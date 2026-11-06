@@ -5979,6 +5979,82 @@ class OracleClient:
             job_id, progress, lease_owner=lease_owner
         )
 
+    async def save_ingestion_attempt_receipt(
+        self,
+        job_id: str,
+        receipt: Any,
+        *,
+        attempt_count: int,
+        lease_owner: str | None,
+    ) -> bool:
+        """受信したclaimの試行とleaseにだけ受理記録を書く。"""
+        from app.rag.ingestion_attempt_receipts import ATTEMPT_RECEIPT_KEY, AttemptReceipt
+
+        checked = AttemptReceipt.model_validate(receipt)
+        if checked.job_id != job_id or checked.attempt_count != attempt_count:
+            raise ValueError("受理記録とjob試行が一致しません。")
+        lease_clause = (
+            "lease_owner IS NULL" if lease_owner is None else "lease_owner = :lease_owner"
+        )
+        binds: dict[str, object] = {"job_id": job_id, "attempt_count": attempt_count}
+        if lease_owner is not None:
+            binds["lease_owner"] = lease_owner
+        predicate = (
+            "job_id = :job_id AND attempt_count = :attempt_count AND status = 'RUNNING' "
+            f"AND {lease_clause} AND document_id = :document_id AND recipe_id = :recipe_id "
+            "AND recipe_revision = :recipe_revision"
+        )
+        binds.update(
+            document_id=checked.document_id,
+            recipe_id=checked.recipe_id,
+            recipe_revision=checked.recipe_revision,
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            rows = _fetch_all(
+                connection,
+                f"SELECT progress_json FROM rag_ingestion_jobs WHERE {predicate} FOR UPDATE",
+                binds,
+            )
+            if not rows:
+                return 0
+            payload = _json_loads(rows[0].get("progress_json")) or {}
+            payload[ATTEMPT_RECEIPT_KEY] = checked.model_dump(mode="json")
+            return _execute_count(
+                connection,
+                f"UPDATE rag_ingestion_jobs SET progress_json = :progress_json WHERE {predicate}",
+                {**binds, "progress_json": _json_dumps(payload)},
+            )
+
+        return await self._run_transaction(operation) == 1
+
+    async def read_ingestion_attempt_receipt(self, job: IngestionJob) -> Any:
+        """明示jobと試行の証拠だけ読む。公開progressのschemaへは加えない。"""
+        from app.rag.ingestion_attempt_receipts import read_attempt_receipt
+
+        if job.recipe_id is None or job.recipe_revision is None:
+            return None
+        # get_ingestion_jobと同じ文書の可視範囲で読む。
+        rows = await self._fetch_all(
+            _render_sql(
+                """SELECT j.progress_json FROM rag_ingestion_jobs j
+                JOIN rag_documents d ON d.document_id = j.document_id
+                WHERE j.job_id = :job_id AND {document_access_sql}""",
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"job_id": job.id}),
+        )
+        if not rows:
+            return None
+        return read_attempt_receipt(
+            _json_loads(rows[0].get("progress_json")) or {},
+            job_id=job.id,
+            attempt_count=job.attempt_count,
+            document_id=job.document_id,
+            recipe_id=job.recipe_id,
+            recipe_revision=job.recipe_revision,
+        )
+
     async def requeue_leased_ingestion_jobs(self, *, lease_owner: str) -> list[IngestionJob]:
         """``lease_owner`` の lease の RUNNING job を QUEUED に戻し、戻した job を返す(#357)。
 
@@ -10885,16 +10961,26 @@ class OracleClient:
             binds["lease_owner"] = lease_owner
 
         def operation(connection: OracleConnectionProtocol) -> int:
+            from app.rag.ingestion_attempt_receipts import ATTEMPT_RECEIPT_KEY
+
+            rows = _fetch_all(
+                connection,
+                f"""SELECT progress_json FROM rag_ingestion_jobs
+                WHERE job_id = :job_id AND status = 'RUNNING' {lease_clause} FOR UPDATE""",
+                {k: v for k, v in binds.items() if k != "progress_json"},
+            )
+            if not rows:
+                return 0
+            previous = _json_loads(rows[0].get("progress_json")) or {}
+            payload = {} if progress is None else progress.model_dump(mode="json")
+            payload.pop(ATTEMPT_RECEIPT_KEY, None)
+            if ATTEMPT_RECEIPT_KEY in previous:
+                payload[ATTEMPT_RECEIPT_KEY] = previous[ATTEMPT_RECEIPT_KEY]
             return _execute_count(
                 connection,
-                f"""
-                UPDATE rag_ingestion_jobs
-                SET progress_json = :progress_json
-                WHERE job_id = :job_id
-                  AND status = 'RUNNING'
-                  {lease_clause}
-                """,
-                binds,
+                f"""UPDATE rag_ingestion_jobs SET progress_json = :progress_json
+                WHERE job_id = :job_id AND status = 'RUNNING' {lease_clause}""",
+                {**binds, "progress_json": _json_dumps(payload) if payload else None},
             )
 
         return await self._run_transaction(operation) > 0

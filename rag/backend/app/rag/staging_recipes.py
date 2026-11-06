@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, StrictBool
 
@@ -26,6 +27,8 @@ from app.schemas.document import (
     IngestionJobStatus,
     SourceProfile,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class StagingRuntimeOptions(BaseModel):
@@ -94,6 +97,23 @@ async def read_staging_recipe(oracle: Any, document_id: str) -> StagingRecipeSta
         extraction = dict(artifact["extraction_json"])
     receipt = read_segment_receipt(extraction, document_id, recipe_id)
     segments = tuple(item.segment for item in receipt.segments) if receipt is not None else ()
+    if status != FileStatus.INDEXED:
+        job = getattr(oracle, "_staging_attempt_jobs", {}).get(document_id)
+        if (
+            job is not None
+            and job.recipe_id == recipe_id
+            and job.recipe_revision == int(row.get("config_revision") or 1)
+        ):
+            attempt = await oracle.read_ingestion_attempt_receipt(job)
+            if attempt is not None:
+                extraction = {
+                    "parser_artifacts": {
+                        "ingestion_segment_receipt": attempt.accepted.model_dump(mode="json")
+                    }
+                }
+                segments = tuple(item.segment for item in attempt.accepted.segments) + tuple(
+                    attempt.remaining_segments
+                )
     return StagingRecipeState(recipe_id, status, chunk_set_id, extraction, chunks, segments)
 
 
@@ -171,7 +191,23 @@ class RecipeStagingIngestion:
         )
         deadline = monotonic() + self._settings.ingestion_job_subprocess_timeout_seconds
         while True:
-            await _run_ingestion_job(job.id, propagate_errors=True)
+            attempts = getattr(self._oracle, "_staging_attempt_jobs", {})
+            attempts.pop(document_id, None)
+            cast(Any, self._oracle)._staging_attempt_jobs = attempts
+            try:
+                await _run_ingestion_job(job.id, propagate_errors=True)
+            finally:
+                # 明示したjobの受信snapshotだけを記録する。別jobや旧activeを探さない。
+                try:
+                    observed = await self._oracle.get_ingestion_job(job.id)
+                    if observed is not None:
+                        attempts = getattr(self._oracle, "_staging_attempt_jobs", {})
+                        attempts[document_id] = observed
+                        cast(Any, self._oracle)._staging_attempt_jobs = attempts
+                except Exception as exc:  # noqa: BLE001 - 元の取込例外を優先する
+                    logger.warning(
+                        "staging_attempt_unrecorded", extra={"error_type": type(exc).__name__}
+                    )
             current = await self._oracle.get_ingestion_job(job.id)
             if current is None:
                 raise RuntimeError("検証対象の取込jobが見つかりません。")

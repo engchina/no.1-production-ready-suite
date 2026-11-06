@@ -106,6 +106,7 @@ from app.rag.ingestion import (
     document_artifact_prefixes,
     record_boundary_failure_message,
 )
+from app.rag.ingestion_attempt_receipts import AttemptReceipt, attempt_receipt_scope
 from app.rag.ingestion_language import artifact_language_compatible, ingestion_release_scope
 from app.rag.ingestion_progress import track_ingestion_progress
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
@@ -5653,26 +5654,46 @@ async def _run_pinned_ingestion_job(
         # 抽出の段（解析・Vision）の進捗を job の行へ書く（#1999）。lease を失った実行は書かない。
         await oracle.update_ingestion_job_progress(job_id, progress, lease_owner=lease_owner)
 
+    async def write_attempt_receipt(payload: dict[str, Any]) -> None:
+        if job.recipe_id is None or job.recipe_revision is None:
+            raise RuntimeError("受理記録をjobの処理レシピへ束縛できません。")
+        receipt = AttemptReceipt.model_validate(
+            {
+                **payload,
+                "version": 1,
+                "job_id": job.id,
+                "attempt_count": job.attempt_count,
+                "document_id": job.document_id,
+                "recipe_id": job.recipe_id,
+                "recipe_revision": job.recipe_revision,
+            }
+        )
+        if not await oracle.save_ingestion_attempt_receipt(
+            job.id, receipt, attempt_count=job.attempt_count, lease_owner=lease_owner
+        ):
+            raise RuntimeError("取込jobの試行又はleaseが変わったため受理記録を保存できません。")
+
     # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
     # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
     next_recipe_phase: IngestionJobPhase | None = None
     # レシピ経路で、job を SUCCEEDED にできた後に記録する成功の監査・metric(#514)。
     recipe_success_outcome: IngestionSuccessOutcome | None = None
     try:
-        async with track_ingestion_progress(write_progress):
-            if job.recipe_id is not None:
-                await _raise_if_job_cancelled(is_cancelled)
-                await oracle.update_document_recipe_status(
-                    recipe_id=job.recipe_id,
-                    status=_PHASE_TO_RUNNING_STATUS[job.phase],
+        with attempt_receipt_scope(write_attempt_receipt):
+            async with track_ingestion_progress(write_progress):
+                if job.recipe_id is not None:
+                    await _raise_if_job_cancelled(is_cancelled)
+                    await oracle.update_document_recipe_status(
+                        recipe_id=job.recipe_id,
+                        status=_PHASE_TO_RUNNING_STATUS[job.phase],
+                    )
+                # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
+                # 止める（#486）。
+                recipe_result = await _materialize_experiment_candidate(
+                    oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
                 )
-            # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
-            # 止める（#486）。
-            recipe_result = await _materialize_experiment_candidate(
-                oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
-            )
-            next_recipe_phase = recipe_result.next_phase
-            recipe_success_outcome = recipe_result.success_outcome
+                next_recipe_phase = recipe_result.next_phase
+                recipe_success_outcome = recipe_result.success_outcome
     except HTTPException as exc:
         await _fail_ingestion_job(oracle, job, str(exc.detail), lease_owner=lease_owner)
         logger.info(

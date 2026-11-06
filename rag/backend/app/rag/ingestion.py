@@ -125,6 +125,7 @@ from app.rag.heading_levels import (
     plan_heading_level_inference,
     with_heading_level_report,
 )
+from app.rag.ingestion_attempt_receipts import record_attempt_receipt
 from app.rag.ingestion_progress import (
     IngestionProgressReporter,
     VisionSegmentsProgress,
@@ -997,6 +998,11 @@ class IngestionPipeline:
         accepted_paths: dict[tuple[int | None, int | None], str | None] = {
             page_range: checkpoints_by_range[page_range].artifact_path for page_range in results
         }
+        accepted_attempts: dict[tuple[int | None, int | None], int] = {
+            page_range: checkpoints_by_range[page_range].attempt_count for page_range in results
+        }
+        terminal_states: dict[str, str] = {}
+        started_attempts: dict[str, int] = {}
         for page_range in sorted(results):
             tracker.mark(checkpoints_by_range[page_range].segment_id, "SUCCEEDED", reused=True)
             if on_segment_parsed is not None:
@@ -1019,6 +1025,7 @@ class IngestionPipeline:
         async def parse_one(segment: PdfPageSegment) -> None:
             page_range = (segment.page_start, segment.page_end)
             checkpoint = checkpoints_by_range[page_range]
+            started_attempts[checkpoint.segment_id] = checkpoint.attempt_count + 1
             await self._safe_update_ingestion_segment(
                 checkpoint.segment_id,
                 status="RUNNING",
@@ -1064,15 +1071,18 @@ class IngestionPipeline:
                 # job の task の取り消し(lease の喪失など)。行は処理中のまま残り、次の試行が
                 # 待機中から始める(``_prepare_pdf_parse_segments``)。
                 tracker.mark(checkpoint.segment_id, "CANCELLED")
+                terminal_states[checkpoint.segment_id] = "CANCELLED"
                 raise
             except Exception as exc:
                 await self._mark_segment_failed(checkpoint, error=exc)
                 tracker.mark(checkpoint.segment_id, "FAILED")
+                terminal_states[checkpoint.segment_id] = "FAILED"
                 raise
             await self._mark_segment_succeeded(checkpoint, artifact_path=artifact_path)
             tracker.mark(checkpoint.segment_id, "SUCCEEDED")
             results[page_range] = (extraction, result)
             accepted_paths[page_range] = artifact_path
+            accepted_attempts[page_range] = checkpoint.attempt_count + 1
             if on_segment_parsed is not None:
                 # 解析の終わった段の図・表の Vision を、次の段の解析と並べて始める(#2002)。
                 on_segment_parsed(checkpoint, extraction)
@@ -1091,7 +1101,60 @@ class IngestionPipeline:
                 except Exception as exc:  # noqa: BLE001 - 解析中の段の終わりを待ってから送出する
                     errors.append(exc)
 
-        await asyncio.gather(*(worker() for _ in range(min(concurrency, len(queue)) or 1)))
+        def accepted_receipt() -> dict[str, object]:
+            return accepted_segment_receipt(
+                document_id,
+                self._recipe_id,
+                [
+                    item.model_copy(
+                        update={
+                            "artifact_path": accepted_paths[(item.page_start, item.page_end)],
+                            "attempt_count": accepted_attempts[(item.page_start, item.page_end)],
+                        }
+                    )
+                    for item in checkpoint_segments
+                    if (item.page_start, item.page_end) in accepted_paths
+                ],
+                {key: value for key, value in parse_keys.items()},
+            )
+
+        tasks = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(queue)) or 1)]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for segment in queue:
+                checkpoint = checkpoints_by_range[(segment.page_start, segment.page_end)]
+                terminal_states[checkpoint.segment_id] = "CANCELLED"
+            await record_attempt_receipt(
+                {
+                    "accepted": accepted_receipt(),
+                    "remaining_segments": [
+                        item.model_copy(
+                            update={
+                                "status": terminal_states.get(item.segment_id, "CANCELLED"),
+                                "attempt_count": started_attempts.get(
+                                    item.segment_id, item.attempt_count
+                                ),
+                            }
+                        ).model_dump(mode="json")
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                    "remaining": [
+                        {
+                            "segment_id": item.segment_id,
+                            "status": terminal_states.get(item.segment_id, "CANCELLED"),
+                        }
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                }
+            )
+            raise
+
         if errors:
             for segment in queue:
                 checkpoint = checkpoints_by_range[(segment.page_start, segment.page_end)]
@@ -1105,6 +1168,32 @@ class IngestionPipeline:
                     ),
                 )
                 tracker.mark(checkpoint.segment_id, "CANCELLED")
+                terminal_states[checkpoint.segment_id] = "CANCELLED"
+            await record_attempt_receipt(
+                {
+                    "accepted": accepted_receipt(),
+                    "remaining_segments": [
+                        item.model_copy(
+                            update={
+                                "status": terminal_states.get(item.segment_id, "QUEUED"),
+                                "attempt_count": started_attempts.get(
+                                    item.segment_id, item.attempt_count
+                                ),
+                            }
+                        ).model_dump(mode="json")
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                    "remaining": [
+                        {
+                            "segment_id": item.segment_id,
+                            "status": terminal_states.get(item.segment_id, "QUEUED"),
+                        }
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                }
+            )
             cancelled = next(
                 (error for error in errors if isinstance(error, IngestionCancelledError)), None
             )
@@ -1141,30 +1230,13 @@ class IngestionPipeline:
             warnings=tuple(_dedupe_text([w for result in fresh for w in result.warnings])),
         )
         latest = await self._segments_with_latest_status(checkpoint_segments)
-        receipt_keys: dict[tuple[int | None, int | None], str] = {
-            key: value for key, value in parse_keys.items()
-        }
         parser_result = replace(
             parser_result,
             extraction=merged.model_copy(
                 update={
                     "parser_artifacts": {
                         **merged.parser_artifacts,
-                        SEGMENT_RECEIPT_KEY: accepted_segment_receipt(
-                            document_id,
-                            self._recipe_id,
-                            [
-                                item.model_copy(
-                                    update={
-                                        "artifact_path": accepted_paths.get(
-                                            (item.page_start, item.page_end)
-                                        )
-                                    }
-                                )
-                                for item in checkpoint_segments
-                            ],
-                            receipt_keys,
-                        ),
+                        SEGMENT_RECEIPT_KEY: accepted_receipt(),
                     }
                 }
             ),
