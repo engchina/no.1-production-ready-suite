@@ -373,6 +373,10 @@ class Settings:
     judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
     audit_reasoning_effort: str = ""
+    # 工程ごとの推論の量(1 回の呼び出しの要求の値)。用途の上書きより後に、その工程の呼び出しにだけ当てる。
+    # 値の意味は用途の上書きと同じ(空はモデルの登録値のまま。登録値が none のモデルには送らない)。
+    # 質問の対象の抽出(#4351): 原文の写しと同じ写しの出現の順番を返す段。役割の判定の段には当てない。
+    question_subject_extraction_reasoning_effort: str = "medium"
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
@@ -716,12 +720,18 @@ def normalize_reasoning_effort_override(value: str | None) -> str:
 
 
 def settings_for_llm_purpose(settings: Settings, purpose: str) -> Settings:
-    """用途の推論の量を反映した設定(#1499)。上書きが無ければ同じ設定を返す。
+    """用途の推論の量を反映した設定(#1499)。上書きが無ければ同じ設定を返す。"""
+    return settings_with_reasoning_effort(settings, getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+
+
+def settings_with_reasoning_effort(settings: Settings, value: str | None) -> Settings:
+    """推論の量の上書き ``value`` を反映した設定。上書きが無ければ同じ設定を返す。
 
     LLM の呼び出しに渡す設定だけを差し替える(provider の `reasoning_effort` は送る値)。モデルの登録値が
-    送らない(空)の provider は、上書きしても送らない。
+    送らない(空)の provider は、上書きしても送らない。用途の上書き(`settings_for_llm_purpose`)と、工程の
+    呼び出しの上書き(`Settings.question_subject_extraction_reasoning_effort` など)が共有する。
     """
-    override = normalize_reasoning_effort_override(getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+    override = normalize_reasoning_effort_override(value)
     if not override:
         return settings
     current = getattr(settings, "llm_providers", None)

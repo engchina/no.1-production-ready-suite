@@ -30,6 +30,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from rag_parser_core.language import current_pack
 
+from rag_engine.config import settings_with_reasoning_effort
 from rag_engine.resources.runtime import resolve_prompt
 
 logger = logging.getLogger(__name__)
@@ -337,6 +338,8 @@ def extract_question_subjects(
     """質問の named の提及と役割を 2 段で取り出す。named が無ければ役割の段を呼ばない。失敗は ``failed`` で返す。
 
     ``parse_text`` は構造化出力の呼び出し（既定は注入された回答フローの ``parse_text_response``）。再試行はしない。
+    抽出の段の呼び出しにだけ、工程の推論の量（``settings.question_subject_extraction_reasoning_effort``）を当てる。
+    役割の段は渡された ``settings`` のまま呼ぶ。
     """
     call: Callable[..., Any]
     if parse_text is None:
@@ -355,7 +358,7 @@ def extract_question_subjects(
         raw = call(
             resolve_prompt("question_subjects.extraction", SUBJECT_EXTRACTION_PROMPT),
             _canonical(prepared),
-            settings,
+            extraction_settings(settings),
             schema,
             provider_id=provider_id,
             purpose=purpose,
@@ -382,6 +385,11 @@ def extract_question_subjects(
     except Exception as exc:  # noqa: BLE001 - 検査を飛ばして回答・評価を続ける。例外の文は残さない。
         logger.warning("question subject extraction failed: %s", type(exc).__name__)
         return QuestionSubjects(question, STATUS_FAILED, failure=type(exc).__name__, calls=calls)
+
+
+def extraction_settings(settings: Any) -> Any:
+    """抽出の段の呼び出しに渡す設定。工程の推論の量の設定があれば、その呼び出しの要求の値だけを差し替える。"""
+    return settings_with_reasoning_effort(settings, getattr(settings, "question_subject_extraction_reasoning_effort", ""))
 
 
 def _dump(raw: Any) -> Any:

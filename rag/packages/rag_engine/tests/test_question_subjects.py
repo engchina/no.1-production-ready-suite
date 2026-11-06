@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from citation_unit_support import generated_fixture
 
-from rag_engine.config import get_settings
+from rag_engine.config import LlmProviderSettings, get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_labels import answer_labels
@@ -290,6 +290,60 @@ def test_model_call_failure_is_returned_not_raised() -> None:
     subjects, _ = extract("装置ラムダの保守期限は？", {EXTRACT: TimeoutError("synthetic")})
     assert (subjects.status, subjects.failure) == (STATUS_FAILED, "TimeoutError")
     assert subjects.diagnostics() == {"status": STATUS_FAILED, "calls": 1, "named_mentions": 0, "failure": "TimeoutError"}
+
+
+# ---------- 工程の推論の量（抽出の段の呼び出しだけ） ----------
+
+
+def provider_settings(registered: str, **overrides: Any) -> Any:
+    """モデルの登録の推論の量が ``registered`` の provider 1 つだけの合成の設定（接続先は偽）。"""
+    base = get_settings(environ={}, dotenv_path=None, **overrides)
+    provider = LlmProviderSettings(
+        provider_id=base.default_answer_llm,
+        label="synthetic",
+        region="",
+        project_id="",
+        api_key="synthetic",
+        model="synthetic-model",
+        endpoint="https://synthetic.invalid/v1",
+        reasoning_effort=registered,
+    )
+    return replace(base, llm_providers={base.default_answer_llm: provider})
+
+
+def sent_efforts(settings: Any) -> list[tuple[str, str]]:
+    """2 段の呼び出しの schema の名前と、各呼び出しに渡した設定の推論の量（送る値）。"""
+    sent: list[tuple[str, str]] = []
+    question = "装置ラムダを導入しました。装置ラムダの保守期限は？"
+    responses = {
+        EXTRACT: {"mentions": [mention(question, "装置ラムダ"), mention(question, "装置ラムダ", nth=1)]},
+        ROLE: {"entities": [{"entity_id": "N1", "roles": ["given"]}, {"entity_id": "N2", "roles": ["asked"]}]},
+    }
+
+    def parse(system: str, prompt: str, call_settings: Any, schema: Any, **options: Any) -> Any:
+        sent.append((schema.__name__, call_settings.llm_providers[call_settings.default_answer_llm].reasoning_effort))
+        return schema.model_validate(responses[schema.__name__])
+
+    assert extract_question_subjects(question, settings, parse_text=parse).status == STATUS_COMPLETED
+    return sent
+
+
+def test_extraction_call_alone_uses_the_step_reasoning_effort() -> None:
+    # 既定は抽出の段だけ medium。役割の段はモデルの登録値（渡された設定）のまま。
+    settings = provider_settings("low")
+    assert settings.question_subject_extraction_reasoning_effort == "medium"
+    assert sent_efforts(settings) == [(EXTRACT, "medium"), (ROLE, "low")]
+    assert settings.llm_providers[settings.default_answer_llm].reasoning_effort == "low"
+
+
+@pytest.mark.parametrize(
+    ("registered", "step", "expected"),
+    [("low", "high", "high"), ("low", "", "low"), ("low", "model", "low"), ("low", "none", ""), ("", "medium", "")],
+    ids=["step-high", "empty-keeps-registered", "model-keeps-registered", "none-omits", "registered-none-never-sends"],
+)
+def test_step_reasoning_effort_is_a_setting_with_the_shared_override_rules(registered: str, step: str, expected: str) -> None:
+    settings = provider_settings(registered, question_subject_extraction_reasoning_effort=step)
+    assert sent_efforts(settings) == [(EXTRACT, expected), (ROLE, registered)]
 
 
 # ---------- 名前の照合（モデルを呼ばない） ----------
