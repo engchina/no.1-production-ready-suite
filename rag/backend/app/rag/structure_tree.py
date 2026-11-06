@@ -10,8 +10,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from rag_parser_core.language import current_pack
+
 from app.rag.cross_references import SECTION_PATH_SEPARATOR, split_section_path
-from app.rag.graph_index import _entity_type_for_content_kind, graph_section_node_id
+from app.rag.graph_index import (
+    _entity_type_for_content_kind,
+    graph_body_node_id,
+    graph_section_node_id,
+)
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,12 @@ def build_structure_tree(
             parent = add(name, part, "section", parent)
         if not parts and row.section_title:
             parent = add(row.section_title, row.section_title, "section", None)
+        if not parts and not row.section_title:
+            node_id = graph_body_node_id(chunk_set_id, knowledge_base_id)
+            if node_id not in tree.nodes:
+                label = current_pack().text("search_labels", "body")
+                tree.nodes[node_id] = StructureTreeNode(node_id, label, label, "body", None)
+                tree.roots.append(node_id)
         if row.content_kind in {"table", "figure"} and (parts or row.section_title):
             label = row.section_title or SECTION_PATH_SEPARATOR.join(parts)
             add(

@@ -10,6 +10,7 @@ import { DataLoadFailure } from "@/components/DataLoadStates";
 import { api, type GraphReferenceEndpoint, type StructureGraphDocument, type StructureGraphOverview } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useStructureNodeMeasurements } from "./use-structure-node-measurements";
+import { GraphBodyPanel } from "./GraphBodyPanel";
 import { GraphReferencePanel } from "./GraphReferencePanel";
 import { emptyStructureTree, layoutStructure, STRUCTURE_PAGE_SIZE, structureReferenceChains, visibleStructureNodes, type StructureTreeState, type StructureViewNode } from "./structure-graph";
 
@@ -28,7 +29,7 @@ function kindLabel(kind: string | null) {
   const names: Record<string, Parameters<typeof t>[0]> = {
     document: "knowledgeBases.graph.kind.document", section: "knowledgeBases.graph.kind.section",
     table_section: "knowledgeBases.graph.kind.table", figure_section: "knowledgeBases.graph.kind.figure",
-    more: "knowledgeBases.graph.kind.more",
+    more: "knowledgeBases.graph.kind.more", body: "knowledgeBases.graph.body",
   };
   return t(names[kind ?? ""] ?? "knowledgeBases.graph.kind.other");
 }
@@ -315,6 +316,7 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
         <GraphLegend label={t("knowledgeBases.graph.legend")} items={legendKinds.map((value) => ({ id: value, label: kindLabel(value), marker: <GraphLegendSwatch fill={kindFill(value)} /> }))} disabledIds={disabledKinds} onToggle={(id) => { setDisabledKinds((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; }); setSelection(null); }} testId="knowledge-base-graph-legend" />
       </GraphCanvas>
     </GraphCanvasFrame></div>
+    {selectedNode?.kind === "body" && selectedNode.tree ? <GraphBodyPanel key={selectedNode.id} kbId={knowledgeBaseId} documentId={selectedNode.tree.document_id} chunkSetId={selectedNode.tree.chunk_set_id} /> : null}
     {selectedNode && !selectedNode.tree?.virtual ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} onLocate={locateReference} /> : null}
     {selectedNode?.tree?.virtual ? <p className="text-sm text-fg-muted">{t("knowledgeBases.graph.virtualNode")}</p> : null}
     {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "knowledgeBases.graph.selectedNode" : "knowledgeBases.graph.selectedEdge")} closeLabel={t("knowledgeBases.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}

@@ -25,6 +25,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStructureIndexUpdate,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
+    StructureGraphBodyChunkPage,
     StructureGraphLocation,
     StructureGraphOverview,
     StructureGraphReferences,
@@ -594,3 +595,25 @@ async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[s
         )
         or {}
     )
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/documents/{document_id}/body-chunks",
+    response_model=ApiResponse[StructureGraphBodyChunkPage],
+)
+async def get_structure_graph_body_chunks(
+    knowledge_base_id: str,
+    document_id: str,
+    chunk_set_id: str = Query(..., min_length=1, max_length=64),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+) -> ApiResponse[StructureGraphBodyChunkPage]:
+    """図の本文を、同じ閲覧範囲/保存版の原文表示へ結ぶ。"""
+    data = await _read_structure_graph(
+        knowledge_base_id,
+        "structure_graph_body_chunks",
+        lambda store: store.body_chunks(
+            knowledge_base_id, document_id, chunk_set_id, offset=offset, limit=limit
+        ),
+    )
+    return ApiResponse(data=StructureGraphBodyChunkPage(**data))

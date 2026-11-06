@@ -763,3 +763,51 @@ test("参照一覧の取得失敗を再試行でき、次のページだけを�
   await expect(panel.getByText("先頭の参照", { exact: true })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+
+for (const theme of ["light", "dark"] as const) {
+  for (const mixed of [false, true]) {
+    test(`章節のない本文を選び全件の原文と保存位置を読む (${mixed ? "mixed" : "allmissing"} ${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
+      await page.addInitScript(value => localStorage.setItem("production-ready-rag.ui",JSON.stringify({state:{theme:value,sidebarCollapsed:true},version:0})), theme);
+      const body = treeNode(ID("body"), "本文", null, "doc", {type:"body"});
+      const nodes = mixed ? [treeNode(ID("named-body"), "本文", null,"doc"),body] : [body];
+      await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+      await mockTree(page,{"root:set-doc":nodes});
+      const ids = Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
+      const reads: string[] = [];
+      await page.route("**/graph/documents/doc-doc/body-chunks?**", route => {
+        const params=new URL(route.request().url()).searchParams;
+        expect(params.get("chunk_set_id")).toBe("set-doc");
+        const offset=Number(params.get("offset"));
+        return route.fulfill({json:ok({items:ids.slice(offset,offset+25),total:26,offset})});
+      });
+      await page.route("**/api/documents/doc-doc/chunks/**",route=>{
+        const id=decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
+        reads.push(id);
+        return route.fulfill({json:ok({document_id:"doc-doc",chunk_id:id,text:"合成の保存本文26",file_name:"synthetic.txt",score:0,metadata:{chunk_set_id:"set-doc",recipe_id:"recipe-1",start_offset:258,end_offset:267}})});
+      });
+      await page.route("**/api/documents/doc-doc/reader?**",route=>{
+        const params=new URL(route.request().url()).searchParams;
+        expect(params.get("chunk_id")).toBe(ids[25]!.chunk_id);
+        return route.fulfill({json:ok({revision:"set-doc",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"anchor",text:"保存位置250：合成の保存本文26",offset:250,highlights:[[8,17]],cited:true}],previous_cursor:null,next_cursor:null,outline:[]})});
+      });
+      await page.goto("/knowledge-bases/kb-1");
+      await disclosureSummary(page,"文書構造グラフを表示").click();
+      const graph=page.locator("#knowledge-base-graph");
+      await graph.locator('.react-flow__node[data-id="doc"]').click();
+      await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+      const panel=page.getByTestId("graph-body");
+      await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+      await panel.getByRole("button",{name:"次へ",exact:true}).click();
+      await expect(panel.getByText("本文 26",{exact:true})).toBeVisible();
+      await panel.getByRole("button",{name:"原文を表示",exact:true}).click();
+      await expect(page.getByRole("dialog", {name:"本文の原文", exact:true})).toBeVisible();
+      const reader=page.getByTestId("evidence-reader");
+      await expect(reader).toContainText("合成の保存本文26");
+      await expect(reader.locator("mark")).toBeVisible();
+      expect(reads).toEqual([ids[25]!.chunk_id]);
+      await expectNoPageOverflow(page);
+      await page.screenshot({path:testInfo.outputPath(`structure-body-${mixed ? "mixed":"allmissing"}-${theme}.png`)});
+    });
+  }
+}
