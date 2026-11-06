@@ -763,3 +763,70 @@ test("参照一覧の取得失敗を再試行でき、次のページだけを�
   await expect(panel.getByText("先頭の参照", { exact: true })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`1001番目の章節の検索位置へページを分けて移動する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value, sidebarCollapsed: true }, version: 0 })), theme);
+    const all = Array.from({ length: 1101 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));
+    const target = all[1000]!;
+    const reads: { offset: number; limit: number }[] = [];
+    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
+    await mockTree(page, { "root:set-doc": all });
+    // 正式tree APIと同じlimit上限。既存mockの無制限sliceで不具合を隠さない。
+    await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
+      const url = new URL(route.request().url());
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 100);
+      reads.push({ offset, limit });
+      if (limit > 1000) return route.fulfill({ status: 422, json: { detail: "ページの表示件数が上限を超えています。" } });
+      return route.fulfill({ json: ok({ items: all.slice(offset, offset + limit), total: all.length, offset }) });
+    });
+    await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
+    await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 1000 }] }) }));
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page, "文書構造グラフを表示").click();
+    const graph = page.locator("#knowledge-base-graph");
+    await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
+    try {
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label);
+      expect(reads.every((r) => r.limit <= 1000)).toBe(true);
+      expect(reads.map((r) => r.offset)).toEqual(Array.from({ length: 11 }, (_, index) => index * 100));
+      await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
+      await expectNoPageOverflow(page);
+    } finally {
+      console.log("structure-tree-requests", JSON.stringify(reads));
+      await testInfo.attach("tree-requests", { body: JSON.stringify(reads), contentType: "application/json" });
+      await page.screenshot({ path: testInfo.outputPath(`structure-reveal-1001-${theme}.png`) });
+    }
+  });
+}
+
+
+test("章節の位置移動で空の続きページをエラーにし、再試行は既読の続きから読む", async ({ page }) => {
+  const all = Array.from({ length: 201 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));
+  const target = all[200]!;
+  let empty = true;
+  const offsets: number[] = [];
+  await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
+  await mockTree(page, { "root:set-doc": all });
+  await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 100);
+    offsets.push(offset);
+    return route.fulfill({ json: ok({ items: empty && offset === 100 ? [] : all.slice(offset, offset + limit), total: all.length, offset }) });
+  });
+  await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
+  await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 200 }] }) }));
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const graph = page.locator("#knowledge-base-graph");
+  await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
+  await expect(graph.getByRole("alert")).toBeVisible();
+  expect(offsets).toEqual([0, 100]);
+  empty = false;
+  await graph.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label);
+  await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
+  expect(offsets).toEqual([0, 100, 100, 200]);
+});
