@@ -6,6 +6,8 @@
   `status=incomplete`）で終わった失敗は、理由ごとの文（出力の上限・安全の判定）と直し方を返す。
   送り直し（上限を広げる・推論の量を下げる）は adapter が済ませている。
 - それ以外の予期しない例外は、定型文（``fallback``）のまま返す（内部の文を利用者に出さない）。
+- 再解析・再分割が要る旧い形式の chunk（``find_unprojected_vision_source``。#4550）は、対象の
+  文書を示す文と ``DOCUMENT_REPROCESS_REQUIRED_CODE`` を返す（REST の検索は 409）。
 - AI の API の失敗（``describe_answer_api_failure``）は、種類・再試行の目安・中断した工程の
   文にする。MCP のツール（`rag_search` など）は種類つきのツールのエラー（#2475）、REST の
   検索・業務ガイドの下書きの試答は種類ごとの HTTP status（#2667）で返す。呼び出し元・利用者が、
@@ -35,10 +37,13 @@ from pr_backend_core.bounded_calls import (
 from pr_backend_core.logging import safe_error_code
 from rag_engine.adapters.oci import IncompleteResponse
 from rag_engine.generation.execution_record import AnswerExecutionError
+from rag_parser_core.vision_text import UnprojectedVisionSourceError
 
 # 未完了の応答の error_type（画面・SSE・MCP の error code）。3 製品の共通の error code と同じ値。
 ANSWER_INCOMPLETE_ERROR_TYPE = "IncompleteResponse"
 ANSWER_INCOMPLETE_ERROR_CODE = "ENTERPRISE_AI_OUTPUT_INCOMPLETE"
+# 保存済みの chunk が旧い形式で、文書の再解析・再分割が要る（#4550）。画面・MCP の error code。
+DOCUMENT_REPROCESS_REQUIRED_CODE = "RAG_DOCUMENT_REPROCESS_REQUIRED"
 # 工程の記録（`execution_steps`）で、例外で終わった工程の status
 # （`rag_engine.generation.execution_record`）。
 _FAILED_STEP_STATUS = "エラーで中断"
@@ -103,6 +108,13 @@ def find_incomplete_response(exc: BaseException) -> IncompleteResponse | None:
     return found
 
 
+def find_unprojected_vision_source(exc: BaseException) -> UnprojectedVisionSourceError | None:
+    """例外の連鎖の中の、旧い画像説明の chunk の失敗（実行記録の例外が包んだものを含む）。"""
+    return next(
+        (item for item in _causes(exc) if isinstance(item, UnprojectedVisionSourceError)), None
+    )
+
+
 def failed_stage(exc: BaseException) -> str | None:
     """回答の工程の記録（`AnswerExecutionError.execution_steps`）で、例外で終わった最も内側の工程の名前。"""
     for item in _causes(exc):
@@ -124,9 +136,17 @@ def failed_stage(exc: BaseException) -> str | None:
 def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
     """回答の失敗を、利用者向けの文と「詳細」の項目にする。
 
-    未完了と安全に分類できる AI の接続失敗以外は ``fallback`` の定型文。
+    再処理が要る旧い chunk・未完了・安全に分類できる AI の接続失敗以外は ``fallback`` の定型文。
     """
     stage = failed_stage(exc)
+    if (legacy := find_unprojected_vision_source(exc)) is not None:
+        # 利用者が直せるデータの状態なので、定型文にせず対象の文書と対処を返す。
+        return AnswerFailure(
+            message=str(legacy),
+            error_type=type(legacy).__name__,
+            stage=stage,
+            error_code=DOCUMENT_REPROCESS_REQUIRED_CODE,
+        )
     incomplete = find_incomplete_response(exc)
     if incomplete is not None:
         return AnswerFailure(

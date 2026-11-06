@@ -86,16 +86,57 @@ def answer_text_from_projection(
     return body if parent else (index_text or body)
 
 
-def require_projected_vision_source(
+# 例外の文に名前を示す文書の上限（多いときは残りを件数で示す）。
+UNPROJECTED_VISION_DOCUMENTS_SHOWN = 10
+
+
+class UnprojectedVisionSourceError(ValueError):
+    """回答本文を分離していない旧い画像説明の chunk。文書の再解析・再分割が要る。
+
+    文は利用者に見せてよい（``safe_for_user``）。``documents`` は利用者が見られる文書の表示名で、
+    chunk の本文は持たない。旧い chunk を推測で復元・除外しないため、呼び出し側は検索を止めて
+    この文を返す。
+    """
+
+    safe_for_user = True
+
+    def __init__(self, documents: Sequence[str] = ()) -> None:
+        self.documents = tuple(dict.fromkeys(name for name in documents if name))
+        super().__init__(_unprojected_vision_message(self.documents))
+
+
+def _unprojected_vision_message(documents: Sequence[str]) -> str:
+    if not documents:
+        return "旧画像説明の回答本文が未分離です。再解析または再分割してください。"
+    shown = documents[:UNPROJECTED_VISION_DOCUMENTS_SHOWN]
+    rest = len(documents) - len(shown)
+    names = "、".join(f"「{name}」" for name in shown) + (f"ほか {rest} 件" if rest else "")
+    return (
+        "画像説明が旧い形式のまま保存された文書があるため、検索・回答できません。"
+        f"次の文書を再解析または再分割してください: {names}"
+    )
+
+
+def is_unprojected_vision_source(
     metadata: Mapping[str, object], refs: Sequence[Mapping[str, object]]
-) -> None:
-    """producerが明示した旧VLM由来だけを止め、native OCRの語句やモデル名では判定しない。"""
+) -> bool:
+    """producerが明示した旧VLM由来だけを旧形式とし、native OCRの語句やモデル名では判定しない。"""
     if any(
         isinstance(ref, Mapping) and ref.get("vision_text_projection_status") == "unrecorded"
         for ref in refs
     ):
-        raise ValueError("旧画像説明の回答本文が未分離です。再解析または再分割してください。")
+        return True
     if "answer_text_projection" in metadata:
-        return
-    if metadata.get("figure_text_source") == "vision":
-        raise ValueError("旧画像説明の回答本文が未分離です。再解析または再分割してください。")
+        return False
+    return metadata.get("figure_text_source") == "vision"
+
+
+def require_projected_vision_source(
+    metadata: Mapping[str, object],
+    refs: Sequence[Mapping[str, object]],
+    *,
+    document: str = "",
+) -> None:
+    """旧形式なら ``document``（文書の表示名）を示す ``UnprojectedVisionSourceError`` で止める。"""
+    if is_unprojected_vision_source(metadata, refs):
+        raise UnprojectedVisionSourceError((document,))
