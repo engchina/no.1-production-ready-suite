@@ -14129,7 +14129,6 @@ def _lock_recipe_for_review_change(
 
     確認待ちでない・処理中・抽出結果が無いときは ``DocumentReviewEditConflictError``。
     """
-    _ensure_recipe_row_if_default(connection, document_id, recipe_id)
     locked = _select_document_recipe_for_update(connection, document_id, recipe_id)
     if locked is None:
         raise KeyError("レシピが見つかりません。")
