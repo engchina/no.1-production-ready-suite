@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { t } from "../src/lib/i18n";
 
 // Issue 281: 文書の詳細（DocumentWorkspace）の不具合の回帰。
 // - ERROR の文書で「再実行」の投入に失敗したとき、何も表示されなかった
@@ -226,3 +227,51 @@ test("索引の使用版・構築中の対象版を区別し、固定した公�
   await expect(panel.getByText("言語資源の現在版が変わりました。再確認してください。", { exact: true })).toBeVisible();
   await expect(panel).toContainText("現在の検索に使用している版 v1");
 });
+
+
+// #4194: 使用中の版が現在の契約で読めない（公開時の設定・比較が 409）とき、行き止まりにせず抽出から再処理できる。
+for (const theme of ["light", "dark"] as const) {
+  test(`使用中の版を現在の契約で読めないときは比較できないことを示し、ファイル準備か抽出から再処理できる（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript(value => {
+      localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+    await mockWorkspace(page, "INDEXED", "合成の投入エラー");
+    const recipe = { ...recipeView("INDEXED"), active_chunk_set_id: "chunks-old", searchable: true };
+    const used = { recipe_id: "recipe-1", chunk_set_id: "chunks-old", release_id: "release-1", version: 1, ingest_hash: "hash-old", relation: "different", built_at: "2026-10-17T00:00:00Z", job_id: "job-old", target_release_id: null };
+    const unreadable = { status: 409, json: { data: null, error_messages: ["保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"], warning_messages: [] } };
+    await page.route(`**/api/documents/${DOC_ID}/recipes`, route => route.fulfill(ok([recipe])));
+    await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes: [used] } })));
+    await page.route("**/api/settings/language-pack/releases/release-1", route => route.fulfill(unreadable));
+    await page.route("**/api/settings/language-pack/releases/compare?*", route => route.fulfill(unreadable));
+    const submitted: URL[] = [];
+    await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/ingestion-jobs?*`, async route => {
+      submitted.push(new URL(route.request().url()));
+      await route.fulfill(ok({ ...failedJob(), id: "job-new", status: "QUEUED", phase: "EXTRACT", error_message: null, attempt_count: 0, started_at: null, finished_at: null }));
+    });
+    await page.goto(`/documents/${DOC_ID}`);
+    const panel = page.getByTestId("document-language-pack");
+    await panel.getByRole("button", { name: "差分と影響を確認する" }).click();
+    await expect(panel.getByText(/契約/).first()).toBeVisible();
+    await panel.screenshot({ path: testInfo.outputPath(`unreadable-panel-review-${theme}.png`) });
+    await expect(panel.getByText(t("settings.language.release.unreadableTitle"), { exact: true })).toBeVisible();
+    await expect(panel.getByText(t("settings.language.release.unreadableHelp"), { exact: true })).toBeVisible();
+    // 汎用のエラー表示（再試行）にしない。
+    await expect(panel.getByRole("button", { name: "再試行" })).toHaveCount(0);
+    await panel.getByRole("button", { name: "公開時の完全な設定", exact: true }).click();
+    await expect(panel.getByText(t("settings.language.release.unreadableSnapshot"), { exact: true })).toBeVisible();
+    await panel.getByRole("combobox", { name: "再処理を始める工程" }).click();
+    await expect(page.getByRole("option", { name: "Chunk 作成", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("option", { name: "Embedding / 索引", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("option", { name: "ファイル準備", exact: true })).toBeVisible();
+    await page.getByRole("option", { name: "抽出", exact: true }).click();
+    await panel.getByRole("button", { name: "再処理する", exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("開始工程: 抽出");
+    await dialog.getByRole("button", { name: "再処理する", exact: true }).click();
+    await expect.poll(() => submitted.map(url => url.searchParams.get("phase"))).toEqual(["EXTRACT"]);
+    expect(submitted[0].searchParams.get("expected_language_pack_release_id")).toBe("release-2");
+    await expect(panel.getByText(t("settings.language.release.queued"), { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await panel.screenshot({ path: testInfo.outputPath(`unreadable-panel-queued-${theme}.png`) });
+  });
+}
