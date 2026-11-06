@@ -6,11 +6,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from application_verdict_stub import audit_reply
 
 from rag_engine.config import get_settings
 from rag_engine.generation.application_review import application_documents, review_applications
 from rag_engine.generation.applications import CheckedApplication
-from rag_engine.models.llm import ApplicationAudit, GroundedApplication
+from rag_engine.models.llm import ApplicationVerdictAudit, GroundedApplication
 
 TABLE = "| 条件 | 点 |\n| 属性A=有 | 2 |\n| 属性B=有 | 3 |"
 CLASSIFICATION = "0〜2点は区分A、3〜5点は区分Bです。"
@@ -50,21 +51,14 @@ def test_same_partial_quote_cannot_hide_unknown_row_and_classification() -> None
     entry = candidate()
     seen: list[dict[str, Any]] = []
 
-    def parse(system: str, prompt: str, settings: Any, schema: type[ApplicationAudit], **options: Any) -> ApplicationAudit:
+    def parse(system: str, prompt: str, settings: Any, schema: type[Any], **options: Any) -> Any:
+        if schema is not ApplicationVerdictAudit:
+            return audit_reply(schema, reason="未確定の行があるため合計と区分は確定しません。")
         data = json.loads(prompt)
         seen.append(data)
         # 修正前はitemsの抜粋だけでvalidになる再生。固定の資料全体があると未確定行のゼロ扱いを認めない。
         complete = data.get("documents") == application_documents(spans())
-        return schema(
-            application_reviews=[
-                {
-                    "index": 0,
-                    "valid": not complete,
-                    "reason": "未確定の行があるため合計/区分は確定しない",
-                }
-            ],
-            summary_supported=False,
-        )
+        return audit_reply(schema, [{"index": 0, "valid": not complete}], summary_supported=False, prompt=prompt)
 
     trace = review_applications(
         QUESTION,
@@ -76,7 +70,7 @@ def test_same_partial_quote_cannot_hide_unknown_row_and_classification() -> None
         settings=get_settings(environ={}, dotenv_path=None),
         provider_id=None,
     )
-    assert trace["calls"] == 1
+    assert trace["calls"] == 2 and len(seen) == 1
     assert seen[0]["items"][0]["quote"] == "| 属性A=有 | 2 |"
     assert seen[0]["documents"][0]["evidence"][0]["text"] == TABLE
     assert seen[0]["documents"][1]["evidence"][0]["text"] == CLASSIFICATION

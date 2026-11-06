@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -14,7 +15,7 @@ from rag_engine.generation import applications, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.date_consistency import absent_years
-from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedCitation, GroundedItem
+from rag_engine.models.llm import GroundedApplication, GroundedCitation, GroundedItem
 
 RULE = "受付の日を含め14暦日なので4月14日まで有効で、4月15日に停止する。"
 QUESTION = "対象Xを2031年4月1日に受け付けました。いつまで有効ですか？"
@@ -92,8 +93,8 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
     values = iter(outputs)
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の適用判定"}], summary_supported=True)
+        if schema in APPLICATION_SCHEMAS:
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         prompts.append(prompt)
         return generated_fixture(schema, prompt, next(values))
 

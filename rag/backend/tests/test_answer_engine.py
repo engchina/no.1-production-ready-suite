@@ -13,7 +13,6 @@ from rag_engine.generation.citation_wire import (
     guided_generation_wire_model,
 )
 from rag_engine.models.llm import (
-    ApplicationAudit,
     CragRetrievalGradeOutput,
     GroundedDraft,
     QueryExpansionOutput,
@@ -27,6 +26,7 @@ from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests._ai_stubs import application_audit_reply
 from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 
 PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
@@ -172,15 +172,8 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    if schema is ApplicationAudit:
-        data = json.loads(prompt)
-        return schema(
-            application_reviews=[
-                {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
-                for row in data["applications"]
-            ],
-            summary_supported=True,
-        )
+    if (reply := application_audit_reply(schema, prompt)) is not None:
+        return reply
     if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)
         ids = [item["evidence_id"] for item in data["evidence"]]

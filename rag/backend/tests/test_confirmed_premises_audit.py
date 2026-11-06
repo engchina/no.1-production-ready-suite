@@ -189,8 +189,9 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     assert sum(name in generation_names for name in calls) == 2
     if mode == "none":
         assert not audit_inputs
-        assert len(calls) == 4
-        assert calls.count("ApplicationAudit") == 2
+        # 生成・独立の監査の判定・判定の理由を各要求で 1 回ずつ。
+        assert len(calls) == 6
+        assert calls.count("ApplicationVerdictAudit") == 2 and calls.count("AuditReason") == 2
         validator.assert_not_awaited()
     else:
         assert len(audit_inputs) == 2
