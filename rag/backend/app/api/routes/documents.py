@@ -4927,15 +4927,11 @@ async def _reset_document_outputs_for_extract(
     clear_preprocess_artifact: bool = False,
 ) -> None:
     """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
-    reset_outputs = getattr(oracle, "reset_document_ingestion_outputs", None)
-    if callable(reset_outputs):
-        await reset_outputs(
-            document_id,
-            status=FileStatus.UPLOADED,
-            clear_preprocess_artifact=clear_preprocess_artifact,
-        )
-        return
-    await oracle.update_document_status(document_id, FileStatus.UPLOADED)
+    await oracle.reset_document_ingestion_outputs(
+        document_id,
+        status=FileStatus.UPLOADED,
+        clear_preprocess_artifact=clear_preprocess_artifact,
+    )
 
 
 def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
