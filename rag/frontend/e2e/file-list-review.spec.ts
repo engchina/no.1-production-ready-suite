@@ -724,8 +724,8 @@ test("言語資源の対象条件を維持し、使用版の判定を単一ラ�
   const documents = Array.from({ length: 30 }, (_, index) => ({
     ...documentSummary(`release-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null,
     language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
-      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null },
-      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "new", relation: "current", built_at: null, job_id: null, target_release_id: null },
+      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null, target_version: null },
+      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "new", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] },
   }));
   const requests: URL[] = [];
@@ -744,21 +744,24 @@ test("言語資源の対象条件を維持し、使用版の判定を単一ラ�
   await page.screenshot({ path: test.info().outputPath("document-language-versions.png"), fullPage: true });
 });
 
-test("使用版未記録は状態列と同じ形式のラベルを1つだけ表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("使用版未記録と未構築を区別し、状態列と同じ形式のラベルを1つだけ表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const documents = [
-    { ...documentSummary("unrecorded-no-use", "sample-a.txt", "UPLOADED"), language_pack: null },
-    { ...documentSummary("unrecorded-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } },
-    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
-      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null },
-      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null },
+    { ...documentSummary("unrecorded-no-use", "sample-a.txt", "UPLOADED"), language_pack: null, expected: "版未記録" },
+    { ...documentSummary("not-built-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] }, expected: "未構築" },
+    { ...documentSummary("not-built-queued", "sample-d.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+      { recipe_id: "recipe-1", chunk_set_id: null, release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: "release-current", target_version: 3 },
+    ] }, expected: "未構築" },
+    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), expected: "版未記録", language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null },
+      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] } },
   ];
   await mockFileListApi(page, documents);
   await page.goto("/file-list");
   for (const document of documents) {
     const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: document.file_name, exact: true }) });
-    const cell = row.getByRole("cell", { name: "版未記録", exact: true });
-    await expect(cell).toHaveText("版未記録");
+    const cell = row.getByRole("cell", { name: document.expected, exact: true });
+    await expect(cell).toHaveText(document.expected);
     await expect(cell.locator("[data-status-variant]")).toHaveCount(1);
     await expect(cell.locator("a, button")).toHaveCount(0);
   }

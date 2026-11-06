@@ -92,6 +92,8 @@ class LanguagePackRecipeUse(BaseModel):
     built_at: datetime | None = None
     job_id: str | None = None
     target_release_id: str | None = None
+    # 待機中・実行中の job が固定した版の番号。版の行が無ければ None（版の数から推定しない）。
+    target_version: int | None = None
 
 
 class LanguagePackDocumentUse(BaseModel):
