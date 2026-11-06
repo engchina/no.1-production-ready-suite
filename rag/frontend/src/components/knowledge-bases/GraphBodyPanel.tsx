@@ -24,6 +24,6 @@ export function GraphBodyPanel({ kbId, documentId, chunkSetId }: {kbId: string; 
       ]} rows={query.data.items} getRowKey={(item) => item.chunk_id} />
       <OffsetPagination total={query.data.total} offset={offset} limit={25} count={query.data.items.length} onPageChange={(_page, next) => setOffset(next)} labels={paginationLabels()} ariaLabel={t("knowledgeBases.graph.body")} />
     </> : <EmptyState title={t("knowledgeBases.graph.bodyEmpty")} />}
-    <CitationSourceSheet title={t("knowledgeBases.graph.bodySourceTitle")} open={Boolean(selected)} onClose={() => setSelected(null)} index={selected?.chunk_index ?? 0} chunk={selected ? source.data ?? null : null} kind="search" empty={source.isError ? <ApiErrorState error={source.error} fallback={t("knowledgeBases.graph.bodyError")} onRetry={() => void source.refetch()} /> : <TimedLoadingState label={t("knowledgeBases.graph.bodyLoading")} operationKey={selected?.chunk_id ?? ""}><Skeleton className="h-24 w-full" /></TimedLoadingState>} />
+    <CitationSourceSheet showScores={false} title={t("knowledgeBases.graph.bodySourceTitle")} open={Boolean(selected)} onClose={() => setSelected(null)} index={selected?.chunk_index ?? 0} chunk={selected ? source.data ?? null : null} kind="search" empty={source.isError ? <ApiErrorState error={source.error} fallback={t("knowledgeBases.graph.bodyError")} onRetry={() => void source.refetch()} /> : <TimedLoadingState label={t("knowledgeBases.graph.bodyLoading")} operationKey={selected?.chunk_id ?? ""}><Skeleton className="h-24 w-full" /></TimedLoadingState>} />
   </div>;
 }

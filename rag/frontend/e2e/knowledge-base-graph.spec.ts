@@ -807,7 +807,8 @@ for (const theme of ["light", "dark"] as const) {
       await expect(reader.locator("mark")).toBeVisible();
       expect(reads).toEqual([ids[25]!.chunk_id]);
       await expectNoPageOverflow(page);
-      await page.screenshot({path:testInfo.outputPath(`structure-body-${mixed ? "mixed":"allmissing"}-${theme}.png`)});
+      await page.screenshot({path:testInfo.outputPath(`structure-body-${mixed ? "mixed":"allmissing"}-${theme}.png`), animations: "disabled"});
+      await expect(page.getByRole("dialog", {name:"本文の原文", exact:true}).getByTestId("citation-score-panel")).toHaveCount(0, { timeout: 500 });
     });
   }
 }

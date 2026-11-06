@@ -94,6 +94,26 @@ afterEach(() => {
 });
 
 describe("EvidenceSourceSheet", () => {
+  describe.each([undefined, "answer", "search"] as const)("スコアの表示目的 kind=%s", (kind) => {
+    it.each([undefined, true] as const)("通常の検索・回答の実測0を保持する showScores=%s", (showScores) => {
+      const measured = { ...ITEMS[0]!, score: 0, rerankScore: 0 };
+      act(() => root.render(<EvidenceSourceSheet open onClose={() => undefined} item={measured} index={0} kind={kind} showScores={showScores} />));
+      const score = sheet()?.querySelector('[data-testid="citation-score-panel"]');
+      expect(score?.textContent).toContain("0.000");
+      expect(score?.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe("0");
+    });
+
+    it("検索しない原文はスコアを表示せず、原文・位置・値を保持する", () => {
+      const unmeasured = { ...ITEMS[0]!, score: 0 };
+      act(() => root.render(<EvidenceSourceSheet open onClose={() => undefined} item={unmeasured} index={0} kind={kind} showScores={false} />));
+      expect(sheet()?.querySelector('[data-testid="citation-score-panel"]')).toBeNull();
+      expect(sheet()?.textContent).toContain("文書 A.pdf");
+      expect(sheet()?.textContent).toContain("合成の抜粋 1");
+      expect(sheet()?.textContent).toContain("p.3");
+      expect(unmeasured.score).toBe(0);
+    });
+  });
+
   it("根拠を取得する前と取得失敗でも子の状態をパネル内に表示する", () => {
     act(() => root.render(<EvidenceSourceSheet open onClose={() => undefined} item={null} index={0}><p role="status">取得中</p></EvidenceSourceSheet>));
     expect(sheet()?.textContent).toContain("取得中");
