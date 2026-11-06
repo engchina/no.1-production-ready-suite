@@ -273,7 +273,7 @@ def _bool_metadata_value(value: Any, *, default: bool) -> bool:
 
 
 def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> AnswerRecord:
-    require_projected_vision_source(chunk.metadata, chunk.source_record_refs)
+    require_projected_vision_source(chunk.metadata, chunk.source_record_refs, document=chunk.source_file_name)
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
     chunk_uid = _local_chunk_uid(
         chunk_run_id=chunk_run_id,
@@ -319,7 +319,7 @@ def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> Ans
 
 
 def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
-    require_projected_vision_source(chunk.metadata, chunk.source_record_refs)
+    require_projected_vision_source(chunk.metadata, chunk.source_record_refs, document=chunk.source_file_name)
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
     return AnswerRecord(
         id=chunk.chunk_id,

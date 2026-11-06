@@ -17,6 +17,7 @@ from rag_parser_core.language import current_pack
 from app.rag import structure_index_jobs as jobs_module
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
+    STRUCTURE_INDEX_BUILDER_VERSION,
     GraphEntity,
     GraphEntityChunkLink,
     GraphIndex,
@@ -231,7 +232,12 @@ class MemoryStore:
 
     async def builds(self, kb_id: str) -> dict[str, dict[str, Any]]:
         return {
-            did: {"document_id": did, "source_fingerprint": fp, "quality": "COMPLETE"}
+            did: {
+                "document_id": did,
+                "source_fingerprint": fp,
+                "quality": "COMPLETE",
+                "builder_version": STRUCTURE_INDEX_BUILDER_VERSION,
+            }
             for did, fp in self.oracle.builds.items()
             if self.oracle.documents[did]["kb"] == kb_id
         }

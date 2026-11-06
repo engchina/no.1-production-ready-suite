@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 
 from fastapi import HTTPException
 
+from app.rag.answer_failure import DOCUMENT_REPROCESS_REQUIRED_CODE
+
 # 文書の原本・処理後ファイルが保存先に無い（保存先の設定の変更・削除など。#1210）。
 # 画面のプレビューは、この code のときだけ iframe の表示に戻さず理由と対処を出す。
 DOCUMENT_FILE_MISSING_CODE = "RAG_DOCUMENT_FILE_MISSING"
@@ -59,6 +61,18 @@ class SourceVersionStaleError(CodedApiError):
 
     def __init__(self, message: str, *, headers: Mapping[str, str] | None = None) -> None:
         super().__init__(status_code=409, detail=message, headers=dict(headers or {}) or None)
+
+
+class DocumentReprocessRequiredError(CodedApiError):
+    """保存済みの chunk が旧い形式で、文書の再解析・再分割が要る（409。#4550）。
+
+    ``message`` は対象の文書の表示名と対処を含む利用者向けの文。
+    """
+
+    code = DOCUMENT_REPROCESS_REQUIRED_CODE
+
+    def __init__(self, message: str) -> None:
+        super().__init__(status_code=409, detail=message)
 
 
 class DatabaseReadTimeoutError(CodedApiError):

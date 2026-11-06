@@ -395,6 +395,8 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
     { document_id: "doc-b", name: "synthetic-b.txt", status: "CURRENT", reason: null },
     { document_id: "doc-c", name: "synthetic-c.txt", status: "UNAVAILABLE", reason: "no_chunks" },
   ];
+  // 構築器の版が変わった旧い索引は、計画の詳細に理由を出す（#4549）。ジョブの結果には含めない。
+  const planItems = [...items, { document_id: "doc-d", name: "synthetic-d.txt", status: "STALE", reason: "builder_changed" }];
   const result = (status: string) => ({ job_id: "job-a", status, started_at: "2026-01-01T00:00:00Z", finished_at: null, items: [
     { ...items[0], index_status: status === "COMPLETED" ? "CURRENT" : "MISSING", index_quality: status === "COMPLETED" ? "PARTIAL" : null, status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
     { ...items[1], status: "SKIPPED", index_status: "CURRENT", reason: "current" }, { ...items[2], index_status: "UNAVAILABLE" },
@@ -405,7 +407,7 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
     saves++;
     await route.fulfill({ json: ok({ enabled, global_enabled: false }) });
   });
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items, counts: { MISSING: 1, CURRENT: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 }) }));
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items: planItems, counts: { MISSING: 1, STALE: 1, CURRENT: 1, UNAVAILABLE: 1 }, total: 4, offset: 0, limit: 25 }) }));
   await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
     if (route.request().method() === "POST") {
       if (new URL(route.request().url()).pathname.endsWith("/stop")) job = result("STOPPED");
@@ -421,7 +423,8 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await expect.poll(() => saves).toBe(1);
   expect(starts).toBe(0);
   await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
-  await expect(settings.getByText("未構築 1 件・更新が必要 0 件・構築済み 1 件・準備不足 1 件")).toBeVisible();
+  await expect(settings.getByText("未構築 1 件・更新が必要 1 件・構築済み 1 件・準備不足 1 件")).toBeVisible();
+  await expect(settings.getByRole("cell", { name: "構築の方式が更新されました。「不足・更新分を構築」で作り直してください。", exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
   await expect(page.getByText("構築を開始しました。ページを離れても処理は続きます。", { exact: true })).toBeVisible();

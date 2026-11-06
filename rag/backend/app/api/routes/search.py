@@ -17,6 +17,7 @@ from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.errors import SecurityApiError
 from starlette.concurrency import run_in_threadpool
 
+from app.api.errors import DocumentReprocessRequiredError
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore
 from app.clients.support_guide_store import SupportGuideStore
@@ -36,6 +37,7 @@ from app.rag.answer_failure import (
     describe_answer_api_failure,
     describe_answer_failure,
     find_incomplete_response,
+    find_unprojected_vision_source,
 )
 from app.rag.answer_notice import GUIDE_HANDOFF_CONTACT_KEY, current_answer_notice
 from app.rag.answer_provenance import search_answer_profile_revision
@@ -904,6 +906,19 @@ async def _run_search_with_timeout(
         raise
     except Exception as exc:
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
+        legacy = find_unprojected_vision_source(exc)
+        if legacy is not None:
+            # 旧い形式の chunk（#4550）。定型の 500 にせず、再処理が要る文書を 409 で返す。
+            # ログには文書の名前を書かず、件数だけを残す。
+            logger.warning(
+                "rag_search_document_reprocess_required",
+                extra={
+                    "trace_id": trace_id,
+                    "error_code": DocumentReprocessRequiredError.code,
+                    "document_count": len(legacy.documents),
+                },
+            )
+            raise DocumentReprocessRequiredError(str(legacy)) from exc
         incomplete = find_incomplete_response(exc)
         if incomplete is not None and incomplete.user_message:
             # 送り直しても未完了の応答（#2023）。定型の 500 ではなく、理由と直し方を返す。
