@@ -312,12 +312,21 @@ test("一覧から詳細を開き、戻る・再読込・進むで対象と条�
 });
 
 // #1955: タブをやめ、概要 → 処理の経過（タイムラインと処理の詳細。#2325）→ 回答 → 成果物 → 監査ログを縦に 1 枚で読む。
-test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査ログは開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }) => {
+test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査ログは開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi);
+  mockApi.state.runs.at(-1)!.usage = { model: "saved-model", total_tokens: 12345, input_tokens: 12000, output_tokens: 345, requests: 1 };
   await page.goto("/runs?id=run-layout");
   await expect(page.getByRole("tab")).toHaveCount(0);
   const detail = page.locator("[data-run-detail]");
   await expect(detail).toBeVisible();
+  const summary = page.getByTestId("run-summary");
+  await expect(summary.locator('[data-run-fact="tokens"] dt')).toHaveText("トークン数");
+  await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("12,345 トークン");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("1 回（入力 12,000 / 出力 345 トークン）");
+    await summary.screenshot({ path: testInfo.outputPath(`token-labels-${theme}.png`) });
+  }
   const sections = await detail.evaluate((node) =>
     Array.from(node.children).map((child) => child.getAttribute("data-testid"))
   );

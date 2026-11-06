@@ -5583,8 +5583,8 @@ export const ja = {
   "history.detail.citations": "AI に渡した件数",
   // モデルの呼び出し（Agent の実行の詳細と同じ形。#3419）。
   "history.detail.modelCalls": "モデルの呼び出し",
-  "history.detail.modelCallsValue": "{requests} 回（入力 {input} / 出力 {output} token）",
-  "history.detail.modelCallsPartial": "{requests} 回（うち {measured} 回を計測。入力 {input} / 出力 {output} token）",
+  "history.detail.modelCallsValue": "{requests} 回（入力 {input} / 出力 {output} トークン）",
+  "history.detail.modelCallsPartial": "{requests} 回（うち {measured} 回を計測。入力 {input} / 出力 {output} トークン）",
   "history.detail.usageUnmeasured": "未計測",
   "history.detail.usagePartial": "一部計測",
   "history.detail.errorStage": "止まった段",

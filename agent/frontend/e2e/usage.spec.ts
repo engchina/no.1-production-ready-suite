@@ -237,8 +237,8 @@ test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi })
   // 概要の事実（モデル・token・呼び出しの回数と内訳。#772・#1955）。
   const summary = page.getByTestId("run-summary");
   await expect(summary.locator('[data-run-fact="model"] dd')).toHaveText("xai.grok-4");
-  await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("1,500 token");
-  await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("2 回（入力 1,200 / 出力 300 token）");
+  await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("1,500 トークン");
+  await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("2 回（入力 1,200 / 出力 300 トークン）");
 });
 
 for (const recorded of [false, true]) {
@@ -261,8 +261,8 @@ for (const recorded of [false, true]) {
     await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
     await expect(summary.locator('[data-run-fact="tokens"]')).toHaveCount(recorded ? 1 : 0);
     if (recorded) {
-      await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("120 token");
-      await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("1 回（入力 100 / 出力 20 token）");
+      await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("120 トークン");
+      await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("1 回（入力 100 / 出力 20 トークン）");
     } else {
       await expect(summary.locator('[data-run-fact="modelCalls"]')).toHaveCount(0);
     }
