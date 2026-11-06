@@ -155,8 +155,8 @@ def _build_graph_index_for_kb(
     links: dict[tuple[str, str], GraphEntityChunkLink] = {}
 
     for chunk in chunks:
-        body = not _metadata_str(chunk, "section_path") and not _metadata_str(
-            chunk, "section_title"
+        body = is_body_chunk(
+            chunk.metadata.get("section_path"), chunk.metadata.get("section_title")
         )
         names = (
             [current_pack().text("search_labels", "body")]
@@ -407,11 +407,24 @@ def _entity_type_for_content_kind(content_kind: str) -> str:
 
 
 def _metadata_str(chunk: Chunk, key: str) -> str | None:
-    value = chunk.metadata.get(key)
+    return _metadata_text(chunk.metadata.get(key))
+
+
+def _metadata_text(value: object) -> str | None:
     if value is None or isinstance(value, bool):
         return None
     cleaned = str(value).strip()
     return cleaned or None
+
+
+def is_body_chunk(section_path: object, section_title: object) -> bool:
+    """見出しの無い保存本文か。索引の構築・章節の木・旧索引の検出が同じ判定を使う。
+
+    パスは「 > 」でつないだ文字列か配列で、区切りと空白だけの段は見出しにしない。
+    題名は空白だけなら無い扱い。
+    """
+    path = section_path if isinstance(section_path, list | str) else _metadata_text(section_path)
+    return not split_section_path(path) and not _metadata_text(section_title)
 
 
 def _metadata_float(chunk: Chunk, key: str) -> float | None:

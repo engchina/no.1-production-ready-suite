@@ -6209,8 +6209,11 @@ class OracleClient:
         targets = await self._fetch_all(
             _render_sql(
                 """
-            SELECT j.document_id, j.recipe_id, j.language_pack_release_id
+            SELECT j.document_id, j.recipe_id, j.language_pack_release_id,
+                target.version AS target_version
             FROM rag_ingestion_jobs j JOIN rag_documents d ON d.document_id = j.document_id
+            LEFT JOIN rag_language_pack_releases target
+                ON target.release_id = j.language_pack_release_id
             WHERE {predicate} AND j.status IN ('QUEUED', 'RUNNING') AND {access}
             ORDER BY j.queued_at DESC
         """,
@@ -6219,17 +6222,26 @@ class OracleClient:
             ),
             _with_tenant_bind(job_binds),
         )
+        # 構築中の対象版の番号は、job が固定した版の行から引く（active の有無で経路を分けない）。
+        target_versions: dict[str, int | None] = {}
         for row in targets:
             use = result[str(row["document_id"])]
             recipe_id = _optional_str(row.get("recipe_id"))
+            target_id = _optional_str(row.get("language_pack_release_id"))
+            if target_id:
+                target_versions.setdefault(target_id, _optional_int(row.get("target_version")))
             if not any(recipe.recipe_id == recipe_id for recipe in use.recipes):
                 use.recipes.append(
                     LanguagePackRecipeUse(
                         recipe_id=recipe_id,
                         relation=LanguagePackIndexRelation.UNRECORDED,
-                        target_release_id=_optional_str(row.get("language_pack_release_id")),
+                        target_release_id=target_id,
                     )
                 )
+        for use in result.values():
+            for recipe in use.recipes:
+                if recipe.target_release_id:
+                    recipe.target_version = target_versions.get(recipe.target_release_id)
         return result
 
     async def list_documents(

@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.clients.structure_graph_store import StructureGraphStore
@@ -25,7 +25,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStructureIndexUpdate,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
-    StructureGraphBodyChunkPage,
+    StructureGraphChunkPage,
     StructureGraphLocation,
     StructureGraphOverview,
     StructureGraphReferences,
@@ -553,11 +553,19 @@ async def get_structure_index_job(
 async def start_structure_index_job(
     knowledge_base_id: str, request: StructureIndexStartRequest
 ) -> ApiResponse[dict[str, Any]]:
-    from app.rag.structure_index_jobs import current_public_state, structure_index_jobs
+    from app.rag.structure_index_jobs import (
+        StructureIndexScopeError,
+        current_public_state,
+        structure_index_jobs,
+    )
 
     oracle = OracleClient()
     try:
-        state = await structure_index_jobs.start(oracle, knowledge_base_id, request.mode)
+        state = await structure_index_jobs.start(
+            oracle, knowledge_base_id, request.mode, request.document_ids
+        )
+    except StructureIndexScopeError as exc:
+        raise HTTPException(404, str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(404, "ナレッジベースが見つかりません。") from exc
     except ValueError as exc:
@@ -598,22 +606,28 @@ async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[s
 
 
 @router.get(
-    "/{knowledge_base_id}/graph/documents/{document_id}/body-chunks",
-    response_model=ApiResponse[StructureGraphBodyChunkPage],
+    "/{knowledge_base_id}/graph/documents/{document_id}/entity-chunks",
+    response_model=ApiResponse[StructureGraphChunkPage],
 )
-async def get_structure_graph_body_chunks(
+async def get_structure_graph_entity_chunks(
     knowledge_base_id: str,
     document_id: str,
     chunk_set_id: str = Query(..., min_length=1, max_length=64),
+    node_id: str = Query(..., min_length=64, max_length=64),
     offset: int = Query(0, ge=0),
-    limit: int = Query(25, ge=1, le=100),
-) -> ApiResponse[StructureGraphBodyChunkPage]:
-    """図の本文を、同じ閲覧範囲/保存版の原文表示へ結ぶ。"""
+    limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=100),
+) -> ApiResponse[StructureGraphChunkPage]:
+    """図の章節・本文の節点を、同じ閲覧範囲・保存版の原文表示へ結ぶ。"""
     data = await _read_structure_graph(
         knowledge_base_id,
-        "structure_graph_body_chunks",
-        lambda store: store.body_chunks(
-            knowledge_base_id, document_id, chunk_set_id, offset=offset, limit=limit
+        "structure_graph_entity_chunks",
+        lambda store: store.entity_chunks(
+            knowledge_base_id,
+            document_id,
+            chunk_set_id,
+            node_id=node_id,
+            offset=offset,
+            limit=limit,
         ),
     )
-    return ApiResponse(data=StructureGraphBodyChunkPage(**data))
+    return ApiResponse(data=StructureGraphChunkPage(**data))
