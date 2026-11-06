@@ -995,16 +995,17 @@ def _extraction_vision_projection(extraction: StructuredExtraction) -> Projected
             ) or item.source.record_id != str(binding.get("record_id") or element.element_id or ""):
                 raise ValueError("画像本文と元要素の版が一致しません。再解析してください。")
         represented = {item.source.element_id for item in value.ranges}
-        for element in extraction.elements:
+        for index, element in enumerate(extraction.elements):
             if "vision_text_binding" not in element.metadata:
                 continue
             projected = projected_element_text(
                 element.element_id or "", element.text, element.metadata
             )
-            if (
-                projected.ranges or element.metadata.get(TABLE_VISION_TEXT_KEY)
-            ) and element.element_id not in represented:
+            if projected.ranges and element.element_id not in represented:
                 raise ValueError("画像本文の出所位置が未記録です。再解析してください。")
+            if supplement := _pending_table_vision_supplement(element):
+                # 元の抽出全文は不変。分割用viewにだけ、検証済み要素の補足を足す。
+                value = _append_table_projection(value, element, supplement, index)
         return value
     if not any(
         "vision_text_projection" in element.metadata or "vision_text_binding" in element.metadata

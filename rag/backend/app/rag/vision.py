@@ -1346,28 +1346,8 @@ def _write_docling_raw_image(
     if projection is None:
         return
     if record.category == "Table":
-        if any(
-            item.source.element_id == element.element_id
-            and item.source.role == "image_table_supplement"
-            and item.source.projection == projection
-            for item in writer.value.ranges
-        ):
-            return
-        text = table_vision_supplement(str(record.raw.get("table_vision_text") or ""))
-        if text:
-            source = VisionTextSource(
-                element.element_id or record.id,
-                record.seq_no,
-                projection,
-                "image_table_supplement",
-                record.id,
-                text_sha256(element.text),
-            )
-            writer.write(
-                "supplement:" + record.id,
-                "",
-                ProjectedVisionText(text, (VisionTextRange(0, len(text), source),)),
-            )
+        # Doclingの表補足は要素metadataに保存し、元の全文へは書き込まない。
+        return
     elif record.category == "Picture":
         if existing:
             if any(
@@ -1425,8 +1405,16 @@ def _with_vision_assembly(
     if raw_writer is not None:
         elements = []
         for element in extraction.elements:
-            slot = raw_writer.slots.get(element.element_id or "")
             metadata = dict(element.metadata)
+            if (
+                VISION_TEXT_BINDING_KEY not in metadata
+                or not projected_element_text(
+                    element.element_id or "", element.text, metadata
+                ).ranges
+            ):
+                elements.append(element)
+                continue
+            slot = raw_writer.slots.get(element.element_id or "")
             if slot is not None and extraction.raw_text[slot[0] : slot[1]] == element.text:
                 metadata.update(
                     {
