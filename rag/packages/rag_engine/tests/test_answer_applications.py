@@ -24,6 +24,10 @@ def rule_item(eid):
     }
 
 
+# 説明の段（#4393）の合成の応答。valid な推導の結論の数値を含む日本語の説明。
+EXPLANATION = "延滞日数の12日に1日あたり100円を掛けると、12日×100円＝1200円です。"
+
+
 def application(*, premises=("延滞日数が12日",), indexes=(0,), reasoning="12日×100円＝1200円", result="延滞料は1200円です。"):
     return {"request_id": "Q1", "premises": list(premises), "item_indexes": list(indexes), "reasoning": reasoning, "result": result}
 
@@ -35,11 +39,7 @@ def answer(applications, *, rule_review=("supported", "matched"), application_re
     value["applications"] = list(applications)
     review = audit((0, *rule_review, ""), requests=[("Q1", "addressed")])
     review["application_reviews"] = [{"index": i, "valid": v, "reason": "r"} for i, v in application_reviews]
-    review["output_language"] = "日本語"
-    review["application_presentations"] = [
-        {"index": i, "display_reasoning": app["reasoning"], "equivalent": True} for i, app in enumerate(applications)
-    ]
-    return run(FakeModel([value], [review]), ctx, QUESTION).response
+    return run(FakeModel([value], [review], explanations=[EXPLANATION]), ctx, QUESTION).response
 
 
 class ApplicationTest(unittest.TestCase):
@@ -49,7 +49,7 @@ class ApplicationTest(unittest.TestCase):
         section = result.answer_text.split(APPLICATIONS_SECTION_TITLE, 1)[1]
         self.assertIn("・延滞料は1200円です。", section)
         self.assertIn("前提：「延滞日数が12日」", section)
-        self.assertIn("当てはめ：12日×100円＝1200円", section)
+        self.assertIn("当てはめ：" + EXPLANATION, section)
         self.assertIn("根拠：", section)
         (trace,) = result.generation_trace["applications"]
         self.assertTrue(trace["published"])

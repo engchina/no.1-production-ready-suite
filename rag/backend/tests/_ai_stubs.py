@@ -182,6 +182,10 @@ def deterministic_parse_text_response(
     system_prompt: str, prompt: str, settings: Any, text_format: type[BaseModel], **_: Any
 ) -> BaseModel | AuditWireResult:
     """回答の生成の LLM 呼び出しを決定論的に返す（最初の根拠の 1 行を引用する 1 項目の回答）。"""
+    from rag_engine.generation.application_explanation import (
+        KEY_SOURCES,
+        is_explanation_schema,
+    )
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.audit_wire import is_audit_wire
     from rag_engine.models.llm import (
@@ -196,6 +200,12 @@ def deterministic_parse_text_response(
         TextOutput,
     )
 
+    # 推導の説明の段（#4393）。入力の資料の原文だけから日本語の説明を返す（結論は入力に無い）。
+    if is_explanation_schema(text_format):
+        sources = json.loads(prompt)[KEY_SOURCES]
+        return text_format.model_validate(
+            {"explanation": "資料の原文によると、" + " ".join(sources)}
+        )
     if (
         text_format is ApplicationAudit
         or getattr(text_format, "canonical_schema", None) is ApplicationAudit
@@ -321,11 +331,6 @@ def deterministic_parse_text_response(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,
-                "output_language": "ja",
-                "application_presentations": {
-                    key: {"display_reasoning": "選択した原文の記載を示します。", "equivalent": True}
-                    for key in (wire.expected_application_ids or ())
-                },
                 "application_reviews": {
                     key: {"valid": True, "reason": "合成の原文対応"}
                     for key in (wire.expected_application_ids or ())

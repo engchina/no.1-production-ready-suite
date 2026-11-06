@@ -155,20 +155,7 @@ def apply_application_audit(
 ) -> None:
     """推導の採否を記録する。公開門では欠落・重複した判定も未確認として保留する。"""
     rows = list(audit.application_reviews if audit else [])
-    displays = list(audit.application_presentations if audit else [])
     for index, entry in enumerate(checked):
-        matching = [display for display in displays if display.index == index]
-        display = matching[0] if len(matching) == 1 else None
-        entry.presentation = (
-            {"status": "confirmed", "reasoning": display.display_reasoning, "language": audit.output_language}
-            if display is not None
-            and display.equivalent
-            and display.display_reasoning.strip()
-            and audit is not None
-            and audit.output_language
-            and audit.output_language.strip()
-            else {"status": "unconfirmed" if display is not None else "unrecorded"}
-        )
         reviews = [review for review in rows if review.index == index]
         review = reviews[0] if len(reviews) == 1 else None
         if require_complete:
@@ -373,16 +360,6 @@ APPLICATION_SYSTEM_PROMPT = (
     "かず、規則の中身の言葉で書く。\n"
 )
 
-APPLICATION_PRESENTATION_INSTRUCTIONS = (
-    "### 推導説明の表示\n"
-    "- response_languageは検証済みの回答言語契約。output_languageはschemaの固定値を返し、言語を再選択しない。\n"
-    "- application_presentationsのdisplay_reasoningに、output_languageで元の推導と同義の利用者向け説明を書く。\n"
-    "- display_reasoningは原reasoningをそのまま再掲する欄ではなく、利用者に表示する説明の本体である。\n"
-    "- 引用原文・SQL・コード・識別子・固有名詞・数値・式は翻訳しない。\n"
-    "- 原reasoning・result・前提・引用は変更しない。表示説明の条件・否定・期間・値・式・順序が元と同じかを equivalent で返す。\n"
-    "- valid は元の推導の論理だけで判定する。表示説明の作成に失敗しても、元の推導が正しいことを無効にしない。\n"
-)
-
 APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "## Step 1: 当てはめの監査対象を確認する\n"
     "- あなたは独立した監査担当です。各 application が、it"
@@ -405,7 +382,8 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "。\n"
     "- 当てはめた items の source（文書名 / 見出し）が質"
     "問と別の制度・手続・対象のものなら valid=false。\n"
-    "\n" + APPLICATION_PRESENTATION_INSTRUCTIONS + "\n## Step 3: 要約の裏付けを判定する\n"
+    "\n"
+    "## Step 3: 要約の裏付けを判定する\n"
     "- summary_supported は、summary が ite"
     "ms の規則と valid な application の結果の範囲を"
     "超える断定をしていなければ true。\n"
@@ -475,15 +453,8 @@ def run_application_step(
         return applications, ""
     from rag_engine.generation.application_review import application_documents
     from rag_engine.generation.input_budget import ensure_model_input
-    from rag_engine.generation.response_language import response_language_contract
 
-    inputs["response_language"] = response_language_contract(question, draft.response_language)
-    schema = audit_wire_schema(
-        ApplicationAudit,
-        (),
-        application_indexes=tuple(row["index"] for row in candidates),
-        output_language=inputs["response_language"]["language"],
-    )
+    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in candidates))
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = render_prompt(
         {**inputs, "documents": application_documents(evidence_spans), "applications": candidates, "summary": draft.summary}
@@ -501,8 +472,6 @@ def run_application_step(
         ),
         schema,
     ).audit
-    if inputs["response_language"]["language"] is None:
-        audit = audit.model_copy(update={"output_language": None})
     apply_application_audit(applications, audit, require_complete=True)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""

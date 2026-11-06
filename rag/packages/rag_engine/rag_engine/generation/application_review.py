@@ -21,9 +21,8 @@ from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.document_background import background_label
 from rag_engine.generation.document_inputs import document_groups, document_key
 from rag_engine.generation.input_budget import ensure_model_input
-from rag_engine.generation.response_language import response_language_contract
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
-from rag_engine.models.llm import ApplicationAudit, GroundedAudit, ResponseLanguage
+from rag_engine.models.llm import ApplicationAudit, GroundedAudit
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
 from rag_engine.resources.runtime import resolve_prompt
 
@@ -67,12 +66,23 @@ def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any
     ]
 
 
+def must_propagate(exc: BaseException) -> bool:
+    """認可・取り消し・外側の期限切れは回答全体を止める。それ以外の失敗は、その段の未確認として扱う。"""
+    deadline = current_deadline()
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    return bool(
+        isinstance(exc, (PermissionError, CancelledError))
+        or status in {401, 403}
+        or (deadline is not None and (deadline.cancelled or (deadline.expired and not deadline_cut_short())))
+        or (isinstance(exc, DeadlineExceeded) and not deadline_cut_short())
+    )
+
+
 def review_applications(
     question: str,
     checked: Sequence[CheckedApplication],
     *,
     evidence_spans: Sequence[dict[str, Any]] | None = None,
-    response_language: ResponseLanguage | None = None,
     existing_audit: GroundedAudit | None,
     audit_requested: bool,
     parse_text: Callable[..., Any],
@@ -102,7 +112,6 @@ def review_applications(
             "status": "invalid_contract" if invalid_contract else "reused" if existing_audit is not None and complete else "incomplete",
             "calls": 0,
             "results": [dict(entry.assessment) for entry in checked],
-            "presentations": [dict(entry.presentation) for entry in checked],
         }
     candidates = [entry for entry in checked if not entry.reasons]
     if not candidates:
@@ -111,7 +120,6 @@ def review_applications(
     index = {id(item): position for position, item in enumerate(items)}
     inputs: dict[str, Any] = {
         "question": question,
-        "response_language": response_language_contract(question, response_language or ResponseLanguage()),
         "documents": application_documents(evidence_spans),
         "items": [
             {"index": position, "text": item.item.text, "quote": item.item.quote or item.item.text, "source": _source_label(item.span)}
@@ -122,12 +130,7 @@ def review_applications(
     }
     if premises := confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources):
         inputs["confirmed_premises"] = premises
-    schema = audit_wire_schema(
-        ApplicationAudit,
-        (),
-        application_indexes=tuple(row["index"] for row in inputs["applications"]),
-        output_language=inputs["response_language"]["language"],
-    )
+    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in inputs["applications"]))
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = json.dumps(inputs, ensure_ascii=False)
     started = monotonic()
@@ -135,7 +138,6 @@ def review_applications(
         "status": "completed",
         "calls": 0,
         "prompt_chars": len(system) + len(prompt),
-        "response_language": inputs["response_language"],
         "evidence_spans": len(evidence_spans),
         "evidence_scope": "generation_selected_originals",
     }
@@ -147,29 +149,16 @@ def review_applications(
             call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
         )
         audit = result.audit
-        if inputs["response_language"]["language"] is None:
-            audit = audit.model_copy(update={"output_language": None})
         diagnostic["contract"] = result.validation
         if any(row.index not in range(len(candidates)) for row in audit.application_reviews):
             diagnostic["status"] = "invalid_contract"
             audit = None
     except Exception as exc:
-        deadline = current_deadline()
-        status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
-        if (
-            isinstance(exc, (PermissionError, CancelledError))
-            or status in {401, 403}
-            or (deadline is not None and (deadline.cancelled or (deadline.expired and not deadline_cut_short())))
-            or (isinstance(exc, DeadlineExceeded) and not deadline_cut_short())
-        ):
+        if must_propagate(exc):
             raise
         diagnostic.update(status="incomplete", error_type=type(exc).__name__)
     apply_application_audit(candidates, audit, require_complete=True)
-    diagnostic.update(
-        seconds=round(monotonic() - started, 3),
-        results=[dict(entry.assessment) for entry in candidates],
-        presentations=[dict(entry.presentation) for entry in candidates],
-    )
+    diagnostic.update(seconds=round(monotonic() - started, 3), results=[dict(entry.assessment) for entry in candidates])
     if any(entry.assessment.get("status") == "unknown" for entry in candidates) and diagnostic["status"] == "completed":
         diagnostic["status"] = "incomplete"
     return diagnostic

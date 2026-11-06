@@ -49,9 +49,6 @@ NOT_LISTED = {
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
     "rag_engine.knowledge.prompt_files:DEFAULT_VLM_ANSWER_PROMPT": EDITABLE_DEFAULT,
     # 一覧に載せた定数へ組み込み済みの部品。
-    "rag_engine.generation.applications:APPLICATION_PRESENTATION_INSTRUCTIONS": (
-        "APPLICATION_AUDIT_SYSTEM_PROMPT と AUDIT_SYSTEM_PROMPT に組み込み済み"
-    ),
     "rag_engine.generation.query_prompts:_EXPANSION_INSTRUCTIONS": (
         "QUERY_ROUTING_PROMPT_TEMPLATE と QUERY_EXPANSION_PROMPT_TEMPLATE に組み込み済み"
     ),

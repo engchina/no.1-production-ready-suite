@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from audit_fixtures import legacy_application_audit_result
+from audit_fixtures import legacy_application_audit_result, synthetic_explanation
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -15,6 +15,7 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.citation_locator import clean_evidence_locators
 from rag_engine.models.llm import ApplicationAudit, GroundedCitation, GroundedDraft, GroundedItem
 
@@ -178,6 +179,8 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
                 ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "合成の適用判定"}], summary_supported=True),
                 schema,
             )
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
         prompts.append(prompt)
         return generated_fixture(schema, prompt, next(values))
 

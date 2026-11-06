@@ -27,19 +27,19 @@ def test_default_does_not_classify_question_or_sql_language():
 
 
 @pytest.mark.parametrize("canonical", [ApplicationAudit, GroundedAudit, GroundedFactAudit])
-def test_audit_language_is_a_single_fixed_value_for_every_mode(canonical):
-    schema = audit_wire_schema(canonical, (), application_indexes=(0,), output_language="en")
-    assert schema.model_json_schema()["properties"]["output_language"]["const"] == "en"
+def test_audit_schema_judges_logic_only_without_language_or_display_fields(canonical):
+    """推導の審査は論理だけを返す。表示の言語・説明の欄は説明の段（application_explanation）が持つ。"""
+    schema = audit_wire_schema(canonical, (), application_indexes=(0,))
+    properties = schema.model_json_schema()["properties"]
+    assert "output_language" not in properties and "application_presentations" not in properties
     raw = {
-        "output_language": "ja",
         "summary_supported": True,
         "application_reviews": {"A0": {"valid": True, "reason": "原文対応"}},
         "application_presentations": {"A0": {"display_reasoning": "日本語の説明", "equivalent": True}},
     }
     decoded = decode_audit_wire(json.dumps(raw), schema)
     assert decoded.audit.application_reviews[0].valid
-    assert decoded.audit.output_language is None
-    assert any(row["code"] == "output_language_mismatch" for row in decoded.validation["errors"])
+    assert any(row["code"] == "extra_audit_fields" for row in decoded.validation["errors"])
 
 
 def test_generation_cannot_invent_a_language_name_not_in_the_question():

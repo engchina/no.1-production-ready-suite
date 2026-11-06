@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 from unittest.mock import patch
 
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import legacy_audit_result, synthetic_explanation
 from citation_unit_support import canonical_fixture, without_unit_annotations
 from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
@@ -22,6 +22,7 @@ from rag_engine.generation.answering import (
     _prompt_safe_warnings,
     synthesize_grounded_answer,
 )
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, RequestScopePlan
@@ -55,8 +56,10 @@ def context(*records):
 class FakeModel:
     """schema ごとに用意した応答を順に返し、受け取った入力を記録する。"""
 
-    def __init__(self, drafts, audits, *, scope_plan=None):
+    def __init__(self, drafts, audits, *, scope_plan=None, explanations=()):
         self.drafts, self.audits, self.prompts = list(drafts), list(audits), []
+        # 説明の段（#4393）の応答。無ければ入力の資料の原文から作る決定論の説明。
+        self.explanations = list(explanations)
         self.captured_system_prompts = []
         self.scope_plan = scope_plan
 
@@ -64,6 +67,11 @@ class FakeModel:
         observed = schema.canonical_schema if is_audit_wire(schema) else schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
+        if is_explanation_schema(schema):
+            if not self.explanations:
+                return synthetic_explanation(schema, prompt)
+            text = self.explanations.pop(0) if len(self.explanations) > 1 else self.explanations[0]
+            return schema.model_validate({"explanation": text})
         if issubclass(schema, RequestScopePlan) and self.scope_plan is not None:
             return schema.model_validate(self.scope_plan)
         is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft

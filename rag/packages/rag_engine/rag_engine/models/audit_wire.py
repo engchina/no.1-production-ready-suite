@@ -14,7 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError,
 
 from rag_engine.models.llm import (
     ApplicationAudit,
-    GroundedApplicationPresentation,
     GroundedApplicationReview,
     GroundedAudit,
     GroundedFactAudit,
@@ -24,10 +23,7 @@ from rag_engine.models.llm import (
 )
 from rag_engine.resources.structured_failures import structured_failure_details
 
-_APPLICATION_FIELDS: tuple[tuple[str, type[BaseModel]], ...] = (
-    ("application_reviews", GroundedApplicationReview),
-    ("application_presentations", GroundedApplicationPresentation),
-)
+_APPLICATION_FIELDS: tuple[tuple[str, type[BaseModel]], ...] = (("application_reviews", GroundedApplicationReview),)
 
 
 class AuditWireContractError(ValueError):
@@ -53,7 +49,6 @@ class AuditWireResult(BaseModel):
 class _AuditWire(BaseModel):
     model_config = ConfigDict(extra="forbid")
     canonical_schema: ClassVar[type[GroundedAudit] | type[GroundedFactAudit] | type[ApplicationAudit]]
-    fixed_output_language: ClassVar[str | None] = None
     expected_application_ids: ClassVar[tuple[str, ...] | None]
     expected_request_ids: ClassVar[tuple[str, ...]]
     request_value_schema: ClassVar[type[BaseModel]]
@@ -97,7 +92,6 @@ def audit_wire_schema(
     expected_ids: tuple[str, ...],
     requirement_ids: tuple[str, ...] = (),
     application_indexes: tuple[int, ...] | None = None,
-    output_language: str | None = None,
 ) -> type[_AuditWire]:
     if canonical not in {GroundedAudit, GroundedFactAudit, ApplicationAudit}:
         raise AuditWireContractError("invalid_canonical_schema")
@@ -111,9 +105,7 @@ def audit_wire_schema(
     ):
         raise AuditWireContractError("invalid_application_indexes")
     application_ids = None if application_indexes is None else tuple(f"A{index}" for index in application_indexes)
-    suffix = sha256(
-        json.dumps([expected_ids, requirement_ids, application_indexes, output_language], ensure_ascii=False).encode()
-    ).hexdigest()[:16]
+    suffix = sha256(json.dumps([expected_ids, requirement_ids, application_indexes], ensure_ascii=False).encode()).hexdigest()[:16]
     request_value = _value_schema(GroundedRequestReview, "request_id", "BoundRequestValue")
     requirement_value = _value_schema(GuideRequirementReview, "requirement_id", "BoundRequirementValue")
     fields: dict[str, Any] = {
@@ -121,13 +113,6 @@ def audit_wire_schema(
         for key, info in canonical.model_fields.items()
         if key not in {"request_reviews", "guide_requirement_reviews"}
     }
-    if output_language is not None:
-        from typing import Literal
-
-        fields["output_language"] = (
-            cast(Any, Literal)[output_language],
-            Field(..., description="検証済み回答言語の固定値。再選択しない。"),
-        )
     if "reviews" in canonical.model_fields:
         fields["reviews"] = (GenericAlias(list, _review_wire_schema()), deepcopy(canonical.model_fields["reviews"]))
     if "request_reviews" in canonical.model_fields:
@@ -145,11 +130,10 @@ def audit_wire_schema(
                 _keys_schema(
                     application_ids, _value_schema(model, "index", "Bound_" + app_field), "BoundApplicationKeys_" + app_field + suffix
                 ),
-                Field(..., description="対応するapplicationの固定キー。論理の採否と表示の成否を別々に返す。"),
+                Field(..., description="対応するapplicationの固定キーの論理の採否。キーのIDを値に重ねて書かない。"),
             )
     wire = cast(type[_AuditWire], create_model(canonical.__name__ + "Bound_" + suffix, __base__=_AuditWire, **fields))
     wire.canonical_schema, wire.expected_request_ids = canonical, expected_ids
-    wire.fixed_output_language = output_language
     wire.expected_requirement_ids = requirement_ids
     wire.expected_application_ids = application_ids
     wire.request_value_schema, wire.requirement_value_schema = request_value, requirement_value
@@ -290,7 +274,7 @@ def decode_audit_wire(text: str, schema: type[BaseModel]) -> AuditWireResult:
         errors.append({"code": "extra_audit_fields", "count": len(unknown_top)})
     bound_fields = {"request_reviews", "guide_requirement_reviews"}
     if schema.expected_application_ids is not None:
-        bound_fields.update({"application_reviews", "application_presentations"})
+        bound_fields.update(name for name, _ in _APPLICATION_FIELDS)
     for name in canonical.model_fields:
         if name in bound_fields:
             continue
@@ -313,7 +297,7 @@ def decode_audit_wire(text: str, schema: type[BaseModel]) -> AuditWireResult:
                 else "partial"
                 if name == "goal_alignment"
                 else None
-                if name in {"summary_output_fields", "output_language"}
+                if name == "summary_output_fields"
                 else []
             )
             annotation = _field_schema(canonical, name).model_fields[name].annotation
@@ -359,9 +343,6 @@ def decode_audit_wire(text: str, schema: type[BaseModel]) -> AuditWireResult:
             }
             for row in normalized.get("reviews", [])
         ]
-    if schema.fixed_output_language is not None and normalized.get("output_language") != schema.fixed_output_language:
-        normalized["output_language"] = None
-        errors.append({"code": "output_language_mismatch", "field": "output_language"})
     audit = (ApplicationAudit if canonical is ApplicationAudit else GroundedAudit).model_validate(normalized)
     validation = {
         "status": "completed" if not errors else "partial" if all(e["code"] == "missing_bound_key" for e in errors) else "error",

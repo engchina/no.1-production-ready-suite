@@ -1,5 +1,6 @@
 """旧監査の決定論fixtureを明示的に移す。本番のraw wire検証成功にはしない。"""
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -55,7 +56,7 @@ def legacy_audit_to_wire_fixture(value: Mapping[str, Any] | BaseModel, schema: t
             row["source_condition"] = row["condition"]
     bound_fields = [("request_reviews", "request_id"), ("guide_requirement_reviews", "requirement_id")]
     if getattr(schema, "expected_application_ids", None) is not None:
-        bound_fields.extend([("application_reviews", "index"), ("application_presentations", "index")])
+        bound_fields.append(("application_reviews", "index"))
     for field, identity in bound_fields:
         rows = result[field]
         ids = [row[identity] for row in rows]
@@ -81,3 +82,11 @@ def legacy_application_audit_result(value: Mapping[str, Any] | BaseModel, schema
         audit=ApplicationAudit.model_validate(value.model_dump() if isinstance(value, BaseModel) else value),
         validation={"source": "legacy_fixture", "transport_not_observed": True, "strict_wire_validation": "not_observed"},
     )
+
+
+def synthetic_explanation(schema: type[BaseModel], prompt: str) -> BaseModel:
+    """説明の段の決定論スタブ。入力の資料の原文だけから日本語の説明を作る（結論は入力に無い）。"""
+    from rag_engine.generation.application_explanation import KEY_SOURCES
+
+    sources = json.loads(prompt)[KEY_SOURCES]
+    return schema.model_validate({"explanation": "資料の原文によると、" + " ".join(sources)})

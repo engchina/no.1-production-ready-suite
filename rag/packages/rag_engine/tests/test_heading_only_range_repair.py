@@ -8,13 +8,14 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from audit_fixtures import legacy_application_audit_result
+from audit_fixtures import legacy_application_audit_result, synthetic_explanation
 from citation_unit_support import generated_output, repair_output
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.citation_range_repair import CitationRangeRepair
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import ApplicationAudit, GroundedDraft
@@ -262,6 +263,8 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
                 ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "合成の修復原文対応"}], summary_supported=True),
                 schema,
             )
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
         if issubclass(schema, generation_draft_wire_model()):
             return generated_output(schema, prompt, text=CLAIM)
         assert issubclass(schema, CitationRangeRepair)
@@ -272,7 +275,7 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
         result = answering.synthesize_grounded_answer(
             QUESTION, AnswerContext(records=[record], text=TEXT), config, image_prompt_mode="text_only"
         )
-    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationAudit"]
+    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationAudit", "ApplicationExplanation"]
     rounds = result.response.generation_trace["rounds"]
     assert [round_["accepted"] for round_ in rounds] == [True, True]
     assert rounds[1]["timing"]["citation_range_repair"]["status"] == "completed"

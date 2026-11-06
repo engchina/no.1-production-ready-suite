@@ -1,135 +1,73 @@
-"""推導の論理と表示を別々に束縛し、元の説明・結果・原文を改変しない。"""
+"""推導の論理の審査と説明の段を分け、説明の失敗が結論・原文・論理の判定を変えないことを 3 つの監査の型で確かめる。"""
 
 import json
+import re
 from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from audit_fixtures import legacy_audit_to_wire_fixture
 
 from rag_engine.config import get_settings
+from rag_engine.generation.application_explanation import KEY_SOURCES, is_explanation_schema
 from rag_engine.generation.application_review import review_applications
-from rag_engine.generation.applications import CheckedApplication, apply_application_audit, render_lines
-from rag_engine.models.audit_wire import audit_wire_schema, decode_audit_wire
+from rag_engine.generation.applications import APPLICATION_AUDIT_SYSTEM_PROMPT, CheckedApplication, render_lines
+from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, FACT_AUDIT_SYSTEM_PROMPT
+from rag_engine.models.audit_wire import audit_wire_schema, decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedAudit, GroundedFactAudit
 
-ORIGINAL = "The total is 3 * 800 + 2 * 500 = 3400."
-DISPLAY = "単価800円を3個分、単価500円を2個分計算し、合計は3400円です。"
-SOURCE = "項目Aは800円、項目Bは500円です。SQL: SELECT COUNT(*) FROM SYNTHETIC_ITEMS;"
+RECORDED = {
+    case["name"]: case
+    for case in json.loads((Path(__file__).parent / "fixtures" / "application_explanation_recorded.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
+}
+CASE = RECORDED["multiple_rows-r1"]
+QUESTION = CASE["question"]
+SOURCE = CASE["sources"][0]
+RESULT = CASE["conclusion"]
+EXPLANATION = CASE["recorded_explanation"]
+# 生成が書いた英語の推導。表示にも説明の段の入力にも使わない。
+ORIGINAL = "The total is derived from the quantities and unit prices in the source."
 
 
 def candidate():
     item = SimpleNamespace(kind="rule", applies="matched", text=SOURCE, quote=SOURCE)
     rule = SimpleNamespace(item=item, span={"text": SOURCE, "source": "synthetic.txt"}, quote_only=False, removed=False, state="")
-    return CheckedApplication(GroundedApplication(item_indexes=[0], reasoning=ORIGINAL, result="3400円"), [rule])
-
-
-def payload(base=ApplicationAudit, *, indexes=(0,)):
-    schema = audit_wire_schema(base, (), application_indexes=indexes)
-    value = (
-        {"summary_supported": True}
-        if base is ApplicationAudit
-        else legacy_audit_to_wire_fixture(GroundedAudit(reviews=[], summary_supported=True, goal_alignment="aligned"), schema)
-    )
-    value["output_language"] = "ja"
-    value["application_reviews"] = {f"A{i}": {"valid": True, "reason": "規則と一致"} for i in indexes}
-    value["application_presentations"] = {f"A{i}": {"display_reasoning": DISPLAY, "equivalent": True} for i in indexes}
-    return schema, value
+    return CheckedApplication(GroundedApplication(item_indexes=[0], reasoning=ORIGINAL, result=RESULT), [rule])
 
 
 @pytest.mark.parametrize("base", [ApplicationAudit, GroundedAudit, GroundedFactAudit])
-def test_all_modes_bind_logic_and_display_to_same_fixed_application_ids(base):
-    schema, raw = payload(base, indexes=(0, 3))
-    result = decode_audit_wire(json.dumps(raw), schema)
-    assert [r.index for r in result.audit.application_reviews] == [0, 3]
-    assert [r.index for r in result.audit.application_presentations] == [0, 3]
-    assert result.validation["strict_wire_validation"] == "passed"
-    node = schema.model_json_schema()
-    for field in ["application_reviews", "application_presentations"]:
-        keys = node["$defs"][node["properties"][field]["$ref"].split("/")[-1]]
-        assert set(keys["required"]) == {"A0", "A3"}
-        child = node["$defs"][keys["properties"]["A0"]["$ref"].split("/")[-1]]
-        assert "index" not in child["properties"]
-        assert not {"result", "quote", "premises"} & set(child["properties"])
+def test_review_schema_and_prompts_hold_logic_only(base):
+    node = audit_wire_schema(base, (), application_indexes=(0, 3)).model_json_schema()
+    assert "application_presentations" not in node["properties"] and "output_language" not in node["properties"]
+    keys = node["$defs"][node["properties"]["application_reviews"]["$ref"].split("/")[-1]]
+    assert set(keys["required"]) == {"A0", "A3"}
+    for prompt in (APPLICATION_AUDIT_SYSTEM_PROMPT, AUDIT_SYSTEM_PROMPT, FACT_AUDIT_SYSTEM_PROMPT):
+        assert "推導説明の表示" not in prompt and "display_reasoning" not in prompt and "output_language" not in prompt
 
 
-@pytest.mark.parametrize("failure", ["missing", "foreign", "null", "empty", "invalid_type", "whitespace", "extra_result", "not_equivalent"])
-def test_bad_display_keeps_valid_result_and_quote_without_original_fallback(failure):
-    schema, raw = payload()
-    if failure == "missing":
-        raw["application_presentations"].pop("A0")
-    elif failure == "foreign":
-        raw["application_presentations"]["A9"] = raw["application_presentations"].pop("A0")
-    elif failure == "null":
-        raw["application_presentations"]["A0"] = None
-    elif failure in {"empty", "invalid_type"}:
-        raw["application_presentations"]["A0"]["display_reasoning"] = "" if failure == "empty" else 1
-    elif failure == "whitespace":
-        raw["application_presentations"]["A0"]["display_reasoning"] = "   "
-    elif failure == "extra_result":
-        raw["application_presentations"]["A0"]["result"] = "9999円"
-    else:
-        raw["application_presentations"]["A0"]["equivalent"] = False
-    checked = candidate()
-    before = deepcopy(checked.application.model_dump()), deepcopy(checked.entries[0].span)
-    apply_application_audit([checked], decode_audit_wire(json.dumps(raw), schema).audit, require_complete=True)
-    assert checked.published and checked.assessment["status"] == "valid"
-    assert checked.application.model_dump() == before[0] and checked.entries[0].span == before[1]
-    rendered = "\n".join(render_lines([checked], lambda _: "原文", lambda _: None))
-    assert "3400円" in rendered and "当てはめ" not in rendered and ORIGINAL not in rendered
-    assert checked.presentation["status"] in {"unrecorded", "unconfirmed"}
-
-
-def test_duplicate_display_key_does_not_erase_valid_logic():
-    schema, raw = payload(indexes=(0, 1))
-    text = json.dumps(raw).replace('"A0": {"display_reasoning"', '"A0": {}, "A0": {"display_reasoning"')
-    audit = decode_audit_wire(text, schema).audit
-    assert [r.index for r in audit.application_reviews] == [0, 1]
-    assert [r.index for r in audit.application_presentations] == [1]
-
-
-def test_bad_logic_cannot_be_made_valid_by_a_good_display():
-    schema, raw = payload()
-    raw["application_reviews"]["A0"]["valid"] = False
-    checked = candidate()
-    apply_application_audit([checked], decode_audit_wire(json.dumps(raw), schema).audit, require_complete=True)
-    assert not checked.published and checked.assessment["status"] == "invalid"
-    assert render_lines([checked], lambda _: "原文", lambda _: None) == []
-
-
-def test_display_does_not_mutate_original_reasoning_result_or_sql_quote():
-    schema, raw = payload()
-    checked = candidate()
-    before = deepcopy(checked.application.model_dump()), deepcopy(checked.entries[0].span)
-    apply_application_audit([checked], decode_audit_wire(json.dumps(raw), schema).audit, require_complete=True)
-    rendered = "\n".join(render_lines([checked], lambda _: SOURCE, lambda _: None))
-    assert DISPLAY in rendered and ORIGINAL not in rendered and SOURCE in rendered
-    assert checked.application.model_dump() == before[0] and checked.entries[0].span == before[1]
-    assert checked.to_payload()["reasoning"] == ORIGINAL
-    assert checked.to_payload()["presentation"]["reasoning"] == DISPLAY
-
-
-def test_other_language_and_identifiers_are_not_rewritten_by_code():
-    schema, raw = payload()
-    text = "SyntheticFeature uses SELECT 'a  b' FROM SYNTHETIC_ITEMS; to count items."
-    raw["output_language"] = "English"
-    raw["application_presentations"]["A0"].update(display_reasoning=text)
-    checked = candidate()
-    apply_application_audit([checked], decode_audit_wire(json.dumps(raw), schema).audit, require_complete=True)
-    assert text in "\n".join(render_lines([checked], lambda _: "原文", lambda _: None))
-    assert checked.presentation["language"] == "English"
-
-
-def test_existing_audit_reuses_display_without_model_call():
-    schema, raw = payload(GroundedAudit)
-    checked = candidate()
+def test_existing_audit_is_reused_without_a_review_call_and_without_a_display():
+    schema = audit_wire_schema(GroundedAudit, (), application_indexes=(0,))
+    raw = legacy_audit_to_wire_fixture(
+        GroundedAudit(
+            reviews=[],
+            application_reviews=[{"index": 0, "valid": True, "reason": "規則と一致"}],
+            summary_supported=True,
+            goal_alignment="aligned",
+        ),
+        schema,
+    )
+    entry = candidate()
 
     def unused(*a, **kw):
-        pytest.fail("言語表示のために呼び出さない")
+        pytest.fail("推導の審査を再利用するときは呼び出さない")
 
     trace = review_applications(
-        "合計を日本語で説明してください。",
-        [checked],
+        QUESTION,
+        [entry],
         evidence_spans=[{"evidence_id": "E1", "text": SOURCE}],
         existing_audit=decode_audit_wire(json.dumps(raw), schema).audit,
         audit_requested=True,
@@ -137,60 +75,62 @@ def test_existing_audit_reuses_display_without_model_call():
         settings=get_settings(environ={}, dotenv_path=None),
         provider_id=None,
     )
-    assert trace["calls"] == 0 and checked.presentation["reasoning"] == DISPLAY
+    assert trace["calls"] == 0 and entry.assessment["status"] == "valid" and entry.published
+    # 説明の段の前は説明を出さない（生成の推導の文へ戻さない）。
+    before = deepcopy(entry.application.model_dump())
+    rendered = "\n".join(render_lines([entry], lambda _: "根拠：synthetic.txt", lambda _: None))
+    assert RESULT in rendered and "当てはめ" not in rendered and ORIGINAL not in rendered
+    assert entry.application.model_dump() == before
 
 
 @pytest.mark.parametrize("audit_mode", ["none", "standard", "detailed"])
-@pytest.mark.parametrize("display_state", ["confirmed", "missing", "not_equivalent", "invalid_language"])
-def test_generation_keeps_valid_result_and_source_while_english_never_falls_back(display_state, audit_mode):
-    import re
-    from dataclasses import replace
-
+@pytest.mark.parametrize("state", ["confirmed", "hidden", "call_error", "logic_invalid", "invalid_language"])
+def test_generation_calls_the_explanation_once_after_review_and_never_falls_back(state, audit_mode):
     from citation_unit_support import selected_answer_payload
 
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
     from rag_engine.generation.answering import synthesize_grounded_answer
-    from rag_engine.models.audit_wire import is_audit_wire
 
-    calls = []
+    calls: list[str] = []
+    explanation_inputs: list[dict] = []
+    valid = state != "logic_invalid"
 
     def parse(system, prompt, settings, schema, **options):
-        calls.append(schema)
+        if is_explanation_schema(schema):
+            calls.append("explanation")
+            explanation_inputs.append(json.loads(prompt))
+            if state == "call_error":
+                raise RuntimeError("synthetic transport failure")
+            text = RECORDED["explicit_english-r1"]["recorded_explanation"] if state == "hidden" else EXPLANATION
+            return schema.model_validate({"explanation": text})
         if is_audit_wire(schema):
-            _, raw = payload()
-            if schema.canonical_schema is not ApplicationAudit:
-                source = GroundedAudit(
-                    reviews=[
-                        {
-                            "index": 0,
-                            "support": "supported",
-                            "applicability": "matched",
-                            "source_applicability": "matched",
-                            "reason": "原文対応",
-                        }
-                    ],
-                    request_reviews=[
-                        {"request_id": key, "status": "addressed", "reason": "要求に回答"} for key in schema.expected_request_ids
-                    ],
-                    application_reviews=[{"index": 0, "valid": True, "reason": "推導対応"}],
-                    application_presentations=[{"index": 0, "display_reasoning": DISPLAY, "equivalent": True}],
-                    output_language="ja",
-                    summary_supported=True,
-                    goal_alignment="aligned",
-                )
-                raw = legacy_audit_to_wire_fixture(source, schema)
-            if display_state == "missing":
-                raw["application_presentations"] = {}
-            elif display_state == "not_equivalent":
-                raw["application_presentations"]["A0"]["equivalent"] = False
-            result = decode_audit_wire(json.dumps(raw), schema)
-            return result
+            calls.append("audit")
+            if schema.canonical_schema is ApplicationAudit:
+                raw = {"summary_supported": True, "application_reviews": {"A0": {"valid": valid, "reason": "推導対応"}}}
+                return decode_audit_wire(json.dumps(raw), schema)
+            source = GroundedAudit(
+                reviews=[
+                    {
+                        "index": 0,
+                        "support": "supported",
+                        "applicability": "matched",
+                        "source_applicability": "matched",
+                        "reason": "原文対応",
+                    }
+                ],
+                request_reviews=[{"request_id": key, "status": "addressed", "reason": "要求に回答"} for key in schema.expected_request_ids],
+                application_reviews=[{"index": 0, "valid": valid, "reason": "推導対応"}],
+                summary_supported=True,
+                goal_alignment="aligned",
+            )
+            return decode_audit_wire(json.dumps(legacy_audit_to_wire_fixture(source, schema)), schema)
+        calls.append("generate")
         units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
-        value = selected_answer_payload(units, text="3400円")
+        value = selected_answer_payload(units, text=RESULT)
         value["answer_parts"][0]["answer"]["reasoning"] = ORIGINAL
         value["summary_part_indexes"] = [0]
-        if display_state == "invalid_language":
+        if state == "invalid_language":
             value["response_language"] = {"selection": {"kind": "explicit", "quote": "invented language"}}
         return schema.model_validate(value)
 
@@ -213,28 +153,23 @@ def test_generation_keeps_valid_result_and_source_while_english_never_falls_back
     settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode=audit_mode, answer_max_correction_rounds=0)
     with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
         response = synthesize_grounded_answer(
-            "項目Aを3個、項目Bを2個利用する合計額を教えてください。",
-            AnswerContext(records=[row], text=SOURCE),
-            settings,
-            image_prompt_mode="text_only",
+            QUESTION, AnswerContext(records=[row], text=SOURCE), settings, image_prompt_mode="text_only"
         ).response
-    assert len(calls) == 2
-    assert response.generation_trace["applications"][0]["published"], json.dumps(
-        response.generation_trace["applications"], ensure_ascii=False
-    )
-    assert response.answer_text.startswith("3400円") and SOURCE in response.answer_text
-    assert ORIGINAL not in response.answer_text
-    assert (DISPLAY in response.answer_text) == (display_state == "confirmed")
+    called = state in {"confirmed", "hidden", "call_error"}
+    # 生成 1 回・推導の審査 1 回（標準・詳細は通常の監査と同じ呼び出し）と、valid な推導 1 件ごとの説明の段 1 回。
+    assert calls == ["generate", "audit", *(["explanation"] if called else [])]
     trace = response.generation_trace["applications"][0]
-    assert trace["published"] and trace["reasoning"] == ORIGINAL and trace["result"] == "3400円"
-
-
-@pytest.mark.parametrize("language", [None, "", "   ", 1])
-def test_missing_or_invalid_display_language_does_not_revoke_valid_logic(language):
-    schema, raw = payload()
-    raw["output_language"] = language
-    checked = candidate()
-    apply_application_audit([checked], decode_audit_wire(json.dumps(raw), schema).audit, require_complete=True)
-    assert checked.published and checked.assessment["status"] == "valid"
-    rendered = "\n".join(render_lines([checked], lambda _: SOURCE, lambda _: None))
-    assert "3400円" in rendered and ORIGINAL not in rendered and DISPLAY not in rendered
+    assert trace["reasoning"] == ORIGINAL and trace["result"] == RESULT
+    assert ORIGINAL not in response.answer_text
+    if called:
+        (user,) = explanation_inputs
+        assert set(user) == {"質問", KEY_SOURCES} and user["質問"] == QUESTION
+        assert ORIGINAL not in json.dumps(user, ensure_ascii=False) and RESULT not in json.dumps(user, ensure_ascii=False)
+    if not valid:
+        assert not trace["published"] and trace["presentation"] == {"status": "not_requested", "reason": "logic_not_valid"}
+        return
+    assert trace["published"]
+    assert response.answer_text.startswith(RESULT) and SOURCE in response.answer_text
+    assert (EXPLANATION in response.answer_text) == (state == "confirmed")
+    expected = {"confirmed": "confirmed", "hidden": "hidden", "call_error": "unrecorded", "invalid_language": "hidden"}[state]
+    assert trace["presentation"]["status"] == expected

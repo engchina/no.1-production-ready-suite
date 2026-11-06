@@ -55,7 +55,6 @@ from rag_engine.generation.answer_models import (
 from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_generation_model
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
-    APPLICATION_PRESENTATION_INSTRUCTIONS,
     CheckedApplication,
     check_applications,
 )
@@ -82,7 +81,7 @@ from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
-from rag_engine.generation.response_language import generation_language_schema, response_language_contract
+from rag_engine.generation.response_language import generation_language_schema
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.summary_projection import (
     APPLICATION_SUMMARY_WITHHELD,
@@ -479,7 +478,8 @@ AUDIT_SYSTEM_PROMPT = (
         "いない』『未確認』『のみ適用』と限定している事項を、text が『確"
         "認できる』『一致する』『出力できる』と保証していれば unsuppo"
         "rted（末尾で留保していても同じ）。summary が同じ保証をし"
-        "ていれば summary_supported=false。\n" + APPLICATION_PRESENTATION_INSTRUCTIONS + "### applications（当てはめ）\n"
+        "ていれば summary_supported=false。\n"
+        "### applications（当てはめ）\n"
         "- documents は生成へ渡した原文を文書と版ごとにまとめたもの。選択引用の外にある条件・未確定の行・分類規則も確認する。引用抜粋だけで未確認条件を不成立や0とみなさず、必要な規則を確認できなければ valid=false。\n"
         "- valid=true は、item_indexes の items の原文の事実・規則から reasoning と result を導ける場合だけ。"
         "premises を使う場合は質問の事実に限る。資料だけで導く場合は空でよい。"
@@ -515,7 +515,7 @@ AUDIT_SYSTEM_PROMPT = (
         "ceとfunction_contextが示す根拠の役割と成果物の一致"
         "を先に判定する。\n"
         "- application_reviews: 各 applicati"
-        "on の論理判定。application_presentations は表示説明の独立した判定。\n"
+        "on の index、valid、reason。\n"
         "- request_reviews: task_contract.request_units の各 id をそのまま1回ずつ返し、新規・改変・重複した id を作らない。"
         "原質問のすべての小問・条件・否定・例外を確認する。一部だけの回答は partial とし、要求 ID の数や説明の有無だけで完了としない。"
         "各要求について、items（valid な applicatio"
@@ -7233,7 +7233,6 @@ def run_round(
             "question": effective_contract.get("current_request", question) if guide_task_scope else question,
             **({"original_question": question} if guide_task_scope else {}),
             "task_contract": effective_contract,
-            "response_language": response_language_contract(question, draft.response_language),
             "summary": str(draft.summary),
             "items": [
                 {
@@ -7449,7 +7448,6 @@ def run_round(
         review_applications(
             question,
             applications,
-            response_language=draft.response_language,
             evidence_spans=spans,
             existing_audit=application_audit,
             audit_requested=True,
@@ -7713,7 +7711,6 @@ def _parse_audit(
         request_ids,
         requirement_ids,
         application_indexes=tuple(row["index"] for row in inputs.get("applications", [])),
-        output_language=inputs.get("response_language", {}).get("language") if inputs.get("applications") else None,
     )
     result = canonical_audit_result(
         call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
@@ -7721,8 +7718,6 @@ def _parse_audit(
     if not isinstance(result.audit, GroundedAudit):
         raise TypeError("通常監査のcanonical型が一致しません。")
     audit = result.audit
-    if inputs.get("response_language", {}).get("status") == "unconfirmed":
-        audit = audit.model_copy(update={"output_language": None})
     audit._wire_validation = result.validation
     return audit
 

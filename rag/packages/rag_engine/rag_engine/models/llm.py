@@ -846,22 +846,6 @@ class GroundedApplicationReview(_StrictModel):
     reason: str = Field(description="判定の根拠を短く。")
 
 
-class GroundedApplicationPresentation(_StrictModel):
-    """論理の採否とは独立した、推導説明の表示。原推導と結果は変更しない。"""
-
-    index: int = Field(description="対応する application の index。")
-    display_reasoning: str = Field(
-        min_length=1, description="output_languageで書いた利用者向けの推導説明。元の条件・値・否定・順序・式を保ち、同じ結論に至る。"
-    )
-    equivalent: bool = Field(description="原推導の前提・値・式・条件・否定・順序・結果を保ち、判断の追加・省略がなければtrue。")
-
-
-class _PresentationAudit(_StrictModel):
-    output_language: str | None = Field(
-        default=None, min_length=1, description="固定されたresponse_language.languageの写し。言語を再選択しない。"
-    )
-
-
 class ApplicationDraft(_StrictModel):
     """規則の当てはめだけを作る段の出力（#2159）。結論の文は当てはめと規則でつないだものだけ。"""
 
@@ -877,16 +861,11 @@ class ApplicationDraft(_StrictModel):
     )
 
 
-class ApplicationAudit(_PresentationAudit):
+class ApplicationAudit(_StrictModel):
     """当てはめの段の監査（#2159）。"""
 
     application_reviews: list[GroundedApplicationReview] = Field(
         default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application の監査。"
-    )
-    application_presentations: list[GroundedApplicationPresentation] = Field(
-        default_factory=list,
-        max_length=MAX_ANSWER_PARTS,
-        description="論理の判定と分離した表示用説明。原reasoning・result・引用を変更しない。",
     )
     summary_supported: bool = Field(
         description="summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。"
@@ -945,7 +924,7 @@ class GuideRequirementReview(_StrictModel):
     reason: str = Field(max_length=600, description="不足している操作・条件。充足なら空文字。")
 
 
-class GroundedFactAudit(_PresentationAudit):
+class GroundedFactAudit(_StrictModel):
     """通常の回答の監査（#2795）。主張の支持・適用、summary、目的との一致、要求と業務ガイドの要件の充足を判定する。
 
     未使用の根拠は列挙しない（詳しい監査 ``GroundedAudit`` の項目）。受け取った後は ``GroundedAudit`` に写して使う
@@ -961,11 +940,6 @@ class GroundedFactAudit(_PresentationAudit):
     application_reviews: list[GroundedApplicationReview] = Field(
         default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
     )
-    application_presentations: list[GroundedApplicationPresentation] = Field(
-        default_factory=list,
-        max_length=MAX_ANSWER_PARTS,
-        description="論理の判定と分離した表示用説明。原reasoning・result・引用を変更しない。",
-    )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
@@ -979,7 +953,7 @@ class GroundedFactAudit(_PresentationAudit):
     )
 
 
-class GroundedAudit(_PresentationAudit):
+class GroundedAudit(_StrictModel):
     """監査は降格と不足の指摘だけを行い、原文一致した内容を削除しない。"""
 
     _wire_validation: dict[str, Any] = PrivateAttr(default_factory=dict)
@@ -992,11 +966,6 @@ class GroundedAudit(_PresentationAudit):
     )
     application_reviews: list[GroundedApplicationReview] = Field(
         default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
-    )
-    application_presentations: list[GroundedApplicationPresentation] = Field(
-        default_factory=list,
-        max_length=MAX_ANSWER_PARTS,
-        description="論理の判定と分離した表示用説明。原reasoning・result・引用を変更しない。",
     )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     unused_evidence_ids: list[str] = Field(

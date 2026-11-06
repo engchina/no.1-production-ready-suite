@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.application_explanation import KEY_SOURCES, is_explanation_schema
 from rag_engine.generation.citation_wire import (
     generation_draft_wire_model,
     guided_generation_wire_model,
@@ -172,6 +173,10 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+    if is_explanation_schema(schema):
+        # 推導の説明の段（#4393）。入力の資料の原文だけから説明を返す。
+        sources = json.loads(prompt)[KEY_SOURCES]
+        return schema.model_validate({"explanation": "資料の原文によると、" + " ".join(sources)})
     if getattr(schema, "canonical_schema", None) is ApplicationAudit:
         data = json.loads(prompt)
         return legacy_audit_result(
