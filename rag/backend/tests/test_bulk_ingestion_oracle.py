@@ -110,8 +110,8 @@ async def test_load_states_reads_documents_and_jobs_in_chunks() -> None:
     assert retry.has_active_job is True
     assert retry.has_outputs is True
     assert retry.has_default_recipe is False
-    # レシピ1が無い文書は文書の処理設定を使う(1 件の投入の ensure と同じ値)。
-    assert retry.processing_config == {"chunk_size": 600}
+    # 正式レシピが無ければ旧文書の処理設定を受付判定に使わない。
+    assert retry.processing_config == {}
     assert states["doc-500"].fresh is True
 
 
