@@ -847,6 +847,9 @@ for (const viewport of VIEWPORTS) {
     await page.goto("/runs?id=run-chat-seed");
     const openChat = page.getByTestId("run-open-chat");
     await expect(openChat).toHaveText("会話を開く");
+    // 読み上げ名は見えている文言で始める（WCAG 2.5.3 Label in Name。#4558）。
+    await expect(openChat).toHaveAccessibleName("会話を開く（この実行のチャット）");
+    await expect(openChat).toHaveAccessibleName(new RegExp(`^${(await openChat.innerText()).trim()}`));
     await openChat.click();
 
     // URL の会話を選んで開き、URL からは会話の指定を外す。

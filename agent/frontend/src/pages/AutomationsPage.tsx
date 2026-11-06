@@ -165,6 +165,7 @@ export function AutomationsPage() {
         key={detail.data.automation.id}
         automation={detail.data.automation}
         runs={detail.data.runs}
+        runsTotal={detail.data.runs_total}
         agents={usableAgents}
         allAgents={allAgents}
         agentsLoading={agents.isLoading}
@@ -418,6 +419,7 @@ function toPayload(draft: AutomationDraft): AutomationInput {
 function AutomationEditor({
   automation,
   runs = [],
+  runsTotal = runs.length,
   agents,
   allAgents,
   agentsLoading,
@@ -429,6 +431,8 @@ function AutomationEditor({
 }: {
   automation?: Automation;
   runs?: AutomationRun[];
+  /** 実行の全体の件数（`runs` は直近の分だけ。#4558）。 */
+  runsTotal?: number;
   /** 自動実行に選べる（実行できる）業務 Agent。 */
   agents: AgentProfile[];
   /** すべての業務 Agent（保存済みの業務 Agent が実行できなくなったときの表示名に使う）。 */
@@ -788,15 +792,22 @@ function AutomationEditor({
                 {runs.length === 0 ? (
                   <p className="text-sm text-fg-muted">{t("automation.history.empty")}</p>
                 ) : (
-                  <DataTable
-                    rows={runs}
-                    columns={historyColumns()}
-                    getRowKey={(run) => run.run_id}
-                    ariaLabel={t("automation.history.label")}
-                    scrollAriaLabel={listScrollLabel(t("automation.history.label"))}
-                    tableClassName="w-full min-w-[40rem]"
-                    stickyHeader
-                  />
+                  <div className="space-y-3">
+                    {/* 件数は共有の ListToolbar の 1 か所。直近の分だけを出すときは全体の件数を添える（#4558）。 */}
+                    <ListToolbar
+                      count={listCount(Math.max(runsTotal, runs.length), runs.length, runsTotal > runs.length)}
+                      testId="automation-history-toolbar"
+                    />
+                    <DataTable
+                      rows={runs}
+                      columns={historyColumns()}
+                      getRowKey={(run) => run.run_id}
+                      ariaLabel={t("automation.history.label")}
+                      scrollAriaLabel={listScrollLabel(t("automation.history.label"))}
+                      tableClassName="w-full min-w-[40rem]"
+                      stickyHeader
+                    />
+                  </div>
                 )}
               </CardContent>
             </Card>

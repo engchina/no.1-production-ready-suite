@@ -1319,7 +1319,7 @@ const agentJa = {
   "run.timeline.noSteps": "処理の経過の記録はまだありません",
   "run.failedTitle": "実行に失敗しました",
   "run.openChat": "会話を開く",
-  "run.openChatLabel": "この実行の会話をチャットで開く",
+  "run.openChatLabel": "会話を開く（この実行のチャット）",
   "run.approvalDecidedBy": "{name} が {date} に判断",
   "run.userUnknown": "（削除済みのユーザー）",
   // 詳細の実行者と会話の持ち主（#1954）。

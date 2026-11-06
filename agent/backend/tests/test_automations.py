@@ -167,6 +167,7 @@ def test_scheduled_automation_creates_runs_and_skips_while_the_previous_runs(sto
     detail = client.get(f"/api/automations/{automation['id']}").json()["data"]
     assert [item["run_id"] for item in detail["runs"]] == [again.run_id, run.id]
     assert detail["runs"][1]["status"] == RunStatus.CANCELLED
+    assert detail["runs_total"] == 2
 
 
 def _set_run_status(run_id: str, status: RunStatus) -> None:
@@ -301,6 +302,26 @@ def test_manual_run(store: Path) -> None:
     assert fired.status_code == 200, fired.text
     run = runtime_repository.get_run(fired.json()["data"]["run_id"])
     assert run.metadata["automation_trigger"] == "manual"
+
+
+def test_detail_returns_recent_runs_and_the_total(store: Path) -> None:
+    """詳細は新しい順の直近 10 件と、画面の件数に使う全体の件数を返す（#4558）。"""
+    del store
+    automation = client.post("/api/automations", json=BODY).json()["data"]
+    run_ids: list[str] = []
+    for _ in range(automations.RECENT_RUNS_LIMIT + 2):
+        fired = client.post(f"/api/automations/{automation['id']}/run")
+        assert fired.status_code == 200, fired.text
+        run_id = fired.json()["data"]["run_id"]
+        assert run_id, fired.text
+        run_ids.append(run_id)
+        # 前回の Run が終わっていなくても次を作れるように、終わった状態にする。
+        runtime_repository.cancel_run(run_id)
+
+    detail = client.get(f"/api/automations/{automation['id']}").json()["data"]
+    assert detail["runs_total"] == automations.RECENT_RUNS_LIMIT + 2
+    assert len(detail["runs"]) == automations.RECENT_RUNS_LIMIT
+    assert {item["run_id"] for item in detail["runs"]} <= set(run_ids)
 
 
 def test_automations_are_restored_without_catching_up_missed_runs(store: Path) -> None:

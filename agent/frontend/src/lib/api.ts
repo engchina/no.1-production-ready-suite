@@ -865,6 +865,13 @@ export interface AutomationRun {
   updated_at: string;
 }
 
+/** 自動実行の詳細。`runs` は新しい順の直近 10 件、`runs_total` は実行の全体の件数（#4558）。 */
+export interface AutomationDetail {
+  automation: Automation;
+  runs: AutomationRun[];
+  runs_total: number;
+}
+
 export interface AutomationFired {
   run_id: string | null;
   result: "created" | "skipped" | "failed_to_start";
@@ -2154,7 +2161,7 @@ export const agentApi = {
   /** 自動実行（#784）。 */
   listAutomations: () => request<{ automations: Automation[]; persistent: boolean }>("/api/automations"),
   getAutomation: (automationId: string) =>
-    request<{ automation: Automation; runs: AutomationRun[] }>(`/api/automations/${encodeURIComponent(automationId)}`),
+    request<AutomationDetail>(`/api/automations/${encodeURIComponent(automationId)}`),
   createAutomation: (payload: AutomationInput) =>
     request<Automation>("/api/automations", { method: "POST", body: JSON.stringify(payload) }),
   updateAutomation: (automationId: string, payload: AutomationInput) =>

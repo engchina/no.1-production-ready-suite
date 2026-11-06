@@ -215,7 +215,10 @@ class AutomationRun(BaseModel):
 
 class AutomationDetail(BaseModel):
     automation: AutomationView
+    # 新しい順の直近の実行（`RECENT_RUNS_LIMIT` 件まで）と、
+    # この自動実行の実行の全体の件数（画面の件数。#4558）。
     runs: list[AutomationRun] = Field(default_factory=list)
+    runs_total: int = 0
 
 
 class AutomationToolCheck(BaseModel):
@@ -498,7 +501,13 @@ async def run_scheduler() -> None:
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
 
-def recent_runs(automation_id: str, limit: int = 10) -> list[AutomationRun]:
+RECENT_RUNS_LIMIT = 10
+
+
+def recent_runs(
+    automation_id: str, limit: int = RECENT_RUNS_LIMIT
+) -> tuple[list[AutomationRun], int]:
+    """新しい順の直近 `limit` 件の実行と、この自動実行の実行の全体の件数。"""
     from app.features.agent.runtime import runtime_repository
 
     runs = [
@@ -507,7 +516,7 @@ def recent_runs(automation_id: str, limit: int = 10) -> list[AutomationRun]:
         if run.metadata.get("automation_id") == automation_id
     ]
     runs.sort(key=lambda run: run.created_at, reverse=True)
-    return [
+    recent = [
         AutomationRun(
             run_id=run.id,
             status=run.status,
@@ -517,3 +526,4 @@ def recent_runs(automation_id: str, limit: int = 10) -> list[AutomationRun]:
         )
         for run in runs[:limit]
     ]
+    return recent, len(runs)

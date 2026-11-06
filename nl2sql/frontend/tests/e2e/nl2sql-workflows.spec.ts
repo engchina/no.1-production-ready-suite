@@ -9638,7 +9638,7 @@ test("本人の SQL 生成の実行は「SQL 生成で開く」で質問と業�
   await page.goto("/history?id=hist-001");
   const open = page.getByTestId("history-detail-open-query");
   await expect(open).toHaveText("SQL 生成で開く");
-  await expect(open).toHaveAccessibleName("この実行の質問と条件を SQL 生成の画面に入れて開く");
+  await expect(open).toHaveAccessibleName("SQL 生成で開く（この実行の質問と条件を入れる）");
   await expect(page.getByTestId("history-detail-open-chat")).toHaveCount(0);
   expect((await open.boundingBox())?.height).toBe(await expectedControlHeight(page));
   await expectNoHorizontalScroll(page);

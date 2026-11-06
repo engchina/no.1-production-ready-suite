@@ -501,6 +501,46 @@ test("SQL生成評価の読込状態は利用者向けの日本語ラベルを�
   await expect(loading).toBeHidden();
 });
 
+test("節の見出しは共有の Section で、見出しの横に独自の印の箱を置かない (#4558)", async ({ page }, testInfo) => {
+  await mockQualityApi(page);
+  await page.goto("/evaluation");
+  await expect(page.getByRole("heading", { name: "評価条件" })).toBeVisible();
+
+  const sections = [
+    ["quality-evaluation-conditions", "評価条件"],
+    ["quality-evaluation-progress", "実行状況"],
+    ["quality-evaluation-summary", "評価概要"],
+    ["quality-evaluation-details", "結果明細"],
+    ["quality-evaluation-recent", "最近の SQL生成評価 job"],
+  ] as const;
+  for (const [id, title] of sections) {
+    // 節の名前は見出しを指す（aria-labelledby）。
+    const region = page.getByRole("region", { name: title, exact: true });
+    await expect(region).toHaveAttribute("aria-labelledby", id);
+    await expect(page.locator(`#${id}`)).toHaveText(title);
+  }
+  const headerIcons = await page.evaluate((ids) => {
+    return ids.flatMap((id) => {
+      const heading = document.getElementById(id);
+      const section = heading?.closest("section");
+      if (!heading || !section) return [`${id}: missing`];
+      // 見出しの行（見出しと説明・右の操作）の svg のうち、見出しより前（見出しの横の印）に置いたものと、
+      // デザインシステムの段（14 / 16 / 20 / 24px）に無い寸法のもの。
+      const header = heading.parentElement?.parentElement ?? section;
+      return Array.from(header.querySelectorAll("svg"))
+        .filter((svg) => !svg.closest(".pr-spinner"))
+        .flatMap((svg) => {
+          const size = Math.round(svg.getBoundingClientRect().width * 10) / 10;
+          const beforeHeading = Boolean(svg.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING);
+          const offScale = size > 0 && ![14, 16, 20, 24].includes(size);
+          return beforeHeading || offScale ? [`${id}: ${size}px${beforeHeading ? " (見出しの前)" : ""}`] : [];
+        });
+    });
+  }, sections.map(([id]) => id));
+  expect(headerIcons).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("evaluation-sections.png"), fullPage: true });
+});
+
 test("desktop executes two engines twice, restores the job URL and downloads Excel", async ({
   page,
 }, testInfo) => {
