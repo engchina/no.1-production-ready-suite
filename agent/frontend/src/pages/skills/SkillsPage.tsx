@@ -12,6 +12,8 @@ import {
   FormSkeleton,
   ListToolbar,
   MarkdownText,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   ObjectActionBar,
   TableSkeleton,
   PageHeader,
@@ -630,7 +632,12 @@ function SkillReadOnlyDetail({ skill }: { skill: AgentSkill }) {
     <>
       <Section title={t("skills.instructions")}>
         <Card className="min-w-0">
-          <CardContent className="space-y-3 pt-5">
+          <CardContent
+            className={`space-y-3 pt-5 ${INFORMATION_CARD_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+            role="region"
+            aria-label={t("skills.instructions")}
+            tabIndex={0}
+          >
             {/* 指示は Markdown（手順・結果ごとの対応）として表示する（#1795）。 */}
             {skill.instructions.trim() ? (
               // 共有の MarkdownText（#1808）。Section（h2）の下なので最上位の見出しは h3。
