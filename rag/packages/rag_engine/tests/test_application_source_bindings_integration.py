@@ -87,7 +87,7 @@ def test_actual_generation_audit_reuse_preserves_fullwidth_raw_and_sent_view(mod
                     assert row["citations"] == [{"evidence_id": row["citation_bindings"][0]["evidence_id"], "quote": row["quote"]}]
             review = {"application_reviews": [{"index": 0, "valid": True, "reason": "形式fixture"}], "summary_supported": True}
             if schema is ApplicationVerdictAudit:
-                return audit_reply(schema, review["application_reviews"])
+                return audit_reply(schema, review["application_reviews"], prompt=prompt)
             return schema.model_validate(
                 legacy_audit_to_wire_fixture(
                     {

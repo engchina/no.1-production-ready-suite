@@ -69,7 +69,7 @@ class Parser:
         if schema is ApplicationVerdictAudit:
             inputs = json.loads(prompt)
             self.application_reviews.append(inputs)
-            return audit_reply(schema, [{"index": row["index"], "valid": True} for row in inputs["applications"]])
+            return audit_reply(schema, [{"index": row["index"], "valid": True} for row in inputs["applications"]], prompt=prompt)
         assert issubclass(schema, generation_draft_wire_model()), "期待する生成/推導検査以外は呼ばない"
         self.calls.append({"system": system, "prompt": prompt, "schema": schema.model_json_schema()})
         if self.responses:

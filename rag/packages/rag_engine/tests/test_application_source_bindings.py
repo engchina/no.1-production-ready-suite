@@ -98,7 +98,7 @@ def captured(entry, spans):
         if schema is ApplicationVerdictAudit:
             inputs.append(json.loads(prompt))
         # 入力捕捉用。意味成功を表さない。
-        return audit_reply(schema, [{"index": 0, "valid": True}])
+        return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
 
     trace = review_applications(
         QUESTION,

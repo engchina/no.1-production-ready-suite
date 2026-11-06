@@ -58,7 +58,7 @@ def test_same_partial_quote_cannot_hide_unknown_row_and_classification() -> None
         seen.append(data)
         # 修正前はitemsの抜粋だけでvalidになる再生。固定の資料全体があると未確定行のゼロ扱いを認めない。
         complete = data.get("documents") == application_documents(spans())
-        return audit_reply(schema, [{"index": 0, "valid": not complete}], summary_supported=False)
+        return audit_reply(schema, [{"index": 0, "valid": not complete}], summary_supported=False, prompt=prompt)
 
     trace = review_applications(
         QUESTION,

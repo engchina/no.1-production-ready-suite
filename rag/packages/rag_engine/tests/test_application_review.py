@@ -52,7 +52,7 @@ def test_many_applications_are_judged_in_one_call_and_explained_per_application(
         data = json.loads(prompt)
         calls.append(data)
         assert data["items"][0]["quote"] == SOURCE
-        return audit_reply(schema, [{"index": i, "valid": True} for i in range(2)])
+        return audit_reply(schema, [{"index": i, "valid": True} for i in range(2)], prompt=prompt)
 
     checked = [candidate(), candidate()]
     trace = review(checked, parse)
@@ -79,7 +79,7 @@ def test_bad_or_incomplete_judgements_cannot_publish(outcome):
             if outcome == "foreign"
             else [row]
         )
-        return audit_reply(ApplicationVerdictAudit, rows)
+        return audit_reply(ApplicationVerdictAudit, rows, prompt=args[1])
 
     entry = candidate()
     trace = review([entry], parse)
@@ -128,7 +128,7 @@ def test_gate_receives_only_confirmed_context_and_preserves_its_origin():
             return audit_reply(schema)
         data = json.loads(prompt)
         assert data["confirmed_premises"] == [{"question": "区分", "answer": "A", "source": "user"}]
-        return audit_reply(schema, [{"index": 0, "valid": True}])
+        return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
 
     config = replace(
         get_settings(environ={}, dotenv_path=None),
@@ -180,7 +180,7 @@ def test_actual_generation_boundary_keeps_source_and_synchronizes_body_summary(v
     def parse(system, prompt, settings, schema, **options):
         calls.append(schema)
         if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [] if valid is None else [{"index": 0, "valid": valid}])
+            return audit_reply(schema, [] if valid is None else [{"index": 0, "valid": valid}], prompt=prompt)
         unit = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)[0]
         value = selected_answer_payload([unit], text="割合は50%です。" if valid else "割合は0%です。")
         value["answer_parts"][0]["requirement"] = "操作Aの割合"

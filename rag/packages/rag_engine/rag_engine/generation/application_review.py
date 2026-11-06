@@ -65,6 +65,31 @@ def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any
     ]
 
 
+# 判定の根拠が結論の引用元を含まない valid を未確認にしたときの理由（判定の型は変えない）。
+BASIS_NOT_CITED_REASON = "判定の根拠が結論の引用した資料を含まないため、推導を確認できない"
+
+
+def basis_not_cited(inputs: dict[str, Any], audit: ApplicationVerdictAudit) -> list[int]:
+    """valid=true なのに basis_evidence_ids が結論の引用元の evidence_id を 1 つも含まない application の index。
+
+    ID の集合の照合だけで、意味は判定しない。引用元の evidence_id が無い（束縛を検証できなかった）application は
+    照合できないので対象にしない。index の欠落・重複は apply_application_audit が未確認にする。
+    """
+    blocked = []
+    for application in inputs["applications"]:
+        number = int(application["index"])
+        rows = [row for row in audit.application_reviews if row.index == number]
+        cited = {
+            str(binding.get("evidence_id"))
+            for position in application["item_indexes"]
+            for binding in inputs["items"][position].get("citation_bindings") or ()
+            if binding.get("evidence_id")
+        }
+        if len(rows) == 1 and rows[0].valid and cited and not cited & set(rows[0].basis_evidence_ids):
+            blocked.append(number)
+    return blocked
+
+
 def review_applications(
     question: str,
     checked: Sequence[CheckedApplication],
@@ -151,12 +176,19 @@ def review_applications(
         if propagates(exc):
             raise
         diagnostic.update(status="incomplete", error_type=type(exc).__name__)
+    blocked: list[int] = []
+    if audit is not None and (blocked := basis_not_cited(inputs, audit)):
+        # 引用元を含まない根拠の valid は採用せず未確認にする（理由の段も送らない）。
+        diagnostic["basis_not_cited"] = blocked
+        audit = audit.model_copy(update={"application_reviews": [row for row in audit.application_reviews if row.index not in blocked]})
     reasons, reason_trace = explain_verdicts(inputs, audit, parse_text=parse_text, settings=settings, provider_id=provider_id)
     diagnostic["calls"] += reason_trace["calls"]
     if unknown_basis := reason_trace.pop("unknown_basis_ids", None):
         diagnostic["unknown_basis_ids"] = unknown_basis
     diagnostic["reason_step"] = reason_trace
     apply_application_audit(candidates, audit, require_complete=True, reasons=reasons)
+    for position in blocked:
+        candidates[position].assessment["reason"] = BASIS_NOT_CITED_REASON
     diagnostic.update(seconds=round(monotonic() - started, 3), results=[dict(entry.assessment) for entry in candidates])
     if any(entry.assessment.get("status") == "unknown" for entry in candidates) and diagnostic["status"] == "completed":
         diagnostic["status"] = "incomplete"

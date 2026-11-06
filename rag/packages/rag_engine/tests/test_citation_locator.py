@@ -174,7 +174,7 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": True}])
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         prompts.append(prompt)
         return generated_fixture(schema, prompt, next(values))
 

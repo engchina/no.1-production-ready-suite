@@ -188,16 +188,28 @@ def application_audit_reply(
         return AuditReason(reason="合成の判定の理由です。")
     if text_format not in (ApplicationAudit, ApplicationVerdictAudit):
         return None
-    indexes = [row["index"] for row in json.loads(prompt)["applications"]]
-    detail: dict[str, Any] = (
-        {"basis_evidence_ids": []}
-        if text_format is ApplicationVerdictAudit
-        else {"reason": "合成の原文対応"}
-    )
+    data = json.loads(prompt)
+
+    def detail(application: dict[str, Any]) -> dict[str, Any]:
+        if text_format is not ApplicationVerdictAudit:
+            return {"reason": "合成の原文対応"}
+        # 根拠は引用元の evidence_id（引用元を含まない valid は未確認になる。basis_not_cited）。
+        return {
+            "basis_evidence_ids": list(
+                dict.fromkeys(
+                    str(binding["evidence_id"])
+                    for position in application.get("item_indexes") or ()
+                    for binding in data["items"][position].get("citation_bindings") or ()
+                    if binding.get("evidence_id")
+                )
+            )
+        }
+
     return text_format.model_validate(
         {
             "application_reviews": [
-                {"index": index, "valid": valid, **detail} for index in indexes
+                {"index": row["index"], "valid": valid, **detail(row)}
+                for row in data["applications"]
             ],
             "summary_supported": summary_supported,
         }

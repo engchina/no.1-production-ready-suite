@@ -83,7 +83,7 @@ def fixture(mode="detailed", decisions=(True, False), *, summary_supported=False
             )
         reviews = [{"index": i, "valid": valid, "reason": "固定の支持判定"} for i, valid in enumerate(decisions)]
         if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, reviews, summary_supported=summary_supported)
+            return audit_reply(schema, reviews, summary_supported=summary_supported, prompt=_prompt)
         value = {
             "goal_alignment": "aligned",
             "summary_supported": summary_supported,

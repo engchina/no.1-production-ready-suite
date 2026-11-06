@@ -236,7 +236,7 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
     def generate(system, prompt, config, schema, **options):
         calls.append(schema)
         if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": True}])
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         assert schema._uses_typed_answer_parts
         assert "summary_part_indexes" in schema.model_json_schema()["properties"]
         unit_ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
@@ -372,7 +372,7 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
     def generated(system, prompt, settings, schema, **options):
         calls.append(schema.__name__)
         if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": True}])
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         assert getattr(schema, "_uses_unit_ids", False)
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
         return schema.model_validate(

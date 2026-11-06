@@ -258,7 +258,7 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
         if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": True}])
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         if issubclass(schema, generation_draft_wire_model()):
             return generated_output(schema, prompt, text=CLAIM)
         assert issubclass(schema, CitationRangeRepair)
