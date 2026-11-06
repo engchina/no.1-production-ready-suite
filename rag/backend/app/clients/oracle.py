@@ -6629,14 +6629,6 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def save_preprocess_artifact(
-        self,
-        document_id: str,
-        artifact: DocumentPreprocessArtifact | None,
-    ) -> DocumentDetail:
-        """ファイル準備の出力ファイル情報を保存する。"""
-        return await self._save_preprocess_artifact_with_oracle(document_id, artifact)
-
     async def reset_document_ingestion_outputs(
         self,
         document_id: str,
@@ -11706,50 +11698,6 @@ class OracleClient:
                         }
                     ),
                 )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
-
-        return await self._run_transaction(operation)
-
-    async def _save_preprocess_artifact_with_oracle(
-        self,
-        document_id: str,
-        artifact: DocumentPreprocessArtifact | None,
-    ) -> DocumentDetail:
-        """Oracle document table へファイル準備出力情報を保存する。"""
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET preprocess_artifact = :preprocess_artifact
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "preprocess_artifact": (
-                            _json_dumps(artifact.model_dump(mode="json"))
-                            if artifact is not None
-                            else None
-                        ),
-                    }
-                ),
-            )
             document = _select_document(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")

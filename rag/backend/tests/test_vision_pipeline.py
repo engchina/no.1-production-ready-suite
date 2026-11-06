@@ -23,6 +23,7 @@ from tests.test_ingestion_pdf_segments import (
     _docling_like_extraction,
     _original_pages,
     _pdf,
+    _prepared_pdf_artifact,
 )
 from tests.test_ingestion_strategy import (
     FakeEmbeddingClient,
@@ -188,6 +189,8 @@ async def _ingest(pipeline: IngestionPipeline, pdf: bytes) -> Any:
         "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=len(pdf)),
+        # Vision/分段の観点は、元bytes/hashのファイル準備が完了した入力から測る。
+        prepared_artifact=_prepared_pdf_artifact(pdf),
     )
 
 
