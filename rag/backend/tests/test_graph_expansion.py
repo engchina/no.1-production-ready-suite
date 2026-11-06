@@ -483,3 +483,103 @@ def test_graph_diagnostics_distinguishes_absent_graph_from_not_run_and_failure()
         _graph_expansion_diagnostics({}, max_chunks=6, attempts=[{"status": "error"}])["status"]
         == "error"
     )
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("kind", ["text", "table", "figure"])
+async def test_unheaded_body_keeps_whole_document_expansion_excluded(
+    legacy: bool, kind: str
+) -> None:
+    """図の本文groupを、従来広すぎるとして除外した検索拡張へ昇格しない。"""
+    from dataclasses import replace
+
+    from rag_parser_core.language import current_pack
+
+    from app.rag.graph_index import graph_section_node_id
+
+    chunks = [
+        Chunk(
+            text=f"合成本文{i}",
+            index=i,
+            start_offset=i * 10,
+            end_offset=i * 10 + 5,
+            metadata={"content_kind": kind},
+        )
+        for i in range(2)
+    ]
+    store = InMemoryGraphStore({"doc": (chunks, {"kb-1"})})
+    if legacy:
+        body = next(entity for entity in store.index.entities if entity.entity_type == "body")
+        name = current_pack().text("labels", "whole_document")
+        if kind in {"table", "figure"}:
+            name += f" ({kind})"
+        old_type = {"table": "table_section", "figure": "figure_section"}.get(kind, "section")
+        old_id = graph_section_node_id(CHUNK_SET_ID, "kb-1", name)
+        store.index.entities[:] = [
+            replace(entity, entity_id=old_id, entity_type=old_type, canonical_name=name)
+            if entity.entity_id == body.entity_id
+            else entity
+            for entity in store.index.entities
+        ]
+        store.index.entity_chunk_links[:] = [
+            replace(link, entity_id=old_id) if link.entity_id == body.entity_id else link
+            for link in store.index.entity_chunk_links
+        ]
+    ids = store.chunk_ids("doc")
+    result = await plan_graph_expansion(
+        store,
+        dict(KB),
+        question="本文",
+        seed_chunks=[store.chunks[ids[0]]],
+        exclude_chunk_ids={ids[0]},
+        max_chunks=6,
+    )
+    assert result == []
+    assert store.calls == ["seed", "name"]
+
+
+@pytest.mark.parametrize("kind", ["text", "table", "figure"])
+async def test_named_structure_still_expands_with_body_type_added(kind: str) -> None:
+    chunks = [
+        Chunk(
+            text=f"合成の節{i}",
+            index=i,
+            start_offset=0,
+            end_offset=5,
+            metadata={"section_path": "合成見出し", "content_kind": kind},
+        )
+        for i in range(2)
+    ]
+    store = InMemoryGraphStore({"doc": (chunks, {"kb-1"})})
+    ids = store.chunk_ids("doc")
+    result = await plan_graph_expansion(
+        store,
+        dict(KB),
+        question="質問",
+        seed_chunks=[store.chunks[ids[0]]],
+        exclude_chunk_ids={ids[0]},
+        max_chunks=6,
+    )
+    assert [item.chunk.chunk_id for item in result] == [ids[1]]
+    assert (
+        await plan_graph_expansion(
+            store,
+            {"knowledge_base_id": "kb-other"},
+            question="質問",
+            seed_chunks=[store.chunks[ids[0]]],
+            exclude_chunk_ids={ids[0]},
+            max_chunks=6,
+        )
+        == []
+    )
+    assert (
+        await plan_graph_expansion(
+            store,
+            dict(KB),
+            question="質問",
+            seed_chunks=[store.chunks[ids[0]]],
+            exclude_chunk_ids={ids[0]},
+            max_chunks=0,
+        )
+        == []
+    )

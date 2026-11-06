@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from rag_parser_core.language import current_pack
@@ -148,16 +148,24 @@ def _build_graph_index_for_kb(
         document_name=document_name,
     )
     # 同一性は切り詰めない完全な名前。表示名(canonical_name)は上限で省略され、一意とは限らない。
-    entity_by_name: dict[str, GraphEntity] = {
+    entity_by_name: dict[str | tuple[str], GraphEntity] = {
         _document_identity(extraction, document_name): document_entity
     }
     relationships: dict[str, GraphRelationship] = {}
     links: dict[tuple[str, str], GraphEntityChunkLink] = {}
 
     for chunk in chunks:
-        names = _entity_names_for_chunk(chunk)
+        body = not _metadata_str(chunk, "section_path") and not _metadata_str(
+            chunk, "section_title"
+        )
+        names = (
+            [current_pack().text("search_labels", "body")]
+            if body
+            else _entity_names_for_chunk(chunk)
+        )
         for name in names:
-            entity = entity_by_name.get(name)
+            key: str | tuple[str] = ("body",) if body else name
+            entity = entity_by_name.get(key)
             if entity is None:
                 entity = _section_entity(
                     document_id=document_id,
@@ -166,7 +174,14 @@ def _build_graph_index_for_kb(
                     chunk=chunk,
                     identity=name,
                 )
-                entity_by_name[name] = entity
+                if body:
+                    entity = replace(
+                        entity,
+                        entity_id=graph_body_node_id(identity_scope, knowledge_base_id),
+                        entity_type="body",
+                        description=name,
+                    )
+                entity_by_name[key] = entity
                 relationship = _contains_relationship(
                     document_id=document_id,
                     identity_scope=identity_scope,
@@ -442,6 +457,11 @@ def graph_display_name_sql(column: str) -> str:
     )
 
 
+def graph_body_node_id(chunk_set_id: object, knowledge_base_id: object) -> str:
+    """章節名と独立した、見出しなしの保存本文の identity。"""
+    return _graph_id("body", chunk_set_id, knowledge_base_id)
+
+
 def graph_section_node_id(chunk_set_id: object, knowledge_base_id: object, name: str) -> str:
     """完全なパス・文書全体の名前から、構造図の entity と同じ ID を求める。"""
     return _graph_id("entity", chunk_set_id, knowledge_base_id, _normalize_label(name))
@@ -460,7 +480,7 @@ def _dedupe_labels(values: list[str]) -> list[str]:
 
 
 def _graph_id(
-    kind: Literal["entity", "relationship"],
+    kind: Literal["entity", "relationship", "body"],
     *parts: object,
 ) -> str:
     payload = "|".join([kind, *(str(part or "") for part in parts)])

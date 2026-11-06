@@ -203,6 +203,54 @@ class StructureGraphStore:
             "offset": offset,
         }
 
+    async def body_chunks(
+        self, kb_id: str, document_id: str, chunk_set_id: str, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """本文節点の実Chunkだけを保存順に返す。本文/原文の読取は既存根拠APIが担う。"""
+        from app.rag.graph_index import graph_body_node_id
+
+        await self.assert_document(kb_id, document_id, chunk_set_id)
+        source_sql = """FROM rag_graph_entity_chunks l
+            JOIN rag_graph_entities e ON e.entity_id=l.entity_id
+                AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb AND e.entity_type='body'
+            JOIN rag_chunks c ON c.chunk_id=l.chunk_id AND c.chunk_set_id=e.chunk_set_id
+                AND c.document_id=:document_id
+            WHERE l.entity_id=:body AND l.document_id=:document_id"""
+        scope = {
+            "kb": kb_id,
+            "document_id": document_id,
+            "chunk_set": chunk_set_id,
+            "body": graph_body_node_id(chunk_set_id, kb_id),
+        }
+        rows = await self.oracle._fetch_all(
+            f"""SELECT c.chunk_id,c.chunk_index,
+            JSON_VALUE(c.metadata_json,'$.page_number'
+                RETURNING NUMBER NULL ON ERROR) AS page_number,
+            COUNT(*) OVER () AS total_count
+            {source_sql}
+            ORDER BY c.chunk_index,c.chunk_id
+            OFFSET :skip ROWS FETCH NEXT :take ROWS ONLY""",
+            {**scope, "skip": offset, "take": limit},
+        )
+        if rows:
+            total = int(rows[0]["total_count"])
+        else:
+            # 末尾を越えた空ページも、同じ範囲の実件数を保持する。
+            counted = await self.oracle._fetch_all(f"SELECT COUNT(*) AS total {source_sql}", scope)
+            total = int(counted[0]["total"])
+        return {
+            "items": [
+                {
+                    "chunk_id": str(row["chunk_id"]),
+                    "chunk_index": int(row["chunk_index"]),
+                    "page_number": int(row["page_number"]) if row.get("page_number") else None,
+                }
+                for row in rows
+            ],
+            "total": total,
+            "offset": offset,
+        }
+
     async def _entity_ids(self, kb_id: str, chunk_set_id: str, ids: list[str]) -> set[str]:
         """図の節点のうち、構造索引に実体があるもの（参照の一覧を読める節点）。"""
         if not ids:
@@ -281,7 +329,7 @@ class StructureGraphStore:
             AND {_graph_visible_document_predicate("e")}
             AND NOT EXISTS (SELECT 1 FROM rag_graph_entities p
                 WHERE p.chunk_set_id=e.chunk_set_id AND p.knowledge_base_id=e.knowledge_base_id
-                AND e.entity_type<>'document'
+                AND e.entity_type NOT IN ('document','body')
                 AND SUBSTR(p.canonical_name,-LENGTH(e.canonical_name)-3)
                     =' > '||e.canonical_name)
             ORDER BY CASE WHEN e.entity_type='document' THEN 0 ELSE 1 END,

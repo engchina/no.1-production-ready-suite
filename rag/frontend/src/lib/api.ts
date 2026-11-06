@@ -4054,6 +4054,8 @@ export const api = {
     request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}`),
   getStructureGraphOverview: (id: string) =>
     request<StructureGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/overview`),
+  getStructureGraphBodyChunks: (id: string, documentId: string, chunkSetId: string, offset: number) =>
+    request<{ items: {chunk_id: string; chunk_index: number; page_number: number | null}[]; total: number; offset: number }>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/body-chunks?${new URLSearchParams({chunk_set_id: chunkSetId, offset: String(offset), limit: "25"})}`),
   getStructureGraphTree: (id: string, documentId: string, chunkSetId: string, parent: string | null, offset: number, limit: number) =>
     request<StructureGraphTreePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/tree?chunk_set_id=${encodeURIComponent(chunkSetId)}&offset=${offset}&limit=${limit}${parent ? `&parent=${encodeURIComponent(parent)}` : ""}`),
   locateStructureGraphNode: (id: string, documentId: string, chunkSetId: string, node: string) =>

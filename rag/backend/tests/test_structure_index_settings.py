@@ -191,12 +191,21 @@ def test_api_persists_nullable_override_and_rejects_other_fields(
     assert client.get("/api/knowledge-bases/missing/structure-index").status_code == 404
 
 
-async def test_missing_structure_is_not_a_success(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_missing_headings_builds_body_without_fabricating_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients.structure_index_store import StructureIndexStore
+
     oracle = SavedOracle()
     oracle.rows[0].update(section_title=None, section_path_json=None)
-    with pytest.raises(ValueError, match="no_structure"):
-        await rebuild_document_structure_index(oracle, "a", "doc")
-    assert oracle.saved == []
+
+    async def publish(store: Any, *args: Any, **kwargs: Any) -> None:
+        store.oracle.saved.extend(args[4].values())
+
+    monkeypatch.setattr(StructureIndexStore, "publish", publish)
+    result = await rebuild_document_structure_index(oracle, "a", "doc")
+    assert result["quality"] == "COMPLETE"
+    assert any(entity.entity_type == "body" for entity in oracle.saved[0].entities)
 
 
 async def test_changed_source_is_rejected_before_publication() -> None:
