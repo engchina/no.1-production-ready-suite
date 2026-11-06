@@ -9926,7 +9926,6 @@ class OracleClient:
                 if _select_document_state(connection, job.document_id) is None:
                     raise KeyError(f"document_id={job.document_id} は存在しません。")
             else:
-                _ensure_recipe_row_if_default(connection, job.document_id, job.recipe_id)
                 recipe = _select_document_recipe_for_update(
                     connection, job.document_id, job.recipe_id
                 )
