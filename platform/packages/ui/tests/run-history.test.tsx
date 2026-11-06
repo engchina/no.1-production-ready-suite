@@ -118,8 +118,8 @@ describe("書式と絞り込みの値", () => {
     expect(formatRunDateTime("not-a-date")).toBe("not-a-date");
   });
 
-  it("token は桁区切り", () => {
-    expect(formatRunTokens(12345)).toBe("12,345 token");
+  it("トークン数は桁区切り", () => {
+    expect(formatRunTokens(12345)).toBe("12,345 トークン");
     expect(formatRunTokens(null)).toBe("—");
   });
 
@@ -136,7 +136,7 @@ describe("書式と絞り込みの値", () => {
     expect(runUsageView(usage, { fallbackModel: "model-x" })).toEqual({
       model: "model-a、model-b",
       usage: { tokens: 12345, note: null },
-      modelCalls: "3 回（入力 12,000 / 出力 345 token）",
+      modelCalls: "3 回（入力 12,000 / 出力 345 トークン）",
       unmeasuredCalls: null,
     });
     const mixed = runUsageView(
@@ -144,7 +144,7 @@ describe("書式と絞り込みの値", () => {
       { sourceLabel: (source) => `出どころ ${source}` }
     );
     expect(mixed.usage).toEqual({ tokens: 12345, note: "一部計測" });
-    expect(mixed.modelCalls).toBe("3 回（うち 2 回を計測。入力 12,000 / 出力 345 token）");
+    expect(mixed.modelCalls).toBe("3 回（うち 2 回を計測。入力 12,000 / 出力 345 トークン）");
     expect(mixed.unmeasuredCalls).toBe("出どころ select_ai");
     // 計測できない呼び出しだけ: 数を作らない。
     const unmeasured = runUsageView({
@@ -496,12 +496,13 @@ describe("RunSummary", () => {
       <RunSummary status="succeeded" question="合成の質問" startedAt="2026-10-15T00:12:05.000Z" usage={usage} runId="run-1" />
     );
     render(summary({ tokens: 1200, note: "一部計測" }));
-    expect(tokens()).toBe("1,200 token（一部計測）");
+    expect(container.querySelector("[data-run-fact='tokens'] dt")?.textContent).toBe("トークン数");
+    expect(tokens()).toBe("1,200 トークン（一部計測）");
     render(summary({ tokens: null, note: "未計測" }));
     expect(tokens()).toBe("未計測");
     // LLM を呼ばなかった実行の実測の 0 は 0 と出す（注記なし）。
     render(summary({ tokens: 0 }));
-    expect(tokens()).toBe("0 token");
+    expect(tokens()).toBe("0 トークン");
     render(summary(null));
     expect(container.querySelector("[data-run-fact='tokens']")).toBeNull();
   });

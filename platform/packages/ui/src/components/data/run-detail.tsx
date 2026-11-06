@@ -155,7 +155,7 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
     executor: "実行者",
     owner: "会話の持ち主",
     model: "モデル",
-    tokens: "token",
+    tokens: "トークン数",
     cost: "費用",
     runId: "実行 ID",
     cancellation: "取消",

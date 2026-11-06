@@ -163,13 +163,13 @@ describe("実行履歴の表示の対応表", () => {
     expect(runUsageView({ model_id: "model-a", usage })).toEqual({
       model: "model-a、model-b",
       usage: { tokens: 1500, note: null },
-      modelCalls: "4 回（入力 1,200 / 出力 300 token）",
+      modelCalls: "4 回（入力 1,200 / 出力 300 トークン）",
       unmeasuredCalls: null,
     });
     expect(runUsageView({ model_id: "model-a", usage: { ...usage, measurement: "partial", measured_requests: 3 } })).toEqual({
       model: "model-a、model-b",
       usage: { tokens: 1500, note: "一部計測" },
-      modelCalls: "4 回（うち 3 回を計測。入力 1,200 / 出力 300 token）",
+      modelCalls: "4 回（うち 3 回を計測。入力 1,200 / 出力 300 トークン）",
       unmeasuredCalls: null,
     });
     // LLM を呼ばなかった実行は実測の 0（モデルは記録した回答のモデルがあればそれ）。
@@ -177,7 +177,7 @@ describe("実行履歴の表示の対応表", () => {
     expect(runUsageView({ model_id: null, usage: none })).toEqual({
       model: null,
       usage: { tokens: 0, note: null },
-      modelCalls: "0 回（入力 0 / 出力 0 token）",
+      modelCalls: "0 回（入力 0 / 出力 0 トークン）",
       unmeasuredCalls: null,
     });
     // この機能より前の記録: モデルは記録した ID だけ（既定のモデルの文言で置き換えない）、利用量は未計測。
