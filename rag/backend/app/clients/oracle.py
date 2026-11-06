@@ -9108,6 +9108,9 @@ class OracleClient:
         knowledge_base_id: str,
     ) -> KnowledgeBaseDetail | None:
         """Oracle knowledge base table から詳細取得する。"""
+        # 検索対象の chunk 数は、所属の INDEXED 文書 → 配信中の chunk_set → chunk_set_id の索引の
+        # 順に数える。rag_chunks を OR の条件で結ぶと全件走査になる(#4553)。SQL は 1 行に詰めて
+        # 送るので、SQL の中に ``--`` のコメントを書かない。
         rows = await self._fetch_all(
             """
             SELECT
@@ -9127,8 +9130,6 @@ class OracleClient:
                 COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
                     AS error_document_count,
                 (
-                    -- 所属の INDEXED 文書 → 配信中の chunk_set → chunk_set_id の索引の順に数える。
-                    -- rag_chunks を OR の条件で結ぶと全件走査になる(#4553)。
                     SELECT COUNT(*)
                     FROM rag_document_knowledge_bases count_dkb
                     JOIN rag_documents count_d

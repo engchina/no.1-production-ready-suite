@@ -1897,6 +1897,9 @@ async def test_oracle_client_knowledge_base_detail_counts_chunks_from_served_chu
     assert detail.searchable_chunk_count == 5
     statement = " ".join(pool.connection.calls[0].statement.split())
     assert "chunk_set_id IS NULL" not in statement
+    # SQL は 1 行に詰めて送るので、``--`` のコメントは以降の文(bind を含む)を消す。
+    assert "--" not in pool.connection.calls[0].statement
+    assert ":knowledge_base_id" in statement
     assert "LEFT JOIN rag_chunks" not in statement
     assert "c.chunk_set_id IN" not in statement
     count_sql = statement[statement.index("SELECT COUNT(*)") :]
