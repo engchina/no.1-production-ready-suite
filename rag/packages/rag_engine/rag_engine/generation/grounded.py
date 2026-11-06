@@ -82,6 +82,13 @@ from rag_engine.generation.interaction_grounding import interaction_binding_erro
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
+from rag_engine.generation.summary_projection import (
+    APPLICATION_SUMMARY_WITHHELD,
+    SummaryProjection,
+    invalidate_projection,
+    projection_valid,
+    recover_partial_summary,
+)
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
@@ -4706,6 +4713,7 @@ class Round:
     # summary を中立文に置き換えた理由（空なら草稿の summary を公開）。根拠と矛盾して外した主張を summary が
     # 断定したときだけ置き換える（#1013・#2738）。trace 用。
     summary_reason: str = ""
+    summary_projection: SummaryProjection | None = None
     # summary を確かめきれなかった理由（監査なし・不支持・保証の過剰・原因の推測など）。summary は残し、段落に
     # 警告（summary_unaudited）を付ける（#2738）。空でも意味監査の成功とは限らず、実施状態は別に記録する。
     summary_warning: str = ""
@@ -6271,14 +6279,21 @@ def application_summary_snapshot(applications: Sequence[CheckedApplication]) -> 
 def link_summary_evidence(current: Round, *, published_summary: bool = True) -> Round:
     """摘要が指す最終本文の引用を結ぶ。参照の整合性で意味の支持を判定しない。"""
     summary = str(current.summary or "").strip()
-    indexes = list(dict.fromkeys(current.draft.summary_item_indexes))
-    application_indexes = list(dict.fromkeys(current.draft.summary_application_indexes))
+    if current.summary_projection is not None and not projection_valid(current):
+        current = invalidate_projection(current)
+        summary = str(current.summary or "").strip()
+    indexes = [] if current.summary_projection else list(dict.fromkeys(current.draft.summary_item_indexes))
+    application_indexes = (
+        list(current.summary_projection.indexes)
+        if current.summary_projection
+        else list(dict.fromkeys(current.draft.summary_application_indexes))
+    )
     links: list[dict[str, Any]] = []
     missing: list[int] = []
     missing_applications: list[int] = []
     unverified_application = False
     applicable = published_summary and bool(summary) and summary != answer_labels().neutral_summary
-    if applicable and summary == current.draft.summary.strip():
+    if applicable and (current.summary_projection is not None or summary == current.draft.summary.strip()):
         for index in indexes:
             original = current.draft.items[index] if 0 <= index < len(current.draft.items) else None
             entry = next(
@@ -6421,6 +6436,10 @@ def finalize_summary(
     application_state: Sequence[tuple[CheckedApplication, str]] = (),
 ) -> Round:
     """最終本文の状態を使い、未確認・撤回した主張を要約で確定し直さない。"""
+    # 全体監査の観測は採用せず、既存の推導専用公開門を通った結果だけを複写する。
+    current = recover_partial_summary(current)
+    if current.summary_projection is not None:
+        return current
     if diagnostic_only(current.timing):
         return current
     summary = str(current.summary or "").strip()
@@ -7537,7 +7556,7 @@ def run_round(
         summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
     withheld_applications = {index for index, entry in enumerate(applications) if not entry.published}
     if withheld_applications and (not draft._composed_summary or withheld_applications.intersection(draft.summary_application_indexes)):
-        summary_reason = summary_reason or "推導の条件と結論を確認できないため摘要を保留"
+        summary_reason = summary_reason or APPLICATION_SUMMARY_WITHHELD
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
