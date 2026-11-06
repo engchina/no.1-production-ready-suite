@@ -385,9 +385,9 @@ function SkillEditor({
       />
       <PageBody wide className="space-y-6">
         {skill ? (
+          // 見出しはタイトルと対象の操作だけにし、利用者が書いた説明は状態の下の本文に全文で出す（#4537）。
           <Section
             title={t("editor.overview")}
-            description={skill.description || undefined}
             actions={
               <ObjectActionBar
                 actions={actions}
@@ -404,6 +404,11 @@ function SkillEditor({
                 label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
               />
             </div>
+            {skill.description ? (
+              <p className="min-w-0 text-sm text-fg [overflow-wrap:anywhere]" data-testid="skill-overview-description">
+                {skill.description}
+              </p>
+            ) : null}
             {!editable && !readOnly ? <Banner severity="info">{t("skills.readOnly")}</Banner> : null}
           </Section>
         ) : null}
