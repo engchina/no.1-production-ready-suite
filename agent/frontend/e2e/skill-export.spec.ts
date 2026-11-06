@@ -1,3 +1,5 @@
+import type { Page } from "@playwright/test";
+
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1874: スキルを Agent Skills の形（<name>/SKILL.md と references/ の zip）で書き出す。
@@ -56,7 +58,50 @@ test("書き出しに失敗したら理由を出す", async ({ page, mockApi }) 
   await expect(page.getByText("スキルを書き出せませんでした。")).toBeVisible();
 });
 
-const SYNTHETIC_SKILL_ID = `synthetic-skill-${"identifier".repeat(24)}`;
+// #4537: 概要の見出しはタイトルと対象の操作だけ。説明は状態のバッジの下の本文に全文で、横にあふれずに出す。
+async function expectDescriptionInOverviewBody(page: Page, description: string) {
+  const overview = page.locator("section").filter({ has: page.getByTestId("skill-object-actions") });
+  const header = overview.locator(":scope > div").first();
+  await expect(header.getByRole("heading", { name: "概要", level: 2 })).toBeVisible();
+  await expect(header.getByText(description, { exact: true })).toHaveCount(0);
+  const body = overview.getByTestId("skill-overview-description");
+  await expect(body).toHaveText(description);
+  const badges = overview.locator(":scope > div").nth(1);
+  await expect(badges.getByText("有効", { exact: true })).toBeVisible();
+  const [badgeBox, bodyBox] = await Promise.all([badges.boundingBox(), body.boundingBox()]);
+  expect(bodyBox!.y).toBeGreaterThanOrEqual(badgeBox!.y + badgeBox!.height);
+  expect(await body.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+}
+
+test("実行時のスキルも説明を概要の本文に出し、説明が空なら何も出さない", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  const runtimeSkill = (id: string, name: string, description: string) => ({
+    id,
+    name,
+    description,
+    instructions: "",
+    mcp_requirements: [],
+    references: [],
+    enabled: true,
+    tags: [],
+    source: "runtime",
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+  mockApi.state.skills.push(
+    runtimeSkill("synthetic-runtime", "合成の実行時スキル", "合成の説明。概要の本文に出します。"),
+    runtimeSkill("synthetic-empty", "説明のない合成スキル", "")
+  );
+  await page.goto("/skills?id=synthetic-runtime");
+  await expectDescriptionInOverviewBody(page, "合成の説明。概要の本文に出します。");
+  const button = page.getByTestId("skill-object-actions").getByRole("button", { name: "Agent Skills の形で書き出す", exact: true });
+  await expect(button).toBeInViewport({ ratio: 1 });
+  await page.goto("/skills?id=synthetic-empty");
+  await expect(page.getByRole("heading", { name: "説明のない合成スキル", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("skill-object-actions")).toBeVisible();
+  await expect(page.getByTestId("skill-overview-description")).toHaveCount(0);
+});
+
+const SYNTHETIC_SKILL_ID =`synthetic-skill-${"identifier".repeat(24)}`;
 const SYNTHETIC_DESCRIPTION = `合成の長い説明です。${"説明を省略せず保持します。".repeat(28)} ${"synthetic_identifier_".repeat(20)}`;
 const SYNTHETIC_INSTRUCTIONS = Array.from({length:80},(_,i)=>`## 合成段落 ${i+1}\n\n完全な説明 ${i+1}。利用者が最後まで読み、同じ内容を書き出せることを確認します。`).join("\n\n");
 for (const theme of ["light","dark"] as const) {
@@ -76,6 +121,8 @@ for (const theme of ["light","dark"] as const) {
     const box=await button.boundingBox();expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     expect(await button.locator("span").first().evaluate(e=>e.scrollWidth<=e.clientWidth)).toBe(true);
     await expect(page.getByText(SYNTHETIC_DESCRIPTION,{exact:true})).toBeVisible();
+    await expectDescriptionInOverviewBody(page,SYNTHETIC_DESCRIPTION);
+    await expect(button).toBeInViewport({ratio:1});
     const region=page.getByRole("region",{name:"指示",exact:true});await expect(region).toBeVisible();expect(await region.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
     await region.focus();await expect(region).toBeFocused();await page.keyboard.press("Control+End");
     await expect.poll(()=>region.evaluate(e=>e.scrollTop+e.clientHeight>=e.scrollHeight-2)).toBe(true);

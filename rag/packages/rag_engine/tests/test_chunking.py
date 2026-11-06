@@ -634,7 +634,16 @@ class ChunkingTests(unittest.TestCase):
         )
         self.assertNotIn("図1 掛率登録画面", " ".join(p for c in children for p in c.metadata["section_path"]))
 
-    def test_legacy_picture_ocr_heading_is_normalized_in_chunks(self):
+    def test_removed_legacy_picture_ocr_label_is_kept_as_ocr_text(self):
+        # 旧い OCR の欄の名前（"Docling OCR:"）は、もう欄の名前として外さない（#4194）。
+        # 解析は言語資源の欄の名前だけを出すので、旧い名前は OCR の本文の 1 行として残る。
+        from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+
+        self.assertEqual(
+            format_docling_picture_ocr_text("Docling OCR:\n項目A 値B"),
+            "OCR抽出テキスト:\nDocling OCR:\n項目A 値B",
+        )
+
         bbox = [10, 20, 300, 400]
         payload = _viewer_payload(
             [
@@ -642,12 +651,12 @@ class ChunkingTests(unittest.TestCase):
                     1,
                     1,
                     "Picture",
-                    "回答用本文: 請求先欄は会社名で固定。",
+                    "回答用本文: 項目A は値B で固定。",
                     raw_type="picture",
                     bbox=bbox,
                     raw={"vision_crop": "docling/vision/docling-p1-1.png"},
                 ),
-                _record(1, 2, "Picture", "Docling OCR:\n請求先欄 会社名", raw_type="picture_ocr_text", bbox=bbox),
+                _record(1, 2, "Picture", "Docling OCR:\n項目A 値B", raw_type="picture_ocr_text", bbox=bbox),
             ]
         )
 
@@ -660,8 +669,14 @@ class ChunkingTests(unittest.TestCase):
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
 
         self.assertEqual(len(children), 1)
-        self.assertIn("OCR抽出テキスト:\n請求先欄 会社名", children[0].text)
-        self.assertNotIn("Docling OCR", children[0].text)
+        self.assertIn("OCR抽出テキスト:\nDocling OCR:\n項目A 値B", children[0].text)
+
+    def test_removed_legacy_picture_ocr_label_is_not_skipped_in_banner_check(self):
+        # 帯画像の判定は、言語資源の欄の名前の行だけを外す。旧い名前の行は本文の行として数える（#4194）。
+        from rag_engine.chunking.layout import _is_section_banner_text
+
+        self.assertTrue(_is_section_banner_text(["OCR抽出テキスト:\n節A"], ["節A"], []))
+        self.assertFalse(_is_section_banner_text(["Docling OCR:\n節A"], ["節A"], []))
 
     def test_small_footer_logo_picture_is_excluded_from_chunks(self):
         payload = _viewer_payload(
