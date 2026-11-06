@@ -188,6 +188,8 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_segment_checkpoint_enabled",
         "rag_vision_concurrency",
         "rag_vision_enabled",
+        # 用途は再解析した版/corpusに固定し、現在のglobal値で既存資料を読み替えない。
+        "rag_vision_image_purpose",
         "rag_xml_tree_json_source_url_template",
         # 運用・実行の待ち時間と並行数（同じ入力の回答を変える設定ではない）。
         "rag_answer_record_retention_days",
@@ -262,3 +264,14 @@ def test_rag_config_fingerprint_changes_when_candidate_limit_changes() -> None:
     assert rag_config_fingerprint(
         Settings(rag_retrieval_candidate_limit=150)
     ) != rag_config_fingerprint(Settings(rag_retrieval_candidate_limit=1000))
+
+
+def test_image_purpose_changes_parse_identity_without_reinterpreting_query_settings() -> None:
+    from app.rag.variant_keys import compute_extraction_recipe_id
+
+    first = Settings(rag_vision_image_purpose="record")
+    changed = first.model_copy(update={"rag_vision_image_purpose": "example"})
+    assert compute_extraction_recipe_id("a" * 64, first) != compute_extraction_recipe_id(
+        "a" * 64, changed
+    )
+    assert rag_config_fingerprint(first) == rag_config_fingerprint(changed)

@@ -14,6 +14,7 @@ from rag_engine.models.layout import LayoutRecord
 RAW_SCALAR_KEYS = (
     "vision_text_projection",
     "vision_status",
+    "vision_image_purpose",
     "vision_error",
     "vision_model",
     "vision_skipped",

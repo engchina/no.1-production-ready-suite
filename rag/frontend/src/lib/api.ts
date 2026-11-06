@@ -1113,7 +1113,11 @@ export type ExcelColumnRoleSetting =
   | "allowed"
   | "none";
 
+export type ImagePurpose = "record" | "example";
+
 export interface KnowledgeBaseIngestionConfig {
+  /** null / 未設定は全体の既定を継承。保存済みの解析版の用途とは別。 */
+  vision_image_purpose?: ImagePurpose | null;
   preprocess_profile: PreprocessProfileName | null;
   /** 前処理 excel_to_jsonl の選択肢（#1221）。null は全体の既定に従う。 */
   excel_options?: ExcelOptions | null;
@@ -2630,6 +2634,7 @@ export interface ParserAdapterSettingsData {
   capabilities: ParserBackendCapabilityData[];
   connections: ExternalParserConnectionData[];
   /** 「解析後の処理」の全体の既定（#528）。保存先は backend/.env。 */
+  vision_image_purpose: ImagePurpose;
   vision_enabled: boolean;
   /** 見出しの階層の推定（AI。#2277）。 */
   heading_level_inference_enabled?: boolean;
@@ -2664,6 +2669,7 @@ export interface ParserAdapterSettingsUpdate {
   structured_records_jsonl_enabled?: boolean;
   xml_tree_json_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
+  vision_image_purpose?: ImagePurpose | null;
   vision_enabled?: boolean;
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
