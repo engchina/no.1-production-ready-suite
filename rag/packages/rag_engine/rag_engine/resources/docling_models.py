@@ -3,31 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
-import hashlib
 import logging
-import os
-import random
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
-from dataclasses import dataclass
-from http.client import IncompleteRead
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+
+# 検証・原子的な取得の手順は parser-unstructured と共有する（rag_parser_core.model_integrity）。
+from rag_parser_core.model_integrity import ModelArtifact
+from rag_parser_core.model_integrity import verify_files as _verify_files
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ModelArtifact:
-    name: str
-    url: str
-    digest: str
-    hash_kind: str = "sha256"
 
 
 def _registered_models() -> dict[str, list[ModelArtifact]]:
@@ -53,67 +39,6 @@ def _registered_models() -> dict[str, list[ModelArtifact]]:
 
     visit(OmegaConf.to_container(InferSession.model_info, resolve=True))
     return result
-
-
-def _digest(path: Path, hash_kind: str = "sha256") -> str:
-    try:
-        with path.open("rb") as stream:
-            if hash_kind == "git-sha1":
-                digest = hashlib.sha1(usedforsecurity=False)
-                digest.update(f"blob {path.stat().st_size}\0".encode())
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                return digest.hexdigest()
-            return hashlib.file_digest(stream, "sha256").hexdigest()
-    except FileNotFoundError:
-        return ""
-
-
-def _replace_verified(path: Path, spec: ModelArtifact) -> None:
-    for attempt in range(3):
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".part", delete=False) as output:
-                temporary = Path(output.name)
-                with urlopen(spec.url, timeout=60) as response:  # noqa: S310 - 導入済み registry の HTTPS URL のみ
-                    shutil.copyfileobj(response, output, length=1024 * 1024)
-                output.flush()
-                os.fsync(output.fileno())
-            if _digest(temporary, spec.hash_kind) != spec.digest:
-                raise ValueError("ダウンロードした モデルの SHA-256 が一致しません。")
-            os.replace(temporary, path)
-            logger.info("モデルの検証と修復が完了しました: %s", path.name)
-            return
-        except (OSError, ValueError, IncompleteRead) as exc:
-            if attempt == 2:
-                raise RuntimeError(f"モデルの修復に失敗しました: {path.name}。モデル取得先への接続と保存先を確認してください。") from exc
-            delay = 2**attempt
-            time.sleep(delay + random.uniform(0, delay))
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-
-
-def _verify_files(entries: list[tuple[Path, list[ModelArtifact]]], lock_path: Path, *, repair: bool) -> list[str]:
-    repaired: list[str] = []
-    for path, specs in entries:
-        if not specs or any(_digest(path, spec.hash_kind) == spec.digest for spec in specs):
-            continue
-        if not repair:
-            raise RuntimeError(f"モデルのハッシュが一致しません: {path.name}。モデル取得処理を再実行してください。")
-        if len(specs) != 1:
-            raise RuntimeError(f"モデルの取得先を一意に決定できません: {path.name}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # 同時修復を直列化し、検証済みのファイルだけを公開する。
-        with lock_path.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            if _digest(path, specs[0].hash_kind) == specs[0].digest:
-                continue
-            logger.warning("モデルの破損または欠落を検出しました: %s", path.name)
-            _replace_verified(path, specs[0])
-            repaired.append(specs[0].name)
-    logger.info("モデルのハッシュ検証が完了しました: %s files", len(entries))
-    return repaired
 
 
 def verify_rapidocr_cache(model_dir: Path, *, repair: bool = True) -> list[str]:
