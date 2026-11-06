@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 from typing import Any, cast
 
@@ -21,7 +22,12 @@ from app.rag.pdf_segment_merge import (
     merge_segment_extractions,
     pdf_outline_entries,
 )
-from app.schemas.document import FileStatus, IngestionJobProgress, IngestionSegment
+from app.schemas.document import (
+    DocumentPreprocessArtifact,
+    FileStatus,
+    IngestionJobProgress,
+    IngestionSegment,
+)
 from app.schemas.extraction import (
     DocumentElement,
     ExtractionPage,
@@ -201,6 +207,21 @@ def _pipeline(
     )
 
 
+def _prepared_pdf_artifact(pdf: bytes) -> DocumentPreprocessArtifact:
+    """分段/Visionの検査は同じPDF bytesの準備完了後から開始する。保存契約は別testで検査する。"""
+    digest = hashlib.sha256(pdf).hexdigest()
+    return DocumentPreprocessArtifact(
+        derivation_id="synthetic-prepared-pdf",
+        file_name="layout.pdf",
+        profile="passthrough",
+        converted=False,
+        source_content_type="application/pdf",
+        source_sha256=digest,
+        content_type="application/pdf",
+        sha256=digest,
+    )
+
+
 async def _ingest(pipeline: IngestionPipeline, pdf: bytes) -> object:
     return await pipeline.ingest(
         DOCUMENT_ID,
@@ -208,6 +229,7 @@ async def _ingest(pipeline: IngestionPipeline, pdf: bytes) -> object:
         "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=len(pdf)),
+        prepared_artifact=_prepared_pdf_artifact(pdf),
     )
 
 

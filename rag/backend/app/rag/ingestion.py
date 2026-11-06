@@ -2672,43 +2672,19 @@ class IngestionPipeline:
         original_object_storage_path: str | None,
         fallback_content_type: str,
     ) -> DocumentPreprocessArtifact:
+        if self._recipe_id is None:
+            raise IngestionUserError("ファイル準備の保存には正式な文書レシピが必要です。")
         artifact = preprocess_artifact_from_derivation(
             source_derivation,
             original_file_name=original_file_name,
             original_object_storage_path=original_object_storage_path,
             fallback_content_type=fallback_content_type,
         )
-        if self._recipe_id is not None:
-            await self._oracle.update_document_recipe_status(
-                recipe_id=self._recipe_id,
-                status=FileStatus.PREPROCESSED,
-                preprocess_artifact=artifact,
-            )
-            return artifact
-        save_artifact = getattr(self._oracle, "save_preprocess_artifact", None)
-        if not callable(save_artifact):
-            return artifact
-        await save_artifact(document_id, artifact)
-        if artifact.object_storage_path:
-            # 保存検証: ファイル準備 artifact(JSON 列)の書き込みが永続化したか読み戻して確認する。
-            # 稀に commit 成功でも値が残らない事象があり、silent に path 欠落の PREPROCESSED を
-            # 作ると「処理後」も EXTRACT も壊れる。残っていなければ失敗を表面化し再処理を促す。
-            get_document = getattr(self._oracle, "get_document", None)
-            if callable(get_document):
-                saved = await get_document(document_id)
-                if (
-                    saved is None
-                    or saved.preprocess_artifact is None
-                    or not saved.preprocess_artifact.object_storage_path
-                ):
-                    logger.warning(
-                        "preprocess_artifact_not_persisted",
-                        extra={"document_id": document_id},
-                    )
-                    raise IngestionUserError(
-                        "ファイル準備の処理後ファイル情報を保存できませんでした。"
-                        "時間をおいてファイル準備から再処理してください。"
-                    )
+        await self._oracle.update_document_recipe_status(
+            recipe_id=self._recipe_id,
+            status=FileStatus.PREPROCESSED,
+            preprocess_artifact=artifact,
+        )
         return artifact
 
     async def _cache_canonical_artifact(

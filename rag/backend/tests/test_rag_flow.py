@@ -19,7 +19,13 @@ from app.main import app
 from app.rag import ingestion as ingestion_module
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
 from app.rag.navigation import build_navigation_tree
-from app.schemas.document import FileStatus, SourceModality, SourceProfile
+from app.schemas.document import (
+    DocumentDetail,
+    DocumentPreprocessArtifact,
+    FileStatus,
+    SourceModality,
+    SourceProfile,
+)
 from app.schemas.extraction import StructuredExtraction
 from tests._ingestion_jobs import run_ingestion_job_and_queued_followups
 from tests.support import AsgiTestClient
@@ -30,6 +36,25 @@ NO_TENANT_HEADERS = {"X-Tenant-ID": "", "X-User-ID": ""}
 
 # 実 Oracle AI Database + OCI を用いる統合テスト（DB 未到達環境では自動 skip）。
 pytestmark = pytest.mark.usefixtures("oracle_db")
+
+
+def _prepared_source_artifact(
+    document: DocumentDetail, source: bytes, *, content_type: str
+) -> DocumentPreprocessArtifact:
+    """EXTRACT後の観点だけを測るため、同bytes/hashの完了済passthroughを明示する。"""
+    digest = hashlib.sha256(source).hexdigest()
+    assert document.content_sha256 == digest
+    return DocumentPreprocessArtifact(
+        derivation_id="synthetic-prepared",
+        file_name=document.file_name,
+        profile="passthrough",
+        converted=False,
+        source_content_type=content_type,
+        source_sha256=digest,
+        object_storage_path=document.object_storage_path,
+        content_type=content_type,
+        sha256=digest,
+    )
 
 
 @pytest.fixture
@@ -264,7 +289,14 @@ async def test_ingestion_records_trace_spans_without_payload_text(
     )
     pipeline = IngestionPipeline(genai=StubEmbeddingClient(), oracle=oracle)
 
-    detail = await pipeline.ingest(document.id, source, "秘密の規程を抽出する prompt")
+    detail = await pipeline.ingest(
+        document.id,
+        source,
+        "秘密の規程を抽出する prompt",
+        prepared_artifact=_prepared_source_artifact(
+            document, source, content_type="application/octet-stream"
+        ),
+    )
 
     assert detail.status == FileStatus.INDEXED
     expected_stages = [
@@ -365,6 +397,9 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
         "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=source_profile,
+        prepared_artifact=_prepared_source_artifact(
+            document, b"pdfdata", content_type="application/pdf"
+        ),
     )
 
     assert detail.status == FileStatus.INDEXED
@@ -390,7 +425,14 @@ async def test_ingestion_records_error_trace_span_without_error_message(
         caplog.at_level(logging.INFO, logger="app.trace"),
         pytest.raises(RuntimeError, match="INV-SECRET"),
     ):
-        await pipeline.ingest(document.id, b"test", "prompt")
+        await pipeline.ingest(
+            document.id,
+            b"test",
+            "prompt",
+            prepared_artifact=_prepared_source_artifact(
+                document, b"test", content_type="application/octet-stream"
+            ),
+        )
 
     trace_events = _trace_events(caplog)
     assert [(event["span_name"], event["outcome"]) for event in trace_events] == [
@@ -438,7 +480,14 @@ async def test_ingestion_normalizes_untrusted_document_type_in_logs(
     pipeline = IngestionPipeline(genai=StubEmbeddingClient(), oracle=oracle)
 
     with caplog.at_level(logging.INFO):
-        detail = await pipeline.ingest(document.id, b"test", "prompt")
+        detail = await pipeline.ingest(
+            document.id,
+            b"test",
+            "prompt",
+            prepared_artifact=_prepared_source_artifact(
+                document, b"test", content_type="application/octet-stream"
+            ),
+        )
 
     assert detail.status == FileStatus.INDEXED
     audit_event = next(
@@ -487,7 +536,14 @@ async def test_ingestion_redacts_internal_error_messages(
             caplog.at_level(logging.INFO, logger="app.audit"),
             pytest.raises(RuntimeError, match="INV-SECRET"),
         ):
-            await pipeline.ingest(document.id, b"test", "prompt")
+            await pipeline.ingest(
+                document.id,
+                b"test",
+                "prompt",
+                prepared_artifact=_prepared_source_artifact(
+                    document, b"test", content_type="application/octet-stream"
+                ),
+            )
 
         failed = await oracle.get_document(document.id)
         assert failed is not None
@@ -508,7 +564,7 @@ async def test_ingestion_redacts_internal_error_messages(
     assert "raw secret detail" not in str(audit_event)
 
 
-async def test_candidate_mode_isolates_document_state_and_serving() -> None:
+async def test_candidate_mode_isolates_document_state_and_serving(monkeypatch: MonkeyPatch) -> None:
     """candidate モード(manage_document_state=False)は配信中文書の状態/配信を乱さない。
 
     Phase 3b: parser/前処理を変えた候補 chunk_set を再抽出で materialize する際に、
@@ -537,7 +593,15 @@ async def test_candidate_mode_isolates_document_state_and_serving() -> None:
 
         # 通常取込で serving chunk_set を作り、配信に確定する(reconcile 相当)。
         serving_cs = "cs_serving_aaaaaaaa"
-        await pipeline.ingest(document.id, b"test", "prompt", chunk_set_id=serving_cs)
+        await pipeline.ingest(
+            document.id,
+            b"test",
+            "prompt",
+            chunk_set_id=serving_cs,
+            prepared_artifact=_prepared_source_artifact(
+                document, b"test", content_type="application/octet-stream"
+            ),
+        )
         await oracle.upsert_chunk_set(chunk_set_id=serving_cs, document_id=document.id)
         await oracle.mark_chunk_set_indexed(
             chunk_set_id=serving_cs,
@@ -548,6 +612,11 @@ async def test_candidate_mode_isolates_document_state_and_serving() -> None:
             document_id=document.id, chunk_set_id=serving_cs
         )
         assert (await oracle.get_document(document.id)).status == FileStatus.INDEXED  # type: ignore[union-attr]
+
+        async def refuse_save(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("保存しないcandidateがpreprocess保存へ入った")
+
+        monkeypatch.setattr(pipeline, "_save_preprocess_artifact", refuse_save)
 
         # candidate モードで別 chunk_set を materialize(配信は触らない)。
         candidate_cs = "cs_candidate_bbbbbb"

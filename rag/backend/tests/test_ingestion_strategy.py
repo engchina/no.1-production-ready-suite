@@ -47,6 +47,29 @@ from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.prompt_support import UneditedPromptOracle
 
 
+@pytest.fixture
+def isolated_preprocess_save(monkeypatch: pytest.MonkeyPatch) -> None:
+    """後段だけのテスト。保存の拒否/正式recipe境界は専用7対照で検証する。"""
+
+    async def save(
+        self: IngestionPipeline,
+        *,
+        document_id: str,
+        source_derivation: Any,
+        original_file_name: str,
+        original_object_storage_path: str | None,
+        fallback_content_type: str,
+    ) -> Any:
+        return ingestion_module.preprocess_artifact_from_derivation(
+            source_derivation,
+            original_file_name=original_file_name,
+            original_object_storage_path=original_object_storage_path,
+            fallback_content_type=fallback_content_type,
+        )
+
+    monkeypatch.setattr(IngestionPipeline, "_save_preprocess_artifact", save)
+
+
 class FakeOracle(UneditedPromptOracle):
     """IngestionPipeline に必要な OracleClient subset。"""
 
@@ -664,7 +687,9 @@ async def test_recipe_review_load_does_not_fall_back_to_document_extraction() ->
         await pipeline._load_reviewed_extraction(detail)
 
 
-async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpoint() -> None:
+async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpoint(
+    isolated_preprocess_save: None,
+) -> None:
     """抽出 artifact を保存し、segment checkpoint に artifact path を残す。"""
     oracle = FakeOracle()
     storage = FakeObjectStorage()
@@ -720,6 +745,7 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
 
 async def test_low_confidence_excel_header_stops_at_review_even_when_gate_is_off(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_preprocess_save: None,
 ) -> None:
     """表頭の推定の信頼度が低いシートがあれば、全体のレビューの設定が off でも確認で止める。
 
@@ -775,9 +801,31 @@ async def test_low_confidence_excel_header_stops_at_review_even_when_gate_is_off
 
 async def test_ingestion_pipeline_stops_at_preprocessed_when_parse_gate_off() -> None:
     """ファイル準備ゲート off では PREPROCESSED で停止し、抽出/索引へ進めない。"""
-    oracle = FakeOracle()
+
+    class RecipeOracle(FakeOracle):
+        async def get_document(self, document_id: str) -> Any:
+            return DocumentDetail(
+                id=document_id,
+                file_name="synthetic.pdf",
+                status=FileStatus.INDEXED,
+                uploaded_at=datetime.now(UTC),
+            )
+
+        async def update_document_status(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("配信中文書の状態を変更した")
+
+    oracle = RecipeOracle()
+    oracle.recipe_rows["formal-preprocess"] = {
+        "recipe_id": "formal-preprocess",
+        "document_id": "doc-gate",
+        "slot_no": 2,
+        "config_revision": 1,
+        "status": "UPLOADED",
+    }
     storage = FakeObjectStorage()
     pipeline = IngestionPipeline(
+        recipe_id="formal-preprocess",
+        recipe_revision=1,
         vlm=CapturingVlm(),
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
@@ -792,18 +840,22 @@ async def test_ingestion_pipeline_stops_at_preprocessed_when_parse_gate_off() ->
         "doc-gate",
         b"pdfdata",
         "本文を抽出してください。",
+        manage_document_state=False,
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
 
-    assert detail.status == FileStatus.PREPROCESSED
-    assert oracle.statuses[-1] == FileStatus.PREPROCESSED
+    assert detail.status == FileStatus.INDEXED
+    assert oracle.recipe_rows["formal-preprocess"]["status"] == "PREPROCESSED"
+    assert oracle.statuses == []
     # parse 以降は走らない: 抽出も chunk も保存されない。
     assert oracle.saved_extraction is None
     assert oracle.saved_chunk_count == 0
 
 
-async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
+async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys(
+    isolated_preprocess_save: None,
+) -> None:
     """artifact cache key は prefix/document id を安全な Object Storage path に正規化する。"""
     oracle = FakeOracle()
     storage = FakeObjectStorage()
@@ -842,7 +894,9 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
     assert "/doc_with_slash_artifact_/" in artifact_path
 
 
-async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure() -> None:
+async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure(
+    isolated_preprocess_save: None,
+) -> None:
     """artifact cache 失敗は保存 payload と品質レポートへ警告として残す。"""
     oracle = FakeOracle()
     storage = FailingObjectStorage()
@@ -966,27 +1020,17 @@ async def test_canonical_artifact_persists_even_when_extraction_cache_disabled()
 
 
 class _NonPersistingOracle:
-    """save_preprocess_artifact を受けるが永続化しない(読み戻すと artifact なし)スタブ。"""
+    """退役済みのwriter/getterが呼ばれないことを確認する代役。"""
 
     async def save_preprocess_artifact(self, document_id: str, artifact: Any) -> None:
-        _ = document_id, artifact
+        raise AssertionError("旧writerを呼んだ")
 
     async def get_document(self, document_id: str) -> DocumentDetail:
-        return DocumentDetail(
-            id=document_id,
-            file_name="x.pdf",
-            status=FileStatus.PREPROCESSING,
-            content_type="application/pdf",
-            file_size_bytes=1,
-            content_sha256="a" * 64,
-            uploaded_at=datetime.now(UTC),
-            indexed_at=None,
-            preprocess_artifact=None,
-        )
+        raise AssertionError("旧artifactを読み戻した")
 
 
-async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> None:
-    """ファイル準備 artifact の保存が永続化しなければ silent にせず ERROR 用例外を出す。"""
+async def test_preprocess_artifact_without_recipe_refuses_before_legacy_io() -> None:
+    """旧列の永続化確認へ入る前に正式recipe欠失を拒否する。"""
     from rag_parser_core.preprocess import SourceDerivation
 
     pipeline = IngestionPipeline(
@@ -1005,7 +1049,7 @@ async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> Non
         source_sha256="a" * 64,
         derived_sha256="b" * 64,
     )
-    with pytest.raises(IngestionUserError, match="処理後ファイル情報を保存できませんでした"):
+    with pytest.raises(IngestionUserError, match="正式な文書レシピが必要"):
         await pipeline._save_preprocess_artifact(
             document_id="doc-x",
             source_derivation=derivation,
@@ -1015,7 +1059,9 @@ async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> Non
         )
 
 
-async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embedding_failure() -> None:
+async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embedding_failure(
+    isolated_preprocess_save: None,
+) -> None:
     """VLM 成功後の後段失敗は full extraction artifact から復旧し VLM を再実行しない。"""
     oracle = FakeOracle()
     storage = FakeObjectStorage()
@@ -1085,7 +1131,9 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
     assert oracle.saved_chunk_count > 0
 
 
-async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse_input() -> None:
+async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse_input(
+    isolated_preprocess_save: None,
+) -> None:
     """前回の取込と解析に渡す内容が違えば(ファイル準備の出力の変化など)、保存した解析の結果を
     使わずに解析し直す(#2076)。"""
     oracle = FakeOracle()
@@ -1165,7 +1213,9 @@ def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
         pipeline._raise_if_selected_parser_was_not_used(result)
 
 
-async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() -> None:
+async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index(
+    isolated_preprocess_save: None,
+) -> None:
     """cancel 済み job は extraction/chunk/index 保存と INDEXED 遷移を止める。"""
     oracle = FakeOracle()
     pipeline = IngestionPipeline(
@@ -1249,6 +1299,7 @@ async def test_ingestion_pipeline_cancel_during_preprocess_does_not_write_later_
 async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
     monkeypatch: pytest.MonkeyPatch,
     recipe_id: str | None,
+    isolated_preprocess_save: None,
 ) -> None:
     """REVIEW を書く直前に cancel されたら、REVIEW と抽出の切り替えを書かない(#305)。"""
     oracle = FakeOracle()
@@ -1299,7 +1350,9 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
         assert "active_extraction_recipe_id" not in row
 
 
-async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
+async def test_ingestion_pipeline_writes_graph_index_when_enabled(
+    isolated_preprocess_save: None,
+) -> None:
     """関係情報を構築する設定(entities)のときは、取込結果から関係情報を保存する。"""
     oracle = FakeOracle()
     settings = Settings.model_construct(
@@ -1866,6 +1919,7 @@ async def test_ingest_audit_uses_given_document_source_instead_of_input_bytes(
 
 async def test_pipeline_releases_heavy_slot_after_parse_before_llm_stages(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_preprocess_save: None,
 ) -> None:
     """重い段の枠を返すのは、解析・図表の読み取りの後、見出しの推定・項目抽出の前に 1 回(#2702)。"""
     from app.rag.ingestion_slots import heavy_slot_releaser
