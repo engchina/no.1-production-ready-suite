@@ -122,10 +122,4 @@ def build_structure_tree(
                 _entity_type_for_content_kind(row.content_kind),
                 parent,
             )
-    # 文書の題名だけの段が先頭に続くなら飛ばし、文書の直下を章にする。
-    while len(tree.roots) == 1 and tree.nodes[tree.roots[0]].children:
-        only = tree.nodes.pop(tree.roots[0])
-        tree.roots = only.children
-        for child in only.children:
-            tree.nodes[child].parent_id = None
     return tree

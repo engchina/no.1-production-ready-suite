@@ -1,3 +1,4 @@
+import structureLevelsReader from "./fixtures/structure-levels-reader.json";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectToastPlacement } from "./_toast-placement";
 import { expectedControlHeight, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -929,3 +930,39 @@ test("本文の件数が減って末頁が空になったら有効なページ�
   await expect(panel.getByText("本文 6",{exact:true})).toHaveCount(0);
   await expect.poll(()=>offsets).toEqual([0,25,0]);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`保存された共通の章と中間階層を残して実節を開く ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 })), theme);
+    // 正式StructureGraphStore.children/locateを修前後同じ合成保存行に実行した応答。
+    const fixture = process.env.STRUCTURE_LEVEL_FIXTURE === "before" ? structureLevelsReader.before : structureLevelsReader.after;
+    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
+    await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, name: "合成ナレッジベース", description: "構造階層の合成データ" }) }));
+    await mockTree(page, fixture.trees);
+    await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok(fixture.locate) }));
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page, "文書構造グラフを表示").click();
+    const graph = page.locator("#knowledge-base-graph");
+    const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
+    await node("doc").focus(); await page.keyboard.press("Enter");
+    if (process.env.STRUCTURE_LEVEL_FIXTURE === "before") await page.screenshot({ path: testInfo.outputPath(`structure-recorded-levels-before-${theme}.png`), fullPage: true });
+    await expect(node(fixture.rootID)).toBeVisible();
+    await node(fixture.rootID).focus(); await page.keyboard.press("Enter");
+    await expect(node(fixture.middleID)).toBeVisible();
+    await expect(graph.getByText("この段に本文はありません。下の段を開いてください。", { exact: true })).toBeVisible();
+    await node(fixture.middleID).focus(); await page.keyboard.press("Enter");
+    await expect(node(fixture.leafID)).toBeVisible();
+    await node(fixture.leafID).focus(); await page.keyboard.press("Enter");
+    await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("第1章 > 接続 > 形式1");
+    await expect(page.getByTestId("graph-references")).toBeVisible();
+    await expect(graph.locator(`.react-flow__edge[data-id="contains:${fixture.middleID}"]`)).toHaveCount(1);
+    await expect(graph.locator(`.react-flow__edge[data-id="contains:${fixture.leafID}"]`)).toHaveCount(1);
+    await graph.getByRole("button", { name: "全体表示", exact: true }).click();
+    await graph.scrollIntoViewIfNeeded();
+    await expect(node(fixture.rootID)).toBeInViewport();
+    await expect(node(fixture.middleID)).toBeInViewport();
+    await expect(node(fixture.leafID)).toBeInViewport();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`structure-recorded-levels-${theme}.png`), fullPage: true });
+  });
+}
