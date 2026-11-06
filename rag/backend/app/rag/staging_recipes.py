@@ -61,7 +61,10 @@ class StagingRecipeState:
 
 
 async def read_staging_recipe(oracle: Any, document_id: str) -> StagingRecipeState:
-    identity = await oracle.ensure_default_document_recipe(document_id)
+    rows = await oracle.list_document_recipes(document_id)
+    identity = next((row for row in rows if row.get("slot_no") == 1), None)
+    if identity is None:
+        raise RuntimeError("検証対象の処理レシピが見つかりません。")
     recipe_id = str(identity["recipe_id"])
     row = await oracle.get_document_recipe(document_id, recipe_id)
     if row is None:

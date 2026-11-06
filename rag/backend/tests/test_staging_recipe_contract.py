@@ -23,8 +23,8 @@ def test_runtime_options_reject_other_fields(key: Any) -> None:
 
 async def test_collect_reads_active_version_not_document_legacy() -> None:
     class Oracle:
-        async def ensure_default_document_recipe(self, document_id: Any) -> Any:
-            return {"recipe_id": "r1"}
+        async def list_document_recipes(self, document_id: Any) -> Any:
+            return [{"recipe_id": "r1", "slot_no": 1}]
 
         async def get_document_recipe(self, document_id: Any, recipe_id: Any) -> Any:
             return {
@@ -63,8 +63,8 @@ async def test_collect_reads_active_version_not_document_legacy() -> None:
 
 async def test_missing_version_never_reads_document_fallback() -> None:
     class Oracle:
-        async def ensure_default_document_recipe(self, document_id: Any) -> Any:
-            return {"recipe_id": "r1"}
+        async def list_document_recipes(self, document_id: Any) -> Any:
+            return [{"recipe_id": "r1", "slot_no": 1}]
 
         async def get_document_recipe(self, document_id: Any, recipe_id: Any) -> Any:
             return {"recipe_id": "r1", "status": "INDEXED"}
@@ -93,8 +93,8 @@ def test_runtime_options_roundtrip_is_bounded() -> None:
 
 async def test_review_state_is_not_promoted() -> None:
     class Oracle:
-        async def ensure_default_document_recipe(self, document_id: Any) -> Any:
-            return {"recipe_id": "r1"}
+        async def list_document_recipes(self, document_id: Any) -> Any:
+            return [{"recipe_id": "r1", "slot_no": 1}]
 
         async def get_document_recipe(self, document_id: Any, recipe_id: Any) -> Any:
             return {"recipe_id": "r1", "status": "REVIEW", "active_extraction_recipe_id": "e2"}
