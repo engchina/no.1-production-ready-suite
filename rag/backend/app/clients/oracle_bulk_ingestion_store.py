@@ -12,12 +12,9 @@ from datetime import datetime
 from uuid import uuid4
 
 from app.clients.oracle import (
-    DEFAULT_DOCUMENT_RECIPE_MERGE_JSON_BINDS,
-    DEFAULT_DOCUMENT_RECIPE_MERGE_SQL,
     INGESTION_JOB_INSERT_SQL,
     OracleClient,
     OracleConnectionProtocol,
-    _default_document_recipe_values,
     _executemany,
     _fetch_all,
     _file_status,
@@ -31,7 +28,6 @@ from app.clients.oracle import (
     _render_sql,
     _with_tenant_bind,
     default_document_recipe_id,
-    default_document_recipe_merge_binds,
 )
 from app.rag.bulk_ingestion import (
     BulkIngestionDocumentState,
@@ -96,7 +92,7 @@ class OracleBulkIngestionStore:
         queued_at: datetime,
         max_attempts: int,
     ) -> BulkInsertResult:
-        """1 つの transaction でレシピ1を用意し、lock して確かめ直し、QUEUED の job を登録する。"""
+        """1 つの transaction で既存レシピ1を lock して確かめ直し、QUEUED の job を登録する。"""
         if not drafts:
             return BulkInsertResult(created={})
         if len(drafts) > _IN_CHUNK:
@@ -229,21 +225,7 @@ def _insert_queued_jobs(
     max_attempts: int,
 ) -> BulkInsertResult:
     document_ids = [draft.document_id for draft in drafts]
-    # 1. レシピ1が無い文書は作る(MERGE はあれば何もしない。1 件の投入の ensure と同じ値)。
-    missing_recipe = [draft for draft in drafts if not draft.has_default_recipe]
-    if missing_recipe:
-        _executemany(
-            connection,
-            DEFAULT_DOCUMENT_RECIPE_MERGE_SQL,
-            [
-                default_document_recipe_merge_binds(
-                    _default_document_recipe_values(draft.recipe_seed)
-                )
-                for draft in missing_recipe
-            ],
-            input_sizes=_json_input_sizes(*DEFAULT_DOCUMENT_RECIPE_MERGE_JSON_BINDS),
-        )
-    # 2. レシピ1の行を lock する(1 件の投入・レシピの編集と同じ行の lock で直列にする)。
+    # 1. 正式レシピ1の行を lock する(1 件の投入・レシピの編集と同じ行の lock で直列にする)。
     in_sql, in_binds = _oracle_in_predicate("r.document_id", "bulk_lock_document_id", document_ids)
     locked = _fetch_all(
         connection,
@@ -266,12 +248,13 @@ def _insert_queued_jobs(
         str(row["document_id"]): (str(row["recipe_id"]), int(str(row.get("config_revision") or 1)))
         for row in locked
     }
-    # 3. lock の後に、待機中・実行中の job を確かめ直す(別の要求・1 件の投入が先に登録した)。
-    active_sql, active_binds = _oracle_in_predicate(
-        "document_id", "bulk_active_document_id", list(recipes)
-    )
-    active_rows = (
-        _fetch_all(
+    # 2. lock の後に、待機中・実行中の job を確かめ直す(別の要求・1 件の投入が先に登録した)。
+    active_rows: list[dict[str, object]] = []
+    if recipes:
+        active_sql, active_binds = _oracle_in_predicate(
+            "document_id", "bulk_active_document_id", list(recipes)
+        )
+        active_rows = _fetch_all(
             connection,
             f"""
             SELECT document_id, recipe_id
@@ -281,15 +264,12 @@ def _insert_queued_jobs(
             """,
             active_binds,
         )
-        if recipes
-        else []
-    )
     active = {
         str(row["document_id"])
         for row in active_rows
         if _optional_str(row.get("recipe_id")) in {None, recipes[str(row["document_id"])][0]}
     }
-    # 4. まとめて登録する。
+    # 3. まとめて登録する。
     jobs: list[IngestionJob] = []
     for draft in drafts:
         recipe = recipes.get(draft.document_id)

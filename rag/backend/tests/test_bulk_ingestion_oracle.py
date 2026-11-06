@@ -116,7 +116,7 @@ async def test_load_states_reads_documents_and_jobs_in_chunks() -> None:
 
 
 async def test_insert_queued_jobs_locks_recipes_and_rechecks_active_jobs() -> None:
-    """1 つの transaction でレシピ1を用意し、lock し、待機中の job を確かめ直してから登録する。"""
+    """1 つの transaction で既存レシピ1を lock し、待機中の job を確かめ直してから登録する。"""
     pool = FakeOraclePool(
         execute_results=[
             [
@@ -151,10 +151,10 @@ async def test_insert_queued_jobs_locks_recipes_and_rechecks_active_jobs() -> No
     assert result.active == frozenset({"doc-b"})
     assert result.missing == frozenset({"doc-gone"})
     assert pool.connection.commits == 1
-    merge, insert = pool.connection.many_calls
-    assert merge.statement.startswith("MERGE INTO rag_document_recipes")
-    assert [row["document_id"] for row in merge.rows] == ["doc-a"]
-    assert merge.rows[0]["recipe_id"] == default_document_recipe_id("doc-a")
+    # snapshotで欠落していてもlock時に正式行があれば、その行を使い補建しない。
+    assert len(pool.connection.many_calls) == 1
+    insert = pool.connection.many_calls[0]
+    assert not any(call.statement.startswith("MERGE") for call in pool.connection.many_calls)
     lock, active = pool.connection.calls
     assert "FOR UPDATE OF r.recipe_id" in lock.statement
     assert "r.slot_no = 1" in lock.statement
