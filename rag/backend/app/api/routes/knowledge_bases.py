@@ -200,7 +200,7 @@ async def get_structure_graph_tree(
     document_id: str,
     chunk_set_id: str = Query(min_length=1, max_length=64),
     parent: str | None = Query(default=None, min_length=64, max_length=64),
-    offset: int = Query(default=0, ge=0, le=100000),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> ApiResponse[StructureGraphTreePage]:
     """章節の木の 1 段を返す（文書の順）。``parent`` が無ければ文書の直下。"""
@@ -264,7 +264,7 @@ async def get_structure_graph_document_references(
 async def search_structure_graph(
     knowledge_base_id: str,
     q: str = Query(default="", max_length=200),
-    offset: int = Query(default=0, ge=0, le=100000),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ) -> ApiResponse[StructureGraphSearchPage]:
     """KB の全体から文書名と章節名を検索する。"""
@@ -284,7 +284,7 @@ async def get_knowledge_base_graph_references(
         default=None, min_length=64, max_length=64, pattern="^[a-f0-9]+$"
     ),
     direction: str = Query(default="outgoing", pattern="^(outgoing|incoming)$"),
-    offset: int = Query(default=0, ge=0, le=100000),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ) -> ApiResponse[dict[str, Any]]:
     """同じ版の参照先・参照元を、読み取り時点の権限で返す。"""
