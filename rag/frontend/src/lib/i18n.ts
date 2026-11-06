@@ -2698,7 +2698,7 @@ export const ja = {
   "knowledgeBases.structure.build.reason.interrupted": "サービスの中断により停止しました。",
   "knowledgeBases.structure.build.reason.processing_error": "構築できませんでした。再試行しても続く場合は管理者に連絡してください。",
   "knowledgeBases.structure.build.reason.current": "処理対象の版は構築済みでした。",
-  "knowledgeBases.structure.build.reason.partial": "構築対象のレシピ、章節情報の不足、または構造ノード数の上限により、構造の一部を表示しています。",
+  "knowledgeBases.structure.build.reason.partial": "作成済みの章節情報をすべて表示します。章節情報がない箇所や、構築していない処理レシピの構造は表示されません。",
   "knowledgeBases.structure.title": "文書構造索引の構築",
   "knowledgeBases.structure.help": "このKBの文書構造索引だけを設定します。個別指定は文書レシピ・全体設定より優先します。解析・分割・埋め込みや、検索時の構造拡張の設定は変更しません。",
   "knowledgeBases.structure.global": "全体設定：{value}",
