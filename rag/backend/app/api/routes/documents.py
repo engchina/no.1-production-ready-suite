@@ -146,6 +146,7 @@ from app.rag.section_rules import (
     load_section_rules,
 )
 from app.rag.source_profile import build_source_profile, rejected_upload_format_message
+from app.rag.staging_recipes import StagingRuntimeOptions, apply_staging_runtime
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_extraction_recipe_id,
@@ -1496,6 +1497,7 @@ async def _enqueue_ingestion_job_for_recipe(
     phase: IngestionJobPhase,
     expected_language_pack_release_id: str | None = None,
     expected_config_revision: int | None = None,
+    staging_runtime: StagingRuntimeOptions | None = None,
 ) -> IngestionJob:
     """snapshot を作り、Oracle 側の行ロック検証後に recipe job を投入する。"""
     oracle = OracleClient()
@@ -1510,6 +1512,10 @@ async def _enqueue_ingestion_job_for_recipe(
         raise ValueError("レシピの改訂が変わりました。対象を確認し直してください。")
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective_settings, _ = _merge_document_processing_config(config)
+    if staging_runtime is not None:
+        effective_settings = apply_staging_runtime(
+            effective_settings, {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
+        )
     source_profile = _source_profile_for_detail(detail)
     # レシピの解析エンジン(既定は Docling)で扱えない形式は、job を作る前に止める(#286)。
     await _raise_if_parser_source_blocked(effective_settings, source_profile, phase)
@@ -1526,6 +1532,11 @@ async def _enqueue_ingestion_job_for_recipe(
             "processing_config": config.model_dump(mode="json", exclude_none=True),
             "rag_preprocess_profile": effective_settings.rag_preprocess_profile,
             "rag_parser_adapter_backend": effective_settings.rag_parser_adapter_backend,
+            **(
+                {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
+                if staging_runtime is not None
+                else {}
+            ),
         },
     )
     _dispatch_ingestion_job(job.id)
@@ -2885,6 +2896,7 @@ async def _materialize_experiment_candidate(
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
         candidate_config
     )
+    candidate_settings = apply_staging_runtime(candidate_settings, job.settings_overrides or {})
     base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
     candidate_chunk_set_id = hashlib.sha256(
         # 試行も材料にする。切替の後の再投入が active の chunk_set を置き換えないように（#4115）。
@@ -5755,8 +5767,13 @@ async def _run_pinned_ingestion_job(
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は
             # 握りつぶして warning に留め、人手の「承認して Chunk 作成」で続行可能にする。
             try:
+                next_options: dict[str, Any] = {}
+                if job.settings_overrides and "staging_runtime" in job.settings_overrides:
+                    next_options["staging_runtime"] = StagingRuntimeOptions.model_validate(
+                        job.settings_overrides["staging_runtime"]
+                    )
                 await _enqueue_ingestion_job_for_recipe(
-                    job.document_id, job.recipe_id, phase=next_recipe_phase
+                    job.document_id, job.recipe_id, phase=next_recipe_phase, **next_options
                 )
             except Exception:
                 logger.warning(

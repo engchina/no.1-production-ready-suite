@@ -13,7 +13,7 @@ import threading
 import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
@@ -139,6 +139,7 @@ from app.rag.ingestion_prompts import (
     RAPTOR_SUMMARY_SYSTEM_PROMPT,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
+from app.rag.ingestion_segment_receipts import SEGMENT_RECEIPT_KEY, accepted_segment_receipt
 from app.rag.ingestion_slots import release_heavy_ingestion_slot
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.layer_fingerprint import (
@@ -993,6 +994,9 @@ class IngestionPipeline:
             for segment in checkpoint_segments
             if segment.page_start is not None and segment.page_end is not None
         }
+        accepted_paths: dict[tuple[int | None, int | None], str | None] = {
+            page_range: checkpoints_by_range[page_range].artifact_path for page_range in results
+        }
         for page_range in sorted(results):
             tracker.mark(checkpoints_by_range[page_range].segment_id, "SUCCEEDED", reused=True)
             if on_segment_parsed is not None:
@@ -1068,6 +1072,7 @@ class IngestionPipeline:
             await self._mark_segment_succeeded(checkpoint, artifact_path=artifact_path)
             tracker.mark(checkpoint.segment_id, "SUCCEEDED")
             results[page_range] = (extraction, result)
+            accepted_paths[page_range] = artifact_path
             if on_segment_parsed is not None:
                 # 解析の終わった段の図・表の Vision を、次の段の解析と並べて始める(#2002)。
                 on_segment_parsed(checkpoint, extraction)
@@ -1136,6 +1141,34 @@ class IngestionPipeline:
             warnings=tuple(_dedupe_text([w for result in fresh for w in result.warnings])),
         )
         latest = await self._segments_with_latest_status(checkpoint_segments)
+        receipt_keys: dict[tuple[int | None, int | None], str] = {
+            key: value for key, value in parse_keys.items()
+        }
+        parser_result = replace(
+            parser_result,
+            extraction=merged.model_copy(
+                update={
+                    "parser_artifacts": {
+                        **merged.parser_artifacts,
+                        SEGMENT_RECEIPT_KEY: accepted_segment_receipt(
+                            document_id,
+                            self._recipe_id,
+                            [
+                                item.model_copy(
+                                    update={
+                                        "artifact_path": accepted_paths.get(
+                                            (item.page_start, item.page_end)
+                                        )
+                                    }
+                                )
+                                for item in checkpoint_segments
+                            ],
+                            receipt_keys,
+                        ),
+                    }
+                }
+            ),
+        )
         return parser_result, latest
 
     def _segment_extraction_from_result(self, result: ParserRegistryResult) -> StructuredExtraction:
@@ -1630,6 +1663,31 @@ class IngestionPipeline:
                 checkpoint_segments,
                 artifact_path=extraction_artifact_path,
             )
+            if not segmented_parse and checkpoint_segments:
+                extraction = extraction.model_copy(
+                    update={
+                        "parser_artifacts": {
+                            **extraction.parser_artifacts,
+                            SEGMENT_RECEIPT_KEY: accepted_segment_receipt(
+                                document_id,
+                                self._recipe_id,
+                                [
+                                    item.model_copy(
+                                        update={"artifact_path": extraction_artifact_path}
+                                    )
+                                    for item in checkpoint_segments
+                                ],
+                                {
+                                    (item.page_start, item.page_end): self._segment_parse_key(
+                                        parse_bytes
+                                    )
+                                    for item in checkpoint_segments
+                                },
+                                artifact_kind="full",
+                            ),
+                        }
+                    }
+                )
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
