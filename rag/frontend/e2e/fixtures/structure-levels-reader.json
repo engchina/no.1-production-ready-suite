@@ -1,0 +1,124 @@
+{
+  "sourcePaths": [
+    "第1章 > 接続 > 形式0",
+    "第1章 > 接続 > 形式1"
+  ],
+  "before": {
+    "trees": {
+      "root:set-doc": [
+        {
+          "id": "e5979e140571d7f3a850bfe2b8f35e3fd7ae32127a6c25e288032a2ceeb70db6",
+          "name": "第1章 > 接続 > 形式0",
+          "label": "形式0",
+          "type": "section",
+          "document_id": "doc-doc",
+          "document_name": "合成文書.pdf",
+          "chunk_set_id": "set-doc",
+          "parent_id": null,
+          "virtual": false,
+          "child_count": 0
+        },
+        {
+          "id": "2502ba2933b973d09fb708440fdc42f7ee0b7fab8ccfd945fcd2007e261fd95b",
+          "name": "第1章 > 接続 > 形式1",
+          "label": "形式1",
+          "type": "section",
+          "document_id": "doc-doc",
+          "document_name": "合成文書.pdf",
+          "chunk_set_id": "set-doc",
+          "parent_id": null,
+          "virtual": false,
+          "child_count": 0
+        }
+      ]
+    },
+    "locate": {
+      "path": [
+        {
+          "id": "2502ba2933b973d09fb708440fdc42f7ee0b7fab8ccfd945fcd2007e261fd95b",
+          "index": 1
+        }
+      ]
+    },
+    "rootID": "26c39bcb275ecb6d446d3d97b0b50a904f178c8483f2d7929b3b91fe0e08a12e",
+    "middleID": "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c",
+    "leafID": "2502ba2933b973d09fb708440fdc42f7ee0b7fab8ccfd945fcd2007e261fd95b"
+  },
+  "after": {
+    "trees": {
+      "root:set-doc": [
+        {
+          "id": "26c39bcb275ecb6d446d3d97b0b50a904f178c8483f2d7929b3b91fe0e08a12e",
+          "name": "第1章",
+          "label": "第1章",
+          "type": "section",
+          "document_id": "doc-doc",
+          "document_name": "合成文書.pdf",
+          "chunk_set_id": "set-doc",
+          "parent_id": null,
+          "virtual": true,
+          "child_count": 1
+        }
+      ],
+      "26c39bcb275ecb6d446d3d97b0b50a904f178c8483f2d7929b3b91fe0e08a12e": [
+        {
+          "id": "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c",
+          "name": "第1章 > 接続",
+          "label": "接続",
+          "type": "section",
+          "document_id": "doc-doc",
+          "document_name": "合成文書.pdf",
+          "chunk_set_id": "set-doc",
+          "parent_id": "26c39bcb275ecb6d446d3d97b0b50a904f178c8483f2d7929b3b91fe0e08a12e",
+          "virtual": true,
+          "child_count": 2
+        }
+      ],
+      "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c": [
+        {
+          "id": "e5979e140571d7f3a850bfe2b8f35e3fd7ae32127a6c25e288032a2ceeb70db6",
+          "name": "第1章 > 接続 > 形式0",
+          "label": "形式0",
+          "type": "section",
+          "document_id": "doc-doc",
+          "document_name": "合成文書.pdf",
+          "chunk_set_id": "set-doc",
+          "parent_id": "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c",
+          "virtual": false,
+          "child_count": 0
+        },
+        {
+          "id": "2502ba2933b973d09fb708440fdc42f7ee0b7fab8ccfd945fcd2007e261fd95b",
+          "name": "第1章 > 接続 > 形式1",
+          "label": "形式1",
+          "type": "section",
+          "document_id": "doc-doc",
+          "document_name": "合成文書.pdf",
+          "chunk_set_id": "set-doc",
+          "parent_id": "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c",
+          "virtual": false,
+          "child_count": 0
+        }
+      ]
+    },
+    "locate": {
+      "path": [
+        {
+          "id": "26c39bcb275ecb6d446d3d97b0b50a904f178c8483f2d7929b3b91fe0e08a12e",
+          "index": 0
+        },
+        {
+          "id": "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c",
+          "index": 0
+        },
+        {
+          "id": "2502ba2933b973d09fb708440fdc42f7ee0b7fab8ccfd945fcd2007e261fd95b",
+          "index": 1
+        }
+      ]
+    },
+    "rootID": "26c39bcb275ecb6d446d3d97b0b50a904f178c8483f2d7929b3b91fe0e08a12e",
+    "middleID": "319e279713158579b27e083759d680e3cf755da6b85a2d32686b67304543e23c",
+    "leafID": "2502ba2933b973d09fb708440fdc42f7ee0b7fab8ccfd945fcd2007e261fd95b"
+  }
+}
