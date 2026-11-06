@@ -203,6 +203,8 @@ export function SystemTablesCard({
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
     canManage && Boolean(api.deleteSystemTableOrphanedRows) && Boolean(confirmDeleteOrphans);
+  // 操作できない状態と、現在処理が動いている状態を分ける。取得失敗は処理中ではない。
+  const activityBusy = statusQuery.isFetching || mutationPending || schemaOperationRunning;
   const busy =
     statusQuery.isFetching ||
     statusUnavailable ||
@@ -323,7 +325,7 @@ export function SystemTablesCard({
     text(`settings.database.systemTables.status.${status}`);
 
   return (
-    <Card id="system-tables" className="min-w-0 max-w-full scroll-mt-24 rounded-md" aria-busy={busy}>
+    <Card id="system-tables" className="min-w-0 max-w-full scroll-mt-24 rounded-md" aria-busy={activityBusy}>
       <CardHeader className="p-6 pb-0">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
           <div className="min-w-0">
