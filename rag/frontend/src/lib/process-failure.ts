@@ -99,9 +99,11 @@ export function runFailure(run: Pick<RunDetail, "status" | "error_stage" | "erro
   if (run.status !== "error") return null;
   const reason = failureDiagnosisReason(run.failure_diagnosis);
   const stage = run.failure_diagnosis?.stage ?? run.error_stage;
+  const cause = t(`failure.diagnosis.${reason}.cause`);
   return {
     summary: failureSummary(stage),
-    cause: t(`failure.diagnosis.${reason}.cause`),
+    cause,
+    extraDetails: [{ label: t("failure.cause"), value: cause }],
     nextAction: `${t(`failure.diagnosis.${reason}.next`)} ${t("failure.diagnosis.contact")}`,
     failedStep: stage ? failedStageLabel(stage) : null,
     errorType: run.error_type,
