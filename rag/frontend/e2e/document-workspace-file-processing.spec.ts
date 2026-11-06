@@ -3730,7 +3730,7 @@ for (const theme of ["light", "dark"] as const) {
     let created = false;
     let saved = false;
     const recipe = {
-      recipe_id: "recipe-1", document_id: "doc-1", slot_no: 1, status: "UPLOADED",
+      recipe_id: "recipe-2", document_id: "doc-1", slot_no: 2, status: "UPLOADED",
       failed_phase: null, processing_config: {}, effective_processing_config: { vision_enabled: false },
       preprocess_artifact: null, active_extraction_recipe_id: null, active_chunk_set_id: null,
       chunk_count: 0, vector_count: 0, config_revision: 1, materialized_revision: null,
@@ -3743,10 +3743,10 @@ for (const theme of ["light", "dark"] as const) {
         created = true;
         await route.fulfill({ json: { data: recipe, error_messages: [], warning_messages: [] } });
       } else {
-        await route.fulfill({ json: { data: created ? [recipe] : [], error_messages: [], warning_messages: [] } });
+        await route.fulfill({ json: { data: created ? [{ ...recipe, recipe_id: "recipe-1", slot_no: 1, processing_config: {} }, recipe] : [], error_messages: [], warning_messages: [] } });
       }
     });
-    await page.route("**/api/documents/doc-1/recipes/recipe-1", async route => {
+    await page.route("**/api/documents/doc-1/recipes/recipe-2", async route => {
       expect(route.request().method()).toBe("PUT");
       const config = route.request().postDataJSON();
       expect(config.vision_enabled).toBe(true);
@@ -3768,6 +3768,7 @@ for (const theme of ["light", "dark"] as const) {
     await dialog.getByRole("button", { name: "追加する", exact: true }).click();
     await expect.poll(() => created).toBe(true);
     await expect(page.getByText("処理レシピがありません", { exact: true })).toHaveCount(0);
+    await expect(page).toHaveURL(/recipe=recipe-2/u);
     await page.getByRole("button", { name: "処理設定を編集", exact: true }).click();
     const field = page.locator('[data-config-field="vision_enabled"]').last();
     await field.getByRole("button", { name: "上書き", exact: true }).click();
