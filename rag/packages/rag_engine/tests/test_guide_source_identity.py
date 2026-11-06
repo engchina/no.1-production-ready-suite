@@ -4,10 +4,11 @@ import json
 from unittest.mock import patch
 
 import pytest
+from validation_unit_support import unit_audit_output
 
 from rag_engine.evaluation import guide_step_validation as guide
 from rag_engine.evaluation.answer_eval import _evidence_fragments
-from rag_engine.evaluation.answer_validation import ClaimAuditOutput, validate_answer_claims
+from rag_engine.evaluation.answer_validation import validate_answer_claims
 from rag_engine.retrieval.guide_steps import GuidePlan
 
 FIRST = "設定画面で項目Aの入力値を登録します。"
@@ -47,7 +48,7 @@ def plan():
     return value
 
 
-def consume(claims, rows):
+def consume(claims, rows, *, selected_evidence=None):
     observed = []
     original = guide._items
 
@@ -57,7 +58,7 @@ def consume(claims, rows):
         return checked, paragraphs
 
     with patch.object(guide, "_items", side_effect=capture):
-        result = guide.validate_guide_steps(plan(), claims, rows, embed=None)
+        result = guide.validate_guide_steps(plan(), claims, rows, embed=None, selected_evidence=selected_evidence)
     assert all(step["status"] != "explained" for step in result["steps"])
     assert all(step["validation"]["body_coverage"]["execution"] == "not_run" for step in result["steps"])
     return observed, result
@@ -72,23 +73,27 @@ def test_actual_final_audit_keeps_selected_source_identity(order, multi):
     selected = [A, B] if multi else [B]
 
     def parse(system, user, settings, schema, provider_id=None):
-        if schema is not ClaimAuditOutput:
+        if schema.__name__ != "FinalValidationUnitAudit":
             return schema(checks=[])
         data = json.loads(user)
         ids = {item["id"]: item["evidence_id"] for item in data["evidence_items"]}
-        return schema(
-            claim_checks=[
-                {
-                    "answer_quote": answer,
-                    "answer_passage_id": data["answer_passages"][0]["id"],
-                    "evidence_id": ",".join(ids[key] for key in selected),
-                    "evidence_quote": FIRST + "…" + SECOND if multi else SECOND,
-                    "applicability": "matched",
-                    "status": "supported",
-                    "source_id": "",
-                    "reason": "合成の固定支持応答。",
-                }
-            ]
+        return unit_audit_output(
+            schema,
+            data,
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": answer,
+                        "answer_passage_id": data["answer_passages"][0]["id"],
+                        "evidence_id": ",".join(ids[key] for key in selected),
+                        "evidence_quote": FIRST + "…" + SECOND if multi else SECOND,
+                        "applicability": "matched",
+                        "status": "supported",
+                        "source_id": "",
+                        "reason": "合成の固定支持応答。",
+                    }
+                ]
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -100,7 +105,7 @@ def test_actual_final_audit_keeps_selected_source_identity(order, multi):
             caller_citations=[{"start": 0, "end": len(answer), "chunk_ids": selected}],
         )
     assert result["counts"] == {"supported": 1}
-    sources, coverage = consume(result["claim_checks"], rows)
+    sources, coverage = consume(result["claim_checks"], rows, selected_evidence=result["_selected_evidence"])
     assert sources == selected
     expected = {"a": bool(multi), "b": True, "c": False}
     assert {step["step_id"]: bool(step["answer_quote"]) for step in coverage["steps"]} == expected
