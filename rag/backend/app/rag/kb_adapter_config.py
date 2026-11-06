@@ -32,6 +32,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_parser_core.image_purpose import ImagePurpose
 from rag_parser_core.sheet_records import ExcelOptions
 
 from app.config import (
@@ -89,6 +90,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
+    "vision_image_purpose": "rag_vision_image_purpose",
     # 見出しの階層の推定(#2277)。原本全体の整理の後に抽出結果の見出しの階層を変える。
     "heading_level_inference_enabled": "rag_heading_level_inference_enabled",
     "chunking_strategy": "rag_chunking_strategy",
@@ -263,6 +265,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     parser_dots_ocr_enabled: bool | None = None
     parser_structured_records_jsonl_enabled: bool | None = None
     parser_xml_tree_json_enabled: bool | None = None
+    vision_image_purpose: ImagePurpose | None = None
     vision_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None
     chunk_size: int | None = Field(

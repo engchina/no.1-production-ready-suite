@@ -4,6 +4,9 @@ rag_poc の Docling 解析(読み順・段組補正、表セル補修、図内 O
 `StructuredExtraction` を返す。LayoutRecord 全体は parser_artifacts["layout_records"] に保持する。
 図・画像の Vision は backend の解析後の共通の段が行う(#497)。このサービスは LLM を呼ばず、
 parser_options は受け取っても使わない(旧 backend の vision_enabled などは無視する)。
+
+モデルは配備で取得・検証し(rag_engine.resources.docling_models)、解析の要求の時には取得・修復しない。
+無い・壊れているときは解析を配備のやり直しを案内するエラーにし、/health は degraded を返す(#4557)。
 """
 
 from __future__ import annotations
@@ -11,12 +14,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from rag_engine.adapters.parsers.docling_adapter import docling_models_ready
+from rag_engine.config import get_settings
 from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.result import ParseHealth, ParseResponse, service_failure_warning
-from rag_parser_core.service import _detect_version, _parse_source_profile
+from rag_parser_core.service import _detect_version, _parse_source_profile, _runtime_health_ready
 from rag_parser_core.structured_records import is_structured_records_content_type
 
 from app.extraction import analyze_source, read_progress
@@ -25,15 +33,31 @@ _BACKEND = "docling"
 # 取込の worker が付ける進捗の id(#1999)。パスの一部に使うため形を絞る。
 _PROGRESS_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 logger = logging.getLogger(__name__)
+
+
+def _models_ready() -> bool:
+    return docling_models_ready(get_settings(dotenv_path=None))
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # モデルの検証(1 GB 余りのハッシュの計算)を起動の直後に始め、/health と最初の解析を待たせない。
+    threading.Thread(target=_models_ready, name="docling-model-check", daemon=True).start()
+    yield
+
+
 # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
-app = FastAPI(title="parser-docling", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(
+    title="parser-docling", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan
+)
 
 
 @app.get("/health", response_model=ParseHealth)
 async def health() -> ParseHealth:
     installed, version = _detect_version("docling", ("docling",))
+    ready = installed and _runtime_health_ready(_models_ready)
     return ParseHealth(
-        status="ok" if installed else "degraded",
+        status="ok" if ready else "degraded",
         backend=_BACKEND,
         package_name="docling",
         package_version=version,

@@ -9,6 +9,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from rag_parser_core.image_purpose import ImagePurpose
+
 from rag_engine.models.llm import FORM_FIELD_KINDS
 from rag_engine.parsing.checkpoints import atomic_json, digest_json, file_digest
 
@@ -26,9 +28,17 @@ class VisionCheckpoints:
     #1999)。listener の失敗は警告に留め、Vision の処理を止めない。
     """
 
-    def __init__(self, directory: Path, source_hash: str, listener: Callable[[dict], None] | None = None):
+    def __init__(
+        self,
+        directory: Path,
+        source_hash: str,
+        listener: Callable[[dict], None] | None = None,
+        *,
+        image_purpose: ImagePurpose | None = None,
+    ):
         self.directory = directory
         self.source_hash = source_hash
+        self.image_purpose = image_purpose
         self.listener = listener
         self.entries: dict[str, dict] = {}
         self.phase = "pictures"
@@ -90,6 +100,7 @@ class VisionCheckpoints:
             {
                 "version": VISION_CHECKPOINT_VERSION,
                 "source": self.source_hash,
+                "vision_image_purpose": self.image_purpose,
                 "images": [file_digest(crop), file_digest(context)],
                 "prompt": prompt,
                 "system": system_prompt,

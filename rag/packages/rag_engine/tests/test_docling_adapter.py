@@ -16,6 +16,7 @@ from rag_engine.adapters.parsers.docling_adapter import (
     _table_data_to_html,
     _table_html_by_ref,
     docling_table_cells,
+    require_docling_models,
 )
 from rag_engine.config import get_settings
 from rag_engine.models.layout import PageImage
@@ -26,23 +27,40 @@ class DoclingAdapterTests(unittest.TestCase):
     def test_builds_cpu_converter(self):
         settings = replace(get_settings(), docling_device="cpu", docling_num_threads=2)
 
-        converter = _build_docling_converter(settings)
+        with patch("rag_engine.adapters.parsers.docling_adapter.require_docling_models", return_value=None):
+            converter = _build_docling_converter(settings)
 
         self.assertIsNotNone(converter)
 
-    def test_uses_downloaded_models_as_artifacts_path(self):
-        """取得済みのモデルがあれば HuggingFace Hub へ問い合わせずにそれを使う(#829)。"""
+    def test_always_passes_deployed_model_dir_as_artifacts_path(self):
+        """取得していなくても None にしない。None だと Docling が要求の時に HF Hub から取得する(#829・#4557)。"""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DOCLING_ARTIFACTS_PATH", None)
             cache_dir = Path(tmp)
-            # 未取得(models が無い・空)は None: 今までどおり初回の解析で取得する。
-            self.assertIsNone(_docling_artifacts_path(cache_dir))
-            (cache_dir / "models").mkdir()
-            self.assertIsNone(_docling_artifacts_path(cache_dir))
-            (cache_dir / "models" / "docling-project--docling-layout-heron").mkdir()
             self.assertEqual(_docling_artifacts_path(cache_dir), cache_dir / "models")
+            (cache_dir / "models" / "docling-project--docling-layout-heron").mkdir(parents=True)
+            self.assertEqual(_docling_artifacts_path(cache_dir), cache_dir / "models")
+
+    def test_missing_models_fail_with_redeploy_guidance_without_download(self):
+        import tempfile
+
+        from rag_parser_core import model_integrity
+
+        settings = get_settings()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(model_integrity, "urlopen", side_effect=AssertionError("要求の時に取得した")) as get,
+        ):
+            os.environ.pop("DOCLING_ARTIFACTS_PATH", None)
+            with self.assertRaisesRegex(model_integrity.ModelsNotDeployedError, "配備し直して"):
+                require_docling_models(settings, Path(tmp))
+            (Path(tmp) / "models").mkdir()
+            with self.assertRaisesRegex(model_integrity.ModelsNotDeployedError, "配備し直して"):
+                require_docling_models(settings, Path(tmp))
+        get.assert_not_called()
 
     def test_explicit_artifacts_path_env_is_left_to_docling(self):
         import tempfile
@@ -52,6 +70,7 @@ class DoclingAdapterTests(unittest.TestCase):
             (cache_dir / "models" / "x").mkdir(parents=True)
             with patch.dict(os.environ, {"DOCLING_ARTIFACTS_PATH": "/opt/docling-models"}):
                 self.assertIsNone(_docling_artifacts_path(cache_dir))
+                self.assertIsNone(require_docling_models(get_settings(), cache_dir))
 
     def test_reads_picture_child_text_debug_setting(self):
         with patch.dict(os.environ, {"DOCLING_KEEP_PICTURE_CHILD_TEXT": "true"}):

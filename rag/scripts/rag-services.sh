@@ -28,8 +28,8 @@
 # 持ち、CUDA の wheel（triton・nvidia-* / cuda-*）を入れない（各 pyproject.toml の [[tool.uv.index]]。#1650）。
 #
 # 環境変数:
-#   RAG_SERVICES_MODELS=skip  sync で、サービスが実行時に使うモデル（docling-tools models download）を取得しない
-#                           （モデルの要らない pytest だけを動かす CI 用。#1512）。未設定なら取得する。
+#   RAG_SERVICES_MODELS=skip  sync で、サービスが実行時に使うモデル（docling・unstructured）を取得しない
+#                           （モデルの要らない pytest だけを動かす CI 用。#1512）。未設定なら取得してハッシュを検証する。
 #
 # unit は現在のユーザー（sudo で実行したときは SUDO_USER）で動き、backend と同じユーザーの
 # ~/.cache にモデルを置く。起動 / 停止の状態は systemd の enable / disable で保ち、install を
@@ -158,7 +158,7 @@ sync_services() {
       log "${service}: RAG_SERVICES_MODELS=skip のため、モデルを取得しません。"
     elif [ -n "${model_command}" ]; then
       (cd "${dir}" && bash -c "${model_command}") \
-        || log "注意: ${service} のモデルを取得できませんでした（初回の解析で取得します）。"
+        || log "注意: ${service} のモデルを取得・検証できませんでした。もう一度 sync を実行してください。"
     fi
   done
 }
@@ -256,6 +256,7 @@ status_services() {
 run_service() {
   local service="$1"
   local dir port timeout
+  local environment=()
   require_uv
   dir="${RAG_DIR}/$(rag_service_dir "${service}")" || {
     log "未知のサービスです: ${service}"
@@ -263,11 +264,12 @@ run_service() {
   }
   port="$(rag_service_port "${service}")"
   timeout="$(rag_service_timeout "${service}")"
+  mapfile -t environment < <(rag_service_environment "${service}")
   SELECTED=("${service}")
   sync_services
   cd "${dir}"
   log "${service} を 127.0.0.1:${port} で起動します（Ctrl+C で停止）。"
-  exec .venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker \
+  exec env "${environment[@]}" .venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker \
     --bind "127.0.0.1:${port}" --workers 1 --timeout "${timeout}" --graceful-timeout 30 \
     --access-logfile - --error-logfile -
 }

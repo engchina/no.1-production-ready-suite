@@ -137,6 +137,8 @@ test("一覧から今すぐ実行し、実行履歴に出す。未保存の離�
   const history = page.getByRole("table", { name: "実行履歴" });
   await expect(history).toContainText("今すぐ実行");
   await expect(history).toContainText("run-auto-1");
+  // 件数は共有の ListToolbar の 1 か所（#4558）。
+  await expect(page.getByTestId("automation-history-toolbar")).toContainText("全 1 件");
 
   await page.getByLabel("名前").fill("毎朝の売上の要約（改）");
   await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
@@ -160,6 +162,32 @@ test("一覧から今すぐ実行し、実行履歴に出す。未保存の離�
   await expect(page.getByText("自動実行を削除しました")).toBeVisible();
   await expect(page).toHaveURL(/\/automations$/);
 });
+
+for (const viewport of VIEWPORTS) {
+  test(`実行履歴は共有の件数を出し、10 件に切り詰めたときは全体の件数を添える（#4558） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedAutomation(mockApi);
+    mockApi.state.automationRuns["auto-seeded"] = Array.from({ length: 12 }, (_, index) => ({
+      run_id: `run-auto-${12 - index}`,
+      status: "completed",
+      trigger: "schedule",
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    }));
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/automations?id=auto-seeded");
+    const history = page.getByRole("table", { name: "実行履歴" });
+    await expect(history.locator("tbody tr")).toHaveCount(10);
+    const toolbar = page.getByTestId("automation-history-toolbar");
+    await expect(toolbar).toContainText("10 件（全 12 件）");
+    // 件数は表の上に置く。
+    const toolbarBox = await toolbar.boundingBox();
+    const tableBox = await history.boundingBox();
+    expect(toolbarBox && tableBox && toolbarBox.y + toolbarBox.height <= tableBox.y).toBe(true);
+    await expectNoHorizontalOverflow(page);
+    await page.getByRole("heading", { name: "実行履歴" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`automation-history-${viewport.name}.png`) });
+  });
+}
 
 test("Agent 管理の権限が無い利用者は閲覧だけ", async ({ page, mockApi }) => {
   seedAutomation(mockApi, { last_result: "skipped", last_run_at: MOCK_NOW, last_message: "前回の実行が終わっていないため、この回は実行しませんでした。" });

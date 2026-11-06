@@ -63,6 +63,7 @@ from rag_engine.parsing.rendering import (
     get_source_page_count,
     prepare_source_for_analysis,
 )
+from rag_parser_core.image_purpose import IMAGE_PURPOSE_METADATA_KEY, ImagePurpose
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 from rag_parser_core.vision_text import load_vision_text_projection, text_sha256
 from rag_parser_core.vision_text_map import (
@@ -404,6 +405,60 @@ class _Layout:
     skipped_assets: dict[int, str] = field(default_factory=dict)
 
 
+def stamp_image_purpose(
+    extraction: StructuredExtraction, image_purpose: ImagePurpose, *, source_is_image: bool = False
+) -> StructuredExtraction:
+    """新しい解析版に、設定由来の用途を写す。モデル由来の同名値は採用しない。"""
+    updated = extraction.model_copy(deep=True)
+    updated.parser_artifacts[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
+    for element in updated.elements:
+        if (
+            source_is_image
+            or element.kind in VISION_ASSET_KINDS
+            or "vision_status" in element.metadata
+            or element.metadata.get("raw_type") == "picture_ocr_text"
+            or element.metadata.get("picture_record_id")
+        ):
+            element.metadata[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
+        else:
+            element.metadata.pop(IMAGE_PURPOSE_METADATA_KEY, None)
+    for asset in updated.assets:
+        if asset.kind in VISION_ASSET_KINDS or "vision_status" in asset.metadata:
+            asset.metadata[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
+        else:
+            asset.metadata.pop(IMAGE_PURPOSE_METADATA_KEY, None)
+    layout = updated.parser_artifacts.get(LAYOUT_ARTIFACT)
+    if isinstance(layout, dict):
+        records = layout.get("records")
+        if isinstance(records, list):
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                raw = record.get("raw")
+                visual = (
+                    source_is_image
+                    or record.get("category") == "Picture"
+                    or isinstance(raw, dict)
+                    and (
+                        raw.get("picture_record_id")
+                        or record.get("category") == "Table"
+                        and (
+                            "vision_status" in raw
+                            or raw.get("table_missing_picture_regions")
+                            or raw.get("table_vision_text")
+                        )
+                    )
+                )
+                if visual:
+                    if not isinstance(raw, dict):
+                        raw = {}
+                        record["raw"] = raw
+                    raw[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
+                elif isinstance(raw, dict):
+                    raw.pop(IMAGE_PURPOSE_METADATA_KEY, None)
+    return updated
+
+
 def read_figures_with_vision(
     extraction: StructuredExtraction,
     *,
@@ -413,6 +468,7 @@ def read_figures_with_vision(
     parser_backend: str,
     describer: Any,
     prompt_template: str,
+    image_purpose: ImagePurpose | None = None,
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
     work_dir: Path | None = None,
@@ -427,6 +483,9 @@ def read_figures_with_vision(
     from rag_engine.parsing.picture_descriptions import describe_layout_pictures
 
     suffix = _source_suffix(content_type, file_name)
+    source_is_image = suffix is not None and suffix != ".pdf"
+    if image_purpose is not None:
+        extraction = stamp_image_purpose(extraction, image_purpose, source_is_image=source_is_image)
     layout_engine = _layout_engine(extraction)
     has_layout = layout_engine is not None
     engine = layout_engine or (parser_backend.strip().casefold() or "parser")
@@ -489,6 +548,7 @@ def read_figures_with_vision(
             pdf_path=Path(pdf_path),
             engine=engine,
             prompt_template=prompt_template,
+            image_purpose=image_purpose,
             cancel_check=cancel_check,
             progress_callback=progress_callback,
         )
@@ -498,7 +558,12 @@ def read_figures_with_vision(
         updated = _write_back_layout_adapter(extraction, layout, pending_ids)
     else:
         updated = _write_back_adapter(extraction, layout)
-    return _apply_skips(updated, layout, engine=engine, stats=stats)
+    updated = _apply_skips(updated, layout, engine=engine, stats=stats)
+    return (
+        stamp_image_purpose(updated, image_purpose, source_is_image=source_is_image)
+        if image_purpose is not None
+        else updated
+    )
 
 
 @contextlib.contextmanager

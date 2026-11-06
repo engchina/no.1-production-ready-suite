@@ -989,7 +989,17 @@ def _verify_bootstrap(bootstrap: str) -> None:
     if "basic_auth" in bootstrap:
         raise AssertionError("the Agent uses the backend login; cloud-init must not write Basic authentication files")
     model_script = (REPO_ROOT / "rag/scripts/rag-systemd.sh").read_text(encoding="utf-8")
-    _require_all(model_script, [".venv/bin/python -m rag_engine.resources.docling_models"], context="verified Docling model download")
+    _require_all(
+        model_script,
+        [
+            ".venv/bin/python -m rag_engine.resources.docling_models",
+            ".venv/bin/python -m rag_parser_core.unstructured_models",
+            "'HF_HUB_OFFLINE=1'",
+            # parser-docling の unit も HF のモデルを要求の時に取得しない（#4557）。
+            "'RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs' 'HF_HUB_OFFLINE=1'",
+        ],
+        context="verified parser model download (no request-time download)",
+    )
     _require_in_order(
         bootstrap,
         ["ensure_bootstrap_dependencies\n", 'clone_or_update_repo "${application_git_url}"', "run_suite_init\n"],

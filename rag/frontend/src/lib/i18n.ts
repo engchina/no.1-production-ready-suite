@@ -309,6 +309,10 @@ export const ja = {
   "settings.parserAdapters.postParse.description":
     "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きできます。取込時の処理の変更は次の取込から、章節の抽出規則の変更は次に章節を表示するときから使います。",
   "settings.parserAdapters.postParse.step": "{index}. {name}",
+  "imagePurpose.label": "画像の用途",
+  "imagePurpose.record": "実データ・記録",
+  "imagePurpose.example": "画面例・説明用",
+  "imagePurpose.hint": "画像の値や状態を実際の記録として読み取るか、説明用の例として読み取るかを指定します。変更は再解析で反映されます。過去の解析版の用途は変わりません。読み取りの正確さや質問への適用を保証しません。",
   "settings.parserAdapters.postParse.vision.concurrency": "同時に説明する図・表の数",
   "settings.parserAdapters.postParse.vision.concurrencyHint":
     "{min}〜{max}。API の制限（429）を受けると自動で減らし、成功が続くとこの数まで戻します。同じページの図・表は順番に説明します。",
@@ -1687,7 +1691,7 @@ export const ja = {
   "settings.pipeline.flow.loading": "全体の既定を読み込んでいます",
   "settings.pipeline.flow.loadError": "全体の既定を取得できませんでした。",
   "settings.pipeline.flow.openSettings": "設定画面へ",
-  "settings.pipeline.flow.openSettingsAria": "{name} を設定する画面を開く",
+  "settings.pipeline.flow.openSettingsAria": "設定画面へ（{name}）",
   "settings.pipeline.flow.gate.auto_parse_after_preprocess_enabled":
     "オフにすると、ファイル準備の後で止まります。抽出は文書ごとに手動で始めます。",
   "settings.pipeline.flow.gate.auto_chunk_after_extract_enabled":
@@ -2514,7 +2518,7 @@ export const ja = {
   "search.prefill.profileUnavailable": "元の検索・回答プロファイルは使えません。選び直してください。",
   "searchAnswerProfiles.scope.noKnowledgeBases":
     "この検索・回答プロファイルには参照するナレッジベースがありません。検索・回答プロファイルの設定でナレッジベースを追加してください。",
-  "searchAnswerProfileSelect.placeholder": "検索・回答プロファイルを検索して選択…",
+  "searchAnswerProfileSelect.placeholder": "未選択",
   "searchAnswerProfileSelect.searchPlaceholder": "検索・回答プロファイルの名前・説明で検索…",
   "searchAnswerProfileSelect.count": "{shown} / {total} 件",
   "searchAnswerProfileSelect.knowledgeBaseCount": "参照 KB {count} 件",
@@ -2709,6 +2713,7 @@ export const ja = {
   "knowledgeBases.structure.build.reason.no_chunks": "有効なチャンクがありません。文書の処理を先に完了してください。",
   "knowledgeBases.structure.build.reason.no_structure": "章節の情報がありません。抽出・分割の設定を確認してください。",
   "knowledgeBases.structure.build.reason.source_changed": "文書の版が変わりました。現在の版で再実行してください。",
+  "knowledgeBases.structure.build.reason.builder_changed": "構築の方式が更新されました。「不足・更新分を構築」で作り直してください。",
   "knowledgeBases.structure.build.reason.authorization_changed": "利用者の権限が変更されました。現在の権限を確認してください。",
   "knowledgeBases.structure.build.reason.disabled": "構築設定がオフです。",
   "knowledgeBases.structure.build.reason.membership_changed": "文書の所属が変更されました。",
@@ -5613,9 +5618,9 @@ export const ja = {
   "history.detail.errorStage": "止まった段",
   "history.detail.errorStageNotRecorded": "未記録",
   "history.detail.openChat": "会話を開く",
-  "history.detail.openChatLabel": "この実行の会話をチャットで開く",
+  "history.detail.openChatLabel": "会話を開く（この実行のチャット）",
   "history.detail.openSearch": "RAG 検索で開く",
-  "history.detail.openSearchLabel": "この実行の質問と条件を RAG 検索の画面に入れて開く",
+  "history.detail.openSearchLabel": "RAG 検索で開く（この実行の質問と条件を入れる）",
   "history.result.answer": "回答",
   "history.result.answerMissing": "回答の記録は保存期間を過ぎて削除されたか、読み込めませんでした。",
   "history.result.blocked": "質問が安全チェックで止められたため、検索・回答はしていません。",

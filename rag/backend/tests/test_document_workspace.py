@@ -3250,6 +3250,42 @@ def test_delete_document_removes_extraction_artifacts(
         anyio.run(ObjectStorageClient().get, original_path)
 
 
+def test_delete_document_removes_extraction_artifact_without_document_extraction(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """文書の行に抽出の列が無い新しい文書でも、取込が保存した抽出の artifact を消す（#4185）。
+
+    抽出の artifact は取込が文書の prefix の下に保存し、削除は文書の prefix をまとめて消す。
+    文書の行の ``extraction`` は書かれないので、その path を読まなくても消える。
+    """
+    from app.rag.ingestion import IngestionPipeline
+
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+    storage = ObjectStorageClient()
+    pipeline = cast(Any, object.__new__(IngestionPipeline))
+    pipeline._settings = get_settings()
+    pipeline._object_storage = storage
+    _extraction, artifact_path = anyio.run(
+        lambda: IngestionPipeline._cache_extraction_artifact(
+            pipeline,
+            document_id=document_id,
+            trace_id="trace-a",
+            extraction=StructuredExtraction(raw_text="合成の本文"),
+            parse_key="parse-key-a",
+        )
+    )
+    assert artifact_path is not None
+    assert fake_document_dependencies.documents[document_id].extraction == {}
+    assert fake_document_dependencies.ingestion_segments.get(document_id, []) == []
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["artifact_delete_failed_count"] == 0
+    with pytest.raises(FileNotFoundError):
+        anyio.run(storage.get, artifact_path)
+
+
 def test_delete_document_removes_queued_ingestion_state(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:

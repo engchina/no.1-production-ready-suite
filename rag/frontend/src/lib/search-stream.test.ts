@@ -260,6 +260,33 @@ describe("streamSearch", () => {
     expect(presentation.summary).not.toContain("tokens");
   });
 
+  it("error event（再処理が要る旧い形式の文書）は 409 にし、文書名つきの文と code を出す（Issue 4550）", async () => {
+    const payload = {
+      trace_id: "t-reprocess",
+      message:
+        "画像説明が旧い形式のまま保存された文書があるため、検索・回答できません。次の文書を再解析または再分割してください: 「文書A.pdf」",
+      error_type: "UnprojectedVisionSourceError",
+      error_code: "RAG_DOCUMENT_REPROCESS_REQUIRED",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(sseResponse([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]))
+    );
+
+    const error = await streamSearch({ query: "x" }, {}).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(409);
+    expect((error as ApiError).errorCode).toBe("RAG_DOCUMENT_REPROCESS_REQUIRED");
+    const presentation = (error as ApiError).toApiErrorPresentation();
+    expect(presentation.summary).toBe(payload.message);
+    expect(presentation.details).toEqual(
+      expect.arrayContaining([
+        { label: "HTTP ステータス", value: "409" },
+        { label: "エラーコード", value: "RAG_DOCUMENT_REPROCESS_REQUIRED" },
+      ])
+    );
+  });
+
   it("予期しない失敗の error event も trace_id を「詳細」に出し、時間切れの工程の ID は重ねない", async () => {
     const errorBody = (payload: Record<string, unknown>) =>
       sseResponse([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]);

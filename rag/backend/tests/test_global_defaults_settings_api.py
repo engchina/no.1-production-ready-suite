@@ -26,6 +26,7 @@ from tests.support import AsgiTestClient
 client = AsgiTestClient(app)
 
 POST_PARSE_ATTRS = (
+    "rag_vision_image_purpose",
     "rag_vision_enabled",
     "rag_field_extraction_enabled",
     "rag_navigation_summary_enabled",
@@ -367,3 +368,28 @@ def test_raptor_setting_is_saved_by_post_parse_api(settings: Settings, enabled: 
     assert response.json()["data"]["raptor_enabled"] is enabled
     assert settings.rag_raptor_enabled is enabled
     assert dotenv_values(_env_file())["RAG_RAPTOR_ENABLED"] == str(enabled).lower()
+
+
+def test_image_purpose_global_api_persists_and_reports_value(settings: Settings) -> None:
+    settings.rag_vision_image_purpose = "record"
+    response = client.patch(
+        "/api/settings/parser-adapters", json={"vision_image_purpose": "example"}
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["vision_image_purpose"] == "example"
+    assert (
+        client.get("/api/settings/parser-adapters").json()["data"]["vision_image_purpose"]
+        == "example"
+    )
+    assert dotenv_values(_env_file())["RAG_VISION_IMAGE_PURPOSE"] == "example"
+    response = client.patch("/api/settings/parser-adapters", json={"vision_image_purpose": None})
+    assert response.status_code == 200
+    assert response.json()["data"]["vision_image_purpose"] == "example"
+
+
+@pytest.mark.parametrize("value", ["unknown", "other", True, 0])
+def test_global_image_purpose_rejects_unsupported_values(settings: Settings, value: object) -> None:
+    before = settings.rag_vision_image_purpose
+    response = client.patch("/api/settings/parser-adapters", json={"vision_image_purpose": value})
+    assert response.status_code == 422
+    assert settings.rag_vision_image_purpose == before

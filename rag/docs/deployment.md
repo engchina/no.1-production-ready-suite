@@ -104,7 +104,8 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    ```
 
 2. systemd が PID 1 の環境（WSL2 は `/etc/wsl.conf` の `[boot] systemd=true`）では、unit と sudoers を登録する（`rag/` で実行）。
-   venv を作り（docling のモデルも取得する）、unit を `/etc/systemd/system/` に、
+   venv を作り（docling・unstructured のモデルも取得してハッシュを検証する。どちらも解析の要求の時にはモデルを取得・修復しない。
+   [services/parsers/docling/README.md](../services/parsers/docling/README.md)・[services/parsers/unstructured/README.md](../services/parsers/unstructured/README.md)）、unit を `/etc/systemd/system/` に、
    画面から操作する unit の `systemctl` / `journalctl` だけを現在のユーザーに許可する sudoers を
    `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する（既定は停止の parser-xml-tree-json は
    登録だけして起動しない。使うときはサービス管理画面で起動する。#2453）。
@@ -213,6 +214,14 @@ ln -s "${NEW}" "${OLD}"
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#4549 文書構造索引の構築器の版の更新）
+
+構築器の版を版の指紋に入れた（`structure-graph-v2`。参照の辺の起点・参照先の誤りの修正 #4551 を含む）。この版の前に構築した文書構造索引は、すべて補建の計画で「更新が必要」（`STALE`。項目の `reason` が `builder_changed`）になり、既定の補建（`missing`）の対象になる。DDL・設定の変更は無く、補建は構造索引の行（`rag_graph_*`・`rag_structure_index_builds`）だけを置き換え、chunk・embedding・モデルは使わない。
+
+1. backend を更新する。
+2. 検出（読み取りだけ）: KB ごとに計画を取得し、`reason` が `builder_changed` の文書を数える。
+3. 退避・試験・展開は下の #4543 の手順 3〜5 と同じ（展開の後は計画の `builder_changed` が 0 件になったことを確かめる）。
 
 ## 既存環境の更新手順（#4543 「本文」の節点の前の文書構造索引の補建）
 

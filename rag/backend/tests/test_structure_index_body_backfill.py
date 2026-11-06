@@ -17,6 +17,7 @@ from rag_parser_core.language import current_pack
 from app.rag import structure_index_jobs as jobs_module
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
+    STRUCTURE_INDEX_BUILDER_VERSION,
     GraphEntity,
     GraphEntityChunkLink,
     GraphIndex,
@@ -103,7 +104,10 @@ class MemoryOracle:
         return [f"{document_id}:{doc['chunk_set']}:{i}" for i in range(len(doc["chunks"]))]
 
     # --- OracleClient の読み取り ---
-    async def get_knowledge_base(self, kb_id: str) -> Any:
+    async def knowledge_base_is_visible(self, kb_id: str) -> bool:
+        return kb_id in {KB, OTHER_KB}
+
+    async def get_knowledge_base_config(self, kb_id: str) -> Any:
         if kb_id not in {KB, OTHER_KB}:
             return None
         return SimpleNamespace(retrieval_config={"structure_index_enabled": True})
@@ -228,7 +232,12 @@ class MemoryStore:
 
     async def builds(self, kb_id: str) -> dict[str, dict[str, Any]]:
         return {
-            did: {"document_id": did, "source_fingerprint": fp, "quality": "COMPLETE"}
+            did: {
+                "document_id": did,
+                "source_fingerprint": fp,
+                "quality": "COMPLETE",
+                "builder_version": STRUCTURE_INDEX_BUILDER_VERSION,
+            }
             for did, fp in self.oracle.builds.items()
             if self.oracle.documents[did]["kb"] == kb_id
         }

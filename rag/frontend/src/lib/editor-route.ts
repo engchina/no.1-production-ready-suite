@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 
+import { appPath } from "@/lib/base-path";
+
 /**
  * A 型（一覧 → 全画面エディタ）の編集対象を URL の検索パラメータで持つ（platform UX 契約
  * page-archetypes.md §1 A。#147）。
@@ -29,11 +31,14 @@ export interface EditorRoute {
   itemHref: (id: string) => string;
 }
 
-/** `pathname` + `search` に `?id=<id>` を足した URL（他の検索パラメータは残す）。 */
+/**
+ * `pathname`（router の中の path）+ `search` に `?id=<id>` を足した文書の URL（他の検索パラメータは残す）。
+ * `useLocation().pathname` は router の basename を除いた path なので、`/rag/` の下の配備では base を付ける（#4560）。
+ */
 export function editorItemHref(pathname: string, search: string, id: string) {
   const next = new URLSearchParams(search);
   next.set(EDITOR_PARAM, id);
-  return `${pathname}?${next.toString()}`;
+  return appPath(`${pathname}?${next.toString()}`);
 }
 
 /** `?id=` の値を編集対象へ読み替える（空白だけの値は一覧として扱う）。 */

@@ -1194,24 +1194,44 @@ def _prepare_docling_env(settings: Settings) -> None:
 
 
 def _docling_artifacts_path(cache_dir: Path) -> Path | None:
-    """取得済みの Docling のモデルの場所を返す(無ければ None。#829)。
+    """Docling に渡すモデルの場所を返す(#829・#4557)。
 
-    配備の手順は ``docling-tools models download`` でモデルを ``<docling の cache_dir>/models``
-    (既定 ``~/.cache/docling/models``)へ取得する。この場所を ``artifacts_path`` に渡さないと、
-    Docling は converter の作成のたびに HuggingFace Hub へ最新の版を問い合わせ、外へ出られない
-    環境では接続の確立を待ち続ける。``DOCLING_ARTIFACTS_PATH`` を明示したときは Docling が
-    それを読むので、ここでは上書きしない。取得していない(取得に失敗した)ときは None を返し、
-    今までどおり初回の解析で HuggingFace Hub から取得させる。
+    配備の手順(``rag_engine.resources.docling_models``)は ``docling-tools models download`` で
+    モデルを ``<docling の cache_dir>/models``(既定 ``~/.cache/docling/models``)へ取得し、ハッシュを
+    検証する。この場所を ``artifacts_path`` に渡すと、Docling は HuggingFace Hub に問い合わせず、
+    モデルが無ければ取得せずに失敗する。取得していなくても None にしない(None だと Docling が
+    解析の要求の時に HuggingFace Hub から取得する)。``DOCLING_ARTIFACTS_PATH`` を明示したときは
+    Docling がそれを読むので、None を返して上書きしない。
     """
     if os.environ.get("DOCLING_ARTIFACTS_PATH", "").strip():
         return None
-    models_dir = cache_dir / "models"
+    return cache_dir / "models"
+
+
+def require_docling_models(settings: Settings, cache_dir: Path) -> Path | None:
+    """配備で揃えたモデルを検証だけして場所を返す。取得・修復はしない(#4557)。
+
+    無い・壊れているときは配備のやり直しを案内する ``ModelsNotDeployedError``。明示の
+    ``DOCLING_ARTIFACTS_PATH`` は検証しない(None)。
+    """
+    from rag_engine.resources.docling_models import check_docling_cache
+
+    artifacts_path = _docling_artifacts_path(cache_dir)
+    if artifacts_path is not None:
+        check_docling_cache(artifacts_path, include_ocr=settings.docling_do_ocr)
+    return artifacts_path
+
+
+def docling_models_ready(settings: Settings) -> bool:
+    """/health 用: 配備で揃えたモデルがあり、ハッシュが合うか。"""
+    from docling.datamodel.settings import settings as docling_settings
+    from rag_parser_core.model_integrity import ModelsNotDeployedError
+
     try:
-        if models_dir.is_dir() and any(models_dir.iterdir()):
-            return models_dir
-    except OSError:
-        return None
-    return None
+        require_docling_models(settings, Path(docling_settings.cache_dir))
+    except ModelsNotDeployedError:
+        return False
+    return True
 
 
 def _build_docling_converter(settings: Settings):
@@ -1231,12 +1251,9 @@ def _build_docling_converter(settings: Settings):
     device_value = settings.docling_device.lower()
     device = AcceleratorDevice.CPU if device_value == "cpu" else device_value
     pipeline_options = PdfPipelineOptions()
-    artifacts_path = _docling_artifacts_path(Path(docling_settings.cache_dir))
+    artifacts_path = require_docling_models(settings, Path(docling_settings.cache_dir))
     if artifacts_path is not None:
         pipeline_options.artifacts_path = artifacts_path
-        from rag_engine.resources.docling_models import verify_docling_cache
-
-        verify_docling_cache(artifacts_path, include_ocr=settings.docling_do_ocr)
     pipeline_options.do_ocr = settings.docling_do_ocr
     pipeline_options.do_table_structure = settings.docling_do_table_structure
     pipeline_options.accelerator_options = AcceleratorOptions(num_threads=settings.docling_num_threads, device=device)
