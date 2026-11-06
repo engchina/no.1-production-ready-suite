@@ -446,7 +446,9 @@ if grep -Eiq 'docker|compose' "${backend_unit}" "${worker_unit}" "${docling_unit
 fi
 grep -Fqx 'Environment=RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs' "${docling_unit}" \
   || fail "parser-docling の解析の出力先を unit で指定していない"
-# Unstructured は配備で取得・検証した HF のモデルだけを読み、解析の要求の時には取得しない。
+# Docling・Unstructured は配備で取得・検証した HF のモデルだけを読み、解析の要求の時には取得しない（#4555・#4557）。
+grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${docling_unit}" \
+  || fail "parser-docling の unit が解析の要求の時の HF のモデルの取得を禁じていない（HF_HUB_OFFLINE=1）"
 grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${units}/production-ready-rag-parser-unstructured.service" \
   || fail "parser-unstructured の unit が解析の要求の時の HF のモデルの取得を禁じていない（HF_HUB_OFFLINE=1）"
 # 初回の配備: 既定のサービスを起動し（既定は停止の parser-xml-tree-json は起動しない）、backend / worker を enable + restart する。
@@ -770,6 +772,8 @@ grep -Fqx "ExecStart=${REPO_DIR}/services/parsers/docling/.venv/bin/gunicorn app
   "${dev_dir}/production-ready-rag-parser-docling.service" || fail "開発環境の unit が本番と同じ起動方法ではない"
 grep -Fqx "User=$(id -un)" "${dev_dir}/production-ready-rag-parser-docling.service" \
   || fail "開発環境の unit が現在のユーザーで動かない"
+grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${dev_dir}/production-ready-rag-parser-docling.service" \
+  || fail "開発環境の parser-docling の unit が本番と同じく HF のモデルの実行時の取得を禁じていない"
 grep -Fqx "$(id -un) ALL=(root) NOPASSWD: RAG_SERVICE_CONTROL" "${dev_dir}/production-ready-rag-services" \
   || fail "開発環境の sudoers が現在のユーザーに限定されていない"
 if command -v visudo >/dev/null 2>&1; then
@@ -783,6 +787,9 @@ grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${dev_unstructured_dir}/production-rea
 # systemd を使わない前面の起動（rag-services.sh run）も unit と同じ実行時の環境変数を使う。
 test "$(bash -c 'source "$1/scripts/rag-systemd.sh"; rag_service_environment parser-unstructured' _ "${REPO_DIR}")" = "HF_HUB_OFFLINE=1" \
   || fail "rag_service_environment が parser-unstructured の HF_HUB_OFFLINE=1 を返さない"
+test "$(bash -c 'source "$1/scripts/rag-systemd.sh"; rag_service_environment parser-docling' _ "${REPO_DIR}")" = "RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs
+HF_HUB_OFFLINE=1" \
+  || fail "rag_service_environment が parser-docling の出力先と HF_HUB_OFFLINE=1 を返さない"
 grep -Fq 'exec env "${environment[@]}" .venv/bin/gunicorn' "${REPO_DIR}/scripts/rag-services.sh" \
   || fail "scripts/rag-services.sh run が unit と同じ実行時の環境変数で起動しない"
 if bash "${REPO_DIR}/scripts/rag-services.sh" render "${TEST_TMP_DIR}/dev-unknown" 'parser-docling;id' >/dev/null 2>&1; then

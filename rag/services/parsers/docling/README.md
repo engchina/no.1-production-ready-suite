@@ -51,5 +51,5 @@ cd /u01/aipoc/no.1-production-ready-suite/rag/services/parsers/docling
 .venv/bin/python -m rag_engine.resources.docling_models --repair
 ```
 
-Docling の自動管理キャッシュは、converter の準備時にも検証します（OCR が OFF の場合は OCR モデルを検証しません）。明示した `DOCLING_ARTIFACTS_PATH` や独自モデルを実行時に勝手に変更しません。修復後はサービスを再起動し、失敗した文書レシピを解析工程から再実行してください。
+モデルの取得と修復は配備（上の手順）だけが行い、解析の要求の時には取得・修復しません（#4557）。Docling には常に `~/.cache/docling/models` を `artifacts_path` として渡し（Docling は HuggingFace Hub に問い合わせない）、unit は `HF_HUB_OFFLINE=1` で動きます。起動の直後と converter の準備時はキャッシュを検証だけし（OCR が OFF の場合は OCR モデルを検証しません。結果はファイルが変わるまで使い回します）、モデルが無い・ハッシュが合わないときは、解析を「parser-docling を配備し直してください」というエラーにし、`/health` は `degraded` を返します。明示した `DOCLING_ARTIFACTS_PATH` や独自モデルは検証せず、実行時に変更しません。配備のやり直し（または `--repair`）の後はサービスを再起動し、失敗した文書レシピを解析工程から再実行してください。
 `InvalidProtobuf` と hash 不一致だけでは、ダウンロード途中の切断かエラーページの保存かまでは確定できません。モデルのサイズ・形式・先頭バイトと取得ログで区別します。

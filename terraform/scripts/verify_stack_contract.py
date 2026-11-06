@@ -995,6 +995,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
             ".venv/bin/python -m rag_engine.resources.docling_models",
             ".venv/bin/python -m rag_parser_core.unstructured_models",
             "'HF_HUB_OFFLINE=1'",
+            # parser-docling の unit も HF のモデルを要求の時に取得しない（#4557）。
+            "'RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs' 'HF_HUB_OFFLINE=1'",
         ],
         context="verified parser model download (no request-time download)",
     )

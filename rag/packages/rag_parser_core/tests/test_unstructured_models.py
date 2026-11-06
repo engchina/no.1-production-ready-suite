@@ -125,7 +125,9 @@ def test_runtime_spacy_download_is_replaced_by_clear_error(monkeypatch: pytest.M
     tokenize = _fake_tokenize(monkeypatch)
     models.forbid_runtime_downloads()
     forbidden = tokenize._install_spacy_model
-    with pytest.raises(RuntimeError, match="解析の要求の時にはモデルを取得しません"):
+    with pytest.raises(
+        models.ModelsNotDeployedError, match="解析の要求の時にはモデルを取得しません"
+    ):
         forbidden()
     # 2 回目は置き直さない。
     models.forbid_runtime_downloads()

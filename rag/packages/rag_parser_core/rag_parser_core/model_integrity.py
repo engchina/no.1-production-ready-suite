@@ -23,6 +23,15 @@ from urllib.request import urlopen
 logger = logging.getLogger(__name__)
 
 
+class ModelsNotDeployedError(RuntimeError):
+    """配備で揃えるモデルが無い・壊れていて、解析の要求の時には取得しないため解析できない。
+
+    文は利用者に見せてよい（``safe_for_user``。配備のやり直しを案内する。path は含めない）。
+    """
+
+    safe_for_user = True
+
+
 @dataclass(frozen=True)
 class ModelArtifact:
     """配布元の 1 ファイル。digest は hash_kind（sha256 か git の blob の sha1）の 16 進。"""

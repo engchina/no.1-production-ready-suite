@@ -170,3 +170,45 @@ def test_hf_file_without_digest_is_not_claimed_as_verified(tmp_path: Path) -> No
     (repo / "weights.bin").write_bytes(b"unknown")
     with pytest.raises(RuntimeError, match="公式 hash"):
         models.verify_docling_cache(tmp_path)
+
+
+def test_request_time_check_never_repairs_and_guides_redeploy(tmp_path: Path) -> None:
+    """解析の要求の時は取得・修復せず、配備のやり直しを案内する(#4557)。"""
+    bad = hf_cache(tmp_path, "model.safetensors", b"valid")
+    bad.write_bytes(b"incomplete")
+    with (
+        patch.object(models, "_hf_url", return_value="https://example.invalid/pinned"),
+        patch.object(integrity, "urlopen") as get,
+        pytest.raises(integrity.ModelsNotDeployedError, match="配備し直して") as raised,
+    ):
+        models.check_docling_cache(tmp_path)
+    get.assert_not_called()
+    assert bad.read_bytes() == b"incomplete"
+    assert raised.value.safe_for_user
+    assert str(tmp_path) not in str(raised.value)
+
+
+@pytest.mark.parametrize("create_dir", [False, True], ids=["absent", "empty"])
+def test_request_time_check_fails_when_models_were_not_deployed(tmp_path: Path, create_dir: bool) -> None:
+    root = tmp_path / "models"
+    if create_dir:
+        root.mkdir()
+    with patch.object(integrity, "urlopen") as get, pytest.raises(integrity.ModelsNotDeployedError, match="配備し直して"):
+        models.check_docling_cache(root)
+    get.assert_not_called()
+
+
+def test_request_time_check_reuses_result_until_files_change(tmp_path: Path) -> None:
+    weights = hf_cache(tmp_path, "model.safetensors", b"valid")
+    with (
+        patch.object(models, "_hf_url", return_value="https://example.invalid/pinned"),
+        patch.object(models, "verify_docling_cache", wraps=models.verify_docling_cache) as verify,
+    ):
+        models.check_docling_cache(tmp_path)
+        models.check_docling_cache(tmp_path)
+        assert verify.call_count == 1
+        verify.assert_called_with(tmp_path, repair=False, include_ocr=True)
+        weights.write_bytes(b"corrupt")
+        with pytest.raises(integrity.ModelsNotDeployedError):
+            models.check_docling_cache(tmp_path)
+        assert verify.call_count == 2
