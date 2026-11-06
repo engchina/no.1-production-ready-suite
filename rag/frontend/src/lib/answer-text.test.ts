@@ -457,8 +457,21 @@ describe("推導結論の節", () => {
     ].join("\n"), format);
     expect(blocks).toHaveLength(2);
     expect(blocks?.[1]).toEqual({ kind: "section", title, ordered: false, entries: [
-      { kind: "item", text: "合成の結果は 6。", details: ["前提：2 回使用\n当てはめ：3 × 2 = 6"], citations: ["根拠：合成 A.pdf p.1"], citationLines: [2] },
-      { kind: "item", text: "次の合成結果。", details: ["前提：合成条件 B", "当てはめ：合成規則 B"], citations: ["根拠：合成 B.pdf p.2"], citationLines: [3] },
+      { kind: "item", text: "合成の結果は 6。", details: ["前提：2 回使用"], reasoning: "3 × 2 = 6", citations: ["根拠：合成 A.pdf p.1"], citationLines: [2] },
+      { kind: "item", text: "次の合成結果。", details: ["前提：合成条件 B"], reasoning: "合成規則 B", citations: ["根拠：合成 B.pdf p.2"], citationLines: [3] },
+    ] });
+  });
+  it.each(formats)("複数行の説明（Markdown）は根拠の行まで 1 つの説明として原文の改行のまま持つ: %s", (format) => {
+    const title = format?.applications_section ?? "資料をもとに導いた結論";
+    const explanation = ["合成の手順で確かめます。", "", "1. 値 A を読む", "・値 B を読む", "```", "  SELECT 1;", "", "```"];
+    const blocks = parseAnswerText([
+      "資料により確認できた事項", "・合成の値は 3。", "根拠：合成 A.pdf p.1", "",
+      title, "・合成の結果。", "当てはめ：" + explanation[0], ...explanation.slice(1), "根拠：合成 A.pdf p.1", "根拠：合成 B.pdf p.2", "",
+      "・次の合成結果。", "当てはめ：1 行の説明です。", "根拠：合成 B.pdf p.2",
+    ].join("\n"), format);
+    expect(blocks?.[1]).toEqual({ kind: "section", title, ordered: false, entries: [
+      { kind: "item", text: "合成の結果。", reasoning: explanation.join("\n"), citations: ["根拠：合成 A.pdf p.1", "根拠：合成 B.pdf p.2"], citationLines: [2, 3] },
+      { kind: "item", text: "次の合成結果。", reasoning: "1 行の説明です。", citations: ["根拠：合成 B.pdf p.2"], citationLines: [4] },
     ] });
   });
   it("旧見出しも節として保存された文言で読む", () => {

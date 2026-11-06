@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
+from rag_engine.models.audit_wire import AuditWireResult
 from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -186,9 +187,27 @@ def application_audit_reply(
 
     if text_format is AuditReason:
         return AuditReason(reason="合成の判定の理由です。")
-    if text_format not in (ApplicationAudit, ApplicationVerdictAudit):
+    bound = getattr(text_format, "canonical_schema", None) is ApplicationAudit
+    if not bound and text_format not in (ApplicationAudit, ApplicationVerdictAudit):
         return None
     data = json.loads(prompt)
+    if bound:
+        # 当てはめの段の監査は application の固定キーに束縛した wire（#4393）。
+        from tests.audit_fixtures import legacy_audit_result
+
+        return cast(
+            AuditWireResult,
+            legacy_audit_result(
+                text_format,
+                ApplicationAudit(
+                    application_reviews=[
+                        {"index": row["index"], "valid": valid, "reason": "合成の原文対応"}
+                        for row in data["applications"]
+                    ],
+                    summary_supported=summary_supported,
+                ).model_dump(),
+            ),
+        )
 
     def detail(application: dict[str, Any]) -> dict[str, Any]:
         if text_format is not ApplicationVerdictAudit:
@@ -218,8 +237,12 @@ def application_audit_reply(
 
 def deterministic_parse_text_response(
     system_prompt: str, prompt: str, settings: Any, text_format: type[BaseModel], **_: Any
-) -> BaseModel:
+) -> BaseModel | AuditWireResult:
     """回答の生成の LLM 呼び出しを決定論的に返す（最初の根拠の 1 行を引用する 1 項目の回答）。"""
+    from rag_engine.generation.application_explanation import (
+        KEY_SOURCES,
+        is_explanation_schema,
+    )
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.audit_wire import is_audit_wire
     from rag_engine.models.llm import (
@@ -233,6 +256,12 @@ def deterministic_parse_text_response(
         TextOutput,
     )
 
+    # 推導の説明の段（#4393）。入力の資料の原文だけから日本語の説明を返す（結論は入力に無い）。
+    if is_explanation_schema(text_format):
+        sources = json.loads(prompt)[KEY_SOURCES]
+        return text_format.model_validate(
+            {"explanation": "資料の原文によると、" + " ".join(sources)}
+        )
     if (reply := application_audit_reply(text_format, prompt)) is not None:
         return reply
     if text_format is QueryRoutingOutput:
@@ -340,7 +369,10 @@ def deterministic_parse_text_response(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,
-                "application_reviews": [{"index": 0, "valid": True, "reason": "合成の原文対応"}],
+                "application_reviews": {
+                    key: {"valid": True, "reason": "合成の原文対応"}
+                    for key in (wire.expected_application_ids or ())
+                },
                 "reviews": reviews,
                 "request_reviews": dict.fromkeys(wire.expected_request_ids, request),
                 "guide_requirement_reviews": dict.fromkeys(

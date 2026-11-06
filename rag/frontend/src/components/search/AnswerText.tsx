@@ -1,6 +1,8 @@
 import {
   AnswerPlainText,
   AnswerSections,
+  MarkdownInlineText,
+  MarkdownText,
   useEvidenceSource,
   type AnswerCitationRef,
   type AnswerSectionEntry,
@@ -18,6 +20,7 @@ import {
   displayCitationLine,
   parseAnswerText,
   parseCitationLine,
+  REASONING_LABEL,
   resolveCitationLineTargets,
   type AnswerTextBlock,
   type AnswerTextEntry,
@@ -170,15 +173,37 @@ export function AnswerText({
     }
     return {
       key: String(index),
-      content: entry.details?.length ? <>
+      content: entry.details?.length || entry.reasoning ? <>
         {entry.text}
-        {entry.details.map((detail, position) => <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
+        {entry.details?.map((detail, position) => <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
+        {entry.reasoning ? <ReasoningText text={entry.reasoning} /> : null}
       </> : entry.text,
-      passageText: [entry.text, ...(entry.details ?? [])].join("\n"),
+      passageText: [entry.text, ...(entry.details ?? []), ...(entry.reasoning ? [REASONING_LABEL + entry.reasoning] : [])].join("\n"),
       citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
       extra: renderSectionLink(entry.text, title),
     };
   }
+}
+
+/**
+ * 結論の説明（#4393）。説明は Markdown（段落・箇条書き・コードの囲み）を含むことがあるので、共通の Markdown の部品で
+ * 描く（コードは枠の中で横にスクロールし、375px でもページをはみ出さない）。1 行の説明は今までどおり見出しの語に続けて出す。
+ */
+function ReasoningText({ text }: { text: string }) {
+  if (!text.includes("\n")) {
+    return (
+      <span className="block whitespace-pre-line text-fg-muted" data-testid="answer-application-reasoning">
+        {REASONING_LABEL}
+        <MarkdownInlineText text={text} />
+      </span>
+    );
+  }
+  return (
+    <div className="text-fg-muted" data-testid="answer-application-reasoning">
+      <span className="block">{REASONING_LABEL}</span>
+      <MarkdownText text={text} headingLevel={6} className="text-fg-muted" />
+    </div>
+  );
 }
 
 /** 書式の見出しの無い本文を、空行で段落に分ける（段落の印の記録のある回答だけ。#2738）。 */

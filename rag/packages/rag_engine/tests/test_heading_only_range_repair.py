@@ -8,13 +8,15 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
+from application_verdict_stub import audit_reply, is_application_schema
+from audit_fixtures import synthetic_explanation
 from citation_unit_support import generated_output, repair_output
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.citation_range_repair import CitationRangeRepair
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft
@@ -257,8 +259,10 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema in APPLICATION_SCHEMAS:
+        if is_application_schema(schema):
             return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
         if issubclass(schema, generation_draft_wire_model()):
             return generated_output(schema, prompt, text=CLAIM)
         assert issubclass(schema, CitationRangeRepair)
@@ -269,7 +273,7 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
         result = answering.synthesize_grounded_answer(
             QUESTION, AnswerContext(records=[record], text=TEXT), config, image_prompt_mode="text_only"
         )
-    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationVerdictAudit", "AuditReason"]
+    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"]
     rounds = result.response.generation_trace["rounds"]
     assert [round_["accepted"] for round_ in rounds] == [True, True]
     assert rounds[1]["timing"]["citation_range_repair"]["status"] == "completed"

@@ -1,5 +1,8 @@
 """推導の監査の合成応答。独立の監査は判定（ApplicationVerdictAudit）と理由（AuditReason）の 2 段。
 
+当てはめの段の監査は application の固定キーに束縛した wire（canonical が ApplicationAudit。#4393）で、
+旧部品 fixture の移行（``legacy_application_audit_result``）として返す。
+
 テストは判定を ``{"index", "valid"}`` の行で書き、要求された schema の形にして返す。
 判定の行に ``basis_evidence_ids`` が無ければ、``prompt``（独立の監査の入力）でその application が引用した
 evidence_id を根拠にする（引用元を含まない valid は未確認になるため。``basis_not_cited``）。
@@ -16,6 +19,11 @@ from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit
 
 SYNTHETIC_REASON = "合成の判定の理由です。"
 APPLICATION_SCHEMAS = (ApplicationAudit, ApplicationVerdictAudit, AuditReason)
+
+
+def is_application_schema(schema: Any) -> bool:
+    """推導の監査の schema（当てはめの段の束縛 wire を含む）か。"""
+    return schema in APPLICATION_SCHEMAS or getattr(schema, "canonical_schema", None) is ApplicationAudit
 
 
 def audit_reply(
@@ -38,8 +46,14 @@ def audit_reply(
             }
             for row in rows
         ]
-    elif schema is ApplicationAudit:
+    elif schema is ApplicationAudit or getattr(schema, "canonical_schema", None) is ApplicationAudit:
         reviews = [{"index": row["index"], "valid": row["valid"], "reason": row.get("reason", reason)} for row in rows]
+        if schema is not ApplicationAudit:
+            from audit_fixtures import legacy_application_audit_result
+
+            return legacy_application_audit_result(
+                ApplicationAudit(application_reviews=reviews, summary_supported=summary_supported), schema
+            )
     else:
         raise AssertionError(f"推導の監査ではない schema: {schema}")
     return schema.model_validate({"application_reviews": reviews, "summary_supported": summary_supported})

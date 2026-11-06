@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import legacy_audit_result, synthetic_explanation
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -49,6 +49,8 @@ def fixture(mode="detailed", decisions=(True, False), *, summary_supported=False
 
     def fixed(_system, _prompt, _settings, schema, **_kwargs):
         calls.append(schema.canonical_schema.__name__ if is_audit_wire(schema) else schema.__name__)
+        if schema.__name__ == "ApplicationExplanation":
+            return synthetic_explanation(schema, _prompt)
         if schema.__name__ == "GroundedDraftWire":
             spans = [span for span, _view in (grounded._CITATION_VIEWS.get() or {}).values()]
             catalog = grounded.generation_unit_catalog(spans, sent_only=True)
@@ -118,7 +120,8 @@ def test_valid_selected_application_survives_summary_with_its_citation(mode):
     assert summary["citations"]["status"] == "linked"
     assert [link["application_index"] for link in summary["citations"]["links"]] == [0]
     # 監査なしの設定では、独立の監査の判定 1 回に、判定が確定した推導ごとの理由が付く。
-    assert len(calls) == (4 if mode == "none" else 2)
+    # どちらの設定でも、valid な推導 1 件の説明の段（#4393）を 1 回呼ぶ。
+    assert len(calls) == (5 if mode == "none" else 3) and calls.count("ApplicationExplanation") == 1
 
 
 def withheld_round():
@@ -238,7 +241,7 @@ def test_original_normal_summary_and_all_retained_dependencies_are_unchanged():
     assert response.answer_text.startswith(original)
     assert current.summary == original
     assert current.summary_projection is None
-    assert len(calls) == 2
+    assert len(calls) == 4 and calls.count("ApplicationExplanation") == 2
     assert grounded.finalize_summary(current).summary == original
 
 
