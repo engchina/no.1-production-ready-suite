@@ -10,7 +10,7 @@ import pytest
 
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
-from app.clients.oracle import KnowledgeBaseNameConflictError
+from app.clients.oracle import KnowledgeBaseConfig, KnowledgeBaseNameConflictError
 from app.clients.structure_graph_store import StructureGraphStore
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
@@ -150,6 +150,14 @@ class FakeKnowledgeBaseOracle:
 
     async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail | None:
         return self.knowledge_bases.get(knowledge_base_id)
+
+    async def get_knowledge_base_config(self, knowledge_base_id: str) -> KnowledgeBaseConfig | None:
+        detail = self.knowledge_bases.get(knowledge_base_id)
+        if detail is None:
+            return None
+        return KnowledgeBaseConfig(
+            id=detail.id, status=detail.status, retrieval_config=dict(detail.retrieval_config)
+        )
 
     async def get_knowledge_base_extraction_fields(
         self, knowledge_base_id: str
@@ -921,3 +929,67 @@ def test_knowledge_base_extraction_fields_missing_and_archived(
     client.post(f"/api/knowledge-bases/{kb_id}/archive")
     archived = client.put(f"/api/knowledge-bases/{kb_id}/extraction-fields", json={"fields": []})
     assert archived.status_code == 409
+
+
+async def _detail_must_not_be_read(_knowledge_base_id: str) -> None:
+    raise AssertionError("存在・設定の確認で件数つきの詳細を読まない(#4553)")
+
+
+@pytest.mark.usefixtures("_field_schema_file")
+def test_existence_and_config_checks_do_not_load_the_detail_counts(
+    fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """詳細の画面が並行して呼ぶ API は、件数を集計する詳細の読み取りを使わない(#4553)。"""
+    from app.clients.structure_index_store import StructureIndexStore
+
+    async def no_state(_self: object, _kb: str) -> None:
+        return None
+
+    async def visible_state(_self: object, _kb: str, state: object) -> object:
+        return state
+
+    monkeypatch.setattr(StructureIndexStore, "get", no_state)
+    monkeypatch.setattr(StructureIndexStore, "visible_state", visible_state)
+    kb_id = _new_knowledge_base("synthetic-light-checks")
+    archived_id = _new_knowledge_base("synthetic-light-archived")
+    client.post(f"/api/knowledge-bases/{archived_id}/archive")
+    monkeypatch.setattr(fake_oracle, "get_knowledge_base", _detail_must_not_be_read)
+    base = f"/api/knowledge-bases/{kb_id}"
+
+    assert client.get(f"{base}/extraction-fields").status_code == 200
+    assert client.put(f"{base}/extraction-fields", json={"fields": []}).status_code == 200
+    archived = client.put(
+        f"/api/knowledge-bases/{archived_id}/extraction-fields", json={"fields": []}
+    )
+    assert archived.status_code == 409
+    assert client.get(f"{base}/structure-index").status_code == 200
+    job = client.get(f"{base}/structure-index/job")
+    assert job.status_code == 200
+    assert job.json()["data"] is None
+    for path in (
+        "extraction-fields",
+        "structure-index",
+        "structure-index/job",
+    ):
+        assert client.get(f"/api/knowledge-bases/kb-missing/{path}").status_code == 404
+    assert client.post("/api/knowledge-bases/kb-missing/structure-index/job/stop").status_code == (
+        404
+    )
+    references = client.get(
+        "/api/knowledge-bases/kb-missing/graph/references", params={"node_id": "a" * 64}
+    )
+    assert references.status_code == 404
+
+
+def test_detail_read_failure_is_an_api_failure(
+    fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """詳細の読み取りの失敗は 200 や 404 にせず、読み取りの失敗として返す(#4217・#4553)。"""
+
+    async def broken(_knowledge_base_id: str) -> None:
+        raise RuntimeError("synthetic read failure")
+
+    monkeypatch.setattr(fake_oracle, "get_knowledge_base", broken)
+    response = client.get("/api/knowledge-bases/kb-any")
+    assert response.status_code >= 500
+    assert response.json()["error_code"] == "database_read_failed"

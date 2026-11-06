@@ -58,7 +58,7 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> tuple[module.StructureIndexJobs, di
 
 
 class Oracle:
-    async def get_knowledge_base(self, kb: str) -> Any:
+    async def get_knowledge_base_config(self, kb: str) -> Any:
         return SimpleNamespace(retrieval_config={"structure_index_enabled": True})
 
 

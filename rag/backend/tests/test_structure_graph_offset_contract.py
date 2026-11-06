@@ -47,9 +47,6 @@ async def graph_pages(
         async def knowledge_base_is_visible(self, kb: str) -> bool:
             return kb == "kb"
 
-        async def get_knowledge_base(self, kb: str) -> object | None:
-            return object() if kb == "kb" else None
-
     async def children(
         self: StructureGraphStore,
         kb: str,

@@ -1882,6 +1882,59 @@ async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
     assert call.parameters["knowledge_base_query"] == "%規程%"
 
 
+async def test_oracle_client_knowledge_base_detail_counts_chunks_from_served_chunk_sets() -> None:
+    """詳細の検索対象の chunk 数は、配信中の chunk_set から chunk_set_id の索引で数える(#4553)。
+
+    ``rag_chunks`` を ``chunk_set_id IS NULL OR chunk_set_id IN (...)`` で結合すると、OR で副問い
+    合わせの unnest ができず ``RAG_CHUNKS`` の全件走査になる。
+    """
+    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(document_count=3)]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    detail = await client.get_knowledge_base("kb-1")
+
+    assert detail is not None
+    assert detail.searchable_chunk_count == 5
+    statement = " ".join(pool.connection.calls[0].statement.split())
+    assert "chunk_set_id IS NULL" not in statement
+    assert "LEFT JOIN rag_chunks" not in statement
+    assert "c.chunk_set_id IN" not in statement
+    count_sql = statement[statement.index("SELECT COUNT(*)") :]
+    # 所属 → INDEXED の文書 → 配信中の chunk_set → chunk の順に結ぶ。
+    assert count_sql.index("FROM rag_document_knowledge_bases") < count_sql.index(
+        "JOIN rag_chunk_sets cs"
+    )
+    assert count_sql.index("JOIN rag_chunk_sets cs") < count_sql.index("JOIN rag_chunks c")
+    assert "c.chunk_set_id = cs.chunk_set_id" in count_sql
+    assert oracle_module._SERVED_CHUNK_SET_SQL in count_sql
+    assert "count_d.status = 'INDEXED'" in count_sql
+
+
+async def test_oracle_client_knowledge_base_config_reads_only_the_row() -> None:
+    """存在・状態・設定の確認は KB の行だけを読み、文書・chunk を集計しない(#4553)。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(status="ARCHIVED")]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    config = await client.get_knowledge_base_config("kb-1")
+
+    assert config is not None
+    assert config.id == "kb-1"
+    assert config.status == KnowledgeBaseStatus.ARCHIVED
+    assert config.retrieval_config == {"top_k": 20}
+    call = pool.connection.calls[0]
+    assert "FROM rag_knowledge_bases kb" in call.statement
+    for table in ("rag_document_knowledge_bases", "rag_documents", "rag_chunk", "COUNT("):
+        assert table not in call.statement
+    assert call.parameters["knowledge_base_id"] == "kb-1"
+
+    empty = OracleClient(
+        settings=_oci_settings(),
+        pool=FakeOraclePool(execute_results=[[]]),
+        db_call_runner=_run_inline,
+    )
+    assert await empty.get_knowledge_base_config("kb-missing") is None
+
+
 async def test_oracle_client_updates_knowledge_base_metadata() -> None:
     """knowledge base 更新は既存行を確認してから UPDATE する。"""
     pool = FakeOraclePool(
