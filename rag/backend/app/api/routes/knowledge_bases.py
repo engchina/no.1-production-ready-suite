@@ -148,8 +148,13 @@ async def create_knowledge_base(
 async def get_knowledge_base(
     knowledge_base_id: str,
 ) -> ApiResponse[KnowledgeBaseDetail]:
-    """ナレッジベース詳細を返す。"""
-    detail = await OracleClient().get_knowledge_base(knowledge_base_id)
+    """ナレッジベース詳細を返す。読み取りの失敗は API の失敗にする（#4217）。"""
+    oracle = OracleClient()
+    detail = await read_or_raise(
+        lambda: oracle.get_knowledge_base(knowledge_base_id),
+        timeout_seconds=get_settings().db_read_timeout_seconds,
+        log_label="knowledge_base_detail",
+    )
     if detail is None:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
     return ApiResponse(data=detail)
@@ -292,7 +297,7 @@ async def get_knowledge_base_graph_references(
     from app.clients.graph_reference_store import GraphReferenceStore
 
     oracle = OracleClient()
-    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+    if not await oracle.knowledge_base_is_visible(knowledge_base_id):
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
     try:
         data = await GraphReferenceStore(oracle).page(
@@ -355,7 +360,7 @@ async def get_knowledge_base_extraction_fields(
 ) -> ApiResponse[KnowledgeBaseExtractionFieldsData]:
     """ナレッジベースの項目抽出の定義を返す。KB に定義が無ければ全体の既定を返す(#548)。"""
     oracle = OracleClient()
-    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+    if not await oracle.knowledge_base_is_visible(knowledge_base_id):
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
     return _extraction_fields_data(
         await oracle.get_knowledge_base_extraction_fields(knowledge_base_id)
@@ -376,10 +381,10 @@ async def update_knowledge_base_extraction_fields(
     次の取込から効く(既存の文書の抽出値は変えない)。
     """
     oracle = OracleClient()
-    detail = await oracle.get_knowledge_base(knowledge_base_id)
-    if detail is None:
+    config = await oracle.get_knowledge_base_config(knowledge_base_id)
+    if config is None:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
-    if detail.status != KnowledgeBaseStatus.ACTIVE:
+    if config.status != KnowledgeBaseStatus.ACTIVE:
         raise HTTPException(
             status_code=409, detail="アーカイブ済みのナレッジベースは変更できません。"
         )
@@ -471,7 +476,7 @@ async def get_structure_index_settings(
     from app.rag.structure_index import PREFERENCE_KEY
 
     oracle = OracleClient()
-    kb = await oracle.get_knowledge_base(knowledge_base_id)
+    kb = await oracle.get_knowledge_base_config(knowledge_base_id)
     if kb is None:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
     value = kb.retrieval_config.get(PREFERENCE_KEY)
@@ -534,7 +539,7 @@ async def get_structure_index_job(
     from app.rag.structure_index_jobs import current_public_state
 
     oracle = OracleClient()
-    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+    if not await oracle.knowledge_base_is_visible(knowledge_base_id):
         raise HTTPException(404, "ナレッジベースが見つかりません。")
     store = StructureIndexStore(oracle)
     state = await store.get(knowledge_base_id)
@@ -587,7 +592,7 @@ async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[s
     from app.rag.structure_index_jobs import current_public_state, structure_index_jobs
 
     oracle = OracleClient()
-    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+    if not await oracle.knowledge_base_is_visible(knowledge_base_id):
         raise HTTPException(404, "ナレッジベースが見つかりません。")
     try:
         state = await structure_index_jobs.stop(oracle, knowledge_base_id)

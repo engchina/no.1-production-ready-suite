@@ -104,7 +104,10 @@ class MemoryOracle:
         return [f"{document_id}:{doc['chunk_set']}:{i}" for i in range(len(doc["chunks"]))]
 
     # --- OracleClient の読み取り ---
-    async def get_knowledge_base(self, kb_id: str) -> Any:
+    async def knowledge_base_is_visible(self, kb_id: str) -> bool:
+        return kb_id in {KB, OTHER_KB}
+
+    async def get_knowledge_base_config(self, kb_id: str) -> Any:
         if kb_id not in {KB, OTHER_KB}:
             return None
         return SimpleNamespace(retrieval_config={"structure_index_enabled": True})

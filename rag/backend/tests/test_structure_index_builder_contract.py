@@ -250,7 +250,7 @@ class _PlanOracle:
     def __init__(self, build: dict[str, Any]) -> None:
         self.build = build
 
-    async def get_knowledge_base(self, _kb: str) -> Any:
+    async def get_knowledge_base_config(self, _kb: str) -> Any:
         return SimpleNamespace(retrieval_config={"structure_index_enabled": True})
 
     async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:

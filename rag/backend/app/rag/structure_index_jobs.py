@@ -147,7 +147,7 @@ class StructureIndexJobs:
         document_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         store = StructureIndexStore(oracle)
-        kb = await oracle.get_knowledge_base(kb_id)
+        kb = await oracle.get_knowledge_base_config(kb_id)
         if kb is None:
             raise KeyError("ナレッジベースが見つかりません。")
         if kb.retrieval_config.get("structure_index_enabled") is False:

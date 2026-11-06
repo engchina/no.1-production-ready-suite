@@ -57,7 +57,7 @@ async def structure_index_plan(
     from app.clients.structure_graph_store import StructureGraphStore
     from app.clients.structure_index_store import StructureIndexStore
 
-    kb = await oracle.get_knowledge_base(knowledge_base_id)
+    kb = await oracle.get_knowledge_base_config(knowledge_base_id)
     if kb is None:
         raise KeyError("ナレッジベースが見つかりません。")
     if document_ids == []:
@@ -179,9 +179,9 @@ async def rebuild_document_structure_index(
     from app.rag.chunking import Chunk
     from app.schemas.extraction import StructuredExtraction
 
-    kb = await oracle.get_knowledge_base(knowledge_base_id)
+    kb_visible = await oracle.knowledge_base_is_visible(knowledge_base_id)
     document = await oracle.get_document_summary(document_id)
-    if kb is None or document is None:
+    if not kb_visible or document is None:
         raise KeyError("対象が見つかりません。")
     preferences = await oracle.document_structure_index_preferences(document_id) or {}
     if knowledge_base_id not in preferences:
