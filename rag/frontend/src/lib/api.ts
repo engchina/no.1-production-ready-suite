@@ -585,6 +585,8 @@ export interface LanguagePackRecipeUse {
   built_at: string | null;
   job_id: string | null;
   target_release_id: string | null;
+  /** 構築中の job が固定した版の番号。版の行が無ければ null（版の数から推定しない）。 */
+  target_version: number | null;
 }
 export interface LanguagePackReprocessingTarget {
   document_id: string;
