@@ -59,7 +59,7 @@ describe("languagePackPanelState", () => {
 
 describe("languagePackStatus（要約の行のバッジ）", () => {
   it.each<[string, LanguagePackRecipeUse[], LanguagePackStatus, number | null]>([
-    ["索引も job も無い", [], "notBuilt", null],
+    ["索引も job も無い", [], "not_built", null],
     ["索引が無く構築中", [{ ...empty, target_release_id: "release-3", target_version: 3 }], "building", 3],
     ["同じ版で構築中", [{ ...served("release-3", 3, "current"), target_release_id: "release-3", target_version: 3 }], "building", 3],
     ["別の版で構築中", [{ ...served("release-1", 1, "different"), target_release_id: "release-3", target_version: 3 }], "building", 3],
@@ -76,7 +76,7 @@ describe("languagePackStatus（要約の行のバッジ）", () => {
   });
 
   it("対応が要るのは再処理を推奨・判定できないときだけ", () => {
-    const needs = (["current", "equivalent", "different", "unrecorded", "building", "notBuilt"] as const).filter(languagePackNeedsAction);
+    const needs = (["current", "equivalent", "different", "unrecorded", "building", "not_built"] as const).filter(languagePackNeedsAction);
     expect(needs).toEqual(["different", "unrecorded"]);
   });
 });
@@ -95,7 +95,7 @@ describe("languagePackBuildNotice（状態メッセージの枠の構築中の�
 
 describe("languagePackSummaryStatus（文書インデックスの列）", () => {
   it("索引が無ければ未構築、構築中なら構築中、判定できない索引があれば判定できない", () => {
-    expect(languagePackSummaryStatus(documentUse())).toBe("notBuilt");
+    expect(languagePackSummaryStatus(documentUse())).toBe("not_built");
     expect(languagePackSummaryStatus(documentUse({ ...empty, target_release_id: "release-3" }))).toBe("building");
     expect(languagePackSummaryStatus(documentUse({ ...served("release-3", 3, "current"), ingest_hash: null }))).toBe("unrecorded");
     expect(languagePackSummaryStatus(null)).toBe("unrecorded");

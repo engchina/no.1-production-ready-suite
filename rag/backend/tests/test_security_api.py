@@ -342,15 +342,18 @@ def test_manifest_key_assignments() -> None:
     # 回答の注意書き（設定は製品ごと。#2405・#2449）。
     assert _perm("GET", "/settings/answer-notice") == {"menu.settings_answer_notice"}
     assert _perm("PUT", "/settings/answer-notice") == {"menu.settings_answer_notice"}
-    # 公開時の完全な設定は言語資源の設定の権限だけ（#4566）。
-    # 比較は文書インデックスの一括再処理も使う。
-    assert _perm("GET", "/settings/language-pack/releases/{release_id}") == {
-        "menu.settings_language_pack"
-    }
-    assert _perm("GET", "/settings/language-pack/releases/compare") == {
-        "menu.settings_language_pack",
-        "menu.file_list",
-    }
+    # 公開時の完全な設定・版の比較・版を指定した一括再処理は言語資源の設定の権限だけ（#4566）。
+    for method, path in [
+        ("GET", "/settings/language-pack/releases/{release_id}"),
+        ("GET", "/settings/language-pack/releases/compare"),
+        ("POST", "/documents/language-pack/reprocessing-targets"),
+        ("POST", "/documents/language-pack/reprocessing-jobs"),
+    ]:
+        assert _perm(method, path) == {"menu.settings_language_pack"}, path
+    # 文書の通常の再処理（工程からの再処理・失敗の再試行）は文書の画面の権限のまま。
+    assert "menu.file_list" in _perm(
+        "POST", "/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs"
+    )
 
 
 def test_capabilities_imply_their_menu() -> None:
@@ -540,6 +543,31 @@ def test_permission_denied_returns_403(auth: ProductionAuth) -> None:
     assert response.json()["error_messages"] == ["この機能を利用する権限がありません。"]
     builder = login(client, "builder")
     assert client.get("/api/security/permissions", headers=builder).status_code == 200
+
+
+def test_language_pack_compare_and_bulk_reprocess_require_language_pack_settings(
+    auth: ProductionAuth,
+) -> None:
+    """版の比較・公開時の設定・版を指定した一括再処理は、文書インデックスの権限で 403（#4566）。"""
+    auth.user_with_permissions("lister", ["menu.file_list", "menu.upload"])
+    headers = login(client, "lister")
+    for method, path, body in (
+        ("GET", "/api/settings/language-pack/releases/compare?before_id=a&after_id=b", None),
+        ("GET", "/api/settings/language-pack/releases/release-a", None),
+        (
+            "POST",
+            "/api/documents/language-pack/reprocessing-targets",
+            {"document_ids": ["doc-a"], "expected_release_id": "release-a"},
+        ),
+        (
+            "POST",
+            "/api/documents/language-pack/reprocessing-jobs",
+            {"expected_release_id": "release-a", "targets": []},
+        ),
+    ):
+        response = client.request(method, path, headers=headers, json=body)
+        assert response.status_code == 403, path
+        assert response.json()["error_messages"] == ["この機能を利用する権限がありません。"]
 
 
 def test_user_without_roles_is_denied_everything_except_auth(

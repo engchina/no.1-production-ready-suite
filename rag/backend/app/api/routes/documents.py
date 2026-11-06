@@ -239,7 +239,7 @@ from app.schemas.knowledge_base import (
     DocumentKnowledgeBaseReplaceRequest,
     KnowledgeBaseRef,
 )
-from app.schemas.language_pack_release import LanguagePackIndexRelation
+from app.schemas.language_pack_release import LanguagePackDocumentStatus
 from app.schemas.search import RetrievedChunk, normalize_search_id_list
 from app.services.document_inspection import extraction_window, text_window
 from app.services.document_preview_cache import DocumentPreviewCache
@@ -626,17 +626,17 @@ _KNOWLEDGE_BASE_FILTER_MAX_LENGTH = 33 * MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BAS
 
 async def _language_pack_document_filter(
     oracle: OracleClient,
-    relation: LanguagePackIndexRelation | None,
+    status: LanguagePackDocumentStatus | None,
     current_release_id: str | None,
 ) -> dict[str, Any]:
-    if relation is None and current_release_id is None:
+    if status is None and current_release_id is None:
         return {}
     current = await (await initialized_release_store(oracle)).current()
     if current_release_id and current_release_id != current.id:
         raise HTTPException(
             status_code=409, detail="言語資源の現在版が変わりました。条件を再確認してください。"
         )
-    return {"language_pack_relation": relation, "current_release_id": current.id}
+    return {"language_pack_status": status, "current_release_id": current.id}
 
 
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
@@ -650,7 +650,7 @@ async def list_documents(
         default=None, min_length=1, max_length=_KNOWLEDGE_BASE_FILTER_MAX_LENGTH
     ),
     queued_phase: IngestionJobPhase | None = None,
-    language_pack_relation: LanguagePackIndexRelation | None = None,
+    language_pack_status: LanguagePackDocumentStatus | None = None,
     current_release_id: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> ApiResponse[Page[DocumentSummary]]:
     """取込対象ドキュメントの一覧を返す。読み取りの失敗は API の失敗にする（#4217）。
@@ -667,7 +667,7 @@ async def list_documents(
     oracle = OracleClient()
     settings = get_settings()
     release_filter = await _language_pack_document_filter(
-        oracle, language_pack_relation, current_release_id
+        oracle, language_pack_status, current_release_id
     )
 
     async def _load() -> Page[DocumentSummary]:
@@ -707,7 +707,7 @@ async def list_document_ids(
     q: str | None = Query(default=None, min_length=1, max_length=200),
     knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
     queued_phase: IngestionJobPhase | None = None,
-    language_pack_relation: LanguagePackIndexRelation | None = None,
+    language_pack_status: LanguagePackDocumentStatus | None = None,
     current_release_id: str | None = Query(default=None, min_length=1, max_length=64),
     limit: int = Query(default=BULK_INGESTION_MAX_DOCUMENTS, ge=1, le=BULK_INGESTION_MAX_DOCUMENTS),
 ) -> ApiResponse[DocumentIdList]:
@@ -722,7 +722,7 @@ async def list_document_ids(
         )
     oracle = OracleClient()
     release_filter = await _language_pack_document_filter(
-        oracle, language_pack_relation, current_release_id
+        oracle, language_pack_status, current_release_id
     )
     ids, total = await oracle.list_document_ids(
         status=status,

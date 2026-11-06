@@ -31,7 +31,7 @@ const STATUS_BADGE: Record<LanguagePackStatus, { variant: StatusVariant; icon: L
   different: { variant: "warning", icon: true },
   unrecorded: { variant: "warning", icon: CircleHelp },
   building: { variant: "info", icon: Hourglass },
-  notBuilt: { variant: "neutral", icon: true },
+  not_built: { variant: "neutral", icon: true },
 };
 
 export function LanguagePackStatusBadge({ status }: { status: LanguagePackStatus }) {

@@ -59,6 +59,22 @@ class LanguagePackIndexRelation(StrEnum):
     UNRECORDED = "unrecorded"
 
 
+class LanguagePackDocumentStatus(StrEnum):
+    """文書の言語資源の状態（文書インデックスの列・絞り込み。#4566）。
+
+    有効なレシピごとの状態（job が版を固定して待機・実行中なら構築中、そうでなければ検索中の索引の
+    関係）を、対応が要るもの > 構築中 > 問題の無いもの の順で 1 つにまとめる。画面の
+    `languagePackSummaryStatus` と同じ規則。
+    """
+
+    DIFFERENT = "different"
+    UNRECORDED = "unrecorded"
+    BUILDING = "building"
+    EQUIVALENT = "equivalent"
+    CURRENT = "current"
+    NOT_BUILT = "not_built"
+
+
 class LanguagePackFieldDifference(BaseModel):
     section: str
     key: str

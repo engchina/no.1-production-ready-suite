@@ -1,4 +1,4 @@
-import type { LanguagePackDocumentUse, LanguagePackRecipeUse, LanguagePackRelation } from "@/lib/api";
+import type { LanguagePackDocumentStatus, LanguagePackDocumentUse, LanguagePackRecipeUse, LanguagePackRelation } from "@/lib/api";
 
 /** 構築中の job が固定した版。版の行が無ければ version は null（版の数から推定しない）。 */
 export interface LanguagePackBuildTarget {
@@ -59,14 +59,15 @@ export function languagePackPanelState(use: LanguagePackDocumentUse, recipeId: s
  * 利用者に見せる状態（バッジ 1 つ）。文書の詳細の要約の行と文書インデックスの列で同じものを使う。
  * - current: 現在版を使用（最新） / equivalent: 版は違うが取込設定は同じ（最新・内容は同じ）
  * - different: 取込設定に差分あり（再処理を推奨） / unrecorded: 使用版を判定できない
- * - building: job が版を固定して待機・実行中 / notBuilt: 索引も構築中の job も無い
+ * - building: job が版を固定して待機・実行中 / not_built: 索引も構築中の job も無い
+ * 値は文書インデックスの絞り込み（backend の LanguagePackDocumentStatus）と同じ。
  */
-export type LanguagePackStatus = LanguagePackRelation | "building" | "notBuilt";
+export type LanguagePackStatus = LanguagePackDocumentStatus;
 
 export function languagePackStatus(state: LanguagePackPanelState): LanguagePackStatus {
   switch (state.kind) {
     case "notBuilt":
-      return "notBuilt";
+      return "not_built";
     case "firstBuild":
     case "sameVersionBuild":
     case "differentVersionBuild":
@@ -106,16 +107,16 @@ export function languagePackBuildNotice(use: LanguagePackDocumentUse | null | un
 /** 一覧の 1 つのレシピの状態（構築中を先に見る。文書の詳細の判定と同じ）。 */
 function recipeStatus(recipe: LanguagePackRecipeUse): LanguagePackStatus {
   if (recipe.target_release_id) return "building";
-  if (recipe.chunk_set_id === null) return "notBuilt";
+  if (recipe.chunk_set_id === null) return "not_built";
   return isRecordedUse(recipe) ? recipe.relation : "unrecorded";
 }
 
 /** 一覧で 1 つにまとめるときの優先順（対応が要るもの > 構築中 > 問題の無いもの）。 */
-const SUMMARY_PRIORITY: readonly LanguagePackStatus[] = ["different", "unrecorded", "building", "equivalent", "current", "notBuilt"];
+const SUMMARY_PRIORITY: readonly LanguagePackStatus[] = ["different", "unrecorded", "building", "equivalent", "current", "not_built"];
 
 /** 一覧の 1 つのラベル。有効レシピの差分・未記録を見落とさず、判定を 1 つにまとめる。 */
 export function languagePackSummaryStatus(use: LanguagePackDocumentUse | null | undefined): LanguagePackStatus {
   if (!use) return "unrecorded";
   const statuses = new Set(use.recipes.map(recipeStatus));
-  return SUMMARY_PRIORITY.find((status) => statuses.has(status)) ?? "notBuilt";
+  return SUMMARY_PRIORITY.find((status) => statuses.has(status)) ?? "not_built";
 }

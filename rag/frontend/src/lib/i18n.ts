@@ -409,13 +409,13 @@ export const ja = {
   "settings.language.release.relation.equivalent": "取込設定は同じ・再構築不要",
   "settings.language.release.relation.different": "取込設定に差分あり",
   "settings.language.release.relation.unrecorded": "版未記録",
-  // 文書の詳細の要約の行と文書インデックスの列の状態のバッジ（#4566）。
+  // 文書の詳細の要約の行と文書インデックスの列・絞り込みの状態（#4566）。
   "settings.language.release.status.current": "最新",
   "settings.language.release.status.equivalent": "最新（内容は同じ）",
   "settings.language.release.status.different": "再処理を推奨",
   "settings.language.release.status.unrecorded": "判定できません",
   "settings.language.release.status.building": "構築中",
-  "settings.language.release.status.notBuilt": "未構築",
+  "settings.language.release.status.not_built": "未構築",
   "settings.language.release.summary": "言語資源",
   "settings.language.release.summaryVersion": "言語資源 v{version}",
   "settings.language.release.askAdmin": "管理者に再処理を依頼してください",

@@ -11,7 +11,11 @@ from app.clients.language_pack_release_store import _insert
 from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute
 from app.rag.ingestion_language import ingestion_release_scope
 from app.schemas.document import IngestionJob, IngestionJobStatus
-from app.schemas.language_pack_release import LanguagePackIndexRelation, LanguagePackRelease
+from app.schemas.language_pack_release import (
+    LanguagePackDocumentStatus,
+    LanguagePackIndexRelation,
+    LanguagePackRelease,
+)
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -47,6 +51,22 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         document_id = detail.id
         recipe = await client.ensure_default_document_recipe(document_id)
         recipe_id = str(recipe["recipe_id"])
+
+        async def ids_with(status: LanguagePackDocumentStatus) -> list[str]:
+            ids, total = await client.list_document_ids(
+                language_pack_status=status, current_release_id=releases[1].id, limit=1000
+            )
+            assert (
+                await client.count_documents(
+                    language_pack_status=status, current_release_id=releases[1].id
+                )
+                == total
+            )
+            return ids
+
+        # 索引も job も無い文書は未構築（判定できないにしない。#4566）。
+        assert document_id in await ids_with(LanguagePackDocumentStatus.NOT_BUILT)
+        assert document_id not in await ids_with(LanguagePackDocumentStatus.UNRECORDED)
         old_set, new_set = f"old-{suffix}", f"new-{suffix}"
         with ingestion_release_scope(releases[0], "synthetic-job"):
             await client.upsert_chunk_set(
@@ -56,6 +76,8 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         await client.activate_recipe_chunk_set(
             recipe_id=recipe_id, chunk_set_id=old_set, expected_base_chunk_set_id=None
         )
+        # 旧版の索引だけ（構築中の job なし）は、現在版と取込設定が違うので再処理を推奨。
+        assert document_id in await ids_with(LanguagePackDocumentStatus.DIFFERENT)
         item = IngestionJob(
             id=f"job-{suffix}",
             document_id=document_id,
@@ -85,8 +107,9 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         assert used.target_version == releases[1].version
         assert used.relation == LanguagePackIndexRelation.DIFFERENT
         assert used.built_at is not None
+        # 版を固定した job が待機中の間は構築中（再処理を推奨に入れない。画面のバッジと同じ）。
         args: dict[str, Any] = dict(
-            language_pack_relation=LanguagePackIndexRelation.DIFFERENT,
+            language_pack_status=LanguagePackDocumentStatus.BUILDING,
             current_release_id=releases[1].id,
         )
         ids, total = await client.list_document_ids(**args, limit=1000)
@@ -94,6 +117,7 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         rows = await client.list_documents(**args)
         assert document_id in [row.id for row in rows]
         assert await client.count_documents(**args) == total
+        assert document_id not in await ids_with(LanguagePackDocumentStatus.DIFFERENT)
         # 未完了の成果物を active にする操作は拒否し、旧版を引き続き表示する。
         with pytest.raises(ValueError):
             await client.activate_recipe_chunk_set(
@@ -115,8 +139,18 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         )[document_id].recipes[0]
         assert now.release_id == releases[1].id and now.job_id == item.id
         assert now.relation == LanguagePackIndexRelation.CURRENT
-        ids, _ = await client.list_document_ids(**args, limit=1000)
-        assert document_id not in ids
+
+        def finish(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                "UPDATE rag_ingestion_jobs SET status = 'SUCCEEDED' WHERE job_id = :id",
+                {"id": item.id},
+            )
+
+        await client._run_transaction(finish)
+        assert document_id not in await ids_with(LanguagePackDocumentStatus.BUILDING)
+        assert document_id not in await ids_with(LanguagePackDocumentStatus.DIFFERENT)
+        assert document_id in await ids_with(LanguagePackDocumentStatus.CURRENT)
     finally:
         if document_id:
             await client.delete_document(document_id)

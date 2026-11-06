@@ -361,8 +361,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
     # 一覧の「条件に一致する文書をすべて選ぶ」の ID（一括の操作と同じ画面。#2674）。
     ("GET", "/documents/ids"): _any(MENU_FILE_LIST),
-    ("POST", "/documents/language-pack/reprocessing-targets"): _any(MENU_FILE_LIST),
-    ("POST", "/documents/language-pack/reprocessing-jobs"): _any(MENU_FILE_LIST),
+    # 言語資源の版を指定した一括再処理は、言語資源の設定の権限だけ
+    # （文書インデックスの「一括再処理」もこの権限の利用者だけに出す。#4566）。
+    ("POST", "/documents/language-pack/reprocessing-targets"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("POST", "/documents/language-pack/reprocessing-jobs"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     # 分類の入力の候補（分類の編集と同じ権限。#547）。
     # 分類の一覧は、管理の画面と、文書の詳細・RAG 検索の分類の選択肢が読む（#2131）。
     ("GET", "/document-categories"): _any(
@@ -703,11 +705,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/language-pack/preview"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/publish"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("GET", "/settings/language-pack/releases"): _any(MENU_SETTINGS_LANGUAGE_PACK),
-    # 版の比較は、文書インデックスの一括再処理（文書インデックスの権限）も使う。
-    ("GET", "/settings/language-pack/releases/compare"): _any(
-        MENU_SETTINGS_LANGUAGE_PACK, MENU_FILE_LIST
-    ),
-    # 公開時の完全な設定は言語資源の設定の権限だけ（文書の詳細の「詳細」も管理者だけ。#4566）。
+    # 版の比較と公開時の完全な設定は言語資源の設定の権限だけ
+    # （文書の詳細の「詳細」・文書インデックスの一括再処理もこの権限の利用者だけ。#4566）。
+    ("GET", "/settings/language-pack/releases/compare"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("GET", "/settings/language-pack/releases/{release_id}"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/releases/{release_id}/restore"): _any(
         MENU_SETTINGS_LANGUAGE_PACK

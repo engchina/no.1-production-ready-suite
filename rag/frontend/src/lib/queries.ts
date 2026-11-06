@@ -116,7 +116,7 @@ export const queryKeys = {
     queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
-    language_pack_relation?: import("./api").LanguagePackRelation;
+    language_pack_status?: import("./api").LanguagePackDocumentStatus;
     current_release_id?: string;
     limit?: number;
     offset?: number;
@@ -351,7 +351,7 @@ export function useDocuments(
     queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
-    language_pack_relation?: import("./api").LanguagePackRelation;
+    language_pack_status?: import("./api").LanguagePackDocumentStatus;
     current_release_id?: string;
     limit?: number;
     offset?: number;
@@ -365,7 +365,7 @@ export function useDocuments(
       queued_phase: params.queued_phase,
       q: params.q,
       knowledge_base_id: params.knowledge_base_id,
-      language_pack_relation: params.language_pack_relation,
+      language_pack_status: params.language_pack_status,
       current_release_id: params.current_release_id,
       limit: params.limit,
       offset: params.offset,
