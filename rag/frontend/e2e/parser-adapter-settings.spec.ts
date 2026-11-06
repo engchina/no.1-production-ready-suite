@@ -228,7 +228,7 @@ async function mockParserAdaptersWithPostParse(
   initial: { vision_enabled: boolean; field_extraction_enabled: boolean; navigation_summary_enabled: boolean }
 ) {
   const patches: Record<string, unknown>[] = [];
-  let current = { heading_level_inference_enabled: false, navigation_summary_max_nodes: 37, ...initial };
+  let current = { vision_image_purpose: "record", heading_level_inference_enabled: false, navigation_summary_max_nodes: 37, ...initial };
   const envelope = () =>
     parserAdapterEnvelope({
       ...current,
@@ -369,6 +369,7 @@ for (const scheme of ["light", "dark"] as const) {
     expect(patches).toEqual([
       {
         vision_enabled: true,
+        vision_image_purpose: "record",
         heading_level_inference_enabled: false,
         field_extraction_enabled: true,
         navigation_summary_enabled: false,
@@ -411,6 +412,7 @@ test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002
   expect(patches).toEqual([
     {
       vision_enabled: true,
+      vision_image_purpose: "record",
       heading_level_inference_enabled: false,
       field_extraction_enabled: false,
       navigation_summary_enabled: false,
@@ -1316,6 +1318,7 @@ function parserAdapterEnvelope(data: object) {
   const sourceRoutes = defaultSourceRoutes();
   return {
     data: {
+      vision_image_purpose: "record",
       source_routes: sourceRoutes,
       connections: defaultConnections(),
       service_backends: [
@@ -1750,4 +1753,27 @@ test("画像の自然言語指示は保存・再読込でき、出力契約は�
   await page.screenshot({ path: test.info().outputPath("vision-editable-instructions.png") });
   await instructions.getByRole("textbox", { name: "出力形式と上限（読み取り専用）", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("vision-contract-readonly.png") });
+});
+
+// 全体の既定だけを保存し、既存の解析版を同じ用途に読み替えない。
+test("画像の用途は全体の既定を保存し再読込できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const patches = await mockParserAdaptersWithPostParse(page, { vision_enabled: true, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page);
+  await page.goto("/settings/parser-adapters");
+  const purpose = page.getByRole("combobox", {name: "画像の用途", exact: true});
+  await expect(purpose).toContainText("実データ・記録");
+  await purpose.click();
+  await page.getByRole("option", {name: "画面例・説明用", exact: true}).click();
+  const save = page.getByRole("button", {name: "解析後の処理を保存", exact: true});
+  await save.click();
+  await expect.poll(() => patches.at(-1)?.vision_image_purpose).toBe("example");
+  await page.reload();
+  await expect(purpose).toContainText("画面例・説明用");
+  for (const scheme of ["light", "dark"] as const) {
+    await useTheme(page, scheme);
+    await purpose.scrollIntoViewIfNeeded();
+    await expect(page.getByText(/変更は再解析で反映されます/)).toBeVisible();
+    await expectNoPageOverflow(page);
+    await purpose.locator("..").screenshot({path: testInfo.outputPath(`image-purpose-${testInfo.project.name}-${scheme}.png`)});
+  }
 });

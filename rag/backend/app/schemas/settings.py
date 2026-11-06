@@ -77,6 +77,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 
 from app.config import (
@@ -429,6 +430,7 @@ class ParserAdapterSettingsData(BaseModel):
     capabilities: list[ParserBackendCapabilityData] = Field(default_factory=list)
     # 「解析後の処理」の全体の既定（#528）。文書のレシピで上書きしないときに使う。
     # 保存先は parser-settings.json ではなく RAG の backend/.env（RAG_VISION_ENABLED など）。
+    vision_image_purpose: ImagePurpose = DEFAULT_IMAGE_PURPOSE
     vision_enabled: bool = False
     heading_level_inference_enabled: bool = False
     field_extraction_enabled: bool = False
@@ -445,6 +447,7 @@ class ParserAdapterSettingsData(BaseModel):
 
 # 「解析後の処理」の項目（#528）。parser の選択（parser-settings.json）とは保存先が違う。
 POST_PARSE_SETTING_FIELDS = (
+    "vision_image_purpose",
     "vision_enabled",
     "heading_level_inference_enabled",
     "field_extraction_enabled",
@@ -473,6 +476,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     structured_records_jsonl_enabled: bool | None = None
     xml_tree_json_enabled: bool | None = None
     connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
+    vision_image_purpose: ImagePurpose | None = None
     vision_enabled: bool | None = None
     heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None

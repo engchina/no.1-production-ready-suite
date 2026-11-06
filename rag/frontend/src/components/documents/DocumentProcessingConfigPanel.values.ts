@@ -1,6 +1,7 @@
 import type { SelectFieldOption } from "@production-ready/ui";
 
 import type {
+  ImagePurpose,
   ChunkingStrategyName,
   DocumentProcessingConfig,
   GraphProfileName,
@@ -18,6 +19,11 @@ import type { RecipeConfigItem } from "./DocumentProcessingConfigPanel.logic";
  * レシピ 11 項目の選択肢と値の表示。選択中レシピの設定（DocumentProcessingConfigPanel）と
  * 設定の概要の全体の既定の一覧（PipelineHubClient。#528）が同じ表示にするために共有する。
  */
+
+export const IMAGE_PURPOSE_OPTIONS: SelectFieldOption<ImagePurpose>[] = [
+  {value: "record", label: t("imagePurpose.record")},
+  {value: "example", label: t("imagePurpose.example")},
+];
 
 const PREPROCESS_VALUES = [
   "passthrough",
@@ -98,6 +104,8 @@ export function parserOptionLabel(value: ParserAdapterBackend | null) {
 /** 項目の実効値の表示。項目の並びは RECIPE_CONFIG_ITEMS が決める(#523)。 */
 export function recipeConfigValueLabel(item: RecipeConfigItem, effective: DocumentProcessingConfig) {
   switch (item.field) {
+    case "vision_image_purpose":
+      return optionLabel(effective.vision_image_purpose ?? null, IMAGE_PURPOSE_OPTIONS);
     case "preprocess_profile":
       return optionLabel(effective.preprocess_profile, PREPROCESS_OPTIONS);
     case "parser_adapter_backend":

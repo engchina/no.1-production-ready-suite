@@ -295,7 +295,8 @@ def test_chunk_set_id_keeps_ids_after_delimiter_default_change() -> None:
 def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contract() -> None:
     """分割方式の値と 5 項目の属性名の改名(#599)で、既存の chunk_set_id を変えない。
 
-    期待値は旧い分割名と、質問の推定属性を除き、画像説明本文の形式v3を含む現在の契約で計算した ID。
+    期待値は旧い分割名と、質問の推定属性を除いた現在の契約で計算した ID。
+    画像説明本文の形式v3と画像用途を含む。
     改名の hash 入力は維持し、解析の内容が変わった場合は別の抽出・Chunk 集合にする。
     """
     # 改名時の明示設定で比較し、その後の既定値変更から独立させる。
@@ -308,9 +309,9 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     )
     structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
 
-    assert compute_chunk_set_id(SRC, small_to_big) == "cs_66eaf89040dea781"
-    assert compute_chunk_set_id(SRC, tuned) == "cs_7bd7b251e4782722"
-    assert compute_chunk_set_id(SRC, structure) == "cs_e769ec957524c28f"
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_280ebf2e10b65d8b"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_43f34f1c57bec7e8"
+    assert compute_chunk_set_id(SRC, structure) == "cs_78dd93b3dc4d80a5"
 
 
 def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
