@@ -1428,3 +1428,60 @@ test("未保存の抽出修正がある間は分割プレビューを無効に�
   expect(state.previewPosts()).toBe(0);
   await expectNoPageOverflow(page);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`レシピ比較の長い結果は高い標準の領域内で左右独立に読める (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await setTheme(page, theme);
+    await mockWorkspace(page, { recipeCount: 2 });
+    await page.route("**/api/search", route => {
+      const request = route.request().postDataJSON() as { filters?: { chunk_set_id?: string } };
+      const chunkSetId = request.filters?.chunk_set_id ?? "chunk-set";
+      return fulfillDocumentInspection(route, { json: ok({
+        answer: "合成資料の検索結果です。",
+        citations: Array.from({ length: 12 }, (_, index) => ({
+          document_id: "doc-1", chunk_id: `doc-1:${chunkSetId}:${index}`,
+          text: `合成結果${index + 1}。${"表示領域の末尾まで原文を確認できることを検証します。".repeat(8)}`,
+          score: 0.048, rerank_score: 0.869, file_name: "synthetic.txt", category_name: null, metadata: {},
+        })),
+        trace_id: "trace-long-comparison", guardrail_warnings: [], elapsed_ms: 12, diagnostics: {},
+      }) });
+    });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("button", { name: "検索結果を横並びで比較" }).click();
+    await page.getByLabel("比較する質問").fill("合成資料の箇所を比較してください。");
+    await page.getByRole("button", { name: "比較", exact: true }).click();
+    const columns = page.locator("section:has(> h4):has(> ol)");
+    await expect(columns).toHaveCount(2);
+    const lists = columns.locator("ol");
+    await expect(lists).toHaveCount(2);
+    await expect(lists.first().locator(":scope > li")).toHaveCount(12);
+    await page.screenshot({ path: testInfo.outputPath(`comparison-initial-${theme}.png`), fullPage: true });
+    for (const list of await lists.all()) {
+      await expect(list.locator(":scope > li")).toHaveCount(12);
+      const size = await list.evaluate(node => {
+        const style = getComputedStyle(node);
+        return { client: node.clientHeight, scroll: node.scrollHeight, max: style.maxHeight, overflow: style.overflowY, rem: parseFloat(getComputedStyle(document.documentElement).fontSize), wide: matchMedia("(min-width: 48rem)").matches };
+      });
+      expect(size.max).toBe(`${(size.wide ? 42 : 26.25) * size.rem}px`);
+      expect(size.overflow).toBe("auto");
+      expect(size.scroll).toBeGreaterThan(size.client);
+      await list.scrollIntoViewIfNeeded();
+      await list.focus();
+      await page.keyboard.press("End");
+      await expect.poll(() => list.evaluate(node => node.scrollTop + node.clientHeight >= node.scrollHeight - 1)).toBe(true);
+      await expect(list.getByText(/^合成結果12。/)).toBeInViewport();
+    }
+    await lists.evaluateAll(nodes => nodes.forEach(node => { node.scrollTop = 0; }));
+    await lists.first().evaluate(node => { node.scrollTop = node.scrollHeight; });
+    expect(await lists.nth(1).evaluate(node => node.scrollTop)).toBe(0);
+    for (let index = 0; index < 2; index += 1) {
+      expect(await columns.nth(index).locator("h4").evaluate(node => node.closest("ol") === null)).toBe(true);
+    }
+    const boxes = await columns.evaluateAll(nodes => nodes.map(node => { const box = node.getBoundingClientRect(); return { x: box.x, y: box.y }; }));
+    if (testInfo.project.name === "desktop") expect(boxes[0].y).toBe(boxes[1].y);
+    else expect(boxes[1].y).toBeGreaterThan(boxes[0].y);
+    await expectNoPageOverflow(page);
+    await columns.first().scrollIntoViewIfNeeded();
+    await columns.first().locator("..").screenshot({ path: testInfo.outputPath(`comparison-scroll-${theme}.png`) });
+  });
+}
