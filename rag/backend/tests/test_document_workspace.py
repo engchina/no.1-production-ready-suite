@@ -107,8 +107,8 @@ class FakeWorkspaceOracle:
         self.ingestion_jobs: dict[str, IngestionJob] = {}
         self.ingestion_segments: dict[str, list[IngestionSegment]] = {}
         self.knowledge_base_assignments: set[tuple[str, str]] = set()
-        self.processing_configs: dict[str, DocumentProcessingConfig] = {}
         self.recipes: dict[str, dict[str, object]] = {}
+        self.default_recipe_rows: dict[str, dict[str, object]] = {}
         self.extraction_artifacts: dict[str, dict[str, object]] = {}
         self.chunk_set_chunks: dict[str, list[DocumentChunkView]] = {}
         # 文書の削除の後始末の記録（#2452）。
@@ -149,6 +149,13 @@ class FakeWorkspaceOracle:
             knowledge_bases=knowledge_bases,
         )
         self.documents[document_id] = detail
+        # 正式実装と同じく新規登録時に初期レシピを明示準備する。
+        self.default_recipe_rows[document_id] = {
+            "recipe_id": f"default-{document_id}",
+            "document_id": document_id,
+            "slot_no": 1,
+            "processing_config": {},
+        }
         for knowledge_base in knowledge_bases:
             self.knowledge_base_assignments.add((knowledge_base.id, document_id))
         return detail
@@ -249,15 +256,6 @@ class FakeWorkspaceOracle:
     async def get_document_summary(self, document_id: str) -> DocumentDetail | None:
         # 実装は JSON 列を読まない DocumentSummary を返す。fake は詳細(その上位型)で代用する。
         return self.documents.get(document_id)
-
-    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
-        return self.processing_configs.get(document_id, DocumentProcessingConfig())
-
-    async def update_document_processing_config(
-        self, document_id: str, config: DocumentProcessingConfig
-    ) -> DocumentProcessingConfig:
-        self.processing_configs[document_id] = config
-        return config
 
     async def get_document_serving_chunk_set_id(self, document_id: str) -> None:
         _ = document_id
@@ -512,10 +510,23 @@ class FakeWorkspaceOracle:
         self.ingestion_jobs[job_id] = updated
         return updated
 
+    async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
+        for row in self.recipes.values():
+            if row.get("document_id") == document_id and row.get("slot_no") == 1:
+                return dict(row)
+        default_row = self.default_recipe_rows.get(document_id)
+        if default_row is None or document_id not in self.documents:
+            raise KeyError("既定の処理レシピが見つかりません。")
+        return dict(default_row)
+
     async def get_document_recipe(
         self, document_id: str, recipe_id: str
     ) -> dict[str, object] | None:
         row = self.recipes.get(recipe_id)
+        if row is None:
+            default = self.default_recipe_rows.get(document_id)
+            if default is not None and default.get("recipe_id") == recipe_id:
+                row = default
         if row is None or row.get("document_id") != document_id:
             return None
         return dict(row)
@@ -523,7 +534,14 @@ class FakeWorkspaceOracle:
     async def update_document_recipe_status(
         self, *, recipe_id: str, status: FileStatus, **kwargs: object
     ) -> None:
-        row = self.recipes.setdefault(recipe_id, {"recipe_id": recipe_id})
+        row = self.recipes.get(recipe_id)
+        if row is None:
+            row = next(
+                (row for row in self.default_recipe_rows.values() if row["recipe_id"] == recipe_id),
+                None,
+            )
+        if row is None:
+            raise KeyError("処理レシピが見つかりません。")
         row["status"] = status.value
         for key, value in kwargs.items():
             if value is not None:
@@ -1789,11 +1807,10 @@ def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reinge
     assert fake_document_dependencies.chunks.get(document_id) is None
     assert fake_document_dependencies.ingestion_segments.get(document_id) is None
 
+    # checkpoint が出来るまでは segment を返さない（消した抽出から組み立てない。#4185）。
     segments = client.get(f"/api/documents/{document_id}/ingestion-segments")
     assert segments.status_code == 200
-    assert [item["segment_id"] for item in segments.json()["data"]] == [f"{document_id}:source"]
-    assert segments.json()["data"][0]["status"] == "QUEUED"
-    assert segments.json()["data"][0]["progress_unit"] == "source"
+    assert segments.json()["data"] == []
 
 
 def test_document_ingestion_job_endpoint_skips_unsupported_outlook_msg() -> None:
@@ -3086,59 +3103,6 @@ def test_document_content_returns_404_for_unknown_document() -> None:
     assert resp.json()["error_messages"] == ["ドキュメントが見つかりません。"]
 
 
-def test_ingestion_segments_fallback_uses_table_and_asset_pages(
-    fake_document_dependencies: FakeWorkspaceOracle,
-) -> None:
-    """checkpoint 未永続化でも table/asset lineage から page range を返す。"""
-    document_id = _upload("layout.pdf", b"%PDF-1.7\nsample", "application/pdf")
-    artifact_path = f"artifacts/extractions/{document_id}/full.json"
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "status": FileStatus.INDEXED,
-            "indexed_at": datetime.now(UTC),
-            "extraction": {
-                "raw_text": "売上表と説明図を含む PDF",
-                "elements": [],
-                "tables": [
-                    {
-                        "table_id": "tbl-1",
-                        "page_number": 3,
-                        "caption": "四半期売上",
-                    }
-                ],
-                "assets": [
-                    {
-                        "asset_id": "fig-1",
-                        "kind": "figure",
-                        "page_number": 5,
-                    }
-                ],
-                "quality_report": {
-                    "parser_backend": "docling",
-                    "parser_profile": "enterprise_ai_pdf_layout",
-                },
-                "parser_artifacts": {
-                    "extraction_artifact_path": artifact_path,
-                },
-            },
-        }
-    )
-
-    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
-
-    assert resp.status_code == 200
-    segments = resp.json()["data"]
-    assert len(segments) == 1
-    assert segments[0]["page_start"] == 3
-    assert segments[0]["page_end"] == 5
-    assert segments[0]["progress_unit"] == "page"
-    assert segments[0]["progress_start"] == 3
-    assert segments[0]["progress_end"] == 5
-    assert segments[0]["parser_backend"] == "docling"
-    assert segments[0]["artifact_path"] == artifact_path
-
-
 def test_ingestion_segments_progress_unit_for_persisted_office_segments(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
@@ -3181,61 +3145,6 @@ def test_ingestion_segments_progress_unit_for_persisted_office_segments(
     assert pptx_resp.json()["data"][0]["progress_start"] == 2
     assert xlsx_resp.json()["data"][0]["progress_unit"] == "sheet"
     assert xlsx_resp.json()["data"][0]["progress_start"] == 3
-
-
-@pytest.mark.usefixtures("mineru_selectable")
-def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job(
-    fake_document_dependencies: FakeWorkspaceOracle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """checkpoint 作成前の取込中表示は upload 時 profile ではなく現行 parser 設定を使う。"""
-    monkeypatch.setattr(
-        documents_route,
-        "get_settings",
-        lambda: Settings(
-            rag_parser_adapter_backend="mineru",
-            rag_parser_mineru_enabled=True,
-        ),
-    )
-    document_id = _upload("scan.pdf", b"%PDF-1.7\nsample", "application/pdf")
-    job = IngestionJob(
-        id="job-mineru",
-        document_id=document_id,
-        status=IngestionJobStatus.RUNNING,
-        parser_profile="enterprise_ai_pdf_layout",
-        queued_at=datetime.now(UTC),
-        started_at=datetime.now(UTC),
-    )
-    fake_document_dependencies.ingestion_jobs[job.id] = job
-
-    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
-
-    assert resp.status_code == 200
-    segments = resp.json()["data"]
-    assert len(segments) == 1
-    assert segments[0]["status"] == "RUNNING"
-    assert segments[0]["parser_backend"] == "mineru"
-    assert segments[0]["parser_profile"] == "mineru"
-
-
-@pytest.mark.usefixtures("mineru_selectable")
-def test_ingestion_segments_fallback_uses_document_parser_before_ingest(
-    fake_document_dependencies: FakeWorkspaceOracle,
-) -> None:
-    """未取込表示は upload 時 profile ではなく文書の現行 parser 設定を使う。"""
-    document_id = _upload("scan-before-ingest.pdf", b"%PDF-1.7\nsample", "application/pdf")
-    fake_document_dependencies.processing_configs[document_id] = DocumentProcessingConfig(
-        parser_adapter_backend="mineru"
-    )
-
-    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
-
-    assert resp.status_code == 200
-    segments = resp.json()["data"]
-    assert len(segments) == 1
-    assert segments[0]["status"] == "UPLOADED"
-    assert segments[0]["parser_backend"] == "mineru"
-    assert segments[0]["parser_profile"] == "mineru"
 
 
 def test_delete_document_removes_record_and_original_file(
@@ -4414,23 +4323,78 @@ def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
     fake.document_has_served_output = served  # type: ignore[attr-defined]
     fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
 
-    async def default_recipe(_document_id: str) -> dict[str, object]:
-        row: dict[str, object] = {
-            "recipe_id": "recipe-default",
-            "document_id": _document_id,
-            "status": FileStatus.INDEXED.value,
-            "processing_config": {},
-        }
-        fake.recipes["recipe-default"] = row
-        return row
-
-    fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
+    fake.recipes["recipe-default"] = {
+        "recipe_id": "recipe-default",
+        "document_id": document_id,
+        "slot_no": 1,
+        "status": FileStatus.INDEXED.value,
+        "processing_config": {},
+    }
 
     resp = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
 
     assert resp.status_code == 200
     assert reset_calls == []
     assert checkpoint_calls == [(document_id, "recipe-default")]
+
+
+def test_ingestion_segments_after_served_reingest_do_not_show_previous_extraction(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """#4185: 再取込で checkpoint を消した後は、文書の行に残る前回の抽出から segment を作らない。"""
+    document_id = _upload("served-reingest.pdf", b"%PDF-1.7\nsynthetic", "application/pdf")
+    fake = fake_document_dependencies
+    detail = fake.documents[document_id]
+    fake.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "indexed_at": datetime.now(UTC),
+            # 配信中の版の抽出（前回の job の JSON）が文書の行に残っている。
+            "extraction": {
+                "raw_text": "合成の前回の本文",
+                "pages": [{"page_number": 1}, {"page_number": 7}],
+                "quality_report": {"parser_backend": "synthetic-previous-parser"},
+                "parser_artifacts": {
+                    "extraction_artifact_path": f"artifacts/extractions/{document_id}/old.json"
+                },
+            },
+        }
+    )
+    fake.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:p1-7",
+            document_id=document_id,
+            status="SUCCEEDED",
+            page_start=1,
+            page_end=7,
+        )
+    ]
+
+    async def served(_document_id: str) -> bool:
+        return True
+
+    async def clear_checkpoints(document_id: str, recipe_id: str) -> None:
+        _ = recipe_id
+        fake.ingestion_segments.pop(document_id, None)
+
+    fake.document_has_served_output = served  # type: ignore[attr-defined]
+    fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
+    fake.recipes["recipe-default"] = {
+        "recipe_id": "recipe-default",
+        "document_id": document_id,
+        "slot_no": 1,
+        "status": FileStatus.INDEXED.value,
+        "processing_config": {},
+    }
+
+    queued = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
+    assert queued.status_code == 200
+    assert fake.documents[document_id].extraction["pages"]  # 文書の行の抽出は残ったまま
+
+    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
 
 
 def test_first_ingest_without_served_output_still_resets_outputs(

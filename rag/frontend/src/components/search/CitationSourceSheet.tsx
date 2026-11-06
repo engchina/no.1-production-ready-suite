@@ -29,12 +29,18 @@ export function CitationSourceSheet({
   position = { kind: "exact" },
   empty,
   scores,
+  showScores,
+  title,
 }: {
   chunk: RetrievedChunk | null;
+  /** 原文表示を開く元に合わせた見出し。未指定は既存の回答/検索の見出し。 */
+  title?: string;
   /** 根拠の位置を取得中、または現在は閲覧できない場合の状態。 */
   empty?: ReactNode;
   /** 位置だけを ID で読んだ場合は、保存時のスコアだけを表示する。 */
   scores?: { score: number | null; rerankScore: number | null };
+  /** 検索しない原文入口ではスコア領域を表示しない。既定は共通部品の true。 */
+  showScores?: boolean;
   /** 根拠の番号（0 始まり）。 */
   index: number;
   open: boolean;
@@ -51,8 +57,9 @@ export function CitationSourceSheet({
       onClose={onClose}
       item={chunk ? { ...citationEvidenceItem(chunk), ...scores } : null}
       index={index}
-      labels={EVIDENCE_LABELS}
+      labels={title ? {...EVIDENCE_LABELS, sourceTitle: title, sourceTitleSearch: title} : EVIDENCE_LABELS}
       kind={kind}
+      showScores={showScores}
       notice={
         unresolved
           ? {

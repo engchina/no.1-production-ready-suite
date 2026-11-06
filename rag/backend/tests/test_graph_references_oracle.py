@@ -1,5 +1,6 @@
 """版付きの参照記録と双方向のページングを、合成データで実Oracle上に確認する。"""
 
+import os
 from typing import Any, cast
 from uuid import uuid4
 
@@ -364,3 +365,421 @@ async def test_refresh_resolves_references_after_target_document_is_added() -> N
     )
     # 同じ目録なら何も変わらない。
     assert (await refresh_knowledge_base_references(client, kb.id))["updated"] == 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") != "true", reason="CI専用Oracleの匿名合成データだけで検証する"
+)
+@pytest.mark.usefixtures("oracle_db")
+async def test_entity_chunks_read_actual_saved_links_in_version_scope() -> None:
+    """章節・本文の節点の chunk を保存順に読み、範囲・版の外は 404（#4544）。
+
+    CI隔離schemaのfixtureが作成行を後始末する。手元/配備先へは接続しない。
+    """
+    from dataclasses import replace
+
+    from app.rag.chunking import Chunk
+    from app.rag.graph_index import build_graph_index, graph_body_node_id
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+    from app.schemas.extraction import StructuredExtraction
+    from tests.test_graph_expansion_oracle import _EMBEDDING
+
+    def metadata(index: int) -> dict[str, Any]:
+        if index == 1:
+            return {"section_path": "合成章 > 本文", "section_title": "本文"}
+        if index >= 28:
+            return {"section_path": "合成章 > 合成節", "section_title": "合成節"}
+        return {}
+
+    def synthetic_chunks(prefix: str, count: int) -> list[Chunk]:
+        return [
+            Chunk(
+                text=f"{prefix}{index}",
+                index=index,
+                start_offset=index * 10,
+                end_offset=index * 10 + 5,
+                metadata={"page_number": index + 1, **metadata(index)},
+            )
+            for index in range(count)
+        ]
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-body-{uuid4().hex[:8]}")
+    document, chunk_set = await _indexed_document(
+        client,
+        file_name="synthetic-body.pdf",
+        chunks=synthetic_chunks("合成本文", 55),
+        knowledge_base_id=kb.id,
+    )
+    store = StructureGraphStore(client)
+    tree = await store.children(kb.id, document, chunk_set, parent_id=None, offset=0, limit=25)
+    body = graph_body_node_id(chunk_set, kb.id)
+    chapter = graph_section_node_id(chunk_set, kb.id, "合成章")
+    section = graph_section_node_id(chunk_set, kb.id, "合成章 > 合成節")
+    assert any(node["id"] == body and not node["virtual"] for node in tree["items"])
+    assert any(node["id"] == chapter and node["virtual"] for node in tree["items"])
+    found = await store.search(kb.id, "本文", offset=0, limit=25)
+    assert {item["id"] for item in found["items"]} == {
+        body,
+        graph_section_node_id(chunk_set, kb.id, "合成章 > 本文"),
+    }
+
+    async def pages(node: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        return (
+            await store.entity_chunks(kb.id, document, chunk_set, node_id=node, offset=0, limit=25),
+            await store.entity_chunks(
+                kb.id, document, chunk_set, node_id=node, offset=25, limit=25
+            ),
+            await store.entity_chunks(
+                kb.id, document, chunk_set, node_id=node, offset=1000001, limit=25
+            ),
+        )
+
+    # 本文: 見出しの無い chunk だけを保存順に。
+    first, last, empty = await pages(body)
+    assert first["total"] == last["total"] == empty["total"] == 27
+    assert empty["items"] == []
+    assert [row["chunk_id"] for row in first["items"] + last["items"]] == [
+        f"{document}:{chunk_set}:{index}" for index in range(28) if index != 1
+    ]
+    assert last["items"][-1]["page_number"] == 28
+    # 章節: その節点に結んだ chunk だけを保存順に（ページの外でも件数を保つ）。
+    first, last, empty = await pages(section)
+    assert first["total"] == last["total"] == empty["total"] == 27
+    assert [row["chunk_id"] for row in first["items"] + last["items"]] == [
+        f"{document}:{chunk_set}:{index}" for index in range(28, 55)
+    ]
+    assert last["items"][-1]["page_number"] == 55
+    original = await client.readable_version_chunk(document, last["items"][-1]["chunk_id"])
+    assert original is not None and original.text == "合成本文54"
+    assert original.metadata["page_number"] == 55
+    # 木だけにある仮想の祖先・文書の節点は chunk を作らない。
+    [document_node] = [
+        item["id"]
+        for item in (await store.overview(kb.id))["documents"]
+        if item["chunk_set_id"] == chunk_set
+    ]
+    for node in (chapter, document_node):
+        with pytest.raises(KeyError):
+            await store.entity_chunks(kb.id, document, chunk_set, node_id=node, offset=0, limit=25)
+    # 別の KB・別の KB の節点の ID・別の版の ID は 404。
+    other = await client.create_knowledge_base(name=f"synthetic-body-other-{uuid4().hex[:8]}")
+    with pytest.raises(KeyError):
+        await store.entity_chunks(
+            other.id, document, chunk_set, node_id=section, offset=0, limit=25
+        )
+    foreign = graph_section_node_id(chunk_set, other.id, "合成章 > 合成節")
+    with pytest.raises(KeyError):
+        await store.entity_chunks(kb.id, document, chunk_set, node_id=foreign, offset=0, limit=25)
+    with pytest.raises(KeyError):
+        await store.entity_chunks(
+            kb.id, document, f"cs_missing_{uuid4().hex[:8]}", node_id=section, offset=0, limit=25
+        )
+    # 権限の外の文書・別の tenant は最初の確認で 404（件数を返さない）。
+    base = current_audit_request_context()
+    for context in (
+        replace(base, allowed_document_ids=frozenset({f"synthetic-other-{uuid4().hex}"})),
+        replace(base, tenant_id_hash=uuid4().hex),
+    ):
+        token = set_audit_request_context(context)
+        try:
+            with pytest.raises(KeyError):
+                await store.entity_chunks(
+                    kb.id, document, chunk_set, node_id=section, offset=0, limit=25
+                )
+        finally:
+            reset_audit_request_context(token)
+    # 版を切り替えたら旧版の一覧は 404、開いた旧版の chunk は旧版の内容のまま読める。
+    recipes = await client.list_document_recipes(document)
+    recipe_id = str(recipes[0]["recipe_id"])
+    next_set = f"cs_graph_{uuid4().hex[:16]}"
+    next_chunks = synthetic_chunks("合成改版", 30)
+    await client.upsert_chunk_set(chunk_set_id=next_set, document_id=document, recipe_id=recipe_id)
+    await client.save_index(
+        document,
+        StructuredExtraction(raw_text="本文", confidence=0.9, document_type="手順書"),
+        next_chunks,
+        [_EMBEDDING] * len(next_chunks),
+        chunk_set_id=next_set,
+    )
+    await client.mark_chunk_set_indexed(
+        chunk_set_id=next_set, chunk_count=len(next_chunks), vector_count=len(next_chunks)
+    )
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id,
+        chunk_set_id=next_set,
+        expected_base_chunk_set_id=chunk_set,
+        materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
+    )
+    await client.replace_document_graph_index(
+        document,
+        build_graph_index(
+            document_id=document,
+            knowledge_base_ids=[kb.id],
+            extraction=StructuredExtraction(raw_text="本文"),
+            chunks=next_chunks,
+            chunk_set_id=next_set,
+            document_name="synthetic-body.pdf",
+        ),
+        chunk_set_id=next_set,
+    )
+    with pytest.raises(KeyError):
+        await store.entity_chunks(kb.id, document, chunk_set, node_id=section, offset=0, limit=25)
+    stale = await client.readable_version_chunk(document, f"{document}:{chunk_set}:54")
+    assert stale is not None and stale.text == "合成本文54"
+    assert stale.metadata["chunk_set_id"] == chunk_set
+    current = await store.entity_chunks(
+        kb.id,
+        document,
+        next_set,
+        node_id=graph_section_node_id(next_set, kb.id, "合成章 > 合成節"),
+        offset=0,
+        limit=25,
+    )
+    assert current["total"] == 2
+    assert [row["chunk_id"] for row in current["items"]] == [
+        f"{document}:{next_set}:{index}" for index in (28, 29)
+    ]
+
+
+def _body_fixture_chunks(prefix: str, count: int = 4) -> list[Any]:
+    """見出しの無い chunk と、見出しのある chunk 1 件（index 1）の合成文書。"""
+    from app.rag.chunking import Chunk
+
+    return [
+        Chunk(
+            text=f"{prefix}{index}",
+            index=index,
+            start_offset=0,
+            end_offset=len(f"{prefix}{index}"),
+            metadata={
+                "page_number": index + 1,
+                **(
+                    {"section_path": "合成章 > 合成節", "section_title": "合成節"}
+                    if index == 1
+                    else {}
+                ),
+            },
+        )
+        for index in range(count)
+    ]
+
+
+async def _chunk_snapshot(client: OracleClient, document_id: str) -> list[dict[str, str]]:
+    """本文・metadata・embedding の保存値（補建が変えないことの比較に使う）。
+
+    複数行の一時 LOB（``... RETURNING CLOB``）は次の行の取得で失われる（ORA-24826）ので、
+    metadata は VARCHAR2、embedding は次元の数とノルムで比べる。
+    """
+    rows = await client._fetch_all(
+        """SELECT chunk_id,chunk_set_id,chunk_text,
+        JSON_SERIALIZE(metadata_json RETURNING VARCHAR2(4000)) AS metadata_text,
+        VECTOR_DIMENSION_COUNT(embedding) AS embedding_dimensions,
+        VECTOR_NORM(embedding) AS embedding_norm
+        FROM rag_chunks WHERE document_id=:id ORDER BY chunk_set_id,chunk_index""",
+        {"id": document_id},
+    )
+    return [{key: str(value) for key, value in row.items()} for row in rows]
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") != "true", reason="CI専用Oracleの匿名合成データだけで検証する"
+)
+@pytest.mark.usefixtures("oracle_db")
+async def test_index_built_before_body_nodes_is_stale_and_rebuild_links_body() -> None:
+    """#4543: 「本文」の節点の前の形の索引を、計画が STALE にし、補建が本文へ結び直す。"""
+    from dataclasses import replace
+
+    from rag_parser_core.language import current_pack
+
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.graph_index import build_graph_index, graph_body_node_id
+    from app.rag.structure_index import source_fingerprint, structure_index_plan
+    from app.schemas.extraction import StructuredExtraction
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-body-old-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    chunks = _body_fixture_chunks("合成本文")
+    document, chunk_set = await _indexed_document(
+        client, file_name="synthetic-body-old.pdf", chunks=chunks, knowledge_base_id=kb.id
+    )
+    # #4507 の前の形: 見出しの無い chunk を「文書全体」の章節に結び、本文の節点を作らない。
+    whole = current_pack().text("labels", "whole_document")
+    old_chunks = [
+        chunk
+        if "section_path" in chunk.metadata
+        else replace(chunk, metadata={**chunk.metadata, "section_path": whole})
+        for chunk in chunks
+    ]
+    old_graph = build_graph_index(
+        document_id=document,
+        knowledge_base_ids=[kb.id],
+        extraction=StructuredExtraction(),
+        chunks=old_chunks,
+        chunk_set_id=chunk_set,
+        document_name="synthetic-body-old.pdf",
+    )
+    await StructureIndexStore(client).publish(
+        kb.id,
+        document,
+        source_fingerprint([chunk_set]),
+        [chunk_set],
+        {chunk_set: old_graph},
+        "COMPLETE",
+        {"quality": "COMPLETE"},
+    )
+    body = graph_body_node_id(chunk_set, kb.id)
+    whole_node = graph_section_node_id(chunk_set, kb.id, whole)
+    store = StructureGraphStore(client)
+    # 症状: 木は仮想の本文を出し、本文の節点の一覧は実体が無いので 404（KeyError）。
+    roots = await store.children(kb.id, document, chunk_set, parent_id=None, offset=0, limit=25)
+    assert any(node["id"] == body and node["virtual"] for node in roots["items"])
+    with pytest.raises(KeyError):
+        await store.entity_chunks(kb.id, document, chunk_set, node_id=body, offset=0, limit=25)
+    before = await _chunk_snapshot(client, document)
+
+    [item] = await structure_index_plan(client, kb.id, document_ids=[document])
+    assert item["status"] == "STALE" and item["body_links_missing"] is True
+
+    await rebuild_document_structure_index(client, kb.id, document)
+    page = await store.entity_chunks(kb.id, document, chunk_set, node_id=body, offset=0, limit=25)
+    assert [row["chunk_id"] for row in page["items"]] == [
+        f"{document}:{chunk_set}:{index}" for index in (0, 2, 3)
+    ]
+    entities = await client._fetch_all(
+        "SELECT entity_id,entity_type FROM rag_graph_entities WHERE chunk_set_id=:id",
+        {"id": chunk_set},
+    )
+    kinds = {str(row["entity_id"]): str(row["entity_type"]) for row in entities}
+    assert kinds[body] == "body" and whole_node not in kinds
+    assert await _chunk_snapshot(client, document) == before
+    [after] = await structure_index_plan(client, kb.id, document_ids=[document])
+    assert after["status"] == "CURRENT" and after["body_links_missing"] is False
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") != "true", reason="CI専用Oracleの匿名合成データだけで検証する"
+)
+@pytest.mark.usefixtures("oracle_db")
+async def test_body_chunk_chain_is_closed_at_the_first_gate_for_restricted_users() -> None:
+    """#4543: 本文の一覧 → 原文の経路は、権限の外・別の KB・別の tenant で件数を出さず 404。"""
+    from dataclasses import replace
+
+    from fastapi import HTTPException
+
+    from app.api.routes import documents as document_routes
+    from app.api.routes import knowledge_bases as kb_routes
+    from app.rag.graph_index import graph_body_node_id
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-body-scope-{uuid4().hex[:8]}")
+    other = await client.create_knowledge_base(name=f"synthetic-body-scope-o-{uuid4().hex[:8]}")
+    document, chunk_set = await _indexed_document(
+        client,
+        file_name="synthetic-body-scope.pdf",
+        chunks=_body_fixture_chunks("合成範囲"),
+        knowledge_base_id=kb.id,
+    )
+    store = StructureGraphStore(client)
+    body = graph_body_node_id(chunk_set, kb.id)
+    listed = await store.entity_chunks(kb.id, document, chunk_set, node_id=body, offset=0, limit=25)
+    assert listed["total"] == 3
+    chunk_id = listed["items"][0]["chunk_id"]
+    assert (await document_routes.get_document_citation_chunk(document, chunk_id)).data
+
+    with pytest.raises(HTTPException) as other_kb:
+        await kb_routes.get_structure_graph_entity_chunks(
+            other.id, document, chunk_set_id=chunk_set, node_id=body, offset=0, limit=25
+        )
+    assert other_kb.value.status_code == 404
+    base = current_audit_request_context()
+    for restricted in (
+        replace(base, allowed_document_ids=frozenset({"synthetic-other-document"})),
+        replace(base, tenant_id_hash="synthetic-other-tenant"),
+    ):
+        token = set_audit_request_context(restricted)
+        try:
+            with pytest.raises(KeyError):
+                await store.entity_chunks(
+                    kb.id, document, chunk_set, node_id=body, offset=0, limit=25
+                )
+            with pytest.raises(HTTPException) as body_error:
+                await kb_routes.get_structure_graph_entity_chunks(
+                    kb.id, document, chunk_set_id=chunk_set, node_id=body, offset=0, limit=25
+                )
+            assert body_error.value.status_code == 404
+            assert "3" not in str(body_error.value.detail)
+            with pytest.raises(HTTPException) as source_error:
+                await document_routes.get_document_citation_chunk(document, chunk_id)
+            assert source_error.value.status_code == 404
+        finally:
+            reset_audit_request_context(token)
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") != "true", reason="CI専用Oracleの匿名合成データだけで検証する"
+)
+@pytest.mark.usefixtures("oracle_db")
+async def test_body_chunk_opened_after_version_switch_keeps_listed_version() -> None:
+    """#4543: 版 A で一覧した本文の chunk は、版 B へ切り替えた後も版 A の内容で開く。"""
+    from app.api.routes import documents as document_routes
+    from app.rag.graph_index import graph_body_node_id
+    from app.schemas.extraction import StructuredExtraction
+    from tests.test_graph_expansion_oracle import _EMBEDDING
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-body-version-{uuid4().hex[:8]}")
+    document, set_a = await _indexed_document(
+        client,
+        file_name="synthetic-body-version.pdf",
+        chunks=_body_fixture_chunks("合成版A"),
+        knowledge_base_id=kb.id,
+    )
+    store = StructureGraphStore(client)
+    listed = await store.entity_chunks(
+        kb.id, document, set_a, node_id=graph_body_node_id(set_a, kb.id), offset=0, limit=25
+    )
+    chunk_id = listed["items"][0]["chunk_id"]
+
+    [recipe] = await client.list_document_recipes(document)
+    set_b = f"cs_graph_{uuid4().hex[:16]}"
+    chunks_b = _body_fixture_chunks("合成版B")
+    await client.upsert_chunk_set(
+        chunk_set_id=set_b, document_id=document, recipe_id=str(recipe["recipe_id"])
+    )
+    await client.save_index(
+        document,
+        StructuredExtraction(raw_text="本文", confidence=0.9),
+        chunks_b,
+        [_EMBEDDING] * len(chunks_b),
+        chunk_set_id=set_b,
+    )
+    await client.mark_chunk_set_indexed(
+        chunk_set_id=set_b, chunk_count=len(chunks_b), vector_count=len(chunks_b)
+    )
+    await client.activate_recipe_chunk_set(
+        recipe_id=str(recipe["recipe_id"]),
+        chunk_set_id=set_b,
+        expected_base_chunk_set_id=set_a,
+        materialized_revision=int(str(recipe.get("config_revision") or 1)),
+    )
+
+    # 一覧した版 A の内容で開く（版 B の同じ位置の内容に差し替えない）。
+    opened = (await document_routes.get_document_citation_chunk(document, chunk_id)).data
+    assert opened is not None and opened.text == "合成版A0"
+    assert opened.metadata["chunk_set_id"] == set_a
+    # 版 A の本文の一覧は、active でなくなったので 404。
+    with pytest.raises(KeyError):
+        await store.entity_chunks(
+            kb.id, document, set_a, node_id=graph_body_node_id(set_a, kb.id), offset=0, limit=25
+        )

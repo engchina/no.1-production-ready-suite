@@ -436,6 +436,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/overview"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/tree"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/graph/documents/{{document_id}}/entity-chunks"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/references"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/search"): _any(MENU_KNOWLEDGE_BASES),

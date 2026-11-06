@@ -49,6 +49,8 @@ import {
   FieldActionRow,
   FormGrid,
   FormStatus,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   ObjectActionBar,
   SelectField,
   Skeleton,
@@ -971,7 +973,11 @@ function ComparisonColumn({ title, result }: { title: string; result: SearchResp
     <section className="min-w-0">
       <h4 className="mb-2 text-sm font-semibold text-fg">{title}</h4>
       {chunks.length ? (
-        <ol className="space-y-2">
+        <ol
+          aria-label={title}
+          tabIndex={0}
+          className={`space-y-2 ${INFORMATION_CARD_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+        >
           {chunks.map((chunk, index) => (
             <CitationCard
               key={`${chunk.chunk_id}-${index}`}

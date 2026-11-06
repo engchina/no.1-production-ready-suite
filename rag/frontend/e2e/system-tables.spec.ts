@@ -729,3 +729,80 @@ for (const theme of ["light", "dark"] as const) {
     await expect(missing).toHaveCount(0);
   });
 }
+
+for (const theme of ["light", "dark"] as const) {
+  test(`取得エラー後の処理中解除と再試行・操作中の保護（4534・${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockSettings(page, { initialStatus: "ready" });
+    await page.addInitScript((value) => { localStorage.setItem("theme", value); }, theme);
+    let next: "error" | "ready" | "running" = "error";
+    let release: (() => void) | undefined;
+    let mutations = 0;
+    const data = systemTables("ready");
+    await page.route("**/api/settings/database/system-tables", async (route) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      const mode = next;
+      await route.fulfill({ status: mode === "error" ? 404 : 200, json: {
+        data: mode === "error" ? null : { ...data, operation_state: { ...data.operation_state, status: mode === "running" ? "running" : "idle" } },
+        error_messages: mode === "error" ? ["合成の状態取得エラー"] : [], warning_messages: [],
+      } });
+    });
+    await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
+      mutations += 1;
+      await new Promise<void>((resolve) => { release = resolve; });
+      await route.fulfill({ json: { data: { ...data, operation: "initialized" }, error_messages: [], warning_messages: [] } });
+    });
+    const finish = async () => {
+      await expect.poll(() => Boolean(release)).toBe(true);
+      const resolve = release!; release = undefined; resolve();
+    };
+    await page.goto("/settings/system-tables");
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; document.documentElement.classList.toggle("dark", value === "dark"); }, theme);
+    const card = page.locator("#system-tables");
+    await expect(card).toHaveAttribute("aria-busy", "true");
+    await finish();
+    await expect(card.getByTestId("database-gate-retry")).toBeVisible();
+    await card.screenshot({ path: testInfo.outputPath("4534-error.png") });
+    await expect(card).toHaveAttribute("aria-busy", "false");
+    await expect(card.getByRole("button", { name: "作成・更新", exact: true })).toHaveCount(0);
+    next = "ready";
+    await card.getByTestId("database-gate-retry").click();
+    await expect(card).toHaveAttribute("aria-busy", "true");
+    await finish();
+    await expect(card).toHaveAttribute("aria-busy", "false");
+    const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+    await expect(initialize).toBeEnabled();
+    await expect(card.getByRole("button", { name: "すべて再作成", exact: true })).toBeDisabled();
+    next = "error";
+    await card.getByRole("button", { name: "最新情報を取得", exact: true }).click();
+    await expect(card).toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toBeDisabled();
+    await finish();
+    await expect(card).toHaveAttribute("aria-busy", "false");
+    await expect(initialize).toBeDisabled();
+    await expect(card.getByRole("textbox")).toBeDisabled();
+    next = "running";
+    await card.getByTestId("database-gate-retry").click();
+    await finish();
+    await expect(card.getByText("操作中", { exact: true })).toBeVisible();
+    await expect(card).toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toBeDisabled();
+    next = "ready";
+    await card.getByRole("button", { name: "最新情報を取得", exact: true }).click();
+    await finish();
+    await expect(initialize).toBeEnabled();
+    await initialize.click();
+    await expect.poll(() => mutations).toBe(1);
+    await expect(card).toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toBeDisabled();
+    await finish();
+    await expect(card).toHaveAttribute("aria-busy", "false");
+    await expect(initialize).toBeEnabled();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    const notifications = page.getByRole("region", { name: "通知", exact: true });
+    const closeNotices = notifications.getByRole("button", { name: "閉じる", exact: true });
+    while (await closeNotices.count()) await closeNotices.first().click();
+    await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("4534-success.png") });
+    expect(mutations).toBe(1); // すべて合成route、実DDLなし。
+  });
+}

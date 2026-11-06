@@ -1769,26 +1769,21 @@ class IngestionPipeline:
             extraction_recipe_id = await self._persist_extraction_layer(
                 document_id, source_profile, extraction
             )
-            if (manage_document_state or self._recipe_id is not None) and (
+            # レシピの無い取込は _persist_extraction_layer が拒否済みなので、ここではレシピがある。
+            recipe_id = self._recipe_id
+            if recipe_id is not None and (
                 self._settings.rag_review_gate_enabled or requires_review(quality_report)
             ):
-                # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
-                # candidate モードは REVIEW で止めず索引まで進める。
+                # REVIEW で止める前に抽出をレシピへ保存済み。プレビュー・後段 CHUNK で再利用する。
                 await _raise_if_cancelled(cancel_checker)
-                if self._recipe_id is not None:
-                    await self._oracle.update_document_recipe_status(
-                        recipe_id=self._recipe_id,
-                        status=FileStatus.REVIEW,
-                        active_extraction_recipe_id=extraction_recipe_id,
-                    )
-                    detail = await self._oracle.get_document(document_id)
-                    if detail is None:
-                        raise IngestionUserError("ドキュメントが見つかりません。")
-                else:
-                    await self._oracle.save_extraction(document_id, extraction)
-                    detail = await self._oracle.update_document_status(
-                        document_id, FileStatus.REVIEW
-                    )
+                await self._oracle.update_document_recipe_status(
+                    recipe_id=recipe_id,
+                    status=FileStatus.REVIEW,
+                    active_extraction_recipe_id=extraction_recipe_id,
+                )
+                detail = await self._oracle.get_document(document_id)
+                if detail is None:
+                    raise IngestionUserError("ドキュメントが見つかりません。")
                 record_ingestion("review", 0)
                 return detail
             return await self._run_index_phase(
@@ -1855,113 +1850,76 @@ class IngestionPipeline:
         document_id: str,
         source_profile: SourceProfile | None,
         extraction: StructuredExtraction,
-    ) -> str | None:
-        """抽出を extraction 層(rag_document_extractions)へ正本として upsert する。
+    ) -> str:
+        """正式レシピの抽出を保存してから、その抽出 pointer を切り替える。
 
-        extraction_recipe_id = hash(source_sha256, preprocess, parser)。chunk_set の親キーで、
-        index 時は同じキーで読み戻す(単一 materialization では owning 抽出と一致)。
-        recipe job はレシピ固有 ID に保存してから pointer を切り替える。legacy 経路だけは
-        書込失敗時に従来どおり取込を継続する。
+        source・設定・recipe revision から抽出の版を決める。配信中の版を作り直す場合は
+        build ごとに分離し、保存できなければ後段へ進めない。
         """
+        if self._recipe_id is None:
+            raise IngestionUserError("抽出成果物の保存には正式な文書レシピが必要です。")
         source_sha256 = source_profile.content_sha256 if source_profile is not None else None
         if not source_sha256:
-            if self._recipe_id is not None:
-                raise IngestionUserError("抽出成果物のソースハッシュが未確定です。")
-            return None
-        try:
-            preprocess_profile = _source_derivation_profile(extraction)
-            recipe_settings = (
-                self._settings.model_copy(update={"rag_preprocess_profile": preprocess_profile})
-                if preprocess_profile
-                else self._settings
+            raise IngestionUserError("抽出成果物のソースハッシュが未確定です。")
+        preprocess_profile = _source_derivation_profile(extraction)
+        recipe_settings = (
+            self._settings.model_copy(update={"rag_preprocess_profile": preprocess_profile})
+            if preprocess_profile
+            else self._settings
+        )
+        extraction_recipe_id = compute_extraction_recipe_id(source_sha256, recipe_settings)
+        if self._recipe_revision is None:
+            raise IngestionUserError("レシピ revision が未確定です。")
+        extraction_recipe_id = compute_document_recipe_extraction_id(
+            extraction_recipe_id,
+            self._recipe_id,
+            self._recipe_revision,
+        )
+        served_ids = getattr(self._oracle, "served_extraction_ids", None)
+        if (
+            self._build_id is not None
+            and callable(served_ids)
+            and extraction_recipe_id in await served_ids(document_id)
+        ):
+            extraction_recipe_id = compute_isolated_extraction_id(
+                extraction_recipe_id, self._build_id
             )
-            extraction_recipe_id = compute_extraction_recipe_id(source_sha256, recipe_settings)
-            if self._recipe_id is not None:
-                if self._recipe_revision is None:
-                    raise IngestionUserError("レシピ revision が未確定です。")
-                extraction_recipe_id = compute_document_recipe_extraction_id(
-                    extraction_recipe_id,
-                    self._recipe_id,
-                    self._recipe_revision,
-                )
-                served_ids = getattr(self._oracle, "served_extraction_ids", None)
-                if (
-                    self._build_id is not None
-                    and callable(served_ids)
-                    and extraction_recipe_id in await served_ids(document_id)
-                ):
-                    extraction_recipe_id = compute_isolated_extraction_id(
-                        extraction_recipe_id, self._build_id
-                    )
-            recipe = extraction_recipe_subset(recipe_settings)
-            await self._oracle.upsert_document_extraction_artifact(
-                document_id=document_id,
-                extraction_recipe_id=extraction_recipe_id,
-                source_sha256=source_sha256,
-                recipe_subset=recipe,
-                extraction=extraction.to_document_payload(),
-                status="materialized",
-            )
-            if self._recipe_id is not None:
-                await self._oracle.update_document_recipe_status(
-                    recipe_id=self._recipe_id,
-                    status=FileStatus.INGESTING,
-                    active_extraction_recipe_id=extraction_recipe_id,
-                )
-            return extraction_recipe_id
-        except Exception:
-            if self._recipe_id is not None:
-                raise
-            logger.warning(
-                "extraction 層への書込に失敗(取込は継続)。document_id=%s",
-                document_id,
-                exc_info=True,
-            )
-            return None
+        recipe = extraction_recipe_subset(recipe_settings)
+        await self._oracle.upsert_document_extraction_artifact(
+            document_id=document_id,
+            extraction_recipe_id=extraction_recipe_id,
+            source_sha256=source_sha256,
+            recipe_subset=recipe,
+            extraction=extraction.to_document_payload(),
+            status="materialized",
+        )
+        await self._oracle.update_document_recipe_status(
+            recipe_id=self._recipe_id,
+            status=FileStatus.INGESTING,
+            active_extraction_recipe_id=extraction_recipe_id,
+        )
+        return extraction_recipe_id
 
     async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
-        """承認済み文書の抽出を extraction 層(正本)から読む。無ければ legacy 列へ縮退。
-
-        index 時の設定から extraction_recipe_id を再計算して新表を引く。単一 materialization では
-        extract 時の owning 抽出と一致。読み失敗・未登録は detail.extraction(legacy)へ縮退。
-        """
-        if self._recipe_id is not None:
-            recipe = await self._oracle.get_document_recipe(detail.id, self._recipe_id)
-            extraction_recipe_id = (
-                str(recipe.get("active_extraction_recipe_id"))
-                if recipe is not None and recipe.get("active_extraction_recipe_id")
-                else None
-            )
-            if extraction_recipe_id is None:
-                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-            row = await self._oracle.get_document_extraction_artifact(
-                document_id=detail.id,
-                extraction_recipe_id=extraction_recipe_id,
-            )
-            payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
-            if payload is None:
-                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-            return _validate_structured_extraction_payload(payload)
-
-        source_sha256 = detail.content_sha256
-        if source_sha256:
-            try:
-                extraction_recipe_id = compute_extraction_recipe_id(source_sha256, self._settings)
-                row = await self._oracle.get_document_extraction_artifact(
-                    document_id=detail.id,
-                    extraction_recipe_id=extraction_recipe_id,
-                )
-            except Exception:  # noqa: BLE001 — 縮退して legacy 列から読む。
-                logger.warning("extraction 層の読込に失敗、legacy へ縮退。", exc_info=True)
-                row = None
-            payload = (
-                _coerce_extraction_payload(row.get("extraction_json")) if row else None
-            ) or _coerce_extraction_payload(detail.extraction)
-            if payload:
-                return _validate_structured_extraction_payload(payload)
-        if not detail.extraction:
+        """指定レシピが保持する抽出の版だけを読む。"""
+        if self._recipe_id is None:
+            raise IngestionUserError("保存済み抽出の続行にはレシピの指定が必要です。")
+        recipe = await self._oracle.get_document_recipe(detail.id, self._recipe_id)
+        extraction_recipe_id = (
+            str(recipe.get("active_extraction_recipe_id"))
+            if recipe is not None and recipe.get("active_extraction_recipe_id")
+            else None
+        )
+        if extraction_recipe_id is None:
             raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-        return _validate_structured_extraction_payload(detail.extraction)
+        row = await self._oracle.get_document_extraction_artifact(
+            document_id=detail.id,
+            extraction_recipe_id=extraction_recipe_id,
+        )
+        payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
+        if payload is None:
+            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+        return _validate_structured_extraction_payload(payload)
 
     async def index_reviewed(
         self,

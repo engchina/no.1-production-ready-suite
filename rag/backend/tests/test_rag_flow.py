@@ -124,6 +124,24 @@ def _create_document_with_source_metadata(
     )
 
 
+async def _formal_chunk_set(oracle: OracleClient, document: DocumentDetail, recipe_id: str) -> str:
+    """実際に作成された文書・recipeへ候補版を結び付ける。"""
+    chunk_set_id = hashlib.sha256(f"synthetic:{document.id}:{recipe_id}".encode()).hexdigest()
+    await oracle.upsert_chunk_set(
+        chunk_set_id=chunk_set_id, document_id=document.id, recipe_id=recipe_id
+    )
+    return chunk_set_id
+
+
+def _generic_source_profile(document: DocumentDetail) -> SourceProfile:
+    """原本hashを正式に渡し、旧None対照のgeneric解析方針を保持する。"""
+    from app.api.routes.documents import _source_profile_for_detail
+
+    return _source_profile_for_detail(document).model_copy(
+        update={"parser_profile": "enterprise_ai_generic"}
+    )
+
+
 def _run_ingestion_and_get_job(
     document_id: str,
     *,
@@ -287,12 +305,21 @@ async def test_ingestion_records_trace_spans_without_payload_text(
         "app.rag.ingestion.record_ingestion_stage",
         lambda stage, outcome, seconds: stage_metrics.append((stage, outcome, seconds)),
     )
-    pipeline = IngestionPipeline(genai=StubEmbeddingClient(), oracle=oracle)
+    recipe = await oracle.ensure_default_document_recipe(document.id)
+    chunk_set_id = await _formal_chunk_set(oracle, document, str(recipe["recipe_id"]))
+    pipeline = IngestionPipeline(
+        genai=StubEmbeddingClient(),
+        oracle=oracle,
+        recipe_id=str(recipe["recipe_id"]),
+        recipe_revision=int(str(recipe["config_revision"])),
+    )
 
     detail = await pipeline.ingest(
         document.id,
         source,
         "秘密の規程を抽出する prompt",
+        chunk_set_id=chunk_set_id,
+        source_profile=_generic_source_profile(document),
         prepared_artifact=_prepared_source_artifact(
             document, source, content_type="application/octet-stream"
         ),
@@ -377,7 +404,14 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
         file_size_bytes=7,
         content_sha256=hashlib.sha256(b"pdfdata").hexdigest(),
     )
-    pipeline = IngestionPipeline(genai=StubEmbeddingClient(), oracle=oracle)
+    recipe = await oracle.ensure_default_document_recipe(document.id)
+    chunk_set_id = await _formal_chunk_set(oracle, document, str(recipe["recipe_id"]))
+    pipeline = IngestionPipeline(
+        genai=StubEmbeddingClient(),
+        oracle=oracle,
+        recipe_id=str(recipe["recipe_id"]),
+        recipe_revision=int(str(recipe["config_revision"])),
+    )
     source_profile = SourceProfile(
         original_file_name="layout.pdf",
         sanitized_file_name="layout.pdf",
@@ -396,6 +430,7 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
         b"pdfdata",
         "本文を抽出してください。",
         content_type="application/pdf",
+        chunk_set_id=chunk_set_id,
         source_profile=source_profile,
         prepared_artifact=_prepared_source_artifact(
             document, b"pdfdata", content_type="application/pdf"
@@ -419,7 +454,14 @@ async def test_ingestion_records_error_trace_span_without_error_message(
     """取込 stage 失敗は error_type だけを trace に残す。"""
     oracle = OracleClient()
     document = await _create_text_document(oracle, "trace-error.txt", b"test")
-    pipeline = IngestionPipeline(genai=FailingEmbeddingClient(), oracle=oracle)
+    recipe = await oracle.ensure_default_document_recipe(document.id)
+    chunk_set_id = await _formal_chunk_set(oracle, document, str(recipe["recipe_id"]))
+    pipeline = IngestionPipeline(
+        genai=FailingEmbeddingClient(),
+        oracle=oracle,
+        recipe_id=str(recipe["recipe_id"]),
+        recipe_revision=int(str(recipe["config_revision"])),
+    )
 
     with (
         caplog.at_level(logging.INFO, logger="app.trace"),
@@ -429,6 +471,8 @@ async def test_ingestion_records_error_trace_span_without_error_message(
             document.id,
             b"test",
             "prompt",
+            chunk_set_id=chunk_set_id,
+            source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
                 document, b"test", content_type="application/octet-stream"
             ),
@@ -477,13 +521,22 @@ async def test_ingestion_normalizes_untrusted_document_type_in_logs(
     monkeypatch.setattr(ParserServiceClient, "runner", sensitive_runner)
     oracle = OracleClient()
     document = await _create_text_document(oracle, "unsafe-document-type.txt", b"test")
-    pipeline = IngestionPipeline(genai=StubEmbeddingClient(), oracle=oracle)
+    recipe = await oracle.ensure_default_document_recipe(document.id)
+    chunk_set_id = await _formal_chunk_set(oracle, document, str(recipe["recipe_id"]))
+    pipeline = IngestionPipeline(
+        genai=StubEmbeddingClient(),
+        oracle=oracle,
+        recipe_id=str(recipe["recipe_id"]),
+        recipe_revision=int(str(recipe["config_revision"])),
+    )
 
     with caplog.at_level(logging.INFO):
         detail = await pipeline.ingest(
             document.id,
             b"test",
             "prompt",
+            chunk_set_id=chunk_set_id,
+            source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
                 document, b"test", content_type="application/octet-stream"
             ),
@@ -530,7 +583,14 @@ async def test_ingestion_redacts_internal_error_messages(
     oracle = OracleClient()
     with audit_request_context():
         document = await _create_text_document(oracle, "internal-error.txt", b"test")
-        pipeline = IngestionPipeline(genai=FailingEmbeddingClient(), oracle=oracle)
+        recipe = await oracle.ensure_default_document_recipe(document.id)
+        chunk_set_id = await _formal_chunk_set(oracle, document, str(recipe["recipe_id"]))
+        pipeline = IngestionPipeline(
+            genai=FailingEmbeddingClient(),
+            oracle=oracle,
+            recipe_id=str(recipe["recipe_id"]),
+            recipe_revision=int(str(recipe["config_revision"])),
+        )
 
         with (
             caplog.at_level(logging.INFO, logger="app.audit"),
@@ -540,6 +600,8 @@ async def test_ingestion_redacts_internal_error_messages(
                 document.id,
                 b"test",
                 "prompt",
+                chunk_set_id=chunk_set_id,
+                source_profile=_generic_source_profile(document),
                 prepared_artifact=_prepared_source_artifact(
                     document, b"test", content_type="application/octet-stream"
                 ),
@@ -585,19 +647,26 @@ async def test_candidate_mode_isolates_document_state_and_serving(monkeypatch: M
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
         )
+        recipe = await oracle.ensure_default_document_recipe(document.id)
         pipeline = IngestionPipeline(
             genai=StubEmbeddingClient(),
             oracle=oracle,
+            recipe_id=str(recipe["recipe_id"]),
+            recipe_revision=int(str(recipe["config_revision"])),
             settings=settings,
         )
 
         # 通常取込で serving chunk_set を作り、配信に確定する(reconcile 相当)。
         serving_cs = "cs_serving_aaaaaaaa"
+        await oracle.upsert_chunk_set(
+            chunk_set_id=serving_cs, document_id=document.id, recipe_id=str(recipe["recipe_id"])
+        )
         await pipeline.ingest(
             document.id,
             b"test",
             "prompt",
             chunk_set_id=serving_cs,
+            source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
                 document, b"test", content_type="application/octet-stream"
             ),
@@ -614,17 +683,24 @@ async def test_candidate_mode_isolates_document_state_and_serving(monkeypatch: M
         assert (await oracle.get_document(document.id)).status == FileStatus.INDEXED  # type: ignore[union-attr]
 
         async def refuse_save(*args: Any, **kwargs: Any) -> Any:
-            raise AssertionError("保存しないcandidateがpreprocess保存へ入った")
+            raise AssertionError("準備済みcandidateがpreprocess保存へ入った")
 
         monkeypatch.setattr(pipeline, "_save_preprocess_artifact", refuse_save)
 
         # candidate モードで別 chunk_set を materialize(配信は触らない)。
         candidate_cs = "cs_candidate_bbbbbb"
+        await oracle.upsert_chunk_set(
+            chunk_set_id=candidate_cs, document_id=document.id, recipe_id=str(recipe["recipe_id"])
+        )
         await pipeline.ingest(
             document.id,
             b"test",
             "prompt",
             chunk_set_id=candidate_cs,
+            source_profile=_generic_source_profile(document),
+            prepared_artifact=_prepared_source_artifact(
+                document, b"test", content_type="application/octet-stream"
+            ),
             manage_document_state=False,
             record_outcome=False,
         )
@@ -648,6 +724,16 @@ async def test_candidate_mode_isolates_document_state_and_serving(monkeypatch: M
         candidate_row = await oracle.get_chunk_set(candidate_cs)
         assert serving_row is not None and int(str(serving_row["is_serving"])) == 1
         assert candidate_row is not None and int(str(candidate_row["is_serving"])) == 0
+        assert serving_row["recipe_id"] == candidate_row["recipe_id"] == recipe["recipe_id"]
+        saved_recipe = await oracle.get_document_recipe(document.id, str(recipe["recipe_id"]))
+        assert saved_recipe is not None and saved_recipe["active_extraction_recipe_id"]
+        assert (
+            await oracle.get_document_extraction_artifact(
+                document_id=document.id,
+                extraction_recipe_id=str(saved_recipe["active_extraction_recipe_id"]),
+            )
+            is not None
+        )
 
 
 async def test_candidate_mode_failure_does_not_error_document() -> None:
@@ -662,17 +748,35 @@ async def test_candidate_mode_failure_does_not_error_document() -> None:
             content_sha256=hashlib.sha256(b"test").hexdigest(),
         )
         await oracle.update_document_status(document.id, FileStatus.INDEXED)
+        recipe = await oracle.ensure_default_document_recipe(document.id)
         pipeline = IngestionPipeline(
             genai=FailingEmbeddingClient(),
             oracle=oracle,
+            recipe_id=str(recipe["recipe_id"]),
+            recipe_revision=int(str(recipe["config_revision"])),
+            settings=Settings.model_construct(
+                rag_parser_adapter_backend="unstructured",
+                rag_review_gate_enabled=False,
+                rag_auto_parse_after_preprocess_enabled=True,
+            ),
         )
 
-        with pytest.raises(RuntimeError):
+        await oracle.upsert_chunk_set(
+            chunk_set_id="cs_candidate_fail00",
+            document_id=document.id,
+            recipe_id=str(recipe["recipe_id"]),
+        )
+
+        with pytest.raises(RuntimeError, match="INV-SECRET"):
             await pipeline.ingest(
                 document.id,
                 b"test",
                 "prompt",
                 chunk_set_id="cs_candidate_fail00",
+                source_profile=_generic_source_profile(document),
+                prepared_artifact=_prepared_source_artifact(
+                    document, b"test", content_type="application/octet-stream"
+                ),
                 manage_document_state=False,
                 record_outcome=False,
             )

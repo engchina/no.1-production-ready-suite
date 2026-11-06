@@ -803,6 +803,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
           const summary = page.getByTestId("run-history-summary");
           const failure = page.getByTestId("run-history-failure");
           await expect(failure).toContainText(item.expected);
+          await expect(failure.locator("dt").filter({ hasText: /^原因$/ }).locator("+ dd")).toContainText(item.expected);
           await expect(failure).toContainText("実行 ID");
           await expect(failure).not.toContainText("synthetic-private-token");
           await expect(failure).not.toContainText("synthetic.invalid");
@@ -882,8 +883,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
     await page.goto("/history/run-1");
     await expect(fact("model")).toHaveText("model-a、model-rewrite");
-    await expect(fact("tokens")).toHaveText("13,500 token");
-    await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 token）");
+    await expect(fact("tokens")).toHaveText("13,500 トークン");
+    await expect(summary.locator('[data-run-fact="tokens"] dt')).toHaveText("トークン数");
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 トークン）");
+      await summary.screenshot({ path: testInfo.outputPath(`token-labels-${theme}.png`) });
+    }
+    await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 トークン）");
     expect(await factOrder()).toEqual(
       expect.arrayContaining(["target", "model", "tokens", "modelCalls", "citations", "runId"])
     );
@@ -896,16 +903,16 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history/run-2");
     await expect(fact("kind")).toHaveText("RAG 検索");
     await expect(fact("model")).toHaveText("model-a");
-    await expect(fact("tokens")).toHaveText("9,000 token（一部計測）");
-    await expect(fact("modelCalls")).toHaveText("3 回（うち 2 回を計測。入力 12,000 / 出力 1,500 token）");
+    await expect(fact("tokens")).toHaveText("9,000 トークン（一部計測）");
+    await expect(fact("modelCalls")).toHaveText("3 回（うち 2 回を計測。入力 12,000 / 出力 1,500 トークン）");
     await expectNoPageOverflow(page);
     await summary.screenshot({ path: testInfo.outputPath("summary-usage-search.png") });
 
     await page.goto("/history/run-4");
     await expect(fact("kind")).toHaveText("RAG 検索");
     await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
-    await expect(fact("tokens")).toHaveText("0 token");
-    await expect(fact("modelCalls")).toHaveText("0 回（入力 0 / 出力 0 token）");
+    await expect(fact("tokens")).toHaveText("0 トークン");
+    await expect(fact("modelCalls")).toHaveText("0 回（入力 0 / 出力 0 トークン）");
 
     await page.goto("/history/run-6");
     await expect(fact("kind")).toHaveText("RAG 検索");

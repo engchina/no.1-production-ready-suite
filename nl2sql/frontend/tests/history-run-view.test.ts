@@ -262,7 +262,7 @@ test("model usage: Enterprise AI は記録した数、Select AI は数を作ら�
   assert.deepEqual(measured, {
     model: "model-a",
     usage: { tokens: 1280, note: null },
-    modelCalls: "2 回（入力 1,200 / 出力 80 token）",
+    modelCalls: "2 回（入力 1,200 / 出力 80 トークン）",
     unmeasuredCalls: null,
   });
 
@@ -295,7 +295,7 @@ test("model usage: Enterprise AI は記録した数、Select AI は数を作ら�
     },
   });
   assert.deepEqual(mixed.usage, { tokens: 12, note: "一部計測" });
-  assert.equal(mixed.modelCalls, "1 回（うち 1 回を計測。入力 10 / 出力 2 token）");
+  assert.equal(mixed.modelCalls, "1 回（うち 1 回を計測。入力 10 / 出力 2 トークン）");
   assert.equal(mixed.unmeasuredCalls, "Select AI Agent（データベースの中で呼ぶモデル）");
 
   // この機能より前の行: 0 にしない。

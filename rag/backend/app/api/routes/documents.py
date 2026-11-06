@@ -3584,29 +3584,20 @@ def _snapshot_used_removed_chunking_strategy(row: Mapping[str, object] | None) -
 async def list_document_ingestion_segments(
     document_id: str,
 ) -> ApiResponse[list[IngestionSegment]]:
-    """文書 preview workspace 用に取込 segment/checkpoint 状態を返す。"""
+    """文書 preview workspace 用に、保存済みの取込 segment/checkpoint の状態を返す。
+
+    保存済みの segment が無ければ空の一覧を返し、文書の行の抽出から組み立てない。再取込で
+    checkpoint を消した後も、文書の行には前回の job の抽出が残るため（#4185）。
+    """
     oracle = OracleClient()
-    # 取込中にポーリングされるため、保存済みの segment があれば JSON 列を読まない(#341)。
+    # 取込中にポーリングされるため、JSON 列を読まない要約で存在を確かめる(#341)。
     summary = await oracle.get_document_summary(document_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    try:
-        persisted_segments = await oracle.list_ingestion_segments(document_id)
-    except Exception:
-        persisted_segments = []
-    if persisted_segments:
-        return ApiResponse(
-            data=[
-                _segment_with_progress_defaults(segment, summary) for segment in persisted_segments
-            ]
-        )
-    # 保存済みの segment が無い旧データだけ、抽出結果のページ範囲から segment を組み立てる。
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
-    jobs = await oracle.list_document_ingestion_jobs(document_id)
-    return ApiResponse(data=_document_ingestion_segments(detail, jobs, effective_settings))
+    persisted_segments = await oracle.list_ingestion_segments(document_id)
+    return ApiResponse(
+        data=[_segment_with_progress_defaults(segment, summary) for segment in persisted_segments]
+    )
 
 
 def _segment_with_progress_defaults(
@@ -4510,21 +4501,15 @@ async def _resolve_ingestion_settings(
     レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
     旧文書列の設定で補わず停止する。
     """
-    config: DocumentProcessingConfig | None = None
-    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
-    get_recipe = getattr(oracle, "get_document_recipe", None)
-    if recipe_id is None and callable(ensure_recipe):
-        recipe_id = str((await ensure_recipe(document_id))["recipe_id"])
-    if recipe_id is not None and callable(get_recipe):
-        row = await get_recipe(document_id, recipe_id)
-        if row is None:
-            raise HTTPException(
-                status_code=404,
-                detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
-            )
-        config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    if config is None:
-        config = await oracle.get_document_processing_config(document_id)
+    if recipe_id is None:
+        recipe_id = str((await oracle.ensure_default_document_recipe(document_id))["recipe_id"])
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
+        )
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective, _resolved = _merge_document_processing_config(config)
     return effective, config
 
@@ -4927,15 +4912,11 @@ async def _reset_document_outputs_for_extract(
     clear_preprocess_artifact: bool = False,
 ) -> None:
     """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
-    reset_outputs = getattr(oracle, "reset_document_ingestion_outputs", None)
-    if callable(reset_outputs):
-        await reset_outputs(
-            document_id,
-            status=FileStatus.UPLOADED,
-            clear_preprocess_artifact=clear_preprocess_artifact,
-        )
-        return
-    await oracle.update_document_status(document_id, FileStatus.UPLOADED)
+    await oracle.reset_document_ingestion_outputs(
+        document_id,
+        status=FileStatus.UPLOADED,
+        clear_preprocess_artifact=clear_preprocess_artifact,
+    )
 
 
 def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
@@ -4951,178 +4932,6 @@ def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
         duplicate_of_document_id=detail.duplicate_of_document_id,
         data=None,
     )
-
-
-def _document_ingestion_segments(
-    detail: DocumentDetail,
-    jobs: list[IngestionJob],
-    effective_settings: Settings | None = None,
-) -> list[IngestionSegment]:
-    """保存済み extraction/job から segment view を推定する。"""
-    source_profile = _source_profile_for_detail(detail)
-    page_start, page_end = _document_page_range(detail.extraction)
-    latest_job = max(jobs, key=lambda job: job.queued_at, default=None)
-    attempt_count = latest_job.attempt_count if latest_job is not None else 0
-    status = _segment_status_from_detail(detail, latest_job)
-    error_message = detail.error_message or (latest_job.error_message if latest_job else None)
-    parser_backend = _parser_backend_from_extraction(detail.extraction, source_profile)
-    parser_profile = _parser_profile_from_extraction(detail.extraction, source_profile)
-    progress_unit = "page" if page_start is not None and page_end is not None else "source"
-    planned_parser = _planned_parser_backend_for_unmaterialized_extract(
-        detail,
-        latest_job,
-        effective_settings,
-    )
-    if planned_parser is not None:
-        parser_backend = planned_parser
-        parser_profile = planned_parser
-    return [
-        IngestionSegment(
-            segment_id=f"{detail.id}:source",
-            document_id=detail.id,
-            status=status,
-            parser_backend=parser_backend,
-            parser_profile=parser_profile,
-            page_start=page_start,
-            page_end=page_end,
-            progress_unit=progress_unit,
-            progress_start=page_start,
-            progress_end=page_end,
-            attempt_count=attempt_count,
-            artifact_path=(
-                _extraction_artifact_path(detail.extraction) or detail.object_storage_path
-            ),
-            error_code="ingestion_error" if error_message else None,
-            error_message=error_message,
-        )
-    ]
-
-
-def _planned_parser_backend_for_unmaterialized_extract(
-    detail: DocumentDetail,
-    latest_job: IngestionJob | None,
-    effective_settings: Settings | None,
-) -> str | None:
-    """未実体化の抽出では upload 時判定ではなく現在の明示 parser を表示に使う。"""
-    if effective_settings is None or _extraction_has_parser_context(detail.extraction):
-        return None
-    planned = _selected_parser_backend(effective_settings)
-    if planned is None:
-        return None
-    if (
-        latest_job is not None
-        and latest_job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
-        and latest_job.status
-        in {
-            IngestionJobStatus.QUEUED,
-            IngestionJobStatus.RUNNING,
-            IngestionJobStatus.FAILED,
-        }
-    ):
-        return planned
-    if detail.status in {
-        FileStatus.UPLOADED,
-        FileStatus.PREPROCESSING,
-        FileStatus.INGESTING,
-        FileStatus.ERROR,
-    }:
-        return planned
-    return None
-
-
-def _selected_parser_backend(settings: Settings) -> str | None:
-    """Settings の明示 parser backend を表示用に返す。local は未選択として扱う。"""
-    selected = str(getattr(settings, "rag_parser_adapter_backend", "local")).strip()
-    if not selected or selected == "local":
-        return None
-    return selected[:80]
-
-
-def _extraction_has_parser_context(extraction: Mapping[str, object]) -> bool:
-    """保存済み extraction に実 parser 情報があるか判定する。"""
-    for container_name in ("quality_report", "parser_artifacts"):
-        container = extraction.get(container_name)
-        if not isinstance(container, Mapping):
-            continue
-        for key in ("parser_backend", "parser_profile", "source_parser", "external_adapter"):
-            value = container.get(key)
-            if isinstance(value, str) and value.strip():
-                return True
-    return False
-
-
-def _document_page_range(extraction: Mapping[str, object]) -> tuple[int | None, int | None]:
-    """extraction payload からページ範囲を推定する。"""
-    pages: set[int] = set()
-    raw_pages = extraction.get("pages")
-    if isinstance(raw_pages, list):
-        for page in raw_pages:
-            if isinstance(page, Mapping):
-                page_number = page.get("page_number")
-                if isinstance(page_number, int) and page_number >= 1:
-                    pages.add(page_number)
-    raw_elements = extraction.get("elements")
-    if isinstance(raw_elements, list):
-        for element in raw_elements:
-            if isinstance(element, Mapping):
-                page_number = element.get("page_number")
-                if isinstance(page_number, int) and page_number >= 1:
-                    pages.add(page_number)
-    raw_tables = extraction.get("tables")
-    if isinstance(raw_tables, list):
-        pages.update(_page_numbers_from_mappings(raw_tables))
-    raw_assets = extraction.get("assets")
-    if isinstance(raw_assets, list):
-        pages.update(_page_numbers_from_mappings(raw_assets))
-    if not pages:
-        return None, None
-    return min(pages), max(pages)
-
-
-def _page_numbers_from_mappings(items: list[object]) -> set[int]:
-    """tables/assets の first-class metadata からページ番号を集める。"""
-    pages: set[int] = set()
-    for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        page_number = item.get("page_number")
-        if isinstance(page_number, int) and not isinstance(page_number, bool) and page_number >= 1:
-            pages.add(page_number)
-    return pages
-
-
-def _parser_backend_from_extraction(
-    extraction: Mapping[str, object],
-    source_profile: SourceProfile,
-) -> str:
-    """extraction quality/parser artifacts から parser backend を読む。"""
-    for container_name in ("quality_report", "parser_artifacts"):
-        container = extraction.get(container_name)
-        if isinstance(container, Mapping):
-            value = container.get("parser_backend")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return source_profile.parser_backend
-
-
-def _parser_profile_from_extraction(
-    extraction: Mapping[str, object],
-    source_profile: SourceProfile,
-) -> str:
-    """extraction quality/parser artifacts から parser profile を読む。"""
-    for container_name in ("quality_report", "parser_artifacts"):
-        container = extraction.get(container_name)
-        if isinstance(container, Mapping):
-            value = container.get("parser_profile")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            source_parser = container.get("source_parser")
-            if isinstance(source_parser, str) and source_parser.strip():
-                return source_parser.strip()
-            external_adapter = container.get("external_adapter")
-            if isinstance(external_adapter, str) and external_adapter.strip():
-                return external_adapter.strip()
-    return source_profile.parser_profile
 
 
 def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
@@ -5571,24 +5380,6 @@ async def _document_artifact_paths(
         seen.add(normalized)
         deduped.append(normalized)
     return deduped
-
-
-def _segment_status_from_detail(
-    detail: DocumentDetail,
-    latest_job: IngestionJob | None,
-) -> str:
-    """document/job status を segment status に寄せる。"""
-    if latest_job is not None and latest_job.status in {
-        IngestionJobStatus.QUEUED,
-        IngestionJobStatus.RUNNING,
-        IngestionJobStatus.CANCELLED,
-    }:
-        return latest_job.status.value
-    if detail.status == FileStatus.ERROR:
-        return "FAILED"
-    if detail.status == FileStatus.INDEXED:
-        return "SUCCEEDED"
-    return detail.status.value
 
 
 async def _run_ingestion_job(

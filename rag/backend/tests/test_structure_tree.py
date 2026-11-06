@@ -41,14 +41,20 @@ def test_tree_hides_title_alias_of_a_path_tail() -> None:
 
 def test_tree_keeps_title_when_there_is_no_path() -> None:
     tree = _tree(StructureChunkRow(None, section_title="見出しだけ"), StructureChunkRow(None))
-    assert [tree.nodes[item].name for item in tree.roots] == ["見出しだけ"]
+    assert [tree.nodes[item].name for item in tree.roots] == ["見出しだけ", "本文"]
 
 
-def test_tree_skips_a_single_title_only_level() -> None:
-    """文書の題名だけの段を飛ばし、文書の直下を章にする。段が 1 つなら残す。"""
+def test_tree_preserves_a_recorded_title_level_without_inferring_its_role() -> None:
+    """文書題名のtyped区別がないため、記録された階層はすべて残す。"""
     tree = _tree(StructureChunkRow("題名 > 第1章"), StructureChunkRow("題名 > 第2章"))
-    assert [tree.nodes[item].label for item in tree.roots] == ["第1章", "第2章"]
-    assert all(tree.nodes[item].parent_id is None for item in tree.roots)
+    assert tree.roots == [node_id("題名")]
+    assert [tree.nodes[item].label for item in tree.children_of(node_id("題名"))] == [
+        "第1章",
+        "第2章",
+    ]
+    assert all(
+        tree.nodes[item].parent_id == node_id("題名") for item in tree.children_of(node_id("題名"))
+    )
     single = _tree(StructureChunkRow("第1章"))
     assert [single.nodes[item].label for item in single.roots] == ["第1章"]
 

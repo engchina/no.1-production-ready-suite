@@ -271,11 +271,13 @@ async def test_queued_only_recipe_reports_target_without_inventing_active_artifa
                     "document_id": "document-a",
                     "recipe_id": "recipe-a",
                     "language_pack_release_id": "release-b",
+                    "target_version": 7,
                 },
                 {
                     "document_id": "document-a",
                     "recipe_id": "recipe-a",
                     "language_pack_release_id": "release-older",
+                    "target_version": 6,
                 },
             ],
         ]
@@ -292,6 +294,89 @@ async def test_queued_only_recipe_reports_target_without_inventing_active_artifa
     assert used.version is None and used.built_at is None and used.job_id is None
     assert used.relation == LanguagePackIndexRelation.UNRECORDED
     assert used.target_release_id == "release-b"
+    assert used.target_version == 7
     assert uses["document-a"].current_release_id == current.id
     assert "cs.is_active = 1" in fetch.call_args_list[0].args[0]
     assert "j.status IN ('QUEUED', 'RUNNING')" in fetch.call_args_list[1].args[0]
+    assert "LEFT JOIN rag_language_pack_releases target" in fetch.call_args_list[1].args[0]
+
+
+def _active_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "document_id": "document-a",
+        "recipe_id": "recipe-a",
+        "chunk_set_id": "chunks-a",
+        "language_pack_release_id": "release-a",
+        "language_pack_ingest_hash": None,
+        "language_pack_job_id": "job-a",
+        "language_pack_built_at": None,
+        "version": 1,
+        "target_release_id": None,
+    }
+    return {**row, **overrides}
+
+
+def _mock_release_store(monkeypatch: pytest.MonkeyPatch, current: LanguagePackRelease) -> None:
+    monkeypatch.setattr(
+        oracle_module,
+        "LanguagePackReleaseStore",
+        lambda _client: type("Store", (), {"get": AsyncMock(return_value=current)})(),
+    )
+
+
+async def test_active_recipe_reports_target_version_from_pinned_job_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既存の索引を持つレシピにも、構築中の job が固定した版の番号を付ける。"""
+    current = release("release-b", 2)
+    client = oracle_module.OracleClient()
+    active = _active_row(language_pack_ingest_hash=current.ingest_hash + "-old")
+    fetch = AsyncMock(
+        side_effect=[
+            [{**active, "target_release_id": "release-b"}],
+            [
+                {
+                    "document_id": "document-a",
+                    "recipe_id": "recipe-a",
+                    "language_pack_release_id": "release-b",
+                    "target_version": 2,
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    _mock_release_store(monkeypatch, current)
+    uses = await client.document_language_pack_uses(["document-a"], current_release_id=current.id)
+    [used] = uses["document-a"].recipes
+    assert used.chunk_set_id == "chunks-a" and used.release_id == "release-a"
+    assert used.version == 1
+    assert used.relation == LanguagePackIndexRelation.DIFFERENT
+    assert used.target_release_id == "release-b" and used.target_version == 2
+
+
+async def test_active_recipe_without_ingest_hash_is_unrecorded_and_target_row_missing_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """取込設定の hash が無い索引は判定不可のまま返し、版の行が無い対象版の番号を推定しない。"""
+    current = release("release-b", 2)
+    client = oracle_module.OracleClient()
+    fetch = AsyncMock(
+        side_effect=[
+            [_active_row(language_pack_ingest_hash=None, target_release_id="release-gone")],
+            [
+                {
+                    "document_id": "document-a",
+                    "recipe_id": "recipe-a",
+                    "language_pack_release_id": "release-gone",
+                    "target_version": None,
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    _mock_release_store(monkeypatch, current)
+    uses = await client.document_language_pack_uses(["document-a"], current_release_id=current.id)
+    [used] = uses["document-a"].recipes
+    assert used.ingest_hash is None
+    assert used.relation == LanguagePackIndexRelation.UNRECORDED
+    assert used.target_release_id == "release-gone" and used.target_version is None

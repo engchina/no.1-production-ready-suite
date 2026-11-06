@@ -59,6 +59,10 @@ async def refresh_actor() -> Any:
     )
 
 
+class StructureIndexScopeError(LookupError):
+    """指定した文書の一部が、KB に属さないか利用者に見えない（どちらかは区別しない）。"""
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -135,7 +139,13 @@ class StructureIndexJobs:
     def __init__(self) -> None:
         self.tasks: set[asyncio.Task[None]] = set()
 
-    async def start(self, oracle: OracleClient, kb_id: str, mode: str) -> dict[str, Any]:
+    async def start(
+        self,
+        oracle: OracleClient,
+        kb_id: str,
+        mode: str,
+        document_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         store = StructureIndexStore(oracle)
         kb = await oracle.get_knowledge_base(kb_id)
         if kb is None:
@@ -145,7 +155,10 @@ class StructureIndexJobs:
         previous = await store.get(kb_id)
         if mode in {"retry", "continue"} and previous is None:
             raise ValueError("再開する構築の記録がありません。")
-        plan = await structure_index_plan(oracle, kb_id)
+        plan = await structure_index_plan(oracle, kb_id, document_ids=document_ids)
+        # 計画は KB の所属と利用者の権限で絞る。欠けた ID があれば作業を始めない。
+        if document_ids is not None and set(document_ids) - {i["document_id"] for i in plan}:
+            raise StructureIndexScopeError("指定した文書が見つかりません。")
         if mode in {"retry", "continue"}:
             assert previous is not None
             wanted = {

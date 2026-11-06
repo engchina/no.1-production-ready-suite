@@ -63,7 +63,7 @@ function statusData(
 
 function clientWith(data?: unknown, error = false) {
   // 失敗した状態を描くため、mount 時の取り直しをしない。
-  const client = new QueryClient({ defaultOptions: { queries: { retryOnMount: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retryOnMount: false, staleTime: Infinity } } });
   const query = client.getQueryCache().build(client, { queryKey: SYSTEM_TABLES_QUERY_KEY });
   if (data !== undefined) client.setQueryData(SYSTEM_TABLES_QUERY_KEY, data);
   if (error) query.setState({ status: "error", error: new Error("503"), fetchStatus: "idle" });
@@ -134,6 +134,47 @@ describe("判定の helper", () => {
       "settings.database.systemTables.table.objectType.package body",
     );
     expect(systemObjectTypeMessageKey("TEXT_PREFERENCE")).toBeUndefined();
+  });
+});
+
+describe("SystemTablesCard の取得状態と操作可否の分離", () => {
+  it.each([
+    ["成功", statusData("ready"), false],
+    ["404終了", undefined, true],
+    ["再取得失敗・既存データあり", statusData("ready"), true],
+    ["不正な応答で終了", { status: "ready" }, false],
+  ] as const)("%s の後は処理中を解除する", (_label, data, error) => {
+    const html = renderCard(clientWith(data, error));
+    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="false"');
+    if (error && data) {
+      // 取得失敗時は古い状態を根拠に危険な操作を再開しない。
+      expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+      expect(html).toMatch(/<input[^>]*disabled=""/s);
+    }
+  });
+
+  it("初回取得と再取得の間は処理中を示す", () => {
+    expect(renderCard(new QueryClient()).match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="true"');
+    const client = clientWith(statusData("ready"));
+    client.getQueryCache().find({ queryKey: SYSTEM_TABLES_QUERY_KEY })!.setState({ fetchStatus: "fetching" });
+    const html = renderCard(client);
+    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="true"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+  });
+
+  it("DBの操作中は取得完了後も処理中と操作無効を保つ", () => {
+    const data = statusData("ready");
+    data.operation_state.status = "running";
+    const html = renderCard(clientWith(data));
+    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="true"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+  });
+
+  it("閲覧専用の取得完了は処理中でなく、管理操作を追加しない", () => {
+    const html = renderCard(clientWith(statusData("ready")), { canManage: false });
+    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="false"');
+    expect(html).not.toContain("すべて再作成");
+    expect(html).not.toContain("作成・更新</span>");
   });
 });
 

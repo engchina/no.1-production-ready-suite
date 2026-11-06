@@ -2750,10 +2750,10 @@ class OracleClient:
     # ------------------------------------------------------------------
 
     async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
-        """レシピ1が無ければ文書 legacy 状態から補完する(書き込みの経路だけで呼ぶ)。
+        """正式レシピ1を取得し、欠落・利用範囲外なら KeyError にする。
 
-        GET(`list_document_recipes` / `get_document_recipe`)からは呼ばない。レシピ1は文書の登録・
-        migration・ジョブの投入・レシピの追加と編集の transaction で作る(#341)。
+        新規文書の初期レシピは文書登録の transaction で作る。
+        通常の投入・追加・編集では旧文書の状態から復元しない。
         """
 
         def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
@@ -6212,8 +6212,11 @@ class OracleClient:
         targets = await self._fetch_all(
             _render_sql(
                 """
-            SELECT j.document_id, j.recipe_id, j.language_pack_release_id
+            SELECT j.document_id, j.recipe_id, j.language_pack_release_id,
+                target.version AS target_version
             FROM rag_ingestion_jobs j JOIN rag_documents d ON d.document_id = j.document_id
+            LEFT JOIN rag_language_pack_releases target
+                ON target.release_id = j.language_pack_release_id
             WHERE {predicate} AND j.status IN ('QUEUED', 'RUNNING') AND {access}
             ORDER BY j.queued_at DESC
         """,
@@ -6222,17 +6225,26 @@ class OracleClient:
             ),
             _with_tenant_bind(job_binds),
         )
+        # 構築中の対象版の番号は、job が固定した版の行から引く（active の有無で経路を分けない）。
+        target_versions: dict[str, int | None] = {}
         for row in targets:
             use = result[str(row["document_id"])]
             recipe_id = _optional_str(row.get("recipe_id"))
+            target_id = _optional_str(row.get("language_pack_release_id"))
+            if target_id:
+                target_versions.setdefault(target_id, _optional_int(row.get("target_version")))
             if not any(recipe.recipe_id == recipe_id for recipe in use.recipes):
                 use.recipes.append(
                     LanguagePackRecipeUse(
                         recipe_id=recipe_id,
                         relation=LanguagePackIndexRelation.UNRECORDED,
-                        target_release_id=_optional_str(row.get("language_pack_release_id")),
+                        target_release_id=target_id,
                     )
                 )
+        for use in result.values():
+            for recipe in use.recipes:
+                if recipe.target_release_id:
+                    recipe.target_version = target_versions.get(recipe.target_release_id)
         return result
 
     async def list_documents(
@@ -6351,10 +6363,6 @@ class OracleClient:
         summaries = [_to_document_summary(_stored_document_from_row(row)) for row in rows]
         return await self._attach_knowledge_base_refs_to_documents(summaries)
 
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        """アクセス可能な document の extraction JSON だけを返す。"""
-        return await self._list_document_extractions_with_oracle()
-
     async def count_documents(
         self,
         status: FileStatus | None = None,
@@ -6429,61 +6437,6 @@ class OracleClient:
         if row is None:
             return None
         return _to_document_summary(_stored_document_from_row(row))
-
-    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
-        """文書単位の処理レシピ上書きを返す。未設定は全項目継承。"""
-        row = await self._fetch_one(
-            _render_sql(
-                """
-                SELECT processing_config
-                FROM rag_documents
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                access_predicate=_oracle_access_predicate_sql(),
-            ),
-            _with_tenant_bind({"document_id": document_id}),
-        )
-        if row is None:
-            raise KeyError(f"document_id={document_id} は存在しません。")
-        try:
-            return DocumentProcessingConfig.model_validate(
-                _json_loads(row.get("processing_config"))
-            )
-        except Exception:  # noqa: BLE001 - 壊れた永続値は global 継承へ安全に縮退する
-            logger.warning(
-                "文書処理設定の復元に失敗したため global 継承へ縮退します。",
-                exc_info=True,
-            )
-            return DocumentProcessingConfig()
-
-    async def update_document_processing_config(
-        self,
-        document_id: str,
-        config: DocumentProcessingConfig,
-    ) -> DocumentProcessingConfig:
-        """文書単位の処理レシピ上書きを保存する。"""
-        payload = config.model_dump(mode="json", exclude_none=True)
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentProcessingConfig:
-            if _select_document_state(connection, document_id) is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            _execute(
-                connection,
-                """
-                UPDATE rag_documents
-                SET processing_config = :processing_config
-                WHERE document_id = :document_id
-                """,
-                {
-                    "document_id": document_id,
-                    "processing_config": _json_bind(payload),
-                },
-                input_sizes=_json_input_sizes("processing_config"),
-            )
-            return config
-
-        return await self._run_transaction(operation)
 
     async def delete_document(self, document_id: str) -> bool:
         """ドキュメントと関連 chunk/index/ingestion 行を削除する。"""
@@ -6672,12 +6625,6 @@ class OracleClient:
             status=status,
             error_message=error_message,
         )
-
-    async def save_extraction(
-        self, document_id: str, extraction: StructuredExtraction
-    ) -> DocumentDetail:
-        """VLM/LLM の抽出本文を保存する。"""
-        return await self._save_extraction_with_oracle(document_id, extraction)
 
     async def save_index(
         self,
@@ -11393,22 +11340,6 @@ class OracleClient:
         )
         return [item.model_copy(update={"language_pack": uses.get(item.id)}) for item in summaries]
 
-    async def _list_document_extractions_with_oracle(self) -> list[dict[str, object]]:
-        """Oracle document table から extraction JSON だけを取得する。"""
-        where_sql, binds = _oracle_document_where()
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT extraction
-            FROM rag_documents
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return [_json_loads(row.get("extraction")) for row in rows]
-
     async def _count_documents_with_oracle(
         self,
         status: FileStatus | None,
@@ -12033,57 +11964,6 @@ class OracleClient:
             return delete_document_rows(connection, document_id)
 
         return await self._run_transaction(operation, retry_deadlocks=True)
-
-    async def _save_extraction_with_oracle(
-        self,
-        document_id: str,
-        extraction: StructuredExtraction,
-    ) -> DocumentDetail:
-        """Oracle document table へ構造化抽出を保存する。"""
-
-        if release := active_release():
-            extraction = extraction.model_copy(
-                update={
-                    "parser_artifacts": {
-                        **extraction.parser_artifacts,
-                        "language_pack_release_id": release.id,
-                        "language_pack_ingest_hash": release.ingest_hash,
-                    }
-                }
-            )
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET extraction = :extraction
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "extraction": _json_dumps(extraction.to_document_payload()),
-                    }
-                ),
-            )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
-
-        return await self._run_transaction(operation)
 
     @staticmethod
     def _chunk_insert_rows(
@@ -14262,35 +14142,11 @@ def _ensure_default_document_recipe_row(
     connection: OracleConnectionProtocol,
     document_id: str,
 ) -> dict[str, object]:
-    """書き込みの transaction の中で、レシピ1が無ければ文書の状態から作って返す。
-
-    レシピ1があれば MERGE もせず、文書の JSON 列も読まない(ジョブの投入のたびに書かない)。
-    """
+    """利用可能な正式レシピ1を返し、欠落時に旧文書の状態から補完しない。"""
     existing = _select_default_document_recipe(connection, document_id)
-    if existing is not None:
-        return _document_recipe_row(existing)
-    document = _fetch_one(
-        connection,
-        _render_sql(
-            """
-        SELECT
-            d.document_id, d.tenant_id_hash, d.status, d.processing_config,
-            d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at
-        FROM rag_documents d
-        WHERE d.document_id = :document_id
-          AND {access_predicate}
-        """,
-            access_predicate=_oracle_access_predicate_sql(alias="d"),
-        ),
-        _with_tenant_bind({"document_id": document_id}),
-    )
-    if document is None:
-        raise KeyError(f"document_id={document_id} は存在しません。")
-    _merge_default_document_recipe(connection, _default_document_recipe_values(document))
-    created = _select_default_document_recipe(connection, document_id)
-    if created is None:
-        raise RuntimeError("レシピ1の作成に失敗しました。")
-    return _document_recipe_row(created)
+    if existing is None:
+        raise KeyError("既定の処理レシピが見つかりません。")
+    return _document_recipe_row(existing)
 
 
 def _select_knowledge_base(

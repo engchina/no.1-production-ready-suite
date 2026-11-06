@@ -585,6 +585,8 @@ export interface LanguagePackRecipeUse {
   built_at: string | null;
   job_id: string | null;
   target_release_id: string | null;
+  /** 構築中の job が固定した版の番号。版の行が無ければ null（版の数から推定しない）。 */
+  target_version: number | null;
 }
 export interface LanguagePackReprocessingTarget {
   document_id: string;
@@ -1314,6 +1316,17 @@ export interface StructureGraphTreeNode {
 }
 export interface StructureGraphTreePage {
   items: StructureGraphTreeNode[];
+  total: number;
+  offset: number;
+}
+/** 図の章節・本文の節点に結んだ実チャンク（保存順。#4544）。 */
+export interface StructureGraphChunk {
+  chunk_id: string;
+  chunk_index: number;
+  page_number: number | null;
+}
+export interface StructureGraphChunkPage {
+  items: StructureGraphChunk[];
   total: number;
   offset: number;
 }
@@ -4054,6 +4067,8 @@ export const api = {
     request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}`),
   getStructureGraphOverview: (id: string) =>
     request<StructureGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/overview`),
+  getStructureGraphEntityChunks: (id: string, documentId: string, chunkSetId: string, nodeId: string, offset: number, limit: number) =>
+    request<StructureGraphChunkPage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/entity-chunks?${new URLSearchParams({chunk_set_id: chunkSetId, node_id: nodeId, offset: String(offset), limit: String(limit)})}`),
   getStructureGraphTree: (id: string, documentId: string, chunkSetId: string, parent: string | null, offset: number, limit: number) =>
     request<StructureGraphTreePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/tree?chunk_set_id=${encodeURIComponent(chunkSetId)}&offset=${offset}&limit=${limit}${parent ? `&parent=${encodeURIComponent(parent)}` : ""}`),
   locateStructureGraphNode: (id: string, documentId: string, chunkSetId: string, node: string) =>
