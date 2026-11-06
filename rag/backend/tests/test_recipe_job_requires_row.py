@@ -1,4 +1,4 @@
-"""job投入は選択した正式行だけを使い、未指定時の明示初期化と区別する。"""
+"""job投入は選択した正式行だけを使い、未指定でも既存の正式行を必須にする。"""
 
 from collections.abc import Mapping
 from copy import deepcopy
@@ -167,12 +167,13 @@ async def test_low_level_none_recipe_keeps_existing_compatibility() -> None:
     assert connection.calls[1].parameters["recipe_id"] is None
 
 
-async def test_unspecified_record_explicitly_initializes_recipe(
+async def test_unspecified_record_uses_existing_formal_recipe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.api.routes import documents
 
-    client, connection = client_for()
+    row = _recipe_row(recipe_id="formal-slot-one", slot_no=1, config_revision=4)
+    client, connection = client_for(row)
     monkeypatch.setattr(
         documents, "active_release", lambda: SimpleNamespace(id="synthetic-release")
     )
@@ -185,21 +186,43 @@ async def test_unspecified_record_explicitly_initializes_recipe(
         parser_profile="local_text_structure",
         quality_warnings=[],
     )
-    assert job.recipe_id == _default_recipe_id() and job.recipe_revision == 1
-    assert (
-        sum(
-            call.statement.lstrip().startswith("MERGE INTO rag_document_recipes")
-            for call in connection.calls
-        )
-        == 1
-    )
-    assert (
-        sum(
-            call.statement.startswith("INSERT INTO rag_ingestion_jobs") for call in connection.calls
-        )
-        == 1
-    )
+    assert job.recipe_id == "formal-slot-one" and job.recipe_revision == 4
+    assert connection.row == row
+    writes = [call for call in connection.calls if not call.statement.lstrip().startswith("SELECT")]
+    assert len(writes) == 1 and writes[0].statement.startswith("INSERT INTO rag_ingestion_jobs")
+    assert writes[0].parameters["recipe_id"] == "formal-slot-one"
+    assert writes[0].parameters["recipe_revision"] == 4
+    assert not any("MERGE INTO rag_document_recipes" in call.statement for call in connection.calls)
     assert connection.commits == 2 and connection.rollbacks == 0
+
+
+@pytest.mark.parametrize("visible,formal_exists", [(True, False), (False, False), (False, True)])
+async def test_unspecified_record_requires_visible_formal_recipe(
+    monkeypatch: pytest.MonkeyPatch, visible: bool, formal_exists: bool
+) -> None:
+    from app.api.routes import documents
+
+    row = _recipe_row() if formal_exists else None
+    client, connection = client_for(row, visible=visible)
+
+    def unexpected_after_recipe() -> None:
+        raise AssertionError("正式行を取得できない場合は後段へ進まない")
+
+    monkeypatch.setattr(documents, "active_release", unexpected_after_recipe)
+    monkeypatch.setattr(documents, "get_settings", unexpected_after_recipe)
+    with pytest.raises(KeyError, match="既定の処理レシピが見つかりません"):
+        await documents._create_ingestion_job_record(
+            oracle=client,
+            document_id="doc-1",
+            parser_profile="local_text_structure",
+            quality_warnings=[],
+        )
+    assert connection.row == row
+    assert_read_only(connection)
+    assert len(connection.calls) == 1
+    assert "FROM rag_document_recipes" in connection.calls[0].statement
+    assert "JOIN rag_documents d" in connection.calls[0].statement
+    assert connection.calls[0].parameters["document_id"] == "doc-1"
 
 
 @pytest.mark.parametrize("active,revision", [(True, 1), (False, 2)])
