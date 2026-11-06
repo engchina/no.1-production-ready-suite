@@ -290,13 +290,13 @@ class StructureIndexStartRequest(BaseModel):
     mode: Literal["missing", "rebuild", "retry", "continue"] = "missing"
 
 
-class StructureGraphBodyChunk(BaseModel):
+class StructureGraphChunk(BaseModel):
     chunk_id: str
     chunk_index: int
     page_number: int | None = None
 
 
-class StructureGraphBodyChunkPage(BaseModel):
-    items: list[StructureGraphBodyChunk] = Field(default_factory=list)
+class StructureGraphChunkPage(BaseModel):
+    items: list[StructureGraphChunk] = Field(default_factory=list)
     total: int = 0
     offset: int = 0

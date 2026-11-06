@@ -371,52 +371,176 @@ async def test_refresh_resolves_references_after_target_document_is_added() -> N
     os.environ.get("GITHUB_ACTIONS") != "true", reason="CI専用Oracleの匿名合成データだけで検証する"
 )
 @pytest.mark.usefixtures("oracle_db")
-async def test_body_chunks_read_actual_saved_links_in_version_scope() -> None:
-    """CI隔離schemaのfixtureが作成行を後始末する。手元/配備先へは接続しない。"""
+async def test_entity_chunks_read_actual_saved_links_in_version_scope() -> None:
+    """章節・本文の節点の chunk を保存順に読み、範囲・版の外は 404（#4544）。
+
+    CI隔離schemaのfixtureが作成行を後始末する。手元/配備先へは接続しない。
+    """
+    from dataclasses import replace
+
     from app.rag.chunking import Chunk
-    from app.rag.graph_index import graph_body_node_id
+    from app.rag.graph_index import build_graph_index, graph_body_node_id
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+    from app.schemas.extraction import StructuredExtraction
+    from tests.test_graph_expansion_oracle import _EMBEDDING
+
+    def metadata(index: int) -> dict[str, Any]:
+        if index == 1:
+            return {"section_path": "合成章 > 本文", "section_title": "本文"}
+        if index >= 28:
+            return {"section_path": "合成章 > 合成節", "section_title": "合成節"}
+        return {}
+
+    def synthetic_chunks(prefix: str, count: int) -> list[Chunk]:
+        return [
+            Chunk(
+                text=f"{prefix}{index}",
+                index=index,
+                start_offset=index * 10,
+                end_offset=index * 10 + 5,
+                metadata={"page_number": index + 1, **metadata(index)},
+            )
+            for index in range(count)
+        ]
 
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-body-{uuid4().hex[:8]}")
-    chunks = [
-        Chunk(
-            text=f"合成本文{index}",
-            index=index,
-            start_offset=index * 10,
-            end_offset=index * 10 + 5,
-            metadata={
-                "page_number": index + 1,
-                **(
-                    {"section_path": "合成章 > 本文", "section_title": "本文"} if index == 1 else {}
-                ),
-            },
-        )
-        for index in range(28)
-    ]
     document, chunk_set = await _indexed_document(
-        client, file_name="synthetic-body.pdf", chunks=chunks, knowledge_base_id=kb.id
+        client,
+        file_name="synthetic-body.pdf",
+        chunks=synthetic_chunks("合成本文", 55),
+        knowledge_base_id=kb.id,
     )
     store = StructureGraphStore(client)
     tree = await store.children(kb.id, document, chunk_set, parent_id=None, offset=0, limit=25)
     body = graph_body_node_id(chunk_set, kb.id)
+    chapter = graph_section_node_id(chunk_set, kb.id, "合成章")
+    section = graph_section_node_id(chunk_set, kb.id, "合成章 > 合成節")
     assert any(node["id"] == body and not node["virtual"] for node in tree["items"])
+    assert any(node["id"] == chapter and node["virtual"] for node in tree["items"])
     found = await store.search(kb.id, "本文", offset=0, limit=25)
     assert {item["id"] for item in found["items"]} == {
         body,
         graph_section_node_id(chunk_set, kb.id, "合成章 > 本文"),
     }
-    first = await store.body_chunks(kb.id, document, chunk_set, offset=0, limit=25)
-    last = await store.body_chunks(kb.id, document, chunk_set, offset=25, limit=25)
-    empty = await store.body_chunks(kb.id, document, chunk_set, offset=1000001, limit=25)
+
+    async def pages(node: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        return (
+            await store.entity_chunks(kb.id, document, chunk_set, node_id=node, offset=0, limit=25),
+            await store.entity_chunks(
+                kb.id, document, chunk_set, node_id=node, offset=25, limit=25
+            ),
+            await store.entity_chunks(
+                kb.id, document, chunk_set, node_id=node, offset=1000001, limit=25
+            ),
+        )
+
+    # 本文: 見出しの無い chunk だけを保存順に。
+    first, last, empty = await pages(body)
     assert first["total"] == last["total"] == empty["total"] == 27
     assert empty["items"] == []
     assert [row["chunk_id"] for row in first["items"] + last["items"]] == [
         f"{document}:{chunk_set}:{index}" for index in range(28) if index != 1
     ]
     assert last["items"][-1]["page_number"] == 28
+    # 章節: その節点に結んだ chunk だけを保存順に（ページの外でも件数を保つ）。
+    first, last, empty = await pages(section)
+    assert first["total"] == last["total"] == empty["total"] == 27
+    assert [row["chunk_id"] for row in first["items"] + last["items"]] == [
+        f"{document}:{chunk_set}:{index}" for index in range(28, 55)
+    ]
+    assert last["items"][-1]["page_number"] == 55
     original = await client.readable_version_chunk(document, last["items"][-1]["chunk_id"])
-    assert original is not None and original.text == "合成本文27"
-    assert original.metadata["page_number"] == 28
+    assert original is not None and original.text == "合成本文54"
+    assert original.metadata["page_number"] == 55
+    # 木だけにある仮想の祖先・文書の節点は chunk を作らない。
+    [document_node] = [
+        item["id"]
+        for item in (await store.overview(kb.id))["documents"]
+        if item["chunk_set_id"] == chunk_set
+    ]
+    for node in (chapter, document_node):
+        with pytest.raises(KeyError):
+            await store.entity_chunks(kb.id, document, chunk_set, node_id=node, offset=0, limit=25)
+    # 別の KB・別の KB の節点の ID・別の版の ID は 404。
     other = await client.create_knowledge_base(name=f"synthetic-body-other-{uuid4().hex[:8]}")
     with pytest.raises(KeyError):
-        await store.body_chunks(other.id, document, chunk_set, offset=0, limit=25)
+        await store.entity_chunks(
+            other.id, document, chunk_set, node_id=section, offset=0, limit=25
+        )
+    foreign = graph_section_node_id(chunk_set, other.id, "合成章 > 合成節")
+    with pytest.raises(KeyError):
+        await store.entity_chunks(kb.id, document, chunk_set, node_id=foreign, offset=0, limit=25)
+    with pytest.raises(KeyError):
+        await store.entity_chunks(
+            kb.id, document, f"cs_missing_{uuid4().hex[:8]}", node_id=section, offset=0, limit=25
+        )
+    # 権限の外の文書・別の tenant は最初の確認で 404（件数を返さない）。
+    base = current_audit_request_context()
+    for context in (
+        replace(base, allowed_document_ids=frozenset({f"synthetic-other-{uuid4().hex}"})),
+        replace(base, tenant_id_hash=uuid4().hex),
+    ):
+        token = set_audit_request_context(context)
+        try:
+            with pytest.raises(KeyError):
+                await store.entity_chunks(
+                    kb.id, document, chunk_set, node_id=section, offset=0, limit=25
+                )
+        finally:
+            reset_audit_request_context(token)
+    # 版を切り替えたら旧版の一覧は 404、開いた旧版の chunk は旧版の内容のまま読める。
+    recipes = await client.list_document_recipes(document)
+    recipe_id = str(recipes[0]["recipe_id"])
+    next_set = f"cs_graph_{uuid4().hex[:16]}"
+    next_chunks = synthetic_chunks("合成改版", 30)
+    await client.upsert_chunk_set(chunk_set_id=next_set, document_id=document, recipe_id=recipe_id)
+    await client.save_index(
+        document,
+        StructuredExtraction(raw_text="本文", confidence=0.9, document_type="手順書"),
+        next_chunks,
+        [_EMBEDDING] * len(next_chunks),
+        chunk_set_id=next_set,
+    )
+    await client.mark_chunk_set_indexed(
+        chunk_set_id=next_set, chunk_count=len(next_chunks), vector_count=len(next_chunks)
+    )
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id,
+        chunk_set_id=next_set,
+        expected_base_chunk_set_id=chunk_set,
+        materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
+    )
+    await client.replace_document_graph_index(
+        document,
+        build_graph_index(
+            document_id=document,
+            knowledge_base_ids=[kb.id],
+            extraction=StructuredExtraction(raw_text="本文"),
+            chunks=next_chunks,
+            chunk_set_id=next_set,
+            document_name="synthetic-body.pdf",
+        ),
+        chunk_set_id=next_set,
+    )
+    with pytest.raises(KeyError):
+        await store.entity_chunks(kb.id, document, chunk_set, node_id=section, offset=0, limit=25)
+    stale = await client.readable_version_chunk(document, f"{document}:{chunk_set}:54")
+    assert stale is not None and stale.text == "合成本文54"
+    assert stale.metadata["chunk_set_id"] == chunk_set
+    current = await store.entity_chunks(
+        kb.id,
+        document,
+        next_set,
+        node_id=graph_section_node_id(next_set, kb.id, "合成章 > 合成節"),
+        offset=0,
+        limit=25,
+    )
+    assert current["total"] == 2
+    assert [row["chunk_id"] for row in current["items"]] == [
+        f"{document}:{next_set}:{index}" for index in (28, 29)
+    ]
