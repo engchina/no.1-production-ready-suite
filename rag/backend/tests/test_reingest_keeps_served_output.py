@@ -13,6 +13,10 @@ class _SectionsOracle:
     async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
         return {"recipe_id": "recipe-1"}
 
+    async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
+        row = await self.get_document_recipe(document_id, "recipe-1")
+        return [{**row, "slot_no": 1, "recipe_id": "recipe-1"}]
+
     async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
         return {"processing_config": {}, "active_extraction_recipe_id": "extraction-new"}
 
