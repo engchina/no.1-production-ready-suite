@@ -2991,10 +2991,9 @@ class OracleClient:
         recipe_id: str,
         config: DocumentProcessingConfig,
     ) -> dict[str, object]:
-        """活動中 job が無いレシピの明示設定を保存し revision を進める。"""
+        """既存の正式レシピに活動中 job が無ければ設定を保存し revision を進める。"""
 
         def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
-            _ensure_recipe_row_if_default(connection, document_id, recipe_id)
             recipe = _select_document_recipe_for_update(connection, document_id, recipe_id)
             if recipe is None:
                 raise KeyError("レシピが見つかりません。")
