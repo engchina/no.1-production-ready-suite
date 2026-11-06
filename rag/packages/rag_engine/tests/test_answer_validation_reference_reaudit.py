@@ -29,6 +29,8 @@ def run(first, second=None, *, deadline=None, answer=ANSWER, citations=CITATIONS
 
     def parse(system, inputs, settings, schema, provider_id=None):
         data = json.loads(inputs)
+        assert "passage_citations" not in data
+        assert "passage_citations" not in system
         calls.append({"system": system, "inputs": data, "schema": schema.model_json_schema()})
         is_reaudit = str(data.get("validation_feedback") or "").startswith(REFERENCE_REAUDIT_FEEDBACK)
         rows = second if is_reaudit else first

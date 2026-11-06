@@ -1179,9 +1179,10 @@ def test_unreferenced_conclusions_are_rechecked_with_evidence_cited_by_other_pas
     assert [claim["source_id"] for claim in result["claim_checks"]] == [f"{PLAN}:1", f"{PLAN}:1", f"{CHANGE}:4", f"{PLAN}:1"]
     assert result["rechecked_passage_ids"] == ["A2", "A6"]
     # 確かめ直しには ID を書かない 2 段落と、他の段落が引いた 2 つの根拠だけを渡す（質問・回答の全文は同じ）。
-    (system, first), (_, recheck) = calls
+    (system, first), (recheck_system, recheck) = calls
     assert "段落に ID が無いことを citation_error にしない" in system
     assert "passage_citations" not in first and "passage_citations" not in recheck
+    assert "passage_citations" not in system and "passage_citations" not in recheck_system
     assert [passage["id"] for passage in first["answer_passages"]] == ["A2", "A4", "A5", "A6"]
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
     assert [item["id"] for item in _documents(recheck)] == [f"{PLAN}:1", f"{CHANGE}:4"]
@@ -2187,6 +2188,8 @@ def test_passages_the_model_calls_non_claims_are_reaudited() -> None:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
+        assert "passage_citations" not in payload
+        assert "passage_citations" not in system
         calls.append(payload)
         if len(calls) == 1:
             return _claim_output(payload, {bold: "not_a_claim", example: "not_a_claim", LIMIT_OWNER: "unsupported"}, schema=schema)
@@ -2317,6 +2320,8 @@ def _figure_validation(statuses: dict[int, tuple[str, str]], recheck: dict[int, 
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
+        assert "passage_citations" not in payload
+        assert "passage_citations" not in system
         evidence = _documents(payload)
         seen["calls"].append(payload)
         if "validation_feedback" not in payload:
