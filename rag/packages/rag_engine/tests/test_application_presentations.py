@@ -166,6 +166,8 @@ def test_generation_calls_the_explanation_once_after_review_and_never_falls_back
     # 理由の段 1 回）の後に、valid な推導 1 件ごとの説明の段 1 回。
     reason = ["reason"] if audit_mode == "none" else []
     assert calls == ["generate", "audit", *reason, *(["explanation"] if called else [])]
+    # 回答の記録の呼び出し回数にも、説明の段を含める。
+    assert response.generation_trace["llm_calls"] == len(calls)
     trace = response.generation_trace["applications"][0]
     assert trace["reasoning"] == ORIGINAL and trace["result"] == RESULT
     assert ORIGINAL not in response.answer_text

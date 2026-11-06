@@ -4012,6 +4012,8 @@ def synthesize_grounded_answer(
             r.get("timing", {}).get("generation_calls", 1)
             + r.get("audit_calls", int(bool(r.get("audit"))))
             + r.get("timing", {}).get("application_review", {}).get("calls", 0)
+            # 論理が valid な推導ごとの説明の段（#4393）。
+            + r.get("timing", {}).get("application_explanation", {}).get("calls", 0)
             for r in rounds
         ),
         "image_fallback": image_decision,

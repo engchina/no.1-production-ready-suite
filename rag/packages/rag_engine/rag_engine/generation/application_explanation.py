@@ -12,6 +12,9 @@
 - 審査済みの結論の数値（Unicode の 10 進数字の連なり。3 桁区切りを除く）がすべて説明にある。
 - 本文の出典行の印で始まる行を含まない（画面が出典行を数えて根拠に結ぶため）。
 
+検査の前に、改行・タブのエスケープの写し（逆斜線と ``n`` / ``r`` / ``t`` の 2 文字。構造化出力の文字列の中で
+モデルが二重にエスケープしたもの）を、入力の原文に同じ写しが無いときだけ制御文字へ戻す（形式の解析。#4567）。
+
 不成立・呼び出しの失敗なら説明だけを隠す。結論と資料の原文はそのまま出し、生成の推導の文へ戻さない。
 """
 
@@ -43,6 +46,8 @@ KEY_LANGUAGE = "回答言語の指定"
 # 入力の原文に無い Latin の語がこの数以上連なれば、既定の言語の説明ではないとみなして隠す。
 LATIN_RUN_WORDS = 3
 _THOUSANDS_SEPARATORS = (",", "，")
+# JSON の文字列のエスケープの写しと、戻す制御文字（長い写しを先に置き換える）。
+_ESCAPED_CONTROLS = (("\\r\\n", "\n"), ("\\n", "\n"), ("\\r", "\n"), ("\\t", "\t"))
 
 
 def language_label(instruction: str | None) -> str:
@@ -178,15 +183,26 @@ def number_runs(text: str) -> list[str]:
     return runs
 
 
+def restore_escaped_controls(text: str, inputs: str) -> str:
+    """改行・タブのエスケープの写しを制御文字へ戻す。入力の原文に同じ写しがあれば、原文の写しと区別できないので変えない。"""
+    if any(escaped in inputs for escaped, _ in _ESCAPED_CONTROLS):
+        return text
+    for escaped, control in _ESCAPED_CONTROLS:
+        text = text.replace(escaped, control)
+    return text
+
+
 def display_gate(explanation: Any, *, question: str, sources: Sequence[str], conclusion: str, default_language: bool) -> dict[str, Any]:
-    """説明を表示してよいかを形式だけで決める。``reason`` は隠した理由のコード。"""
-    if not isinstance(explanation, str) or not explanation.strip():
+    """説明を表示してよいかを形式だけで決める。``reason`` は隠した理由のコード。``text`` は表示する説明（エスケープの写しを戻した後）。"""
+    if not isinstance(explanation, str):
         return {"status": "hidden", "reason": "empty"}
-    text = explanation.strip()
+    joined = "\n".join([question, *sources, conclusion])
+    text = restore_escaped_controls(explanation, joined).strip()
+    if not text:
+        return {"status": "hidden", "reason": "empty"}
     if default_language:
         if not any(_is_kana(ch) for ch in text):
             return {"status": "hidden", "reason": "no_kana"}
-        joined = "\n".join([question, *sources, conclusion])
         if any(words >= LATIN_RUN_WORDS and run not in joined for run, words in latin_runs(text)):
             return {"status": "hidden", "reason": "latin_run_not_in_inputs"}
     have = set(number_runs(text))

@@ -217,7 +217,7 @@ def test_actual_generation_boundary_keeps_source_and_synchronizes_body_summary(v
     # 判定が確定したときだけ理由の段を 1 回足す。説明の段（#4393）は論理が valid な推導だけに 1 回。
     assert calls.count(AuditReason) == (0 if valid is None else 1)
     assert sum(is_explanation_schema(schema) for schema in calls) == (1 if valid else 0)
-    assert result.generation_trace["llm_calls"] == (2 if valid is None else 3)
+    assert result.generation_trace["llm_calls"] == len(calls) == (2 if valid is None else 4 if valid else 3)
     assert SOURCE in result.answer_text
     assert result.generation_trace["applications"][0]["published"] == bool(valid)
     if valid:

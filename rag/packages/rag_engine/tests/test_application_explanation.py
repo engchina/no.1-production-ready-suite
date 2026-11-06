@@ -259,3 +259,44 @@ def test_multiline_markdown_is_kept_for_the_answer_text():
     lines = render_lines([entry], lambda _: "根拠：synthetic.txt", lambda _: None)
     body = "\n".join(lines)
     assert "```\n" in body and body.index("当てはめ：") < body.index("```") < body.index("根拠：synthetic.txt")
+
+
+# ---- 改行などの制御文字のエスケープの写し（#4567） -----------------------------------------------
+
+
+def test_escaped_line_breaks_are_restored_when_the_inputs_have_none():
+    # 合成の再現: モデルが JSON の文字列の中で改行を二重にエスケープし、逆斜線と n の 2 文字が説明に残る。
+    escaped = "原文の値は6と7です。\\n6と7を掛けると 6 × 7 = 42 です。\\r\\n結論は42個です。\\t以上です。"
+    result = gate(escaped)
+    assert result["status"] == "confirmed"
+    assert result["text"] == "原文の値は6と7です。\n6と7を掛けると 6 × 7 = 42 です。\n結論は42個です。\t以上です。"
+    assert "\\" not in result["text"]
+
+
+def test_escape_sequences_present_in_the_inputs_are_kept_verbatim():
+    # 入力の原文に同じ形の逆斜線の連なりがあれば、原文の写し（パス・SQL の文字列など）と区別できないので変えない。
+    sql = "SELECT REPLACE(COL_X, '\\n', ' ') FROM TABLE_X"
+    text = f"次の SQL を原文のまま実行します。{sql}"
+    result = gate(text, conclusion="実行します。", sources=[sql])
+    assert result == {"status": "confirmed", "text": text}
+
+
+def test_restored_line_breaks_are_checked_by_the_citation_line_rule():
+    prefix = explanation.answer_labels().citation_prefix
+    assert gate(f"6と7を掛けると42です。\\n{prefix}原文")["reason"] == "citation_marker_in_text"
+
+
+def test_escaped_line_breaks_reach_the_answer_text_as_real_line_breaks():
+    case = CASES["multiple_rows-r1"]
+    entry = checked(case)
+    escaped = case["recorded_explanation"].replace("です。", "です。\\n", 1)
+
+    def replay(system, prompt, settings, schema, **options):
+        return schema.model_validate({"explanation": escaped})
+
+    explanation.explain_applications(
+        case["question"], [entry], None, parse_text=replay, settings=get_settings(environ={}, dotenv_path=None), provider_id=None
+    )
+    assert entry.presentation["status"] == "confirmed"
+    body = "\n".join(render_lines([entry], lambda _: "根拠：synthetic.txt", lambda _: None))
+    assert "\\n" not in body and case["recorded_explanation"].replace("です。", "です。\n", 1).strip() in body
