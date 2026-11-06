@@ -295,6 +295,7 @@ jobs:
             # backend のテストが読む frontend のファイル（ナビ・権限・i18n の一致、引用の fixture）。backend のテストが
             # frontend のファイルを新しく読んだら、ここに足す（ci_frontend_paths.py が検出する。#1592）。
             rag_backend_frontend:
+              - "rag/frontend/e2e/fixtures/structure-levels-reader.json"
               - "rag/frontend/e2e/fixtures/native-only-rrf-trace.json"
               - "rag/frontend/src/components/layout/nav-config.ts"
               - "rag/frontend/src/lib/i18n.ts"
