@@ -6120,22 +6120,31 @@ async def _finish_ingestion_job_unless_cancelled(
     return finished
 
 
+def _require_recipe_for_prepared(variant: str) -> None:
+    if variant == "prepared":
+        raise HTTPException(
+            status_code=400,
+            detail="処理後ファイルを取得するには、処理レシピを指定したURLを使用してください。",
+        )
+
+
 @router.get("/{document_id}/content")
 async def document_content(
     document_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
 ) -> Response:
-    """原本またはファイル準備後 artifact を返す（文書プレビュー/ダウンロード用）。"""
+    """文書の原本を返す。処理後ファイルはレシピ指定の入口を使う。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    _require_recipe_for_prepared(variant)
     return await document_content_response(
         detail,
         variant=variant,
         disposition=disposition,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -6144,13 +6153,12 @@ async def document_preview_pages(
     document_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
 ) -> ApiResponse[DocumentPreviewPages]:
-    """原本 / 処理後ファイルのページ一覧(PDF をページ画像で表示し、bbox の強調を重ねる。#349)。"""
+    """原本のページ一覧を返す。処理後ファイルはレシピ指定の入口を使う。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    return await _document_preview_pages_response(
-        detail, variant=variant, preprocess_artifact=detail.preprocess_artifact
-    )
+    _require_recipe_for_prepared(variant)
+    return await _document_preview_pages_response(detail, variant=variant, preprocess_artifact=None)
 
 
 @router.get("/{document_id}/preview-pages/{page_number}")
@@ -6160,16 +6168,17 @@ async def document_preview_page_image(
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     dpi: Annotated[int, Query(ge=48, le=288)] = 144,
 ) -> Response:
-    """原本 / 処理後ファイルの 1 ページを PNG で返す(ページの /Rotate を反映した向き)。"""
+    """原本の 1 ページを PNG で返す。処理後ファイルはレシピ指定の入口を使う。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    _require_recipe_for_prepared(variant)
     return await _document_preview_page_image_response(
         detail,
         page_number=page_number,
         variant=variant,
         dpi=dpi,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -6184,8 +6193,9 @@ async def document_recipe_text_window(
         found_detail = await OracleClient().get_document(document_id)
         if found_detail is None:
             raise HTTPException(status_code=404, detail="文書が見つかりません。")
+        _require_recipe_for_prepared(request.variant)
         detail = found_detail
-        artifact = detail.preprocess_artifact
+        artifact = None
     variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
 
     payload: dict[str, Any] = {}
