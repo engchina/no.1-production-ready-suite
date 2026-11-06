@@ -111,9 +111,8 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
 
     def parser(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         # 質問の対象の抽出(#4351)は別に数える(回答ごとに 1 回)。
-        (subject_calls if schema.__name__ == "QuestionMentionAnchors" else calls).append(
-            schema.__name__
-        )
+        name = getattr(schema, "canonical_schema", schema).__name__
+        (subject_calls if name == "QuestionMentionAnchors" else calls).append(name)
         if is_audit_schema(schema):
             data = json.loads(prompt)
             audit_inputs.append(data)
@@ -195,9 +194,10 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     assert sum(name in generation_names for name in calls) == 2
     if mode == "none":
         assert not audit_inputs
-        # 生成・独立の監査の判定・判定の理由を各要求で 1 回ずつ。
-        assert len(calls) == 6
+        # 生成・独立の監査の判定・判定の理由・valid な推導の説明の段（#4393）を各要求で 1 回ずつ。
+        assert len(calls) == 8
         assert calls.count("ApplicationVerdictAudit") == 2 and calls.count("AuditReason") == 2
+        assert calls.count("ApplicationExplanation") == 2
         validator.assert_not_awaited()
     else:
         assert len(audit_inputs) == 2

@@ -167,6 +167,7 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
+from rag_engine.generation.application_explanation import explain_applications
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.crag_support import (
@@ -3710,6 +3711,29 @@ def synthesize_grounded_answer(
                 # 当てはめの監査が支持した結論に置き換えたら、確かめた summary にする。
                 summary_warning="" if step_summary else current.summary_warning,
             )
+    # 採用した回の推導の審査がすべて済んだ後に、論理が valid な推導ごとに説明の段を 1 回呼ぶ（#4393）。
+    # 監査の型（none / standard / detailed）と当てはめの段で同じ。説明の失敗は説明だけを隠し、結論と原文は残す。
+    if current.applications:
+        with _execution_step(
+            "資料をもとに導いた結論の説明を作る", "質問と資料の原文から、結論の導き方を利用者に示す説明を作ります。"
+        ) as explanation_step:
+            explanation_step.input({"question": question, "applications": len(current.applications)})
+            explanation = explain_applications(
+                question,
+                current.applications,
+                getattr(current.draft, "response_language", None),
+                parse_text=parse_text_response,
+                settings=generation_settings,
+                provider_id=provider,
+            )
+            current.timing["application_explanation"] = explanation
+            explanation_step.output(explanation)
+            shown_count = sum(1 for row in explanation.get("results", []) if row.get("status") == "confirmed")
+            if not explanation["calls"]:
+                reason = next((str(row.get("reason")) for row in explanation.get("results", []) if row.get("reason")), "")
+                explanation_step.skip("説明を作らず、結論と資料の原文だけを示します。", reason_code=reason or "no_valid_derivations")
+            else:
+                explanation_step.result(f"説明 {explanation['calls']} 件を作成、表示 {shown_count} 件")
     if image_decision["reason"] == "attempted":
         image_decision["reason"] = (
             "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
@@ -3993,6 +4017,8 @@ def synthesize_grounded_answer(
             r.get("timing", {}).get("generation_calls", 1)
             + r.get("audit_calls", int(bool(r.get("audit"))))
             + r.get("timing", {}).get("application_review", {}).get("calls", 0)
+            # 論理が valid な推導ごとの説明の段（#4393）。
+            + r.get("timing", {}).get("application_explanation", {}).get("calls", 0)
             for r in rounds
         ),
         "image_fallback": image_decision,

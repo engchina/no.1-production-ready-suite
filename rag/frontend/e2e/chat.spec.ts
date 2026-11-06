@@ -3210,6 +3210,48 @@ for (const generated of generatedAnswers) {
   });
 }
 
+// 結論の説明（#4393）は Markdown（段落・箇条書き・コードの囲み）を含む。説明の中の行を回答の項目・根拠の行として
+// 読まず、共通の Markdown の部品で描き、コードは枠の中だけで横にスクロールする。
+for (const theme of ["light", "dark"] as const) {
+  test(`結論の説明の Markdown を共通の部品で描く (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => {
+      window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+    const sql = "SELECT COUNT(*) FROM SYNTHETIC_ITEMS WHERE SYNTHETIC_STATUS = 'ACTIVE' AND SYNTHETIC_REGION IN ('A', 'B', 'C');";
+    const text = [
+      "合成の回答。", "資料により確認できた事項", "・合成の確認には次の SQL を実行します。", "根拠：合成 A.pdf p.1", "",
+      "資料をもとに導いた結論",
+      "・合成の確認には次の SQL を実行します。",
+      "当てはめ：合成の確認には、資料に記載された次の SQL を実行します。", "```", sql, "```",
+      "根拠：合成 A.pdf p.1",
+      "・合成の合計は 3400 です。",
+      "当てはめ：項目ごとに数量と単価を掛けて足します。", "", "1. 項目A: 3 × 800 = 2400", "2. 項目B: 2 × 500 = 1000", "", "合計は 2400 + 1000 = 3400 です。",
+      "根拠：合成 B.pdf p.2",
+    ].join("\n");
+    const citations = ["合成 A.pdf", "合成 B.pdf"].map((file_name, index) => ({
+      ...citationChunk, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: index + 1 },
+    }));
+    const response = { ...assistantMessage, content: text, citations, passage_marks: [], removed_passages: [], answer_warnings: [] };
+    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問。" }, response]);
+    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
+    await expect(page.locator("html")).toHaveClass(theme === "dark" ? /\bdark\b/ : /^(?!.*\bdark\b)/);
+    const answer = page.getByTestId("answer-text");
+    const derived = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料をもとに導いた結論", exact: true }) });
+    const reasoning = derived.getByTestId("answer-application-reasoning");
+    await expect(reasoning).toHaveCount(2);
+    // 説明の中の番号付きの行は回答の項目にならず、根拠の行は項目ごとに 1 つのまま。
+    await expect(derived.getByTestId("answer-citation-link")).toHaveCount(2);
+    await expect(reasoning.nth(0).locator("pre code")).toHaveText(sql);
+    await expect(reasoning.nth(0)).not.toContainText("```");
+    await expect(reasoning.nth(1).locator("ol > li")).toHaveCount(2);
+    await expect(reasoning.nth(1)).toContainText("合計は 2400 + 1000 = 3400 です。");
+    await expectNoPageOverflow(page);
+    await answer.screenshot({ path: testInfo.outputPath(`application-explanation-markdown-${theme}.png`) });
+    await reasoning.nth(0).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`application-explanation-viewport-${theme}.png`) });
+  });
+}
+
 test("保存済みチャットの0spanでも書込欠落を隠さない", {tag:"@responsive"}, async ({page}, testInfo) => {
   await mockChat(page, "ready", [
     {...userMessage, content:"合成の質問"},

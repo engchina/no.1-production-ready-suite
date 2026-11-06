@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
+from rag_engine.generation.application_explanation import is_explanation_schema
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
@@ -109,10 +110,14 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert [step["id"] for step in compiled] == ["common"]
     guide = {**match.summary(), "step_plan": compiled}
     calls: list[tuple[str, str]] = []
+    explanations: list[str] = []
 
     def model(
         system: str, prompt: str, settings: Any, schema: type[BaseModel], **options: Any
     ) -> Any:
+        if is_explanation_schema(schema):
+            explanations.append(prompt)
+            return schema.model_validate({"explanation": "資料の原文に記載された手順です。"})
         if (reply := application_audit_reply(schema, prompt)) is not None:
             return reply
         if schema.__name__ == "QuestionMentionAnchors":
@@ -185,7 +190,7 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert rows[0]["retained_body_chars"] > 0
     assert rows[1]["execution"] == "not_run" and rows[1]["reason"] == "required_budget_exhausted"
     assert acquisition["incomplete_step_ids"] == ["common"]
-    assert len(calls) == 1
+    assert len(calls) == 1 and len(explanations) <= 1
     assert "guide_acquisition:" in calls[0][1] and "incomplete_ref_count" in calls[0][1]
     assert "required_budget_exhausted" in calls[0][1]
     assert BODY in outcome.answer

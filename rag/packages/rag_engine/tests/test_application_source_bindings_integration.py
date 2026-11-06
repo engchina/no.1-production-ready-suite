@@ -143,8 +143,8 @@ def test_actual_generation_audit_reuse_preserves_fullwidth_raw_and_sent_view(mod
             QUESTION, AnswerContext(records=[row], text=raw), settings, image_prompt_mode="text_only"
         ).response
     assert len(observations) == 1
-    # 監査なしの設定では、独立の監査の判定に理由の段が 1 回付く。
-    assert result.generation_trace["llm_calls"] == (3 if mode == "none" else 2)
+    # 監査なしの設定では、独立の監査の判定に理由の段が 1 回付き、valid な推導の説明の段（#4393）が 1 回付く。
+    assert result.generation_trace["llm_calls"] == (4 if mode == "none" else 2)
     assert raw in result.answer_text
 
 
