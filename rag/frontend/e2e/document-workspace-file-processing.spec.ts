@@ -3723,3 +3723,63 @@ for (const initialActive of [null, "old-active"] as const) {
     await page.screenshot({path: testInfo.outputPath(`pending-chunks-${initialActive ?? "first"}.png`), fullPage: true});
   });
 }
+
+for (const theme of ["light", "dark"] as const) {
+  test(`未登録の処理レシピを作成し選択して設定を保存できる (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockDocumentWorkspace(page, { documentStatus: "UPLOADED" });
+    let created = false;
+    let saved = false;
+    const recipe = {
+      recipe_id: "recipe-2", document_id: "doc-1", slot_no: 2, status: "UPLOADED",
+      failed_phase: null, processing_config: {}, effective_processing_config: { vision_enabled: false },
+      preprocess_artifact: null, active_extraction_recipe_id: null, active_chunk_set_id: null,
+      chunk_count: 0, vector_count: 0, config_revision: 1, materialized_revision: null,
+      searchable: false, needs_reprocessing: false, error_message: null, steps: [],
+      created_at: null, updated_at: null, started_at: null, finished_at: null,
+    };
+    await page.route("**/api/documents/doc-1/recipes", async route => {
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({ copy_from_recipe_id: null });
+        created = true;
+        await route.fulfill({ json: { data: recipe, error_messages: [], warning_messages: [] } });
+      } else {
+        await route.fulfill({ json: { data: created ? [{ ...recipe, recipe_id: "recipe-1", slot_no: 1, processing_config: {} }, recipe] : [], error_messages: [], warning_messages: [] } });
+      }
+    });
+    await page.route("**/api/documents/doc-1/recipes/recipe-2", async route => {
+      expect(route.request().method()).toBe("PUT");
+      const config = route.request().postDataJSON();
+      expect(config.vision_enabled).toBe(true);
+      recipe.processing_config = config;
+      saved = true;
+      await route.fulfill({ json: { data: recipe, error_messages: [], warning_messages: [] } });
+    });
+    await page.goto("/documents/doc-1");
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expect(page.getByText("処理レシピがありません", { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`empty-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: "レシピを追加", exact: true }).click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog.getByRole("heading", { name: "処理レシピを追加" })).toBeVisible();
+    await expect(dialog.getByText("選択中のレシピを複製", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("radio", { name: "全体既定から作成" })).toBeChecked();
+    await page.screenshot({ path: testInfo.outputPath(`dialog-${theme}.png`), fullPage: true });
+    await dialog.getByRole("button", { name: "追加する", exact: true }).click();
+    await expect.poll(() => created).toBe(true);
+    await expect(page.getByText("処理レシピがありません", { exact: true })).toHaveCount(0);
+    await expect(page).toHaveURL(/recipe=recipe-2/u);
+    await page.getByRole("button", { name: "処理設定を編集", exact: true }).click();
+    const field = page.locator('[data-config-field="vision_enabled"]').last();
+    await field.getByRole("button", { name: "上書き", exact: true }).click();
+    await field.getByRole("button", { name: "有効", exact: true }).click();
+    await page.getByRole("button", { name: "構築設定を保存", exact: true }).click();
+    await expect.poll(() => saved).toBe(true);
+    await page.getByRole("button", { name: "レシピを追加", exact: true }).click();
+    await expect(dialog.getByRole("radio", { name: "選択中のレシピを複製" })).toBeChecked();
+    await expect(dialog.getByRole("radio", { name: "全体既定から作成" })).not.toBeChecked();
+    await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`saved-${theme}.png`), fullPage: true });
+  });
+}

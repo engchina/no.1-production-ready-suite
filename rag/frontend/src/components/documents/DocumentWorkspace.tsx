@@ -332,6 +332,8 @@ export function DocumentWorkspace({
   const hasSelectedRecipeExtraction = Boolean(selectedRecipe?.active_extraction_recipe_id);
   useEffect(() => {
     if (!selectedRecipeId || requestedRecipeId === selectedRecipeId) return;
+    // 新規作成直後の選択を、古い描画のURL補完で上書きしない。
+    if (new URLSearchParams(window.location.search).get("recipe") !== requestedRecipeId) return;
     const next = new URLSearchParams(searchParams);
     next.set("recipe", selectedRecipeId);
     setSearchParams(next, { replace: true });
