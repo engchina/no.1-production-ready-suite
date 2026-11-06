@@ -4510,21 +4510,15 @@ async def _resolve_ingestion_settings(
     レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
     旧文書列の設定で補わず停止する。
     """
-    config: DocumentProcessingConfig | None = None
-    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
-    get_recipe = getattr(oracle, "get_document_recipe", None)
-    if recipe_id is None and callable(ensure_recipe):
-        recipe_id = str((await ensure_recipe(document_id))["recipe_id"])
-    if recipe_id is not None and callable(get_recipe):
-        row = await get_recipe(document_id, recipe_id)
-        if row is None:
-            raise HTTPException(
-                status_code=404,
-                detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
-            )
-        config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    if config is None:
-        config = await oracle.get_document_processing_config(document_id)
+    if recipe_id is None:
+        recipe_id = str((await oracle.ensure_default_document_recipe(document_id))["recipe_id"])
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
+        )
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective, _resolved = _merge_document_processing_config(config)
     return effective, config
 

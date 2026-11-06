@@ -109,6 +109,7 @@ class FakeWorkspaceOracle:
         self.knowledge_base_assignments: set[tuple[str, str]] = set()
         self.processing_configs: dict[str, DocumentProcessingConfig] = {}
         self.recipes: dict[str, dict[str, object]] = {}
+        self.default_recipe_rows: dict[str, dict[str, object]] = {}
         self.extraction_artifacts: dict[str, dict[str, object]] = {}
         self.chunk_set_chunks: dict[str, list[DocumentChunkView]] = {}
         # 文書の削除の後始末の記録（#2452）。
@@ -149,6 +150,13 @@ class FakeWorkspaceOracle:
             knowledge_bases=knowledge_bases,
         )
         self.documents[document_id] = detail
+        # 正式実装と同じく新規登録時に初期レシピを明示準備する。
+        self.default_recipe_rows[document_id] = {
+            "recipe_id": f"default-{document_id}",
+            "document_id": document_id,
+            "slot_no": 1,
+            "processing_config": {},
+        }
         for knowledge_base in knowledge_bases:
             self.knowledge_base_assignments.add((knowledge_base.id, document_id))
         return detail
@@ -512,10 +520,23 @@ class FakeWorkspaceOracle:
         self.ingestion_jobs[job_id] = updated
         return updated
 
+    async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
+        for row in self.recipes.values():
+            if row.get("document_id") == document_id and row.get("slot_no") == 1:
+                return dict(row)
+        default_row = self.default_recipe_rows.get(document_id)
+        if default_row is None or document_id not in self.documents:
+            raise KeyError("既定の処理レシピが見つかりません。")
+        return dict(default_row)
+
     async def get_document_recipe(
         self, document_id: str, recipe_id: str
     ) -> dict[str, object] | None:
         row = self.recipes.get(recipe_id)
+        if row is None:
+            default = self.default_recipe_rows.get(document_id)
+            if default is not None and default.get("recipe_id") == recipe_id:
+                row = default
         if row is None or row.get("document_id") != document_id:
             return None
         return dict(row)
@@ -523,7 +544,14 @@ class FakeWorkspaceOracle:
     async def update_document_recipe_status(
         self, *, recipe_id: str, status: FileStatus, **kwargs: object
     ) -> None:
-        row = self.recipes.setdefault(recipe_id, {"recipe_id": recipe_id})
+        row = self.recipes.get(recipe_id)
+        if row is None:
+            row = next(
+                (row for row in self.default_recipe_rows.values() if row["recipe_id"] == recipe_id),
+                None,
+            )
+        if row is None:
+            raise KeyError("処理レシピが見つかりません。")
         row["status"] = status.value
         for key, value in kwargs.items():
             if value is not None:
@@ -3224,9 +3252,9 @@ def test_ingestion_segments_fallback_uses_document_parser_before_ingest(
 ) -> None:
     """未取込表示は upload 時 profile ではなく文書の現行 parser 設定を使う。"""
     document_id = _upload("scan-before-ingest.pdf", b"%PDF-1.7\nsample", "application/pdf")
-    fake_document_dependencies.processing_configs[document_id] = DocumentProcessingConfig(
-        parser_adapter_backend="mineru"
-    )
+    fake_document_dependencies.default_recipe_rows[document_id]["processing_config"] = {
+        "parser_adapter_backend": "mineru"
+    }
 
     resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
 
@@ -4414,17 +4442,13 @@ def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
     fake.document_has_served_output = served  # type: ignore[attr-defined]
     fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
 
-    async def default_recipe(_document_id: str) -> dict[str, object]:
-        row: dict[str, object] = {
-            "recipe_id": "recipe-default",
-            "document_id": _document_id,
-            "status": FileStatus.INDEXED.value,
-            "processing_config": {},
-        }
-        fake.recipes["recipe-default"] = row
-        return row
-
-    fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
+    fake.recipes["recipe-default"] = {
+        "recipe_id": "recipe-default",
+        "document_id": document_id,
+        "slot_no": 1,
+        "status": FileStatus.INDEXED.value,
+        "processing_config": {},
+    }
 
     resp = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
 
