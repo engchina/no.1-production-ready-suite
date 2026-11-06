@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+from rag_parser_core.vision_text import answer_text_from_projection
+
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _normalize_text
@@ -282,7 +284,7 @@ def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> Ans
         page=chunk.page_start,
         seq_no=first_seq,
         category="ParentChunk" if chunk.chunk_level == PARENT_CHUNK_LEVEL else "ChildChunk",
-        text=chunk.text if chunk.chunk_level == PARENT_CHUNK_LEVEL else (chunk.retrieval_text or chunk.text),
+        text=answer_text_from_projection(chunk.metadata, chunk.text, chunk.retrieval_text, parent=chunk.chunk_level == PARENT_CHUNK_LEVEL),
         body_text=chunk.text,
         source=chunk.source_file_name,
         source_run_id=chunk.source_run_id,
@@ -309,7 +311,7 @@ def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
         page=chunk.page_start,
         seq_no=first_seq,
         category="ParentChunk" if chunk.chunk_level == PARENT_CHUNK_LEVEL else "ChildChunk",
-        text=chunk.text if chunk.chunk_level == PARENT_CHUNK_LEVEL else (chunk.retrieval_text or chunk.text),
+        text=answer_text_from_projection(chunk.metadata, chunk.text, chunk.retrieval_text, parent=chunk.chunk_level == PARENT_CHUNK_LEVEL),
         body_text=chunk.text,
         source=chunk.source_file_name,
         source_run_id=chunk.source_run_id,
