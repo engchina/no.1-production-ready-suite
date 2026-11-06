@@ -49,13 +49,17 @@ def test_inline_results_generate_all_internal_references():
     raw, schema, catalog = case()
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert [item.text for item in draft.items] == ["単位A"]
-    assert draft.applications[1].result == "導いた結果"
+    # 原文の写しだけの「元の値」は、選んだ ID の原文を直接の記載にし、導出を作らない。
+    assert [part.result_kind for part in draft.answer_parts] == ["direct", "derived"]
+    assert draft.answer_parts[0].item_indexes == [0]
+    assert draft.answer_parts[0].application_indexes == []
+    assert len(draft.applications) == 1
+    assert draft.applications[0].result == "導いた結果"
     assert draft.applications[0].item_indexes == [0]
     assert [part.id for part in draft.answer_parts] == ["P1", "P2"]
-    assert draft.answer_parts[0].application_indexes == [0]
-    assert draft.answer_parts[1].application_indexes == [1]
+    assert draft.answer_parts[1].application_indexes == [0]
     assert draft.summary == "導いた結果"
-    assert draft.summary_application_indexes == [1]
+    assert draft.summary_application_indexes == [0]
     assert draft.items[0].citations[0]._unit_binding.text == "単位A"
 
 
@@ -64,7 +68,8 @@ def test_same_source_for_distinct_requests_keeps_each_request_reference():
     raw["answer_parts"][1]["request_id"] = "Q2"
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert [item.request_id for item in draft.items] == ["Q1", "Q2"]
-    assert draft.applications[1].item_indexes == [1]
+    assert draft.answer_parts[0].item_indexes == [0]
+    assert draft.applications[0].item_indexes == [1]
 
 
 @pytest.mark.parametrize("change", ["missing_result", "missing_basis", "invented_source", "direct_text"])
@@ -169,9 +174,9 @@ def test_bound_source_locators_use_structured_citation_without_discarding_conclu
     evidence_id = catalog.snapshots[0].span()["evidence_id"]
     raw["answer_parts"][1]["answer"]["reasoning"] = f"根拠 [{evidence_id}] に記載された値から導く。"
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.applications[1].reasoning == "根拠 に記載された値から導く。"
-    assert draft.applications[1].item_indexes == [0]
-    assert draft.applications[1].result == "導いた結果"
+    assert draft.applications[0].reasoning == "根拠 に記載された値から導く。"
+    assert draft.applications[0].item_indexes == [0]
+    assert draft.applications[0].result == "導いた結果"
 
 
 @pytest.mark.parametrize("reasoning", ["根拠 [E999] から導く。", "E1の規則から導く。", "根拠 [E1は条件の対象] から導く。"])
@@ -179,7 +184,7 @@ def test_unbound_or_sentence_locators_remain_for_existing_rejection(reasoning):
     raw, schema, catalog = case()
     raw["answer_parts"][1]["answer"]["reasoning"] = reasoning
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.applications[1].reasoning == reasoning
+    assert draft.applications[0].reasoning == reasoning
 
 
 def test_selected_long_original_is_preserved_instead_of_rejected_or_truncated():
@@ -313,7 +318,7 @@ def test_locator_uses_display_label_while_source_keeps_immutable_evidence_identi
         part["answer"]["basis"]["unit_ids"] = [source.unit_ids[0]]
     raw["answer_parts"][1]["answer"]["reasoning"] = "根拠[E1]に記載された値から導く。"
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.applications[1].reasoning == "根拠に記載された値から導く。"
+    assert draft.applications[0].reasoning == "根拠に記載された値から導く。"
     assert draft.items[0].citations[0].evidence_id == "immutable-evidence-identity"
 
 
