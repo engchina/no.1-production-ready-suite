@@ -1920,48 +1920,25 @@ class IngestionPipeline:
             return None
 
     async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
-        """承認済み文書の抽出を extraction 層(正本)から読む。無ければ legacy 列へ縮退。
-
-        index 時の設定から extraction_recipe_id を再計算して新表を引く。単一 materialization では
-        extract 時の owning 抽出と一致。読み失敗・未登録は detail.extraction(legacy)へ縮退。
-        """
-        if self._recipe_id is not None:
-            recipe = await self._oracle.get_document_recipe(detail.id, self._recipe_id)
-            extraction_recipe_id = (
-                str(recipe.get("active_extraction_recipe_id"))
-                if recipe is not None and recipe.get("active_extraction_recipe_id")
-                else None
-            )
-            if extraction_recipe_id is None:
-                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-            row = await self._oracle.get_document_extraction_artifact(
-                document_id=detail.id,
-                extraction_recipe_id=extraction_recipe_id,
-            )
-            payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
-            if payload is None:
-                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-            return _validate_structured_extraction_payload(payload)
-
-        source_sha256 = detail.content_sha256
-        if source_sha256:
-            try:
-                extraction_recipe_id = compute_extraction_recipe_id(source_sha256, self._settings)
-                row = await self._oracle.get_document_extraction_artifact(
-                    document_id=detail.id,
-                    extraction_recipe_id=extraction_recipe_id,
-                )
-            except Exception:  # noqa: BLE001 — 縮退して legacy 列から読む。
-                logger.warning("extraction 層の読込に失敗、legacy へ縮退。", exc_info=True)
-                row = None
-            payload = (
-                _coerce_extraction_payload(row.get("extraction_json")) if row else None
-            ) or _coerce_extraction_payload(detail.extraction)
-            if payload:
-                return _validate_structured_extraction_payload(payload)
-        if not detail.extraction:
+        """指定レシピが保持する抽出の版だけを読む。"""
+        if self._recipe_id is None:
+            raise IngestionUserError("保存済み抽出の続行にはレシピの指定が必要です。")
+        recipe = await self._oracle.get_document_recipe(detail.id, self._recipe_id)
+        extraction_recipe_id = (
+            str(recipe.get("active_extraction_recipe_id"))
+            if recipe is not None and recipe.get("active_extraction_recipe_id")
+            else None
+        )
+        if extraction_recipe_id is None:
             raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-        return _validate_structured_extraction_payload(detail.extraction)
+        row = await self._oracle.get_document_extraction_artifact(
+            document_id=detail.id,
+            extraction_recipe_id=extraction_recipe_id,
+        )
+        payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
+        if payload is None:
+            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+        return _validate_structured_extraction_payload(payload)
 
     async def index_reviewed(
         self,
