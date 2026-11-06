@@ -149,7 +149,7 @@ class PictureDescriptionTests(unittest.TestCase):
 
         text = vision_description_text(payload)
 
-        self.assertIn("■ 要点\n視覚種別: chart", text)
+        self.assertNotIn("視覚種別:", text)
         self.assertIn("■ 構造\n図のノード: 受付 / 審査\n図の接続: 受付 → 審査（申請あり）", text)
         self.assertIn("グラフのタイトル: 月別件数\nグラフの軸: x=月 / y=件数\nグラフの系列: 申請: 4月=10（増加）", text)
         self.assertIn("表の見出し: 区分 | 件数\n表の行: 1行目: A | 10", text)

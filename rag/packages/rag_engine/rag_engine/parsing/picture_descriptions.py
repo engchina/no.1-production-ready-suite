@@ -52,7 +52,6 @@ VISION_SENTENCE_GROUPS = (
         (
             "retrieval_text",
             "main_topic",
-            "visual_kind",
         ),
     ),
     (
