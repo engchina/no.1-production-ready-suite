@@ -1,3 +1,5 @@
+import AxeBuilder from "@axe-core/playwright";
+
 import { expect, test, type Page } from "./fixtures/test";
 import type { VectorIndexProfileName } from "../src/lib/api";
 import { vectorIndexEnvelope } from "./_vector-index-fixtures";
@@ -224,14 +226,14 @@ for (const scheme of ["light", "dark"] as const) {
 
     // 各項目から、その全体の既定を変える画面へ移動できる。
     await expect(
-      items.getByRole("link", { name: "図・画像を AI で読み取る を設定する画面を開く" })
+      items.getByRole("link", { name: "設定画面へ（図・画像を AI で読み取る）" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-vision");
     await expect(items.locator('[data-config-field="chunk_context_header_enabled"]')).toHaveCount(0);
     await expect(
-      items.getByRole("link", { name: "見出しの階層の推定（AI） を設定する画面を開く" })
+      items.getByRole("link", { name: "設定画面へ（見出しの階層の推定（AI））" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-heading-levels");
     await expect(items.locator('[data-config-field="heading_level_inference_enabled"]')).toContainText("無効");
-    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(12);
+    await expect(items.getByRole("link", { name: /^設定画面へ（.+）$/ })).toHaveCount(12);
     // 索引構築の全体の既定は OFF。専用の設定画面から変更できる。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
     await expect(entityIndex).toContainText("無効");
@@ -297,9 +299,9 @@ test("権限のない設定画面へのリンクは出さない", async ({ page 
   await page.goto("/settings/pipeline");
   const items = page.getByTestId("pipeline-recipe-defaults");
   await expect(items.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
-  await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(1);
+  await expect(items.getByRole("link", { name: /^設定画面へ（.+）$/ })).toHaveCount(1);
   await expect(
-    items.getByRole("link", { name: "文書分割 を設定する画面を開く" })
+    items.getByRole("link", { name: "設定画面へ（文書分割）" })
   ).toHaveAttribute("href", "/settings/chunking");
 });
 
@@ -378,7 +380,7 @@ for (const theme of ["light", "dark"] as const) {
       await expect(card.locator("dd").first()).toHaveText(value);
       await expect(card.getByRole("link")).toContainText("設定画面へ");
     }
-    const vision = items.getByRole("link", { name: "図・画像を AI で読み取る を設定する画面を開く" });
+    const vision = items.getByRole("link", { name: "設定画面へ（図・画像を AI で読み取る）" });
     await vision.focus();
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
@@ -431,10 +433,28 @@ test("サブパス配備でも全工程の設定リンクと hash を保持す�
   for (const link of await links.all()) await expect(link).toHaveAttribute("href", new RegExp(`^${basePath}/settings/`));
   const vision = links.filter({ hasText: "設定画面へ" }).filter({ has: page.locator("span") });
   await expect(vision).toHaveCount(12);
-  const target = page.getByRole("link", { name: "章節の要約 を設定する画面を開く", exact: true });
+  const target = page.getByRole("link", { name: "設定画面へ（章節の要約）", exact: true });
   await expect(target).toHaveAttribute("href", `${basePath}/settings/parser-adapters#post-parse-navigation-summary`);
   await target.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("subpath-setting-links.png") });
   await target.click();
   await expect(page).toHaveURL(new RegExp(`${basePath}/settings/parser-adapters#post-parse-navigation-summary$`));
+});
+
+// #4560: 設定画面へのリンクの読み上げ名は見えている文字「設定画面へ」で始め、対象の名前を後ろに足す（WCAG 2.5.3）。
+test("取込の流れの設定画面へのリンクの読み上げ名は見えている文字で始まる（#4560）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.goto("/settings/pipeline");
+  const links = page.locator("a[aria-label]").filter({ hasText: "設定画面へ" });
+  await expect(links.first()).toBeVisible();
+  for (const link of await links.all()) {
+    const visible = (await link.innerText()).trim();
+    expect(await link.getAttribute("aria-label")).toMatch(new RegExp(`^${visible}（.+）$`));
+  }
+  await expect(page.getByRole("link", { name: "設定画面へ（図・画像を AI で読み取る）", exact: true })).toHaveAttribute(
+    "href",
+    "/settings/parser-adapters#post-parse-vision"
+  );
+  const axe = await new AxeBuilder({ page }).withRules(["label-content-name-mismatch"]).analyze();
+  expect(axe.violations.flatMap((violation) => violation.nodes.map((node) => node.target.join(" ")))).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("pipeline-setting-links.png"), fullPage: true });
 });

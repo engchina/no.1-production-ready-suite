@@ -1691,7 +1691,7 @@ export const ja = {
   "settings.pipeline.flow.loading": "全体の既定を読み込んでいます",
   "settings.pipeline.flow.loadError": "全体の既定を取得できませんでした。",
   "settings.pipeline.flow.openSettings": "設定画面へ",
-  "settings.pipeline.flow.openSettingsAria": "{name} を設定する画面を開く",
+  "settings.pipeline.flow.openSettingsAria": "設定画面へ（{name}）",
   "settings.pipeline.flow.gate.auto_parse_after_preprocess_enabled":
     "オフにすると、ファイル準備の後で止まります。抽出は文書ごとに手動で始めます。",
   "settings.pipeline.flow.gate.auto_chunk_after_extract_enabled":
@@ -2518,7 +2518,7 @@ export const ja = {
   "search.prefill.profileUnavailable": "元の検索・回答プロファイルは使えません。選び直してください。",
   "searchAnswerProfiles.scope.noKnowledgeBases":
     "この検索・回答プロファイルには参照するナレッジベースがありません。検索・回答プロファイルの設定でナレッジベースを追加してください。",
-  "searchAnswerProfileSelect.placeholder": "検索・回答プロファイルを検索して選択…",
+  "searchAnswerProfileSelect.placeholder": "未選択",
   "searchAnswerProfileSelect.searchPlaceholder": "検索・回答プロファイルの名前・説明で検索…",
   "searchAnswerProfileSelect.count": "{shown} / {total} 件",
   "searchAnswerProfileSelect.knowledgeBaseCount": "参照 KB {count} 件",

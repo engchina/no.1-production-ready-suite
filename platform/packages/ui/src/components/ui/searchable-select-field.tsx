@@ -90,7 +90,11 @@ export interface SearchableSelectFieldProps {
    * （一覧のツールバーの絞り込みで、数百件から選ぶ対象。`SelectField` の `labelPlacement` と同じ）。`inline` では
    * 選択中の名前を 1 行で切り（全文は `title`）、ツールバーの行の高さを欄にそろえる。
    */
-  /** compact はチャットのツールバー用。選択値だけを 1 行で表示し、ラベルは読み上げ名に残す。 */
+  /**
+   * compact はチャットのツールバー用。選択値だけを 1 行で表示し、ラベルは読み上げ名に残す。必須の「必須」はボタンの中
+   * （未選択のときは見える形、選んだ後は読み上げだけ）に出し、読み上げ名は「ラベル 値 必須」の順にする（見えている
+   * 「値 必須」を同じ並びで含める。WCAG 2.5.3 Label in Name。#4560）。
+   */
   labelPlacement?: "top" | "inline" | "compact";
   /** 絞り込みが掛かっている（`inline` のときだけ効く。値を太字・アクセント、枠をアクセントにする。`SelectField` の `active` と同じ）。 */
   active?: boolean;
@@ -138,6 +142,9 @@ export function SearchableSelectField({
   const reactId = useId();
   const labelId = `${id}-${reactId}-label`;
   const valueId = `${id}-${reactId}-value`;
+  const requiredId = `${id}-${reactId}-required`;
+  // compact の必須の印はボタンの中に置き、読み上げ名の末尾で読む（ラベルには重ねない。#4560）。
+  const compactRequired = compactLabel && Boolean(required && requiredLabel);
   const hintId = `${id}-${reactId}-hint`;
   const errorId = `${id}-${reactId}-error`;
   const popoverId = `${id}-${reactId}-popover`;
@@ -439,7 +446,7 @@ export function SearchableSelectField({
       >
         {label}
         {/* ボタンは aria-required を持てない（axe の aria-allowed-attr）ので、タグを読み上げ対象に残す（#1595）。 */}
-        {required && requiredLabel ? <RequiredBadge label={requiredLabel} /> : null}
+        {required && requiredLabel && !compactRequired ? <RequiredBadge label={requiredLabel} /> : null}
       </label>
       <button
         ref={buttonRef}
@@ -448,7 +455,7 @@ export function SearchableSelectField({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? popoverId : undefined}
-        aria-labelledby={`${labelId} ${valueId}`}
+        aria-labelledby={compactRequired ? `${labelId} ${valueId} ${requiredId}` : `${labelId} ${valueId}`}
         aria-describedby={describedBy}
         aria-invalid={Boolean(error) || undefined}
         disabled={disabled}
@@ -494,7 +501,11 @@ export function SearchableSelectField({
             {current?.label ?? (value || placeholder)}
           </span>
         </span>
-        {compactLabel && !value && required && requiredLabel ? <span aria-hidden className="shrink-0"><RequiredBadge label={requiredLabel} /></span> : null}
+        {compactRequired ? (
+          <span id={requiredId} className={value ? "sr-only" : "shrink-0"}>
+            {value ? requiredLabel : <RequiredBadge label={requiredLabel} />}
+          </span>
+        ) : null}
         <ChevronDown
           size={16}
           aria-hidden

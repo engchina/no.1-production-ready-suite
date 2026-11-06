@@ -7,6 +7,7 @@ import {
   SelectField,
   type SelectFieldOption,
   StatusBadge,
+  TabPanel,
   Tabs,
   TextareaField,
   TextField,
@@ -101,6 +102,27 @@ export function LanguagePackFieldsPanel({
       onChange={(value) => onChange(textKey(field), value)}
     />
   );
+  // 上の段（使い道の組）と下の段（節）は、どちらも選んだタブの panel を共有の TabPanel で描く（タブの aria-controls が
+  // 指す要素。#4560）。下の段は上の段の panel の中に置く。組が 1 つならタブも panel も出さない。
+  const grouped = groups.length > 1;
+  const sectionTabs = (
+    <>
+      <Tabs
+        idPrefix={idPrefix}
+        ariaLabel={t("nav.settingsLanguagePack")}
+        value={current}
+        onChange={(value) => state.setSection(value)}
+        items={currentGroup.sections.map((name) => ({
+          id: name,
+          label: t(`settings.language.section.${name}` as I18nKey),
+        }))}
+      />
+      <TabPanel idPrefix={idPrefix} id={current} value={current}>
+        <p className="mb-4 text-xs text-fg-muted">{t(`settings.language.section.${current}.help` as I18nKey)}</p>
+        <FormGrid>{fields.map(renderField)}</FormGrid>
+      </TabPanel>
+    </>
+  );
   return (
     <div className="space-y-4">
       <SearchField
@@ -131,7 +153,7 @@ export function LanguagePackFieldsPanel({
         )
       ) : (
         <>
-          {groups.length > 1 ? (
+          {grouped ? (
             <Tabs
               idPrefix={`${idPrefix}-group`}
               ariaLabel={t("settings.language.groups.label")}
@@ -146,20 +168,13 @@ export function LanguagePackFieldsPanel({
               }))}
             />
           ) : null}
-          <Tabs
-            idPrefix={idPrefix}
-            ariaLabel={t("nav.settingsLanguagePack")}
-            value={current}
-            onChange={(value) => state.setSection(value)}
-            items={currentGroup.sections.map((name) => ({
-              id: name,
-              label: t(`settings.language.section.${name}` as I18nKey),
-            }))}
-          />
-          <div id={`${idPrefix}-panel-${current}`} role="tabpanel" aria-labelledby={`${idPrefix}-tab-${current}`}>
-            <p className="mb-4 text-xs text-fg-muted">{t(`settings.language.section.${current}.help` as I18nKey)}</p>
-            <FormGrid>{fields.map(renderField)}</FormGrid>
-          </div>
+          {grouped ? (
+            <TabPanel idPrefix={`${idPrefix}-group`} id={currentGroup.id} value={currentGroup.id} className="space-y-4">
+              {sectionTabs}
+            </TabPanel>
+          ) : (
+            sectionTabs
+          )}
         </>
       )}
     </div>

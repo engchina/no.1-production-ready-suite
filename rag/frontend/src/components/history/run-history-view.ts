@@ -31,8 +31,23 @@ import type {
   RunSurface,
   RunVerification,
 } from "@/lib/api";
+import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 import { searchPrefillHref } from "@/components/search/search-prefill";
+
+/** 実行の詳細の router の中の path（`navigate` / `Link` の `to`。base は router が補う）。 */
+export function runDetailPath(runId: string): string {
+  return `${APP_ROUTES.history}/${encodeURIComponent(runId)}`;
+}
+
+/**
+ * 実行の詳細の文書の URL（一覧の題名の `href`。新しいタブ・URL のコピーで開く）。`/rag/` の下の配備では base を
+ * 付ける（#4560。`lib/base-path.ts`）。
+ */
+export function runDetailHref(runId: string): string {
+  return appPath(runDetailPath(runId));
+}
 
 export interface BadgeView {
   variant: StatusVariant;
