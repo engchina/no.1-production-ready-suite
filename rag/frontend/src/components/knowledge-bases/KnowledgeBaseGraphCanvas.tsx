@@ -117,15 +117,20 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const loadChildren = async (parent: string, count: number) => {
     const document = documentOf(parent);
     if (!document) return;
-    const loaded = treeRef.current.children.get(parent);
-    const offset = loaded?.ids.length ?? 0;
-    if (loaded && offset >= Math.min(count, loaded.total)) return;
-    const page = await api.getStructureGraphTree(knowledgeBaseId, document.document_id, document.chunk_set_id, documents.has(parent) ? null : parent, offset, Math.max(count - offset, 1));
-    updateTree((current) => ({
-      ...current,
-      nodes: new Map([...current.nodes, ...page.items.map((item) => [item.id, item] as const)]),
-      children: new Map(current.children).set(parent, { ids: [...new Set([...(current.children.get(parent)?.ids ?? []), ...page.items.map((item) => item.id)])], total: page.total }),
-    }));
+    let loaded = treeRef.current.children.get(parent);
+    while (!loaded || loaded.ids.length < Math.min(count, loaded.total)) {
+      const offset = loaded?.ids.length ?? 0;
+      const page = await api.getStructureGraphTree(knowledgeBaseId, document.document_id, document.chunk_set_id, documents.has(parent) ? null : parent, offset, Math.min(STRUCTURE_PAGE_SIZE, Math.max(count - offset, 1)));
+      updateTree((current) => ({
+        ...current,
+        nodes: new Map([...current.nodes, ...page.items.map((item) => [item.id, item] as const)]),
+        children: new Map(current.children).set(parent, { ids: [...new Set([...(current.children.get(parent)?.ids ?? []), ...page.items.map((item) => item.id)])], total: page.total }),
+      }));
+      loaded = treeRef.current.children.get(parent)!;
+      if (loaded.ids.length <= offset && loaded.ids.length < Math.min(count, loaded.total)) {
+        throw new Error(t("knowledgeBases.graph.expandError"));
+      }
+    }
   };
 
   const loadReferences = async (document: StructureGraphDocument) => {
@@ -211,17 +216,21 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const positionOf = (id: string) => overrides.get(id) ?? layout.get(id) ?? { x: 0, y: 0 };
 
   // 種類の切替だけで表示範囲を合わせ、開閉や検索の移動では今の見え方を保つ。
-  useEffect(() => { void flow.fitView({ padding: 0.18, duration: 0 }); }, [flow, kind, disabledKinds]);
+  useEffect(() => {
+    if (pendingFocus && focusedNode.current !== pendingFocus) return;
+    void flow.fitView({ padding: 0.18, duration: 0 });
+  }, [flow, kind, disabledKinds, pendingFocus]);
 
   useEffect(() => {
     if (!pendingFocus || focusedNode.current === pendingFocus) return;
     const position = layout.get(pendingFocus);
-    if (!position || !sizes.has(pendingFocus)) return;
-    const size = sizes.get(pendingFocus)!;
+    if (!position) return;
+    // 画面外の未描画ノードは測れないため、配置と同じ既定寸法で先に表示位置へ移す。
+    const size = sizes.get(pendingFocus) ?? GRAPH_NODE_CARD_SIZE;
     canvasAnchor.current?.scrollIntoView({ block: "center", behavior: "instant" });
     const point = overrides.get(pendingFocus) ?? position;
     void flow.setCenter(point.x + size.width / 2, point.y + size.height / 2, { zoom: 1, duration: 0 });
-    focusedNode.current = pendingFocus;
+    if (sizes.has(pendingFocus)) focusedNode.current = pendingFocus;
   }, [pendingFocus, layout, overrides, sizes, flow]);
 
   const allEdges = useMemo(() => [...containsEdges.map((edge) => ({ ...edge, isReference: false, count: 0 })), ...referenceEdges.map((edge) => ({ ...edge, isReference: true }))], [containsEdges, referenceEdges]);
