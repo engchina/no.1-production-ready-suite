@@ -288,6 +288,13 @@ class KnowledgeBaseStructureIndexData(KnowledgeBaseStructureIndexUpdate):
 class StructureIndexStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["missing", "rebuild", "retry", "continue"] = "missing"
+    # 指定した文書だけを対象にする（少数の文書での試験の補建。#4543）。省略は KB の全文書。
+    document_ids: list[str] | None = Field(None, min_length=1, max_length=200)
+
+    @field_validator("document_ids")
+    @classmethod
+    def normalize_document_ids(cls, values: list[str] | None) -> list[str] | None:
+        return None if values is None else _unique_clean_ids(values)
 
 
 class StructureGraphBodyChunk(BaseModel):
