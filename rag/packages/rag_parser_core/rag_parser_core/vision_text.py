@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -83,3 +84,18 @@ def answer_text_from_projection(
             raise ValueError("回答本文の投影の版またはhashが一致しません。再分割してください。")
         return body
     return body if parent else (index_text or body)
+
+
+def require_projected_vision_source(
+    metadata: Mapping[str, object], refs: Sequence[Mapping[str, object]]
+) -> None:
+    """producerが明示した旧VLM由来だけを止め、native OCRの語句やモデル名では判定しない。"""
+    if any(
+        isinstance(ref, Mapping) and ref.get("vision_text_projection_status") == "unrecorded"
+        for ref in refs
+    ):
+        raise ValueError("旧画像説明の回答本文が未分離です。再解析または再分割してください。")
+    if "answer_text_projection" in metadata:
+        return
+    if metadata.get("figure_text_source") == "vision":
+        raise ValueError("旧画像説明の回答本文が未分離です。再解析または再分割してください。")

@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
-from rag_parser_core.vision_text import answer_text_from_projection
+from rag_parser_core.vision_text import answer_text_from_projection, load_vision_text_projection, require_projected_vision_source
 
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
@@ -186,6 +186,21 @@ def _engine_labels(raw_engines: Any) -> dict[str, str]:
 def _answer_record(raw_record: Any, engine_labels: dict[str, str], source_name: str = "") -> AnswerRecord | None:
     if not isinstance(raw_record, dict):
         return None
+    from rag_engine.chunking.records import _vision_projection_status
+    from rag_engine.parsing.picture_descriptions import reproject_saved_vision_record
+
+    raw_record = {**raw_record, "raw": dict(raw_record.get("raw")) if isinstance(raw_record.get("raw"), dict) else {}}
+    reproject_saved_vision_record(raw_record)
+    state = _vision_projection_status(raw_record)
+    raw = raw_record["raw"]
+    if state == "unrecorded" or (
+        raw_record.get("category") == "Picture"
+        and raw_record.get("raw_type") == "picture"
+        and raw.get("vision_status") == "succeeded"
+        and not raw.get("vision_error")
+        and load_vision_text_projection(raw.get("vision_text_projection")) is None
+    ):
+        raise ValueError("旧画像説明の回答本文が未分離です。再解析してください。")
     text = str(raw_record.get("text") or raw_record.get("sentence") or "").strip()
     if not text:
         return None
@@ -258,6 +273,7 @@ def _bool_metadata_value(value: Any, *, default: bool) -> bool:
 
 
 def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> AnswerRecord:
+    require_projected_vision_source(chunk.metadata, chunk.source_record_refs)
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
     chunk_uid = _local_chunk_uid(
         chunk_run_id=chunk_run_id,
@@ -303,6 +319,7 @@ def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> Ans
 
 
 def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
+    require_projected_vision_source(chunk.metadata, chunk.source_record_refs)
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
     return AnswerRecord(
         id=chunk.chunk_id,

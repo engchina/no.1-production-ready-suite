@@ -407,6 +407,10 @@ class HtmlTableLayout:
     rows: tuple[str, ...]
     header_rows: int
     suffix: str
+    row_ranges: tuple[tuple[int, int], ...] = ()
+    table_start: int = 0
+    table_end: int = 0
+    caption_range: tuple[int, int] | None = None
 
     def part(self, rows: Sequence[str], *, last: bool = False) -> str:
         """表頭の行と ``rows`` の行だけの表の HTML（最後の部分は表の後ろの本文も付ける）。"""
@@ -528,6 +532,10 @@ def html_table_layout(text: str) -> HtmlTableLayout | None:
         rows=tuple(text[row_start:row_end] for row_start, row_end, _header in parser.rows),
         header_rows=header_rows,
         suffix=text[end:],
+        row_ranges=tuple((row_start, row_end) for row_start, row_end, _header in parser.rows),
+        table_start=start,
+        table_end=end,
+        caption_range=parser.caption,
     )
 
 

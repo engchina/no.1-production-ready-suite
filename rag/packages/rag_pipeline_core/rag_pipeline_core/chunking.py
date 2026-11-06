@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from rag_parser_core.extraction import (
     EXTRACTED_FIELD_KEY,
@@ -32,6 +32,20 @@ from rag_parser_core.structured_records import (
     has_record_boundaries,
     record_boundary_plain_text,
     split_record_boundary_text,
+)
+from rag_parser_core.vision_text import load_vision_text_projection, text_sha256
+from rag_parser_core.vision_text_map import (
+    VISION_ASSEMBLY_KEY,
+    VISION_CHUNK_MAP_KEY,
+    VISION_RAW_PROJECTION_KEY,
+    ProjectedVisionText,
+    VisionTextRange,
+    VisionTextSource,
+    chunk_projected_text,
+    chunk_projection_metadata,
+    positioned_vision_assembly,
+    projected_element_text,
+    require_element_vision_projection,
 )
 from rag_parser_core.xml_tree_json import (
     XML_TREE_LOOKUP_KEYS_KEY,
@@ -126,6 +140,7 @@ class _ElementSpan:
     asset_id: str | None
     asset_kind: str | None
     # 表計算の行の場所（前処理 excel_to_jsonl の行の記録。#1221）。
+    vision_projection: ProjectedVisionText | None = None
     sheet_name: str | None = None
     sheet_row_start: int | None = None
     sheet_row_end: int | None = None
@@ -165,6 +180,7 @@ class _TablePart:
     row_end: int | None
     header_repeated: bool
     header_rows: int = 1
+    vision_projection: ProjectedVisionText | None = None
 
 
 STRUCTURE_CHUNK_PROFILE = "structure_v1"
@@ -238,14 +254,37 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chu
     if not source.strip():
         return []
 
+    return _chunk_sectioned_text(source, chunk_size=chunk_size, overlap=overlap)
+
+
+def _chunk_sectioned_text(
+    source: str,
+    *,
+    chunk_size: int,
+    overlap: int,
+    projection: ProjectedVisionText | None = None,
+) -> list[Chunk]:
+    """既存の章節・group処理へ任意の同座標投影を並走させる。"""
     chunks: list[Chunk] = []
     for segment in _section_segments(source):
-        normalized = re.sub(r"\s+", " ", segment.text).strip()
+        segment_projection = (
+            projection.slice(
+                segment.start_offset, segment.start_offset + len(segment.text)
+            ).whitespace_normalized()
+            if projection is not None
+            else None
+        )
+        normalized = (
+            segment_projection.text
+            if segment_projection is not None
+            else re.sub(r"\s+", " ", segment.text).strip()
+        )
         if not normalized:
             continue
         metadata = _segment_metadata(segment)
         segment_chunks = _chunk_normalized_text(
             normalized,
+            projection=segment_projection,
             chunk_size=chunk_size,
             overlap=overlap,
             base_offset=segment.start_offset,
@@ -465,9 +504,13 @@ def _chunk_recursive_character(
     overlap: int,
 ) -> list[Chunk]:
     """LangChain RecursiveCharacterTextSplitter 風に raw_text を固定長で分割する。"""
-    return chunk_text(
-        _raw_text_with_table_vision(extraction), chunk_size=chunk_size, overlap=overlap
-    )
+    projection = _extraction_vision_projection(extraction)
+    if projection.ranges:
+        value = projection.line_endings_normalized()
+        return _chunk_sectioned_text(
+            value.text, projection=value, chunk_size=chunk_size, overlap=overlap
+        )
+    return chunk_text(projection.text, chunk_size=chunk_size, overlap=overlap)
 
 
 def _chunk_fixed_size(
@@ -483,8 +526,8 @@ def _chunk_fixed_size(
     chunk_size / overlap を固定したい運用(機械的に揃った chunk 長が欲しい場合)向け。
     トークン化ライブラリに依存しないため CI でも安定する。
     """
-    source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
-    normalized = re.sub(r"\s+", " ", source).strip()
+    projection = _extraction_vision_projection(extraction).whitespace_normalized()
+    normalized = projection.text
     if not normalized:
         return []
     metadata: ChunkMetadata = {
@@ -505,7 +548,12 @@ def _chunk_fixed_size(
                     index=len(chunks),
                     start_offset=cursor + len(window) - len(window.lstrip()),
                     end_offset=cursor + len(window.rstrip()),
-                    metadata=dict(metadata),
+                    metadata={
+                        **metadata,
+                        **chunk_projection_metadata(
+                            projection.slice(cursor, min(cursor + chunk_size, length)).stripped()
+                        ),
+                    },
                 )
             )
         if cursor + chunk_size >= length:
@@ -531,7 +579,8 @@ def _chunk_fixed_delimiter(
     """
     if has_record_boundaries(extraction):
         return _chunk_structured_records(extraction)
-    source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
+    projection = _extraction_vision_projection(extraction).line_endings_normalized()
+    source = projection.text
     resolved_delimiter = (
         decode_fixed_delimiter(delimiter or _DEFAULT_FIXED_DELIMITER)
         .replace("\r\n", "\n")
@@ -556,7 +605,12 @@ def _chunk_fixed_delimiter(
                     index=len(chunks),
                     start_offset=cursor + leading,
                     end_offset=cursor + trimmed_length,
-                    metadata=dict(metadata),
+                    metadata={
+                        **metadata,
+                        **chunk_projection_metadata(
+                            projection.slice(cursor, cursor + len(part)).stripped()
+                        ),
+                    },
                 )
             )
         cursor += len(part) + len(resolved_delimiter)
@@ -669,12 +723,16 @@ def _chunk_markdown_heading(
     overlap: int,
 ) -> list[Chunk]:
     """章節(見出し)単位で 1 chunk にまとめ、超過時のみ size 分割する。"""
-    source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
+    projection = _extraction_vision_projection(extraction).line_endings_normalized()
+    source = projection.text
     if not source.strip():
         return []
     chunks: list[Chunk] = []
     for segment in _section_segments(source):
-        normalized = re.sub(r"\s+", " ", segment.text).strip()
+        normalized_projection = projection.slice(
+            segment.start_offset, segment.start_offset + len(segment.text)
+        ).whitespace_normalized()
+        normalized = normalized_projection.text
         if not normalized:
             continue
         metadata = _segment_metadata(segment)
@@ -685,12 +743,13 @@ def _chunk_markdown_heading(
                     index=len(chunks),
                     start_offset=segment.start_offset,
                     end_offset=segment.start_offset + len(normalized),
-                    metadata=dict(metadata),
+                    metadata={**metadata, **chunk_projection_metadata(normalized_projection)},
                 )
             ]
         else:
             segment_chunks = _chunk_normalized_text(
                 normalized,
+                projection=normalized_projection,
                 chunk_size=chunk_size,
                 overlap=overlap,
                 base_offset=segment.start_offset,
@@ -796,14 +855,21 @@ def _absorb_small_chunks(
             and previous.metadata.get("chunk_group_id") == chunk.metadata.get("chunk_group_id")
             and previous.metadata.get("chunk_group_id") is not None
         ):
-            joined = f"{previous.text}\n{chunk.text}".strip()
+            projection = ProjectedVisionText.join(
+                [
+                    chunk_projected_text(previous.text, previous.metadata),
+                    chunk_projected_text(chunk.text, chunk.metadata),
+                ],
+                "\n",
+            ).stripped()
+            joined = projection.text
             merged[-1] = _restamp_merged_chunk(
                 Chunk(
                     text=joined,
                     index=previous.index,
                     start_offset=previous.start_offset,
                     end_offset=chunk.end_offset,
-                    metadata=dict(previous.metadata),
+                    metadata={**previous.metadata, **chunk_projection_metadata(projection)},
                 ),
                 chunk_size=chunk_size,
             )
@@ -869,6 +935,169 @@ def _validate_chunk_settings(chunk_size: int, overlap: int) -> None:
         raise ValueError("overlap は chunk_size より小さい必要があります。")
 
 
+def _append_table_projection(
+    value: ProjectedVisionText, element: DocumentElement, supplement: str, occurrence: int
+) -> ProjectedVisionText:
+    projection = load_vision_text_projection(element.metadata.get("vision_text_projection"))
+    if projection is None:
+        return ProjectedVisionText.join([value, ProjectedVisionText(supplement)], "\n")
+    binding = (
+        json.loads(str(element.metadata["vision_text_binding"]))
+        if "vision_text_binding" in element.metadata
+        else {}
+    )
+    source = VisionTextSource(
+        element.element_id or "",
+        occurrence,
+        projection,
+        "image_table_supplement",
+        str(binding.get("record_id") or element.element_id or ""),
+        text_sha256(element.text),
+    )
+    addition = ProjectedVisionText(supplement, (VisionTextRange(0, len(supplement), source),))
+    return ProjectedVisionText.join([value, addition], "\n")
+
+
+def _extraction_vision_projection(extraction: StructuredExtraction) -> ProjectedVisionText:
+    for element in extraction.elements:
+        require_element_vision_projection(element.metadata)
+    if VISION_RAW_PROJECTION_KEY in extraction.parser_artifacts:
+        value = chunk_projected_text(
+            extraction.raw_text,
+            {VISION_CHUNK_MAP_KEY: extraction.parser_artifacts[VISION_RAW_PROJECTION_KEY]},
+        )
+        current = {}
+        ambiguous = set()
+        for element in extraction.elements:
+            if not element.element_id:
+                continue
+            if element.element_id in current:
+                ambiguous.add(element.element_id)
+            current[element.element_id] = element
+        for item in value.ranges:
+            if item.source.element_id in ambiguous:
+                raise ValueError("画像本文の出所IDが重複しています。再解析してください。")
+            element = current.get(item.source.element_id)
+            if (
+                element is None
+                or load_vision_text_projection(element.metadata.get("vision_text_projection"))
+                != item.source.projection
+            ):
+                raise ValueError("画像本文と画像出所が一致しません。再解析してください。")
+            projected_element_text(element.element_id or "", element.text, element.metadata)
+            binding = (
+                json.loads(str(element.metadata["vision_text_binding"]))
+                if "vision_text_binding" in element.metadata
+                else {}
+            )
+            if item.source.element_body_sha256 != text_sha256(
+                element.text
+            ) or item.source.record_id != str(binding.get("record_id") or element.element_id or ""):
+                raise ValueError("画像本文と元要素の版が一致しません。再解析してください。")
+        represented = {item.source.element_id for item in value.ranges}
+        for element in extraction.elements:
+            if "vision_text_binding" not in element.metadata:
+                continue
+            projected = projected_element_text(
+                element.element_id or "", element.text, element.metadata
+            )
+            if (
+                projected.ranges or element.metadata.get(TABLE_VISION_TEXT_KEY)
+            ) and element.element_id not in represented:
+                raise ValueError("画像本文の出所位置が未記録です。再解析してください。")
+        return value
+    if not any(
+        "vision_text_projection" in element.metadata or "vision_text_binding" in element.metadata
+        for element in extraction.elements
+    ):
+        return ProjectedVisionText(_raw_text_with_table_vision(extraction))
+    assembly = positioned_vision_assembly(
+        extraction.raw_text,
+        [(element.element_id or "", element.text, element.kind) for element in extraction.elements],
+        [element.metadata for element in extraction.elements],
+    )
+    saved = extraction.parser_artifacts.get(VISION_ASSEMBLY_KEY)
+    if saved is not None and saved != assembly:
+        raise ValueError("画像本文と保存済み全文の組み立てが一致しません。再解析してください。")
+    if assembly["status"] != "mapped":
+        raise ValueError("画像本文と全文の組み立てが未記録または不一致です。再解析してください。")
+    ranges = []
+    for row in assembly["ranges"]:
+        index = row["occurrence"]
+        element = extraction.elements[index]
+        projected = projected_element_text(
+            element.element_id or "", element.text, element.metadata, occurrence=index
+        )
+        ranges.extend(
+            VisionTextRange(row["start"] + item.start, row["start"] + item.end, item.source)
+            for item in projected.ranges
+        )
+    value = ProjectedVisionText(
+        extraction.raw_text, tuple(sorted(ranges, key=lambda item: item.start))
+    )
+    for index, element in enumerate(extraction.elements):
+        if supplement := _pending_table_vision_supplement(element):
+            value = _append_table_projection(value, element, supplement, index)
+    return value
+
+
+def _chunk_projected_sentences(
+    value: ProjectedVisionText,
+    *,
+    chunk_size: int,
+    overlap: int,
+    base_offset: int,
+    metadata: ChunkMetadata,
+    start_index: int,
+) -> list[Chunk]:
+    sentences = []
+    previous = 0
+    for match in sentence_boundary().finditer(value.text):
+        sentences.append(value.slice(previous, match.end()).stripped())
+        previous = match.end()
+    sentences.append(value.slice(previous, len(value.text)).stripped())
+    sentences = [part for part in sentences if part.text]
+    chunks = []
+    cursor = 0
+    buffer = ProjectedVisionText("")
+    buffer_start = 0
+
+    def append(part: ProjectedVisionText, start: int) -> None:
+        chunks.append(
+            Chunk(
+                text=part.text,
+                index=start_index + len(chunks),
+                start_offset=base_offset + start,
+                end_offset=base_offset + start + len(part.text),
+                metadata={**metadata, **chunk_projection_metadata(part)},
+            )
+        )
+
+    for sentence in sentences:
+        if not buffer.text:
+            buffer_start = cursor
+        projected = ProjectedVisionText.join([buffer, sentence], " ").stripped()
+        if len(projected.text) <= chunk_size:
+            buffer = projected
+            cursor += len(sentence.text) + 1
+            continue
+        if buffer.text:
+            append(buffer, buffer_start)
+        if len(sentence.text) <= chunk_size:
+            buffer = sentence
+            buffer_start = cursor
+            cursor += len(sentence.text) + 1
+            continue
+        for start in range(0, len(sentence.text), chunk_size):
+            part = sentence.slice(start, min(start + chunk_size, len(sentence.text)))
+            append(part, cursor)
+            cursor += len(part.text)
+        buffer = ProjectedVisionText("")
+    if buffer.text:
+        append(buffer, buffer_start)
+    return _apply_overlap(chunks, overlap) if overlap and len(chunks) > 1 else chunks
+
+
 def _chunk_normalized_text(
     text: str,
     *,
@@ -877,8 +1106,18 @@ def _chunk_normalized_text(
     base_offset: int,
     metadata: ChunkMetadata,
     start_index: int,
+    projection: ProjectedVisionText | None = None,
 ) -> list[Chunk]:
     """正規化済みテキストを文境界優先で chunk 化する。"""
+    if projection is not None and projection.ranges:
+        return _chunk_projected_sentences(
+            projection,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            base_offset=base_offset,
+            metadata=metadata,
+            start_index=start_index,
+        )
     sentences = _split_sentences(text)
     chunks: list[Chunk] = []
     cursor = 0
@@ -947,8 +1186,11 @@ def _element_spans(
     """
     spans: list[_ElementSpan] = []
     cursor = 0
-    for element in elements:
-        text = element.text.strip()
+    for occurrence, element in enumerate(elements):
+        projection = projected_element_text(
+            element.element_id or "", element.text, element.metadata, occurrence=occurrence
+        ).stripped()
+        text = projection.text
         if not text:
             continue
         start_offset = _metadata_int(element.metadata.get("raw_start"), cursor)
@@ -962,7 +1204,8 @@ def _element_spans(
         # 表の中の画像の説明文は、元の表の本文の後ろに区切って足す(#513)。位置(offset)は元の
         # 本文のまま変えない。
         if supplement := _pending_table_vision_supplement(element):
-            text = f"{text}\n{supplement}"
+            projection = _append_table_projection(projection, element, supplement, occurrence)
+            text = projection.text
         section_path = tuple(element.section_path)
         section_level = _metadata_int(
             element.metadata.get("section_level"),
@@ -976,6 +1219,7 @@ def _element_spans(
         spans.append(
             _ElementSpan(
                 text=text,
+                vision_projection=projection,
                 start_offset=start_offset,
                 end_offset=end_offset,
                 kind=element.kind,
@@ -1045,7 +1289,11 @@ def _element_spans(
                 ),
                 sheet_table_index=_metadata_positive_int(element.metadata.get("sheet_table_index")),
                 vision_described=element.kind == "figure"
-                and str(element.metadata.get("vision_status") or "") == "succeeded",
+                and (
+                    any(item.source.role != "image_ocr" for item in projection.ranges)
+                    if projection.ranges
+                    else str(element.metadata.get("vision_status") or "") == "succeeded"
+                ),
                 xml_tree_metadata=tuple(
                     (key, value)
                     for key, value in element.metadata.items()
@@ -1123,7 +1371,19 @@ def _pending_table_vision_supplement(element: DocumentElement) -> str:
     value = element.metadata.get(TABLE_VISION_TEXT_KEY)
     if not isinstance(value, str) or not value.strip():
         return ""
-    if _element_content_kind(element) != "table" or value.strip() in element.text:
+    if _element_content_kind(element) != "table":
+        return ""
+    if "vision_text_binding" in element.metadata:
+        projected_element_text(element.element_id or "", element.text, element.metadata)
+        binding = json.loads(str(element.metadata["vision_text_binding"]))
+        if binding["role"] == "image_table_supplement":
+            if binding["ranges"]:
+                return ""
+            projection = load_vision_text_projection(binding["projection"])
+            if projection is None or value != projection.answer_description:
+                raise ValueError("画像補足と保存済みの本文が一致しません。再解析してください。")
+            return table_vision_supplement(value)
+    if value.strip() in element.text:
         return ""
     return table_vision_supplement(value)
 
@@ -1376,7 +1636,15 @@ def _chunk_span_group(
     start_index: int,
 ) -> list[Chunk]:
     """非 table element group を chunk 化する。"""
-    text = _join_span_text(group)
+    projection = ProjectedVisionText.join(
+        [
+            span.vision_projection or ProjectedVisionText(span.text)
+            for span in group
+            if span.text.strip()
+        ],
+        "\n",
+    ).stripped()
+    text = projection.text
     metadata = _span_group_metadata(group)
     start_offset = min(span.start_offset for span in group)
     end_offset = max(span.end_offset for span in group)
@@ -1388,7 +1656,7 @@ def _chunk_span_group(
                     index=start_index,
                     start_offset=start_offset,
                     end_offset=end_offset,
-                    metadata=metadata,
+                    metadata={**metadata, **chunk_projection_metadata(projection)},
                 )
             ],
             group_kind="element_group",
@@ -1401,15 +1669,25 @@ def _chunk_span_group(
             start_offset=start_offset,
             metadata=metadata,
         )
+        if projection.ranges:
+            mapped = _split_projected_lines(projection, chunk_size)
+            if [chunk.text for chunk in list_chunks] != [item.text for item in mapped]:
+                raise ValueError("画像本文の行分割が一致しません。再解析してください。")
+            list_chunks = [
+                replace(chunk, metadata={**chunk.metadata, **chunk_projection_metadata(item)})
+                for chunk, item in zip(list_chunks, mapped, strict=True)
+            ]
         return _with_chunk_group_metadata(
             _apply_overlap(list_chunks, overlap) if overlap else list_chunks,
             group_kind="element_group",
             group_text=text,
         )
-    normalized = re.sub(r"\s+", " ", text).strip()
+    normalized_projection = projection.whitespace_normalized()
+    normalized = normalized_projection.text
     return _with_chunk_group_metadata(
         _chunk_normalized_text(
             normalized,
+            projection=normalized_projection,
             chunk_size=chunk_size,
             overlap=overlap,
             base_offset=start_offset,
@@ -1428,7 +1706,10 @@ def _chunk_table_span(
     start_index: int,
 ) -> list[Chunk]:
     """表は他要素と結合せず、必要な場合だけ行単位で分割する。"""
-    metadata = _span_group_metadata([span])
+    metadata = {
+        **_span_group_metadata([span]),
+        **chunk_projection_metadata(span.vision_projection or ProjectedVisionText(span.text)),
+    }
     source_template = metadata.get("chunk_template")
     if source_template and source_template != TABLE_PRESERVE_ROWS_TEMPLATE:
         metadata["source_chunk_template"] = source_template
@@ -1449,9 +1730,17 @@ def _chunk_table_span(
             group_kind="table",
             group_text=span.text,
         )
+    metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"vision_text_chunk_map", "answer_text_projection_json", "engine_search_text"}
+    }
+    parts = _split_table_rows_by_size(span.text, chunk_size)
+    if span.vision_projection is not None and span.vision_projection.ranges:
+        parts = _project_table_parts(span.vision_projection, parts, chunk_size)
     return _with_chunk_group_metadata(
         _chunks_from_table_parts(
-            _split_table_rows_by_size(span.text, chunk_size),
+            parts,
             start_index=start_index,
             start_offset=span.start_offset,
             metadata=metadata,
@@ -1578,7 +1867,10 @@ def _chunks_from_table_parts(
     for part in parts:
         if not part.text.strip():
             continue
-        part_metadata = dict(metadata)
+        part_metadata = {
+            **metadata,
+            **chunk_projection_metadata(part.vision_projection or ProjectedVisionText(part.text)),
+        }
         if part.row_start is not None:
             part_metadata["table_data_row_start"] = part.row_start
         if part.row_end is not None:
@@ -2049,6 +2341,111 @@ def _split_html_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePar
     return parts
 
 
+def _project_table_parts(
+    value: ProjectedVisionText, parts: list[_TablePart], chunk_size: int
+) -> list[_TablePart]:
+    """表parserが記録した位置と行番号から、繰り返す表頭も同時に投影する。"""
+    layout = html_table_layout(value.text)
+    result = []
+    if layout is not None and layout.row_ranges:
+        for index, part in enumerate(parts):
+            ranges = [
+                (0, layout.table_start),
+                (layout.table_start, layout.table_start + len(layout.table_open)),
+            ]
+            if layout.caption_range:
+                ranges.append(layout.caption_range)
+            ranges.extend(layout.row_ranges[: layout.header_rows])
+            if part.row_start is None or part.row_end is None:
+                raise ValueError("表の画像本文の行位置が未記録です。再解析してください。")
+            ranges.extend(
+                layout.row_ranges[
+                    layout.header_rows + part.row_start - 1 : layout.header_rows + part.row_end
+                ]
+            )
+            pieces = [value.slice(start, end) for start, end in ranges]
+            pieces.append(ProjectedVisionText("</table>"))
+            if index == len(parts) - 1:
+                pieces.append(value.slice(layout.table_end, len(value.text)))
+            projected = ProjectedVisionText.join(pieces, "")
+            if projected.text != part.text:
+                raise ValueError("表の画像本文の組み立てが一致しません。再解析してください。")
+            result.append(replace(part, vision_projection=projected))
+        return result
+    # Markdown行の先頭からの位置を保持し、既存の行番号で表頭/本文を連結する。
+    lines = []
+    cursor = 0
+    for line in value.text.splitlines(keepends=True):
+        if line.strip():
+            trimmed = line.rstrip()
+            lines.append(value.slice(cursor, cursor + len(trimmed)))
+        cursor += len(line)
+    prefix = 0
+    while prefix < len(lines) and not TABLE_LINE.match(lines[prefix].text):
+        prefix += 1
+    if prefix == len(lines):
+        # 非表形式の補足だけは行分割の実操作を再現する（文字列の位置検索をしない）。
+        projected_parts = _split_projected_lines(value, chunk_size)
+        if [part.text for part in projected_parts] != [part.text for part in parts]:
+            raise ValueError("表補足の分割位置が未記録です。再解析してください。")
+        return [
+            replace(part, vision_projection=projection)
+            for part, projection in zip(parts, projected_parts, strict=True)
+        ]
+    header_count = _table_header_line_count([line.text for line in lines[prefix:]])
+    for part in parts:
+        if part.row_start is None or part.row_end is None:
+            projected = ProjectedVisionText.join(lines, "\n")
+        else:
+            projected = ProjectedVisionText.join(
+                [
+                    *lines[: prefix + header_count],
+                    *lines[
+                        prefix + header_count + part.row_start - 1 : prefix
+                        + header_count
+                        + part.row_end
+                    ],
+                ],
+                "\n",
+            )
+        if projected.text != part.text:
+            raise ValueError("表補足の行位置が一致しません。再解析してください。")
+        result.append(replace(part, vision_projection=projected))
+    return result
+
+
+def _split_projected_lines(
+    value: ProjectedVisionText, chunk_size: int
+) -> list[ProjectedVisionText]:
+    parts = []
+    current = []
+    cursor = 0
+    for line in value.text.splitlines(keepends=True):
+        text = line.rstrip("\r\n")
+        item = value.slice(cursor, cursor + len(text))
+        cursor += len(line)
+        if not text.strip():
+            continue
+        if len(text) > chunk_size:
+            if current:
+                parts.append(ProjectedVisionText.join(current, "\n"))
+                current = []
+            parts.extend(
+                item.slice(start, min(start + chunk_size, len(text)))
+                for start in range(0, len(text), chunk_size)
+            )
+            continue
+        projected = ProjectedVisionText.join([*current, item], "\n")
+        if len(projected.text) <= chunk_size:
+            current.append(item)
+        else:
+            parts.append(ProjectedVisionText.join(current, "\n"))
+            current = [item]
+    if current:
+        parts.append(ProjectedVisionText.join(current, "\n"))
+    return parts
+
+
 def _split_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePart]:
     """表は行を壊さず、分割後の各 chunk に表頭を繰り返す。"""
     if (html_parts := _split_html_table_rows_by_size(text, chunk_size)) is not None:
@@ -2404,18 +2801,29 @@ def _apply_overlap(chunks: list[Chunk], overlap: int) -> list[Chunk]:
     """隣接チャンクの前方に前チャンク末尾を重ねる。"""
     overlapped: list[Chunk] = []
     previous_tail = ""
+    previous_projection = ProjectedVisionText("")
     for chunk in chunks:
         text = f"{previous_tail} {chunk.text}".strip() if previous_tail else chunk.text
+        projection = (
+            ProjectedVisionText.join(
+                [previous_projection, chunk_projected_text(chunk.text, chunk.metadata)], " "
+            ).stripped()
+            if previous_tail
+            else chunk_projected_text(chunk.text, chunk.metadata)
+        )
         overlapped.append(
             Chunk(
                 text=text,
                 index=chunk.index,
                 start_offset=max(0, chunk.start_offset - len(previous_tail)),
                 end_offset=chunk.end_offset,
-                metadata=dict(chunk.metadata),
+                metadata={**chunk.metadata, **chunk_projection_metadata(projection)},
             )
         )
         previous_tail = chunk.text[-overlap:]
+        previous_projection = chunk_projected_text(chunk.text, chunk.metadata).slice(
+            max(0, len(chunk.text) - overlap), len(chunk.text)
+        )
     return overlapped
 
 

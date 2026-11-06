@@ -60,6 +60,7 @@ from rag_engine.retrieval.search_stages import (
     IMAGE_EVIDENCE_STAGE,
     REFERENCE_EXPANSION_STAGE,
 )
+from rag_parser_core.vision_text import require_projected_vision_source
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -4159,6 +4160,14 @@ def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
 
 
 def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
+    answer_projection: dict[str, Any] = {}
+    if "answer_text_projection_json" in chunk.metadata:
+        try:
+            answer_projection["answer_text_projection"] = json.loads(
+                str(chunk.metadata["answer_text_projection_json"])
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("回答本文の投影が壊れています。再分割してください。") from exc
     raw = chunk.metadata.get("engine_metadata_json")
     if isinstance(raw, str) and raw.strip():
         try:
@@ -4168,6 +4177,7 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         if isinstance(decoded, dict):
             return {
                 **decoded,
+                **answer_projection,
                 **{
                     key: chunk.metadata[key]
                     for key in (
@@ -4182,6 +4192,7 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
     # 親子階層以外の分割方式の chunk も最小の v4 metadata で扱う。
     section = str(chunk.metadata.get("section_path") or "")
     return {
+        **answer_projection,
         "schema_version": 4,
         "active": True,
         "atomic": False,
@@ -4515,6 +4526,16 @@ def _stored_child(
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
+    require_projected_vision_source(metadata, ())
+    require_projected_vision_source(
+        {
+            **metadata,
+            **{
+                key: chunk.metadata[key] for key in ("figure_text_source",) if key in chunk.metadata
+            },
+        },
+        (),
+    )
     if isinstance(document := metadata.get("document"), dict) and "first_page_context" in document:
         metadata["document"] = {
             key: value for key, value in document.items() if key != "first_page_context"
@@ -4763,6 +4784,20 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
             continue
         text = parent_text
         metadata = dict(members[0].metadata)
+        proof_values = [
+            state.chunks[child.chunk_uid].metadata.get("parent_answer_text_projection_json")
+            for child in members
+            if child.chunk_uid in state.chunks
+        ]
+        if any(proof is not None for proof in proof_values):
+            if not proof_values or any(proof != proof_values[0] for proof in proof_values):
+                raise ValueError("親の回答本文の投影が一致しません。再分割してください。")
+            try:
+                metadata["answer_text_projection"] = json.loads(str(proof_values[0]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("親の回答本文の投影が壊れています。再分割してください。") from exc
+        elif "answer_text_projection" in metadata:
+            raise ValueError("親の回答本文の投影が未記録です。再分割してください。")
         _merge_member_metadata(metadata, members)
         _restore_parent_native_ranges(text, metadata, members, state)
         metadata.pop("rrf_score", None)
