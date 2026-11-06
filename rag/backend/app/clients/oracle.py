@@ -14332,16 +14332,6 @@ def _ensure_default_document_recipe_row(
     return _document_recipe_row(created)
 
 
-def _ensure_recipe_row_if_default(
-    connection: OracleConnectionProtocol,
-    document_id: str,
-    recipe_id: str,
-) -> None:
-    """GET が仮の行で返したレシピ1を、最初の書き込みの transaction で実体化する。"""
-    if recipe_id == default_document_recipe_id(document_id):
-        _ensure_default_document_recipe_row(connection, document_id)
-
-
 def _select_knowledge_base(
     connection: OracleConnectionProtocol,
     knowledge_base_id: str,
