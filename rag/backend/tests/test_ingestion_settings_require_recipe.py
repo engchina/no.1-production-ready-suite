@@ -22,6 +22,21 @@ from app.schemas.document import (
 )
 
 
+class LegacyDocument:
+    """文書の行。旧列の処理設定を読んだら ``legacy`` を記録する。"""
+
+    def __init__(self, calls: list[str], legacy: bool | None) -> None:
+        self.id = "synthetic-doc"
+        self.content_sha256 = "a" * 64
+        self._calls = calls
+        self._legacy = legacy
+
+    @property
+    def processing_config(self) -> DocumentProcessingConfig:
+        self._calls.append("legacy")
+        return DocumentProcessingConfig(vision_enabled=self._legacy)
+
+
 class RecipeOracle:
     def __init__(self, row: dict[str, Any] | None, legacy: bool | None) -> None:
         self.row = row
@@ -36,12 +51,8 @@ class RecipeOracle:
         self.calls.append(f"recipe:{recipe_id}")
         return self.row
 
-    async def get_document_processing_config(self, _document_id: str) -> DocumentProcessingConfig:
-        self.calls.append("legacy")
-        return DocumentProcessingConfig(vision_enabled=self.legacy)
-
     async def get_document(self, _document_id: str) -> Any:
-        return SimpleNamespace(id="synthetic-doc", content_sha256="a" * 64)
+        return LegacyDocument(self.calls, self.legacy)
 
 
 @pytest.mark.parametrize("recipe_id", [None, "synthetic-recipe"])
@@ -116,10 +127,7 @@ class VisibleRecipeOracle(RecipeOracle):
         return []
 
 
-@pytest.mark.parametrize("route", ["chunk_sets", "segments"])
-async def test_missing_recipe_get_returns_safe_404(
-    monkeypatch: pytest.MonkeyPatch, route: str
-) -> None:
+async def test_missing_recipe_get_returns_safe_404(monkeypatch: pytest.MonkeyPatch) -> None:
     oracle = VisibleRecipeOracle(None, True)
 
     async def no_plan(*_args: Any, **_kwargs: Any) -> tuple[None, dict[str, Any]]:
@@ -128,10 +136,7 @@ async def test_missing_recipe_get_returns_safe_404(
     monkeypatch.setattr(documents, "OracleClient", lambda: oracle)
     monkeypatch.setattr(documents, "_materialization_plan_for_document", no_plan)
     with pytest.raises(HTTPException) as raised:
-        if route == "chunk_sets":
-            await documents.list_document_chunk_sets("synthetic-doc")
-        else:
-            await documents.list_document_ingestion_segments("synthetic-doc")
+        await documents.list_document_chunk_sets("synthetic-doc")
     request = Request(
         {"type": "http", "method": "GET", "path": "/api/documents/synthetic-doc", "headers": []}
     )
@@ -143,6 +148,17 @@ async def test_missing_recipe_get_returns_safe_404(
     assert raised.value.detail in json.loads(body)["error_messages"]
     assert "処理レシピ" in body.decode()
     assert "legacy" not in oracle.calls
+
+
+async def test_segments_get_reads_only_saved_segments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """segment の一覧は保存済みの checkpoint だけを返し、レシピの設定も文書の行も読まない。"""
+    oracle = VisibleRecipeOracle(None, True)
+    monkeypatch.setattr(documents, "OracleClient", lambda: oracle)
+
+    result = await documents.list_document_ingestion_segments("synthetic-doc")
+
+    assert result.data == []
+    assert oracle.calls == []
 
 
 @pytest.mark.parametrize("status", [409, 503])
@@ -168,3 +184,34 @@ async def test_formal_empty_config_keeps_global_inheritance() -> None:
     )
     assert config.vision_enabled is None
     assert "legacy" not in oracle.calls
+
+
+@pytest.mark.parametrize(
+    "capabilities,recipe_id",
+    [((), None), ((), "synthetic-recipe"), (("ensure",), None), (("get",), None)],
+)
+async def test_required_recipe_reader_cannot_fall_back_to_legacy_settings(
+    capabilities: tuple[str, ...], recipe_id: str | None
+) -> None:
+    calls: list[str] = []
+
+    async def legacy_document(_document_id: str) -> LegacyDocument:
+        return LegacyDocument(calls, False)
+
+    async def ensure(_document_id: str) -> dict[str, str]:
+        calls.append("ensure")
+        return {"recipe_id": "synthetic-recipe"}
+
+    async def get(_document_id: str, _recipe_id: str) -> dict[str, object]:
+        calls.append("get")
+        return {"processing_config": {"vision_enabled": True}}
+
+    oracle = SimpleNamespace(get_document=legacy_document)
+    if "ensure" in capabilities:
+        oracle.ensure_default_document_recipe = ensure
+    if "get" in capabilities:
+        oracle.get_document_recipe = get
+    with pytest.raises(AttributeError):
+        await documents._resolve_ingestion_settings(cast(Any, oracle), "synthetic-doc", recipe_id)
+    assert calls == (["ensure"] if capabilities == ("ensure",) else [])
+    assert "legacy" not in calls

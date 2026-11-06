@@ -111,14 +111,6 @@ class FakeOracle(UneditedPromptOracle):
             error_message=error_message,
         )
 
-    async def save_extraction(
-        self,
-        document_id: str,
-        extraction: StructuredExtraction,
-    ) -> None:
-        _ = document_id
-        self.saved_extraction = extraction
-
     async def save_index(
         self,
         document_id: str,

@@ -27,6 +27,10 @@ const BUILTIN = {
   english: { en_section_words: ["section=section"] },
 };
 
+function releaseMetadata(item: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(item).filter(([key]) => key !== "effective"));
+}
+
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
 }
@@ -62,7 +66,7 @@ async function mockLanguagePack(page: Page, builtin: Record<string, Record<strin
     await route.fulfill({ json: envelope({ before_id: current.id, after_id: `draft:${revision}`, differences, ingest_changed: differences.length > 0, impact_requires_review: false, affected_stages: differences.length ? ["EXTRACT", "CHUNK", "INDEX"] : [] }) });
   });
   await page.route("**/api/settings/language-pack/releases?*", async route => {
-    await route.fulfill({ json: envelope({ releases: [current, release(1, { ...builtin, numbers: { ...builtin.numbers, article_units: ["条", "款"] } })], total: 2 }) });
+    await route.fulfill({ json: envelope({ releases: [current, release(1, { ...builtin, numbers: { ...builtin.numbers, article_units: ["条", "款"] } })].map(releaseMetadata), total: 2 }) });
   });
   await page.route("**/api/settings/language-pack/releases/v*", async route => {
     const id = route.request().url().split("/releases/")[1];
@@ -325,7 +329,7 @@ test("公開版の履歴はサーバーのページ条件で読み、表示件�
     const url = new URL(route.request().url()); requests.push(url.search);
     const offset = Number(url.searchParams.get("offset")); const limit = Number(url.searchParams.get("limit"));
     const releases = Array.from({ length: Math.min(limit, 35 - offset) }, (_, index) => ({ id: `v${35-offset-index}`, version: 35-offset-index, effective: BUILTIN, hash: "a", ingest_hash: "a", published_at: "2026-10-17T09:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "合成の変更" }));
-    await route.fulfill({ json: envelope({ releases, total: 35 }) });
+    await route.fulfill({ json: envelope({ releases: releases.map(releaseMetadata), total: 35 }) });
   });
   await page.goto("/settings/language-pack");
   await page.getByRole("button", { name: "次へ", exact: true }).click();
@@ -390,7 +394,7 @@ test("草稿の競合後は変更の破棄を確認して最新の草稿を読�
 
 test("索引が参照する過去版は現在の履歴ページに無くても ID で読み取り専用表示する", { tag: "@responsive" }, async ({ page }) => {
   const { readState } = await mockLanguagePack(page);
-  await page.route("**/api/settings/language-pack/releases?*", route => route.fulfill({ json: envelope({ releases: [readState().current], total: 1 }) }));
+  await page.route("**/api/settings/language-pack/releases?*", route => route.fulfill({ json: envelope({ releases: [releaseMetadata(readState().current)], total: 1 }) }));
   await page.goto("/settings/language-pack?release=v1");
   const details = page.getByRole("region", { name: "公開版の内容（読み取り専用）" });
   await expect(details.getByRole("heading")).toContainText("v1");
@@ -467,3 +471,35 @@ test("旧草稿の追加表示文言は補完して試せるが公開版を書�
     await page.screenshot({ path: test.info().outputPath(`legacy-draft-preview-${theme}.png`) });
   }
 });
+
+
+for (const width of [1440, 375]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`履歴は未検証の旧版をメタデータだけで一覧表示し内容の拒否を保つ ${width} ${theme}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript(value => {
+        localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+      }, theme);
+      await mockLanguagePack(page);
+      const message = "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。";
+      await page.route("**/api/settings/language-pack/releases/v1", route => route.fulfill({ status: 409, json: { data: null, error_messages: [message], warning_messages: [] } }));
+      let restoreCalls = 0;
+      await page.route("**/api/settings/language-pack/releases/v1/restore", route => {
+        restoreCalls += 1;
+        return route.fulfill({ status: 409, json: { data: null, error_messages: [message], warning_messages: [] } });
+      });
+      const listResponse = page.waitForResponse(response => response.url().includes("/language-pack/releases?") && response.status() === 200);
+      await page.goto("/settings/language-pack");
+      const listing = (await (await listResponse).json()).data;
+      expect(listing.releases).toHaveLength(2);
+      expect(listing.releases.every((item: Record<string, unknown>) => !("effective" in item) && !("validated" in item))).toBe(true);
+      await page.getByRole("button", { name: "v1", exact: true }).click();
+      await expect(page.getByText(message, { exact: true })).toBeVisible();
+      await expect(page.getByText("現在使用中 v2")).toBeVisible();
+      await expect(page.getByRole("button", { name: t("settings.language.release.restore"), exact: true })).toHaveCount(0);
+      expect(restoreCalls).toBe(0);
+      await expectNoPageOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`unsupported-history-${width}-${theme}.png`), fullPage: true });
+    });
+  }
+}

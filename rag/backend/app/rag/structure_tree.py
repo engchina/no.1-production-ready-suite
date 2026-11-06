@@ -17,6 +17,7 @@ from app.rag.graph_index import (
     _entity_type_for_content_kind,
     graph_body_node_id,
     graph_section_node_id,
+    is_body_chunk,
 )
 
 
@@ -108,7 +109,7 @@ def build_structure_tree(
             parent = add(name, part, "section", parent)
         if not parts and title:
             parent = add(title, title, "section", None)
-        if not parts and not title:
+        if is_body_chunk(row.section_path, row.section_title):
             node_id = graph_body_node_id(chunk_set_id, knowledge_base_id)
             if node_id not in tree.nodes:
                 label = current_pack().text("search_labels", "body")

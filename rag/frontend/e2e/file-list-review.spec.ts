@@ -3,6 +3,7 @@ import { expectGrowingList } from "./_list-viewport";
 import type { SourceProfile } from "../src/lib/api";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { t } from "../src/lib/i18n";
 
 // Issue 281: 文書インデックスの不具合（範囲外のページ・投入結果の通知・検索欄の blur・状態の絞り込み・
 // 削除の後始末の警告）の回帰。desktop / mobile の両 project で動く。
@@ -723,8 +724,8 @@ test("言語資源の対象条件を維持し、使用版の判定を単一ラ�
   const documents = Array.from({ length: 30 }, (_, index) => ({
     ...documentSummary(`release-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null,
     language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
-      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null },
-      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "new", relation: "current", built_at: null, job_id: null, target_release_id: null },
+      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null, target_version: null },
+      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "new", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] },
   }));
   const requests: URL[] = [];
@@ -743,21 +744,24 @@ test("言語資源の対象条件を維持し、使用版の判定を単一ラ�
   await page.screenshot({ path: test.info().outputPath("document-language-versions.png"), fullPage: true });
 });
 
-test("使用版未記録は状態列と同じ形式のラベルを1つだけ表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("使用版未記録と未構築を区別し、状態列と同じ形式のラベルを1つだけ表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const documents = [
-    { ...documentSummary("unrecorded-no-use", "sample-a.txt", "UPLOADED"), language_pack: null },
-    { ...documentSummary("unrecorded-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } },
-    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
-      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null },
-      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null },
+    { ...documentSummary("unrecorded-no-use", "sample-a.txt", "UPLOADED"), language_pack: null, expected: "版未記録" },
+    { ...documentSummary("not-built-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] }, expected: "未構築" },
+    { ...documentSummary("not-built-queued", "sample-d.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+      { recipe_id: "recipe-1", chunk_set_id: null, release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: "release-current", target_version: 3 },
+    ] }, expected: "未構築" },
+    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), expected: "版未記録", language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null },
+      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] } },
   ];
   await mockFileListApi(page, documents);
   await page.goto("/file-list");
   for (const document of documents) {
     const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: document.file_name, exact: true }) });
-    const cell = row.getByRole("cell", { name: "版未記録", exact: true });
-    await expect(cell).toHaveText("版未記録");
+    const cell = row.getByRole("cell", { name: document.expected, exact: true });
+    await expect(cell).toHaveText(document.expected);
     await expect(cell.locator("[data-status-variant]")).toHaveCount(1);
     await expect(cell.locator("a, button")).toHaveCount(0);
   }
@@ -830,3 +834,62 @@ test("ページをまたぐ選択から実在のレシピを確認し、固定�
   await page.screenshot({path:testInfo.outputPath("bulk-reprocess-toolbar.png")});
   await expectNoPageOverflow(page);
 });
+
+
+// #4194: 使用中の版を現在の契約で読めない行があっても送信を止めず、その行だけ抽出から再処理する。
+for (const theme of ["light", "dark"] as const) {
+  test(`一括再処理は使用中の版を読めない行を比較できないと示し、その行だけ抽出から再処理する（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript(value => {
+      localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+    const documents = ["unreadable-doc-a", "unreadable-doc-b"].map((id, index) => ({ ...documentSummary(id, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } }));
+    await mockFileListApi(page, documents);
+    await page.route("**/api/documents/language-pack/reprocessing-targets", route => route.fulfill({ json: { data: { current_release: { id: "release-current", version: 3, effective: {}, hash: "current", ingest_hash: "current", published_at: "2026-10-17T00:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "" }, targets: [
+      { document_id: "unreadable-doc-a", file_name: "sample-0.txt", recipe_id: "recipe-a", slot_no: 1, config_revision: 2, used_release_id: "release-old", used_ingest_hash: "old", relation: "different" },
+      { document_id: "unreadable-doc-b", file_name: "sample-1.txt", recipe_id: "recipe-b", slot_no: 1, config_revision: 5, used_release_id: "release-legacy", used_ingest_hash: "legacy", relation: "different" },
+    ], unavailable_count: 0 }, error_messages: [], warning_messages: [] } }));
+    await page.route("**/api/settings/language-pack/releases/compare?*", async route => {
+      const before = new URL(route.request().url()).searchParams.get("before_id");
+      if (before === "release-legacy") {
+        await route.fulfill({ status: 409, json: { data: null, error_messages: ["保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"], warning_messages: [] } });
+        return;
+      }
+      await route.fulfill({ json: { data: { before_id: "release-old", after_id: "release-current", differences: [{ section: "numbers", key: "article_units", before: ["条"], after: ["条", "款"], ingest: true }], ingest_changed: true, impact_requires_review: false, affected_stages: ["CHUNK", "INDEX"] }, error_messages: [], warning_messages: [] } });
+    });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("**/api/documents/language-pack/reprocessing-jobs", async route => {
+      submissions.push(route.request().postDataJSON());
+      await route.fulfill({ json: { data: { accepted_count: 2, rejected_count: 0, items: [
+        { document_id: "unreadable-doc-a", recipe_id: "recipe-a", job_id: "job-a", outcome: "accepted", reason: null },
+        { document_id: "unreadable-doc-b", recipe_id: "recipe-b", job_id: "job-b", outcome: "accepted", reason: null },
+      ] }, error_messages: [], warning_messages: [] } });
+    });
+    await page.goto("/file-list?language_pack_relation=different&current_release_id=release-current");
+    await page.getByRole("checkbox", { name: "すべて選択", exact: true }).check();
+    await page.getByRole("button", { name: "一括再処理", exact: true }).click();
+    const panel = page.getByTestId("language-pack-bulk-reprocess");
+    const targets = panel.getByRole("table", { name: "再処理するレシピを選ぶ" });
+    await targets.getByRole("checkbox", { name: "すべて選択", exact: true }).check();
+    await panel.getByRole("button", { name: "選択レシピの差分と影響を確認する" }).click();
+    await panel.getByRole("combobox", { name: "再処理を始める工程" }).click();
+    await page.getByRole("option", { name: "Chunk 作成", exact: true }).click();
+    await expect(panel.getByText(/契約/).first()).toBeVisible();
+    await panel.screenshot({ path: testInfo.outputPath(`unreadable-bulk-review-${theme}.png`) });
+    await expect(panel.getByText(t("settings.language.release.unreadableBulkTitle", { count: 1 }), { exact: true })).toBeVisible();
+    await expect(panel.getByText(t("settings.language.release.unreadableBulkHelp"), { exact: true })).toBeVisible();
+    await expect(panel.getByText("sample-1.txt / レシピ1", { exact: true })).toBeVisible();
+    const submit = panel.getByRole("button", { name: "再処理する (2)", exact: true });
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(t("settings.language.release.unreadableBulkConfirm", { count: 1, phase: "抽出" }));
+    await dialog.getByRole("button", { name: "再処理する", exact: true }).click();
+    await expect.poll(() => submissions).toEqual([{ expected_release_id: "release-current", targets: [
+      { document_id: "unreadable-doc-a", recipe_id: "recipe-a", phase: "CHUNK", expected_config_revision: 2 },
+      { document_id: "unreadable-doc-b", recipe_id: "recipe-b", phase: "EXTRACT", expected_config_revision: 5 },
+    ] }]);
+    await expect(panel.getByText("受付 2 レシピ・受付不可 0 レシピ。処理結果は各文書の状態で確認してください。", { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await panel.screenshot({ path: testInfo.outputPath(`unreadable-bulk-queued-${theme}.png`) });
+  });
+}

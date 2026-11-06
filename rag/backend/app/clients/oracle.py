@@ -3992,8 +3992,10 @@ class OracleClient:
         """文書の検索対象の chunk_set の派生 layer のうち、指紋のある行を返す(一覧の判定。#550)。
 
         検索対象はレシピの active chunk_set と、レシピを持たない(legacy の plan の)配信中の
-        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピ
-        (無ければ文書)の処理設定も返す。抽出結果などの大きな JSON 列は読まない。
+        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピの
+        処理設定も返す。レシピを持たない chunk_set は、呼び出し側が文書詳細と同じく既定のレシピと
+        KB の計画で判定する(文書の行の旧列は読まない。#4185)。抽出結果などの大きな JSON 列は
+        読まない。
         """
         ids = list(dict.fromkeys(document_ids))
         if not ids:
@@ -4004,8 +4006,7 @@ class OracleClient:
                 """
                 SELECT l.document_id, l.layer_id, l.layer_kind, l.parent_chunk_set_id,
                        l.input_fingerprint, cs.recipe_id,
-                       r.processing_config AS recipe_processing_config,
-                       d.processing_config AS document_processing_config
+                       r.processing_config AS recipe_processing_config
                 FROM rag_artifact_layers l
                 JOIN rag_chunk_sets cs ON cs.chunk_set_id = l.parent_chunk_set_id
                 JOIN rag_documents d ON d.document_id = l.document_id
@@ -4024,11 +4025,7 @@ class OracleClient:
         result: list[dict[str, object]] = []
         for row in rows:
             normalized = {str(key).lower(): value for key, value in row.items()}
-            for key in (
-                "input_fingerprint",
-                "recipe_processing_config",
-                "document_processing_config",
-            ):
+            for key in ("input_fingerprint", "recipe_processing_config"):
                 normalized[key] = _json_loads(normalized.get(key))
             result.append(normalized)
         return result
@@ -6212,8 +6209,11 @@ class OracleClient:
         targets = await self._fetch_all(
             _render_sql(
                 """
-            SELECT j.document_id, j.recipe_id, j.language_pack_release_id
+            SELECT j.document_id, j.recipe_id, j.language_pack_release_id,
+                target.version AS target_version
             FROM rag_ingestion_jobs j JOIN rag_documents d ON d.document_id = j.document_id
+            LEFT JOIN rag_language_pack_releases target
+                ON target.release_id = j.language_pack_release_id
             WHERE {predicate} AND j.status IN ('QUEUED', 'RUNNING') AND {access}
             ORDER BY j.queued_at DESC
         """,
@@ -6222,17 +6222,26 @@ class OracleClient:
             ),
             _with_tenant_bind(job_binds),
         )
+        # 構築中の対象版の番号は、job が固定した版の行から引く（active の有無で経路を分けない）。
+        target_versions: dict[str, int | None] = {}
         for row in targets:
             use = result[str(row["document_id"])]
             recipe_id = _optional_str(row.get("recipe_id"))
+            target_id = _optional_str(row.get("language_pack_release_id"))
+            if target_id:
+                target_versions.setdefault(target_id, _optional_int(row.get("target_version")))
             if not any(recipe.recipe_id == recipe_id for recipe in use.recipes):
                 use.recipes.append(
                     LanguagePackRecipeUse(
                         recipe_id=recipe_id,
                         relation=LanguagePackIndexRelation.UNRECORDED,
-                        target_release_id=_optional_str(row.get("language_pack_release_id")),
+                        target_release_id=target_id,
                     )
                 )
+        for use in result.values():
+            for recipe in use.recipes:
+                if recipe.target_release_id:
+                    recipe.target_version = target_versions.get(recipe.target_release_id)
         return result
 
     async def list_documents(
@@ -6351,10 +6360,6 @@ class OracleClient:
         summaries = [_to_document_summary(_stored_document_from_row(row)) for row in rows]
         return await self._attach_knowledge_base_refs_to_documents(summaries)
 
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        """アクセス可能な document の extraction JSON だけを返す。"""
-        return await self._list_document_extractions_with_oracle()
-
     async def count_documents(
         self,
         status: FileStatus | None = None,
@@ -6429,61 +6434,6 @@ class OracleClient:
         if row is None:
             return None
         return _to_document_summary(_stored_document_from_row(row))
-
-    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
-        """文書単位の処理レシピ上書きを返す。未設定は全項目継承。"""
-        row = await self._fetch_one(
-            _render_sql(
-                """
-                SELECT processing_config
-                FROM rag_documents
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                access_predicate=_oracle_access_predicate_sql(),
-            ),
-            _with_tenant_bind({"document_id": document_id}),
-        )
-        if row is None:
-            raise KeyError(f"document_id={document_id} は存在しません。")
-        try:
-            return DocumentProcessingConfig.model_validate(
-                _json_loads(row.get("processing_config"))
-            )
-        except Exception:  # noqa: BLE001 - 壊れた永続値は global 継承へ安全に縮退する
-            logger.warning(
-                "文書処理設定の復元に失敗したため global 継承へ縮退します。",
-                exc_info=True,
-            )
-            return DocumentProcessingConfig()
-
-    async def update_document_processing_config(
-        self,
-        document_id: str,
-        config: DocumentProcessingConfig,
-    ) -> DocumentProcessingConfig:
-        """文書単位の処理レシピ上書きを保存する。"""
-        payload = config.model_dump(mode="json", exclude_none=True)
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentProcessingConfig:
-            if _select_document_state(connection, document_id) is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            _execute(
-                connection,
-                """
-                UPDATE rag_documents
-                SET processing_config = :processing_config
-                WHERE document_id = :document_id
-                """,
-                {
-                    "document_id": document_id,
-                    "processing_config": _json_bind(payload),
-                },
-                input_sizes=_json_input_sizes("processing_config"),
-            )
-            return config
-
-        return await self._run_transaction(operation)
 
     async def delete_document(self, document_id: str) -> bool:
         """ドキュメントと関連 chunk/index/ingestion 行を削除する。"""
@@ -6673,12 +6623,6 @@ class OracleClient:
             error_message=error_message,
         )
 
-    async def save_extraction(
-        self, document_id: str, extraction: StructuredExtraction
-    ) -> DocumentDetail:
-        """VLM/LLM の抽出本文を保存する。"""
-        return await self._save_extraction_with_oracle(document_id, extraction)
-
     async def save_index(
         self,
         document_id: str,
@@ -6687,7 +6631,7 @@ class OracleClient:
         embeddings: list[list[float]],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """構造化抽出と chunk/vector を 1 transaction で保存する。
+        """chunk/vector を 1 transaction で保存する(抽出は文書の行に書かない。#4185)。
 
         chunk_set_id を渡すと、その chunk_set の chunk だけを置換・タグ付けする(複数 chunk_set
         共存)。None は文書の全 chunk を置換し未タグ保存(現行挙動・後方互換)。
@@ -11393,22 +11337,6 @@ class OracleClient:
         )
         return [item.model_copy(update={"language_pack": uses.get(item.id)}) for item in summaries]
 
-    async def _list_document_extractions_with_oracle(self) -> list[dict[str, object]]:
-        """Oracle document table から extraction JSON だけを取得する。"""
-        where_sql, binds = _oracle_document_where()
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT extraction
-            FROM rag_documents
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return [_json_loads(row.get("extraction")) for row in rows]
-
     async def _count_documents_with_oracle(
         self,
         status: FileStatus | None,
@@ -12034,57 +11962,6 @@ class OracleClient:
 
         return await self._run_transaction(operation, retry_deadlocks=True)
 
-    async def _save_extraction_with_oracle(
-        self,
-        document_id: str,
-        extraction: StructuredExtraction,
-    ) -> DocumentDetail:
-        """Oracle document table へ構造化抽出を保存する。"""
-
-        if release := active_release():
-            extraction = extraction.model_copy(
-                update={
-                    "parser_artifacts": {
-                        **extraction.parser_artifacts,
-                        "language_pack_release_id": release.id,
-                        "language_pack_ingest_hash": release.ingest_hash,
-                    }
-                }
-            )
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET extraction = :extraction
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "extraction": _json_dumps(extraction.to_document_payload()),
-                    }
-                ),
-            )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
-
-        return await self._run_transaction(operation)
-
     @staticmethod
     def _chunk_insert_rows(
         document_id: str,
@@ -12161,8 +12038,10 @@ class OracleClient:
         embeddings: Sequence[Sequence[float] | None],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。
+        """chunk/vector を同一 Oracle transaction で置換する。
 
+        ``extraction`` は chunk の出所の照合と 1 ページ目の本文にだけ使い、文書の行には書かない
+        (抽出の正本はレシピの抽出の版。#4185)。
         chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
@@ -12198,24 +12077,6 @@ class OracleClient:
             from app.rag.chunk_source_projection import _validate_chunk_source_projection
 
             _validate_chunk_source_projection(extraction, chunks)
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET extraction = :extraction
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "extraction": _json_dumps(extraction.to_document_payload()),
-                    }
-                ),
-            )
             # chunk_set_id 指定時はその chunk_set の chunk だけ置換する(複数 chunk_set 共存可)。
             chunk_set_clause = (
                 "AND chunk_set_id = :chunk_set_id" if chunk_set_id is not None else ""

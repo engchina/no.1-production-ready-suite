@@ -271,11 +271,13 @@ async def test_queued_only_recipe_reports_target_without_inventing_active_artifa
                     "document_id": "document-a",
                     "recipe_id": "recipe-a",
                     "language_pack_release_id": "release-b",
+                    "target_version": 7,
                 },
                 {
                     "document_id": "document-a",
                     "recipe_id": "recipe-a",
                     "language_pack_release_id": "release-older",
+                    "target_version": 6,
                 },
             ],
         ]
@@ -292,6 +294,187 @@ async def test_queued_only_recipe_reports_target_without_inventing_active_artifa
     assert used.version is None and used.built_at is None and used.job_id is None
     assert used.relation == LanguagePackIndexRelation.UNRECORDED
     assert used.target_release_id == "release-b"
+    assert used.target_version == 7
     assert uses["document-a"].current_release_id == current.id
     assert "cs.is_active = 1" in fetch.call_args_list[0].args[0]
     assert "j.status IN ('QUEUED', 'RUNNING')" in fetch.call_args_list[1].args[0]
+    assert "LEFT JOIN rag_language_pack_releases target" in fetch.call_args_list[1].args[0]
+
+
+def _active_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "document_id": "document-a",
+        "recipe_id": "recipe-a",
+        "chunk_set_id": "chunks-a",
+        "language_pack_release_id": "release-a",
+        "language_pack_ingest_hash": None,
+        "language_pack_job_id": "job-a",
+        "language_pack_built_at": None,
+        "version": 1,
+        "target_release_id": None,
+    }
+    return {**row, **overrides}
+
+
+def _mock_release_store(monkeypatch: pytest.MonkeyPatch, current: LanguagePackRelease) -> None:
+    monkeypatch.setattr(
+        oracle_module,
+        "LanguagePackReleaseStore",
+        lambda _client: type("Store", (), {"get": AsyncMock(return_value=current)})(),
+    )
+
+
+async def test_active_recipe_reports_target_version_from_pinned_job_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既存の索引を持つレシピにも、構築中の job が固定した版の番号を付ける。"""
+    current = release("release-b", 2)
+    client = oracle_module.OracleClient()
+    active = _active_row(language_pack_ingest_hash=current.ingest_hash + "-old")
+    fetch = AsyncMock(
+        side_effect=[
+            [{**active, "target_release_id": "release-b"}],
+            [
+                {
+                    "document_id": "document-a",
+                    "recipe_id": "recipe-a",
+                    "language_pack_release_id": "release-b",
+                    "target_version": 2,
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    _mock_release_store(monkeypatch, current)
+    uses = await client.document_language_pack_uses(["document-a"], current_release_id=current.id)
+    [used] = uses["document-a"].recipes
+    assert used.chunk_set_id == "chunks-a" and used.release_id == "release-a"
+    assert used.version == 1
+    assert used.relation == LanguagePackIndexRelation.DIFFERENT
+    assert used.target_release_id == "release-b" and used.target_version == 2
+
+
+async def test_active_recipe_without_ingest_hash_is_unrecorded_and_target_row_missing_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """取込設定の hash が無い索引は判定不可のまま返し、版の行が無い対象版の番号を推定しない。"""
+    current = release("release-b", 2)
+    client = oracle_module.OracleClient()
+    fetch = AsyncMock(
+        side_effect=[
+            [_active_row(language_pack_ingest_hash=None, target_release_id="release-gone")],
+            [
+                {
+                    "document_id": "document-a",
+                    "recipe_id": "recipe-a",
+                    "language_pack_release_id": "release-gone",
+                    "target_version": None,
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    _mock_release_store(monkeypatch, current)
+    uses = await client.document_language_pack_uses(["document-a"], current_release_id=current.id)
+    [used] = uses["document-a"].recipes
+    assert used.ingest_hash is None
+    assert used.relation == LanguagePackIndexRelation.UNRECORDED
+    assert used.target_release_id == "release-gone" and used.target_version is None
+
+
+def _unreadable_store(monkeypatch: pytest.MonkeyPatch, *, raise_on_get: bool) -> None:
+    """現在の契約で読めない旧版を返す保存先（読むときに失敗するか、返した版の照合に失敗する）。"""
+    from app.clients import language_pack_release_store
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    legacy = release("release-legacy", version=1)
+    # 旧い版は項目が欠けている（合成）。hash はそのまま残し、照合の失敗を再現する。
+    effective = dict(legacy.effective)
+    effective.pop(next(iter(effective)))
+    legacy = legacy.model_copy(update={"effective": effective})
+
+    async def get(_identity: str) -> LanguagePackRelease:
+        if raise_on_get:
+            raise LanguagePackSnapshotError("保存済み言語資源の項目が現在の契約に合いません。")
+        return legacy
+
+    monkeypatch.setattr(
+        language_pack_release_store,
+        "LanguagePackReleaseStore",
+        lambda _oracle: type("Store", (), {"get": staticmethod(get)})(),
+    )
+
+
+@pytest.mark.parametrize("raise_on_get", [True, False], ids=["store-rejects", "pack-rejects"])
+@pytest.mark.parametrize("phase", ["CHUNK", "INDEX"])
+async def test_unreadable_artifact_release_is_not_reusable(
+    monkeypatch: pytest.MonkeyPatch, raise_on_get: bool, phase: str
+) -> None:
+    """現在の契約で読めない版の成果物は、例外にせず再利用できないと判定する。"""
+    _unreadable_store(monkeypatch, raise_on_get=raise_on_get)
+    legacy = release("release-legacy", version=1)
+    provenance = {
+        "language_pack_release_id": legacy.id,
+        "language_pack_ingest_hash": legacy.ingest_hash,
+    }
+    with ingestion_release_scope(release("release-b", version=2), "job-b"):
+        assert not await artifact_language_compatible(cast(Any, object()), provenance, phase)
+
+
+async def test_chunk_reuse_of_unreadable_release_asks_to_reprocess_from_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHUNK の再開で抽出の版が読めないとき、汎用の失敗ではなく文書解析からの再処理を示す。"""
+    from app.rag.ingestion import IngestionUserError
+    from app.schemas.document import DocumentDetail, FileStatus, IngestionJobPhase
+
+    _unreadable_store(monkeypatch, raise_on_get=True)
+    legacy = release("release-legacy", version=1)
+
+    class Oracle:
+        async def get_document(self, document_id: str) -> DocumentDetail:
+            return DocumentDetail(
+                id=document_id,
+                file_name="synthetic.pdf",
+                status=FileStatus.INDEXED,
+                content_sha256="a" * 64,
+                content_type="application/pdf",
+                object_storage_path="local://synthetic.pdf",
+                uploaded_at=datetime.now(UTC),
+            )
+
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, Any]:
+            return {
+                "document_id": document_id,
+                "recipe_id": recipe_id,
+                "active_chunk_set_id": "chunk-set-legacy",
+                "active_extraction_recipe_id": "extraction-legacy",
+            }
+
+        async def update_document_recipe_status(self, **_kwargs: Any) -> None:
+            return None
+
+        async def upsert_chunk_set(self, **_kwargs: Any) -> None:
+            return None
+
+        async def get_document_extraction_artifact(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "extraction_json": {
+                    "parser_artifacts": {
+                        "language_pack_release_id": legacy.id,
+                        "language_pack_ingest_hash": legacy.ingest_hash,
+                    }
+                }
+            }
+
+    monkeypatch.setattr(documents, "IngestionPipeline", lambda **_kwargs: object())
+    chunk_job = job().model_copy(
+        update={"phase": IngestionJobPhase.CHUNK, "settings_overrides": {"processing_config": {}}}
+    )
+    with (
+        ingestion_release_scope(release("release-b", version=2), chunk_job.id),
+        pytest.raises(IngestionUserError) as caught,
+    ):
+        await documents._materialize_experiment_candidate(cast(Any, Oracle()), chunk_job)
+    message = documents._safe_ingestion_job_error_message(caught.value)
+    assert "文書解析から再処理してください" in message

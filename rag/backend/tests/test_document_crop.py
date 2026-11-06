@@ -372,11 +372,11 @@ def test_crop_png_bounded_rejects_too_large_and_invalid_regions() -> None:
 
 
 @pytest.mark.parametrize("document_artifact_path", [None, "docs/doc-1/legacy.pdf"])
-async def test_load_parsed_source_uses_recipe_prepared_artifact(
+async def test_load_parsed_source_requires_version(
     monkeypatch: pytest.MonkeyPatch,
     document_artifact_path: str | None,
 ) -> None:
-    """図の bbox はレシピが解析したファイルの座標なので、そのレシピの artifact を読む。"""
+    """bbox は版が解析したファイルの座標なので、版の指定が無ければファイルを開かない。"""
     detail = SimpleNamespace(
         id="doc-1",
         content_sha256="synthetic-source",
@@ -415,14 +415,11 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
     monkeypatch.setattr(document_crop, "ObjectStorageClient", FakeStorage)
     oracle = cast(Any, FakeOracle())
 
-    await document_crop.load_parsed_source(oracle, "doc-1", "recipe-1")
-    # 指定したレシピが無ければ原本を開かない。
-    with pytest.raises(document_crop.DocumentSourceNotFoundError, match="処理レシピ"):
-        await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
-    assert read == ["docs/doc-1/recipe-1/prepared.pdf"]
-    with pytest.raises(document_crop.VersionSourceUnknownError):
-        await document_crop.load_parsed_source(oracle, "doc-1")
-    assert read == ["docs/doc-1/recipe-1/prepared.pdf"]
+    # 版（抽出版か chunk_set）を指定しない読み取りは、レシピの今のファイルでも原本でも代用しない。
+    for recipe_id in ("recipe-1", "unknown", None):
+        with pytest.raises(document_crop.VersionSourceUnknownError):
+            await document_crop.load_parsed_source(oracle, "doc-1", recipe_id)
+    assert read == []
     with pytest.raises(document_crop.DocumentSourceNotFoundError):
         await document_crop.load_parsed_source(oracle, "doc-2", "recipe-1")
 

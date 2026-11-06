@@ -48,7 +48,6 @@ from app.schemas.document import (
     DocumentDetail,
     DocumentLayerStatusName,
     DocumentPreprocessArtifact,
-    DocumentProcessingConfig,
     DocumentRecipeStepStatus,
     DocumentReviewEditsRequest,
     DocumentSummary,
@@ -802,8 +801,8 @@ class _FakeRecipeJobOracle:
     async def get_document_serving_chunk_set_id(self, document_id: str) -> str | None:
         return None
 
-    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
-        return DocumentProcessingConfig()
+    async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
+        return await self.get_document_recipe(document_id, "recipe-1")
 
     async def update_document_recipe_status(
         self, *, recipe_id: str, status: FileStatus, **_kwargs: object
@@ -1918,7 +1917,6 @@ def _layer_row(
         "parent_chunk_set_id": chunk_set_id,
         "recipe_id": f"recipe-{document_id}",
         "recipe_processing_config": {},
-        "document_processing_config": {},
         "input_fingerprint": fingerprint,
     }
 
