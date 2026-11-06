@@ -1917,7 +1917,6 @@ def _layer_row(
         "parent_chunk_set_id": chunk_set_id,
         "recipe_id": f"recipe-{document_id}",
         "recipe_processing_config": {},
-        "document_processing_config": {},
         "input_fingerprint": fingerprint,
     }
 

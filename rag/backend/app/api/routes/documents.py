@@ -821,7 +821,9 @@ async def _mark_layers_rebuild_required(
         logger.warning("documents_list_layer_fingerprints_failed", exc_info=True)
         return
     default_fields = load_field_schema().fields
+    documents_by_id = {document.id: document for document in documents}
     inputs_by_document: dict[str, dict[str, object]] = {}
+    unowned_plans: dict[str, tuple[MaterializationPlan, dict[str, Settings]] | None] = {}
     flagged: set[str] = set()
     for row in rows:
         document_id = str(row.get("document_id"))
@@ -833,27 +835,67 @@ async def _mark_layers_rebuild_required(
                 current_field_definitions(field_sets.get(document_id, []), default_fields),
             )
         current_inputs = inputs_by_document[document_id]
-        raw_config = (
-            row.get("recipe_processing_config")
-            if row.get("recipe_id") is not None
-            else row.get("document_processing_config")
-        )
-        try:
-            settings, _effective = _merge_document_processing_config(
-                DocumentProcessingConfig.model_validate(raw_config or {}), global_settings
-            )
-        except (ValueError, KbAdapterConfigError):
-            continue
         layer = str(row.get("layer_kind"))
         chunk_set_id = str(row.get("parent_chunk_set_id"))
-        if not _layer_requested(layer, settings) or row.get("layer_id") != _recipe_layer_id(
-            chunk_set_id, settings, layer
-        ):
+        requested_ids: tuple[str, ...]
+        if row.get("recipe_id") is not None:
+            try:
+                settings, _effective = _merge_document_processing_config(
+                    DocumentProcessingConfig.model_validate(
+                        row.get("recipe_processing_config") or {}
+                    ),
+                    global_settings,
+                )
+            except (ValueError, KbAdapterConfigError):
+                continue
+            requested_ids = (
+                (_recipe_layer_id(chunk_set_id, settings, layer),)
+                if _layer_requested(layer, settings)
+                else ()
+            )
+        else:
+            if document_id not in unowned_plans:
+                unowned_plans[document_id] = await _unowned_chunk_set_plan(
+                    oracle, documents_by_id.get(document_id)
+                )
+            plan_inputs = unowned_plans[document_id]
+            if plan_inputs is None:
+                continue
+            plan, effective_by_kb = plan_inputs
+            requested_ids = _requested_layer_ids_for_chunk_set(
+                chunk_set_id, plan, effective_by_kb, layer=layer
+            )
+        # 詳細と同じく、今の設定で要求される層がこの行の 1 つだけのときに指紋を比べる。
+        if requested_ids != (str(row.get("layer_id")),):
             continue
         if changed_layer_inputs(row.get("input_fingerprint"), current_inputs):
             flagged.add(document_id)
     for document in documents:
         document.layers_rebuild_required = document.id in flagged
+
+
+async def _unowned_chunk_set_plan(
+    oracle: OracleClient,
+    document: DocumentSummary | None,
+) -> tuple[MaterializationPlan, dict[str, Settings]] | None:
+    """レシピを持たない配信中の chunk_set の層の判定の入力(文書詳細の /chunk-sets と同じ)。
+
+    既定のレシピの設定と所属 KB の計画で判定する(文書の行の旧列は読まない。#4185)。
+    読めないとき・計画が無いときは None(一覧は印を付けない)。
+    """
+    if document is None:
+        return None
+    try:
+        settings, _config = await _resolve_ingestion_settings(oracle, document.id)
+        plan, configs = await _materialization_plan_for_document(
+            oracle, document, global_settings=settings
+        )
+    except Exception:
+        logger.warning("documents_list_layer_fingerprints_failed", exc_info=True)
+        return None
+    if plan is None:
+        return None
+    return plan, _effective_ingestion_settings_by_kb(settings, configs)
 
 
 DELETE_IMPACT_MAX_DOCUMENTS = 100
