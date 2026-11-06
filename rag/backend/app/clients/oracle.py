@@ -2750,10 +2750,10 @@ class OracleClient:
     # ------------------------------------------------------------------
 
     async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
-        """レシピ1が無ければ文書 legacy 状態から補完する(書き込みの経路だけで呼ぶ)。
+        """正式レシピ1を取得し、欠落・利用範囲外なら KeyError にする。
 
-        GET(`list_document_recipes` / `get_document_recipe`)からは呼ばない。レシピ1は文書の登録・
-        migration・ジョブの投入・レシピの追加と編集の transaction で作る(#341)。
+        新規文書の初期レシピは文書登録の transaction で作る。
+        通常の投入・追加・編集では旧文書の状態から復元しない。
         """
 
         def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
@@ -14262,35 +14262,11 @@ def _ensure_default_document_recipe_row(
     connection: OracleConnectionProtocol,
     document_id: str,
 ) -> dict[str, object]:
-    """書き込みの transaction の中で、レシピ1が無ければ文書の状態から作って返す。
-
-    レシピ1があれば MERGE もせず、文書の JSON 列も読まない(ジョブの投入のたびに書かない)。
-    """
+    """利用可能な正式レシピ1を返し、欠落時に旧文書の状態から補完しない。"""
     existing = _select_default_document_recipe(connection, document_id)
-    if existing is not None:
-        return _document_recipe_row(existing)
-    document = _fetch_one(
-        connection,
-        _render_sql(
-            """
-        SELECT
-            d.document_id, d.tenant_id_hash, d.status, d.processing_config,
-            d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at
-        FROM rag_documents d
-        WHERE d.document_id = :document_id
-          AND {access_predicate}
-        """,
-            access_predicate=_oracle_access_predicate_sql(alias="d"),
-        ),
-        _with_tenant_bind({"document_id": document_id}),
-    )
-    if document is None:
-        raise KeyError(f"document_id={document_id} は存在しません。")
-    _merge_default_document_recipe(connection, _default_document_recipe_values(document))
-    created = _select_default_document_recipe(connection, document_id)
-    if created is None:
-        raise RuntimeError("レシピ1の作成に失敗しました。")
-    return _document_recipe_row(created)
+    if existing is None:
+        raise KeyError("既定の処理レシピが見つかりません。")
+    return _document_recipe_row(existing)
 
 
 def _select_knowledge_base(

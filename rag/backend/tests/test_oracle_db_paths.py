@@ -232,39 +232,19 @@ async def test_ensure_default_document_recipe_skips_merge_when_recipe_exists() -
     assert _document_selects(pool) == []
 
 
-async def test_ensure_default_document_recipe_creates_missing_recipe_one() -> None:
-    """レシピ 1 が無ければ(書き込みの経路で)文書の状態から作る。"""
-    document_row: dict[str, object] = {
-        "document_id": "doc-1",
-        "tenant_id_hash": "t" * 64,
-        "status": "INDEXED",
-        "processing_config": None,
-        "preprocess_artifact": None,
-        "error_message": None,
-        "uploaded_at": datetime(2026, 1, 1, tzinfo=UTC),
-        "indexed_at": datetime(2026, 1, 2, tzinfo=UTC),
-        "recipe_count": 0,
-    }
-    pool = FakeOraclePool(execute_results=[[], [document_row], [_recipe_row()]])
+async def test_ensure_default_document_recipe_rejects_missing_recipe_one() -> None:
+    """レシピ1が無いときは旧文書を読まず、作成もせずに失敗する。"""
+    pool = FakeOraclePool(execute_results=[[], [_recipe_row()]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
-    row = await client.ensure_default_document_recipe("doc-1")
+    with pytest.raises(KeyError, match="既定の処理レシピが見つかりません"):
+        await client.ensure_default_document_recipe("doc-1")
 
-    assert row["recipe_id"] == _default_recipe_id()
-    merge = next(
-        call
-        for call in pool.connection.calls
-        if "MERGE INTO rag_document_recipes" in call.statement
-    )
-    assert merge.parameters["recipe_id"] == _default_recipe_id()
-    assert merge.parameters["status"] == "INDEXED"
-    assert merge.parameters["tenant_id_hash"] == "t" * 64
-    assert merge.parameters["materialized_revision"] == 1
-    # レシピ 1 の元にする preprocess_artifact / processing_config は読むが、抽出結果は読まない。
-    for statement in _document_selects(pool):
-        select_list = statement.split("FROM rag_documents", 1)[0]
-        assert "extraction" not in select_list
-        assert "classification" not in select_list
+    assert len(pool.connection.calls) == 1
+    assert _write_statements(pool) == []
+    assert _document_selects(pool) == []
+    assert pool.connection.commits == 0
+    assert pool.connection.rollbacks == 1
 
 
 async def test_create_document_creates_recipe_one_in_same_transaction() -> None:
