@@ -328,12 +328,15 @@ def sent_efforts(settings: Any) -> list[tuple[str, str]]:
     return sent
 
 
-def test_extraction_call_alone_uses_the_step_reasoning_effort() -> None:
-    # 既定は抽出の段だけ medium。役割の段はモデルの登録値（渡された設定）のまま。
+def test_each_stage_call_uses_its_own_step_reasoning_effort() -> None:
+    # 既定は抽出・役割の段とも medium。渡された設定（モデルの登録値）は変えない。
     settings = provider_settings("low")
-    assert settings.question_subject_extraction_reasoning_effort == "medium"
-    assert sent_efforts(settings) == [(EXTRACT, "medium"), (ROLE, "low")]
+    assert settings.question_subject_extraction_reasoning_effort == settings.question_subject_role_reasoning_effort == "medium"
+    assert sent_efforts(settings) == [(EXTRACT, "medium"), (ROLE, "medium")]
     assert settings.llm_providers[settings.default_answer_llm].reasoning_effort == "low"
+    # 段ごとに別に決まる（片方だけ変えても他方は変わらない）。
+    assert sent_efforts(provider_settings("low", question_subject_role_reasoning_effort="")) == [(EXTRACT, "medium"), (ROLE, "low")]
+    assert sent_efforts(provider_settings("low", question_subject_extraction_reasoning_effort="")) == [(EXTRACT, "low"), (ROLE, "medium")]
 
 
 @pytest.mark.parametrize(
@@ -342,8 +345,8 @@ def test_extraction_call_alone_uses_the_step_reasoning_effort() -> None:
     ids=["step-high", "empty-keeps-registered", "model-keeps-registered", "none-omits", "registered-none-never-sends"],
 )
 def test_step_reasoning_effort_is_a_setting_with_the_shared_override_rules(registered: str, step: str, expected: str) -> None:
-    settings = provider_settings(registered, question_subject_extraction_reasoning_effort=step)
-    assert sent_efforts(settings) == [(EXTRACT, expected), (ROLE, registered)]
+    settings = provider_settings(registered, question_subject_extraction_reasoning_effort=step, question_subject_role_reasoning_effort=step)
+    assert sent_efforts(settings) == [(EXTRACT, expected), (ROLE, expected)]
 
 
 # ---------- 名前の照合（モデルを呼ばない） ----------

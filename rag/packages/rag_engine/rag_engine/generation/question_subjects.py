@@ -338,8 +338,8 @@ def extract_question_subjects(
     """質問の named の提及と役割を 2 段で取り出す。named が無ければ役割の段を呼ばない。失敗は ``failed`` で返す。
 
     ``parse_text`` は構造化出力の呼び出し（既定は注入された回答フローの ``parse_text_response``）。再試行はしない。
-    抽出の段の呼び出しにだけ、工程の推論の量（``settings.question_subject_extraction_reasoning_effort``）を当てる。
-    役割の段は渡された ``settings`` のまま呼ぶ。
+    各段の呼び出しにだけ、その段の推論の量（``settings.question_subject_extraction_reasoning_effort``・
+    ``settings.question_subject_role_reasoning_effort``）を当てる。
     """
     call: Callable[..., Any]
     if parse_text is None:
@@ -373,7 +373,7 @@ def extract_question_subjects(
         raw_roles = call(
             resolve_prompt("question_subjects.role", SUBJECT_ROLE_PROMPT),
             _canonical(role_input),
-            settings,
+            role_settings(settings),
             role_schema,
             provider_id=provider_id,
             purpose=purpose,
@@ -388,8 +388,13 @@ def extract_question_subjects(
 
 
 def extraction_settings(settings: Any) -> Any:
-    """抽出の段の呼び出しに渡す設定。工程の推論の量の設定があれば、その呼び出しの要求の値だけを差し替える。"""
+    """抽出の段の呼び出しに渡す設定。段の推論の量の設定があれば、その呼び出しの要求の値だけを差し替える。"""
     return settings_with_reasoning_effort(settings, getattr(settings, "question_subject_extraction_reasoning_effort", ""))
+
+
+def role_settings(settings: Any) -> Any:
+    """役割の段の呼び出しに渡す設定。段の推論の量の設定があれば、その呼び出しの要求の値だけを差し替える。"""
+    return settings_with_reasoning_effort(settings, getattr(settings, "question_subject_role_reasoning_effort", ""))
 
 
 def _dump(raw: Any) -> Any:
