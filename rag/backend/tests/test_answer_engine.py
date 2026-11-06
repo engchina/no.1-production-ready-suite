@@ -172,6 +172,9 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+    if schema.__name__ == "QuestionMentionAnchors":
+        # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
+        return cast(Any, schema).model_validate({"mentions": []})
     if schema is ApplicationAudit:
         data = json.loads(prompt)
         return schema(

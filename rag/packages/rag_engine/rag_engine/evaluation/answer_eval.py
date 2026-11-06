@@ -23,7 +23,7 @@ import logging
 import re
 import threading
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -55,6 +55,7 @@ from rag_engine.generation.operation_audit import (
     standard_answer_unit_ranges,
     table_header_lines,
 )
+from rag_engine.generation.question_subjects import QuestionSubjects, absent_question_names, extract_question_subjects
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_text_with_positions, fold_width
@@ -1149,7 +1150,8 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
 # 13: 根拠不足の定型の説明・確認案内を言語資源と照合し、事実の主張に数えない（#3131）。
 # 14: 要約を本文の原文候補へ関連付け、参照不足は意味を未評価とする（#3920）。
 # 20: 未記載報告だけを生成へ渡した全範囲で検査し、部分根拠から不支持と断定しない（#4350）。
-RUBRIC_VERSION = 20
+# 21: 質問が問うた対象の名前を、モデルの構造化出力で取り出した対象と役割で引用の根拠に照らす（#4351）。
+RUBRIC_VERSION = 21
 # 1 件の評価で同時に行う判定の呼び出しの数（網羅・正確性・段落ごとの主張）。
 JUDGE_MAX_CONCURRENCY = 4
 # 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。実モデルで同じ比較範囲を 2 回ずつ判定すると、
@@ -1622,6 +1624,56 @@ def _judge_claim(
     return bound.claim_checks[0], [item for item in inputs["evidence_items"] if item["evidence_id"] != QUESTION_EVIDENCE_ID]
 
 
+def _gap_passages(answer_text: str) -> list[str]:
+    """回答の「資料から確認できなかった事項」の節の段落。"""
+    labels = answer_labels()
+    gap_title = labels.gaps_section.strip()
+    titles = {str(getattr(labels, field, "") or "").strip() for field, _ in _SECTION_KINDS} | {APPLICATIONS_SECTION_TITLE}
+    passages: list[str] = []
+    inside = False
+    for _, start, end in answer_passage_ranges(answer_text):
+        text = answer_text[start:end].strip()
+        if text in titles:
+            inside = text == gap_title
+        elif inside:
+            passages.append(text)
+    return passages
+
+
+def _checked_question_names(
+    claims: Sequence[ClaimCheck],
+    subjects: QuestionSubjects | None,
+    cited_nodes: Iterable[Mapping[str, Any]],
+    *,
+    gaps: Sequence[str] = (),
+) -> list[ClaimCheck]:
+    """質問が問うた対象の名前を書いた supported を、回答が引用した根拠に照らす（#4327・#4343・#4351）。
+
+    一般の条件だけを述べる根拠から「対象がその条件を満たす」とする飛躍は、モデルが前提を補うと supported になる。
+    対象と役割は ``question_subjects`` の構造化出力で取り出し、名前の有無はコードで確かめる（判定のモデルの出力に頼らない）。
+    多段の質問では別の段落の根拠で確かめていることがあるので、回答全体の根拠に照らす。回答が確認できないと書いた
+    名前は確かめない（生成の要約の検査と同じ。#4347）。抽出が失敗したら確かめない。
+    """
+    sources = [text for node in cited_nodes for text in (str(node.get("text") or ""), str(node.get("source") or ""))]
+    sources.extend(gaps)
+
+    def checked(claim: ClaimCheck) -> ClaimCheck:
+        names = absent_question_names(claim.answer_quote, subjects, sources) if claim.status == "supported" else []
+        if not names:
+            return claim
+        return claim.model_copy(
+            update={
+                "status": "unsupported",
+                "source_id": "",
+                "evidence_quote": "",
+                "reference_check": REFERENCE_SUBJECT_UNSUPPORTED,
+                "reason": f"質問の対象「{'、'.join(names)}」は回答が引用した根拠にありません。{claim.reason}",
+            }
+        )
+
+    return [checked(claim) for claim in claims]
+
+
 def _decided_claim(passage: Mapping[str, str], status: str, reason: str, reference_check: str = "") -> ClaimCheck:
     """モデルを呼ばずにコードが決めた段落の判定（見出し・出典の無い段落・判定の失敗）。"""
     return ClaimCheck(
@@ -1812,12 +1864,26 @@ def evaluate_answer_payload(
             claims.append(len(tasks))
             judge = partial(_judge_claim, passage, inputs, settings, provider_id, budget, retried("claim"), heading_lines)
             tasks.append(counted(judge, claim=True))
+        # 質問の対象と役割（#4351）。判定する段落があるときだけ、段落の判定と並行に取り出す。失敗しても評価は続ける。
+        subject_slot = None
+        if any(isinstance(decided, int) for decided in claims):
+            subject_slot = len(tasks)
+            tasks.append(
+                partial(
+                    extract_question_subjects,
+                    question,
+                    settings,
+                    provider_id=provider_id,
+                    parse_text=parse_text_response,
+                    purpose="evaluation.question_subjects",
+                )
+            )
 
         results = _run_parallel(tasks, JUDGE_MAX_CONCURRENCY)
         # 期限切れ・網羅と正確性の失敗は評価全体の失敗（部分評価を返さない）。
         for position, result in enumerate(results):
-            # 根拠の網羅は参考値なので、失敗しても時間切れでも評価全体を失敗にしない。
-            if position in evidence_slots:
+            # 根拠の網羅は参考値なので、失敗しても時間切れでも評価全体を失敗にしない。対象の抽出は失敗を結果で返す。
+            if position in evidence_slots or position == subject_slot:
                 continue
             fatal = position in coverage_slots or position == correctness_slot
             if isinstance(result, DeadlineExceeded) or (isinstance(result, Exception) and fatal):
@@ -1840,6 +1906,14 @@ def evaluate_answer_payload(
             claim, fragments = result
             catalog.update((item["evidence_id"], item) for item in fragments)
             claim_checks.append(claim)
+        if subject_slot is not None:
+            subjects = results[subject_slot] if isinstance(results[subject_slot], QuestionSubjects) else None
+            diagnostics["question_subjects"] = (
+                subjects.diagnostics() if subjects is not None else {"status": "failed", "failure": type(results[subject_slot]).__name__}
+            )
+            claim_checks = _checked_question_names(
+                claim_checks, subjects, (node for nodes in nodes_by_id.values() for node in nodes), gaps=_gap_passages(answer_text)
+            )
         claim_checks = _review_absence_reports(claim_checks, payload, settings, provider_id, budget, diagnostics)
         base["evidence_catalog"] = list(catalog.values())
         checks = sorted((check for slot in coverage_slots for check in results[slot]), key=lambda item: item.requirement_index)

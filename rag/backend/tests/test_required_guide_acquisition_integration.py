@@ -118,6 +118,9 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
                 application_reviews=[{"index": 0, "valid": True, "reason": "合成の原文対応"}],
                 summary_supported=True,
             )
+        if schema.__name__ == "QuestionMentionAnchors":
+            # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い。
+            return cast(Any, schema).model_validate({"mentions": []})
         calls.append((schema.__name__, prompt))
         assert schema.__name__.endswith("GroundedDraftWire"), "生成以外のモデル呼び出しは禁止"
         evidence_id = re.findall(r"\[(E[0-9]+)\]", prompt[: prompt.index(BODY)])[-1]

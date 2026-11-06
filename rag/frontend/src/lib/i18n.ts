@@ -4324,6 +4324,9 @@ export const ja = {
   "settings.answerPrompts.stage.generation": "回答の生成",
   "settings.answerPrompts.stage.generation.condition":
     "検索した根拠から回答を生成するとき。検索だけの実行、回答前の確認、登録済みQ&Aの経路では使いません",
+  "settings.answerPrompts.stage.question_subjects": "質問の対象の抽出",
+  "settings.answerPrompts.stage.question_subjects.condition":
+    "回答の説明・要約と品質評価で、質問が問うた対象の名前を引用した資料に照らすとき（根拠を引用した回答で毎回）",
   "settings.answerPrompts.stage.audit": "回答の監査",
   "settings.answerPrompts.stage.audit.condition": "生成後の LLM 監査を有効にしたとき（既定は無効）。業務ガイドの下書きの試答では詳細な監査を使います",
   "settings.answerPrompts.stage.application": "規則の当てはめ",
@@ -4347,6 +4350,9 @@ export const ja = {
   "settings.answerPrompts.part.coverage": "標準回答の比較項目の網羅の判定",
   "settings.answerPrompts.part.claim": "回答の段落ごとの、出典の根拠による裏付けの判定",
   "settings.answerPrompts.part.instruction": "指示",
+  "settings.answerPrompts.part.extraction": "質問の中の名前の範囲と種別を選ぶ指示",
+  "settings.answerPrompts.part.role":
+    "各名前を、その文が問うているか・前提として述べたか・例として挙げたかで分ける指示",
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.rules": "共通の読み取り指示",

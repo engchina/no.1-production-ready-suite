@@ -11,7 +11,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -43,6 +43,7 @@ from rag_engine.dependencies import (
     injected_context_chunks,
     injected_embedder,
     injected_prefetch_search,
+    injected_question_subjects,
     parse_multimodal_response,
     parse_text_response,
     record_retrieval_stage,
@@ -2945,6 +2946,9 @@ def synthesize_grounded_answer(
     # vector を再利用する。注入が無ければ語の判定だけ。
     embedder = injected_embedder() if guide_steps else None
     guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
+    # 質問の対象と役割（#4351）。最初に必要になった round で 1 回だけ抽出し、是正の round でも同じ結果を使う。
+    subject_reader = injected_question_subjects()
+    question_subjects = cache(partial(subject_reader, question, audit_settings, provider_id=provider)) if subject_reader else None
 
     def generate_round(
         round_spans: Sequence[dict[str, Any]],
@@ -2984,6 +2988,7 @@ def synthesize_grounded_answer(
             confirmed_premises=settings.confirmed_premises,
             confirmed_premise_sources=settings.confirmed_premise_sources,
             guide_task_scope=round_knowledge.guide_task_scope if round_knowledge else (),
+            question_subjects=question_subjects,
         )
 
     # 用語の照合結果は 1 回の回答の中で変わらない。プロンプトの組み立ての回数によらず 1 回だけ残す（#4095）。
