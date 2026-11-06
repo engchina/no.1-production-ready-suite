@@ -1555,7 +1555,7 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
     from app.schemas.document import IngestionJobProgress, IngestionParseProgress
 
     monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
-    pool = FakeOraclePool()
+    pool = FakeOraclePool(execute_results=[[{"progress_json": None}], [{"progress_json": None}]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     progress = IngestionJobProgress(
         stage="parse",
@@ -1570,7 +1570,10 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
 
     assert written is True
     assert cleared is True
-    write_call, clear_call = pool.connection.calls
+    lock_write, write_call, lock_clear, clear_call = pool.connection.calls
+    assert "FOR UPDATE" in lock_write.statement and "FOR UPDATE" in lock_clear.statement
+    assert pool.connection.commits == 2
+    assert pool.connection.rollbacks == 0
     assert "SET progress_json = :progress_json" in write_call.statement
     assert "AND status = 'RUNNING'" in write_call.statement
     assert "AND lease_owner = :lease_owner" in write_call.statement
