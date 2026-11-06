@@ -553,11 +553,19 @@ async def get_structure_index_job(
 async def start_structure_index_job(
     knowledge_base_id: str, request: StructureIndexStartRequest
 ) -> ApiResponse[dict[str, Any]]:
-    from app.rag.structure_index_jobs import current_public_state, structure_index_jobs
+    from app.rag.structure_index_jobs import (
+        StructureIndexScopeError,
+        current_public_state,
+        structure_index_jobs,
+    )
 
     oracle = OracleClient()
     try:
-        state = await structure_index_jobs.start(oracle, knowledge_base_id, request.mode)
+        state = await structure_index_jobs.start(
+            oracle, knowledge_base_id, request.mode, request.document_ids
+        )
+    except StructureIndexScopeError as exc:
+        raise HTTPException(404, str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(404, "ナレッジベースが見つかりません。") from exc
     except ValueError as exc:

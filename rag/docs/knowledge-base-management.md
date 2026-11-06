@@ -942,3 +942,8 @@ job の取得・開始・停止 API は、保存された `status` / `reason` �
 `index_status` / `index_reason` / `index_quality` を要求時に付加する。
 内部の作業記録は変更しない。現在状態の取得はページ内の文書 ID に限定し、本文・embedding を取得しない。
 対象確認用 plan の `status` は、作業対象を選ぶ従来の判定を維持する。
+
+fingerprint が一致しても、「本文」の節点への結び付きが本文の Chunk より少ない索引（#4507 の前の索引）は
+「更新が必要」とし、plan の項目に `body_links_missing` を付ける（#4543）。本文の判定は索引の構築・章節の木と
+同じ関数（`graph_index.is_body_chunk`）を使い、本文・embedding は読まない。job の開始は任意の `document_ids` で
+対象を絞れる（KB に属し利用者に見える文書だけ。そうでなければ 404 で作業を始めない）。

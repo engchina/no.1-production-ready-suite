@@ -28,7 +28,8 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> tuple[module.StructureIndexJobs, di
             saved[kb] = change(old)
             return deepcopy(saved[kb])
 
-    async def plan(oracle: Any, kb: str) -> Any:
+    async def plan(oracle: Any, kb: str, *, document_ids: list[str] | None = None) -> Any:
+        assert document_ids is None
         return [
             {
                 "document_id": name,
