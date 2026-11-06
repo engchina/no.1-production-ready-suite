@@ -217,7 +217,7 @@ class StructureGraphStore:
             node_sql, node_binds = _oracle_in_predicate(
                 "l.entity_id", "body_link_node", [graph_body_node_id(cs, kb_id) for cs in batch]
             )
-            # body_chunks と同じ結び付きの範囲（本文の entity・同じ版と文書の chunk）を数える。
+            # 本文の節点の entity_chunks と同じ結び付きの範囲（同じ版と文書の chunk）を数える。
             links = {
                 str(row["chunk_set_id"]): int(row["body_links"])
                 for row in await self.oracle._fetch_all(
@@ -285,24 +285,41 @@ class StructureGraphStore:
             "offset": offset,
         }
 
-    async def body_chunks(
-        self, kb_id: str, document_id: str, chunk_set_id: str, *, offset: int, limit: int
+    async def entity_chunks(
+        self,
+        kb_id: str,
+        document_id: str,
+        chunk_set_id: str,
+        *,
+        node_id: str,
+        offset: int,
+        limit: int,
     ) -> dict[str, Any]:
-        """本文節点の実Chunkだけを保存順に返す。本文/原文の読取は既存根拠APIが担う。"""
-        from app.rag.graph_index import graph_body_node_id
+        """章節・本文の節点に結んだ実 chunk を保存順に返す。原文の読み取りは既存の根拠 API。
 
+        節点は同じ版・同じ KB の実体だけ（木だけにある仮想の節点・文書の節点は KeyError）。
+        下の段の節点の chunk は含めない（その節点を開いて読む）。
+        """
         await self.assert_document(kb_id, document_id, chunk_set_id)
+        entity = await self.oracle._fetch_all(
+            """SELECT e.entity_id FROM rag_graph_entities e WHERE e.entity_id=:node
+            AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb
+            AND e.entity_type<>'document'""",
+            {"node": node_id, "chunk_set": chunk_set_id, "kb": kb_id},
+        )
+        if not entity:
+            raise KeyError(node_id)
         source_sql = """FROM rag_graph_entity_chunks l
             JOIN rag_graph_entities e ON e.entity_id=l.entity_id
-                AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb AND e.entity_type='body'
+                AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb
             JOIN rag_chunks c ON c.chunk_id=l.chunk_id AND c.chunk_set_id=e.chunk_set_id
                 AND c.document_id=:document_id
-            WHERE l.entity_id=:body AND l.document_id=:document_id"""
+            WHERE l.entity_id=:node AND l.document_id=:document_id"""
         scope = {
             "kb": kb_id,
             "document_id": document_id,
             "chunk_set": chunk_set_id,
-            "body": graph_body_node_id(chunk_set_id, kb_id),
+            "node": node_id,
         }
         rows = await self.oracle._fetch_all(
             f"""SELECT c.chunk_id,c.chunk_index,

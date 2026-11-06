@@ -776,9 +776,10 @@ for (const theme of ["light", "dark"] as const) {
       await mockTree(page,{"root:set-doc":nodes});
       const ids = Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
       const reads: string[] = [];
-      await page.route("**/graph/documents/doc-doc/body-chunks?**", route => {
+      await page.route("**/graph/documents/doc-doc/entity-chunks?**", route => {
         const params=new URL(route.request().url()).searchParams;
         expect(params.get("chunk_set_id")).toBe("set-doc");
+        expect(params.get("node_id")).toBe(body.id);
         const offset=Number(params.get("offset"));
         return route.fulfill({json:ok({items:ids.slice(offset,offset+25),total:26,offset})});
       });
@@ -797,21 +798,81 @@ for (const theme of ["light", "dark"] as const) {
       const graph=page.locator("#knowledge-base-graph");
       await graph.locator('.react-flow__node[data-id="doc"]').click();
       await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-      const panel=page.getByTestId("graph-body");
-      await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+      const panel=page.getByTestId("graph-chunks");
+      await expect(panel.getByText("チャンク 1",{exact:true})).toBeVisible();
       await panel.getByRole("button",{name:"次へ",exact:true}).click();
-      await expect(panel.getByText("本文 26",{exact:true})).toBeVisible();
+      await expect(panel.getByText("チャンク 26",{exact:true})).toBeVisible();
       await panel.getByRole("button",{name:"原文を表示",exact:true}).click();
-      await expect(page.getByRole("dialog", {name:"本文の原文", exact:true})).toBeVisible();
+      await expect(page.getByRole("dialog", {name:"「本文」の原文", exact:true})).toBeVisible();
       const reader=page.getByTestId("evidence-reader");
       await expect(reader).toContainText("合成の保存本文26");
       await expect(reader.locator("mark")).toBeVisible();
       expect(reads).toEqual([ids[25]!.chunk_id]);
       await expectNoPageOverflow(page);
       await page.screenshot({path:testInfo.outputPath(`structure-body-${mixed ? "mixed":"allmissing"}-${theme}.png`), animations: "disabled"});
-      await expect(page.getByRole("dialog", {name:"本文の原文", exact:true}).getByTestId("citation-score-panel")).toHaveCount(0, { timeout: 500 });
+      await expect(page.getByRole("dialog", {name:"「本文」の原文", exact:true}).getByTestId("citation-score-panel")).toHaveCount(0, { timeout: 500 });
     });
   }
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`章から節を開き、節のチャンクを保存順に読んで原文の位置を示す (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value, sidebarCollapsed: true }, version: 0 })), theme);
+    // 章は木だけにある仮想の祖先、節は構造索引に実体のある葉（#4544）。
+    const chapter = treeNode(ID("chapter"), "合成章", null, "doc", { virtual: true, child_count: 1 });
+    const leaf = { ...treeNode(ID("leaf"), "合成章 > 合成節", chapter, "doc"), label: "合成節" };
+    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "synthetic.txt")], edges: [] });
+    await mockTree(page, { "root:set-doc": [chapter], [chapter.id]: [leaf] });
+    const ids = Array.from({ length: 26 }, (_, index) => ({ chunk_id: `doc-doc:set-doc:${index + 3}`, chunk_index: index + 3, page_number: index + 1 }));
+    const listed: string[] = [];
+    const reads: string[] = [];
+    await page.route("**/graph/documents/doc-doc/entity-chunks?**", (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      listed.push(params.get("node_id") ?? "");
+      expect(params.get("chunk_set_id")).toBe("set-doc");
+      const offset = Number(params.get("offset"));
+      return route.fulfill({ json: ok({ items: ids.slice(offset, offset + 25), total: 26, offset }) });
+    });
+    await page.route("**/api/documents/doc-doc/chunks/**", (route) => {
+      const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
+      reads.push(id);
+      return route.fulfill({ json: ok({ document_id: "doc-doc", chunk_id: id, text: "合成の節の本文28", file_name: "synthetic.txt", score: 0, metadata: { chunk_set_id: "set-doc", recipe_id: "recipe-1", start_offset: 300, end_offset: 309 } }) });
+    });
+    await page.route("**/api/documents/doc-doc/reader?**", (route) => {
+      expect(new URL(route.request().url()).searchParams.get("chunk_id")).toBe(ids[25]!.chunk_id);
+      return route.fulfill({ json: ok({ revision: "set-doc", anchor_status: "exact", section_path: ["合成章", "合成節"], scope: "paragraph", blocks: [{ id: "anchor", text: "保存位置300：合成の節の本文28", offset: 292, highlights: [[8, 17]], cited: true }], previous_cursor: null, next_cursor: null, outline: [] }) });
+    });
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page, "文書構造グラフを表示").click();
+    const graph = page.locator("#knowledge-base-graph");
+    const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
+    await node("doc").click();
+    await node(chapter.id).click();
+    // 仮想の章は chunk を読まず、下の段を案内する。
+    await expect(graph.getByText("この段に本文はありません。下の段を開いてください。", { exact: true })).toBeVisible();
+    await node(leaf.id).click();
+    await expect(page.getByTestId("graph-references")).toBeVisible();
+    await page.getByTestId("graph-references").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`structure-section-chunks-selected-${theme}.png`), animations: "disabled" });
+    const panel = page.getByTestId("graph-chunks");
+    await expect(panel.getByText("チャンク 4", { exact: true })).toBeVisible();
+    await expect(panel.getByText("全 26 件", { exact: true })).toBeVisible();
+    await panel.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`structure-section-chunks-list-${theme}.png`), animations: "disabled" });
+    await panel.getByRole("button", { name: "次へ", exact: true }).click();
+    await expect(panel.getByText("チャンク 29", { exact: true })).toBeVisible();
+    await expect(panel.getByText("26 ページ", { exact: true })).toBeVisible();
+    expect([...new Set(listed)]).toEqual([leaf.id]);
+    await panel.getByRole("button", { name: "原文を表示", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "「合成節」の原文", exact: true });
+    await expect(dialog).toBeVisible();
+    const reader = page.getByTestId("evidence-reader");
+    await expect(reader).toContainText("合成の節の本文28");
+    await expect(reader.locator("mark")).toBeVisible();
+    expect(reads).toEqual([ids[25]!.chunk_id]);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`structure-section-chunks-source-${theme}.png`), animations: "disabled" });
+  });
 }
 
 for (const theme of ["light", "dark"] as const) {
@@ -883,11 +944,11 @@ test("章節の位置移動で空の続きページをエラーにし、再試�
 
 
 for (const state of ["empty", "error"] as const) {
-  test(`旧索引の本文の空・取得失敗を原文なしと断定しない (${state})`, {tag:"@responsive"}, async ({page}) => {
-    const body=treeNode(ID("body"),"本文",null,"doc",{type:"body",virtual:true});
+  test(`本文のチャンクの空・取得失敗を原文なしと断定しない (${state})`, {tag:"@responsive"}, async ({page}) => {
+    const body=treeNode(ID("body"),"本文",null,"doc",{type:"body"});
     await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
     await mockTree(page,{"root:set-doc":[body]});
-    await page.route("**/graph/documents/doc-doc/body-chunks?**",route=>state==="empty"
+    await page.route("**/graph/documents/doc-doc/entity-chunks?**",route=>state==="empty"
       ? route.fulfill({json:ok({items:[],total:0,offset:0})})
       : route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}}));
     await page.goto("/knowledge-bases/kb-1");
@@ -895,13 +956,33 @@ for (const state of ["empty", "error"] as const) {
     const graph=page.locator("#knowledge-base-graph");
     await graph.locator('.react-flow__node[data-id="doc"]').click();
     await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-    const panel=page.getByTestId("graph-body");
+    const panel=page.getByTestId("graph-chunks");
     if (state==="empty") await expect(panel).toContainText("文書構造索引を再構築してください");
     else await expect(panel.getByRole("alert")).toContainText("対象が見つかりません");
     await expect(graph).not.toContainText("この段に本文はありません");
     await expect(panel.getByRole("button",{name:"原文を表示",exact:true})).toHaveCount(0);
   });
 }
+
+test("旧索引の仮想の本文はチャンクを読まずに再構築を案内する", {tag:"@responsive"}, async ({page}) => {
+  const body=treeNode(ID("body"),"本文",null,"doc",{type:"body",virtual:true});
+  const listed:string[]=[];
+  await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+  await mockTree(page,{"root:set-doc":[body]});
+  await page.route("**/graph/documents/doc-doc/entity-chunks?**",route=>{
+    listed.push(route.request().url());
+    return route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}});
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page,"文書構造グラフを表示").click();
+  const graph=page.locator("#knowledge-base-graph");
+  await graph.locator('.react-flow__node[data-id="doc"]').click();
+  await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+  await expect(graph.getByText("本文の位置がまだありません。文書構造索引を再構築してください。",{exact:true})).toBeVisible();
+  await expect(graph).not.toContainText("この段に本文はありません");
+  await expect(page.getByTestId("graph-chunks")).toHaveCount(0);
+  expect(listed).toEqual([]);
+});
 
 
 test("本文の件数が減って末頁が空になったら有効なページへ戻る", {tag:"@responsive"}, async ({page}) => {
@@ -911,7 +992,7 @@ test("本文の件数が減って末頁が空になったら有効なページ�
   let changed=false;
   await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
   await mockTree(page,{"root:set-doc":[body]});
-  await page.route("**/graph/documents/doc-doc/body-chunks?**",route=>{
+  await page.route("**/graph/documents/doc-doc/entity-chunks?**",route=>{
     const offset=Number(new URL(route.request().url()).searchParams.get("offset"));
     offsets.push(offset);
     if (offset>0) changed=true;
@@ -923,11 +1004,11 @@ test("本文の件数が減って末頁が空になったら有効なページ�
   const graph=page.locator("#knowledge-base-graph");
   await graph.locator('.react-flow__node[data-id="doc"]').click();
   await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-  const panel=page.getByTestId("graph-body");
-  await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+  const panel=page.getByTestId("graph-chunks");
+  await expect(panel.getByText("チャンク 1",{exact:true})).toBeVisible();
   await panel.getByRole("button",{name:"次へ",exact:true}).click();
-  await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
-  await expect(panel.getByText("本文 6",{exact:true})).toHaveCount(0);
+  await expect(panel.getByText("チャンク 1",{exact:true})).toBeVisible();
+  await expect(panel.getByText("チャンク 6",{exact:true})).toHaveCount(0);
   await expect.poll(()=>offsets).toEqual([0,25,0]);
 });
 

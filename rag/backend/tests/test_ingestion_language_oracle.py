@@ -82,6 +82,7 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         [used] = uses[document_id].recipes
         assert used.release_id == releases[0].id
         assert used.target_release_id == releases[1].id
+        assert used.target_version == releases[1].version
         assert used.relation == LanguagePackIndexRelation.DIFFERENT
         assert used.built_at is not None
         args: dict[str, Any] = dict(
