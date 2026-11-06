@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { OpenConversationAction, OpenRunInputAction } from "../src";
 
-const LABELS = { label: "画面 A で開く", ariaLabel: "この実行の質問と条件を画面 A に入れて開く" };
+// 読み上げ名は見えている文言で始める（WCAG 2.5.3 Label in Name。#4558）。
+const LABELS = { label: "画面 A で開く", ariaLabel: "画面 A で開く（この実行の質問と条件を入れる）" };
 
 describe("OpenRunInputAction（#3309）", () => {
   it("本人の実行だけ、製品が渡す文言と読み上げ名のリンクで出す", () => {
@@ -12,7 +13,7 @@ describe("OpenRunInputAction（#3309）", () => {
     );
     expect(html).toContain('href="/search?question=q1"');
     expect(html).toContain("画面 A で開く");
-    expect(html).toContain('aria-label="この実行の質問と条件を画面 A に入れて開く"');
+    expect(html).toContain('aria-label="画面 A で開く（この実行の質問と条件を入れる）"');
     expect(html).toContain('data-testid="open-input"');
   });
 

@@ -636,6 +636,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       "href",
       /\/chat\?search_answer_profile_id=bv-1&conversation_id=conv-21$/
     );
+    // 読み上げ名は見えている文言で始める（WCAG 2.5.3 Label in Name。#4558）。
+    await expect(page.getByTestId("run-history-open-chat")).toHaveText("会話を開く");
+    await expect(page.getByTestId("run-history-open-chat")).toHaveAccessibleName("会話を開く（この実行のチャット）");
     await expect(page.getByTestId("run-history-answer")).toContainText("受注番号を入力して登録します。");
     // 根拠はチャットと同じ部品（「AI に渡した N 件 …」の折りたたみ。既定は閉じる。#2328）。
     const evidence = page.getByTestId("run-history-evidence").getByTestId("answer-citations");
@@ -1075,7 +1078,8 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history/run-2");
     const open = page.getByTestId("run-history-open-search");
     await expect(open).toHaveText("RAG 検索で開く");
-    await expect(open).toHaveAccessibleName("この実行の質問と条件を RAG 検索の画面に入れて開く");
+    // 読み上げ名は見えている文言で始める（WCAG 2.5.3 Label in Name。#4558）。
+    await expect(open).toHaveAccessibleName("RAG 検索で開く（この実行の質問と条件を入れる）");
     // RAG 検索の実行に「会話を開く」は出さない（どちらか 1 つ）。
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
     // 見出しの右の操作は他の操作と同じ高さ（タッチ端末は 44px）。

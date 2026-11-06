@@ -199,6 +199,17 @@ describe("PageHeader", () => {
     );
   });
 
+  it("Section の titleId は見出しの id になり、節の名前（aria-labelledby）を見出しにする（#4558）", () => {
+    const html = renderToStaticMarkup(<Section titleId="s-title" title="見出し" description="説明" />);
+    expect(html).toMatch(/^<section aria-labelledby="s-title" class=/);
+    expect(html).toContain('<h2 id="s-title" class="text-base font-semibold text-fg">見出し</h2>');
+    // 呼び出し側の aria-labelledby を優先し、見出しが無ければ指さない。
+    expect(renderToStaticMarkup(<Section titleId="s-title" title="見出し" aria-labelledby="other" />)).toMatch(
+      /^<section aria-labelledby="other" class=/
+    );
+    expect(renderToStaticMarkup(<Section titleId="s-title" actions={<span />} />)).not.toContain("aria-labelledby");
+  });
+
   it("中身は PageBody と同じ計測コンテナに入る（ワイドモニタで左端が揃う）", () => {
     const measure = "max-w-[var(--content-max-width)]";
     expect(renderToStaticMarkup(<PageHeader title="文書" />)).toContain(measure);

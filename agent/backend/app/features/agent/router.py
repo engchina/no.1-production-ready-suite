@@ -2580,10 +2580,11 @@ async def create_automation(
 
 @router.get("/automations/{automation_id}", response_model=ApiResponse[AutomationDetail])
 async def get_automation(automation_id: str, request: Request) -> ApiResponse[AutomationDetail]:
-    """自動実行と、最近の Run（新しい順に 10 件）。"""
+    """自動実行と、最近の Run（新しい順に 10 件）と Run の全体の件数。"""
     item = _automation_for_actor(request, automation_id)
+    runs, runs_total = recent_runs(item.id)
     return ApiResponse(
-        data=AutomationDetail(automation=automation_view(item), runs=recent_runs(item.id))
+        data=AutomationDetail(automation=automation_view(item), runs=runs, runs_total=runs_total)
     )
 
 
