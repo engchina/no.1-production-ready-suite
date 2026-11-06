@@ -60,7 +60,10 @@ from rag_engine.retrieval.search_stages import (
     IMAGE_EVIDENCE_STAGE,
     REFERENCE_EXPANSION_STAGE,
 )
-from rag_parser_core.vision_text import require_projected_vision_source
+from rag_parser_core.vision_text import (
+    UnprojectedVisionSourceError,
+    is_unprojected_vision_source,
+)
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -2053,6 +2056,7 @@ class AnswerEngine:
             graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
         added = [*referenced, *entity_chunks, *graph_chunks]
         evidence = [*anchors, *siblings, *added]
+        _require_projected_vision_chunks([*evidence, *self._attachment_chunks])
         children = []
         for chunk in anchors:
             if chunk.chunk_id in entity_ids:
@@ -4510,6 +4514,39 @@ def _reference_source_entry(
     }
 
 
+def _unprojected_vision_chunk(chunk: RetrievedChunk, metadata: Mapping[str, Any]) -> bool:
+    """回答本文を分離していない旧い画像説明の chunk か(#4550)。
+
+    由来は保存済みの engine の metadata と、検索の行の ``figure_text_source`` のどちらでも見る
+    (片方の欠落・別の値で旧い由来を消さない)。
+    """
+    if is_unprojected_vision_source(metadata, ()):
+        return True
+    source = chunk.metadata.get("figure_text_source")
+    return source is not None and is_unprojected_vision_source(
+        {**metadata, "figure_text_source": source}, ()
+    )
+
+
+def _document_display_name(chunk: RetrievedChunk) -> str:
+    return chunk.file_name or chunk.document_id
+
+
+def _require_projected_vision_chunks(chunks: Iterable[RetrievedChunk]) -> None:
+    """候補に旧い画像説明の chunk があれば、対象の文書をまとめて示して止める(#4550)。
+
+    旧い chunk を候補から黙って外す・本文を推測で作り直すことはしない。利用者が再解析・再分割
+    すべき文書を 1 度で分かるように、最初の 1 件で止めずに候補全体を調べる。
+    """
+    names = [
+        _document_display_name(chunk)
+        for chunk in chunks
+        if _unprojected_vision_chunk(chunk, _engine_metadata(chunk))
+    ]
+    if names:
+        raise UnprojectedVisionSourceError(names)
+
+
 def _stored_child(
     chunk: RetrievedChunk,
     *,
@@ -4526,16 +4563,8 @@ def _stored_child(
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
-    require_projected_vision_source(metadata, ())
-    require_projected_vision_source(
-        {
-            **metadata,
-            **{
-                key: chunk.metadata[key] for key in ("figure_text_source",) if key in chunk.metadata
-            },
-        },
-        (),
-    )
+    if _unprojected_vision_chunk(chunk, metadata):
+        raise UnprojectedVisionSourceError((_document_display_name(chunk),))
     if isinstance(document := metadata.get("document"), dict) and "first_page_context" in document:
         metadata["document"] = {
             key: value for key, value in document.items() if key != "first_page_context"

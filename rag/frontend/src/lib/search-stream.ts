@@ -59,6 +59,8 @@ interface SearchStreamErrorPayload {
   reason?: string;
   /** 未完了の出力の上限・使った token・推論の量（「詳細」に出す。#2023）。 */
   detail?: string;
+  /** 失敗の code（再処理が要る文書の `RAG_DOCUMENT_REPROCESS_REQUIRED`・ORA の番号など）。 */
+  error_code?: string;
 }
 
 const SEARCH_STREAM_PATH = "/api/search/stream";
@@ -69,6 +71,8 @@ const STREAM_ERROR_STATUS: Record<string, number> = {
   GenerationContractError: 502,
   // LLM の応答が送り直しても未完了（REST は 502。#2023）。
   IncompleteResponse: 502,
+  // 旧い形式の chunk が残り、文書の再解析・再分割が要る（REST は 409。#4550）。
+  UnprojectedVisionSourceError: 409,
 };
 
 /**
@@ -175,7 +179,7 @@ export async function streamSearch(
   throw new ApiError(
     STREAM_ERROR_STATUS[outcome.error_type ?? ""] ?? 500,
     [outcome.message?.trim() || t("search.stream.failed")],
-    { requestId, extraDetails: streamErrorDetails(outcome) }
+    { requestId, errorCode: outcome.error_code, extraDetails: streamErrorDetails(outcome) }
   );
 }
 
