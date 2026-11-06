@@ -72,8 +72,8 @@ class _Oracle:
     [
         (None, {}, False, True, None, document_crop.VersionSourceUnknownError),
         (None, {}, False, False, None, document_crop.VersionSourceUnknownError),
-        ("recipe-a", {}, False, True, "synthetic/current-recipe", None),
-        ("unknown", {}, False, True, None, document_crop.DocumentSourceNotFoundError),
+        ("recipe-a", {}, False, True, None, document_crop.VersionSourceUnknownError),
+        ("unknown", {}, False, True, None, document_crop.VersionSourceUnknownError),
         ("recipe-a", {"chunk_set_id": "cs-old"}, False, True, "synthetic/version-old", None),
         ("recipe-a", {"chunk_set_id": "cs-plain"}, False, True, "synthetic/original", None),
         (
@@ -128,8 +128,8 @@ class _Oracle:
     ids=[
         "no-selector-legacy",
         "no-selector-original",
-        "recipe-current",
-        "recipe-unknown",
+        "recipe-without-version",
+        "unknown-recipe-without-version",
         "cs-fixed",
         "cs-original",
         "cs-unknown",
@@ -172,7 +172,7 @@ async def test_source_selector_boundaries(
         assert reads == [expected]
 
     assert oracle.events[0] == ("document", "doc-a")
-    if denied or not (recipe_id or selectors) or len(selectors) == 2:
+    if denied or not selectors or len(selectors) == 2:
         assert oracle.events == [("document", "doc-a")]
     elif "chunk_set_id" in selectors:
         assert oracle.events == [

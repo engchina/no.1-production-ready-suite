@@ -1769,26 +1769,21 @@ class IngestionPipeline:
             extraction_recipe_id = await self._persist_extraction_layer(
                 document_id, source_profile, extraction
             )
-            if (manage_document_state or self._recipe_id is not None) and (
+            # レシピの無い取込は _persist_extraction_layer が拒否済みなので、ここではレシピがある。
+            recipe_id = self._recipe_id
+            if recipe_id is not None and (
                 self._settings.rag_review_gate_enabled or requires_review(quality_report)
             ):
-                # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
-                # candidate モードは REVIEW で止めず索引まで進める。
+                # REVIEW で止める前に抽出をレシピへ保存済み。プレビュー・後段 CHUNK で再利用する。
                 await _raise_if_cancelled(cancel_checker)
-                if self._recipe_id is not None:
-                    await self._oracle.update_document_recipe_status(
-                        recipe_id=self._recipe_id,
-                        status=FileStatus.REVIEW,
-                        active_extraction_recipe_id=extraction_recipe_id,
-                    )
-                    detail = await self._oracle.get_document(document_id)
-                    if detail is None:
-                        raise IngestionUserError("ドキュメントが見つかりません。")
-                else:
-                    await self._oracle.save_extraction(document_id, extraction)
-                    detail = await self._oracle.update_document_status(
-                        document_id, FileStatus.REVIEW
-                    )
+                await self._oracle.update_document_recipe_status(
+                    recipe_id=recipe_id,
+                    status=FileStatus.REVIEW,
+                    active_extraction_recipe_id=extraction_recipe_id,
+                )
+                detail = await self._oracle.get_document(document_id)
+                if detail is None:
+                    raise IngestionUserError("ドキュメントが見つかりません。")
                 record_ingestion("review", 0)
                 return detail
             return await self._run_index_phase(
