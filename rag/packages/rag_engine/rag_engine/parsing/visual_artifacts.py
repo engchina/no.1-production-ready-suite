@@ -113,13 +113,28 @@ def _visual_targets(records: Sequence[LayoutRecord]) -> list[LayoutRecord]:
             if visual_role.skip_vlm and not record.raw.get("vision_description"):
                 continue
             if visual_role.reason == "meaningful_text_in_visual" and not record.text.strip():
-                from rag_engine.parsing.picture_descriptions import vision_text_projection
-
-                projection = vision_text_projection(record.raw.get("vision_description") or {})
-                record.text = projection.answer_description
-                record.raw["vision_text_projection"] = projection.dumps()
+                _restore_saved_vision_text(record)
         targets.append(record)
     return sorted(targets, key=lambda item: (item.page, item.seq_no, item.bbox[1], item.bbox[0]))
+
+
+def _restore_saved_vision_text(record: LayoutRecord) -> None:
+    """保存済みの VLM の説明があるときだけ、その説明から本文と投影を作ります。
+
+    crop の保存は解析サービスで VLM の前にも走ります。説明の無い段階で投影を書くと、回答本文の
+    空の投影が残り、後の VLM の書き戻しと分割の検査で不正として止まるため、何も書きません
+    （投影は VLM の結果を書く工程が作ります。#4569）。
+    """
+    description = record.raw.get("vision_description")
+    if not isinstance(description, dict) or record.raw.get("vision_error"):
+        return
+    from rag_engine.parsing.picture_descriptions import vision_text_projection
+
+    projection = vision_text_projection(description)
+    if not projection.answer_description.strip():
+        return
+    record.text = projection.answer_description
+    record.raw["vision_text_projection"] = projection.dumps()
 
 
 def _is_form_visual_record(record: LayoutRecord) -> bool:

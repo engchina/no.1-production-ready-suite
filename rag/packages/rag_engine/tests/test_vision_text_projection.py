@@ -294,3 +294,77 @@ def test_native_record_does_not_gain_generated_origin_from_arbitrary_raw_project
     native = record("Text", project.answer_description, raw={"vision_text_projection": project.dumps()})
     assert _vision_projection_status(native) is None
     assert _record_text_for_chunk(native, for_retrieval=True) == native["text"]
+
+
+def _picture_with_visual_text(tmp_path):
+    """本文が空で、同じ bbox の画像内 OCR に操作の語がある Picture（解析の直後の形）。"""
+    path = tmp_path / "page.png"
+    Image.new("RGB", (100, 100), "white").save(path)
+    bbox = [10.0, 10.0, 80.0, 80.0]
+    picture = LayoutRecord("picture-1", "docling", 1, 1, list(bbox), "image_top_left", 100, 100, "Picture", raw_type="picture")
+    ocr = LayoutRecord(
+        "picture-ocr-1", "docling", 1, 2, list(bbox), "image_top_left", 100, 100, "Picture", "登録ボタン", raw_type="picture_ocr_text"
+    )
+    return picture, ocr, PageImage(1, 100, 100, 100, 100, str(path))
+
+
+def test_crop_step_before_vision_does_not_write_an_empty_projection(tmp_path):
+    """crop の保存は VLM の前に走るため、説明が無い図に投影も本文も作らない（#4569）。"""
+    from rag_engine.chunking.records import _vision_projection_status
+    from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
+
+    picture, ocr, page = _picture_with_visual_text(tmp_path)
+    persist_semantic_visual_crops([picture, ocr], [page], run_dir=tmp_path / "run")
+
+    assert picture.raw["visual_role_reason"] == "meaningful_text_in_visual"
+    assert picture.raw["crop_path"]
+    assert "vision_text_projection" not in picture.raw
+    assert picture.text == ""
+    assert _vision_projection_status(picture.to_dict()) is None
+
+
+def test_crop_step_then_vision_verifies_projection_and_chunks(tmp_path):
+    """crop の保存 → VLM の書き戻し → 分割が、空の投影で止まらずに通る（#4569）。"""
+    from rag_engine.chunking.records import _vision_projection_status
+    from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
+
+    picture, ocr, page = _picture_with_visual_text(tmp_path)
+    persist_semantic_visual_crops([picture, ocr], [page], run_dir=tmp_path / "run")
+    with patch.object(pictures, "describe_picture", return_value=description()):
+        result = pictures.describe_docling_pictures(
+            [picture, ocr],
+            [page],
+            run_dir=tmp_path / "run",
+            pdf_name="synthetic.pdf",
+            settings=get_settings(environ={"OCI_ENTERPRISE_AI_VLM_MODEL": "vendor.synthetic"}, dotenv_path=None),
+        )
+
+    assert result.succeeded == 1
+    assert _vision_projection_status(picture.to_dict()) == "verified"
+    chunks = chunks_for([picture.to_dict(), ocr.to_dict()])
+    assert any("検索語" in chunk.text for chunk in chunks)
+
+
+def test_crop_step_keeps_projection_of_a_saved_vision_description(tmp_path):
+    """保存済みの VLM の説明がある図（保存済みの解析結果の復元）は、その説明から投影を作る。"""
+    from rag_engine.chunking.records import _vision_projection_status
+    from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
+
+    picture, ocr, page = _picture_with_visual_text(tmp_path)
+    picture.raw["vision_description"] = description()
+    persist_semantic_visual_crops([picture, ocr], [page], run_dir=tmp_path / "run")
+
+    assert picture.text == pictures.vision_text_projection(description()).answer_description
+    assert _vision_projection_status(picture.to_dict()) == "verified"
+
+
+def test_invalid_projection_error_is_safe_for_the_job_message():
+    """不正な投影の失敗は、汎用の「取込処理に失敗しました。」ではなく、直し方を示す文で返す。"""
+    from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, VisionTextProjection
+
+    from rag_engine.chunking.records import _vision_projection_status
+
+    invalid = record("Picture", "", raw={VISION_TEXT_PROJECTION_KEY: VisionTextProjection("", "").dumps()})
+    with pytest.raises(ValueError, match="再解析") as caught:
+        _vision_projection_status(invalid)
+    assert getattr(caught.value, "safe_for_user", False) is True

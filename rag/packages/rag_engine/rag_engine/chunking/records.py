@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Any
 
 from rag_parser_core.language.markers import marker_patterns
-from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, load_vision_text_projection
+from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, InvalidVisionProjectionError, load_vision_text_projection
 
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
@@ -338,7 +338,7 @@ def _vision_projection_status(record: dict[str, Any]) -> str | None:
             or raw.get("vision_error")
             or body != projection.answer_description
         ):
-            raise ValueError("画像本文の投影が不正です。再解析または再分割してください。")
+            raise InvalidVisionProjectionError("画像本文の投影が不正です。再解析または再分割してください。")
         states.add("verified")
     elif isinstance(raw.get("vision_description"), dict) or raw.get("table_vision_text"):
         states.add("unrecorded")
@@ -353,10 +353,10 @@ def _vision_projection_status(record: dict[str, Any]) -> str | None:
                 continue
             projection = load_vision_text_projection(saved[image_id])
             if projection is None or not projection.answer_description.strip() or text != projection.answer_description:
-                raise ValueError("表内画像の本文投影が不正です。再分割してください。")
+                raise InvalidVisionProjectionError("表内画像の本文投影が不正です。再分割してください。")
             states.add("verified")
     if len(states) > 1:
-        raise ValueError("画像本文の投影に未記録の範囲が混在しています。再解析してください。")
+        raise InvalidVisionProjectionError("画像本文の投影に未記録の範囲が混在しています。再解析してください。")
     return next(iter(states), None)
 
 
