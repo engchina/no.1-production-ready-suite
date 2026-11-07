@@ -11,9 +11,9 @@
    提及の全体を囲む対の括弧・引用符を 1 組ずつ外す（形式の解析。内側に同じ種類の記号があれば外さない）。
 
    collective は範囲・列挙などで複数の個別の対象をまとめて指す 1 つの表記（#4584。NER の composite mention・
-   range mention の扱いと同じく、1 つの名前として照合しない）。表記そのものは名前として照合せず、``members`` に
-   その表記の中に写された個々の名前（提及の写しの中で数えた出現の順番つき）だけを named の位置として加える。
-   範囲の中の書かれていない名前はモデルに補わせない（原文の写しでない名前は照合できない）。
+   range mention の扱いと同じく、1 つの名前として照合しない）。表記そのものは名前として照合せず、``members`` のうち
+   その表記の写しの中に完全一致で現れる名前（提及の写しの中で数えた出現の順番つき）だけを named の位置として加える。
+   写しの中に無い名前（範囲を補って展開した名前など）は、原文の写しでなく照合できないので使わず、件数だけを診断に残す。
 2. 役割: 原質問を文末の記号・改行で文に区切り（形式の解析）、named の各提及にそれを含む文の ID を付けて渡し、その文の中での
    役割だけを返させる。段の間で渡すのはコードが確定した位置と ID だけで、モデルの写しは渡さない。文の区切りを
    またぐ提及は失敗にする。
@@ -121,9 +121,10 @@ class QuestionSubjects:
     mentions: tuple[SubjectMention, ...] = ()
     failure: str = ""
     calls: int = 0
-    # まとめた表記の数と、その中に写された個々の名前の数（名前は ``mentions`` に含む）。
+    # まとめた表記の数、その中に写された個々の名前の数（名前は ``mentions`` に含む）、写しの中に無く使わなかった名前の数。
     collective_mentions: int = 0
     collective_members: int = 0
+    collective_unwritten_members: int = 0
 
     def diagnostics(self) -> dict[str, Any]:
         """実行記録に残す件数と類別（質問・名前の文字列は残さない）。"""
@@ -136,6 +137,8 @@ class QuestionSubjects:
             result["collective_mentions"] = self.collective_mentions
         if self.collective_members:
             result["collective_members"] = self.collective_members
+        if self.collective_unwritten_members:
+            result["collective_unwritten_members"] = self.collective_unwritten_members
         if self.failure:
             result["failure"] = self.failure
         return result
@@ -261,17 +264,19 @@ def _resolve_copy(within: str, text: Any, occurrence: Any, *, missing: str, out_
     raise QuestionSubjectError(out_of_range, "occurrence が同じ写しの出現の数を超えています。")
 
 
-def project_extraction(question: str, raw: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """抽出の出力を原質問の位置へ確定する。
+def project_extraction(question: str, raw: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
+    """抽出の出力を原質問の位置へ確定する。返すのは (位置を確定した行, 使わなかった collective の名前の数)。
 
     位置はコードが ``text`` の完全一致の出現から決める。出現が 1 つならその位置、複数なら ``occurrence`` 番目。
     写しが原文に無い・``occurrence`` が出現の数を超えるときは失敗にする（あいまい一致・別の出現への寄せはしない）。
     collective の ``members`` は、その提及の写しの中で同じ規則で位置を決め、named の行（``member_of`` はまとめた表記の
-    範囲）として加える。collective 以外の ``members``・提及の外の写し・提及の全体と同じ写しは失敗にする。
-    同じ範囲が単独の named の提及にもあれば 1 つにする（同じ位置の同じ名前）。
+    範囲）として加える。提及の写しの中に無い名前は使わず、件数だけを返す。
+    collective 以外の ``members``・提及の全体と同じ写しは失敗にする。同じ範囲が単独の named の提及にもあれば 1 つにする
+    （同じ位置の同じ名前）。
     """
     rows: list[dict[str, Any]] = []
     members: list[dict[str, Any]] = []
+    unwritten = 0
     for item in raw.get("mentions") or ():
         text, designation = str(item["text"]), str(item["designation"])
         if designation not in DESIGNATIONS:
@@ -286,6 +291,9 @@ def project_extraction(question: str, raw: Mapping[str, Any]) -> list[dict[str, 
             raise QuestionSubjectError("members_on_single_mention", "members は collective の提及にだけ返します。")
         for member in written:
             name = member["text"]
+            if not exact_occurrences(text, str(name)):
+                unwritten += 1
+                continue
             offset = _resolve_copy(
                 text, name, member["occurrence"], missing="member_not_in_mention", out_of_range="member_occurrence_out_of_range"
             )
@@ -304,7 +312,7 @@ def project_extraction(question: str, raw: Mapping[str, Any]) -> list[dict[str, 
         if not same:
             rows.append(member)
     rows.sort(key=lambda row: (row["start"], row["end"]))
-    return rows
+    return rows, unwritten
 
 
 def trim_enclosing_pairs(question: str, mentions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -439,7 +447,8 @@ def extract_question_subjects(
             provider_id=provider_id,
             purpose=PURPOSE_EXTRACTION,
         )
-        mentions = trim_enclosing_pairs(question, project_extraction(question, schema.model_validate(_dump(raw)).model_dump()))
+        projected, unwritten = project_extraction(question, schema.model_validate(_dump(raw)).model_dump())
+        mentions = trim_enclosing_pairs(question, projected)
         named = [row for row in mentions if row["designation"] == DESIGNATION_NAMED]
         # まとめた表記の件数は、以後の結果にもそのまま残す（``replace`` で状態と名前だけを変える）。
         extracted = QuestionSubjects(
@@ -448,6 +457,7 @@ def extract_question_subjects(
             calls=calls,
             collective_mentions=sum(1 for row in mentions if row["designation"] == DESIGNATION_COLLECTIVE),
             collective_members=sum(1 for row in named if "member_of" in row),
+            collective_unwritten_members=unwritten,
         )
         if not named:
             return extracted

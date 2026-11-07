@@ -97,6 +97,12 @@ def test_extraction_input_is_the_question_and_the_schema_asks_for_text_occurrenc
     }
 
 
+def _rows(question: str, raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """位置を確定した行（写しの中に無い collective の名前の数を除く）。"""
+    rows, _ = project_extraction(question, raw)
+    return rows
+
+
 def anchor(text: str, occurrence: int = 1) -> dict[str, Any]:
     return {"text": text, "occurrence": occurrence, "designation": "named", "members": []}
 
@@ -116,7 +122,7 @@ def anchor(text: str, occurrence: int = 1) -> dict[str, Any]:
     ids=["unique", "unique-occurrence-ignored", "repeated-first", "repeated-second", "overlapping"],
 )
 def test_code_resolves_the_position_from_exact_occurrences_of_the_text(question: str, text: str, occurrence: int, start: int) -> None:
-    rows = project_extraction(question, {"mentions": [anchor(text, occurrence)]})
+    rows = _rows(question, {"mentions": [anchor(text, occurrence)]})
     assert rows == [{"start": start, "end": start + len(text), "text": text, "designation": "named"}]
     assert question[start : start + len(text)] == text
 
@@ -133,7 +139,7 @@ def test_code_resolves_the_position_from_exact_occurrences_of_the_text(question:
 )
 def test_text_absent_or_occurrence_out_of_range_fails_without_snapping(question: str, text: str, occurrence: int, code: str) -> None:
     with pytest.raises(QuestionSubjectError) as caught:
-        project_extraction(question, {"mentions": [anchor(text, occurrence)]})
+        _rows(question, {"mentions": [anchor(text, occurrence)]})
     assert caught.value.code == code
     subjects, parse = extract(question, {EXTRACT: {"mentions": [anchor(text, occurrence)]}})
     assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_FAILED, code, 1)
@@ -142,7 +148,7 @@ def test_text_absent_or_occurrence_out_of_range_fails_without_snapping(question:
 
 def test_two_mentions_resolving_to_the_same_range_fail() -> None:
     with pytest.raises(QuestionSubjectError) as caught:
-        project_extraction("装置ラムダの手順は？", {"mentions": [anchor("装置ラムダ", 1), anchor("装置ラムダ", 2)]})
+        _rows("装置ラムダの手順は？", {"mentions": [anchor("装置ラムダ", 1), anchor("装置ラムダ", 2)]})
     assert caught.value.code == "exact_duplicate_range"
 
 
@@ -251,7 +257,7 @@ def collective(question: str, text: str, *members: str | tuple[str, int], nth: i
 def test_collective_mention_is_not_a_name_and_its_members_are_named_positions() -> None:
     """範囲の表記は 1 つの名前として照合せず、その中に写された個々の名前だけを named の位置にする（#4584）。"""
     question = RANGE_QUESTION
-    rows = project_extraction(question, {"mentions": [collective(question, "部品P1〜P4", "部品P1"), mention(question, "部品P5")]})
+    rows = _rows(question, {"mentions": [collective(question, "部品P1〜P4", "部品P1"), mention(question, "部品P5")]})
     assert [(row["text"], row["designation"], question[row["start"] : row["end"]]) for row in rows] == [
         ("部品P1", "named", "部品P1"),
         ("部品P1〜P4", "collective", "部品P1〜P4"),
@@ -280,15 +286,39 @@ def test_collective_mention_is_not_a_name_and_its_members_are_named_positions() 
 def test_member_position_is_counted_inside_the_collective_mention() -> None:
     # 個々の名前の出現の順番は、まとめた提及の写しの中で数える（同じ写しが提及の外にあっても位置を取り違えない）。
     question = "部品Pの点検は？部品P・部品Qは済みです。"
-    rows = project_extraction(question, {"mentions": [collective(question, "部品P・部品Q", "部品P", "部品Q")]})
+    rows = _rows(question, {"mentions": [collective(question, "部品P・部品Q", "部品P", "部品Q")]})
     start = question.index("部品P・部品Q")
     assert [(row["start"], row["text"]) for row in rows if row["designation"] == "named"] == [(start, "部品P"), (start + 4, "部品Q")]
 
 
 def test_member_also_returned_as_a_named_mention_is_one_position() -> None:
     question = RANGE_QUESTION
-    rows = project_extraction(question, {"mentions": [mention(question, "部品P1"), collective(question, "部品P1〜P4", "部品P1")]})
+    rows = _rows(question, {"mentions": [mention(question, "部品P1"), collective(question, "部品P1〜P4", "部品P1")]})
     assert [(row["text"], row["designation"]) for row in rows] == [("部品P1", "named"), ("部品P1〜P4", "collective")]
+
+
+def test_members_not_written_in_the_collective_mention_are_not_used() -> None:
+    """範囲を補って展開した名前・提及の外の名前は原文の写しでないので照合に使わず、件数だけを残す（実モデルの応答の形）。"""
+    question = RANGE_QUESTION
+    expanded = collective(question, "部品P1〜P4", "部品P1", "部品P2", "部品P3", ("部品P4", 4), "部品P5")
+    rows, unwritten = project_extraction(question, {"mentions": [expanded, mention(question, "部品P5")]})
+    assert ([(row["text"], row["designation"]) for row in rows], unwritten) == (
+        [("部品P1", "named"), ("部品P1〜P4", "collective"), ("部品P5", "named")],
+        4,
+    )
+    subjects, _ = extract(question, {EXTRACT: {"mentions": [expanded, mention(question, "部品P5")]}, ROLE: RuntimeError("synthetic")})
+    assert [m.text for m in subjects.mentions] == ["部品P1", "部品P5"]
+    assert unconfirmed_question_notices(subjects, [RANGE_SOURCE]) == []
+    assert subjects.diagnostics() == {
+        "status": STATUS_ROLES_UNAVAILABLE,
+        "calls": 2,
+        "named_mentions": 2,
+        "verified_mentions": 2,
+        "collective_mentions": 1,
+        "collective_members": 1,
+        "collective_unwritten_members": 4,
+        "failure": "RuntimeError",
+    }
 
 
 def test_collective_without_a_written_member_has_no_named_position() -> None:
@@ -301,17 +331,16 @@ def test_collective_without_a_written_member_has_no_named_position() -> None:
 @pytest.mark.parametrize(
     ("row", "code"),
     [
-        (collective(RANGE_QUESTION, "部品P1〜P4", "部品P5"), "member_not_in_mention"),
         (collective(RANGE_QUESTION, "部品P1〜P4", ("P", 3)), "member_occurrence_out_of_range"),
         (collective(RANGE_QUESTION, "部品P1〜P4", "部品P1〜P4"), "member_is_whole_mention"),
         (collective(RANGE_QUESTION, "部品P1〜P4", "部品P1", "部品P1"), "exact_duplicate_range"),
         ({**mention(RANGE_QUESTION, "部品P5"), "members": [{"text": "P5", "occurrence": 1}]}, "members_on_single_mention"),
     ],
-    ids=["member-outside", "member-occurrence", "member-whole", "member-duplicate", "members-on-named"],
+    ids=["member-occurrence", "member-whole", "member-duplicate", "members-on-named"],
 )
 def test_collective_member_contract_violations_fail_without_snapping(row: dict[str, Any], code: str) -> None:
     with pytest.raises(QuestionSubjectError) as caught:
-        project_extraction(RANGE_QUESTION, {"mentions": [row]})
+        _rows(RANGE_QUESTION, {"mentions": [row]})
     assert caught.value.code == code
 
 
