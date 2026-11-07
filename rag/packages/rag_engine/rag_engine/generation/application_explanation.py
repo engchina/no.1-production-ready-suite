@@ -43,6 +43,11 @@ DEFAULT_LANGUAGE_LABEL = "日本語"
 KEY_QUESTION = "質問"
 KEY_SOURCES = "資料の原文"
 KEY_LANGUAGE = "回答言語の指定"
+# 推導が使った表の行の判定（row_conditions。#4349）。判定はコードと行の段が決め、説明の段は写すだけ。
+KEY_ROWS = "表の行の判定"
+KEY_ROW_CONDITION = "条件"
+KEY_ROW_RESULT = "判定"
+ROW_RESULT_LABELS = {"applies": "成り立つ", "does_not_apply": "成り立たない", "cannot_determine": "質問から決められない"}
 # 入力の原文に無い Latin の語がこの数以上連なれば、既定の言語の説明ではないとみなして隠す。
 LATIN_RUN_WORDS = 3
 _THOUSANDS_SEPARATORS = (",", "，")
@@ -54,17 +59,20 @@ def language_label(instruction: str | None) -> str:
     return DEFAULT_LANGUAGE_LABEL if instruction is None else f"「{KEY_LANGUAGE}」が求める言語"
 
 
-def explanation_system(instruction: str | None) -> str:
+def explanation_system(instruction: str | None, *, with_rows: bool = False) -> str:
+    """``with_rows`` は入力に表の行の判定（``KEY_ROWS``）があるとき。無いときの文は変えない。"""
     label = language_label(instruction)
     return "\n".join(
         [
             "## Step 1: 入力を読む",
             f"入力の「{KEY_QUESTION}」は利用者の質問、「{KEY_SOURCES}」は資料から引いた原文です。"
-            + ("" if instruction is None else f"「{KEY_LANGUAGE}」は、質問のうち回答の言語を指定した原文です。"),
+            + ("" if instruction is None else f"「{KEY_LANGUAGE}」は、質問のうち回答の言語を指定した原文です。")
+            + ("" if not with_rows else f"「{KEY_ROWS}」は、表の各行の条件が質問から成り立つかを確かめた結果です。"),
             "",
             "## Step 2: 説明を書く",
             f"質問への答えが、質問の条件と{KEY_SOURCES}の値からどう導かれるかを、利用者に示す{label}の文で書きます。"
-            "計算を含むときは、使った値と式と途中の結果を示します。"
+            + ("" if not with_rows else f"表の行が成り立つかは「{KEY_ROWS}」のとおりに書きます。")
+            + "計算を含むときは、使った値と式と途中の結果を示します。"
             f"質問と{KEY_SOURCES}に無い値・条件を足しません。"
             "原文の数値・記号・固有名詞・SQL は原文のまま書きます。",
             "",
@@ -95,11 +103,27 @@ def explanation_schema(instruction: str | None) -> type[BaseModel]:
     return _explanation_model(language_label(instruction))
 
 
-def explanation_prompt(question: str, sources: Sequence[str], instruction: str | None) -> str:
+def explanation_prompt(question: str, sources: Sequence[str], instruction: str | None, rows: Sequence[dict[str, str]] = ()) -> str:
     value: dict[str, Any] = {KEY_QUESTION: question, KEY_SOURCES: list(sources)}
     if instruction is not None:
         value[KEY_LANGUAGE] = instruction
+    if rows:
+        value[KEY_ROWS] = list(rows)
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def application_rows(entry: CheckedApplication, row_conditions: Any) -> list[dict[str, str]]:
+    """推導が当てはめた根拠の表の、条件のある行の判定（行の段の結果。無ければ空）。日本語の key と値だけにする。"""
+    if row_conditions is None or getattr(row_conditions, "status", "") != "completed":
+        return []
+    facts = row_conditions.facts_by_evidence()
+    evidence_ids = dict.fromkeys(str((getattr(item, "span", None) or {}).get("evidence_id") or "") for item in entry.entries)
+    return [
+        {KEY_ROW_CONDITION: str(row["condition"]), KEY_ROW_RESULT: ROW_RESULT_LABELS[row["applicability"]]}
+        for evidence_id in evidence_ids
+        for row in (facts.get(evidence_id) or {}).get("rows", [])
+        if row.get("condition") and row.get("applicability") in ROW_RESULT_LABELS
+    ]
 
 
 def application_sources(entry: CheckedApplication) -> list[str]:
@@ -230,8 +254,13 @@ def explain_applications(
     parse_text: Callable[..., Any],
     settings: Any,
     provider_id: str | None,
+    row_conditions: Any = None,
 ) -> dict[str, Any]:
-    """valid な推導ごとに 1 回、説明の段を呼び、表示の門を通った説明だけを ``presentation`` に置く。"""
+    """valid な推導ごとに 1 回、説明の段を呼び、表示の門を通った説明だけを ``presentation`` に置く。
+
+    ``row_conditions``（表の行の判定。#4349）があれば、推導が当てはめた表の行の判定を入力に渡す。説明の文が
+    確かめた行の判定と食い違わないよう、判定は渡すだけで、説明の段に決め直させない。
+    """
     targets = [entry for entry in checked if explanation_target(entry)]
     for entry in checked:
         if not explanation_target(entry):
@@ -246,7 +275,6 @@ def explain_applications(
         diagnostic.update(status="not_applicable", results=[dict(entry.presentation) for entry in targets])
         return diagnostic
     instruction = contract["instruction"]
-    system = explanation_system(instruction)
     schema = explanation_schema(instruction)
     started = monotonic()
     for entry in targets:
@@ -257,7 +285,9 @@ def explain_applications(
             diagnostic["status"] = "incomplete"
             continue
         sources = application_sources(entry)
-        prompt = explanation_prompt(question, sources, instruction)
+        rows = application_rows(entry, row_conditions)
+        system = explanation_system(instruction, with_rows=bool(rows))
+        prompt = explanation_prompt(question, sources, instruction, rows)
         diagnostic["prompt_chars"].append(len(system) + len(prompt))
         try:
             ensure_model_input(settings, system, prompt, schema.model_json_schema(), provider_id=provider_id)

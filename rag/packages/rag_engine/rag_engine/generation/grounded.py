@@ -4161,6 +4161,13 @@ def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -
     return SentUnitCatalog(snapshots)
 
 
+def sent_table_views(spans: Sequence[dict]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """実際に送った単位だけの目録から投影した表（#4349。投影は sent_table_projection）。"""
+    from rag_engine.generation.sent_table_projection import sent_tables
+
+    return sent_tables(generation_unit_catalog(spans, sent_only=True))
+
+
 def _sent_view(span: Mapping[str, Any]) -> CitationView:
     """モデルに示した版（送信時に固定した本文と引用単位）。記録が無ければ今の本文から作る。"""
     snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))

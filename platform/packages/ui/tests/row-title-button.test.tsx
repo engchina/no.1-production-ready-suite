@@ -155,6 +155,13 @@ describe("RowTitleButton の操作", () => {
     expect(labels).toEqual(["詳細を開く", "合成の項目", "合成の説明"]);
   });
 
+  it("見えている文は題名と補足の間に区切りを持つ（語に分けて比べる Label in Name の検査で 1 語につながらない。#4571）", () => {
+    act(() => root.render(<RowTitleButton title="合成 A" subtitle="Beta の説明" aria-label="合成 A を開く" />));
+    expect(host.querySelector("[data-row-title-button]")!.textContent).toBe("合成 A Beta の説明");
+    act(() => root.render(<RowTitleButton title="合成 A" aria-label="合成 A を開く" />));
+    expect(host.querySelector("[data-row-title-button]")!.textContent).toBe("合成 A");
+  });
+
   it("DataTable の行の中で押すと onClick だけが 1 回呼ばれ、行のクリック（onRowClick）は重ねて呼ばない", () => {
     const onClick = vi.fn();
     const onRowClick = vi.fn();

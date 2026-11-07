@@ -72,6 +72,7 @@ from app.clients.oracle_read_stats import (
     read_lobs_as_values,
 )
 from app.config import (
+    EnterpriseAiModelNotRegisteredError,
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
@@ -546,6 +547,38 @@ def _reasoning_effort_override(value: str) -> str:
     return "" if value == "model" else value
 
 
+def _row_condition_environ(settings: Settings) -> dict[str, str]:
+    """表の各行の条件を質問に当てはめる段(#4349)のモデルの接続を rag_engine へ渡す値。
+
+    モデルは段ごとの設定(``rag_row_condition_model``)で、接続・推論の量・入出力の上限はそのモデルの登録の
+    値。モデルが登録されていなければ接続を渡さず、理由(``RAG_ENGINE_ROW_CONDITION_UNAVAILABLE``)だけを
+    渡す。rag_engine はこの段を実行せず理由を記録し、回答のモデルへ切り替えない
+    (#3240 の不変条件と同じ)。
+    """
+    model = settings.rag_row_condition_model.strip()
+    if not model:
+        return {"RAG_ENGINE_ROW_CONDITION_UNAVAILABLE": "row_condition_model_not_configured"}
+    try:
+        connection = enterprise_ai_connection_for_model(settings, model)
+    except EnterpriseAiModelNotRegisteredError as exc:
+        return {"RAG_ENGINE_ROW_CONDITION_UNAVAILABLE": str(exc)}
+    return {
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL": model,
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_ENDPOINT": connection.base_url,
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_API_KEY": connection.api_key,
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_PROJECT_OCID": connection.project_ocid,
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
+            settings, model
+        ),
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_MAX_INPUT_TOKENS": str(
+            enterprise_ai_max_input_tokens(settings, model)
+        ),
+        "OCI_ENTERPRISE_AI_ROW_CONDITION_MAX_OUTPUT_TOKENS": str(
+            enterprise_ai_output_token_budget(settings, model)
+        ),
+    }
+
+
 def build_engine_settings(
     settings: Settings,
     *,
@@ -743,6 +776,11 @@ def build_engine_settings(
         ),
         "RAG_ENGINE_AUDIT_REASONING_EFFORT": _reasoning_effort_override(
             settings.rag_audit_reasoning_effort
+        ),
+        # 表の各行の条件を質問に当てはめる段のモデルと推論の量(#4349。段ごとの設定)。
+        **_row_condition_environ(settings),
+        "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT": _reasoning_effort_override(
+            settings.rag_row_condition_reasoning_effort
         ),
         "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": (
             "1" if settings.rag_crag_skip_on_strong_signals else "0"

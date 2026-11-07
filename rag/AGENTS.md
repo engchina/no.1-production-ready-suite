@@ -54,6 +54,10 @@ cd services/parsers/docling && uv run --no-sync --with pytest python -m pytest -
 
 CI の job は `RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等。外部 parser のテストは `RAG / Parser docling` で、その parser と path 依存が変わったときだけ動く（#1512）。
 
+## 解析の出力の版
+
+解析の出力の内容を変える修正（解析サービス・`rag_engine` の解析・`rag_parser_core`）は、同じ PR で `app/rag/ingestion.py` の `EXTRACTION_ARTIFACT_SCHEMA_VERSION` を上げる（上げないと保存済みの段・全体の抽出結果が使い直され、解析からの再処理でも直らない。#4577）。
+
 ## テスト
 
 backend は pytest、frontend のロジックは Vitest、UI/UX は Playwright。実 Oracle のテストはテスト専用の schema で流すことを推奨し、データを削除する migration には `destructive_note` を書く（[docs/agents/development.md](./docs/agents/development.md)）。
