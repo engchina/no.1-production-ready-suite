@@ -19,8 +19,11 @@ from app.rag.ingestion_language import (
 from app.rag.language_pack_releases import active_release
 from app.schemas.document import IngestionJob, IngestionJobStatus
 from app.schemas.language_pack_release import (
+    LANGUAGE_PACK_SUPERSEDED,
     LanguagePackDocumentStatus,
+    LanguagePackDocumentUse,
     LanguagePackIndexRelation,
+    LanguagePackRecipeUse,
     LanguagePackRelease,
 )
 
@@ -188,6 +191,150 @@ def test_document_status_filter_takes_the_first_status_in_priority_order() -> No
     assert "ORDER BY j.queued_at DESC FETCH FIRST 1 ROWS ONLY) IS NOT NULL" in building
     # 版の行が無い索引は判定できない（画面は版番号の無い使用版を判定しない）。
     assert "rag_language_pack_releases used" in present[LanguagePackDocumentStatus.UNRECORDED]
+
+
+def _recipe(**overrides: Any) -> LanguagePackRecipeUse:
+    values: dict[str, Any] = {
+        "recipe_id": "recipe-a",
+        "chunk_set_id": "chunks-a",
+        "release_id": "release-a",
+        "version": 1,
+        "ingest_hash": "hash-a",
+        "relation": LanguagePackIndexRelation.CURRENT,
+    }
+    return LanguagePackRecipeUse(**{**values, **overrides})
+
+
+def _use(*recipes: LanguagePackRecipeUse, superseded: bool = False) -> LanguagePackDocumentUse:
+    return LanguagePackDocumentUse(
+        current_release_id="release-a",
+        current_version=1,
+        recipes=list(recipes),
+        superseded=superseded,
+    )
+
+
+@pytest.mark.parametrize(
+    ("recipes", "expected"),
+    [
+        ((), LanguagePackDocumentStatus.NOT_BUILT),
+        ((_recipe(),), LanguagePackDocumentStatus.CURRENT),
+        (
+            (_recipe(release_id="release-old", relation=LanguagePackIndexRelation.EQUIVALENT),),
+            LanguagePackDocumentStatus.EQUIVALENT,
+        ),
+        # 版の行が無い索引は、関係が分かっても判定できない（SQL の known と同じ）。
+        ((_recipe(version=None),), LanguagePackDocumentStatus.UNRECORDED),
+        ((_recipe(ingest_hash=None),), LanguagePackDocumentStatus.UNRECORDED),
+        # 構築中は索引の有無・使用版より先に見る。
+        (
+            (_recipe(ingest_hash=None, target_release_id="release-b"),),
+            LanguagePackDocumentStatus.BUILDING,
+        ),
+        (
+            (
+                _recipe(
+                    chunk_set_id=None,
+                    release_id=None,
+                    version=None,
+                    ingest_hash=None,
+                    relation=LanguagePackIndexRelation.UNRECORDED,
+                ),
+            ),
+            LanguagePackDocumentStatus.NOT_BUILT,
+        ),
+        # 優先順: 再処理を推奨 > 判定できません > 構築中 > 内容は同じ > 最新 > 未構築。
+        (
+            (
+                _recipe(relation=LanguagePackIndexRelation.DIFFERENT),
+                _recipe(recipe_id="recipe-b", ingest_hash=None),
+            ),
+            LanguagePackDocumentStatus.DIFFERENT,
+        ),
+        (
+            (
+                _recipe(recipe_id="recipe-b", target_release_id="release-b"),
+                _recipe(ingest_hash=None),
+            ),
+            LanguagePackDocumentStatus.UNRECORDED,
+        ),
+        (
+            (
+                _recipe(),
+                _recipe(
+                    recipe_id="recipe-b",
+                    release_id="release-old",
+                    relation=LanguagePackIndexRelation.EQUIVALENT,
+                ),
+            ),
+            LanguagePackDocumentStatus.EQUIVALENT,
+        ),
+    ],
+    ids=[
+        "empty",
+        "current",
+        "equivalent",
+        "missing-release-row",
+        "missing-hash",
+        "building-first",
+        "queued-without-release",
+        "different-first",
+        "unrecorded-over-building",
+        "equivalent-over-current",
+    ],
+)
+def test_document_status_follows_the_filter_priority(
+    recipes: tuple[LanguagePackRecipeUse, ...], expected: LanguagePackDocumentStatus
+) -> None:
+    """文書の状態（一覧の列のバッジ）は、絞り込みの SQL と同じ規則・優先順で決める（#4566）。"""
+    assert _use(*recipes).status == expected
+
+
+@pytest.mark.parametrize(
+    "recipes",
+    [
+        (),
+        (_recipe(ingest_hash=None),),
+        (_recipe(relation=LanguagePackIndexRelation.DIFFERENT),),
+        (_recipe(target_release_id="release-b"),),
+    ],
+    ids=["not-built", "unrecorded", "different", "building"],
+)
+def test_superseded_document_is_outside_the_six_filter_states(
+    recipes: tuple[LanguagePackRecipeUse, ...],
+) -> None:
+    """新しい版に置き換えた文書（旧版）は、絞り込みの 6 つの状態に入れず「対象外」にする（#4601）。
+
+    絞り込みは旧版を除く（#3709）ため、バッジが 6 つのどれかを出すと絞り込みと食い違う。
+    """
+    use = _use(*recipes, superseded=True)
+    assert use.status == LANGUAGE_PACK_SUPERSEDED
+    assert use.status not in set(LanguagePackDocumentStatus)
+    assert use.model_dump(mode="json")["status"] == "superseded"
+
+
+async def test_language_pack_uses_mark_superseded_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """呼び出し元が渡した旧版の文書だけを、使用版の記録にかかわらず「対象外」にする（#4601）。"""
+    current = release()
+    client = oracle_module.OracleClient()
+    unrecorded = _active_row(language_pack_ingest_hash=None)
+    fetch = AsyncMock(
+        side_effect=[
+            [unrecorded, {**unrecorded, "document_id": "document-b"}],
+            [],
+        ]
+    )
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    _mock_release_store(monkeypatch, current)
+    uses = await client.document_language_pack_uses(
+        ["document-a", "document-b"], current_release_id=current.id, superseded_ids={"document-a"}
+    )
+    assert uses["document-a"].superseded is True
+    assert uses["document-a"].status == LANGUAGE_PACK_SUPERSEDED
+    assert uses["document-b"].superseded is False
+    assert uses["document-b"].status == LanguagePackDocumentStatus.UNRECORDED
 
 
 def test_release_scope_restores_after_failure() -> None:
