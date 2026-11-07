@@ -324,19 +324,8 @@ def deterministic_parse_text_response(
             )
             return text_format.model_validate(
                 {
-                    "request_coverage": [
-                        {
-                            "request_id": "Q1",
-                            "evidence_scope": [
-                                {
-                                    "evidence_id": evidence[0],
-                                    "target": "合成の要求",
-                                    "relation": "direct",
-                                    "link": None,
-                                }
-                            ],
-                        }
-                    ]
+                    # basis の根拠の direct の計画の行はコードが作る（#4611）。
+                    "request_coverage": [{"request_id": "Q1", "evidence_scope": []}]
                     if evidence
                     else [],
                     "answer_parts": [

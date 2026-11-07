@@ -250,11 +250,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             "confidence": "high",
         }
         if getattr(schema, "_uses_typed_answer_parts", False):
-            scopes = [
-                {"evidence_id": label, "target": "合成の操作", "relation": "direct", "link": None}
-                for label, block in re.findall(r"(?ms)^\[(E\d+)\][^\n]*\n(.*?)^\[/\1\]", prompt)
-                if any(uid in block for uid in selected)
-            ]
+            scopes: list[dict[str, Any]] = []  # basis の根拠の direct の行はコードが作る（#4611）
             answer = (
                 {
                     "kind": "answer",

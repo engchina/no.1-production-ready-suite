@@ -123,8 +123,9 @@ def answer_parts_model(
         "summary": (SkipJsonSchema[str], Field(default="", exclude=True)),
         "summary_item_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
-        # 計画の行は evidence_id → relation → link だけ（自由記述の target を書かせない。#4594）。
-        "request_coverage": request_coverage_field(base, catalog, request_ids, scope_target=False),
+        # 計画の行は evidence_id → relation → link だけ（自由記述の target を書かせない。#4594）。basis に選んだ根拠の
+        # direct の行はコードが作り、モデルは linked / unrelated の判断が要る行だけを書く（#4611）。
+        "request_coverage": request_coverage_field(base, catalog, request_ids, scope_target=False, derived_direct=True),
         "question_type": (
             GenericAlias(list, question_types),
             Field(
@@ -269,6 +270,30 @@ def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[st
             part["item_indexes"] = quotes
 
 
+def _with_basis_plan_rows(coverage: list[dict[str, Any]], basis: list[tuple[str, list[BoundUnitRange]]]) -> list[dict[str, Any]]:
+    """要点の basis に選んだ根拠の direct の計画の行を、要求ごとに足す（#4611）。
+
+    basis に選んだ根拠は答えに使う根拠なので、direct の判断はコードで分かる。モデルが同じ要求で同じ根拠に linked /
+    unrelated の行を書いていれば（表示の label と evidence_id のどちらでも）、その判断を覆さない（行を足さない）。根拠は
+    モデルの行と同じ表示の label（無ければ evidence_id）で書く。計画の無い要求には計画を足す。
+    """
+    rows = {str(plan["request_id"]): plan for plan in coverage}
+    for request_id, selected in basis:
+        plan = rows.get(request_id)
+        if plan is None:
+            plan = rows[request_id] = {"request_id": request_id, "evidence_scope": [], "evidence_ids": []}
+            coverage.append(plan)
+        for binding in selected:
+            span = binding.snapshot.span()
+            names = {str(span.get("label") or ""), str(span["evidence_id"])} - {""}
+            if any(scope["evidence_id"] in names for scope in plan["evidence_scope"]):
+                continue
+            label = str(span.get("label") or span["evidence_id"])
+            plan["evidence_scope"].append({"evidence_id": label, "target": "", "relation": "direct", "link_quote": ""})
+            plan["evidence_ids"] = list(dict.fromkeys([*plan["evidence_ids"], label]))
+    return coverage
+
+
 def canonical_answer_parts(
     value: BaseModel,
     catalog: SentUnitCatalog,
@@ -279,11 +304,15 @@ def canonical_answer_parts(
 ) -> GroundedDraft:
     """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。
 
+    計画を同じ出力で返す生成（schema に request_coverage がある）では、basis に選んだ根拠の direct の計画の行をコードが
+    足す（``_with_basis_plan_rows``。#4611）。計画を生成の前に立てる経路（answer.scope）の計画は変えない。
+
     ``underived_requests`` は、導出が要るのに導出を作れなかった要求（``source_only_derivation`` の作り直しが契約を
     満たさなかったとき。#4586）。その要求の source 型の要点は、原文を引用に残したまま導出の無い derived にし、
     要約に使わない（``check_answer_parts`` が欠けた要点として不足の記載を足す）。原文の列挙を答えとして示さない。
     """
     raw = value.model_dump(exclude_unset=True)
+    derive_plan = not type(value).model_fields["request_coverage"].exclude
     wire_parts = raw.pop("answer_parts", [])
     summary_indexes = raw.pop("summary_part_indexes", [])
     items: list[dict[str, Any]] = []
@@ -294,6 +323,7 @@ def canonical_answer_parts(
     texts = []
     part_sources = []
     part_applications = []
+    basis_plans: list[tuple[str, list[BoundUnitRange]]] = []
     for position, part in enumerate(wire_parts):
         answer = part["answer"]
         kind = answer["kind"]
@@ -308,6 +338,7 @@ def canonical_answer_parts(
         header_only = kind == "source" and _header_only(selected)
         if header_only:
             selected = []
+        basis_plans.append((str(part["request_id"]), selected))
         indexes = []
         for binding in selected:
             key = (part["request_id"], binding.snapshot.snapshot_id, binding.first, binding.last)
@@ -382,7 +413,7 @@ def canonical_answer_parts(
         items=items,
         applications=applications,
         answer_parts=parts,
-        request_coverage=coverage,
+        request_coverage=_with_basis_plan_rows(coverage, basis_plans) if derive_plan else coverage,
         summary="\n".join(texts[index] for index in chosen),
         summary_item_indexes=list(dict.fromkeys(source for index in chosen for source in part_sources[index])),
         summary_application_indexes=list(dict.fromkeys(app for index in chosen for app in part_applications[index])),

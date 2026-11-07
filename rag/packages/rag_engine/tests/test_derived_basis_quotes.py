@@ -113,9 +113,7 @@ def run(valid: bool):
             {
                 "answer_parts": [part("answer", ids)],
                 "summary_part_indexes": [0],
-                "request_coverage": [
-                    {"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "target": "期限", "relation": "direct", "link": None}]}
-                ],
+                "request_coverage": [{"request_id": "Q1", "evidence_scope": []}],
                 "confidence": "medium",
             }
         )

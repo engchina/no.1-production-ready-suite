@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from citation_unit_support import judged_rows_only
 from pydantic import ValidationError
 
 from rag_engine.config import get_settings
@@ -31,7 +32,13 @@ def catalog() -> tuple[SentUnitCatalog, EvidenceUnitSnapshot]:
 
 
 def plan(request_id: str, target: str = "項目A") -> dict[str, Any]:
+    """計画だけの出力（answer.scope）の行。"""
     return {"request_id": request_id, "evidence_scope": [{"evidence_id": "E1", "target": target, "relation": "direct", "link": None}]}
+
+
+def generation_plan(request_id: str) -> dict[str, Any]:
+    """回答の生成の計画。basis の根拠の direct の行はコードが作るので、判断の要る行が無ければ空（#4611）。"""
+    return {"request_id": request_id, "evidence_scope": []}
 
 
 def draft(coverage: list[dict[str, Any]], snapshot: EvidenceUnitSnapshot) -> dict[str, Any]:
@@ -69,7 +76,9 @@ def test_recorded_repetition_of_one_request_is_rejected():
     """要求が 1 つの質問で、同じ request_id の計画を target だけ変えて繰り返した出力（録画の形の合成）。"""
     units, snapshot = catalog()
     model = generation_output_model(QUESTION, unit_catalog=units)
-    repeated = [plan("Q1", f"項目Aの記録値（言い換え{n}）") for n in range(6)]
+    repeated = [
+        {"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "relation": "unrelated", "link": None}] * n} for n in range(6)
+    ]
     with pytest.raises(ValidationError):
         model.model_validate(draft(repeated, snapshot))
 
@@ -77,7 +86,7 @@ def test_recorded_repetition_of_one_request_is_rejected():
 def test_one_plan_per_request_passes_and_reaches_the_canonical_draft():
     units, snapshot = catalog()
     model = generation_output_model(QUESTION, unit_catalog=units)
-    canonical = canonical_generation_draft(model.model_validate(draft([plan("Q1")], snapshot)), unit_catalog=units)
+    canonical = canonical_generation_draft(model.model_validate(draft([generation_plan("Q1")], snapshot)), unit_catalog=units)
     assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
     assert canonical.request_coverage[0].evidence_ids == ["E1"]
 
@@ -98,9 +107,9 @@ def test_several_requests_take_one_plan_each_and_reject_a_repeated_id():
     units, snapshot = catalog()
     model = answer_parts_model(generation_draft_wire_model(), units, request_ids=("Q1", "Q2"))
     assert coverage_schema(model)["field"]["maxItems"] == 2
-    model.model_validate(draft([plan("Q1"), plan("Q2")], snapshot))
+    model.model_validate(draft([generation_plan("Q1"), generation_plan("Q2")], snapshot))
     with pytest.raises(ValidationError, match="Q1"):
-        model.model_validate(draft([plan("Q1"), plan("Q1", "項目Aの値")], snapshot))
+        model.model_validate(draft([generation_plan("Q1"), generation_plan("Q1")], snapshot))
 
 
 def test_scope_plan_schema_takes_one_plan_per_request():
@@ -173,10 +182,14 @@ def test_recorded_repetitive_output_is_rejected_and_a_single_plan_recording_pass
             text = text.replace(key, value)
         return json.loads(text)
 
+    # 録画は direct の行を含む（basis の根拠からコードが作る前の契約。#4611）。繰り返しの録画は、そのままでも
+    # direct の行を除いても（同じ内容の計画は 1 件に寄せる）、要求ごとに 1 件の計画にしかならない。
     repeated = replay("deployed_42dd5db")
     assert len(repeated["request_coverage"]) > 1
     assert {plan["request_id"] for plan in repeated["request_coverage"]} == {"Q1"}
     with pytest.raises(ValidationError, match="request_coverage"):
         model.model_validate(repeated)
-    single = model.model_validate(replay("deployed_c00108e_retry"))
+    collapsed = model.model_validate(judged_rows_only(replay("deployed_42dd5db")))
+    assert [plan.request_id for plan in collapsed.request_coverage] == ["Q1"]
+    single = model.model_validate(judged_rows_only(replay("deployed_c00108e_retry")))
     assert [plan.request_id for plan in single.request_coverage] == ["Q1"]

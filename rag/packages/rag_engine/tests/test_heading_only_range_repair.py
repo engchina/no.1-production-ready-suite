@@ -288,9 +288,7 @@ def test_unit_repair_uses_original_snapshot_after_same_label_points_elsewhere() 
         payload["request_coverage"] = [
             {
                 "request_id": "Q1",
-                "evidence_scope": [
-                    {"evidence_id": "E1", "target": "合成の対象", "relation": "direct", "link": None},
-                ],
+                "evidence_scope": [],
             }
         ]
         return schema.model_validate(payload)

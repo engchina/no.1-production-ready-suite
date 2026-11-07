@@ -1,6 +1,5 @@
 """既存の合成応答を、実提示IDを使う要点単位の返却契約へ移す。"""
 
-import re
 from copy import deepcopy
 from typing import Any
 
@@ -32,28 +31,15 @@ def generation_result(schema: type[BaseModel], prompt: str, payload: dict[str, A
             {"request_id": request_id, "requirement": f"合成の要点{position + 1}", "answer": answer}
         )
     assert parts, "空の成功ではなく、合成の不足要点を明記してください。"
+    # basis の根拠の direct の計画の行はコードが作る（#4611）。モデルは判断の要る行だけ。
     if "request_coverage" not in result:
-        blocks = re.findall(r"(?ms)^\[(E\d+)\][^\n]*\n(.*?)^\[/\1\]", prompt)
         result["request_coverage"] = [
-            {
-                "request_id": request_id,
-                "evidence_scope": [
-                    {
-                        "evidence_id": label,
-                        "target": "合成の対象",
-                        "relation": "direct",
-                        "link": None,
-                    }
-                    for label, block in blocks
-                    if any(
-                        uid in block
-                        for part in parts
-                        if part["request_id"] == request_id and part["answer"]["kind"] == "answer"
-                        for uid in part["answer"]["basis"]["unit_ids"]
-                    )
-                ],
-            }
+            {"request_id": request_id, "evidence_scope": []}
             for request_id in dict.fromkeys(part["request_id"] for part in parts)
+        ]
+    for plan in result["request_coverage"]:
+        plan["evidence_scope"] = [
+            scope for scope in plan.get("evidence_scope", []) if scope.get("relation") != "direct"
         ]
     selected = result.pop("summary_item_indexes", [])
     summary = result.pop("summary", "")

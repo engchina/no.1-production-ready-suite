@@ -75,10 +75,7 @@ def fixture(mode="detailed", decisions=(True, False), *, summary_supported=False
                     "request_coverage": [
                         {
                             "request_id": "Q1",
-                            "evidence_scope": [
-                                {"evidence_id": span["evidence_id"], "target": "対象Aと対象B", "relation": "direct", "link": None}
-                                for span in spans
-                            ],
+                            "evidence_scope": [],
                         }
                     ],
                     "summary_part_indexes": [0, 1],

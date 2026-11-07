@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
+from citation_unit_support import judged_rows_only
 
 from rag_engine.adapters.oci import LlmRunawayOutput
 from rag_engine.config import get_settings
@@ -73,14 +74,14 @@ def _units(prompt: str) -> tuple[dict[str, str], str]:
 def _replay(prompt: str) -> dict[str, Any]:
     mapping, label = _units(prompt)
     text = json.dumps(FIXTURE["outputs"]["direct_value_header_only"], ensure_ascii=False)
-    return json.loads(text.replace("{header}", mapping[HEADER]).replace("{E:table}", label))
+    # 録画の direct の計画の行は、basis の根拠からコードが作るので再生しない（#4611）。
+    return judged_rows_only(json.loads(text.replace("{header}", mapping[HEADER]).replace("{E:table}", label)))
 
 
 def _row_answer(prompt: str) -> dict[str, Any]:
     output = _replay(prompt)
     mapping, _label = _units(prompt)
     output["answer_parts"][0]["answer"]["basis"]["unit_ids"] = [mapping[HEADER], mapping[ROW_A4]]
-    output["request_coverage"][0]["evidence_scope"][0]["link"] = {"unit_ids": [mapping[ROW_A4]]}
     return output
 
 

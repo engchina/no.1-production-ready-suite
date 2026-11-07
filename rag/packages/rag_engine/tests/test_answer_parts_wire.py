@@ -255,14 +255,7 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
                 "request_coverage": [
                     {
                         "request_id": "Q1",
-                        "evidence_scope": [
-                            {
-                                "evidence_id": "E1",
-                                "target": "項目A",
-                                "relation": "direct",
-                                "link": None,
-                            }
-                        ],
+                        "evidence_scope": [],
                     }
                 ],
                 "answer_parts": [
@@ -392,14 +385,7 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
                 "request_coverage": [
                     {
                         "request_id": "Q1",
-                        "evidence_scope": [
-                            {
-                                "evidence_id": "E1",
-                                "target": "項目Aと項目B",
-                                "relation": "direct",
-                                "link": None,
-                            }
-                        ],
+                        "evidence_scope": [],
                     }
                 ],
                 "answer_parts": [

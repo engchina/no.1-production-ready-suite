@@ -43,12 +43,17 @@ def test_generation_plan_row_without_target_reaches_the_canonical_plan():
             {"request_id": "Q1", "requirement": "項目Aの値", "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_ids)}}}
         ],
         "summary_part_indexes": [0],
-        "request_coverage": [{"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "relation": "direct", "link": None}]}],
+        "request_coverage": [
+            {
+                "request_id": "Q1",
+                "evidence_scope": [{"evidence_id": "E1", "relation": "linked", "link": {"unit_ids": list(snapshot.unit_ids)}}],
+            }
+        ],
         "confidence": "high",
     }
     draft = canonical_generation_draft(model.model_validate(raw), unit_catalog=units)
     scope = draft.request_coverage[0].evidence_scope[0]
-    assert (scope.evidence_id, scope.relation, scope.target) == ("E1", "direct", "")
+    assert (scope.evidence_id, scope.relation, scope.target, scope.link_quote) == ("E1", "linked", "", TEXT)
     assert draft.request_coverage[0].evidence_ids == ["E1"]
 
 

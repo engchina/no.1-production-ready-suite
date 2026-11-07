@@ -213,7 +213,8 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
 
     generate = grounded.GENERATE_SYSTEM_PROMPT
     section = generate.split("### 出典の網羅", 1)[1].split("## Step 3:", 1)[0]
-    assert "挙げた文書ごとに" in section
+    # 回答の生成では basis の根拠の direct の計画の行をコードが作るので、文書ごとの出典は basis の選び方に書く（#4611）。
+    assert "文書ごとにその文書の原文を basis に選ぶ" in section
     assert "言い換えていても省かず" in section
     assert "説明の内容を支えない原文は、質問に関係していても出典にしない" in section
     # 1つの説明を実際の引用集合で共同支持し、未引用の資料で不足を埋めない。

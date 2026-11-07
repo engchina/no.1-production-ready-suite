@@ -149,12 +149,30 @@ class SentUnitCatalog:
         return create_model("CitationUnitSelection", __config__=ConfigDict(extra="forbid"), **fields)
 
 
-def _unit_coverage_type(catalog: SentUnitCatalog, request_ids: Sequence[str] = (), *, scope_target: bool = True) -> type[BaseModel]:
+# basis に選んだ根拠の direct の行をコードが作る生成（#4611）の、モデルが書く行の説明。判断が要る行だけを書く。
+JUDGED_RELATION_DESCRIPTION = (
+    "linked=basis に選ぶ根拠が質問の対象とは別の対象で、質問の操作の前提・後続とする関係が原文に明記されている。"
+    "unrelated=別の対象・独立した操作で、答えに使わない。同じ文書や頁にあるだけでは linked にしない。"
+)
+JUDGED_LINK_DESCRIPTION = "linked のときの、関係を明記した本文の範囲。関係が書かれていなければ unrelated とする。unrelated は null。"
+JUDGED_SCOPE_DESCRIPTION = (
+    "質問の対象との関係の判断が要る根拠だけを行にする: basis に選ぶ根拠のうち質問の対象とは別の対象の前提・後続の操作"
+    "（relation=linked）と、答えに使わない別の対象・独立した操作の根拠（relation=unrelated）。"
+    "basis に選んだ根拠の、質問の対象・要求を直接述べる行はシステムが作るので書かない。各 evidence_id は1回まで。該当が無ければ空にする。"
+)
+
+
+def _unit_coverage_type(
+    catalog: SentUnitCatalog, request_ids: Sequence[str] = (), *, scope_target: bool = True, derived_direct: bool = False
+) -> type[BaseModel]:
     """根拠間の関係を示す原文にも、同じ単位選択の契約を使う。``request_ids`` を渡すと request_id はその列挙だけを受ける。
 
     ``scope_target=False`` は行の自由記述の target をモデルに書かせない（回答の生成。#4594）。target は下流のどの判定にも
     使わず、録画ではモデルが target の値の後で行を閉じようとして、次の必須の欄の前で空白を出し続けた。正規化の後の
     target は空文字になる。
+
+    ``derived_direct=True`` は、要点の basis に選んだ根拠の direct の行をコードが作る生成（#4611）。モデルの行の relation は
+    linked / unrelated だけで、判断が要る行だけを書く（``answer_parts_wire.canonical_answer_parts`` が direct の行を足す）。
     """
     from copy import deepcopy
 
@@ -165,10 +183,13 @@ def _unit_coverage_type(catalog: SentUnitCatalog, request_ids: Sequence[str] = (
     fields: dict[str, Any] = {"link": (catalog.selection_model() | None, deepcopy(RequestEvidenceScopeRange.model_fields["link"]))}
     if not scope_target:
         fields["target"] = (SkipJsonSchema[str], Field(default="", exclude=True))
+    scope_info = deepcopy(RequestCoverageRange.model_fields["evidence_scope"])
+    if derived_direct:
+        fields["relation"] = (cast(Any, Literal["linked", "unrelated"]), Field(description=JUDGED_RELATION_DESCRIPTION))
+        fields["link"] = (catalog.selection_model() | None, Field(default=None, description=JUDGED_LINK_DESCRIPTION))
+        scope_info.description = JUDGED_SCOPE_DESCRIPTION
     scope = create_model("UnitRequestEvidenceScope", __base__=RequestEvidenceScopeRange, **fields)
-    coverage_fields: dict[str, Any] = {
-        "evidence_scope": (GenericAlias(list, scope), deepcopy(RequestCoverageRange.model_fields["evidence_scope"]))
-    }
+    coverage_fields: dict[str, Any] = {"evidence_scope": (GenericAlias(list, scope), scope_info)}
     if request_ids:
         coverage_fields["request_id"] = (
             cast(Any, Literal)[tuple(dict.fromkeys(request_ids))],
@@ -186,9 +207,14 @@ def _one_plan_per_request(plans: list[Any]) -> list[Any]:
 
 
 def request_coverage_field(
-    base: type[BaseModel], catalog: SentUnitCatalog, request_ids: Sequence[str] = (), *, scope_target: bool = True
+    base: type[BaseModel],
+    catalog: SentUnitCatalog,
+    request_ids: Sequence[str] = (),
+    *,
+    scope_target: bool = True,
+    derived_direct: bool = False,
 ) -> tuple[Any, Any]:
-    """生成・計画の出力の request_coverage の型と欄の定義。``scope_target`` は ``_unit_coverage_type`` と同じ。
+    """生成・計画の出力の request_coverage の型と欄の定義。``scope_target``・``derived_direct`` は ``_unit_coverage_type`` と同じ。
 
     ``request_ids`` （その回の要求の id。空でないとき）を渡すと、計画は要求ごとにちょうど 1 件にする（#4587）:
     request_id はその id の列挙、件数の下限と上限は要求の数、同じ id の 2 件目は検証で拒む。要求の数に関係なく
@@ -200,7 +226,7 @@ def request_coverage_field(
     from pydantic import AfterValidator
 
     info = deepcopy(base.model_fields["request_coverage"])
-    coverage = _unit_coverage_type(catalog, request_ids, scope_target=scope_target)
+    coverage = _unit_coverage_type(catalog, request_ids, scope_target=scope_target, derived_direct=derived_direct)
     if not request_ids:
         return GenericAlias(list, coverage), info
     count = len(dict.fromkeys(request_ids))

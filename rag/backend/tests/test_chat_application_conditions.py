@@ -41,14 +41,7 @@ def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
                 "request_coverage": [
                     {
                         "request_id": "Q1",
-                        "evidence_scope": [
-                            {
-                                "evidence_id": "E1",
-                                "target": "操作A",
-                                "relation": "direct",
-                                "link": None,
-                            }
-                        ],
+                        "evidence_scope": [],
                     }
                 ],
                 "answer_parts": [

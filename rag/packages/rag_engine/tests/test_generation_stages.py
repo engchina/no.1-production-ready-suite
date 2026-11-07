@@ -124,7 +124,7 @@ def test_generation_keeps_source_coverage_after_planning(question: str) -> None:
         generation_calls += 1
         assert system.count("### 出典の網羅") == 1
         citation_phase = system.split("### 出典の網羅", 1)[1].split("###", 1)[0]
-        assert "request_coverage" in citation_phase
+        assert "根拠の計画" in citation_phase
         assert "文書ごと" in citation_phase
         assert "支えない原文" in citation_phase
         return generated_fixture(schema, prompt, {"summary": "", "confidence": "low", "items": []})

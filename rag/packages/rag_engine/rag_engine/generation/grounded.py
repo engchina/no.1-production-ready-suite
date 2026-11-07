@@ -220,11 +220,11 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。request_coverage に選択した根拠の関係を記録する。
+- 各項目の意味は応答 schema の説明に従う。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
 ### 出典の網羅
-- 根拠の計画（request_coverage）に挙げた文書ごとに、その文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
+- 答えの内容を述べた原文が複数の文書にあれば（入力に根拠の計画があれば計画に挙げた文書も）、文書ごとにその文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
 - 説明の内容を支えない原文は、質問に関係していても出典にしない。
 ### 例示値と実データ
 - 画面キャプチャ・Vision 生成説明に見える値（年月・金額・氏名・番号・コード・選択状態）は文書の例示で、今回の実データではない。表示されているだけで現在値・既定値・必須値・許容範囲・登録済み状態と断定しない。
@@ -7148,13 +7148,18 @@ def run_round(
         generation_calls += 1
     elif not range_only and plan_errors:
         # 構造の不整合だけを一度直す。回答の生成後の意味の監査や、無制限の是正にはしない。
+        previous_view = draft.model_dump(mode="json", exclude={"request_coverage": _PLAN_FIELDS_FROM_CODE})
+        if scope_plan is None:
+            # basis から作った direct の行はコードの欄（モデルは linked / unrelated だけを書く。#4611）。入力に出さない。
+            for plan in previous_view["request_coverage"]:
+                plan["evidence_scope"] = [scope for scope in plan.get("evidence_scope", []) if scope.get("relation") != "direct"]
         repair_prompt = (
             prompt
             + "\n"
             + json.dumps(
                 {
                     "invalid_request_plan": plan_errors,
-                    "previous_draft": draft.model_dump(mode="json", exclude={"request_coverage": _PLAN_FIELDS_FROM_CODE}),
+                    "previous_draft": previous_view,
                     "instruction": "invalid_request_plan の指摘をすべて直し（対象の照合が抜けた根拠は照合し、unrelated は計画と説明から除く）、根拠計画と items が対応する完全な草稿を返してください。",
                 },
                 ensure_ascii=False,

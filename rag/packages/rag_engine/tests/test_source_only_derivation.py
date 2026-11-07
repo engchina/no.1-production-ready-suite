@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
+from citation_unit_support import judged_rows_only
 from pydantic import ValidationError
 
 from rag_engine.adapters.oci import LlmRunawayOutput
@@ -86,7 +87,8 @@ def _replay(name: str, prompt: str) -> dict[str, Any]:
     for plan in output["request_coverage"]:
         first.setdefault(plan["request_id"], plan)
     output["request_coverage"] = list(first.values())
-    return output
+    # 録画の direct の行は、basis の根拠からコードが作るので再生しない（#4611）。
+    return judged_rows_only(output)
 
 
 def _derivation(prompt: str, requirement: str) -> dict[str, Any]:
@@ -110,10 +112,7 @@ def _derivation(prompt: str, requirement: str) -> dict[str, Any]:
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_scope": [
-                    {"evidence_id": mapping["{E:table}"], "target": "判定表", "relation": "direct", "link": None},
-                    {"evidence_id": mapping["{E:rule}"], "target": "区分の規則", "relation": "direct", "link": None},
-                ],
+                "evidence_scope": [],
             }
         ],
         "confidence": "high",

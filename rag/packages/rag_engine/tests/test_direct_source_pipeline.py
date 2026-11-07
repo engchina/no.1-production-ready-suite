@@ -40,9 +40,7 @@ def run(*, derived: bool, valid: bool = True, readback: str | None = None):
             {
                 "answer_parts": parts,
                 "summary_part_indexes": list(range(len(parts))),
-                "request_coverage": [
-                    {"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "target": "項目A", "relation": "direct", "link": None}]}
-                ],
+                "request_coverage": [{"request_id": "Q1", "evidence_scope": []}],
                 "confidence": "high",
             }
         )

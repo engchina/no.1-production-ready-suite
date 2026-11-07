@@ -147,7 +147,7 @@ def test_real_generation_schema_selects_one_of_identical_sources_by_unit_id(sele
     catalog = grounded.generation_unit_catalog(evidence)
     schema = grounded.generation_output_model("合成の設定は？", unit_catalog=catalog)
     chosen = catalog.snapshots[selected].unit_ids[0]
-    output = schema.model_validate(selected_answer_payload([chosen], evidence_ids=(evidence[selected]["label"],)))
+    output = schema.model_validate(selected_answer_payload([chosen]))
     draft = canonical_generation_draft(output, unit_catalog=catalog)
     checked, dropped = grounded.verify("合成の設定は？", draft, evidence)
     assert not dropped

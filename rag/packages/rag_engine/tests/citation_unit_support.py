@@ -23,19 +23,10 @@ def repair_output(schema: type[BaseModel], prompt: str, *ranges: tuple[int, int,
     return schema.model_validate({"ranges": updates})
 
 
-def selected_answer_payload(
-    unit_ids: list[str], *, text: str = "合成の回答です。", evidence_ids: tuple[str, ...] = ("E1",)
-) -> dict[str, Any]:
-    """新規の送達ID契約を直接使う、1要点の合成応答。"""
+def selected_answer_payload(unit_ids: list[str], *, text: str = "合成の回答です。") -> dict[str, Any]:
+    """新規の送達ID契約を直接使う、1要点の合成応答。basis の根拠の direct の計画の行はコードが作る（#4611）。"""
     return {
-        "request_coverage": [
-            {
-                "request_id": "Q1",
-                "evidence_scope": [
-                    {"evidence_id": label, "target": "合成の対象", "relation": "direct", "link": None} for label in evidence_ids
-                ],
-            }
-        ],
+        "request_coverage": [{"request_id": "Q1", "evidence_scope": []}],
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -127,6 +118,7 @@ def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, A
         result.pop("summary_application_indexes", None)
         result["answer_parts"] = parts
         result["summary_part_indexes"] = selected[:2] if selected else [0] if summary else []
+        judged_rows_only(result)
     return schema.model_validate(result)
 
 
@@ -165,3 +157,10 @@ def canonical_fixture(payload: dict[str, Any]) -> Any:
             citation._wire_range = (selected[0] + 1, selected[-1] + 1)
             citation.lines = str(selected[0] + 1) if selected[0] == selected[-1] else f"{selected[0] + 1}-{selected[-1] + 1}"
     return result
+
+
+def judged_rows_only(output: dict[str, Any]) -> dict[str, Any]:
+    """録画の生成の出力から、モデルが書かなくなった direct の計画の行を除く（basis の根拠からコードが作る。#4611）。"""
+    for plan in output.get("request_coverage") or []:
+        plan["evidence_scope"] = [scope for scope in plan.get("evidence_scope") or [] if scope.get("relation") != "direct"]
+    return output
