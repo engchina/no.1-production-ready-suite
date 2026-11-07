@@ -287,7 +287,8 @@ class SearchRequest(BaseModel):
         max_length=256,
         description=(
             "回答のモデル(RAG 検索の画面で選ぶ既定のテキストモデルか既定の Vision モデル。#675)。"
-            "候補外・未指定なら既定のテキストモデル。"
+            "未指定なら既定のテキストモデル。登録されていないモデルは 422"
+            "(error_code: enterprise_ai_model_not_registered。既定のモデルへ切り替えない。#4582)。"
         ),
     )
 

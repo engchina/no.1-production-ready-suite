@@ -494,9 +494,9 @@ def test_resolve_compare_models_caps_and_defaults(monkeypatch: MonkeyPatch) -> N
     from app.schemas.chat import ChatMessageRequest
 
     selected = chat_route._resolve_compare_models(
-        ChatMessageRequest(content="質問", model_ids=["not-registered", "m3", "m2", "m1"]), settings
+        ChatMessageRequest(content="質問", model_ids=["m3", "m2", "m1"]), settings
     )
-    # 未登録を無視し、全体の既定以外の登録モデルも受け付け、上限 1 に抑える。
+    # 全体の既定以外の登録モデルも受け付け、上限 1 に抑える（未登録は送信の前に 422。#4582）。
     assert [c["model_id"] for c in selected] == ["m3"]
 
     default_only = chat_route._resolve_compare_models(ChatMessageRequest(content="質問"), settings)
@@ -1214,6 +1214,43 @@ def test_stream_message_multi_model_compares_two_columns(monkeypatch: MonkeyPatc
     assert roles.count("ASSISTANT") == 2
     # 列ごとのモデルを回答フローの回答のモデルとしても渡す(#593)。
     assert sorted(str(item) for item in _FakePipeline.answer_model_ids) == ["m1", "m2"]
+
+
+@pytest.mark.parametrize(
+    "model_ids",
+    [["not-registered"], ["m1", "not-registered"]],
+    ids=["only-unregistered", "mixed"],
+)
+def test_stream_message_rejects_unregistered_compare_model(
+    monkeypatch: MonkeyPatch, model_ids: list[str]
+) -> None:
+    """比較の model_ids に未登録のモデルがあれば 422 にし、落として既定のモデルで答えない(#4582)。
+
+    質問・回答のメッセージを保存せず、回答フローも作らない。
+    """
+    fake = FakeChatOracle()
+    fake.conversations["conv-u"] = StoredConversation(
+        id="conv-u",
+        search_answer_profile_id="bv-1",
+        status="ACTIVE",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    fake.messages["conv-u"] = []
+    _stub_stream(monkeypatch, fake, ["m1", "m2"])
+    monkeypatch.setattr(_FakePipeline, "answer_model_ids", [])
+
+    resp = client.post(
+        "/api/chat/conversations/conv-u/messages/stream",
+        json={"content": "比較して", "model_ids": model_ids},
+    )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error_code"] == "enterprise_ai_model_not_registered"
+    assert "not-registered" in "".join(body["error_messages"])
+    assert fake.messages["conv-u"] == []
+    assert _FakePipeline.answer_model_ids == []
 
 
 def test_stream_message_rejects_archived_conversation(monkeypatch: MonkeyPatch) -> None:
