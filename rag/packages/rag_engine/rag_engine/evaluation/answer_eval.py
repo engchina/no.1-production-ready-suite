@@ -1875,7 +1875,6 @@ def evaluate_answer_payload(
                     settings,
                     provider_id=provider_id,
                     parse_text=parse_text_response,
-                    purpose="evaluation.question_subjects",
                 )
             )
 

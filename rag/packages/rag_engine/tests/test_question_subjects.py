@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from citation_unit_support import generated_fixture
 
-from rag_engine.config import LlmProviderSettings, get_settings
+from rag_engine.config import QUESTION_SUBJECT_ROLE_LLM_PROVIDER, LlmProviderSettings, get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_labels import answer_labels
@@ -383,6 +383,129 @@ def test_unknown_role_stage_model_fails_without_raising() -> None:
     assert (subjects.status, subjects.calls) == (STATUS_FAILED, 2)
 
 
+# ---------- 役割の段のモデル（設定の env と録画の応答） ----------
+
+ROLE_RECORDED = json.loads((Path(__file__).parent / "fixtures" / "question_subject_role_grok_recorded.json").read_text(encoding="utf-8"))
+
+
+def role_model_env(**extra: str) -> dict[str, str]:
+    """回答のモデルと役割の段のモデルの接続（合成の接続先）。"""
+    return {
+        "OCI_ENTERPRISE_AI_ENDPOINT": "https://answer.invalid/openai/v1",
+        "OCI_ENTERPRISE_AI_API_KEY": "synthetic-answer",
+        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "synthetic-answer-model",
+        "OCI_ENTERPRISE_AI_REASONING_EFFORT": "low",
+        "RAG_ENGINE_QUESTION_SUBJECT_ROLE_MODEL": ROLE_RECORDED["model"],
+        "RAG_ENGINE_QUESTION_SUBJECT_ROLE_ENDPOINT": "https://role.invalid/openai/v1",
+        "RAG_ENGINE_QUESTION_SUBJECT_ROLE_API_KEY": "synthetic-role",
+        "RAG_ENGINE_QUESTION_SUBJECT_ROLE_REASONING_EFFORT": ROLE_RECORDED["reasoning_effort"],
+        "RAG_ENGINE_QUESTION_SUBJECT_ROLE_MAX_OUTPUT_TOKENS": "32768",
+        **extra,
+    }
+
+
+def test_role_model_env_builds_the_role_stage_provider() -> None:
+    settings = get_settings(environ=role_model_env(), dotenv_path=None)
+    provider = settings.llm_providers[QUESTION_SUBJECT_ROLE_LLM_PROVIDER]
+    assert settings.question_subject_role_llm == QUESTION_SUBJECT_ROLE_LLM_PROVIDER
+    assert (provider.model, provider.base_url, provider.reasoning_effort, provider.max_output_tokens) == (
+        "xai.grok-4.7",
+        "https://role.invalid/openai/v1",
+        "low",
+        32768,
+    )
+    # 設定が無ければ provider を作らず、役割の段は呼び出し側の provider のまま。
+    plain = get_settings(environ={k: v for k, v in role_model_env().items() if "QUESTION_SUBJECT_ROLE" not in k}, dotenv_path=None)
+    assert QUESTION_SUBJECT_ROLE_LLM_PROVIDER not in plain.llm_providers and plain.question_subject_role_llm == ""
+
+
+def _responses_body(model: str, schema_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """合成の Responses API の応答（抽出の段の応答に使う）。"""
+    return {
+        "id": "resp_synthetic",
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_synthetic",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": json.dumps(payload, ensure_ascii=False), "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": False,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+@pytest.mark.parametrize("case", ROLE_RECORDED["cases"], ids=[case["case"] for case in ROLE_RECORDED["cases"]])
+def test_role_stage_calls_its_model_and_parses_the_recorded_response(case: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    import openai
+    from pr_backend_core.observability.model_purpose import model_purpose_attributes
+
+    from rag_engine.adapters import oci
+
+    question = case["question"]
+    sent: list[tuple[str, str, str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        name = body["text"]["format"]["name"]
+        purpose = model_purpose_attributes().get("pr.gen_ai.purpose", "")
+        sent.append((name, body["model"], body.get("reasoning", {}).get("effort", ""), purpose))
+        if name == EXTRACT:
+            mentions = [
+                {"text": question[start:end], "occurrence": 1 + question[:start].count(question[start:end]), "designation": "named"}
+                for start, end in case["spans"]
+            ]
+            return httpx.Response(200, json=_responses_body(body["model"], name, {"mentions": mentions}))
+        return httpx.Response(200, json=case["response"])
+
+    client = openai.OpenAI(
+        api_key="synthetic",
+        base_url="https://synthetic.invalid/openai/v1",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda provider, settings: client)
+    settings = get_settings(environ=role_model_env(), dotenv_path=None)
+
+    subjects = extract_question_subjects(question, settings, parse_text=oci.parse_text_response)
+
+    assert sent == [
+        (EXTRACT, "synthetic-answer-model", "medium", "query.subjects"),
+        (ROLE, "xai.grok-4.7", "low", "query.subject_roles"),
+    ]
+    assert subjects.status == STATUS_COMPLETED
+    assert [[m.start, m.end] for m in subjects.mentions] == case["spans"]
+    assert [list(m.roles) for m in subjects.mentions] == case["expected_roles"]
+    assert [row["roles"] for row in case["recorded_output"]["entities"]] == case["expected_roles"]
+
+
+def test_role_stage_model_without_a_connection_fails_and_the_answer_continues() -> None:
+    from rag_engine.adapters import oci
+
+    # backend は登録していないモデルの接続を渡さない（model だけ）。
+    missing = ("RAG_ENGINE_QUESTION_SUBJECT_ROLE_ENDPOINT", "RAG_ENGINE_QUESTION_SUBJECT_ROLE_API_KEY")
+    settings = get_settings(environ={k: v for k, v in role_model_env().items() if k not in missing}, dotenv_path=None)
+    question = ROLE_RECORDED["cases"][0]["question"]
+    start, end = ROLE_RECORDED["cases"][0]["spans"][0]
+
+    def parse(system: str, prompt: str, call_settings: Any, schema: Any, **options: Any) -> Any:
+        if schema.__name__ == EXTRACT:
+            return schema.model_validate({"mentions": [{"text": question[start:end], "occurrence": 1, "designation": "named"}]})
+        return oci.parse_text_response(system, prompt, call_settings, schema, **options)
+
+    subjects = extract_question_subjects(question, settings, parse_text=parse)
+    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_FAILED, "RuntimeError", 2)
+
+
 # ---------- 名前の照合（モデルを呼ばない） ----------
 
 RULE = "利用者が外部サービスを使う場合、管理部が承認したものに限る。"
@@ -634,6 +757,7 @@ _SCANNED = (
     _ENGINE / "tests" / "test_question_subjects.py",
     _ENGINE / "tests" / "test_answer_evaluation.py",
     _ENGINE / "tests" / "judge_stub.py",
+    _ENGINE / "tests" / "fixtures" / "question_subject_role_grok_recorded.json",
     _ENGINE.parent / "rag_parser_core" / "rag_parser_core" / "language" / "packs" / "ja.json",
 )
 

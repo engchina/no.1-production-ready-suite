@@ -61,6 +61,10 @@ ROLE_EXAMPLE = "example"
 ROLES = (ROLE_ASKED, ROLE_GIVEN, ROLE_EXAMPLE)
 DESIGNATIONS = ("named", "generic")
 
+# 段ごとのモデルの呼び出しの用途（trace の表示。回答と品質評価で同じ）。
+PURPOSE_EXTRACTION = "query.subjects"
+PURPOSE_ROLE = "query.subject_roles"
+
 STATUS_COMPLETED = "completed"
 STATUS_NO_NAMED = "no_named_mention"
 STATUS_FAILED = "failed"
@@ -333,7 +337,6 @@ def extract_question_subjects(
     *,
     provider_id: str | None = None,
     parse_text: Callable[..., Any] | None = None,
-    purpose: str = "answer.question_subjects",
 ) -> QuestionSubjects:
     """質問の named の提及と役割を 2 段で取り出す。named が無ければ役割の段を呼ばない。失敗は ``failed`` で返す。
 
@@ -362,7 +365,7 @@ def extract_question_subjects(
             extraction_settings(settings),
             schema,
             provider_id=provider_id,
-            purpose=purpose,
+            purpose=PURPOSE_EXTRACTION,
         )
         mentions = project_extraction(question, schema.model_validate(_dump(raw)).model_dump())
         named = [row for row in trim_enclosing_pairs(question, mentions) if row["designation"] == "named"]
@@ -377,7 +380,7 @@ def extract_question_subjects(
             role_settings(settings),
             role_schema,
             provider_id=role_provider(settings, provider_id),
-            purpose=purpose,
+            purpose=PURPOSE_ROLE,
         )
         roles = project_roles(role_input, role_schema.model_validate(_dump(raw_roles)).model_dump())
         return QuestionSubjects(question, STATUS_COMPLETED, roles, calls=calls)
