@@ -8,6 +8,7 @@ from typing import Literal
 from rag_pipeline_core.vector_index import resolve_vector_index
 
 from app.config import Settings, get_settings
+from app.rag.step_models import STEP_MODEL_SETTINGS
 from app.schemas.common import JsonValue
 from app.schemas.search import SearchDiagnostics, SearchRequest
 
@@ -110,8 +111,11 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
         "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
-        # 質問の対象の名前の役割の判定の段のモデル(#4351)。
-        "question_subject_role_model": resolved_settings.rag_question_subject_role_model,
+        # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
+        **{
+            f"{step.key}_model": getattr(resolved_settings, step.field)
+            for step in STEP_MODEL_SETTINGS
+        },
         "crag_compact_input": resolved_settings.rag_crag_compact_input,
         # CRAG の評価の候補の短い ID(#1864)。
         "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,

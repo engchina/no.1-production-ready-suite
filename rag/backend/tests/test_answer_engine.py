@@ -1012,11 +1012,17 @@ def _figure_oracle() -> FakeOracle:
     return oracle
 
 
+# 推導の監査の判定・理由の段のモデル(#4564・#4565)は回答のモデルのまま
+# (段のモデルは test_step_models で確かめる)。
+_ANSWER_MODEL_ONLY_STEPS = {"rag_application_audit_model": "", "rag_application_reason_model": ""}
+
+
 def _model_settings(**overrides: Any) -> Settings:
     """回答のモデルの候補: テキストだけのモデル 2 つと画像を読めるモデル 2 つ(既定の Vision)。"""
     values: dict[str, Any] = {
         "oci_enterprise_ai_default_text_model": "text-model",
         "oci_enterprise_ai_default_vision_model": "vision-model",
+        **_ANSWER_MODEL_ONLY_STEPS,
         **overrides,
     }
     return Settings(
@@ -1118,7 +1124,11 @@ async def test_answer_engine_attaches_evidence_images_for_vision_answer_model(
         (_model_settings(), "text-model-b", "text-model-b"),
         # 既定の Vision モデルが無い環境。
         (
-            Settings(_env_file=None, oci_enterprise_ai_default_text_model="text-model"),
+            Settings(
+                _env_file=None,
+                oci_enterprise_ai_default_text_model="text-model",
+                **_ANSWER_MODEL_ONLY_STEPS,
+            ),
             None,
             "text-model",
         ),
@@ -2781,7 +2791,15 @@ async def test_evidence_retrieval_for_agent_stops_after_document_search(
     answer = response.diagnostics.answer or {}
     assert answer["answer_flow"] == "standard_rag"
     models = cast(dict[str, Any], answer["models"])
-    assert set(models) == {"llm", "question_subject_role", "attached_images", "embedding", "rerank"}
+    assert set(models) == {
+        "llm",
+        "question_subject_role",
+        "application_audit",
+        "application_reason",
+        "attached_images",
+        "embedding",
+        "rerank",
+    }
     assert oracle.saved == []
 
 
@@ -2807,6 +2825,9 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
         "llm": {"model_id": "model-a", "label": "Model A"},
         # 質問の対象の役割の判定の段のモデル(#4351。既定の設定、登録の表示名が無ければ ID)。
         "question_subject_role": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
+        # 推導の監査の判定の段(#4565)と理由の段(#4564)のモデル(既定の設定)。
+        "application_audit": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
+        "application_reason": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
         "attached_images": 0,
         "embedding": settings.oci_genai_embedding_model,
         "rerank": "",

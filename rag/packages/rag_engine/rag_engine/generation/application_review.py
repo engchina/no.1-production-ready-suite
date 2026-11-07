@@ -9,6 +9,7 @@ from typing import Any
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 
+from rag_engine.config import step_provider
 from rag_engine.generation.application_reason import explain_verdicts, propagates
 from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.applications import (
@@ -163,11 +164,13 @@ def review_applications(
         "evidence_scope": "generation_selected_originals",
     }
     audit = None
+    # 判定の段のモデル(#4565。設定が無ければ回答のモデル)。登録していないモデルは呼び出しが失敗して未確認になる。
+    audit_provider = step_provider(settings, "application_audit_llm", provider_id)
     try:
-        ensure_model_input(settings, system, prompt, ApplicationVerdictAudit.model_json_schema(), provider_id=provider_id)
+        ensure_model_input(settings, system, prompt, ApplicationVerdictAudit.model_json_schema(), provider_id=audit_provider)
         diagnostic["calls"] = 1
         audit = call_with_model_purpose(
-            "answer.audit", parse_text, system, prompt, settings, ApplicationVerdictAudit, provider_id=provider_id
+            "answer.audit", parse_text, system, prompt, settings, ApplicationVerdictAudit, provider_id=audit_provider
         )
         if any(row.index not in range(len(candidates)) for row in audit.application_reviews):
             diagnostic["status"] = "invalid_contract"

@@ -43,7 +43,6 @@ from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.timezones import configured_timezone_name
-from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.context_expansion_trace import context_read_receipt
@@ -139,6 +138,7 @@ from app.rag.graph_expansion import (
 from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
 from app.rag.step_details import step_details_payload
+from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.search import (
@@ -542,36 +542,6 @@ def article_catalog_cache_dir(settings: Settings) -> Path | None:
     return resolve_article_catalog_cache_dir(settings)
 
 
-def _question_subject_role_environ(settings: Settings) -> dict[str, str]:
-    """質問の対象の役割の判定の段のモデル(#4351)の接続を rag_engine へ渡す env。
-
-    空の設定は何も渡さない(回答のモデルのまま)。登録していないモデルは接続を渡さず model
-    だけを渡す(段の呼び出しが設定の不足で失敗し、回答は対象の名前の照合を飛ばして続ける。
-    プライマリ接続へ暗黙に切り替えない)。推論の量と出力の上限はそのモデルの登録値。
-    """
-    model_id = settings.rag_question_subject_role_model.strip()
-    if not model_id:
-        return {}
-    environ = {"RAG_ENGINE_QUESTION_SUBJECT_ROLE_MODEL": model_id}
-    try:
-        connection = enterprise_ai_connection_for_model(settings, model_id)
-    except EnterpriseAiModelNotRegisteredError:
-        return environ
-    effort = enterprise_ai_reasoning_effort_to_send(settings, model_id)
-    environ.update(
-        {
-            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_ENDPOINT": connection.base_url,
-            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_API_KEY": connection.api_key,
-            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_PROJECT_OCID": connection.project_ocid,
-            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_REASONING_EFFORT": effort,
-            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_MAX_OUTPUT_TOKENS": str(
-                enterprise_ai_output_token_budget(settings, model_id)
-            ),
-        }
-    )
-    return environ
-
-
 def _reasoning_effort_override(value: str) -> str:
     """用途ごとの推論の量の設定を rag_engine へ渡す値にする(#1499。model は空 = 登録値のまま)。"""
     return "" if value == "model" else value
@@ -810,8 +780,8 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": str(settings.rag_crag_skip_min_rerank_score),
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
-    # 質問の対象の役割の判定の段のモデル(#4351)。
-    environ.update(_question_subject_role_environ(settings))
+    # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
+    environ.update(step_model_environ(settings))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
@@ -1393,10 +1363,11 @@ class AnswerEngine:
         answer_model = self._answer_model_id or enterprise_ai_default_model_id(settings)
         return {
             "llm": model(answer_model),
-            # 質問の対象の名前の役割の判定の段のモデル(#4351。空の設定は回答のモデル)。
-            "question_subject_role": model(
-                settings.rag_question_subject_role_model.strip() or answer_model
-            ),
+            # 段ごとのモデル(#4351・#4564・#4565。空の設定は回答のモデル)。
+            **{
+                step.key: model(step_model_id(settings, step) or answer_model)
+                for step in STEP_MODEL_SETTINGS
+            },
             "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
