@@ -794,6 +794,20 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261107_4185_drop_document_preprocess_artifact",
+            table_name="rag_documents",
+            sql=drop_document_preprocess_artifact_sql(),
+            destructive_note=(
+                "RAG_DOCUMENTS の旧列 PREPROCESS_ARTIFACT（文書単位の処理後のファイルの情報）を"
+                "削除します。処理後のファイルの正本は RAG_DOCUMENT_RECIPES.PREPROCESS_ARTIFACT で、"
+                "現行のコードはこの列を読み書きしません。保存先のファイル・レシピ・抽出・chunk は"
+                "削除しません。値が残る環境は適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
     return sections
 
 
@@ -819,6 +833,23 @@ BEGIN
     END IF;
 END;
 /"""
+
+
+def drop_document_preprocess_artifact_sql() -> str:
+    """文書の行の旧列 preprocess_artifact を削除する。列が無い環境でも適用できる（#4185）。"""
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PREPROCESS_ARTIFACT';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN preprocess_artifact';
+    END IF;
+END;
+/
+""".strip()
 
 
 def retire_query_history_sql() -> str:

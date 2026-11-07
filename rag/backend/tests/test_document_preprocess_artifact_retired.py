@@ -22,6 +22,7 @@ from app.clients import oracle as oracle_module
 from app.clients.chunk_set_retention_store import _unreferenced_paths
 from app.clients.document_cleanup_store import DocumentCleanupStore
 from app.clients.oracle import OracleClient, StoredDocument
+from app.rag.oracle_schema import oracle_schema_migration_sections
 from app.schemas.document import DocumentDetail, FileStatus
 from tests.test_oracle_adapter import (
     FakeOraclePool,
@@ -194,3 +195,25 @@ def test_app_has_no_document_preprocess_artifact_reader() -> None:
     ]
 
     assert offenders == []
+
+
+def test_document_base_schema_has_no_preprocess_artifact_column() -> None:
+    """新しい DB の rag_documents は旧列 preprocess_artifact を持たない（レシピの行は持つ）。"""
+    assert "preprocess_artifact" not in oracle_module.oracle_document_schema_sql()
+    assert "preprocess_artifact" in oracle_module.oracle_document_recipe_schema_sql()
+
+
+def test_drop_migration_removes_document_column_only_when_present() -> None:
+    """既存の DB の旧列は destructive な migration で消す。列が無ければ何もしない。"""
+    [section] = [
+        section
+        for section in oracle_schema_migration_sections()
+        if section.name == "20261107_4185_drop_document_preprocess_artifact"
+    ]
+    sql = _normalized(section.sql)
+
+    assert section.destructive
+    assert section.table_name == "rag_documents"
+    assert "WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PREPROCESS_ARTIFACT'" in sql
+    assert "EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN preprocess_artifact'" in sql
+    assert "rag_document_recipes" not in sql.lower()
