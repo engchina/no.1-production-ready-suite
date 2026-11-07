@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ from rag_engine.generation import grounded, model_cascade
 from rag_engine.generation.answering import synthesize_with_model_cascade
 from rag_engine.generation.citation_range_repair import CitationRangeRepair
 from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.generation.execution_record import _structured_steps
 from rag_engine.generation.summary_projection import APPLICATION_SUMMARY_WITHHELD
 from rag_engine.models.llm import GroundedDraft
 
@@ -107,8 +109,18 @@ def test_structured_output_invalid_after_retry_escalates():
         raise InvalidStructuredOutput("synthetic")
 
     model = ByProvider(**{ENTERPRISE_AI_LLM_PROVIDER: broken, ESCALATION_LLM_PROVIDER: _good(ctx)})
+    steps: list[dict] = []
+    token = _structured_steps.set(steps)
+    try:
+        result = _run(model, ctx, _settings())
+    finally:
+        _structured_steps.reset(token)
 
-    result = _run(model, ctx, _settings())
+    # 1 つ目のモデルの工程は「資料の記載だけを示す」ではなく、回答し直すことを示す。
+    first = json.dumps(next(step for step in steps if str(step.get("name", "")).startswith("回答文の生成と根拠確認")), ensure_ascii=False)
+    assert "確認を通らなかったときのモデルで回答し直します" in first
+    assert "資料の記載だけを示します" not in first
+    assert [step.get("name") for step in steps].count("高性能モデルで回答し直す") == 1
 
     assert result.generation_trace["model_cascade"]["escalated"] is True
     assert result.generation_trace["model_cascade"]["reasons"] == ["structured_output_invalid"]
@@ -254,4 +266,3 @@ def _entry(**values):
 )
 def test_round_signals(current, mode, expected):
     assert model_cascade.round_signals(current, audit_mode=mode) == expected
-

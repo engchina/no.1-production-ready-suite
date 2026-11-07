@@ -3249,6 +3249,9 @@ def synthesize_grounded_answer(
                     step.result(
                         "モデルの入力予算に必須の根拠または指示が入らないため、生成を送信せず資料の記載を示します"
                         if input_limited
+                        # モデルのカスケード（#4581）で昇格するときは、資料の記載だけを示さずに回答し直す。
+                        else f"{work}{problem}ため、確認を通らなかったときのモデルで回答し直します（{generation_failure}）"
+                        if early_escalation
                         else f"{work}{problem}ため、{'回答文を生成せず、' if preparing_evidence else ''}"
                         f"質問に関係する資料の記載だけを示します（{generation_failure}）"
                     )
