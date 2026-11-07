@@ -79,7 +79,14 @@ def _replay(name: str, prompt: str) -> dict[str, Any]:
     for key, value in _placeholders(prompt).items():
         text = text.replace(key, value)
     assert "{" + "row:" not in text and "{E:" not in text
-    return json.loads(text)
+    output = json.loads(text)
+    # 生成の schema は要求ごとに計画を 1 件だけ受ける（#4587）。同じ要求の計画を繰り返した録画は
+    # test_request_coverage_cardinality が拒まれることを確かめ、ここでは要求ごとの最初の計画で再生する。
+    first: dict[str, Any] = {}
+    for plan in output["request_coverage"]:
+        first.setdefault(plan["request_id"], plan)
+    output["request_coverage"] = list(first.values())
+    return output
 
 
 def _derivation(prompt: str, requirement: str) -> dict[str, Any]:

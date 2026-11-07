@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import GenericAlias
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
@@ -148,8 +149,8 @@ class SentUnitCatalog:
         return create_model("CitationUnitSelection", __config__=ConfigDict(extra="forbid"), **fields)
 
 
-def _unit_coverage_type(catalog: SentUnitCatalog) -> type[BaseModel]:
-    """根拠間の関係を示す原文にも、同じ単位選択の契約を使う。"""
+def _unit_coverage_type(catalog: SentUnitCatalog, request_ids: Sequence[str] = ()) -> type[BaseModel]:
+    """根拠間の関係を示す原文にも、同じ単位選択の契約を使う。``request_ids`` を渡すと request_id はその列挙だけを受ける。"""
     from copy import deepcopy
 
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
@@ -159,15 +160,45 @@ def _unit_coverage_type(catalog: SentUnitCatalog) -> type[BaseModel]:
     coverage_fields: dict[str, Any] = {
         "evidence_scope": (GenericAlias(list, scope), deepcopy(RequestCoverageRange.model_fields["evidence_scope"]))
     }
+    if request_ids:
+        coverage_fields["request_id"] = (
+            cast(Any, Literal)[tuple(dict.fromkeys(request_ids))],
+            deepcopy(RequestCoverageRange.model_fields["request_id"]),
+        )
     return create_model("UnitRequestCoverage", __base__=RequestCoverageRange, **coverage_fields)
 
 
-def unit_scope_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[BaseModel]:
+def _one_plan_per_request(plans: list[Any]) -> list[Any]:
+    """同じ要求の計画は 1 件だけ（#4587）。下流は要求ごとの計画として読むので、2 件目以降には使い道が無い。"""
+    repeated = [request_id for request_id, count in Counter(plan.request_id for plan in plans).items() if count > 1]
+    if repeated:
+        raise ValueError(f"request_coverage に要求 {'、'.join(repeated)} の計画が複数あります。要求ごとに計画を 1 件にしてください。")
+    return plans
+
+
+def request_coverage_field(base: type[BaseModel], catalog: SentUnitCatalog, request_ids: Sequence[str] = ()) -> tuple[Any, Any]:
+    """生成・計画の出力の request_coverage の型と欄の定義。
+
+    ``request_ids`` （その回の要求の id。空でないとき）を渡すと、計画は要求ごとにちょうど 1 件にする（#4587）:
+    request_id はその id の列挙、件数の下限と上限は要求の数、同じ id の 2 件目は検証で拒む。要求の数に関係なく
+    上限まで受けると、弱いモデルが同じ要求の計画を言い回しを変えて繰り返し、出力が膨らむ・終わらない。
+    """
     from copy import deepcopy
 
-    fields: dict[str, Any] = {
-        "request_coverage": (GenericAlias(list, _unit_coverage_type(catalog)), deepcopy(base.model_fields["request_coverage"]))
-    }
+    from annotated_types import MaxLen, MinLen
+    from pydantic import AfterValidator
+
+    info = deepcopy(base.model_fields["request_coverage"])
+    coverage = _unit_coverage_type(catalog, request_ids)
+    if not request_ids:
+        return GenericAlias(list, coverage), info
+    count = len(dict.fromkeys(request_ids))
+    info.metadata = [item for item in info.metadata if not isinstance(item, MinLen | MaxLen)] + [MinLen(count), MaxLen(count)]
+    return Annotated[GenericAlias(list, coverage), AfterValidator(_one_plan_per_request)], info
+
+
+def unit_scope_model(base: type[BaseModel], catalog: SentUnitCatalog, *, request_ids: Sequence[str] = ()) -> type[BaseModel]:
+    fields: dict[str, Any] = {"request_coverage": request_coverage_field(base, catalog, request_ids)}
     return create_model(base.__name__, __base__=base, **fields)
 
 

@@ -323,9 +323,16 @@ def _generation_base_model(question: str, *, guided: bool = False) -> type[BaseM
     return base
 
 
+def generation_request_ids(question: str) -> tuple[str, ...]:
+    """生成・計画の入力の質問契約（``_contract_view``）が示す要求の id（背景を除く）。計画は要求ごとに 1 件（#4587）。"""
+    return tuple(str(unit["id"]) for unit in _contract_view(question).get("request_units", ()) if unit.get("kind") != "context")
+
+
 def generation_output_model(question: str, *, guided: bool = False, unit_catalog: SentUnitCatalog | None = None) -> type[BaseModel]:
     """表示と実行が共有する要点単位の生成契約。未提示原文のIDは選ばせない。"""
-    return unit_generation_model(_generation_base_model(question, guided=guided), unit_catalog or SentUnitCatalog(()))
+    return unit_generation_model(
+        _generation_base_model(question, guided=guided), unit_catalog or SentUnitCatalog(()), request_ids=generation_request_ids(question)
+    )
 
 
 # 監査の判断順を Step で示す。UI の読み取り専用表示と実行はこの定数を共有する。
@@ -6676,7 +6683,7 @@ def run_round(
                 for span in evidence
             ]
         )
-        plan_model = unit_scope_model(RequestScopePlan, catalog)
+        plan_model = unit_scope_model(RequestScopePlan, catalog, request_ids=generation_request_ids(question))
         plan = call_with_model_purpose(
             "answer.scope",
             parse_text,
@@ -6712,7 +6719,7 @@ def run_round(
 
     def scope_plan_issues(plan: _ScopePlan) -> tuple[dict[str, int], list[str]]:
         """生成の前の計画の不整合の件数（診断）と指摘の文（作り直しの入力）。検査の条件はここだけに置く。"""
-        known = {unit["id"] for unit in _contract_view(question).get("request_units", ()) if unit.get("kind") != "context"}
+        known = set(generation_request_ids(question))
         own = [entry.request_id for entry in plan.request_coverage]
         unknown = [
             (entry.request_id, label)
@@ -6844,7 +6851,8 @@ def run_round(
     )
     unit_catalog = generation_unit_catalog(spans, sent_only=True)
     generation_base = _generation_base_model(question, guided=bool(guide_step_contracts))
-    generation_model = generation_language_schema(unit_generation_model(generation_base, unit_catalog), question)
+    request_ids = generation_request_ids(question)
+    generation_model = generation_language_schema(unit_generation_model(generation_base, unit_catalog, request_ids=request_ids), question)
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -7025,6 +7033,7 @@ def run_round(
                     generation_base,
                     unit_catalog,
                     direct_source=False,
+                    request_ids=request_ids,
                     # 要求の名前（不足の文に出る）は 1 回目の出力の requirement の写しだけを受ける。
                     requirements=[part.requirement for part in getattr(draft, "answer_parts", [])],
                 ),
