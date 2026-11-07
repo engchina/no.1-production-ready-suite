@@ -1,8 +1,9 @@
 """独立の審査が valid の根拠にした原文を、説明の段にも渡す（#4589）。外部I/Oなし。
 
-合成の資料は 1 文書の 3 単位（加算の方法の文・判定表・区分の規則）。推導は判定表の行だけを引用し、結論は
-合計点と区分。独立の審査は送った原文の全体を見て valid にし、判定の根拠に 3 単位の evidence_id を返す
-（実モデルの記録と同じ形）。説明の段の入力が推導の引用だけだと、説明の段は区分の規則を見られない。
+合成の資料は 1 文書の 3 単位（加算の方法の文・判定表・区分の規則）。推導は判定表の行だけ（または行と区分の規則の
+見出しだけ）を引用し、結論は合計点と区分。独立の審査は送った単位の全文を見て valid にし、判定の根拠に 3 単位の
+evidence_id を返す（実モデルの記録と同じ形）。説明の段の入力が推導の引用の原文だけだと、説明の段は区分の規則の
+本文を見られない。
 
 説明の段の応答は、記録の再生で返す: 入力に区分の規則の原文が無ければ、記録された「資料に区分の基準が示されて
 いない」の説明を、有れば規則を使った説明を返す（モデルの振る舞いの写し。意味の判定はテストの中だけ）。
@@ -17,7 +18,7 @@ from rag_engine.config import get_settings
 from rag_engine.generation import application_explanation as explanation
 from rag_engine.generation import grounded
 from rag_engine.generation.application_reason import AuditReason
-from rag_engine.generation.application_review import review_applications
+from rag_engine.generation.application_review import attach_audit_basis, review_applications
 from rag_engine.generation.applications import CheckedApplication, render_lines
 from rag_engine.generation.citation_unit_ids import unit_generation_model
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
@@ -29,6 +30,7 @@ METHOD = "合成資料\n判定表。各行の条件に一致するときだけ�
 TABLE = "| 行ID | 条件 | 点数 |\n| R1 | 属性P=有 | 4 |\n| R2 | 属性Q=有 | 5 |\n| R3 | 属性R=有 | 3 |\n| R4 | 属性S=有 | 6 |"
 ROWS = "| R1 | 属性P=有 | 4 |\n| R2 | 属性Q=有 | 5 |\n| R3 | 属性R=有 | 3 |\n| R4 | 属性S=有 | 6 |"
 RULE = "区分の規則\n合計点の区分は、0〜9点は区分X、10〜19点は区分Y、20〜29点は区分Zです。"
+RULE_HEADING = "区分の規則"
 RESULT = "合計点は 12 点、区分は Y です。"
 # 記録の説明（区分の規則を見られなかった版と、見た版）。
 RECORDED_WITHOUT_RULE = (
@@ -62,31 +64,25 @@ def spans():
     return rows
 
 
-def table_entry(sent):
-    """判定表の単位だけを引用した要点（検証済みの引用の束縛を持つ）。"""
+def cited_entries(sent, *, rule_heading=False):
+    """判定表の行の単位を引用した要点（検証済みの引用の束縛を持つ）。``rule_heading`` なら区分の規則の見出しの単位だけを
+    引用した要点も足す（引用は規則の単位を指すが、原文は見出しだけ）。"""
     grounded.format_functions(sent)
     catalog = grounded.generation_unit_catalog(sent)
     model = unit_generation_model(generation_draft_wire_model(), catalog)
+    items = [{"request_id": "Q1", "kind": "rule", "text": ROWS, "citations": [{"unit_ids": list(catalog.snapshots[1].unit_ids[1:])}]}]
+    scope = [{"evidence_id": "E2", "target": "合計点", "relation": "direct", "link": None}]
+    if rule_heading:
+        items.append(
+            {"request_id": "Q1", "kind": "rule", "text": RULE_HEADING, "citations": [{"unit_ids": [catalog.snapshots[2].unit_ids[0]]}]}
+        )
+        scope.append({"evidence_id": "E3", "target": "区分", "relation": "direct", "link": None})
     raw = model.model_validate(
-        {
-            "items": [
-                {
-                    "request_id": "Q1",
-                    "kind": "rule",
-                    "text": ROWS,
-                    "citations": [{"unit_ids": list(catalog.snapshots[1].unit_ids[1:])}],
-                }
-            ],
-            "request_coverage": [
-                {"request_id": "Q1", "evidence_scope": [{"evidence_id": "E2", "target": "合計点", "relation": "direct", "link": None}]}
-            ],
-            "summary": "",
-            "confidence": "low",
-        }
+        {"items": items, "request_coverage": [{"request_id": "Q1", "evidence_scope": scope}], "summary": "", "confidence": "low"}
     )
     entries, dropped = grounded.verify(QUESTION, canonical_generation_draft(raw, unit_catalog=catalog), sent)
-    assert len(entries) == 1 and not dropped
-    return entries[0]
+    assert len(entries) == len(items) and not dropped
+    return entries
 
 
 def row_conditions():
@@ -112,11 +108,13 @@ def row_conditions():
     return RowConditionsResult(status="completed", tables=[table])
 
 
-def run(*, valid=True, basis=IDS):
+def run(*, valid=True, basis=IDS, rule_heading=False):
     """審査（判定と理由）→ 説明の段を通し、説明の段の入力を返す。"""
     sent = spans()
+    entries = cited_entries(sent, rule_heading=rule_heading)
     application = CheckedApplication(
-        GroundedApplication(item_indexes=[0], reasoning="表の点数を合計し、区分の規則に当てはめる。", result=RESULT), [table_entry(sent)]
+        GroundedApplication(item_indexes=list(range(len(entries))), reasoning="表の点数を合計し、区分の規則に当てはめる。", result=RESULT),
+        entries,
     )
     settings = get_settings(environ={}, dotenv_path=None)
 
@@ -153,19 +151,46 @@ def test_explanation_sees_the_units_the_audit_accepted_the_conclusion_on():
     assert application.published and application.assessment["status"] == "valid"
     assert trace["calls"] == 1 and len(prompts) == 1
     sources = prompts[0][explanation.KEY_SOURCES]
-    # 推導の引用（表の行）を先に、審査が根拠にした送った原文（推導が引用していないもの）をその後に渡す。
-    assert sources == [ROWS, METHOD, RULE]
-    # 表の行の判定（#4576）は今までどおり渡す。
+    # 推導の引用（表の行）を先に、審査が根拠にした単位のうち引用の原文が全文を含まないものの全文をその後に渡す
+    # （引用した判定表も、引用が見出しの行を含まないので全文を足す）。
+    assert sources == [ROWS, METHOD, TABLE, RULE]
+    # 表の行の判定（#4576）は今までどおり渡す（同じ表の行は 1 回）。
     assert [row[explanation.KEY_ROW_RESULT] for row in prompts[0][explanation.KEY_ROWS]] == ["成り立つ"] * 3 + ["成り立たない"]
-    assert review["explanation_basis"] == {"0": ["evidence-method", "evidence-rule"]}
+    assert review["explanation_basis"] == {"0": list(IDS)}
     rendered = "\n".join(render_lines([application], lambda _: "根拠：synthetic.md", lambda _: None))
     assert RECORDED_WITH_RULE in rendered and RECORDED_WITHOUT_RULE not in rendered
 
 
+def test_cited_unit_whose_quote_is_only_its_heading_is_passed_in_full():
+    """推導が区分の規則の単位を引用しても原文が見出しだけなら、規則の全文を説明の段へ渡す（実モデルの記録の形）。"""
+    application, review, _trace, prompts = run(rule_heading=True)
+    assert application.published
+    sources = prompts[0][explanation.KEY_SOURCES]
+    assert sources[:2] == [ROWS, RULE_HEADING] and RULE in sources
+    assert "evidence-rule" in review["explanation_basis"]["0"]
+    assert application.presentation["reasoning"] == RECORDED_WITH_RULE
+
+
+def test_unit_whose_full_text_is_already_quoted_is_not_repeated():
+    sent = spans()
+    entries = cited_entries(sent)
+    application = CheckedApplication(GroundedApplication(item_indexes=[0], reasoning="合成の推導。", result=RESULT), entries)
+    inputs = {
+        "items": [{"quote": TABLE}],
+        "applications": [{"index": 0, "item_indexes": [0]}],
+        "documents": [{"evidence": [{"evidence_id": i, "text": t} for i, t in zip(IDS, (METHOD, TABLE, RULE), strict=True)]}],
+    }
+    application.assessment = {"status": "valid"}
+    verdict = ApplicationVerdictAudit.model_validate(
+        {"application_reviews": [{"index": 0, "valid": True, "basis_evidence_ids": list(IDS)}], "summary_supported": True}
+    )
+    assert attach_audit_basis(inputs, verdict, [application]) == {"0": ["evidence-method", "evidence-rule"]}
+
+
 def test_basis_ids_that_were_not_sent_are_not_passed():
     _application, review, _trace, prompts = run(basis=("evidence-table", "evidence-unsent"))
-    assert prompts[0][explanation.KEY_SOURCES] == [ROWS]
-    assert "explanation_basis" not in review and review["unknown_basis_ids"] == {"0": ["evidence-unsent"]}
+    assert prompts[0][explanation.KEY_SOURCES] == [ROWS, TABLE]
+    assert review["explanation_basis"] == {"0": ["evidence-table"]} and review["unknown_basis_ids"] == {"0": ["evidence-unsent"]}
 
 
 @pytest.mark.parametrize("basis", [("evidence-rule",), ()], ids=["uncited_only", "empty"])

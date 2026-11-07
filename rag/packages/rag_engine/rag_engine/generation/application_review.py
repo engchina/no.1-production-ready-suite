@@ -110,10 +110,12 @@ def cited_evidence_ids(inputs: dict[str, Any], application: dict[str, Any]) -> s
 def attach_audit_basis(
     inputs: dict[str, Any], audit: ApplicationVerdictAudit | None, candidates: Sequence[CheckedApplication]
 ) -> dict[str, list[str]]:
-    """valid と確定した推導に、審査が判定に使った送った原文のうち推導が引用していない単位を付ける（#4589）。
+    """valid と確定した推導に、審査が判定に使った送った原文の単位のうち、推導の引用の原文が全体を含まないものを付ける（#4589）。
 
-    説明の段は推導の引用と、ここで付けた単位を入力にする（審査が結論を受け入れた原文を説明の段も見る）。
-    送った documents に無い evidence_id は捨てる（記録は ``unknown_basis_ids``）。ID の照合だけで意味は判定しない。
+    審査は送った単位の全文を見て判定するが、推導の引用（item の quote）は単位の一部（見出しだけ・表の一部の行など）の
+    ことがある。説明の段は推導の引用と、ここで付けた単位の全文を入力にする（審査が結論を受け入れた原文を説明の段も
+    見る）。推導が引用した単位でも、引用の原文が全文を含まなければ付ける。送った documents に無い evidence_id は捨てる
+    （記録は ``unknown_basis_ids``）。ID の照合と文字列の包含だけで、意味は判定しない。
     返り値は単位を付けた application の index ごとの evidence_id（診断用）。
     """
     if audit is None:
@@ -126,11 +128,15 @@ def attach_audit_basis(
         entry = candidates[number]
         if len(rows) != 1 or entry.assessment.get("status") != "valid":
             continue
-        cited = cited_evidence_ids(inputs, application)
-        extra = [value for value in dict.fromkeys(rows[0].basis_evidence_ids) if value in evidence and value not in cited]
-        entry.audit_basis = [{"evidence_id": value, "text": str(evidence[value].get("text") or "")} for value in extra]
-        if extra:
-            attached[str(number)] = extra
+        quotes = [str(inputs["items"][position].get("quote") or "") for position in application["item_indexes"]]
+        units = [
+            {"evidence_id": value, "text": text}
+            for value in dict.fromkeys(rows[0].basis_evidence_ids)
+            if value in evidence and (text := str(evidence[value].get("text") or "").strip()) and not any(text in quote for quote in quotes)
+        ]
+        entry.audit_basis = units
+        if units:
+            attached[str(number)] = [unit["evidence_id"] for unit in units]
     return attached
 
 

@@ -64,7 +64,7 @@ class CheckedApplication:
     # 計算し直すと合わなかった式（#4581。モデルのカスケードの昇格の信号に使う）。
     arithmetic_issues: list[str] = field(default_factory=list)
     assessment: dict[str, Any] = field(default_factory=dict)
-    # 独立の審査が valid の根拠にした、送った原文のうち推導が引用していない単位（evidence_id と本文。#4589）。
+    # 独立の審査が valid の根拠にした送った単位のうち、推導の引用の原文が全文を含まないもの（evidence_id と全文。#4589）。
     # 説明の段の入力に足し、審査が結論を受け入れた原文の範囲を説明の段も見られるようにする。
     audit_basis: list[dict[str, str]] = field(default_factory=list)
     presentation: dict[str, Any] = field(default_factory=dict)
