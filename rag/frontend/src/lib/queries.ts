@@ -226,11 +226,7 @@ export const queryKeys = {
     ["services", "logs", serviceId, lines] as const,
 };
 
-function clearDocumentProcessingCache(
-  qc: QueryClient,
-  documentId: string,
-  options: { clearPreprocessArtifact?: boolean } = {},
-) {
+function clearDocumentProcessingCache(qc: QueryClient, documentId: string) {
   qc.setQueryData<DocumentDetail | undefined>(
     queryKeys.document(documentId),
     (current) =>
@@ -238,9 +234,6 @@ function clearDocumentProcessingCache(
         ? {
             ...current,
             status: "UPLOADED",
-            preprocess_artifact: options.clearPreprocessArtifact
-              ? null
-              : current.preprocess_artifact,
             extraction: {},
             error_message: null,
             indexed_at: null,
@@ -2080,9 +2073,7 @@ export function useEnqueueDocumentIngestionJob() {
         (job.phase === "PREPROCESS" || job.phase === "EXTRACT") &&
         job.status === "QUEUED"
       ) {
-        clearDocumentProcessingCache(qc, job.document_id, {
-          clearPreprocessArtifact: job.phase === "PREPROCESS",
-        });
+        clearDocumentProcessingCache(qc, job.document_id);
       }
       invalidateDocumentProcessingQueries(qc, job.document_id);
     },

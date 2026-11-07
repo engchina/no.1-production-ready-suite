@@ -41,7 +41,6 @@ async def one(mode: str) -> dict[str, Any]:
             status=FileStatus.PREPROCESSING,
             uploaded_at=datetime(2026, 1, 1, tzinfo=UTC),
             tenant_id_hash="synthetic-tenant",
-            preprocess_artifact=state["legacy"],
         )
 
     def execute(_connection: Any, sql: str, binds: Any = None, **_kw: Any) -> None:

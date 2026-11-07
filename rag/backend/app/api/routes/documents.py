@@ -4682,12 +4682,6 @@ async def _enqueue_ingestion_job_for_document(
         # 検索に出している版は切替まで残す。解析はやり直すので区間の checkpoint だけ消す（#4115）。
         recipe = await oracle.ensure_default_document_recipe(document_id)
         await oracle.delete_recipe_segment_checkpoints(document_id, str(recipe["recipe_id"]))
-    elif phase == IngestionJobPhase.PREPROCESS:
-        await _reset_document_outputs_for_extract(
-            oracle,
-            document_id,
-            clear_preprocess_artifact=True,
-        )
     else:
         await _reset_document_outputs_for_extract(oracle, document_id)
 
@@ -4951,15 +4945,9 @@ async def _create_ingestion_job_record(
 async def _reset_document_outputs_for_extract(
     oracle: OracleClient,
     document_id: str,
-    *,
-    clear_preprocess_artifact: bool = False,
 ) -> None:
     """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
-    await oracle.reset_document_ingestion_outputs(
-        document_id,
-        status=FileStatus.UPLOADED,
-        clear_preprocess_artifact=clear_preprocess_artifact,
-    )
+    await oracle.reset_document_ingestion_outputs(document_id, status=FileStatus.UPLOADED)
 
 
 def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
@@ -5393,8 +5381,6 @@ async def _document_artifact_paths(
     paths: list[str] = []
     if extraction_artifact_path := _extraction_artifact_path(detail.extraction):
         paths.append(extraction_artifact_path)
-    if detail.preprocess_artifact is not None and detail.preprocess_artifact.object_storage_path:
-        paths.append(detail.preprocess_artifact.object_storage_path)
     try:
         segments = await oracle.list_ingestion_segments(detail.id)
     except Exception:

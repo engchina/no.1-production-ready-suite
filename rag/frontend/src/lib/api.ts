@@ -781,7 +781,6 @@ export interface StructuredExtraction {
 
 export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
-  preprocess_artifact: DocumentPreprocessArtifact | null;
   extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;

@@ -265,7 +265,6 @@ class StoredDocument:
     status: FileStatus
     uploaded_at: datetime
     object_storage_path: str | None = None
-    preprocess_artifact: dict[str, object] | None = None
     content_type: str | None = None
     file_size_bytes: int | None = None
     content_sha256: str | None = None
@@ -6622,14 +6621,12 @@ class OracleClient:
         *,
         status: FileStatus = FileStatus.UPLOADED,
         error_message: str | None = None,
-        clear_preprocess_artifact: bool = False,
     ) -> DocumentDetail:
         """再取込前に旧抽出・索引・checkpoint と派生状態を破棄する。"""
         return await self._reset_document_ingestion_outputs_with_oracle(
             document_id=document_id,
             status=status,
             error_message=error_message,
-            clear_preprocess_artifact=clear_preprocess_artifact,
         )
 
     async def reset_document_chunk_outputs(
@@ -11556,7 +11553,6 @@ class OracleClient:
                 tenant_id_hash,
                 category_name,
                 object_storage_path,
-                preprocess_artifact,
                 content_type,
                 file_size_bytes,
                 content_sha256,
@@ -11691,7 +11687,6 @@ class OracleClient:
         document_id: str,
         status: FileStatus,
         error_message: str | None,
-        clear_preprocess_artifact: bool,
     ) -> DocumentDetail:
         """同一文書の再取込開始時に、旧実体化結果を transaction 内で初期化する。"""
 
@@ -11790,9 +11785,6 @@ class OracleClient:
                 ),
                 _with_tenant_bind({"document_id": document_id}),
             )
-            preprocess_reset_sql = (
-                "preprocess_artifact = NULL," if clear_preprocess_artifact else ""
-            )
             _execute(
                 connection,
                 _render_sql(
@@ -11801,12 +11793,11 @@ class OracleClient:
                 SET
                     status = :status,
                     error_message = :error_message,
-                    __PREPROCESS_RESET__
                     extraction = NULL,
                     indexed_at = NULL
                 WHERE document_id = :document_id
                   AND {access_predicate}
-                """.replace("__PREPROCESS_RESET__", preprocess_reset_sql),
+                """,
                     access_predicate=_oracle_access_predicate_sql(),
                 ),
                 _with_tenant_bind(
@@ -13650,7 +13641,6 @@ def _select_document(
             tenant_id_hash,
             category_name,
             object_storage_path,
-            preprocess_artifact,
             content_type,
             file_size_bytes,
             content_sha256,
@@ -13780,7 +13770,7 @@ def _with_superseded_file_names[D: DocumentSummary](
     ]
 
 
-# rag_documents の JSON 列(extraction / preprocess_artifact / classification / processing_config)を
+# rag_documents の JSON 列(extraction / classification / processing_config)を
 # 除いた列。存在確認・状態確認・chunk の保存に使う(#341)。大きな JSON 列(行の外の LOB)を
 # 必要の無い経路で読まない(ADB の result cache の不具合 #333 の引き金になった)。
 _DOCUMENT_STATE_COLUMNS_SQL = """
@@ -14084,7 +14074,6 @@ def _default_document_recipe_values(row: Mapping[str, object]) -> dict[str, obje
         "processing_config": row.get("processing_config"),
         "status": status.value,
         "failed_phase": None,
-        "preprocess_artifact": row.get("preprocess_artifact"),
         "active_extraction_recipe_id": None,
         "config_revision": 1,
         "materialized_revision": 1 if status == FileStatus.INDEXED else None,
@@ -14103,15 +14092,15 @@ DEFAULT_DOCUMENT_RECIPE_MERGE_SQL = """
         ON (r.document_id = s.document_id AND r.slot_no = s.slot_no)
         WHEN NOT MATCHED THEN INSERT (
             recipe_id, document_id, slot_no, tenant_id_hash, processing_config,
-            status, preprocess_artifact, config_revision, materialized_revision,
+            status, config_revision, materialized_revision,
             error_message, created_at, updated_at, finished_at
         ) VALUES (
             :recipe_id, :document_id, 1, :tenant_id_hash, :processing_config,
-            :status, :preprocess_artifact, 1, :materialized_revision,
+            :status, 1, :materialized_revision,
             :error_message, :created_at, SYSTIMESTAMP, :finished_at
         )
         """
-DEFAULT_DOCUMENT_RECIPE_MERGE_JSON_BINDS = ("processing_config", "preprocess_artifact")
+DEFAULT_DOCUMENT_RECIPE_MERGE_JSON_BINDS = ("processing_config",)
 
 
 def default_document_recipe_merge_binds(values: Mapping[str, object]) -> dict[str, object]:
@@ -14122,7 +14111,6 @@ def default_document_recipe_merge_binds(values: Mapping[str, object]) -> dict[st
         "tenant_id_hash": values.get("tenant_id_hash"),
         "processing_config": _json_bind(_json_loads(values.get("processing_config"))),
         "status": values["status"],
-        "preprocess_artifact": _json_bind(_json_loads(values.get("preprocess_artifact")) or None),
         "materialized_revision": values.get("materialized_revision"),
         "error_message": values.get("error_message"),
         "created_at": values.get("created_at"),
@@ -16553,7 +16541,6 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         status=_file_status(row["status"]),
         uploaded_at=_datetime_value(row.get("uploaded_at")),
         object_storage_path=_optional_str(row.get("object_storage_path")),
-        preprocess_artifact=_json_loads(row.get("preprocess_artifact")) or None,
         content_type=_optional_str(row.get("content_type")),
         file_size_bytes=_optional_int(row.get("file_size_bytes")),
         content_sha256=_optional_str(row.get("content_sha256")),
@@ -18940,11 +18927,6 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         superseded_by_document_id=document.superseded_by_document_id,
         superseded_at=document.superseded_at,
         object_storage_path=document.object_storage_path,
-        preprocess_artifact=(
-            DocumentPreprocessArtifact.model_validate(document.preprocess_artifact)
-            if document.preprocess_artifact
-            else None
-        ),
         extraction=document.extraction,
         error_message=document.error_message,
         classification=(

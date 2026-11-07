@@ -1,4 +1,4 @@
-"""実Oracleで正式recipe artifactへ保存し、旧文書列を変更しない。"""
+"""実Oracleで正式recipe artifactへ保存し、文書の詳細には処理後のファイルを出さない。"""
 
 import hashlib
 
@@ -46,7 +46,6 @@ async def test_formal_preprocess_artifact_roundtrip_keeps_document_legacy_empty(
         assert saved is not None and saved["status"] == "PREPROCESSED"
         assert DocumentPreprocessArtifact.model_validate(saved["preprocess_artifact"]) == artifact
         reloaded = await client.get_document(document.id)
-        assert (
-            reloaded is not None
-            and reloaded.preprocess_artifact == document.preprocess_artifact is None
-        )
+        # 処理後のファイルの正本はレシピの行。文書の詳細（API の型）には持たない（#4185）。
+        assert reloaded is not None
+        assert "preprocess_artifact" not in reloaded.model_dump()
