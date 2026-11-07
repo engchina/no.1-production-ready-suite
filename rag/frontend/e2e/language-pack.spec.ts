@@ -392,12 +392,12 @@ for (const [index, relation] of ["different", "unrecorded"].entries()) {
     await page.goto(`${basePath}/settings/language-pack`);
     const links = page.getByRole("link", { name: "対象文書を確認する" });
     await expect(links).toHaveCount(2);
-    await expect(links.nth(index)).toHaveAttribute("href", `${basePath}/file-list?language_pack_relation=${relation}&current_release_id=v2`);
+    await expect(links.nth(index)).toHaveAttribute("href", `${basePath}/file-list?language_pack_status=${relation}&current_release_id=v2`);
     await expect(page.getByText("使用版が未記録の文書 2 件")).toBeVisible();
     await links.nth(index).click();
-    const expected = `${basePath}/file-list?language_pack_relation=${relation}&current_release_id=v2`;
+    const expected = `${basePath}/file-list?language_pack_status=${relation}&current_release_id=v2`;
     await expect.poll(() => { const url = new URL(page.url()); return url.pathname + url.search; }).toBe(expected);
-    await expect.poll(() => requests.some(url => url.pathname === `${basePath}/api/documents` && url.searchParams.get("language_pack_relation") === relation && url.searchParams.get("current_release_id") === "v2")).toBe(true);
+    await expect.poll(() => requests.some(url => url.pathname === `${basePath}/api/documents` && url.searchParams.get("language_pack_status") === relation && url.searchParams.get("current_release_id") === "v2")).toBe(true);
     await expect(page.getByRole("link", {name: `synthetic-${relation}.txt`, exact: true})).toBeVisible();
     await expectNoPageOverflow(page);
     await page.screenshot({path: testInfo.outputPath(`language-target-${relation}.png`), fullPage: true});

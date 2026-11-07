@@ -575,6 +575,9 @@ export interface IngestionJobProgress {
 }
 
 export type LanguagePackRelation = "current" | "equivalent" | "different" | "unrecorded";
+/** 文書の言語資源の状態（文書インデックスの列・絞り込み。backend の LanguagePackDocumentStatus。#4566）。 */
+export type LanguagePackDocumentStatus = LanguagePackRelation | "building" | "not_built";
+export const LANGUAGE_PACK_DOCUMENT_STATUSES = ["current", "equivalent", "different", "unrecorded", "building", "not_built"] as const satisfies readonly LanguagePackDocumentStatus[];
 export interface LanguagePackRecipeUse {
   recipe_id: string | null;
   chunk_set_id: string | null;
@@ -3580,7 +3583,7 @@ export const api = {
       queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
-      language_pack_relation?: LanguagePackRelation;
+      language_pack_status?: LanguagePackDocumentStatus;
       current_release_id?: string;
       limit?: number;
       offset?: number;
@@ -3594,7 +3597,7 @@ export const api = {
       search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
-    if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
+    if (params.language_pack_status) search.set("language_pack_status", params.language_pack_status);
     if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
     return request<Page<DocumentSummary>>(
@@ -3720,7 +3723,7 @@ export const api = {
       queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
-      language_pack_relation?: LanguagePackRelation;
+      language_pack_status?: LanguagePackDocumentStatus;
       current_release_id?: string;
       limit?: number;
     } = {},
@@ -3731,7 +3734,7 @@ export const api = {
     if (params.q) search.set("q", params.q);
     if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
-    if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
+    if (params.language_pack_status) search.set("language_pack_status", params.language_pack_status);
     if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
     return request<DocumentIdList>(`/api/documents/ids${qs ? `?${qs}` : ""}`);

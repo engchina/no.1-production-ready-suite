@@ -18,7 +18,11 @@ from app.rag.ingestion_language import (
 )
 from app.rag.language_pack_releases import active_release
 from app.schemas.document import IngestionJob, IngestionJobStatus
-from app.schemas.language_pack_release import LanguagePackIndexRelation, LanguagePackRelease
+from app.schemas.language_pack_release import (
+    LanguagePackDocumentStatus,
+    LanguagePackIndexRelation,
+    LanguagePackRelease,
+)
 
 
 def release(identity: str = "release-a", version: int = 1) -> LanguagePackRelease:
@@ -148,18 +152,42 @@ class AnyOracle:
     pass
 
 
-@pytest.mark.parametrize("relation", list(LanguagePackIndexRelation))
+@pytest.mark.parametrize("status", list(LanguagePackDocumentStatus))
 def test_relation_filter_keeps_access_and_one_shared_document_predicate(
-    relation: LanguagePackIndexRelation,
+    status: LanguagePackDocumentStatus,
 ) -> None:
     sql, binds = oracle_module._oracle_document_where(
-        language_pack_relation=relation, current_release_id="release-a"
+        language_pack_status=status, current_release_id="release-a"
     )
     assert "rag_chunk_sets" in sql and "cs.is_active = 1" in sql
     assert "superseded_by_document_id IS NULL" in sql
     assert binds["current_language_release_id"] == "release-a"
     baseline, _ = oracle_module._oracle_document_where()
     assert sql.startswith(baseline + " AND ")
+
+
+def test_document_status_filter_takes_the_first_status_in_priority_order() -> None:
+    """文書の状態は、優先順（推奨 > 判定不可 > 構築中 > 同値 > 最新 > 未構築）の最初（#4566）。"""
+    order = [
+        LanguagePackDocumentStatus.DIFFERENT,
+        LanguagePackDocumentStatus.UNRECORDED,
+        LanguagePackDocumentStatus.BUILDING,
+        LanguagePackDocumentStatus.EQUIVALENT,
+        LanguagePackDocumentStatus.CURRENT,
+    ]
+    present = {status: oracle_module._language_pack_status_sql(status) for status in order}
+    # 各状態の述語は、自分の存在と、優先順で上の状態が無いことの組み合わせ。
+    assert present[LanguagePackDocumentStatus.DIFFERENT].count("NOT (EXISTS") == 0
+    for index, status in enumerate(order):
+        assert present[status].count("AND NOT (EXISTS") == index
+    # 未構築は、どの状態も無い文書。
+    not_built = oracle_module._language_pack_status_sql(LanguagePackDocumentStatus.NOT_BUILT)
+    assert not_built.count("NOT (EXISTS") == len(order)
+    # 構築中は、レシピの最新の待機中・実行中の job が版を固定しているか（画面の判定と同じ）。
+    building = present[LanguagePackDocumentStatus.BUILDING]
+    assert "ORDER BY j.queued_at DESC FETCH FIRST 1 ROWS ONLY) IS NOT NULL" in building
+    # 版の行が無い索引は判定できない（画面は版番号の無い使用版を判定しない）。
+    assert "rag_language_pack_releases used" in present[LanguagePackDocumentStatus.UNRECORDED]
 
 
 def test_release_scope_restores_after_failure() -> None:

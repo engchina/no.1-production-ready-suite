@@ -26,7 +26,8 @@ import { useQuery } from "@tanstack/react-query";
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
-import { LanguagePackDocumentPanel } from "./LanguagePackDocumentPanel";
+import { LanguagePackRecipeSummary, languagePackBuildText } from "./LanguagePackDocumentPanel";
+import { languagePackBuildNotice } from "./LanguagePackDocumentPanel.logic";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentVersionEditor } from "./DocumentVersionEditor";
 import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
@@ -162,6 +163,8 @@ import {
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useAuth } from "@/components/security/AuthProvider";
+import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
 import { recipeQueueWait } from "@/lib/ingestion-queue";
@@ -324,6 +327,8 @@ export function DocumentWorkspace({
   showTitle?: boolean;
 }) {
   const query = useDocument(documentId);
+  // 言語資源の「詳細」（差分・公開時の設定・再処理）は、言語資源の設定の権限を持つ利用者だけ（#4566）。
+  const canManageLanguagePack = useAuth().hasPermission(MENU_PERMISSIONS.settingsLanguagePack);
   const [searchParams, setSearchParams] = useSearchParams();
   const recipesQuery = useDocumentRecipes(documentId);
   const requestedRecipeId = searchParams.get("recipe");
@@ -1267,13 +1272,17 @@ export function DocumentWorkspace({
     phaseForDocumentStatus(status) ??
     latestDocumentJob?.phase ??
     "PREPROCESS";
+  const processingWatchVisible = shouldShowProcessingWatchBanner({
+    watchProcessing,
+    documentStatus: status,
+    latestJobStatus: latestDocumentJob?.status,
+  });
+  // 選んだレシピを job が言語資源の版を固定して構築している間は、その案内を状態メッセージの枠の
+  // 「実行中」に出す（別の Banner を重ねない。messaging §9。#4566）。
+  const languagePackBuild = languagePackBuildNotice(query.data?.language_pack, selectedRecipeId);
   const statusMessageSlot = resolveStatusMessageSlot({
     errored: documentFailure.errored,
-    processingVisible: shouldShowProcessingWatchBanner({
-      watchProcessing,
-      documentStatus: status,
-      latestJobStatus: latestDocumentJob?.status,
-    }),
+    processingVisible: processingWatchVisible || languagePackBuild !== null,
     documentStatus: status,
     preparedArtifactMissing,
   });
@@ -1467,7 +1476,17 @@ export function DocumentWorkspace({
           ),
         }
       : statusMessageSlot?.kind === "processing"
-        ? { severity: "info", body: t(phaseRunningMessageKey(currentProcessingPhase)) }
+        ? {
+            severity: "info",
+            body: languagePackBuild ? (
+              <div className="space-y-1" data-testid="document-language-pack-building">
+                {processingWatchVisible ? <p>{t(phaseRunningMessageKey(currentProcessingPhase))}</p> : null}
+                <p>{languagePackBuildText(languagePackBuild)}</p>
+              </div>
+            ) : (
+              t(phaseRunningMessageKey(currentProcessingPhase))
+            ),
+          }
         : statusMessageSlot?.kind === "gate"
           ? statusMessageSlot.artifactMissing
             ? {
@@ -1525,6 +1544,16 @@ export function DocumentWorkspace({
           sourceModality={sourceProfile?.modality ?? null}
           // 未保存の抽出確認の修正があるあいだは、レシピの操作からも承認させない（本文側の承認と同じ。#944）。
           approveBlocked={status === "REVIEW" && hasReviewEdits}
+          languagePack={(recipe) => (
+            <LanguagePackRecipeSummary
+              key={recipe.recipe_id}
+              documentId={documentId}
+              fileName={doc.file_name}
+              use={doc.language_pack}
+              recipe={recipe}
+              canManage={canManageLanguagePack}
+            />
+          )}
         />
         {selectedRecipeId ? (
           <ExtractionRevisionHistory
@@ -1542,7 +1571,6 @@ export function DocumentWorkspace({
             currentExtractionRecipeId={selectedRecipe?.active_extraction_recipe_id ?? null}
           />
         ) : null}
-        <LanguagePackDocumentPanel key={selectedRecipeId ?? "default"} documentId={documentId} fileName={doc.file_name} use={doc.language_pack} recipe={selectedRecipe ?? null} />
         {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。
             工程の操作（承認・実行・再試行・再処理）はこの案内の中に置き、押した結果（投入の失敗・開始・承認の失敗）は
             同じ案内の中のボタンの直下に出す（UX 契約 messaging §10.1・§10.2。#2034）。押した後の実行中は、同じ場所の
