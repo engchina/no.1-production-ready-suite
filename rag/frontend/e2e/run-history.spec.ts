@@ -883,6 +883,11 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(modelIds).toHaveText(["model-light", "model-strong"]);
     expect(await modelIds.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).fontFamily))).toEqual([monoFont, monoFont]);
     expect(await fact("modelTokens").evaluate((node) => getComputedStyle(node).fontFamily)).not.toBe(monoFont);
+    // ID の文字の大きさも「モデル」の行と同じ（共有の事実の値の識別子の 12px。数の文言は本文の 14px のまま。#4605）。
+    const monoSize = await fact("model").evaluate((node) => getComputedStyle(node).fontSize);
+    expect(monoSize).toBe("12px");
+    expect(await modelIds.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).fontSize))).toEqual([monoSize, monoSize]);
+    expect(await fact("modelTokens").evaluate((node) => getComputedStyle(node).fontSize)).toBe("14px");
     await expect(fact("modelCascade")).toHaveText("あり（引用の ID・原文が資料と一致しなかった）");
     // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
     await expect(page.getByTestId("answer-model-cascade")).toBeHidden();

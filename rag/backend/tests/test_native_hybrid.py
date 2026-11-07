@@ -55,10 +55,13 @@ def test_native_request_scopes_before_ranking_and_does_not_infer_queries() -> No
 
 class NativeOracle(OracleClient):
     def __init__(self, *, fail_keyword: bool = False) -> None:
-        # 原生索引の経路の契約を確かめる(範囲の行を距離順に読む経路は下の専用のテスト)。
+        # 原生索引の経路の契約を確かめる(範囲の行を距離順に読む経路と不足の読み直しは下の
+        # 専用のテスト)。
         super().__init__(
             Settings(
-                rag_hybrid_search_backend="oracle_native", rag_native_vector_exact_max_chunks=0
+                rag_hybrid_search_backend="oracle_native",
+                rag_native_vector_exact_max_chunks=0,
+                rag_native_vector_shortage_oversample_factor=1,
             )
         )
         self.calls: list[tuple[str, dict[str, object]]] = []
@@ -526,11 +529,14 @@ async def test_native_metadata_omits_unmatched_channel_rank(present: str) -> Non
 class ExactScopeOracle(OracleClient):
     """範囲の行を距離順に読む経路(#4134・#4097)。読んだ SQL と検索の要求を記録する。"""
 
-    def __init__(self, *, vector_chunks: int = 3, exact_max_chunks: int = 50000) -> None:
+    def __init__(
+        self, *, vector_chunks: int = 3, exact_max_chunks: int = 50000, oversample_factor: int = 1
+    ) -> None:
         super().__init__(
             Settings(
                 rag_hybrid_search_backend="oracle_native",
                 rag_native_vector_exact_max_chunks=exact_max_chunks,
+                rag_native_vector_shortage_oversample_factor=oversample_factor,
                 rag_min_similarity=0.3,
             )
         )
@@ -539,6 +545,9 @@ class ExactScopeOracle(OracleClient):
         self.exact_binds: list[dict[str, object]] = []
         self.searches: list[dict[str, Any]] = []
         self.search_rows: list[dict[str, object]] = []
+        # 呼び出しごとに返す SEARCH の結果(空なら search_rows)と、失敗させる呼び出しの番号。
+        self.search_responses: list[list[dict[str, object]]] = []
+        self.fail_search_at: int | None = None
         self.fail_exact = False
 
     async def _fetch_all(
@@ -554,6 +563,10 @@ class ExactScopeOracle(OracleClient):
         if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
             spec = json.loads(str((binds or {})["native_spec"]))
             self.searches.append(spec)
+            if len(self.searches) == self.fail_search_at:
+                raise RuntimeError("合成の SEARCH の失敗")
+            if self.search_responses:
+                return self.search_responses.pop(0)
             return self.search_rows
         assert "FETCH EXACT FIRST" in sql
         if self.fail_exact:
@@ -739,6 +752,149 @@ async def test_native_index_shortage_over_the_limit_is_recorded_without_exact_re
     assert rows.vector_retrieval["returned"] == returned
     assert rows.vector_retrieval["shortage"] is shortage
     assert ("候補が不足" in caplog.text) is shortage
+
+
+def _vector_row(chunk_id: str, rank: int, score: float) -> dict[str, object]:
+    return {
+        **_text_row(chunk_id, 1),
+        "chunk_index": rank,
+        "score": score,
+        "native_similarity": 0.9 - rank / 100,
+        "native_vector_rank": rank,
+        "native_vector_score": score,
+        "native_text_rank": None,
+        "native_text_score": 0,
+    }
+
+
+@pytest.mark.parametrize("channel", ["vector", "hybrid"])
+@pytest.mark.asyncio
+async def test_native_index_shortage_is_read_again_with_wider_vector_candidates(
+    channel: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """削除の残骸が上位の枠を使って k 件を下回ったら、候補を広げて 1 回だけ読み直す(#4097)。"""
+    client = ExactScopeOracle(vector_chunks=10, exact_max_chunks=5, oversample_factor=4)
+    text = [_text_row("text-only", 1)] if channel == "hybrid" else []
+    # 残骸が順位 1・2 を使い、外で除かれた最初の結果(順位 3 の 1 件だけ)。
+    first = [_vector_row("v3", 3, 70), *text]
+    # 候補を広げた結果。範囲の中の行が k 件より多く返り、呼出し側で k 件に切る。
+    wider = [_vector_row("v3", 3, 70), _vector_row("v4", 4, 60), _vector_row("v5", 5, 50), *text]
+    client.search_responses = [first, wider]
+
+    with caplog.at_level("INFO", logger="app.clients.oracle"):
+        rows = await client._native_rows(channel, "合成", [1.0] * 1536, top_k=2, filters={})
+
+    assert client.exact_sql == []
+    assert len(client.searches) == 2
+    original, retried = client.searches
+    # 範囲の条件と全文の分岐は変えず、ベクトルの候補だけを広げる。
+    assert retried["filter_by"] == original["filter_by"]
+    assert original["vector"]["result_max"] == 2
+    assert retried["vector"]["result_max"] == 8
+    if channel == "hybrid":
+        assert retried["text"]["result_max"] == original["text"]["result_max"] == 2
+        assert (original["return"]["topN"], retried["return"]["topN"]) == (4, 10)
+    else:
+        assert (original["return"]["topN"], retried["return"]["topN"]) == (2, 8)
+    assert isinstance(rows, NativeSearchRows)
+    vector_rows = sorted(
+        (row for row in rows if row.get("native_vector_rank")),
+        key=lambda row: int(str(row["native_vector_rank"])),
+    )
+    # 経路ごとに k 件へ切り、残骸の分の空きを詰めて順位を付け直す。
+    assert [row["chunk_id"] for row in vector_rows] == ["v3", "v4"]
+    assert [row["native_vector_rank"] for row in vector_rows] == [1, 2]
+    assert ("text-only" in {row["chunk_id"] for row in rows}) is (channel == "hybrid")
+    assert rows.vector_retrieval == {
+        "method": "native_index_retry",
+        "scope_vector_chunks": 10,
+        "exact_max_chunks": 5,
+        "requested": 2,
+        "expected": 2,
+        "returned": 2,
+        "shortage": False,
+        "first_returned": 1,
+        "oversample_factor": 4,
+    }
+    assert "読み直しで補った" in caplog.text
+    assert "候補が不足" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_native_index_shortage_left_after_the_retry_is_recorded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ExactScopeOracle(vector_chunks=10, exact_max_chunks=5, oversample_factor=3)
+    client.search_rows = [_vector_row("v3", 3, 70)]
+
+    with caplog.at_level("WARNING", logger="app.clients.oracle"):
+        rows = await client._native_rows("vector", "合成", [1.0] * 1536, top_k=2, filters={})
+
+    # 読み直しは 1 回だけ。それでも足りなければ不足を残す。
+    assert len(client.searches) == 2
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["method"] == "native_index_retry"
+    assert rows.vector_retrieval["returned"] == 1
+    assert rows.vector_retrieval["shortage"] is True
+    assert "候補が不足" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_native_index_retry_failure_keeps_the_first_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ExactScopeOracle(vector_chunks=10, exact_max_chunks=5, oversample_factor=4)
+    client.search_rows = [_vector_row("v3", 3, 70)]
+    client.fail_search_at = 2
+
+    with caplog.at_level("WARNING", logger="app.clients.oracle"):
+        rows = await client._native_rows("vector", "合成", [1.0] * 1536, top_k=2, filters={})
+
+    assert [row["chunk_id"] for row in rows] == ["v3"]
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["method"] == "native_index"
+    assert rows.vector_retrieval["shortage"] is True
+    assert "native_vector_shortage_retry_failed" in caplog.text
+    assert "候補が不足" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_native_index_without_shortage_reads_once() -> None:
+    client = ExactScopeOracle(vector_chunks=10, exact_max_chunks=5, oversample_factor=4)
+    client.search_rows = [_vector_row("v1", 1, 80), _vector_row("v2", 2, 70)]
+
+    rows = await client._native_rows("vector", "合成", [1.0] * 1536, top_k=2, filters={})
+
+    assert len(client.searches) == 1
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["method"] == "native_index"
+    assert rows.vector_retrieval["shortage"] is False
+
+
+def test_native_request_widens_only_the_vector_candidates() -> None:
+    spec = native_search_request(
+        query="合成",
+        vector=[1.0, 0.0],
+        channel="hybrid",
+        allowed_ids=["a"],
+        limit=5,
+        vector_limit=20,
+    )
+    assert spec["vector"]["result_max"] == 20
+    assert spec["text"]["result_max"] == 5
+    assert spec["return"]["topN"] == 25
+    with pytest.raises(ValueError):
+        native_search_request(
+            query="合成", vector=[1.0], channel="vector", allowed_ids=["a"], limit=5, vector_limit=4
+        )
+
+
+def test_shortage_oversample_factor_setting() -> None:
+    assert Settings().rag_native_vector_shortage_oversample_factor == 4
+    assert Settings(rag_native_vector_shortage_oversample_factor=1)
+    for invalid in (0, 21):
+        with pytest.raises(ValidationError):
+            Settings(rag_native_vector_shortage_oversample_factor=invalid)
 
 
 @pytest.mark.asyncio
@@ -992,6 +1148,7 @@ class LongScopeOracle(OracleClient):
             Settings(
                 rag_hybrid_search_backend="oracle_native",
                 rag_native_vector_exact_max_chunks=exact_max_chunks,
+                rag_native_vector_shortage_oversample_factor=1,
                 rag_min_similarity=0.0,
             )
         )

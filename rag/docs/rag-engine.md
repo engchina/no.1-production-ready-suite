@@ -698,7 +698,14 @@ Oracle内部で展開した語はAPIが返さないため表示できない。
 - **問いに近い centroid に範囲の行が無い（#4134）。** Oracle の[IVF の計画](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/optimizer-plans-ivf-vector-indexes.html)は、選んだ centroid の partition の行だけに範囲の条件を掛ける。範囲の行がそこに無ければ 0 件になる。`accuracy=100` は partition を増やさない。`index_probes` は `accuracy` が 0 のときだけ SQL に反映され、partition の大半を読むまで件数が戻らない（合成の 82 centroid で `probes 30` は 0 件、`probes 64` で 50 件）。`FETCH FIRST n TO m ROWS` の[打ち切り可能な反復](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/terminable-iteration-ivf.html)は件数を戻すが、`SEARCH` のパラメータには無い。
 - **削除の残骸が上位 k 件の枠を使う（#4097）。** 文書の削除で `$VR` の行は整理まで残る（lazy delete）。空いた ROWID を新しい行が使うと、古い行が基表との結合と範囲の条件を通り、上位 k 件に入ってから `$K` で除かれる。件数は残骸の割合に応じて減る。
 
-**対処:** 許可された chunk が `RAG_NATIVE_VECTOR_EXACT_MAX_CHUNKS`（既定 50,000）以下なら、基表の範囲の行を `FETCH EXACT` で距離順に読む。`$VR` を読まないのでどちらの影響も受けない。範囲は `SEARCH` の `filter_by` と同じ解決済みの範囲を使い、結果の行に同じ権限の条件を掛け直す。hybrid は全文の `TEXT_ONLY` の `SEARCH` と距離順の結果を chunk ごとに合わせ、順位から融合の点数を一度だけ計算する。範囲がこれを超えると原生索引で読み、不足（範囲に候補があるのに k 件未満）は処理の経過の「ベクトルの読み方」と warning のログに残す。退避の再検索はしない。
+**対処:** 許可された chunk が `RAG_NATIVE_VECTOR_EXACT_MAX_CHUNKS`（既定 50,000）以下なら、基表の範囲の行を `FETCH EXACT` で距離順に読む。`$VR` を読まないのでどちらの影響も受けない。範囲は `SEARCH` の `filter_by` と同じ解決済みの範囲を使い、結果の行に同じ権限の条件を掛け直す。hybrid は全文の `TEXT_ONLY` の `SEARCH` と距離順の結果を chunk ごとに合わせ、順位から融合の点数を一度だけ計算する。範囲がこれを超えると原生索引で読む。
+
+**上限を超える範囲の不足（#4097）:** 原生索引の結果のベクトルが、範囲に候補があるのに k 件未満なら、ベクトルの候補（`vector.result_max`）を `RAG_NATIVE_VECTOR_SHORTAGE_OVERSAMPLE_FACTOR`（既定 4）倍にして `SEARCH` を 1 回だけ読み直し、`_merge_native_filter_batches` で経路ごとに k 件へ切って順位を付け直す。範囲・権限の条件、全文の分岐の候補数、最終の件数は変えず、不足の無い検索は今までどおり 1 回の `SEARCH` で終わる。Oracle の文書も、近似検索の後で条件を掛ける計画は条件を通る行が減って要求より少なくなり得るとし、[候補を広げて読み続ける方法](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/terminable-iteration-ivf.html)を示している（`SEARCH` のパラメータには無いので、候補の数を広げて読む）。
+
+- 読み直しは処理の経過の「ベクトルの読み方」に最初の取得数と倍率を出し、ログ（`原生索引のベクトル候補の不足を読み直しで補った`）に残す。読み直しても足りなければ今までどおり「候補不足」と warning を残す。読み直しが失敗したときは最初の結果を返し、`native_vector_shortage_retry_failed` を残す。
+- 残骸は整理（[native-index-maintenance.md](./native-index-maintenance.md)）で消える。読み直しは整理が終わるまでの間を埋めるもので、整理の代わりではない。semantic の整理の後も残骸が残ると、FULL の間隔（既定 6 時間）の間は不足の条件が続く（開発の ADB で `$VR` 48,921 件・可視 48,906 件のまま保守が `NativeIndexMaintenanceIncomplete` で残る状態を確認した）。
+- 距離順の読み直しにしない理由: 開発の ADB の実表（約 49,000 行。埋め込みは LOB に置かれる）を距離順に全件読むと 6.4〜9.5 秒かかった（既存の埋め込みを問いにした 5 回。上の合成の表の 210 ms とは違う）。上限を超える範囲では 1 回の読み直しの `SEARCH` の方が小さい。
+- 倍率の目安: 倍率 f の読み直しは、上位の候補のうち残骸が 1 − 1/f まで（既定の 4 なら 75% まで）なら k 件に戻る。#4097 の合成の索引の測定では、行の入れ替えを重ねて上位 k 件の 60〜80% が残骸になった例がある（k=20 で 8 件・4 件）。それより多いと不足が残り、「候補不足」とログで分かる。
 
 合成の表（1536 次元・`native_scope_id` の索引あり）で距離順に読む時間の中央値（上限 50 件。別の埋め込みを 5 回）: 1,000 行 3 ms、5,000 行 21 ms、20,000 行 83 ms、50,000 行 210 ms。同じ規模の `SEARCH`（256 次元・20,000 行）は 85〜150 ms で、IVF の計画でも `$VR` を全件読む。実データの時間は環境で変わるので、処理の経過と合わせて見直す。
 

@@ -264,13 +264,16 @@ class IngestionJob(BaseModel):
 
 
 class IngestionJobLease(BaseModel):
-    """取込 job の状態と lease の持ち主(worker が自分の実行かどうかを確かめる。#359)。
+    """取込 job の状態と lease の持ち主・試行の回数(worker が自分の実行かどうかを確かめる。#359)。
 
+    lease の持ち主は worker ごとの値で、同じ worker が claim し直すと変わらない。claim のたびに
+    増える試行の回数も比べて、古い試行を区別する(#4187)。
     API の応答には出さない(``lease_owner`` は worker の host・pid を含むため)。
     """
 
     status: IngestionJobStatus
     lease_owner: str | None = None
+    attempt_count: int
 
 
 class DocumentClassification(BaseModel):
