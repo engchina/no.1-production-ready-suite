@@ -140,7 +140,10 @@ class _SlowAnswerPipeline:
 
 
 def test_search_uses_selected_answer_model_only_from_choices(monkeypatch: MonkeyPatch) -> None:
-    """RAG 検索の model_id は既定のテキスト / Vision モデルのときだけ回答のモデルにする(#675)。"""
+    """RAG 検索の model_id は登録済みの候補のときだけ回答のモデルにする(#675)。
+
+    未指定は既定のテキストモデル（None）。
+    """
     answer_models: list[object] = []
 
     class CapturingPipeline:
@@ -157,10 +160,10 @@ def test_search_uses_selected_answer_model_only_from_choices(monkeypatch: Monkey
     monkeypatch.setattr(search_route, "enterprise_ai_default_model_id", lambda _s: "text-m")
     monkeypatch.setattr(search_route, "enterprise_ai_vision_model_id", lambda _s: "vision-m")
 
-    for model_id in ("vision-m", "other-m", None):
+    for model_id in ("vision-m", None):
         response = client.post("/api/search", json={"query": "承認条件", "model_id": model_id})
         assert response.status_code == 200
-    assert answer_models == ["vision-m", None, None]
+    assert answer_models == ["vision-m", None]
 
     models = client.get("/api/search/models").json()["data"]
     assert [(m["model_id"], m["kind"]) for m in models] == [
@@ -177,6 +180,45 @@ def test_search_uses_selected_answer_model_only_from_choices(monkeypatch: Monkey
     response = client.post("/api/search", json={"query": "承認条件", "model_id": "text-m"})
     assert response.status_code == 200
     assert answer_models == ["text-m"]
+
+
+@pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
+def test_search_rejects_unregistered_answer_model_without_calling_default(
+    monkeypatch: MonkeyPatch, path: str
+) -> None:
+    """登録されていない model_id は 422 にし、既定のモデルへ切り替えて回答しない(#4582・#3240)。"""
+    constructed: list[object] = []
+
+    class CapturingPipeline:
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs.get("answer_model_id"))
+
+        async def run(
+            self, request: SearchRequest, trace_id: str | None = None, **_kwargs: object
+        ) -> SearchResponse:
+            return SearchResponse(answer="回答", trace_id=trace_id or "trace", elapsed_ms=1.0)
+
+    class NoOracle:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("未登録のモデルの指定で DB を読まない")
+
+    monkeypatch.setattr(search_route, "RagPipeline", CapturingPipeline)
+    monkeypatch.setattr(search_route, "enterprise_ai_model_catalog", lambda _s: [])
+    monkeypatch.setattr(search_route, "enterprise_ai_default_model_id", lambda _s: "text-m")
+    monkeypatch.setattr(search_route, "enterprise_ai_vision_model_id", lambda _s: "vision-m")
+    monkeypatch.setattr(search_route, "_search_run_recorder", lambda _request: None)
+    monkeypatch.setattr(search_route, "OracleClient", NoOracle)
+
+    response = client.post(
+        path,
+        json={"query": "承認条件", "model_id": "removed-m", "search_answer_profile_id": "bv-1"},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error_code"] == "enterprise_ai_model_not_registered"
+    assert "removed-m" in "".join(body["error_messages"])
+    assert constructed == []
 
 
 def test_search_api_accepts_and_ignores_removed_standard_options(
