@@ -111,7 +111,8 @@ def answer_parts_model(
         "summary": (SkipJsonSchema[str], Field(default="", exclude=True)),
         "summary_item_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
-        "request_coverage": request_coverage_field(base, catalog, request_ids),
+        # 計画の行は evidence_id → relation → link だけ（自由記述の target を書かせない。#4594）。
+        "request_coverage": request_coverage_field(base, catalog, request_ids, scope_target=False),
         "question_type": (
             GenericAlias(list, question_types),
             Field(
