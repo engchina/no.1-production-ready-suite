@@ -374,7 +374,9 @@ def _picture_and_body(tmp_path):
     """本文の段落と、本文の空の Picture 1 件の合成の頁（VLM の前の形）。"""
     path = tmp_path / "page.png"
     Image.new("RGB", (100, 100), "white").save(path)
-    body = LayoutRecord("body-1", "docling", 1, 1, [5, 2, 95, 8], "image_top_left", 100, 100, "Text", "合成の本文の段落です。", raw_type="text")
+    body = LayoutRecord(
+        "body-1", "docling", 1, 1, [5, 2, 95, 8], "image_top_left", 100, 100, "Text", "合成の本文の段落です。", raw_type="text"
+    )
     picture = LayoutRecord("picture-1", "docling", 1, 2, [10, 10, 80, 80], "image_top_left", 100, 100, "Picture", raw_type="picture")
     return body, picture, PageImage(1, 100, 100, 100, 100, str(path))
 
