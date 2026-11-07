@@ -150,10 +150,9 @@ def test_answer_passes_row_judgments_to_the_explanation_stage() -> None:
     result, model = answer(with_derivation)
     prompts = [json.loads(prompt) for name, _system, prompt in model.calls if name == "ApplicationExplanation"]
     assert prompts, [name for name, _s, _p in model.calls]
-    rows = prompts[0][explanation.KEY_ROWS]
-    assert {row[explanation.KEY_ROW_CONDITION]: row[explanation.KEY_ROW_RESULT] for row in rows} == {
-        "操作Aを2営業日前の17時より後に行った": explanation.ROW_RESULT_LABELS["applies"],
-        "操作Aを2営業日前の17時までに行った": explanation.ROW_RESULT_LABELS["does_not_apply"],
+    assert set(prompts[0][explanation.KEY_ROWS]) == {
+        explanation.row_fact("操作Aを2営業日前の17時より後に行った", "applies"),
+        explanation.row_fact("操作Aを2営業日前の17時までに行った", "does_not_apply"),
     }
 
 
@@ -206,12 +205,15 @@ def test_explanation_input_carries_the_row_judgments_of_the_entry_table() -> Non
     [(system, prompt)] = _explain(_entry(result.tables[0].evidence_id), result)
     data = json.loads(prompt)
     assert data[explanation.KEY_QUESTION] == QUESTION
-    labels = {row[explanation.KEY_ROW_CONDITION]: row[explanation.KEY_ROW_RESULT] for row in data[explanation.KEY_ROWS]}
-    assert labels == {
-        "操作Aを2営業日前の17時より後に行った": explanation.ROW_RESULT_LABELS["applies"],
-        "操作Aを2営業日前の17時までに行った": explanation.ROW_RESULT_LABELS["does_not_apply"],
+    assert set(data[explanation.KEY_ROWS]) == {
+        explanation.row_fact("操作Aを2営業日前の17時より後に行った", "applies"),
+        explanation.row_fact("操作Aを2営業日前の17時までに行った", "does_not_apply"),
     }
-    assert explanation.KEY_ROWS in system
+    # 行の節は Step 1 で読み方を示すだけで、説明を書く Step 2 は節の名前を引かない（#4615）。
+    step1, step2 = system.split("## Step 2:")
+    assert explanation.KEY_ROWS in step1 and explanation.KEY_ROWS not in step2
+    # 行の節は内部の名前として表示の門が見る。
+    assert explanation.KEY_ROWS in explanation.internal_labels(data)
 
 
 def test_explanation_input_is_unchanged_without_row_judgments() -> None:

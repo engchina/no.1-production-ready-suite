@@ -106,15 +106,17 @@ def gate(
 
 def test_every_input_section_is_classified():
     # 入力の節は SECTION_KEYS のどれか。説明の語にしてよい節（WORDING_KEYS）以外は内部の名前として門が見る。
-    value = json.loads(explanation.explanation_prompt("質問", ["原文"], "指定", [{"条件": "行"}], [{"結論": "c", "資料の原文": []}]))
+    row = explanation.row_fact("条件の原文", "applies")
+    value = json.loads(explanation.explanation_prompt("質問", ["原文"], "指定", [row], [{"結論": "c", "資料の原文": []}]))
     assert list(value) == list(explanation.SECTION_KEYS)
-    assert set(explanation.WORDING_KEYS) <= set(explanation.SECTION_KEYS)
-    assert explanation.INTERNAL_SECTION_KEYS == (explanation.KEY_LANGUAGE, explanation.KEY_OTHERS)
-    assert explanation.internal_labels(value) == [explanation.KEY_LANGUAGE, explanation.KEY_OTHERS]
+    # 説明の語にしてよい節は、利用者に見せてよい語（質問・資料の原文）だけ。行の節も内部の名前（#4615）。
+    assert explanation.WORDING_KEYS == (explanation.KEY_QUESTION, explanation.KEY_SOURCES)
+    assert explanation.INTERNAL_SECTION_KEYS == (explanation.KEY_LANGUAGE, explanation.KEY_ROWS, explanation.KEY_OTHERS)
+    assert explanation.internal_labels(value) == [explanation.KEY_LANGUAGE, explanation.KEY_ROWS, explanation.KEY_OTHERS]
     assert explanation.internal_labels(json.loads(explanation.explanation_prompt("質問", ["原文"], None))) == []
 
 
-@pytest.mark.parametrize("label", [explanation.KEY_LANGUAGE, explanation.KEY_OTHERS])
+@pytest.mark.parametrize("label", [explanation.KEY_LANGUAGE, explanation.KEY_ROWS, explanation.KEY_OTHERS])
 def test_gate_hides_text_that_names_an_internal_input_section(label):
     text = f"{label}に示された値によれば、6と7を掛けると42です。"
     assert gate(text, labels=[label]) == {"status": "hidden", "reason": "internal_label", "labels": [label]}
@@ -126,8 +128,29 @@ def test_gate_hides_text_that_names_an_internal_input_section(label):
 
 def test_wording_sections_are_not_internal_labels():
     labels = explanation.internal_labels({key: "" for key in explanation.SECTION_KEYS})
-    text = f"{explanation.KEY_SOURCES}と{explanation.KEY_ROWS}によれば、{explanation.KEY_QUESTION}の値6と7を掛けると42です。"
+    text = f"{explanation.KEY_SOURCES}によれば、{explanation.KEY_QUESTION}の値6と7を掛けると42です。"
     assert gate(text, labels=labels)["status"] == "confirmed"
+
+
+@pytest.mark.parametrize("instruction", [None, "回答言語の指定の原文"])
+def test_writing_step_refers_to_the_content_not_the_internal_section_names(instruction):
+    # 説明を書く Step 2 以降は内部の節の名前を引かない（引けば説明の地の文に写る。#4615）。読み方は Step 1 だけが示す。
+    # 回答言語の指定は書く言語を指す名前で、説明の内容を指さないので除く。
+    system = explanation.explanation_system(instruction, with_rows=True, with_others=True)
+    reading, writing = system.split("## Step 2:")
+    for key in explanation.INTERNAL_SECTION_KEYS:
+        if key != explanation.KEY_LANGUAGE:
+            assert key in reading, key
+            assert key not in writing, key
+    assert "行の条件" in writing
+
+
+@pytest.mark.parametrize("applicability", ["applies", "does_not_apply", "cannot_determine"])
+def test_row_facts_are_plain_sentences_with_the_condition(applicability):
+    # 行の段の判定は、行の条件の原文を含む事実の文で渡す（内部の成果物の名前・判定の値を写さない）。
+    fact = explanation.row_fact("条件の原文", applicability)
+    assert "「条件の原文」" in fact and "判定" not in fact
+    assert len({explanation.row_fact("c", value) for value in explanation.ROW_FACTS}) == len(explanation.ROW_FACTS)
 
 
 def test_gate_requires_conclusion_numbers_kana_and_no_foreign_latin_run():

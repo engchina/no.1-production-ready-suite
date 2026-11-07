@@ -17,9 +17,9 @@
   逐字で無い Latin の 3 語以上の連なりを含まない。
 - 審査済みの結論の数値（Unicode の 10 進数字の連なり。3 桁区切りを除く）がすべて説明にある。
 - 本文の出典行の印で始まる行を含まない（画面が出典行を数えて根拠に結ぶため）。
-- その呼び出しで送った入力の節の名前のうち、説明の語にしてよい節（``WORDING_KEYS``）以外の名前を、入力の原文に
-  逐字で無いのに含まない（利用者に見えない入力の構造を出典のように書かないため。#4603）。比べる名前は入力を組み立てる
-  定数そのもので、語の一覧ではない。
+- その呼び出しで送った入力の節の名前のうち、説明の語にしてよい節（``WORDING_KEYS``。利用者に見せてよい「質問」「資料の原文」）
+  以外の名前を、入力の原文に逐字で無いのに含まない（利用者に見えない入力の構造を出典のように書かないため。#4603・#4615）。
+  比べる名前は入力を組み立てる定数そのもので、語の一覧ではない。
 
 検査の前に、改行・タブのエスケープの写し（逆斜線と ``n`` / ``r`` / ``t`` の 2 文字。構造化出力の文字列の中で
 モデルが二重にエスケープしたもの）を、入力の原文に同じ写しが無いときだけ制御文字へ戻す（形式の解析。#4567）。
@@ -52,21 +52,25 @@ DEFAULT_LANGUAGE_LABEL = "日本語"
 KEY_QUESTION = "質問"
 KEY_SOURCES = "資料の原文"
 KEY_LANGUAGE = "回答言語の指定"
-# 推導が使った表の行の判定（row_conditions。#4349）。判定はコードと行の段が決め、説明の段は写すだけ。
-KEY_ROWS = "表の行の判定"
-KEY_ROW_CONDITION = "条件"
+# 推導が使った表の行の判定（row_conditions。#4349）。判定はコードと行の段が決め、説明の段は写すだけ。行ごとに、行の条件の
+# 原文とその行が質問に当てはまるかを平易な事実の文で渡す（説明が内部の成果物の名前・値を引かずに言い換えられる形。#4615）。
+KEY_ROWS = "表の行と質問の照合"
 # 同じ回答で公開した（審査が valid の）ほかの推導の結論と、その推導の原文（#4589）。結論を複数の推導に分け、ある推導が
 # ほかの推導の結論に依るとき（premises に無くても）、説明の段がほかの推導の事実を「資料に無い」と書かないよう入力に渡す。
 KEY_OTHERS = "同じ回答のほかの結論"
 KEY_CONCLUSION = "結論"
-KEY_ROW_RESULT = "判定"
 # 入力の節（explanation_input の key。この順で置く）。
 SECTION_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_LANGUAGE, KEY_ROWS, KEY_OTHERS)
-# 説明の文の語にしてよい節の名前: Step 2 が説明の書き方に使う語（質問の条件・資料の原文の値・表の行が成り立つか）。
-# ほかの節の名前（INTERNAL_SECTION_KEYS）は入力の構造を指すだけの名前なので、説明に写れば表示の門が隠す（#4603）。
-WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_ROWS)
+# 説明の文の語にしてよい節の名前: 利用者に見せてよい語（質問・資料の原文）だけ。ほかの節の名前（INTERNAL_SECTION_KEYS）は
+# 入力の構造を指すだけの名前なので、説明に写れば表示の門が隠す（#4603）。行の節も内部の名前にする（#4615）。
+WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES)
 INTERNAL_SECTION_KEYS = tuple(key for key in SECTION_KEYS if key not in WORDING_KEYS)
-ROW_RESULT_LABELS = {"applies": "成り立つ", "does_not_apply": "成り立たない", "cannot_determine": "質問から決められない"}
+# 行の段の判定ごとの、行の事実の文（{condition} は行の条件の原文）。
+ROW_FACTS = {
+    "applies": "「{condition}」の行は質問に当てはまる",
+    "does_not_apply": "「{condition}」の行は質問に当てはまらない",
+    "cannot_determine": "「{condition}」の行が質問に当てはまるかは、質問から決められない",
+}
 # 入力の原文に無い Latin の語がこの数以上連なれば、既定の言語の説明ではないとみなして隠す。
 LATIN_RUN_WORDS = 3
 _THOUSANDS_SEPARATORS = (",", "，")
@@ -80,21 +84,22 @@ def language_label(instruction: str | None) -> str:
 
 def explanation_system(instruction: str | None, *, with_rows: bool = False, with_others: bool = False) -> str:
     """``with_rows`` は入力に表の行の判定（``KEY_ROWS``）、``with_others`` は同じ回答のほかの結論（``KEY_OTHERS``）が
-    あるとき。無いときの文は変えない。"""
+    あるとき。無いときの文は変えない。Step 2 は節の名前を引かず、内容（表のどの行が質問に当てはまるか・入力に無い値）を指す
+    （節の名前が利用者の文に写らないように。#4615）。"""
     label = language_label(instruction)
     return "\n".join(
         [
             "## Step 1: 入力を読む",
             f"入力の「{KEY_QUESTION}」は利用者の質問、「{KEY_SOURCES}」は資料から引いた原文です。"
             + ("" if instruction is None else f"「{KEY_LANGUAGE}」は、質問のうち回答の言語を指定した原文です。")
-            + ("" if not with_rows else f"「{KEY_ROWS}」は、表の各行の条件が質問から成り立つかを確かめた結果です。")
+            + ("" if not with_rows else f"「{KEY_ROWS}」は、資料の表の各行が質問に当てはまるかを、行ごとに確かめた事実です。")
             + ("" if not with_others else f"「{KEY_OTHERS}」は、同じ回答で確かめたほかの結論と、その結論の資料の原文です。"),
             "",
             "## Step 2: 説明を書く",
             f"質問への答えが、質問の条件と{KEY_SOURCES}の値からどう導かれるかを、利用者に示す{label}の文で書きます。"
-            + ("" if not with_rows else f"表の行が成り立つかは「{KEY_ROWS}」のとおりに書きます。")
+            + ("" if not with_rows else "表のどの行が質問に当てはまるかは、行の条件を挙げて書きます。当てはまるかを決め直しません。")
             + "計算を含むときは、使った値と式と途中の結果を示します。"
-            f"質問と{KEY_SOURCES}" + ("" if not with_others else f"と「{KEY_OTHERS}」") + "に無い値・条件を足しません。"
+            "入力に無い値・条件を足しません。"
             "原文の数値・記号・固有名詞・SQL は原文のまま書きます。",
             "",
             "## Step 3: 出力する",
@@ -128,7 +133,7 @@ def explanation_input(
     question: str,
     sources: Sequence[str],
     instruction: str | None,
-    rows: Sequence[dict[str, str]] = (),
+    rows: Sequence[str] = (),
     others: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     value: dict[str, Any] = {KEY_QUESTION: question, KEY_SOURCES: list(sources)}
@@ -145,7 +150,7 @@ def explanation_prompt(
     question: str,
     sources: Sequence[str],
     instruction: str | None,
-    rows: Sequence[dict[str, str]] = (),
+    rows: Sequence[str] = (),
     others: Sequence[dict[str, Any]] = (),
 ) -> str:
     return json.dumps(explanation_input(question, sources, instruction, rows, others), ensure_ascii=False, indent=2)
@@ -165,9 +170,14 @@ def other_conclusions(entry: CheckedApplication, targets: Sequence[CheckedApplic
     ]
 
 
-def application_rows(entry: CheckedApplication, row_conditions: Any, others: Sequence[CheckedApplication] = ()) -> list[dict[str, str]]:
-    """推導（と ``others`` のほかの推導）が当てはめた根拠の表と審査が根拠にした表の、条件のある行の判定（行の段の結果。
-    無ければ空）。同じ表の行は 1 回。日本語の key と値だけにする。"""
+def row_fact(condition: str, applicability: str) -> str:
+    """行の条件の原文と行の段の判定から、その行が質問に当てはまるかの事実の文を作る。"""
+    return ROW_FACTS[applicability].format(condition=condition)
+
+
+def application_rows(entry: CheckedApplication, row_conditions: Any, others: Sequence[CheckedApplication] = ()) -> list[str]:
+    """推導（と ``others`` のほかの推導）が当てはめた根拠の表と審査が根拠にした表の、条件のある行の事実の文（行の段の結果。
+    無ければ空）。同じ表の行は 1 回。"""
     if row_conditions is None or getattr(row_conditions, "status", "") != "completed":
         return []
     facts = row_conditions.facts_by_evidence()
@@ -180,10 +190,10 @@ def application_rows(entry: CheckedApplication, row_conditions: Any, others: Seq
         )
     )
     return [
-        {KEY_ROW_CONDITION: str(row["condition"]), KEY_ROW_RESULT: ROW_RESULT_LABELS[row["applicability"]]}
+        row_fact(str(row["condition"]), row["applicability"])
         for evidence_id in evidence_ids
         for row in (facts.get(evidence_id) or {}).get("rows", [])
-        if row.get("condition") and row.get("applicability") in ROW_RESULT_LABELS
+        if row.get("condition") and row.get("applicability") in ROW_FACTS
     ]
 
 
