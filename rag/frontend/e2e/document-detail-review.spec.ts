@@ -454,6 +454,41 @@ test("言語資源: 現在版の索引は「最新」で詳細を閉じ、比較
   expect(comparisons).toHaveLength(0);
 });
 
+// #4597: 閉じた「公開時の完全な設定」は読み込み中を描かない（無効の query も isPending のため、閉じている間に計時が
+// 始まり、開いた直後にページを開いてからの経過時間と遅延の案内が出ていた）。開いて取得を始めたときから計時する。
+test("言語資源: 公開時の完全な設定は閉じている間は読み込み中を描かず、開いたときから経過時間を数える", async ({ page }) => {
+  await page.clock.install();
+  let releaseSnapshotResponse: () => void = () => {};
+  const held = new Promise<void>(resolve => { releaseSnapshotResponse = resolve; });
+  const { panel, details } = await openLanguagePackState(page, [servingUse("release-2", 2, "current")]);
+  // openLanguagePackState の route より後に登録した route が先に当たる。応答は開いた後に返す。
+  await page.route("**/api/settings/language-pack/releases/release-2", async route => {
+    await held;
+    await route.fulfill(ok(releaseSnapshot("release-2", 2)));
+  });
+  await expect(details).toHaveAttribute("data-state", "closed");
+  await expect(panel.locator('[aria-busy="true"]')).toHaveCount(0);
+  // 閉じたまま時間が経っても、読み込み中の表示（と計時）は始まらない。
+  await page.clock.fastForward(20_000);
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  const snapshot = details.getByTestId("document-language-pack-snapshot");
+  await expect(snapshot).toHaveAttribute("data-state", "closed");
+  await expect(panel.locator('[aria-busy="true"]')).toHaveCount(0);
+  await page.clock.fastForward(20_000);
+  await snapshot.getByTestId("document-language-pack-snapshot-toggle").click();
+  const loading = snapshot.locator('section[aria-busy="true"]');
+  await expect(loading).toHaveCount(1);
+  await expect(loading.getByLabel("経過時間 00:00")).toBeVisible();
+  await expect(loading.locator('[data-processing-slow="true"]')).toHaveCount(0);
+  await expect(loading).not.toContainText("通常より時間がかかっています");
+  releaseSnapshotResponse();
+  await expect(snapshot.getByRole("textbox", { name: "公開時の完全な設定 v2" })).toHaveAttribute("readonly");
+  await expect(panel.locator('[aria-busy="true"]')).toHaveCount(0);
+  // 閉じたら中身の読み込み中は残らない（取得済みなので開き直しても読み込み中を出さない）。
+  await snapshot.getByTestId("document-language-pack-snapshot-toggle").click();
+  await expect(panel.locator('[aria-busy="true"]')).toHaveCount(0);
+});
+
 test("言語資源: 取込設定が同じ版は「最新（内容は同じ）」とし、差分の確認はできるが再処理は出さない", { tag: "@responsive" }, async ({ page }) => {
   const { panel, details, comparisons } = await openLanguagePackState(page, [servingUse("release-1", 1, "equivalent")]);
   await expectBadge(panel, "最新（内容は同じ）", "neutral");
