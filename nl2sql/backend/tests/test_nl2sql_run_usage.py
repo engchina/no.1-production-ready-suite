@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from pr_backend_core.observability.model_usage import RunModelUsage
+from pr_backend_core.observability.model_usage import ModelTokenUsage, RunModelUsage
 from test_enterprise_ai_client import _direct_settings, _mock_http
 from test_health import (
     _FakeOracleDb,
@@ -93,6 +93,16 @@ def test_direct_job_records_the_llm_usage_of_the_run(monkeypatch: pytest.MonkeyP
 
     assert item.usage == RunModelUsage(
         models=["openai.gpt-oss-120b"],
+        # モデルごとの内訳（#4581）。
+        by_model=[
+            ModelTokenUsage(
+                model="openai.gpt-oss-120b",
+                requests=1,
+                input_tokens=1200,
+                output_tokens=80,
+                total_tokens=1280,
+            )
+        ],
         requests=1,
         input_tokens=1200,
         output_tokens=80,
