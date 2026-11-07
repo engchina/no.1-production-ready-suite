@@ -82,14 +82,14 @@ def _replay(name: str, prompt: str) -> dict[str, Any]:
     return json.loads(text)
 
 
-def _derivation(prompt: str) -> dict[str, Any]:
+def _derivation(prompt: str, requirement: str) -> dict[str, Any]:
     mapping = _placeholders(prompt)
     rows = [mapping[f"{{row:{number}}}"] for number in range(1, 10)]
     return {
         "answer_parts": [
             {
                 "request_id": "Q1",
-                "requirement": "合計点と区分",
+                "requirement": requirement,
                 "answer": {
                     "kind": "answer",
                     "basis": {"unit_ids": [*rows, mapping["{rule}"]]},
@@ -113,6 +113,14 @@ def _derivation(prompt: str) -> dict[str, Any]:
     }
 
 
+# 作り直しでモデルが書いた識別子の形の文（実モデルの確認で不足の文に出た形の合成）。
+IDENTIFIER_REQUIREMENT = "calculation_and_classification"
+
+
+def _first_requirement(name: str) -> str:
+    return FIXTURE["outputs"][name]["answer_parts"][0]["requirement"]
+
+
 def run(name: str, *, repair: str = "derive", valid: bool = True):
     calls: list[tuple[str, str]] = []
 
@@ -128,9 +136,12 @@ def run(name: str, *, repair: str = "derive", valid: bool = True):
         # 作り直しの契約は source 型を受けない。
         with pytest.raises(ValidationError):
             schema.model_validate(_replay(name, prompt))
+        # 作り直しの要点の requirement は、1 回目の出力の同じ要求の requirement の写しだけを受ける。
+        with pytest.raises(ValidationError):
+            schema.model_validate(_derivation(prompt, IDENTIFIER_REQUIREMENT))
         if repair == "invalid":
             raise LlmRunawayOutput("合成の反復", "runaway_repetition", None)
-        return schema.model_validate(_derivation(prompt))
+        return schema.model_validate(_derivation(prompt, _first_requirement(name)))
 
     def unexpected(*args, **kwargs):
         raise AssertionError("追加の検索・画像の呼び出しは不要")
@@ -169,6 +180,16 @@ def test_source_only_derivation_is_regenerated_without_source_and_publishes_the_
     assert round_["timing"]["answer_part_role_repair"]["requests"] == ["Q1"]
     assert round_["timing"]["generation_calls"] == 2
     assert [part["result_kind"] for part in round_["draft"]["answer_parts"]] == ["derived"]
+    assert [part["text"] for part in round_["draft"]["answer_parts"]] == [_first_requirement(name)]
+
+
+@pytest.mark.parametrize("name", sorted(FIXTURE["outputs"]))
+def test_unpublished_regenerated_derivation_names_the_original_requirement_in_the_gap(name):
+    """作り直しの導出が審査で公開されないとき、不足の文は 1 回目の要求の文で示す（識別子を出さない）。"""
+    response, _calls = run(name, valid=False)
+    assert DERIVED not in response.answer_text
+    assert f"『{_first_requirement(name)}』" in response.answer_text
+    assert IDENTIFIER_REQUIREMENT not in response.answer_text
 
 
 @pytest.mark.parametrize("name", sorted(FIXTURE["outputs"]))

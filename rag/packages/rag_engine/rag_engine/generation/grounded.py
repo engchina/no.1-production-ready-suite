@@ -7021,7 +7021,14 @@ def run_round(
             )
             role_repair_prompt = prompt + "\n\n" + role_repair_part + json.dumps({"source_only_requests": source_only}, ensure_ascii=False)
             derivation_model = generation_language_schema(
-                unit_generation_model(generation_base, unit_catalog, direct_source=False), question
+                unit_generation_model(
+                    generation_base,
+                    unit_catalog,
+                    direct_source=False,
+                    # 要求の名前（不足の文に出る）は 1 回目の出力の requirement の写しだけを受ける。
+                    requirements=[part.requirement for part in getattr(draft, "answer_parts", [])],
+                ),
+                question,
             )
             try:
                 if image_paths and not image_fallback:

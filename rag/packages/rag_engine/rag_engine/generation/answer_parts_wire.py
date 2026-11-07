@@ -46,11 +46,15 @@ def _answer_before_coverage(schema: dict[str, Any]) -> None:
         schema["required"] = [name for name in properties if name in schema["required"]]
 
 
-def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog, *, direct_source: bool = True) -> type[BaseModel]:
+def answer_parts_model(
+    base: type[BaseModel], catalog: SentUnitCatalog, *, direct_source: bool = True, requirements: Collection[str] = ()
+) -> type[BaseModel]:
     """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。
 
     ``direct_source=False`` は source 型を受けない契約（導出が要る質問で要点がすべて source だった出力の作り直し。
     #4586）。原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
+    ``requirements`` を渡すと、要点の requirement はその文の写しだけを受ける（作り直しでは 1 回目の出力の要点の文。
+    不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
     """
     source = catalog.selection_model()
     direct = create_model(
@@ -78,8 +82,10 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog, *, direc
         __config__=ConfigDict(extra="forbid"),
         request_id=(str, Field(description="元の request_units の id。背景は答えない。")),
         requirement=(
-            str,
-            Field(
+            cast(Any, Literal)[tuple(dict.fromkeys(requirements))] if requirements else str,
+            Field(description="前回の出力の要点の requirement から、この要点で答える要求をそのまま選ぶ。")
+            if requirements
+            else Field(
                 min_length=1, max_length=600, description="この要点で答える質問の要求。必要な粒度で複合要求を分け、任意補足を必須にしない。"
             ),
         ),
