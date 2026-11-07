@@ -31,8 +31,7 @@ from rag_engine.models.llm import GroundedApplication
 FIXTURES = Path(__file__).parent / "fixtures"
 RECORDED = json.loads((FIXTURES / "application_stage_models_grok_recorded.json").read_text(encoding="utf-8"))
 CASES = {
-    case["case_id"]: case
-    for case in json.loads((FIXTURES / "application_reason_recorded.json").read_text(encoding="utf-8"))["case_inputs"]
+    case["case_id"]: case for case in json.loads((FIXTURES / "application_reason_recorded.json").read_text(encoding="utf-8"))["case_inputs"]
 }
 STEP_MODEL = RECORDED["model"]
 ANSWER_MODEL = "synthetic-answer-model"
@@ -261,9 +260,7 @@ def test_audit_stage_input_budget_uses_the_stage_model(monkeypatch: pytest.Monke
     from rag_engine.generation import application_review
 
     measured: list[str | None] = []
-    monkeypatch.setattr(
-        application_review, "ensure_model_input", lambda *args, provider_id=None, **kwargs: measured.append(provider_id)
-    )
+    monkeypatch.setattr(application_review, "ensure_model_input", lambda *args, provider_id=None, **kwargs: measured.append(provider_id))
     Wire(monkeypatch, {AUDIT: RECORDED["stage_a"][0]["response"], REASON: responses_body(ANSWER_MODEL, SYNTHETIC_REASON)})
 
     review("source-positive", "audit")
@@ -310,9 +307,7 @@ def test_reason_stage_input_budget_uses_the_stage_model(monkeypatch: pytest.Monk
     from rag_engine.generation import application_reason
 
     measured: list[str | None] = []
-    monkeypatch.setattr(
-        application_reason, "ensure_model_input", lambda *args, provider_id=None, **kwargs: measured.append(provider_id)
-    )
+    monkeypatch.setattr(application_reason, "ensure_model_input", lambda *args, provider_id=None, **kwargs: measured.append(provider_id))
     slot = RECORDED["stage_b"][0]
     Wire(monkeypatch, {AUDIT: responses_body(ANSWER_MODEL, slot["stage_a"]), REASON: slot["response"]})
 

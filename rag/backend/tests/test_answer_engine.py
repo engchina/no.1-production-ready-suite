@@ -1127,7 +1127,8 @@ async def test_answer_engine_attaches_evidence_images_for_vision_answer_model(
             Settings(
                 _env_file=None,
                 oci_enterprise_ai_default_text_model="text-model",
-                **_ANSWER_MODEL_ONLY_STEPS,
+                rag_application_audit_model="",
+                rag_application_reason_model="",
             ),
             None,
             "text-model",
