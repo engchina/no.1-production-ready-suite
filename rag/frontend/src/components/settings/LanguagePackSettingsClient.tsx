@@ -135,11 +135,11 @@ export function LanguagePackSettingsClient() {
       {data.current_release ? <div className="space-y-3">
         {data.outdated_documents ? <Banner severity="warning" title={t("settings.language.release.differentCount", { count: data.outdated_documents })}>
           <p>{t("settings.language.release.differentHelp")}</p>
-          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
+          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_status=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
         </Banner> : null}
         {data.unrecorded_documents ? <Banner severity="info" title={t("settings.language.release.unrecordedCount", { count: data.unrecorded_documents })}>
           <p>{t("settings.language.release.unrecordedHelp")}</p>
-          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
+          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_status=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
         </Banner> : null}
       </div> : null}
       <Card>

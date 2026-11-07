@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.api.errors import AnswerModelNotRegisteredError
 from app.api.routes import chat as chat_route
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as profile_route
@@ -40,11 +41,9 @@ def test_profile_selects_registered_model_without_mutating_global_defaults() -> 
     assert effective.oci_enterprise_ai_default_text_model == "model-c"
     assert original.oci_enterprise_ai_default_text_model == "model-a"
     assert effective.oci_enterprise_ai_default_vision_model == "model-b"
-    assert (
-        search_route._answer_model_id(
-            SearchRequest(query="操作方法", model_id="model-a"), effective
-        )
-        == "model-a"
+    search_route.ensure_answer_models_registered(["model-a"], effective)
+    assert search_route._answer_model_id(SearchRequest(query="操作方法", model_id="model-a")) == (
+        "model-a"
     )
     assert (
         chat_route._resolve_compare_models(ChatMessageRequest(content="操作方法"), effective)[0][
@@ -78,6 +77,23 @@ def test_removed_model_has_actionable_error_but_does_not_block_retrieval_only() 
         settings(), config, apply_answer_model=False
     )
     assert effective.oci_enterprise_ai_default_text_model == "model-a"
+
+
+@pytest.mark.parametrize("value", [None, "", "   "], ids=["none", "empty", "blank"])
+def test_unspecified_request_model_uses_default(value: str | None) -> None:
+    """未指定の model_id は既定のテキストモデル（None）のまま（#4582）。"""
+    assert search_route._answer_model_id(SearchRequest(query="操作方法", model_id=value)) is None
+
+
+def test_unregistered_request_models_raise_coded_422() -> None:
+    """未登録の明示は既定へ切り替えず 422（#4582）。既定の 2 つは登録モデルに無くても受け付ける。"""
+    effective = settings().model_copy(update={"oci_enterprise_ai_models": []})
+    search_route.ensure_answer_models_registered(["model-a", "model-b"], effective)
+    with pytest.raises(AnswerModelNotRegisteredError) as raised:
+        search_route.ensure_answer_models_registered(["model-a", "removed-model"], effective)
+    assert raised.value.status_code == 422
+    assert raised.value.code == "enterprise_ai_model_not_registered"
+    assert "removed-model" in str(raised.value.detail)
 
 
 def test_candidates_only_return_public_model_metadata(monkeypatch: pytest.MonkeyPatch) -> None:

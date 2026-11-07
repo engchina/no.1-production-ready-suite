@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from fastapi import HTTPException
+from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 
 from app.rag.answer_failure import DOCUMENT_REPROCESS_REQUIRED_CODE
 
@@ -43,6 +44,18 @@ class DocumentRecipeConfigInvalidError(CodedApiError):
                 "処理レシピの設定を現在の選択肢で保存し直してください。" + suffix
             ),
         )
+
+
+class AnswerModelNotRegisteredError(CodedApiError):
+    """要求で明示した回答のモデルが登録されていない（422。#4582）。
+
+    既定のモデルへ暗黙に切り替えない（#3240）。code と文は共通のモデル設定の失敗と同じ。
+    """
+
+    code = EnterpriseAiModelNotRegisteredError.code
+
+    def __init__(self, model_id: str) -> None:
+        super().__init__(status_code=422, detail=str(EnterpriseAiModelNotRegisteredError(model_id)))
 
 
 class DocumentFileMissingError(CodedApiError):

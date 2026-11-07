@@ -42,6 +42,7 @@ from app.api.routes.search import (
     _resolve_query_context,
     _sse_event,
     answer_model_choices,
+    ensure_answer_models_registered,
     ensure_search_answer_profile_has_knowledge_bases,
     ensure_search_answer_profile_knowledge_bases_permitted,
     registered_answer_model_choices,
@@ -509,6 +510,9 @@ async def stream_message(
     settings = get_settings()
     _require_chat_enabled(settings)
     enforce_rate_limit("search", http_request)
+    # 比較のモデルに未登録の ID があれば、質問を保存する前に 422 にする（落として既定のモデルで
+    # 答えない。#4582）。
+    ensure_answer_models_registered(request.model_ids, settings)
     oracle = OracleClient()
     conversation = await _load_sendable_conversation(oracle, conversation_id)
     context = current_audit_request_context()
@@ -585,21 +589,22 @@ async def _load_sendable_conversation(
 def _resolve_compare_models(
     request: ChatMessageRequest, settings: Settings
 ) -> list[dict[str, str]]:
-    """比較対象の OCI モデル(model_id + label)を解決する。上限は設定値で抑える。"""
+    """比較対象の OCI モデル(model_id + label)を解決する。上限は設定値で抑える。
+
+    ``model_ids`` の登録は送信の最初に確かめ済み（`ensure_answer_models_registered`。#4582）。
+    未指定なら有効な既定のテキストモデル 1 系統。
+    """
     catalog = {
         choice["model_id"]: choice["display_name"]
         for choice in registered_answer_model_choices(settings)
     }
-    default_model = enterprise_ai_default_model_id(settings)
     if request.model_ids:
         selected = [
             {"model_id": model_id, "label": catalog.get(model_id, model_id)}
             for model_id in request.model_ids
-            if model_id in catalog
         ]
     else:
-        selected = []
-    if not selected:
+        default_model = enterprise_ai_default_model_id(settings)
         label = catalog.get(default_model, default_model) or "既定モデル"
         selected = [{"model_id": default_model, "label": label}]
     return selected[: settings.rag_chat_max_compare_models]

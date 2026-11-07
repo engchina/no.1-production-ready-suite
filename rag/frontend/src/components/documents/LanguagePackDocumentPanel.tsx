@@ -1,53 +1,108 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { RefreshCw } from "lucide-react";
-import { Button, Card, CardContent, CardHeader, CardTitle, Banner, FormStatus, SelectField, Skeleton, TextareaField, TimedLoadingState, useConfirm, StatusBadge } from "@production-ready/ui";
+import { useState, type ReactNode } from "react";
+import { CircleCheck, CircleHelp, Hourglass, RefreshCw, type LucideIcon } from "lucide-react";
+import { Banner, Button, Disclosure, FormStatus, SelectField, Skeleton, StatusBadge, TextareaField, TimedLoadingState, useConfirm, type StatusVariant } from "@production-ready/ui";
 
-import { api, type IngestionJobPhase, type LanguagePackDocumentUse, type LanguagePackRelation } from "@/lib/api";
+import { api, type DocumentRecipeView, type IngestionJobPhase, type LanguagePackDocumentUse } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackComparison } from "@/components/settings/LanguagePackHistoryCard";
 import { formatDateTime } from "@/lib/format";
 import { phaseLabelKey } from "./DocumentWorkspace.logic";
-import { languagePackPanelState, languagePackSummaryStatus, type LanguagePackBuildTarget } from "./LanguagePackDocumentPanel.logic";
+import {
+  languagePackDisplayVersion,
+  languagePackNeedsAction,
+  languagePackPanelState,
+  languagePackStatus,
+  languagePackSummaryStatus,
+  type LanguagePackBuildNotice,
+  type LanguagePackPanelState,
+  type LanguagePackStatus,
+} from "./LanguagePackDocumentPanel.logic";
 import { ALL_START_PHASES, UNREADABLE_START_PHASES, isUnreadableReleaseError, selectablePhase } from "./LanguagePackUnreadable.logic";
 
-export function LanguagePackRelationBadge({ relation }: { relation: LanguagePackRelation }) {
-  return <StatusBadge variant={relation === "different" ? "warning" : relation === "unrecorded" ? "neutral" : "success"} label={t(`settings.language.release.relation.${relation}`)} icon={false} />;
+/**
+ * 状態ごとのバッジの形。対応の要らない状態（最新・未構築）は控えめな neutral、対応が要る状態は warning、
+ * 構築中は info。色だけにしないよう、状態ごとにアイコンも変える（デザインシステム README §4「StatusBadge」）。
+ */
+const STATUS_BADGE: Record<LanguagePackStatus, { variant: StatusVariant; icon: LucideIcon | true }> = {
+  current: { variant: "neutral", icon: CircleCheck },
+  equivalent: { variant: "neutral", icon: CircleCheck },
+  different: { variant: "warning", icon: true },
+  unrecorded: { variant: "warning", icon: CircleHelp },
+  building: { variant: "info", icon: Hourglass },
+  not_built: { variant: "neutral", icon: true },
+};
+
+export function LanguagePackStatusBadge({ status }: { status: LanguagePackStatus }) {
+  const badge = STATUS_BADGE[status];
+  return <StatusBadge variant={badge.variant} icon={badge.icon} label={t(`settings.language.release.status.${status}`)} />;
 }
 
-/** 一覧の 1 つのラベル。未構築（索引なし）と版未記録（索引はあるが判定不可）を分ける。 */
+/** 文書インデックスの列の 1 つのラベル（有効なレシピの状態を 1 つにまとめる）。 */
 export function LanguagePackUseSummary({ use }: { use?: LanguagePackDocumentUse | null }) {
-  const status = languagePackSummaryStatus(use);
-  if (status === "notBuilt") return <StatusBadge variant="neutral" label={t("settings.language.release.notBuiltLabel")} />;
-  return <StatusBadge variant={status === "different" ? "warning" : status === "unrecorded" ? "neutral" : "success"} label={t(`settings.language.release.relation.${status}`)} />;
+  return <LanguagePackStatusBadge status={languagePackSummaryStatus(use)} />;
 }
 
-export function LanguagePackDocumentPanel(props: { documentId: string; fileName: string; use?: LanguagePackDocumentUse | null; recipe: import("@/lib/api").DocumentRecipeView | null }) {
-  if (!props.use || !props.recipe) return null;
-  return <RecipeLanguagePackPanel {...props} use={props.use} recipe={props.recipe} />;
+/** 構築中の案内の文（ページの状態メッセージの枠の本文）。 */
+export function languagePackBuildText(notice: LanguagePackBuildNotice): string {
+  const target = notice.version === null ? t("settings.language.release.buildingUnknownVersion") : t("settings.language.release.buildingVersion", { version: notice.version });
+  return `${target}${t(notice.keepsActive ? "settings.language.release.buildingKeepActive" : "settings.language.release.buildingFirst")}`;
 }
 
-function TargetVersion({ target }: { target: LanguagePackBuildTarget }) {
-  return <p>{target.version === null ? t("settings.language.release.targetVersionUnknown") : t("settings.language.release.targetVersion", { version: target.version })}</p>;
+/**
+ * 処理レシピの区画に置く、選んだレシピの言語資源の要約の行（#4566）。
+ * 「言語資源 v{n} [状態]」の 1 行を全員に出し、言語資源の設定の権限を持つ利用者には「詳細」を足す。
+ * 権限の無い利用者には操作を描かず、対応が要るときだけ管理者への依頼を示す（UX 契約 messaging §3.4.1）。
+ */
+export function LanguagePackRecipeSummary({ documentId, fileName, use, recipe, canManage }: { documentId: string; fileName: string; use?: LanguagePackDocumentUse | null; recipe: DocumentRecipeView; canManage: boolean }) {
+  if (!use) return null;
+  const state = languagePackPanelState(use, recipe.recipe_id);
+  const status = languagePackStatus(state);
+  const version = languagePackDisplayVersion(state);
+  const needsAction = languagePackNeedsAction(status);
+  return <div className="mt-3 space-y-1 border-t border-border pt-3" data-testid="document-language-pack" data-state={state.kind} data-status={status}>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="text-sm font-medium text-fg">{version === null ? t("settings.language.release.summary") : t("settings.language.release.summaryVersion", { version })}</span>
+      <LanguagePackStatusBadge status={status} />
+      {!canManage && needsAction ? <span className="text-xs text-fg-muted" data-testid="document-language-pack-ask-admin">{t("settings.language.release.askAdmin")}</span> : null}
+    </div>
+    {canManage && state.kind !== "notBuilt" ? <LanguagePackDetails key={`${recipe.recipe_id}:${state.kind}:${needsAction}`} documentId={documentId} fileName={fileName} use={use} recipe={recipe} state={state} defaultOpen={needsAction} /> : null}
+  </div>;
 }
 
-function RecipeLanguagePackPanel({ documentId, fileName, use, recipe }: { documentId: string; fileName: string; use: LanguagePackDocumentUse; recipe: import("@/lib/api").DocumentRecipeView }) {
+function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="min-w-0">
+    <dt className="text-xs text-fg-muted">{label}</dt>
+    <dd className="mt-0.5 break-words text-sm text-fg">{children}</dd>
+  </div>;
+}
+
+/** 公開時の完全な設定。開いたときだけ読む（自動で開いた「詳細」で読み込みを増やさない）。 */
+function ReleaseSnapshot({ id, releaseId, label }: { id: string; releaseId: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const snapshot = useQuery({ queryKey: ["language-pack-release", releaseId], queryFn: () => api.getLanguagePackRelease(releaseId), enabled: open, retry: false });
+  return <Disclosure variant="card" surface="sunken" size="sm" summary={label} open={open} onOpenChange={setOpen} summaryProps={{ "data-testid": `${id}-toggle` }} data-testid={id}>
+    {snapshot.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey={`document-language-release:${releaseId}`}><Skeleton className="h-40 w-full" /></TimedLoadingState>
+      : snapshot.isError ? isUnreadableReleaseError(snapshot.error) ? <Banner severity="warning">{t("settings.language.release.unreadableSnapshot")}</Banner> : <ApiErrorState error={snapshot.error} fallback={t("settings.language.history.loadError")} onRetry={() => void snapshot.refetch()} />
+      : <TextareaField id={`${id}-value`} label={label} labelHidden rows={8} width="full" readOnly value={JSON.stringify(snapshot.data.effective, null, 2)} />}
+  </Disclosure>;
+}
+
+function LanguagePackDetails({ documentId, fileName, use, recipe, state, defaultOpen }: { documentId: string; fileName: string; use: LanguagePackDocumentUse; recipe: DocumentRecipeView; state: Exclude<LanguagePackPanelState, { kind: "notBuilt" }>; defaultOpen: boolean }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
-  const [showSnapshot, setShowSnapshot] = useState<string | null>(null);
+  const [open, setOpen] = useState(defaultOpen);
   const [review, setReview] = useState<string | null>(null);
   const [phase, setPhase] = useState<IngestionJobPhase | "">("");
-  const state = languagePackPanelState(use, recipe.recipe_id);
   const active = "active" in state ? state.active : null;
   const target = "target" in state ? state.target : null;
-  // 比較は記録済みの版どうしだけ（使用中 → 構築の対象、構築中でなければ使用中 → 現在版）。
-  const pair = state.kind === "built" || state.kind === "differentVersionBuild" ? state.comparison : null;
+  // 比較は記録済みの別の版どうしだけ（使用中 → 構築の対象、構築中でなければ使用中 → 現在版）。現在版を使う索引は比べない。
+  const pair = state.kind === "differentVersionBuild" || (state.kind === "built" && state.relation !== "current") ? state.comparison : null;
   // 構築中でなく使用版を判定できない索引は、差分を出さずに再処理の判断だけを残す。
   const reviewable = pair !== null || (state.kind === "unrecorded" && target === null);
   const reviewKey = `${recipe.recipe_id}:${state.kind}:${active?.chunk_set_id ?? ""}:${pair ? `${pair.beforeId}>${pair.afterId}` : ""}`;
   const reviewed = reviewable && review === reviewKey;
-  const snapshot = useQuery({ queryKey: ["language-pack-release", showSnapshot], queryFn: () => api.getLanguagePackRelease(showSnapshot!), enabled: Boolean(showSnapshot), retry: false });
   const comparison = useQuery({ queryKey: ["language-pack-comparison", pair?.beforeId, pair?.afterId], queryFn: () => api.compareLanguagePackReleases(pair!.beforeId, pair!.afterId), enabled: reviewed && pair !== null, retry: false });
   // 比較元の版を現在の契約で読めない（409）ときは比較できないが、ファイル準備か抽出からの再処理で作り直せる。
   const unreadable = comparison.isError && isUnreadableReleaseError(comparison.error);
@@ -60,50 +115,26 @@ function RecipeLanguagePackPanel({ documentId, fileName, use, recipe }: { docume
     const ok = await confirm({ title: t("settings.language.release.reprocessTitle"), description: t("settings.language.release.reprocessConfirm", { fileName, recipe: t("documents.recipes.name", { slot: recipe.slot_no }), version: use.current_version, phase: t(phaseLabelKey(startPhase)) }), confirmLabel: t("flow.reprocess.confirm"), tone: "warning" });
     if (ok) enqueue.mutate(startPhase);
   };
-  const targetSnapshotButton = target ? <Button className="mt-3" variant="secondary" size="sm" onClick={() => setShowSnapshot(target.releaseId)}>{t("settings.language.release.targetSnapshot")}</Button> : null;
-  return <Card data-testid="document-language-pack" data-state={state.kind}>
-    <CardHeader><CardTitle>{t("settings.language.release.usedVersion")}</CardTitle></CardHeader>
-    <CardContent className="space-y-4">
-      <p className="text-sm">{t("documents.recipes.name", { slot: recipe.slot_no })} · {t("settings.language.release.current", { version: use.current_version })}</p>
-      {active ? <div className="flex flex-wrap items-center gap-3">
-        <span>{t("settings.language.release.activeIndex")} {state.kind === "unrecorded" ? t("settings.language.release.unrecordedActive") : `v${active.version}`}</span>
-        {state.kind === "unrecorded" ? null : <>
-          <LanguagePackRelationBadge relation={active.relation} />
-          {active.release_id ? <Button size="sm" variant="secondary" onClick={() => setShowSnapshot(active.release_id)}>{t("settings.language.release.snapshot")}</Button> : null}
-        </>}
-      </div> : <p>{t("settings.language.release.notBuilt")}</p>}
-      {active?.built_at ? <p className="text-xs text-fg-muted">{t("settings.language.release.builtAt")} {formatDateTime(active.built_at)}</p> : null}
-      {active?.job_id ? <p className="break-all text-xs text-fg-muted">{t("settings.language.release.job")} {active.job_id}</p> : null}
-      {state.kind === "firstBuild" ? <Banner severity="info" title={t("settings.language.release.firstBuild")}>
-        <TargetVersion target={state.target} />
-        <p>{t("settings.language.release.firstBuildHelp")}</p>
-        {targetSnapshotButton}
-      </Banner> : null}
-      {state.kind === "sameVersionBuild" ? <Banner severity="info" title={t("settings.language.release.sameVersionBuilding")}>
-        <TargetVersion target={state.target} />
-        <p>{t("settings.language.release.sameVersionHelp")}</p>
-      </Banner> : null}
-      {state.kind === "differentVersionBuild" ? <Banner severity="info" title={t("settings.language.release.building")}>
-        <TargetVersion target={state.target} />
-        <p>{t("settings.language.release.keepActive")}</p>
-        {targetSnapshotButton}
-      </Banner> : null}
-      {state.kind === "unrecorded" && state.target ? <Banner severity="info" title={t("settings.language.release.unrecordedBuilding")}>
-        <TargetVersion target={state.target} />
-        <p>{t("settings.language.release.unrecordedBuildingHelp")}</p>
-        {targetSnapshotButton}
-      </Banner> : null}
-      {showSnapshot ? snapshot.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-release"><Skeleton className="h-40 w-full" /></TimedLoadingState> : snapshot.isError ? isUnreadableReleaseError(snapshot.error) ? <Banner severity="warning">{t("settings.language.release.unreadableSnapshot")}</Banner> : <ApiErrorState error={snapshot.error} fallback={t("settings.language.history.loadError")} onRetry={() => void snapshot.refetch()} /> : <TextareaField id={`recipe-${recipe.recipe_id}-language-snapshot`} label={`${t("settings.language.release.snapshot")} v${snapshot.data.version}`} rows={6} width="full" readOnly value={JSON.stringify(snapshot.data.effective, null, 2)} /> : null}
-      {reviewable ? <div><Button variant="secondary" onClick={() => setReview(reviewKey)}>{t(pair ? "settings.language.release.review" : "settings.language.release.reviewReprocess")}</Button></div> : null}
-      {reviewed && !pair ? <Banner severity="warning" title={t("settings.language.release.unrecordedActive")}>{t("settings.language.release.unrecordedHelp")}</Banner> : null}
-      {reviewed && pair ? comparison.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-diff"><Skeleton className="h-20 w-full" /></TimedLoadingState> : comparison.isError ? unreadable ? <Banner severity="warning" title={t("settings.language.release.unreadableTitle")}>{t("settings.language.release.unreadableHelp")}</Banner> : <ApiErrorState error={comparison.error} fallback={t("settings.language.history.loadError")} onRetry={() => void comparison.refetch()} /> : <LanguagePackComparison comparison={comparison.data} /> : null}
-      {canReprocess ? <>
-        <SelectField id={`recipe-${recipe.recipe_id}-language-phase`} label={t("settings.language.release.startPhase")} value={startPhase} required options={[{ value: "", label: t("settings.language.release.selectPhase") }, ...(unreadable ? UNREADABLE_START_PHASES : ALL_START_PHASES).map((value) => ({ value, label: t(phaseLabelKey(value)) }))]} onValueChange={(value) => setPhase(value as IngestionJobPhase)} />
-        <p className="text-xs text-fg-muted">{t("settings.language.release.processingHelp")}</p>
-        <Button variant="secondary" icon={RefreshCw} disabled={!startPhase || processing || (comparison.isError && !unreadable) || comparison.isFetching} loading={enqueue.isPending} onClick={() => void execute()}>{t("flow.reprocess.confirm")}</Button>
-      </> : null}
-      {enqueue.isError ? <ApiErrorState error={enqueue.error} fallback={t("settings.language.saveError")} onRetry={() => { void qc.invalidateQueries({ queryKey: ["documents", documentId] }); setReview(null); enqueue.reset(); }} /> : null}
-      {enqueue.isSuccess ? <FormStatus tone="success" message={t("settings.language.release.queued")} /> : null}
-    </CardContent>
-  </Card>;
+  const recorded = state.kind !== "unrecorded" && state.kind !== "firstBuild" && active?.release_id ? active : null;
+  return <Disclosure variant="plain" size="sm" summary={t("settings.language.release.detailsToggle")} open={open} onOpenChange={setOpen} summaryProps={{ "data-testid": "document-language-pack-details-toggle" }} data-testid="document-language-pack-details" contentClassName="space-y-4 pt-2">
+    <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+      <Fact label={t("settings.language.release.activeIndex")}>{active ? state.kind === "unrecorded" ? t("settings.language.release.unrecordedActive") : `v${active.version}` : t("settings.language.release.notBuilt")}</Fact>
+      {state.kind === "built" ? <Fact label={t("settings.language.release.relationLabel")}>{t(`settings.language.release.relation.${state.relation}`)}</Fact> : null}
+      {target ? <Fact label={t("settings.language.release.targetVersionLabel")}>{target.version === null ? t("settings.language.release.versionUnknown") : `v${target.version}`}</Fact> : null}
+      <Fact label={t("settings.language.release.currentVersionLabel")}>{`v${use.current_version}`}</Fact>
+      {active?.built_at ? <Fact label={t("settings.language.release.builtAt")}><span className="tnum">{formatDateTime(active.built_at)}</span></Fact> : null}
+      {active?.job_id ? <Fact label={t("settings.language.release.job")}><span className="break-all font-mono text-xs">{active.job_id}</span></Fact> : null}
+    </dl>
+    {recorded?.release_id ? <ReleaseSnapshot id="document-language-pack-snapshot" releaseId={recorded.release_id} label={t("settings.language.release.snapshotVersion", { version: recorded.version ?? "" })} /> : null}
+    {target && target.releaseId !== recorded?.release_id ? <ReleaseSnapshot id="document-language-pack-target-snapshot" releaseId={target.releaseId} label={target.version === null ? t("settings.language.release.targetSnapshotUnknown") : t("settings.language.release.targetSnapshotVersion", { version: target.version })} /> : null}
+    {reviewable ? <div><Button variant="secondary" size="sm" onClick={() => setReview(reviewKey)}>{t(pair ? "settings.language.release.review" : "settings.language.release.reviewReprocess")}</Button></div> : null}
+    {reviewed && !pair ? <Banner severity="warning" title={t("settings.language.release.unrecordedActive")}>{t("settings.language.release.unrecordedHelp")}</Banner> : null}
+    {reviewed && pair ? comparison.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-diff"><Skeleton className="h-20 w-full" /></TimedLoadingState> : comparison.isError ? unreadable ? <Banner severity="warning" title={t("settings.language.release.unreadableTitle")}>{t("settings.language.release.unreadableHelp")}</Banner> : <ApiErrorState error={comparison.error} fallback={t("settings.language.history.loadError")} onRetry={() => void comparison.refetch()} /> : <LanguagePackComparison comparison={comparison.data} /> : null}
+    {canReprocess ? <div className="space-y-3">
+      <SelectField id={`recipe-${recipe.recipe_id}-language-phase`} label={t("settings.language.release.startPhase")} value={startPhase} required width="md" options={[{ value: "", label: t("settings.language.release.selectPhase") }, ...(unreadable ? UNREADABLE_START_PHASES : ALL_START_PHASES).map((value) => ({ value, label: t(phaseLabelKey(value)) }))]} onValueChange={(value) => setPhase(value as IngestionJobPhase)} helper={t("settings.language.release.processingHelp")} />
+      <Button variant="secondary" icon={RefreshCw} disabled={!startPhase || processing || (comparison.isError && !unreadable) || comparison.isFetching} loading={enqueue.isPending} onClick={() => void execute()}>{t("flow.reprocess.confirm")}</Button>
+    </div> : null}
+    {enqueue.isError ? <ApiErrorState error={enqueue.error} fallback={t("settings.language.saveError")} onRetry={() => { void qc.invalidateQueries({ queryKey: ["documents", documentId] }); setReview(null); enqueue.reset(); }} /> : null}
+    {enqueue.isSuccess ? <FormStatus tone="success" message={t("settings.language.release.queued")} /> : null}
+  </Disclosure>;
 }

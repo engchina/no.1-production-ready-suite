@@ -36,8 +36,8 @@ from app.rag.language_pack_releases import compare_releases, pack_from_release
 from app.rag.published_language import initialized_release_store
 from app.schemas.common import ApiResponse
 from app.schemas.language_pack_release import (
+    LanguagePackDocumentStatus,
     LanguagePackDraftUpdate,
-    LanguagePackIndexRelation,
     LanguagePackPublishRequest,
     LanguagePackRelease,
     LanguagePackReleaseComparison,
@@ -107,11 +107,11 @@ async def get_language_pack() -> ApiResponse[LanguagePackData]:
     oracle = OracleClient()
     try:
         data.outdated_documents = await oracle.count_documents(
-            language_pack_relation=LanguagePackIndexRelation.DIFFERENT,
+            language_pack_status=LanguagePackDocumentStatus.DIFFERENT,
             current_release_id=published.id,
         )
         data.unrecorded_documents = await oracle.count_documents(
-            language_pack_relation=LanguagePackIndexRelation.UNRECORDED,
+            language_pack_status=LanguagePackDocumentStatus.UNRECORDED,
             current_release_id=published.id,
         )
     except Exception:  # noqa: BLE001 - 件数は補助。取得できないときは不明として返す。

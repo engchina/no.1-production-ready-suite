@@ -128,6 +128,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseSummary,
 )
 from app.schemas.language_pack_release import (
+    LanguagePackDocumentStatus,
     LanguagePackDocumentUse,
     LanguagePackIndexRelation,
     LanguagePackRecipeUse,
@@ -6278,7 +6279,7 @@ class OracleClient:
         offset: int = 0,
         knowledge_base_id: str | None = None,
         queued_phase: IngestionJobPhase | None = None,
-        language_pack_relation: LanguagePackIndexRelation | None = None,
+        language_pack_status: LanguagePackDocumentStatus | None = None,
         current_release_id: str | None = None,
     ) -> list[DocumentSummary]:
         """ドキュメント一覧を返す。
@@ -6294,7 +6295,7 @@ class OracleClient:
             offset=offset,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
-            language_pack_relation=language_pack_relation,
+            language_pack_status=language_pack_status,
             current_release_id=current_release_id,
         )
 
@@ -6305,7 +6306,7 @@ class OracleClient:
         query: str | None = None,
         knowledge_base_id: str | None = None,
         queued_phase: IngestionJobPhase | None = None,
-        language_pack_relation: LanguagePackIndexRelation | None = None,
+        language_pack_status: LanguagePackDocumentStatus | None = None,
         current_release_id: str | None = None,
         limit: int,
     ) -> tuple[list[str], int]:
@@ -6319,7 +6320,7 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
-            language_pack_relation=language_pack_relation,
+            language_pack_status=language_pack_status,
             current_release_id=current_release_id,
         )
         rows = await self._fetch_all(
@@ -6341,7 +6342,7 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
-            language_pack_relation=language_pack_relation,
+            language_pack_status=language_pack_status,
             current_release_id=current_release_id,
         )
         return [str(row["document_id"]) for row in rows], total
@@ -6392,7 +6393,7 @@ class OracleClient:
         query: str | None = None,
         knowledge_base_id: str | None = None,
         queued_phase: IngestionJobPhase | None = None,
-        language_pack_relation: LanguagePackIndexRelation | None = None,
+        language_pack_status: LanguagePackDocumentStatus | None = None,
         current_release_id: str | None = None,
     ) -> int:
         """条件に一致するドキュメント数を返す(条件は ``list_documents`` と同じ)。"""
@@ -6401,7 +6402,7 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
-            language_pack_relation=language_pack_relation,
+            language_pack_status=language_pack_status,
             current_release_id=current_release_id,
         )
 
@@ -11325,7 +11326,7 @@ class OracleClient:
         offset: int,
         knowledge_base_id: str | None,
         queued_phase: IngestionJobPhase | None = None,
-        language_pack_relation: LanguagePackIndexRelation | None = None,
+        language_pack_status: LanguagePackDocumentStatus | None = None,
         current_release_id: str | None = None,
     ) -> list[DocumentSummary]:
         """Oracle document table から一覧取得する。"""
@@ -11334,7 +11335,7 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
-            language_pack_relation=language_pack_relation,
+            language_pack_status=language_pack_status,
             current_release_id=current_release_id,
         )
         binds.update(offset_fetch_binds(offset=offset, limit=limit))
@@ -11375,7 +11376,7 @@ class OracleClient:
         query: str | None,
         knowledge_base_id: str | None,
         queued_phase: IngestionJobPhase | None = None,
-        language_pack_relation: LanguagePackIndexRelation | None = None,
+        language_pack_status: LanguagePackDocumentStatus | None = None,
         current_release_id: str | None = None,
     ) -> int:
         """Oracle document table の件数を取得する。"""
@@ -11384,7 +11385,7 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
-            language_pack_relation=language_pack_relation,
+            language_pack_status=language_pack_status,
             current_release_id=current_release_id,
         )
         row = await self._fetch_one(
@@ -14849,30 +14850,52 @@ def _render_sql(template: str, **parts: str) -> str:
     return rendered
 
 
-def _language_pack_relation_sql(relation: LanguagePackIndexRelation) -> str:
-    active = """SELECT 1 FROM rag_chunk_sets cs
-        WHERE cs.document_id = rag_documents.document_id AND cs.is_active = 1"""
-    known = "cs.language_pack_release_id IS NOT NULL AND cs.language_pack_ingest_hash IS NOT NULL"
+def _language_pack_status_sql(status: LanguagePackDocumentStatus) -> str:
+    """文書の言語資源の状態（`LanguagePackDocumentStatus`）の絞り込み。
+
+    レシピごとに、最新の待機中・実行中の job が版を固定していれば構築中、そうでなければ検索中の索引
+    （`is_active`）の関係（`index_relation` と同じ。版の行が無いものは判定できない）とし、
+    文書の状態は 再処理を推奨 > 判定できません > 構築中 > 内容は同じ > 最新 > 未構築 の最初のもの。
+    構築中・関係の判定は `document_language_pack_uses` と画面の `languagePackSummaryStatus` と同じ。
+    """
+
+    def recipe_building(document: str, recipe: str) -> str:
+        return f"""(SELECT j.language_pack_release_id FROM rag_ingestion_jobs j
+            WHERE j.document_id = {document} AND j.recipe_id = {recipe}
+                AND j.status IN ('QUEUED', 'RUNNING')
+            ORDER BY j.queued_at DESC FETCH FIRST 1 ROWS ONLY) IS NOT NULL"""
+
+    idle = f"""SELECT 1 FROM rag_chunk_sets cs
+        WHERE cs.document_id = rag_documents.document_id AND cs.is_active = 1
+            AND NOT ({recipe_building("cs.document_id", "cs.recipe_id")})"""
+    known = """cs.language_pack_release_id IS NOT NULL AND cs.language_pack_ingest_hash IS NOT NULL
+            AND EXISTS (SELECT 1 FROM rag_language_pack_releases used
+                WHERE used.release_id = cs.language_pack_release_id)"""
     current_hash = (
         "(SELECT ingest_hash FROM rag_language_pack_releases "
         "WHERE release_id = :current_language_release_id)"
     )
-    different = f"EXISTS ({active} AND {known} AND cs.language_pack_ingest_hash <> {current_hash})"
-    missing = (
-        f"(NOT EXISTS ({active}) OR EXISTS ({active} AND "
-        "(cs.language_pack_release_id IS NULL OR cs.language_pack_ingest_hash IS NULL)))"
-    )
-    if relation == LanguagePackIndexRelation.DIFFERENT:
-        return different
-    if relation == LanguagePackIndexRelation.UNRECORDED:
-        return f"NOT ({different}) AND {missing}"
-    same = f"EXISTS ({active}) AND NOT ({different}) AND NOT ({missing})"
-    other = f"EXISTS ({active} AND cs.language_pack_release_id <> :current_language_release_id)"
-    return (
-        f"{same} AND {other}"
-        if relation == LanguagePackIndexRelation.EQUIVALENT
-        else f"{same} AND NOT ({other})"
-    )
+    has = {
+        LanguagePackDocumentStatus.DIFFERENT: (
+            f"EXISTS ({idle} AND {known} AND cs.language_pack_ingest_hash <> {current_hash})"
+        ),
+        LanguagePackDocumentStatus.UNRECORDED: f"EXISTS ({idle} AND NOT ({known}))",
+        LanguagePackDocumentStatus.BUILDING: f"""EXISTS (SELECT 1 FROM rag_ingestion_jobs jb
+            WHERE jb.document_id = rag_documents.document_id
+                AND jb.status IN ('QUEUED', 'RUNNING')
+                AND {recipe_building("jb.document_id", "jb.recipe_id")})""",
+        LanguagePackDocumentStatus.EQUIVALENT: f"""EXISTS ({idle} AND {known}
+            AND cs.language_pack_ingest_hash = {current_hash}
+            AND cs.language_pack_release_id <> :current_language_release_id)""",
+        LanguagePackDocumentStatus.CURRENT: f"""EXISTS ({idle} AND {known}
+            AND cs.language_pack_ingest_hash = {current_hash}
+            AND cs.language_pack_release_id = :current_language_release_id)""",
+    }
+    order = list(has)
+    if status == LanguagePackDocumentStatus.NOT_BUILT:
+        return " AND ".join(f"NOT ({has[item]})" for item in order)
+    higher = order[: order.index(status)]
+    return " AND ".join([has[status], *(f"NOT ({has[item]})" for item in higher)])
 
 
 def _oracle_document_where(
@@ -14881,7 +14904,7 @@ def _oracle_document_where(
     query: str | None = None,
     knowledge_base_id: str | None = None,
     queued_phase: IngestionJobPhase | None = None,
-    language_pack_relation: LanguagePackIndexRelation | None = None,
+    language_pack_status: LanguagePackDocumentStatus | None = None,
     current_release_id: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = _oracle_access_predicates()
@@ -14929,11 +14952,11 @@ def _oracle_document_where(
             )
         )
         binds.update(knowledge_base_binds)
-    if language_pack_relation is not None:
+    if language_pack_status is not None:
         if not current_release_id:
             raise ValueError("言語資源の比較対象版を指定してください。")
         clauses.append("superseded_by_document_id IS NULL")
-        clauses.append(_language_pack_relation_sql(language_pack_relation))
+        clauses.append(_language_pack_status_sql(language_pack_status))
         binds["current_language_release_id"] = current_release_id
     return " AND ".join(clauses), binds
 

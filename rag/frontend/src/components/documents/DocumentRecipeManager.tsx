@@ -119,6 +119,7 @@ export function DocumentRecipeManager({
   chunkSets,
   sourceModality = null,
   approveBlocked = false,
+  languagePack,
 }: {
   documentId: string;
   recipes: DocumentRecipeView[];
@@ -131,6 +132,8 @@ export function DocumentRecipeManager({
   sourceModality?: string | null;
   /** 選んでいるレシピの承認を止める（抽出確認の未保存の修正がある。#944）。 */
   approveBlocked?: boolean;
+  /** 選んでいるレシピの言語資源の要約の行（#4566）。工程の下に置く。 */
+  languagePack?: (recipe: DocumentRecipeView) => ReactNode;
 }) {
   const selected = resolveSelectedRecipe(recipes, selectedRecipeId);
   const createRecipe = useCreateDocumentRecipe();
@@ -433,6 +436,7 @@ export function DocumentRecipeManager({
 
         <RecipeSteps recipe={selected} />
         <RecipeQueueWaitNote recipe={selected} />
+        {languagePack?.(selected)}
 
         {/* 作成後に項目の定義などが変わったレイヤー（#550）。自動では作り直さず、既存の「再処理」へ案内する。 */}
         {layerRebuild.layers.length ? (
