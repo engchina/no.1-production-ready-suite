@@ -232,6 +232,12 @@ def test_recorded_header_line_requires_the_recorded_column_keys(keys, expected):
     assert recorded_header_line(record) == expected
 
 
+def test_recorded_header_line_reads_the_chunk_body_not_the_search_text():
+    """子の chunk の text は検索用の本文（列名つきの値）のことがある。分割が記録した本文で見出しの行を決める。"""
+    record = replace(_record("table-a", "行ID: A1 / 条件: 属性A=有 / 点数: 2", TABLE_METADATA), body_text=TABLE)
+    assert recorded_header_line(record) == HEADER
+
+
 def test_evidence_spans_carry_only_recorded_header_rows():
     with_header = evidence_spans(QUESTION, [_record("table-a", TABLE, TABLE_METADATA)])
     assert [span.get(TABLE_HEADER_LINES_KEY) for span in with_header] == [[HEADER]]

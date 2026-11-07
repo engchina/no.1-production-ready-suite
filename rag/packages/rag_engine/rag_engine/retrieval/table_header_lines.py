@@ -29,7 +29,7 @@ def _cells(line: str) -> list[str]:
 
 
 def recorded_header_line(chunk: Any) -> str | None:
-    """chunk の分割が見出しと記録した、chunk の本文の表の最初の行（記録と一致しなければ None）。"""
+    """chunk の分割が見出しと記録した、chunk の本文（body_text、無ければ text）の表の最初の行（記録と一致しなければ None）。"""
     metadata = getattr(chunk, "metadata", None)
     raw = metadata.get(_COLUMN_KEYS) if isinstance(metadata, Mapping) else None
     if not isinstance(raw, str):
@@ -40,7 +40,8 @@ def recorded_header_line(chunk: Any) -> str | None:
         return None
     if not isinstance(keys, list) or not keys or not all(isinstance(key, str) for key in keys):
         return None
-    for line in str(getattr(chunk, "text", "") or "").splitlines():
+    # 子の chunk の text は検索用の本文（列名つきの値など）のことがあるので、分割が記録した本文（body_text）を読む。
+    for line in str(getattr(chunk, "body_text", "") or getattr(chunk, "text", "") or "").splitlines():
         if not _TABLE_LINE.match(line):
             continue
         cells = _cells(line)
