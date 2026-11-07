@@ -45,7 +45,7 @@ ROLE = "QuestionEntityRoles"
 def mention(question: str, text: str, designation: str = "named", *, nth: int = 0) -> dict[str, Any]:
     """録画応答の 1 提及（原文の写しと、その写しの ``nth`` 番目（0 から）の出現の順番）。"""
     assert text in question
-    return {"text": text, "occurrence": nth + 1, "designation": designation}
+    return {"text": text, "occurrence": nth + 1, "designation": designation, "members": []}
 
 
 class Recorded:
@@ -88,7 +88,7 @@ def test_extraction_input_is_the_question_and_the_schema_asks_for_text_occurrenc
     assert prepared == {"question": "装置ラムダ"}
     schema = extraction_model(prepared).model_json_schema()
     anchor = next(iter(schema["$defs"].values()))
-    assert set(anchor["properties"]) == set(anchor["required"]) == {"text", "occurrence", "designation"}
+    assert set(anchor["properties"]) == set(anchor["required"]) == {"text", "occurrence", "designation", "members"}
     assert anchor["properties"]["occurrence"] == {
         "description": anchor["properties"]["occurrence"]["description"],
         "minimum": 1,
@@ -98,7 +98,7 @@ def test_extraction_input_is_the_question_and_the_schema_asks_for_text_occurrenc
 
 
 def anchor(text: str, occurrence: int = 1) -> dict[str, Any]:
-    return {"text": text, "occurrence": occurrence, "designation": "named"}
+    return {"text": text, "occurrence": occurrence, "designation": "named", "members": []}
 
 
 @pytest.mark.parametrize(
@@ -228,6 +228,118 @@ def test_wrapped_mention_reaches_the_role_stage_without_brackets() -> None:
 
 
 # ---------- 役割の契約 ----------
+
+
+# ---------- 複数の対象をまとめた表記（collective） ----------
+
+RANGE_QUESTION = "部品P1〜P4は点検済みです。部品P5の扱いは？"
+RANGE_SOURCE = "部品P1、部品P2、部品P3、部品P4、部品P5は点検の対象である。"
+
+
+def collective(question: str, text: str, *members: str | tuple[str, int], nth: int = 0) -> dict[str, Any]:
+    """録画応答の collective の提及（個々の名前は、提及の写しの中で数えた出現の順番つきの写し）。"""
+    assert text in question
+    rows = [member if isinstance(member, tuple) else (member, 1) for member in members]
+    return {
+        "text": text,
+        "occurrence": nth + 1,
+        "designation": "collective",
+        "members": [{"text": member, "occurrence": occurrence} for member, occurrence in rows],
+    }
+
+
+def test_collective_mention_is_not_a_name_and_its_members_are_named_positions() -> None:
+    """範囲の表記は 1 つの名前として照合せず、その中に写された個々の名前だけを named の位置にする（#4584）。"""
+    question = RANGE_QUESTION
+    rows = project_extraction(question, {"mentions": [collective(question, "部品P1〜P4", "部品P1"), mention(question, "部品P5")]})
+    assert [(row["text"], row["designation"], question[row["start"] : row["end"]]) for row in rows] == [
+        ("部品P1", "named", "部品P1"),
+        ("部品P1〜P4", "collective", "部品P1〜P4"),
+        ("部品P5", "named", "部品P5"),
+    ]
+    subjects, parse = extract(
+        question,
+        {
+            EXTRACT: {"mentions": [collective(question, "部品P1〜P4", "部品P1"), mention(question, "部品P5")]},
+            ROLE: {"entities": [{"entity_id": "N1", "roles": ["given"]}, {"entity_id": "N2", "roles": ["asked"]}]},
+        },
+    )
+    assert [entity["text"] for entity in parse.calls[1][1]["entities"]] == ["部品P1", "部品P5"]
+    assert [(m.text, m.roles) for m in subjects.mentions] == [("部品P1", ("given",)), ("部品P5", ("asked",))]
+    assert subjects.diagnostics() == {
+        "status": STATUS_COMPLETED,
+        "calls": 2,
+        "named_mentions": 2,
+        "verified_mentions": 2,
+        "asked_mentions": 1,
+        "collective_mentions": 1,
+        "collective_members": 1,
+    }
+
+
+def test_member_position_is_counted_inside_the_collective_mention() -> None:
+    # 個々の名前の出現の順番は、まとめた提及の写しの中で数える（同じ写しが提及の外にあっても位置を取り違えない）。
+    question = "部品Pの点検は？部品P・部品Qは済みです。"
+    rows = project_extraction(question, {"mentions": [collective(question, "部品P・部品Q", "部品P", "部品Q")]})
+    start = question.index("部品P・部品Q")
+    assert [(row["start"], row["text"]) for row in rows if row["designation"] == "named"] == [(start, "部品P"), (start + 4, "部品Q")]
+
+
+def test_member_also_returned_as_a_named_mention_is_one_position() -> None:
+    question = RANGE_QUESTION
+    rows = project_extraction(question, {"mentions": [mention(question, "部品P1"), collective(question, "部品P1〜P4", "部品P1")]})
+    assert [(row["text"], row["designation"]) for row in rows] == [("部品P1", "named"), ("部品P1〜P4", "collective")]
+
+
+def test_collective_without_a_written_member_has_no_named_position() -> None:
+    question = RANGE_QUESTION
+    subjects, parse = extract(question, {EXTRACT: {"mentions": [collective(question, "P1〜P4")]}})
+    assert (subjects.status, subjects.mentions, [name for _, _, name in parse.calls]) == (STATUS_NO_NAMED, (), [EXTRACT])
+    assert subjects.diagnostics() == {"status": STATUS_NO_NAMED, "calls": 1, "named_mentions": 0, "collective_mentions": 1}
+
+
+@pytest.mark.parametrize(
+    ("row", "code"),
+    [
+        (collective(RANGE_QUESTION, "部品P1〜P4", "部品P5"), "member_not_in_mention"),
+        (collective(RANGE_QUESTION, "部品P1〜P4", ("P", 3)), "member_occurrence_out_of_range"),
+        (collective(RANGE_QUESTION, "部品P1〜P4", "部品P1〜P4"), "member_is_whole_mention"),
+        (collective(RANGE_QUESTION, "部品P1〜P4", "部品P1", "部品P1"), "exact_duplicate_range"),
+        ({**mention(RANGE_QUESTION, "部品P5"), "members": [{"text": "P5", "occurrence": 1}]}, "members_on_single_mention"),
+    ],
+    ids=["member-outside", "member-occurrence", "member-whole", "member-duplicate", "members-on-named"],
+)
+def test_collective_member_contract_violations_fail_without_snapping(row: dict[str, Any], code: str) -> None:
+    with pytest.raises(QuestionSubjectError) as caught:
+        project_extraction(RANGE_QUESTION, {"mentions": [row]})
+    assert caught.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        # 範囲の中の名前が引いた原文に個々にあれば、範囲の表記そのものが原文に無くても伝えない。
+        (RANGE_SOURCE, []),
+        # 写された個々の名前は照合する（まとめた表記の中でも、資料に無い名前は従来どおり伝える）。
+        ("部品P2、部品P5は点検の対象である。", [("unknown", ["部品P1"])]),
+    ],
+    ids=["members-in-source", "written-member-absent"],
+)
+def test_collective_mention_verifies_written_members_not_the_range(source: str, expected: list[tuple[str, list[str]]]) -> None:
+    question = RANGE_QUESTION
+    subjects, _ = extract(
+        question,
+        {
+            EXTRACT: {"mentions": [collective(question, "部品P1〜P4", "部品P1"), mention(question, "部品P5")]},
+            ROLE: RuntimeError("synthetic"),
+        },
+    )
+    assert subjects.status == STATUS_ROLES_UNAVAILABLE
+    notices = unconfirmed_question_notices(subjects, [source])
+    assert [(notice.kind, list(notice.phrases)) for notice in notices] == expected
+    assert absent_question_names("部品P1〜P4は点検済みです。", subjects, [source]) == [
+        phrase for _, phrases in expected for phrase in phrases
+    ]
 
 
 def test_repeated_name_at_two_positions_keeps_distinct_spans_and_roles() -> None:
@@ -477,7 +589,12 @@ def test_role_stage_calls_its_model_and_parses_the_recorded_response(case: dict[
         sent.append((name, body["model"], body.get("reasoning", {}).get("effort", ""), purpose))
         if name == EXTRACT:
             mentions = [
-                {"text": question[start:end], "occurrence": 1 + question[:start].count(question[start:end]), "designation": "named"}
+                {
+                    "text": question[start:end],
+                    "occurrence": 1 + question[:start].count(question[start:end]),
+                    "designation": "named",
+                    "members": [],
+                }
                 for start, end in case["spans"]
             ]
             return httpx.Response(200, json=_responses_body(body["model"], name, {"mentions": mentions}))
@@ -515,7 +632,9 @@ def test_role_stage_model_without_a_connection_fails_and_the_answer_continues() 
 
     def parse(system: str, prompt: str, call_settings: Any, schema: Any, **options: Any) -> Any:
         if schema.__name__ == EXTRACT:
-            return schema.model_validate({"mentions": [{"text": question[start:end], "occurrence": 1, "designation": "named"}]})
+            return schema.model_validate(
+                {"mentions": [{"text": question[start:end], "occurrence": 1, "designation": "named", "members": []}]}
+            )
         return oci.parse_text_response(system, prompt, call_settings, schema, **options)
 
     subjects = extract_question_subjects(question, settings, parse_text=parse)
@@ -655,7 +774,7 @@ def test_unconfirmed_question_notices(
 SUBJECTS = {EXTRACT: {"mentions": [mention(QUESTION, "ServiceX")]}, ROLE: {"entities": [{"entity_id": "N1", "roles": ["asked"]}]}}
 
 
-def record() -> AnswerRecord:
+def record(text: str = RULE) -> AnswerRecord:
     return AnswerRecord(
         id="c1",
         engine="docling",
@@ -663,7 +782,7 @@ def record() -> AnswerRecord:
         page=1,
         seq_no=1,
         category="Chunk",
-        text=RULE,
+        text=text,
         source="synthetic.txt",
         chunk_level="parent",
         chunk_id="c1",
@@ -686,7 +805,13 @@ def draft(text: str, summary: str = "", *, gap: str = "") -> dict[str, Any]:
     }
 
 
-def answer(*outputs: dict[str, Any], subjects: dict[str, Any] | None = None, inject: bool = True) -> tuple[Any, list[str], list[str]]:
+def answer(
+    *outputs: dict[str, Any],
+    subjects: dict[str, Any] | None = None,
+    inject: bool = True,
+    question: str = QUESTION,
+    source: str = RULE,
+) -> tuple[Any, list[str], list[str]]:
     """監査なしの回答を、生成の録画応答と対象の抽出の録画応答で通す。(結果, 生成の入力, 対象の抽出の schema の名前)。
 
     生成（``GroundedDraftWire``）は ``outputs`` を順に返す。録画の無い呼び出し（当てはめの監査など）は失敗させる。
@@ -710,13 +835,13 @@ def answer(*outputs: dict[str, Any], subjects: dict[str, Any] | None = None, inj
     def unused(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("追加の外部呼び出しは不可")
 
-    context = AnswerContext(records=[record()], text=RULE)
+    context = AnswerContext(records=[record(source)], text=source)
     settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none")
     dependencies = AnswerDependencies(
         unused, unused, parse, unused, unused, question_subjects=extract_question_subjects if inject else None
     )
     with bind_dependencies(dependencies):
-        result = synthesize_grounded_answer(QUESTION, context, settings, image_prompt_mode="text_only").response
+        result = synthesize_grounded_answer(question, context, settings, image_prompt_mode="text_only").response
     return result, prompts, subject_calls
 
 
@@ -771,6 +896,26 @@ def test_every_named_subject_is_verified_whatever_the_role(roles: Any, kind: str
     assert [{"kind": kind, "names": 1}] in _values_of(result.generation_trace, "subject_unconfirmed")
 
 
+@pytest.mark.parametrize(
+    ("range_mention", "notice"),
+    [
+        # 範囲の表記を 1 つの名前として返すと、その表記は原文に無いので確認できないと伝える（#4584 の誤った通知の形）。
+        (mention(RANGE_QUESTION, "部品P1〜P4"), True),
+        # まとめた表記（collective）として返せば、範囲の表記は照合せず、写された個々の名前だけを照合する。
+        (collective(RANGE_QUESTION, "部品P1〜P4", "部品P1"), False),
+    ],
+    ids=["range-as-one-name", "range-as-collective"],
+)
+def test_range_mention_with_members_in_the_cited_source_is_not_reported_unconfirmed(range_mention: dict[str, Any], notice: bool) -> None:
+    roles = {"entities": [{"entity_id": "N1", "roles": ["given"]}, {"entity_id": "N2", "roles": ["asked"]}]}
+    subjects = {EXTRACT: {"mentions": [range_mention, mention(RANGE_QUESTION, "部品P5")]}, ROLE: roles}
+    result, _, subject_calls = answer(draft(RANGE_SOURCE), subjects=subjects, question=RANGE_QUESTION, source=RANGE_SOURCE)
+    assert subject_calls == [EXTRACT, ROLE]
+    unconfirmed = answer_labels().subject_unconfirmed_gap.format(names="部品P1〜P4")
+    assert (unconfirmed in result.answer_text) is notice
+    assert ("subject_unconfirmed" in json.dumps(result.generation_trace, ensure_ascii=False)) is notice
+
+
 def _values_of(node: Any, key: str) -> list[Any]:
     """入れ子の dict / list から ``key`` の値をすべて集める（実行記録の中の位置に依らず確かめる）。"""
     found: list[Any] = []
@@ -797,7 +942,7 @@ def test_summary_naming_a_misjudged_given_name_is_corrected() -> None:
     ("subjects", "inject", "calls"),
     [
         ({EXTRACT: {"mentions": []}}, True, [EXTRACT]),
-        ({EXTRACT: {"mentions": [{"text": "ServiceY", "occurrence": 1, "designation": "named"}]}}, True, [EXTRACT]),
+        ({EXTRACT: {"mentions": [anchor("ServiceY")]}}, True, [EXTRACT]),
         (SUBJECTS, False, []),
     ],
     ids=["no-named-mention", "text-not-in-question", "not-injected"],
