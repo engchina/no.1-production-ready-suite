@@ -6,12 +6,13 @@ from copy import deepcopy
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
+from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, _unit_coverage_type
-from rag_engine.models.llm import MAX_ANSWER_PARTS, GroundedCitation, GroundedDraft
+from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
 
 
 def _answer_before_coverage(schema: dict[str, Any]) -> None:
@@ -125,6 +126,32 @@ def _copies_one_original(result: str, selected: list[BoundUnitRange]) -> bool:
     return all(target not in _formal_text(candidate.text) for candidate in narrower)
 
 
+def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[str, Any]]) -> None:
+    """導出の要点に、依存する basis の原文の items を引用として結ぶ（結論の言い換えで条件が消えても原文を示す）。
+
+    引用は ID から切り出した原文の items だけで、結論の公開は従来どおり導出の独立の検証が決める。
+    同じ要求で直接の要点がすでに示す item は重ねない。要約の依存（summary_*_indexes）は変えない。
+    """
+    shown: dict[str, set[int]] = {}
+    for part in parts:
+        if part["result_kind"] == "direct":
+            shown.setdefault(part["request_id"], set()).update(part["item_indexes"])
+    limit = next((rule.max_length for rule in AnswerPart.model_fields["item_indexes"].metadata if isinstance(rule, MaxLen)), None)
+    for part in parts:
+        if part["result_kind"] != "derived":
+            continue
+        quotes = [
+            index
+            for app in part["application_indexes"]
+            for index in applications[app]["item_indexes"]
+            if index not in shown.get(part["request_id"], set())
+        ]
+        quotes = list(dict.fromkeys(quotes))
+        # 要点の参照の上限を超える選択は、引用を結ばずに従来の導出の形のままにする（本文の原文の節には残る）。
+        if limit is None or len(quotes) <= limit:
+            part["item_indexes"] = quotes
+
+
 def canonical_answer_parts(
     value: BaseModel, catalog: SentUnitCatalog, coverage: list[dict[str, Any]], *, question: str | None = None
 ) -> GroundedDraft:
@@ -205,6 +232,7 @@ def canonical_answer_parts(
         texts.append(text)
         part_sources.append(indexes if kind != "answer" else [])
         part_applications.append(app_indexes)
+    _attach_basis_quotes(parts, applications)
     chosen = list(dict.fromkeys(index for index in summary_indexes if 0 <= index < len(parts) and parts[index]["result_kind"] != "gap"))
     raw.update(
         items=items,
