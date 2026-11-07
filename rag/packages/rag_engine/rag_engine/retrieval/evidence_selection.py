@@ -19,6 +19,7 @@ from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.character_forms import find_width_folded
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
+from rag_engine.retrieval.table_header_lines import TABLE_HEADER_LINES_KEY, header_lines, header_lines_in
 from rag_engine.retrieval.task_contract import (
     COUNT_REQUEST,
     LIST_REQUEST,
@@ -445,6 +446,7 @@ def evidence_spans(
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
     result = []
+    table_headers: dict[str, list[str]] = {}
     ordered = _same_unit_first(list(unique.items()), question)
     if labels:
         ordered.sort(key=lambda item: -len(definition_ranges(item[1].text, labels)))
@@ -556,6 +558,10 @@ def evidence_spans(
             for child in scope_records
             for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys, body_text=True)
         ]
+        # 表の chunk の分割が記録した見出しの行（#4592）。根拠の本文に行として現れるものだけを、結合の後で根拠に付ける。
+        table_headers[str(getattr(record, "chunk_uid", "") or record.id)] = header_lines(
+            [record, *(child for _a, _b, _page, child in provenance)]
+        )
         # 子の本文だけでなく、そこに実際に重なる完全な出典情報も先に取り置く。
         # 後付けの補助情報で選択済みの本文を取り消すことを避ける。
         priority_extra_cost = 0
@@ -780,6 +786,9 @@ def evidence_spans(
             result[-1]["source_context"] = info
             cursor = end
     result = _merge_adjacent_spans(result)
+    for span in result:
+        if found := header_lines_in(span["text"], table_headers.get(span["source_id"], ())):
+            span[TABLE_HEADER_LINES_KEY] = found
     if diagnostics is not None:
         diagnostics.extend(_verified_quote_outcomes(quote_order, quote_requests, quote_ranges, unique, result))
         for group in priority_source_groups:
