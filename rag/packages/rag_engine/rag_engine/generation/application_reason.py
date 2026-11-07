@@ -24,6 +24,7 @@ from pydantic import Field
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class
 
+from rag_engine.config import step_provider
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, ensure_model_input
 from rag_engine.models.llm import ApplicationVerdictAudit, _StrictModel
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
@@ -185,6 +186,8 @@ def explain_verdicts(
     evidence = _evidence(inputs)
     ids = internal_ids(inputs)
     system = resolve_prompt("application.reasonSystem", APPLICATION_REASON_SYSTEM_PROMPT)
+    # 理由の段のモデル(#4564。設定が無ければ呼び出し側の provider)。登録していないモデルは呼び出しが失敗し、定型の文になる。
+    reason_provider = step_provider(settings, "application_reason_llm", provider_id)
     unknown_basis: dict[int, list[str]] = {}
     for application in inputs["applications"]:
         index = int(application["index"])
@@ -201,10 +204,10 @@ def explain_verdicts(
         result: dict[str, Any] = {"index": index, "prompt_chars": len(system) + len(prompt)}
         parsed = None
         try:
-            ensure_model_input(settings, system, prompt, AuditReason.model_json_schema(), provider_id=provider_id)
+            ensure_model_input(settings, system, prompt, AuditReason.model_json_schema(), provider_id=reason_provider)
             trace["calls"] += 1
             parsed = call_with_model_purpose(
-                "answer.audit_reason", parse_text, system, prompt, settings, AuditReason, provider_id=provider_id
+                "answer.audit_reason", parse_text, system, prompt, settings, AuditReason, provider_id=reason_provider
             )
         except Exception as exc:
             if propagates(exc):

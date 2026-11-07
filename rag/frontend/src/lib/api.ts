@@ -2990,12 +2990,18 @@ export interface AnsweringSettingsData {
   section_expansion_input_token_percent: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
   question_subject_role_model: string;
-  /** 役割の判定の段で選べる登録モデル（接続情報を含まない）。 */
-  question_subject_role_model_choices: { model_id: string; display_name: string }[];
+  /** 表の各行の条件を質問に当てはめる段のモデル（#4349。空は回答のモデル）。 */
+  row_condition_model: string;
+  /** 導いた結論（推導）の監査の判定の段のモデル（#4565。空は回答のモデル）。 */
+  application_audit_model: string;
+  /** 推導の判定の理由の段のモデル（#4564。空は回答のモデル）。 */
+  application_reason_model: string;
+  /** 段ごとのモデルで選べる登録モデル（3 つの段で同じ。接続情報を含まない）。 */
+  step_model_choices: { model_id: string; display_name: string }[];
   config_source: "runtime";
 }
 
-export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source" | "question_subject_role_model_choices">>;
+export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source" | "step_model_choices">>;
 
 /** 回答の記録の保持日数(0 は無期限)。 */
 export interface AnswerRecordSettingsData {

@@ -59,7 +59,7 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
 
 type AnsweringDraft = Omit<
   AnsweringSettingsData,
-  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled" | "question_subject_role_model_choices"
+  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled" | "step_model_choices"
 >;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
@@ -89,17 +89,28 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
     question_subject_role_model: settings.question_subject_role_model ?? "",
+    row_condition_model: settings.row_condition_model ?? "",
+    application_audit_model: settings.application_audit_model ?? "",
+    application_reason_model: settings.application_reason_model ?? "",
   };
 }
 
-/** 役割の判定の段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351）。 */
-function questionSubjectRoleModelOptions(settings: AnsweringSettingsData, current: string): SelectFieldOption<string>[] {
-  const choices = settings.question_subject_role_model_choices ?? [];
+/** 段ごとのモデル（#4351・#4349・#4564・#4565）の項目。並びは画面の表示の順（回答の工程の順）。 */
+const STEP_MODEL_FIELDS = [
+  { key: "question_subject_role_model", id: "answering-question-subject-role-model", label: "settings.answering.questionSubjectRoleModel" },
+  { key: "row_condition_model", id: "answering-row-condition-model", label: "settings.answering.rowConditionModel" },
+  { key: "application_audit_model", id: "answering-application-audit-model", label: "settings.answering.applicationAuditModel" },
+  { key: "application_reason_model", id: "answering-application-reason-model", label: "settings.answering.applicationReasonModel" },
+] as const;
+
+/** 段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351・#4349・#4564・#4565）。 */
+function stepModelOptions(settings: AnsweringSettingsData, current: string): SelectFieldOption<string>[] {
+  const choices = settings.step_model_choices ?? [];
   return [
-    { value: "", label: t("settings.answering.questionSubjectRoleModel.sameAsAnswer") },
+    { value: "", label: t("settings.answering.stepModel.sameAsAnswer") },
     ...choices.map((choice) => ({ value: choice.model_id, label: choice.display_name || choice.model_id })),
     ...(current && !choices.some((choice) => choice.model_id === current)
-      ? [{ value: current, label: t("settings.answering.questionSubjectRoleModel.unavailable", { model: current }) }]
+      ? [{ value: current, label: t("settings.answering.stepModel.unavailable", { model: current }) }]
       : []),
   ];
 }
@@ -408,16 +419,19 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             disabled={disabled}
             onValueChange={(value) => update({ answer_audit_mode: value })}
           />
-          <SelectField
-            id="answering-question-subject-role-model"
-            label={t("settings.answering.questionSubjectRoleModel")}
-            helper={t("settings.answering.questionSubjectRoleModelHint")}
-            value={form.question_subject_role_model}
-            options={questionSubjectRoleModelOptions(saved, saved.question_subject_role_model ?? "")}
-            width="md"
-            disabled={disabled}
-            onValueChange={(value) => update({ question_subject_role_model: value })}
-          />
+          {STEP_MODEL_FIELDS.map((field) => (
+            <SelectField
+              key={field.key}
+              id={field.id}
+              label={t(field.label)}
+              helper={t(`${field.label}Hint`)}
+              value={form[field.key]}
+              options={stepModelOptions(saved, saved[field.key] ?? "")}
+              width="md"
+              disabled={disabled}
+              onValueChange={(value) => update({ [field.key]: value })}
+            />
+          ))}
           <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
           <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>
         </div>

@@ -43,12 +43,18 @@ def recorded(call: str) -> str:
 
 
 def settings(*, step_model: bool = True) -> Any:
-    environ = {"OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model", "RAG_ENGINE_ANSWER_AUDIT_MODE": "none"}
+    """段のモデル（``step_model=False`` は登録していないモデル: backend は model だけを渡す）。"""
+    environ = {
+        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
+        "RAG_ENGINE_ANSWER_AUDIT_MODE": "none",
+        "RAG_ENGINE_ROW_CONDITION_MODEL": "xai.grok-4.7",
+        "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT_OVERRIDE": "low",
+    }
     if step_model:
         environ.update(
             {
-                "OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL": "xai.grok-4.7",
-                "OCI_ENTERPRISE_AI_ROW_CONDITION_REASONING_EFFORT": "low",
+                "RAG_ENGINE_ROW_CONDITION_ENDPOINT": "https://row.invalid/v1",
+                "RAG_ENGINE_ROW_CONDITION_API_KEY": "synthetic-row",
                 "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT": "low",
             }
         )

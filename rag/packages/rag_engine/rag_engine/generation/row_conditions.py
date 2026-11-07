@@ -32,7 +32,7 @@ from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict
 from rag_parser_core.language import current_pack
 
-from rag_engine.config import LLM_PURPOSE_ROW_CONDITION, Settings, settings_for_llm_purpose
+from rag_engine.config import LLM_PURPOSE_ROW_CONDITION, Settings, settings_for_llm_purpose, step_provider
 from rag_engine.resources.runtime import resolve_prompt
 
 APPLICABILITY = ("applies", "does_not_apply", "cannot_determine", "no_condition")
@@ -106,20 +106,19 @@ class RowConditionModelUnavailable(RuntimeError):
 def row_condition_call_settings(settings: Any) -> tuple[Any, str]:
     """この段の呼び出しに渡す設定と provider ID。
 
-    モデルは段ごとの設定（backend が ``OCI_ENTERPRISE_AI_ROW_CONDITION_*`` で渡す provider）で、推論の量は用途の
-    上書き（``row_condition_reasoning_effort``）、入力の上限はこの段のモデルの値にする。provider が無ければ
-    ``RowConditionModelUnavailable``（回答のモデルへ切り替えない）。
+    モデルは段ごとの設定（``row_condition_llm``。空は回答のモデル）で、推論の量は用途の上書き
+    （``row_condition_reasoning_effort``）、入力の上限はこの段のモデルの値にする。段のモデルの接続が無い
+    （登録されていないモデル）ときは ``RowConditionModelUnavailable``（回答のモデルへ切り替えない）。
     """
     if not isinstance(settings, Settings):
         raise RowConditionModelUnavailable("row_condition_settings_missing")
-    unavailable = str(getattr(settings, "row_condition_unavailable", "") or "")
-    provider_id = str(getattr(settings, "row_condition_llm", "") or "")
-    if unavailable or not provider_id or provider_id not in settings.llm_providers:
-        raise RowConditionModelUnavailable(unavailable or "row_condition_model_not_configured")
+    provider_id = step_provider(settings, "row_condition_llm", settings.default_answer_llm) or ""
+    provider = settings.llm_providers.get(provider_id)
+    if provider is None or not (provider.base_url and provider.api_key and provider.model):
+        raise RowConditionModelUnavailable("row_condition_model_not_registered")
     call_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_ROW_CONDITION)
-    limit = int(getattr(settings, "row_condition_max_input_tokens", 0) or 0)
-    if limit > 0:
-        call_settings = replace(call_settings, answer_max_input_tokens=limit)
+    if settings.row_condition_llm and settings.row_condition_max_input_tokens > 0:
+        call_settings = replace(call_settings, answer_max_input_tokens=settings.row_condition_max_input_tokens)
     return call_settings, provider_id
 
 

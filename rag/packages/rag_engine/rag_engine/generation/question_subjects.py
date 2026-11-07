@@ -33,7 +33,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from rag_parser_core.language import current_pack
 
-from rag_engine.config import settings_with_reasoning_effort
+from rag_engine.config import settings_with_reasoning_effort, step_provider
 from rag_engine.resources.runtime import resolve_prompt
 
 logger = logging.getLogger(__name__)
@@ -429,7 +429,7 @@ def role_settings(settings: Any) -> Any:
 
 def role_provider(settings: Any, provider_id: str | None) -> str | None:
     """役割の段の呼び出しの provider ID。段のモデルの設定があればそれ、無ければ呼び出し側の provider。"""
-    return str(getattr(settings, "question_subject_role_llm", "") or "") or provider_id
+    return step_provider(settings, "question_subject_role_llm", provider_id)
 
 
 def _dump(raw: Any) -> Any:

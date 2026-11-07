@@ -11,13 +11,12 @@ import copy
 import hashlib
 import inspect
 import json
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from rag_engine.config import ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER, get_settings
+from rag_engine.config import ROW_CONDITION_LLM_PROVIDER, get_settings
 from rag_engine.generation import row_conditions as rc
 from rag_engine.generation import sent_table_projection as projection
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
@@ -77,10 +76,14 @@ def row_settings(**overrides: Any) -> Any:
     """この段のモデルを渡した設定（backend が段ごとの設定から渡す環境変数と同じ形）。"""
     environ = {
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
-        "OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL": "xai.grok-4.7",
-        "OCI_ENTERPRISE_AI_ROW_CONDITION_REASONING_EFFORT": "high",
-        "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT": "low",
-        "OCI_ENTERPRISE_AI_ROW_CONDITION_MAX_INPUT_TOKENS": "128000",
+        "OCI_ENTERPRISE_AI_ENDPOINT": "https://answer.invalid/v1",
+        "OCI_ENTERPRISE_AI_API_KEY": "synthetic-answer",
+        "RAG_ENGINE_ROW_CONDITION_MODEL": "xai.grok-4.7",
+        "RAG_ENGINE_ROW_CONDITION_ENDPOINT": "https://row.invalid/v1",
+        "RAG_ENGINE_ROW_CONDITION_API_KEY": "synthetic-row",
+        "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT": "high",
+        "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT_OVERRIDE": "low",
+        "RAG_ENGINE_ROW_CONDITION_MAX_INPUT_TOKENS": "128000",
         **overrides,
     }
     return get_settings(environ=environ, dotenv_path=None)
@@ -177,7 +180,7 @@ def test_recorded_grok_outputs_match_gold_through_the_product_code(round_name: s
     assert not replay.outputs
     assert_matches_gold(outcome, GOLD[case_id])
     assert outcome.calls == len(replay.sent)
-    assert [call["provider_id"] for call in replay.sent] == [ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER] * len(replay.sent)
+    assert [call["provider_id"] for call in replay.sent] == [ROW_CONDITION_LLM_PROVIDER] * len(replay.sent)
 
 
 def test_rows_unknown_is_not_determined_and_keeps_the_known_rows() -> None:
@@ -591,7 +594,7 @@ def test_too_many_rows_rejected_not_truncated() -> None:
 
 def test_wide_rows_over_input_budget_rejected_before_sending() -> None:
     case = _synthetic_rows(14, width=1500)
-    settings = row_settings(OCI_ENTERPRISE_AI_ROW_CONDITION_MAX_INPUT_TOKENS="40000")
+    settings = row_settings(RAG_ENGINE_ROW_CONDITION_MAX_INPUT_TOKENS="40000")
     call_settings, provider_id = rc.row_condition_call_settings(settings)
     table = _table(case)
     [call] = rc.build_type_calls(case["question"], rc.split_question(case["question"]), table)
@@ -628,27 +631,31 @@ def test_step_model_and_effort_come_from_the_step_setting() -> None:
     settings = row_settings()
     call_settings, provider_id = rc.row_condition_call_settings(settings)
     provider = call_settings.llm_providers[provider_id]
-    assert provider_id == ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER
+    assert provider_id == ROW_CONDITION_LLM_PROVIDER
     assert provider.model == "xai.grok-4.7" and provider.reasoning_effort == "low"
     # ほかの段の設定（回答のモデル）は変えない。
     assert settings.llm_providers[settings.default_answer_llm].model == "answer-model"
 
 
-@pytest.mark.parametrize(
-    "environ,reason",
-    [
-        ({"OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL": ""}, "row_condition_model_not_configured"),
-        ({"RAG_ENGINE_ROW_CONDITION_UNAVAILABLE": "モデル「xai.grok-4.7」は登録されていません。"}, "登録されていません"),
-    ],
-)
-def test_unavailable_step_model_does_not_fall_back(environ: dict[str, str], reason: str) -> None:
-    settings = row_settings(**environ)
+def test_unregistered_step_model_does_not_fall_back() -> None:
+    # backend は登録していないモデルの接続を渡さない（model だけ）。回答のモデルへ切り替えずに段を実行しない。
+    settings = row_settings(RAG_ENGINE_ROW_CONDITION_ENDPOINT="", RAG_ENGINE_ROW_CONDITION_API_KEY="")
     replay = Replay([])
     result = rc.evaluate_tables(
         CASES["reg-period-reversed"]["question"], [table_for("reg-period-reversed")], parse_text=replay, settings=settings
     )
-    assert result.status == "model_unavailable" and reason in result.reason and not replay.sent
+    assert result.status == "model_unavailable" and result.reason == "row_condition_model_not_registered" and not replay.sent
     assert result.undetermined() == []
+
+
+def test_empty_step_model_uses_the_answer_model_with_the_step_effort() -> None:
+    # 段のモデルの設定が空なら回答のモデル（ほかの段と同じ）。段の推論の量の上書きと入力の上限（回答の上限のまま）。
+    settings = row_settings(RAG_ENGINE_ROW_CONDITION_MODEL="")
+    call_settings, provider_id = rc.row_condition_call_settings(settings)
+    assert ROW_CONDITION_LLM_PROVIDER not in settings.llm_providers
+    assert provider_id == settings.default_answer_llm
+    assert call_settings.llm_providers[provider_id].model == "answer-model"
+    assert call_settings.answer_max_input_tokens == settings.answer_max_input_tokens
 
 
 def test_no_sent_table_is_not_applicable() -> None:
@@ -687,8 +694,8 @@ def test_projection_skips_ambiguous_snapshots_with_reason() -> None:
 def test_row_settings_helper_is_the_backend_contract() -> None:
     # backend（rag/backend の build_engine_settings）が渡す環境変数の名前と一致する。
     settings = row_settings()
-    assert settings.row_condition_llm == ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER
-    assert replace(settings, row_condition_unavailable="x").row_condition_unavailable == "x"
+    assert settings.row_condition_llm == ROW_CONDITION_LLM_PROVIDER
+    assert (settings.row_condition_reasoning_effort, settings.row_condition_max_input_tokens) == ("low", 128000)
 
 
 def test_real_sdk_path_sends_the_step_model_effort_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -715,9 +722,7 @@ def test_real_sdk_path_sends_the_step_model_effort_and_schema(monkeypatch: pytes
     )
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_args: client)
     monkeypatch.setattr(oci, "_stall_detection_enabled", lambda _settings: False)
-    settings = row_settings(
-        OCI_ENTERPRISE_AI_ROW_CONDITION_ENDPOINT="https://mock.invalid/v1", OCI_ENTERPRISE_AI_ROW_CONDITION_API_KEY="mock-only"
-    )
+    settings = row_settings(RAG_ENGINE_ROW_CONDITION_ENDPOINT="https://mock.invalid/v1", RAG_ENGINE_ROW_CONDITION_API_KEY="mock-only")
     call_settings, provider_id = rc.row_condition_call_settings(settings)
     question = CASES["reg-period-reversed"]["question"]
     [call] = rc.build_type_calls(question, rc.split_question(question), table_for("reg-period-reversed"))

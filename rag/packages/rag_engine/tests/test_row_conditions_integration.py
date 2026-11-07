@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from application_verdict_stub import audit_reply, is_application_schema
 
-from rag_engine.config import get_settings
+from rag_engine.config import ROW_CONDITION_LLM_PROVIDER, get_settings
 from rag_engine.generation import applications, grounded
 from rag_engine.generation import row_conditions as rc
 from rag_engine.generation.application_review import application_documents, review_applications
@@ -33,9 +33,11 @@ def settings() -> Any:
     return get_settings(
         environ={
             "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
-            "OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL": "xai.grok-4.7",
-            "OCI_ENTERPRISE_AI_ROW_CONDITION_REASONING_EFFORT": "low",
+            "RAG_ENGINE_ROW_CONDITION_MODEL": "xai.grok-4.7",
+            "RAG_ENGINE_ROW_CONDITION_ENDPOINT": "https://row.invalid/v1",
+            "RAG_ENGINE_ROW_CONDITION_API_KEY": "synthetic-row",
             "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT": "low",
+            "RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT_OVERRIDE": "low",
         },
         dotenv_path=None,
     )
@@ -267,7 +269,11 @@ def test_answering_step_records_unavailable_model_without_calls(sent_spans: Any,
 
     spans = sent_spans([table_span("reg-period-reversed")])
     monkeypatch.setattr(answering, "parse_text_response", lambda *a, **kw: pytest.fail("モデルが使えなければ呼ばない"))
-    unavailable = replace(settings(), row_condition_unavailable="モデル「xai.grok-4.7」は登録されていません。")
+    # 登録していないモデル: backend は接続を渡さない（段の provider に接続が無い）。
+    provider = settings().llm_providers[ROW_CONDITION_LLM_PROVIDER]
+    unavailable = replace(
+        settings(), llm_providers={**settings().llm_providers, ROW_CONDITION_LLM_PROVIDER: replace(provider, endpoint="", api_key="")}
+    )
     result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], spans, settings=unavailable)
     assert result is not None and result.status == "model_unavailable" and result.undetermined() == []
 
