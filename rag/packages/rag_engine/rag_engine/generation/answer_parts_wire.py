@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
-from copy import deepcopy
+from collections.abc import Collection, Sequence
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
@@ -12,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
-from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, _unit_coverage_type
+from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, request_coverage_field
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
 
 # 質問の種類（question_type）の閉じた語彙（#4586）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の記載で
@@ -47,7 +46,12 @@ def _answer_before_coverage(schema: dict[str, Any]) -> None:
 
 
 def answer_parts_model(
-    base: type[BaseModel], catalog: SentUnitCatalog, *, direct_source: bool = True, requirements: Collection[str] = ()
+    base: type[BaseModel],
+    catalog: SentUnitCatalog,
+    *,
+    direct_source: bool = True,
+    requirements: Collection[str] = (),
+    request_ids: Sequence[str] = (),
 ) -> type[BaseModel]:
     """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。
 
@@ -55,6 +59,7 @@ def answer_parts_model(
     #4586）。原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
     ``requirements`` を渡すと、要点の requirement はその文の写しだけを受ける（作り直しでは 1 回目の出力の要点の文。
     不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
+    ``request_ids`` はその回の要求の id。request_coverage は要求ごとにちょうど 1 件だけを受ける（``request_coverage_field``。#4587）。
     """
     source = catalog.selection_model()
     direct = create_model(
@@ -106,7 +111,7 @@ def answer_parts_model(
         "summary": (SkipJsonSchema[str], Field(default="", exclude=True)),
         "summary_item_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
-        "request_coverage": (GenericAlias(list, _unit_coverage_type(catalog)), deepcopy(base.model_fields["request_coverage"])),
+        "request_coverage": request_coverage_field(base, catalog, request_ids),
         "question_type": (
             GenericAlias(list, question_types),
             Field(
