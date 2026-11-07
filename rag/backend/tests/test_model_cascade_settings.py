@@ -29,7 +29,9 @@ SECONDARY = "https://secondary.example/openai/v1"
 
 
 def _settings(**overrides: Any) -> Settings:
-    return Settings(
+    # 確認を通らなかったときのモデルは要求の単位の値だけ（構築・環境変数では決めない）。
+    escalation = overrides.pop("rag_answer_escalation_model", None)
+    settings = Settings(
         oci_enterprise_ai_endpoint=PRIMARY,
         oci_enterprise_ai_api_key="sk-primary",
         oci_enterprise_ai_secondary_endpoint=SECONDARY,
@@ -50,6 +52,23 @@ def _settings(**overrides: Any) -> Settings:
         oci_enterprise_ai_default_vision_model="model-light",
         **overrides,
     )
+    if escalation is not None:
+        settings = settings.model_copy(update={"rag_answer_escalation_model": escalation})
+    return settings
+
+
+def test_there_is_no_global_escalation_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """全体の既定は持たない: 環境変数・構築の値では有効にならず、既存のプロファイルは変わらない。"""
+    monkeypatch.setenv("RAG_ANSWER_ESCALATION_MODEL", "model-strong")
+    assert Settings().rag_answer_escalation_model == ""
+    assert Settings(rag_answer_escalation_model="model-strong").rag_answer_escalation_model == ""
+    # 項目の無い保存済みのプロファイル（既存）はカスケードしない。
+    from app.rag.search_answer_profile_config import parse_search_answer_profile_config
+
+    legacy = parse_search_answer_profile_config({"version": 1, "knowledge_base_ids": ["kb-1"]})
+    assert legacy.escalation_model_id is None
+    effective, _ = resolve_search_answer_profile_settings(_settings(), legacy)
+    assert effective.rag_answer_escalation_model == ""
 
 
 def test_profile_escalation_model_is_request_scoped() -> None:
