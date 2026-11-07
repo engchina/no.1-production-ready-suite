@@ -78,7 +78,7 @@ def propagates(exc: BaseException) -> bool:
     )
 
 
-def _evidence(inputs: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def sent_evidence(inputs: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {
         str(row["evidence_id"]): row
         for document in inputs.get("documents") or ()
@@ -89,7 +89,7 @@ def _evidence(inputs: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
 
 def reason_inputs(inputs: Mapping[str, Any], index: int, status: str, basis_ids: Sequence[str]) -> dict[str, Any]:
     """理由の段の入力。原文は引用の束縛と判定に使った evidence_id からコードが切り出す。"""
-    evidence = _evidence(inputs)
+    evidence = sent_evidence(inputs)
     application = next(row for row in inputs["applications"] if row["index"] == index)
     items = [inputs["items"][position] for position in application["item_indexes"]]
     cited = list(
@@ -131,7 +131,7 @@ def reason_input_texts(payload: Mapping[str, Any]) -> list[str]:
 def internal_ids(inputs: Mapping[str, Any]) -> list[str]:
     """監査の入力が持つ内部 ID（根拠・出典・単位・要求の ID）。"""
     found: list[str] = []
-    for row in _evidence(inputs).values():
+    for row in sent_evidence(inputs).values():
         found += [str(row.get("evidence_id") or ""), str(row.get("source_id") or "")]
     for item in inputs.get("items") or ():
         for binding in item.get("citation_bindings") or ():
@@ -183,7 +183,7 @@ def explain_verdicts(
     trace: dict[str, Any] = {"calls": 0, "results": []}
     if audit is None:
         return reasons, trace
-    evidence = _evidence(inputs)
+    evidence = sent_evidence(inputs)
     ids = internal_ids(inputs)
     system = resolve_prompt("application.reasonSystem", APPLICATION_REASON_SYSTEM_PROMPT)
     # 理由の段のモデル(#4564。設定が無ければ呼び出し側の provider)。登録していないモデルは呼び出しが失敗し、定型の文になる。

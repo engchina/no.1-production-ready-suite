@@ -10,7 +10,7 @@ from typing import Any
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 
 from rag_engine.config import step_provider
-from rag_engine.generation.application_reason import explain_verdicts, propagates
+from rag_engine.generation.application_reason import explain_verdicts, propagates, sent_evidence
 from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.applications import (
     APPLICATION_AUDIT_SYSTEM_PROMPT,
@@ -91,15 +91,53 @@ def basis_not_cited(inputs: dict[str, Any], audit: ApplicationVerdictAudit) -> l
     for application in inputs["applications"]:
         number = int(application["index"])
         rows = [row for row in audit.application_reviews if row.index == number]
-        cited = {
-            str(binding.get("evidence_id"))
-            for position in application["item_indexes"]
-            for binding in inputs["items"][position].get("citation_bindings") or ()
-            if binding.get("evidence_id")
-        }
+        cited = cited_evidence_ids(inputs, application)
         if len(rows) == 1 and rows[0].valid and cited and not cited & set(rows[0].basis_evidence_ids):
             blocked.append(number)
     return blocked
+
+
+def cited_evidence_ids(inputs: dict[str, Any], application: dict[str, Any]) -> set[str]:
+    """application の items が引用した evidence_id（検証済みの引用の束縛）。"""
+    return {
+        str(binding.get("evidence_id"))
+        for position in application["item_indexes"]
+        for binding in inputs["items"][position].get("citation_bindings") or ()
+        if binding.get("evidence_id")
+    }
+
+
+def attach_audit_basis(
+    inputs: dict[str, Any], audit: ApplicationVerdictAudit | None, candidates: Sequence[CheckedApplication]
+) -> dict[str, list[str]]:
+    """valid と確定した推導に、審査が判定に使った送った原文の単位のうち、推導の引用の原文が全体を含まないものを付ける（#4589）。
+
+    審査は送った単位の全文を見て判定するが、推導の引用（item の quote）は単位の一部（見出しだけ・表の一部の行など）の
+    ことがある。説明の段は推導の引用と、ここで付けた単位の全文を入力にする（審査が結論を受け入れた原文を説明の段も
+    見る）。推導が引用した単位でも、引用の原文が全文を含まなければ付ける。送った documents に無い evidence_id は捨てる
+    （記録は ``unknown_basis_ids``）。ID の照合と文字列の包含だけで、意味は判定しない。
+    返り値は単位を付けた application の index ごとの evidence_id（診断用）。
+    """
+    if audit is None:
+        return {}
+    evidence = sent_evidence(inputs)
+    attached: dict[str, list[str]] = {}
+    for application in inputs["applications"]:
+        number = int(application["index"])
+        rows = [row for row in audit.application_reviews if row.index == number]
+        entry = candidates[number]
+        if len(rows) != 1 or entry.assessment.get("status") != "valid":
+            continue
+        quotes = [str(inputs["items"][position].get("quote") or "") for position in application["item_indexes"]]
+        units = [
+            {"evidence_id": value, "text": text}
+            for value in dict.fromkeys(rows[0].basis_evidence_ids)
+            if value in evidence and (text := str(evidence[value].get("text") or "").strip()) and not any(text in quote for quote in quotes)
+        ]
+        entry.audit_basis = units
+        if units:
+            attached[str(number)] = [unit["evidence_id"] for unit in units]
+    return attached
 
 
 def review_applications(
@@ -124,6 +162,8 @@ def review_applications(
     """
     if not checked:
         return {"status": "not_applicable", "calls": 0}
+    for entry in checked:
+        entry.audit_basis = []
     if evidence_spans is None or not evidence_spans:
         apply_application_audit(checked, None, require_complete=True)
         return {
@@ -216,6 +256,8 @@ def review_applications(
     apply_application_audit(candidates, audit, require_complete=True, reasons=reasons)
     for position in blocked:
         candidates[position].assessment["reason"] = BASIS_NOT_CITED_REASON
+    if attached := attach_audit_basis(inputs, audit, candidates):
+        diagnostic["explanation_basis"] = attached
     diagnostic.update(seconds=round(monotonic() - started, 3), results=[dict(entry.assessment) for entry in candidates])
     if any(entry.assessment.get("status") == "unknown" for entry in candidates) and diagnostic["status"] == "completed":
         diagnostic["status"] = "incomplete"

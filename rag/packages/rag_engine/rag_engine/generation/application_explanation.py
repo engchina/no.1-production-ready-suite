@@ -1,8 +1,10 @@
 """論理の審査で valid とした推導ごとに、利用者に示す説明を独立した短い段で作る（#4393）。
 
-説明の段に渡すのは原質問と、その推導が当てはめた資料の原文だけ（明示の回答言語の指定があるときだけ、その原文の
-引用も渡す）。審査済みの結論・生成の推導の文・要求は渡さない。照らす相手が入力に無いので、説明が入力の写しや
-「結論と一致します」という自己確認の文にならない。
+説明の段に渡すのは原質問と、その推導が当てはめた資料の原文と、独立の審査が valid の根拠にした送った単位のうち
+推導の引用の原文が全文を含まないものの全文（``CheckedApplication.audit_basis``。#4589）だけ（明示の回答言語の指定があるときだけ、
+その原文の引用も渡す）。審査が結論を受け入れた原文を説明の段も見るので、審査が依った規則を説明の段が「資料に無い」
+と書いて公開の結論と食い違うことを、入力の範囲で防ぐ。審査済みの結論・生成の推導の文・要求は渡さない。照らす相手が
+入力に無いので、説明が入力の写しや「結論と一致します」という自己確認の文にならない。
 
 表示するかはコードが形式だけで決める（意味の判定はしない。語の一覧・正規表現の語彙を持たない）:
 
@@ -113,11 +115,16 @@ def explanation_prompt(question: str, sources: Sequence[str], instruction: str |
 
 
 def application_rows(entry: CheckedApplication, row_conditions: Any) -> list[dict[str, str]]:
-    """推導が当てはめた根拠の表の、条件のある行の判定（行の段の結果。無ければ空）。日本語の key と値だけにする。"""
+    """推導が当てはめた根拠の表と審査が根拠にした表の、条件のある行の判定（行の段の結果。無ければ空）。日本語の key と値だけにする。"""
     if row_conditions is None or getattr(row_conditions, "status", "") != "completed":
         return []
     facts = row_conditions.facts_by_evidence()
-    evidence_ids = dict.fromkeys(str((getattr(item, "span", None) or {}).get("evidence_id") or "") for item in entry.entries)
+    evidence_ids = dict.fromkeys(
+        [
+            *(str((getattr(item, "span", None) or {}).get("evidence_id") or "") for item in entry.entries),
+            *(unit["evidence_id"] for unit in entry.audit_basis),
+        ]
+    )
     return [
         {KEY_ROW_CONDITION: str(row["condition"]), KEY_ROW_RESULT: ROW_RESULT_LABELS[row["applicability"]]}
         for evidence_id in evidence_ids
@@ -127,8 +134,12 @@ def application_rows(entry: CheckedApplication, row_conditions: Any) -> list[dic
 
 
 def application_sources(entry: CheckedApplication) -> list[str]:
-    """推導が当てはめた資料の原文（監査の items の quote と同じ値）。同じ原文は 1 回だけ渡す。"""
+    """推導が当てはめた資料の原文（監査の items の quote と同じ値）と、審査が根拠にした送った原文（``audit_basis``）。
+
+    推導の引用を先に、審査の根拠をその後に置く。同じ原文は 1 回だけ渡す。
+    """
     texts = [str(item.item.quote or item.item.text or "").strip() for item in entry.entries]
+    texts += [str(unit.get("text") or "").strip() for unit in entry.audit_basis]
     return [text for text in dict.fromkeys(texts) if text]
 
 
