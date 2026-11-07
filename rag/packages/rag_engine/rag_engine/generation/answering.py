@@ -51,7 +51,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import crag_generation, form_field_kinds, passage_marks
+from rag_engine.generation import crag_generation, form_field_kinds, passage_marks, row_conditions
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -2810,6 +2810,38 @@ def _invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, LlmRunawayOutput | LlmStreamOutputMissing) or is_invalid_structured_output(exc)
 
 
+def _row_condition_step(
+    question: str, spans: Sequence[dict[str, Any]], entries: Sequence[Any], *, settings: Settings
+) -> row_conditions.RowConditionsResult | None:
+    """推導に使う規則の原文の表の各行の条件を、質問に当てはめる段（#4349）。送った表が無ければ None。
+
+    表は実際に送った単位の目録から投影した表だけ（``grounded.sent_table_views``）。この段のモデルは段ごとの設定
+    （``row_condition_call_settings``）で、使えなければ実行せず理由を残す。
+    """
+    from rag_engine.generation import grounded
+
+    evidence_ids = {str((getattr(entry, "span", None) or {}).get("evidence_id") or "") for entry in entries} - {""}
+    selected = [span for span in spans if str(span.get("evidence_id") or "") in evidence_ids]
+    tables, skipped = grounded.sent_table_views(selected) if selected else ([], [])
+    if not tables:
+        return None
+    with _execution_step(
+        "表の各行の条件を質問に当てはめる", "推導に使う表の各行の条件が、質問の内容から成り立つかを行ごとに確かめます。"
+    ) as step:
+        step.input(
+            {"question": question, "tables": [{"evidence_id": table["evidence_id"], "rows": len(table["rows"])} for table in tables]}
+        )
+        result = row_conditions.evaluate_tables(question, tables, skipped, parse_text=parse_text_response, settings=settings)
+        step.output(result.trace())
+        if result.status == "model_unavailable":
+            step.skip("この段のモデルを使えないため、表の行の判定を行いません。", reason_code="row_condition_model_unavailable")
+        elif undetermined := result.undetermined():
+            step.result(f"表 {len(result.tables)} 件のうち、決められない行のある表 {len(undetermined)} 件（推導を保留）")
+        else:
+            step.result(f"表 {len(result.tables)} 件の行をすべて判定")
+    return result
+
+
 def synthesize_grounded_answer(
     question: str,
     context: AnswerContext,
@@ -3592,6 +3624,17 @@ def synthesize_grounded_answer(
         from rag_engine.generation.answer_parts import check_answer_parts
         from rag_engine.generation.application_review import review_applications
 
+        # 推導の審査の前に、推導が使う表の各行の条件を質問に当てはめる（#4349。送った表が無ければ段を開かない）。
+        row_result = (
+            _row_condition_step(
+                question,
+                spans,
+                [item for entry in current.applications if not entry.reasons for item in entry.entries],
+                settings=settings,
+            )
+            if any(not entry.reasons for entry in current.applications)
+            else None
+        )
         with _execution_step(
             "資料をもとに導いた結論を確認する", "選択した原文と質問の条件から、その結論が導けるかを確認します。"
         ) as review_step:
@@ -3605,11 +3648,16 @@ def synthesize_grounded_answer(
                 parse_text=parse_text_response,
                 settings=audit_settings,
                 provider_id=provider,
+                row_conditions=row_result,
             )
+            if row_result is not None:
+                diagnostic["row_conditions"] = row_result.trace()
             current.timing["application_review"] = diagnostic
             review_step.output(diagnostic)
             if diagnostic["status"] == "not_applicable":
                 review_step.skip("確認対象の導出結論がありません。", reason_code="no_derivations")
+            elif diagnostic["status"] == "withheld_table_not_determined":
+                review_step.skip("表に質問から決められない行があるため、表から導く結論を保留します。", reason_code="table_not_determined")
             elif diagnostic.get("error_type"):
                 review_step.fail("確認を完了できなかったため、未確認の結論を保留します。", reason_code="application_review_failed")
             else:
@@ -3677,9 +3725,11 @@ def synthesize_grounded_answer(
         )
     ):
         application_step["ran"] = True
-        step_basis = grounded.summary_basis_snapshot(
-            list(answer_applications.application_step_inputs(question, current.checked, current.requests)[1].values())
-        )
+        step_items = list(answer_applications.application_step_inputs(question, current.checked, current.requests)[1].values())
+        step_basis = grounded.summary_basis_snapshot(step_items)
+        step_rows = _row_condition_step(question, spans, step_items, settings=settings)
+        if step_rows is not None:
+            application_step["row_conditions"] = step_rows.trace()
         try:
             step_applications, step_summary = answer_applications.run_application_step(
                 question,
@@ -3691,6 +3741,7 @@ def synthesize_grounded_answer(
                 audit_settings=audit_settings,
                 provider_id=provider,
                 render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
+                row_conditions=step_rows,
             )
         except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
             application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
