@@ -2872,7 +2872,7 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
         "llm": {"model_id": "model-a", "label": "Model A"},
         # 質問の対象の役割の判定の段のモデル(#4351。既定の設定、登録の表示名が無ければ ID)。
         "question_subject_role": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
-        # 表の行の条件の段(#4349)、推導の監査の判定の段(#4565)と理由の段(#4564)のモデル(既定の設定)。
+        # 表の行の条件の段(#4349)、推導の監査の判定(#4565)・理由(#4564)の段のモデル(既定)。
         "row_condition": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
         "application_audit": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
         "application_reason": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
