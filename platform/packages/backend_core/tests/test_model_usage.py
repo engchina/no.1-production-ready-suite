@@ -11,6 +11,7 @@ import pytest
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.model_usage import (
     UNMEASURED_SOURCE_ATTRIBUTE,
+    ModelTokenUsage,
     ModelUsageCollector,
     RunModelUsage,
     add_run_usage,
@@ -49,6 +50,15 @@ def test_llm_calls_are_summed_and_other_spans_are_ignored() -> None:
 
     assert collector.summary(primary_model="model-b") == RunModelUsage(
         models=["model-b", "model-a"],
+        # モデルごとの内訳（#4581。`models` と同じ順）。
+        by_model=[
+            ModelTokenUsage(
+                model="model-b", requests=1, input_tokens=50, output_tokens=5, total_tokens=55
+            ),
+            ModelTokenUsage(
+                model="model-a", requests=1, input_tokens=100, output_tokens=20, total_tokens=120
+            ),
+        ],
         requests=2,
         input_tokens=150,
         output_tokens=25,
@@ -156,6 +166,11 @@ def test_collect_model_usage_works_outside_and_inside_an_operation_trace() -> No
         _llm_call("model-a", {"input_tokens": 30, "output_tokens": 4})
     assert outside.summary() == RunModelUsage(
         models=["model-a"],
+        by_model=[
+            ModelTokenUsage(
+                model="model-a", requests=1, input_tokens=30, output_tokens=4, total_tokens=34
+            )
+        ],
         requests=1,
         input_tokens=30,
         output_tokens=4,
@@ -213,6 +228,48 @@ def test_add_run_usage_sums_two_requests_of_one_run() -> None:
         measured_requests=3,
     )
     assert add_run_usage(None, confirmation) == confirmation
+
+    # モデルごとの内訳は同じモデルを足し、先の側の順にする（#4581）。
+    with_rows = add_run_usage(
+        job.model_copy(
+            update={
+                "by_model": [
+                    ModelTokenUsage(
+                        model="model-a",
+                        requests=1,
+                        input_tokens=100,
+                        output_tokens=20,
+                        total_tokens=120,
+                    )
+                ]
+            }
+        ),
+        confirmation.model_copy(
+            update={
+                "by_model": [
+                    ModelTokenUsage(
+                        model="model-b",
+                        requests=1,
+                        input_tokens=30,
+                        output_tokens=6,
+                        total_tokens=36,
+                    ),
+                    ModelTokenUsage(
+                        model="model-a",
+                        requests=1,
+                        input_tokens=20,
+                        output_tokens=4,
+                        total_tokens=24,
+                    ),
+                ]
+            }
+        ),
+    )
+    assert with_rows is not None
+    assert [(row.model, row.requests, row.total_tokens) for row in with_rows.by_model] == [
+        ("model-a", 2, 144),
+        ("model-b", 1, 36),
+    ]
     assert add_run_usage(job, None) == job
     assert add_run_usage(None, None) is None
 

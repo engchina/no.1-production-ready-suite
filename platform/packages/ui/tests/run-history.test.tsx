@@ -27,6 +27,8 @@ import {
   formatRunTokens,
   runListUsage,
   runUsageView,
+  runModelTokensView,
+  modelCascadeView,
   isRunActive,
   runPeriodSince,
   runStatusIcon,
@@ -180,6 +182,41 @@ describe("書式と絞り込みの値", () => {
     expect(runListUsage(null, "unmeasured")).toEqual({ tokens: null, note: "未計測" });
     expect(runListUsage(undefined, null)).toEqual({ tokens: null, note: "未計測" });
     expect(runListUsage(1, "partial", { partial: "partial" }).note).toBe("partial");
+  });
+
+  it("モデルごとのトークン数は 2 つ以上のモデルを呼んだ実行だけ（#4581）", () => {
+    const usage: RunModelUsageRecord = {
+      models: ["model-a", "model-b"],
+      requests: 3,
+      input_tokens: 12000,
+      output_tokens: 345,
+      total_tokens: 12345,
+      measurement: "complete",
+      measured_requests: 3,
+      by_model: [
+        { model: "model-a", requests: 2, input_tokens: 10000, output_tokens: 300, total_tokens: 10300 },
+        { model: "model-b", requests: 1, input_tokens: 2000, output_tokens: 45, total_tokens: 2045 },
+      ],
+    };
+    expect(runModelTokensView(usage)).toBe("model-a: 10,300 トークン（2 回） ／ model-b: 2,045 トークン（1 回）");
+    expect(runModelTokensView({ ...usage, by_model: usage.by_model?.slice(0, 1) })).toBeNull();
+    expect(runModelTokensView({ ...usage, by_model: undefined })).toBeNull();
+    expect(runModelTokensView(null)).toBeNull();
+  });
+
+  it("モデルのカスケードの表示: 昇格・昇格しない・カスケードしない（#4581）", () => {
+    expect(modelCascadeView({ escalated: true, reasons: ["citation_mismatch", "unknown_signal"] })).toEqual({
+      escalated: true,
+      line: "最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました",
+      reasons: "引用の ID・原文が資料と一致しなかった、unknown_signal",
+    });
+    expect(modelCascadeView({ escalated: false, reasons: [] })).toEqual({
+      escalated: false,
+      line: "回答し直していません（最初のモデルの回答が確認を通りました）",
+      reasons: null,
+    });
+    expect(modelCascadeView(null)).toBeNull();
+    expect(modelCascadeView({ escalated: true, reasons: ["citation_mismatch"] }, { reasons: { citation_mismatch: "x" } })?.reasons).toBe("x");
   });
 
   it("期間の開始は now から引いた ISO、すべては null", () => {

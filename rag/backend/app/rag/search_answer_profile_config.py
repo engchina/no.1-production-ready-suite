@@ -85,7 +85,16 @@ class SearchAnswerProfileConfig(BaseModel):
         description="回答に使う登録済みモデル。null は全体の既定を継承する。",
     )
 
-    @field_validator("answer_model_id")
+    # 確認を通らなかったときのモデル（モデルのカスケード。#4581）。回答のモデルの回答が機械で
+    # 判定できる確認を通らなかったときだけ、取得した根拠のまま失敗した段をこのモデルでやり直す。
+    # null はカスケードしない（全体の既定は持たない）。質問でモデルを選んだ実行には使わない。
+    escalation_model_id: str | None = Field(
+        default=None,
+        max_length=256,
+        description="確認を通らなかったときに回答し直す登録済みモデル。null はカスケードしない。",
+    )
+
+    @field_validator("answer_model_id", "escalation_model_id")
     @classmethod
     def _normalize_answer_model(cls, value: str | None) -> str | None:
         return value.strip() or None if value is not None else None
@@ -172,11 +181,16 @@ def dump_search_answer_profile_config(config: SearchAnswerProfileConfig) -> dict
 
 def validate_profile_answer_model(settings: Settings, config: SearchAnswerProfileConfig) -> None:
     """登録済みのモデルだけを参照し、登録削除後の別モデルへの切り替えを防ぐ。"""
-    if config.answer_model_id and not any(
-        model.model_id == config.answer_model_id for model in enterprise_ai_model_catalog(settings)
-    ):
+    registered = {model.model_id for model in enterprise_ai_model_catalog(settings)}
+    if config.answer_model_id and config.answer_model_id not in registered:
         raise ProfileAnswerModelUnavailableError(
             "回答設定で選んだモデルが登録されていません。検索・回答プロファイルの回答モデルを選び直すか、全体の既定を継承してください。"
+        )
+    # 確認を通らなかったときのモデルも同じ（#4581）。別のモデルへ暗黙に切り替えず、明示の
+    # 失敗にする。
+    if config.escalation_model_id and config.escalation_model_id not in registered:
+        raise ProfileAnswerModelUnavailableError(
+            "確認を通らなかったときのモデルが登録されていません。検索・回答プロファイルで選び直すか、使わない設定にしてください。"
         )
 
 
@@ -205,6 +219,12 @@ def resolve_search_answer_profile_settings(
             update={"oci_enterprise_ai_default_text_model": config.answer_model_id}
         )
         applied = True
+    # 確認を通らなかったときのモデル（#4581）。リクエストの単位で回答エンジンへ渡す（全体の
+    # 既定は無い）。
+    escalation = (config.escalation_model_id or "") if apply_answer_model else ""
+    if settings.rag_answer_escalation_model != escalation:
+        settings = settings.model_copy(update={"rag_answer_escalation_model": escalation})
+        applied = applied or bool(escalation)
     if settings.rag_language_pack_overrides != config.language_pack:
         settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
     if config.language_pack:

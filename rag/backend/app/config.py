@@ -2083,6 +2083,21 @@ class Settings(
             "空ならシステム設定の窓口。"
         ),
     )
+    rag_answer_escalation_model: str = Field(
+        default="",
+        description=(
+            "リクエスト単位で検索・回答プロファイルから解決する、確認を通らなかったときのモデル（モデルの"
+            "カスケード。#4581）。空はカスケードしない。全体の既定は持たない（.env に書かない）。"
+        ),
+    )
+
+    @field_validator("rag_answer_escalation_model", mode="before")
+    @classmethod
+    def _no_global_escalation_model(cls, _value: object) -> str:
+        """全体の既定は持たない（#4581）。環境変数・構築の値は捨て、要求の単位の model_copy だけで
+        決める。"""
+        return ""
+
     rag_language_pack_overrides: dict[str, dict[str, object]] = Field(
         default_factory=dict,
         description=(

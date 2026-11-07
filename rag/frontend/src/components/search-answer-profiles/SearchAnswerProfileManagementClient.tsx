@@ -708,6 +708,8 @@ function SearchAnswerProfileEditor({
   });
   const { draft, setDraft, dirty } = editor;
   const { name, description, config } = draft;
+  // 確認を通らなかったときのモデルの候補（回答のモデルと同じモデルは選べない。#4581）。
+  const escalationModels = registeredModels.filter((model) => model.model_id !== config.answer_model_id);
   const setName = (value: string) => setDraft((current) => ({ ...current, name: value }));
   const setDescription = (value: string) =>
     setDraft((current) => ({ ...current, description: value }));
@@ -974,6 +976,25 @@ function SearchAnswerProfileEditor({
                     disabled={locked || (!config.answer_model_id && !registeredModels.length)}
                     onChange={(value) => setConfig((current) => ({ ...current, answer_model_id: value || null }))}
                   />
+                  {/* 確認を通らなかったときのモデル（モデルのカスケード。#4581）。全体の既定は無く、空は使わない。 */}
+                  <QuerySelectRow
+                    id="search-answer-profile-escalation-model"
+                    width="md"
+                    label={t("searchAnswerProfiles.field.escalationModel")}
+                    helper={answerModels.isError ? t("searchAnswerProfiles.field.answerModelLoadFailed") : t("searchAnswerProfiles.field.escalationModelHelper")}
+                    offLabel={t("searchAnswerProfiles.field.escalationModelOff")}
+                    onLabel={t("searchAnswerProfiles.field.escalationModelOn")}
+                    value={config.escalation_model_id ?? null}
+                    options={[
+                      ...escalationModels.map((model) => ({ value: model.model_id, label: model.display_name })),
+                      ...(config.escalation_model_id && !registeredModels.some((model) => model.model_id === config.escalation_model_id)
+                        ? [{ value: config.escalation_model_id, label: t("searchAnswerProfiles.field.unavailableModel", { model: config.escalation_model_id }) }]
+                        : []),
+                    ]}
+                    defaultOnOverride={escalationModels[0]?.model_id ?? ""}
+                    disabled={locked || (!config.escalation_model_id && !escalationModels.length)}
+                    onChange={(value) => setConfig((current) => ({ ...current, escalation_model_id: value || null }))}
+                  />
                   <div
                     className="flex items-start justify-between gap-4 rounded-lg border border-border p-3"
                     data-testid="search-answer-profile-guide-matching"
@@ -1166,6 +1187,8 @@ function QuerySelectRow<T extends string>({
   width,
   defaultOnOverride,
   helper,
+  offLabel,
+  onLabel,
   disabled = false,
   onChange,
 }: {
@@ -1173,6 +1196,9 @@ function QuerySelectRow<T extends string>({
   label: string;
   /** 項目の説明（継承・上書きのどちらでも出す）。 */
   helper?: string;
+  /** 値が無い側・値を選ぶ側の切り替えの文言（既定は「グローバル既定を継承」「検索・回答プロファイルで上書き」）。 */
+  offLabel?: string;
+  onLabel?: string;
   value: T | null;
   options: readonly SelectFieldOption<T>[];
   /** 選択欄の幅（値の種類。#1891）。 */
@@ -1188,7 +1214,7 @@ function QuerySelectRow<T extends string>({
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
-            {t("searchAnswerProfiles.inherit")}
+            {offLabel ?? t("searchAnswerProfiles.inherit")}
           </ToggleChip>
           <ToggleChip
             selected={overriding}
@@ -1197,7 +1223,7 @@ function QuerySelectRow<T extends string>({
               if (!overriding) onChange(defaultOnOverride);
             }}
           >
-            {t("searchAnswerProfiles.override")}
+            {onLabel ?? t("searchAnswerProfiles.override")}
           </ToggleChip>
         </div>
         {helper ? <p className="text-xs text-fg-muted">{helper}</p> : null}

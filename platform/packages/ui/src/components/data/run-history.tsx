@@ -80,6 +80,79 @@ export interface RunModelUsageRecord {
   measured_requests: number;
   /** 利用量を計測できない呼び出しの出どころ（`select_ai` など。回数は数えない）。古い記録は無い。 */
   unmeasured_sources?: string[];
+  /** モデルごとの内訳（`models` と同じ順。#4581）。古い記録は無い。 */
+  by_model?: RunModelTokenUsageRecord[];
+}
+
+/** 1 つのモデルの呼び出しの回数と利用量（backend の `ModelTokenUsage`）。 */
+export interface RunModelTokenUsageRecord {
+  model: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+/**
+ * 「モデルごとのトークン数」の値（モデルのカスケードで 2 つ以上のモデルを呼んだ実行。#4581）。モデルが 1 つ・内訳の無い
+ * 記録・計測できない実行は null（行を出さない）。数は桁区切り。
+ */
+export function runModelTokensView(
+  usage: RunModelUsageRecord | null | undefined,
+  label: (values: { model: string; tokens: string; requests: string }) => string = ({ model, tokens, requests }) =>
+    `${model}: ${tokens} トークン（${requests} 回）`
+): string | null {
+  const rows = usage?.by_model ?? [];
+  if (!usage || usage.measurement === "unmeasured" || rows.length < 2) return null;
+  return rows
+    .map((row) =>
+      label({ model: row.model, tokens: formatPaginationNumber(row.total_tokens), requests: formatPaginationNumber(row.requests) })
+    )
+    .join(" ／ ");
+}
+
+/** モデルのカスケードの記録（backend の `pr_backend_core.model_cascade.cascade_record`。#4581）。 */
+export interface ModelCascadeView {
+  escalated: boolean;
+  /** 「詳細」に出す 1 行（昇格しなかった実行は「回答し直していません」）。 */
+  line: string;
+  /** 昇格の理由（表示名を「、」で並べる）。昇格しなかった実行は null。 */
+  reasons: string | null;
+}
+
+/** モデルのカスケードの文言（製品の i18n で上書きできる）。理由の語は `ESCALATION_SIGNALS`。 */
+export interface ModelCascadeLabels {
+  escalated: string;
+  notEscalated: string;
+  reasons: Record<string, string>;
+}
+
+export const DEFAULT_MODEL_CASCADE_LABELS: ModelCascadeLabels = {
+  escalated: "最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました",
+  notEscalated: "回答し直していません（最初のモデルの回答が確認を通りました）",
+  reasons: {
+    structured_output_invalid: "生成の出力が形式の検査を通らなかった",
+    citation_mismatch: "引用の ID・原文が資料と一致しなかった",
+    arithmetic_mismatch: "計算を確かめ直すと合わなかった",
+    conclusion_withheld: "要約・結論を確かめられず保留した",
+    audit_contradicted: "監査が資料と矛盾すると判定した",
+  },
+};
+
+/** モデルのカスケードの表示（3 製品で同じ規則）。カスケードしない実行・古い記録は null（何も出さない）。 */
+export function modelCascadeView(
+  record: { escalated: boolean; reasons: readonly string[] } | null | undefined,
+  labels: Partial<ModelCascadeLabels> = {}
+): ModelCascadeView | null {
+  if (!record) return null;
+  const merged = { ...DEFAULT_MODEL_CASCADE_LABELS, ...labels };
+  const reasons = { ...DEFAULT_MODEL_CASCADE_LABELS.reasons, ...labels.reasons };
+  if (!record.escalated) return { escalated: false, line: merged.notEscalated, reasons: null };
+  return {
+    escalated: true,
+    line: merged.escalated,
+    reasons: record.reasons.length ? record.reasons.map((reason) => reasons[reason] ?? reason).join("、") : null,
+  };
 }
 
 /** 利用量の文言（製品の i18n で上書きできる）。 */

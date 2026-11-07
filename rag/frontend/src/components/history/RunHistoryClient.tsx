@@ -36,6 +36,7 @@ import {
   Skeleton,
   type RunExecutorFilter,
   type RunFact,
+  runModelTokensView,
   type RunHistoryItem,
   type RunPeriod,
   type RunStatusFilter,
@@ -62,12 +63,14 @@ import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { AnswerCitations, CitationList } from "@/components/search/CitationList";
+import { parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { processFailureLabels, runFailure, storageFailureNotice } from "@/lib/process-failure";
+import { answerModelCascadeView } from "@/lib/model-cascade";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { useListTotal, useRunHistory, useRunHistoryDetail } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -477,8 +480,23 @@ function RunDetailView({ run }: { run: RunDetail }) {
 
   // モデル・token・モデルの呼び出し（実行のときに記録した値。Agent の実行の詳細と同じ形。#3419）。
   const usageView = runUsageView(run);
+  // モデルのカスケード（#4581）: 2 つのモデルを呼んだ実行はモデルごとの token と、回答し直したかを出す。
+  const modelTokens = runModelTokensView(run.usage, (values) => t("history.detail.modelTokensValue", values));
+  const cascade = answerModelCascadeView(parseAnswerDiagnostics(run.answer_diagnostics)?.modelCascade);
   const extraFacts: RunFact[] = [
     { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls, tabular: Boolean(run.usage && run.usage.measurement !== "unmeasured" && Number.isFinite(run.usage.requests)) },
+    ...(modelTokens ? [{ id: "modelTokens", label: t("history.detail.modelTokens"), value: modelTokens, tabular: true }] : []),
+    ...(cascade
+      ? [
+          {
+            id: "modelCascade",
+            label: t("history.detail.cascade"),
+            value: cascade.escalated
+              ? t("history.detail.cascade.escalated", { reasons: cascade.reasons ?? "" })
+              : t("history.detail.cascade.notEscalated"),
+          },
+        ]
+      : []),
     { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count), tabular: Number.isFinite(run.citation_count) },
   ];
   if (run.status === "error") {

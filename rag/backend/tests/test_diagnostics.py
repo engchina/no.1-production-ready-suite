@@ -207,6 +207,8 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_section_max_revisions",
         # 要求ごとにプロファイルから解決する値。内容の版は manifest の profiles に残る。
         "rag_answer_contact_override",
+        # 確認を通らなかったときのモデル（#4581）。manifest の profiles の escalation_model_id。
+        "rag_answer_escalation_model",
         "rag_domain_keywords",
         "rag_guide_preview",
         "rag_language_pack_overrides",

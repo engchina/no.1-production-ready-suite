@@ -17,6 +17,8 @@ from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
+from pr_backend_core.model_cascade import SIGNAL_STRUCTURED_OUTPUT_INVALID, decide_escalation, escalation_reasons
+from pr_backend_core.model_cascade import cascade_record as model_cascade_record
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation
@@ -52,7 +54,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import crag_generation, form_field_kinds, passage_marks, row_conditions
+from rag_engine.generation import crag_generation, form_field_kinds, model_cascade, passage_marks, row_conditions
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -2857,6 +2859,8 @@ def synthesize_grounded_answer(
     unread_documents: Collection[str] = (),
     evidence_budget_chars: int | None = None,
     recover_requests: Callable[[AnswerContext, Sequence[Mapping[str, Any]]], tuple[AnswerContext, dict[str, Any]]] | None = None,
+    escalation_probe: bool = False,
+    shared_steps: model_cascade.SharedSteps | None = None,
 ) -> GroundedAnswer:
     """主張と引用の対で回答を生成し、検査・局所監査・最大2回の是正を行う。
 
@@ -2872,7 +2876,12 @@ def synthesize_grounded_answer(
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
     recover_requests があれば、未回答の要求を共有予算内で1回だけ探し直す。通常は各回で生成と監査を1回ずつ行う。
     生成した根拠計画の構造が不正な場合だけ、1回修正する。
+
+    escalation_probe はモデルのカスケード（#4581）の 1 つ目のモデルの実行で、生成の段の結果が確認を通らなければ
+    修正の回を続けずに ``model_cascade.EscalationRequested`` を送出する（以後の修正の回は 2 つ目のモデルで行う）。
+    shared_steps は 1 つ目と 2 つ目のモデルの実行が共有する、やり直さない段の結果。
     """
+    shared = shared_steps if shared_steps is not None else model_cascade.SharedSteps()
     if runtime_knowledge is not None:
         runtime_knowledge = runtime_knowledge.with_rule_usage(
             confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled
@@ -2951,6 +2960,10 @@ def synthesize_grounded_answer(
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""
+    # 生成の出力が再試行の後も構造化出力の契約を満たさなかった（モデルのカスケードの昇格の信号。#4581）。
+    structured_output_failed = False
+    # 1 つ目のモデルの生成の段が確認を通らなかったときの昇格の信号（escalation_probe のときだけ集める。#4581）。
+    early_escalation: tuple[str, ...] = ()
     # 1 組目の生成の出力が契約を満たさず草稿が無い（元の例外の型名。#3849）。関係する資料の記載だけを示す。
     generation_failure = ""
     generation_failure_stage = "answer.generate"
@@ -2978,7 +2991,9 @@ def synthesize_grounded_answer(
     guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
     # 質問の対象と役割（#4351）。最初に必要になった round で 1 回だけ抽出し、是正の round でも同じ結果を使う。
     subject_reader = injected_question_subjects()
-    question_subjects = cache(partial(subject_reader, question, audit_settings, provider_id=provider)) if subject_reader else None
+    if shared.question_subjects is None and subject_reader:
+        shared.question_subjects = cache(partial(subject_reader, question, audit_settings, provider_id=provider))
+    question_subjects = shared.question_subjects
 
     def generate_round(
         round_spans: Sequence[dict[str, Any]],
@@ -3022,7 +3037,9 @@ def synthesize_grounded_answer(
         )
 
     # 用語の照合結果は 1 回の回答の中で変わらない。プロンプトの組み立ての回数によらず 1 回だけ残す（#4095）。
-    _record_term_usage(base_knowledge, answer=True)
+    if not shared.term_usage_recorded:
+        _record_term_usage(base_knowledge, answer=True)
+        shared.term_usage_recorded = True
     for number in range(max_rounds):
         document_background_reader.remember(context)
         context = without_embedded_background(context)
@@ -3179,6 +3196,11 @@ def synthesize_grounded_answer(
                     raise
                 # 生成の出力の不合格は、包む前の例外の型名（InvalidStructuredOutput・ValidationError）で残す。
                 error_name = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
+                # 構造化出力の不正（再試行の後）だけをカスケードの信号にする。入力の予算・時間の上限・接続の失敗は数えない。
+                if not cut and not input_limited and (isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc)):
+                    structured_output_failed = True
+                    if escalation_probe:
+                        early_escalation = (SIGNAL_STRUCTURED_OUTPUT_INVALID,)
                 # 是正はより良くする試みなので、その LLM 呼出（生成・監査）の失敗で採用済みの回答を捨てない (#748)。
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
                 rounds.append(
@@ -3227,6 +3249,9 @@ def synthesize_grounded_answer(
                     step.result(
                         "モデルの入力予算に必須の根拠または指示が入らないため、生成を送信せず資料の記載を示します"
                         if input_limited
+                        # モデルのカスケード（#4581）で昇格するときは、資料の記載だけを示さずに回答し直す。
+                        else f"{work}{problem}ため、確認を通らなかったときのモデルで回答し直します（{generation_failure}）"
+                        if early_escalation
                         else f"{work}{problem}ため、{'回答文を生成せず、' if preparing_evidence else ''}"
                         f"質問に関係する資料の記載だけを示します（{generation_failure}）"
                     )
@@ -3293,6 +3318,10 @@ def synthesize_grounded_answer(
             # 原文の範囲だけを変える処理は、説明内容の是正を済ませたことにしない。
             corrected = False
         rounds.append({**current.trace(), "accepted": accepted})
+        if escalation_probe and (early_escalation := model_cascade.round_signals(current, audit_mode=audit_mode)):
+            # 1 つ目のモデルの生成の段が確認を通らなかった（#4581）。修正の回を 1 つ目のモデルで続けない。
+            rounds[-1]["escalation_signals"] = list(early_escalation)
+            break
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         previous_feedback, feedback = (
             feedback,
@@ -3527,6 +3556,9 @@ def synthesize_grounded_answer(
             elif remedy["remedy"] == "images":
                 remedy_step.field("添付する画像", f"{len(images)} 件")
 
+    if early_escalation:
+        raise model_cascade.EscalationRequested(early_escalation)
+
     from rag_engine.generation.refinement_round import project_crag_view, project_knowledge, prompt_context_for, refine_answer
 
     assert best is not None
@@ -3624,7 +3656,10 @@ def synthesize_grounded_answer(
         )
     # 送った根拠に投影できる表があれば、推導の有無に関わらず行の判定の段を 1 回動かす（#4349）。結果は推導の審査・
     # 当てはめの段・説明の段へ渡す。生成の草稿は作り直さない（既存の門はそのまま）。
-    row_result = _row_condition_step(question, spans, settings=settings)
+    row_key = tuple(str(span.get("evidence_id") or "") for span in spans)
+    if row_key not in shared.row_conditions:
+        shared.row_conditions[row_key] = _row_condition_step(question, spans, settings=settings)
+    row_result = shared.row_conditions[row_key]
     if audit_mode == grounded.AUDIT_MODE_NONE:
         from rag_engine.generation.answer_parts import check_answer_parts
         from rag_engine.generation.application_review import review_applications
@@ -4043,6 +4078,15 @@ def synthesize_grounded_answer(
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
+        # 採用した回答に残る、モデルのカスケードの昇格の信号（#4581。カスケードしない実行でも記録する）。
+        "escalation_signals": list(
+            escalation_reasons(
+                [
+                    *((SIGNAL_STRUCTURED_OUTPUT_INVALID,) if structured_output_failed else ()),
+                    *model_cascade.round_signals(current, audit_mode=audit_mode),
+                ]
+            )
+        ),
         # 1 組目の生成の出力が契約を満たさず、関係する資料の記載だけを示した（元の例外の型名。#3849）。
         **(
             {"generation_failure": {"error": generation_failure, "stage": generation_failure_stage, **generation_failure_detail}}
@@ -4193,6 +4237,102 @@ def synthesize_grounded_answer(
         response, generation_trace={**(response.generation_trace or {}), "document_background": document_background_reader.rounds}
     )
     return GroundedAnswer(response, context, tuple(images), mode)
+
+
+# モデルのカスケードの昇格の理由の表示（処理の経過）。語彙は platform の ``pr_backend_core.model_cascade``。
+_ESCALATION_REASON_LABELS = {
+    "structured_output_invalid": "生成の出力が形式の検査を通らなかった",
+    "citation_mismatch": "引用の ID・原文が資料と一致しなかった",
+    "arithmetic_mismatch": "計算を確かめ直すと合わなかった",
+    "conclusion_withheld": "要約・結論を確かめられず保留した",
+    "audit_contradicted": "監査が資料と矛盾すると判定した",
+}
+
+
+def synthesize_with_model_cascade(
+    question: str,
+    context: AnswerContext,
+    settings: Settings,
+    *,
+    answer_llm_provider: str | None = None,
+    image_evidence: Sequence[dict[str, Any]] = (),
+    image_prompt_mode: str,
+    **options: Any,
+) -> GroundedAnswer:
+    """回答の生成の段を、確認を通らなかったときだけ 2 つ目のモデルでやり直す（モデルのカスケード。#4581）。
+
+    確認を通らなかったときのモデル（``settings.escalation_llm``）が無ければ、``synthesize_grounded_answer`` と同じ。
+    あれば 1 つ目のモデルで生成し、生成の段の結果が機械で判定できる確認を通らなければ（昇格の信号は
+    ``model_cascade.round_signals`` と構造化出力の不正）、検索の結果（``context``）をそのまま使って生成の段を
+    2 つ目のモデルでやり直す。1 回の質問で昇格は 1 回だけで、やり直しの修正の回はすべて 2 つ目のモデルで行う
+    （回数の上限は同じ）。2 つ目のモデルも通らなければ、その結果を既存の失敗の扱いで返す。
+    カスケードの記録（``generation_trace["model_cascade"]``）は、昇格しなかった実行にも残す（昇格率を数える）。
+    """
+    primary_provider = answer_llm_provider or settings.default_answer_llm
+    cascade = model_cascade.answer_cascade(settings, primary_provider)
+    synthesize_options = {"image_evidence": image_evidence, "image_prompt_mode": image_prompt_mode, **options}
+    if not cascade.enabled:
+        return synthesize_grounded_answer(question, context, settings, answer_llm_provider=answer_llm_provider, **synthesize_options)
+    shared = model_cascade.SharedSteps()
+    first: GroundedAnswer | None
+    try:
+        first = synthesize_grounded_answer(
+            question,
+            context,
+            settings,
+            answer_llm_provider=answer_llm_provider,
+            escalation_probe=True,
+            shared_steps=shared,
+            **synthesize_options,
+        )
+    except model_cascade.EscalationRequested as exc:
+        first, signals = None, exc.signals
+    else:
+        signals = tuple((first.response.generation_trace or {}).get("escalation_signals") or ())
+    decision = decide_escalation(signals, cascade=cascade, escalated=False)
+    if not decision.escalate:
+        assert first is not None
+        return _with_model_cascade(first, model_cascade_record(cascade, escalated=False))
+    second_settings = model_cascade.escalated_settings(settings)
+    escalation_provider = settings.escalation_llm
+    with _execution_step(
+        "高性能モデルで回答し直す",
+        "最初のモデルの回答が確認を通らなかったため、取得した根拠をそのまま使い、確認を通らなかったときのモデルで回答を作り直します。",
+    ) as step:
+        step.input(
+            {
+                "最初のモデル": cascade.primary_model,
+                "回答し直すモデル": cascade.escalation_model,
+                "理由": list(decision.reasons),
+            }
+        )
+        step.field("回答し直すモデル", cascade.escalation_model)
+        step.field("理由", join_values([_ESCALATION_REASON_LABELS.get(reason, reason) for reason in decision.reasons]))
+        step.result(f"{cascade.escalation_model} で回答を作り直します")
+        step.output({"escalated": True, "reasons": list(decision.reasons), "stage": model_cascade.ESCALATION_STAGE})
+    # 根拠の画像は、2 つ目のモデルが読めるときだけ添付する（#3444。読めなければ文字の説明で答える）。
+    second_mode = (
+        _image_prompt_mode(image_evidence, second_settings, escalation_provider)
+        if image_prompt_mode == "vision_attachments"
+        else image_prompt_mode
+    )
+    second = synthesize_grounded_answer(
+        question,
+        context,
+        second_settings,
+        answer_llm_provider=escalation_provider,
+        shared_steps=shared,
+        **{**synthesize_options, "image_prompt_mode": second_mode},
+    )
+    return _with_model_cascade(
+        second,
+        model_cascade_record(cascade, escalated=True, reasons=decision.reasons, stage=model_cascade.ESCALATION_STAGE),
+    )
+
+
+def _with_model_cascade(answer: GroundedAnswer, record: dict[str, Any]) -> GroundedAnswer:
+    response = replace(answer.response, generation_trace={**(answer.response.generation_trace or {}), "model_cascade": record})
+    return replace(answer, response=response)
 
 
 def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set[str] = (), withheld: int = 0) -> dict[str, Any]:
@@ -7236,7 +7376,7 @@ def answer_question_result(
                 _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
             )
         else:
-            grounded_answer = synthesize_grounded_answer(
+            grounded_answer = synthesize_with_model_cascade(
                 request_text,
                 context,
                 settings,

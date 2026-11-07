@@ -30,6 +30,10 @@ ROW_CONDITION_LLM_PROVIDER = "enterprise-ai-row-condition"
 # 推導の監査の判定の段(#4565)と、判定が確定した推導の理由の段(#4564)。
 APPLICATION_AUDIT_LLM_PROVIDER = "enterprise-ai-application-audit"
 APPLICATION_REASON_LLM_PROVIDER = "enterprise-ai-application-reason"
+# 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
+# RAG_ENGINE_ESCALATION_* で渡したときだけ作る(利用者がモデルを明示した実行には渡さない)。
+ESCALATION_LLM_PROVIDER = "enterprise-ai-escalation"
+ESCALATION_ENV_PREFIX = "RAG_ENGINE_ESCALATION"
 
 
 @dataclass(frozen=True)
@@ -435,6 +439,11 @@ class Settings:
     # (この段のモデルの値)。段のモデルが使えなければ段は実行しない(回答のモデルへ暗黙に切り替えない)。
     row_condition_reasoning_effort: str = ""
     row_condition_max_input_tokens: int = 128_000
+    # 確認を通らなかったときのモデルの provider ID(モデルのカスケード。#4581)。空はカスケードしない。
+    # 回答のモデルの出力が機械で判定できる確認を通らなかったときだけ、失敗した段をこのモデルでやり直す。
+    escalation_llm: str = ""
+    # そのモデルの入力の上限(tokens。回答のモデルの `answer_max_input_tokens` の代わりに使う)。
+    escalation_max_input_tokens: int = 128_000
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
@@ -592,6 +601,20 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             max_output_tokens=_positive_int(env, f"{prefix}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
         )
         step_llms[step.field] = step.provider_id
+    escalation_model = env.get(f"{ESCALATION_ENV_PREFIX}_MODEL", "").strip()
+    if escalation_model:
+        llm_providers[ESCALATION_LLM_PROVIDER] = LlmProviderSettings(
+            provider_id=ESCALATION_LLM_PROVIDER,
+            label=llm_provider_label("Enterprise AI 確認を通らなかったときのモデル", escalation_model),
+            region="",
+            project_id=env.get(f"{ESCALATION_ENV_PREFIX}_PROJECT_OCID", "").strip(),
+            api_key=env.get(f"{ESCALATION_ENV_PREFIX}_API_KEY", "").strip(),
+            model=escalation_model,
+            supports_vision=_env_bool(env, f"{ESCALATION_ENV_PREFIX}_VISION", False),
+            endpoint=env.get(f"{ESCALATION_ENV_PREFIX}_ENDPOINT", "").strip(),
+            reasoning_effort=env.get(f"{ESCALATION_ENV_PREFIX}_REASONING_EFFORT", "").strip(),
+            max_output_tokens=_positive_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
+        )
     default_vision_llm = normalize_llm_provider_id(
         env.get("DEFAULT_VISION_LLM"),
         ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -769,6 +792,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         application_audit_llm=step_llms["application_audit_llm"],
         application_reason_llm=step_llms["application_reason_llm"],
         row_condition_llm=step_llms["row_condition_llm"],
+        escalation_llm=ESCALATION_LLM_PROVIDER if escalation_model else "",
+        escalation_max_input_tokens=max(1, _env_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_INPUT_TOKENS", 128_000)),
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 

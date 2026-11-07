@@ -97,6 +97,8 @@ interface RunRow {
     reasoning_output_tokens: number | null;
     measurement: "complete" | "partial";
     measured_requests: number;
+    /** モデルごとの内訳（#4581）。古い記録は無い。 */
+    by_model?: { model: string; requests: number; input_tokens: number; output_tokens: number; total_tokens: number }[];
   } | null;
 }
 
@@ -846,6 +848,52 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(models.locator("dd").first()).toHaveAttribute("title", "provider.synthetic");
     await expectNoPageOverflow(page);
     await models.screenshot({ path: testInfo.outputPath("recorded-model-display.png") });
+  });
+
+  test("詳細: 高性能モデルで回答し直した実行はモデルごとの token と理由を出し、本文には出さない (#4581)", async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    const usage = {
+      models: ["model-light", "model-strong"], requests: 3, input_tokens: 9000, output_tokens: 900, total_tokens: 9900,
+      cached_input_tokens: null, reasoning_output_tokens: null, measurement: "complete" as const, measured_requests: 3,
+      by_model: [
+        { model: "model-light", requests: 1, input_tokens: 3000, output_tokens: 300, total_tokens: 3300 },
+        { model: "model-strong", requests: 2, input_tokens: 6000, output_tokens: 600, total_tokens: 6600 },
+      ],
+    };
+    const cascade = { primary_model: "model-light", escalation_model: "model-strong", escalated: true, reasons: ["citation_mismatch"], stage: "answer.generate" };
+    await mockRuns(page, [
+      run(1, {
+        question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light", usage,
+        answer_diagnostics: { models: { llm: { model_id: "model-light", label: "モデル Light" } }, model_cascade: cascade },
+      }),
+      run(2, {
+        question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light",
+        usage: { ...usage, models: ["model-light"], by_model: usage.by_model.slice(0, 1) },
+        answer_diagnostics: { models: { llm: { model_id: "model-light", label: "モデル Light" } }, model_cascade: { ...cascade, escalated: false, reasons: [] } },
+      }),
+    ]);
+    const summary = page.getByTestId("run-history-summary");
+    const fact = (id: string) => summary.locator(`[data-run-fact="${id}"] dd`);
+    await page.goto("/history/run-1");
+    await expect(fact("modelTokens")).toHaveText("model-light: 3,300 トークン（1 回） ／ model-strong: 6,600 トークン（2 回）");
+    await expect(fact("modelCascade")).toHaveText("あり（引用の ID・原文が資料と一致しなかった）");
+    // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
+    await expect(page.getByTestId("answer-model-cascade")).toBeHidden();
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    const line = page.getByTestId("answer-model-cascade");
+    await expect(line).toContainText("最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました");
+    await expect(line).toContainText("理由: 引用の ID・原文が資料と一致しなかった");
+    await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light", "model-strong"]);
+    await expectNoPageOverflow(page);
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await summary.screenshot({ path: testInfo.outputPath(`cascade-summary-${theme}.png`) });
+    }
+    // 回答し直さなかった実行は「なし」、モデルが 1 つならモデルごとの token は出さない。
+    await page.goto("/history/run-2");
+    await expect(fact("modelCascade")).toHaveText("なし");
+    await expect(summary.locator('[data-run-fact="modelTokens"]')).toHaveCount(0);
   });
 
   test("詳細: 概要にモデル・token・モデルの呼び出しを Agent と同じ形で出し、不明は未計測・一部計測と出す（Issue 3419）", async ({

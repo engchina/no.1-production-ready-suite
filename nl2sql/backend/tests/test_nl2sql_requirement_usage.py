@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 import pytest
 from pr_backend_core.observability.genai import record_genai_usage
-from pr_backend_core.observability.model_usage import RunModelUsage
+from pr_backend_core.observability.model_usage import ModelTokenUsage, RunModelUsage
 from pr_backend_core.observability.tracing import observed_span
 from test_enterprise_ai_client import _direct_settings, _mock_http
 from test_nl2sql_guided_clarification import (
@@ -148,6 +148,16 @@ def test_screen_requirement_usage_is_added_to_the_job_usage(
     # 再検査の呼び出し（回答）を足した、session の利用量。
     assert applied.session.requirement_usage == RunModelUsage(
         models=[_REQUIREMENT_MODEL],
+        # モデルごとの内訳（#4581）。
+        by_model=[
+            ModelTokenUsage(
+                model=_REQUIREMENT_MODEL,
+                requests=2,
+                input_tokens=500,
+                output_tokens=70,
+                total_tokens=570,
+            )
+        ],
         requests=2,
         input_tokens=500,
         output_tokens=70,
@@ -182,6 +192,22 @@ def test_screen_requirement_usage_is_added_to_the_job_usage(
     assert item.usage == RunModelUsage(
         # 生成のモデルを先頭にし、確認のモデルを続ける。
         models=["openai.gpt-oss-120b", _REQUIREMENT_MODEL],
+        by_model=[
+            ModelTokenUsage(
+                model="openai.gpt-oss-120b",
+                requests=1,
+                input_tokens=1000,
+                output_tokens=50,
+                total_tokens=1050,
+            ),
+            ModelTokenUsage(
+                model=_REQUIREMENT_MODEL,
+                requests=2,
+                input_tokens=500,
+                output_tokens=70,
+                total_tokens=570,
+            ),
+        ],
         requests=3,
         input_tokens=1500,
         output_tokens=120,
