@@ -5440,7 +5440,8 @@ async def _run_ingestion_job(
     heartbeat を打つ(#357)。lease を持つ実行は、完了・失敗・再キュー・取り消しの後始末を
     自分の lease のときだけ行う。heartbeat が途絶えて別の worker が claim し直した後の古い実行の
     結果は捨て、新しい実行の状態・文書・レシピを変えない。工程の途中の取り消しの確認でも lease を
-    確かめ、lease を失った実行はそこで止める(#359)。
+    確かめ、lease を失った実行はそこで止める(#359)。lease は持ち主と試行の回数で比べ、同じ worker が
+    claim し直した後の古い試行も区別する(#4187)。
     """
     oracle = OracleClient()
     job = await oracle.claim_ingestion_job(
@@ -5481,13 +5482,14 @@ async def _run_pinned_ingestion_job(
     lease_owner: str | None = None,
 ) -> None:
     job_id = job.id
+    fence = _ingestion_job_fence(job, lease_owner)
 
     async def is_cancelled() -> bool:
-        if lease_owner is not None:
+        if fence is not None:
             lease = await oracle.get_ingestion_job_lease(job_id)
-            # lease を失った実行も取り消しと同じく止め、後始末で結果を捨てる(#359)。
+            # lease を失った実行も取り消しと同じく止め、後始末で結果を捨てる(#359・#4187)。
             return lease is None or (
-                not _holds_ingestion_lease(lease, lease_owner)
+                not _holds_ingestion_lease(lease, fence)
                 or lease.status == IngestionJobStatus.CANCELLED
             )
         current = await oracle.get_ingestion_job(job_id)
@@ -5495,7 +5497,7 @@ async def _run_pinned_ingestion_job(
 
     async def write_progress(progress: IngestionJobProgress | None) -> None:
         # 抽出の段（解析・Vision）の進捗を job の行へ書く（#1999）。lease を失った実行は書かない。
-        await oracle.update_ingestion_job_progress(job_id, progress, lease_owner=lease_owner)
+        await oracle.update_ingestion_job_progress(job_id, progress, fence=fence)
 
     async def write_attempt_receipt(payload: dict[str, Any]) -> None:
         if job.recipe_id is None or job.recipe_revision is None:
@@ -5607,7 +5609,7 @@ async def _run_pinned_ingestion_job(
     else:
         succeeded = await _finish_ingestion_job_unless_cancelled(
             oracle,
-            job_id,
+            job,
             status=IngestionJobStatus.SUCCEEDED,
             lease_owner=lease_owner,
         )
@@ -5700,7 +5702,7 @@ async def _requeue_ingestion_job_after_transient_error(
             to_status=IngestionJobStatus.QUEUED,
             error_message=None,
             finished_at=None,
-            lease_owner=lease_owner,
+            fence=_ingestion_job_fence(job, lease_owner),
         )
     except Exception as requeue_error:
         logger.warning(
@@ -5762,7 +5764,7 @@ async def _fail_ingestion_job(
     """
     failed = await _finish_ingestion_job_unless_cancelled(
         oracle,
-        job.id,
+        job,
         status=IngestionJobStatus.FAILED,
         error_message=error_message,
         lease_owner=lease_owner,
@@ -5788,7 +5790,7 @@ async def _skip_superseded_ingestion_job(
         from_statuses=(IngestionJobStatus.RUNNING,),
         to_status=IngestionJobStatus.SKIPPED,
         finished_at=datetime.now(UTC),
-        lease_owner=lease_owner,
+        fence=_ingestion_job_fence(job, lease_owner),
         skip_reason=INGESTION_SKIP_REASON_SUPERSEDED,
     )
     if skipped is None:
@@ -5848,11 +5850,25 @@ async def _restore_statuses_after_cancel(
     )
 
 
-def _holds_ingestion_lease(lease: IngestionJobLease | None, lease_owner: str) -> bool:
-    """job がまだ ``lease_owner`` の実行(RUNNING か、実行中に取り消された)なら True(#359)。"""
+def _ingestion_job_fence(job: IngestionJob, lease_owner: str | None) -> IngestionJobFence | None:
+    """lease を持つ実行の識別子(lease の持ち主と claim した試行の回数)。lease が無ければ None。
+
+    lease の持ち主は worker ごとの値で、同じ worker が claim し直すと変わらないため、試行の回数も
+    条件にする(#4187)。``job`` は claim が返した job(``attempt_count`` はその試行の回数)。
+    """
+    if lease_owner is None:
+        return None
+    return IngestionJobFence(
+        job_id=job.id, attempt_count=job.attempt_count, lease_owner=lease_owner
+    )
+
+
+def _holds_ingestion_lease(lease: IngestionJobLease | None, fence: IngestionJobFence) -> bool:
+    """job がまだ ``fence`` の実行(RUNNING か、実行中に取り消された)なら True(#359・#4187)。"""
     return (
         lease is not None
-        and lease.lease_owner == lease_owner
+        and lease.lease_owner == fence.lease_owner
+        and lease.attempt_count == fence.attempt_count
         and lease.status in _LEASE_HELD_INGESTION_JOB_STATUSES
     )
 
@@ -5869,12 +5885,14 @@ async def _discard_if_ingestion_lease_lost(
     heartbeat が TTL を超えて途絶えると、別の worker の stale の回復が job を QUEUED(lease を外す)
     か FAILED に戻し、別の worker が claim し直す(lease の持ち主が変わる)。その後の古い実行の
     完了・失敗・再キュー・取り消しの後始末は、新しい実行の状態・文書・レシピを上書きしうるため
-    捨てる。lease を持たない実行(``lease_owner`` なし)は従来どおり False を返す。
+    捨てる。同じ worker が claim し直したとき(持ち主は同じで試行の回数が増える)も捨てる(#4187)。
+    lease を持たない実行(``lease_owner`` なし)は従来どおり False を返す。
     """
-    if lease_owner is None:
+    fence = _ingestion_job_fence(job, lease_owner)
+    if fence is None:
         return False
     lease = await oracle.get_ingestion_job_lease(job.id)
-    if _holds_ingestion_lease(lease, lease_owner):
+    if _holds_ingestion_lease(lease, fence):
         return False
     logger.warning(
         "ingestion_job_stale_result_discarded",
@@ -5884,9 +5902,11 @@ async def _discard_if_ingestion_lease_lost(
             "recipe_id": job.recipe_id,
             "phase": job.phase.value,
             "lease_owner": lease_owner,
+            "attempt_count": job.attempt_count,
             "discarded_status": discarded_status.value,
             "current_status": lease.status.value if lease is not None else None,
             "current_lease_owner": lease.lease_owner if lease is not None else None,
+            "current_attempt_count": lease.attempt_count if lease is not None else None,
         },
     )
     return True
@@ -5956,7 +5976,7 @@ def _safe_ingestion_job_error_message(error: Exception) -> str:
 
 async def _finish_ingestion_job_unless_cancelled(
     oracle: OracleClient,
-    job_id: str,
+    job: IngestionJob,
     *,
     status: IngestionJobStatus,
     error_message: str | None = None,
@@ -5965,21 +5985,21 @@ async def _finish_ingestion_job_unless_cancelled(
     """RUNNING の job だけを完了・失敗にする。取り消し済みなどで書けなければ None を返す。
 
     状態の確認と書き込みは 1 回の条件付き UPDATE で行い、確認と書き込みの間に cancel API が
-    割り込んでも CANCELLED を上書きしない(#305)。``lease_owner`` を渡すと自分の lease の行だけを
-    書き、別の worker が claim し直した job を上書きしない(#359)。
+    割り込んでも CANCELLED を上書きしない(#305)。``lease_owner`` を渡すと自分の実行(lease の
+    持ち主と試行の回数)の行だけを書き、claim し直された job を上書きしない(#359・#4187)。
     """
     finished = await oracle.transition_ingestion_job(
-        job_id,
+        job.id,
         from_statuses=(IngestionJobStatus.RUNNING,),
         to_status=status,
         error_message=error_message,
         finished_at=datetime.now(UTC),
-        lease_owner=lease_owner,
+        fence=_ingestion_job_fence(job, lease_owner),
     )
     if finished is None:
         logger.info(
             "ingestion_job_finish_skipped_not_running",
-            extra={"job_id": job_id, "final_status": status.value},
+            extra={"job_id": job.id, "final_status": status.value},
         )
     return finished
 

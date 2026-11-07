@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import IngestionJobFence, OracleClient
 from app.rag.ingestion_attempt_receipts import AttemptReceipt
 from app.schemas.document import IngestionJob, IngestionJobProgress, IngestionJobStatus
 
@@ -70,12 +70,15 @@ async def test_receipt_survives_concurrent_progress_and_terminal_rejects_write()
         assert await client.save_ingestion_attempt_receipt(
             job.id, receipt, attempt_count=claimed.attempt_count, lease_owner="synthetic-worker"
         )
+        fence = IngestionJobFence(
+            job_id=job.id, attempt_count=claimed.attempt_count, lease_owner="synthetic-worker"
+        )
         await asyncio.gather(
-            client.update_ingestion_job_progress(job.id, None, lease_owner="synthetic-worker"),
+            client.update_ingestion_job_progress(job.id, None, fence=fence),
             client.update_ingestion_job_progress(
                 job.id,
                 IngestionJobProgress(stage="parse", updated_at=datetime.now(UTC)),
-                lease_owner="synthetic-worker",
+                fence=fence,
             ),
         )
         assert await client.read_ingestion_attempt_receipt(claimed) == receipt
@@ -108,7 +111,7 @@ async def test_receipt_survives_concurrent_progress_and_terminal_rejects_write()
             job.id,
             from_statuses={IngestionJobStatus.RUNNING},
             to_status=IngestionJobStatus.FAILED,
-            lease_owner="synthetic-worker",
+            fence=fence,
         )
         assert not await client.save_ingestion_attempt_receipt(
             job.id, receipt, attempt_count=claimed.attempt_count, lease_owner="synthetic-worker"
