@@ -23,6 +23,7 @@ import { DisclosureChevron } from "../ui/disclosure-chevron";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
+import { RUN_FACT_IDENTIFIER_CLASS } from "./run-fact-identifier";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
 import { hasRunStepDetails, RunStepDetailsView, runStepContent, type RunStepDetails } from "./run-step-details";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
@@ -204,7 +205,7 @@ export interface RunFact {
   /** 見出し（翻訳済み）。 */
   label: string;
   value: ReactNode;
-  /** 識別子（実行 ID・モデルの実ID）を等幅で出す。 */
+  /** 識別子（実行 ID・モデルの実ID）を等幅で出す（`RUN_FACT_IDENTIFIER_CLASS`）。 */
   mono?: boolean;
   /** 比較する数値。通常の文字や欠測の代替文は指定しない。 */
   tabular?: boolean;
@@ -229,7 +230,7 @@ export function RunFactList({ facts, className, testId }: { facts: readonly RunF
           <dd
             className={cn(
               "mt-0.5 break-words text-fg [overflow-wrap:anywhere]",
-              fact.mono && "font-mono text-xs leading-5",
+              fact.mono && cn(RUN_FACT_IDENTIFIER_CLASS, "leading-5"),
               fact.tabular && "tnum"
             )}
           >

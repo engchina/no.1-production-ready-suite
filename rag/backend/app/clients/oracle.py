@@ -459,7 +459,8 @@ class RecipeActivationFencedError(RuntimeError):
 
 @dataclass(frozen=True)
 class IngestionJobFence:
-    """切替を要求する実行の識別子。取り消し・lease の喪失・claim し直しを切替の中で確かめる。
+    """job の実行(claim 1 回)の識別子。書き込みの条件にし、取り消し・lease の喪失・claim し直しの
+    後の古い実行の書き込みを止める(切替は #4167、job の完了・失敗・再キューと進捗は #4187)。
 
     lease_owner は worker ごとの値で、同じ worker が claim し直すと区別できない。試行の回数も見る。
     """
@@ -569,11 +570,21 @@ class NativeSearchRows(list[dict[str, object]]):
 
 
 def _native_vector_retrieval(
-    *, method: str, scope: _NativeScope, top_k: int, exact_max_chunks: int, returned: int
+    *,
+    method: str,
+    scope: _NativeScope,
+    top_k: int,
+    exact_max_chunks: int,
+    returned: int,
+    first_returned: int | None = None,
+    oversample_factor: int | None = None,
 ) -> dict[str, object]:
-    """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。"""
+    """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。
+
+    不足で読み直したとき(``native_index_retry``)は、最初の取得数と候補の倍率も残す。
+    """
     expected = min(top_k, scope.vector_chunks) if top_k else scope.vector_chunks
-    return {
+    retrieval: dict[str, object] = {
         "method": method,
         "scope_vector_chunks": scope.vector_chunks,
         "exact_max_chunks": exact_max_chunks,
@@ -582,6 +593,10 @@ def _native_vector_retrieval(
         "returned": returned,
         "shortage": returned < expected,
     }
+    if first_returned is not None:
+        retrieval["first_returned"] = first_returned
+        retrieval["oversample_factor"] = oversample_factor
+    return retrieval
 
 
 def _native_exact_vector_statement(
@@ -5963,16 +5978,14 @@ class OracleClient:
         job_id: str,
         progress: IngestionJobProgress | None,
         *,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
     ) -> bool:
         """RUNNING の job の抽出の段の進捗を書き、書けたかを返す(#1999)。
 
-        ``progress`` が None なら消す(再試行の始め)。``lease_owner`` を渡すと自分の lease の
-        job だけに書く(lease を失った古い実行が新しい実行の進捗を上書きしない)。
+        ``progress`` が None なら消す(再試行の始め)。``fence`` を渡すとその実行(lease の持ち主と
+        試行の回数)の行だけに書く(古い実行が新しい実行の進捗を上書きしない。#4187)。
         """
-        return await self._update_ingestion_job_progress_with_oracle(
-            job_id, progress, lease_owner=lease_owner
-        )
+        return await self._update_ingestion_job_progress_with_oracle(job_id, progress, fence=fence)
 
     async def save_ingestion_attempt_receipt(
         self,
@@ -6112,7 +6125,7 @@ class OracleClient:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
         skip_reason: str | None = None,
     ) -> IngestionJob | None:
         """job が ``from_statuses`` のときだけ ``to_status`` へ遷移する(compare-and-set)。
@@ -6121,10 +6134,11 @@ class OracleClient:
         書き込みが互いの最終状態を上書きしないようにする(#305)。遷移元の状態でなければ
         0 行更新になり ``None`` を返す。``error_message`` / ``finished_at`` は None でも書く。
 
-        ``lease_owner``(job を実行している worker の識別子)を渡すと、その lease の行だけを
-        遷移する(#359)。heartbeat が途絶えて別の worker が claim し直した後に、古い実行の完了・
-        失敗が新しい実行の状態を上書きしないようにする。lease を持たない実行(利用者の取り消し・
-        lease 導入前の経路)は渡さず、従来どおり状態だけを条件にする。
+        ``fence``(job を実行している実行の識別子: lease の持ち主と試行の回数)を渡すと、その実行の
+        行だけを遷移する。heartbeat が途絶えて claim し直された後に(同じ worker が claim し直した
+        ときも)、古い実行の完了・失敗が新しい実行の状態を上書きしないようにする(#359・#4187)。
+        lease を持たない実行(利用者の取り消し・lease 導入前の経路)は渡さず、従来どおり状態だけを
+        条件にする。
         """
         return await self._transition_ingestion_job_with_oracle(
             job_id,
@@ -6132,7 +6146,7 @@ class OracleClient:
             to_status=to_status,
             error_message=error_message,
             finished_at=finished_at,
-            lease_owner=lease_owner,
+            fence=fence,
             skip_reason=skip_reason,
         )
 
@@ -8501,27 +8515,34 @@ class OracleClient:
         text_contains = (
             _oracle_text_query(query, settings=self._settings) if channel != "vector" else None
         )
-        specs = [
-            request_json(
-                query=query,
-                vector=vector,
-                channel=channel,
-                allowed_ids=batch.allowed_ids,
-                allowed_scopes=batch.allowed_scopes,
-                allowed_scope_spans=batch.allowed_scope_spans,
-                allowed_scope_ranges=batch.allowed_scope_ranges,
-                limit=top_k or scope.total_chunks,
-                rank_constant=self._settings.rag_rrf_k,
-                accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
-                method_ratio=self._settings.rag_rrf_method_ratio,
-                text_contains=text_contains,
-            )
-            for batch in native_filter_batches(
-                allowed_ids=scope.allowed_ids,
-                allowed_scopes=scope.complete_scopes,
-                allowed_scope_ranges=scope.scope_ranges,
-            )
-        ]
+        limit = top_k or scope.total_chunks
+        batches = native_filter_batches(
+            allowed_ids=scope.allowed_ids,
+            allowed_scopes=scope.complete_scopes,
+            allowed_scope_ranges=scope.scope_ranges,
+        )
+
+        def specs_for(vector_limit: int) -> list[str]:
+            return [
+                request_json(
+                    query=query,
+                    vector=vector,
+                    channel=channel,
+                    allowed_ids=batch.allowed_ids,
+                    allowed_scopes=batch.allowed_scopes,
+                    allowed_scope_spans=batch.allowed_scope_spans,
+                    allowed_scope_ranges=batch.allowed_scope_ranges,
+                    limit=limit,
+                    vector_limit=vector_limit,
+                    rank_constant=self._settings.rag_rrf_k,
+                    accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
+                    method_ratio=self._settings.rag_rrf_method_ratio,
+                    text_contains=text_contains,
+                )
+                for batch in batches
+            ]
+
+        specs = specs_for(limit)
         score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
             channel
         ]
@@ -8552,39 +8573,80 @@ class OracleClient:
             async with semaphore:
                 return await self._fetch_all(statement, {**native_binds, "native_spec": spec})
 
+        async def read_all(batch_specs: list[str]) -> list[list[dict[str, object]]]:
+            if len(batch_specs) == 1:
+                return [await read_batch(batch_specs[0])]
+            # 1 回でも失敗したら検索の失敗にする(範囲の一部だけの結果を返さない)。
+            async with asyncio.TaskGroup() as group:
+                reads = [group.create_task(read_batch(spec)) for spec in batch_specs]
+            return [read.result() for read in reads]
+
+        def vector_count(rows: list[dict[str, object]]) -> int:
+            return sum(_float_value(row.get("native_vector_score", 0)) > 0 for row in rows)
+
         try:
+            results = await read_all(specs)
             if len(specs) == 1:
-                rows = await read_batch(specs[0])
+                rows = results[0]
             else:
-                # 1 回でも失敗したら検索の失敗にする(範囲の一部だけの結果を返さない)。
-                async with asyncio.TaskGroup() as group:
-                    reads = [group.create_task(read_batch(spec)) for spec in specs]
-                rows = _merge_native_filter_batches(
-                    [read.result() for read in reads], channel, top_k
-                )
+                rows = _merge_native_filter_batches(results, channel, top_k)
                 logger.info("native_search_filter_batches", extra={"filter_batches": len(specs)})
-            selected = _apply_native_search_threshold(rows, channel, self._settings)
-            selected.filter_batches = len(specs)
-            if channel != "keyword":
-                selected.vector_retrieval = _native_vector_retrieval(
-                    method="native_index",
-                    scope=scope,
-                    top_k=top_k,
-                    exact_max_chunks=exact_max_chunks,
-                    returned=sum(
-                        _float_value(row.get("native_vector_score", 0)) > 0 for row in rows
-                    ),
-                )
-                if selected.vector_retrieval["shortage"]:
-                    logger.warning(
-                        "原生索引のベクトル候補が不足: %s",
-                        json.dumps(selected.vector_retrieval, ensure_ascii=False),
-                    )
-            return selected
         except Exception as exc:
             raise NativeHybridUnavailable(
                 "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
             ) from exc
+        retrieval: dict[str, object] = {}
+        if channel != "keyword":
+            retrieval = _native_vector_retrieval(
+                method="native_index",
+                scope=scope,
+                top_k=top_k,
+                exact_max_chunks=exact_max_chunks,
+                returned=vector_count(rows),
+            )
+            factor = self._settings.rag_native_vector_shortage_oversample_factor
+            if retrieval["shortage"] and factor > 1:
+                # 削除の残骸が上位の枠を使うと k 件を下回る(#4097)。候補を広げて 1 回だけ読み直し、
+                # 経路ごとに k 件へ切る(範囲・権限の条件と最終の件数は変えない)。
+                try:
+                    retried = _merge_native_filter_batches(
+                        await read_all(specs_for(limit * factor)), channel, top_k
+                    )
+                except Exception as exc:
+                    # 最初の結果は範囲の中の正しい行なので、読み直しの失敗では捨てない。
+                    logger.warning(
+                        "native_vector_shortage_retry_failed", extra=oracle_error_log_fields(exc)
+                    )
+                else:
+                    rows = retried
+                    retrieval = _native_vector_retrieval(
+                        method="native_index_retry",
+                        scope=scope,
+                        top_k=top_k,
+                        exact_max_chunks=exact_max_chunks,
+                        returned=vector_count(rows),
+                        first_returned=int(str(retrieval["returned"])),
+                        oversample_factor=factor,
+                    )
+            if retrieval["shortage"]:
+                logger.warning(
+                    "原生索引のベクトル候補が不足: %s",
+                    json.dumps(retrieval, ensure_ascii=False),
+                )
+            elif retrieval["method"] == "native_index_retry":
+                logger.info(
+                    "原生索引のベクトル候補の不足を読み直しで補った: %s",
+                    json.dumps(retrieval, ensure_ascii=False),
+                )
+        try:
+            selected = _apply_native_search_threshold(rows, channel, self._settings)
+        except Exception as exc:
+            raise NativeHybridUnavailable(
+                "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
+            ) from exc
+        selected.filter_batches = len(specs)
+        selected.vector_retrieval = retrieval
+        return selected
 
     async def _vector_rows(
         self, embedding_bind: object, *, top_k: int, filters: dict[str, str]
@@ -10004,11 +10066,11 @@ class OracleClient:
         return None if not rows else _ingestion_job_from_row(rows[0])
 
     async def _get_ingestion_job_lease_with_oracle(self, job_id: str) -> IngestionJobLease | None:
-        """job の status と lease_owner を読む(#359)。"""
+        """job の status・lease_owner・attempt_count を読む(#359・#4187)。"""
         row = await self._fetch_one(
             _render_sql(
                 """
-            SELECT j.status, j.lease_owner
+            SELECT j.status, j.lease_owner, j.attempt_count
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
               ON d.document_id = j.document_id
@@ -10024,6 +10086,7 @@ class OracleClient:
         return IngestionJobLease(
             status=_ingestion_job_status(row.get("status")),
             lease_owner=_optional_str(row.get("lease_owner")),
+            attempt_count=_int_value(row.get("attempt_count")),
         )
 
     async def _list_ingestion_jobs_with_oracle(
@@ -10893,19 +10956,19 @@ class OracleClient:
         job_id: str,
         progress: IngestionJobProgress | None,
         *,
-        lease_owner: str | None,
+        fence: IngestionJobFence | None,
     ) -> bool:
         """job の行の progress_json を書く。worker は request の文脈を持たないため tenant の条件は
-        付けず、job_id・RUNNING・lease の持ち主で絞る(heartbeat と同じ)。"""
-        lease_clause = "AND lease_owner = :lease_owner" if lease_owner is not None else ""
+        付けず、job_id・RUNNING・実行の識別子(lease の持ち主と試行の回数)で絞る。"""
+        fence_sql, fence_binds = _ingestion_job_fence_sql(job_id, fence)
+        lease_clause = f"AND {fence_sql}" if fence_sql else ""
         binds: dict[str, object] = {
             "job_id": job_id,
             "progress_json": (
                 None if progress is None else _json_dumps(progress.model_dump(mode="json"))
             ),
+            **fence_binds,
         }
-        if lease_owner is not None:
-            binds["lease_owner"] = lease_owner
 
         def operation(connection: OracleConnectionProtocol) -> int:
             from app.rag.ingestion_attempt_receipts import ATTEMPT_RECEIPT_KEY
@@ -11190,10 +11253,10 @@ class OracleClient:
         to_status: IngestionJobStatus,
         error_message: str | None,
         finished_at: datetime | None,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
         skip_reason: str | None = None,
     ) -> IngestionJob | None:
-        """遷移元の status(と lease の持ち主)を WHERE に入れた UPDATE で job の状態を遷移する。"""
+        """遷移元の status(と実行の識別子)を WHERE に入れた UPDATE で job の状態を遷移する。"""
         statuses = list(dict.fromkeys(from_statuses))
         if not statuses:
             raise ValueError("遷移元の status を 1 つ以上指定してください。")
@@ -11209,11 +11272,10 @@ class OracleClient:
             "skip_reason": skip_reason,
             **status_binds,
         }
-        lease_sql = ""
-        if lease_owner is not None:
-            # 別の worker が claim し直した行(lease の持ち主が変わった行)は書かない(#359)。
-            lease_sql = "AND lease_owner = :lease_owner"
-            binds["lease_owner"] = lease_owner
+        # claim し直された行(lease の持ち主か試行の回数が変わった行)は書かない(#359・#4187)。
+        fence_sql, fence_binds = _ingestion_job_fence_sql(job_id, fence)
+        lease_sql = f"AND {fence_sql}" if fence_sql else ""
+        binds.update(fence_binds)
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
             updated_count = _execute_count(
@@ -13004,6 +13066,27 @@ def _delete_scoped_graph_entities(
             f"DELETE FROM {table} WHERE {predicate} AND {_oracle_tenant_predicate()}",
             _with_tenant_bind(binds),
         )
+
+
+def _ingestion_job_fence_sql(
+    job_id: str, fence: IngestionJobFence | None
+) -> tuple[str, dict[str, object]]:
+    """``rag_ingestion_jobs`` の行を ``fence`` の実行に絞る条件と bind を返す(#4187)。
+
+    fence が無ければ空の条件を返す。lease を持たない実行の fence は ``lease_owner IS NULL`` にする。
+    """
+    if fence is None:
+        return "", {}
+    if fence.job_id != job_id:
+        raise ValueError("実行の識別子と job が一致しません。")
+    binds: dict[str, object] = {"fence_attempt_count": fence.attempt_count}
+    if fence.lease_owner is None:
+        return "attempt_count = :fence_attempt_count AND lease_owner IS NULL", binds
+    binds["fence_lease_owner"] = fence.lease_owner
+    return (
+        "attempt_count = :fence_attempt_count AND lease_owner = :fence_lease_owner",
+        binds,
+    )
 
 
 def _raise_if_job_fence_lost(

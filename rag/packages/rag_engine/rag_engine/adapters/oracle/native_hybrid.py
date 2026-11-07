@@ -257,17 +257,23 @@ def native_search_request(
     allowed_scope_spans: Sequence[tuple[int, int]] = (),
     id_column: str = "CHUNK_ID",
     limit: int = 600,
+    vector_limit: int | None = None,
     rank_constant: int = 60,
     accuracy: int = 100,
     method_ratio: tuple[float, float] = (10, 1),
     text_contains: str | None = None,
 ) -> dict[str, Any]:
-    """許可されたchunkの集合を検索前に制限する。空の集合では実行しない。"""
+    """許可されたchunkの集合を検索前に制限する。空の集合では実行しない。
+
+    ``vector_limit`` はベクトルの分岐の候補の数(省略時は ``limit``)。不足の読み直しで、候補を
+    広げてから呼出し側で ``limit`` 件に切るときだけ使う(#4097)。
+    """
+    vector_max = limit if vector_limit is None else vector_limit
     if id_column not in {"CHUNK_ID", "CHUNK_UID"}:
         raise ValueError("検索範囲の列が不正です。")
     identifiers = list(dict.fromkeys(allowed_ids))
     has_scope = identifiers or allowed_scopes or allowed_scope_spans or allowed_scope_ranges
-    if not has_scope or limit < 1 or rank_constant < 1 or not 1 <= accuracy <= 100:
+    if not has_scope or limit < 1 or vector_max < limit or rank_constant < 1 or not 1 <= accuracy <= 100:
         raise ValueError("検索範囲・上限・順位定数が不正です。")
     if channel not in {"vector", "keyword", "hybrid"}:
         raise ValueError("検索方式が不正です。")
@@ -289,7 +295,7 @@ def native_search_request(
         "search_scorer": "WRRF" if channel == "hybrid" else "RRF",
         "filter_by": _combined_filter(groups),
         "return": {
-            "topN": limit * 2 if channel == "hybrid" else limit,
+            "topN": {"vector": vector_max, "keyword": limit, "hybrid": vector_max + limit}[channel],
             "values": ["rowid", "score", "vector_score", "text_score", "vector_rank", "text_rank"],
         },
     }
@@ -301,7 +307,7 @@ def native_search_request(
             "accuracy": accuracy,
             "filter_type": "PRE_WO",
             "inpath": ["$.embedding"],
-            "result_max": limit,
+            "result_max": vector_max,
             "rank_penalty": rank_constant,
             "score_weight": weights.vector,
         }

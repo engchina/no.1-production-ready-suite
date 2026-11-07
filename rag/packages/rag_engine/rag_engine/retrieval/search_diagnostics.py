@@ -36,7 +36,14 @@ _SCOPE_KEYS = frozenset(
 
 
 def _vector_retrieval_text(retrieval: Mapping[str, Any]) -> str:
-    method = "範囲の行を距離順に読む" if retrieval["method"] == "exact_scope" else "原生索引の近似検索"
+    method = {
+        "exact_scope": "範囲の行を距離順に読む",
+        # 不足のときだけ候補を広げて読み直す(#4097)。
+        "native_index_retry": (
+            f"原生索引の近似検索（取得 {retrieval.get('first_returned')} 件で不足したので、"
+            f"候補を {retrieval.get('oversample_factor')} 倍にして読み直し、要求の件数に切った）"
+        ),
+    }.get(str(retrieval["method"]), "原生索引の近似検索")
     counts = (
         f"範囲のベクトル {retrieval['scope_vector_chunks']} 件（距離順に読む上限 {retrieval['exact_max_chunks']} 件）/ "
         f"要求 {retrieval['requested']} 件 / 範囲から返せる数 {retrieval['expected']} 件 / 取得 {retrieval['returned']} 件"

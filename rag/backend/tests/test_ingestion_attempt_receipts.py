@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 
 from app.clients import oracle as oracle_module
-from app.clients.oracle import OracleClient
+from app.clients.oracle import IngestionJobFence, OracleClient
 from app.schemas.document import IngestionJobProgress
 
 
@@ -41,11 +41,16 @@ async def test_progress_preserves_large_receipt_under_same_row_lock(
 
     def fetch(conn: Any, sql: str, binds: Any) -> Any:
         assert conn is connection and "FOR UPDATE" in sql
+        # 進捗も実行の識別子(lease の持ち主と試行の回数)の行だけに書く(#4187)。
+        assert "attempt_count = :fence_attempt_count" in sql
+        assert "lease_owner = :fence_lease_owner" in sql
+        assert binds["fence_attempt_count"] == 2 and binds["fence_lease_owner"] == "w1"
         calls.append("lock")
         return [{"progress_json": json.dumps(stored)}]
 
     def execute(conn: Any, sql: str, binds: Any) -> int:
         assert conn is connection and calls == ["lock"]
+        assert "attempt_count = :fence_attempt_count" in sql
         assert (
             json.loads(binds["progress_json"])["_segment_attempt_receipt"]
             == stored["_segment_attempt_receipt"]
@@ -59,7 +64,8 @@ async def test_progress_preserves_large_receipt_under_same_row_lock(
     monkeypatch.setattr(oracle_module, "_fetch_all", fetch)
     monkeypatch.setattr(oracle_module, "_execute_count", execute)
     client._run_transaction = transaction
-    assert await client.update_ingestion_job_progress("j1", progress, lease_owner="w1")
+    fence = IngestionJobFence(job_id="j1", attempt_count=2, lease_owner="w1")
+    assert await client.update_ingestion_job_progress("j1", progress, fence=fence)
     assert calls == ["lock", "write"]
 
 

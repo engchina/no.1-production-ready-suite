@@ -24,6 +24,7 @@ from typing import Any, cast
 import pytest
 
 from app.api.routes import documents
+from app.clients.oracle import IngestionJobFence
 from app.config import BACKEND_ROOT, Settings, get_settings
 from app.rag import ingestion_job_runner, ingestion_worker
 from app.rag.ingestion import IngestionCancelledError
@@ -259,7 +260,11 @@ class _LeaseQueueStore:
         row = self.rows.get(job_id)
         if row is None:
             return None
-        return IngestionJobLease(status=row.job.status, lease_owner=row.lease_owner)
+        return IngestionJobLease(
+            status=row.job.status,
+            lease_owner=row.lease_owner,
+            attempt_count=row.job.attempt_count,
+        )
 
     async def list_document_ingestion_jobs(
         self, document_id: str, *, status: IngestionJobStatus | None = None
@@ -278,13 +283,17 @@ class _LeaseQueueStore:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
+        skip_reason: str | None = None,
     ) -> IngestionJob | None:
+        _ = skip_reason
         row = self.rows.get(job_id)
         if row is None or row.job.status not in from_statuses:
             return None
-        # lease を持つ実行は、自分の lease の行だけを遷移する(#359)。
-        if lease_owner is not None and row.lease_owner != lease_owner:
+        # lease を持つ実行は、自分の実行(lease の持ち主と試行の回数)の行だけを遷移する。
+        if fence is not None and (
+            row.lease_owner != fence.lease_owner or row.job.attempt_count != fence.attempt_count
+        ):
             return None
         row.job = row.job.model_copy(
             update={
@@ -974,13 +983,22 @@ def pipeline(monkeypatch: pytest.MonkeyPatch, store: _LeaseQueueStore) -> _Pipel
     return pipeline
 
 
+# claim し直す worker。別の worker(#359)と、lease を失った worker 自身(#4187)。
+_RECLAIM_OWNERS = pytest.mark.parametrize(
+    "new_owner", ["worker-b", "worker-a"], ids=["other-worker", "same-worker"]
+)
+
+
 async def _expire_lease_and_reclaim(
     store: _LeaseQueueStore, clock: _Clock, job_id: str, *, new_owner: str = "worker-b"
 ) -> None:
-    """worker-a の heartbeat が TTL を超えて途絶え、別の worker が回復して claim し直す。"""
-    other, _ = _worker(new_owner, store, clock)
+    """worker-a の heartbeat が途絶え、別の worker が回復し、``new_owner`` が claim し直す。
+
+    ``new_owner`` が worker-a なら、lease の持ち主は同じで試行の回数だけが増える(#4187)。
+    """
+    recoverer, _ = _worker("worker-recover", store, clock)
     clock.advance(91)
-    await other._recover_stale_safely()
+    await recoverer._recover_stale_safely()
     assert store.job(job_id).status == IngestionJobStatus.QUEUED
     reclaimed = await store.claim_ingestion_job(job_id, started_at=clock(), lease_owner=new_owner)
     assert reclaimed is not None
@@ -997,16 +1015,19 @@ def _stale_result_discarded(
     )
 
 
-def _assert_reclaimed_job_untouched(store: _LeaseQueueStore, job_id: str, document_id: str) -> None:
+def _assert_reclaimed_job_untouched(
+    store: _LeaseQueueStore, job_id: str, document_id: str, *, lease_owner: str = "worker-b"
+) -> None:
     job = store.job(job_id)
     assert job.status == IngestionJobStatus.RUNNING
     assert job.attempt_count == 2
     assert job.finished_at is None
-    assert store.rows[job_id].lease_owner == "worker-b"
+    assert store.rows[job_id].lease_owner == lease_owner
     # 新しい実行が工程中にした文書の status も変えない。
     assert store.documents[document_id] == FileStatus.INGESTING
 
 
+@_RECLAIM_OWNERS
 @pytest.mark.parametrize("outcome", ["success", "failure", "transient"])
 async def test_stale_run_result_does_not_overwrite_reclaimed_job(
     store: _LeaseQueueStore,
@@ -1015,11 +1036,13 @@ async def test_stale_run_result_does_not_overwrite_reclaimed_job(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     outcome: str,
+    new_owner: str,
 ) -> None:
-    """heartbeat が途絶えて別の worker が再 claim した後の、古い実行の完了・失敗・再キューは捨てる。
+    """heartbeat が途絶えて再 claim された後の、古い実行の完了・失敗・再キューは捨てる。
 
     修正前は遷移の条件が ``status = 'RUNNING'`` だけで、古い実行の SUCCEEDED / FAILED / QUEUED が
-    新しい実行の RUNNING を上書きし、文書の status も戻していた。
+    新しい実行の RUNNING を上書きし、文書の status も戻していた(#359)。同じ worker が claim し直すと
+    lease の持ち主が同じになるため、試行の回数でも区別する(#4187)。
     """
     store.add("job-stale", document_id="doc-stale", queued_at=clock())
     if outcome == "failure":
@@ -1030,36 +1053,41 @@ async def test_stale_run_result_does_not_overwrite_reclaimed_job(
     run_a = asyncio.create_task(documents._run_ingestion_job("job-stale", lease_owner="worker-a"))
     await asyncio.wait_for(pipeline.started.wait(), timeout=5)
 
-    await _expire_lease_and_reclaim(store, clock, "job-stale")
+    await _expire_lease_and_reclaim(store, clock, "job-stale", new_owner=new_owner)
     with caplog.at_level(logging.INFO):
         pipeline.release.set()
         await asyncio.wait_for(run_a, timeout=5)
 
-    _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale")
+    _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale", lease_owner=new_owner)
     assert pipeline.success_recorded == []
     assert pipeline.dispatched == []
     assert _stale_result_discarded(caplog, job_id="job-stale", lease_owner="worker-a")
 
 
+@_RECLAIM_OWNERS
 async def test_stale_run_stops_at_cancel_check_after_lease_is_lost(
     store: _LeaseQueueStore,
     clock: _Clock,
     pipeline: _Pipeline,
     caplog: pytest.LogCaptureFixture,
+    new_owner: str,
 ) -> None:
-    """lease を失った実行は、工程の途中の取り消しの確認で止まり、以後の書き込みをしない。"""
+    """lease を失った実行は、工程の途中の取り消しの確認で止まり、以後の書き込みをしない。
+
+    同じ worker が claim し直した後も、古い試行は止まる(#4187)。
+    """
     store.add("job-stale", document_id="doc-stale", queued_at=clock())
     pipeline.check_cancel = True
     run_a = asyncio.create_task(documents._run_ingestion_job("job-stale", lease_owner="worker-a"))
     await asyncio.wait_for(pipeline.started.wait(), timeout=5)
 
-    await _expire_lease_and_reclaim(store, clock, "job-stale")
+    await _expire_lease_and_reclaim(store, clock, "job-stale", new_owner=new_owner)
     with caplog.at_level(logging.INFO):
         pipeline.release.set()
         await asyncio.wait_for(run_a, timeout=5)
 
     assert pipeline.cancel_results == [True]
-    _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale")
+    _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale", lease_owner=new_owner)
     assert _stale_result_discarded(caplog, job_id="job-stale", lease_owner="worker-a")
 
 

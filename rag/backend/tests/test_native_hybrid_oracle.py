@@ -476,6 +476,83 @@ async def test_native_vector_returns_scope_rows_for_a_far_question_and_after_rep
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_native_index_shortage_after_replacement_is_filled_by_one_wider_read() -> None:
+    """再取込の削除の残骸で原生索引の結果が k 件を下回っても、候補を広げた読み直しで範囲の
+    k 件を返す(#4097)。
+
+    距離順に読む上限を 0 にして原生索引で読む。同じ chunk set を置き換えると、空いた ROWID を
+    新しい行が使い、古い ``$VR`` の行が上位 k 件の枠を使ってから外で除かれる。
+    """
+    from app.clients.oracle import NativeSearchRows
+    from app.schemas.extraction import StructuredExtraction
+
+    base = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": "oracle_native",
+            "rag_native_vector_exact_max_chunks": 0,
+        }
+    )
+    plain = OracleClient(
+        base.model_copy(update={"rag_native_vector_shortage_oversample_factor": 1})
+    )
+    widened = OracleClient(
+        base.model_copy(update={"rag_native_vector_shortage_oversample_factor": 20})
+    )
+    token = uuid4().hex[:10]
+    kb = await plain.create_knowledge_base(name=f"合成の再取込KB {token}")
+    vectors = [_axis_vector(0, 10 + index, 0.02 * (index + 1)) for index in range(4)]
+    chunks = [
+        Chunk(
+            text=f"synthetic{token} replaced item {index}",
+            index=index,
+            start_offset=0,
+            end_offset=30,
+            metadata={"page_number": 1},
+        )
+        for index in range(len(vectors))
+    ]
+    document = await _indexed_document(
+        plain,
+        file_name=f"synthetic-replaced-{token}.txt",
+        chunks=chunks,
+        knowledge_base_ids=[kb.id],
+        embeddings=vectors,
+    )
+    chunk_sets = await plain._fetch_all(
+        "SELECT DISTINCT chunk_set_id FROM rag_chunks WHERE document_id = :document_id",
+        {"document_id": document},
+    )
+    question = _axis_vector(0, 1, 0.1)
+    filters = {"knowledge_base_id": kb.id}
+    k = len(vectors)
+    reproduced = False
+    for _generation in range(20):
+        await plain.save_index(
+            document,
+            StructuredExtraction(raw_text="本文", confidence=0.9),
+            chunks,
+            vectors,
+            chunk_set_id=str(chunk_sets[0]["chunk_set_id"]),
+        )
+        first = await plain._native_rows("vector", "", question, top_k=k, filters=filters)
+        rows = await widened._native_rows("vector", "", question, top_k=k, filters=filters)
+        assert isinstance(first, NativeSearchRows) and isinstance(rows, NativeSearchRows)
+        assert first.vector_retrieval["method"] == "native_index"
+        assert rows.vector_retrieval["shortage"] is False, rows.vector_retrieval
+        assert rows.vector_retrieval["returned"] == k
+        assert sorted(int(str(row["chunk_index"])) for row in rows) == list(range(k))
+        assert {row["document_id"] for row in rows} == {document}
+        if first.vector_retrieval["shortage"]:
+            assert rows.vector_retrieval["method"] == "native_index_retry"
+            assert int(str(rows.vector_retrieval["first_returned"])) < k
+            reproduced = True
+            break
+        assert rows.vector_retrieval["method"] == "native_index"
+    # 読み直しの経路を通ったことを確かめる(不足が再現しなければ、このテストは何も守らない)。
+    assert reproduced, "置き換えを重ねても原生索引の不足が再現しませんでした。"
+
+
+@pytest.mark.usefixtures("oracle_db")
 async def test_native_vector_exact_read_keeps_page_limited_scope() -> None:
     """ページで絞った範囲(chunk set の一部)でも、距離順の結果に範囲の外の行が入らない。"""
     from app.clients.oracle import NativeSearchRows
