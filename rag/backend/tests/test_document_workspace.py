@@ -320,15 +320,11 @@ class FakeWorkspaceOracle:
         *,
         status: FileStatus = FileStatus.UPLOADED,
         error_message: str | None = None,
-        clear_preprocess_artifact: bool = False,
     ) -> DocumentDetail:
         detail = self.documents[document_id]
         updated = detail.model_copy(
             update={
                 "status": status,
-                "preprocess_artifact": (
-                    None if clear_preprocess_artifact else detail.preprocess_artifact
-                ),
                 "extraction": {},
                 "error_message": error_message,
                 "indexed_at": None,
@@ -337,16 +333,6 @@ class FakeWorkspaceOracle:
         self.documents[document_id] = updated
         self.chunks.pop(document_id, None)
         self.ingestion_segments.pop(document_id, None)
-        return updated
-
-    async def save_preprocess_artifact(
-        self,
-        document_id: str,
-        artifact: DocumentPreprocessArtifact | None,
-    ) -> DocumentDetail:
-        detail = self.documents[document_id]
-        updated = detail.model_copy(update={"preprocess_artifact": artifact})
-        self.documents[document_id] = updated
         return updated
 
     async def reset_document_chunk_outputs(
@@ -632,26 +618,10 @@ class FakeWorkspaceIngestionPipeline:
         prepared_artifact: DocumentPreprocessArtifact | None = None,
         cancel_checker: object | None = None,
     ) -> DocumentDetail:
-        _ = prompt, source_profile, chunk_set_id, cancel_checker
+        _ = prompt, source_profile, chunk_set_id, cancel_checker, prepared_artifact
+        _ = content_type, original_object_storage_path
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
-        if prepared_artifact is None:
-            await self._oracle.save_preprocess_artifact(
-                document_id,
-                DocumentPreprocessArtifact(
-                    derivation_id="fake-passthrough",
-                    profile="none",
-                    converted=False,
-                    source_content_type=detail.content_type,
-                    source_sha256=detail.content_sha256,
-                    object_storage_path=original_object_storage_path,
-                    content_type=content_type,
-                    sha256=hashlib.sha256(image_bytes).hexdigest(),
-                    file_name=f"{detail.file_name.rsplit('.', 1)[0]}__prepared.txt",
-                ),
-            )
-            detail = await self._oracle.get_document(document_id)
-            assert detail is not None
         raw_text = image_bytes.decode("utf-8", errors="replace")
         self._oracle.documents[document_id] = detail.model_copy(
             update={
@@ -745,8 +715,12 @@ class FakeDocumentCleanupStore:
         referenced: set[str] = set()
         for detail in self.oracle.documents.values():
             referenced.add(detail.object_storage_path or "")
-            if detail.preprocess_artifact is not None:
-                referenced.add(detail.preprocess_artifact.object_storage_path or "")
+        for recipe in self.oracle.recipes.values():
+            if recipe.get("document_id") not in self.oracle.documents:
+                continue
+            artifact = recipe.get("preprocess_artifact")
+            if isinstance(artifact, Mapping):
+                referenced.add(str(artifact.get("object_storage_path") or ""))
         for segments in self.oracle.ingestion_segments.values():
             referenced.update(segment.artifact_path or "" for segment in segments)
         return {uri for uri in uris if uri in referenced}
@@ -2287,29 +2261,15 @@ def test_retry_ingestion_job_creates_new_job_for_failed_document(
     assert original_job.json()["data"]["status"] == "FAILED"
 
 
-def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
+def test_preprocess_reprocess_clears_document_outputs(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """PREPROCESS 再処理は処理後ファイル情報と抽出/Chunk を削除して原本からやり直す。"""
+    """PREPROCESS 再処理は抽出/Chunk を削除して原本からやり直す（処理後ファイルはレシピの層）。"""
     document_id = _upload("policy.txt", b"original-body", "text/plain")
-    prepared_path = anyio.run(
-        ObjectStorageClient().put,
-        f"artifacts/canonical/{document_id}/old-prepared.txt",
-        b"old-prepared",
-        "text/plain",
-    )
     detail = fake_document_dependencies.documents[document_id]
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="old",
-                profile="text_normalize",
-                converted=True,
-                object_storage_path=prepared_path,
-                content_type="text/plain",
-                file_name="policy__prepared.txt",
-            ),
             "extraction": {"raw_text": "old extraction"},
             "indexed_at": datetime.now(UTC),
         }
@@ -2331,7 +2291,6 @@ def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "PREPROCESS"
-    assert fake_document_dependencies.documents[document_id].preprocess_artifact is None
     assert fake_document_dependencies.documents[document_id].extraction == {}
     assert document_id not in fake_document_dependencies.chunks
 
@@ -2362,7 +2321,6 @@ def test_extract_reprocess_keeps_existing_prepared_artifact(
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "preprocess_artifact": artifact,
             "extraction": {"raw_text": "old extraction"},
             "indexed_at": datetime.now(UTC),
         }
@@ -2383,7 +2341,9 @@ def test_extract_reprocess_keeps_existing_prepared_artifact(
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "EXTRACT"
-    assert fake_document_dependencies.documents[document_id].preprocess_artifact == artifact
+    assert fake_document_dependencies.recipes["recipe-1"]["preprocess_artifact"] == (
+        artifact.model_dump(mode="json")
+    )
 
 
 def test_extract_reprocess_requires_prepared_artifact(
@@ -2961,26 +2921,19 @@ def test_document_recipe_content_returns_prepared_artifact(
         prepared_body,
         "application/pdf",
     )
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="der-1",
-                profile="office_pdf",
-                converted=True,
-                object_storage_path=prepared_path,
-                content_type="application/pdf",
-                sha256="dummy",
-                file_name="私の上司__prepared.pdf",
-            )
-        }
-    )
-
     recipe_id = _seed_recipe(
         fake_document_dependencies,
         document_id,
         status=FileStatus.UPLOADED,
-        preprocess_artifact=fake_document_dependencies.documents[document_id].preprocess_artifact,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="der-1",
+            profile="office_pdf",
+            converted=True,
+            object_storage_path=prepared_path,
+            content_type="application/pdf",
+            sha256="dummy",
+            file_name="私の上司__prepared.pdf",
+        ),
     )
     resp = client.get(
         f"/api/documents/{document_id}/recipes/{recipe_id}/content"
@@ -3176,8 +3129,9 @@ def test_delete_document_removes_record_and_original_file(
 
 def test_delete_document_removes_extraction_artifacts(
     fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """document 削除 API は抽出 artifact cache と segment artifact も best-effort で削除する。"""
+    """document 削除 API は抽出 artifact cache・segment artifact・レシピの処理後ファイルも消す。"""
     document_id = _upload("policy.txt", b"sample policy", "text/plain")
     full_artifact_path = anyio.run(
         ObjectStorageClient().put,
@@ -3205,16 +3159,24 @@ def test_delete_document_removes_extraction_artifacts(
     ].model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="der-delete",
-                profile="office_pdf",
-                converted=True,
-                object_storage_path=prepared_artifact_path,
-                content_type="application/pdf",
-                file_name="policy__prepared.pdf",
-            ),
             "extraction": {"parser_artifacts": {"extraction_artifact_path": full_artifact_path}},
         }
+    )
+    prepared_artifact = DocumentPreprocessArtifact(
+        derivation_id="der-delete",
+        profile="office_pdf",
+        converted=True,
+        object_storage_path=prepared_artifact_path,
+        content_type="application/pdf",
+        file_name="policy__prepared.pdf",
+    )
+
+    async def list_document_recipes(requested_id: str) -> list[dict[str, object]]:
+        assert requested_id == document_id
+        return [{"recipe_id": "recipe-1", "preprocess_artifact": prepared_artifact.model_dump()}]
+
+    monkeypatch.setattr(
+        fake_document_dependencies, "list_document_recipes", list_document_recipes, raising=False
     )
     fake_document_dependencies.ingestion_segments[document_id] = [
         IngestionSegment(

@@ -15,7 +15,6 @@ from app.schemas.document import DocumentPreprocessArtifact, FileStatus, Ingesti
 class _Base:
     def __init__(self) -> None:
         self.extraction: object | None = object()
-        self.prepared: object | None = object()
         self.chunks = ["synthetic-chunk"]
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -28,8 +27,6 @@ class _Complete(_Base):
         self.calls.append(("reset", {"document_id": document_id, **kwargs}))
         self.extraction = None
         self.chunks = []
-        if kwargs["clear_preprocess_artifact"]:
-            self.prepared = None
 
 
 class _Missing(_Base):
@@ -51,7 +48,6 @@ class _Raising(_Base):
         raise RuntimeError("synthetic-reset-failure")
 
 
-@pytest.mark.parametrize("clear", [False, True])
 @pytest.mark.parametrize(
     ("adapter_type", "failure"),
     [
@@ -63,38 +59,25 @@ class _Raising(_Base):
     ],
 )
 async def test_reset_requires_async_port_without_status_only_success(
-    clear: bool, adapter_type: type[_Base], failure: type[Exception] | None
+    adapter_type: type[_Base], failure: type[Exception] | None
 ) -> None:
     adapter = adapter_type()
-    old_extraction, old_prepared = adapter.extraction, adapter.prepared
+    old_extraction = adapter.extraction
     if failure is None:
-        await _reset_document_outputs_for_extract(
-            cast(OracleClient, adapter), "synthetic-doc", clear_preprocess_artifact=clear
-        )
+        await _reset_document_outputs_for_extract(cast(OracleClient, adapter), "synthetic-doc")
         assert adapter.extraction is None and adapter.chunks == []
-        assert adapter.prepared is (None if clear else old_prepared)
         assert adapter.calls == [
-            (
-                "reset",
-                {
-                    "document_id": "synthetic-doc",
-                    "status": FileStatus.UPLOADED,
-                    "clear_preprocess_artifact": clear,
-                },
-            )
+            ("reset", {"document_id": "synthetic-doc", "status": FileStatus.UPLOADED})
         ]
     else:
         with pytest.raises(failure):
-            await _reset_document_outputs_for_extract(
-                cast(OracleClient, adapter), "synthetic-doc", clear_preprocess_artifact=clear
-            )
+            await _reset_document_outputs_for_extract(cast(OracleClient, adapter), "synthetic-doc")
         assert adapter.extraction is old_extraction
-        assert adapter.prepared is old_prepared and adapter.chunks == ["synthetic-chunk"]
+        assert adapter.chunks == ["synthetic-chunk"]
     assert not any(name == "status_only" for name, _ in adapter.calls)
 
 
-@pytest.mark.parametrize("clear", [False, True])
-async def test_formal_oracle_wrapper_forwards_the_same_reset_transaction(clear: bool) -> None:
+async def test_formal_oracle_wrapper_forwards_the_same_reset_transaction() -> None:
     sentinel = object()
     calls: list[dict[str, Any]] = []
 
@@ -107,7 +90,6 @@ async def test_formal_oracle_wrapper_forwards_the_same_reset_transaction(clear: 
         cast(OracleClient, Transaction()),
         "synthetic-doc",
         status=FileStatus.UPLOADED,
-        clear_preprocess_artifact=clear,
     )
     assert returned is sentinel
     assert calls == [
@@ -115,7 +97,6 @@ async def test_formal_oracle_wrapper_forwards_the_same_reset_transaction(clear: 
             "document_id": "synthetic-doc",
             "status": FileStatus.UPLOADED,
             "error_message": None,
-            "clear_preprocess_artifact": clear,
         }
     ]
 
@@ -129,7 +110,7 @@ def test_staging_adapter_inherits_the_formal_reset_port() -> None:
 
 @pytest.mark.parametrize("served", [False, True])
 @pytest.mark.parametrize("phase", [IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT])
-async def test_real_enqueue_preserves_phase_clear_and_served_output(
+async def test_real_enqueue_preserves_phase_and_served_output(
     monkeypatch: pytest.MonkeyPatch, served: bool, phase: IngestionJobPhase
 ) -> None:
     artifact = DocumentPreprocessArtifact(
@@ -156,7 +137,7 @@ async def test_real_enqueue_preserves_phase_clear_and_served_output(
             self.calls.append(("checkpoint", {"document_id": document_id, "recipe_id": recipe_id}))
 
     oracle = Oracle()
-    original = oracle.extraction, oracle.prepared, list(oracle.chunks)
+    original = oracle.extraction, list(oracle.chunks)
 
     async def noop(*args: Any, **kwargs: Any) -> None:
         pass
@@ -197,21 +178,13 @@ async def test_real_enqueue_preserves_phase_clear_and_served_output(
     )
     assert result.id == "synthetic-job" and dispatched == [("synthetic-job", True)]
     if served:
-        assert (oracle.extraction, oracle.prepared, oracle.chunks) == original
+        assert (oracle.extraction, oracle.chunks) == original
         assert oracle.calls == [
             ("checkpoint", {"document_id": "synthetic-doc", "recipe_id": "synthetic-recipe"})
         ]
     else:
-        clear = phase == IngestionJobPhase.PREPROCESS
+        # PREPROCESS も EXTRACT も同じ初期化を呼ぶ（処理後のファイルはレシピの層にある）。
         assert oracle.extraction is None and not oracle.chunks
-        assert oracle.prepared is (None if clear else original[1])
         assert oracle.calls == [
-            (
-                "reset",
-                {
-                    "document_id": "synthetic-doc",
-                    "status": FileStatus.UPLOADED,
-                    "clear_preprocess_artifact": clear,
-                },
-            )
+            ("reset", {"document_id": "synthetic-doc", "status": FileStatus.UPLOADED})
         ]

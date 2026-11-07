@@ -240,10 +240,7 @@ def _unreferenced_paths(
                OR EXISTS (
                     SELECT 1 FROM rag_documents d
                     WHERE d.document_id = :document_id
-                      AND (
-                          d.object_storage_path = :path
-                          OR JSON_VALUE(d.preprocess_artifact, '$.object_storage_path') = :path
-                      )
+                      AND d.object_storage_path = :path
                 )
             """,
             {"document_id": document_id, "path": path},

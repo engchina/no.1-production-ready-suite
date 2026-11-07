@@ -13,13 +13,19 @@ from uuid import uuid4
 
 import pytest
 
+from app.clients.chunk_set_retention_store import _unreferenced_paths
 from app.clients.document_cleanup_store import (
     DOCUMENT_CLEANUP_TABLE,
     DocumentCleanupStore,
     DocumentCleanupTargets,
 )
 from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
-from app.schemas.document import IngestionJob, IngestionJobStatus
+from app.schemas.document import (
+    DocumentPreprocessArtifact,
+    FileStatus,
+    IngestionJob,
+    IngestionJobStatus,
+)
 
 
 async def _delete_cleanup_rows(client: OracleClient, document_ids: list[str]) -> None:
@@ -127,3 +133,44 @@ async def test_document_cleanup_record_is_rolled_back_when_running_job_blocks_de
         assert await store.find_for_document(detail.id) is None
     finally:
         await _delete_cleanup_rows(client, [detail.id])
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_recipe_prepared_file_is_protected_without_document_column() -> None:
+    """処理後のファイルはレシピの行の参照で後始末から守る（文書の行の列は読まない。#4185）。"""
+    client = OracleClient()
+    store = DocumentCleanupStore(client)
+    token = uuid4().hex[:12]
+    detail = await client.create_document(
+        file_name=f"cleanup-prepared-{token}.docx",
+        object_storage_path=f"local://uploaded/{token}/source.docx",
+        content_type="application/octet-stream",
+    )
+    [recipe, *_] = await client.list_document_recipes(detail.id)
+    prefix = f"artifacts/canonical/{detail.id}/"
+    prepared = f"local://{prefix}{token}/prepared.pdf"
+    orphan = f"local://{prefix}{token}/old-prepared.pdf"
+    await client.update_document_recipe_status(
+        recipe_id=str(recipe["recipe_id"]),
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id=f"derivation-{token}",
+            profile="office_to_pdf",
+            converted=True,
+            object_storage_path=prepared,
+            content_type="application/pdf",
+            file_name="prepared.pdf",
+        ),
+    )
+
+    assert await store.referenced_uris([prepared, orphan]) == {prepared}
+
+    def unreferenced(connection: object) -> list[str]:
+        return _unreferenced_paths(
+            connection,  # type: ignore[arg-type]
+            detail.id,
+            [prepared, orphan],
+            prefix=prefix,
+        )
+
+    assert await client._run_transaction(unreferenced) == [orphan]

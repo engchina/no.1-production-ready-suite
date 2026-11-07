@@ -58,7 +58,7 @@ async def test_formal_recipe_does_not_read_old_document_or_write() -> None:
 def test_new_upload_seed_remains_fresh_without_legacy_outputs() -> None:
     result = _default_document_recipe_values({"document_id": "synthetic-new", "status": "UPLOADED"})
     assert result["status"] == "UPLOADED"
-    assert result["preprocess_artifact"] is None
+    assert "preprocess_artifact" not in result
     assert result["materialized_revision"] is None
     assert result["active_extraction_recipe_id"] is None
 
