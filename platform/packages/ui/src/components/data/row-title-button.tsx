@@ -175,6 +175,12 @@ export function RowTitleButton({
       >
         {title}
       </span>
+      {/*
+        題名と補足の間の区切り（2 つの span は block なので画面には出ない）。見えている文を語に分けて比べる
+        検査（axe の label-content-name-mismatch。WCAG 2.5.3）が、区切りの無い「題名の末尾 + 補足の先頭」を
+        1 語につなげて、読み上げ名に含まれないと判定しないようにする（#4571）。
+      */}
+      {subtitle ? " " : null}
       {subtitle ? (
         <span id={subtitleId} className="mt-0.5 block break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
           {subtitle}

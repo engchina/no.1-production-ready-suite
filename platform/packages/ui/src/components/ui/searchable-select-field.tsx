@@ -463,7 +463,7 @@ export function SearchableSelectField({
         onKeyDown={handleButtonKeyDown}
         className={cn(
           CONTROL_MIN_HEIGHT_CLASS[size],
-          "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 py-1.5 text-left text-sm text-fg outline-none transition-colors",
+          "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 py-1.5 text-left text-sm text-fg transition-colors",
           "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
           error ? "border-danger-fg" : inlineLabel && filterActive ? "border-accent-fg" : "border-border-control",

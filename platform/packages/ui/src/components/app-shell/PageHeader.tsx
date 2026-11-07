@@ -328,7 +328,11 @@ export function PageHeader({
       )}
     >
       <div className={cn(measureClass(wide), "flex flex-wrap items-start justify-between gap-4")}>
-        <div className="min-w-0 flex-auto">
+        {/*
+          md 未満はタイトルの塊を全幅にし、ページの操作を常にタイトル（と補足）の下の段に置く。通知（Toast）は
+          md 未満で上端のバーに重ねて出るので、短いタイトルの右に操作が入ると 1 段目の操作が通知の範囲に入る（#4571）。
+        */}
+        <div className="min-w-0 flex-auto basis-full md:basis-auto">
           {back ? (
             <div className="mb-1.5">
               {/* 左の余白をボタンの内側の余白の分だけ戻し、矢印の左端をタイトルの左端にそろえる。 */}
