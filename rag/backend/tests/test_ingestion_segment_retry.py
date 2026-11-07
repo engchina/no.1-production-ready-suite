@@ -184,6 +184,91 @@ async def test_cached_full_artifact_of_older_version_is_not_reused() -> None:
     assert await pipeline._load_cached_full_extraction([segment], parse_key="key-a") is None
 
 
+def _segment_artifact_case(
+    *, schema_version: int, parse_key: str
+) -> tuple[IngestionPipeline, IngestionSegment]:
+    """分割解析の段の artifact を 1 つ保存した状態(段の PDF と設定の鍵は ``parse_key``)。"""
+    document_id = "doc-segment-version"
+    cached_path = "local://artifacts/extractions/doc-segment-version/segments/p1-2.json"
+    storage = _FakeObjectStorage(
+        {
+            cached_path: _extraction_payload(
+                "previous segment parse text",
+                page_number=1,
+                element_id="previous-segment-e1",
+                source_parser="docling",
+                parser_artifacts={
+                    "extraction_artifact_schema_version": schema_version,
+                    "extraction_artifact_kind": "segment",
+                    "extraction_artifact_document_id": document_id,
+                    "extraction_artifact_trace_id": "trace-previous",
+                    "extraction_artifact_parse_key": parse_key,
+                    "extraction_artifact_segment_id": f"{document_id}:p1-2",
+                    "extraction_artifact_page_start": 1,
+                    "extraction_artifact_page_end": 2,
+                },
+            )
+        }
+    )
+    pipeline = IngestionPipeline(
+        object_storage=storage,  # type: ignore[arg-type]
+        settings=Settings.model_construct(),
+    )
+    segment = IngestionSegment(
+        segment_id=f"{document_id}:p1-2",
+        document_id=document_id,
+        status="SUCCEEDED",
+        parser_backend="docling",
+        parser_profile="docling_layout",
+        page_start=1,
+        page_end=2,
+        artifact_path=cached_path,
+    )
+    return pipeline, segment
+
+
+async def test_cached_segment_artifact_with_same_version_and_key_is_reused() -> None:
+    """同じ段の PDF・設定・解析の出力の版なら、再試行で段を解析し直さない(費用の確認)。"""
+    pipeline, segment = _segment_artifact_case(
+        schema_version=ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION, parse_key="key-a"
+    )
+
+    result = await pipeline._load_cached_segment_extractions(
+        [segment], target_segments=[], parse_keys={(1, 2): "key-a"}
+    )
+
+    assert [item.extraction.raw_text for item in result.cached] == ["previous segment parse text"]
+    assert result.missing_ranges == set()
+
+
+async def test_cached_segment_artifact_of_older_version_is_parsed_again() -> None:
+    """解析の出力の版が変わったら、段の PDF と設定の鍵が同じでも段を解析し直す(#4577)。"""
+    current = ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION
+    pipeline, segment = _segment_artifact_case(schema_version=current - 1, parse_key="key-a")
+
+    result = await pipeline._load_cached_segment_extractions(
+        [segment], target_segments=[], parse_keys={(1, 2): "key-a"}
+    )
+
+    assert result.cached == []
+    assert result.missing_ranges == {(1, 2)}
+
+
+async def test_segment_saved_by_parser_before_4569_fix_is_parsed_again() -> None:
+    """#4569 の修正の前の解析(版 4)が保存した段は、解析から再処理で使い直さない(#4577)。
+
+    その段は VLM の前の crop の保存が書いた空の画像本文の投影を持ち、使い直すと分割で止まる。
+    """
+    pipeline, segment = _segment_artifact_case(schema_version=4, parse_key="key-a")
+
+    result = await pipeline._load_cached_segment_extractions(
+        [segment], target_segments=[], parse_keys={(1, 2): "key-a"}
+    )
+
+    assert result.cached == []
+    assert result.missing_ranges == {(1, 2)}
+
+
 class _RetrySegmentVlm(OciEnterpriseAiClient):
     """失敗 segment だけが呼ばれたことを記録する VLM fake。"""
 

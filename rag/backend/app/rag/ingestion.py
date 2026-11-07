@@ -218,9 +218,14 @@ INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間�
 # 解析中のページの進捗を解析サービスから読む間隔(秒。#1999)。
 _PARSE_PROGRESS_POLL_SECONDS = 3.0
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
-# 保存した抽出結果の版。解析の出力の内容が変わる修正で上げ、古い結果を再開・再処理で使い直さない
-# (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140。3: #4154。4: #4224)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 4
+# 保存した抽出結果(段の artifact と全体の artifact)の、解析の出力の版。artifact に記録し、
+# 読み戻すときに今の値と違えば使わずに解析し直す(段の PDF と設定の鍵が同じでも。#4577)。
+# 解析の出力の内容を変える修正(解析サービス・rag_engine の解析・rag_parser_core。例: 要素・本文・
+# layout_records・画像本文の投影)は、同じ PR でこの値を上げる。上げないと保存済みの段の結果が
+# 使い直され、解析からの再処理でも直らない
+# (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140。3: #4154。4: #4224。
+# 5: VLM の前の crop の保存が空の画像本文の投影を書かない。#4569)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 5
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -1258,7 +1263,11 @@ class IngestionPipeline:
         return result.extraction
 
     def _segment_parse_key(self, segment_bytes: bytes) -> str:
-        """段の抽出結果を使い回してよいかの鍵(段の PDF の hash と、解析・前処理の設定)。"""
+        """段の抽出結果を使い回してよいかの鍵(段の PDF の hash と、解析・前処理の設定)。
+
+        解析の出力の版(``EXTRACTION_ARTIFACT_SCHEMA_VERSION``)は artifact に記録して読み戻しで比べる
+        (``_cached_segment_artifact_matches``)。鍵が同じでも版の違う段は解析し直す(#4577)。
+        """
         segment_sha = hashlib.sha256(segment_bytes).hexdigest()
         key = compute_extraction_recipe_id(segment_sha, self._settings)
         if self._recipe_id is not None and self._recipe_revision is not None:
