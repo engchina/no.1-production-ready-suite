@@ -150,10 +150,8 @@ def test_answer_passes_row_judgments_to_the_explanation_stage() -> None:
     result, model = answer(with_derivation)
     prompts = [json.loads(prompt) for name, _system, prompt in model.calls if name == "ApplicationExplanation"]
     assert prompts, [name for name, _s, _p in model.calls]
-    assert set(prompts[0][explanation.KEY_ROWS]) == {
-        explanation.row_fact("操作Aを2営業日前の17時より後に行った", "applies"),
-        explanation.row_fact("操作Aを2営業日前の17時までに行った", "does_not_apply"),
-    }
+    assert prompts[0][explanation.ROW_KEYS["applies"]] == ["操作Aを2営業日前の17時より後に行った"]
+    assert prompts[0][explanation.ROW_KEYS["does_not_apply"]] == ["操作Aを2営業日前の17時までに行った"]
 
 
 # ---------------------------------------------------------------- 説明の段の入力（単体）
@@ -205,15 +203,13 @@ def test_explanation_input_carries_the_row_judgments_of_the_entry_table() -> Non
     [(system, prompt)] = _explain(_entry(result.tables[0].evidence_id), result)
     data = json.loads(prompt)
     assert data[explanation.KEY_QUESTION] == QUESTION
-    assert set(data[explanation.KEY_ROWS]) == {
-        explanation.row_fact("操作Aを2営業日前の17時より後に行った", "applies"),
-        explanation.row_fact("操作Aを2営業日前の17時までに行った", "does_not_apply"),
-    }
-    # 行の節は Step 1 で読み方を示すだけで、説明を書く Step 2 は節の名前を引かない（#4615）。
-    step1, step2 = system.split("## Step 2:")
-    assert explanation.KEY_ROWS in step1 and explanation.KEY_ROWS not in step2
-    # 行の節は内部の名前として表示の門が見る。
-    assert explanation.KEY_ROWS in explanation.internal_labels(data)
+    assert data[explanation.ROW_KEYS["applies"]] == ["操作Aを2営業日前の17時より後に行った"]
+    assert data[explanation.ROW_KEYS["does_not_apply"]] == ["操作Aを2営業日前の17時までに行った"]
+    assert explanation.ROW_KEYS["cannot_determine"] not in data
+    # 送った行の節だけを Step 1 が読み方として示す。行の節は説明の語にしてよい（門の内部の名前ではない。#4615）。
+    step1, _step2 = system.split("## Step 2:")
+    assert explanation.ROW_KEYS["applies"] in step1 and explanation.ROW_KEYS["cannot_determine"] not in system
+    assert explanation.internal_labels(data) == []
 
 
 def test_explanation_input_is_unchanged_without_row_judgments() -> None:
@@ -224,4 +220,4 @@ def test_explanation_input_is_unchanged_without_row_judgments() -> None:
     # 推導が使わない表の判定は渡さない。
     result = _table_result()
     [(system, prompt)] = _explain(_entry("E-other"), result)
-    assert explanation.KEY_ROWS not in json.loads(prompt) and system == explanation.explanation_system(None)
+    assert not set(explanation.ROW_KEYS.values()) & set(json.loads(prompt)) and system == explanation.explanation_system(None)

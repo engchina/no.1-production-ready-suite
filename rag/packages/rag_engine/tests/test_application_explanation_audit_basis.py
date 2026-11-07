@@ -159,12 +159,12 @@ def test_explanation_sees_the_units_the_audit_accepted_the_conclusion_on():
     # （引用した判定表も、引用が見出しの行を含まないので全文を足す）。
     assert sources == [ROWS, METHOD, TABLE, RULE]
     # 表の行の判定（#4576）は今までどおり渡す（同じ表の行は 1 回）。
-    assert prompts[0][explanation.KEY_ROWS] == [
-        explanation.row_fact("属性P=有", "applies"),
-        explanation.row_fact("属性Q=有", "applies"),
-        explanation.row_fact("属性R=有", "applies"),
-        explanation.row_fact("属性S=有", "does_not_apply"),
-    ]
+    rows = {key: prompts[0].get(key) for key in explanation.ROW_KEYS.values()}
+    assert rows == {
+        explanation.ROW_KEYS["applies"]: ["属性P=有", "属性Q=有", "属性R=有"],
+        explanation.ROW_KEYS["does_not_apply"]: ["属性S=有"],
+        explanation.ROW_KEYS["cannot_determine"]: None,
+    }
     assert review["explanation_basis"] == {"0": list(IDS)}
     rendered = "\n".join(render_lines([application], lambda _: "根拠：synthetic.md", lambda _: None))
     assert RECORDED_WITH_RULE in rendered and RECORDED_WITHOUT_RULE not in rendered
@@ -222,9 +222,10 @@ def test_table_rows_of_an_audit_basis_table_are_passed():
     entry = CheckedApplication(GroundedApplication(item_indexes=[0], reasoning="合成の推導。", result=RESULT), [])
     entry.audit_basis = [{"evidence_id": "evidence-table", "text": TABLE}]
     rows = explanation.application_rows(entry, row_conditions())
-    assert rows == [
-        explanation.row_fact(f"属性{name}=有", result) for name, result in zip("PQRS", ["applies"] * 3 + ["does_not_apply"], strict=True)
-    ]
+    assert rows == {
+        explanation.ROW_KEYS["applies"]: ["属性P=有", "属性Q=有", "属性R=有"],
+        explanation.ROW_KEYS["does_not_apply"]: ["属性S=有"],
+    }
     assert explanation.application_sources(entry) == [TABLE]
 
 
