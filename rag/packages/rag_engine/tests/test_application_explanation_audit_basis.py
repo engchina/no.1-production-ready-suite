@@ -64,9 +64,10 @@ def spans():
     return rows
 
 
-def cited_entries(sent, *, rule_heading=False):
+def cited_entries(sent, *, rule_heading=False, rule_full=False):
     """判定表の行の単位を引用した要点（検証済みの引用の束縛を持つ）。``rule_heading`` なら区分の規則の見出しの単位だけを
-    引用した要点も足す（引用は規則の単位を指すが、原文は見出しだけ）。"""
+    引用した要点も足す（引用は規則の単位を指すが、原文は見出しだけ）。``rule_full`` なら区分の規則の単位の全文を引用した
+    要点を足す。"""
     grounded.format_functions(sent)
     catalog = grounded.generation_unit_catalog(sent)
     model = unit_generation_model(generation_draft_wire_model(), catalog)
@@ -76,6 +77,9 @@ def cited_entries(sent, *, rule_heading=False):
         items.append(
             {"request_id": "Q1", "kind": "rule", "text": RULE_HEADING, "citations": [{"unit_ids": [catalog.snapshots[2].unit_ids[0]]}]}
         )
+        scope.append({"evidence_id": "E3", "target": "区分", "relation": "direct", "link": None})
+    if rule_full:
+        items.append({"request_id": "Q1", "kind": "rule", "text": RULE, "citations": [{"unit_ids": list(catalog.snapshots[2].unit_ids)}]})
         scope.append({"evidence_id": "E3", "target": "区分", "relation": "direct", "link": None})
     raw = model.model_validate(
         {"items": items, "request_coverage": [{"request_id": "Q1", "evidence_scope": scope}], "summary": "", "confidence": "low"}
@@ -215,3 +219,77 @@ def test_table_rows_of_an_audit_basis_table_are_passed():
     rows = explanation.application_rows(entry, row_conditions())
     assert [row[explanation.KEY_ROW_CONDITION] for row in rows] == ["属性P=有", "属性Q=有", "属性R=有", "属性S=有"]
     assert explanation.application_sources(entry) == [TABLE]
+
+
+# 結論を 2 つの推導に分けた形（実モデルの記録の形）: 推導 0 = 判定表から合計点、推導 1 = 区分の規則だけから区分
+# （premises は空）。説明の段の応答は記録の再生で返す: ほかの推導の結論か原文が入力に無ければ、記録された「資料に無い」
+# の説明を、有ればそれを使った説明を返す（意味の判定はテストの中だけ）。
+TOTAL = "合計点は 12 点です。"
+CLASS = "区分は Y です。"
+TOTAL_WITHOUT_CLASS = "成り立つ行の点数を足すと 4 + 5 + 3 = 12 点です。区分に関する情報は資料に記載されていないため、提示できません。"
+TOTAL_WITH_CLASS = "成り立つ行の点数を足すと 4 + 5 + 3 = 12 点です。"
+CLASS_WITHOUT_TOTAL = "資料には属性ごとの点数の記述が無いため、合計点を算出できず、区分を求めることはできません。"
+CLASS_WITH_TOTAL = "同じ回答で確かめた合計点 12 点は、区分の規則の10〜19点に当たるので、区分は Y です。"
+
+
+def run_split():
+    sent = spans()
+    table, rule = cited_entries(sent, rule_full=True)
+    applications = [
+        CheckedApplication(GroundedApplication(item_indexes=[0], reasoning="表の点数を合計する。", result=TOTAL), [table]),
+        CheckedApplication(GroundedApplication(item_indexes=[1], reasoning="区分の規則に当てはめる。", result=CLASS), [rule]),
+    ]
+    settings = get_settings(environ={}, dotenv_path=None)
+    basis = {0: ["evidence-method", "evidence-table"], 1: ["evidence-rule"]}
+
+    def audit(system, prompt, settings, schema, **options):
+        rows = [{"index": index, "valid": True, "basis_evidence_ids": ids} for index, ids in basis.items()]
+        return audit_reply(schema, rows, prompt=prompt)
+
+    review = review_applications(
+        QUESTION,
+        applications,
+        evidence_spans=sent,
+        existing_audit=None,
+        audit_requested=False,
+        parse_text=audit,
+        settings=settings,
+        provider_id=None,
+        row_conditions=row_conditions(),
+    )
+    prompts = []
+
+    def replay(system, prompt, settings, schema, **options):
+        value = json.loads(prompt)
+        prompts.append((system, value))
+        seen = json.dumps(value, ensure_ascii=False).replace("\\n", "\n")
+        if "区分" not in value[explanation.KEY_SOURCES][0]:
+            return schema.model_validate({"explanation": TOTAL_WITH_CLASS if RULE in seen else TOTAL_WITHOUT_CLASS})
+        return schema.model_validate({"explanation": CLASS_WITH_TOTAL if TOTAL in seen else CLASS_WITHOUT_TOTAL})
+
+    trace = explanation.explain_applications(
+        QUESTION, applications, None, parse_text=replay, settings=settings, provider_id=None, row_conditions=row_conditions()
+    )
+    return applications, review, trace, prompts
+
+
+def test_split_derivations_see_each_others_conclusions_and_sources():
+    applications, review, trace, prompts = run_split()
+    assert all(entry.published and entry.assessment["status"] == "valid" for entry in applications)
+    # 説明の段は推導ごとに 1 回のまま。
+    assert trace["calls"] == 2 and len(prompts) == 2
+    # どちらの説明も、ほかの推導の事実を資料に無いとする説明（記録の形）にならない。
+    rendered = "\n".join(render_lines(applications, lambda _: "根拠：synthetic.md", lambda _: None))
+    assert TOTAL_WITHOUT_CLASS not in rendered and CLASS_WITHOUT_TOTAL not in rendered
+    assert [entry.presentation["reasoning"] for entry in applications] == [TOTAL_WITH_CLASS, CLASS_WITH_TOTAL]
+    (_, first), (_, second) = prompts
+    # 自分の結論は渡さず、同じ回答のほかの公開した推導の結論と、その推導の原文（引用と審査の根拠の全文）を渡す。
+    assert first[explanation.KEY_OTHERS] == [{explanation.KEY_CONCLUSION: CLASS, explanation.KEY_SOURCES: [RULE]}]
+    assert second[explanation.KEY_OTHERS] == [{explanation.KEY_CONCLUSION: TOTAL, explanation.KEY_SOURCES: [ROWS, METHOD, TABLE]}]
+    assert TOTAL not in json.dumps(first, ensure_ascii=False) and CLASS not in json.dumps(second, ensure_ascii=False)
+    assert review["explanation_basis"] == {"0": ["evidence-method", "evidence-table"]}
+
+
+def test_single_derivation_has_no_other_conclusions_section():
+    _application, _review, _trace, prompts = run()
+    assert explanation.KEY_OTHERS not in prompts[0]
