@@ -118,6 +118,10 @@ WARNING_BBOX_MISSING = "vision_bbox_missing"
 WARNING_TABLE_DETECTION_FAILED = "vision_table_detection_failed"
 WARNING_SOURCE_UNSUPPORTED = "vision_source_unsupported"
 WARNING_FAILED = "vision_failed"
+# 読み取りの試行の結果を表す warning(入力の bbox の warning と違い、読み直すと変わる)。
+_RUN_OUTCOME_WARNINGS = frozenset(
+    {WARNING_PARTIAL_FAILURE, WARNING_TABLE_DETECTION_FAILED, WARNING_FAILED}
+)
 
 # 共通抽出 schema の要素 kind -> LayoutRecord の category。
 _CATEGORY_BY_KIND = {
@@ -1618,7 +1622,14 @@ def _apply_skips(
             warnings.append(WARNING_TABLE_DETECTION_FAILED)
     for reason, count in reasons.items():
         summary[f"skipped_{reason.removeprefix('vision_')}"] = count
-    updated = extraction.model_copy(update={"elements": elements, "assets": assets})
+    update: dict[str, object] = {"elements": elements, "assets": assets}
+    if stats is not None:
+        # 保存した抽出結果を読み直したときは、前の試行の結果の warning をこの試行の結果で置き換える
+        # (失敗した図だけを読み直して成功したのに、失敗の warning が残らないようにする。#4570)。
+        update["warnings"] = [
+            warning for warning in extraction.warnings if warning not in _RUN_OUTCOME_WARNINGS
+        ]
+    updated = extraction.model_copy(update=update)
     return _with_summary(updated, summary=summary, warnings=warnings)
 
 
