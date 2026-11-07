@@ -3769,6 +3769,10 @@ for (const theme of ["light", "dark"] as const) {
     await expect.poll(() => created).toBe(true);
     await expect(page.getByText("処理レシピがありません", { exact: true })).toHaveCount(0);
     await expect(page).toHaveURL(/recipe=recipe-2/u);
+    // URL は選んだ時点で変わり、画面の選択は router の遷移の描画で後から追いつく。その間は先頭のレシピの
+    // 設定が出ているので、画面がレシピ2を選んでから編集する（URL だけを待つと遅い環境で前のレシピを編集する。#4574）。
+    // 375px はカードを隠して選択欄を出すが、カードの選択の状態は同じ state なので幅に依らず確かめられる。
+    await expect(page.getByRole("button", { name: /^レシピ2/u, includeHidden: true })).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: "処理設定を編集", exact: true }).click();
     const field = page.locator('[data-config-field="vision_enabled"]').last();
     await field.getByRole("button", { name: "上書き", exact: true }).click();
