@@ -97,6 +97,8 @@ interface RunRow {
     reasoning_output_tokens: number | null;
     measurement: "complete" | "partial";
     measured_requests: number;
+    /** モデルごとの内訳（#4581）。古い記録は無い。 */
+    by_model?: { model: string; requests: number; input_tokens: number; output_tokens: number; total_tokens: number }[];
   } | null;
 }
 
