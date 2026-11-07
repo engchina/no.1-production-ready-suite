@@ -47,8 +47,6 @@ MAX_TABLES = 4
 
 PURPOSE_TYPE = "answer.row_condition_type"
 PURPOSE_JUDGE = "answer.row_condition_judge"
-TYPE_PROMPT_KEY = "application.rowTypeSystem"
-JUDGE_PROMPT_KEY = "application.rowJudgeSystem"
 
 
 ROW_TYPE_SYSTEM_PROMPT = """## Step 1: 役割を確認する
@@ -385,7 +383,7 @@ def build_type_calls(question: str, question_units: Sequence[dict[str, Any]], ta
         part = table_subset(table, rows)
         built.append(
             {
-                "system": resolve_prompt(TYPE_PROMPT_KEY, ROW_TYPE_SYSTEM_PROMPT),
+                "system": resolve_prompt("application.rowTypeSystem", ROW_TYPE_SYSTEM_PROMPT),
                 "user": user_message_with_positions(question, question_units, part),
                 "schema_name": "RowConditionType",
                 "schema": schema_type(question_units, part, question),
@@ -409,7 +407,7 @@ def build_judge_calls(
         part = table_subset(table, rows)
         built.append(
             {
-                "system": resolve_prompt(JUDGE_PROMPT_KEY, ROW_JUDGE_SYSTEM_PROMPT),
+                "system": resolve_prompt("application.rowJudgeSystem", ROW_JUDGE_SYSTEM_PROMPT),
                 "user": user_message(question_units, part),
                 "schema_name": "RowApplicability",
                 "schema": schema_judge(question_units, part),
