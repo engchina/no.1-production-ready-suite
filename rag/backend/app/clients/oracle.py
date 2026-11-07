@@ -571,11 +571,21 @@ class NativeSearchRows(list[dict[str, object]]):
 
 
 def _native_vector_retrieval(
-    *, method: str, scope: _NativeScope, top_k: int, exact_max_chunks: int, returned: int
+    *,
+    method: str,
+    scope: _NativeScope,
+    top_k: int,
+    exact_max_chunks: int,
+    returned: int,
+    first_returned: int | None = None,
+    oversample_factor: int | None = None,
 ) -> dict[str, object]:
-    """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。"""
+    """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。
+
+    不足で読み直したとき(``native_index_retry``)は、最初の取得数と候補の倍率も残す。
+    """
     expected = min(top_k, scope.vector_chunks) if top_k else scope.vector_chunks
-    return {
+    retrieval: dict[str, object] = {
         "method": method,
         "scope_vector_chunks": scope.vector_chunks,
         "exact_max_chunks": exact_max_chunks,
@@ -584,6 +594,10 @@ def _native_vector_retrieval(
         "returned": returned,
         "shortage": returned < expected,
     }
+    if first_returned is not None:
+        retrieval["first_returned"] = first_returned
+        retrieval["oversample_factor"] = oversample_factor
+    return retrieval
 
 
 def _native_exact_vector_statement(
@@ -8504,27 +8518,34 @@ class OracleClient:
         text_contains = (
             _oracle_text_query(query, settings=self._settings) if channel != "vector" else None
         )
-        specs = [
-            request_json(
-                query=query,
-                vector=vector,
-                channel=channel,
-                allowed_ids=batch.allowed_ids,
-                allowed_scopes=batch.allowed_scopes,
-                allowed_scope_spans=batch.allowed_scope_spans,
-                allowed_scope_ranges=batch.allowed_scope_ranges,
-                limit=top_k or scope.total_chunks,
-                rank_constant=self._settings.rag_rrf_k,
-                accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
-                method_ratio=self._settings.rag_rrf_method_ratio,
-                text_contains=text_contains,
-            )
-            for batch in native_filter_batches(
-                allowed_ids=scope.allowed_ids,
-                allowed_scopes=scope.complete_scopes,
-                allowed_scope_ranges=scope.scope_ranges,
-            )
-        ]
+        limit = top_k or scope.total_chunks
+        batches = native_filter_batches(
+            allowed_ids=scope.allowed_ids,
+            allowed_scopes=scope.complete_scopes,
+            allowed_scope_ranges=scope.scope_ranges,
+        )
+
+        def specs_for(vector_limit: int) -> list[str]:
+            return [
+                request_json(
+                    query=query,
+                    vector=vector,
+                    channel=channel,
+                    allowed_ids=batch.allowed_ids,
+                    allowed_scopes=batch.allowed_scopes,
+                    allowed_scope_spans=batch.allowed_scope_spans,
+                    allowed_scope_ranges=batch.allowed_scope_ranges,
+                    limit=limit,
+                    vector_limit=vector_limit,
+                    rank_constant=self._settings.rag_rrf_k,
+                    accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
+                    method_ratio=self._settings.rag_rrf_method_ratio,
+                    text_contains=text_contains,
+                )
+                for batch in batches
+            ]
+
+        specs = specs_for(limit)
         score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
             channel
         ]
@@ -8555,39 +8576,80 @@ class OracleClient:
             async with semaphore:
                 return await self._fetch_all(statement, {**native_binds, "native_spec": spec})
 
+        async def read_all(batch_specs: list[str]) -> list[list[dict[str, object]]]:
+            if len(batch_specs) == 1:
+                return [await read_batch(batch_specs[0])]
+            # 1 回でも失敗したら検索の失敗にする(範囲の一部だけの結果を返さない)。
+            async with asyncio.TaskGroup() as group:
+                reads = [group.create_task(read_batch(spec)) for spec in batch_specs]
+            return [read.result() for read in reads]
+
+        def vector_count(rows: list[dict[str, object]]) -> int:
+            return sum(_float_value(row.get("native_vector_score", 0)) > 0 for row in rows)
+
         try:
+            results = await read_all(specs)
             if len(specs) == 1:
-                rows = await read_batch(specs[0])
+                rows = results[0]
             else:
-                # 1 回でも失敗したら検索の失敗にする(範囲の一部だけの結果を返さない)。
-                async with asyncio.TaskGroup() as group:
-                    reads = [group.create_task(read_batch(spec)) for spec in specs]
-                rows = _merge_native_filter_batches(
-                    [read.result() for read in reads], channel, top_k
-                )
+                rows = _merge_native_filter_batches(results, channel, top_k)
                 logger.info("native_search_filter_batches", extra={"filter_batches": len(specs)})
-            selected = _apply_native_search_threshold(rows, channel, self._settings)
-            selected.filter_batches = len(specs)
-            if channel != "keyword":
-                selected.vector_retrieval = _native_vector_retrieval(
-                    method="native_index",
-                    scope=scope,
-                    top_k=top_k,
-                    exact_max_chunks=exact_max_chunks,
-                    returned=sum(
-                        _float_value(row.get("native_vector_score", 0)) > 0 for row in rows
-                    ),
-                )
-                if selected.vector_retrieval["shortage"]:
-                    logger.warning(
-                        "原生索引のベクトル候補が不足: %s",
-                        json.dumps(selected.vector_retrieval, ensure_ascii=False),
-                    )
-            return selected
         except Exception as exc:
             raise NativeHybridUnavailable(
                 "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
             ) from exc
+        retrieval: dict[str, object] = {}
+        if channel != "keyword":
+            retrieval = _native_vector_retrieval(
+                method="native_index",
+                scope=scope,
+                top_k=top_k,
+                exact_max_chunks=exact_max_chunks,
+                returned=vector_count(rows),
+            )
+            factor = self._settings.rag_native_vector_shortage_oversample_factor
+            if retrieval["shortage"] and factor > 1:
+                # 削除の残骸が上位の枠を使うと k 件を下回る(#4097)。候補を広げて 1 回だけ読み直し、
+                # 経路ごとに k 件へ切る(範囲・権限の条件と最終の件数は変えない)。
+                try:
+                    retried = _merge_native_filter_batches(
+                        await read_all(specs_for(limit * factor)), channel, top_k
+                    )
+                except Exception as exc:
+                    # 最初の結果は範囲の中の正しい行なので、読み直しの失敗では捨てない。
+                    logger.warning(
+                        "native_vector_shortage_retry_failed", extra=oracle_error_log_fields(exc)
+                    )
+                else:
+                    rows = retried
+                    retrieval = _native_vector_retrieval(
+                        method="native_index_retry",
+                        scope=scope,
+                        top_k=top_k,
+                        exact_max_chunks=exact_max_chunks,
+                        returned=vector_count(rows),
+                        first_returned=int(str(retrieval["returned"])),
+                        oversample_factor=factor,
+                    )
+            if retrieval["shortage"]:
+                logger.warning(
+                    "原生索引のベクトル候補が不足: %s",
+                    json.dumps(retrieval, ensure_ascii=False),
+                )
+            elif retrieval["method"] == "native_index_retry":
+                logger.info(
+                    "原生索引のベクトル候補の不足を読み直しで補った: %s",
+                    json.dumps(retrieval, ensure_ascii=False),
+                )
+        try:
+            selected = _apply_native_search_threshold(rows, channel, self._settings)
+        except Exception as exc:
+            raise NativeHybridUnavailable(
+                "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
+            ) from exc
+        selected.filter_batches = len(specs)
+        selected.vector_retrieval = retrieval
+        return selected
 
     async def _vector_rows(
         self, embedding_bind: object, *, top_k: int, filters: dict[str, str]
