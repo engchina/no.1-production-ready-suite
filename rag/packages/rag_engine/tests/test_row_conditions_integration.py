@@ -268,9 +268,7 @@ def test_answering_step_records_unavailable_model_without_calls(sent_spans: Any,
     spans = sent_spans([table_span("reg-period-reversed")])
     monkeypatch.setattr(answering, "parse_text_response", lambda *a, **kw: pytest.fail("モデルが使えなければ呼ばない"))
     unavailable = replace(settings(), row_condition_unavailable="モデル「xai.grok-4.7」は登録されていません。")
-    result = answering._row_condition_step(
-        FIXTURE["cases"]["reg-period-reversed"]["question"], spans, [checked_item(spans[0])], settings=unavailable
-    )
+    result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], spans, settings=unavailable)
     assert result is not None and result.status == "model_unavailable" and result.undetermined() == []
 
 
@@ -286,9 +284,7 @@ def test_answering_step_uses_the_step_model(sent_spans: Any, monkeypatch: pytest
         return replay(system, user, call_settings, schema)
 
     monkeypatch.setattr(answering, "parse_text_response", parse)
-    result = answering._row_condition_step(
-        FIXTURE["cases"]["reg-period-reversed"]["question"], spans, [checked_item(spans[0])], settings=settings()
-    )
+    result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], spans, settings=settings())
     assert result is not None and result.status == "completed" and providers == ["xai.grok-4.7", "xai.grok-4.7"]
-    # 表の無い根拠だけなら段を開かない。
-    assert answering._row_condition_step("質問。", spans, [], settings=settings()) is None
+    # 送った表が無ければ段を開かない。
+    assert answering._row_condition_step("質問。", [], settings=settings()) is None
