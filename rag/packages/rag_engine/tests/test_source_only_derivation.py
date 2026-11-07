@@ -123,7 +123,7 @@ def run(name: str, *, repair: str = "derive", valid: bool = True):
         if schema.__name__ == "ApplicationExplanation":
             return schema.model_validate({"explanation": "表の行の点数を合計し、区分の規則に当てはめた。"})
         assert schema.__name__ == "GroundedDraftWire", schema.__name__
-        if "answer_part_role_errors" not in prompt:
+        if "source_only_requests" not in prompt:
             return schema.model_validate(_replay(name, prompt))
         # 作り直しの契約は source 型を受けない。
         with pytest.raises(ValidationError):

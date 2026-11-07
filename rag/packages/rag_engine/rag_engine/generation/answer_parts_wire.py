@@ -25,14 +25,15 @@ QUESTION_TYPE_DESCRIPTION = (
     "definition=語・項目の意味、procedure=手順・操作、comparison=複数の対象の比較、other=それ以外。"
 )
 
-# source 型だけの出力を作り直すときに、生成の入力の後ろへ足す指摘（#4586）。何が違反でどう直すかだけを書く。
-SOURCE_ONLY_DERIVATION_ERROR = (
-    f"question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを選んだが、この要求の要点がすべて source 型"
-    "（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無い。"
-)
-SOURCE_ONLY_DERIVATION_INSTRUCTION = (
-    "answer_part_role_errors の要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）"
-    "で返し、導くのに足りない資料・値は gap 型に書いて、完全な草稿を返してください。"
+# source 型だけの出力を作り直すときに、生成の user の入力の後ろへ足す部品（#4586）。何が違反でどう直すかだけを書く。
+# 既定の user の入力（Step 5 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
+SOURCE_ONLY_DERIVATION_PROMPT = (
+    "## Step 6: 導出が要る要求の要点を作り直す\n"
+    f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
+    "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
+    "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
+    "導くのに足りない資料・値は gap 型に書く。\n"
+    "- 応答 schema どおりの完全な草稿を返す。\n"
 )
 
 

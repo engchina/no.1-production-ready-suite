@@ -52,11 +52,7 @@ from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
 )
-from rag_engine.generation.answer_parts_wire import (
-    SOURCE_ONLY_DERIVATION_ERROR,
-    SOURCE_ONLY_DERIVATION_INSTRUCTION,
-    source_only_derivation,
-)
+from rag_engine.generation.answer_parts_wire import SOURCE_ONLY_DERIVATION_PROMPT, source_only_derivation
 from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_generation_model
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
@@ -99,7 +95,12 @@ from rag_engine.generation.summary_projection import (
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
-from rag_engine.knowledge.prompt_files import continue_prompt_steps, neutralize_boundary_markers
+from rag_engine.knowledge.prompt_files import (
+    VLM_ANSWER_PROMPT_KEY,
+    continue_prompt_steps,
+    neutralize_boundary_markers,
+    read_prompt,
+)
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
@@ -7013,19 +7014,12 @@ def run_round(
         role_repair_prompt = ""
         if source_only:
             role_repair = {"requests": source_only, "question_type": list(getattr(draft, "question_type", []) or [])}
-            role_repair_prompt = (
-                prompt
-                + "\n"
-                + json.dumps(
-                    {
-                        "answer_part_role_errors": [
-                            {"request_id": request_id, "error": SOURCE_ONLY_DERIVATION_ERROR} for request_id in source_only
-                        ],
-                        "instruction": SOURCE_ONLY_DERIVATION_INSTRUCTION,
-                    },
-                    ensure_ascii=False,
-                )
+            # 番号は指示の側の文（user のテンプレート）の最後の Step の続きにする（根拠の中の見出しで決めない）。
+            role_repair_part = continue_prompt_steps(
+                read_prompt(VLM_ANSWER_PROMPT_KEY),
+                resolve_prompt("generation.sourceOnlyDerivation", SOURCE_ONLY_DERIVATION_PROMPT),
             )
+            role_repair_prompt = prompt + "\n\n" + role_repair_part + json.dumps({"source_only_requests": source_only}, ensure_ascii=False)
             derivation_model = generation_language_schema(
                 unit_generation_model(generation_base, unit_catalog, direct_source=False), question
             )
