@@ -309,7 +309,10 @@ def project_extraction(question: str, raw: Mapping[str, Any]) -> tuple[list[dict
         same = [row for row in rows if (row["start"], row["end"]) == (member["start"], member["end"])]
         if same and same[0]["designation"] != DESIGNATION_NAMED:
             raise QuestionSubjectError("exact_duplicate_range", "個々の名前と同じ範囲の提及の種別が食い違います。")
-        if not same:
+        if same:
+            # 単独の named の提及と同じ位置の名前は 1 つにし、まとめた表記の中の名前であることは残す（診断の件数）。
+            same[0].setdefault("member_of", member["member_of"])
+        else:
             rows.append(member)
     rows.sort(key=lambda row: (row["start"], row["end"]))
     return rows, unwritten

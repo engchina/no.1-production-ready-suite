@@ -295,6 +295,15 @@ def test_member_also_returned_as_a_named_mention_is_one_position() -> None:
     question = RANGE_QUESTION
     rows = _rows(question, {"mentions": [mention(question, "部品P1"), collective(question, "部品P1〜P4", "部品P1")]})
     assert [(row["text"], row["designation"]) for row in rows] == [("部品P1", "named"), ("部品P1〜P4", "collective")]
+    # 単独でも返した名前も、まとめた表記の中の名前として数える（実モデルの応答の形）。
+    subjects, _ = extract(
+        question,
+        {
+            EXTRACT: {"mentions": [mention(question, "部品P1"), collective(question, "部品P1〜P4", "部品P1")]},
+            ROLE: RuntimeError("synthetic"),
+        },
+    )
+    assert (len(subjects.mentions), subjects.collective_mentions, subjects.collective_members) == (1, 1, 1)
 
 
 def test_members_not_written_in_the_collective_mention_are_not_used() -> None:
@@ -1023,6 +1032,7 @@ _TUNING_DIGESTS = {
 # 契約の確認に使う未知の合成の質問と、その名前の sha256（調整に使わない評価の組。コード・指示・fixture へ漏らさない）。
 _UNSEEN_DIGESTS = {
     5: {
+        "6cc0c767623e200aaa2fae2f3725f0dc10f1efa89bccac2ed390b38a28a8f815",
         "1304cd276bd8dfff82cb80f51c52d9d9371dcc38c47c19ae15a7fd6f862693a4",
         "4facc826062ce9c5b2b867c19e23f78967cc97aedeab24a9de36a079ccbbb95a",
         "94f662f328bdf8eeb5c3a1570a5f6ea9340469dd286c246d833792565f3c5965",
@@ -1034,10 +1044,18 @@ _UNSEEN_DIGESTS = {
         "ab1a49a5eea3334ea4d8a128cb51c39c9df9b6cd0a756559ceb38e62841561d4",
         "e9a8de2fcee9c284dd6855bf2191911e60cac0bdca3d61af8373ea87231e835f",
         "eef5d26290862f12272246d2aff070c445f2500bcbce0b6498f83b6b96a21d88",
+        # #4584 の実モデルの確認の回帰の題の名前（以下の 8・19・22・28 も同じ確認の名前と質問）。
+        "f9d91be521da5ae961aa7afbc16f4c636df401c8ae4575a7dfc15c5412e959f9",
     },
+    8: {"60a617b3cdacbd8ef9d98c69993e8519e044a97e6ab25e2344f612a45d4bf3a2"},
+    19: {"282b37fd2383682d2659e75491dff91f386786ae507fef758a5a9f1cacb9fdc8"},
     21: {"173d67c99ee9434a81128378fb24cbb65879c0f13b194b5679a738813ce1499a"},
-    22: {"2464ca0dbc33317dbf3f580ec1664c56029805353b8236b728100c0c830aaada"},
+    22: {
+        "2464ca0dbc33317dbf3f580ec1664c56029805353b8236b728100c0c830aaada",
+        "f5641b436d12a52cd9f002d10d32f29b06be2b22f43964b55fa85fc47cba7570",
+    },
     25: {"26f039a9c360c62697c580af4aa61ffd83fbf4573ae6211dfbd86db0214f6b99"},
+    28: {"b06281659284d4139d7aa72d37661dc8fd203b74eebb28b337773ba9bf5ca40b"},
     34: {
         "7d5e6cf705c0900fbdadd1ea9e351b57b6f40bc74ed76a5dbd8a0efaa215bcd6",
         "d23e2fc589f69f4a90cbc9aa3dbd0797c58182b87f9566ff82c43df8cf309261",
