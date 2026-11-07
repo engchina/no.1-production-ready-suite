@@ -902,7 +902,9 @@ for (const theme of ["light", "dark"] as const) {
     const graph = page.locator("#knowledge-base-graph");
     await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
     try {
-      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label);
+      // 11 ページを順に読み、1101 件の節点を配置してから選ぶ。配置は main thread の処理で、nightly の
+      // JS coverage の記録（E2E_IMPACT_DIR）の下では 5 秒を超える（#4574）。待ちの上限だけを広げる。
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label, { timeout: 15_000 });
       expect(reads.every((r) => r.limit <= 1000)).toBe(true);
       expect(reads.map((r) => r.offset)).toEqual(Array.from({ length: 11 }, (_, index) => index * 100));
       await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();

@@ -124,7 +124,7 @@ def test_citation_line_and_used_mark_point_to_the_child_that_holds_the_quote() -
     """同じ親・同じ頁の H と F が並んでも、出典行と「回答で引用」は引用のある F に付く（並びの先の H にしない）。"""
     result = _run([_rule("左の枠に値 B を入れると、右の枠に結果 C が出ます。")]).response
     refs = result.generation_trace["citation_lines"]
-    assert len(refs) == 2  # 原文の事実と、それを使った回答の出典行。
+    assert len(refs) == 1  # 原文の写しの要点は、選んだ ID の原文を直接の記載にする（導出の出典行は作らない）。
     assert all(row["scope_source_ids"] == ["doc:c-f"] for row in refs)
     assert all(row["candidate_source_ids"] == [] for row in refs)
     assert [entry["evidence_id"] for entry in result.cited_evidence] == ["doc:c-f"]

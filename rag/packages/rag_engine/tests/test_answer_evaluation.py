@@ -52,6 +52,7 @@ from rag_engine.generation.answering import AnswerQuestionResult, AnswerRecord, 
 from rag_engine.generation.question_subjects import (
     STATUS_COMPLETED,
     STATUS_FAILED,
+    STATUS_ROLES_UNAVAILABLE,
     SUBJECT_EXTRACTION_PROMPT,
     QuestionSubjects,
     SubjectMention,
@@ -142,7 +143,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
         schema = call.args[3]
         assert call.args[0] == expected_systems.get(schema, expected_systems.get(schema.__name__))
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 21
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 22
     assert result["judge_diagnostics"]["question_subjects"] == {"status": "no_named_mention", "calls": 1, "named_mentions": 0}
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
@@ -1402,15 +1403,32 @@ def test_general_rule_does_not_support_a_name_the_question_asked():
     [
         (SUBJECT_CLAIM, None, ["ServiceXは承認された項目である。"]),
         (SUBJECT_CLAIM, None, [GENERAL_RULE, "ServiceXの担当は管理部である。"]),
-        (SUBJECT_CLAIM, _subjects("部門でServiceXを導入しました。", ("ServiceX", ("given",))), [GENERAL_RULE]),
-        (SUBJECT_CLAIM, _subjects("ServiceXなどは利用できますか。", ("ServiceX", ("example",))), [GENERAL_RULE]),
         (GENERAL_RULE, None, [GENERAL_RULE]),
         (SUBJECT_CLAIM, QuestionSubjects(SUBJECT_QUESTION, STATUS_FAILED, failure="TimeoutError"), [GENERAL_RULE]),
     ],
-    ids=["in-document", "in-another-passage-document", "given", "example", "name-not-written", "extraction-failed"],
+    ids=["in-document", "in-another-passage-document", "name-not-written", "extraction-failed"],
 )
 def test_question_name_check_keeps_the_verdict(text, subjects, documents):
     assert _question_name_status(text, subjects, documents).status == "supported"
+
+
+@pytest.mark.parametrize(
+    "subjects",
+    [
+        _subjects("部門でServiceXを導入しました。", ("ServiceX", ("given",))),
+        _subjects("ServiceXなどは利用できますか。", ("ServiceX", ("example",))),
+        QuestionSubjects(
+            SUBJECT_QUESTION,
+            STATUS_ROLES_UNAVAILABLE,
+            tuple(replace(mention, roles=()) for mention in _subjects().mentions),
+            failure="TimeoutError",
+        ),
+    ],
+    ids=["given", "example", "roles-unavailable"],
+)
+def test_every_named_subject_is_checked_whatever_the_role(subjects):
+    """利用者の決定（2026-11-07）: 前提・例の名前も、役割の段が失敗しても、名前は根拠に照らす（生成と同じ規則）。"""
+    assert _question_name_status(SUBJECT_CLAIM, subjects, [GENERAL_RULE]).reference_check == REFERENCE_SUBJECT_UNSUPPORTED
 
 
 def test_question_name_check_ignores_claims_not_supported():
@@ -1477,6 +1495,7 @@ def test_question_name_check_lowers_claim_support_through_the_evaluation():
         "status": "completed",
         "calls": 2,
         "named_mentions": 1,
+        "verified_mentions": 1,
         "asked_mentions": 1,
     }
 

@@ -111,10 +111,16 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
         "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
-        # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
+        # 段ごとのモデルと段の推論の量(質問の対象の役割の判定 #4351・表の行の条件 #4349・
+        # 推導の監査の判定 #4565 と理由 #4564)。
         **{
             f"{step.key}_model": getattr(resolved_settings, step.field)
             for step in STEP_MODEL_SETTINGS
+        },
+        **{
+            f"{step.key}_reasoning_effort": getattr(resolved_settings, step.effort_field)
+            for step in STEP_MODEL_SETTINGS
+            if step.effort_field
         },
         "crag_compact_input": resolved_settings.rag_crag_compact_input,
         # CRAG の評価の候補の短い ID(#1864)。

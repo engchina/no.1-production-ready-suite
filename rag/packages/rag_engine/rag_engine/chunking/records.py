@@ -324,20 +324,32 @@ def _join_records_text(records: Sequence[dict[str, Any]], *, for_retrieval: bool
 
 
 def _vision_projection_status(record: dict[str, Any]) -> str | None:
-    """原文を探し直さず、型付き画像投影の完全性だけを調べる。"""
+    """原文を探し直さず、型付き画像投影の完全性だけを調べる。
+
+    状態は ``verified``（検証済みの投影）・``unrecorded``（投影の無い旧い画像説明）・
+    ``vision_failed``（VLM が失敗し ``vision_error`` を記録した、VLM の本文の無い record。#4570）。
+    ``vision_failed`` の record は VLM の本文を出さず、分割・検索を止めない。失敗の記録の無い空・破損の
+    投影と、失敗の記録と矛盾する本文つきの投影は不正として止める。
+    """
     if record.get("category") not in {"Picture", "Table", "Form"}:
         return None
     raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
     states: set[str] = set()
-    if VISION_TEXT_PROJECTION_KEY in raw:
+    failed = False
+    if raw.get("vision_error"):
+        # 修正前の失敗は回答本文の空の投影を残した。失敗の記録があり回答本文が空なら、VLM の本文なしと読む。
+        if VISION_TEXT_PROJECTION_KEY in raw:
+            projection = load_vision_text_projection(raw[VISION_TEXT_PROJECTION_KEY])
+            if projection is None or projection.answer_description.strip():
+                raise InvalidVisionProjectionError("画像本文の投影が不正です。再解析または再分割してください。")
+        failed = True
+        if raw.get("table_vision_text"):
+            # 失敗した表に投影の無い補足の本文が残るのは旧い形式。VLM の本文なしとして通さない。
+            states.add("unrecorded")
+    elif VISION_TEXT_PROJECTION_KEY in raw:
         projection = load_vision_text_projection(raw[VISION_TEXT_PROJECTION_KEY])
         body = raw.get("table_vision_text") if record.get("category") == "Table" else record.get("text")
-        if (
-            projection is None
-            or not projection.answer_description.strip()
-            or raw.get("vision_error")
-            or body != projection.answer_description
-        ):
+        if projection is None or not projection.answer_description.strip() or body != projection.answer_description:
             raise InvalidVisionProjectionError("画像本文の投影が不正です。再解析または再分割してください。")
         states.add("verified")
     elif isinstance(raw.get("vision_description"), dict) or raw.get("table_vision_text"):
@@ -357,7 +369,8 @@ def _vision_projection_status(record: dict[str, Any]) -> str | None:
             states.add("verified")
     if len(states) > 1:
         raise InvalidVisionProjectionError("画像本文の投影に未記録の範囲が混在しています。再解析してください。")
-    return next(iter(states), None)
+    # 表の補足の VLM が失敗しても、表内画像の投影の状態（本文に載る VLM の本文）を優先して示す。
+    return next(iter(states), "vision_failed" if failed else None)
 
 
 def _record_text_for_chunk(record: dict[str, Any], *, for_retrieval: bool = False) -> str:

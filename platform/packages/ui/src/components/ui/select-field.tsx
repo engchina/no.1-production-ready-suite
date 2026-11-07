@@ -588,7 +588,7 @@ export function SelectField<T extends string>({
           onKeyDown={handleKeyDown}
           className={cn(
             CONTROL_HEIGHT_CLASS[size],
-            "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg outline-none transition-colors",
+            "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg transition-colors",
             "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
             // TextField・SearchableSelectField の disabled と同じ地・文字（枠線は残して欄の形を見せる）。
             "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",

@@ -319,3 +319,44 @@ test("Agent 管理の権限が無い利用者には、ツール権限の変更�
   await expect(notice).toContainText("管理者が変更できます");
   await expect(page.getByTestId("automation-open-tool-policy")).toHaveCount(0);
 });
+
+// #4571: 選択欄（業務 Agent・頻度。共有の SelectField のボタン）にキーボードで移ると、フォーカスの outline が出る
+// （README §4「フォーカスの表示」。枠線の色が 1px 変わるだけにしない）。
+for (const viewport of VIEWPORTS) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`自動実行の詳細の選択欄はキーボードのフォーカスを outline で示す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await useTheme(page, theme);
+      seedAutomation(mockApi);
+      await page.goto("/automations?id=auto-seeded");
+      await expect(page.getByRole("heading", { name: "毎朝の売上の要約", level: 1 })).toBeVisible();
+
+      const results = [];
+      for (const [before, select] of [
+        ["#automation-name", "#automation-agent"],
+        ['[role="switch"]', "#automation-frequency"],
+      ] as const) {
+        // 前の欄から Tab で移る（キーボードの操作なので :focus-visible になる）。
+        await page.locator(before).first().focus();
+        await page.keyboard.press("Tab");
+        const trigger = page.locator(select);
+        await expect(trigger).toBeFocused();
+        await page.screenshot({ path: testInfo.outputPath(`automation-focus${select.replace("#automation", "")}-${viewport.name}-${theme}.png`) });
+        results.push(
+          await trigger.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              id: element.id,
+              focusVisible: element.matches(":focus-visible"),
+              outline: style.outlineStyle !== "none" && parseFloat(style.outlineWidth) >= 2,
+            };
+          })
+        );
+      }
+      expect(results).toEqual([
+        { id: "automation-agent", focusVisible: true, outline: true },
+        { id: "automation-frequency", focusVisible: true, outline: true },
+      ]);
+    });
+  }
+}

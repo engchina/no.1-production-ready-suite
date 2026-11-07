@@ -2990,6 +2990,8 @@ export interface AnsweringSettingsData {
   section_expansion_input_token_percent: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
   question_subject_role_model: string;
+  /** 表の各行の条件を質問に当てはめる段のモデル（#4349。空は回答のモデル）。 */
+  row_condition_model: string;
   /** 導いた結論（推導）の監査の判定の段のモデル（#4565。空は回答のモデル）。 */
   application_audit_model: string;
   /** 推導の判定の理由の段のモデル（#4564。空は回答のモデル）。 */

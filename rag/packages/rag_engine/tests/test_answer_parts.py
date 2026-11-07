@@ -66,7 +66,7 @@ def test_wire_part_reference_is_bound_to_the_generated_application():
     raw, schema, catalog = wire_case()
     result = canonical_generation_draft(schema.model_validate(deepcopy(raw)), unit_catalog=catalog)
     assert result.answer_parts[1].item_indexes == []
-    assert result.answer_parts[1].application_indexes == [1]
+    assert result.answer_parts[1].application_indexes == [0]
 
 
 def test_verified_gap_keeps_index_so_the_declared_part_is_not_duplicated():

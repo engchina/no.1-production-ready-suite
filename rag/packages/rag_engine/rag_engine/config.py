@@ -25,14 +25,46 @@ ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
 # 渡したときだけ作る(`STEP_LLM_PROVIDERS`)。
 # 質問の対象の役割の判定の段(#4351)。
 QUESTION_SUBJECT_ROLE_LLM_PROVIDER = "enterprise-ai-question-subject-role"
+# 表の各行の条件を質問に当てはめる段(#4349)。
+ROW_CONDITION_LLM_PROVIDER = "enterprise-ai-row-condition"
 # 推導の監査の判定の段(#4565)と、判定が確定した推導の理由の段(#4564)。
 APPLICATION_AUDIT_LLM_PROVIDER = "enterprise-ai-application-audit"
 APPLICATION_REASON_LLM_PROVIDER = "enterprise-ai-application-reason"
-# (env の接頭辞, provider ID, provider の表示名, その provider ID を持つ `Settings` のフィールド)。
-STEP_LLM_PROVIDERS: tuple[tuple[str, str, str, str], ...] = (
-    ("RAG_ENGINE_QUESTION_SUBJECT_ROLE", QUESTION_SUBJECT_ROLE_LLM_PROVIDER, "Enterprise AI 質問の対象の役割", "question_subject_role_llm"),
-    ("RAG_ENGINE_APPLICATION_AUDIT", APPLICATION_AUDIT_LLM_PROVIDER, "Enterprise AI 推導の判定", "application_audit_llm"),
-    ("RAG_ENGINE_APPLICATION_REASON", APPLICATION_REASON_LLM_PROVIDER, "Enterprise AI 推導の理由", "application_reason_llm"),
+
+
+@dataclass(frozen=True)
+class StepLlm:
+    """段のモデルの provider 1 つ(backend の段のモデルの表 `STEP_MODEL_SETTINGS` と同じ段)。"""
+
+    # env の接頭辞(`<prefix>_MODEL`・`_ENDPOINT`・`_API_KEY`・`_PROJECT_OCID`・`_REASONING_EFFORT`・`_MAX_OUTPUT_TOKENS`)。
+    prefix: str
+    provider_id: str
+    label: str
+    # その provider ID を持つ `Settings` のフィールド。
+    field: str
+    # 段の推論の量の上書き(`<prefix>_REASONING_EFFORT_OVERRIDE`)を持つ `Settings` のフィールド。無い段は空。
+    effort_field: str = ""
+    # 段のモデルの入力の上限(`<prefix>_MAX_INPUT_TOKENS`)を持つ `Settings` のフィールド。無い段は空。
+    max_input_field: str = ""
+
+
+STEP_LLM_PROVIDERS: tuple[StepLlm, ...] = (
+    StepLlm(
+        "RAG_ENGINE_QUESTION_SUBJECT_ROLE",
+        QUESTION_SUBJECT_ROLE_LLM_PROVIDER,
+        "Enterprise AI 質問の対象の役割",
+        "question_subject_role_llm",
+    ),
+    StepLlm(
+        "RAG_ENGINE_ROW_CONDITION",
+        ROW_CONDITION_LLM_PROVIDER,
+        "Enterprise AI 表の行の条件",
+        "row_condition_llm",
+        effort_field="row_condition_reasoning_effort",
+        max_input_field="row_condition_max_input_tokens",
+    ),
+    StepLlm("RAG_ENGINE_APPLICATION_AUDIT", APPLICATION_AUDIT_LLM_PROVIDER, "Enterprise AI 推導の判定", "application_audit_llm"),
+    StepLlm("RAG_ENGINE_APPLICATION_REASON", APPLICATION_REASON_LLM_PROVIDER, "Enterprise AI 推導の理由", "application_reason_llm"),
 )
 DEFAULT_LLM_PROVIDER = ENTERPRISE_AI_LLM_PROVIDER
 DEFAULT_CHICAGO_REGION = "us-chicago-1"
@@ -398,6 +430,11 @@ class Settings:
     question_subject_role_llm: str = ""
     application_audit_llm: str = ""
     application_reason_llm: str = ""
+    row_condition_llm: str = ""
+    # 表の行の条件の当てはめの段(#4349。row_conditions)の推論の量の上書き(用途 row_condition)と、入力の上限
+    # (この段のモデルの値)。段のモデルが使えなければ段は実行しない(回答のモデルへ暗黙に切り替えない)。
+    row_condition_reasoning_effort: str = ""
+    row_condition_max_input_tokens: int = 128_000
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
@@ -532,14 +569,20 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     # 段ごとのモデル(#4351・#4564・#4565)。接続が不足(登録していないモデル)でも provider は作り、呼び出しの時点で
     # 設定の不足として失敗させる(段は失敗を返し、回答はその段の結果なしで続ける。回答のモデルへ暗黙に切り替えない)。
     step_llms: dict[str, str] = {}
-    for prefix, provider_id, label, field_name in STEP_LLM_PROVIDERS:
+    step_options: dict[str, Any] = {}
+    for step in STEP_LLM_PROVIDERS:
+        prefix = step.prefix
+        if step.effort_field:
+            step_options[step.effort_field] = normalize_reasoning_effort_override(env.get(f"{prefix}_REASONING_EFFORT_OVERRIDE"))
+        if step.max_input_field:
+            step_options[step.max_input_field] = max(1, _env_int(env, f"{prefix}_MAX_INPUT_TOKENS", 128_000))
         step_model = env.get(f"{prefix}_MODEL", "").strip()
         if not step_model:
-            step_llms[field_name] = ""
+            step_llms[step.field] = ""
             continue
-        llm_providers[provider_id] = LlmProviderSettings(
-            provider_id=provider_id,
-            label=llm_provider_label(label, step_model),
+        llm_providers[step.provider_id] = LlmProviderSettings(
+            provider_id=step.provider_id,
+            label=llm_provider_label(step.label, step_model),
             region="",
             project_id=env.get(f"{prefix}_PROJECT_OCID", "").strip(),
             api_key=env.get(f"{prefix}_API_KEY", "").strip(),
@@ -548,7 +591,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             reasoning_effort=env.get(f"{prefix}_REASONING_EFFORT", "").strip(),
             max_output_tokens=_positive_int(env, f"{prefix}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
         )
-        step_llms[field_name] = provider_id
+        step_llms[step.field] = step.provider_id
     default_vision_llm = normalize_llm_provider_id(
         env.get("DEFAULT_VISION_LLM"),
         ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -683,6 +726,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         audit_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_AUDIT_REASONING_EFFORT")),
+        row_condition_reasoning_effort=step_options["row_condition_reasoning_effort"],
+        row_condition_max_input_tokens=step_options["row_condition_max_input_tokens"],
         crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
@@ -723,6 +768,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         question_subject_role_llm=step_llms["question_subject_role_llm"],
         application_audit_llm=step_llms["application_audit_llm"],
         application_reason_llm=step_llms["application_reason_llm"],
+        row_condition_llm=step_llms["row_condition_llm"],
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 
@@ -740,17 +786,21 @@ LLM_PURPOSE_STRATEGY = "strategy"
 LLM_PURPOSE_JUDGE = "judge"
 LLM_PURPOSE_GENERATION = "generation"
 LLM_PURPOSE_AUDIT = "audit"
+# 表の行の条件の当てはめ(#4349。row_conditions の 2 つの呼び出し)。
+LLM_PURPOSE_ROW_CONDITION = "row_condition"
 _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
     LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
     LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
+    LLM_PURPOSE_ROW_CONDITION: "row_condition_reasoning_effort",
 }
 _PURPOSE_LABELS = {
     LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
     LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
     LLM_PURPOSE_AUDIT: "回答の監査",
+    LLM_PURPOSE_ROW_CONDITION: "表の行の条件の当てはめ",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
 REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")

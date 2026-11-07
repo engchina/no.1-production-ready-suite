@@ -89,19 +89,21 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
     question_subject_role_model: settings.question_subject_role_model ?? "",
+    row_condition_model: settings.row_condition_model ?? "",
     application_audit_model: settings.application_audit_model ?? "",
     application_reason_model: settings.application_reason_model ?? "",
   };
 }
 
-/** 段ごとのモデル（#4351・#4564・#4565）の項目。並びは画面の表示の順。 */
+/** 段ごとのモデル（#4351・#4349・#4564・#4565）の項目。並びは画面の表示の順（回答の工程の順）。 */
 const STEP_MODEL_FIELDS = [
   { key: "question_subject_role_model", id: "answering-question-subject-role-model", label: "settings.answering.questionSubjectRoleModel" },
+  { key: "row_condition_model", id: "answering-row-condition-model", label: "settings.answering.rowConditionModel" },
   { key: "application_audit_model", id: "answering-application-audit-model", label: "settings.answering.applicationAuditModel" },
   { key: "application_reason_model", id: "answering-application-reason-model", label: "settings.answering.applicationReasonModel" },
 ] as const;
 
-/** 段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351・#4564・#4565）。 */
+/** 段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351・#4349・#4564・#4565）。 */
 function stepModelOptions(settings: AnsweringSettingsData, current: string): SelectFieldOption<string>[] {
   const choices = settings.step_model_choices ?? [];
   return [

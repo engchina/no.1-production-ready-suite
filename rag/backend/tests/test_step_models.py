@@ -1,6 +1,7 @@
 """段ごとのモデルの設定を rag_engine の設定へ渡す(合成の設定)。
 
-質問の対象の役割の判定(#4351)、推導の監査の判定(#4565)と理由(#4564)の段。既定は xai.grok-4.7。
+質問の対象の役割の判定(#4351)、表の行の条件の当てはめ(#4349)、推導の監査の判定(#4565)と理由(#4564)の段。
+既定は xai.grok-4.7。
 登録モデルならその接続・推論の量・出力の上限を渡し、登録していないモデルは接続を渡さない(段が設定の
 不足で失敗し、回答はその段の結果なしで続ける)。空は回答のモデルのまま。
 """
@@ -13,6 +14,7 @@ from rag_engine.config import (
     APPLICATION_AUDIT_LLM_PROVIDER,
     APPLICATION_REASON_LLM_PROVIDER,
     QUESTION_SUBJECT_ROLE_LLM_PROVIDER,
+    ROW_CONDITION_LLM_PROVIDER,
 )
 
 from app import config as config_module
@@ -33,6 +35,7 @@ STEPS = [
         QUESTION_SUBJECT_ROLE_LLM_PROVIDER,
         "question_subject_role_llm",
     ),
+    ("rag_row_condition_model", ROW_CONDITION_LLM_PROVIDER, "row_condition_llm"),
     ("rag_application_audit_model", APPLICATION_AUDIT_LLM_PROVIDER, "application_audit_llm"),
     ("rag_application_reason_model", APPLICATION_REASON_LLM_PROVIDER, "application_reason_llm"),
 ]
@@ -122,3 +125,22 @@ def test_empty_step_model_keeps_the_answer_model(
 @pytest.mark.parametrize("field", STEP_IDS)
 def test_step_model_changes_the_config_fingerprint(field: str) -> None:
     assert rag_config_fingerprint(_settings()) != rag_config_fingerprint(_settings(**{field: ""}))
+
+
+def test_row_condition_effort_override_is_a_step_column(tmp_path: Path) -> None:
+    """表の行の条件の段の推論の量の上書き(既定 low)は表の列。
+
+    段のモデルが空(回答のモデル)でも当てる。"""
+    assert Settings().rag_row_condition_reasoning_effort == "low"
+    engine = build_engine_settings(_settings(), output_dir=tmp_path)
+    assert engine.row_condition_reasoning_effort == "low"
+    # 入力の上限はこの段のモデルの登録値。
+    assert engine.row_condition_max_input_tokens > 0
+    empty = build_engine_settings(_settings(rag_row_condition_model=""), output_dir=tmp_path)
+    assert empty.row_condition_llm == "" and empty.row_condition_reasoning_effort == "low"
+    model = build_engine_settings(
+        _settings(rag_row_condition_reasoning_effort="model"), output_dir=tmp_path
+    )
+    assert model.row_condition_reasoning_effort == ""
+    # 上書きの無い段は登録値のまま(上書きの env を渡さない)。
+    assert [step.key for step in STEP_MODEL_SETTINGS if step.effort_field] == ["row_condition"]

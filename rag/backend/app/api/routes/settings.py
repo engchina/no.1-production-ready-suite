@@ -681,6 +681,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
         section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
         question_subject_role_model=settings.rag_question_subject_role_model.strip(),
+        row_condition_model=settings.rag_row_condition_model.strip(),
         application_audit_model=settings.rag_application_audit_model.strip(),
         application_reason_model=settings.rag_application_reason_model.strip(),
         step_model_choices=_step_model_choices(settings),

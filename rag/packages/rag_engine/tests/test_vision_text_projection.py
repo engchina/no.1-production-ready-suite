@@ -368,3 +368,134 @@ def test_invalid_projection_error_is_safe_for_the_job_message():
     with pytest.raises(ValueError, match="再解析") as caught:
         _vision_projection_status(invalid)
     assert getattr(caught.value, "safe_for_user", False) is True
+
+
+def _picture_and_body(tmp_path):
+    """本文の段落と、本文の空の Picture 1 件の合成の頁（VLM の前の形）。"""
+    path = tmp_path / "page.png"
+    Image.new("RGB", (100, 100), "white").save(path)
+    body = LayoutRecord(
+        "body-1", "docling", 1, 1, [5, 2, 95, 8], "image_top_left", 100, 100, "Text", "合成の本文の段落です。", raw_type="text"
+    )
+    picture = LayoutRecord("picture-1", "docling", 1, 2, [10, 10, 80, 80], "image_top_left", 100, 100, "Picture", raw_type="picture")
+    return body, picture, PageImage(1, 100, 100, 100, 100, str(path))
+
+
+def _describe_without_answer_field(records, page, run_dir):
+    """回答本文の field を持たない VLM の応答（検索語だけ）を返す決定論のスタブで読む。"""
+    with patch.object(pictures, "describe_picture", return_value={"search_keywords": ["索引専用甲"]}):
+        return pictures.describe_docling_pictures(
+            records,
+            [page],
+            run_dir=run_dir,
+            pdf_name="synthetic.pdf",
+            settings=get_settings(environ={"OCI_ENTERPRISE_AI_VLM_MODEL": "vendor.synthetic"}, dotenv_path=None),
+        )
+
+
+def test_vlm_without_answer_field_leaves_no_projection_and_marks_the_picture_failed(tmp_path):
+    """回答本文の field の無い応答は投影を書かず、その図だけを「VLM の本文なし」にする（#4570）。"""
+    from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY
+
+    from rag_engine.chunking.records import _vision_projection_status
+
+    body, picture, page = _picture_and_body(tmp_path)
+    result = _describe_without_answer_field([body, picture], page, tmp_path / "run")
+
+    assert result.failed == 1 and result.succeeded == 0
+    assert picture.raw["vision_status"] == "failed"
+    assert "説明フィールド" in picture.raw["vision_error"]
+    assert VISION_TEXT_PROJECTION_KEY not in picture.raw
+    assert picture.text == ""
+    assert _vision_projection_status(picture.to_dict()) == "vision_failed"
+
+
+def test_failed_picture_does_not_stop_chunking_of_the_document(tmp_path):
+    """VLM の失敗した図があっても文書全体の分割は続き、その図は VLM の本文を出さない（#4570）。"""
+    from rag_parser_core.vision_text import is_unprojected_vision_source
+
+    body, picture, page = _picture_and_body(tmp_path)
+    _describe_without_answer_field([body, picture], page, tmp_path / "run")
+
+    chunks = chunks_for([body.to_dict(), picture.to_dict()])
+
+    assert any("合成の本文の段落" in chunk.text for chunk in chunks)
+    assert all("索引専用甲" not in chunk.text and "索引専用甲" not in chunk.retrieval_text for chunk in chunks)
+    picture_refs = [ref for chunk in chunks for ref in chunk.source_record_refs if ref["record_id"] == "picture-1"]
+    assert picture_refs
+    for ref in picture_refs:
+        assert ref["vision_text_projection_status"] == "vision_failed"
+        assert "説明フィールド" in ref["vision_error"]
+        assert "vision_text_origin" not in ref
+    for chunk in chunks:
+        # 検索で旧い画像説明（回答本文の未分離）として止めない。
+        assert not is_unprojected_vision_source(chunk.metadata, chunk.source_record_refs)
+        assert "answer_text_projection" not in chunk.metadata
+
+
+def test_failed_picture_answer_record_is_not_treated_as_old_format(tmp_path):
+    """VLM の失敗した図の record は、回答の record の組み立てで旧い画像説明として止めない。"""
+    from rag_engine.generation.answer_records import _answer_record
+
+    body, picture, page = _picture_and_body(tmp_path)
+    _describe_without_answer_field([body, picture], page, tmp_path / "run")
+
+    assert _answer_record(picture.to_dict(), {"docling": "Docling"}) is None
+
+
+def test_projection_left_by_the_old_failure_is_read_as_no_vlm_text():
+    """修正前の失敗が残した回答本文の空の投影も、失敗の記録があれば「VLM の本文なし」として再分割できる。"""
+    from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, VisionTextProjection
+
+    from rag_engine.chunking.records import _vision_projection_status
+
+    left = record(
+        "Picture",
+        "",
+        raw={
+            "vision_description": {"search_keywords": ["索引専用甲"]},
+            "vision_status": "failed",
+            "vision_error": "RuntimeError: Vision 応答に利用可能な説明フィールドがありません。",
+            VISION_TEXT_PROJECTION_KEY: VisionTextProjection("", "検索語: 索引専用甲").dumps(),
+        },
+    )
+    assert _vision_projection_status(left) == "vision_failed"
+    for chunk in chunks_for([record("Text", "合成の本文の段落です。", seq=2, bbox=[5, 82, 95, 90]), left]):
+        assert "索引専用甲" not in chunk.text and "索引専用甲" not in chunk.retrieval_text
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param({"vision_status": "succeeded"}, id="empty-without-failure"),
+        pytest.param({"vision_status": "failed", "vision_error": "RuntimeError: 合成の失敗"}, id="nonempty-with-failure"),
+    ],
+)
+def test_projection_without_a_matching_failure_stays_invalid(raw):
+    """失敗の記録の無い空の投影と、失敗の記録と矛盾する本文つきの投影は、これまでどおり不正（#4569 の規則）。"""
+    from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, VisionTextProjection
+
+    from rag_engine.chunking.records import _vision_projection_status
+
+    answer = "合成の画像の説明" if "vision_error" in raw else ""
+    invalid = record("Picture", answer, raw={**raw, VISION_TEXT_PROJECTION_KEY: VisionTextProjection(answer, answer).dumps()})
+    with pytest.raises(ValueError, match="投影が不正"):
+        _vision_projection_status(invalid)
+
+
+def test_failed_table_supplement_keeps_verified_contained_pictures():
+    """表の補足の VLM が失敗しても、表内画像の検証済みの投影はそのまま使い、混在として止めない。"""
+    from rag_engine.chunking.records import _vision_projection_status
+
+    project = pictures.vision_text_projection(description())
+    table = record(
+        "Table",
+        "<table><tr><td>合成のセル</td></tr></table>",
+        raw={
+            "vision_status": "failed",
+            "vision_error": "RuntimeError: 合成の失敗",
+            "table_visual_texts": {"image-1": project.answer_description},
+            "table_visual_text_projections": {"image-1": project.dumps()},
+        },
+    )
+    assert _vision_projection_status(table) == "verified"

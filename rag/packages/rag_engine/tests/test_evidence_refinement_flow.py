@@ -158,7 +158,8 @@ def test_none_opt_in_sends_only_selected_evidence_and_never_audits(monkeypatch: 
     assert trace["evidence_refinement"]["additional_generation_calls"] == 1
     assert trace["evidence_refinement"]["semantic_verification"] == "not_performed_by_selection"
     assert all(row["review_execution"] == "not_run" for row in trace["rounds"])
-    assert len(parser.application_reviews) == 1
+    # 原文の写しだけの要点は、選んだ ID の原文を直接の記載にするため、推導の検査を呼ばない。
+    assert parser.application_reviews == []
     assert prepared
 
 

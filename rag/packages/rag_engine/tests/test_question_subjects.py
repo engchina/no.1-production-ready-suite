@@ -21,6 +21,7 @@ from rag_engine.generation.question_subjects import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_NO_NAMED,
+    STATUS_ROLES_UNAVAILABLE,
     SUBJECT_EXTRACTION_PROMPT,
     SUBJECT_ROLE_PROMPT,
     QuestionSubjectError,
@@ -34,7 +35,7 @@ from rag_engine.generation.question_subjects import (
     project_extraction,
     question_sentences,
     trim_enclosing_pairs,
-    unconfirmed_question_phrases,
+    unconfirmed_question_notices,
 )
 
 EXTRACT = "QuestionMentionAnchors"
@@ -280,10 +281,25 @@ def test_no_named_mention_skips_the_role_stage() -> None:
     ],
     ids=["missing-entity", "duplicate-role"],
 )
-def test_role_output_violating_the_contract_fails(entities: list[dict[str, Any]], code: str) -> None:
+def test_role_output_violating_the_contract_keeps_the_names_without_roles(entities: list[dict[str, Any]], code: str) -> None:
+    # 役割の段が失敗しても、抽出した名前は役割なしで残す（名前は一律に照合する。役割は文面の選び分けだけ）。
     question = "装置ラムダの保守期限は？"
     subjects, _ = extract(question, {EXTRACT: {"mentions": [mention(question, "装置ラムダ")]}, ROLE: {"entities": entities}})
-    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_FAILED, code, 2)
+    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_ROLES_UNAVAILABLE, code, 2)
+    assert [(m.start, m.end, m.text, m.sentence_id, m.roles) for m in subjects.mentions] == [(0, 5, "装置ラムダ", "S1", ())]
+    assert subjects.diagnostics() == {
+        "status": STATUS_ROLES_UNAVAILABLE,
+        "calls": 2,
+        "named_mentions": 1,
+        "verified_mentions": 1,
+        "failure": code,
+    }
+
+
+def test_role_call_failure_keeps_the_names_without_roles() -> None:
+    question = "装置ラムダの保守期限は？"
+    subjects, _ = extract(question, {EXTRACT: {"mentions": [mention(question, "装置ラムダ")]}, ROLE: TimeoutError("synthetic")})
+    assert (subjects.status, subjects.failure, [m.roles for m in subjects.mentions]) == (STATUS_ROLES_UNAVAILABLE, "TimeoutError", [()])
 
 
 def test_model_call_failure_is_returned_not_raised() -> None:
@@ -380,7 +396,7 @@ def test_unknown_role_stage_model_fails_without_raising() -> None:
         return parse_text_response(system, prompt, call_settings, schema, **options)
 
     subjects = extract_question_subjects(question, settings, parse_text=parse)
-    assert (subjects.status, subjects.calls) == (STATUS_FAILED, 2)
+    assert (subjects.status, subjects.calls, len(subjects.mentions)) == (STATUS_ROLES_UNAVAILABLE, 2, 1)
 
 
 # ---------- 役割の段のモデル（設定の env と録画の応答） ----------
@@ -503,7 +519,8 @@ def test_role_stage_model_without_a_connection_fails_and_the_answer_continues() 
         return oci.parse_text_response(system, prompt, call_settings, schema, **options)
 
     subjects = extract_question_subjects(question, settings, parse_text=parse)
-    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_FAILED, "RuntimeError", 2)
+    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_ROLES_UNAVAILABLE, "RuntimeError", 2)
+    assert [(m.text, m.roles) for m in subjects.mentions] == [(question[start:end], ())]
 
 
 # ---------- 名前の照合（モデルを呼ばない） ----------
@@ -528,6 +545,12 @@ def subjects_of(question: str, *rows: tuple[str, tuple[str, ...]]) -> QuestionSu
     return QuestionSubjects(question, STATUS_COMPLETED, tuple(mentions))
 
 
+def roles_unavailable(question: str, *texts: str) -> QuestionSubjects:
+    """役割の段が失敗した結果（名前の位置だけ。役割なし）。"""
+    full = subjects_of(question, *((text, ()) for text in texts))
+    return QuestionSubjects(question, STATUS_ROLES_UNAVAILABLE, full.mentions, failure="TimeoutError", calls=2)
+
+
 @pytest.mark.parametrize(
     ("text", "subjects", "sources", "expected"),
     [
@@ -535,17 +558,32 @@ def subjects_of(question: str, *rows: tuple[str, tuple[str, ...]]) -> QuestionSu
         (GENERAL, subjects_of(QUESTION, ("ServiceX", ("asked",))), [RULE], []),
         (LEAP, subjects_of(QUESTION, ("ServiceX", ("asked",))), ["ＳＥＲＶＩＣＥＸは承認済みである。"], []),
         ("端末ミモザは承認済みです。", subjects_of("端末ミモザは使えますか？", ("端末ミモザ", ("asked",))), [RULE], ["端末ミモザ"]),
+        # 前提として述べた名前も、例の名前も、役割に関わらず照合する（利用者の決定。名前は一律に照合）。
         (
             LEAP,
             subjects_of("ServiceXを導入しました。ServiceXの条件は？", ("ServiceX", ("given",)), ("ServiceX", ("asked",))),
             [RULE],
-            [],
+            ["ServiceX"],
         ),
-        ("ServiceX等は利用できません。", subjects_of("ServiceXなどの外部サービスは？", ("ServiceX", ("example",))), [RULE], []),
+        ("ServiceX等は利用できません。", subjects_of("ServiceXなどの外部サービスは？", ("ServiceX", ("example",))), [RULE], ["ServiceX"]),
+        # 1 文で名前を問う質問の役割を given と誤って判定しても、名前は照合する（製品の経路の受け入れで見つけた形）。
+        (LEAP, subjects_of(QUESTION, ("ServiceX", ("given",))), [RULE], ["ServiceX"]),
+        (LEAP, roles_unavailable(QUESTION, "ServiceX"), [RULE], ["ServiceX"]),
         (LEAP, QuestionSubjects(QUESTION, STATUS_FAILED, failure="TimeoutError"), [RULE], []),
         (LEAP, None, [RULE], []),
     ],
-    ids=["leap", "not-written", "width-case", "katakana", "given-elsewhere", "example", "failed", "not-extracted"],
+    ids=[
+        "leap",
+        "not-written",
+        "width-case",
+        "katakana",
+        "given-and-asked",
+        "example",
+        "misjudged-given",
+        "roles-unavailable",
+        "failed",
+        "not-extracted",
+    ],
 )
 def test_absent_question_names(text: str, subjects: QuestionSubjects | None, sources: list[str], expected: list[str]) -> None:
     assert absent_question_names(text, subjects, sources) == expected
@@ -554,16 +592,62 @@ def test_absent_question_names(text: str, subjects: QuestionSubjects | None, sou
 @pytest.mark.parametrize(
     ("subjects", "sources", "gaps", "expected"),
     [
-        (subjects_of(QUESTION, ("ServiceX", ("asked",))), [RULE], [], ["ServiceX"]),
-        (subjects_of("Acme ServiceXは使えますか？", ("Acme", ("asked",)), ("ServiceX", ("asked",))), [RULE], [], ["Acme ServiceX"]),
-        (subjects_of("ServiceXとToolYは？", ("ServiceX", ("asked",)), ("ToolY", ("asked",))), [RULE], [], ["ServiceX", "ToolY"]),
+        (subjects_of(QUESTION, ("ServiceX", ("asked",))), [RULE], [], [("asked", ["ServiceX"])]),
+        (
+            subjects_of("Acme ServiceXは使えますか？", ("Acme", ("asked",)), ("ServiceX", ("asked",))),
+            [RULE],
+            [],
+            [("asked", ["Acme ServiceX"])],
+        ),
+        (
+            subjects_of("ServiceXとToolYは？", ("ServiceX", ("asked",)), ("ToolY", ("asked",))),
+            [RULE],
+            [],
+            [("asked", ["ServiceX", "ToolY"])],
+        ),
         (subjects_of(QUESTION, ("ServiceX", ("asked",))), ["ServiceXは承認済みである。"], [], []),
         (subjects_of(QUESTION, ("ServiceX", ("asked",))), [RULE], [GAP], []),
+        # 役割は文面の選び分けだけ。前提・例・役割の誤り・役割の段の失敗でも名前は照合する。
+        (subjects_of(QUESTION, ("ServiceX", ("given",))), [RULE], [], [("given", ["ServiceX"])]),
+        (
+            subjects_of("ToolYを使っています。ServiceXは使えますか？", ("ToolY", ("given",)), ("ServiceX", ("asked",))),
+            [RULE],
+            [],
+            [("given", ["ToolY"]), ("asked", ["ServiceX"])],
+        ),
+        (
+            subjects_of("ServiceXを導入しました。ServiceXの条件は？", ("ServiceX", ("given",)), ("ServiceX", ("asked",))),
+            [RULE],
+            [],
+            [("asked", ["ServiceX"])],
+        ),
+        (subjects_of("ServiceXなどの外部サービスは？", ("ServiceX", ("example",))), [RULE], [], [("example", ["ServiceX"])]),
+        (roles_unavailable(QUESTION, "ServiceX"), [RULE], [], [("unknown", ["ServiceX"])]),
+        (
+            subjects_of("ToolYを使っています。ServiceXは使えますか？", ("ToolY", ("given",)), ("ServiceX", ("asked",))),
+            ["ToolYの設定"],
+            [],
+            [("asked", ["ServiceX"])],
+        ),
     ],
-    ids=["one", "adjacent-merged", "two", "in-source", "already-in-gap"],
+    ids=[
+        "one",
+        "adjacent-merged",
+        "two",
+        "in-source",
+        "already-in-gap",
+        "misjudged-given",
+        "premise-and-asked",
+        "same-name-given-then-asked",
+        "example",
+        "roles-unavailable",
+        "premise-in-source",
+    ],
 )
-def test_unconfirmed_question_phrases(subjects: QuestionSubjects, sources: list[str], gaps: list[str], expected: list[str]) -> None:
-    assert unconfirmed_question_phrases(subjects, sources, gaps) == expected
+def test_unconfirmed_question_notices(
+    subjects: QuestionSubjects, sources: list[str], gaps: list[str], expected: list[tuple[str, list[str]]]
+) -> None:
+    assert [(notice.kind, list(notice.phrases)) for notice in unconfirmed_question_notices(subjects, sources, gaps)] == expected
 
 
 # ---------- 回答の流れ（生成・是正・要約・gap） ----------
@@ -615,6 +699,8 @@ def answer(*outputs: dict[str, Any], subjects: dict[str, Any] | None = None, inj
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         if schema.__name__ in recorded:
             subject_calls.append(schema.__name__)
+            if isinstance(recorded[schema.__name__], Exception):
+                raise recorded[schema.__name__]
             return schema.model_validate(recorded[schema.__name__])
         if schema.__name__ != "GroundedDraftWire":
             raise RuntimeError("録画の無い呼び出し")
@@ -666,16 +752,57 @@ def test_gap_written_by_the_model_is_not_repeated() -> None:
 
 
 @pytest.mark.parametrize(
+    ("roles", "kind"),
+    [
+        # 製品の経路の受け入れの形: 1 文で名前を問う質問の役割を given と誤って判定しても、名前は照合して伝える。
+        ({"entities": [{"entity_id": "N1", "roles": ["given"]}]}, "given"),
+        ({"entities": [{"entity_id": "N1", "roles": ["example"]}]}, "example"),
+        ({"entities": [{"entity_id": "N1", "roles": ["asked"]}]}, "asked"),
+        # 役割の段が失敗しても照合する。
+        (RuntimeError("synthetic"), "unknown"),
+    ],
+    ids=["misjudged-given", "example", "asked", "roles-unavailable"],
+)
+def test_every_named_subject_is_verified_whatever_the_role(roles: Any, kind: str) -> None:
+    """利用者の決定（2026-11-07）: 名前は役割に関わらず照合し、無ければ伝える。文面は中立の 1 文、役割の種類は診断に残す。"""
+    result, _, subject_calls = answer(draft(GENERAL), draft(GENERAL), subjects={EXTRACT: SUBJECTS[EXTRACT], ROLE: roles})
+    assert subject_calls == [EXTRACT, ROLE]
+    assert UNCONFIRMED in result.answer_text
+    assert [{"kind": kind, "names": 1}] in _values_of(result.generation_trace, "subject_unconfirmed")
+
+
+def _values_of(node: Any, key: str) -> list[Any]:
+    """入れ子の dict / list から ``key`` の値をすべて集める（実行記録の中の位置に依らず確かめる）。"""
+    found: list[Any] = []
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == key:
+                found.append(value)
+            found.extend(_values_of(value, key))
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            found.extend(_values_of(value, key))
+    return found
+
+
+def test_summary_naming_a_misjudged_given_name_is_corrected() -> None:
+    result, prompts, _ = answer(
+        draft(LEAP), draft(LEAP), subjects={EXTRACT: SUBJECTS[EXTRACT], ROLE: {"entities": [{"entity_id": "N1", "roles": ["given"]}]}}
+    )
+    assert len(prompts) == 2 and '"absent_names": ["ServiceX"]' in prompts[1]
+    assert LEAP not in result.answer_text
+
+
+@pytest.mark.parametrize(
     ("subjects", "inject", "calls"),
     [
         ({EXTRACT: {"mentions": []}}, True, [EXTRACT]),
         ({EXTRACT: {"mentions": [{"text": "ServiceY", "occurrence": 1, "designation": "named"}]}}, True, [EXTRACT]),
-        ({EXTRACT: SUBJECTS[EXTRACT], ROLE: {"entities": [{"entity_id": "N1", "roles": ["given"]}]}}, True, [EXTRACT, ROLE]),
         (SUBJECTS, False, []),
     ],
-    ids=["no-named-mention", "text-not-in-question", "given-only", "not-injected"],
+    ids=["no-named-mention", "text-not-in-question", "not-injected"],
 )
-def test_no_check_without_a_confirmed_asked_name(subjects: dict[str, Any], inject: bool, calls: list[str]) -> None:
+def test_no_check_without_an_extracted_name(subjects: dict[str, Any], inject: bool, calls: list[str]) -> None:
     result, prompts, subject_calls = answer(draft(LEAP), subjects=subjects, inject=inject)
     assert subject_calls == calls
     assert all("subject_name_issues" not in prompt for prompt in prompts)

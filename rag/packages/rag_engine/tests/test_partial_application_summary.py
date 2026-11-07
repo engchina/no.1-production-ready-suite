@@ -15,8 +15,10 @@ from rag_engine.models.audit_wire import is_audit_wire
 
 FIRST = "対象Aの値は28です。"
 SECOND = "対象Bの値は12です。"
-GOOD = FIRST
+# 導出の公開門を確かめるため、原文の写しではない結果にする（写しは直接の記載になる）。
+GOOD = "対象Aは28です。"
 BAD = "対象Bの値は99です。"
+KEPT = "対象Bは12です。"
 QUESTION = "対象Aと対象Bの値をそれぞれ教えてください。"
 
 
@@ -236,8 +238,8 @@ def test_later_dependency_changes_withhold_projection(stage, mutation):
 
 
 def test_original_normal_summary_and_all_retained_dependencies_are_unchanged():
-    response, current, calls = fixture(decisions=(True, True), summary_supported=True, second=SECOND)
-    original = GOOD + "\n" + SECOND
+    response, current, calls = fixture(decisions=(True, True), summary_supported=True, second=KEPT)
+    original = GOOD + "\n" + KEPT
     assert response.answer_text.startswith(original)
     assert current.summary == original
     assert current.summary_projection is None
@@ -253,9 +255,9 @@ def test_no_valid_application_does_not_construct_summary():
 
 
 def test_all_retained_composed_summary_preserves_existing_behavior():
-    _, current, _ = fixture(decisions=(True, True), second=SECOND)
+    _, current, _ = fixture(decisions=(True, True), second=KEPT)
     result = grounded.finalize_summary(current)
-    assert result.summary == GOOD + "\n" + SECOND
+    assert result.summary == GOOD + "\n" + KEPT
     assert result.summary_projection is None
 
 

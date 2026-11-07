@@ -14,10 +14,12 @@ from rag_engine.generation.application_reason import explain_verdicts, propagate
 from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.applications import (
     APPLICATION_AUDIT_SYSTEM_PROMPT,
+    TABLE_UNDETERMINED_REASON,
     CheckedApplication,
     _source_label,
     apply_application_audit,
     audit_view,
+    withhold_undetermined_tables,
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.document_background import background_label
@@ -27,8 +29,12 @@ from rag_engine.models.llm import ApplicationVerdictAudit, GroundedAudit
 from rag_engine.resources.runtime import resolve_prompt
 
 
-def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """生成へ選んだ原文全体を文書・版ごとに保持し、引用抜粋へ縮めない。"""
+def application_documents(spans: Sequence[dict[str, Any]], row_conditions: Any = None) -> list[dict[str, Any]]:
+    """生成へ選んだ原文全体を文書・版ごとに保持し、引用抜粋へ縮めない。
+
+    ``row_conditions`` があれば、表の原文の根拠に、コードが決めた表の行の判定（table_row_judgments）を添える（#4349）。
+    """
+    judgments = row_conditions.facts_by_evidence() if row_conditions is not None and row_conditions.status == "completed" else {}
     return [
         {
             "document_scope": list(document_key(members[0])),
@@ -58,6 +64,11 @@ def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any
                         if key in span
                     },
                     **({"role": background_label(span)} if span.get("document_background_only") else {}),
+                    **(
+                        {"table_row_judgments": judgments[str(span.get("evidence_id"))]}
+                        if str(span.get("evidence_id") or "") in judgments
+                        else {}
+                    ),
                 }
                 for span in members
             ],
@@ -101,8 +112,12 @@ def review_applications(
     parse_text: Callable[..., Any],
     settings: Any,
     provider_id: str | None,
+    row_conditions: Any = None,
 ) -> dict[str, Any]:
     """既存監査を再利用し、監査なしの推導群にだけ1回まとめて判定を問い合わせる。
+
+    ``row_conditions``（表の行の判定。#4349）に決められない行のある表があれば、推導を問い合わせずに保留する
+    （``withhold_undetermined_tables``）。決まった表の行の判定は documents に添えて監査に渡す。
 
     独立の監査のモデルは判定と判定に使った evidence_id だけを返し、表示の理由は判定が確定した推導ごとに
     別の段（application_reason）が日本語だけの入力から作る。理由の有無・成否で判定は変えない。
@@ -130,6 +145,15 @@ def review_applications(
             "calls": 0,
             "results": [dict(entry.assessment) for entry in checked],
         }
+    if withheld := withhold_undetermined_tables(checked, row_conditions):
+        for entry in checked:
+            entry.assessment = entry.assessment or {"status": "unknown", "reason": TABLE_UNDETERMINED_REASON}
+        return {
+            "status": "withheld_table_not_determined",
+            "calls": 0,
+            "withheld": withheld,
+            "results": [dict(entry.assessment) for entry in checked],
+        }
     candidates = [entry for entry in checked if not entry.reasons]
     if not candidates:
         return {"status": "not_applicable", "calls": 0}
@@ -137,7 +161,7 @@ def review_applications(
     index = {id(item): position for position, item in enumerate(items)}
     inputs = {
         "question": question,
-        "documents": application_documents(evidence_spans),
+        "documents": application_documents(evidence_spans, row_conditions),
         "items": [
             {
                 "index": position,
