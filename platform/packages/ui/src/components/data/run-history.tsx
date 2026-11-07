@@ -14,6 +14,7 @@ import { ListToolbar, type ListToolbarLabels } from "./list-toolbar";
 import { RowActionMenu, type EntityAction } from "./object-actions";
 import { formatPaginationNumber } from "./pagination";
 import { RowTitleButton } from "./row-title-button";
+import { RUN_FACT_IDENTIFIER_CLASS } from "./run-fact-identifier";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
 import type { SelectFieldOption } from "../ui/select-field";
 
@@ -95,8 +96,8 @@ export interface RunModelTokenUsageRecord {
 
 /**
  * 「モデルごとのトークン数」の値（モデルのカスケードで 2 つ以上のモデルを呼んだ実行。#4581）。モデルが 1 つ・内訳の無い
- * 記録・計測できない実行は null（行を出さない）。数は桁区切り。モデルの ID は「モデル」の行と同じ等幅の書体
- * （`--font-mono`）で出し、数の文言（`label`。製品の i18n で上書きできる）は本文の書体のまま（#4599）。
+ * 記録・計測できない実行は null（行を出さない）。数は桁区切り。モデルの ID は「モデル」の行と同じ等幅の書体・大きさ
+ * （`RUN_FACT_IDENTIFIER_CLASS`。#4599・#4605）で出し、数の文言（`label`。製品の i18n で上書きできる）は本文の書体・大きさのまま。
  */
 export function runModelTokensView(
   usage: RunModelUsageRecord | null | undefined,
@@ -108,7 +109,7 @@ export function runModelTokensView(
   return rows.map((row, index) => (
     <Fragment key={`${index}:${row.model}`}>
       {index > 0 ? " ／ " : null}
-      <span className="font-mono" data-run-model-id="">
+      <span className={RUN_FACT_IDENTIFIER_CLASS} data-run-model-id="">
         {row.model}
       </span>
       {`: ${label({ tokens: formatPaginationNumber(row.total_tokens), requests: formatPaginationNumber(row.requests) })}`}
