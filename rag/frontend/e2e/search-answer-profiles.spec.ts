@@ -166,6 +166,8 @@ for (const viewport of [
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "1 つの文書から採る根拠の上限",
       "回答モデル",
+      // 確認を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
+      "確認を通らなかったときのモデル",
       "業務ガイドを使用する",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -176,9 +178,10 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 個別に残すのは文書ごとの根拠上限と回答モデルの2選択欄だけ。
+    // 継承 / 上書きを選ぶのは文書ごとの根拠上限と回答モデルの2選択欄だけ。
     await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(2);
     await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(2);
+    await expect(settings.getByRole("button", { name: "使わない" })).toHaveCount(1);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
