@@ -32,6 +32,8 @@ MODEL_CALL_PURPOSES = frozenset(
         "query.route",
         "query.rewrite",
         "query.conditions",
+        "query.subjects",
+        "query.subject_roles",
         "query.embed",
         "document.embed",
         "sql.generate",

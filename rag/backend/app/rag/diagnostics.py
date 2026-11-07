@@ -110,6 +110,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
         "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
+        # 質問の対象の名前の役割の判定の段のモデル(#4351)。
+        "question_subject_role_model": resolved_settings.rag_question_subject_role_model,
         # 表の各行の条件を質問に当てはめる段のモデルと推論の量(#4349)。
         "row_condition_model": resolved_settings.rag_row_condition_model,
         "row_condition_reasoning_effort": resolved_settings.rag_row_condition_reasoning_effort,

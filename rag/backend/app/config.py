@@ -1778,6 +1778,15 @@ class Settings(
             "既定 model = モデルの登録値)。"
         ),
     )
+    rag_question_subject_role_model: str = Field(
+        default="xai.grok-4.7",
+        description=(
+            "質問の対象の名前の役割(問い・前提・例)の判定の段の LLM のモデル ID"
+            "(#4351。モデル設定の登録モデル)。空は回答のモデルのまま。"
+            "登録していないモデルでは段が失敗し、回答は対象の名前の照合を飛ばして続ける。"
+            "推論の量と出力の上限はそのモデルの登録値。"
+        ),
+    )
     rag_row_condition_model: str = Field(
         default="xai.grok-4.7",
         max_length=256,

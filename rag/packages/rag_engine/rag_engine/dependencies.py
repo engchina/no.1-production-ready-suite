@@ -54,6 +54,9 @@ class AnswerDependencies:
     語の判定だけで決める。
     report_degraded は補助の処理（画面の選択など）が失敗して空のまま続けたことを、処理の種類と例外を受け取って
     呼び出し元の診断に残す（#3259。例外の文は呼び出し元が残さない）。省略時は残さない。
+    question_subjects は説明・要約に書いた質問の対象の名前を引いた原文に照らす検査（#4351）の、質問の対象と役割の
+    抽出（`question_subjects.extract_question_subjects` と同じ引数）。question・settings を位置で、provider_id を
+    keyword で受け取り `question_subjects.QuestionSubjects` を返す。回答の中で 1 回だけ呼ぶ。省略時は対象の名前を確かめない。
     """
 
     search: Callable[..., Any]
@@ -78,6 +81,7 @@ class AnswerDependencies:
     record_retrieval: Callable[[Mapping[str, Any]], None] | None = None
     # 正式生成に選んだ文書だけを、その版と検索範囲で読む。
     document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
+    question_subjects: Callable[..., Any] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -169,6 +173,12 @@ def injected_embedder() -> "Embedder | None":
     return None if current is None else current.embedder
 
 
+def injected_question_subjects() -> Callable[..., Any] | None:
+    """注入された質問の対象の抽出（#4351）。注入が無ければ None（対象の名前を確かめない）。"""
+    current = _active.get()
+    return None if current is None else current.question_subjects
+
+
 def report_degraded(kind: str, exc: BaseException) -> None:
     """補助の処理 ``kind`` の失敗を、注入された記録に残す（#3259）。注入が無ければ何もしない。"""
     current = _active.get()
@@ -192,7 +202,7 @@ def check_adb_hybrid_search_ready(**kwargs):
     return _get().check_ready(**kwargs)
 
 
-def parse_text_response(*args, **kwargs):
+def parse_text_response(*args: Any, **kwargs: Any) -> Any:
     """指定 schema のテキスト回答を取得する。呼出回数を llm_call_count に数える。"""
     _count_llm_call()
     with model_call_purpose(kwargs.pop("purpose", None)):

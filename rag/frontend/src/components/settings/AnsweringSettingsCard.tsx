@@ -57,7 +57,10 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
   label: String(n),
 }));
 
-type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled">;
+type AnsweringDraft = Omit<
+  AnsweringSettingsData,
+  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled" | "question_subject_role_model_choices"
+>;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
@@ -85,8 +88,20 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
-
+    question_subject_role_model: settings.question_subject_role_model ?? "",
   };
+}
+
+/** 役割の判定の段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351）。 */
+function questionSubjectRoleModelOptions(settings: AnsweringSettingsData, current: string): SelectFieldOption<string>[] {
+  const choices = settings.question_subject_role_model_choices ?? [];
+  return [
+    { value: "", label: t("settings.answering.questionSubjectRoleModel.sameAsAnswer") },
+    ...choices.map((choice) => ({ value: choice.model_id, label: choice.display_name || choice.model_id })),
+    ...(current && !choices.some((choice) => choice.model_id === current)
+      ? [{ value: current, label: t("settings.answering.questionSubjectRoleModel.unavailable", { model: current }) }]
+      : []),
+  ];
 }
 
 /**
@@ -392,6 +407,16 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             width="lg"
             disabled={disabled}
             onValueChange={(value) => update({ answer_audit_mode: value })}
+          />
+          <SelectField
+            id="answering-question-subject-role-model"
+            label={t("settings.answering.questionSubjectRoleModel")}
+            helper={t("settings.answering.questionSubjectRoleModelHint")}
+            value={form.question_subject_role_model}
+            options={questionSubjectRoleModelOptions(saved, saved.question_subject_role_model ?? "")}
+            width="md"
+            disabled={disabled}
+            onValueChange={(value) => update({ question_subject_role_model: value })}
           />
           <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
           <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>

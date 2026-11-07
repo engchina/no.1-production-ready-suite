@@ -35,6 +35,7 @@ from app.config import (
     MODEL_SETTINGS_STORE,
     PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
+    EnterpriseAiConfiguredModel,
     Settings,
     get_settings,
     load_persisted_model_settings,
@@ -3566,7 +3567,11 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         monkeypatch.delenv(f"RAG_{name.upper()}", raising=False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    assert client.get("/api/settings/answering").json()["data"] == {
+    current = client.get("/api/settings/answering").json()["data"]
+    # 役割の判定の段のモデルと候補は別のテストで確かめる(#4351)。
+    current.pop("question_subject_role_model")
+    current.pop("question_subject_role_model_choices")
+    assert current == {
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
         "hybrid_search_backend": "oracle_native",
@@ -3647,6 +3652,65 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         assert data[name] == expected
         assert getattr(settings, f"rag_{name}") == expected
         assert getattr(reloaded, f"rag_{name}") == expected
+
+
+def test_answering_question_subject_role_model_round_trip(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """役割の判定の段のモデル(#4351)は登録モデルか空(回答のモデル)だけを受け、
+    .env と現在プロセスへ保存する。"""
+    settings = get_settings()
+    monkeypatch.setattr(
+        settings,
+        "oci_enterprise_ai_models",
+        [
+            EnterpriseAiConfiguredModel(model_id="model-answer", display_name="Answer"),
+            EnterpriseAiConfiguredModel(model_id="model-role", display_name="Role"),
+        ],
+    )
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "model-answer")
+    monkeypatch.setattr(settings, "rag_question_subject_role_model", "model-answer")
+    monkeypatch.delenv("RAG_QUESTION_SUBJECT_ROLE_MODEL", raising=False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    data = client.get("/api/settings/answering").json()["data"]
+    assert data["question_subject_role_model"] == "model-answer"
+    choices = {choice["model_id"]: choice for choice in data["question_subject_role_model_choices"]}
+    assert set(choices) >= {"model-answer", "model-role"}
+    # 接続情報は返さない。
+    assert all(set(choice) == {"model_id", "display_name"} for choice in choices.values())
+
+    changed = client.patch(
+        "/api/settings/answering", json={"question_subject_role_model": "model-role"}
+    )
+    assert changed.status_code == 200
+    assert changed.json()["data"]["question_subject_role_model"] == "model-role"
+    assert settings.rag_question_subject_role_model == "model-role"
+    assert "RAG_QUESTION_SUBJECT_ROLE_MODEL=model-role" in env_file.read_text(encoding="utf-8")
+    assert Settings(_env_file=env_file).rag_question_subject_role_model == "model-role"
+
+    # 登録していないモデルは保存しない。
+    rejected = client.patch(
+        "/api/settings/answering", json={"question_subject_role_model": "model-unknown"}
+    )
+    assert rejected.status_code == 422
+    assert settings.rag_question_subject_role_model == "model-role"
+
+    # 保存済みの値と同じなら、登録が外れていても受ける(画面は欄の全体を送る)。
+    monkeypatch.setattr(settings, "rag_question_subject_role_model", "model-removed")
+    kept = client.patch(
+        "/api/settings/answering",
+        json={"question_subject_role_model": "model-removed", "neighbor_child_count": 3},
+    )
+    assert kept.status_code == 200
+    assert kept.json()["data"]["question_subject_role_model"] == "model-removed"
+
+    # 空は回答のモデル。別の項目だけの更新では変えない。
+    emptied = client.patch("/api/settings/answering", json={"question_subject_role_model": ""})
+    assert emptied.json()["data"]["question_subject_role_model"] == ""
+    assert Settings(_env_file=env_file).rag_question_subject_role_model == ""
+    other = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
+    assert other.json()["data"]["question_subject_role_model"] == ""
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

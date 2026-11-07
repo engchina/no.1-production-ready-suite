@@ -21,6 +21,9 @@ from rag_engine.retrieval.text_search_tokenizer import (
 # 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
+# 質問の対象の役割の判定の段(#4351)のモデル。backend が段のモデルの設定(RAG_QUESTION_SUBJECT_ROLE_MODEL)の
+# 接続を RAG_ENGINE_QUESTION_SUBJECT_ROLE_* で渡したときだけ作る。
+QUESTION_SUBJECT_ROLE_LLM_PROVIDER = "enterprise-ai-question-subject-role"
 # 表の行の条件の当てはめの段（#4349）だけが使うモデル。段ごとのモデルの設定で backend が渡したときだけ作る。
 ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER = "enterprise-ai-row-condition"
 DEFAULT_LLM_PROVIDER = ENTERPRISE_AI_LLM_PROVIDER
@@ -375,6 +378,16 @@ class Settings:
     judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
     audit_reasoning_effort: str = ""
+    # 工程ごとの推論の量(1 回の呼び出しの要求の値)。用途の上書きより後に、その工程の呼び出しにだけ当てる。
+    # 値の意味は用途の上書きと同じ(空はモデルの登録値のまま。登録値が none のモデルには送らない)。
+    # 質問の対象(#4351): 抽出の段(原文の写しと同じ写しの出現の順番を返す)と、役割の判定の段(文の中での
+    # 問い・前提・例)。それぞれの段の呼び出しにだけ当てる。
+    question_subject_extraction_reasoning_effort: str = "medium"
+    question_subject_role_reasoning_effort: str = ""
+    # 工程ごとのモデル(1 回の呼び出しの provider ID。`llm_providers` のキー)。空は呼び出し側が渡した provider
+    # (回答のモデル)のまま。質問の対象の役割の判定の段(#4351)にだけ当てる。`get_settings` は
+    # RAG_ENGINE_QUESTION_SUBJECT_ROLE_MODEL があれば `QUESTION_SUBJECT_ROLE_LLM_PROVIDER` を作ってこれにする。
+    question_subject_role_llm: str = ""
     # 表の行の条件の当てはめの段（#4349。row_conditions）の推論の量の上書きとモデル。モデルは段ごとの設定で、backend が
     # 登録モデルの接続を ``OCI_ENTERPRISE_AI_ROW_CONDITION_*`` で渡したときだけ provider（row_condition_llm）を作る。
     # 渡せなかった理由（登録されていない等）は row_condition_unavailable に入り、段は実行しない（回答のモデルへ
@@ -514,6 +527,21 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             max_output_tokens=vision_output_tokens,
         ),
     }
+    # 質問の対象の役割の判定の段のモデル(#4351)。接続が不足(登録していないモデル)でも provider は作り、呼び出しの
+    # 時点で設定の不足として失敗させる(段は失敗を返し、回答は名前の照合を飛ばして続ける)。
+    role_model = env.get("RAG_ENGINE_QUESTION_SUBJECT_ROLE_MODEL", "").strip()
+    if role_model:
+        llm_providers[QUESTION_SUBJECT_ROLE_LLM_PROVIDER] = LlmProviderSettings(
+            provider_id=QUESTION_SUBJECT_ROLE_LLM_PROVIDER,
+            label=llm_provider_label("Enterprise AI 質問の対象の役割", role_model),
+            region="",
+            project_id=env.get("RAG_ENGINE_QUESTION_SUBJECT_ROLE_PROJECT_OCID", "").strip(),
+            api_key=env.get("RAG_ENGINE_QUESTION_SUBJECT_ROLE_API_KEY", "").strip(),
+            model=role_model,
+            endpoint=env.get("RAG_ENGINE_QUESTION_SUBJECT_ROLE_ENDPOINT", "").strip(),
+            reasoning_effort=env.get("RAG_ENGINE_QUESTION_SUBJECT_ROLE_REASONING_EFFORT", "").strip(),
+            max_output_tokens=_positive_int(env, "RAG_ENGINE_QUESTION_SUBJECT_ROLE_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
+        )
     # 表の行の条件の当てはめの段のモデル（#4349）。backend が段ごとの設定のモデルの接続を渡したときだけ。
     row_condition_model = env.get("OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL", "").strip()
     if row_condition_model:
@@ -703,6 +731,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
+        question_subject_role_llm=QUESTION_SUBJECT_ROLE_LLM_PROVIDER if role_model else "",
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 
@@ -748,12 +777,18 @@ def normalize_reasoning_effort_override(value: str | None) -> str:
 
 
 def settings_for_llm_purpose(settings: Settings, purpose: str) -> Settings:
-    """用途の推論の量を反映した設定(#1499)。上書きが無ければ同じ設定を返す。
+    """用途の推論の量を反映した設定(#1499)。上書きが無ければ同じ設定を返す。"""
+    return settings_with_reasoning_effort(settings, getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+
+
+def settings_with_reasoning_effort(settings: Settings, value: str | None) -> Settings:
+    """推論の量の上書き ``value`` を反映した設定。上書きが無ければ同じ設定を返す。
 
     LLM の呼び出しに渡す設定だけを差し替える(provider の `reasoning_effort` は送る値)。モデルの登録値が
-    送らない(空)の provider は、上書きしても送らない。
+    送らない(空)の provider は、上書きしても送らない。用途の上書き(`settings_for_llm_purpose`)と、工程の
+    呼び出しの上書き(`Settings.question_subject_extraction_reasoning_effort` など)が共有する。
     """
-    override = normalize_reasoning_effort_override(getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+    override = normalize_reasoning_effort_override(value)
     if not override:
         return settings
     current = getattr(settings, "llm_providers", None)

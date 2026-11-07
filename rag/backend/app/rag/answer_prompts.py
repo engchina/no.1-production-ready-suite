@@ -235,6 +235,16 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
         ),
     ),
+    # 説明・要約に書いた質問の対象の名前を引いた原文に照らす検査の、対象の抽出と役割の判定(#4351)。
+    # 品質評価も同じ指示で取り出す。
+    PromptStage(
+        "question_subjects",
+        "audit",
+        (
+            ("extraction", "rag_engine.generation.question_subjects:SUBJECT_EXTRACTION_PROMPT"),
+            ("role", "rag_engine.generation.question_subjects:SUBJECT_ROLE_PROMPT"),
+        ),
+    ),
     PromptStage(
         "audit",
         "audit",

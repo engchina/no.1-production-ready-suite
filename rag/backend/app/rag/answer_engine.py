@@ -542,6 +542,36 @@ def article_catalog_cache_dir(settings: Settings) -> Path | None:
     return resolve_article_catalog_cache_dir(settings)
 
 
+def _question_subject_role_environ(settings: Settings) -> dict[str, str]:
+    """質問の対象の役割の判定の段のモデル(#4351)の接続を rag_engine へ渡す env。
+
+    空の設定は何も渡さない(回答のモデルのまま)。登録していないモデルは接続を渡さず model
+    だけを渡す(段の呼び出しが設定の不足で失敗し、回答は対象の名前の照合を飛ばして続ける。
+    プライマリ接続へ暗黙に切り替えない)。推論の量と出力の上限はそのモデルの登録値。
+    """
+    model_id = settings.rag_question_subject_role_model.strip()
+    if not model_id:
+        return {}
+    environ = {"RAG_ENGINE_QUESTION_SUBJECT_ROLE_MODEL": model_id}
+    try:
+        connection = enterprise_ai_connection_for_model(settings, model_id)
+    except EnterpriseAiModelNotRegisteredError:
+        return environ
+    effort = enterprise_ai_reasoning_effort_to_send(settings, model_id)
+    environ.update(
+        {
+            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_ENDPOINT": connection.base_url,
+            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_API_KEY": connection.api_key,
+            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_PROJECT_OCID": connection.project_ocid,
+            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_REASONING_EFFORT": effort,
+            "RAG_ENGINE_QUESTION_SUBJECT_ROLE_MAX_OUTPUT_TOKENS": str(
+                enterprise_ai_output_token_budget(settings, model_id)
+            ),
+        }
+    )
+    return environ
+
+
 def _reasoning_effort_override(value: str) -> str:
     """用途ごとの推論の量の設定を rag_engine へ渡す値にする(#1499。model は空 = 登録値のまま)。"""
     return "" if value == "model" else value
@@ -817,6 +847,8 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": str(settings.rag_crag_skip_min_rerank_score),
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
+    # 質問の対象の役割の判定の段のモデル(#4351)。
+    environ.update(_question_subject_role_environ(settings))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
@@ -1395,8 +1427,13 @@ class AnswerEngine:
         def model(model_id: str) -> dict[str, str]:
             return {"model_id": model_id, "label": labels.get(model_id, model_id)}
 
+        answer_model = self._answer_model_id or enterprise_ai_default_model_id(settings)
         return {
-            "llm": model(self._answer_model_id or enterprise_ai_default_model_id(settings)),
+            "llm": model(answer_model),
+            # 質問の対象の名前の役割の判定の段のモデル(#4351。空の設定は回答のモデル)。
+            "question_subject_role": model(
+                settings.rag_question_subject_role_model.strip() or answer_model
+            ),
             "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
@@ -1446,6 +1483,7 @@ class AnswerEngine:
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
+        from rag_engine.generation.question_subjects import extract_question_subjects
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -1466,6 +1504,8 @@ class AnswerEngine:
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
+            # 説明・要約に書いた質問の対象の名前を原文に照らす検査の、対象と役割の抽出(#4351)。
+            question_subjects=extract_question_subjects,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),

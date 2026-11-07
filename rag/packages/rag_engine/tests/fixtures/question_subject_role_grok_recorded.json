@@ -1,0 +1,214 @@
+{
+ "description": "質問の対象の役割の判定の段の録画応答（#4351）。応答は実モデル xai.grok-4.7（推論の量 low）の検証の記録から写した（推論の要約・暗号化した推論・schema の写しは除いた）。役割の出力は entity_id と役割だけで名前を含まないので、質問・名前は同じ構造の新しい合成のもの。",
+ "model": "xai.grok-4.7",
+ "reasoning_effort": "low",
+ "cases": [
+  {
+   "case": "example",
+   "question": "機器ベルンなどの装置では、標準の清掃方法は何ですか。",
+   "spans": [
+    [
+     0,
+     5
+    ]
+   ],
+   "expected_roles": [
+    [
+     "example"
+    ]
+   ],
+   "recorded_output": {
+    "entities": [
+     {
+      "entity_id": "N1",
+      "roles": [
+       "example"
+      ]
+     }
+    ]
+   },
+   "response": {
+    "id": "resp_ord_92c27ddlwks7wzplkviw45m6etvmeacdj89dtiapj8xo0ne5",
+    "object": "response",
+    "created_at": 1794009287,
+    "completed_at": 1794009295,
+    "background": false,
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "billing": {
+     "payer": "developer"
+    },
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "frequency_penalty": 0.0,
+    "model": "grok-4.7",
+    "output": [
+     {
+      "type": "reasoning",
+      "id": "rs_5124c6f2-6283-d2b9-3352-ad34a9f6b4fa",
+      "summary": [],
+      "status": "completed"
+     },
+     {
+      "type": "message",
+      "id": "msg_5124c6f2-6283-d2b9-3352-ad34a9f6b4fa",
+      "role": "assistant",
+      "content": [
+       {
+        "type": "output_text",
+        "text": "{\"entities\":[{\"entity_id\":\"N1\",\"roles\":[\"example\"]}]}",
+        "annotations": [],
+        "logprobs": []
+       }
+      ],
+      "status": "completed"
+     }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "moderation": null,
+    "presence_penalty": 0.0,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": null,
+    "reasoning": {
+     "effort": "low",
+     "summary": "detailed"
+    },
+    "store": true,
+    "service_tier": "default",
+    "temperature": 0.0,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.95,
+    "truncation": "disabled",
+    "usage": {
+     "input_tokens": 1765,
+     "output_tokens": 534,
+     "total_tokens": 2299,
+     "input_tokens_details": {
+      "cached_tokens": 1152
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 516
+     }
+    },
+    "user": null,
+    "safety_identifier": null,
+    "metadata": {}
+   }
+  },
+  {
+   "case": "given_then_asked",
+   "question": "端末クロは昨日交換しました。端末クロの保証期間はいつまでですか。",
+   "spans": [
+    [
+     0,
+     4
+    ],
+    [
+     14,
+     18
+    ]
+   ],
+   "expected_roles": [
+    [
+     "given"
+    ],
+    [
+     "asked"
+    ]
+   ],
+   "recorded_output": {
+    "entities": [
+     {
+      "entity_id": "N1",
+      "roles": [
+       "given"
+      ]
+     },
+     {
+      "entity_id": "N2",
+      "roles": [
+       "asked"
+      ]
+     }
+    ]
+   },
+   "response": {
+    "id": "resp_ord_i5mpod9hwy0qf68qmkl23vswssatdadyn3zqwbyq90echas1",
+    "object": "response",
+    "created_at": 1794009643,
+    "completed_at": 1794009646,
+    "background": false,
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "billing": {
+     "payer": "developer"
+    },
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "frequency_penalty": 0.0,
+    "model": "grok-4.7",
+    "output": [
+     {
+      "type": "reasoning",
+      "id": "rs_1ff6a565-f00d-7c81-b09a-525f61634d19",
+      "summary": [],
+      "status": "completed"
+     },
+     {
+      "type": "message",
+      "id": "msg_1ff6a565-f00d-7c81-b09a-525f61634d19",
+      "role": "assistant",
+      "content": [
+       {
+        "type": "output_text",
+        "text": "{\"entities\":[{\"entity_id\":\"N1\",\"roles\":[\"given\"]},{\"entity_id\":\"N2\",\"roles\":[\"asked\"]}]}",
+        "annotations": [],
+        "logprobs": []
+       }
+      ],
+      "status": "completed"
+     }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "moderation": null,
+    "presence_penalty": 0.0,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": null,
+    "reasoning": {
+     "effort": "low",
+     "summary": "detailed"
+    },
+    "store": true,
+    "service_tier": "default",
+    "temperature": 0.0,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.95,
+    "truncation": "disabled",
+    "usage": {
+     "input_tokens": 1827,
+     "output_tokens": 493,
+     "total_tokens": 2320,
+     "input_tokens_details": {
+      "cached_tokens": 1152
+     },
+     "output_tokens_details": {
+      "reasoning_tokens": 461
+     }
+    },
+    "user": null,
+    "safety_identifier": null,
+    "metadata": {}
+   }
+  }
+ ]
+}

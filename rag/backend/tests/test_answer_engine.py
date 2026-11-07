@@ -173,6 +173,9 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+    if schema.__name__ == "QuestionMentionAnchors":
+        # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
+        return cast(Any, schema).model_validate({"mentions": []})
     if is_explanation_schema(schema):
         # 推導の説明の段（#4393）。入力の資料の原文だけから説明を返す。
         sources = json.loads(prompt)[KEY_SOURCES]
@@ -2819,7 +2822,7 @@ async def test_evidence_retrieval_for_agent_stops_after_document_search(
     answer = response.diagnostics.answer or {}
     assert answer["answer_flow"] == "standard_rag"
     models = cast(dict[str, Any], answer["models"])
-    assert set(models) == {"llm", "attached_images", "embedding", "rerank"}
+    assert set(models) == {"llm", "question_subject_role", "attached_images", "embedding", "rerank"}
     assert oracle.saved == []
 
 
@@ -2843,6 +2846,8 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
     outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
     assert outcome.diagnostics["models"] == {
         "llm": {"model_id": "model-a", "label": "Model A"},
+        # 質問の対象の役割の判定の段のモデル(#4351。既定の設定、登録の表示名が無ければ ID)。
+        "question_subject_role": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
         "attached_images": 0,
         "embedding": settings.oci_genai_embedding_model,
         "rerank": "",
