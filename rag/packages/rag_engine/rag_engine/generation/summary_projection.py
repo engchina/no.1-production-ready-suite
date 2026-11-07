@@ -104,7 +104,13 @@ def _eligible(current: Round, index: int, application: CheckedApplication) -> bo
     ):
         return False
     parts = [part for part in current.draft.answer_parts if index in part.application_indexes]
-    if len(parts) != 1 or parts[0].result_kind != "derived" or parts[0].application_indexes != [index] or parts[0].item_indexes:
+    if (
+        len(parts) != 1
+        or parts[0].result_kind != "derived"
+        or parts[0].application_indexes != [index]
+        # 導出の要点が持つ item は、この導出の basis の原文の引用だけ。
+        or not set(parts[0].item_indexes) <= set(application.application.item_indexes)
+    ):
         return False
     for entry in application.entries:
         if (
