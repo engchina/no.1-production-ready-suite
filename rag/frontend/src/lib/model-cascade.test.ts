@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { answerModelCascadeView } from "@/lib/model-cascade";
 
-describe("モデルのカスケードの記録（#4581）", () => {
+describe("モデルのカスケードの記録（Issue 4581）", () => {
   it("回答し直した記録は理由を表示名にして読む", () => {
     const data = parseAnswerDiagnostics({
       model_cascade: {
