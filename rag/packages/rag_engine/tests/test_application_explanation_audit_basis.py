@@ -232,7 +232,7 @@ CLASS_WITHOUT_TOTAL = "資料には属性ごとの点数の記述が無いため
 CLASS_WITH_TOTAL = "同じ回答で確かめた合計点 12 点は、区分の規則の10〜19点に当たるので、区分は Y です。"
 
 
-def run_split():
+def run_split(class_explanation=CLASS_WITH_TOTAL):
     sent = spans()
     table, rule = cited_entries(sent, rule_full=True)
     applications = [
@@ -265,7 +265,7 @@ def run_split():
         seen = json.dumps(value, ensure_ascii=False).replace("\\n", "\n")
         if "区分" not in value[explanation.KEY_SOURCES][0]:
             return schema.model_validate({"explanation": TOTAL_WITH_CLASS if RULE in seen else TOTAL_WITHOUT_CLASS})
-        return schema.model_validate({"explanation": CLASS_WITH_TOTAL if TOTAL in seen else CLASS_WITHOUT_TOTAL})
+        return schema.model_validate({"explanation": class_explanation if TOTAL in seen else CLASS_WITHOUT_TOTAL})
 
     trace = explanation.explain_applications(
         QUESTION, applications, None, parse_text=replay, settings=settings, provider_id=None, row_conditions=row_conditions()
@@ -293,3 +293,20 @@ def test_split_derivations_see_each_others_conclusions_and_sources():
 def test_single_derivation_has_no_other_conclusions_section():
     _application, _review, _trace, prompts = run()
     assert explanation.KEY_OTHERS not in prompts[0]
+
+
+# 実モデルの記録の形（#4603）: 説明の段の入力の節の名前（同じ回答のほかの結論）を、出典のように説明の文に写す。
+CLASS_NAMING_THE_SECTION = f"{explanation.KEY_OTHERS}に示された合計点 12 点は、区分の規則の10〜19点に当たるので、区分は Y です。"
+
+
+def test_explanation_that_names_an_internal_input_section_is_hidden():
+    applications, _review, trace, prompts = run_split(CLASS_NAMING_THE_SECTION)
+    assert trace["calls"] == 2 and explanation.KEY_OTHERS in prompts[1][1]
+    total, klass = applications
+    assert total.presentation["status"] == "confirmed" and total.presentation["reasoning"] == TOTAL_WITH_CLASS
+    # 説明だけを隠し、審査の判定と公開の結論・根拠はそのまま。
+    assert klass.presentation == {"status": "hidden", "reason": "internal_label", "labels": [explanation.KEY_OTHERS]}
+    assert klass.published and klass.assessment["status"] == "valid"
+    rendered = "\n".join(render_lines(applications, lambda _: "根拠：synthetic.md", lambda _: None))
+    assert CLASS in rendered and TOTAL in rendered and CLASS_NAMING_THE_SECTION not in rendered
+    assert trace["results"][1] == klass.presentation
