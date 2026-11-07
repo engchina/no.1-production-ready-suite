@@ -5657,7 +5657,7 @@ export const ja = {
   // モデルの呼び出し（Agent の実行の詳細と同じ形。#3419）。
   "history.detail.modelCalls": "モデルの呼び出し",
   "history.detail.modelTokens": "モデルごとのトークン数",
-  "history.detail.modelTokensValue": "{model}: {tokens} トークン（{requests} 回）",
+  "history.detail.modelTokensValue": "{tokens} トークン（{requests} 回）",
   "history.detail.cascade": "高性能モデルでの回答し直し",
   "history.detail.cascade.escalated": "あり（{reasons}）",
   "history.detail.cascade.notEscalated": "なし",
