@@ -52,6 +52,7 @@ from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
 )
+from rag_engine.generation.answer_parts_wire import SOURCE_ONLY_DERIVATION_PROMPT, source_only_derivation
 from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_generation_model
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
@@ -94,7 +95,12 @@ from rag_engine.generation.summary_projection import (
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
-from rag_engine.knowledge.prompt_files import continue_prompt_steps, neutralize_boundary_markers
+from rag_engine.knowledge.prompt_files import (
+    VLM_ANSWER_PROMPT_KEY,
+    continue_prompt_steps,
+    neutralize_boundary_markers,
+    read_prompt,
+)
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
@@ -6857,10 +6863,15 @@ def run_round(
     }
 
     plan_rows_added: list[str] = []
+    role_repair: dict[str, Any] = {}
 
-    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
+    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str, *, underived_requests: Sequence[str] = ()) -> GroundedDraft:
         canonical = canonical_generation_draft(
-            value, lambda link: _scope_range_text(link, spans), unit_catalog=unit_catalog, question=question
+            value,
+            lambda link: _scope_range_text(link, spans),
+            unit_catalog=unit_catalog,
+            question=question,
+            underived_requests=underived_requests,
         )
         if scope_plan is None and isinstance(value, generation_base):
             # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
@@ -6877,7 +6888,9 @@ def run_round(
                 "raw_output_representation": "provider_output_text" if provider_text is not None else None,
                 "provider_capture_scope": "returned_response_only",
                 "provider_output_text": provider_text,
-                "parsed_output_representation": "generation_wire" if isinstance(value, generation_model) else "legacy_parsed_draft",
+                "parsed_output_representation": "generation_wire"
+                if getattr(type(value), "_uses_typed_answer_parts", False)
+                else "legacy_parsed_draft",
                 "parsed_output": value.model_dump(mode="json", exclude_unset=True),
                 # 検証の前に最初の 1 件へ寄せた、同じ内容の entry の数（#3849）。寄せる前の応答は provider_output_text。
                 **({"collapsed_duplicates": dict(canonical._collapsed_duplicates)} if canonical._collapsed_duplicates else {}),
@@ -6993,10 +7006,66 @@ def run_round(
             # 再実行の後も出力が構造化出力の契約を満たさず、この round の草稿が無い（#3849）。呼び出し側が、前の round の
             # 回答か、草稿の無い round（関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
             raise DraftGenerationInvalid(type(exc).__name__) from exc
-        draft = canonicalize_output(draft, "answer.generate", prompt)
+        # 導出（計算・区分・条件の当てはめ）が要る種類を自分で宣言したのに、要点がすべて原文の提示（source 型）の出力は、
+        # 質問の既知値を当てはめた答えを持たない（#4586）。source 型を受けない契約で 1 回だけ作り直す。作り直しが契約を
+        # 満たさなければ、その要求を導出の無い要点にし、原文の列挙を答えとして示さずに不足として残す。
+        source_only = source_only_derivation(draft)
+        repaired: BaseModel | None = None
+        role_repair_prompt = ""
+        if source_only:
+            role_repair = {"requests": source_only, "question_type": list(getattr(draft, "question_type", []) or [])}
+            # 番号は指示の側の文（user のテンプレート）の最後の Step の続きにする（根拠の中の見出しで決めない）。
+            role_repair_part = continue_prompt_steps(
+                read_prompt(VLM_ANSWER_PROMPT_KEY),
+                resolve_prompt("generation.sourceOnlyDerivation", SOURCE_ONLY_DERIVATION_PROMPT),
+            )
+            role_repair_prompt = prompt + "\n\n" + role_repair_part + json.dumps({"source_only_requests": source_only}, ensure_ascii=False)
+            derivation_model = generation_language_schema(
+                unit_generation_model(
+                    generation_base,
+                    unit_catalog,
+                    direct_source=False,
+                    # 要求の名前（不足の文に出る）は 1 回目の出力の requirement の写しだけを受ける。
+                    requirements=[part.requirement for part in getattr(draft, "answer_parts", [])],
+                ),
+                question,
+            )
+            try:
+                if image_paths and not image_fallback:
+                    repaired = call_with_model_purpose(
+                        "answer.repair",
+                        parse_images,
+                        generation_system,
+                        role_repair_prompt,
+                        list(image_paths),
+                        settings,
+                        derivation_model,
+                        provider_id=provider_id,
+                    )
+                else:
+                    repaired = call_with_model_purpose(
+                        "answer.repair",
+                        parse_text,
+                        generation_system,
+                        role_repair_prompt,
+                        settings,
+                        derivation_model,
+                        provider_id=provider_id,
+                    )
+            except Exception as exc:
+                if invalid_output is None or not invalid_output(exc):
+                    raise
+                role_repair.update(outcome="underived", error=type(exc).__name__)
+            else:
+                role_repair["outcome"] = "repaired"
+        draft = canonicalize_output(
+            draft, "answer.generate", prompt, underived_requests=source_only if source_only and repaired is None else ()
+        )
+        if repaired is not None:
+            draft = canonicalize_output(repaired, "answer.repair", role_repair_prompt)
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair))
+        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair)) + int(bool(source_only))
     if previous_draft is not None:
         draft = draft.model_copy(update={"response_language": previous_draft.response_language})
     plan_errors = _request_plan_errors(draft, spans)
@@ -7127,6 +7196,10 @@ def run_round(
         timing["request_scope_repair"] = scope_plan_repair
     if plan_rows_added:
         timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
+    if role_repair:
+        # 導出が要る種類の宣言と source 型だけの要点の矛盾の作り直し（#4586）: 要求・宣言した種類・結果（repaired /
+        # underived）・作り直しが契約を満たさなかったときの例外の型名。
+        timing["answer_part_role_repair"] = role_repair
     if plan_repair_calls:
         timing["request_plan_repair"] = {
             "calls": plan_repair_calls,

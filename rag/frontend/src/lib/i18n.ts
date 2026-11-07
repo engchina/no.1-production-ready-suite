@@ -4406,6 +4406,7 @@ export const ja = {
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
   "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（生成後の回答確認が標準・詳細で、この設定が有効かつ生成が条を引かなかったときだけ）",
+  "settings.answerPrompts.part.sourceOnlyDerivation": "計算・区分・条件の当てはめの質問と宣言したのに、要点がすべて原文の提示だった回答を作り直すとき、回答生成の入力の後ろに足す指示（1 回だけ）",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
