@@ -61,6 +61,8 @@ class CheckedApplication:
     warnings: list[str] = field(default_factory=list)
     internal_label_issues: list[str] = field(default_factory=list)
     date_value_issues: list[str] = field(default_factory=list)
+    # 計算し直すと合わなかった式（#4581。モデルのカスケードの昇格の信号に使う）。
+    arithmetic_issues: list[str] = field(default_factory=list)
     assessment: dict[str, Any] = field(default_factory=dict)
     presentation: dict[str, Any] = field(default_factory=dict)
 
@@ -147,6 +149,7 @@ def check_applications(
             else:
                 entry.entries.append(item)
         if mismatch := arithmetic_mismatch(f"{application.reasoning}\n{application.result}"):
+            entry.arithmetic_issues.append(mismatch)
             entry.reject(f"算式が合わない: {mismatch}")
         if label := _internal_label().search(f"{application.reasoning}\n{application.result}"):
             entry.internal_label_issues.append(label.group(0))

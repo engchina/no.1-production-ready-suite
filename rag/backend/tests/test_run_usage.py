@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import pytest
 from pr_backend_core.observability.genai import record_genai_usage
-from pr_backend_core.observability.model_usage import RunModelUsage, parse_run_usage
+from pr_backend_core.observability.model_usage import (
+    ModelTokenUsage,
+    RunModelUsage,
+    parse_run_usage,
+)
 from pr_backend_core.observability.tracing import observed_span
 from rag_engine.resources.tracing import observe_call
 
@@ -60,6 +64,23 @@ def test_usage_sums_llm_calls_without_double_counting_stages() -> None:
     usage = trace.model_usage(primary_model="model-answer")
     assert usage == RunModelUsage(
         models=["model-answer", "model-rewrite"],
+        # モデルごとの内訳（カスケードで 2 つのモデルを呼んだ実行の token を分ける。#4581）。
+        by_model=[
+            ModelTokenUsage(
+                model="model-answer",
+                requests=3,
+                input_tokens=700,
+                output_tokens=220,
+                total_tokens=920,
+            ),
+            ModelTokenUsage(
+                model="model-rewrite",
+                requests=1,
+                input_tokens=50,
+                output_tokens=10,
+                total_tokens=60,
+            ),
+        ],
         requests=4,
         input_tokens=750,
         output_tokens=230,

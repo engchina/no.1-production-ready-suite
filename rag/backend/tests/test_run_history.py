@@ -1081,6 +1081,16 @@ async def test_pipeline_records_the_model_usage_of_each_run(monkeypatch: MonkeyP
         "measurement": "complete",
         "measured_requests": calls,
         "unmeasured_sources": [],
+        # モデルごとの内訳（#4581）。
+        "by_model": [
+            {
+                "model": "model-a",
+                "requests": calls,
+                "input_tokens": 100 * calls,
+                "output_tokens": 10 * calls,
+                "total_tokens": 110 * calls,
+            }
+        ],
     }
     assert store.records[0]["model_id"] == "model-a"
 

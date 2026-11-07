@@ -267,6 +267,40 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in (config.query ?? {})).toBe(false);
 });
 
+test("確認を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body = null as Record<string, unknown> | null;
+  await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
+  await page.goto("/search-answer-profiles?id=new");
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("プロファイル A");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+  const model = page.getByRole("heading", { name: "回答モデル", level: 3 }).locator("..");
+  await model.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
+  await model.getByRole("combobox").click();
+  await page.getByRole("option", { name: "モデル A", exact: true }).click();
+  // 「回答モデル」の直下に置き、既定は「使わない」（全体の既定は持たない）。
+  const escalation = page.getByRole("heading", { name: "確認を通らなかったときのモデル", level: 3 }).locator("..");
+  const headings = await page.getByRole("heading", { level: 3 }).allTextContents();
+  expect(headings.indexOf("確認を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
+  await expect(escalation.getByRole("button", { name: "使わない" })).toHaveAttribute("aria-pressed", "true");
+  await expect(escalation.getByRole("combobox")).toHaveCount(0);
+  await expect(escalation.getByText(/確認を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
+  await escalation.getByRole("button", { name: "モデルを選ぶ" }).click();
+  await escalation.getByRole("combobox").click();
+  // 回答モデルと同じモデルは候補に出さない。
+  await expect(page.getByRole("option", { name: "モデル A", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "モデル B", exact: true }).click();
+  await escalation.screenshot({ path: testInfo.outputPath("escalation-model.png") });
+  await expectNoPageOverflow(page);
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
+  await expect.poll(() => body?.name).toBe("プロファイル A");
+  const config = body?.config as { answer_model_id?: string; escalation_model_id?: string | null };
+  expect(config.answer_model_id).toBe("model-a");
+  expect(config.escalation_model_id).toBe("model-b");
+});
+
 test("業務ガイドは既定 OFF の単一スイッチで保存・再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });

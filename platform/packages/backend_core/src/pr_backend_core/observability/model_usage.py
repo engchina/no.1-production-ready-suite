@@ -53,6 +53,16 @@ type UsageMeasurement = Literal["complete", "partial", "unmeasured"]
 USAGE_MEASUREMENTS: frozenset[str] = frozenset({"complete", "partial", "unmeasured"})
 
 
+class ModelTokenUsage(BaseModel):
+    """1 つのモデルの呼び出しの回数と利用量（実行のモデルごとの内訳。#4581）。"""
+
+    model: str
+    requests: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
 class RunModelUsage(BaseModel):
     """1 回の実行のモデルの利用量（RAG の `stages_json.usage`・NL2SQL の実行履歴の `usage`）。"""
 
@@ -74,6 +84,9 @@ class RunModelUsage(BaseModel):
     measured_requests: int = Field(default=0, ge=0)
     # 利用量を計測できない呼び出しの出どころ（Select AI など。最初に呼んだ順。回数は数えない）。
     unmeasured_sources: list[str] = Field(default_factory=list)
+    # モデルごとの内訳（`models` と同じ順。モデルの ID が無い呼び出しは含めない）。モデルの
+    # カスケードで 2 つのモデルを呼んだ実行の token を分けて示す（#4581）。古い記録は空。
+    by_model: list[ModelTokenUsage] = Field(default_factory=list)
 
 
 class _Call:
@@ -181,6 +194,10 @@ class ModelUsageCollector:
             measurement = "complete"
         return RunModelUsage(
             models=models,
+            by_model=[
+                _model_tokens(model, [call for call in leaves if call.model == model])
+                for model in models
+            ],
             requests=len(leaves),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -203,6 +220,38 @@ def collect_model_usage() -> Iterator[ModelUsageCollector]:
     collector = ModelUsageCollector()
     with observe_spans(collector.observe):
         yield collector
+
+
+def _model_tokens(model: str, calls: list[_Call]) -> ModelTokenUsage:
+    input_tokens = sum(call.tokens.get("input", 0) for call in calls)
+    output_tokens = sum(call.tokens.get("output", 0) for call in calls)
+    return ModelTokenUsage(
+        model=model,
+        requests=len(calls),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+
+
+def _merge_by_model(
+    left: list[ModelTokenUsage], right: list[ModelTokenUsage]
+) -> list[ModelTokenUsage]:
+    merged = {row.model: row for row in left}
+    for row in right:
+        current = merged.get(row.model)
+        merged[row.model] = (
+            row
+            if current is None
+            else ModelTokenUsage(
+                model=row.model,
+                requests=current.requests + row.requests,
+                input_tokens=current.input_tokens + row.input_tokens,
+                output_tokens=current.output_tokens + row.output_tokens,
+                total_tokens=current.total_tokens + row.total_tokens,
+            )
+        )
+    return list(merged.values())
 
 
 def _sum_optional(left: int | None, right: int | None) -> int | None:
@@ -239,6 +288,7 @@ def add_run_usage(total: RunModelUsage | None, usage: RunModelUsage | None) -> R
     output_tokens = total.output_tokens + usage.output_tokens
     return RunModelUsage(
         models=models,
+        by_model=_merge_by_model(total.by_model, usage.by_model),
         requests=requests,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -297,6 +347,7 @@ __all__ = [
     "LLM_CALL_SPAN",
     "UNMEASURED_SOURCE_ATTRIBUTE",
     "USAGE_MEASUREMENTS",
+    "ModelTokenUsage",
     "ModelUsageCollector",
     "RunModelUsage",
     "UsageMeasurement",

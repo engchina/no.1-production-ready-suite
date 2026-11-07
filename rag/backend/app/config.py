@@ -2083,6 +2083,13 @@ class Settings(
             "空ならシステム設定の窓口。"
         ),
     )
+    rag_answer_escalation_model: str = Field(
+        default="",
+        description=(
+            "リクエスト単位で検索・回答プロファイルから解決する、確認を通らなかったときのモデル（モデルの"
+            "カスケード。#4581）。空はカスケードしない。全体の既定は持たない（.env に書かない）。"
+        ),
+    )
     rag_language_pack_overrides: dict[str, dict[str, object]] = Field(
         default_factory=dict,
         description=(

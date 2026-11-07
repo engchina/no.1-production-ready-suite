@@ -1385,6 +1385,11 @@ export interface SearchAnswerProfileRef {
 export interface SearchAnswerProfileConfig {
   version: number;
   answer_model_id?: string | null;
+  /**
+   * 確認を通らなかったときのモデル（モデルのカスケード。#4581）。回答のモデルの回答が機械で判定できる確認を
+   * 通らなかったときだけ、このモデルで回答し直す。null はカスケードしない。
+   */
+  escalation_model_id?: string | null;
   knowledge_base_ids: string[];
   query: KnowledgeBaseQueryConfig;
   /**

@@ -43,6 +43,7 @@ from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.timezones import configured_timezone_name
+from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.context_expansion_trace import context_read_receipt
@@ -547,6 +548,40 @@ def _reasoning_effort_override(value: str) -> str:
     return "" if value == "model" else value
 
 
+def escalation_model_environ(settings: Settings, answer_model: str) -> dict[str, str]:
+    """確認を通らなかったときのモデル(モデルのカスケード。#4581)の接続を rag_engine へ渡す env。
+
+    検索・回答プロファイルの設定(``rag_answer_escalation_model``。利用者がモデルを明示した実行では空)が
+    回答のモデルと違うときだけ渡す。登録の確認は設定の解決(``validate_profile_answer_model``)で済ませ、
+    ここで登録の無いモデルは渡さない(回答のモデルや別の接続へ暗黙に切り替えない)。
+    """
+    model_id = settings.rag_answer_escalation_model.strip()
+    if not model_id or model_id == answer_model:
+        return {}
+    try:
+        connection = enterprise_ai_connection_for_model(settings, model_id)
+    except EnterpriseAiModelNotRegisteredError:
+        return {}
+    return {
+        "RAG_ENGINE_ESCALATION_MODEL": model_id,
+        "RAG_ENGINE_ESCALATION_ENDPOINT": connection.base_url,
+        "RAG_ENGINE_ESCALATION_API_KEY": connection.api_key,
+        "RAG_ENGINE_ESCALATION_PROJECT_OCID": connection.project_ocid,
+        "RAG_ENGINE_ESCALATION_VISION": (
+            "1" if answer_model_reads_images(settings, model_id) else "0"
+        ),
+        "RAG_ENGINE_ESCALATION_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
+            settings, model_id
+        ),
+        "RAG_ENGINE_ESCALATION_MAX_INPUT_TOKENS": str(
+            enterprise_ai_max_input_tokens(settings, model_id)
+        ),
+        "RAG_ENGINE_ESCALATION_MAX_OUTPUT_TOKENS": str(
+            enterprise_ai_output_token_budget(settings, model_id)
+        ),
+    }
+
+
 def build_engine_settings(
     settings: Settings,
     *,
@@ -782,6 +817,7 @@ def build_engine_settings(
     }
     # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
     environ.update(step_model_environ(settings))
+    environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
@@ -5245,6 +5281,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # LLM を呼ばずに対応の決定を replay する材料。
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
         "generation_failure": dict((result.generation_trace or {}).get("generation_failure") or {}),
+        # モデルのカスケード(#4581。確認を通らなかったときのモデルで回答し直したか・理由)。
+        "model_cascade": dict((result.generation_trace or {}).get("model_cascade") or {}),
         # 摘要の引用対応と意味検査の実施は分けて保存する。旧記録は空のまま扱う。
         "summary_evidence": dict(
             ((result.generation_trace or {}).get("finalization") or {}).get("summary") or {}

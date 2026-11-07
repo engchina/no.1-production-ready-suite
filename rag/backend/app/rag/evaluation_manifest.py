@@ -219,6 +219,8 @@ async def _profile(oracle: ManifestOracle, profile_id: str) -> dict[str, Any]:
     return {
         **search_answer_profile_revision(view),
         "answer_model_id": view.config.answer_model_id,
+        # 確認を通らなかったときのモデル（モデルのカスケード。#4581）。
+        "escalation_model_id": view.config.escalation_model_id,
         "knowledge_sha256": _sha256(knowledge or {}),
         "domain_keywords_sha256": _sha256(keywords or []),
         "knowledge_base_ids": sorted(view.config.normalized_knowledge_base_ids()),
