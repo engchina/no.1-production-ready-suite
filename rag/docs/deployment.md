@@ -2141,3 +2141,12 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 他表の参照などのエラーは握りつぶさない。旧コードが保存しないことを確認してから、現在の schema 管理の
 `initialize --allow-destructive` で明示的に適用する。必要な履歴がある環境は先に同表を export する。
 `RAG_QUERY_HISTORY_*` の設定は新コードでは使用しない。配備時は不要になった行だけを削除する。
+
+### 文書の行の処理後のファイルの列の削除（#4185）
+
+処理後のファイルの正本はレシピの行（`RAG_DOCUMENT_RECIPES.PREPROCESS_ARTIFACT`）で、現行のコードは文書の行の旧列
+`RAG_DOCUMENTS.PREPROCESS_ARTIFACT` を読み書きしない。新規の schema の正本はこの列を含まない。過去の migration は
+変更せず、`20261107_4185_drop_document_preprocess_artifact` が同列を削除する（列が無ければ何もしない）。
+保存先のファイル・レシピ・抽出・chunk は削除しない。旧コードが動いていないことを確認してから、現在の schema 管理の
+`initialize --allow-destructive` で明示的に適用する。値が残る環境（`SELECT COUNT(*) FROM rag_documents WHERE
+preprocess_artifact IS NOT NULL` が 0 でない）は先に同列を export する。
