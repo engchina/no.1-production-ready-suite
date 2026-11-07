@@ -20,6 +20,7 @@ from app.api.routes import documents as documents_route
 from app.clients.oracle import OracleClient
 from app.main import app
 from app.schemas.document import (
+    DocumentDetail,
     DocumentSummary,
     FileStatus,
     IngestionJob,
@@ -74,6 +75,43 @@ async def test_list_documents_selects_status_from_first_recipe(
     assert "rag_documents.status ) AS status," in select_list
     assert "FROM rag_ingestion_jobs j" in select_list
     assert "j.status IN ('QUEUED', 'RUNNING')" in select_list
+
+
+async def test_list_and_detail_pass_superseded_documents_to_language_pack_uses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一覧と詳細は、旧版の文書を言語資源の状態の判定に渡す（バッジを絞り込みとそろえる。#4601）。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                _document_state_row(document_id="doc-old", superseded_by_document_id="doc-new"),
+                _document_state_row(document_id="doc-new"),
+            ],
+            [],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    uses = AsyncMock(return_value={})
+    monkeypatch.setattr(client, "document_language_pack_uses", uses)
+
+    await client.list_documents(limit=10)
+
+    [listed] = uses.await_args_list
+    assert listed.args[0] == ["doc-old", "doc-new"]
+    assert listed.kwargs["superseded_ids"] == {"doc-old"}
+
+    detail = DocumentDetail(
+        id="doc-old",
+        file_name="sample.txt",
+        status=FileStatus.INDEXED,
+        uploaded_at=datetime(2026, 1, 1, tzinfo=UTC),
+        superseded_by_document_id="doc-new",
+    )
+    monkeypatch.setattr(client, "_get_document_with_oracle", AsyncMock(return_value=detail))
+    await client.get_document("doc-old")
+    [_, detailed] = uses.await_args_list
+    assert detailed.args[0] == ["doc-old"]
+    assert detailed.kwargs["superseded_ids"] == {"doc-old"}
 
 
 async def test_list_and_count_filter_status_by_first_recipe() -> None:

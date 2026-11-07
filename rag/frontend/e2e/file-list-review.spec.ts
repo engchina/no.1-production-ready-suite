@@ -49,6 +49,8 @@ interface MockOptions {
   deleteWarnings?: string[];
   /** 一覧の応答を遅らせる（返した Promise が解決するまで応答しない）。 */
   delayList?: (url: URL) => Promise<void> | undefined;
+  /** 言語資源の状態の絞り込みを、backend と同じく文書の status（旧版は superseded）で行う（#4601）。 */
+  filterLanguagePackStatus?: boolean;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -448,9 +450,11 @@ async function mockFileListApi(
       onList?.(url);
       await options.delayList?.(url);
       const status = url.searchParams.get("status");
+      const languagePackStatus = options.filterLanguagePackStatus ? url.searchParams.get("language_pack_status") : null;
       const limit = Number(url.searchParams.get("limit") ?? "25");
       const offset = Number(url.searchParams.get("offset") ?? "0");
-      const filtered = documents.filter((document) => !status || document.status === status);
+      const filtered = documents.filter((document) => (!status || document.status === status)
+        && (!languagePackStatus || (document.language_pack as { status?: string } | null | undefined)?.status === languagePackStatus));
       await route.fulfill({
         json: {
           data: {
@@ -725,7 +729,7 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
 test("言語資源の対象条件を維持し、使用版の判定を単一ラベルで表示する", { tag: "@responsive" }, async ({ page }) => {
   const documents = Array.from({ length: 30 }, (_, index) => ({
     ...documentSummary(`release-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null,
-    language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+    language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "different", recipes: [
       { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null, target_version: null },
       { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "new", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] },
@@ -751,14 +755,14 @@ test("言語資源の対象条件を維持し、使用版の判定を単一ラ�
 test("判定できない・未構築・構築中・最新を区別し、文書の詳細と同じバッジを1つだけ表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const documents = [
     { ...documentSummary("unrecorded-no-use", "sample-a.txt", "UPLOADED"), language_pack: null, expected: "判定できません", variant: "warning" },
-    { ...documentSummary("not-built-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] }, expected: "未構築", variant: "neutral" },
-    { ...documentSummary("not-built-queued", "sample-d.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+    { ...documentSummary("not-built-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "not_built", recipes: [] }, expected: "未構築", variant: "neutral" },
+    { ...documentSummary("not-built-queued", "sample-d.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "building", recipes: [
       { recipe_id: "recipe-1", chunk_set_id: null, release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: "release-current", target_version: 3 },
     ] }, expected: "構築中", variant: "info" },
-    { ...documentSummary("current", "sample-e.txt", "INDEXED"), expected: "最新", variant: "neutral", language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+    { ...documentSummary("current", "sample-e.txt", "INDEXED"), expected: "最新", variant: "neutral", language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "current", recipes: [
       { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] } },
-    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), expected: "判定できません", variant: "warning", language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), expected: "判定できません", variant: "warning", language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "unrecorded", recipes: [
       { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null },
       { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] } },
@@ -781,10 +785,45 @@ test("判定できない・未構築・構築中・最新を区別し、文書�
 });
 
 
+// #4601: 新しい版に置き換えた文書（旧版）は絞り込みの 6 つの状態に入らない（#3709）。列のバッジも 6 つのどれかを
+// 出さず「対象外」にし、バッジで絞り込んでも行が見つからない食い違いを作らない。
+test("旧版の文書は言語資源の列に「対象外」を出し、絞り込みの 6 つの状態に入れない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const unrecordedRecipe = { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null };
+  const documents = [
+    { ...documentSummary("old-version", "sample-old.txt", "INDEXED"), superseded_by_document_id: "new-version", is_superseded: true, language_pack: { current_release_id: "release-current", current_version: 3, superseded: true, status: "superseded", recipes: [unrecordedRecipe] } },
+    { ...documentSummary("unrecorded", "sample-unrecorded.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "unrecorded", recipes: [unrecordedRecipe] } },
+  ];
+  const requests: URL[] = [];
+  await mockFileListApi(page, documents, { filterLanguagePackStatus: true }, url => requests.push(url));
+  await page.goto("/file-list");
+  const oldRow = page.getByRole("row").filter({ has: page.getByRole("link", { name: "sample-old.txt", exact: true }) });
+  const cell = oldRow.getByRole("cell", { name: "対象外（新しい版に置き換え済み）", exact: true });
+  await expect(cell).toHaveText("対象外（新しい版に置き換え済み）");
+  // 対応の要らない状態（neutral）。色だけにしない（アイコン）。
+  await expect(cell.locator("[data-status-variant]")).toHaveCount(1);
+  await expect(cell.locator("[data-status-variant]")).toHaveAttribute("data-status-variant", "neutral");
+  await expect(cell.locator("[data-status-variant] svg")).toHaveCount(1);
+  await expect(oldRow.getByText("判定できません", { exact: true })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("document-language-superseded.png"), fullPage: true });
+
+  // 絞り込みの選択肢は 6 つの状態のまま（「対象外」を足さない）。
+  await openFileListFilters(page);
+  await page.getByRole("combobox", { name: "言語資源" }).click();
+  await expect(page.getByRole("option")).toHaveText(["すべて", "最新", "最新（内容は同じ）", "再処理を推奨", "判定できません", "構築中", "未構築"]);
+  await page.getByRole("option", { name: "判定できません", exact: true }).click();
+  await closeFileListFilters(page);
+  await expect.poll(() => requests.some(url => url.searchParams.get("language_pack_status") === "unrecorded")).toBe(true);
+  // 「判定できません」で絞ると、その状態のバッジの文書だけが出て、旧版は出ない。
+  const unrecordedRow = page.getByRole("row").filter({ has: page.getByRole("link", { name: "sample-unrecorded.txt", exact: true }) });
+  await expect(unrecordedRow.getByRole("cell", { name: "判定できません", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "sample-old.txt", exact: true })).toHaveCount(0);
+});
+
 // #4566: 言語資源の絞り込みの選択肢は列のバッジと同じ語・同じ状態の値で、選んだ状態を API に渡す。
 test("言語資源の絞り込みは列のバッジと同じ 6 つの状態で選び、選んだ状態で一覧を取り直す", { tag: "@responsive" }, async ({ page }) => {
   const requests: URL[] = [];
-  await mockFileListApi(page, [{ ...documentSummary("doc-a", "sample-a.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } }], {}, url => requests.push(url));
+  await mockFileListApi(page, [{ ...documentSummary("doc-a", "sample-a.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "not_built", recipes: [] } }], {}, url => requests.push(url));
   await page.goto("/file-list");
   await expect(page.getByRole("link", { name: "sample-a.txt" })).toBeVisible();
   await openFileListFilters(page);
@@ -801,7 +840,7 @@ test("言語資源の絞り込みは列のバッジと同じ 6 つの状態で�
 // #4566: 言語資源の版を指定した一括再処理は、言語資源の設定の権限を持つ利用者だけに出す（使えない操作を描かない）。
 for (const admin of [true, false]) {
   test(`言語資源の一括再処理は言語資源の設定の権限を持つ利用者だけに出す（${admin ? "権限あり" : "権限なし"}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await mockFileListApi(page, [{ ...documentSummary("doc-a", "sample-a.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+    await mockFileListApi(page, [{ ...documentSummary("doc-a", "sample-a.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "different", recipes: [
       { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null, target_version: null },
     ] } }]);
     if (!admin) await mockAuthUser(page, { permissions: ["menu.file_list", "menu.upload"] });
@@ -818,7 +857,7 @@ for (const admin of [true, false]) {
 }
 
 test("ページをまたぐ選択から実在のレシピを確認し、固定版と設定版で一括再処理して部分失敗を残す", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const documents = Array.from({ length: 30 }, (_, index) => ({ ...documentSummary(`batch-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } }));
+  const documents = Array.from({ length: 30 }, (_, index) => ({ ...documentSummary(`batch-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "not_built", recipes: [] } }));
   await mockFileListApi(page, documents);
   const submissions: Record<string, unknown>[] = [];
   const idsQueries: URL[] = [];
@@ -888,7 +927,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.addInitScript(value => {
       localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
     }, theme);
-    const documents = ["unreadable-doc-a", "unreadable-doc-b"].map((id, index) => ({ ...documentSummary(id, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } }));
+    const documents = ["unreadable-doc-a", "unreadable-doc-b"].map((id, index) => ({ ...documentSummary(id, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, superseded: false, status: "not_built", recipes: [] } }));
     await mockFileListApi(page, documents);
     await page.route("**/api/documents/language-pack/reprocessing-targets", route => route.fulfill({ json: { data: { current_release: { id: "release-current", version: 3, effective: {}, hash: "current", ingest_hash: "current", published_at: "2026-10-17T00:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "" }, targets: [
       { document_id: "unreadable-doc-a", file_name: "sample-0.txt", recipe_id: "recipe-a", slot_no: 1, config_revision: 2, used_release_id: "release-old", used_ingest_hash: "old", relation: "different" },

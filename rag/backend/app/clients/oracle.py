@@ -6171,7 +6171,13 @@ class OracleClient:
         document_ids: Sequence[str],
         *,
         current_release_id: str | None = None,
+        superseded_ids: Collection[str] = frozenset(),
     ) -> dict[str, LanguagePackDocumentUse]:
+        """文書ごとの言語資源の使用版と状態。
+
+        ``superseded_ids`` は新しい版に置き換えた文書（旧版）で、状態を「対象外」にする
+        （絞り込みは旧版を除くため。#3709・#4601）。
+        """
         if not document_ids:
             return {}
         if current_release_id:
@@ -6205,7 +6211,9 @@ class OracleClient:
         )
         result = {
             identity: LanguagePackDocumentUse(
-                current_release_id=current.id, current_version=current.version
+                current_release_id=current.id,
+                current_version=current.version,
+                superseded=identity in superseded_ids,
             )
             for identity in document_ids
         }
@@ -6419,7 +6427,9 @@ class OracleClient:
         detail = await self._get_document_with_oracle(document_id)
         if detail is None:
             return None
-        uses = await self.document_language_pack_uses([document_id])
+        uses = await self.document_language_pack_uses(
+            [document_id], superseded_ids={document_id} if detail.is_superseded else set()
+        )
         return detail.model_copy(update={"language_pack": uses.get(document_id)})
 
     async def document_exists(self, document_id: str) -> bool:
@@ -11366,7 +11376,9 @@ class OracleClient:
         ]
         summaries = await self._attach_knowledge_base_refs_to_documents(summaries)
         uses = await self.document_language_pack_uses(
-            [item.id for item in summaries], current_release_id=current_release_id
+            [item.id for item in summaries],
+            current_release_id=current_release_id,
+            superseded_ids={item.id for item in summaries if item.is_superseded},
         )
         return [item.model_copy(update={"language_pack": uses.get(item.id)}) for item in summaries]
 
@@ -14856,7 +14868,8 @@ def _language_pack_status_sql(status: LanguagePackDocumentStatus) -> str:
     レシピごとに、最新の待機中・実行中の job が版を固定していれば構築中、そうでなければ検索中の索引
     （`is_active`）の関係（`index_relation` と同じ。版の行が無いものは判定できない）とし、
     文書の状態は 再処理を推奨 > 判定できません > 構築中 > 内容は同じ > 最新 > 未構築 の最初のもの。
-    構築中・関係の判定は `document_language_pack_uses` と画面の `languagePackSummaryStatus` と同じ。
+    構築中・関係の判定は `language_pack_document_status`（一覧の列・文書の詳細のバッジ）と同じ。
+    旧版は絞り込みの対象外（呼び出し元が `superseded_by_document_id IS NULL` を足す。#4601）。
     """
 
     def recipe_building(document: str, recipe: str) -> str:
