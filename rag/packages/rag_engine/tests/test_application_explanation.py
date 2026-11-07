@@ -87,8 +87,47 @@ def test_number_runs_unicode_and_separators():
     assert explanation.number_runs("COUNT(*) を数える") == []
 
 
-def gate(text, *, conclusion="結論は42個です。", sources=("原文の値は6と7です。",), question="値を掛けるといくつですか。", default=True):
-    return explanation.display_gate(text, question=question, sources=list(sources), conclusion=conclusion, default_language=default)
+def gate(
+    text,
+    *,
+    conclusion="結論は42個です。",
+    sources=("原文の値は6と7です。",),
+    question="値を掛けるといくつですか。",
+    default=True,
+    labels=(),
+):
+    return explanation.display_gate(
+        text, question=question, sources=list(sources), conclusion=conclusion, default_language=default, labels=labels
+    )
+
+
+# ---- 説明の段の入力の節の名前（#4603） ------------------------------------------------------------
+
+
+def test_every_input_section_is_classified():
+    # 入力の節は SECTION_KEYS のどれか。説明の語にしてよい節（WORDING_KEYS）以外は内部の名前として門が見る。
+    value = json.loads(explanation.explanation_prompt("質問", ["原文"], "指定", [{"条件": "行"}], [{"結論": "c", "資料の原文": []}]))
+    assert list(value) == list(explanation.SECTION_KEYS)
+    assert set(explanation.WORDING_KEYS) <= set(explanation.SECTION_KEYS)
+    assert explanation.INTERNAL_SECTION_KEYS == (explanation.KEY_LANGUAGE, explanation.KEY_OTHERS)
+    assert explanation.internal_labels(value) == [explanation.KEY_LANGUAGE, explanation.KEY_OTHERS]
+    assert explanation.internal_labels(json.loads(explanation.explanation_prompt("質問", ["原文"], None))) == []
+
+
+@pytest.mark.parametrize("label", [explanation.KEY_LANGUAGE, explanation.KEY_OTHERS])
+def test_gate_hides_text_that_names_an_internal_input_section(label):
+    text = f"{label}に示された値によれば、6と7を掛けると42です。"
+    assert gate(text, labels=[label]) == {"status": "hidden", "reason": "internal_label", "labels": [label]}
+    # その呼び出しで送っていない節の名前は比べない。
+    assert gate(text)["status"] == "confirmed"
+    # 入力の原文に同じ字の並びがあれば、原文の写しと区別できないので表示する。
+    assert gate(text, sources=[f"原文の値は6と7です。{label}"], labels=[label])["status"] == "confirmed"
+
+
+def test_wording_sections_are_not_internal_labels():
+    labels = explanation.internal_labels({key: "" for key in explanation.SECTION_KEYS})
+    text = f"{explanation.KEY_SOURCES}と{explanation.KEY_ROWS}によれば、{explanation.KEY_QUESTION}の値6と7を掛けると42です。"
+    assert gate(text, labels=labels)["status"] == "confirmed"
 
 
 def test_gate_requires_conclusion_numbers_kana_and_no_foreign_latin_run():
