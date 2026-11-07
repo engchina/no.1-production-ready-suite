@@ -17,7 +17,7 @@ from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.errors import SecurityApiError
 from starlette.concurrency import run_in_threadpool
 
-from app.api.errors import DocumentReprocessRequiredError
+from app.api.errors import AnswerModelNotRegisteredError, DocumentReprocessRequiredError
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore
 from app.clients.support_guide_store import SupportGuideStore
@@ -231,14 +231,24 @@ def registered_answer_model_choices(settings: Settings) -> list[dict[str, str]]:
     return choices
 
 
-def _answer_model_id(request: SearchRequest, settings: Settings) -> str | None:
-    """RAG 検索で選んだ回答のモデル。候補外・未指定は None(既定のテキストモデル)。"""
-    if request.model_id and any(
-        choice["model_id"] == request.model_id
-        for choice in registered_answer_model_choices(settings)
-    ):
-        return request.model_id
-    return None
+def ensure_answer_models_registered(model_ids: Iterable[str], settings: Settings) -> None:
+    """明示した回答のモデルがすべて登録済みか確かめる（#4582）。
+
+    登録されていない ID があれば `AnswerModelNotRegisteredError`（422）。落として既定のモデルへ
+    切り替えない（#3240）。モデルを呼ぶ前・要求を保存する前に呼ぶ。
+    """
+    registered = {choice["model_id"] for choice in registered_answer_model_choices(settings)}
+    for model_id in model_ids:
+        if model_id not in registered:
+            raise AnswerModelNotRegisteredError(model_id)
+
+
+def _answer_model_id(request: SearchRequest) -> str | None:
+    """RAG 検索で選んだ回答のモデル。未指定は None(既定のテキストモデル)。
+
+    登録の確認は `_resolve_query_context` の最初で済ませる（未登録は 422。#4582）。
+    """
+    return (request.model_id or "").strip() or None
 
 
 def _answer_model_registered(settings: Settings, config: SearchAnswerProfileConfig) -> bool:
@@ -342,6 +352,9 @@ async def _resolve_query_context(
     ``guide_preview``（下書きで試す。#1288）は、そのガイドの公開の版の代わりに下書きを、この
     1 回の回答の照合にだけ使う（保存・公開の版は変えない）。回答の記録に印を残す。
     """
+    # 明示した回答のモデルが未登録なら、DB・モデルを使う前に 422 にする（#4582）。
+    if explicit_model := _answer_model_id(request):
+        ensure_answer_models_registered([explicit_model], global_settings)
     oracle = OracleClient()
     settings = global_settings
     if request.search_answer_profile_id:
@@ -365,7 +378,7 @@ async def _resolve_query_context(
             effective_request, from_search_answer_profile=not request.knowledge_base_ids
         )
         profile_config = view.config
-        if explicit_model := _answer_model_id(request, global_settings):
+        if explicit_model:
             profile_config = profile_config.model_copy(update={"answer_model_id": explicit_model})
         # 回答を作らない検索も、根拠を集める LLM（質問拡張・条の選択・CRAG など）はチャットと同じ
         # 回答のモデルで呼ぶ（#3506。回答の有無でモデルを変えない）。ただし回答を作らない検索は、
@@ -826,7 +839,7 @@ async def _run_search_with_timeout(
     trace_id = new_trace_id()
     if guide_preview is not None:
         trace_id = GUIDE_PREVIEW_TRACE_PREFIX + trace_id
-    answer_model_id = _answer_model_id(request, settings)
+    answer_model_id = _answer_model_id(request)
     # 処理の経過（共通の span の表に書く。MCP の要求の中では Agent の trace の下に入る。#3226）。
     trace = AnswerTrace(trace_id, owner_user_uuid=current_audit_request_context().user_uuid)
     if run_recorder is not None:
@@ -1055,7 +1068,7 @@ async def _stream_search_events_with_timeout(
     async def produce() -> None:
         try:
             # 回答を LLM で生成するため、回答生成の上限で打ち切る（#375）。
-            answer_model_id = _answer_model_id(request, settings)
+            answer_model_id = _answer_model_id(request)
             if run_recorder is not None:
                 run_recorder.model_id = (
                     _run_model_id(answer_model_id, settings) if request.generate_answer else None

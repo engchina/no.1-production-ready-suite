@@ -1,0 +1,944 @@
+{
+ "note": "#4586 の録画応答（合成の題: 属性 A〜I の判定表と区分の規則）。原文単位 ID は {row:N}（表の N 行目のデータ行）・{header}（表の見出し行）・{rule}（区分の規則の文）に、根拠の label は {E:table} / {E:rule} に置き換えた。",
+ "outputs": {
+  "deployed_42dd5db": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "属性A〜Hが有で属性Iが無の場合の合計点と区分を示す",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{row:1}",
+        "{row:2}",
+        "{row:3}",
+        "{row:4}",
+        "{row:5}",
+        "{row:6}",
+        "{row:7}",
+        "{row:8}",
+        "{row:9}"
+       ]
+      }
+     }
+    },
+    {
+     "request_id": "Q1",
+     "requirement": "合計点に対する区分を示す",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{rule}"
+       ]
+      }
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "question_type": [
+    "calculation",
+    "classification"
+   ],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0,
+    1
+   ],
+   "request_coverage": [
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A〜Hの点数",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      },
+      {
+       "evidence_id": "{E:rule}",
+       "target": "合計点の区分規則",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iの点数（無の場合は加算しない）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分の範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合の点数は0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A〜Hの点数合計計算",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの範囲（10〜19点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが有の場合の点数5（今回は無）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Cの範囲（20〜29点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Aの範囲（0〜9点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A〜Hの点数合計 2+3+1+4+2+1+3+2 = 18",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "合計点18は区分Bに該当",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として計算に含めない",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分判定のルール",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A〜Hの点数リスト",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの定義",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが有の場合の点数5（本ケースでは適用外）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Aの範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Cの範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として除外",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "合計点18の区分判定",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A〜Hの点数合計計算式",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの点数範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分判定ロジック",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数加算しない",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの定義（10〜19点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として計算に含めない",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分判定の範囲（0-9 A, 10-19 B, 20-29 C）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの範囲（10〜19点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として除外",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの定義（10〜19点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分A, B, C の範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として計算に含めない",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分判定ロジック（0-9 A, 10-19 B, 20-29 C）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分B（10〜19点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A〜Hの点数合計 18",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分B（10〜19点）に該当",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として除外",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの範囲（10〜19点）",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無で点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの定義",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分A, B, C の範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性Iが無の場合は点数0として計算に含めない",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:9}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分Bの範囲",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "属性A、A2 etc...",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:1}",
+         "{row:2}",
+         "{row:3}",
+         "{row:4}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "deployed_c00108e_retry": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "属性A〜Hが有で属性Iが無の場合の合計点と区分",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{row:2}",
+        "{row:3}",
+        "{row:5}",
+        "{row:6}",
+        "{row:7}",
+        "{row:8}",
+        "{row:4}",
+        "{row:1}",
+        "{row:9}"
+       ]
+      }
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "question_type": [
+    "calculation",
+    "classification"
+   ],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0
+   ],
+   "request_coverage": [
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "点数テーブル",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{row:2}",
+         "{row:3}",
+         "{row:5}",
+         "{row:6}",
+         "{row:7}",
+         "{row:8}",
+         "{row:4}",
+         "{row:1}",
+         "{row:9}"
+        ]
+       }
+      },
+      {
+       "evidence_id": "{E:rule}",
+       "target": "区分規則",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{rule}"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

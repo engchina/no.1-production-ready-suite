@@ -1,13 +1,17 @@
 """要点と結果のinline契約に、モデルによる重複分類・内部番号を要求しない。"""
 
 import pytest
+from application_verdict_stub import audit_reply, is_application_schema
+from audit_fixtures import synthetic_explanation
 from pydantic import ValidationError
 from test_citation_unit_ids import snapshot
 
 from rag_engine.generation.answer_parts_wire import answer_parts_model
+from rag_engine.generation.application_explanation import is_explanation_schema
+from rag_engine.generation.application_reason import AuditReason
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import ApplicationAudit
+from rag_engine.models.llm import ApplicationVerdictAudit
 
 
 def case():
@@ -47,13 +51,17 @@ def test_inline_results_generate_all_internal_references():
     raw, schema, catalog = case()
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert [item.text for item in draft.items] == ["単位A"]
-    assert draft.applications[1].result == "導いた結果"
+    # 原文の写しだけの「元の値」は、選んだ ID の原文を直接の記載にし、導出を作らない。
+    assert [part.result_kind for part in draft.answer_parts] == ["direct", "derived"]
+    assert draft.answer_parts[0].item_indexes == [0]
+    assert draft.answer_parts[0].application_indexes == []
+    assert len(draft.applications) == 1
+    assert draft.applications[0].result == "導いた結果"
     assert draft.applications[0].item_indexes == [0]
     assert [part.id for part in draft.answer_parts] == ["P1", "P2"]
-    assert draft.answer_parts[0].application_indexes == [0]
-    assert draft.answer_parts[1].application_indexes == [1]
+    assert draft.answer_parts[1].application_indexes == [0]
     assert draft.summary == "導いた結果"
-    assert draft.summary_application_indexes == [1]
+    assert draft.summary_application_indexes == [0]
     assert draft.items[0].citations[0]._unit_binding.text == "単位A"
 
 
@@ -62,7 +70,8 @@ def test_same_source_for_distinct_requests_keeps_each_request_reference():
     raw["answer_parts"][1]["request_id"] = "Q2"
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert [item.request_id for item in draft.items] == ["Q1", "Q2"]
-    assert draft.applications[1].item_indexes == [1]
+    assert draft.answer_parts[0].item_indexes == [0]
+    assert draft.applications[0].item_indexes == [1]
 
 
 @pytest.mark.parametrize("change", ["missing_result", "missing_basis", "invented_source", "direct_text"])
@@ -119,7 +128,7 @@ def test_source_method_and_result_precede_global_coverage_without_dropping_guard
     raw, schema, catalog = case()
     document = schema.model_json_schema()
     fields = list(document["properties"])
-    assert fields[0] == "answer_parts"
+    assert fields[:2] == ["response_language", "answer_parts"]
     assert fields[-1] == "request_coverage"
     supported = document["$defs"]["SupportedAnswerPart"]
     assert list(supported["properties"]) == ["kind", "basis", "reasoning", "result"]
@@ -167,9 +176,9 @@ def test_bound_source_locators_use_structured_citation_without_discarding_conclu
     evidence_id = catalog.snapshots[0].span()["evidence_id"]
     raw["answer_parts"][1]["answer"]["reasoning"] = f"根拠 [{evidence_id}] に記載された値から導く。"
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.applications[1].reasoning == "根拠 に記載された値から導く。"
-    assert draft.applications[1].item_indexes == [0]
-    assert draft.applications[1].result == "導いた結果"
+    assert draft.applications[0].reasoning == "根拠 に記載された値から導く。"
+    assert draft.applications[0].item_indexes == [0]
+    assert draft.applications[0].result == "導いた結果"
 
 
 @pytest.mark.parametrize("reasoning", ["根拠 [E999] から導く。", "E1の規則から導く。", "根拠 [E1は条件の対象] から導く。"])
@@ -177,7 +186,7 @@ def test_unbound_or_sentence_locators_remain_for_existing_rejection(reasoning):
     raw, schema, catalog = case()
     raw["answer_parts"][1]["answer"]["reasoning"] = reasoning
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.applications[1].reasoning == reasoning
+    assert draft.applications[0].reasoning == reasoning
 
 
 def test_selected_long_original_is_preserved_instead_of_rejected_or_truncated():
@@ -233,8 +242,10 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
 
     def generate(system, prompt, config, schema, **options):
         calls.append(schema)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の対応"}], summary_supported=True)
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
+        if is_application_schema(schema):
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         assert schema._uses_typed_answer_parts
         assert "summary_part_indexes" in schema.model_json_schema()["properties"]
         unit_ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
@@ -293,7 +304,9 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
         response = synthesize_grounded_answer(
             "項目Aの値を教えてください。", AnswerContext(records=[record], text=source_text), config, image_prompt_mode="text_only"
         ).response
-    assert len(calls) == 2 and calls[-1] is ApplicationAudit
+    # 生成 1 回と、独立の監査の判定・理由の各 1 回の後に、valid な推導 1 件の説明の段を 1 回呼ぶ。
+    assert len(calls) == 4 and calls[1:3] == [ApplicationVerdictAudit, AuditReason]
+    assert is_explanation_schema(calls[3])
     assert "合成の回答です。" in response.answer_text
     assert source_text in response.answer_text
     trace = response.generation_trace
@@ -310,7 +323,7 @@ def test_locator_uses_display_label_while_source_keeps_immutable_evidence_identi
         part["answer"]["basis"]["unit_ids"] = [source.unit_ids[0]]
     raw["answer_parts"][1]["answer"]["reasoning"] = "根拠[E1]に記載された値から導く。"
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.applications[1].reasoning == "根拠に記載された値から導く。"
+    assert draft.applications[0].reasoning == "根拠に記載された値から導く。"
     assert draft.items[0].citations[0].evidence_id == "immutable-evidence-identity"
 
 
@@ -368,8 +381,10 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
 
     def generated(system, prompt, settings, schema, **options):
         calls.append(schema.__name__)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "計算の合成判定"}], summary_supported=True)
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
+        if is_application_schema(schema):
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         assert getattr(schema, "_uses_unit_ids", False)
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
         return schema.model_validate(
@@ -411,7 +426,7 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
     settings = replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=0)
     with bind_dependencies(AnswerDependencies(unused, unused, generated, unused, unused)):
         result = synthesize_grounded_answer("項目Aと項目Bの合計を教えてください。", ctx, settings, image_prompt_mode="text_only").response
-    assert calls == ["GroundedDraftWire", "ApplicationAudit"]
+    assert calls == ["GroundedDraftWire", "ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"]
     assert result.answer_text.startswith("合計は20です。")
     assert result.generation_trace["applications"][0]["published"]
     assert result.generation_trace["applications"][0]["result"] == "合計は20です。"

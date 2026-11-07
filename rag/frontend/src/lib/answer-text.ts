@@ -10,7 +10,11 @@ import { integerMetadataValue } from "./table-cell-focus";
 
 export type AnswerTextEntry =
   /** `citationLines` は各根拠の行が本文の何番目（1 始まり）の「根拠：」の行か（#1330）。 */
-  | { kind: "item"; text: string; citations: string[]; citationLines: number[]; details?: string[] }
+  /**
+   * `reasoning` は「資料をもとに導いた結論」の項目の説明（「当てはめ：」の後ろから最初の根拠の行の前まで。#4393）。
+   * 説明は Markdown（段落・箇条書き・コードの囲み）を含むことがあるので、行の書式で分けずに原文の改行のまま持つ。
+   */
+  | { kind: "item"; text: string; citations: string[]; citationLines: number[]; details?: string[]; reasoning?: string }
   | { kind: "text"; text: string };
 
 export type AnswerTextBlock =
@@ -46,6 +50,8 @@ const SECTION_TITLE = new RegExp(
     ")$",
 );
 const CITATION = /^根拠：/;
+// rag_engine の applications.py の REASONING_LABEL（結論の説明の行の先頭）。
+export const REASONING_LABEL = "当てはめ：";
 const BULLET = /^・/;
 const NUMBERED = /^\d+\.\s/;
 
@@ -105,8 +111,29 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
     else if (section) section.entries.push({ kind: "text", text: joined });
     else blocks.push({ kind: "paragraph", text: joined });
   };
+  // 結論の説明（#4393）を集めている項目。根拠の行（回答エンジンは説明の後に必ず根拠の行を置く）か節の見出しで閉じる。
+  let reasoning: { entry: Extract<AnswerTextEntry, { kind: "item" }>; lines: string[] } | null = null;
+  const closeReasoning = () => {
+    if (!reasoning) return;
+    const value = reasoning.lines.join("\n").trim();
+    if (value) reasoning.entry.reasoning = value;
+    reasoning = null;
+  };
   for (const raw of lines) {
     const line = raw.trim();
+    if (reasoning) {
+      if (!citation.test(line) && !sectionTitle(line, format)) {
+        reasoning.lines.push(raw.trimEnd());
+        continue;
+      }
+      closeReasoning();
+    }
+    const current = section?.entries[section.entries.length - 1];
+    if (isApplication() && current?.kind === "item" && line.startsWith(REASONING_LABEL)) {
+      flushParagraph();
+      reasoning = { entry: current, lines: [line.slice(REASONING_LABEL.length)] };
+      continue;
+    }
     if (!line) {
       flushParagraph();
       continue;
@@ -138,6 +165,7 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
     }
     paragraph.push(line);
   }
+  closeReasoning();
   flushParagraph();
   for (const block of blocks) {
     if (block.kind === "section" && !block.entries.some((entry) => entry.kind === "item")) {

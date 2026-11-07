@@ -11,7 +11,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -43,6 +43,7 @@ from rag_engine.dependencies import (
     injected_context_chunks,
     injected_embedder,
     injected_prefetch_search,
+    injected_question_subjects,
     parse_multimodal_response,
     parse_text_response,
     record_retrieval_stage,
@@ -51,7 +52,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import crag_generation, form_field_kinds, passage_marks
+from rag_engine.generation import crag_generation, form_field_kinds, passage_marks, row_conditions
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -166,6 +167,7 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
+from rag_engine.generation.application_explanation import explain_applications
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.crag_support import (
@@ -2809,6 +2811,35 @@ def _invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, LlmRunawayOutput | LlmStreamOutputMissing) or is_invalid_structured_output(exc)
 
 
+def _row_condition_step(question: str, spans: Sequence[dict[str, Any]], *, settings: Settings) -> row_conditions.RowConditionsResult | None:
+    """送った根拠の表の各行の条件を、質問に当てはめる段（#4349）。投影できる表が無ければ None（段を開かない）。
+
+    動かすかはコードが決める: 実際に送った単位の目録（``grounded.sent_table_views``）に投影できる表が 1 つ以上
+    あれば動かし、推導（applications）の有無には依らない。結果は推導の審査・当てはめの段・説明の段へ渡す。
+    この段のモデルは段ごとの設定（``row_condition_call_settings``）で、使えなければ実行せず理由を残す。
+    """
+    from rag_engine.generation import grounded
+
+    tables, skipped = grounded.sent_table_views(spans) if spans else ([], [])
+    if not tables:
+        return None
+    with _execution_step(
+        "表の各行の条件を質問に当てはめる", "送った資料の表の各行の条件が、質問の内容から成り立つかを行ごとに確かめます。"
+    ) as step:
+        step.input(
+            {"question": question, "tables": [{"evidence_id": table["evidence_id"], "rows": len(table["rows"])} for table in tables]}
+        )
+        result = row_conditions.evaluate_tables(question, tables, skipped, parse_text=parse_text_response, settings=settings)
+        step.output(result.trace())
+        if result.status == "model_unavailable":
+            step.skip("この段のモデルを使えないため、表の行の判定を行いません。", reason_code="row_condition_model_unavailable")
+        elif undetermined := result.undetermined():
+            step.result(f"表 {len(result.tables)} 件のうち、決められない行のある表 {len(undetermined)} 件（推導を保留）")
+        else:
+            step.result(f"表 {len(result.tables)} 件の行をすべて判定")
+    return result
+
+
 def synthesize_grounded_answer(
     question: str,
     context: AnswerContext,
@@ -2945,6 +2976,9 @@ def synthesize_grounded_answer(
     # vector を再利用する。注入が無ければ語の判定だけ。
     embedder = injected_embedder() if guide_steps else None
     guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
+    # 質問の対象と役割（#4351）。最初に必要になった round で 1 回だけ抽出し、是正の round でも同じ結果を使う。
+    subject_reader = injected_question_subjects()
+    question_subjects = cache(partial(subject_reader, question, audit_settings, provider_id=provider)) if subject_reader else None
 
     def generate_round(
         round_spans: Sequence[dict[str, Any]],
@@ -2984,6 +3018,7 @@ def synthesize_grounded_answer(
             confirmed_premises=settings.confirmed_premises,
             confirmed_premise_sources=settings.confirmed_premise_sources,
             guide_task_scope=round_knowledge.guide_task_scope if round_knowledge else (),
+            question_subjects=question_subjects,
         )
 
     # 用語の照合結果は 1 回の回答の中で変わらない。プロンプトの組み立ての回数によらず 1 回だけ残す（#4095）。
@@ -3587,6 +3622,9 @@ def synthesize_grounded_answer(
                 "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
             }
         )
+    # 送った根拠に投影できる表があれば、推導の有無に関わらず行の判定の段を 1 回動かす（#4349）。結果は推導の審査・
+    # 当てはめの段・説明の段へ渡す。生成の草稿は作り直さない（既存の門はそのまま）。
+    row_result = _row_condition_step(question, spans, settings=settings)
     if audit_mode == grounded.AUDIT_MODE_NONE:
         from rag_engine.generation.answer_parts import check_answer_parts
         from rag_engine.generation.application_review import review_applications
@@ -3604,11 +3642,14 @@ def synthesize_grounded_answer(
                 parse_text=parse_text_response,
                 settings=audit_settings,
                 provider_id=provider,
+                row_conditions=row_result,
             )
             current.timing["application_review"] = diagnostic
             review_step.output(diagnostic)
             if diagnostic["status"] == "not_applicable":
                 review_step.skip("確認対象の導出結論がありません。", reason_code="no_derivations")
+            elif diagnostic["status"] == "withheld_table_not_determined":
+                review_step.skip("表に質問から決められない行があるため、表から導く結論を保留します。", reason_code="table_not_determined")
             elif diagnostic.get("error_type"):
                 review_step.fail("確認を完了できなかったため、未確認の結論を保留します。", reason_code="application_review_failed")
             else:
@@ -3676,9 +3717,8 @@ def synthesize_grounded_answer(
         )
     ):
         application_step["ran"] = True
-        step_basis = grounded.summary_basis_snapshot(
-            list(answer_applications.application_step_inputs(question, current.checked, current.requests)[1].values())
-        )
+        step_items = list(answer_applications.application_step_inputs(question, current.checked, current.requests)[1].values())
+        step_basis = grounded.summary_basis_snapshot(step_items)
         try:
             step_applications, step_summary = answer_applications.run_application_step(
                 question,
@@ -3690,6 +3730,7 @@ def synthesize_grounded_answer(
                 audit_settings=audit_settings,
                 provider_id=provider,
                 render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
+                row_conditions=row_result,
             )
         except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
             application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
@@ -3705,6 +3746,30 @@ def synthesize_grounded_answer(
                 # 当てはめの監査が支持した結論に置き換えたら、確かめた summary にする。
                 summary_warning="" if step_summary else current.summary_warning,
             )
+    # 採用した回の推導の審査がすべて済んだ後に、論理が valid な推導ごとに説明の段を 1 回呼ぶ（#4393）。
+    # 監査の型（none / standard / detailed）と当てはめの段で同じ。説明の失敗は説明だけを隠し、結論と原文は残す。
+    if current.applications:
+        with _execution_step(
+            "資料をもとに導いた結論の説明を作る", "質問と資料の原文から、結論の導き方を利用者に示す説明を作ります。"
+        ) as explanation_step:
+            explanation_step.input({"question": question, "applications": len(current.applications)})
+            explanation = explain_applications(
+                question,
+                current.applications,
+                getattr(current.draft, "response_language", None),
+                parse_text=parse_text_response,
+                settings=generation_settings,
+                provider_id=provider,
+                row_conditions=row_result,
+            )
+            current.timing["application_explanation"] = explanation
+            explanation_step.output(explanation)
+            shown_count = sum(1 for row in explanation.get("results", []) if row.get("status") == "confirmed")
+            if not explanation["calls"]:
+                reason = next((str(row.get("reason")) for row in explanation.get("results", []) if row.get("reason")), "")
+                explanation_step.skip("説明を作らず、結論と資料の原文だけを示します。", reason_code=reason or "no_valid_derivations")
+            else:
+                explanation_step.result(f"説明 {explanation['calls']} 件を作成、表示 {shown_count} 件")
     if image_decision["reason"] == "attempted":
         image_decision["reason"] = (
             "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
@@ -3988,8 +4053,12 @@ def synthesize_grounded_answer(
             r.get("timing", {}).get("generation_calls", 1)
             + r.get("audit_calls", int(bool(r.get("audit"))))
             + r.get("timing", {}).get("application_review", {}).get("calls", 0)
+            # 論理が valid な推導ごとの説明の段（#4393）。
+            + r.get("timing", {}).get("application_explanation", {}).get("calls", 0)
             for r in rounds
-        ),
+        )
+        # 表の行の判定の段（#4349。回答ごとに 1 回）。
+        + (row_result.calls if row_result is not None else 0),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
         "procedure_quotes": dict(current.timing.get("procedure_quotes") or {}),
@@ -4001,6 +4070,8 @@ def synthesize_grounded_answer(
         # 規則を質問の事実に当てはめた結果と、検査・監査で公開しなかった理由（#2155）。
         "applications": [application.to_payload() for application in current.applications],
         "application_step": application_step,
+        # 送った根拠の表の行の判定（#4349。投影できる表があったときだけ）。
+        **({"row_conditions": row_result.trace()} if row_result is not None else {}),
         # 「回答に未反映の関連章節」に出さなかった章節と、行の上限でまとめた数（#2828）。
         **({"unread_sections": unread_view.to_payload()} if unread_view.hidden or unread_view.overflow else {}),
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。

@@ -2,16 +2,39 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from copy import deepcopy
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
+from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, _unit_coverage_type
-from rag_engine.models.llm import MAX_ANSWER_PARTS, GroundedCitation, GroundedDraft
+from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
+
+# 質問の種類（question_type）の閉じた語彙（#4586）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の記載で
+# 答えられる種類を分ける。種類の判定はモデルの構造化出力だけが行い、コードは値の集合を比べるだけで語の意味を読まない。
+DERIVATION_QUESTION_TYPES = ("calculation", "classification", "condition_check")
+STATED_QUESTION_TYPES = ("fact", "definition", "procedure", "comparison", "other")
+QUESTION_TYPE_DESCRIPTION = (
+    "質問が求める答えの種類（複数可）。calculation=値の計算・集計、classification=値や条件から区分・等級を決める、"
+    "condition_check=質問の事実を規則の条件に当てはめて可否・該当を決める、fact=資料に書かれた事実・値、"
+    "definition=語・項目の意味、procedure=手順・操作、comparison=複数の対象の比較、other=それ以外。"
+)
+
+# source 型だけの出力を作り直すときに、生成の user の入力の後ろへ足す部品（#4586）。何が違反でどう直すかだけを書く。
+# 既定の user の入力（Step 5 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
+SOURCE_ONLY_DERIVATION_PROMPT = (
+    "## Step 6: 導出が要る要求の要点を作り直す\n"
+    f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
+    "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
+    "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
+    "導くのに足りない資料・値は gap 型に書く。\n"
+    "- 応答 schema どおりの完全な草稿を返す。\n"
+)
 
 
 def _answer_before_coverage(schema: dict[str, Any]) -> None:
@@ -23,13 +46,27 @@ def _answer_before_coverage(schema: dict[str, Any]) -> None:
         schema["required"] = [name for name in properties if name in schema["required"]]
 
 
-def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[BaseModel]:
-    """原文の選択と方法・結果を要点ごとに組にし、根拠不足はgapで受ける。"""
+def answer_parts_model(
+    base: type[BaseModel], catalog: SentUnitCatalog, *, direct_source: bool = True, requirements: Collection[str] = ()
+) -> type[BaseModel]:
+    """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。
+
+    ``direct_source=False`` は source 型を受けない契約（導出が要る質問で要点がすべて source だった出力の作り直し。
+    #4586）。原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
+    ``requirements`` を渡すと、要点の requirement はその文の写しだけを受ける（作り直しでは 1 回目の出力の要点の文。
+    不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
+    """
     source = catalog.selection_model()
+    direct = create_model(
+        "SourceAnswerPart",
+        __config__=ConfigDict(extra="forbid"),
+        kind=(cast(Any, Literal["source"]), Field(description="basis の原文をそのまま答えとして示す。")),
+        basis=(source, Field(description="答えとして示す原文の単位だけ。")),
+    )
     derived = create_model(
         "SupportedAnswerPart",
         __config__=ConfigDict(extra="forbid"),
-        kind=(Literal["answer"], Field(description="引用の根拠に基づく答え。")),
+        kind=(cast(Any, Literal["answer"]), Field(description="原文と既知値から計算・条件適用・組合せで導く答え。")),
         basis=(source, Field(description="導出に使う資料の事実・規則の原文。")),
         reasoning=(str, Field(min_length=1, max_length=600, description="依存する原文と既知値から導く方法。計算は算式で表す。")),
         result=(str, Field(min_length=1, max_length=600, description="reasoning から導いた、この要点への最終的な答え。途中の値ではない。")),
@@ -37,7 +74,7 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
     gap = create_model(
         "GapAnswerPart",
         __config__=ConfigDict(extra="forbid"),
-        kind=(Literal["gap"], Field()),
+        kind=(cast(Any, Literal["gap"]), Field()),
         text=(str, Field(min_length=1, max_length=600, description="必要な資料・値・前提のうち不足するもの。")),
     )
     part = create_model(
@@ -45,13 +82,19 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
         __config__=ConfigDict(extra="forbid"),
         request_id=(str, Field(description="元の request_units の id。背景は答えない。")),
         requirement=(
-            str,
-            Field(
+            cast(Any, Literal)[tuple(dict.fromkeys(requirements))] if requirements else str,
+            Field(description="前回の出力の要点の requirement から、この要点で答える要求をそのまま選ぶ。")
+            if requirements
+            else Field(
                 min_length=1, max_length=600, description="この要点で答える質問の要求。必要な粒度で複合要求を分け、任意補足を必須にしない。"
             ),
         ),
-        answer=(Union.__getitem__((derived, gap)) if catalog.unit_ids else gap, Field()),
+        answer=(
+            cast(Any, Union.__getitem__((direct, derived, gap) if direct_source else (derived, gap)) if catalog.unit_ids else gap),
+            Field(),
+        ),
     )
+    question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),
         "summary_part_indexes": (
@@ -64,6 +107,14 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
         "summary_item_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         "request_coverage": (GenericAlias(list, _unit_coverage_type(catalog)), deepcopy(base.model_fields["request_coverage"])),
+        "question_type": (
+            GenericAlias(list, question_types),
+            Field(
+                default_factory=list,
+                max_length=len(DERIVATION_QUESTION_TYPES) + len(STATED_QUESTION_TYPES),
+                description=QUESTION_TYPE_DESCRIPTION,
+            ),
+        ),
     }
     if base.model_fields["request_coverage"].exclude:
         fields["request_coverage"] = (SkipJsonSchema[list[Any]], Field(default_factory=list, exclude=True))
@@ -78,6 +129,24 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
     return model
 
 
+def source_only_derivation(value: BaseModel) -> list[str]:
+    """導出が要る種類を question_type で宣言した出力で、要点がすべて source 型なら、その要求 ID を返す（#4586）。
+
+    source 型は原文の提示だけで、質問の既知値を当てはめた答えを持たない。モデル自身が計算・区分・条件の当てはめの
+    質問と宣言したのに導出（answer 型）も不足（gap 型）も無い出力は、自分の宣言と矛盾し、質問に答えていない。
+    比べるのは閉じた語彙の値と要点の型だけで、質問・原文の語の意味は読まない。
+    """
+    if not getattr(type(value), "_uses_typed_answer_parts", False):
+        return []
+    raw = value.model_dump(exclude_unset=True)
+    if not set(raw.get("question_type") or ()) & set(DERIVATION_QUESTION_TYPES):
+        return []
+    parts = raw.get("answer_parts") or []
+    if not parts or any(part["answer"]["kind"] != "source" for part in parts):
+        return []
+    return list(dict.fromkeys(str(part["request_id"]) for part in parts))
+
+
 def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
     """実際に選んだ出典と一致する位置だけの括弧を、既存の出典表示へ一本化する。"""
     citations = [
@@ -90,10 +159,75 @@ def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
     return cleaned.text
 
 
+def _formal_text(text: str) -> str:
+    """空白（改行・全角空白を含む）だけを除く。表記・語の意味は変えない。"""
+    return "".join(text.split())
+
+
+def _copies_one_original(result: str, selected: list[BoundUnitRange]) -> bool:
+    """導出の結果が、選んだ1つの原文範囲の写しだけで成り立つかを形式で確かめる。
+
+    次をすべて満たすときだけ真にする（文字列の包含の検査で、語の意味は判定しない）。
+    1. basis が1つの文書の連続した1範囲だけを選ぶ（ほかの原文を前提・条件に使っていない）。
+    2. 空白を除いた結果が、空白を除いたその範囲の原文に含まれる。
+    3. 範囲の両端の単位を外すと含まれなくなる（写しに要らない単位を選んでいない）。
+    結果が原文に無い計算・組合せ・条件の当てはめは 2 を満たさず、導出のまま独立の検証を通る。
+    """
+    if len(selected) != 1:
+        return False
+    target = _formal_text(result)
+    binding = selected[0]
+    if not target or target not in _formal_text(binding.text):
+        return False
+    if binding.first == binding.last:
+        return True
+    narrower = (
+        BoundUnitRange(binding.snapshot, binding.first + 1, binding.last),
+        BoundUnitRange(binding.snapshot, binding.first, binding.last - 1),
+    )
+    return all(target not in _formal_text(candidate.text) for candidate in narrower)
+
+
+def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[str, Any]]) -> None:
+    """導出の要点に、依存する basis の原文の items を引用として結ぶ（結論の言い換えで条件が消えても原文を示す）。
+
+    引用は ID から切り出した原文の items だけで、結論の公開は従来どおり導出の独立の検証が決める。
+    同じ要求で直接の要点がすでに示す item は重ねない。要約の依存（summary_*_indexes）は変えない。
+    """
+    shown: dict[str, set[int]] = {}
+    for part in parts:
+        if part["result_kind"] == "direct":
+            shown.setdefault(part["request_id"], set()).update(part["item_indexes"])
+    limit = next((rule.max_length for rule in AnswerPart.model_fields["item_indexes"].metadata if isinstance(rule, MaxLen)), None)
+    for part in parts:
+        if part["result_kind"] != "derived" or not part["application_indexes"]:
+            continue
+        quotes = [
+            index
+            for app in part["application_indexes"]
+            for index in applications[app]["item_indexes"]
+            if index not in shown.get(part["request_id"], set())
+        ]
+        quotes = list(dict.fromkeys(quotes))
+        # 要点の参照の上限を超える選択は、引用を結ばずに従来の導出の形のままにする（本文の原文の節には残る）。
+        if limit is None or len(quotes) <= limit:
+            part["item_indexes"] = quotes
+
+
 def canonical_answer_parts(
-    value: BaseModel, catalog: SentUnitCatalog, coverage: list[dict[str, Any]], *, question: str | None = None
+    value: BaseModel,
+    catalog: SentUnitCatalog,
+    coverage: list[dict[str, Any]],
+    *,
+    question: str | None = None,
+    underived_requests: Collection[str] = (),
 ) -> GroundedDraft:
-    """選択原文とinlineの導出から、既存APIの草稿と全indexを生成する。"""
+    """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。
+
+    ``underived_requests`` は、導出が要るのに導出を作れなかった要求（``source_only_derivation`` の作り直しが契約を
+    満たさなかったとき。#4586）。その要求の source 型の要点は、原文を引用に残したまま導出の無い derived にし、
+    要約に使わない（``check_answer_parts`` が欠けた要点として不足の記載を足す）。原文の列挙を答えとして示さない。
+    """
     raw = value.model_dump(exclude_unset=True)
     wire_parts = raw.pop("answer_parts", [])
     summary_indexes = raw.pop("summary_part_indexes", [])
@@ -108,7 +242,13 @@ def canonical_answer_parts(
     for position, part in enumerate(wire_parts):
         answer = part["answer"]
         kind = answer["kind"]
+        if kind not in {"source", "answer", "gap"}:
+            raise ValueError("回答要点の役割を確認できません。")
         selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
+        if kind == "answer" and _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
+            # 原文の写しだけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
+            kind = "source"
+        underived = kind == "source" and part["request_id"] in underived_requests
         indexes = []
         for binding in selected:
             key = (part["request_id"], binding.snapshot.snapshot_id, binding.first, binding.last)
@@ -117,7 +257,7 @@ def canonical_answer_parts(
                 source_indexes[key] = index
                 items.append(
                     {
-                        "kind": kind if kind != "answer" else "rule",
+                        "kind": "rule",
                         "text": binding.text,
                         "request_id": part["request_id"],
                         "citations": [
@@ -150,22 +290,29 @@ def canonical_answer_parts(
             items.append({"kind": "gap", "request_id": part["request_id"], "text": answer["text"], "citations": []})
             bindings.append(None)
             text = answer["text"]
-        else:
+        elif underived:  # 導出が要るのに作れなかった要点。原文は引用に残し、答えの文は無い。
+            text = ""
+        else:  # source は選んだ原文だけを直接提示する。
             text = "\n".join(items[index]["text"] for index in indexes)
         parts.append(
             {
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "derived" if kind == "answer" else "gap",
+                "result_kind": "derived" if underived else "direct" if kind == "source" else "derived" if kind == "answer" else "gap",
                 "item_indexes": [] if kind == "answer" else indexes,
                 "application_indexes": app_indexes,
             }
         )
         texts.append(text)
-        part_sources.append(indexes if kind != "answer" else [])
+        part_sources.append(indexes if kind != "answer" and not underived else [])
         part_applications.append(app_indexes)
-    chosen = list(dict.fromkeys(index for index in summary_indexes if 0 <= index < len(parts) and parts[index]["result_kind"] != "gap"))
+    _attach_basis_quotes(parts, applications)
+    chosen = list(
+        dict.fromkeys(
+            index for index in summary_indexes if 0 <= index < len(parts) and texts[index] and parts[index]["result_kind"] != "gap"
+        )
+    )
     raw.update(
         items=items,
         applications=applications,

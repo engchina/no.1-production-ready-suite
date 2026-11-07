@@ -86,6 +86,16 @@ def answer_text_from_projection(
     return body if parent else (index_text or body)
 
 
+class InvalidVisionProjectionError(ValueError):
+    """保存された画像本文の投影が不正（空・破損・本文と不一致）。文書の再解析・再分割が要る。
+
+    文は利用者に見せてよい（``safe_for_user``）。取込の job には汎用の失敗の文ではなく、この文を
+    残す。投影は推測で直さず、不正のまま分割・検索に使わない。
+    """
+
+    safe_for_user = True
+
+
 # 例外の文に名前を示す文書の上限（多いときは残りを件数で示す）。
 UNPROJECTED_VISION_DOCUMENTS_SHOWN = 10
 

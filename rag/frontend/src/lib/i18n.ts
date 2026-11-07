@@ -1115,7 +1115,7 @@ export const ja = {
   "settings.language.field.cause_gap": "原因が無いときの説明",
   "settings.language.field.cause_gap.help": "原因を尋ねる質問で、資料に原因の記載が無いときの説明です。",
   "settings.language.field.subject_unconfirmed_gap": "対象を確認できない記載",
-  "settings.language.field.subject_unconfirmed_gap.help": "質問が問うた対象の名前が引用した資料に無いとき、回答に足す文です。{names} に対象の名前が入ります。",
+  "settings.language.field.subject_unconfirmed_gap.help": "質問の対象の名前（問い・前提・例のどれでも）が引用した資料に無いとき、回答に足す文です。{names} に対象の名前が入ります。",
   "settings.language.field.crag_refusal_summary": "CRAG の根拠未確認の前置き",
   "settings.language.field.crag_refusal_summary.help": "直接回答できる部分がない場合に示す前置きです。",
   "settings.language.field.crag_missing_aspect_template": "CRAG の不足した観点の案内",
@@ -4362,11 +4362,14 @@ export const ja = {
   "settings.answerPrompts.stage.generation": "回答の生成",
   "settings.answerPrompts.stage.generation.condition":
     "検索した根拠から回答を生成するとき。検索だけの実行、回答前の確認、登録済みQ&Aの経路では使いません",
+  "settings.answerPrompts.stage.question_subjects": "質問の対象の抽出",
+  "settings.answerPrompts.stage.question_subjects.condition":
+    "回答の説明・要約と品質評価で、質問が問うた対象の名前を引用した資料に照らすとき（根拠を引用した回答で毎回）",
   "settings.answerPrompts.stage.audit": "回答の監査",
   "settings.answerPrompts.stage.audit.condition": "生成後の LLM 監査を有効にしたとき（既定は無効）。業務ガイドの下書きの試答では詳細な監査を使います",
   "settings.answerPrompts.stage.application": "規則の当てはめ",
   "settings.answerPrompts.stage.application.condition":
-    "生成後の LLM 監査が有効で、結論が中立のまま、質問の事実と引用で裏付けた規則があるときに補助の当てはめと監査を行います。生成時の applications は回答生成の指示で扱います",
+    "生成後の LLM 監査が有効で、結論が中立のまま、質問の事実と引用で裏付けた規則があるときに補助の当てはめと監査を行います。生成時の applications は回答生成の指示で扱います。生成後の LLM 監査を使わない設定では、導いた結論を独立の監査で判定し、判定ごとに利用者に示す理由を別に書きます。どちらの場合も、導いた結論が表の原文を使うときは、その前に表の各行の条件が質問から成り立つかを行ごとに判定し、決められない行があれば表から導く結論を確定として出しません",
   "settings.answerPrompts.stage.evaluation": "回答の品質評価",
   "settings.answerPrompts.stage.evaluation.condition":
     "品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります",
@@ -4385,6 +4388,9 @@ export const ja = {
   "settings.answerPrompts.part.coverage": "標準回答の比較項目の網羅の判定",
   "settings.answerPrompts.part.claim": "回答の段落ごとの、出典の根拠による裏付けの判定",
   "settings.answerPrompts.part.instruction": "指示",
+  "settings.answerPrompts.part.extraction": "質問の中の名前の範囲と種別を選ぶ指示",
+  "settings.answerPrompts.part.role":
+    "各名前を、その文が問うているか・前提として述べたか・例として挙げたかで分ける指示",
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.rules": "共通の読み取り指示",
@@ -4393,6 +4399,11 @@ export const ja = {
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
   "settings.answerPrompts.part.auditSystem": "監査の システムプロンプト",
+  "settings.answerPrompts.part.reasonSystem": "監査の判定の理由を書く システムプロンプト",
+  "settings.answerPrompts.part.rowTypeSystem":
+    "表の各行の条件の種類と時点を読み取る システムプロンプト（推導に使う表があるときだけ）",
+  "settings.answerPrompts.part.rowJudgeSystem":
+    "表の各行の時点以外の条件が質問から成り立つか判定する システムプロンプト（推導に使う表があるときだけ）",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
   "settings.answerPrompts.part.citationRepair":
@@ -4405,6 +4416,7 @@ export const ja = {
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
   "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（生成後の回答確認が標準・詳細で、この設定が有効かつ生成が条を引かなかったときだけ）",
+  "settings.answerPrompts.part.sourceOnlyDerivation": "計算・区分・条件の当てはめの質問と宣言したのに、要点がすべて原文の提示だった回答を作り直すとき、回答生成の入力の後ろに足す指示（1 回だけ）",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
@@ -4504,6 +4516,16 @@ export const ja = {
   "settings.answering.auditModeHint.none": "全回答の診断と最終回答の資料照合は行いません。資料をもとに導いた結論がある場合は、最終候補の結論だけをまとめて AI で確認します。資料の値をそのまま答える場合も、生成した説明があれば確認対象です。引用の ID・行範囲・原文との照合と決定的な検査は続けます。明確な表の矛盾などは既存の局部修正を行い、実値の断定や、確認前の条件を仮定して答える設定での過剰な拒答は最大 1 回是正します。",
   "settings.answering.auditModeHint.standard": "主張の支持と、要求・業務ガイドの要件を診断します。未校正の意味判定による自動是正は行いません。基本検査による救済の是正予算は最大 1 回、生成は初回を含め最大 2 回の上限を維持します。",
   "settings.answering.auditModeHint.detailed": "標準の診断に加えて未使用の根拠も調べ、結果を確認用に記録します。意味判定や説明の抜けの診断だけでは作り直しません。基本検査による救済の是正予算は最大 2 回、初回の生成を含め合計最大 3 回の上限を維持します。",
+  "settings.answering.questionSubjectRoleModel": "質問の対象の役割を判定するモデル",
+  "settings.answering.questionSubjectRoleModelHint": "回答の要約・説明に書いた質問の対象の名前を資料と照合する前に、その名前が問い・前提・例のどれかを判定するモデルです。モデル設定に登録したモデルから選びます。対象の名前がある質問だけで、回答ごとに 1 回呼びます。品質評価の照合も同じモデルを使います。",
+  "settings.answering.rowConditionModel": "表の行の条件を当てはめるモデル",
+  "settings.answering.rowConditionModelHint": "根拠として送った資料の表の各行の条件が、質問の内容から成り立つかを行ごとに判定するモデルです。モデル設定に登録したモデルから選びます。表を送った回答だけで呼びます。推論の量はこの段の設定（既定 low）です。",
+  "settings.answering.applicationAuditModel": "導いた結論を判定するモデル",
+  "settings.answering.applicationAuditModelHint": "回答で資料をもとに導いた結論が、選んだ原文と質問の条件から導けるかを判定するモデルです。モデル設定に登録したモデルから選びます。AIによる確認が「実行しない」のときに、導いた結論がある回答だけで 1 回呼びます。",
+  "settings.answering.applicationReasonModel": "判定の理由を書くモデル",
+  "settings.answering.applicationReasonModelHint": "導いた結論の判定が決まったあと、利用者に示す理由の文を書くモデルです。モデル設定に登録したモデルから選びます。判定の結果は変えません。導いた結論ごとに 1 回呼びます。",
+  "settings.answering.stepModel.sameAsAnswer": "回答のモデルと同じ",
+  "settings.answering.stepModel.unavailable": "{model}（登録を確認できません）",
   "settings.answering.auditBudgetHint": "是正回数の設定と共有の時間予算によって、実際の回数は減ります。引用範囲などの基本検査による救済は続けます。業務ガイドの下書きの試答は常に詳細で診断し、未校正の意味判定は自動採用しません。",
   "settings.answering.requestCoverage": "根拠の無い要求を探し直す",
   "settings.answering.requestCoverageHint": "回答生成が明示した根拠不足の要求を、回数・時間の予算内で補助検索します。初回検索の「質問の言い換え・分解」とは別の処理です。元の要求の文や登録済みの別名で未実行の検索文を作れない場合は、自動ルーティング（自動選択）で追加の検索文を作ります。この自動選択には「原質問のみ（言い換え・分解なし）」を含めないため、初回に「原質問のみ」を選んだ場合も AI の呼び出しが増えることがあります。既にある根拠での説明漏れを材料不足とは扱わず、未校正の意味監査の結果だけでは追加検索や再生成を行いません。",

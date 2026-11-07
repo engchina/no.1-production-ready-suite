@@ -22,10 +22,11 @@ def check_answer_parts(
         derived = [applications[index] if 0 <= index < len(applications) else None for index in part.application_indexes]
         valid_id = part.request_id in request_ids and counts[part.id] == 1
         if part.result_kind == "derived":
+            # 導出の item_indexes は、結論の隣に示す basis の原文の引用。結論の公開は導出の検証だけが決める。
             present = (
                 bool(derived)
-                and not direct
                 and all(entry is not None and entry.published and entry.application.request_id == part.request_id for entry in derived)
+                and all(entry is not None and entry.item.request_id == part.request_id and entry.item.kind != "gap" for entry in direct)
             )
         else:
             present = (

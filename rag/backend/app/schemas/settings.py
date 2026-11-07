@@ -747,6 +747,13 @@ class AnswerPromptUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
 
 
+class AnsweringModelChoice(BaseModel):
+    """回答の設定で選べる登録モデル(接続情報を含まない)。"""
+
+    model_id: str
+    display_name: str
+
+
 class AnsweringSettingsData(BaseModel):
     """回答の検索と生成の全体既定(回答エンジン。#593)。
 
@@ -781,6 +788,13 @@ class AnsweringSettingsData(BaseModel):
     section_expansion_max_levels: int
     section_expansion_input_token_percent: int
     graph_expansion_enabled: bool
+    # 段ごとのモデル(空は回答のモデル): 質問の対象の名前の役割の判定(#4351)、表の行の条件の当てはめ
+    # (#4349)、推導の監査の判定(#4565)と理由(#4564)。選べる登録モデルは段で同じ。
+    question_subject_role_model: str = ""
+    row_condition_model: str = ""
+    application_audit_model: str = ""
+    application_reason_model: str = ""
+    step_model_choices: list[AnsweringModelChoice] = Field(default_factory=list)
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -826,6 +840,11 @@ class AnsweringSettingsUpdate(BaseModel):
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
+    # 段ごとのモデル。空は回答のモデル。登録モデルの ID だけを受ける(route で確かめる)。
+    question_subject_role_model: str | None = Field(default=None, max_length=256)
+    row_condition_model: str | None = Field(default=None, max_length=256)
+    application_audit_model: str | None = Field(default=None, max_length=256)
+    application_reason_model: str | None = Field(default=None, max_length=256)
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

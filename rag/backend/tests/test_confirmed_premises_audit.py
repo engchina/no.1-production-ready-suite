@@ -107,8 +107,12 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     calls: list[str] = []
     audit_inputs: list[dict[str, Any]] = []
 
+    subject_calls: list[str] = []
+
     def parser(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        calls.append(schema.__name__)
+        # 質問の対象の抽出(#4351)は別に数える(回答ごとに 1 回)。
+        name = getattr(schema, "canonical_schema", schema).__name__
+        (subject_calls if name == "QuestionMentionAnchors" else calls).append(name)
         if is_audit_schema(schema):
             data = json.loads(prompt)
             audit_inputs.append(data)
@@ -185,12 +189,15 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     for engine in (first, second):
         outcome = await engine.run(SearchRequest(query=QUESTION))
         assert "登録ボタン" in outcome.answer
+    assert len(subject_calls) == 2
     generation_names = {GroundedDraft.__name__, generation_draft_wire_model().__name__}
     assert sum(name in generation_names for name in calls) == 2
     if mode == "none":
         assert not audit_inputs
-        assert len(calls) == 4
-        assert calls.count("ApplicationAudit") == 2
+        # 共通桩は原文の写しを返すので、要点は選んだ ID の原文の直接の記載になり、
+        # 導出の独立の監査（判定・理由）と推導の説明の段は呼ばない。生成だけを各要求で 1 回ずつ。
+        assert len(calls) == 2
+        assert not {"ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"} & set(calls)
         validator.assert_not_awaited()
     else:
         assert len(audit_inputs) == 2

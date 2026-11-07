@@ -15,6 +15,7 @@ from pydantic import (
     ModelWrapValidatorHandler,
     PrivateAttr,
     StrictInt,
+    ValidationError,
     create_model,
     field_validator,
     model_validator,
@@ -592,6 +593,39 @@ class AnswerPart(_StrictModel):
     )
 
 
+class DefaultResponseLanguage(_StrictModel):
+    kind: Literal["default"] = Field(default="default", description="原質問に回答言語の明示指定が無い。")
+
+
+class ExplicitResponseLanguage(_StrictModel):
+    kind: Literal["explicit"] = Field(default="explicit", description="原質問に回答言語の明示指定がある。")
+    quote: str = Field(
+        min_length=1,
+        description="原質問で回答言語を指定している語句だけを、連続した原文のまま写す。言語コードへの変換や、原質問に無い言語名の追加はしない。",
+    )
+
+
+class ResponseLanguage(_StrictModel):
+    """回答言語の指定原文または指定なしを、一度だけ次段へ渡す。"""
+
+    invalid: SkipJsonSchema[bool] = False
+
+    selection: DefaultResponseLanguage | ExplicitResponseLanguage = Field(
+        default_factory=DefaultResponseLanguage,
+        discriminator="kind",
+        description="回答言語の明示指定だけを原質問から選ぶ。質問本文・引用原文・SQLが何語で書かれたかの分類ではない。",
+    )
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _isolate_language_error(cls, data: Any, handler: ModelWrapValidatorHandler[ResponseLanguage]) -> ResponseLanguage:
+        """表示言語の不正だけで、生成済みの事実や推導を捨てない。"""
+        try:
+            return handler(data)
+        except ValidationError:
+            return cls.model_construct(selection=DefaultResponseLanguage(), invalid=True)
+
+
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
 
@@ -603,6 +637,10 @@ class GroundedDraft(_StrictModel):
     _citation_snapshots: tuple[Any, ...] = PrivateAttr(default=())
     # 新wireの摘要は既出出力の選択だけ。依存が非公開になれば機械的に保留する。
     _composed_summary: bool = PrivateAttr(default=False)
+
+    response_language: ResponseLanguage = Field(
+        default_factory=ResponseLanguage, description="最初に決めた回答言語。次段はこの契約を保持する。"
+    )
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
@@ -811,6 +849,8 @@ class GroundedApplicationReview(_StrictModel):
 class ApplicationDraft(_StrictModel):
     """規則の当てはめだけを作る段の出力（#2159）。結論の文は当てはめと規則でつないだものだけ。"""
 
+    response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
+
     applications: list[GroundedApplication] = Field(
         default_factory=list,
         max_length=MAX_ANSWER_PARTS,
@@ -830,6 +870,29 @@ class ApplicationAudit(_StrictModel):
     summary_supported: bool = Field(
         description="summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。"
     )
+
+
+# 推導の独立監査（application_review.review_applications）だけが使う判定の型（#4471）。
+# GroundedApplicationReview の reason を同じ位置で basis_evidence_ids に置き換え、ほかの欄・説明・順序は同じにする
+# （docstring は schema の description として渡るため、検証した版のまま変えない）。表示の理由は別の段
+# （application_reason）が日本語だけの入力から作る。
+class ApplicationVerdict(_StrictModel):
+    """1 つの当てはめの監査（#2155）。"""
+
+    index: int = Field(description=GroundedApplicationReview.model_fields["index"].description)
+    valid: bool = Field(description=GroundedApplicationReview.model_fields["valid"].description)
+    basis_evidence_ids: list[str] = Field(description="判定に使った documents の evidence_id。")
+
+
+class ApplicationVerdictAudit(_StrictModel):
+    """当てはめの段の監査（#2159）。"""
+
+    application_reviews: list[ApplicationVerdict] = Field(
+        default_factory=list,
+        max_length=MAX_ANSWER_PARTS,
+        description=ApplicationAudit.model_fields["application_reviews"].description,
+    )
+    summary_supported: bool = Field(description=ApplicationAudit.model_fields["summary_supported"].description)
 
 
 class MissingContentEvidence(_StrictModel):

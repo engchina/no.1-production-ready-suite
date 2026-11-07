@@ -1,0 +1,95 @@
+{
+  "description": "#4393 v7 の説明の段の実モデルの応答の記録（合成の題。モデルへの入力は質問・資料の原文・明示の言語指定だけ）。CI は記録の再生だけで、実サービスを呼ばない。",
+  "cases": [
+    {
+      "name": "multiple_rows-r1",
+      "question": "項目Aを3個、項目Bを2個利用する合計額を教えてください。",
+      "sources": [
+        "項目Aの単価は800円です。項目Bの単価は500円です。"
+      ],
+      "instruction": null,
+      "conclusion": "3400円",
+      "recorded_explanation": "項目Aの単価は800円、項目Bの単価は500円です。項目Aを3個利用すると 3 × 800円 = 2400円、項目Bを2個利用すると 2 × 500円 = 1000円です。合計額は 2400円 + 1000円 = 3400円 となります。",
+      "usage": {
+        "input_tokens": 305,
+        "output_tokens": 139
+      },
+      "expected_status": "confirmed"
+    },
+    {
+      "name": "multiple_rows-r2",
+      "question": "項目Aを3個、項目Bを2個利用する合計額を教えてください。",
+      "sources": [
+        "項目Aの単価は800円です。項目Bの単価は500円です。"
+      ],
+      "instruction": null,
+      "conclusion": "3400円",
+      "recorded_explanation": "項目Aは1個800円、項目Bは1個500円です。項目Aを3個利用すると 3 × 800円 = 2400円、項目Bを2個利用すると 2 × 500円 = 1000円です。合計額は 2400円 + 1000円 = 3400円 です。",
+      "usage": {
+        "input_tokens": 305,
+        "output_tokens": 136
+      },
+      "expected_status": "confirmed"
+    },
+    {
+      "name": "multiple_rows-r3",
+      "question": "項目Aを3個、項目Bを2個利用する合計額を教えてください。",
+      "sources": [
+        "項目Aの単価は800円です。項目Bの単価は500円です。"
+      ],
+      "instruction": null,
+      "conclusion": "3400円",
+      "recorded_explanation": "項目Aは1個800円、項目Bは1個500円です。項目Aを3個利用すると 3 × 800円 = 2400円、項目Bを2個利用すると 2 × 500円 = 1000円です。合計額は 2400円 + 1000円 = 3400円 です。",
+      "usage": {
+        "input_tokens": 305,
+        "output_tokens": 136
+      },
+      "expected_status": "confirmed"
+    },
+    {
+      "name": "quote_sql-r1",
+      "question": "SyntheticFeature の確認方法を日本語で説明し、資料に記載されたSQLを原文のまま示してください。",
+      "sources": [
+        "SyntheticFeature の確認には次のSQLを実行します。SELECT COUNT(*) FROM SYNTHETIC_ITEMS;"
+      ],
+      "instruction": null,
+      "conclusion": "SyntheticFeature の確認には次の SQL を実行します。SELECT COUNT(*) FROM SYNTHETIC_ITEMS;",
+      "recorded_explanation": "SyntheticFeature を確認するには、資料に記載されている通り次の SQL を実行します。\n```\nSELECT COUNT(*) FROM SYNTHETIC_ITEMS;\n```",
+      "usage": {
+        "input_tokens": 309,
+        "output_tokens": 81
+      },
+      "expected_status": "confirmed"
+    },
+    {
+      "name": "japanese_control-r1",
+      "question": "項目Aを2個利用する合計額を日本語で教えてください。",
+      "sources": [
+        "項目Aの単価は1200円です。"
+      ],
+      "instruction": "項目Aを2個利用する合計額を日本語で教えてください。",
+      "conclusion": "2400円",
+      "recorded_explanation": "資料の原文によると、項目Aの単価は1200円です。2個利用する場合の合計額は、単価1200円 × 個数2 = 2400円 となります。したがって、項目Aを2個利用する合計額は2400円です。",
+      "usage": {
+        "input_tokens": 352,
+        "output_tokens": 116
+      },
+      "expected_status": "confirmed"
+    },
+    {
+      "name": "explicit_english-r1",
+      "question": "項目Aを3個、項目Bを2個利用する合計額を教えてください。Explain the calculation in English.",
+      "sources": [
+        "項目Aの単価は800円です。項目Bの単価は500円です。"
+      ],
+      "instruction": "English.",
+      "conclusion": "The total amount is 3,400 yen.",
+      "recorded_explanation": "The total amount is calculated by multiplying the quantity of each item by its unit price and then adding the results.\n\n- Item A: 3 units × 800 yen = 2400 yen\n- Item B: 2 units × 500 yen = 1000 yen\n\nTotal = 2400 yen + 1000 yen = 3400 yen.\n\nTherefore, the combined cost for 3 units of Item A and 2 units of Item B is 3400 yen.",
+      "usage": {
+        "input_tokens": 354,
+        "output_tokens": 161
+      },
+      "expected_status": "confirmed"
+    }
+  ]
+}

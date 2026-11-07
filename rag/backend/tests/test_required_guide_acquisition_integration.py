@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
-from rag_engine.models.llm import ApplicationAudit
+from rag_engine.generation.application_explanation import is_explanation_schema
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
@@ -18,6 +18,7 @@ from app.rag.pipeline import RagPipeline
 from app.rag.support_guide_runtime import guide_step_plan, match_guide
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from app.schemas.support_guide import SupportGuideContent
+from tests._ai_stubs import application_audit_reply
 from tests.generation_fixtures import generation_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _doc_chunk
 
@@ -109,15 +110,19 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert [step["id"] for step in compiled] == ["common"]
     guide = {**match.summary(), "step_plan": compiled}
     calls: list[tuple[str, str]] = []
+    explanations: list[str] = []
 
     def model(
         system: str, prompt: str, settings: Any, schema: type[BaseModel], **options: Any
     ) -> Any:
-        if schema is ApplicationAudit:
-            return schema(
-                application_reviews=[{"index": 0, "valid": True, "reason": "合成の原文対応"}],
-                summary_supported=True,
-            )
+        if is_explanation_schema(schema):
+            explanations.append(prompt)
+            return schema.model_validate({"explanation": "資料の原文に記載された手順です。"})
+        if (reply := application_audit_reply(schema, prompt)) is not None:
+            return reply
+        if schema.__name__ == "QuestionMentionAnchors":
+            # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い。
+            return cast(Any, schema).model_validate({"mentions": []})
         calls.append((schema.__name__, prompt))
         assert schema.__name__.endswith("GroundedDraftWire"), "生成以外のモデル呼び出しは禁止"
         evidence_id = re.findall(r"\[(E[0-9]+)\]", prompt[: prompt.index(BODY)])[-1]
@@ -185,7 +190,7 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert rows[0]["retained_body_chars"] > 0
     assert rows[1]["execution"] == "not_run" and rows[1]["reason"] == "required_budget_exhausted"
     assert acquisition["incomplete_step_ids"] == ["common"]
-    assert len(calls) == 1
+    assert len(calls) == 1 and len(explanations) <= 1
     assert "guide_acquisition:" in calls[0][1] and "incomplete_ref_count" in calls[0][1]
     assert "required_budget_exhausted" in calls[0][1]
     assert BODY in outcome.answer

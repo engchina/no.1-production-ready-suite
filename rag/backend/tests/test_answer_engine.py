@@ -8,12 +8,12 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.application_explanation import KEY_SOURCES, is_explanation_schema
 from rag_engine.generation.citation_wire import (
     generation_draft_wire_model,
     guided_generation_wire_model,
 )
 from rag_engine.models.llm import (
-    ApplicationAudit,
     CragRetrievalGradeOutput,
     GroundedDraft,
     QueryExpansionOutput,
@@ -27,6 +27,7 @@ from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests._ai_stubs import application_audit_reply
 from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 
 PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
@@ -172,15 +173,15 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    if schema is ApplicationAudit:
-        data = json.loads(prompt)
-        return schema(
-            application_reviews=[
-                {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
-                for row in data["applications"]
-            ],
-            summary_supported=True,
-        )
+    if schema.__name__ == "QuestionMentionAnchors":
+        # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
+        return cast(Any, schema).model_validate({"mentions": []})
+    if is_explanation_schema(schema):
+        # 推導の説明の段（#4393）。入力の資料の原文だけから説明を返す。
+        sources = json.loads(prompt)[KEY_SOURCES]
+        return schema.model_validate({"explanation": "資料の原文によると、" + " ".join(sources)})
+    if (reply := application_audit_reply(schema, prompt)) is not None:
+        return reply
     if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)
         ids = [item["evidence_id"] for item in data["evidence"]]
@@ -1011,11 +1012,17 @@ def _figure_oracle() -> FakeOracle:
     return oracle
 
 
+# 推導の監査の判定・理由の段のモデル(#4564・#4565)は回答のモデルのまま
+# (段のモデルは test_step_models で確かめる)。
+_ANSWER_MODEL_ONLY_STEPS = {"rag_application_audit_model": "", "rag_application_reason_model": ""}
+
+
 def _model_settings(**overrides: Any) -> Settings:
     """回答のモデルの候補: テキストだけのモデル 2 つと画像を読めるモデル 2 つ(既定の Vision)。"""
     values: dict[str, Any] = {
         "oci_enterprise_ai_default_text_model": "text-model",
         "oci_enterprise_ai_default_vision_model": "vision-model",
+        **_ANSWER_MODEL_ONLY_STEPS,
         **overrides,
     }
     return Settings(
@@ -1117,7 +1124,12 @@ async def test_answer_engine_attaches_evidence_images_for_vision_answer_model(
         (_model_settings(), "text-model-b", "text-model-b"),
         # 既定の Vision モデルが無い環境。
         (
-            Settings(_env_file=None, oci_enterprise_ai_default_text_model="text-model"),
+            Settings(
+                _env_file=None,
+                oci_enterprise_ai_default_text_model="text-model",
+                rag_application_audit_model="",
+                rag_application_reason_model="",
+            ),
             None,
             "text-model",
         ),
@@ -2386,6 +2398,51 @@ def test_build_engine_settings_passes_judge_latency_settings(tmp_path: Any) -> N
     assert model.crag_compact_input is True and model.section_skip_regrade_at_scope is True
 
 
+def test_build_engine_settings_passes_row_condition_step_model(tmp_path: Any) -> None:
+    """表の行の条件の当てはめの段のモデル・推論の量は段ごとの設定(#4349)。回答のモデルは変えない。"""
+    from rag_engine.config import ROW_CONDITION_LLM_PROVIDER
+
+    from app.rag.answer_engine import build_engine_settings
+
+    assert Settings().rag_row_condition_model == "xai.grok-4.7"
+    assert Settings().rag_row_condition_reasoning_effort == "low"
+    registered = Settings(
+        _env_file=None,
+        oci_enterprise_ai_default_text_model="text-model",
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="text-model", display_name="Text A"),
+            EnterpriseAiConfiguredModel(
+                model_id="xai.grok-4.7",
+                display_name="Step model",
+                reasoning_effort="high",
+                max_input_tokens=200000,
+            ),
+        ],
+    )
+    engine = build_engine_settings(registered, output_dir=tmp_path)
+    provider = engine.llm_providers[ROW_CONDITION_LLM_PROVIDER]
+    assert engine.row_condition_llm == ROW_CONDITION_LLM_PROVIDER
+    assert provider.model == "xai.grok-4.7" and provider.reasoning_effort == "high"
+    assert engine.row_condition_reasoning_effort == "low"
+    assert engine.row_condition_max_input_tokens == 200000
+    assert engine.llm_providers[engine.default_answer_llm].model == "text-model"
+
+    # 登録されていないモデルは接続を渡さない(段の provider は model だけ。段は実行せず、
+    # 回答のモデルへ切り替えない。段ごとのモデルの共通の仕組み)。
+    missing = build_engine_settings(_model_settings(), output_dir=tmp_path)
+    unregistered = missing.llm_providers[ROW_CONDITION_LLM_PROVIDER]
+    assert missing.row_condition_llm == ROW_CONDITION_LLM_PROVIDER
+    assert (unregistered.model, unregistered.base_url, unregistered.api_key) == (
+        "xai.grok-4.7",
+        "",
+        "",
+    )
+    model = build_engine_settings(
+        _model_settings(rag_row_condition_reasoning_effort="model"), output_dir=tmp_path
+    )
+    assert model.row_condition_reasoning_effort == ""
+
+
 def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None:
     """CRAG の評価の候補の短い ID(#1864。既定 ON)を rag_engine に渡す。"""
     from app.rag.answer_engine import build_engine_settings
@@ -2780,7 +2837,16 @@ async def test_evidence_retrieval_for_agent_stops_after_document_search(
     answer = response.diagnostics.answer or {}
     assert answer["answer_flow"] == "standard_rag"
     models = cast(dict[str, Any], answer["models"])
-    assert set(models) == {"llm", "attached_images", "embedding", "rerank"}
+    assert set(models) == {
+        "llm",
+        "question_subject_role",
+        "row_condition",
+        "application_audit",
+        "application_reason",
+        "attached_images",
+        "embedding",
+        "rerank",
+    }
     assert oracle.saved == []
 
 
@@ -2804,6 +2870,12 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
     outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
     assert outcome.diagnostics["models"] == {
         "llm": {"model_id": "model-a", "label": "Model A"},
+        # 質問の対象の役割の判定の段のモデル(#4351。既定の設定、登録の表示名が無ければ ID)。
+        "question_subject_role": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
+        # 表の行の条件の段(#4349)、推導の監査の判定(#4565)・理由(#4564)の段のモデル(既定)。
+        "row_condition": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
+        "application_audit": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
+        "application_reason": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
         "attached_images": 0,
         "embedding": settings.oci_genai_embedding_model,
         "rerank": "",

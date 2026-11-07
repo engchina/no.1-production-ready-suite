@@ -52,6 +52,7 @@ from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
 )
+from rag_engine.generation.answer_parts_wire import SOURCE_ONLY_DERIVATION_PROMPT, source_only_derivation
 from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_generation_model
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
@@ -80,7 +81,9 @@ from rag_engine.generation.guide_authority import authoritative_guide_inputs, bi
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
+from rag_engine.generation.question_subjects import QuestionSubjects, absent_question_names, unconfirmed_question_notices
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
+from rag_engine.generation.response_language import generation_language_schema
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.summary_projection import (
     APPLICATION_SUMMARY_WITHHELD,
@@ -92,7 +95,12 @@ from rag_engine.generation.summary_projection import (
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
-from rag_engine.knowledge.prompt_files import continue_prompt_steps, neutralize_boundary_markers
+from rag_engine.knowledge.prompt_files import (
+    VLM_ANSWER_PROMPT_KEY,
+    continue_prompt_steps,
+    neutralize_boundary_markers,
+    read_prompt,
+)
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
@@ -207,7 +215,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。各要点の basis で根拠を選び、方法と結果を組にして answer_parts へ書く。request_coverage に選択した根拠の関係を記録する。
+- 各項目の意味は応答 schema の説明に従う。request_coverage に選択した根拠の関係を記録する。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
 ### 出典の網羅
@@ -238,7 +246,7 @@ GENERATE_SYSTEM_PROMPT = (
 - どれかの段の根拠が無ければ、その段を kind=gap にし、最終の答えを断定しない（足りない段を推測で埋めない）。
 ### 要点ごとに答えを作る
 - answer_parts の各要点に request_id・requirement・answer を書く。要点と結果を別々に重複生成しない。
-- 根拠から答えられる要点は answer 型とし、basis に原文単位を選び、reasoning に方法、result に答えを書く。足りない要点だけ gap 型にする。
+- 根拠から答えられる要点は、原文の記載がそのまま答えになるなら source 型、原文から導くなら answer 型にする。足りない要点だけ gap 型にする。
 - 要件がすべて必要な規則は、既知の事実から1つの要件を満たさないと確定すれば不該当と判断できる。結論が未確認の事実で分かれる場合は external_data_items に確認対象を挙げる。
 - 必須根拠（pinned）は質問に適用できる限り選ぶ。直接記載の説明と資料間の接続を区別し、規則の対象・条件・否定・例外と質問の既知値を保持する。
 - 原文が別の制度・手続・対象に属する規則を使わない。利用者向けの文に内部番号を含めず、規則の中身の言葉を使う。
@@ -264,7 +272,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 機能・前提ごとに分ける手順 → 機能ごとに要点を分ける。見出しは書かない。
 ### 根拠が無い場合
 - 引用できる根拠が1つも無い場合は、各要点の answer を kind=gap にして冒頭の選択を空にする（根拠不足の案内文はシステムが表示する）。不足する範囲は gap に、確認すれば確定できる実データ・利用者に確かめる条件・別の資料は external_data_items / reference_materials に書く。
-- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば その原文を basis に選んだ answer にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。
+- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば その原文を basis に選んだ要点にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。
 - user message の「検索評価で未確認の観点」は、根拠があれば答え、無ければその観点の gap を書く。
 
 ## Step 5: 結論と整合を確認して JSON を返す
@@ -275,7 +283,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 応答 schema の件数と長さの範囲で、同じ根拠の同じ説明をまとめ、質問に必要な内容を優先する。
 ### summary と言語
 - 回答の冒頭へ示す要点を summary_part_indexes で選ぶ。新しい摘要の自由文は書かない。
-- result・reasoning・requirement・text は質問の回答指示（kind=context にある書き方の指示も含む）に従い、言語の指定がなければ質問と同じ言語で書く。引用原文と逐語で示す語句は原文の表記と言語のままにする。
+- result・reasoning・requirement・text は response_language の回答言語契約に従う。引用原文と逐語で示す語句は原文の表記と言語のままにする。
 """
 )
 
@@ -2172,6 +2180,7 @@ def verify(
     guide_sources: Sequence[str] = (),
     guide_ids: Sequence[str] = (),
     plan_unsettled: Sequence[str] = (),
+    subjects: QuestionSubjects | None = None,
 ) -> tuple[list[CheckedItem], list[dict]]:
     """ID・版・範囲を検証して原文を抽出し、規則の検査で段落に印を付ける。
 
@@ -2182,6 +2191,9 @@ def verify(
     ``plan_unsettled`` は、作り直しても残った要求の根拠計画の不整合（#3228）。計画が決まらなかったので、
     計画の外の説明を外さずに本文に残して ``unassessed`` の印を付ける（根拠と矛盾した説明ではない。#2738）。
     計画がはっきり unrelated と判断した根拠の説明は、今までどおり外す。
+
+    ``subjects`` は質問の対象の名前と役割（#4351）。説明に書いた質問の named の名前（役割に関わらず）が、回答が引いた
+    どの原文にも無ければ印を付ける。None・抽出の失敗は確かめない。
     """
     spans = [span for span in spans if not span.get("document_background_only")]
     checked: list[CheckedItem] = []
@@ -2334,6 +2346,13 @@ def verify(
                 _mark_check(entry, INTERNAL_LABEL_CHECK, "説明の文に内部の番号が混ざっていた")
         checked.extend(kept_entries)
         dropped.extend(notes)
+    # 多段の質問では、対象の名前を別の説明が引いた原文で確かめていることがあるので、回答全体の原文に照らす。
+    answer_sources = [text for entry in checked for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
+    for entry in checked:
+        if names := _item_absent_names(subjects, entry, answer_sources):
+            # 一般の規則を対象へ当てはめた飛躍かもしれない。本文は変えず印を付け、是正で作り直す（直らなければ印のまま）。
+            entry.subject_name_issues = names
+            _mark_check(entry, SUBJECT_NAME_CHECK, "引いた原文に無い対象の名前: " + "、".join(names))
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
     if evidence_scope_error([e.span for e in checked if e.span and e.item.kind == "operation"]).startswith("同一文書の異なる版"):
         checked.append(
@@ -2416,6 +2435,13 @@ def _item_absent_years(question: str, entry: CheckedItem) -> list[str]:
         return []
     sources = [text for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
     return absent_years(entry.item.text, question, sources) if sources else []
+
+
+def _item_absent_names(subjects: QuestionSubjects | None, entry: CheckedItem, sources: Sequence[str]) -> list[str]:
+    """説明に書いた質問の named の名前（役割に関わらず）のうち、回答が引いた原文に無い名前（#4327・#4351）。"""
+    if subjects is None or not entry.published or entry.added or entry.item.kind == "gap" or not sources:
+        return []
+    return absent_question_names(entry.item.text, subjects, sources)
 
 
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
@@ -4160,6 +4186,13 @@ def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -
     return SentUnitCatalog(snapshots)
 
 
+def sent_table_views(spans: Sequence[dict]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """実際に送った単位だけの目録から投影した表（#4349。投影は sent_table_projection）。"""
+    from rag_engine.generation.sent_table_projection import sent_tables
+
+    return sent_tables(generation_unit_catalog(spans, sent_only=True))
+
+
 def _sent_view(span: Mapping[str, Any]) -> CitationView:
     """モデルに示した版（送信時に固定した本文と引用単位）。記録が無ければ今の本文から作る。"""
     snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
@@ -4456,6 +4489,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             )
     # 現在の版と一致した後は、送信時に固定した本文と引用単位から取り出す。
     extraction_view = sent if isinstance(sent, CitationView) else view
+    metadata["source_scope_sha256"] = hashlib.sha256(extraction_view.provenance_json.encode()).hexdigest()
     text, units = extraction_view.text, extraction_view.units
     if not units:
         return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
@@ -6574,6 +6608,7 @@ def run_round(
     assume_unconfirmed: bool = False,
     confirmed_premises: Sequence[tuple[str, str]] = (),
     confirmed_premise_sources: Sequence[tuple[str, str, str]] = (),
+    question_subjects: Callable[[], QuestionSubjects] | None = None,
 ) -> Round:
     """生成と監査。計画の構造不正だけは、生成を一度やり直す。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -6599,6 +6634,9 @@ def run_round(
     作り直しの出力が失敗したら、作り直す前の草稿を使い、残った不整合に印を付ける。
     ``glossary`` は質問に当たった検索・回答プロファイルの用語（名前と別名。#2823）。監査が別名で書いた質問の対象と
     正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
+    ``question_subjects`` は質問の対象の名前と役割（#4351）を返す呼び出し（回答の中で 1 回だけ抽出し、round をまたいで
+    同じ結果を返す）。説明・要約に書いた質問の named の名前（役割に関わらず）を引いた原文に照らし、無ければ印と是正、
+    要約の定型文、「確認できない」の gap（中立の文面。役割の種類は診断に残す）に乗せる。None は対象の名前を確かめない。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     premise_records = confirmed_premise_records(confirmed_premises, confirmed_premise_sources)
@@ -6806,7 +6844,7 @@ def run_round(
     )
     unit_catalog = generation_unit_catalog(spans, sent_only=True)
     generation_base = _generation_base_model(question, guided=bool(guide_step_contracts))
-    generation_model = unit_generation_model(generation_base, unit_catalog)
+    generation_model = generation_language_schema(unit_generation_model(generation_base, unit_catalog), question)
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -6825,10 +6863,15 @@ def run_round(
     }
 
     plan_rows_added: list[str] = []
+    role_repair: dict[str, Any] = {}
 
-    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
+    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str, *, underived_requests: Sequence[str] = ()) -> GroundedDraft:
         canonical = canonical_generation_draft(
-            value, lambda link: _scope_range_text(link, spans), unit_catalog=unit_catalog, question=question
+            value,
+            lambda link: _scope_range_text(link, spans),
+            unit_catalog=unit_catalog,
+            question=question,
+            underived_requests=underived_requests,
         )
         if scope_plan is None and isinstance(value, generation_base):
             # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
@@ -6845,7 +6888,9 @@ def run_round(
                 "raw_output_representation": "provider_output_text" if provider_text is not None else None,
                 "provider_capture_scope": "returned_response_only",
                 "provider_output_text": provider_text,
-                "parsed_output_representation": "generation_wire" if isinstance(value, generation_model) else "legacy_parsed_draft",
+                "parsed_output_representation": "generation_wire"
+                if getattr(type(value), "_uses_typed_answer_parts", False)
+                else "legacy_parsed_draft",
                 "parsed_output": value.model_dump(mode="json", exclude_unset=True),
                 # 検証の前に最初の 1 件へ寄せた、同じ内容の entry の数（#3849）。寄せる前の応答は provider_output_text。
                 **({"collapsed_duplicates": dict(canonical._collapsed_duplicates)} if canonical._collapsed_duplicates else {}),
@@ -6961,10 +7006,68 @@ def run_round(
             # 再実行の後も出力が構造化出力の契約を満たさず、この round の草稿が無い（#3849）。呼び出し側が、前の round の
             # 回答か、草稿の無い round（関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
             raise DraftGenerationInvalid(type(exc).__name__) from exc
-        draft = canonicalize_output(draft, "answer.generate", prompt)
+        # 導出（計算・区分・条件の当てはめ）が要る種類を自分で宣言したのに、要点がすべて原文の提示（source 型）の出力は、
+        # 質問の既知値を当てはめた答えを持たない（#4586）。source 型を受けない契約で 1 回だけ作り直す。作り直しが契約を
+        # 満たさなければ、その要求を導出の無い要点にし、原文の列挙を答えとして示さずに不足として残す。
+        source_only = source_only_derivation(draft)
+        repaired: BaseModel | None = None
+        role_repair_prompt = ""
+        if source_only:
+            role_repair = {"requests": source_only, "question_type": list(getattr(draft, "question_type", []) or [])}
+            # 番号は指示の側の文（user のテンプレート）の最後の Step の続きにする（根拠の中の見出しで決めない）。
+            role_repair_part = continue_prompt_steps(
+                read_prompt(VLM_ANSWER_PROMPT_KEY),
+                resolve_prompt("generation.sourceOnlyDerivation", SOURCE_ONLY_DERIVATION_PROMPT),
+            )
+            role_repair_prompt = prompt + "\n\n" + role_repair_part + json.dumps({"source_only_requests": source_only}, ensure_ascii=False)
+            derivation_model = generation_language_schema(
+                unit_generation_model(
+                    generation_base,
+                    unit_catalog,
+                    direct_source=False,
+                    # 要求の名前（不足の文に出る）は 1 回目の出力の requirement の写しだけを受ける。
+                    requirements=[part.requirement for part in getattr(draft, "answer_parts", [])],
+                ),
+                question,
+            )
+            try:
+                if image_paths and not image_fallback:
+                    repaired = call_with_model_purpose(
+                        "answer.repair",
+                        parse_images,
+                        generation_system,
+                        role_repair_prompt,
+                        list(image_paths),
+                        settings,
+                        derivation_model,
+                        provider_id=provider_id,
+                    )
+                else:
+                    repaired = call_with_model_purpose(
+                        "answer.repair",
+                        parse_text,
+                        generation_system,
+                        role_repair_prompt,
+                        settings,
+                        derivation_model,
+                        provider_id=provider_id,
+                    )
+            except Exception as exc:
+                if invalid_output is None or not invalid_output(exc):
+                    raise
+                role_repair.update(outcome="underived", error=type(exc).__name__)
+            else:
+                role_repair["outcome"] = "repaired"
+        draft = canonicalize_output(
+            draft, "answer.generate", prompt, underived_requests=source_only if source_only and repaired is None else ()
+        )
+        if repaired is not None:
+            draft = canonicalize_output(repaired, "answer.repair", role_repair_prompt)
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair))
+        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair)) + int(bool(source_only))
+    if previous_draft is not None:
+        draft = draft.model_copy(update={"response_language": previous_draft.response_language})
     plan_errors = _request_plan_errors(draft, spans)
     plan_unsettled: list[str] = []
     plan_recovery = ""
@@ -7093,6 +7196,10 @@ def run_round(
         timing["request_scope_repair"] = scope_plan_repair
     if plan_rows_added:
         timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
+    if role_repair:
+        # 導出が要る種類の宣言と source 型だけの要点の矛盾の作り直し（#4586）: 要求・宣言した種類・結果（repaired /
+        # underived）・作り直しが契約を満たさなかったときの例外の型名。
+        timing["answer_part_role_repair"] = role_repair
     if plan_repair_calls:
         timing["request_plan_repair"] = {
             "calls": plan_repair_calls,
@@ -7124,6 +7231,9 @@ def run_round(
     draft, restored_ranges = restore_previous_citation_ranges(question, draft, spans, previous, previous_draft)
     if restored_ranges:
         timing["citation_range_restored"] = restored_ranges
+    subjects = question_subjects() if question_subjects is not None else None
+    if subjects is not None:
+        timing["question_subjects"] = subjects.diagnostics()
     checked, dropped = verify(
         question,
         draft,
@@ -7136,6 +7246,7 @@ def run_round(
             )
         ),
         plan_unsettled=plan_unsettled,
+        subjects=subjects,
     )
     for entry in dropped:
         ref = _evidence_ref(entry["evidence_id"], spans)
@@ -7198,6 +7309,8 @@ def run_round(
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
         used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span and not entry.added}
         audit_entries = [*audited, *((index, other) for index, _entry, other in also_audited)]
+        from rag_engine.generation.application_sources import application_item_citations
+
         citation_groups = {
             id(cited): [
                 {"evidence_id": member.span["evidence_id"], "quote": member.item.quote}
@@ -7207,6 +7320,7 @@ def run_round(
             for _, entry in audited
             for cited in item_citations(entry)
         }
+        citation_bindings = {id(cited): application_item_citations(entry) for _, entry in audited for cited in item_citations(entry)}
         located_citation_groups = {
             id(cited): {
                 member.span["evidence_id"]
@@ -7246,6 +7360,7 @@ def run_round(
                     "condition": e.item.condition,
                     "quote": e.item.quote,
                     "citations": citation_groups.get(id(e), []),
+                    "citation_bindings": citation_bindings.get(id(e), []),
                     "evidence_id": e.span["evidence_id"],
                     "checks": e.hints,
                     "quote_unmatched": e.unmatched,
@@ -7554,11 +7669,28 @@ def run_round(
     )
     if summary_absent:
         summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
+    cited_texts = [text for entry in published for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
+    gap_texts = [entry.item.text for entry in checked if entry.item.kind == "gap"]
+    # 確かめられないと gap に書いた名前は、要約が同じことを述べてよい（#4327）。
+    summary_names = absent_question_names(str(draft.summary), subjects, [*cited_texts, *gap_texts])
+    if summary_names:
+        summary_reason = summary_reason or f"引いた原文に無い対象を要約が述べている: {'、'.join(summary_names)}"
     withheld_applications = {index for index, entry in enumerate(applications) if not entry.published}
     if withheld_applications and (not draft._composed_summary or withheld_applications.intersection(draft.summary_application_indexes)):
         summary_reason = summary_reason or APPLICATION_SUMMARY_WITHHELD
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
+    # 質問の名前（役割に関わらずすべて）が引いた原文に無ければ、モデルが gap を書かなくても確認できないことを本文で伝える
+    # （#4345・#4351）。文面は言語資源の中立の 1 文（役割ごとの文面は言語資源の保存契約の変更が要るため、まだ分けない）。
+    # 役割の種類は診断にだけ残す（名前の文字列は残さない）。
+    notices = unconfirmed_question_notices(subjects, cited_texts, gap_texts) if cited_texts else []
+    if notices:
+        before_gap = list(checked)
+        phrases = [phrase for notice in notices for phrase in notice.phrases]
+        checked.append(CheckedItem(GroundedItem(kind="gap", text=answer_labels().subject_unconfirmed_gap.format(names="、".join(phrases)))))
+        timing["subject_unconfirmed"] = [{"kind": notice.kind, "names": len(notice.phrases)} for notice in notices]
+        if audit is not None:
+            audit = reindex_audit_items(before_gap, checked, audit, len(guide_notices))
     if (
         not diagnostic_only(timing)
         and task_contract(question)["asks_cause"]
@@ -7587,6 +7719,7 @@ def run_round(
         summary_reason=summary_reason,
         summary_warning=summary_warning,
         summary_absent_years=summary_absent,
+        summary_absent_names=summary_names,
         audit_cut=audit_cut,
         timing=timing,
         citation_trace=citation_trace,
@@ -7703,10 +7836,17 @@ def _parse_audit(
     inputs = json.loads(prompt)
     request_ids = tuple(row["id"] for row in inputs.get("task_contract", {}).get("request_units", []))
     requirement_ids = tuple(row["id"] for contract in inputs.get("guide_contracts", []) for row in contract.get("requirements", []))
-    schema = audit_wire_schema(GroundedAudit if detailed else GroundedFactAudit, request_ids, requirement_ids)
+    schema = audit_wire_schema(
+        GroundedAudit if detailed else GroundedFactAudit,
+        request_ids,
+        requirement_ids,
+        application_indexes=tuple(row["index"] for row in inputs.get("applications", [])),
+    )
     result = canonical_audit_result(
         call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
     )
+    if not isinstance(result.audit, GroundedAudit):
+        raise TypeError("通常監査のcanonical型が一致しません。")
     audit = result.audit
     audit._wire_validation = result.validation
     return audit

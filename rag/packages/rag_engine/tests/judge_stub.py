@@ -16,16 +16,21 @@ from rag_engine.evaluation.answer_eval import (
 )
 
 JUDGED_STATUSES = ("supported", "unsupported", "contradicted", "data_confirmation")
+# 質問の対象の抽出（#4351）の録画応答の既定: 名前の提及が無い（役割の段は呼ばれない）。
+NO_SUBJECTS = {"QuestionMentionAnchors": {"mentions": []}}
+SUBJECT_SCHEMAS = ("QuestionMentionAnchors", "QuestionEntityRoles")
 
 
-def judge(evaluated: AnswerEvaluationOutput, *, scope=None, correctness="correct", failures=None, calls=None):
+def judge(evaluated: AnswerEvaluationOutput, *, scope=None, correctness="correct", failures=None, calls=None, subjects=None):
     """evaluated（網羅と主張の判定の元）に従って、網羅・主張・正確性・比較範囲の呼び出しに応答する。
 
     網羅は requirement_index ごとに evaluated.coverage_checks の判定を返す（段落の ID が無ければ引用を含む段落）。
     主張は段落の ID か引用で evaluated.claim_checks の判定を選び、無ければ unsupported。supported / contradicted で
     evidence_id が無ければ最初の資料の根拠を書く。failures は schema の名前 → 先に送出する例外の list、calls には
-    (schema, 入力) を残す。
+    (schema, 入力) を残す。subjects は質問の対象の抽出の schema の名前 → 録画応答（既定 ``NO_SUBJECTS``）。
+    対象の抽出の呼び出しは calls に残さない（``subject_calls`` で数える）。
     """
+    recorded = NO_SUBJECTS if subjects is None else subjects
     pending = dict((name, list(errors)) for name, errors in (failures or dict()).items())
     lock = threading.Lock()
 
@@ -73,6 +78,9 @@ def judge(evaluated: AnswerEvaluationOutput, *, scope=None, correctness="correct
 
     def parse(system, prompt, settings, schema, **kwargs):
         inputs = json.loads(prompt)
+        if schema.__name__ in SUBJECT_SCHEMAS:
+            parse.subject_calls.append((schema.__name__, inputs))
+            return schema.model_validate(recorded[schema.__name__])
         with lock:
             if calls is not None:
                 calls.append((schema, inputs))
@@ -98,6 +106,7 @@ def judge(evaluated: AnswerEvaluationOutput, *, scope=None, correctness="correct
             )
         raise AssertionError(schema)
 
+    parse.subject_calls = []
     return parse
 
 

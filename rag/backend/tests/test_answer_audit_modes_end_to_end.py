@@ -412,7 +412,12 @@ async def test_formal_none_entry_keeps_invalid_id_and_range_checks(
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
     ).run(SearchRequest(query="対象の操作手順は？"))
-    assert schemas in (["GroundedDraft"], ["GroundedDraftWire"])
+    # 質問の対象の抽出(#4351)は回答ごとに 1 回。監査なしでも生成は 1 回だけ。
+    assert schemas.count("QuestionMentionAnchors") == 1
+    assert [name for name in schemas if name != "QuestionMentionAnchors"] in (
+        ["GroundedDraft"],
+        ["GroundedDraftWire"],
+    )
     validator.assert_not_awaited()
     marked = result.diagnostics["envelope"]["passage_marks"]
     assert reason in {proof["code"] for row in marked for proof in row["reasons"]}

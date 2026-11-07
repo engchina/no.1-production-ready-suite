@@ -123,6 +123,7 @@ from app.rag.section_rules import (
     save_section_rules,
     section_rules_settings,
 )
+from app.rag.step_models import STEP_MODEL_SETTINGS, StepModelSetting, step_model_id
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
@@ -133,6 +134,7 @@ from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
     POST_PARSE_SETTING_FIELDS,
+    AnsweringModelChoice,
     AnsweringSettingsData,
     AnsweringSettingsUpdate,
     AnswerPromptsData,
@@ -509,9 +511,14 @@ async def update_answering_settings(
     送った項目だけを変える。この画面の項目は全体設定だけで決め、検索・回答プロファイルでは上書きしない。
     """
     settings = get_settings()
+    step_models = [
+        (step.field, _step_model_update(settings, step, getattr(payload, f"{step.key}_model")))
+        for step in STEP_MODEL_SETTINGS
+    ]
     updates = {
         field: value
         for field, value in (
+            *step_models,
             ("rag_retrieval_query_limit", payload.retrieval_query_limit),
             ("rag_rerank_top_n", payload.rerank_top_n),
             ("rag_min_similarity", payload.min_similarity),
@@ -602,6 +609,10 @@ async def update_answering_settings(
                 "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
                     candidate.rag_graph_expansion_enabled
                 ),
+                **{
+                    step.field.upper(): getattr(candidate, step.field)
+                    for step in STEP_MODEL_SETTINGS
+                },
             },
             section_comment="# 回答の検索と生成",
             error_detail="回答の検索と生成の設定を backend/.env へ保存できませんでした。",
@@ -609,6 +620,36 @@ async def update_answering_settings(
         for field, value in updates.items():
             setattr(settings, field, value)
     return ApiResponse(data=_answering_settings_data(settings))
+
+
+def _step_model_choices(settings: Settings) -> list[AnsweringModelChoice]:
+    """段ごとのモデルで選べる登録モデル(回答のモデルの候補と同じ。接続情報は含めない)。"""
+    from app.api.routes.search import registered_answer_model_choices
+
+    return [
+        AnsweringModelChoice(model_id=choice["model_id"], display_name=choice["display_name"])
+        for choice in registered_answer_model_choices(settings)
+    ]
+
+
+def _step_model_update(settings: Settings, step: StepModelSetting, value: str | None) -> str | None:
+    """送られた段のモデル(#4351・#4564・#4565)。空は回答のモデル、それ以外は登録モデルの ID だけ。
+
+    画面は欄の全体を送るので、保存済みの値と同じなら登録が外れていても受ける(別の項目の保存を止めない)。
+    """
+    if value is None:
+        return None
+    model_id = value.strip()
+    if (
+        model_id
+        and model_id != step_model_id(settings, step)
+        and model_id not in {choice.model_id for choice in _step_model_choices(settings)}
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{step.label}のモデルには、モデル設定に登録したモデルを選んでください。",
+        )
+    return model_id
 
 
 def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
@@ -639,6 +680,11 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         section_expansion_enabled=settings.rag_section_expansion_enabled,
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
         section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
+        question_subject_role_model=settings.rag_question_subject_role_model.strip(),
+        row_condition_model=settings.rag_row_condition_model.strip(),
+        application_audit_model=settings.rag_application_audit_model.strip(),
+        application_reason_model=settings.rag_application_reason_model.strip(),
+        step_model_choices=_step_model_choices(settings),
     )
 
 

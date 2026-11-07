@@ -759,20 +759,23 @@ def _describe_layout_pictures(
         if post_vision_role is not None:
             mark_picture_record_role(record, post_vision_role)
         projection = vision_text_projection(description)
-        record.raw[VISION_TEXT_PROJECTION_KEY] = projection.dumps()
         sentence = projection.answer_description
         if not sentence:
+            # 投影は回答本文があるときだけ書く。失敗の前に書くと、回答本文の空の投影が残り、
+            # 分割の検査が文書全体を不正として止める(#4570)。
             work.reusable = False
             raise RuntimeError("Vision 応答に利用可能な説明フィールドがありません。")
         work.reusable = True
         if record.category == "Table":
             from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
 
-            record.raw["table_vision_text"] = sentence
+            # 行の対応づけが失敗したときに、説明の本文だけが残らないよう、先に行う。
             enrich_table_visual_rows(record, work.page, description, run_dir)
+            record.raw["table_vision_text"] = sentence
             record.raw["visual_artifact_type"] = "table"
         else:
             record.text = sentence
+        record.raw[VISION_TEXT_PROJECTION_KEY] = projection.dumps()
         record.raw["vision_status"] = "succeeded"
         record.raw["vision_skipped"] = False
         record.raw.pop("vision_error", None)
@@ -796,9 +799,11 @@ def _describe_layout_pictures(
             checkpoint_failed = True
             raise
         except Exception as exc:
+            # 失敗した record は「VLM の本文なし」。前の試行の投影も残さない(#4570)。
             record.raw["vision_status"] = "failed"
             record.raw["vision_skipped"] = False
             record.raw["vision_error"] = f"{type(exc).__name__}: {exc}"[:500]
+            record.raw.pop(VISION_TEXT_PROJECTION_KEY, None)
             counts["failed"] += 1
         finally:
             if not checkpoint_failed:

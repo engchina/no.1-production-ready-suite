@@ -129,6 +129,15 @@ const ANSWERING_SETTINGS = {
   section_expansion_enabled: true,
   section_expansion_max_levels: 4,
   section_expansion_input_token_percent: 50,
+  question_subject_role_model: "model-role",
+  row_condition_model: "model-step",
+  application_audit_model: "model-step",
+  application_reason_model: "",
+  step_model_choices: [
+    { model_id: "model-answer", display_name: "回答用モデル" },
+    { model_id: "model-role", display_name: "役割判定用モデル" },
+    { model_id: "model-step", display_name: "段用モデル" },
+  ],
 };
 
 async function mockAnsweringSettings(page: Page, saved: unknown[] = [], initial: Record<string, unknown> = {}) {
@@ -264,6 +273,11 @@ for (const viewport of [
           section_expansion_enabled: true,
           section_expansion_max_levels: 4,
           section_expansion_input_token_percent: 50,
+          // 変えていない段ごとのモデルも欄の全体として送る（#4351・#4349・#4564・#4565）。
+          question_subject_role_model: "model-role",
+          row_condition_model: "model-step",
+          application_audit_model: "model-step",
+          application_reason_model: "",
         },
       ]);
       await expect(save).toBeDisabled();
@@ -335,6 +349,123 @@ for (const viewport of [
     await page.screenshot({ path: testInfo.outputPath(`answer-audit-mode-${viewport.name}.png`) });
   });
 }
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 812, collapse: true },
+]) {
+  test(`質問の対象の役割を判定するモデルを登録モデルから選んで保存できる (#4351, ${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: Record<string, unknown>[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const card = page.getByTestId("answering-settings-card");
+    const roleModel = card.getByRole("combobox", { name: "質問の対象の役割を判定するモデル", exact: true });
+    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+    // 生成後の回答確認の塊の中、AIによる確認の後に置く。
+    await expect(page.getByTestId("answering-audit-mode").locator("#answering-question-subject-role-model")).toBeVisible();
+    await expect(roleModel).toContainText("役割判定用モデル");
+    await expect(roleModel).toHaveAccessibleDescription(/問い・前提・例のどれかを判定するモデル.*モデル設定に登録したモデルから選びます/);
+    await roleModel.click();
+    await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル"]);
+    await page.getByRole("option", { name: "回答のモデルと同じ", exact: true }).click();
+    await expect(roleModel).toContainText("回答のモデルと同じ");
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(saved.at(-1)).toEqual(expect.objectContaining({ question_subject_role_model: "" }));
+    expect(saved.at(-1)).not.toHaveProperty("step_model_choices");
+    await roleModel.click();
+    await page.getByRole("option", { name: "回答用モデル", exact: true }).click();
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(saved.at(-1)).toEqual(expect.objectContaining({ question_subject_role_model: "model-answer" }));
+    await page.getByTestId("answering-audit-mode").scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`question-subject-role-model-${viewport.name}.png`) });
+  });
+}
+
+test("登録が外れた役割の判定のモデルは、名前に印を付けて選択肢に残す (#4351)", { tag: "@responsive" }, async ({ page }) => {
+  await mockRetrievalCards(page);
+  await mockAnsweringSettings(page, [], { question_subject_role_model: "model-removed" });
+  await page.goto("/settings/retrieval");
+  const roleModel = page.getByTestId("answering-settings-card").getByRole("combobox", { name: "質問の対象の役割を判定するモデル", exact: true });
+  await expect(roleModel).toContainText("model-removed（登録を確認できません）");
+  await roleModel.click();
+  await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル", "model-removed（登録を確認できません）"]);
+});
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 812, collapse: true },
+]) {
+  test(`表の行の条件・導いた結論の判定・理由のモデルを段ごとに登録モデルから選んで保存できる (#4349, #4564, #4565, ${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: Record<string, unknown>[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const card = page.getByTestId("answering-settings-card");
+    const group = page.getByTestId("answering-audit-mode");
+    const auditModel = card.getByRole("combobox", { name: "導いた結論を判定するモデル", exact: true });
+    const reasonModel = card.getByRole("combobox", { name: "判定の理由を書くモデル", exact: true });
+    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+    // 生成後の回答確認の塊の中、回答の工程の順（役割の判定・表の行の条件・判定・理由）に置く。
+    const stepFields = group.locator(
+      "#answering-question-subject-role-model, #answering-row-condition-model, #answering-application-audit-model, #answering-application-reason-model"
+    );
+    await expect(stepFields).toHaveCount(4);
+    // セレクタの一覧は文書の順で返る（表示の順）。
+    const ids = await stepFields.evaluateAll((nodes) => nodes.map((node) => node.id));
+    expect(ids).toEqual([
+      "answering-question-subject-role-model",
+      "answering-row-condition-model",
+      "answering-application-audit-model",
+      "answering-application-reason-model",
+    ]);
+    const rowModel = card.getByRole("combobox", { name: "表の行の条件を当てはめるモデル", exact: true });
+    await expect(rowModel).toContainText("段用モデル");
+    await expect(rowModel).toHaveAccessibleDescription(/表の各行の条件が、質問の内容から成り立つかを行ごとに判定するモデル.*推論の量はこの段の設定（既定 low）です/);
+    await expect(auditModel).toContainText("段用モデル");
+    await expect(reasonModel).toContainText("回答のモデルと同じ");
+    await expect(auditModel).toHaveAccessibleDescription(/導いた結論が、選んだ原文と質問の条件から導けるかを判定するモデル.*モデル設定に登録したモデルから選びます/);
+    await expect(reasonModel).toHaveAccessibleDescription(/利用者に示す理由の文を書くモデル.*判定の結果は変えません/);
+    await reasonModel.click();
+    await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル"]);
+    await page.getByRole("option", { name: "段用モデル", exact: true }).click();
+    await auditModel.click();
+    await page.getByRole("option", { name: "回答のモデルと同じ", exact: true }).click();
+    await rowModel.click();
+    await page.getByRole("option", { name: "回答用モデル", exact: true }).click();
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(saved.at(-1)).toEqual(
+      expect.objectContaining({
+        application_audit_model: "",
+        application_reason_model: "model-step",
+        row_condition_model: "model-answer",
+        question_subject_role_model: "model-role",
+      })
+    );
+    expect(saved.at(-1)).not.toHaveProperty("step_model_choices");
+    await group.scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`application-step-models-${viewport.name}.png`) });
+  });
+}
+
+test("登録が外れた判定のモデルは、名前に印を付けて選択肢に残す (#4565)", { tag: "@responsive" }, async ({ page }) => {
+  await mockRetrievalCards(page);
+  await mockAnsweringSettings(page, [], { application_audit_model: "model-removed" });
+  await page.goto("/settings/retrieval");
+  const auditModel = page.getByTestId("answering-settings-card").getByRole("combobox", { name: "導いた結論を判定するモデル", exact: true });
+  await expect(auditModel).toContainText("model-removed（登録を確認できません）");
+  await auditModel.click();
+  await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル", "model-removed（登録を確認できません）"]);
+});
 
 test("回答の検索と生成の既定を読み込めないときは、その欄だけに理由を出す (#593)", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });

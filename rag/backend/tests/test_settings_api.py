@@ -35,6 +35,7 @@ from app.config import (
     MODEL_SETTINGS_STORE,
     PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
+    EnterpriseAiConfiguredModel,
     Settings,
     get_settings,
     load_persisted_model_settings,
@@ -3566,7 +3567,17 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         monkeypatch.delenv(f"RAG_{name.upper()}", raising=False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    assert client.get("/api/settings/answering").json()["data"] == {
+    current = client.get("/api/settings/answering").json()["data"]
+    # 段ごとのモデルと候補は別のテストで確かめる(#4351・#4564・#4565)。
+    for key in (
+        "question_subject_role_model",
+        "row_condition_model",
+        "application_audit_model",
+        "application_reason_model",
+        "step_model_choices",
+    ):
+        current.pop(key)
+    assert current == {
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
         "hybrid_search_backend": "oracle_native",
@@ -3647,6 +3658,72 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         assert data[name] == expected
         assert getattr(settings, f"rag_{name}") == expected
         assert getattr(reloaded, f"rag_{name}") == expected
+
+
+@pytest.mark.parametrize(
+    "key", ["question_subject_role", "row_condition", "application_audit", "application_reason"]
+)
+def test_answering_step_model_round_trip(
+    monkeypatch: MonkeyPatch, tmp_path: Path, key: str
+) -> None:
+    """段ごとのモデル(#4351・#4349・#4564・#4565)は登録モデルか空(回答のモデル)だけを受け、
+    .env と現在プロセスへ保存する。ほかの段の設定は変えない。"""
+    field = f"rag_{key}_model"
+    item = f"{key}_model"
+    settings = get_settings()
+    monkeypatch.setattr(
+        settings,
+        "oci_enterprise_ai_models",
+        [
+            EnterpriseAiConfiguredModel(model_id="model-answer", display_name="Answer"),
+            EnterpriseAiConfiguredModel(model_id="model-step", display_name="Step"),
+        ],
+    )
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "model-answer")
+    steps = ("question_subject_role", "row_condition", "application_audit", "application_reason")
+    for step in steps:
+        monkeypatch.setattr(settings, f"rag_{step}_model", "model-answer")
+        monkeypatch.delenv(f"RAG_{step.upper()}_MODEL", raising=False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    data = client.get("/api/settings/answering").json()["data"]
+    assert all(data[f"{step}_model"] == "model-answer" for step in steps)
+    choices = {choice["model_id"]: choice for choice in data["step_model_choices"]}
+    assert set(choices) >= {"model-answer", "model-step"}
+    # 接続情報は返さない。
+    assert all(set(choice) == {"model_id", "display_name"} for choice in choices.values())
+
+    changed = client.patch("/api/settings/answering", json={item: "model-step"})
+    assert changed.status_code == 200
+    assert changed.json()["data"][item] == "model-step"
+    assert getattr(settings, field) == "model-step"
+    assert f"{field.upper()}=model-step" in env_file.read_text(encoding="utf-8")
+    assert getattr(Settings(_env_file=env_file), field) == "model-step"
+    # ほかの段は変えない。
+    others = [step for step in steps if step != key]
+    assert all(changed.json()["data"][f"{step}_model"] == "model-answer" for step in others)
+
+    # 登録していないモデルは保存しない。
+    rejected = client.patch("/api/settings/answering", json={item: "model-unknown"})
+    assert rejected.status_code == 422
+    assert "モデル設定に登録したモデルを選んでください" in rejected.text
+    assert getattr(settings, field) == "model-step"
+
+    # 保存済みの値と同じなら、登録が外れていても受ける(画面は欄の全体を送る)。
+    monkeypatch.setattr(settings, field, "model-removed")
+    kept = client.patch(
+        "/api/settings/answering",
+        json={item: "model-removed", "neighbor_child_count": 3},
+    )
+    assert kept.status_code == 200
+    assert kept.json()["data"][item] == "model-removed"
+
+    # 空は回答のモデル。別の項目だけの更新では変えない。
+    emptied = client.patch("/api/settings/answering", json={item: ""})
+    assert emptied.json()["data"][item] == ""
+    assert getattr(Settings(_env_file=env_file), field) == ""
+    other = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
+    assert other.json()["data"][item] == ""
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

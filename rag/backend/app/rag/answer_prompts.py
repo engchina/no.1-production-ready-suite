@@ -233,6 +233,21 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ),
             # 目録で選んだ条を生成が引かなかったときだけ、支える説明を検討する（#3526）。
             ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
+            # 要点がすべて原文の提示だった導出の質問の作り直しで、入力に足す部品（#4586）。
+            (
+                "sourceOnlyDerivation",
+                "rag_engine.generation.answer_parts_wire:SOURCE_ONLY_DERIVATION_PROMPT",
+            ),
+        ),
+    ),
+    # 説明・要約に書いた質問の対象の名前を引いた原文に照らす検査の、対象の抽出と役割の判定(#4351)。
+    # 品質評価も同じ指示で取り出す。
+    PromptStage(
+        "question_subjects",
+        "audit",
+        (
+            ("extraction", "rag_engine.generation.question_subjects:SUBJECT_EXTRACTION_PROMPT"),
+            ("role", "rag_engine.generation.question_subjects:SUBJECT_ROLE_PROMPT"),
         ),
     ),
     PromptStage(
@@ -251,6 +266,15 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         (
             ("system", "rag_engine.generation.applications:APPLICATION_SYSTEM_PROMPT"),
             ("auditSystem", "rag_engine.generation.applications:APPLICATION_AUDIT_SYSTEM_PROMPT"),
+            # 独立の監査の判定に、利用者に示す理由を付ける（判定は変えない。#4471）。
+            (
+                "reasonSystem",
+                "rag_engine.generation.application_reason:APPLICATION_REASON_SYSTEM_PROMPT",
+            ),
+            # 推導の前に、表の各行の条件の種類と時点を読み取り（rowTypeSystem）、
+            # 時点以外の条件が質問から成り立つかを判定する（rowJudgeSystem。#4349）。
+            ("rowTypeSystem", "rag_engine.generation.row_conditions:ROW_TYPE_SYSTEM_PROMPT"),
+            ("rowJudgeSystem", "rag_engine.generation.row_conditions:ROW_JUDGE_SYSTEM_PROMPT"),
         ),
     ),
     PromptStage(

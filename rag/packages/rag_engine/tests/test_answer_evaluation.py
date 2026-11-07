@@ -22,6 +22,7 @@ from rag_engine.evaluation.answer_eval import (
     MAX_EVALUATION_INPUT_BYTES,
     QUESTION_EVIDENCE_ID,
     QUESTION_SOURCE_ID,
+    REFERENCE_SUBJECT_UNSUPPORTED,
     REFERENCE_UNCITED,
     RUBRIC_VERSION,
     SCOPE_PROMPT,
@@ -38,6 +39,8 @@ from rag_engine.evaluation.answer_eval import (
     EvidenceCoverageOutput,
     StandardAnswerScope,
     StandardRequirement,
+    _checked_question_names,
+    _gap_passages,
     _prepare_standard_scope,
     evaluate_answer_payload,
     grounded_quote,
@@ -46,6 +49,14 @@ from rag_engine.evaluation.answer_eval import (
 )
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answering import AnswerQuestionResult, AnswerRecord, answer_evidence_items, parse_answer_response
+from rag_engine.generation.question_subjects import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_ROLES_UNAVAILABLE,
+    SUBJECT_EXTRACTION_PROMPT,
+    QuestionSubjects,
+    SubjectMention,
+)
 from rag_engine.knowledge.answers import save_answer_result
 
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
@@ -122,11 +133,18 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     )
     with patch(PARSE, side_effect=judge(supported, calls=calls)) as parse:
         result = evaluate_answer_payload(data, object(), provider_id="chosen")
-    expected_systems = {ClaimJudgement: CLAIM_PROMPT, CoverageOutput: COVERAGE_PROMPT, AnswerCorrectnessOutput: CORRECTNESS_PROMPT}
+    expected_systems = {
+        ClaimJudgement: CLAIM_PROMPT,
+        CoverageOutput: COVERAGE_PROMPT,
+        AnswerCorrectnessOutput: CORRECTNESS_PROMPT,
+        "QuestionMentionAnchors": SUBJECT_EXTRACTION_PROMPT,
+    }
     for call in parse.call_args_list:
-        assert call.args[0] == expected_systems[call.args[3]]
+        schema = call.args[3]
+        assert call.args[0] == expected_systems.get(schema, expected_systems.get(schema.__name__))
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 20
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 23
+    assert result["judge_diagnostics"]["question_subjects"] == {"status": "no_named_mention", "calls": 1, "named_mentions": 0}
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
     assert not {"scores", "total_score", "passed", "max_score", "pass_threshold"} & set(result)
@@ -1346,6 +1364,182 @@ def test_summary_candidates_include_each_cited_body_original_without_word_matchi
     inputs = next(item for item in calls_of(calls, ClaimJudgement) if item["passage"]["text"] == summary)
     assert [node["id"] for node in inputs["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3", "doc:p9"]
     assert len(result["judge_diagnostics"]["summary_citation_candidates"][0]["body_passage_ids"]) == 2
+
+
+GENERAL_RULE = "承認された項目だけを利用できる。"
+SUBJECT_CLAIM = "ServiceXは承認された項目なので利用できます。"
+SUBJECT_QUESTION = "ServiceXは利用できますか。"
+
+
+def _subjects(question=SUBJECT_QUESTION, *rows):
+    """対象と役割まで確定した結果（照合の単体テスト用。rows は (名前, 役割)）。"""
+    mentions = []
+    for text, roles in rows or (("ServiceX", ("asked",)),):
+        start = question.index(text)
+        mentions.append(SubjectMention(start, start + len(text), text, "S1", roles))
+    return QuestionSubjects(question, STATUS_COMPLETED, tuple(mentions))
+
+
+def _supported_claim(text=SUBJECT_CLAIM):
+    return ClaimCheck(answer_quote=text, status="supported", source_id="doc:p1", evidence_quote="x", reason="理由")
+
+
+def _question_name_status(text=SUBJECT_CLAIM, subjects=None, documents=(GENERAL_RULE,)):
+    nodes = [dict(text=document, source="rule.pdf") for document in documents]
+    return _checked_question_names([_supported_claim(text)], subjects or _subjects(), nodes)[0]
+
+
+def test_general_rule_does_not_support_a_name_the_question_asked():
+    """#4327・#4351: 一般の条件だけの根拠から、質問が問うた対象が条件を満たすとする段落を supported にしない。"""
+    claim = _question_name_status()
+    assert claim.status == "unsupported"
+    assert claim.reference_check == REFERENCE_SUBJECT_UNSUPPORTED
+    assert (claim.source_id, claim.evidence_quote) == ("", "")
+    assert "ServiceX" in claim.reason
+
+
+@pytest.mark.parametrize(
+    ("text", "subjects", "documents"),
+    [
+        (SUBJECT_CLAIM, None, ["ServiceXは承認された項目である。"]),
+        (SUBJECT_CLAIM, None, [GENERAL_RULE, "ServiceXの担当は管理部である。"]),
+        (GENERAL_RULE, None, [GENERAL_RULE]),
+        (SUBJECT_CLAIM, QuestionSubjects(SUBJECT_QUESTION, STATUS_FAILED, failure="TimeoutError"), [GENERAL_RULE]),
+    ],
+    ids=["in-document", "in-another-passage-document", "name-not-written", "extraction-failed"],
+)
+def test_question_name_check_keeps_the_verdict(text, subjects, documents):
+    assert _question_name_status(text, subjects, documents).status == "supported"
+
+
+@pytest.mark.parametrize(
+    "subjects",
+    [
+        _subjects("部門でServiceXを導入しました。", ("ServiceX", ("given",))),
+        _subjects("ServiceXなどは利用できますか。", ("ServiceX", ("example",))),
+        QuestionSubjects(
+            SUBJECT_QUESTION,
+            STATUS_ROLES_UNAVAILABLE,
+            tuple(replace(mention, roles=()) for mention in _subjects().mentions),
+            failure="TimeoutError",
+        ),
+    ],
+    ids=["given", "example", "roles-unavailable"],
+)
+def test_every_named_subject_is_checked_whatever_the_role(subjects):
+    """利用者の決定（2026-11-07）: 前提・例の名前も、役割の段が失敗しても、名前は根拠に照らす（生成と同じ規則）。"""
+    assert _question_name_status(SUBJECT_CLAIM, subjects, [GENERAL_RULE]).reference_check == REFERENCE_SUBJECT_UNSUPPORTED
+
+
+def test_question_name_check_ignores_claims_not_supported():
+    claim = _supported_claim().model_copy(update={"status": "contradicted"})
+    assert _checked_question_names([claim], _subjects(), [dict(text=GENERAL_RULE)])[0].status == "contradicted"
+
+
+def test_passage_saying_a_gap_name_is_unconfirmed_stays_supported():
+    """#4347: 回答が確認できないと書いた名前は、断定の検査の対象にしない。"""
+    claim = _supported_claim("ServiceXが対象かは資料に記載がなく判断できません。")
+    gap = "ServiceXは引用した資料で確認できません。"
+    nodes = [dict(text=GENERAL_RULE, source="rule.pdf")]
+    assert _checked_question_names([claim], _subjects(), nodes, gaps=[gap])[0].status == "supported"
+    assert _checked_question_names([claim], _subjects(), nodes)[0].status == "unsupported"
+
+
+def test_gap_passages_reads_only_the_gap_section():
+    labels = answer_labels()
+    answer = f"結論です。\n\n{labels.rules_section}\n\n・規則です。\n\n{labels.gaps_section}\n\n・確認できない点です。"
+    assert [text.lstrip("・") for text in _gap_passages(answer)] == ["確認できない点です。"]
+
+
+def test_claim_judgement_has_no_subject_fields():
+    """対象の照合はコードが行う。判定のモデルの出力に頼らない（#4343）。"""
+    assert set(ClaimJudgement.model_fields) == {"claim_kind", "reason", "status", "evidence_id"}
+    assert "subject" not in CLAIM_PROMPT and "question_fact" not in CLAIM_PROMPT
+
+
+ASKED_SUBJECTS = {
+    "QuestionMentionAnchors": {"mentions": [{"text": "ServiceX", "occurrence": 1, "designation": "named", "members": []}]},
+    "QuestionEntityRoles": {"entities": [{"entity_id": "N1", "roles": ["asked"]}]},
+}
+
+
+def _subject_evaluation(subjects, *, question=SUBJECT_QUESTION, claim=SUBJECT_CLAIM, evidence=GENERAL_RULE):
+    data = cited_payload() | dict(
+        question=question,
+        answer_text=claim + "\n根拠：manual.pdf p.3",
+        evidence_items=[dict(id="doc:p3", source="manual.pdf", page_start=3, page_end=3, text=evidence)],
+    )
+    supported = output().model_copy(
+        update=dict(claim_checks=[ClaimCheck(answer_quote=claim, status="supported", source_id="", evidence_quote="", reason="前提")])
+    )
+    parse = judge(supported, subjects=subjects)
+    with patch(PARSE, side_effect=parse):
+        result = evaluate_answer_payload(data, object())
+    return result, parse.subject_calls
+
+
+def test_question_name_check_lowers_claim_support_through_the_evaluation():
+    result, subject_calls = _subject_evaluation(ASKED_SUBJECTS)
+    claim = result["claim_checks"][0]
+    assert claim["status"] == "unsupported"
+    assert claim["audit_status"] == "supported"
+    assert claim["reference_check"] == REFERENCE_SUBJECT_UNSUPPORTED
+    # 評価にも同じ 2 段の契約（抽出 → 文の区切りつきの役割）を使う。
+    (extract_name, extract_input), (role_name, role_input) = subject_calls
+    assert (extract_name, role_name) == ("QuestionMentionAnchors", "QuestionEntityRoles")
+    assert extract_input == {"question": SUBJECT_QUESTION}
+    assert role_input["sentences"] == [{"sentence_id": "S1", "text": SUBJECT_QUESTION}]
+    assert result["judge_diagnostics"]["question_subjects"] == {
+        "status": "completed",
+        "calls": 2,
+        "named_mentions": 1,
+        "verified_mentions": 1,
+        "asked_mentions": 1,
+    }
+
+
+RANGE_QUESTION = "部品P1〜P4は利用できますか。"
+
+
+@pytest.mark.parametrize(
+    ("range_mention", "status"),
+    [
+        # 範囲の表記を 1 つの名前として返すと、その表記は根拠に無いので不支持にする（#4584 の誤りの形）。
+        ({"text": "部品P1〜P4", "occurrence": 1, "designation": "named", "members": []}, "unsupported"),
+        # まとめた表記（collective）は照らさず、写された個々の名前（根拠にある）だけを照らす。
+        (
+            {"text": "部品P1〜P4", "occurrence": 1, "designation": "collective", "members": [{"text": "部品P1", "occurrence": 1}]},
+            "supported",
+        ),
+    ],
+    ids=["range-as-one-name", "range-as-collective"],
+)
+def test_range_mention_is_checked_by_its_written_members_in_the_evaluation(range_mention, status):
+    subjects = {
+        "QuestionMentionAnchors": {"mentions": [range_mention]},
+        "QuestionEntityRoles": {"entities": [{"entity_id": "N1", "roles": ["asked"]}]},
+    }
+    result, _ = _subject_evaluation(
+        subjects,
+        question=RANGE_QUESTION,
+        claim="部品P1〜P4は承認された項目なので利用できます。",
+        evidence="部品P1、部品P2、部品P3、部品P4は承認された項目である。",
+    )
+    assert result["claim_checks"][0]["status"] == status
+
+
+def test_failed_subject_extraction_keeps_the_verdict_and_records_the_failure():
+    rejected = {"QuestionMentionAnchors": {"mentions": [{"text": "ServiceY", "occurrence": 1, "designation": "named", "members": []}]}}
+    result, subject_calls = _subject_evaluation(rejected)
+    assert result["status"] == "completed"
+    assert result["claim_checks"][0]["status"] == "supported"
+    assert [name for name, _ in subject_calls] == ["QuestionMentionAnchors"]
+    assert result["judge_diagnostics"]["question_subjects"] == {
+        "status": "failed",
+        "calls": 1,
+        "named_mentions": 0,
+        "failure": "text_not_in_question",
+    }
 
 
 def _evidence_check(status, *lines, index=1):

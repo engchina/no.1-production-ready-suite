@@ -138,6 +138,7 @@ from app.rag.graph_expansion import (
 from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
 from app.rag.step_details import step_details_payload
+from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.search import (
@@ -779,6 +780,8 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": str(settings.rag_crag_skip_min_rerank_score),
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
+    # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
+    environ.update(step_model_environ(settings))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
@@ -1357,8 +1360,14 @@ class AnswerEngine:
         def model(model_id: str) -> dict[str, str]:
             return {"model_id": model_id, "label": labels.get(model_id, model_id)}
 
+        answer_model = self._answer_model_id or enterprise_ai_default_model_id(settings)
         return {
-            "llm": model(self._answer_model_id or enterprise_ai_default_model_id(settings)),
+            "llm": model(answer_model),
+            # 段ごとのモデル(#4351・#4564・#4565。空の設定は回答のモデル)。
+            **{
+                step.key: model(step_model_id(settings, step) or answer_model)
+                for step in STEP_MODEL_SETTINGS
+            },
             "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
@@ -1408,6 +1417,7 @@ class AnswerEngine:
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
+        from rag_engine.generation.question_subjects import extract_question_subjects
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -1428,6 +1438,8 @@ class AnswerEngine:
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
+            # 説明・要約に書いた質問の対象の名前を原文に照らす検査の、対象と役割の抽出(#4351)。
+            question_subjects=extract_question_subjects,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),

@@ -146,7 +146,12 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
         audit_mode="none",
     )
     entry = actual.checked[0]
-    assert actual.applications[0].application.result == claim
+    if claim == spans[0]["text"]:
+        # 原文の写しの結果は、選んだ ID の原文を直接の記載にする（導出を作らない）。
+        assert not actual.applications
+        assert actual.draft.answer_parts[0].result_kind == "direct"
+    else:
+        assert actual.applications[0].application.result == claim
     assert len(calls) == 1 and actual.review_execution == "not_run"
     assert entry.quote_match == "exact" and entry.citation_resolution["authenticity"] == "verified"
     assert not entry.marks

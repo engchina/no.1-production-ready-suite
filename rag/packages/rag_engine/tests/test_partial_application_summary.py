@@ -4,7 +4,8 @@ from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
-from audit_fixtures import legacy_audit_result
+from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
+from audit_fixtures import legacy_audit_result, synthetic_explanation
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -14,8 +15,10 @@ from rag_engine.models.audit_wire import is_audit_wire
 
 FIRST = "対象Aの値は28です。"
 SECOND = "対象Bの値は12です。"
-GOOD = FIRST
+# 導出の公開門を確かめるため、原文の写しではない結果にする（写しは直接の記載になる）。
+GOOD = "対象Aは28です。"
 BAD = "対象Bの値は99です。"
+KEPT = "対象Bは12です。"
 QUESTION = "対象Aと対象Bの値をそれぞれ教えてください。"
 
 
@@ -48,6 +51,8 @@ def fixture(mode="detailed", decisions=(True, False), *, summary_supported=False
 
     def fixed(_system, _prompt, _settings, schema, **_kwargs):
         calls.append(schema.canonical_schema.__name__ if is_audit_wire(schema) else schema.__name__)
+        if schema.__name__ == "ApplicationExplanation":
+            return synthetic_explanation(schema, _prompt)
         if schema.__name__ == "GroundedDraftWire":
             spans = [span for span, _view in (grounded._CITATION_VIEWS.get() or {}).values()]
             catalog = grounded.generation_unit_catalog(spans, sent_only=True)
@@ -81,8 +86,8 @@ def fixture(mode="detailed", decisions=(True, False), *, summary_supported=False
                 }
             )
         reviews = [{"index": i, "valid": valid, "reason": "固定の支持判定"} for i, valid in enumerate(decisions)]
-        if schema.__name__ == "ApplicationAudit":
-            return schema.model_validate({"application_reviews": reviews, "summary_supported": summary_supported})
+        if schema in APPLICATION_SCHEMAS:
+            return audit_reply(schema, reviews, summary_supported=summary_supported, prompt=_prompt)
         value = {
             "goal_alignment": "aligned",
             "summary_supported": summary_supported,
@@ -116,7 +121,9 @@ def test_valid_selected_application_survives_summary_with_its_citation(mode):
     summary = response.generation_trace["finalization"]["summary"]
     assert summary["citations"]["status"] == "linked"
     assert [link["application_index"] for link in summary["citations"]["links"]] == [0]
-    assert len(calls) == 2
+    # 監査なしの設定では、独立の監査の判定 1 回に、判定が確定した推導ごとの理由が付く。
+    # どちらの設定でも、valid な推導 1 件の説明の段（#4393）を 1 回呼ぶ。
+    assert len(calls) == (5 if mode == "none" else 3) and calls.count("ApplicationExplanation") == 1
 
 
 def withheld_round():
@@ -231,12 +238,12 @@ def test_later_dependency_changes_withhold_projection(stage, mutation):
 
 
 def test_original_normal_summary_and_all_retained_dependencies_are_unchanged():
-    response, current, calls = fixture(decisions=(True, True), summary_supported=True, second=SECOND)
-    original = GOOD + "\n" + SECOND
+    response, current, calls = fixture(decisions=(True, True), summary_supported=True, second=KEPT)
+    original = GOOD + "\n" + KEPT
     assert response.answer_text.startswith(original)
     assert current.summary == original
     assert current.summary_projection is None
-    assert len(calls) == 2
+    assert len(calls) == 4 and calls.count("ApplicationExplanation") == 2
     assert grounded.finalize_summary(current).summary == original
 
 
@@ -248,9 +255,9 @@ def test_no_valid_application_does_not_construct_summary():
 
 
 def test_all_retained_composed_summary_preserves_existing_behavior():
-    _, current, _ = fixture(decisions=(True, True), second=SECOND)
+    _, current, _ = fixture(decisions=(True, True), second=KEPT)
     result = grounded.finalize_summary(current)
-    assert result.summary == GOOD + "\n" + SECOND
+    assert result.summary == GOOD + "\n" + KEPT
     assert result.summary_projection is None
 
 
