@@ -255,7 +255,10 @@ class _LeaseOracle(_CompletingRecipeOracle):
         )
 
     async def get_ingestion_job_lease(self, job_id: str) -> IngestionJobLease:
-        return IngestionJobLease(status=self.jobs[job_id].status, lease_owner=self.lease_owner)
+        job = self.jobs[job_id]
+        return IngestionJobLease(
+            status=job.status, lease_owner=self.lease_owner, attempt_count=job.attempt_count
+        )
 
     async def update_ingestion_job_progress(self, *args: object, **kwargs: object) -> None:
         _ = args, kwargs
@@ -270,11 +273,14 @@ class _LeaseOracle(_CompletingRecipeOracle):
         self,
         job_id: str,
         *,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
         skip_reason: str | None = None,
         **kwargs: Any,
     ) -> IngestionJob | None:
-        if lease_owner is not None and lease_owner != self.lease_owner:
+        if fence is not None and (
+            fence.lease_owner != self.lease_owner
+            or fence.attempt_count != self.jobs[job_id].attempt_count
+        ):
             return None
         updated = await super().transition_ingestion_job(job_id, **kwargs)
         if updated is not None:
@@ -447,11 +453,14 @@ async def test_skip_reason_is_written_with_the_transition(
         from_statuses=(IngestionJobStatus.RUNNING,),
         to_status=IngestionJobStatus.SKIPPED,
         finished_at=datetime.now(UTC),
-        lease_owner="worker-a",
+        fence=IngestionJobFence(job_id="job-1", attempt_count=2, lease_owner="worker-a"),
         skip_reason=documents_route.INGESTION_SKIP_REASON_SUPERSEDED,
     )
 
     statement, binds = connection.calls[0]
     assert "skip_reason = :skip_reason" in statement
-    assert "lease_owner = :lease_owner" in statement
+    assert "attempt_count = :fence_attempt_count" in statement
+    assert "lease_owner = :fence_lease_owner" in statement
+    assert binds["fence_attempt_count"] == 2
+    assert binds["fence_lease_owner"] == "worker-a"
     assert binds["skip_reason"] == documents_route.INGESTION_SKIP_REASON_SUPERSEDED

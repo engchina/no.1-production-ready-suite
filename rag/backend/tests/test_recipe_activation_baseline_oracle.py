@@ -296,7 +296,9 @@ async def test_superseded_job_keeps_skip_reason() -> None:
         from_statuses=(IngestionJobStatus.RUNNING,),
         to_status=IngestionJobStatus.SKIPPED,
         finished_at=datetime.now(UTC),
-        lease_owner="worker-a",
+        fence=IngestionJobFence(
+            job_id=job.id, attempt_count=job.attempt_count, lease_owner="worker-a"
+        ),
         skip_reason="superseded_by_newer_version",
     )
 

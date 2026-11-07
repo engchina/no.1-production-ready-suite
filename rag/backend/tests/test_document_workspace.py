@@ -16,7 +16,11 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.clients.document_cleanup_store import DocumentCleanupTargets, DocumentCleanupTask
 from app.clients.object_storage import ObjectStorageClient
-from app.clients.oracle import DocumentReviewEditConflictError, ReviewedExtractionWrite
+from app.clients.oracle import (
+    DocumentReviewEditConflictError,
+    IngestionJobFence,
+    ReviewedExtractionWrite,
+)
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.document_cleanup import retry_due_document_cleanups
@@ -492,10 +496,10 @@ class FakeWorkspaceOracle:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
     ) -> IngestionJob | None:
-        # lease を持たない実行(lease_owner なし)の経路だけを扱う(lease の条件は #359 のテスト)。
-        assert lease_owner is None
+        # lease を持たない実行(fence なし)の経路だけを扱う(lease の条件は #359・#4187 のテスト)。
+        assert fence is None
         # 実 Oracle の `WHERE status IN (...)` と同じく、遷移元の状態のときだけ書く。
         job = self.ingestion_jobs.get(job_id)
         if job is None or job.status not in from_statuses:
