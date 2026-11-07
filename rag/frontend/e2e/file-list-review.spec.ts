@@ -26,6 +26,8 @@ interface DocumentSummary {
   layers_rebuild_required?: boolean;
   superseded_by_document_id?: string | null;
   is_superseded?: boolean;
+  // 言語資源の使用版（合成の応答をそのまま返すので形は問わない。#4566）。
+  language_pack?: unknown;
 }
 
 interface BulkItem {
