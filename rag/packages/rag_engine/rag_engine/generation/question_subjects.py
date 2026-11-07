@@ -13,8 +13,11 @@
    役割だけを返させる。段の間で渡すのはコードが確定した位置と ID だけで、モデルの写しは渡さない。文の区切りを
    またぐ提及は失敗にする。
 
-名前の有無の照合（``absent_question_names``・``unconfirmed_question_phrases``）はモデルを呼ばずにコードで行う。
-抽出と役割の判定が失敗しても回答・評価は止めない（呼び出し側が検査を飛ばし、診断に失敗の類別を残す）。
+名前の有無の照合（``absent_question_names``・``unconfirmed_question_notices``）はモデルを呼ばずにコードで行う。
+**抽出した named の名前は、役割に関わらずすべて照合する**（利用者の決定 2026-11-07。前提・例の名前も、役割の誤りでも）。
+役割は「確認できない」の文面（問うた名前 / 前提の名前 / 例の名前）の選び分けだけに使い、役割の段が失敗したら
+名前を役割なしで残して照合し、中立の文面にする（``STATUS_ROLES_UNAVAILABLE``）。抽出が失敗したら照合しない。
+抽出と役割の判定が失敗しても回答・評価は止めない（診断に失敗の類別を残す）。
 """
 
 from __future__ import annotations
@@ -68,6 +71,17 @@ PURPOSE_ROLE = "query.subject_roles"
 STATUS_COMPLETED = "completed"
 STATUS_NO_NAMED = "no_named_mention"
 STATUS_FAILED = "failed"
+# 名前は確定したが役割の段が失敗した（名前は照合し、文面は中立にする）。
+STATUS_ROLES_UNAVAILABLE = "roles_unavailable"
+# 名前を照合する結果（抽出が成功した結果）。
+VERIFIABLE = (STATUS_COMPLETED, STATUS_ROLES_UNAVAILABLE)
+
+# 「確認できない」の文面の種類（役割から選ぶ。同じ名前が複数の役割を持てば、この順で先のもの）。
+NOTICE_ASKED = "asked"
+NOTICE_GIVEN = "given"
+NOTICE_EXAMPLE = "example"
+NOTICE_UNKNOWN = "unknown"
+_NOTICE_ORDER = (NOTICE_ASKED, NOTICE_GIVEN, NOTICE_EXAMPLE, NOTICE_UNKNOWN)
 
 
 class QuestionSubjectError(ValueError):
@@ -102,8 +116,10 @@ class QuestionSubjects:
     def diagnostics(self) -> dict[str, Any]:
         """実行記録に残す件数と類別（質問・名前の文字列は残さない）。"""
         result: dict[str, Any] = {"status": self.status, "calls": self.calls, "named_mentions": len(self.mentions)}
+        if self.status in VERIFIABLE:
+            result["verified_mentions"] = len(self.mentions)
         if self.status == STATUS_COMPLETED:
-            result["asked_mentions"] = sum(1 for mention in self.mentions if _checked(mention))
+            result["asked_mentions"] = sum(1 for mention in self.mentions if ROLE_ASKED in mention.roles)
         if self.failure:
             result["failure"] = self.failure
         return result
@@ -338,7 +354,9 @@ def extract_question_subjects(
     provider_id: str | None = None,
     parse_text: Callable[..., Any] | None = None,
 ) -> QuestionSubjects:
-    """質問の named の提及と役割を 2 段で取り出す。named が無ければ役割の段を呼ばない。失敗は ``failed`` で返す。
+    """質問の named の提及と役割を 2 段で取り出す。named が無ければ役割の段を呼ばない。
+
+    抽出の失敗は ``failed``（照合しない）。役割の段の失敗は ``roles_unavailable``（名前は役割なしで残し、照合する）。
 
     ``parse_text`` は構造化出力の呼び出し（既定は注入された回答フローの ``parse_text_response``）。再試行はしない。
     各段の呼び出しにだけ、その段の推論の量（``settings.question_subject_extraction_reasoning_effort``・
@@ -372,6 +390,14 @@ def extract_question_subjects(
         if not named:
             return QuestionSubjects(question, STATUS_NO_NAMED, calls=calls)
         role_input = prepare_roles(question, named)
+    except QuestionSubjectError as exc:
+        return QuestionSubjects(question, STATUS_FAILED, failure=exc.code, calls=calls)
+    except Exception as exc:  # noqa: BLE001 - 検査を飛ばして回答・評価を続ける。例外の文は残さない。
+        logger.warning("question subject extraction failed: %s", type(exc).__name__)
+        return QuestionSubjects(question, STATUS_FAILED, failure=type(exc).__name__, calls=calls)
+    # ここからは役割の段。失敗しても名前は役割なしで残して照合する（役割は文面の選び分けだけ）。
+    names = tuple(SubjectMention(row["start"], row["end"], row["text"], row["sentence_id"], ()) for row in role_input["entities"])
+    try:
         role_schema = role_model(role_input)
         calls += 1
         raw_roles = call(
@@ -385,10 +411,10 @@ def extract_question_subjects(
         roles = project_roles(role_input, role_schema.model_validate(_dump(raw_roles)).model_dump())
         return QuestionSubjects(question, STATUS_COMPLETED, roles, calls=calls)
     except QuestionSubjectError as exc:
-        return QuestionSubjects(question, STATUS_FAILED, failure=exc.code, calls=calls)
-    except Exception as exc:  # noqa: BLE001 - 検査を飛ばして回答・評価を続ける。例外の文は残さない。
-        logger.warning("question subject extraction failed: %s", type(exc).__name__)
-        return QuestionSubjects(question, STATUS_FAILED, failure=type(exc).__name__, calls=calls)
+        return QuestionSubjects(question, STATUS_ROLES_UNAVAILABLE, names, failure=exc.code, calls=calls)
+    except Exception as exc:  # noqa: BLE001 - 名前の照合は続ける。例外の文は残さない。
+        logger.warning("question subject role stage failed: %s", type(exc).__name__)
+        return QuestionSubjects(question, STATUS_ROLES_UNAVAILABLE, names, failure=type(exc).__name__, calls=calls)
 
 
 def extraction_settings(settings: Any) -> Any:
@@ -417,48 +443,76 @@ def _form(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
 
-def _checked(mention: SubjectMention) -> bool:
-    """確かめる提及: その文が答えを求めている名前。例として挙げた名前は確かめない（問うているのは分類）。"""
-    return ROLE_ASKED in mention.roles and ROLE_EXAMPLE not in mention.roles
+@dataclass(frozen=True)
+class UnconfirmedNotice:
+    """回答で「確認できない」と伝える名前の句と、文面の種類（役割から選ぶ。``NOTICE_*``）。"""
+
+    kind: str
+    phrases: tuple[str, ...]
 
 
-def _unconfirmed(subjects: QuestionSubjects | None, sources: Sequence[str]) -> list[SubjectMention]:
-    """問うている名前のうち、根拠にも利用者が前提として述べた名前にも無い提及（質問の順。同じ表記は最初の 1 つ）。"""
-    if subjects is None or subjects.status != STATUS_COMPLETED:
+def notice_kind(roles: Sequence[str]) -> str:
+    """役割から文面の種類を選ぶ（問うた > 前提 > 例。役割が無ければ中立）。照合するかどうかには使わない。"""
+    return next((kind for kind in _NOTICE_ORDER if kind in roles), NOTICE_UNKNOWN)
+
+
+def _unconfirmed(subjects: QuestionSubjects | None, sources: Sequence[str]) -> list[tuple[SubjectMention, str]]:
+    """根拠に無い named の名前（役割に関わらずすべて）と文面の種類。質問の順、同じ表記は最初の提及に 1 つ。
+
+    同じ表記の名前が複数の役割で現れたら、文面は ``_NOTICE_ORDER`` の先の種類にする。
+    """
+    if subjects is None or subjects.status not in VERIFIABLE:
         return []
-    given = [mention.text for mention in subjects.mentions if ROLE_GIVEN in mention.roles]
-    known = _form("\n".join((*given, *sources)))
-    found: dict[str, SubjectMention] = {}
+    known = _form("\n".join(sources))
+    first: dict[str, SubjectMention] = {}
+    kinds: dict[str, str] = {}
     for mention in subjects.mentions:
-        if _checked(mention) and _form(mention.text) not in known:
-            found.setdefault(mention.text, mention)
-    return list(found.values())
+        if _form(mention.text) in known:
+            continue
+        first.setdefault(mention.text, mention)
+        kind = notice_kind(mention.roles)
+        previous = kinds.get(mention.text)
+        kinds[mention.text] = kind if previous is None or _NOTICE_ORDER.index(kind) < _NOTICE_ORDER.index(previous) else previous
+    return [(mention, kinds[text]) for text, mention in first.items()]
 
 
 def absent_question_names(text: str, subjects: QuestionSubjects | None, sources: Sequence[str]) -> list[str]:
-    """``text`` に書いた、質問が問うた対象の名前のうち、根拠にも利用者が前提として述べた名前にも無い名前（質問の順）。"""
+    """``text`` に書いた質問の named の名前（役割に関わらず）のうち、根拠に無い名前（質問の順）。"""
     written = _form(text)
-    return [mention.text for mention in _unconfirmed(subjects, sources) if _form(mention.text) in written]
+    return [mention.text for mention, _ in _unconfirmed(subjects, sources) if _form(mention.text) in written]
 
 
-def unconfirmed_question_phrases(subjects: QuestionSubjects | None, sources: Sequence[str], gaps: Sequence[str] = ()) -> list[str]:
-    """回答で確認できないと伝える質問の対象の名前。``gaps`` に書いた名前は除く。
+def unconfirmed_question_notices(
+    subjects: QuestionSubjects | None, sources: Sequence[str], gaps: Sequence[str] = ()
+) -> list[UnconfirmedNotice]:
+    """回答で確認できないと伝える質問の名前を、文面の種類ごとに返す（種類は質問に最初に現れた順）。``gaps`` に書いた名前は除く。
 
-    同じ文の中で空白だけを挟んで続く提及は、原質問の範囲のまま 1 つの句にする。
+    同じ種類の中で、同じ文の中で空白だけを挟んで続く提及は、原質問の範囲のまま 1 つの句にする。
     """
     if subjects is None:
         return []
     written = _form("\n".join(gaps))
-    mentions = [mention for mention in _unconfirmed(subjects, sources) if _form(mention.text) not in written]
-    phrases: list[str] = []
-    previous: SubjectMention | None = None
-    phrase_start = 0
-    for mention in mentions:
-        between = subjects.question[previous.end : mention.start] if previous is not None else ""
-        if previous is not None and previous.sentence_id == mention.sentence_id and mention.start > previous.end and not between.strip():
-            phrases[-1] = subjects.question[phrase_start : mention.end]
-        else:
-            phrases.append(mention.text)
-            phrase_start = mention.start
-        previous = mention
-    return phrases
+    grouped: dict[str, list[SubjectMention]] = {}
+    for mention, kind in _unconfirmed(subjects, sources):
+        if _form(mention.text) not in written:
+            grouped.setdefault(kind, []).append(mention)
+    notices: list[UnconfirmedNotice] = []
+    for kind, mentions in grouped.items():
+        phrases: list[str] = []
+        previous: SubjectMention | None = None
+        phrase_start = 0
+        for mention in mentions:
+            between = subjects.question[previous.end : mention.start] if previous is not None else ""
+            if (
+                previous is not None
+                and previous.sentence_id == mention.sentence_id
+                and mention.start > previous.end
+                and not between.strip()
+            ):
+                phrases[-1] = subjects.question[phrase_start : mention.end]
+            else:
+                phrases.append(mention.text)
+                phrase_start = mention.start
+            previous = mention
+        notices.append(UnconfirmedNotice(kind, tuple(phrases)))
+    return notices

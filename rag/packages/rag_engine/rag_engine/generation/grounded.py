@@ -80,7 +80,7 @@ from rag_engine.generation.guide_authority import authoritative_guide_inputs, bi
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
-from rag_engine.generation.question_subjects import QuestionSubjects, absent_question_names, unconfirmed_question_phrases
+from rag_engine.generation.question_subjects import QuestionSubjects, absent_question_names, unconfirmed_question_notices
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.response_language import generation_language_schema
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
@@ -2186,8 +2186,8 @@ def verify(
     計画の外の説明を外さずに本文に残して ``unassessed`` の印を付ける（根拠と矛盾した説明ではない。#2738）。
     計画がはっきり unrelated と判断した根拠の説明は、今までどおり外す。
 
-    ``subjects`` は質問の対象の名前と役割（#4351）。説明に書いた問うた対象の名前が、回答が引いたどの原文にも無ければ
-    印を付ける。None・抽出の失敗は確かめない。
+    ``subjects`` は質問の対象の名前と役割（#4351）。説明に書いた質問の named の名前（役割に関わらず）が、回答が引いた
+    どの原文にも無ければ印を付ける。None・抽出の失敗は確かめない。
     """
     spans = [span for span in spans if not span.get("document_background_only")]
     checked: list[CheckedItem] = []
@@ -2432,7 +2432,7 @@ def _item_absent_years(question: str, entry: CheckedItem) -> list[str]:
 
 
 def _item_absent_names(subjects: QuestionSubjects | None, entry: CheckedItem, sources: Sequence[str]) -> list[str]:
-    """説明に書いた質問が問うた対象の名前のうち、利用者が前提として述べた名前と回答が引いた原文に無い名前（#4327・#4351）。"""
+    """説明に書いた質問の named の名前（役割に関わらず）のうち、回答が引いた原文に無い名前（#4327・#4351）。"""
     if subjects is None or not entry.published or entry.added or entry.item.kind == "gap" or not sources:
         return []
     return absent_question_names(entry.item.text, subjects, sources)
@@ -6622,8 +6622,8 @@ def run_round(
     ``glossary`` は質問に当たった検索・回答プロファイルの用語（名前と別名。#2823）。監査が別名で書いた質問の対象と
     正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
     ``question_subjects`` は質問の対象の名前と役割（#4351）を返す呼び出し（回答の中で 1 回だけ抽出し、round をまたいで
-    同じ結果を返す）。説明・要約に書いた問うた対象の名前を引いた原文に照らし、無ければ印と是正、要約の定型文、
-    「確認できない」の gap に乗せる。None は対象の名前を確かめない。
+    同じ結果を返す）。説明・要約に書いた質問の named の名前（役割に関わらず）を引いた原文に照らし、無ければ印と是正、
+    要約の定型文、「確認できない」の gap（中立の文面。役割の種類は診断に残す）に乗せる。None は対象の名前を確かめない。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     premise_records = confirmed_premise_records(confirmed_premises, confirmed_premise_sources)
@@ -7600,12 +7600,15 @@ def run_round(
         summary_reason = summary_reason or APPLICATION_SUMMARY_WITHHELD
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
-    # 質問が問うた対象が引いた原文に無ければ、モデルが gap を書かなくても確認できないことを本文で伝える（#4345）。
-    unconfirmed = unconfirmed_question_phrases(subjects, cited_texts, gap_texts) if cited_texts else []
-    if unconfirmed:
+    # 質問の名前（役割に関わらずすべて）が引いた原文に無ければ、モデルが gap を書かなくても確認できないことを本文で伝える
+    # （#4345・#4351）。文面は言語資源の中立の 1 文（役割ごとの文面は言語資源の保存契約の変更が要るため、まだ分けない）。
+    # 役割の種類は診断にだけ残す（名前の文字列は残さない）。
+    notices = unconfirmed_question_notices(subjects, cited_texts, gap_texts) if cited_texts else []
+    if notices:
         before_gap = list(checked)
-        gap_text = answer_labels().subject_unconfirmed_gap.format(names="、".join(unconfirmed))
-        checked.append(CheckedItem(GroundedItem(kind="gap", text=gap_text)))
+        phrases = [phrase for notice in notices for phrase in notice.phrases]
+        checked.append(CheckedItem(GroundedItem(kind="gap", text=answer_labels().subject_unconfirmed_gap.format(names="、".join(phrases)))))
+        timing["subject_unconfirmed"] = [{"kind": notice.kind, "names": len(notice.phrases)} for notice in notices]
         if audit is not None:
             audit = reindex_audit_items(before_gap, checked, audit, len(guide_notices))
     if (

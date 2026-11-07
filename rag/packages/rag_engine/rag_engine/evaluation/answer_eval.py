@@ -1017,7 +1017,7 @@ REFERENCE_ANSWER_ID_INVALID = "answer_id_invalid"  # 段落が書いた ID が�
 REFERENCE_AUDIT_ID_INVALID = "audit_id_invalid"  # 監査が返した ID が根拠に無い（監査の応答だけの誤り）
 REFERENCE_AMBIGUOUS_ID = "ambiguous_id"  # 省いて書いた ID が複数の chunk に当たり、1 つに決まらない
 REFERENCE_AUDIT_ID_MISSING = "audit_id_missing"  # 監査が ID を返さず、段落も ID を書いていない
-REFERENCE_SUBJECT_UNSUPPORTED = "subject_unsupported"  # 質問が問うた対象の名前が、回答が引用した根拠にも質問の事実にも無い
+REFERENCE_SUBJECT_UNSUPPORTED = "subject_unsupported"  # 質問の named の名前（役割に関わらず）が、回答が引用した根拠に無い
 REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査が返した引用がその根拠に無い
 # 段落の分類の照合の結果（ClaimCheck.classification_check。#2625）。
 CLASSIFICATION_NON_CLAIM_MISMATCH = "non_claim_mismatch"  # モデルは not_a_claim、コードは見出し・出典の行と認めない
@@ -1151,7 +1151,8 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
 # 14: 要約を本文の原文候補へ関連付け、参照不足は意味を未評価とする（#3920）。
 # 20: 未記載報告だけを生成へ渡した全範囲で検査し、部分根拠から不支持と断定しない（#4350）。
 # 21: 質問が問うた対象の名前を、モデルの構造化出力で取り出した対象と役割で引用の根拠に照らす（#4351）。
-RUBRIC_VERSION = 21
+# 22: 質問の named の名前を役割に関わらずすべて照らす（前提・例の名前・役割の段の失敗を含む。#4351、利用者の決定）。
+RUBRIC_VERSION = 22
 # 1 件の評価で同時に行う判定の呼び出しの数（網羅・正確性・段落ごとの主張）。
 JUDGE_MAX_CONCURRENCY = 4
 # 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。実モデルで同じ比較範囲を 2 回ずつ判定すると、
@@ -1647,10 +1648,11 @@ def _checked_question_names(
     *,
     gaps: Sequence[str] = (),
 ) -> list[ClaimCheck]:
-    """質問が問うた対象の名前を書いた supported を、回答が引用した根拠に照らす（#4327・#4343・#4351）。
+    """質問の named の名前（役割に関わらず）を書いた supported を、回答が引用した根拠に照らす（#4327・#4343・#4351）。
 
     一般の条件だけを述べる根拠から「対象がその条件を満たす」とする飛躍は、モデルが前提を補うと supported になる。
-    対象と役割は ``question_subjects`` の構造化出力で取り出し、名前の有無はコードで確かめる（判定のモデルの出力に頼らない）。
+    名前は ``question_subjects`` の構造化出力で取り出し、名前の有無はコードで確かめる（判定のモデルの出力に頼らない）。
+    前提・例の名前も、役割の段が失敗しても照合する（生成と同じ規則。利用者の決定 2026-11-07）。
     多段の質問では別の段落の根拠で確かめていることがあるので、回答全体の根拠に照らす。回答が確認できないと書いた
     名前は確かめない（生成の要約の検査と同じ。#4347）。抽出が失敗したら確かめない。
     """
