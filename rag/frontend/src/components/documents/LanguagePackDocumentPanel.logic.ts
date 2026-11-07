@@ -1,4 +1,4 @@
-import type { LanguagePackDocumentStatus, LanguagePackDocumentUse, LanguagePackRecipeUse, LanguagePackRelation } from "@/lib/api";
+import type { LanguagePackDocumentStatus, LanguagePackDocumentUse, LanguagePackDocumentUseStatus, LanguagePackRecipeUse, LanguagePackRelation } from "@/lib/api";
 
 /** 構築中の job が固定した版。版の行が無ければ version は null（版の数から推定しない）。 */
 export interface LanguagePackBuildTarget {
@@ -60,11 +60,13 @@ export function languagePackPanelState(use: LanguagePackDocumentUse, recipeId: s
  * - current: 現在版を使用（最新） / equivalent: 版は違うが取込設定は同じ（最新・内容は同じ）
  * - different: 取込設定に差分あり（再処理を推奨） / unrecorded: 使用版を判定できない
  * - building: job が版を固定して待機・実行中 / not_built: 索引も構築中の job も無い
- * 値は文書インデックスの絞り込み（backend の LanguagePackDocumentStatus）と同じ。
+ * - superseded: 新しい版に置き換えた文書（旧版）。判定・絞り込みの対象外（#4601）
+ * superseded 以外の値は文書インデックスの絞り込み（backend の LanguagePackDocumentStatus）と同じ。
  */
-export type LanguagePackStatus = LanguagePackDocumentStatus;
+export type LanguagePackStatus = LanguagePackDocumentUseStatus;
 
-export function languagePackStatus(state: LanguagePackPanelState): LanguagePackStatus {
+/** 選んだレシピ 1 つの状態（要約の行）。旧版の文書かどうかは見ない（languagePackRecipeSummaryStatus）。 */
+export function languagePackStatus(state: LanguagePackPanelState): LanguagePackDocumentStatus {
   switch (state.kind) {
     case "notBuilt":
       return "not_built";
@@ -77,6 +79,11 @@ export function languagePackStatus(state: LanguagePackPanelState): LanguagePackS
     case "built":
       return state.relation;
   }
+}
+
+/** 要約の行のバッジ。旧版の文書は、一覧の列と同じく使用版にかかわらず対象外にする（#4601）。 */
+export function languagePackRecipeSummaryStatus(use: LanguagePackDocumentUse, state: LanguagePackPanelState): LanguagePackStatus {
+  return use.superseded ? "superseded" : languagePackStatus(state);
 }
 
 /** 要約の行の版。構築中は対象版、検索中の索引の版が記録済みならその版。判定できない・未構築は出さない。 */
@@ -104,19 +111,10 @@ export function languagePackBuildNotice(use: LanguagePackDocumentUse | null | un
   return { version: state.target.version, keepsActive: state.kind !== "firstBuild" };
 }
 
-/** 一覧の 1 つのレシピの状態（構築中を先に見る。文書の詳細の判定と同じ）。 */
-function recipeStatus(recipe: LanguagePackRecipeUse): LanguagePackStatus {
-  if (recipe.target_release_id) return "building";
-  if (recipe.chunk_set_id === null) return "not_built";
-  return isRecordedUse(recipe) ? recipe.relation : "unrecorded";
-}
-
-/** 一覧で 1 つにまとめるときの優先順（対応が要るもの > 構築中 > 問題の無いもの）。 */
-const SUMMARY_PRIORITY: readonly LanguagePackStatus[] = ["different", "unrecorded", "building", "equivalent", "current", "not_built"];
-
-/** 一覧の 1 つのラベル。有効レシピの差分・未記録を見落とさず、判定を 1 つにまとめる。 */
+/**
+ * 一覧の 1 つのラベル。レシピの状態をまとめる優先順と旧版の扱いは backend が絞り込みと同じ規則で決めた
+ * `status` をそのまま使う（画面と SQL に別々の判定を持たない。#4601）。使用版の情報が無ければ判定できない。
+ */
 export function languagePackSummaryStatus(use: LanguagePackDocumentUse | null | undefined): LanguagePackStatus {
-  if (!use) return "unrecorded";
-  const statuses = new Set(use.recipes.map(recipeStatus));
-  return SUMMARY_PRIORITY.find((status) => statuses.has(status)) ?? "not_built";
+  return use?.status ?? "unrecorded";
 }

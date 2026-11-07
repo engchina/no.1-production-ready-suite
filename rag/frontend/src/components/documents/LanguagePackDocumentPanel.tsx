@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { CircleCheck, CircleHelp, Hourglass, RefreshCw, type LucideIcon } from "lucide-react";
+import { CircleCheck, CircleHelp, History, Hourglass, RefreshCw, type LucideIcon } from "lucide-react";
 import { Banner, Button, Disclosure, FormStatus, SelectField, Skeleton, StatusBadge, TextareaField, TimedLoadingState, useConfirm, type StatusVariant } from "@production-ready/ui";
 
 import { api, type DocumentRecipeView, type IngestionJobPhase, type LanguagePackDocumentUse } from "@/lib/api";
@@ -13,7 +13,7 @@ import {
   languagePackDisplayVersion,
   languagePackNeedsAction,
   languagePackPanelState,
-  languagePackStatus,
+  languagePackRecipeSummaryStatus,
   languagePackSummaryStatus,
   type LanguagePackBuildNotice,
   type LanguagePackPanelState,
@@ -22,7 +22,7 @@ import {
 import { ALL_START_PHASES, UNREADABLE_START_PHASES, isUnreadableReleaseError, selectablePhase } from "./LanguagePackUnreadable.logic";
 
 /**
- * 状態ごとのバッジの形。対応の要らない状態（最新・未構築）は控えめな neutral、対応が要る状態は warning、
+ * 状態ごとのバッジの形。対応の要らない状態（最新・未構築・対象外）は控えめな neutral、対応が要る状態は warning、
  * 構築中は info。色だけにしないよう、状態ごとにアイコンも変える（デザインシステム README §4「StatusBadge」）。
  */
 const STATUS_BADGE: Record<LanguagePackStatus, { variant: StatusVariant; icon: LucideIcon | true }> = {
@@ -32,6 +32,8 @@ const STATUS_BADGE: Record<LanguagePackStatus, { variant: StatusVariant; icon: L
   unrecorded: { variant: "warning", icon: CircleHelp },
   building: { variant: "info", icon: Hourglass },
   not_built: { variant: "neutral", icon: true },
+  // 旧版は判定・絞り込みの対象外で対応も要らない（neutral）。形は一覧の「旧版」と同じ History（#4601）。
+  superseded: { variant: "neutral", icon: History },
 };
 
 export function LanguagePackStatusBadge({ status }: { status: LanguagePackStatus }) {
@@ -39,7 +41,7 @@ export function LanguagePackStatusBadge({ status }: { status: LanguagePackStatus
   return <StatusBadge variant={badge.variant} icon={badge.icon} label={t(`settings.language.release.status.${status}`)} />;
 }
 
-/** 文書インデックスの列の 1 つのラベル（有効なレシピの状態を 1 つにまとめる）。 */
+/** 文書インデックスの列の 1 つのラベル（backend が有効なレシピの状態を 1 つにまとめた状態）。 */
 export function LanguagePackUseSummary({ use }: { use?: LanguagePackDocumentUse | null }) {
   return <LanguagePackStatusBadge status={languagePackSummaryStatus(use)} />;
 }
@@ -58,7 +60,7 @@ export function languagePackBuildText(notice: LanguagePackBuildNotice): string {
 export function LanguagePackRecipeSummary({ documentId, fileName, use, recipe, canManage }: { documentId: string; fileName: string; use?: LanguagePackDocumentUse | null; recipe: DocumentRecipeView; canManage: boolean }) {
   if (!use) return null;
   const state = languagePackPanelState(use, recipe.recipe_id);
-  const status = languagePackStatus(state);
+  const status = languagePackRecipeSummaryStatus(use, state);
   const version = languagePackDisplayVersion(state);
   const needsAction = languagePackNeedsAction(status);
   return <div className="mt-3 space-y-1 border-t border-border pt-3" data-testid="document-language-pack" data-state={state.kind} data-status={status}>

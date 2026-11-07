@@ -198,7 +198,16 @@ describe("書式と絞り込みの値", () => {
         { model: "model-b", requests: 1, input_tokens: 2000, output_tokens: 45, total_tokens: 2045 },
       ],
     };
-    expect(runModelTokensView(usage)).toBe("model-a: 10,300 トークン（2 回） ／ model-b: 2,045 トークン（1 回）");
+    render(<p>{runModelTokensView(usage)}</p>);
+    expect(container.textContent).toBe("model-a: 10,300 トークン（2 回） ／ model-b: 2,045 トークン（1 回）");
+    // モデルの ID だけを「モデル」の行と同じ等幅の書体（--font-mono）で出し、数の文言は本文の書体のまま（#4599）。
+    const ids = [...container.querySelectorAll("[data-run-model-id]")];
+    expect(ids.map((node) => node.textContent)).toEqual(["model-a", "model-b"]);
+    expect(ids.every((node) => node.classList.contains("font-mono"))).toBe(true);
+    expect(container.querySelectorAll(".font-mono")).toHaveLength(2);
+    // 数の文言は製品の i18n で上書きできる（ID は含めない）。
+    render(<p>{runModelTokensView(usage, ({ tokens, requests }) => `${tokens} / ${requests}`)}</p>);
+    expect(container.textContent).toBe("model-a: 10,300 / 2 ／ model-b: 2,045 / 1");
     expect(runModelTokensView({ ...usage, by_model: usage.by_model?.slice(0, 1) })).toBeNull();
     expect(runModelTokensView({ ...usage, by_model: undefined })).toBeNull();
     expect(runModelTokensView(null)).toBeNull();

@@ -7,6 +7,7 @@ import {
   languagePackDisplayVersion,
   languagePackNeedsAction,
   languagePackPanelState,
+  languagePackRecipeSummaryStatus,
   languagePackStatus,
   languagePackSummaryStatus,
   type LanguagePackStatus,
@@ -14,7 +15,8 @@ import {
 
 const empty: LanguagePackRecipeUse = { recipe_id: "recipe-1", chunk_set_id: null, release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null };
 const served = (release: string, version: number, relation: LanguagePackRecipeUse["relation"]): LanguagePackRecipeUse => ({ ...empty, chunk_set_id: "chunks-a", release_id: release, version, ingest_hash: `hash-${version}`, relation, built_at: "2026-10-17T00:00:00Z", job_id: "job-a" });
-const documentUse = (...recipes: LanguagePackRecipeUse[]): LanguagePackDocumentUse => ({ current_release_id: "release-3", current_version: 3, recipes });
+// status は backend が決める（画面の判定はこの値を使うだけ。#4601）。ここでは要約の行の判定に使わない。
+const documentUse = (...recipes: LanguagePackRecipeUse[]): LanguagePackDocumentUse => ({ current_release_id: "release-3", current_version: 3, recipes, superseded: false, status: "not_built" });
 
 describe("languagePackPanelState", () => {
   it("索引も構築中の job も無ければ未構築にし、比較を作らない", () => {
@@ -76,8 +78,18 @@ describe("languagePackStatus（要約の行のバッジ）", () => {
   });
 
   it("対応が要るのは再処理を推奨・判定できないときだけ", () => {
-    const needs = (["current", "equivalent", "different", "unrecorded", "building", "not_built"] as const).filter(languagePackNeedsAction);
+    const needs = (["current", "equivalent", "different", "unrecorded", "building", "not_built", "superseded"] as const).filter(languagePackNeedsAction);
     expect(needs).toEqual(["different", "unrecorded"]);
+  });
+
+  // #4601: 旧版は絞り込みの 6 つの状態に入らない。
+  it("旧版の文書は、レシピの使用版にかかわらず対象外にする（一覧の列・絞り込みとそろえる）", () => {
+    for (const recipe of [{ ...served("release-1", 1, "different"), ingest_hash: null }, served("release-1", 1, "different"), { ...empty, target_release_id: "release-3" }]) {
+      const use = { ...documentUse(recipe), superseded: true, status: "superseded" as const };
+      const state = languagePackPanelState(use, "recipe-1");
+      expect(languagePackRecipeSummaryStatus(use, state)).toBe("superseded");
+      expect(languagePackRecipeSummaryStatus({ ...use, superseded: false }, state)).toBe(languagePackStatus(state));
+    }
   });
 });
 
@@ -94,20 +106,11 @@ describe("languagePackBuildNotice（状態メッセージの枠の構築中の�
 });
 
 describe("languagePackSummaryStatus（文書インデックスの列）", () => {
-  it("索引が無ければ未構築、構築中なら構築中、判定できない索引があれば判定できない", () => {
-    expect(languagePackSummaryStatus(documentUse())).toBe("not_built");
-    expect(languagePackSummaryStatus(documentUse({ ...empty, target_release_id: "release-3" }))).toBe("building");
-    expect(languagePackSummaryStatus(documentUse({ ...served("release-3", 3, "current"), ingest_hash: null }))).toBe("unrecorded");
+  it("backend が決めた状態をそのまま使い、使用版の情報が無ければ判定できない", () => {
+    for (const status of ["current", "equivalent", "different", "unrecorded", "building", "not_built", "superseded"] as const) {
+      // レシピの内容から優先順を判定し直さない（backend の status と食い違わせない）。
+      expect(languagePackSummaryStatus({ ...documentUse(served("release-1", 1, "different")), status })).toBe(status);
+    }
     expect(languagePackSummaryStatus(null)).toBe("unrecorded");
-  });
-
-  it("差分 > 判定できない > 構築中 > 同値 > 現在版の順で 1 つにまとめる", () => {
-    const unrecorded = { ...served("release-3", 3, "current"), version: null };
-    const building = { ...served("release-1", 1, "different"), recipe_id: "recipe-3", target_release_id: "release-3" };
-    expect(languagePackSummaryStatus(documentUse(served("release-1", 1, "different"), unrecorded))).toBe("different");
-    expect(languagePackSummaryStatus(documentUse(served("release-2", 2, "equivalent"), unrecorded))).toBe("unrecorded");
-    expect(languagePackSummaryStatus(documentUse(served("release-2", 2, "equivalent"), building))).toBe("building");
-    expect(languagePackSummaryStatus(documentUse(served("release-2", 2, "equivalent"), served("release-3", 3, "current")))).toBe("equivalent");
-    expect(languagePackSummaryStatus(documentUse(served("release-3", 3, "current")))).toBe("current");
   });
 });

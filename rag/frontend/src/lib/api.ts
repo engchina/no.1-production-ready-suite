@@ -578,6 +578,11 @@ export type LanguagePackRelation = "current" | "equivalent" | "different" | "unr
 /** 文書の言語資源の状態（文書インデックスの列・絞り込み。backend の LanguagePackDocumentStatus。#4566）。 */
 export type LanguagePackDocumentStatus = LanguagePackRelation | "building" | "not_built";
 export const LANGUAGE_PACK_DOCUMENT_STATUSES = ["current", "equivalent", "different", "unrecorded", "building", "not_built"] as const satisfies readonly LanguagePackDocumentStatus[];
+/**
+ * 一覧の列・文書の詳細のバッジの状態（backend の `LanguagePackDocumentUse.status`）。
+ * 新しい版に置き換えた文書（旧版）は superseded で、絞り込みの 6 つの状態に入れない（#4601）。
+ */
+export type LanguagePackDocumentUseStatus = LanguagePackDocumentStatus | "superseded";
 export interface LanguagePackRecipeUse {
   recipe_id: string | null;
   chunk_set_id: string | null;
@@ -616,6 +621,10 @@ export interface LanguagePackDocumentUse {
   current_release_id: string;
   current_version: number;
   recipes: LanguagePackRecipeUse[];
+  /** 新しい版に置き換えた文書（旧版）か（#4601）。 */
+  superseded: boolean;
+  /** 文書の状態。backend が絞り込みと同じ規則で決める（画面で優先順を判定しない）。 */
+  status: LanguagePackDocumentUseStatus;
 }
 
 export interface DocumentSummary {

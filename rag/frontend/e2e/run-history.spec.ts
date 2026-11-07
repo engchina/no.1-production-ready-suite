@@ -876,6 +876,13 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const fact = (id: string) => summary.locator(`[data-run-fact="${id}"] dd`);
     await page.goto("/history/run-1");
     await expect(fact("modelTokens")).toHaveText("model-light: 3,300 トークン（1 回） ／ model-strong: 6,600 トークン（2 回）");
+    // モデルの ID は「モデル」の行と同じ等幅の書体（共有の --font-mono）で、数の文言は本文の書体のまま（#4599）。
+    const monoFont = await fact("model").evaluate((node) => getComputedStyle(node).fontFamily);
+    expect(monoFont).toMatch(/^"?Google Sans Code/);
+    const modelIds = fact("modelTokens").locator("[data-run-model-id]");
+    await expect(modelIds).toHaveText(["model-light", "model-strong"]);
+    expect(await modelIds.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).fontFamily))).toEqual([monoFont, monoFont]);
+    expect(await fact("modelTokens").evaluate((node) => getComputedStyle(node).fontFamily)).not.toBe(monoFont);
     await expect(fact("modelCascade")).toHaveText("あり（引用の ID・原文が資料と一致しなかった）");
     // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
     await expect(page.getByTestId("answer-model-cascade")).toBeHidden();

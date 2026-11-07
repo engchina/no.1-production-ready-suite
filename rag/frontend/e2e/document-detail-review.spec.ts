@@ -200,9 +200,10 @@ const servingUse = (release: string, version: number, relation: string) => ({ ..
 const unrecordedUse = { ...servingUse("release-1", 1, "different"), ingest_hash: null, relation: "unrecorded" };
 const releaseSnapshot = (id: string, version: number) => ({ id, version, effective: { numbers: { article_units: ["A"] } }, hash: "old", ingest_hash: "old", published_at: "2026-10-17T00:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "" });
 
-type LanguagePackStateOptions = { building?: boolean; admin?: boolean; theme?: "light" | "dark" };
+/** superseded: 新しい版に置き換えた文書（旧版。#4601）。 */
+type LanguagePackStateOptions = { building?: boolean; admin?: boolean; theme?: "light" | "dark"; superseded?: boolean };
 
-async function openLanguagePackState(page: Page, recipes: Record<string, unknown>[], { building = false, admin = true, theme }: LanguagePackStateOptions = {}) {
+async function openLanguagePackState(page: Page, recipes: Record<string, unknown>[], { building = false, admin = true, theme, superseded = false }: LanguagePackStateOptions = {}) {
   if (theme) {
     await page.addInitScript(value => {
       localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
@@ -213,7 +214,8 @@ async function openLanguagePackState(page: Page, recipes: Record<string, unknown
   if (!admin) await mockAuthUser(page, { permissions: ["menu.file_list", "menu.upload"] });
   const recipe = { ...recipeView("INDEXED"), active_chunk_set_id: recipes.some(item => item.chunk_set_id) ? "chunks-a" : null, searchable: recipes.some(item => item.chunk_set_id), steps: recipeView("INDEXED").steps.map(step => ({ ...step, status: building ? "QUEUED" : "SUCCEEDED" })) };
   await page.route(`**/api/documents/${DOC_ID}/recipes`, route => route.fulfill(ok([recipe])));
-  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes } })));
+  const version = superseded ? { superseded_by_document_id: "doc-new", is_superseded: true } : {};
+  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), ...version, file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, superseded, recipes } })));
   const comparisons: URL[] = [];
   const snapshots: string[] = [];
   await page.route("**/api/settings/language-pack/releases/compare?*", route => {
@@ -308,6 +310,23 @@ test("言語資源: 権限の無い利用者にも、判定できない索引で
   await expect(panel.getByTestId("document-language-pack-ask-admin")).toBeVisible();
   await expect(panel.locator("a, button, summary")).toHaveCount(0);
 });
+
+// #4601: 旧版の文書は、一覧の列と同じく「対象外」を出す（絞り込みの 6 つの状態に入らないため、判定できない・
+// 再処理を推奨などの状態や管理者への依頼を出さない）。
+for (const admin of [true, false]) {
+  test(`言語資源: 旧版の文書は使用版にかかわらず「対象外」を出し、対応を求めない（${admin ? "権限あり" : "権限なし"}）`, { tag: "@responsive" }, async ({ page }) => {
+    const { panel, details, comparisons } = await openLanguagePackState(page, [unrecordedUse], { admin, superseded: true });
+    await expect(panel).toHaveAttribute("data-status", "superseded");
+    await expectBadge(panel, "対象外（新しい版に置き換え済み）", "neutral");
+    await expect(panel).not.toContainText("判定できません");
+    await expect(panel.getByTestId("document-language-pack-ask-admin")).toHaveCount(0);
+    // 管理者の「詳細」は残すが、対応を求めないので自動で開かない。
+    if (admin) await expect(details).toHaveAttribute("data-state", "closed");
+    else await expect(details).toHaveCount(0);
+    expect(comparisons).toHaveLength(0);
+    await expectNoPageOverflow(page);
+  });
+}
 
 // #4194: 使用中の版が現在の契約で読めない（公開時の設定・比較が 409）とき、行き止まりにせず抽出から再処理できる。
 for (const theme of ["light", "dark"] as const) {

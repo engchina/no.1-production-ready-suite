@@ -1,5 +1,5 @@
 import { CalendarRange } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 import { displayDateTimeParts, displayTimeZone } from "../../lib/date-time";
 import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
@@ -95,20 +95,25 @@ export interface RunModelTokenUsageRecord {
 
 /**
  * 「モデルごとのトークン数」の値（モデルのカスケードで 2 つ以上のモデルを呼んだ実行。#4581）。モデルが 1 つ・内訳の無い
- * 記録・計測できない実行は null（行を出さない）。数は桁区切り。
+ * 記録・計測できない実行は null（行を出さない）。数は桁区切り。モデルの ID は「モデル」の行と同じ等幅の書体
+ * （`--font-mono`）で出し、数の文言（`label`。製品の i18n で上書きできる）は本文の書体のまま（#4599）。
  */
 export function runModelTokensView(
   usage: RunModelUsageRecord | null | undefined,
-  label: (values: { model: string; tokens: string; requests: string }) => string = ({ model, tokens, requests }) =>
-    `${model}: ${tokens} トークン（${requests} 回）`
-): string | null {
+  label: (values: { tokens: string; requests: string }) => string = ({ tokens, requests }) =>
+    `${tokens} トークン（${requests} 回）`
+): ReactNode {
   const rows = usage?.by_model ?? [];
   if (!usage || usage.measurement === "unmeasured" || rows.length < 2) return null;
-  return rows
-    .map((row) =>
-      label({ model: row.model, tokens: formatPaginationNumber(row.total_tokens), requests: formatPaginationNumber(row.requests) })
-    )
-    .join(" ／ ");
+  return rows.map((row, index) => (
+    <Fragment key={`${index}:${row.model}`}>
+      {index > 0 ? " ／ " : null}
+      <span className="font-mono" data-run-model-id="">
+        {row.model}
+      </span>
+      {`: ${label({ tokens: formatPaginationNumber(row.total_tokens), requests: formatPaginationNumber(row.requests) })}`}
+    </Fragment>
+  ));
 }
 
 /** モデルのカスケードの記録（backend の `pr_backend_core.model_cascade.cascade_record`。#4581）。 */

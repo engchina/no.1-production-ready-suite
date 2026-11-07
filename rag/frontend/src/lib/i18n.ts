@@ -416,6 +416,8 @@ export const ja = {
   "settings.language.release.status.unrecorded": "判定できません",
   "settings.language.release.status.building": "構築中",
   "settings.language.release.status.not_built": "未構築",
+  // 新しい版に置き換えた文書（旧版）。絞り込みの選択肢には出さない（#4601）。
+  "settings.language.release.status.superseded": "対象外（新しい版に置き換え済み）",
   "settings.language.release.summary": "言語資源",
   "settings.language.release.summaryVersion": "言語資源 v{version}",
   "settings.language.release.askAdmin": "管理者に再処理を依頼してください",
@@ -5657,7 +5659,7 @@ export const ja = {
   // モデルの呼び出し（Agent の実行の詳細と同じ形。#3419）。
   "history.detail.modelCalls": "モデルの呼び出し",
   "history.detail.modelTokens": "モデルごとのトークン数",
-  "history.detail.modelTokensValue": "{model}: {tokens} トークン（{requests} 回）",
+  "history.detail.modelTokensValue": "{tokens} トークン（{requests} 回）",
   "history.detail.cascade": "高性能モデルでの回答し直し",
   "history.detail.cascade.escalated": "あり（{reasons}）",
   "history.detail.cascade.notEscalated": "なし",
