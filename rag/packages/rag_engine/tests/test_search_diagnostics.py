@@ -165,6 +165,36 @@ def test_native_trace_shows_vector_read_method_and_shortage() -> None:
     assert fields["ベクトルの読み方 1"].endswith("取得 0 件 / 候補不足")
     assert "Oracle の1回の呼び出し" in fields["目的"]
 
+    retried = search_diagnostics(
+        HYBRID_SEARCH_STAGE,
+        branches=[
+            {
+                "native": True,
+                "raw_count": 50,
+                "vector_retrieval": {
+                    "method": "native_index_retry",
+                    "scope_vector_chunks": 60000,
+                    "exact_max_chunks": 50000,
+                    "requested": 50,
+                    "expected": 50,
+                    "returned": 50,
+                    "shortage": False,
+                    "first_returned": 41,
+                    "oversample_factor": 4,
+                },
+                "results": [],
+            }
+        ],
+        scope={},
+        limit=50,
+        metric="有効 RRF 寄与",
+    )
+    fields = {entry["label"]: entry["value"] for entry in retried["fields"]}
+    assert fields["ベクトルの読み方 1"].startswith(
+        "原生索引の近似検索（取得 41 件で不足したので、候補を 4 倍にして読み直し、要求の件数に切った） /"
+    )
+    assert fields["ベクトルの読み方 1"].endswith("取得 50 件")
+
 
 def test_search_diagnostics_shows_split_scope_only_when_the_search_was_split() -> None:
     def fields(filter_batches: int) -> dict[str, str]:

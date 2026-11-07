@@ -19,6 +19,7 @@ from app.api.routes.documents import (
 )
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import (
+    IngestionJobFence,
     ReviewedExtractionWrite,
     oracle_chunk_set_schema_sql,
     oracle_document_recipe_schema_sql,
@@ -862,10 +863,10 @@ class _FakeRecipeJobOracle:
         to_status: IngestionJobStatus,
         error_message: str | None = None,
         finished_at: datetime | None = None,
-        lease_owner: str | None = None,
+        fence: IngestionJobFence | None = None,
     ) -> IngestionJob | None:
-        # lease を持たない実行(lease_owner なし)の経路だけを扱う(lease の条件は #359 のテスト)。
-        assert lease_owner is None
+        # lease を持たない実行(fence なし)の経路だけを扱う(lease の条件は #359・#4187 のテスト)。
+        assert fence is None
         # 実 Oracle の `WHERE status IN (...)` と同じく、遷移元の状態のときだけ書く。
         job = self.jobs.get(job_id)
         if job is None or job.status not in from_statuses:

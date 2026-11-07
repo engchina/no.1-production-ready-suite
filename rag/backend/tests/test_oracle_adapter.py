@@ -17,6 +17,7 @@ from pr_backend_core.oracle_session import init_oracle_session
 import app.clients.oracle as oracle_module
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
+    IngestionJobFence,
     OracleClient,
     OracleWalletPasswordRequiredError,
     _datetime_value,
@@ -1151,7 +1152,11 @@ async def test_oracle_client_transition_ingestion_job_returns_none_when_no_row_m
 async def test_oracle_client_transition_ingestion_job_with_lease_requires_own_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """lease を渡した遷移は、自分の lease の行だけを書く(再 claim 後の上書きを防ぐ。#359)。"""
+    """実行の識別子を渡した遷移は、自分の実行の行だけを書く(再 claim 後の上書きを防ぐ)。
+
+    lease の持ち主(#359)に加えて試行の回数も条件にし、同じ worker が claim し直した後の古い試行も
+    書かない(#4187)。
+    """
     pool = FakeOraclePool(execute_results=[])
     monkeypatch.setattr(FakeOracleCursor, "rowcount", 0, raising=False)
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
@@ -1161,23 +1166,30 @@ async def test_oracle_client_transition_ingestion_job_with_lease_requires_own_le
         from_statuses=(IngestionJobStatus.RUNNING,),
         to_status=IngestionJobStatus.SUCCEEDED,
         finished_at=datetime(2026, 1, 2, 0, 5, tzinfo=UTC),
-        lease_owner="host:1:worker",
+        fence=IngestionJobFence(job_id="job-1", attempt_count=2, lease_owner="host:1:worker"),
     )
 
     assert updated is None
     [update_call] = pool.connection.calls
     assert "UPDATE rag_ingestion_jobs" in update_call.statement
     assert "status IN (:from_status_0)" in update_call.statement
-    assert "AND lease_owner = :lease_owner" in update_call.statement
-    assert update_call.parameters["lease_owner"] == "host:1:worker"
+    assert (
+        "AND attempt_count = :fence_attempt_count AND lease_owner = :fence_lease_owner"
+        in update_call.statement
+    )
+    assert update_call.parameters["fence_attempt_count"] == 2
+    assert update_call.parameters["fence_lease_owner"] == "host:1:worker"
     # 0 行なら最新行を読み直さない(古い実行の結果として捨てる)。
     assert pool.connection.commits == 1
 
 
 async def test_oracle_client_reads_ingestion_job_lease() -> None:
-    """job の状態と lease の持ち主を、job の取得と同じ範囲の条件で読む(#359)。"""
+    """job の状態と lease の持ち主・試行の回数を、job の取得と同じ範囲の条件で読む(#359・#4187)。"""
     pool = FakeOraclePool(
-        execute_results=[[{"status": "RUNNING", "lease_owner": "host:2:other"}], []]
+        execute_results=[
+            [{"status": "RUNNING", "lease_owner": "host:2:other", "attempt_count": 3}],
+            [],
+        ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
@@ -1187,9 +1199,10 @@ async def test_oracle_client_reads_ingestion_job_lease() -> None:
     assert lease is not None
     assert lease.status == IngestionJobStatus.RUNNING
     assert lease.lease_owner == "host:2:other"
+    assert lease.attempt_count == 3
     assert missing is None
     call = pool.connection.calls[0]
-    assert "SELECT j.status, j.lease_owner" in call.statement
+    assert "SELECT j.status, j.lease_owner, j.attempt_count" in call.statement
     assert "JOIN rag_documents d" in call.statement
     assert call.parameters["job_id"] == "job-1"
 
@@ -1524,7 +1537,9 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
     )
 
     written = await client.update_ingestion_job_progress(
-        "job-1", progress, lease_owner="host:1:worker"
+        "job-1",
+        progress,
+        fence=IngestionJobFence(job_id="job-1", attempt_count=2, lease_owner="host:1:worker"),
     )
     cleared = await client.update_ingestion_job_progress("job-1", None)
 
@@ -1536,8 +1551,12 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
     assert pool.connection.rollbacks == 0
     assert "SET progress_json = :progress_json" in write_call.statement
     assert "AND status = 'RUNNING'" in write_call.statement
-    assert "AND lease_owner = :lease_owner" in write_call.statement
-    assert write_call.parameters["lease_owner"] == "host:1:worker"
+    assert (
+        "AND attempt_count = :fence_attempt_count AND lease_owner = :fence_lease_owner"
+        in write_call.statement
+    )
+    assert write_call.parameters["fence_attempt_count"] == 2
+    assert write_call.parameters["fence_lease_owner"] == "host:1:worker"
     saved = json.loads(str(write_call.parameters["progress_json"]))
     assert saved["parse"] == {
         "engine": "docling",

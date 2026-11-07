@@ -17,6 +17,9 @@
   逐字で無い Latin の 3 語以上の連なりを含まない。
 - 審査済みの結論の数値（Unicode の 10 進数字の連なり。3 桁区切りを除く）がすべて説明にある。
 - 本文の出典行の印で始まる行を含まない（画面が出典行を数えて根拠に結ぶため）。
+- その呼び出しで送った入力の節の名前のうち、説明の語にしてよい節（``WORDING_KEYS``）以外の名前を、入力の原文に
+  逐字で無いのに含まない（利用者に見えない入力の構造を出典のように書かないため。#4603）。比べる名前は入力を組み立てる
+  定数そのもので、語の一覧ではない。
 
 検査の前に、改行・タブのエスケープの写し（逆斜線と ``n`` / ``r`` / ``t`` の 2 文字。構造化出力の文字列の中で
 モデルが二重にエスケープしたもの）を、入力の原文に同じ写しが無いときだけ制御文字へ戻す（形式の解析。#4567）。
@@ -57,6 +60,12 @@ KEY_ROW_CONDITION = "条件"
 KEY_OTHERS = "同じ回答のほかの結論"
 KEY_CONCLUSION = "結論"
 KEY_ROW_RESULT = "判定"
+# 入力の節（explanation_input の key。この順で置く）。
+SECTION_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_LANGUAGE, KEY_ROWS, KEY_OTHERS)
+# 説明の文の語にしてよい節の名前: Step 2 が説明の書き方に使う語（質問の条件・資料の原文の値・表の行が成り立つか）。
+# ほかの節の名前（INTERNAL_SECTION_KEYS）は入力の構造を指すだけの名前なので、説明に写れば表示の門が隠す（#4603）。
+WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_ROWS)
+INTERNAL_SECTION_KEYS = tuple(key for key in SECTION_KEYS if key not in WORDING_KEYS)
 ROW_RESULT_LABELS = {"applies": "成り立つ", "does_not_apply": "成り立たない", "cannot_determine": "質問から決められない"}
 # 入力の原文に無い Latin の語がこの数以上連なれば、既定の言語の説明ではないとみなして隠す。
 LATIN_RUN_WORDS = 3
@@ -115,13 +124,13 @@ def explanation_schema(instruction: str | None) -> type[BaseModel]:
     return _explanation_model(language_label(instruction))
 
 
-def explanation_prompt(
+def explanation_input(
     question: str,
     sources: Sequence[str],
     instruction: str | None,
     rows: Sequence[dict[str, str]] = (),
     others: Sequence[dict[str, Any]] = (),
-) -> str:
+) -> dict[str, Any]:
     value: dict[str, Any] = {KEY_QUESTION: question, KEY_SOURCES: list(sources)}
     if instruction is not None:
         value[KEY_LANGUAGE] = instruction
@@ -129,7 +138,22 @@ def explanation_prompt(
         value[KEY_ROWS] = list(rows)
     if others:
         value[KEY_OTHERS] = list(others)
-    return json.dumps(value, ensure_ascii=False, indent=2)
+    return value
+
+
+def explanation_prompt(
+    question: str,
+    sources: Sequence[str],
+    instruction: str | None,
+    rows: Sequence[dict[str, str]] = (),
+    others: Sequence[dict[str, Any]] = (),
+) -> str:
+    return json.dumps(explanation_input(question, sources, instruction, rows, others), ensure_ascii=False, indent=2)
+
+
+def internal_labels(value: dict[str, Any]) -> list[str]:
+    """送った入力の節のうち、説明の語にしてよい節以外の名前（表示の門が内部の名前として比べる）。"""
+    return [key for key in value if key in INTERNAL_SECTION_KEYS]
 
 
 def other_conclusions(entry: CheckedApplication, targets: Sequence[CheckedApplication]) -> list[dict[str, Any]]:
@@ -257,8 +281,19 @@ def restore_escaped_controls(text: str, inputs: str) -> str:
     return text
 
 
-def display_gate(explanation: Any, *, question: str, sources: Sequence[str], conclusion: str, default_language: bool) -> dict[str, Any]:
-    """説明を表示してよいかを形式だけで決める。``reason`` は隠した理由のコード。``text`` は表示する説明（エスケープの写しを戻した後）。"""
+def display_gate(
+    explanation: Any,
+    *,
+    question: str,
+    sources: Sequence[str],
+    conclusion: str,
+    default_language: bool,
+    labels: Sequence[str] = (),
+) -> dict[str, Any]:
+    """説明を表示してよいかを形式だけで決める。``reason`` は隠した理由のコード。``text`` は表示する説明（エスケープの写しを戻した後）。
+
+    ``labels`` はその呼び出しで送った入力の内部の節の名前（``internal_labels``）。説明にあって入力の原文に無ければ隠す。
+    """
     if not isinstance(explanation, str):
         return {"status": "hidden", "reason": "empty"}
     joined = "\n".join([question, *sources, conclusion])
@@ -276,6 +311,8 @@ def display_gate(explanation: Any, *, question: str, sources: Sequence[str], con
     prefix = answer_labels().citation_prefix
     if prefix and any(line.strip().startswith(prefix) for line in text.splitlines()):
         return {"status": "hidden", "reason": "citation_marker_in_text"}
+    if found := [label for label in dict.fromkeys(labels) if label and label in text and label not in joined]:
+        return {"status": "hidden", "reason": "internal_label", "labels": found}
     return {"status": "confirmed", "text": text}
 
 
@@ -330,7 +367,8 @@ def explain_applications(
         others = other_conclusions(entry, targets)
         rows = application_rows(entry, row_conditions, siblings)
         system = explanation_system(instruction, with_rows=bool(rows), with_others=bool(others))
-        prompt = explanation_prompt(question, sources, instruction, rows, others)
+        value = explanation_input(question, sources, instruction, rows, others)
+        prompt = json.dumps(value, ensure_ascii=False, indent=2)
         diagnostic["prompt_chars"].append(len(system) + len(prompt))
         try:
             ensure_model_input(settings, system, prompt, schema.model_json_schema(), provider_id=provider_id)
@@ -348,11 +386,12 @@ def explain_applications(
             sources=[*sources, *(text for other in others for text in (other[KEY_CONCLUSION], *other[KEY_SOURCES]))],
             conclusion=entry.application.result,
             default_language=instruction is None,
+            labels=internal_labels(value),
         )
         entry.presentation = (
             {"status": "confirmed", "reasoning": gate["text"], "language": contract["language"]}
             if gate["status"] == "confirmed"
-            else {"status": "hidden", "reason": gate["reason"]}
+            else {"status": "hidden", **{key: item for key, item in gate.items() if key != "status"}}
         )
     diagnostic.update(seconds=round(monotonic() - started, 3), results=[dict(entry.presentation) for entry in targets])
     return diagnostic

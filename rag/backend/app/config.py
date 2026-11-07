@@ -1276,6 +1276,16 @@ class Settings(
             "(#4134・#4097)。超えると原生索引で読み、不足は診断とログに残す。0 は常に原生索引。"
         ),
     )
+    rag_native_vector_shortage_oversample_factor: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description=(
+            "原生索引のベクトルの分岐が範囲に候補があるのに要求より少ないとき、候補の数をこの倍に"
+            "して 1 回だけ読み直し、要求の件数に切る(#4097)。削除の残骸が上位の枠を使う分を"
+            "埋める。1 は読み直さない。"
+        ),
+    )
     rag_native_index_full_optimize_interval_hours: float = Field(
         default=6,
         ge=0,

@@ -205,6 +205,8 @@ describe("書式と絞り込みの値", () => {
     expect(ids.map((node) => node.textContent)).toEqual(["model-a", "model-b"]);
     expect(ids.every((node) => node.classList.contains("font-mono"))).toBe(true);
     expect(container.querySelectorAll(".font-mono")).toHaveLength(2);
+    // ID の文字の大きさも「モデル」の行（RunFactList の mono）と同じ 12px（text-xs）。数の文言は本文の大きさのまま（#4605）。
+    expect(ids.every((node) => node.classList.contains("text-xs"))).toBe(true);
     // 数の文言は製品の i18n で上書きできる（ID は含めない）。
     render(<p>{runModelTokensView(usage, ({ tokens, requests }) => `${tokens} / ${requests}`)}</p>);
     expect(container.textContent).toBe("model-a: 10,300 / 2 ／ model-b: 2,045 / 1");
@@ -534,6 +536,38 @@ describe("RunSummary", () => {
     expect(container.querySelector("[data-run-status]")).toBeNull();
     expect(container.querySelector("[data-run-summary-heading]")?.textContent).toBe("概要");
     expect(container.textContent).not.toContain("合成の追加バッジ");
+  });
+
+  it("事実の値の中の等幅の ID は「モデル」の行と同じ書体・大きさ（#4605）", () => {
+    const usage: RunModelUsageRecord = {
+      models: ["model-a", "model-b"],
+      requests: 2,
+      input_tokens: 200,
+      output_tokens: 20,
+      total_tokens: 220,
+      measurement: "complete",
+      measured_requests: 2,
+      by_model: [
+        { model: "model-a", requests: 1, input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+        { model: "model-b", requests: 1, input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+      ],
+    };
+    render(
+      <RunSummary
+        status="succeeded"
+        question="合成の質問"
+        startedAt="2026-10-15T00:12:05.000Z"
+        model="model-a"
+        extraFacts={[{ id: "modelTokens", label: "モデルごとのトークン数", value: runModelTokensView(usage), tabular: true }]}
+        runId="run-1"
+      />
+    );
+    const typeClasses = (node: Element) => [...node.classList].filter((name) => /^(font-mono|text-(xs|sm|base))$/.test(name)).sort();
+    const model = container.querySelector("[data-run-fact='model'] dd");
+    const ids = [...container.querySelectorAll("[data-run-fact='modelTokens'] [data-run-model-id]")];
+    expect(ids).toHaveLength(2);
+    expect(typeClasses(model!)).toEqual(["font-mono", "text-xs"]);
+    for (const id of ids) expect(typeClasses(id)).toEqual(typeClasses(model!));
   });
 
   it("token の計測の状態の注記は数の後ろに括弧で、数が無ければ注記だけを出す（#3419）", () => {
