@@ -1,0 +1,53 @@
+{
+ "note": "#4587 の実モデルの確認（GPT-OSS）で、直接の値の質問に表の見出しの行だけを source の basis に選んだ answer.generate の出力（合成の題: 属性 A〜I の判定表）。原文単位 ID は {header}（表の見出しの行）に、根拠の label は {E:table} に置き換えた。ほかは録画のまま。",
+ "outputs": {
+  "direct_value_header_only": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "行A4の点数を教えてください。",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{header}"
+       ]
+      }
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "question_type": [
+    "fact"
+   ],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0
+   ],
+   "request_coverage": [
+    {
+     "request_id": "Q1",
+     "evidence_scope": [
+      {
+       "evidence_id": "{E:table}",
+       "target": "{header}",
+       "relation": "direct",
+       "link": {
+        "unit_ids": [
+         "{header}"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

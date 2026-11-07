@@ -13,6 +13,7 @@ from pydantic.json_schema import SkipJsonSchema
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, request_coverage_field
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
+from rag_engine.retrieval.table_header_lines import span_header_lines
 
 # 質問の種類（question_type）の閉じた語彙（#4586）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の記載で
 # 答えられる種類を分ける。種類の判定はモデルの構造化出力だけが行い、コードは値の集合を比べるだけで語の意味を読まない。
@@ -32,6 +33,17 @@ SOURCE_ONLY_DERIVATION_PROMPT = (
     "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
     "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
     "導くのに足りない資料・値は gap 型に書く。\n"
+    "- 応答 schema どおりの完全な草稿を返す。\n"
+)
+
+
+# 表の見出しの行だけを basis に選んだ source 型の要点を作り直すときに、生成の user の入力の後ろへ足す部品（#4592）。
+# 見出しの行かは表の chunk の分割の記録で決まり（``retrieval.table_header_lines``）、この部品は違反と直し方だけを書く。
+HEADER_ONLY_SOURCE_PROMPT = (
+    "## Step 6: 表の見出しの行だけを示した要点を作り直す\n"
+    "- header_only_requests の要求の要点は、前回の出力で source 型の basis に表の見出しの行（列名の行）だけを選び、"
+    "表のデータの行を選んでいなかった。見出しの行だけでは答えにならない。\n"
+    "- その要点の basis に、答えが書かれた表のデータの行の単位を選ぶ。根拠に答えが書かれた行が無ければ gap 型に書く。\n"
     "- 応答 schema どおりの完全な草稿を返す。\n"
 )
 
@@ -153,6 +165,43 @@ def source_only_derivation(value: BaseModel) -> list[str]:
     return list(dict.fromkeys(str(part["request_id"]) for part in parts))
 
 
+def _header_only(selected: Sequence[BoundUnitRange]) -> bool:
+    """選んだ単位がすべて、根拠に記録した表の見出しの行（データの行を 1 つも含まない）か。
+
+    見出しの行かは、表の chunk の分割の記録と一致した行の原文との一致だけで決める（語の意味は読まない）。
+    """
+    if not selected:
+        return False
+    for binding in selected:
+        headers = span_header_lines(binding.snapshot.span())
+        text = str(binding.snapshot.span().get("text") or "")
+        units = binding.snapshot.units[binding.first : binding.last + 1]
+        if not headers or any(text[start:end].strip() not in headers for start, end in units):
+            return False
+    return True
+
+
+def header_only_source_parts(value: BaseModel, catalog: SentUnitCatalog) -> list[str]:
+    """source 型の要点の basis が表の見出しの行だけのとき、その要求 ID を返す（#4592）。
+
+    見出しの行は列名で、行の値を示さない。見出しの行だけを答えの原文にした要点は、表の値に答えていない。
+    原文の写しだけの導出（``_copies_one_original``）は直接の記載になるので、同じく数える。
+    """
+    if not getattr(type(value), "_uses_typed_answer_parts", False):
+        return []
+    found = []
+    for part in value.model_dump(exclude_unset=True).get("answer_parts") or []:
+        answer = part["answer"]
+        if answer["kind"] == "gap":
+            continue
+        selected = list(catalog.bind(answer["basis"]["unit_ids"]))
+        if answer["kind"] == "answer" and not _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
+            continue
+        if _header_only(selected):
+            found.append(str(part["request_id"]))
+    return list(dict.fromkeys(found))
+
+
 def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
     """実際に選んだ出典と一致する位置だけの括弧を、既存の出典表示へ一本化する。"""
     citations = [
@@ -255,6 +304,10 @@ def canonical_answer_parts(
             # 原文の写しだけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
             kind = "source"
         underived = kind == "source" and part["request_id"] in underived_requests
+        # 表の見出しの行だけを示す要点は答えとして受けない（#4592）。見出しの行を確認できた事項に出さず、欠けた要点にする。
+        header_only = kind == "source" and _header_only(selected)
+        if header_only:
+            selected = []
         indexes = []
         for binding in selected:
             key = (part["request_id"], binding.snapshot.snapshot_id, binding.first, binding.last)
@@ -296,7 +349,7 @@ def canonical_answer_parts(
             items.append({"kind": "gap", "request_id": part["request_id"], "text": answer["text"], "citations": []})
             bindings.append(None)
             text = answer["text"]
-        elif underived:  # 導出が要るのに作れなかった要点。原文は引用に残し、答えの文は無い。
+        elif underived or header_only:  # 導出が要るのに作れなかった・見出しの行だけの要点。答えの文は無い。
             text = ""
         else:  # source は選んだ原文だけを直接提示する。
             text = "\n".join(items[index]["text"] for index in indexes)
@@ -305,13 +358,19 @@ def canonical_answer_parts(
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "derived" if underived else "direct" if kind == "source" else "derived" if kind == "answer" else "gap",
+                "result_kind": "derived"
+                if underived or header_only
+                else "direct"
+                if kind == "source"
+                else "derived"
+                if kind == "answer"
+                else "gap",
                 "item_indexes": [] if kind == "answer" else indexes,
                 "application_indexes": app_indexes,
             }
         )
         texts.append(text)
-        part_sources.append(indexes if kind != "answer" and not underived else [])
+        part_sources.append(indexes if kind != "answer" and not underived and not header_only else [])
         part_applications.append(app_indexes)
     _attach_basis_quotes(parts, applications)
     chosen = list(

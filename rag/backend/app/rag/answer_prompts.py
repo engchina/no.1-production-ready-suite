@@ -238,6 +238,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
                 "sourceOnlyDerivation",
                 "rag_engine.generation.answer_parts_wire:SOURCE_ONLY_DERIVATION_PROMPT",
             ),
+            # 表の見出しの行だけを示した要点の作り直しで、入力に足す部品（#4592）。
+            (
+                "headerOnlySource",
+                "rag_engine.generation.answer_parts_wire:HEADER_ONLY_SOURCE_PROMPT",
+            ),
         ),
     ),
     # 説明・要約に書いた質問の対象の名前を引いた原文に照らす検査の、対象の抽出と役割の判定(#4351)。
