@@ -192,7 +192,12 @@ const SCREENS: Screen[] = [
  * サイドナビの行に無い画面（#1873。アカウントの画面はサイドナビの下部のアカウントの欄から開く）。
  * SCREENS と同じく axe と通知の置き場所を確かめ、「ナビの全項目」の比較には含めない。
  */
-const NON_NAV_SCREENS: Screen[] = [{ path: "/account" }, { path: "/account?tab=password" }];
+const NON_NAV_SCREENS: Screen[] = [
+  { path: "/account" },
+  { path: "/account?tab=password" },
+  // 実行履歴の詳細（一覧の行から開く。PageHeader に「最新情報を取得」と戻る操作を持つ）。
+  { path: "/history?id=history-1" },
+];
 
 /** 淡い色の面（選んだ行・状態の表示）が出る状態。 */
 const STATES: (Screen & { name: string })[] = [

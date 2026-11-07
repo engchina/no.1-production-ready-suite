@@ -1,0 +1,908 @@
+{
+ "provenance": {
+  "model": "xai.grok-4.7",
+  "reasoning_effort": "low",
+  "recorded": "2026-11-07",
+  "note": "合成の題の実呼出しの録画（出力の文だけ）。入力は sha256 で照合する。"
+ },
+ "catalog_snapshots": [
+  {
+   "span": {
+    "adjacent_texts": [],
+    "article_catalog": false,
+    "article_unit": false,
+    "conversation_attachment": false,
+    "document_scope": [
+     "synthetic-0.txt",
+     "",
+     "synthetic",
+     "docling",
+     "",
+     ""
+    ],
+    "document_texts": [],
+    "end": 228,
+    "evidence_id": "Ef40a42dc34b3bcd9eb59",
+    "excerpt_only": false,
+    "function": [
+     "synthetic-0.txt",
+     "",
+     "synthetic",
+     "docling",
+     "",
+     "",
+     "合成資料 > 値と規則"
+    ],
+    "function_texts": [],
+    "label": "E1",
+    "limits": [],
+    "location": null,
+    "origin": "unclassified",
+    "page": 1,
+    "page_end": 1,
+    "page_scope": "",
+    "pinned": false,
+    "screen_texts": [],
+    "section_path": [
+     "合成資料",
+     "値と規則"
+    ],
+    "section_path_sources": [],
+    "source": "synthetic-0.txt",
+    "source_aliases": [
+     "r0"
+    ],
+    "source_context": {
+     "document_name": "synthetic-0.txt",
+     "section_path": [
+      "合成資料",
+      "値と規則"
+     ]
+    },
+    "source_id": "r0",
+    "source_order": [
+     0,
+     1,
+     0
+    ],
+    "source_record_ids": [],
+    "start": 0,
+    "superseded": false,
+    "tags": [],
+    "text": "判定表。各行の条件に一致するときだけ点数を加算し、一致しない行は0点とします。\n| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |\n| A9 | 属性I=有 | 5 |",
+    "value_context": "reference_document"
+   },
+   "units": [
+    [
+     0,
+     39
+    ],
+    [
+     40,
+     57
+    ],
+    [
+     58,
+     76
+    ],
+    [
+     77,
+     95
+    ],
+    [
+     96,
+     114
+    ],
+    [
+     115,
+     133
+    ],
+    [
+     134,
+     152
+    ],
+    [
+     153,
+     171
+    ],
+    [
+     172,
+     190
+    ],
+    [
+     191,
+     209
+    ],
+    [
+     210,
+     228
+    ]
+   ],
+   "contract": "explicit_units_v5"
+  },
+  {
+   "span": {
+    "adjacent_texts": [],
+    "article_catalog": false,
+    "article_unit": false,
+    "conversation_attachment": false,
+    "document_scope": [
+     "synthetic-1.txt",
+     "",
+     "synthetic",
+     "docling",
+     "",
+     ""
+    ],
+    "document_texts": [],
+    "end": 41,
+    "evidence_id": "E5a814dd57c71a0a78618",
+    "excerpt_only": false,
+    "function": [
+     "synthetic-1.txt",
+     "",
+     "synthetic",
+     "docling",
+     "",
+     "",
+     "合成資料 > 値と規則"
+    ],
+    "function_texts": [],
+    "label": "E2",
+    "limits": [],
+    "location": null,
+    "origin": "unclassified",
+    "page": 1,
+    "page_end": 1,
+    "page_scope": "",
+    "pinned": false,
+    "screen_texts": [],
+    "section_path": [
+     "合成資料",
+     "値と規則"
+    ],
+    "section_path_sources": [],
+    "source": "synthetic-1.txt",
+    "source_aliases": [
+     "r1"
+    ],
+    "source_context": {
+     "document_name": "synthetic-1.txt",
+     "section_path": [
+      "合成資料",
+      "値と規則"
+     ]
+    },
+    "source_id": "r1",
+    "source_order": [
+     0,
+     2,
+     0
+    ],
+    "source_record_ids": [],
+    "start": 0,
+    "superseded": false,
+    "tags": [
+     "aggregate_only"
+    ],
+    "text": "合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。",
+    "value_context": "reference_document"
+   },
+   "units": [
+    [
+     0,
+     41
+    ]
+   ],
+   "contract": "explicit_units_v5"
+  }
+ ],
+ "cases": {
+  "rows-unknown": {
+   "question": "属性A〜Hは有です。属性Iは未確定です。確定した合計点と区分を教えてください。",
+   "evidence_text": null,
+   "source": "actual"
+  },
+  "reg-period-reversed": {
+   "question": "操作Aを前営業日に行った場合の割合を教えてください。",
+   "evidence_text": "操作Aの割合表。条件に一致する行の割合を適用します。\n| 行ID | 条件 | 割合 |\n| B1 | 操作Aを2営業日前の17時より後に行った | 50% |\n| B2 | 操作Aを2営業日前の17時までに行った | 0% |",
+   "source": "synthetic-reg-period"
+  },
+  "reg-rows-known": {
+   "question": "属性A〜Hは有です。属性Iは無です。確定した合計点と区分を教えてください。",
+   "evidence_text": null,
+   "source": "actual"
+  },
+  "reg-period-before": {
+   "question": "操作Aを3営業日前に行った場合の割合を教えてください。",
+   "evidence_text": "操作Aの割合表。条件に一致する行の割合を適用します。\n| 行ID | 条件 | 割合 |\n| B1 | 操作Aを2営業日前の17時までに行った | 0% |\n| B2 | 操作Aを2営業日前の17時より後に行った | 50% |",
+   "source": "synthetic-reg-period-before"
+  },
+  "unseen-u1-silent": {
+   "question": "要素Xは有です。要素Yは無です。該当する加算を教えてください。",
+   "evidence_text": "加算表。各行の条件に一致するときだけ加算します。\n| 行ID | 条件 | 加算 |\n| X1 | 要素X=有 | 2 |\n| X2 | 要素Y=有 | 3 |\n| X3 | 要素Z=有 | 4 |",
+   "source": "synthetic-unseen-u1"
+  },
+  "unseen-u2-times": {
+   "question": "手続Kを基準日の3営業日前の10時に行いました。この場合の区分を教えてください。",
+   "evidence_text": "区分表。条件に一致する行の区分を適用します。\n| 行ID | 条件 | 区分 |\n| K1 | 手続Kを基準日の2営業日前の12時までに行った | 甲 |\n| K2 | 手続Kを基準日の2営業日前の12時より後に行った | 乙 |",
+   "source": "synthetic-unseen-u2"
+  },
+  "unseen-u3-same-day": {
+   "question": "手続Kを基準日の2営業日前に行いました。この場合の区分を教えてください。",
+   "evidence_text": "区分表。条件に一致する行の区分を適用します。\n| 行ID | 条件 | 区分 |\n| K1 | 手続Kを基準日の2営業日前の12時までに行った | 甲 |\n| K2 | 手続Kを基準日の2営業日前の12時より後に行った | 乙 |",
+   "source": "synthetic-unseen-u3"
+  },
+  "unseen-u4-mixed": {
+   "question": "会員区分は一般です。申込Pを基準日の前営業日に行いました。加算の合計を教えてください。",
+   "evidence_text": "加算表。条件に一致する行の加算を合計します。\n| 行ID | 条件 | 加算 |\n| P1 | 会員区分=一般 | 1 |\n| P2 | 会員区分=特別 | 3 |\n| P3 | 申込Pを基準日の2営業日前までに行った | 2 |",
+   "source": "synthetic-unseen-u4"
+  },
+  "new-n1-next-day": {
+   "question": "手続Mを基準日の翌営業日に行いました。この場合の区分を教えてください。",
+   "evidence_text": "区分表。条件に一致する行の区分を適用します。\n| 行ID | 条件 | 区分 |\n| M1 | 手続Mを基準日の当日までに行った | 甲 |\n| M2 | 手続Mを基準日の当日より後に行った | 乙 |",
+   "source": "synthetic-new-n1"
+  },
+  "new-n2-two-days-before": {
+   "question": "申請Sを基準日の前々営業日の9時に行いました。該当する加算を教えてください。",
+   "evidence_text": "加算表。条件に一致する行の加算を適用します。\n| 行ID | 条件 | 加算 |\n| S1 | 申請Sを基準日の前営業日の12時までに行った | 2 |\n| S2 | 申請Sを基準日の前営業日の12時より後に行った | 0 |",
+   "source": "synthetic-new-n2"
+  },
+  "new-n3-no-expression": {
+   "question": "手続Mを行いました。この場合の区分を教えてください。",
+   "evidence_text": "区分表。条件に一致する行の区分を適用します。\n| 行ID | 条件 | 区分 |\n| M1 | 手続Mを基準日の当日までに行った | 甲 |\n| M2 | 手続Mを基準日の当日より後に行った | 乙 |",
+   "source": "synthetic-new-n3"
+  },
+  "new-n4-mixed-digits": {
+   "question": "区分コードはKです。操作Tを基準日の4営業日前に行いました。合計を教えてください。",
+   "evidence_text": "加算表。条件に一致する行の加算を合計します。\n| 行ID | 条件 | 加算 |\n| T1 | 区分コード=K | 1 |\n| T2 | 区分コード=L | 2 |\n| T3 | 操作Tを基準日の3営業日前より前に行った | 4 |",
+   "source": "synthetic-new-n4"
+  }
+ },
+ "gold": {
+  "rows-unknown": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R3": {
+     "applicability": "applies",
+     "condition_cell_id": "R3C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R4": {
+     "applicability": "applies",
+     "condition_cell_id": "R4C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R5": {
+     "applicability": "applies",
+     "condition_cell_id": "R5C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R6": {
+     "applicability": "applies",
+     "condition_cell_id": "R6C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R7": {
+     "applicability": "applies",
+     "condition_cell_id": "R7C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R8": {
+     "applicability": "applies",
+     "condition_cell_id": "R8C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R9": {
+     "applicability": "applies",
+     "condition_cell_id": "R9C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R10": {
+     "applicability": "cannot_determine",
+     "condition_cell_id": "R10C2",
+     "condition_type": "other"
+    }
+   },
+   "table_result": "not_determined",
+   "core_reference": "既知分18、属性I未確定なので確定総計/区分は未確定。I有なら23/C、無なら18/B。未知を0と扱わず、既知分の説明を拒否しない。"
+  },
+  "reg-period-reversed": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "temporal"
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "temporal"
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "前営業日は2営業日前17時の期限後なので B1(50%) が該当、B2(0%) は非該当。前後関係を逆転しない。"
+  },
+  "reg-rows-known": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R3": {
+     "applicability": "applies",
+     "condition_cell_id": "R3C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R4": {
+     "applicability": "applies",
+     "condition_cell_id": "R4C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R5": {
+     "applicability": "applies",
+     "condition_cell_id": "R5C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R6": {
+     "applicability": "applies",
+     "condition_cell_id": "R6C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R7": {
+     "applicability": "applies",
+     "condition_cell_id": "R7C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R8": {
+     "applicability": "applies",
+     "condition_cell_id": "R8C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R9": {
+     "applicability": "applies",
+     "condition_cell_id": "R9C2",
+     "question_ids_include": [
+      "Q1"
+     ],
+     "condition_type": "other"
+    },
+    "R10": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R10C2",
+     "question_ids_include": [
+      "Q2"
+     ],
+     "condition_type": "other"
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "A1〜A8 該当（Q1）、A9 非該当（Q2）。全行が決まる。"
+  },
+  "reg-period-before": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "3営業日前は2営業日前17時の期限より前なので B1(0%) が該当、B2(50%) は非該当。"
+  },
+  "unseen-u1-silent": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "condition_type": "other",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "condition_type": "other",
+     "question_ids_include": [
+      "Q2"
+     ]
+    },
+    "R4": {
+     "applicability": "cannot_determine",
+     "condition_cell_id": "R4C2",
+     "condition_type": "other"
+    }
+   },
+   "table_result": "not_determined",
+   "core_reference": "X1 該当、X2 非該当、要素Z は質問が触れないので X3 は決められない。"
+  },
+  "unseen-u2-times": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "3営業日前10時は2営業日前12時より前。K1 該当、K2 非該当。"
+  },
+  "unseen-u3-same-day": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "cannot_determine",
+     "condition_cell_id": "R2C2",
+     "condition_type": "temporal"
+    },
+    "R3": {
+     "applicability": "cannot_determine",
+     "condition_cell_id": "R3C2",
+     "condition_type": "temporal"
+    }
+   },
+   "table_result": "not_determined",
+   "core_reference": "同じ日で時刻が無いので K1・K2 とも決められない。時刻を補わない。"
+  },
+  "unseen-u4-mixed": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "condition_type": "other",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "condition_type": "other",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R4": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R4C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q2"
+     ]
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "P1 該当、P2 非該当、前営業日は2営業日前までより後なので P3 非該当。"
+  },
+  "new-n1-next-day": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R2C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "applies",
+     "condition_cell_id": "R3C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "翌営業日は当日より後。M1 非該当、M2 該当。"
+  },
+  "new-n2-two-days-before": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q1"
+     ]
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "前々営業日9時は前営業日12時より前。S1 該当、S2 非該当。"
+  },
+  "new-n3-no-expression": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "cannot_determine",
+     "condition_cell_id": "R2C2",
+     "condition_type": "temporal"
+    },
+    "R3": {
+     "applicability": "cannot_determine",
+     "condition_cell_id": "R3C2",
+     "condition_type": "temporal"
+    }
+   },
+   "table_result": "not_determined",
+   "core_reference": "質問に時点が無いので M1・M2 とも決められない。"
+  },
+  "new-n4-mixed-digits": {
+   "rows": {
+    "R1": {
+     "applicability": "no_condition",
+     "condition_cell_id": null,
+     "condition_type": "other"
+    },
+    "R2": {
+     "applicability": "applies",
+     "condition_cell_id": "R2C2",
+     "condition_type": "other",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R3": {
+     "applicability": "does_not_apply",
+     "condition_cell_id": "R3C2",
+     "condition_type": "other",
+     "question_ids_include": [
+      "Q1"
+     ]
+    },
+    "R4": {
+     "applicability": "applies",
+     "condition_cell_id": "R4C2",
+     "condition_type": "temporal",
+     "question_ids_include": [
+      "Q2"
+     ]
+    }
+   },
+   "table_result": "determined",
+   "core_reference": "T1 該当、T2 非該当、4営業日前は3営業日前より前なので T3 該当。"
+  }
+ },
+ "recorded": [
+  {
+   "round": "n4-r1",
+   "case_id": "new-n4-mixed-digits",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "657f03e41cac11f107168c3b96c42d36e452f197a9a6814745b7cb139c122b3d",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "1a5596bc021087a75dccde21790d204d47fe8b8dfaa1f362f082604edccd268e",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false},\"R2\":{\"condition_cell_id\":\"R2C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R3\":{\"condition_cell_id\":\"R3C2\",\"question_ids\":[\"Q1\"],\"entailed\":false,\"contradicted\":true}}}"
+  },
+  {
+   "round": "n4-r1",
+   "case_id": "new-n4-mixed-digits",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "07f98a9eb50ba0f77311edecc96232b9d7d31c6df698e42e6c6b9ed255c73754",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "8b16151ea022311431f0a00baa2848777e1091cb384840108085285fc8720dc6",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R4\":{\"condition_cell_id\":\"R4C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q2\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-4,\"time\":null,\"expression\":{\"start_id\":\"P14\",\"text\":\"基準日の4営業日前\"},\"anchor\":{\"present\":true,\"start_id\":\"P14\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-3,\"time\":null,\"expression\":{\"start_id\":\"R4C2.4\",\"text\":\"基準日の3営業日前\"},\"anchor\":{\"present\":true,\"start_id\":\"R4C2.4\",\"text\":\"基準日\"}},\"comparator\":\"before\"}}}}"
+  },
+  {
+   "round": "n4-r2",
+   "case_id": "new-n4-mixed-digits",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "657f03e41cac11f107168c3b96c42d36e452f197a9a6814745b7cb139c122b3d",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "1a5596bc021087a75dccde21790d204d47fe8b8dfaa1f362f082604edccd268e",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false},\"R2\":{\"condition_cell_id\":\"R2C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R3\":{\"condition_cell_id\":\"R3C2\",\"question_ids\":[\"Q1\"],\"entailed\":false,\"contradicted\":true}}}"
+  },
+  {
+   "round": "n4-r2",
+   "case_id": "new-n4-mixed-digits",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "07f98a9eb50ba0f77311edecc96232b9d7d31c6df698e42e6c6b9ed255c73754",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "8b16151ea022311431f0a00baa2848777e1091cb384840108085285fc8720dc6",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R4\":{\"condition_cell_id\":\"R4C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q2\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-4,\"time\":null,\"expression\":{\"start_id\":\"P14\",\"text\":\"基準日の4営業日前\"},\"anchor\":{\"present\":true,\"start_id\":\"P14\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-3,\"time\":null,\"expression\":{\"start_id\":\"R4C2.4\",\"text\":\"基準日の3営業日前\"},\"anchor\":{\"present\":true,\"start_id\":\"R4C2.4\",\"text\":\"基準日\"}},\"comparator\":\"before\"}}}}"
+  },
+  {
+   "round": "n4-r3",
+   "case_id": "new-n4-mixed-digits",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "657f03e41cac11f107168c3b96c42d36e452f197a9a6814745b7cb139c122b3d",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "1a5596bc021087a75dccde21790d204d47fe8b8dfaa1f362f082604edccd268e",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false},\"R2\":{\"condition_cell_id\":\"R2C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R3\":{\"condition_cell_id\":\"R3C2\",\"question_ids\":[\"Q1\"],\"entailed\":false,\"contradicted\":true}}}"
+  },
+  {
+   "round": "n4-r3",
+   "case_id": "new-n4-mixed-digits",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "07f98a9eb50ba0f77311edecc96232b9d7d31c6df698e42e6c6b9ed255c73754",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "8b16151ea022311431f0a00baa2848777e1091cb384840108085285fc8720dc6",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R4\":{\"condition_cell_id\":\"R4C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q2\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-4,\"time\":null,\"expression\":{\"start_id\":\"P14\",\"text\":\"基準日の4営業日前\"},\"anchor\":{\"present\":true,\"start_id\":\"P14\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-3,\"time\":null,\"expression\":{\"start_id\":\"R4C2.4\",\"text\":\"基準日の3営業日前\"},\"anchor\":{\"present\":true,\"start_id\":\"R4C2.4\",\"text\":\"基準日\"}},\"comparator\":\"before\"}}}}"
+  },
+  {
+   "round": "reg",
+   "case_id": "reg-period-reversed",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "96785eb9ae13df3f6b786bc7b92231dcac63ea001e6d10b47e22714ab2595718",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "2fb974c1ccbc4710ea994f6559a87ed2d60897873dfe5039e7856f15d62bcb07",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false}}}"
+  },
+  {
+   "round": "reg",
+   "case_id": "reg-period-reversed",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "7e59561381661474f99837d7b524757d295a35ffa3b5b63a756aaf4d3325213d",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "a5f86328b0e5a8d7a7b88946f5d383a845aa428b0f1d9d8303461153af316f41",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-1,\"time\":null,\"expression\":{\"start_id\":\"P4\",\"text\":\"前営業日\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-2,\"time\":{\"hour\":17,\"minute\":0},\"expression\":{\"start_id\":\"R2C2.4\",\"text\":\"2営業日前の17時\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"comparator\":\"after\"}},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-1,\"time\":null,\"expression\":{\"start_id\":\"P4\",\"text\":\"前営業日\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-2,\"time\":{\"hour\":17,\"minute\":0},\"expression\":{\"start_id\":\"R3C2.4\",\"text\":\"2営業日前の17時\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"comparator\":\"at_or_before\"}}}}"
+  },
+  {
+   "round": "reg",
+   "case_id": "rows-unknown",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "921dc3c6fea9dc9b4eb29f89940f00dec0a5ee9cab041c243310adc5bc0dd811",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "b8c1e73b88b2a5a0bfb67dd06b3c74ab6e0b64695b689c13ddb9b4aa462410d2",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false},\"R2\":{\"condition_cell_id\":\"R2C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R3\":{\"condition_cell_id\":\"R3C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R4\":{\"condition_cell_id\":\"R4C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R5\":{\"condition_cell_id\":\"R5C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R6\":{\"condition_cell_id\":\"R6C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R7\":{\"condition_cell_id\":\"R7C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R8\":{\"condition_cell_id\":\"R8C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R9\":{\"condition_cell_id\":\"R9C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R10\":{\"condition_cell_id\":\"R10C2\",\"question_ids\":[\"Q2\"],\"entailed\":false,\"contradicted\":false}}}"
+  },
+  {
+   "round": "reg",
+   "case_id": "rows-unknown",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "cffac1eebe268cbdee72547ec4a33905a509f6109c5813c968f58616eb01e923",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "2be5ecd9098dc29f5a63de5cf72ff844f40617ad7a6046840ba64fa283dc5d00",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R4\":{\"condition_cell_id\":\"R4C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R5\":{\"condition_cell_id\":\"R5C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R6\":{\"condition_cell_id\":\"R6C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R7\":{\"condition_cell_id\":\"R7C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R8\":{\"condition_cell_id\":\"R8C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R9\":{\"condition_cell_id\":\"R9C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R10\":{\"condition_cell_id\":\"R10C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "new-n1-next-day",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "93517f6a22a2c1abead80441c84014922d45884099044e5a1b08e7aa9f2c4c5f",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "51dc65e91bb34408c442e6e95a30c9e302acf3c7cafe05ae647deb5c42027da3",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "new-n1-next-day",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "a5a1ee09b45ff3f0b45e123695dafdcdcd62ae2a1231d6d700caec293624632b",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "50a5b18931b26bdb639b3a4524410c7ddd4477cd2f2883b5f9929b4d5ce4e9ef",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":1,\"time\":null,\"expression\":{\"start_id\":\"P4\",\"text\":\"基準日の翌営業日\"},\"anchor\":{\"present\":true,\"start_id\":\"P4\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":0,\"time\":null,\"expression\":{\"start_id\":\"R2C2.4\",\"text\":\"基準日の当日\"},\"anchor\":{\"present\":true,\"start_id\":\"R2C2.4\",\"text\":\"基準日\"}},\"comparator\":\"at_or_before\"}},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":1,\"time\":null,\"expression\":{\"start_id\":\"P4\",\"text\":\"基準日の翌営業日\"},\"anchor\":{\"present\":true,\"start_id\":\"P4\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":0,\"time\":null,\"expression\":{\"start_id\":\"R3C2.4\",\"text\":\"基準日の当日\"},\"anchor\":{\"present\":true,\"start_id\":\"R3C2.4\",\"text\":\"基準日\"}},\"comparator\":\"after\"}}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "new-n2-two-days-before",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "83eeefa73b2c7bcc7234a9143fc92fba3235eb1230af6e92126c15089376a319",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "51dc65e91bb34408c442e6e95a30c9e302acf3c7cafe05ae647deb5c42027da3",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "new-n2-two-days-before",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "b745c47d9f06a896aaa0e2c71b5f48765e941907998a34a483a00347c9372477",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "0fe2f97b70971198bc18bbb677c045701a1ac9e80b6f39e449c5f69a3835248a",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-2,\"time\":{\"hour\":9,\"minute\":0},\"expression\":{\"start_id\":\"P4\",\"text\":\"基準日の前々営業日の9時\"},\"anchor\":{\"present\":true,\"start_id\":\"P4\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-1,\"time\":{\"hour\":12,\"minute\":0},\"expression\":{\"start_id\":\"R2C2.4\",\"text\":\"基準日の前営業日の12時\"},\"anchor\":{\"present\":true,\"start_id\":\"R2C2.4\",\"text\":\"基準日\"}},\"comparator\":\"at_or_before\"}},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-2,\"time\":{\"hour\":9,\"minute\":0},\"expression\":{\"start_id\":\"P4\",\"text\":\"基準日の前々営業日の9時\"},\"anchor\":{\"present\":true,\"start_id\":\"P4\",\"text\":\"基準日\"}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-1,\"time\":{\"hour\":12,\"minute\":0},\"expression\":{\"start_id\":\"R3C2.4\",\"text\":\"基準日の前営業日の12時\"},\"anchor\":{\"present\":true,\"start_id\":\"R3C2.4\",\"text\":\"基準日\"}},\"comparator\":\"after\"}}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "new-n3-no-expression",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "37616fae7b7a41e076b4a55aa9ed0dc0e19c653c46513c5f7317cf272674d807",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "51dc65e91bb34408c442e6e95a30c9e302acf3c7cafe05ae647deb5c42027da3",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "new-n3-no-expression",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "b46fa204e14b33c8a5a5c14fc8e82fc00ce1d451aa6aa00a9613bdfdc77d1eaf",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "a46e91adc4007878489eb3f37bd3e39973197868a4c3060ff0192b36d3609565",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":false,\"business_day_offset\":0,\"time\":null,\"expression\":{\"start_id\":null,\"text\":null},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":0,\"time\":null,\"expression\":{\"start_id\":\"R2C2.4\",\"text\":\"基準日の当日\"},\"anchor\":{\"present\":true,\"start_id\":\"R2C2.4\",\"text\":\"基準日\"}},\"comparator\":\"at_or_before\"}},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":false,\"business_day_offset\":0,\"time\":null,\"expression\":{\"start_id\":null,\"text\":null},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":0,\"time\":null,\"expression\":{\"start_id\":\"R3C2.4\",\"text\":\"基準日の当日\"},\"anchor\":{\"present\":true,\"start_id\":\"R3C2.4\",\"text\":\"基準日\"}},\"comparator\":\"after\"}}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "reg-period-before",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "968206a206031d24ad930ba2d3cfa530baefc79595653a913dac4615f8bdabd9",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "2fb974c1ccbc4710ea994f6559a87ed2d60897873dfe5039e7856f15d62bcb07",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "reg-period-before",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "1aadc1fbd9e4a8737e3c71fd7cb7fe121d868ef70a6e907052a63f4902619bed",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "2e3edb21e7b50c195877de68b4aaa2f8635498e651f7ea016ed1526f2682cb6c",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-3,\"time\":null,\"expression\":{\"start_id\":\"P4\",\"text\":\"3営業日前\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-2,\"time\":{\"hour\":17,\"minute\":0},\"expression\":{\"start_id\":\"R2C2.4\",\"text\":\"2営業日前の17時\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"comparator\":\"at_or_before\"}},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"temporal\",\"question_ids\":[\"Q1\"],\"temporal\":{\"observation\":{\"expression_present\":true,\"business_day_offset\":-3,\"time\":null,\"expression\":{\"start_id\":\"P4\",\"text\":\"3営業日前\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"threshold\":{\"expression_present\":true,\"business_day_offset\":-2,\"time\":{\"hour\":17,\"minute\":0},\"expression\":{\"start_id\":\"R3C2.4\",\"text\":\"2営業日前の17時\"},\"anchor\":{\"present\":false,\"start_id\":null,\"text\":null}},\"comparator\":\"after\"}}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "reg-rows-known",
+   "call": "judge",
+   "system_sha256": "66a7a09ec93f0574757251a81f994165a68c5639c1c2027e81b760b66a08db85",
+   "user_sha256": "f55948fa04fbb5426026cc4ccfabd855c63ba33700772a1831915b98338fa363",
+   "schema_name": "RowApplicability",
+   "schema_sha256": "b8c1e73b88b2a5a0bfb67dd06b3c74ab6e0b64695b689c13ddb9b4aa462410d2",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"question_ids\":[],\"entailed\":false,\"contradicted\":false},\"R2\":{\"condition_cell_id\":\"R2C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R3\":{\"condition_cell_id\":\"R3C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R4\":{\"condition_cell_id\":\"R4C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R5\":{\"condition_cell_id\":\"R5C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R6\":{\"condition_cell_id\":\"R6C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R7\":{\"condition_cell_id\":\"R7C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R8\":{\"condition_cell_id\":\"R8C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R9\":{\"condition_cell_id\":\"R9C2\",\"question_ids\":[\"Q1\"],\"entailed\":true,\"contradicted\":false},\"R10\":{\"condition_cell_id\":\"R10C2\",\"question_ids\":[\"Q2\"],\"entailed\":false,\"contradicted\":true}}}"
+  },
+  {
+   "round": "rest",
+   "case_id": "reg-rows-known",
+   "call": "type",
+   "system_sha256": "a76c832f87ad6f79630a48f4f9ca9a59cc93a4431b7dff09e5276c78531486f7",
+   "user_sha256": "8b79bd5e776e8732de92e26ba04b54566a9b3737ce9f5ca9bb0461aa4bc45163",
+   "schema_name": "RowConditionType",
+   "schema_sha256": "8711bed65693800c0820110aded15203a0ea7244663db87cbb48a44f694cb33e",
+   "output_text": "{\"rows\":{\"R1\":{\"condition_cell_id\":null,\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R2\":{\"condition_cell_id\":\"R2C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R3\":{\"condition_cell_id\":\"R3C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R4\":{\"condition_cell_id\":\"R4C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R5\":{\"condition_cell_id\":\"R5C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R6\":{\"condition_cell_id\":\"R6C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R7\":{\"condition_cell_id\":\"R7C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R8\":{\"condition_cell_id\":\"R8C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R9\":{\"condition_cell_id\":\"R9C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null},\"R10\":{\"condition_cell_id\":\"R10C2\",\"condition_type\":\"other\",\"question_ids\":[],\"temporal\":null}}}"
+  }
+ ]
+}

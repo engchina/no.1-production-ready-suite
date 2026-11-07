@@ -18,6 +18,8 @@ MODEL_CALL_PURPOSES = frozenset(
         "answer.repair",
         "answer.scope",
         "answer.resolve_conflicts",
+        "answer.row_condition_type",
+        "answer.row_condition_judge",
         "evidence.read_batch",
         "evidence.repair_batch_range",
         "evidence.grade",

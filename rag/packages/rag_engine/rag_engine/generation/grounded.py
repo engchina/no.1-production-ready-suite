@@ -209,7 +209,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。各要点の basis で根拠を選び、方法と結果を組にして answer_parts へ書く。request_coverage に選択した根拠の関係を記録する。
+- 各項目の意味は応答 schema の説明に従う。request_coverage に選択した根拠の関係を記録する。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
 ### 出典の網羅
@@ -240,7 +240,7 @@ GENERATE_SYSTEM_PROMPT = (
 - どれかの段の根拠が無ければ、その段を kind=gap にし、最終の答えを断定しない（足りない段を推測で埋めない）。
 ### 要点ごとに答えを作る
 - answer_parts の各要点に request_id・requirement・answer を書く。要点と結果を別々に重複生成しない。
-- 根拠から答えられる要点は answer 型とし、basis に原文単位を選び、reasoning に方法、result に答えを書く。足りない要点だけ gap 型にする。
+- 根拠から答えられる要点は、原文の記載がそのまま答えになるなら source 型、原文から導くなら answer 型にする。足りない要点だけ gap 型にする。
 - 要件がすべて必要な規則は、既知の事実から1つの要件を満たさないと確定すれば不該当と判断できる。結論が未確認の事実で分かれる場合は external_data_items に確認対象を挙げる。
 - 必須根拠（pinned）は質問に適用できる限り選ぶ。直接記載の説明と資料間の接続を区別し、規則の対象・条件・否定・例外と質問の既知値を保持する。
 - 原文が別の制度・手続・対象に属する規則を使わない。利用者向けの文に内部番号を含めず、規則の中身の言葉を使う。
@@ -266,7 +266,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 機能・前提ごとに分ける手順 → 機能ごとに要点を分ける。見出しは書かない。
 ### 根拠が無い場合
 - 引用できる根拠が1つも無い場合は、各要点の answer を kind=gap にして冒頭の選択を空にする（根拠不足の案内文はシステムが表示する）。不足する範囲は gap に、確認すれば確定できる実データ・利用者に確かめる条件・別の資料は external_data_items / reference_materials に書く。
-- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば その原文を basis に選んだ answer にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。
+- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば その原文を basis に選んだ要点にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。
 - user message の「検索評価で未確認の観点」は、根拠があれば答え、無ければその観点の gap を書く。
 
 ## Step 5: 結論と整合を確認して JSON を返す
@@ -4178,6 +4178,13 @@ def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -
         original = json.loads(view.span_json) if view.span_json else span
         snapshots.append(EvidenceUnitSnapshot.create(original, view.units, view.contract_version))
     return SentUnitCatalog(snapshots)
+
+
+def sent_table_views(spans: Sequence[dict]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """実際に送った単位だけの目録から投影した表（#4349。投影は sent_table_projection）。"""
+    from rag_engine.generation.sent_table_projection import sent_tables
+
+    return sent_tables(generation_unit_catalog(spans, sent_only=True))
 
 
 def _sent_view(span: Mapping[str, Any]) -> CitationView:

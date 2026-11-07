@@ -1,3 +1,5 @@
+import AxeBuilder from "@axe-core/playwright";
+
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
 import { findClippedPlaceholders, findFloatingFormActionBars, jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
@@ -609,6 +611,36 @@ test("検索・回答プロファイルの編集: 参照するナレッジベー
   await expectSearchablePanelFits(page);
   await expectNoPageOverflow(page);
 });
+
+// #4571: 補足（説明）のある行の題名のリンクは、見えている文（題名と補足）を読み上げ名に含める
+// （WCAG 2.5.3 Label in Name。axe の label-content-name-mismatch）。axe は見えている文を語に分けて比べるので、
+// 題名の末尾と補足の先頭が英字のとき、区切りが無いと 2 つの語が 1 語につながる（「A」+「Beta」→「ABeta」）。
+// 補足の無い行も並べて確かめる。
+for (const viewport of [
+  { name: "1440", width: 1440, height: 900 },
+  { name: "375", width: 375, height: 812 },
+]) {
+  test(`検索・回答プロファイルの一覧の題名のリンクは、見えている題名と補足を読み上げ名に含む (${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const described = { ...accountingView, id: "bv-1", name: "合成のプロファイル A", description: "Beta 用の合成の説明" };
+    await mockSearchAnswerProfiles(page, [
+      described,
+      { ...accountingView, id: "bv-2", name: "合成のプロファイル B", description: null },
+    ]);
+    await page.goto("/search-answer-profiles");
+    const link = page.getByTestId("search-answer-profile-row-bv-1").locator("[data-row-title-button]");
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAccessibleName(`${described.name} を編集 ${described.name} ${described.description}`);
+    await page.screenshot({ path: testInfo.outputPath(`search-answer-profile-list-${viewport.name}.png`) });
+    const axe = await new AxeBuilder({ page })
+      .include('[data-testid^="search-answer-profile-row-"]')
+      .withRules(["label-content-name-mismatch"])
+      .analyze();
+    expect(axe.violations.flatMap((violation) => violation.nodes.map((node) => node.target.join(" ")))).toEqual([]);
+  });
+}
 
 test("検索・回答プロファイルは行のクリックで ?id= の全画面エディタを開き、再読込・戻る / 進むで同じ対象を開く", async ({
   page,

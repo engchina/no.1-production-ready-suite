@@ -112,6 +112,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
         # 質問の対象の名前の役割の判定の段のモデル(#4351)。
         "question_subject_role_model": resolved_settings.rag_question_subject_role_model,
+        # 表の各行の条件を質問に当てはめる段のモデルと推論の量(#4349)。
+        "row_condition_model": resolved_settings.rag_row_condition_model,
+        "row_condition_reasoning_effort": resolved_settings.rag_row_condition_reasoning_effort,
         "crag_compact_input": resolved_settings.rag_crag_compact_input,
         # CRAG の評価の候補の短い ID(#1864)。
         "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,

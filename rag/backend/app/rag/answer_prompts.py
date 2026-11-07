@@ -266,6 +266,10 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
                 "reasonSystem",
                 "rag_engine.generation.application_reason:APPLICATION_REASON_SYSTEM_PROMPT",
             ),
+            # 推導の前に、表の各行の条件の種類と時点を読み取り（rowTypeSystem）、
+            # 時点以外の条件が質問から成り立つかを判定する（rowJudgeSystem。#4349）。
+            ("rowTypeSystem", "rag_engine.generation.row_conditions:ROW_TYPE_SYSTEM_PROMPT"),
+            ("rowJudgeSystem", "rag_engine.generation.row_conditions:ROW_JUDGE_SYSTEM_PROMPT"),
         ),
     ),
     PromptStage(

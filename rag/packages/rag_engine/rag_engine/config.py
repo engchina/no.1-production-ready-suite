@@ -24,6 +24,8 @@ ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
 # 質問の対象の役割の判定の段(#4351)のモデル。backend が段のモデルの設定(RAG_QUESTION_SUBJECT_ROLE_MODEL)の
 # 接続を RAG_ENGINE_QUESTION_SUBJECT_ROLE_* で渡したときだけ作る。
 QUESTION_SUBJECT_ROLE_LLM_PROVIDER = "enterprise-ai-question-subject-role"
+# 表の行の条件の当てはめの段（#4349）だけが使うモデル。段ごとのモデルの設定で backend が渡したときだけ作る。
+ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER = "enterprise-ai-row-condition"
 DEFAULT_LLM_PROVIDER = ENTERPRISE_AI_LLM_PROVIDER
 DEFAULT_CHICAGO_REGION = "us-chicago-1"
 DEFAULT_OSAKA_REGION = "ap-osaka-1"
@@ -386,6 +388,14 @@ class Settings:
     # (回答のモデル)のまま。質問の対象の役割の判定の段(#4351)にだけ当てる。`get_settings` は
     # RAG_ENGINE_QUESTION_SUBJECT_ROLE_MODEL があれば `QUESTION_SUBJECT_ROLE_LLM_PROVIDER` を作ってこれにする。
     question_subject_role_llm: str = ""
+    # 表の行の条件の当てはめの段（#4349。row_conditions）の推論の量の上書きとモデル。モデルは段ごとの設定で、backend が
+    # 登録モデルの接続を ``OCI_ENTERPRISE_AI_ROW_CONDITION_*`` で渡したときだけ provider（row_condition_llm）を作る。
+    # 渡せなかった理由（登録されていない等）は row_condition_unavailable に入り、段は実行しない（回答のモデルへ
+    # 暗黙に切り替えない）。入力の上限はこの段のモデルの値。
+    row_condition_reasoning_effort: str = ""
+    row_condition_llm: str = ""
+    row_condition_unavailable: str = ""
+    row_condition_max_input_tokens: int = 128_000
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
@@ -532,6 +542,20 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             reasoning_effort=env.get("RAG_ENGINE_QUESTION_SUBJECT_ROLE_REASONING_EFFORT", "").strip(),
             max_output_tokens=_positive_int(env, "RAG_ENGINE_QUESTION_SUBJECT_ROLE_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
         )
+    # 表の行の条件の当てはめの段のモデル（#4349）。backend が段ごとの設定のモデルの接続を渡したときだけ。
+    row_condition_model = env.get("OCI_ENTERPRISE_AI_ROW_CONDITION_MODEL", "").strip()
+    if row_condition_model:
+        llm_providers[ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER] = LlmProviderSettings(
+            provider_id=ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER,
+            label=llm_provider_label("Enterprise AI Row Condition", row_condition_model),
+            region="",
+            project_id=env.get("OCI_ENTERPRISE_AI_ROW_CONDITION_PROJECT_OCID", "").strip(),
+            api_key=env.get("OCI_ENTERPRISE_AI_ROW_CONDITION_API_KEY", "").strip(),
+            model=row_condition_model,
+            endpoint=env.get("OCI_ENTERPRISE_AI_ROW_CONDITION_ENDPOINT", "").strip(),
+            reasoning_effort=env.get("OCI_ENTERPRISE_AI_ROW_CONDITION_REASONING_EFFORT", "").strip(),
+            max_output_tokens=_positive_int(env, "OCI_ENTERPRISE_AI_ROW_CONDITION_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
+        )
     default_vision_llm = normalize_llm_provider_id(
         env.get("DEFAULT_VISION_LLM"),
         ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -666,6 +690,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         audit_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_AUDIT_REASONING_EFFORT")),
+        row_condition_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_ROW_CONDITION_REASONING_EFFORT")),
+        row_condition_llm=ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER if row_condition_model else "",
+        row_condition_unavailable=env.get("RAG_ENGINE_ROW_CONDITION_UNAVAILABLE", "").strip(),
+        row_condition_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_ROW_CONDITION_MAX_INPUT_TOKENS", 128_000)),
         crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
@@ -721,17 +749,21 @@ LLM_PURPOSE_STRATEGY = "strategy"
 LLM_PURPOSE_JUDGE = "judge"
 LLM_PURPOSE_GENERATION = "generation"
 LLM_PURPOSE_AUDIT = "audit"
+# 表の行の条件の当てはめ(#4349。row_conditions の 2 つの呼び出し)。
+LLM_PURPOSE_ROW_CONDITION = "row_condition"
 _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
     LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
     LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
+    LLM_PURPOSE_ROW_CONDITION: "row_condition_reasoning_effort",
 }
 _PURPOSE_LABELS = {
     LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
     LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
     LLM_PURPOSE_AUDIT: "回答の監査",
+    LLM_PURPOSE_ROW_CONDITION: "表の行の条件の当てはめ",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
 REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")

@@ -2387,6 +2387,47 @@ def test_build_engine_settings_passes_judge_latency_settings(tmp_path: Any) -> N
     assert model.crag_compact_input is True and model.section_skip_regrade_at_scope is True
 
 
+def test_build_engine_settings_passes_row_condition_step_model(tmp_path: Any) -> None:
+    """表の行の条件の当てはめの段のモデル・推論の量は段ごとの設定(#4349)。回答のモデルは変えない。"""
+    from rag_engine.config import ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER
+
+    from app.rag.answer_engine import build_engine_settings
+
+    assert Settings().rag_row_condition_model == "xai.grok-4.7"
+    assert Settings().rag_row_condition_reasoning_effort == "low"
+    registered = Settings(
+        _env_file=None,
+        oci_enterprise_ai_default_text_model="text-model",
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="text-model", display_name="Text A"),
+            EnterpriseAiConfiguredModel(
+                model_id="xai.grok-4.7",
+                display_name="Step model",
+                reasoning_effort="high",
+                max_input_tokens=200000,
+            ),
+        ],
+    )
+    engine = build_engine_settings(registered, output_dir=tmp_path)
+    provider = engine.llm_providers[ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER]
+    assert engine.row_condition_llm == ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER
+    assert provider.model == "xai.grok-4.7" and provider.reasoning_effort == "high"
+    assert engine.row_condition_reasoning_effort == "low"
+    assert engine.row_condition_max_input_tokens == 200000
+    assert engine.row_condition_unavailable == ""
+    assert engine.llm_providers[engine.default_answer_llm].model == "text-model"
+
+    # 登録されていないモデルは接続を渡さず、理由だけを渡す(回答のモデルへ切り替えない)。
+    missing = build_engine_settings(_model_settings(), output_dir=tmp_path)
+    assert ENTERPRISE_AI_ROW_CONDITION_LLM_PROVIDER not in missing.llm_providers
+    assert missing.row_condition_llm == ""
+    assert "xai.grok-4.7" in missing.row_condition_unavailable
+    model = build_engine_settings(
+        _model_settings(rag_row_condition_reasoning_effort="model"), output_dir=tmp_path
+    )
+    assert model.row_condition_reasoning_effort == ""
+
+
 def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None:
     """CRAG の評価の候補の短い ID(#1864。既定 ON)を rag_engine に渡す。"""
     from app.rag.answer_engine import build_engine_settings
