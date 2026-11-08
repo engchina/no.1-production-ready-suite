@@ -6910,13 +6910,16 @@ def run_round(
     role_repair: dict[str, Any] = {}
     header_repair: dict[str, Any] = {}
 
-    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str, *, underived_requests: Sequence[str] = ()) -> GroundedDraft:
+    def canonicalize_output(
+        value: BaseModel, purpose: str, input_prompt: str, *, underived_requests: Sequence[str] = (), stated_values: bool = False
+    ) -> GroundedDraft:
         canonical = canonical_generation_draft(
             value,
             lambda link: _scope_range_text(link, spans),
             unit_catalog=unit_catalog,
             question=question,
             underived_requests=underived_requests,
+            stated_values=stated_values,
         )
         if getattr(type(value), "_uses_typed_answer_parts", False):
             # 要点の型の生成では、計画は basis から導いた（#4611）。引いた根拠はすべて計画にあるので足す行は無い。
@@ -7154,7 +7157,8 @@ def run_round(
             draft, "answer.generate", prompt, underived_requests=source_only if source_only and repaired is None else ()
         )
         if repaired is not None:
-            draft = canonicalize_output(repaired, "answer.repair", role_repair_prompt)
+            # source 型だけの作り直しは導出か不足しか受けないので、原文の値もコードが確かめて直接の記載に戻す（#4631）。
+            draft = canonicalize_output(repaired, "answer.repair", role_repair_prompt, stated_values=bool(source_only))
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair)) + int(bool(source_only)) + int(bool(header_only))

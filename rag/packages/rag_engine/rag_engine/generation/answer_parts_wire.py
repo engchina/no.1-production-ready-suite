@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Collection, Sequence
+from decimal import Decimal
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
 from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
+from rag_parser_core.language.text import arabic_numbers
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
@@ -282,6 +286,28 @@ def _copies_one_original(result: str, selected: list[BoundUnitRange]) -> bool:
     return all(target not in _formal_text(candidate.text) for candidate in narrower)
 
 
+_ARABIC_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+
+
+def _number_values(text: str) -> set[Decimal]:
+    """文の算用数字の値の集合。全角・桁区切り・位取りの混在をそろえるだけの形式の解析（語の意味は読まない）。"""
+    normalized = arabic_numbers(unicodedata.normalize("NFKC", text), kanji=False, spaced=True)
+    return {Decimal(value) for value in _ARABIC_NUMBER.findall(normalized)}
+
+
+def _states_values_of_one_unit(result: str, selected: list[BoundUnitRange]) -> bool:
+    """結果の数字がすべて、引用した 1 つの原文の単位に書かれているかを形式で確かめる（#4631）。
+
+    複数の単位を引用している・どれかの数字が単位に無い（足し算で出した合計など）・数字が無い結果は真にしない。
+    数の値を比べるだけで、語の意味は判定しない。1 つの単位だけを引用して合計がたまたまその単位の値と同じ結果は
+    形式では区別できず、真になる。
+    """
+    if len(selected) != 1 or selected[0].first != selected[0].last:
+        return False
+    numbers = _number_values(result)
+    return bool(numbers) and numbers <= _number_values(selected[0].text)
+
+
 def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[str, Any]]) -> None:
     """導出の要点に、依存する basis の原文の items を引用として結ぶ（結論の言い換えで条件が消えても原文を示す）。
 
@@ -340,6 +366,7 @@ def canonical_answer_parts(
     *,
     question: str | None = None,
     underived_requests: Collection[str] = (),
+    stated_values: bool = False,
 ) -> GroundedDraft:
     """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。
 
@@ -348,6 +375,10 @@ def canonical_answer_parts(
     ``underived_requests`` は、導出が要るのに導出を作れなかった要求（``source_only_derivation`` の作り直しが契約を
     満たさなかったとき。#4586）。その要求の source 型の要点は、原文を引用に残したまま導出の無い derived にし、
     要約に使わない（``check_answer_parts`` が欠けた要点として不足の記載を足す）。原文の列挙を答えとして示さない。
+
+    ``stated_values`` は ``source_only_derivation`` の作り直しの出力のとき真にする（#4631）。作り直しの契約は導出か不足しか
+    受けないので、原文に書かれた値も answer 型の言い換えで返る。結果の数字が引用した 1 つの単位にある要点は、その原文の直接の
+    記載にする（導出にすると、表の行の判定が決まらない題で保留になり値を答えない）。モデルの文は表示しない。
     """
     raw = value.model_dump(exclude_unset=True)
     wire_parts = raw.pop("answer_parts", [])
@@ -367,9 +398,11 @@ def canonical_answer_parts(
         if kind not in {"source", "answer", "gap"}:
             raise ValueError("回答要点の役割を確認できません。")
         selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
-        if kind == "answer" and _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
-            # 原文の写しだけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
-            kind = "source"
+        if kind == "answer":
+            result = _without_bound_locators(answer["result"], selected)
+            if _copies_one_original(result, selected) or (stated_values and _states_values_of_one_unit(result, selected)):
+                # 原文の写しだけ・原文の値だけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
+                kind = "source"
         underived = kind == "source" and part["request_id"] in underived_requests
         # 表の見出しの行だけを示す要点は答えとして受けない（#4592）。見出しの行を確認できた事項に出さず、欠けた要点にする。
         header_only = kind == "source" and _header_only(selected)
