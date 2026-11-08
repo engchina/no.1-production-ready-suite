@@ -2150,3 +2150,21 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 保存先のファイル・レシピ・抽出・chunk は削除しない。旧コードが動いていないことを確認してから、現在の schema 管理の
 `initialize --allow-destructive` で明示的に適用する。値が残る環境（`SELECT COUNT(*) FROM rag_documents WHERE
 preprocess_artifact IS NOT NULL` が 0 でない）は先に同列を export する。
+
+### 文書の行の旧い抽出・処理設定の列の削除（#4617）
+
+抽出の正本はレシピの抽出の版（`RAG_DOCUMENT_EXTRACTIONS`）、処理設定の正本はレシピの行（`RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG`）で、
+現行のコードは文書の行の旧列 `RAG_DOCUMENTS.EXTRACTION`・`RAG_DOCUMENTS.PROCESSING_CONFIG` を読み書きしない。新規の schema の正本は
+この 2 列を含まない。過去の migration は変更せず、`20261108_4617_drop_document_extraction_processing_config` が 2 列を削除する
+（列が無ければ何もしない）。保存先のファイル・レシピ・抽出の版・chunk は削除しない。旧コードが動いていないことを確認してから、
+現在の schema 管理の `initialize --allow-destructive` で明示的に適用する。
+
+レシピの抽出の版を 1 件も持たない文書では、`EXTRACTION` が唯一の旧い抽出の記録になる。適用の前に次で確かめ、残す必要があれば
+同列を export する（`PROCESSING_CONFIG` も値が残っていれば export する）。
+
+```sql
+SELECT COUNT(*) FROM rag_documents d
+WHERE d.extraction IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM rag_document_extractions e WHERE e.document_id = d.document_id);
+SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
+```
