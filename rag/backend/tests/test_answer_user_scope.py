@@ -1,10 +1,9 @@
-"""根拠 0 件で自動の検索条件を外しても、利用者が指定した条件・基準日・認可の範囲が残る(#3260)。
+"""回答の検索の入口(``AnswerEngine.run``)から、自動の条件を足しても利用者の範囲が残ることを確かめる(#3260)。
 
-回答の検索の入口(``AnswerEngine.run``)から、自動の条件(質問から読み取った抽出項目の条件・質問が
-名指しした文書名とページ)を外した後の検索(CRAG の補正検索を含む)と、実体・関係情報の拡張の範囲に、
-利用者が指定した条件(文書名・分類・手の項目の条件・ナレッジベース・旧版の扱い)・基準日・認可の
-範囲(監査 context の predicate)が残ることを確かめる。本文が明記した参照を辿る交差参照(#1280)は、
-利用者が指定した文書名・分類の範囲も保つ。DB と LLM は呼ばない(決定論の代役。内容は合成)。
+すべての検索(CRAG の補正検索を含む)と実体・関係情報の拡張に、利用者が指定した条件(文書名・分類・
+手の項目の条件・ナレッジベース・旧版の扱い)・基準日・認可の範囲(監査 context の predicate)が残る。
+本文が明記した参照を辿る交差参照(#1280)でも、利用者が指定した文書名・分類の範囲を保つ。
+DB と LLM は呼ばない(決定論の代役。内容は合成)。
 """
 
 from __future__ import annotations
@@ -52,10 +51,6 @@ def _manual_fields() -> str:
     return json.dumps([MANUAL_FIELD.model_dump()], ensure_ascii=False, separators=(",", ":"))
 
 
-def _field_names(filters: dict[str, str]) -> set[str]:
-    return {item["name"] for item in json.loads(filters.get("extraction_fields") or "[]")}
-
-
 def _field_values(filters: dict[str, str]) -> list[tuple[str, str]]:
     return [
         (item["name"], item["value"])
@@ -78,8 +73,8 @@ def access() -> Iterator[AuditRequestContext]:
         reset_audit_request_context(token)
 
 
-class AutoBlockedOracle(FakeOracle):
-    """自動の条件(質問のページ・文書名・読み取った項目)が残る間は 0 件を返す代役。
+class ScopeRecordingOracle(FakeOracle):
+    """検索の代役。
 
     検索ごとに、渡った条件と、その時点の監査 context(認可の範囲)を記録する。
     """
@@ -88,11 +83,6 @@ class AutoBlockedOracle(FakeOracle):
         super().__init__()
         self.contexts: list[AuditRequestContext] = []
         self.queries: list[str] = []
-
-    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        # 質問が名指しした文書名は範囲にある(自動の文書名の条件を足す)。
-        self.probes.append(dict(filters))
-        return True
 
     async def hybrid_search(
         self,
@@ -106,12 +96,6 @@ class AutoBlockedOracle(FakeOracle):
         self.filters.append(scoped)
         self.queries.append(query)
         self.contexts.append(current_audit_request_context())
-        if (
-            scoped.get("page_number_min") == "12"
-            or scoped.get("file_name") == "sample.pdf"
-            or AUTO_FIELD.name in _field_names(scoped)
-        ):
-            return []
         return self.chunks[:1]
 
 
@@ -137,7 +121,7 @@ def plans(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[PlanRecorder, PlanR
 
 
 def _crag_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    """CRAG の評価で「不足」とし、補正検索を 1 回させる(外した後の検索も確かめる)。"""
+    """CRAG の評価で「不足」とし、補正検索を 1 回させる。"""
     if schema is CragRetrievalGradeOutput:
         return CragRetrievalGradeOutput(
             reason="後続の手順が不足",
@@ -176,10 +160,9 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
 
 
 @pytest.mark.parametrize(
-    ("question", "user_filters", "relaxed"),
+    ("question", "user_filters"),
     [
         (
-            # 利用者が文書名を指定したので、質問の文書名・ページは足さない(外すのは項目だけ)。
             "sample.pdf の12ページの登録手順は？",
             {
                 "knowledge_base_id": "kb-1",
@@ -188,37 +171,33 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
                 "include_superseded": "true",
                 "as_of": "2020-06-30",
             },
-            ["auto_field"],
         ),
         (
-            # 質問から文書名・ページを条件にしない。独立した LLM 項目条件だけを緩和する。
+            # 質問から文書名・ページを条件にしない。
             "sample.pdf の12ページの登録手順は？",
             {"knowledge_base_id": "kb-1", "middle_category": "分類B"},
-            ["auto_field"],
         ),
         (
             # 利用者の明示ページを保持し、質問の文書名を条件にしない。
             "sample.pdf の12ページの登録手順は？",
             {"knowledge_base_id": "kb-1", "page_number_min": "1", "page_number_max": "3"},
-            ["auto_field"],
         ),
     ],
     ids=["user-file-name", "question-file-name", "user-page"],
 )
-async def test_relaxation_keeps_user_conditions_as_of_and_access_in_every_search(
+async def test_user_conditions_as_of_and_access_stay_in_every_search(
     monkeypatch: pytest.MonkeyPatch,
     access: AuditRequestContext,
     plans: tuple[PlanRecorder, PlanRecorder],
     question: str,
     user_filters: dict[str, str],
-    relaxed: list[str],
 ) -> None:
-    """自動の条件を外した後のすべての検索と、実体・関係情報の拡張に、利用者の条件・基準日・認可が残る。"""
+    """すべての検索と、実体・関係情報の拡張に、利用者の条件・基準日・認可の範囲が残る。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _crag_llm)
     monkeypatch.setattr(answer_engine, "_today", lambda: date(2026, 4, 1))
-    oracle = AutoBlockedOracle()
+    oracle = ScopeRecordingOracle()
     filters = {**user_filters, "extraction_fields": _manual_fields()}
     request = SearchRequest(query=question, filters=filters)
 
@@ -226,7 +205,6 @@ async def test_relaxation_keeps_user_conditions_as_of_and_access_in_every_search
 
     # 利用者の条件 + 回答の初めに決めた基準日(指定があればその日)。
     expected = {"as_of": "2026-04-01", **filters}
-    assert outcome.diagnostics["filter_relaxation"]["relaxed"] == relaxed
     assert outcome.citations
     # 最初の検索は自動の条件を足し、利用者が手で指定した項目の条件は自動の条件で上書きしない。
     first = oracle.filters[0]
@@ -234,14 +212,10 @@ async def test_relaxation_keeps_user_conditions_as_of_and_access_in_every_search
         (MANUAL_FIELD.name, MANUAL_FIELD.value),
         (AUTO_FIELD.name, AUTO_FIELD.value),
     ]
-    # 外した後の検索(外し終えた検索と、CRAG の補正検索)は、利用者の条件だけ(自動の条件はすべて
-    # 外れ、利用者の値はそのまま)。外した後に自動の条件が戻ることもない。
-    start = oracle.filters.index(expected)
-    searches_after = oracle.filters[start:]
-    assert all(item == expected for item in searches_after)
-    # CRAG の補正検索(評価が書き直した検索文)も、外した後の条件で検索する。
-    assert "登録の手順" in oracle.queries[start:]
-    # どの検索にも、利用者の条件・基準日が残る(外す段の途中も含む)。
+    # どの検索も同じ条件で検索する(CRAG の補正検索を含む)。
+    assert all(item == first for item in oracle.filters)
+    assert "登録の手順" in oracle.queries
+    # どの検索にも、利用者の条件・基準日が残る。
     for item in oracle.filters:
         assert {key: item.get(key) for key in expected if key != "extraction_fields"} == {
             key: value for key, value in expected.items() if key != "extraction_fields"
@@ -257,7 +231,7 @@ async def test_relaxation_keeps_user_conditions_as_of_and_access_in_every_search
     assert set(entity.contexts) == set(graph.contexts) == {access}
     # その context で組む検索の SQL は、文書・分類・ナレッジベースの認可の述語を持つ。
     assert {"access_document_id_0", "access_category_name_0", "access_knowledge_base_id_0"} <= set(
-        _access_binds(searches_after[-1])
+        _access_binds(oracle.filters[-1])
     )
 
 
@@ -367,8 +341,8 @@ async def test_reference_entity_and_graph_expansion_keep_the_explicit_file_name(
     assert set(entity.contexts) == set(graph.contexts) == {access}
 
 
-class RelaxedCoverageOracle(CoverageOracle):
-    """要求ごとの再検索の代役(#1279)。自動の項目の条件が残る間は 0 件を返し、条件を記録する。"""
+class ScopeRecordingCoverageOracle(CoverageOracle):
+    """要求ごとの再検索の代役(#1279)。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -384,15 +358,13 @@ class RelaxedCoverageOracle(CoverageOracle):
     ) -> list[RetrievedChunk]:
         scoped = dict(filters or {})
         self.searches.append((query, scoped, current_audit_request_context()))
-        if AUTO_FIELD.name in _field_names(scoped):
-            return []
         return await super().hybrid_search(query, embedding, top_k, mode, scoped)
 
 
-async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation(
+async def test_request_coverage_re_search_keeps_user_conditions(
     monkeypatch: pytest.MonkeyPatch, access: AuditRequestContext
 ) -> None:
-    """自動の条件を外した後の、根拠の無い要求だけの再検索も、利用者の条件・基準日・認可で検索する。"""
+    """根拠の無い要求だけの再検索も、利用者の条件・基準日・認可の範囲で検索する。"""
     import rag_engine.adapters.oci as engine_oci
     from rag_engine.models.llm import GroundedDraft, QueryExpansionOutput, QueryRoutingOutput
 
@@ -429,7 +401,7 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
         return result
 
     monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
-    oracle = RelaxedCoverageOracle()
+    oracle = ScopeRecordingCoverageOracle()
     filters = {
         "knowledge_base_id": "kb-1",
         "large_category": "分類A",
@@ -452,12 +424,17 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
         SearchRequest(query="受注の登録方法は？請求書の再発行方法は？", filters=filters)
     )
 
-    assert outcome.diagnostics["filter_relaxation"]["relaxed"] == ["auto_field"]
     assert (
         outcome.diagnostics["request_coverage"]["after_generation"][0]["re_retrieval"]["applied"]
         is True
     )
     re_searches = [item for item in oracle.searches if item[0] == "請求書の再発行方法は？"]
     assert re_searches
-    assert all(scoped == filters for _query, scoped, _context in re_searches)
+    scalar = {key: value for key, value in filters.items() if key != "extraction_fields"}
+    for _query, scoped, _context in re_searches:
+        assert {key: scoped.get(key) for key in scalar} == scalar
+        assert _field_values(scoped) == [
+            (MANUAL_FIELD.name, MANUAL_FIELD.value),
+            (AUTO_FIELD.name, AUTO_FIELD.value),
+        ]
     assert {context for _query, _scoped, context in oracle.searches} == {access}

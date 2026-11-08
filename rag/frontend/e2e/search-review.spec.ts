@@ -314,7 +314,6 @@ test("質問から読み取った条件を「自動」のチップで出し、�
                 { name: "契約日", value_type: "date", op: "gte", value: "2025-01-01" },
                 { name: "金額", value_type: "number", op: "gte", value: "100000" },
               ],
-              relaxed: true,
             },
           }
         : {}),
@@ -337,8 +336,6 @@ test("質問から読み取った条件を「自動」のチップで出し、�
   const chips = page.getByTestId("auto-field-filter-chips");
   await expect(chips.getByText("自動: 契約日 ≥ 2025-01-01")).toBeVisible();
   await expect(chips.getByText("自動: 金額 ≥ 100000")).toBeVisible();
-  // 読み取った条件で見つからず、外して検索したことを示す。
-  await expect(chips.getByRole("status")).toContainText("条件を外して検索しました");
   await expectNoPageOverflow(page);
 
   await chips.getByRole("button", { name: "金額 ≥ 100000 を外して検索し直す" }).click();
@@ -497,7 +494,6 @@ test.describe("送り直す操作は、表示中の結果を出した検索の�
     evidence_tree: [],
     auto_field_filter: {
       conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-      relaxed: false,
     },
   };
 

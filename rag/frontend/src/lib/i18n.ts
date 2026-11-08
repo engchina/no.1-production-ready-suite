@@ -4217,8 +4217,6 @@ export const ja = {
   "search.answerText.passage.jump": "{quote}（本文の段落へ移動）",
   "search.answerText.passage.warningsTitle": "回答全体に注意が必要です",
   "search.answerDetails.autoFieldFilter": "質問から読み取った条件",
-  "search.answerDetails.autoFieldFilterRelaxed":
-    "読み取った条件では見つからなかったため、条件を外して検索しました。",
   "search.autoFieldFilter.chip": "自動: {label}",
   "search.autoFieldFilter.remove": "{label} を外して検索し直す",
   "search.answerDetails.reasoning": "判断理由: {reason}",

@@ -1280,27 +1280,6 @@ class OracleClient:
             neighbor_child_count=neighbor_child_count,
         )
 
-    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        """検索と同じ条件(KB・分類・文書名など)で、検索対象の chunk が 1 件でもあるかを返す。
-
-        質問が名指しした文書名がナレッジベースに無いときに、その条件を外すために使う(#546)。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        row = await self._fetch_one(
-            _render_sql(
-                """
-            SELECT 1 AS found
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-              AND ROWNUM = 1
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        return row is not None
-
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
         """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
 

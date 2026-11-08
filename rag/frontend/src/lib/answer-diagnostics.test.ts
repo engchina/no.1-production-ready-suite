@@ -24,7 +24,6 @@ describe("parseAnswerDiagnostics", () => {
           { name: "金額", value_type: "number", op: "gte", value: "100000" },
           { name: "壊れた条件", value_type: "number", op: "between", value: "1" },
         ],
-        relaxed: true,
       },
       rewritten_question: "受注入力画面での受注の登録方法は？",
       generated_queries: ["受注 登録"],
@@ -66,7 +65,6 @@ describe("parseAnswerDiagnostics", () => {
     expect(parsed?.questionType).toEqual(["操作方法"]);
     expect(parsed?.autoFieldFilter).toEqual({
       conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-      relaxed: true,
     });
     expect(parsed?.models).toEqual({
       llm: { modelId: "model-a", label: "Model A" },

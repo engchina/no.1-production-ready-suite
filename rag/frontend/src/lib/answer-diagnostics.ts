@@ -85,10 +85,9 @@ export type AnswerDiagnostics = {
   /** 問い合わせ型（回答モデルが付けた質問の種類の語。#651）。 */
   questionType: string[];
   /**
-   * 質問から読み取って検索に足した抽出項目の条件（#652）。relaxed は、その条件で見つからず
-   * 外して検索し直したか。読み取っていなければ null。
+   * 質問から読み取って検索に足した抽出項目の条件（#652）。読み取っていなければ null。
    */
-  autoFieldFilter: { conditions: ExtractionFieldCondition[]; relaxed: boolean } | null;
+  autoFieldFilter: { conditions: ExtractionFieldCondition[] } | null;
   /**
    * 利用者が選んだ承認済み FAQ だけから回答したときの出典（回答した時点の原文。#737）。
    * answer は変更前に保存した回答では空。FAQ から回答していなければ null。
@@ -340,7 +339,7 @@ function parseAutoFieldFilter(value: unknown): AnswerDiagnostics["autoFieldFilte
       },
     ];
   });
-  return conditions.length ? { conditions, relaxed: raw.relaxed === true } : null;
+  return conditions.length ? { conditions } : null;
 }
 
 type ModelRef = { modelId: string; label: string };

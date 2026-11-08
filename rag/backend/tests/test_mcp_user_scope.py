@@ -1,13 +1,12 @@
-"""MCP の入口(``POST /api/mcp``)から、根拠 0 件で自動の検索条件を外しても、呼び出し元が指定した
-条件・基準日・サービストークンの範囲(検索・回答プロファイルと KB)が残ることを確かめる(#3260)。
+"""MCP の入口(``POST /api/mcp``)から、自動の検索条件を足しても、呼び出し元が指定した条件・基準日・
+サービストークンの範囲(検索・回答プロファイルと KB)が残ることを確かめる(#3260)。
 
 ``rag_search``(回答あり。CRAG の補正検索を含む)と ``rag_retrieve_evidence``(planning=rag /
 caller。#2651)を、サービストークン(claim ``profile_ids``。#1379)で呼ぶ。検索 API の解決・
 ``RagPipeline``・``AnswerEngine`` は本物を動かし、Oracle・embedding・LLM と実体・関係情報の拡張の
 計画だけを決定論の代役にする(内容は合成)。
 
-- 自動の条件(質問から読み取った抽出項目の条件・質問が名指しした文書名とページ)を外した後の検索、
-  実体・関係情報の拡張の範囲、章節の拡張の読み取りに、呼び出し元の条件と基準日が残る。
+- すべての検索、実体・関係情報の拡張の範囲、章節の拡張の読み取りに、呼び出し元の条件と基準日が残る。
 - どの検索・拡張も、トークンの範囲に絞った監査 context(認可の述語)で Oracle を読む。
 - 本文が明記した参照と章節の補充も、明示した文書名・分類・基準日と認可の範囲を保つ(#4026)。
 """
@@ -43,15 +42,14 @@ from app.schemas.search import ExtractionFieldCondition, SearchRequest
 from tests.security_support import ProductionAuth, enable_production_auth
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, _fake_llm
-from tests.test_answer_scope_after_relaxation import (
+from tests.test_answer_user_scope import (
     AUTO_FIELD,
     AUTO_SAME_FIELD,
     MANUAL_FIELD,
-    AutoBlockedOracle,
     ContextReferenceOracle,
     PlanRecorder,
+    ScopeRecordingOracle,
     _crag_llm,
-    _field_names,
     _field_values,
     _manual_fields,
     _reference_corpus,
@@ -98,12 +96,12 @@ class _ResultLookups:
         return []
 
 
-class ScopedViewSearchOracle(_ResultLookups, ScopedViewOracle, AutoBlockedOracle):
-    """検索・回答プロファイルの解決(範囲で絞る)と、自動の条件で 0 件を返す検索を受ける代役。"""
+class ScopedViewSearchOracle(_ResultLookups, ScopedViewOracle, ScopeRecordingOracle):
+    """検索・回答プロファイルの解決(範囲で絞る)と検索の条件の記録を受ける代役。"""
 
     def __init__(self) -> None:
         ScopedViewOracle.__init__(self, VIEWS)
-        AutoBlockedOracle.__init__(self)
+        ScopeRecordingOracle.__init__(self)
 
 
 class ScopedViewReferenceOracle(_ResultLookups, ScopedViewOracle, ContextReferenceOracle):
@@ -113,9 +111,6 @@ class ScopedViewReferenceOracle(_ResultLookups, ScopedViewOracle, ContextReferen
         reference = _reference_corpus()
         ScopedViewOracle.__init__(self, VIEWS)
         ContextReferenceOracle.__init__(self, reference.hits, reference.sections)
-
-    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        return True
 
 
 @pytest.fixture
@@ -224,8 +219,7 @@ def _access_knowledge_bases(context: AuditRequestContext, filters: dict[str, str
     [
         pytest.param({"as_of": "2020-06-30"}, "2020-06-30", id="explicit-as-of"),
         pytest.param({}, TODAY.isoformat(), id="default-as-of"),
-        # 呼び出し元が文書名・ページを指定したので、質問の文書名・ページは足さない(外すのは項目
-        # だけ。caller は項目も読み取らないので外さない)。
+        # 呼び出し元が文書名・ページを指定したので、質問の文書名・ページは足さない。
         pytest.param(
             {"file_name": "manual", "page_number_min": "1", "page_number_max": "3"},
             TODAY.isoformat(),
@@ -233,7 +227,7 @@ def _access_knowledge_bases(context: AuditRequestContext, filters: dict[str, str
         ),
     ],
 )
-def test_mcp_relaxation_keeps_caller_conditions_as_of_and_token_scope(
+def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     auth: ProductionAuth,
     monkeypatch: MonkeyPatch,
     plans: tuple[PlanRecorder, PlanRecorder],
@@ -242,7 +236,7 @@ def test_mcp_relaxation_keeps_caller_conditions_as_of_and_token_scope(
     caller_filters: dict[str, str],
     as_of: str,
 ) -> None:
-    """自動の条件を外した後のすべての検索と、実体・関係情報の拡張に、呼び出し元の条件が残る。
+    """すべての検索と、実体・関係情報の拡張に、呼び出し元の条件が残る。
 
     呼び出し元の条件は文書名・ページ・分類・手の項目の条件・旧版の扱い(include_superseded)・
     基準日。ナレッジベースはトークンの範囲のプロファイルの参照先。
@@ -289,20 +283,18 @@ def test_mcp_relaxation_keeps_caller_conditions_as_of_and_token_scope(
         assert _field_values(first) == [manual]
     else:
         assert _field_values(first) == [manual, (AUTO_FIELD.name, AUTO_FIELD.value)]
-    # 外し終えた後の検索(CRAG の補正検索・caller の追加の検索文を含む)は、呼び出し元の条件だけ。
-    start = oracle.filters.index(expected)
-    assert all(item == expected for item in oracle.filters[start:])
+    # どの検索も同じ条件で検索する(CRAG の補正検索・caller の追加の検索文を含む)。
+    assert all(item == first for item in oracle.filters)
     if tool == "rag_search":
-        assert "登録の手順" in oracle.queries[start:]
+        assert "登録の手順" in oracle.queries
     if extra.get("planning") == "caller":
-        assert "登録 手順" in oracle.queries[start:]
-    # どの検索(外す段の途中も含む)にも、呼び出し元の条件・KB・基準日が残る。
+        assert "登録 手順" in oracle.queries
+    # どの検索にも、呼び出し元の条件・KB・基準日が残る。
     scalar = {key: value for key, value in expected.items() if key != "extraction_fields"}
     for item in oracle.filters:
         assert {key: item.get(key) for key in scalar} == scalar
         assert manual in _field_values(item)
         assert AUTO_SAME_FIELD.value not in [value for _name, value in _field_values(item)]
-    assert all(AUTO_FIELD.name not in _field_names(item) for item in oracle.filters[start:])
     # 実体・関係情報の拡張は、主の検索と同じ呼び出し元の範囲の中で広げる。
     entity, graph = plans
     assert entity.scopes and graph.scopes
@@ -385,7 +377,7 @@ def test_mcp_section_expansion_reads_with_caller_conditions_and_as_of(
     caller_filters: dict[str, str],
     as_of: str,
 ) -> None:
-    """章節の拡張(#1436)は、自動の条件を外した後の検索と同じ条件・基準日・トークンの範囲で読む。
+    """章節の拡張(#1436)は、主の検索と同じ条件・基準日・トークンの範囲で読む。
 
     基準日は呼び出し元が明示した値か、回答の初めに決めた既定の日(#2602)。
     """
@@ -415,15 +407,18 @@ def test_mcp_section_expansion_reads_with_caller_conditions_and_as_of(
     )
 
     expected = {**filters, "knowledge_base_id": "kb-1,kb-2", "as_of": as_of}
-    # 質問から文書名・ページを足さず、独立した項目条件だけを外す。
+    # 質問から文書名・ページを足さない。
     assert (oracle.filters[0].get("file_name"), oracle.filters[0].get("page_number_min")) == (
         None,
         None,
     )
-    assert expected in oracle.filters
-    # 章節の本文は、自動の条件を外した後の検索と同じ条件(呼び出し元の条件・KB・基準日)で読む。
+    searched = oracle.filters[0]
+    assert {key: searched.get(key) for key in expected if key != "extraction_fields"} == {
+        key: value for key, value in expected.items() if key != "extraction_fields"
+    }
+    # 章節の本文は、主の検索と同じ条件(呼び出し元の条件・KB・基準日)で読む。
     assert stub.reads
-    assert all(read_filters == expected for _section, read_filters in stub.reads)
+    assert all(read_filters == searched for _section, read_filters in stub.reads)
     assert json.loads(expected["extraction_fields"]) == [MANUAL_FIELD.model_dump()]
     _assert_token_scope(stub.contexts)
 
@@ -435,9 +430,6 @@ class ScopedViewSectionReferenceOracle(_ResultLookups, ScopedViewOracle, Context
         corpus = _section_corpus()
         ScopedViewOracle.__init__(self, VIEWS)
         ContextReferenceOracle.__init__(self, corpus[:1], corpus)
-
-    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        return True
 
 
 def test_mcp_section_expansion_does_not_read_reference_outside_caller_file_name(

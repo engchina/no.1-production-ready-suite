@@ -18,7 +18,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 略号 | 場所 | コード |
 |---|---|---|
 | `DS` | 回答の診断の `degraded_steps`（処理の種類・回数・例外の型の名前。#3259）。根拠 0 件のときは `zero_evidence.degraded_steps` にも入る。回答エンジンの前の段（`pipeline.py`）の縮退も、同じ記録を回答エンジンへ渡して入れる（承認済み FAQ からの回答にも入る。#3286） | `rag/backend/app/rag/degraded_steps.py::DegradedSteps`・`rag/backend/app/rag/answer_engine.py::_SearchState.record_degraded`・`rag/packages/rag_engine/rag_engine/dependencies.py::report_degraded` |
-| `ZE` | 根拠 0 件の診断 `zero_evidence`（0 件になった段・検索の記録・外した自動の条件） | `rag/backend/app/rag/answer_engine.py::_zero_evidence_diagnostics` |
+| `ZE` | 根拠 0 件の診断 `zero_evidence`（0 件になった段・検索の記録・効いていた自動の条件） | `rag/backend/app/rag/answer_engine.py::_zero_evidence_diagnostics` |
 | `GD` | 検索の診断の `guardrail_degraded`（OCI Guardrails で検査できなかった） | `rag/backend/app/schemas/search.py::SearchDiagnostics`・`rag/backend/app/rag/guardrails.py::GuardrailResult` |
 | `DX` | 回答の診断のその能力の項目（`graph_expansion`・`section_expansion`・`request_coverage`・`answer_validation`・`strategy` など） | `rag/backend/app/rag/answer_engine.py::_outcome_from_result` |
 | `ST` | 回答の診断の `execution_steps`（rag_engine の工程の `status` の文言と詳細の行）。rag_engine の工程の span（`rag.engine.stage`）の表示にも同じ値が出る。span の状態は例外のときだけ失敗で、縮退の文言だけでは成功のまま | `rag/packages/rag_engine/rag_engine/generation/execution_record.py::_execution_step` |
@@ -56,7 +56,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 前後の文脈 | 必須 | 例外を送出 → **エラー** | `SP`・`ST` | 見せる | `rag/backend/app/rag/answer_engine.py::AnswerEngine._context_chunks` |
 | 最終根拠の文書の先頭Chunk・先頭頁全文 | 必須（最終選択後・正式生成前） | 取得例外は**エラー**。範囲外・未解析・無ページは状態を記録。旧欠落値は同じ版の不変解析から復元できなければ不完全と明示 | `SP`・`ST`・`DX` | 見せる（実範囲・版・再利用） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._selected_document_backgrounds`・`rag/packages/rag_engine/rag_engine/generation/document_background.py::DocumentBackgroundReader.append` |
 | 派生の chunk の原文への置き換え（#2641） | 必須（派生の chunk が当たったとき） | 読み込みの例外は**エラー**。原文が無いときは根拠に渡さない | `DX`（`derived_evidence.unresolved_count`） | 見せない（要約の文を確かめた記載にしない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._original_anchors` |
-| 自動の検索条件の緩和（#2401） | 任意（設定 `RAG_FILTER_RELAXATION_MAX_STEPS`） | 0 件のとき自動で足した条件を段ごとに外す（失敗ではない） | `DX`（`filter_relaxation`）・`ZE`（`relaxed`・`automatic_filters`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._relax_filters` |
 | 元の質問の検索の先読み（#1499） | 任意 | 失敗 → 続く検索がそのまま読む | `ST`（工程の詳細の文） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_wait_original_query_prefetch` |
 | 主の検索の準備の確認 | — | backend は `check_ready` を何もしない関数にしている（埋め込みの有無を事前に確かめない）。工程にもしない（#3495。rag_engine を単独で使う経路だけが工程を開かずに確かめ、中止したときだけ「文書検索」の工程に理由を残す） | — | — | `rag/backend/app/rag/answer_engine.py::AnswerEngine._answer_sync` |
 
