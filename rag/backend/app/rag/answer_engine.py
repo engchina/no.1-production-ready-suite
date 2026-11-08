@@ -1658,8 +1658,12 @@ class AnswerEngine:
                         for mode in (SearchMode.VECTOR, SearchMode.KEYWORD)
                     )
                 else:
-                    mode = SearchMode.HYBRID if channel == "hybrid" else SearchMode.VECTOR
-                    searches.append((query, embeddings[query], mode))
+                    mode = {
+                        "hybrid": SearchMode.HYBRID,
+                        "vector": SearchMode.VECTOR,
+                        "keyword": SearchMode.KEYWORD,
+                    }[channel]
+                    searches.append((query, embeddings.get(query, []), mode))
         fused: dict[str, float] = {}
         rankings: list[list[str]] = []
         keywords_by_query = {

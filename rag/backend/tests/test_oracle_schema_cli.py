@@ -638,6 +638,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261107_4185_drop_document_preprocess_artifact",
         "20261108_4617_drop_document_extraction_processing_config",
         "20261108_4628_foreign_key_lock_indexes",
+        "20261109_4666_language_pack_retired_question_cues",
     ]
 
 
