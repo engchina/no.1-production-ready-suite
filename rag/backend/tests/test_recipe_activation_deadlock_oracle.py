@@ -210,10 +210,12 @@ async def test_parallel_activations_of_two_documents_both_succeed(
         document_id: str,
         chunk_sets: Sequence[Mapping[str, object]],
     ) -> Any:
-        # 最初の 2 回だけ、2 つの transaction が同時に削除へ入るようそろえる。
+        # 最初の 2 回だけ、2 つの transaction が関係情報の参照の表を変更中（その transaction の
+        # 前の削除の連鎖と同じ SX）のまま、同時に削除へ入るようそろえる。
         with lock:
             first_round = next(waits, None) is not None
         if first_round:
+            _execute(connection, "LOCK TABLE rag_graph_references IN ROW EXCLUSIVE MODE", {})
             barrier.wait(timeout=30)
         return original(connection, document_id=document_id, chunk_sets=chunk_sets)
 
