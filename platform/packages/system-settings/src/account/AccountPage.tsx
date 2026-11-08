@@ -38,6 +38,8 @@ export interface AccountPageProps {
     endpoints: McpEndpoint[];
     messages?: ApiKeysMessages;
     agentScopeOptions?: ApiKeyScopeOption[];
+    /** `agentScopeOptions` を読み込んでいる間（欄の形の Skeleton を出す。#4649）。 */
+    agentScopeLoading?: boolean;
   };
   /** パスワードの変更の失敗の表示文言（製品の API の失敗の説明）。 */
   describePasswordError?: (cause: unknown) => string | undefined;
@@ -104,6 +106,7 @@ export function AccountPage({ loginRoute, apiKeys, describePasswordError, messag
             endpoints={apiKeys.endpoints}
             messages={apiKeys.messages}
             agentScopeOptions={apiKeys.agentScopeOptions}
+            agentScopeLoading={apiKeys.agentScopeLoading}
           />
         </TabPanel>
         <TabPanel idPrefix={TAB_ID_PREFIX} id="password" value={tab} className="grid content-start gap-6">

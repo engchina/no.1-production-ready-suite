@@ -311,8 +311,10 @@ export function AuditPage() {
                 {t("audit.downloadCsv")}
               </Button>
             </div>
+            {/* 操作の案内はボタンの行のすぐ下に固定し、CSV の作成中の表示はその下に出す（案内の行を押し下げない。#4649）。 */}
+            <p className="text-xs leading-5 text-fg-muted">{t("audit.csvHint")}</p>
             {csvDownload.isPending ? (
-              // 監査レコードが多いと CSV の作成に数秒以上かかる。スピナーはボタンの loading が担う。
+              // 監査レコードが多いと CSV の作成に数秒以上かかる。スピナーはボタンの loading が担い、ここは経過時間を出す。
               <ProcessingIndicator
                 active
                 label={t("audit.progress.downloadingCsv")}
@@ -322,7 +324,6 @@ export function AuditPage() {
                 testId="audit-csv-processing"
               />
             ) : null}
-            <p className="text-xs leading-5 text-fg-muted">{t("audit.csvHint")}</p>
             {tools.error ? <Banner severity="warning">{apiErrorMessage(tools.error, t("common.error.load"))}</Banner> : null}
           </CardContent>
         </Card>

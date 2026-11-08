@@ -172,6 +172,14 @@ describe("API キーの画面（#1805）", () => {
     expect(html).not.toContain('data-testid="api-key-agent-scope-elsewhere"');
   });
 
+  it("業務 Agent の候補の読み込み中は、欄の形の Skeleton で場所を確保し、絞れない案内を出さない（#4649）", () => {
+    const html = render(<MyApiKeysPanel api={myApi} endpoints={[]} agentScopeLoading />, { mine: [] });
+    expect(html).toContain('data-testid="api-key-agent-scope-loading"');
+    expect(html).toContain('aria-label="使える業務 Agent を読み込んでいます"');
+    expect(html).not.toContain('data-testid="api-key-agent-scope-elsewhere"');
+    expect(html).not.toContain('name="api-key-agent-scope"');
+  });
+
   it("対象を絞ったキーは、使える製品の列に件数を添える（#1874）", () => {
     const html = render(<MyApiKeysPanel api={myApi} endpoints={[]} />, {
       mine: [{ ...KEY, products: ["rag", "agent"], resource_scopes: { agent: ["sales", "hr"] } }],

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Database, HardDrive, RefreshCw, Server, SlidersHorizontal } from "lucide-react";
+import { Database, HardDrive, RefreshCw, Server, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import {
   Banner,
   ButtonLink,
@@ -13,6 +13,7 @@ import {
   PageHeader,
   StatusBadge,
   PageBody,
+  TimedLoadingState,
   useActionPending,
 } from "@production-ready/ui";
 import { agentApi, type RuntimeStorageStatus } from "@/lib/api";
@@ -38,6 +39,8 @@ export function RuntimesPage() {
   // 「最新情報を取得」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
   const manualRefresh = useActionPending();
   const data = status.data;
+  // 実行環境と保存先は同じ時に読み込む。経過時間は 1 か所だけにし、2 つのカードの形で寸法を予約する（#4649）。
+  const initialLoading = status.isLoading || storage.isLoading;
   return (
     <>
       <PageHeader
@@ -57,67 +60,95 @@ export function RuntimesPage() {
         ]}
       />
       <PageBody wide>
-        <QueryState query={status} loadingLabel={t("loading.runtimes")} skeleton={<RuntimeCardsSkeleton />}>
-          {data ? (
-            <Card className="min-w-0" data-testid="builtin-runtime-card">
-              <CardHeader className="flex-row items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <CardTitle className="flex items-center gap-2">
-                    <Server size={20} aria-hidden />
-                    {t("runtime.builtin.title")}
-                  </CardTitle>
-                  <CardDescription>{t("runtime.builtin.description")}</CardDescription>
-                </div>
-                <StatusBadge
-                  variant={data.ready ? "success" : "warning"}
-                  label={data.ready ? t("runtime.builtin.ready") : t("runtime.builtin.notReady")}
-                />
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
-                  <dt className="text-fg-muted">{t("runtime.builtin.sdk")}</dt>
-                  <dd className="break-words">
-                    <code>{data.sdk}</code> {data.sdk_version}
-                  </dd>
-                  <dt className="text-fg-muted">{t("runtime.builtin.provider")}</dt>
-                  <dd>{data.model_provider}</dd>
-                  <dt className="text-fg-muted">{t("runtime.builtin.defaultModel")}</dt>
-                  <dd className="break-words">{data.model_id || t("runtime.builtin.modelUnset")}</dd>
-                  <dt className="text-fg-muted">{t("runtime.builtin.models")}</dt>
-                  <dd className="break-words">
-                    {data.models.length
-                      ? data.models.map((model) => model.display_name).join("、")
-                      : t("runtime.builtin.modelsEmpty")}
-                  </dd>
-                </dl>
-                {!data.ready ? (
-                  // 実行できない理由と、直す場所を出す（モデルの設定はシステム設定の権限がある利用者だけが開ける）。
-                  <Banner severity="warning" title={t("runtime.builtin.notReadyTitle")}>
-                    <div className="space-y-3">
-                      <p>{data.message ?? t("runtime.builtin.notReadyDefault")}</p>
-                      {hasPermission(MENU_PERMISSIONS.settingsModel) ? (
-                        <ButtonLink
-                          to={APP_ROUTES.settingsModel}
-                          linkComponent={Link}
-                          size="sm"
-                          icon={SlidersHorizontal}
-                          testId="builtin-runtime-open-model-settings"
-                        >
-                          {t("runtime.builtin.openModelSettings")}
-                        </ButtonLink>
-                      ) : (
-                        <p className="text-fg-muted">{t("runtime.builtin.askAdmin")}</p>
-                      )}
+        {initialLoading ? (
+          <TimedLoadingState label={t("loading.runtimes")} testId="runtimes-loading">
+            <div className="space-y-6">
+              <RuntimeCardSkeleton
+                icon={Server}
+                title={t("runtime.builtin.title")}
+                description={t("runtime.builtin.description")}
+                terms={[
+                  t("runtime.builtin.sdk"),
+                  t("runtime.builtin.provider"),
+                  t("runtime.builtin.defaultModel"),
+                  t("runtime.builtin.models"),
+                ]}
+                testId="builtin-runtime-card-skeleton"
+              />
+              <RuntimeCardSkeleton
+                icon={HardDrive}
+                title={t("storage.card.title")}
+                description={t("storage.card.description")}
+                terms={[t("storage.card.backend"), t("storage.card.database")]}
+                testId="runtime-storage-card-skeleton"
+              />
+            </div>
+          </TimedLoadingState>
+        ) : (
+          <>
+            <QueryState query={status} loadingLabel={t("loading.runtimes")} skeleton={null}>
+              {data ? (
+                <Card className="min-w-0" data-testid="builtin-runtime-card">
+                  <CardHeader className="flex-row items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <CardTitle className="flex items-center gap-2">
+                        <Server size={20} aria-hidden />
+                        {t("runtime.builtin.title")}
+                      </CardTitle>
+                      <CardDescription>{t("runtime.builtin.description")}</CardDescription>
                     </div>
-                  </Banner>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
-        </QueryState>
-        <QueryState query={storage} loadingLabel={t("loading.runtimeStorage")} skeleton={<StorageCardSkeleton />}>
-          {storage.data ? <StorageCard status={storage.data} /> : null}
-        </QueryState>
+                    <StatusBadge
+                      variant={data.ready ? "success" : "warning"}
+                      label={data.ready ? t("runtime.builtin.ready") : t("runtime.builtin.notReady")}
+                    />
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+                      <dt className="text-fg-muted">{t("runtime.builtin.sdk")}</dt>
+                      <dd className="break-words">
+                        <code>{data.sdk}</code> {data.sdk_version}
+                      </dd>
+                      <dt className="text-fg-muted">{t("runtime.builtin.provider")}</dt>
+                      <dd>{data.model_provider}</dd>
+                      <dt className="text-fg-muted">{t("runtime.builtin.defaultModel")}</dt>
+                      <dd className="break-words">{data.model_id || t("runtime.builtin.modelUnset")}</dd>
+                      <dt className="text-fg-muted">{t("runtime.builtin.models")}</dt>
+                      <dd className="break-words">
+                        {data.models.length
+                          ? data.models.map((model) => model.display_name).join("、")
+                          : t("runtime.builtin.modelsEmpty")}
+                      </dd>
+                    </dl>
+                    {!data.ready ? (
+                      // 実行できない理由と、直す場所を出す（モデルの設定はシステム設定の権限がある利用者だけが開ける）。
+                      <Banner severity="warning" title={t("runtime.builtin.notReadyTitle")}>
+                        <div className="space-y-3">
+                          <p>{data.message ?? t("runtime.builtin.notReadyDefault")}</p>
+                          {hasPermission(MENU_PERMISSIONS.settingsModel) ? (
+                            <ButtonLink
+                              to={APP_ROUTES.settingsModel}
+                              linkComponent={Link}
+                              size="sm"
+                              icon={SlidersHorizontal}
+                              testId="builtin-runtime-open-model-settings"
+                            >
+                              {t("runtime.builtin.openModelSettings")}
+                            </ButtonLink>
+                          ) : (
+                            <p className="text-fg-muted">{t("runtime.builtin.askAdmin")}</p>
+                          )}
+                        </div>
+                      </Banner>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              ) : null}
+            </QueryState>
+            <QueryState query={storage} loadingLabel={t("loading.runtimes")} skeleton={null}>
+              {storage.data ? <StorageCard status={storage.data} /> : null}
+            </QueryState>
+          </>
+        )}
       </PageBody>
     </>
   );
@@ -217,20 +248,48 @@ function StorageCard({ status }: { status: RuntimeStorageStatus }) {
   );
 }
 
-/** 保存先のカードの形。 */
-function StorageCardSkeleton() {
+/**
+ * 実行環境・保存先のカードの形（#4649）。見出し（題名・説明）と項目名は決まった文なのでそのまま出し、
+ * 読み込んで決まる右の状態と値だけを Skeleton にする（文字の行の高さ 1lh で、読み込み後のカードと同じ高さ）。
+ */
+function RuntimeCardSkeleton({
+  icon: Icon,
+  title,
+  description,
+  terms,
+  testId,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  /** 項目名（`dt`）の文。 */
+  terms: string[];
+  testId?: string;
+}) {
   return (
-    <div aria-hidden="true">
-      <Skeleton className="h-40" />
-    </div>
-  );
-}
-
-/** 組み込み Runtime のカードの形。読み込み後のカードの高さを予約する。 */
-function RuntimeCardsSkeleton() {
-  return (
-    <div aria-hidden="true">
-      <Skeleton className="h-56" />
-    </div>
+    <Card className="min-w-0" aria-hidden="true" data-skeleton="card" data-testid={testId}>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div className="min-w-0">
+          <CardTitle className="flex items-center gap-2">
+            <Icon size={20} aria-hidden />
+            {title}
+          </CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </div>
+        <Skeleton className="h-[1lh] w-24 shrink-0 text-sm" />
+      </CardHeader>
+      <CardContent>
+        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+          {terms.map((term, row) => (
+            <div key={term} className="contents">
+              <dt className="text-fg-muted">{term}</dt>
+              <dd>
+                <Skeleton className={row % 2 === 0 ? "h-[1lh] w-1/2" : "h-[1lh] w-2/3"} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
   );
 }

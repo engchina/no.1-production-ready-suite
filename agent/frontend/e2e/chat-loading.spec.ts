@@ -1,4 +1,5 @@
 import { expectChatTargetNextToNewConversation } from "../../../platform/packages/ui/e2e/chat-toolbar-layout";
+import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
@@ -65,12 +66,23 @@ for (const theme of ["light", "dark"] as const) {
     const release = await holdAgents(page);
     await page.reload();
 
-    // 上のカードは文言と経過時間（同じ取得の経過時間はここだけ）。
-    await expect(page.getByTestId("chat-agents-loading")).toContainText("業務 Agent を読み込んでいます");
-    // 会話の欄は最初から描き、空の状態の代わりに会話の形の Skeleton を出す。経過時間は重ねない。
-    await expect(page.getByTestId("chat-conversation-skeleton")).toBeVisible();
+    // ツールバーの欄は欄の形の Skeleton だけ（狭い欄に読み込みの表示を入れない。#4649）。
+    const toolbarLoading = page.getByTestId("chat-agents-loading");
+    await expect(toolbarLoading).toHaveAttribute("aria-label", "業務 Agent を読み込んでいます");
+    await expect(toolbarLoading.getByRole("timer")).toHaveCount(0);
+    // 会話の欄は最初から描き、空の状態の代わりに、先頭の文言と経過時間（ここだけ）と会話の形の Skeleton を出す。
+    const conversationLoading = page.getByTestId("chat-conversation-loading");
+    await expect(conversationLoading).toContainText("業務 Agent を読み込んでいます");
+    await expect(conversationLoading.getByTestId("chat-conversation-skeleton")).toBeVisible();
     await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
     await expect(page.getByRole("timer")).toHaveCount(1);
+    // 灰色の枠・経過時間・会話の領域の全幅・あふれ・Skeleton・1 か所（docs/agents/ui.md「読み込み中」）。
+    expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+    // 会話の欄は最新へ自動でスクロールするが、先頭の文言と経過時間は欄の中に見えている（375px でも）。
+    const log = page.getByRole("log", { name: "会話" });
+    const header = conversationLoading.getByRole("timer");
+    const [logBox, headerBox] = [await log.boundingBox(), await header.boundingBox()];
+    expect(headerBox!.y).toBeGreaterThanOrEqual(logBox!.y);
     // 入力欄（書いた文字は残す）・送信・新しい会話・履歴の開閉は無効。
     await expect(composer).toBeDisabled();
     await expect(composer).toHaveValue("書きかけの質問");
@@ -82,6 +94,7 @@ for (const theme of ["light", "dark"] as const) {
     // 読み込み後: 空の状態と、使える入力欄。
     release();
     await expect(page.getByTestId("chat-agents-loading")).toHaveCount(0);
+    await expect(page.getByTestId("chat-conversation-loading")).toHaveCount(0);
 
     const toolbarTarget = page.locator("[data-chat-toolbar] #chat-agent");
     await expect(toolbarTarget).toBeVisible();

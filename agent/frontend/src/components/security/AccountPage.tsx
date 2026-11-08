@@ -31,6 +31,8 @@ export function AccountRoute() {
         api: myApiKeysApi,
         endpoints: mcpEndpoints("agent", APP_BASE_PATH, window.location.origin),
         agentScopeOptions,
+        // 候補の読み込み中は欄の形で場所を確保する（読み込み後に欄が現れて下を押し下げない。#4649）。
+        agentScopeLoading: agents.isLoading,
       }}
     />
   );

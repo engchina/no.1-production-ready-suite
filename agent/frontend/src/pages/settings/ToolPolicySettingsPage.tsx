@@ -13,7 +13,7 @@ import {
   EmptyState,
   FormActionBar,
   FormStatus,
-  FormSkeleton,
+  Skeleton,
   ListToolbar,
   TableSkeleton,
   PageHeader,
@@ -26,7 +26,7 @@ import {
 } from "@production-ready/ui";
 import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi, type ToolPolicyConnection, type ToolPolicyTool } from "@/lib/api";
-import { PagedDataTable, QueryState } from "@/components/ListViews";
+import { FieldSkeleton, PagedDataTable, QueryState } from "@/components/ListViews";
 import { ListSearchField, listCount, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -304,7 +304,19 @@ export function ToolPolicySettingsPage() {
       <PageBody wide>
         <NonPersistentStorageNotice />
         <div className="space-y-5">
-        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={4} />}>
+        {/* 既定の扱いとツールの一覧は同じ時に読み込む。経過時間は 1 か所で続けて数え、途中で文言を替えない（#4649）。 */}
+        <QueryState
+          query={{
+            isLoading: settings.isLoading || tools.isLoading,
+            error: settings.error,
+            data: settings.data,
+            refetch: settings.refetch,
+            dataUpdatedAt: settings.dataUpdatedAt,
+            isFetching: settings.isFetching,
+          }}
+          loadingLabel={t("loading.toolPolicy")}
+          skeleton={<ToolPolicySkeleton />}
+        >
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle>{t("nav.settingsToolPolicy")}</CardTitle>
@@ -374,5 +386,28 @@ export function ToolPolicySettingsPage() {
         </div>
       </PageBody>
     </>
+  );
+}
+
+/**
+ * ツール権限のカードの形（#4649）。見出し → 既定の扱いの欄 → 一覧の検索の行 → ツールの表 → 保存の行を、
+ * 読み込み後のカードと同じ並びで置く（見出しと項目名は決まった文なのでそのまま出す）。
+ */
+function ToolPolicySkeleton() {
+  return (
+    <Card className="min-w-0" aria-hidden="true" data-skeleton="card">
+      <CardHeader>
+        <CardTitle>{t("nav.settingsToolPolicy")}</CardTitle>
+        <CardDescription>{t("page.settings.toolPolicy.subtitle")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <FieldSkeleton width="md" fieldLabel={t("settings.toolPolicy.defaultMode")} />
+        <Skeleton className="h-[var(--control-height-md)] w-full sm:w-[var(--field-width-lg)]" />
+        <TableSkeleton columns={4} />
+        <div className="flex justify-end">
+          <Skeleton className="h-[var(--button-height-md)] w-24" />
+        </div>
+      </CardContent>
+    </Card>
   );
 }

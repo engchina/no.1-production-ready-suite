@@ -12,7 +12,6 @@ import {
   EmptyState,
   FormActionBar,
   FormStatus,
-  FormSkeleton,
   OffsetPagination,
   PAGE_SIZE_OPTIONS,
   RUN_EXECUTOR_FILTERS,
@@ -37,6 +36,7 @@ import {
   isSubmitEnter,
   runPeriodSince,
   SelectField,
+  Skeleton,
   TextareaField,
   useActionPending,
 } from "@production-ready/ui";
@@ -49,7 +49,7 @@ import {
   type RunsPage as RunsPageData,
 } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { agentPaginationLabels, listToolbarLabels, QueryState, usePersistedServerPaging } from "@/components/ListViews";
+import { agentPaginationLabels, FieldSkeleton, listToolbarLabels, QueryState, usePersistedServerPaging } from "@/components/ListViews";
 import { ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useEditorRoute } from "@/lib/editor-route";
@@ -527,12 +527,20 @@ export function RunsPage() {
         <NonPersistentStorageNotice />
         {editor.target.kind === "new" ? (
           capabilities.operateRuns ? (
-            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<FormSkeleton fields={2} />}>
-              <QueryState
-                query={runtimeStatus}
-                loadingLabel={t("loading.runtimes")}
-                skeleton={<FormSkeleton fields={2} />}
-              >
+            // 業務 Agent と実行環境は同じ時に読み込む。経過時間は 1 か所で続けて数え、途中で文言を替えない（#4649）。
+            <QueryState
+              query={{
+                isLoading: agents.isLoading || runtimeStatus.isLoading,
+                error: agents.error,
+                data: agents.data,
+                refetch: agents.refetch,
+                dataUpdatedAt: agents.dataUpdatedAt,
+                isFetching: agents.isFetching,
+              }}
+              loadingLabel={t("loading.runForm")}
+              skeleton={<RunFormSkeleton draftSwitch={capabilities.admin} />}
+            >
+              <QueryState query={runtimeStatus} loadingLabel={t("loading.runForm")} skeleton={null}>
                 <Card className="min-w-0">
                   <CardHeader>
                     <CardTitle>{t("run.form.submit")}</CardTitle>
@@ -771,6 +779,35 @@ export function RunsPage() {
         )}
       </PageBody>
     </>
+  );
+}
+
+/**
+ * 実行の作成のフォームの形（#4649）。見出し・項目名・補足は決まった文なのでそのまま出し、業務 Agent の欄・
+ * 目標の入力欄・実行のボタンを Skeleton にする（読み込み後のカードと同じ並びと高さ）。
+ */
+function RunFormSkeleton({ draftSwitch }: { draftSwitch: boolean }) {
+  return (
+    <Card className="min-w-0" aria-hidden="true" data-skeleton="form">
+      <CardHeader>
+        <CardTitle>{t("run.form.submit")}</CardTitle>
+        <CardDescription>{t("run.form.runtimeHint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <FieldSkeleton width="lg" fieldLabel={t("run.form.agent")} />
+        {/* 下書きで実行するスイッチの行（1 行の高さ）。 */}
+        {draftSwitch ? <Skeleton className="h-[1lh] w-40 text-base" /> : null}
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium text-fg-muted">{t("run.form.goal")}</p>
+          {/* 目標の入力欄（3.5 行。TextareaField の行の高さの計算と同じ）。 */}
+          <Skeleton className="h-[calc(3.5lh+1rem+2px)] w-full text-sm leading-relaxed" />
+          <p className="text-xs leading-relaxed text-fg-muted">{t("run.form.submitShortcut")}</p>
+        </div>
+        <div className="border-t border-border pt-4">
+          <Skeleton className="h-[var(--button-height-lg)] w-32" />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
