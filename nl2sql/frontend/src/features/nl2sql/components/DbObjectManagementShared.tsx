@@ -90,7 +90,7 @@ export function DbObjectCommentText({ id, comment }: { id: string; comment?: str
   );
 }
 
-export type DbObjectDetailTab = "columns" | "ddl";
+export type DbObjectDetailTab = "columns" | "ddl" | "joinWhere";
 export type DbObjectOwnerPrefix = string;
 export type DbObjectSortKey = "name" | "row_count" | "owner";
 export type DbObjectSortDirection = "asc" | "desc";
@@ -111,6 +111,12 @@ export interface DbObjectPickerSortState {
 
 export interface DbObjectGridLabels {
   title: string;
+  /** コメントの列の見出し（全幅の一覧。#4645）。 */
+  comment?: string;
+  /** 種類の列の見出し（`kindLabel` を渡すとき）。 */
+  kind?: string;
+  /** 行の操作の列の読み上げ名（`rowActions` を渡すとき）。 */
+  actions?: string;
   hint: string;
   loading: string;
   emptyTitle: string;
@@ -981,9 +987,11 @@ export function dbObjectListCount({
 }
 
 /**
- * DB オブジェクトの一覧 + 詳細（B 型。#2281）。共有の `ListDetailLayout` に、DB オブジェクトの一覧
- * （左の狭い列: 検索・所有者・絞り込み・件数 → 名前とコメントの 2 段 + 行数（と種類）の表 → 「さらに読み込む」）と、
- * 選んだ対象の詳細（右の広い列）を渡す。選択は URL（`useWorkspaceUrlSelection`）が持ち、先頭の行を自動で選ばない。
+ * DB オブジェクトの全幅の一覧 → 全幅の詳細（A 型。#4645）。共有の `ListDetailLayout` の `layout="single"` /
+ * `listVariant="table"` に、全幅の表（検索・所有者・絞り込み・件数 → 名前・コメント・行数・種類・行の操作 →
+ * 「さらに読み込む」）と、選んだ対象の詳細（全幅。上端の行に前へ / 次へ）を渡す。md 未満は名前の列だけを残し、ほかの値を
+ * 名前の下の 1 行に畳む。選択は URL（`useWorkspaceUrlSelection` の `singlePane`）が持ち、先頭の行を自動で選ばない。
+ * 一覧へ戻ると、その行のページ・スクロール・フォーカスを戻す（`ListDetailLayout`）。
  * テーブル / ビューの管理（詳細は `DbObjectDetailPanel`）と、データの管理のデータの表示（詳細はデータの結果。#2315）が使う。
  */
 export function DbObjectListDetail({
@@ -1014,6 +1022,8 @@ export function DbObjectListDetail({
   filtersLayout,
   kindLabel,
   formatRowCount = rowCountLabel,
+  showRowCount = true,
+  rowActions,
   onSearchChange,
   onOwnerPrefixChange,
   onSortChange,
@@ -1050,8 +1060,11 @@ export function DbObjectListDetail({
    * "none" にする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
    */
   loadingActivityIcon?: ProcessingActivityIcon;
-  /** 選んだ対象の詳細（`DbObjectDetailPanel`）。 */
-  detail: ReactNode;
+  /**
+   * 選んだ対象の詳細（`DbObjectDetailPanel`）。関数なら前へ / 次へ（`ListDetailPager`）を受け取り、詳細の操作の行の
+   * 右端に置く（上端の行を別に作らない。#4645）。
+   */
+  detail: ReactNode | ((pager: ReactNode) => ReactNode);
   /** 詳細の列の名前（翻訳済み。例:「テーブルの詳細」）。 */
   detailLabel: string;
   /** 未選択の 2 ペインの詳細の空の状態。省略すると列情報・CREATE SQL の案内。 */
@@ -1068,6 +1081,10 @@ export function DbObjectListDetail({
   kindLabel?: (item: DbAdminObjectSummary) => string;
   /** 行数の表示（既定は件数か `-`）。 */
   formatRowCount?: (rowCount?: number | null) => string;
+  /** 行数の列を出すか（ビューは行数を持たないので出さない）。 */
+  showRowCount?: boolean;
+  /** 行の操作（詳細の `ObjectActionBar` と同じ定義。page-archetypes.md §0-6）。省略すると列を出さない。 */
+  rowActions?: (item: DbAdminObjectSummary) => EntityAction[];
   onSearchChange: (value: string) => void;
   onOwnerPrefixChange: (value: DbObjectOwnerPrefix) => void;
   onSortChange: (key: DbObjectSortKey) => void;
@@ -1084,20 +1101,31 @@ export function DbObjectListDetail({
     ready: !loading && !error,
   });
   const { previous, next } = adjacentListItems(items, selectedName || null, (item) => formatDbObjectName(item));
+  const pager = selectedName ? (
+    <ListDetailPager
+      onPrevious={previous ? () => onSelect(formatDbObjectName(previous)) : null}
+      onNext={next ? () => onSelect(formatDbObjectName(next)) : null}
+      labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
+      testId={`${idPrefix}-detail-pager`}
+    />
+  ) : null;
+  const detailContent = typeof detail === "function" ? detail(pager) : detail;
 
   return (
     <ListDetailLayout
       id={idPrefix}
+      layout="single"
+      listVariant="table"
       listLabel={labels.title}
       detailLabel={detailLabel}
       storagePrefix={LIST_DETAIL_STORAGE_PREFIX}
       listHeader={
         <div className="grid gap-3">
-          <h2 id={headingId} className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <h2 id={headingId} className="sr-only">
             <Icon size={16} aria-hidden="true" />
             {labels.title}
           </h2>
-          {/* 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。狭い列なので縦に積む。 */}
+          {/* 件数はツールバーの右の ListCount 1 か所に出す（#1891）。 */}
           <DbObjectSearchOwnerFields
             searchLabel={t("dbAdmin.search.label")}
             searchPlaceholder={t("dbAdmin.search.placeholder")}
@@ -1122,7 +1150,7 @@ export function DbObjectListDetail({
       }
       list={
         loading ? (
-          <div className="p-3">
+          <div>
             <DbManagementLoadingSkeleton
               idPrefix={idPrefix}
               ariaLabel={labels.loading}
@@ -1131,63 +1159,113 @@ export function DbObjectListDetail({
             />
           </div>
         ) : error ? (
-          <div className="p-3">
+          <div>
             <ErrorState message={error} onRetry={onRetry} />
           </div>
         ) : items.length === 0 ? (
-          <div className="p-3">
+          <div className="rounded-lg border border-border bg-surface">
             <EmptyState
               title={hasActiveFilter ? labels.noResultsTitle : labels.emptyTitle}
               hint={hasActiveFilter ? labels.noResultsHint : labels.emptyHint}
             />
           </div>
         ) : (
-          // 一覧 + 詳細（ListDetailLayout）の一覧の列の表で、高さは列の残りの高さ（page-archetypes.md の例外。#4636）。
-          // oxlint-disable-next-line design-system/list-height -- 一覧 + 詳細の一覧の列（高さは列が決める）
+          // 全幅の表。表頭を固定し、md 未満 5 行・md 以上 8 行（画面の高さまで伸ばす）の中で縦にスクロールする（#4645）。
           <DataTable
             columns={[
               {
                 key: "name",
                 header: labels.objectName,
                 sortable: true,
+                rowHeader: true,
                 className: "align-top",
                 render: (item, index) => {
                   const qualifiedName = formatDbObjectName(item);
                   const commentId = `${idPrefix}-comment-${index}`;
+                  const narrowSummary = [
+                    kindLabel ? kindLabel(item) : "",
+                    showComments ? item.comment?.trim() || "" : "",
+                    showRowCount ? formatRowCount(item.row_count) : "",
+                  ].filter(Boolean);
                   return (
                     <RowTitleButton
                       title={<DbObjectName value={qualifiedName} size="xs" />}
-                      subtitle={showComments ? <DbObjectCommentText id={commentId} comment={item.comment} /> : undefined}
+                      // md 未満は名前の列だけを残し、種類・コメント・行数を名前の下の 1 行に畳む（横にスクロールさせない）。
+                      subtitle={
+                        narrowSummary.length > 0 ? (
+                          <span id={commentId} className="line-clamp-2 md:hidden" data-testid={`${idPrefix}-row-summary`}>
+                            {narrowSummary.join(" · ")}
+                          </span>
+                        ) : undefined
+                      }
                       current={qualifiedName === selectedName}
                       aria-label={labels.showObject(qualifiedName)}
-                      aria-describedby={showComments ? commentId : undefined}
                       onClick={() => onSelect(qualifiedName)}
                     />
                   );
                 },
               },
-              {
-                key: "row_count",
-                header: labels.rows,
-                sortable: true,
-                align: "right",
-                headerClassName: "w-[6.5rem]",
-                className: "whitespace-nowrap align-top font-sans tabular-nums",
-                render: (item) =>
-                  kindLabel ? (
-                    // 種類は行数の下に短い値として添える（狭い列で列を増やさない。#2315）。
-                    <span className="grid justify-items-end gap-1">
-                      <span>{formatRowCount(item.row_count)}</span>
-                      <StatusBadge
-                        icon={false}
-                        variant={item.object_type === "view" ? "info" : "neutral"}
-                        label={kindLabel(item)}
-                      />
-                    </span>
-                  ) : (
-                    formatRowCount(item.row_count)
-                  ),
-              },
+              ...(kindLabel
+                ? [
+                    {
+                      key: "kind",
+                      header: labels.kind ?? "",
+                      headerClassName: "hidden w-[7rem] md:table-cell",
+                      className: "hidden align-top md:table-cell",
+                      render: (item: DbAdminObjectSummary) => (
+                        <StatusBadge
+                          icon={false}
+                          variant={item.object_type === "view" ? "info" : "neutral"}
+                          label={kindLabel(item)}
+                        />
+                      ),
+                    } satisfies DataTableColumn<DbAdminObjectSummary>,
+                  ]
+                : []),
+              ...(showComments
+                ? [
+                    {
+                      key: "comment",
+                      header: labels.comment ?? "",
+                      headerClassName: "hidden md:table-cell",
+                      className: "hidden align-top md:table-cell",
+                      render: (item: DbAdminObjectSummary, index: number) => (
+                        <DbObjectCommentText id={`${idPrefix}-comment-cell-${index}`} comment={item.comment} />
+                      ),
+                    } satisfies DataTableColumn<DbAdminObjectSummary>,
+                  ]
+                : []),
+              ...(showRowCount
+                ? [
+                    {
+                      key: "row_count",
+                      header: labels.rows,
+                      sortable: true,
+                      align: "right",
+                      headerClassName: "hidden w-[8rem] md:table-cell",
+                      className: "hidden whitespace-nowrap align-top font-sans tabular-nums md:table-cell",
+                      render: (item: DbAdminObjectSummary) => formatRowCount(item.row_count),
+                    } satisfies DataTableColumn<DbAdminObjectSummary>,
+                  ]
+                : []),
+              ...(rowActions
+                ? [
+                    {
+                      key: "actions",
+                      header: <span className="sr-only">{labels.actions ?? ""}</span>,
+                      align: "right",
+                      headerClassName: "w-[3.5rem]",
+                      className: "align-top",
+                      render: (item: DbAdminObjectSummary) => (
+                        <RowActionMenu
+                          actions={rowActions(item)}
+                          ariaLabel={`${labels.actions ?? ""}: ${formatDbObjectName(item)}`}
+                          testId={`${idPrefix}-row-actions-${formatDbObjectName(item)}`}
+                        />
+                      ),
+                    } satisfies DataTableColumn<DbAdminObjectSummary>,
+                  ]
+                : []),
             ]}
             rows={items}
             getRowKey={(item) => formatDbObjectName(item)}
@@ -1198,10 +1276,11 @@ export function DbObjectListDetail({
             rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
             testId={`${idPrefix}-grid`}
             scrollTestId="db-admin-object-list"
-            // 一覧の列（既定 20rem・16〜32rem）の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
-            className="min-h-0 rounded-none border-0"
-            tableClassName="w-full table-fixed"
+            scrollAriaLabel={labels.title}
+            tableClassName="w-full"
             stickyHeader
+            visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+            growToViewport
           />
         )
       }
@@ -1214,30 +1293,53 @@ export function DbObjectListDetail({
             loadingNextPage={loadingNextPage}
             loadMoreError={loadMoreError}
             dataTestId={`${idPrefix}-footer`}
-            className="min-h-10"
             onLoadMore={onLoadMore}
             onRetryLoadMore={onRetryLoadMore}
           />
         ) : undefined
       }
       hasSelection={Boolean(selectedName)}
-      detail={detail}
+      detail={detailContent}
       emptyDetail={emptyDetail ?? <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />}
-      detailToolbar={
-        selectedName ? (
-          <ListDetailPager
-            onPrevious={previous ? () => onSelect(formatDbObjectName(previous)) : null}
-            onNext={next ? () => onSelect(formatDbObjectName(next)) : null}
-            labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
-            testId={`${idPrefix}-detail-pager`}
-          />
-        ) : undefined
-      }
+      detailToolbar={typeof detail === "function" ? undefined : pager ?? undefined}
       labels={{ resize: t("listDetail.resize"), resizeHint: t("listDetail.resizeHint") }}
     />
   );
 }
 
+/**
+ * 全幅の詳細の見出しのバッジ（種類・列数・行数。#4645）。見出しは `PageHeader` の対象名で、ここはその `status`。
+ */
+export function DbObjectHeaderBadges({ detail }: { detail: DbAdminObjectDetail }) {
+  const showRowCountBadge = detail.object_type === "table" || detail.row_count != null;
+  return (
+    <span className="flex flex-wrap items-center gap-2" data-testid="db-object-header-badges">
+      <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
+      <StatusBadge icon={false} variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
+      {showRowCountBadge && (
+        <StatusBadge
+          icon={false}
+          variant={detail.row_count != null ? "info" : "neutral"}
+          label={rowCountLabel(detail.row_count)}
+          className="min-w-[4.5rem]"
+        />
+      )}
+    </span>
+  );
+}
+
+/** 詳細のタブに足す内容（ビューの JOIN・WHERE 条件など）。 */
+export interface DbObjectDetailExtraTab {
+  id: DbObjectDetailTab;
+  label: string;
+  icon: LucideIcon;
+  content: ReactNode;
+}
+
+/**
+ * 選んだテーブル / ビューの全幅の詳細（#4645）。対象名・種類・列数・行数・コメントは `PageHeader` が出し
+ * （`DbObjectHeaderBadges`）、ここは対象への操作（`ObjectActionBar`）とタブ（列情報 / DDL と `extraTabs`）。
+ */
 export function DbObjectDetailPanel({
   idPrefix,
   operationKey,
@@ -1259,10 +1361,16 @@ export function DbObjectDetailPanel({
   onExport,
   onExactCount,
   onDrop,
+  extraTabs = [],
+  pager,
 }: {
   idPrefix: string;
+  /** 前へ / 次へ（`DbObjectListDetail` の `detail` を関数で渡すと受け取れる）。操作の行の右端に置く。 */
+  pager?: ReactNode;
   operationKey?: string | number | null;
   headingId: string;
+  /** 列情報 / DDL の後に足すタブ。 */
+  extraTabs?: DbObjectDetailExtraTab[];
   detail: DbAdminObjectDetail | null;
   loading: boolean;
   ddlLoading?: boolean;
@@ -1285,22 +1393,29 @@ export function DbObjectDetailPanel({
   onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
+  // 読み込み中・失敗の間も前へ / 次へを同じ位置に残す（続けて押せる。押す位置を動かさない）。
+  const pagerRow = pager ? <div className="flex justify-end">{pager}</div> : null;
+
   if (loading) {
     return (
-      <DbManagementLoadingSkeleton
-        idPrefix={idPrefix}
-        ariaLabel={labels.loading}
-        variant="detail"
-        operationKey={operationKey ?? idPrefix}
-        onCancel={onCancel}
-        activityIcon={loadingActivityIcon}
-      />
+      <div className="grid min-w-0 gap-3">
+        {pagerRow}
+        <DbManagementLoadingSkeleton
+          idPrefix={idPrefix}
+          ariaLabel={labels.loading}
+          variant="detail"
+          operationKey={operationKey ?? idPrefix}
+          onCancel={onCancel}
+          activityIcon={loadingActivityIcon}
+        />
+      </div>
     );
   }
 
   if (error) {
     return (
-      <section className="grid min-w-0 content-start" data-testid={`${idPrefix}-detail-error`}>
+      <section className="grid min-w-0 content-start gap-3" data-testid={`${idPrefix}-detail-error`}>
+        {pagerRow}
         <ErrorState message={error} onRetry={onRetry} />
       </section>
     );
@@ -1310,10 +1425,12 @@ export function DbObjectDetailPanel({
     return <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />;
   }
 
-  const detailTabs = [
+  const detailTabs: Array<{ id: DbObjectDetailTab; label: string; icon: LucideIcon }> = [
     { id: "columns", label: labels.columns, icon: Table2 },
     { id: "ddl", label: labels.ddl, icon: Code2 },
-  ] as const;
+    ...extraTabs.map(({ id, label, icon }) => ({ id, label, icon })),
+  ];
+  const extraTab = extraTabs.find((item) => item.id === tab);
   const detailQualifiedName = formatDbObjectName(detail);
   const detailActions: EntityAction[] = [
     {
@@ -1345,38 +1462,23 @@ export function DbObjectDetailPanel({
       onSelect: () => onDrop(detailQualifiedName),
     },
   ];
-  const showRowCountBadge = detail.object_type === "table" || detail.row_count != null;
-
   return (
-    // 枠は一覧 + 詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を 1 段減らす。#2281）。
+    // 枠は全幅の詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を作らない）。見出しは PageHeader の対象名。
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId} data-testid={`${idPrefix}-detail`}>
       <div
-        className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
+        className="flex flex-wrap items-center justify-end gap-3"
         data-testid={`${idPrefix}-detail-header`}
       >
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 id={headingId} className="min-w-0">
-              <DbObjectName value={detailQualifiedName} size="base" />
-            </h2>
-            <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
-            <StatusBadge icon={false} variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
-            {showRowCountBadge && (
-              <StatusBadge
-                icon={false}
-                variant={detail.row_count != null ? "info" : "neutral"}
-                label={rowCountLabel(detail.row_count)}
-                className="min-w-[4.5rem]"
-              />
-            )}
-          </div>
-          {detail.comment && <p className="mt-2 text-sm leading-6 text-fg">{detail.comment}</p>}
-        </div>
+        {/* 見える見出しは PageHeader の対象名。詳細の領域の名前だけを読み上げる。 */}
+        <h2 id={headingId} className="sr-only">
+          {detailQualifiedName}
+        </h2>
         <ObjectActionBar
           actions={detailActions}
           ariaLabel={`${labels.actions}: ${detailQualifiedName}`}
           testId={`${idPrefix}-detail-actions`}
         />
+        {pager}
       </div>
       {countingRows || exporting ? (
         // 大きな表の COUNT(*) と Excel 出力は数十秒かかる。スピナーは操作の loading が担う（messaging.md §3.7）。
@@ -1402,7 +1504,16 @@ export function DbObjectDetailPanel({
         items={detailTabs.map((item) => ({ id: item.id, label: item.label, icon: item.icon }))}
       />
 
-      {tab === "columns" ? (
+      {extraTab ? (
+        <div
+          id={`${idPrefix}-detail-panel-${extraTab.id}`}
+          role="tabpanel"
+          aria-labelledby={`${idPrefix}-detail-tab-${extraTab.id}`}
+          className="min-w-0"
+        >
+          {extraTab.content}
+        </div>
+      ) : tab === "columns" ? (
         <div
           id={`${idPrefix}-detail-panel-columns`}
           role="tabpanel"
@@ -1487,6 +1598,7 @@ export function DbObjectManagementTabs<T extends string>({
   ariaLabel,
   onViewChange,
   disabled = false,
+  hidden = false,
 }: {
   idPrefix: string;
   tabs: Array<DbObjectTab<T>>;
@@ -1494,16 +1606,20 @@ export function DbObjectManagementTabs<T extends string>({
   ariaLabel: string;
   onViewChange: (view: T) => void;
   disabled?: boolean;
+  /** 全幅の詳細を開いている間は隠す（描いたまま。パネルの aria-labelledby の参照先を残す。#4645）。 */
+  hidden?: boolean;
 }) {
   // 共有 Tabs に NL2SQL の view 型を渡す adapter。処理中は全タブを無効にする。
   return (
-    <Tabs
-      idPrefix={idPrefix}
-      ariaLabel={ariaLabel}
-      value={activeView}
-      onChange={(id) => onViewChange(id as T)}
-      items={tabs.map((tab) => ({ id: tab.id, label: tab.label, icon: tab.icon, disabled }))}
-    />
+    <div hidden={hidden}>
+      <Tabs
+        idPrefix={idPrefix}
+        ariaLabel={ariaLabel}
+        value={activeView}
+        onChange={(id) => onViewChange(id as T)}
+        items={tabs.map((tab) => ({ id: tab.id, label: tab.label, icon: tab.icon, disabled }))}
+      />
+    </div>
   );
 }
 
