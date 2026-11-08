@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,6 +75,10 @@ from app.clients.support_guide_store import (
     oracle_support_guide_schema_sql,
 )
 from app.rag.ingestion_language import language_pack_artifact_statements
+from app.rag.language_pack_retired_fields import (
+    RETIRED_QUESTION_CUE_FIELDS,
+    remove_retired_language_pack_fields,
+)
 from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.vector_index_adapter import default_vector_index_build
@@ -129,12 +133,17 @@ class OracleSchemaSection:
     消えるデータ・適用の前にすることの説明（#619）。空でない migration が未適用なら、
     「作成・更新」（画面・`system_schema_cli initialize`）は明示の承認が無ければ止まり、
     実 Oracle のテストの fixture は当てない。checksum（SQL だけから作る）には含めない。
+
+    `data_step` は SQL だけでは書けないデータの移行（保存値から hash を計算し直すなど）。
+    `sql` の後に同じ接続で呼ぶ。途中で止まって流し直しても同じ結果になるように書く。
+    未初期化の DB では呼ばない。
     """
 
     name: str
     table_name: str
     sql: str
     destructive_note: str = ""
+    data_step: Callable[[Any], None] | None = None
 
     @property
     def destructive(self) -> bool:
@@ -835,6 +844,25 @@ END;
             name="20261108_4628_foreign_key_lock_indexes",
             table_name="rag_graph_references",
             sql=_create_missing_objects_sql(foreign_key_lock_index_sql(), "FK の子の列の索引"),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261109_4666_language_pack_retired_question_cues",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step（公開版の hash の計算は SQL では書けない）。SQL は何もしない。
+            # 項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql=f"BEGIN\n  NULL; -- {','.join(sorted(RETIRED_QUESTION_CUE_FIELDS))}\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、廃止した質問の"
+                "手がかりの 11 項目（どの処理も読まない項目）の値を削除し、公開版の CONTENT_HASH を"
+                "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
         )
     )
     return sections

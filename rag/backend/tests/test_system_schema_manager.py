@@ -728,7 +728,8 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
     dropping = {
         section.name
         for section in sections
-        if any(_DATA_LOSS_SQL.search(statement) for statement in split_sql_statements(section.sql))
+        if section.data_step is not None
+        or any(_DATA_LOSS_SQL.search(statement) for statement in split_sql_statements(section.sql))
     }
     assert marked == dropping
     assert {
@@ -741,6 +742,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261029_001_retire_query_history",
         "20261107_4185_drop_document_preprocess_artifact",
         "20261108_4617_drop_document_extraction_processing_config",
+        "20261109_4666_language_pack_retired_question_cues",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

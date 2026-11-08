@@ -95,6 +95,8 @@ class MigrationArtifact:
     sql: str
     # データを消す migration の説明（空なら破壊的でない。checksum には含めない。#619）。
     destructive_note: str = ""
+    # SQL の後に呼ぶデータの移行（`OracleSchemaSection.data_step`）。
+    data_step: Callable[[Any], None] | None = None
 
     @property
     def checksum(self) -> str:
@@ -111,6 +113,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = tuple(
         section.table_name.upper(),
         section.sql,
         destructive_note=section.destructive_note,
+        data_step=section.data_step,
     )
     for section in oracle_schema_migration_sections()
 )
@@ -626,6 +629,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                     continue
                 self._heartbeat(connection, owner)
                 self._execute_statements(connection, split_sql_statements(migration.sql))
+                if migration.data_step is not None:
+                    migration.data_step(connection)
                 self._record_migration(connection, migration)
                 applied_names.append(migration.name)
         # DDL は auto-commit。ledger 未記録の中断後もこの冪等 block を再開する。
@@ -955,6 +960,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 else current_schema_sql(migration.sql)
             ),
         )
+        if migration.data_step is not None:
+            migration.data_step(connection)
         self._record_migration(connection, migration)
 
     def _record_migration(self, connection: Any, migration: MigrationArtifact) -> None:
