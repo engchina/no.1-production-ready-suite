@@ -72,7 +72,10 @@ def test_backend_venv_is_locked_and_excludes_heavy_parser_adapters() -> None:
     """
     venvs = _function_body(_init_script(), "install_service_venvs")
 
-    assert 'sync_uv_venv "${BACKEND_DIR}" "sync --locked --no-dev --python ${RAG_PYTHON_VERSION}"' in venvs
+    assert (
+        'sync_uv_venv "${BACKEND_DIR}" "sync --locked --no-dev --python ${RAG_PYTHON_VERSION}"'
+        in venvs
+    )
     assert "--extra" not in venvs
     assert "--extra" not in _function_body(_systemd_script(), "rag_uv_sync_args")
     # backend は共有 contract package を path 依存で取り込む(uv.lock に固定される)。
