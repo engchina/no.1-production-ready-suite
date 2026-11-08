@@ -300,12 +300,13 @@ def test_chunk_id_written_in_the_passage_is_its_citation():
 
 def test_uncited_and_heading_passages_are_decided_without_the_model():
     calls = []
+    # 語で見出しを判定しないので、組み立ての節の見出し以外の「【手順】」は出典の無い段落として判定する（#4668）。
     answer = "回答の結論です。\n\n資料により確認できた事項\n\n【手順】\n根拠：manual.pdf 第4条"
     with patch(PARSE, side_effect=judge(calls=calls)):
         result = evaluate_answer_payload(cited_payload() | dict(answer_text=answer, cited_evidence=[]), object())
     assert calls_of(calls, ClaimJudgement) == []
     statuses = [(claim["answer_quote"], claim["status"]) for claim in result["claim_checks"]]
-    assert statuses == [("回答の結論です。", "unassessed"), ("【手順】", "not_a_claim"), ("根拠：manual.pdf 第4条", "not_a_claim")]
+    assert statuses == [("回答の結論です。", "unassessed"), ("【手順】", "unassessed"), ("根拠：manual.pdf 第4条", "not_a_claim")]
     assert result["judge_diagnostics"]["claim_calls"] == 0
 
 

@@ -1188,6 +1188,8 @@ class AnswerEngine:
                         self._settings,
                         oracle=self._oracle,
                         premises=premises,
+                        # 組み立ての時点で主張ではないと決まった本文の行（#4668）。
+                        non_claim_lines=outcome.diagnostics.get("non_claim_lines"),
                     )
                 recorded_result = result
                 llm_usage = dict(result.llm_usage)
@@ -5257,6 +5259,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738。形は
         # platform/contracts/answer-passages/passage-marks.json）。画面・MCP・評価が読む。
         **passage_mark_record(result.envelope),
+        # 組み立ての時点で主張ではないと決まった本文の行（最終の検証が監査から外す。#4668）。
+        **(
+            {"non_claim_lines": list(lines)}
+            if isinstance(lines := (result.generation_trace or {}).get("non_claim_lines"), list)
+            else {}
+        ),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,

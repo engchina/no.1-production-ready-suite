@@ -1,5 +1,5 @@
 {
-  "description": "回答の検証で主張として数えない出典の行と、出典に見えても主張として残す行の事例（#1370・#1833）。RAG（rag_engine.generation.operation_audit.is_non_claim_passage）と Agent（app.features.agent.answer_passages.passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。「第 2章」などの数字の前後の空白は、モデルの回答のとおり U+202F（NARROW NO-BREAK SPACE）のものがある。answers は #1335 の再評価の D の Run の回答と、#1833 の実機の回答そのもの。",
+  "description": "回答の検証で主張として数えない出典の行と、出典に見えても主張として残す行の事例（#1370・#1833）。Agent（app.features.agent.answer_passages.passage_kind / non_claim_passages）のテストがこのファイルを読む（RAG は語で判定しない。#4668）。passage は段落（句点・改行で分けて前後の空白を除いた原文）。「第 2章」などの数字の前後の空白は、モデルの回答のとおり U+202F（NARROW NO-BREAK SPACE）のものがある。answers は #1335 の再評価の D の Run の回答と、#1833 の実機の回答そのもの。",
   "citation_passages": [
     {
       "id": "locator-element",

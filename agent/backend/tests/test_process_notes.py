@@ -2,8 +2,8 @@
 
 #1362 の deepseek-flash の評価で、回答の「補足：この内容に当たる公開の業務ガイドは見つかりません
 でした（`rag_lookup_guides` の結果は0件）。」が、業務ガイドの検索の結果が検証の根拠に無いため
-`unsupported` で外れ、資料の答えは正しいのに回答が conditional になっていた。事例は RAG と共有する
-（platform/contracts/answer-passages/process-notes.json）。
+`unsupported` で外れ、資料の答えは正しいのに回答が conditional になっていた。事例は
+platform/contracts/answer-passages/process-notes.json。
 """
 
 from __future__ import annotations

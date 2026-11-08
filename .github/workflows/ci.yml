@@ -262,7 +262,7 @@ jobs:
               - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
             # RAG / Engine・RAG / Backend（rag_contracts）・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・Agent の回答の節の事例（#1370・#1455・#1456）と、
-            # 両方の backend が実行のときに読む段落の分け方の語（vocabulary.json。#2197）。
+            # Agent の backend が実行のときに読む段落の分け方の語（vocabulary.json。#2197）。RAG は語の判定を持たない（#4668）。
             answer_passages_contract:
               - "platform/contracts/answer-passages/**"
             mcp_contract:

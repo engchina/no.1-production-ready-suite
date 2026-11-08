@@ -40,6 +40,7 @@ from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, LEGACY_APPLICATIONS_SECTION_TITLES, PREMISES_LABEL
 from rag_engine.generation.grounded import (
     generated_section_lines,
+    is_rendered_citation_line,
     is_structural_line,
     quote_in_text,
     verbatim_quote_lines,
@@ -47,10 +48,9 @@ from rag_engine.generation.grounded import (
 from rag_engine.generation.operation_audit import (
     answer_passage_ranges,
     answer_passages,
-    is_citation_line,
-    is_heading,
-    is_non_claim_passage,
-    list_heading_lines,
+    is_markup_line,
+    is_non_claim_form,
+    is_source_reference_form,
     sentence_ranges,
     standard_answer_unit_ranges,
     table_header_lines,
@@ -1058,10 +1058,8 @@ def _unresolved_reference(claim, catalog, *, passage_citations):
     return REFERENCE_QUOTE_UNMATCHED
 
 
-def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, heading_lines=()):
+def _bind_claims(output, catalog, passages, *, passage_citations: bool = False):
     """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。
-
-    heading_lines は回答全体の ``list_heading_lines``（次の行で決まる番号つき・箇条書きの見出しの行。#1481 / #1486）。
 
     passage_citations（最終の検証。#1404）では、モデルの evidence_id で決まらないとき、回答の段落が書いた
     根拠の ID でも結び付ける。モデルが citation_error を返した段落も、引用した ID（evidence_id か段落の ID）が
@@ -1128,18 +1126,6 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
             matches = [p["id"] for p in passages if p["text"] == claim.answer_quote]
             if len(matches) == 1:
                 claim = claim.model_copy(update={"answer_passage_id": matches[0]})
-        # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。それ以外は
-        # 内容を確かめていないので unassessed にし、分類の食い違いとして残す（最終の検証は監査し直す。#2625）。
-        if claim.status == "not_a_claim" and not (
-            is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote) or claim.answer_quote.strip() in heading_lines
-        ):
-            claim = claim.model_copy(
-                update={
-                    "status": "unassessed",
-                    "reason": "本文を見出しとして監査から除外できません。" + claim.reason,
-                    "classification_check": CLASSIFICATION_NON_CLAIM_MISMATCH,
-                }
-            )
         bound.append(claim)
     return output.model_copy(update={"claim_checks": bound})
 
@@ -1167,7 +1153,7 @@ QUESTION_SOURCE = "質問の文（資料ではない）"
 # 出典の無い段落・見出しの判定の理由と、根拠の ID の検査の結果（ClaimCheck.reference_check）。
 REFERENCE_UNCITED = "uncited"
 UNCITED_CLAIM_REASON = "段落に対応する出典を確認できず、内容の支持は未評価。"
-NON_CLAIM_REASON = "見出し・出典・利用者への質問の行で、主張ではない。"
+NON_CLAIM_REASON = "見出し・出典・注記の行で、主張ではない。"
 CLAIM_FAILED_REASON = "この段落の裏付けの判定を完了できませんでした。"
 _EVIDENCE_ID_FEEDBACK = (
     "supported / contradicted の evidence_id が evidence_items の evidence_id と一致しません。"
@@ -1280,6 +1266,11 @@ class _EvidenceIndex:
         return found
 
 
+def _is_citation_form(text: str) -> bool:
+    """回答の出典の行の形か（組み立ての出典の行か、根拠の ID・リンク・ファイル名・頁だけの行。語の意味は見ない）。"""
+    return is_rendered_citation_line(text) or is_source_reference_form(text)
+
+
 def _passage_citations(answer_text: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """回答の段落の ID ごとの出典の文と、同じ出典の行を共有する段落の ID（自分を含む）。
 
@@ -1296,7 +1287,7 @@ def _passage_citations(answer_text: str) -> tuple[dict[str, list[str]], dict[str
         text = answer_text[start:end]
         gap = answer_text[previous_end:start]
         previous_end = end
-        if is_citation_line(text):
+        if _is_citation_form(text):
             for member in group:
                 citations[member].append(text)
             after_citation = True
@@ -1305,7 +1296,8 @@ def _passage_citations(answer_text: str) -> tuple[dict[str, list[str]], dict[str
             group = []
         after_citation = False
         citations[passage_id] = [text]
-        if is_heading(text) or is_structural_line(text):
+        # 出典の組の区切り（見出しの形の行で組を切る。主張かどうかは決めない）。
+        if is_markup_line(text) or is_structural_line(text):
             group = []
             continue
         group.append(passage_id)
@@ -1330,7 +1322,7 @@ def _summary_body_candidates(
             start
             for _pid, start, end in ranges
             if answer_text[start:end].strip() in titles
-            or (is_structural_line(answer_text[start:end]) and not is_citation_line(answer_text[start:end]))
+            or (is_structural_line(answer_text[start:end]) and not _is_citation_form(answer_text[start:end]))
         ),
         None,
     )
@@ -1343,8 +1335,7 @@ def _summary_body_candidates(
         if positions.get(p["id"], -1) > boundary
         and nodes_by_id.get(p["id"])
         and not system_kinds.get(p["id"])
-        and not is_citation_line(p["text"])
-        and not is_heading(p["text"])
+        and not _is_citation_form(p["text"])
     ]
     return {
         p["id"]: body
@@ -1412,7 +1403,7 @@ def _system_passage_kinds(answer_text: str) -> dict[str, str]:
             kinds[passage_id] = "not_a_claim"
         elif text in notes:
             kinds[passage_id] = "not_a_claim"
-        elif current and not is_citation_line(text):
+        elif current and not _is_citation_form(text):
             kinds[passage_id] = current
     return kinds
 
@@ -1519,7 +1510,7 @@ def _run_parallel(tasks: Sequence[Callable[[], Any]], max_workers: int) -> list[
 
 def _coverage_passages(answer_text: str) -> list[dict[str, str]]:
     """網羅の判定に渡す回答の段落（出典の行を除く。見出し・原文の引用の行は回答の内容として残す）。"""
-    return [passage for passage in answer_passages(answer_text) if not is_citation_line(passage["text"])]
+    return [passage for passage in answer_passages(answer_text) if not _is_citation_form(passage["text"])]
 
 
 def _judge_coverage(
@@ -1581,7 +1572,6 @@ def _judge_claim(
     provider_id: str | None,
     budget: int,
     on_retry: RetryRecorder,
-    heading_lines: Sequence[str],
 ) -> tuple[ClaimCheck, list[dict[str, Any]]]:
     """1 段落の主張を、その段落の出典の根拠だけで判定し、根拠へ結び付けた判定と渡した根拠の断片を返す。
 
@@ -1631,7 +1621,7 @@ def _judge_claim(
         if not last:
             raise
         output = last[-1]
-    bound = _bind_claims(AnswerEvaluationOutput(claim_checks=[as_claim(output)]), catalog, [dict(passage)], heading_lines=heading_lines)
+    bound = _bind_claims(AnswerEvaluationOutput(claim_checks=[as_claim(output)]), catalog, [dict(passage)])
     return bound.claim_checks[0], [item for item in inputs["evidence_items"] if item["evidence_id"] != QUESTION_EVIDENCE_ID]
 
 
@@ -1772,7 +1762,6 @@ def evaluate_answer_payload(
     answer_text = str(payload.get("answer_text") or "")
     question = str(payload.get("question") or "")
     passages = _judged_passages(answer_text)
-    heading_lines = sorted(list_heading_lines(answer_text))
     table_headers = table_header_lines(answer_text)
     coverage_fixed = dict(question=question, answer_passages=_coverage_passages(answer_text))
     try:
@@ -1840,7 +1829,8 @@ def evaluate_answer_payload(
                 reason = CONFIRMATION_ITEM_REASON if kind == "data_confirmation" else NON_CLAIM_REASON
                 claims.append(_decided_claim(passage, kind, reason))
                 continue
-            if is_non_claim_passage(passage["text"], table_headers=table_headers, heading_lines=heading_lines):
+            # 組み立てた回答の節の見出し・注記は上の system_kinds が決める。ここは出典の行と表の形だけ（語の意味は見ない。#4668）。
+            if _is_citation_form(passage["text"]) or is_non_claim_form(passage["text"], table_headers=table_headers):
                 claims.append(_decided_claim(passage, "not_a_claim", NON_CLAIM_REASON))
                 continue
             premise = _premise_claim(passage, question)
@@ -1874,7 +1864,7 @@ def evaluate_answer_payload(
                 diagnostics["claim_failures"] += 1
                 continue
             claims.append(len(tasks))
-            judge = partial(_judge_claim, passage, inputs, settings, provider_id, budget, retried("claim"), heading_lines)
+            judge = partial(_judge_claim, passage, inputs, settings, provider_id, budget, retried("claim"))
             tasks.append(counted(judge, claim=True))
         # 質問の対象と役割（#4351）。判定する段落があるときだけ、段落の判定と並行に取り出す。失敗しても評価は続ける。
         subject_slot = None
@@ -1980,7 +1970,7 @@ CORRECTNESS_VALUES = dict(correct=1.0, incorrect=0.0)
 
 def _without_citation_lines(answer_text: str) -> str:
     """回答の本文から出典の行（「根拠：文書名 p.7」）を除く。正確性は結論だけを比べる（#4341）。"""
-    return "\n".join(line for line in answer_text.splitlines() if not is_citation_line(line))
+    return "\n".join(line for line in answer_text.splitlines() if not _is_citation_form(line))
 
 
 _EVIDENCE_LINE_SPLIT = re.compile(r"(?<=[。．！？!?])|\n")

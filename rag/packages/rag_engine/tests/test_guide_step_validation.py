@@ -89,7 +89,9 @@ def _statuses(answer: str, quotes: list[str], *, embed: Any = None, steps: list[
     # 各説明の実際の出典を付け、意味の対応付けと手順の充足を検査する。
     answer = "\n\n".join(part if part.startswith("#") else part + "\n根拠：manual.pdf p.3" for part in answer.split("\n\n"))
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(quotes)):
-        claims = validate_answer_claims("質問", answer, items, settings=None)
+        # 「## 進め方」の見出しと「根拠：」の行は組み立てが主張ではないと決めた行として渡す。
+        non_claims = ["## 進め方", "根拠：manual.pdf p.3"]
+        claims = validate_answer_claims("質問", answer, items, settings=None, non_claim_lines=non_claims)
     result = validate_guide_steps(
         _plan(steps), claims["claim_checks"], EVIDENCE, embed=embed, selected_evidence=claims["_selected_evidence"]
     )

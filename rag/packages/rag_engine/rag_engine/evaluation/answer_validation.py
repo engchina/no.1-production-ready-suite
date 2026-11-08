@@ -53,9 +53,8 @@ from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.grounded import output_field_claim, quote_in_text
 from rag_engine.generation.operation_audit import (
     answer_passage_ranges,
-    is_non_claim_passage,
+    is_non_claim_form,
     is_operation_instruction,
-    list_heading_lines,
     table_header_lines,
 )
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
@@ -97,7 +96,9 @@ from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests,
 # 19: 監査が supported としたのに、監査の応答の参照（写した原文・返した ID）を根拠に結び付けられなかった段落を、
 #     誤りと直し方を差し戻してその段落だけで 1 回監査し直す（最初の監査の指示は変えていない。#112）。
 # 20: 最終検証だけを送達原文単位のID選択へ変え、原文・位置はコードで復元する（#4152）。
-VALIDATION_RUBRIC_VERSION = 20
+# 21: 見出し・前置き・文書名・利用者への質問・作業の経過の語の判定をコードから外し、組み立てた回答は組み立ての役割で、
+#     外部の回答は監査モデルの not_a_claim で決めるようにした（not_a_claim の定義を広げた。#4668）。
+VALIDATION_RUBRIC_VERSION = 21
 
 # 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
 # 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
@@ -180,7 +181,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
 - figure_only: 段落が図の見た目でしか決まらない内容（要素の配置・矢印の向き・線のつながり・どの分岐や枠に属するか）を述べ、図の項目（evidence_type が figure_description / ocr）の本文がそれを明示していない。evidence_unit_ids にその図の原文単位IDを選ぶ。図の本文の語の並び・近さから推した構造を supported にしない（語の並びは図の配置を表さない）。図の本文が明示する内容（説明の文が述べる関係・図の中の語そのもの）は、ほかの根拠と同じく判定する。図の項目の対象はその図（配置・矢印を含む）なので、その図について述べた段落（図の本文から決められないと述べる段落を含む）との applicability は matched。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
-- not_a_claim: 見出しだけの行。本文の文には使わない。
+- not_a_claim: 段落全体が、見出し・節の名前、以降を導くだけの前置きや礼の文、文書名と場所だけの出典の行、利用者への質問・確認の依頼、資料の内容ではなく検索や作業の経過だけを述べる文のどれか。事実・値・条件・操作を述べる段落は、見出しや質問の形でも not_a_claim にしない。
 - evidence_items のうち source が「"""
     + PREMISE_SOURCE
     + """」のもの（id が """
@@ -527,19 +528,8 @@ def _passage_check(passages: Sequence[Mapping[str, str]], answer_text: str, *, d
     残りを採る（外した段落は監査が返されなかった段落になる）。違反の 1 件でツール全体を失敗させない。
     """
     texts = {item["id"]: item["text"] for item in passages}
-    headers = table_header_lines(answer_text)
-    headings = list_heading_lines(answer_text)
-    non_claims = {
-        item["text"]
-        for item in _answer_passages(answer_text)
-        if is_non_claim_passage(item["text"], table_headers=headers, heading_lines=headings)
-    }
 
     def check(output: ClaimAuditOutput) -> None:
-        # 全文を読んだモデルが、対象外の見出し・出典も返す場合がある。本文の判定だけを採る。
-        output.claim_checks = [
-            claim for claim in output.claim_checks if claim.answer_passage_id or claim.answer_quote.strip() not in non_claims
-        ]
         kept = []
         for claim in output.claim_checks:
             violation = ""
@@ -1093,6 +1083,36 @@ REAUDIT_FEEDBACK = (
     "answer_passages の段落は、見出し・出典の行ではない本文の段落です。not_a_claim を使わず、evidence_items に"
     "照らして " + " / ".join(REAUDIT_STATUSES) + " のいずれかで判定してください。"
 )
+
+
+def _non_claim_passage_ids(answer_text: str, non_claim_lines: Collection[str] | None) -> set[str]:
+    """回答の段落のうち、回答の組み立てが主張ではないと決めた行（``non_claim_lines``）に含まれる段落の ID（#4668）。
+
+    行の文字が同じかだけで照らす（語の意味は見ない）。安全処理などで行が変わっていれば、主張として監査する。
+    """
+    if not non_claim_lines:
+        return set()
+    lines = {line.strip() for line in non_claim_lines}
+    found = set()
+    for passage_id, start, end in answer_passage_ranges(answer_text):
+        stop = answer_text.find("\n", end)
+        line = answer_text[answer_text.rfind("\n", 0, start) + 1 : stop if stop >= 0 else len(answer_text)]
+        if line.strip() in lines:
+            found.add(passage_id)
+    return found
+
+
+def _non_claim_mismatch(claim: ValidationClaimCheck) -> ValidationClaimCheck:
+    """監査に渡した主張の段落への not_a_claim を、内容を確かめていない判定（unassessed・non_claim_mismatch）にする（#2625）。"""
+    if claim.status != "not_a_claim":
+        return claim
+    return claim.model_copy(
+        update={
+            "status": "unassessed",
+            "reason": "本文を見出しとして監査から除外できません。" + claim.reason,
+            "classification_check": CLASSIFICATION_NON_CLAIM_MISMATCH,
+        }
+    )
 
 
 def _reaudit_misclassified_passages(
@@ -1658,6 +1678,7 @@ def validate_answer_claims(
     batch_passages: int | None = None,
     max_concurrency: int = 1,
     caller_citations: Sequence[Mapping[str, Any]] = (),
+    non_claim_lines: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
 
@@ -1665,9 +1686,13 @@ def validate_answer_claims(
     ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。表の 1 行の
     記録の根拠は、同じ表の印と行・セルの ``table_record``（`table_records`。モデルには渡さない）も持てる（#2594）。
     戻り値は status（completed / partial / timed_out / no_claims / input_too_large）・claim_checks・件数・切り詰め。
-    見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
-    監査に渡した段落をモデルが not_a_claim と返したら、その段落だけで 1 回監査し直す（``reaudited_passage_ids``。
-    決まらなければ unassessed のままで、判定の classification_check が non_claim_mismatch。#2625）。
+    形だけで主張でないと決まる段落（``is_non_claim_form``）は監査せず、claim_checks にも含めない（#1317）。
+
+    ``non_claim_lines`` は回答の組み立てが主張ではないと決めた行（``RenderedAnswer.non_claim_lines``。#4668）。渡すと、その行の
+    段落は監査しない。渡した回答では監査に渡した段落はすべて主張なので、モデルが not_a_claim と返した段落はその段落だけで
+    1 回監査し直す（``reaudited_passage_ids``。決まらなければ unassessed のままで、判定の classification_check が
+    non_claim_mismatch。#2625）。``non_claim_lines`` が None（外部の回答）のときは見出し・前置き・文書名・質問などの意味の
+    判定をコードで行わず、監査モデルの not_a_claim をそのまま採る（コードは段落の実在だけを確かめる）。
     監査が supported としたのに監査の応答の参照（写した原文・返した ID）だけを根拠に結び付けられなかった段落は、誤りを
     差し戻してその段落だけで 1 回監査し直し、同じ決定的な検査を通った supported だけを採る（``reference_reaudit``・
     判定の ``reference_reaudit``。#112）。
@@ -1695,14 +1720,13 @@ def validate_answer_claims(
     （理由 ``TIMED_OUT_REASON``。``timed_out_passage_ids``）にして status を partial にする（確かめ終わった段落の判定は
     使う）。どの段落も監査し終わらなければ status は timed_out（claim_checks は空）。
     """
-    # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
-    # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
+    # 形だけで主張でないと決まる段落と、組み立てが主張でないと決めた行の段落を除いてから監査する（#4668）。
+    non_claims = _non_claim_passage_ids(answer_text, non_claim_lines)
     headers = table_header_lines(answer_text)
-    heading_lines = list_heading_lines(answer_text)
     passages = [
         passage
         for passage in _answer_passages(answer_text)
-        if not is_non_claim_passage(passage["text"], table_headers=headers, heading_lines=heading_lines)
+        if passage["id"] not in non_claims and not is_non_claim_form(passage["text"], table_headers=headers)
     ]
     base: dict[str, Any] = {"rubric_version": VALIDATION_RUBRIC_VERSION, "claim_checks": []}
     if not passages:
@@ -1773,9 +1797,12 @@ def validate_answer_claims(
             # どの段落も期限までに監査し終わらなかった（再利用した段落も無い）。
             return {**base, "status": STATUS_TIMED_OUT}
         judged = [passage for passage in remaining if passage not in timed_out]
-        # モデルが not_a_claim とした本文の段落は、その段落だけで監査し直す（#2625）。
+        audited_claims = [claim for claims in audited_batches if claims for claim in claims]
+        # 組み立てた回答の監査に渡した段落は主張なので、モデルの not_a_claim は分類の食い違いとして監査し直す（#2625）。
+        if non_claim_lines is not None:
+            audited_claims = [_non_claim_mismatch(claim) for claim in audited_claims]
         reaudited_claims, reaudited = _reaudit_misclassified_passages(
-            [claim for claims in audited_batches if claims for claim in claims], fixed, judged, evidence, catalog, settings, provider_id
+            audited_claims, fixed, judged, evidence, catalog, settings, provider_id
         )
         # ID を書かない段落の出典が決まらなければ、回答の他の段落が引いた根拠で確かめ直す（#1412）。再利用した段落の
         # 根拠も「他の段落が引いた根拠」に入れる。

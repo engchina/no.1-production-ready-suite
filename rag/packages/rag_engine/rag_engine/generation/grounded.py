@@ -2832,6 +2832,11 @@ def _citation_keys(entry: CheckedItem) -> list[str]:
     return list(dict.fromkeys(line for cited in item_citations(entry) if (line := _cited_line(cited))))
 
 
+def is_rendered_citation_line(text: str) -> bool:
+    """render() が組み立てた出典の行（「根拠：文書名 p.7」）の形か（言語資源の接頭辞だけを見る。語の意味は判定しない）。"""
+    return str(text or "").strip().startswith(answer_labels().citation_prefix)
+
+
 def is_structural_line(text: str) -> bool:
     """render() が組み立てた見出し行・出典行かどうかを返します。
 
@@ -3267,13 +3272,18 @@ def citation_line_ref(entries: Sequence[CheckedItem]) -> dict[str, Any]:
 
 @dataclass
 class RenderedAnswer:
-    """組み立てた本文と、本文の出典行ごとの根拠・段落の印・外した段落・回答全体の警告（#1330・#2738）。"""
+    """組み立てた本文と、本文の出典行ごとの根拠・段落の印・外した段落・回答全体の警告（#1330・#2738）。
+
+    ``non_claim_lines`` は組み立ての時点で主張ではないと決まっている行（節の見出し・注記・出典の行・不足の案内など。
+    #4668）。最終の検証はこの行を監査せず、本文の字を語で解析しない。
+    """
 
     text: str
     citation_lines: list[dict[str, Any]]
     passage_marks: list[dict[str, Any]] = field(default_factory=list)
     removed_passages: list[dict[str, Any]] = field(default_factory=list)
     answer_warnings: list[dict[str, Any]] = field(default_factory=list)
+    non_claim_lines: list[str] = field(default_factory=list)
 
     def record(self) -> dict[str, list[dict[str, Any]]]:
         """回答の記録・MCP に載せる 3 つ（``platform/contracts/answer-passages/passage-marks.json`` の形）。"""
@@ -3349,6 +3359,9 @@ def render_answer(
     # 出典行ごとに、その表示項目を支える根拠だけを対応させる。
     citation_entries: list[list[CheckedItem]] = []
     marks: list[dict[str, Any]] = []
+    # 組み立ての時点で主張ではないと決まっている行と、主張の行（同じ文字の行は主張として監査する）。
+    non_claim_lines: list[str] = []
+    claim_lines: set[str] = {summary.strip()}
 
     def lines(entries: Sequence[CheckedItem], numbered: bool) -> list[str]:
         out: list[str] = []
@@ -3361,11 +3374,13 @@ def render_answer(
                 text = labels.condition(_condition_phrase(item.condition)) + text
             line = (f"{number}. " if numbered else labels.item_bullet) + text
             out.append(line)
+            (non_claim_lines.append(line) if item.kind == "gap" else claim_lines.add(line))
             if entry.state and (mark := passage_marks.passage_mark(line, entry.marks)):
                 marks.append(mark)
             # 同じ文書・頁・chunk を再利用しても、各説明の直下に出典を付ける。
             for key in _citation_keys(entry):
                 out.append(key)
+                non_claim_lines.append(key)
                 citation_entries.append([cited for cited in item_citations(entry) if _cited_line(cited) == key])
         return out
 
@@ -3377,9 +3392,17 @@ def render_answer(
         checked: Sequence[CheckedItem], unanswered: Sequence[str], applications: Sequence[CheckedApplication]
     ) -> list[tuple[str, list[str]]]:
         """説明・当てはめ・手順・参考情報・不足の節（小問ごとと、小問に付かない分で同じ組み立て）。"""
-        return _body_sections(
-            checked, unanswered, applications, lines, lambda entries: citation_entries.append(list(entries)), mark_application
+        found = _body_sections(
+            checked,
+            unanswered,
+            applications,
+            lines,
+            lambda entries: citation_entries.append(list(entries)),
+            mark_application,
+            non_claim_lines.append,
         )
+        non_claim_lines.extend(title for title, _lines in found)
+        return found
 
     if summary.strip() and summary_reasons and (mark := passage_marks.passage_mark(summary.strip(), summary_reasons)):
         marks.append(mark)
@@ -3394,6 +3417,7 @@ def render_answer(
             own_gaps = [missing] if missing in unanswered or not answered else []
             rest_unanswered = [line for line in rest_unanswered if line != missing]
             heading = answer_labels().subquestion_heading(str(unit.get("subquestion") or ""), _subquestion_text(unit))
+            non_claim_lines.append(heading)
             content = body_sections(entries, own_gaps, apps)
             blocks.append("\n\n".join([heading, *(title + "\n\n" + "\n".join(lines_) for title, lines_ in content)]))
         sections = body_sections(
@@ -3406,16 +3430,20 @@ def render_answer(
     bullet = answer_labels().item_bullet
     if unverified:
         sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
+        non_claim_lines.extend([sections[-1][0], *sections[-1][1]])
     if deadline:
         sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
+        non_claim_lines.extend([sections[-1][0], *sections[-1][1]])
     lead: list[tuple[str, list[str]]] = []
     if guide_notes and guide_notes[1]:
         title, notes = guide_notes
         labels = answer_labels()
         guide_section = (labels.guide_notes_section, [labels.guide_notes_note(title), *(f"{bullet}{line}" for line in notes)])
         (lead if guide_notes_first else sections).append(guide_section)
+        non_claim_lines.extend([labels.guide_notes_section, labels.guide_notes_note(title)])
     if confirmations:
         sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
+        non_claim_lines.append(answer_labels().confirmations_section)
     removed = [
         item
         for entry in checked
@@ -3426,10 +3454,12 @@ def render_answer(
     warnings = [dict(item) for item in answer_warnings]
     if removed_lines := passage_marks.removed_section_lines(removed):
         sections.append((answer_labels().removed_section, removed_lines))
+        non_claim_lines.extend([answer_labels().removed_section, *removed_lines])
     marked_lines = passage_marks.marked_section_lines(merged, warnings)
     marked_lines.extend(f"{bullet}{line}" for line in dict.fromkeys(unverified_requirements))
     if marked_lines:
         sections.append((answer_labels().marked_section, marked_lines))
+        non_claim_lines.extend([answer_labels().marked_section, *marked_lines])
     body = "\n\n".join(
         [
             *(title + "\n\n" + "\n".join(content) for title, content in lead),
@@ -3444,6 +3474,7 @@ def render_answer(
         passage_marks=merged,
         removed_passages=removed,
         answer_warnings=warnings,
+        non_claim_lines=[line for line in dict.fromkeys(non_claim_lines) if line.strip() and line.strip() not in claim_lines],
     )
 
 
@@ -3454,8 +3485,12 @@ def _body_sections(
     lines: Callable[[Sequence[CheckedItem], bool], list[str]],
     add_citation: Callable[[Sequence[CheckedItem]], None],
     mark_application: Callable[[str, CheckedApplication], None] | None = None,
+    add_non_claim: Callable[[str], None] = lambda _line: None,
 ) -> list[tuple[str, list[str]]]:
-    """``render_answer`` の説明・当てはめ・手順・参考情報・不足の節。lines は出典行を数えながら行を作る。"""
+    """``render_answer`` の説明・当てはめ・手順・参考情報・不足の節。lines は出典行を数えながら行を作る。
+
+    ``add_non_claim`` には、組み立ての時点で主張ではないと決まっている行（節の注記・不足の案内）を渡す（#4668）。
+    """
     # 本文に言い換えを出す説明（印の付いた説明を含む。#2738）。適用が未確認（unverified）の印の無い説明は、
     # 結論の節ではなく「参考情報」の節に置く。行末の注記は付けず、節の直下の説明で該当が未確認であることを
     # 伝える (#2040)。
@@ -3475,6 +3510,7 @@ def _body_sections(
     if marked_rules := [entry for entry in rules if entry.state]:
         labels = answer_labels()
         sections.append((labels.marked_rules_section, [labels.marked_rules_section_note, *lines(marked_rules, False)]))
+        add_non_claim(labels.marked_rules_section_note)
     # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, add_citation, mark_application):
         sections.append((answer_labels().applications_section, applied))
@@ -3498,6 +3534,7 @@ def _body_sections(
     if unsourced:
         labels = answer_labels()
         sections.append((labels.unsourced_section, [labels.unsourced_section_note, *lines(unsourced, False)]))
+        add_non_claim(labels.unsourced_section_note)
     # 画面の UI ラベル（「管理者」「管理区分」）のような単語だけの引用は説明を含まないので表示しない (#647)。
     # 表示する引用（画面説明は例の値を除いた後）が空・単語だけなら出さない (#1120)。
     quotes = _by_document(
@@ -3506,6 +3543,7 @@ def _body_sections(
     )
     if quotes:
         sections.append((answer_labels().quote_only_section, [answer_labels().quote_only_note, *lines(quotes, False)]))
+        add_non_claim(answer_labels().quote_only_note)
     gaps = _by_document([entry for entry in checked if entry.item.kind == "gap"], order)
     bullet = answer_labels().item_bullet
     gap_lines = lines(gaps, False) + [
@@ -3513,6 +3551,8 @@ def _body_sections(
     ]
     if gap_lines:
         sections.append((answer_labels().gaps_section, gap_lines))
+        for line in gap_lines:
+            add_non_claim(line)
     return sections
 
 

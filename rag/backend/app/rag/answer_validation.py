@@ -508,8 +508,12 @@ async def validate_answer(
     premises: Sequence[Mapping[str, str]] = (),
     data_results: Sequence[Mapping[str, str]] = (),
     passage_citations: Sequence[Mapping[str, Any]] = (),
+    non_claim_lines: Sequence[str] | None = None,
 ) -> AnswerValidation:
     """回答の本文を根拠と照合する（MCP の `rag_validate_answer` と回答フローの「資料との照合」）。
+
+    ``non_claim_lines`` は回答フローの組み立てが主張ではないと決めた本文の行（#4668）。MCP の
+    外部の回答は渡さない。
 
     中の工程（業務ガイドの読み込み・根拠の本文の読み込み・回答の段落の監査）とモデルの呼び出し
     は、検索・回答と同じ回答エンジンの観測（`_observe_engine_call`）で span にする（#3470。MCP の
@@ -531,6 +535,7 @@ async def validate_answer(
             premises=premises,
             data_results=data_results,
             passage_citations=passage_citations,
+            non_claim_lines=non_claim_lines,
         )
 
 
@@ -548,6 +553,7 @@ async def _validate_answer(
     premises: Sequence[Mapping[str, str]],
     data_results: Sequence[Mapping[str, str]],
     passage_citations: Sequence[Mapping[str, Any]] = (),
+    non_claim_lines: Sequence[str] | None = None,
 ) -> AnswerValidation:
     started = time.monotonic()
     limit = float(settings.rag_answer_validation_timeout_seconds)
@@ -714,6 +720,7 @@ async def _validate_answer(
                     data_results=list(data_results)[:MAX_DATA_RESULTS],
                     # 本文に出典を書かない呼び出し側が渡した段落ごとの根拠（#104）。
                     caller_citations=list(passage_citations),
+                    non_claim_lines=non_claim_lines,
                     batch_passages=settings.rag_answer_validation_batch_passages,
                     max_concurrency=settings.rag_answer_validation_concurrency,
                 )

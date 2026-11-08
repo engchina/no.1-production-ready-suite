@@ -4155,6 +4155,8 @@ def synthesize_grounded_answer(
         **({"unread_sections": unread_view.to_payload()} if unread_view.hidden or unread_view.overflow else {}),
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
+        # 組み立ての時点で主張ではないと決まった本文の行（最終の検証が監査から外す。#4668）。
+        "non_claim_lines": rendered.non_claim_lines,
         # 業務ガイドの手順ごとの充足（#2491）。
         **(
             {"guide_step_coverage": [{k: v for k, v in step.items() if k != "evidence_refs"} for step in guide_coverage]}
