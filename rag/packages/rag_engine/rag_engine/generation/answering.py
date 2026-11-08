@@ -2486,13 +2486,23 @@ def _grounded_prompt(
     known_gaps は CRAG 評価器の missing_aspects（#983）で、context block に既知の欠落として載せる。
     field_kind_note は根拠の画面の図の項目の種類の注記（#2404。``form_field_kinds.prompt_note``）。
     """
-    from rag_engine.generation.grounded import build_context_block
+    from rag_engine.generation.grounded import build_context_block, guide_rules_context
 
+    has_guide = runtime_knowledge is not None and bool(
+        runtime_knowledge.guide_task_scope
+        or runtime_knowledge.guide_condition_notices
+        or runtime_knowledge.guide_acquisition
+        or runtime_knowledge.guide_steps
+        or runtime_knowledge.guide_step_contracts
+    )
     preface = "\n\n".join(
         section
         for section in (
             ("confirmed_premises:\n" + json.dumps(list(confirmed_premises), ensure_ascii=False)) if confirmed_premises else "",
             runtime_knowledge.prompt_context() if runtime_knowledge is not None and runtime_knowledge.has_matches else "",
+            guide_rules_context(scope=bool(runtime_knowledge.guide_task_scope), notices=bool(runtime_knowledge.guide_condition_notices))
+            if runtime_knowledge is not None and has_guide
+            else "",
             ("guide_task_scope:\n" + json.dumps(runtime_knowledge.guide_task_scope, ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_task_scope
             else "",
@@ -2532,6 +2542,7 @@ def _grounded_prompt(
                 known_gaps=known_gaps,
                 guide_steps=runtime_knowledge.guide_steps if runtime_knowledge is not None else (),
                 guide_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge is not None else (),
+                attached_images=bool(images),
             ),
         },
     )

@@ -52,5 +52,6 @@ def test_the_end_line_does_not_change_units_or_extracted_quotes():
 
 
 def test_the_input_description_names_the_end_line():
-    # 入力の説明（1 か所）が、始まりの行と終わりの行の両方を示す。
-    assert "`[E1] p.頁" in grounded.GENERATE_SYSTEM_PROMPT and "`[/E1]` の行で終わる" in grounded.GENERATE_SYSTEM_PROMPT
+    # 根拠の入力の説明（根拠の直前の 1 か所）が、始まりの行と終わりの行の両方を示す。
+    block = grounded.build_context_block("確かめます。", [span("E1", FIRST) | {"pinned": False}], preface="", feedback=None)
+    assert "`[番号]` の行から `[/番号]` の行まで" in block

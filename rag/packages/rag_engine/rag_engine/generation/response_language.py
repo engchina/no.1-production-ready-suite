@@ -32,4 +32,7 @@ def generation_language_schema(base: type[BaseModel], question: str) -> type[Bas
         __base__=ResponseLanguage,
         selection=(DefaultResponseLanguage | explicit, Field(default_factory=DefaultResponseLanguage, discriminator="kind")),
     )
-    return create_model(base.__name__, __base__=base, response_language=(contract, Field(default_factory=contract)))
+    description = "result・reasoning・requirement・text はこの回答言語で書く。引用原文と逐語で示す語句は原文の表記と言語のままにする。"
+    return create_model(
+        base.__name__, __base__=base, response_language=(contract, Field(default_factory=contract, description=description))
+    )

@@ -82,8 +82,9 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
     assert prompt.count(note) == 1
     assert prompt.index("guide_task_scope:\n") < prompt.index("guide_condition_notices:\n") < prompt.index(note)
     assert "guide_condition_notices" not in without
-    # 補足の節の読み方は system の 1 か所にだけある。
-    assert grounded.GENERATE_SYSTEM_PROMPT.count("guide_condition_notices") == 1
+    # 補足の読み方は、業務ガイドの部品があるときに渡す 1 か所にだけある。
+    assert grounded.GUIDE_RULES_PROMPT.count("guide_condition_notices") == 1
+    assert "guide_condition_notices" not in grounded.GENERATE_SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize("reason", ["disabled", "no_budget", "empty"])

@@ -103,7 +103,7 @@ def answer_parts_model(
     gap = create_model(
         "GapAnswerPart",
         __config__=ConfigDict(extra="forbid"),
-        kind=(cast(Any, Literal["gap"]), Field()),
+        kind=(cast(Any, Literal["gap"]), Field(description="根拠から答えられない要点だけに使う。")),
         text=(str, Field(min_length=1, max_length=600, description="必要な資料・値・前提のうち不足するもの。")),
     )
     common: dict[str, Any] = {
@@ -153,7 +153,10 @@ def answer_parts_model(
         )
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
-        "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),
+        "answer_parts": (
+            GenericAlias(list, part),
+            Field(min_length=1, max_length=MAX_ANSWER_PARTS, description="要点ごとに 1 件。要点と結果を別々に重複して生成しない。"),
+        ),
         "summary_part_indexes": (
             list[Annotated[int, Field(strict=True, ge=0, lt=MAX_ANSWER_PARTS)]],
             Field(default_factory=list, max_length=2, description="冒頭に示す要点のindexを最大2つ選ぶ。別の結論は書かない。"),
