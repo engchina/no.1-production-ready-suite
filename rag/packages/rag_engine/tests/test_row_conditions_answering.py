@@ -223,3 +223,66 @@ def test_explanation_input_is_unchanged_without_row_judgments() -> None:
     result = _table_result()
     [(system, prompt)] = _explain(_entry("E-other"), result)
     assert explanation.KEY_ROWS not in json.loads(prompt) and system == explanation.explanation_system(None)
+
+
+# ---------------------------------------------------------------- 是正の後の回が不採用で前の回を採用する（#4620）
+
+UNKNOWN = FIXTURE["cases"]["rows-unknown"]
+UNKNOWN_TEXT = FIXTURE["catalog_snapshots"][0]["span"]["text"]
+
+
+class RowsUnknownModel(Model):
+    """行の判定は「決められない行がある」合成の題の録画を返す。"""
+
+    def __call__(self, system: str, prompt: str, call_settings: Any, schema: Any, **options: Any) -> Any:
+        name = getattr(schema, "__name__", "")
+        if name in {"RowConditionType", "RowApplicability"}:
+            self.calls.append((name, system, prompt))
+            call = "type" if name == "RowConditionType" else "judge"
+            output = next(
+                row["output_text"]
+                for row in FIXTURE["recorded"]
+                if (row["round"], row["case_id"], row["call"]) == ("reg", "rows-unknown", call)
+            )
+            return schema.model_validate_json(output)
+        return super().__call__(system, prompt, call_settings, schema, **options)
+
+
+def test_row_step_uses_the_adopted_round_after_a_rejected_correction() -> None:
+    """2 回目を送った後に 1 回目を採用しても、1 回目が送った表で行の判定の段を開き、推導の審査の門に渡す。"""
+    ctx = context(record(0, UNKNOWN_TEXT, FUNCTION, source="synthetic-rows.md"))
+    eid = ids(ctx, UNKNOWN["question"])[UNKNOWN_TEXT]
+    quote = UNKNOWN_TEXT.splitlines()[2]
+    generated = draft({"kind": "rule", "request_id": "Q1", "text": quote, "citations": [{"evidence_id": eid, "quote": quote}]}, summary="")
+    # 2 回とも、2 つ目の推導の方法に内部の番号（items[0]）を含む（是正を作り、2 回目は改善しないので不採用）。
+    generated["applications"] = [
+        {
+            "request_id": "Q1",
+            "premises": ["属性A〜Hは有"],
+            "item_indexes": [0],
+            "reasoning": "表の行を当てはめる。",
+            "result": "合計は 2 点です。",
+        },
+        {
+            "request_id": "Q1",
+            "premises": ["属性A〜Hは有"],
+            "item_indexes": [0],
+            "reasoning": "items[0] を当てはめる。",
+            "result": "合計は 2 点です。",
+        },
+    ]
+    model = RowsUnknownModel(generated)
+
+    def unused(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("unexpected I/O")
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = synthesize_grounded_answer(UNKNOWN["question"], ctx, settings(), image_prompt_mode="text_only").response
+    trace = result.generation_trace
+    assert [row["accepted"] for row in trace["rounds"]] == [True, False]
+    names = [name for name, _system, _prompt in model.calls]
+    assert names.count("RowConditionType") == 1 and names.count("RowApplicability") == 1
+    assert trace["row_conditions"]["status"] == "completed"
+    assert [table["table_result"] for table in trace["row_conditions"]["tables"]] == ["not_determined"]
+    # 決められない行のある表の推導は、審査に問い合わせずに保留する（門が働く）。
+    assert trace["rounds"][0]["timing"]["application_review"]["status"] == "withheld_table_not_determined"

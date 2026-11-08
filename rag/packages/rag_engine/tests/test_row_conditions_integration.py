@@ -77,6 +77,11 @@ def sent_spans() -> Any:
     grounded._CITATION_VIEWS.reset(token)
 
 
+def sent_units(spans: list[dict[str, Any]]) -> Any:
+    """生成の回が結果に持つ送達の目録（Round.sent_units）と同じもの。"""
+    return grounded.generation_unit_catalog(spans, sent_only=True)
+
+
 class Replay:
     def __init__(self, outputs: list[str]) -> None:
         self.outputs = list(outputs)
@@ -88,7 +93,7 @@ class Replay:
 
 
 def row_result(case_id: str, round_name: str, spans: list[dict[str, Any]]) -> rc.RowConditionsResult:
-    tables, skipped = grounded.sent_table_views(spans)
+    tables, skipped = grounded.sent_table_views(sent_units(spans))
     return rc.evaluate_tables(
         FIXTURE["cases"][case_id]["question"],
         tables,
@@ -117,7 +122,7 @@ def entry_for(span: dict[str, Any]) -> CheckedApplication:
 
 def test_sent_table_views_projects_only_the_sent_snapshot(sent_spans: Any) -> None:
     sent = sent_spans([table_span("reg-period-reversed")])
-    tables, skipped = grounded.sent_table_views(sent)
+    tables, skipped = grounded.sent_table_views(sent_units(sent))
     assert len(tables) == 1 and not skipped
     table = tables[0]
     text = sent[0]["text"]
@@ -125,7 +130,7 @@ def test_sent_table_views_projects_only_the_sent_snapshot(sent_spans: Any) -> No
         assert text[alias["start"] : alias["end"]] == alias["raw"]
     assert table["header"] == "not_recorded"
     # 送達の記録が無い span（今回の入力に無い）は投影しない。
-    assert grounded.sent_table_views([table_span("reg-period-reversed")]) == ([], [])
+    assert grounded.sent_table_views(sent_units([table_span("reg-period-reversed")])) == ([], [])
 
 
 def test_recorded_rows_through_grounded_projection(sent_spans: Any) -> None:
@@ -274,7 +279,7 @@ def test_answering_step_records_unavailable_model_without_calls(sent_spans: Any,
     unavailable = replace(
         settings(), llm_providers={**settings().llm_providers, ROW_CONDITION_LLM_PROVIDER: replace(provider, endpoint="", api_key="")}
     )
-    result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], spans, settings=unavailable)
+    result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], sent_units(spans), settings=unavailable)
     assert result is not None and result.status == "model_unavailable" and result.undetermined() == []
 
 
@@ -290,7 +295,7 @@ def test_answering_step_uses_the_step_model(sent_spans: Any, monkeypatch: pytest
         return replay(system, user, call_settings, schema)
 
     monkeypatch.setattr(answering, "parse_text_response", parse)
-    result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], spans, settings=settings())
+    result = answering._row_condition_step(FIXTURE["cases"]["reg-period-reversed"]["question"], sent_units(spans), settings=settings())
     assert result is not None and result.status == "completed" and providers == ["xai.grok-4.7", "xai.grok-4.7"]
     # 送った表が無ければ段を開かない。
-    assert answering._row_condition_step("質問。", [], settings=settings()) is None
+    assert answering._row_condition_step("質問。", grounded.SentUnitCatalog(()), settings=settings()) is None
