@@ -15,25 +15,18 @@ from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCata
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
 from rag_engine.retrieval.table_header_lines import span_header_lines
 
-# 質問の種類（question_type）の閉じた語彙（#4586）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の記載で
-# 答えられる種類を分ける。種類の判定はモデルの構造化出力だけが行い、コードは値の集合を比べるだけで語の意味を読まない。
+# 要点の要求の種類（requirement_type）の閉じた語彙（#4586・#4631）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の
+# 記載で答えられる種類を分ける。種類の判定はモデルの構造化出力だけが要点ごとに行い、コードは値の集合を比べるだけで語の意味を
+# 読まない。質問全体の 1 つの宣言にしない（要求が複数ある質問で、一部の語が計算らしいだけで記載の要点まで導出にしない）。
 DERIVATION_QUESTION_TYPES = ("calculation", "classification", "condition_check")
 STATED_QUESTION_TYPES = ("fact", "definition", "procedure", "comparison", "other")
-QUESTION_TYPE_DESCRIPTION = (
-    "質問が求める答えの種類（複数可）。calculation=値の計算・集計、classification=値や条件から区分・等級を決める、"
-    "condition_check=質問の事実を規則の条件に当てはめて可否・該当を決める、fact=資料に書かれた事実・値、"
-    "definition=語・項目の意味、procedure=手順・操作、comparison=複数の対象の比較、other=それ以外。"
+DERIVATION_TYPE_DESCRIPTION = (
+    "この要点の要求の答えの種類。calculation=値の計算・集計、classification=値や条件から区分・等級を決める、"
+    "condition_check=質問の事実を規則の条件に当てはめて可否・該当を決める。答えは answer 型か、導けなければ gap 型。"
 )
-
-# source 型だけの出力を作り直すときに、生成の user の入力の後ろへ足す部品（#4586）。何が違反でどう直すかだけを書く。
-# 既定の user の入力（Step 5 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
-SOURCE_ONLY_DERIVATION_PROMPT = (
-    "## Step 6: 導出が要る要求の要点を作り直す\n"
-    f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
-    "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
-    "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
-    "導くのに足りない資料・値は gap 型に書く。\n"
-    "- 応答 schema どおりの完全な草稿を返す。\n"
+STATED_TYPE_DESCRIPTION = (
+    "この要点の要求の答えの種類。fact=資料に書かれた事実・値、definition=語・項目の意味、procedure=手順・操作、"
+    "comparison=複数の対象の比較、other=それ以外。"
 )
 
 
@@ -52,36 +45,20 @@ def _without_default(schema: dict[str, Any]) -> None:
     schema.pop("default", None)
 
 
-def _question_type_first(schema: dict[str, Any]) -> None:
-    """質問の種類（question_type）を要点より先に生成させる（strict schema の欄の順は生成の順）。
-
-    導出（計算・区分・条件の当てはめ）が要るかの判断を、要点の型（source / answer / gap）を選ぶ前に出させる。要点の後に
-    書くと、種類の判断は要点の型に影響しない（#4586 の source 型だけの出力の作り直しが増える）。
-    """
-    properties = schema.get("properties", {})
-    if "question_type" not in properties:
-        return
-    order = [name for name in properties if name != "question_type"]
-    order.insert(order.index("answer_parts") if "answer_parts" in order else 0, "question_type")
-    schema["properties"] = {name: properties[name] for name in order}
-    if "required" in schema:
-        schema["required"] = [name for name in order if name in schema["required"]]
-
-
 def answer_parts_model(
     base: type[BaseModel],
     catalog: SentUnitCatalog,
     *,
-    direct_source: bool = True,
     requirements: Collection[str] = (),
     request_ids: Sequence[str] = (),
 ) -> type[BaseModel]:
     """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。
 
-    ``direct_source=False`` は source 型を受けない契約（導出が要る質問で要点がすべて source だった出力の作り直し。
-    #4586）。原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
+    要点は要求の種類（``requirement_type``）を答えの型より先に選び、種類で答えの型が決まる（#4631）。導出の種類
+    （計算・区分・条件の当てはめ）の要点は source 型を選べず、記載の種類の要点は source・answer・gap から選ぶ。
+    原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
     ``requirements`` を渡すと、要点の requirement はその文の写しだけを受ける（作り直しでは 1 回目の出力の要点の文。
-    不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
+    作り直しで要求の名前を別の文・識別子に変えさせない）。
     ``request_ids`` はその回の要求の id。要求ごとの根拠の計画はモデルに書かせず、``canonical_answer_parts`` が要点の
     basis から要求ごとに 1 件だけ導く（``basis_request_plans``。#4611）。
     """
@@ -118,28 +95,25 @@ def answer_parts_model(
         ),
     }
     part: Any
-    if direct_source and catalog.unit_ids:
-        # 要点の役割（導出か記載か）を答えの型より先に決めさせ、導出の要点では source 型を選べなくする（#4611。#4586 の
-        # 「導出が要るのに原文の提示だけ」を schema で起こさない）。記載の要点は従来どおり 3 つの型から選ぶ。mode の無い
-        # 出力（録画など）は記載の要点として読む。
+    if catalog.unit_ids:
+        # 要点ごとに要求の種類を答えの型より先に選ばせ、種類を union の判別子にする（#4631）。質問全体の 1 つの宣言と
+        # 要点の型が食い違う出力（#4586 の「導出が要るのに原文の提示だけ」と、#4631 の「記載の要点を導出に作り直す」）を
+        # schema で起こさない。種類の無い出力（録画など）は記載の要点として読む。
         derivation_part = create_model(
             "DerivationAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            mode=(
-                cast(Any, Literal["derivation"]),
-                Field(description="計算・区分・条件の当てはめで答えを導く要点。答えは answer 型か、導けなければ gap 型。"),
-            ),
+            requirement_type=(cast(Any, Literal)[DERIVATION_QUESTION_TYPES], Field(description=DERIVATION_TYPE_DESCRIPTION)),
             answer=(cast(Any, Union.__getitem__((derived, gap))), Field()),
         )
         stated_part = create_model(
             "StatedAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            # 既定値は mode の無い録画を読むためだけ。モデルに渡す schema には出さない（strict schema は全欄が必須）。
-            mode=(
-                cast(Any, Literal["stated"]),
-                Field(default="stated", description="資料の記載がそのまま答えになる要点。", json_schema_extra=_without_default),
+            # 既定値は種類の無い録画を読むためだけ。モデルに渡す schema には出さない（strict schema は全欄が必須）。
+            requirement_type=(
+                cast(Any, Literal)[STATED_QUESTION_TYPES],
+                Field(default="other", description=STATED_TYPE_DESCRIPTION, json_schema_extra=_without_default),
             ),
             answer=(cast(Any, Union.__getitem__((direct, derived, gap))), Field()),
         )
@@ -149,9 +123,8 @@ def answer_parts_model(
             "RequiredAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            answer=(cast(Any, Union.__getitem__((derived, gap)) if catalog.unit_ids else gap), Field()),
+            answer=(cast(Any, gap), Field()),
         )
-    question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),
         "summary_part_indexes": (
@@ -167,38 +140,15 @@ def answer_parts_model(
         # basis から導く。モデルに計画の行を書かせると、basis と同じ根拠を二重に書かせ（暴走の位置。#4594）、basis の
         # 根拠に unrelated を書いて自分の答えを計画の外にする（#4613）。
         "request_coverage": (SkipJsonSchema[list[Any]], Field(default_factory=list, exclude=True)),
-        "question_type": (
-            GenericAlias(list, question_types),
-            Field(
-                default_factory=list,
-                max_length=len(DERIVATION_QUESTION_TYPES) + len(STATED_QUESTION_TYPES),
-                description=QUESTION_TYPE_DESCRIPTION,
-            ),
-        ),
+        # 質問の種類は要点ごとの requirement_type から ``canonical_answer_parts`` が作る（#4631）。モデルに質問全体の
+        # 宣言を別に書かせない（要点の種類と食い違う 2 つ目の宣言になる）。
+        "question_type": (SkipJsonSchema[list[str]], Field(default_factory=list, exclude=True)),
     }
-    model = create_model(base.__name__, __base__=base, __config__=ConfigDict(json_schema_extra=_question_type_first), **fields)
+    model = create_model(base.__name__, __base__=base, **fields)
     cast(Any, model)._uses_typed_answer_parts = True
     cast(Any, model)._uses_unit_ids = True
     cast(Any, model)._request_ids = tuple(dict.fromkeys(request_ids))
     return model
-
-
-def source_only_derivation(value: BaseModel) -> list[str]:
-    """導出が要る種類を question_type で宣言した出力で、要点がすべて source 型なら、その要求 ID を返す（#4586）。
-
-    source 型は原文の提示だけで、質問の既知値を当てはめた答えを持たない。モデル自身が計算・区分・条件の当てはめの
-    質問と宣言したのに導出（answer 型）も不足（gap 型）も無い出力は、自分の宣言と矛盾し、質問に答えていない。
-    比べるのは閉じた語彙の値と要点の型だけで、質問・原文の語の意味は読まない。
-    """
-    if not getattr(type(value), "_uses_typed_answer_parts", False):
-        return []
-    raw = value.model_dump(exclude_unset=True)
-    if not set(raw.get("question_type") or ()) & set(DERIVATION_QUESTION_TYPES):
-        return []
-    parts = raw.get("answer_parts") or []
-    if not parts or any(part["answer"]["kind"] != "source" for part in parts):
-        return []
-    return list(dict.fromkeys(str(part["request_id"]) for part in parts))
 
 
 def _header_only(selected: Sequence[BoundUnitRange]) -> bool:
@@ -336,15 +286,11 @@ def canonical_answer_parts(
     catalog: SentUnitCatalog,
     *,
     question: str | None = None,
-    underived_requests: Collection[str] = (),
 ) -> GroundedDraft:
     """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。
 
-    要求ごとの根拠の計画は要点の basis から導く（``basis_request_plans``。#4611）。
-
-    ``underived_requests`` は、導出が要るのに導出を作れなかった要求（``source_only_derivation`` の作り直しが契約を
-    満たさなかったとき。#4586）。その要求の source 型の要点は、原文を引用に残したまま導出の無い derived にし、
-    要約に使わない（``check_answer_parts`` が欠けた要点として不足の記載を足す）。原文の列挙を答えとして示さない。
+    要求ごとの根拠の計画は要点の basis から導く（``basis_request_plans``。#4611）。質問の種類（``question_type``）は
+    要点ごとに選んだ要求の種類を出現順に重複なく並べる（#4631。保存・表示の形は従来どおり）。
     """
     raw = value.model_dump(exclude_unset=True)
     wire_parts = raw.pop("answer_parts", [])
@@ -367,7 +313,6 @@ def canonical_answer_parts(
         if kind == "answer" and _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
             # 原文の写しだけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
             kind = "source"
-        underived = kind == "source" and part["request_id"] in underived_requests
         # 表の見出しの行だけを示す要点は答えとして受けない（#4592）。見出しの行を確認できた事項に出さず、欠けた要点にする。
         header_only = kind == "source" and _header_only(selected)
         if header_only:
@@ -415,7 +360,7 @@ def canonical_answer_parts(
             items.append({"kind": "gap", "request_id": part["request_id"], "text": answer["text"], "citations": []})
             bindings.append(None)
             text = answer["text"]
-        elif underived or header_only:  # 導出が要るのに作れなかった・見出しの行だけの要点。答えの文は無い。
+        elif header_only:  # 見出しの行だけの要点。答えの文は無い。
             text = ""
         else:  # source は選んだ原文だけを直接提示する。
             text = "\n".join(items[index]["text"] for index in indexes)
@@ -424,19 +369,13 @@ def canonical_answer_parts(
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "derived"
-                if underived or header_only
-                else "direct"
-                if kind == "source"
-                else "derived"
-                if kind == "answer"
-                else "gap",
+                "result_kind": "derived" if header_only else "direct" if kind == "source" else "derived" if kind == "answer" else "gap",
                 "item_indexes": [] if kind == "answer" else indexes,
                 "application_indexes": app_indexes,
             }
         )
         texts.append(text)
-        part_sources.append(indexes if kind != "answer" and not underived and not header_only else [])
+        part_sources.append(indexes if kind != "answer" and not header_only else [])
         part_applications.append(app_indexes)
     _attach_basis_quotes(parts, applications)
     chosen = list(
@@ -445,6 +384,7 @@ def canonical_answer_parts(
         )
     )
     raw.update(
+        question_type=list(dict.fromkeys(str(part["requirement_type"]) for part in wire_parts if part.get("requirement_type"))),
         items=items,
         applications=applications,
         answer_parts=parts,

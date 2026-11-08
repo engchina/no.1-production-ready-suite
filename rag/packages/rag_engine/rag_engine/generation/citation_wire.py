@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
@@ -159,12 +159,10 @@ def canonical_generation_draft(
     *,
     unit_catalog: Any = None,
     question: str | None = None,
-    underived_requests: Collection[str] = (),
 ) -> GroundedDraft:
     """新wireは整数の指定を私有属性へ残す。既存の草稿・履歴のlinesは変更しない。
 
     ``link_text`` は計画の linked の番号の範囲から原文を切り出す（呼び出し側が送った根拠を知っている）。
-    ``underived_requests`` は導出を作れなかった要求（``answer_parts_wire.canonical_answer_parts``。#4586）。
     """
     from rag_engine.models.llm import GroundedCitation, GroundedDraft
 
@@ -174,7 +172,7 @@ def canonical_generation_draft(
         if unit_catalog is None:
             raise ValueError("送達した引用単位の対応がありません。")
         # 要求ごとの根拠の計画はモデルの出力に無く、要点の basis から導く（#4611）。
-        return canonical_answer_parts(value, unit_catalog, question=question, underived_requests=underived_requests)
+        return canonical_answer_parts(value, unit_catalog, question=question)
 
     if getattr(type(value), "_uses_unit_ids", False):
         if unit_catalog is None:

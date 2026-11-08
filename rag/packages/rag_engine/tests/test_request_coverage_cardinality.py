@@ -136,8 +136,9 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
 
     計画を繰り返した出力も、計画の行を読まないので有効な出力になり、計画は basis から 1 件だけ導く。
     """
-    from test_source_only_derivation import FIXTURE, RULE, TABLE
-    from test_source_only_derivation import QUESTION as TABLE_QUESTION
+    from test_part_requirement_type import QUESTION as TABLE_QUESTION
+    from test_part_requirement_type import RULE, TABLE
+    from test_part_requirement_type import SOURCE_ONLY as OUTPUTS
 
     table = {"label": "E1", "evidence_id": "table-a", "source_id": "s-t", "source": "synthetic-table.md", "text": TABLE}
     rule = {"label": "E2", "evidence_id": "rule-a", "source_id": "s-r", "source": "synthetic-rule.md", "text": RULE}
@@ -153,7 +154,7 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
     model = generation_output_model(TABLE_QUESTION, unit_catalog=units)
 
     def replay(name: str) -> dict[str, Any]:
-        text = json.dumps(FIXTURE["outputs"][name], ensure_ascii=False)
+        text = json.dumps(OUTPUTS[name], ensure_ascii=False)
         for key, value in mapping.items():
             text = text.replace(key, value)
         return json.loads(text)

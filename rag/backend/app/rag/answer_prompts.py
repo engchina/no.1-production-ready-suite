@@ -233,11 +233,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ),
             # 目録で選んだ条を生成が引かなかったときだけ、支える説明を検討する（#3526）。
             ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
-            # 要点がすべて原文の提示だった導出の質問の作り直しで、入力に足す部品（#4586）。
-            (
-                "sourceOnlyDerivation",
-                "rag_engine.generation.answer_parts_wire:SOURCE_ONLY_DERIVATION_PROMPT",
-            ),
             # 表の見出しの行だけを示した要点の作り直しで、入力に足す部品（#4592）。
             (
                 "headerOnlySource",

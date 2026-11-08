@@ -132,10 +132,11 @@ def test_source_method_and_result_are_typed_and_the_plan_is_not_generated():
     raw, schema, catalog = case()
     document = schema.model_json_schema()
     fields = list(document["properties"])
-    # 質問の種類（導出が要るか）を要点より先に生成させる（#4611）。
-    assert fields[:3] == ["response_language", "question_type", "answer_parts"]
+    # 質問全体の種類は出力に無く、要点ごとの requirement_type から作る（#4631）。
+    assert fields[:2] == ["response_language", "answer_parts"]
+    assert "question_type" not in fields
     strict = type_to_text_format_param(schema)["schema"]
-    assert list(strict["properties"])[:3] == strict["required"][:3] == ["response_language", "question_type", "answer_parts"]
+    assert list(strict["properties"])[:2] == strict["required"][:2] == ["response_language", "answer_parts"]
     assert "request_coverage" not in fields
     assert "relation" not in json.dumps(document)
     supported = document["$defs"]["SupportedAnswerPart"]
