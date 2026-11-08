@@ -1324,7 +1324,16 @@ def _summary_body_candidates(
     titles = {str(getattr(labels, field, "") or "").strip() for field, _kind in _SECTION_KINDS}
     titles.update((labels.applications_section, APPLICATIONS_SECTION_TITLE, *LEGACY_APPLICATIONS_SECTION_TITLES))
     ranges = list(answer_passage_ranges(answer_text))
-    boundary = next((start for _pid, start, end in ranges if answer_text[start:end].strip() in titles), None)
+    # 手順の節は「操作手順（機能の名前）」の形なので、見出しの定型（structural_line）でも始まりを見る。
+    boundary = next(
+        (
+            start
+            for _pid, start, end in ranges
+            if answer_text[start:end].strip() in titles
+            or (is_structural_line(answer_text[start:end]) and not is_citation_line(answer_text[start:end]))
+        ),
+        None,
+    )
     if boundary is None:
         return {}
     positions = {pid: start for pid, start, _end in ranges}

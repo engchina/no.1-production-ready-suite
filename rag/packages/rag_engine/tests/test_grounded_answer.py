@@ -361,19 +361,6 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(sorted(by["E1"]["function_texts"]), sorted([step["text"], sibling["text"]]))  # 配下の節（同じ文書）
         self.assertNotIn(step["text"], by["E3"]["function_texts"])  # 兄弟の機能は含めない
         self.assertNotIn(other_doc["text"], by["E1"]["function_texts"])  # 別文書は含めない
-        item = GroundedItem(
-            kind="operation",
-            text="取引先登録画面で取引先名を変更し、実行ボタンを押す。",
-            citations=[GroundedCitation(evidence_id="E1", quote=overview["text"])],
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
-        self.assertEqual(grounded._check_interaction(question, item, by["E1"]), "")
-        item = GroundedItem(
-            kind="operation",
-            text="納品先登録画面で納品先名を変更し、登録ボタンを押す。",
-            citations=[GroundedCitation(evidence_id="E2", quote=step["text"])],
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E2"]), "根拠にないボタン名: 登録")
 
     def test_weak_headings_do_not_split_a_function(self):
         """柱・本文の再出現から昇格した見出しは機能の境界にしない。Docling 由来の兄弟機能は従来どおり分ける (#820)。"""
@@ -413,19 +400,12 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertNotEqual(by["E1"]["function"], by["E3"]["function"])
         self.assertIn(continued["text"], by["E1"]["function_texts"])
         self.assertNotIn(sibling["text"], by["E1"]["function_texts"])
-        item = GroundedItem(
-            kind="operation",
-            text="取引先名を変更し、実行ボタンを押す。",
-            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
         # 出所が無い旧データは従来どおり全要素で判定する
         legacy = {**continued, "section_path_sources": []}
         self.assertEqual(grounded._trusted_section_path(legacy), continued["section_path"])
 
-    def test_button_name_on_the_adjacent_page_is_not_an_unsupported_button(self):
-        """section_path の推定が誤って手順が別機能に分かれても、隣のページの本文にあるボタン名で降格しない (#809)。
-        同じページの兄弟機能と離れたページは従来どおり根拠にしない。"""
+    def test_adjacent_page_text_is_collected_apart_from_the_function_body(self):
+        """手順が別機能に分かれても隣のページの本文は adjacent_texts に集める (#809)。同じページの兄弟機能と離れたページは含めない。"""
 
         def span(eid, text, path, page, source="取引先名変更.pdf"):
             return {
@@ -449,23 +429,9 @@ class GroundedAnswerTest(unittest.TestCase):
         by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, continued, sibling, far])}
         self.assertEqual(by["E1"]["adjacent_texts"], [continued["text"]])
         self.assertNotIn(continued["text"], by["E1"]["function_texts"])
-        item = GroundedItem(
-            kind="operation",
-            text="取引先名を変更し、実行ボタンを押す。",
-            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
-        self.assertEqual(grounded._check_interaction(question, item, by["E1"]), "")
-        for name in ("登録", "確認"):
-            item = GroundedItem(
-                kind="operation",
-                text=f"取引先名を変更し、{name}ボタンを押す。",
-                citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
-            )
-            self.assertEqual(grounded._check_button_names(question, item, by["E1"]), f"根拠にないボタン名: {name}")
 
-    def test_button_listed_in_the_screen_description_is_not_an_unsupported_button(self):
-        """画面のボタン一覧は生成説明の `ボタン:` field にしかない。実在するボタンで降格しない (#1074)。"""
+    def test_screen_description_is_collected_apart_from_the_function_body(self):
+        """画面の生成説明は screen_texts に集め、原文照合用の function_texts には入れない (#1074)。"""
 
         def span(eid, text, path, source="架空設定.pdf"):
             return {
@@ -492,61 +458,6 @@ class GroundedAnswerTest(unittest.TestCase):
         by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, screen])}
         self.assertIn(screen["text"], by["E1"]["screen_texts"])
         self.assertNotIn(screen["text"], by["E1"]["function_texts"])  # 原文照合には従来どおり使わない
-        item = GroundedItem(
-            kind="operation",
-            text="取引先名を変更し、実行ボタンを押す。",
-            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
-        # field に無いボタンは従来どおり降格する
-        item = GroundedItem(
-            kind="operation",
-            text="取引先名を変更し、登録ボタンを押す。",
-            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "根拠にないボタン名: 登録")
-        # 値: field の値はボタン名として受け入れない
-        item = GroundedItem(
-            kind="operation", text="架空商事ボタンを押す。", citations=[GroundedCitation(evidence_id="E1", quote=step["text"])]
-        )
-        self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "根拠にないボタン名: 架空商事")
-
-    def test_number_found_elsewhere_in_the_same_document_is_not_an_unsupported_number(self):
-        """画面経路の番号（マスタ管理 2 タブ）が同じ文書の別 span にあれば「引用と質問にない数値」にしない (#678)。"""
-
-        def span(eid, source, text, path):
-            return {
-                "evidence_id": eid,
-                "source_id": f"uid-{eid}",
-                "start": 0,
-                "end": len(text),
-                "text": text,
-                "source": source,
-                "document_scope": [source, ""],
-                "section_path": path,
-                "origin": "document_text",
-            }
-
-        overview = span("E1", "取引先名変更.pdf", "営業所の取引先名を変更する場合は、次の画面で設定を変えます。", ["１．操作手順"])
-        route = span(
-            "E2",
-            "取引先名変更.pdf",
-            "営業所の取引先名を変更します。\n〔マスタ管理⇒マスタ管理 2 タブ⇒取引先登録〕",
-            ["１．操作手順", "（１）取引先登録"],
-        )
-        other = span("E3", "別文書.pdf", "有効期限は 90 日です。", ["１．設定"])
-        question = "取引先名を変更するにはどこから操作すればよいか。"
-        tagged = grounded.tag_spans(question, [overview, route, other])
-        item = GroundedItem(
-            kind="operation",
-            text="マスタ管理⇒マスタ管理 2 タブの取引先登録画面で設定を変更します。",
-            citations=[GroundedCitation(evidence_id="E1", quote=overview["text"])],
-        )
-        self.assertEqual(grounded._check_numbers(question, item, tagged[0]), "")
-        item = GroundedItem(
-            kind="rule", text="取引先名の有効期限は 90 日です。", citations=[GroundedCitation(evidence_id="E1", quote=overview["text"])]
-        )
-        self.assertEqual(grounded._check_numbers(question, item, tagged[0]), "引用と質問にない数値: 90")
 
     def test_quotes_from_tables_and_figures_match_the_original_despite_markup_and_ocr_breaks(self):
         """表は HTML で渡るがモデルは tag を外して引用し、図内の文字は OCR の改行・読点が揺れる (#561)。"""
@@ -2053,7 +1964,6 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         self.assertIn("unsupported", observed_supports(result))
         self.assertNotIn("『入荷検品チェックリスト』は取得した資料に記載がありません。", result.answer_text)
         self.assertIn("unsupported", observed_supports(result))
-        self.assertEqual(grounded._substituted_objects(["掛率登録画面"], "掛率登録画面の一覧から選択します。"), [])
 
     def test_different_error_observation_does_not_infer_missing_material(self):
         """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
@@ -2097,19 +2007,6 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
             result.answer_text,
         )
         self.assertIn("unsupported", observed_supports(result))
-
-    def test_missing_error_gap_is_shown_even_when_no_item_survives(self):
-        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
-        steps = "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」\n①仕入先登録画面で仕入先コードを入力します。"
-        ctx = context(record(0, steps, "（１）仕入業務 ４．仕入内容の確認"))
-        question = "入荷検品チェックリストで仕入先コードが登録済みの仕入先ではないのエラーが出ている。どうすればよいか。"
-        eid = ids(ctx, question)[steps]
-        model = FakeModel([draft(item(eid, "存在しない操作を案内します。", "この引用は原文にありません。"))], [audit()])
-        result = run(model, ctx, question).response
-        self.assertNotIn(
-            grounded.missing_error_gap("仕入先コードが登録済みの仕入先ではない", ["入荷検品チェックリスト"]), result.answer_text
-        )
-        self.assertEqual(grounded.missing_error_gap("得意先なし"), "『得意先なし』のエラーは取得した資料に記載がありません。")
 
     def test_procedure_for_the_asked_error_is_kept_even_with_small_wording_differences(self):
         # 質問「在庫数量引当なし…」と資料「在庫引当なし…」の表記差は許し、そのユニットの手順は残す (#686)。

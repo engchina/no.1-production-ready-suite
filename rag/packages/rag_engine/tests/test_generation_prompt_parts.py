@@ -13,6 +13,7 @@ from rag_engine.generation.answering import AnswerContext, _grounded_prompt
 from rag_engine.knowledge.prompt_files import DEFAULT_VLM_ANSWER_PROMPT
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.models.llm import ExternalDataItem, GroundedDraft
+from rag_engine.resources.runtime import bind_prompt_overrides
 
 QUESTION = "項目Aの設定を確認する手順を教えてください。"
 
@@ -132,3 +133,22 @@ def test_rules_moved_to_the_schema_reach_the_model() -> None:
     assert "true の点は聞き直さない" in wire  # already_known
     assert "個案判断に必要な実値や別資料が未閲覧という理由だけで low にしない" in GroundedDraft.model_fields["confidence"].description
     assert ExternalDataItem.model_fields["who_can_answer"].description.count("反例:") == 1
+
+
+def test_saved_reading_instructions_replace_the_builtin_only_for_the_bound_scope() -> None:
+    evidence = "### 合成の根拠の読み方\n- completion: 合成の完了の読み方。\n"
+    guide = "### 合成のガイドの扱い\n- 業務ガイド: 合成のガイドの扱い。\n"
+    evidence_only = {"generation.evidenceReading": evidence}
+    tagged = span(tags=["completion"])
+    with bind_prompt_overrides(evidence_only):
+        saved_block = context_block([tagged])
+    assert "- completion: 合成の完了の読み方。" in saved_block
+    assert "手順の最後まで答える" not in saved_block
+    assert "合成の完了の読み方" not in context_block([tagged])
+
+    steps = {"guide_steps": (("s1", "手順A", ("r0",)),)}
+    with bind_prompt_overrides({"generation.guideRules": guide}):
+        saved_prompt = _prompt(**steps)
+    assert "- 業務ガイド: 合成のガイドの扱い。" in saved_prompt
+    assert "- 業務ガイド: 本問の業務範囲" not in saved_prompt
+    assert "合成のガイドの扱い" not in _prompt(**steps)

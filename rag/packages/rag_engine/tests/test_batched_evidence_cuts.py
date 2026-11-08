@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from rag_engine.config import get_settings
+from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answering import _invalid_structured_output
 from rag_engine.generation.batched_evidence import prepare_batched_evidence
 
@@ -106,6 +107,98 @@ def test_section_boundary_moves_back_to_the_title_line_of_a_section_before_its_f
     )
     _batches, diagnostic, _selected = run(value)
     assert text.index("詳細の節") in read_cuts(diagnostic, value)
+
+
+def with_current_sections(value, current):
+    """章節ナビゲーションの今の章節を注入して読む。組の境目と、対応を読んだ呼び出しの一覧を返す。"""
+    asked = []
+
+    def lookup(chunk_ids):
+        asked.append(list(chunk_ids))
+        return current
+
+    dependencies = AnswerDependencies(
+        search=None, check_ready=None, parse_text=None, parse_images=None, rerank=None, current_section_paths=lookup
+    )
+    with bind_dependencies(dependencies):
+        _batches, diagnostic, _selected = run(value)
+    return read_cuts(diagnostic, value) if diagnostic["batches"] else [], asked
+
+
+def four_children(ingested):
+    """見出しの行の無い 4 つの子の親本文（``ingested`` は子ごとの取込の章節）。"""
+    parts = ["\n".join(paragraph(f"部分{number}段落{index}") for index in range(5)) for number in range(4)]
+    text = "\n".join(parts)
+    starts = [text.index(part) for part in parts]
+    children = [{"source_id": f"c{index}", "section_path": path} for index, path in enumerate(ingested)]
+    ranges = [{"id": f"c{index}", "start": start, "end": start + len(parts[index])} for index, start in enumerate(starts)]
+    value = make_span(
+        text,
+        section_path=[],
+        source_context={"document_name": "合成文書", "section_path": ingested[0], "children": children},
+        child_ranges=ranges,
+    )
+    return value, starts
+
+
+def test_manually_edited_sections_replace_the_ingested_boundaries():
+    """取込の章節の境目（c2）ではなく、人が直した章節の境目（c1・c3）で切る。"""
+    value, starts = four_children([["取込の節A"], ["取込の節A"], ["取込の節B"], ["取込の節B"]])
+    cuts, _asked = with_current_sections(value, {"c0": ["節X"], "c1": ["節Y"], "c2": ["節Y"], "c3": ["節Z"]})
+    assert cuts
+    assert set(cuts) <= {starts[1], starts[3]}
+
+
+def test_section_added_by_hand_is_a_boundary_where_ingestion_had_none():
+    value, starts = four_children([["取込の章"]] * 4)
+    cuts, _asked = with_current_sections(value, {"c0": ["節X"], "c1": ["節X"], "c2": ["節Y"], "c3": ["節Y"]})
+    assert cuts == [starts[2]]
+
+
+def test_edited_section_moves_back_to_its_title_line():
+    """手修正の章節も、最初の子が文脈に無いときは章節の名前の行で切る（名前の行だけが前の組に残らない）。"""
+    head = "\n".join(paragraph(f"前半{index}") for index in range(10))
+    tail_head = "\n".join(paragraph(f"後半の前置き{index}") for index in range(2))
+    tail = "\n".join(paragraph(f"後半{index}") for index in range(8))
+    text = f"{head}\n人が足した節\n{tail_head}\n{tail}"
+    children = [{"source_id": "c0", "section_path": ["取込の章"]}, {"source_id": "c1", "section_path": ["取込の章"]}]
+    value = make_span(
+        text,
+        source_context={"document_name": "合成文書", "section_path": ["取込の章"], "children": children},
+        child_ranges=[{"id": "c0", "start": 0, "end": len(head)}, {"id": "c1", "start": text.index(tail), "end": len(text)}],
+    )
+    cuts, _asked = with_current_sections(value, {"c0": ["前の節"], "c1": ["人が足した節"]})
+    assert text.index("人が足した節") in cuts
+
+
+def test_first_section_after_the_part_before_any_section_is_a_boundary():
+    """どの章節にも入らない前書き（根の章節。名前が空）の次の、最初の章節の境目で切る。"""
+    value, starts = four_children([["取込の章"]] * 4)
+    cuts, _asked = with_current_sections(value, {"c0": [], "c1": [], "c2": ["節X"], "c3": ["節X"]})
+    assert cuts == [starts[2]]
+
+
+@pytest.mark.parametrize(
+    "current",
+    [{}, {"c0": [], "c1": [], "c2": []}],
+    ids=["no-mapping", "only-the-document-root"],
+)
+def test_ingested_section_path_is_used_when_the_current_sections_are_unknown(current):
+    """対応が無い・読めない文書は、取込の章節のまま。"""
+    value, starts = sectioned_parent()
+    cuts, _asked = with_current_sections(value, current)
+    assert cuts
+    assert set(cuts) <= set(starts[1:])
+
+
+def test_current_sections_are_read_once_and_only_when_the_evidence_is_split():
+    value, _starts = four_children([["取込の章"]] * 4)
+    _cuts, asked = with_current_sections(value, {})
+    assert asked == [["c0", "c1", "c2", "c3"]]
+
+    short = make_span("短い本文です。", source_context={"children": [{"source_id": "c0", "section_path": ["節"]}]})
+    _cuts, asked = with_current_sections(short, {})
+    assert asked == []
 
 
 def test_heading_boundary_is_used_without_section_information():

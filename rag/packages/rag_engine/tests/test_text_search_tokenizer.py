@@ -14,6 +14,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY,
     TextSearchTokenizerConfig,
     _sudachi_available,
+    _token_forms,
     build_oracle_text_query,
     build_oracle_text_query_with_trace,
     escape_oracle_text_term,
@@ -204,6 +205,9 @@ class FakeSudachiTests(unittest.TestCase):
 
     def _tokenize(self, text, mapping, stopwords=frozenset()):
         tokenizer = _FakeSudachiTokenizer(mapping)
+        # 語ごとの結果の再利用は実の tokenizer を前提にするので、偽の辞書の結果を残さない。
+        _token_forms.cache_clear()
+        self.addCleanup(_token_forms.cache_clear)
         with (
             patch(_AVAILABLE, return_value=True),
             patch("rag_engine.retrieval.text_search_tokenizer._get_sudachi_tokenizer", return_value=tokenizer),
@@ -366,3 +370,42 @@ def test_input_tokenization_failure_records_actual_script_fallback(monkeypatch):
     assert result.tokens
     assert result.oracle_text_query
     assert "synthetic-private-content" not in str(result)
+
+
+def test_same_tokens_are_not_normalized_again(monkeypatch):
+    """同じ語の 2 回目からは語の正規化をしない（時間ではなく呼び出しの回数で確かめる。#4679）。"""
+    from rag_engine.retrieval import text_search_tokenizer as module
+
+    text = "申請の期限を確認する。alpha beta の手順を更新する。\n"
+    module.content_term_set("準備")
+    module._token_forms.cache_clear()
+    calls = []
+    original = module._normalize_term
+    monkeypatch.setattr(module, "_normalize_term", lambda term: calls.append(term) or original(term))
+
+    once = module.content_term_set(text)
+    first_calls = len(calls)
+    assert first_calls > 0
+    # 同じ本文をもう一度分割しても、語の正規化は増えない。
+    assert module.content_term_set(text) == once
+    assert len(calls) == first_calls
+
+    # 同じ語が本文の中で繰り返されても、呼び出しは語の種類の数で止まる。
+    module._token_forms.cache_clear()
+    calls.clear()
+    assert module.content_term_set(text * 50) == once
+    assert len(calls) == first_calls
+
+
+def test_token_results_do_not_leak_between_language_packs():
+    """語ごとの結果の再利用は言語資源の語彙ごとに分ける（#4679）。"""
+    from rag_parser_core.language import bind_pack, builtin_pack, resolve
+
+    from rag_engine.retrieval.text_search_tokenizer import content_term_set
+
+    custom = resolve(builtin_pack(), {"search_terms": {"excluded_terms": ["確認"]}})
+    text = "確認する"
+    assert "確認" in content_term_set(text)
+    with bind_pack(custom):
+        assert "確認" not in content_term_set(text)
+    assert "確認" in content_term_set(text)

@@ -267,6 +267,53 @@ def test_value_of_another_column_is_found_by_the_header() -> None:
     assert unbound_table_values("申請の期限は改定前の30日以内から改定後の60日以内に変わります。", [table]) == []
 
 
+# 見出しの語を含むセルがある表（「項目」の列のセルが「項目乙」）。根拠・文は合成（#4691）。
+HEADER_WORD_TABLE = "| 行ID | 項目 | 上限額 |\n|---|---|---|\n| C1 | 項目甲 | 1,000円 |\n| C2 | 項目乙 | 1,200円 |"
+HEADER_WORD_COLUMNS_TABLE = (
+    "| 行ID | 項目 | 改定前 | 改定後 |\n|---|---|---|---|\n| C1 | 項目甲 | 30日 | 60日 |\n| C2 | 項目乙 | 3年 | 5年 |"
+)
+# セルが同じ値の列がある表。
+SAME_VALUE_COLUMNS_TABLE = "| 行ID | 上限 | 下限 | 標準 |\n|---|---|---|---|\n| R1 | 100円 | 100円 | 80円 |\n| R2 | 200円 | 150円 | 150円 |"
+
+
+@pytest.mark.parametrize(
+    ("evidence", "claim"),
+    [
+        (HEADER_WORD_TABLE, "| C2 | 項目乙 | 1,200円 |"),
+        (HEADER_WORD_TABLE, "| C1 | 項目甲 | 1,000円 |\n| C2 | 項目乙 | 1,200円 |"),
+        (HEADER_WORD_TABLE, "| C2 | 項目乙 | 1,200円 | 【証拠 ID 0123abcd:1:1】"),
+        (HEADER_WORD_TABLE.replace("項目", "種別"), "| C2 | 種別乙 | 1,200円 |"),
+        (HEADER_WORD_TABLE, "C2 の項目乙は 1,200円 です。"),
+        # セルの括弧の中に見出しの語がある行（括弧の前だけが照合の形になり、語がセルの外に見える）。
+        (
+            "| 行 | 項目 | 上限額 |\n|---|---|---|\n| 行A | 甲 (項目 別) | 1,000円 |\n| 行B | 乙 (項目 別) | 1,200円 |",
+            "| 行B | 乙 (項目 別) | 1,200円 |",
+        ),
+        (SAME_VALUE_COLUMNS_TABLE, "| R1 | 100円 | 100円 | 80円 |"),
+    ],
+    ids=["row", "two-rows", "row-with-citation", "other-header-word", "sentence", "header-word-in-parenthesis", "same-value-columns"],
+)
+def test_row_of_the_table_is_not_a_mismatch(evidence: str, claim: str) -> None:
+    """表の行そのままの段落と、見出しの語がセルの一部に現れただけの文は、列の取り違えにしない。"""
+    assert unbound_table_values(claim, [evidence]) == []
+
+
+def test_real_mismatches_are_found_in_tables_with_header_words_in_cells() -> None:
+    """見出しの語を含むセルがあっても、別の行・別の列の値を結び付けた文は従来どおり検出する。"""
+    assert unbound_table_values("| C2 | 項目乙 | 1,000円 |", [HEADER_WORD_TABLE]) == [("1,000円", "項目乙")]
+    assert unbound_table_values("項目乙の改定前は 3年 です。", [HEADER_WORD_COLUMNS_TABLE]) == []
+    assert unbound_table_values("項目乙の改定後は 3年 です。", [HEADER_WORD_COLUMNS_TABLE]) == [("3年", "改定後")]
+    # セルの外に見出しの語を述べ、続けて別の列の値を書いた文。
+    assert unbound_table_values("C2 の項目は 1,200円 です。", [HEADER_WORD_TABLE]) == [("1,200円", "項目")]
+
+
+def test_same_value_columns_are_not_mismatches() -> None:
+    """同じ値のセルが複数の列にあるとき、どちらの列の見出しで述べても疑わず、値の違う列の見出しだけ検出する。"""
+    assert unbound_table_values("R1 の上限は 100円 です。", [SAME_VALUE_COLUMNS_TABLE]) == []
+    assert unbound_table_values("R1 の下限は 100円 です。", [SAME_VALUE_COLUMNS_TABLE]) == []
+    assert unbound_table_values("R1 の標準は 100円 です。", [SAME_VALUE_COLUMNS_TABLE]) == [("100円", "標準")]
+
+
 @pytest.mark.parametrize(
     ("evidence", "claim", "expected"),
     [

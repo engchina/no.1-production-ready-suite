@@ -460,3 +460,63 @@ test("引用範囲の修復指示を保存・再読込でき、既定への復�
   await expectNoPageOverflow(page);
   await stage.screenshot({ path: testInfo.outputPath("citation-range-prompt-editor.png") });
 });
+
+// #3753 の受入: #4678 で増えた、該当の入力があるときだけ生成に足す段も同じ契約で編集できる。
+for (const [part, label] of [
+  ["evidenceReading", "根拠に該当の印・値があるときに入力へ足す読み方"],
+  ["guideRules", "業務ガイドがあるときに入力へ足す扱い"],
+] as const) {
+  test(`入力へ足す段（${part}）は保存・破棄でき、既定への復帰は保存まで確定しない`, { tag: "@responsive" }, async ({ page }) => {
+    const key = `generation.${part}`;
+    const requests = await mockEditableStage(page, "generation", "generation", part);
+    const rejected = "## 合成の読み方（キーの行がない内容）";
+    await page.route("**/api/settings/answer-prompts/**", async (route) => {
+      if (route.request().method() === "PUT" && route.request().postDataJSON().content === rejected) {
+        await route.fulfill({ status: 422, json: { data: null, error_messages: ["「- キー: 説明」の行が使われます。"], warning_messages: [] } });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.goto("/settings/prompts");
+    const stage = page.getByTestId("answer-prompt-stage-generation");
+    await stage.locator("summary").click();
+    const field = stage.getByRole("textbox", { name: label, exact: true });
+    const actions = stage.getByRole("group", { name: "編集内容の操作" });
+    const save = actions.getByRole("button", { name: "プロンプトを保存", exact: true });
+    const discard = actions.getByRole("button", { name: "変更を破棄", exact: true });
+    const reset = actions.getByRole("button", { name: "既定に戻す", exact: true });
+    const builtin = "## Step 1: 合成の既定指示";
+    const custom = "## 合成の読み方\n- 表の値: 合成の説明。";
+
+    await field.fill(rejected);
+    await save.click();
+    await expect(actions.getByText("「- キー: 説明」の行が使われます。")).toBeVisible();
+    expect(requests).toEqual([]);
+    await expect(field).toHaveValue(rejected);
+
+    await field.fill(custom);
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(requests).toEqual([{ key, method: "PUT", content: custom }]);
+
+    await field.fill("破棄する指示");
+    await discard.click();
+    await expect(field).toHaveValue(custom);
+
+    await reset.click();
+    await expect(field).toHaveValue(builtin);
+    await expect(actions.getByText("既定の内容に戻しました。保存すると反映されます。")).toBeVisible();
+    expect(requests).toHaveLength(1);
+    await discard.click();
+    await expect(field).toHaveValue(custom);
+    expect(requests).toHaveLength(1);
+
+    await reset.click();
+    await save.click();
+    await expect(save).toBeDisabled();
+    await expect(field).toHaveValue(builtin);
+    expect(requests).toEqual([{ key, method: "PUT", content: custom }, { key, method: "DELETE", content: null }]);
+    await expect(stage.getByText("既定値", { exact: true })).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+}

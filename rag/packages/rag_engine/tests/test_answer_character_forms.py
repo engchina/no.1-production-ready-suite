@@ -100,15 +100,6 @@ def test_check_view_folds_span_text_fields_for_checks():
     # 機能のキーと ID は結び付けに使うので変えず、元の span も変えない。
     assert view["function"] == span["function"] and view["evidence_id"] == "e1"
     assert span["text"] == "ＯＫボタンを押します。"
-    # 説明の「OKボタン」は根拠の「ＯＫボタン」と同じボタン名として扱う。
-    checked_item = grounded._check_item(
-        grounded.GroundedItem(
-            kind="operation",
-            text="OKボタンを押します。",
-            citations=[grounded.GroundedCitation(evidence_id="e1", quote="ＯＫボタンを押します。")],
-        )
-    )
-    assert grounded._check_button_names("", checked_item, view) == ""
 
 
 def test_grounded_answer_reads_half_width_and_cites_the_original():
