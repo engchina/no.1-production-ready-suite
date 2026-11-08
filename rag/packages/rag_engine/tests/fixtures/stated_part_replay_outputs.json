@@ -1,5 +1,5 @@
 {
- "note": "配備 17e41814af の後の受入の録画応答（合成の題: 属性 A〜I の判定表と区分の規則。既定のモデルの answer.generate）。原文単位 ID は {row:N}（表の N 行目のデータ行）・{rule}（区分の規則の文）に置き換えた。mode は要点の役割（#4611）、question_type は質問全体の宣言で、どちらも #4631 で要点ごとの requirement_type に置き換えた。",
+ "note": "配備 17e41814af の後の受入の録画応答（合成の題: 属性 A〜I の判定表と区分の規則。既定のモデルの answer.generate）。原文単位 ID は {row:N}（表の N 行目のデータ行）・{rule}（区分の規則の文）に置き換えた。mode は要点の役割（#4611）、question_type は質問全体の宣言。",
  "outputs": {
   "mr1_multi_request": {
    "response_language": {

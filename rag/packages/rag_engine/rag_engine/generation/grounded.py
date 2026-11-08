@@ -7062,8 +7062,8 @@ def run_round(
             # 回答か、草稿の無い round（関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
             raise DraftGenerationInvalid(type(exc).__name__) from exc
         # 表の見出しの行だけを答えの原文にした source 型の要点（#4592）。1 回だけ作り直し、作り直しの後も残る見出しの行だけの
-        # 要点は ``canonical_answer_parts`` が欠けた要点にする。導出が要る要点の source 型は、要点の種類で schema が受けない
-        # （#4631）ので作り直しの対象にならない。
+        # 要点は ``canonical_answer_parts`` が欠けた要点にする。要点の答えの型は要点ごとの役割（mode）で決まり、質問全体の
+        # 宣言（question_type）と食い違っても作り直さない（#4631。導出の要点の source 型は schema が受けない）。
         header_only = header_only_source_parts(draft, unit_catalog)
         repaired: BaseModel | None = None
         header_repair_prompt = ""
