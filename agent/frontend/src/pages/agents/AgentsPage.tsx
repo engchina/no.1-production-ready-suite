@@ -22,6 +22,7 @@ import {
   ApiErrorBanner,
   apiErrorMessage,
   compareNames,
+  ListScrollRegion,
 } from "@production-ready/ui";
 import { agentApi, type AgentProfile, type AgentVersion } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -139,11 +140,22 @@ export function AgentsPage() {
         />
         <PageBody wide>
           <NonPersistentStorageNotice />
-          {shareApprovals.map((notice) => (
-            <div key={notice.agent_id} data-testid="agent-share-approved-notice"><Banner severity="info">
-              {t("agent.share.approvedNotice", { name: notice.name })}
+          {/* 承認された共有のお知らせは 1 つの Banner にまとめ、名前の一覧は行リストの高さで止める（承認の数だけ
+              Banner を並べない。#4636）。 */}
+          {shareApprovals.length === 1 ? (
+            <div data-testid="agent-share-approved-notice"><Banner severity="info">
+              {t("agent.share.approvedNotice", { name: shareApprovals[0].name })}
             </Banner></div>
-          ))}
+          ) : shareApprovals.length > 1 ? (
+            <div data-testid="agent-share-approved-notice"><Banner severity="info">
+              <p>{t("agent.share.approvedNoticeMany", { count: shareApprovals.length })}</p>
+              <ListScrollRegion label={listScrollLabel(t("agent.share.approvedList")) ?? ""} className="mt-2">
+                <ul className="list-disc space-y-1 pl-5">
+                  {shareApprovals.map((notice) => <li key={notice.agent_id} className="break-words">{notice.name}</li>)}
+                </ul>
+              </ListScrollRegion>
+            </Banner></div>
+          ) : null}
           {skills.error ? <ApiErrorBanner error={skills.error} fallback={t("common.error.load")} /> : null}
           {/* スキルの更新があります（N 件）と、確かめてまとめて再公開する（#1867）。 */}
           <SkillUpdatesPanel agents={agentList} skills={skills.data?.skills ?? []} canManage={canManage} />

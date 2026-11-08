@@ -32,5 +32,7 @@ const restrictedSyntax = {
 
 export default {
   meta: { name: "design-system" },
-  rules: { "restricted-syntax": restrictedSyntax },
+  // list-height は一覧の高さの規則（#4636）。同じ実装を別名で公開し、restricted-syntax の設定を上書きせずに
+  // ファイルごとに外せるようにする（ESLint の製品は同じオプションを no-restricted-syntax に足す）。
+  rules: { "restricted-syntax": restrictedSyntax, "list-height": restrictedSyntax },
 };

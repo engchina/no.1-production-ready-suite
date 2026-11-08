@@ -55,6 +55,7 @@ import {
   useActionPending,
   useTraceDetailsLabels,
   ListToolbar,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -730,7 +731,7 @@ function RunFeedbackSection({ feedback, canOpen }: { feedback: RunFeedback[]; ca
     >
       {/* 件数は表の上のツールバーの ListCount 1 か所（見出しのバッジにしない。#4636）。 */}
       <ListToolbar count={listCountProps({ matchedTotal: feedback.length, filtered: false })} testId="run-history-feedback-toolbar" />
-      <DataTable
+      <DataTable visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
         columns={columns}
         rows={feedback}
         getRowKey={(item) => item.feedback_id}

@@ -325,7 +325,7 @@ function AspectAgreementTable({
             })
           : t("evaluation.calibration.agreement.noAnnotators")}
       </p>
-      <DataTable<AspectAgreement>
+      <DataTable<AspectAgreement> visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
         testId="calibration-aspect-agreement"
         ariaLabel={t("evaluation.calibration.agreement.title")}
         rows={aspects}

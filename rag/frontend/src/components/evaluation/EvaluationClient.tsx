@@ -20,6 +20,7 @@ import {
   ListToolbar,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 import {
   BarChart3,
@@ -880,7 +881,7 @@ function EvaluationComparisonResult({
         </p>
       </div>
       <div data-testid="evaluation-compare-table">
-        <DataTable<EvaluationComparisonRow>
+        <DataTable<EvaluationComparisonRow> visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
           ariaLabel={t("evaluation.compare.title")}
           rows={rows}
           getRowKey={(row) => row.metric}
@@ -1363,7 +1364,7 @@ function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {
   return (
     <div className="space-y-2" data-testid="evaluation-category-breakdown">
       <p className="text-sm font-medium text-fg">{t("evaluation.category.title")}</p>
-      <DataTable
+      <DataTable visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
         ariaLabel={t("evaluation.category.title")}
         rows={rows}
         getRowKey={(row) => row.category}
@@ -1399,7 +1400,7 @@ function DecisionBreakdown({metrics}:{metrics:EvaluationMetrics}) {
  const labels={answer:"evaluation.decision.answer",clarify:"evaluation.decision.clarify",hold:"evaluation.decision.hold"} as const;
  return <section className="space-y-2" data-testid="evaluation-decision-breakdown">
    <h3 className="text-sm font-semibold text-fg">{t("evaluation.decision.breakdown")}</h3>
-   <DataTable ariaLabel={t("evaluation.decision.breakdown")} rows={rows} getRowKey={row=>row.decision} columns={[
+   <DataTable visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader ariaLabel={t("evaluation.decision.breakdown")} rows={rows} getRowKey={row=>row.decision} columns={[
      {key:"decision",header:t("evaluation.perspective.decision"),render:row=>row.decision in labels?t(labels[row.decision as keyof typeof labels]):row.decision},
      {key:"count",header:t("evaluation.category.column.count"),render:row=>String(row.metric_case_counts.response_decision_accuracy ?? 0)},
      {key:"score",header:metricLabel("response_decision_accuracy"),render:row=>formatMetricValue(row.metrics.response_decision_accuracy)},

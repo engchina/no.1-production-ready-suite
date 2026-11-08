@@ -1221,15 +1221,19 @@ function OutputFieldTable({ items }: { items: EvaluationFieldResult[] }) {
       ),
     },
   ];
+  // 行は出力の行の数 × 項目の数（最大 1,500 行）になるので、件数・表の中のスクロール・25 件のページングを付ける（#4636）。
   return (
-    <DataTable<EvaluationFieldResult>
-      rows={items}
-      columns={columns}
-      getRowKey={(item) => `${item.row}-${item.field}`}
-      ariaLabel={t("evaluation.detail.output")}
-      scrollAriaLabel={listScrollLabel(t("evaluation.detail.output"))}
-      tableClassName="w-full min-w-[32rem] text-xs"
-    />
+    <div className="grid min-w-0 gap-2">
+      <ListToolbar count={listTotal(items.length)} testId="evaluation-output-toolbar" />
+      <PagedDataTable<EvaluationFieldResult>
+        rows={items}
+        columns={columns}
+        getRowKey={(item) => `${item.row}-${item.field}`}
+        ariaLabel={t("evaluation.detail.output")}
+        scrollAriaLabel={listScrollLabel(t("evaluation.detail.output"))}
+        tableClassName="w-full min-w-[32rem] text-xs"
+      />
+    </div>
   );
 }
 

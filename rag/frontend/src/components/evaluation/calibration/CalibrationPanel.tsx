@@ -13,6 +13,7 @@ import {
   useConfirm,
   ListToolbar,
   PagedDataTable,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 import { FlaskConical } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -313,7 +314,7 @@ function CalibrationResult({
           <Banner severity="danger">{summary.error_message}</Banner>
         ) : null}
         {rows.length ? (
-          <DataTable<CalibrationResultRow>
+          <DataTable<CalibrationResultRow> visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
             testId="calibration-result-table"
             ariaLabel={t("evaluation.calibration.result.title")}
             rows={rows}

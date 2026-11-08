@@ -2235,7 +2235,7 @@ export function SecurityDeepSecPage() {
                             >
                             {/* 一覧 + 編集の 2 列の枠（高さは枠が決める）の一覧の列。2xl 未満は編集の上に積むので一覧の高さを
                                 小さく止める（page-archetypes.md の例外「一覧 + 詳細の一覧の列」。#4636）。 */}
-                            {/* oxlint-disable-next-line design-system/restricted-syntax -- 枠の高さの中の一覧の列（一覧 + 詳細の例外） */}
+                            {/* oxlint-disable-next-line design-system/list-height -- 枠の高さの中の一覧の列（一覧 + 詳細の例外） */}
                             <div
                               className="grid max-h-36 min-h-0 content-start gap-2 overflow-y-auto pr-1 2xl:max-h-none"
                               aria-label={t("security.deepsec.entitlements.ruleList")}

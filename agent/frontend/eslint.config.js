@@ -50,7 +50,12 @@ export default tseslint.config(
     files: ["src/**/*.{ts,tsx}"],
     rules: {
       // adherence のセレクタを残したまま、全画面 wide の検査を末尾に足す（同じルール名で上書きしない）。
-      "no-restricted-syntax": [...adherenceRules["design-system/restricted-syntax"], ...pageWidthRules],
+      // 一覧の高さ（design-system/list-height。#4636）も同じ no-restricted-syntax に足す（先頭の "error" を除いたセレクタ）。
+      "no-restricted-syntax": [
+        ...adherenceRules["design-system/restricted-syntax"],
+        ...adherenceRules["design-system/list-height"].slice(1),
+        ...pageWidthRules,
+      ],
       "no-restricted-imports": adherenceRules["no-restricted-imports"],
     },
   },

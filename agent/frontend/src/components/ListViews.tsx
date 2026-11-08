@@ -11,6 +11,7 @@ import {
   cn,
   type DataTableProps,
   type PagedDataTableProps as SharedPagedDataTableProps,
+  type CollapsedListLabels,
   type ListCountLabels,
   type ListToolbarLabels,
   type PaginationLabels,
@@ -53,6 +54,15 @@ export function listCountLabels(): ListCountLabels {
   return {
     total: (total) => t("listCount.total", { total }),
     filtered: (matched, total) => t("listCount.filtered", { matched, total }),
+  };
+}
+
+/** 増えるブロックを畳む `CollapsedListToggle` の文言（#4636）。 */
+export function collapsedListLabels(): CollapsedListLabels {
+  return {
+    showAll: (total) => t("collapsedList.showAll", { total }),
+    showEarlier: (hidden) => t("collapsedList.showEarlier", { hidden }),
+    collapse: t("collapsedList.collapse"),
   };
 }
 

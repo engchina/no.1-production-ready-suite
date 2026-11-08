@@ -37,6 +37,7 @@ import {
   ApiErrorBanner,
   apiErrorMessage,
   displayTimeZone,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
@@ -806,6 +807,7 @@ function AutomationEditor({
                       scrollAriaLabel={listScrollLabel(t("automation.history.label"))}
                       tableClassName="w-full min-w-[40rem]"
                       stickyHeader
+                      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                     />
                   </div>
                 )}

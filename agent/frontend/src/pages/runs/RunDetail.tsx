@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { FileText, PlayCircle, RefreshCw } from "lucide-react";
@@ -29,6 +29,8 @@ import {
   type EntityAction,
   type RunEventLogItem,
   type RunTimelineStep,
+  CollapsedListToggle,
+  useCollapsedList,
 } from "@production-ready/ui";
 import {
   agentApi,
@@ -38,7 +40,7 @@ import {
   type RunSummary as RunSummaryData,
   type ToolAuditRecord,
 } from "@/lib/api";
-import { QueryState, listCountLabels } from "@/components/ListViews";
+import { QueryState, listCountLabels, collapsedListLabels } from "@/components/ListViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import { toolProgressTable } from "@/components/chat/ToolProgressTable";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
@@ -431,10 +433,13 @@ function isAnswerArtifact(artifact: Artifact): boolean {
 
 /** 承認の記録（ツール・状態・判断した人と日時）。承認待ちの判断は概要の操作から行う。 */
 function ApprovalsSection({ run }: { run: RunState }) {
+  // 承認の要るツールの呼び出しごとに増えるので、入れ子のスクロールにせず 10 件を超えたら畳む。承認待ちは畳んでも出す（#4636）。
+  const approvals = useCollapsedList(run.approvals, { pinned: (approval) => approval.status === "pending" });
+  const listId = useId();
   return (
     <RunDetailSection title={t("run.section.approvals")} testId="run-approvals-section">
-      <ul className="grid min-w-0 gap-2">
-        {run.approvals.map((approval) => (
+      <ul id={listId} className="grid min-w-0 gap-2">
+        {approvals.visible.map(({ item: approval }) => (
           <li
             key={approval.id}
             className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3"
@@ -451,6 +456,7 @@ function ApprovalsSection({ run }: { run: RunState }) {
           </li>
         ))}
       </ul>
+      <CollapsedListToggle state={approvals} controls={listId} labels={collapsedListLabels()} testId="run-approvals-toggle" />
     </RunDetailSection>
   );
 }
@@ -623,9 +629,13 @@ function auditRecordItem(artifact: Artifact): RunEventLogItem {
 
 /** 利用者が使う出力（表の結果など。種類は `USER_OUTPUT_ARTIFACT_KINDS`。#2403）。元の順序で並べる。 */
 function ArtifactsSection({ artifacts }: { artifacts: Artifact[] }) {
+  // ツールの呼び出しの回数だけ増えるので、入れ子のスクロールにせず 10 件を超えたら畳む（#4636）。
+  const collapsed = useCollapsedList(artifacts);
+  const listId = useId();
   return (
     <RunDetailSection title={t("run.artifacts")} description={t("run.artifactsDescription")} testId="run-artifacts-section">
-      {artifacts.map((artifact) => (
+      <div id={listId} className="contents">
+      {collapsed.visible.map(({ item: artifact }) => (
         <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3" data-testid={`run-artifact-${artifact.id}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -646,6 +656,8 @@ function ArtifactsSection({ artifacts }: { artifacts: Artifact[] }) {
           )}
         </div>
       ))}
+      </div>
+      <CollapsedListToggle state={collapsed} controls={listId} labels={collapsedListLabels()} testId="run-artifacts-toggle" />
     </RunDetailSection>
   );
 }

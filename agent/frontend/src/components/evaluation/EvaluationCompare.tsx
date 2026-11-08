@@ -4,7 +4,6 @@ import {
   Banner,
   Card,
   CardContent,
-  DataTable,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -96,15 +95,19 @@ function CapabilityComparison({ rows }: { rows: CapabilityRow[] }) {
     { key: "base", header: t("evaluation.compare.base"), render: (row) => cell(row.base) },
     { key: "target", header: t("evaluation.compare.target"), render: (row) => cell(row.target) },
   ];
+  // 評価の結果の側の能力分類の表（ListToolbar + PagedDataTable）とそろえる（#4636）。
   return (
-    <DataTable<CapabilityRow>
-      rows={rows}
-      columns={columns}
-      getRowKey={(row) => row.capability}
-      ariaLabel={t("evaluation.compare.capabilityLabel")}
-      scrollAriaLabel={t("evaluation.compare.capabilityLabel")}
-      tableClassName="w-full min-w-[36rem]"
-    />
+    <div className="grid min-w-0 gap-2">
+      <ListToolbar count={listTotal(rows.length)} testId="evaluation-compare-capability-toolbar" />
+      <PagedDataTable<CapabilityRow>
+        rows={rows}
+        columns={columns}
+        getRowKey={(row) => row.capability}
+        ariaLabel={t("evaluation.compare.capabilityLabel")}
+        scrollAriaLabel={t("evaluation.compare.capabilityLabel")}
+        tableClassName="w-full min-w-[36rem]"
+      />
+    </div>
   );
 }
 
