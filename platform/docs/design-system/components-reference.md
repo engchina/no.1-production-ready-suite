@@ -1457,12 +1457,19 @@ export function ListSkeleton({ rows, rowClassName = "h-[3.5rem]", className, tes
 /** 設定カード・エディタの形。見出し → ラベル + 入力欄（--button-height-md）× fields → 右寄せの操作行。 */
 export function FormSkeleton({ fields = 4, title = true, actions = true, className, testId }: FormSkeletonProps);
 
+/** 1 つの欄の形（ラベル + 入力欄 + 案内。#4654）。欄の候補を読み込んでいる間、無効の空の欄の代わりに置く。 */
+export function FieldSkeleton({ width = "full", size = "md", fieldLabel, helperText, helperLines, label, className, testId }: FieldSkeletonProps);
+
 /** チャットの会話の形（#1153）。右寄せの質問の吹き出し（h-12・最大 85%）と左の回答の塊（h-32）を turns 組。
  *  3 製品のチャットの会話の欄で、前提の読み込み中に空の状態の代わりに出す（UX 契約 messaging.md §11.7）。 */
 export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps);
 ```
 
 - 形のある Skeleton は `aria-hidden` です。**読み込み中の文言と経過時間は `TimedLoadingState` が出す**ので、必ずその子に置きます（UX 契約 messaging.md §3.6 / §3.7）。
+- `FieldSkeleton` には読み込み後の欄と同じ `width`・`size` を渡します。外枠と欄の幅は `SelectField` などと同じ規則（`labeledFieldWidthClasses`・`useFieldWidthScope`）で決まり、読み込み後との高さの差は 1px 以内です。経過時間は足しません（`TimedLoadingState` の子か、領域の表示が別にある欄に置きます）。
+  - ラベルの文が決まっていれば `fieldLabel` に渡します。省略すると 1 行の棒、`false` はラベルを見せないツールバーの欄です。
+  - 案内の文が決まっていれば `helperText`、読み込むまで決まらなければ `helperLines`（1〜3）で行数を渡します。
+  - 領域の表示が別に無い単独の欄は `label`（「〜を読み込んでいます」）を渡し、読み上げ名を持たせます（`role="group"`・`aria-busy`）。無ければ `aria-hidden` です。
 - `DataTable` の `loading` の行・`LoadingState` の棒も同じ `SKELETON_CLASS` を使います。`DataTable` の `loading` は、`loadingRows` を省略すると `visibleRows` の行数（無ければ 3 行）の Skeleton で高さを予約します。
 - 同じ取得の経過時間は 1 か所だけに出します。2 つの領域が同じ取得を待つときは、片方は形だけ（`TableSkeleton` を `TimedLoadingState` で包まない）にします。
 - **面は灰色の枠で 1 つ**です（#4649）。`TimedLoadingState` は常に灰色の枠（`PROCESSING_FRAME_CLASS` = `rounded-md border border-border bg-surface-sunken`）で全幅を使い、枠を外す指定を持ちません。単独の `ProcessingIndicator`（操作の進行・再読み込みの行を含む）も既定で同じ枠（`surface="framed"`）を持ち、すでに灰色の枠を持つ部品の中に入れるときだけ `surface="plain"` にします。処理の名前と経過時間の並びは置かれた領域の幅（`@container/processing`）で切り替わり、狭い列・375px では経過時間を処理の名前の下へ回します。`LoadingState`・`ListPicker`・`ChatHistoryList`・`LoadMoreFooter` の再読み込みの行も同じ面です。e2e は `platform/packages/ui/e2e/loading-checks.ts` の `findLoadingStandardViolations` で確かめます。

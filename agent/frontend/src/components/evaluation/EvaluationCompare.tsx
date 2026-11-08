@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  FieldSkeleton,
   ApiErrorState,
   Banner,
   Card,
@@ -18,7 +19,7 @@ import {
 } from "@production-ready/ui";
 
 import { listTotal } from "@/components/ListFilters";
-import { FieldSkeleton, PagedDataTable } from "@/components/ListViews";
+import { PagedDataTable } from "@/components/ListViews";
 import { evaluatedVersionLabel } from "@/components/evaluation/EvaluationVersionField";
 import {
   agentApi,

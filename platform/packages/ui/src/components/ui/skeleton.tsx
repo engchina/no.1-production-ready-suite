@@ -1,5 +1,7 @@
 import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
+import { CONTROL_HEIGHT_CLASS, labeledFieldWidthClasses, type ControlSize, type FieldWidth } from "./control-size";
+import { useFieldWidthScope } from "./field-width-scope";
 
 /**
  * 読み込み中のプレースホルダの見た目（3 製品で共通、#265）。
@@ -154,6 +156,75 @@ export function FormSkeleton({ fields = 4, title = true, actions = true, classNa
         <div className="flex justify-end" data-skeleton-part="actions">
           <div className={cn(SKELETON_CLASS, "h-[var(--button-height-md)] w-24")} />
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+export interface FieldSkeletonProps {
+  /** 幅の段。読み込み後の欄の `width` と同じ値を渡す（既定 `full`）。 */
+  width?: FieldWidth;
+  /** 高さ。読み込み後の欄の `size` と同じ値を渡す（既定 `md`）。 */
+  size?: ControlSize;
+  /**
+   * 読み込み後の欄のラベル（i18n 済み）。文が決まっていれば渡す（高さと幅が読み込み後と同じになる）。
+   * 省略すると 1 行の棒、`false` はラベルの行を置かない（ラベルを見せないツールバーの欄）。
+   */
+  fieldLabel?: string | false;
+  /** 読み込み後の欄の案内（helper）の文（i18n 済み）。 */
+  helperText?: string;
+  /** 案内の文が読み込むまで決まらないときの棒の行数。`helperText` があれば使わない。 */
+  helperLines?: 1 | 2 | 3;
+  /** 渡すと「〜を読み込んでいます」の読み上げ名を持つ領域にする。無ければ読み上げない。 */
+  label?: string;
+  className?: string;
+  testId?: string;
+}
+
+/** 案内の棒の高さ（案内の文字の行の高さ × 行数）。 */
+const FIELD_HELPER_LINE_CLASS = { 1: "h-[1lh]", 2: "h-[2lh]", 3: "h-[3lh]" } as const;
+
+/**
+ * 1 つの欄（ラベル + 入力欄 + 案内）の形のスケルトン（#4649・#4654）。欄の候補を読み込んでいる間、無効の空の欄の
+ * 代わりに置いて場所を確保する。外枠と欄の幅は `SelectField` などと同じ規則で決まり、読み込み後に下を押し下げない。
+ * 経過時間は足さない（領域の読み込みの表示が 1 か所で出す。messaging.md §3.6）。
+ */
+export function FieldSkeleton({
+  width = "full",
+  size = "md",
+  fieldLabel,
+  helperText,
+  helperLines,
+  label,
+  className,
+  testId,
+}: FieldSkeletonProps) {
+  const widthClasses = labeledFieldWidthClasses(width, useFieldWidthScope(), Boolean(helperText || helperLines));
+  return (
+    <div
+      className={cn("space-y-1.5", widthClasses.box, className)}
+      role={label ? "group" : undefined}
+      aria-busy={label ? "true" : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : "true"}
+      data-testid={testId}
+      data-skeleton="field"
+    >
+      {fieldLabel === false ? null : fieldLabel ? (
+        <p className="text-sm font-medium text-fg-muted" aria-hidden="true">
+          {fieldLabel}
+        </p>
+      ) : (
+        // 棒の高さ（1lh）は読み込み後のラベルの文字の行と同じ。
+        <Skeleton className="h-[1lh] w-24 text-sm" />
+      )}
+      <Skeleton className={cn(CONTROL_HEIGHT_CLASS[size], widthClasses.control)} />
+      {helperText ? (
+        <p className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)} aria-hidden="true">
+          {helperText}
+        </p>
+      ) : helperLines ? (
+        <Skeleton className={cn("w-3/4 text-xs leading-relaxed", FIELD_HELPER_LINE_CLASS[helperLines], widthClasses.text)} />
       ) : null}
     </div>
   );

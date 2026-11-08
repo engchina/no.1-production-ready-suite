@@ -127,6 +127,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     // ツールバーは欄の形の Skeleton だけ（#4649）。文言と経過時間は会話の領域の先頭の 1 か所だけ。
     const toolbarSkeleton = page.locator("[data-chat-toolbar]").getByTestId("chat-search-answer-profiles-skeleton");
     await expect(toolbarSkeleton).toBeVisible();
+    const reservedHeight = (await toolbarSkeleton.boundingBox())!.height;
     await expect(page.locator("[data-chat-toolbar]").getByRole("timer")).toHaveCount(0);
     const loading = page.getByTestId("chat-search-answer-profiles-loading");
     await expect(loading).toContainText("検索・回答プロファイルを読み込んでいます");
@@ -153,6 +154,8 @@ for (const colorScheme of ["light", "dark"] as const) {
 
     const toolbarTarget = page.locator("[data-chat-toolbar] #chat-search-answer-profile");
     await expect(toolbarTarget).toBeVisible();
+    // ツールバーの欄の高さは読み込みの前後でそろう（#4654）。
+    expect(Math.abs(reservedHeight - (await toolbarTarget.boundingBox())!.height)).toBeLessThanOrEqual(1);
     await expectChatTargetNextToNewConversation(page, expect);
     await page.screenshot({ path: testInfo.outputPath(`chat-target-ready-${colorScheme}.png`) });
     expect(await toolbarTarget.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);

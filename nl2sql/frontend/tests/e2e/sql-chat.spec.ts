@@ -582,7 +582,9 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
   });
   await page.goto("/chat");
   // 読み込み中: ツールバーには欄の形の Skeleton、文言と経過時間は会話の欄の先頭に 1 か所（#891・#4649）。
-  await expect(page.locator("[data-chat-toolbar]").getByTestId("sql-chat-profiles-skeleton")).toBeVisible();
+  const fieldSkeleton = page.locator("[data-chat-toolbar]").getByTestId("sql-chat-profiles-skeleton");
+  await expect(fieldSkeleton).toBeVisible();
+  const reservedHeight = (await fieldSkeleton.boundingBox())!.height;
   const loading = page.getByTestId("sql-chat-profiles-loading");
   await expect(loading).toBeVisible();
   await expect(loading).toContainText("業務プロファイルを読み込んでいます");
@@ -591,6 +593,8 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
   const field = page.locator("#sql-chat-profile");
   await expect(field).toBeVisible();
   await expect(field).toContainText("売上分析");
+  // ツールバーの欄の高さは読み込みの前後でそろう（#4654）。
+  expect(Math.abs(reservedHeight - (await field.boundingBox())!.height)).toBeLessThanOrEqual(1);
   // 必須の表示・カードの幅いっぱい（#635 / #891）。閉じたボタンに虫眼鏡は無く、値と開閉の印だけ（#1771）。
   await expect(field).toHaveAccessibleName(/必須/);
   await expect(field.locator("svg.lucide-search")).toHaveCount(0);

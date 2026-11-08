@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useSearchParams } from "react-router-dom";
 import { ClipboardList, Download, Eye, FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
 import {
+  FieldSkeleton,
   Banner,
   Button,
   Card,
@@ -45,7 +46,7 @@ import {
 import { AnswerBody } from "@/components/chat/ResultTables";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listTotal } from "@/components/ListFilters";
-import { agentPaginationLabels, FieldSkeleton, listScrollLabel, PagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
+import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
 import { EvaluationCompare } from "@/components/evaluation/EvaluationCompare";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
@@ -451,7 +452,7 @@ function EvaluationOverview({
                   <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
                     <FieldSkeleton width="md" fieldLabel={t("evaluation.form.agent")} />
                     {/* 版の補足は業務 Agent で変わる（多くは 2 行）。 */}
-                    <FieldSkeleton width="md" fieldLabel={t("evaluation.version.label")} helper={2} />
+                    <FieldSkeleton width="md" fieldLabel={t("evaluation.version.label")} helperLines={2} />
                     {/* 補足を持つ欄の外枠は md の幅（SelectField と同じ）。 */}
                     <FieldSkeleton
                       width="md"
