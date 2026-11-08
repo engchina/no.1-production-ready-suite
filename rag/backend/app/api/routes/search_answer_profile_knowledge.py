@@ -12,6 +12,7 @@ from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqR
 
 from app.api.routes.search import (
     _published_guides,
+    ensure_search_answer_profile_knowledge_bases_permitted,
     profile_scope_filters,
     support_guide_context,
 )
@@ -388,7 +389,11 @@ async def suggest_search_answer_profile_approved_faq(
 ) -> ApiResponse[ApprovedFaqSuggestionsData]:
     """質問に近い承認済み FAQ(類似問)を返す。回答前の提示に使う。"""
     oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    view = await _require_search_answer_profile(oracle, search_answer_profile_id)
+    # 検索・チャットと同じく、参照 KB を 1 つも使えない利用者には FAQ の回答を返さない(403。#4618)。
+    ensure_search_answer_profile_knowledge_bases_permitted(
+        view.config.normalized_knowledge_base_ids()
+    )
     settings = get_settings()
     genai = (
         OciGenAiClient(settings=settings) if settings.rag_approved_faq_semantic_enabled else None

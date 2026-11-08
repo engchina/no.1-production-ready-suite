@@ -188,3 +188,35 @@ def test_suggestion_minimum_applies_to_both_answer_entry_points(
         f"{BASE}/suggest", json={"query": "合成の設定 A はどこですか？", "purpose": purpose}
     )
     assert len(exact.json()["data"]["suggestions"]) == 1
+
+
+def test_suggest_requires_a_permitted_knowledge_base_like_search(
+    fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """類似問の提示も、プロファイルの参照 KB を 1 つも使えない利用者には検索と同じ 403(#4618)。"""
+    from app.api.routes import search as search_route
+    from app.security.permissions import SCOPE_FORBIDDEN_CODE
+    from tests.security_support import enable_production_auth, login
+
+    client.post(BASE, json={"question": "合成の設定 A はどこですか？", "answer": "画面 A です。"})
+    auth = enable_production_auth(monkeypatch)
+    # プロファイル bv-1 は許可、参照 KB の kb-1 は不許可。
+    auth.user_with_permissions(
+        "no-kb", ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-9"]
+    )
+    auth.user_with_permissions(
+        "with-kb", ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+    )
+    query = {"query": "合成の設定 A はどこですか？"}
+
+    denied = client.post(f"{BASE}/suggest", json=query, headers=login(client, "no-kb"))
+    assert denied.status_code == 403
+    assert denied.json()["error_messages"] == [
+        search_route.SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
+    ]
+    assert denied.json()["error_code"] == SCOPE_FORBIDDEN_CODE
+    assert "画面 A です。" not in denied.text
+
+    allowed = client.post(f"{BASE}/suggest", json=query, headers=login(client, "with-kb"))
+    assert allowed.status_code == 200
+    assert [item["answer"] for item in allowed.json()["data"]["suggestions"]] == ["画面 A です。"]
