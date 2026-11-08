@@ -4198,11 +4198,15 @@ def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -
     return SentUnitCatalog(snapshots)
 
 
-def sent_table_views(spans: Sequence[dict]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """実際に送った単位だけの目録から投影した表（#4349。投影は sent_table_projection）。"""
+def sent_table_views(catalog: SentUnitCatalog) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """実際に送った単位だけの目録（``Round.sent_units``）から投影した表（#4349。投影は sent_table_projection）。
+
+    目録は回の結果に結び付けたものを渡す。spans から送達の記録を引き直すと、後の回の送信で記録が置き換わった
+    前の回では表が投影されない（#4620）。
+    """
     from rag_engine.generation.sent_table_projection import sent_tables
 
-    return sent_tables(generation_unit_catalog(spans, sent_only=True))
+    return sent_tables(catalog)
 
 
 def _sent_view(span: Mapping[str, Any]) -> CitationView:
@@ -4783,6 +4787,9 @@ class Round:
     invalid_request_result_ids: tuple[str, ...] = ()
     expected_request_ids: tuple[str, ...] = ()
     returned_request_ids: tuple[str, ...] = ()
+    # この回が実際にモデルへ送った単位の目録（#4620）。送達の記録（_CITATION_VIEWS）は次の回の送信で置き換わるため、
+    # 採用した回の後段（表の行の判定など）は、この回の結果に結び付けた目録を使う。
+    sent_units: SentUnitCatalog = field(default_factory=lambda: SentUnitCatalog(()), repr=False, compare=False)
 
     @property
     def request_contract_status(self) -> str:
@@ -7804,6 +7811,7 @@ def run_round(
             if guide_steps
             else []
         ),
+        sent_units=unit_catalog,
     )
 
 
