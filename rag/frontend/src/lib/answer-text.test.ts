@@ -81,6 +81,87 @@ describe("parseAnswerText", () => {
     });
   });
 
+  // 複数行の項目（隣り合う表の行をまとめた引用など。#4632）。
+  it("項目の直後に続く行は項目の続きにし、その後の根拠の行を項目の根拠にする", () => {
+    const rows = ["| A1 | 10 |", "| A2 | 20 |", "| A3 | 30 |"];
+    const blocks = parseAnswerText(
+      [
+        "合成の要約です。",
+        "",
+        "資料により確認できた事項",
+        "",
+        "・" + rows[0],
+        ...rows.slice(1),
+        "根拠：合成の表.md p.1",
+        "・1 行の説明。",
+        "根拠：合成の表.md p.2",
+      ].join("\n")
+    );
+    expect(blocks?.[1]).toEqual({
+      kind: "section",
+      title: "資料により確認できた事項",
+      ordered: false,
+      entries: [
+        { kind: "item", text: rows.join("\n"), citations: ["根拠：合成の表.md p.1"], citationLines: [1] },
+        { kind: "item", text: "1 行の説明。", citations: ["根拠：合成の表.md p.2"], citationLines: [2] },
+      ],
+    });
+  });
+
+  it("複数行の項目は空行・箇条書き・節の見出しで区切り、根拠の行の後の行は節の中の文にする", () => {
+    const blocks = parseAnswerText(
+      [
+        "資料により確認できた事項",
+        "・続きのある説明",
+        "続きの行",
+        "",
+        "空行の後の注記です。",
+        "・次の説明",
+        "続きの行 2",
+        "・根拠のある説明",
+        "根拠：a.pdf p.1",
+        "根拠の行の後の注記です。",
+        "操作手順（合成）",
+        "1. 手順の説明",
+        "手順の続き",
+        "根拠：b.pdf p.2",
+      ].join("\n")
+    );
+    expect(blocks).toEqual([
+      {
+        kind: "section",
+        title: "資料により確認できた事項",
+        ordered: false,
+        entries: [
+          { kind: "item", text: "続きのある説明\n続きの行", citations: [], citationLines: [] },
+          { kind: "text", text: "空行の後の注記です。" },
+          { kind: "item", text: "次の説明\n続きの行 2", citations: [], citationLines: [] },
+          { kind: "item", text: "根拠のある説明", citations: ["根拠：a.pdf p.1"], citationLines: [1] },
+          { kind: "text", text: "根拠の行の後の注記です。" },
+        ],
+      },
+      {
+        kind: "section",
+        title: "操作手順（合成）",
+        ordered: true,
+        entries: [{ kind: "item", text: "手順の説明\n手順の続き", citations: ["根拠：b.pdf p.2"], citationLines: [2] }],
+      },
+    ]);
+  });
+
+  it("保存した表示形式の記号でも複数行の項目の根拠を項目に付ける", () => {
+    const format = answerFormat({
+      answer_format: { rules_section: "確認済みの節 A", item_bullet: "- ", citation_prefix: "Source: " },
+    });
+    const blocks = parseAnswerText(
+      ["確認済みの節 A", "- | B1 | 1 |", "| B2 | 2 |", "Source: synthetic.md p.3"].join("\n"),
+      format
+    );
+    expect(blocks?.[0]).toMatchObject({
+      entries: [{ kind: "item", text: "| B1 | 1 |\n| B2 | 2 |", citations: ["Source: synthetic.md p.3"], citationLines: [1] }],
+    });
+  });
+
   // 印の付いた説明の節（Issue 3394）。
   it("確かめきれていない説明の節は、確認できた事項の節と分ける（表示形式の無い回答）", () => {
     const blocks = parseAnswerText(
