@@ -4465,3 +4465,22 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261108_4617_drop_document_extraction_processing_config
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EXTRACTION';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN extraction';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PROCESSING_CONFIG';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN processing_config';
+    END IF;
+END;
+/

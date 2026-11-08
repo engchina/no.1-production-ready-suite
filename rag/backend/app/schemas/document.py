@@ -430,10 +430,9 @@ class DocumentSupersededByRequest(BaseModel):
 
 
 class DocumentDetail(DocumentSummary):
-    """詳細表示用。VLM/LLM の抽出本文とメタデータを含む。"""
+    """詳細表示用。抽出・処理設定はレシピの層（文書レシピの API）から読む（#4617）。"""
 
     object_storage_path: str | None = None
-    extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
     duplicate_source: DuplicateDocumentRef | None = None
     classification: DocumentClassification | None = None

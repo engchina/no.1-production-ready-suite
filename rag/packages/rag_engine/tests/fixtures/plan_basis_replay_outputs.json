@@ -1,0 +1,1238 @@
+{
+ "note": "#4592・#4611 の実モデルの確認（GPT-OSS、合成の知識ベース・合成の判定表と区分の規則の Markdown 1 件）の answer.generate / answer.repair の出力。4592-live は計画の行の relation を linked / unrelated だけにした試行（PR #4613）の出力、4609-live は main 相当の出力。原文単位 ID は {u:<単位の原文>} に、根拠の label は {E:<根拠の先頭の単位の原文>} に置き換えた。recorded_final は記録の生成の最終の草稿（計画を除く）、recorded_outcome は記録の回答の outcome。ほかは録画のまま。",
+ "cases": {
+  "4592-live/dv1-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "unrelated",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数を教えてください。",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| 行ID | 条件 | 点数 |}",
+           "{u:| A1 | 属性A=有 | 2 |}",
+           "{u:| A2 | 属性B=有 | 3 |}",
+           "{u:| A3 | 属性C=有 | 1 |}",
+           "{u:| A4 | 属性D=有 | 4 |}",
+           "{u:| A5 | 属性E=有 | 2 |}",
+           "{u:| A6 | 属性F=有 | 1 |}",
+           "{u:| A7 | 属性G=有 | 3 |}",
+           "{u:| A8 | 属性H=有 | 2 |}",
+           "{u:| A9 | 属性I=有 | 5 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数を教えてください。",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |\n| A9 | 属性I=有 | 5 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |\n| A9 | 属性I=有 | 5 |"
+    ]
+   },
+   "recorded_outcome": "insufficient_evidence"
+  },
+  "4592-live/dv2-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "unrelated",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| 行ID | 条件 | 点数 |}",
+           "{u:| A1 | 属性A=有 | 2 |}",
+           "{u:| A2 | 属性B=有 | 3 |}",
+           "{u:| A3 | 属性C=有 | 1 |}",
+           "{u:| A4 | 属性D=有 | 4 |}",
+           "{u:| A5 | 属性E=有 | 2 |}",
+           "{u:| A6 | 属性F=有 | 1 |}",
+           "{u:| A7 | 属性G=有 | 3 |}",
+           "{u:| A8 | 属性H=有 | 2 |}",
+           "{u:| A9 | 属性I=有 | 5 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "medium",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |\n| A9 | 属性I=有 | 5 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |\n| A9 | 属性I=有 | 5 |"
+    ]
+   },
+   "recorded_outcome": "insufficient_evidence"
+  },
+  "4592-live/dv3-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "unrelated",
+          "link": {
+           "unit_ids": [
+            "{u:| 行ID | 条件 | 点数 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数を教えてください。",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| 行ID | 条件 | 点数 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数を教えてください。",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| 行ID | 条件 | 点数 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| 行ID | 条件 | 点数 |"
+    ]
+   },
+   "recorded_outcome": "insufficient_evidence"
+  },
+  "4592-live/mr1-multi-request": {
+   "question": "行A4の点数と、区分Bになる合計点の範囲を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "unrelated",
+          "link": {
+           "unit_ids": [
+            "{u:| A2 | 属性B=有 | 3 |}"
+           ]
+          }
+         },
+         {
+          "evidence_id": "{E:区分の規則}",
+          "relation": "unrelated",
+          "link": {
+           "unit_ids": [
+            "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数と、区分Bになる合計点の範囲",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A2 | 属性B=有 | 3 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数と、区分Bになる合計点の範囲",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| A2 | 属性B=有 | 3 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| A2 | 属性B=有 | 3 |"
+    ]
+   },
+   "recorded_outcome": "insufficient_evidence"
+  },
+  "4592-live/rk1-rows-known": {
+   "question": "属性A〜Hは有です。属性Iは無です。確定した合計点と区分を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "linked",
+          "link": {
+           "unit_ids": [
+            "{u:| 行ID | 条件 | 点数 |}",
+            "{u:| A1 | 属性A=有 | 2 |}",
+            "{u:| A2 | 属性B=有 | 3 |}",
+            "{u:| A3 | 属性C=有 | 1 |}",
+            "{u:| A4 | 属性D=有 | 4 |}",
+            "{u:| A5 | 属性E=有 | 2 |}",
+            "{u:| A6 | 属性F=有 | 1 |}",
+            "{u:| A7 | 属性G=有 | 3 |}",
+            "{u:| A8 | 属性H=有 | 2 |}"
+           ]
+          }
+         },
+         {
+          "evidence_id": "{E:区分の規則}",
+          "relation": "linked",
+          "link": {
+           "unit_ids": [
+            "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "属性A〜Hが有、属性Iが無の条件で合計点と区分を算出する",
+        "answer": {
+         "kind": "answer",
+         "basis": {
+          "unit_ids": [
+           "{u:| 行ID | 条件 | 点数 |}",
+           "{u:| A1 | 属性A=有 | 2 |}",
+           "{u:| A2 | 属性B=有 | 3 |}",
+           "{u:| A3 | 属性C=有 | 1 |}",
+           "{u:| A4 | 属性D=有 | 4 |}",
+           "{u:| A5 | 属性E=有 | 2 |}",
+           "{u:| A6 | 属性F=有 | 1 |}",
+           "{u:| A7 | 属性G=有 | 3 |}",
+           "{u:| A8 | 属性H=有 | 2 |}",
+           "{u:区分の規則}",
+           "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+          ]
+         },
+         "reasoning": "属性A〜Hの各行の点数を合計すると 2+3+1+4+2+1+3+2 = 18 点となります。属性Iは無なので点数 5 は加算しません。合計点 18 は区分の規則「10〜19点は区分B」に該当するため、区分は B です。",
+         "result": "合計点は 18 点、区分は B です。"
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "calculation",
+       "classification"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "属性A〜Hが有、属性Iが無の条件で合計点と区分を算出する",
+      "result_kind": "derived",
+      "item_indexes": [
+       0,
+       1
+      ],
+      "application_indexes": [
+       0
+      ]
+     }
+    ],
+    "applications": [
+     {
+      "request_id": "Q1",
+      "premises": [],
+      "item_indexes": [
+       0,
+       1
+      ],
+      "reasoning": "属性A〜Hの各行の点数を合計すると 2+3+1+4+2+1+3+2 = 18 点となります。属性Iは無なので点数 5 は加算しません。合計点 18 は区分の規則「10〜19点は区分B」に該当するため、区分は B です。",
+      "result": "合計点は 18 点、区分は B です。"
+     }
+    ],
+    "summary": "合計点は 18 点、区分は B です。",
+    "summary_item_indexes": [],
+    "summary_application_indexes": [
+     0
+    ],
+    "item_texts": [
+     "| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |",
+     "区分の規則\n合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。"
+    ]
+   },
+   "recorded_outcome": "answered"
+  },
+  "4592-live/rk2-rows-known": {
+   "question": "属性A〜Hは有です。属性Iは無です。確定した合計点と区分を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "unrelated",
+          "link": null
+         },
+         {
+          "evidence_id": "{E:区分の規則}",
+          "relation": "unrelated",
+          "link": null
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "合計点の算出",
+        "answer": {
+         "kind": "answer",
+         "basis": {
+          "unit_ids": [
+           "{u:| 行ID | 条件 | 点数 |}",
+           "{u:| A1 | 属性A=有 | 2 |}",
+           "{u:| A2 | 属性B=有 | 3 |}",
+           "{u:| A3 | 属性C=有 | 1 |}",
+           "{u:| A4 | 属性D=有 | 4 |}",
+           "{u:| A5 | 属性E=有 | 2 |}",
+           "{u:| A6 | 属性F=有 | 1 |}",
+           "{u:| A7 | 属性G=有 | 3 |}",
+           "{u:| A8 | 属性H=有 | 2 |}"
+          ]
+         },
+         "reasoning": "属性A〜Hが有であることから、各行の点数を合計すると 2+3+1+4+2+1+3+2 = 18 点となります。属性Iは無であるため、点数 5 は加算しません。",
+         "result": "合計点は 18 点です。"
+        }
+       },
+       {
+        "request_id": "Q1",
+        "requirement": "区分の判定",
+        "answer": {
+         "kind": "answer",
+         "basis": {
+          "unit_ids": [
+           "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+          ]
+         },
+         "reasoning": "合計点が 10〜19 点の範囲に入るため、区分は B です（区分の規則: 0〜9 点は A、10〜19 点は B、20〜29 点は C）。",
+         "result": "区分は B です。"
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "calculation",
+       "classification"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0,
+       1
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "合計点の算出",
+      "result_kind": "derived",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": [
+       0
+      ]
+     },
+     {
+      "id": "P2",
+      "request_id": "Q1",
+      "text": "区分の判定",
+      "result_kind": "derived",
+      "item_indexes": [
+       1
+      ],
+      "application_indexes": [
+       1
+      ]
+     }
+    ],
+    "applications": [
+     {
+      "request_id": "Q1",
+      "premises": [],
+      "item_indexes": [
+       0
+      ],
+      "reasoning": "属性A〜Hが有であることから、各行の点数を合計すると 2+3+1+4+2+1+3+2 = 18 点となります。属性Iは無であるため、点数 5 は加算しません。",
+      "result": "合計点は 18 点です。"
+     },
+     {
+      "request_id": "Q1",
+      "premises": [],
+      "item_indexes": [
+       1
+      ],
+      "reasoning": "合計点が 10〜19 点の範囲に入るため、区分は B です（区分の規則: 0〜9 点は A、10〜19 点は B、20〜29 点は C）。",
+      "result": "区分は B です。"
+     }
+    ],
+    "summary": "合計点は 18 点です。\n区分は B です。",
+    "summary_item_indexes": [],
+    "summary_application_indexes": [
+     0,
+     1
+    ],
+    "item_texts": [
+     "| 行ID | 条件 | 点数 |\n| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |",
+     "合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。"
+    ]
+   },
+   "recorded_outcome": "insufficient_evidence"
+  },
+  "4609-live/dv1-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A4 | 属性D=有 | 4 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| A4 | 属性D=有 | 4 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| A4 | 属性D=有 | 4 |"
+    ]
+   },
+   "recorded_outcome": "conditional"
+  },
+  "4609-live/dv2-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数を教えてください。",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A4 | 属性D=有 | 4 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数を教えてください。",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| A4 | 属性D=有 | 4 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| A4 | 属性D=有 | 4 |"
+    ]
+   },
+   "recorded_outcome": "conditional"
+  },
+  "4609-live/dv3-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数を教えてください。",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A4 | 属性D=有 | 4 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数を教えてください。",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| A4 | 属性D=有 | 4 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| A4 | 属性D=有 | 4 |"
+    ]
+   },
+   "recorded_outcome": "conditional"
+  },
+  "4609-live/dv4-direct-value": {
+   "question": "行A4の点数を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数を教えてください。",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A4 | 属性D=有 | 4 |}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数を教えてください。",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| A4 | 属性D=有 | 4 |",
+    "summary_item_indexes": [
+     0
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| A4 | 属性D=有 | 4 |"
+    ]
+   },
+   "recorded_outcome": "conditional"
+  },
+  "4609-live/mr1-multi-request": {
+   "question": "行A4の点数と、区分Bになる合計点の範囲を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A4 | 属性D=有 | 4 |}"
+           ]
+          }
+         },
+         {
+          "evidence_id": "{E:区分の規則}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "行A4の点数",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A4 | 属性D=有 | 4 |}"
+          ]
+         }
+        }
+       },
+       {
+        "request_id": "Q1",
+        "requirement": "区分Bになる合計点の範囲",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "fact"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0,
+       1
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "行A4の点数",
+      "result_kind": "direct",
+      "item_indexes": [
+       0
+      ],
+      "application_indexes": []
+     },
+     {
+      "id": "P2",
+      "request_id": "Q1",
+      "text": "区分Bになる合計点の範囲",
+      "result_kind": "direct",
+      "item_indexes": [
+       1
+      ],
+      "application_indexes": []
+     }
+    ],
+    "applications": [],
+    "summary": "| A4 | 属性D=有 | 4 |\n合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。",
+    "summary_item_indexes": [
+     0,
+     1
+    ],
+    "summary_application_indexes": [],
+    "item_texts": [
+     "| A4 | 属性D=有 | 4 |",
+     "合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。"
+    ]
+   },
+   "recorded_outcome": "conditional"
+  },
+  "4609-live/rk1-rows-known": {
+   "question": "属性A〜Hは有です。属性Iは無です。確定した合計点と区分を教えてください。",
+   "outputs": [
+    {
+     "purpose": "answer.generate",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A1 | 属性A=有 | 2 |}",
+            "{u:| A2 | 属性B=有 | 3 |}",
+            "{u:| A3 | 属性C=有 | 1 |}",
+            "{u:| A4 | 属性D=有 | 4 |}",
+            "{u:| A5 | 属性E=有 | 2 |}",
+            "{u:| A6 | 属性F=有 | 1 |}",
+            "{u:| A7 | 属性G=有 | 3 |}",
+            "{u:| A8 | 属性H=有 | 2 |}"
+           ]
+          }
+         },
+         {
+          "evidence_id": "{E:区分の規則}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "属性A〜Hが有で属性Iが無の場合の合計点と区分",
+        "answer": {
+         "kind": "source",
+         "basis": {
+          "unit_ids": [
+           "{u:| A1 | 属性A=有 | 2 |}",
+           "{u:| A2 | 属性B=有 | 3 |}",
+           "{u:| A3 | 属性C=有 | 1 |}",
+           "{u:| A4 | 属性D=有 | 4 |}",
+           "{u:| A5 | 属性E=有 | 2 |}",
+           "{u:| A6 | 属性F=有 | 1 |}",
+           "{u:| A7 | 属性G=有 | 3 |}",
+           "{u:| A8 | 属性H=有 | 2 |}",
+           "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+          ]
+         }
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "calculation",
+       "classification"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    },
+    {
+     "purpose": "answer.repair",
+     "parsed_output": {
+      "response_language": {
+       "selection": {
+        "kind": "default"
+       }
+      },
+      "request_coverage": [
+       {
+        "request_id": "Q1",
+        "evidence_scope": [
+         {
+          "evidence_id": "{E:| 行ID | 条件 | 点数 |}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:| A1 | 属性A=有 | 2 |}",
+            "{u:| A2 | 属性B=有 | 3 |}",
+            "{u:| A3 | 属性C=有 | 1 |}",
+            "{u:| A4 | 属性D=有 | 4 |}",
+            "{u:| A5 | 属性E=有 | 2 |}",
+            "{u:| A6 | 属性F=有 | 1 |}",
+            "{u:| A7 | 属性G=有 | 3 |}",
+            "{u:| A8 | 属性H=有 | 2 |}"
+           ]
+          }
+         },
+         {
+          "evidence_id": "{E:区分の規則}",
+          "relation": "direct",
+          "link": {
+           "unit_ids": [
+            "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+           ]
+          }
+         }
+        ]
+       }
+      ],
+      "answer_parts": [
+       {
+        "request_id": "Q1",
+        "requirement": "属性A〜Hが有で属性Iが無の場合の合計点と区分",
+        "answer": {
+         "kind": "answer",
+         "basis": {
+          "unit_ids": [
+           "{u:| A1 | 属性A=有 | 2 |}",
+           "{u:| A2 | 属性B=有 | 3 |}",
+           "{u:| A3 | 属性C=有 | 1 |}",
+           "{u:| A4 | 属性D=有 | 4 |}",
+           "{u:| A5 | 属性E=有 | 2 |}",
+           "{u:| A6 | 属性F=有 | 1 |}",
+           "{u:| A7 | 属性G=有 | 3 |}",
+           "{u:| A8 | 属性H=有 | 2 |}",
+           "{u:合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。}"
+          ]
+         },
+         "reasoning": "属性A〜Hが有であることから、表の各行の点数を合計する。属性A=2点、属性B=3点、属性C=1点、属性D=4点、属性E=2点、属性F=1点、属性G=3点、属性H=2点を足すと合計18点になる。属性Iは無なので、5点は加算しない。合計点が10〜19点の範囲に入るため、区分は「区分B」になる。",
+         "result": "合計点は18点、区分はBです。"
+        }
+       }
+      ],
+      "external_data_required": false,
+      "external_data_items": [],
+      "reference_materials": [],
+      "question_type": [
+       "calculation",
+       "classification"
+      ],
+      "confidence": "high",
+      "summary_part_indexes": [
+       0
+      ]
+     }
+    }
+   ],
+   "recorded_final": {
+    "answer_parts": [
+     {
+      "id": "P1",
+      "request_id": "Q1",
+      "text": "属性A〜Hが有で属性Iが無の場合の合計点と区分",
+      "result_kind": "derived",
+      "item_indexes": [
+       0,
+       1
+      ],
+      "application_indexes": [
+       0
+      ]
+     }
+    ],
+    "applications": [
+     {
+      "request_id": "Q1",
+      "premises": [],
+      "item_indexes": [
+       0,
+       1
+      ],
+      "reasoning": "属性A〜Hが有であることから、表の各行の点数を合計する。属性A=2点、属性B=3点、属性C=1点、属性D=4点、属性E=2点、属性F=1点、属性G=3点、属性H=2点を足すと合計18点になる。属性Iは無なので、5点は加算しない。合計点が10〜19点の範囲に入るため、区分は「区分B」になる。",
+      "result": "合計点は18点、区分はBです。"
+     }
+    ],
+    "summary": "合計点は18点、区分はBです。",
+    "summary_item_indexes": [],
+    "summary_application_indexes": [
+     0
+    ],
+    "item_texts": [
+     "| A1 | 属性A=有 | 2 |\n| A2 | 属性B=有 | 3 |\n| A3 | 属性C=有 | 1 |\n| A4 | 属性D=有 | 4 |\n| A5 | 属性E=有 | 2 |\n| A6 | 属性F=有 | 1 |\n| A7 | 属性G=有 | 3 |\n| A8 | 属性H=有 | 2 |",
+     "合計点の区分は、0〜9点は区分A、10〜19点は区分B、20〜29点は区分Cです。"
+    ]
+   },
+   "recorded_outcome": "answered"
+  }
+ }
+}

@@ -69,7 +69,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_content import citation_content_unusable
-from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
+from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_scope_model
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
@@ -220,11 +220,12 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。request_coverage に選択した根拠の関係を記録する。
+- 各項目の意味は応答 schema の説明に従う。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
-### 出典の網羅
-- 根拠の計画（request_coverage）に挙げた文書ごとに、その文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
+### 出典（basis）の選び方
+- basis には、質問の対象・要求について規則・要件・定義・手順・事実を述べた原文と、質問の操作の前提・後続とする関係が原文に明記された別対象の原文の単位を選ぶ。同じ文書・頁にあるだけの別の対象・独立した操作の原文は選ばない。
+- 要点の根拠になる原文が複数の文書にあれば（入力に根拠の計画があれば、計画に挙げた文書も）、文書ごとにその文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
 - 説明の内容を支えない原文は、質問に関係していても出典にしない。
 ### 例示値と実データ
 - 画面キャプチャ・Vision 生成説明に見える値（年月・金額・氏名・番号・コード・選択状態）は文書の例示で、今回の実データではない。表示されているだけで現在値・既定値・必須値・許容範囲・登録済み状態と断定しない。
@@ -3220,13 +3221,46 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
 # ---- 本文の組み立て -----------------------------------------------------------
 
 
-def _citation(span: dict) -> str:
+def citation_source(span: Mapping[str, Any]) -> str:
+    """利用者に見せる出典の名前（文書名と頁。本文の出典の行から接頭辞を除いたもの）。"""
     # 頁の無い根拠（Excel の行の記録）はシートとセル範囲を出す（#1224）。
     page = span.get("page", "")
     end = span.get("page_end")
     pages = f"{page}-{end}" if isinstance(page, int) and isinstance(end, int) and end > page else page
     location = span.get("location") or answer_labels().page(pages)
-    return f"{answer_labels().citation_prefix}{span.get('source', '')} {location}"
+    return f"{span.get('source', '')} {location}"
+
+
+def _citation(span: dict) -> str:
+    return f"{answer_labels().citation_prefix}{citation_source(span)}"
+
+
+def sent_evidence_sources(catalog: SentUnitCatalog) -> dict[str, str]:
+    """今回モデルへ送った根拠の表示 ID から、利用者に見せる出典の名前への対応（#4626）。"""
+    spans = [snapshot.span() for snapshot in catalog.snapshots]
+    return {label: citation_source(span) for span in spans if (label := str(span.get("label") or ""))}
+
+
+def with_application_sources(draft: GroundedDraft, catalog: SentUnitCatalog) -> GroundedDraft:
+    """推導の方法と結論の文に混ざった、送った根拠の表示 ID を出典の名前に置き換える（#4626）。
+
+    表示 ID はモデルが入力の根拠ブロックで見た名前で、送った根拠に対応するものはコードが出典の名前に決定的に
+    置き換えられる。送った根拠に無い ID と資料の本文にある同じ字のコードは残し、推導の検査が内部の番号として扱う。
+    """
+    if not draft.applications:
+        return draft
+    sources = sent_evidence_sources(catalog)
+    codes = _document_evidence_codes([snapshot.span() for snapshot in catalog.snapshots])
+    applications = [
+        application.model_copy(
+            update={
+                "reasoning": replace_evidence_labels(application.reasoning, sources, codes=codes),
+                "result": replace_evidence_labels(application.result, sources, codes=codes),
+            }
+        )
+        for application in draft.applications
+    ]
+    return draft if applications == list(draft.applications) else draft.model_copy(update={"applications": applications})
 
 
 def _cited_line(entry: CheckedItem) -> str:
@@ -4198,11 +4232,15 @@ def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -
     return SentUnitCatalog(snapshots)
 
 
-def sent_table_views(spans: Sequence[dict]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """実際に送った単位だけの目録から投影した表（#4349。投影は sent_table_projection）。"""
+def sent_table_views(catalog: SentUnitCatalog) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """実際に送った単位だけの目録（``Round.sent_units``）から投影した表（#4349。投影は sent_table_projection）。
+
+    目録は回の結果に結び付けたものを渡す。spans から送達の記録を引き直すと、後の回の送信で記録が置き換わった
+    前の回では表が投影されない（#4620）。
+    """
     from rag_engine.generation.sent_table_projection import sent_tables
 
-    return sent_tables(generation_unit_catalog(spans, sent_only=True))
+    return sent_tables(catalog)
 
 
 def _sent_view(span: Mapping[str, Any]) -> CitationView:
@@ -4783,6 +4821,9 @@ class Round:
     invalid_request_result_ids: tuple[str, ...] = ()
     expected_request_ids: tuple[str, ...] = ()
     returned_request_ids: tuple[str, ...] = ()
+    # この回が実際にモデルへ送った単位の目録（#4620）。送達の記録（_CITATION_VIEWS）は次の回の送信で置き換わるため、
+    # 採用した回の後段（表の行の判定など）は、この回の結果に結び付けた目録を使う。
+    sent_units: SentUnitCatalog = field(default_factory=lambda: SentUnitCatalog(()), repr=False, compare=False)
 
     @property
     def request_contract_status(self) -> str:
@@ -6876,6 +6917,7 @@ def run_round(
     }
 
     plan_rows_added: list[str] = []
+    plan_sources: set[str] = set()
     role_repair: dict[str, Any] = {}
     header_repair: dict[str, Any] = {}
 
@@ -6887,7 +6929,10 @@ def run_round(
             question=question,
             underived_requests=underived_requests,
         )
-        if scope_plan is None and isinstance(value, generation_base):
+        if getattr(type(value), "_uses_typed_answer_parts", False):
+            # 要点の型の生成では、計画は basis から導いた（#4611）。引いた根拠はすべて計画にあるので足す行は無い。
+            plan_sources.add("derived_from_basis")
+        elif scope_plan is None and isinstance(value, generation_base):
             # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
             canonical, added = plan_rows_from_citations(canonical, spans)
             plan_rows_added.extend(added)
@@ -7231,6 +7276,8 @@ def run_round(
         draft = format_draft_numbers(question, draft, spans)
     if not range_only:
         draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
+        # 推導の文の、送った根拠の表示 ID は出典の名前にする（推導の検査の前。#4626）。
+        draft = with_application_sources(draft, unit_catalog)
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     citation_trace = {
         "capture_scope": "generation_citation_trace",
@@ -7254,6 +7301,11 @@ def run_round(
         timing["request_scope_repair"] = scope_plan_repair
     if plan_rows_added:
         timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
+    if scope_plan is not None:
+        timing["plan_source"] = "answer_scope"
+    elif plan_sources:
+        # 最後の草稿の計画の出どころ（#4611）。derived_from_basis = 要点の basis からコードが導いた。
+        timing["plan_source"] = "derived_from_basis"
     if role_repair:
         # 導出が要る種類の宣言と source 型だけの要点の矛盾の作り直し（#4586）: 要求・宣言した種類・結果（repaired /
         # underived）・作り直しが契約を満たさなかったときの例外の型名。
@@ -7804,6 +7856,7 @@ def run_round(
             if guide_steps
             else []
         ),
+        sent_units=unit_catalog,
     )
 
 

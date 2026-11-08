@@ -171,6 +171,7 @@ from rag_engine.generation.answer_records import (
 )
 from rag_engine.generation.application_explanation import explain_applications
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
+from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.crag_support import (
     MAX_GENERATED_QUERY_CHARS,
@@ -2813,16 +2814,16 @@ def _invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, LlmRunawayOutput | LlmStreamOutputMissing) or is_invalid_structured_output(exc)
 
 
-def _row_condition_step(question: str, spans: Sequence[dict[str, Any]], *, settings: Settings) -> row_conditions.RowConditionsResult | None:
+def _row_condition_step(question: str, sent_units: SentUnitCatalog, *, settings: Settings) -> row_conditions.RowConditionsResult | None:
     """送った根拠の表の各行の条件を、質問に当てはめる段（#4349）。投影できる表が無ければ None（段を開かない）。
 
-    動かすかはコードが決める: 実際に送った単位の目録（``grounded.sent_table_views``）に投影できる表が 1 つ以上
-    あれば動かし、推導（applications）の有無には依らない。結果は推導の審査・当てはめの段・説明の段へ渡す。
+    動かすかはコードが決める: 採用した回が実際に送った単位の目録（``Round.sent_units``。#4620）に投影できる表が
+    1 つ以上あれば動かし、推導（applications）の有無には依らない。結果は推導の審査・当てはめの段・説明の段へ渡す。
     この段のモデルは段ごとの設定（``row_condition_call_settings``）で、使えなければ実行せず理由を残す。
     """
     from rag_engine.generation import grounded
 
-    tables, skipped = grounded.sent_table_views(spans) if spans else ([], [])
+    tables, skipped = grounded.sent_table_views(sent_units)
     if not tables:
         return None
     with _execution_step(
@@ -3655,10 +3656,11 @@ def synthesize_grounded_answer(
             }
         )
     # 送った根拠に投影できる表があれば、推導の有無に関わらず行の判定の段を 1 回動かす（#4349）。結果は推導の審査・
-    # 当てはめの段・説明の段へ渡す。生成の草稿は作り直さない（既存の門はそのまま）。
+    # 当てはめの段・説明の段へ渡す。生成の草稿は作り直さない（既存の門はそのまま）。表は採用した回の結果に結び付けた
+    # 送達の目録から投影する（後の回が不採用でも、前の回が送った表で動く。#4620）。
     row_key = tuple(str(span.get("evidence_id") or "") for span in spans)
     if row_key not in shared.row_conditions:
-        shared.row_conditions[row_key] = _row_condition_step(question, spans, settings=settings)
+        shared.row_conditions[row_key] = _row_condition_step(question, current.sent_units, settings=settings)
     row_result = shared.row_conditions[row_key]
     if audit_mode == grounded.AUDIT_MODE_NONE:
         from rag_engine.generation.answer_parts import check_answer_parts

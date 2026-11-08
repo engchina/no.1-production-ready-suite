@@ -2792,10 +2792,9 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql(strategy: str) ->
     assert call.parameters["ca_ord_49"] is None
 
 
-async def test_oci_update_error_status_preserves_chunks_and_extraction() -> None:
-    """ERROR への状態遷移では段階レビュー用の chunk と抽出 JSON を保持する。"""
-    extraction = {"document_type": "text", "raw_text": "抽出済み"}
-    errored = _oracle_document_row(status="ERROR", extraction=extraction)
+async def test_oci_update_error_status_preserves_chunks() -> None:
+    """ERROR への状態遷移では段階レビュー用の chunk を保持する(抽出はレシピの層。#4617)。"""
+    errored = _oracle_document_row(status="ERROR")
     pool = FakeOraclePool(execute_results=[[_oracle_document_row()], [errored]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
@@ -2806,10 +2805,8 @@ async def test_oci_update_error_status_preserves_chunks_and_extraction() -> None
     )
 
     assert detail.status == FileStatus.ERROR
-    assert detail.extraction == extraction
     statements = [call.statement for call in pool.connection.calls]
     assert not any("DELETE FROM rag_chunks" in statement for statement in statements)
-    assert not any("extraction = NULL" in statement for statement in statements)
     assert pool.connection.commits == 1
 
 
@@ -3624,11 +3621,7 @@ def _oci_settings() -> Settings:
     )
 
 
-def _oracle_document_row(
-    *,
-    status: str = "INDEXED",
-    extraction: object = '{"raw_text":"社内規程本文","document_type":"社内規程"}',
-) -> dict[str, object]:
+def _oracle_document_row(*, status: str = "INDEXED") -> dict[str, object]:
     return {
         "document_id": "doc-1",
         "file_name": "policy.txt",
@@ -3640,7 +3633,6 @@ def _oracle_document_row(
         "file_size_bytes": 12,
         "content_sha256": "a" * 64,
         "duplicate_of_document_id": None,
-        "extraction": extraction,
         "error_message": None,
         "uploaded_at": datetime(2026, 1, 1, tzinfo=UTC),
         "indexed_at": None,

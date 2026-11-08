@@ -694,10 +694,17 @@
       "sha256": "da90ff498178842091e2874bd0c81a1c04f33240b60bd1f47f4b2ab3abd76e02",
       "statement_count": 1,
       "table_name": "rag_documents"
+    },
+    {
+      "destructive": true,
+      "name": "20261108_4617_drop_document_extraction_processing_config",
+      "sha256": "b2d7cfe30027e850972371168ac615471d0efc9c216c1b5c4df2e0452a86c366",
+      "statement_count": 1,
+      "table_name": "rag_documents"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "5fe11c05bda07309400b7393b6099d589d57165d54727285095b76967ed05cdd",
-  "statement_count": 155
+  "sha256": "0b7b9632c7fb52df76f64058b0b51522fa1f1336988f3b01a3457270e1c67137",
+  "statement_count": 156
 }

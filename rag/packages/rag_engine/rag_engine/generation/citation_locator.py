@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from rag_engine.generation.grounding_cues import grounding_cues
@@ -84,3 +84,32 @@ def clean_evidence_locators(
     residual = [label for label in EVIDENCE_LABEL.findall(cleaned) if label not in codes]
     cleaned = EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in codes else "", cleaned)
     return CleanedLocators(cleaned.strip(), tuple(dict.fromkeys(copied)), tuple(dict.fromkeys(residual)))
+
+
+# 括弧の中が根拠の ID 1 つだけの箇所（「（E3）」）。括弧はそのままにして中身だけを出典の名前にする。
+_BRACKETED_LABEL = re.compile(rf"([（(])\s*({EVIDENCE_LABEL.pattern})\s*([）)])")
+# 括弧の外の ID と、前後の半角の空白（「E2 の表」）。出典の名前は「」で区切るので、空白は残さない。
+_SPACED_LABEL = re.compile(rf"[ \t]?({EVIDENCE_LABEL.pattern})[ \t]?")
+
+
+def replace_evidence_labels(text: str, sources: Mapping[str, str], *, codes: Collection[str]) -> str:
+    """文に混ざった根拠の表示 ID を、利用者に見せる出典の名前に置き換える（#4626）。
+
+    ``sources`` は今回モデルへ送った根拠の表示 ID から出典の名前（本文の出典の行と同じ書き方）への対応。対応の無い
+    ID（送っていない根拠・存在しない番号）と、資料の本文にある同じ字のコード（``codes``）は置き換えずに残す
+    （呼び出し側の内部の番号の検査がそのまま漏れとして扱う）。ID のトークンの形だけを見て、文の意味は判定しない。
+    """
+
+    def source(label: str) -> str | None:
+        return None if label in codes else sources.get(label)
+
+    def bracketed(match: re.Match[str]) -> str:
+        opening, label, closing = match.groups()
+        name = source(label)
+        return match.group() if name is None else f"{opening}{name}{closing}"
+
+    def bare(match: re.Match[str]) -> str:
+        name = source(match.group(1))
+        return match.group() if name is None else f"「{name}」"
+
+    return _SPACED_LABEL.sub(bare, _BRACKETED_LABEL.sub(bracketed, text))

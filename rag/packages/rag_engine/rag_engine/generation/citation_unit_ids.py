@@ -149,22 +149,13 @@ class SentUnitCatalog:
         return create_model("CitationUnitSelection", __config__=ConfigDict(extra="forbid"), **fields)
 
 
-def _unit_coverage_type(catalog: SentUnitCatalog, request_ids: Sequence[str] = (), *, scope_target: bool = True) -> type[BaseModel]:
-    """根拠間の関係を示す原文にも、同じ単位選択の契約を使う。``request_ids`` を渡すと request_id はその列挙だけを受ける。
-
-    ``scope_target=False`` は行の自由記述の target をモデルに書かせない（回答の生成。#4594）。target は下流のどの判定にも
-    使わず、録画ではモデルが target の値の後で行を閉じようとして、次の必須の欄の前で空白を出し続けた。正規化の後の
-    target は空文字になる。
-    """
+def _unit_coverage_type(catalog: SentUnitCatalog, request_ids: Sequence[str] = ()) -> type[BaseModel]:
+    """根拠間の関係を示す原文にも、同じ単位選択の契約を使う。``request_ids`` を渡すと request_id はその列挙だけを受ける。"""
     from copy import deepcopy
-
-    from pydantic.json_schema import SkipJsonSchema
 
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
     fields: dict[str, Any] = {"link": (catalog.selection_model() | None, deepcopy(RequestEvidenceScopeRange.model_fields["link"]))}
-    if not scope_target:
-        fields["target"] = (SkipJsonSchema[str], Field(default="", exclude=True))
     scope = create_model("UnitRequestEvidenceScope", __base__=RequestEvidenceScopeRange, **fields)
     coverage_fields: dict[str, Any] = {
         "evidence_scope": (GenericAlias(list, scope), deepcopy(RequestCoverageRange.model_fields["evidence_scope"]))
@@ -185,10 +176,8 @@ def _one_plan_per_request(plans: list[Any]) -> list[Any]:
     return plans
 
 
-def request_coverage_field(
-    base: type[BaseModel], catalog: SentUnitCatalog, request_ids: Sequence[str] = (), *, scope_target: bool = True
-) -> tuple[Any, Any]:
-    """生成・計画の出力の request_coverage の型と欄の定義。``scope_target`` は ``_unit_coverage_type`` と同じ。
+def request_coverage_field(base: type[BaseModel], catalog: SentUnitCatalog, request_ids: Sequence[str] = ()) -> tuple[Any, Any]:
+    """計画の出力の request_coverage の型と欄の定義（回答の生成の出力には計画が無い。#4611）。
 
     ``request_ids`` （その回の要求の id。空でないとき）を渡すと、計画は要求ごとにちょうど 1 件にする（#4587）:
     request_id はその id の列挙、件数の下限と上限は要求の数、同じ id の 2 件目は検証で拒む。要求の数に関係なく
@@ -200,7 +189,7 @@ def request_coverage_field(
     from pydantic import AfterValidator
 
     info = deepcopy(base.model_fields["request_coverage"])
-    coverage = _unit_coverage_type(catalog, request_ids, scope_target=scope_target)
+    coverage = _unit_coverage_type(catalog, request_ids)
     if not request_ids:
         return GenericAlias(list, coverage), info
     count = len(dict.fromkeys(request_ids))

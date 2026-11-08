@@ -234,7 +234,6 @@ function clearDocumentProcessingCache(qc: QueryClient, documentId: string) {
         ? {
             ...current,
             status: "UPLOADED",
-            extraction: {},
             error_message: null,
             indexed_at: null,
           }
