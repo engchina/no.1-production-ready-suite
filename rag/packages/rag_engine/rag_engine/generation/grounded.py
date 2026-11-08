@@ -7160,7 +7160,11 @@ def run_round(
                     raise
                 role_repair.update(outcome="underived", error=type(exc).__name__)
             else:
-                role_repair["outcome"] = "repaired"
+                # 作り直しの要点の答えの型（answer / quote / gap）。quote は原文からの抜き出しを確かめた直接の記載（#4631）。
+                role_repair.update(
+                    outcome="repaired",
+                    answer_kinds=[part.answer.kind for part in getattr(repaired, "answer_parts", [])],
+                )
         draft = canonicalize_output(
             draft, "answer.generate", prompt, underived_requests=source_only if source_only and repaired is None else ()
         )
@@ -7308,7 +7312,7 @@ def run_round(
         timing["plan_source"] = "derived_from_basis"
     if role_repair:
         # 導出が要る種類の宣言と source 型だけの要点の矛盾の作り直し（#4586）: 要求・宣言した種類・結果（repaired /
-        # underived）・作り直しが契約を満たさなかったときの例外の型名。
+        # underived）・作り直しの要点の答えの型・作り直しが契約を満たさなかったときの例外の型名。
         timing["answer_part_role_repair"] = role_repair
     if header_repair:
         # 表の見出しの行だけを答えにした要点の作り直し（#4592）: 要求・結果（repaired / unaccepted）・残った要求・例外の型名。

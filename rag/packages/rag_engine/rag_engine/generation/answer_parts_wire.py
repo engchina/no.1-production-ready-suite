@@ -7,7 +7,7 @@ from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
 from annotated_types import MaxLen
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
@@ -32,6 +32,7 @@ SOURCE_ONLY_DERIVATION_PROMPT = (
     f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
     "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
     "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
+    "答えが原文の 1 つの単位にそのまま書かれた要点は、quote 型でその単位と答えの字句を返す。"
     "導くのに足りない資料・値は gap 型に書く。\n"
     "- 応答 schema どおりの完全な草稿を返す。\n"
 )
@@ -46,6 +47,48 @@ HEADER_ONLY_SOURCE_PROMPT = (
     "- その要点の basis に、答えが書かれた表のデータの行の単位を選ぶ。根拠に答えが書かれた行が無ければ gap 型に書く。\n"
     "- 応答 schema どおりの完全な草稿を返す。\n"
 )
+
+
+# 抜き出しの字句の上限。答えの値・語句を写す欄で、原文の行全体の写しには使わない。
+MAX_QUOTE_CHARS = 200
+
+
+def quote_in_unit(catalog: SentUnitCatalog, unit_id: str, text: str) -> bool:
+    """抜き出しの字句が、送った原文の単位の本文の部分文字列か（#4631）。
+
+    比べる前に除くのは空白（改行・全角空白を含む）だけで、表記・語の意味は変えない（抜き出しの検証。extractive QA の
+    答えの範囲が文脈の部分文字列であることの検証と同じ）。
+    """
+    target = _formal_text(text)
+    return bool(target) and target in _formal_text(catalog.bind([unit_id])[0].text)
+
+
+def _quote_model(catalog: SentUnitCatalog) -> type[BaseModel]:
+    """原文の 1 つの単位から一字一句そのまま抜き出した答え（#4631）。単位は送った ID の列挙から選ぶ。
+
+    抜き出しがその単位の本文に無い出力は契約違反（構造化出力の無効）にする。通った抜き出しは、選んだ単位の原文を
+    直接の記載として答える（``canonical_answer_parts``）。計算・組合せの答えは 1 つの単位の字句にならないので
+    answer 型で導く。
+    """
+
+    def verify(value: Any) -> Any:
+        if not quote_in_unit(catalog, value.unit_id, value.text):
+            raise ValueError(
+                "quote 型の text が unit_id の原文の本文にありません。原文の字句を一字一句そのまま抜き出すか、answer 型で導いてください。"
+            )
+        return value
+
+    return create_model(
+        "QuoteAnswerPart",
+        __config__=ConfigDict(extra="forbid"),
+        __validators__={"quote_in_unit": model_validator(mode="after")(verify)},
+        kind=(cast(Any, Literal["quote"]), Field(description="答えが原文の 1 つの単位にそのまま書かれている。")),
+        unit_id=(cast(Any, Literal)[catalog.unit_ids], Field(description="答えが書かれた原文の単位の ID。")),
+        text=(
+            str,
+            Field(min_length=1, max_length=MAX_QUOTE_CHARS, description="unit_id の原文から一字一句そのまま抜き出した答えの字句。"),
+        ),
+    )
 
 
 def _without_default(schema: dict[str, Any]) -> None:
@@ -79,7 +122,9 @@ def answer_parts_model(
     """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。
 
     ``direct_source=False`` は source 型を受けない契約（導出が要る質問で要点がすべて source だった出力の作り直し。
-    #4586）。原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
+    #4586）。答えは導出（answer）・原文の 1 つの単位からの抜き出し（quote。#4631）・不足（gap）から選ぶ。抜き出しは
+    コードが原文の部分文字列であることを確かめ、直接の記載にする。原文の写しの導出は従来どおり
+    ``canonical_answer_parts`` が直接の記載に戻す。
     ``requirements`` を渡すと、要点の requirement はその文の写しだけを受ける（作り直しでは 1 回目の出力の要点の文。
     不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
     ``request_ids`` はその回の要求の id。要求ごとの根拠の計画はモデルに書かせず、``canonical_answer_parts`` が要点の
@@ -149,7 +194,7 @@ def answer_parts_model(
             "RequiredAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            answer=(cast(Any, Union.__getitem__((derived, gap)) if catalog.unit_ids else gap), Field()),
+            answer=(cast(Any, Union.__getitem__((derived, _quote_model(catalog), gap)) if catalog.unit_ids else gap), Field()),
         )
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
@@ -230,7 +275,7 @@ def header_only_source_parts(value: BaseModel, catalog: SentUnitCatalog) -> list
         answer = part["answer"]
         if answer["kind"] == "gap":
             continue
-        selected = list(catalog.bind(answer["basis"]["unit_ids"]))
+        selected = list(catalog.bind([answer["unit_id"]] if answer["kind"] == "quote" else answer["basis"]["unit_ids"]))
         if answer["kind"] == "answer" and not _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
             continue
         if _header_only(selected):
@@ -361,8 +406,14 @@ def canonical_answer_parts(
     for position, part in enumerate(wire_parts):
         answer = part["answer"]
         kind = answer["kind"]
-        if kind not in {"source", "answer", "gap"}:
+        if kind not in {"source", "answer", "gap", "quote"}:
             raise ValueError("回答要点の役割を確認できません。")
+        if kind == "quote":
+            # 原文の単位からの抜き出し（#4631）。原文にあることを確かめた単位を直接の記載にする（モデルの字句は表示しない）。
+            if not quote_in_unit(catalog, answer["unit_id"], answer["text"]):
+                raise ValueError("抜き出しの字句が原文の単位にありません。")
+            kind = "source"
+            answer = {"kind": "source", "basis": {"unit_ids": [answer["unit_id"]]}}
         selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
         if kind == "answer" and _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
             # 原文の写しだけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
