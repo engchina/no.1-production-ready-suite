@@ -1280,21 +1280,6 @@
       "にな",
       "された"
     ],
-    "clause_split_chars": [
-      "。",
-      "、",
-      "，",
-      ",",
-      "！",
-      "？",
-      "?"
-    ],
-    "contrast_clause_endings": [
-      "した",
-      "った",
-      "いた",
-      "たい"
-    ],
     "sentence_split_chars": [
       "。"
     ],
@@ -1316,11 +1301,6 @@
     "done_marks": [
       "済み",
       "済"
-    ],
-    "condition_cues": [
-      "場合",
-      "なら",
-      "とき"
     ],
     "recipient_subject_words": [
       "対象者"

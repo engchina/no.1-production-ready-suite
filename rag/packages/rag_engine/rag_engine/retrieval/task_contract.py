@@ -32,7 +32,6 @@ class _Cues:
     existential: re.Pattern[str]
     past_request: re.Pattern[str]
     changed_field: re.Pattern[str]
-    clause_split: re.Pattern[str]
     sentence_split: re.Pattern[str]
     unit: re.Pattern[str]
     action_target: re.Pattern[str]
@@ -77,8 +76,6 @@ def _build_cues(pack: LanguagePack) -> _Cues:
     comma_chars = re.escape("".join(words["comma_chars"]))
     unit_chars = re.escape("".join(words["unit_split_chars"]))
     quote_chars = re.escape("".join(quotes))
-    # 経緯の節の後の「が」（「〜したが」）。後読みは語ごとに分ける（長さの違う語も書ける）。
-    contrast = "|".join(f"(?<={re.escape(ending)})" for ending in words["contrast_clause_endings"])
     field_chars = range_class((*terms, "A-Z", "a-z", "0-9", "_"))
     return _Cues(
         words=words,
@@ -95,9 +92,6 @@ def _build_cues(pack: LanguagePack) -> _Cues:
         changed_field=re.compile(
             rf"(?:^|[\s{bracket_opens}{comma_chars}{sentence_chars}])({field_chars}{{2,32}})"
             rf"{alt['changed_field_particles']}?{alt['change_words']}(?:{alt['changed_field_endings']}|$)"
-        ),
-        clause_split=re.compile(
-            rf"{char_class(words['clause_split_chars'])}|\n" + (rf"|(?:{contrast}){alt['contrast_particles']}" if contrast else "")
         ),
         sentence_split=re.compile(rf"{sentence}|\n"),
         unit=re.compile(rf"[^{unit_chars}\n]+[{unit_chars}\n]*"),
