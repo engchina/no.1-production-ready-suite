@@ -1,0 +1,174 @@
+{
+ "note": "配備後の受入の録画応答（合成の題: 属性 A〜I の判定表と区分の規則。既定のモデルの answer.generate）。原文単位 ID は {row:N}（表の N 行目のデータ行）・{rule}（区分の規則の文）に置き換えた。mr1_multi_request_repair は mr1 の作り直し（answer.repair）の出力。",
+ "outputs": {
+  "mr1_multi_request": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "question_type": [
+    "calculation"
+   ],
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "行A4の点数",
+     "mode": "stated",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{row:4}"
+       ]
+      }
+     }
+    },
+    {
+     "request_id": "Q1",
+     "requirement": "区分Bになる合計点の範囲",
+     "mode": "stated",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{rule}"
+       ]
+      }
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0,
+    1
+   ]
+  },
+  "mr1_multi_request_repair": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "question_type": [
+    "calculation",
+    "classification"
+   ],
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "行A4の点数",
+     "answer": {
+      "kind": "answer",
+      "basis": {
+       "unit_ids": [
+        "{row:4}"
+       ]
+      },
+      "reasoning": "表の行A4の条件は「属性D=有」で、点数は4点と記載されている。",
+      "result": "4点"
+     }
+    },
+    {
+     "request_id": "Q1",
+     "requirement": "区分Bになる合計点の範囲",
+     "answer": {
+      "kind": "answer",
+      "basis": {
+       "unit_ids": [
+        "{rule}"
+       ]
+      },
+      "reasoning": "区分の規則では、合計点が10点以上19点以下のときに区分Bになると定義されている。",
+      "result": "10点〜19点"
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0,
+    1
+   ]
+  },
+  "rk1_rows_known": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "question_type": [
+    "calculation"
+   ],
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "属性A〜Hが有で属性Iが無の場合の合計点と区分",
+     "mode": "stated",
+     "answer": {
+      "kind": "answer",
+      "basis": {
+       "unit_ids": [
+        "{row:1}",
+        "{row:2}",
+        "{row:3}",
+        "{row:4}",
+        "{row:5}",
+        "{row:6}",
+        "{row:7}",
+        "{row:8}",
+        "{rule}"
+       ]
+      },
+      "reasoning": "属性A〜Hそれぞれの有無に対応する点数を合計すると、2+3+1+4+2+1+3+2 = 18点となります。区分の規則によれば、合計点が10〜19点のときは区分Bに該当します。",
+      "result": "合計点は18点、区分はBです。"
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0
+   ]
+  },
+  "dv1_direct_value": {
+   "response_language": {
+    "selection": {
+     "kind": "default"
+    }
+   },
+   "question_type": [
+    "fact"
+   ],
+   "answer_parts": [
+    {
+     "request_id": "Q1",
+     "requirement": "行A4の点数を教えてください。",
+     "mode": "stated",
+     "answer": {
+      "kind": "source",
+      "basis": {
+       "unit_ids": [
+        "{row:4}"
+       ]
+      }
+     }
+    }
+   ],
+   "external_data_required": false,
+   "external_data_items": [],
+   "reference_materials": [],
+   "confidence": "high",
+   "summary_part_indexes": [
+    0
+   ]
+  }
+ }
+}
