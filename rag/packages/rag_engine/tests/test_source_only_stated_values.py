@@ -36,7 +36,13 @@ ROW_REQUIREMENT = "行A4の点数"
 RANGE_REQUIREMENT = "区分Bになる合計点の範囲"
 
 
-def _record(identity: str, text: str, source: str) -> AnswerRecord:
+HEADER = "| 行ID | 条件 | 点数 |"
+SEPARATED_TABLE = TABLE.replace(HEADER, HEADER + "\n|---|---|---|")
+# 表の chunk の分割の記録（rag_pipeline_core の _table_row_tree_metadata の形）。
+TABLE_METADATA = {"content_kind": "table", "table_row_tree_column_keys": json.dumps(["行ID", "条件", "点数"], ensure_ascii=False)}
+
+
+def _record(identity: str, text: str, source: str, metadata: dict[str, Any] | None = None) -> AnswerRecord:
     return AnswerRecord(
         id=identity,
         engine="docling",
@@ -49,7 +55,7 @@ def _record(identity: str, text: str, source: str) -> AnswerRecord:
         chunk_level="parent",
         chunk_id=identity,
         source_run_id="synthetic",
-        metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(text)}]}},
+        metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(text)}]}, **(metadata or {})},
     )
 
 
@@ -63,7 +69,7 @@ def _bind(output: dict[str, Any], prompt: str) -> dict[str, Any]:
         if row := re.match(r"\| A(\d) \|", text):
             mapping["{row:" + row.group(1) + "}"] = unit
         elif text.startswith("| 行ID"):
-            continue
+            mapping["{header}"] = unit
         elif text == RULE:
             mapping["{rule}"] = unit
         else:
@@ -71,7 +77,7 @@ def _bind(output: dict[str, Any], prompt: str) -> dict[str, Any]:
     text = json.dumps(output, ensure_ascii=False)
     for key, value in mapping.items():
         text = text.replace(key, value)
-    assert "{row:" not in text and "{rule}" not in text and "{only}" not in text
+    assert "{row:" not in text and "{rule}" not in text and "{only}" not in text and "{header}" not in text
     return json.loads(text)
 
 
@@ -84,12 +90,13 @@ def _source(requirement: str, *units: str) -> dict[str, Any]:
     }
 
 
-def _derived(requirement: str, result: str, *units: str) -> dict[str, Any]:
-    return {
+def _derived(requirement: str, result: str, *units: str, mode: str | None = None) -> dict[str, Any]:
+    part: dict[str, Any] = {
         "request_id": "Q1",
         "requirement": requirement,
         "answer": {"kind": "answer", "basis": {"unit_ids": list(units)}, "reasoning": "原文の値から導く。", "result": result},
     }
+    return {**part, "mode": mode} if mode else part
 
 
 def _draft(*parts: dict[str, Any]) -> dict[str, Any]:
@@ -105,7 +112,14 @@ def _draft(*parts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run(first: dict[str, Any], repair: dict[str, Any], *, texts: tuple[str, ...] = (TABLE, RULE), undetermined: bool = False):
+def run(
+    first: dict[str, Any],
+    repair: dict[str, Any],
+    *,
+    texts: tuple[str, ...] = (TABLE, RULE),
+    undetermined: bool = False,
+    metadata: dict[str, Any] | None = None,
+):
     calls: list[str] = []
 
     def parse(system, prompt, config, schema, **options):
@@ -127,7 +141,9 @@ def run(first: dict[str, Any], repair: dict[str, Any], *, texts: tuple[str, ...]
     def unexpected(*args, **kwargs):
         raise AssertionError("追加の検索・画像の呼び出しは不要")
 
-    records = [_record(f"record-{index}", text, f"synthetic-{index}.md") for index, text in enumerate(texts)]
+    records = [
+        _record(f"record-{index}", text, f"synthetic-{index}.md", metadata if index == 0 else None) for index, text in enumerate(texts)
+    ]
     environ = (
         {
             "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
@@ -236,9 +252,94 @@ def test_value_equal_to_the_only_cited_unit_is_a_known_limit():
     assert kinds(response) == ["direct"]
 
 
-def test_first_generation_answer_is_not_rewritten():
-    """作り直しを通らない 1 回目の answer 型は、数字が 1 つの単位にあっても今までどおり導出のまま。"""
+def test_first_generation_without_the_stated_mode_is_not_rewritten():
+    """mode=stated の無い出力（録画）の 1 回目の answer 型は、数字が 1 つの単位にあっても導出のまま。"""
     first = _draft(_derived(ROW_REQUIREMENT, "4点", "{row:4}"))
     response, calls = run(first, first)
     assert calls == ["generate"]
+    assert kinds(response) == ["derived"]
+
+
+def test_stated_values_of_the_first_generation_are_not_held_by_an_undetermined_table():
+    """1 回目の生成の mode=stated の answer 型も、数字が 1 つの単位にあれば直接の記載になり、保留にならない。"""
+    first = _draft(
+        _derived(ROW_REQUIREMENT, "行A4の点数は4点です。", "{row:4}", mode="stated"),
+        _derived(RANGE_REQUIREMENT, "区分Bになる合計点の範囲は10〜19点です。", "{rule}", mode="stated"),
+    )
+    response, calls = run(first, first, undetermined=True)
+    assert calls[0] == "generate" and "repair" not in calls
+    assert [table["table_result"] for table in response.generation_trace["row_conditions"]["tables"]] == ["not_determined"]
+    assert kinds(response) == ["direct", "direct"]
+    assert ROW_A4 in response.answer_text and RULE in response.answer_text
+    assert MISSING not in response.answer_text
+
+
+def test_derivation_mode_of_the_first_generation_stays_a_derivation():
+    first = _draft(_derived(ROW_REQUIREMENT, "合計点は4点です。", "{row:4}", mode="derivation"))
+    response, calls = run(first, first)
+    assert calls == ["generate"]
+    assert kinds(response) == ["derived"]
+
+
+@pytest.mark.parametrize(
+    ("result", "units"),
+    [
+        pytest.param("合計点は18点です。", ("{row:4}",), id="sum-missing-from-the-cited-unit"),
+        pytest.param("合計点は18点です。", tuple(f"{{row:{number}}}" for number in range(1, 9)), id="sum-of-the-cited-rows"),
+        pytest.param("5点です。", ("{row:1}", "{row:2}", "{row:9}"), id="sum-equal-to-one-cited-row"),
+        pytest.param("4点です。", ("{row:4}", "{row:5}"), id="adjacent-units-are-not-one-unit"),
+        pytest.param("区分Bです。", ("{rule}",), id="answer-without-digits"),
+    ],
+)
+def test_stated_sums_of_the_first_generation_stay_derivations(result, units):
+    """モデルが mode=stated と宣言した足し算でも、数字が 1 つの単位に無ければ導出のまま。"""
+    first = _draft(_derived(ROW_REQUIREMENT, result, *units, mode="stated"))
+    response, calls = run(first, first)
+    assert calls == ["generate"]
+    assert kinds(response) == ["derived"]
+
+
+def test_stated_sum_equal_to_the_only_cited_unit_is_a_known_limit():
+    """既知の制約: mode=stated の足し算で、答えの数字がたまたま 1 つの単位にあれば直接の記載になる（形式では区別しない）。"""
+    first = _draft(_derived(ROW_REQUIREMENT, "合計点は4点です。", "{row:4}", mode="stated"))
+    response, _calls = run(first, first)
+    assert kinds(response) == ["direct"]
+
+
+@pytest.mark.parametrize(
+    ("texts", "metadata"),
+    [
+        pytest.param((SEPARATED_TABLE, RULE), None, id="separator-row"),
+        pytest.param((TABLE, RULE), TABLE_METADATA, id="recorded-header"),
+    ],
+)
+@pytest.mark.parametrize("route", ["first-generation", "repair"])
+def test_table_header_is_not_counted_as_a_cited_unit(texts, metadata, route):
+    """形式の情報（区切りの行・取込の記録）で分かる見出しの行は、単位の数に入れない。"""
+    if route == "repair":
+        first, repair = _draft(_source(ROW_REQUIREMENT, "{row:4}")), _draft(_derived(ROW_REQUIREMENT, "4点", "{header}", "{row:4}"))
+    else:
+        first = repair = _draft(_derived(ROW_REQUIREMENT, "行A4の点数は4点です。", "{header}", "{row:4}", mode="stated"))
+    response, _calls = run(first, repair, texts=texts, metadata=metadata)
+    assert kinds(response) == ["direct"]
+
+
+def test_header_is_not_guessed_without_a_separator_or_a_record():
+    """区切りの行も取込の記録も無い表の最初の行は見出しと決めない（列名を推測しない）。"""
+    first = _draft(_derived(ROW_REQUIREMENT, "行A4の点数は4点です。", "{header}", "{row:4}", mode="stated"))
+    response, _calls = run(first, first)
+    assert kinds(response) == ["derived"]
+
+
+def test_header_with_two_data_rows_is_still_two_units():
+    first = _draft(_derived(ROW_REQUIREMENT, "4点です。", "{header}", "{row:4}", "{row:5}", mode="stated"))
+    response, _calls = run(first, first, texts=(SEPARATED_TABLE, RULE))
+    assert kinds(response) == ["derived"]
+
+
+def test_digits_of_a_header_row_are_not_a_stated_value():
+    """見出しの行だけを引用した答えは、数字が見出しにあっても値の記載にしない。"""
+    table = SEPARATED_TABLE.replace("| 点数 |", "| 2026 |", 1)
+    first = _draft(_derived(ROW_REQUIREMENT, "2026点です。", "{header}", mode="stated"))
+    response, _calls = run(first, first, texts=(table, RULE))
     assert kinds(response) == ["derived"]

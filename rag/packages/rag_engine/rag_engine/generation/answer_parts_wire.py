@@ -16,6 +16,7 @@ from rag_parser_core.language.text import arabic_numbers
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
+from rag_engine.generation.evidence_cuts import evidence_cuts
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
 from rag_engine.retrieval.table_header_lines import span_header_lines
 
@@ -295,17 +296,31 @@ def _number_values(text: str) -> set[Decimal]:
     return {Decimal(value) for value in _ARABIC_NUMBER.findall(normalized)}
 
 
+def _units_without_table_headers(selected: list[BoundUnitRange]) -> list[str]:
+    """選んだ単位の本文（表の見出しの行を除く）。見出しは区切りの行か取込の記録だけで決める（``evidence_cuts``。列名を推測しない）。"""
+    texts = []
+    for binding in selected:
+        span = binding.snapshot.span()
+        text = str(span.get("text") or "")
+        tables = evidence_cuts(span).tables
+        for start, end in binding.snapshot.units[binding.first : binding.last + 1]:
+            if not any(table.start <= start < table.body_start for table in tables):
+                texts.append(text[start:end])
+    return texts
+
+
 def _states_values_of_one_unit(result: str, selected: list[BoundUnitRange]) -> bool:
     """結果の数字がすべて、引用した 1 つの原文の単位に書かれているかを形式で確かめる（#4631）。
 
-    複数の単位を引用している・どれかの数字が単位に無い（足し算で出した合計など）・数字が無い結果は真にしない。
-    数の値を比べるだけで、語の意味は判定しない。1 つの単位だけを引用して合計がたまたまその単位の値と同じ結果は
-    形式では区別できず、真になる。
+    表の見出しの行は単位の数に入れない。複数の単位を引用している・どれかの数字が単位に無い（足し算で出した合計など）・
+    数字が無い結果は真にしない。数の値を比べるだけで、語の意味は判定しない。1 つの単位だけを引用して合計がたまたまその
+    単位の値と同じ結果は形式では区別できず、真になる。
     """
-    if len(selected) != 1 or selected[0].first != selected[0].last:
+    units = _units_without_table_headers(selected)
+    if len(units) != 1:
         return False
     numbers = _number_values(result)
-    return bool(numbers) and numbers <= _number_values(selected[0].text)
+    return bool(numbers) and numbers <= _number_values(units[0])
 
 
 def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[str, Any]]) -> None:
@@ -377,8 +392,9 @@ def canonical_answer_parts(
     要約に使わない（``check_answer_parts`` が欠けた要点として不足の記載を足す）。原文の列挙を答えとして示さない。
 
     ``stated_values`` は ``source_only_derivation`` の作り直しの出力のとき真にする（#4631）。作り直しの契約は導出か不足しか
-    受けないので、原文に書かれた値も answer 型の言い換えで返る。結果の数字が引用した 1 つの単位にある要点は、その原文の直接の
-    記載にする（導出にすると、表の行の判定が決まらない題で保留になり値を答えない）。モデルの文は表示しない。
+    受けないので要点に mode が無く、原文に書かれた値も answer 型の言い換えで返る。この出力と、mode=stated を選んだ answer 型の
+    要点で、結果の数字が引用した 1 つの単位にあるものは、その原文の直接の記載にする（導出にすると、表の行の判定が決まらない
+    題で保留になり値を答えない）。mode=derivation の要点には掛けない。モデルの文は表示しない。
     """
     raw = value.model_dump(exclude_unset=True)
     wire_parts = raw.pop("answer_parts", [])
@@ -400,7 +416,8 @@ def canonical_answer_parts(
         selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
         if kind == "answer":
             result = _without_bound_locators(answer["result"], selected)
-            if _copies_one_original(result, selected) or (stated_values and _states_values_of_one_unit(result, selected)):
+            may_state_value = stated_values or part.get("mode") == "stated"
+            if _copies_one_original(result, selected) or (may_state_value and _states_values_of_one_unit(result, selected)):
                 # 原文の写しだけ・原文の値だけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
                 kind = "source"
         underived = kind == "source" and part["request_id"] in underived_requests
