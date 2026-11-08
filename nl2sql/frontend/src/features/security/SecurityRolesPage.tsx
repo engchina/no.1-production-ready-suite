@@ -1,7 +1,6 @@
 import { RoleManagementPage } from "@production-ready/system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
-import { LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
 import { useAuth } from "./AuthProvider";
 import { securityApi } from "./api";
 import { describeSecurityApiError } from "./describe-error";
@@ -19,7 +18,6 @@ export function SecurityRolesPage() {
       api={securityApi}
       canManage={hasPermission(MENU_PERMISSIONS.securityRoles)}
       describeError={describeSecurityApiError}
-      listDetailStoragePrefix={LIST_DETAIL_STORAGE_PREFIX}
       permissionSummary={{
         count: (role) => role.permissions?.length ?? 0,
         permissionsPath: APP_ROUTES.securityPermissions,

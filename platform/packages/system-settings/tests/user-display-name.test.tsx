@@ -108,25 +108,30 @@ describe("userDisplayName（#1696）", () => {
 });
 
 describe("ユーザー管理の利用者の表示（#1696）", () => {
-  it("一覧の行・詳細の見出し・読み上げは表示名で、ログイン ID は「ログインユーザーID」の欄にだけ、UUID はどこにも出さない", async () => {
-    await render(<UserManagementPage api={userApi([user({})])} canManage />);
+  it("一覧の行の名前とエディタの見出しは表示名で、ログイン ID は ID の書体の欄にだけ、UUID は文字に出さない", async () => {
+    await render(<UserManagementPage api={userApi([user({})])} canManage />, "/");
 
     const grid = host.querySelector<HTMLElement>('[data-testid="security-users-grid"]');
-    expect(grid?.textContent).toContain("アリス");
-    expect(grid?.textContent).not.toContain("alice.login");
-    expect(host.querySelector("#security-users-detail-heading")?.textContent?.trim()).toBe("アリス");
+    expect(grid?.querySelector("[data-row-title-button] > span")?.textContent?.trim()).toBe("アリス");
+    // ログイン ID は行の 2 行目の ID の書体（`<code>`）にだけ出す（#4635）。
     const loginIdFields = Array.from(host.querySelectorAll("code")).filter((node) => node.textContent === "alice.login");
     expect(loginIdFields).toHaveLength(1);
     for (const text of textsOutsideLoginIdField(host)) {
       expect(text).not.toContain("alice.login");
       expect(text).not.toMatch(UUID_PATTERN);
     }
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    await render(<UserManagementPage api={userApi([user({})])} canManage />, `/?user=${USER_UUID}`);
+    expect(host.querySelector("h1")?.textContent?.trim()).toBe("アリス");
+    for (const text of textsOutsideLoginIdField(host)) expect(text).not.toMatch(UUID_PATTERN);
   });
 
   it("表示名が空の利用者はログイン ID を名前にする", async () => {
-    await render(<UserManagementPage api={userApi([user({ display_name: "" })])} canManage />);
+    await render(<UserManagementPage api={userApi([user({ display_name: "" })])} canManage />, `/?user=${USER_UUID}`);
 
-    expect(host.querySelector("#security-users-detail-heading")?.textContent?.trim()).toBe("alice.login");
+    expect(host.querySelector("h1")?.textContent?.trim()).toBe("alice.login");
     expect(host.textContent).not.toMatch(UUID_PATTERN);
   });
 });

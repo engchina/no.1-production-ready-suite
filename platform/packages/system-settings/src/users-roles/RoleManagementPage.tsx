@@ -5,19 +5,16 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type ReactNode,
 } from "react";
 
 import {
   Archive,
   ArchiveRestore,
   LockKeyhole,
-  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
-  Shield,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -28,6 +25,10 @@ import {
   compareNames,
   Banner,
   ButtonLink,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
   EmptyState,
   ErrorState,
   toast,
@@ -43,10 +44,12 @@ import {
   useConfirm,
   ProcessingIndicator,
   ObjectActionBar,
+  RowActionMenu,
   FormActionBar,
   type EntityAction,
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   TextareaField,
   TextField,
 } from "@production-ready/ui";
@@ -56,11 +59,8 @@ import { useRequestScope } from "../oci/useRequestScope";
 import { t } from "./messages";
 import { RoleNameRowTitleButton, roleDisplayName } from "./RoleNameBadges";
 import {
-  SecurityDetailField,
-  SecurityDetailFallback,
-  SecurityListDetail,
-  SecurityManagementPanelShell,
-  SecurityPanelHeader,
+  SECURITY_NEW_ENTITY_ID,
+  SecurityEditorFallback,
   SecuritySearchField,
   SecurityClearSearchAction,
   SecurityListPagination,
@@ -71,7 +71,8 @@ import {
   unmappedErrorMessage,
   useFocusAfterCommit,
   usePagedSelectionList,
-  useSecurityUrlSelection,
+  useReturnFocusToRow,
+  useSecurityEditorSelection,
   withoutFieldError,
 } from "./shared";
 import {
@@ -82,7 +83,8 @@ import {
 } from "./types";
 import { roleCodeValidationError } from "./validation";
 
-type RolePanelView = "list" | "create" | "edit";
+/** 一覧（null）・新規作成・編集・URL の対象が無い（読み込み中を含む）。 */
+type RoleView = "list" | "create" | "edit" | "missing";
 
 interface RoleDraftState {
   roleCode: string;
@@ -104,28 +106,31 @@ function compareText(left: string, right: string, direction: DataTableSort["dire
   return compareNames(left, right, direction);
 }
 
-function roleStatusText(role: SecurityRole) {
-  if (role.archived) return t("security.roles.archivedDisabled");
+/** ロールの種類（組み込み / カスタム / アーカイブ済み）。一覧の列・狭い画面の補足・検索に使う。 */
+function roleKindText(role: SecurityRole) {
+  if (role.archived) return t("security.roles.archived");
   if (role.is_built_in) return t("security.roles.builtIn");
   return t("security.roles.custom");
 }
 
+function draftFromRole(role: SecurityRole): RoleDraftState {
+  return { roleCode: role.role_code, displayName: role.display_name, description: role.description };
+}
+
 export interface RoleManagementPageProps<R extends SecurityRole = SecurityRole> {
   api: RoleManagementApi<R>;
-  /** ロールの作成・編集・アーカイブ・削除を行えるか（製品の権限判定）。 */
+  /** ロールの作成・編集・アーカイブ・削除を行えるか（製品の権限判定）。false なら同じエディタを読み取り専用で出す。 */
   canManage: boolean;
   /** 製品の API エラーから入力項目のエラーとエラーコードを取り出す。 */
   describeError?: DescribeApiError;
-  /** 一覧 + 詳細（ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（製品ごと。#2282）。 */
-  listDetailStoragePrefix?: string;
   /**
-   * 詳細パネルの末尾に、ロールに付けた機能権限の件数と、製品の権限管理への導線を出す（3 製品で同じ形。#800）。
+   * エディタの基本情報の下に、ロールに付けた機能権限の件数と、製品の権限管理への導線を出す（3 製品で同じ形。#800）。
    * ロールに付ける権限は製品ごとの権限管理が扱うため、ここでは件数と移動先だけを受け取る。
    */
   permissionSummary?: RolePermissionSummary<R>;
 }
 
-/** ロールの詳細に出す、機能権限の件数と権限管理への導線（#800）。 */
+/** ロールのエディタに出す、機能権限の件数と権限管理への導線（#800）。 */
 export interface RolePermissionSummary<R extends SecurityRole = SecurityRole> {
   /** ロールに付けている機能権限の数（製品の API のロールが持つ権限の一覧の件数）。 */
   count: (role: R) => number;
@@ -135,26 +140,27 @@ export interface RolePermissionSummary<R extends SecurityRole = SecurityRole> {
   canManagePermissions: boolean;
 }
 
-/** ロール管理（3製品共通。ロールの基本情報と状態だけを扱う。#206）。 */
+/**
+ * ロール管理（3製品共通。ロールの基本情報と状態だけを扱う。#206）。全幅の一覧 → 全幅のエディタ（A 型。#4635）。
+ * 開いている対象は URL の `?role=`（`new` は新規作成）が唯一の情報源。
+ */
 export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   api,
   canManage,
   describeError = describeErrorMessageOnly,
-  listDetailStoragePrefix,
   permissionSummary,
 }: RoleManagementPageProps<R>) {
   const confirm = useConfirm();
   const [roles, setRoles] = useState<R[]>([]);
-  // 選択中のロールは URL の `?role=<role_id>` が唯一の情報源（#2282）。先頭の行を自動で選ばない。
-  // 一覧から選ぶときは select（1 ペインでは履歴に積む）、操作の結果で選び直すときは replace。
-  const selection = useSecurityUrlSelection("role");
-  const selectedRoleId = selection.selectedId;
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<RolePanelView>("list");
+  const selection = useSecurityEditorSelection("role");
+  const target = selection.selectedId;
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<DataTableSort>({ key: "role", direction: "asc" });
   const [draft, setDraft] = useState<RoleDraftState>(EMPTY_DRAFT);
   const [baseline, setBaseline] = useState<RoleDraftState>(EMPTY_DRAFT);
+  // 今の draft がどの対象のものか（"new" / role_id / null）。URL の対象が変わったら入れ直す。
+  const [draftFor, setDraftFor] = useState<string | null>(null);
+  const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
   const [changingRoleId, setChangingRoleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // 「最新情報を取得」を押した読み直しの間だけ、そのボタンを回す。初回の読込・エラーからの再試行は
@@ -172,7 +178,24 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const loadSequence = useRef(0);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  const editingRole = roles.find((role) => role.role_id === editingId) ?? null;
+  const creating = target === SECURITY_NEW_ENTITY_ID && canManage;
+  const editingRole = target && !creating ? (roles.find((role) => role.role_id === target) ?? null) : null;
+  const view: RoleView = !target ? "list" : creating ? "create" : editingRole ? "edit" : "missing";
+  const draftKey = view === "create" ? SECURITY_NEW_ENTITY_ID : view === "edit" ? (editingRole?.role_id ?? null) : null;
+
+  // URL の対象（新規作成・別のロール・一覧）が変わったら、フォームをその対象の値で入れ直す（render 中に同期する）。
+  if (draftKey !== draftFor) {
+    const nextDraft = editingRole && view === "edit" ? draftFromRole(editingRole) : EMPTY_DRAFT;
+    setDraftFor(draftKey);
+    setDraft(nextDraft);
+    setBaseline(nextDraft);
+    setFormError("");
+    setFieldErrors({});
+  }
+  if (target && target !== SECURITY_NEW_ENTITY_ID && target !== lastOpenedId) {
+    setLastOpenedId(target);
+  }
+
   const readOnly = Boolean(!canManage || editingRole?.is_built_in || editingRole?.archived);
   const mutationBusy = busy || deletingRoleId !== null || changingRoleId !== null;
   const operationBusy = mutationBusy || loading;
@@ -180,7 +203,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const [submitAttempt, setSubmitAttempt] = useState(0);
   const inputReadOnly = readOnly || operationBusy;
   const isDirty =
-    activeView !== "list" &&
+    (view === "create" || view === "edit") &&
     (draft.roleCode !== baseline.roleCode ||
       draft.displayName !== baseline.displayName ||
       draft.description !== baseline.description);
@@ -195,21 +218,26 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         dismissOnOverlay: false,
       })));
   useUnsavedChangesGuard(isDirty || mutationBusy, confirmLeave);
+  // 破棄して一覧へ戻るとき、離脱ガードが外れた commit の後で履歴を戻す（確認を二重に出さない）。
+  const scheduleLeave = useFocusAfterCommit(!isDirty);
 
   const filteredRoles = useMemo(() => {
     const q = search.trim().toLowerCase();
     return roles
       .filter((role) =>
         q
-          ? [role.role_code, role.display_name, role.description, roleStatusText(role)]
+          ? [role.role_code, role.display_name, role.description, roleKindText(role)]
               .join(" ")
               .toLowerCase()
               .includes(q)
           : true
       )
       .sort((left, right) => {
-        if (sort.key === "status") {
-          return compareText(roleStatusText(left), roleStatusText(right), sort.direction);
+        if (sort.key === "kind") {
+          return compareText(roleKindText(left), roleKindText(right), sort.direction);
+        }
+        if (sort.key === "code") {
+          return compareText(left.role_code, right.role_code, sort.direction);
         }
         // 1 列目はロール名を出すため、ロール名で並べる（#1682）。
         return compareText(roleDisplayName(left), roleDisplayName(right), sort.direction);
@@ -220,14 +248,14 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const roleList = usePagedSelectionList({
     items: filteredRoles,
     getKey: (role) => role.role_id,
-    selectedId: selectedRoleId,
-    active: activeView === "list",
+    selectedId: lastOpenedId,
+    active: view === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
     pagingKey: "roles",
   });
   const roleListCount = securityListCount(roles.length, filteredRoles.length, search);
-  const selectedRole = roles.find((role) => role.role_id === selectedRoleId) ?? null;
+  useReturnFocusToRow(view === "list", lastOpenedId);
   // 初回の読み込みに失敗してロールが 1 件も無いときは、空の一覧ではなく失敗と再試行を出す（#1038）。
   // 表示を更新したときの失敗は、前の一覧を残して Banner で出す。
   const initialLoadFailed = Boolean(loadError) && roles.length === 0;
@@ -296,41 +324,37 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     });
   };
 
-  const startCreate = () => {
-    setActiveView("create");
-    setEditingId(null);
-    setDraft(EMPTY_DRAFT);
-    setBaseline(EMPTY_DRAFT);
-    setFormError("");
-    setFieldErrors({});
+  const openRole = (role: R) => {
+    if (operationBusy) return;
+    setActionError("");
+    selection.open(role.role_id);
   };
 
-  const startEdit = (role: R) => {
-    selection.replace(role.role_id);
-    setEditingId(role.role_id);
-    setActiveView("edit");
-    const nextDraft = {
-      roleCode: role.role_code,
-      displayName: role.display_name,
-      description: role.description,
-    };
+  const startCreate = () => {
+    setActionError("");
+    selection.open(SECURITY_NEW_ENTITY_ID);
+  };
+
+  /** 保存・作成の結果を基準にしてエディタに残る（作成のときは作った対象の URL へ置き換える）。 */
+  const keepEditing = (role: R) => {
+    const nextDraft = draftFromRole(role);
+    setDraftFor(role.role_id);
     setDraft(nextDraft);
     setBaseline(nextDraft);
     setFormError("");
     setFieldErrors({});
-  };
-
-  const finishToList = () => {
-    setDraft(EMPTY_DRAFT);
-    setBaseline(EMPTY_DRAFT);
-    setActiveView("list");
-    setEditingId(null);
-    setFormError("");
-    setFieldErrors({});
+    selection.replace(role.role_id);
   };
 
   const returnToList = async () => {
-    if (await confirmLeave()) finishToList();
+    if (!(await confirmLeave())) return;
+    setActionError("");
+    if (isDirty) {
+      setDraft(baseline);
+      scheduleLeave(selection.close);
+      return;
+    }
+    selection.close();
   };
 
   // 変更を破棄: 入力を開いたときの値に戻す（#1786。変更が無いときは disabled）。
@@ -348,7 +372,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     // 未入力は送信前に欄の下へ出し、最初のエラーの欄へフォーカスする（noValidate。#531）。
     const requiredErrors: RoleFieldErrors = {};
     // backend（RoleCreateRequest）と同じ規則: 2〜64 文字、英大文字で始まり英大文字・数字・アンダースコア（#540）。
-    if (activeView === "create") {
+    if (view === "create") {
       const roleCodeError = roleCodeValidationError(normalizedRoleCode);
       if (roleCodeError) requiredErrors.roleCode = t(roleCodeError);
     }
@@ -361,7 +385,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
       focusFirstFieldError(requiredErrors);
       return;
     }
-    if (activeView === "create" && normalizedRoleCode === SYSTEM_ADMIN_ROLE_CODE) {
+    if (view === "create" && normalizedRoleCode === SYSTEM_ADMIN_ROLE_CODE) {
       const nextErrors = { roleCode: t("security.roles.codeReserved") };
       setFormError("");
       setFieldErrors(nextErrors);
@@ -372,7 +396,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     setFormError("");
     setFieldErrors({});
     try {
-      if (activeView === "edit") {
+      if (view === "edit") {
         if (!editingRole) return;
         const updated = await api.updateRole({
           ...editingRole,
@@ -380,7 +404,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
           description: draft.description,
         });
         setRoles((rows) => rows.map((row) => (row.role_id === updated.role_id ? updated : row)));
-        startEdit(updated);
+        keepEditing(updated);
       } else {
         const created = await api.createRole({
           role_code: draft.roleCode,
@@ -388,7 +412,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
           description: draft.description,
         });
         setRoles((rows) => [...rows, created]);
-        startEdit(created);
+        keepEditing(created);
       }
       toast.success(t("security.common.saved"));
     } catch (cause) {
@@ -438,8 +462,12 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     try {
       const changed = archive ? await api.archiveRole(role) : await api.restoreRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === changed.role_id ? changed : row)));
-      selection.replace(changed.role_id);
-      finishToList();
+      // エディタで操作したときは、変わった状態を基準にして入力を入れ直す（未保存の入力は確認の上で捨てている）。
+      if (target === changed.role_id) {
+        const nextDraft = draftFromRole(changed);
+        setDraft(nextDraft);
+        setBaseline(nextDraft);
+      }
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
@@ -469,12 +497,9 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     try {
       await api.deleteRole(role);
       setRoles((rows) => rows.filter((row) => row.role_id !== role.role_id));
-      // 削除した対象の選択を外す（ほかの行へ置き換えない。page-archetypes.md §1 B。#2282）。
-      selection.replace(null);
-      setEditingId(null);
-      setActiveView("list");
-      setFormError("");
-      setFieldErrors({});
+      // 削除した対象のエディタは閉じて一覧へ戻す（ほかの対象へ置き換えない）。
+      if (target === role.role_id) selection.replace(null);
+      setLastOpenedId(null);
       toast.success(t("security.roles.deleteSuccess", { name: role.display_name }));
     } catch (cause) {
       setActionError(
@@ -487,18 +512,10 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     }
   };
 
-  const roleActions = (role: R): EntityAction[] =>
+  /** 対象への操作（行のメニューとエディタの ObjectActionBar で同じ定義。page-archetypes.md §0-6）。 */
+  const stateActions = (role: R): EntityAction[] =>
     canManage
       ? [
-          {
-            id: "edit",
-            label: t("security.common.edit"),
-            icon: Pencil,
-            disabled: operationBusy,
-            onSelect: () => {
-              if (!operationBusy) startEdit(role);
-            },
-          },
           {
             id: "archive",
             label: t("security.roles.archive"),
@@ -515,7 +532,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
             label: t("security.roles.restore"),
             icon: ArchiveRestore,
             visible: !role.is_built_in && role.archived,
-            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
             disabled: operationBusy && !(changingRoleId === role.role_id),
             loading: changingRoleId === role.role_id,
             onSelect: () => changeArchived(role, false),
@@ -527,254 +543,149 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
             tone: "danger",
             visible: canDeleteRole(role),
             loading: deletingRoleId === role.role_id,
-            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
             disabled: operationBusy && !(deletingRoleId === role.role_id),
             onSelect: () => handleDelete(role),
           },
         ]
       : [];
 
-  /**
-   * 編集フォームの対象への操作（復元・アーカイブ・削除）。フォームのパネルの見出しの右の ObjectActionBar
-   * 1 か所に置く（#618）。保存はページの右上（PageHeader）の primary。
-   */
-  const editObjectActions = (): EntityAction[] => {
-    if (!editingRole) return [];
-    const ids = new Set(["restore", "archive", "delete"]);
-    return roleActions(editingRole).filter((action) => ids.has(action.id));
-  };
-
-  // 一覧の列は狭い（既定 20rem）ので、ロール名と補足 1 行（説明）と状態だけを出す（#2282）。
-  // ロールコードは詳細の「ロールコード」の項目に出す（#1682）。
+  // 全幅の表（#4635）。md 未満は先頭の列だけを残し、ロールコードと種類は名前の下の補足 1 行に畳む。
   const roleColumns: Array<DataTableColumn<R>> = [
     {
       key: "role",
       header: t("security.roles.column.role"),
       sortable: true,
+      rowHeader: true,
       className: "align-top",
       render: (role) => (
         <RoleNameRowTitleButton
           securityRole={role}
           subtitle={
-            role.description ? <span className="line-clamp-1 break-all">{role.description}</span> : undefined
+            <>
+              {role.description ? <span className="line-clamp-1 break-all">{role.description}</span> : null}
+              <span className="block md:hidden" data-testid="security-roles-row-summary">
+                {`${role.role_code} · ${roleKindText(role)}`}
+              </span>
+            </>
           }
-          current={selectedRoleId === role.role_id}
+          href={selection.hrefFor(role.role_id)}
+          data-security-row-id={role.role_id}
           aria-label={t("security.roles.showRole", { name: roleDisplayName(role) })}
           onClick={(event) => {
             event.stopPropagation();
-            if (operationBusy) return;
-            selection.select(role.role_id);
+            openRole(role);
           }}
         />
       ),
     },
     {
-      key: "status",
-      header: t("security.common.status"),
+      key: "code",
+      header: t("security.roles.code"),
       sortable: true,
-      headerClassName: "w-[8rem]",
-      className: "align-top",
+      headerClassName: "hidden w-[16rem] md:table-cell",
+      className: "hidden align-top md:table-cell",
+      render: (role) => <code className="break-all font-mono text-xs">{role.role_code}</code>,
+    },
+    {
+      key: "kind",
+      header: t("security.roles.column.kind"),
+      sortable: true,
+      headerClassName: "hidden w-[10rem] md:table-cell",
+      className: "hidden align-top md:table-cell",
       render: (role) => <RoleListStatusBadge role={role} />,
     },
+    // 行のメニューは実際の操作だけ（開くのは行と名前のリンク。page-archetypes.md §0-7）。管理の権限が無ければ列を出さない。
+    ...(canManage
+      ? [
+          {
+            key: "actions",
+            header: <span className="sr-only">{t("security.common.actions")}</span>,
+            align: "right",
+            headerClassName: "w-[3.5rem]",
+            className: "align-top",
+            render: (role: R) => (
+              <RowActionMenu
+                actions={stateActions(role)}
+                ariaLabel={`${t("security.common.actions")}: ${roleDisplayName(role)}`}
+                testId={`security-roles-row-actions-${role.role_id}`}
+              />
+            ),
+          } satisfies DataTableColumn<R>,
+        ]
+      : []),
   ];
 
-  return (
+  const back = {
+    label: t("security.common.backToList"),
+    onClick: () => void returnToList(),
+    disabled: operationBusy,
+    testId: "security-roles-back",
+  };
+  const errorBanners = (
     <>
-      <PageHeader
-        wide
-        title={t("nav.securityRoles")}
-        subtitle={t("security.roles.subtitle")}
-        actions={
-          activeView === "list"
-            ? [
-                ...(canManage && !initialLoadFailed
-                  ? [
-                      {
-                        id: "create-role",
-                        kind: "primary" as const,
-                        label: t("security.common.create"),
-                        icon: Plus,
-                        disabled: operationBusy,
-                        onClick: startCreate,
-                      },
-                    ]
-                  : []),
-                {
-                  id: "refresh",
-                  kind: "utility",
-                  label: t("common.action.refresh"),
-                  icon: RefreshCw,
-                  // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
-                  disabled: operationBusy && !(loading && refreshRequested),
-                  onClick: () => load(true),
-                  loading: loading && refreshRequested,
-                },
-              ]
-            : []
-        }
-        // 詳細・作成・編集の画面の「一覧へ戻る」は左上（#618）。確定（作成・保存）はフォームの末尾の FormActionBar（#1786）。
-        // 一覧 + 詳細の 1 ペイン（xl 未満）で詳細を出している間も、左上の「一覧へ戻る」で一覧へ戻る（#2282）。
-        back={
-          activeView !== "list"
-            ? { label: t("security.common.backToList"), onClick: () => void returnToList(), disabled: operationBusy, testId: "security-roles-back" }
-            : !selection.split && selectedRoleId
-              ? { label: t("security.common.backToList"), onClick: selection.clear, testId: "security-roles-back" }
-              : undefined
-        }
-        actionsLabel={t("security.roles.actionsLabel")}
-        actionsTestId="security-roles-actions"
-      />
-      <PageBody wide className="grid gap-4">
-        {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
-        {/* 編集の画面の操作の失敗は SaveErrorBanner の 1 か所に出す（二重に出さない。#1038）。 */}
-        {activeView === "list" && actionError ? (
-          <Banner severity="danger">{actionError}</Banner>
-        ) : null}
+      {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
+      {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
+    </>
+  );
 
-        {initialLoadFailed ? (
-          <ErrorState message={loadError} onRetry={() => void load()} />
-        ) : activeView === "list" ? (
-          // 一覧は狭い列・詳細は広い列（xl 未満は 1 ペイン）。選択は URL の ?role=（#2282）。
-          <SecurityListDetail
-            id="security-roles"
-            storagePrefix={listDetailStoragePrefix}
-            icon={Shield}
-            headingId="security-roles-list-heading"
-            listLabel={t("security.roles.list")}
-            detailLabel={t("security.roles.detail")}
-            toolbar={
-              // 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
-              // 検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。
-              <ListToolbar
-                testId="security-roles-toolbar"
-                search={
-                  <SecuritySearchField
-                    label={t("security.common.search")}
-                    placeholder={t("security.roles.searchPlaceholder")}
-                    value={search}
-                    testId="security-roles-search"
-                    disabled={operationBusy}
-                    resultCountLabel={listCountText(roleListCount)}
-                    onChange={setSearch}
-                  />
-                }
-                count={{ ...roleListCount, live: false, testId: "security-roles-count" }}
-              />
-            }
-            loadingIndicator={
-              loading ? (
-                <ProcessingIndicator
-                  active
-                  label={t("security.roles.loading")}
-                  operationKey="security-roles-load"
-                  placement="panel"
-                  testId="security-roles-loading"
-                  activityIcon={refreshRequested ? "none" : "spinner"}
+  if (view === "missing") {
+    return (
+      <>
+        <PageHeader wide title={t("nav.securityRoles")} back={back} />
+        <PageBody wide className="grid gap-4">
+          {initialLoadFailed ? (
+            <ErrorState message={loadError} onRetry={() => void load()} />
+          ) : (
+            <SecurityEditorFallback
+              loading={loading}
+              loadingLabel={t("security.roles.loading")}
+              title={t("security.roles.notFoundTitle")}
+              hint={t("security.roles.notFoundHint")}
+              onBack={() => selection.close()}
+              testId="security-roles-detail-not-found"
+            />
+          )}
+        </PageBody>
+      </>
+    );
+  }
+
+  if (view === "create" || view === "edit") {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={view === "edit" && editingRole ? roleDisplayName(editingRole) : t("security.roles.form.create")}
+          subtitle={view === "create" ? t("security.roles.formHint") : undefined}
+          status={view === "edit" && editingRole ? <RoleStatusBadges role={editingRole} /> : undefined}
+          // 一覧へ戻るは左上（#618）。確定（作成・保存）はフォームの末尾の FormActionBar（#1786）。
+          back={back}
+        />
+        <PageBody wide className="grid grid-cols-1 gap-5">
+          {errorBanners}
+          {editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
+            <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
+          ) : editingRole?.archived ? (
+            <Banner severity="warning">{t("security.roles.archivedPermissionNotice")}</Banner>
+          ) : editingRole?.is_built_in ? (
+            <Banner severity="info">{t("security.roles.builtInReadonly")}</Banner>
+          ) : null}
+          <Card data-testid="security-roles-editor">
+            <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+              <CardTitle id="security-roles-form-heading" className="flex items-center gap-2">
+                <ShieldCheck size={20} aria-hidden="true" />
+                {t("security.roles.section.basic")}
+              </CardTitle>
+              {view === "edit" && editingRole && canManage ? (
+                // 対象への操作は最初のカードの見出しの右の 1 か所（#618）。
+                <ObjectActionBar
+                  actions={stateActions(editingRole)}
+                  ariaLabel={t("security.roles.editActions")}
+                  testId="security-roles-object-actions"
                 />
-              ) : null
-            }
-            list={
-              <DataTable
-                dense
-                loading={loading}
-                rows={roleList.pageItems}
-                sort={sort}
-                onSortChange={(next) => {
-                  if (!operationBusy) setSort(next);
-                }}
-                selectedRowKey={selectedRoleId}
-                onRowClick={(role) => {
-                  if (operationBusy) return;
-                  selection.select(role.role_id);
-                }}
-                getRowKey={(role) => role.role_id}
-                rowProps={(role) => ({
-                  className: INFORMATION_TABLE_ROW_CLASS,
-                  "aria-label": t("security.roles.showRole", { name: roleDisplayName(role) }),
-                })}
-                ariaLabel={t("security.roles.list")}
-                testId="security-roles-grid"
-                scrollAriaLabel={t("security.common.listScrollLabel", {
-                  list: t("security.roles.list"),
-                })}
-                scrollTestId="security-roles-scroll-region"
-                // 一覧の列（sticky・画面の高さまで）の中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
-                className="min-h-0 rounded-none border-0"
-                tableClassName="w-full table-fixed"
-                stickyHeader
-                empty={
-                  <EmptyState
-                    title={search ? t("security.roles.noResultsTitle") : t("security.common.empty")}
-                    hint={search ? t("security.roles.noResultsHint") : undefined}
-                    action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined}
-                  />
-                }
-                columns={roleColumns}
-              />
-            }
-            footer={
-              <SecurityListPagination
-                list={roleList}
-                ariaLabel={t("security.roles.pagination")}
-                testId="security-roles-pagination"
-                disabled={operationBusy}
-              />
-            }
-            pageItems={roleList.pageItems}
-            getKey={(role) => role.role_id}
-            selectedId={selectedRoleId}
-            onSelect={selection.replace}
-            disabled={operationBusy}
-            emptyTitle={t("security.roles.noSelectionTitle")}
-            emptyHint={t("security.roles.noSelectionHint")}
-            detail={
-              selectedRole ? (
-                <RoleDetailPanel
-                  role={selectedRole}
-                  canManage={canManage}
-                  actions={roleActions(selectedRole)}
-                  extra={
-                    permissionSummary ? (
-                      <RolePermissionSummaryRow role={selectedRole} summary={permissionSummary} />
-                    ) : null
-                  }
-                />
-              ) : (
-                <SecurityDetailFallback
-                  loading={loading}
-                  title={t("security.roles.notFoundTitle")}
-                  hint={t("security.roles.notFoundHint")}
-                  testId="security-roles-detail-not-found"
-                />
-              )
-            }
-          />
-        ) : (
-          <>
-            <SecurityManagementPanelShell
-              id={`security-roles-panel-${activeView}`}
-              idPrefix="security-roles"
-              ariaLabel={t("security.roles.taskPanelLabel")}
-            >
-              <SecurityPanelHeader
-                icon={activeView === "create" ? Plus : Pencil}
-                title={
-                  activeView === "edit"
-                    ? t("security.roles.form.edit")
-                    : t("security.roles.form.create")
-                }
-                description={t("security.roles.formHint")}
-                headingId="security-roles-form-heading"
-                action={
-                  activeView === "edit" ? (
-                    <ObjectActionBar
-                      actions={editObjectActions()}
-                      ariaLabel={t("security.roles.editActions")}
-                      testId="security-roles-object-actions"
-                    />
-                  ) : undefined
-                }
-              />
+              ) : null}
+            </CardHeader>
+            <CardContent>
               <form
                 ref={formRef}
                 className="grid gap-6"
@@ -782,20 +693,18 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 aria-labelledby="security-roles-form-heading"
                 noValidate
               >
-                {editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
-                  <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
-                ) : null}
                 {/* 欄の並びは FormGrid（最大 60rem・置き場所 42rem 以上で 2 列）。説明は全幅（#1891）。 */}
                 <FormGrid>
                   <TextField
                     ref={roleCodeRef}
                     id="security-role-code"
                     label={t("security.roles.code")}
-                    required
+                    required={view === "create"}
                     width="md"
-                    disabled={activeView === "edit" || inputReadOnly}
+                    disabled={view === "edit" || inputReadOnly}
                     error={fieldErrors.roleCode}
                     value={draft.roleCode}
+                    inputClassName="font-mono"
                     onValueChange={(value) => {
                       if (inputReadOnly) return;
                       setDraft((current) => ({
@@ -809,7 +718,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     ref={displayNameRef}
                     id="security-role-name"
                     label={t("security.roles.name")}
-                    required
+                    required={!readOnly}
                     width="md"
                     disabled={inputReadOnly}
                     error={fieldErrors.displayName}
@@ -833,9 +742,12 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     }}
                   />
                 </FormGrid>
+                {view === "edit" && editingRole && permissionSummary ? (
+                  <RolePermissionSummaryRow role={editingRole} summary={permissionSummary} />
+                ) : null}
                 {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
                 <SaveErrorBanner
-                  message={formError || (activeView === "edit" ? actionError : "")}
+                  message={formError}
                   attemptKey={submitAttempt}
                   testId="security-roles-save-error"
                 />
@@ -846,9 +758,9 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     testId="security-roles-form-actions"
                     primaryActions={[
                       {
-                        id: activeView === "edit" ? "save" : "create",
-                        label: activeView === "edit" ? t("security.common.save") : t("security.common.submitCreate"),
-                        icon: activeView === "edit" ? Save : Plus,
+                        id: view === "edit" ? "save" : "create",
+                        label: view === "edit" ? t("security.common.save") : t("security.common.submitCreate"),
+                        icon: view === "edit" ? Save : Plus,
                         type: "submit",
                         loading: busy,
                         // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
@@ -869,8 +781,118 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   />
                 ) : null}
               </form>
-            </SecurityManagementPanelShell>
-          </>
+            </CardContent>
+          </Card>
+        </PageBody>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHeader
+        wide
+        title={t("nav.securityRoles")}
+        subtitle={t("security.roles.subtitle")}
+        actions={[
+          ...(canManage && !initialLoadFailed
+            ? [
+                {
+                  id: "create-role",
+                  kind: "primary" as const,
+                  label: t("security.common.create"),
+                  icon: Plus,
+                  disabled: operationBusy,
+                  onClick: startCreate,
+                },
+              ]
+            : []),
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(loading && refreshRequested),
+            onClick: () => load(true),
+            loading: loading && refreshRequested,
+          },
+        ]}
+        actionsLabel={t("security.roles.actionsLabel")}
+        actionsTestId="security-roles-actions"
+      />
+      <PageBody wide className="grid grid-cols-1 gap-4">
+        {errorBanners}
+        {initialLoadFailed ? (
+          <ErrorState message={loadError} onRetry={() => void load()} />
+        ) : (
+          <section className="grid min-w-0 gap-3" aria-label={t("security.roles.list")} data-testid="security-roles-list">
+            {/* 件数はツールバーの右の ListCount 1 か所（#1891）。件数の読み上げは検索欄の resultCountLabel が行う。 */}
+            <ListToolbar
+              testId="security-roles-toolbar"
+              search={
+                <SecuritySearchField
+                  label={t("security.common.search")}
+                  placeholder={t("security.roles.searchPlaceholder")}
+                  value={search}
+                  testId="security-roles-search"
+                  disabled={operationBusy}
+                  resultCountLabel={listCountText(roleListCount)}
+                  onChange={setSearch}
+                />
+              }
+              count={{ ...roleListCount, live: false, testId: "security-roles-count" }}
+            />
+            {loading ? (
+              <ProcessingIndicator
+                active
+                label={t("security.roles.loading")}
+                operationKey="security-roles-load"
+                placement="panel"
+                testId="security-roles-loading"
+                activityIcon={refreshRequested ? "none" : "spinner"}
+              />
+            ) : null}
+            <div className="grid gap-2">
+              <DataTable
+                loading={loading}
+                rows={roleList.pageItems}
+                sort={sort}
+                onSortChange={(next) => {
+                  if (!operationBusy) setSort(next);
+                }}
+                // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。キーボードは名前のリンク。
+                onRowClick={openRole}
+                getRowKey={(role) => role.role_id}
+                rowProps={(role) => ({
+                  className: INFORMATION_TABLE_ROW_CLASS,
+                  "data-testid": `security-roles-row-${role.role_id}`,
+                })}
+                ariaLabel={t("security.roles.list")}
+                testId="security-roles-grid"
+                scrollAriaLabel={t("security.common.listScrollLabel", { list: t("security.roles.list") })}
+                scrollTestId="security-roles-scroll-region"
+                tableClassName="w-full"
+                stickyHeader
+                visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+                growToViewport
+                empty={
+                  <EmptyState
+                    title={search ? t("security.roles.noResultsTitle") : t("security.common.empty")}
+                    hint={search ? t("security.roles.noResultsHint") : undefined}
+                    action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined}
+                  />
+                }
+                columns={roleColumns}
+              />
+              <SecurityListPagination
+                list={roleList}
+                ariaLabel={t("security.roles.pagination")}
+                testId="security-roles-pagination"
+                disabled={operationBusy}
+              />
+            </div>
+          </section>
         )}
       </PageBody>
     </>
@@ -878,8 +900,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
 }
 
 /**
- * 一覧の列（既定 20rem）のロールの状態（#2282）。1 つのバッジにまとめる（アーカイブ済み > 組み込み > カスタム）。
- * 権限が無効なことは詳細の `RoleStatusBadges` と注意の Banner で示す。
+ * ロールの種類（1 つのバッジ。アーカイブ済み > 組み込み > カスタム）。一覧の種類の列と、権限管理の一覧で使う。
+ * 権限が無効なことはエディタの `RoleStatusBadges` と注意の Banner で示す。
  */
 export function RoleListStatusBadge({ role }: { role: SecurityRole }) {
   if (role.archived) return <StatusBadge variant="neutral" label={t("security.roles.archived")} />;
@@ -892,6 +914,7 @@ export function RoleListStatusBadge({ role }: { role: SecurityRole }) {
   );
 }
 
+/** エディタの見出しのロールの状態（種類と、アーカイブ済みなら権限が無効なこと）。 */
 export function RoleStatusBadges({ role }: { role: SecurityRole }) {
   return (
     <div className="flex flex-wrap gap-1">
@@ -908,7 +931,7 @@ export function RoleStatusBadges({ role }: { role: SecurityRole }) {
 }
 
 /**
- * 機能権限の件数と権限管理への導線（#800）。詳細の区切り線の下に置き、枠の中に枠を重ねない。
+ * 機能権限の件数と権限管理への導線（#800）。基本情報の欄の下の区切り線の下に置き、枠の中に枠を重ねない。
  * 組み込み・アーカイブ済みのロールには権限を付けられないため、導線を出さない。
  */
 function RolePermissionSummaryRow<R extends SecurityRole>({
@@ -920,7 +943,7 @@ function RolePermissionSummaryRow<R extends SecurityRole>({
 }) {
   return (
     <div
-      className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between"
       data-testid="security-roles-permission-summary"
     >
       <p className="text-sm text-fg">
@@ -940,71 +963,5 @@ function RolePermissionSummaryRow<R extends SecurityRole>({
         </ButtonLink>
       ) : null}
     </div>
-  );
-}
-
-function RoleDetailPanel({
-  role,
-  canManage,
-  actions,
-  extra,
-}: {
-  role: SecurityRole;
-  canManage: boolean;
-  actions: EntityAction[];
-  extra: ReactNode;
-}) {
-  return (
-    // 枠は一覧 + 詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を 1 段減らす。#2282）。
-    <section
-      className="grid min-w-0 content-start gap-4"
-      aria-labelledby="security-roles-detail-heading"
-      data-testid="security-roles-detail"
-    >
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2
-              id="security-roles-detail-heading"
-              className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg"
-            >
-              <ShieldCheck size={20} aria-hidden="true" />
-              <span className="min-w-0 break-words">{roleDisplayName(role)}</span>
-            </h2>
-            <RoleStatusBadges role={role} />
-          </div>
-        </div>
-        {canManage ? (
-          <ObjectActionBar
-            actions={actions}
-            ariaLabel={`${t("security.common.actions")}: ${roleDisplayName(role)}`}
-            testId="security-roles-detail-actions"
-          />
-        ) : null}
-      </div>
-
-      {role.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
-        <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
-      ) : null}
-      {role.archived ? (
-        <Banner severity="warning">{t("security.roles.archivedPermissionNotice")}</Banner>
-      ) : null}
-
-      <dl className="grid gap-3 md:grid-cols-2">
-        <SecurityDetailField label={t("security.roles.code")}>
-          <code className="break-all font-mono text-xs">{role.role_code}</code>
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.common.status")}>
-          <RoleStatusBadges role={role} />
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.common.version")}>
-          {String(role.version)}
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.roles.description")}>
-          {role.description || t("security.common.none")}
-        </SecurityDetailField>
-      </dl>
-      {extra}
-    </section>
   );
 }

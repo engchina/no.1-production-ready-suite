@@ -8,17 +8,10 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   subtitle:
     "ロールごとに、使える画面（機能権限）と利用できる対象を設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   actionsLabel: "権限管理表示切替",
-  workspaceLabel: "ロール別の権限一覧と詳細作業領域",
-  taskPanelLabel: "権限管理タスク",
   listTitle: "ロール一覧",
-  listHint: "ロールを選ぶと、付与している機能権限の件数と利用できる対象を確認できます。",
-  // placeholder は一覧の列（既定 20rem）の検索欄に収める（#1891 / #2282）。
   searchPlaceholder: "ロール・権限・対象で絞り込み",
   pagination: "ロール一覧のページ",
-  noSelectionTitle: "ロールを選択してください",
-  noSelectionHint: "一覧のロールを選ぶと、付与している権限を確認できます。",
-  // 一覧 + 詳細の詳細の列の名前と、URL のロールが見つからないとき（#2282）。
-  detailTitle: "ロールの権限",
+  // URL のロールが見つからないとき。
   notFoundTitle: "ロールが見つかりません",
   notFoundHint: "削除されたか、URL が正しくありません。一覧から選び直してください。",
   noResultsTitle: "条件に一致するロールがありません",
@@ -26,10 +19,6 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   showRole: "{name} を表示",
   columnRole: "ロール",
   status: "状態",
-  roleCode: "ロールコード",
-  roleName: "ロール名",
-  edit: "権限を編集",
-  editActions: "権限編集操作",
   formTitle: "{role} の権限を編集",
   formHint:
     "機能権限と利用できる対象を設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
@@ -37,6 +26,10 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   permissionsHint:
     "メニュー権限は画面表示を許可します。一部の権限は、必要な参照権限を自動的に付与します。",
   permissionCount: "{count} 件",
+  permissionCountOfTotal: "{count} / {total} 件",
+  allTargets: "すべて",
+  builtInReadonly: "組み込みロールの権限は変更できません。",
+  openRoleManagement: "ロール管理で開く",
   allPermissions: "すべての機能権限",
   permissionInherited: "{source}により付与",
   systemAdminNotice: "SYSTEM_ADMIN は現在および将来の全機能権限を自動的に持つ組み込みロールです。",
@@ -55,8 +48,6 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   save: "保存",
   discardChanges: "変更を破棄",
   formActionsLabel: "権限の確定",
-  cancel: "キャンセル",
-  actions: "操作",
   search: "検索",
   empty: "対象データはありません。",
   listScrollLabel: "{list}。必要に応じて縦方向または横方向にスクロールできます。",

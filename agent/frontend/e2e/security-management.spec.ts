@@ -44,7 +44,7 @@ for (const viewport of VIEWPORTS) {
       await context.addCookies([{ name: "pr_csrf", value: CSRF_TOKEN, url: baseURL ?? "http://127.0.0.1:3042" }]);
     });
 
-    test("ユーザー管理とロール管理を開け、ロールの詳細から権限管理へ移れる", async ({ page }) => {
+    test("ユーザー管理とロール管理を開け、ロールのエディタと権限管理の同じロールのエディタを行き来できる", async ({ page }) => {
       await page.goto("/settings/security/users");
       await expect(page.getByRole("heading", { name: "ユーザー管理", level: 1 })).toBeVisible();
       const users = page.getByTestId("security-users-grid");
@@ -54,30 +54,33 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/settings/security/roles");
       await expect(page.getByRole("heading", { name: "ロール管理", level: 1 })).toBeVisible();
-      await page
-        .getByTestId("security-roles-grid")
-        .locator("tbody tr")
-        .filter({ hasText: "Agent 実行担当" })
-        .locator("td")
-        .first()
-        .click();
+      // 行の名前（?role= のリンク）から全幅のエディタを開く（A 型。#4635）。
+      await page.getByTestId("security-roles-grid").getByRole("link", { name: /Agent 実行担当/ }).click();
+      await expect(page).toHaveURL(/\/settings\/security\/roles\?role=role-operator$/);
+      await expect(page.getByTestId("security-roles-editor")).toBeVisible();
       const summary = page.getByTestId("security-roles-permission-summary");
       await expect(summary).toContainText("付与している機能権限: 2 件");
       await expectNoPageOverflow(page);
       await summary.getByTestId("security-roles-open-permissions").click();
 
+      // 権限管理は同じロールの全幅のエディタを開き、ロール管理の同じロールへ戻る導線を持つ（A 型。#4635）。
       await expect(page).toHaveURL(/\/settings\/security\/permissions\?role=role-operator$/);
-      await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Agent 実行担当", level: 1 })).toBeVisible();
+      await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
       await expectNoPageOverflow(page);
+      await page.getByTestId("security-permissions-open-role").click();
+      await expect(page).toHaveURL(/\/settings\/security\/roles\?role=role-operator$/);
+      await expect(page.getByTestId("security-roles-editor")).toBeVisible();
     });
 
     test("権限管理で業務 Agentを保存し、Agent 管理では全件が対象になる。検索・回答プロファイルは出さない", async ({
       page,
       mockApi,
     }) => {
+      // ?role= で開くと、そのロールの全幅のエディタを出す（A 型。#4635）。
       await page.goto("/settings/security/permissions?role=role-operator");
-      await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
-      await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+      await expect(page.getByRole("heading", { name: "Agent 実行担当", level: 1 })).toBeVisible();
+      await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
 
       const agents = page.getByTestId("security-roles-agent-access-list");
       await expect(agents).toHaveAccessibleName("利用できる業務 Agent");
@@ -132,9 +135,10 @@ for (const viewport of VIEWPORTS) {
         status: "enabled",
       }));
 
+      // ?role= で開くと、そのロールの全幅のエディタを出す（A 型。#4635）。
       await page.goto("/settings/security/permissions?role=role-operator");
-      await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
-      await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+      await expect(page.getByRole("heading", { name: "Agent 実行担当", level: 1 })).toBeVisible();
+      await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
       const agents = page.getByTestId("security-roles-agent-access-list");
       await expect(agents.getByRole("option")).toHaveCount(50);
       await expect(agents).toContainText("50 / 180 件、選択 1 件");

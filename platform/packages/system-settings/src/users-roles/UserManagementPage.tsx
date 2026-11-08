@@ -1,6 +1,10 @@
 import {
   compareNames,
   Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
   CopyButton,
   EmptyState,
   ErrorState,
@@ -22,11 +26,13 @@ import {
   useConfirm,
   ProcessingIndicator,
   ObjectActionBar,
+  RowActionMenu,
   FormActionBar,
   cn,
   type EntityAction,
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   RowTitleButton,
 } from "@production-ready/ui";
 import {
@@ -40,15 +46,15 @@ import {
 } from "react";
 import {
   KeyRound,
-  Pencil,
+  LockKeyholeOpen,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
+  ShieldCheck,
   Trash2,
   UserCheck,
   UserRound,
-  Users,
   UserX,
 } from "lucide-react";
 
@@ -59,11 +65,9 @@ import { t } from "./messages";
 import { roleDisplayName } from "./RoleNameBadges";
 import { userDisplayName } from "./userDisplayName";
 import {
+  SECURITY_NEW_ENTITY_ID,
   SecurityDetailField,
-  SecurityDetailFallback,
-  SecurityListDetail,
-  SecurityManagementPanelShell,
-  SecurityPanelHeader,
+  SecurityEditorFallback,
   SecuritySearchField,
   SecurityClearSearchAction,
   SecurityListPagination,
@@ -75,7 +79,8 @@ import {
   unmappedErrorMessage,
   useFocusAfterCommit,
   usePagedSelectionList,
-  useSecurityUrlSelection,
+  useReturnFocusToRow,
+  useSecurityEditorSelection,
   withoutFieldError,
 } from "./shared";
 import {
@@ -89,22 +94,26 @@ import {
 
 export interface UserManagementPageProps {
   api: UserManagementApi;
-  /** ユーザーの作成・編集・無効化などを行えるか（製品の権限判定）。 */
+  /** ユーザーの作成・編集・無効化などを行えるか（製品の権限判定）。false なら同じエディタを読み取り専用で出す。 */
   canManage: boolean;
   /** ログイン中のユーザー。自分自身は削除できない。 */
   currentUserUuid?: string | null;
   /** 製品の API エラーから入力項目のエラーとエラーコードを取り出す。 */
   describeError?: DescribeApiError;
-  /** 一覧 + 詳細（ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（製品ごと。#2282）。 */
-  listDetailStoragePrefix?: string;
 }
 
-/** ユーザー管理（3製品共通。NL2SQL の画面を移設。#206）。 */
-type UserPanelView = "list" | "create" | "edit";
+/** 一覧（null）・新規作成・編集・URL の対象が無い（読み込み中を含む）。 */
+type UserView = "list" | "create" | "edit" | "missing";
 
 interface ResetPasswordError {
   userUuid: string;
   message: string;
+}
+
+/** 作成・リセットで発行した一時パスワード（そのユーザーのエディタの「サインインの状態」に出す）。 */
+interface IssuedPassword {
+  userUuid: string;
+  password: string;
 }
 
 interface UserDraftState {
@@ -146,12 +155,26 @@ function userStatusLabel(user: SecurityUser) {
   return user.status === "ACTIVE" ? t("security.common.active") : t("security.common.disabled");
 }
 
+/** 状態の文字（狭い画面の行の補足・検索に使う）。有効 / 無効と、ロック中・パスワード変更待ち。 */
+function userStatusSummary(user: SecurityUser) {
+  return [
+    userStatusLabel(user),
+    user.locked_until ? t("security.users.locked") : "",
+    user.force_password_change ? t("security.users.passwordChangePending") : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * ユーザー管理（3製品共通。NL2SQL の画面を移設。#206）。全幅の一覧 → 全幅のエディタ（A 型。#4635）。
+ * 開いている対象は URL の `?user=`（`new` は新規作成）が唯一の情報源。
+ */
 export function UserManagementPage({
   api,
   canManage,
   currentUserUuid = null,
   describeError = describeErrorMessageOnly,
-  listDetailStoragePrefix,
 }: UserManagementPageProps) {
   const confirm = useConfirm();
   const [users, setUsers] = useState<SecurityUser[]>([]);
@@ -165,22 +188,25 @@ export function UserManagementPage({
   const [actionError, setActionError] = useState("");
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<UserFieldErrors>({});
-  // 選択中の利用者は URL の `?user=<user_uuid>` が唯一の情報源（#2282）。先頭の行を自動で選ばない。
-  // 一覧から選ぶときは select（1 ペインでは履歴に積む）、操作の結果で選び直すときは replace。
-  const selection = useSecurityUrlSelection("user");
-  const selectedUserId = selection.selectedId;
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<UserPanelView>("list");
+  const selection = useSecurityEditorSelection("user");
+  const target = selection.selectedId;
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<DataTableSort>({ key: "user", direction: "asc" });
   const [draft, setDraft] = useState<UserDraftState>(EMPTY_DRAFT);
   const [baseline, setBaseline] = useState<UserDraftState>(EMPTY_DRAFT);
+  // 今の draft がどの対象のものか（"new" / user_uuid / null）。URL の対象が変わったら入れ直す。
+  const [draftFor, setDraftFor] = useState<string | null>(null);
+  // 最後に開いた対象（一覧へ戻ったときに、その行のページとフォーカスを戻す）。
+  const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
   const [unlockingUserId, setUnlockingUserId] = useState<string | null>(null);
   const [copyPasswordError, setCopyPasswordError] = useState("");
   const [resettingUserId, setResettingUserId] = useState<string | null>(null);
   const [statusChangingUserId, setStatusChangingUserId] = useState<string | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [resetPasswordError, setResetPasswordError] = useState<ResetPasswordError | null>(null);
+  // 発行した一時パスワードは URL と同期するフォームの値（draft）と分けて持つ。URL の切り替えの途中の描画で
+  // draft を入れ直しても消えないようにし、利用者の操作（一覧へ戻る・ほかの対象を開く・新規作成・削除）でだけ消す。
+  const [issuedPassword, setIssuedPassword] = useState<IssuedPassword | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const loadSequence = useRef(0);
   const loginUserIdRef = useRef<HTMLInputElement | null>(null);
@@ -188,6 +214,12 @@ export function UserManagementPage({
   const temporaryPasswordRef = useRef<HTMLInputElement | null>(null);
   const roleGroupRef = useRef<HTMLDivElement | null>(null);
   const { abortAll, run: runScopedRequest } = useRequestScope();
+
+  const creating = target === SECURITY_NEW_ENTITY_ID && canManage;
+  const editingUser =
+    target && !creating ? (users.find((user) => user.user_uuid === target) ?? null) : null;
+  const view: UserView = !target ? "list" : creating ? "create" : editingUser ? "edit" : "missing";
+  const draftKey = view === "create" ? SECURITY_NEW_ENTITY_ID : view === "edit" ? (editingUser?.user_uuid ?? null) : null;
 
   const roleById = useMemo(
     () => new Map(roles.map((role) => [role.role_id, role])),
@@ -197,15 +229,55 @@ export function UserManagementPage({
     () => roles.find((role) => role.role_code === SYSTEM_ADMIN_ROLE_CODE)?.role_id ?? null,
     [roles]
   );
+  const isSystemAdminRole = (role: SecurityRole) =>
+    role.role_code === SYSTEM_ADMIN_ROLE_CODE || role.role_id === systemAdminRoleId;
+  // SYSTEM_ADMIN は構成管理者（.env の system_admin）だけが持ち、DB のユーザーには割り当てない。
+  // 新規作成・編集のどちらでも選択肢に出さない（#1792）。
+  const roleOptions = roles.filter((role) => !isSystemAdminRole(role));
+  const systemAdminRoleHidden = roleOptions.length < roles.length;
+  const selectKnownRoleId = (roleIds: string[]) => {
+    // 選択肢に無い SYSTEM_ADMIN は選ばない（「ほかに割り当てられているロール」に出る）。
+    const availableRoleIds = new Set(roleOptions.map((role) => role.role_id));
+    return roleIds.find((roleId) => availableRoleIds.has(roleId)) ?? "";
+  };
 
-  const editingUser = users.find((user) => user.user_uuid === editingId) ?? null;
+  const draftFromUser = (user: SecurityUser): UserDraftState => ({
+    loginUserId: user.login_user_id,
+    displayName: user.display_name,
+    selectedRoleId: selectKnownRoleId(user.role_ids),
+    temporaryPassword: "",
+  });
+
+  const resetFormMessages = () => {
+    setFormError("");
+    setFieldErrors({});
+    setCopyPasswordError("");
+    setResetPasswordError(null);
+  };
+
+  // URL の対象（新規作成・別のユーザー・一覧）が変わったら、フォームをその対象の値で入れ直す（render 中に同期する）。
+  if (draftKey !== draftFor) {
+    const nextDraft = editingUser && view === "edit" ? draftFromUser(editingUser) : EMPTY_DRAFT;
+    setDraftFor(draftKey);
+    setDraft(nextDraft);
+    setBaseline(nextDraft);
+    resetFormMessages();
+  }
+  if (target && target !== SECURITY_NEW_ENTITY_ID && target !== lastOpenedId) {
+    setLastOpenedId(target);
+  }
+
+  const issuedTemporaryPassword =
+    editingUser && issuedPassword?.userUuid === editingUser.user_uuid ? issuedPassword.password : "";
   // 一時パスワードの欄の操作（コピー・再発行）の失敗。欄の下に出し、欄の aria-describedby で結び付ける。
   const temporaryPasswordActionError =
     copyPasswordError ||
     (resetPasswordError?.userUuid === editingUser?.user_uuid ? (resetPasswordError?.message ?? "") : "");
   // 一時パスワードの欄（md）とコピーの操作の行の幅（#1891）。
   const temporaryPasswordRowWidth = fieldActionRowWidthClasses("md");
-  const userFormReadOnly = activeView === "edit" && editingUser?.status !== "ACTIVE";
+  // 管理の権限が無い・無効なユーザーは、同じエディタを読み取り専用で出す。
+  const disabledUser = view === "edit" && editingUser?.status !== "ACTIVE";
+  const userFormReadOnly = !canManage || disabledUser;
   const canSubmitUserForm = !userFormReadOnly;
   const accountActionBusy =
     resettingUserId !== null || statusChangingUserId !== null || deletingUserId !== null || unlockingUserId !== null;
@@ -213,10 +285,10 @@ export function UserManagementPage({
   // 保存を試みた回数（保存の失敗の Banner を、同じ文言の失敗でも入れ直す。#585）。
   const [submitAttempt, setSubmitAttempt] = useState(0);
   const inputReadOnly = userFormReadOnly || operationBusy;
-  const isDirty = activeView !== "list" && (
+  const isDirty = (view === "create" || view === "edit") && (
     draft.loginUserId !== baseline.loginUserId || draft.displayName !== baseline.displayName ||
     draft.selectedRoleId !== baseline.selectedRoleId ||
-    (activeView === "create" && draft.temporaryPassword !== baseline.temporaryPassword)
+    (view === "create" && draft.temporaryPassword !== baseline.temporaryPassword)
   );
   const confirmLeave = async () => !operationBusy && (!isDirty || await confirm({
     title: t("security.common.discardTitle"),
@@ -226,6 +298,10 @@ export function UserManagementPage({
     dismissOnOverlay: false,
   }));
   useUnsavedChangesGuard(isDirty || busy || accountActionBusy, confirmLeave);
+  // 破棄して一覧へ戻るとき、離脱ガードが外れた（未保存でなくなった）commit の後で履歴を戻す
+  // （先に戻ると、ブラウザの戻ると同じ確認がもう一度出る）。
+  const scheduleLeave = useFocusAfterCommit(!isDirty);
+
   const assignedRoles = useCallback((user: SecurityUser): AssignedRole[] => {
     if (user.assigned_roles?.length) return user.assigned_roles;
     return user.role_ids.map((id) => {
@@ -254,17 +330,6 @@ export function UserManagementPage({
     const names = assignedRoles(user).map(assignedRoleLabel);
     return names.length > 0 ? names.join(", ") : t("security.common.none");
   }, [assignedRoles]);
-  const isSystemAdminRole = (role: SecurityRole) =>
-    role.role_code === SYSTEM_ADMIN_ROLE_CODE || role.role_id === systemAdminRoleId;
-  // SYSTEM_ADMIN は構成管理者（.env の system_admin）だけが持ち、DB のユーザーには割り当てない。
-  // 新規作成・編集のどちらでも選択肢に出さない（#1792）。
-  const roleOptions = roles.filter((role) => !isSystemAdminRole(role));
-  const systemAdminRoleHidden = roleOptions.length < roles.length;
-  const selectKnownRoleId = (roleIds: string[]) => {
-    // 選択肢に無い SYSTEM_ADMIN は選ばない（「ほかに割り当てられているロール」に出る）。
-    const availableRoleIds = new Set(roleOptions.map((role) => role.role_id));
-    return roleIds.find((roleId) => availableRoleIds.has(roleId)) ?? "";
-  };
 
   const filteredUsers = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -274,7 +339,7 @@ export function UserManagementPage({
         return (
           user.display_name.toLowerCase().includes(q) ||
           user.login_user_id.toLowerCase().includes(q) ||
-          user.status.toLowerCase().includes(q) ||
+          userStatusSummary(user).toLowerCase().includes(q) ||
           roleSummary(user).toLowerCase().includes(q)
         );
       })
@@ -287,17 +352,18 @@ export function UserManagementPage({
   }, [roleSummary, search, sort, users]);
 
   // 一覧は 25 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
+  // エディタから戻ったときは、開いていた行のあるページを出す。
   const userList = usePagedSelectionList({
     items: filteredUsers,
     getKey: (user) => user.user_uuid,
-    selectedId: selectedUserId,
-    active: activeView === "list",
+    selectedId: lastOpenedId,
+    active: view === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
     pagingKey: "users",
   });
   const userListCount = securityListCount(users.length, filteredUsers.length, search);
-  const selectedUser = users.find((user) => user.user_uuid === selectedUserId) ?? null;
+  useReturnFocusToRow(view === "list", lastOpenedId);
 
   const load = async (announce = false) => {
     if (busy || accountActionBusy) return;
@@ -386,48 +452,37 @@ export function UserManagementPage({
     });
   };
 
-  const startCreate = () => {
-    setActiveView("create");
-    setEditingId(null);
-    setDraft(EMPTY_DRAFT);
-    setBaseline(EMPTY_DRAFT);
-    setFormError("");
-    setFieldErrors({});
+  const openUser = (user: SecurityUser) => {
+    if (operationBusy) return;
     setActionError("");
-    setCopyPasswordError("");
-    setResetPasswordError(null);
+    setIssuedPassword(null);
+    selection.open(user.user_uuid);
   };
 
-  const startEdit = (user: SecurityUser, temporaryPassword = "") => {
-    selection.replace(user.user_uuid);
-    setEditingId(user.user_uuid);
-    setActiveView("edit");
-    const nextDraft = {
-      loginUserId: user.login_user_id,
-      displayName: user.display_name,
-      selectedRoleId: selectKnownRoleId(user.role_ids),
-      temporaryPassword,
-    };
-    setDraft(nextDraft);
-    setBaseline(nextDraft);
-    setFormError("");
-    setFieldErrors({});
+  const startCreate = () => {
     setActionError("");
+    setIssuedPassword(null);
+    selection.open(SECURITY_NEW_ENTITY_ID);
+  };
+
+  /** 一時パスワード（作成・リセットの結果）を持たせて、そのユーザーのエディタを開く。 */
+  const showUserWithPassword = (user: SecurityUser, temporaryPassword: string, how: "open" | "replace") => {
+    setIssuedPassword({ userUuid: user.user_uuid, password: temporaryPassword });
     setCopyPasswordError("");
-    setResetPasswordError(null);
+    if (how === "open") selection.open(user.user_uuid);
+    else selection.replace(user.user_uuid);
   };
 
   const returnToList = async () => {
     if (!(await confirmLeave())) return;
-    setDraft(EMPTY_DRAFT);
-    setBaseline(EMPTY_DRAFT);
-    setActiveView("list");
-    setEditingId(null);
-    setFormError("");
-    setFieldErrors({});
     setActionError("");
-    setCopyPasswordError("");
-    setResetPasswordError(null);
+    setIssuedPassword(null);
+    if (isDirty) {
+      setDraft(baseline);
+      scheduleLeave(selection.close);
+      return;
+    }
+    selection.close();
   };
 
   // 変更を破棄: 入力を開いたときの値に戻す（#1786。変更が無いときは disabled）。
@@ -446,7 +501,7 @@ export function UserManagementPage({
     setActionError("");
     // 未入力は送信前に欄の下へ出し、最初のエラーの欄へフォーカスする（noValidate。#531）。
     const requiredErrors: UserFieldErrors = {};
-    if (activeView === "create" && !draft.loginUserId.trim()) {
+    if (view === "create" && !draft.loginUserId.trim()) {
       requiredErrors.loginUserId = t("security.users.loginUserIdRequired");
     }
     if (!draft.displayName.trim()) {
@@ -463,7 +518,7 @@ export function UserManagementPage({
     const submittedRoleId = draft.selectedRoleId;
     setBusy(true);
     try {
-      if (activeView === "edit") {
+      if (view === "edit") {
         if (!editingUser) return;
         // 選び直したロールだけを置き換え、選択欄に出ないほかのロールは残す（#1050）。
         const updated = await api.updateUser({
@@ -495,7 +550,8 @@ export function UserManagementPage({
           temporary_password: draft.temporaryPassword || undefined,
         });
         setUsers((rows) => [...rows, created.user]);
-        startEdit(created.user, created.temporary_password);
+        // 作ったユーザーのエディタへ置き換え、発行した一時パスワードを「サインインの状態」に出す。
+        showUserWithPassword(created.user, created.temporary_password, "replace");
         toast.success(t("security.common.saved"));
       }
     } catch (cause) {
@@ -568,23 +624,21 @@ export function UserManagementPage({
     try {
       const result = await api.resetPassword(user.user_uuid);
       setUsers((rows) => rows.map((row) => (row.user_uuid === result.user.user_uuid ? result.user : row)));
-      if (activeView === "edit" && editingId === result.user.user_uuid) {
-        setDraft((current) => ({
-          ...current,
-          temporaryPassword: result.temporary_password,
-        }));
+      if (view === "edit" && editingUser?.user_uuid === result.user.user_uuid) {
+        setIssuedPassword({ userUuid: result.user.user_uuid, password: result.temporary_password });
       } else {
-        startEdit(result.user, result.temporary_password);
+        // 一覧の行からリセットしたときは、そのユーザーのエディタを開いて一時パスワードを出す。
+        showUserWithPassword(result.user, result.temporary_password, "open");
       }
       toast.success(t("security.users.oneTimePassword.resetSuccess"));
     } catch (cause) {
-      setResetPasswordError({
-        userUuid: user.user_uuid,
-        message:
-          cause instanceof Error && cause.message.trim()
-            ? cause.message
-            : t("security.users.oneTimePassword.resetError"),
-      });
+      const message =
+        cause instanceof Error && cause.message.trim()
+          ? cause.message
+          : t("security.users.oneTimePassword.resetError");
+      setResetPasswordError({ userUuid: user.user_uuid, message });
+      // 一覧の行からの失敗は一覧の上に出す（エディタでは「サインインの状態」の欄の下）。
+      if (view === "list") setActionError(message);
     } finally {
       setResettingUserId(null);
     }
@@ -630,14 +684,10 @@ export function UserManagementPage({
     try {
       await api.deleteUser(user);
       setUsers((rows) => rows.filter((row) => row.user_uuid !== user.user_uuid));
-      // 削除した対象の選択を外す（ほかの行へ置き換えない。page-archetypes.md §1 B。#2282）。
-      selection.replace(null);
-      setEditingId(null);
-      setActiveView("list");
-      setFormError("");
-      setFieldErrors({});
-      setCopyPasswordError("");
-      setResetPasswordError(null);
+      // 削除した対象のエディタは閉じて一覧へ戻す（ほかの対象へ置き換えない）。
+      if (target === user.user_uuid) selection.replace(null);
+      setLastOpenedId(null);
+      setIssuedPassword(null);
       toast.success(t("security.users.deleteSuccess", { name: userDisplayName(user) }));
     } catch (cause) {
       setActionError(
@@ -650,34 +700,26 @@ export function UserManagementPage({
     }
   };
 
-  const resetPasswordAction = (user: SecurityUser): EntityAction => ({
-    id: "reset-password",
-    label: t("security.users.resetPassword"),
-    icon: KeyRound,
-    onSelect: () => handleResetPassword(user),
-    visible: user.status === "ACTIVE" && !user.is_bootstrap_admin,
-    loading: resettingUserId === user.user_uuid,
-    // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
-    disabled: operationBusy && !(resettingUserId === user.user_uuid),
-  });
-
-  const userActions = (user: SecurityUser): EntityAction[] =>
+  /** 対象への操作（行のメニューとエディタの ObjectActionBar で同じ定義。page-archetypes.md §0-6）。 */
+  const accountActions = (user: SecurityUser): EntityAction[] =>
     canManage
       ? [
           {
-            id: "edit",
-            label: t("security.common.edit"),
-            icon: Pencil,
-            disabled: operationBusy,
-            onSelect: () => { if (!operationBusy) startEdit(user); },
+            id: "reset-password",
+            label: t("security.users.resetPassword"),
+            icon: KeyRound,
+            onSelect: () => handleResetPassword(user),
+            visible: user.status === "ACTIVE" && !user.is_bootstrap_admin,
+            loading: resettingUserId === user.user_uuid,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(resettingUserId === user.user_uuid),
           },
-          resetPasswordAction(user),
           {
             id: "unlock",
             label: t("security.users.unlock"),
+            icon: LockKeyholeOpen,
             visible: Boolean(user.locked_until),
             loading: unlockingUserId === user.user_uuid,
-            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
             disabled: operationBusy && !(unlockingUserId === user.user_uuid),
             onSelect: () => handleUnlock(user),
           },
@@ -687,7 +729,6 @@ export function UserManagementPage({
             icon: user.status === "ACTIVE" ? UserX : UserCheck,
             tone: user.status === "ACTIVE" ? "danger" : "default",
             loading: statusChangingUserId === user.user_uuid,
-            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
             disabled: operationBusy && !(statusChangingUserId === user.user_uuid),
             onSelect: () => handleToggleStatus(user),
           },
@@ -698,251 +739,160 @@ export function UserManagementPage({
             tone: "danger",
             visible: canDeleteUser(user),
             loading: deletingUserId === user.user_uuid,
-            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
             disabled: operationBusy && !(deletingUserId === user.user_uuid),
             onSelect: () => handleDelete(user),
           },
         ]
       : [];
 
-  /**
-   * 編集フォームの対象への操作（パスワードのリセット・有効化・無効化・削除）。フォームのパネルの見出しの右の
-   * ObjectActionBar 1 か所に置く（#618）。保存はページの右上（PageHeader）の primary。
-   */
-  const editObjectActions = (): EntityAction[] => {
-    if (!editingUser || !canManage) return [];
-    const ids = new Set(["reset-password", "enable", "disable", "delete"]);
-    return userActions(editingUser).filter((action) => ids.has(action.id));
-  };
-
   const selectRole = (roleId: string) => {
     if (userFormReadOnly) return;
     updateDraftField("selectedRoleId", roleId);
   };
 
-  // 一覧の列は狭い（既定 20rem）ので、名前と補足 1 行（割り当てロール）と状態だけを出す（#2282）。
-  // ログイン ID は詳細の「ログインユーザーID」の項目に出す（#1696）。
+  // 全幅の表（#4635）。md 未満は先頭の列だけを残し、割り当てロールと状態は名前の下の補足 1 行に畳む（横にスクロールさせない）。
   const userColumns: Array<DataTableColumn<SecurityUser>> = [
     {
       key: "user",
       header: t("security.users.column.user"),
       sortable: true,
+      rowHeader: true,
       className: "align-top",
       render: (user) => (
         <RowTitleButton
           title={userDisplayName(user)}
-          subtitle={<span className="line-clamp-1 break-all">{roleSummary(user)}</span>}
-          current={selectedUserId === user.user_uuid}
+          subtitle={
+            <>
+              {/* ログイン ID は ID の書体で 2 行目に出す（一覧で見分ける。#4635）。 */}
+              <code className="block break-all font-mono">{user.login_user_id}</code>
+              <span className="block md:hidden" data-testid="security-users-row-summary">
+                {`${roleSummary(user)} · ${userStatusSummary(user)}`}
+              </span>
+            </>
+          }
+          href={selection.hrefFor(user.user_uuid)}
+          data-security-row-id={user.user_uuid}
           aria-label={t("security.users.showUser", { name: userDisplayName(user) })}
           onClick={(event) => {
             event.stopPropagation();
-            if (operationBusy) return;
-            selection.select(user.user_uuid);
+            openUser(user);
           }}
         />
       ),
     },
     {
+      key: "roles",
+      header: t("security.users.column.roles"),
+      sortable: true,
+      headerClassName: "hidden md:table-cell",
+      className: "hidden align-top md:table-cell",
+      render: (user) => <span className="break-words text-sm">{roleSummary(user)}</span>,
+    },
+    {
       key: "status",
       header: t("security.common.status"),
       sortable: true,
-      headerClassName: "w-[8rem]",
-      className: "align-top",
+      headerClassName: "hidden w-[16rem] md:table-cell",
+      className: "hidden align-top md:table-cell",
       render: (user) => <UserStatusBadges user={user} />,
     },
+    // 行のメニューは実際の操作だけ（開くのは行と名前のリンク。page-archetypes.md §0-7）。管理の権限が無ければ列を出さない。
+    ...(canManage
+      ? [
+          {
+            key: "actions",
+            header: <span className="sr-only">{t("security.common.actions")}</span>,
+            align: "right",
+            headerClassName: "w-[3.5rem]",
+            className: "align-top",
+            render: (user: SecurityUser) => (
+              <RowActionMenu
+                actions={accountActions(user)}
+                ariaLabel={`${t("security.common.actions")}: ${userDisplayName(user)}`}
+                testId={`security-users-row-actions-${user.user_uuid}`}
+              />
+            ),
+          } satisfies DataTableColumn<SecurityUser>,
+        ]
+      : []),
   ];
 
   const initialLoadFailed = Boolean(loadError) && users.length === 0 && roles.length === 0;
   // 編集中のユーザーの、選択欄で選ばれていないほかのロール（保存しても変わらない。#1050）。
   const otherAssignedRoles =
-    activeView === "edit" && editingUser
+    view === "edit" && editingUser
       ? assignedRoles(editingUser).filter(
           (role) => role.role_id !== baseline.selectedRoleId && role.role_id !== draft.selectedRoleId,
         )
       : [];
-
-  return (
+  const back = { label: t("security.common.backToList"), onClick: () => void returnToList(), disabled: operationBusy, testId: "security-users-back" };
+  const errorBanners = (
     <>
-      <PageHeader wide
-        title={t("nav.securityUsers")}
-        subtitle={t("security.users.subtitle")}
-        actions={
-          activeView === "list"
-            ? [
-                ...(canManage && !initialLoadFailed
-                  ? [
-                      {
-                        id: "create-user",
-                        kind: "primary" as const,
-                        label: t("security.common.create"),
-                        icon: Plus,
-                        disabled: operationBusy,
-                        onClick: startCreate,
-                      },
-                    ]
-                  : []),
-                {
-                  id: "refresh",
-                  kind: "utility",
-                  label: t("common.action.refresh"),
-                  icon: RefreshCw,
-                  // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
-                  disabled: operationBusy && !(loading && refreshRequested),
-                  onClick: () => load(true),
-                  loading: loading && refreshRequested,
-                },
-              ]
-            : []
-        }
-        // 詳細・作成・編集の画面の「一覧へ戻る」は左上（#618）。確定（作成・保存）はフォームの末尾の FormActionBar（#1786）。
-        // 一覧 + 詳細の 1 ペイン（xl 未満）で詳細を出している間も、左上の「一覧へ戻る」で一覧へ戻る（#2282）。
-        back={
-          activeView !== "list"
-            ? { label: t("security.common.backToList"), onClick: returnToList, disabled: operationBusy, testId: "security-users-back" }
-            : !selection.split && selectedUserId
-              ? { label: t("security.common.backToList"), onClick: selection.clear, testId: "security-users-back" }
-              : undefined
-        }
-        actionsLabel={t("security.users.actionsLabel")}
-        actionsTestId="security-users-actions"
-      />
-      <PageBody wide className="grid gap-4">
-        {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
-        {activeView === "list" && actionError ? (
-          <Banner severity="danger">{actionError}</Banner>
-        ) : null}
+      {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
+      {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
+    </>
+  );
 
-        {initialLoadFailed ? (
-          <ErrorState message={loadError} onRetry={() => void load()} />
-        ) : activeView === "list" ? (
-          // 一覧は狭い列・詳細は広い列（xl 未満は 1 ペイン）。選択は URL の ?user=（#2282）。
-          <SecurityListDetail
-            id="security-users"
-            storagePrefix={listDetailStoragePrefix}
-            icon={Users}
-            headingId="security-users-list-heading"
-            listLabel={t("security.users.list")}
-            detailLabel={t("security.users.detail")}
-            toolbar={
-              // 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
-              // 検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。
-              <ListToolbar
-                testId="security-users-toolbar"
-                search={
-                  <SecuritySearchField
-                    label={t("security.common.search")}
-                    placeholder={t("security.users.searchPlaceholder")}
-                    value={search}
-                    testId="security-users-search"
-                    disabled={operationBusy}
-                    resultCountLabel={listCountText(userListCount)}
-                    onChange={setSearch}
-                  />
-                }
-                count={{ ...userListCount, live: false, testId: "security-users-count" }}
-              />
-            }
-            loadingIndicator={
-              loading ? (
-                <ProcessingIndicator
-                  active
-                  label={t("security.users.loading")}
-                  operationKey="security-users-load"
-                  placement="panel"
-                  testId="security-users-loading"
-                  activityIcon={refreshRequested ? "none" : "spinner"}
+  if (view === "missing") {
+    return (
+      <>
+        <PageHeader wide title={t("nav.securityUsers")} back={back} />
+        <PageBody wide className="grid gap-4">
+          {initialLoadFailed ? (
+            <ErrorState message={loadError} onRetry={() => void load()} />
+          ) : (
+            <SecurityEditorFallback
+              loading={loading}
+              loadingLabel={t("security.users.loading")}
+              title={t("security.users.notFoundTitle")}
+              hint={t("security.users.notFoundHint")}
+              onBack={() => selection.close()}
+              testId="security-users-detail-not-found"
+            />
+          )}
+        </PageBody>
+      </>
+    );
+  }
+
+  if (view === "create" || view === "edit") {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={view === "edit" && editingUser ? userDisplayName(editingUser) : t("security.users.form.create")}
+          subtitle={view === "create" ? t("security.users.formHint") : undefined}
+          status={view === "edit" && editingUser ? <UserStatusBadges user={editingUser} /> : undefined}
+          // 一覧へ戻るは左上（#618）。確定（作成・保存）はフォームの末尾の FormActionBar（#1786）。
+          back={back}
+        />
+        <PageBody wide className="grid grid-cols-1 gap-5">
+          {errorBanners}
+          {canManage && disabledUser ? (
+            <Banner severity="info">{t("security.users.disabledReadonly")}</Banner>
+          ) : null}
+          {editingUser && assignedRoles(editingUser).some((role) => role.archived) ? (
+            <Banner severity="warning">{t("security.users.archivedRoleNotice")}</Banner>
+          ) : null}
+          <Card data-testid="security-users-editor">
+            <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+              <CardTitle id="security-users-form-heading" className="flex items-center gap-2">
+                <UserRound size={20} aria-hidden="true" />
+                {t("security.users.section.basic")}
+              </CardTitle>
+              {view === "edit" && editingUser && canManage ? (
+                // 対象への操作は最初のカードの見出しの右の 1 か所（#618）。
+                <ObjectActionBar
+                  actions={accountActions(editingUser)}
+                  ariaLabel={t("security.users.editActions")}
+                  testId="security-users-object-actions"
                 />
-              ) : null
-            }
-            list={
-              <DataTable
-                dense
-                loading={loading}
-                rows={userList.pageItems}
-                sort={sort}
-                onSortChange={(next) => { if (!operationBusy) setSort(next); }}
-                selectedRowKey={selectedUserId}
-                onRowClick={(user) => {
-                  if (operationBusy) return;
-                  selection.select(user.user_uuid);
-                }}
-                getRowKey={(user) => user.user_uuid}
-                rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: userDisplayName(user) }) })}
-                ariaLabel={t("security.users.list")}
-                testId="security-users-grid"
-                scrollAriaLabel={t("security.common.listScrollLabel", {
-                  list: t("security.users.list"),
-                })}
-                scrollTestId="security-users-scroll-region"
-                // 一覧の列（sticky・画面の高さまで）の中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
-                className="min-h-0 rounded-none border-0"
-                tableClassName="w-full table-fixed"
-                stickyHeader
-                empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined} />}
-                columns={userColumns}
-              />
-            }
-            footer={
-              <SecurityListPagination
-                list={userList}
-                ariaLabel={t("security.users.pagination")}
-                testId="security-users-pagination"
-                disabled={operationBusy}
-              />
-            }
-            pageItems={userList.pageItems}
-            getKey={(user) => user.user_uuid}
-            selectedId={selectedUserId}
-            onSelect={selection.replace}
-            disabled={operationBusy}
-            emptyTitle={t("security.users.noSelectionTitle")}
-            emptyHint={t("security.users.noSelectionHint")}
-            detail={
-              selectedUser ? (
-                <UserDetailPanel
-                  user={selectedUser}
-                  canManage={canManage}
-                  assignedRoles={assignedRoles(selectedUser)}
-                  actions={userActions(selectedUser)}
-                  resetError={
-                    resetPasswordError?.userUuid === selectedUser.user_uuid ? resetPasswordError.message : ""
-                  }
-                />
-              ) : (
-                <SecurityDetailFallback
-                  loading={loading}
-                  title={t("security.users.notFoundTitle")}
-                  hint={t("security.users.notFoundHint")}
-                  testId="security-users-detail-not-found"
-                />
-              )
-            }
-          />
-        ) : (
-          <>
-            <SecurityManagementPanelShell
-              id={`security-users-panel-${activeView}`}
-              idPrefix="security-users"
-              ariaLabel={t("security.users.taskPanelLabel")}
-            >
-              <SecurityPanelHeader
-                icon={activeView === "create" ? Plus : Pencil}
-                title={activeView === "edit" ? t("security.users.form.edit") : t("security.users.form.create")}
-                description={t("security.users.formHint")}
-                headingId="security-users-form-heading"
-                action={
-                  activeView === "edit" ? (
-                    <ObjectActionBar
-                      actions={editObjectActions()}
-                      ariaLabel={t("security.users.editActions")}
-                      testId="security-users-object-actions"
-                    />
-                  ) : undefined
-                }
-              />
+              ) : null}
+            </CardHeader>
+            <CardContent>
               <form
                 ref={formRef}
-                className="grid gap-4"
+                className="grid gap-6"
                 onSubmit={handleSubmit}
                 aria-labelledby="security-users-form-heading"
                 noValidate
@@ -953,10 +903,10 @@ export function UserManagementPage({
                     ref={loginUserIdRef}
                     id="security-user-login-user-id"
                     label={t("security.users.loginUserId")}
-                    required
+                    required={view === "create"}
                     maxLength={64}
                     width="md"
-                    disabled={activeView === "edit" || operationBusy}
+                    disabled={view === "edit" || inputReadOnly}
                     error={fieldErrors.loginUserId}
                     autoComplete="off"
                     value={draft.loginUserId}
@@ -966,87 +916,32 @@ export function UserManagementPage({
                     ref={displayNameRef}
                     id="security-user-display-name"
                     label={t("security.users.displayName")}
-                    required
+                    required={!userFormReadOnly}
                     width="md"
                     disabled={inputReadOnly}
                     error={fieldErrors.displayName}
                     value={draft.displayName}
                     onValueChange={(value) => updateDraftField("displayName", value)}
                   />
-                    {/* 一時パスワード。作成では入力、編集では発行した値（読み取り専用）とコピーの操作の行。
-                        エラーは操作の下端がずれないよう footer に出す（#613 / #631）。欄は md の段で、
-                        コピーの操作は欄のすぐ右（#1891）。 */}
-                    <FieldActionRow
-                      className={temporaryPasswordRowWidth.row}
-                      fit={temporaryPasswordRowWidth.fit}
-                      actions={
-                        activeView === "edit" ? (
-                          <CopyButton
-                            text={draft.temporaryPassword}
-                            label={t("security.users.oneTimePassword.copy")}
-                            copiedMessage={t("common.action.copied")}
-                            failedMessage={t("security.users.oneTimePassword.copyError")}
-                            disabled={userFormReadOnly || !draft.temporaryPassword}
-                            onCopied={() => setCopyPasswordError("")}
-                            onCopyError={setCopyPasswordError}
-                            testId="security-user-temporary-password-copy"
-                          />
-                        ) : null
-                      }
-                      footer={
-                        fieldErrors.temporaryPassword || activeView === "edit" ? (
-                        <div className={cn("space-y-1.5", temporaryPasswordRowWidth.footer)}>
-                          <FieldError
-                            id="security-user-temporary-password-error"
-                            message={fieldErrors.temporaryPassword}
-                          />
-                          {activeView === "edit" ? (
-                            <div
-                              id="security-user-temporary-password-action-error"
-                              data-testid="security-user-temporary-password-error"
-                            >
-                              <FormStatus tone="danger" message={temporaryPasswordActionError} />
-                            </div>
-                          ) : null}
-                        </div>
-                        ) : null
-                      }
-                    >
-                      <TextField
-                        ref={temporaryPasswordRef}
-                        id="security-user-temporary-password"
-                        label={t(
-                          activeView === "create"
-                            ? "security.users.tempPassword"
-                            : "security.users.oneTimePassword.valueLabel"
-                        )}
-                        type={activeView === "create" ? "password" : "text"}
-                        width="md"
-                        readOnly={activeView === "edit"}
-                        disabled={inputReadOnly}
-                        aria-invalid={Boolean(fieldErrors.temporaryPassword)}
-                        aria-describedby={
-                          fieldErrors.temporaryPassword
-                            ? "security-user-temporary-password-error"
-                            : activeView === "edit" && temporaryPasswordActionError
-                              ? "security-user-temporary-password-action-error"
-                              : undefined
-                        }
-                        inputClassName={cn(fieldErrors.temporaryPassword && "border-danger-fg")}
-                        autoComplete={activeView === "create" ? "new-password" : "off"}
-                        value={draft.temporaryPassword}
-                        onValueChange={(value) => {
-                          if (activeView === "create") {
-                            updateDraftField("temporaryPassword", value);
-                          }
-                        }}
-                        data-testid="security-user-temporary-password"
-                      />
-                    </FieldActionRow>
+                  {view === "create" ? (
+                    <TextField
+                      ref={temporaryPasswordRef}
+                      id="security-user-temporary-password"
+                      label={t("security.users.tempPassword")}
+                      type="password"
+                      width="md"
+                      disabled={inputReadOnly}
+                      error={fieldErrors.temporaryPassword}
+                      autoComplete="new-password"
+                      value={draft.temporaryPassword}
+                      onValueChange={(value) => updateDraftField("temporaryPassword", value)}
+                      data-testid="security-user-temporary-password"
+                    />
+                  ) : null}
                 </FormGrid>
-                    <fieldset className="grid gap-2" disabled={inputReadOnly}>
+                <fieldset className="grid gap-2 border-t border-border pt-5" disabled={inputReadOnly}>
                   {/* 必須は下の radiogroup の aria-required で伝えるので、legend のタグは読み上げない。 */}
-                  <FieldLegend id="security-users-role-legend" required requiredAnnouncedByControl>
+                  <FieldLegend id="security-users-role-legend" required={!userFormReadOnly} requiredAnnouncedByControl>
                     {t("security.users.roles")}
                   </FieldLegend>
                   {roleOptions.length === 0 ? (
@@ -1057,7 +952,7 @@ export function UserManagementPage({
                       className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
                       role="radiogroup"
                       aria-labelledby="security-users-role-legend"
-                      aria-required="true"
+                      aria-required={userFormReadOnly ? undefined : "true"}
                       aria-invalid={fieldErrors.selectedRoleId ? "true" : undefined}
                       aria-describedby={
                         [
@@ -1076,7 +971,7 @@ export function UserManagementPage({
                             className={cn(
                               "flex min-h-11 items-start gap-2 rounded-md border p-2.5 text-sm transition-colors",
                               disabled
-                                ? "cursor-not-allowed bg-surface-hover text-fg-muted"
+                                ? cn("cursor-not-allowed bg-surface-hover text-fg-muted", selected && "border-accent-emphasis")
                                 : selected
                                   ? "cursor-pointer border-accent-emphasis bg-info-subtle"
                                   : "cursor-pointer border-border hover:bg-surface-hover"
@@ -1117,10 +1012,10 @@ export function UserManagementPage({
                       })}
                     </p>
                   ) : null}
-                    </fieldset>
+                </fieldset>
                 {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
                 <SaveErrorBanner
-                  message={formError || (activeView === "edit" ? actionError : "")}
+                  message={formError}
                   attemptKey={submitAttempt}
                   testId="security-users-save-error"
                 />
@@ -1131,9 +1026,9 @@ export function UserManagementPage({
                     testId="security-users-form-actions"
                     primaryActions={[
                       {
-                        id: activeView === "edit" ? "save" : "create",
-                        label: activeView === "edit" ? t("security.common.save") : t("security.common.submitCreate"),
-                        icon: activeView === "edit" ? Save : Plus,
+                        id: view === "edit" ? "save" : "create",
+                        label: view === "edit" ? t("security.common.save") : t("security.common.submitCreate"),
+                        icon: view === "edit" ? Save : Plus,
                         type: "submit",
                         loading: busy,
                         // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
@@ -1154,14 +1049,180 @@ export function UserManagementPage({
                   />
                 ) : null}
               </form>
-            </SecurityManagementPanelShell>
-          </>
+            </CardContent>
+          </Card>
+
+          {view === "edit" && editingUser ? (
+            <Card data-testid="security-users-sign-in">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldCheck size={20} aria-hidden="true" />
+                  {t("security.users.section.signIn")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <dl className="grid gap-3 md:grid-cols-3">
+                  <SecurityDetailField label={t("security.common.status")}>
+                    {userStatusLabel(editingUser)}
+                  </SecurityDetailField>
+                  <SecurityDetailField label={t("security.users.lock")}>
+                    {editingUser.locked_until ? t("security.users.locked") : t("security.common.none")}
+                  </SecurityDetailField>
+                  <SecurityDetailField label={t("security.users.forceChange")}>
+                    {editingUser.force_password_change ? t("security.common.yes") : t("security.common.no")}
+                  </SecurityDetailField>
+                </dl>
+                {issuedTemporaryPassword || temporaryPasswordActionError ? (
+                  // 発行した一時パスワード（作成・リセットの直後だけ）とコピーの操作の行。
+                  // エラーは操作の下端がずれないよう footer に出す（#613 / #631）。
+                  <FieldActionRow
+                    className={temporaryPasswordRowWidth.row}
+                    fit={temporaryPasswordRowWidth.fit}
+                    actions={
+                      <CopyButton
+                        text={issuedTemporaryPassword}
+                        label={t("security.users.oneTimePassword.copy")}
+                        copiedMessage={t("common.action.copied")}
+                        failedMessage={t("security.users.oneTimePassword.copyError")}
+                        disabled={userFormReadOnly || !issuedTemporaryPassword}
+                        onCopied={() => setCopyPasswordError("")}
+                        onCopyError={setCopyPasswordError}
+                        testId="security-user-temporary-password-copy"
+                      />
+                    }
+                    footer={
+                      <div
+                        className={cn("space-y-1.5", temporaryPasswordRowWidth.footer)}
+                        id="security-user-temporary-password-action-error"
+                        data-testid="security-user-temporary-password-error"
+                      >
+                        <FormStatus tone="danger" message={temporaryPasswordActionError} />
+                      </div>
+                    }
+                  >
+                    <TextField
+                      id="security-user-temporary-password"
+                      label={t("security.users.oneTimePassword.valueLabel")}
+                      width="md"
+                      readOnly
+                      // 無効なユーザーでは発行済みの一時パスワードを使わせない（コピーも止める）。
+                      disabled={userFormReadOnly}
+                      aria-describedby={temporaryPasswordActionError ? "security-user-temporary-password-action-error" : undefined}
+                      autoComplete="off"
+                      value={issuedTemporaryPassword}
+                      data-testid="security-user-temporary-password"
+                    />
+                  </FieldActionRow>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+        </PageBody>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHeader
+        wide
+        title={t("nav.securityUsers")}
+        subtitle={t("security.users.subtitle")}
+        actions={[
+          ...(canManage && !initialLoadFailed
+            ? [
+                {
+                  id: "create-user",
+                  kind: "primary" as const,
+                  label: t("security.common.create"),
+                  icon: Plus,
+                  disabled: operationBusy,
+                  onClick: startCreate,
+                },
+              ]
+            : []),
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(loading && refreshRequested),
+            onClick: () => load(true),
+            loading: loading && refreshRequested,
+          },
+        ]}
+        actionsLabel={t("security.users.actionsLabel")}
+        actionsTestId="security-users-actions"
+      />
+      <PageBody wide className="grid grid-cols-1 gap-4">
+        {errorBanners}
+        {initialLoadFailed ? (
+          <ErrorState message={loadError} onRetry={() => void load()} />
+        ) : (
+          <section className="grid min-w-0 gap-3" aria-label={t("security.users.list")} data-testid="security-users-list">
+            {/* 件数はツールバーの右の ListCount 1 か所（#1891）。件数の読み上げは検索欄の resultCountLabel が行う。 */}
+            <ListToolbar
+              testId="security-users-toolbar"
+              search={
+                <SecuritySearchField
+                  label={t("security.common.search")}
+                  placeholder={t("security.users.searchPlaceholder")}
+                  value={search}
+                  testId="security-users-search"
+                  disabled={operationBusy}
+                  resultCountLabel={listCountText(userListCount)}
+                  onChange={setSearch}
+                />
+              }
+              count={{ ...userListCount, live: false, testId: "security-users-count" }}
+            />
+            {loading ? (
+              <ProcessingIndicator
+                active
+                label={t("security.users.loading")}
+                operationKey="security-users-load"
+                placement="panel"
+                testId="security-users-loading"
+                activityIcon={refreshRequested ? "none" : "spinner"}
+              />
+            ) : null}
+            <div className="grid gap-2">
+              <DataTable
+                loading={loading}
+                rows={userList.pageItems}
+                sort={sort}
+                onSortChange={(next) => { if (!operationBusy) setSort(next); }}
+                // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。キーボードは名前のリンク。
+                onRowClick={openUser}
+                getRowKey={(user) => user.user_uuid}
+                rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "data-testid": `security-users-row-${user.user_uuid}` })}
+                ariaLabel={t("security.users.list")}
+                testId="security-users-grid"
+                scrollAriaLabel={t("security.common.listScrollLabel", { list: t("security.users.list") })}
+                scrollTestId="security-users-scroll-region"
+                tableClassName="w-full"
+                stickyHeader
+                visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+                growToViewport
+                empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined} />}
+                columns={userColumns}
+              />
+              <SecurityListPagination
+                list={userList}
+                ariaLabel={t("security.users.pagination")}
+                testId="security-users-pagination"
+                disabled={operationBusy}
+              />
+            </div>
+          </section>
         )}
       </PageBody>
     </>
   );
 }
 
+/** ユーザーの状態（有効 / 無効、ロック中、パスワード変更待ち）。一覧の状態の列とエディタの見出しで使う。 */
 function UserStatusBadges({ user }: { user: SecurityUser }) {
   return (
     <div className="flex flex-wrap gap-1">
@@ -1170,84 +1231,9 @@ function UserStatusBadges({ user }: { user: SecurityUser }) {
         label={userStatusLabel(user)}
       />
       {user.locked_until ? <StatusBadge variant="warning" label={t("security.users.locked")} /> : null}
+      {user.force_password_change ? (
+        <StatusBadge variant="info" label={t("security.users.passwordChangePending")} />
+      ) : null}
     </div>
-  );
-}
-
-function UserDetailPanel({
-  user,
-  assignedRoles,
-  canManage,
-  actions,
-  resetError,
-}: {
-  user: SecurityUser;
-  assignedRoles: AssignedRole[];
-  canManage: boolean;
-  actions: EntityAction[];
-  resetError: string;
-}) {
-  const hasArchivedRole = assignedRoles.some((role) => role.archived);
-
-  return (
-    // 枠は一覧 + 詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を 1 段減らす。#2282）。
-    <section className="grid min-w-0 content-start gap-4" aria-labelledby="security-users-detail-heading" data-testid="security-users-detail">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 id="security-users-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
-              <UserRound size={20} aria-hidden="true" />
-              <span className="min-w-0 break-words">{userDisplayName(user)}</span>
-            </h2>
-            <UserStatusBadges user={user} />
-          </div>
-        </div>
-        {canManage ? (
-          <ObjectActionBar
-            actions={actions}
-            ariaLabel={`${t("security.common.actions")}: ${userDisplayName(user)}`}
-            testId="security-users-detail-actions"
-          />
-        ) : null}
-      </div>
-      <div data-testid="security-users-reset-password-error">
-        <FormStatus tone="danger" message={resetError} />
-      </div>
-      <dl className="grid gap-3 md:grid-cols-2">
-        <SecurityDetailField label={t("security.users.loginUserId")}>
-          <code className="break-all font-mono text-xs">{user.login_user_id}</code>
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.common.status")}>
-          <UserStatusBadges user={user} />
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.users.forceChange")}>
-          {user.force_password_change ? t("security.common.yes") : t("security.common.no")}
-        </SecurityDetailField>
-        <SecurityDetailField label={t("security.common.version")}>
-          {String(user.version)}
-        </SecurityDetailField>
-      </dl>
-
-      <section className="grid gap-2" aria-label={t("security.users.roles")}>
-        <h3 className="text-sm font-semibold text-fg">{t("security.users.roles")}</h3>
-        {hasArchivedRole ? (
-          <Banner severity="warning">{t("security.users.archivedRoleNotice")}</Banner>
-        ) : null}
-        {assignedRoles.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5">
-            {assignedRoles.map((role) => (
-              <StatusBadge
-                icon={false}
-                key={role.role_id}
-                variant={role.archived ? "neutral" : "info"}
-                label={assignedRoleLabel(role)}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">{t("security.common.none")}</p>
-        )}
-      </section>
-    </section>
   );
 }
