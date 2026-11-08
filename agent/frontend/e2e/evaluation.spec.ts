@@ -467,7 +467,7 @@ test("Excel から評価ケースを取り込み（確認して置き換え）�
   seedSet(mockApi);
   await page.goto("/evaluation?id=evset-seeded");
   await expect(page.getByRole("heading", { name: "経理の評価", level: 1 })).toBeVisible();
-  await expect(page.getByText("評価ケース（3 件）")).toBeVisible();
+  await expect(page.getByTestId("evaluation-cases-toolbar")).toContainText("全 3 件");
 
   await page.getByTestId("evaluation-set-file").setInputFiles({
     name: "cases.xlsx",
@@ -478,14 +478,14 @@ test("Excel から評価ケースを取り込み（確認して置き換え）�
   await expect(dialog.getByText("評価ケースを置き換えますか?")).toBeVisible();
   await dialog.getByRole("button", { name: "置き換える" }).click();
   await expect(page.getByText("Excel から 2 件を読み込みました。保存すると反映します。")).toBeVisible();
-  await expect(page.getByText("評価ケース（2 件）")).toBeVisible();
+  await expect(page.getByTestId("evaluation-cases-toolbar")).toContainText("全 2 件");
   await expect(page.getByTestId("evaluation-case-1").getByLabel("質問")).toHaveValue("Excel の質問 1");
   await page.screenshot({ path: testInfo.outputPath("evaluation-set-editor.png"), fullPage: true });
   expect(mockApi.lastRequest("POST", "/api/evaluation-sets/parse-xlsx")).toBeDefined();
 
   // 保存していない変更があるときは評価を始めず、変更を破棄できる。
   await page.getByRole("button", { name: "変更を破棄" }).click();
-  await expect(page.getByText("評価ケース（3 件）")).toBeVisible();
+  await expect(page.getByTestId("evaluation-cases-toolbar")).toContainText("全 3 件");
 
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
   await expect.poll(() => mockApi.lastRequest("GET", "/api/evaluation-sets/template.xlsx")).toBeDefined();

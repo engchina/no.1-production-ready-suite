@@ -24,6 +24,7 @@ import {
   usePagination,
   type EntityAction,
   apiErrorMessage,
+  ListToolbar,
 } from "@production-ready/ui";
 
 import { agentPaginationLabels } from "@/components/ListViews";
@@ -57,6 +58,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
+import { listTotal } from "@/components/ListFilters";
 
 export const EVALUATION_MAX_CASES = 50;
 /** 評価ケースの 1 ページの件数（一覧の既定の表示件数と同じ。#1952）。 */
@@ -508,7 +510,7 @@ export function EvaluationSetEditor({
           </Card>
         </Section>
 
-        <Section title={t("evaluation.set.cases", { count: draft.cases.length })} description={t("evaluation.set.casesDescription")}>
+        <Section title={t("evaluation.set.cases")} description={t("evaluation.set.casesDescription")}>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" icon={Plus} onClick={addCase} disabled={draft.cases.length >= EVALUATION_MAX_CASES}>
               {t("evaluation.set.addCase")}
@@ -544,6 +546,10 @@ export function EvaluationSetEditor({
           {draft.cases.length === 0 ? (
             <EmptyState title={t("evaluation.set.noCases")} hint={t("evaluation.set.noCasesHint")} />
           ) : (
+            // 件数は見出しではなくツールバーの ListCount 1 か所（#4636）。入力のカードは上限（50）のある編集のフォームなので
+            // 一覧の高さで止めない（page-archetypes.md の例外「上限のある編集のフォームの繰り返し」）。
+            <>
+            <ListToolbar count={listTotal(draft.cases.length)} testId="evaluation-cases-toolbar" />
             <div className="space-y-3">
               {pagination.pageItems.map((item) => {
                 const index = draft.cases.indexOf(item);
@@ -694,6 +700,7 @@ export function EvaluationSetEditor({
                 />
               ) : null}
             </div>
+            </>
           )}
         </Section>
         {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
