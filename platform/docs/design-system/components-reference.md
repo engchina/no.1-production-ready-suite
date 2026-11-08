@@ -1470,6 +1470,8 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
   - ラベルの文が決まっていれば `fieldLabel` に渡します。省略すると 1 行の棒、`false` はラベルを見せないツールバーの欄です。
   - 案内の文が決まっていれば `helperText`、読み込むまで決まらなければ `helperLines`（1〜3）で行数を渡します。
   - 領域の表示が別に無い単独の欄は `label`（「〜を読み込んでいます」）を渡し、読み上げ名を持たせます（`role="group"`・`aria-busy`）。無ければ `aria-hidden` です。
+  - チャットのツールバーの選択欄は `fieldLabel={false}` と `size="sm"` にし、`label` は渡しません（文言は会話の領域の `TimedLoadingState` が読みます）。
+  - 選択肢を並べる `Fieldset` の読み込み中は `FieldSkeleton` ではなく、実際の `Fieldset`（legend・helper はそのまま）の中で選択肢を `invisible` にして `SKELETON_CLASS` で覆います（読み込み後と同じ寸法になる。見本は `MyApiKeysPanel`）。
 - `DataTable` の `loading` の行・`LoadingState` の棒も同じ `SKELETON_CLASS` を使います。`DataTable` の `loading` は、`loadingRows` を省略すると `visibleRows` の行数（無ければ 3 行）の Skeleton で高さを予約します。
 - 同じ取得の経過時間は 1 か所だけに出します。2 つの領域が同じ取得を待つときは、片方は形だけ（`TableSkeleton` を `TimedLoadingState` で包まない）にします。
 - **面は灰色の枠で 1 つ**です（#4649）。`TimedLoadingState` は常に灰色の枠（`PROCESSING_FRAME_CLASS` = `rounded-md border border-border bg-surface-sunken`）で全幅を使い、枠を外す指定を持ちません。単独の `ProcessingIndicator`（操作の進行・再読み込みの行を含む）も既定で同じ枠（`surface="framed"`）を持ち、すでに灰色の枠を持つ部品の中に入れるときだけ `surface="plain"` にします。処理の名前と経過時間の並びは置かれた領域の幅（`@container/processing`）で切り替わり、狭い列・375px では経過時間を処理の名前の下へ回します。`LoadingState`・`ListPicker`・`ChatHistoryList`・`LoadMoreFooter` の再読み込みの行も同じ面です。e2e は `platform/packages/ui/e2e/loading-checks.ts` の `findLoadingStandardViolations` で確かめます。

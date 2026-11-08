@@ -1,4 +1,8 @@
-import { expectChatTargetNextToNewConversation } from "../../../../platform/packages/ui/e2e/chat-toolbar-layout";
+import {
+  expectChatTargetNextToNewConversation,
+  expectChatToolbarHeightUnchanged,
+  measureChatToolbarHeight,
+} from "../../../../platform/packages/ui/e2e/chat-toolbar-layout";
 import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
@@ -70,6 +74,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     // ツールバーの対象の欄は欄の形の Skeleton だけ。文言と経過時間は会話の欄の先頭に 1 か所だけ出す（#4649）。
     const toolbar = page.locator("[data-chat-toolbar]");
     await expect(toolbar.getByTestId("sql-chat-profiles-skeleton")).toBeVisible();
+    const reservedHeight = await measureChatToolbarHeight(page);
     await expect(toolbar.getByRole("timer")).toHaveCount(0);
     const panel = page.getByTestId("sql-chat-panel");
     await expect(panel).toBeVisible();
@@ -107,6 +112,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(page.getByTestId("sql-chat-profiles-skeleton")).toHaveCount(0);
     await expect(page.locator("[data-chat-toolbar] #sql-chat-profile")).toBeVisible();
     await expectChatTargetNextToNewConversation(page, expect);
+    await expectChatToolbarHeightUnchanged(page, expect, reservedHeight);
     await page.screenshot({ path: testInfo.outputPath(`chat-target-ready-${colorScheme}.png`) });
     await expect(page.getByTestId("sql-chat-conversation-skeleton")).toHaveCount(0);
     await expect(
