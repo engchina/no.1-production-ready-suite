@@ -136,9 +136,9 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
 
     計画を繰り返した出力も、計画の行を読まないので有効な出力になり、計画は basis から 1 件だけ導く。
     """
-    from test_stated_part_replay import QUESTION as TABLE_QUESTION
-    from test_stated_part_replay import RULE, TABLE
-    from test_stated_part_replay import SOURCE_ONLY as OUTPUTS
+    from test_part_requirement_type import QUESTION as TABLE_QUESTION
+    from test_part_requirement_type import RULE, TABLE
+    from test_part_requirement_type import SOURCE_ONLY as OUTPUTS
 
     table = {"label": "E1", "evidence_id": "table-a", "source_id": "s-t", "source": "synthetic-table.md", "text": TABLE}
     rule = {"label": "E2", "evidence_id": "rule-a", "source_id": "s-r", "source": "synthetic-rule.md", "text": RULE}
