@@ -448,6 +448,13 @@ export function SearchableSelectField({
         {/* ボタンは aria-required を持てない（axe の aria-allowed-attr）ので、タグを読み上げ対象に残す（#1595）。 */}
         {required && requiredLabel && !compactRequired ? <RequiredBadge label={requiredLabel} /> : null}
       </label>
+      {/* 選んだ後の compact の「必須」は見せず、読み上げ名の末尾にだけ入れる（hidden の要素も aria-labelledby で読む。
+          ボタンの文字を値だけに保つ。#4560）。ボタンの前に置く（後ろだと外枠の space-y がボタンに余白を付ける。#4656）。 */}
+      {compactRequired && value ? (
+        <span id={requiredId} hidden>
+          {requiredLabel}
+        </span>
+      ) : null}
       <button
         ref={buttonRef}
         id={id}
@@ -516,13 +523,6 @@ export function SearchableSelectField({
           )}
         />
       </button>
-      {/* 選んだ後の compact の「必須」は見せず、読み上げ名の末尾にだけ入れる（hidden の要素も aria-labelledby で読む。
-          ボタンの文字を値だけに保つ。#4560）。 */}
-      {compactRequired && value ? (
-        <span id={requiredId} hidden>
-          {requiredLabel}
-        </span>
-      ) : null}
       {popover}
       {helper ? (
         <p id={hintId} className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)}>

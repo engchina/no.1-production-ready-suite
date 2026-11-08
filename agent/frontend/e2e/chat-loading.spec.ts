@@ -1,4 +1,8 @@
-import { expectChatTargetNextToNewConversation } from "../../../platform/packages/ui/e2e/chat-toolbar-layout";
+import {
+  expectChatTargetNextToNewConversation,
+  expectChatToolbarHeightUnchanged,
+  measureChatToolbarHeight,
+} from "../../../platform/packages/ui/e2e/chat-toolbar-layout";
 import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import type { Page } from "@playwright/test";
 
@@ -68,7 +72,8 @@ for (const theme of ["light", "dark"] as const) {
 
     // ツールバーの欄は欄の形の Skeleton だけ（狭い欄に読み込みの表示を入れない。#4649）。
     const toolbarLoading = page.getByTestId("chat-agents-loading");
-    await expect(toolbarLoading).toHaveAttribute("aria-label", "業務 Agent を読み込んでいます");
+    await expect(toolbarLoading).toHaveAttribute("data-skeleton", "field");
+    const reservedHeight = await measureChatToolbarHeight(page);
     await expect(toolbarLoading.getByRole("timer")).toHaveCount(0);
     // 会話の欄は最初から描き、空の状態の代わりに、先頭の文言と経過時間（ここだけ）と会話の形の Skeleton を出す。
     const conversationLoading = page.getByTestId("chat-conversation-loading");
@@ -99,6 +104,7 @@ for (const theme of ["light", "dark"] as const) {
     const toolbarTarget = page.locator("[data-chat-toolbar] #chat-agent");
     await expect(toolbarTarget).toBeVisible();
     await expectChatTargetNextToNewConversation(page, expect);
+    await expectChatToolbarHeightUnchanged(page, expect, reservedHeight);
     await page.screenshot({ path: testInfo.outputPath(`chat-target-ready-${theme}.png`) });
     expect(await toolbarTarget.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);
 

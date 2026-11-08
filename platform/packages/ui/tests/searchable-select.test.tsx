@@ -518,6 +518,11 @@ describe("チャットの対象のコンパクトな選択", () => {
     act(() => button.click());
     expect(document.querySelector("[role=dialog]")?.getAttribute("aria-label")).toBe("対象");
   });
+  it("読み上げだけの「必須」をボタンの後ろに置かない（外枠の space-y でボタンの下に余白が付く。#4656）", () => {
+    act(() => root.render(<SearchableSelectField id="synthetic-last" label="対象" required labelPlacement="compact" size="sm" value="kb-1" options={OPTIONS} onValueChange={() => {}} />));
+    const button = host.querySelector<HTMLButtonElement>("#synthetic-last")!;
+    expect(button.parentElement?.lastElementChild).toBe(button);
+  });
   it("未選択では見えている「値 必須」を読み上げ名の末尾に同じ並びで含め、ラベルに必須を重ねない（#4560）", () => {
     act(() => root.render(<SearchableSelectField id="synthetic-empty" label="対象" required labelPlacement="compact" size="sm" value="" placeholder="未選択" options={OPTIONS} onValueChange={() => {}} />));
     const button = host.querySelector<HTMLButtonElement>("#synthetic-empty")!;

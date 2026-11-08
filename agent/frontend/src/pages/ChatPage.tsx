@@ -23,6 +23,7 @@ import {
   RunUsedModels,
   RunProcessDetails,
   ChatSkeleton,
+  FieldSkeleton,
   useTraceDetailsLabels,
   ChatAnswer,
   ChatAnswerBody,
@@ -33,7 +34,6 @@ import {
   PageBody,
   PageHeader,
   SearchableSelectField,
-  Skeleton,
   StatusBadge,
   TimedLoadingState,
   createOptimisticChatMessage,
@@ -687,17 +687,7 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
             {agents.isLoading ? (
               // ツールバーの欄には欄の形（compact の 1 行・sm の高さ）だけを置き、経過時間は会話の領域の先頭に
               // 1 つだけ出す（狭いツールバーの欄に読み込みの表示を入れない。#4649）。
-              <div
-                className="space-y-1.5"
-                aria-busy="true"
-                aria-label={t("chat.agent.loading")}
-                data-testid="chat-agents-loading"
-              >
-                <Skeleton className="h-[var(--control-height-sm)] w-full" />
-                {/* 読み込み後の欄は、選んだ値の後ろに読み上げだけの行（高さ 0）を持ち、その間隔の分だけ高い。
-                    同じ間隔を置いて、読み込み後にツールバーの高さが変わらないようにする。 */}
-                <span className="block" aria-hidden="true" />
-              </div>
+              <FieldSkeleton fieldLabel={false} size="sm" testId="chat-agents-loading" />
             ) : agents.isError ? (
               // 読めなかったときは会話の欄を出さず（空の状態を出さない）、ここに失敗と再試行を出す（#1153）。
               <ApiErrorBanner
