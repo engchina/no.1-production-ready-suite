@@ -101,7 +101,9 @@ class _Connection:
 def _client(monkeypatch: pytest.MonkeyPatch, connection: _Connection) -> OracleClient:
     client = OracleClient(settings=Settings.model_construct())
 
-    async def run_transaction(operation: Callable[[object], object]) -> object:
+    async def run_transaction(
+        operation: Callable[[object], object], *, retry_deadlocks: bool = False
+    ) -> object:
         return operation(connection)
 
     monkeypatch.setattr(client, "_run_transaction", run_transaction)

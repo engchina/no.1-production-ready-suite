@@ -20,7 +20,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.clients.oracle import (
+    DEADLOCK_RETRY_BASE_DELAY_SECONDS,
+    DEADLOCK_RETRY_MAX_ATTEMPTS,
+    DEADLOCK_RETRY_MAX_DELAY_SECONDS,
     OracleClient,
+    deadlock_retry_delay_seconds,
     is_transient_oracle_error,
     oracle_error_log_fields,
 )
@@ -547,8 +551,21 @@ def test_real_oracledb_dead_session_error_is_transient() -> None:
     assert oracle_error_log_fields(exc)["full_code"] == "DPY-4011"
 
 
+@pytest.fixture
+def deadlock_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """ORA-00060 のやり直しの前の待ちを記録し、実際には待たない(jitter は上限の値に固定)。"""
+    from app.clients import oracle as oracle_module
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(oracle_module, "_deadlock_retry_jitter", lambda: 1.0)
+    monkeypatch.setattr(oracle_module, "_deadlock_retry_sleep", sleeps.append)
+    return sleeps
+
+
 @pytest.mark.parametrize("retry", [False, True])
-async def test_deadlock_retries_only_when_explicitly_enabled(retry: bool) -> None:
+async def test_deadlock_retries_only_when_explicitly_enabled(
+    retry: bool, deadlock_sleeps: list[float]
+) -> None:
     first, second = _Connection(), _Connection()
     pool = _Pool([first, second])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
@@ -557,13 +574,17 @@ async def test_deadlock_retries_only_when_explicitly_enabled(retry: bool) -> Non
         assert await client._run_transaction(operation, retry_deadlocks=True) == "ok"
         assert first.rollbacks == 1 and first.commits == 0 and second.commits == 1
         assert pool.acquired == [first, second]
+        assert deadlock_sleeps == [DEADLOCK_RETRY_BASE_DELAY_SECONDS]
     else:
         with pytest.raises(RuntimeError, match="ORA-00060"):
             await client._run_transaction(operation)
         assert pool.acquired == [first]
+        assert deadlock_sleeps == []
 
 
-async def test_deadlock_is_not_retried_after_rollback_failure() -> None:
+async def test_deadlock_is_not_retried_after_rollback_failure(
+    deadlock_sleeps: list[float],
+) -> None:
     connection = _Connection(rollback_error=RuntimeError("rollback failed"))
     pool = _Pool([connection, _Connection()])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
@@ -572,17 +593,67 @@ async def test_deadlock_is_not_retried_after_rollback_failure() -> None:
             _failing_operation([RuntimeError("ORA-00060: deadlock")]), retry_deadlocks=True
         )
     assert pool.acquired == [connection]
+    assert deadlock_sleeps == []
 
 
-async def test_deadlock_retry_is_bounded() -> None:
-    pool = _Pool([_Connection(), _Connection(), _Connection()])
+async def test_deadlock_retry_succeeds_within_the_bound_with_backoff(
+    deadlock_sleeps: list[float],
+) -> None:
+    """上限の直前の試行で通れば成功し、待ちは指数で伸びる(#4628)。"""
+    retries = DEADLOCK_RETRY_MAX_ATTEMPTS - 1
+    connections = [_Connection() for _ in range(DEADLOCK_RETRY_MAX_ATTEMPTS)]
+    pool = _Pool(connections)
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    errors: list[Exception] = [RuntimeError("ORA-00060") for _ in range(retries)]
+
+    assert await client._run_transaction(_failing_operation(errors), retry_deadlocks=True) == "ok"
+
+    assert pool.acquired == connections
+    assert [c.rollbacks for c in connections] == [1] * retries + [0]
+    assert connections[-1].commits == 1
+    # 待つ前に接続を返している(相手の transaction の commit を妨げない)。
+    assert all(c.closes == 1 for c in connections)
+    assert deadlock_sleeps == [
+        min(DEADLOCK_RETRY_MAX_DELAY_SECONDS, DEADLOCK_RETRY_BASE_DELAY_SECONDS * 2**n)
+        for n in range(retries)
+    ]
+
+
+async def test_deadlock_retry_stops_at_the_bound(deadlock_sleeps: list[float]) -> None:
+    """上限の回数まで続けて ORA-00060 なら、それ以上やり直さずに元の例外を返す(#4628)。"""
+    connections = [_Connection() for _ in range(DEADLOCK_RETRY_MAX_ATTEMPTS + 1)]
+    pool = _Pool(connections)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    errors: list[Exception] = [
+        RuntimeError("ORA-00060") for _ in range(DEADLOCK_RETRY_MAX_ATTEMPTS + 1)
+    ]
     with pytest.raises(RuntimeError, match="ORA-00060"):
-        await client._run_transaction(
-            _failing_operation([RuntimeError("ORA-00060"), RuntimeError("ORA-00060")]),
-            retry_deadlocks=True,
-        )
-    assert len(pool.acquired) == 2
+        await client._run_transaction(_failing_operation(errors), retry_deadlocks=True)
+    assert len(pool.acquired) == DEADLOCK_RETRY_MAX_ATTEMPTS
+    assert len(deadlock_sleeps) == DEADLOCK_RETRY_MAX_ATTEMPTS - 1
+
+
+def test_deadlock_retry_delay_is_capped_full_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """待ちは 0〜上限の乱数で、上限は指数で伸びて最大値で止まる。"""
+    from app.clients import oracle as oracle_module
+
+    monkeypatch.setattr(oracle_module, "_deadlock_retry_jitter", lambda: 0.5)
+    assert deadlock_retry_delay_seconds(1) == DEADLOCK_RETRY_BASE_DELAY_SECONDS * 0.5
+    assert deadlock_retry_delay_seconds(2) == DEADLOCK_RETRY_BASE_DELAY_SECONDS * 2 * 0.5
+    assert deadlock_retry_delay_seconds(30) == DEADLOCK_RETRY_MAX_DELAY_SECONDS * 0.5
+
+
+async def test_deadlock_and_transient_retry_budgets_are_separate(
+    deadlock_sleeps: list[float],
+) -> None:
+    """一時的な接続断のやり直し(1 回)と ORA-00060 のやり直しは、別々の上限で数える。"""
+    connections = [_Connection() for _ in range(3)]
+    pool = _Pool(connections)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    errors: list[Exception] = [_dead_session_error(), RuntimeError("ORA-00060")]
+    assert await client._run_transaction(_failing_operation(errors), retry_deadlocks=True) == "ok"
+    assert pool.acquired == connections
+    assert deadlock_sleeps == [DEADLOCK_RETRY_BASE_DELAY_SECONDS]
 
 
 def _text_commit_error() -> RuntimeError:

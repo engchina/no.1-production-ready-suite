@@ -55,7 +55,9 @@ async def test_activate_recipe_chunk_set_casts_materialized_revision_bind(
     client = OracleClient(settings=Settings.model_construct())
     connection = _RecordingConnection()
 
-    async def run_transaction(operation: Callable[[object], object]) -> object:
+    async def run_transaction(
+        operation: Callable[[object], object], *, retry_deadlocks: bool = False
+    ) -> object:
         return operation(connection)
 
     monkeypatch.setattr(client, "_run_transaction", run_transaction)
@@ -75,6 +77,48 @@ async def test_activate_recipe_chunk_set_casts_materialized_revision_bind(
         "config_revision )" in statement
     )
     assert binds["materialized_revision"] == materialized_revision
+
+
+async def test_activation_and_candidate_discard_retry_deadlocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有効化と候補の破棄は、ORA-00060 を transaction の単位でやり直す(#4628)。"""
+    client = OracleClient(settings=Settings.model_construct())
+    retry_flags: list[bool] = []
+
+    async def run_transaction(
+        operation: Callable[[object], object], *, retry_deadlocks: bool = False
+    ) -> object:
+        retry_flags.append(retry_deadlocks)
+        return None
+
+    monkeypatch.setattr(client, "_run_transaction", run_transaction)
+
+    await client.activate_recipe_chunk_set(
+        recipe_id="recipe-1", chunk_set_id="cs-1", expected_base_chunk_set_id=None
+    )
+    await client.discard_recipe_candidate_chunk_set(recipe_id="recipe-1", chunk_set_id="cs-2")
+
+    assert retry_flags == [True, True]
+
+
+def test_chunk_set_outputs_are_deleted_in_chunk_set_id_order() -> None:
+    """lock の順を transaction の間でそろえるため、chunk_set の ID の順に消す(#4628)。"""
+    from app.clients.oracle import _delete_chunk_set_outputs
+
+    connection = _RecordingConnection()
+    _delete_chunk_set_outputs(
+        cast(Any, connection),
+        document_id="doc-1",
+        chunk_sets=[{"chunk_set_id": "cs-c"}, {"chunk_set_id": "cs-a"}, {"chunk_set_id": "cs-b"}],
+    )
+
+    deleted = [
+        binds["chunk_set_id"]
+        for statement, binds in connection.calls
+        if statement.startswith("DELETE FROM rag_chunk_sets")
+    ]
+    assert deleted == ["cs-a", "cs-b", "cs-c"]
 
 
 @pytest.mark.usefixtures("oracle_db")
