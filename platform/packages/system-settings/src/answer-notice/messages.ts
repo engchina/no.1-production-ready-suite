@@ -3,7 +3,7 @@
  * 製品側が `messages` prop（`settingsDescription` など）で上書きする。
  */
 export const ANSWER_NOTICE_MESSAGES = {
-  loading: "回答の注意書きを読み込んでいます。",
+  loading: "回答の注意書きを読み込んでいます",
   loadError: "回答の注意書きの取得に失敗しました。",
   refetchError:
     "最新の回答の注意書きを取得できませんでした。表示中の値は前回取得した内容です。再試行してください。",

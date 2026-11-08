@@ -38,7 +38,7 @@ describe("DatabaseSettingsPage", () => {
   it("読み込み中は状態表示を出す", () => {
     const html = render(<DatabaseSettingsPage api={api} />);
     expect(html).toContain('data-testid="settings-database-loading"');
-    expect(html).toContain("データベース設定を読み込んでいます。");
+    expect(html).toContain("データベース設定を読み込んでいます");
     // 既定でも経過時間付きの読み込み表示（TimedLoadingState）と Skeleton にする（RAG / Agent は既定を使う）。
     expect(html).toContain('data-testid="settings-database-loading-processing"');
     expect(html).toContain("経過時間");

@@ -143,7 +143,7 @@ test("アップロード保存先の読み込み中は経過時間とフォー�
   const loading = page.getByTestId("settings-upload-storage-loading");
   await expect(loading).toBeVisible();
   await expect(loading).toContainText(
-    "アップロード保存先設定を読み込んでいます。",
+    "アップロード保存先設定を読み込んでいます",
   );
   await expect(loading.locator('[data-skeleton="form"]')).toHaveCount(1);
 

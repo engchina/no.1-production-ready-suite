@@ -10436,8 +10436,8 @@ test("feedback management initial load covers the list and the editor with skele
   // 件数は取得してから出す（読み込み中に 0 件と見せない）。
   await expect(historyPane.getByText(/アプリ内フィードバック \d+/)).toHaveCount(0);
   await expect(page.getByTestId("feedback-management-refresh-processing")).toHaveCount(0);
-  // スピナーはヘッダーの「最新情報を取得」の 1 つだけ（操作が 1 つのヘッダー。messaging §3.7）。
-  await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
+  // 最初の読み込みは押したボタンが無いので、スピナーは作業領域の表示の 1 つだけ（ヘッダーのボタンは回さない。#4649）。
+  await expectSingleSpinner(page, loadingState);
   await expectNoHorizontalScroll(page);
 
   expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);

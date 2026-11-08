@@ -70,7 +70,7 @@ export const ja = {
     "NL2SQL 内部 schema、migration、保存領域の状態を確認・初期化します。",
   "settings.selectAiCredential.subtitle":
     "Select AI（DBMS_CLOUD_AI）が OCI を呼び出すための Credential を、データベースに作成・更新します。",
-  "settings.database.loading": "データベース設定を読み込んでいます。",
+  "settings.database.loading": "データベース設定を読み込んでいます",
   "settings.database.selectAiCredential.title": "Select AI Credential",
   "settings.database.selectAiCredential.loading": "Select AI Credential の状態を読み込んでいます",
   "settings.database.selectAiCredential.description":

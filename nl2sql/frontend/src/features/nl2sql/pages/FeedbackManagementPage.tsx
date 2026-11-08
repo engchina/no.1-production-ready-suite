@@ -836,7 +836,8 @@ export function FeedbackManagementPage() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             onClick: () => load(true, "header"),
-            loading: loading === "load" && refreshOrigin === "header",
+            // 最初の読み込みはボタンを回さず、領域の表示がスピナーを出す（ボタンの loading は押した再読み込みだけ。#4649）。
+            loading: loading === "load" && refreshOrigin === "header" && loadedOnce,
             disabled: Boolean(loading),
           },
         ]}
@@ -978,14 +979,13 @@ export function FeedbackManagementPage() {
                 />
               ) : initialLoading ? (
                 // 最初の読み込みも業務プロファイルの切り替えと同じく、分割の上に全幅で経過時間を 1 か所だけ出し、
-                // 一覧と詳細の両方を形の Skeleton で覆う（スピナーはヘッダーの「最新情報を取得」。#1777・#4649）。
+                // 一覧と詳細の両方を形の Skeleton で覆う。押したボタンが無いので、この表示がスピナーを出す（#1777・#4649）。
                 <ProcessingIndicator
                   active
                   label={t("feedbackManagement.entries.loading")}
                   operationKey="feedback-management-initial-load"
                   placement="workspace"
                   testId="feedback-management-entries-loading"
-                  activityIcon="none"
                 />
               ) : null}
 
@@ -1135,8 +1135,8 @@ export function FeedbackManagementPage() {
             ariaLabel={t("feedbackManagement.workspace.appFeedback")}
             idPrefix="feedback-management-app-feedback"
             // 読み込み中の文言と経過時間は、一覧と編集欄の両方を覆う作業領域の先頭に全幅で 1 か所だけ出す（375px の
-            // 1 ペインでも見える。#4649）。最初の読み込みは一覧と編集欄を形の Skeleton で覆い、スピナーはヘッダーの
-            // 「最新情報を取得」が出す（messaging.md §3.7）。絞り込み・ページ送りは前の一覧を出したまま示す（#535）。
+            // 1 ペインでも見える。#4649）。最初の読み込みは一覧と編集欄を形の Skeleton で覆い、押したボタンが無いので
+            // この表示がスピナーを出す（messaging.md §3.7）。絞り込み・ページ送りは前の一覧を出したまま示す（#535）。
             processing={
               initialLoading ? (
                 <ProcessingIndicator
@@ -1145,7 +1145,6 @@ export function FeedbackManagementPage() {
                   operationKey="feedback-management-initial-load"
                   placement="workspace"
                   testId="app-feedback-list-loading"
-                  activityIcon="none"
                 />
               ) : loading === "app-feedback-load" ? (
                 <ProcessingIndicator
