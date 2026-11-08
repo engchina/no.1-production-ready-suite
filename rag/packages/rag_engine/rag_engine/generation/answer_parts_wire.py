@@ -32,7 +32,7 @@ SOURCE_ONLY_DERIVATION_PROMPT = (
     f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
     "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
     "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
-    "答えが原文の 1 つの単位にそのまま書かれた要点は、quote 型でその単位と答えの字句を返す。"
+    "答えが原文の 1 つの単位にそのまま書かれた要点は、placement に in_one_unit を選び、quote 型でその単位と答えの字句を返す。"
     "導くのに足りない資料・値は gap 型に書く。\n"
     "- 応答 schema どおりの完全な草稿を返す。\n"
 )
@@ -189,13 +189,37 @@ def answer_parts_model(
             answer=(cast(Any, Union.__getitem__((direct, derived, gap))), Field()),
         )
         part = Union.__getitem__((derivation_part, stated_part))
-    else:
-        part = create_model(
-            "RequiredAnswerPart",
+    elif catalog.unit_ids:
+        # 作り直しでは、答えが送った単位 1 つにそのまま書かれているか（placement）を答えの型より先に選ばせ、判別子にする
+        # （#4631。#4611 の役割の union と同じ考え方）。in_one_unit の要点は抜き出し（quote）だけ、derived の要点は導出か
+        # 不足だけを返す。抜き出しの枝を先頭に置く。placement の無い出力（録画）は derived の要点として読む。
+        in_one_unit_part = create_model(
+            "InOneUnitAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            answer=(cast(Any, Union.__getitem__((derived, _quote_model(catalog), gap)) if catalog.unit_ids else gap), Field()),
+            placement=(
+                cast(Any, Literal["in_one_unit"]),
+                Field(description="この要点の答えが、送った原文の単位 1 つにそのまま書かれている。答えは quote 型。"),
+            ),
+            answer=(_quote_model(catalog), Field()),
         )
+        derived_part = create_model(
+            "DerivedAnswerPart",
+            __config__=ConfigDict(extra="forbid"),
+            **common,
+            placement=(
+                cast(Any, Literal["derived"]),
+                Field(
+                    default="derived",
+                    description="この要点の答えを原文と質問の既知値から導く。答えは answer 型か、導けなければ gap 型。",
+                    json_schema_extra=_without_default,
+                ),
+            ),
+            answer=(cast(Any, Union.__getitem__((derived, gap))), Field()),
+        )
+        part = Union.__getitem__((in_one_unit_part, derived_part))
+    else:
+        part = create_model("RequiredAnswerPart", __config__=ConfigDict(extra="forbid"), **common, answer=(cast(Any, gap), Field()))
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),

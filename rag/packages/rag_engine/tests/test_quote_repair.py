@@ -77,6 +77,7 @@ def quoted_repair(rule_text: str = "10〜19点は区分B") -> dict[str, Any]:
     repair = json.loads(json.dumps(RECORDED["mr1_multi_request_repair"], ensure_ascii=False))
     quotes = [{"kind": "quote", "unit_id": "{row:4}", "text": "4"}, {"kind": "quote", "unit_id": "{rule}", "text": rule_text}]
     for part, quote in zip(repair["answer_parts"], quotes, strict=True):
+        part["placement"] = "in_one_unit"
         part["answer"] = quote
     return repair
 
@@ -141,22 +142,48 @@ def ref(node: dict) -> str:
     return node["$ref"].rsplit("/", 1)[1]
 
 
-def test_only_the_regeneration_contract_has_the_quote_answer():
+def test_only_the_regeneration_contract_chooses_the_placement_before_the_answer():
+    """作り直しの要点は placement を答えより先に選び、in_one_unit は quote だけ・derived は answer か gap だけ（先頭は抜き出し）。"""
     units, snapshot = _catalog()
     for direct_source, expected in ((True, False), (False, True)):
         strict = type_to_text_format_param(answer_parts_model(generation_draft_wire_model(), units, direct_source=direct_source))["schema"]
         assert ("QuoteAnswerPart" in strict["$defs"]) is expected
-    quote = strict["$defs"]["QuoteAnswerPart"]
+    defs = strict["$defs"]
+    quote = defs["QuoteAnswerPart"]
     assert list(quote["properties"]) == quote["required"] == ["kind", "unit_id", "text"]
     unit = quote["properties"]["unit_id"]
     assert unit.get("enum", [unit.get("const")]) == list(snapshot.unit_ids)
-    part = strict["$defs"][ref(strict["properties"]["answer_parts"]["items"])]
-    assert [ref(node) for node in part["properties"]["answer"]["anyOf"]] == ["SupportedAnswerPart", "QuoteAnswerPart", "GapAnswerPart"]
+    assert [ref(node) for node in strict["properties"]["answer_parts"]["items"]["anyOf"]] == ["InOneUnitAnswerPart", "DerivedAnswerPart"]
+    for name in ("InOneUnitAnswerPart", "DerivedAnswerPart"):
+        assert list(defs[name]["properties"]) == defs[name]["required"] == ["request_id", "requirement", "placement", "answer"]
+        assert "default" not in defs[name]["properties"]["placement"]
+    assert ref(defs["InOneUnitAnswerPart"]["properties"]["answer"]) == "QuoteAnswerPart"
+    assert [ref(node) for node in defs["DerivedAnswerPart"]["properties"]["answer"]["anyOf"]] == ["SupportedAnswerPart", "GapAnswerPart"]
+
+
+def test_quote_needs_the_in_one_unit_placement_and_derivations_cannot_be_in_one_unit():
+    units, snapshot = _catalog()
+    model = answer_parts_model(generation_draft_wire_model(), units, direct_source=False)
+    output = _quote_output(snapshot.unit_ids[0], "区分B")
+    output["answer_parts"][0]["placement"] = "derived"
+    with pytest.raises(ValidationError):
+        model.model_validate(output)
+    derived = {"kind": "answer", "basis": {"unit_ids": list(snapshot.unit_ids)}, "reasoning": "規則の範囲", "result": "18点は区分B"}
+    output["answer_parts"][0].update(placement="in_one_unit", answer=derived)
+    with pytest.raises(ValidationError):
+        model.model_validate(output)
 
 
 def _quote_output(unit_id: str, text: str) -> dict[str, Any]:
     return {
-        "answer_parts": [{"request_id": "Q1", "requirement": "区分B", "answer": {"kind": "quote", "unit_id": unit_id, "text": text}}],
+        "answer_parts": [
+            {
+                "request_id": "Q1",
+                "requirement": "区分B",
+                "placement": "in_one_unit",
+                "answer": {"kind": "quote", "unit_id": unit_id, "text": text},
+            }
+        ],
         "question_type": ["calculation"],
         "summary_part_indexes": [0],
         "confidence": "high",

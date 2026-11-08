@@ -1,5 +1,7 @@
 """要点の役割（mode）を答えの型より先に決め、導出の要点では source 型を選べなくする（#4611。#4586 の規則を schema で）。"""
 
+import json
+
 import pytest
 from openai.lib._parsing._responses import type_to_text_format_param
 from pydantic import ValidationError
@@ -71,8 +73,10 @@ def test_stated_part_and_parts_without_mode_keep_the_source_answer_and_the_sourc
 
 
 def test_regeneration_without_source_has_no_mode():
-    """source 型を受けない作り直しの契約（#4586）は、役割を選ばせず導出か不足だけを受ける。"""
+    """source 型を受けない作り直しの契約（#4586）は、mode を選ばせない（抜き出しか導出かの placement を選ぶ。#4631）。"""
     units, _ = catalog()
     strict = type_to_text_format_param(answer_parts_model(generation_draft_wire_model(), units, direct_source=False))["schema"]
-    part = strict["$defs"][ref(strict["properties"]["answer_parts"]["items"])]
-    assert "mode" not in part["properties"]
+    for node in strict["properties"]["answer_parts"]["items"]["anyOf"]:
+        part = strict["$defs"][ref(node)]
+        assert "mode" not in part["properties"] and "placement" in part["properties"]
+        assert "SourceAnswerPart" not in json.dumps(part)
