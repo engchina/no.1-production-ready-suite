@@ -5,10 +5,7 @@ import { FormSkeleton, PageBody, TimedLoadingState } from "@production-ready/ui"
 import { ErrorState } from "@/components/StateViews";
 import { AnsweringSettingsCard } from "@/components/settings/AnsweringSettingsCard";
 import { t } from "@/lib/i18n";
-import {
-  useAnswerPrompts,
-  useAnsweringSettings,
-} from "@/lib/queries";
+import { useAnswerPrompts } from "@/lib/queries";
 
 import { AnswerPromptStages } from "./AnswerPromptStages";
 import { isRetrievalPromptStage } from "./answer-prompt.logic";
@@ -18,23 +15,22 @@ import { isRetrievalPromptStage } from "./answer-prompt.logic";
  * 以前の検索モード・検索オプションは、回答エンジンを 1 つにしたときに削除した（#595）。
  */
 export function RetrievalSettingsClient() {
-  // 各設定とプロンプトの初回の読み込みの経過時間は、ページの先頭の 1 か所だけに出す。カードは読み込み中も
-  // 形の Skeleton で寸法を保ち、読めたものから順に出す（1 つの取得の失敗・再試行でほかのカードを待たせない）。
-  const answering = useAnsweringSettings();
+  // 回答の設定のカードとプロンプトのカードは別々に読み、読めたものから順に出す（1 つの取得の失敗・再試行でほかの
+  // カードを待たせない）。読み込み中の文言と経過時間は各カードの先頭に 1 か所ずつ出し、ページの先頭には重ねない
+  // （1 つの領域に経過時間は 1 か所。#4649）。
   const prompts = useAnswerPrompts();
-  const loading = answering.isPending || prompts.isPending;
   return (
     <PageBody wide>
-      {loading ? (
-        <TimedLoadingState
-          label={t("settings.loading")}
-          operationKey="settings-retrieval-load"
-          placement="page"
-          testId="settings-retrieval-loading"
-        />
-      ) : null}
       <AnsweringSettingsCard />
-      {prompts.isPending ? <FormSkeleton /> : prompts.isError || !prompts.data ? (
+      {prompts.isPending ? (
+        <TimedLoadingState
+          label={t("settings.answerPrompts.loading")}
+          operationKey="settings-retrieval-prompts-load"
+          testId="settings-retrieval-prompts-loading"
+        >
+          <FormSkeleton />
+        </TimedLoadingState>
+      ) : prompts.isError || !prompts.data ? (
         <ErrorState message={t("settings.answerPrompts.loadError")} onRetry={() => void prompts.refetch()} />
       ) : (
         <AnswerPromptStages

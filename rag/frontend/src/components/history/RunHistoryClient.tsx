@@ -619,7 +619,15 @@ function RunDetailView({ run }: { run: RunDetail }) {
                 {timeline.legacy ? traceLabels.legacy : t("history.process.empty")}
               </p>
             ) : (
-              <Skeleton className="h-5 w-full" data-testid="run-history-timeline-loading" />
+              // 処理の経過は実行の詳細の後から読む別の取得なので、節の先頭に文言と経過時間を 1 か所だけ出し、
+              // 読み込み後の形（閉じた段の一覧の見出しの 1 行）の Skeleton で覆う（#4649）。
+              <TimedLoadingState
+                label={t("history.process.loading")}
+                operationKey={`run-history-trace-load:${run.run_id}`}
+                testId="run-history-timeline-loading"
+              >
+                <Skeleton className="h-[var(--button-height-sm)] w-64 max-w-full" />
+              </TimedLoadingState>
             )
           }
           processDetailsProps={{ metadata: { conversationId: run.conversation_id ?? null, messageId: run.message_id ?? null }, title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}

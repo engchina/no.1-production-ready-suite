@@ -15,6 +15,7 @@ import {
   Skeleton,
   StatusBadge,
   Switch,
+  TableSkeleton,
   TextField,
   TimedLoadingState,
 } from "@production-ready/ui";
@@ -456,7 +457,11 @@ function CreateLabelSetForm({
                 operationKey="calibration-sources"
                 testId="calibration-sources-loading"
               >
-                <Skeleton className="h-10 w-full" aria-hidden="true" />
+                {/* 読み込み後の件数の行と表（4 列）の形で寸法を予約する（#4649）。 */}
+                <div className="grid min-w-0 gap-2">
+                  <Skeleton className="h-5 w-24" />
+                  <TableSkeleton columns={4} />
+                </div>
               </TimedLoadingState>
             ) : (
               sourcesQuery.isError ? (

@@ -122,3 +122,31 @@ test("ローカル DEBUG（範囲の制限なし）は KB の選択を必須に�
   await expect.poll(() => uploads.length).toBe(1);
   expect(uploads[0].body).not.toContain('name="knowledge_base_ids"');
 });
+
+test("保存先の案内の読み込み中は同じ寸法の Skeleton で場所を取り、読み込み後に下の欄を押し下げない（#4649）", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  await mockUploadPage(page);
+  await mockLocalAuth(page);
+  // 保存先の設定の取得だけを止める（mockUploadPage より後に登録して先に当てる）。
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    await gate;
+    await route.fallback();
+  });
+
+  await page.goto("/upload");
+  const skeleton = page.getByTestId("upload-storage-notice-skeleton");
+  await expect(skeleton).toBeVisible();
+  const picker = page.getByTestId("upload-knowledge-base-picker");
+  await expect(picker.getByText("未選択の場合は DEFAULT へ登録します。")).toBeVisible();
+  const pickerTop = (await picker.boundingBox())!.y;
+  await page.screenshot({ path: testInfo.outputPath("loading-upload-storage-notice.png") });
+
+  release();
+  await expect(skeleton).toHaveCount(0);
+  await expect(page.getByText(/^現在の保存先:/)).toBeVisible();
+  // 案内が出てもナレッジベースの欄は動かない（Skeleton は案内と同じ寸法）。
+  expect(Math.abs((await picker.boundingBox())!.y - pickerTop)).toBeLessThanOrEqual(2);
+});

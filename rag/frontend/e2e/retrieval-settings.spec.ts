@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "./fixtures/test";
 import { FLOW_STAGES } from "./_prompt-stage-fixtures";
 import { apiEnvelope, expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 
 // 検索方法の画面。検索・回答の既定、検索関連プロンプトを持つ。
 // 以前の検索モード・検索オプションと、根拠確認・回答スタイル・高度な検索の画面は削除した。
@@ -56,27 +57,53 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 
-  test(`検索方法の画面は読み込み中は経過時間を先頭の 1 か所に出し、カードは形を保つ (${viewport.name})`, async ({
+  test(`検索方法の画面の読み込み中は各カードの先頭に経過時間を 1 か所ずつ出し、ページの先頭に重ねない (${viewport.name})`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
+    // 回答の設定とプロンプトは別々に読む（読めたものから出す）。それぞれの応答を別々に止める。
+    let releaseAnswering: () => void = () => undefined;
+    let releasePrompts: () => void = () => undefined;
+    const answeringGate = new Promise<void>((resolve) => (releaseAnswering = resolve));
+    const promptsGate = new Promise<void>((resolve) => (releasePrompts = resolve));
+    await page.route("**/api/settings/answering", async (route) => {
+      await answeringGate;
+      await route.fulfill({ json: apiEnvelope(ANSWERING_SETTINGS) });
     });
-    await mockRetrievalCards(page, gate);
+    await page.route("**/api/settings/answer-prompts", async (route) => {
+      await promptsGate;
+      await route.fulfill({ json: apiEnvelope({ prompts: [], stages: FLOW_STAGES }) });
+    });
 
     await page.goto("/settings/retrieval");
 
-    const loading = page.getByTestId("settings-retrieval-loading");
-    await expect(loading).toBeVisible();
+    // ページの先頭の読み込み中の表示は無い（カードの表示と重ねない。#4649）。
+    await expect(page.getByTestId("settings-retrieval-loading")).toHaveCount(0);
+    const answering = page.getByTestId("answering-settings-loading");
+    const prompts = page.getByTestId("settings-retrieval-prompts-loading");
+    await expect(answering).toContainText("回答の検索と生成の設定を読み込んでいます");
+    await expect(prompts).toContainText("プロンプトを読み込んでいます");
     // カードは読み込み中も枠を出し、保存のボタンはまだ出さない（寸法を予約する）。
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toHaveCount(0);
-    release();
-    await expect(loading).toHaveCount(0);
+    // 縦に並ぶ 2 つのカードは別々の領域なので、経過時間は各カードに 1 つずつ（灰色の枠・全幅・Skeleton）。
+    await expect(answering.getByRole("timer")).toHaveCount(1);
+    await expect(prompts.getByRole("timer")).toHaveCount(1);
+    expect(await findLoadingStandardViolations(page, { expectCount: 2, skeleton: true })).toEqual([]);
+
+    // 回答の設定だけ読めたら、プロンプトのカードの表示だけが残る。
+    releaseAnswering();
+    await expect(answering).toHaveCount(0);
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
+    await expect(page.getByRole("timer")).toHaveCount(1);
+    expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+    await prompts.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("loading-retrieval-prompts.png") });
+
+    releasePrompts();
+    await expect(prompts).toHaveCount(0);
+    await expect(page.getByTestId("answer-prompt-stages-card")).toBeVisible();
     await expectNoPageOverflow(page);
   });
 

@@ -1,4 +1,5 @@
 import structureLevelsReader from "./fixtures/structure-levels-reader.json";
+import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectToastPlacement } from "./_toast-placement";
 import { expectedControlHeight, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -917,6 +918,50 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+
+test("節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const chapter = treeNode(ID("chapter"), "合成章", null, "doc", { virtual: true, child_count: 1 });
+  await mockKb(page, { status: "ok", documents: [structureDocument("doc", "synthetic.txt")], edges: [] });
+  await mockTree(page, { "root:set-doc": [chapter] });
+  // 文書の下の段の取得を止める（mockTree より後に登録して先に当てる）。
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/api\/knowledge-bases\/kb-1\/graph\/documents\/[^/]+\/tree/, async (route) => {
+    await gate;
+    await route.fallback();
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const graph = page.locator("#knowledge-base-graph");
+  const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
+  await expect(canvas).toBeVisible();
+  // 画布の位置はグラフの領域の上端からの距離で比べる（クリックでページがスクロールしても変わらない）。
+  const offset = async () => (await canvas.boundingBox())!.y - (await graph.boundingBox())!.y;
+  const before = await offset();
+
+  await graph.locator('.react-flow__node[data-id="doc"]').click();
+  const expanding = graph.getByTestId("structure-graph-expanding");
+  await expect(expanding).toContainText("章節を読み込んでいます");
+  // 画布は動かない（表示は画布の上に重なる）。
+  expect(Math.abs((await offset()) - before)).toBeLessThanOrEqual(1);
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("loading-graph-expand.png"), animations: "disabled" });
+  // 画面の中にあり、固定の見出しなどに隠れていない（重ねた表示はクリックを通すので、確かめる間だけ当たりを戻す）。
+  await expect(expanding).toBeInViewport({ ratio: 1 });
+  const visibleOnTop = await expanding.evaluate((element) => {
+    const anchor = element.closest<HTMLElement>('[data-testid="structure-graph-expanding-anchor"]')!;
+    anchor.style.pointerEvents = "auto";
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    anchor.style.pointerEvents = "";
+    return Boolean(hit && element.contains(hit));
+  });
+  expect(visibleOnTop).toBe(true);
+
+  release();
+  await expect(expanding).toHaveCount(0);
+  await expect(graph.locator(`.react-flow__node[data-id="${chapter.id}"]`)).toBeVisible();
+});
 
 test("章節の位置移動で空の続きページをエラーにし、再試行は既読の続きから読む", async ({ page }) => {
   const all = Array.from({ length: 201 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));

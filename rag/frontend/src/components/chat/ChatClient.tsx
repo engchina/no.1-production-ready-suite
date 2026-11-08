@@ -875,6 +875,9 @@ export function ChatClient() {
   const autoScroll = useChatAutoScroll({
     contentKey: scrollContentKey,
     resetKey: `${searchAnswerProfileId ?? ""}:${activeId ?? ""}`,
+    // 前提の読み込み中は会話の欄の先頭に文言と経過時間を出すので、末尾へ送らない（狭い画面で先頭が隠れる）。
+    // 読み終えたら末尾から読み始める（#4649）。
+    enabled: !(prerequisitesLoading && !liveTurn),
   });
 
   useEffect(() => {
@@ -1602,13 +1605,8 @@ export function ChatClient() {
   const targetSelector = (<>
 
             {searchAnswerProfileLoading ? (
-              <TimedLoadingState
-                label={t("chat.searchAnswerProfile.loading")}
-                operationKey="chat-search-answer-profiles-load"
-                testId="chat-search-answer-profiles-loading"
-              >
-                <SearchAnswerProfileSelectSkeleton />
-              </TimedLoadingState>
+              // ツールバーには欄の形だけを置き、文言と経過時間は会話の領域の先頭に 1 か所だけ出す（#4649）。
+              <SearchAnswerProfileSelectSkeleton compact testId="chat-search-answer-profiles-skeleton" />
             ) : searchAnswerProfilesFailed ? (
               <ApiErrorState
                 error={searchAnswerProfilesQuery.error}
@@ -1756,7 +1754,18 @@ export function ChatClient() {
             }
           >
             {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
-            {conversationLoading && !liveTurn ? (
+            {searchAnswerProfileLoading && !liveTurn ? (
+              // 検索・回答プロファイルの読み込み中は空の状態を出さず、文言と経過時間を会話の領域の先頭に 1 か所だけ出し、
+              // 会話の形の Skeleton で覆う。ツールバーは欄の形の Skeleton だけ。会話の内容の取得が同時に走っても
+              // 経過時間はここ 1 つにまとめる（#1153・#4649）。
+              <TimedLoadingState
+                label={t("chat.searchAnswerProfile.loading")}
+                operationKey="chat-search-answer-profiles-load"
+                testId="chat-search-answer-profiles-loading"
+              >
+                <ChatSkeleton testId="chat-messages-skeleton" />
+              </TimedLoadingState>
+            ) : conversationLoading && !liveTurn ? (
               <TimedLoadingState
                 label={t("chat.messages.loading")}
                 operationKey="chat-conversation-load"
@@ -1765,10 +1774,6 @@ export function ChatClient() {
                 {/* 質問と回答の吹き出しの寸法を予約する（3 製品で同じ形。#1153）。 */}
                 <ChatSkeleton />
               </TimedLoadingState>
-            ) : searchAnswerProfileLoading ? (
-              // 検索・回答プロファイルの読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
-              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
-              <ChatSkeleton testId="chat-messages-skeleton" />
             ) : activeId && conversationQuery.isError ? (
               <ErrorState
                 message={t("chat.messages.error")}

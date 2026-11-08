@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
 import { FileText, Heading, Image, Layers, MoreHorizontal, Table2, type LucideIcon } from "lucide-react";
-import { Banner, SelectField, TimedLoadingState } from "@production-ready/ui";
+import { Banner, ProcessingIndicator, SelectField } from "@production-ready/ui";
 import { aggregateGraphEdges, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphParallelEdge, graphPathLabel, GraphSearchNavigation, GraphSelectionDetails, selectGraphEdgeHandles, type GraphNodeDimensions, type GraphPoint } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 
@@ -314,17 +314,25 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     </div>
     {searchQuery.isError && query ? <Banner severity="danger" title={t("knowledgeBases.graph.searchError")} /> : null}
     {failure ? <DataLoadFailure error={failure.error} fallback={t("knowledgeBases.graph.expandError")} onRetry={failure.retry} /> : null}
-    {pending > 0 ? <TimedLoadingState label={t("knowledgeBases.graph.expanding")} operationKey="structure-graph-expand" testId="structure-graph-expanding">{null}</TimedLoadingState> : null}
-    <div ref={canvasAnchor}><GraphCanvasFrame role="region" aria-label={t("knowledgeBases.graph.title")}>
-      <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
-        onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
-        onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
-        onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
-        miniMap={viewNodes.length > 12 ? { "aria-label": t("knowledgeBases.graph.minimap"), nodeColor: (node) => kindFill((node.data as StructureNodeData).item.kind) } : false}>
-        <GraphCanvasControls labels={{ zoomIn: t("knowledgeBases.graph.zoomIn"), zoomOut: t("knowledgeBases.graph.zoomOut"), fit: t("knowledgeBases.graph.fitView"), reset: t("knowledgeBases.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
-        <GraphLegend label={t("knowledgeBases.graph.legend")} items={legendKinds.map((value) => ({ id: value, label: kindLabel(value), marker: <GraphLegendSwatch fill={kindFill(value)} /> }))} disabledIds={disabledKinds} onToggle={(id) => { setDisabledKinds((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; }); setSelection(null); }} testId="knowledge-base-graph-legend" />
-      </GraphCanvas>
-    </GraphCanvasFrame></div>
+    <div ref={canvasAnchor} className="relative">
+      <GraphCanvasFrame role="region" aria-label={t("knowledgeBases.graph.title")}>
+        <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
+          onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
+          onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
+          onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
+          miniMap={viewNodes.length > 12 ? { "aria-label": t("knowledgeBases.graph.minimap"), nodeColor: (node) => kindFill((node.data as StructureNodeData).item.kind) } : false}>
+          <GraphCanvasControls labels={{ zoomIn: t("knowledgeBases.graph.zoomIn"), zoomOut: t("knowledgeBases.graph.zoomOut"), fit: t("knowledgeBases.graph.fitView"), reset: t("knowledgeBases.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
+          <GraphLegend label={t("knowledgeBases.graph.legend")} items={legendKinds.map((value) => ({ id: value, label: kindLabel(value), marker: <GraphLegendSwatch fill={kindFill(value)} /> }))} disabledIds={disabledKinds} onToggle={(id) => { setDisabledKinds((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; }); setSelection(null); }} testId="knowledge-base-graph-legend" />
+        </GraphCanvas>
+      </GraphCanvasFrame>
+      {/* 節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）。画布は画面より高いことがあり、上端は固定の
+          見出しの下に隠れるので、下端に置き、画布の下端が画面の外にある間は画面の下端に留める（sticky）。凡例の上に置く。 */}
+      {pending > 0 ? <div className="pointer-events-none sticky bottom-3 z-20 h-0" data-testid="structure-graph-expanding-anchor">
+        <div className="absolute inset-x-3 bottom-20">
+          <ProcessingIndicator active label={t("knowledgeBases.graph.expanding")} operationKey="structure-graph-expand" testId="structure-graph-expanding" className="shadow-sm" />
+        </div>
+      </div> : null}
+    </div>
     {selectedNode?.tree && !selectedNode.tree.virtual ? <GraphChunkPanel key={`chunks:${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} documentId={selectedNode.tree.document_id} chunkSetId={selectedNode.tree.chunk_set_id} nodeId={selectedNode.id} nodeLabel={selectedNode.tree.label} /> : null}
     {selectedNode && !selectedNode.tree?.virtual ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} onLocate={locateReference} /> : null}
     {/* 仮想の節点（木だけにある祖先・旧索引の本文）は実体が無いので、チャンクを読まずに案内だけを出す。 */}
