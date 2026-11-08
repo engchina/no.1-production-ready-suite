@@ -59,6 +59,8 @@ function SkillUpdateItem({ item }: { item: SkillUpdateDetail }) {
         <p className="text-xs font-semibold text-fg-muted">{t("agent.skillUpdates.instructions")}</p>
         {item.instructions_diff.length ? (
           // 指示の差分（固定した版 → 今のスキル）。横に長い行は折り返し、横スクロールにしない。
+          // 差分のコードの表示で、データの一覧ではない（行の数の上限は backend の truncated。#4636）。
+          // eslint-disable-next-line no-restricted-syntax -- 差分の表示（一覧ではない）
           <ol
             className="max-h-80 overflow-y-auto rounded-md border border-border bg-surface-sunken py-1 font-mono text-xs"
             aria-label={t("agent.skillUpdates.instructionsLabel", { name: item.current?.name ?? item.pinned.name })}

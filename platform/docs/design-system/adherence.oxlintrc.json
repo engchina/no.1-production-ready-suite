@@ -175,6 +175,17 @@
             "selector": "MemberExpression[property.name='clipboard']:matches([object.name='navigator'], [object.property.name='navigator'])",
             "message": "クリップボードへ直接書かない（navigator.clipboard）。コピーのボタンは共有の CopyButton（アイコン Copy → 成功で Check と読み上げ、失敗は Toast か onCopyError で同じ場所。http の配備の execCommand と Safari の ClipboardItem にも対応）を使う（docs/design-system/components-reference.md「CopyButton」、#2099）。"
           }
+        ],
+        "design-system/list-height": [
+          "error",
+          {
+            "selector": "JSXOpeningElement[name.name='DataTable']:not(:has(JSXAttribute[name.name=/^(?:visibleRows|growToViewport|scrollWithinParent)$/])):not(:has(JSXSpreadAttribute)):not(:has(JSXAttribute[name.name='className'] Identifier[name=/^INFORMATION_[A-Z_]*SCROLL_CLASS$/]))",
+            "message": "DataTable に高さの指定が無い（件数が増えるとページ全体が伸びる）。stickyHeader と visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}（画面の下端まで使うなら growToViewport も）を渡すか、クライアント側で全件を持つなら PagedDataTable、セルの高い表は className={INFORMATION_LIST_SCROLL_CLASS} にする。一覧 + 詳細の一覧の列など例外は理由を添えて局所的に外し、page-archetypes.md の例外の表に書く（docs/ux-contracts/page-archetypes.md「一覧の型と、基準から外す例外」、#4636）。"
+          },
+          {
+            "selector": "JSXElement:has(> JSXOpeningElement:has(JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|[ ])max-h-/], TemplateElement[value.raw=/(?:^|[ ])max-h-/]))):has(> JSXExpressionContainer:has(> CallExpression[callee.property.name='map']))",
+            "message": "行リスト（.map() の行を直接持つ要素）の高さを手書きの max-h-* で決めない。共通の ListScrollRegion（size=\"list\" / \"card\"）か INFORMATION_LIST_SCROLL_CLASS / INFORMATION_CARD_LIST_SCROLL_CLASS を使う。会話・実行の詳細の中で増えるブロックは useCollapsedList で畳む（docs/ux-contracts/page-archetypes.md「一覧の型と、基準から外す例外」、#4636）。コード・ログ・差分の表示など一覧でないものは理由を添えて局所的に外す。"
+          }
         ]
       }
     }

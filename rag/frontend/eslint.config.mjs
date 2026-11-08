@@ -59,7 +59,11 @@ export default [
   {
     files: ["src/**/*.{ts,tsx}"],
     rules: {
-      "no-restricted-syntax": adherenceRules["design-system/restricted-syntax"],
+      // 一覧の高さ（design-system/list-height。#4636）も同じ no-restricted-syntax に足す（先頭の "error" を除いたセレクタ）。
+      "no-restricted-syntax": [
+        ...adherenceRules["design-system/restricted-syntax"],
+        ...adherenceRules["design-system/list-height"].slice(1),
+      ],
       "no-restricted-imports": adherenceRules["no-restricted-imports"],
     },
   },
