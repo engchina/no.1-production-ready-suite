@@ -62,6 +62,8 @@ def validate_prompt(key: str, content: str) -> None:
     missing.extend(token for token in required_tokens(key) if token not in content)
     if missing:
         raise ValueError(f"必須の placeholder がありません: {', '.join(missing)}")
+    if key in KEYED_LINE_PROMPT_KEYS:
+        _validate_keyed_lines(key, content)
 
 
 # 設定の概要の順を土台に、独立した知識の準備と、検索・回答の実行順を区別する。
@@ -340,6 +342,22 @@ def required_tokens(key: str) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(re.findall(r"(?<!{){[A-Za-z_][A-Za-z_0-9]*}(?!})", default_prompt(key)))
     )
+
+
+# 該当する入力のときだけ ``- キー: 説明`` の行を渡す指示。キーのない行だけの内容は実行で渡されない。
+KEYED_LINE_PROMPT_KEYS = ("generation.evidenceReading", "generation.guideRules")
+
+
+def _validate_keyed_lines(key: str, content: str) -> None:
+    from rag_engine.generation.grounded import reading_line_keys
+
+    known = reading_line_keys(default_prompt(key))
+    used = reading_line_keys(content)
+    if not used or any(name not in known for name in used):
+        raise ValueError(
+            "「- キー: 説明」の行が使われます。キーは次のいずれかにしてください: "
+            + "、".join(known)
+        )
 
 
 def stage_prompt_permission(key: str) -> str | None:

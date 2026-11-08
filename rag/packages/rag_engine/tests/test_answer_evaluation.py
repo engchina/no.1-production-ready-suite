@@ -1676,3 +1676,58 @@ def test_evidence_coverage_is_not_measured_when_one_batch_fails():
     assert result["status"] == "completed"
     assert result.get("evidence_coverage") is None
     assert result["judge_diagnostics"]["evidence_coverage_failure"] == "RuntimeError"
+
+
+@pytest.mark.parametrize("status", ["supported", "unsupported", "contradicted"])
+def test_summary_of_a_rendered_answer_is_judged_against_the_originals_its_body_cites(status):
+    """#3685: 実際の回答の組み立てを通した要約は、未引用として隠さず、本文が引いた原文だけで判定する。"""
+    from dataclasses import replace
+
+    from test_grounded_answer import FakeModel, draft, item
+    from test_guide_step_fulfillment import _context, _ids, _knowledge, _record
+
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.answering import _cited_evidence_ids, synthesize_grounded_answer
+
+    body = "画面Aで値を入力します。"
+    other = "別の表で値を集計します。"
+    summary = "画面Aで値を入力すると手続きが必ず完了します。"
+    ctx = _context(_record(0, body, "画面A", "run:a"), _record(1, other, "別の機能", "run:b"))
+    knowledge = _knowledge(())
+    labels = _ids(ctx, knowledge)
+    model = FakeModel([draft(item(labels[body], body, body), summary=summary)], [])
+
+    def unused(*a, **k):
+        return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        answered = synthesize_grounded_answer(
+            "画面Aの手順は？",
+            ctx,
+            replace(get_settings(), answer_audit_mode="none"),
+            image_prompt_mode="text_only",
+            runtime_knowledge=knowledge,
+        )
+    assert answered.response.answer_text.startswith(summary)
+    response = answered.response
+    payload = dict(
+        question="画面Aの手順は？",
+        standard_answer="合成の標準回答。",
+        answer_text=response.answer_text,
+        cited_evidence=list(response.cited_evidence),
+        evidence_items=answer_evidence_items(ctx.records, _cited_evidence_ids(response.cited_evidence)),
+    )
+    evaluated = AnswerEvaluationOutput(
+        coverage_checks=output().coverage_checks,
+        claim_checks=[ClaimCheck(answer_quote=summary, status=status, source_id="", evidence_quote="", reason="合成の意味判定")],
+    )
+    calls = []
+    with patch(PARSE, side_effect=judge(evaluated, calls=calls)):
+        result = evaluate_answer_payload(payload, object())
+    claim = next(item for item in result["claim_checks"] if item["answer_quote"] == summary)
+    assert (claim["status"], claim["reference_check"] != REFERENCE_UNCITED) == (status, True)
+    inputs = next(call for call in calls_of(calls, ClaimJudgement) if call["passage"]["text"] == summary)
+    assert [node["text"] for node in inputs["evidence_items"] if node["id"] != QUESTION_SOURCE_ID] == [body]
+    assert result["judge_diagnostics"]["uncited_claims"] == 0
+    assert result["judge_diagnostics"]["summary_citation_candidates"][0]["evidence_ids"]

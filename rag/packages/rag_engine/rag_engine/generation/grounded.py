@@ -250,6 +250,11 @@ GUIDE_RULES_PROMPT = (
 _READING_LINE = re.compile(r"^- ([^:\s]+): ")
 
 
+def reading_line_keys(template: str) -> list[str]:
+    """読み方の指示の ``- キー: 説明`` の行のキー（``_reading_block`` が行を残す差し込み口）。"""
+    return [match.group(1) for line in template.splitlines() if (match := _READING_LINE.match(line))]
+
+
 def _reading_block(template: str, keys: set[str]) -> str:
     """読み方の見出しと、今の入力にあるキーの行だけ。該当する行が無ければ空（見出しも渡さない）。"""
     kept = [line for line in template.splitlines() if not (match := _READING_LINE.match(line)) or match.group(1) in keys]

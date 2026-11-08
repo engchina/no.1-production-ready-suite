@@ -379,3 +379,129 @@ def test_partly_explained_quote_does_not_retry_the_audit():
     model = FakeModel([draft(item(labels[STEP_A], STEP_A, STEP_A), item(labels[STEP_B], STEP_B, STEP_B))], [partial])
     result = _run(model, ctx, knowledge).response
     assert result.generation_trace["rounds"][0]["audit_calls"] == 1
+
+
+# #2649 の最小再現と同じ形の合成の資料（本文と引用を意図的に違える。#3753 の受入）。
+_SHARED_A = "パネルAを開いて設定値を入力します。"
+_SHARED_B = "プレビューを選び内容を確認して反映ボタンを押します。"
+_SHARED_END = "操作を完了します。"
+_SHARED_TEXT = _SHARED_A + _SHARED_B + _SHARED_END
+_SHARED_STEPS = (
+    ("s1", "パネルAで設定値を入力する", ("run:shared",)),
+    ("s2", "プレビューを選び内容を確認して反映ボタンで反映する", ("run:shared",)),
+)
+_SHARED_TERMS = (("s1", ("パネルA", "設定値", "入力")), ("s2", ("プレビュー", "内容", "確認", "反映ボタン")))
+_SHARED_CONTRACTS = (contract("s1", _SHARED_STEPS[0][1]), contract("s2", _SHARED_STEPS[1][1], dependencies=["s1"]))
+
+
+def _observed(step, state, quote="", indexes=(0,)):
+    return {
+        "requirement_id": f"{step}:0",
+        "answer_state": state,
+        "item_indexes": list(indexes) if state == "explained" else [],
+        "answer_quote": quote,
+        "reason": "合成の観察",
+    }
+
+
+_NOT_MENTIONED = ("not_mentioned", "")
+
+
+def _statuses_from_audit(texts, reviews):
+    """決定論の監査の観察を、充足の確定（apply_guide_contracts）へ渡した手順の状態。"""
+    span = {"source_id": "run:shared", "evidence_id": "E1", "label": "E1", "text": _SHARED_TEXT}
+    checked = [
+        grounded.CheckedItem(
+            GroundedItem(
+                kind="operation", text=text, applies="matched", citations=[GroundedCitation(evidence_id="E1", quote=_SHARED_TEXT)]
+            ),
+            span=span,
+        )
+        for text in texts
+    ]
+    coverage = grounded.guide_step_coverage(_SHARED_STEPS, checked, [span], (), dict(_SHARED_TERMS))
+    result = grounded.apply_guide_contracts(coverage, checked, _SHARED_CONTRACTS, audit(*reviews))
+    return [step["status"] for step in result]
+
+
+def test_audit_does_not_explain_a_following_step_that_only_the_citation_contains():
+    assert _statuses_from_audit([_SHARED_A], [_observed("s1", "explained", _SHARED_A), _observed("s2", *_NOT_MENTIONED)]) == [
+        "explained",
+        "unused",
+    ]
+
+
+def test_audit_that_quotes_only_the_citation_cannot_explain_the_following_step():
+    """監査が引用の原文を本文の証拠にしても、本文に無い操作を説明済みにしない。"""
+    statuses = _statuses_from_audit([_SHARED_A], [_observed("s1", "explained", _SHARED_A), _observed("s2", "explained", _SHARED_B)])
+    assert statuses[0] == "explained"
+    assert statuses[1] != "explained"
+
+
+@pytest.mark.parametrize(
+    ("texts", "indexes"),
+    [([_SHARED_A + _SHARED_B], (0, 0)), ([_SHARED_A, _SHARED_B], (0, 1))],
+    ids=["one-item", "two-items"],
+)
+def test_audit_explains_both_steps_when_the_answer_explains_both(texts, indexes):
+    assert _statuses_from_audit(
+        texts, [_observed("s1", "explained", _SHARED_A, (indexes[0],)), _observed("s2", "explained", _SHARED_B, (indexes[1],))]
+    ) == ["explained", "explained"]
+
+
+def test_common_sentence_alone_explains_no_step():
+    assert _statuses_from_audit([_SHARED_END], [_observed("s1", *_NOT_MENTIONED), _observed("s2", *_NOT_MENTIONED)]) == [
+        "unused",
+        "unused",
+    ]
+
+
+@pytest.mark.parametrize("mode", ["none", "standard"])
+@pytest.mark.parametrize(
+    "texts", [[_SHARED_A], [_SHARED_A + _SHARED_B], [_SHARED_END]], ids=["first-step", "both-steps", "common-sentence"]
+)
+def test_answer_flow_keeps_steps_unknown_while_the_semantic_audit_is_diagnostic_only(mode, texts):
+    """全経路では、未校正の意味監査（#3769）の観察を手順の状態に採用しない。説明済みにも根拠の不在にも断定しない。"""
+    from dataclasses import replace
+
+    from test_grounded_answer import FakeModel, draft, item
+    from test_grounded_answer import audit as make_audit
+    from test_guide_step_fulfillment import _context, _ids, _knowledge, _record
+
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.answering import synthesize_grounded_answer
+
+    ctx = _context(_record(0, _SHARED_TEXT, "パネルの手順", "run:shared"))
+    knowledge = replace(_knowledge(_SHARED_STEPS, terms=_SHARED_TERMS), guide_step_contracts=_SHARED_CONTRACTS)
+    label = _ids(ctx, knowledge)[_SHARED_TEXT]
+    # 本文のとおりの観察を返す決定論の監査（A+B なら両方 explained）。
+    observations = [
+        _observed(step, "explained", quote) if quote in " ".join(texts) else _observed(step, *_NOT_MENTIONED)
+        for step, quote in (("s1", _SHARED_A), ("s2", _SHARED_B))
+    ]
+    audit_reply = {
+        **make_audit(*((index, "supported", "matched", "") for index in range(len(texts))), requests=[("Q1", "addressed")]),
+        "guide_requirement_reviews": observations,
+    }
+    model = FakeModel([draft(*(item(label, text, _SHARED_TEXT) for text in texts))], [audit_reply])
+
+    def unused(*a, **k):
+        return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = synthesize_grounded_answer(
+            "パネルAの手順を教えてください",
+            ctx,
+            replace(get_settings(), answer_audit_mode=mode),
+            image_prompt_mode="text_only",
+            runtime_knowledge=knowledge,
+        ).response
+    assert [step["status"] for step in result.generation_trace["guide_step_coverage"]] == ["unknown", "unknown"]
+    if mode == "standard":
+        # 監査の観察は診断に残す。
+        observation = result.generation_trace["semantic_audit_observation"]
+        assert observation["adopted"] is False
+        assert [row["answer_state"] for row in observation["audit"]["guide_requirement_reviews"]] == [
+            row["answer_state"] for row in observations
+        ]
