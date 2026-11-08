@@ -4955,7 +4955,8 @@ test("DeepSec は構造化データ権限をロール別に編集する", { tag:
         comment: "",
         sample_values: [],
       },
-      ...Array.from({ length: 12 }, (_, index) => ({
+      // 列の選択の格子が共通の行リストの高さ（md 以上 28rem）を超えてスクロールする数（#4636）。
+      ...Array.from({ length: 45 }, (_, index) => ({
         column_name: `AUDIT_COLUMN_${String(index + 1).padStart(2, "0")}`,
         logical_name: `監査列${index + 1}`,
         data_type: "VARCHAR2(64)",
