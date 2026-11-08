@@ -443,7 +443,6 @@ function QueryStatus({
       active
       label={text("expression.loading")}
       placement="panel"
-      className="rounded-md border border-border bg-surface-sunken px-3 py-2"
       testId="scope-expression-loading"
     />
   ) : error ? (

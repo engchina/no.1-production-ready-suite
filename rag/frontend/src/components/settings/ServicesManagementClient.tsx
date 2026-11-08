@@ -652,7 +652,7 @@ function ServiceRow({
           operationKey={`${service.service_id}:${pendingAction}`}
           placement="action"
           activityIcon="none"
-          className="mt-3 rounded-md border border-border bg-surface-sunken px-3 py-2"
+          className="mt-3"
           testId={`service-processing-${service.service_id}`}
         />
       ) : null}
@@ -789,7 +789,6 @@ function ServiceLogPanel({
         <TimedLoadingState
           label={t("settings.services.logs.loading")}
           operationKey="services-logs-load"
-          framed={false}
           className="px-3 py-3"
           testId="services-logs-loading"
         >

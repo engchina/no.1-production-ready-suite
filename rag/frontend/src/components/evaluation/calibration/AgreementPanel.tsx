@@ -107,7 +107,6 @@ export function AgreementPanel({ detail }: { detail: LabelSetDetail }) {
             <TimedLoadingState
               label={t("evaluation.calibration.agreement.loading")}
               operationKey={`calibration-agreement-${labelSetId}`}
-              framed={false}
               testId="calibration-agreement-loading"
             >
               <Skeleton className="h-24 w-full" aria-hidden="true" />

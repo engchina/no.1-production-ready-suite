@@ -230,23 +230,12 @@ export function ModelSettingsPage({
   useEffect(() => {
     if (!query.data || draft) return;
     const loaded = cloneSettings(query.data.settings);
+    const flags = savedSettingsErrorFlags(loaded);
     setDraft(loaded);
     // 保存済みの状態が不正（旧設定で Vision 対応のモデルがない等）なら、開いた時点で案内する。
-    setShowDefaultErrors(
-      Object.keys(validateDefaultModels(loaded.enterprise_ai)).length > 0,
-    );
-    setShowModelConnectionErrors(
-      Object.keys(
-        validateModelConnections(
-          loaded.enterprise_ai.models,
-          loaded.enterprise_ai.connections,
-          savedConnectionIds(loaded),
-        ),
-      ).length > 0,
-    );
-    setShowModelIdErrors(
-      Object.keys(validateModelIds(loaded.enterprise_ai.models)).length > 0,
-    );
+    setShowDefaultErrors(flags.defaults);
+    setShowModelConnectionErrors(flags.modelConnections);
+    setShowModelIdErrors(flags.modelIds);
     setBaselineData(query.data);
     setCheckData(query.data);
   }, [draft, query.data]);
@@ -681,8 +670,16 @@ export function ModelSettingsPage({
         }));
         return;
       }
-      // 下書きを捨てると、読み込みの effect が最新の値から下書き・基準を作り直す。
-      setDraft(null);
+      // 最新の値から下書き・基準をその場で作り直す。下書きを一度 null にすると、読み込み中の表示に 1 度切り替わって
+      // 画面が縮み、スクロールの位置が動く（#4649）。再読み込みは前の内容を残し、ボタンの loading だけで示す。
+      const loaded = cloneSettings(result.data.settings);
+      const flags = savedSettingsErrorFlags(loaded);
+      setDraft(loaded);
+      setShowDefaultErrors(flags.defaults);
+      setShowModelConnectionErrors(flags.modelConnections);
+      setShowModelIdErrors(flags.modelIds);
+      setBaselineData(result.data);
+      setCheckData(result.data);
       setConflictSection(null);
       setSaveErrors({});
       setTestResults({});
@@ -1977,6 +1974,22 @@ function buildClientSideTestFailure(
 
 function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
   return normalizeModelSettings(settings);
+}
+
+/** 保存済みの設定の不正（開いた時点・読み込み直した時点で案内する誤り）の有無。 */
+function savedSettingsErrorFlags(loaded: ModelSettingsPayload) {
+  return {
+    defaults: Object.keys(validateDefaultModels(loaded.enterprise_ai)).length > 0,
+    modelConnections:
+      Object.keys(
+        validateModelConnections(
+          loaded.enterprise_ai.models,
+          loaded.enterprise_ai.connections,
+          savedConnectionIds(loaded),
+        ),
+      ).length > 0,
+    modelIds: Object.keys(validateModelIds(loaded.enterprise_ai.models)).length > 0,
+  };
 }
 
 function savedConnectionIds(settings: ModelSettingsPayload): string[] {

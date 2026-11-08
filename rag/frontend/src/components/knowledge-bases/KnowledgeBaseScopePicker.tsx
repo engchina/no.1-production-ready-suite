@@ -104,7 +104,6 @@ export function KnowledgeBaseScopePicker({
         <TimedLoadingState
           label={t("knowledgeBaseScope.loading")}
           operationKey="knowledge-base-scope-load"
-          framed={false}
           testId="knowledge-base-scope-loading"
         >
           <Skeleton className="h-[var(--field-height)] w-full" />

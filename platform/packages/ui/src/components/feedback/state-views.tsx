@@ -24,7 +24,7 @@ export function LoadingState({
   testId?: string;
 }) {
   return (
-    <TimedLoadingState label={label} operationKey={operationKey} framed={false} testId={testId}>
+    <TimedLoadingState label={label} operationKey={operationKey} testId={testId}>
       <div className="flex flex-col gap-2" aria-hidden="true">
         {Array.from({ length: rows }).map((_, index) => (
           <Skeleton key={index} className="h-5 w-full" />

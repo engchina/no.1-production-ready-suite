@@ -314,7 +314,7 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     </div>
     {searchQuery.isError && query ? <Banner severity="danger" title={t("knowledgeBases.graph.searchError")} /> : null}
     {failure ? <DataLoadFailure error={failure.error} fallback={t("knowledgeBases.graph.expandError")} onRetry={failure.retry} /> : null}
-    {pending > 0 ? <TimedLoadingState label={t("knowledgeBases.graph.expanding")} operationKey="structure-graph-expand" testId="structure-graph-expanding" framed={false}>{null}</TimedLoadingState> : null}
+    {pending > 0 ? <TimedLoadingState label={t("knowledgeBases.graph.expanding")} operationKey="structure-graph-expand" testId="structure-graph-expanding">{null}</TimedLoadingState> : null}
     <div ref={canvasAnchor}><GraphCanvasFrame role="region" aria-label={t("knowledgeBases.graph.title")}>
       <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
         onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}

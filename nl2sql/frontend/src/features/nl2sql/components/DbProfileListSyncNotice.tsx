@@ -22,7 +22,7 @@ import type { DbProfileListSync } from "../useDbProfileListSync";
 /** DB Profile 一覧の再取得・差分同期の進行（経過時間）。 */
 export function DbProfileListSyncProcessing({
   sync,
-  className = "rounded-md border border-border bg-surface-sunken px-3 py-2",
+  className = "",
   testId,
 }: {
   sync: DbProfileListSync;

@@ -54,6 +54,15 @@ export type ProcessingPlacement =
  */
 export type ProcessingActivityIcon = "spinner" | "static" | "none";
 
+/**
+ * 処理中の表示の面。既定の "framed" は灰色の枠（`bg-surface-sunken`）で、処理中であることを 3 製品で同じ見た目で示す
+ * （#4649）。"plain" は、すでに灰色の枠を持つ部品（`TimedLoadingState`・処理の経過の帯など）の中に入れるときだけ使う。
+ */
+export type ProcessingSurface = "framed" | "plain";
+
+/** 処理中の表示の灰色の枠（`TimedLoadingState` と単独の `ProcessingIndicator` で共通）。 */
+export const PROCESSING_FRAME_CLASS = "rounded-md border border-border bg-surface-sunken";
+
 export interface UseOperationTimingOptions {
   active: boolean;
   /** 同じ component instance で別処理へ切り替わるとき timer をリセットする識別子。 */
@@ -171,10 +180,15 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   /** 別の live region が状態遷移を通知する場合は false にして二重読み上げを避ける。 */
   announceActivity?: boolean;
   labels?: Partial<ProcessingLabels>;
+  /** 既定は灰色の枠。灰色の枠を持つ部品の中に入れるときだけ "plain"。 */
+  surface?: ProcessingSurface;
 }
 
 /**
  * 処理ラベル・spinner・経過時間・取消を一列にまとめた全画面共通表示。
+ *
+ * 折り返しは置かれた領域の幅で決める（container query。#4649）。狭い列・375px では経過時間を処理の名前の下へ回し、
+ * 横にあふれない。
  *
  * 遅延の案内（「通常より時間がかかっています。」）は処理の名前の直下に出す（#2426）。行は処理の開始から見えない
  * 文言で高さを予約し（#902）、一度出たら処理が終わるまで消さない（`useLatchedSlow`）。
@@ -191,6 +205,7 @@ export function ProcessingIndicator({
   activityIcon = "spinner",
   announceActivity = true,
   labels: labelOverrides,
+  surface = "framed",
   ...timingOptions
 }: ProcessingIndicatorProps) {
   const labels = { ...DEFAULT_PROCESSING_LABELS, ...labelOverrides };
@@ -202,8 +217,11 @@ export function ProcessingIndicator({
 
   return (
     <div
-      className={`pr-message-text grid min-w-0 gap-2 ${className}`}
+      className={`@container/processing pr-message-text grid w-full min-w-0 gap-2 ${
+        surface === "framed" ? `${PROCESSING_FRAME_CLASS} px-3 py-2` : ""
+      } ${className}`}
       aria-busy={timing.active}
+      data-processing-surface={surface}
       data-processing-placement={placement}
       data-processing-activity-icon={activityIcon}
       data-testid={testId}
@@ -213,10 +231,10 @@ export function ProcessingIndicator({
           {label}
         </span>
       ) : null}
-      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex min-w-0 flex-col gap-2 @md/processing:flex-row @md/processing:items-start @md/processing:justify-between">
         {/* 印は折り返した文字の 1 行目の中心にそろえる（#2371）。広い幅では 1 行目を右の経過時間（高さ 1.75rem）の
             中央の高さに置き、遅延の案内はその下に続ける（#2426）。 */}
-        <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-fg sm:pt-[calc((1.75rem-1lh)/2)]">
+        <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-fg @md/processing:pt-[calc((1.75rem-1lh)/2)]">
           {timing.active && showActivityIcon ? (
             <span className="pr-icon-line">
               <Spinner size={16} className="text-accent-fg" />
@@ -262,7 +280,7 @@ export function ProcessingIndicator({
           </span>
         </span>
         {/* 右の列: 経過時間（と取り消し）だけ。 */}
-        <span className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
+        <span className="flex flex-wrap items-center gap-2 @md/processing:shrink-0 @md/processing:justify-end">
           <span
             className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-fg-muted"
             role="timer"
@@ -301,12 +319,16 @@ export interface TimedLoadingStateProps {
   placement?: ProcessingPlacement;
   className?: string;
   testId?: string;
-  framed?: boolean;
   activityIcon?: ProcessingActivityIcon;
   labels?: Partial<ProcessingLabels>;
 }
 
-/** Skeleton/結果領域の寸法を保ったまま共通 timer を付ける loading container。 */
+/**
+ * Skeleton/結果領域の寸法を保ったまま共通 timer を付ける loading container。
+ *
+ * 常に灰色の枠で、置かれた領域の全幅を使う（枠を外す指定は持たない。#4649）。中の Skeleton は読み込み後の内容と
+ * 同じ形・高さにする。
+ */
 export function TimedLoadingState({
   label,
   children,
@@ -316,7 +338,6 @@ export function TimedLoadingState({
   placement = "panel",
   className = "",
   testId,
-  framed = true,
   activityIcon,
   labels,
 }: TimedLoadingStateProps) {
@@ -324,9 +345,7 @@ export function TimedLoadingState({
 
   return (
     <section
-      className={`grid min-w-0 gap-3 ${
-        framed ? "rounded-md border border-border bg-surface-sunken p-3" : ""
-      } ${className}`}
+      className={`grid w-full min-w-0 gap-3 ${PROCESSING_FRAME_CLASS} p-3 ${className}`}
       aria-busy="true"
       aria-label={label}
       data-processing-placement={placement}
@@ -342,6 +361,7 @@ export function TimedLoadingState({
         testId={testId ? `${testId}-processing` : undefined}
         activityIcon={effectiveActivityIcon}
         labels={labels}
+        surface="plain"
       />
       {children}
     </section>

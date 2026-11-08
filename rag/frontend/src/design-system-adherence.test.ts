@@ -377,12 +377,11 @@ const f = <span style={{ animationName: "spin" }} />;
     expect(linesWith(messages, INLINE_SPIN)).toEqual([7, 8]);
   });
 
-  it("共有の Spinner・loading・回さないアイコン・spin を含む別の語は許す", async () => {
+  it("loading・回さないアイコン・spin を含む別の語は許す", async () => {
     const messages = await lint(`
 import { RefreshCw, RotateCcw, Clock3 } from "lucide-react";
-import { Spinner, Button } from "@production-ready/ui";
+import { Button } from "@production-ready/ui";
 import { Loader2 } from "./local-loader";
-const a = <Spinner size={14} className="text-accent-fg" />;
 const b = <Button loading={busy} icon={RefreshCw}>再読み込み</Button>;
 const c = <RotateCcw size={16} aria-hidden />;
 const d = <span className="animate-pulse spinner-like" />;
@@ -390,6 +389,19 @@ const e = <span style={{ animation: "toast-in 200ms ease-out" }} />;
 const f = { label: "spin" };
 `);
     expect(messages).toEqual([]);
+  });
+});
+
+describe("adherence: packages/ui の外で Spinner を直接置かない（#4649）", () => {
+  it("Spinner を検出し、領域は TimedLoadingState・操作は ProcessingIndicator・ボタンは loading を許す", async () => {
+    const messages = await lint(`
+import { Spinner, Button, TimedLoadingState, ProcessingIndicator } from "@production-ready/ui";
+const a = <Spinner size={14} className="text-accent-fg" />;
+const b = <TimedLoadingState label="読み込んでいます"><div /></TimedLoadingState>;
+const c = <ProcessingIndicator active label="保存しています" placement="action" />;
+const d = <Button loading={busy} icon={Save}>保存</Button>;
+`);
+    expect(linesWith(messages, "packages/ui の外で Spinner を直接置かない")).toEqual([3]);
   });
 });
 

@@ -649,7 +649,6 @@ export function QuestionClassifierModelsPage() {
             label={t("common.processing.refreshing")}
             operationKey="question-learning-refresh"
             placement="workspace"
-            className="rounded-md border border-border bg-surface-sunken px-3 py-2"
             testId="question-learning-workspace-processing"
             activityIcon="none"
           />

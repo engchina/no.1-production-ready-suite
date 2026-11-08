@@ -33,7 +33,6 @@ export function HistoryRowListSkeleton({
       placement="panel"
       className="content-start"
       testId={testId}
-      framed={false}
       activityIcon={activityIcon}
     >
       {children}

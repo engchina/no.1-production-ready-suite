@@ -537,6 +537,8 @@ export {
   type TimedLoadingStateProps,
   type ProcessingPlacement,
   type ProcessingActivityIcon,
+  type ProcessingSurface,
+  PROCESSING_FRAME_CLASS,
   type ProcessingLabels,
   type UseOperationTimingOptions,
   type OperationTiming,

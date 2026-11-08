@@ -60,7 +60,6 @@ export function AnswerPromptPanel({ promptKey, fieldLabel }: { promptKey: Answer
       <TimedLoadingState
         label={t("settings.answerPrompts.loading")}
         operationKey={`answer-prompt-load:${promptKey}`}
-        framed={false}
         testId="answer-prompt-loading"
       >
         <Skeleton className="h-40 w-full" />

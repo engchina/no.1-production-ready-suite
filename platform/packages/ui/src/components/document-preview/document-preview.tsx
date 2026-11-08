@@ -397,7 +397,7 @@ function TextPreview({ sizing, loadText, loadTextRange, onTextRangeChange, fileN
   }, [key]);
   useEffect(() => { if (current && !current.error) onTextRangeChange?.(current); }, [current, onTextRangeChange]);
   if (current?.error != null) return <ApiErrorState error={current.error} fallback={labels.fetchError} onRetry={() => setAttempt(v => v + 1)} retryLabel={labels.retry} />;
-  if (!current) return <TimedLoadingState label={labels.textLoading} operationKey="preview-text-load" framed={false} testId="preview-text-loading"><Skeleton className="h-40 w-full" /></TimedLoadingState>;
+  if (!current) return <TimedLoadingState label={labels.textLoading} operationKey="preview-text-load" testId="preview-text-loading"><Skeleton className="h-40 w-full" /></TimedLoadingState>;
   return <div className={cn("flex min-h-0 flex-col gap-2", sizing !== "bounded" && "h-full")}>
     {current.total > current.limit ? <div className="flex flex-wrap items-center justify-between gap-2" aria-label={labels.toolbar}>
       <Button size="sm" variant="secondary" icon={ArrowLeft} disabled={current.offset === 0} onClick={() => setOffset(current.previous_offset ?? Math.max(0, current.offset - current.limit))}>{labels.previousPage}</Button>

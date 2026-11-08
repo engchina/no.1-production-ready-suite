@@ -174,7 +174,6 @@ export function AnnotationPanel({ detail }: { detail: LabelSetDetail }) {
             <TimedLoadingState
               label={t("evaluation.calibration.annotate.loading")}
               operationKey={`calibration-rows-${labelSetId}`}
-              framed={false}
               testId="calibration-rows-loading"
             >
               <Skeleton className="h-6 w-1/3" aria-hidden="true" />

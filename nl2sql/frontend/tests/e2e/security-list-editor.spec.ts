@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { findClippedPlaceholders, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
+import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
 
 // 共通のユーザー・ロール・権限管理の一覧 → 全幅のエディタ（A 型。page-archetypes.md §1 A。#4635）。
 // 一覧は全幅の表（詳細の列・空の選択の状態を持たない）。行か名前のリンクで全幅のエディタを開き、
@@ -273,7 +274,7 @@ test("管理画面の読込表示は対象を短く示して一覧の幅に収�
   const pending = new Promise<void>(resolve => { release = resolve; });
   await page.route("**/api/security/**", async route => { await pending; await route.fallback(); });
   try {
-    for (const [kind, label] of [["users", "ユーザーを読込中"], ["roles", "ロールを読込中"], ["permissions", "権限を読込中"]]) {
+    for (const [kind, label] of [["users", "ユーザーを読み込んでいます"], ["roles", "ロールを読み込んでいます"], ["permissions", "権限を読み込んでいます"]]) {
       await page.goto(`/settings/security/${kind}`);
       const loading = page.getByTestId(`security-${kind}-loading`);
       await expect(loading.locator("[data-processing-label]")).toHaveText(label);
@@ -282,6 +283,33 @@ test("管理画面の読込表示は対象を短く示して一覧の幅に収�
       const size = await loading.locator("[data-processing-label]").evaluate(node => ({height: node.getBoundingClientRect().height, line: parseFloat(getComputedStyle(node).lineHeight)}));
       expect(size.height).toBeLessThanOrEqual(size.line * 2 + 1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+      // 読み込み中の表示の基準（#4649）: 灰色の枠・経過時間・一覧の全幅・あふれない、を 1 つだけ。
+      expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
     }
   } finally { release(); }
+});
+
+test("一覧の「最新情報を取得」は前の行を残し、ボタンの loading だけで示す（#4649）", { tag: "@responsive" }, async ({ page }) => {
+  await mockSecurity(page);
+  await page.goto("/settings/security/users");
+  await expect(userLink(page, "01")).toBeVisible();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/security/users", async (route) => { await pending; await fulfill(route, USERS); });
+  try {
+    const actions = page.getByTestId("security-users-actions");
+    const refresh = actions.getByRole("button", { name: "最新情報を取得" });
+    if (await refresh.isVisible()) {
+      await refresh.click();
+      await expect(refresh).toHaveAttribute("aria-busy", "true");
+    } else {
+      // 狭い幅は PageHeader のその他の操作のメニューに入る。
+      await actions.getByRole("button").last().click();
+      await page.getByRole("menuitem", { name: "最新情報を取得" }).click();
+    }
+    // 行は Skeleton に置き換えず残し、領域の経過時間の表示も出さない。
+    await expect(userLink(page, "01")).toBeVisible();
+    await expect(page.getByTestId("security-users-loading")).toHaveCount(0);
+  } finally { release(); }
+  await expect(userLink(page, "01")).toBeVisible();
 });

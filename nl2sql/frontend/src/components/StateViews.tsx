@@ -37,7 +37,6 @@ export function LoadingState({
       onCancel={onCancel}
       placement={placement}
       activityIcon={activityIcon}
-      framed={false}
     >
       {children}
     </TimedLoadingState>

@@ -4,7 +4,7 @@ import { isTimeoutError } from "../../lib/api-error";
 import { cn } from "../../lib/utils";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
-import { Spinner } from "../ui/spinner";
+import { ProcessingIndicator } from "../feedback/processing-state";
 
 export interface LoadMoreFooterProps {
   /** 件数の文言（翻訳済み。例:「100 / 3,000 件を表示、選択 3 件」）。 */
@@ -55,17 +55,20 @@ export function LoadMoreFooter({
   const retry = onRetry ?? onLoadMore;
   return (
     <div className={cn("grid min-w-0 gap-2", className)} data-testid={testId}>
+      {/* 再読み込みは前の行を残したまま、ほかの処理中と同じ灰色の枠・経過時間の行を全幅で出す（#4649）。 */}
+      {refreshing && refreshingLabel ? (
+        <ProcessingIndicator
+          active
+          label={refreshingLabel}
+          placement="action"
+          showSlowMessage={false}
+          testId={testId ? `${testId}-refreshing` : undefined}
+        />
+      ) : null}
       <div className="flex flex-col gap-2 sm:min-h-[var(--button-height-sm)] sm:flex-row sm:items-center sm:justify-between">
-        {refreshing && refreshingLabel ? (
-          <p className="flex items-center gap-2 text-xs text-fg-muted" role="status">
-            <Spinner size={14} className="text-accent-fg" />
-            <span>{refreshingLabel}</span>
-          </p>
-        ) : (
-          <p className="text-xs text-fg-muted tnum" aria-live={announce ? "polite" : undefined}>
-            {summary}
-          </p>
-        )}
+        <p className="text-xs text-fg-muted tnum" aria-live={announce ? "polite" : undefined}>
+          {summary}
+        </p>
         {hasMore && onLoadMore && !loadMoreError ? (
           <Button
             type="button"

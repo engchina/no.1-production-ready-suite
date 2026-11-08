@@ -550,7 +550,6 @@ function FeedbackDetailPanel({ feedbackId }: { feedbackId: string }) {
         <TimedLoadingState
           label={t("feedback.detail.loading")}
           operationKey={`feedback-detail-${feedbackId}`}
-          framed={false}
           testId="feedback-detail-loading"
         >
           <Skeleton className="h-6 w-2/3" />

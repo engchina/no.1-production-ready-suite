@@ -307,6 +307,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const [draftFor, setDraftFor] = useState<string | null>(null);
   const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshRequested, setRefreshRequested] = useState(false);
+  const initialLoading = loading && !refreshRequested;
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [formError, setFormError] = useState("");
@@ -460,6 +462,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
+    setRefreshRequested(announce);
     setLoadError("");
     setTargetLoadWarnings({});
     await requestData(sequence, announce);
@@ -951,7 +954,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
             icon: RefreshCw,
             disabled: operationBusy,
             onClick: () => load(true),
-            loading,
+            loading: loading && refreshRequested,
           },
         ]}
         actionsLabel={m.actionsLabel}
@@ -976,19 +979,19 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
             }
             count={{ ...roleListCount, live: false, testId: "security-permissions-count" }}
           />
-          {loading ? (
+          {/* 再読み込みは前の行を残し、ボタンの loading だけで示す。経過時間と Skeleton は最初の読み込みだけ（#4649）。 */}
+          {initialLoading ? (
             <ProcessingIndicator
               active
               label={m.loading}
               operationKey="security-permissions-load"
               placement="panel"
               testId="security-permissions-loading"
-              activityIcon="none"
             />
           ) : null}
           <div className="grid gap-2">
             <DataTable
-              loading={loading}
+              loading={initialLoading}
               rows={roleList.pageItems}
               sort={sort}
               onSortChange={(next) => {

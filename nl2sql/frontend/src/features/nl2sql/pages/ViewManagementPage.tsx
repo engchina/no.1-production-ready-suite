@@ -723,7 +723,6 @@ export function ViewManagementPage() {
                     label={t("viewMgmt.workspace.refreshing")}
                     operationKey="view-list-refresh"
                     placement="workspace"
-                    className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                     testId="view-management-workspace-processing"
                     activityIcon={manualRefresh.pending ? "none" : "spinner"}
                   />

@@ -331,7 +331,6 @@ export function HistoryRunDetail({ historyId, onBack }: { historyId: string; onB
             operationKey={`history-detail-${historyId}`}
             placement="panel"
             testId="history-detail-loading"
-            framed={false}
             activityIcon="spinner"
           >
             <RunDetailSkeleton />

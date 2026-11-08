@@ -514,7 +514,6 @@ export function SearchClient() {
                 <TimedLoadingState
                   label={t("search.searchAnswerProfileLoading")}
                   operationKey="search-search-answer-profiles-load"
-                  framed={false}
                   testId="search-search-answer-profiles-loading"
                 >
                   <SearchAnswerProfileSelectSkeleton />

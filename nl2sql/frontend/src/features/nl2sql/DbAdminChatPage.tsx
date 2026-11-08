@@ -363,7 +363,6 @@ export function DbAdminChatPage() {
           <TimedLoadingState
             label={t("chat.loading")}
             operationKey="db-admin-chat-conversation-load"
-            framed={false}
             testId={`${TEST_ID}-conversation-loading`}
           >
             <ChatSkeleton />

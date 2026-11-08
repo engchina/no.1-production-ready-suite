@@ -136,7 +136,7 @@ export function RequirementClarificationView({
       ) : null}
 
       {check.checking ? (
-        <div className="rounded-md border border-border bg-surface-sunken p-4" data-start-phase={startPhase}>
+        <div data-start-phase={startPhase}>
           <ProcessingIndicator
             active
             operationKey="guided-clarification-start"
