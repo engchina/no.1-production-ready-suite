@@ -49,14 +49,38 @@ class DomainKeywordSuggestionData(BaseModel):
     processed_chunk_count: int = 0
 
 
+ApprovedFaqReviewReason = Literal[
+    "no_target_knowledge_bases", "knowledge_base_removed", "source_document_missing"
+]
+
+
 class ApprovedFaqRecordData(BaseModel):
-    """承認済み FAQ 1 件(rag_poc ApprovedFaqRecord の表示用射影)。"""
+    """承認済み FAQ 1 件(rag_poc ApprovedFaqRecord の表示用射影と、今の根拠の状態。#4621)。"""
 
     id: str
     question: str
     answer: str
     alternate_questions: list[str] = Field(default_factory=list)
     status: str = ""
+    # FAQ を使える範囲(この KB をすべて使える利用者だけに提示・回答で使う)。
+    target_knowledge_base_ids: list[str] = Field(default_factory=list)
+    # 回答の根拠にした文書(フィードバックからの昇格は回答の引用)。
+    source_document_ids: list[str] = Field(default_factory=list)
+    # 承認(保存・確かめ直し)した利用者の表示名と時刻。引けない利用者は None。
+    approved_by: str | None = None
+    approved_at: str | None = None
+    # 空でなければ停止中(要確認。提示・回答に使わない)。
+    review_reasons: list[ApprovedFaqReviewReason] = Field(default_factory=list)
+    # 引用した文書が承認の後に新しい版になった(使い続ける)。
+    source_updated: bool = False
+
+
+class ApprovedFaqKnowledgeBaseData(BaseModel):
+    """対象の KB の選択肢・表示名(プロファイルの参照 KB と、FAQ の対象に残る KB)。"""
+
+    id: str
+    name: str
+    in_profile: bool
 
 
 class ApprovedFaqListData(BaseModel):
@@ -64,16 +88,25 @@ class ApprovedFaqListData(BaseModel):
     records: list[ApprovedFaqRecordData] = Field(default_factory=list)
     # 回答の前に類似問を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。
     enabled: bool = True
+    knowledge_bases: list[ApprovedFaqKnowledgeBaseData] = Field(default_factory=list)
 
 
 class ApprovedFaqSettingsRequest(BaseModel):
     enabled: bool
 
 
+class ApprovedFaqConfirmRequest(BaseModel):
+    """FAQ の対象の KB と根拠を確かめ直す。未指定はプロファイルの全 KB(最も厳しい)。"""
+
+    target_knowledge_base_ids: list[str] | None = Field(default=None, max_length=200)
+
+
 class ApprovedFaqAddRequest(BaseModel):
     # 空・空白だけは画面の欄の下と同じ文言で拒否する（#541）。前後の空白は画面と同じく除く。
     question: str = Field(max_length=1000)
     answer: str = Field(max_length=20000)
+    # 対象のナレッジベース(未指定はプロファイルの全 KB。#4621)。
+    target_knowledge_base_ids: list[str] | None = Field(default=None, max_length=200)
 
     @field_validator("question", "answer")
     @classmethod

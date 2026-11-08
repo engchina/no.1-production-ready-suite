@@ -122,9 +122,10 @@ def test_generation_keeps_source_coverage_after_planning(question: str) -> None:
         if issubclass(schema, RequestScopePlan):
             return RequestScopePlan.model_validate(plan())
         generation_calls += 1
-        assert system.count("### 出典の網羅") == 1
-        citation_phase = system.split("### 出典の網羅", 1)[1].split("###", 1)[0]
-        assert "request_coverage" in citation_phase
+        assert system.count("### 出典（basis）の選び方") == 1
+        citation_phase = system.split("### 出典（basis）の選び方", 1)[1].split("###", 1)[0]
+        assert "request_coverage" not in system
+        assert "入力に根拠の計画があれば" in citation_phase
         assert "文書ごと" in citation_phase
         assert "支えない原文" in citation_phase
         return generated_fixture(schema, prompt, {"summary": "", "confidence": "low", "items": []})

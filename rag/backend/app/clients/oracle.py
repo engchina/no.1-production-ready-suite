@@ -59,6 +59,7 @@ from app.clients.recipe_version_log import (
     RecipeVersionOperation,
 )
 from app.config import Settings, get_settings, settings_today
+from app.rag.approved_faq_scope import FaqSourceDocumentState, document_version
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
 from app.rag.extraction_field_adapter import (
@@ -9931,6 +9932,48 @@ class OracleClient:
             )
         return refs_by_document_id
 
+    async def approved_faq_source_document_states(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, FaqSourceDocumentState]:
+        """承認済み FAQ が引用した文書の今の版の印と所属 KB（#4621）。
+
+        利用者から見える文書だけを返す（無い ID は削除・範囲外）。版の印は検索に出す版の切替
+        （``indexed_at``）と新しい版の文書の設定（``superseded_by_document_id``）で変わる。
+        """
+        unique_document_ids = _unique_optional_sequence(document_ids)
+        states: dict[str, FaqSourceDocumentState] = {}
+        # Oracle の IN の上限（1000）より小さい単位で読む。
+        for start in range(0, len(unique_document_ids), 500):
+            document_filter_sql, document_binds = _oracle_in_predicate(
+                "d.document_id", "document_id", unique_document_ids[start : start + 500]
+            )
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT d.document_id, d.indexed_at, d.superseded_by_document_id
+                FROM rag_documents d
+                WHERE {document_filter_sql}
+                  AND {document_access_sql}
+                """,
+                    document_filter_sql=document_filter_sql,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind(document_binds),
+            )
+            refs = await self._document_knowledge_base_refs_by_document_id_with_oracle(
+                [str(row["document_id"]) for row in rows]
+            )
+            for row in rows:
+                document_id = str(row["document_id"])
+                states[document_id] = FaqSourceDocumentState(
+                    version=document_version(
+                        _optional_datetime(row.get("indexed_at")),
+                        _optional_str(row.get("superseded_by_document_id")),
+                    ),
+                    knowledge_base_ids=frozenset(ref.id for ref in refs.get(document_id, [])),
+                )
+        return states
+
     async def _attach_knowledge_base_refs_to_documents(
         self,
         documents: Sequence[DocumentT],
@@ -18392,13 +18435,11 @@ CREATE TABLE {table_name} (
     tenant_id_hash           CHAR(64),
     category_name            VARCHAR2(256),
     object_storage_path      VARCHAR2(1024),
-    processing_config        JSON,
     classification           JSON,
     content_type             VARCHAR2(255),
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
     duplicate_of_document_id VARCHAR2(64),
-    extraction               JSON,
     error_message            VARCHAR2(2000),
     uploaded_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     indexed_at               TIMESTAMP WITH TIME ZONE,

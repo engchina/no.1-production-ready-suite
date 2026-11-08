@@ -2327,6 +2327,39 @@ export const ja = {
   "searchAnswerProfiles.faq.import": "取込",
   "searchAnswerProfiles.faq.importing": "Q&A を取り込んでいます",
   "searchAnswerProfiles.faq.imported": "取込みました（追加 {inserted} 件 / 置換で削除 {deleted} 件）",
+  // 対象のナレッジベース・根拠の状態・承認者（#4621）。
+  "searchAnswerProfiles.faq.targets.label": "対象のナレッジベース",
+  "searchAnswerProfiles.faq.targets.placeholder": "検索して選ぶ…",
+  "searchAnswerProfiles.faq.targets.help":
+    "選んだナレッジベースをすべて使える利用者にだけ、この Q&A を提示・回答に使います。既定はプロファイルの全ナレッジベースです。",
+  "searchAnswerProfiles.faq.targets.importHelp":
+    "取り込む Q&A の対象です。選んだナレッジベースをすべて使える利用者にだけ提示・回答に使います。",
+  "searchAnswerProfiles.faq.targets.required": "対象のナレッジベースを 1 つ以上選んでください。",
+  "searchAnswerProfiles.faq.targets.summary": "対象: {names}",
+  "searchAnswerProfiles.faq.targets.none": "対象: なし",
+  "searchAnswerProfiles.faq.targets.removedName": "{name}（プロファイルから外れた）",
+  "searchAnswerProfiles.faq.approval.summary": "承認: {name}・{time}",
+  "searchAnswerProfiles.faq.approval.none": "承認: 記録なし",
+  "searchAnswerProfiles.faq.approval.unknownUser": "（削除済みのユーザー）",
+  "searchAnswerProfiles.faq.state.needsReview": "要確認",
+  "searchAnswerProfiles.faq.state.sourceUpdated": "原文が更新されました",
+  "searchAnswerProfiles.faq.reason.no_target_knowledge_bases":
+    "対象のナレッジベースがありません。確かめ直すまで提示・回答に使いません。",
+  "searchAnswerProfiles.faq.reason.knowledge_base_removed":
+    "対象のナレッジベースがプロファイルから外れました。確かめ直すまで提示・回答に使いません。",
+  "searchAnswerProfiles.faq.reason.source_document_missing":
+    "根拠の文書が削除されたか、対象のナレッジベースから外れました。確かめ直すまで提示・回答に使いません。",
+  "searchAnswerProfiles.faq.sourceUpdatedHelp":
+    "根拠の文書が新しい版になりました。提示・回答には使い続けます。内容を確かめたら確かめ直してください。",
+  "searchAnswerProfiles.faq.confirm.action": "対象を確かめ直す",
+  "searchAnswerProfiles.faq.confirm.title": "対象を確かめ直す",
+  "searchAnswerProfiles.faq.confirm.close": "閉じる",
+  "searchAnswerProfiles.faq.confirm.description":
+    "対象のナレッジベースを選び直して承認します。今も対象のナレッジベースにある根拠の文書は今の版で記録し直し、無くなった文書は根拠から外します。",
+  "searchAnswerProfiles.faq.confirm.submit": "確かめて承認",
+  "searchAnswerProfiles.faq.confirm.cancel": "キャンセル",
+  "searchAnswerProfiles.faq.confirm.done": "Q&A の対象を確かめ直しました。",
+  "searchAnswerProfiles.faq.confirm.error": "Q&A の対象を確かめ直せませんでした。",
   "searchAnswerProfiles.runtime.kind.terms": "用語・同義語",
   "searchAnswerProfiles.runtime.kind.rules": "確認・回答ルール",
   "searchAnswerProfiles.runtime.terms.hint":

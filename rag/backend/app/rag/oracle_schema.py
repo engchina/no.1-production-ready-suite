@@ -816,6 +816,22 @@ END;
     )
     sections.append(
         OracleSchemaSection(
+            name="20261108_4617_drop_document_extraction_processing_config",
+            table_name="rag_documents",
+            sql=drop_document_extraction_processing_config_sql(),
+            destructive_note=(
+                "RAG_DOCUMENTS の旧列 EXTRACTION（文書単位の旧い抽出の JSON）と PROCESSING_CONFIG"
+                "（文書単位の旧い処理設定）を削除します。抽出の正本は RAG_DOCUMENT_EXTRACTIONS、"
+                "処理設定の正本は RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG で、現行のコードは"
+                "この 2 列を読み書きしません。レシピの抽出の版が無い文書では EXTRACTION が"
+                "唯一の旧い抽出の記録なので、残す必要があれば適用前に同列を export してください。"
+                "保存先のファイル・"
+                "レシピ・抽出の版・chunk は削除しません。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
             name="20261108_4628_foreign_key_lock_indexes",
             table_name="rag_graph_references",
             sql=_create_missing_objects_sql(foreign_key_lock_index_sql(), "FK の子の列の索引"),
@@ -882,6 +898,29 @@ BEGIN
     WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PREPROCESS_ARTIFACT';
     IF v_count > 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN preprocess_artifact';
+    END IF;
+END;
+/
+""".strip()
+
+
+def drop_document_extraction_processing_config_sql() -> str:
+    """文書の行の旧列 extraction・processing_config を削除する。列が無くても適用できる（#4617）。"""
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EXTRACTION';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN extraction';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PROCESSING_CONFIG';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN processing_config';
     END IF;
 END;
 /

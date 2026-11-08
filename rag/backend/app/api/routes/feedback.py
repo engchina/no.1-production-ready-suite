@@ -16,7 +16,10 @@ from app.clients.oracle import OracleClient
 from app.rag.evaluation_excel import XLSX_MEDIA_TYPE, evaluation_cases_xlsx, evidence_line
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import caller_owns, current_audit_request_context
-from app.rag.search_answer_profile_knowledge import import_approved_faq
+from app.rag.search_answer_profile_knowledge import (
+    approved_faq_row_with_citations,
+    import_approved_faq,
+)
 from app.rag.support_guide_runtime import is_guide_preview_trace
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import STANDARD_ANSWER_MAX_CHARS
@@ -166,6 +169,8 @@ async def promote_feedback_to_approved_faq(
     search_answer_profile_id = str(detail.search_answer_profile_id)
     if await oracle.get_search_answer_profile(search_answer_profile_id) is None:
         raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
+    # 回答の引用の文書から、FAQ の対象の KB と根拠の文書・承認者を埋める(#4621)。
+    row = await approved_faq_row_with_citations(oracle, search_answer_profile_id, row)
     result = await import_approved_faq(
         oracle, search_answer_profile_id, [row], mode=APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT
     )
@@ -262,6 +267,9 @@ async def _answer_feedback_record(
         "question": detail.question or "",
         "answer_text": detail.answer or "",
         "retrieval_scope": "knowledge_base",
+        # 回答の引用の chunk と文書(FAQ の出典と対象の KB に使う。#4621)。
+        "evidence_item_ids": list(dict.fromkeys(item.chunk_id for item in detail.citations)),
+        "source_document_ids": list(dict.fromkeys(item.document_id for item in detail.citations)),
     }
     # 回答フローの回答なら、除外規則(根拠不足かつ信頼度 low)に使う値を回答記録から補う。
     answer_record = await oracle.get_answer_record(detail.trace_id)

@@ -1,8 +1,11 @@
 """要点と結果のinline契約に、モデルによる重複分類・内部番号を要求しない。"""
 
+import json
+
 import pytest
 from application_verdict_stub import audit_reply, is_application_schema
 from audit_fixtures import synthetic_explanation
+from openai.lib._parsing._responses import type_to_text_format_param
 from pydantic import ValidationError
 from test_citation_unit_ids import snapshot
 
@@ -124,31 +127,26 @@ def test_question_copy_is_not_generated_again_as_a_premise():
         schema.model_validate(raw)
 
 
-def test_source_method_and_result_precede_global_coverage_without_dropping_guards():
+def test_source_method_and_result_are_typed_and_the_plan_is_not_generated():
+    """生成の schema に計画（request_coverage）は無く、モデルが計画の行を返しても読まない（#4611）。"""
     raw, schema, catalog = case()
     document = schema.model_json_schema()
     fields = list(document["properties"])
-    assert fields[:2] == ["response_language", "answer_parts"]
-    assert fields[-1] == "request_coverage"
+    # 質問の種類（導出が要るか）を要点より先に生成させる（#4611）。
+    assert fields[:3] == ["response_language", "question_type", "answer_parts"]
+    strict = type_to_text_format_param(schema)["schema"]
+    assert list(strict["properties"])[:3] == strict["required"][:3] == ["response_language", "question_type", "answer_parts"]
+    assert "request_coverage" not in fields
+    assert "relation" not in json.dumps(document)
     supported = document["$defs"]["SupportedAnswerPart"]
     assert list(supported["properties"]) == ["kind", "basis", "reasoning", "result"]
     assert set(supported["required"]) == {"kind", "basis", "reasoning", "result"}
     assert document["$defs"]["CitationUnitSelection"]["properties"]["unit_ids"]["minItems"] == 1
     raw["request_coverage"] = [
-        {
-            "request_id": "Q1",
-            "evidence_scope": [
-                {
-                    "evidence_id": "E1",
-                    "target": "項目A",
-                    "relation": "unrelated",
-                    "link": None,
-                }
-            ],
-        }
+        {"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "target": "項目A", "relation": "unrelated", "link": None}]}
     ]
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert draft.request_coverage[0].evidence_scope[0].relation == "unrelated"
+    assert {scope.relation for plan in draft.request_coverage for scope in plan.evidence_scope} == {"direct"}
 
 
 def test_forty_answer_parts_preserve_every_result_and_last_summary_dependency():
@@ -216,7 +214,7 @@ def test_generated_answer_still_has_a_length_limit_separate_from_source_length()
         schema.model_validate(raw)
 
 
-def test_formal_generation_entry_uses_answer_parts_and_keeps_preplanned_scope_hidden():
+def test_formal_generation_entry_uses_answer_parts_and_keeps_every_plan_hidden():
     from rag_engine.generation import grounded
     from rag_engine.generation.citation_wire import planned_generation_wire_model
 
@@ -224,7 +222,7 @@ def test_formal_generation_entry_uses_answer_parts_and_keeps_preplanned_scope_hi
     schema = grounded.generation_output_model("対象の値は何ですか。", unit_catalog=catalog)
     assert schema._uses_typed_answer_parts
     assert "items" not in schema.model_json_schema()["properties"]
-    assert "request_coverage" in schema.model_json_schema()["properties"]
+    assert "request_coverage" not in schema.model_json_schema()["properties"]
     planned = answer_parts_model(planned_generation_wire_model(), catalog)
     assert "request_coverage" not in planned.model_json_schema()["properties"]
 
