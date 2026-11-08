@@ -14578,7 +14578,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
   const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
   const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
-  // xl 未満（375px）は 1 ペイン。一覧を操作する前に、詳細から「一覧へ戻る」で戻る。
+  // 一覧と詳細は 1 ペイン（#4645）。一覧を操作する前に、詳細から「一覧へ戻る」で戻る。
   const backToPreviewList = async () => {
     const back = page.getByTestId("data-management-detail-back");
     if (await back.isVisible()) await back.click();
@@ -14586,7 +14586,8 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   api.previewDataPayload = null;
   await dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" }).click();
   await expect(page).toHaveURL(/[?&]object=APP\.INVOICES/);
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  // 全幅の一覧 → 全幅の詳細（#4645）: 選ぶと一覧を隠し、見出しを対象の名前にする。
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("APP.INVOICES");
   // 行を選ぶと今の取得件数上限（既定 100）でデータを表示する。
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("INVOICES");
   await expect(previewRowLimitInput).toHaveValue("100");
@@ -14598,7 +14599,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toBeVisible();
   await expect(previewShowButton).toBeDisabled();
   await expect(previewExportButton).toBeDisabled();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeEnabled();
+  await expect(page.getByTestId("data-management-detail-back")).toBeEnabled();
   await previewRowLimitInput.fill("100");
   await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toHaveCount(0);
   await previewShowButton.click();
@@ -14620,7 +14621,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(previewSheet.getByRole("cell", { name: "顧客26" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(previewSheet).toBeHidden();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("APP.INVOICES");
   await expect(previewShowButton).toBeEnabled();
   await expectBoundedRowLimit(previewRowLimitInput, previewShowButton);
   api.previewDataPayload = null;
@@ -14697,7 +14698,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(viewSelectTarget).toBeEnabled();
   await viewSelectTarget.focus();
   await page.keyboard.press("Enter");
-  await expect(viewSelectTarget).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("APP.V_EMP_DEPT");
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
   // ビューにはデータを空にする操作を出さない。
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
@@ -14729,6 +14730,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   expect(api.previewDataExportPayload?.where_clause).toBe("");
   await expectNoHorizontalScroll(page);
 
+  await backToPreviewList();
   await dataCsvTab.click();
   await expect(dataCsvTab).toHaveAttribute("aria-selected", "true");
   const csvPanel = page.locator("#data-management-panel-csv");
