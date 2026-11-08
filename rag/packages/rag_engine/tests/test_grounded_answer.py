@@ -936,7 +936,7 @@ class GroundedAnswerTest(unittest.TestCase):
         prompt = grounded.GENERATE_SYSTEM_PROMPT
         # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
         self.assertNotIn("別の節にする", prompt)
-        mapping = prompt.split("### 方針と回答の対応\n", 1)[1].split("### 根拠が無い場合", 1)[0]
+        mapping = prompt.split("## Step 3:", 1)[1].split("## Step 5:", 1)[0]
         for field in ("kind=gap", "結果にも条件", "external_data_items"):
             self.assertIn(field, mapping)
 
@@ -998,10 +998,9 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_generation_prompt_explains_every_tag_shown_with_the_evidence(self):
         # 凡例は「tags は原文の性質を示す。」の下の字下げ箇条書き（次の top-level 箇条書きまで）。
-        legend = grounded.GENERATE_SYSTEM_PROMPT.split("tags は原文の性質を示す。\n", 1)[1].split("\n- ", 1)[0]
-        # タグは降格の条件に使われる。tagger を足したら凡例も足す。
+        # タグは降格の条件に使われる。tagger を足したら読み方も足す（該当するときだけ入力へ渡す）。
         for tagger in grounded.SPAN_TAGGERS:
-            self.assertIn("  - " + tagger.__name__.removeprefix("_tag_") + ": ", legend)
+            self.assertIn("- " + tagger.__name__.removeprefix("_tag_") + ": ", grounded.EVIDENCE_READING_PROMPT)
 
     def test_document_context_is_shown_under_its_own_evidence_as_not_quotable(self):
         spans = [
@@ -1022,7 +1021,7 @@ class GroundedAnswerTest(unittest.TestCase):
             f"{grounded.CONTEXT_NOTE_BEGIN}\n文書種別: 操作説明書\n{grounded.CONTEXT_NOTE_END}\n1| 二つ目の本文。",
             without_unit_annotations(block),
         )
-        self.assertIn(grounded.CONTEXT_NOTE_BEGIN, grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn("補助情報の囲み", grounded.EVIDENCE_READING_PROMPT)
 
     def test_prompts_account_for_every_applies_and_applicability_value(self):
         from typing import get_args
@@ -1038,7 +1037,7 @@ class GroundedAnswerTest(unittest.TestCase):
     def test_policy_names_the_origin_label_as_the_evidence_block_prints_it(self):
         span = {"label": "E1", "text": "本文。", "tags": [], "pinned": False, "function": ("f",), "origin": "document_text"}
         self.assertIn("origin=document_text", grounded.format_functions([span]))
-        self.assertIn("`origin=`", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn("`origin=image_extraction`", grounded.EVIDENCE_READING_PROMPT)
 
     def test_all_gap_answer_shows_the_system_refusal_and_the_gaps_not_the_summary(self):
         ctx = context(record(0, "帳票の一覧です。", "その他"))  # 必須根拠にならない原文

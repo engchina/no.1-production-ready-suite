@@ -116,7 +116,8 @@ def test_generation_instructions_name_only_the_public_citation_fields():
     wire_citation = wire["$defs"]["GroundedCitationWire"]
     assert set(wire_citation["properties"]) == {"evidence_id", "line_start", "line_end"}
     assert set(wire_citation["required"]) == {"evidence_id", "line_start", "line_end"}
-    assert "quote は、citations が選択した引用単位 ID の原文" in grounded.GENERATE_SYSTEM_PROMPT
+    # 指示の本文は引用を basis の選択として説明し、schema に無い quote の語を使わない。
+    assert "quote" not in grounded.GENERATE_SYSTEM_PROMPT
 
 
 def test_lines_holding_text_are_not_resolved_by_searching_the_original():

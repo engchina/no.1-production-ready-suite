@@ -227,6 +227,9 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),
             ("plannedSystem", "rag_engine.generation.grounded:PLANNED_GENERATE_SYSTEM_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
+            # 該当する入力のときだけ生成の入力へ足す読み方（タグ・値の種類 / 業務ガイド。#4677）。
+            ("evidenceReading", "rag_engine.generation.grounded:EVIDENCE_READING_PROMPT"),
+            ("guideRules", "rag_engine.generation.grounded:GUIDE_RULES_PROMPT"),
             (
                 "citationRepair",
                 "rag_engine.generation.citation_range_repair:CITATION_RANGE_REPAIR_SYSTEM_PROMPT",

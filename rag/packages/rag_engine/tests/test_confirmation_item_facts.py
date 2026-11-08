@@ -153,35 +153,35 @@ class WhoCanAnswerDefinitionTest(unittest.TestCase):
     システムにだけある値（ログ・設定の現在値・処理の状態・実績）。
     """
 
-    def sections(self):
+    def schema_text(self):
         from rag_engine.models.llm import ExternalDataItem
 
-        prompt = grounded.GENERATE_SYSTEM_PROMPT.split("### 未確認事項・実データ・別の資料", 1)[1].split("### 方針と items の対応", 1)[0]
-        return prompt, ExternalDataItem.model_fields["who_can_answer"].description
+        return ExternalDataItem.model_fields["who_can_answer"].description
 
     def test_ledger_values_are_document_not_system(self):
-        prompt, schema = self.sections()
-        for text in (prompt, schema):
-            with self.subTest(text=text[:20]):
-                self.assertIn("台帳・一覧・表の値", text.split("document=", 1)[1].split("system=", 1)[0])
-                system = text.split("system=", 1)[1].split("。", 1)[0]
-                self.assertNotIn("台帳", system)
-                self.assertNotIn("対象レコード", system)
-                self.assertIn("ログの行", system)
-                # 旧い反例（台帳の担当部署は system）を残さない。
-                self.assertNotIn("台帳の値なので system", text)
-                self.assertIn("台帳の担当部署は台帳が資料なので", text.replace("「", "").replace("」", ""))
-        self.assertIn("根拠に台帳の行があれば挙げず、無ければ document", prompt)
+        text = self.schema_text()
+        self.assertIn("台帳・一覧・表の値", text.split("document=", 1)[1].split("system=", 1)[0])
+        system = text.split("system=", 1)[1].split("。", 1)[0]
+        self.assertNotIn("台帳", system)
+        self.assertNotIn("対象レコード", system)
+        self.assertIn("ログの行", system)
+        # 反例は 1 つ（台帳は資料なので document）。旧い反例（台帳の担当部署は system）を残さない。
+        self.assertNotIn("台帳の値なので system", text)
+        self.assertEqual(text.count("反例:"), 1)
+        self.assertIn("台帳の担当部署は台帳が資料なので", text)
+        self.assertIn("取得した根拠に該当の行・記載があれば値は分かるので挙げず、無ければ document", text)
 
     def test_attributes_of_the_target_the_user_knows_are_user(self):
-        prompt, schema = self.sections()
-        for text in (prompt, schema):
-            with self.subTest(text=text[:20]):
-                user = text.split("user=", 1)[1].split("document=", 1)[0]
-                self.assertIn("対象のアカウントの種類（検証用か・共用か）", user)
-                self.assertIn("付与対象のアカウントが検証用か", text.replace("「", "").replace("」", ""))
-        # ログの行は今までどおり system の反例。
-        self.assertIn("「エラーの時刻の認証ログ（auth.log）の行」は資料にも利用者の記憶にも無いので system", prompt)
+        text = self.schema_text()
+        user = text.split("user=", 1)[1].split("document=", 1)[0]
+        self.assertIn("対象のアカウントの種類（検証用か・共用か）", user)
+        # 値が対象で決まるときは、対象を確かめる user の項目だけ。
+        self.assertIn("対象が質問で特定されていなければ、対象を確かめる user の項目だけを挙げる", text)
+
+    def test_system_prompt_defers_the_item_facts_to_the_response_schema(self):
+        # 3 つの事実の定義は schema の 1 か所だけ（指示に重ねない）。
+        self.assertNotIn("who_can_answer", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn("項目の書き方は応答 schema に従う", grounded.GENERATE_SYSTEM_PROMPT)
 
     def test_items_classified_by_the_definition_settle_the_outcome(self):
         outcome = EnvelopeFromFactsTest().outcome_of
