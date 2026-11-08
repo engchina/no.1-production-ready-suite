@@ -5466,7 +5466,9 @@ test("SQL 生成の業務プロファイルの読み込み中は、領域の先�
   const loading = workspace.getByTestId("nl2sql-profiles-loading");
   await expect(loading).toContainText("業務プロファイルを読み込んでいます");
   // 業務プロファイルの欄は文字だけの選択肢ではなく、ラベルと欄の形の Skeleton で寸法を予約する。
-  await expect(workspace.getByTestId("nl2sql-profile-select-skeleton")).toBeVisible();
+  const fieldSkeleton = workspace.getByTestId("nl2sql-profile-select-skeleton");
+  await expect(fieldSkeleton).toBeVisible();
+  const reservedField = (await fieldSkeleton.boundingBox())!;
   await expect(page.locator("#nl2sql-profile-select")).toHaveCount(0);
   // スキーマ参照は経過時間を重ねず、表の一覧の形の Skeleton だけにする。
   await expect(workspace.getByTestId("schema-reference-skeleton")).toBeVisible();
@@ -5480,6 +5482,13 @@ test("SQL 生成の業務プロファイルの読み込み中は、領域の先�
   await expect(loading).toHaveCount(0);
   await expect(page.locator("#nl2sql-profile-select")).toBeVisible();
   await expect(workspace.getByTestId("nl2sql-profile-select-skeleton")).toHaveCount(0);
+  // 読み込み後の欄（ラベル + 欄）と高さ・幅がそろう（読み込み後に下を押し下げない。#4654）。
+  const loadedField = await page.locator("#nl2sql-profile-select").evaluate((node) => {
+    const box = node.closest(".space-y-1\\.5")!.getBoundingClientRect();
+    return { width: box.width, height: box.height };
+  });
+  expect(Math.abs(reservedField.height - loadedField.height)).toBeLessThanOrEqual(1);
+  expect(Math.abs(reservedField.width - loadedField.width)).toBeLessThanOrEqual(1);
 });
 
 test("参考履歴の検索中は見出しの直下に経過時間を出し、開くと結果の一覧の形の Skeleton で覆う (#4649)", { tag: "@responsive" }, async ({ page }, testInfo) => {

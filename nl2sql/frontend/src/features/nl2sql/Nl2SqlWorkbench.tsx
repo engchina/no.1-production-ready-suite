@@ -17,10 +17,8 @@ import {
   SelectField,
   FormStatus,
   ProcessingIndicator,
-  Skeleton,
+  FieldSkeleton,
   ListSkeleton,
-  CONTROL_HEIGHT_CLASS,
-  FIELD_WIDTH_CLASS,
   useActionPending,
 } from "@production-ready/ui";
 import {
@@ -1393,14 +1391,11 @@ function ExecutableNl2SqlWorkbench() {
                   >
                     {/* 隣の「自動判定」（md）と同じ高さ（#613）。読み込み中はラベルと欄の形の Skeleton で寸法を予約する。 */}
                     {profilesQuery.isPending ? (
-                      <div
-                        className={`space-y-1.5 ${FIELD_WIDTH_CLASS.lg}`}
-                        aria-hidden="true"
-                        data-testid="nl2sql-profile-select-skeleton"
-                      >
-                        <Skeleton className="h-5 w-28" />
-                        <Skeleton className={`${CONTROL_HEIGHT_CLASS.md} w-full`} />
-                      </div>
+                      <FieldSkeleton
+                        width="lg"
+                        fieldLabel={t("nl2sql.profile.label")}
+                        testId="nl2sql-profile-select-skeleton"
+                      />
                     ) : (
                       <SelectField
                         id="nl2sql-profile-select"

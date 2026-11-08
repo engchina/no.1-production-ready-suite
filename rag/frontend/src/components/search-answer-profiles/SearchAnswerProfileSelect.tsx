@@ -2,8 +2,8 @@
 
 import {
   compareNames,
+  FieldSkeleton,
   SearchableSelectField,
-  Skeleton,
   type SearchableSelectOption,
 } from "@production-ready/ui";
 import { useMemo } from "react";
@@ -81,22 +81,19 @@ export function SearchAnswerProfileSelect({
 }
 
 /**
- * 検索・回答プロファイルを読み込んでいる間の欄の形（ラベル・欄）。RAG 検索とチャットで同じにする。
- * compact はチャットのツールバーの欄（ラベルを出さない sm の高さのボタン）の形。経過時間は会話の領域の先頭の
- * 読み込み中の表示が出すので、ここは欄の寸法を予約する形だけにする（1 つの領域に経過時間は 1 か所。#4649）。
+ * 検索・回答プロファイルを読み込んでいる間の欄の形。RAG 検索とチャットで同じにする。`compact` はチャットのツールバーの欄。
+ * 経過時間は領域の先頭の読み込み中の表示が出すので、ここは欄の寸法を予約する形だけにする（#4649）。
  */
 export function SearchAnswerProfileSelectSkeleton({
   compact = false,
   testId,
 }: { compact?: boolean; testId?: string } = {}) {
-  if (compact) {
-    return <Skeleton className="h-[var(--button-height-sm)] w-full" testId={testId} />;
-  }
   return (
-    <div className="space-y-1.5" aria-hidden data-testid={testId}>
-      <Skeleton className="h-4 w-32" />
-      <Skeleton className="h-[var(--button-height-md)] w-full" />
-    </div>
+    <FieldSkeleton
+      size={compact ? "sm" : "md"}
+      fieldLabel={compact ? false : t("searchAnswerProfiles.scope.label")}
+      testId={testId}
+    />
   );
 }
 

@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { FlaskConical, Rocket, RotateCcw, Save } from "lucide-react";
 import {
+  FieldSkeleton,
   Banner,
   Button,
   ButtonLink,
@@ -47,7 +48,6 @@ import {
   type SkillPolicy,
 } from "@/lib/api";
 import { matchesSearch } from "@/components/ListFilters";
-import { FieldSkeleton } from "@/components/ListViews";
 import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
 import {
   AgentOutputFieldsSection,

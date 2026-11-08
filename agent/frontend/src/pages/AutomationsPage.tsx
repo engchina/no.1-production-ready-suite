@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { History, Pencil, Play, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import {
+  FieldSkeleton,
   Banner,
   Button,
   ButtonLink,
@@ -42,7 +43,7 @@ import {
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { FieldSkeleton, PagedDataTable, listScrollLabel } from "@/components/ListViews";
+import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
 import { ListSearchField, listCount, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import {
   agentApi,

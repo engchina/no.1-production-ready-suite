@@ -163,12 +163,14 @@ export {
   TableSkeleton,
   ListSkeleton,
   FormSkeleton,
+  FieldSkeleton,
   ChatSkeleton,
   SKELETON_CLASS,
   type SkeletonRows,
   type TableSkeletonProps,
   type ListSkeletonProps,
   type FormSkeletonProps,
+  type FieldSkeletonProps,
   type ChatSkeletonProps,
 } from "./components/ui/skeleton";
 export { Switch, type SwitchProps } from "./components/ui/switch";

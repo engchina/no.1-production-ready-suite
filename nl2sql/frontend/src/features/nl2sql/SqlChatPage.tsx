@@ -21,6 +21,7 @@ import {
   RunUsedModels,
   RunProcessDetails,
   ChatSkeleton,
+  FieldSkeleton,
   ChatSqlBlock,
   ChatTurn,
   ClarificationRecord,
@@ -32,7 +33,6 @@ import {
   ProcessFailureNotice,
   SearchableSelectField,
   SelectField,
-  Skeleton,
   SqlSafetyBadge,
   TimedLoadingState,
   useChatAutoScroll,
@@ -650,10 +650,7 @@ export function SqlChatPage() {
 
           {profilesLoading ? (
             // ツールバーの欄の寸法だけを予約する。文言と経過時間は会話の欄の先頭の 1 か所に出す（#4649）。
-            <Skeleton
-              testId="sql-chat-profiles-skeleton"
-              className="h-[var(--control-height-sm)] w-full"
-            />
+            <FieldSkeleton fieldLabel={false} size="sm" testId="sql-chat-profiles-skeleton" />
           ) : profilesFailed ? (
             <ApiErrorBanner
               error={profiles.error}

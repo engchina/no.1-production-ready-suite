@@ -3,7 +3,18 @@ import { describe, expect, it } from "vitest";
 
 import { DataTable } from "../src/components/data/data-table";
 import { LoadingState } from "../src/components/feedback/state-views";
-import { ChatSkeleton, FormSkeleton, ListSkeleton, SKELETON_CLASS, Skeleton, TableSkeleton } from "../src/components/ui/skeleton";
+import { CONTROL_HEIGHT_CLASS, type FieldWidth } from "../src/components/ui/control-size";
+import { FieldWidthScopeProvider } from "../src/components/ui/field-width-scope";
+import { SelectField } from "../src/components/ui/select-field";
+import {
+  ChatSkeleton,
+  FieldSkeleton,
+  FormSkeleton,
+  ListSkeleton,
+  SKELETON_CLASS,
+  Skeleton,
+  TableSkeleton,
+} from "../src/components/ui/skeleton";
 import * as ui from "../src/index";
 import {
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
@@ -140,6 +151,93 @@ describe("FormSkeleton", () => {
     expect(html).not.toContain('data-skeleton-part="title"');
     expect(html).not.toContain('data-skeleton-part="actions"');
     expect(count(html, /data-skeleton-part="field"/g)).toBe(2);
+  });
+});
+
+describe("FieldSkeleton（#4654）", () => {
+  const WIDTHS: FieldWidth[] = ["xs", "sm", "md", "lg", "full"];
+
+  /** 最初の要素（外枠）の class。 */
+  function rootClass(html: string) {
+    return html.match(/^<div class="([^"]*)"/)?.[1];
+  }
+
+  function selectFieldHtml(width: FieldWidth, helper?: string) {
+    return renderToStaticMarkup(
+      <SelectField id="field" label="ラベル" value="" options={[]} onValueChange={() => {}} width={width} helper={helper} />
+    );
+  }
+
+  it("既定はラベルの棒と md の高さの欄で、読み上げない", () => {
+    const html = renderToStaticMarkup(<FieldSkeleton testId="f" />);
+    expect(html).toMatch(/^<div class="space-y-1\.5 w-full" aria-hidden="true" data-testid="f" data-skeleton="field">/);
+    expect(count(html, /bg-surface-hover/g)).toBe(2);
+    expect(html).toContain("h-[1lh] w-24 text-sm");
+    expect(html).toContain(CONTROL_HEIGHT_CLASS.md);
+    expect(html).not.toContain("aria-busy");
+  });
+
+  it.each(WIDTHS)("外枠の幅は読み込み後の SelectField と同じ（width=%s）", (width) => {
+    expect(rootClass(renderToStaticMarkup(<FieldSkeleton width={width} />))).toBe(rootClass(selectFieldHtml(width)));
+    expect(rootClass(renderToStaticMarkup(<FieldSkeleton width={width} helperText="案内" />))).toBe(
+      rootClass(selectFieldHtml(width, "案内"))
+    );
+    expect(rootClass(renderToStaticMarkup(<FieldSkeleton width={width} helperLines={2} />))).toBe(
+      rootClass(selectFieldHtml(width, "案内"))
+    );
+  });
+
+  it("欄の幅の段と高さの段は読み込み後の欄と同じクラス", () => {
+    const html = renderToStaticMarkup(<FieldSkeleton width="lg" size="sm" />);
+    expect(html).toContain("sm:w-[var(--field-width-lg)] sm:max-w-full");
+    expect(html).toContain(CONTROL_HEIGHT_CLASS.sm);
+    expect(html).not.toContain(CONTROL_HEIGHT_CLASS.md);
+  });
+
+  it("ラベルの文と案内の文を渡すと、読み込み後と同じ文字の行を出す", () => {
+    const html = renderToStaticMarkup(<FieldSkeleton fieldLabel="モデル" helperText="既定のモデルを使います" />);
+    expect(html).toContain('<p class="text-sm font-medium text-fg-muted" aria-hidden="true">モデル</p>');
+    expect(html).toContain("既定のモデルを使います");
+    expect(html).toContain("text-xs leading-relaxed text-fg-muted");
+    expect(count(html, /bg-surface-hover/g)).toBe(1);
+  });
+
+  it("fieldLabel={false} はラベルの行を置かない（ツールバーの欄）", () => {
+    const html = renderToStaticMarkup(<FieldSkeleton fieldLabel={false} size="sm" />);
+    expect(count(html, /bg-surface-hover/g)).toBe(1);
+    expect(html).not.toContain("1lh");
+    expect(html).toContain(CONTROL_HEIGHT_CLASS.sm);
+  });
+
+  it("helperLines は案内の棒の高さ（行数 × 行の高さ）。helperText があれば文を優先する", () => {
+    const html = renderToStaticMarkup(<FieldSkeleton helperLines={2} />);
+    expect(html).toContain("h-[2lh]");
+    expect(html).toContain("text-xs leading-relaxed");
+    const text = renderToStaticMarkup(<FieldSkeleton helperLines={3} helperText="案内" />);
+    expect(text).not.toContain("h-[3lh]");
+    expect(text).toContain("案内");
+  });
+
+  it("label を渡すと読み上げ名を持つ読み込み中の領域になる", () => {
+    const html = renderToStaticMarkup(<FieldSkeleton label="モデルを読み込んでいます" />);
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('aria-label="モデルを読み込んでいます"');
+    expect(html).not.toMatch(/^<div[^>]*aria-hidden/);
+  });
+
+  it("container の中では幅の段を container の幅で切り替える", () => {
+    const html = renderToStaticMarkup(
+      <FieldWidthScopeProvider scope="container">
+        <FieldSkeleton width="md" />
+      </FieldWidthScopeProvider>
+    );
+    expect(html).toContain("@md:w-[var(--field-width-md)]");
+    expect(html).not.toContain("sm:w-[var(--field-width-md)]");
+  });
+
+  it("パッケージのルートから export される", () => {
+    expect(ui.FieldSkeleton).toBe(FieldSkeleton);
   });
 });
 

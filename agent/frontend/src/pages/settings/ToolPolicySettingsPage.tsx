@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { PlugZap, Save } from "lucide-react";
 import {
+  FieldSkeleton,
   Banner,
   ButtonLink,
   Card,
@@ -26,7 +27,7 @@ import {
 } from "@production-ready/ui";
 import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi, type ToolPolicyConnection, type ToolPolicyTool } from "@/lib/api";
-import { FieldSkeleton, PagedDataTable, QueryState } from "@/components/ListViews";
+import { PagedDataTable, QueryState } from "@/components/ListViews";
 import { ListSearchField, listCount, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
