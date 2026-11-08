@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import type { DocumentElement, DocumentReviewEditsRequest } from "@/lib/api";
 import { parseStructuredExtraction } from "@/lib/extraction";
 import { t } from "@/lib/i18n";
+import { INFORMATION_CARD_LIST_SCROLL_CLASS } from "@production-ready/ui";
 
 function cellKey(tableId: string, row: number, col: number): string {
   return `${tableId}::${row}::${col}`;
@@ -116,7 +117,8 @@ export function ReviewTextEditor({
           <h4 className="text-sm font-semibold text-fg">
             {t("flow.review.edit.elements")}
           </h4>
-          <ol className="max-h-[37.14rem] space-y-3 overflow-auto pr-1">
+          {/* 1 頁の要素の数だけ増える高い行なので、高い行の一覧の高さで止める（手書きの max-h にしない。#4636）。 */}
+          <ol className={`${INFORMATION_CARD_LIST_SCROLL_CLASS} space-y-3 pr-1`}>
             {editableElements.map((element) => {
               const id = editableElementId(element) as string;
               const fieldId = `review-edit-${id}`;

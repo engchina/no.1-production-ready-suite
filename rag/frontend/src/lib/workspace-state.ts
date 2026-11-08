@@ -72,7 +72,13 @@ export type WorkspaceField =
   | "documents.sectionRevisionsPaging"
   | "runtimeKnowledge.listPaging"
   | "approvedFaqs.listPaging"
-  | "documentCategories.searchPaging";
+  | "documentCategories.searchPaging"
+  // 品質評価の校正・期待の下書きの一覧（#4636）
+  | "evaluation.calibration.historyPaging"
+  | "evaluation.calibration.sourcesPaging"
+  | "evaluation.calibration.syntheticPaging"
+  | "evaluation.testsets.previousCalibrationPaging"
+  | "evaluation.processDraftsPaging";
 
 interface StoredRecord {
   value: unknown;

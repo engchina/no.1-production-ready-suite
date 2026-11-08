@@ -1,4 +1,4 @@
-import { AnswerPlainText, Button, DataTable, INFORMATION_TABLE_VISIBLE_ROWS, Pagination, RowTitleButton, Section } from "@production-ready/ui";
+import { AnswerPlainText, Button, DataTable, DEFAULT_PAGE_SIZE, INFORMATION_TABLE_VISIBLE_ROWS, ListToolbar, PagedDataTable, Pagination, RowTitleButton, Section } from "@production-ready/ui";
 import { Download } from "lucide-react";
 import { useState } from "react";
 
@@ -7,6 +7,7 @@ import { requestFile } from "@/lib/api";
 import { useAnnotationRows, useCalibrationAgreement, useLabelSet, useLabelSets } from "@/lib/calibration-queries";
 import { saveDownloadedFile } from "@/lib/download";
 import { type I18nKey, t } from "@/lib/i18n";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { toast } from "@/lib/toast";
 
@@ -14,10 +15,14 @@ import { toast } from "@/lib/toast";
 export function PreviousCalibration() {
   const sets = useLabelSets();
   const [selected, setSelected] = useState("");
+  // 旧集合の一覧は全件を持つので、件数と 25 件のページングを付ける（#4636）。
+  const paging = useClientListPaging("evaluation.testsets.previousCalibrationPaging", "sets");
   return <Section title={t("evaluation.testsets.previous")} description={t("evaluation.testsets.previousHelp")}>
     {sets.isError ? <ApiErrorState fallback={t("common.apiError")} error={sets.error} /> : <>
-      <DataTable rows={sets.data?.items ?? []} getRowKey={row => row.label_set_id} loading={sets.isPending}
-        ariaLabel={t("evaluation.testsets.previous")} visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
+      <ListToolbar count={listCountProps({ matchedTotal: sets.data?.items.length, filtered: false })} testId="previous-calibration-toolbar" />
+      <PagedDataTable {...paging} paginationLabels={paginationLabels()} paginationAriaLabel={t("evaluation.testsets.previous")}
+        rows={sets.data?.items ?? []} getRowKey={row => row.label_set_id} loading={sets.isPending}
+        ariaLabel={t("evaluation.testsets.previous")}
         onRowClick={row => setSelected(row.label_set_id)} selectedRowKey={selected}
         columns={[{ key: "name", header: t("evaluation.testsets.name"), render: row => <RowTitleButton title={row.name} onClick={() => setSelected(row.label_set_id)} /> }]} />
       {selected ? <PreviousDetail key={selected} id={selected} /> : null}
@@ -29,7 +34,7 @@ function PreviousDetail({ id }: { id: string }) {
   const detail = useLabelSet(id);
   const [offset, setOffset] = useState(0);
   const rows = useAnnotationRows(id, { offset, status: "all" });
-  const agreement = useCalibrationAgreement(id, { offset: offset * 25, limit: 25, status: "all" }, Boolean(detail.data?.can_manage));
+  const agreement = useCalibrationAgreement(id, { offset: offset * DEFAULT_PAGE_SIZE, limit: DEFAULT_PAGE_SIZE, status: "all" }, Boolean(detail.data?.can_manage));
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
   const row = detail.data?.can_manage ? agreement.data?.rows.find(value => `${value.item_id}:${value.aspect}` === selected) ?? agreement.data?.rows[0] : rows.data?.items[0];
@@ -42,6 +47,7 @@ function PreviousDetail({ id }: { id: string }) {
   return <div className="mt-4 grid min-w-0 gap-3" data-testid="previous-calibration-readonly">
     {detail.data?.can_manage ? <>
       {agreement.isError ? <ApiErrorState fallback={t("common.apiError")} error={agreement.error} /> : null}
+      <ListToolbar count={listCountProps({ matchedTotal: agreement.data?.total, filtered: false })} testId="previous-calibration-agreement-toolbar" />
       <DataTable ariaLabel={t("evaluation.testsets.previous")} rows={agreement.data?.rows ?? []} getRowKey={value => `${value.item_id}:${value.aspect}`}
         visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader loading={agreement.isPending}
         onRowClick={value => setSelected(`${value.item_id}:${value.aspect}`)}
@@ -50,7 +56,8 @@ function PreviousDetail({ id }: { id: string }) {
           { key: "aspect", header: t("evaluation.calibration.progress.aspect"), render: value => t(`evaluation.calibration.aspect.${value.aspect}` as I18nKey) },
           { key: "label", header: t("evaluation.testsets.previousFinal"), render: value => value.final_label ? t(`evaluation.calibration.label.${value.final_label}` as I18nKey) : t("evaluation.calibration.label.none") },
         ]} />
-      <Pagination page={offset + 1} totalPages={Math.max(1, Math.ceil((agreement.data?.total ?? 0) / 25))} onPageChange={page => setOffset(page - 1)} labels={paginationLabels()} />
+      <Pagination page={offset + 1} totalPages={Math.max(1, Math.ceil((agreement.data?.total ?? 0) / DEFAULT_PAGE_SIZE))} onPageChange={page => setOffset(page - 1)} labels={paginationLabels()}
+        range={agreement.data ? { start: agreement.data.total ? agreement.data.offset + 1 : 0, end: agreement.data.offset + agreement.data.rows.length, total: agreement.data.total } : undefined} />
     </> : null}
     {rows.isError ? <ApiErrorState fallback={t("common.apiError")} error={rows.error} /> : null}
     {row ? <>

@@ -1,12 +1,11 @@
 import {
   Banner,
   Button,
-  DataTable,
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
   ProcessingIndicator,
   StatusBadge,
   Switch,
+  ListToolbar,
+  PagedDataTable,
 } from "@production-ready/ui";
 import { ListChecks } from "lucide-react";
 import { useState } from "react";
@@ -17,6 +16,8 @@ import { useDraftEvaluationProcess } from "@/lib/queries";
 
 import { evaluationCaseRowLabel } from "./evaluation-input";
 import { outcomeLabel } from "./evaluation-metrics";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
+import { paginationLabels } from "@/lib/pagination-labels";
 
 /** 1 回の下書きの API で送る行の数（backend の `EVALUATION_PROCESS_MAX_REQUEST_ROWS`）。 */
 export const EVALUATION_PROCESS_BATCH_ROWS = 10;
@@ -146,14 +147,18 @@ export function EvaluationProcessDrafts({
 }
 
 function ProcessDraftTable({ drafts }: { drafts: EvaluationProcessDraft[] }) {
+  // 読み込んだケースの数だけ増えるので、件数と 25 件のページングを付ける（#4636）。
+  const paging = useClientListPaging("evaluation.processDraftsPaging", "drafts");
   return (
-    <DataTable<EvaluationProcessDraft>
+    <div className="grid min-w-0 gap-2">
+    <ListToolbar count={listCountProps({ matchedTotal: drafts.length, filtered: false })} testId="evaluation-process-toolbar" />
+    <PagedDataTable<EvaluationProcessDraft>
+      {...paging}
+      paginationLabels={paginationLabels()}
+      paginationAriaLabel={t("evaluation.process.tableLabel")}
       ariaLabel={t("evaluation.process.tableLabel")}
       rows={drafts}
       getRowKey={(draft) => draft.case_id}
-      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
-      stickyHeader
-      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       scrollAriaLabel={t("evaluation.process.tableLabel")}
       scrollTestId="evaluation-process-table"
       tableClassName="w-full min-w-[22.86rem] text-sm md:min-w-[44rem]"
@@ -217,6 +222,7 @@ function ProcessDraftTable({ drafts }: { drafts: EvaluationProcessDraft[] }) {
         },
       ]}
     />
+    </div>
   );
 }
 

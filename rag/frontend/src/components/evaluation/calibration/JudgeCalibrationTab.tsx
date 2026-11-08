@@ -6,9 +6,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  DataTable,
   FormActionBar,
-  INFORMATION_TABLE_VISIBLE_ROWS,
   ListToolbar,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
@@ -533,16 +531,21 @@ function SourceJobTable({
   selected: readonly string[];
   onToggle: (jobId: string, checked: boolean) => void;
 }) {
+  // 品質評価のジョブの数だけ増えるので、件数と 25 件のページングを付ける（#4636）。
+  const paging = useClientListPaging("evaluation.calibration.sourcesPaging", "sources");
   return (
-    <DataTable
+    <div className="grid min-w-0 gap-2">
+    <ListToolbar count={listCountProps({ matchedTotal: jobs.length, filtered: false })} testId="calibration-sources-toolbar" />
+    <PagedDataTable
+      {...paging}
+      paginationLabels={paginationLabels()}
+      paginationAriaLabel={t("evaluation.calibration.create.jobs")}
       testId="calibration-sources"
       ariaLabel={t("evaluation.calibration.create.jobs")}
       rows={jobs}
       getRowKey={(row) => row.job_id}
       isRowSelected={(row) => selected.includes(row.job_id)}
       dense
-      stickyHeader
-      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       empty={
         <EmptyState title={t("evaluation.calibration.create.jobsEmpty")} />
       }
@@ -589,5 +592,6 @@ function SourceJobTable({
         },
       ]}
     />
+    </div>
   );
 }

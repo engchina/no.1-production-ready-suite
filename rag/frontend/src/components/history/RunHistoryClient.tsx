@@ -54,6 +54,7 @@ import {
   formatRunDateTime,
   useActionPending,
   useTraceDetailsLabels,
+  ListToolbar,
 } from "@production-ready/ui";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -725,9 +726,10 @@ function RunFeedbackSection({ feedback, canOpen }: { feedback: RunFeedback[]; ca
     <RunDetailSection
       title={t("history.feedback.title")}
       description={t("history.feedback.description")}
-      meta={<StatusBadge variant="neutral" label={t("history.feedback.count", { count: formatNumber(feedback.length) })} />}
       testId="run-history-feedback"
     >
+      {/* 件数は表の上のツールバーの ListCount 1 か所（見出しのバッジにしない。#4636）。 */}
+      <ListToolbar count={listCountProps({ matchedTotal: feedback.length, filtered: false })} testId="run-history-feedback-toolbar" />
       <DataTable
         columns={columns}
         rows={feedback}

@@ -12,6 +12,7 @@ import {
   Tabs,
   TextareaField,
   toast,
+  ListScrollRegion,
 } from "@production-ready/ui";
 
 import {
@@ -34,6 +35,7 @@ import {
 
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
 import { SupportGuideProcessImport } from "./SupportGuideProcessImport";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 type ImportTab = "json" | "process";
 
@@ -228,6 +230,8 @@ function SupportGuideJsonImport({
               })}
             </p>
             {!allValid ? <Banner severity="danger">{t("supportGuides.importPanel.blocked")}</Banner> : null}
+            {/* 最大 100 件の大きなカードなので、高い行の一覧の高さで止める（#4636）。 */}
+            <ListScrollRegion size="card" label={listScrollLabel(t("supportGuides.importPanel.listLabel"))}>
             <ul className="space-y-2">
               {preview.items.map((item) => (
                 <li
@@ -262,6 +266,7 @@ function SupportGuideJsonImport({
                 </li>
               ))}
             </ul>
+            </ListScrollRegion>
           </div>
         ) : null}
       </div>
