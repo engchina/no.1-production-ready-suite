@@ -6184,7 +6184,7 @@ def evidence_metadata_text(span: Mapping[str, Any]) -> str:
     return neutralize_boundary_markers(_model_source_note(span, _citation_view(span).units))
 
 
-def _evidence_reading(spans: Sequence[dict], evidence_text: str, *, attached_images: bool) -> str:
+def _evidence_reading(spans: Sequence[dict[str, Any]], evidence_text: str, *, attached_images: bool) -> str:
     """今回の根拠に現れる印・値の読み方だけを渡す。該当は入力の形（タグ・目録の印・補助情報の囲み・表の構造）で決める。"""
     keys: set[str] = {str(tag) for span in spans for tag in span.get("tags", ())}
     if any(span.get(ARTICLE_CATALOG_KEY) for span in spans):
