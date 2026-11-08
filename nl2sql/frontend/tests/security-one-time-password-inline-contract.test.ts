@@ -25,8 +25,9 @@ test("作成・リセット結果は「サインインの状態」の同じ読�
   assert.match(usersPage, /data-testid="security-user-temporary-password"/u);
   // コピーは共有の CopyButton（#2099）。
   assert.match(usersPage, /testId="security-user-temporary-password-copy"/u);
-  assert.match(usersPage, /<CopyButton\s+text=\{draft\.temporaryPassword\}/u);
-  assert.match(usersPage, /temporaryPassword: result\.temporary_password/u);
+  // 発行した値は URL と同期する draft と分けて持つ（URL の切り替えの途中の描画で消さない）。
+  assert.match(usersPage, /<CopyButton\s+text=\{issuedTemporaryPassword\}/u);
+  assert.match(usersPage, /setIssuedPassword\(\{ userUuid: result\.user\.user_uuid, password: result\.temporary_password \}\)/u);
   assert.doesNotMatch(usersPage, /oneTimePassword\.createdTitle|oneTimePassword\.resetTitle/u);
 });
 
@@ -53,6 +54,8 @@ test("無効ユーザー・管理の権限が無い利用者は保存とパス�
 test("無効ユーザーの編集内容は選択状態を表示したまま読み取り専用になる", () => {
   assert.match(usersPage, /if \(userFormReadOnly\) return;\s*setDraft/u);
   assert.match(usersPage, /disabled=\{inputReadOnly\}/u);
+  // 発行済みの一時パスワードの欄とコピーも、無効なユーザーでは使わせない。
+  assert.match(usersPage, /disabled=\{userFormReadOnly \|\| !issuedTemporaryPassword\}/u);
   assert.match(
     usersPage,
     /<fieldset className="grid gap-2 border-t border-border pt-5" disabled=\{inputReadOnly\}>/u

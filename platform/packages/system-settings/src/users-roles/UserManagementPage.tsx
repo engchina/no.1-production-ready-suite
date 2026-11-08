@@ -110,6 +110,12 @@ interface ResetPasswordError {
   message: string;
 }
 
+/** 作成・リセットで発行した一時パスワード（そのユーザーのエディタの「サインインの状態」に出す）。 */
+interface IssuedPassword {
+  userUuid: string;
+  password: string;
+}
+
 interface UserDraftState {
   loginUserId: string;
   displayName: string;
@@ -198,6 +204,9 @@ export function UserManagementPage({
   const [statusChangingUserId, setStatusChangingUserId] = useState<string | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [resetPasswordError, setResetPasswordError] = useState<ResetPasswordError | null>(null);
+  // 発行した一時パスワードは URL と同期するフォームの値（draft）と分けて持つ。URL の切り替えの途中の描画で
+  // draft を入れ直しても消えないようにし、利用者の操作（一覧へ戻る・ほかの対象を開く・新規作成・削除）でだけ消す。
+  const [issuedPassword, setIssuedPassword] = useState<IssuedPassword | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const loadSequence = useRef(0);
   const loginUserIdRef = useRef<HTMLInputElement | null>(null);
@@ -232,11 +241,11 @@ export function UserManagementPage({
     return roleIds.find((roleId) => availableRoleIds.has(roleId)) ?? "";
   };
 
-  const draftFromUser = (user: SecurityUser, temporaryPassword = ""): UserDraftState => ({
+  const draftFromUser = (user: SecurityUser): UserDraftState => ({
     loginUserId: user.login_user_id,
     displayName: user.display_name,
     selectedRoleId: selectKnownRoleId(user.role_ids),
-    temporaryPassword,
+    temporaryPassword: "",
   });
 
   const resetFormMessages = () => {
@@ -258,6 +267,8 @@ export function UserManagementPage({
     setLastOpenedId(target);
   }
 
+  const issuedTemporaryPassword =
+    editingUser && issuedPassword?.userUuid === editingUser.user_uuid ? issuedPassword.password : "";
   // 一時パスワードの欄の操作（コピー・再発行）の失敗。欄の下に出し、欄の aria-describedby で結び付ける。
   const temporaryPasswordActionError =
     copyPasswordError ||
@@ -444,21 +455,20 @@ export function UserManagementPage({
   const openUser = (user: SecurityUser) => {
     if (operationBusy) return;
     setActionError("");
+    setIssuedPassword(null);
     selection.open(user.user_uuid);
   };
 
   const startCreate = () => {
     setActionError("");
+    setIssuedPassword(null);
     selection.open(SECURITY_NEW_ENTITY_ID);
   };
 
   /** 一時パスワード（作成・リセットの結果）を持たせて、そのユーザーのエディタを開く。 */
   const showUserWithPassword = (user: SecurityUser, temporaryPassword: string, how: "open" | "replace") => {
-    const nextDraft = draftFromUser(user, temporaryPassword);
-    setDraftFor(user.user_uuid);
-    setDraft(nextDraft);
-    setBaseline(nextDraft);
-    resetFormMessages();
+    setIssuedPassword({ userUuid: user.user_uuid, password: temporaryPassword });
+    setCopyPasswordError("");
     if (how === "open") selection.open(user.user_uuid);
     else selection.replace(user.user_uuid);
   };
@@ -466,6 +476,7 @@ export function UserManagementPage({
   const returnToList = async () => {
     if (!(await confirmLeave())) return;
     setActionError("");
+    setIssuedPassword(null);
     if (isDirty) {
       setDraft(baseline);
       scheduleLeave(selection.close);
@@ -614,8 +625,7 @@ export function UserManagementPage({
       const result = await api.resetPassword(user.user_uuid);
       setUsers((rows) => rows.map((row) => (row.user_uuid === result.user.user_uuid ? result.user : row)));
       if (view === "edit" && editingUser?.user_uuid === result.user.user_uuid) {
-        setDraft((current) => ({ ...current, temporaryPassword: result.temporary_password }));
-        setBaseline((current) => ({ ...current, temporaryPassword: result.temporary_password }));
+        setIssuedPassword({ userUuid: result.user.user_uuid, password: result.temporary_password });
       } else {
         // 一覧の行からリセットしたときは、そのユーザーのエディタを開いて一時パスワードを出す。
         showUserWithPassword(result.user, result.temporary_password, "open");
@@ -677,6 +687,7 @@ export function UserManagementPage({
       // 削除した対象のエディタは閉じて一覧へ戻す（ほかの対象へ置き換えない）。
       if (target === user.user_uuid) selection.replace(null);
       setLastOpenedId(null);
+      setIssuedPassword(null);
       toast.success(t("security.users.deleteSuccess", { name: userDisplayName(user) }));
     } catch (cause) {
       setActionError(
@@ -859,6 +870,9 @@ export function UserManagementPage({
           {errorBanners}
           {canManage && disabledUser ? (
             <Banner severity="info">{t("security.users.disabledReadonly")}</Banner>
+          ) : null}
+          {editingUser && assignedRoles(editingUser).some((role) => role.archived) ? (
+            <Banner severity="warning">{t("security.users.archivedRoleNotice")}</Banner>
           ) : null}
           <Card data-testid="security-users-editor">
             <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
@@ -1058,7 +1072,7 @@ export function UserManagementPage({
                     {editingUser.force_password_change ? t("security.common.yes") : t("security.common.no")}
                   </SecurityDetailField>
                 </dl>
-                {draft.temporaryPassword || temporaryPasswordActionError ? (
+                {issuedTemporaryPassword || temporaryPasswordActionError ? (
                   // 発行した一時パスワード（作成・リセットの直後だけ）とコピーの操作の行。
                   // エラーは操作の下端がずれないよう footer に出す（#613 / #631）。
                   <FieldActionRow
@@ -1066,11 +1080,11 @@ export function UserManagementPage({
                     fit={temporaryPasswordRowWidth.fit}
                     actions={
                       <CopyButton
-                        text={draft.temporaryPassword}
+                        text={issuedTemporaryPassword}
                         label={t("security.users.oneTimePassword.copy")}
                         copiedMessage={t("common.action.copied")}
                         failedMessage={t("security.users.oneTimePassword.copyError")}
-                        disabled={!draft.temporaryPassword}
+                        disabled={userFormReadOnly || !issuedTemporaryPassword}
                         onCopied={() => setCopyPasswordError("")}
                         onCopyError={setCopyPasswordError}
                         testId="security-user-temporary-password-copy"
@@ -1091,9 +1105,11 @@ export function UserManagementPage({
                       label={t("security.users.oneTimePassword.valueLabel")}
                       width="md"
                       readOnly
+                      // 無効なユーザーでは発行済みの一時パスワードを使わせない（コピーも止める）。
+                      disabled={userFormReadOnly}
                       aria-describedby={temporaryPasswordActionError ? "security-user-temporary-password-action-error" : undefined}
                       autoComplete="off"
-                      value={draft.temporaryPassword}
+                      value={issuedTemporaryPassword}
                       data-testid="security-user-temporary-password"
                     />
                   </FieldActionRow>
