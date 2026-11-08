@@ -53,11 +53,17 @@ def keeps_position(record: Any) -> bool:
     )
 
 
-def _overlap(left: frozenset[str], right: frozenset[str]) -> float:
-    """語の重なり（Jaccard）。"""
-    shared = len(left & right)
-    union = len(left) + len(right) - shared
-    return shared / union if union else 0.0
+def _term_masks(terms: Sequence[frozenset[str]]) -> list[int]:
+    """語の集合を整数のビット列にする（候補の間で同じ語に同じビットを当て、共通の語の数を速く数える）。"""
+    numbers: dict[str, int] = {}
+    positions = [[numbers.setdefault(term, len(numbers)) for term in group] for group in terms]
+    masks: list[int] = []
+    for bits in positions:
+        mask = bytearray(len(numbers) // 8 + 1)
+        for bit in bits:
+            mask[bit >> 3] |= 1 << (bit & 7)
+        masks.append(int.from_bytes(mask, "little"))
+    return masks
 
 
 def mmr_order(scores: Sequence[float], terms: Sequence[frozenset[str]]) -> list[int]:
@@ -65,12 +71,17 @@ def mmr_order(scores: Sequence[float], terms: Sequence[frozenset[str]]) -> list[
     remaining = list(range(len(scores)))
     redundancy = [0.0] * len(scores)
     order: list[int] = []
+    masks = _term_masks(terms)
+    sizes = [len(group) for group in terms]
     while remaining:
         chosen = max(remaining, key=lambda index: MMR_LAMBDA * scores[index] - (1.0 - MMR_LAMBDA) * redundancy[index])
         remaining.remove(chosen)
         order.append(chosen)
         for index in remaining:
-            redundancy[index] = max(redundancy[index], _overlap(terms[chosen], terms[index]))
+            # 語の重なり（Jaccard）。
+            shared = (masks[chosen] & masks[index]).bit_count()
+            union = sizes[chosen] + sizes[index] - shared
+            redundancy[index] = max(redundancy[index], shared / union if union else 0.0)
     return order
 
 

@@ -61,6 +61,8 @@ _TIER_SUPPLEMENT = 0
 
 _VALID_LATIN_STEMMERS = {"auto", "snowball", "light", "none"}
 _SUDACHI_MAX_BYTES = 20000
+# 語ごとの結果を覚えておく件数（語の種類は有限なので、process ごとに上限を決めて再利用する）。
+_TOKEN_FORMS_CACHE_SIZE = 16384
 _LATIN_ALPHA = re.compile(r"^[a-z]+$")
 # 文字種の区切り（漢字・カタカナの範囲は言語資源。ひらがなは区切りとして捨てる）。
 _LATIN_RUN = re.compile(r"[a-z0-9][a-z0-9_]*(?:[-.][a-z0-9_]+)*")
@@ -73,6 +75,8 @@ _EXTRA_PATTERNS = (
 # 文字の同一視（質問の側と索引の側、回答のモデルに渡す根拠で共通。#1336・#1350）。波線・ダッシュは
 # ``character_forms.SYMBOL_FOLD``、質問の側だけが空白の連続を 1 つにまとめる。
 _WHITESPACE_RUN = re.compile(r"[　\s]+")
+_CONTROL_RUN = re.compile(r"[\x00-\x1f\x7f]+")
+_SPACE_RUN = re.compile(r"\s+")
 
 
 ORACLE_TEXT_RESERVED_TERMS = {
@@ -228,8 +232,12 @@ def normalize_text_search_text(text: Any) -> str:
     """Oracle Text token 化前の文字列を NFKC と空白規則で正規化します。"""
     normalized = unicodedata.normalize("NFKC", str(text or "")).translate(SYMBOL_FOLD)
     normalized = _WHITESPACE_RUN.sub(" ", normalized)
-    normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", normalized)
+    normalized = _CONTROL_RUN.sub(" ", normalized)
     return normalized.casefold().strip()
+
+
+# 同じ語の表層形を繰り返し正規化しないための再利用（語の後処理の時間の多くを占める。#4679）。
+_normalize_token = functools.lru_cache(maxsize=_TOKEN_FORMS_CACHE_SIZE)(normalize_text_search_text)
 
 
 def normalize_text_search_index_text(text: Any) -> str:
@@ -787,7 +795,7 @@ def _emit_morpheme(
         return
     normalized = morpheme.normalized_form().casefold()
     _push_token(normalized, tokens, config, stopwords)
-    surface_term = normalize_text_search_text(surface)
+    surface_term = _normalize_token(surface)
     if surface_term != normalized:
         _push_token(surface_term, tokens, config, stopwords)
 
@@ -801,18 +809,31 @@ def _push_token(
     derive_latin: bool = True,
     bridge_latin: bool = True,
 ) -> None:
+    tokens.extend(_token_forms(raw_token, config, stopwords, _vocabulary().key, derive_latin, bridge_latin))
+
+
+@functools.lru_cache(maxsize=_TOKEN_FORMS_CACHE_SIZE)
+def _token_forms(
+    raw_token: Any,
+    config: TextSearchTokenizerConfig,
+    stopwords: frozenset[str],
+    _vocabulary_key: str,
+    derive_latin: bool,
+    bridge_latin: bool,
+) -> tuple[str, ...]:
+    """1 語の正規化と判定の結果（語・設定・言語資源の語彙だけで決まるので、同じ語を繰り返し処理しない。#4679）。"""
     token = _normalize_term(raw_token)
     if not _keep_token(token, stopwords):
-        return
-    tokens.append(token)
+        return ()
+    forms = [token]
     if not derive_latin or not _LATIN_ALPHA.fullmatch(token):
-        return
+        return tuple(forms)
     for derived in _latin_variants(token, config):
         if _keep_token(derived, stopwords):
-            tokens.append(derived)
+            forms.append(derived)
             if bridge_latin:
-                for bridged in _bridge_latin_to_sudachi(derived, config, stopwords):
-                    tokens.append(bridged)
+                forms.extend(_bridge_latin_to_sudachi(derived, config, stopwords))
+    return tuple(forms)
 
 
 def _keep_token(token: str, stopwords: frozenset[str]) -> bool:
@@ -875,7 +896,7 @@ def _bridge_latin_to_sudachi(
 def _normalize_term(term: Any) -> str:
     normalized = normalize_text_search_text(term)
     normalized = normalized.strip("{}[]()")
-    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = _SPACE_RUN.sub(" ", normalized).strip()
     if " " in normalized:
         return ""
     return _trim_japanese_particle_edges(normalized)
