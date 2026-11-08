@@ -69,7 +69,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_content import citation_content_unusable
-from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
+from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_scope_model
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
@@ -3220,13 +3220,46 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
 # ---- 本文の組み立て -----------------------------------------------------------
 
 
-def _citation(span: dict) -> str:
+def citation_source(span: Mapping[str, Any]) -> str:
+    """利用者に見せる出典の名前（文書名と頁。本文の出典の行から接頭辞を除いたもの）。"""
     # 頁の無い根拠（Excel の行の記録）はシートとセル範囲を出す（#1224）。
     page = span.get("page", "")
     end = span.get("page_end")
     pages = f"{page}-{end}" if isinstance(page, int) and isinstance(end, int) and end > page else page
     location = span.get("location") or answer_labels().page(pages)
-    return f"{answer_labels().citation_prefix}{span.get('source', '')} {location}"
+    return f"{span.get('source', '')} {location}"
+
+
+def _citation(span: dict) -> str:
+    return f"{answer_labels().citation_prefix}{citation_source(span)}"
+
+
+def sent_evidence_sources(catalog: SentUnitCatalog) -> dict[str, str]:
+    """今回モデルへ送った根拠の表示 ID から、利用者に見せる出典の名前への対応（#4626）。"""
+    spans = [snapshot.span() for snapshot in catalog.snapshots]
+    return {label: citation_source(span) for span in spans if (label := str(span.get("label") or ""))}
+
+
+def with_application_sources(draft: GroundedDraft, catalog: SentUnitCatalog) -> GroundedDraft:
+    """推導の方法と結論の文に混ざった、送った根拠の表示 ID を出典の名前に置き換える（#4626）。
+
+    表示 ID はモデルが入力の根拠ブロックで見た名前で、送った根拠に対応するものはコードが出典の名前に決定的に
+    置き換えられる。送った根拠に無い ID と資料の本文にある同じ字のコードは残し、推導の検査が内部の番号として扱う。
+    """
+    if not draft.applications:
+        return draft
+    sources = sent_evidence_sources(catalog)
+    codes = _document_evidence_codes([snapshot.span() for snapshot in catalog.snapshots])
+    applications = [
+        application.model_copy(
+            update={
+                "reasoning": replace_evidence_labels(application.reasoning, sources, codes=codes),
+                "result": replace_evidence_labels(application.result, sources, codes=codes),
+            }
+        )
+        for application in draft.applications
+    ]
+    return draft if applications == list(draft.applications) else draft.model_copy(update={"applications": applications})
 
 
 def _cited_line(entry: CheckedItem) -> str:
@@ -7238,6 +7271,8 @@ def run_round(
         draft = format_draft_numbers(question, draft, spans)
     if not range_only:
         draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
+        # 推導の文の、送った根拠の表示 ID は出典の名前にする（推導の検査の前。#4626）。
+        draft = with_application_sources(draft, unit_catalog)
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     citation_trace = {
         "capture_scope": "generation_citation_trace",

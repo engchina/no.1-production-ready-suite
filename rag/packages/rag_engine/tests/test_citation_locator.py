@@ -214,17 +214,27 @@ def test_a_copied_position_needs_no_extra_call_and_leaves_no_fragment() -> None:
     assert not [mark for row in result.envelope.get("passage_marks") or [] for mark in row["reasons"] if mark["code"] == "item_check"]
 
 
+def test_a_sent_id_in_the_derivation_becomes_the_source_name() -> None:
+    """送った根拠の表示 ID は出典の名前に置き換え、作り直さない（#4626）。"""
+    result, prompts = answer(output(f"E1 によると{SENTENCE}。"))
+    assert len(prompts) == 1
+    assert "E1" not in result.answer_text
+    assert f"「synthetic.txt p.1」によると{SENTENCE}。" in result.answer_text
+    assert result.generation_trace["applications"][0]["published"] is True
+
+
 def test_a_mixed_id_is_regenerated_once() -> None:
-    result, prompts = answer(output(f"E1 によると{SENTENCE}。"), output(f"{SENTENCE}。"))
+    # 送っていない根拠の ID（E7）は内部の番号の漏れとして作り直す。
+    result, prompts = answer(output(f"E7 によると{SENTENCE}。"), output(f"{SENTENCE}。"))
     assert len(prompts) == 2
     assert "internal_label_issues" in prompts[1]
     assert f"{SENTENCE}。" in result.answer_text
 
 
 def test_unrepaired_mixed_id_withholds_result_and_preserves_original_source() -> None:
-    result, prompts = answer(output(f"E1 によると{SENTENCE}。"), output(f"E1 によると{SENTENCE}。"))
+    result, prompts = answer(output(f"E7 によると{SENTENCE}。"), output(f"E7 によると{SENTENCE}。"))
     assert len(prompts) == 2
-    assert "E1" not in result.answer_text
+    assert "E7" not in result.answer_text
     assert SENTENCE in result.answer_text
     assert result.generation_trace["applications"][0]["published"] is False
     assert result.generation_trace["applications"][0]["reasons"]
