@@ -4965,16 +4965,6 @@ def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
     )
 
 
-def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
-    """extraction payload から artifact cache path を読む。"""
-    artifacts = extraction.get("parser_artifacts")
-    if isinstance(artifacts, Mapping):
-        value = artifacts.get("extraction_artifact_path")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
 def _document_extraction_export_content(
     export_format: DocumentExtractionExportFormat,
     extraction: StructuredExtraction,
@@ -5377,10 +5367,12 @@ async def _document_artifact_paths(
     oracle: OracleClient,
     detail: DocumentDetail,
 ) -> list[str]:
-    """削除対象 document に紐づく抽出 artifact cache path を重複排除して返す。"""
+    """削除対象 document に紐づく segment・レシピの artifact の path を重複排除して返す。
+
+    抽出の artifact（``{抽出の prefix}/{document_id}/...``）は文書の prefix の一括削除
+    （``document_artifact_prefixes``）が消す。文書の行の旧い抽出からは集めない（#4617）。
+    """
     paths: list[str] = []
-    if extraction_artifact_path := _extraction_artifact_path(detail.extraction):
-        paths.append(extraction_artifact_path)
     try:
         segments = await oracle.list_ingestion_segments(detail.id)
     except Exception:

@@ -781,7 +781,6 @@ export interface StructuredExtraction {
 
 export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
-  extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;
   /** 文書の分類と有効期間(検索の分類フィルタと基準日に使う)。未設定は null。 */

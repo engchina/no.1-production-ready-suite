@@ -242,7 +242,7 @@ class DocumentElement(BaseModel):
         return normalized
 
     def to_payload(self) -> dict[str, object]:
-        """DocumentDetail.extraction に入れる JSON 互換 payload を返す。"""
+        """抽出の JSON（レシピの抽出の版）に入れる JSON 互換 payload を返す。"""
         return self.model_dump(exclude_none=True)
 
 
@@ -462,7 +462,7 @@ class StructuredExtraction(BaseModel):
         return self
 
     def to_document_payload(self) -> dict[str, object]:
-        """DocumentDetail.extraction に格納する JSON 互換 dict を返す。"""
+        """抽出の JSON（レシピの抽出の版）に格納する JSON 互換 dict を返す。"""
         from rag_parser_core.structured_records import record_boundary_plain_text
 
         payload: dict[str, object] = {

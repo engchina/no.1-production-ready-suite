@@ -699,7 +699,6 @@ async def test_recipe_review_load_does_not_fall_back_to_document_extraction() ->
         status=FileStatus.REVIEW,
         uploaded_at=datetime.now(UTC),
         content_sha256="a" * 64,
-        extraction={"raw_text": "別レシピの本文"},
     )
 
     with pytest.raises(IngestionUserError, match="抽出結果が見つかりません"):
