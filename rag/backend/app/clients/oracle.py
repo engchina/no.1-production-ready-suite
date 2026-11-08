@@ -18335,7 +18335,6 @@ CREATE TABLE {table_name} (
     tenant_id_hash           CHAR(64),
     category_name            VARCHAR2(256),
     object_storage_path      VARCHAR2(1024),
-    preprocess_artifact      JSON,
     processing_config        JSON,
     classification           JSON,
     content_type             VARCHAR2(255),
