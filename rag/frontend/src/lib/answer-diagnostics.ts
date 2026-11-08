@@ -1,7 +1,7 @@
 import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from "@production-ready/ui";
 
 import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
-import { t } from "@/lib/i18n";
+import { ja, t, type I18nKey } from "@/lib/i18n";
 import { parseCragDiagnostics, type CragDiagnostics } from "@/lib/crag-diagnostics";
 import { parseAnswerValidation } from "@/lib/answer-validation";
 
@@ -108,6 +108,8 @@ export type AnswerDiagnostics = {
   models: { llm: ModelRef | null; attachedImages: number; embedding: string; rerank: string };
   /** モデルのカスケード（#4581）。カスケードしない実行・古い記録は null。 */
   modelCascade: ModelCascadeRecord | null;
+  /** 失敗して省いた補助の工程の、利用者向けの名前（#4681）。縮退が無ければ空。 */
+  degradedSteps: string[];
   steps: {
     name: string;
     status: string;
@@ -175,6 +177,20 @@ export function parseRunStepDetails(value: unknown): RunStepDetails | undefined 
   return hasRunStepDetails(details) ? details : undefined;
 }
 
+/**
+ * 縮退の記録（backend の degraded_steps）の工程の名前（重複なし）。種類だけを読み、例外の型の名前は持たない。
+ * 名前の無い種類は汎用の名前にまとめ、識別子を画面に出さない。
+ */
+function parseDegradedSteps(value: unknown): string[] {
+  const labels = list(value).flatMap((entry) => {
+    const kind = record(entry).kind;
+    if (typeof kind !== "string" || !kind) return [];
+    const key = `search.answerDetails.degraded.step.${kind}`;
+    return [t(key in ja ? (key as I18nKey) : "search.answerDetails.degraded.step.unknown")];
+  });
+  return [...new Set(labels)];
+}
+
 /** diagnostics.answer を表示用に正規化する。回答フローの診断が無い回答では null。 */
 export function parseAnswerDiagnostics(
   value: unknown,
@@ -213,6 +229,7 @@ export function parseAnswerDiagnostics(
     graphExpansion: parseGraphExpansion(raw.graph_expansion),
     models: parseModels(raw.models),
     modelCascade: parseModelCascade(raw.model_cascade),
+    degradedSteps: parseDegradedSteps(raw.degraded_steps),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
       const details = parseRunStepDetails(item.details);

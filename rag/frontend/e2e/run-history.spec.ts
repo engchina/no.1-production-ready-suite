@@ -1002,6 +1002,46 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(summary.locator('[data-run-fact="modelTokens"]')).toHaveCount(0);
   });
 
+  test("詳細: 縮退した工程を処理の詳細に利用者の言葉で出し、縮退の無い実行には出さない (#4681)", async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    const models = { llm: { model_id: "model-light", label: "モデル Light" } };
+    await mockRuns(page, [
+      run(1, {
+        question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light",
+        answer_diagnostics: {
+          models,
+          degraded_steps: [
+            { kind: "query_embedding", count: 1, exc_type: "SyntheticError" },
+            { kind: "rerank", count: 2, exc_type: "SyntheticError" },
+            { kind: "future_step_name", count: 1, exc_type: "SyntheticError" },
+          ],
+        },
+      }),
+      run(2, { question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light", answer_diagnostics: { models } }),
+    ]);
+    await page.goto("/history/run-1");
+    // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
+    await expect(page.getByTestId("answer-degraded-steps")).toBeHidden();
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    const degraded = page.getByTestId("answer-degraded-steps");
+    await expect(degraded).toContainText("一部の処理を省いて回答しました");
+    await expect(degraded.getByRole("listitem")).toHaveText(["質問のベクトル化", "根拠の並べ替え", "その他の補助の処理"]);
+    await expect(degraded).not.toContainText("future_step_name");
+    await expect(degraded).not.toContainText("SyntheticError");
+    await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light"]);
+    await expectNoPageOverflow(page);
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await degraded.screenshot({ path: testInfo.outputPath(`degraded-steps-${theme}.png`) });
+    }
+    await page.goto("/history/run-2");
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light"]);
+    await expect(page.getByTestId("answer-degraded-steps")).toHaveCount(0);
+  });
+
   test("詳細: 概要にモデル・token・モデルの呼び出しを Agent と同じ形で出し、不明は未計測・一部計測と出す（Issue 3419）", async ({
     page,
   }, testInfo) => {

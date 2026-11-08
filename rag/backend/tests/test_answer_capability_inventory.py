@@ -3,6 +3,7 @@
 - 診断の ``degraded_steps`` の処理の種類(#3259)は、文書の「``degraded_steps`` の処理の種類」の
   表と一致する(``record_degraded("…")`` / ``report_degraded("…")`` の文字列)。種類を足したら、表に
   足すまで失敗する。
+- 表の種類には、回答の処理の詳細に出す工程の名前が i18n にある(#4681)。
 - 文書が示すコードの file と関数・class の名前は、コードにある(名前を変えたら文書も直す)。
 
 コードは読むだけで、import も実行もしない(AST と文字列)。
@@ -14,6 +15,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 DOC = REPO / "rag/docs/answer-capability-inventory.md"
+I18N = REPO / "rag/frontend/src/lib/i18n.ts"
 # degraded_steps を記録するコード(backend の回答と rag_engine)。
 CODE_ROOTS = (
     REPO / "rag/backend/app",
@@ -86,6 +88,15 @@ def test_degraded_kinds_in_code_are_documented() -> None:
     stale = sorted(documented - code)
     assert not missing, f"コードが degraded_steps に記録する種類が {DOC.name} の表に無い: {missing}"
     assert not stale, f"{DOC.name} の表に、コードが記録しない種類がある: {stale}"
+
+
+def test_degraded_kinds_have_screen_labels() -> None:
+    """種類を足したら、処理の詳細に出す工程の名前を i18n に足すまで失敗する。"""
+    i18n = I18N.read_text(encoding="utf-8")
+    missing = sorted(
+        kind for kind in _doc_kinds() if f'"search.answerDetails.degraded.step.{kind}":' not in i18n
+    )
+    assert not missing, f"{I18N.name} に工程の名前が無い degraded_steps の種類: {missing}"
 
 
 def test_code_references_in_document_exist() -> None:
