@@ -593,6 +593,73 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
   });
 
+  // #4632: 1 つの項目が複数行（隣り合う表の行をまとめた引用など）でも、全行を項目の本文に出し、その後の根拠の行を
+  // 項目の根拠のリンクにする（地の文の段落にしない）。表の行が並んでも回答のカードが横にはみ出さない。
+  for (const theme of ["light", "dark"] as const) {
+    test(`詳細: 複数行の項目は全行を項目に出し、その後の根拠の行をリンクにする（#4632・${theme}）`, async ({ page }, testInfo) => {
+      await page.addInitScript((value) => {
+        window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+      }, theme);
+      await mockLocalAuth(page);
+      const rows = [
+        "| A1 | 合成の品目 1 | 120 |",
+        "| A2 | 合成の品目 2 | 340 |",
+        "| A3 | 合成の品目 3 | 560 |",
+        "| A4 | SYNTHETIC-ITEM-CODE-0004-ABCDEFGHIJKLMNOPQRSTUVWXYZ | 780 |",
+        "| A5 | 合成の品目 5 | 910 |",
+        "| A6 | 合成の品目 6 | 230 |",
+        "| A7 | 合成の品目 7 | 450 |",
+        "| A8 | 合成の品目 8 | 670 |",
+      ];
+      const answer = [
+        "合成の表の 8 行の合計は 4060 です。",
+        "",
+        "資料により確認できた事項",
+        "",
+        "・" + rows[0],
+        ...rows.slice(1),
+        "根拠：合成の表.md p.1",
+        "・合計は各行の値を足して求めます。",
+        "根拠：合成の表.md p.2",
+      ].join("\n");
+      const citations = [
+        { ...CITATION, chunk_id: "doc-1:c1", file_name: "合成の表.md", metadata: { page: 1 } },
+        { ...CITATION, chunk_id: "doc-1:c2", file_name: "合成の表.md", metadata: { page: 2 } },
+      ];
+      await mockRuns(page, [run(1, { answer, citations })]);
+
+      await page.goto("/history/run-1");
+      const card = page.getByTestId("run-history-answer");
+      const section = card
+        .getByTestId("answer-section")
+        .filter({ has: page.getByRole("heading", { name: "資料により確認できた事項", exact: true }) });
+      // 地の文の段落（節の中の文）も listitem なので、2 つだけなら続きの行と根拠の行は段落になっていない。
+      const items = section.getByRole("listitem");
+      await expect(items).toHaveCount(2);
+      // 1 つ目の項目は表の 8 行をすべて持ち、根拠の行は項目のリンク（地の文の段落ではない）。
+      for (const row of rows) await expect(items.first()).toContainText(row);
+      await expect(items.first().getByTestId("answer-citation-link")).toHaveCount(1);
+      await expect(items.first().getByTestId("answer-citation-link")).toContainText("合成の表.md");
+      await expect(items.nth(1).getByTestId("answer-citation-link")).toHaveCount(1);
+      // 表の行は 1 行ずつ改行して並び、長い値も回答のカードの幅で折り返す。
+      const metrics = await card.evaluate((element) => ({
+        cardOverflow: element.scrollWidth - element.clientWidth,
+        itemOverflow: Math.max(
+          ...[...element.querySelectorAll<HTMLElement>('[data-testid="answer-section"] li')].map(
+            (item) => item.getBoundingClientRect().right - element.getBoundingClientRect().right,
+          ),
+        ),
+      }));
+      expect(metrics.cardOverflow).toBeLessThanOrEqual(1);
+      expect(metrics.itemOverflow).toBeLessThanOrEqual(1);
+      await card.screenshot({ path: testInfo.outputPath(`answer-multiline-item-${theme}.png`) });
+      await expectNoPageOverflow(page);
+      // 根拠のリンクから原文のサイドパネルを開ける。
+      await items.first().getByTestId("answer-citation-link").click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+    });
+  }
+
   test("詳細: 概要 → 処理の経過（処理の詳細を含む）→ 回答 → 根拠 → フィードバックの 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,
   }, testInfo) => {

@@ -113,6 +113,10 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   };
   // 結論の説明（#4393）を集めている項目。根拠の行（回答エンジンは説明の後に必ず根拠の行を置く）か節の見出しで閉じる。
   let reasoning: { entry: Extract<AnswerTextEntry, { kind: "item" }>; lines: string[] } | null = null;
+  // 本文の続きの行を受ける項目（#4632）。回答エンジンは項目の文の改行（隣り合う表の行をまとめた引用など）をそのまま
+  // 出すので、項目の直後の行は空行・箇条書き・節の見出し・根拠の行で区切られるまで項目の本文の続きにする。
+  // 区切りは書式の印だけで決める。結論の節の項目は説明の行を details に分けるので受けない。
+  let continued: Extract<AnswerTextEntry, { kind: "item" }> | null = null;
   const closeReasoning = () => {
     if (!reasoning) return;
     const value = reasoning.lines.join("\n").trim();
@@ -121,6 +125,8 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   };
   for (const raw of lines) {
     const line = raw.trim();
+    const item = continued;
+    continued = null;
     if (reasoning) {
       if (!citation.test(line) && !sectionTitle(line, format)) {
         reasoning.lines.push(raw.trimEnd());
@@ -148,12 +154,19 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
     if (section && (bullet.test(line) || NUMBERED.test(line))) {
       flushParagraph();
       if (!NUMBERED.test(line)) section.ordered = false;
-      section.entries.push({
+      const entry: Extract<AnswerTextEntry, { kind: "item" }> = {
         kind: "item",
         text: line.replace(bullet, "").replace(NUMBERED, ""),
         citations: [],
         citationLines: [],
-      });
+      };
+      section.entries.push(entry);
+      if (!isApplication()) continued = entry;
+      continue;
+    }
+    if (item && !citation.test(line)) {
+      item.text += "\n" + line;
+      continued = item;
       continue;
     }
     if (citation.test(line) && isApplication()) flushParagraph();
