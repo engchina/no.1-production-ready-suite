@@ -331,8 +331,10 @@ export function PageHeader({
         {/*
           md 未満はタイトルの塊を全幅にし、ページの操作を常にタイトル（と補足）の下の段に置く。通知（Toast）は
           md 未満で上端のバーに重ねて出るので、短いタイトルの右に操作が入ると 1 段目の操作が通知の範囲に入る（#4571）。
+          md 以上はタイトルの塊を残りの幅（basis 0）にし、補足が長くても操作をタイトルの右に置く（補足は折り返す）。
+          塊が 20rem を取れないときだけ操作を下の段へ送る（#4635）。
         */}
-        <div className="min-w-0 flex-auto basis-full md:basis-auto">
+        <div className="min-w-0 flex-auto basis-full md:min-w-[20rem] md:basis-0">
           {back ? (
             <div className="mb-1.5">
               {/* 左の余白をボタンの内側の余白の分だけ戻し、矢印の左端をタイトルの左端にそろえる。 */}

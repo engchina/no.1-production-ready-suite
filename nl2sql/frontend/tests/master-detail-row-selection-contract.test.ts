@@ -25,37 +25,34 @@ const profileManagementSource = readFileSync(
   "utf8"
 );
 
-test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / onRowClick）と表示行数を使う", () => {
-  // 行全体の単一選択・行内操作の除外・スクロール領域の公開は共有 DataTable が持つ（#530）。
+test("一覧/詳細ページは共有 DataTable の行のクリックと表示行数を使う", () => {
+  // 行全体のクリック・行内操作の除外・スクロール領域の公開は共有 DataTable が持つ（#530）。
   for (const source of [securityUsersSource, securityRolesSource, dbObjectSharedSource, profileManagementSource]) {
     assert.match(source, /<DataTable/u);
     assert.doesNotMatch(source, /MasterDetailDataTable|isInteractiveRowTarget|<table/u);
-    assert.match(source, /selectedRowKey=/u);
     assert.match(source, /onRowClick=/u);
   }
+  for (const source of [dbObjectSharedSource, profileManagementSource]) {
+    assert.match(source, /selectedRowKey=/u);
+  }
 
-  // 選択は URL の検索パラメータ（共有の useUrlSelection）が持ち、先頭の行を自動で選ばない（#2282）。
-  // 一覧 + 詳細は共有の ListDetailLayout（一覧の列の中で縦にスクロールし、visibleRows の固定の高さにしない）。
+  // ユーザー・ロール管理は全幅の一覧 → 全幅のエディタ（A 型。#4635）。開いている対象は URL の検索パラメータ
+  // （共有の useUrlSelection）が持ち、表は visibleRows の高さで中をスクロールする。
   assert.match(securitySharedSource, /useUrlSelection\(/u);
-  assert.match(securitySharedSource, /<ListDetailLayout/u);
-  assert.doesNotMatch(securitySharedSource, /selectedVisibleKey|FixedSplitPane/u);
-  assert.match(securityUsersSource, /usePagedSelectionList/u);
-  assert.match(securityUsersSource, /useSecurityUrlSelection\("user"\)/u);
-  assert.match(securityUsersSource, /selectedRowKey=\{selectedUserId\}/u);
-  assert.match(securityUsersSource, /selection\.select\(user\.user_uuid\)/u);
-  assert.doesNotMatch(securityUsersSource, /visibleRows=/u);
-  assert.match(securityUsersSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
-  assert.match(securityUsersSource, /scrollTestId="security-users-scroll-region"/u);
-  assert.match(securityUsersSource, /scrollAriaLabel/u);
-
-  assert.match(securityRolesSource, /usePagedSelectionList/u);
-  assert.match(securityRolesSource, /useSecurityUrlSelection\("role"\)/u);
-  assert.match(securityRolesSource, /selectedRowKey=\{selectedRoleId\}/u);
-  assert.match(securityRolesSource, /selection\.select\(role\.role_id\)/u);
-  assert.doesNotMatch(securityRolesSource, /visibleRows=/u);
-  assert.match(securityRolesSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
-  assert.match(securityRolesSource, /scrollTestId="security-roles-scroll-region"/u);
-  assert.match(securityRolesSource, /scrollAriaLabel/u);
+  assert.doesNotMatch(securitySharedSource, /ListDetailLayout|selectedVisibleKey|FixedSplitPane/u);
+  for (const [source, param, grid] of [
+    [securityUsersSource, "user", "users"],
+    [securityRolesSource, "role", "roles"],
+  ] as const) {
+    assert.match(source, /usePagedSelectionList/u);
+    assert.match(source, new RegExp(`useSecurityEditorSelection\\("${param}"\\)`, "u"));
+    assert.match(source, /useReturnFocusToRow\(view === "list", lastOpenedId\)/u);
+    assert.doesNotMatch(source, /selectedRowKey=/u);
+    assert.match(source, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
+    assert.match(source, /className: INFORMATION_TABLE_ROW_CLASS/u);
+    assert.match(source, new RegExp(`scrollTestId="security-${grid}-scroll-region"`, "u"));
+    assert.match(source, /scrollAriaLabel/u);
+  }
 });
 
 test("行メニューには純粋な詳細/編集選択を置かず、実操作だけを残す", () => {
@@ -66,14 +63,16 @@ test("行メニューには純粋な詳細/編集選択を置かず、実操作�
   assert.match(profileManagementSource, /id:\s*"delete"/u);
 });
 
-test("セキュリティとプロファイルの一覧は操作列を持たず詳細アクションへ集約する", () => {
-  assert.doesNotMatch(securityUsersSource, /RowActionMenu/u);
-  assert.doesNotMatch(securityUsersSource, /key:\s*"actions"/u);
-  assert.match(securityUsersSource, /testId="security-users-detail-actions"/u);
-
-  assert.doesNotMatch(securityRolesSource, /RowActionMenu/u);
-  assert.doesNotMatch(securityRolesSource, /key:\s*"actions"/u);
-  assert.match(securityRolesSource, /testId="security-roles-detail-actions"/u);
+test("プロファイルの一覧は操作列を持たず、セキュリティの一覧の行のメニューはエディタと同じ操作の定義を使う", () => {
+  // ユーザー・ロール管理（A 型。#4635）: 行のメニューとエディタの ObjectActionBar に同じ EntityAction を渡す
+  // （page-archetypes.md §0-6）。開くのは行と名前のリンクで、メニューに「編集」「表示」を入れない（§0-7）。
+  assert.match(securityUsersSource, /<RowActionMenu\s+actions=\{accountActions\(user\)\}/u);
+  assert.match(securityUsersSource, /<ObjectActionBar\s+actions=\{accountActions\(editingUser\)\}/u);
+  assert.match(securityRolesSource, /<RowActionMenu\s+actions=\{stateActions\(role\)\}/u);
+  assert.match(securityRolesSource, /<ObjectActionBar\s+actions=\{stateActions\(editingRole\)\}/u);
+  for (const source of [securityUsersSource, securityRolesSource]) {
+    assert.doesNotMatch(source, /id:\s*"edit"/u);
+  }
 
   assert.doesNotMatch(profileManagementSource, /RowActionMenu/u);
   assert.doesNotMatch(profileManagementSource, /profile-management-row-actions/u);

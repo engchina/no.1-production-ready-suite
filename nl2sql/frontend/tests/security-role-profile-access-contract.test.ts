@@ -138,8 +138,8 @@ test("built-in and archived roles cannot be edited from the permission editor", 
     permissionsPageSource,
     /const readOnly = Boolean\(!canManage \|\| \(editingRole && !permissionsEditable\(editingRole\)\)\)/u
   );
-  assert.match(permissionsPageSource, /canManage && permissionsEditable\(role\)/u);
-  assert.match(permissionsPageSource, /<fieldset className="grid gap-3" disabled=\{inputReadOnly\}>/u);
+  // 読み取り専用のロールも同じエディタで開き、欄を無効にする（A 型。#4635）。
+  assert.match(permissionsPageSource, /<fieldset className="grid gap-3" disabled=\{inputReadOnly\}[^>]*>/u);
   assert.match(permissionsPageSource, /<fieldset className="grid gap-3" disabled=\{targetReadOnly\}>/u);
   assert.match(permissionsPageSource, /disabled=\{inputReadOnly \|\| inherited\}/u);
   assert.match(

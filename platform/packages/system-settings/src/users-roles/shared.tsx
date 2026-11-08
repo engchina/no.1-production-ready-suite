@@ -1,21 +1,20 @@
-// ユーザー管理・ロール管理（と製品の権限管理など）で使う一覧＋詳細レイアウトの部品と補助関数。
+// ユーザー管理・ロール管理（と製品の権限管理など）で使う一覧 → エディタ（A 型。#4635）の部品と補助関数。
 // NL2SQL の features/security/SecurityManagementShared.tsx などを移設した（#206）。
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, type LucideIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  Button,
+  Card,
   ClearActionButton,
   EmptyState,
-  ListDetailLayout,
-  ListDetailPager,
   PAGE_SIZE_OPTIONS,
   Pagination,
   RowTitleButton,
   SearchField,
-  ListSkeleton,
-  adjacentListItems,
+  FormSkeleton,
+  TimedLoadingState,
   cn,
-  useListDetailSplit,
   usePagination,
   useUrlSelection,
   type RowTitleButtonProps,
@@ -59,23 +58,62 @@ export function useValuesChanged(values: readonly unknown[]): boolean {
   return changed;
 }
 
+/** エディタの対象の URL の値のうち、新規作成を表す値（`?user=new` / `?role=new`。#4635）。 */
+export const SECURITY_NEW_ENTITY_ID = "new";
+
 /**
- * 一覧 + 詳細（`ListDetailLayout`）の選択を URL の検索パラメータに持つ（共有の `useUrlSelection`。#2282）。
- * 再読込・戻る / 進む・リンクの共有で同じ対象が開き、先頭の行を自動で選ばない。`split` は 2 ペイン（xl 以上）か。
+ * 一覧 → 全幅のエディタ（A 型。page-archetypes.md §1 A。#4635）の対象を URL の検索パラメータに持つ。
+ * `null` = 一覧、`"new"` = 新規作成、`<id>` = その対象のエディタ。再読込・戻る / 進む・リンクの共有で同じ画面が開く。
+ *
+ * - `open`: 一覧からエディタへ入る（履歴に積む。ブラウザの「戻る」でも一覧へ戻る）。
+ * - `close`: 一覧へ戻る（この画面で積んだときは `history.back()`、URL から直接開いたときは置き換える）。
+ * - `replace`: 作成の後に作った対象へ移る・削除の後に一覧へ戻るなど、履歴に積まずに置き換える。
+ * - `hrefFor`: 一覧の行の名前のリンク（新しいタブで開ける。#583）。
  */
-export function useSecurityUrlSelection(param: string): UrlSelection & { split: boolean } {
-  const split = useListDetailSplit();
+export function useSecurityEditorSelection(param: string): Omit<UrlSelection, "select" | "clear"> & {
+  open: (id: string) => void;
+  close: () => void;
+  hrefFor: (id: string) => string;
+} {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   // 「一覧へ戻る」の履歴の戻りは router を通す（ブラウザの戻ると同じ。MemoryRouter の画面でも動く）。
   const goBack = useCallback(() => navigate(-1), [navigate]);
-  const selection = useUrlSelection({ param, searchParams, setSearchParams, singlePane: !split, goBack });
-  return { ...selection, split };
+  const selection = useUrlSelection({ param, searchParams, setSearchParams, singlePane: true, goBack });
+  const hrefFor = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set(param, id);
+    return `?${next.toString()}`;
+  };
+  return {
+    selectedId: selection.selectedId,
+    open: selection.select,
+    close: selection.clear,
+    replace: selection.replace,
+    hrefFor,
+  };
 }
 
 /**
- * 一覧＋詳細の画面のページング（#1891）。クライアント側で全件を持つ一覧を 25 件ずつ（表示件数は 10 / 25 / 50 / 100）
- * に分ける。選択は URL（`useSecurityUrlSelection`）が持ち、ここでは選ばない（先頭の行を自動で選ばない。#2282）。
+ * エディタから一覧へ戻ったとき、開いていた対象の行の名前（`RowTitleButton`）へフォーカスを戻す（A 型。#4635）。
+ * `active` は一覧を出しているか。行には `data-security-row-id` を付ける。
+ */
+export function useReturnFocusToRow(active: boolean, lastOpenedId: string | null) {
+  const previousActive = useRef(active);
+  useLayoutEffect(() => {
+    const wasActive = previousActive.current;
+    previousActive.current = active;
+    if (!active || wasActive || !lastOpenedId) return;
+    const target = document.querySelector<HTMLElement>(
+      `[data-security-row-id="${CSS.escape(lastOpenedId)}"]`,
+    );
+    target?.focus();
+  });
+}
+
+/**
+ * 一覧の画面のページング（#1891）。クライアント側で全件を持つ一覧を 25 件ずつ（表示件数は 10 / 25 / 50 / 100）
+ * に分ける。開いている対象は URL（`useSecurityEditorSelection`）が持つ。
  *
  * - ページと表示件数は作業状態（`pagingKey`。このタブの sessionStorage）に残す。別の画面へ移って戻っても、
  *   再読込しても同じページ・件数に戻る（`lists/listPaging.ts`）。
@@ -95,7 +133,7 @@ export function usePagedSelectionList<T>({
   /** 絞り込み・並べ替えの後の全件。 */
   items: readonly T[];
   getKey: (item: T) => string;
-  /** 選んでいる行（URL の検索パラメータ）。 */
+  /** 開いている対象（URL の検索パラメータ）。一覧へ戻ったときにその行のあるページを出す。 */
   selectedId: string | null;
   /** 一覧を表示しているか（作成・編集の画面ではページを動かさない）。 */
   active: boolean;
@@ -126,7 +164,7 @@ export function usePagedSelectionList<T>({
 }
 
 /**
- * 一覧＋詳細の画面のページ送り（一覧の列の下端。#1891 / #2282）。`usePagedSelectionList` の戻り値を渡す。
+ * 一覧の画面のページ送り（表の直下。#1891）。`usePagedSelectionList` の戻り値を渡す。
  * 1 ページに収まるときは部品が範囲と表示件数の選択だけを出す（件数は `ListToolbar` の `ListCount`）。
  */
 export function SecurityListPagination({
@@ -265,7 +303,7 @@ export const describeErrorMessageOnly: DescribeApiError = (error) =>
 
 // ---- レイアウト部品 ----
 
-/** 作成・編集のフォームのパネル（カード 1 枚）。一覧 + 詳細は `SecurityListDetail`（#2282）。 */
+/** 作成・編集のフォームのパネル（カード 1 枚）。 */
 export function SecurityManagementPanelShell({
   id,
   labelledBy,
@@ -297,115 +335,44 @@ export function SecurityManagementPanelShell({
 }
 
 /**
- * ユーザー・ロール・権限管理の一覧 + 詳細（B 型。#2282）。共有の `ListDetailLayout` に、一覧の列（見出し・
- * `ListToolbar`・読み込み中 → 行の表 → ページ送り）と、選んだ対象の詳細（詳細の列。上端の行に一覧の開閉と前へ / 次へ）を渡す。
- * 選択は URL（`useSecurityUrlSelection`）が持ち、未選択の 2 ペインは詳細に空の状態を出す。
+ * エディタの対象（URL の `?user=` / `?role=`）を読み込んでいる間と、見つからないときの本文（A 型。#4635）。
+ * 読み込み中はフォームの形の Skeleton、読み込んだ後に無ければ「見つかりません」と一覧へ戻る導線を出す
+ * （別の対象へ置き換えない）。
  */
-export function SecurityListDetail<T>({
-  id,
-  storagePrefix,
-  icon: Icon,
-  headingId,
-  listLabel,
-  detailLabel,
-  toolbar,
-  loadingIndicator,
-  list,
-  footer,
-  pageItems,
-  getKey,
-  selectedId,
-  onSelect,
-  disabled = false,
-  detail,
-  emptyTitle,
-  emptyHint,
-}: {
-  /** `<feature>-<view>`（例: `security-users`）。幅・開閉の保存 key と data-testid（`list-detail-<id>…`）。 */
-  id: string;
-  /** 幅と開閉を保存する localStorage key の前置き（製品ごと）。 */
-  storagePrefix?: string;
-  icon: LucideIcon;
-  headingId: string;
-  /** 一覧の列の名前（見出し・開閉ボタンの名前）。 */
-  listLabel: string;
-  /** 詳細の列の名前。 */
-  detailLabel: string;
-  /** 検索・件数（`ListToolbar`。狭い列なので縦に積む）。 */
-  toolbar: ReactNode;
-  /** 読み込み中の表示（一覧の列の先頭に 1 か所）。 */
-  loadingIndicator?: ReactNode;
-  /** 行の表（`DataTable`。列の高さの中でスクロールする）。 */
-  list: ReactNode;
-  /** ページ送り（列の下端に固定）。 */
-  footer?: ReactNode;
-  /** 今のページの行（前へ / 次へ の並び）。 */
-  pageItems: readonly T[];
-  getKey: (item: T) => string;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  /** 処理中は前へ / 次へを押せない。 */
-  disabled?: boolean;
-  /** 選んだ対象の詳細（見つからない・読み込み中の表示も中に置く）。 */
-  detail: ReactNode;
-  emptyTitle: string;
-  emptyHint: string;
-}) {
-  const { previous, next } = adjacentListItems(pageItems, selectedId, getKey);
-  return (
-    <ListDetailLayout
-      id={id}
-      storagePrefix={storagePrefix}
-      listLabel={listLabel}
-      detailLabel={detailLabel}
-      listHeader={
-        <div className="grid gap-3">
-          <h2 id={headingId} className="flex items-center gap-2 text-sm font-semibold text-fg">
-            <Icon size={16} aria-hidden="true" />
-            {listLabel}
-          </h2>
-          {toolbar}
-          {loadingIndicator}
-        </div>
-      }
-      list={list}
-      listFooter={footer}
-      hasSelection={selectedId !== null}
-      detail={detail}
-      emptyDetail={<EmptyState title={emptyTitle} hint={emptyHint} />}
-      detailToolbar={
-        selectedId !== null ? (
-          <ListDetailPager
-            onPrevious={previous ? () => onSelect(getKey(previous)) : null}
-            onNext={next ? () => onSelect(getKey(next)) : null}
-            labels={{ previous: t("security.common.previous"), next: t("security.common.next") }}
-            disabled={disabled}
-            testId={`${id}-detail-pager`}
-          />
-        ) : undefined
-      }
-      labels={{ resize: t("security.common.listWidth"), resizeHint: t("security.common.listWidthHint") }}
-    />
-  );
-}
-
-/** 選んだ対象が一覧に無いときの詳細（読み込み中はスケルトン、読み込んだ後は「見つかりません」）。 */
-export function SecurityDetailFallback({
+export function SecurityEditorFallback({
   loading,
+  loadingLabel,
   title,
   hint,
+  onBack,
   testId,
 }: {
   loading: boolean;
+  loadingLabel: string;
   title: string;
   hint: string;
-  testId?: string;
+  onBack: () => void;
+  testId: string;
 }) {
-  if (loading) return <ListSkeleton rows={4} rowClassName="h-12" testId={testId ? `${testId}-loading` : undefined} />;
+  if (loading) {
+    return (
+      <TimedLoadingState label={loadingLabel} operationKey={`${testId}-loading`} placement="page" testId={`${testId}-loading`}>
+        <FormSkeleton />
+      </TimedLoadingState>
+    );
+  }
   return (
-    <div data-testid={testId}>
-      <EmptyState title={title} hint={hint} />
-    </div>
+    <Card data-testid={testId}>
+      <EmptyState
+        title={title}
+        hint={hint}
+        action={
+          <Button variant="secondary" icon={ArrowLeft} onClick={onBack}>
+            {t("security.common.backToList")}
+          </Button>
+        }
+      />
+    </Card>
   );
 }
 

@@ -159,8 +159,8 @@ describe("ユーザー管理の削除済みのロール（#1682）", () => {
   });
 });
 
-describe("ロール管理の一覧と詳細（#1682）", () => {
-  it("一覧の行・詳細の見出し・行の読み上げはロール名で、ID を出さない", async () => {
+describe("ロール管理の一覧とエディタ（#1682）", () => {
+  it("一覧の行の名前とエディタの見出しはロール名で、コードはロールコードの列にだけ出し、ID を出さない", async () => {
     const api: RoleManagementApi = {
       roles: () =>
         Promise.resolve([
@@ -173,15 +173,25 @@ describe("ロール管理の一覧と詳細（#1682）", () => {
       restoreRole: never,
       deleteRole: never,
     };
-    // 選択は URL の ?role= が持つ（先頭の行を自動で選ばない。#2282）。
-    await render(<RoleManagementPage api={api} canManage />, `/?role=${SYSTEM_ADMIN_ID}`);
+    await render(<RoleManagementPage api={api} canManage />);
 
     const grid = host.querySelector<HTMLElement>('[data-testid="security-roles-grid"]');
-    expect(grid?.textContent).toContain("システム管理者");
-    expect(grid?.textContent).toContain("人事利用者");
-    expect(grid?.textContent).not.toContain("SYSTEM_ADMIN");
-    expect(grid?.textContent).not.toContain("HR_USER");
-    expect(host.querySelector("#security-roles-detail-heading")?.textContent?.trim()).toBe("システム管理者");
+    const titles = Array.from(grid?.querySelectorAll("[data-row-title-button] > span:first-child") ?? []).map(
+      (element) => element.textContent?.trim(),
+    );
+    expect(titles).toEqual(["システム管理者", "人事利用者"]);
+    // コードはロールコードの列（と狭い画面の補足）にだけ出す（#4635）。
+    const codeCells = Array.from(grid?.querySelectorAll("tbody tr td:nth-child(2) code") ?? []).map((element) =>
+      element.textContent?.trim(),
+    );
+    expect(codeCells).toEqual(["SYSTEM_ADMIN", "HR_USER"]);
+    expectNoUuidShown(host);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    // エディタは URL の ?role= が持つ（A 型。#4635）。
+    await render(<RoleManagementPage api={api} canManage />, `/?role=${SYSTEM_ADMIN_ID}`);
+    expect(host.querySelector("h1")?.textContent?.trim()).toBe("システム管理者");
     expectNoUuidShown(host);
   });
 });

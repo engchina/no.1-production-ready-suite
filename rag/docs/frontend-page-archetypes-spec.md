@@ -88,7 +88,7 @@
 
 ## 4. 一覧 + 詳細と分割ペイン
 
-共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`src/components/security/Security*Page.tsx`）は `listDetailStoragePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}`（`production-ready-rag.listDetail`。`EntityLayout.tsx`）を渡す。
+共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は A 型の全幅の一覧 → 全幅のエディタ（#4635）。開いている対象は URL の `?user=` / `?role=`（`new` は新規作成）。ロール管理のエディタの「権限管理で設定」は `?role=` を付けて権限管理の同じロールのエディタを開き、権限管理のエディタの「ロール管理で開く」はその逆（製品のラッパー `src/components/security/Security*Page.tsx` が、ロール管理を開ける利用者にだけ `roleManagementPath` を渡す）。
 
 フィードバックは共有の `ListDetailLayout layout="single"` を使い、すべての画面幅で一覧と全幅の詳細を切り替える（#3635）。保存 key の前置きは `RAG_LIST_DETAIL_STORAGE_PREFIX`（`production-ready-rag.listDetail`）、文言は `listDetail.*`。RAG の画面で `FixedSplitPane` を使うものは今は無い（入力と結果・比較の画面を足すときに使う）。
 

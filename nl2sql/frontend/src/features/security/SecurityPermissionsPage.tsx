@@ -5,7 +5,7 @@ import {
 } from "@production-ready/system-settings";
 
 import { t } from "@/lib/i18n";
-import { LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
+import { APP_ROUTES } from "@/lib/routes";
 import { useAuth } from "./AuthProvider";
 import { securityApi } from "./api";
 import { MENU_PERMISSIONS } from "./menu-permissions";
@@ -86,12 +86,12 @@ export function SecurityPermissionsPage() {
     <RolePermissionsPage<SecurityRole>
       api={PERMISSIONS_API}
       canManage={hasPermission(MENU_PERMISSIONS.securityPermissions)}
+      // ロール管理を開ける利用者には、同じロールをロール管理で開く導線を出す（#4635）。
+      roleManagementPath={hasPermission(MENU_PERMISSIONS.securityRoles) ? APP_ROUTES.securityRoles : undefined}
       targets={PERMISSION_TARGETS}
-      listDetailStoragePrefix={LIST_DETAIL_STORAGE_PREFIX}
       messages={{
         title: t("nav.securityPermissions"),
         subtitle: t("security.permissions.subtitle"),
-        listHint: t("security.permissions.listHint"),
         searchPlaceholder: t("security.permissions.searchPlaceholder"),
         formHint: t("security.permissions.formHint"),
         permissionsHint: t("security.roles.permissionsHint"),

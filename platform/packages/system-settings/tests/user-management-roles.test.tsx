@@ -102,10 +102,8 @@ function setup() {
 }
 
 async function openEdit() {
-  // 先頭の行は自動で選ばれない（#2282）。一覧の行を選んでから詳細の「編集」を押す。
+  // 一覧の行の名前でエディタを開く（A 型。#4635）。
   await click(host.querySelector<HTMLElement>('[data-testid="security-users-grid"] [data-row-title-button]'));
-  const detail = host.querySelector<HTMLElement>('[data-testid="security-users-detail-actions"]');
-  await click(buttonByText("編集", detail ?? host));
 }
 
 describe("ユーザーの編集でほかのロールを残す（#1050）", () => {

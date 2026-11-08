@@ -180,7 +180,7 @@ async function mockSecurityApi(page: Page) {
   return { saved, accessTargetRequests, roleListCalls: () => roleListCalls };
 }
 
-test("ユーザー管理とロール管理を開け、ロールの詳細から権限管理へ移れる", async ({ page }) => {
+test("ユーザー管理とロール管理を開け、ロールのエディタと権限管理の同じロールのエディタを行き来できる", async ({ page }) => {
   await mockSecurityApi(page);
 
   await page.goto("/settings/security/users");
@@ -192,27 +192,36 @@ test("ユーザー管理とロール管理を開け、ロールの詳細から�
 
   await page.goto("/settings/security/roles");
   await expect(page.getByRole("heading", { name: "ロール管理", level: 1 })).toBeVisible();
-  await page.getByTestId("security-roles-grid").locator("tbody tr").filter({ hasText: "人事利用者" }).locator("td").first().click();
+  // 行の名前（?role= のリンク）から全幅のエディタを開く（A 型。#4635）。
+  await page.getByTestId("security-roles-grid").getByRole("link", { name: /人事利用者/ }).click();
   const summary = page.getByTestId("security-roles-permission-summary");
   await expect(summary).toContainText("付与している機能権限: 2 件");
   await summary.getByTestId("security-roles-open-permissions").click();
 
+  // 権限管理は同じロールの全幅のエディタを開き、ロール管理の同じロールへ戻る導線を持つ（A 型。#4635）。
   await expect(page).toHaveURL(/\/settings\/security\/permissions\?role=role-hr$/);
-  await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "人事利用者", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
   await expectNoPageOverflow(page);
+  await page.getByTestId("security-permissions-open-role").click();
+  await expect(page).toHaveURL(/\/settings\/security\/roles\?role=role-hr$/);
+  await expect(page.getByTestId("security-roles-editor")).toBeVisible();
 });
 
 test("権限管理で検索・回答プロファイルと KB を選んで保存し、KB 管理権限では KB が全件対象になる", async ({ page }) => {
   const api = await mockSecurityApi(page);
 
-  await page.goto("/settings/security/permissions?role=role-hr");
+  await page.goto("/settings/security/permissions");
   await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
   // 候補は全件を読まない（#608）。一覧では、ロールに選択済みの対象の名前だけを ids で読む（このロールは未選択）。
   await expect(page.getByTestId("security-permissions-grid")).toContainText("人事利用者");
   expect(api.accessTargetRequests).toEqual([]);
 
-  await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
-  // 編集を開くと、対象ごとに 1 ページ目（50 件）を読む。
+  // 一覧の行から全幅のエディタを開く（A 型。#4635）。
+  await page.getByTestId("security-permissions-grid").getByRole("link", { name: /人事利用者/ }).click();
+  await expect(page).toHaveURL(/\?role=role-hr$/);
+  await expect(page.getByRole("heading", { name: "人事利用者", level: 1 })).toBeVisible();
+  // エディタを開くと、対象ごとに 1 ページ目（50 件）を読む。
   await expect
     .poll(() => api.accessTargetRequests.map((url) => `${url.pathname}?${url.searchParams.toString()}`).sort())
     .toEqual(
@@ -225,7 +234,7 @@ test("権限管理で検索・回答プロファイルと KB を選んで保存�
   // 機能の一覧は左のナビと同じグループ・並び順・名前（Issue 567）。backend のカタログが RAG 検索 → チャットの
   // 順でも、ナビの順（チャット → RAG 検索）に並べ、ナビに無い capability は後ろに置く。
   // チャット・RAG 検索のグループはナビの先頭のセクション「AI 活用」（#860 で 3 製品の名前にそろえた）。
-  const featureList = page.locator('form[aria-labelledby="security-permissions-form-heading"] fieldset').first();
+  const featureList = page.getByTestId("security-permissions-editor").locator("fieldset").first();
   await expect(featureList.locator("h3")).toHaveText(["AI 活用", "ナレッジ構築", "管理権限"]);
   await expect(featureList.getByRole("checkbox").nth(0)).toHaveAccessibleName(/^チャット/);
   await expect(featureList.getByRole("checkbox").nth(1)).toHaveAccessibleName(/^RAG 検索/);
@@ -318,10 +327,8 @@ for (const theme of ["light", "dark"] as const) {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(theme === "dark");
-    await page
-      .getByTestId("security-permissions-detail-actions")
-      .getByRole("button", { name: "権限を編集" })
-      .click();
+    // ?role= で開くと、そのロールの全幅のエディタを出す（A 型。#4635）。
+    await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
 
     for (const [key, targets] of [
       ["search-answer-profile-access", MANY_TARGETS.search_answer_profiles],
@@ -400,13 +407,13 @@ test("権限管理の対象が大量でもサーバー側で検索し、50 件�
     return fulfillAccessTargets(route, LARGE_TARGETS);
   });
 
-  await page.goto("/settings/security/permissions?role=role-hr");
-  // 一覧では選択済みの対象の名前だけを ids で読み、詳細に出す。
-  await expect(page.getByText("ナレッジベース 2999")).toBeVisible();
+  await page.goto("/settings/security/permissions");
+  // 一覧では選択済みの対象の名前だけを ids で読み、件数を列に出す。
+  await expect(page.getByTestId("security-permissions-target-summary").last()).toContainText("1 件");
   expect(requests.map((url) => url.searchParams.getAll("ids"))).toContainEqual(["kb-2999"]);
   expect(requests.every((url) => url.searchParams.getAll("ids").length > 0)).toBe(true);
 
-  await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+  await page.getByTestId("security-permissions-grid").getByRole("link", { name: /人事利用者/ }).click();
   const bases = page.getByTestId("security-roles-knowledge-base-access-list");
   await expect(bases.getByRole("option")).toHaveCount(50);
   await expect(bases).toContainText("50 / 3,000 件、選択 1 件");
@@ -493,8 +500,8 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
   await expect(displayName).toHaveValue("");
 
   await page.goto("/settings/security/users");
+  // 一覧の行から全幅のエディタを開く（A 型。#4635）。
   await page.getByTestId("security-users-grid").getByText("人事 花子").click();
-  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
   actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "[role=radiogroup][aria-labelledby=security-users-role-legend]", ["保存", "変更を破棄"]);
 
   await page.goto("/settings/security/roles");

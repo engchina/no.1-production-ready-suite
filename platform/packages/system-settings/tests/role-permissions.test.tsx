@@ -60,9 +60,9 @@ const ragTargets: RolePermissionTargetSection<RagRole>[] = [
   },
 ];
 
-function render(node: ReactNode) {
+function render(node: ReactNode, entry = "/settings/security/permissions") {
   return renderToStaticMarkup(
-    <MemoryRouter initialEntries={["/settings/security/permissions?role=role-1"]}>
+    <MemoryRouter initialEntries={[entry]}>
       <ConfirmProvider>{node}</ConfirmProvider>
     </MemoryRouter>,
   );
@@ -75,15 +75,23 @@ const catalog: PermissionDefinition[] = [
 ];
 
 describe("RolePermissionsPage", () => {
-  it("読み込み中は状態表示を出し、NL2SQL と同じテスト ID の一覧 + 詳細を持つ", () => {
+  it("読み込み中は状態表示を出し、NL2SQL と同じテスト ID の全幅の一覧を持つ", () => {
     const html = render(<RolePermissionsPage api={api} canManage targets={ragTargets} />);
     expect(html).toContain("権限管理");
     expect(html).toContain('data-testid="security-permissions-loading"');
     expect(html).toContain("権限を読込中");
     expect(html).toContain('data-testid="security-permissions-actions"');
     expect(html).toContain('data-testid="security-permissions-search"');
-    // 一覧の列は狭いので、利用できる対象の件数は列にせず詳細に出す（#2282）。
-    expect(html).toContain('data-testid="list-detail-security-permissions"');
+    // 全幅の表（A 型。#4635）。利用できる対象の件数は対象の種類ごとの列に出す。
+    expect(html).toContain('data-testid="security-permissions-list"');
+    for (const target of ragTargets) expect(html).toContain(target.messages.title);
+  });
+
+  it("?role= で開くと、読み込み中はエディタの形の読み込み中を出す（#4635）", () => {
+    const html = render(<RolePermissionsPage api={api} canManage targets={ragTargets} />, "/settings/security/permissions?role=role-1");
+    expect(html).toContain('data-testid="security-permissions-detail-not-found-loading"');
+    expect(html).toContain('data-testid="security-permissions-back"');
+    expect(html).not.toContain('data-testid="security-permissions-grid"');
   });
 
   it("文言は messages で上書きできる", () => {
@@ -162,7 +170,7 @@ describe("候補にない ID の直接入力（allowCustomIds。#215）", () => 
     ];
     const html = render(<RolePermissionsPage api={api} canManage targets={agentTargets} />);
     expect(html).toContain('data-testid="security-permissions-grid"');
-    expect(html).toContain('data-testid="list-detail-security-permissions-list"');
+    expect(html).toContain('data-testid="security-permissions-list"');
   });
 });
 
