@@ -7,6 +7,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { traceCategory, traceMeasuredTiming, traceOrderedSteps, traceSearchText, type TraceCategory, type TraceOrder } from "../../lib/trace-explorer";
 import { cn } from "../../lib/utils";
+import { INFORMATION_CARD_LIST_SCROLL_CLASS } from "../../lib/list-density";
 import { Button } from "../ui/button";
 import { SearchField } from "../ui/search-field";
 import { Tabs, TabPanel } from "../ui/tabs";
@@ -130,7 +131,7 @@ export function TraceExplorer({ steps: inputSteps, hierarchyOrdered = false, for
       {!filtered.length ? <div className="grid gap-2 rounded-md border border-border p-4 text-sm"><p role="status">{labels.empty}</p>{hasFilters ? <Button variant="secondary" onClick={reset}>{labels.reset}</Button> : null}</div> :
         <div className="grid min-w-0 items-start gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className={cn("min-w-0", mobileDetail ? "hidden @4xl:block" : "block")}>
-            <div data-trace-list-scroll="" className="max-h-[36rem] overflow-y-auto rounded-md border border-border bg-surface">
+            <div data-trace-list-scroll="" className={cn(INFORMATION_CARD_LIST_SCROLL_CLASS, "rounded-md border border-border bg-surface")}>
               <RunTimelineViewport depth={order === "hierarchy" ? Math.max(0, ...list.map(step => step.level ?? 0)) : 0} label={labels.list}>
                 <ol ref={listRef} aria-label={labels.list} className="grid min-w-0 divide-y divide-border">
                   {list.map(step => {

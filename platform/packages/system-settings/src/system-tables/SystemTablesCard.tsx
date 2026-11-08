@@ -14,6 +14,7 @@ import {
   DataTable,
   Disclosure,
   ExecutionConfirmationField,
+  ListScrollRegion,
   ListToolbar,
   Skeleton,
   StatusBadge,
@@ -409,16 +410,22 @@ export function SystemTablesCard({
                         count: missingColumns.length,
                       })}
                     </p>
-                    <ul className="mt-1.5 space-y-1">
-                      {missingColumns.map((column) => (
-                        <li
-                          key={`${column.table_name}.${column.column_name}`}
-                          className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]"
-                        >
-                          {column.table_name}.{column.column_name}
-                        </li>
-                      ))}
-                    </ul>
+                    {/* スキーマが古いと件数が増えるので、行リストの高さで止める（#4636）。 */}
+                    <ListScrollRegion
+                      className="mt-1.5"
+                      label={text("settings.database.systemTables.columns.missing", { count: missingColumns.length })}
+                    >
+                      <ul className="space-y-1">
+                        {missingColumns.map((column) => (
+                          <li
+                            key={`${column.table_name}.${column.column_name}`}
+                            className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]"
+                          >
+                            {column.table_name}.{column.column_name}
+                          </li>
+                        ))}
+                      </ul>
+                    </ListScrollRegion>
                   </div>
                 ) : null}
                 {missingForeignKeys.length > 0 ? (
@@ -428,7 +435,7 @@ export function SystemTablesCard({
                         count: missingForeignKeys.length,
                       })}
                     </p>
-                    <ForeignKeyList foreignKeys={missingForeignKeys} text={text} />
+                    <ForeignKeyList foreignKeys={missingForeignKeys} text={text} label={text("settings.database.systemTables.foreignKeys.missing", { count: missingForeignKeys.length })} />
                   </div>
                 ) : null}
                 {mismatchedForeignKeys.length > 0 ? (
@@ -438,7 +445,7 @@ export function SystemTablesCard({
                         count: mismatchedForeignKeys.length,
                       })}
                     </p>
-                    <ForeignKeyList foreignKeys={mismatchedForeignKeys} text={text} showDeleteRule />
+                    <ForeignKeyList foreignKeys={mismatchedForeignKeys} text={text} label={text("settings.database.systemTables.foreignKeys.mismatched", { count: mismatchedForeignKeys.length })} showDeleteRule />
                   </div>
                 ) : null}
                 {disabledForeignKeys.length > 0 ? (
@@ -448,7 +455,7 @@ export function SystemTablesCard({
                         count: disabledForeignKeys.length,
                       })}
                     </p>
-                    <ForeignKeyList foreignKeys={disabledForeignKeys} text={text} />
+                    <ForeignKeyList foreignKeys={disabledForeignKeys} text={text} label={text("settings.database.systemTables.foreignKeys.disabled", { count: disabledForeignKeys.length })} />
                   </div>
                 ) : null}
               </Banner>
@@ -479,6 +486,7 @@ export function SystemTablesCard({
                   <ForeignKeyList
                     foreignKeys={orphanedForeignKeys}
                     text={text}
+                    label={text("settings.database.systemTables.foreignKeys.orphanedTitle")}
                     renderAction={
                       canDeleteOrphans
                         ? (foreignKey) =>
@@ -672,53 +680,59 @@ function ForeignKeyList({
   text,
   showDeleteRule = false,
   renderAction,
+  label,
 }: {
   foreignKeys: SystemTableForeignKey[];
   text: Text;
   showDeleteRule?: boolean;
   renderAction?: (foreignKey: SystemTableForeignKey) => ReactNode;
+  /** 一覧のスクロール領域の読み上げ名。 */
+  label: string;
 }) {
+  // 件数に上限が無いので、行リストの高さで止める（#4636）。
   return (
-    <ul className={cn("mt-1.5", renderAction ? "space-y-2" : "space-y-1")}>
-      {foreignKeys.map((foreignKey) => {
-        const action = renderAction?.(foreignKey);
-        return (
-          <li
-            key={foreignKey.name}
-            className={cn(
-              "min-w-0",
-              action ? "flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5" : undefined,
-            )}
-          >
-            <span className="min-w-0">
-              <span className="font-mono text-xs [overflow-wrap:anywhere]">
-                {text("settings.database.systemTables.foreignKeys.item", {
-                  table: foreignKey.table_name,
-                  columns: foreignKey.columns.join(", "),
-                  referenced: foreignKey.referenced_table_name,
-                })}
+    <ListScrollRegion className="mt-1.5" label={label}>
+      <ul className={renderAction ? "space-y-2" : "space-y-1"}>
+        {foreignKeys.map((foreignKey) => {
+          const action = renderAction?.(foreignKey);
+          return (
+            <li
+              key={foreignKey.name}
+              className={cn(
+                "min-w-0",
+                action ? "flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5" : undefined,
+              )}
+            >
+              <span className="min-w-0">
+                <span className="font-mono text-xs [overflow-wrap:anywhere]">
+                  {text("settings.database.systemTables.foreignKeys.item", {
+                    table: foreignKey.table_name,
+                    columns: foreignKey.columns.join(", "),
+                    referenced: foreignKey.referenced_table_name,
+                  })}
+                </span>
+                {showDeleteRule && foreignKey.current_delete_rule ? (
+                  <span className="ml-2 text-xs font-medium">
+                    {text("settings.database.systemTables.foreignKeys.deleteRule", {
+                      current: foreignKey.current_delete_rule,
+                      expected: foreignKey.delete_rule,
+                    })}
+                  </span>
+                ) : null}
+                {foreignKey.orphan_rows ? (
+                  <span className="ml-2 text-xs font-medium">
+                    {text("settings.database.systemTables.foreignKeys.orphanRows", {
+                      count: formatNumber(foreignKey.orphan_rows),
+                    })}
+                  </span>
+                ) : null}
               </span>
-              {showDeleteRule && foreignKey.current_delete_rule ? (
-                <span className="ml-2 text-xs font-medium">
-                  {text("settings.database.systemTables.foreignKeys.deleteRule", {
-                    current: foreignKey.current_delete_rule,
-                    expected: foreignKey.delete_rule,
-                  })}
-                </span>
-              ) : null}
-              {foreignKey.orphan_rows ? (
-                <span className="ml-2 text-xs font-medium">
-                  {text("settings.database.systemTables.foreignKeys.orphanRows", {
-                    count: formatNumber(foreignKey.orphan_rows),
-                  })}
-                </span>
-              ) : null}
-            </span>
-            {action}
-          </li>
-        );
-      })}
-    </ul>
+              {action}
+            </li>
+          );
+        })}
+      </ul>
+    </ListScrollRegion>
   );
 }
 

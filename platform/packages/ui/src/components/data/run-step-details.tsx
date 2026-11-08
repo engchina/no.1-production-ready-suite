@@ -12,6 +12,7 @@ import { callPresentation, type CallTextBlock } from "../../lib/call-presentatio
 import { Info } from "lucide-react";
 
 import { cn } from "../../lib/utils";
+import { INFORMATION_TABLE_FIXED_VISIBLE_ROWS } from "../../lib/list-density";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
 
 /*
@@ -363,7 +364,7 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
               <p className="text-xs text-fg-muted">{labels.vectors}: {presentation.embeddings.length}</p>
               <CallTextBlocks blocks={presentation.embeddings.map(vector => ({ role: `#${vector.index} · ${labels.dimensions}: ${vector.dimensions}${vector.partial ? ` · ${labels.partialVector}` : ""}`, text: vector.values, collapsed: true }))} labels={labels} />
             </> : null}
-            {presentation.ranks.length ? <DataTable rows={presentation.ranks} getRowKey={row => row.rank} dense visibleRows={5} scrollAriaLabel={labels.output} columns={[
+            {presentation.ranks.length ? <DataTable rows={presentation.ranks} getRowKey={row => row.rank} dense visibleRows={INFORMATION_TABLE_FIXED_VISIBLE_ROWS} scrollAriaLabel={labels.output} columns={[
               { key: "rank", header: labels.rank }, { key: "index", header: labels.sourceIndex }, { key: "score", header: labels.score },
               { key: "text", header: labels.document, render: row => <Disclosure size="sm" variant="plain" summary={<span className="line-clamp-2 break-words [overflow-wrap:anywhere]">{row.text || labels.notRecorded}</span>}><div className="grid min-w-0 gap-2"><CopyButton text={row.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" variant="ghost" /><CallBody text={row.text} /></div></Disclosure> },
             ]} /> : null}

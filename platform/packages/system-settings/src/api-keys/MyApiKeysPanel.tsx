@@ -18,6 +18,7 @@ import {
   FormStatus,
   ListToolbar,
   OneTimeSecret,
+  SearchableMultiSelect,
   SelectField,
   TableSkeleton,
   TextField,
@@ -132,10 +133,6 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
     setProducts((current) => (checked ? [...new Set([...current, item])] : current.filter((value) => value !== item)));
   }
 
-  function toggleAgent(id: string, checked: boolean) {
-    setAgentIds((current) => (checked ? [...new Set([...current, id])] : current.filter((value) => value !== id)));
-  }
-
   async function confirmRevoke(key: ApiKey) {
     const ok = await confirm({
       title: t("apiKeys.revokeTitle", { name: key.name }),
@@ -222,29 +219,25 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
                 </div>
               </Fieldset>
               {agentScope === "selected" ? (
-                <Fieldset legend={t("apiKeys.create.agentScope.selected")} required error={agentScopeError}>
-                  {agentScopeOptions.length === 0 ? (
+                agentScopeOptions.length === 0 ? (
+                  <Fieldset legend={t("apiKeys.create.agentScope.selected")} required error={agentScopeError}>
                     <p className="text-sm text-fg-muted">{t("apiKeys.create.agentScope.empty")}</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2" data-testid="api-key-agent-options">
-                      {agentScopeOptions.map((option) => (
-                        <label key={option.id} data-surface-tint="accent" className={CHOICE_CLASS}>
-                          {/* 業務 Agent の複数選択。件数が少ないので、ネイティブの checkbox をラベルで包む。 */}
-                          <input
-                            type="checkbox"
-                            name="api-key-agent-ids"
-                            value={option.id}
-                            checked={agentIds.includes(option.id)}
-                            onChange={(event) => toggleAgent(option.id, event.currentTarget.checked)}
-                            className="accent-accent-emphasis"
-                            data-testid={`api-key-agent-${option.id}`}
-                          />
-                          <span className="min-w-0 break-words">{option.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </Fieldset>
+                  </Fieldset>
+                ) : (
+                  // 業務 Agent の数に上限は無いので、検索でき、候補の一覧の高さが決まった複数選択にする（#4636）。
+                  <div data-testid="api-key-agent-options">
+                    <SearchableMultiSelect
+                      id="api-key-agent-ids"
+                      label={t("apiKeys.create.agentScope.selected")}
+                      required
+                      error={agentScopeError}
+                      options={agentScopeOptions.map((option) => ({ value: option.id, label: option.name }))}
+                      value={agentIds}
+                      onValueChange={setAgentIds}
+                      width="lg"
+                    />
+                  </div>
+                )
               ) : null}
             </div>
           ) : agentSelected ? (

@@ -891,6 +891,17 @@ export {
 } from "./components/data/list-count";
 export { LoadMoreFooter, loadMoreErrorMessage, type LoadMoreFooterProps } from "./components/data/load-more-footer";
 export {
+  COLLAPSED_LIST_LIMIT,
+  CollapsedListToggle,
+  DEFAULT_COLLAPSED_LIST_LABELS,
+  useCollapsedList,
+  type CollapsedListLabels,
+  type CollapsedListOptions,
+  type CollapsedListState,
+  type CollapsedListToggleProps,
+} from "./components/data/collapsed-list";
+export { ListScrollRegion, type ListScrollRegionProps } from "./components/data/list-scroll-region";
+export {
   ListPicker,
   DEFAULT_LIST_PICKER_LABELS,
   type ListPickerProps,

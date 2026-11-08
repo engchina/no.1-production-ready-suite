@@ -9,6 +9,7 @@ import { createContext, useContext, useEffect, useId, useMemo, useState, type Re
 
 import { DEFAULT_TRACE_EXPLORER_LABELS, TraceExplorer, type TraceExplorerLabels } from "./trace-explorer";
 import { Button } from "../ui/button";
+import { CollapsedListToggle, DEFAULT_COLLAPSED_LIST_LABELS, useCollapsedList, type CollapsedListLabels } from "./collapsed-list";
 import { CopyButton } from "../ui/copy-button";
 import type { TraceDetailsLabels } from "../../lib/trace-labels";
 import { useTraceDetailsLabels } from "./trace-labels-provider";
@@ -74,6 +75,8 @@ export interface RunDetailLabels {
   timelineRunning: (completed: number) => string;
   /** 実行中の処理の経過の見出しの右の、処理全体の経過時間の見出し（「経過時間」）。 */
   timelineElapsed: string;
+  /** 段が多いときに畳んだ一覧の開閉のボタン（`COLLAPSED_LIST_LIMIT` 件を超えると畳む。#4636）。 */
+  timelineCollapsed: CollapsedListLabels;
   /** 段の状態（アイコンに添える読み上げ・失敗とスキップは画面にも出す）。 */
   stepStatus: Record<RunTimelineStepStatus, string>;
   /** 段の詳細（`RunTimelineStep.details`）の長さを切ったときの印。 */
@@ -167,6 +170,7 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   timelineSummary: (count, duration) => `${count} ステップ・合計 ${duration}`,
   timelineRunning: (completed) => (completed > 0 ? `処理中（${completed} ステップ完了）` : "処理中"),
   timelineElapsed: "経過時間",
+  timelineCollapsed: DEFAULT_COLLAPSED_LIST_LABELS,
   stepStatus: {
     pending: "未実行",
     running: "実行中",
@@ -179,8 +183,9 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   status: DEFAULT_RUN_STATUS_LABELS,
 };
 
-export type RunDetailLabelsInput = Partial<Omit<RunDetailLabels, "facts" | "stepStatus" | "status" | "cancellation">> & {
+export type RunDetailLabelsInput = Partial<Omit<RunDetailLabels, "facts" | "stepStatus" | "status" | "cancellation" | "timelineCollapsed">> & {
   facts?: Partial<RunDetailLabels["facts"]>;
+  timelineCollapsed?: Partial<CollapsedListLabels>;
   cancellation?: Partial<RunCancellationLabels>;
   stepStatus?: Partial<RunDetailLabels["stepStatus"]>;
   status?: Partial<RunStatusLabels>;
@@ -194,6 +199,7 @@ export function resolveRunDetailLabels(labels?: RunDetailLabelsInput): RunDetail
     cancellation: { ...DEFAULT_RUN_DETAIL_LABELS.cancellation, ...labels?.cancellation },
     stepStatus: { ...DEFAULT_RUN_DETAIL_LABELS.stepStatus, ...labels?.stepStatus },
     status: { ...DEFAULT_RUN_DETAIL_LABELS.status, ...labels?.status },
+    timelineCollapsed: { ...DEFAULT_RUN_DETAIL_LABELS.timelineCollapsed, ...labels?.timelineCollapsed },
   };
 }
 
@@ -761,6 +767,9 @@ export interface RunTimelineProps {
  * - 入れ子の段は実際の `level` で字下げし、深い一覧は内部で横へ移動する。補足（LLM の回数など）は名前の後ろの括弧に出す。
  * - 狭い置き場所（36rem 未満）では線を隠し、名前と所要時間だけにする（container query）。
  * - 状態はアイコンの形と読み上げの文言で伝え、失敗・スキップ・応答待ちは画面にも文字で出す（色だけにしない）。
+ * - 段が `COLLAPSED_LIST_LIMIT` 件を超えたら、入れ子のスクロールにせず残りを畳む（#4636）。実行中（実行中の段がある）は
+ *   末尾（最新）の段を残して「前の N 件を表示」を一覧の前に、終わった一覧は先頭を残して「すべて表示（全 N 件）」を後ろに
+ *   置く。実行中・応答待ち・失敗の段は畳んでも出す。
  */
 export function RunTimeline({
   loadCallBody,
@@ -794,6 +803,16 @@ export function RunTimeline({
     )
   );
   const total = totalDurationMs ?? runTimelineDuration(steps);
+  const active = steps.some((step) => step.status === "running");
+  const collapsed = useCollapsedList(steps, {
+    keep: active ? "end" : "start",
+    pinned: pinnedTimelineStep,
+  });
+  const listId = `${idPrefix}-list`;
+  const toggle = (
+    <CollapsedListToggle state={collapsed} controls={listId} labels={labels.timelineCollapsed}
+      testId={testId ? `${testId}-collapse-toggle` : stepTestIdPrefix ? `${stepTestIdPrefix}-collapse-toggle` : undefined} />
+  );
 
   if (exploring) return <TraceExplorer loadCallBody={loadCallBody} steps={steps} hierarchyOrdered formatDuration={formatDuration} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
 
@@ -813,9 +832,10 @@ export function RunTimeline({
           {labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}
         </p>
       ) : null}
+      {collapsed.keep === "end" ? toggle : null}
       <RunTimelineViewport depth={Math.max(0, ...steps.map(step => stepLevel(step.level)))} label={labels.timeline}>
-      <ol className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
-        {steps.map((step, index) => {
+      <ol id={listId} className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
+        {collapsed.visible.map(({ item: step, index }) => {
           if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
@@ -870,8 +890,14 @@ export function RunTimeline({
         })}
       </ol>
       </RunTimelineViewport>
+      {collapsed.keep === "start" ? toggle : null}
     </div>
   );
+}
+
+/** 畳んでも出す段（実行中・応答待ち・失敗）。 */
+function pinnedTimelineStep(step: RunTimelineStep): boolean {
+  return step.status === "running" || step.status === "waiting" || step.status === "failed";
 }
 
 // ---------------------------------------------------------------------------
