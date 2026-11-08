@@ -17,7 +17,12 @@
   （複数の行の値の列挙・範囲「254・253・300」「A101〜A103」）では疑わない。
 - 見出しの行のセルと、表の複数の行にあるセルは、行を見分ける手がかりにしない。
 - 列: 行は合っていても、表に見出しの行があり、文がその値の列の見出しを述べず、同じ行に値のある別の列の見出し
-  （「改定前」の値に対する「改定後」）を同じ所で述べている。
+  （「改定前」の値に対する「改定後」）を同じ所で述べている。セルの一部に現れた見出しの語（「項目乙」の「項目」）は
+  見出しを述べたことにしない。
+- 表の本文の行をそのまま写した行（Markdown の表の行）は、行と列の対応が表のとおりなので調べない。
+
+取り違えの直し（`table_corrections`）は、正しいセルが 1 つに決まり、別の列に直すときは 2 つのセルの形が同じときだけ
+値を示す。確かめられなければ値を書き換えない。
 
 「同じ所」は文の読点・句点で区切った区間で、値の無い区間（「区分Ⅱの場合、」）は続く区間と合わせて見る。
 最終の検証（`evaluation.answer_validation`）と回答の生成の検査（`generation.grounded`）が同じ判定を使う。
@@ -451,11 +456,15 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
         return bool(starts(key))
 
     def near(name: str, value: str) -> bool:
-        """見出しが値の前にあり、間に表の別の値が無いか（見出しがその値を指すか。#4060）。"""
+        """見出しが値の前にあり、間に表の別の値が無いか（見出しがその値を指すか。#4060）。
+
+        述べたセルの中に現れた見出しの語（「項目乙」の「項目」）は、見出しを述べたことにしない（#4691）。
+        """
         values = [(place, key) for key in mentioned if table.is_value(key) and key != value for place in found[key]]
+        heads = [head for head in starts(name) if not any(left <= head and head + len(name) <= right for left, right in spans)]
         return any(
             head + len(name) <= place and not any(head + len(name) <= other < place for other, _key in values)
-            for head in starts(name)
+            for head in heads
             for place in found.get(value, [])
         )
 
@@ -505,18 +514,23 @@ def _kind(key: str) -> str:
     return "number" if any(char.isdigit() for char in key) else "word"
 
 
+def _same_kind(value: str, cell: str) -> bool:
+    """値とセルが同じ種類か（値がコードなら、コードを中に持つセルも同じ種類とする）。"""
+    kind = _kind(value)
+    return _kind(cell) == kind or (kind == "code" and bool(_CODE_IN_CELL.findall(cell)))
+
+
 def _parallel(table: Table, index: int, value: str, value_columns: frozenset[int]) -> bool:
     """別の行（``index``）が、値と同じ列に同じ種類の値を持つ（同じ並びの別の項目の行）か。
 
     注記・見出しのような、値の列に別の種類の文（「入力は必須」）しか無い行の語を述べただけでは疑わない。
     """
     cells = table.grid[index] if index < len(table.grid) else ()
-    kind = _kind(value)
     for column in value_columns:
         cell = cells[column] if column < len(cells) else ""
         if not cell or not table.is_value(cell) and not _CODE_IN_CELL.findall(cell):
             continue
-        if _kind(cell) == kind or (kind == "code" and _CODE_IN_CELL.findall(cell)):
+        if _same_kind(value, cell):
             return True
     return False
 
@@ -552,6 +566,17 @@ def _other_column(table: Table, value: str, rows: Sequence[int], said: Callable[
     return ""
 
 
+def _without_copied_rows(claim: str, tables: Sequence[Table]) -> str:
+    """文の行のうち、表の本文の行（セルの並びが同じ Markdown の表の行）をそのまま写した行を除く（#4691）。"""
+    rows = {cells for table in tables for cells in table.grid}
+
+    def copied(line: str) -> bool:
+        cleaned = _clean_claim(line)
+        return cleaned.count("|") >= 2 and tuple(_cell_key(cell) for cell in cleaned.strip("| ").split("|")) in rows
+
+    return "\n".join(line for line in str(claim or "").split("\n") if not copied(line))
+
+
 def unbound_table_values(claim: str, evidence_texts: Sequence[str], *, line_pairs: bool = True) -> list[tuple[str, str]]:
     """文が、根拠の表の別の行の区分・名前と結び付けた値の組（値, 別の行のセル。根拠の原文の表記）。
 
@@ -563,7 +588,7 @@ def unbound_table_values(claim: str, evidence_texts: Sequence[str], *, line_pair
         return []
     values = {key for table in tables for row in table.rows for key in row if table.is_value(key)}
     found: dict[str, str] = {}
-    for window in _windows(_clean_claim(claim), values):
+    for window in _windows(_clean_claim(_without_copied_rows(claim, tables)), values):
         bound: set[str] = set()
         candidates: dict[str, str] = {}
         for table in tables:
@@ -585,9 +610,11 @@ def unbound_table_values(claim: str, evidence_texts: Sequence[str], *, line_pair
 def _correct_cell(pair: tuple[str, str], tables: Sequence[Table]) -> tuple[str, str, str] | None:
     """取り違えた組（値, 別の行の名前か別の列の見出し）について、表の正しい対応（行の名前, 見出し, 正しい値）。
 
-    別の行の名前なら、その行の値の列のセル。別の列の見出しなら、値の行のその列のセル。決まらなければ None。
+    別の行の名前なら、その行の値の列のセル。別の列の見出しなら、値の行のその列のセル。値が複数の行・列にあって
+    候補のセルが 1 つに決まらないときは、どのセルのことか確かめられないので None（#4691）。
     """
     value, other = (_cell_key(part) for part in pair)
+    candidates: dict[str, tuple[str, str, str]] = {}
     for table in tables:
         if other in table.header:
             column = table.header.index(other)
@@ -595,13 +622,15 @@ def _correct_cell(pair: tuple[str, str], tables: Sequence[Table]) -> tuple[str, 
                 has_value = value in cells or any(value in _CODE_IN_CELL.findall(cell) for cell in cells)
                 if has_value and column < len(cells) and cells[column] and cells[column] != value:
                     label = table.cells.get(cells[0], cells[0]) if cells and cells[0] else ""
-                    return label, table.cells.get(other, other), table.cells.get(cells[column], cells[column])
+                    candidates.setdefault(
+                        cells[column], (label, table.cells.get(other, other), table.cells.get(cells[column], cells[column]))
+                    )
             continue
         for column in sorted(table.columns.get(value, frozenset())):
             for cells in table.grid:
                 if other in cells and column < len(cells) and cells[column] and cells[column] != value:
-                    return table.cells.get(other, other), "", table.cells.get(cells[column], cells[column])
-    return None
+                    candidates.setdefault(cells[column], (table.cells.get(other, other), "", table.cells.get(cells[column], cells[column])))
+    return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
 def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str], *, line_pairs: bool = True) -> list[str]:
@@ -623,9 +652,20 @@ def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Seque
 def table_corrections(
     pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str], *, line_pairs: bool = True
 ) -> list[tuple[str, str | None]]:
-    """取り違えた組ごとの（誤った値, 表の正しい値）。正しい値が決まらなければ None。"""
+    """取り違えた組ごとの（誤った値, 表の正しい値）。正しい値が決まらなければ None。
+
+    別の列のセルに直すのは、値とセルの種類が同じとき（同じ並びの列）だけ。金額を名前に置き換えるような直しは
+    表の対応から確かめられないので None にし、値を書き換えない（#4691）。
+    """
     tables = [table for text in evidence_texts for table in evidence_tables(text, line_pairs=line_pairs)]
-    return [(value, correct[2] if (correct := _correct_cell((value, other), tables)) else None) for value, other in pairs]
+    corrections: list[tuple[str, str | None]] = []
+    for value, other in pairs:
+        correct = _correct_cell((value, other), tables)
+        if correct is None or (correct[1] and not _same_kind(_cell_key(value), _cell_key(correct[2]))):
+            corrections.append((value, None))
+        else:
+            corrections.append((value, correct[2]))
+    return corrections
 
 
 def states_value(value: str, text: str) -> bool:
