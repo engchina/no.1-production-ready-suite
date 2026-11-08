@@ -1,3 +1,4 @@
+import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -1430,6 +1431,42 @@ test(
     await expectNoHorizontalOverflow(page);
   }
 );
+
+test("工程ごとの実行状況と抽出セグメントの読み込み中は、経過時間を 1 か所にまとめ工程の行の形の Skeleton で覆う（#4649）", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  await mockDocumentWorkspace(page, { segmentCount: 3, jobsForAllPhases: true });
+  // 取込 job と段の一覧の取得を止める（mockDocumentWorkspace より後に登録して先に当てる）。
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  for (const path of ["**/api/documents/doc-1/ingestion-jobs**", "**/api/documents/doc-1/ingestion-segments**"]) {
+    await page.route(path, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await gate;
+      await route.fallback();
+    });
+  }
+
+  await page.goto("/documents/doc-1");
+  // 工程ごとの実行状況と段の一覧は「処理の詳細(診断)」の中にある。
+  await page.getByTestId("document-diagnostics").locator("summary").click();
+  const loading = page.getByTestId("document-jobs-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("工程ごとの実行状況を読み込んでいます");
+  // 段の一覧は形だけ（経過時間は工程ごとの実行状況の 1 か所）。
+  await expect(page.getByTestId("document-segments-skeleton")).toBeVisible();
+  await expect(page.getByTestId("document-segments-loading")).toHaveCount(0);
+  await expect(loading.locator('[data-skeleton="list"] > *')).toHaveCount(4);
+  await expect(loading.getByRole("timer")).toHaveCount(1);
+  expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+  await loading.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("loading-document-jobs.png") });
+
+  release();
+  await expect(loading).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "工程ごとの実行状況" })).toBeVisible();
+  await expect(page.getByTestId("document-segments-skeleton")).toHaveCount(0);
+});
 
 test("文書 workspace はこの文書の取込 job と時間線を表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {

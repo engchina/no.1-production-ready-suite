@@ -46,6 +46,7 @@ import {
   chunkPreviewForm,
   chunkPreviewValidationError,
   classificationPeriodIsValid,
+  INGESTION_PHASE_ORDER,
   ingestConflictBannerIsStale,
   isIndexedTransition,
   phaseForDocumentStatus,
@@ -2051,6 +2052,7 @@ export function DocumentWorkspace({
                   ?.progress
               )}
               loading={segmentsQuery.isPending}
+              timerShownAbove={documentJobsQuery.isPending}
               error={initialLoadError(segmentsQuery) != null}
               retrying={retryFailedSegments.isPending}
               visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
@@ -2131,7 +2133,11 @@ function IngestionJobsPanel({
         operationKey="document-jobs-load"
         testId="document-jobs-loading"
       >
-        <Skeleton className="h-24 w-full rounded-md" />
+        {/* 読み込み後の形（見出しの行と、工程ごとの行）で寸法を予約する（#4649）。 */}
+        <div className="grid gap-3">
+          <Skeleton className="h-5 w-40" />
+          <ListSkeleton rows={INGESTION_PHASE_ORDER.length} rowClassName="h-10" />
+        </div>
       </TimedLoadingState>
     );
   }
@@ -2563,6 +2569,7 @@ function JobMetric({
 function IngestionSegmentsPanel({
   segments,
   loading,
+  timerShownAbove,
   error,
   retrying,
   visibleErrorSegmentIds,
@@ -2572,6 +2579,8 @@ function IngestionSegmentsPanel({
   /** 段の状態は実行中の job の進捗を正にしたもの（`segmentsWithProgress`。#2001）。 */
   segments: (IngestionSegment & { reused?: boolean; completed_pages?: number })[];
   loading: boolean;
+  /** 直上の工程ごとの実行状況も読み込み中で、そちらが文言と経過時間を出している（ここは形だけにする）。 */
+  timerShownAbove: boolean;
   error: boolean;
   retrying: boolean;
   visibleErrorSegmentIds: ReadonlySet<string>;
@@ -2579,13 +2588,22 @@ function IngestionSegmentsPanel({
   onRetryFailedSegments: () => void;
 }) {
   if (loading) {
+    // 段の一覧は閉じた折りたたみ（見出しと説明の行）で出るので、その形で寸法を予約する。直上の工程ごとの実行状況と
+    // 同時に読むときは、経過時間をそちらの 1 か所にまとめ、ここは形だけにする（1 つの領域に経過時間は 1 か所。#4649）。
+    const skeleton = (
+      <div className="grid gap-1.5" data-testid={timerShownAbove ? "document-segments-skeleton" : undefined}>
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-4 w-full max-w-md" />
+      </div>
+    );
+    if (timerShownAbove) return skeleton;
     return (
       <TimedLoadingState
         label={t("flow.segments.loading")}
         operationKey="document-segments-load"
         testId="document-segments-loading"
       >
-        <Skeleton className="h-24 w-full rounded-md" />
+        {skeleton}
       </TimedLoadingState>
     );
   }

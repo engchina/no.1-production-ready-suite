@@ -5716,6 +5716,7 @@ export const ja = {
   "history.result.answerMissing": "回答の記録は保存期間を過ぎて削除されたか、読み込めませんでした。",
   "history.result.blocked": "質問が安全チェックで止められたため、検索・回答はしていません。",
   "history.process.title": "処理の経過",
+  "history.process.loading": "処理の経過を読み込んでいます",
   "history.process.llmCalls": "LLM {count} 回",
   "history.process.llmCallsWithSends": "LLM {count} 回・送信 {sends} 回",
   "history.detail.conversationId": "会話 ID",

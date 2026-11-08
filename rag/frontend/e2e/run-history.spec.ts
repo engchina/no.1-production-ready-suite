@@ -1,4 +1,5 @@
 import { expectRunValueTypography } from "../../../platform/packages/ui/e2e/run-value-typography";
+import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import recoveryGeneratedTrace from "./fixtures/recovery-generated-trace.json";
 import searchTraceParity from "./fixtures/search-trace-parity.json";
 import generatedAnswers from "./fixtures/derived-answer-generated.json";
@@ -659,6 +660,32 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       await expect(page.getByRole("dialog")).toBeVisible();
     });
   }
+
+  test("詳細: 処理の経過の読み込み中は節の先頭に文言と経過時間を 1 か所だけ出し、閉じた見出しの形の Skeleton で覆う（#4649）", async ({
+    page,
+  }, testInfo) => {
+    await mockLocalAuth(page);
+    await mockRuns(page, [run(1)]);
+    // 実行の trace の取得だけを止める（mockRuns より後に登録して先に当てる）。
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/history/runs/run-1/trace", async (route) => {
+      await gate;
+      await route.fallback();
+    });
+
+    await page.goto("/history/run-1");
+    const timeline = page.getByTestId("run-history-timeline");
+    const loading = timeline.getByTestId("run-history-timeline-loading");
+    await expect(loading).toContainText("処理の経過を読み込んでいます");
+    await expect(page.getByRole("timer")).toHaveCount(1);
+    expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+    await timeline.screenshot({ path: testInfo.outputPath("loading-run-history-trace.png") });
+
+    release();
+    await expect(loading).toHaveCount(0);
+    await expect(page.getByTestId("run-history-timeline-summary")).toBeVisible();
+  });
 
   test("詳細: 概要 → 処理の経過（処理の詳細を含む）→ 回答 → 根拠 → フィードバックの 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,

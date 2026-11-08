@@ -523,13 +523,34 @@ function UploadKnowledgeBasePicker({
   );
 }
 
+const STORAGE_NOTICE_CLASS =
+  "flex flex-col gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm text-fg md:flex-row md:items-center md:justify-between";
+
 function UploadStorageNotice() {
   const query = useUploadStorageSettings();
 
-  if (query.isPending || query.isError || !query.data) return null;
+  // 読み込み中は案内と同じ枠・寸法の Skeleton で場所を取り、読み込み後に現れて下の欄を押し下げない。経過時間は
+  // 同じ画面のナレッジベースの欄の読み込み中の表示が出すので、ここは形だけにする（#4649）。
+  if (query.isPending) {
+    return (
+      <div className={STORAGE_NOTICE_CLASS} aria-hidden data-testid="upload-storage-notice-skeleton">
+        <div className="flex items-start gap-3">
+          <Skeleton className="h-9 w-9 shrink-0" />
+          {/* 文字の行と同じ高さ（1lh）にする（見出しは text-sm、保存先は text-xs）。 */}
+          <div className="min-w-0 flex-1">
+            <Skeleton className="h-[1lh] w-48 max-w-full" />
+            <div className="mt-1 text-xs">
+              <Skeleton className="h-[1lh] w-64 max-w-full" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (query.isError || !query.data) return null;
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm text-fg md:flex-row md:items-center md:justify-between">
+    <div className={STORAGE_NOTICE_CLASS}>
       <div className="flex items-start gap-3">
         <div data-surface-tint="info" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
           {query.data.backend === "oci" ? (

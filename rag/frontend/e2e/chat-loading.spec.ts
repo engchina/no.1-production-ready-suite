@@ -1,4 +1,5 @@
 import { expectChatTargetNextToNewConversation } from "../../../platform/packages/ui/e2e/chat-toolbar-layout";
+import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import { expect, type Page, test } from "./fixtures/test";
 
 import { mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
@@ -123,14 +124,20 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.reload();
     await applyColorScheme(page, colorScheme);
 
-    // 上のカードは文言と経過時間（同じ取得の経過時間はここだけ）。
-    await expect(page.getByTestId("chat-search-answer-profiles-loading")).toContainText(
-      "検索・回答プロファイルを読み込んでいます"
-    );
-    // 会話の領域は最初から描き、空の状態の代わりに会話の形の Skeleton を出す。経過時間は重ねない。
-    await expect(page.getByTestId("chat-messages-skeleton")).toBeVisible();
+    // ツールバーは欄の形の Skeleton だけ（#4649）。文言と経過時間は会話の領域の先頭の 1 か所だけ。
+    const toolbarSkeleton = page.locator("[data-chat-toolbar]").getByTestId("chat-search-answer-profiles-skeleton");
+    await expect(toolbarSkeleton).toBeVisible();
+    await expect(page.locator("[data-chat-toolbar]").getByRole("timer")).toHaveCount(0);
+    const loading = page.getByTestId("chat-search-answer-profiles-loading");
+    await expect(loading).toContainText("検索・回答プロファイルを読み込んでいます");
+    // 会話の領域は最初から描き、空の状態の代わりに会話の形の Skeleton を出す。
+    await expect(loading.getByTestId("chat-messages-skeleton")).toBeVisible();
     await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
     await expect(page.getByRole("timer")).toHaveCount(1);
+    // 読み込み中は会話の欄を末尾へ送らず、先頭の文言と経過時間が 375px でも見える（#4649）。
+    await expect(loading.getByRole("timer")).toBeInViewport();
+    // 灰色の枠・全幅・経過時間・Skeleton・375px で横にあふれない（3 製品の共通の検査。#4649）。
+    expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
     // 入力欄（書いた文字は残す）・送信・新しい会話・履歴の開閉は無効。
     await expect(composer).toBeDisabled();
     await expect(composer).toHaveValue("書きかけの質問");
@@ -142,6 +149,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     // 読み込み後: 空の状態と、使える入力欄。
     release();
     await expect(page.getByTestId("chat-search-answer-profiles-loading")).toHaveCount(0);
+    await expect(toolbarSkeleton).toHaveCount(0);
 
     const toolbarTarget = page.locator("[data-chat-toolbar] #chat-search-answer-profile");
     await expect(toolbarTarget).toBeVisible();
@@ -212,6 +220,8 @@ test("開いている会話の内容の読み込み中も入力欄に書け、�
   await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
   await expect(page.getByTestId("chat-messages-loading")).toContainText("会話の内容を読み込んでいます");
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
+  expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+  await expect(page.getByTestId("chat-messages-loading").getByRole("timer")).toBeInViewport();
   const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
   await expect(composer).toBeEnabled();
   await composer.fill("続きの質問");
