@@ -1,7 +1,8 @@
-import { Disclosure, StatusBadge } from "@production-ready/ui";
+import { Disclosure, StatusBadge, ListScrollRegion } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import { findingName, findingTarget, partitionFindings } from "./publicationSummary";
 import type { OntologyFinding } from "./types";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 interface FindingGroup { message: string; severity: string; items: OntologyFinding[] }
 
@@ -50,8 +51,9 @@ export function OntologyFindings({ findings, label, names }: {
   const improvementGroups = groupFindings(improvements);
   if (!groups.length && !improvementGroups.length) return null;
   return <div className="grid min-w-0 gap-3">
-    {groups.length > 0 && <div role="region" aria-label={label} tabIndex={0}
-      className="max-h-72 min-w-0 overflow-y-auto overscroll-contain rounded-md border border-border bg-surface p-4">
+    {/* 診断の数だけ増えるので、高い行の一覧の高さで止める（手書きの max-h にしない。#4636）。 */}
+    {groups.length > 0 && <ListScrollRegion size="card" label={label}
+      className="rounded-md border border-border bg-surface p-4">
       <ul className="grid min-w-0 gap-4">
         {groups.map(group => <li key={`${group.severity}:${group.message}`} className="grid min-w-0 gap-2 border-b border-border pb-4 last:border-b-0 last:pb-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -63,12 +65,13 @@ export function OntologyFindings({ findings, label, names }: {
           <FindingTargets items={group.items} names={names} />
         </li>)}
       </ul>
-    </div>}
+    </ListScrollRegion>}
     {improvementGroups.length > 0 && <Disclosure data-testid="ontology-improvement-findings"
       summary={t("markdownOntology.improvements")}
       meta={<span className="tnum text-xs text-fg-muted">{t("markdownOntology.occurrences", { count: improvements.length })}</span>}
       summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4">
       <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.improvementsHint")}</p>
+      <ListScrollRegion size="card" label={listScrollLabel(t("markdownOntology.improvements"))}>
       <ul className="grid min-w-0 gap-3">
         {improvementGroups.map(group => <li key={group.message} className="grid min-w-0 gap-1">
           <p className="whitespace-pre-wrap break-words text-sm">
@@ -78,6 +81,7 @@ export function OntologyFindings({ findings, label, names }: {
           <FindingTargets items={group.items} names={names} />
         </li>)}
       </ul>
+      </ListScrollRegion>
     </Disclosure>}
   </div>;
 }

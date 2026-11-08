@@ -1,5 +1,5 @@
 import { conceptKinds, conceptLabel, conceptGraph, nodeConceptKind } from "./unifiedConcepts";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import {
   AlertTriangle,
@@ -30,7 +30,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, fieldControlClassName } from "@production-ready/ui";
+import { Button, fieldControlClassName, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
 import { applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -56,6 +56,7 @@ import {
 } from "./graphView";
 import { ontologyNodeDisplay, ontologyNodeSearchValues } from "./nodeDisplay";
 import type { OntologyGraph, OntologyNode } from "./types";
+import { collapsedListLabels } from "@/lib/pagination-labels";
 
 interface OntologyGraphCanvasProps {
   graph: OntologyGraph;
@@ -876,7 +877,6 @@ function OntologyFlow({
           value={search} onChange={setSearch} count={orderedSearchMatches.length} cursor={searchCursor}
           onPrevious={() => jumpToSearchMatch(-1)} onNext={() => jumpToSearchMatch(1)} scopeHintHidden testId="ontology-graph-search"
         />
-        {query && scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query))).map(edge=><Button type="button" key={edge.id} size="sm" variant="secondary" onClick={()=>onSelectEdge?.(edge.id)}>{edge.relationship_name_ja}</Button>)}
         {detailCount > 0 ? (
           <label
             className="flex h-[var(--control-height-lg)] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs text-fg shadow-sm transition-colors focus-within:border-focus-ring"
@@ -893,6 +893,13 @@ function OntologyFlow({
           </label>
         ) : null}
       </div>
+      {/* 検索に当たった関係はツールバーの外の行に出し、10 件を超えたら畳む（ツールバーを伸ばさない。#4636）。 */}
+      {query ? (
+        <RelationshipMatches
+          edges={scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query)))}
+          onSelect={(id) => onSelectEdge?.(id)}
+        />
+      ) : null}
       <p className="text-xs text-fg-muted">{t("nl2sql.ontology.graphSearchScope")}</p>
       <GraphCanvasFrame ref={canvasRef} data-testid="ontology-graph-canvas">
       {canvasVisible && <GraphCanvas
@@ -955,5 +962,32 @@ export default function OntologyGraphCanvas(props: OntologyGraphCanvasProps) {
     <GraphCanvasProvider>
       <OntologyFlow {...props} />
     </GraphCanvasProvider>
+  );
+}
+
+/** 検索に当たった関係のボタンの並び。`COLLAPSED_LIST_LIMIT` 件を超えたら畳む（#4636）。 */
+function RelationshipMatches<T extends { id: string; relationship_name_ja?: string | null }>({
+  edges,
+  onSelect,
+}: {
+  edges: T[];
+  onSelect: (id: string) => void;
+}) {
+  const collapsed = useCollapsedList(edges);
+  const listId = useId();
+  if (edges.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="ontology-graph-relationship-matches">
+      <ul id={listId} className="contents" aria-label={t("nl2sql.ontology.graphRelationshipMatches")}>
+        {collapsed.visible.map(({ item: edge }) => (
+          <li key={edge.id} className="contents">
+            <Button type="button" size="sm" variant="secondary" onClick={() => onSelect(edge.id)}>
+              {edge.relationship_name_ja}
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <CollapsedListToggle state={collapsed} controls={listId} labels={collapsedListLabels()} testId="ontology-graph-relationship-matches-toggle" />
+    </div>
   );
 }

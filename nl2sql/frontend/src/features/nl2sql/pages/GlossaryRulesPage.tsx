@@ -13,13 +13,14 @@ import {
   ProcessingIndicator,
   Pagination,
   useConfirm,
+  INFORMATION_LIST_SCROLL_CLASS,
 } from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, listScrollLabel, paginationLabels } from "@/lib/pagination-labels";
 import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { downloadBlob } from "../components/DbAdminShared";
@@ -414,6 +415,11 @@ function GlobalPreviewTable({
         rows={visibleRows}
         getRowKey={(row, index) => `${row.term}-${start + index}`}
         tableClassName="w-full table-fixed"
+        // セルが最大 15rem まで高くなるので、実測の 8 行ではなく共通の高さの上限で止める（page-archetypes.md の例外
+        // 「長い文章を持つ一覧」。#4636）。
+        stickyHeader
+        className={INFORMATION_LIST_SCROLL_CLASS}
+        scrollAriaLabel={listScrollLabel(t("glossary.preview.scrollLabel"))}
       />
       <Pagination
         page={currentPage}

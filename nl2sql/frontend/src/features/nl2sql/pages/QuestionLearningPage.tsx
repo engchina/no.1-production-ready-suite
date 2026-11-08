@@ -29,6 +29,7 @@ import {
   Pagination,
   PAGE_SIZE_OPTIONS,
   TextareaField,
+  ListScrollRegion,
 } from "@production-ready/ui";
 import {
   useEffect,
@@ -59,7 +60,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { listCountLabels, listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, listToolbarLabels, paginationLabels, listScrollLabel } from "@/lib/pagination-labels";
 import { useWorkspacePaging, type WorkspacePaging } from "@/lib/use-workspace-paging";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { APP_ROUTES } from "@/lib/routes";
@@ -1571,9 +1572,11 @@ function TrainingCandidatesPanel({
 
           {/* 学習候補の追加は、候補を選ぶ一覧（ListPicker）ではなく、行ごとに業務プロファイルを確定してから追加する
               作業の一覧（行の中に入力と操作がある）なので、今の形のままにする（UX 契約 page-archetypes.md
-              「大量の候補から選ぶ」の画面ごとの判断。#608）。 */}
+              「大量の候補から選ぶ」の画面ごとの判断。#608）。1 行が高い（入力と操作を持つ）ので、高い行の一覧の高さで止め、
+              ページ全体を伸ばさない（#4636）。 */}
+          <ListScrollRegion size="card" label={listScrollLabel(t("qcm.candidates.listAria"))} className="rounded-md border border-border bg-surface">
           <ul
-            className="divide-y divide-border/70 rounded-md border border-border bg-surface"
+            className="divide-y divide-border/70"
             aria-label={t("qcm.candidates.listAria")}
             data-testid="qcm-candidate-list"
           >
@@ -1704,6 +1707,7 @@ function TrainingCandidatesPanel({
               );
             })}
           </ul>
+          </ListScrollRegion>
 
           <OffsetPagination
             offset={offset}

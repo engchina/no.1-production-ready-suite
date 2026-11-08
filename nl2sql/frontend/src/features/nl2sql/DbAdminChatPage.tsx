@@ -1,5 +1,5 @@
-import { callBodyPath } from "@production-ready/ui";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { callBodyPath, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
 import {
@@ -88,6 +88,7 @@ import type {
   DbAdminChatTurn as DbAdminChatTurnData,
 } from "./types";
 import { useMutationSchemaSync } from "./useMutationSchemaSync";
+import { collapsedListLabels } from "@/lib/pagination-labels";
 
 /** 送った質問（生成の応答の前・送れなかったとき）。ターンの ID は送信の前に決め、送り直しも同じ ID。 */
 interface PendingGenerate {
@@ -582,6 +583,15 @@ function DbAdminChatTurn({
     runAll?.status === "running" ||
     Object.values(executions.statements).some((item) => item.status === "running");
   const total = plan.statements.length;
+  // 貼り付けた SQL の文の数だけカードが並ぶので、会話の中で入れ子のスクロールにせず 10 件を超えたら畳む。
+  // 実行中・失敗した文は畳んでも出す（#4636）。
+  const statementList = useCollapsedList(plan.statements, {
+    pinned: (statement) => {
+      const status = executions.statements[statement.index]?.status;
+      return status === "running" || status === "failed";
+    },
+  });
+  const statementListId = useId();
   const hasSql = total > 0;
 
   const execute = async (
@@ -747,7 +757,8 @@ function DbAdminChatTurn({
             {runAll ? <RunAllSummary runAll={runAll} turnId={turn.turn_id} /> : null}
           </section>
         ) : null}
-        {plan.statements.map((statement) => (
+        <div id={statementListId} className="contents">
+        {statementList.visible.map(({ item: statement }) => (
           <DbAdminChatStatement
             key={`${statement.index}:${statement.sql}`}
             conversationId={conversationId}
@@ -763,6 +774,13 @@ function DbAdminChatTurn({
             onReplaceTurn={onReplaceTurn}
           />
         ))}
+        </div>
+        <CollapsedListToggle
+          state={statementList}
+          controls={statementListId}
+          labels={collapsedListLabels()}
+          testId={`${TEST_ID}-statements-toggle-${turn.turn_id}`}
+        />
         <SchemaSyncNotice
           sync={schemaSync}
           testId={`${TEST_ID}-schema-sync-notice`}

@@ -9876,7 +9876,7 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(page.locator("#sql-to-question-panel-input")).toBeVisible();
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
   await expect(page.getByText("請求情報")).toBeVisible();
-  await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
+  await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await expect(page.getByLabel("用語・同義語を使う")).toHaveCount(0);
@@ -9950,7 +9950,7 @@ test("SQL から質問は保存した業務プロファイルが一覧に無け�
 
   await page.goto("/sql-to-question");
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
-  await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
+  await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
   await expect(page.getByText("業務プロファイルが見つかりません。")).toHaveCount(0);
   expect(usageContextIds).not.toContain("deleted-profile");
   // 消えたプロファイルの下書きは使わず、切り替え先の下書き（空）を出す。
@@ -10101,7 +10101,7 @@ test("sql to question page shows a reserved loading state and retries reference-
   await errorBanner.getByRole("button", { name: "プロファイル・スキーマを再読込" }).click();
   await expect(errorBanner).toHaveCount(0);
   await expect(page.getByText("請求情報")).toBeVisible();
-  await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
+  await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
   await expectNoHorizontalScroll(page);
 });
 
@@ -10121,7 +10121,7 @@ test("sql to question page shows a guided empty schema state", async ({ page }) 
 
   await expect(page.getByText("参照できる表がありません")).toBeVisible();
   await expect(page.getByText("選択プロファイルで参照できるスキーマ情報がありません。")).toBeVisible();
-  await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 0");
+  await expect(page.getByTestId("sql-to-question-table-count")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 

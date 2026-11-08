@@ -1,5 +1,6 @@
 import {
   formatPaginationNumber,
+  type CollapsedListLabels,
   type ListCountLabels,
   type ListToolbarLabels,
   type PaginationLabels,
@@ -49,5 +50,19 @@ export function listToolbarLabels(): ListToolbarLabels {
     filtersSheetClose: t("listToolbar.filtersClose"),
     showResults: (matched) =>
       matched === undefined ? t("listToolbar.showResults") : t("listToolbar.showMatched", { matched }),
+  };
+}
+
+/** 一覧のスクロール領域（`ListScrollRegion` / `DataTable` の `scrollAriaLabel`）の読み上げ名（#4636）。 */
+export function listScrollLabel(list: string): string {
+  return t("security.common.listScrollLabel", { list });
+}
+
+/** 増えるブロックを畳む `CollapsedListToggle` の文言（#4636）。 */
+export function collapsedListLabels(): CollapsedListLabels {
+  return {
+    showAll: (total) => t("collapsedList.showAll", { total }),
+    showEarlier: (hidden) => t("collapsedList.showEarlier", { hidden }),
+    collapse: t("collapsedList.collapse"),
   };
 }

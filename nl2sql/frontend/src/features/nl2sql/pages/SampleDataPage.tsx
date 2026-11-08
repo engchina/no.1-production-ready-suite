@@ -13,6 +13,7 @@ import {
   ExecutionConfirmationField,
   ProcessingIndicator,
   SelectField,
+  ListToolbar,
 } from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -37,6 +38,7 @@ import {
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import type { SampleDataInfo, SampleDataMutationData, SampleDataset } from "../types";
+import { listCountLabels } from "@/lib/pagination-labels";
 
 type SampleStep = "tables" | "views" | "data" | "all";
 type SampleAction = "import" | "delete";
@@ -64,11 +66,6 @@ function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null
           <span className="sr-only" data-testid="sample-data-object-count">
             {formatNumber(sampleInfo?.objects.length ?? 0)}
           </span>
-          <StatusBadge
-            icon={false}
-            variant="neutral"
-            label={`${t("dataTools.sample.metric.objects")} ${formatNumber(sampleInfo?.objects.length ?? 0)}`}
-          />
           <span className="sr-only" data-testid="sample-data-imported-count">
             {formatNumber(sampleInfo?.imported_objects.length ?? 0)}
           </span>
@@ -78,6 +75,8 @@ function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null
           />
         </div>
       </div>
+      {/* オブジェクトの件数はツールバーの ListCount 1 か所（見出しのバッジにしない。#4636）。 */}
+      <ListToolbar count={{ total: sampleInfo?.objects.length ?? 0, labels: listCountLabels() }} testId="sample-data-object-toolbar" />
       <ul className="grid gap-1 sm:grid-cols-2" data-testid="sample-data-object-list">
         {(sampleInfo?.objects ?? []).map((objectName) => {
           const ref = sampleInfo?.object_refs?.find((item) => item.name === objectName);

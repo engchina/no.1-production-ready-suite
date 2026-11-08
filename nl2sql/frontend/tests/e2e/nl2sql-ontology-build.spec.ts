@@ -3521,7 +3521,8 @@ for (const status of ["failed", "ready"] as const) {
         await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
         await region.scrollIntoViewIfNeeded();
         const metrics = await region.evaluate(element => ({
-          height: element.getBoundingClientRect().height, max: 18 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+          // 高い行の一覧の共通の高さ（md 未満 26.25rem・md 以上 42rem。#4636）。
+          height: element.getBoundingClientRect().height, max: (innerWidth >= 768 ? 42 : 26.25) * parseFloat(getComputedStyle(document.documentElement).fontSize),
           scroll: element.scrollHeight, client: element.clientHeight,
         }));
         expect(metrics.height).toBeLessThanOrEqual(metrics.max + 1);

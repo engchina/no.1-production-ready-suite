@@ -28,6 +28,8 @@ import {
   SelectField,
   TextField,
   formatDisplayDateTime,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
 } from "@production-ready/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -946,7 +948,7 @@ export function EvaluationPage() {
                   />
                 ) : (
                   <div
-                    className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={`grid min-w-0 gap-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
                     role="region"
                     aria-label={t("qualityEvaluation.recent.scrollRegion")}
                     tabIndex={0}

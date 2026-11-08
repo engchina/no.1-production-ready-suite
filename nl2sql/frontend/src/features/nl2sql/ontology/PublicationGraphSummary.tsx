@@ -1,6 +1,7 @@
-import { Disclosure } from "@production-ready/ui";
+import { Disclosure, ListScrollRegion } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import { summarizeOntologyGraph, type PublicationDefinition } from "./publicationSummary";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 /**
  * 公開前の確認で、graph として何ができたか（オブジェクト・関係・プロパティ）を示す（#1720）。
@@ -23,7 +24,8 @@ export function PublicationGraphSummary({ definitions }: { definitions: Publicat
       </div>)}
     </dl>
     {summary.objectCount > 0 && summary.linkCount === 0 && <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.graph.noLinks")}</p>}
-    {summary.objects.length > 0 && <ul className="grid min-w-0 gap-2" aria-label={t("markdownOntology.graph.objectList")}>
+    {/* オブジェクトの数（≒表の数）だけ増えるので、高い行の一覧の高さで止める（件数は上の dl。#4636）。 */}
+    {summary.objects.length > 0 && <ListScrollRegion size="card" label={listScrollLabel(t("markdownOntology.graph.objectList"))}><ul className="grid min-w-0 gap-2" aria-label={t("markdownOntology.graph.objectList")}>
       {summary.objects.map(object => <li key={object.apiName} className="min-w-0">
         <Disclosure variant="plain" size="sm"
           summary={<span className="grid min-w-0 gap-0.5">
@@ -43,6 +45,6 @@ export function PublicationGraphSummary({ definitions }: { definitions: Publicat
           </dl>
         </Disclosure>
       </li>)}
-    </ul>}
+    </ul></ListScrollRegion>}
   </section>;
 }

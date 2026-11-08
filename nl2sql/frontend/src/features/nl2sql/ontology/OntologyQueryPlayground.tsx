@@ -26,6 +26,8 @@ import {
   FieldActionRow,
   isImeComposing,
   TextField,
+  ListScrollRegion,
+  ListToolbar,
 } from "@production-ready/ui";
 import { ErrorState } from "@/components/StateViews";
 
@@ -61,6 +63,7 @@ import {
   ontologyValidationLabel,
   ontologyValidationVariant,
 } from "./OntologySelectionDetails";
+import { listCountLabels, listScrollLabel } from "@/lib/pagination-labels";
 
 const LazyOntologyGraphCanvas = lazy(() => import("./OntologyGraphCanvas"));
 
@@ -215,13 +218,6 @@ function ServerSearchResultPanel({
           <ServerCog size={16} className="text-accent-fg" aria-hidden="true" />
           {t("ontologyPlayground.serverSearch.title")}
         </h3>
-        <StatusBadge
-          icon={false}
-          variant="neutral"
-          label={t("ontologyPlayground.serverSearch.hitCount", {
-            count: result.hits.length,
-          })}
-        />
       </div>
       {comparison ? (
         <div className="grid gap-2" data-testid="ontology-playground-grounding-comparison">
@@ -255,10 +251,13 @@ function ServerSearchResultPanel({
       {result.hits.length === 0 ? (
         <Banner severity="info">{t("ontologyPlayground.serverSearch.empty")}</Banner>
       ) : (
+        // 件数はツールバーの ListCount（見出しのバッジにしない）、一覧は行リストの高さで止める（#4636）。
+        // 見出しと比較バッジは常時見えるよう、スクロールはヒット一覧だけに限定する。
+        <>
+        <ListToolbar count={{ total: result.hits.length, labels: listCountLabels() }} testId="ontology-playground-server-hits-toolbar" />
+        <ListScrollRegion label={listScrollLabel(t("ontologyPlayground.serverSearch.title"))}>
         <ol
-          // 関係一覧(ontology-inspector-relationship-list)と同じ標準: 最大高さ + 縦スクロール。
-          // ヘッダーと比較バッジは常時見えるよう、スクロールはヒット一覧だけに限定する。
-          className="grid max-h-80 gap-1.5 overflow-y-auto overscroll-contain pr-1"
+          className="grid gap-1.5"
           data-testid="ontology-playground-server-hits"
         >
           {result.hits.map((hit, index) => {
@@ -316,6 +315,8 @@ function ServerSearchResultPanel({
             );
           })}
         </ol>
+        </ListScrollRegion>
+        </>
       )}
     </section>
   );
@@ -536,12 +537,14 @@ function OntologyRelationshipListPanel({
           <Network size={16} className="text-accent-fg" aria-hidden="true" />
           {t("ontologyPlayground.inspector.relationships")}
         </h3>
-        <StatusBadge icon={false} variant="neutral" label={t("ontologyPlayground.inspector.relationshipCount", { count: rows.length })} />
       </div>
       {rows.length === 0 ? (
         <Banner severity="info">{t("ontologyPlayground.inspector.relationshipsEmpty")}</Banner>
       ) : (
-        <div className="grid max-h-80 gap-2 overflow-y-auto pr-1" data-testid="ontology-inspector-relationship-list">
+        // 件数はツールバーの ListCount、一覧は高い行の一覧の高さで止める（#4636）。
+        <>
+        <ListToolbar count={{ total: rows.length, labels: listCountLabels() }} testId="ontology-inspector-relationships-toolbar" />
+        <ListScrollRegion size="card" label={listScrollLabel(t("ontologyPlayground.inspector.relationships"))} className="grid gap-2" testId="ontology-inspector-relationship-list">
           {rows.map((row) => (
             <RelationshipCard
               key={row.edge_id}
@@ -550,7 +553,8 @@ function OntologyRelationshipListPanel({
               onSelect={onSelectEdge}
             />
           ))}
-        </div>
+        </ListScrollRegion>
+        </>
       )}
     </section>
   );
@@ -578,15 +582,13 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
         </div>
         <div className="flex flex-wrap gap-2" aria-label={t("ontologyPlayground.erSummary")}>
           <StatusBadge icon={false} variant="neutral" label={erObjectTypeLabel(details.objectType)} />
-          <StatusBadge
-            icon={false}
-            variant="info"
-            label={t("ontologyPlayground.erColumnCount", { count: details.columns.length })}
-          />
         </div>
       </div>
 
       {details.columns.length > 0 ? (
+        // 列の件数は表の上のツールバーの ListCount 1 か所（見出しのバッジにしない。#4636）。
+        <div className="grid min-w-0 gap-2">
+        <ListToolbar count={{ total: details.columns.length, labels: listCountLabels() }} testId="ontology-er-columns-toolbar" />
         <DataTable
           columns={[
             {
@@ -633,6 +635,7 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
           stickyHeader
           visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
+        </div>
       ) : (
         <Banner severity="info">{t("ontologyPlayground.erColumnsEmpty")}</Banner>
       )}
@@ -642,7 +645,7 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
           {t("ontologyPlayground.erJoinConditions")}
         </h4>
         {details.joins.length > 0 ? (
-          <div className="grid gap-2">
+          <ListScrollRegion label={listScrollLabel(t("ontologyPlayground.erJoinConditions"))} className="grid gap-2">
             {details.joins.map((join) => (
               <div
                 key={join.id}
@@ -663,7 +666,7 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
                 </code>
               </div>
             ))}
-          </div>
+          </ListScrollRegion>
         ) : (
           <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.erJoinsEmpty")}</p>
         )}

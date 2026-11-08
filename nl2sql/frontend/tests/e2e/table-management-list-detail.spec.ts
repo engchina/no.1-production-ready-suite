@@ -162,7 +162,9 @@ test.describe("テーブルの管理の一覧 + 詳細（ListDetailLayout。#228
   test("詳細が長いと本文はスクロールし、一覧の列は見出しの下に貼り付いたまま高さを変えない（#2330）", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
     await clearListDetailStorage(page);
-    // 列の多いテーブル（列情報はページと一緒にスクロールする）。
+    // 列の多いテーブル。列情報は表の中でスクロールし（8 行以上・画面の下端まで。#4636）、低い画面では詳細が
+    // 画面の高さを超えて本文がスクロールする。
+    await page.setViewportSize({ width: 1280, height: 640 });
     await mockTableManagement(page, { tableCount: 40, columnCount: 60 });
     await page.goto("/table-management?table=APP.TABLE_03");
     await expect(page.getByTestId("table-management-detail-header")).toContainText("APP.TABLE_03");

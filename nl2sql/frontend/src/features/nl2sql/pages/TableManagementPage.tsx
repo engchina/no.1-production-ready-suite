@@ -22,6 +22,7 @@ import {
   FormGrid,
   TextField,
   useActionPending,
+  ListScrollRegion,
 } from "@production-ready/ui";
 
 import { RetryPageNotice } from "@/components/page-notice";
@@ -72,6 +73,7 @@ import {
 import { useMutationSchemaSync, type MutationSchemaSync } from "../useMutationSchemaSync";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 /** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
 const TABLE_SCHEMA_REFRESH_HEADER = "table-management-header";
@@ -271,6 +273,8 @@ function ImportWizard({
           {t("tableMgmt.importWizard.preview")}
         </Button>
         {result && !result.executed && (
+          // 取り込むファイルの列の数だけ欄が増えるので、高い行の一覧の高さで止める（上限の無いフォームの繰り返し。#4636）。
+          <ListScrollRegion size="card" label={listScrollLabel(t("tableMgmt.importWizard.columnTypesLabel"))} testId="table-import-column-types">
           <FormGrid>
             {result.columns.map((column) => (
               <TextField key={column.column_name} id={`table-import-column-${column.column_name}`}
@@ -280,6 +284,7 @@ function ImportWizard({
                 onValueChange={(value) => onColumnTypeChange(column.column_name, value)} />
             ))}
           </FormGrid>
+          </ListScrollRegion>
         )}
       </div>
 

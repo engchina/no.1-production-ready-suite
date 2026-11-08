@@ -4951,7 +4951,8 @@ test("DeepSec は構造化データ権限をロール別に編集する", { tag:
         comment: "",
         sample_values: [],
       },
-      ...Array.from({ length: 12 }, (_, index) => ({
+      // 列の選択の格子が共通の行リストの高さ（md 以上 28rem）を超えてスクロールする数（#4636）。
+      ...Array.from({ length: 45 }, (_, index) => ({
         column_name: `AUDIT_COLUMN_${String(index + 1).padStart(2, "0")}`,
         logical_name: `監査列${index + 1}`,
         data_type: "VARCHAR2(64)",
@@ -5106,7 +5107,10 @@ test("DeepSec は構造化データ権限をロール別に編集する", { tag:
     .poll(() =>
       roleList.evaluate((node) => ({
         scrolls: node.scrollHeight > node.clientHeight + 1,
-        bounded: node.clientHeight <= 300,
+        // 共通の行リストの高さ（md 未満 17.5rem・md 以上 28rem。#4636）。
+        bounded:
+          node.clientHeight <=
+          (window.innerWidth >= 768 ? 28 : 17.5) * Number.parseFloat(getComputedStyle(document.documentElement).fontSize) + 1,
       }))
     )
     .toEqual({ scrolls: true, bounded: true });
@@ -6122,10 +6126,12 @@ test("DeepSec は版管理 SQL を読み取り専用で順次適用し、検証�
         window.getComputedStyle(document.documentElement).fontSize
       ),
       scrollHeight: node.scrollHeight,
+      wide: window.innerWidth >= 768,
     };
   });
+  // 共通の行リストの高さ（md 未満 17.5rem・md 以上 28rem。#4636）。
   expect(verificationScrollState.maxHeight).toBeCloseTo(
-    23.25 * verificationScrollState.rootFontSize,
+    (verificationScrollState.wide ? 28 : 17.5) * verificationScrollState.rootFontSize,
     0
   );
   expect(verificationScrollState.clientHeight).toBeLessThanOrEqual(

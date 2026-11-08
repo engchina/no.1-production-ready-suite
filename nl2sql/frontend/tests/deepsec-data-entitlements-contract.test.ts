@@ -32,8 +32,8 @@ const objectPicker = sliceBetween(
 
 test("DeepSec 対象ロール list は 5 行相当の固定高 scroll container を使う", () => {
   assert.match(entitlementsPanel, /data-testid="security-deepsec-entitlement-roles"/u);
-  assert.match(entitlementsPanel, /max-h-\[17\.5rem\]/u);
-  assert.match(entitlementsPanel, /overflow-auto/u);
+  // 高さは共通の行リストの定数（手書きの max-h にしない。#4636）。
+  assert.match(entitlementsPanel, /className=\{`grid gap-1\.5 \$\{INFORMATION_LIST_SCROLL_CLASS\}`\}[\s\S]*data-testid="security-deepsec-entitlement-roles"/u);
   assert.doesNotMatch(entitlementsPanel, /max-h-\[30rem\]/u);
 });
 
@@ -44,7 +44,7 @@ test("DeepSec 検証結果は 5 件相当の最大高で縦スクロールする
   );
   assert.match(
     entitlementsPanel,
-    /className="grid max-h-\[23\.25rem\] gap-2 overflow-y-auto overscroll-contain[^"]*"[\s\S]*data-testid="security-deepsec-verification-results"/u
+    /className=\{`grid gap-2 \$\{INFORMATION_LIST_SCROLL_CLASS\} \$\{INFORMATION_TABLE_FOCUS_CLASS\}`\}[\s\S]*data-testid="security-deepsec-verification-results"/u
   );
   assert.match(entitlementsPanel, /className="flex min-h-\[4\.25rem\] items-start/u);
 });
@@ -195,7 +195,7 @@ test("DeepSec 許可列は一括選択バーと明示的な余白を持つ", () 
     /data-testid=\{`security-deepsec-entitlement-columns-grid-\$\{index\}`\}/u
   );
   assert.match(entitlementsPanel, /className="mt-1 flex min-w-0 justify-start"/u);
-  assert.match(entitlementsPanel, /className="mt-1 grid max-h-48 gap-2 overflow-auto/u);
+  assert.match(entitlementsPanel, /className=\{`mt-1 grid gap-2 rounded-md border border-border bg-surface-sunken p-2 sm:grid-cols-2 xl:grid-cols-3 \$\{INFORMATION_LIST_SCROLL_CLASS\}`\}/u);
   assert.match(pageSource, /useLayoutEffect\(\(\) => \{[\s\S]*pendingEntitlementScrollPositionsRef/u);
   assert.match(pageSource, /data-entitlement-scroll-container/u);
   assert.match(

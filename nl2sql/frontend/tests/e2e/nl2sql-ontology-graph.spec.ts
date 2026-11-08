@@ -882,7 +882,8 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
   await expect(details).toBeVisible();
   await expect(details.getByRole("heading", { name: "ER 詳細" })).toBeVisible();
   await expect(details.getByTestId("ontology-er-detail-object-name")).toContainText("ADMIN.EMPLOYEE");
-  await expect(details).toContainText("列 4");
+  // 列の件数は表の上のツールバーの ListCount（見出しのバッジにしない。#4636）。
+  await expect(details.getByTestId("ontology-er-columns-toolbar")).toContainText("全 4 件");
 
   const columns = details.getByTestId("ontology-er-columns");
   await expect(columns).toContainText("EMPLOYEE_ID");
@@ -1384,7 +1385,7 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
       profile_id: "default",
       profile_view_id: "v",
       ontology_revision_id: "rev1",
-      hits: Array.from({ length: 8 }, (_, index) => ({
+      hits: Array.from({ length: 12 }, (_, index) => ({
         node: {
           id: `hit-${index + 1}`,
           kind: index < 2 ? "business_entity" : "column",
@@ -1410,29 +1411,29 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
   await playground.getByTestId("ontology-playground-question").fill("従業員");
   await playground.getByTestId("ontology-playground-server-search").click();
 
-  const hits = playground.getByTestId("ontology-playground-server-hits");
-  await expect(hits.locator("li")).toHaveCount(8);
-  // 関係一覧と同じ標準: max-h-80(20rem) + overflow-y-auto でリスト内スクロール
+  const hitList = playground.getByTestId("ontology-playground-server-hits");
+  await expect(hitList.locator("li")).toHaveCount(12);
+  // 共通の行リストの高さ（ListScrollRegion。md 未満 17.5rem・md 以上 28rem）で、一覧の中だけをスクロールする（#4636）。
+  const hits = hitList.locator("xpath=ancestor::*[@data-list-scroll-region][1]");
   const metrics = await hits.evaluate((el) => ({
     clientHeight: el.clientHeight,
     scrollHeight: el.scrollHeight,
     overflowY: getComputedStyle(el).overflowY,
     maxHeightPx: Number.parseFloat(getComputedStyle(el).maxHeight),
     remPx: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+    wide: innerWidth >= 768,
   }));
   expect(metrics.overflowY).toBe("auto");
-  // max-h-80 = 20rem(root font-size 14px なら 280px)
-  expect(metrics.maxHeightPx).toBeCloseTo(20 * metrics.remPx, 0);
+  expect(metrics.maxHeightPx).toBeCloseTo((metrics.wide ? 28 : 17.5) * metrics.remPx, 0);
   expect(metrics.clientHeight).toBeLessThanOrEqual(metrics.maxHeightPx + 1);
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
   await hits.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
   });
   expect(await hits.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  // 見出しとヒット件数バッジはスクロール外で常時見える
-  await expect(
-    playground.getByTestId("ontology-playground-server-result").getByText("8 件ヒット")
-  ).toBeVisible();
+  // 見出しと件数（ツールバーの ListCount）はスクロール外で常時見える
+  await expect(playground.getByTestId("ontology-playground-server-hits-toolbar")).toContainText("全 12 件");
+  await expect(playground.getByTestId("ontology-playground-server-hits-toolbar")).toBeVisible();
   expect(invalidCoordinates).toEqual([]);
   const expand = playground.getByRole("button", { name: "グラフを表示", exact: true });
   if (await expand.isVisible()) {
