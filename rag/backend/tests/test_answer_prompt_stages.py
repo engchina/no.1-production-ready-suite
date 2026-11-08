@@ -355,6 +355,9 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
             if identity in {
                 ("audit", "compactRule"),
                 ("picture_description", "rules"),
+                # 周辺の入力があるときだけ対象の指示（Step 6）の後ろに足す小節。
+                ("picture_description", "contextImage"),
+                ("picture_description", "contextRecords"),
                 ("generation", "evidenceReading"),
                 ("generation", "guideRules"),
             }:

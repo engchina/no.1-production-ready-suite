@@ -68,7 +68,7 @@ class OutputContractTests(unittest.TestCase):
 
     def test_rules_give_visual_criteria_and_unknown_for_kind(self) -> None:
         rules = vision_extraction_rules()
-        self.assertIn("name / value / state / kind", rules)
+        self.assertIn("form_fields の kind は画像で見える部品の形だけで決める", rules)
         self.assertIn("unknown にし、項目名や値から推測しない", rules)
 
     def test_saved_json_is_preserved_and_fixed_contract_defines_kind(self) -> None:

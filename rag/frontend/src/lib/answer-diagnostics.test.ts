@@ -10,6 +10,37 @@ import {
 } from "./answer-diagnostics";
 
 describe("parseAnswerDiagnostics", () => {
+  describe("縮退した工程（degraded_steps）", () => {
+    const steps = (value: unknown) => parseAnswerDiagnostics({ degraded_steps: value })?.degradedSteps;
+
+    it("工程の種類を利用者向けの名前にし、同じ工程は 1 行にまとめる", () => {
+      expect(
+        steps([
+          { kind: "query_embedding", count: 1, exc_type: "SyntheticError" },
+          { kind: "rerank", count: 2, exc_type: "SyntheticError" },
+          { kind: "rerank", count: 1, exc_type: "TimeoutError" },
+        ]),
+      ).toEqual(["質問のベクトル化", "根拠の並べ替え"]);
+    });
+
+    it("未知の種類は汎用の名前にまとめ、識別子と例外の型の名前を出さない", () => {
+      const labels = steps([
+        { kind: "future_step_a", count: 1, exc_type: "SyntheticError" },
+        { kind: "future_step_b", count: 1, exc_type: "SyntheticError" },
+        { kind: "constructor", count: 1, exc_type: "SyntheticError" },
+      ]);
+      expect(labels).toEqual(["その他の補助の処理"]);
+      expect(JSON.stringify(labels)).not.toMatch(/future_step|constructor|SyntheticError/);
+    });
+
+    it("記録が無い・壊れているときは空にする", () => {
+      expect(parseAnswerDiagnostics({})?.degradedSteps).toEqual([]);
+      expect(steps([])).toEqual([]);
+      expect(steps("query_embedding")).toEqual([]);
+      expect(steps([null, "rerank", 1, {}, { kind: "" }, { kind: 1 }])).toEqual([]);
+    });
+  });
+
   it("回答フローの診断を表示用に正規化する", () => {
     const parsed = parseAnswerDiagnostics({
       confidence: "high",

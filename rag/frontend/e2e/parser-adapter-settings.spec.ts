@@ -1697,7 +1697,7 @@ test("章節の要約は実効の対象数上限を示し不要な比較文を�
 test("画像の自然言語指示は保存・再読込でき、出力契約は読み取り専用", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
   await mockExtractionFields(page);
-  const parts = [["system", "システムプロンプト"], ["picture", "図・画像を読むときの対象の指示"], ["table", "表を読むときの対象の指示"], ["rules", "共通の読み取り指示"]] as const;
+  const parts = [["system", "システムプロンプト"], ["picture", "図・画像を読むときの対象の指示"], ["table", "表を読むときの対象の指示"], ["rules", "共通の読み取り指示"], ["contextImage", "周辺の画像があるときに足す指示"], ["contextRecords", "前後の記録や見出しがあるときに足す指示"]] as const;
   const saved = new Map<string, string>();
   const requests: string[] = [];
   const builtin = "## Step 1: 合成の既定指示";

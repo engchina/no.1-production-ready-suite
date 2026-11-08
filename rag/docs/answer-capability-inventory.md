@@ -141,7 +141,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 ## `degraded_steps` の処理の種類
 
-`DS` に出る処理の種類（`kind`）の一覧。コードの `record_degraded("…")`・`report_degraded("…")` と一致させる（`rag/backend/tests/test_answer_capability_inventory.py` が確かめ、種類を足したらこの表に足すまで失敗する）。
+`DS` に出る処理の種類（`kind`）の一覧。コードの `record_degraded("…")`・`report_degraded("…")` と一致させる（`rag/backend/tests/test_answer_capability_inventory.py` が確かめ、種類を足したらこの表に足すまで失敗する）。回答の処理の詳細には工程の名前だけを出す（`rag/frontend/src/lib/i18n.ts` の `search.answerDetails.degraded.step.<kind>`。種類を足したら名前も足すまで同じテストが失敗する。#4681）。
 
 | kind | 処理 | 記録する箇所 |
 |---|---|---|
