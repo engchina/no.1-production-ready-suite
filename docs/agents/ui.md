@@ -58,7 +58,7 @@
 3 製品で NL2SQL の基準にそろえ、新しい一覧は NL2SQL の同種の画面を見本にする。部品と定数は components-reference.md「読み込み中と一覧の表示密度」、一覧の型と例外は `page-archetypes.md`「一覧の型と、基準から外す例外」。
 
 - **読み込み中**: 領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を 1 か所だけ出し、領域は内容の形の `Skeleton` で覆う。文字だけの「読み込み中…」・空白・画面全体のスピナーは使わない。再読み込みは前の内容を出したまま、ボタンの `loading` で示す（`messaging.md` §3.6）。
-- **一覧**: `DataTable` の `stickyHeader` と `visibleRows`（共通の定数）で表の中を縦スクロールにし、製品で行数・高さを書かない。
+- **一覧**: `DataTable` の `stickyHeader` と `visibleRows`（共通の定数）で表の中を縦スクロールにし、製品で行数・高さを書かない。表ではない行リストは `ListScrollRegion`（高い行は `size="card"`）。詳細・評価・サイドの領域の中の小さな一覧も同じ。会話・実行の詳細の流れの中で増えるブロックは入れ子のスクロールにせず `useCollapsedList`（10 件を超えたら畳む）。lint が高さの無い `DataTable` と行リストの手書きの `max-h-*` を止める（#4636）。
 - **件数**: 一覧の件数は `ListToolbar` の `count`（`ListCount`。「全 N 件」/「N 件（全 M 件）」）1 か所。1 ページでも出し、見出しのバッジと二重にしない。一覧の検索欄は `ListToolbar` が `lg` で固定する（#1891）。
 - **ページング**: 共通の `Pagination` / `usePagination`（既定 25 件。#1952）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–25 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100。既定 25）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
 - **一覧の絞り込み**は `SearchField`（検索ボタンを置かない）。重い検索（LLM・ベクトル検索・SQL の生成）は `type="search"` にせず、ボタンと Enter（`isSubmitEnter`）で実行する（`page-archetypes.md`「一覧の絞り込みの検索」）。

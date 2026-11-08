@@ -207,6 +207,9 @@ test("深いリランク要求とSDKの親子を一覧内でたどれ、保存�
   await expect(turn.getByTestId("chat-progress-step-rank-b-sdk")).toBeVisible();
 
   async function verify() {
+    // 段が 10 を超えると畳む（実行中は最新の段、終わった後は先頭の段を残す）ので、全部の段を開いてから確かめる（#4636）。
+    const expand = turn.getByTestId("chat-progress-timeline-collapse-toggle");
+    if ((await expand.getAttribute("aria-expanded")) === "false") await expand.click();
     const request = turn.getByTestId("chat-progress-step-rank-a");
     const sdk = turn.getByTestId("chat-progress-step-rank-a-sdk");
     await expect(request).toHaveAttribute("data-level", "6");
