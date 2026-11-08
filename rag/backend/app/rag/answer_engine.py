@@ -428,6 +428,8 @@ class _SearchState:
     # 失敗して空のまま続けた補助の処理(#3259。``DegradedSteps``)。回答エンジンの前の段の失敗も
     # 同じ記録に入る(#3286)。
     degraded: DegradedSteps = field(default_factory=DegradedSteps, repr=False, compare=False)
+    # 質問の embedding の失敗(#4663)。1 回の回答の中で呼び直さず、以後の検索を全文のみにする。
+    query_embedding_failed: bool = False
 
     def record_degraded(self, kind: str, exc: BaseException) -> None:
         """補助の処理 ``kind`` が ``exc`` で失敗し、空のまま続けたことを数える(#3259)。"""
@@ -1396,7 +1398,9 @@ class AnswerEngine:
         生成は行わず、LLM を呼ばない(embedding と Oracle の検索だけ)。KB の検索テストとレシピの
         検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
         """
-        state = _SearchState()
+        state = _SearchState(
+            degraded=self._degraded if self._degraded is not None else DegradedSteps()
+        )
         # 主検索と同じ基準日で読む(#2602。この経路は拡張しないが、条件の決め方をそろえる)。
         request = _with_effective_as_of(request)
         with read_lobs_as_values():
@@ -1618,12 +1622,16 @@ class AnswerEngine:
             for query in queries
         }
         vector_queries = [q for q in queries if channels[q] != ("keyword",)]
-        embedded = (
-            await self._genai.embed(vector_queries, input_type="SEARCH_QUERY")
-            if vector_queries
-            else []
-        )
-        embeddings = dict(zip(vector_queries, embedded, strict=True))
+        embedded = await self._query_embeddings(state, vector_queries) if vector_queries else []
+        embeddings: dict[str, list[float]] = {}
+        if embedded is None:
+            # 全文を使う検索文だけを全文のみで検索する(ベクトルのみの検索文は全文に使わない)。
+            channels = {
+                query: ("keyword",) if {"hybrid", "keyword"} & set(used) else ()
+                for query, used in channels.items()
+            }
+        else:
+            embeddings = dict(zip(vector_queries, embedded, strict=True))
         k = float(self._settings.rag_rrf_k)
         from rag_engine.retrieval.weighted_rrf import (
             RankedList,
@@ -1733,7 +1741,10 @@ class AnswerEngine:
                 }
             )
             observation.display(details=details)
-            observation.response(fusion.diagnostics(weights, budgets, k))
+            response = fusion.diagnostics(weights, budgets, k)
+            if state.query_embedding_failed:
+                response = {**response, "回答内の縮退記録（累計）": state.degraded_steps()}
+            observation.response(response)
             if raw_lists and all(r.status == "failed" for r in raw_lists):
                 observation.display(params={"status": "failed"})
                 raise RuntimeError("すべての検索一覧の取得に失敗しました。")
@@ -2476,20 +2487,39 @@ class AnswerEngine:
             return
         await self._ensure_search_filters(request, state)
         assert state.filters is not None
-        embeddings = await self._genai.embed([text], input_type="SEARCH_QUERY")
-        if not embeddings:
+        embeddings = await self._query_embeddings(state, [text])
+        if embeddings == []:
             return
-        await self._query_hits(
-            state,
-            [(text, embeddings[0], SearchMode.HYBRID)]
-            if self._settings.rag_hybrid_search_backend == "oracle_native"
-            else [
+        searches: list[tuple[str, list[float], SearchMode]]
+        if embeddings is None:
+            searches = [(text, [], SearchMode.KEYWORD)]
+        elif self._settings.rag_hybrid_search_backend == "oracle_native":
+            searches = [(text, embeddings[0], SearchMode.HYBRID)]
+        else:
+            searches = [
                 (text, embeddings[0], SearchMode.VECTOR),
                 (text, embeddings[0], SearchMode.KEYWORD),
-            ],
+            ]
+        await self._query_hits(
+            state,
+            searches,
             candidate_limit=self._read_depth(candidate_limit),
             filters=dict(state.filters),
         )
+
+    async def _query_embeddings(
+        self, state: _SearchState, texts: list[str]
+    ) -> list[list[float]] | None:
+        """検索文の embedding。失敗したら記録して ``None`` を返し、同じ回答の中では呼び直さない。"""
+        if state.query_embedding_failed:
+            return None
+        try:
+            return await self._genai.embed(texts, input_type="SEARCH_QUERY")
+        except Exception as exc:  # noqa: BLE001 - 全文のみの検索へ縮退する(#4663)。
+            logger.warning("rag_query_embedding_failed", exc_info=True)
+            state.record_degraded("query_embedding", exc)
+            state.query_embedding_failed = True
+            return None
 
     def _read_depth(self, candidate_limit: int) -> int:
         """検索文ごとの取得上限。融合後の候補数・多様化の有無・起点数とは独立。"""
