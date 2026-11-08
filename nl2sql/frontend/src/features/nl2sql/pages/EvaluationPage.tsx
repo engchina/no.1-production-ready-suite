@@ -1260,6 +1260,8 @@ function EngineSummaryCard({ summary }: { summary: QualityEvaluationEngineSummar
 function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
   return (
     <>
+      {/* 高さは固定の 30.5rem（className。page-archetypes.md の例外「LLM 判定の結果明細」。#4636）。 */}
+      {/* oxlint-disable-next-line design-system/list-height -- 固定の高さの例外（className の max-h） */}
       <DataTable
         columns={[
           {
@@ -1324,6 +1326,8 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
         scrollTestId="quality-evaluation-results-table"
         stickyHeader
       />
+      {/* 結果明細の md 未満のカード（同じ例外の固定の高さ）。 */}
+      {/* oxlint-disable-next-line design-system/list-height -- 固定の高さの例外（LLM 判定の結果明細） */}
       <div
         className="grid max-h-[37.5rem] min-w-0 gap-3 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:hidden"
         role="region"

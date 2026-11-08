@@ -3,17 +3,5 @@
   // 共通のシステム設定・ユーザー / ロール管理の画面にも、3 製品と同じデザインシステム遵守ルールを掛ける（#1891）。
   // ルールと JS プラグインの正本は platform の docs/design-system/adherence.oxlintrc.json / design-system-plugin.mjs。
   // コピーせず相対パスで参照する（platform AGENTS.md「lint」節）。
-  "extends": ["../../docs/design-system/adherence.oxlintrc.json"],
-  "overrides": [
-    {
-      // ユーザー管理・ロール管理・権限管理は #4635 で画面の構成を作り直している最中なので、一覧の高さの規則
-      // （design-system/list-height。#4636）を #4635 の merge まで外す。#4635 で一覧を作り直すときにこの override を消す。
-      "files": [
-        "src/users-roles/UserManagementPage.tsx",
-        "src/users-roles/RoleManagementPage.tsx",
-        "src/permissions/RolePermissionsPage.tsx"
-      ],
-      "rules": { "design-system/list-height": "off" }
-    }
-  ]
+  "extends": ["../../docs/design-system/adherence.oxlintrc.json"]
 }

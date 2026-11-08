@@ -1,4 +1,4 @@
-import { DataTable, StatusBadge } from "@production-ready/ui";
+import { DataTable, StatusBadge, INFORMATION_TABLE_VISIBLE_ROWS } from "@production-ready/ui";
 
 import type { CalibrationErrorType, CalibrationProgress } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -25,7 +25,7 @@ export function ProgressTable({
   );
   return (
     <div className="grid min-w-0 gap-3" data-testid={testId}>
-      <DataTable
+      <DataTable visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
         ariaLabel={title}
         rows={progress.aspects}
         getRowKey={(row) => row.aspect}

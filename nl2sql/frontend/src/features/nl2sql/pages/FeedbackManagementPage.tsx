@@ -2006,6 +2006,8 @@ function FeedbackHistoryList({
   onSelect: (id: string) => void;
 }) {
   return (
+    // 一覧 + 詳細（ListDetailLayout）の一覧の列の表で、高さは列の残りの高さ（page-archetypes.md の例外。#4636）。
+    // oxlint-disable-next-line design-system/list-height -- 一覧 + 詳細の一覧の列（高さは列が決める）
     <DataTable<FeedbackRecord>
       columns={[
         {
