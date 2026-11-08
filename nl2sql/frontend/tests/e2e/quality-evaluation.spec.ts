@@ -810,7 +810,7 @@ test("desktop constrains result details and recent jobs to internal scroll regio
   await mockQualityApi(page, {
     fixedStatus: "completed_with_errors",
     resultItems: repeatedResults(12),
-    recentJobs: repeatedJobs(5),
+    recentJobs: repeatedJobs(8),
   });
   await page.goto("/evaluation?job=job-001");
 
@@ -860,7 +860,7 @@ test("desktop constrains result details and recent jobs to internal scroll regio
     "aria-label",
     "最近の SQL生成評価 job 一覧。必要に応じて縦方向にスクロールできます。"
   );
-  await expect(recentRegion.locator("article")).toHaveCount(5);
+  await expect(recentRegion.locator("article")).toHaveCount(8);
   const recentMetrics = await recentRegion.evaluate((node) => {
     const computed = window.getComputedStyle(node);
     const rootFontSize = Number.parseFloat(
@@ -871,7 +871,8 @@ test("desktop constrains result details and recent jobs to internal scroll regio
       scrollHeight: node.scrollHeight,
       maxHeight: Number.parseFloat(computed.maxHeight),
       overflowY: computed.overflowY,
-      expectedMaxHeight: rootFontSize * 17.5,
+      // 共通の行リストの高さ（INFORMATION_LIST_SCROLL_CLASS。md 未満 17.5rem・md 以上 28rem。#4636）。
+      expectedMaxHeight: rootFontSize * (window.innerWidth >= 768 ? 28 : 17.5),
     };
   });
   expect(recentMetrics.maxHeight).toBeGreaterThanOrEqual(

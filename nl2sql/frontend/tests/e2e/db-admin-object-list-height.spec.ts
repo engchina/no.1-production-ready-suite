@@ -1086,18 +1086,19 @@ for (const scenario of scenarios) {
   );
 
   test(
-    `${scenario.title}の列情報は詳細と一緒にページでスクロールし、入れ子の縦スクロールを持たない`, { tag: "@responsive" },
+    `${scenario.title}の列情報は件数をツールバーに出し、表頭を固定して表の中でスクロールする（ページを伸ばさない。#4636）`, { tag: "@responsive" },
     async ({ page }) => {
       await mockObjectManagementApi(page, scenario, { columnCount: 30 });
       await page.goto(`${scenario.path}?${scenario.objectType}=APP.${scenario.prefix}_01`);
 
       const detailColumns = page.getByTestId("db-admin-detail-columns");
       await expect(detailColumns.locator("tbody tr")).toHaveCount(30);
-      const scrollState = await detailColumns.evaluate((node) => ({
-        scrollHeight: node.scrollHeight,
-        clientHeight: node.clientHeight,
-      }));
-      expect(scrollState.scrollHeight).toBeLessThanOrEqual(scrollState.clientHeight + 1);
+      await expect(page.getByTestId("db-admin-detail-columns-toolbar")).toContainText("全 30 件");
+      // 30 列は 8 行（md 未満 5 行）を超えるので、表の中だけが縦にスクロールする。
+      await expect
+        .poll(() => detailColumns.evaluate((node) => node.scrollHeight - node.clientHeight))
+        .toBeGreaterThan(0);
+      expect(await detailColumns.evaluate((node) => getComputedStyle(node).overflowY)).toBe("auto");
       await expectNoHorizontalScroll(page);
     }
   );
