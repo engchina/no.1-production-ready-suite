@@ -648,19 +648,32 @@ install_wallet() {
   find "${WALLET_DIR}" -type f -exec chmod 0600 {} \;
 }
 
+# uv の venv を lock どおりに同期する。先に uv の cache だけで同期し（--offline）、cache に足りない依存があるときだけ
+# 配布元から取得する。uv は直接の URL の依存（spaCy のモデルの wheel など）を、cache にあっても配布元に確かめ直すため、
+# 配布元が応答しないと、依存の変わらない再配備でも失敗する（#4647）。
+sync_uv_venv() {
+  local dir="$1"
+  shift
+  if retry_command 1 run_as_app_user_in_dir "${dir}" "uv $* --offline"; then
+    return 0
+  fi
+  log "Some dependencies are not in the uv cache. Fetching them for ${dir}."
+  retry_command 3 run_as_app_user_in_dir "${dir}" "uv $*"
+}
+
 # backend と前処理 / parser の venv をサービスごとに作る（uv の lock どおり。Python 3.12）。
 install_service_venvs() {
   local service dir model_command
   local sync_args=()
 
   log "Installing backend dependencies with uv."
-  retry_command 3 run_as_app_user_in_dir "${BACKEND_DIR}" "uv sync --locked --no-dev --python ${RAG_PYTHON_VERSION}"
+  sync_uv_venv "${BACKEND_DIR}" "sync --locked --no-dev --python ${RAG_PYTHON_VERSION}"
 
   for service in "${RAG_SERVICES[@]}"; do
     dir="${APP_REPO_DIR}/$(rag_service_dir "${service}")"
     mapfile -t sync_args < <(rag_uv_sync_args "${service}")
     log "Installing ${service} dependencies with uv."
-    retry_command 3 run_as_app_user_in_dir "${dir}" "uv ${sync_args[*]}"
+    sync_uv_venv "${dir}" "${sync_args[*]}"
     model_command="$(rag_service_model_command "${service}")"
     if [ -n "${model_command}" ] && ! retry_command 3 run_as_service_user_in_dir "${dir}" "${model_command}"; then
       log "WARNING: ${service} could not download and verify its models now. Run the deployment again (platform/deploy/suite-update.sh)."

@@ -76,6 +76,10 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 「運用設定 › サービス管理」画面から起動 / 停止する。Docker は使わない。unit の定義は本番の `init_script.sh` と共通
 （[`scripts/rag-systemd.sh`](../scripts/rag-systemd.sh)）。
 
+配備（`init_script.sh`）は各 venv を先に uv の cache だけで同期し（`--offline`）、cache に足りない依存があるときだけ
+配布元から取得する。直接の URL の依存（parser-unstructured の spaCy のモデルの wheel）は、cache にあっても uv が配布元に
+確かめ直すため、配布元が応答しない間も依存の変わらない再配備が失敗しないようにしている（#4647）。
+
 | サービス | ディレクトリ | port |
 |---|---|---|
 | preprocess-office-to-pdf / csv-to-jsonl / excel-to-jsonl | `services/preprocess/<name>` | 18010・18012・18013 |

@@ -125,6 +125,10 @@ run_venv_case() (
     local attempts="$1"
     shift
     printf '%s | attempts=%s\n' "$*" "${attempts}" >> "${case_dir}/commands.log"
+    # parser-unstructured だけ uv の cache に足りない依存がある（--offline が失敗する）ことにし、そのときだけ取得することを確かめる。
+    if printf '%s\n' "$*" | grep -q 'services/parsers/unstructured uv sync .* --offline$'; then
+      return 1
+    fi
     # docling のモデル取得は失敗させ、配備が止まらないことを確かめる。
     if printf '%s\n' "$*" | grep -q '.venv/bin/python -m rag_engine.resources.docling_models'; then
       return 1
@@ -356,14 +360,22 @@ test "$(cat "${TEST_TMP_DIR}/degraded/ready")" = "false" || fail "schema 初期�
 run_venv_case
 venv_commands="${TEST_TMP_DIR}/venvs/commands.log"
 rag_dir="${TEST_TMP_DIR}/venvs/app/no.1-production-ready-suite/rag"
-grep -Fq "run_as_app_user_in_dir ${rag_dir}/backend uv sync --locked --no-dev --python 3.12 | attempts=3" "${venv_commands}" \
-  || fail "backend の venv を uv sync --locked --no-dev --python 3.12 で作っていない"
-grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/docling uv sync --locked --no-dev --python 3.12 | attempts=3" "${venv_commands}" \
+# 先に uv の cache だけで同期し（--offline。1 回）、cache に足りないときだけ配布元から取得する（3 回まで。#4647）。
+sync_cmd="uv sync --locked --no-dev --python 3.12"
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/backend ${sync_cmd} --offline | attempts=1" "${venv_commands}" \
+  || fail "backend の venv を先に uv の cache だけで（--offline）同期していない"
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/docling ${sync_cmd} --offline | attempts=1" "${venv_commands}" \
   || fail "parser-docling の venv をサービスのディレクトリで作っていない"
-grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/unstructured uv sync --locked --no-dev --python 3.12 | attempts=3" "${venv_commands}" \
-  || fail "parser-unstructured の venv をサービスのディレクトリで作っていない"
-grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/preprocess/office_to_pdf uv sync --locked --no-dev --python 3.12 | attempts=3" "${venv_commands}" \
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/preprocess/office_to_pdf ${sync_cmd} --offline | attempts=1" "${venv_commands}" \
   || fail "preprocess-office-to-pdf の venv をサービスのディレクトリで作っていない"
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/backend ${sync_cmd} | attempts=3" "${venv_commands}" \
+  && fail "uv の cache で同期できた backend の venv でも配布元から取得している"
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/unstructured ${sync_cmd} --offline | attempts=1" "${venv_commands}" \
+  || fail "parser-unstructured の venv を先に uv の cache だけで同期していない"
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/unstructured ${sync_cmd} | attempts=3" "${venv_commands}" \
+  || fail "uv の cache に足りない parser-unstructured の依存を配布元から取得していない"
+grep -Fq "Some dependencies are not in the uv cache. Fetching them for ${rag_dir}/services/parsers/unstructured." "${TEST_TMP_DIR}/venvs/venvs.log" \
+  || fail "uv の cache に足りず取得することを log に出していない"
 # 取込時の PIIマスクと spaCy の日本語モデルは削除した（#3358）。venv は lock どおりで、追加の取得をしない。
 grep -Eq -- "--inexact|spacy download" "${venv_commands}" && fail "削除した PIIマスクの venv の例外（--inexact・spaCy のモデル）が残っている"
 grep -Fq "run_as_service_user_in_dir ${rag_dir}/services/parsers/docling .venv/bin/python -m rag_engine.resources.docling_models" "${venv_commands}" \
@@ -743,7 +755,7 @@ fi
 if grep -Eq '^\s*(docker|docker-compose)\b|docker-ce|docker-compose-plugin|download\.docker\.com|docker run|docker compose' "${init_script}"; then
   fail "init_script.sh が Docker を入れる、または使っている"
 fi
-grep -Fq 'uv sync --locked --no-dev --python ${RAG_PYTHON_VERSION}' "${init_script}" \
+grep -Fq 'sync_uv_venv "${BACKEND_DIR}" "sync --locked --no-dev --python ${RAG_PYTHON_VERSION}"' "${init_script}" \
   || fail "backend の venv を Python 3.12 の lock どおりに作っていない"
 # Nginx の既定の上限の元（suite-init.sh の既定値）は backend の max_upload_bytes の既定値と同じ（#1316）。
 grep -Fq 'RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200' "${REPO_DIR}/../platform/deploy/suite-init.sh" \
