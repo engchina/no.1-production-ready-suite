@@ -767,7 +767,7 @@ def test_generated_answer_format_reaches_saved_chat_response(monkeypatch: Monkey
 
 
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:
-    """チャットの画面は top_k を送らず、RAG 検索と同じ既定(50)で検索する。上限は 100(#3512)。"""
+    """チャットの画面は top_k を送らず、RAG 検索と同じ既定(30)で検索する。上限は 100(#3512)。"""
     fake = FakeChatOracle()
     _chat_conversation(fake, "conv-k")
     _stub_stream(monkeypatch, fake, ["m1"])
@@ -778,7 +778,7 @@ def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: Monk
     assert client.post(url, json={"content": "質問 B", "top_k": 100}).status_code == 200
     assert client.post(url, json={"content": "質問 C", "top_k": 101}).status_code == 422
 
-    assert SEARCH_TOP_K_DEFAULT == 50
+    assert SEARCH_TOP_K_DEFAULT == 30
     assert _FakePipeline.top_ks == [SEARCH_TOP_K_DEFAULT, 100]
 
 

@@ -336,7 +336,7 @@ EVIDENCE_TEXT_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
 # rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
-# top_k の既定。#3512 で 50）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
+# top_k の既定 30）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
 # rag_search は回答に使った根拠が先に並ぶので 12 のまま。返す本文の合計は
 # EVIDENCE_TEXT_BUDGET_TOKENS で抑える。
 RETRIEVE_EVIDENCE_LIMIT_DEFAULT = min(SEARCH_TOP_K_DEFAULT, EVIDENCE_LIMIT_MAX)

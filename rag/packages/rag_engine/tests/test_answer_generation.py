@@ -1553,10 +1553,10 @@ class AnswerGenerationTests(unittest.TestCase):
         final_prompt = parse.call_args.args[1]
         self.assertIn("reranked answer", result.answer)
         self.assertEqual(search.call_args.kwargs["retrieval_queries"], ("needle",))
-        self.assertEqual(search.call_args.kwargs["candidate_limit"], 1000)
+        self.assertEqual(search.call_args.kwargs["candidate_limit"], 140)
         self.assertEqual(rerank.call_args.args[0], "needle")
         self.assertEqual(result.retrieval_query_plan["vector_queries"], ["needle"])
-        self.assertEqual(result.retrieval_query_plan["candidate_limit"], 1000)
+        self.assertEqual(result.retrieval_query_plan["candidate_limit"], 140)
         self.assertEqual(result.rerank_scores[0]["relevance_score"], 0.94)
         # 候補の選択順位と、同じ資料をモデルへ読ませる原文順は区別する。
         self.assertEqual(max(result.rerank_scores, key=lambda row: row["relevance_score"])["id"], "chunk-docling-c000002")
@@ -1821,7 +1821,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(plan["text_search_tokens"], ["拠点名", "拠点", "変更"])
         self.assertTrue(plan["text_search_tokenization_traces"][0]["truncated"])
         self.assertEqual(plan["text_search_tokenization_traces"][0]["truncated_tokens"], ["方法"])
-        self.assertEqual(plan["candidate_limit"], 1000)
+        self.assertEqual(plan["candidate_limit"], 140)
         self.assertNotIn("Intent Classification", result.question_display)
         self.assertNotIn("NLUタスク", result.question_display)
         ordered_sections = [

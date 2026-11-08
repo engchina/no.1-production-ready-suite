@@ -1946,7 +1946,7 @@ def test_retrieve_evidence_returns_all_retrieved_anchors_by_default(
     assert body["evidence_omitted"] == 12
     # 既定は検索する件数（top_k の既定）と同じ。
     assert SearchRequest(query="q").top_k == mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT
-    assert mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT == SEARCH_TOP_K_DEFAULT == 50
+    assert mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT == SEARCH_TOP_K_DEFAULT == 30
     assert captured[0].top_k == mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT
 
 

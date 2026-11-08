@@ -64,10 +64,10 @@ type AnsweringDraft = Omit<
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
-    retrieval_query_limit: settings.retrieval_query_limit ?? 300,
-    rerank_top_n: settings.rerank_top_n ?? 300,
+    retrieval_query_limit: settings.retrieval_query_limit ?? 60,
+    rerank_top_n: settings.rerank_top_n ?? 60,
     min_similarity: settings.min_similarity ?? 0.2,
-    rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.2,
+    rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.3,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
     rrf_method_ratio: settings.rrf_method_ratio ?? [7, 3],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
