@@ -187,7 +187,7 @@ def test_upload_ingest_search_flow() -> None:
     assert ingest_resp.status_code == 200
     indexed = ingest_resp.json()["data"]
     assert indexed["status"] == "INDEXED"
-    assert indexed["extraction"] == {}
+    assert "extraction" not in indexed  # 抽出はレシピの層(#4617)
     extraction = asyncio.run(_recipe_extraction(OracleClient(), document_id))
     assert "部門長の承認" in extraction["raw_text"]
     assert extraction["elements"]
