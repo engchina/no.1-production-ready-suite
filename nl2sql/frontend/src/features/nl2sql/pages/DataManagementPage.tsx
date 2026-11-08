@@ -68,6 +68,7 @@ import {
 import {
   DbManagementLoadingSkeleton,
   DropDbObjectDialog,
+  DbObjectDetailActionRow,
   DbObjectListDetail,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
@@ -1530,21 +1531,21 @@ function PreviewResultsPanel({
       aria-labelledby="data-preview-detail-heading"
       data-testid="data-preview-detail"
     >
-      <div
-        className="flex flex-wrap items-center justify-end gap-3"
-        data-testid="data-preview-detail-header"
-      >
-        {/* 見える見出しは PageHeader の対象名（種類・行数・コメントもそこ。#4645）。 */}
-        <h2 id="data-preview-detail-heading" className="sr-only">
-          {selectedObjectName}
-        </h2>
-        <ObjectActionBar
-          actions={previewActions}
-          ariaLabel={t("dataMgmt.preview.actions")}
-          testId="data-preview-results-actions"
-        />
-        {pager}
-      </div>
+      {/* 見える見出しは PageHeader の対象名（種類・行数・コメントもそこ。#4645）。 */}
+      <h2 id="data-preview-detail-heading" className="sr-only">
+        {selectedObjectName}
+      </h2>
+      <DbObjectDetailActionRow
+        testId="data-preview-detail-header"
+        pager={pager}
+        actions={
+          <ObjectActionBar
+            actions={previewActions}
+            ariaLabel={t("dataMgmt.preview.actions")}
+            testId="data-preview-results-actions"
+          />
+        }
+      />
       {/* 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。 */}
       <div className="grid grid-cols-1 gap-3 border-t border-border pt-3" data-testid="data-preview-controls">
         <RowLimitField

@@ -597,6 +597,7 @@ export function ViewManagementPage() {
       />
     ) : null;
 
+  const selectedListItem = viewItems.find((item) => formatDbObjectName(item) === selectedViewName);
   const showingDetail = activeView === "list" && Boolean(selectedViewName);
   /** 一覧の行の操作（詳細の ObjectActionBar と同じ操作。page-archetypes.md §0-6）。 */
   const viewRowActions = (item: DbAdminObjectSummary): EntityAction[] => {
@@ -625,7 +626,8 @@ export function ViewManagementPage() {
       <PageHeader wide
         // 全幅の詳細（#4645）は見出しを対象名にし、種類・列数のバッジとコメントを添える。
         title={showingDetail ? selectedViewName : t("nav.viewManagement")}
-        subtitle={showingDetail ? detail?.comment || undefined : t("viewMgmt.subtitle")}
+        // コメントは一覧の行の値を使い、前へ / 次へで読み込む間も見出しの高さを変えない（押す位置を動かさない）。
+        subtitle={showingDetail ? selectedListItem?.comment || detail?.comment || undefined : t("viewMgmt.subtitle")}
         meta={
           !showingDetail && firstViewPage?.refreshed_at
             ? t("common.schemaRefreshedAt", { date: formatDateTime(firstViewPage.refreshed_at) })

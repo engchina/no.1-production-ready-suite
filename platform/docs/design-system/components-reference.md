@@ -2955,7 +2955,8 @@ const { previous, next } = adjacentListItems(items, selection.selectedId, (item)
 - `useUrlSelection({ param, searchParams, setSearchParams, singlePane })` は `{ selectedId, select, clear, replace }`。`select` は 1 ペインで未選択から選ぶときだけ push、それ以外は replace。`clear` はこの画面で push して入ったなら `history.back()`、URL から直接開いたなら検索パラメータを消して replace。`replace(null)` は削除の後に選択を外す。`packages/ui` は router に依存しないので、`searchParams` / `setSearchParams` は製品が `useSearchParams()` から渡す。
 - `ListDetailPager`（`onPrevious` / `onNext` は無ければ `null`、`testId` で `-previous` / `-next`）と `adjacentListItems(items, selectedKey, getKey)` は、詳細の上端の行と `SideSheet` の `pager` で共有する。
 - 共通のユーザー・ロール・権限管理（`@production-ready/system-settings`）はこの部品を使わず、全幅の一覧 → 全幅のエディタ（A 型。#4635）。開いている対象は `useSecurityEditorSelection`（`users-roles/shared.tsx`。共有の `useUrlSelection` を 1 ペインで使い、`?user=` / `?role=`、`new` は新規作成。「一覧へ戻る」の履歴の戻りは router の `navigate(-1)`）。
-- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）と、一覧の列の高さ（1280px / 1920px で本文がスクロールしない・詳細が長いと列の高さが変わらず見出しの下に貼り付く。`data-management-list-detail.spec.ts` も。判定は `tests/e2e/_helpers/list-detail-fit.ts`。#2330）。
+- NL2SQL のテーブル・ビューの管理とデータの表示（`DbObjectListDetail`）は `layout="single"` / `listVariant="table"` の全幅の一覧 → 全幅の詳細（A 型。#4645）。前へ / 次へは詳細の操作の行の右端（`detail` を関数で渡す）。
+- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`。実ブラウザは、2 ペイン（幅・開閉・↑ / ↓・一覧の列の高さ。1280px / 1920px で本文がスクロールしない・詳細が長いと列の高さが変わらず見出しの下に貼り付く。判定は `tests/e2e/_helpers/list-detail-fit.ts`。#2330）が NL2SQL の `tests/e2e/feedback-management.spec.ts`、`layout="single"` / `listVariant="table"`（全幅の表・戻るとページとフォーカス・前へ / 次へ）が `table-management-list-detail.spec.ts`・`data-management-list-detail.spec.ts`。
 
 ---
 

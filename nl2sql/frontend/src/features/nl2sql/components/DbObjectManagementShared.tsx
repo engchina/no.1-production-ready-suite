@@ -84,7 +84,8 @@ export {
 export function DbObjectCommentText({ id, comment }: { id: string; comment?: string | null }) {
   const text = comment?.trim() || "-";
   return (
-    <span id={id} className="line-clamp-2 break-words text-xs font-normal leading-5 text-fg-muted [overflow-wrap:anywhere]" title={text}>
+    // 区切りの無い長い識別子でも列を押し広げない（break-words は anywhere を打ち消すので使わない。#4645）。
+    <span id={id} className="line-clamp-2 text-xs font-normal leading-5 text-fg-muted [overflow-wrap:anywhere]" title={text}>
       {text}
     </span>
   );
@@ -1193,13 +1194,19 @@ export function DbObjectListDetail({
                       // md 未満は名前の列だけを残し、種類・コメント・行数を名前の下の 1 行に畳む（横にスクロールさせない）。
                       subtitle={
                         narrowSummary.length > 0 ? (
-                          <span id={commentId} className="line-clamp-2 md:hidden" data-testid={`${idPrefix}-row-summary`}>
+                          <span
+                            id={commentId}
+                            className="line-clamp-2 [overflow-wrap:anywhere] md:hidden"
+                            data-testid={`${idPrefix}-row-summary`}
+                          >
                             {narrowSummary.join(" · ")}
                           </span>
                         ) : undefined
                       }
                       current={qualifiedName === selectedName}
                       aria-label={labels.showObject(qualifiedName)}
+                      // 名前の下に畳んだ値（種類・コメント・行数）は、ボタンの読み上げ名の補足として読む。
+                      aria-describedby={narrowSummary.length > 0 ? commentId : undefined}
                       onClick={() => onSelect(qualifiedName)}
                     />
                   );
@@ -1254,7 +1261,8 @@ export function DbObjectListDetail({
                       key: "actions",
                       header: <span className="sr-only">{labels.actions ?? ""}</span>,
                       align: "right",
-                      headerClassName: "w-[3.5rem]",
+                      // 列の幅は固定（table-fixed）なので、タッチ端末の 44px のボタンとセルの余白が収まる幅にする。
+                      headerClassName: "w-[5rem]",
                       className: "align-top",
                       render: (item: DbAdminObjectSummary) => (
                         <RowActionMenu
@@ -1277,7 +1285,8 @@ export function DbObjectListDetail({
             testId={`${idPrefix}-grid`}
             scrollTestId="db-admin-object-list"
             scrollAriaLabel={labels.title}
-            tableClassName="w-full"
+            // 列の幅は表の幅で決め、長い値で表を押し広げない（横にスクロールさせない。#4645）。
+            tableClassName="w-full table-fixed"
             stickyHeader
             visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
             growToViewport
@@ -1325,6 +1334,27 @@ export function DbObjectHeaderBadges({ detail }: { detail: DbAdminObjectDetail }
         />
       )}
     </span>
+  );
+}
+
+/**
+ * 全幅の詳細の操作の行（#4645）。対象の操作（`ObjectActionBar`）は右寄せで折り返し、前へ / 次へは行の右上に固定する。
+ * 読み込み中・失敗（操作が無い）でも前へ / 次へは同じ位置に出る（続けて押しても押す位置が動かない）。
+ */
+export function DbObjectDetailActionRow({
+  actions,
+  pager,
+  testId,
+}: {
+  actions?: ReactNode;
+  pager?: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <div className="flex items-start gap-3" data-testid={testId}>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-3">{actions}</div>
+      {pager ? <div className="shrink-0">{pager}</div> : null}
+    </div>
   );
 }
 
@@ -1393,8 +1423,8 @@ export function DbObjectDetailPanel({
   onExactCount?: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
-  // 読み込み中・失敗の間も前へ / 次へを同じ位置に残す（続けて押せる。押す位置を動かさない）。
-  const pagerRow = pager ? <div className="flex justify-end">{pager}</div> : null;
+  // 読み込み中・失敗の間も前へ / 次へを同じ位置（操作の行の右上）に残す（続けて押せる。押す位置を動かさない）。
+  const pagerRow = pager ? <DbObjectDetailActionRow pager={pager} /> : null;
 
   if (loading) {
     return (
@@ -1465,21 +1495,21 @@ export function DbObjectDetailPanel({
   return (
     // 枠は全幅の詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を作らない）。見出しは PageHeader の対象名。
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId} data-testid={`${idPrefix}-detail`}>
-      <div
-        className="flex flex-wrap items-center justify-end gap-3"
-        data-testid={`${idPrefix}-detail-header`}
-      >
-        {/* 見える見出しは PageHeader の対象名。詳細の領域の名前だけを読み上げる。 */}
-        <h2 id={headingId} className="sr-only">
-          {detailQualifiedName}
-        </h2>
-        <ObjectActionBar
-          actions={detailActions}
-          ariaLabel={`${labels.actions}: ${detailQualifiedName}`}
-          testId={`${idPrefix}-detail-actions`}
-        />
-        {pager}
-      </div>
+      {/* 見える見出しは PageHeader の対象名。詳細の領域の名前だけを読み上げる。 */}
+      <h2 id={headingId} className="sr-only">
+        {detailQualifiedName}
+      </h2>
+      <DbObjectDetailActionRow
+        testId={`${idPrefix}-detail-header`}
+        pager={pager}
+        actions={
+          <ObjectActionBar
+            actions={detailActions}
+            ariaLabel={`${labels.actions}: ${detailQualifiedName}`}
+            testId={`${idPrefix}-detail-actions`}
+          />
+        }
+      />
       {countingRows || exporting ? (
         // 大きな表の COUNT(*) と Excel 出力は数十秒かかる。スピナーは操作の loading が担う（messaging.md §3.7）。
         <ProcessingIndicator
@@ -1610,17 +1640,17 @@ export function DbObjectManagementTabs<T extends string>({
   hidden?: boolean;
 }) {
   // 共有 Tabs に NL2SQL の view 型を渡す adapter。処理中は全タブを無効にする。
-  return (
-    <div hidden={hidden}>
-      <Tabs
-        idPrefix={idPrefix}
-        ariaLabel={ariaLabel}
-        value={activeView}
-        onChange={(id) => onViewChange(id as T)}
-        items={tabs.map((tab) => ({ id: tab.id, label: tab.label, icon: tab.icon, disabled }))}
-      />
-    </div>
+  const tabsNode = (
+    <Tabs
+      idPrefix={idPrefix}
+      ariaLabel={ariaLabel}
+      value={activeView}
+      onChange={(id) => onViewChange(id as T)}
+      items={tabs.map((tab) => ({ id: tab.id, label: tab.label, icon: tab.icon, disabled }))}
+    />
   );
+  // 隠すときだけ包む（ほかの画面の並びを変えない）。
+  return hidden ? <div hidden>{tabsNode}</div> : tabsNode;
 }
 
 export function DropDbObjectDialog({

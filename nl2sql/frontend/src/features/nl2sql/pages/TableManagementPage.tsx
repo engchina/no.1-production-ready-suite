@@ -793,6 +793,7 @@ export function TableManagementPage() {
       />
     ) : null;
 
+  const selectedListItem = tableItems.find((item) => formatDbObjectName(item) === selectedTableName);
   const showingDetail = activeView === "list" && Boolean(selectedTableName);
   /** 一覧の行の操作（詳細の ObjectActionBar と同じ操作。page-archetypes.md §0-6）。 */
   const tableRowActions = (item: DbAdminObjectSummary): EntityAction[] => {
@@ -831,7 +832,8 @@ export function TableManagementPage() {
       <PageHeader wide
         // 全幅の詳細（#4645）は見出しを対象名にし、種類・列数・行数のバッジとコメントを添える。
         title={showingDetail ? selectedTableName : t("nav.tableManagement")}
-        subtitle={showingDetail ? detail?.comment || undefined : t("tableMgmt.subtitle")}
+        // コメントは一覧の行の値を使い、前へ / 次へで読み込む間も見出しの高さを変えない（押す位置を動かさない）。
+        subtitle={showingDetail ? selectedListItem?.comment || detail?.comment || undefined : t("tableMgmt.subtitle")}
         meta={
           !showingDetail && firstTablePage?.refreshed_at
             ? t("common.schemaRefreshedAt", { date: formatDateTime(firstTablePage.refreshed_at) })
