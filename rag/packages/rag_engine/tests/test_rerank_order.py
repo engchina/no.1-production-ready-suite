@@ -1,5 +1,6 @@
 """rerank の後の並び（7:3 の枠・MMR・合格点の 1 回のやり直し。#4664）。"""
 
+import random
 from dataclasses import replace
 
 import pytest
@@ -83,6 +84,25 @@ def test_mmr_moves_similar_candidates_back_without_dropping_any():
 def test_mmr_keeps_order_when_the_score_gap_outweighs_redundancy():
     terms = [frozenset("ab"), frozenset("ab"), frozenset("wx")]
     assert mmr_order([0.9, 0.88, 0.2], terms) == [0, 1, 2]
+
+
+# 改修前（#4679 の前）の mmr_order で記録した順序。計算の方法を変えても順序は変えない。
+_RECORDED_MMR_ORDERS = [
+    (4679, 4, 0.0, "0 1 2 4 3 5 6 8 9 7 10 12 11 13 14 20 15 16 17 19 18 21 22 24 23 26 25 28 27 30 29 32 33 34 31 39 35 37 36 38"),
+    # 点数の同点が多い場合。同点の中では先の候補を取る。
+    (4680, 1, 0.0, "0 1 2 5 7 4 6 3 8 9 10 12 11 13 15 16 14 17 18 20 22 21 19 23 26 24 25 27 29 35 28 31 33 30 32 34 37 38 36 39"),
+    # 語の無い候補を含む場合。
+    (4681, 2, 0.2, "0 3 1 2 6 4 7 5 9 10 13 8 12 11 14 15 21 16 18 17 23 19 20 22 24 29 31 25 33 26 32 34 28 27 30 37 35 36 39 38"),
+]
+
+
+@pytest.mark.parametrize(("seed", "digits", "empty_ratio", "expected"), _RECORDED_MMR_ORDERS)
+def test_mmr_order_keeps_the_recorded_order(seed, digits, empty_ratio, expected):
+    rng = random.Random(seed)
+    vocabulary = [f"term{i}" for i in range(150)]
+    scores = sorted((round(rng.uniform(0.1, 0.99), digits) for _ in range(40)), reverse=True)
+    terms = [frozenset() if rng.random() < empty_ratio else frozenset(rng.sample(vocabulary, rng.randint(1, 60))) for _ in range(40)]
+    assert mmr_order(scores, terms) == [int(position) for position in expected.split()]
 
 
 @pytest.mark.parametrize("ratio", [(7, 3), [1, 1], (0, 3), (3, 0)])
