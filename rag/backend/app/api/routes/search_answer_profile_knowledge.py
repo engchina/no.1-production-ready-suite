@@ -5,10 +5,11 @@ KB・文書レシピには持たせず、検索時は検索・回答プロファ
 """
 
 import asyncio
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
+from fastapi.concurrency import run_in_threadpool
+from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow
 
 from app.api.routes.search import (
     _published_guides,
@@ -19,6 +20,7 @@ from app.api.routes.search import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.rag.approved_faq_scope import ApprovedFaqScopeState
 from app.rag.chat_question_token import with_rule_selection_answers
 from app.rag.domain_keyword_import import (
     PREVIEW_ROWS,
@@ -33,12 +35,13 @@ from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
     ApprovedFaqMutation,
     add_approved_faq,
+    approved_faq_enabled,
+    confirm_approved_faq,
     delete_approved_faq,
     edit_runtime_knowledge,
     import_approved_faq,
     is_direct_faq_match,
-    load_approved_faq,
-    load_approved_faq_enabled,
+    load_approved_faq_snapshot,
     load_domain_keywords,
     load_runtime_knowledge_payload,
     preview_runtime_knowledge,
@@ -62,12 +65,15 @@ from app.schemas.common import ApiResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.search_answer_profile_knowledge import (
     ApprovedFaqAddRequest,
+    ApprovedFaqConfirmRequest,
     ApprovedFaqDeleteRequest,
     ApprovedFaqImportPreviewData,
     ApprovedFaqImportRowData,
+    ApprovedFaqKnowledgeBaseData,
     ApprovedFaqListData,
     ApprovedFaqMutationData,
     ApprovedFaqRecordData,
+    ApprovedFaqReviewReason,
     ApprovedFaqSettingsRequest,
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
@@ -89,6 +95,7 @@ from app.schemas.search_answer_profile_knowledge import (
     RuntimeKnowledgePreviewData,
     RuntimeKnowledgePreviewRequest,
 )
+from app.security.user_names import user_display_names
 
 # チャットで提示する類似問の上限(rag_poc の候補の上限は 5。チャットは 3 ＋「どれでもない」。#684)。
 CHAT_APPROVED_FAQ_LIMIT = 3
@@ -238,22 +245,73 @@ async def suggest_search_answer_profile_domain_keywords(
 # --- Approved FAQ(類似問)-----------------------------------------------------
 
 
-def _faq_record_data(record: ApprovedFaqRecord) -> ApprovedFaqRecordData:
+def _faq_record_data(
+    state: ApprovedFaqScopeState, approver_names: dict[str, str]
+) -> ApprovedFaqRecordData:
+    record = state.record
+    approval = record.approval
     return ApprovedFaqRecordData(
         id=record.id,
         question=record.question,
         answer=record.approved_answer,
         alternate_questions=list(record.alternate_questions),
         status=record.status,
+        target_knowledge_base_ids=list(record.target_knowledge_base_ids or ()),
+        source_document_ids=[source.document_id for source in record.source_documents],
+        approved_by=approver_names.get(approval.approved_by) if approval else None,
+        approved_at=(approval.approved_at or None) if approval else None,
+        review_reasons=[cast(ApprovedFaqReviewReason, reason) for reason in state.review_reasons],
+        source_updated=state.source_updated,
     )
 
 
-def _faq_mutation_data(
-    search_answer_profile_id: str, mutation: ApprovedFaqMutation
-) -> ApprovedFaqMutationData:
-    return ApprovedFaqMutationData(
+async def _faq_list_data(
+    oracle: OracleClient, search_answer_profile_id: str
+) -> ApprovedFaqListData:
+    """FAQ の一覧と今の根拠の状態・承認者の表示名・対象の KB の名前(#4621)。"""
+    snapshot = await load_approved_faq_snapshot(oracle, search_answer_profile_id)
+    approvers = sorted(
+        {state.record.approval.approved_by for state in snapshot.states if state.record.approval}
+        - {""}
+    )
+    approver_names = await run_in_threadpool(user_display_names, approvers) if approvers else {}
+    profile_kbs = snapshot.profile_knowledge_base_ids
+    kb_ids = list(
+        dict.fromkeys(
+            [
+                *profile_kbs,
+                *(
+                    knowledge_base_id
+                    for record in snapshot.records
+                    for knowledge_base_id in record.target_knowledge_base_ids or ()
+                ),
+            ]
+        )
+    )
+    names = (
+        {kb.id: kb.name for kb in await oracle.list_knowledge_bases(knowledge_base_ids=kb_ids)}
+        if kb_ids
+        else {}
+    )
+    return ApprovedFaqListData(
         search_answer_profile_id=search_answer_profile_id,
-        records=[_faq_record_data(record) for record in mutation.records],
+        records=[_faq_record_data(state, approver_names) for state in snapshot.states],
+        enabled=approved_faq_enabled(snapshot.payload),
+        knowledge_bases=[
+            ApprovedFaqKnowledgeBaseData(
+                id=kb_id, name=names.get(kb_id, kb_id), in_profile=kb_id in profile_kbs
+            )
+            for kb_id in kb_ids
+        ],
+    )
+
+
+async def _faq_mutation_data(
+    oracle: OracleClient, search_answer_profile_id: str, mutation: ApprovedFaqMutation
+) -> ApprovedFaqMutationData:
+    listed = await _faq_list_data(oracle, search_answer_profile_id)
+    return ApprovedFaqMutationData(
+        **listed.model_dump(),
         inserted_count=mutation.inserted_count,
         deleted_count=mutation.deleted_count,
     )
@@ -264,17 +322,34 @@ def _faq_mutation_data(
     response_model=ApiResponse[ApprovedFaqListData],
 )
 async def get_approved_faq(search_answer_profile_id: str) -> ApiResponse[ApprovedFaqListData]:
-    """検索・回答プロファイルの承認済み FAQ 一覧を返す。"""
+    """検索・回答プロファイルの承認済み FAQ 一覧を返す(根拠の状態・承認者・対象の KB を含む)。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
-    records = await load_approved_faq(oracle, search_answer_profile_id)
-    return ApiResponse(
-        data=ApprovedFaqListData(
-            search_answer_profile_id=search_answer_profile_id,
-            records=[_faq_record_data(record) for record in records],
-            enabled=await load_approved_faq_enabled(oracle, search_answer_profile_id),
+    return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
+
+
+@router.post(
+    "/{search_answer_profile_id}/approved-faq/{faq_id}/confirm",
+    response_model=ApiResponse[ApprovedFaqListData],
+)
+async def confirm_search_answer_profile_approved_faq(
+    search_answer_profile_id: str, faq_id: str, request: ApprovedFaqConfirmRequest
+) -> ApiResponse[ApprovedFaqListData]:
+    """FAQ の対象の KB と根拠を確かめ直し、承認者と時刻を記録する(要確認からの復帰。#4621)。"""
+    oracle = OracleClient()
+    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    try:
+        await confirm_approved_faq(
+            oracle,
+            search_answer_profile_id,
+            faq_id,
+            target_knowledge_base_ids=request.target_knowledge_base_ids,
         )
-    )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="FAQ が見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
 
 
 @router.put(
@@ -298,16 +373,20 @@ async def put_approved_faq_settings(
 async def post_approved_faq(
     search_answer_profile_id: str, request: ApprovedFaqAddRequest
 ) -> ApiResponse[ApprovedFaqMutationData]:
-    """FAQ を 1 件追加する(同じ質問は置き換え)。"""
+    """FAQ を 1 件追加する(同じ質問は追加しない)。対象の KB の未指定はプロファイルの全 KB。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     try:
         mutation = await add_approved_faq(
-            oracle, search_answer_profile_id, question=request.question, answer=request.answer
+            oracle,
+            search_answer_profile_id,
+            question=request.question,
+            answer=request.answer,
+            target_knowledge_base_ids=request.target_knowledge_base_ids,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ApiResponse(data=_faq_mutation_data(search_answer_profile_id, mutation))
+    return ApiResponse(data=await _faq_mutation_data(oracle, search_answer_profile_id, mutation))
 
 
 @router.post(
@@ -324,7 +403,7 @@ async def delete_search_answer_profile_approved_faq(
         mutation = await delete_approved_faq(oracle, search_answer_profile_id, request.ids)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ApiResponse(data=_faq_mutation_data(search_answer_profile_id, mutation))
+    return ApiResponse(data=await _faq_mutation_data(oracle, search_answer_profile_id, mutation))
 
 
 async def _excel_rows(file: UploadFile) -> list[ApprovedFaqImportRow]:
@@ -368,16 +447,26 @@ async def import_search_answer_profile_approved_faq(
     search_answer_profile_id: str,
     file: Annotated[UploadFile, File()],
     mode: Annotated[str, Form()] = "INSERT",
+    target_knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
 ) -> ApiResponse[ApprovedFaqMutationData]:
-    """Excel から FAQ を取り込む。INSERT は同じ質問をスキップ、DELETE_THEN_INSERT は置き換え。"""
+    """Excel から FAQ を取り込む。INSERT は同じ質問をスキップ、DELETE_THEN_INSERT は置き換え。
+
+    取り込む FAQ の対象の KB は ``target_knowledge_base_ids``(未指定はプロファイルの全 KB)。
+    """
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     rows = await _excel_rows(file)
     try:
-        mutation = await import_approved_faq(oracle, search_answer_profile_id, rows, mode=mode)
+        mutation = await import_approved_faq(
+            oracle,
+            search_answer_profile_id,
+            rows,
+            mode=mode,
+            target_knowledge_base_ids=target_knowledge_base_ids,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ApiResponse(data=_faq_mutation_data(search_answer_profile_id, mutation))
+    return ApiResponse(data=await _faq_mutation_data(oracle, search_answer_profile_id, mutation))
 
 
 @router.post(

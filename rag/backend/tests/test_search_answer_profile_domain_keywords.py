@@ -1,6 +1,8 @@
 """検索・回答プロファイル単位のドメインキーワード API と全文検索クエリへの反映。"""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +10,7 @@ from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.clients.oracle import _oracle_text_query
 from app.config import Settings
 from app.main import app
+from app.rag.approved_faq_scope import FaqSourceDocumentState
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail, SearchAnswerProfileStatus
 from tests.support import AsgiTestClient
@@ -19,6 +22,9 @@ class FakeKnowledgeOracle:
     def __init__(self, *, support_guide_enabled: bool = False) -> None:
         self.support_guide_enabled = support_guide_enabled
         self.payloads: dict[tuple[str, str], dict[str, object]] = {}
+        # プロファイルの参照 KB と、承認済み FAQ が引用する文書の今の状態（#4621）。
+        self.knowledge_base_ids = ["kb-1"]
+        self.documents: dict[str, FaqSourceDocumentState] = {}
         self.chunk_texts = [
             ("c1", "d1", "伝票区分を変更するには伝票区分マスタを開きます。"),
             ("c2", "d1", "伝票区分の初期値は通常伝票です。受注番号は必須です。"),
@@ -38,13 +44,30 @@ class FakeKnowledgeOracle:
             knowledge_base_count=1,
             config=SearchAnswerProfileConfig.model_validate(
                 {
-                    "knowledge_base_ids": ["kb-1"],
+                    "knowledge_base_ids": list(self.knowledge_base_ids),
                     "query": {"support_guide_enabled": self.support_guide_enabled},
                 }
             ),
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
+
+    async def list_knowledge_bases(
+        self, *, knowledge_base_ids: list[str] | None = None, **_kwargs: object
+    ) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(id=kb_id, name=f"ナレッジベース {kb_id}")
+            for kb_id in knowledge_base_ids or []
+        ]
+
+    async def approved_faq_source_document_states(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, FaqSourceDocumentState]:
+        return {
+            document_id: self.documents[document_id]
+            for document_id in document_ids
+            if document_id in self.documents
+        }
 
     async def get_search_answer_profile_knowledge(
         self, search_answer_profile_id: str, kind: str

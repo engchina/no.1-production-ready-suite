@@ -4263,10 +4263,19 @@ export const api = {
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
     ),
-  addApprovedFaq: (id: string, body: { question: string; answer: string }) =>
+  addApprovedFaq: (
+    id: string,
+    body: { question: string; answer: string; target_knowledge_base_ids: string[] },
+  ) =>
     request<ApprovedFaqMutationData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
       jsonBody(body),
+    ),
+  /** FAQ の対象の KB と根拠を確かめ直し、承認者と時刻を記録する（要確認からの復帰。#4621）。 */
+  confirmApprovedFaq: (id: string, faqId: string, targetKnowledgeBaseIds: string[]) =>
+    request<ApprovedFaqListData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/confirm`,
+      jsonBody({ target_knowledge_base_ids: targetKnowledgeBaseIds }),
     ),
   deleteApprovedFaq: (id: string, ids: string[]) =>
     request<ApprovedFaqMutationData>(
@@ -4281,10 +4290,18 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  importApprovedFaq: (id: string, file: File, mode: ApprovedFaqImportMode) => {
+  importApprovedFaq: (
+    id: string,
+    file: File,
+    mode: ApprovedFaqImportMode,
+    targetKnowledgeBaseIds: string[],
+  ) => {
     const form = new FormData();
     form.append("file", file);
     form.append("mode", mode);
+    for (const knowledgeBaseId of targetKnowledgeBaseIds) {
+      form.append("target_knowledge_base_ids", knowledgeBaseId);
+    }
     return request<ApprovedFaqMutationData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import`,
       { method: "POST", body: form },
@@ -5011,12 +5028,36 @@ export interface DomainKeywordImportData extends DomainKeywordsData {
 // --- 検索・回答プロファイルの知識: Approved FAQ(類似問) ---
 export type ApprovedFaqImportMode = "INSERT" | "DELETE_THEN_INSERT";
 
+/** 停止（要確認）の理由（#4621）。 */
+export type ApprovedFaqReviewReason =
+  | "no_target_knowledge_bases"
+  | "knowledge_base_removed"
+  | "source_document_missing";
+
 export interface ApprovedFaqRecordData {
   id: string;
   question: string;
   answer: string;
   alternate_questions: string[];
   status: string;
+  /** FAQ を使える範囲（この KB をすべて使える利用者だけに提示・回答で使う。#4621）。 */
+  target_knowledge_base_ids: string[];
+  /** 回答の根拠にした文書。 */
+  source_document_ids: string[];
+  /** 承認（保存・確かめ直し）した利用者の表示名と時刻。引けない利用者は null。 */
+  approved_by: string | null;
+  approved_at: string | null;
+  /** 空でなければ停止中（要確認）。 */
+  review_reasons: ApprovedFaqReviewReason[];
+  /** 引用した文書が承認の後に新しい版になった（使い続ける）。 */
+  source_updated: boolean;
+}
+
+/** 対象の KB の選択肢・表示名（in_profile=false はプロファイルから外れた KB）。 */
+export interface ApprovedFaqKnowledgeBaseData {
+  id: string;
+  name: string;
+  in_profile: boolean;
 }
 
 export interface ApprovedFaqListData {
@@ -5024,6 +5065,7 @@ export interface ApprovedFaqListData {
   records: ApprovedFaqRecordData[];
   /** 回答の前に類似問を提示するか（検索・回答プロファイルごと。未設定はオン。#684）。 */
   enabled: boolean;
+  knowledge_bases: ApprovedFaqKnowledgeBaseData[];
 }
 
 export interface ApprovedFaqMutationData extends ApprovedFaqListData {

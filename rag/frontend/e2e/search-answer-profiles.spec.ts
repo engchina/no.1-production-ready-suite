@@ -35,11 +35,14 @@ for (const [tab, paginationId, kind] of [
         triggers: [], status: kind === "guides" ? "active" : "approved",
         guide_id: `guide-${index}`, published_revision: null, draft_revision: 1,
         has_unpublished_changes: true, updated_at: "2026-10-01T00:00:00Z", updated_by: null,
+        // 承認済み FAQ の対象と根拠の状態（#4621）。
+        target_knowledge_base_ids: [], source_document_ids: [], approved_by: null, approved_at: null,
+        review_reasons: [], source_updated: false,
       };
     });
     const response = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
     await page.route("**/api/search-answer-profiles/bv-default/approved-faq", (route) =>
-      route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true })));
+      route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true, knowledge_bases: [] })));
     await page.route("**/api/search-answer-profiles/bv-default/runtime-knowledge", (route) =>
       route.fulfill(response({ terms: kind === "terms" ? rows() : [], rules: kind === "rules" ? rows() : [] })));
     await page.route("**/api/search-answer-profiles/bv-default/support-guides**", (route) =>
@@ -60,11 +63,11 @@ for (const [tab, paginationId, kind] of [
     const panel = page.getByRole("tabpanel");
     await expect(pagination).toContainText("1–25 / 61 件");
     await expect(panel.getByRole("rowheader")).toHaveCount(25);
-    await expect(panel.getByRole("rowheader").first()).toHaveText("項目 001");
+    await expect(panel.getByRole("rowheader").first()).toHaveText(/^項目 001/); // 登録済みQ&A は質問の下に対象・承認を出す（#4621）
     await jumpToPage(pagination, 3);
     await expect(pagination).toContainText("51–61 / 61 件");
     await expect(panel.getByRole("rowheader")).toHaveCount(11);
-    await expect(panel.getByRole("rowheader").first()).toHaveText("項目 051");
+    await expect(panel.getByRole("rowheader").first()).toHaveText(/^項目 051/);
     await expect(pagination.getByRole("button", { name: "次へ", exact: true })).toBeDisabled();
     await page.reload();
     await open();
@@ -75,7 +78,7 @@ for (const [tab, paginationId, kind] of [
     await expect(panel.getByRole("rowheader")).toHaveCount(10);
     await pagination.getByRole("button", { name: "次へ", exact: true }).click();
     await expect(pagination).toContainText("11–20 / 61 件");
-    await expect(panel.getByRole("rowheader").first()).toHaveText("項目 011");
+    await expect(panel.getByRole("rowheader").first()).toHaveText(/^項目 011/);
     await pagination.getByRole("button", { name: "前へ", exact: true }).click();
     await expect(pagination).toContainText("1–10 / 61 件");
     await page.screenshot({ path: testInfo.outputPath(`${kind}-paging.png`) });

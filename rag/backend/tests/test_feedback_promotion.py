@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -12,6 +13,8 @@ from pydantic import ValidationError
 
 from app.api.routes import feedback as feedback_route
 from app.main import app
+from app.rag.approved_faq_scope import FaqSourceDocumentState
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.feedback import FeedbackRequest
 from tests.support import AsgiTestClient
 
@@ -284,9 +287,19 @@ class FakePromotionClient:
         self.knowledge: dict[str, dict[str, object]] = {}
         self.saved: list[dict[str, object]] = []
         self.saved_details: list[dict[str, object] | None] = []
+        # プロファイルの参照 KB と、引用の文書の今の状態（FAQ の対象の KB。#4621）。
+        self.knowledge_base_ids = ["kb-1", "kb-2", "kb-3"]
+        self.documents: dict[str, FaqSourceDocumentState] = {}
 
     async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
-        return object()
+        return SimpleNamespace(
+            config=SearchAnswerProfileConfig(knowledge_base_ids=list(self.knowledge_base_ids))
+        )
+
+    async def approved_faq_source_document_states(
+        self, document_ids: list[str]
+    ) -> dict[str, FaqSourceDocumentState]:
+        return {key: self.documents[key] for key in document_ids if key in self.documents}
 
     async def save_feedback(
         self, payload: dict[str, object], *, details: dict[str, object] | None = None
