@@ -1,4 +1,5 @@
 import { expect, test } from "./fixtures/test";
+import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectNoPageOverflow } from "./_helpers";
 import { envelope, faqList, faqRecords, mockFaqScopeApi } from "./_faq-scope";
 
@@ -51,6 +52,8 @@ test.describe("承認済み FAQ の対象と根拠の状態", { tag: "@responsiv
     expect(confirms).toEqual([{ target_knowledge_base_ids: ["kb-1"] }]);
     await expect(page.getByTestId("approved-faq-row-faq-2").getByText("要確認")).toHaveCount(0);
     await expect(page.getByTestId("approved-faq-approval-faq-2")).toContainText("承認: ローカル利用者・");
+    // 対象の選択の placeholder は 375px の欄にも収める。
+    expect(await findClippedPlaceholders(page)).toEqual([]);
     await expectNoPageOverflow(page);
   });
 

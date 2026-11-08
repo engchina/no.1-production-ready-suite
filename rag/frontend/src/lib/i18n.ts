@@ -2329,6 +2329,7 @@ export const ja = {
   "searchAnswerProfiles.faq.imported": "取込みました（追加 {inserted} 件 / 置換で削除 {deleted} 件）",
   // 対象のナレッジベース・根拠の状態・承認者（#4621）。
   "searchAnswerProfiles.faq.targets.label": "対象のナレッジベース",
+  "searchAnswerProfiles.faq.targets.placeholder": "検索して選ぶ…",
   "searchAnswerProfiles.faq.targets.help":
     "選んだナレッジベースをすべて使える利用者にだけ、この Q&A を提示・回答に使います。既定はプロファイルの全ナレッジベースです。",
   "searchAnswerProfiles.faq.targets.importHelp":

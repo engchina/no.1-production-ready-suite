@@ -146,6 +146,14 @@ export function ApprovedFaqManager({
     [knowledgeBases],
   );
   const allTargets = useMemo(() => knowledgeBaseOptions.map((option) => option.value), [knowledgeBaseOptions]);
+  // 375px の 2 段の欄に収まる短い placeholder（欄の幅に収める。ui.md「操作部品の高さと幅」）。
+  const targetLabels = useMemo(
+    () => ({
+      ...knowledgeBaseMultiSelectLabels(),
+      searchPlaceholder: t("searchAnswerProfiles.faq.targets.placeholder"),
+    }),
+    [],
+  );
   const add = useApprovedFaqMutation(
     searchAnswerProfileId,
     (body: { question: string; answer: string; target_knowledge_base_ids: string[] }) =>
@@ -427,7 +435,7 @@ export function ApprovedFaqManager({
             options={knowledgeBaseOptions}
             value={effectiveAddTargets}
             disabled={!query.data}
-            labels={knowledgeBaseMultiSelectLabels()}
+            labels={targetLabels}
             onValueChange={(value) => {
               setAddTargets(value);
               setAddErrors((current) => ({ ...current, targets: null }));
@@ -523,7 +531,7 @@ export function ApprovedFaqManager({
             options={knowledgeBaseOptions}
             value={effectiveImportTargets}
             disabled={!query.data}
-            labels={knowledgeBaseMultiSelectLabels()}
+            labels={targetLabels}
             onValueChange={(value) => {
               setImportTargets(value);
               setImportTargetsError(null);
@@ -620,7 +628,7 @@ export function ApprovedFaqManager({
               error={confirmError ?? undefined}
               options={knowledgeBaseOptions}
               value={confirmTargets}
-              labels={knowledgeBaseMultiSelectLabels()}
+              labels={targetLabels}
               onValueChange={(value) => {
                 setConfirmTargets(value);
                 setConfirmError(null);
