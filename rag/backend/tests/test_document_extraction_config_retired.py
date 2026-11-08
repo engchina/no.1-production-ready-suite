@@ -20,6 +20,7 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.clients import oracle as oracle_module
 from app.clients.oracle import OracleClient, StoredDocument
+from app.rag.oracle_schema import oracle_schema_migration_sections
 from app.schemas.document import DocumentDetail, FileStatus
 from tests.test_oracle_adapter import (
     FakeOraclePool,
@@ -178,3 +179,29 @@ def test_app_has_no_document_extraction_or_config_reader() -> None:
     ]
 
     assert offenders == []
+
+
+def test_document_base_schema_has_no_extraction_or_processing_config_column() -> None:
+    """新しい DB の rag_documents は旧列 2 つを持たない（レシピの行は処理設定を持つ）。"""
+    column = re.compile(r"^\s*(extraction|processing_config)\s+JSON", re.M)
+
+    assert not column.search(oracle_module.oracle_document_schema_sql())
+    assert column.search(oracle_module.oracle_document_recipe_schema_sql())
+
+
+def test_drop_migration_removes_both_document_columns_only_when_present() -> None:
+    """既存の DB の旧列 2 つは destructive な migration で消す。列が無ければ何もしない。"""
+    [section] = [
+        section
+        for section in oracle_schema_migration_sections()
+        if section.name == "20261108_4617_drop_document_extraction_processing_config"
+    ]
+    sql = _normalized(section.sql)
+
+    assert section.destructive
+    assert section.table_name == "rag_documents"
+    for name in ("extraction", "processing_config"):
+        assert f"WHERE table_name = 'RAG_DOCUMENTS' AND column_name = '{name.upper()}'" in sql
+        assert f"EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN {name}'" in sql
+    assert "rag_document_recipes" not in sql.lower()
+    assert "rag_document_extractions" not in sql.lower()
