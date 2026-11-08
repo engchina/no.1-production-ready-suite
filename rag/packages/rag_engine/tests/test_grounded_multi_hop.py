@@ -212,8 +212,10 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
     generate = grounded.GENERATE_SYSTEM_PROMPT
-    section = generate.split("### 出典の網羅", 1)[1].split("## Step 3:", 1)[0]
-    assert "挙げた文書ごとに" in section
+    section = generate.split("### 出典（basis）の選び方", 1)[1].split("###", 1)[0]
+    assert "文書ごとにその文書の原文を basis に選ぶ" in section
+    # 別の対象の根拠を basis に選ばない判断は basis の選び方に置く（生成の出力に計画の行は無い。#4611）。
+    assert "別の対象・独立した操作の原文は選ばない" in section
     assert "言い換えていても省かず" in section
     assert "説明の内容を支えない原文は、質問に関係していても出典にしない" in section
     # 1つの説明を実際の引用集合で共同支持し、未引用の資料で不足を埋めない。
@@ -227,7 +229,7 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     relation = RequestEvidenceScopeRange.model_json_schema()["properties"]["relation"]["description"]
     plan_ids = RequestCoverageRange.model_json_schema()["properties"]["evidence_scope"]["description"]
     assert "直接答える" not in relation + plan_ids
-    # 別の対象の根拠を外す判断と、計画の根拠だけで items を作る契約は残す。
+    # 計画だけを立てる経路（answer.scope）の、別の対象の根拠を外す判断と、計画の根拠だけで items を作る契約は残す。
     assert "unrelated=別の対象・独立した操作" in relation
     assert "文書ごとに行にする" in plan_ids
     assert "items はこの計画の根拠だけで作る" in plan_ids
