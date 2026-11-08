@@ -48,6 +48,22 @@ HEADER_ONLY_SOURCE_PROMPT = (
 )
 
 
+def _question_type_first(schema: dict[str, Any]) -> None:
+    """質問の種類（question_type）を要点より先に生成させる（strict schema の欄の順は生成の順）。
+
+    導出（計算・区分・条件の当てはめ）が要るかの判断を、要点の型（source / answer / gap）を選ぶ前に出させる。要点の後に
+    書くと、種類の判断は要点の型に影響しない（#4586 の source 型だけの出力の作り直しが増える）。
+    """
+    properties = schema.get("properties", {})
+    if "question_type" not in properties:
+        return
+    order = [name for name in properties if name != "question_type"]
+    order.insert(order.index("answer_parts") if "answer_parts" in order else 0, "question_type")
+    schema["properties"] = {name: properties[name] for name in order}
+    if "required" in schema:
+        schema["required"] = [name for name in order if name in schema["required"]]
+
+
 def answer_parts_model(
     base: type[BaseModel],
     catalog: SentUnitCatalog,
@@ -128,7 +144,7 @@ def answer_parts_model(
             ),
         ),
     }
-    model = create_model(base.__name__, __base__=base, **fields)
+    model = create_model(base.__name__, __base__=base, __config__=ConfigDict(json_schema_extra=_question_type_first), **fields)
     cast(Any, model)._uses_typed_answer_parts = True
     cast(Any, model)._uses_unit_ids = True
     cast(Any, model)._request_ids = tuple(dict.fromkeys(request_ids))
