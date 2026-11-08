@@ -3514,6 +3514,9 @@ def _body_sections(
     # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, add_citation, mark_application):
         sections.append((answer_labels().applications_section, applied))
+        for line in applied:
+            if is_rendered_citation_line(line):
+                add_non_claim(line)
     # 操作の順序は草稿のまま保持し、同じ文書・機能の連続する操作だけを同じ節にする。
     # 別文書を挟んで戻る操作を文書ごとに集約すると、後続操作が先へ移ってしまう。
     groups: list[tuple[Any, list[CheckedItem]]] = []

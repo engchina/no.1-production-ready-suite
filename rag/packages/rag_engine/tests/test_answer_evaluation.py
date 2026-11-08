@@ -143,7 +143,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
         schema = call.args[3]
         assert call.args[0] == expected_systems.get(schema, expected_systems.get(schema.__name__))
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 23
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 24
     assert result["judge_diagnostics"]["question_subjects"] == {"status": "no_named_mention", "calls": 1, "named_mentions": 0}
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。

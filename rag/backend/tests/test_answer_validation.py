@@ -2076,3 +2076,39 @@ async def test_selected_unit_sidecar_is_guide_only_and_absent_from_saved_trace(
     assert "PRIVATE_UNIT_SENTINEL" not in json.dumps(traces)
     assert "_selected_evidence" not in json.dumps(traces)
     assert guide_seen == ([] if mode == "no-guide" else [private])
+
+
+@pytest.mark.asyncio
+async def test_validate_answer_passes_the_non_claim_lines_to_the_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答フローは組み立てが決めた非主張の行を渡す。MCP（外部の回答）は渡さない（#4668）。"""
+    oracle = _Oracle()
+    captured: dict[str, Any] = {}
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        captured.update(options)
+        return {"status": "completed", "counts": {"supported": 1}, "claim_checks": []}
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    await validate_answer(
+        "q",
+        "有効期限は 30 日です。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, oracle),
+        non_claim_lines=["資料により確認できた事項"],
+    )
+    assert captured["non_claim_lines"] == ["資料により確認できた事項"]
+    await validate_answer(
+        "q",
+        "有効期限は 30 日です。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, oracle),
+    )
+    assert captured["non_claim_lines"] is None

@@ -384,7 +384,8 @@ def _heading_title(text: str) -> str | None:
     return value if is_lead_in(value) else None
 
 
-# ---- 見出しの名詞句と導入の文（#1469）。事例は platform/contracts/answer-passages/headings.json で確かめる。
+# ---- 見出しの名詞句と導入の文（#1469）。事例は
+# platform/contracts/answer-passages/headings.json で確かめる。
 # 見出しの後ろの注記の括弧（「補足（資料の記載）」
 # 「2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）」）。
 _HEADING_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)]\s*$")

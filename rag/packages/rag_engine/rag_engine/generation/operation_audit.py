@@ -137,7 +137,9 @@ _EVIDENCE_REF = re.compile(
     r"[【〔［\[]\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}[】〕］\]]", re.I
 )
 _LINK = re.compile(r"\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)|https?://\S+")
-_FILE_NAME = re.compile(r"[^\s「」『』（）()【】\[\]、,，|]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b", re.I)
+_FILE_NAME = re.compile(r"[^\s「」『』（）()【】\[\]、,，|:：。．]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b", re.I)
+# 行の先頭の短いラベルとコロン（「出典：manual.pdf p.3」。語は見ない。残りが参照の形のときだけ参照の行にする）。
+_SHORT_LABEL = re.compile(r"^[^\s:：。．]{1,12}[:：]\s*")
 _PAGE_NUMBER = re.compile(r"(?:ページ|頁|p\.|page)\s*[0-9０-９]+", re.I)
 _REFERENCE_SEPARATORS = re.compile(r"[|\s→>＞\-–—‑―、,，:：/／()（）\[\]【】〔〕「」『』]+")
 # Markdown の見出しの行と、行全体が 1 つの強調・【…】の行（出典の組の区切りにだけ使う。主張かどうかは決めない）。
@@ -158,7 +160,7 @@ def is_source_reference_form(text: str) -> bool:
     value = _EMPHASIS.sub("", _LIST_MARK.sub("", text.strip(), count=1)).strip()
     if not value:
         return False
-    rest, ids = _EVIDENCE_REF.subn(" ", value)
+    rest, ids = _EVIDENCE_REF.subn(" ", _SHORT_LABEL.sub("", value, count=1))
     rest, links = _LINK.subn(" ", rest)
     rest, files = _FILE_NAME.subn(" ", rest)
     rest, pages = _PAGE_NUMBER.subn(" ", rest)

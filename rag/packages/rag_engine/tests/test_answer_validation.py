@@ -2058,12 +2058,41 @@ def test_render_records_the_lines_that_are_not_claims() -> None:
     assert all(line in lines for line in non_claims)
 
 
+def test_application_citation_lines_are_recorded_as_non_claims() -> None:
+    """当てはめの節の出典の行も主張ではない行に入れ、当てはめの結果の行は主張のまま（#4668）。"""
+    from rag_engine.generation.applications import CheckedApplication
+    from rag_engine.generation.grounded import CheckedItem, render_answer
+    from rag_engine.models.llm import GroundedApplication, GroundedItem
+
+    span = {
+        "evidence_id": "E1",
+        "source_id": "c1",
+        "source": "仕様書.pdf",
+        "page": 2,
+        "function": ("節",),
+        "text": "本文",
+        "document_scope": [],
+    }
+    rule = CheckedItem(GroundedItem(kind="rule", text="規則の説明です。", applies="matched"), span=dict(span))
+    application = CheckedApplication(
+        GroundedApplication(reasoning="規則を当てはめます。", result="結果の文です。"), entries=[rule], source="step"
+    )
+
+    rendered = render_answer("要約の文です。", [rule], applications=[application])
+
+    assert "資料をもとに導いた結論" in rendered.non_claim_lines
+    assert "根拠：仕様書.pdf p.2" in rendered.non_claim_lines
+    assert "・結果の文です。" not in rendered.non_claim_lines
+
+
 def test_source_reference_forms_only_look_at_shape() -> None:
     """参照だけの行は形（ID・リンク・ファイル名・頁）で決める。文書の名前は語で判定しない（モデルが決める）。"""
     from rag_engine.generation.operation_audit import is_non_claim_form, is_source_reference_form, table_header_lines
 
     assert is_source_reference_form("【証拠 ID: 03ac:1】")
     assert is_source_reference_form("manual.pdf p.3")
+    assert is_source_reference_form("出典：manual.pdf p.3")
+    assert not is_source_reference_form("承認者は課長です。manual.pdf")
     assert is_source_reference_form("- [仕様書](https://example.com/a.pdf)")
     assert not is_source_reference_form("運用マニュアル 第 2 章")
     assert not is_source_reference_form("manual.pdf の 3 頁に書かれています。")
