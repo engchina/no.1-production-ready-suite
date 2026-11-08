@@ -18,7 +18,7 @@ import {
 } from "@production-ready/ui";
 
 import { listTotal } from "@/components/ListFilters";
-import { PagedDataTable } from "@/components/ListViews";
+import { FieldSkeleton, PagedDataTable } from "@/components/ListViews";
 import { evaluatedVersionLabel } from "@/components/evaluation/EvaluationVersionField";
 import {
   agentApi,
@@ -179,7 +179,15 @@ function Outcome({ outcome }: { outcome: EvaluationComparisonOutcome | null }) {
  * 評価を比べる（#1845）。2 つの評価（業務 Agent・版・評価セットをまたいでよい）を、同じ質問の
  * ケースどうしで並べ、合否の変化（改善・悪化・変化なし）を文と色で出す。選んだ 2 つは作業状態に残す。
  */
-export function EvaluationCompare() {
+export function EvaluationCompare({
+  listLoading = false,
+}: {
+  /**
+   * 同じ画面の最近の評価の一覧が最初の読み込み中か。そちらが経過時間を出しているので、候補の読み込みは
+   * 形だけにする（1 つの画面で同じ時の読み込みの経過時間を重ねない。#4649）。
+   */
+  listLoading?: boolean;
+} = {}) {
   const [baseId, setBaseId] = useWorkspaceState("evaluation", "compareBase", "", isString);
   const [targetId, setTargetId] = useWorkspaceState("evaluation", "compareTarget", "", isString);
   const jobs = useQuery({
@@ -233,9 +241,15 @@ export function EvaluationCompare() {
       </CardHeader>
       <CardContent className="space-y-4">
         {jobs.isLoading ? (
-          <TimedLoadingState label={t("loading.evaluations")} testId="evaluation-compare-options-loading">
-            <TableSkeleton columns={4} />
-          </TimedLoadingState>
+          listLoading ? (
+            <div aria-busy="true" aria-label={t("loading.evaluationCompareOptions")} data-testid="evaluation-compare-options-loading">
+              <CompareOptionsSkeleton />
+            </div>
+          ) : (
+            <TimedLoadingState label={t("loading.evaluationCompareOptions")} testId="evaluation-compare-options-loading">
+              <CompareOptionsSkeleton />
+            </TimedLoadingState>
+          )
         ) : jobs.error ? (
           <ApiErrorState error={jobs.error} fallback={t("common.error.load")} retryLabel={t("common.retry")} onRetry={() => void jobs.refetch()} />
         ) : finished.length < 2 ? (
@@ -312,5 +326,18 @@ export function EvaluationCompare() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** 比べる評価の 2 つの選択欄と、選ぶ前の案内の行の形（読み込み後の欄の並びと同じ。項目名と案内は決まった文）。 */
+function CompareOptionsSkeleton() {
+  return (
+    <div className="space-y-4" aria-hidden="true">
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+        <FieldSkeleton width="lg" fieldLabel={t("evaluation.compare.base")} />
+        <FieldSkeleton width="lg" fieldLabel={t("evaluation.compare.target")} />
+      </div>
+      <p className="text-xs text-fg-muted">{t("evaluation.compare.chooseHint")}</p>
+    </div>
   );
 }

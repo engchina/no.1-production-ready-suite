@@ -37,6 +37,7 @@ export const API_KEYS_MESSAGES = {
     "キーで呼べる業務 Agent を絞ると、キーが漏れたときの影響を小さくできます。あなたが使えない業務 Agent は選んでも使えません。",
   "apiKeys.create.agentScope.required": "業務 Agent を 1 つ以上選んでください。",
   "apiKeys.create.agentScope.empty": "選べる業務 Agent がありません。",
+  "apiKeys.create.agentScope.loading": "使える業務 Agent を読み込んでいます",
   "apiKeys.create.agentScope.elsewhere":
     "このキーは、あなたが使えるすべての業務 Agent を呼べます。業務 Agent を絞るときは、Agent の画面で発行します。",
   "apiKeys.create.expiry": "有効期限",

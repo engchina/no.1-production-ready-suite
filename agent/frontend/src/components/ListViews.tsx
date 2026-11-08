@@ -2,14 +2,17 @@ import type { ReactNode } from "react";
 import {
   DataTable,
   DEFAULT_PAGE_SIZE,
+  FIELD_WIDTH_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   OffsetPagination,
   PAGE_SIZE_OPTIONS,
   PagedDataTable as SharedPagedDataTable,
+  Skeleton,
   TimedLoadingState,
   cn,
   type DataTableProps,
+  type FieldWidth,
   type PagedDataTableProps as SharedPagedDataTableProps,
   type CollapsedListLabels,
   type ListCountLabels,
@@ -182,6 +185,63 @@ function isEmptyData(data: unknown): boolean {
   if (Array.isArray(data)) return data.length === 0;
   const items = (data as { items?: unknown } | null)?.items;
   return Array.isArray(items) && items.length === 0;
+}
+
+/** 補足の棒の高さ（文字の行の高さ × 行数）。 */
+const HELPER_LINE_HEIGHT = { 1: "h-[1lh]", 2: "h-[2lh]", 3: "h-[3lh]" } as const;
+
+/**
+ * 上にラベルを置く 1 つの欄（ラベル + 欄 + 補足の行）の形の Skeleton（#4649）。欄の候補を読み込んでいる間、
+ * 無効の空の欄の代わりに置いて場所を確保する（読み込み後に欄が現れて下を押し下げない）。
+ * 経過時間は足さない（領域の読み込みの表示が 1 か所で出す。docs/agents/ui.md「読み込み中」）。
+ * ラベル・補足の文が決まっているときは文を出し（高さが読み込み後と同じになる）、無ければ 1 行の棒にする。
+ * `label` を渡すと、読み上げ名（「〜を読み込んでいます」）を付けた読み込み中の領域にする。
+ */
+export function FieldSkeleton({
+  width = "full",
+  fieldLabel,
+  helper = false,
+  helperText,
+  label,
+  testId,
+}: {
+  /** 読み込み後の欄の幅の段（`SelectField` の `width` と同じ）。 */
+  width?: FieldWidth;
+  /** 読み込み後の欄のラベル（i18n 済み）。 */
+  fieldLabel?: string;
+  /** 読み込み後の欄が補足（helper）の行を持つか。数は文が決まらないときの棒の行数（既定 1）。 */
+  helper?: boolean | 1 | 2 | 3;
+  /** 読み込み後の欄の補足の文（i18n 済み）。 */
+  helperText?: string;
+  label?: string;
+  testId?: string;
+}) {
+  return (
+    <div
+      className={cn("space-y-1.5", FIELD_WIDTH_CLASS[width])}
+      aria-busy={label ? "true" : undefined}
+      aria-label={label}
+      data-skeleton="field"
+      data-testid={testId}
+    >
+      {fieldLabel ? (
+        <p className="text-sm font-medium text-fg-muted" aria-hidden="true">
+          {fieldLabel}
+        </p>
+      ) : (
+        // 行の高さ（1lh）は読み込み後のラベルの文字の行と同じ。
+        <Skeleton className="h-[1lh] w-24 text-sm" />
+      )}
+      <Skeleton className="h-[var(--control-height-md)] w-full" />
+      {helperText ? (
+        <p className="text-xs leading-relaxed text-fg-muted" aria-hidden="true">
+          {helperText}
+        </p>
+      ) : helper ? (
+        <Skeleton className={cn("w-3/4 text-xs leading-relaxed", HELPER_LINE_HEIGHT[helper === true ? 1 : helper])} />
+      ) : null}
+    </div>
+  );
 }
 
 /**

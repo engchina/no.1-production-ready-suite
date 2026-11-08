@@ -7,6 +7,7 @@ import {
   Button,
   ButtonLink,
   SideSheet,
+  Skeleton,
   ListToolbar,
   Pagination,
   usePagination,
@@ -220,8 +221,11 @@ export function SkillUpdatesPanel({
                     <p className="text-xs text-fg-muted">{t("agent.skillUpdates.draftNotPublished")}</p>
                   ) : null}
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* 読み取れなかったときは「評価セットがありません」と言わない（#4217）。 */}
-                    {evaluationSets.isLoading || evaluationSets.isError ? null : sets ? (
+                    {/* 読み取れなかったときは「評価セットがありません」と言わない（#4217）。読み込み中はボタンの形で
+                        場所を確保し、読み込み後に現れて下を押し下げない（経過時間は足さない。#4649）。 */}
+                    {evaluationSets.isLoading ? (
+                      <Skeleton className="h-[var(--button-height-sm)] w-40" testId={`agent-skill-update-evaluate-loading-${agent.id}`} />
+                    ) : evaluationSets.isError ? null : sets ? (
                       <ButtonLink
                         to={evaluationHref(agent.id)}
                         linkComponent={Link}

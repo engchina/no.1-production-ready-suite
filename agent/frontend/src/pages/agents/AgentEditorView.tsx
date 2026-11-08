@@ -47,6 +47,7 @@ import {
   type SkillPolicy,
 } from "@/lib/api";
 import { matchesSearch } from "@/components/ListFilters";
+import { FieldSkeleton } from "@/components/ListViews";
 import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
 import {
   AgentOutputFieldsSection,
@@ -697,20 +698,30 @@ export function AgentEditorView({
                       onValueChange={setInstructions}
                       rows={8}
                     />
-                    {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
-                    <SelectField
-                      id={`${fieldId}-agent-model`}
-                      label={t("agent.model")}
-                      helper={t("agent.modelHint")}
-                      width="lg"
-                      disabled={modelsLoading}
-                      value={modelId}
-                      emptyOptionLabel={
-                        defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
-                      }
-                      options={agentModelOptions(models, modelId)}
-                      onValueChange={setModelId}
-                    />
+                    {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。
+                        候補の読み込み中は、無効の空の欄ではなく欄の形で場所を確保する（#4649）。 */}
+                    {modelsLoading ? (
+                      <FieldSkeleton
+                        width="lg"
+                        fieldLabel={t("agent.model")}
+                        helperText={t("agent.modelHint")}
+                        label={t("loading.models")}
+                        testId="agent-model-loading"
+                      />
+                    ) : (
+                      <SelectField
+                        id={`${fieldId}-agent-model`}
+                        label={t("agent.model")}
+                        helper={t("agent.modelHint")}
+                        width="lg"
+                        value={modelId}
+                        emptyOptionLabel={
+                          defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
+                        }
+                        options={agentModelOptions(models, modelId)}
+                        onValueChange={setModelId}
+                      />
+                    )}
                     {!agent ? (
                       // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
                       <label className="flex items-center gap-2 self-end text-sm text-fg">

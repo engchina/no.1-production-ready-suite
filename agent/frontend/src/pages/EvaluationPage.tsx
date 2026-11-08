@@ -45,7 +45,7 @@ import {
 import { AnswerBody } from "@/components/chat/ResultTables";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listTotal } from "@/components/ListFilters";
-import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
+import { agentPaginationLabels, FieldSkeleton, listScrollLabel, PagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
 import { EvaluationCompare } from "@/components/evaluation/EvaluationCompare";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
@@ -217,6 +217,7 @@ export function EvaluationPage() {
   }
   return (
     <EvaluationOverview
+      agentsLoading={agents.isLoading}
       agentsError={agents.data ? null : agents.error}
       onRetryAgents={() => void agents.refetch()}
       agentId={selectedAgentId}
@@ -239,6 +240,7 @@ export function EvaluationPage() {
 }
 
 function EvaluationOverview({
+  agentsLoading,
   agentsError,
   onRetryAgents,
   agentId,
@@ -258,6 +260,8 @@ function EvaluationOverview({
   starting,
 }: {
   agentId: string;
+  /** 業務 Agent の一覧の最初の読み込み中（評価セットの欄はまだ取得できない）。 */
+  agentsLoading: boolean;
   /** 業務 Agent の一覧を読み取れなかった（前回の内容が無いとき）。 */
   agentsError: Error | null;
   onRetryAgents: () => void;
@@ -439,77 +443,100 @@ function EvaluationOverview({
             <CardDescription>{t("evaluation.sets.description")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-              <SelectField<string>
-                id="evaluation-agent"
-                label={t("evaluation.form.agent")}
-                width="md"
-                value={agentId}
-                options={agentOptions}
-                onValueChange={onAgentChange}
-                disabled={agentOptions.length === 0}
-              />
-              <EvaluationVersionField id="evaluation-version" agent={agent} value={version} onChange={onVersionChange} />
-              <SelectField<string>
-                id="evaluation-trials"
-                data-testid="evaluation-trials"
-                label={t("evaluation.form.trials")}
-                helper={t("evaluation.form.trialsHelper")}
-                width="sm"
-                value={String(trials)}
-                options={TRIAL_OPTIONS.map((count) => ({ value: String(count), label: t("evaluation.form.trialsOption", { count }) }))}
-                onValueChange={(value) => onTrialsChange(Number(value))}
-              />
-            </div>
-            {agentsError ? (
-              // 業務 Agent を読み取れないと評価セットも読めない。「評価セットはまだありません」と言わない（#4217）。
-              <ApiErrorState
-                error={agentsError}
-                fallback={t("common.error.load")}
-                retryLabel={t("common.retry")}
-                onRetry={onRetryAgents}
-              />
-            ) : sets.isLoading ? (
-              <TimedLoadingState label={t("loading.evaluationSets")} testId="evaluation-sets-loading">
-                <TableSkeleton columns={4} />
-              </TimedLoadingState>
-            ) : sets.error ? (
-              // 取得の失敗を「評価セットがありません」と出さない（messaging.md §3.6。#818）。
-              <ApiErrorState error={sets.error} fallback={t("common.error.load")} retryLabel={t("common.retry")} onRetry={() => void sets.refetch()} />
-            ) : (sets.data?.sets ?? []).length === 0 ? (
-              <EmptyState
-                title={t("evaluation.sets.empty")}
-                hint={agent?.template_id ? t("evaluation.sets.fromTemplateHint") : t("evaluation.sets.emptyHint")}
-                action={
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {agent?.template_id ? (
-                      <Button
-                        icon={ClipboardList}
-                        loading={fromTemplate.isPending}
-                        onClick={() => fromTemplate.mutate(agent.id)}
-                        data-testid="evaluation-sets-from-template"
-                      >
-                        {t("evaluation.sets.fromTemplate")}
-                      </Button>
-                    ) : null}
-                    <Button variant="secondary" icon={Plus} onClick={onCreate} disabled={!agentId}>
-                      {t("evaluation.set.create")}
-                    </Button>
+            {agentsLoading ? (
+              // 業務 Agent が決まるまで評価セットを取得できない。「評価セットはまだありません」と言わず、
+              // 経過時間を 1 か所だけ出し、欄の行と表の形で寸法を予約する（#4649）。
+              <TimedLoadingState label={t("loading.agents")} testId="evaluation-sets-loading">
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                    <FieldSkeleton width="md" fieldLabel={t("evaluation.form.agent")} />
+                    {/* 版の補足は業務 Agent で変わる（多くは 2 行）。 */}
+                    <FieldSkeleton width="md" fieldLabel={t("evaluation.version.label")} helper={2} />
+                    {/* 補足を持つ欄の外枠は md の幅（SelectField と同じ）。 */}
+                    <FieldSkeleton
+                      width="md"
+                      fieldLabel={t("evaluation.form.trials")}
+                      helperText={t("evaluation.form.trialsHelper")}
+                    />
                   </div>
-                }
-              />
+                  <TableSkeleton columns={4} />
+                </div>
+              </TimedLoadingState>
             ) : (
-              <SetsTable
-                sets={sets.data?.sets ?? []}
-                running={running || starting}
-                itemHref={itemHref}
-                onOpen={onOpen}
-                onStart={onStart}
-                onExport={(item) => void exportSet(item)}
-                onDelete={(item) => void confirmDeleteSet(item)}
-              />
+              <>
+                <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                  <SelectField<string>
+                    id="evaluation-agent"
+                    label={t("evaluation.form.agent")}
+                    width="md"
+                    value={agentId}
+                    options={agentOptions}
+                    onValueChange={onAgentChange}
+                    disabled={agentOptions.length === 0}
+                  />
+                  <EvaluationVersionField id="evaluation-version" agent={agent} value={version} onChange={onVersionChange} />
+                  <SelectField<string>
+                    id="evaluation-trials"
+                    data-testid="evaluation-trials"
+                    label={t("evaluation.form.trials")}
+                    helper={t("evaluation.form.trialsHelper")}
+                    width="sm"
+                    value={String(trials)}
+                    options={TRIAL_OPTIONS.map((count) => ({ value: String(count), label: t("evaluation.form.trialsOption", { count }) }))}
+                    onValueChange={(value) => onTrialsChange(Number(value))}
+                  />
+                </div>
+                {agentsError ? (
+                  // 業務 Agent を読み取れないと評価セットも読めない。「評価セットはまだありません」と言わない（#4217）。
+                  <ApiErrorState
+                    error={agentsError}
+                    fallback={t("common.error.load")}
+                    retryLabel={t("common.retry")}
+                    onRetry={onRetryAgents}
+                  />
+                ) : sets.isLoading ? (
+                  <TimedLoadingState label={t("loading.evaluationSets")} testId="evaluation-sets-loading">
+                    <TableSkeleton columns={4} />
+                  </TimedLoadingState>
+                ) : sets.error ? (
+                  // 取得の失敗を「評価セットがありません」と出さない（messaging.md §3.6。#818）。
+                  <ApiErrorState error={sets.error} fallback={t("common.error.load")} retryLabel={t("common.retry")} onRetry={() => void sets.refetch()} />
+                ) : (sets.data?.sets ?? []).length === 0 ? (
+                  <EmptyState
+                    title={t("evaluation.sets.empty")}
+                    hint={agent?.template_id ? t("evaluation.sets.fromTemplateHint") : t("evaluation.sets.emptyHint")}
+                    action={
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {agent?.template_id ? (
+                          <Button
+                            icon={ClipboardList}
+                            loading={fromTemplate.isPending}
+                            onClick={() => fromTemplate.mutate(agent.id)}
+                            data-testid="evaluation-sets-from-template"
+                          >
+                            {t("evaluation.sets.fromTemplate")}
+                          </Button>
+                        ) : null}
+                        <Button variant="secondary" icon={Plus} onClick={onCreate} disabled={!agentId}>
+                          {t("evaluation.set.create")}
+                        </Button>
+                      </div>
+                    }
+                  />
+                ) : (
+                  <SetsTable
+                    sets={sets.data?.sets ?? []}
+                    running={running || starting}
+                    itemHref={itemHref}
+                    onOpen={onOpen}
+                    onStart={onStart}
+                    onExport={(item) => void exportSet(item)}
+                    onDelete={(item) => void confirmDeleteSet(item)}
+                  />
+                )}
+                {running ? <p className="text-xs text-fg-muted">{t("evaluation.form.busy")}</p> : null}
+              </>
             )}
-            {running ? <p className="text-xs text-fg-muted">{t("evaluation.form.busy")}</p> : null}
           </CardContent>
         </Card>
 
@@ -567,7 +594,8 @@ function EvaluationOverview({
           </CardContent>
         </Card>
 
-        <EvaluationCompare />
+        {/* 比べる評価の候補は最近の評価と同じ時に読み込む。経過時間は最近の評価のカードの 1 か所だけにする（#4649）。 */}
+        <EvaluationCompare listLoading={jobs.isLoading} />
 
         {/* ケースの詳細は一覧の文脈を保ったまま 1 件をのぞく補助の内容なので、40rem（md）のシートで読み、
             見出しの行の「前へ / 次へ」で評価の結果の前後のケースへ移る（page-archetypes.md §1「詳細の出し方」。#2283）。 */}

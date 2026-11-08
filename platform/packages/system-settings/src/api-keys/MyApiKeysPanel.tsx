@@ -20,6 +20,8 @@ import {
   OneTimeSecret,
   SearchableMultiSelect,
   SelectField,
+  SKELETON_CLASS,
+  cn,
   TableSkeleton,
   TextField,
   TimedLoadingState,
@@ -62,6 +64,11 @@ export interface MyApiKeysPanelProps {
    * 渡さない製品（RAG / NL2SQL）では、Agent のキーは利用者が使えるすべての業務 Agent になる。
    */
   agentScopeOptions?: ApiKeyScopeOption[];
+  /**
+   * `agentScopeOptions` を読み込んでいる間（#4649）。欄の形の Skeleton で場所を確保し、読み込み後に
+   * 「使える業務 Agent」の欄が現れて下を押し下げない（経過時間は足さない）。
+   */
+  agentScopeLoading?: boolean;
 }
 
 /**
@@ -73,7 +80,13 @@ export interface MyApiKeysPanelProps {
  * - 秘密は発行の直後に 1 回だけ、起点の「発行」の直下に全幅で出す（messaging.md §10.1）。
  * - Agent を選んだキーは、使える業務 Agent を「すべて」か「選んだものだけ」にできる（#1874。最小権限）。
  */
-export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: MyApiKeysPanelProps) {
+export function MyApiKeysPanel({
+  api,
+  endpoints,
+  messages,
+  agentScopeOptions,
+  agentScopeLoading = false,
+}: MyApiKeysPanelProps) {
   const t = apiKeysTranslator(messages);
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -197,7 +210,29 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
               ))}
             </div>
           </Fieldset>
-          {agentSelected && agentScopeOptions !== undefined ? (
+          {agentSelected && agentScopeLoading ? (
+            // 「使える業務 Agent」の欄の形（#4649）。見出しと補足は決まった文なのでそのまま出し、2 つの選択肢を
+            // 同じ寸法の Skeleton にする（選択肢の中身を見えなくして置き、幅と折り返しを読み込み後と同じにする）。
+            <div
+              aria-busy="true"
+              aria-label={t("apiKeys.create.agentScope.loading")}
+              data-skeleton="field"
+              data-testid="api-key-agent-scope-loading"
+            >
+              <div aria-hidden="true">
+                <Fieldset legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
+                  <div className="flex flex-wrap gap-2">
+                    {(["all", "selected"] as const).map((mode) => (
+                      <div key={mode} className={cn(CHOICE_CLASS, SKELETON_CLASS, "cursor-default border-transparent")}>
+                        <input type="radio" disabled tabIndex={-1} className="invisible" />
+                        <span className="invisible">{t(`apiKeys.create.agentScope.${mode}`)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Fieldset>
+              </div>
+            </div>
+          ) : agentSelected && agentScopeOptions !== undefined ? (
             <div className="grid gap-3">
               <Fieldset role="radiogroup" legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
                 <div className="flex flex-wrap gap-2">

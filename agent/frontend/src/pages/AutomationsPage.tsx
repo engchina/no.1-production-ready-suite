@@ -42,7 +42,7 @@ import {
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
+import { FieldSkeleton, PagedDataTable, listScrollLabel } from "@/components/ListViews";
 import { ListSearchField, listCount, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import {
   agentApi,
@@ -632,27 +632,36 @@ function AutomationEditor({
                       error={nameError}
                       onValueChange={(value) => setField("name", value)}
                     />
-                    <SelectField<string>
-                      id="automation-agent"
-                      label={t("automation.agent")}
-                      width="lg"
-                      required
-                      placeholder={t("automation.agentPlaceholder")}
-                      value={draft.agentId}
-                      options={agentOptions}
-                      error={agentError}
-                      helper={
-                        agentsLoadFailed && agents.length === 0
-                          ? t("common.error.load")
-                          : !agentsLoading && agents.length === 0
-                          ? t("automation.agentNone")
-                          : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
-                            ? t("automation.agentUnavailableHint")
-                            : undefined
-                      }
-                      disabled={agentsLoading}
-                      onValueChange={(value) => setField("agentId", value)}
-                    />
+                    {/* 業務 Agent の読み込み中は、無効の空の欄ではなく欄の形で場所を確保する（#4649）。 */}
+                    {agentsLoading ? (
+                      <FieldSkeleton
+                        width="lg"
+                        fieldLabel={t("automation.agent")}
+                        label={t("loading.agents")}
+                        testId="automation-agent-loading"
+                      />
+                    ) : (
+                      <SelectField<string>
+                        id="automation-agent"
+                        label={t("automation.agent")}
+                        width="lg"
+                        required
+                        placeholder={t("automation.agentPlaceholder")}
+                        value={draft.agentId}
+                        options={agentOptions}
+                        error={agentError}
+                        helper={
+                          agentsLoadFailed && agents.length === 0
+                            ? t("common.error.load")
+                            : agents.length === 0
+                            ? t("automation.agentNone")
+                            : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
+                              ? t("automation.agentUnavailableHint")
+                              : undefined
+                        }
+                        onValueChange={(value) => setField("agentId", value)}
+                      />
+                    )}
                   </FormGrid>
                   <ApprovalToolsNotice data={approvalTools.data} canOpenToolPolicy={canOpenToolPolicy} />
                   <TextareaField
