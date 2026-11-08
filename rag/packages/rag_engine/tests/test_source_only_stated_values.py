@@ -76,7 +76,12 @@ def _bind(output: dict[str, Any], prompt: str) -> dict[str, Any]:
 
 
 def _source(requirement: str, *units: str) -> dict[str, Any]:
-    return {"request_id": "Q1", "requirement": requirement, "mode": "stated", "answer": {"kind": "source", "basis": {"unit_ids": list(units)}}}
+    return {
+        "request_id": "Q1",
+        "requirement": requirement,
+        "mode": "stated",
+        "answer": {"kind": "source", "basis": {"unit_ids": list(units)}},
+    }
 
 
 def _derived(requirement: str, result: str, *units: str) -> dict[str, Any]:
@@ -133,7 +138,9 @@ def run(first: dict[str, Any], repair: dict[str, Any], *, texts: tuple[str, ...]
         if undetermined
         else {}
     )
-    settings = replace(get_settings(environ=environ, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = replace(
+        get_settings(environ=environ, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0
+    )
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
             QUESTION, AnswerContext(records=records, text="\n".join(texts)), settings, image_prompt_mode="text_only"
