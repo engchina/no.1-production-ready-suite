@@ -105,11 +105,6 @@ class FakeOracle:
         self.large_category_calls.append(dict(filters))
         return list(self.large_categories)
 
-    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        self.probes.append(dict(filters))
-        name = filters.get("file_name", "").casefold()
-        return any(name in (chunk.file_name or "").casefold() for chunk in self.chunks)
-
     async def document_classifications(
         self, document_ids: list[str]
     ) -> dict[str, dict[str, object]]:
@@ -2023,33 +2018,6 @@ def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
 
 
-async def test_oracle_has_retrieval_chunks_uses_search_scope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """文書名の存在確認は検索と同じ条件(KB・文書名)で 1 行だけ読む(#546)。"""
-    from app.clients.oracle import OracleClient
-
-    client = OracleClient(settings=Settings())
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    async def fake_fetch_all(
-        statement: str, binds: dict[str, object] | None = None
-    ) -> list[dict[str, object]]:
-        calls.append((statement, dict(binds or {})))
-        return [] if len(calls) > 1 else [{"found": 1}]
-
-    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
-    filters = {"knowledge_base_id": "kb-1", "file_name": "Manual.pdf"}
-
-    assert await client.has_retrieval_chunks(filters) is True
-    assert await client.has_retrieval_chunks(filters) is False
-    statement, binds = calls[0]
-    assert "ROWNUM = 1" in statement
-    assert "LOWER(d.file_name) LIKE :filter_file_name" in statement
-    assert binds["filter_file_name"] == "%manual.pdf%"
-    assert "kb-1" in binds.values()
-
-
 async def test_oracle_retrieval_large_categories_uses_search_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2261,7 +2229,6 @@ async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
     )
 
     assert calls.count("ScreenLinks") == 1
-    assert outcome.diagnostics["auto_field_filter"]["relaxed"] is False
     assert oracle.section_calls and oracle.state_calls and oracle.screen_filters
     assert "setting:c1" in _evidence_ids(outcome)
     for filters in [*oracle.section_calls, *oracle.state_calls, *oracle.screen_filters]:
@@ -2924,14 +2891,13 @@ async def test_answer_engine_applies_auto_field_conditions(
     )
     assert outcome.diagnostics["auto_field_filter"] == {
         "conditions": [condition.model_dump()],
-        "relaxed": False,
     }
 
 
-async def test_answer_engine_relaxes_auto_field_conditions_without_hits(
+async def test_answer_engine_keeps_auto_field_conditions_without_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """読み取った条件で 0 件なら、条件を外して 1 回だけ検索し直す(手の条件は外さない。#652)。"""
+    """読み取った条件で 0 件なら、条件を外して検索し直さない。"""
     import rag_engine.adapters.oci as engine_oci
 
     from app.schemas.search import ExtractionFieldCondition
@@ -2948,11 +2914,12 @@ async def test_answer_engine_relaxes_auto_field_conditions_without_hits(
     )
     outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
 
-    assert "extraction_fields" in oracle.filters[0]
-    assert "extraction_fields" not in oracle.filters[-1]
-    assert outcome.citations
-    assert outcome.diagnostics["auto_field_filter"]["relaxed"] is True
-    assert outcome.diagnostics["filter_relaxation"]["relaxed"] == ["auto_field"]
+    assert oracle.filters
+    assert all("extraction_fields" in item for item in oracle.filters)
+    assert not outcome.citations
+    assert "filter_relaxation" not in outcome.diagnostics
+    assert outcome.diagnostics["zero_evidence"]["stage"] == "filter"
+    assert outcome.diagnostics["zero_evidence"]["automatic_filters"] == ["auto_field"]
 
 
 class EmptyWithKeysOracle(FakeOracle):

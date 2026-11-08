@@ -2202,9 +2202,6 @@ def section_scope(monkeypatch: pytest.MonkeyPatch) -> SectionScopeMap:
 class SectionReferenceOracle(ReferenceOracle):
     """回答の実行(``AnswerEngine.run``)で読む部分も持つ交差参照の代役。"""
 
-    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        return True
-
 
 class PageScopedReferenceOracle(SectionReferenceOracle):
     """主の検索は、呼び出し元のページの範囲の中の ``hits`` だけを返す代役。"""
