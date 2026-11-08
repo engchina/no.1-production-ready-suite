@@ -302,7 +302,7 @@ def _units_without_table_headers(selected: list[BoundUnitRange]) -> list[str]:
     for binding in selected:
         span = binding.snapshot.span()
         text = str(span.get("text") or "")
-        tables = evidence_cuts(span).tables
+        tables = evidence_cuts(span, {}).tables  # 表の範囲だけを使うので、章節の切れ目の入力は要らない。
         for start, end in binding.snapshot.units[binding.first : binding.last + 1]:
             if not any(table.start <= start < table.body_start for table in tables):
                 texts.append(text[start:end])
