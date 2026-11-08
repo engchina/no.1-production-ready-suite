@@ -25,6 +25,8 @@ import {
   useActionPending,
   FormGrid,
   ListToolbar,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   SelectField,
   TextField,
   FieldLegend,
@@ -2101,7 +2103,7 @@ export function SecurityDeepSecPage() {
                       />
                     ) : null}
                     <div
-                      className="grid max-h-[17.5rem] gap-1.5 overflow-auto pr-1"
+                      className={`grid gap-1.5 ${INFORMATION_LIST_SCROLL_CLASS}`}
                       data-testid="security-deepsec-entitlement-roles"
                     >
                       {!entitlementLoading && filteredEntitlementRoles.length === 0 ? (
@@ -2231,6 +2233,9 @@ export function SecurityDeepSecPage() {
                               className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden 2xl:grid-cols-[minmax(12rem,18rem)_minmax(0,1fr)] 2xl:grid-rows-1"
                               data-testid="security-deepsec-entitlement-workspace"
                             >
+                            {/* 一覧 + 編集の 2 列の枠（高さは枠が決める）の一覧の列。2xl 未満は編集の上に積むので一覧の高さを
+                                小さく止める（page-archetypes.md の例外「一覧 + 詳細の一覧の列」。#4636）。 */}
+                            {/* oxlint-disable-next-line design-system/restricted-syntax -- 枠の高さの中の一覧の列（一覧 + 詳細の例外） */}
                             <div
                               className="grid max-h-36 min-h-0 content-start gap-2 overflow-y-auto pr-1 2xl:max-h-none"
                               aria-label={t("security.deepsec.entitlements.ruleList")}
@@ -2417,7 +2422,7 @@ export function SecurityDeepSecPage() {
                                           </p>
                                         ) : detail?.columns.length ? (
                                           <div
-                                            className="mt-1 grid max-h-48 gap-2 overflow-auto rounded-md border border-border bg-surface-sunken p-2 sm:grid-cols-2 xl:grid-cols-3"
+                                            className={`mt-1 grid gap-2 rounded-md border border-border bg-surface-sunken p-2 sm:grid-cols-2 xl:grid-cols-3 ${INFORMATION_LIST_SCROLL_CLASS}`}
                                             data-entitlement-scroll-container
                                             data-testid={`security-deepsec-entitlement-columns-grid-${index}`}
                                           >
@@ -2740,7 +2745,7 @@ export function SecurityDeepSecPage() {
                       role="region"
                       aria-label={t("security.deepsec.resultListAriaLabel")}
                       tabIndex={0}
-                      className="grid max-h-[23.25rem] gap-2 overflow-y-auto overscroll-contain pr-1"
+                      className={`grid gap-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
                       data-testid="security-deepsec-verification-results"
                     >
                       {verification.checks.map((check) => (

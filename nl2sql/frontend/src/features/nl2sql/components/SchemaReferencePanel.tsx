@@ -11,6 +11,7 @@ import {
   DisclosureChevron,
   ListToolbar,
   SearchField,
+  INFORMATION_LIST_SCROLL_CLASS,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
@@ -44,7 +45,6 @@ export function SchemaReferencePanel({
   insertMode = "logical",
   allowedTableNames = null,
   scopeAppliedByServer = false,
-  listMaxHeightClass = "max-h-72",
   onRefreshSchema,
   refreshing = false,
   refreshStarting = false,
@@ -79,8 +79,6 @@ export function SchemaReferencePanel({
    * `allowedTableNames` で絞っていても、API の total（`totalCount`）をそのまま件数に使う（#1891）。
    */
   scopeAppliedByServer?: boolean;
-  /** リスト領域の最大高さ Tailwind クラス。 */
-  listMaxHeightClass?: string;
   /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh-jobs）。 */
   onRefreshSchema?: () => void;
   /** スキーマの更新の送信中または job の実行中（進行の表示を出し、更新のボタンを無効にする）。 */
@@ -315,7 +313,8 @@ export function SchemaReferencePanel({
 
       {!listHidden && (
       <div
-        className={`grid min-w-0 max-w-full ${listMaxHeightClass} content-start gap-1 overflow-x-hidden overflow-y-auto pr-1`}
+        // 表の数だけ増えるので、共通の行リストの高さで止める（手書きの max-h にしない。#4636）。
+        className={`grid min-w-0 max-w-full content-start gap-1 ${INFORMATION_LIST_SCROLL_CLASS} overflow-x-hidden`}
       >
         {filteredTables.map((table) => (
           <SchemaTableItem

@@ -1725,7 +1725,6 @@ function ExecutableNl2SqlWorkbench() {
                         scopeAppliedByServer
                         totalCount={schemaTotalCount}
                         unfilteredTotalCount={schemaUnfilteredTotalCount}
-                        listMaxHeightClass="max-h-[30rem]"
                         onRefreshSchema={
                           canRefreshSchema
                             ? () => void loadCatalog(true, false, WORKBENCH_SCHEMA_REFRESH_PANEL)

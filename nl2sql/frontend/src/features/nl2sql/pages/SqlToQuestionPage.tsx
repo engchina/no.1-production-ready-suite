@@ -18,6 +18,9 @@ import {
   FormGrid,
   DISPLAY_DATE_TIME_SECONDS,
   formatDisplayDateTime,
+  ListScrollRegion,
+  ListToolbar,
+  LoadMoreFooter,
 } from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -48,6 +51,7 @@ import type {
   SchemaObjectPage,
   SchemaTable,
 } from "../types";
+import { listCountLabels, listScrollLabel } from "@/lib/pagination-labels";
 
 type SqlToQuestionPanel = "input" | "structure";
 type GeneratedSql = { sql: string; explanation: string; warnings: string[]; at: string };
@@ -67,6 +71,10 @@ export function SqlToQuestionPage() {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileUsageContext | null>(null);
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
+  // スキーマの一覧はカーソルで続きを読む（100 件で黙って切らない。#4636）。
+  const [schemaPaging, setSchemaPaging] = useState<{ cursor: string | null; total: number | null }>({ cursor: null, total: null });
+  const [schemaLoadingMore, setSchemaLoadingMore] = useState(false);
+  const [schemaLoadMoreError, setSchemaLoadMoreError] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useWorkspaceState("selectedProfileId", "");
   const [sql, setSql] = useWorkspaceState(`sql:${selectedProfileId}`, "");
   const [structureText, setStructureText] = useWorkspaceState(`structureText:${selectedProfileId}`, "");
@@ -162,6 +170,7 @@ export function SqlToQuestionPage() {
   if (useValuesChanged([referenceRefreshVersion, runScopedRequest, selectedProfileId]) && !selectedProfileId) {
     setSelectedProfile(null);
     setSchemaTables([]);
+    setSchemaPaging({ cursor: null, total: null });
   }
 
   useEffect(() => {
@@ -205,6 +214,8 @@ export function SqlToQuestionPage() {
               detailsByName.get(JSON.stringify([item.owner, item.object_name])) ?? schemaSummaryTable(item)
           )
         );
+        setSchemaPaging({ cursor: page.next_cursor, total: page.total });
+        setSchemaLoadMoreError("");
       } catch (error) {
         if (!isAbortError(error) && sequence === detailSequence.current) {
           setLoadError(actionableError(error, t("sqlToQuestion.error.load")));
@@ -214,6 +225,36 @@ export function SqlToQuestionPage() {
       }
     });
   }, [referenceRefreshVersion, runScopedRequest, selectedProfileId]);
+
+  const loadMoreSchema = useCallback(() => {
+    if (!selectedProfileId || !schemaPaging.cursor) return;
+    const sequence = detailSequence.current;
+    const params = new URLSearchParams({
+      limit: "100",
+      profile_id: selectedProfileId,
+      cursor: schemaPaging.cursor,
+      include_counts: "false",
+    });
+    setSchemaLoadingMore(true);
+    setSchemaLoadMoreError("");
+    void runScopedRequest(async (signal) => {
+      try {
+        const page = await apiGet<SchemaObjectPage>(`/api/schema/objects?${params}`, {
+          signal,
+          timeoutMs: API_TIMEOUT_MS.interactiveList,
+        });
+        if (signal.aborted || sequence !== detailSequence.current) return;
+        setSchemaTables((current) => [...current, ...page.items.map(schemaSummaryTable)]);
+        setSchemaPaging((current) => ({ cursor: page.next_cursor, total: page.total ?? current.total }));
+      } catch (error) {
+        if (!isAbortError(error) && sequence === detailSequence.current) {
+          setSchemaLoadMoreError(actionableError(error, t("sqlToQuestion.error.load")));
+        }
+      } finally {
+        if (sequence === detailSequence.current) setSchemaLoadingMore(false);
+      }
+    });
+  }, [runScopedRequest, schemaPaging.cursor, selectedProfileId]);
 
   const referenceVisited = useRef(false);
   useWorkspaceActivation(() => {
@@ -496,6 +537,11 @@ export function SqlToQuestionPage() {
                 buttonSpinning={refreshOrigin !== null}
                 profile={selectedProfile}
                 tables={schemaTables}
+                total={schemaPaging.total}
+                hasMore={Boolean(schemaPaging.cursor)}
+                loadingMore={schemaLoadingMore}
+                loadMoreError={schemaLoadMoreError}
+                onLoadMore={loadMoreSchema}
                 loadFailed={Boolean(loadError)}
               />
             }
@@ -629,10 +675,21 @@ function SchemaPreview({
   buttonSpinning,
   profile,
   tables,
+  total,
+  hasMore,
+  loadingMore,
+  loadMoreError,
+  onLoadMore,
 }: {
   loading: boolean;
   buttonSpinning: boolean;
   profile: ProfileUsageContext | null;
+  /** 業務プロファイルで参照できる表の全件（数えられないときは null）。 */
+  total: number | null;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError: string;
+  onLoadMore: () => void;
   /** 読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。 */
   loadFailed: boolean;
   tables: SchemaTable[];
@@ -661,9 +718,6 @@ function SchemaPreview({
     <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge icon={false} variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
-        <span data-testid="sql-to-question-table-count">
-          <StatusBadge icon={false} variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
-        </span>
       </div>
       <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Database size={16} aria-hidden="true" />
@@ -677,7 +731,10 @@ function SchemaPreview({
           hint={t("sqlToQuestion.schema.empty")}
         />
       ) : (
-        <div className="grid max-h-96 gap-2 overflow-auto pr-1">
+        // 件数はツールバーの ListCount、一覧は高い行の一覧の高さで止め、続きは「さらに読み込む」で足す（#4636）。
+        <div className="grid min-w-0 gap-2">
+        <ListToolbar count={{ total: total ?? tables.length, labels: listCountLabels() }} testId="sql-to-question-table-count" />
+        <ListScrollRegion size="card" label={listScrollLabel(t("sqlToQuestion.schema.title"))} className="grid gap-2">
           {tables.map((table) => (
             <section key={JSON.stringify([table.owner, table.table_name])} className="rounded-md border border-border bg-surface p-3">
               <p className="font-semibold text-fg">
@@ -697,6 +754,19 @@ function SchemaPreview({
               </p>
             </section>
           ))}
+        </ListScrollRegion>
+        {hasMore || loadMoreError ? (
+          <LoadMoreFooter
+            summary={t("sqlToQuestion.schema.loaded", { loaded: tables.length, total: total ?? tables.length })}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            loadMoreError={loadMoreError || undefined}
+            onLoadMore={onLoadMore}
+            onRetry={onLoadMore}
+            loadMoreLabel={t("profiles.action.loadMore")}
+            retryLabel={t("common.retry")}
+          />
+        ) : null}
         </div>
       )}
     </section>

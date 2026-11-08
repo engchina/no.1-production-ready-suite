@@ -18,6 +18,9 @@ import {
   ActionResultRegion,
   ContentActionBar,
   INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  ListScrollRegion,
+  ListToolbar,
   ExecutionConfirmationField,
   FormGrid,
   TextareaField,
@@ -47,6 +50,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
+import { listCountLabels, listScrollLabel } from "@/lib/pagination-labels";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 import type {
   DbAdminExecuteData,
@@ -281,6 +285,9 @@ export function DbObjectColumnsTable({
     },
   ];
   return (
+    <div className="grid min-w-0 gap-2">
+    {/* 件数はツールバーの ListCount 1 か所（#4636）。 */}
+    <ListToolbar count={{ total: columns.length, labels: listCountLabels() }} testId="db-admin-detail-columns-toolbar" />
     <DataTable
       columns={tableColumns}
       rows={columns}
@@ -291,8 +298,13 @@ export function DbObjectColumnsTable({
       tableClassName={showComment ? "w-full min-w-[44rem] table-fixed" : "w-full min-w-[36rem] table-fixed"}
       scrollAriaLabel={t("dbAdmin.detail.columnsScrollLabel")}
       scrollTestId="db-admin-detail-columns"
-      // 詳細はページと一緒にスクロールする（詳細の中に縦のスクロールを入れ子にしない。#2281）。
+      // 列が数百あってもページ全体を伸ばさない。表頭を固定し、8 行以上・画面の下端までの高さで表の中をスクロールする
+      // （#4636。以前は詳細と一緒にページがスクロールした。#2281）。
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      growToViewport
     />
+    </div>
   );
 }
 
@@ -604,7 +616,10 @@ export function DbAdminExecutionResult({
         <QueryResultTable results={result.select_result} rowLimit={rowLimit} csvFilePrefix="nl2sql-admin-sql-result" />
       )}
       {showStatementDetails ? (
-        <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
+        <div className="grid min-w-0 gap-2">
+        {/* 文の数（スクリプトでは数百）に上限が無いので、件数をツールバーに出し、高い行の一覧の高さで止める（#4636）。 */}
+        <ListToolbar count={{ total: result.statements.length, labels: listCountLabels() }} testId="db-admin-statement-results-toolbar" />
+        <ListScrollRegion size="card" label={listScrollLabel(t("dbAdmin.result.statementsLabel"))} className="grid gap-2" testId="db-admin-statement-results">
           {result.statements.map((statement) => (
             <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-surface p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -628,6 +643,7 @@ export function DbAdminExecutionResult({
               {statement.error_message && <DbAdminStatementError statement={statement} context={context} />}
             </div>
           ))}
+        </ListScrollRegion>
         </div>
       ) : null}
     </section>

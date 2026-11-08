@@ -21,6 +21,8 @@ import {
   FormGrid,
   DISPLAY_TIME_SECONDS,
   formatDisplayDateTime,
+  ListScrollRegion,
+  ListToolbar,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -91,6 +93,7 @@ import type {
   OntologyRevision,
   OntologySourceDocument,
 } from "./types";
+import { listCountLabels, listScrollLabel } from "@/lib/pagination-labels";
 
 const POLL_INTERVAL_MS = 1000;
 /**
@@ -491,6 +494,10 @@ function SavedSourceDocumentsList({
         />
       ) : null}
       {documents.length > 0 ? (
+        // アップロードの数だけ増えるので、件数をツールバーに出し、行リストの高さで止める（#4636）。
+        <>
+        <ListToolbar count={{ total: documents.length, labels: listCountLabels() }} testId="ontology-build-saved-files-toolbar" />
+        <ListScrollRegion label={listScrollLabel(t("profiles.ontologyBuild.savedFilesList"))}>
         <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.savedFilesList")}>
           {documents.map((source) => (
             <li key={source.id} className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm">
@@ -547,6 +554,8 @@ function SavedSourceDocumentsList({
             </li>
           ))}
         </ul>
+        </ListScrollRegion>
+        </>
       ) : loading ? (
         // 文字だけにせず、経過時間とファイルの行の形の Skeleton を出す（#265）。
         <TimedLoadingState
@@ -1489,7 +1498,8 @@ export function OntologyBuildSection({
       assignments.set(stage, events);
     }
     for (const [stage, events] of assignments) {
-      stageEvents[stage as keyof typeof stageEvents] = <ol className="grid gap-1 text-xs text-fg-muted" aria-label={t("profiles.ontologyBuild.stepEventsLabel")}><BuildEventRows events={events} /></ol>;
+      // 経過のイベント（最大 100 件）は行リストの高さで止める（#4636）。
+      stageEvents[stage as keyof typeof stageEvents] = <ListScrollRegion label={listScrollLabel(t("profiles.ontologyBuild.stepEventsLabel"))}><ol className="grid gap-1 text-xs text-fg-muted" aria-label={t("profiles.ontologyBuild.stepEventsLabel")}><BuildEventRows events={events} /></ol></ListScrollRegion>;
     }
   }
   const buildProgress = job ? orderedBuildProgress(job, job.steps.map((step, stepIndex) => {
@@ -1522,12 +1532,14 @@ export function OntologyBuildSection({
             </p>
           ) : null}
           {stepEvents.length > 0 ? (
-            <ol
-              className="mt-2 grid gap-1 border-l border-border pl-3"
-              aria-label={t("profiles.ontologyBuild.stepEventsLabel")}
-            >
-              <BuildEventRows events={stepEvents} />
-            </ol>
+            <ListScrollRegion className="mt-2" label={listScrollLabel(t("profiles.ontologyBuild.stepEventsLabel"))}>
+              <ol
+                className="grid gap-1 border-l border-border pl-3"
+                aria-label={t("profiles.ontologyBuild.stepEventsLabel")}
+              >
+                <BuildEventRows events={stepEvents} />
+              </ol>
+            </ListScrollRegion>
           ) : null}
         </>
       ),
@@ -1864,6 +1876,8 @@ export function OntologyBuildSection({
                 {/* DB の構造を読み取れない失敗では、警告は案内の中に出す（同じ趣旨を 2 か所に出さない。#2034）。 */}
                 {!schemaScopeFailure ? buildWarningsDisclosure(job.status === "failed") : null}
                 {(job.sources?.length ?? 0) > 0 ? (
+                  // 資料の数だけ増えるので、行リストの高さで止める（#4636）。
+                  <ListScrollRegion label={listScrollLabel(t("profiles.ontologyBuild.sourceProgress"))}>
                   <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceProgress")}>
                     {(job.sources ?? []).map((source) => (
                       <li
@@ -1889,6 +1903,7 @@ export function OntologyBuildSection({
                       </li>
                     ))}
                   </ul>
+                  </ListScrollRegion>
                 ) : null}
               </div>
             ) : null

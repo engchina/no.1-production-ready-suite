@@ -1,4 +1,4 @@
-import { Disclosure, StatusBadge } from "@production-ready/ui";
+import { Disclosure, StatusBadge, ListScrollRegion, ListToolbar } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import { DefinitionFields, TechnicalDetails } from "./ontologyResultPresentation";
 import { conceptLabel } from "./unifiedConcepts";
@@ -9,6 +9,7 @@ import {
   type PublicationDifference,
 } from "./publicationSummary";
 import type { OntologyFinding } from "./types";
+import { listCountLabels, listScrollLabel } from "@/lib/pagination-labels";
 
 const STATUS_VARIANT = { added: "success", changed: "info", removed: "danger" } as const;
 
@@ -77,19 +78,24 @@ export function PublicationChanges({ differences, findings, definitions }: {
           : t("markdownOntology.changes.summary", summary.counts)}
     </p>
     {summary.total > 0 && <div className="grid min-w-0 gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <h5 className="text-sm font-semibold">{t("markdownOntology.changes.review")}</h5>
-        <span className="tnum text-xs text-fg-muted">{t("markdownOntology.occurrences", { count: summary.review.length })}</span>
-      </div>
+      <h5 className="text-sm font-semibold">{t("markdownOntology.changes.review")}</h5>
+      {/* 定義の差分の数だけ増えるので、件数はツールバー、一覧は高い行の一覧の高さで止める（#4636）。 */}
       {summary.review.length
-        ? <ul className="grid min-w-0 gap-3" aria-label={t("markdownOntology.changes.review")}>{summary.review.map(row => <ChangeItem key={row.id} row={row} />)}</ul>
+        ? <>
+          <ListToolbar count={{ total: summary.review.length, labels: listCountLabels() }} testId="ontology-publication-review-toolbar" />
+          <ListScrollRegion size="card" label={listScrollLabel(t("markdownOntology.changes.review"))}>
+            <ul className="grid min-w-0 gap-3" aria-label={t("markdownOntology.changes.review")}>{summary.review.map(row => <ChangeItem key={row.id} row={row} />)}</ul>
+          </ListScrollRegion>
+        </>
         : <p className="text-sm text-fg-muted">{t("markdownOntology.changes.noReview")}</p>}
     </div>}
     {!summary.first && summary.others.length > 0 && <Disclosure data-testid="ontology-publication-unchanged-issues"
       summary={t("markdownOntology.changes.ok")}
       meta={<span className="tnum text-xs text-fg-muted">{t("markdownOntology.occurrences", { count: summary.others.length })}</span>}
       summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-3 p-4">
-      <ul className="grid min-w-0 gap-3">{summary.others.map(row => <ChangeItem key={row.id} row={row} />)}</ul>
+      <ListScrollRegion size="card" label={listScrollLabel(t("markdownOntology.changes.ok"))}>
+        <ul className="grid min-w-0 gap-3">{summary.others.map(row => <ChangeItem key={row.id} row={row} />)}</ul>
+      </ListScrollRegion>
     </Disclosure>}
   </section>;
 }
