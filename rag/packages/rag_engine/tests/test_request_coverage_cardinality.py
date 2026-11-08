@@ -1,6 +1,7 @@
-"""要求ごとの根拠の計画（request_coverage）は、その回の要求 1 つにつき 1 件だけを受ける（#4587）。
+"""要求ごとの根拠の計画（request_coverage）は、その回の要求 1 つにつき 1 件だけにする（#4587）。
 
-同じ要求の計画を言い回しを変えて繰り返す出力（合成の録画応答）を、構造で受けない。
+計画だけを立てる経路（answer.scope）は、同じ要求の計画を言い回しを変えて繰り返す出力を構造で受けない。回答の生成の
+出力には計画が無く、コードが要点の basis から要求ごとに 1 件だけ導く（#4611）ので、繰り返した計画の行は読まない。
 """
 
 import json
@@ -56,51 +57,32 @@ def coverage_schema(model: Any) -> dict[str, Any]:
     return {"field": field, "request_id": item["properties"]["request_id"]}
 
 
-def test_generation_schema_bounds_coverage_to_the_request_ids():
+def test_generation_schema_has_no_plan():
     units, _ = catalog()
-    ids = generation_request_ids(QUESTION)
-    assert ids == ("Q1",)
-    schema = coverage_schema(generation_output_model(QUESTION, unit_catalog=units))
-    assert schema["field"]["minItems"] == schema["field"]["maxItems"] == len(ids)
-    assert schema["request_id"].get("enum", [schema["request_id"].get("const")]) == list(ids)
-
-
-def test_recorded_repetition_of_one_request_is_rejected():
-    """要求が 1 つの質問で、同じ request_id の計画を target だけ変えて繰り返した出力（録画の形の合成）。"""
-    units, snapshot = catalog()
-    model = generation_output_model(QUESTION, unit_catalog=units)
-    repeated = [plan("Q1", f"項目Aの記録値（言い換え{n}）") for n in range(6)]
-    with pytest.raises(ValidationError):
-        model.model_validate(draft(repeated, snapshot))
-
-
-def test_one_plan_per_request_passes_and_reaches_the_canonical_draft():
-    units, snapshot = catalog()
-    model = generation_output_model(QUESTION, unit_catalog=units)
-    canonical = canonical_generation_draft(model.model_validate(draft([plan("Q1")], snapshot)), unit_catalog=units)
-    assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
-    assert canonical.request_coverage[0].evidence_ids == ["E1"]
+    assert generation_request_ids(QUESTION) == ("Q1",)
+    assert "request_coverage" not in generation_output_model(QUESTION, unit_catalog=units).model_json_schema()["properties"]
 
 
 @pytest.mark.parametrize(
     "coverage",
-    [[], [{"request_id": "Q2", "evidence_scope": []}]],
-    ids=["missing", "foreign-id"],
+    [[], [plan("Q1", f"項目Aの記録値（言い換え{n}）") for n in range(6)], [{"request_id": "Q2", "evidence_scope": []}]],
+    ids=["missing", "repeated", "foreign-id"],
 )
-def test_missing_or_foreign_plan_is_rejected(coverage):
+def test_generation_derives_one_plan_per_request_whatever_plan_rows_the_model_returned(coverage):
+    """要求が 1 つの質問。モデルが計画の行を返しても（無い・繰り返し・別の要求）、計画は basis から 1 件だけ導く。"""
     units, snapshot = catalog()
     model = generation_output_model(QUESTION, unit_catalog=units)
-    with pytest.raises(ValidationError):
-        model.model_validate(draft(coverage, snapshot))
+    canonical = canonical_generation_draft(model.model_validate(draft(coverage, snapshot)), unit_catalog=units)
+    assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
+    assert canonical.request_coverage[0].evidence_ids == ["E1"]
+    assert [(scope.evidence_id, scope.relation) for scope in canonical.request_coverage[0].evidence_scope] == [("E1", "direct")]
 
 
-def test_several_requests_take_one_plan_each_and_reject_a_repeated_id():
+def test_several_requests_take_one_plan_each_even_without_basis():
     units, snapshot = catalog()
     model = answer_parts_model(generation_draft_wire_model(), units, request_ids=("Q1", "Q2"))
-    assert coverage_schema(model)["field"]["maxItems"] == 2
-    model.model_validate(draft([plan("Q1"), plan("Q2")], snapshot))
-    with pytest.raises(ValidationError, match="Q1"):
-        model.model_validate(draft([plan("Q1"), plan("Q1", "項目Aの値")], snapshot))
+    canonical = canonical_generation_draft(model.model_validate(draft([], snapshot)), unit_catalog=units)
+    assert [(entry.request_id, entry.evidence_ids) for entry in canonical.request_coverage] == [("Q1", ["E1"]), ("Q2", [])]
 
 
 def test_scope_plan_schema_takes_one_plan_per_request():
@@ -113,8 +95,8 @@ def test_scope_plan_schema_takes_one_plan_per_request():
         model.model_validate({"request_coverage": [plan("Q1"), plan("Q1", "別の言い方")]})
 
 
-def test_generation_call_sends_the_bounded_coverage_schema():
-    """実際の生成の呼び出しに渡す schema も、要求の数で絞る。"""
+def test_generation_call_sends_no_plan_schema():
+    """実際の生成の呼び出しに渡す schema にも計画は無い。"""
     captured: list[Any] = []
 
     def parse(system, prompt, config, schema, **options):
@@ -144,13 +126,16 @@ def test_generation_call_sends_the_bounded_coverage_schema():
         pytest.raises(RuntimeError, match="schema を確かめたら止める"),
     ):
         synthesize_grounded_answer(QUESTION, AnswerContext(records=[record], text=TEXT), settings, image_prompt_mode="text_only")
-    generation = next(schema for schema in captured if "request_coverage" in schema.model_json_schema()["properties"])
-    field = coverage_schema(generation)["field"]
-    assert field["minItems"] == field["maxItems"] == 1
+    generation = [schema for schema in captured if getattr(schema, "_uses_typed_answer_parts", False)]
+    assert generation
+    assert all("request_coverage" not in schema.model_json_schema()["properties"] for schema in generation)
 
 
-def test_recorded_repetitive_output_is_rejected_and_a_single_plan_recording_passes():
-    """#4586 の録画応答（合成の判定表と区分の規則。要求は Q1 だけ）を、生成の schema で検証し直す。"""
+def test_recorded_repetitive_output_keeps_one_derived_plan():
+    """#4586 の録画応答（合成の判定表と区分の規則。要求は Q1 だけ）を、生成の schema で検証し直す。
+
+    計画を繰り返した出力も、計画の行を読まないので有効な出力になり、計画は basis から 1 件だけ導く。
+    """
     from test_source_only_derivation import FIXTURE, RULE, TABLE
     from test_source_only_derivation import QUESTION as TABLE_QUESTION
 
@@ -176,7 +161,16 @@ def test_recorded_repetitive_output_is_rejected_and_a_single_plan_recording_pass
     repeated = replay("deployed_42dd5db")
     assert len(repeated["request_coverage"]) > 1
     assert {plan["request_id"] for plan in repeated["request_coverage"]} == {"Q1"}
-    with pytest.raises(ValidationError, match="request_coverage"):
-        model.model_validate(repeated)
-    single = model.model_validate(replay("deployed_c00108e_retry"))
-    assert [plan.request_id for plan in single.request_coverage] == ["Q1"]
+    for name in ("deployed_42dd5db", "deployed_c00108e_retry"):
+        canonical = canonical_generation_draft(model.model_validate(replay(name)), unit_catalog=units)
+        assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
+        assert {scope.relation for scope in canonical.request_coverage[0].evidence_scope} <= {"direct"}
+
+
+def test_scope_plan_row_keeps_target():
+    """計画だけを別に立てる経路は対象の照合が目的なので、行の target を残す（#4594）。"""
+    units, _ = catalog()
+    schema = unit_scope_model(RequestScopePlan, units, request_ids=("Q1",)).model_json_schema()
+    coverage = schema["$defs"][schema["properties"]["request_coverage"]["items"]["$ref"].rsplit("/", 1)[1]]
+    row = schema["$defs"][coverage["properties"]["evidence_scope"]["items"]["$ref"].rsplit("/", 1)[1]]
+    assert "target" in row["properties"]

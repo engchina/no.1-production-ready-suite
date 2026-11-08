@@ -173,10 +173,8 @@ def canonical_generation_draft(
 
         if unit_catalog is None:
             raise ValueError("送達した引用単位の対応がありません。")
-        coverage = canonical_request_coverage(cast(Any, value).request_coverage, link_text, unit_catalog=unit_catalog)
-        return canonical_answer_parts(
-            value, unit_catalog, [row.model_dump() for row in coverage], question=question, underived_requests=underived_requests
-        )
+        # 要求ごとの根拠の計画はモデルの出力に無く、要点の basis から導く（#4611）。
+        return canonical_answer_parts(value, unit_catalog, question=question, underived_requests=underived_requests)
 
     if getattr(type(value), "_uses_unit_ids", False):
         if unit_catalog is None:

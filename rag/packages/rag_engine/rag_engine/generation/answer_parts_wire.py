@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
-from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, request_coverage_field
+from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
 from rag_engine.retrieval.table_header_lines import span_header_lines
 
@@ -48,15 +48,6 @@ HEADER_ONLY_SOURCE_PROMPT = (
 )
 
 
-def _answer_before_coverage(schema: dict[str, Any]) -> None:
-    """要点の原文選択・方法・結果を、回答全体の関係記録より先に生成する。"""
-    properties = schema.get("properties", {})
-    if "request_coverage" in properties:
-        properties["request_coverage"] = properties.pop("request_coverage")
-    if "required" in schema:
-        schema["required"] = [name for name in properties if name in schema["required"]]
-
-
 def answer_parts_model(
     base: type[BaseModel],
     catalog: SentUnitCatalog,
@@ -71,7 +62,8 @@ def answer_parts_model(
     #4586）。原文の写しの導出は従来どおり ``canonical_answer_parts`` が直接の記載に戻す。
     ``requirements`` を渡すと、要点の requirement はその文の写しだけを受ける（作り直しでは 1 回目の出力の要点の文。
     不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
-    ``request_ids`` はその回の要求の id。request_coverage は要求ごとにちょうど 1 件だけを受ける（``request_coverage_field``。#4587）。
+    ``request_ids`` はその回の要求の id。要求ごとの根拠の計画はモデルに書かせず、``canonical_answer_parts`` が要点の
+    basis から要求ごとに 1 件だけ導く（``basis_request_plans``。#4611）。
     """
     source = catalog.selection_model()
     direct = create_model(
@@ -123,8 +115,10 @@ def answer_parts_model(
         "summary": (SkipJsonSchema[str], Field(default="", exclude=True)),
         "summary_item_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
-        # 計画の行は evidence_id → relation → link だけ（自由記述の target を書かせない。#4594）。
-        "request_coverage": request_coverage_field(base, catalog, request_ids, scope_target=False),
+        # 要求ごとの根拠の計画は schema に出さない（#4611）。basis に選んだ根拠が答えに使う根拠なので、計画はコードが
+        # basis から導く。モデルに計画の行を書かせると、basis と同じ根拠を二重に書かせ（暴走の位置。#4594）、basis の
+        # 根拠に unrelated を書いて自分の答えを計画の外にする（#4613）。
+        "request_coverage": (SkipJsonSchema[list[Any]], Field(default_factory=list, exclude=True)),
         "question_type": (
             GenericAlias(list, question_types),
             Field(
@@ -134,16 +128,10 @@ def answer_parts_model(
             ),
         ),
     }
-    if base.model_fields["request_coverage"].exclude:
-        fields["request_coverage"] = (SkipJsonSchema[list[Any]], Field(default_factory=list, exclude=True))
-    model = create_model(
-        base.__name__,
-        __base__=base,
-        __config__=ConfigDict(json_schema_extra=_answer_before_coverage),
-        **fields,
-    )
+    model = create_model(base.__name__, __base__=base, **fields)
     cast(Any, model)._uses_typed_answer_parts = True
     cast(Any, model)._uses_unit_ids = True
+    cast(Any, model)._request_ids = tuple(dict.fromkeys(request_ids))
     return model
 
 
@@ -269,15 +257,42 @@ def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[st
             part["item_indexes"] = quotes
 
 
+def basis_request_plans(request_ids: Sequence[str], basis: Sequence[tuple[str, Sequence[BoundUnitRange]]]) -> list[dict[str, Any]]:
+    """要点の basis から、要求ごとの根拠の計画（``RequestCoverage`` の形）を 1 件ずつ導く（#4611）。
+
+    ``basis`` は答えとして受けた要点（source・answer）の要求 ID と、その basis の単位の組。basis に選んだ根拠は、その
+    要求で答えに使う根拠なので relation=direct の行にする。gap の要点・答えとして受けない見出しの行だけの要点は渡さない。
+    行の名前は根拠の表示 ID（``_label_spans`` が引ける label）の 1 つの形だけにする。``request_ids`` （その回の要求）は
+    basis が無くても計画を 1 件ずつ持ち、要点にだけ現れた要求 ID は後ろに足す。
+    """
+    labels: dict[str, list[str]] = {request_id: [] for request_id in request_ids}
+    for request_id, selected in basis:
+        rows = labels.setdefault(request_id, [])
+        for binding in selected:
+            span = binding.snapshot.span()
+            label = str(span.get("label") or span["evidence_id"])
+            if label not in rows:
+                rows.append(label)
+    return [
+        {
+            "request_id": request_id,
+            "evidence_scope": [{"evidence_id": label, "target": "", "relation": "direct", "link_quote": ""} for label in rows],
+            "evidence_ids": list(rows),
+        }
+        for request_id, rows in labels.items()
+    ]
+
+
 def canonical_answer_parts(
     value: BaseModel,
     catalog: SentUnitCatalog,
-    coverage: list[dict[str, Any]],
     *,
     question: str | None = None,
     underived_requests: Collection[str] = (),
 ) -> GroundedDraft:
     """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。
+
+    要求ごとの根拠の計画は要点の basis から導く（``basis_request_plans``。#4611）。
 
     ``underived_requests`` は、導出が要るのに導出を作れなかった要求（``source_only_derivation`` の作り直しが契約を
     満たさなかったとき。#4586）。その要求の source 型の要点は、原文を引用に残したまま導出の無い derived にし、
@@ -294,6 +309,7 @@ def canonical_answer_parts(
     texts = []
     part_sources = []
     part_applications = []
+    plan_basis: list[tuple[str, list[BoundUnitRange]]] = []
     for position, part in enumerate(wire_parts):
         answer = part["answer"]
         kind = answer["kind"]
@@ -308,6 +324,8 @@ def canonical_answer_parts(
         header_only = kind == "source" and _header_only(selected)
         if header_only:
             selected = []
+        if selected:
+            plan_basis.append((part["request_id"], selected))
         indexes = []
         for binding in selected:
             key = (part["request_id"], binding.snapshot.snapshot_id, binding.first, binding.last)
@@ -382,7 +400,7 @@ def canonical_answer_parts(
         items=items,
         applications=applications,
         answer_parts=parts,
-        request_coverage=coverage,
+        request_coverage=basis_request_plans(getattr(type(value), "_request_ids", ()), plan_basis),
         summary="\n".join(texts[index] for index in chosen),
         summary_item_indexes=list(dict.fromkeys(source for index in chosen for source in part_sources[index])),
         summary_application_indexes=list(dict.fromkeys(app for index in chosen for app in part_applications[index])),

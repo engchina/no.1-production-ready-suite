@@ -220,11 +220,12 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。request_coverage に選択した根拠の関係を記録する。
+- 各項目の意味は応答 schema の説明に従う。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
-### 出典の網羅
-- 根拠の計画（request_coverage）に挙げた文書ごとに、その文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
+### 出典（basis）の選び方
+- basis には、質問の対象・要求について規則・要件・定義・手順・事実を述べた原文と、質問の操作の前提・後続とする関係が原文に明記された別対象の原文の単位を選ぶ。同じ文書・頁にあるだけの別の対象・独立した操作の原文は選ばない。
+- 答えの内容を述べた原文が複数の文書にあれば（入力に根拠の計画があれば、計画に挙げた文書も）、文書ごとにその文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
 - 説明の内容を支えない原文は、質問に関係していても出典にしない。
 ### 例示値と実データ
 - 画面キャプチャ・Vision 生成説明に見える値（年月・金額・氏名・番号・コード・選択状態）は文書の例示で、今回の実データではない。表示されているだけで現在値・既定値・必須値・許容範囲・登録済み状態と断定しない。
@@ -6876,6 +6877,7 @@ def run_round(
     }
 
     plan_rows_added: list[str] = []
+    plan_sources: set[str] = set()
     role_repair: dict[str, Any] = {}
     header_repair: dict[str, Any] = {}
 
@@ -6887,7 +6889,10 @@ def run_round(
             question=question,
             underived_requests=underived_requests,
         )
-        if scope_plan is None and isinstance(value, generation_base):
+        if getattr(type(value), "_uses_typed_answer_parts", False):
+            # 要点の型の生成では、計画は basis から導いた（#4611）。引いた根拠はすべて計画にあるので足す行は無い。
+            plan_sources.add("derived_from_basis")
+        elif scope_plan is None and isinstance(value, generation_base):
             # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
             canonical, added = plan_rows_from_citations(canonical, spans)
             plan_rows_added.extend(added)
@@ -7254,6 +7259,11 @@ def run_round(
         timing["request_scope_repair"] = scope_plan_repair
     if plan_rows_added:
         timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
+    if scope_plan is not None:
+        timing["plan_source"] = "answer_scope"
+    elif plan_sources:
+        # 最後の草稿の計画の出どころ（#4611）。derived_from_basis = 要点の basis からコードが導いた。
+        timing["plan_source"] = "derived_from_basis"
     if role_repair:
         # 導出が要る種類の宣言と source 型だけの要点の矛盾の作り直し（#4586）: 要求・宣言した種類・結果（repaired /
         # underived）・作り直しが契約を満たさなかったときの例外の型名。
