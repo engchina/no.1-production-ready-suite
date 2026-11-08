@@ -597,6 +597,97 @@ test("回答を成果物より先に出し、失敗した実行は理由と処�
   await expect(page.getByTestId("run-timeline-section").getByText(TOOL_STEP)).toBeVisible();
 });
 
+// 120×60 の単色の PNG（根拠の原文のページの画像の代わり）。
+const SOURCE_PAGE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAHgAAAA8CAIAAAAiz+n/AAAAaklEQVR42u3QQQ0AAAgEoEtiMBMbyxbOBxsJSPVwIApEi0a0aNEWRItGtGjRFkSLRrRo0YgWjWjRohEtGtGiRSNaNKJFi0a0aESLFo1o0YgWLRrRohEtWjSiRSNatGhEi0a0aNGIFo3oXxYAgSoOxqX2IQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+// #2731: 実行の詳細の「回答」は grid の子なので、空白の無い長い文書名の根拠の行でも本文の幅を広げない（内容はすべて合成）。
+test("詳細の回答は長い文書名の根拠の行を省略して頁は残し、横にはみ出さず、押すと原文が開く", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const longNames = [
+    "合成の文書A_SYNTHETIC-DOCUMENT-NAME-WITHOUT-ANY-SPACES_第03版_項目の一覧と確認の方法_2026年度_改訂.pdf",
+    "合成の文書B_SYNTHETIC-DOCUMENT-NAME-WITHOUT-ANY-SPACES_第04版_项目的一览与确认方法_2026年度_改訂.pdf",
+  ];
+  const chunks = ["doc-a:cs_a:1", "doc-b:cs_b:2"];
+  const bullets = ["- 合成の手続きの 1 段目を行います。", "- 合成の手続きの 2 段目を行います。"];
+  seedRun(mockApi);
+  mockApi.state.runs[0].artifacts = [
+    {
+      id: "artifact-evidence",
+      kind: "answer_evidence",
+      name: "回答の根拠",
+      created_at: MOCK_NOW,
+      content: {
+        items: chunks.map((chunkId, index) => ({
+          document_id: chunkId.split(":")[0],
+          chunk_id: chunkId,
+          file_name: longNames[index],
+          excerpt: `合成の本文（${chunkId}）。`,
+          truncated: false,
+          locator: { page_start: 12 + index, page_end: 12 + index, section_path: [] },
+          role: "retrieved_anchor",
+          cited: true,
+          answer_use: "confirmed",
+        })),
+        passed: 2,
+        cited: 2,
+        markers: [],
+        passages: bullets.map((text, index) => ({ text, chunk_ids: [chunks[index]] })),
+      },
+    },
+    {
+      id: "artifact-answer",
+      kind: "answer",
+      name: "回答",
+      created_at: MOCK_NOW,
+      content: { text: ["合成の手続きは 2 段階です。", "", ...bullets].join("\n") },
+    },
+  ];
+  await page.route("http://rag.e2e.test/**", (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", headers: { "Cache-Control": "private, no-store" }, body: SOURCE_PAGE_PNG }),
+  );
+
+  await page.goto("/runs?id=run-layout");
+  const section = page.getByTestId("run-answer-section");
+  const links = section.getByTestId("answer-citation-link");
+  await expect(links).toHaveCount(2);
+  // 省略しても何の根拠か分かるよう、読み上げの名前には全文を残す。
+  await expect(links.first()).toHaveAccessibleName(new RegExp(`${longNames[0]} p\\.12`));
+  // 頁は省略しない（名前だけを省略する）。
+  await expect(links.first().locator(":scope > span").last()).toHaveText("p.12");
+  const metrics = await section.evaluate((element) => {
+    const sectionBox = element.getBoundingClientRect();
+    return {
+      sectionOverflow: element.scrollWidth - element.clientWidth,
+      rows: [...element.querySelectorAll<HTMLElement>('[data-testid="answer-citation-link"]')].map((button) => {
+        const [label, location] = button.querySelectorAll<HTMLElement>(":scope > span");
+        const locationBox = location.getBoundingClientRect();
+        return {
+          buttonRight: button.getBoundingClientRect().right - sectionBox.right,
+          locationVisible: locationBox.width > 0 && locationBox.right <= sectionBox.right + 1 && location.scrollWidth <= location.clientWidth + 1,
+          labelTruncated: label.scrollWidth > label.clientWidth,
+        };
+      }),
+    };
+  });
+  expect(metrics.sectionOverflow).toBeLessThanOrEqual(1);
+  for (const row of metrics.rows) {
+    expect(row.buttonRight).toBeLessThanOrEqual(1);
+    expect(row.locationVisible).toBe(true);
+    if (testInfo.project.name === "mobile-375") expect(row.labelTruncated).toBe(true);
+  }
+  if (testInfo.project.name === "mobile-375") await expect(links.first()).toHaveAttribute("data-truncated", "true");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(0);
+  await section.screenshot({ path: testInfo.outputPath("run-answer-long-citations.png") });
+
+  // 省略した行を押すと、その行の文書の原文を開く。
+  await links.last().click();
+  const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+  await expect(sheet.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText(longNames[1]);
+  await expect(sheet.getByTestId("evidence-source-preview").getByTestId("preview-viewer")).toBeVisible();
+});
+
 test("承認待ちの判断は概要の操作から行い、承認の記録も同じ画面に出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi, "run-layout", "waiting_approval");
   mockApi.state.runs[0].approvals = [
