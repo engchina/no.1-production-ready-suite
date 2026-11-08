@@ -3581,7 +3581,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
         "hybrid_search_backend": "oracle_native",
-        "rrf_method_ratio": [10.0, 1.0],
+        "rrf_method_ratio": [7.0, 3.0],
         "rrf_source_ratio": [7.0, 3.0],
         "retrieval_query_limit": settings.rag_retrieval_query_limit,
         "rerank_top_n": settings.rag_rerank_top_n,

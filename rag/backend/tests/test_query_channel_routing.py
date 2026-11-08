@@ -96,7 +96,7 @@ def test_native_score_is_scaled_once_without_reciprocal_of_fused_rank() -> None:
         weights,
         k=60,
     )
-    assert result.scores == pytest.approx({"b": 0.7 * 0.009, "a": 0.7 * 0.003 + 0.3 / 11 / 61})
+    assert result.scores == pytest.approx({"b": 0.7 * 0.009, "a": 0.7 * 0.003 + 0.09 / 61})
     assert sum(c.value for c in result.contributions if c.chunk_id == "a") == pytest.approx(
         result.scores["a"]
     )

@@ -833,9 +833,10 @@ test(`RRF の比重が未指定の場合も新しい既定値と公式説明を�
   await mockAnsweringSettings(page, [], {rrf_method_ratio: undefined, rrf_source_ratio: undefined});
   await page.goto("/settings/retrieval");
   const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
-  for (const [name,value] of [["ベクトル検索の比重","10"],["全文検索の比重","1"],["原質問の比重","7"],["追加検索文全体の比重","3"]]) {
+  for (const [name,value] of [["ベクトル検索の比重","7"],["全文検索の比重","3"],["原質問の比重","7"],["追加検索文全体の比重","3"]]) {
     await expect(section.getByRole("spinbutton", {name,exact:true})).toHaveValue(value);
   }
+  await expect(section).toContainText("本システムの既定はベクトル 7・全文 3");
   await expect(section).toContainText("Oracle 公式 API の既定はベクトル 10・全文 1");
   await expect(section).toContainText("5:1 は計算例");
   await expect(section).toContainText("7:3 は本システム独自の予算");

@@ -14,7 +14,7 @@
     },
     {
       "label": "ベクトル検索と全文検索の比重",
-      "value": "10：1"
+      "value": "7：3"
     },
     {
       "label": "原質問と追加検索文の比重",
@@ -41,15 +41,15 @@
     {
       "label": "原質問の検索から引き継いだ融合記録",
       "language": "json",
-      "text": "{\n  \"fusion_execution\": \"native_only\",\n  \"oracle_internal_fusion\": true,\n  \"method_ratio\": [\n    10,\n    1\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"q\",\n      \"weight\": 1.0,\n      \"original\": true\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"q\",\n      \"channel\": \"hybrid\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"weight\": 1.0,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"oracle_wrrf\",\n      \"native_scores\": [\n        0.016\n      ]\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-id\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.016,\n      \"fused_score\": 0.016\n    }\n  ],\n  \"raw_count\": 1,\n  \"unique_count\": 1,\n  \"candidate_count\": 1\n}"
+      "text": "{\n  \"fusion_execution\": \"native_only\",\n  \"oracle_internal_fusion\": true,\n  \"method_ratio\": [\n    7,\n    3\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"q\",\n      \"weight\": 1.0,\n      \"original\": true\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"q\",\n      \"channel\": \"hybrid\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"weight\": 1.0,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"oracle_wrrf\",\n      \"native_scores\": [\n        0.016\n      ]\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-id\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.016,\n      \"fused_score\": 0.016\n    }\n  ],\n  \"raw_count\": 1,\n  \"unique_count\": 1,\n  \"candidate_count\": 1\n}"
     }
   ],
   "rrf": {
     "fusion_execution": "native_only",
     "oracle_internal_fusion": true,
     "method_ratio": [
-      10,
-      1
+      7,
+      3
     ],
     "source_ratio": [
       7,

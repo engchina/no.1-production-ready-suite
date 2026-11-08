@@ -260,7 +260,7 @@ def native_search_request(
     vector_limit: int | None = None,
     rank_constant: int = 60,
     accuracy: int = 100,
-    method_ratio: tuple[float, float] = (10, 1),
+    method_ratio: tuple[float, float] = (7, 3),
     text_contains: str | None = None,
 ) -> dict[str, Any]:
     """許可されたchunkの集合を検索前に制限する。空の集合では実行しない。
