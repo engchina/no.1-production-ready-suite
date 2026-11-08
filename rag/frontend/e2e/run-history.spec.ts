@@ -2225,6 +2225,8 @@ test("不足から3拡張を補搜した実編排の記録が経過と軌跡で�
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
   const timeline = page.getByTestId("run-history-timeline");
+  // 段が 10 を超えると畳むので、全部の段を開いてから確かめる（#4636）。
+  await timeline.getByRole("button", { name: /すべて表示/ }).click();
   const vector = recoveryGeneratedTrace.events.filter(event => event.type === "step" && "params" in event && event.params?.name === "ベクトル検索");
   const recovery = recoveryGeneratedTrace.events.find(event => event.type === "step" && "params" in event && event.params?.name === "未回答の要求の探し直し");
   expect(vector).toHaveLength(3);
