@@ -581,7 +581,8 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
     });
   });
   await page.goto("/chat");
-  // 読み込み中: ラベルと欄の形の Skeleton と経過時間（#891）。
+  // 読み込み中: ツールバーには欄の形の Skeleton、文言と経過時間は会話の欄の先頭に 1 か所（#891・#4649）。
+  await expect(page.locator("[data-chat-toolbar]").getByTestId("sql-chat-profiles-skeleton")).toBeVisible();
   const loading = page.getByTestId("sql-chat-profiles-loading");
   await expect(loading).toBeVisible();
   await expect(loading).toContainText("業務プロファイルを読み込んでいます");

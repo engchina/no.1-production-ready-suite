@@ -55,9 +55,10 @@ test("静的な i18n key はすべて日本語辞書に定義されている", (
   );
 });
 
-test("共通・スキーマ読込状態は利用者向けの日本語ラベルを返す", () => {
-  assert.equal(t("common.loading"), "読み込んでいます");
+test("読み込み中は「〜を読み込んでいます」の具体的なラベルを返す（#4649）", () => {
   assert.equal(t("nl2sql.schema.loading"), "スキーマ情報を読み込んでいます");
+  assert.equal(t("nl2sql.profile.loading"), "業務プロファイルを読み込んでいます");
+  assert.equal(t("qualityEvaluation.conditions.loading"), "評価の条件を読み込んでいます");
 });
 
 test("一括選択は範囲が明確な共通文言を返す", () => {

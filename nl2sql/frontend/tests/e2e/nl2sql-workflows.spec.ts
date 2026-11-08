@@ -1,6 +1,7 @@
 import { inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
+import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
 import {jobProgressEvents, jobProgressTraceId, withJobProgress, withRecordedTrace, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
@@ -5452,6 +5453,95 @@ test("SQL の生成と実行の開始時に前回の生成結果を先に消し�
   });
 });
 
+test("SQL 生成の業務プロファイルの読み込み中は、領域の先頭に経過時間を 1 か所だけ出し、欄とスキーマ参照は形の Skeleton にする (#4649)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const profilesGate = createRequestGate();
+  await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
+    await profilesGate.promise;
+    await route.fallback();
+  });
+  await page.goto("/query");
+
+  const workspace = page.getByTestId("nl2sql-workspace-shell");
+  const loading = workspace.getByTestId("nl2sql-profiles-loading");
+  await expect(loading).toContainText("業務プロファイルを読み込んでいます");
+  // 業務プロファイルの欄は文字だけの選択肢ではなく、ラベルと欄の形の Skeleton で寸法を予約する。
+  await expect(workspace.getByTestId("nl2sql-profile-select-skeleton")).toBeVisible();
+  await expect(page.locator("#nl2sql-profile-select")).toHaveCount(0);
+  // スキーマ参照は経過時間を重ねず、表の一覧の形の Skeleton だけにする。
+  await expect(workspace.getByTestId("schema-reference-skeleton")).toBeVisible();
+  await expect(workspace.getByTestId("schema-reference-loading")).toHaveCount(0);
+  await expect(page.getByRole("timer")).toHaveCount(1);
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("query-profiles-loading.png") });
+
+  profilesGate.release();
+  await expect(loading).toHaveCount(0);
+  await expect(page.locator("#nl2sql-profile-select")).toBeVisible();
+  await expect(workspace.getByTestId("nl2sql-profile-select-skeleton")).toHaveCount(0);
+});
+
+test("参考履歴の検索中は見出しの直下に経過時間を出し、開くと結果の一覧の形の Skeleton で覆う (#4649)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const gate = createRequestGate();
+  let requests = 0;
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      return fulfillJson(route, { used_for_generation: true, engine: "enterprise_ai_direct", items: [] });
+    }
+    await gate.promise;
+    return fulfillJson(route, {
+      used_for_generation: true,
+      engine: "enterprise_ai_direct",
+      items: [0.9, 0.88].map((score, index) => ({
+        history_id: `hist-loading-${index + 1}`,
+        question: `参考履歴 ${index + 1}`,
+        sql: historySql,
+        profile_id: historyItem.profile_id,
+        profile_name: historyItem.profile_name,
+        score,
+        reason: "請求金額の履歴と近い質問です。",
+      })),
+    });
+  });
+  await page.goto("/query");
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  const question = nl2sqlQuestionInput(page);
+  await question.fill("請求金額を一覧で見たい");
+  const header = page.getByRole("button", { name: /参考履歴/ });
+  await expect(header).toContainText("0 件");
+  await header.click();
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeVisible();
+
+  // 次の検索は応答を止める。前の結果が無いので、開いた一覧は結果の形の Skeleton で覆い、空の案内は出さない。
+  await question.fill("請求金額を部署別に見たい");
+  const loading = page.getByTestId("nl2sql-similar-history-loading");
+  await expect(loading).toContainText("参考履歴を検索しています");
+  await expect(loading.getByTestId("nl2sql-similar-history-skeleton")).toBeVisible();
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
+  await expect(page.getByText("参考履歴はありません")).toHaveCount(0);
+  await loading.scrollIntoViewIfNeeded();
+  expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("query-similar-history-loading.png") });
+  const skeletonRowHeight = await loading
+    .getByTestId("nl2sql-similar-history-skeleton")
+    .locator("[data-skeleton-row]")
+    .first()
+    .evaluate((element) => element.getBoundingClientRect().height);
+
+  gate.release();
+  await expect(loading).toHaveCount(0);
+  const items = page.getByTestId("nl2sql-similar-history-item");
+  await expect(items).toHaveCount(2);
+  // Skeleton の行は読み込み後の 1 件とおおむね同じ高さ（低すぎて下の内容が押し下がる・高すぎて縮む、をしない）。
+  const itemHeight = await items.first().evaluate((element) => element.getBoundingClientRect().height);
+  expect(Math.abs(itemHeight - skeletonRowHeight)).toBeLessThanOrEqual(24);
+});
+
 test("参考履歴は件数を表示し、候補があれば自動で展開する", async ({ page }) => {
   await mockNl2SqlApi(page);
   let similarHistoryPayload: Record<string, unknown> | null = null;
@@ -10307,7 +10397,7 @@ test("feedback management defaults to app feedback and keeps explicit tab deep l
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("feedback management initial load covers only the history list with the list skeleton (#1777)", async ({ page }) => {
+test("feedback management initial load covers the list and the editor with skeletons under one workspace indicator (#1777, #4649)", async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockNl2SqlApi(page);
   const feedbackGate = createRequestGate();
@@ -10321,14 +10411,16 @@ test("feedback management initial load covers only the history list with the lis
   await page.goto("/feedback-management?tab=appFeedback&feedback=hist-001");
   const panel = page.locator("#feedback-management-panel-appFeedback");
   const historyPane = feedbackHistoryList(page);
-  // タブ・一覧の見出し・絞り込みは隠さず、一覧の領域だけを TimedLoadingState と一覧の形の Skeleton にする。
+  // タブ・一覧の見出し・絞り込みは隠さず、一覧の領域を一覧の形の Skeleton にする。文言と経過時間は一覧と編集欄を
+  // 覆う作業領域の先頭に全幅で 1 か所だけ出す（#4649）。
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
   await expect(historyPane).toBeVisible();
   await expect(historyPane.getByRole("searchbox", { name: "履歴検索" })).toBeVisible();
-  const loadingState = historyPane.getByTestId("app-feedback-list-loading");
+  const loadingState = panel.getByTestId("app-feedback-list-loading");
   await expect(loadingState).toBeVisible();
   await expect(loadingState).toHaveAttribute("aria-busy", "true");
-  await expect(loadingState).toHaveAttribute("data-processing-placement", "panel");
+  await expect(loadingState).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(historyPane.getByTestId("app-feedback-list-loading")).toHaveCount(0);
   await expect(loadingState).toContainText("フィードバック履歴を読み込んでいます");
   await expect(loadingState.getByRole("timer")).toHaveAccessibleName(/経過時間 00:0\d/);
   await expect(historyPane.getByTestId("app-feedback-list-skeleton")).toBeVisible();
@@ -10348,11 +10440,16 @@ test("feedback management initial load covers only the history list with the lis
   await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
   await expectNoHorizontalScroll(page);
 
-  // 375px は 1 ペイン。選んだ履歴を開いているので、詳細（編集欄の Skeleton）だけを出す。
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("app-feedback-initial-loading-desktop.png") });
+
+  // 375px は 1 ペイン。選んだ履歴を開いているので、詳細（編集欄の Skeleton）を出し、経過時間はその上に残す。
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(panel.getByTestId("app-feedback-editor-skeleton")).toBeVisible();
-  await expect(loadingState).toBeHidden();
+  await expect(loadingState).toBeVisible();
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
   await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("app-feedback-initial-loading-375.png") });
 
   feedbackGate.release();
   await expect(loadingState).toHaveCount(0);
@@ -10912,7 +11009,7 @@ test("feedback missing-table warning hides the Oracle physical table name", asyn
   await expectNoHorizontalScroll(page);
 });
 
-test("Select AI feedback reserves the master-detail workspace during initial loading", async ({ page }) => {
+test("Select AI feedback reserves the master-detail workspace during initial loading", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let releaseConfig: (() => void) | undefined;
   const configGate = new Promise<void>((resolve) => {
@@ -10932,16 +11029,21 @@ test("Select AI feedback reserves the master-detail workspace during initial loa
   const workspace = page.getByTestId("feedback-management-entries-workspace");
   await expect(workspace).toBeVisible();
   await expect(workspace.getByTestId("feedback-management-entries-toolbar")).toBeVisible();
+  // 文言と経過時間は分割の上に全幅で 1 か所だけ出し、一覧と詳細の両方を形の Skeleton で覆う（#4649）。
   const loadingState = workspace.getByTestId("feedback-management-entries-loading");
   await expect(loadingState).toBeVisible();
   await expect(loadingState).toHaveAttribute("aria-busy", "true");
   await expect(loadingState).toContainText("Select AI feedback を読み込んでいます");
-  await expect(loadingState.getByTestId("feedback-management-entries-list-skeleton")).toBeVisible();
+  await expect(loadingState).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(workspace.getByTestId("feedback-management-entries-list-skeleton")).toBeVisible();
+  await expect(loadingState.getByTestId("feedback-management-entries-list-skeleton")).toHaveCount(0);
   await expect(workspace.getByTestId("feedback-management-entry-detail-skeleton")).toBeVisible();
   await expect(workspace.getByRole("timer")).toHaveCount(1);
   await expect(workspace.getByTestId("feedback-management-entry-count")).toHaveCount(0);
   await expect(workspace.getByTestId("feedback-management-entries-processing")).toHaveCount(0);
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
   await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("feedback-entries-initial-loading.png") });
   releaseConfig?.();
   await expect(page.getByTestId("feedback-management-entries-table")).toBeVisible();
   await expect(loadingState).toHaveCount(0);
@@ -12682,8 +12784,13 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expectLargeActionButton(joinWhereButton);
   await expect(joinWhereSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
+  // 読み込み中の領域は抽出の結果とおおむね同じ高さ（読み込み後に大きく縮まない。#4649）。上の文言と経過時間の行の分だけ高い。
+  const joinWhereSkeletonHeight = (await joinWhereSkeleton.boundingBox())!.height;
   joinWhereGate.release();
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE/);
+  const joinWhereResultHeight = (await page.getByRole("region", { name: "JOIN/WHERE 条件抽出結果" }).boundingBox())!.height;
+  expect(joinWhereSkeletonHeight - joinWhereResultHeight).toBeGreaterThanOrEqual(0);
+  expect(joinWhereSkeletonHeight - joinWhereResultHeight).toBeLessThanOrEqual(96);
   await page.setViewportSize({ width: 375, height: 900 });
   // 共有 Button の 44px 化はタッチ端末(pointer: coarse)だけで、幅 375px でもマウス環境は lg=40px のまま。
   // expectLargeActionButton は旧仕様の max-width: 639px も 44px 扱いするため、ここでは DS 仕様で直接測る。
@@ -14330,7 +14437,9 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await chooseSelectFieldOption(selector, "sales");
   try {
-    await expect(page.getByTestId("sample-data-workspace-refresh-skeleton")).toBeVisible();
+    // 種類の切り替えは今の種類の内容がまだ無いので、作業領域を形の Skeleton で覆う。
+    await expect(page.getByTestId("sample-data-workspace-loading-skeleton")).toBeVisible();
+    await expect(page.getByTestId("sample-data-workspace-loading-skeleton")).toContainText("サンプルデータの情報を読み込んでいます");
     await expect(selector).toBeDisabled();
     await expect(page.locator("pre")).toHaveCount(0);
   } finally { gate.release(); }
@@ -14863,7 +14972,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expectNoHorizontalScroll(page);
 });
 
-test("sample data refresh replaces the whole workspace with the shared skeleton", async ({ page }) => {
+test("sample data refresh keeps the workspace content and shows the workspace processing (#4649)", async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockNl2SqlApi(page);
   const refreshGate = createRequestGate();
@@ -14907,31 +15016,29 @@ test("sample data refresh replaces the whole workspace with the shared skeleton"
   await clickPageHeaderAction(page, "sample-data-actions", "最新情報を取得");
   await refreshStarted;
 
-  const skeleton = page.getByTestId("sample-data-workspace-refresh-skeleton");
-  await expect(skeleton).toBeVisible();
-  await expect(skeleton).toHaveAttribute("aria-busy", "true");
-  await expect(skeleton).toHaveAttribute("data-processing-placement", "workspace");
-  await expect(skeleton).toContainText("最新情報を取得しています");
-  await expect(skeleton.getByTestId("sample-data-workspace-refresh-skeleton-processing")).toHaveAttribute(
-    "data-processing-activity-icon",
-    "none"
-  );
-  await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
-  await expect(skeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
-    "animation-name",
-    "none"
-  );
-  await expect(panel.getByText("対象オブジェクト", { exact: true })).toHaveCount(0);
-  await expect(panel.getByText("SQL プレビュー", { exact: true })).toHaveCount(0);
-  await expect(panel.getByText("DEPARTMENT", { exact: true })).toHaveCount(0);
+  // 前の内容（対象オブジェクト・SQL プレビュー）を出したまま、作業領域の先頭に全幅で経過時間を 1 か所だけ出す（#4649）。
+  const processing = panel.getByTestId("sample-data-workspace-refresh-processing");
+  await expect(processing).toBeVisible();
+  await expect(processing).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(processing).toContainText("最新情報を取得しています");
+  await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+  await expect(panel).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("sample-data-workspace-loading-skeleton")).toHaveCount(0);
+  await expect(panel.getByText("対象オブジェクト", { exact: true })).toBeVisible();
+  await expect(panel.getByText("SQL プレビュー", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "取り込み実行", exact: true })).toBeDisabled();
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
   await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sample-data-refresh-desktop.png") });
 
   await page.setViewportSize({ width: 375, height: 900 });
-  await expect(skeleton).toBeVisible();
+  await expect(processing).toBeVisible();
+  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
   await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sample-data-refresh-375.png") });
 
   refreshGate.release();
-  await expect(skeleton).toHaveCount(0);
+  await expect(processing).toHaveCount(0);
   await expect(panel.getByText("対象オブジェクト", { exact: true })).toBeVisible();
   await expect(panel.getByText("SQL プレビュー", { exact: true })).toBeVisible();
 });

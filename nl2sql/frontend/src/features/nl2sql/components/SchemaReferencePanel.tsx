@@ -40,6 +40,7 @@ type SchemaInsertMode = "logical" | "physical";
 export function SchemaReferencePanel({
   catalog,
   loading,
+  loadingIndicator = true,
   profileUnselected = false,
   disabled,
   insertMode = "logical",
@@ -65,6 +66,11 @@ export function SchemaReferencePanel({
 }: {
   catalog: SchemaCatalog | null;
   loading: boolean;
+  /**
+   * 読み込み中に文言と経過時間を出すか（既定 true）。同じ領域の先頭が別の読み込みの経過時間を出している間は
+   * false にして、表の一覧の形の Skeleton だけを出す（1 つの領域に経過時間は 1 か所。#4649）。
+   */
+  loadingIndicator?: boolean;
   /**
    * 業務プロファイルが未選択・使えないので表を取りに行っていない（#3413）。読み込み中にせず、選ぶと表と列を出すと
    * 案内する（検索欄は無効、件数・「スキーマ未取得です」の案内は出さない）。
@@ -203,6 +209,14 @@ export function SchemaReferencePanel({
     });
   };
 
+  const schemaListSkeleton = (
+    <>
+      <Skeleton className="h-9" />
+      <Skeleton className="h-9" />
+      <Skeleton className="h-9" />
+    </>
+  );
+
   return (
     <section
       className="grid min-w-0 max-w-full content-start gap-2 overflow-hidden"
@@ -246,18 +260,22 @@ export function SchemaReferencePanel({
         </div>
       ) : null}
 
-      {loading && !profileUnselected && (
-        <TimedLoadingState
-          label={t("nl2sql.schema.loading")}
-          operationKey="schema-reference-load"
-          placement="panel"
-          testId="schema-reference-loading"
-        >
-          <Skeleton className="h-9" />
-          <Skeleton className="h-9" />
-          <Skeleton className="h-9" />
-        </TimedLoadingState>
-      )}
+      {loading && !profileUnselected ? (
+        loadingIndicator ? (
+          <TimedLoadingState
+            label={t("nl2sql.schema.loading")}
+            operationKey="schema-reference-load"
+            placement="panel"
+            testId="schema-reference-loading"
+          >
+            {schemaListSkeleton}
+          </TimedLoadingState>
+        ) : (
+          <div className="grid gap-3" data-testid="schema-reference-skeleton">
+            {schemaListSkeleton}
+          </div>
+        )
+      ) : null}
       {!loading && refreshing && showRefreshProgress ? (
         <SchemaRefreshProcessing
           placement="panel"

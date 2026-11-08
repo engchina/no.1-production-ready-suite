@@ -493,7 +493,7 @@ test("SQL生成評価の読込状態は利用者向けの日本語ラベルを�
 
   await page.goto("/evaluation");
 
-  const loading = page.getByRole("region", { name: "読み込んでいます", exact: true }).first();
+  const loading = page.getByRole("region", { name: "評価の条件を読み込んでいます", exact: true });
   await expect(loading).toBeVisible();
   await expect(page.getByText("common.loading", { exact: true })).toHaveCount(0);
 

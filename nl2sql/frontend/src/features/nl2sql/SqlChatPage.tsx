@@ -647,17 +647,11 @@ export function SqlChatPage() {
   const targetSelector = (<>
 
           {profilesLoading ? (
-            <TimedLoadingState
-              label={t("chat.profile.loading")}
-              operationKey="sql-chat-profiles-load"
-              testId="sql-chat-profiles-loading"
-            >
-              {/* ラベルと欄の寸法を予約する。 */}
-              <div className="space-y-1.5" aria-hidden>
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-[var(--button-height-md)] w-full" />
-              </div>
-            </TimedLoadingState>
+            // ツールバーの欄の寸法だけを予約する。文言と経過時間は会話の欄の先頭の 1 か所に出す（#4649）。
+            <Skeleton
+              testId="sql-chat-profiles-skeleton"
+              className="h-[var(--control-height-sm)] w-full"
+            />
           ) : profilesFailed ? (
             <ApiErrorBanner
               error={profiles.error}
@@ -886,20 +880,17 @@ export function SqlChatPage() {
             )
           }
         >
-          {conversationLoading ? (
-            // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する
-            // （3 製品で同じ。messaging.md §3.6 / §11.7）。
+          {profilesLoading || conversationLoading ? (
+            // 画面の前提（業務プロファイルの一覧・開いている会話の内容）の読み込み中は、会話の欄の先頭に文言と経過時間を
+            // 1 か所だけ出し、空の状態（はじめの案内）の代わりに会話の形の Skeleton で寸法を予約する。続けて読む 2 つの
+            // 取得は同じ表示のまま文言だけを替え、経過時間を数え直さない（messaging.md §3.6 / §11.7。#1153・#4649）。
             <TimedLoadingState
-              label={t("chat.loading")}
-              operationKey="sql-chat-conversation-load"
-              testId="sql-chat-conversation-loading"
+              label={profilesLoading ? t("chat.profile.loading") : t("chat.loading")}
+              operationKey="sql-chat-prerequisites-load"
+              testId={profilesLoading ? "sql-chat-profiles-loading" : "sql-chat-conversation-loading"}
             >
-              <ChatSkeleton />
+              <ChatSkeleton testId="sql-chat-conversation-skeleton" />
             </TimedLoadingState>
-          ) : profilesLoading ? (
-            // 業務プロファイルの一覧の読み込み中は、空の状態（はじめの案内）を出さず会話の形の Skeleton で覆う。
-            // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
-            <ChatSkeleton testId="sql-chat-conversation-skeleton" />
           ) : null}
           {conversationId && conversation.isError ? (
             <ApiErrorBanner

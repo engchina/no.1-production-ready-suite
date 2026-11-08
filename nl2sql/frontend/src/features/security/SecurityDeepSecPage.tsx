@@ -2091,7 +2091,24 @@ export function SecurityDeepSecPage() {
                             }
                       }
                     />
-                    {entitlementLoading ? (
+                    {entitlementLoading && entitlementRoles.length === 0 ? (
+                      // まだロールの一覧が無い最初の読み込みは、ロールの行の形の Skeleton で一覧の寸法を予約する（#4649）。
+                      <TimedLoadingState
+                        label={t("security.deepsec.entitlements.loading")}
+                        operationKey="security-deepsec-entitlements"
+                        placement="panel"
+                        testId="security-deepsec-entitlements-loading"
+                        activityIcon={headerRefresh.pending ? "none" : "spinner"}
+                      >
+                        <ListSkeleton
+                          rows={{ base: 3, md: 5 }}
+                          rowClassName="h-[4.5rem]"
+                          className="gap-1.5"
+                          testId="security-deepsec-entitlement-roles-skeleton"
+                        />
+                      </TimedLoadingState>
+                    ) : entitlementLoading ? (
+                      // 読み直しは前のロールの一覧を出したまま示す。
                       <ProcessingIndicator
                         active
                         label={t("security.deepsec.entitlements.loading")}

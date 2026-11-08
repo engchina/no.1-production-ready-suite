@@ -28,6 +28,9 @@ import {
   TextField,
   ListScrollRegion,
   ListToolbar,
+  Skeleton,
+  TimedLoadingState,
+  CONTROL_HEIGHT_CLASS,
 } from "@production-ready/ui";
 import { ErrorState } from "@/components/StateViews";
 
@@ -1080,11 +1083,16 @@ export function OntologyQueryPlayground({
                 >
                   <Suspense
                     fallback={
-                      <DbManagementLoadingSkeleton
-                        idPrefix="ontology-query-playground-graph"
-                        ariaLabel={t("nl2sql.ontology.loading")}
-                        variant="compact"
-                      />
+                      // グラフの部品の読み込み中は、グラフの操作の行とキャンバス（GraphCanvasFrame の高さ）の形の
+                      // Skeleton で寸法を予約する（低い塊で読み込み後に下の内容が押し下がらないように。#4649）。
+                      <TimedLoadingState
+                        label={t("nl2sql.interpretation.graphLoading")}
+                        operationKey="ontology-query-playground-graph"
+                        testId="ontology-query-playground-graph-loading"
+                      >
+                        <Skeleton className={`${CONTROL_HEIGHT_CLASS.lg} w-full`} />
+                        <Skeleton className="h-[56rem] max-sm:h-[65dvh]" />
+                      </TimedLoadingState>
                     }
                   >
                     <LazyOntologyGraphCanvas
