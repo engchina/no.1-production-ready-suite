@@ -285,9 +285,7 @@ export function DbObjectColumnsTable({
     },
   ];
   return (
-    <div className="grid min-w-0 gap-2">
-    {/* 件数はツールバーの ListCount 1 か所（#4636）。 */}
-    <ListToolbar count={{ total: columns.length, labels: listCountLabels() }} testId="db-admin-detail-columns-toolbar" />
+    // 列の件数は詳細の見出しの「N 列」が出すので、表の上に重ねて出さない（同じ件数を 2 か所に出さない）。
     <DataTable
       columns={tableColumns}
       rows={columns}
@@ -304,7 +302,6 @@ export function DbObjectColumnsTable({
       visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       growToViewport
     />
-    </div>
   );
 }
 
