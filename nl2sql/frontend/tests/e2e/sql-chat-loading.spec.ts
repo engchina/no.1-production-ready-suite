@@ -84,6 +84,9 @@ for (const colorScheme of ["light", "dark"] as const) {
     ).toHaveCount(0);
     await expect(page.getByRole("timer")).toHaveCount(1);
     expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+    // 会話の欄を末尾へ送らず、先頭の文言と経過時間が見える（375px で隠れない。#4649）。
+    await expect(profilesLoading.locator("[data-processing-label]")).toBeInViewport();
+    await expect(profilesLoading.getByRole("timer")).toBeInViewport();
     // 入力欄・生成方法・送信・新しい会話・履歴の開閉は無効。
     await expect(
       page.getByRole("textbox", { name: "質問", exact: true }),

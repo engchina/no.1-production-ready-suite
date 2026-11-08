@@ -606,7 +606,9 @@ export function SqlChatPage() {
       latest?.requirement_skipped ? "skipped" : "",
     ].join(":"),
     resetKey: `${selectedProfileId}:${conversationId}`,
-    enabled: active,
+    // 業務プロファイル・会話の読み込み中は会話の欄の先頭に文言と経過時間を出すので、末尾へ送らない（狭い画面で
+    // 先頭が隠れる）。読み終えたら末尾から読み始める（#4649）。
+    enabled: active && !(profilesLoading || conversationLoading),
   });
   // 会話の名前の変更・削除（3 製品共通の useChatHistoryActions。#1817）。SQL の生成中の会話は backend が
   // 削除しない（409）。消せた後に開いている会話なら新しい会話に戻す。
