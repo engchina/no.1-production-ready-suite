@@ -283,6 +283,7 @@ for (const viewport of [
           hybrid_search_backend: "sudachi",
           rrf_method_ratio: [1, 1],
           rrf_source_ratio: [7, 3],
+          rerank_slot_ratio: [7, 3],
           query_strategy: "rag_fusion",
           runtime_terms_search_enabled: false,
           runtime_rules_confirmation_enabled: false,

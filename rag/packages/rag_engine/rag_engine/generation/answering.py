@@ -583,10 +583,12 @@ def _order_by_slots(
     }
     receipt["並びの枠"] = trace
     step.field("並びの枠（rerank の順 : 検索の順）", f"{ratio[0]} : {ratio[1]}")
-    step.field(
-        "枠の内訳",
-        f"rerank の順 {trace['rerank_slot_count']} 件 / 検索の順 {trace['search_slot_count']} 件 / 位置を保つ {trace['kept_position_count']} 件",
+    breakdown = (
+        ("rerank の順", trace["rerank_slot_count"]),
+        ("検索の順", trace["search_slot_count"]),
+        ("位置を保つ", trace["kept_position_count"]),
     )
+    step.field("枠の内訳", " / ".join(f"{label} {count} 件" for label, count in breakdown))
     record_retrieval_stage(
         {
             "stage": "rerank_slot_order",
