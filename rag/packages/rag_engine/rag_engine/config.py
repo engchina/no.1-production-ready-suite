@@ -305,6 +305,8 @@ class Settings:
     domain_keywords_override: tuple[str, ...] | None = None
     # 検索の比較実験用。重み付けを切ると全検索文が同じ票、original_query_only は原質問だけで検索する。
     retrieval_query_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # 検索文ごとに、全文検索の語の上限で優先する語（質問に足した用語・同義語）。ドメインキーワードと同じ段で扱う。
+    retrieval_query_keywords: dict[str, tuple[str, ...]] = field(default_factory=dict)
     hybrid_search_backend: str = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)

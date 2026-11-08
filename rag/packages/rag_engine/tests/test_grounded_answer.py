@@ -972,7 +972,6 @@ class GroundedAnswerTest(unittest.TestCase):
             "document_text",
             "image_extraction",
             "context_crop",
-            "desired_outcome",
             "explicit_facet",
             "calculation_basis",
             "magenta_rectangle",

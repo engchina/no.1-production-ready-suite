@@ -67,7 +67,7 @@ from rag_parser_core.vision_text import (
 )
 
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, bind_text_query_keywords
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     read_lobs_as_values,
@@ -1622,8 +1622,7 @@ class AnswerEngine:
             )
             for query in queries
         }
-        vector_queries = [q for q in queries if channels[q] != ("keyword",)]
-        embedded = await self._query_embeddings(state, vector_queries) if vector_queries else []
+        embedded = await self._query_embeddings(state, queries)
         embeddings: dict[str, list[float]] = {}
         if embedded is None:
             # 全文を使う検索文だけを全文のみで検索する(ベクトルのみの検索文は全文に使わない)。
@@ -1632,7 +1631,7 @@ class AnswerEngine:
                 for query, used in channels.items()
             }
         else:
-            embeddings = dict(zip(vector_queries, embedded, strict=True))
+            embeddings = dict(zip(queries, embedded, strict=True))
         k = float(self._settings.rag_rrf_k)
         from rag_engine.retrieval.weighted_rrf import (
             RankedList,
@@ -1667,14 +1666,25 @@ class AnswerEngine:
                     searches.append((query, embeddings.get(query, []), mode))
         fused: dict[str, float] = {}
         rankings: list[list[str]] = []
-        all_hits = await self._query_hits(
-            state,
-            searches,
-            candidate_limit=depth,
-            filters=(_with_page_ranges(state.filters, page_ranges) or {})
-            if page_ranges
-            else dict(state.filters),
-        )
+        keywords_by_query = {
+            query_key(query): terms
+            for query, terms in (getattr(settings, "retrieval_query_keywords", {}) or {}).items()
+        }
+        with bind_text_query_keywords(
+            {
+                query: keywords_by_query[query_key(query)]
+                for query in queries
+                if query_key(query) in keywords_by_query
+            }
+        ):
+            all_hits = await self._query_hits(
+                state,
+                searches,
+                candidate_limit=depth,
+                filters=(_with_page_ranges(state.filters, page_ranges) or {})
+                if page_ranges
+                else dict(state.filters),
+            )
         raw_lists = []
         for (query, _embedding, mode), hits in zip(searches, all_hits, strict=True):
             index = queries.index(query)

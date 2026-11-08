@@ -10,7 +10,15 @@ import pytest
 from rag_parser_core.language import builtin_pack
 
 from app.clients import language_pack_release_store as module
-from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute
+from app.clients.oracle import (
+    OracleClient,
+    OracleConnectionProtocol,
+    _execute,
+    _fetch_one,
+    _json_bind,
+    _json_input_sizes,
+    _json_loads,
+)
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -112,3 +120,94 @@ async def test_releases_are_atomic_immutable_and_complete(monkeypatch: pytest.Mo
             _execute(connection, f"DROP TABLE {release_table} PURGE", {})
 
         await client._run_transaction(cleanup)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_retired_fields_migration_restores_saved_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全項目のスナップショットから廃止した項目を除き、hash を直して読める状態に戻す(#4666)。"""
+    from app.rag import language_pack_retired_fields as retired
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    suffix = uuid4().hex[:10]
+    release_table = f"rag_test_lang_releases_{suffix}"
+    state_table = f"rag_test_lang_state_{suffix}"
+    profile_table = f"rag_test_lang_profiles_{suffix}"
+    monkeypatch.setattr(module, "RELEASE_TABLE", release_table)
+    monkeypatch.setattr(module, "STATE_TABLE", state_table)
+    monkeypatch.setattr(retired, "PROFILE_TABLE", profile_table)
+    sql = module.language_pack_release_statements().replace("rag_lang_", f"rag_test_{suffix}_")
+    client = OracleClient()
+
+    def create(connection: OracleConnectionProtocol) -> None:
+        for statement in sql.split(";"):
+            if statement.strip():
+                _execute(connection, statement, {})
+        _execute(
+            connection,
+            f"CREATE TABLE {profile_table} (search_answer_profile_id VARCHAR2(64) PRIMARY KEY, "
+            "profile_config JSON)",
+            {},
+        )
+
+    await client._run_transaction(create)
+    store = module.LanguagePackReleaseStore(client)
+    initial = builtin_pack().to_dict()
+    try:
+        before = await store.ensure_initialized(initial)
+        old = deepcopy(initial)
+        old["question_cues"].update(
+            {key: ["合成語"] for key in retired.RETIRED_QUESTION_CUE_FIELDS}
+        )
+
+        def seed(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                f"UPDATE {release_table} SET effective_json=:effective, content_hash='stale'",
+                {"effective": _json_bind(old)},
+                input_sizes=_json_input_sizes("effective"),
+            )
+            _execute(
+                connection,
+                f"UPDATE {state_table} SET draft_effective_json=:effective",
+                {"effective": _json_bind(old)},
+                input_sizes=_json_input_sizes("effective"),
+            )
+            _execute(
+                connection,
+                f"INSERT INTO {profile_table} VALUES ('p', :config)",
+                {
+                    "config": _json_bind(
+                        {"language_pack": {"question_cues": {"means_cues": ["合成語"]}}}
+                    )
+                },
+                input_sizes=_json_input_sizes("config"),
+            )
+
+        await client._run_transaction(seed)
+        with pytest.raises(LanguagePackSnapshotError):
+            await store.state()
+
+        for _ in range(2):
+            await client._run_transaction(retired.remove_retired_language_pack_fields)
+            state = await store.state()
+            assert state.current.effective == initial
+            assert state.current.hash == before.current.hash
+            assert state.current.ingest_hash == before.current.ingest_hash
+            assert state.draft_effective == initial
+            assert state.draft_revision == before.draft_revision
+
+        def profile(connection: OracleConnectionProtocol) -> dict[str, object]:
+            row = _fetch_one(connection, f"SELECT profile_config FROM {profile_table}", {})
+            assert row is not None
+            return _json_loads(row["profile_config"])
+
+        assert await client._run_transaction(profile) == {"language_pack": {}}
+    finally:
+
+        def drop(connection: OracleConnectionProtocol) -> None:
+            for table in (state_table, release_table, profile_table):
+                _execute(connection, f"DROP TABLE {table} CASCADE CONSTRAINTS PURGE", {})
+
+        await client._run_transaction(drop)
