@@ -922,13 +922,12 @@ def search_adb_hybrid_chunks(
                 q: expression_channels(q, queries[0], settings.retrieval_query_sources, vector_only=_query_key(q) in vector_only_keys)
                 for q in queries
             }
-            vector_inputs = [q for q in queries if channels[q] != ("keyword",)]
-            vectors = dict(zip(vector_inputs, _query_vectors(vector_inputs, settings, query_embedder), strict=True))
+            vectors = dict(zip(queries, _query_vectors(queries, settings, query_embedder), strict=True))
             with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
                 if getattr(vector_observation, "capture_enabled", True):
                     vector_observation.request(
                         {
-                            "queries": vector_inputs,
+                            "queries": queries,
                             "query_vectors": vectors,
                             "candidate_limit": limit,
                             "retrieval_scope": scope,
@@ -938,11 +937,6 @@ def search_adb_hybrid_chunks(
                         }
                     )
                 for query in queries:
-                    if query not in vectors:
-                        rankings.append([])
-                        if _image_embedding_enabled(settings):
-                            image_rankings.append([])
-                        continue
                     query_vector = vectors[query]
                     rankings.append(
                         read_ranking(
@@ -1012,6 +1006,7 @@ def search_adb_hybrid_chunks(
                 else load_domain_keywords(settings.output_dir)
             )
             tokenizer_config = _text_search_tokenizer_config(settings)
+            query_keywords = {_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
             # 全文検索の上限は vector 専用の検索文（HyDE の仮説文）を除いてから数える (#921)。重みは元の位置で決める。
             text_candidates = [
                 (index, query) for index, query in enumerate(queries) if any(c in {"hybrid", "keyword"} for c in channels[query])
@@ -1038,7 +1033,7 @@ def search_adb_hybrid_chunks(
                 for _query_index, query in text_variants:
                     text_query = oracle_text_query(
                         query,
-                        domain_keywords=domain_keywords,
+                        domain_keywords=[*domain_keywords, *query_keywords.get(_query_key(query), ())],
                         tokenizer_config=tokenizer_config,
                     )
                     if not text_query or text_query in seen_text_queries:
@@ -1120,7 +1115,6 @@ def search_adb_hybrid_chunks(
                     sources=settings.retrieval_query_sources.get(q, ("原質問",) if i == 0 else ("追加検索文",)),
                 )
                 for i, (q, ranking) in enumerate(zip(queries, rankings, strict=True))
-                if q in vectors
             ]
             raw_lists += [
                 RankedList(
@@ -1144,7 +1138,6 @@ def search_adb_hybrid_chunks(
                         factor=image_weight / (1 + image_weight),
                     )
                     for i, (q, ranking) in enumerate(zip(queries, image_rankings, strict=True))
-                    if q in vectors
                 ]
             raw_lists = [
                 replace(r, status="failed", error=failures[(r.channel, r.query, r.variant)])

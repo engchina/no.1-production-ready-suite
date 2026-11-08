@@ -35,8 +35,6 @@ class _Cues:
     clause_split: re.Pattern[str]
     sentence_split: re.Pattern[str]
     unit: re.Pattern[str]
-    tried_action: re.Pattern[str]
-    observed_state: re.Pattern[str]
     action_target: re.Pattern[str]
     error_quoted: re.Pattern[str]
     error_phrase: re.Pattern[str]
@@ -67,7 +65,6 @@ def _build_cues(pack: LanguagePack) -> _Cues:
     name_head = range_class((*terms, "A-Z", "a-z"))
     kanji = range_class(pack.words("search_terms", "kanji_chars"))
     object_suffix = f"(?:{alt['object_suffixes']}|{kanji}{{1,3}}{char_class(words['document_kind_chars'])})"
-    done = alt["done_marks"]
     quotes = pack.words("symbols", "quote_brackets")
     brackets = (*quotes, *pack.words("symbols", "bracket_pairs"))
     opens = char_class(tuple(pair[0] for pair in quotes))
@@ -104,10 +101,6 @@ def _build_cues(pack: LanguagePack) -> _Cues:
         ),
         sentence_split=re.compile(rf"{sentence}|\n"),
         unit=re.compile(rf"[^{unit_chars}\n]+[{unit_chars}\n]*"),
-        # 「取消済み伝票」のように名詞を修飾する「〜済」はデータの状態。済の印の後に名詞が続けば除く（atomic で
-        # 「済み」から「済」へ戻って「み」を後ろの字にしない）。
-        tried_action=re.compile(rf"{alt['tried_action_cues']}|{alt['done_state_verbs']}(?>{done})(?!{kana_kanji})"),
-        observed_state=re.compile(rf"{kana_kanji}{{2,}}{alt['passive_state_endings']}|{alt['observed_state_cues']}"),
         # 要求文の操作対象「X を〔一括で〕<操作語>(する|したい|…)」の X（数字で始まらない 2〜20 文字の名詞句）。
         action_target=re.compile(
             rf"({name_head}{name}{{1,19}}){alt['object_particles']}{alt['manner_words']}?"
@@ -175,7 +168,6 @@ def generic_target_words() -> frozenset[str]:
 
 
 def _requester_terms_pattern() -> str:
-
     terms = _cues().words["requester_terms"]
     return "|".join(re.escape(term) for term in dict.fromkeys(term for term in terms if term))
 
@@ -200,47 +192,6 @@ def changed_field_conditions(text: str) -> list[str]:
     文境界直後の名詞に限定し、曖昧な言い換えや単なる変更希望は推測しない。
     """
     return list(dict.fromkeys(_cues().changed_field.findall(unicodedata.normalize("NFKC", text))))
-
-
-def question_intent_parts(question: str) -> dict[str, list[str]]:
-    """明示的な希望・試行・観測・仮説を原文の節として返す。
-
-    検索補助用の保守的な抽出であり、推測した解決策や省略された対象を補わない。
-    分類は排他的ではなく、検出できない節も原質問側に保持する。
-    """
-    cues = _cues()
-    clauses = [s.strip() for s in cues.clause_split.split(question) if s.strip()]
-    hypothesis = f"{cues.alt['hypothesis_cues']}|{cues.alt['means_cues']}"
-    # 同一文で撤回された希望を、接続助詞の分割で復活させない。
-    withdrawn = [m.group() for m in cues.unit.finditer(question) if cues.has("withdrawn_cues", m.group())]
-    conditional = f"{cues.alt['condition_cues']}"
-    return {
-        "desired_outcomes": [
-            s
-            for s in clauses
-            if cues.has("wish_endings", s) and not re.search(hypothesis, s) and not any(s in sentence for sentence in withdrawn)
-        ],
-        # 「取消済み伝票」のように名詞を修飾する「〜済」はデータの状態であり、利用者の試行ではない。
-        # 文末や助詞が続く「取消済みです」だけを試行操作とする。
-        "tried_actions": [s for s in clauses if cues.tried_action.search(s) and not re.search(conditional, s)],
-        "observed_states": [
-            s
-            for s in clauses
-            if cues.observed_state.search(s) and not re.search(f"{hypothesis}|{conditional}|{cues.alt['uncertainty_cues']}", s)
-        ],
-        "hypothesized_means": [s for s in clauses if re.search(hypothesis, s)],
-    }
-
-
-def goal_retrieval_queries(question: str) -> tuple[str, ...]:
-    """経緯や仮説が混在する場合、明示目的を最大2件の補助検索文として返す。
-
-    原質問を置き換えず、固有の業務名・操作名・値は追加しない。
-    """
-    parts = question_intent_parts(question)
-    if not any(parts[key] for key in ("tried_actions", "observed_states", "hypothesized_means")):
-        return ()
-    return tuple(dict.fromkeys(parts["desired_outcomes"]))[:2]
 
 
 def task_contract(question: str) -> dict[str, Any]:
@@ -309,10 +260,6 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
     wants_basis = cues.has("basis_cues", text)
     requests = explicit_requests(question)
     definitions = definition_targets(question)
-    intent_parts = question_intent_parts(question)
-    # 明示目的の操作を先に記録する。経緯中の「登録」だけを要求操作とすると、
-    # 追加・削除等の本来の目的が契約から脱落する。原質問の他の要求も保持する。
-    action_text = "\n".join([*intent_parts["desired_outcomes"], current])
     enumeration = enumeration_request(question)
     # 手順の観点は、手順か一覧（件数ではない）の要求、選択肢が無いと述べた質問で足す。
     procedure_aspect = STEPS_REQUEST in requests or requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST} or missing_choice
@@ -320,7 +267,6 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
         "original_question": question,
         "current_request": current,
         "historical_context": question[: question.rfind(current)].strip() if current != question else "",
-        "intent_parts": intent_parts,
         "request_units": request_units(question),
         "definition_targets": definitions,
         "asks_cause": asks_cause(question),
@@ -333,7 +279,7 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
         "error_messages": error_messages(question),
         "action_targets": action_targets(question),
         # 「取消済み」「登録済み」の操作語は状態の一部で、要求された操作ではない（直後の「済」で除く）。
-        "requested_actions": list(dict.fromkeys(re.findall(rf"{alt['requested_action_words']}(?!{alt['done_marks']})", action_text))),
+        "requested_actions": list(dict.fromkeys(re.findall(rf"{alt['requested_action_words']}(?!{alt['done_marks']})", current))),
         "user_assertions": [c for c in clauses if not cues.has("hypothesis_cues", c)],
         "requester_mentions": requester,
         "output_formats": [v for v in cues.words["output_format_words"] if v in text],
@@ -530,19 +476,11 @@ def request_units(question: str) -> list[dict[str, str]]:
 
     丸数字・(1) などで小問を並べた質問は、小問ごとに 1 つの要求単位にする（`subquestion` に印、`preamble` に
     小問の前の共通の前置き。前置きの文は背景）。小問の印の無い質問の単位は変わらない (#2399)。
-    長い入力も切り捨てず、定義項目と経緯に埋もれた明示目的を子要求にする。
-    原文単位のIDは維持し、既に独立した目的文は重複させない。
+    長い入力も切り捨てず、定義項目を子要求にする。原文単位のIDは維持する。
     """
     cues = _cues()
     withdrawn = f"{cues.alt['facet_withdrawal_objects']}?{cues.alt['topic_particles']}{cues.alt['facet_withdrawal_words']}"
     units = _base_units(question)
-    goals = question_intent_parts(question)["desired_outcomes"] if goal_retrieval_queries(question) else []
-    goal_units = [
-        dict(id=f"{unit['id']}.G{n}", text=goal, kind="desired_outcome", request_id=unit["id"])
-        for unit in units
-        for n, goal in enumerate(goals, 1)
-        if unit.get("kind") != "context" and goal in unit["text"] and goal != unit["text"].strip("。！？? \n")
-    ]
     facets = []
     for unit in units:
         if unit.get("kind") == "context":
@@ -618,7 +556,6 @@ def request_units(question: str) -> list[dict[str, str]]:
             )
     return (
         units
-        + goal_units
         + facets
         + [
             dict(

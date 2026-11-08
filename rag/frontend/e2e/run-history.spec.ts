@@ -1422,7 +1422,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
         await expect(inspector).toContainText("10：1");
         await expect(inspector).toContainText("融合済み順位への再 RRF は行いません");
         await expect(inspector).toContainText("意味の追加 / ベクトル検索");
-        await expect(inspector).toContainText("用語の追加 / 全文検索");
+        await expect(inspector).toContainText("用語の追加 / Oracle hybrid（WRRF）");
       }
       await expectNoPageOverflow(page);
       await inspector.screenshot({path: testInfo.outputPath(`native-${key}.png`)});

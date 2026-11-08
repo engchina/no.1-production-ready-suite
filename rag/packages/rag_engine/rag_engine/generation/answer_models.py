@@ -13,7 +13,6 @@ from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.context_builder import ContextEvidence, ContextParentEvidence
 from rag_engine.retrieval.question_planning import QuestionPlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN, RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
-from rag_engine.retrieval.task_contract import goal_retrieval_queries
 
 # 回答で引用した箇所の使われ方（#2040）。confirmed は「資料により確認できた事項」・手順の節の説明（質問の条件への該当を
 # 監査で確認した。原文の条件つきを含む）で使用した箇所、reference は「参考情報」の節（降格した原文・該当が
@@ -248,15 +247,11 @@ class QueryExpansionResult:
     routing_data_required: bool | None = None
     routing_data_items: tuple[str, ...] = ()
     rejected_queries: tuple[dict[str, str], ...] = ()
-    # 規定（法令・規程の条文）の書き方で根拠を言い表した検索文。vector だけに使う (#2148)。
-    provision_queries: tuple[str, ...] = ()
 
     @property
     def retrieval_queries(self) -> tuple[str, ...]:
         """検索へ投入する query を重複なく返します。"""
-        return _dedupe_queries(
-            (self.original_question, *goal_retrieval_queries(self.original_question), *self.generated_queries, *self.provision_queries)
-        )
+        return _dedupe_queries((self.original_question, *self.generated_queries))
 
     @property
     def vector_only_queries(self) -> tuple[str, ...]:
@@ -265,8 +260,7 @@ class QueryExpansionResult:
         HyDE の仮説文は文書にありそうな文を創作したもので、含まれる語は事実でなくてよい。
         創作した語をキーワード検索の条件にすると無関係な chunk を拾うため、embedding だけに使う (#911)。
         """
-        hypotheses = self.generated_queries if self.effective_strategy == HYDE_STRATEGY else ()
-        return (*hypotheses, *self.provision_queries)
+        return self.generated_queries if self.effective_strategy == HYDE_STRATEGY else ()
 
 
 @dataclass(frozen=True)

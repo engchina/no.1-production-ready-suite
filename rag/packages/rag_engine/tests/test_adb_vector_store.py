@@ -361,14 +361,15 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
         self.assertNotIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
 
-    def test_registered_terms_use_text_only_and_are_not_embedded(self):
+    def test_term_expanded_question_searches_vector_and_text_like_the_original(self):
         settings = replace(
             get_settings(),
             embedding_output_dimensions=1536,
             image_embedding_enabled=False,
             text_search_tokenizer_latin_stemmer="none",
             text_search_query_variant_limit=2,
-            retrieval_query_sources={"expanded synonym": ("用語・同義語だけ",)},
+            retrieval_query_sources={"expanded synonym": ("原質問 + 用語・同義語",)},
+            retrieval_query_keywords={"expanded synonym": ("synonym",)},
         )
         connection = object()
         embedded_queries = []
@@ -406,13 +407,17 @@ class AdbVectorStoreTests(unittest.TestCase):
                 query_embedder=query_embedder,
             )
 
-        self.assertEqual(embedded_queries, ["original question"])
-        self.assertEqual(vector_search.call_count, 1)
+        self.assertEqual(embedded_queries, ["original question", "expanded synonym"])
+        self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
         self.assertEqual(text_search.call_count, 2)
         self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
+        # 足した語はドメインキーワードと同じ段で優先する（質問と同じ語の扱いは変えない）。
+        self.assertIn("{synonym}*2", text_search.call_args_list[1].args[2])
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
-        self.assertIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
+        channels = result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"]
+        self.assertIn("vector:q2", channels)
+        self.assertIn("keyword:oracle_text:q2", channels)
 
     def test_hybrid_search_runs_extra_text_queries_as_additional_keyword_channels(self):
         """組み立て済みの Oracle Text 式（対象語の部分語）は質問文の変種とは別に検索し、派生と同じ重みで融合する (#730)。"""

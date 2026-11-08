@@ -25,6 +25,8 @@ from app.clients.oracle import (
     OracleClient,
     SearchHits,
     _merge_native_filter_batches,
+    _text_search_domain_keywords,
+    bind_text_query_keywords,
 )
 from app.config import Settings
 from app.schemas.search import SearchMode
@@ -1341,6 +1343,37 @@ async def test_native_contains_is_built_once_for_all_filter_batches(channel: str
     assert all(
         spec["return"]["topN"] == (100 if channel == "hybrid" else 50) for spec in client.searches
     )
+
+
+@pytest.mark.asyncio
+async def test_native_contains_keeps_added_aliases_of_a_long_question() -> None:
+    """用語・同義語を足した質問は、長い質問の後ろの別名も全文検索の語に残す(#2163)。"""
+    aliases = ["合成別名甲", "合成別名乙"]
+    # 語の上限(24 語)を超える、数字を含まない質問(数字は別の段で優先される)。
+    question = "、".join(
+        f"{chr(0x4E00 + 97 * index)}{chr(0x4E10 + 131 * index)}の値" for index in range(40)
+    )
+    expanded = f"{question}\n{' '.join(aliases)}"
+
+    async def contains(*, bound: bool) -> str:
+        client = LongScopeOracle()
+        with bind_text_query_keywords({expanded: aliases} if bound else {}):
+            await client._native_rows("hybrid", expanded, [1.0] * 1536, top_k=50, filters={})
+        return str(client.searches[0]["text"]["contains"])
+
+    without_binding, with_binding = await contains(bound=False), await contains(bound=True)
+    # 優先が無ければ語の上限で落ちる入力であることも確かめる。
+    assert not any(f"{{{alias}}}" in without_binding for alias in aliases)
+    assert all(f"{{{alias}}}*2" in with_binding for alias in aliases)
+
+
+def test_text_query_keywords_do_not_leak_outside_the_binding() -> None:
+    aliases = ["合成別名甲"]
+    query = "質問\n合成別名甲"
+    with bind_text_query_keywords({query: aliases}):
+        assert _text_search_domain_keywords(None, query) == aliases
+        assert _text_search_domain_keywords(None, "別の検索文") == []
+    assert _text_search_domain_keywords(None, query) == []
 
 
 @pytest.mark.asyncio

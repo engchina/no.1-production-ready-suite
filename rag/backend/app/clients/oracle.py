@@ -19,6 +19,7 @@ from array import array
 from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -19190,7 +19191,9 @@ def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[s
     """全文検索（Oracle Text）の語。検索と同じ分割で、診断に出す（#588）。"""
     from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
 
-    return tokenize_text_search_query(query, domain_keywords=_text_search_domain_keywords(settings))
+    return tokenize_text_search_query(
+        query, domain_keywords=_text_search_domain_keywords(settings, query)
+    )
 
 
 def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str | None:
@@ -19205,14 +19208,30 @@ def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str |
 
     return (
         oracle_text_query_for_question(
-            query, domain_keywords=_text_search_domain_keywords(settings)
+            query, domain_keywords=_text_search_domain_keywords(settings, query)
         )
         or None
     )
 
 
-def _text_search_domain_keywords(settings: Settings | None) -> list[str]:
-    return list(settings.rag_domain_keywords) if settings is not None else []
+_TEXT_QUERY_KEYWORDS: ContextVar[Mapping[str, Sequence[str]] | None] = ContextVar(
+    "rag_text_query_keywords", default=None
+)
+
+
+@contextmanager
+def bind_text_query_keywords(keywords: Mapping[str, Sequence[str]]) -> Iterator[None]:
+    """検索文ごとの全文検索で優先する語を、この要求の間だけ結び付ける(用語・同義語を足した検索文。#2163)。"""
+    token = _TEXT_QUERY_KEYWORDS.set(keywords)
+    try:
+        yield
+    finally:
+        _TEXT_QUERY_KEYWORDS.reset(token)
+
+
+def _text_search_domain_keywords(settings: Settings | None, query: str) -> list[str]:
+    configured = list(settings.rag_domain_keywords) if settings is not None else []
+    return [*configured, *(_TEXT_QUERY_KEYWORDS.get() or {}).get(query, ())]
 
 
 def _rrf(rank: int, constant: int = 60) -> float:

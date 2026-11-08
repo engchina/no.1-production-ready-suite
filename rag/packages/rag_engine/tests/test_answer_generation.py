@@ -1254,29 +1254,6 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn('"generate"', prompt)
         self.assertIn('"queries"', prompt)
 
-    def test_auto_routing_adds_provision_query_for_vector_only(self):
-        """規定の書き方の検索文は 1 本だけ採り、vector だけに使い、記録に残す (#2148)。"""
-        routed = QueryRoutingOutput(
-            strategy=QUERY_DECOMPOSITION_STRATEGY,
-            reason="複数の論点",
-            queries=["子質問 A"],
-            provision_queries=["規定の書き方の文", "二本目", "三本目", "四本目"],
-        )
-        with patch("rag_engine.generation.answering.parse_text_response", return_value=routed) as parse:
-            result = build_query_expansion("原質問", AUTO_ROUTING_LABEL, get_settings())
-        # 論点ごとに最大 3 本（#2163）。
-        self.assertEqual(result.provision_queries, ("規定の書き方の文", "二本目", "三本目"))
-        self.assertEqual(result.retrieval_queries, ("原質問", "子質問 A", "規定の書き方の文", "二本目", "三本目"))
-        self.assertEqual(result.vector_only_queries, ("規定の書き方の文", "二本目", "三本目"))
-        prompt = parse.call_args.args[1]
-        self.assertIn('"provision_queries"', prompt)
-        self.assertIn("判断に効く条件", prompt)
-
-        simple = QueryRoutingOutput(strategy=SIMPLE_RETRIEVAL_STRATEGY, reason="明確", provision_queries=["規定の書き方の文"])
-        with patch("rag_engine.generation.answering.parse_text_response", return_value=simple):
-            result = build_query_expansion("原質問", AUTO_ROUTING_LABEL, get_settings())
-        self.assertEqual(result.vector_only_queries, ("規定の書き方の文",))
-
     def test_routing_output_schema_constrains_strategy_to_routable_ids(self):
         """strategy は schema の enum で戦略 ID に制約し、プロンプトは ID と表示名を併記する (#919)。"""
         from typing import get_args
@@ -1430,7 +1407,7 @@ class AnswerGenerationTests(unittest.TestCase):
         )
         for prompt in (_build_query_routing_prompt(question), _build_query_expansion_prompt(question, RAG_FUSION_STRATEGY)):
             self.assertEqual(prompt.count(question), 1)
-            for key in ("user_assertions", "request_units", "required_aspects", "intent_parts", "original_question", "hypotheses"):
+            for key in ("user_assertions", "request_units", "required_aspects", "original_question", "hypotheses"):
                 self.assertNotIn(f'"{key}"', prompt)
             self.assertNotIn('"goal"', prompt)
             self.assertIn('"business_objects": ["地区別売上集計表"]', prompt)
@@ -2625,18 +2602,6 @@ class AnswerGenerationTests(unittest.TestCase):
         # 候補の選択順位と、同じ資料をモデルへ読ませる原文順は区別する。
         self.assertEqual(max(result.rerank_scores, key=lambda row: row["relevance_score"])["id"], "chunk-beta")
         self.assertLess(final_prompt.index("alpha source evidence"), final_prompt.index("beta source evidence"))
-
-    def test_matched_term_query_lists_matched_terms_and_aliases(self):
-        """用語・同義語に一致したら、用語と別名だけの検索文にする（#2163）。"""
-        from types import SimpleNamespace
-
-        from rag_engine.generation.answering import matched_term_query
-
-        term = SimpleNamespace(labels=lambda: ("延滞", "遅延", "返却の遅れ"))
-        other = SimpleNamespace(labels=lambda: ("料金", "遅延"))
-        self.assertEqual(matched_term_query(SimpleNamespace(retrieval_terms=(term, other))), "延滞 遅延 返却の遅れ 料金")
-        self.assertEqual(matched_term_query(SimpleNamespace(retrieval_terms=())), "")
-        self.assertEqual(matched_term_query(None), "")
 
     def test_rerank_retains_queries_with_additional_conditions(self):
         """原質問を含んでいても追加条件を持つ検索文は別に比べる。"""

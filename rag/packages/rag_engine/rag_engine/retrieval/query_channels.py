@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 
-from rag_engine.knowledge.runtime_knowledge import ORIGINAL_QUESTION_SOURCE_LABEL, TERMS_ONLY_SOURCE_LABEL, TERMS_SOURCE_LABEL
+from rag_engine.knowledge.runtime_knowledge import ORIGINAL_QUESTION_SOURCE_LABEL, TERMS_SOURCE_LABEL
 from rag_engine.retrieval.weighted_rrf import query_key
 
 
@@ -14,7 +14,5 @@ def expression_channels(query: str, original: str, sources: Mapping[str, Sequenc
     labels = {
         part for key, values in sources.items() if query_key(key) == query_key(query) for label in values for part in label.split(" + ")
     } - {ORIGINAL_QUESTION_SOURCE_LABEL}
-    terms = {TERMS_SOURCE_LABEL, TERMS_ONLY_SOURCE_LABEL}
-    if labels and labels <= terms:
-        return ("keyword",)
-    return ("vector", "keyword") if labels & terms else ("vector",)
+    # 用語・同義語を足した質問は、原質問と同じ原生ハイブリッド検索にする（ガイド・条件などの語だけを足した文は vector のまま）。
+    return ("hybrid",) if TERMS_SOURCE_LABEL in labels else ("vector",)
