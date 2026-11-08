@@ -1,6 +1,6 @@
 """回答の検査の手がかりの語（言語資源の answer_check_cues。#2181 段 5）。
 
-確定の操作・限定・未説明・保証・推測・条件の句・但し書き・版の廃止などを見分ける語は言語資源のデータで、
+確定の操作・限定・未説明・条件の句・但し書き・版の廃止などを見分ける語は言語資源のデータで、
 ここは語を正規表現に組み立てるだけを持つ（言語資源の hash ごとに 1 回だけ）。
 """
 
@@ -32,22 +32,14 @@ class CheckCues:
     constraint: re.Pattern[str]
     heading_brackets: re.Pattern[str]
     route_separator: re.Pattern[str]
-    field_label: re.Pattern[str]
-    field_label_open: str
-    field_label_close: str
     enumeration: re.Pattern[str]
-    unexplained: re.Pattern[str]
-    guarantee: re.Pattern[str]
-    speculation: re.Pattern[str]
     button: re.Pattern[str]
-    option_value: re.Pattern[str]
     ignored_quote_chars: frozenset[str]
     trailing_punctuation: str
     step_split: re.Pattern[str]
     # 行の先頭で ``match`` する手順の番号（①・⑴・(1)・（１）・1.・１．）。小数（1.5）には当たらない。
     step_line_start: re.Pattern[str]
     ellipsis_split: re.Pattern[str]
-    object_kinds: tuple[tuple[str, re.Pattern[str]], ...]
     condition_sentence: re.Pattern[str]
     condition_clause: re.Pattern[str]
     condition_strip: re.Pattern[str]
@@ -67,8 +59,6 @@ class CheckCues:
     quoted_name: re.Pattern[str]
     bare_title_marks: re.Pattern[str]
     claim_word: re.Pattern[str]
-    # 生成説明が列挙する画面のボタン一覧の欄（`ボタン: (F5) 実行 / 戻る`。content_labels の visible_buttons）。
-    screen_button_field: re.Pattern[str]
     # 番号付きの機能見出し（「〜-(1)…」。線の字は evidence_cues）。
     function_label: re.Pattern[str]
 
@@ -119,9 +109,6 @@ def _build(pack: LanguagePack) -> CheckCues:
     heading_opens = re.escape("".join(pair[0] for pair in pairs))
     heading_closes = re.escape("".join(pair[1] for pair in pairs))
     colon = re.escape("".join(pack.words("evidence_cues", "label_colon_chars")))
-    labels = pack.words("evidence_cues", "section_label_brackets")
-    label_open = labels[0][0] if labels else "【"
-    label_close = labels[0][1] if labels else "】"
     item_bullets = re.escape("".join(pack.words("evidence_cues", "item_bullet_chars")))
     notes = re.escape("".join(pack.words("evidence_cues", "note_mark_chars")))
     heading_bullets = re.escape("".join(pack.words("evidence_cues", "heading_bullet_chars")))
@@ -136,16 +123,11 @@ def _build(pack: LanguagePack) -> CheckCues:
     version_label = rf"{prefix}\s*[0-9{re.escape(kanji_digits)}]+\s*{alt['version_units']}"
     constraint = rf"{alt['constraint_words']}|{alt['condition_preceders']}{alt['condition_nouns']}{alt['condition_followers']}"
     unexplained = alt["unexplained_words"]
-    guarantee = rf"{alt['guarantee_verbs']}{alt['guarantee_endings']}(?!{alt['guarantee_exceptions']})|{alt['match_claims']}"
     adverb_kanji = char_class(words["condition_adverb_kanji"])
     range_particles = "|".join(f"(?<={re.escape(word)})" for word in words["condition_range_particles"])
     trailing_particles = alt["condition_trailing_particles"]
     particle_head = _body((*kanji_items, "〆", "ヵ", "ヶ", *katakana_items, "A-Z", "a-z", "0-9", "Ａ-Ｚ", "ａ-ｚ", "０-９"))
     closers = re.escape("".join(pair[1] for pair in quotes) + "".join(pair[1] for pair in pack.words("markers", "number_brackets")))
-    buttons_label = next(
-        (label for label, field in pack.mapping("content_labels", "vision_fields").items() if field == "visible_buttons"),
-        "visible_buttons",
-    )
     dashes = re.escape("".join(pack.words("evidence_cues", "function_number_dashes")))
     return CheckCues(
         words=words,
@@ -164,19 +146,8 @@ def _build(pack: LanguagePack) -> CheckCues:
         constraint=re.compile(constraint),
         heading_brackets=re.compile(rf"^[{heading_opens}]\s*(?:{alt['heading_screen_words']}\s*[{colon}])?\s*|\s*[{heading_closes}]$"),
         route_separator=re.compile(markers.route_arrow),
-        # 【X】の直後に欄・項目などが続くのは欄名の参照で、節見出しではない。
-        field_label=re.compile(
-            rf"{re.escape(label_open)}([^{re.escape(label_close)}]{{1,40}}){re.escape(label_close)}"
-            rf"(?={alt['field_label_followers']})"
-        ),
-        field_label_open=label_open,
-        field_label_close=label_close,
         enumeration=re.compile(markers.circled),
-        unexplained=re.compile(unexplained),
-        guarantee=re.compile(guarantee),
-        speculation=re.compile(alt["speculation_words"]),
         button=re.compile(rf"({word_chars}{{1,12}}){alt['button_words']}"),
-        option_value=re.compile(rf"^[{quote_opens}]?[0-9]{{1,3}}[{colon}]"),
         ignored_quote_chars=frozenset("".join(words["ignored_quote_chars"])),
         trailing_punctuation="".join(words["quote_sentence_end_chars"]),
         step_split=re.compile(
@@ -192,10 +163,6 @@ def _build(pack: LanguagePack) -> CheckCues:
             + "|".join(f"{re.escape(char)}{{2,}}" for char in words["repeated_ellipsis_chars"])
             + (f"|[{chars('ellipsis_chars')}]+" if words["ellipsis_chars"] else "")
             + r")\s*"
-        ),
-        object_kinds=(
-            ("report", re.compile(rf"{alt['report_suffixes']}$")),
-            ("screen", re.compile(rf"{alt['screen_object_suffixes']}$")),
         ),
         condition_sentence=re.compile(rf"[{sentence}]|{alt['condition_sentence_endings']}$"),
         condition_clause=re.compile(
@@ -233,7 +200,6 @@ def _build(pack: LanguagePack) -> CheckCues:
         ),
         quoted_name=re.compile(rf"{re.escape(first_quote[0])}([^{re.escape(first_quote[1])}]+){re.escape(first_quote[1])}"),
         claim_word=re.compile(rf"{word_chars}{{2,}}"),
-        screen_button_field=re.compile(rf"^{re.escape(buttons_label)}[:：]\s*(.+)$", re.M),
         function_label=re.compile(rf"[{dashes}]\([0-9]+\).+"),
         bare_title_marks=re.compile(
             rf"[{re.escape(''.join(w for w in words['bare_title_marks'] if len(w) == 1))}]"

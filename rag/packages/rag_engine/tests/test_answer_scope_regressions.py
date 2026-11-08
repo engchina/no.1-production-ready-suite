@@ -477,8 +477,6 @@ def test_none_mode_does_not_rephrase_csv_values_from_word_presence(correction_ro
 
 @pytest.mark.parametrize("plan_kind", ["absent", "legacy", "scoped"])
 def test_planned_table_evidence_does_not_need_question_words(plan_kind):
-    from rag_engine.generation.grounded import OTHER_DOCUMENT_CHECK
-
     operation = "入力ファイルを開いて値を確認します。"
     rows = (EXAMPLES / "rows.csv").read_text()
     spans = [
@@ -512,4 +510,4 @@ def test_planned_table_evidence_does_not_need_question_words(plan_kind):
         payload["request_coverage"][0].pop("evidence_scope")
     result, _ = verify("入力ファイルの更新方法を教えてください。", GroundedDraft.model_validate(payload), spans)
     entry = next(e for e in result if e.item.evidence_id == "rows")
-    assert not any(OTHER_DOCUMENT_CHECK in str(mark) for mark in entry.marks)
+    assert not entry.marks

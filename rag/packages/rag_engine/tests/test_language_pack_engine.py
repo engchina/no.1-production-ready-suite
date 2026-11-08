@@ -5,7 +5,6 @@ import unittest
 from rag_parser_core.language import bind_pack, builtin_pack, resolve
 
 from rag_engine.chunking.headings import _heading_patterns
-from rag_engine.generation.value_grounding import _date
 from rag_engine.retrieval.enumeration import enumeration_request
 
 
@@ -46,12 +45,6 @@ class LanguagePackEngineTest(unittest.TestCase):
         self.assertNotEqual(enumeration_request(question).chapters, (2, 3, 4))
         with bind_pack(_custom(numbers={"range_connectors": ["から", "to"]})):
             self.assertEqual(enumeration_request(question).chapters, (2, 3, 4))
-
-    def test_dates_use_era_words_not_single_characters(self):
-        # 以前は元号を字の集合で書いていて、元号の 1 字だけでも日付にしていた。
-        self.assertEqual(_date().sub("", "R6年度の上限は100"), "の上限は100")
-        with bind_pack(_custom(numbers={"era_letters": ["K=令和"]})):
-            self.assertEqual(_date().sub("", "K6年度の上限は100"), "の上限は100")
 
     def test_content_labels_follow_the_pack(self):
         """表・図の内容のラベルは書く側と読む側が同じ言語資源から作る(#2181 段 2c)。"""
@@ -139,10 +132,9 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(definition_labels("〈区分〉の意味は"), ["区分"])
 
     def test_evidence_cues_follow_the_pack(self):
-        """根拠の選び方の手がかり（集計値・機能をつなぐ語・機能番号の線）は言語資源から作る(#2181 段 4)。"""
+        """根拠の選び方の手がかり（集計値・機能番号の線）は言語資源から作る(#2181 段 4)。"""
         from types import SimpleNamespace
 
-        from rag_engine.retrieval.evidence_scope import evidence_scope_error
         from rag_engine.retrieval.operation_context import alternative_operation_queries
         from rag_engine.retrieval.result_granularity import aggregate_only_evidence
 
@@ -153,22 +145,15 @@ class LanguagePackEngineTest(unittest.TestCase):
             SimpleNamespace(metadata={"section_path": ["業務~(2)削除画面"]}),
         ]
         self.assertEqual(alternative_operation_queries("登録したい", records), ())
-        linked = [
-            {"text": "機能Aから機能Bへ渡る", "section_path": ["X-(1)機能A"]},
-            {"text": "機能Aから機能Bへ渡る", "section_path": ["X-(2)機能B"]},
-        ]
-        self.assertEqual(evidence_scope_error(linked), "別機能の操作を接続する明示根拠がない")
         with bind_pack(
             _custom(
                 evidence_cues={
                     "aggregate_value_words": ["総数"],
-                    "link_verbs": ["渡る"],
                     "function_number_dashes": ["-", "~"],
                 }
             )
         ):
             self.assertFalse(aggregate_only_evidence(spans))
-            self.assertEqual(evidence_scope_error(linked), "")
             self.assertEqual(len(alternative_operation_queries("登録したい", records)), 2)
 
     def test_answer_labels_follow_the_pack(self):
@@ -213,50 +198,32 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertIn("E1", superseded_evidence_ids("手順は", [old, abolished]))
 
     def test_operation_audit_cues_follow_the_pack(self):
-        """操作の指示・操作の語の族・削除の対象は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.operation_audit import deletion_targets, is_operation_instruction, missing_operation_terms
+        """操作の指示は言語資源から作る(#2181 段 5)。"""
+        from rag_engine.generation.operation_audit import is_operation_instruction
 
         self.assertFalse(is_operation_instruction("申請書を提出します"))
-        self.assertEqual(missing_operation_terms("再交付してください", [{"text": "再発行の手順"}]), [])
-        self.assertEqual(deletion_targets("帳票を破棄したい"), [])
         with bind_pack(
             _custom(
-                operation_audit_cues={"instruction_phrases": ["を提出"], "operation_families": ["再交付=再交付"]},
-                answer_check_cues={"deletion_words": ["破棄"]},
+                operation_audit_cues={"instruction_phrases": ["を提出"]},
             )
         ):
             self.assertTrue(is_operation_instruction("申請書を提出します"))
-            self.assertEqual(deletion_targets("帳票を破棄したい"), ["帳票"])
 
     def test_grounding_cues_follow_the_pack(self):
-        """回答の値の裏付け・算式の単位は言語資源から作る(#2181 段 5)。"""
+        """算式の単位は言語資源から作る(#2181 段 5)。"""
         from rag_engine.generation.applications import arithmetic_mismatch
-        from rag_engine.generation.value_grounding import unsupported_document_value_claim
 
-        claim = "入力の限度は 8 です"
-        self.assertEqual(unsupported_document_value_claim(claim, [{"text": "画面の例"}], ""), "")
         self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
         with bind_pack(
             _custom(
                 grounding_cues={
-                    "numeric_rule_words": ["限度"],
                     "amount_units": ["兆円", "円"],
                     "amount_scale_units": ["兆=9"],
                 }
             )
         ):
-            self.assertTrue(unsupported_document_value_claim(claim, [{"text": "画面の例"}], ""))
             self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
             self.assertTrue(arithmetic_mismatch("2兆円+3兆円=5円"))
-
-    def test_remaining_cues_follow_the_pack(self):
-        """エラーの質問・根拠の ID のラベル・機能番号の線は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.answering import _error_question
-
-        self.assertTrue(_error_question().search("エラーが出る"))
-        self.assertFalse(_error_question().search("障害が出る"))
-        with bind_pack(_custom(question_cues={"error_words": ["障害"]})):
-            self.assertTrue(_error_question().search("障害が出る"))
 
 
 if __name__ == "__main__":
