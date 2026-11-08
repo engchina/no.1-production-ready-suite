@@ -10,13 +10,16 @@
 `ProfileManagementPage`（業務プロファイル）を参照実装とする。URL の検索パラメータは `?id=` / `?profile=` など。
 
 - **割当**: 業務プロファイル / 用語・同義語 / 検証用サンプルデータ / コメント管理 / アノテーション管理 / ドメイン管理 / 質問分類モデル管理。テーブルの管理・ビューの管理の作成・取込（`?` を持たない画面内の切り替え）もこの型の置き方（`PageHeader` の `back`）にする。
+- **割当（全幅の一覧 → 全幅の詳細。#4645）**: テーブルの管理 / ビューの管理 / データの管理の「テーブル・ビューデータの表示」。部品は `components/DbObjectManagementShared.tsx` の `DbObjectListDetail`（共有の `ListDetailLayout` の `layout="single"` / `listVariant="table"`）と `DbObjectDetailPanel`。
+  - 一覧: 全幅の表。テーブル「テーブル名（`OWNER.NAME`）・コメント・行数・行の操作（正確な件数を取得・XLSX・削除）」、ビュー「ビュー名・コメント・行の操作（XLSX・削除）」、データ「対象名・種別・コメント・行数（統計未取得）」（行の操作なし）。行の操作は詳細の `ObjectActionBar` と同じ操作（テーブルの「正確な件数を取得」は詳細を開いて数える）。検索・所有者の接頭辞（データは種別の `FilterSelect` も。28rem 未満は「絞り込み（N）」のシート）・件数 → 表 →「さらに読み込む」（100 件ずつ）。md 未満は名前の列だけを残し、ほかの値を名前の下の 1 行に畳む。
+  - 選択: URL の `?table=` / `?view=` / `?object=<OWNER.NAME>`（`useWorkspaceUrlSelection(param, { singlePane: true })`。一覧から詳細へ入るときは履歴に積む。keep-alive の間はほかの画面の URL を読まず、サイドナビから戻ると最後の選択を URL に戻す）。先頭の行を自動で選ばない。一覧へ戻るとその行のページ・スクロール・フォーカスを戻す。データの表示は、ほかのタブへ移るときに URL から `?object=` を外し（選択は作業状態に残す）、`?object=` 付きのリンクで開くとこのタブを開く。
+  - 詳細: `PageHeader` の見出しは対象名、`status` は種類・列数・行数のバッジ（`DbObjectHeaderBadges`）、補足はコメント。詳細の間は一覧の操作（作成・取込・最新情報を取得など）を出さない。詳細の操作の行は `ObjectActionBar` と、右端の前へ / 次へ（今の一覧の並び。読み込み中・失敗の間も同じ位置に残す）。テーブル / ビューは列情報 / DDL のタブ（DDL は重い GET_DDL を伴うので初めて開いたときに取る）、ビューは「JOIN・WHERE 条件」のタブ（抽出。開くと DDL を後追いで取る）を足す。データの表示は取得件数上限 →「データを表示」→ 表示結果（`ResultTable`）。行を開く・前へ / 次へで、今の取得件数上限でデータを表示する。データの表示の詳細の間は画面のタブを隠す。
+  - 以前の B 型（狭い一覧 | 広い詳細。#2281 / #2315）は、未選択の詳細の空の状態が画面の大半を占め、一覧で属性を見比べられなかったので、全幅の一覧 → 全幅の詳細にした。ビューの「JOIN/WHERE 条件抽出」は PageHeader の操作で先に一覧でビューを選んでおく必要があったので、詳細のタブに移した。
 - 旧タブ（list/create/import 等）は **一覧上のアクション** か **エディタ内の節** へ平坦化。破壊的操作は `useConfirm` + `ADMIN_EXECUTE` ゲートへ集約。
 
 ### B. マスタ詳細の閲覧
 
-- **割当**: テーブルの管理 / ビューの管理（共有の `ListDetailLayout`。#2281）。一覧の列は見出し・検索・所有者の接頭辞・件数（`DbObjectSearchOwnerFields`）→ 名前とコメントの 2 段 + 行数の表（並べ替えは列見出し）→「さらに読み込む」、詳細の列は対象の見出し・`ObjectActionBar`・列情報 / DDL のタブ。選択は URL の `?table=` / `?view=`（`useWorkspaceUrlSelection`。keep-alive の間はほかの画面の URL を読まず、サイドナビから戻ると最後の選択を URL に戻す）。先頭の行を自動で選ばない。選んでいる行をもう一度押すと詳細を取り直す（取消・失敗の後の読み直し）。部品は `components/DbObjectManagementShared.tsx` の `DbObjectListDetail` / `DbObjectDetailPanel`。
 - **割当（フィードバック管理。#2283）**: 「アプリ内フィードバック」のタブ（フィードバック履歴 + 管理者レビュー）も同じ `ListDetailLayout`（`id="feedback-management"`）。一覧の列は見出し・`ListToolbar`（履歴検索・利用者評価・業務プロファイル。列は 28rem 未満なので「絞り込み（N）」のシート）・件数 → 質問（2 行まで）と補足 1 行（評価の日時・利用者評価・管理者レビュー）の 1 列の表 → 列の下の `OffsetPagination`、詳細の列は管理者レビューのフォーム（業務プロファイル・日時・実行エンジンと処理時間・生成 SQL・評価・コメント・確定の行）。選択は URL の `?feedback=<履歴の ID>`（`useWorkspaceUrlSelection("feedback")`）で、先頭の行を自動で選ばない。編集欄の上の履歴の選択欄は持たない（一覧と前へ / 次へ で選ぶ）。未保存のレビューがあるときは、行・前へ / 次へ・1 ペインの「一覧へ戻る」の前に破棄を確認する（確認した編集は保存済みの扱いにしてから戻るので、戻る / 進むの確認を重ねない）。選んだ履歴が絞り込み・ページ送りで一覧から外れても別の行へ置き換えず、詳細に「選んだ履歴は今の一覧にありません」。
-- **割当（データの管理のデータの表示。#2315）**: 「データの管理」の「テーブル・ビューデータの表示」のタブも同じ `DbObjectListDetail`（`ListDetailLayout` の `id="data-management-preview"`）。一覧の列は見出し・検索・所有者の接頭辞・種別（`FilterSelect`。列は 28rem 未満なので「絞り込み（N）」のシート）・件数 → 名前とコメントの 2 段 + 行数と種類（短い値）の表（並べ替えは名前・行数の列見出し）→「さらに読み込む」、詳細の列は対象の見出し（種類・行数・コメント）と `ObjectActionBar`（XLSX ダウンロード・データを空にする）→ 取得件数上限・「データを表示」・リセット → 表示結果（`ResultTable`。詳細の列の全幅）。選択は URL の `?object=<OWNER.NAME>`（`useWorkspaceUrlSelection("object", { enabled: <このタブを開いている> })`）で、先頭の行を自動で選ばない。ほかのタブへ移るときは URL から `?object=` を外し（選択は作業状態に残す）、タブへ戻ると URL に戻す。`?object=` 付きのリンクで開くとこのタブを開く。行を選ぶと（URL の選択が変わると）今の取得件数上限でデータを表示し、選んでいる行をもう一度押すと取り直す。以前の左右 1:1 の `FixedSplitPane` とステップの表示（対象選択 → 結果確認）は、狭い一覧 | 広い詳細の構成が段階をそのまま示すので持たない（結果の表に幅を渡す）。
 - 「Select AI feedback」のタブ（Select AI の feedback のベクトル表の行 → 選んだ SQL の詳細と削除）は `FixedSplitPane`（`feedback-management-entries-split`）のまま。行に安定した ID が無く（`sql_id` は空のことがある）URL で選べないことと、一覧の内容（質問）と SQL を並べて見比べる技術の点検の画面であることから、一覧 + 詳細に移さない（#2283）。
 - 実行履歴は 3 製品共通の型（一覧 → `?id=<run_id>` の全幅の詳細。UX 契約 `platform/docs/ux-contracts/run-history.md`。#1955）に移した。A 型の一覧内詳細は本規約を流用可。種類の絞り込みの既定は「品質評価以外」（Agent の品質評価の Run が MCP で呼んだ実行を隠す。選択肢は 品質評価以外 / すべて / チャット / SQL 生成 / MCP / 品質評価、「条件をクリア」は既定へ戻す）。品質評価の実行だけがあるときは、絞り込みを出したまま表の空の状態に隠している件数と出し方を出す（#1986。`security-rbac-deepsec.md`「実行履歴の種類」）。
 
@@ -36,7 +39,7 @@
 ## 3. 一覧 + 詳細と分割ペイン
 
 - `FixedSplitPane`（C 型の入力 | 結果と比較）は共有の `@production-ready/ui` の部品で、`DbObjectManagementPanelShell` の `splitId` に渡すと左右に並べる。保存 key の前置きは `FIXED_SPLIT_STORAGE_PREFIX`（`src/lib/ui-store.ts`）。
-- `ListDetailLayout`（B 型の一覧 + 詳細）は `DbObjectListDetail` が包む。一覧の幅と開閉の保存 key の前置きは `LIST_DETAIL_STORAGE_PREFIX`（`production-ready-nl2sql.listDetail`）。一覧 + 詳細の画面は `DbObjectManagementPanelShell` に `framed={false}` を渡し、外側の枠を付けない（一覧と詳細の列がそれぞれ枠を持つ）。
+- `ListDetailLayout` は、フィードバック管理（B 型の一覧 + 詳細）と、`DbObjectListDetail`（A 型の全幅の一覧 → 全幅の詳細。#4645）が使う。一覧の幅と開閉の保存 key の前置きは `LIST_DETAIL_STORAGE_PREFIX`（`production-ready-nl2sql.listDetail`。B 型だけが使う）。`ListDetailLayout` を使う画面は `DbObjectManagementPanelShell` に `framed={false}` を渡し、外側の枠を付けない（表と詳細の列がそれぞれ枠を持つ）。
 - 共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は A 型の全幅の一覧 → 全幅のエディタ（#4635）。開いている対象は URL の `?user=` / `?role=`（`new` は新規作成）。ロール管理のエディタの「権限管理で設定」は `?role=` を付けて権限管理の同じロールのエディタを開き、権限管理のエディタの「ロール管理で開く」はその逆（製品のラッパー `features/security/Security*Page.tsx` が、ロール管理を開ける利用者にだけ `roleManagementPath` を渡す）。
 
 ## 4. 色の移行
