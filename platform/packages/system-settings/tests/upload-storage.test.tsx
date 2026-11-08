@@ -58,7 +58,7 @@ describe("UploadStorageSettingsPage", () => {
       </MemoryRouter>,
     );
     expect(html).toContain('data-testid="settings-upload-storage-loading"');
-    expect(html).toContain("アップロード保存先設定を読み込んでいます。");
+    expect(html).toContain("アップロード保存先設定を読み込んでいます");
     expect(html).toContain('data-skeleton="form"');
     expect(html).toContain('data-processing-placement="panel"');
   });

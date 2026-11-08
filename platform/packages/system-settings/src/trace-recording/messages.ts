@@ -1,6 +1,6 @@
 /** 3製品で共通の運用設定の文言。 */
 export const TRACE_RECORDING_SETTINGS_MESSAGES = {
-  loading: "軌跡の記録設定を読み込んでいます。", loadError: "軌跡の記録設定を取得できませんでした。",
+  loading: "軌跡の記録設定を読み込んでいます", loadError: "軌跡の記録設定を取得できませんでした。",
   refetchError: "最新の設定を取得できませんでした。表示中の値は前回取得した内容です。再試行してください。",
   saveError: "軌跡の記録設定を保存できませんでした。", retry: "再試行",
   settingsTitle: "軌跡の記録", settingsDescription: "Agent・RAG・NL2SQL に共通の設定です。通常は本文を記録せず、問題を調べるときに有効にします。",

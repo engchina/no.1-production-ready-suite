@@ -19,7 +19,9 @@ import {
   PageBody,
   ContentActionBar,
   ProcessingIndicator,
+  Skeleton,
   TextareaField,
+  TimedLoadingState,
   useActionPending,
   type EntityAction,
 } from "@production-ready/ui";
@@ -31,7 +33,6 @@ import { t } from "@/lib/i18n";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
-  DbManagementLoadingSkeleton,
   DbObjectDetailPanel,
   DbObjectHeaderBadges,
   DbObjectListDetail,
@@ -214,12 +215,26 @@ function ViewJoinWherePanel({
 
       {!loading && extractError ? <Banner severity="danger">{extractError}</Banner> : null}
       {loading ? (
-        <DbManagementLoadingSkeleton
-          idPrefix="view-join-where-result"
-          ariaLabel={t("viewMgmt.joinWhere.loading")}
-          variant="detail"
+        // 抽出の結果（方式の印・JOIN と WHERE の 5 行の欄・構造の分析の開閉）の形の Skeleton。汎用の詳細の形は結果より
+        // 大幅に高く、読み込み後に領域が縮むので使わない（#4649）。
+        <TimedLoadingState
+          label={t("viewMgmt.joinWhere.loading")}
           placement="result"
-        />
+          testId="view-join-where-result-detail-skeleton"
+        >
+          <div className="grid gap-3" aria-hidden="true">
+            <Skeleton className="h-6 w-64 max-w-full" />
+            <div className="grid gap-3 lg:grid-cols-2">
+              {[0, 1].map((field) => (
+                <div key={field} className="grid gap-1.5">
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-34" />
+                </div>
+              ))}
+            </div>
+            <Skeleton className="h-10" />
+          </div>
+        </TimedLoadingState>
       ) : result ? (
         <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
           <div className="flex flex-wrap gap-2">

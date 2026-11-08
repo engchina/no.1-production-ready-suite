@@ -437,7 +437,7 @@ export function EvaluationPage() {
           {pageLoading ? (
             // 読み込み中は条件のフォームの形の Skeleton で領域を予約する（messaging.md §3.6）。
             <TimedLoadingState
-              label={t("common.loading")}
+              label={t("qualityEvaluation.conditions.loading")}
               operationKey="quality-evaluation-conditions"
               placement="panel"
               testId="quality-evaluation-conditions-loading"
@@ -748,7 +748,7 @@ export function EvaluationPage() {
                   hint={t("qualityEvaluation.progress.emptyHint")}
                 />
               ) : currentJobQuery.isLoading ? (
-                <LoadingState label={t("common.loading")} placement="job">
+                <LoadingState label={t("qualityEvaluation.progress.loading")} placement="job">
                   {/* 文言と経過時間の行の下を、進行の表示の形の Skeleton で覆う（#2510）。 */}
                   <ListSkeleton rows={2} />
                 </LoadingState>

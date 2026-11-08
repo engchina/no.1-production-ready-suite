@@ -1,4 +1,5 @@
 import { expectChatTargetNextToNewConversation } from "../../../../platform/packages/ui/e2e/chat-toolbar-layout";
+import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { mockChatRequirement } from "./_helpers/chat-requirement";
@@ -66,20 +67,26 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.goto("/chat");
     await applyColorScheme(page, colorScheme);
 
-    // ツールバーの対象の欄に文言と経過時間を出す（同じ取得の経過時間はここだけ）。
-    const profilesLoading = page.getByTestId("sql-chat-profiles-loading");
+    // ツールバーの対象の欄は欄の形の Skeleton だけ。文言と経過時間は会話の欄の先頭に 1 か所だけ出す（#4649）。
+    const toolbar = page.locator("[data-chat-toolbar]");
+    await expect(toolbar.getByTestId("sql-chat-profiles-skeleton")).toBeVisible();
+    await expect(toolbar.getByRole("timer")).toHaveCount(0);
+    const panel = page.getByTestId("sql-chat-panel");
+    await expect(panel).toBeVisible();
+    const profilesLoading = panel.getByTestId("sql-chat-profiles-loading");
     await expect(profilesLoading).toContainText(
       "業務プロファイルを読み込んでいます",
     );
-    // 会話の欄は最初から描き、空の状態の代わりに会話の形の Skeleton を出す。経過時間は重ねない。
-    const panel = page.getByTestId("sql-chat-panel");
-    await expect(panel).toBeVisible();
-    await expect(page.getByTestId("sql-chat-conversation-skeleton")).toBeVisible();
+    // 会話の欄は最初から描き、空の状態の代わりに会話の形の Skeleton を出す。
+    await expect(profilesLoading.getByTestId("sql-chat-conversation-skeleton")).toBeVisible();
     await expect(
       page.getByText("質問を入力して会話を始めます", { exact: true }),
     ).toHaveCount(0);
-    await expect(panel.getByRole("log").getByRole("timer")).toHaveCount(0);
     await expect(page.getByRole("timer")).toHaveCount(1);
+    expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
+    // 会話の欄を末尾へ送らず、先頭の文言と経過時間が見える（375px で隠れない。#4649）。
+    await expect(profilesLoading.locator("[data-processing-label]")).toBeInViewport();
+    await expect(profilesLoading.getByRole("timer")).toBeInViewport();
     // 入力欄・生成方法・送信・新しい会話・履歴の開閉は無効。
     await expect(
       page.getByRole("textbox", { name: "質問", exact: true }),
@@ -97,6 +104,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     // 読み込み後: 空の状態と、使える入力欄。
     release();
     await expect(page.getByTestId("sql-chat-profiles-loading")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-profiles-skeleton")).toHaveCount(0);
     await expect(page.locator("[data-chat-toolbar] #sql-chat-profile")).toBeVisible();
     await expectChatTargetNextToNewConversation(page, expect);
     await page.screenshot({ path: testInfo.outputPath(`chat-target-ready-${colorScheme}.png`) });

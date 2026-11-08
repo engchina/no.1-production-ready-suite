@@ -312,6 +312,11 @@ export function SampleDataPage() {
   // 押したボタンが見えていて回っているときだけ、作業領域の読込表示はスピナーを出さない（案内は読込で消えることがある）。
   const loadButtonSpinning =
     loading === "load" && (loadOrigin === "header" || (loadOrigin === "notice" && pageNoticeShown));
+  // 今の種類のサンプル情報を出している間の取り直し（「最新情報を取得」）は、前の内容を出したまま作業領域の先頭に
+  // 経過時間を出す（messaging.md §3.6・§3.7。#4649）。まだ今の種類の内容が無い読み込み（最初・種類の切り替え・
+  // 失敗の後）だけ、作業領域を形の Skeleton で覆う。
+  const sampleRefreshing = loading === "load" && sampleReady;
+  const sampleInitialLoading = loading === "load" && !sampleReady;
 
   return (
     <>
@@ -409,19 +414,28 @@ export function SampleDataPage() {
           ariaLabel={t("dataTools.sample.workspace.label")}
           splitId={`sample-data-${activeAction}`}
           processing={
-            schemaRefreshing && !schemaSync.ownsProgress ? (
+            sampleRefreshing ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="sample-data-refresh"
+                placement="workspace"
+                testId="sample-data-workspace-refresh-processing"
+                activityIcon={loadButtonSpinning ? "none" : "spinner"}
+              />
+            ) : schemaRefreshing && !schemaSync.ownsProgress ? (
               <SchemaRefreshProcessing testId="sample-data-workspace-processing" />
             ) : undefined
           }
         >
-          {loading === "load" ? (
+          {sampleInitialLoading ? (
             <DbManagementLoadingSkeleton
               idPrefix="sample-data-workspace-refresh"
-              ariaLabel={t("common.processing.refreshing")}
+              ariaLabel={t("dataTools.sample.loading")}
               variant="detail"
               operationKey="sample-data-refresh"
               placement="workspace"
-              testId="sample-data-workspace-refresh-skeleton"
+              testId="sample-data-workspace-loading-skeleton"
               activityIcon={loadButtonSpinning ? "none" : "spinner"}
             />
           ) : (
@@ -484,7 +498,7 @@ export function SampleDataPage() {
             </section>
           )}
 
-          {loading !== "load" && (
+          {!sampleInitialLoading && (
             <section className="grid min-w-0 content-start gap-4">
               <DbObjectPanelHeader
                 icon={Database}

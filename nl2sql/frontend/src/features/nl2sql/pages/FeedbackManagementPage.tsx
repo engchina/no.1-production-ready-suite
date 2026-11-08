@@ -836,7 +836,8 @@ export function FeedbackManagementPage() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             onClick: () => load(true, "header"),
-            loading: loading === "load" && refreshOrigin === "header",
+            // 最初の読み込みはボタンを回さず、領域の表示がスピナーを出す（ボタンの loading は押した再読み込みだけ。#4649）。
+            loading: loading === "load" && refreshOrigin === "header" && loadedOnce,
             disabled: Boolean(loading),
           },
         ]}
@@ -976,6 +977,16 @@ export function FeedbackManagementPage() {
                   // ボタンが回っていないとき（業務プロファイルの切り替えなど）は、この表示がスピナーを出す（#819）。
                   activityIcon={refreshOrigin === "entries" ? "none" : "spinner"}
                 />
+              ) : initialLoading ? (
+                // 最初の読み込みも業務プロファイルの切り替えと同じく、分割の上に全幅で経過時間を 1 か所だけ出し、
+                // 一覧と詳細の両方を形の Skeleton で覆う。押したボタンが無いので、この表示がスピナーを出す（#1777・#4649）。
+                <ProcessingIndicator
+                  active
+                  label={t("feedbackManagement.entries.loading")}
+                  operationKey="feedback-management-initial-load"
+                  placement="workspace"
+                  testId="feedback-management-entries-loading"
+                />
               ) : null}
 
               <FixedSplitPane
@@ -985,7 +996,7 @@ export function FeedbackManagementPage() {
                 minRightPaneWidthPx={400}
                 left={
                   initialEntriesLoading ? (
-                    <FeedbackEntriesListSkeleton timed={initialLoading} />
+                    <FeedbackEntriesListSkeleton />
                   ) : feedback?.read_failed || (loadFailed && !feedback) ? (
                     // 読み取れなかった（理由はページの先頭）。「Select AI feedback はありません」と出さない（#4217）。
                     <p className="p-3 text-sm text-fg-muted" data-testid="feedback-entries-load-failed">{t("common.list.loadUnavailable")}</p>
@@ -1123,7 +1134,30 @@ export function FeedbackManagementPage() {
             labelledBy="feedback-management-tab-appFeedback"
             ariaLabel={t("feedbackManagement.workspace.appFeedback")}
             idPrefix="feedback-management-app-feedback"
-            processing={refreshProcessing}
+            // 読み込み中の文言と経過時間は、一覧と編集欄の両方を覆う作業領域の先頭に全幅で 1 か所だけ出す（375px の
+            // 1 ペインでも見える。#4649）。最初の読み込みは一覧と編集欄を形の Skeleton で覆い、押したボタンが無いので
+            // この表示がスピナーを出す（messaging.md §3.7）。絞り込み・ページ送りは前の一覧を出したまま示す（#535）。
+            processing={
+              initialLoading ? (
+                <ProcessingIndicator
+                  active
+                  label={t("feedbackManagement.appFeedback.loading")}
+                  operationKey="feedback-management-initial-load"
+                  placement="workspace"
+                  testId="app-feedback-list-loading"
+                />
+              ) : loading === "app-feedback-load" ? (
+                <ProcessingIndicator
+                  active
+                  label={t("feedbackManagement.appFeedback.loading")}
+                  operationKey="app-feedback-load"
+                  placement="workspace"
+                  testId="app-feedback-load-processing"
+                />
+              ) : (
+                refreshProcessing
+              )
+            }
             // 一覧と詳細の列がそれぞれ枠を持つので、外側の枠を付けない（#2281・#2283）。
             framed={false}
           >
@@ -1207,16 +1241,6 @@ export function FeedbackManagementPage() {
                     filtersLayout="sheet"
                     labels={listToolbarLabels()}
                   />
-                  {loading === "app-feedback-load" ? (
-                    // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。
-                    <ProcessingIndicator
-                      active
-                      label={t("feedbackManagement.appFeedback.loading")}
-                      operationKey="app-feedback-load"
-                      placement="panel"
-                      testId="app-feedback-load-processing"
-                    />
-                  ) : null}
                   <ActionResultBanner result={actionResultFor("appFeedbackList")} />
                 </div>
               }
@@ -1227,16 +1251,9 @@ export function FeedbackManagementPage() {
                   className="m-0 flex min-h-0 min-w-0 flex-col border-0 p-0"
                 >
                   {initialLoading ? (
-                    // 最初の読み込みは一覧の領域だけを一覧の形の Skeleton で覆い、経過時間をここに 1 か所だけ出す。
-                    // スピナーはヘッダーの「最新情報を取得」が出す（操作が 1 つのヘッダー。messaging.md §3.7）。
+                    // 最初の読み込みは一覧の領域を一覧の形の Skeleton で覆う（文言と経過時間は作業領域の先頭）。
                     <div className="p-3">
-                      <HistoryRowListSkeleton
-                        label={t("feedbackManagement.appFeedback.loading")}
-                        operationKey="feedback-management-initial-load"
-                        testId="app-feedback-list-loading"
-                        skeletonTestId="app-feedback-list-skeleton"
-                        activityIcon="none"
-                      />
+                      <HistoryRowListSkeleton testId="app-feedback-list-skeleton" />
                     </div>
                   ) : appFeedbackItems.length > 0 ? (
                     <FeedbackHistoryList
@@ -1880,33 +1897,19 @@ function FeedbackEntryDetail({
   );
 }
 
-function FeedbackEntriesListSkeleton({ timed = false }: { timed?: boolean }) {
-  const skeleton = (
+/** Select AI feedback の一覧の Skeleton。読み込み中の文言と経過時間は分割の上の ProcessingIndicator が 1 か所だけ出す。 */
+function FeedbackEntriesListSkeleton() {
+  return (
     <section
       className="grid min-w-0 content-start gap-3"
       aria-label={t("feedbackManagement.entries.loading")}
       aria-busy="true"
       data-testid="feedback-management-entries-list-skeleton"
     >
-      {/* profile の切り替えでは、読み込み中の文言と経過時間は分割の上の ProcessingIndicator が 1 か所だけ出す。 */}
       <Skeleton className="h-6 w-44" />
       <Skeleton className="h-5 w-72 max-w-full" />
       <TableSkeleton columns={2} />
     </section>
-  );
-  if (!timed) return skeleton;
-  // 最初の読み込みは一覧の領域の先頭に経過時間を 1 か所だけ出す（スピナーはヘッダーの「最新情報を取得」。#1777）。
-  return (
-    <TimedLoadingState
-      label={t("feedbackManagement.entries.loading")}
-      operationKey="feedback-management-initial-load"
-      placement="panel"
-      className="content-start"
-      testId="feedback-management-entries-loading"
-      activityIcon="none"
-    >
-      {skeleton}
-    </TimedLoadingState>
   );
 }
 

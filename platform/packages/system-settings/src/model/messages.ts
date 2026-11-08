@@ -153,7 +153,7 @@ export const MODEL_MESSAGES = {
     "原因: 旧形式の model-settings.json に API Key が保存されています。復旧方法: この画面で保存すると API Key を .env へ移し、JSON から secret を削除します。移行後は接続テストを実行してください。",
   "settings.model.legacySecret.title": "旧 JSON に API Key が残っています",
   "settings.model.loadError": "モデル設定の取得に失敗しました。",
-  "settings.model.loading": "モデル設定を読み込んでいます。",
+  "settings.model.loading": "モデル設定を読み込んでいます",
   "settings.model.placeholder.apiKey": "sk-xxxxxxxxxxxxxxxx",
   "settings.model.placeholder.displayName": "業務 NL2SQL 標準",
   "settings.model.placeholder.embeddingModel": "cohere.embed-v4.0",

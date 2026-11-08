@@ -199,7 +199,7 @@ describe("ModelSettingsPage の読み込み（#1036）", () => {
 
     const loading = host.querySelector('[data-testid="settings-model-loading"]');
     expect(loading?.getAttribute("aria-busy")).toBe("true");
-    expect(loading?.textContent).toContain("モデル設定を読み込んでいます。");
+    expect(loading?.textContent).toContain("モデル設定を読み込んでいます");
     expect(loading?.querySelectorAll('[data-skeleton="form"]')).toHaveLength(3);
   });
 

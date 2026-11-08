@@ -207,6 +207,6 @@ describe("ModelSettingsPage", () => {
       </MemoryRouter>,
     );
     expect(html).toContain('data-testid="settings-model-loading"');
-    expect(html).toContain("モデル設定を読み込んでいます。");
+    expect(html).toContain("モデル設定を読み込んでいます");
   });
 });

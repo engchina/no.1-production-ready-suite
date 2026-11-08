@@ -17,6 +17,10 @@ import {
   SelectField,
   FormStatus,
   ProcessingIndicator,
+  Skeleton,
+  ListSkeleton,
+  CONTROL_HEIGHT_CLASS,
+  FIELD_WIDTH_CLASS,
   useActionPending,
 } from "@production-ready/ui";
 import {
@@ -134,6 +138,8 @@ type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh" | "samp
 type PageError = { source: PageErrorSource; message: string; code?: string } | null;
 
 const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
+/** 参考履歴の 1 件（質問・理由・SQL の枠〔max-h-28〕）の高さの Skeleton。狭い幅は点数が下の行に回る分だけ高い（#4649）。 */
+const SIMILAR_HISTORY_ROW_SKELETON_CLASS = "h-[13rem] sm:h-[11.25rem]";
 // URL で受け取るクエリ画面の初期値（一度だけ適用して URL から消す）。
 const QUERY_PREFILL_KEYS = ["question", "engine", "profile_id"];
 /** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
@@ -1333,6 +1339,15 @@ function ExecutableNl2SqlWorkbench() {
                   description={t("nl2sql.workbench.description")}
                 />
                 <div className="space-y-5">
+                  {profilesQuery.isPending ? (
+                    // 業務プロファイルの一覧の最初の読み込み。文言と経過時間はこの領域の先頭の 1 か所だけに出し、
+                    // 業務プロファイルの欄とスキーマ参照は形の Skeleton だけにする（#4649）。
+                    <TimedLoadingState
+                      label={t("nl2sql.profile.loading")}
+                      operationKey="nl2sql-profiles-load"
+                      testId="nl2sql-profiles-loading"
+                    />
+                  ) : null}
                   <EngineSelector
                     value={engine}
                     onChange={(nextEngine) => {
@@ -1376,31 +1391,38 @@ function ExecutableNl2SqlWorkbench() {
                       </>
                     }
                   >
-                    {/* 隣の「自動判定」（md）と同じ高さ（#613）。読み込み中は今の値を「読み込み中」の選択肢として出す。 */}
-                    <SelectField
-                      id="nl2sql-profile-select"
-                      label={t("nl2sql.profile.label")}
-                      value={profileId}
-                      // 受け取った業務プロファイルが使えず空のとき（#3355）に出す。
-                      placeholder={t("nl2sql.profile.selectPlaceholder")}
-                      options={
-                        profilesQuery.isPending
-                          ? [{ value: profileId, label: t("profiles.summary.loading") }]
-                          : profileOptions.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))
-                      }
-                      onValueChange={(nextProfileId) => {
-                        setProfileId(nextProfileId);
-                        suppressedRecommendationSignaturesRef.current.clear();
-                        setSelection(emptySelection());
-                        setAutoDetectLowConfidence(false);
-                        setActionError("");
-                        setPageError(null);
-                        setSchemaDetailError("");
-                      }}
-                      disabled={active || profilesQuery.isPending || noProfiles}
-                      // 対象の選択（業務プロファイル）は lg（#1891）。
-                      width="lg"
-                    />
+                    {/* 隣の「自動判定」（md）と同じ高さ（#613）。読み込み中はラベルと欄の形の Skeleton で寸法を予約する。 */}
+                    {profilesQuery.isPending ? (
+                      <div
+                        className={`space-y-1.5 ${FIELD_WIDTH_CLASS.lg}`}
+                        aria-hidden="true"
+                        data-testid="nl2sql-profile-select-skeleton"
+                      >
+                        <Skeleton className="h-5 w-28" />
+                        <Skeleton className={`${CONTROL_HEIGHT_CLASS.md} w-full`} />
+                      </div>
+                    ) : (
+                      <SelectField
+                        id="nl2sql-profile-select"
+                        label={t("nl2sql.profile.label")}
+                        value={profileId}
+                        // 受け取った業務プロファイルが使えず空のとき（#3355）に出す。
+                        placeholder={t("nl2sql.profile.selectPlaceholder")}
+                        options={profileOptions.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
+                        onValueChange={(nextProfileId) => {
+                          setProfileId(nextProfileId);
+                          suppressedRecommendationSignaturesRef.current.clear();
+                          setSelection(emptySelection());
+                          setAutoDetectLowConfidence(false);
+                          setActionError("");
+                          setPageError(null);
+                          setSchemaDetailError("");
+                        }}
+                        disabled={active || noProfiles}
+                        // 対象の選択（業務プロファイル）は lg（#1891）。
+                        width="lg"
+                      />
+                    )}
                   </FieldActionRow>
                   {prefillProfileUnavailable && !profileId && !noProfiles ? (
                     // 実行履歴から開いた実行の業務プロファイルが削除済み・権限なしで使えない（#3355）。選択欄の直下に出す。
@@ -1717,6 +1739,8 @@ function ExecutableNl2SqlWorkbench() {
                       <SchemaReferencePanel
                         catalog={catalog}
                         loading={loadingCatalog}
+                        // 業務プロファイルの一覧の読み込み中は、経過時間を上の領域の表示に任せて Skeleton だけにする（#4649）。
+                        loadingIndicator={!profilesQuery.isPending}
                         profileUnselected={schemaPanelState === "profile-unselected"}
                         disabled={active}
                         insertMode="logical"
@@ -1849,23 +1873,31 @@ function ExecutableNl2SqlWorkbench() {
                           size={16}
                         />
                       </Button>
-                      {/* 検索中は見出しの文言を差し替えず、ほかの読み込み中と同じく見出しの直下に全幅の行で出す（#2510）。 */}
+                      {/* 検索中は見出しの文言を差し替えず、見出しの直下に全幅で文言と経過時間を出す（#2510）。開いていて前の
+                          結果が無いときは、結果の一覧の形の Skeleton で寸法を予約する。前の結果は検索中も出したままにする（#4649）。 */}
                       {similarHistoryLoading ? (
-                        <div className="border-t border-border px-3 py-2">
-                          <ProcessingIndicator
-                            active
+                        <div className="border-t border-border p-3">
+                          <TimedLoadingState
                             label={t("nl2sql.similar.loading")}
                             operationKey="similar-history"
                             placement="panel"
                             testId="nl2sql-similar-history-loading"
-                          />
+                          >
+                            {similarHistoryOpen && similarHistory.length === 0 ? (
+                              <ListSkeleton
+                                rows={2}
+                                rowClassName={SIMILAR_HISTORY_ROW_SKELETON_CLASS}
+                                testId="nl2sql-similar-history-skeleton"
+                              />
+                            ) : null}
+                          </TimedLoadingState>
                         </div>
                       ) : null}
                       {/* aria-controls の参照先を常時レンダし、閉時は hidden にする。 */}
                       <div
                         id="nl2sql-similar-history"
                         data-testid="nl2sql-similar-history"
-                        hidden={!similarHistoryOpen}
+                        hidden={!similarHistoryOpen || (similarHistoryLoading && similarHistory.length === 0)}
                         className="grid gap-3 border-t border-border p-3 text-sm text-fg"
                       >
                         {!similarHistoryUsedForGeneration && !similarHistoryLoading && (

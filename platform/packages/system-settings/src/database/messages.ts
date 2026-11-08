@@ -96,7 +96,7 @@ export const DATABASE_MESSAGES = {
   "settings.database.hint":
     "DB設定は `.env` の接続文字列に保存されます。Wallet と DSN が一致しているか確認してください。",
   "settings.database.loadError": "データベース設定の取得に失敗しました。",
-  "settings.database.loading": "データベース設定を読み込んでいます。",
+  "settings.database.loading": "データベース設定を読み込んでいます",
   "settings.database.placeholder.dbUser": "admin",
   "settings.database.placeholder.directDsn":
     "adb.example.oraclecloud.com:1522/service_name",
