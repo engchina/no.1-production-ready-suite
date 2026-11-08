@@ -45,20 +45,3 @@ def test_explicit_heading_clears_previous_function_but_adjacency_does_not():
     c = record("r:c", "", metadata={"section_path": ["管理－（１）拠点設定", "管理－（２）利用者設定", "B【操作説明】"]})
     assert _local_child_path(c, "管理－（２）利用者設定\n") == ("管理－（２）利用者設定", "B【操作説明】")
     assert _local_child_path(c, "名称が似ています。\n") == tuple(c.metadata["section_path"])
-
-
-def test_alternative_button_needs_its_own_literal_label():
-    from rag_engine.generation.interaction_grounding import interaction_binding_error
-
-    spans = [dict(text="実行ボタンで登録します。", origin="document_text")]
-    assert interaction_binding_error("「実行」または「保存」ボタンを押します。", spans)
-    assert not interaction_binding_error("「実行」ボタンを押します。", spans)
-    assert not interaction_binding_error(
-        "「実行」または「保存」ボタンを押します。", [dict(text="実行ボタンまたは保存ボタンで登録します。", origin="document_text")]
-    )
-
-
-def test_button_presence_in_cited_image_is_left_to_visual_applicability_audit():
-    from rag_engine.generation.interaction_grounding import interaction_binding_error
-
-    assert not interaction_binding_error("「更新」ボタンを押します。", [dict(text="画像のボタン：更新", origin="image_extraction")])

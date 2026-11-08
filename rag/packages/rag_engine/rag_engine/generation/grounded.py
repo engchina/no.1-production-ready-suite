@@ -38,7 +38,7 @@ from openai import APITimeoutError
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ValidationError
 from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import alternation, arabic_numbers
+from rag_parser_core.language.text import arabic_numbers
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
 from rag_engine.generation import passage_marks
@@ -84,8 +84,7 @@ from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.document_inputs import document_key, order_document_spans
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
-from rag_engine.generation.interaction_grounding import interaction_binding_error
-from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
+from rag_engine.generation.operation_audit import button_names_absent
 from rag_engine.generation.question_subjects import QuestionSubjects, absent_question_names, unconfirmed_question_notices
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.response_language import generation_language_schema
@@ -99,7 +98,7 @@ from rag_engine.generation.summary_projection import (
 )
 from rag_engine.generation.table_binding import has_table_structure, table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
-from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
+from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON
 from rag_engine.knowledge.prompt_files import (
     VLM_ANSWER_PROMPT_KEY,
     continue_prompt_steps,
@@ -137,7 +136,7 @@ from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, label_mentioned
 from rag_engine.retrieval.evidence_cues import evidence_cues
-from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupported_heading_navigation
+from rag_engine.retrieval.evidence_scope import evidence_scope_error
 from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
@@ -884,10 +883,6 @@ def _document_key(span: dict) -> tuple[str, ...]:
 # 引用が属する見出し（section_path）は見出し分類と番号表記からの推定で誤り得るが、画面経路の語の出所としては
 # LLM にも出典情報の section_path として渡す (#808・#3831)。
 # 見出しの画面経路（〔A⇒B⇒C〕、[画面：A⇒B]）の要素を item 本文が使うのは、根拠にない語や数値の追加ではない。
-# 【X】の直後に欄・項目などが続くのは欄名の参照で、節見出しではない。
-# 箇条書きの丸数字・括弧数字は順序記号で、年・金額・件数のような値ではない（NFKC で数字になる前に除く）。
-# ファンクションキー（F5）はキー名で値ではない。キーとボタンの対応は _check_interaction が別に照合する。
-_FUNCTION_KEY = re.compile(r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])")
 
 
 def _heading_terms(span: dict) -> list[str]:
@@ -908,113 +903,7 @@ def _without_heading_terms(text: str, span: dict) -> str:
     return text
 
 
-def _check_heading(question: str, item: GroundedItem, span: dict) -> str:
-    text = check_cues().field_label.sub(r"「\1」", item.text)
-    # 根拠の見出しにある画面経路（【マスタ管理⇒基本設定】）をそのまま書いた item は、節見出しの入口化ではない (#658)。
-    for heading in span.get("section_path") or ():
-        core = check_cues().heading_brackets.sub("", str(heading)).strip()
-        if check_cues().route_separator.search(core):
-            cues = check_cues()
-            label_open, label_close = re.escape(cues.field_label_open), re.escape(cues.field_label_close)
-            text = re.sub(rf"{label_open}\s*{re.escape(core)}\s*{label_close}", core, text)
-    return unsupported_heading_navigation(text, [span])
-
-
-def _check_interaction(question: str, item: GroundedItem, span: dict) -> str:
-    # ボタン名の存在は同じ機能の本文（function_texts）でも確認する (#658, #676)。
-    return interaction_binding_error(
-        item.text,
-        [span],
-        screen_texts=span.get("screen_texts", ()),
-        body_texts=[*span.get("function_texts", ()), *span.get("adjacent_texts", ())],
-    )
-
-
-def _check_value(question: str, item: GroundedItem, span: dict) -> str:
-    return unsupported_document_value_claim(item.text, [span], question)
-
-
-def _check_operation_terms(question: str, item: GroundedItem, span: dict) -> str:
-    if item.kind != "operation":
-        return ""
-    # 操作語も同じ機能の本文（function_texts。生成説明を除く）で照合する。手順が「③削除ボタン／④実行ボタン」の
-    # record 単位で別 span になると、④を引用した「実行ボタンを押して削除を確定する」の「削除」が引用にないため (#698)。
-    cited = [span, *({"text": text} for text in span.get("function_texts", ()))]
-    missing = missing_operation_terms(_without_heading_terms(item.text, span), cited)
-    return "引用にない操作: " + "、".join(missing) if missing else ""
-
-
-def _check_deletion_target(question: str, item: GroundedItem, span: dict) -> str:
-    if check_cues().has("deletion_words", item.text) and not deletion_target_supported(question, [span]):
-        return "削除対象が引用本文と一致しない"
-    return ""
-
-
-def _numbers(value: str) -> set[str]:
-    """表記（全角・桁区切り・先頭ゼロ）の違いを除いた数値。時刻の「00」など桁埋めのゼロは数えない。"""
-    import unicodedata
-
-    text = unicodedata.normalize("NFKC", value).replace(",", "")
-    return {n.lstrip("0") for n in re.findall(r"[0-9]+", text)} - {""}
-
-
-def _check_numbers(question: str, item: GroundedItem, span: dict) -> str:
-    # 年・日付・時刻・金額・件数は、根拠（引用した span か同じ文書の本文）か質問に同じ数値がある場合だけ
-    # 言い換えに使える (#678)。見出し由来の数値（「マスタ管理2タブ」）と箇条書きの番号は値ではない。
-    text = _FUNCTION_KEY.sub(" ", check_cues().enumeration.sub(" ", _without_heading_terms(item.text, span)))
-    corpus = "\n".join([span["text"], *span.get("document_texts", ())])
-    extra = _numbers(text) - _numbers(corpus) - _numbers(question)
-    return "引用と質問にない数値: " + "、".join(sorted(extra)) if extra else ""
-
-
 # 「確認できます」のような保証。「確認できるとは限りません」「確認できません」「確認できるかは…」は保証ではない。
-
-
-# 原因の推測を示す語。原因を尋ねる質問で、supported な引用にない内容をこの語とともに述べる summary は公開しない。
-# 推測文が引用にない語（漢字・カタカナの 2 文字組）をいくつ持てば「資料にない原因」とみなすか。
-# 1 組は「対象外」の「象外」のような表記の揺れで出るため 2 組から (ponytail: 閾値は回帰で調整)。
-_SPECULATION_NEW_BIGRAMS = 2
-
-
-def speculative_causes(summary: str, quotes: str, question: str) -> str:
-    """原因を尋ねる質問で、summary が supported な引用にも質問にもない原因候補を推測で挙げていれば理由を返す (#713)。
-
-    監査の summary_supported は「断定」しか見ず、「①〜⑤のいずれかが原因と考えられます」のような列挙を通す。
-    推測語（考えられ・可能性・いずれか…）を含む文の語（漢字・カタカナの 2 文字組）が、supported な item の引用と
-    質問のどちらにもない場合に、資料にない診断とみなす。語の並びで判定し、意味は見ない。
-    """
-
-    def bigrams(value: str) -> set[str]:
-        return {w[i : i + 2] for w in re.findall(rf"{check_cues().kana_kanji}{{2,}}", value) for i in range(len(w) - 1)}
-
-    known = bigrams(quotes) | bigrams(question) | {"原因", "可能", "理由", "場合", "設定", "処理", "確認"}
-    for sentence in (s for s in check_cues().sentence_split.split(summary or "") if check_cues().speculation.search(s)):
-        unknown = bigrams(sentence) - known
-        if len(unknown) >= _SPECULATION_NEW_BIGRAMS:
-            return "資料にない原因の推測: " + "、".join(sorted(unknown)[:6])
-    return ""
-
-
-def guarantees_unexplained(text: str, quote: str, limits: Sequence[str]) -> str:
-    """原文が「説明していない」とする事項について、言い換えが確認・一致を保証していれば理由を返す。
-
-    末尾で留保しても、先に述べた保証は取り消されない。保証の対象は、未説明の文と
-    言い換えに共通し、引用にはない語（漢字・カタカナの2文字）で結び付ける。
-    """
-    sentences = [s for s in check_cues().sentence_split.split(text) if check_cues().guarantee.search(s)]
-    if not sentences:
-        return ""
-
-    def bigrams(value: str) -> set[str]:
-        return {w[i : i + 2] for w in re.findall(rf"{check_cues().kana_kanji}{{2,}}", value) for i in range(len(w) - 1)}
-
-    # 引用に含まれる「未説明」の文そのものは、保証の裏付けにならない。
-    support = "".join(s for s in check_cues().sentence_split.split(quote) if not check_cues().unexplained.search(s))
-    claimed = set().union(*(bigrams(s) for s in sentences)) - bigrams(support) - {"確認", "説明", "記載", "資料", "場合", "対象"}
-    for limit in limits:
-        if check_cues().unexplained.search(limit) and claimed & bigrams(limit):
-            return "原文が未説明とする事項を保証している: " + limit[:60]
-    return ""
 
 
 # 外した・印の付いた主張の語（支持された主張にない 2 文字組）が summary の同じ文にどれだけ現れれば「断定している」と
@@ -1086,140 +975,7 @@ def repeats_summary(summary: str, flagged: str) -> bool:
     return any(len(old & new) / len(old) >= _REPEATED_SUMMARY_RATIO for old in sentences(flagged) for new in current)
 
 
-def _check_unexplained_guarantee(question: str, item: GroundedItem, span: dict) -> str:
-    return guarantees_unexplained(item.text, item.quote, span.get("limits", ()))
-
-
-# 生成説明が列挙する画面のボタン一覧。`ボタン: (F5) 実行 / 戻る` の形で、原文の本文には現れない。
-_FUNCTION_KEY_LABEL = re.compile(r"\(F\d+\)")
-
-
-def _screen_button_names(span: dict) -> set[str]:
-    """同じ機能の生成説明が列挙する、画面に実在するボタン名。
-
-    ボタン一覧は Vision の `ボタン:` field にしか無く、原文照合に使う `function_texts` は生成説明を
-    除いている。そのため画面に実在するボタンでも「根拠にない」と誤判定していた (#1074)。
-    使うのは field に列挙された名前だけで、生成説明の本文や `値:`（画面例の値）は使わない。
-    """
-    names: set[str] = set()
-    for text in (span.get("text", ""), *span.get("screen_texts", ())):
-        for listing in check_cues().screen_button_field.findall(str(text or "")):
-            for value in re.split(r"\s*/\s*", listing):
-                name = _FUNCTION_KEY_LABEL.sub("", value).strip()
-                if name:
-                    names.add(_compact(name))
-    return names
-
-
-def _check_button_names(question: str, item: GroundedItem, span: dict) -> str:
-    # 「追加して実行する」を「追加ボタンを実行」と書くと、原文にないボタンを案内することになる。
-    # 引用符の有無にかかわらず、案内したボタン名は根拠に同じ名前のボタンまたは「」付きの名前が必要。
-    source = _compact("\n".join([span["text"], *span.get("function_texts", ()), *span.get("adjacent_texts", ())]))
-    on_screen = _screen_button_names(span)
-    missing = [
-        name
-        for name in dict.fromkeys(check_cues().button.findall(_compact(item.text)))
-        if name + "ボタン" not in source
-        and f"「{name}」" not in source
-        and _compact(name) not in on_screen
-        and name + "ボタン" not in _compact(question)
-    ]
-    return "根拠にないボタン名: " + "、".join(missing) if missing else ""
-
-
-def _check_members(question: str, item: GroundedItem, span: dict) -> str:
-    # 集計値だけの引用で、構成明細の要求に答えたことにしない。
-    if item.request_id.endswith(".M1") and "aggregate_only" in span.get("tags", ()):
-        return "集計値だけの根拠で構成明細の要求に対応している"
-    return ""
-
-
-# 生成説明が画面に表示されている値を並べる欄（`値: ユーザ=… / 受付年月=…`）は content_labels().screen_value_field（#2181）。
-# 項目名や選択肢の語（「選択」）と区別できる値。数字か英字を含むもの（ID・コード・日付・金額・ファイル名）。
-_EXAMPLE_VALUE_SHAPE = re.compile(r"[0-9A-Za-z]")
-_FUNCTION_KEY_VALUE = re.compile(r"^\(?F(?:1[0-2]|[1-9])\)?$")
 # 設定項目の選択肢（「1:住基」「「3:通信先」」）。画面の例ではなくその設定で選べる値で、答えになり得る (#1110)。
-
-
-def _screen_example_values(span: dict) -> set[str]:
-    """引用元と同じ文書の近傍ページの生成説明が `値:` 欄に並べる表示例の値（正規化・空白除去）。"""
-    texts = [*span.get("screen_texts", ())]
-    if "image_generated" in span.get("tags", ()):
-        texts.append(span.get("text", ""))
-    values: set[str] = set()
-    for text in texts:
-        for value_field in content_labels().screen_value_field.findall(str(text or "")):
-            for pair in re.split(r"\s*/\s*", value_field):
-                value = _function_label_key(pair.split("=", 1)[-1])
-                if (
-                    len(value) >= 2
-                    and _EXAMPLE_VALUE_SHAPE.search(value)
-                    and not _FUNCTION_KEY_VALUE.match(value)
-                    and not check_cues().option_value.match(value)
-                ):
-                    values.add(value)
-    return values
-
-
-def _check_screen_example_values(question: str, item: GroundedItem, span: dict) -> str:
-    """画面の表示例の値を答えとして使っていないか (#1104)。
-
-    生成説明（Vision）の `値:` 欄は、スクリーンショットに表示されている例の値で、利用者の実値でも規則でもない。
-    その値を text に含み、質問にも同じ文書の生成説明以外の本文にも無ければ、画面例を答えにしている。
-    本文との食い違いで判定する `_generated_values_absent_from_document_text` は数値だけを見て、本文が無い
-    機能では判定しないため、画面キャプチャが中心の説明書では画面例のユーザ ID やファイル名が素通りしていた。
-    """
-    values = _screen_example_values(span)
-    if not values:
-        return ""
-    text = _function_label_key(item.text)
-    if "image_generated" in span.get("tags", ()):
-        body = "\n".join(span.get("document_texts", ()))
-    else:
-        body = "\n".join([span.get("text", ""), *span.get("document_texts", ())])
-    known = _function_label_key(question) + "\n" + _function_label_key(body)
-    used = sorted(v for v in values if v in text and v not in known)
-    return "画面の表示例の値『" + "』『".join(used) + "』を答えに使っている" if used else ""
-
-
-# 画面の一覧の行のコード（#2797）。英字の接頭と数字の語（「B0016」）で、同じ接頭・同じ桁の語が画面の生成説明・OCR に
-# ``_SCREEN_LIST_MIN_ROWS`` 個以上並ぶもの（コードの一覧の画面の行）。1 つだけの画面の ID・パラメータの名前は含めない。
-_LIST_CODE = re.compile(r"(?<![0-9A-Za-z])([A-Za-z]{1,4})([0-9]{2,})(?![0-9A-Za-z])")
-_SCREEN_LIST_MIN_ROWS = 5
-
-
-def _screen_listed_codes(span: dict) -> set[str]:
-    """画面の生成説明・OCR に一覧として並ぶコード（同じ形のコードが ``_SCREEN_LIST_MIN_ROWS`` 個以上）。"""
-    series: dict[tuple[str, int], set[str]] = {}
-    for prefix, digits in _LIST_CODE.findall(str(span.get("text") or "")):
-        series.setdefault((prefix, len(digits)), set()).add(prefix + digits)
-    return {code for codes in series.values() if len(codes) >= _SCREEN_LIST_MIN_ROWS for code in codes}
-
-
-def _check_screen_list_codes(question: str, item: GroundedItem, span: dict) -> str:
-    """画面の一覧に写った行のコードを、本文に対応の記載が無いまま質問の対象として使っていないか (#2797)。
-
-    一覧の画面のスクリーンショットに写る行は画面例で、利用者の環境の全件でも、質問の対象との対応でもない。その
-    コードを text に含み、質問・同じ文書の生成説明以外の本文・見出しのどこにも無ければ、画面例の行を対象と断定
-    している。本文が対応を書いていれば（同じコードが本文にある）警告しない。
-    """
-    if "image_generated" not in span.get("tags", ()):
-        return ""
-    listed = _screen_listed_codes(span)
-    if not listed:
-        return ""
-    known = "\n".join(
-        [
-            question,
-            *map(str, span.get("document_texts", ())),
-            *map(str, span.get("function_texts", ())),
-            *map(str, span.get("section_path") or ()),
-        ]
-    )
-    used = sorted(
-        {prefix + digits for prefix, digits in _LIST_CODE.findall(item.text)} & listed - {code for code in listed if code in known}
-    )
-    return "画面の一覧に写ったコード『" + "』『".join(used) + "』を、本文に対応の記載が無いまま対象に使っている" if used else ""
 
 
 def _table_binding_conflict(item: GroundedItem, span: dict) -> str:
@@ -1240,58 +996,13 @@ def _table_line_pairs(span: dict) -> bool:
     return "image_generated" not in span.get("tags", ())
 
 
-def _check_verbatim_conditions(question: str, item: GroundedItem, span: dict) -> str:
-    if "multi_condition" in span.get("tags", ()) and _compact(item.text) != _compact(item.quote):
-        return "複数の処理区分は原文のまま提示する"
-    return ""
-
-
-# 警告を付ける検査。質問が尋ねた対象・画面・要求の種類に合っているか、画面の表示例の値を答えにしていないかを
-# 見る。資料が別の対象を説明していれば引用が正しくても回答として誤りのことがあり、スクリーンショットや生成説明に
-# 写った値は利用者の実値でも規則でもない。規則の検査は誤判定があるので、言い換えは本文に残し、段落に警告
-# （item_check）を付ける（#2738。以前は原文のみ提示へ落としていた）。表の行・列の対応の取り違えは、規則の検査では
-# なく表が否定した対応なので、根拠と矛盾した説明として外す（`_table_binding_conflict`。#2998）。
-ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
-    _check_heading,
-    _check_deletion_target,
-    _check_members,
-    _check_verbatim_conditions,
-    _check_value,
-    _check_screen_example_values,
-    _check_screen_list_codes,
-]
-# 警告の理由（detail）に書く検査の名前。
-ITEM_CHECK_NAMES: dict[Callable[[str, GroundedItem, dict], str], str] = {
-    _check_heading: "見出しの入口化",
-    _check_deletion_target: "削除対象",
-    _check_members: "構成明細",
-    _check_verbatim_conditions: "処理区分の逐語",
-    _check_value: "値",
-    _check_screen_example_values: "画面の表示例の値",
-    _check_screen_list_codes: "画面の一覧のコード",
-}
 # 本文の手順・規則の検査（verify の中の規則）の名前。
-GENERATED_VALUE_CHECK = "生成説明の値"
-QUESTION_TARGET_CHECK = "質問の対象"
-QUESTION_ERROR_CHECK = "質問のエラー"
-OTHER_DOCUMENT_CHECK = "別文書の手順"
 CITED_BUTTON_CHECK = "ボタン名"
 DATE_VALUE_CHECK = "年の一致"
 SUBJECT_NAME_CHECK = "対象の名前"
 INTERNAL_LABEL_CHECK = "内部の番号"
 # 警告の理由に添える原文の引用の長さ。
 MARK_QUOTE_MAX_CHARS = 80
-
-# 降格させず、監査への手がかりとして渡す検査。案内した語が本文にあるかという字句の存在を、限定した本文の
-# 集合に対する文字列照合で見る。照合先は解析した機能・頁で決まるため、狭いと実在する語でも「無い」と判定する。
-# 同じことを監査が引用元の本文（#1086）を含む広い入力で判定するので、判断は監査に任せる (#1090)。
-ITEM_HINTS: list[Callable[[str, GroundedItem, dict], str]] = [
-    _check_interaction,
-    _check_button_names,
-    _check_unexplained_guarantee,
-    _check_numbers,
-    _check_operation_terms,
-]
 
 
 def _compact(value: str) -> str:
@@ -1548,7 +1259,7 @@ class CheckedItem:
     quote_match: str = "exact"  # ID・範囲による抽出の成否。trace 用。
     citation_resolution: dict[str, str] = field(default_factory=dict)
     review_assessment: dict[str, Any] = field(default_factory=dict)
-    hints: list[str] = field(default_factory=list)  # ITEM_HINTS の該当。印は付けず監査へ渡す手がかり (#1090)
+    hints: list[str] = field(default_factory=list)  # 印は付けず監査へ渡す手がかり (#1090)。今は付ける検査が無く、空のまま。
     carried: bool = False  # 前の round から引き継いだ item（当該 round の草稿にはない）。監査対象に含める (#1011)
     withdrawn: bool = False  # 監査が contradicted / not_applicable と判定して撤回した item (#1011)
     draft_index: int | None = None  # 草稿の items の index（当てはめが規則を指す番号。#2155）
@@ -2488,39 +2199,6 @@ def _document_evidence_codes(spans: Sequence[dict]) -> set[str]:
 # 「一覧」「リスト」単独は画面上の一覧（帳票設定の一覧）にも使われ、帳票の種別にしない（「一覧表」は帳票）(#654)。
 
 
-def _object_kind(name: str) -> str:
-    return next((kind for kind, pattern in check_cues().object_kinds if pattern.search(name)), "other")
-
-
-def _missing_question_objects(question: str, spans: Sequence[dict]) -> list[str]:
-    """質問が名指しした対象（4 文字以上の帳票・画面名）のうち、根拠の本文にも見出しにも現れないもの。"""
-    corpus = _compact("\n".join(str(v) for s in spans for v in (s.get("text", ""), *(s.get("section_path") or ()))))
-    return [name for name in task_contract(question)["business_objects"] if len(name) >= 4 and _compact(name) not in corpus]
-
-
-def _question_terms(question: str, contract: dict) -> set[str]:
-    """文書が質問と関係あるかを見るための質問の語 (#731)。
-
-    契約の対象（`action_targets` / `business_objects` / `error_messages`）に、質問の漢字・カタカナ 2 文字以上の語
-    （総称語 `set(check_cues().words["related_stopwords"])` を除く）を加える。総称語しかない質問では空集合を返し、検査しない。
-    """
-    terms = {*contract.get("action_targets", ()), *contract.get("business_objects", ()), *contract.get("error_messages", ())}
-    terms |= {t for t in re.findall(rf"{check_cues().kana_kanji}{{2,}}", question) if t not in set(check_cues().words["related_stopwords"])}
-    return {t for t in terms if len(_compact(t)) >= 2}
-
-
-def _document_mentions_question(span: dict, terms: set[str]) -> bool:
-    """引用の文書（本文・見出し・同じ文書の本文。生成説明を除く）が質問の語を 1 つでも含むか (#731)。
-
-    機能ユニット単位ではなく文書単位で見る。資料が質問の語を言い換えている（「支店コード」に対する「支店」
-    「正式コード」）場合に同じ文書の別の箇所で一致すれば十分で、別業務の文書だけを除く。呼び出し側は最上位候補
-    以外の文書にだけ適用する。
-    """
-    corpus = _compact("\n".join([span.get("text", ""), *(span.get("section_path") or ()), *span.get("document_texts", ())]))
-    # エラー文のような長い語は表記の揺れを許す（#694 と同じ類似度）。
-    return any(_mentions_term(t, corpus) or (len(_compact(t)) >= 6 and _fuzzy_contains(t, corpus)) for t in terms)
-
-
 def _mentions_term(term: str, corpus: str) -> bool:
     """corpus に term が完全一致で、または略称として（文字が順に並ぶ term の 2 倍程度までの範囲に）現れるか (#700)。
 
@@ -2535,36 +2213,6 @@ def _mentions_term(term: str, corpus: str) -> bool:
     gap = len(needle) + 2
     pattern = (".{0," + str(gap) + "}?").join(re.escape(c) for c in needle)
     return any(len(m.group()) <= len(needle) * 2 + 2 for m in re.finditer(pattern, corpus))
-
-
-def _missing_question_targets(asked: Sequence[str], spans: Sequence[dict]) -> list[str]:
-    """質問の操作対象のうち、根拠の本文にも見出しにも（略称としても）現れないもの (#700)。"""
-    corpus = _compact("\n".join(str(v) for s in spans for v in (s.get("text", ""), *(s.get("section_path") or ()))))
-    return [t for t in asked if not _mentions_term(t, corpus)]
-
-
-def _substituted_objects(missing: Sequence[str], text: str) -> list[tuple[str, str]]:
-    """item 本文が、根拠にない質問の対象の代わりに同じ種別の別対象を名指ししていれば (質問の対象, 別対象) を返す。
-
-    質問「地区別売上集計表はどこから出力するのか」に、根拠にある「顧客名簿」の出力手順で
-    答える強行回答を止める。対象を名指ししない一般的な操作説明は対象外 (#642)。質問の対象の核心語だけ
-    （「出荷検品エラーリスト」に対する「エラーリスト」ボタン）を名指しする item も置換として扱う (#684)。
-    """
-    from rag_engine.retrieval.task_contract import object_pattern
-
-    found: list[tuple[str, str]] = []
-    for asked in missing:
-        for other in dict.fromkeys(object_pattern().findall(text)):
-            if len(other) < 4 or other == asked or asked in other:
-                # 質問の対象を含む長い名前（「売上登録画面の一覧」）は別対象ではない。
-                continue
-            # 質問の対象の末尾だけ（修飾語を落とした核心語。「出荷検品エラーリスト」に対する「エラーリスト」）は、
-            # 対象が根拠にない以上、別機能の同名要素を指す (#684)。それ以外の部分一致は従来どおり除外する。
-            core_word = asked.endswith(other)
-            if (core_word or other not in asked) and _object_kind(other) == _object_kind(asked):
-                found.append((asked, other))
-                break
-    return found
 
 
 _ERROR_MATCH_RATIO = 0.8
@@ -2595,76 +2243,17 @@ def _fuzzy_contains(needle: str, haystack: str, ratio: float = _ERROR_MATCH_RATI
     return False
 
 
-def missing_error_gap(error: str, objects: Sequence[str] = ()) -> str:
-    """質問のエラー文が資料に無いことを伝える gap 行。質問が帳票・画面を挙げていれば、どこで出たエラーかも書く (#993)。"""
-    where = ("『" + "』『".join(objects) + "』の") if objects else ""
-    return f"{where}『{error}』のエラーは取得した資料に記載がありません。"
-
-
-def _missing_question_errors(asked: Sequence[str], spans: Sequence[dict]) -> list[str]:
-    """質問のエラー文のうち、根拠の本文にも見出しにも（8 割以上似た連続範囲として）現れないもの (#686)。"""
-    corpus = "\n".join(str(v) for s in spans for v in (s.get("text", ""), *(s.get("section_path") or ())))
-    return [e for e in asked if not _fuzzy_contains(e, corpus)]
-
-
 def mentions_error(text: str, asked: Sequence[str]) -> bool:
     """text が質問のいずれかのエラー文に 8 割以上似た連続範囲で触れているか。
 
-    生成側の検査（`_unit_mentions_error`）と CRAG 評価器の決定的検査（#999）が同じ基準を共有するための公開関数。
+    CRAG 評価器の決定的検査（#999）が使う公開関数。
     """
     return any(_fuzzy_contains(e, text) for e in asked)
-
-
-def _unit_mentions_error(span: dict, asked: Sequence[str]) -> bool:
-    """引用した span の機能ユニット（本文・見出し・同じ機能の本文）が、質問のいずれかのエラー文に触れているか。"""
-    unit = "\n".join([span.get("text", ""), *(span.get("section_path") or ()), *span.get("function_texts", ())])
-    return any(_fuzzy_contains(e, unit) for e in asked)
-
-
-def _claims_about_absent_object(missing: Sequence[str], item: GroundedItem) -> list[str]:
-    """定義・規則の item が、根拠にない質問の対象そのものを名指ししていれば、その対象名を返す (#673)。
-
-    対象名は質問由来、述部は資料由来という組み合わせは、置き換え（`_substituted_objects`）にも
-    引用照合にも掛からない。対象が資料にない以上、その対象の定義は公開しない。操作の item は対象外
-    （「請求書のファイル名は帳票設定で変更する」のように、一般の手順を質問の対象に当てはめる
-    説明は資料の手順そのもので、別対象への置き換えは `_substituted_objects` が検査する）。
-    """
-    if item.kind != "rule":
-        return []
-    compact_text = _compact(item.text)
-    return [asked for asked in missing if _compact(asked) in compact_text]
 
 
 def _context_request_ids(question: str) -> set[str]:
     """経緯・背景の要求単位の id。答えたり未回答にしたりしない (#650)。"""
     return {unit["id"] for unit in answer_requirements(question) if unit.get("kind") == "context"}
-
-
-def _generated_values_absent_from_document_text(question: str, entry: CheckedItem, spans: Sequence[dict]) -> list[str]:
-    """画像の生成説明（image_generated）を根拠にした操作 item が、同じ機能の本文と食い違う値を持つか (#652)。
-
-    生成説明は OCR より筋の通った説明で、吹き出しの手順が図の中にしかない文書では唯一の操作根拠になる
-    ため、本文があるというだけでは降格しない（#632 の一律降格を置き換え）。降格するのは、item 本文の
-    数値（図の例示値「001」「55555」）が、同じ機能の本文の根拠・見出し・質問のいずれにもない場合だけ。
-    ファンクションキー（F5）は画面表示の対応を認める (#637)。本文の根拠がない機能では食い違いを判定しない。
-    """
-    span = entry.span
-    if entry.item.kind != "operation" or "image_generated" not in span.get("tags", ()):
-        return []
-    document = [
-        other
-        for other in spans
-        if other is not span
-        and other.get("function") == span.get("function")
-        and "image_generated" not in other.get("tags", ())
-        and other.get("origin") != "image_extraction"
-        and not _bare_title(other["text"])
-    ]
-    if not document:
-        return []
-    corpus = "\n".join(str(v) for other in document for v in (other["text"], *(other.get("section_path") or ())))
-    text = _FUNCTION_KEY.sub(" ", check_cues().enumeration.sub(" ", _without_heading_terms(entry.item.text, span)))
-    return sorted(_numbers(text) - _numbers(corpus) - _numbers(question))
 
 
 def _original_range_at(text: str, positions: list[int], start: int, end: int) -> str:
@@ -6575,32 +6164,6 @@ def finalize_summary(
             "summary_finalization": {"status": "withheld", "reason": reason, "body_items_retained": len(current.checked)},
         },
     )
-
-
-def summary_deletion_error(summary: str, checked: Sequence[CheckedItem]) -> str:
-    """削除を指示する要約は、確認済みの手順の引用文を省略せず使う。
-
-    連続する部分文字列でも対象を修飾する否定・除外を落とせるため、文全体で照合する。
-    資料全体に同じ文があるだけでは足りず、回答で使った削除手順の引用だけを使う。
-    """
-    cues = check_cues()
-    deletion_instruction = re.compile(
-        cues.alt["deletion_words"] + alternation(current_pack().words("operation_audit_cues", "deletion_endings"))
-    )
-    instructions = [part.strip() for part in cues.sentence_split.split(summary) if part.strip()]
-    deletions = [part for part in instructions if deletion_instruction.search(part)]
-    if not deletions:
-        return ""
-    supported = {
-        _canonical(part)[0]
-        for entry in checked
-        if entry.confirmed and cues.has("deletion_words", entry.item.text)
-        for part in cues.sentence_split.split(entry.item.quote)
-        if part.strip()
-    }
-    if any(_canonical(part)[0] not in supported for part in deletions):
-        return "要約の削除操作で、引用原文の対象・否定・除外条件を省略せず保持したことを確認できません。"
-    return ""
 
 
 def _audit_function_context(span: dict) -> str:

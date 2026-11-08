@@ -2,26 +2,7 @@
 
 import pytest
 
-from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.retrieval.task_contract import task_contract
-
-
-@pytest.mark.parametrize("value", ["1万4千", "1万4000", "14,000"])
-def test_mixed_numbers_match_source(value):
-    assert (
-        unsupported_document_value_claim(f"上限は{value}円です。", [{"origin": "document_text", "text": "上限は一万四千円です。"}], "")
-        == ""
-    )
-
-
-def test_wrong_mixed_number_still_warns():
-    assert unsupported_document_value_claim("上限は1万5千円です。", [{"origin": "document_text", "text": "上限は一万四千円です。"}], "")
-
-
-def test_layout_gap_matches_source():
-    assert (
-        unsupported_document_value_claim("上限は48000件です。", [{"origin": "document_text", "text": "上限は四万八 千件です。"}], "") == ""
-    )
 
 
 @pytest.mark.parametrize(

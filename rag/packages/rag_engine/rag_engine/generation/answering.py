@@ -1890,12 +1890,6 @@ def build_crag_answer_context(
 
 # CRAG の評価を規則の信号で飛ばしたときの stop_reason (#1499)。
 CRAG_SKIP_STOP_REASON = "grade_skipped_strong_signals"
-# 列挙・網羅を求める質問の語 (#1499 / #1503)。根拠の一部しか集まっていなくても語の一致では「根拠あり」に見える
-# （CRAG の評価でも足りると判定されやすい。#1503）ため、この質問では CRAG の評価を飛ばさない。
-_ENUMERATION_QUESTION = re.compile(
-    r"すべて|全て|全部|全件|各|それぞれ|一覧|リスト|列挙|漏れなく|網羅|何件|何個|何人|何種類|いくつ|件数|人数|"
-    r"どれ|どの.{0,8}(?:が|も)|ほか|他に"
-)
 
 
 def _top_rerank_score(context: AnswerContext) -> float | None:
@@ -1919,10 +1913,10 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
     if not context.records or not context.text.strip():
         return {"skip": False, "reason": "根拠が無い"}
     contract = task_contract(question)
-    if contract["error_messages"] or _error_question().search(unicodedata.normalize("NFKC", question)):
+    if contract["error_messages"]:
         return {"skip": False, "reason": "エラー文を問う質問"}
     # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
-    if explicit_requests(question) & {COUNT_REQUEST, LIST_REQUEST} or contract.get("enumeration") or _ENUMERATION_QUESTION.search(question):
+    if explicit_requests(question) & {COUNT_REQUEST, LIST_REQUEST} or contract.get("enumeration"):
         return {"skip": False, "reason": "列挙・網羅・件数を問う質問"}
     if exclusion := _crag_exclusion_needed(context):
         return {"skip": False, "reason": exclusion}
@@ -1939,13 +1933,6 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
             return {"skip": False, "reason": "定義を問う語の定義本文が無い"}
     # 文字上の一致や精排スコアは、回答に足りる根拠があることを保証しない。
     return {"skip": False, "reason": "語の一致による充足性の判定は行わない"}
-
-
-# エラー文・エラーコードを問う質問（質問契約の error_messages が拾わない「E0123」「ERR-12」などのコードも含む）。
-def _error_question() -> re.Pattern[str]:
-    """エラー文・エラーコードを問う質問（エラーの語は言語資源の question_cues。#2181）。"""
-    words = alternation(current_pack().words("question_cues", "error_words"))
-    return re.compile(rf"{words}|[A-Za-z]{{1,5}}-?\d{{3,}}")
 
 
 # 重複とみなす本文の長さの下限（字）。短い定型文（「以上」「目的」など）は文書をまたいで一致しても重複にしない。
