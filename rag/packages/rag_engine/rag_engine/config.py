@@ -94,9 +94,9 @@ DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
 # と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
 DEFAULT_RETRIEVAL_TOP_K_SETTING = 20
 DEFAULT_MAX_CONTEXT_RECORDS = 12
-DEFAULT_EVIDENCE_BUDGET_CHARS = 80000
+DEFAULT_EVIDENCE_BUDGET_CHARS = 40000
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
-DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.2
+DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.3
 # Reciprocal Rank Fusion の平滑化定数。ADB の hybrid 検索と回答側の順位融合で同じ値を使う。
 RRF_K = 60
 
@@ -330,9 +330,9 @@ class Settings:
     # 検索の起点 child 数（UI の既定値。API・SDK は引数で指定）、context に入れる parent 数、生成の原文予算（文字）(#1054)。
     retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K_SETTING
     # 基本候補と、拡張を含む精排入力の合計は回答起点数から独立する。
-    retrieval_candidate_limit: int = 1000
-    rerank_candidate_limit: int = 0
-    rerank_top_n: int = 300
+    retrieval_candidate_limit: int = 140
+    rerank_candidate_limit: int = 200
+    rerank_top_n: int = 60
     # 呼出元が解決した、各候補経路の既存の上限。KB/レシピには設定しない。
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
@@ -704,9 +704,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
-        retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 1000)),
-        rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 0)),
-        rerank_top_n=max(0, _env_int(env, "RAG_ENGINE_RERANK_TOP_N", 300)),
+        retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 140)),
+        rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 200)),
+        rerank_top_n=max(0, _env_int(env, "RAG_ENGINE_RERANK_TOP_N", 60)),
         retrieval_stage_limits={
             str(key): max(0, int(value)) for key, value in json.loads(env.get("RAG_ENGINE_RETRIEVAL_STAGE_LIMITS", "{}")).items()
         },

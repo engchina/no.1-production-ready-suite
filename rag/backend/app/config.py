@@ -1266,7 +1266,7 @@ class Settings(
         ),
     )
     rag_min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
-    rag_rerank_min_relevance_score: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
+    rag_rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rag_native_vector_exact_max_chunks: int = Field(
         default=50000,
@@ -1323,13 +1323,13 @@ class Settings(
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
     rag_retrieval_query_limit: int = Field(
-        default=300,
+        default=60,
         ge=0,
         le=2000,
         description="検索文ごとに各検索経路から取得する上限。起点数・多様化の有無とは独立。",
     )
     rag_retrieval_candidate_limit: int = Field(
-        default=1000,
+        default=140,
         ge=1,
         le=2000,
         description=(
@@ -1338,16 +1338,20 @@ class Settings(
         ),
     )
     rag_rerank_top_n: int = Field(
-        default=300,
+        default=60,
         ge=0,
         le=2000,
         description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付・条目録と参照先は別枠で保持する。",
     )
     rag_rerank_candidate_limit: int = Field(
-        default=0,
+        default=200,
         ge=0,
         le=2000,
-        description="明示参照・多様化・各種拡張を含む精排入力の合計上限。0は有効な各段の既存上限の合計から互換上限を導出。",
+        description=(
+            "明示参照・多様化・各種拡張を含む rerank の入力の合計上限。"
+            "候補は段ごとの枠の中で先着で入り、融合 → 多様化 → 画面 → 条の目録の順に"
+            "合計まで採る。0 は有効な各段の上限の合計を使う。"
+        ),
     )
     rag_rerank_max_documents_per_request: int = Field(
         default=1000,
@@ -1359,7 +1363,7 @@ class Settings(
         ),
     )
     rag_candidate_diversity_depth: int = Field(
-        default=600,
+        default=420,
         ge=0,
         le=2000,
         description=(
@@ -1383,7 +1387,7 @@ class Settings(
         description="候補の多様化で、融合の上位にある文書から続きを足す件数(#2228)。",
     )
     rag_candidate_diversity_max_extra: int = Field(
-        default=100,
+        default=20,
         ge=0,
         le=1000,
         description=(
@@ -2152,12 +2156,12 @@ class Settings(
     )
     rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
     rag_evidence_budget_chars: int = Field(
-        default=80000,
+        default=40000,
         ge=1000,
         le=500000,
         description=(
             "回答の生成に渡す根拠の原文の文字予算（文字。#3776）。"
-            "既定 80000 は rag_engine の既定と同じ。"
+            "既定 40000 は rag_engine の既定と同じ。"
             "1 回に渡す根拠の本文・前置き・出典情報・描画の書式の文字予算。"
             "選択済みの根拠が超える場合は全文を分割して読み、原文引用付きの回答候補を統合する。"
             "全体設定だけで決め、検索・回答プロファイル・KB・文書レシピでは上書きしない。"

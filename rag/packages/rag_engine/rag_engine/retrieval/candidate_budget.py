@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 # 融合順位の基本候補の既定の上限。backend の既定（RAG_RETRIEVAL_CANDIDATE_LIMIT）と同じ値。
-DEFAULT_FUSION_LIMIT = 1000
+DEFAULT_FUSION_LIMIT = 140
 
 
 def record_id(record: Any) -> str:

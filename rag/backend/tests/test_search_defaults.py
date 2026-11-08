@@ -64,4 +64,4 @@ def test_default_is_not_frozen_at_import_or_after_file_reload(
     assert ChatMessageRequest(content="q").top_k == 17
     assert SearchInput(query="q").top_k == 17
     path.write_text("")
-    assert SearchRequest(query="q").top_k == 50
+    assert SearchRequest(query="q").top_k == 30

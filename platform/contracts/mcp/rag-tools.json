@@ -3010,7 +3010,7 @@
                 "type": "null"
               }
             ],
-            "default": 50,
+            "default": 30,
             "description": "検索する件数。",
             "title": "Top K"
           },
@@ -3029,7 +3029,7 @@
             "type": "boolean"
           },
           "evidence_limit": {
-            "default": 50,
+            "default": 30,
             "description": "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、検索で当たった根拠を全部返す。",
             "maximum": 50,
             "minimum": 1,
@@ -4481,7 +4481,7 @@
                 "type": "null"
               }
             ],
-            "default": 50,
+            "default": 30,
             "description": "検索する件数。",
             "title": "Top K"
           },

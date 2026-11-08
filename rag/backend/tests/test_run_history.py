@@ -915,7 +915,7 @@ async def test_search_recorder_keeps_the_screen_conditions() -> None:
     # 根拠の検索だけの実行は記録しない。
     assert _search_run_recorder(request.model_copy(update={"retrieval_only": True})) is None
     # 絞り込みの無い実行は件数だけ。
-    assert search_run_conditions(SearchRequest(query="q")) == {"top_k": 50}
+    assert search_run_conditions(SearchRequest(query="q")) == {"top_k": 30}
 
     store = RecordingStore()
     recorder.store = store

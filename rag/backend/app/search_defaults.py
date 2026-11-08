@@ -2,7 +2,7 @@
 
 from typing import Any
 
-SEARCH_TOP_K_DEFAULT = 50
+SEARCH_TOP_K_DEFAULT = 30
 SEARCH_TOP_K_MAX = 100
 
 
