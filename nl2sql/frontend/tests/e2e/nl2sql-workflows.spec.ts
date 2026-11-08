@@ -12317,7 +12317,7 @@ test("data preparation read results use the shared detail skeleton without stale
   objectsGate.release();
   await expect(page.getByTestId("data-management-preview-grid")).toBeVisible();
 
-  // データの表示は一覧 + 詳細（#2315）。詳細の列に対象の見出し・取得件数上限・表示結果を出す。
+  // データの表示は全幅の一覧 → 全幅の詳細（#2315・#4645）。詳細に取得件数上限・表示結果を出す。
   const resultsPanel = page.getByTestId("data-preview-detail");
   const invoicesSelectButton = page.getByRole("button", { name: "APP.INVOICES を選択" });
   const viewSelectButton = page.getByRole("button", { name: "APP.V_EMP_DEPT を選択" });
@@ -12330,8 +12330,10 @@ test("data preparation read results use the shared detail skeleton without stale
   await expect(showPreviewButton).toBeDisabled();
   // 行の選択で始めた表示のスピナーは結果の領域の 1 つだけ（ボタンは回さない。#416・#819）。
   await expectSingleSpinner(page, dataSkeleton);
-  await expect(invoicesSelectButton).toBeEnabled();
-  await expect(viewSelectButton).toBeEnabled();
+  // 全幅の詳細（#4645）の間は一覧を隠し、別の対象へは前へ / 次へで移る（読み込み中も押せる）。
+  await expect(invoicesSelectButton).toBeHidden();
+  await expect(viewSelectButton).toBeHidden();
+  await expect(page.getByTestId("data-management-preview-detail-pager-next")).toBeEnabled();
   await expect(resultsActions.getByRole("button", { name: "XLSX ダウンロード" })).toBeDisabled();
   await expect(resultsActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
   await resultsActions.getByRole("button", { name: "その他の操作" }).click();
@@ -12652,7 +12654,8 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   const autoDdlResponse = page.waitForResponse((response) =>
     response.url().includes("/api/nl2sql/db-admin/views/V_EMP_DEPT?include_ddl=1") && response.ok()
   );
-  await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
+  // JOIN/WHERE の抽出は選んだビューの詳細のタブ（#4645）。タブを開くと抽出に要る DDL を後追いで取る。
+  await page.locator("#view-management-detail-tab-joinWhere").click();
   await autoDdlResponse;
   await expect(page.getByTestId("view-join-where-actions")).toContainText("DDL 取得済み");
   let joinWhereGate = createRequestGate();
@@ -13177,8 +13180,12 @@ test("table and view management object lists load more and find unloaded objects
   await tableSearch.fill("PAGE_TABLE_101");
   await expect(tableFooter).toContainText("1 / 1 件を表示");
   await page.getByRole("button", { name: "PAGE_TABLE_101 を表示" }).click();
-  await expect(page.getByTestId("table-management-detail-header")).toContainText("PAGE_TABLE_101");
+  // 見出しは PageHeader の対象名（#4645）。
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("PAGE_TABLE_101");
   await expect(page.getByTestId("db-admin-detail-columns").getByRole("rowheader", { name: "ID" })).toBeVisible();
+  // 全幅の詳細（#4645）から一覧へ戻ると、検索の条件はそのまま残る。
+  await page.getByTestId("table-management-detail-back").click();
+  await expect(tableSearch).toHaveValue("PAGE_TABLE_101");
   await tableSearch.fill("");
   await expect(tableFooter).toContainText("100 / 101 件を表示");
   await tableFooter.getByRole("button", { name: "さらに読み込む" }).click();
@@ -13193,9 +13200,13 @@ test("table and view management object lists load more and find unloaded objects
   await viewFooter.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(viewFooter).toContainText("101 / 101 件を表示");
   await page.getByRole("button", { name: "V_PAGE_VIEW_101 を表示" }).click();
-  await expect(page.getByTestId("view-management-detail-header")).toContainText("V_PAGE_VIEW_101");
+  // 見出しは PageHeader の対象名（#4645）。
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("V_PAGE_VIEW_101");
   await expect(page.getByTestId("db-admin-detail-columns").getByRole("rowheader", { name: "ID" })).toBeVisible();
   await page.goto("/view-management");
+  // 作業状態（workspace-state.md）は最後に開いていた対象を戻すので、全幅の詳細が開く（#4645）。一覧へ戻って探す。
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("V_PAGE_VIEW_101");
+  await page.getByTestId("view-management-detail-back").click();
   await expect(viewFooter).toContainText("100 / 101 件を表示");
   await viewSearch.fill("V_PAGE_VIEW_101");
   await expect(viewFooter).toContainText("1 / 1 件を表示");
@@ -14567,7 +14578,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
   const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
   const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
-  // xl 未満（375px）は 1 ペイン。一覧を操作する前に、詳細から「一覧へ戻る」で戻る。
+  // 一覧と詳細は 1 ペイン（#4645）。一覧を操作する前に、詳細から「一覧へ戻る」で戻る。
   const backToPreviewList = async () => {
     const back = page.getByTestId("data-management-detail-back");
     if (await back.isVisible()) await back.click();
@@ -14575,7 +14586,8 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   api.previewDataPayload = null;
   await dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" }).click();
   await expect(page).toHaveURL(/[?&]object=APP\.INVOICES/);
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  // 全幅の一覧 → 全幅の詳細（#4645）: 選ぶと一覧を隠し、見出しを対象の名前にする。
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("APP.INVOICES");
   // 行を選ぶと今の取得件数上限（既定 100）でデータを表示する。
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("INVOICES");
   await expect(previewRowLimitInput).toHaveValue("100");
@@ -14587,7 +14599,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toBeVisible();
   await expect(previewShowButton).toBeDisabled();
   await expect(previewExportButton).toBeDisabled();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeEnabled();
+  await expect(page.getByTestId("data-management-detail-back")).toBeEnabled();
   await previewRowLimitInput.fill("100");
   await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toHaveCount(0);
   await previewShowButton.click();
@@ -14609,7 +14621,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(previewSheet.getByRole("cell", { name: "顧客26" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(previewSheet).toBeHidden();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("APP.INVOICES");
   await expect(previewShowButton).toBeEnabled();
   await expectBoundedRowLimit(previewRowLimitInput, previewShowButton);
   api.previewDataPayload = null;
@@ -14686,7 +14698,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(viewSelectTarget).toBeEnabled();
   await viewSelectTarget.focus();
   await page.keyboard.press("Enter");
-  await expect(viewSelectTarget).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("APP.V_EMP_DEPT");
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
   // ビューにはデータを空にする操作を出さない。
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
@@ -14718,6 +14730,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   expect(api.previewDataExportPayload?.where_clause).toBe("");
   await expectNoHorizontalScroll(page);
 
+  await backToPreviewList();
   await dataCsvTab.click();
   await expect(dataCsvTab).toHaveAttribute("aria-selected", "true");
   const csvPanel = page.locator("#data-management-panel-csv");
@@ -16319,7 +16332,8 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   const ddlDownload = await ddlDownloadPromise;
   expect(ddlDownload.suggestedFilename()).toBe("app_invoices_ddl.sql");
 
-  await expect(page.getByTestId("table-management-grid").getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  // 全幅の詳細（#4645）の間は一覧を隠し、削除は詳細の操作（ObjectActionBar）から行う。
+  await expect(page.getByTestId("list-detail-table-management-list")).toBeHidden();
   await clickObjectDetailAction(page, "table-management-detail-actions", "削除");
   const dropTableDialog = page.getByRole("dialog", { name: "DROP TABLE の確認" });
   await expect(dropTableDialog).toBeVisible();
@@ -16535,18 +16549,19 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   await expect(page.getByText('CREATE OR REPLACE VIEW "V_EMP_DEPT"')).toBeVisible();
   await expectContentActionsRightAligned(page.getByTestId("view-management-ddl-actions"));
 
-  await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
-  const stepIndicatorBox = await page.getByTestId("view-join-where-steps").boundingBox();
-  const selectedViewBox = await page.getByTestId("view-join-where-selected-view").boundingBox();
+  // JOIN/WHERE の抽出は選んだビューの詳細のタブ（#4645）。対象は詳細を開いているビューなので、段の表示と選んだビューの
+  // カードは持たない。
+  await expect(page.getByTestId("view-management-actions")).toHaveCount(0);
+  await page.locator("#view-management-detail-tab-joinWhere").click();
+  await expect(page.getByTestId("view-join-where-steps")).toHaveCount(0);
+  await expect(page.getByTestId("view-join-where-selected-view")).toHaveCount(0);
   const advancedSettings = page.getByTestId("view-join-where-advanced-settings");
   const advancedSettingsBox = await advancedSettings.boundingBox();
   const joinWhereActionsBox = await page.getByTestId("view-join-where-actions").boundingBox();
-  expect(stepIndicatorBox).not.toBeNull();
-  expect(selectedViewBox).not.toBeNull();
+  const detailTabsBox = await page.getByRole("tablist", { name: "ビュー詳細タブ" }).boundingBox();
   expect(advancedSettingsBox).not.toBeNull();
   expect(joinWhereActionsBox).not.toBeNull();
-  expect(stepIndicatorBox!.y).toBeLessThan(advancedSettingsBox!.y);
-  expect(selectedViewBox!.y).toBeLessThan(advancedSettingsBox!.y);
+  expect(detailTabsBox!.y).toBeLessThan(advancedSettingsBox!.y);
   expect(advancedSettingsBox!.y).toBeLessThan(joinWhereActionsBox!.y);
   await expect(page.getByTestId("view-join-where-actions")).toContainText("DDL 取得済み");
   await expect(page.getByText("提示詞プロファイル")).toHaveCount(0);
@@ -16568,8 +16583,7 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   await page.getByText("SQL構造解析結果").click();
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
-  await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.getByTestId("view-management-grid").getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  // 削除は詳細の操作（ObjectActionBar）。一覧の行の操作のメニューにも同じ操作がある（#4645）。
   await clickObjectDetailAction(page, "view-management-detail-actions", "削除");
   const dropViewDialog = page.getByRole("dialog", { name: "DROP VIEW の確認" });
   await expect(dropViewDialog).toBeVisible();
@@ -17729,7 +17743,8 @@ test("workspace: 一覧の検索条件は戻る・進む・再読込でも保持
   await expect(page).toHaveURL(/\/view-management$/);
   await (await openSidebarNav(page)).locator('a[href="/table-management"]').first().click();
   await expect(page).toHaveURL(/\/table-management\?table=APP\.INVOICES$/);
-  await expect(page.getByTestId("table-management-detail-header")).toContainText("APP.INVOICES");
+  // 見出しは PageHeader の対象名（#4645）。
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("APP.INVOICES");
 });
 
 test("workspace: DB context とアカウントを跨いで SQL 草稿と確認を流用しない", async ({ page }) => {
@@ -18446,7 +18461,7 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   expect(api.importTabularPayload).toBeNull();
 });
 
-test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失敗時も旧結果を残さない", async ({ page }, testInfo) => {
+test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失敗時も旧結果を残さない", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/db-admin/objects?*", (route) => fulfillJson(route, {
     items: ["V_EMP_DEPT", "V_OTHER"].map((name) => ({ name, owner: "APP", qualified_name: `APP.${name}`, object_type: "view", row_count: null, comment: name })),
@@ -18470,14 +18485,14 @@ test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失�
   });
   await page.goto("/view-management");
   await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
-  await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
+  // JOIN/WHERE の抽出は選んだビューの詳細のタブ（#4645）。
+  await page.locator("#view-management-detail-tab-joinWhere").click();
   await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
   await expect.poll(() => calls).toBe(1);
-  await page.getByTestId("view-management-back").click();
-  // 1 ペイン（xl 未満）では選んだビューの詳細へ戻るので、詳細の「一覧へ戻る」で一覧を開く（#2281）。
-  if (testInfo.project.name === "mobile-375") await page.getByTestId("view-management-detail-back").click();
+  // 抽出の応答を待たずに一覧へ戻り、別のビューを選ぶ。
+  await page.getByTestId("view-management-detail-back").click();
   await page.getByRole("button", { name: "APP.V_OTHER を表示" }).click();
-  await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
+  await page.locator("#view-management-detail-tab-joinWhere").click();
   const response = page.waitForResponse("**/api/nl2sql/db-admin/extract-join-where");
   gate.release();
   await response;
@@ -18616,9 +18631,10 @@ test("データの管理は切り詰めの Oracle のエラーの原因をダイ
   await page.goto("/data-management");
   const preview = page.locator("#data-management-panel-preview");
   await preview.getByRole("button", { name: "APP.INVOICES を選択" }).click();
-  // 選択は URL が持つ（375px の 1 ペインでは一覧が隠れるので、行の aria-current ではなく URL と詳細の見出しで確かめる。#2315）。
+  // 選択は URL が持つ（詳細の間は一覧が隠れるので、URL と詳細の見出しで確かめる。#2315・#4645）。
   await expect(page).toHaveURL(/[?&]object=APP\.INVOICES/);
-  await expect(page.getByTestId("data-preview-detail-header")).toContainText("APP.INVOICES");
+  // 見出しは PageHeader の対象名（#4645）。
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("APP.INVOICES");
   await clickObjectDetailAction(page, "data-preview-results-actions", "APP.INVOICES のデータを空にする");
   const dialog = page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" });
   await dialog.getByLabel("実行確認語").fill("APP.INVOICES");

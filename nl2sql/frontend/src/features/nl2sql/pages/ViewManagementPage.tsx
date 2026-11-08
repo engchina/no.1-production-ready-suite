@@ -7,13 +7,12 @@ import {
   useWorkspaceUrlSelection,
 } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
+import { Code2, Download, Eye, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 
 import {
   Banner,
   Button,
   Disclosure,
-  EmptyState,
   toast,
   StatusBadge,
   PageHeader,
@@ -22,6 +21,7 @@ import {
   ProcessingIndicator,
   TextareaField,
   useActionPending,
+  type EntityAction,
 } from "@production-ready/ui";
 
 import { RetryPageNotice } from "@/components/page-notice";
@@ -33,9 +33,9 @@ import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
   DbManagementLoadingSkeleton,
   DbObjectDetailPanel,
+  DbObjectHeaderBadges,
   DbObjectListDetail,
   DbObjectManagementPanelShell,
-  DbObjectPanelHeader,
   DbObjectStepIndicator,
   DropDbObjectDialog,
   dbAdminExecuteFailureMessage,
@@ -48,13 +48,13 @@ import {
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
-import { DbObjectName } from "../components/DbObjectName";
 import { StatementRunnerCard, downloadBlob } from "../components/DbAdminShared";
 import type {
   DbAdminExecuteData,
   DbAdminJoinWhereData,
   DbAdminJoinWherePromptProfile,
   DbAdminObjectDetail,
+  DbAdminObjectSummary,
 } from "../types";
 import { useDbAdminObjects } from "../incrementalQueries";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
@@ -74,7 +74,7 @@ const VIEW_SCHEMA_REFRESH_NOTICE = "view-management-notice";
 /** 作成の結果の直下の案内の「DB 構造を再取得」の起点（#2031）。 */
 const VIEW_CREATE_SCHEMA_REFRESH_NOTICE = "view-management-create-notice";
 
-type ActiveView = "list" | "create" | "joinWhere";
+type ActiveView = "list" | "create";
 
 const VIEW_MANAGEMENT_ID = "view-management";
 const JOIN_WHERE_PROMPT_PROFILE: DbAdminJoinWherePromptProfile = "sql_structure";
@@ -128,33 +128,8 @@ function ViewJoinWherePanel({
 
   return (
     <div className="grid gap-4">
-      <DbObjectPanelHeader
-        icon={Sparkles}
-        title={t("viewMgmt.joinWhere.title")}
-        description={t("viewMgmt.joinWhere.subtitle")}
-      />
-
-      <DbObjectStepIndicator
-        steps={[t("viewMgmt.joinWhere.stepSelect"), t("viewMgmt.joinWhere.stepExtract")]}
-        activeIndex={result ? 2 : detail ? 0 : -1}
-        ariaLabel={t("viewMgmt.joinWhere.steps")}
-        dataTestId="view-join-where-steps"
-      />
-
-      {detail ? (
-        <section
-          className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3"
-          data-testid="view-join-where-selected-view"
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <DbObjectName object={detail} size="sm" data-testid="view-join-where-selected-view-name" />
-            <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
-          </div>
-          <p className="text-sm text-fg-muted">{t("viewMgmt.joinWhere.selectedHint")}</p>
-        </section>
-      ) : (
-        <EmptyState title={t("viewMgmt.joinWhere.emptyTitle")} hint={t("viewMgmt.joinWhere.empty")} />
-      )}
+      {/* 対象は詳細を開いているビュー（見出しは PageHeader）。抽出の説明だけを出す。 */}
+      <p className="text-sm text-fg-muted">{t("viewMgmt.joinWhere.subtitle")}</p>
 
       <section
         aria-label={t("viewMgmt.joinWhere.advancedSettings")}
@@ -367,7 +342,8 @@ export function ViewManagementPage() {
     clear: clearDetail,
   } = detailRequest;
   // 選んだビューは URL の `?view=` が唯一の情報源（#2281）。先頭の行を自動で選ばない。
-  const selection = useWorkspaceUrlSelection("view");
+  // 全幅の一覧 → 全幅の詳細（#4645）なので、幅に関わらず 1 ペイン。
+  const selection = useWorkspaceUrlSelection("view", { singlePane: true });
   const selectedViewName = selection.selectedId ?? "";
 
   const fetchDetail = async (name: string) => {
@@ -429,8 +405,9 @@ export function ViewManagementPage() {
   // loadDdl は detail を deps に持つ useCallback なので、detail が変わるたびに作り直される。
   // deps を detail?.name / detail?.ddl から detail に広げても、発火の条件は元と同じ。
   useEffect(() => {
+    // JOIN・WHERE 条件のタブを開いたら、抽出に要る DDL を後追いで取る（#4645。詳細のタブに移した）。
     if (
-      activeView !== "joinWhere" ||
+      detailTab !== "joinWhere" ||
       !detail ||
       detail.ddl ||
       detailDdlLoading ||
@@ -442,7 +419,7 @@ export function ViewManagementPage() {
     autoJoinWhereDdlName.current = formatDbObjectName(detail);
     void loadDetailDdl(formatDbObjectName(detail));
   }, [
-    activeView,
+    detailTab,
     detail,
     detailDdlLoading,
     detailDdlError,
@@ -618,35 +595,51 @@ export function ViewManagementPage() {
         framed={false}
         onExecuted={reloadAfterMutation}
       />
-    ) : activeView === "joinWhere" ? (
-      <ViewJoinWherePanel
-        detail={detail}
-        result={joinWhere}
-        loading={loading === "join-where"}
-        ddlLoading={detailRequest.ddlLoading}
-        ddlError={detailRequest.ddlError}
-        extractError={joinWhereError}
-        onExtract={() => void extractJoinWhere()}
-        onRetryDdl={() => {
-          if (detail) {
-            autoJoinWhereDdlName.current = "";
-            void detailRequest.loadDdl(formatDbObjectName(detail));
-          }
-        }}
-      />
     ) : null;
+
+  const selectedListItem = viewItems.find((item) => formatDbObjectName(item) === selectedViewName);
+  const showingDetail = activeView === "list" && Boolean(selectedViewName);
+  /** 一覧の行の操作（詳細の ObjectActionBar と同じ操作。page-archetypes.md §0-6）。 */
+  const viewRowActions = (item: DbAdminObjectSummary): EntityAction[] => {
+    const name = formatDbObjectName(item);
+    return [
+      {
+        id: "export",
+        label: t("viewMgmt.export"),
+        ariaLabel: t("viewMgmt.exportColumns"),
+        icon: Download,
+        loading: loading === "view-export",
+        onSelect: () => void downloadColumnsXlsx(name),
+      },
+      {
+        id: "drop",
+        label: t("viewMgmt.grid.drop"),
+        icon: Trash2,
+        tone: "danger",
+        onSelect: () => openDropDialog(name),
+      },
+    ];
+  };
 
   return (
     <>
       <PageHeader wide
-        title={t("nav.viewManagement")}
-        subtitle={t("viewMgmt.subtitle")}
+        // 全幅の詳細（#4645）は見出しを対象名にし、種類・列数のバッジとコメントを添える。
+        title={showingDetail ? selectedViewName : t("nav.viewManagement")}
+        // コメントは一覧の行の値を使い、前へ / 次へで読み込む間も見出しの高さを変えない（押す位置を動かさない）。
+        subtitle={showingDetail ? selectedListItem?.comment || detail?.comment || undefined : t("viewMgmt.subtitle")}
         meta={
-          firstViewPage?.refreshed_at
+          !showingDetail && firstViewPage?.refreshed_at
             ? t("common.schemaRefreshedAt", { date: formatDateTime(firstViewPage.refreshed_at) })
             : undefined
         }
-        status={<SchemaRefreshHeaderStatus testId="view-schema-refresh-status" />}
+        status={
+          showingDetail ? (
+            detail && formatDbObjectName(detail) === selectedViewName ? <DbObjectHeaderBadges detail={detail} /> : undefined
+          ) : (
+            <SchemaRefreshHeaderStatus testId="view-schema-refresh-status" />
+          )
+        }
         // 作業（作成）の画面と、1 ペイン（xl 未満）の詳細の「一覧へ戻る」はページの左上（#618・#2281）。
         back={
           activeView !== "list"
@@ -658,7 +651,7 @@ export function ViewManagementPage() {
         actionsLabel={t("viewMgmt.tabs.label")}
         actionsTestId="view-management-actions"
         actions={
-          activeView === "list"
+          activeView === "list" && !showingDetail
             ? [
                 {
                   id: "create-view",
@@ -666,13 +659,6 @@ export function ViewManagementPage() {
                   label: t("viewMgmt.create.title"),
                   icon: Code2,
                   onClick: () => setActiveView("create"),
-                },
-                {
-                  id: "extract-view-conditions",
-                  kind: "secondary",
-                  label: t("viewMgmt.joinWhere.title"),
-                  icon: Sparkles,
-                  onClick: () => setActiveView("joinWhere"),
                 },
                 {
                   id: "refresh-view-list",
@@ -771,6 +757,8 @@ export function ViewManagementPage() {
               }
               labels={{
                 title: t("viewMgmt.list.title"),
+                comment: t("viewMgmt.grid.comment"),
+                actions: t("viewMgmt.grid.actions"),
                 hint: t("viewMgmt.grid.hint"),
                 loading: t("viewMgmt.list.loading"),
                 emptyTitle: t("viewMgmt.list.emptyTitle"),
@@ -785,47 +773,76 @@ export function ViewManagementPage() {
               onSearchChange={setViewSearch}
               onOwnerPrefixChange={setViewOwnerPrefix}
               onSortChange={toggleSort}
+              showRowCount={false}
+              rowActions={viewRowActions}
               // 選んでいる行をもう一度押すと詳細を取り直す（取消・失敗の後の読み直し）。
               onSelect={(name) => (name === selectedViewName ? void fetchDetail(name) : selection.select(name))}
               onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}
               detailLabel={t("viewMgmt.detail.label")}
-              detail={
-                <DbObjectDetailPanel
-                  idPrefix={VIEW_MANAGEMENT_ID}
-                  operationKey={selectedViewName}
-                  headingId="view-detail-heading"
-                  detail={detail}
-                  loading={detailRequest.loading || (viewObjectsQuery.isPending && !viewObjectsQuery.data)}
-                  // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
-                  loadingActivityIcon={viewObjectsQuery.isPending && !viewObjectsQuery.data ? "none" : undefined}
-                  ddlLoading={detailRequest.ddlLoading}
-                  error={detailRequest.error}
-                  ddlError={detailRequest.ddlError}
-                  exporting={loading === "view-export"}
-                  tab={detailTab}
-                  labels={{
-                    actions: t("viewMgmt.grid.actions"),
-                    loading: t("viewMgmt.detail.loading"),
-                    ddlLoading: t("viewMgmt.detail.ddlLoading"),
-                    tabsLabel: t("viewMgmt.detailTabs.label"),
-                    columns: t("viewMgmt.detailTabs.columns"),
-                    ddl: t("viewMgmt.detailTabs.ddl"),
-                    export: t("viewMgmt.export"),
-                    exportAria: t("viewMgmt.exportColumns"),
-                    drop: t("viewMgmt.grid.drop"),
-                  }}
-                  onTabChange={handleDetailTabChange}
-                  onRetry={() => void fetchDetail(selectedViewName)}
-                  onRetryDdl={() => {
-                    if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
-                  }}
-                  onCancel={detailRequest.cancel}
-                  onExport={(name) => void downloadColumnsXlsx(name)}
-                  onDrop={openDropDialog}
-                />
-              }
+              detail={(pager) => (
+                  <DbObjectDetailPanel
+                    pager={pager}
+                    idPrefix={VIEW_MANAGEMENT_ID}
+                    operationKey={selectedViewName}
+                    headingId="view-detail-heading"
+                    detail={detail}
+                    loading={detailRequest.loading || (viewObjectsQuery.isPending && !viewObjectsQuery.data)}
+                    // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
+                    loadingActivityIcon={viewObjectsQuery.isPending && !viewObjectsQuery.data ? "none" : undefined}
+                    ddlLoading={detailRequest.ddlLoading}
+                    error={detailRequest.error}
+                    ddlError={detailRequest.ddlError}
+                    exporting={loading === "view-export"}
+                    tab={detailTab}
+                    labels={{
+                      actions: t("viewMgmt.grid.actions"),
+                      loading: t("viewMgmt.detail.loading"),
+                      ddlLoading: t("viewMgmt.detail.ddlLoading"),
+                      tabsLabel: t("viewMgmt.detailTabs.label"),
+                      columns: t("viewMgmt.detailTabs.columns"),
+                      ddl: t("viewMgmt.detailTabs.ddl"),
+                      export: t("viewMgmt.export"),
+                      exportAria: t("viewMgmt.exportColumns"),
+                      drop: t("viewMgmt.grid.drop"),
+                    }}
+                    onTabChange={handleDetailTabChange}
+                    onRetry={() => void fetchDetail(selectedViewName)}
+                    onRetryDdl={() => {
+                      if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
+                    }}
+                    onCancel={detailRequest.cancel}
+                    onExport={(name) => void downloadColumnsXlsx(name)}
+                    onDrop={openDropDialog}
+                    // JOIN・WHERE 条件の抽出は、選んだビューの詳細のタブ（#4645。以前は PageHeader の操作で、先に一覧で
+                    // ビューを選んでおく必要があった）。
+                    extraTabs={[
+                      {
+                        id: "joinWhere",
+                        label: t("viewMgmt.detailTabs.joinWhere"),
+                        icon: Sparkles,
+                        content: (
+                          <ViewJoinWherePanel
+                            detail={detail}
+                            result={joinWhere}
+                            loading={loading === "join-where"}
+                            ddlLoading={detailRequest.ddlLoading}
+                            ddlError={detailRequest.ddlError}
+                            extractError={joinWhereError}
+                            onExtract={() => void extractJoinWhere()}
+                            onRetryDdl={() => {
+                              if (detail) {
+                                autoJoinWhereDdlName.current = "";
+                                void detailRequest.loadDdl(formatDbObjectName(detail));
+                              }
+                            }}
+                          />
+                        ),
+                      },
+                    ]}
+                  />
+              )}
             />
             </DbObjectManagementPanelShell>
           </>

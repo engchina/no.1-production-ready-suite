@@ -68,6 +68,7 @@ import {
 import {
   DbManagementLoadingSkeleton,
   DropDbObjectDialog,
+  DbObjectDetailActionRow,
   DbObjectListDetail,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
@@ -191,7 +192,11 @@ export function DataManagementPage() {
   const syntheticRuns = useSyntheticRuns({ enabled: workspaceActive });
   const [searchParams, setSearchParams] = useSearchParams();
   // データの表示で選んだ対象は URL の `?object=` が唯一の情報源（一覧 + 詳細。#2315）。先頭の行を自動で選ばない。
-  const previewSelection = useWorkspaceUrlSelection(PREVIEW_OBJECT_PARAM, { enabled: activeView === "preview" });
+  // 全幅の一覧 → 全幅の詳細（#4645）なので、幅に関わらず 1 ペイン。
+  const previewSelection = useWorkspaceUrlSelection(PREVIEW_OBJECT_PARAM, {
+    enabled: activeView === "preview",
+    singlePane: true,
+  });
   const previewObject = previewSelection.selectedId ?? "";
   // 対象を付けたリンク（`?object=`）で開いたときは、ほかのタブを開いていてもデータの表示を開く。
   const linkedPreviewObject = useRef(Boolean(searchParams.get(PREVIEW_OBJECT_PARAM)));
@@ -980,26 +985,35 @@ export function DataManagementPage() {
     </>
   );
 
+  const showingPreviewDetail = activeView === "preview" && Boolean(previewObject);
+
   return (
     <>
       <PageHeader wide
-        title={t("nav.dataManagement")}
-        subtitle={t("dataMgmt.subtitle")}
+        // データの表示の全幅の詳細（#4645）は見出しを対象名にし、種類・行数のバッジとコメントを添える。
+        title={showingPreviewDetail ? previewObject : t("nav.dataManagement")}
+        subtitle={showingPreviewDetail ? selectedPreviewObjectItem?.comment || undefined : t("dataMgmt.subtitle")}
         meta={
-          firstObjectPage?.refreshed_at
+          !showingPreviewDetail && firstObjectPage?.refreshed_at
             ? t("common.schemaRefreshedAt", {
                 date: formatDateTime(firstObjectPage.refreshed_at),
               })
             : undefined
         }
-        status={<SchemaRefreshHeaderStatus testId="data-management-schema-refresh-status" />}
-        // 1 ペイン（xl 未満）のデータの表示の詳細の「一覧へ戻る」はページの左上（#2281・#2315）。
+        status={
+          showingPreviewDetail ? (
+            <PreviewObjectBadges object={selectedPreviewObjectItem} />
+          ) : (
+            <SchemaRefreshHeaderStatus testId="data-management-schema-refresh-status" />
+          )
+        }
+        // データの表示の詳細の「一覧へ戻る」はページの左上（#2281・#2315・#4645）。
         back={
-          activeView === "preview" && !previewSelection.split && previewObject
+          showingPreviewDetail
             ? { label: t("dataMgmt.preview.backToList"), onClick: previewSelection.clear, testId: "data-management-detail-back" }
             : undefined
         }
-        actions={[
+        actions={showingPreviewDetail ? [] : [
           {
             id: "refresh-data",
             kind: "utility",
@@ -1045,7 +1059,9 @@ export function DataManagementPage() {
           />
         ) : null}
 
+        {/* 対象のデータを開いている間はタブを出さない（全幅の詳細。「一覧へ戻る」でタブと一覧に戻る。#4645）。 */}
         <DbObjectManagementTabs
+          hidden={showingPreviewDetail}
           activeView={activeView}
           tabs={[
             { id: "preview", label: t("dataMgmt.preview.title"), icon: Table2 },
@@ -1084,6 +1100,8 @@ export function DataManagementPage() {
               loadMoreError={previewObjectLoadMoreError}
               labels={{
                 title: t("dataMgmt.preview.object"),
+                comment: t("dataMgmt.preview.objectComment"),
+                kind: t("dataMgmt.preview.kindFilter"),
                 hint: t("dataMgmt.preview.controlsHint"),
                 loading: t("dataMgmt.objectList.loading"),
                 emptyTitle: t("dataMgmt.preview.emptyObjectsTitle"),
@@ -1097,7 +1115,8 @@ export function DataManagementPage() {
               }}
               kindLabel={(item) => previewObjectKindLabel(item.object_type === "view" ? "view" : "table")}
               formatRowCount={previewObjectRowCountLabel}
-              // 検索・所有者・種別の 3 つ。狭い列（28rem 未満）では「絞り込み（N）」のシートにまとめる（#1933）。
+              // 検索・所有者・種別の 3 つ。全幅の一覧ではツールバーに並べ、狭い置き場所（28rem 未満。375px）だけ
+              // 「絞り込み（N）」のシートにまとめる（#1933・#4645）。
               filtersLayout="sheet"
               filters={
                 <FilterSelect
@@ -1126,28 +1145,29 @@ export function DataManagementPage() {
               emptyDetail={
                 <EmptyState title={t("dataMgmt.preview.emptyDetailTitle")} hint={t("dataMgmt.preview.emptyDetailHint")} />
               }
-              detail={
-                <PreviewResultsPanel
-                  preview={preview}
-                  loading={Boolean(previewLoadingObject)}
-                  showButtonLoading={previewFromButton}
-                  exporting={exportLoading}
-                  previewError={previewError}
-                  exportError={exportError}
-                  rowLimitInput={previewRowLimitInput}
-                  rowLimitError={previewRowLimitError}
-                  executedRowLimit={executedPreviewRowLimit}
-                  canShowPreview={canShowPreview}
-                  selectedObjectName={previewObject}
-                  selectedObject={selectedPreviewObjectItem}
-                  truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
-                  onRowLimitChange={updatePreviewRowLimitInput}
-                  onShowPreview={() => void showPreview(previewObject, { fromButton: true })}
-                  onRetryPreview={() => void showPreview(previewObject)}
-                  onDownload={() => void downloadPreviewXlsx()}
-                  onTruncateTable={openTruncateDialog}
-                />
-              }
+              detail={(pager) => (
+                  <PreviewResultsPanel
+                    pager={pager}
+                    preview={preview}
+                    loading={Boolean(previewLoadingObject)}
+                    showButtonLoading={previewFromButton}
+                    exporting={exportLoading}
+                    previewError={previewError}
+                    exportError={exportError}
+                    rowLimitInput={previewRowLimitInput}
+                    rowLimitError={previewRowLimitError}
+                    executedRowLimit={executedPreviewRowLimit}
+                    canShowPreview={canShowPreview}
+                    selectedObjectName={previewObject}
+                    selectedObject={selectedPreviewObjectItem}
+                    truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
+                    onRowLimitChange={updatePreviewRowLimitInput}
+                    onShowPreview={() => void showPreview(previewObject, { fromButton: true })}
+                    onRetryPreview={() => void showPreview(previewObject)}
+                    onDownload={() => void downloadPreviewXlsx()}
+                    onTruncateTable={openTruncateDialog}
+                  />
+              )}
             />
           </DbObjectManagementPanelShell>
         )}
@@ -1413,8 +1433,20 @@ function previewObjectRowCountLabel(rowCount?: number | null) {
   return t("dbAdmin.list.rows", { count: rowCount });
 }
 
+/** データの表示の全幅の詳細の見出しのバッジ（種類・行数。#4645）。一覧の外の対象（未読込）は出さない。 */
+function PreviewObjectBadges({ object }: { object?: DbAdminObjectSummary }) {
+  if (!object) return null;
+  const kind: PreviewObjectKind = object.object_type === "view" ? "view" : "table";
+  return (
+    <span className="flex flex-wrap items-center gap-2" data-testid="data-preview-header-badges">
+      <StatusBadge icon={false} variant={kind === "view" ? "info" : "neutral"} label={previewObjectKindLabel(kind)} />
+      <StatusBadge icon={false} variant="neutral" label={previewObjectRowCountLabel(object.row_count)} />
+    </span>
+  );
+}
+
 /**
- * データの表示の詳細の列（一覧 + 詳細の右の広い列。#2315）。上端に選んだ対象の見出しと対象の操作（XLSX・データを空にする）、
+ * データの表示の全幅の詳細（#2315・#4645）。上端に選んだ対象の見出しと対象の操作（XLSX・データを空にする）、
  * その下に取得件数上限と「データを表示」、データの結果は詳細の列の全幅に出す。枠は `ListDetailLayout` の詳細の列が持つ。
  */
 function PreviewResultsPanel({
@@ -1436,7 +1468,10 @@ function PreviewResultsPanel({
   onRetryPreview,
   onDownload,
   onTruncateTable,
+  pager,
 }: {
+  /** 前へ / 次へ（操作の行の右端。#4645）。 */
+  pager?: ReactNode;
   preview: DbAdminDataPreviewData | null;
   loading: boolean;
   /** 「表示」を押して始めたプレビューか（そのときだけボタンを回す。#819）。 */
@@ -1496,34 +1531,21 @@ function PreviewResultsPanel({
       aria-labelledby="data-preview-detail-heading"
       data-testid="data-preview-detail"
     >
-      <div
-        className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
-        data-testid="data-preview-detail-header"
-      >
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 id="data-preview-detail-heading" className="min-w-0">
-              <DbObjectName value={selectedObjectName} size="base" />
-            </h2>
-            {selectedObjectKind && (
-              <StatusBadge
-                icon={false}
-                variant={selectedObjectKind === "view" ? "info" : "neutral"}
-                label={previewObjectKindLabel(selectedObjectKind)}
-              />
-            )}
-            {selectedObject && (
-              <StatusBadge icon={false} variant="neutral" label={previewObjectRowCountLabel(selectedObject.row_count)} />
-            )}
-          </div>
-          {selectedObject?.comment && <p className="mt-2 text-sm leading-6 text-fg">{selectedObject.comment}</p>}
-        </div>
-        <ObjectActionBar
-          actions={previewActions}
-          ariaLabel={t("dataMgmt.preview.actions")}
-          testId="data-preview-results-actions"
-        />
-      </div>
+      {/* 見える見出しは PageHeader の対象名（種類・行数・コメントもそこ。#4645）。 */}
+      <h2 id="data-preview-detail-heading" className="sr-only">
+        {selectedObjectName}
+      </h2>
+      <DbObjectDetailActionRow
+        testId="data-preview-detail-header"
+        pager={pager}
+        actions={
+          <ObjectActionBar
+            actions={previewActions}
+            ariaLabel={t("dataMgmt.preview.actions")}
+            testId="data-preview-results-actions"
+          />
+        }
+      />
       {/* 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。 */}
       <div className="grid grid-cols-1 gap-3 border-t border-border pt-3" data-testid="data-preview-controls">
         <RowLimitField

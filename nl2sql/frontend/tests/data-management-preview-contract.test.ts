@@ -181,22 +181,26 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.wherePlaceholder"\)/u);
 });
 
-test("データ管理プレビューは一覧 + 詳細（ListDetailLayout）で、選択を URL に持ちステップを出さない", () => {
-  // 左右 1:1 の FixedSplitPane（C 型）ではなく、テーブル / ビューの管理と同じ一覧 + 詳細（B 型。#2281・#2315）。
+test("データ管理プレビューは全幅の一覧 → 全幅の詳細で、選択を URL に持ちステップを出さない", () => {
+  // 左右 1:1 の FixedSplitPane（C 型）ではなく、テーブル / ビューの管理と同じ全幅の一覧 → 全幅の詳細（#2315・#4645）。
   assert.doesNotMatch(dataManagementSource, /splitId="data-management-preview"/u);
   assert.match(dataManagementSource, /<DbObjectListDetail[\s\S]{0,200}idPrefix="data-management-preview"/u);
   assert.match(dataManagementSource, /id="data-management-panel-preview"[\s\S]{0,300}framed=\{false\}/u);
-  // 一覧 + 詳細の構成が段階（左で選ぶ → 右で結果）を示すので、ステップの表示は持たない。
+  // 一覧で選ぶ → 詳細で結果、の構成が段階を示すので、ステップの表示は持たない。
   assert.doesNotMatch(dataManagementSource, /data-preview-steps/u);
   assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.step/u);
-  // 選択は URL の ?object=（keep-alive の画面の useWorkspaceUrlSelection。タブが開いている間だけ有効）。
+  // 選択は URL の ?object=（keep-alive の画面の useWorkspaceUrlSelection。タブが開いている間だけ有効・幅に関わらず 1 ペイン）。
   assert.match(dataManagementSource, /const PREVIEW_OBJECT_PARAM = "object"/u);
-  assert.match(dataManagementSource, /useWorkspaceUrlSelection\(PREVIEW_OBJECT_PARAM, \{ enabled: activeView === "preview" \}\)/u);
+  assert.match(
+    dataManagementSource,
+    /useWorkspaceUrlSelection\(PREVIEW_OBJECT_PARAM, \{\s*enabled: activeView === "preview",\s*singlePane: true,\s*\}\)/u
+  );
   // 先頭の行を自動で選ばない（一覧の変化で選択を置き換える selectedVisibleStringKey を使わない）。
   assert.doesNotMatch(dataManagementSource, /selectedVisibleStringKey\(previewObject/u);
   assert.doesNotMatch(dataManagementSource, /useWorkspaceState\("previewObject"/u);
-  // 1 ペインの「一覧へ戻る」は PageHeader の back。
-  assert.match(dataManagementSource, /!previewSelection\.split && previewObject[\s\S]{0,200}onClick: previewSelection\.clear/u);
+  // 詳細の「一覧へ戻る」は PageHeader の back。
+  assert.match(dataManagementSource, /const showingPreviewDetail = activeView === "preview" && Boolean\(previewObject\)/u);
+  assert.match(dataManagementSource, /showingPreviewDetail\s*\?\s*\{ label: t\("dataMgmt\.preview\.backToList"\), onClick: previewSelection\.clear/u);
   assert.equal(t("dataMgmt.preview.backToList"), "一覧へ戻る");
 });
 

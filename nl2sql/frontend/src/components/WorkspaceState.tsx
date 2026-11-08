@@ -150,16 +150,21 @@ const NO_SEARCH_PARAMS_UPDATE = () => undefined;
  * - サイドナビから戻る（URL に選択が無いまま画面が表に出る）ときは、最後の選択を URL に戻す（replace）。
  *   作業状態の「対象の選択は残して検証し直す」（workspace-state.md）。「一覧へ戻る」で外した選択は戻さない。
  *
+ * 全幅の一覧 → 全幅の詳細（`layout="single"`）の画面は `singlePane` を渡す（一覧から詳細へ入るときは履歴に積み、
+ * ブラウザの「戻る」と「一覧へ戻る」で一覧へ戻る）。
+ *
  * 画面の中のタブの 1 つだけが一覧 + 詳細のとき（データの管理のデータの表示。#2315）は `enabled` にそのタブが
  * 開いているかを渡す。ほかのタブの間は隠れている画面と同じに扱い（URL を読まず書かない）、タブへ戻ると最後の選択を
  * URL に戻す。タブを離れるときに URL からパラメータを外すのは呼び出し側が行う。
  */
 export function useWorkspaceUrlSelection(
   param: string,
-  options: { enabled?: boolean } = {}
+  options: { enabled?: boolean; singlePane?: boolean } = {}
 ): UrlSelection & { split: boolean } {
   const active = useWorkspaceActive() && (options.enabled ?? true);
-  const split = useListDetailSplit();
+  // 全幅の一覧 → 全幅の詳細（`ListDetailLayout` の `layout="single"`。#4645）は幅に関わらず 1 ペイン。
+  const responsiveSplit = useListDetailSplit();
+  const split = options.singlePane ? false : responsiveSplit;
   const [searchParams, setSearchParams] = useSearchParams();
   const [remembered, setRemembered] = useWorkspaceState(`selection:${param}`, "");
   const urlValue = searchParams.get(param)?.trim() ?? "";
