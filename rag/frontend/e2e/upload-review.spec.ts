@@ -322,7 +322,7 @@ test("送信中は経過時間を示し、KB 一覧の読み込み中は Skeleto
   await page.goto("/upload");
   const loading = page.getByTestId("upload-knowledge-base-loading");
   await expect(loading).toBeVisible();
-  await expect(loading.getByText("ナレッジベースを読み込んでいます。").first()).toBeVisible();
+  await expect(loading.getByText("ナレッジベースを読み込んでいます").first()).toBeVisible();
   await expect(loading.getByRole("timer")).toBeVisible();
   releaseKnowledgeBases();
   await expect(loading).toHaveCount(0);

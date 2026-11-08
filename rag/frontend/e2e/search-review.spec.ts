@@ -364,7 +364,7 @@ test("検索・回答プロファイルの読み込み中は読み込み中の�
   const loading = page.getByTestId("search-search-answer-profiles-loading");
   await expect(loading).toBeVisible();
   await expect(loading.getByRole("timer")).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: "検索・回答プロファイルを読み込んでいます。" })).toHaveCount(1);
+  await expect(page.getByRole("status").filter({ hasText: "検索・回答プロファイルを読み込んでいます" })).toHaveCount(1);
   await expect(page.getByText("検索・回答プロファイルを作成してください")).toHaveCount(0);
   release();
   await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toBeVisible();

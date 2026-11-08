@@ -2628,7 +2628,7 @@ export const ja = {
     "このプロファイルのナレッジベースに文書を追加すると、ここから選べます。",
   "documentPicker.noResults": "検索に一致する文書がありません。",
   "documentPicker.noResultsHint": "文書名を変えるか、検索語をクリアしてください。",
-  "documentPicker.loading": "追加できる文書を読み込んでいます。",
+  "documentPicker.loading": "追加できる文書を読み込んでいます",
   "documentPicker.search": "追加する文書を検索",
   "documentPicker.searchPlaceholder": "文書名で検索",
   "documentPicker.alreadyAdded": "追加済み",
@@ -2660,7 +2660,7 @@ export const ja = {
   "knowledgeBases.extractionFields.reset.description":
     "このナレッジベースの項目の定義を削除し、全体の既定の項目を使います。抽出済みの値は次の取込まで変わりません。",
   "knowledgeBases.extractionFields.reset.done": "全体の既定の項目に戻しました。",
-  "knowledgeBases.documents.loading": "所属文書を読み込んでいます。",
+  "knowledgeBases.documents.loading": "所属文書を読み込んでいます",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
   "knowledgeBases.documents.empty.hint": "「文書を追加」から既存の文書を追加してください。",
   "knowledgeBases.variant.layer.metadata": "項目抽出",
@@ -2895,7 +2895,7 @@ export const ja = {
   "knowledgeBases.scrollLabel": "ナレッジベース一覧。スクロールできます。",
   "knowledgeBaseScope.label": "ナレッジベース",
   "knowledgeBaseScope.helper": "未選択の場合は、利用できるすべてのナレッジベースを対象にします。",
-  "knowledgeBaseScope.loading": "ナレッジベースを読み込んでいます。",
+  "knowledgeBaseScope.loading": "ナレッジベースを読み込んでいます",
   "knowledgeBaseScope.loadWarning": "ナレッジベース一覧を取得できませんでした。",
   "knowledgeBaseScope.loadWarningHint":
     "未選択のまま実行すると、利用できるすべてのナレッジベースを対象にします。",
@@ -2996,7 +2996,7 @@ export const ja = {
   "upload.storageNotice.title": "現在の保存先",
   "upload.storageNotice.unset": "未設定",
   "upload.knowledgeBases.title": "所属させるナレッジベース",
-  "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます。",
+  "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます",
   "upload.knowledgeBases.loadWarning": "ナレッジベース一覧を取得できませんでした。",
   "upload.knowledgeBases.loadWarningHint":
     "未選択のままアップロードすると、DEFAULT へ登録されます。",
@@ -4906,7 +4906,7 @@ export const ja = {
     "RAG 検索は検索・回答プロファイル単位で行います。ナレッジベースを束ねた検索・回答プロファイルを作成すると検索できます。",
   "search.searchAnswerProfileRequired.cta": "検索・回答プロファイルを作成",
   "search.searchAnswerProfileError": "検索・回答プロファイルを読み込めませんでした。",
-  "search.searchAnswerProfileLoading": "検索・回答プロファイルを読み込んでいます。",
+  "search.searchAnswerProfileLoading": "検索・回答プロファイルを読み込んでいます",
   "search.guardrail": "安全チェック警告",
 
   // 入力欄の検証の共通の文言（UX 契約 messaging.md §3.2.1。{field} は欄のラベル。#541）
@@ -5404,7 +5404,7 @@ export const ja = {
   "supportGuides.add.stepReference": "この手順の資料を足す",
   "supportGuides.referencePicker.hint":
     "このプロファイルのナレッジベースの文書から、文書名で検索して選んでください。すでに入れた文書は選べません。",
-  "supportGuides.referencePicker.loading": "プロファイルのナレッジベースを読み込んでいます。",
+  "supportGuides.referencePicker.loading": "プロファイルのナレッジベースを読み込んでいます",
   "supportGuides.referencePicker.loadError": "プロファイルのナレッジベースを取得できませんでした。",
   "supportGuides.stepReference.row": "手順 {step} の資料 {n}",
   "supportGuides.stepReference.remove": "手順 {step} の資料 {n} を外す",
