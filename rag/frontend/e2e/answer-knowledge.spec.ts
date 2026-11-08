@@ -46,6 +46,21 @@ const faqSuggestion = {
   direct: true,
 };
 
+// 登録済みQ&A の一覧の 1 件（対象と根拠の状態は #4621）。
+const faqRecord = {
+  id: "faq-1",
+  question: faqSuggestion.question,
+  answer: faqSuggestion.answer,
+  alternate_questions: [],
+  status: "approved",
+  target_knowledge_base_ids: ["kb-1"],
+  source_document_ids: [],
+  approved_by: null,
+  approved_at: null,
+  review_reasons: [],
+  source_updated: false,
+};
+
 async function mockCommon(page: Page) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
@@ -73,15 +88,9 @@ async function mockSearchAnswerProfileApi(
       return route.fulfill({
         json: envelope({
           search_answer_profile_id: "bv-1",
-          records: [
-            {
-              id: "faq-1",
-              question: faqSuggestion.question,
-              answer: faqSuggestion.answer,
-              alternate_questions: [],
-              status: "approved",
-            },
-          ],
+          records: [faqRecord],
+          enabled: true,
+          knowledge_bases: [{ id: "kb-1", name: "受注マニュアル", in_profile: true }],
         }),
       });
     }
@@ -388,7 +397,12 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
     const body = route.request().postDataJSON() as { enabled: boolean };
     saved.push(body);
     await route.fulfill({
-      json: envelope({ search_answer_profile_id: "bv-1", records: [faqSuggestion], enabled: body.enabled }),
+      json: envelope({
+        search_answer_profile_id: "bv-1",
+        records: [faqRecord],
+        enabled: body.enabled,
+        knowledge_bases: [{ id: "kb-1", name: "受注マニュアル", in_profile: true }],
+      }),
     });
   });
 

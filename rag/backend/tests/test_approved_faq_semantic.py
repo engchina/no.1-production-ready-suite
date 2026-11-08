@@ -1,11 +1,16 @@
 """Approved FAQ の embedding 意味照合(rag_poc semantic index)。"""
 
+import pytest
+
 from app.rag.search_answer_profile_knowledge import (
     FAQ_SEMANTIC_CACHE_KEY,
     add_approved_faq,
     suggest_approved_faq,
 )
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
+
+# FAQ は対象の KB を使える利用者にだけ使う(#4621)。範囲の制限の無い context で照合だけを確かめる。
+pytestmark = pytest.mark.usefixtures("system_access")
 
 
 class StubEmbedder:

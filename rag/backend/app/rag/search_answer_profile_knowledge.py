@@ -11,7 +11,7 @@ import logging
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
@@ -20,6 +20,7 @@ from pr_backend_core.logging import safe_exception_fields
 from rag_engine.knowledge.approved_faq import (
     APPROVED_FAQ_APPROVED_STATUS,
     APPROVED_FAQ_IMPORT_MODES,
+    APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY,
     DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
     DEFAULT_APPROVED_FAQ_MIN_SCORE,
     DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
@@ -27,11 +28,13 @@ from rag_engine.knowledge.approved_faq import (
     ApprovedFaqMutationResult,
     ApprovedFaqRecord,
     ApprovedFaqSemanticIndex,
+    ApprovedFaqSourceDocument,
     ApprovedFaqSuggestion,
     _approved_faq_semantic_questions,
     add_approved_faq_record,
     apply_approved_faq_import_rows,
     approved_faq_records_signature,
+    approved_faq_scope_raw,
     build_approved_faq_semantic_index,
     delete_approved_faq_records,
     load_approved_faq_excel_rows,
@@ -65,7 +68,18 @@ from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 from app.config import get_settings
 from app.rag.answer_engine import AnswerScope
+from app.rag.approved_faq_scope import (
+    ApprovedFaqScopeState,
+    FaqSourceDocumentState,
+    cited_knowledge_base_ids,
+    current_approval,
+    default_target_knowledge_base_ids,
+    evaluate_approved_faq_scope,
+    permitted_for_current_user,
+    validate_target_knowledge_base_ids,
+)
 from app.schemas.search import PageRange, format_page_ranges
+from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.search_answer_profile_knowledge import (
     ClarificationAnswer,
     ClarificationSection,
@@ -182,11 +196,49 @@ FaqEmbedder = Callable[[list[str], FaqEmbedInputType], Awaitable[list[list[float
 APPROVED_FAQ_PREVIEW_ROWS = 10
 
 
+class ApprovedFaqStore(SearchAnswerProfileKnowledgeStore, Protocol):
+    """FAQ の対象の範囲と根拠の状態を判定するために、プロファイルと文書の今の状態も読む。"""
+
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None: ...
+
+    async def approved_faq_source_document_states(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, FaqSourceDocumentState]: ...
+
+
 @dataclass(frozen=True)
 class ApprovedFaqMutation:
     records: list[ApprovedFaqRecord]
     inserted_count: int
     deleted_count: int
+
+
+@dataclass(frozen=True)
+class ApprovedFaqSnapshot:
+    """FAQ の payload と、各 FAQ の今の根拠の状態（読むたびに計算する。#4621）。"""
+
+    payload: dict[str, object] | None
+    states: list[ApprovedFaqScopeState]
+    profile_knowledge_base_ids: list[str]
+
+    @property
+    def records(self) -> list[ApprovedFaqRecord]:
+        return [state.record for state in self.states]
+
+    def usable_records(self) -> list[ApprovedFaqRecord]:
+        """今の利用者に提示・回答で使える FAQ。
+
+        停止していない・承認済み・対象の KB をすべて使える FAQ だけ。
+        """
+        return [
+            state.record
+            for state in self.states
+            if state.active
+            and state.record.status == APPROVED_FAQ_APPROVED_STATUS
+            and permitted_for_current_user(state.record)
+        ]
 
 
 FAQ_ENABLED_KEY = "enabled"
@@ -197,17 +249,82 @@ def approved_faq_enabled(payload: Mapping[str, object] | None) -> bool:
     return (payload or {}).get(FAQ_ENABLED_KEY) is not False
 
 
-async def load_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
-) -> list[ApprovedFaqRecord]:
-    """検索・回答プロファイルの承認済み FAQ を返す。"""
+def migrate_approved_faq_targets(
+    payload: Mapping[str, object] | None, profile_knowledge_base_ids: Sequence[str]
+) -> dict[str, object] | None:
+    """対象の KB を持たない FAQ に、今のプロファイルの全 KB を書く（既存の FAQ の移行。#4621）。
+
+    変えたときだけ新しい payload を返す（変える record が無ければ None）。
+    """
+    raw_records = (payload or {}).get("records")
+    if payload is None or not isinstance(raw_records, list):
+        return None
+    targets = default_target_knowledge_base_ids(profile_knowledge_base_ids)
+    migrated = [
+        {**raw, APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY: targets}
+        if isinstance(raw, dict) and APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY not in raw
+        else raw
+        for raw in raw_records
+    ]
+    if migrated == raw_records:
+        return None
+    return {**payload, "records": migrated}
+
+
+async def _profile_knowledge_base_ids(
+    store: ApprovedFaqStore, search_answer_profile_id: str
+) -> list[str] | None:
+    """プロファイルの今の参照 KB（プロファイルが見えなければ None）。"""
+    view = await store.get_search_answer_profile(search_answer_profile_id)
+    return None if view is None else view.config.normalized_knowledge_base_ids()
+
+
+async def _load_faq_payload(
+    store: ApprovedFaqStore,
+    search_answer_profile_id: str,
+    profile_knowledge_base_ids: Sequence[str],
+) -> dict[str, object] | None:
+    """FAQ の payload を読み、対象の KB が無い FAQ があれば移行して保存する（1 回だけ）。
+
+    ponytail: 移行の保存と管理の更新が重なると後勝ち（移行は最初の 1 回の読み込みだけ）。
+    """
     payload = await store.get_search_answer_profile_knowledge(
         search_answer_profile_id, APPROVED_FAQ_KIND
     )
+    migrated = migrate_approved_faq_targets(payload, profile_knowledge_base_ids)
+    if migrated is None:
+        return payload
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND, migrated
+    )
+    return migrated
+
+
+async def load_approved_faq_snapshot(
+    store: ApprovedFaqStore, search_answer_profile_id: str
+) -> ApprovedFaqSnapshot:
+    """FAQ と、今のプロファイルの参照 KB・文書の状態から計算した根拠の状態を返す。"""
+    profile_knowledge_base_ids = await _profile_knowledge_base_ids(store, search_answer_profile_id)
+    if profile_knowledge_base_ids is None:
+        return ApprovedFaqSnapshot(payload=None, states=[], profile_knowledge_base_ids=[])
+    payload = await _load_faq_payload(store, search_answer_profile_id, profile_knowledge_base_ids)
     if payload is None:
-        return []
-    with _faq_file(payload) as path:
-        return load_approved_faq_records(path)
+        records: list[ApprovedFaqRecord] = []
+    else:
+        with _faq_file(payload) as path:
+            records = load_approved_faq_records(path)
+    document_ids = [source.document_id for record in records for source in record.source_documents]
+    documents = (
+        await store.approved_faq_source_document_states(document_ids) if document_ids else {}
+    )
+    return ApprovedFaqSnapshot(
+        payload=payload,
+        states=[
+            evaluate_approved_faq_scope(record, profile_knowledge_base_ids, documents)
+            for record in records
+        ],
+        profile_knowledge_base_ids=profile_knowledge_base_ids,
+    )
 
 
 async def load_approved_faq_enabled(
@@ -235,41 +352,35 @@ async def save_approved_faq_enabled(
 
 
 async def find_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, faq_id: str
+    store: ApprovedFaqStore, search_answer_profile_id: str, faq_id: str
 ) -> ApprovedFaqRecord | None:
-    """利用者が選んだ類似問を、検索・回答プロファイルの承認
-    済み FAQ から引き直す(提示がオンのときだけ)。"""
-    payload = await store.get_search_answer_profile_knowledge(
-        search_answer_profile_id, APPROVED_FAQ_KIND
-    )
-    if payload is None or not approved_faq_enabled(payload):
+    """利用者が選んだ類似問を、検索・回答プロファイルの承認済み FAQ から引き直す。
+
+    提示がオンで、今の利用者が使える FAQ（停止していない・対象の KB をすべて使える）だけを返す。
+    使えない FAQ は無いものと同じ None（存在を示さない。#4621）。
+    """
+    snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
+    if snapshot.payload is None or not approved_faq_enabled(snapshot.payload):
         return None
-    with _faq_file(payload) as path:
-        records = load_approved_faq_records(path)
-    return next(
-        (
-            record
-            for record in records
-            if record.id == faq_id and record.status == APPROVED_FAQ_APPROVED_STATUS
-        ),
-        None,
-    )
+    return next((record for record in snapshot.usable_records() if record.id == faq_id), None)
 
 
 async def mutate_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore,
+    store: ApprovedFaqStore,
     search_answer_profile_id: str,
-    operation: Callable[[Path], ApprovedFaqMutationResult],
+    operation: Callable[[Path, list[str]], ApprovedFaqMutationResult],
 ) -> ApprovedFaqMutation:
     """rag_poc の FAQ 更新関数(ファイル前提)を一時ファイル上で実行し、結果を DB へ保存する。
 
+    ``operation`` にはプロファイルの今の参照 KB も渡す(対象の KB の既定と検証に使う)。
     ponytail: 同時編集は後勝ち。競合検出が必要になったら revision を条件に MERGE する。
     """
-    payload = await store.get_search_answer_profile_knowledge(
-        search_answer_profile_id, APPROVED_FAQ_KIND
-    )
+    profile_knowledge_base_ids = await _profile_knowledge_base_ids(store, search_answer_profile_id)
+    if profile_knowledge_base_ids is None:
+        raise KeyError(search_answer_profile_id)
+    payload = await _load_faq_payload(store, search_answer_profile_id, profile_knowledge_base_ids)
     with _faq_file(payload) as path:
-        result = operation(path)
+        result = operation(path, profile_knowledge_base_ids)
         updated = load_approved_faq_payload(path)
         records = load_approved_faq_records(path)
     if payload is not None and FAQ_ENABLED_KEY in payload:
@@ -286,24 +397,125 @@ async def mutate_approved_faq(
 
 
 async def add_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore,
+    store: ApprovedFaqStore,
     search_answer_profile_id: str,
     *,
     question: str,
     answer: str,
+    target_knowledge_base_ids: Sequence[str] | None = None,
 ) -> ApprovedFaqMutation:
+    """手入力の FAQ を追加する。対象の KB は選んだもの(未指定はプロファイルの全 KB)。"""
     return await mutate_approved_faq(
         store,
         search_answer_profile_id,
-        lambda path: add_approved_faq_record(path, question=question, approved_answer=answer),
+        lambda path, profile_kbs: add_approved_faq_record(
+            path,
+            question=question,
+            approved_answer=answer,
+            target_knowledge_base_ids=validate_target_knowledge_base_ids(
+                target_knowledge_base_ids, profile_kbs
+            ),
+            approval=current_approval(),
+        ),
     )
 
 
 async def delete_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, ids: list[str]
+    store: ApprovedFaqStore, search_answer_profile_id: str, ids: list[str]
 ) -> ApprovedFaqMutation:
     return await mutate_approved_faq(
-        store, search_answer_profile_id, lambda path: delete_approved_faq_records(path, ids)
+        store,
+        search_answer_profile_id,
+        lambda path, _profile_kbs: delete_approved_faq_records(path, ids),
+    )
+
+
+async def confirm_approved_faq(
+    store: ApprovedFaqStore,
+    search_answer_profile_id: str,
+    faq_id: str,
+    *,
+    target_knowledge_base_ids: Sequence[str] | None = None,
+) -> None:
+    """管理者が FAQ の対象の KB と根拠を確かめ直す(要確認からの復帰・対象の変更。#4621)。
+
+    対象の KB を選び直し(未指定はプロファイルの全 KB)、引用した文書のうち今も対象の KB に
+    ある文書だけを今の版で記録し直し、承認者と時刻を記録する。FAQ が無ければ KeyError。
+    """
+    profile_knowledge_base_ids = await _profile_knowledge_base_ids(store, search_answer_profile_id)
+    if profile_knowledge_base_ids is None:
+        raise KeyError(search_answer_profile_id)
+    targets = validate_target_knowledge_base_ids(
+        target_knowledge_base_ids, profile_knowledge_base_ids
+    )
+    payload = await _load_faq_payload(store, search_answer_profile_id, profile_knowledge_base_ids)
+    raw_records = (payload or {}).get("records")
+    records = raw_records if isinstance(raw_records, list) else []
+    index = next(
+        (
+            position
+            for position, raw in enumerate(records)
+            if isinstance(raw, dict) and str(raw.get("id") or "").strip() == faq_id
+        ),
+        None,
+    )
+    if payload is None or index is None:
+        raise KeyError(faq_id)
+    with _faq_file({**payload, "records": [records[index]]}) as path:
+        record = next(iter(load_approved_faq_records(path)), None)
+    if record is None:
+        raise KeyError(faq_id)
+    document_ids = [source.document_id for source in record.source_documents]
+    documents = (
+        await store.approved_faq_source_document_states(document_ids) if document_ids else {}
+    )
+    kept = [
+        ApprovedFaqSourceDocument(document_id=document_id, version=state.version)
+        for document_id in document_ids
+        if (state := documents.get(document_id)) is not None
+        and state.knowledge_base_ids & set(targets)
+    ]
+    updated_records = list(records)
+    updated_records[index] = {
+        **records[index],
+        **approved_faq_scope_raw(
+            target_knowledge_base_ids=targets,
+            source_documents=kept,
+            approval=current_approval(),
+        ),
+    }
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND, {**payload, "records": updated_records}
+    )
+
+
+async def approved_faq_row_with_citations(
+    store: ApprovedFaqStore, search_answer_profile_id: str, row: ApprovedFaqImportRow
+) -> ApprovedFaqImportRow:
+    """回答 feedback から作った FAQ 行に、引用の文書・対象の KB・承認を付ける(#4621)。
+
+    対象の KB は引用した文書を含むプロファイルの参照 KB(引用が無い・どの参照 KB にも無ければ
+    プロファイルの全 KB)。文書は今の版の印で記録する(見えない文書は印なしで残し、要確認になる)。
+    """
+    profile_knowledge_base_ids = (
+        await _profile_knowledge_base_ids(store, search_answer_profile_id) or []
+    )
+    cited = list(dict.fromkeys(row.cited_document_ids))
+    documents = await store.approved_faq_source_document_states(cited) if cited else {}
+    targets = cited_knowledge_base_ids(
+        cited, documents, profile_knowledge_base_ids
+    ) or default_target_knowledge_base_ids(profile_knowledge_base_ids)
+    return replace(
+        row,
+        target_knowledge_base_ids=tuple(targets),
+        source_documents=tuple(
+            ApprovedFaqSourceDocument(
+                document_id=document_id,
+                version=state.version if (state := documents.get(document_id)) else "",
+            )
+            for document_id in cited
+        ),
+        approval=current_approval(),
     )
 
 
@@ -319,23 +531,32 @@ def read_approved_faq_excel(content: bytes, file_name: str) -> list[ApprovedFaqI
 
 
 async def import_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore,
+    store: ApprovedFaqStore,
     search_answer_profile_id: str,
     rows: list[ApprovedFaqImportRow],
     *,
     mode: str,
+    target_knowledge_base_ids: Sequence[str] | None = None,
 ) -> ApprovedFaqMutation:
+    """FAQ 行を取り込む。対象の KB を持たない行(Excel)には選んだ KB(未指定は全 KB)を付ける。"""
     if mode not in APPROVED_FAQ_IMPORT_MODES:
         raise ValueError(f"取込モードが不正です: {mode}")
-    return await mutate_approved_faq(
-        store,
-        search_answer_profile_id,
-        lambda path: apply_approved_faq_import_rows(path, rows, mode=mode),
-    )
+
+    def operation(path: Path, profile_kbs: list[str]) -> ApprovedFaqMutationResult:
+        approval = current_approval()
+        scoped: list[ApprovedFaqImportRow] = []
+        for row in rows:
+            if row.target_knowledge_base_ids is None:
+                targets = validate_target_knowledge_base_ids(target_knowledge_base_ids, profile_kbs)
+                row = replace(row, target_knowledge_base_ids=tuple(targets))
+            scoped.append(row if row.approval is not None else replace(row, approval=approval))
+        return apply_approved_faq_import_rows(path, scoped, mode=mode)
+
+    return await mutate_approved_faq(store, search_answer_profile_id, operation)
 
 
 async def suggest_approved_faq(
-    store: SearchAnswerProfileKnowledgeStore,
+    store: ApprovedFaqStore,
     search_answer_profile_id: str,
     question: str,
     *,
@@ -350,15 +571,19 @@ async def suggest_approved_faq(
     文字列類似度に加え、embed 指定時は rag_poc の意味照合(FAQ 質問の embedding index)を使う。
     index は FAQ payload の ``semantic_index_cache`` に保持し、FAQ 集合の署名が変われば作り直す。
     embedding に失敗しても文字列照合で続ける。
+
+    照合するのは今の利用者が使える FAQ だけ(停止していない・対象の KB をすべて使える。#4621)。
+    index は全 FAQ で作る(利用者ごとに作り直さない)。
     """
-    payload = await store.get_search_answer_profile_knowledge(
-        search_answer_profile_id, APPROVED_FAQ_KIND
-    )
-    if payload is None or not question.strip() or not approved_faq_enabled(payload):
+    if not question.strip():
         return []
-    with _faq_file(payload) as path:
-        records = load_approved_faq_records(path)
-    if not records:
+    snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
+    payload = snapshot.payload
+    if payload is None or not approved_faq_enabled(payload):
+        return []
+    records = snapshot.records
+    usable = snapshot.usable_records()
+    if not usable:
         return []
     semantic_index: ApprovedFaqSemanticIndex | None = None
     query_embedding: list[float] | None = None
@@ -381,7 +606,7 @@ async def suggest_approved_faq(
             semantic_index, query_embedding = None, None
     return suggest_approved_faq_questions(
         question,
-        records,
+        usable,
         semantic_index=semantic_index,
         semantic_query_embedding=query_embedding,
         limit=limit,

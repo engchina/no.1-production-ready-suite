@@ -31,7 +31,7 @@ export function knowledgeBaseSelectLabels(): SearchableSelectLabels {
   };
 }
 
-function knowledgeBaseMultiSelectLabels(): SearchableMultiSelectLabels {
+export function knowledgeBaseMultiSelectLabels(): SearchableMultiSelectLabels {
   return {
     ...knowledgeBaseSelectLabels(),
     toggleList: t("knowledgeBasePicker.toggleListAria"),

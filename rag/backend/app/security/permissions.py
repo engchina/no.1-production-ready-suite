@@ -475,6 +475,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_BV}/approved-faq"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    # FAQ の対象の KB と根拠の確かめ直し（#4621）。
+    ("POST", f"{_BV}/approved-faq/{{faq_id}}/confirm"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),

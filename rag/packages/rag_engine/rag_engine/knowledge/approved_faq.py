@@ -49,11 +49,35 @@ APPROVED_FAQ_SCOPE_MODES = (
 )
 MAX_APPROVED_FAQ_QUESTION_LENGTH = 1000
 MAX_APPROVED_FAQ_ANSWER_LENGTH = 20000
+# FAQ record の JSON の項目（対象の範囲・根拠の文書・承認）。
+APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY = "target_knowledge_base_ids"
+APPROVED_FAQ_SOURCE_DOCUMENTS_KEY = "source_documents"
+APPROVED_FAQ_APPROVAL_KEY = "approval"
+
+
+@dataclass(frozen=True)
+class ApprovedFaqSourceDocument:
+    """FAQ の回答の根拠にした文書と、承認の時点の文書の版の印（呼び出し元が決める不透明な文字列）。"""
+
+    document_id: str
+    version: str = ""
+
+
+@dataclass(frozen=True)
+class ApprovedFaqApproval:
+    """FAQ を承認（保存・確かめ直し）した利用者の ID と時刻（ISO 8601）。"""
+
+    approved_by: str = ""
+    approved_at: str = ""
 
 
 @dataclass(frozen=True)
 class ApprovedFaqRecord:
-    """Approved FAQ の canonical question、回答、分類、出典を保持します。"""
+    """Approved FAQ の canonical question、回答、分類、出典、対象の範囲、承認を保持します。
+
+    target_knowledge_base_ids は FAQ を使える範囲（この KB をすべて使える利用者だけに使う）。
+    None は対象を記録していない record（呼び出し元が移行する）。
+    """
 
     id: str
     question: str
@@ -66,6 +90,9 @@ class ApprovedFaqRecord:
     review: dict[str, Any] | None = None
     timestamps: dict[str, Any] | None = None
     tags: tuple[str, ...] = ()
+    target_knowledge_base_ids: tuple[str, ...] | None = None
+    source_documents: tuple[ApprovedFaqSourceDocument, ...] = ()
+    approval: ApprovedFaqApproval | None = None
 
     @property
     def match_questions(self) -> tuple[str, ...]:
@@ -120,6 +147,11 @@ class ApprovedFaqImportRow:
     source: dict[str, Any] | None = None
     review: dict[str, Any] | None = None
     tags: tuple[str, ...] = ()
+    target_knowledge_base_ids: tuple[str, ...] | None = None
+    source_documents: tuple[ApprovedFaqSourceDocument, ...] = ()
+    approval: ApprovedFaqApproval | None = None
+    # 回答 feedback の引用の文書 ID（版の印は呼び出し元が今の状態から付ける）。
+    cited_document_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -307,6 +339,9 @@ def _apply_approved_faq_import_rows_locked(
             source=_dict_or_none(row.source),
             review=_dict_or_none(row.review),
             tags=_string_tuple(row.tags),
+            target_knowledge_base_ids=(None if row.target_knowledge_base_ids is None else _string_tuple(row.target_knowledge_base_ids)),
+            source_documents=_source_documents(row.source_documents),
+            approval=row.approval,
         )
         record = _new_approved_faq_record(normalized_row, existing_ids, saved_at)
         if replaced is not None:
@@ -340,12 +375,16 @@ def add_approved_faq_record(
     question: str,
     approved_answer: str,
     now: datetime | None = None,
+    target_knowledge_base_ids: Sequence[str] | None = None,
+    approval: ApprovedFaqApproval | None = None,
 ) -> ApprovedFaqMutationResult:
     """手入力された QUESTION/ANSWER を Approved FAQ に追加します。"""
     row = ApprovedFaqImportRow(
         question=question,
         approved_answer=approved_answer,
         source_file="manual",
+        target_knowledge_base_ids=None if target_knowledge_base_ids is None else tuple(target_knowledge_base_ids),
+        approval=approval,
     )
     return apply_approved_faq_import_rows(path, [row], mode=APPROVED_FAQ_IMPORT_MODE_INSERT, now=now)
 
@@ -838,6 +877,7 @@ def approved_faq_import_row_from_answer_feedback(record: dict[str, Any]) -> Appr
         source=source,
         review=review,
         tags=tags,
+        cited_document_ids=_string_tuple(_string_list(answer_trace.get("source_document_ids"))),
     )
 
 
@@ -951,6 +991,63 @@ def _approved_faq_record_from_raw(
         review=_dict_or_none(raw_record.get("review")),
         timestamps=_dict_or_none(raw_record.get("timestamps")),
         tags=tuple(str(item).strip() for item in raw_record.get("tags") or [] if str(item).strip()),
+        target_knowledge_base_ids=(
+            _string_tuple(_string_list(raw_record.get(APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY)))
+            if APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY in raw_record
+            else None
+        ),
+        source_documents=_source_documents_from_raw(raw_record.get(APPROVED_FAQ_SOURCE_DOCUMENTS_KEY)),
+        approval=_approval_from_raw(raw_record.get(APPROVED_FAQ_APPROVAL_KEY)),
+    )
+
+
+def approved_faq_scope_raw(
+    *,
+    target_knowledge_base_ids: Sequence[str] | None,
+    source_documents: Sequence[ApprovedFaqSourceDocument],
+    approval: ApprovedFaqApproval | None,
+) -> dict[str, Any]:
+    """FAQ record の対象の範囲・根拠の文書・承認を JSON の項目にします（None の対象は書きません）。"""
+    raw: dict[str, Any] = {
+        APPROVED_FAQ_SOURCE_DOCUMENTS_KEY: [
+            {"document_id": item.document_id, "version": item.version} for item in _source_documents(source_documents)
+        ],
+    }
+    if target_knowledge_base_ids is not None:
+        raw[APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY] = list(_string_tuple(target_knowledge_base_ids))
+    if approval is not None:
+        raw[APPROVED_FAQ_APPROVAL_KEY] = {"approved_by": approval.approved_by, "approved_at": approval.approved_at}
+    return raw
+
+
+def _source_documents(values: Iterable[ApprovedFaqSourceDocument]) -> tuple[ApprovedFaqSourceDocument, ...]:
+    out: list[ApprovedFaqSourceDocument] = []
+    seen: set[str] = set()
+    for item in values:
+        document_id = str(item.document_id or "").strip()
+        if not document_id or document_id in seen:
+            continue
+        seen.add(document_id)
+        out.append(ApprovedFaqSourceDocument(document_id=document_id, version=str(item.version or "")))
+    return tuple(out)
+
+
+def _source_documents_from_raw(value: Any) -> tuple[ApprovedFaqSourceDocument, ...]:
+    if not isinstance(value, list):
+        return ()
+    return _source_documents(
+        ApprovedFaqSourceDocument(document_id=str(item.get("document_id") or ""), version=str(item.get("version") or ""))
+        for item in value
+        if isinstance(item, dict)
+    )
+
+
+def _approval_from_raw(value: Any) -> ApprovedFaqApproval | None:
+    if not isinstance(value, dict):
+        return None
+    return ApprovedFaqApproval(
+        approved_by=str(value.get("approved_by") or "").strip(),
+        approved_at=str(value.get("approved_at") or "").strip(),
     )
 
 
@@ -1295,7 +1392,13 @@ def _new_approved_faq_record(
         "confidence": "",
     }
     review.update(row.review or {})
+    scope = approved_faq_scope_raw(
+        target_knowledge_base_ids=row.target_knowledge_base_ids,
+        source_documents=row.source_documents,
+        approval=row.approval,
+    )
     return {
+        **scope,
         "id": record_id,
         "question": row.question,
         "alternate_questions": [],
