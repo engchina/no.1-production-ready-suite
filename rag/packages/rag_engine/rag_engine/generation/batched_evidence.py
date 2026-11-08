@@ -27,6 +27,7 @@ from rag_engine.generation.batch_output_repair import (
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.document_inputs import document_groups, document_key, document_priority, order_document_spans
+from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
@@ -204,7 +205,16 @@ def prepare_batched_evidence(
 
     def read_prompt(values: Sequence[dict[str, Any]]) -> str:
         # 出典の ID・原文の座標はコードが組立時に復元するので、モデルへ渡さない。
-        fields = ("source", "page", "page_end", "section_path", "source_context", "batch_answer", "document_background_only")
+        fields = (
+            "source",
+            "page",
+            "page_end",
+            "section_path",
+            "source_context",
+            "batch_answer",
+            "document_background_only",
+            CONTINUED_TABLE_HEADER_KEY,
+        )
         return json.dumps(
             {
                 "question": question,
@@ -225,7 +235,10 @@ def prepare_batched_evidence(
 
     def fits(values: Sequence[dict[str, Any]]) -> bool:
         # 修復の指摘の上限まで含めて測る。どの組も、読取の不合格を指摘する再試行が入力の予算に必ず入る（#4229）。
-        if len(evidence_text(values)) > settings.evidence_budget_chars:
+        if (
+            len(evidence_text(values)) + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in values)
+            > settings.evidence_budget_chars
+        ):
             return False
         largest = batch_repair_prompt(read_prompt(values), repair_feedback_upper_bound(reading_unit_counts(values)))
         return bool(
@@ -260,6 +273,44 @@ def prepare_batched_evidence(
             failed_batches.append(failed_receipt)
         raise error
 
+    def piece(value: dict[str, Any], cuts: EvidenceCuts, start: int, end: int) -> dict[str, Any]:
+        """原文の範囲。表のデータ行から始まる組には、読取の入力に表頭を添える。"""
+        part = _slice(value, start, end)
+        if header := cuts.table_header_at(start):
+            part[CONTINUED_TABLE_HEADER_KEY] = header
+        return part
+
+    def cut_end(value: dict[str, Any], cuts: EvidenceCuts, offset: int) -> int:
+        """``offset`` から始まる組の終わり。強い順の切れ目のうち、組に入る一番後ろの位置を選ぶ。"""
+        text = value["text"]
+
+        def in_budget(end: int) -> bool:
+            return fits([piece(value, cuts, offset, end)])
+
+        for level in cuts.levels:
+            positions = [position for position in level if position > offset and text[offset:position].strip() and text[position:].strip()]
+            if not positions or not in_budget(positions[0]):
+                continue
+            low, high = 0, len(positions) - 1
+            while low < high:
+                mid = (low + high + 1) // 2
+                if in_budget(positions[mid]):
+                    low = mid
+                else:
+                    high = mid - 1
+            return positions[low]
+        # 区切りの無い長い文だけ字数で切る。
+        low, high = 0, len(text) - offset
+        while low < high:
+            mid = (low + high + 1) // 2
+            if in_budget(offset + mid):
+                low = mid
+            else:
+                high = mid - 1
+        if low == 0:
+            fail("batch_fixed_input_or_source_metadata_exceeds_limit")
+        return offset + low
+
     def partition(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         result: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
@@ -273,11 +324,12 @@ def prepare_batched_evidence(
             if fits(document):
                 current.extend(document)
                 continue
-            # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。
+            # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。字数は入るかどうかの確認だけに使う。
             for value in document:
+                cuts = evidence_cuts(value)
                 offset = 0
                 while offset < len(value["text"]):
-                    rest = _slice(value, offset, len(value["text"]))
+                    rest = piece(value, cuts, offset, len(value["text"]))
                     if fits([*current, rest]):
                         current.append(rest)
                         break
@@ -285,25 +337,8 @@ def prepare_batched_evidence(
                         result.append(current)
                         current = []
                         continue
-                    low, high = 0, len(value["text"]) - offset
-                    while low < high:
-                        mid = (low + high + 1) // 2
-                        if fits([_slice(value, offset, offset + mid)]):
-                            low = mid
-                        else:
-                            high = mid - 1
-                    if low == 0:
-                        fail("batch_fixed_input_or_source_metadata_exceeds_limit")
-                    # 容量内の最後の段落境界を優先する。境界が無い長文も欠落なく分割する。
-                    end = offset + low
-                    boundaries = [
-                        position + len(separator)
-                        for separator in ("\n\n", "\n", "。", ". ")
-                        if (position := value["text"].rfind(separator, offset + low // 2, end)) >= 0
-                    ]
-                    if boundaries:
-                        end = max(boundaries)
-                    result.append([_slice(value, offset, end)])
+                    end = cut_end(value, cuts, offset)
+                    result.append([piece(value, cuts, offset, end)])
                     offset = end
             if current:
                 result.append(current)

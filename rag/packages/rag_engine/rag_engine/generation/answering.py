@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
@@ -297,6 +298,7 @@ from rag_engine.retrieval.request_coverage import (
     select_new_parents,
     within_extra_budget,
 )
+from rag_engine.retrieval.rerank_order import COLUMN_RERANK, COLUMN_SEARCH, DEFAULT_SLOT_RATIO, order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.rerank_selection import select_reranked_candidates
 from rag_engine.retrieval.scope import (
@@ -430,6 +432,8 @@ def rerank_records(
 
 # rerank に使う検索文の上限（原質問のほか。LLM ではなく rerank の呼び出しの数を抑える。#2161）。
 MAX_EXTRA_RERANK_QUERIES = 6
+# 全候補が合格点未満のとき、合格点に掛けてやり直す倍率（#4664）。
+RERANK_THRESHOLD_RELAXATION = 0.7
 
 
 def _best_rerank_ranks(
@@ -543,6 +547,43 @@ def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | No
     return ""
 
 
+def _order_by_slots(
+    records: Sequence[AnswerRecord], settings: Settings, step: Any, receipt: dict[str, Any], *, rerank_phase: str
+) -> list[AnswerRecord]:
+    """合格した候補を、rerank の順（MMR）と検索の順の枠で 1 本に並べ、工程の記録に残す（#4664）。"""
+    ratio = cast(tuple[int, int], getattr(settings, "rerank_slot_ratio", DEFAULT_SLOT_RATIO))
+    tokenizer_config = TextSearchTokenizerConfig(
+        sudachi_dict_type=getattr(settings, "text_search_tokenizer_sudachi_dict", ""),
+        sudachi_config_path=getattr(settings, "text_search_tokenizer_sudachi_config", ""),
+        latin_stemmer=getattr(settings, "text_search_tokenizer_latin_stemmer", ""),
+    )
+    ordered, columns = order_reranked_candidates(records, ratio, tokenizer_config=tokenizer_config)
+    counts = Counter(column for column in columns if column is not None)
+    trace = {
+        "ratio": list(ratio),
+        "rerank_slot_count": counts[COLUMN_RERANK],
+        "search_slot_count": counts[COLUMN_SEARCH],
+        "kept_position_count": len(records) - sum(counts.values()),
+    }
+    receipt["並びの枠"] = trace
+    step.field("並びの枠（rerank の順 : 検索の順）", f"{ratio[0]} : {ratio[1]}")
+    breakdown = (
+        ("rerank の順", trace["rerank_slot_count"]),
+        ("検索の順", trace["search_slot_count"]),
+        ("位置を保つ", trace["kept_position_count"]),
+    )
+    step.field("枠の内訳", " / ".join(f"{label} {count} 件" for label, count in breakdown))
+    record_retrieval_stage(
+        {
+            "stage": "rerank_slot_order",
+            "phase": rerank_phase,
+            **trace,
+            "order": [{"id": retrieval_record_id(record), "column": column} for record, column in zip(ordered, columns, strict=True)],
+        }
+    )
+    return ordered
+
+
 def _rerank_records(
     question: str,
     records: Sequence[AnswerRecord],
@@ -555,7 +596,7 @@ def _rerank_records(
     rerank_phase: str = "other",
     receipt: dict[str, Any] | None = None,
 ) -> list[AnswerRecord]:
-    """rerank 本体。無効・未設定・失敗時は取得順を保持する。
+    """rerank 本体。無効・未設定・失敗時は取得順を保持する（並びの枠と MMR も行わない。#4664）。
 
     extra_queries（言い換え・分解の検索文、質問に用語・同義語を足した検索文など）があれば、候補ごとに原質問と各検索文の関連度の最高値で
     並べる（#2161）。長い事例の質問の全体と比べると、要求の一部にだけ答える根拠（条文など）の関連度が薄まるため。
@@ -614,11 +655,28 @@ def _rerank_records(
         candidate_indices=rerankable_indices,
         decisions=threshold_rows,
     )
+    # 全部が不合格のときだけ、合格点を下げて 1 回だけやり直す（#4664）。それでも 0 件なら根拠 0 件で終える。
+    relaxed_from: float | None = None
+    if all(row["status"] == "excluded" for row in threshold_rows):
+        relaxed_from = cast(float, threshold_rows[0]["minimum"])
+        threshold_rows.clear()
+        reranked_candidates = _records_by_rerank_ranks(
+            rerankable_candidates,
+            reranked,
+            cast(Settings, settings),
+            candidate_indices=rerankable_indices,
+            decisions=threshold_rows,
+            min_score_override=round(relaxed_from * RERANK_THRESHOLD_RELAXATION, 6),
+        )
+        receipt["関連度下限のやり直し"] = {"元の下限": relaxed_from, "下げた下限": threshold_rows[0]["minimum"]}
     receipt["関連度下限の判断"] = threshold_rows
     excluded = sum(row["status"] == "excluded" for row in threshold_rows)
     unscored = sum(row["status"] == "kept_unscored" for row in threshold_rows)
     attachments = sum(row["status"] == "kept_attachment" for row in threshold_rows)
-    step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
+    if relaxed_from is None:
+        step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
+    else:
+        step.field("関連度スコアの下限", f"{threshold_rows[0]['minimum']}（全候補が {relaxed_from} 未満のため下げて 1 回だけやり直し）")
     step.field(
         "関連度による選別",
         f"採用 {len(reranked_candidates)} 件 / 下限未満で除外 {excluded} 件 / "
@@ -638,6 +696,7 @@ def _rerank_records(
             "stage": "rerank_threshold",
             "phase": rerank_phase,
             "minimum": threshold_rows[0]["minimum"],
+            "relaxed_from": relaxed_from,
             "decisions": threshold_rows,
             "excluded_count": excluded,
             "unscored_kept_count": unscored,
@@ -647,8 +706,11 @@ def _rerank_records(
     )
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
     protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)
+    has_scores = any(row["adopted_score"] is not None for row in threshold_rows)
+    if has_scores:
+        reranked_candidates = _order_by_slots(reranked_candidates, cast(Settings, settings), step, receipt, rerank_phase=rerank_phase)
     merged = _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
-    if not any(row["adopted_score"] is not None for row in threshold_rows):
+    if not has_scores:
         receipt["採用件数の判断"] = {"applied": False, "stop_reason": "no_scores"}
         if int(getattr(settings, "rerank_top_n", 0) or 0) > 0:
             step.add("有効な採点がないため、採用件数の上限を適用せず候補を保持します。")
@@ -778,8 +840,8 @@ def select_documents(
 
     粗→細の検索の「粗」の側。文書級の要約や索引は作らず、文書の点数は文書の chunk の rerank の点数の最高値
     （MaxP。#3504）。後回しにするのは、並べ替えの点数（原質問と検索文の最高値。#2161）でも原質問だけの点数でも
-    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の上位 `top_k` 件（起点）に chunk を
-    持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
+    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の後の並び（枠の並び。#4664）の上位
+    `top_k` 件（起点）に chunk を持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
     文書を、点数の低い候補を多く持つ文書より後ろにしていた。#3504）。集約は rerank が見た範囲、すなわち候補
     全件で行う (#1084)。後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。
     rerank の点数が無い（rerank が動かなかった）ときは落差を判断できないので後回しにしない。無効なら何もしない。

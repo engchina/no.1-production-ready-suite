@@ -428,6 +428,12 @@ def tokenize_text_search_query_with_trace(
     )
 
 
+def content_term_set(text: str, config: TextSearchTokenizerConfig | None = None) -> frozenset[str]:
+    """本文の語の集合（全文検索と同じ分割。Sudachi、無ければ文字種の区切り）。候補同士の語の重なりを測るのに使う。"""
+    cfg = normalize_text_search_tokenizer_config(config)
+    return frozenset(term for term, _tier in _content_terms(text, cfg, _sudachi_available(cfg)))
+
+
 def _protected_query_terms(query: str) -> tuple[str, ...]:
     """識別子の内部の数字を別の条件として重複配分しない。"""
     normalized = normalize_text_search_text(query)

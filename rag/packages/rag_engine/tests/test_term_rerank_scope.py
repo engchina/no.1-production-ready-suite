@@ -18,7 +18,7 @@ def test_term_expanded_question_is_used_as_a_rerank_query(monkeypatch):
             page=1,
             seq_no=i,
             category="Chunk",
-            text=f"合成資料 {key}",
+            text=f"合成資料 item{key}",
             source=f"{key}.txt",
         )
         for i, key in enumerate(("A", "B", "D"))

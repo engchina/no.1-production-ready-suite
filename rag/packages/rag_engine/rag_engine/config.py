@@ -310,6 +310,8 @@ class Settings:
     hybrid_search_backend: str = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
+    # rerank の後の並びの枠（rerank の順の件数・検索の順の件数。#4664）。
+    rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
     runtime_terms_search_enabled: bool = False
@@ -631,6 +633,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_native")),
         rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[7,3]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
+        rerank_slot_ratio=_slot_ratio(env.get("RAG_RERANK_SLOT_RATIO", "[7,3]")),
         runtime_rules_confirmation_enabled=_env_bool(env, "RUNTIME_RULES_CONFIRMATION_ENABLED", False),
         runtime_rules_answer_enabled=_env_bool(env, "RUNTIME_RULES_ANSWER_ENABLED", False),
         runtime_terms_search_enabled=_env_bool(env, "RUNTIME_TERMS_SEARCH_ENABLED", False),
@@ -928,6 +931,12 @@ def _rrf_ratio(raw: str) -> tuple[float, float]:
     left, right = float(parsed[0]), float(parsed[1])
     RrfWeights(vector=left, keyword=right)
     return left, right
+
+
+def _slot_ratio(raw: str) -> tuple[int, int]:
+    from rag_engine.retrieval.rerank_order import validate_slot_ratio
+
+    return validate_slot_ratio(json.loads(raw))
 
 
 def _hybrid_backend(value: str) -> str:

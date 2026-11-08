@@ -2983,6 +2983,7 @@ export interface AnsweringSettingsData {
   hybrid_search_backend?: "oracle_native" | "sudachi";
   rrf_method_ratio?: [number, number];
   rrf_source_ratio?: [number, number];
+  rerank_slot_ratio?: [number, number];
   runtime_rules_confirmation_enabled?: boolean;
   runtime_rules_answer_enabled?: boolean;
   runtime_terms_search_enabled?: boolean;
