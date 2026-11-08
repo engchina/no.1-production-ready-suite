@@ -54,7 +54,9 @@ from rag_engine.generation.answer_models import (
 )
 from rag_engine.generation.answer_parts_wire import (
     HEADER_ONLY_SOURCE_PROMPT,
+    SOURCE_ONLY_DERIVATION_PROMPT,
     header_only_source_parts,
+    source_only_derivation,
 )
 from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_generation_model
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
@@ -6916,14 +6918,16 @@ def run_round(
 
     plan_rows_added: list[str] = []
     plan_sources: set[str] = set()
+    role_repair: dict[str, Any] = {}
     header_repair: dict[str, Any] = {}
 
-    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
+    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str, *, underived_requests: Sequence[str] = ()) -> GroundedDraft:
         canonical = canonical_generation_draft(
             value,
             lambda link: _scope_range_text(link, spans),
             unit_catalog=unit_catalog,
             question=question,
+            underived_requests=underived_requests,
         )
         if getattr(type(value), "_uses_typed_answer_parts", False):
             # 要点の型の生成では、計画は basis から導いた（#4611）。引いた根拠はすべて計画にあるので足す行は無い。
@@ -7061,18 +7065,21 @@ def run_round(
             # 再実行の後も出力が構造化出力の契約を満たさず、この round の草稿が無い（#3849）。呼び出し側が、前の round の
             # 回答か、草稿の無い round（関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
             raise DraftGenerationInvalid(type(exc).__name__) from exc
-        # 表の見出しの行だけを答えの原文にした source 型の要点（#4592）。1 回だけ作り直し、作り直しの後も残る見出しの行だけの
-        # 要点は ``canonical_answer_parts`` が欠けた要点にする。導出が要る要点の source 型は、要点の種類で schema が受けない
-        # （#4631）ので作り直しの対象にならない。
-        header_only = header_only_source_parts(draft, unit_catalog)
+        # 導出（計算・区分・条件の当てはめ）が要る種類を自分で宣言したのに、要点がすべて原文の提示（source 型）の出力は、
+        # 質問の既知値を当てはめた答えを持たない（#4586）。source 型を受けない契約で 1 回だけ作り直す。作り直しが契約を
+        # 満たさなければ、その要求を導出の無い要点にし、原文の列挙を答えとして示さずに不足として残す。
+        source_only = source_only_derivation(draft)
+        # 表の見出しの行だけを答えの原文にした source 型の要点（#4592）。同じ契約で 1 回だけ作り直し、作り直しの後も
+        # 残る見出しの行だけの要点は ``canonical_answer_parts`` が欠けた要点にする。導出の作り直しが先（source 型を受けない）。
+        header_only = [] if source_only else header_only_source_parts(draft, unit_catalog)
         repaired: BaseModel | None = None
-        header_repair_prompt = ""
+        role_repair_prompt = ""
         if header_only:
             header_repair = {"requests": header_only}
             header_repair_part = continue_prompt_steps(
                 read_prompt(VLM_ANSWER_PROMPT_KEY), resolve_prompt("generation.headerOnlySource", HEADER_ONLY_SOURCE_PROMPT)
             )
-            header_repair_prompt = (
+            role_repair_prompt = (
                 prompt + "\n\n" + header_repair_part + json.dumps({"header_only_requests": header_only}, ensure_ascii=False)
             )
             header_model = generation_language_schema(
@@ -7090,7 +7097,7 @@ def run_round(
                         "answer.repair",
                         parse_images,
                         generation_system,
-                        header_repair_prompt,
+                        role_repair_prompt,
                         list(image_paths),
                         settings,
                         header_model,
@@ -7098,13 +7105,7 @@ def run_round(
                     )
                 else:
                     repaired = call_with_model_purpose(
-                        "answer.repair",
-                        parse_text,
-                        generation_system,
-                        header_repair_prompt,
-                        settings,
-                        header_model,
-                        provider_id=provider_id,
+                        "answer.repair", parse_text, generation_system, role_repair_prompt, settings, header_model, provider_id=provider_id
                     )
             except Exception as exc:
                 if invalid_output is None or not invalid_output(exc):
@@ -7113,12 +7114,61 @@ def run_round(
             else:
                 left = header_only_source_parts(repaired, unit_catalog)
                 header_repair.update(outcome="unaccepted" if left else "repaired", **({"remaining": left} if left else {}))
-        draft = canonicalize_output(draft, "answer.generate", prompt)
+        if source_only:
+            role_repair = {"requests": source_only, "question_type": list(getattr(draft, "question_type", []) or [])}
+            # 番号は指示の側の文（user のテンプレート）の最後の Step の続きにする（根拠の中の見出しで決めない）。
+            role_repair_part = continue_prompt_steps(
+                read_prompt(VLM_ANSWER_PROMPT_KEY),
+                resolve_prompt("generation.sourceOnlyDerivation", SOURCE_ONLY_DERIVATION_PROMPT),
+            )
+            role_repair_prompt = prompt + "\n\n" + role_repair_part + json.dumps({"source_only_requests": source_only}, ensure_ascii=False)
+            derivation_model = generation_language_schema(
+                unit_generation_model(
+                    generation_base,
+                    unit_catalog,
+                    direct_source=False,
+                    request_ids=request_ids,
+                    # 要求の名前（不足の文に出る）は 1 回目の出力の requirement の写しだけを受ける。
+                    requirements=[part.requirement for part in getattr(draft, "answer_parts", [])],
+                ),
+                question,
+            )
+            try:
+                if image_paths and not image_fallback:
+                    repaired = call_with_model_purpose(
+                        "answer.repair",
+                        parse_images,
+                        generation_system,
+                        role_repair_prompt,
+                        list(image_paths),
+                        settings,
+                        derivation_model,
+                        provider_id=provider_id,
+                    )
+                else:
+                    repaired = call_with_model_purpose(
+                        "answer.repair",
+                        parse_text,
+                        generation_system,
+                        role_repair_prompt,
+                        settings,
+                        derivation_model,
+                        provider_id=provider_id,
+                    )
+            except Exception as exc:
+                if invalid_output is None or not invalid_output(exc):
+                    raise
+                role_repair.update(outcome="underived", error=type(exc).__name__)
+            else:
+                role_repair["outcome"] = "repaired"
+        draft = canonicalize_output(
+            draft, "answer.generate", prompt, underived_requests=source_only if source_only and repaired is None else ()
+        )
         if repaired is not None:
-            draft = canonicalize_output(repaired, "answer.repair", header_repair_prompt)
+            draft = canonicalize_output(repaired, "answer.repair", role_repair_prompt)
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair)) + int(bool(header_only))
+        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair)) + int(bool(source_only)) + int(bool(header_only))
     if previous_draft is not None:
         draft = draft.model_copy(update={"response_language": previous_draft.response_language})
     plan_errors = _request_plan_errors(draft, spans)
@@ -7256,6 +7306,10 @@ def run_round(
     elif plan_sources:
         # 最後の草稿の計画の出どころ（#4611）。derived_from_basis = 要点の basis からコードが導いた。
         timing["plan_source"] = "derived_from_basis"
+    if role_repair:
+        # 導出が要る種類の宣言と source 型だけの要点の矛盾の作り直し（#4586）: 要求・宣言した種類・結果（repaired /
+        # underived）・作り直しが契約を満たさなかったときの例外の型名。
+        timing["answer_part_role_repair"] = role_repair
     if header_repair:
         # 表の見出しの行だけを答えにした要点の作り直し（#4592）: 要求・結果（repaired / unaccepted）・残った要求・例外の型名。
         timing["header_only_source_repair"] = header_repair
