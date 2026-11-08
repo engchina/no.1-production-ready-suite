@@ -58,7 +58,6 @@ def pipeline_and_detail(
         status=FileStatus.REVIEW,
         uploaded_at=datetime(2026, 1, 1, tzinfo=UTC),
         content_sha256="a" * 64 if source_hash else None,
-        extraction=StructuredExtraction(raw_text="合成の旧列").model_dump(mode="json"),
     )
     return pipeline, detail
 
@@ -102,4 +101,4 @@ async def test_formal_recipe_returns_only_its_saved_extraction() -> None:
     loaded = await pipeline._load_reviewed_extraction(detail)
     assert loaded.model_dump(mode="json") == store.payload
     assert store.calls == ["recipe", "extraction"]
-    assert detail.extraction != store.payload
+    assert "extraction" not in detail.model_dump()

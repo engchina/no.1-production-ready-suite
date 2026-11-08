@@ -3207,6 +3207,8 @@ class FakeStagingOracle:
         self.documents: dict[str, DocumentDetail] = {}
         self.chunks: dict[str, list[DocumentChunkView]] = {}
         self.segments: dict[str, list[IngestionSegment]] = {}
+        # レシピの抽出の版(文書の行は抽出を持たない。#4617)。
+        self.extractions: dict[str, dict[str, object]] = {}
         self.knowledge_base_documents: dict[str, set[str]] = {}
         self.counter = 0
 
@@ -3287,7 +3289,7 @@ class FakeStagingOracle:
             for item in self.segments.get(document_id, [])
         )
         accepted = [item for item in segments if item.status == "SUCCEEDED"]
-        extraction = dict(detail.extraction)
+        extraction = dict(self.extractions.get(document_id, {}))
         artifacts = dict(cast(Any, extraction.get("parser_artifacts") or {}))
         artifacts[SEGMENT_RECEIPT_KEY] = accepted_segment_receipt(
             document_id,
@@ -3335,44 +3337,40 @@ class FakeStagingOracle:
         assets: list[dict[str, object]] | None = None,
     ) -> None:
         document = self.documents[document_id]
-        self.documents[document_id] = document.model_copy(
-            update={
-                "status": FileStatus.INDEXED,
-                "extraction": {
-                    "pages": pages or [],
-                    "elements": elements or [],
-                    "tables": tables or [],
-                    "assets": assets or [],
-                    "parser_artifacts": {
-                        "staging_fake": True,
-                        "extraction_artifact_schema_version": 1,
-                        "extraction_artifact_kind": "full",
-                        "extraction_artifact_document_id": document_id,
-                        "extraction_artifact_trace_id": "fake-staging-trace",
-                        "extraction_artifact_path": (
-                            f"oci://namespace/bucket/artifacts/extractions/{document_id}/full.json"
-                        ),
-                    },
-                    "quality_report": {
-                        "parser_profile": "enterprise_ai_pdf_layout",
-                        "parser_backend": "enterprise_ai",
-                        "parser_version": "v1",
-                        "fallback_used": False,
-                        "risk_level": "low",
-                        "page_count": 1,
-                        "page_coverage": 1.0,
-                        "table_count": len(tables or []),
-                        "figure_count": len(assets or []),
-                        "formula_count": 0,
-                        "element_count": len(elements or []),
-                        "low_confidence_count": 0,
-                        "failed_segment_count": 0,
-                        "long_document": False,
-                        "quality_warnings": [],
-                    },
-                },
-            }
-        )
+        self.documents[document_id] = document.model_copy(update={"status": FileStatus.INDEXED})
+        self.extractions[document_id] = {
+            "pages": pages or [],
+            "elements": elements or [],
+            "tables": tables or [],
+            "assets": assets or [],
+            "parser_artifacts": {
+                "staging_fake": True,
+                "extraction_artifact_schema_version": 1,
+                "extraction_artifact_kind": "full",
+                "extraction_artifact_document_id": document_id,
+                "extraction_artifact_trace_id": "fake-staging-trace",
+                "extraction_artifact_path": (
+                    f"oci://namespace/bucket/artifacts/extractions/{document_id}/full.json"
+                ),
+            },
+            "quality_report": {
+                "parser_profile": "enterprise_ai_pdf_layout",
+                "parser_backend": "enterprise_ai",
+                "parser_version": "v1",
+                "fallback_used": False,
+                "risk_level": "low",
+                "page_count": 1,
+                "page_coverage": 1.0,
+                "table_count": len(tables or []),
+                "figure_count": len(assets or []),
+                "formula_count": 0,
+                "element_count": len(elements or []),
+                "low_confidence_count": 0,
+                "failed_segment_count": 0,
+                "long_document": False,
+                "quality_warnings": [],
+            },
+        }
         self.chunks[document_id] = chunks
         self.segments[document_id] = segments or []
 

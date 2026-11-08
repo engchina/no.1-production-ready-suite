@@ -272,7 +272,6 @@ class StoredDocument:
     tenant_id_hash: str | None = None
     category_name: str | None = None
     indexed_at: datetime | None = None
-    extraction: dict[str, object] = field(default_factory=dict)
     error_message: str | None = None
     classification: dict[str, object] | None = None
     superseded_by_document_id: str | None = None
@@ -11363,7 +11362,6 @@ class OracleClient:
                     file_size_bytes,
                     content_sha256,
                     duplicate_of_document_id,
-                    extraction,
                     error_message,
                     uploaded_at,
                     indexed_at
@@ -11619,7 +11617,6 @@ class OracleClient:
                 file_size_bytes,
                 content_sha256,
                 duplicate_of_document_id,
-                extraction,
                 classification,
                 error_message,
                 uploaded_at,
@@ -11669,8 +11666,7 @@ class OracleClient:
                     UPDATE rag_documents
                     SET
                         status = :status,
-                        error_message = :error_message,
-                        extraction = NULL
+                        error_message = :error_message
                     WHERE document_id = :document_id
                       AND {access_predicate}
                     """,
@@ -11855,7 +11851,6 @@ class OracleClient:
                 SET
                     status = :status,
                     error_message = :error_message,
-                    extraction = NULL,
                     indexed_at = NULL
                 WHERE document_id = :document_id
                   AND {access_predicate}
@@ -13728,7 +13723,6 @@ def _select_document(
             file_size_bytes,
             content_sha256,
             duplicate_of_document_id,
-            extraction,
             classification,
             error_message,
             uploaded_at,
@@ -13853,7 +13847,7 @@ def _with_superseded_file_names[D: DocumentSummary](
     ]
 
 
-# rag_documents の JSON 列(extraction / classification / processing_config)を
+# rag_documents の JSON 列(classification)を
 # 除いた列。存在確認・状態確認・chunk の保存に使う(#341)。大きな JSON 列(行の外の LOB)を
 # 必要の無い経路で読まない(ADB の result cache の不具合 #333 の引き金になった)。
 _DOCUMENT_STATE_COLUMNS_SQL = """
@@ -13976,7 +13970,7 @@ def _select_document_state(
     connection: OracleConnectionProtocol,
     document_id: str,
 ) -> StoredDocument | None:
-    """文書の状態だけを読む(JSON 列は読まない。``extraction`` 等は空のまま返す)。"""
+    """文書の状態だけを読む(JSON 列は読まない。``classification`` は空のまま返す)。"""
     rows = _fetch_all(
         connection,
         _render_sql(
@@ -14146,7 +14140,10 @@ def default_document_recipe_id(document_id: str) -> str:
 
 
 def _default_document_recipe_values(row: Mapping[str, object]) -> dict[str, object]:
-    """文書の legacy 状態(rag_documents の行)からレシピ1の値を組み立てる。"""
+    """文書の行の状態からレシピ1の値を組み立てる。
+
+    処理設定は文書の行から写さず、空の処理設定で始める(処理設定の正本はレシピの行。#4617)。
+    """
     document_id = str(row["document_id"])
     status = _file_status(row.get("status") or FileStatus.UPLOADED.value)
     return {
@@ -14154,7 +14151,6 @@ def _default_document_recipe_values(row: Mapping[str, object]) -> dict[str, obje
         "document_id": document_id,
         "slot_no": 1,
         "tenant_id_hash": row.get("tenant_id_hash"),
-        "processing_config": row.get("processing_config"),
         "status": status.value,
         "failed_phase": None,
         "active_extraction_recipe_id": None,
@@ -14192,7 +14188,7 @@ def default_document_recipe_merge_binds(values: Mapping[str, object]) -> dict[st
         "recipe_id": values["recipe_id"],
         "document_id": values["document_id"],
         "tenant_id_hash": values.get("tenant_id_hash"),
-        "processing_config": _json_bind(_json_loads(values.get("processing_config"))),
+        "processing_config": _json_bind({}),
         "status": values["status"],
         "materialized_revision": values.get("materialized_revision"),
         "error_message": values.get("error_message"),
@@ -16631,7 +16627,6 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
         category_name=_optional_str(row.get("category_name")),
         indexed_at=_optional_datetime(row.get("indexed_at")),
-        extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
         classification=_json_loads(row.get("classification")) or None,
         superseded_by_document_id=_optional_str(row.get("superseded_by_document_id")),
@@ -19009,7 +19004,6 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         superseded_by_document_id=document.superseded_by_document_id,
         superseded_at=document.superseded_at,
         object_storage_path=document.object_storage_path,
-        extraction=document.extraction,
         error_message=document.error_message,
         classification=(
             DocumentClassification.model_validate(document.classification)

@@ -325,7 +325,6 @@ class FakeWorkspaceOracle:
         updated = detail.model_copy(
             update={
                 "status": status,
-                "extraction": {},
                 "error_message": error_message,
                 "indexed_at": None,
             }
@@ -622,16 +621,7 @@ class FakeWorkspaceIngestionPipeline:
         _ = content_type, original_object_storage_path
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
-        raw_text = image_bytes.decode("utf-8", errors="replace")
-        self._oracle.documents[document_id] = detail.model_copy(
-            update={
-                "extraction": {
-                    "document_type": "社内規程",
-                    "raw_text": raw_text,
-                    "confidence": 0.9,
-                }
-            }
-        )
+        _ = image_bytes
         return await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
 
 
@@ -1088,7 +1078,6 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     assert detail.status_code == 200
     indexed = detail.json()["data"]
     assert indexed["status"] == "INDEXED"
-    assert "部門長が承認" in indexed["extraction"]["raw_text"]
 
     job_detail = client.get(f"/api/documents/ingestion-jobs/{job['id']}")
     assert job_detail.status_code == 200
@@ -1655,12 +1644,10 @@ def test_document_chunk_reprocess_resets_downstream_only(
 ) -> None:
     """CHUNK から再処理すると抽出は保持し、chunk 以降だけ削除する。"""
     document_id = _upload("chunk-reprocess.txt", b"chunk source", "text/plain")
-    extraction = {"document_type": "text", "raw_text": "抽出済み"}
     detail = fake_document_dependencies.documents[document_id]
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": extraction,
             "indexed_at": datetime.now(UTC),
         }
     )
@@ -1683,7 +1670,6 @@ def test_document_chunk_reprocess_resets_downstream_only(
     assert job["phase"] == "CHUNK"
     reset = fake_document_dependencies.documents[document_id]
     assert reset.status == FileStatus.REVIEW
-    assert reset.extraction == extraction
     assert reset.indexed_at is None
     assert fake_document_dependencies.chunks.get(document_id) is None
 
@@ -1697,7 +1683,6 @@ def test_document_index_reprocess_keeps_chunks(
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {"document_type": "text", "raw_text": "chunk 済み"},
             "indexed_at": datetime.now(UTC),
         }
     )
@@ -1738,13 +1723,6 @@ def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reinge
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {
-                "raw_text": "前回の抽出本文",
-                "quality_report": {
-                    "parser_backend": "enterprise_ai",
-                    "parser_profile": "enterprise_ai_pdf_layout",
-                },
-            },
             "indexed_at": datetime.now(UTC),
             "error_message": "前回の状態",
         }
@@ -1779,7 +1757,6 @@ def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reinge
     assert job["status"] == "QUEUED"
     cleared = fake_document_dependencies.documents[document_id]
     assert cleared.status == FileStatus.UPLOADED
-    assert cleared.extraction == {}
     assert cleared.indexed_at is None
     assert cleared.error_message is None
     assert fake_document_dependencies.chunks.get(document_id) is None
@@ -2270,7 +2247,6 @@ def test_preprocess_reprocess_clears_document_outputs(
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {"raw_text": "old extraction"},
             "indexed_at": datetime.now(UTC),
         }
     )
@@ -2291,7 +2267,6 @@ def test_preprocess_reprocess_clears_document_outputs(
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "PREPROCESS"
-    assert fake_document_dependencies.documents[document_id].extraction == {}
     assert document_id not in fake_document_dependencies.chunks
 
 
@@ -2321,7 +2296,6 @@ def test_extract_reprocess_keeps_existing_prepared_artifact(
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {"raw_text": "old extraction"},
             "indexed_at": datetime.now(UTC),
         }
     )
@@ -2374,7 +2348,6 @@ def test_retry_failed_chunk_job_requeues_from_error(
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.ERROR,
-            "extraction": {"document_type": "text", "raw_text": "抽出済み"},
             "error_message": "前回 chunk 失敗",
         }
     )
@@ -2831,7 +2804,6 @@ def test_retry_recipe_job_requeues_same_recipe_without_resetting_document(
     ].model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {"raw_text": "レシピ 1 の抽出"},
             "indexed_at": datetime.now(UTC),
         }
     )
@@ -2873,10 +2845,9 @@ def test_retry_recipe_job_requeues_same_recipe_without_resetting_document(
     assert retry_job["recipe_revision"] == 3
     assert retry_job["phase"] == "PREPROCESS"
     assert retry_job["status"] == "QUEUED"
-    # 他のレシピの出力(文書の chunk / 抽出)と文書の status はそのまま。
+    # 他のレシピの出力(文書の chunk)と文書の status はそのまま。
     detail = fake_document_dependencies.documents[document_id]
     assert detail.status == FileStatus.INDEXED
-    assert detail.extraction == {"raw_text": "レシピ 1 の抽出"}
     assert [chunk.chunk_id for chunk in fake_document_dependencies.chunks[document_id]] == [
         "chunk-recipe-1"
     ]
@@ -3159,7 +3130,6 @@ def test_delete_document_removes_extraction_artifacts(
     ].model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {"parser_artifacts": {"extraction_artifact_path": full_artifact_path}},
         }
     )
     prepared_artifact = DocumentPreprocessArtifact(
@@ -3241,7 +3211,6 @@ def test_delete_document_removes_extraction_artifact_without_document_extraction
         )
     )
     assert artifact_path is not None
-    assert fake_document_dependencies.documents[document_id].extraction == {}
     assert fake_document_dependencies.ingestion_segments.get(document_id, []) == []
 
     resp = client.delete(f"/api/documents/{document_id}")
@@ -3499,9 +3468,17 @@ def test_delete_document_retries_artifact_and_prefix_cleanup_in_worker_sweep(
         "application/json",
     )
     documents = fake_cleanup_store.oracle.documents
-    documents[document_id] = documents[document_id].model_copy(
-        update={"extraction": {"parser_artifacts": {"extraction_artifact_path": artifact_path}}}
-    )
+    # prefix の外の成果物は segment の artifact の path で集める(文書の行は抽出を持たない。#4617)。
+    fake_cleanup_store.oracle.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:p1",
+            document_id=document_id,
+            status="SUCCEEDED",
+            page_start=1,
+            page_end=1,
+            artifact_path=artifact_path,
+        )
+    ]
     failing = {artifact_path}
     calls: list[str] = []
     _fail_storage_delete_for(monkeypatch, failing, calls)
@@ -3738,8 +3715,8 @@ def test_delete_impact_requires_document_ids() -> None:
     )
 
 
-def test_document_detail_returns_extraction_after_ingest() -> None:
-    """取込 job 実行後の詳細 API は抽出本文とメタデータを返す。"""
+def test_document_detail_has_no_document_extraction_after_ingest() -> None:
+    """取込 job 実行後の詳細 API は文書の行の抽出を返さない（抽出はレシピの層。#4617）。"""
     document_id = _upload(
         "policy.txt",
         "社内規程: 経費申請\n部門長が承認します。".encode(),
@@ -3754,10 +3731,8 @@ def test_document_detail_returns_extraction_after_ingest() -> None:
 
     detail = client.get(f"/api/documents/{document_id}")
     assert detail.status_code == 200
-    extraction = detail.json()["data"]["extraction"]
-    assert extraction["document_type"] == "社内規程"
-    assert "部門長が承認" in extraction["raw_text"]
-    assert "fields" not in extraction
+    assert detail.json()["data"]["status"] == "INDEXED"
+    assert "extraction" not in detail.json()["data"]
 
     jobs = client.get("/api/documents/ingestion-jobs", params={"status": "SUCCEEDED"})
     assert jobs.status_code == 200
@@ -4351,15 +4326,6 @@ def test_ingestion_segments_after_served_reingest_do_not_show_previous_extractio
         update={
             "status": FileStatus.INDEXED,
             "indexed_at": datetime.now(UTC),
-            # 配信中の版の抽出（前回の job の JSON）が文書の行に残っている。
-            "extraction": {
-                "raw_text": "合成の前回の本文",
-                "pages": [{"page_number": 1}, {"page_number": 7}],
-                "quality_report": {"parser_backend": "synthetic-previous-parser"},
-                "parser_artifacts": {
-                    "extraction_artifact_path": f"artifacts/extractions/{document_id}/old.json"
-                },
-            },
         }
     )
     fake.ingestion_segments[document_id] = [
@@ -4391,7 +4357,6 @@ def test_ingestion_segments_after_served_reingest_do_not_show_previous_extractio
 
     queued = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
     assert queued.status_code == 200
-    assert fake.documents[document_id].extraction["pages"]  # 文書の行の抽出は残ったまま
 
     resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
 

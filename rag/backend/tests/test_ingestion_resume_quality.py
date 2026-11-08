@@ -25,7 +25,6 @@ class SavedExtractionOracle:
             file_name="synthetic.txt",
             status=FileStatus.REVIEW,
             uploaded_at=datetime(2026, 1, 1, tzinfo=UTC),
-            extraction=payload,
         )
 
     async def get_document(self, document_id: str) -> DocumentDetail:

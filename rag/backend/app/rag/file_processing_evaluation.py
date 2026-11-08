@@ -3276,7 +3276,7 @@ def _staging_required_evidence(check: str, reason: str) -> tuple[str, ...]:
         )
     if check == "quality_report_metadata":
         return (
-            "DocumentDetail.extraction.quality_report includes parser profile/backend/version",
+            "recipe extraction quality_report includes parser profile/backend/version",
             "quality_report includes fallback/page/table/figure/formula/segment count metadata",
             "quality_report contains stable warning codes and no OCR/source text",
             "ingestion_quality_report_completeness threshold passes in staging report",
