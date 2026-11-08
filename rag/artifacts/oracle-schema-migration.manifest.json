@@ -708,10 +708,17 @@
       "sha256": "117929c315e253eb8c751e344d9c8cf4133515606d1645c4a8c7db8c7f02d6b8",
       "statement_count": 1,
       "table_name": "rag_graph_references"
+    },
+    {
+      "destructive": true,
+      "name": "20261109_4666_language_pack_retired_question_cues",
+      "sha256": "ca63431accb961689c162971908a354d1c40f036b4a3562888777e68724785de",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "af714f04ff00768f794211256ae85278c1978aba060144891bb042f17e2b006f",
-  "statement_count": 157
+  "sha256": "75d08741205193f5f85a397d1e7719b52ac671ec8e0c71d6d1ad7d2d9cb88148",
+  "statement_count": 158
 }
