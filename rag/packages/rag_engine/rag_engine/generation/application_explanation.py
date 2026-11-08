@@ -6,9 +6,10 @@
 と書いて公開の結論と食い違うことを、入力の範囲で防ぐ。審査済みの結論・生成の推導の文・要求は渡さない。照らす相手が
 入力に無いので、説明が入力の写しや「結論と一致します」という自己確認の文にならない。
 
-同じ回答で公開した（valid の）ほかの推導があれば、その結論と原文（推導の引用と ``audit_basis`` の全文）も渡す
-（``KEY_OTHERS``。#4589）。結論を複数の推導に分け、ある推導がほかの推導の結論に依るとき、説明の段がほかの推導の
-事実を「資料に無い」と書いて公開の結論と食い違うことを、入力の範囲で防ぐ。自分の結論は渡さない。
+同じ回答で公開した（valid の）ほかの推導があれば、その結論（``KEY_OTHERS``）を渡し、その推導の原文（推導の引用と
+``audit_basis`` の全文）を自分の原文の後に「資料の原文」へ合わせる（#4589・#4615）。結論を複数の推導に分け、ある推導が
+ほかの推導の結論に依るとき、説明の段がほかの推導の事実を「資料に無い」と書いて公開の結論と食い違うことを、入力の範囲で
+防ぐ。自分の結論は渡さない。
 
 表示するかはコードが形式だけで決める（意味の判定はしない。語の一覧・正規表現の語彙を持たない）:
 
@@ -60,15 +61,16 @@ ROW_KEYS = {
     "does_not_apply": "質問に当てはまらない表の行",
     "cannot_determine": "質問からは決められない表の行",
 }
-# 同じ回答で公開した（審査が valid の）ほかの推導の結論と、その推導の原文（#4589）。結論を複数の推導に分け、ある推導が
-# ほかの推導の結論に依るとき（premises に無くても）、説明の段がほかの推導の事実を「資料に無い」と書かないよう入力に渡す。
-KEY_OTHERS = "同じ回答のほかの結論"
-KEY_CONCLUSION = "結論"
+# 同じ回答で公開した（審査が valid の）ほかの推導の結論（#4589）。結論を複数の推導に分け、ある推導がほかの推導の結論に
+# 依るとき（premises に無くても）、説明の段がほかの推導の事実を「資料に無い」と書かないよう入力に渡す。その推導の原文は
+# 「資料の原文」に合わせる。節の名前は利用者の文に出ても自然な語にする（#4615）。
+KEY_OTHERS = "この回答で導いたほかの結論"
 # 入力の節（explanation_input の key。この順で置く）。
 SECTION_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_LANGUAGE, *ROW_KEYS.values(), KEY_OTHERS)
-# 説明の文の語にしてよい節の名前: 利用者の文に出ても自然な語（質問・資料の原文・どの表の行が質問に当てはまるか）。ほかの
-# 節の名前（INTERNAL_SECTION_KEYS）は入力の構造を指すだけの名前なので、説明に写れば表示の門が隠す（#4603）。
-WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES, *ROW_KEYS.values())
+# 説明の文の語にしてよい節の名前: 利用者の文に出ても自然な語（質問・資料の原文・どの表の行が質問に当てはまるか・この回答で
+# 導いたほかの結論）。ほかの節の名前（INTERNAL_SECTION_KEYS）は入力の構造を指すだけの名前なので、説明に写れば表示の門が
+# 隠す（#4603）。
+WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES, *ROW_KEYS.values(), KEY_OTHERS)
 INTERNAL_SECTION_KEYS = tuple(key for key in SECTION_KEYS if key not in WORDING_KEYS)
 # 入力の原文に無い Latin の語がこの数以上連なれば、既定の言語の説明ではないとみなして隠す。
 LATIN_RUN_WORDS = 3
@@ -95,9 +97,10 @@ def explanation_system(instruction: str | None, *, row_keys: Sequence[str] = (),
             + (
                 ""
                 if not sent_rows
-                else "".join(f"「{key}」" for key in sent_rows) + "は、資料の表の行の条件の原文を、質問に当てはまるかで分けたものです。"
+                else "".join(f"「{key}」" for key in sent_rows)
+                + "は、表の各行が質問に当てはまるかを確かめた結果で、行の条件を並べています。"
             )
-            + ("" if not with_others else f"「{KEY_OTHERS}」は、同じ回答で確かめたほかの結論と、その結論の資料の原文です。"),
+            + ("" if not with_others else f"「{KEY_OTHERS}」は、同じ回答で確かめたほかの結論です。"),
             "",
             "## Step 2: 説明を書く",
             f"質問への答えが、質問の条件と{KEY_SOURCES}の値からどう導かれるかを、利用者に示す{label}の文で書きます。"
@@ -138,7 +141,7 @@ def explanation_input(
     sources: Sequence[str],
     instruction: str | None,
     rows: dict[str, list[str]] | None = None,
-    others: Sequence[dict[str, Any]] = (),
+    others: Sequence[str] = (),
 ) -> dict[str, Any]:
     value: dict[str, Any] = {KEY_QUESTION: question, KEY_SOURCES: list(sources)}
     if instruction is not None:
@@ -156,7 +159,7 @@ def explanation_prompt(
     sources: Sequence[str],
     instruction: str | None,
     rows: dict[str, list[str]] | None = None,
-    others: Sequence[dict[str, Any]] = (),
+    others: Sequence[str] = (),
 ) -> str:
     return json.dumps(explanation_input(question, sources, instruction, rows, others), ensure_ascii=False, indent=2)
 
@@ -166,13 +169,17 @@ def internal_labels(value: dict[str, Any]) -> list[str]:
     return [key for key in value if key in INTERNAL_SECTION_KEYS]
 
 
-def other_conclusions(entry: CheckedApplication, targets: Sequence[CheckedApplication]) -> list[dict[str, Any]]:
-    """同じ回答で公開した（valid の）ほかの推導の結論と原文（検証済みの引用と、審査の根拠の送った単位の全文）。自分は含めない。"""
-    return [
-        {KEY_CONCLUSION: other.application.result, KEY_SOURCES: application_sources(other)}
-        for other in targets
-        if other is not entry and other.application.result.strip()
-    ]
+def other_conclusions(entry: CheckedApplication, targets: Sequence[CheckedApplication]) -> list[str]:
+    """同じ回答で公開した（valid の）ほかの推導の結論。自分は含めない。"""
+    return [other.application.result for other in targets if other is not entry and other.application.result.strip()]
+
+
+def explanation_sources(entry: CheckedApplication, targets: Sequence[CheckedApplication]) -> list[str]:
+    """説明の段の「資料の原文」: 自分の推導の原文を先に、結論のあるほかの公開した推導の原文をその後に置く（どれも検証済みの
+    引用と、審査の根拠の送った単位の全文。同じ原文は 1 回）。"""
+    others = [other for other in targets if other is not entry and other.application.result.strip()]
+    texts = [*application_sources(entry), *(text for other in others for text in application_sources(other))]
+    return list(dict.fromkeys(texts))
 
 
 def application_rows(entry: CheckedApplication, row_conditions: Any, others: Sequence[CheckedApplication] = ()) -> dict[str, list[str]]:
@@ -372,7 +379,7 @@ def explain_applications(
             entry.presentation = {"status": "unrecorded", "reason": "deadline"}
             diagnostic["status"] = "incomplete"
             continue
-        sources = application_sources(entry)
+        sources = explanation_sources(entry, targets)
         siblings = [other for other in targets if other is not entry]
         others = other_conclusions(entry, targets)
         rows = application_rows(entry, row_conditions, siblings)
@@ -393,7 +400,7 @@ def explain_applications(
         gate = display_gate(
             getattr(output, "explanation", None),
             question=question,
-            sources=[*sources, *(text for other in others for text in (other[KEY_CONCLUSION], *other[KEY_SOURCES]))],
+            sources=[*sources, *others],
             conclusion=entry.application.result,
             default_language=instruction is None,
             labels=internal_labels(value),
