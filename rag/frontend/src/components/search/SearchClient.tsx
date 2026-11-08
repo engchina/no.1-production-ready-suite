@@ -955,7 +955,6 @@ function runStartedAtMs(): number {
 
 /**
  * 質問から読み取って検索に足した条件（#652）。「自動」のチップで出し、外して検索し直せる。
- * 読み取った条件で見つからず外して検索したときは、その旨を出す。
  */
 function AutoFieldFilterChips({
   diagnostics,
@@ -999,9 +998,6 @@ function AutoFieldFilterChips({
           );
         })}
       </div>
-      {auto.relaxed ? (
-        <Banner severity="info">{t("search.answerDetails.autoFieldFilterRelaxed")}</Banner>
-      ) : null}
     </div>
   );
 }

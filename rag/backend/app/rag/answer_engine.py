@@ -361,13 +361,7 @@ class _SearchState:
     screen_catalog: dict[str, list[str]] | None = None
     # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)。
     auto_field_conditions: list[ExtractionFieldCondition] = field(default_factory=list)
-    # 自動で足した検索条件を外す段(#652・#2401)。(段の名前, その段まで外した検索条件) を
-    # 外す順に持つ。候補が 0 件なら、前から順に外して検索し直す(段ごとに 1 回。以降の検索も
-    # 外したまま)。
-    relaxations: list[tuple[str, dict[str, str]]] = field(default_factory=list)
-    # 外した段の名前(外した順)。
-    relaxed: list[str] = field(default_factory=list)
-    # 検索ごとの検索文の数・候補の件数・効いていた自動の条件・外した段(#2401。根拠 0 件の診断)。
+    # 検索ごとの検索文の数・候補の件数・効いていた自動の条件(#2401。根拠 0 件の診断)。
     search_log: list[dict[str, object]] = field(default_factory=list)
     # 正式生成へ追加する文書背景の既読。版と検索範囲が同じ場合だけ再利用する。
     document_backgrounds: dict[tuple[str, str, tuple[tuple[str, str], ...]], dict[str, Any]] = (
@@ -444,25 +438,12 @@ class _SearchState:
         return self.degraded.steps()
 
     @property
-    def auto_field_relaxed(self) -> bool:
-        """読み取った抽出項目の条件を、候補 0 件で外したか(#652)。"""
-        return RELAX_AUTO_FIELD in self.relaxed
-
-    def active_relaxations(self) -> list[str]:
-        """まだ外していない(今の検索条件に効いている)自動の条件の段の名前。"""
-        return [name for name, _ in self.relaxations[len(self.relaxed) :]]
+    def automatic_filters(self) -> list[str]:
+        """今の検索条件に効いている自動の条件の種類(検索の条件の値は含めない)。"""
+        return ["auto_field"] if self.auto_field_conditions else []
 
 
-# 自動で足した検索条件の段(#2401)。外す順(質問から推測した度合いの強い順)に並ぶ。
-RELAX_AUTO_FIELD = "auto_field"
 _ZERO_EVIDENCE_SEARCH_LOG_LIMIT = 12
-
-
-def _relaxation_steps(
-    base: Mapping[str, str], full: Mapping[str, str]
-) -> list[tuple[str, dict[str, str]]]:
-    """独立した LLM 項目条件だけを緩和する。明示的な条件は維持する。"""
-    return [(RELAX_AUTO_FIELD, dict(base))] if dict(full) != dict(base) else []
 
 
 def _reference_scope(filters: Mapping[str, str]) -> dict[str, str]:
@@ -492,7 +473,7 @@ def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
     ``request.filters``)で、ナレッジベース・旧版の扱い・基準日に加えて文書名・ページ・分類・項目の
     条件を含む。拡張は主の検索と同じ範囲の中で広げ、利用者が指定した範囲の外から黙って根拠を足さ
     ない。質問から推測して自動で足した条件(``_question_filters``・``merge_field_conditions``)は
-    含まない(0 件で外す条件。#2401)。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
+    含まない。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
     明記した参照を辿る交差参照も同じ明示範囲を維持する。
     """
     return {key: value for key, value in filters.items() if value.strip()}
@@ -1116,13 +1097,6 @@ class AnswerEngine:
         if state.auto_field_conditions:
             outcome.diagnostics["auto_field_filter"] = {
                 "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
-                "relaxed": state.auto_field_relaxed,
-            }
-        if state.relaxed:
-            # 候補 0 件で外した自動の条件の段(#2401)。
-            outcome.diagnostics["filter_relaxation"] = {
-                "relaxed": list(state.relaxed),
-                "max_steps": self._settings.rag_filter_relaxation_max_steps,
             }
         if degraded := state.degraded_steps():
             # 失敗して空のまま続けた補助の処理(#3259)。根拠 0 件の診断にも入れる。
@@ -1682,102 +1656,93 @@ class AnswerEngine:
                         "keyword": SearchMode.KEYWORD,
                     }[channel]
                     searches.append((query, embeddings.get(query, []), mode))
-        relaxed_before = len(state.relaxed)
-        while True:
-            fused: dict[str, float] = {}
-            rankings: list[list[str]] = []
-            all_hits = await self._query_hits(
-                state,
-                searches,
-                candidate_limit=depth,
-                filters=(_with_page_ranges(state.filters, page_ranges) or {})
-                if page_ranges
-                else dict(state.filters),
-            )
-            raw_lists = []
-            for (query, _embedding, mode), hits in zip(searches, all_hits, strict=True):
-                index = queries.index(query)
-                if getattr(hits, "status", "") == "not_executed":
-                    continue
-                if getattr(hits, "status", "") == "failed":
-                    state.record_degraded(
-                        "retrieval",
-                        getattr(hits, "failure", None)
-                        or RuntimeError(getattr(hits, "error", "検索に失敗")),
+        fused: dict[str, float] = {}
+        rankings: list[list[str]] = []
+        all_hits = await self._query_hits(
+            state,
+            searches,
+            candidate_limit=depth,
+            filters=(_with_page_ranges(state.filters, page_ranges) or {})
+            if page_ranges
+            else dict(state.filters),
+        )
+        raw_lists = []
+        for (query, _embedding, mode), hits in zip(searches, all_hits, strict=True):
+            index = queries.index(query)
+            if getattr(hits, "status", "") == "not_executed":
+                continue
+            if getattr(hits, "status", "") == "failed":
+                state.record_degraded(
+                    "retrieval",
+                    getattr(hits, "failure", None)
+                    or RuntimeError(getattr(hits, "error", "検索に失敗")),
+                )
+            rankings.append([hit.chunk_id for hit in hits])
+            raw_lists.append(
+                RankedList(
+                    query,
+                    mode.value
+                    if mode == SearchMode.HYBRID
+                    else "vector"
+                    if mode == SearchMode.VECTOR
+                    else "keyword",
+                    tuple(hit.chunk_id for hit in hits),
+                    native_scores=tuple(
+                        float(str(hit.metadata["native_rrf_contribution"])) for hit in hits
                     )
-                rankings.append([hit.chunk_id for hit in hits])
-                raw_lists.append(
-                    RankedList(
-                        query,
-                        mode.value
-                        if mode == SearchMode.HYBRID
-                        else "vector"
-                        if mode == SearchMode.VECTOR
-                        else "keyword",
-                        tuple(hit.chunk_id for hit in hits),
-                        native_scores=tuple(
-                            float(str(hit.metadata["native_rrf_contribution"])) for hit in hits
+                    if mode == SearchMode.HYBRID
+                    and all("native_rrf_contribution" in h.metadata for h in hits)
+                    else (),
+                    status=getattr(hits, "status", "completed"),
+                    error=getattr(hits, "error", ""),
+                    sources=tuple(
+                        query_sources.get(
+                            query,
+                            ("原質問",)
+                            if query_key(query) == query_key(original_query)
+                            else ("追加検索文",),
                         )
-                        if mode == SearchMode.HYBRID
-                        and all("native_rrf_contribution" in h.metadata for h in hits)
-                        else (),
-                        status=getattr(hits, "status", "completed"),
-                        error=getattr(hits, "error", ""),
-                        sources=tuple(
-                            query_sources.get(
-                                query,
-                                ("原質問",)
-                                if query_key(query) == query_key(original_query)
-                                else ("追加検索文",),
-                            )
-                        ),
-                    )
+                    ),
                 )
-                for hit in hits:
-                    state.chunks.setdefault(hit.chunk_id, hit)
-                    state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
-                        _hit_channels(hit, index)
-                    )
-            with observe_call("stage", "検索結果の統合（RRF）") as observation:
-                fusion = fuse_rankings(raw_lists, budgets, weights, k=k)
-                fused = dict(fusion.scores)
-                for chunk_id, score in fused.items():
-                    chunk = state.chunks[chunk_id]
-                    state.chunks[chunk_id] = chunk.model_copy(
-                        update={"metadata": {**chunk.metadata, "rrf_score": score, "rrf_k": k}}
-                    )
-                details = fusion_details(fusion, weights, budgets, k)
-                execution = fusion.execution(budgets)
-                if execution in {"native_only", "additional_to_native"}:
-                    observation.display(params={"name": "追加の検索結果統合"})
-                if execution == "native_only":
-                    observation.display(params={"status": "skipped"})
-                observation.request(
-                    {
-                        "source_weights": budgets,
-                        "channel_weights": {"vector": weights.vector, "keyword": weights.keyword},
-                        "rank_constant": k,
-                        "lists": fusion.diagnostics(weights, budgets, k)["lists"],
-                    }
+            )
+            for hit in hits:
+                state.chunks.setdefault(hit.chunk_id, hit)
+                state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
+                    _hit_channels(hit, index)
                 )
-                observation.display(details=details)
-                observation.response(fusion.diagnostics(weights, budgets, k))
-                if raw_lists and all(r.status == "failed" for r in raw_lists):
-                    observation.display(params={"status": "failed"})
-                    raise RuntimeError("すべての検索一覧の取得に失敗しました。")
-            # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
-            # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
-            # 補正検索など)も外したまま)。
-            # 参照の頁に絞った検索(#2395)の 0 件では外さない(ほかの検索の条件を変えない)。
-            if fused or page_ranges or not self._relax_filters(state):
-                break
+        with observe_call("stage", "検索結果の統合（RRF）") as observation:
+            fusion = fuse_rankings(raw_lists, budgets, weights, k=k)
+            fused = dict(fusion.scores)
+            for chunk_id, score in fused.items():
+                chunk = state.chunks[chunk_id]
+                state.chunks[chunk_id] = chunk.model_copy(
+                    update={"metadata": {**chunk.metadata, "rrf_score": score, "rrf_k": k}}
+                )
+            details = fusion_details(fusion, weights, budgets, k)
+            execution = fusion.execution(budgets)
+            if execution in {"native_only", "additional_to_native"}:
+                observation.display(params={"name": "追加の検索結果統合"})
+            if execution == "native_only":
+                observation.display(params={"status": "skipped"})
+            observation.request(
+                {
+                    "source_weights": budgets,
+                    "channel_weights": {"vector": weights.vector, "keyword": weights.keyword},
+                    "rank_constant": k,
+                    "lists": fusion.diagnostics(weights, budgets, k)["lists"],
+                }
+            )
+            observation.display(details=details)
+            observation.response(fusion.diagnostics(weights, budgets, k))
+            if raw_lists and all(r.status == "failed" for r in raw_lists):
+                observation.display(params={"status": "failed"})
+                raise RuntimeError("すべての検索一覧の取得に失敗しました。")
         if len(state.search_log) < _ZERO_EVIDENCE_SEARCH_LOG_LIMIT:
             state.search_log.append(
                 {
                     "queries": len(queries),
                     "candidates": len(fused),
-                    "automatic_filters": state.active_relaxations(),
-                    "relaxed": state.relaxed[relaxed_before:],
+                    "automatic_filters": state.automatic_filters,
                 }
             )
         citation_ids: list[str] = []
@@ -2486,25 +2451,10 @@ class AnswerEngine:
         """
         if state.filters is not None:
             return
-        base = dict(request.filters)
-        filters = dict(base)
+        filters = dict(request.filters)
         state.filters, state.auto_field_conditions = merge_field_conditions(
             filters, self._auto_field_conditions
         )
-        state.relaxations = _relaxation_steps(base, state.filters)
-
-    def _relax_filters(self, state: _SearchState) -> bool:
-        """候補 0 件のとき、自動で足した検索条件の次の段を外す(#2401)。外せなければ False。
-
-        外す段の数は ``rag_filter_relaxation_max_steps`` まで(0 は外さない)。
-        """
-        done = len(state.relaxed)
-        if done >= len(state.relaxations) or done >= self._settings.rag_filter_relaxation_max_steps:
-            return False
-        name, filters = state.relaxations[done]
-        state.filters = dict(filters)
-        state.relaxed.append(name)
-        return True
 
     async def _prefetch_query_hits(
         self,
@@ -5507,7 +5457,7 @@ def _zero_evidence_diagnostics(
     """根拠 0 件で回答を作らずに終えたときの、0 件になった段と検索の記録(#2401)。
 
     段は rag_engine が決め(検索の候補が無い・根拠確認で全部外した・根拠の組み立て)、検索の候補が
-    無く、自動で足した検索条件が効いたままだった(外す段の上限・設定で外さなかった)ときは ``filter``
+    無く、自動で足した検索条件が効いたままだったときは ``filter``
     にする。検索の条件は値を出さず、項目の名前だけを残す(値は質問・文書の内容を含みうる)。
     """
     from rag_engine.generation.zero_evidence import ZERO_EVIDENCE_STAGE_LABELS
@@ -5516,7 +5466,7 @@ def _zero_evidence_diagnostics(
     engine = trace.get("zero_evidence") if isinstance(trace, Mapping) else None
     if not isinstance(engine, Mapping):
         return {}
-    active = state.active_relaxations()
+    active = state.automatic_filters
     stage = str(engine.get("stage") or "")
     if stage == "retrieval" and active:
         stage = "filter"
@@ -5528,9 +5478,8 @@ def _zero_evidence_diagnostics(
         "request_filter_keys": sorted(
             key for key, value in request.filters.items() if value.strip()
         ),
-        # 最後の検索で効いていた自動の条件と、候補 0 件で外した自動の条件。
+        # 効いていた自動の条件。
         "automatic_filters": active,
-        "relaxed": list(state.relaxed),
         "searches": list(state.search_log),
         # 失敗して空のまま続けた補助の処理(#3259)。0 件が「当たらなかった」のか
         # 「読めなかった」のかを分ける(処理の種類・回数・例外の型の名前だけ)。

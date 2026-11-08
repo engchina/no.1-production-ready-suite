@@ -1474,7 +1474,6 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     question_type: ["規則"],
     auto_field_filter: {
       conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-      relaxed: false,
     },
     original_question: "それの上限は？",
     rewritten_question: "経費精算の上限額は？",
