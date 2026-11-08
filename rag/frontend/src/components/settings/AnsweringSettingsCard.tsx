@@ -69,7 +69,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     min_similarity: settings.min_similarity ?? 0.2,
     rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.2,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
-    rrf_method_ratio: settings.rrf_method_ratio ?? [10, 1],
+    rrf_method_ratio: settings.rrf_method_ratio ?? [7, 3],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
@@ -285,7 +285,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               {([0, 1] as const).map((index) => <TextField
                 key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step="any"
                 label={t(`settings.answering.${key}.${index}`)}
-                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [10,1] : [7,3])[index])}
+                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [7,3] : [7,3])[index])}
                 disabled={disabled} onChange={(event) => {
                   const ratio: [number, number] = [...(form[key] ?? [0,0])];
                   ratio[index] = Number(event.target.value);

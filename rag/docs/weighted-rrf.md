@@ -2,14 +2,14 @@
 
 全体の「検索方法」→「検索文の作成」の後に、ランキングの寄与を指定する二組の比重を置く。
 
-- ベクトル検索 : 全文検索 = **10 : 1**（`RAG_RRF_METHOD_RATIO=[10,1]`）。
+- ベクトル検索 : 全文検索 = **7 : 3**（`RAG_RRF_METHOD_RATIO=[7,3]`）。
 - 原質問 : 全追加検索文 = **7 : 3**（`RAG_RRF_SOURCE_RATIO=[7,3]`）。
 
 未保存の環境にも新しい既定値を使う。非負の有限値で指定し、組内の全ゼロを拒否する。候補の件数と rerank は独立で、結果の件数や回答内容の比率を約束する設定ではない。rerank に渡る候補は変わり得る。KB は対象範囲、文書レシピは取込の責務を維持し、比重を保存しない。
 
 ## 計算
 
-原質問は1回の `DBMS_HYBRID_VECTOR.SEARCH` に vector と text を渡し、`search_fusion=UNION` / `search_scorer=WRRF` で検索・融合する。`vector.score_weight` と `text.score_weight` に設定比率（既定10と1）、両方の `rank_penalty` に既存定数（既定60）を渡す。各経路の候補上限を維持し、返却上限は両経路の和にする。
+原質問は1回の `DBMS_HYBRID_VECTOR.SEARCH` に vector と text を渡し、`search_fusion=UNION` / `search_scorer=WRRF` で検索・融合する。`vector.score_weight` と `text.score_weight` に設定比率（既定7と3）、両方の `rank_penalty` に既存定数（既定60）を渡す。各経路の候補上限を維持し、返却上限は両経路の和にする。
 
 意味の言い換え・分解・HyDE の追加検索文は向量のみ。登録用語・同義語からの追加検索文は全文のみで、embedding API にも送らない。判定は検索文の出所に基づき、質問本文の語から推測しない。同一表現が両方の出所を持つ場合は予算を重複させず必要な両経路を使う。原質問と同じ表現は原質問として扱う。
 

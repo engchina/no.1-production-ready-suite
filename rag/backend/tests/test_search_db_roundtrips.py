@@ -874,7 +874,7 @@ async def test_vector_only_queries_share_the_additional_budget() -> None:
     )
     scores = {chunk.chunk_id: chunk.metadata.get("rrf_score") for chunk in result.child_chunks}
     assert scores["c-0"] == pytest.approx(0.7 / 61)
-    assert scores["c-3"] == pytest.approx(0.1 * 10 / 11 / 61)
+    assert scores["c-3"] == pytest.approx(0.1 * 0.7 / 61)
     assert scores["c-1"] == scores["c-2"]
     assert scores["c-1"] < scores["c-0"]
 
@@ -1263,12 +1263,12 @@ async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions
     )
     record = next(s for s in state.retrieval_stages if s["stage"] == "candidate_fusion")["rrf"]
     assert len(record["lists"]) == 3
-    assert [r["weight"] for r in record["lists"]] == pytest.approx([0.7, 1.5 / 11, 1.5 / 11])
+    assert [r["weight"] for r in record["lists"]] == pytest.approx([0.7, 0.105, 0.105])
     assert record["unique_count"] == 3
     assert record["raw_count"] == 3
     scores = {c.chunk_id: c.metadata["rrf_score"] for c in result.child_chunks}
     assert scores == pytest.approx(
-        {"c-0": 0.7 / 61, "c-1": 0.15 * 10 / 11 / 61, "c-2": 0.15 * 10 / 11 / 61}
+        {"c-0": 0.7 / 61, "c-1": 0.15 * 0.7 / 61, "c-2": 0.15 * 0.7 / 61}
     )
     for chunk_id, score in scores.items():
         assert state.chunks[chunk_id].metadata["rrf_score"] == pytest.approx(score)

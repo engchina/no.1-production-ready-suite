@@ -151,8 +151,8 @@ def test_original_request_runs_both_channels_and_native_wrrf_once() -> None:
     assert spec["search_scorer"] == "WRRF"
     assert spec["vector"]["search_vector"] == [1, 0, 0]
     assert spec["text"]["search_text"] == "合成の質問"
-    assert spec["vector"]["score_weight"] == 10
-    assert spec["text"]["score_weight"] == 1
+    assert spec["vector"]["score_weight"] == 7
+    assert spec["text"]["score_weight"] == 3
     assert "score" in spec["return"]["values"]
 
 
@@ -453,10 +453,10 @@ def test_native_threshold_keeps_text_independent_and_uses_true_cosine(channel: s
     assert selected.threshold["rejected_vector_count"] == 2
     assert selected[0]["native_effective_text_rank"] == 0
     if channel == "hybrid":
-        assert selected[0]["score"] == pytest.approx(10 / 11 / 61)
-        assert selected[1]["score"] == pytest.approx(1 / 11 / 61)
+        assert selected[0]["score"] == pytest.approx(0.7 / 61)
+        assert selected[1]["score"] == pytest.approx(0.3 / 61)
         assert selected[1]["native_effective_vector_rank"] == 0
-        assert selected[2]["score"] == pytest.approx(1 / 11 / 62)
+        assert selected[2]["score"] == pytest.approx(0.3 / 62)
         assert selected[0]["native_wrrf_score"] == 99.85
     assert rows[0]["score"] == 99.85
 

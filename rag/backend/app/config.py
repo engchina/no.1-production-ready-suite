@@ -1296,7 +1296,7 @@ class Settings(
             "過ぎた後に要求が無くても片付ける。0 は間隔なし。"
         ),
     )
-    rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
+    rag_rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
 
     @field_validator("rag_rrf_method_ratio", "rag_rrf_source_ratio")

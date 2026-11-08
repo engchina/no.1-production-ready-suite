@@ -139,7 +139,7 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     assert {c.metadata["document_id"] for c in result.child_chunks} == set(ids[:2])
     fusion = state.retrieval_stages[-1]["rrf"]
     assert [row["weight"] for row in fusion["lists"]] == pytest.approx(
-        [0.7, 3 / 11] if backend == "oracle_native" else [7 / 11, 0.7 / 11, 3 / 11]
+        [0.7, 0.21] if backend == "oracle_native" else [0.49, 0.21, 0.21]
     )
     assert all(row["status"] == "completed" for row in fusion["lists"])
     assert state.filters is not None

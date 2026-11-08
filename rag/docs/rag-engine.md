@@ -729,9 +729,9 @@ Oracle内部で展開した語はAPIが返さないため表示できない。
 
 ### RRFの既定比率
 
-検索方式の既定はベクトル:全文=10:1。Oracleの
+検索方式の既定はベクトル:全文=7:3。Oracleの
 [SEARCH API](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/search.html)
-が定義する `vector.score_weight=10` と `text.score_weight=1` を参考にする。
+の既定は `vector.score_weight=10` と `text.score_weight=1` だが、本システムは全文検索だけが当てた候補も rerank へ残りやすいよう、全文の寄与を高めた値を既定にする。
 [WRRFの説明](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/understand-hybrid-search.html)
 でも同じweightフィールドを使うが、5:1は計算例であり、すべての資料に最適な推奨値ではない。
 アプリでは原生の生順位とSudachiの生順位を同じ一回のRRFへ渡す。
