@@ -639,6 +639,7 @@ def build_engine_settings(
         "RAG_HYBRID_SEARCH_BACKEND": settings.rag_hybrid_search_backend,
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
         "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
+        "RAG_RERANK_SLOT_RATIO": json.dumps(settings.rag_rerank_slot_ratio),
         "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
         "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),

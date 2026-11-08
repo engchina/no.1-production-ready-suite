@@ -66,6 +66,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
 | rerank（Cohere Rerank） | 任意（設定 `RAG_RERANK_ENABLED`。モデル・compartment が未設定なら実行しない） | 原質問の rerank の失敗 → 取得の順で続ける | `DS`（`rerank`）・`ST`（工程「Rerank」の status「失敗・取得順を保持」） | 見せない: 診断の `models.rerank` は、無効・未設定のときと、回答の中で 1 回でも rerank が失敗したとき空にする（#3286）。引用には `rerank_score` が付かない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_rerank_records`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._models_used` |
+| rerank の後の並びの枠と MMR（#4664。`RAG_RERANK_SLOT_RATIO`） | 任意（rerank が有効で点の付いた候補があるとき） | rerank が無効・失敗・有効な点が無い → 枠も MMR も行わず検索の順位のまま。全候補が合格点未満 → 合格点を 0.7 倍にして 1 回だけやり直し、それでも 0 件なら根拠 0 件 | `ST`（工程「Rerank」の「関連度スコアの下限」「並びの枠」）・`retrieval_stages`（`rerank_threshold` の `relaxed_from`・`rerank_slot_order`） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_rerank_records`・`rag/packages/rag_engine/rag_engine/retrieval/rerank_order.py::order_reranked_candidates` |
 | 追加の検索文の rerank（#2161） | 任意 | その検索文を飛ばし、原質問の関連度で補う | `DS`（`rerank_extra_query`）・`ST`（「検索文 N 本の最高値」の N） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
 
 ### 検索の拡張（`answer_engine.py`）

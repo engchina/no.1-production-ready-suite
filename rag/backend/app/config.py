@@ -1307,6 +1307,15 @@ class Settings(
         RrfWeights(vector=value[0], keyword=value[1])
         return value
 
+    rag_rerank_slot_ratio: tuple[int, int] = (7, 3)
+
+    @field_validator("rag_rerank_slot_ratio")
+    @classmethod
+    def _rerank_slot_ratio(cls, value: tuple[int, int]) -> tuple[int, int]:
+        from rag_engine.retrieval.rerank_order import validate_slot_ratio
+
+        return validate_slot_ratio(value)
+
     rag_rrf_k: int = Field(
         default=60,
         ge=1,

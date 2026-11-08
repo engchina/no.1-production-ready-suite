@@ -1,7 +1,9 @@
 """候補の rerank の点数を読む（選択・並べ替えの主キー。#3504）。
 
 rerank の点数がある候補は、それを選択・並べ替えの主キーにし、件数・RRF・語の一致・文書の位置は同点の順か、
-rerank が動かなかったときの代わりにだけ使う。点数は `metadata["rerank"]` に rerank の工程が書く:
+rerank が動かなかったときの代わりにだけ使う。候補の主な並びは rerank の工程が点数の順と検索の順を枠で混ぜて決め
+（`rerank_order`。#4664）、点数で並べ直す工程は枠の外の補助（表示の順・溢れの切り）だけにする。点数は
+`metadata["rerank"]` に rerank の工程が書く:
 
 - ``relevance_score``: 並べ替えの点数（原質問と検索文ごとの rerank の最高値。#2161）
 - ``question_relevance_score``: 原質問だけとの点数（#3504。無い記録は ``relevance_score`` と同じ）
