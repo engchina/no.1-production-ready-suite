@@ -13,7 +13,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from rag_engine.config import Settings
-from rag_engine.dependencies import record_retrieval_stage
+from rag_engine.dependencies import injected_current_section_paths, record_retrieval_stage
 from rag_engine.generation.batch_output_repair import (
     RANGE_INVALID_CODE,
     UNIT_INVALID_CODE,
@@ -27,7 +27,7 @@ from rag_engine.generation.batch_output_repair import (
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.document_inputs import document_groups, document_key, document_priority, order_document_spans
-from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts
+from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
@@ -182,6 +182,14 @@ def prepare_batched_evidence(
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
     context = render([])
+    section_paths: Mapping[str, Sequence[str]] | None = None
+
+    def current_section_paths() -> Mapping[str, Sequence[str]]:
+        """根拠の子の今の章節。原文を分けるときだけ、全部の根拠の分をまとめて 1 回読む。"""
+        nonlocal section_paths
+        if section_paths is None:
+            section_paths = injected_current_section_paths(section_child_ids(spans))
+        return section_paths
 
     def final_prompt(values: Sequence[dict[str, Any]]) -> str:
         values = order_document_spans(values, priority=document_order)
@@ -326,7 +334,7 @@ def prepare_batched_evidence(
                 continue
             # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。字数は入るかどうかの確認だけに使う。
             for value in document:
-                cuts = evidence_cuts(value)
+                cuts = evidence_cuts(value, current_section_paths())
                 offset = 0
                 while offset < len(value["text"]):
                     rest = piece(value, cuts, offset, len(value["text"]))

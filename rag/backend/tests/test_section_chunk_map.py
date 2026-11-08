@@ -91,6 +91,43 @@ def _members(mapping: SectionChunkMap) -> dict[str, list[str]]:
 # ---- 対応の決め方（DB を読まない決定論の関数） ----
 
 
+async def test_edited_sections_become_the_current_section_of_each_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """手で足した章節は、chunk を変えずに対応から各 chunk の今の章節になる（#4682）。"""
+    edited = [
+        _section("s1", "第1章", 1, (1, 2)),
+        _section("s2", "人が足した節", 2, (2, 2)),
+    ]
+    chunks = [
+        _chunk(0, None, "前書き"),
+        _chunk(1, 1, "第1章"),
+        _chunk(2, 2, "人が足した節"),
+    ]
+    mapping = build_section_chunk_map("cs1", edited, chunks, root_title="合成文書")
+    nodes = {node.section_id: node for node in mapping.sections}
+
+    class _Store:
+        def __init__(self, oracle: Any) -> None:
+            del oracle
+
+        async def owner_sections(
+            self, chunk_ids: Sequence[str]
+        ) -> dict[str, tuple[SectionNode, SectionNode | None]]:
+            found = {chunk_id: mapping.owner_of(chunk_id) for chunk_id in chunk_ids}
+            return {
+                chunk_id: (nodes[owner], nodes.get(nodes[owner].parent_section_id or ""))
+                for chunk_id, owner in found.items()
+                if owner is not None
+            }
+
+    monkeypatch.setattr(section_map_service, "SectionMapStore", _Store)
+
+    paths = await section_map_service.evidence_section_paths(["c0", "c1", "c2", "other"])
+
+    assert paths == {"c0": (), "c1": ("第1章",), "c2": ("第1章", "人が足した節")}
+
+
 def test_element_anchors_decide_where_each_section_starts() -> None:
     """同じページに 2 つの章節が始まっても、解析の要素の ID で境目を決める。"""
     sections = [

@@ -1484,6 +1484,10 @@ class AnswerEngine:
                 if self._settings.rag_section_expansion_enabled
                 else None
             ),
+            # 長い根拠を分ける区切りに使う今の章節(#4682)。章節の拡張の設定には関係なく読む。
+            current_section_paths=lambda chunk_ids: run_async(
+                lambda: self._current_section_paths(state, chunk_ids)
+            ),
             # 質問拡張の LLM と並行に、元の質問の検索を先に読む(#1499。結果は変えない)。
             prefetch_search=lambda **kwargs: run_async(
                 lambda: self._prefetch_query_hits(request, state, **kwargs)
@@ -3469,6 +3473,19 @@ class AnswerEngine:
             ),
             file_name=_source_file_name(chunk),
         )
+
+    async def _current_section_paths(
+        self, state: _SearchState, chunk_ids: Sequence[str]
+    ) -> dict[str, tuple[str, ...]]:
+        """根拠の子の chunk の今の章節(#4682)。読めなければ空(取込の章節で区切って回答を続ける)。"""
+        from app.rag.section_map_service import evidence_section_paths
+
+        try:
+            return await evidence_section_paths(chunk_ids, oracle=self._oracle)
+        except Exception as exc:  # noqa: BLE001 - 区切りの補助。取込の章節で続ける。
+            logger.warning("evidence section paths load failed", exc_info=True)
+            state.record_degraded("evidence_section_paths", exc)
+            return {}
 
     async def _section_chunks(
         self,

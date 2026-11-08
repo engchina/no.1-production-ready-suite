@@ -256,6 +256,28 @@ async def test_section_outline_failure_is_recorded(
         assert state.degraded_steps() == []
 
 
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
+async def test_evidence_section_paths_failure_keeps_the_ingested_sections(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    """長い根拠を分ける区切りの今の章節を読めなければ、空(取込の章節で区切る)にして記録に残す(#4682)。"""
+    from app.rag import section_map_service
+
+    async def paths(chunk_ids: Any, **kwargs: Any) -> dict[str, tuple[str, ...]]:
+        if fail:
+            raise Boom(SECRET)
+        return {}
+
+    monkeypatch.setattr(section_map_service, "evidence_section_paths", paths)
+    state = _SearchState()
+
+    assert await _engine(FakeOracle())._current_section_paths(state, ["c1"]) == {}
+    if fail:
+        _assert_degraded(state, "evidence_section_paths")
+    else:
+        assert state.degraded_steps() == []
+
+
 async def test_section_chunks_failure_is_recorded_with_the_read_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
