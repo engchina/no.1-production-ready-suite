@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from rag_engine.adapters.oci import _compact_schema
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_parser_core.image_purpose import ImagePurpose
 
@@ -374,7 +375,8 @@ async def test_pipeline_formal_vlm_and_saved_rules_precedence(
     assert len(reader.calls) == 1
     call = reader.calls[0]
     assert len(call["images"]) == 2
-    assert call["response_schema"] == PictureDescriptionOutput.model_json_schema()
+    # 応答 schema は項目の説明を持たない形で渡す（項目の説明はプロンプトの出力契約にある）。
+    assert call["response_schema"] == _compact_schema(PictureDescriptionOutput.model_json_schema())
     assert call["response_schema_name"] == "picture_description"
     assert f'"vision_image_purpose": "{purpose}"' in call["prompt"]
     if rules_source == "builtin":
