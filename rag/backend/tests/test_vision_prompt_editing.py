@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
-from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+from rag_engine.adapters.oci import _compact_schema, _picture_output_contract, _render_prompt
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description
 from rag_engine.parsing.vision_prompt_rules import (
     MAX_TABLE_ROWS,
@@ -231,8 +231,8 @@ async def test_saved_vision_instructions_reach_serialized_http_payload(
             assert _renumbered(saved[f"picture_description.{target}"], 2) in text
             assert saved["picture_description.rules"] in text
             assert text.endswith(_renumbered(_picture_output_contract(), 3))
-            assert (
-                payload["text"]["format"]["schema"] == PictureDescriptionOutput.model_json_schema()
+            assert payload["text"]["format"]["schema"] == _compact_schema(
+                PictureDescriptionOutput.model_json_schema()
             )
             assert f"table_rows={MAX_TABLE_ROWS}" in text
     # HTTP transport は完全なスタブ。モデルの画像対応能力を実サービスで確認するテストではない。

@@ -56,6 +56,7 @@ from rag_engine.parsing.vision_prompt_rules import (
     TABLE_EXTRACTION_INSTRUCTION,
     VISION_LIST_FIELD_LIMITS,
     refine_image_retrieval_prompt,
+    vision_context_instructions,
 )
 from rag_engine.resources.cache import application_cache
 from rag_engine.resources.deadline import (
@@ -245,6 +246,8 @@ def _render_prompt(metadata: dict[str, Any], *, target_kind: str = "picture", te
         if target_kind == "table"
         else resolve_prompt("picture_description.picture", PICTURE_EXTRACTION_INSTRUCTION)
     )
+    # 周辺の画像・記録の読み方は、その入力があるときだけ対象の指示の後ろに足す。
+    instruction = "\n\n".join([instruction, *vision_context_instructions(metadata)])
     # 保存したテンプレートの Step の数が既定と違っても、対象の指示と出力契約の番号を続けます（#3810）。
     # 番号は差し込み前のテンプレートから数え、metadata などの根拠データの見出しで決めません。
     instruction = continue_prompt_steps(refined, instruction)
@@ -254,7 +257,7 @@ def _render_prompt(metadata: dict[str, Any], *, target_kind: str = "picture", te
 
 def _picture_output_contract() -> str:
     """実際の検証モデルから契約を生成し、プロンプト内の固定 JSON 例との乖離を防ぎます。"""
-    schema = _compact_schema(PictureDescriptionOutput.model_json_schema())
+    schema = _compact_schema(PictureDescriptionOutput.model_json_schema(), keep_field_descriptions=True)
     return (
         "## Step 7: 構造化出力契約に従って返す\n"
         "実行時の構造化出力契約（出力形式は以下を優先。上記の読取・業務説明方針は維持）:\n"
@@ -267,19 +270,28 @@ def _picture_output_contract() -> str:
     )
 
 
-def _compact_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """検証制約を保持し、prompt 用コピーから title 等の重複した注釈だけを除きます。"""
-    compact = {}
+def _compact_schema(schema: dict[str, Any], *, keep_field_descriptions: bool = False, _field: bool = False) -> dict[str, Any]:
+    """検証制約を保持し、prompt 用コピーから title 等の重複した注釈だけを除きます。
+
+    ``keep_field_descriptions`` は項目の説明（出力の項目の意味の正本）を残すときに渡します。
+    モデルの docstring に由来する型の説明は常に除きます。
+    """
+    compact: dict[str, Any] = {}
     for key, value in schema.items():
-        if key in {"title", "description", "default"}:
+        if key in {"title", "default"} or (key == "description" and not (keep_field_descriptions and _field)):
             continue
         if key in {"properties", "$defs"}:
             # description という実際の field 名は注釈ではないため、辞書のキーを保持します。
-            compact[key] = {name: _compact_schema(item) for name, item in value.items()}
+            compact[key] = {
+                name: _compact_schema(item, keep_field_descriptions=keep_field_descriptions, _field=key == "properties")
+                for name, item in value.items()
+            }
         elif isinstance(value, dict):
-            compact[key] = _compact_schema(value)
+            compact[key] = _compact_schema(value, keep_field_descriptions=keep_field_descriptions)
         elif isinstance(value, list):
-            compact[key] = [_compact_schema(item) if isinstance(item, dict) else item for item in value]
+            compact[key] = [
+                _compact_schema(item, keep_field_descriptions=keep_field_descriptions) if isinstance(item, dict) else item for item in value
+            ]
         else:
             compact[key] = value
     return compact

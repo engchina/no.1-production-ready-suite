@@ -109,6 +109,14 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("rules", "rag_engine.parsing.vision_prompt_rules:VISION_EXTRACTION_INSTRUCTION"),
             ("picture", "rag_engine.parsing.vision_prompt_rules:PICTURE_EXTRACTION_INSTRUCTION"),
             ("table", "rag_engine.parsing.vision_prompt_rules:TABLE_EXTRACTION_INSTRUCTION"),
+            (
+                "contextImage",
+                "rag_engine.parsing.vision_prompt_rules:VISION_CONTEXT_IMAGE_INSTRUCTION",
+            ),
+            (
+                "contextRecords",
+                "rag_engine.parsing.vision_prompt_rules:VISION_CONTEXT_RECORDS_INSTRUCTION",
+            ),
         ),
     ),
     PromptStage(

@@ -1015,10 +1015,6 @@ def _vision_metadata(
         "context_source_record_refs": list(context_crop.source_record_refs),
         "nearby_headings": nearby_headings,
         "owning_section": nearby_headings[-1] if nearby_headings else {},
-        "context_constraint": (
-            "所属章は owning_section。next_record の見出しは section_role が section_boundary なら次節の境界であり所属章ではありません。"
-            "subheading_in_owning_section なら同じ節の小見出しで、その本文は主対象の説明として使えます。"
-        ),
         "previous_record": previous_record,
         "next_record": next_record,
         "containing_table": containing_table,

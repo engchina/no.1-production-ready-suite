@@ -43,28 +43,30 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+# 図・画像の読み取りの各項目の意味は Field(description=...) に置く。プロンプトの出力契約とモデルの応答 schema の
+# 両方の正本で、プロンプトの本文に同じ説明を重ねない（判断の原則は vision_prompt_rules.py の読取方針）。
 class ConditionResultPairOutput(_StrictModel):
     """LLM が返す条件ごとの判定結果ペアを表します。"""
 
-    condition: str
-    result: str
-    visible_text: str
+    condition: str = Field(description="条件、状態、前提、選択肢。限定語は原文で。")
+    result: str = Field(description="その条件で起きる表示、動作、必要操作。見えていない結論は書かない。")
+    visible_text: str = Field(description="根拠の短い可視テキスト。")
 
 
 class DiagramEdgeOutput(_StrictModel):
     """図中の接続元、接続先、条件ラベルを保持します。"""
 
-    source: str
-    target: str
-    label: str
+    source: str = Field(description="接続元。diagram_nodes の名称と一致させる。")
+    target: str = Field(description="接続先。diagram_nodes の名称と一致させる。")
+    label: str = Field(description="条件や Yes/No。無ければ空文字。")
 
 
 class ChartSeriesOutput(_StrictModel):
     """Chart の系列名、読み取れる値、傾向を保持します。"""
 
-    name: str
-    values: list[str]
-    trend: str
+    name: str = Field(description="系列名。")
+    values: list[str] = Field(description="確実に読める category=value だけ。目測値は入れない。")
+    trend: str = Field(description="可視範囲の傾向。")
 
 
 # 画面の項目の種類（#2404）。見た目の手がかりで決まる固定の値で、言語資源にはしない（表示の語は言語資源の
@@ -82,9 +84,9 @@ def form_field_kind(value: object) -> str:
 class FormFieldOutput(_StrictModel):
     """Form の項目名、表示値、選択状態、項目の種類を保持します。"""
 
-    name: str
-    value: str
-    state: str
+    name: str = Field(description="項目名。")
+    value: str = Field(description="表示値。空欄なら空文字。")
+    state: str = Field(description="selected / unselected / enabled / disabled / required / optional / unknown。")
     kind: FormFieldKind
 
     @field_validator("kind", mode="before")
@@ -100,38 +102,46 @@ class PictureDescriptionOutput(_StrictModel):
     生成説明の本文にも回答生成にも使われない field は持ちません (#769)。
     """
 
-    surrounding_context: str = ""
-    correction_notes: str = ""
-    main_topic: str
-    visual_kind: str
-    diagram_title: str
-    diagram_nodes: list[str]
-    diagram_edges: list[DiagramEdgeOutput]
-    diagram_summary: str
-    chart_title: str
-    chart_type: str
-    chart_axes: list[str]
-    chart_legends: list[str]
-    chart_series: list[ChartSeriesOutput]
-    chart_summary: str
-    table_headers: list[str]
-    table_rows: list[list[str]]
-    table_summary: str
-    form_fields: list[FormFieldOutput]
-    form_layout: str
-    menu_route: str
-    visible_screen_names: list[str]
-    visible_buttons: list[str]
-    visible_fields: list[str]
-    visible_values: list[str]
-    codes_and_errors: list[str]
-    operation_steps: list[str]
-    condition_result_pairs: list[ConditionResultPairOutput]
-    exception_or_cautions: list[str]
-    answerable_questions: list[str]
-    query_rewrites: list[str]
-    search_keywords: list[str]
-    retrieval_text: str
+    surrounding_context: str = Field(
+        default="", description="対象が属する見出し、表、セル/列、操作ステップ、キャプション、同行説明との関係。"
+    )
+    correction_notes: str = Field(default="", description="周辺文脈や OCR で補足・訂正した点とその根拠、未読箇所、出力の省略。")
+    main_topic: str = Field(description="検索の中心になる画面名、操作名、制度名、機能名、概念名、図表名。")
+    visual_kind: str = Field(
+        description="flowchart / architecture_diagram / chart / table / form / screenshot / photo / logo / watermark / background / decorative / other から一つ。不明なら other。"
+    )
+    diagram_title: str = Field(description="図のタイトル。")
+    diagram_nodes: list[str] = Field(description="読めるノード名や処理名を読める順序で。")
+    diagram_edges: list[DiagramEdgeOutput] = Field(description="図で見える接続。")
+    diagram_summary: str = Field(description="開始点、主要経路、分岐条件、順序、戻り先、完了条件の要約。")
+    chart_title: str = Field(description="グラフのタイトル。")
+    chart_type: str = Field(description="bar / line / pie / scatter / area / combination / other。")
+    chart_axes: list[str] = Field(description="軸名、単位、期間、目盛り。")
+    chart_legends: list[str] = Field(description="凡例名と識別情報。")
+    chart_series: list[ChartSeriesOutput] = Field(description="系列ごとの読み取り。")
+    chart_summary: str = Field(description="主要な傾向と比較。")
+    table_headers: list[str] = Field(description="列見出し。")
+    table_rows: list[list[str]] = Field(
+        description="見出しを除く行を上から下、セルを左から右の順で、同じ行のセルの配列にする。画像セルもその位置に入れ、空セルは空文字で残し、複数行を一行に統合しない。"
+    )
+    table_summary: str = Field(description="表の主題、比較軸、主要な条件と結果の要約。")
+    form_fields: list[FormFieldOutput] = Field(description="入力欄・選択項目の値と状態。")
+    form_layout: str = Field(description="Form 名、セクション、列、グループ、配置関係。")
+    menu_route: str = Field(description="ナビゲーション経路、メニュー階層、パンくず、ページ遷移。")
+    visible_screen_names: list[str] = Field(description="画面名、ページ名、ダイアログ名、フォーム名、帳票名。")
+    visible_buttons: list[str] = Field(description="ボタン、リンク、タブ、メニュー項目、ショートカット表示。")
+    visible_fields: list[str] = Field(description="入力欄、選択項目、チェックボックス、表の列名、設定項目。")
+    visible_values: list[str] = Field(description="読める選択値、状態、日付、件数、設定値、コード。項目名と値をセットで。")
+    codes_and_errors: list[str] = Field(description="エラーコード、各種コード、パラメータ名、条件式、API 名、ファイル名、キー名。")
+    operation_steps: list[str] = Field(description="読み取れる操作手順。順番が読めれば順番を保つ。")
+    condition_result_pairs: list[ConditionResultPairOutput] = Field(description="条件と結果の対応。")
+    exception_or_cautions: list[str] = Field(description="例外、対象外、制限、前提条件、禁止事項、未対応、別途必要な資料や外部確認。")
+    answerable_questions: list[str] = Field(description="この画像で回答できる問い合わせ文を文書の言語で複数。")
+    query_rewrites: list[str] = Field(description="利用者が言いそうな別表現、略称、言い換え。")
+    search_keywords: list[str] = Field(description="重要語、正式名、別名、略称、表記ゆれ、コード、エラー、画面名、項目名。")
+    retrieval_text: str = Field(
+        description="RAG 索引用の本文。最初にこの画像だけで回答できる結論を書き、画面名、操作名、項目名、条件、結果、注意、検索されそうな自然表現を自然文でまとめる。複数ケースは条件→結果を分け、見えていない分岐・値・可否・実施済み結果は書かない。"
+    )
 
 
 class QueryRoutingOutput(_StrictModel):

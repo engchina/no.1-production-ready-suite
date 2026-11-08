@@ -352,7 +352,13 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         for part in parts:
             identity = (str(stage["id"]), str(part["id"]))
             content = str(part["content"])
-            if identity in {("audit", "compactRule"), ("picture_description", "rules")}:
+            if identity in {
+                ("audit", "compactRule"),
+                ("picture_description", "rules"),
+                # 周辺の入力があるときだけ対象の指示（Step 6）の後ろに足す小節。
+                ("picture_description", "contextImage"),
+                ("picture_description", "contextRecords"),
+            }:
                 # 判定の理由の書き方は監査の最後の Step 内の追加規則。
                 assert content.lstrip().startswith("### ")
                 assert not re.search(r"^## ", content, re.M)

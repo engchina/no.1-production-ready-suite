@@ -4444,6 +4444,8 @@ export const ja = {
     "各名前を、その文が問うているか・前提として述べたか・例として挙げたかで分ける指示",
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
+  "settings.answerPrompts.part.contextImage": "周辺の画像があるときに足す指示",
+  "settings.answerPrompts.part.contextRecords": "前後の記録や見出しがあるときに足す指示",
   "settings.answerPrompts.part.rules": "共通の読み取り指示",
   "settings.answerPrompts.part.contract": "出力形式と上限（読み取り専用）",
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",

@@ -68,11 +68,7 @@ class PromptFileTests(unittest.TestCase):
         self.assertIn("現在の状態、未記載の条件、既定値や推奨値へ広げない", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
         self.assertIn("用途が未記録なら", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
         self.assertNotIn("not real production system values", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
-        self.assertIn("- diagram_edges.source:", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
-        self.assertIn("- chart_series.name:", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
-        self.assertIn("- table_rows:", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
-        self.assertIn("- form_fields.name:", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
-        self.assertIn("logo / watermark / background / decorative", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
+        self.assertIn("decorative / background / watermark", DEFAULT_IMAGE_RETRIEVAL_PROMPT)
         from rag_engine.adapters.oci import _picture_output_contract
 
         self.assertIn("diagram_nodes=30", _picture_output_contract())  # 件数上限はコードの契約に置く。
@@ -309,29 +305,29 @@ def test_default_answer_template_keeps_steps_placeholders_and_trust_boundaries()
     assert "標準回答、評価用正解、過去の担当者判断は入力に含まれません" in rendered
 
 
-def test_new_image_default_describes_all_fields_without_a_competing_json_shape():
-    import re
-
+def test_new_image_default_defers_field_meanings_to_the_output_contract():
     from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
     from rag_engine.models.llm import PictureDescriptionOutput
 
     editable = prompt_files.PROMPT_FILES[IMAGE_RETRIEVAL_PROMPT_KEY].default_content
     assert editable is not None
-    described = set(re.findall(r"^- ([a-z_]+)(?:\.[a-z_]+)?:", editable, re.M))
-    assert described == set(PictureDescriptionOutput.model_fields)
+    # 項目の一覧を本文に重ねない（意味は出力契約の項目の説明が持つ）。
+    for field in PictureDescriptionOutput.model_fields:
+        assert f"- {field}:" not in editable
     assert "\n{\n" not in editable
     assert '"main_topic":' not in editable
     assert "出力する項目・型・件数上限は実行時の固定契約に従ってください" in editable
+    contract = _picture_output_contract()
     for meaning in (
         "接続元",
         "接続先",
         "確実に読める category=value",
         "同じ行のセルの配列",
-        "原文で",
+        "限定語は原文で",
         "実施済み結果は書かない",
     ):
-        assert meaning in editable or meaning in DEFAULT_IMAGE_RETRIEVAL_PROMPT
-    assert _render_prompt({}, template=editable).endswith(_picture_output_contract())
+        assert meaning in contract, meaning
+    assert _render_prompt({}, template=editable).endswith(contract)
 
 
 def test_existing_custom_json_example_is_preserved_during_rendering():
