@@ -94,7 +94,6 @@ export function DocumentExtractionExportPanel({
           <TimedLoadingState
             label={t("flow.extractionExport.loading")}
             operationKey="document-extraction-export-load"
-            framed={false}
             testId="document-extraction-export-loading"
           >
             <ListSkeleton rows={formats.length} rowClassName="h-[6rem]" />

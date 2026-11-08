@@ -107,7 +107,7 @@ function CitationSourcePreview({
   }
   if (office) {
     if (!recipeId || !chunkSetId) return <FormStatus tone="warning" message={t("search.previewSource.missing")} />;
-    if (source.isPending) return <TimedLoadingState label={t("search.previewSource.loading")} operationKey={`citation-source-${chunk.chunk_id}`} framed={false}><Skeleton className="h-24 w-full" /></TimedLoadingState>;
+    if (source.isPending) return <TimedLoadingState label={t("search.previewSource.loading")} operationKey={`citation-source-${chunk.chunk_id}`}><Skeleton className="h-24 w-full" /></TimedLoadingState>;
     if (source.isError) {
       if (isSourceVersionStale(source.error)) return <SourceVersionStaleNotice />;
       return <ApiErrorState error={source.error} fallback={t("search.previewSource.error")} onRetry={() => { void source.refetch(); }} />;

@@ -123,7 +123,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
   };
   return <section aria-label={t("syntheticRun.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-4" data-testid="synthetic-run-panel">
     <h3 className="font-semibold">{t("syntheticRun.title")}</h3>
-    {submitting && <ProcessingIndicator active label={t("syntheticRun.submitting")} activityIcon="none" placement="action" testId="synthetic-submitting" />}
+    {submitting && <ProcessingIndicator active label={t("syntheticRun.submitting")} activityIcon="none" placement="action" surface="plain" testId="synthetic-submitting" />}
     {error && !feedback?.failed && <Banner severity="warning">{t("syntheticRun.stale")}{run?.checked_at ? ` ${formatDateTime(run.checked_at)}` : ""}</Banner>}
     {submitting ? null : !run ? !error && <p className="text-sm text-fg-muted">{t("syntheticRun.notStarted")}</p> : <>
       <div role="status" data-testid="synthetic-run-status">

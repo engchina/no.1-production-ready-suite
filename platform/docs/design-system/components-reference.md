@@ -1465,6 +1465,7 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
 - 形のある Skeleton は `aria-hidden` です。**読み込み中の文言と経過時間は `TimedLoadingState` が出す**ので、必ずその子に置きます（UX 契約 messaging.md §3.6 / §3.7）。
 - `DataTable` の `loading` の行・`LoadingState` の棒も同じ `SKELETON_CLASS` を使います。`DataTable` の `loading` は、`loadingRows` を省略すると `visibleRows` の行数（無ければ 3 行）の Skeleton で高さを予約します。
 - 同じ取得の経過時間は 1 か所だけに出します。2 つの領域が同じ取得を待つときは、片方は形だけ（`TableSkeleton` を `TimedLoadingState` で包まない）にします。
+- **面は灰色の枠で 1 つ**です（#4649）。`TimedLoadingState` は常に灰色の枠（`PROCESSING_FRAME_CLASS` = `rounded-md border border-border bg-surface-sunken`）で全幅を使い、枠を外す指定を持ちません。単独の `ProcessingIndicator`（操作の進行・再読み込みの行を含む）も既定で同じ枠（`surface="framed"`）を持ち、すでに灰色の枠を持つ部品の中に入れるときだけ `surface="plain"` にします。処理の名前と経過時間の並びは置かれた領域の幅（`@container/processing`）で切り替わり、狭い列・375px では経過時間を処理の名前の下へ回します。`LoadingState`・`ListPicker`・`ChatHistoryList`・`LoadMoreFooter` の再読み込みの行も同じ面です。e2e は `platform/packages/ui/e2e/loading-checks.ts` の `findLoadingStandardViolations` で確かめます。
 - **位置と幅は全画面で 1 つ**です（#2510）。影響を受ける領域の先頭に、領域と同じ幅の行で出し、その下を内容の形の Skeleton で覆います。画面の中央に浮かせる・内容の幅のカードにする・ページの上に重ねる・見出しの文言を差し替える・右寄せのバッジにする、はしません。
   - ページ全体が使えない初期処理（認証の確認・DB の状態の確認・画面のコードの読み込み）は `PageLoadingState`（全幅の `PageBody` の先頭の行 + 本文の形の Skeleton。画面と同じく常に全幅で、`wide` は渡さない。#3311。`AppShell` の外では `<main className="min-h-screen bg-canvas">` で包む）。
   - 汎用の行の形は `LoadingState`（`label` 必須。行 + 棒の Skeleton）。検索つきの選択欄の取得中は、一覧の先頭に同じ形の行を出します（部品が持つ）。

@@ -34,7 +34,6 @@ export function SavedAnswerRecord({
       <TimedLoadingState
         label={t("search.history.detailLoading")}
         operationKey="search-history-detail-load"
-        framed={false}
         testId="search-history-detail-loading"
       >
         <Skeleton className="h-24 w-full" />

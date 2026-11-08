@@ -251,7 +251,6 @@ export function SchemaReferencePanel({
           label={t("nl2sql.schema.loading")}
           operationKey="schema-reference-load"
           placement="panel"
-          framed={false}
           testId="schema-reference-loading"
         >
           <Skeleton className="h-9" />
@@ -262,7 +261,6 @@ export function SchemaReferencePanel({
       {!loading && refreshing && showRefreshProgress ? (
         <SchemaRefreshProcessing
           placement="panel"
-          className="rounded-md border border-border bg-surface px-3 py-2"
           testId="schema-reference-refreshing"
         />
       ) : null}

@@ -251,7 +251,6 @@ export function ChatSqlExecutionResult({
         <TimedLoadingState
           label={t("chat.execute.receiving")}
           operationKey={`sql-chat-receive-${turn.job_id}`}
-          framed={false}
           testId="sql-chat-execution-receiving"
         >
           <TableSkeleton rows={3} columns={3} />

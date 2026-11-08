@@ -440,7 +440,6 @@ export function EvaluationPage() {
               label={t("common.loading")}
               operationKey="quality-evaluation-conditions"
               placement="panel"
-              framed={false}
               testId="quality-evaluation-conditions-loading"
             >
               <FormSkeleton fields={4} title={false} />
@@ -857,7 +856,6 @@ export function EvaluationPage() {
                 label={t("qualityEvaluation.details.loading")}
                 operationKey={`quality-evaluation-results-${currentJobId}`}
                 placement="result"
-                framed={false}
                 testId="quality-evaluation-results-loading"
               >
                 <TableSkeleton columns={6} className="hidden md:block" />
@@ -920,7 +918,6 @@ export function EvaluationPage() {
                 label={t("qualityEvaluation.recent.loading")}
                 operationKey="quality-evaluation-recent-jobs"
                 placement="panel"
-                framed={false}
                 testId="quality-evaluation-recent-jobs-loading"
               >
                 <ListSkeleton rows={5} rowClassName="h-[5.5rem]" className="max-h-[17.5rem] overflow-hidden" />

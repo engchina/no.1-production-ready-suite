@@ -322,7 +322,6 @@ function HistoryList({
                 operationKey="history-list-load"
                 placement="panel"
                 testId="history-list-loading"
-                framed={false}
                 // 初回の読込は PageHeader の「最新情報を取得」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。
                 activityIcon="none"
               >

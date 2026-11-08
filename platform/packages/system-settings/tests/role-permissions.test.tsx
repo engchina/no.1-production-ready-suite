@@ -79,7 +79,7 @@ describe("RolePermissionsPage", () => {
     const html = render(<RolePermissionsPage api={api} canManage targets={ragTargets} />);
     expect(html).toContain("権限管理");
     expect(html).toContain('data-testid="security-permissions-loading"');
-    expect(html).toContain("権限を読込中");
+    expect(html).toContain("権限を読み込んでいます");
     expect(html).toContain('data-testid="security-permissions-actions"');
     expect(html).toContain('data-testid="security-permissions-search"');
     // 全幅の表（A 型。#4635）。利用できる対象の件数は対象の種類ごとの列に出す。

@@ -808,7 +808,6 @@ export function FeedbackManagementPage() {
       label={t("common.processing.refreshing")}
       operationKey="feedback-management-refresh"
       placement="workspace"
-      className="rounded-md border border-border bg-surface-sunken px-3 py-2"
       testId="feedback-management-refresh-processing"
       activityIcon="none"
     />
@@ -973,7 +972,6 @@ export function FeedbackManagementPage() {
                   label={t(feedback ? "feedbackManagement.entries.refreshing" : "feedbackManagement.entries.loading")}
                   operationKey={profileName}
                   placement="workspace"
-                  className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   testId="feedback-management-entries-processing"
                   // ボタンが回っていないとき（業務プロファイルの切り替えなど）は、この表示がスピナーを出す（#819）。
                   activityIcon={refreshOrigin === "entries" ? "none" : "spinner"}
@@ -1905,7 +1903,6 @@ function FeedbackEntriesListSkeleton({ timed = false }: { timed?: boolean }) {
       placement="panel"
       className="content-start"
       testId="feedback-management-entries-loading"
-      framed={false}
       activityIcon="none"
     >
       {skeleton}
@@ -1943,7 +1940,6 @@ function SettingsFormSkeleton({ label, testId }: { label: string; testId: string
       placement="panel"
       className="content-start"
       testId={testId}
-      framed={false}
       activityIcon="none"
     >
       <FormSkeleton fields={2} title={false} />

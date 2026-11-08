@@ -936,7 +936,6 @@ export function TableManagementPage() {
                     label={t("tableMgmt.workspace.refreshing")}
                     operationKey="table-list-refresh"
                     placement="workspace"
-                    className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                     testId="table-management-workspace-processing"
                     activityIcon={manualRefresh.pending ? "none" : "spinner"}
                   />

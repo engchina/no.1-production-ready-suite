@@ -33,8 +33,8 @@ export const USERS_ROLES_MESSAGES = {
   // 一覧 + 詳細（ListDetailLayout）の一覧の列の幅の分割線（#2282）。
   "security.common.loadError":
     "読み込みに失敗しました。接続状態と権限を確認して再試行してください。",
-  "security.users.loading": "ユーザーを読込中",
-  "security.roles.loading": "ロールを読込中",
+  "security.users.loading": "ユーザーを読み込んでいます",
+  "security.roles.loading": "ロールを読み込んでいます",
   // 一覧 + 詳細の詳細の上端の「前へ / 次へ」（#2282）。
   "security.common.no": "いいえ",
   "security.common.none": "なし",

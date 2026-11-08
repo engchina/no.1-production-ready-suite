@@ -685,7 +685,7 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
   const targetSelector = (<>
 
             {agents.isLoading ? (
-              <TimedLoadingState label={t("chat.agent.loading")} framed={false} testId="chat-agents-loading">
+              <TimedLoadingState label={t("chat.agent.loading")} testId="chat-agents-loading">
                 {/* ラベルと欄の寸法を予約する（RAG・NL2SQL の対象の欄と同じ形。#1153）。 */}
                 <div className="space-y-1.5" aria-hidden="true">
                   <Skeleton className="h-4 w-32" />
@@ -827,7 +827,7 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
       >
         {threadLoading && !pending ? (
           // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（3 製品で同じ。#1153）。
-          <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
+          <TimedLoadingState label={t("chat.loading")} testId="chat-thread-loading">
             <ChatSkeleton />
           </TimedLoadingState>
         ) : agentsLoading ? (

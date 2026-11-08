@@ -420,7 +420,6 @@ export function DocumentProcessingConfigPanel({
         <TimedLoadingState
           label={t("flow.buildConfig.loading")}
           operationKey="document-build-config-load"
-          framed={false}
           className="mt-3"
           testId="document-build-config-loading"
         >

@@ -277,7 +277,6 @@ export function DocumentRecipeManager({
         <TimedLoadingState
           label={t("documents.recipes.loading")}
           operationKey="document-recipes-load"
-          framed={false}
           testId="document-recipes-loading"
         >
           <Skeleton className="h-9 w-48" />
@@ -631,6 +630,7 @@ function QueueWaitNote({ wait }: { wait: QueueWaitView }) {
 
 function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
   if (step?.status === "RUNNING") {
+    // eslint-disable-next-line no-restricted-syntax -- 工程の状態の印（読み込みの表示ではない）。
     return <Spinner size={14} />;
   }
   if (step?.status === "FAILED") return <AlertCircle size={14} aria-hidden />;
@@ -651,6 +651,7 @@ function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView
       className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}
     >
       {/* 回すアイコンは共有の Spinner（全周トラック・180 度対称のアーク・reduced-motion 対応。#395 / #1180） */}
+      {/* eslint-disable-next-line no-restricted-syntax -- 実行の状態の badge の印（読み込みの表示ではない）。 */}
       {status.spin && spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
       {status.text}
     </span>

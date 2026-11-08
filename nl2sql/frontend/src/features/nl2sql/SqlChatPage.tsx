@@ -650,7 +650,6 @@ export function SqlChatPage() {
             <TimedLoadingState
               label={t("chat.profile.loading")}
               operationKey="sql-chat-profiles-load"
-              framed={false}
               testId="sql-chat-profiles-loading"
             >
               {/* ラベルと欄の寸法を予約する。 */}
@@ -893,7 +892,6 @@ export function SqlChatPage() {
             <TimedLoadingState
               label={t("chat.loading")}
               operationKey="sql-chat-conversation-load"
-              framed={false}
               testId="sql-chat-conversation-loading"
             >
               <ChatSkeleton />

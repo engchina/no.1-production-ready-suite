@@ -1605,7 +1605,6 @@ export function ChatClient() {
               <TimedLoadingState
                 label={t("chat.searchAnswerProfile.loading")}
                 operationKey="chat-search-answer-profiles-load"
-                framed={false}
                 testId="chat-search-answer-profiles-loading"
               >
                 <SearchAnswerProfileSelectSkeleton />
@@ -1761,7 +1760,6 @@ export function ChatClient() {
               <TimedLoadingState
                 label={t("chat.messages.loading")}
                 operationKey="chat-conversation-load"
-                framed={false}
                 testId="chat-messages-loading"
               >
                 {/* 質問と回答の吹き出しの寸法を予約する（3 製品で同じ形。#1153）。 */}

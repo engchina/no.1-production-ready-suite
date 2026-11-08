@@ -191,7 +191,6 @@ export function GlobalRulesPage() {
                 label={t("common.processing.refreshing")}
                 operationKey="global-rules-refresh"
                 placement="workspace"
-                className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                 testId="global-rules-workspace-processing"
                 activityIcon="none"
               />

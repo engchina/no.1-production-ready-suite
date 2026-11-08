@@ -247,7 +247,6 @@ function LabelSetTable({
       <TimedLoadingState
         label={t("evaluation.calibration.sets.loading")}
         operationKey="calibration-label-sets"
-        framed={false}
         testId="calibration-label-sets-loading"
       >
         <Skeleton className="h-10 w-full" aria-hidden="true" />
@@ -455,7 +454,6 @@ function CreateLabelSetForm({
               <TimedLoadingState
                 label={t("evaluation.calibration.create.jobsLoading")}
                 operationKey="calibration-sources"
-                framed={false}
                 testId="calibration-sources-loading"
               >
                 <Skeleton className="h-10 w-full" aria-hidden="true" />

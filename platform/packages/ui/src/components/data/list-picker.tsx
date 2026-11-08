@@ -581,7 +581,6 @@ export function ListPicker({
         <TimedLoadingState
           label={labels.loading}
           operationKey={`${id}-load`}
-          framed={false}
           className="content-start"
           testId={testId ? `${testId}-loading` : undefined}
         >

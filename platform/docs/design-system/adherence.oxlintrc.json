@@ -84,6 +84,10 @@
             "message": "回転用の lucide のアイコン（Loader / Loader2 / LoaderCircle / LoaderPinwheel）を使わない。欠けた円弧は回すと重心が動いて上下に揺れて見える。処理中の表示は共有の Spinner、ボタンは loading、領域は ProcessingIndicator / TimedLoadingState を使う（docs/design-system/README.md §4「Spinner」、#1180）。"
           },
           {
+            "selector": "JSXOpeningElement[name.name='Spinner']",
+            "message": "packages/ui の外で Spinner を直接置かない。領域の読み込みは TimedLoadingState（灰色の枠・経過時間・内容の形の Skeleton）、操作の進行は ProcessingIndicator、ボタンは loading を使う（docs/agents/ui.md「読み込み中」、#4649）。項目の状態の印（実行中の badge など）だけは、理由を添えて行ごとに除外する。"
+          },
+          {
             "selector": "Property[key.name=/^animation(?:Name)?$/] :matches(Literal[value=/(?:^|[\\s,])spin(?![\\w-])/], TemplateElement[value.raw=/(?:^|[\\s,])spin(?![\\w-])/])",
             "message": "inline style の animation で回転（spin）を書かない。処理中の表示は共有の Spinner、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」、#1180）。"
           },

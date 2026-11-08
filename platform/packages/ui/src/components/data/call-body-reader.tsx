@@ -85,7 +85,7 @@ export function useCallBodyContent(content: CallContent, spanId: string | undefi
       <p ref={statusRef} tabIndex={-1} className="flex min-w-0 items-start gap-1.5 text-xs text-fg-muted" role="status"><span className="pr-icon-line"><Info size={14} aria-hidden="true" /></span><span className="min-w-0">{incomplete ? labels.availableOnly : state?.status === "complete" ? labels.loaded(state.end, reference.character_count) : state?.status === "pending" && !state.error ? labels.pending : labels.preview}</span></p>
       {state?.error ? <Banner severity="danger">{labels.unavailable}</Banner> : null}
       {!loaded ? load && spanId ? <div><Button size="sm" variant="secondary" icon={state?.error || state?.status === "pending" ? RefreshCw : BookOpen} loading={loading} onClick={() => void read()}>{state?.error || state?.status === "pending" ? labels.retry : incomplete ? labels.inspect : state?.next ? labels.more : labels.read}</Button></div> : <p className="text-xs text-fg-muted">{labels.noReader}</p> : null}
-      {loading ? <TimedLoadingState label={labels.loading} activityIcon="none" framed={false} operationKey={key}><Skeleton className="h-6 w-full" /></TimedLoadingState> : null}
+      {loading ? <TimedLoadingState label={labels.loading} activityIcon="none" operationKey={key}><Skeleton className="h-6 w-full" /></TimedLoadingState> : null}
     </> : null}
   </div>;
   return {content: effective, controls};

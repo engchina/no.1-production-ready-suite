@@ -554,7 +554,6 @@ export function RequirementAnswerProgress({ active, onSkip }: { active: boolean;
       label={t("nl2sql.clarification.loading.answer")}
       placement="panel"
       activityIcon="none"
-      className="rounded-md border border-border bg-surface-sunken px-3 py-2"
       testId="nl2sql-guided-answer-progress"
       onCancel={onSkip}
       labels={{ cancel: t("chat.requirement.skip") }}

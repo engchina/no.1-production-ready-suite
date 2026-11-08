@@ -13,7 +13,7 @@ import {
 
 import { t } from "./messages";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "./fileDropzone";
-import { cn, ClearActionButton } from "@production-ready/ui";
+import { cn, ClearActionButton, ProcessingIndicator } from "@production-ready/ui";
 import {
   FieldError,
   FieldLabel,
@@ -229,6 +229,7 @@ export function FileDropzone({
             aria-hidden="true"
           >
             {loading ? (
+              // oxlint-disable-next-line design-system/restricted-syntax -- 欄の中の読み込みの印（経過時間は欄の下の ProcessingIndicator が出す）。
               <Spinner size={16} />
             ) : (
               <Icon size={16} />
@@ -296,6 +297,16 @@ export function FileDropzone({
           />
         ) : null}
       </div>
+      {/* 読み込み（アップロード）の間は、ほかの処理中と同じ灰色の枠と経過時間を欄の下に出す（#4649）。回る印は欄の中の 1 つだけ。 */}
+      {loading ? (
+        <ProcessingIndicator
+          active
+          label={loadingText}
+          placement="action"
+          activityIcon="none"
+          testId={dataTestId ? `${dataTestId}-processing` : undefined}
+        />
+      ) : null}
       {hint ? (
         <p id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
           {hint}

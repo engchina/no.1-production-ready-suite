@@ -411,7 +411,6 @@ export function EvaluationClient() {
                   <TimedLoadingState
                     label={t("searchAnswerProfiles.loading")}
                     operationKey="evaluation-profiles-load"
-                    framed={false}
                   >
                     <SearchAnswerProfileSelectSkeleton />
                   </TimedLoadingState>
@@ -719,7 +718,6 @@ function SuiteSummary({ query }: { query: ReturnType<typeof useEvaluationSetting
           <TimedLoadingState
             label={t("settings.loading")}
             operationKey="evaluation-suite-load"
-            framed={false}
             testId="evaluation-suite-loading"
           >
             <Skeleton className="h-5 w-32" aria-hidden="true" />
@@ -823,7 +821,6 @@ function CompareOption({
           <TimedLoadingState
             label={t("searchAnswerProfiles.loading")}
             operationKey="evaluation-compare-profiles-load"
-            framed={false}
             testId="evaluation-compare-profiles-loading"
           >
             <SearchAnswerProfileSelectSkeleton />

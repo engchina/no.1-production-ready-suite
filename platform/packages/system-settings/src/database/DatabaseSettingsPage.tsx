@@ -14,6 +14,7 @@ import {
   ProcessingIndicator,
   SecretField,
   SelectField,
+  FormSkeleton,
   Skeleton,
   StatusBadge,
   TextField,
@@ -409,7 +410,7 @@ export function DatabaseSettingsPage({
             testId="settings-database-loading"
           >
             <Skeleton className="h-20 w-full rounded-lg" />
-            <Skeleton className="h-[33rem] w-full rounded-lg" />
+            <FormSkeleton fields={7} />
           </TimedLoadingState>
         )}
       </PageBody>
@@ -1056,7 +1057,6 @@ function AdbManagementCard({
           <TimedLoadingState
             label={t("settings.adb.loading")}
             operationKey="settings-adb-info"
-            framed={false}
             testId="settings-adb-loading"
           >
             <Skeleton className="h-24 w-full" />

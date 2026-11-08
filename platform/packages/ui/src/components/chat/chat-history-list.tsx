@@ -127,7 +127,7 @@ export function ChatHistoryList({
   if (waiting) return <ListSkeleton rows={3} rowClassName="h-12" testId={testIds?.skeleton} />;
   if (loading) {
     return (
-      <TimedLoadingState label={labels.loading} operationKey={operationKey} framed={false} testId={testIds?.loading}>
+      <TimedLoadingState label={labels.loading} operationKey={operationKey} testId={testIds?.loading}>
         <ListSkeleton rows={3} rowClassName="h-12" />
       </TimedLoadingState>
     );

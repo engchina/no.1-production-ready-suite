@@ -452,17 +452,15 @@ function ClarificationConfirming({
           ))}
         </dl>
       ) : null}
-      <div className="rounded-md border border-border bg-surface-sunken p-4">
-        <ProcessingIndicator
-          active
-          operationKey={operationKey}
-          label={labels.confirming}
-          placement="panel"
-          testId={`${testId}-progress`}
-          onCancel={onSkip}
-          labels={{ cancel: labels.skip }}
-        />
-      </div>
+      <ProcessingIndicator
+        active
+        operationKey={operationKey}
+        label={labels.confirming}
+        placement="panel"
+        testId={`${testId}-progress`}
+        onCancel={onSkip}
+        labels={{ cancel: labels.skip }}
+      />
     </div>
   );
 }

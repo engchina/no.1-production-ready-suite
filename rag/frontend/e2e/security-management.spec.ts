@@ -518,7 +518,7 @@ test("管理画面の読込表示は対象を短く示して一覧の幅に収�
   const pending = new Promise<void>(resolve => { release = resolve; });
   await page.route("**/api/security/**", async route => { await pending; await route.fallback(); });
   try {
-    for (const [kind, label] of [["users", "ユーザーを読込中"], ["roles", "ロールを読込中"], ["permissions", "権限を読込中"]]) {
+    for (const [kind, label] of [["users", "ユーザーを読み込んでいます"], ["roles", "ロールを読み込んでいます"], ["permissions", "権限を読み込んでいます"]]) {
       await page.goto(`/settings/security/${kind}`);
       const loading = page.getByTestId(`security-${kind}-loading`);
       await expect(loading.locator("[data-processing-label]")).toHaveText(label);

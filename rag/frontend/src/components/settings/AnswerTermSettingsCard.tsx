@@ -20,7 +20,7 @@ export function AnswerTermSettingsCard({ field = "runtime_terms_answer_enabled" 
       <CardDescription>{t(`settings.answering.${label}Hint`)}</CardDescription>
     </CardHeader>
     <CardContent>
-      {query.isPending ? <TimedLoadingState label={t("settings.answering.loading")} operationKey="answer-term-settings" framed={false}><FormSkeleton fields={1} /></TimedLoadingState> : null}
+      {query.isPending ? <TimedLoadingState label={t("settings.answering.loading")} operationKey="answer-term-settings"><FormSkeleton fields={1} /></TimedLoadingState> : null}
       {query.isError ? <ApiErrorState error={query.error} fallback={t("settings.answering.loadError")} onRetry={() => void query.refetch()} /> : null}
       {query.data ? <AnswerTermForm field={field} key={String(query.data[field] ?? false)} saved={query.data[field] ?? false} /> : null}
     </CardContent>

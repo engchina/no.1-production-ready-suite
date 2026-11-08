@@ -84,7 +84,6 @@ export function ExtractionFieldsEditor() {
       <TimedLoadingState
         label={t("settings.extractionFields.loading")}
         operationKey="extraction-fields-load"
-        framed={false}
         testId="extraction-fields-loading"
       >
         <FormSkeleton fields={2} />

@@ -166,6 +166,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   // 「最新情報を取得」を押した読み直しの間だけ、そのボタンを回す。初回の読込・エラーからの再試行は
   // 押していないので、一覧の読込表示がスピナーを出し、「最新情報を取得」は disabled だけにする（#819）。
   const [refreshRequested, setRefreshRequested] = useState(false);
+  const initialLoading = loading && !refreshRequested;
   const [busy, setBusy] = useState(false);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -843,19 +844,19 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
               }
               count={{ ...roleListCount, live: false, testId: "security-roles-count" }}
             />
-            {loading ? (
+            {/* 再読み込みは前の行を残し、ボタンの loading だけで示す。経過時間と Skeleton は最初の読み込みだけ（#4649）。 */}
+            {initialLoading ? (
               <ProcessingIndicator
                 active
                 label={t("security.roles.loading")}
                 operationKey="security-roles-load"
                 placement="panel"
                 testId="security-roles-loading"
-                activityIcon={refreshRequested ? "none" : "spinner"}
               />
             ) : null}
             <div className="grid gap-2">
               <DataTable
-                loading={loading}
+                loading={initialLoading}
                 rows={roleList.pageItems}
                 sort={sort}
                 onSortChange={(next) => {

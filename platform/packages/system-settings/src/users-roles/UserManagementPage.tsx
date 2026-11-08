@@ -183,6 +183,7 @@ export function UserManagementPage({
   // 「最新情報を取得」を押した読み直しの間だけ、そのボタンを回す。初回の読込・エラーからの再試行は
   // 押していないので、一覧の読込表示がスピナーを出し、「最新情報を取得」は disabled だけにする（#819）。
   const [refreshRequested, setRefreshRequested] = useState(false);
+  const initialLoading = loading && !refreshRequested;
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -1177,19 +1178,19 @@ export function UserManagementPage({
               }
               count={{ ...userListCount, live: false, testId: "security-users-count" }}
             />
-            {loading ? (
+            {/* 再読み込みは前の行を残し、ボタンの loading だけで示す。経過時間と Skeleton は最初の読み込みだけ（#4649）。 */}
+            {initialLoading ? (
               <ProcessingIndicator
                 active
                 label={t("security.users.loading")}
                 operationKey="security-users-load"
                 placement="panel"
                 testId="security-users-loading"
-                activityIcon={refreshRequested ? "none" : "spinner"}
               />
             ) : null}
             <div className="grid gap-2">
               <DataTable
-                loading={loading}
+                loading={initialLoading}
                 rows={userList.pageItems}
                 sort={sort}
                 onSortChange={(next) => { if (!operationBusy) setSort(next); }}

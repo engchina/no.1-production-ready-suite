@@ -558,7 +558,7 @@ export function SqlToQuestionPage() {
         >
           <div aria-busy={reverseLoading} className="grid min-w-0 gap-4" data-testid="sql-to-question-analysis-content">
           {reverseLoading && (
-            <TimedLoadingState label={t("sqlToQuestion.analysis.loading")} placement="result" framed={false} testId="sql-to-question-analysis-loading">
+            <TimedLoadingState label={t("sqlToQuestion.analysis.loading")} placement="result" testId="sql-to-question-analysis-loading">
               <Skeleton className="h-5 w-40" aria-hidden="true" />
               <Skeleton className="h-8 w-full" aria-hidden="true" />
               <Skeleton className="h-80 w-full" aria-hidden="true" />

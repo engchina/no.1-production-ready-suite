@@ -18,6 +18,7 @@ import {
   findToolbarMisalignment,
   measureHorizontalOverflow,
 } from "../../../../platform/packages/ui/e2e/layout-checks";
+import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseGateReady(page);
@@ -2234,6 +2235,8 @@ for (const scenario of scenarios) {
     await expect(skeleton).toHaveAttribute("data-processing-placement", "tab");
     await expect(skeleton).toContainText(loadingLabel);
     await expect(skeleton.getByRole("timer")).toHaveAccessibleName(/経過時間 00:0\d/);
+    // 読み込み中の表示の基準の見本（#4649）: 灰色の枠・経過時間・領域の全幅・あふれない・Skeleton を持つ、を 1 つだけ。
+    expect(await findLoadingStandardViolations(page, { expectCount: 1, skeleton: true })).toEqual([]);
     await expect(page.getByRole("heading", { level: 1, name: objectName })).toBeVisible();
     await expect(page.getByRole("tab", { name: "DDL" })).toBeVisible();
     await expect(page.getByRole("button", { name: "コピー" })).toHaveCount(0);

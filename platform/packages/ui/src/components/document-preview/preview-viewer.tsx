@@ -651,6 +651,7 @@ export function PreviewViewer({
                 label={labels.pageLoading}
                 operationKey={`page:${pageNumber}`}
                 testId="preview-page-loading"
+                surface="plain"
               />
             </div>
           </div>

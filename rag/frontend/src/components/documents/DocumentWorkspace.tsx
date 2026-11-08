@@ -529,7 +529,7 @@ export function DocumentWorkspace({
   const extractionPending = hasSelectedRecipeExtraction && extractionJsonQuery.isPending;
   const extractionError = extractionJsonQuery.isError && !extractionJsonQuery.data;
   const extractionState = (content: ReactNode) => extractionPending ? (
-    <TimedLoadingState label={t("flow.extractionExport.loading")} operationKey="document-extraction-load" framed={false} testId="document-extraction-loading"><ListSkeleton rows={3} /></TimedLoadingState>
+    <TimedLoadingState label={t("flow.extractionExport.loading")} operationKey="document-extraction-load" testId="document-extraction-loading"><ListSkeleton rows={3} /></TimedLoadingState>
   ) : extractionError ? <ApiErrorState fallback={t("flow.extractionExport.loadError")} error={extractionJsonQuery.error} onRetry={() => void extractionJsonQuery.refetch()} /> : content;
   const scopeStatus = inspectorTab === "chunks" ? chunkWindowQuery.data?.scope_status : extractionJsonQuery.data?.scope_status;
   const unaligned = currentTextRange && scopeStatus && !["exact", "page"].includes(scopeStatus);
@@ -2129,7 +2129,6 @@ function IngestionJobsPanel({
       <TimedLoadingState
         label={t("flow.jobs.loading")}
         operationKey="document-jobs-load"
-        framed={false}
         testId="document-jobs-loading"
       >
         <Skeleton className="h-24 w-full rounded-md" />
@@ -2584,7 +2583,6 @@ function IngestionSegmentsPanel({
       <TimedLoadingState
         label={t("flow.segments.loading")}
         operationKey="document-segments-load"
-        framed={false}
         testId="document-segments-loading"
       >
         <Skeleton className="h-24 w-full rounded-md" />
@@ -3160,7 +3158,6 @@ function DocumentChunksPanel({
       <TimedLoadingState
         label={t("flow.chunks.loading")}
         operationKey="document-chunks-load"
-        framed={false}
         testId="document-chunks-loading"
       >
         <ListSkeleton

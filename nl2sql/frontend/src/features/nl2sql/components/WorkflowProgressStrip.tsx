@@ -124,6 +124,7 @@ function StepIcon({
   spinning: boolean;
 }) {
   if (spinning) {
+    // oxlint-disable-next-line design-system/restricted-syntax -- 工程の状態の印（経過時間は帯の ProcessingIndicator が出す）。
     return <Spinner size={14} />;
   }
   if (status === "done") return <Check size={14} aria-hidden="true" />;
@@ -194,6 +195,7 @@ export function WorkflowProgressStrip({
             aria-hidden="true"
             data-icon-align-skip=""
           >
+            {/* oxlint-disable-next-line design-system/restricted-syntax -- 帯の見出しの状態の印（経過時間は帯の ProcessingIndicator が出す）。 */}
             {spinnerTarget === "header" ? <Spinner size={20} /> : toneIcon(tone)}
           </span>
           <div className="min-w-0">

@@ -148,7 +148,6 @@ export function AnsweringSettingsCard() {
           <TimedLoadingState
             label={t("settings.answering.loading")}
             operationKey="answering-settings-load"
-            framed={false}
             testId="answering-settings-loading"
           >
             <Skeleton className="h-48 w-full" />

@@ -58,6 +58,10 @@
 3 製品で NL2SQL の基準にそろえ、新しい一覧は NL2SQL の同種の画面を見本にする。部品と定数は components-reference.md「読み込み中と一覧の表示密度」、一覧の型と例外は `page-archetypes.md`「一覧の型と、基準から外す例外」。
 
 - **読み込み中**: 領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を 1 か所だけ出し、領域は内容の形の `Skeleton` で覆う。文字だけの「読み込み中…」・空白・画面全体のスピナーは使わない。再読み込みは前の内容を出したまま、ボタンの `loading` で示す（`messaging.md` §3.6）。
+  - **見た目（#4649）**: 見本は NL2SQL のテーブルの管理の詳細の DDL タブ。灰色の枠（`bg-surface-sunken`）・左に処理の名前・右に経過時間（取り消せるときだけ「キャンセル」）・下に内容と同じ形と高さの `Skeleton`。`TimedLoadingState` は常に枠を持ち（枠を外す指定は無い）、単独の `ProcessingIndicator`（操作の進行を含む）も既定で枠を持つ。すでに灰色の枠を持つ部品の中に入れるときだけ `surface="plain"`。
+  - **大きさ**: 置き換える内容の領域と同じ幅（全幅）にし、ツールバーの欄・狭い列・`w-fit` の箱に入れない。チャットのツールバーの選択欄の読み込みは、欄の形の `Skeleton` だけを置き、経過時間は会話の領域の先頭に 1 つ。折り返しは置かれた領域の幅（container query）で決まり、375px・狭い列で経過時間が処理の名前の下へ回る。
+  - **1 つの領域に 1 つ**: 同時・順に読み込む複数の要求は 1 つの表示（読み込み中の状態を合わせる）にし、ほかは `Skeleton` だけ。フィールド単位の読み込みはフィールドの形の `Skeleton` で場所を確保し、経過時間を足さない。読み込み中に「まだありません」の空の表示を出さない。
+  - **検査**: `packages/ui` の外で `<Spinner>` を直接置くことを lint が止める（項目の状態の印だけ理由を添えて除外）。e2e は `platform/packages/ui/e2e/loading-checks.ts` の `findLoadingStandardViolations`（灰色の枠・経過時間・全幅・あふれ・Skeleton・数）で desktop と 375px を確かめる。
 - **一覧**: `DataTable` の `stickyHeader` と `visibleRows`（共通の定数）で表の中を縦スクロールにし、製品で行数・高さを書かない。表ではない行リストは `ListScrollRegion`（高い行は `size="card"`）。詳細・評価・サイドの領域の中の小さな一覧も同じ。会話・実行の詳細の流れの中で増えるブロックは入れ子のスクロールにせず `useCollapsedList`（10 件を超えたら畳む）。lint が高さの無い `DataTable` と行リストの手書きの `max-h-*` を止める（#4636）。
 - **件数**: 一覧の件数は `ListToolbar` の `count`（`ListCount`。「全 N 件」/「N 件（全 M 件）」）1 か所。1 ページでも出し、見出しのバッジと二重にしない。一覧の検索欄は `ListToolbar` が `lg` で固定する（#1891）。
 - **ページング**: 共通の `Pagination` / `usePagination`（既定 25 件。#1952）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–25 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100。既定 25）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。

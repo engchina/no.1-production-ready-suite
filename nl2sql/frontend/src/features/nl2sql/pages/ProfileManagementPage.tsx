@@ -448,7 +448,6 @@ function ProfileList({
           <TimedLoadingState
             label={t("profiles.summary.loading")}
             operationKey="profile-list-load"
-            framed={false}
             testId="profile-list-loading"
           >
             <TableSkeleton columns={3} testId="profile-list-skeleton" />
@@ -2128,7 +2127,6 @@ export function ProfileManagementPage() {
         label={t("common.processing.refreshing")}
         operationKey="profile-refresh"
         placement="workspace"
-        className="rounded-md border border-border bg-surface-sunken px-3 py-2"
         testId="profile-management-workspace-processing"
         // 押した「最新情報を取得」が回っている間はスピナーを出さない。定期・他の操作の後の一覧の取り直しの間は
         // ボタンを回さないため、この表示がスピナーを出す（#819 / #821）。
@@ -2302,7 +2300,6 @@ export function ProfileManagementPage() {
                 <TimedLoadingState
                   label={t("profiles.detail.loading")}
                   operationKey="profile-detail-load"
-                  framed={false}
                   testId="profile-editor-loading"
                 >
                   <FormSkeleton fields={5} testId="profile-editor-skeleton" />

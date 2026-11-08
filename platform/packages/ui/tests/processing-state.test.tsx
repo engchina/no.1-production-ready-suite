@@ -144,6 +144,34 @@ describe("TimedLoadingState", () => {
     expect(html).toContain('data-processing-activity-icon="spinner"');
     expect(html).toContain("animate-spin");
   });
+
+  it("常に灰色の枠で全幅を使い、中の処理中の表示に枠を重ねない（#4649）", () => {
+    const html = renderToStaticMarkup(<TimedLoadingState label="読み込んでいます" testId="t" />);
+    const root = html.match(/<section class="([^"]*)"/u)?.[1] ?? "";
+    expect(root).toContain("bg-surface-sunken");
+    expect(root).toContain("border-border");
+    expect(root).toContain("w-full");
+    expect(html).toContain('data-processing-surface="plain"');
+    expect(html.match(/bg-surface-sunken/gu)).toHaveLength(1);
+  });
+});
+
+describe("ProcessingIndicator の面（#4649）", () => {
+  it("既定は灰色の枠、plain は枠なし", () => {
+    const framed = renderToStaticMarkup(<ProcessingIndicator active label="保存しています" placement="action" />);
+    expect(framed).toContain('data-processing-surface="framed"');
+    expect(framed).toContain("bg-surface-sunken");
+    const plain = renderToStaticMarkup(<ProcessingIndicator active label="保存しています" surface="plain" />);
+    expect(plain).toContain('data-processing-surface="plain"');
+    expect(plain).not.toContain("bg-surface-sunken");
+  });
+
+  it("折り返しは置かれた領域の幅（container query）で決め、画面の幅の sm: を使わない", () => {
+    const html = renderToStaticMarkup(<ProcessingIndicator active label="読み込んでいます" onCancel={() => {}} />);
+    expect(html).toContain("@container/processing");
+    expect(html).toContain("@md/processing:flex-row");
+    expect(html).not.toMatch(/\bsm:(?:flex-row|justify-between|shrink-0|pt-)/u);
+  });
 });
 
 describe("PageLoadingState", () => {
