@@ -265,3 +265,21 @@ async def evidence_sections(
 ) -> dict[str, tuple[SectionNode, SectionNode | None]]:
     """根拠の chunk ごとの所有の章節と親の章節（対応の無い chunk は含めない）。"""
     return await SectionMapStore(oracle).owner_sections(chunk_ids)
+
+
+async def evidence_section_paths(
+    chunk_ids: Sequence[str], *, oracle: OracleClient | None = None
+) -> dict[str, tuple[str, ...]]:
+    """根拠の chunk ごとの今の章節の名前（親の章節・所有の章節の順。根の章節は名前に入れない）。
+
+    章節の境目は所有の章節が変わる chunk で決まるので、親より上の名前は読まない。対応の無い chunk は
+    含めない（呼び出し元は取込の章節を使う）。
+    """
+    return {
+        chunk_id: tuple(
+            node.title
+            for node in (parent, owner)
+            if node is not None and node.section_id != ROOT_SECTION_ID
+        )
+        for chunk_id, (owner, parent) in (await evidence_sections(chunk_ids, oracle=oracle)).items()
+    }

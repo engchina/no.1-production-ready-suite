@@ -2,7 +2,8 @@
 
 字数は「入るかどうか」の確認だけに使い（``batched_evidence``）、切る位置は原文の構造から強い順に決める。
 章節の区切り（根拠の本文の中で章節が分かるとき）か見出しの区切り → 段落の区切り → 文の区切り。表は行の途中で切らない。
-章節は根拠が持つ子の範囲（``child_ranges``）と子の出典の章節（``source_context.children``）から決め、新しく読み込まない。
+章節は根拠が持つ子の範囲（``child_ranges``）と、子の今の章節（章節ナビゲーションが正本）で決める。
+今の章節が分からない根拠は、子の取込の章節（``source_context.children``）で決める。
 """
 
 from __future__ import annotations
@@ -117,25 +118,49 @@ def _html_tables(text: str) -> list[_Table]:
     return tables
 
 
-def _section_cuts(value: Mapping[str, Any], text: str, lines: Sequence[tuple[int, int]]) -> tuple[list[int], set[str]]:
-    """子の章節が変わる行の先頭と、本文で見出しになる章節の名前（比べる形）。
-
-    章節の最初の子が文脈に無いことがあるので、章節の名前の行が子の手前にあればその行で切る。
-    """
+def _ingested_child_paths(value: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """根拠の子の取込の章節（子の ID → 章節の名前の列）。"""
     context = value.get("source_context")
     if not isinstance(context, Mapping):
-        return [], set()
-    paths = {
+        return {}
+    return {
         str(child["source_id"]): tuple(str(part) for part in child.get("section_path") or ())
         for child in context.get("children") or ()
         if isinstance(child, Mapping) and child.get("source_id")
     }
+
+
+def section_child_ids(values: Iterable[Mapping[str, Any]]) -> list[str]:
+    """根拠の子の ID（今の章節を読む対象。重複なし）。"""
+    return list(dict.fromkeys(child_id for value in values for child_id in _ingested_child_paths(value)))
+
+
+def _section_cuts(
+    value: Mapping[str, Any], text: str, lines: Sequence[tuple[int, int]], current_paths: Mapping[str, Sequence[str]]
+) -> tuple[list[int], set[str]]:
+    """子の章節が変わる行の先頭と、本文で見出しになる章節の名前（比べる形）。
+
+    章節の最初の子が文脈に無いことがあるので、章節の名前の行が子の手前にあればその行で切る。
+    ``current_paths`` は子の今の章節（子の ID → 章節の名前の列。どの章節にも入らない子は空）。
+    """
+    context = value.get("source_context")
+    if not isinstance(context, Mapping):
+        return [], set()
+    paths = _ingested_child_paths(value)
     previous = tuple(str(part) for part in context.get("section_path") or ())
+    # 取込の見出しの行は今の章節に無くても見出しなので、直後で切らないように名前は両方を持つ。
     titles = {_form(part) for path in (previous, *paths.values()) for part in path}
+    rows = sorted(value.get("child_ranges") or (), key=lambda item: (item["start"], item["end"]))
+    current = {child_id: tuple(str(part) for part in current_paths[child_id]) for child_id in paths if child_id in current_paths}
+    # 今の章節が 1 つでも分かる根拠は、取込の章節と混ぜない（章節の木が違うので、混ぜると偽の境目になる）。
+    if any(current.values()):
+        paths = current
+        previous = next((current[str(row["id"])] for row in rows if str(row["id"]) in current), ())
+        titles |= {_form(part) for path in current.values() for part in path}
     base = int(value.get("start", 0))
     cuts: list[int] = []
     known_end = 0
-    for row in sorted(value.get("child_ranges") or (), key=lambda item: (item["start"], item["end"])):
+    for row in rows:
         path = paths.get(str(row["id"]))
         if not path:
             continue
@@ -157,11 +182,11 @@ def _section_cuts(value: Mapping[str, Any], text: str, lines: Sequence[tuple[int
     return cuts, titles
 
 
-def evidence_cuts(value: Mapping[str, Any]) -> EvidenceCuts:
+def evidence_cuts(value: Mapping[str, Any], current_paths: Mapping[str, Sequence[str]]) -> EvidenceCuts:
     """根拠の本文の切れ目の候補。章節の区切りが分かる本文は見出しを推定しない。"""
     text = str(value["text"])
     lines = _lines(text)
-    sections, titles = _section_cuts(value, text, lines)
+    sections, titles = _section_cuts(value, text, lines, current_paths)
     html_tables = _html_tables(text)
     tables = [*_markdown_tables(text, lines, span_header_lines(value)), *html_tables]
     blocked = {position for table in tables for position in range(table.start + 1, table.body_start + 1)}
