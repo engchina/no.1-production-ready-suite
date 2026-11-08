@@ -159,7 +159,12 @@ def test_explanation_sees_the_units_the_audit_accepted_the_conclusion_on():
     # （引用した判定表も、引用が見出しの行を含まないので全文を足す）。
     assert sources == [ROWS, METHOD, TABLE, RULE]
     # 表の行の判定（#4576）は今までどおり渡す（同じ表の行は 1 回）。
-    assert [row[explanation.KEY_ROW_RESULT] for row in prompts[0][explanation.KEY_ROWS]] == ["成り立つ"] * 3 + ["成り立たない"]
+    rows = {key: prompts[0].get(key) for key in explanation.ROW_KEYS.values()}
+    assert rows == {
+        explanation.ROW_KEYS["applies"]: ["属性P=有", "属性Q=有", "属性R=有"],
+        explanation.ROW_KEYS["does_not_apply"]: ["属性S=有"],
+        explanation.ROW_KEYS["cannot_determine"]: None,
+    }
     assert review["explanation_basis"] == {"0": list(IDS)}
     rendered = "\n".join(render_lines([application], lambda _: "根拠：synthetic.md", lambda _: None))
     assert RECORDED_WITH_RULE in rendered and RECORDED_WITHOUT_RULE not in rendered
@@ -217,7 +222,10 @@ def test_table_rows_of_an_audit_basis_table_are_passed():
     entry = CheckedApplication(GroundedApplication(item_indexes=[0], reasoning="合成の推導。", result=RESULT), [])
     entry.audit_basis = [{"evidence_id": "evidence-table", "text": TABLE}]
     rows = explanation.application_rows(entry, row_conditions())
-    assert [row[explanation.KEY_ROW_CONDITION] for row in rows] == ["属性P=有", "属性Q=有", "属性R=有", "属性S=有"]
+    assert rows == {
+        explanation.ROW_KEYS["applies"]: ["属性P=有", "属性Q=有", "属性R=有"],
+        explanation.ROW_KEYS["does_not_apply"]: ["属性S=有"],
+    }
     assert explanation.application_sources(entry) == [TABLE]
 
 
@@ -283,9 +291,10 @@ def test_split_derivations_see_each_others_conclusions_and_sources():
     assert TOTAL_WITHOUT_CLASS not in rendered and CLASS_WITHOUT_TOTAL not in rendered
     assert [entry.presentation["reasoning"] for entry in applications] == [TOTAL_WITH_CLASS, CLASS_WITH_TOTAL]
     (_, first), (_, second) = prompts
-    # 自分の結論は渡さず、同じ回答のほかの公開した推導の結論と、その推導の原文（引用と審査の根拠の全文）を渡す。
-    assert first[explanation.KEY_OTHERS] == [{explanation.KEY_CONCLUSION: CLASS, explanation.KEY_SOURCES: [RULE]}]
-    assert second[explanation.KEY_OTHERS] == [{explanation.KEY_CONCLUSION: TOTAL, explanation.KEY_SOURCES: [ROWS, METHOD, TABLE]}]
+    # 自分の結論は渡さず、同じ回答のほかの公開した推導の結論を渡す。その推導の原文（引用と審査の根拠の全文）は、自分の
+    # 原文の後に「資料の原文」へ合わせる（同じ原文は 1 回。#4615）。
+    assert first[explanation.KEY_SOURCES] == [ROWS, METHOD, TABLE, RULE] and first[explanation.KEY_OTHERS] == [CLASS]
+    assert second[explanation.KEY_SOURCES] == [RULE, ROWS, METHOD, TABLE] and second[explanation.KEY_OTHERS] == [TOTAL]
     assert TOTAL not in json.dumps(first, ensure_ascii=False) and CLASS not in json.dumps(second, ensure_ascii=False)
     assert review["explanation_basis"] == {"0": ["evidence-method", "evidence-table"]}
 
@@ -295,18 +304,13 @@ def test_single_derivation_has_no_other_conclusions_section():
     assert explanation.KEY_OTHERS not in prompts[0]
 
 
-# 実モデルの記録の形（#4603）: 説明の段の入力の節の名前（同じ回答のほかの結論）を、出典のように説明の文に写す。
-CLASS_NAMING_THE_SECTION = f"{explanation.KEY_OTHERS}に示された合計点 12 点は、区分の規則の10〜19点に当たるので、区分は Y です。"
+# ほかの結論の節の名前は利用者の文に出ても自然な語（#4615）。説明がその語で書いても表示する。
+CLASS_NAMING_THE_SECTION = f"{explanation.KEY_OTHERS}の合計点 12 点は、区分の規則の10〜19点に当たるので、区分は Y です。"
 
 
-def test_explanation_that_names_an_internal_input_section_is_hidden():
+def test_explanation_that_names_the_other_conclusions_section_is_shown():
     applications, _review, trace, prompts = run_split(CLASS_NAMING_THE_SECTION)
     assert trace["calls"] == 2 and explanation.KEY_OTHERS in prompts[1][1]
     total, klass = applications
     assert total.presentation["status"] == "confirmed" and total.presentation["reasoning"] == TOTAL_WITH_CLASS
-    # 説明だけを隠し、審査の判定と公開の結論・根拠はそのまま。
-    assert klass.presentation == {"status": "hidden", "reason": "internal_label", "labels": [explanation.KEY_OTHERS]}
-    assert klass.published and klass.assessment["status"] == "valid"
-    rendered = "\n".join(render_lines(applications, lambda _: "根拠：synthetic.md", lambda _: None))
-    assert CLASS in rendered and TOTAL in rendered and CLASS_NAMING_THE_SECTION not in rendered
-    assert trace["results"][1] == klass.presentation
+    assert klass.presentation["status"] == "confirmed" and klass.presentation["reasoning"] == CLASS_NAMING_THE_SECTION
