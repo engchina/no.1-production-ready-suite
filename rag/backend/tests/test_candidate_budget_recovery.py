@@ -126,7 +126,7 @@ def _settings(**overrides: Any) -> Settings:
             "oci_compartment_id": "ocid1.compartment.oc1..example",
             "rag_query_strategy": "simple_retrieval",
             "rag_answer_flow": "standard_rag",
-            # 融合順位の深い位置の候補を rerank まで届ける広い枠を明示する（既定の枠では 396 位は融合で落ちる）。
+            # 融合順位の深い候補を rerank まで届ける広い枠を明示する（既定の枠では落ちる）。
             "rag_retrieval_query_limit": 600,
             "rag_retrieval_candidate_limit": 1000,
             "rag_rerank_candidate_limit": 0,
