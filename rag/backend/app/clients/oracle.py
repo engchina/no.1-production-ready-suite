@@ -11,8 +11,10 @@ import inspect
 import json
 import logging
 import math
+import random
 import re
 import threading
+import time
 from array import array
 from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -3387,7 +3389,8 @@ class OracleClient:
             )
             _delete_chunk_set_outputs(connection, document_id=document_id, chunk_sets=never_served)
 
-        await self._run_transaction(operation)
+        # 全体を rollback した後は基線の照合から最初の状態でやり直せる(#4628)。
+        await self._run_transaction(operation, retry_deadlocks=True)
 
     async def discard_recipe_candidate_chunk_set(
         self, *, recipe_id: str, chunk_set_id: str
@@ -3446,7 +3449,7 @@ class OracleClient:
             )
             return True
 
-        return await self._run_transaction(operation)
+        return await self._run_transaction(operation, retry_deadlocks=True)
 
     async def list_recipe_version_log(
         self, document_id: str, recipe_id: str
@@ -12342,12 +12345,20 @@ class OracleClient:
         (``is_session_dead`` / ``isrecoverable``)になった場合だけ。接続が切れた transaction は
         DB 側で rollback されるため、``operation`` を最初から実行し直しても二重に反映しない。
         commit の途中で切れた場合は反映済みか分からないため、やり直さずに例外を返す。
-        削除が明示的に指定した場合は、ORA-00060 も全体の rollback 成功後に一度だけ再試行する。
+        呼び出し側が ``retry_deadlocks`` を指定した場合は、ORA-00060(deadlock。Oracle は
+        文だけを rollback する)も、全体の rollback が成功した後に、上限
+        (``DEADLOCK_RETRY_MAX_ATTEMPTS``)まで指数の backoff と full jitter を置いてやり直す
+        (#2865・#4628)。``operation`` を最初から実行し直しても安全な transaction だけが指定する。
         rollback / close の失敗(切断後の ``DPY-1001`` など)はログに残し、元の例外を隠さない。
         """
-        for attempt in (1, 2):
+        attempt = 0
+        transient_retried = False
+        deadlock_attempts = 0
+        while True:
+            attempt += 1
             connection = self._acquire_connection()
             committing = False
+            retry_delay: float | None = None
             try:
                 result = operation(connection)
                 committing = True
@@ -12364,15 +12375,34 @@ class OracleClient:
                     },
                 )
                 rolled_back = _rollback_quietly(connection, exc)
-                retryable = is_transient_oracle_error(exc) or (
-                    retry_deadlocks and rolled_back and "ORA-00060" in oracle_error_codes(exc)
-                )
-                if committing or attempt > 1 or not retryable:
+                if committing:
                     raise
-                logger.warning("oracle_transaction_retry", extra=oracle_error_log_fields(exc))
+                if is_transient_oracle_error(exc) and not transient_retried:
+                    transient_retried = True
+                    retry_delay = 0.0
+                elif (
+                    retry_deadlocks
+                    and rolled_back
+                    and "ORA-00060" in oracle_error_codes(exc)
+                    and deadlock_attempts + 1 < DEADLOCK_RETRY_MAX_ATTEMPTS
+                ):
+                    deadlock_attempts += 1
+                    retry_delay = deadlock_retry_delay_seconds(deadlock_attempts)
+                else:
+                    raise
+                logger.warning(
+                    "oracle_transaction_retry",
+                    extra={
+                        **oracle_error_log_fields(exc),
+                        "transaction_attempt": attempt,
+                        "retry_delay_seconds": round(retry_delay, 3),
+                    },
+                )
             finally:
                 _close_quietly(connection)
-        raise RuntimeError("unreachable: transaction の再試行は 1 回まで")  # pragma: no cover
+            # 待つ間は接続を pool へ返しておく(相手の transaction の commit を妨げない)。
+            if retry_delay:
+                _deadlock_retry_sleep(retry_delay)
 
     def _run_with_connection(self, operation: Callable[[OracleConnectionProtocol], Any]) -> Any:
         connection = self._acquire_connection()
@@ -12492,6 +12522,35 @@ async def _run_db_test_call_in_thread(operation: Callable[[], Any]) -> Any:
 def _oracle_error_object(exc: BaseException) -> object | None:
     """python-oracledb の例外が持つ ``_Error``(``exc.args[0]``)を返す。"""
     return exc.args[0] if exc.args else None
+
+
+# ORA-00060 をやり直す transaction の試行の上限(最初の 1 回を含む)と、待ちの backoff(#4628)。
+DEADLOCK_RETRY_MAX_ATTEMPTS = 4
+DEADLOCK_RETRY_BASE_DELAY_SECONDS = 0.2
+DEADLOCK_RETRY_MAX_DELAY_SECONDS = 2.0
+
+
+def deadlock_retry_delay_seconds(retry_number: int) -> float:
+    """``retry_number`` 回目のやり直しの前の待ち(指数の backoff と full jitter)。
+
+    上限は ``min(MAX, BASE × 2^(n-1))``、待ちは 0〜上限の乱数。同時に deadlock になった
+    transaction どうしが、同じ時刻にやり直して再び衝突しないようにずらす。
+    """
+    ceiling = min(
+        DEADLOCK_RETRY_MAX_DELAY_SECONDS,
+        DEADLOCK_RETRY_BASE_DELAY_SECONDS * (2.0 ** max(retry_number - 1, 0)),
+    )
+    return ceiling * _deadlock_retry_jitter()
+
+
+def _deadlock_retry_jitter() -> float:
+    """jitter の乱数(暗号の用途ではない)。"""
+    return random.random()  # nosec B311 - backoff の jitter で、暗号の用途ではない
+
+
+def _deadlock_retry_sleep(seconds: float) -> None:
+    """やり直しの前に待つ(DB の呼び出しの thread の中。テストで差し替える)。"""
+    time.sleep(seconds)
 
 
 def is_transient_oracle_error(exc: BaseException) -> bool:
@@ -13115,8 +13174,11 @@ def _delete_chunk_set_outputs(
     document_id: str,
     chunk_sets: Sequence[Mapping[str, object]],
 ) -> None:
-    """chunk_set の行と版に属する行を消し、どこからも参照されなくなった抽出も消す。"""
-    for chunk_set in chunk_sets:
+    """chunk_set の行と版に属する行を消し、どこからも参照されなくなった抽出も消す。
+
+    行の lock を取る順を transaction の間でそろえるため、chunk_set の ID の順に消す(#4628)。
+    """
+    for chunk_set in sorted(chunk_sets, key=lambda row: str(row["chunk_set_id"])):
         chunk_set_id = str(chunk_set["chunk_set_id"])
         entity_rows = _fetch_all(
             connection,

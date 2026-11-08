@@ -4465,3 +4465,34 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261108_4628_foreign_key_lock_indexes
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REFS_SOURCE_SET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_refs_source_set_idx '
+            || 'ON rag_graph_references (source_chunk_set_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REL_SOURCE_ENTITY_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_rel_source_entity_idx '
+            || 'ON rag_graph_relationships (source_entity_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REL_TARGET_ENTITY_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_rel_target_entity_idx '
+            || 'ON rag_graph_relationships (target_entity_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_STRUCTURE_BUILDS_DOC_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_structure_builds_doc_idx '
+            || 'ON rag_structure_index_builds (document_id)';
+    END IF;
+END;
+/

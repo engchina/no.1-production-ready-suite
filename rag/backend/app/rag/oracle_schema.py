@@ -347,6 +347,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_graph_references",
             sql=graph_reference_schema_sql(),
         ),
+        # 親の行を消す FK の子の列の索引（#4628）。親の表をすべて作った後に置く。
+        OracleSchemaSection(
+            name="foreign_key_lock_indexes",
+            table_name="rag_graph_references",
+            sql=foreign_key_lock_index_sql(),
+        ),
         OracleSchemaSection(
             name="document_extraction_revisions",
             table_name="rag_document_extraction_revisions",
@@ -808,7 +814,37 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261108_4628_foreign_key_lock_indexes",
+            table_name="rag_graph_references",
+            sql=_create_missing_objects_sql(foreign_key_lock_index_sql(), "FK の子の列の索引"),
+        )
+    )
     return sections
+
+
+def foreign_key_lock_index_sql() -> str:
+    """親の行を消す FK の、子の列を先頭に持つ索引（#4628。#2865 と同じ扱い）。
+
+    子の列を先頭に持つ索引が無い FK は、親の行の DELETE のたびに子の表全体の lock を取る。
+    別の transaction が子の表を変更中（SX）なら待ち、2 つの transaction が同時に親の行を消すと
+    ORA-00060 になる（別々の文書の行でも起きる）。既存の (tenant / KB, 列) の索引は FK の判定に
+    使えないため、列だけの索引を足す。
+    """
+    return """
+CREATE INDEX rag_graph_refs_source_set_idx
+    ON rag_graph_references (source_chunk_set_id);
+
+CREATE INDEX rag_graph_rel_source_entity_idx
+    ON rag_graph_relationships (source_entity_id);
+
+CREATE INDEX rag_graph_rel_target_entity_idx
+    ON rag_graph_relationships (target_entity_id);
+
+CREATE INDEX rag_structure_builds_doc_idx
+    ON rag_structure_index_builds (document_id);
+""".strip()
 
 
 def chunk_set_retired_at_migration_sql() -> str:
