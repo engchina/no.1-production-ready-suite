@@ -16,13 +16,13 @@ from app.rag.diagnostics import rag_config_fingerprint
 
 def test_default_matches_the_engine_default() -> None:
     """既定は rag_engine の既定と同じ(既定の挙動を変えない)。"""
-    assert Settings().rag_evidence_budget_chars == DEFAULT_EVIDENCE_BUDGET_CHARS == 80000
+    assert Settings().rag_evidence_budget_chars == DEFAULT_EVIDENCE_BUDGET_CHARS == 40000
     assert "rag_evidence_budget_chars" not in PROFILE_ONLY_SETTING_FIELDS
 
 
 def test_env_example_lists_the_default() -> None:
     example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
-    assert "RAG_EVIDENCE_BUDGET_CHARS=80000" in example.splitlines()
+    assert "RAG_EVIDENCE_BUDGET_CHARS=40000" in example.splitlines()
 
 
 def test_env_value_is_read_and_validated(monkeypatch: pytest.MonkeyPatch) -> None:

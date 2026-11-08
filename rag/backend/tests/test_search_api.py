@@ -259,9 +259,9 @@ def test_search_api_accepts_and_ignores_removed_standard_options(
         assert removed not in dumped
 
 
-def test_search_request_top_k_defaults_to_50_and_caps_at_100() -> None:
-    """検索する件数の既定は 50、上限は 100（省略時は現在の設定で解決。#3679）。"""
-    assert SearchRequest(query="q").top_k == 50
+def test_search_request_top_k_defaults_to_30_and_caps_at_100() -> None:
+    """検索する件数の既定は 30、上限は 100（省略時は現在の設定で解決。#3679）。"""
+    assert SearchRequest(query="q").top_k == 30
     assert SearchRequest(query="q", top_k=100).top_k == 100
     for invalid in (0, 101):
         with pytest.raises(ValidationError):

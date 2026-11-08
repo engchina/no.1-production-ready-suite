@@ -4193,7 +4193,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
         settings.rag_retrieval_query_limit,
         settings.rag_rerank_min_relevance_score,
         settings.rag_rerank_top_n,
-    ) == (0.2, 300, 0.2, 300)
+    ) == (0.2, 60, 0.3, 60)
     fields = AnsweringSettingsData.model_fields
     assert tuple(
         fields[name].default
@@ -4203,7 +4203,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
             "rerank_min_relevance_score",
             "rerank_top_n",
         )
-    ) == (0.2, 300, 0.2, 300)
+    ) == (0.2, 60, 0.3, 60)
     custom = settings.model_copy(
         update={
             "rag_min_similarity": 0.35,

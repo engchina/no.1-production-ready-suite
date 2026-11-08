@@ -496,7 +496,7 @@ def test_backend_threshold_defaults_and_explicit_saved_values(
     monkeypatch.delenv("RAG_RERANK_MIN_RELEVANCE_SCORE", raising=False)
     default = Settings(_env_file=None)
     assert default.rag_min_similarity == 0.2
-    assert default.rag_rerank_min_relevance_score == 0.2
+    assert default.rag_rerank_min_relevance_score == 0.3
     monkeypatch.setenv("RAG_MIN_SIMILARITY", "0.18")
     monkeypatch.setenv("RAG_RERANK_MIN_RELEVANCE_SCORE", "0.0")
     saved = Settings(_env_file=None)

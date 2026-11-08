@@ -44,7 +44,7 @@ class RagSearchIn(_ContractInput):
     search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] | None = None
     # 既定は契約の既定（#3240）。null は省略と同じ。
-    top_k: int | None = Field(default=50, ge=1, le=100)
+    top_k: int | None = Field(default=30, ge=1, le=100)
     filters: dict[str, str] | None = None
     # 旧版も検索するかは専用の真偽値（#1392。filters の値は文字列だけ）。
     include_superseded: bool = False
@@ -57,8 +57,8 @@ class RagSearchIn(_ContractInput):
 
 
 class RagRetrieveEvidenceIn(RagSearchIn):
-    # 根拠の収集は検索する件数（top_k の既定 50。#3512）と同じ件数を既定で返す（#1365）。
-    evidence_limit: int = Field(default=50, ge=1, le=50)
+    # 根拠の収集は検索する件数（top_k の既定 30）と同じ件数を既定で返す（#1365）。
+    evidence_limit: int = Field(default=30, ge=1, le=50)
     # 検索文を作る主体と、呼び出し元の検索文・追跡 ID（#2651）。
     planning: Literal["rag", "caller"] = "rag"
     queries: list[str] = Field(default_factory=list, max_length=5)
