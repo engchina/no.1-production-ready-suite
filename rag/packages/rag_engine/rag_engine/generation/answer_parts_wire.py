@@ -48,6 +48,10 @@ HEADER_ONLY_SOURCE_PROMPT = (
 )
 
 
+def _without_default(schema: dict[str, Any]) -> None:
+    schema.pop("default", None)
+
+
 def _question_type_first(schema: dict[str, Any]) -> None:
     """質問の種類（question_type）を要点より先に生成させる（strict schema の欄の順は生成の順）。
 
@@ -102,11 +106,9 @@ def answer_parts_model(
         kind=(cast(Any, Literal["gap"]), Field()),
         text=(str, Field(min_length=1, max_length=600, description="必要な資料・値・前提のうち不足するもの。")),
     )
-    part = create_model(
-        "RequiredAnswerPart",
-        __config__=ConfigDict(extra="forbid"),
-        request_id=(str, Field(description="元の request_units の id。背景は答えない。")),
-        requirement=(
+    common: dict[str, Any] = {
+        "request_id": (str, Field(description="元の request_units の id。背景は答えない。")),
+        "requirement": (
             cast(Any, Literal)[tuple(dict.fromkeys(requirements))] if requirements else str,
             Field(description="前回の出力の要点の requirement から、この要点で答える要求をそのまま選ぶ。")
             if requirements
@@ -114,11 +116,41 @@ def answer_parts_model(
                 min_length=1, max_length=600, description="この要点で答える質問の要求。必要な粒度で複合要求を分け、任意補足を必須にしない。"
             ),
         ),
-        answer=(
-            cast(Any, Union.__getitem__((direct, derived, gap) if direct_source else (derived, gap)) if catalog.unit_ids else gap),
-            Field(),
-        ),
-    )
+    }
+    part: Any
+    if direct_source and catalog.unit_ids:
+        # 要点の役割（導出か記載か）を答えの型より先に決めさせ、導出の要点では source 型を選べなくする（#4611。#4586 の
+        # 「導出が要るのに原文の提示だけ」を schema で起こさない）。記載の要点は従来どおり 3 つの型から選ぶ。mode の無い
+        # 出力（録画など）は記載の要点として読む。
+        derivation_part = create_model(
+            "DerivationAnswerPart",
+            __config__=ConfigDict(extra="forbid"),
+            **common,
+            mode=(
+                cast(Any, Literal["derivation"]),
+                Field(description="計算・区分・条件の当てはめで答えを導く要点。答えは answer 型か、導けなければ gap 型。"),
+            ),
+            answer=(cast(Any, Union.__getitem__((derived, gap))), Field()),
+        )
+        stated_part = create_model(
+            "StatedAnswerPart",
+            __config__=ConfigDict(extra="forbid"),
+            **common,
+            # 既定値は mode の無い録画を読むためだけ。モデルに渡す schema には出さない（strict schema は全欄が必須）。
+            mode=(
+                cast(Any, Literal["stated"]),
+                Field(default="stated", description="資料の記載がそのまま答えになる要点。", json_schema_extra=_without_default),
+            ),
+            answer=(cast(Any, Union.__getitem__((direct, derived, gap))), Field()),
+        )
+        part = Union.__getitem__((derivation_part, stated_part))
+    else:
+        part = create_model(
+            "RequiredAnswerPart",
+            __config__=ConfigDict(extra="forbid"),
+            **common,
+            answer=(cast(Any, Union.__getitem__((derived, gap)) if catalog.unit_ids else gap), Field()),
+        )
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),
