@@ -283,6 +283,7 @@ for (const viewport of [
           hybrid_search_backend: "sudachi",
           rrf_method_ratio: [1, 1],
           rrf_source_ratio: [7, 3],
+          rerank_slot_ratio: [7, 3],
           query_strategy: "rag_fusion",
           runtime_terms_search_enabled: false,
           runtime_rules_confirmation_enabled: false,
@@ -825,6 +826,38 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+
+for (const theme of ["light", "dark"] as const) {
+  test(`再ランキング後の並びの比率を検証して保存・再表示できる (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {theme, sidebarCollapsed: true},version: 0})), theme);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await mockAnsweringSettings(page, saved, {rerank_slot_ratio: undefined});
+    await page.goto("/settings/retrieval");
+    const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
+    const rerank = section.getByRole("spinbutton", {name:"再ランキングの順から取る件数",exact:true});
+    const search = section.getByRole("spinbutton", {name:"検索の順から取る件数",exact:true});
+    await expect(rerank).toHaveValue("7");
+    await expect(search).toHaveValue("3");
+    await expect(section).toContainText("Rerank が無効・失敗のときは適用しません");
+    await rerank.fill("0");
+    await search.fill("0");
+    await expect(section.getByRole("alert")).toContainText("少なくとも一方を 1 以上");
+    await expect(page.getByRole("button", {name:"回答の設定を保存",exact:true})).toBeDisabled();
+    await search.fill("1.5");
+    await expect(page.getByRole("button", {name:"回答の設定を保存",exact:true})).toBeDisabled();
+    await rerank.fill("4");
+    await search.fill("1");
+    await expect(section.getByRole("alert")).toHaveCount(0);
+    await section.screenshot({path:testInfo.outputPath(`rerank-slot-ratio-${theme}.png`)});
+    await page.getByRole("button", {name:"回答の設定を保存",exact:true}).click();
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({rerank_slot_ratio:[4,1]});
+    await page.reload();
+    await expect(page.getByRole("spinbutton", {name:"再ランキングの順から取る件数",exact:true})).toHaveValue("4");
+    await expectNoPageOverflow(page);
+  });
+}
 
 for (const theme of ["light", "dark"] as const) {
 test(`RRF の比重が未指定の場合も新しい既定値と公式説明を表示する (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {

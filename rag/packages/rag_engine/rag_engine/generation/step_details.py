@@ -126,7 +126,7 @@ def record_rerank_top(step: StepRecorder, records: Sequence[AnswerRecord]) -> No
     scored = [(record, score) for record in records if (score := rerank_score(record)) is not None]
     if not scored:
         return
-    best = scored[0][1]
+    best = max(score for _, score in scored)
     step.field("最上位の関連度", f"{best:.3f}")
     step.add(
         "並べ替えた後の上位（関連度）:",

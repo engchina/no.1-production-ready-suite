@@ -71,6 +71,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
     rrf_method_ratio: settings.rrf_method_ratio ?? [7, 3],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
+    rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
     query_strategy: settings.query_strategy,
@@ -180,6 +181,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 0 || (form.retrieval_query_limit ?? 0) > 2000
     || !Number.isInteger(form.rerank_top_n) || (form.rerank_top_n ?? -1) < 0 || (form.rerank_top_n ?? 0) > 2000;
   const invalidRatio = [form.rrf_method_ratio, form.rrf_source_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
+  const slotRatio = form.rerank_slot_ratio;
+  const invalidSlotRatio = !slotRatio || slotRatio.some((v) => !Number.isInteger(v) || v < 0) || slotRatio[0] + slotRatio[1] <= 0;
 
   function update(patch: Partial<AnsweringDraft>) {
     save.reset();
@@ -192,7 +195,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   }
 
   function submit() {
-    if (save.isPending || invalidRatio || invalidThreshold || invalidCount) return;
+    if (save.isPending || invalidRatio || invalidSlotRatio || invalidThreshold || invalidCount) return;
     // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
     save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) });
   }
@@ -278,14 +281,15 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             </a>
           </p>
         </div>
-        {(["rrf_method_ratio", "rrf_source_ratio"] as const).map((key) => (
+        {(["rrf_method_ratio", "rrf_source_ratio", "rerank_slot_ratio"] as const).map((key) => (
           <fieldset key={key} className="space-y-2">
             <legend className="text-sm font-medium text-fg">{t(`settings.answering.${key}`)}</legend>
+            {key === "rerank_slot_ratio" ? <p className="text-sm text-fg-muted">{t("settings.answering.rerank_slot_ratioHint")}</p> : null}
             <FormGrid>
               {([0, 1] as const).map((index) => <TextField
-                key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step="any"
+                key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step={key === "rerank_slot_ratio" ? 1 : "any"}
                 label={t(`settings.answering.${key}.${index}`)}
-                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [7,3] : [7,3])[index])}
+                value={String(form[key]?.[index] ?? [7,3][index])}
                 disabled={disabled} onChange={(event) => {
                   const ratio: [number, number] = [...(form[key] ?? [0,0])];
                   ratio[index] = Number(event.target.value);
@@ -296,6 +300,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           </fieldset>
         ))}
         {invalidRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rrfInvalid")}</p> : null}
+        {invalidSlotRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rerank_slot_ratioInvalid")}</p> : null}
       </SettingsGroup>
       <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
       <FormGrid>
@@ -464,7 +469,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             label: t("settings.answering.save"),
             icon: Save,
             loading: save.isPending,
-            disabled: !dirty || invalidRatio || invalidThreshold || invalidCount,
+            disabled: !dirty || invalidRatio || invalidSlotRatio || invalidThreshold || invalidCount,
             onClick: submit,
           },
         ]}

@@ -80,7 +80,7 @@ def test_follow_keeps_order_when_reference_is_above_source_or_source_missing():
 def test_rerank_places_reference_after_its_source(monkeypatch):
     """質問の rerank で参照先が最下位になっても、参照元（1 位）の直後に置く。"""
     monkeypatch.setattr(answering, "_rerank_configured", lambda settings: True)
-    scores = {"window": 0.67, "a": 0.63, "b": 0.6, "c": 0.5, "plan2": 0.29}
+    scores = {"window": 0.67, "alpha": 0.63, "bravo": 0.6, "charlie": 0.5, "plan2": 0.29}
 
     def fake(question, documents, settings, top_n=None):
         order = sorted(range(len(documents)), key=lambda index: -scores[documents[index].split(" の本文")[0].rsplit("\n", 1)[-1]])
@@ -91,11 +91,11 @@ def test_rerank_places_reference_after_its_source(monkeypatch):
 
     monkeypatch.setattr(answering, "rerank_text_with_scores", fake)
     settings = SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True, document_selection_enabled=False)
-    records = [_child("a"), _child("window"), _child("plan2", ref_from="window", rank=1), _child("b"), _child("c")]
+    records = [_child("alpha"), _child("window"), _child("plan2", ref_from="window", rank=1), _child("bravo"), _child("charlie")]
 
     ranked = rerank_records("質問", records, settings, enabled=True)
 
-    assert _ids(ranked) == ["window", "plan2", "a", "b", "c"]
+    assert _ids(ranked) == ["window", "plan2", "alpha", "bravo", "charlie"]
     assert ranked[1].metadata["rerank"]["relevance_score"] == 0.29
 
 
