@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import threading
-import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -2154,16 +2153,18 @@ async def test_ontology_proposals_does_not_block_unrelated_api(
     settings = get_settings()
     monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "auth_mode", "local")
 
+    # 秒数は止まったときに失敗にするための上限で、合否は順序で決める。
+    hang_guard_seconds = 30.0
     started = threading.Event()
     release = threading.Event()
+    released_by_test: list[bool] = []
 
     class _BlockingOntologyRuntime:
         def list_profile_proposals(self, profile_id: str) -> list[Any]:
             assert profile_id == "sales"
             started.set()
-            release.wait(timeout=1.0)
+            released_by_test.append(release.wait(timeout=hang_guard_seconds))
             return []
 
     monkeypatch.setattr(
@@ -2171,31 +2172,23 @@ async def test_ontology_proposals_does_not_block_unrelated_api(
         "ontology_runtime",
         _BlockingOntologyRuntime(),
     )
-    timer = threading.Timer(0.5, release.set)
-    timer.start()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         proposal_task = asyncio.create_task(
             client.get("/api/nl2sql/profiles/sales/ontology-proposals")
         )
         try:
-            started_at = time.perf_counter()
-            deadline = started_at + 1.0
-            while not started.is_set() and time.perf_counter() < deadline:
-                await asyncio.sleep(0.01)
-            assert started.is_set()
-            assert time.perf_counter() - started_at < 0.2
+            assert await asyncio.to_thread(started.wait, hang_guard_seconds)
 
-            permissions_response = await asyncio.wait_for(
-                client.get("/api/security/permissions"),
-                timeout=0.2,
-            )
+            # proposal の処理を止めたまま、別の API の応答を受け取る。
+            permissions_response = await client.get("/api/security/permissions")
             assert permissions_response.status_code == 200
+            assert released_by_test == []
         finally:
             release.set()
-            timer.cancel()
-            timer.join(timeout=1.0)
-        proposal_response = await asyncio.wait_for(proposal_task, timeout=1.0)
+        proposal_response = await proposal_task
+        # 処理が event loop や共有の資源を塞ぐと、上の応答が返らず待ちが上限で切れて False になる。
+        assert released_by_test == [True]
         assert proposal_response.status_code == 200
         assert proposal_response.json()["data"]["proposals"] == []
 
