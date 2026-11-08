@@ -4202,6 +4202,7 @@ export const ja = {
   "search.answerDetails.degraded.hint": "次の処理に失敗したため、その結果を使わずに回答を続けました。",
   "search.answerDetails.degraded.step.retrieval": "検索の一部",
   "search.answerDetails.degraded.step.query_embedding": "質問のベクトル化",
+  "search.answerDetails.degraded.step.evidence_section_paths": "長い根拠の区切りに使う章節の読み出し",
   "search.answerDetails.degraded.step.query_expansion": "質問の言い換え・分解",
   "search.answerDetails.degraded.step.runtime_terms": "登録用語の照合",
   "search.answerDetails.degraded.step.query_overflow": "全文検索の語の補完",
