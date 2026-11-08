@@ -31,7 +31,7 @@ def test_search_only_term_queries_do_not_displace_both_subjects(monkeypatch, sou
             page=1,
             seq_no=i,
             category="Chunk",
-            text=f"合成資料 {key}",
+            text=f"合成資料 item{key}",
             source=f"{key}.txt",
         )
         for i, key in enumerate(("A", "B", "D"))

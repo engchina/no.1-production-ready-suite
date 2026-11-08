@@ -1031,7 +1031,11 @@ class RagPipeline:
         """
         if request.query != query_guardrail.sanitized_text:
             request = request.model_copy(update={"query": query_guardrail.sanitized_text})
-        engine = AnswerEngine(self._settings, oracle=self._oracle, genai=self._genai)
+        # 検索だけの結果にも縮退を残す(全文のみの結果を見誤らないように。#4663)。
+        degraded = DegradedSteps()
+        engine = AnswerEngine(
+            self._settings, oracle=self._oracle, genai=self._genai, degraded=degraded
+        )
         citations = await _observe_stage(
             trace_id,
             "retrieval",
@@ -1049,6 +1053,9 @@ class RagPipeline:
             settings=self._settings,
             retrieval_strategy_adapter="retrieval_only",
             guardrail_degraded=query_guardrail.backend_degraded,
+            answer={"degraded_steps": cast(JsonValue, steps)}
+            if (steps := degraded.steps())
+            else None,
         )
         elapsed = elapsed_ms(started_at)
         record_rag_request(SEARCH_METRIC_MODE, "success", elapsed / 1000, len(citations))

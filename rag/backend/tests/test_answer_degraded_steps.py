@@ -8,12 +8,15 @@
 
 import json
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from rag_engine.knowledge.runtime_knowledge import TERMS_SOURCE_LABEL
 from rag_engine.retrieval.article_catalog import SelectedArticle
 
+from app.clients.oracle import SearchHits
 from app.config import Settings
 from app.rag import answer_engine as answer_engine_module
 from app.rag.answer_engine import AnswerEngine, _SearchState
@@ -560,6 +563,250 @@ async def test_main_search_failure_is_an_error_not_zero_evidence(
     with pytest.raises(AnswerExecutionError) as caught:
         await _run(monkeypatch, FailingSearch(fail_overrides=False))
     assert isinstance(caught.value.__cause__, Boom)
+
+
+# ---- 質問の embedding の失敗(全文のみの検索へ縮退する。#4663) ----
+
+
+class _EmbedFails(FakeGenAi):
+    """embedding だけが失敗する(呼ばれた回数を数える)。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def embed(
+        self, texts: list[str], *, input_type: str = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]:
+        self.calls += 1
+        raise Boom(SECRET)
+
+
+class _SearchLog(FakeOracle):
+    """検索の方式と embedding の長さを残す(``status`` があれば本文の無いその状態の結果を返す)。"""
+
+    def __init__(self, status: str = "") -> None:
+        super().__init__()
+        self.status = status
+        self.searches: list[tuple[str, str, int]] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.searches.append((query, mode.value, len(embedding)))
+        if self.status:
+            hits = SearchHits()
+            hits.status = self.status
+            return hits
+        return await super().hybrid_search(query, embedding, top_k, mode, filters)
+
+
+_QUERY_SOURCES = SimpleNamespace(
+    retrieval_query_sources={
+        "原質問": ("原質問",),
+        "用語の検索文": (TERMS_SOURCE_LABEL, "言い換え"),
+        "言い換えの検索文": ("言い換え",),
+    }
+)
+
+
+async def _degraded_search(
+    oracle: _SearchLog, genai: _EmbedFails, state: _SearchState, queries: list[str], **settings: Any
+) -> Any:
+    return await AnswerEngine(
+        Settings(**settings),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=genai,  # type: ignore[arg-type]
+    )._search(
+        SearchRequest(query=queries[0]),
+        state,
+        retrieval_queries=queries,
+        vector_only_queries=["仮説の文"],
+        settings=_QUERY_SOURCES,
+        expand_references=False,
+    )
+
+
+@pytest.mark.parametrize("backend", ["oracle_native", "sudachi"])
+async def test_query_embedding_failure_falls_back_to_keyword_only(backend: str) -> None:
+    """全文を使う検索文を全文のみで検索し、全文を使わない検索文は外す。検索を重ねても呼び直さない。"""
+    oracle = _SearchLog()
+    genai = _EmbedFails()
+    state = _SearchState()
+    queries = ["原質問", "用語の検索文", "言い換えの検索文", "仮説の文"]
+
+    first = await _degraded_search(oracle, genai, state, queries, rag_hybrid_search_backend=backend)
+    await _degraded_search(oracle, genai, state, queries, rag_hybrid_search_backend=backend)
+
+    assert [child.chunk_uid for child in first.child_chunks] == ["doc-1:c1"]
+    assert oracle.searches == [("原質問", "keyword", 0), ("用語の検索文", "keyword", 0)]
+    assert genai.calls == 1
+    _assert_degraded(state, "query_embedding")
+
+
+@pytest.mark.parametrize(
+    ("queries", "status", "searched"),
+    [
+        (["仮説の文"], "", []),
+        (["言い換えの検索文"], "", []),
+        (["原質問"], "not_executed", [("原質問", "keyword", 0)]),
+    ],
+    ids=["vector-only", "vector-only-by-source", "no-text-query"],
+)
+async def test_query_embedding_failure_without_keyword_search_returns_no_chunks(
+    queries: list[str], status: str, searched: list[tuple[str, str, int]]
+) -> None:
+    """全文検索が 1 本も走らないときは、エラーにせず 0 件で終える。"""
+    state = _SearchState(original_retrieval_query="原質問")
+    oracle = _SearchLog(status)
+
+    result = await _degraded_search(oracle, _EmbedFails(), state, queries)
+
+    assert result.child_chunks == []
+    assert oracle.searches == searched
+    _assert_degraded(state, "query_embedding")
+
+
+async def test_query_embedding_failure_is_in_the_fusion_stage_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """処理の詳細の検索結果の統合の段に、縮退の記録(例外の文は無し)が出る。"""
+    records: dict[str, Any] = {}
+
+    class Observation:
+        capture_enabled = False
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def request(self, value: Any) -> None:
+            pass
+
+        def response(self, value: Any) -> None:
+            records[self.name] = value() if callable(value) else value
+
+        def display(self, **kwargs: Any) -> None:
+            pass
+
+    @contextmanager
+    def observe(operation: str, name: str) -> Any:
+        yield Observation(name)
+
+    monkeypatch.setattr(answer_engine_module, "observe_call", observe)
+
+    await _degraded_search(_SearchLog(), _EmbedFails(), _SearchState(), ["原質問"])
+
+    stage = records["検索結果の統合（RRF）"]
+    assert stage["回答内の縮退記録（累計）"] == [
+        {"kind": "query_embedding", "count": 1, "exc_type": "Boom"}
+    ]
+    assert SECRET not in json.dumps(stage, ensure_ascii=False, default=str)
+
+
+async def test_query_embedding_failure_keeps_oracle_failure_as_error() -> None:
+    """縮退の後の全文検索がすべて失敗したら、0 件にせずエラーにする。"""
+    state = _SearchState()
+
+    with pytest.raises(RuntimeError, match="すべての検索一覧"):
+        await _degraded_search(_SearchLog("failed"), _EmbedFails(), state, ["原質問"])
+
+    assert {step["kind"] for step in state.degraded_steps()} == {"query_embedding", "retrieval"}
+
+
+async def test_query_embedding_failure_in_prefetch_is_remembered() -> None:
+    """先読みの失敗を覚え、続く検索は embedding を呼ばず、先読みの全文の結果を使う。"""
+    oracle = _SearchLog()
+    genai = _EmbedFails()
+    state = _SearchState()
+    engine = AnswerEngine(
+        Settings(),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=genai,  # type: ignore[arg-type]
+    )
+    request = SearchRequest(query="原質問")
+
+    await engine._prefetch_query_hits(request, state, query="原質問")
+    result = await engine._search(
+        request, state, retrieval_queries=["原質問"], expand_references=False
+    )
+
+    assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:c1"]
+    assert oracle.searches == [("原質問", "keyword", 0)]
+    assert genai.calls == 1
+    _assert_degraded(state, "query_embedding")
+
+
+async def _run_with_failing_embedding(
+    monkeypatch: pytest.MonkeyPatch, oracle: _SearchLog
+) -> tuple[Any, _EmbedFails]:
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    genai = _EmbedFails()
+    outcome = await AnswerEngine(
+        Settings(rag_entity_expansion_enabled=False, rag_graph_expansion_enabled=False),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=genai,  # type: ignore[arg-type]
+    ).run(SearchRequest(query="登録の手順は？", filters={"knowledge_base_id": "kb-1"}))
+    return outcome, genai
+
+
+async def test_query_embedding_failure_answers_from_keyword_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答はエラーにならず、失敗は診断にだけ残り、回答の本文に注意書きを出さない。"""
+    oracle = _SearchLog()
+
+    outcome, genai = await _run_with_failing_embedding(monkeypatch, oracle)
+
+    assert outcome.citations
+    assert genai.calls == 1
+    assert {mode for _, mode, _ in oracle.searches} == {"keyword"}
+    assert outcome.diagnostics["degraded_steps"] == [
+        {"kind": "query_embedding", "count": 1, "exc_type": "Boom"}
+    ]
+    assert "embedding" not in outcome.answer
+    assert "全文" not in outcome.answer
+    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
+
+
+async def test_query_embedding_failure_without_hits_is_zero_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全文検索が走らないときは根拠 0 件の経路で終え、診断で「当たらなかった」と分ける。"""
+    outcome, _ = await _run_with_failing_embedding(monkeypatch, _SearchLog("not_executed"))
+
+    assert outcome.citations == []
+    expected = [{"kind": "query_embedding", "count": 1, "exc_type": "Boom"}]
+    zero = outcome.diagnostics["zero_evidence"]
+    assert zero["stage"] == "retrieval"
+    assert zero["degraded_steps"] == expected
+    assert outcome.diagnostics["degraded_steps"] == expected
+    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])
+async def test_retrieval_only_reports_query_embedding_failure(fail: bool) -> None:
+    """検索だけの経路は全文のみの結果を返し、応答の診断で縮退が分かる(成功なら診断を足さない)。"""
+    from app.rag.pipeline import RagPipeline
+    from tests.test_answer_engine import RewriteLlm
+
+    pipeline = RagPipeline(
+        settings=Settings(),
+        oracle=_SearchLog(),  # type: ignore[arg-type]
+        genai=(_EmbedFails() if fail else FakeGenAi()),  # type: ignore[arg-type]
+        llm=RewriteLlm("unused"),  # type: ignore[arg-type]
+    )
+
+    response = await pipeline.run(SearchRequest(query="原質問", top_k=5, retrieval_only=True))
+
+    assert [chunk.chunk_id for chunk in response.citations] == ["doc-1:c1"]
+    expected = {"degraded_steps": [{"kind": "query_embedding", "count": 1, "exc_type": "Boom"}]}
+    assert response.diagnostics.answer == (expected if fail else None)
 
 
 # ---- 回答エンジンの前の段(会話の書き換え・抽出項目の条件・会話の添付。#3286) ----

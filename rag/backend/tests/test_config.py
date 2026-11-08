@@ -901,6 +901,32 @@ def test_rrf_ratio_defaults_match_api_and_direct_engine(monkeypatch: pytest.Monk
     assert (response.rrf_method_ratio, response.rrf_source_ratio) == expected
 
 
+def test_rerank_slot_ratio_defaults_match_across_config_layers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全体設定の既定と engine の既定を同じ 7:3 にする(環境変数から渡す前の直接の経路を含む)。"""
+    from rag_engine.config import get_settings as get_engine_settings
+
+    from app.api.routes.settings import _answering_settings_data
+
+    monkeypatch.delenv("RAG_RERANK_SLOT_RATIO", raising=False)
+    backend = Settings(_env_file=None)
+    assert backend.rag_rerank_slot_ratio == (7, 3)
+    assert get_engine_settings(environ={}, dotenv_path=None).rerank_slot_ratio == (7, 3)
+    assert _answering_settings_data(backend).rerank_slot_ratio == (7, 3)
+    assert get_engine_settings(
+        environ={"RAG_RERANK_SLOT_RATIO": "[4, 1]"}, dotenv_path=None
+    ).rerank_slot_ratio == (4, 1)
+
+
+@pytest.mark.parametrize("raw", ["[0, 0]", "[-1, 1]", "[1]", "[1.5, 1]"])
+def test_engine_rejects_invalid_rerank_slot_ratio(raw: str) -> None:
+    from rag_engine.config import get_settings as get_engine_settings
+
+    with pytest.raises(ValueError):
+        get_engine_settings(environ={"RAG_RERANK_SLOT_RATIO": raw}, dotenv_path=None)
+
+
 def test_rag_rrf_k_is_bounded() -> None:
     """Hybrid retrieval の RRF 定数は正の安全な範囲に制限する。"""
     assert Settings().rag_rrf_k == 60
