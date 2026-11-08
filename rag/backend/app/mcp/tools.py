@@ -336,7 +336,7 @@ EVIDENCE_TEXT_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
 # rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
-# top_k の既定。#3512 で 50）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
+# top_k の既定 30）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
 # rag_search は回答に使った根拠が先に並ぶので 12 のまま。返す本文の合計は
 # EVIDENCE_TEXT_BUDGET_TOKENS で抑える。
 RETRIEVE_EVIDENCE_LIMIT_DEFAULT = min(SEARCH_TOP_K_DEFAULT, EVIDENCE_LIMIT_MAX)
@@ -1909,9 +1909,10 @@ class DegradedStep(BaseModel):
 
 
 DEGRADED_STEPS_DESCRIPTION = (
-    "失敗して縮退した任意の補助の処理（rerank・章節の目録・参照先の読み込みなど）。その処理を"
-    "使わずに続けた結果（例: rerank の失敗は検索の順のまま）で、空なら縮退していない。必須の能力"
-    "（主の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。"
+    "失敗して縮退した任意の補助の処理（rerank・質問の embedding・章節の目録・参照先の読み込み"
+    "など）。その処理を使わずに続けた結果（例: rerank の失敗は検索の順のまま、質問の embedding の"
+    "失敗は全文検索だけの結果）で、空なら縮退していない。必須の能力（Oracle の検索・回答の生成・"
+    "有効な安全チェック）の失敗は縮退せずエラーで返る。"
 )
 
 

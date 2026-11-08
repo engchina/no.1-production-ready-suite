@@ -126,8 +126,10 @@ def _settings(**overrides: Any) -> Settings:
             "oci_compartment_id": "ocid1.compartment.oc1..example",
             "rag_query_strategy": "simple_retrieval",
             "rag_answer_flow": "standard_rag",
-            # 融合の候補予算だけを検証し、検索ごとの既定上限とは切り離す。
+            # 融合順位の深い候補を rerank まで届ける広い枠を明示する（既定の枠では落ちる）。
             "rag_retrieval_query_limit": 600,
+            "rag_retrieval_candidate_limit": 1000,
+            "rag_rerank_candidate_limit": 0,
             **overrides,
         }
     )
@@ -189,7 +191,7 @@ async def test_needed_source_below_old_budget_is_dropped_while_its_document_stay
     assert any(item.startswith("doc-needed:") for item in stage["selected_ids"])
 
 
-async def test_default_budget_gives_the_needed_source_to_rerank(tmp_path: Path) -> None:
+async def test_wide_budget_gives_the_needed_source_to_rerank(tmp_path: Path) -> None:
     settings = _settings()
     limit = _retrieval_candidate_limit(50, build_engine_settings(settings, output_dir=tmp_path))
     stage = await _fusion_stage(settings, limit, _ranked_chunks())
@@ -241,14 +243,15 @@ async def test_answer_uses_low_fusion_rank_source_chosen_by_rerank(
 async def test_source_below_minimum_score_is_reported_as_insufficient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """候補に入っても最低点の下の原文は渡さない。日付を推測せず、資料不足を明示する。"""
+    """下げた合格点でも全部落ちる原文は渡さない。日付を推測せず、資料不足を明示する。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _llm)
     outcome = await AnswerEngine(
         _settings(),
         oracle=cast(Any, _RankedOracle(_ranked_chunks())),
-        genai=cast(Any, _ScoredGenAi(needed_score=0.16)),
+        # 全部が不合格なら合格点を 0.7 倍にしてやり直すので、下げた合格点より下の点数にする。
+        genai=cast(Any, _ScoredGenAi(needed_score=0.12)),
     ).run(SearchRequest(query=QUESTION, generate_answer=True))
 
     assert outcome.diagnostics["outcome"] == "insufficient_evidence"
@@ -259,5 +262,7 @@ async def test_source_below_minimum_score_is_reported_as_insufficient(
     # 候補に入って最低点で外れたことが、融合の予算で落ちたことと区別して残る。
     decision = next(item for item in threshold["decisions"] if item["candidate_id"] == NEEDED_ID)
     assert decision["status"] == "excluded"
+    assert threshold["relaxed_from"] is not None
+    assert threshold["minimum"] < threshold["relaxed_from"]
     fusion = next(stage for stage in stages if stage["stage"] == "candidate_fusion")
     assert NEEDED_ID in fusion["selected_ids"]

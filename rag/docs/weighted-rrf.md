@@ -9,15 +9,19 @@
 
 ## 計算
 
-原質問は1回の `DBMS_HYBRID_VECTOR.SEARCH` に vector と text を渡し、`search_fusion=UNION` / `search_scorer=WRRF` で検索・融合する。`vector.score_weight` と `text.score_weight` に設定比率（既定7と3）、両方の `rank_penalty` に既存定数（既定60）を渡す。各経路の候補上限を維持し、返却上限は両経路の和にする。
+原質問と「質問＋用語・同義語」の検索文は、それぞれ1回の `DBMS_HYBRID_VECTOR.SEARCH` に vector と text を渡し、`search_fusion=UNION` / `search_scorer=WRRF` で検索・融合する。`vector.score_weight` と `text.score_weight` に設定比率（既定7と3）、両方の `rank_penalty` に既存定数（既定60）を渡す。各経路の候補上限を維持し、返却上限は両経路の和にする。
 
-意味の言い換え・分解・HyDE の追加検索文は向量のみ。登録用語・同義語からの追加検索文は全文のみで、embedding API にも送らない。判定は検索文の出所に基づき、質問本文の語から推測しない。同一表現が両方の出所を持つ場合は予算を重複させず必要な両経路を使う。原質問と同じ表現は原質問として扱う。
+追加検索文の種類は「質問の言い換え・分解」（HyDE を含む）「質問＋用語・同義語」「呼び出し元の指定」である。言い換え・分解と呼び出し元の指定はベクトルのみ。登録用語・同義語の語を足した検索文は原質問と同じ原生ハイブリッド検索にする。業務ガイド・確認で選んだ条件・回答ルールの語だけを足した検索文はベクトルのみで、用語とそれらが混ざった検索文はハイブリッドにする。判定は検索文の出所に基づき、質問本文の語から推測しない。原質問と同じ表現は原質問として扱う。
 
-`score(d) = source_weight(original) × native_WRRF(d) / (100 × (k + 1)) + Σ source_weight(additional) × channel_weight / (k + rank(d))`
+全文検索の語は 24 語・3,800 字までなので、足した用語・同義語はドメインキーワードと同じ段で優先し、長い質問の後ろの別名が上限で落ちないようにする（#2163）。優先は足した語を持つ検索文だけに効き、原質問の語の分配は変えない。登録した語はその検索文のときだけ `retrieval_query_keywords`（原生方式では `bind_text_query_keywords`）で全文検索の語の組み立てに渡す。
+
+`score(d) = source_weight(original) × native_WRRF(d) / (100 × (k + 1)) + Σ source_weight(additional) × list_contribution(d)`
+
+`list_contribution` はベクトルのみの一覧なら `channel_weight / (k + rank(d))`、原生ハイブリッドの追加検索文（「質問＋用語・同義語」）なら原質問と同じく `native_WRRF(d) / (100 × (k + 1))` である。
 
 Oracle WRRF は理論上の最大値を100とするため、原始の正規化した順位寄与へ尺度を戻してから、原質問の出所予算を掛ける。融合済み結果の順位に再度RRFを掛けない。追加検索の順位は1から始まり、出現しない候補は寄与0。追加文は正規化・重複除去後の集合で追加予算30%を等分する。追加がなければ原質問の出所予算は1。空結果・失敗・未使用経路の予算を再配分しない。
 
-Sudachi方式は原質問のvector/text原始順位をアプリで融合し、追加文の経路は同じ出所規則で制限する。独立 engine の旧schema経路では原生方式へ暗黙に切り替えず、backend入口を使う。順位定数はbackendの `RAG_RRF_K`、旧schemaの `RRF_K` を維持する。
+Sudachi方式は原質問と「質問＋用語・同義語」のvector/text原始順位をアプリで融合し、追加文の経路は同じ出所規則で制限する。独立 engine の旧schema経路では原生方式へ暗黙に切り替えず、backend入口を使う。順位定数はbackendの `RAG_RRF_K`、旧schemaの `RRF_K` を維持する。
 
 画像のベクトル索引が有効な engine の直接経路では、既存の画像対テキスト埋め込みの比重を使い、**ベクトル方式の予算の中**を二つの埋め込み一覧に配分する。画像一覧の増設でベクトル方式の総予算を増やさない。
 

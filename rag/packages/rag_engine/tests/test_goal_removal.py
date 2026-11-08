@@ -129,10 +129,3 @@ class GoalFreeAnswerFlowTests(unittest.TestCase):
         # 検索は止めず、独立して読み取った条件（文書の種類の絞り込み）を渡す。
         search.assert_called()
         self.assertNotIn("inquiry_conditions", search.call_args.kwargs)
-
-    def test_desired_outcome_query_is_labeled_without_purpose_wording(self):
-        """経緯と希望が混ざった質問の希望の部分の検索文は残し、出どころを「希望する結果」と示す。"""
-        result, search = self._run("取消を試した。CSVを使って令和10年7月の予約を追加したい。")
-        self.assertIn("CSVを使って令和10年7月の予約を追加したい", search.call_args.kwargs["retrieval_queries"])
-        self.assertIn("[希望する結果] CSVを使って令和10年7月の予約を追加したい", result.question_display)
-        self.assertNotIn("質問の目的", result.question_display)

@@ -1,0 +1,238 @@
+"""言語資源の保存データから廃止した項目を取り除く migration を、合成の行で確かめる(#4666)。"""
+
+from __future__ import annotations
+
+import copy
+import re
+from dataclasses import replace
+from typing import Any
+
+import pytest
+from rag_parser_core.language import build_pack, builtin_pack
+
+from app.rag import language_pack_retired_fields as module
+from app.rag import system_schema
+from app.rag.language_pack_retired_fields import (
+    RETIRED_QUESTION_CUE_FIELDS,
+    remove_retired_language_pack_fields,
+)
+from app.rag.oracle_schema import oracle_schema_migration_sections, split_sql_statements
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+from app.rag.system_schema import SystemSchemaManager
+from tests.test_system_schema_manager import _FakeDatabase
+
+_NAME = "20261109_4666_language_pack_retired_question_cues"
+_KEEP = "hypothesis_cues"
+
+
+def _with_retired(pack: dict[str, Any]) -> dict[str, Any]:
+    old = copy.deepcopy(pack)
+    old["question_cues"].update({key: ["合成語"] for key in RETIRED_QUESTION_CUE_FIELDS})
+    return old
+
+
+class _Cursor:
+    def __init__(self, db: _Db) -> None:
+        self.db = db
+        self.rows: list[tuple[Any, ...]] = []
+        self.description: list[tuple[str, ...]] = []
+
+    def setinputsizes(self, **_: object) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self.rows
+
+    def execute(self, sql: str, binds: dict[str, Any] | None = None, **_: object) -> None:
+        import json
+
+        binds = binds or {}
+        self.rows = []
+        if "user_tables" in sql:
+            self.description = [("FOUND",)]
+            self.rows = [(1,)] if binds["name"] in self.db.tables else []
+            return
+        table = next(name for name in self.db.tables if name.lower() in sql.lower())
+        rows = self.db.tables[table]
+        if sql.startswith("SELECT"):
+            columns = re.match(r"SELECT (.*?) FROM", sql)
+            assert columns is not None
+            names = [c.strip() for c in columns.group(1).split(",")]
+            self.description = [(name.upper(),) for name in names]
+            self.rows = [
+                tuple(copy.deepcopy(row[name]) for name in names)
+                for row in rows
+                if "JSON_EXISTS" not in sql
+                or row["profile_config"].get("language_pack", {}).get("question_cues") is not None
+            ]
+            return
+        assert sql.startswith("UPDATE")
+        self.db.updates += 1
+        assignments = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[0])
+        key, bind = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[1])[0]
+        for row in rows:
+            if row[key] == binds[bind]:
+                for column, name in assignments:
+                    value = binds[name]
+                    row[column] = (
+                        json.loads(value) if column.endswith(("json", "config")) else value
+                    )
+
+
+class _Db:
+    def __init__(self, **tables: list[dict[str, Any]]) -> None:
+        self.tables = {name.upper(): rows for name, rows in tables.items()}
+        self.commits = 0
+        self.updates = 0
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+def _db(*releases: dict[str, Any], draft: dict[str, Any], profile: dict[str, Any]) -> _Db:
+    return _Db(
+        rag_language_pack_releases=list(releases),
+        rag_language_pack_state=[
+            {"singleton_id": 1, "draft_revision": 7, "draft_effective_json": draft}
+        ],
+        rag_search_answer_profiles=[{"search_answer_profile_id": "p", "profile_config": profile}],
+    )
+
+
+def _release(effective: dict[str, Any], *, content_hash: str = "stale") -> dict[str, Any]:
+    return {
+        "release_id": "r1",
+        "version": 3,
+        "effective_json": effective,
+        "content_hash": content_hash,
+        "ingest_hash": "ingest",
+    }
+
+
+def test_retired_fields_are_removed_from_snapshots_and_hash_is_recomputed() -> None:
+    current = builtin_pack().to_dict()
+    old = _with_retired(current)
+    profile = {
+        "query": {"marker": 1},
+        "language_pack": {
+            "question_cues": {"wish_endings": ["合成語"], _KEEP: ["合成語"]},
+            "search_terms": {"stopwords": ["合成語"]},
+        },
+    }
+    db = _db(_release(old), draft=old, profile=profile)
+
+    remove_retired_language_pack_fields(db)
+
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    pack = build_pack(release["effective_json"])
+    assert pack.to_dict() == current
+    assert release["content_hash"] == pack.hash
+    assert (release["version"], release["ingest_hash"]) == (3, "ingest")
+    state = db.tables["RAG_LANGUAGE_PACK_STATE"][0]
+    assert state["draft_effective_json"] == current
+    assert state["draft_revision"] == 7
+    config = db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]
+    assert config == {
+        "query": {"marker": 1},
+        "language_pack": {
+            "question_cues": {_KEEP: ["合成語"]},
+            "search_terms": {"stopwords": ["合成語"]},
+        },
+    }
+
+
+def test_running_twice_gives_the_same_result() -> None:
+    old = _with_retired(builtin_pack().to_dict())
+    db = _db(_release(old), draft=old, profile={"language_pack": {}})
+    remove_retired_language_pack_fields(db)
+    snapshot = copy.deepcopy(db.tables)
+    updates = db.updates
+
+    remove_retired_language_pack_fields(db)
+
+    assert db.tables == snapshot
+    assert db.updates == updates
+
+
+def test_profile_section_with_only_retired_fields_becomes_no_override() -> None:
+    profile = {"language_pack": {"question_cues": {"means_cues": ["合成語"]}}}
+    db = _db(draft=builtin_pack().to_dict(), profile=profile)
+    remove_retired_language_pack_fields(db)
+    config = db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]
+    assert config == {"language_pack": {}}
+    assert SearchAnswerProfileConfig.model_validate(config).language_pack == {}
+
+
+def test_rows_without_retired_fields_are_not_touched() -> None:
+    current = builtin_pack().to_dict()
+    db = _db(_release(current, content_hash="kept"), draft=current, profile={})
+    remove_retired_language_pack_fields(db)
+    assert db.updates == 0
+    assert db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]["content_hash"] == "kept"
+
+
+def test_missing_tables_and_empty_tables_do_not_fail() -> None:
+    remove_retired_language_pack_fields(_Db())
+    db = _Db(
+        rag_language_pack_releases=[], rag_language_pack_state=[], rag_search_answer_profiles=[]
+    )
+    remove_retired_language_pack_fields(db)
+    assert db.updates == 0
+
+
+def test_release_unreadable_for_another_reason_keeps_its_hash() -> None:
+    old = _with_retired(builtin_pack().to_dict())
+    del old["question_cues"][_KEEP]
+    db = _db(_release(old, content_hash="kept"), draft=builtin_pack().to_dict(), profile={})
+    remove_retired_language_pack_fields(db)
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert not RETIRED_QUESTION_CUE_FIELDS & release["effective_json"]["question_cues"].keys()
+    assert release["content_hash"] == "kept"
+
+
+def test_retired_fields_are_no_longer_part_of_the_pack() -> None:
+    assert not RETIRED_QUESTION_CUE_FIELDS & builtin_pack().to_dict()["question_cues"].keys()
+    assert module.without_retired_fields({"question_cues": {_KEEP: []}}) is None
+
+
+def test_migration_is_registered_as_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+    assert len(statements := split_sql_statements(section.sql)) == 1
+    assert statements[0].startswith("BEGIN")
+    for field in RETIRED_QUESTION_CUE_FIELDS:
+        assert field in section.sql
+
+
+def test_data_step_runs_once_when_the_migration_is_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        system_schema,
+        "MIGRATIONS",
+        tuple(
+            replace(item, data_step=calls.append) if item.name == _NAME else item
+            for item in system_schema.MIGRATIONS
+        ),
+    )
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    assert calls == []  # 未初期化の DB は記録だけで、データの移行を呼ばない。
+
+    database.migrations.pop(_NAME)
+    manager.initialize(allow_destructive=True)
+    assert len(calls) == 1
+    assert _NAME in database.migrations
+
+    manager.initialize()
+    assert len(calls) == 1

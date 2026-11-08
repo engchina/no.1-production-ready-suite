@@ -26,7 +26,6 @@ from rag_engine.retrieval.task_contract import (
     STEPS_REQUEST,
     current_request_text,
     explicit_requests,
-    goal_retrieval_queries,
     task_contract,
 )
 
@@ -62,9 +61,6 @@ def evidence_relevance(question: str, text: str) -> float:
     operation_text = f"{operation_fields}|{labels.field_line('condition_result_pairs')}|{alt['operation_text_cues']}"
     matches = [term for term in _terms(current_request_text(question)) if term in normalized]
     score = sum(min(len(term), 8) for term in matches)
-    # 試行した経路の語数が多くても、希望する結果を扱う原文を残す。
-    goal_terms = _terms(" ".join(goal_retrieval_queries(question)))
-    score += 2 * sum(min(len(term), 8) for term in goal_terms if term in normalized)
     # 列名の出現数ではなく、質問の各項目に対する定義本文を優先する。
     score += 100 * len({item["label"] for item in definition_ranges(text, definition_labels(question))})
     # 一致する操作説明を画面のサンプル値より優先する。無関係な操作には加点しない。
@@ -330,7 +326,7 @@ def new_evidence_count(records: Sequence[Any], seen: Sequence[Any]) -> int:
 
 
 # 回答生成に渡す原文の総予算（文字）。親 6,000 字の候補を複数の機能・文書から入れられる大きさ (#665)。
-EVIDENCE_BUDGET_CHARS = 80000
+EVIDENCE_BUDGET_CHARS = 40000
 # 後続候補のために取り置く短い原文範囲の上限（親ごと）。
 NATIVE_RESERVE_CAP = 1200
 

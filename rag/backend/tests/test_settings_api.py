@@ -3582,6 +3582,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "runtime_rules_answer_enabled": False,
         "hybrid_search_backend": "oracle_native",
         "rrf_method_ratio": [7.0, 3.0],
+        "rerank_slot_ratio": [7, 3],
         "rrf_source_ratio": [7.0, 3.0],
         "retrieval_query_limit": settings.rag_retrieval_query_limit,
         "rerank_top_n": settings.rag_rerank_top_n,
@@ -4074,6 +4075,30 @@ def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: 
     assert response.json()["data"]["rerank_enabled"] == initial["rerank_enabled"]
 
 
+def test_rerank_slot_ratio_default_save_and_reload(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_rerank_slot_ratio", (7, 3))
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    assert client.get("/api/settings/answering").json()["data"]["rerank_slot_ratio"] == [7, 3]
+    response = client.patch("/api/settings/answering", json={"rerank_slot_ratio": [4, 1]})
+    assert response.status_code == 200
+    assert response.json()["data"]["rerank_slot_ratio"] == [4, 1]
+    assert Settings(_env_file=env_file).rag_rerank_slot_ratio == (4, 1)
+
+
+@pytest.mark.parametrize("ratio", [[-1, 1], [0, 0], [1], [1, 2, 3], [1.5, 1]])
+def test_rerank_slot_ratio_rejects_invalid_without_saving(
+    ratio: list[float], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text() if env_file.exists() else ""
+    response = client.patch("/api/settings/answering", json={"rerank_slot_ratio": ratio})
+    assert response.status_code == 422
+    assert (env_file.read_text() if env_file.exists() else "") == before
+
+
 @pytest.mark.parametrize("field", ["rrf_method_ratio", "rrf_source_ratio"])
 @pytest.mark.parametrize("ratio", [[-1, 1], [0, 0], [1], [1, 2, 3]])
 def test_rrf_ratios_reject_invalid_without_saving(
@@ -4193,7 +4218,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
         settings.rag_retrieval_query_limit,
         settings.rag_rerank_min_relevance_score,
         settings.rag_rerank_top_n,
-    ) == (0.2, 300, 0.2, 300)
+    ) == (0.2, 60, 0.3, 60)
     fields = AnsweringSettingsData.model_fields
     assert tuple(
         fields[name].default
@@ -4203,7 +4228,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
             "rerank_min_relevance_score",
             "rerank_top_n",
         )
-    ) == (0.2, 300, 0.2, 300)
+    ) == (0.2, 60, 0.3, 60)
     custom = settings.model_copy(
         update={
             "rag_min_similarity": 0.35,

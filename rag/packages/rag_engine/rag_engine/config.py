@@ -94,9 +94,9 @@ DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
 # と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
 DEFAULT_RETRIEVAL_TOP_K_SETTING = 20
 DEFAULT_MAX_CONTEXT_RECORDS = 12
-DEFAULT_EVIDENCE_BUDGET_CHARS = 80000
+DEFAULT_EVIDENCE_BUDGET_CHARS = 40000
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
-DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.2
+DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.3
 # Reciprocal Rank Fusion の平滑化定数。ADB の hybrid 検索と回答側の順位融合で同じ値を使う。
 RRF_K = 60
 
@@ -305,9 +305,13 @@ class Settings:
     domain_keywords_override: tuple[str, ...] | None = None
     # 検索の比較実験用。重み付けを切ると全検索文が同じ票、original_query_only は原質問だけで検索する。
     retrieval_query_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # 検索文ごとに、全文検索の語の上限で優先する語（質問に足した用語・同義語）。ドメインキーワードと同じ段で扱う。
+    retrieval_query_keywords: dict[str, tuple[str, ...]] = field(default_factory=dict)
     hybrid_search_backend: str = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
+    # rerank の後の並びの枠（rerank の順の件数・検索の順の件数。#4664）。
+    rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
     runtime_terms_search_enabled: bool = False
@@ -328,9 +332,9 @@ class Settings:
     # 検索の起点 child 数（UI の既定値。API・SDK は引数で指定）、context に入れる parent 数、生成の原文予算（文字）(#1054)。
     retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K_SETTING
     # 基本候補と、拡張を含む精排入力の合計は回答起点数から独立する。
-    retrieval_candidate_limit: int = 1000
-    rerank_candidate_limit: int = 0
-    rerank_top_n: int = 300
+    retrieval_candidate_limit: int = 140
+    rerank_candidate_limit: int = 200
+    rerank_top_n: int = 60
     # 呼出元が解決した、各候補経路の既存の上限。KB/レシピには設定しない。
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
@@ -629,6 +633,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_native")),
         rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[7,3]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
+        rerank_slot_ratio=_slot_ratio(env.get("RAG_RERANK_SLOT_RATIO", "[7,3]")),
         runtime_rules_confirmation_enabled=_env_bool(env, "RUNTIME_RULES_CONFIRMATION_ENABLED", False),
         runtime_rules_answer_enabled=_env_bool(env, "RUNTIME_RULES_ANSWER_ENABLED", False),
         runtime_terms_search_enabled=_env_bool(env, "RUNTIME_TERMS_SEARCH_ENABLED", False),
@@ -701,9 +706,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
-        retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 1000)),
-        rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 0)),
-        rerank_top_n=max(0, _env_int(env, "RAG_ENGINE_RERANK_TOP_N", 300)),
+        retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 140)),
+        rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 200)),
+        rerank_top_n=max(0, _env_int(env, "RAG_ENGINE_RERANK_TOP_N", 60)),
         retrieval_stage_limits={
             str(key): max(0, int(value)) for key, value in json.loads(env.get("RAG_ENGINE_RETRIEVAL_STAGE_LIMITS", "{}")).items()
         },
@@ -926,6 +931,12 @@ def _rrf_ratio(raw: str) -> tuple[float, float]:
     left, right = float(parsed[0]), float(parsed[1])
     RrfWeights(vector=left, keyword=right)
     return left, right
+
+
+def _slot_ratio(raw: str) -> tuple[int, int]:
+    from rag_engine.retrieval.rerank_order import validate_slot_ratio
+
+    return validate_slot_ratio(json.loads(raw))
 
 
 def _hybrid_backend(value: str) -> str:

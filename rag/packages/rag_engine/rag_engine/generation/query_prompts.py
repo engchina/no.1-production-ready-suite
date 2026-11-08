@@ -94,7 +94,7 @@ def _query_expansion_details(expansion: QueryExpansionResult) -> list[str]:
 
 
 # 検索文生成のプロンプトへ渡す契約の項目。原質問の写し（original_question / current_request / request_units /
-# user_assertions）はプロンプトの「原質問」と重複し、intent_parts / required_aspects は回答生成・監査用なので渡さない (#917)。
+# user_assertions）はプロンプトの「原質問」と重複し、required_aspects は回答生成・監査用なので渡さない (#917)。
 _PROMPT_CONTRACT_KEYS = (
     "asks_cause",
     "requested_actions",
@@ -210,7 +210,6 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
 - {{strategy_guidance}}
 - routing_data_required は、個案の原因・値・処理分岐の確定に実際の日付・設定・CSV・ログ・履歴などの照合が必要かの暫定判定。必要なら routing_data_items に確認するフィールドと目的を列挙し、値や原因は推測しない。操作方法・出力方法・エラーの意味・規則の説明、関連文書の不足、質問内に全必要値がある場合は false と空配列（検索後に回答生成で再判定する）。
 - {{query_generation_rule}}
-- 戦略とは別に、根拠が規定（法令・規程の条文）にありそうな質問のときだけ、根拠になる条文そのものを想定して、その条文の一文の形（「〜の場合において、〜は、〜とする。」「〜は、〜しなければならない。」のような規定の用語と文体）で書いた検索文を provision_queries に返す。質問の判断に効く論点（定義・要件・期限・効果）ごとに 1 つ、最大 3 つ。1 つの検索文に別の論点を混ぜず、その論点の要件の語（資格・権利・状態・期間など）を落とさない。「〜に関する条文」「〜の規定」のような条文を探す言い方にしない。規定に無関係な質問では空配列。
 """
     + _EXPANSION_CONSTRAINTS
     + (
@@ -222,9 +221,7 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
         ': "検索戦略を選んだ短い理由", "routing_data_re'
         'quired": true|false, "routing_data'
         '_items": ["確認対象と目的（不要なら空配列）"], "qu'
-        'eries": ["追加の検索質問または検索文"], "provis'
-        'ion_queries": ["規定の書き方の検索文（無ければ空配列'
-        '）"]}'
+        'eries": ["追加の検索質問または検索文"]}'
     )
 )
 

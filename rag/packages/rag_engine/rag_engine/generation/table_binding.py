@@ -31,6 +31,8 @@ import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
+from pr_backend_core.spreadsheet.models import COLUMN_ROLE_TEXT_LABELS
+
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_width
 
@@ -53,6 +55,7 @@ _ROMAN_CELL = re.compile(r"[\u2160-\u217f]{1,4}")
 # 数の桁区切りのカンマ（「12,000円」）は区切りにしない（#4060）。
 _DIGIT_GROUP_COMMA = r"(?<![0-9])[,，]|[,，](?![0-9]{3}(?![0-9]))"
 _CELL_KEY_END = re.compile(rf"\s*[（(［\[〔【「『<＜]|\s{{2,}}|\s*(?:[、。;；]|{_DIGIT_GROUP_COMMA})")
+_COLUMN_ROLE_TEXT = re.compile("|".join(f"［{re.escape(label)}］" for label in COLUMN_ROLE_TEXT_LABELS.values()))
 _ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr\s*>", re.IGNORECASE | re.DOTALL)
 _CELL = re.compile(r"<t([dh])\b([^>]*)>(.*?)</t[dh]\s*>", re.IGNORECASE | re.DOTALL)
 _SPAN = re.compile(r"""(row|col)span\s*=\s*["']?(\d+)""", re.IGNORECASE)
@@ -60,6 +63,17 @@ _TAG = re.compile(r"<[^<>]*>")
 _TABLE_BLOCK = re.compile(r"<table\b.*?</table\s*>", re.IGNORECASE | re.DOTALL)
 # Markdown の表の区切りの行（| --- | :---: |）。
 _PIPE_RULE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$")
+
+
+def has_table_structure(text: str) -> bool:
+    """本文に表の形（HTML の表・Markdown の表の行・列の種類の表示）があるか。語の意味は読まない。"""
+    return (
+        "<table" in text.lower()
+        or _COLUMN_ROLE_TEXT.search(text) is not None
+        or any(_PIPE_RULE.match(line) or line.count("|") >= 2 for line in text.splitlines())
+    )
+
+
 # 「名前：値」の行の区切り（全角のコロン・縦棒・タブ・等号。半角のコロンは時刻「9:00」と区別する）。
 _PAIR_SEPARATOR = re.compile(r"[：｜|\t＝]|(?<![0-9]):(?![0-9])|\s=\s")
 # 「名前：値」の行の先頭の箇条書きの印（「- 」「・」「1. 」）。

@@ -340,9 +340,9 @@ def test_guide_step_instructions_keep_steps_the_user_cannot_perform() -> None:
 
     条件で外れる手順は分岐（visible_plan）がコードで外すので、生成の指示は手順を省く理由に条件を挙げない。
     """
-    from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GENERATE_SYSTEM_PROMPT
+    from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GUIDE_RULES_PROMPT
 
-    guide_line = next(line for line in GENERATE_SYSTEM_PROMPT.splitlines() if line.startswith("- guide_task_scope は"))
+    guide_line = next(line for line in GUIDE_RULES_PROMPT.splitlines() if line.startswith("- guide_task_scope: "))
     assert "利用者が自分で行えない必須手順も省かず" in guide_line
     assert "required=true" in guide_line and "required=false" in guide_line
     assert "外れる操作は混ぜない" not in guide_line

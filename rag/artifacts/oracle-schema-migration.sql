@@ -4515,3 +4515,9 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261109_4666_language_pack_retired_question_cues
+BEGIN
+  NULL; -- clause_split_chars,condition_cues,contrast_clause_endings,done_state_verbs,means_cues,observed_state_cues,passive_state_endings,tried_action_cues,uncertainty_cues,wish_endings,withdrawn_cues
+END;
+/

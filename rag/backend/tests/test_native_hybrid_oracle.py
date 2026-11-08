@@ -298,13 +298,13 @@ async def test_native_combined_original_and_provenance_channels(
         settings=SimpleNamespace(
             retrieval_query_sources={
                 "syntheticsemantic": ("質問の言い換え・分解",),
-                "syntheticterm": ("用語・同義語だけ",),
+                "syntheticterm": ("原質問 + 用語・同義語",),
             }
         ),
     )
     assert result.child_chunks
-    assert embedded == ["syntheticoriginal", "syntheticsemantic"]
-    assert sorted(c["search_fusion"] for c in calls) == ["TEXT_ONLY", "UNION", "VECTOR_ONLY"]
+    assert embedded == ["syntheticoriginal", "syntheticsemantic", "syntheticterm"]
+    assert sorted(c["search_fusion"] for c in calls) == ["UNION", "UNION", "VECTOR_ONLY"]
     original = next(c for c in calls if c["search_fusion"] == "UNION")
     assert original["search_scorer"] == "WRRF"
     assert original["vector"]["score_weight"] == ratio[0]

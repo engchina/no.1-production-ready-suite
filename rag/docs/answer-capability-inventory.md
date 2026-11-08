@@ -47,7 +47,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
-| 質問の embedding（OCI Generative AI） | 必須 | 例外を送出 → 回答は**エラー**（0 件にしない） | `SP`（`answer` / `retrieval` が `error`。`error_type` と安全なコードだけ） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._search` |
+| 質問の embedding（OCI Generative AI） | 任意（全文検索へ縮退。#4663） | 失敗 → 原質問と、ベクトルと全文の両方を使う検索文を全文のみで検索し、ベクトルのみの検索文は外す。全文検索が 1 本も走らないときはエラーにせず 0 件にし、根拠 0 件の経路で終える。失敗は 1 回の回答の中で覚え、検索のたびに呼び直さない（先読みも同じ） | `DS`（`query_embedding`）。検索だけの経路（`retrieval_only`）は `diagnostics.answer.degraded_steps` | 見せない（回答の本文に注意書きを出さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._search`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_query_hits` |
 | vector 検索（Oracle AI Vector Search） | 必須 | 例外を送出 → **エラー** | `SP` | 見せない | `rag/backend/app/clients/oracle.py::OracleClient.search_many`・`_read_vector_branch` |
 | 全文検索（Oracle Text） | 必須（hybrid の方式で検索するとき） | SQL の失敗は例外を送出 → **エラー**。質問から検索語が作れないとき（`_oracle_text_query` が `None`）は全文検索を飛ばす（失敗ではない） | `SP` | 見せない | `rag/backend/app/clients/oracle.py::_read_keyword_branch`・`_oracle_text_query` |
 | 全文検索の語の分割（Sudachi） | 任意 | Sudachi・辞書が使えない・分割に失敗 → 文字種の区切りだけで検索語を作る | `DS`（`text_search_tokenizer`。使えないときは回答ごとに 1 回、分割の失敗は 1 回ごと）。使えるかの確認は process ごとに 1 回（例外を cache する） | 見せない（縮退は `DS` で分かる） | `rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py::_sudachi_failure`・`sudachi_unavailable`・`_content_terms`・`rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
@@ -66,6 +66,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
 | rerank（Cohere Rerank） | 任意（設定 `RAG_RERANK_ENABLED`。モデル・compartment が未設定なら実行しない） | 原質問の rerank の失敗 → 取得の順で続ける | `DS`（`rerank`）・`ST`（工程「Rerank」の status「失敗・取得順を保持」） | 見せない: 診断の `models.rerank` は、無効・未設定のときと、回答の中で 1 回でも rerank が失敗したとき空にする（#3286）。引用には `rerank_score` が付かない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_rerank_records`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._models_used` |
+| rerank の後の並びの枠と MMR（#4664。`RAG_RERANK_SLOT_RATIO`） | 任意（rerank が有効で点の付いた候補があるとき） | rerank が無効・失敗・有効な点が無い → 枠も MMR も行わず検索の順位のまま。全候補が合格点未満 → 合格点を 0.7 倍にして 1 回だけやり直し、それでも 0 件なら根拠 0 件 | `ST`（工程「Rerank」の「関連度スコアの下限」「並びの枠」）・`retrieval_stages`（`rerank_threshold` の `relaxed_from`・`rerank_slot_order`） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_rerank_records`・`rag/packages/rag_engine/rag_engine/retrieval/rerank_order.py::order_reranked_candidates` |
 | 追加の検索文の rerank（#2161） | 任意 | その検索文を飛ばし、原質問の関連度で補う | `DS`（`rerank_extra_query`）・`ST`（「検索文 N 本の最高値」の N） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
 
 ### 検索の拡張（`answer_engine.py`）
@@ -145,6 +146,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | kind | 処理 | 記録する箇所 |
 |---|---|---|
 | `retrieval` | ランキング一覧の取得に失敗。成功した一覧だけを元の重みで使い、全失敗なら検索の失敗を返す | `rag/backend/app/rag/answer_engine.py::_search`・`rag/packages/rag_engine/rag_engine/adapters/oracle/store.py::search_adb_hybrid_chunks` |
+| `query_embedding` | 質問の embedding に失敗し、全文のみの検索で続行（ベクトルのみの検索文は外し、同じ回答では呼び直さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
 | `query_expansion` | 言い換え・分解に失敗し原質問で続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_degraded_query_expansion` |
 | `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |
@@ -183,7 +185,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 ## 一覧から分かったこと
 
-- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、質問の embedding、vector 検索、全文検索の SQL、引用ラベルの検索、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索の失敗は 0 件にせずエラーにする（#3259 のテスト）。
+- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、vector 検索（embedding を作れたとき）、全文検索の SQL、引用ラベルの検索、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索（Oracle の SQL）の失敗は 0 件にせずエラーにする（#3259 のテスト）。質問の embedding の失敗はエラーにせず全文検索へ縮退する（#4663）。
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・CRAG の判定・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語と回答ルールの読み込みは、例外の型の名前だけにした（#3284）。

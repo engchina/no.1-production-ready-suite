@@ -39,7 +39,7 @@ MAX_CONTEXT_RECORDS = 12
 
 MAX_RECORD_TEXT_CHARS = 1200
 
-DEFAULT_RETRIEVAL_CANDIDATE_LIMIT = 1000
+DEFAULT_RETRIEVAL_CANDIDATE_LIMIT = 140
 
 MAX_RERANK_METADATA_CHARS = 700
 
@@ -582,10 +582,15 @@ def _records_by_rerank_ranks(
     *,
     candidate_indices: Sequence[int] | None = None,
     decisions: list[dict[str, object]] | None = None,
+    min_score_override: float | None = None,
 ) -> list[AnswerRecord]:
     selected: list[AnswerRecord] = []
     seen: set[int] = set()
-    min_score = max(0.0, float(getattr(settings, "rerank_min_relevance_score", 0.0) or 0.0))
+    min_score = (
+        min_score_override
+        if min_score_override is not None
+        else max(0.0, float(getattr(settings, "rerank_min_relevance_score", 0.0) or 0.0))
+    )
     for rank_position, rank in enumerate(ranks, start=1):
         index = rank.index
         if index in seen or index < 0 or index >= len(records):

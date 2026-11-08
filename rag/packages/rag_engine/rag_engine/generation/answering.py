@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
@@ -233,7 +234,6 @@ from rag_engine.knowledge.prompt_files import (
     render_prompt_template,
 )
 from rag_engine.knowledge.runtime_knowledge import (
-    TERMS_ONLY_SOURCE_LABEL,
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
     runtime_rules_status,
@@ -298,6 +298,7 @@ from rag_engine.retrieval.request_coverage import (
     select_new_parents,
     within_extra_budget,
 )
+from rag_engine.retrieval.rerank_order import COLUMN_RERANK, COLUMN_SEARCH, DEFAULT_SLOT_RATIO, order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.rerank_selection import select_reranked_candidates
 from rag_engine.retrieval.scope import (
@@ -312,7 +313,6 @@ from rag_engine.retrieval.task_contract import (
     LIST_REQUEST,
     explicit_requests,
     filter_queries,
-    goal_retrieval_queries,
     query_rejection_reason,
     task_contract,
 )
@@ -432,6 +432,8 @@ def rerank_records(
 
 # rerank に使う検索文の上限（原質問のほか。LLM ではなく rerank の呼び出しの数を抑える。#2161）。
 MAX_EXTRA_RERANK_QUERIES = 6
+# 全候補が合格点未満のとき、合格点に掛けてやり直す倍率（#4664）。
+RERANK_THRESHOLD_RELAXATION = 0.7
 
 
 def _best_rerank_ranks(
@@ -534,20 +536,6 @@ def _best_rerank_ranks(
     return merged
 
 
-def _ranking_extra_queries(queries: Sequence[str], settings: Settings | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """質問を含まない用語表現を分離する。独立した質問の出所も持つ表現は残す。"""
-    sources = getattr(settings, "retrieval_query_sources", {})
-    source_keys = {normalized_query_key(query): labels for query, labels in sources.items()}
-    search_only_sources = {TERMS_ONLY_SOURCE_LABEL}
-    ranking: list[str] = []
-    search_only: list[str] = []
-    for query in queries:
-        labels = source_keys.get(normalized_query_key(query), ())
-        target = search_only if labels and set(labels) <= search_only_sources else ranking
-        target.append(query)
-    return tuple(ranking), tuple(search_only)
-
-
 def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | None, *, enabled: bool) -> str:
     """rerank を実行しない理由。実行するなら空文字。"""
     if not enabled:
@@ -557,6 +545,43 @@ def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | No
     if not records:
         return "対象の根拠なし"
     return ""
+
+
+def _order_by_slots(
+    records: Sequence[AnswerRecord], settings: Settings, step: Any, receipt: dict[str, Any], *, rerank_phase: str
+) -> list[AnswerRecord]:
+    """合格した候補を、rerank の順（MMR）と検索の順の枠で 1 本に並べ、工程の記録に残す（#4664）。"""
+    ratio = cast(tuple[int, int], getattr(settings, "rerank_slot_ratio", DEFAULT_SLOT_RATIO))
+    tokenizer_config = TextSearchTokenizerConfig(
+        sudachi_dict_type=getattr(settings, "text_search_tokenizer_sudachi_dict", ""),
+        sudachi_config_path=getattr(settings, "text_search_tokenizer_sudachi_config", ""),
+        latin_stemmer=getattr(settings, "text_search_tokenizer_latin_stemmer", ""),
+    )
+    ordered, columns = order_reranked_candidates(records, ratio, tokenizer_config=tokenizer_config)
+    counts = Counter(column for column in columns if column is not None)
+    trace = {
+        "ratio": list(ratio),
+        "rerank_slot_count": counts[COLUMN_RERANK],
+        "search_slot_count": counts[COLUMN_SEARCH],
+        "kept_position_count": len(records) - sum(counts.values()),
+    }
+    receipt["並びの枠"] = trace
+    step.field("並びの枠（rerank の順 : 検索の順）", f"{ratio[0]} : {ratio[1]}")
+    breakdown = (
+        ("rerank の順", trace["rerank_slot_count"]),
+        ("検索の順", trace["search_slot_count"]),
+        ("位置を保つ", trace["kept_position_count"]),
+    )
+    step.field("枠の内訳", " / ".join(f"{label} {count} 件" for label, count in breakdown))
+    record_retrieval_stage(
+        {
+            "stage": "rerank_slot_order",
+            "phase": rerank_phase,
+            **trace,
+            "order": [{"id": retrieval_record_id(record), "column": column} for record, column in zip(ordered, columns, strict=True)],
+        }
+    )
+    return ordered
 
 
 def _rerank_records(
@@ -571,9 +596,9 @@ def _rerank_records(
     rerank_phase: str = "other",
     receipt: dict[str, Any] | None = None,
 ) -> list[AnswerRecord]:
-    """rerank 本体。無効・未設定・失敗時は取得順を保持する。
+    """rerank 本体。無効・未設定・失敗時は取得順を保持する（並びの枠と MMR も行わない。#4664）。
 
-    extra_queries（分解した検索文・規定の書き方の検索文など）があれば、候補ごとに原質問と各検索文の関連度の最高値で
+    extra_queries（言い換え・分解の検索文、質問に用語・同義語を足した検索文など）があれば、候補ごとに原質問と各検索文の関連度の最高値で
     並べる（#2161）。長い事例の質問の全体と比べると、要求の一部にだけ答える根拠（条文など）の関連度が薄まるため。
 
     実行しなかったときは、実行記録の状態に理由を付ける（「未実行: 無効の設定」など）。画面は状態をそのまま出すため、
@@ -598,27 +623,16 @@ def _rerank_records(
         return [protected_candidates[index] for index in sorted(protected_candidates)] + remainder
     step.field("並べ替える候補", f"{len(rerankable_candidates)} 件" + (f"（ほか {len(remainder)} 件は取得順のまま）" if remainder else ""))
     documents = [_rerank_document(record) for record in rerankable_candidates]
-    ranking_queries, search_only_queries = _ranking_extra_queries(extra_queries, settings)
     receipt.update(
         {
             "状態": "採点完了",
             "採点候補ID": [retrieval_record_id(record) for record in rerankable_candidates],
-            "検索専用のため採点しない検索文": list(search_only_queries),
-        }
-    )
-    record_retrieval_stage(
-        {
-            "stage": "rerank_query_selection",
-            "phase": rerank_phase,
-            "ranking_queries": [question, *ranking_queries],
-            "retrieval_only_queries": list(search_only_queries),
-            "reason": "registered_term_only_search_expression",
         }
     )
     try:
         reranked = _best_rerank_ranks(
             question,
-            ranking_queries,
+            extra_queries,
             documents,
             settings,
             step,
@@ -641,11 +655,28 @@ def _rerank_records(
         candidate_indices=rerankable_indices,
         decisions=threshold_rows,
     )
+    # 全部が不合格のときだけ、合格点を下げて 1 回だけやり直す（#4664）。それでも 0 件なら根拠 0 件で終える。
+    relaxed_from: float | None = None
+    if all(row["status"] == "excluded" for row in threshold_rows):
+        relaxed_from = cast(float, threshold_rows[0]["minimum"])
+        threshold_rows.clear()
+        reranked_candidates = _records_by_rerank_ranks(
+            rerankable_candidates,
+            reranked,
+            cast(Settings, settings),
+            candidate_indices=rerankable_indices,
+            decisions=threshold_rows,
+            min_score_override=round(relaxed_from * RERANK_THRESHOLD_RELAXATION, 6),
+        )
+        receipt["関連度下限のやり直し"] = {"元の下限": relaxed_from, "下げた下限": threshold_rows[0]["minimum"]}
     receipt["関連度下限の判断"] = threshold_rows
     excluded = sum(row["status"] == "excluded" for row in threshold_rows)
     unscored = sum(row["status"] == "kept_unscored" for row in threshold_rows)
     attachments = sum(row["status"] == "kept_attachment" for row in threshold_rows)
-    step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
+    if relaxed_from is None:
+        step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
+    else:
+        step.field("関連度スコアの下限", f"{threshold_rows[0]['minimum']}（全候補が {relaxed_from} 未満のため下げて 1 回だけやり直し）")
     step.field(
         "関連度による選別",
         f"採用 {len(reranked_candidates)} 件 / 下限未満で除外 {excluded} 件 / "
@@ -665,6 +696,7 @@ def _rerank_records(
             "stage": "rerank_threshold",
             "phase": rerank_phase,
             "minimum": threshold_rows[0]["minimum"],
+            "relaxed_from": relaxed_from,
             "decisions": threshold_rows,
             "excluded_count": excluded,
             "unscored_kept_count": unscored,
@@ -674,8 +706,11 @@ def _rerank_records(
     )
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
     protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)
+    has_scores = any(row["adopted_score"] is not None for row in threshold_rows)
+    if has_scores:
+        reranked_candidates = _order_by_slots(reranked_candidates, cast(Settings, settings), step, receipt, rerank_phase=rerank_phase)
     merged = _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
-    if not any(row["adopted_score"] is not None for row in threshold_rows):
+    if not has_scores:
         receipt["採用件数の判断"] = {"applied": False, "stop_reason": "no_scores"}
         if int(getattr(settings, "rerank_top_n", 0) or 0) > 0:
             step.add("有効な採点がないため、採用件数の上限を適用せず候補を保持します。")
@@ -805,8 +840,8 @@ def select_documents(
 
     粗→細の検索の「粗」の側。文書級の要約や索引は作らず、文書の点数は文書の chunk の rerank の点数の最高値
     （MaxP。#3504）。後回しにするのは、並べ替えの点数（原質問と検索文の最高値。#2161）でも原質問だけの点数でも
-    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の上位 `top_k` 件（起点）に chunk を
-    持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
+    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の後の並び（枠の並び。#4664）の上位
+    `top_k` 件（起点）に chunk を持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
     文書を、点数の低い候補を多く持つ文書より後ろにしていた。#3504）。集約は rerank が見た範囲、すなわち候補
     全件で行う (#1084)。後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。
     rerank の点数が無い（rerank が動かなかった）ときは落差を判断できないので後回しにしない。無効なら何もしない。
@@ -2451,13 +2486,23 @@ def _grounded_prompt(
     known_gaps は CRAG 評価器の missing_aspects（#983）で、context block に既知の欠落として載せる。
     field_kind_note は根拠の画面の図の項目の種類の注記（#2404。``form_field_kinds.prompt_note``）。
     """
-    from rag_engine.generation.grounded import build_context_block
+    from rag_engine.generation.grounded import build_context_block, guide_rules_context
 
+    has_guide = runtime_knowledge is not None and bool(
+        runtime_knowledge.guide_task_scope
+        or runtime_knowledge.guide_condition_notices
+        or runtime_knowledge.guide_acquisition
+        or runtime_knowledge.guide_steps
+        or runtime_knowledge.guide_step_contracts
+    )
     preface = "\n\n".join(
         section
         for section in (
             ("confirmed_premises:\n" + json.dumps(list(confirmed_premises), ensure_ascii=False)) if confirmed_premises else "",
             runtime_knowledge.prompt_context() if runtime_knowledge is not None and runtime_knowledge.has_matches else "",
+            guide_rules_context(scope=bool(runtime_knowledge.guide_task_scope), notices=bool(runtime_knowledge.guide_condition_notices))
+            if runtime_knowledge is not None and has_guide
+            else "",
             ("guide_task_scope:\n" + json.dumps(runtime_knowledge.guide_task_scope, ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_task_scope
             else "",
@@ -2497,6 +2542,7 @@ def _grounded_prompt(
                 known_gaps=known_gaps,
                 guide_steps=runtime_knowledge.guide_steps if runtime_knowledge is not None else (),
                 guide_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge is not None else (),
+                attached_images=bool(images),
             ),
         },
     )
@@ -4485,7 +4531,7 @@ def _cover_missing_requests(
         except Exception as exc:
             entry.update(status="failed", error=type(exc).__name__)
             raise
-        generated = tuple(dict.fromkeys((*expansion.generated_queries, *expansion.provision_queries)))
+        generated = expansion.generated_queries
         entry.update(
             status="generated" if generated else "no_queries",
             effective_strategy=expansion.effective_strategy,
@@ -5106,16 +5152,11 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
                 search=settings.runtime_terms_search_enabled,
                 answer=settings.runtime_terms_answer_enabled,
             )
-            query = matched_term_query(result)
-            additions = _dedupe_queries(
-                tuple(
-                    value
-                    for value in (result.expanded_question, query)
-                    if value and _dedupe_query_key(value) != _dedupe_query_key(result.original_question)
-                )
-            )
-            if settings.original_query_only:
-                additions = ()
+            additions: tuple[str, ...] = ()
+            if not settings.original_query_only and _dedupe_query_key(result.expanded_question) != _dedupe_query_key(
+                result.original_question
+            ):
+                additions = (result.expanded_question,)
             _describe_term_usage(step, result, answer=False, queries=additions)
             return result
         except Exception as exc:
@@ -5125,12 +5166,9 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
             return failed_runtime
 
 
-def matched_term_query(runtime_knowledge: RuntimeKnowledgeContext | None) -> str:
-    """質問に一致した用語・同義語の、用語と別名だけを並べた検索文（#2163）。一致が無ければ空。"""
-    if runtime_knowledge is None:
-        return ""
-    labels = _dedupe_queries(tuple(label for term in runtime_knowledge.retrieval_terms for label in term.labels()))
-    return " ".join(labels)
+def _term_labels(runtime_knowledge: RuntimeKnowledgeContext) -> tuple[str, ...]:
+    """検索に使う、一致した用語と別名。"""
+    return _dedupe_queries(tuple(label for term in runtime_knowledge.retrieval_terms for label in term.labels()))
 
 
 def _retrieval_query_plan_payload(
@@ -5149,17 +5187,10 @@ def _retrieval_query_plan_payload(
 ) -> dict[str, Any]:
     runtime_question = runtime_knowledge.expanded_question if runtime_knowledge is not None else expansion.original_question
     queries = _dedupe_queries(vector_queries or text_search_info.query_variants or expansion.retrieval_queries)
-    from rag_engine.retrieval.query_channels import expression_channels
-
-    vector_inputs = tuple(
-        q
-        for q in queries
-        if expression_channels(q, expansion.original_question, getattr(settings, "retrieval_query_sources", {}) or {}) != ("keyword",)
-    )
     plan = RetrievalQueryPlan(
         original_question=expansion.original_question,
         runtime_expanded_question=runtime_question,
-        vector_queries=vector_inputs,
+        vector_queries=tuple(queries),
         text_query_variants=tuple(text_search_info.query_variants),
         oracle_text_queries=tuple(text_search_info.oracle_text_queries),
         text_search_tokens=tuple(text_search_info.tokens),
@@ -5210,7 +5241,6 @@ def build_query_expansion(
     routing_data_required = None
     routing_data_items: tuple[str, ...] = ()
     routed_queries: list[str] = []
-    provision_queries: tuple[str, ...] = ()
 
     if selected_strategy == AUTO_ROUTING_STRATEGY:
         try:
@@ -5230,12 +5260,6 @@ def build_query_expansion(
         routing_data_items = tuple(_string_list(routing.routing_data_items))
         routing_data_required = True if routing_data_items else routing.routing_data_required
         routed_queries = _string_list(routing.queries)
-        provision_queries, _ = filter_queries(
-            original_question,
-            _generated_queries_from_payload(
-                {"queries": _string_list(routing.provision_queries)}, original_question, limit=MAX_PROVISION_QUERIES
-            ),
-        )
 
     if effective_strategy == SIMPLE_RETRIEVAL_STRATEGY:
         return QueryExpansionResult(
@@ -5245,7 +5269,6 @@ def build_query_expansion(
             routing_reason=routing_reason,
             routing_data_required=routing_data_required,
             routing_data_items=routing_data_items,
-            provision_queries=provision_queries,
         )
 
     # 自動ルーティングは戦略選択と検索文生成を1回の呼出で行う。先に上限で切ると先頭の不採用ぶんだけ
@@ -5276,7 +5299,6 @@ def build_query_expansion(
                 allowed_strategies=allowed_strategies,
                 routing_data_required=routing_data_required,
                 routing_data_items=routing_data_items,
-                provision_queries=provision_queries,
             )
         generated_queries, rejected = filter_queries(
             original_question, _generated_queries_from_payload(output.model_dump(mode="json"), original_question, limit=None)
@@ -5292,12 +5314,7 @@ def build_query_expansion(
         routing_reason=routing_reason,
         routing_data_required=routing_data_required,
         routing_data_items=routing_data_items,
-        provision_queries=provision_queries,
     )
-
-
-# 規定の書き方の検索文の上限（論点・要件ごとに 1 本。#2163）。
-MAX_PROVISION_QUERIES = 3
 
 
 def _query_expansion_max_queries(settings: Settings) -> int:
@@ -5346,7 +5363,6 @@ def _degraded_query_expansion(
     allowed_strategies: tuple[str, ...] | None = None,
     routing_data_required: bool | None = None,
     routing_data_items: tuple[str, ...] = (),
-    provision_queries: tuple[str, ...] = (),
 ) -> QueryExpansionResult:
     """質問拡張の LLM 呼び出しが失敗したときの縮退結果を返します。
 
@@ -5366,7 +5382,6 @@ def _degraded_query_expansion(
         routing_reason=f"{stage}の LLM 呼び出しに失敗したため、原質問のみで続行します（{error}）",
         routing_data_required=routing_data_required,
         routing_data_items=routing_data_items,
-        provision_queries=provision_queries,
     )
 
 
@@ -5406,6 +5421,7 @@ def build_question_text_search_info(
             if settings.domain_keywords_override is not None
             else load_domain_keywords(settings.output_dir)
         )
+        query_keywords = {_dedupe_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
         query_terms: list[tuple[str, ...]] = []
         tokenization_traces: list[dict[str, Any]] = []
         oracle_queries: list[str] = []
@@ -5413,7 +5429,7 @@ def build_question_text_search_info(
         for variant in variants:
             tokenization = tokenize_text_search_query_with_trace(
                 variant,
-                domain_keywords=domain_keywords,
+                domain_keywords=[*domain_keywords, *query_keywords.get(_dedupe_query_key(variant), ())],
                 config=config,
                 max_tokens=MAX_TEXT_SEARCH_TOKENS,
             )
@@ -6642,8 +6658,8 @@ def answer_question_result(
                     step.add(prefetch_note)
                 step.add(*_query_expansion_details(expansion))
                 # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
-                if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
-                    step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
+                if expansion.generated_queries:
+                    step.add("言い換えた検索文:", *numbered([_display_query(query) for query in expansion.generated_queries], limit=8))
                 if expansion.rejected_queries:
                     step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（原質問から外れる）")
                 if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
@@ -6660,15 +6676,12 @@ def answer_question_result(
         "原質問と言い換え・分解、用語・同義語による追加検索文をまとめ、重複を除き、全文検索に使う検索語を作ります。",
     ) as step:
         keyword_trace: dict[str, Any] = {}
-        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに語を足しただけの
-        # 検索文（expanded_question）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
-        term_query = matched_term_query(runtime_knowledge)
         candidate_queries = _merge_retrieval_queries(
             normalized_question,
             runtime_knowledge.expanded_question,
-            *_dedupe_queries((*expansion.retrieval_queries, *((term_query,) if term_query else ()))),
+            *expansion.retrieval_queries,
         )
-        grounded = " ".join(label for term in runtime_knowledge.retrieval_terms for label in term.labels())
+        grounded = " ".join(_term_labels(runtime_knowledge))
         retrieval_queries, rejected = filter_queries(normalized_question, candidate_queries, grounded_text=grounded)
         if trusted_queries:
             retrieval_queries, rejected = _keep_trusted_queries(candidate_queries, retrieval_queries, rejected, trusted_queries)
@@ -6683,13 +6696,6 @@ def answer_question_result(
             sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         for query in expansion.generated_queries:
             sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問の言い換え・分解")
-        if term_query:
-            sources.setdefault(_dedupe_query_key(term_query), TERMS_ONLY_SOURCE_LABEL)
-        # 規定の書き方の検索文は質問拡張の LLM が作り、希望する結果の検索文は経緯と希望が混ざった質問から希望の部分を取り出す。
-        for query in expansion.provision_queries:
-            sources.setdefault(_dedupe_query_key(query), "質問拡張")
-        for query in goal_retrieval_queries(expansion.original_question):
-            sources.setdefault(_dedupe_query_key(query), "希望する結果")
         query_sources: dict[str, tuple[str, ...]] = {}
         for query in retrieval_queries:
             key = _dedupe_query_key(query)
@@ -6701,8 +6707,6 @@ def answer_question_result(
                 and _dedupe_query_key(runtime_knowledge.expanded_question) == key
             ):
                 labels.append(runtime_knowledge.query_source)
-            if term_query and _dedupe_query_key(term_query) == key:
-                labels.append(TERMS_ONLY_SOURCE_LABEL)
             query_sources[query] = tuple(dict.fromkeys(labels))
         step.input(
             {
@@ -6714,7 +6718,10 @@ def answer_question_result(
                 "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
             }
         )
-        settings = replace(settings, retrieval_query_sources=query_sources)
+        # 用語・同義語を足した検索文は、足した語を全文検索の語の上限から落とさない（長い質問の後ろの別名が埋もれる #2163）。
+        term_labels = _term_labels(runtime_knowledge)
+        query_keywords = {runtime_knowledge.expanded_question: term_labels} if term_labels else {}
+        settings = replace(settings, retrieval_query_sources=query_sources, retrieval_query_keywords=query_keywords)
         text_search_info = build_question_text_search_info(
             normalized_question,
             settings,
@@ -7882,8 +7889,7 @@ def _answer_question_result(
         answer_flow=selected_answer_flow,
         retrieval_scope=selected_retrieval_scope,
         classification_filter=selected_classification_filter.to_metadata(),
-        # 規定の書き方の検索文 (#2148) も、LLM が作った検索文として記録する。
-        generated_queries=(*expansion.generated_queries, *expansion.provision_queries),
+        generated_queries=expansion.generated_queries,
         routing_reason=expansion.routing_reason,
         routing_data_required=expansion.routing_data_required,
         routing_data_items=expansion.routing_data_items,

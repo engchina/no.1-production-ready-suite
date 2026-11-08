@@ -148,7 +148,7 @@ def test_the_prompt_shows_the_catalog_mark_on_the_evidence_line():
     spans = grounded.tag_spans(QUESTION, _grounded_spans(QUESTION, _context(), (), None))
     lines = [line for line in grounded.format_functions(spans).splitlines() if line.startswith("[E")]
     assert [line.endswith(" catalog") for line in lines].count(True) == 1
-    assert "catalog" in grounded.GENERATE_SYSTEM_PROMPT
+    assert "catalog" in grounded.EVIDENCE_READING_PROMPT
 
 
 def _review(*supports: tuple[int, str]):

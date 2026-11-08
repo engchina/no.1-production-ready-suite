@@ -1,28 +1,15 @@
-"""用語の検索用表現が回答の起点を辞書資料へ置き換えないことを確認する。"""
+"""質問に用語・同義語を足した検索文も、rerank の比較文に使う（原質問との最高値で並べる）。"""
 
 from types import SimpleNamespace
-
-import pytest
 
 from rag_engine.generation import answering
 from rag_engine.generation.answering import AnswerRecord, rerank_records
 from rag_engine.models.llm import RerankTextRank
 
 
-@pytest.mark.parametrize(
-    "sources,expected",
-    [
-        (("用語・同義語だけ",), ["A", "B", "D"]),
-        (("原質問 + 用語・同義語",), ["D", "A", "B"]),
-        (("質問の言い換え・分解",), ["D", "A", "B"]),
-        (("用語・同義語だけ", "質問の言い換え・分解"), ["D", "A", "B"]),
-        ((), ["D", "A", "B"]),
-        (("原質問 + 用語・同義語 + 確認で選んだ条件",), ["D", "A", "B"]),
-    ],
-)
-def test_search_only_term_queries_do_not_displace_both_subjects(monkeypatch, sources, expected):
+def test_term_expanded_question_is_used_as_a_rerank_query(monkeypatch):
     original = "項目 A と B の条件を比較してください。"
-    extra = "項目 A 別名 A 項目 B 別名 B"
+    extra = "項目 A と B の条件を比較してください。\n項目 A 別名 A 項目 B 別名 B"
     records = [
         AnswerRecord(
             id=key,
@@ -31,15 +18,13 @@ def test_search_only_term_queries_do_not_displace_both_subjects(monkeypatch, sou
             page=1,
             seq_no=i,
             category="Chunk",
-            text=f"合成資料 {key}",
+            text=f"合成資料 item{key}",
             source=f"{key}.txt",
         )
         for i, key in enumerate(("A", "B", "D"))
     ]
-    settings = SimpleNamespace(rerank_model="synthetic", rerank_enabled=True, retrieval_query_sources={extra: sources})
+    settings = SimpleNamespace(rerank_model="synthetic", rerank_enabled=True, retrieval_query_sources={extra: ("原質問 + 用語・同義語",)})
     calls = []
-    stages = []
-    monkeypatch.setattr(answering, "record_retrieval_stage", stages.append)
     monkeypatch.setattr(answering, "_rerank_configured", lambda settings: True)
 
     def rank(query, documents, settings, top_n):
@@ -49,12 +34,6 @@ def test_search_only_term_queries_do_not_displace_both_subjects(monkeypatch, sou
 
     monkeypatch.setattr(answering, "rerank_text_with_scores", rank)
     ranked = rerank_records(original, records, settings, enabled=True, extra_queries=[extra])
-    assert [row.id for row in ranked] == expected
-    assert calls == ([original] if expected[0] == "A" else [original, extra])
-    assert len(ranked) == 3
-    selection = next(row for row in stages if row["stage"] == "rerank_query_selection")
-    assert selection["ranking_queries"] == calls
-    assert selection["retrieval_only_queries"] == ([extra] if expected[0] == "A" else [])
-    # 入力の出所と候補は変更しない。
-    assert settings.retrieval_query_sources == {extra: sources}
+    assert [row.id for row in ranked] == ["D", "A", "B"]
+    assert calls == [original, extra]
     assert [record.id for record in records] == ["A", "B", "D"]

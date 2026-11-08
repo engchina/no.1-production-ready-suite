@@ -195,8 +195,8 @@ def test_miscopied_trailing_sentence_keeps_the_claim_unconfirmed():
 
 def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     generate, audit_prompt = grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT
-    assert "### 複数の根拠をつなぐ答え（多段）" in generate
-    assert "各段を述べる原文の単位を basis に選ぶ" in generate
+    assert "複数の根拠をつないで答える質問" in generate
+    assert "各段を述べる原文の単位を basis に選び" in generate
     assert "方法を reasoning に、最終の答えを result" in generate
     assert "足りない段を推測で埋めない" in generate
     assert "その item だけで最終の答えにならないこと" in audit_prompt
@@ -212,7 +212,7 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
     generate = grounded.GENERATE_SYSTEM_PROMPT
-    section = generate.split("### 出典（basis）の選び方", 1)[1].split("###", 1)[0]
+    section = generate.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
     assert "文書ごとにその文書の原文を basis に選ぶ" in section
     # 別の対象の根拠を basis に選ばない判断は basis の選び方に置く（生成の出力に計画の行は無い。#4611）。
     assert "別の対象・独立した操作の原文は選ばない" in section

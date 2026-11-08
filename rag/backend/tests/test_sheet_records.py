@@ -886,7 +886,7 @@ def test_column_roles_label_values_in_chunks_and_match_the_answer_prompt() -> No
     """列の役割（#1281）は値の列の本文に表示され、回答の生成の規則と同じ表示を使う。"""
     import pytest
     from pydantic import ValidationError
-    from rag_engine.generation.grounded import GENERATE_SYSTEM_PROMPT
+    from rag_engine.generation.grounded import EVIDENCE_READING_PROMPT
     from rag_parser_core.sheet_records import COLUMN_ROLE_TEXT_LABELS, SheetColumn
 
     from app.schemas.document import DocumentProcessingConfig
@@ -936,7 +936,7 @@ def test_column_roles_label_values_in_chunks_and_match_the_answer_prompt() -> No
     )
     # 回答の生成の規則は、本文に付く表示と同じ文字で列の種類を説明する。
     for label in COLUMN_ROLE_TEXT_LABELS.values():
-        assert f"［{label}］" in GENERATE_SYSTEM_PROMPT
+        assert f"［{label}］" in EVIDENCE_READING_PROMPT
 
     # 文書レシピの選択肢で、判定の有無と列ごとの役割を指定できる。役割の名前は検証する。
     recipe = DocumentProcessingConfig.model_validate(

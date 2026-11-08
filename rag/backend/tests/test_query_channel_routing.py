@@ -17,9 +17,12 @@ from tests.test_search_db_roundtrips import _OneHitPerQueryOracle
     "labels,expected",
     [
         (("質問の言い換え・分解",), ("vector",)),
-        (("用語・同義語だけ",), ("keyword",)),
-        (("原質問 + 用語・同義語",), ("keyword",)),
-        (("質問の言い換え・分解", "用語・同義語だけ"), ("vector", "keyword")),
+        (("原質問 + 用語・同義語",), ("hybrid",)),
+        (("原質問 + 用語・同義語 + 業務ガイド",), ("hybrid",)),
+        (("質問の言い換え・分解", "原質問 + 用語・同義語"), ("hybrid",)),
+        (("原質問 + 業務ガイド",), ("vector",)),
+        (("原質問 + 確認で選んだ条件",), ("vector",)),
+        (("原質問 + 確認・回答ルール",), ("vector",)),
         ((), ("vector",)),
     ],
 )
@@ -31,7 +34,7 @@ def test_channels_use_provenance_not_words(
     assert expression_channels("追加", "原", {"追加": labels}, vector_only=True) == ("vector",)
 
 
-async def test_terms_are_not_embedded_and_semantic_expansions_never_text_searched() -> None:
+async def test_term_expanded_query_uses_native_hybrid_and_semantic_stays_vector() -> None:
     calls = []
 
     class Oracle(_OneHitPerQueryOracle):
@@ -51,7 +54,7 @@ async def test_terms_are_not_embedded_and_semantic_expansions_never_text_searche
 
     class Embedding:
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-            assert texts == ["原質問", "意味追加"]
+            assert texts == ["原質問", "意味追加", "用語追加"]
             return [[1.0] for _ in texts]
 
     state = _SearchState()
@@ -68,19 +71,21 @@ async def test_terms_are_not_embedded_and_semantic_expansions_never_text_searche
         settings=SimpleNamespace(
             retrieval_query_sources={
                 "意味追加": ("質問の言い換え・分解",),
-                "用語追加": ("用語・同義語だけ",),
+                "用語追加": ("原質問 + 用語・同義語",),
             }
         ),
     )
     assert [(q, mode) for q, mode, _ in calls] == [
         ("原質問", SearchMode.HYBRID),
         ("意味追加", SearchMode.VECTOR),
-        ("用語追加", SearchMode.KEYWORD),
+        ("用語追加", SearchMode.HYBRID),
     ]
-    assert calls[-1][2] == []
     rrf = state.retrieval_stages[-1]["rrf"]
-    assert [r["channel"] for r in rrf["lists"]] == ["hybrid", "vector", "keyword"]
+    assert [r["channel"] for r in rrf["lists"]] == ["hybrid", "vector", "hybrid"]
     assert rrf["lists"][0]["score_source"] == "oracle_wrrf"
+    # 用語を足した質問も原質問と同じく Oracle の融合点を使い、重みは追加検索文の 3 割を等分する。
+    assert rrf["lists"][2]["score_source"] == "oracle_wrrf"
+    assert rrf["lists"][1]["weight"] == pytest.approx(rrf["lists"][2]["weight"] * 0.7)
     assert rrf["fusion_execution"] == "additional_to_native"
 
 

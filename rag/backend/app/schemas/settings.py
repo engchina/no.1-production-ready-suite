@@ -761,15 +761,16 @@ class AnsweringSettingsData(BaseModel):
     (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
-    retrieval_query_limit: int = Field(default=300, ge=0, le=2000, strict=True)
-    rerank_top_n: int = Field(default=300, ge=0, le=2000, strict=True)
+    retrieval_query_limit: int = Field(default=60, ge=0, le=2000, strict=True)
+    rerank_top_n: int = Field(default=60, ge=0, le=2000, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
-    rerank_min_relevance_score: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
+    rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
     hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
+    rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
     query_strategy: QueryStrategy
@@ -812,6 +813,16 @@ class AnsweringSettingsUpdate(BaseModel):
     hybrid_search_backend: Literal["oracle_native", "sudachi"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
     rrf_source_ratio: tuple[float, float] | None = None
+    rerank_slot_ratio: tuple[int, int] | None = None
+
+    @field_validator("rerank_slot_ratio")
+    @classmethod
+    def _rerank_slot_ratio(cls, value: tuple[int, int] | None) -> tuple[int, int] | None:
+        if value is None:
+            return None
+        from rag_engine.retrieval.rerank_order import validate_slot_ratio
+
+        return validate_slot_ratio(value)
 
     @field_validator("rrf_method_ratio", "rrf_source_ratio")
     @classmethod
