@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LocateFixed } from "lucide-react";
-import { Button, CursorPagination, DataTable, Skeleton, TabPanel, Tabs, TimedLoadingState, type DataTableColumn } from "@production-ready/ui";
+import { Button, CursorPagination, DataTable, DEFAULT_PAGE_SIZE, INFORMATION_TABLE_VISIBLE_ROWS, Skeleton, TabPanel, Tabs, TimedLoadingState, type DataTableColumn } from "@production-ready/ui";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { api, type GraphReferenceEndpoint, type GraphReferenceItem } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -28,8 +28,9 @@ export function GraphReferencePanel({ kbId, nodeId, onLocate }: {
     <Tabs idPrefix="graph-references" ariaLabel={t("knowledgeBases.graph.referenceList")} value={direction} onChange={(value) => { setDirection(value as "outgoing" | "incoming"); setOffset(0); }} items={[{ id: "outgoing", label: t("knowledgeBases.graph.outgoing") }, { id: "incoming", label: t("knowledgeBases.graph.incoming") }]} />
     <TabPanel idPrefix="graph-references" id={direction} value={direction}>
       {query.isPending ? <TimedLoadingState label={t("knowledgeBases.graph.referenceLoading")} operationKey={`${nodeId}:${direction}:${offset}`}><Skeleton className="h-24 w-full" /></TimedLoadingState> : query.isError ? <ApiErrorState error={query.error} fallback={t("knowledgeBases.graph.referenceError")} onRetry={() => void query.refetch()} /> : query.data.items.length ? <>
-        <DataTable columns={columns} rows={query.data.items} getRowKey={(item) => item.id} />
-        <CursorPagination depth={offset / 25} count={query.data.items.length} nextCursor={query.data.has_more ? String(offset + 25) : null} onPrevious={() => setOffset((value) => Math.max(0, value - 25))} onNext={() => setOffset((value) => value + 25)} labels={paginationLabels()} />
+        {/* 表頭を固定し、表の中をスクロールする。API はカーソル型（総数を返さない）なので「N ページ目」の前後の送り（#4636）。 */}
+        <DataTable columns={columns} rows={query.data.items} getRowKey={(item) => item.id} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} scrollAriaLabel={t("knowledgeBases.graph.referenceList")} />
+        <CursorPagination depth={offset / DEFAULT_PAGE_SIZE} count={query.data.items.length} nextCursor={query.data.has_more ? String(offset + DEFAULT_PAGE_SIZE) : null} onPrevious={() => setOffset((value) => Math.max(0, value - DEFAULT_PAGE_SIZE))} onNext={() => setOffset((value) => value + DEFAULT_PAGE_SIZE)} labels={paginationLabels()} />
       </> : <EmptyState title={t("knowledgeBases.graph.referenceEmpty")} />}
     </TabPanel>
   </div>;

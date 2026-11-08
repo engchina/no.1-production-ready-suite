@@ -13,6 +13,7 @@ import {
   toast,
   type EntityAction,
   type SelectFieldOption,
+  ListScrollRegion,
 } from "@production-ready/ui";
 import { ArrowDown, ArrowUp, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
@@ -33,6 +34,7 @@ import {
   useSaveSectionRulesSettings,
   useSectionRulesSettings,
 } from "@/lib/queries";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 const LEVEL_OPTIONS: SelectFieldOption<string>[] = [1, 2, 3, 4, 5, 6].map((level) => ({
   value: String(level),
@@ -221,6 +223,8 @@ export function SectionRulesEditor() {
             {current.rules.length > 0 ? (
               // 1 行に 1 規則の欄を並べる表の形の編集の行（名前 sm・パターンは残りの幅・階層 xs）なので、欄の幅の段の
               // 検査（findFieldsOffWidthScale）の対象から外す（表の中の欄と同じ扱い。#1891）。
+              // 規則の数に上限が無いので、高い行の一覧の高さで止める（上限の無いフォームの繰り返し。#4636）。
+              <ListScrollRegion size="card" label={listScrollLabel(t("sectionRules.list.label"))}>
               <ol className="space-y-2" aria-label={t("sectionRules.list.label")} data-field-width-exempt="">
                 {current.rules.map((rule, index) => {
                   const rowErrors = submitted ? errors[index] : undefined;
@@ -282,6 +286,7 @@ export function SectionRulesEditor() {
                   );
                 })}
               </ol>
+              </ListScrollRegion>
             ) : (
               <p className="text-sm text-fg-muted">{t("sectionRules.empty")}</p>
             )}

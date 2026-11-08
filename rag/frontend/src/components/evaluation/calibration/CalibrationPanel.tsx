@@ -11,6 +11,8 @@ import {
   SelectField,
   StatusBadge,
   useConfirm,
+  ListToolbar,
+  PagedDataTable,
 } from "@production-ready/ui";
 import { FlaskConical } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -44,6 +46,8 @@ import {
   splitLabel,
   type CalibrationResultRow,
 } from "./calibration-format";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
+import { paginationLabels } from "@/lib/pagination-labels";
 
 const REPEAT_OPTIONS = ["1", "2", "3"] as const;
 type Repeats = (typeof REPEAT_OPTIONS)[number];
@@ -452,15 +456,22 @@ function CalibrationHistory({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const paging = useClientListPaging("evaluation.calibration.historyPaging", "history");
   return (
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle>{t("evaluation.calibration.history.title")}</CardTitle>
       </CardHeader>
-      <CardContent>
-        <DataTable<CalibrationSummary>
+      <CardContent className="grid min-w-0 gap-2">
+        {/* 校正を実行するたびに増えるので、件数・表の中のスクロール・25 件のページングを付ける（#4636）。 */}
+        <ListToolbar count={listCountProps({ matchedTotal: items.length, filtered: false })} testId="calibration-history-toolbar" />
+        <PagedDataTable<CalibrationSummary>
+          {...paging}
+          paginationLabels={paginationLabels()}
+          paginationAriaLabel={t("evaluation.calibration.history.title")}
           testId="calibration-history"
           ariaLabel={t("evaluation.calibration.history.title")}
+          scrollAriaLabel={t("evaluation.calibration.history.title")}
           rows={items}
           getRowKey={(row) => row.calibration_id}
           selectedRowKey={selectedId}

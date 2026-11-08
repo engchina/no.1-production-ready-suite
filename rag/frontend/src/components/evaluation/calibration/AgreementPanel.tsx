@@ -6,7 +6,6 @@ import {
   CardTitle,
   DataTable,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  INFORMATION_TABLE_ROW_CLASS,
   FilterChipGroup,
   FilterSelect,
   Pagination,
@@ -15,6 +14,9 @@ import {
   StatusBadge,
   Switch,
   TimedLoadingState,
+  DEFAULT_PAGE_SIZE,
+  ListToolbar,
+  PagedDataTable,
 } from "@production-ready/ui";
 import { Gavel, Users } from "lucide-react";
 import { useState } from "react";
@@ -52,8 +54,8 @@ import {
 import { LabelEditor, type LabelDraft } from "./LabelEditor";
 import { ProgressTable } from "./ProgressTable";
 import { RowContent } from "./RowContent";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 
-const PAGE_SIZE = 25;
 const STATUS_FILTERS: readonly AgreementFilter[] = [
   "disagreed",
   "pending",
@@ -76,11 +78,14 @@ export function AgreementPanel({ detail }: { detail: LabelSetDetail }) {
     {
       aspect: aspect === "all" ? undefined : aspect,
       status,
-      offset: (page - 1) * PAGE_SIZE,
-      limit: PAGE_SIZE,
+      offset: (page - 1) * DEFAULT_PAGE_SIZE,
+      limit: DEFAULT_PAGE_SIZE,
     },
     true,
   );
+  // 絞り込む前の全件（「N 件（全 M 件）」の M。#4636）。
+  const allQuery = useCalibrationAgreement(labelSetId, { status: "all", offset: 0, limit: 1 }, true);
+  const filtered = aspect !== "all" || status !== "all";
   const data = query.data;
   const rows = data?.rows ?? [];
   const current = rows.find((row) => rowKey(row) === selected) ?? null;
@@ -148,7 +153,11 @@ export function AgreementPanel({ detail }: { detail: LabelSetDetail }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid min-w-0 gap-4">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {/* 絞り込みと件数は共通の ListToolbar（件数は ListCount 1 か所。#4636）。 */}
+          <ListToolbar
+            count={listCountProps({ matchedTotal: data?.total, filtered, allTotal: allQuery.data?.total })}
+            testId="calibration-agreement-toolbar"
+            filters={<>
             <FilterSelect<string>
               id="calibration-agreement-aspect"
               label={t("evaluation.calibration.filter.aspect")}
@@ -185,7 +194,8 @@ export function AgreementPanel({ detail }: { detail: LabelSetDetail }) {
                 ),
               }))}
             />
-          </div>
+            </>}
+          />
           <DataTable<AgreementRow>
             testId="calibration-agreement-rows"
             scrollTestId="calibration-agreement-scroll"
@@ -270,7 +280,7 @@ export function AgreementPanel({ detail }: { detail: LabelSetDetail }) {
           />
           <Pagination
             page={page}
-            totalPages={Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))}
+            totalPages={Math.max(1, Math.ceil((data?.total ?? 0) / DEFAULT_PAGE_SIZE))}
             onPageChange={setPage}
             labels={paginationLabels()}
             range={
@@ -486,6 +496,7 @@ function SyntheticItemsCard({ labelSetId }: { labelSetId: string }) {
   const query = useSyntheticItems(labelSetId, true);
   const mutation = useSetSyntheticExcluded(labelSetId);
   const items = query.data?.items ?? [];
+  const syntheticPaging = useClientListPaging("evaluation.calibration.syntheticPaging", labelSetId);
   return (
     <Card className="min-w-0" data-testid="calibration-synthetic">
       <CardHeader>
@@ -503,14 +514,17 @@ function SyntheticItemsCard({ labelSetId }: { labelSetId: string }) {
             onRetry={() => void query.refetch()}
           />
         ) : (
-        <DataTable
+        // 全件を持つ一覧なので、件数と 25 件のページングを付ける（#4636）。
+        <div className="grid min-w-0 gap-2">
+        <ListToolbar count={listCountProps({ matchedTotal: query.data ? items.length : undefined, filtered: false })} testId="calibration-synthetic-toolbar" />
+        <PagedDataTable
+          {...syntheticPaging}
+          paginationLabels={paginationLabels()}
+          paginationAriaLabel={t("evaluation.calibration.synthetic.title")}
           ariaLabel={t("evaluation.calibration.synthetic.title")}
           testId="calibration-synthetic-table"
           scrollTestId="calibration-synthetic-scroll"
           scrollAriaLabel={t("evaluation.calibration.synthetic.title")}
-          stickyHeader
-          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
           rows={items}
           loading={query.isPending}
           getRowKey={(row) => row.item_id}
@@ -558,6 +572,7 @@ function SyntheticItemsCard({ labelSetId }: { labelSetId: string }) {
             },
           ]}
         />
+        </div>
         )}
       </CardContent>
     </Card>

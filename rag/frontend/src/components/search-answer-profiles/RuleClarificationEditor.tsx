@@ -8,6 +8,7 @@ import {
   TextareaField,
   TextField,
   toast,
+  ListScrollRegion,
 } from "@production-ready/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { MessageCircleQuestion, Plus, Save, Trash2, Undo2, X } from "lucide-react";
@@ -25,6 +26,7 @@ import {
 import { sectionPageLabel } from "@/lib/document-sections";
 import { t } from "@/lib/i18n";
 import { useDocumentCandidates, useDocumentSections } from "@/lib/queries";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 8;
@@ -420,7 +422,9 @@ function OptionSections({
       />
       {documentId && sectionsQuery.data ? (
         sectionsQuery.data.sections.length > 0 ? (
-          <ul className="max-h-60 space-y-1 overflow-y-auto rounded-md border border-border bg-surface p-2">
+          // 文書の章節の数だけ増えるので、共通の行リストの高さで止める（手書きの max-h にしない。#4636）。
+          <ListScrollRegion label={listScrollLabel(t("ruleClarification.sectionsLabel"))} className="rounded-md border border-border bg-surface p-2">
+          <ul className="space-y-1">
             {sectionsQuery.data.sections.map((section) => {
               const item: ClarificationSection = {
                 document_id: documentId,
@@ -449,6 +453,7 @@ function OptionSections({
               );
             })}
           </ul>
+          </ListScrollRegion>
         ) : (
           <p className="text-xs text-fg-muted">{t("clarification.noSections")}</p>
         )

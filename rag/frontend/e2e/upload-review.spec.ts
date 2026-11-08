@@ -282,7 +282,7 @@ test("複数のファイルがすべて失敗したときは、選択を残し�
   await expect(failure).toBeVisible();
   await expect(failure).not.toContainText("一部");
   await expect(failure).toContainText("a.txt");
-  await expect(page.getByTestId("upload-selection")).toContainText("選んだファイル（2 件）");
+  await expect(page.getByTestId("upload-selection-toolbar")).toContainText("全 2 件");
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 

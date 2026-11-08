@@ -16,6 +16,7 @@ import {
   TextField,
   ToggleChip,
   toast,
+  ListScrollRegion,
 } from "@production-ready/ui";
 
 import {
@@ -33,6 +34,7 @@ import { useEditRuntimeKnowledge, useImportSupportGuides } from "@/lib/queries";
 
 import { SupportGuideContentView } from "./SupportGuideContentView";
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
+import { listScrollLabel } from "@/lib/pagination-labels";
 
 type Source = "excel" | "text";
 
@@ -432,6 +434,8 @@ export function SupportGuideProcessImport({
                 count: preview.importable_count,
               })}
             </p>
+            {/* 最大 100 件の、入れ子の一覧を持つカードなので、高い行の一覧の高さで止める（#4636）。 */}
+            <ListScrollRegion size="card" label={listScrollLabel(t("supportGuides.processImport.listLabel"))}>
             <ul className="space-y-2">
               {preview.items.map((item) => (
                 <ProcessItem
@@ -445,6 +449,7 @@ export function SupportGuideProcessImport({
                 />
               ))}
             </ul>
+            </ListScrollRegion>
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
               <Button
                 size="sm"

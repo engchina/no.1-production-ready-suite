@@ -1,4 +1,4 @@
-import { Button, ClearActionButton, StatusBadge } from "@production-ready/ui";
+import { Button, ClearActionButton, StatusBadge, ListScrollRegion, ListToolbar } from "@production-ready/ui";
 import { FileText, Upload, X } from "lucide-react";
 
 import { t, type I18nKey } from "@/lib/i18n";
@@ -8,6 +8,8 @@ import {
   type RejectedUploadFormat,
   type UploadFileProblem,
 } from "@/lib/upload-selection";
+import { listScrollLabel } from "@/lib/pagination-labels";
+import { listCountProps } from "@/lib/list-paging";
 
 const PROBLEM_LABEL: Record<UploadFileProblem, I18nKey> = {
   unsupported: "upload.selection.problem.unsupported",
@@ -64,7 +66,7 @@ export function UploadSelectionList({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <h2 id="upload-selection-title" className="text-sm font-semibold text-fg">
-            {t("upload.selection.title", { count: files.length })}
+            {t("upload.selection.title")}
           </h2>
           <p className="tnum mt-0.5 text-xs text-fg-muted" role="status">
             {t("upload.selection.summary", {
@@ -76,7 +78,10 @@ export function UploadSelectionList({
         </div>
         <ClearActionButton label={t("upload.selection.clear")} onClick={onClear} />
       </div>
-      <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-surface-sunken">
+      {/* 件数はツールバーの ListCount（見出しに件数を入れない）、一覧は共通の行リストの高さ（#4636）。 */}
+      <ListToolbar count={listCountProps({ matchedTotal: files.length, filtered: false })} testId="upload-selection-toolbar" />
+      <ListScrollRegion label={listScrollLabel(t("upload.selection.listLabel"))} className="rounded-md border border-border bg-surface-sunken">
+      <ul className="divide-y divide-border">
         {rows.map(({ file, problem }, index) => (
           // 同じ名前のファイル（別のフォルダ）も並ぶので、位置を key に含める。
           <li
@@ -122,6 +127,7 @@ export function UploadSelectionList({
           </li>
         ))}
       </ul>
+      </ListScrollRegion>
       <div className="flex justify-end">
         <Button
           type="button"

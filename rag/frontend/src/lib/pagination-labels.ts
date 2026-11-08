@@ -53,3 +53,8 @@ export function listToolbarLabels(): ListToolbarLabels {
         : t("listToolbar.showResults", { count: matched }),
   };
 }
+
+/** 一覧のスクロール領域（`ListScrollRegion` / `DataTable` の `scrollAriaLabel`）の読み上げ名（#4636）。 */
+export function listScrollLabel(list: string): string {
+  return t("common.listScrollLabel", { list });
+}
