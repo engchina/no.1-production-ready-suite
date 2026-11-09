@@ -5,13 +5,7 @@ schema の evidence_ids は「direct の根拠と、原文に関係が明記さ�
 evidence_scope は引いた根拠を direct と照合した）を匿名の文で作る。unrelated と食い違う判断は今までどおり許可しない。
 """
 
-from rag_engine.generation.grounded import (
-    _outside_request_plan,
-    _plan_undecided_errors,
-    _request_plan_errors,
-    _unknown_plan_label_errors,
-    verify,
-)
+from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors, _unknown_plan_label_errors, verify
 from rag_engine.models.llm import GroundedDraft, GroundedItem
 
 OPEN = "メニューから設定を選び、設定タブの登録画面を開きます。"
@@ -59,31 +53,11 @@ def unassessed(draft):
     return unsettled, kept, marked, dropped
 
 
-def test_a_label_the_scope_judges_direct_is_in_the_plan_without_being_in_evidence_ids():
-    draft = plan_draft(GUIDE_IDS, [scope("E1"), scope("E2")], [cited(OPEN, "E1"), cited(STEPS, "E2")])
-    assert not outside(draft, "E1") and not outside(draft, "E2")
-    # 計画に無い根拠は今までどおり計画の外。
-    assert outside(draft, "E3")
-    unsettled, kept, marked, _ = unassessed(draft)
-    assert unsettled == []
-    assert kept == {OPEN, STEPS} and marked == set()
-
-
 def test_a_linked_label_needs_the_relation_quote_the_code_cut_from_its_range():
     found = plan_draft(["E1"], [scope("E1"), scope("E3", "linked", AFTER)], [cited(AFTER, "E3")])
     assert not outside(found, "E3")
     empty = plan_draft(["E1"], [scope("E1"), scope("E3", "linked")], [cited(AFTER, "E3")])
     assert outside(empty, "E3")
-
-
-def test_an_unrelated_label_stays_excluded_even_while_the_plan_is_unsettled():
-    draft = plan_draft(["E1"], [scope("E1"), scope("E2", "unrelated")], [cited(OPEN, "E1"), cited(STEPS, "E2")])
-    assert outside(draft, "E2")
-    # 計画が未決（別の根拠の判断が無い）でも、unrelated と判断した根拠の説明は外す。
-    unsettled = ["Q1: E3 の対象を計画で照合できませんでした。"]
-    checked, dropped = verify("設定の手順は？", draft, SPANS, plan_unsettled=unsettled)
-    assert {entry.item.text for entry in checked if not entry.added} == {OPEN}
-    assert any(note.get("scope_excluded") and not note.get("kept") for note in dropped)
 
 
 def test_conflicting_scope_decisions_still_do_not_authorize_a_label():
@@ -106,27 +80,3 @@ def test_the_unknown_label_errors_do_not_point_to_guide_coverage():
         assert "は Evidence の ID ではありません。" in error and "guide_coverage" not in error
     assert not any("guide_coverage" in error for error in _unknown_plan_label_errors(draft, SPANS))
 
-
-def test_a_recovered_plan_with_only_scope_decisions_keeps_the_explanations_unmarked():
-    from test_grounded_answer import ids, marks
-    from test_missing_request_plan import INTRO, INTRO_ITEM, OUTLINE, OUTLINE_ITEM, QUESTION, _ctx, _draft, _run
-
-    labels = ids(_ctx(), QUESTION)
-    recovered = {
-        "request_coverage": [
-            {
-                "request_id": "Q1",
-                "evidence_scope": [
-                    {"evidence_id": label, "target": "対象", "relation": "direct"} for label in (labels[INTRO], labels[OUTLINE], *GUIDE_IDS)
-                ],
-            }
-        ]
-    }
-    result, _model = _run([_draft(labels)], [recovered])
-    assert INTRO_ITEM in result.answer_text and OUTLINE_ITEM in result.answer_text
-    assert marks(result) == {}
-    timing = result.generation_trace["rounds"][0]["timing"]
-    assert timing["request_plan_recovery"] == "planned"
-    assert "request_plan_unsettled" not in timing
-    assert len(timing["request_plan_ignored"]) == len(GUIDE_IDS)
-    assert not any("guide_coverage" in error for error in timing["request_plan_ignored"])

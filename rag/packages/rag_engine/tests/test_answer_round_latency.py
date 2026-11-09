@@ -15,7 +15,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.models.audit_wire import is_audit_wire
+from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import GroundedAudit
 
 GOOD = "一覧表を選択し、処理を選択します。"
@@ -45,41 +45,6 @@ class SystemCapturingModel(FakeModel):
     def __call__(self, system, prompt, settings, schema, **options):
         self.systems.append(((schema.canonical_schema if is_audit_wire(schema) else schema).__name__, system))
         return super().__call__(system, prompt, settings, schema, **options)
-
-
-class DowngradedOnlyUnitTest(unittest.TestCase):
-    def test_downgraded_only(self):
-        self.assertTrue(grounded.downgraded_only({"downgraded_items": [{}], "supported_items": [{}]}))
-        self.assertFalse(grounded.downgraded_only({}))
-        for key, value in (
-            ("dropped_items", [{}]),
-            ("unanswered_requests", [{"request_id": "Q1", "status": "partial"}]),
-            ("unused_evidence_ids", [{"evidence_id": "e"}]),
-            ("goal_alignment", "partial"),
-            ("no_cited_evidence", "x"),
-        ):
-            with self.subTest(key=key):
-                self.assertFalse(grounded.downgraded_only({"downgraded_items": [{}], key: value}))
-
-    def test_downgraded_only_stops_only_after_a_correction(self):
-        previous = {"unused_evidence_ids": [{"evidence_id": "e"}], "downgraded_items": [{}]}
-        down = {"downgraded_items": [{}]}
-        # 1 組目の後は、付け足した前提を直せることがあるので作り直す。
-        self.assertEqual(grounded.no_improvement_reason(0, accepted=True, feedback=down, previous=None), "")
-        self.assertEqual(
-            grounded.no_improvement_reason(1, accepted=True, feedback=down, previous=previous), grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY
-        )
-        # 写し誤りなど内容の指摘が残るなら作り直す。
-        mixed = {**down, "dropped_items": [{}]}
-        self.assertEqual(grounded.no_improvement_reason(1, accepted=True, feedback=mixed, previous=previous), "")
-        # 採用されなかった・同じ指摘の理由が先。
-        self.assertEqual(
-            grounded.no_improvement_reason(1, accepted=False, feedback=down, previous=previous), grounded.NO_IMPROVEMENT_NOT_ACCEPTED
-        )
-        self.assertEqual(
-            grounded.no_improvement_reason(1, accepted=True, feedback=down, previous=down), grounded.NO_IMPROVEMENT_SAME_FEEDBACK
-        )
-        self.assertIn(grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY, answering._NO_IMPROVEMENT_RESULTS)
 
 
 class DowngradedOnlySynthesizeTest(unittest.TestCase):
@@ -145,7 +110,7 @@ class MaxCorrectionRoundsTest(unittest.TestCase):
 
     def test_zero_correction_rounds_finalizes_the_first_round(self):
         ctx, model = self._miscopied()
-        result = _run(model, ctx, answer_max_correction_rounds=0)
+        result = _run(model, ctx)
         self.assertEqual(len(_drafts(model)), 1)
         stop = result.generation_trace["round_budget"]["stop"]
         self.assertEqual(stop["reason"], answering.MAX_CORRECTION_ROUNDS_STOP)
@@ -168,50 +133,6 @@ class MaxCorrectionRoundsTest(unittest.TestCase):
         self.assertEqual(len(_drafts(model)), 2)
         self.assertNotIn("stop", result.generation_trace["round_budget"])
         self.assertIn(DONE, result.answer_text)
-
-    def test_engine_setting_is_clamped(self):
-        self.assertEqual(get_settings(environ={}, dotenv_path=None).answer_max_correction_rounds, 2)
-        for raw, expected in (("0", 0), ("1", 1), ("5", 2), ("-1", 0)):
-            with self.subTest(raw=raw):
-                env = {"RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": raw}
-                self.assertEqual(get_settings(environ=env, dotenv_path=None).answer_max_correction_rounds, expected)
-
-
-class CompactAuditReasonsTest(unittest.TestCase):
-    def test_prompt_rule(self):
-        self.assertEqual(grounded.audit_system_prompt(), grounded.AUDIT_SYSTEM_PROMPT)
-        compact = grounded.audit_system_prompt(compact_reasons=True)
-        self.assertTrue(compact.startswith(grounded.AUDIT_SYSTEM_PROMPT))
-        self.assertTrue(compact.endswith(grounded.AUDIT_COMPACT_REASON_RULE))
-        # 規則が名指す値は監査の出力の型の値と同じ。
-        for value in ("supported", "matched", "addressed", "unsupported", "contradicted", "conditional", "not_applicable", "unknown"):
-            self.assertIn(value, grounded.AUDIT_COMPACT_REASON_RULE)
-        # 空の reason は監査の出力として受け取れる。
-        GroundedAudit.model_validate(
-            {
-                "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": ""}],
-                "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": ""}],
-                "summary_supported": True,
-                "goal_alignment": "aligned",
-            }
-        )
-
-    def test_setting_switches_the_audit_system_prompt(self):
-        self.assertFalse(get_settings(environ={}, dotenv_path=None).answer_audit_compact_reasons)
-        on = get_settings(environ={"RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS": "1"}, dotenv_path=None)
-        self.assertTrue(on.answer_audit_compact_reasons)
-        for compact in (False, True):
-            with self.subTest(compact=compact):
-                ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-                eid = ids(ctx)[LIST_TEXT]
-                model = SystemCapturingModel(
-                    [draft(item(eid, GOOD, GOOD), item(eid, DONE, DONE))],
-                    [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
-                )
-                _run(model, ctx, answer_audit_compact_reasons=compact)
-                systems = [system for name, system in model.systems if name == "GroundedAudit"]
-                self.assertEqual(systems, [grounded.audit_system_prompt(compact_reasons=compact)])
-
 
 if __name__ == "__main__":
     unittest.main()

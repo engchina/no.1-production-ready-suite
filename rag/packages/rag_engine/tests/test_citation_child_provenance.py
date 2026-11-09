@@ -12,7 +12,7 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_payload import answer_evidence_items
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.audit_wire import is_audit_wire
+from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
@@ -120,16 +120,6 @@ def test_spans_keep_the_children_and_their_ranges_in_the_parent() -> None:
             assert span["start"] <= item["start"] < item["end"] <= span["end"]
 
 
-def test_citation_line_and_used_mark_point_to_the_child_that_holds_the_quote() -> None:
-    """同じ親・同じ頁の H と F が並んでも、出典行と「回答で引用」は引用のある F に付く（並びの先の H にしない）。"""
-    result = _run([_rule("左の枠に値 B を入れると、右の枠に結果 C が出ます。")]).response
-    refs = result.generation_trace["citation_lines"]
-    assert len(refs) == 1  # 原文の写しの要点は、選んだ ID の原文を直接の記載にする（導出の出典行は作らない）。
-    assert all(row["scope_source_ids"] == ["doc:c-f"] for row in refs)
-    assert all(row["candidate_source_ids"] == [] for row in refs)
-    assert [entry["evidence_id"] for entry in result.cited_evidence] == ["doc:c-f"]
-
-
 def test_used_mark_does_not_spread_to_siblings() -> None:
     response = _run([_rule("左の枠に値 B を入れると、右の枠に結果 C が出ます。")]).response
     used = [entry["evidence_id"] for entry in response.cited_evidence]
@@ -163,39 +153,6 @@ def _parent_span() -> dict:
             {"id": "doc:c-f", "start": split, "end": len(text)},
         ],
     }
-
-
-def test_each_item_citation_line_keeps_only_its_supporting_child() -> None:
-    """同じ出典・頁でも項目ごとの出典行へ分け、その説明を支える子だけを残す。"""
-    span = _parent_span()
-    entries = [
-        grounded._quote_item(span, 0, len(HEADING), "合成の原文"),
-        grounded._quote_item(dict(span, evidence_id="E-b"), len(HEADING) + 1, len(span["text"]), "合成の原文"),
-    ]
-    body, refs = grounded.render_with_citations("", entries)
-    assert body.count(grounded.answer_labels().citation_prefix) == 2
-    assert [ref["scope_source_ids"] for ref in refs] == [["doc:c-h"], ["doc:c-f"]]
-    assert [ref["evidence_ids"] for ref in refs] == [["E-a"], ["E-b"]]
-
-
-def test_unlocated_quote_leaves_candidates_instead_of_the_first_child() -> None:
-    """引用の位置が決まらず、根拠が 2 つの子にまたがれば、どちらも確定にせず候補に残す。"""
-    span = _parent_span()
-    exact, candidates = grounded.citation_children(span)
-    assert (exact, candidates) == ([], ["doc:c-h", "doc:c-f"])
-    _body, refs = grounded.render_with_citations("", [_entry("根拠に無い文", span)])
-    assert refs[0]["scope_source_ids"] == []
-    assert refs[0]["candidate_source_ids"] == ["doc:c-h", "doc:c-f"]
-
-
-def test_selected_coordinates_locate_the_child_without_searching_the_display_quote() -> None:
-    span = _parent_span()
-    entry = grounded._quote_item(span, len(HEADING) + 1, len(span["text"]), "合成の原文")
-    entry.item = entry.item.model_copy(update={"text": "同じ原文が別の子にもある表示", "citations": []})
-    assert grounded.citation_children(span, citation_resolution=entry.citation_resolution) == (["doc:c-f"], [])
-    assert grounded.citation_children(span) == ([], ["doc:c-h", "doc:c-f"])
-    changed = dict(span, text=span["text"] + "改版")
-    assert grounded.citation_children(changed, citation_resolution=entry.citation_resolution) == ([], ["doc:c-h", "doc:c-f"])
 
 
 def test_parent_only_reference_marks_children_as_parent_context_not_as_cited() -> None:

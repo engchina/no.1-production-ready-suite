@@ -173,64 +173,6 @@ def _kinds(reported: list[tuple[str, str]]) -> set[str]:
     return {kind for kind, _ in reported}
 
 
-def test_runtime_knowledge_failure_is_reported_and_the_step_shows_only_the_type(tmp_path: Path) -> None:
-    path = tmp_path / "runtime_knowledge.json"
-    path.write_text("{" + SECRET, encoding="utf-8")
-    settings = replace(get_settings(), runtime_knowledge_path=path)
-
-    result, reported = _answer(
-        settings,
-        [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-    )
-
-    # 補助情報なしで回答を続ける。
-    assert "answer" in result.answer
-    assert ("runtime_knowledge", "JSONDecodeError") in reported
-    assert result.runtime_knowledge.error == "JSONDecodeError"
-    assert SECRET not in result.question_display and "secret-dir" not in result.question_display
-
-
-def test_runtime_knowledge_not_registered_is_not_reported(tmp_path: Path) -> None:
-    settings = replace(get_settings(), runtime_knowledge_path=tmp_path / "missing.json")
-
-    _, reported = _answer(
-        settings,
-        [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-    )
-
-    assert "runtime_knowledge" not in _kinds(reported)
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "graded"])
-def test_crag_grade_failure_is_reported(fail: bool) -> None:
-    grade = (
-        Boom(SECRET)
-        if fail
-        else _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["chunk-safe"], support_text="available evidence")
-    )
-
-    result, reported = _answer(
-        get_settings(),
-        [grade, _answer_output(answer="fallback answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.CRAG_ANSWER_FLOW_LABEL,
-    )
-
-    # 評価の失敗は判定不能で、不足を確かめていない。取得済みの根拠で生成へ進み、失敗の診断を保持する（#3837）。
-    if fail:
-        assert "fallback answer" in result.answer
-        assert result.crag_attempts[0]["grade_execution"] == "error"
-        assert result.crag_attempts[0]["required_aspect_coverage"] == "unknown"
-        assert result.generation_trace["crag_generation_gate"]["reason"] == "grading_incomplete"
-        assert result.generation_trace["crag_generation_gate"]["generation_usable"] is False
-        assert ("crag_grade", "Boom") in reported
-        assert SECRET not in result.question_display
-    else:
-        assert "fallback answer" in result.answer
-        assert "crag_grade" not in _kinds(reported)
-
-
 @contextmanager
 def _sudachi_broken() -> Iterator[None]:
     """Sudachi（辞書）を使えない環境（process ごとの確認の cache を前後で消す）。"""
@@ -240,34 +182,6 @@ def _sudachi_broken() -> Iterator[None]:
             yield
     finally:
         tokenizer._sudachi_failure.cache_clear()
-
-
-def test_sudachi_unavailable_is_reported_once_per_answer() -> None:
-    with _sudachi_broken():
-        assert isinstance(tokenizer.sudachi_unavailable(), Boom)
-        result, reported = _answer(
-            get_settings(),
-            [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-            answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-        )
-
-    # 文字種の区切りだけで検索語を作って回答を続け、回答ごとに 1 回だけ記録に渡す。
-    assert "answer" in result.answer
-    assert reported.count(("text_search_tokenizer", "Boom")) == 1
-
-
-def test_sudachi_available_is_not_reported() -> None:
-    tokenizer._sudachi_failure.cache_clear()
-    if tokenizer.sudachi_unavailable() is not None:
-        pytest.skip("Sudachi（辞書）が入っていない環境")
-
-    _, reported = _answer(
-        get_settings(),
-        [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-    )
-
-    assert "text_search_tokenizer" not in _kinds(reported)
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])

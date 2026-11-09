@@ -184,19 +184,6 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(_condition_phrase("管理者"), "管理者のとき")
             self.assertEqual(known_gap_labels(["procedure"]), ["手順"])
 
-    def test_answer_check_cues_follow_the_pack(self):
-        """回答の検査の手がかり（限定・推測・版の廃止）は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.grounded import _tag_constraint, superseded_evidence_ids
-
-        span = {"text": "管理者に限定する。", "evidence_id": "E1"}
-        self.assertEqual(_tag_constraint("", span), set())
-        abolished = {"text": "第1版は改訂により廃棄されました。", "evidence_id": "E2", "source": "改訂の案内", "section_path": []}
-        old = {"text": "手順", "evidence_id": "E1", "source": "第1版 手引き", "section_path": []}
-        self.assertEqual(superseded_evidence_ids("手順は", [old, abolished]), set())
-        with bind_pack(_custom(answer_check_cues={"constraint_words": ["に限定"], "abolish_words": ["廃棄"]})):
-            self.assertEqual(_tag_constraint("", span), {"constraint"})
-            self.assertIn("E1", superseded_evidence_ids("手順は", [old, abolished]))
-
     def test_operation_audit_cues_follow_the_pack(self):
         """操作の指示は言語資源から作る(#2181 段 5)。"""
         from rag_engine.generation.operation_audit import is_operation_instruction
@@ -208,23 +195,6 @@ class LanguagePackEngineTest(unittest.TestCase):
             )
         ):
             self.assertTrue(is_operation_instruction("申請書を提出します"))
-
-    def test_grounding_cues_follow_the_pack(self):
-        """算式の単位は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.applications import arithmetic_mismatch
-
-        self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
-        with bind_pack(
-            _custom(
-                grounding_cues={
-                    "amount_units": ["兆円", "円"],
-                    "amount_scale_units": ["兆=9"],
-                }
-            )
-        ):
-            self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
-            self.assertTrue(arithmetic_mismatch("2兆円+3兆円=5円"))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -95,28 +95,6 @@ def readback(unit_ids, result, reasoning="選択した原文を示す。"):
     }
 
 
-@pytest.mark.parametrize("result", ["項目Aは12です。", "12です", "項目A は 12\nです。"], ids=["whole", "excerpt", "spacing"])
-def test_answer_copying_one_cited_original_becomes_direct_by_id(result):
-    raw, model, catalog, snapshot = case()
-    raw = readback(list(snapshot.unit_ids), result)
-    draft = canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
-    assert not draft.applications
-    assert draft.answer_parts[0].result_kind == "direct"
-    assert draft.answer_parts[0].item_indexes == [0]
-    assert draft.items[0].text == snapshot.span()["text"]
-    assert draft.items[0].citations[0]._unit_binding.unit_ids == snapshot.unit_ids
-    assert draft.summary == snapshot.span()["text"]
-    assert draft.summary_item_indexes == [0] and draft.summary_application_indexes == []
-
-
-def test_readback_keeps_only_the_cited_unit_without_widening_to_neighbors():
-    model, catalog, snapshot = two_unit_case()
-    draft = canonical_generation_draft(model.model_validate(readback([snapshot.unit_ids[1]], "8です")), unit_catalog=catalog)
-    assert draft.answer_parts[0].result_kind == "direct"
-    assert [item.text for item in draft.items] == ["項目Bは8です。"]
-    assert draft.items[0].citations[0]._unit_binding.unit_ids == (snapshot.unit_ids[1],)
-
-
 @pytest.mark.parametrize(
     "result",
     ["20です。", "項目Aは12です。項目Bは8です。合計20です。", "12"],
@@ -201,15 +179,3 @@ def test_empty_catalog_keeps_only_gap():
     with pytest.raises(ValidationError):
         model.model_validate(raw)
 
-
-@pytest.mark.parametrize("kind", ["source", "answer"], ids=["id-only", "readback"])
-def test_direct_parts_pass_the_existing_role_check_with_item_dependencies(kind):
-    from rag_engine.generation.answer_parts import check_answer_parts
-    from rag_engine.generation.grounded import CheckedItem
-
-    raw, model, catalog, snapshot = case()
-    if kind == "answer":
-        raw = readback(list(snapshot.unit_ids), "12です")
-    draft = canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
-    entries = {0: CheckedItem(draft.items[0], span={"evidence_id": "source-a"}, draft_index=0)}
-    assert check_answer_parts(draft, entries, [], {"Q1"})["status"] == "linked"

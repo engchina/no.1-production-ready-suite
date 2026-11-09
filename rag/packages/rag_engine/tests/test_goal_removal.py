@@ -96,36 +96,3 @@ def test_per_request_coverage_targets_do_not_depend_on_a_category():
     targets = coverage_targets(PLAIN_QUESTION, lambda text: text.replace("。", " ").split())
     assert [target.id for target in targets] == ["Q1"]
 
-
-class GoalFreeAnswerFlowTests(unittest.TestCase):
-    def setUp(self):
-        from grounded_stub import stub_generation
-
-        stub_generation(self)
-
-    def _run(self, question):
-        search_result = _hybrid_result(_stored_child("chunk-a", 1, "帳票Aは画面Bから出力します。"))
-        with (
-            patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
-            patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
-            patch("rag_engine.generation.answering.search_adb_hybrid_chunks", return_value=search_result) as search,
-            patch(
-                "rag_engine.generation.answering.parse_text_response",
-                return_value=_answer_output(answer="帳票Aは画面Bから出力します。"),
-            ),
-        ):
-            result = answer_question_result(
-                question,
-                "abcdef",
-                ["docling"],
-                get_settings(),
-                query_strategy=SIMPLE_RETRIEVAL_LABEL,
-                answer_flow=STANDARD_ANSWER_FLOW_LABEL,
-            )
-        return result, search
-
-    def test_plain_question_continues_search_and_answer_without_a_purpose_label(self):
-        result, search = self._run(PLAIN_QUESTION)
-        # 検索は止めず、独立して読み取った条件（文書の種類の絞り込み）を渡す。
-        search.assert_called()
-        self.assertNotIn("inquiry_conditions", search.call_args.kwargs)

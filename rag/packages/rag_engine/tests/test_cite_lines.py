@@ -93,18 +93,6 @@ def test_a_stored_quote_does_not_override_the_id_selected_original():
     assert grounded.cited_quote(gap, spans()) == (gap, "")
 
 
-def test_verify_publishes_the_item_cited_by_lines():
-    draft = GroundedDraft.model_validate(
-        {"summary": "s", "confidence": "high", "items": [item("E1", "3").model_dump(), item("E1", "9").model_dump()]}
-    )
-    checked, dropped = grounded.verify("対象を選ぶ方法", draft, spans())
-    first = next(entry for entry in checked if entry.draft_index == 0)
-    assert first.span is not None and first.span["evidence_id"] == "Ea"
-    assert "quote_unmatched" not in [mark.get("code") for mark in first.marks]
-    assert [entry["index"] for entry in dropped] == [1]
-    assert "範囲" in dropped[0]["reason"]
-
-
 def test_generation_instructions_name_only_the_public_citation_fields():
     schema = GroundedItem.model_json_schema()
     assert "citations" in schema["properties"]

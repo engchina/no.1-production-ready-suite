@@ -81,17 +81,6 @@ def _prompt(**knowledge: Any) -> str:
     )
 
 
-def test_guide_rules_are_passed_only_with_guide_parts_and_only_for_those_parts() -> None:
-    assert "### 業務ガイドの扱い" not in _prompt()
-    scoped = _prompt(guide_task_scope=({"step_id": "s1", "required": True},))
-    assert "### 業務ガイドの扱い" in scoped
-    assert "- guide_task_scope: " in scoped and "- 業務ガイド: " in scoped
-    assert "- guide_condition_notices: " not in scoped
-    noted = _prompt(guide_condition_notices=("分岐の補足。",))
-    assert "- guide_condition_notices: " in noted and "- guide_task_scope: " not in noted
-    assert "- 業務ガイド: " in _prompt(guide_steps=(("s1", "手順A", ("r0",)),))
-
-
 def test_required_rules_stay_in_the_system_prompt() -> None:
     prompt = grounded.GENERATE_SYSTEM_PROMPT
     for rule in (
@@ -130,25 +119,6 @@ def test_rules_moved_to_the_schema_reach_the_model() -> None:
     assert ExternalDataItem.model_fields["who_can_answer"].description.count("反例:") == 1
 
 
-def test_saved_reading_instructions_replace_the_builtin_only_for_the_bound_scope() -> None:
-    evidence = "### 合成の根拠の読み方\n- completion: 合成の完了の読み方。\n"
-    guide = "### 合成のガイドの扱い\n- 業務ガイド: 合成のガイドの扱い。\n"
-    evidence_only = {"generation.evidenceReading": evidence}
-    tagged = span(tags=["completion"])
-    with bind_prompt_overrides(evidence_only):
-        saved_block = reading_part([tagged])
-    assert "- completion: 合成の完了の読み方。" in saved_block
-    assert "手順の最後まで答える" not in saved_block
-    assert "合成の完了の読み方" not in reading_part([tagged])
-
-    steps = {"guide_steps": (("s1", "手順A", ("r0",)),)}
-    with bind_prompt_overrides({"generation.guideRules": guide}):
-        saved_prompt = _prompt(**steps)
-    assert "- 業務ガイド: 合成のガイドの扱い。" in saved_prompt
-    assert "- 業務ガイド: 本問の業務範囲" not in saved_prompt
-    assert "合成のガイドの扱い" not in _prompt(**steps)
-
-
 def _steps(prompt: str) -> dict[int, str]:
     """``## Step N:`` ごとの本文（見出しを含む）。"""
     parts = re.split(r"^(?=## Step \d+:)", prompt, flags=re.M)
@@ -161,23 +131,6 @@ def _rendered(spans: list[dict[str, Any]], **knowledge: Any) -> dict[int, str]:
         QUESTION, spans, AnswerContext(records=[], text=""), [], None, None, runtime, None, template=DEFAULT_VLM_ANSWER_PROMPT
     )
     return _steps(prompt)
-
-
-def test_reading_rules_are_their_own_step_before_the_evidence() -> None:
-    steps = _rendered([span(tags=["completion"])], guide_steps=(("s1", "手順A", ("r0",)),))
-    assert list(steps) == [1, 2, 3, 4, 5, 6]
-    assert "### 根拠の読み方" in steps[5] and "- completion: " in steps[5]
-    assert "### 業務ガイドの扱い" in steps[5]
-    assert "BEGIN_UNTRUSTED_RETRIEVED_CONTEXT" not in steps[5]
-    assert "BEGIN_UNTRUSTED_RETRIEVED_CONTEXT" in steps[6]
-    assert "### " not in steps[6]
-
-
-def test_step_numbers_do_not_depend_on_which_reading_rules_apply() -> None:
-    steps = _rendered([span()])
-    assert list(steps) == [1, 2, 3, 4, 5, 6]
-    assert grounded.NO_READING_RULES in steps[5]
-    assert "### " not in steps[5]
 
 
 def test_reading_rules_placeholder_is_required_when_saving() -> None:

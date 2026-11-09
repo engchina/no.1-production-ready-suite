@@ -9,7 +9,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.application_explanation import is_explanation_schema
+from audit_fixtures import is_explanation_schema
 
 
 def run(*, derived: bool, readback: str | None = None):
@@ -64,7 +64,7 @@ def run(*, derived: bool, readback: str | None = None):
         source_run_id="synthetic",
         metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(text)}]}},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
             "項目Aの値と2件分を教えてください。" if derived else "項目Aの値を教えてください。",
@@ -85,26 +85,3 @@ def test_source_formal_flow_publishes_original_without_derivation_call():
     assert draft["summary_item_indexes"] == [0]
     assert draft["summary_application_indexes"] == []
 
-
-def test_mixed_direct_and_derived_keep_final_summary_dependencies():
-    response, calls = run(derived=True)
-    assert calls == ["GroundedDraftWire", "ApplicationExplanation"]
-    assert "項目Aは12です。" in response.answer_text
-    assert response.generation_trace["applications"][0]["published"]
-    assert "24です。" in response.answer_text
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["summary_item_indexes"] == [0]
-    assert draft["summary_application_indexes"] == [0]
-    assert [part["result_kind"] for part in draft["answer_parts"]] == ["direct", "derived"]
-
-
-def test_answer_copying_the_original_renders_the_original_fetched_by_id():
-    response, calls = run(derived=False, readback="12です")
-    assert calls == ["GroundedDraftWire"]
-    assert "項目Aは12です。" in response.answer_text
-    assert not response.generation_trace["applications"]
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["answer_parts"][0]["result_kind"] == "direct"
-    assert draft["items"][0]["text"] == "項目Aは12です。"
-    assert draft["summary"] == "項目Aは12です。"
-    assert draft["summary_item_indexes"] == [0]

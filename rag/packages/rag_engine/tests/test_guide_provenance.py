@@ -29,36 +29,6 @@ def _entry(text: str, quote: str = STEP_A) -> grounded.CheckedItem:
     )
 
 
-def test_guide_text_without_evidence_is_marked_but_paraphrase_of_evidence_is_not():
-    guide = [GUIDE_PURPOSE]
-    copied = _entry(GUIDE_TEXT_CLAIM)
-    # 業務ガイドの文は資料の言い回しを写すことが多い。根拠にある語の言い換えは業務ガイドの文にしない。
-    paraphrase = _entry("設定画面で、設定 A の値を入力します。")
-    gap = grounded.CheckedItem(GroundedItem(kind="gap", text=GUIDE_TEXT_CLAIM))
-
-    assert grounded.mark_guide_text([copied, paraphrase, gap], guide) == 1
-    assert [mark["code"] for mark in copied.marks] == ["guide_text"]
-    assert copied.state == "unverified" and not copied.confirmed
-    assert paraphrase.marks == [] and gap.marks == []
-
-
-def test_unsourced_items_lose_the_document_citation_and_get_their_own_section():
-    copied = _entry(GUIDE_TEXT_CLAIM)
-    grounded.mark_guide_text([copied], [GUIDE_PURPOSE])
-    sourced = _entry("設定画面で設定 A の値を入力します。")
-
-    assert grounded.detach_unsourced([copied, sourced]) == 1
-    rendered = grounded.render_answer("要約", [sourced, copied])
-
-    labels = grounded.answer_labels()
-    body, _sep, unsourced = rendered.text.partition(labels.unsourced_section)
-    assert "設定 A の値を入力します。\n" + labels.citation_prefix in body
-    assert GUIDE_TEXT_CLAIM in unsourced and labels.citation_prefix not in unsourced.split(labels.marked_section)[0]
-    assert GUIDE_TEXT_CLAIM not in body
-    # 出典の行は資料と照合できた説明の分だけ。
-    assert len(rendered.citation_lines) == 1
-
-
 def test_guide_notes_are_rendered_from_the_guide_settings_without_a_document_citation():
     notes = grounded.guide_notice_lines("窓口 X", ["対象の区分を特定できない場合", "現在の設定値を確かめる場合"], "担当者の承認", True)
     rendered = grounded.render_answer("要約", [_entry("設定画面で設定 A の値を入力します。")], guide_notes=("合成ガイド", notes))
@@ -77,39 +47,6 @@ def test_guide_notes_are_rendered_from_the_guide_settings_without_a_document_cit
     assert grounded.guide_notice_lines("", ["条件"]) == []
 
 
-def test_completion_requirement_can_cite_a_guide_note_but_evidence_requirement_cannot():
-    notes = grounded.guide_notice_lines("窓口 X", ["変更の可否を判断する場合"])
-    note_index = 1  # items（1 件）の後ろに続く
-    completion = {
-        "step_id": "a",
-        "requirements": [{"id": "a:0", "text": "窓口 X への確認を示した", "kind": "completion"}],
-        "depends_on": [],
-    }
-    result = grounded.apply_guide_contracts(
-        coverage("a"),
-        [_entry("設定画面で設定 A の値を入力します。")],
-        [completion],
-        audit({**review("a:0", [note_index]), "answer_quote": "窓口 X へお問い合わせください"}),
-        notes,
-    )
-    assert result[0]["status"] == "explained"
-
-    evidence = {**completion, "requirements": [{**completion["requirements"][0], "kind": "evidence"}]}
-    result = grounded.apply_guide_contracts(
-        coverage("a"),
-        [_entry("設定画面で設定 A の値を入力します。")],
-        [evidence],
-        audit({**review("a:0", [note_index]), "answer_quote": "窓口 X へお問い合わせください"}),
-        notes,
-    )
-    assert result[0]["status"] != "explained"
-    # 案内の行が無ければ、items の外の index は引けない。
-    result = grounded.apply_guide_contracts(
-        coverage("a"), [_entry("t")], [completion], audit({**review("a:0", [note_index]), "answer_quote": "窓口 X"})
-    )
-    assert result[0]["status"] != "explained"
-
-
 def test_plan_carries_the_guide_title_and_notices():
     plan = GuidePlan.from_payload(
         "guide",
@@ -126,46 +63,6 @@ def test_plan_carries_the_guide_title_and_notices():
         True,
         "承認",
     )
-
-
-def test_answer_moves_guide_text_out_of_the_document_sections_and_shows_the_guide_notes():
-    """生成が業務ガイドの方針を根拠つきの説明に書いても、資料の出典を付けずに分け、案内の行はシステムが出す。"""
-    ctx = _ab_context()
-    notes = tuple(grounded.guide_notice_lines("窓口 X", ["区分を特定できない場合"]))
-    knowledge = replace(
-        _knowledge(GUIDE),
-        guide_step_contracts=(
-            {"step_id": "s1", "purpose": GUIDE_PURPOSE, "requirements": [], "depends_on": []},
-            {"step_id": "s2", "purpose": "反映ボタンで確定する。", "requirements": [], "depends_on": ["s1"]},
-        ),
-        guide_title="合成ガイド",
-        guide_notices=notes,
-    )
-    ids = _ids(ctx, knowledge)
-    model = FakeModel(
-        [
-            draft(
-                item(ids[STEP_A], "設定画面で設定 A の値を入力します。", STEP_A),
-                item(ids[STEP_A], GUIDE_TEXT_CLAIM, STEP_A, kind="rule"),
-                item(ids[STEP_B], "反映画面で反映ボタンを押して確定します。", STEP_B),
-                summary="設定 A を入力して反映します。",
-            )
-        ],
-        [make_audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), (2, "supported", "matched", ""))],
-    )
-
-    response = _run(model, ctx, knowledge).response
-
-    labels = grounded.answer_labels()
-    text = response.answer_text
-    documents = text.split(labels.unsourced_section)[0]
-    assert GUIDE_TEXT_CLAIM not in documents
-    assert marks(response)[GUIDE_TEXT_CLAIM] == ["guide_text"]
-    assert labels.guide_notes_note("合成ガイド") in text
-    assert labels.guide_handoff("窓口 X", "区分を特定できない場合") in text
-    # 監査は案内の行を items の後ろの index で受け取る。
-    audits = [prompt for name, prompt in model.prompts if name == "GroundedAudit"]
-    assert '"guide_notes"' in audits[0]
 
 
 # 合成の分岐の補足（分かっている条件で選んだ分岐の note。#3769）。

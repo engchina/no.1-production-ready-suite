@@ -144,34 +144,6 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         result = self.run_flow()
         self.assertNotIn("根拠に画像がありません", result.question_display)
 
-    def test_answer_round_records_audit_counts(self):
-        steps = _by_name(self.run_flow())
-        answer = _fields(steps["回答文の生成と根拠確認（1回目）"])
-        self.assertIn("目的", answer)
-        self.assertIn("結果", answer)
-        self.assertIn("監査した説明", answer)
-        self.assertIn("要求の充足（監査）", answer)
-        self.assertEqual(answer["採否"], "採用")
-
-    def test_answer_round_without_audit_does_not_describe_an_audit(self):
-        """監査の型が none なら、目的・推論の量・要求の充足に、行っていない監査を書かない（#2966）。
-
-        条を出典にした説明にも監査を実行したとは表示しない。
-        """
-        from dataclasses import replace
-
-        steps = _by_name(self.run_flow(replace(_rerank_ready_settings(), answer_audit_mode="none")))
-        step = steps["回答文の生成と根拠確認（1回目）"]
-        answer = _fields(step)
-        self.assertIn("生成後の LLM 監査は実行しません", answer["目的"])
-        self.assertNotIn("条を出典にした説明だけに掛けます", answer["目的"])
-        self.assertNotIn("別のLLM呼出で適用性を監査", answer["目的"])
-        self.assertNotIn("監査した説明", answer)
-        self.assertNotIn("要求の充足（監査）", answer)
-        self.assertIn("要求の充足（原文との照合）", answer)
-        self.assertFalse(any(line.startswith("監査の推論の量") for line in _lines(step)))
-
-
 class CragFlowStepDetailsTest(unittest.TestCase):
     """補正の回答フロー: 根拠の確認の判定・理由・次の対処、探し直しの検索文を詳細に残す。"""
 

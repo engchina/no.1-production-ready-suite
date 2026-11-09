@@ -237,3 +237,4 @@ def test_audit_settings_are_gone() -> None:
     assert not hasattr(_settings(), "answer_audit_mode")
     assert not hasattr(_settings(), "answer_max_correction_rounds")
     assert replace(_settings()) is not None
+

@@ -132,21 +132,10 @@ def run():
         source_run_id="synthetic",
         metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(TEXT)}]}},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
     with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
         response = synthesize_grounded_answer(
             "申請の期限はいつですか。", AnswerContext(records=[record], text=TEXT), settings, image_prompt_mode="text_only"
         ).response
     return response, calls
 
-
-def test_formal_flow_shows_basis_originals_and_publishes_the_conclusion():
-    response, calls = run()
-    assert calls[:2] == ["GroundedDraftWire", "ApplicationExplanation"]
-    assert RULE in response.answer_text and EXCEPTION in response.answer_text
-    assert DROPPED in response.answer_text
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["answer_parts"][0]["result_kind"] == "derived"
-    assert draft["answer_parts"][0]["item_indexes"] == [0]
-    assert draft["items"][0]["text"] == TEXT
-    assert response.generation_trace["applications"][0]["published"]

@@ -14,8 +14,17 @@ from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.audit_wire import is_audit_wire
-from rag_engine.models.llm import CitedEvidenceOutput, GroundedAudit, GroundedDraft, GroundedFactAudit
+from audit_fixtures import is_audit_wire
+from rag_engine.models.llm import GroundedDraft
+
+
+class CitedEvidenceOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: str = ""
+    source: str = ""
+    page: str = ""
+    look_at: str = ""
+    visible_evidence: str = ""
 
 
 class AnswerOutput(BaseModel):
@@ -47,7 +56,6 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
             spans,
             context,
             images,
-            None,
             options.get("question_plan"),
             options.get("runtime_knowledge"),
             options.get("query_expansion"),
@@ -96,7 +104,7 @@ def echo_model(system, prompt, settings, schema, **options):
         items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
         return canonical_fixture({"summary": "answer", "items": items, "confidence": "high"})
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
-    if is_audit_wire(schema) or schema in (GroundedAudit, GroundedFactAudit):
+    if is_audit_wire(schema):
         parse_fixture = (lambda value: legacy_audit_result(value, schema)) if is_audit_wire(schema) else schema.model_validate
         return parse_fixture(
             {

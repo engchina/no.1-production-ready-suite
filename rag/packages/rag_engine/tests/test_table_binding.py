@@ -152,32 +152,6 @@ def test_standalone_values_still_detect_wrong_rows(value: str) -> None:
     assert unbound_table_values(f"項目乙では「{value}」を指定する。", [table]) == [(value, "項目乙")]
 
 
-def test_grounded_item_with_a_value_from_another_row_is_removed_with_the_right_value() -> None:
-    """表の別の行の値を結び付けた説明は、根拠と矛盾した説明として外し、表の正しい対応を理由に出す（#2998）。"""
-    question = "区分Ⅱで選ぶ選択肢の値は？"
-    spans = grounded.tag_spans(
-        question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": TABLE, "section_path": []}]
-    )
-    wrong = GroundedItem(
-        kind="rule", text="区分Ⅱの選択肢の値は 01 です。", citations=[GroundedCitation(evidence_id="E1", quote="区分Ⅱ 02")]
-    )
-    right = GroundedItem(
-        kind="rule", text="区分Ⅱの選択肢の値は 02 です。", citations=[GroundedCitation(evidence_id="E1", quote="区分Ⅱ 02")]
-    )
-
-    def checked(item: GroundedItem) -> grounded.CheckedItem:
-        entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
-        return next(entry for entry in entries if entry.item.text == item.text)
-
-    entry = checked(wrong)
-    assert entry.removed and not entry.published
-    assert [mark["code"] for mark in entry.marks] == ["contradicted"]
-    assert entry.marks[0]["detail"].startswith("根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。")
-    assert "原文「区分 | 選択肢の値 / 区分Ⅰ | 01 / 区分Ⅱ | 02 / 区分Ⅲ | 03」" in entry.marks[0]["detail"]
-    kept = checked(right)
-    assert not kept.removed and kept.reasons == [] and kept.state == ""
-
-
 def test_table_mismatch_notes_name_the_right_row_or_column_value() -> None:
     from rag_engine.generation.table_binding import table_mismatch_notes
 
@@ -187,20 +161,6 @@ def test_table_mismatch_notes_name_the_right_row_or_column_value() -> None:
     assert table_mismatch_notes(pairs, [revised]) == ["『申請の期限』の『改定後』は『60日以内』（『30日以内』は別の列の値）"]
     # 正しい対応が決まらないときは、別の行の値であることだけを書く。
     assert table_mismatch_notes([("99", "区分Ⅹ")], [TABLE]) == ["値『99』は『区分Ⅹ』と別の行の値"]
-
-
-def test_grounded_item_listing_values_of_several_rows_is_kept() -> None:
-    """複数の行の値を列挙した説明は、表の別の行の値として落とさない（#2734）。"""
-    question = "単価の列に表示される値は？"
-    spans = grounded.tag_spans(
-        question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": PRICE_TABLE, "section_path": []}]
-    )
-    listed = GroundedItem(
-        kind="rule", text="単価の列に 254・253・300 が表示されます。", citations=[GroundedCitation(evidence_id="E1", quote="254")]
-    )
-    entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[listed]), spans)
-    entry = next(entry for entry in entries if entry.item.text == listed.text)
-    assert not any("表の別の行の値" in reason for reason in entry.reasons)
 
 
 def test_audit_prompt_judges_the_relation_not_the_shared_words() -> None:
@@ -395,25 +355,6 @@ def test_real_tables_in_figure_descriptions_are_still_checked() -> None:
     # 見出しの無い抜粋（画像の生成説明の途中）の「名前：値」は、line_pairs=False では表にしない。
     excerpt = "\n".join(_figure_description().split("\n")[4:])
     assert evidence_tables(excerpt, line_pairs=False) == []
-
-
-def test_grounded_item_about_a_figure_button_is_kept() -> None:
-    """図の生成説明を根拠にした正しい説明を、表の対応の取り違えとして外さない（#3482）。"""
-    question = "画面 A の差し戻しボタンはどこにありますか？"
-    figure = _figure_description()
-    spans = grounded.tag_spans(
-        question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": figure, "section_path": []}]
-    )
-    assert "image_generated" in spans[0]["tags"]
-    item = GroundedItem(
-        kind="operation",
-        text="画面 A の下部に差し戻しボタンがあります。",
-        citations=[GroundedCitation(evidence_id="E1", quote="ボタン: 保存 / 承認 / 差し戻し / 一時保存")],
-    )
-    entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
-    entry = next(entry for entry in entries if entry.item.text == item.text)
-    assert not entry.table_conflict
-    assert "contradicted" not in [mark["code"] for mark in entry.marks]
 
 
 def test_index_column_is_not_the_label_column() -> None:

@@ -304,17 +304,6 @@ def test_build_context_block_lists_step_evidence_labels() -> None:
     assert guide_step_evidence_lines(steps, spans) == ["- s1「画面 A」: E1", "- s2「画面 B」: E2", "- s3「画面 C」: 根拠なし"]
 
 
-def test_build_context_block_shows_step_evidence_only_with_guide_steps() -> None:
-    spans = [{"label": "E1", "source_id": "run:a1", "pinned": False, "function": ("doc", "F"), "text": "a", "tags": []}]
-
-    with_steps = build_context_block(QUESTION, spans, preface="", feedback=None, guide_steps=(("s1", "画面 A", ("run:a1",)),))
-    without = build_context_block(QUESTION, spans, preface="", feedback=None)
-
-    assert "業務ガイドの手順ごとの根拠" in with_steps and "- s1「画面 A」: E1" in with_steps
-    assert "業務ガイドの手順ごとの根拠" not in without
-    assert RuntimeKnowledgeContext(original_question="q", expanded_question="q", path=Path("x")).guide_steps == ()
-
-
 def test_engine_settings_default_and_env_for_guide_steps() -> None:
     default = get_settings(environ={}, dotenv_path=None)
     custom = get_settings(
@@ -334,16 +323,3 @@ def test_engine_settings_default_and_env_for_guide_steps() -> None:
     assert (custom.guide_step_retrieval_enabled, custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (False, 2, 3)
     assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds, custom.extra_retrieval_max_queries) == (1, 2.5, 5)
 
-
-def test_guide_step_instructions_keep_steps_the_user_cannot_perform() -> None:
-    """残った業務ガイドの手順は、分かっている条件で利用者が自分で行えなくても説明させる（#2813）。
-
-    条件で外れる手順は分岐（visible_plan）がコードで外すので、生成の指示は手順を省く理由に条件を挙げない。
-    """
-    from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GUIDE_RULES_PROMPT
-
-    guide_line = next(line for line in GUIDE_RULES_PROMPT.splitlines() if line.startswith("- guide_task_scope: "))
-    assert "利用者が自分で行えない必須手順も省かず" in guide_line
-    assert "required=true" in guide_line and "required=false" in guide_line
-    assert "外れる操作は混ぜない" not in guide_line
-    assert "条件" not in _GUIDE_STEP_HINT

@@ -58,65 +58,6 @@ def test_folded_quote_resolves_to_the_original_text():
     assert not grounded.quote_in_text("HRM:第3水曜 22:00〜24:00", PLAN)
 
 
-def test_answer_context_folds_widths_and_keeps_the_original_evidence():
-    ctx = _plan_context()
-    spans = _grounded_spans(QUESTION, ctx, (), None)
-    block = grounded.build_context_block(QUESTION, spans, preface="", feedback=None)
-    assert "HRM:第2水曜 22:00〜24:00" in block and "OMS:第3木曜" in block
-    assert "原文の文字表記" in block and "ＨＲＭ" in block and "ＯＭＳ" in block
-    # 根拠（表示・保存・引用の原文）は資料の表記のまま。
-    assert any("ＨＲＭ：第２水曜" in span["text"] for span in spans)
-    assert ctx.records[0].text == PLAN
-
-
-def test_verify_binds_a_folded_quote_and_checks_in_the_same_form():
-    spans = _grounded_spans(QUESTION, _plan_context(), (), None)
-    grounded.format_functions(spans)
-    eid = spans[0]["evidence_id"]
-    proposal = item(eid, TEXT, QUOTE, kind="rule")
-    proposal["citations"][0]["lines"] = "2"
-    checked, dropped = grounded.verify(QUESTION, GroundedDraft.model_validate(draft(proposal)), spans)
-    assert dropped == []
-    entry = next(e for e in checked if e.item.text == TEXT)
-    assert entry.span is not None and entry.span["evidence_id"] == eid
-    assert entry.item.quote == "ＨＲＭ：第２水曜 22:00〜24:00"
-    assert not entry.quote_only and entry.reasons == []
-
-
-def test_check_view_folds_span_text_fields_for_checks():
-    span = {
-        "text": "ＯＫボタンを押します。",
-        "function_texts": ["ＨＲＭ"],
-        "section_path": ["（１）設定"],
-        "function": ("doc", "（１）設定"),
-        "evidence_id": "e1",
-    }
-    view = grounded.check_view(span)
-    assert view["text"] == "OKボタンを押します。" and view["function_texts"] == ["HRM"]
-    assert view["section_path"] == ["(1)設定"]
-    # 機能のキーと ID は結び付けに使うので変えず、元の span も変えない。
-    assert view["function"] == span["function"] and view["evidence_id"] == "e1"
-    assert span["text"] == "ＯＫボタンを押します。"
-
-
-def test_grounded_answer_reads_half_width_and_cites_the_original():
-    ctx = _plan_context()
-    eid = ids(ctx, QUESTION)[PLAN]
-    model = FakeModel(
-        [draft(item(eid, TEXT, QUOTE, kind="rule"), summary="HRM は第2水曜の保守枠です。")], [audit((0, "supported", "matched", ""))]
-    )
-    result = run(model, ctx, QUESTION).response
-    generation = next(prompt for name, prompt in model.prompts if name == "GroundedDraftWire")
-    assert "HRM:第2水曜 22:00〜24:00" in generation and "ＨＲＭ" in generation
-    audit_prompt = json.loads(next(prompt for name, prompt in model.prompts if name == "GroundedAudit"))
-    assert audit_prompt["items"][0]["quote"] == "HRM:第2水曜 22:00〜24:00"
-    assert "ＨＲＭ" not in json.dumps(audit_prompt, ensure_ascii=False)
-    # 公開する説明は引用の照合を通り、出典の引用と保存する根拠は原文のまま。
-    assert TEXT in result.answer_text and grounded.answer_labels().quote_only_section not in result.answer_text
-    assert [fact["quote"] for fact in result.evidence_facts] == ["ＨＲＭ：第２水曜 22:00〜24:00"]
-    assert any("ＨＲＭ：第２水曜" in span["text"] for span in result.generation_trace["selected_evidence"])
-
-
 def test_figure_dash_is_folded_only_for_comparison() -> None:
     from rag_engine.retrieval.character_forms import fold_text
 

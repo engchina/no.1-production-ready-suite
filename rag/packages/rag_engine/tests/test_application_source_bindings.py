@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from rag_engine.generation import grounded
-from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.citation_unit_ids import unit_generation_model
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft

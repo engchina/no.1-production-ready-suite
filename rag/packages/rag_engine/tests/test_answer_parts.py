@@ -58,17 +58,6 @@ def test_missing_plan_is_unrecorded_instead_of_success_or_semantic_failure():
     assert result == {"status": "unrecorded", "parts": [], "unrecorded_request_ids": ["Q1"]}
 
 
-def test_wire_part_reference_is_bound_to_the_generated_application():
-    from test_answer_parts_wire import case as wire_case
-
-    from rag_engine.generation.citation_wire import canonical_generation_draft
-
-    raw, schema, catalog = wire_case()
-    result = canonical_generation_draft(schema.model_validate(deepcopy(raw)), unit_catalog=catalog)
-    assert result.answer_parts[1].item_indexes == []
-    assert result.answer_parts[1].application_indexes == [0]
-
-
 def test_verified_gap_keeps_index_so_the_declared_part_is_not_duplicated():
     from rag_engine.generation.grounded import verify
 

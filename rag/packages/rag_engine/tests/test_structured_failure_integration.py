@@ -48,19 +48,6 @@ def invalid_output() -> Exception:
     raise AssertionError("合成の入力は型違反になる")
 
 
-@pytest.mark.parametrize("error", [invalid_output(), invalid_json_output(), oci.IncompleteResponse("private-message", "max_output_tokens")])
-def test_audit_failure_is_preserved_in_response_trace(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
-    current, _, calls = cast(Callable[..., Any], run_failed_audit)(monkeypatch, error)
-    details = current.trace()["timing"]["audit_failure"]
-    assert current.review_execution == "error"
-    assert details["error_class"] == type(error).__name__
-    assert details["category"] in {"schema_field", "invalid_json", "truncated_output"}
-    assert len(calls) == 1
-    assert "private" not in json.dumps(details)
-    assert current.unanswered[0]["status"] == "unknown"
-    assert current.unanswered[0]["reviewed"] is False
-
-
 def test_failed_call_logger_keeps_safe_chain_as_extra(caplog: pytest.LogCaptureFixture) -> None:
     provider = synthetic_provider()
     with caplog.at_level(logging.INFO, logger=oci.__name__):

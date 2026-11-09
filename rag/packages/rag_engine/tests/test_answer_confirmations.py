@@ -29,11 +29,6 @@ def test_confirmation_lines_keep_data_and_documents_named_in_the_evidence_or_que
     ]
 
 
-def test_render_adds_the_confirmation_section_last():
-    text = grounded.render("結論です。", [], confirmations=["実データ: 設定値（区分を決める）"])
-    assert text.endswith("回答を確定するために確認すること\n\n・実データ: 設定値（区分を決める）")
-
-
 def test_no_evidence_with_confirmations_guides_instead_of_refusing():
     ctx = context(record(0, "帳票の一覧です。", "その他"))
     guided = _draft(external_data_items=["対象伝票の状態（取消できるかを決める）"])

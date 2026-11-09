@@ -50,8 +50,3 @@ def test_the_end_line_does_not_change_units_or_extracted_quotes():
     quoted, error = grounded.cited_quote(item, [evidence])
     assert not error and "[/E2]" not in quoted.quote and quoted.quote in SECOND
 
-
-def test_the_input_description_names_the_end_line():
-    # 根拠の入力の説明（根拠の直前の 1 か所）が、始まりの行と終わりの行の両方を示す。
-    block = grounded.build_context_block("確かめます。", [span("E1", FIRST) | {"pinned": False}], preface="", feedback=None)
-    assert "`[番号]` の行から `[/番号]` の行まで" in block

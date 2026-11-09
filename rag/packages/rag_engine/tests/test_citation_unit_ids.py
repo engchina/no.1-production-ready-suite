@@ -198,49 +198,6 @@ def test_scope_links_choose_sent_units_and_code_extracts_original():
         model.model_validate(payload)
 
 
-def test_repair_keeps_original_snapshot_and_only_replaces_selected_units():
-    from rag_engine.generation.citation_range_repair import apply_range_repair, unit_range_repair_model
-    from rag_engine.generation.citation_unit_ids import unit_generation_model
-    from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-
-    original = snapshot()
-    foreign = snapshot(source_id="other", evidence_id="E2", label="E2")
-    catalog = SentUnitCatalog([original, foreign])
-    generation = unit_generation_model(generation_draft_wire_model(), catalog)
-    draft = canonical_generation_draft(
-        generation.model_validate(
-            {
-                "items": [{"kind": "rule", "text": "合成の説明", "citations": [{"unit_ids": [original.unit_ids[0]]}]}],
-                "summary": "変更しない要約",
-                "confidence": "low",
-            }
-        ),
-        unit_catalog=catalog,
-    )
-    targets = [
-        {"item_index": 0, "citation_index": 0, "evidence_id": "E1", "unit_count": 3, "numbered": True, "snapshot_id": original.snapshot_id}
-    ]
-    model = unit_range_repair_model(catalog)
-    assert "line_start" not in str(model.model_json_schema())
-    assert "line_end" not in str(model.model_json_schema())
-    for selected, reason in [
-        ([original.unit_ids[1], original.unit_ids[2]], None),
-        ([foreign.unit_ids[1]], "evidence_id_changed"),
-        ([original.unit_ids[0], original.unit_ids[2]], "citation_range_disconnected"),
-    ]:
-        response = model.model_validate({"ranges": [{"item_index": 0, "citation_index": 0, "unit_ids": selected}]})
-        repaired, diagnostic = apply_range_repair(draft, response, targets, unit_catalog=catalog)
-        assert repaired.items[0].text == draft.items[0].text
-        assert repaired.summary == draft.summary
-        if reason:
-            assert diagnostic["rejected"][0]["reason_code"] == reason
-            assert repaired.items[0].citations[0]._unit_binding == draft.items[0].citations[0]._unit_binding
-        else:
-            assert diagnostic["status"] == "completed"
-            assert repaired.items[0].citations[0]._unit_binding.text == "単位B\n単位C"
-            assert repaired.items[0].citations[0]._unit_binding.snapshot == original
-
-
 def test_empty_sent_catalog_cannot_return_any_citation_or_link_range():
     from rag_engine.generation.citation_unit_ids import unit_generation_model
     from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model

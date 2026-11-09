@@ -2819,9 +2819,6 @@ def synthesize_grounded_answer(
         runtime_knowledge = runtime_knowledge.with_rule_usage(
             confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled
         ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
-    if not context.records:
-        return GroundedAnswer(_no_candidates_response(context), context, tuple(image_evidence), image_prompt_mode)
-
     from rag_engine.generation import grounded
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.batched_evidence import prepare_batched_evidence
@@ -2849,6 +2846,13 @@ def synthesize_grounded_answer(
             return GroundedAnswer(
                 _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
             )
+    if not context.records:
+        return GroundedAnswer(
+            _with_guide_acquisition_notices(_no_candidates_response(context), runtime_knowledge),
+            context,
+            tuple(image_evidence),
+            image_prompt_mode,
+        )
     provider = answer_llm_provider
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
     images, mode = tuple(image_evidence), image_prompt_mode
@@ -3040,7 +3044,9 @@ def synthesize_grounded_answer(
         summary = grounded.answer_labels().neutral_summary
         rendered_items = shown
     else:
-        summary = str(current.summary or "").strip() or grounded.answer_labels().insufficient_evidence_summary
+        summary = str(current.summary or "").strip()
+        if not summary and not published and not any(entry.published for entry in current.applications):
+            summary = grounded.answer_labels().insufficient_evidence_summary
         rendered_items = current.checked
     rendered = grounded.render_answer(
         summary if published or not confirmation_section else grounded.answer_labels().confirmation_only_summary,
