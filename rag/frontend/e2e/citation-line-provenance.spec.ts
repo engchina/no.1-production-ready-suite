@@ -162,7 +162,7 @@ test.describe("本文の根拠の行と根拠の一覧の対応（issue 2710）"
     // 根拠の一覧から同じ箇所（3 番目のカード）を開くと、本文の行から開いたときと同じ要約。
     const summary = page.locator("summary").filter({ hasText: "AI に渡した 3 件" });
     await expect(summary).toHaveText(
-      "AI に渡した 3 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件 ／ まとまりで参照 1 件"
+      "AI に渡した 3 件 ／ 回答で引用 1 件 ／ まとまりで参照 1 件"
     );
     const cards = page.getByTestId("evidence-card");
     await expect(cards).toHaveCount(3);

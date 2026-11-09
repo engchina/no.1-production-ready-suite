@@ -472,7 +472,7 @@ for (const viewport of [
       // 件数は括弧を使わず区切りで並べ、0 件の項目は出さない。
       const summary = page
         .locator("summary")
-        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 参考 1 件" })
+        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ 参考 1 件" })
         .first();
       await expect(summary).toBeVisible();
       await summary.click();
@@ -1319,7 +1319,7 @@ test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブ�
   // 見出しは Agent と同じ書き方（まとまりの数を出さない。#2388）。
   const summary = page
     .locator("summary")
-    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件" });
   await expect(summary).toBeVisible();
   await expect(page.getByText(/のまとまり/)).toHaveCount(0);
   await summary.click();
@@ -2544,7 +2544,7 @@ for (const compare of [false, true]) {
       await expect(answer.getByTestId("chat-answer-progress-summary")).toContainText("16 ステップ");
     }
     const last = page.locator(`[id="message-${replies.at(-1)!.message_id}"]`);
-    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件" });
     const feedback = last.getByRole("group", { name: "この回答は役に立ちましたか？" });
     // scrollTop の代入だけで済ませず、会話の欄の上でホイールを動かして末尾へ進む。
     await log.hover();
