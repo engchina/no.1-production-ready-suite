@@ -5,7 +5,6 @@ import {
   MarkdownInlineText,
   useEvidenceSource,
   type AnswerCitationRef,
-  type AnswerPassageRecords,
   type AnswerSectionsBlock,
   type EvidenceSourceState,
 } from "@production-ready/ui";
@@ -17,7 +16,7 @@ import {
   citationLabel,
   type AnswerEvidenceData,
 } from "@/lib/answer-evidence";
-import { answerPassageLabels, type StructuredBlock } from "@/lib/answer-structure";
+import type { StructuredBlock } from "@/lib/answer-structure";
 
 /**
  * 回答の根拠の塊（#2328）。RAG のチャットと同じ共有の `AnswerEvidence`（「AI に渡した N 件 ／ 回答で引用 M 件」の
@@ -113,21 +112,17 @@ function EvidenceSource({
 /**
  * 回答の本文の節（RAG のチャットの回答と同じ共有の `AnswerSections`。#2328）。段落・項目の下の「根拠：文書 p.N」を
  * 押すと、その根拠を右のサイドパネルで開く（RAG の根拠の行と同じ共通の `EvidenceSourceSheet`。#2360）。
- * 段落の印の記録（`passages`。#2738）があれば、印の付いた段落に線と印を付け、回答全体の注意・外した段落・
- * 確認が必要な点を共有の部品で出す（RAG のチャットと同じ見た目）。根拠の無い回答（`evidence` が null）も描ける。
  */
 export function StructuredAnswer({
   runId,
   blocks,
   evidence,
-  passages = null,
   markdownHeadingLevel = 2,
   testId,
 }: {
   runId: string;
   blocks: StructuredBlock[];
   evidence: AnswerEvidenceData | null;
-  passages?: AnswerPassageRecords | null;
   /** Markdown の塊の最上位の見出しの段（置く場所の見出しの下。チャットは見出し「回答」h3 の下の 4。#3433）。 */
   markdownHeadingLevel?: 2 | 3 | 4;
   testId: string;
@@ -190,7 +185,7 @@ export function StructuredAnswer({
     };
   });
   return (
-    <AnswerSections blocks={sections} testId={testId} passages={passages} passageLabels={answerPassageLabels()}>
+    <AnswerSections blocks={sections} testId={testId}>
       {evidence ? (
         <EvidenceSource runId={runId} evidence={evidence} source={source} testId={`${testId}-citation-sheet`} />
       ) : null}

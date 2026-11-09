@@ -802,23 +802,8 @@ const agentJa = {
   // 回答の本文の節（RAG のチャットの回答と同じ見出し。#2328）。
   // 回答の注意書き（設定は製品ごと。#2405・#2449）
   "answer.notice.label": "回答の注意書き",
-  "chat.answer.confirmed": "資料により確認できた事項",
-  "chat.answer.unconfirmed": "資料から確認できなかった事項",
   "chat.answer.reference": "参考情報",
   "chat.answer.referenceNote": "以下は資料の原文です。本質問の条件への該当は確認できていません。",
-  // 回答の段落の印（共有の AnswerSections。RAG の search.answerText.passage.* と同じ文言。#2738）。理由の文は backend が
-  // 返す文をそのまま出す。
-  "chat.answer.passage.unverified": "未確認",
-  "chat.answer.passage.warning": "要注意",
-  "chat.answer.passage.unverifiedDescription": "この段落は根拠で確かめられていません。",
-  "chat.answer.passage.warningDescription": "この段落はシステムの検査で注意が必要とされました。",
-  "chat.answer.passage.toggleHint": "の理由",
-  "chat.answer.passage.removedTitle": "根拠と矛盾し除いた内容",
-  "chat.answer.passage.removedNote": "根拠と矛盾したため、次の内容は回答に載せていません。",
-  "chat.answer.passage.marksTitle": "確認が必要な点",
-  "chat.answer.passage.marksNote": "次の段落は根拠で確かめられていないか、注意が必要です。押すと本文の段落へ移ります。",
-  "chat.answer.passage.jump": "{quote}（本文の段落へ移動）",
-  "chat.answer.passage.warningsTitle": "回答全体に注意が必要です",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
   "evidence.row": "{row} 行",
   "evidence.rowRange": "{start}–{end} 行",

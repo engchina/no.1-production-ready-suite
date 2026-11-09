@@ -24,7 +24,7 @@ B=http://localhost:8120/api   # 画面と同じ認証（Cookie / CSRF）で呼�
 # 1. 全構成（基準）
 curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3}'
 # 2. 補助を 1 つずつ外す
-curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["final_validation"]}'
+curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["tool_grounding"]}'
 curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["tool_grounding"]}'
 curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["context_compaction"]}'
 # 3. 全構成をもう一度（順序・cache の温まりの目安）

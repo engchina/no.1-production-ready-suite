@@ -8,19 +8,17 @@
   （`rag_search` / `rag_retrieve_evidence`）の `evidence`。同じ chunk
   （`document_id`・`chunk_id`）は 1 回だけ、出てきた順。
 - 回答で引用した根拠: 利用者に見せる回答が書いた根拠の ID
-  （省いて書いた形を含む。照合
-  `answer_references.cited_chunk_ids`）と、回答の段落を裏付けた
-  （`supported`）根拠。
+  （省いて書いた形を含む。`answer_references.cited_chunk_ids`）と、決定的な照合で段落に結び付けた根拠。
 - 回答での使われ方（`answer_use`。該当確認済み / 参考）は、回答で引用した根拠に、
   RAG が同じ根拠に付けた値があれば残す。
 - 会話の添付の根拠（#2554）: 添付を読むツール（`chat_attachment_read_section` /
   `chat_attachment_read_rows` / `chat_attachment_find`）が返した節・行・一致した箇所。
   `document_id` は `attachment:<添付の ID>`（RAG の文書ではないので、根拠の原文・図を
-  開く確かめ（`passed_evidence`）には入れない）。添付は最終の検証の対象外で根拠の ID の
-  印も無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
+  開く確かめ（`passed_evidence`）には入れない）。添付は根拠の ID の
+  印が無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
 
-- 結び付けの方法（`binding`）は `text` だけ（#4714）: 段落が書いた根拠の ID の印と、段落の特徴
-  （引用・ID・コード・見出し・同じ文字の並び）の決定的な照合で根拠の行を付ける。
+- 段落に結び付ける根拠: 段落が書いた根拠の ID の印と、段落の特徴（引用・ID・コード・見出し・
+  同じ文字の並び）の決定的な照合で決める（#4714）。
 """
 
 from __future__ import annotations
@@ -71,7 +69,6 @@ ATTACHMENT_EVIDENCE_TYPE = "chat_attachment"
 # 添付の根拠の抜粋の上限（節は 1 回に 8000 文字まで読めるので、画面と成果物では縮める）。
 ATTACHMENT_EXCERPT_CHARACTERS = 2_000
 _ANSWER_USES = frozenset({"confirmed", "reference"})
-BINDING_TEXT = "text"
 # 決定的な照合で 1 つの段落に結び付ける根拠の上限（当たりの重みの大きい順）。
 MAX_TEXT_BOUND_PER_PASSAGE = 3
 # 「参考情報」に出す根拠の原文の上限の文字数。
@@ -391,20 +388,18 @@ def _markers(answer: str, chunk_ids: Sequence[str]) -> list[JsonObject]:
 def _passages(
     answer: str,
     chunk_ids: Sequence[str],
-    supported: list[tuple[str, str]],
     markers: list[JsonObject],
     text_bound: Mapping[str, list[str]],
 ) -> list[JsonObject]:
     """回答の段落ごとの根拠（段落の原文, chunk の一覧）。
 
-    根拠は、最終の検証がその段落を裏付けた根拠と、段落が書いた根拠の ID の印の根拠と、決定的な
-    照合で結び付けた根拠（`text_bound`。検証が判定を出さなかったときだけ）。画面は段落の下に
+    根拠は、段落が書いた根拠の ID の印の根拠と、決定的な照合で結び付けた根拠（`text_bound`）。
+    画面は段落の下に
     「根拠：文書 p.N」を出す。根拠の無い段落は入れない。
     """
-    known = set(chunk_ids)
     passages: list[JsonObject] = []
     for text in dict.fromkeys(_answer_passages(answer)):
-        ids = {chunk_id for quote, chunk_id in supported if quote == text and chunk_id in known}
+        ids: set[str] = set()
         for marker in markers:
             if marker["text"] in text:
                 ids.update(marker["chunk_ids"])
@@ -415,7 +410,7 @@ def _passages(
 
 
 def _answer_passages(answer: str) -> list[str]:
-    """回答の段落の原文（行ごとに分けた文。最終の検証の `answer_quote` と同じ分け方）。"""
+    """回答の段落の原文（行ごとに分けた文）。"""
     return [
         text for line in answer.split("\n") for _start, _end, text in passage_spans(line) if text
     ]
@@ -513,14 +508,11 @@ def _featured(
     return [str(items[index]["chunk_id"]) for _weight, index in ranked[:MAX_TEXT_BOUND_PER_PASSAGE]]
 
 
-def _text_bound(
-    answer: str, items: Sequence[Mapping[str, Any]], only: set[str] | None = None
-) -> dict[str, list[str]]:
+def _text_bound(answer: str, items: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
     """決定的な照合で段落に結び付けた根拠（段落の原文 → chunk の一覧）。
 
     主張の段落は、段落の特徴で当たった根拠と、書いた文書名と頁で指した根拠。出典の行は、書いた
-    文書名と頁で指した根拠。見出し・質問・不足の文などには結び付けない。`only` を渡したら、その
-    段落（最終の検証が印を付けた、根拠で確かめていない主張の段落）だけを結び付ける。
+    文書名と頁で指した根拠。見出し・質問・不足の文などには結び付けない。
     """
     if not items:
         return {}
@@ -529,8 +521,6 @@ def _text_bound(
     bound: dict[str, list[str]] = {}
     for passage in dict.fromkeys(_answer_passages(answer)):
         kind = kinds.get(passage)
-        if only is not None and (passage not in only or kind is not None):
-            continue
         if kind is not None and kind != KIND_CITATION:
             continue
         ids = _located(passage, items, citation=kind == KIND_CITATION)
@@ -590,7 +580,6 @@ def answer_evidence(steps: Sequence[RunStep], answer: str) -> JsonObject:
     - `markers`: 回答の中の根拠の ID の印と引き当てた根拠（画面は印を文字で出さず、根拠の
       行にする）。
     - `passages`: 段落ごとの根拠（画面は段落の下に「根拠：文書 p.N」を出す）。
-    - `binding`: 結び付けの方法（常に `text`。#2707）。
     - `references`: 「参考情報」の根拠（根拠の原文 `quote` と chunk）。
     - `citation_lines`: 根拠に結び付いた出典の行（画面は「参考情報」の根拠の行で示し、平文の行を
       重ねて出さない）。
@@ -599,7 +588,7 @@ def answer_evidence(steps: Sequence[RunStep], answer: str) -> JsonObject:
     chunk_ids = [str(item["chunk_id"]) for item in passed]
     markers = _markers(answer, chunk_ids)
     text_bound = _text_bound(answer, passed)
-    passages = _passages(answer, chunk_ids, [], markers, text_bound)
+    passages = _passages(answer, chunk_ids, markers, text_bound)
     cited = cited_chunk_ids(answer, chunk_ids) | {
         chunk_id for ids in text_bound.values() for chunk_id in ids
     }
@@ -630,7 +619,6 @@ def answer_evidence(steps: Sequence[RunStep], answer: str) -> JsonObject:
         "cited": sum(1 for item in items if item["cited"]),
         "markers": markers,
         "passages": passages,
-        "binding": BINDING_TEXT,
         "references": [],
         "citation_lines": [],
     }

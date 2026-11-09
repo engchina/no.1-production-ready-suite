@@ -5,7 +5,7 @@
   モデルに見せない（モデルが渡した値は上書きする）。宣言の無い古いスキルを固定した公開版・固定の
   中身の無い公開版は RAG が計画し、caller でだけ効く引数（planning・queries など）をモデルに見せず、
   モデルが渡しても呼び先へ送らない（#2676）。
-- 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答 → 最終の検証が
+- 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答の順に呼ぶ。
   RAG に回答を作らせずに（`rag_search` を呼ばずに）通る。
 - 根拠の取得が検索・回答プロファイルのルールの確認を返したら、確認の次の手と確かめ中の問いにする。
 """
@@ -413,7 +413,7 @@ def test_rag_planned_schema_and_arguments_drop_caller_only_arguments() -> None:
 def test_agent_orchestrates_retrieval_figure_reading_and_answer(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """本文・表・図の根拠を取得し、図の根拠だけ元の画像を読んでから答え、最終の検証を通す。"""
+    """本文・表・図の根拠を取得し、図の根拠だけ元の画像を読んでから答える。"""
     retrieved = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
     retrieved["evidence"] = [_TEXT, _TABLE, _FIGURE]
     mcp.outputs["rag_retrieve_evidence"] = retrieved

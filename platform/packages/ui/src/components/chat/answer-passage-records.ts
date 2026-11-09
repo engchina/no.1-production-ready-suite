@@ -3,7 +3,7 @@
  *
  * 回答の検証は、根拠と矛盾する段落（`removed_passages`）だけを本文から外し、確かめられない段落（`unverified`）と
  * 規則の検査で注意の要る段落（`warning`）は本文に残して印（`passage_marks`）を付け、回答全体の注意
- * （`answer_warnings`）を返す。RAG（回答の診断）と Agent（成果物「資料との照合」）が同じ形で返し、画面は
+ * （`answer_warnings`）を返す。RAG（回答の診断）が返し、画面は
  * ここで読んで共有の `AnswerSections` で描く。本文の文字列に印の記号は埋め込まれていない（段落の照合は `text`）。
  *
  * 3 つの項目がどれも無い記録（この形より前に保存した回答）は null を返し、呼び出し側は今までの表示のままにする
@@ -100,7 +100,7 @@ export function visibleAnswerPassageRecords(records: AnswerPassageRecords): Answ
 }
 
 /**
- * 回答の記録（RAG の回答の診断・Agent の成果物「資料との照合」の内容）から、段落の印・外した段落・回答全体の注意を
+ * 回答の記録（RAG の回答の診断）から、段落の印・外した段落・回答全体の注意を
  * 読む。3 つの項目がどれも配列でなければ null（新しい記録の無い過去の回答）。
  */
 export function parseAnswerPassageRecords(source: unknown): AnswerPassageRecords | null {

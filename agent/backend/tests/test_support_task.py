@@ -377,7 +377,6 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     assert len(env.mcp.calls_of("rag_search")) == 1
     assert len(env.mcp.calls_of("rag_read_source")) == 1
-    # 最後の step は回答の最終の検証（既定 on。予算には数えない。#1277）。
     assert [step.status for step in run.steps] == ["completed", "failed", "completed"]
     blocked = run.steps[1].tool_result
     assert blocked is not None

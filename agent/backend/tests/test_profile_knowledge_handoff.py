@@ -2,7 +2,7 @@
 
 RAG は Agent 主体の取得（planning=caller）で回答を作らないので、承認済みのルールの本文と用語の
 説明は根拠の取得の結果（`profile_knowledge`）で Agent に届く。組み込み Runtime はそれを根拠
-（`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）・最終の検証の根拠には
+（`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）の根拠には
 入れない。渡したことは Run の step とログに残る。合成の設定・根拠で、モデルは台本（ScriptedModel）。
 """
 

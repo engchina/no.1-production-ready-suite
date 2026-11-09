@@ -68,7 +68,7 @@ ASK_ARGUMENTS = {
 def agents(monkeypatch: MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
     settings = get_settings()
-    # 台本のモデルはツールを呼ばずに答えるので、最終の検証と拒答のガードは外す。
+    # 台本のモデルはツールを呼ばずに答えるので、拒答のガードは外す。
     monkeypatch.setattr(settings, "agent_tool_grounding_required", False)
     for agent_id, name in ((AGENT_ID, "経理の Agent"), (OTHER_AGENT_ID, "人事の Agent")):
         runtime_repository.create_agent(
@@ -415,9 +415,9 @@ def test_api_key_limits_runs_per_day_and_calls_per_minute(
     assert throttled.json()["error_code"] == "SECURITY_API_KEY_RATE_LIMITED"
 
 
-def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation() -> None:
-    """根拠は RAG のツールの結果の evidence のうち、回答で引用した chunk（最終の検証が段落を
-    裏付けた chunk・回答が書いた ID。画面と同じ判定。#2328）で、無ければ全件。"""
+def test_run_output_sources_use_the_rag_tool_results_cited_by_the_answer() -> None:
+    """根拠は RAG のツールの結果の evidence のうち、回答で引用した chunk
+    （回答が書いた ID。画面と同じ判定。#2328）で、無ければ全件。"""
     evidence = [
         {
             "evidence_id": "e1",
@@ -452,15 +452,6 @@ def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation()
         ],
         artifacts=[
             Artifact(name="回答", kind="answer", content={"text": "翌月10日までです。"}),
-            Artifact(
-                name="資料との照合",
-                kind="answer_validation",
-                content={
-                    "status": "completed",
-                    "evidence": [{"chunk_id": "c1"}, {"chunk_id": "c2"}],
-                    "result": {"claims": [{"status": "supported", "chunk_id": "c1"}]},
-                },
-            ),
         ],
     )
     output = mcp_server.run_output(run)

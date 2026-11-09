@@ -1017,7 +1017,7 @@ function RunChatTurn({
   // 同じ形。#2328）。段落に根拠を結び付けられないときは今までの Markdown の描き方にする。
   const answerBlocks = useMemo(
     () =>
-      answer && evidence ? structureAnswer(answer, evidence, null, answerStructureTitles(), null) : null,
+      answer && evidence ? structureAnswer(answer, evidence, answerStructureTitles()) : null,
     [answer, evidence]
   );
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。

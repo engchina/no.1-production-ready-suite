@@ -118,7 +118,6 @@ def _lookup_output(argument: Any) -> dict[str, Any]:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch, outputs={"rag_lookup_guides": _lookup_output})
-    # 最終の検証（#1246）はこのテストの対象外（対応は回答の段落と step から決める）。
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
@@ -442,7 +441,7 @@ def test_agent_question_on_a_guide_condition_becomes_the_condition_card(
 ) -> None:
     """業務ガイドが条件を確かめる判断のとき、Agent 自身の確認ではなく条件の id 付きのカードで聞く。
 
-    答え（自由入力）は次の Run で業務ガイドの条件になり、照合・最終の検証の業務ガイドに渡る。
+    答え（自由入力）は次の Run で業務ガイドの条件になり、照合の業務ガイドに渡る。
     """
     from app.features.agent.confirmation import CONFIRMATION_TOOL, ConfirmationAnswer
 

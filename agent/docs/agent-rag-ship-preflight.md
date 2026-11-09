@@ -28,7 +28,7 @@ PLATFORM_ENV_FILE=<repo>/platform/.env AGENT_ENV_FILE=<repo>/agent/backend/.env 
 
 | 領域 | 項目 | blocker になる条件 |
 |---|---|---|
-| config | `auth_mode` / `environment` / `service_token_secret` / `{rag,nl2sql}_mcp_url` / `tool_grounding_required` / `final_validation_enabled` / `run_store` | `PLATFORM_AUTH_MODE=local`（MCP が token を検査しない）、鍵が 32 文字未満、MCP の URL が未設定、Run の保存先が memory（再起動で承認待ちと取消の記録が消える）。根拠のガードの無効化と `environment=local` は warning |
+| config | `auth_mode` / `environment` / `service_token_secret` / `{rag,nl2sql}_mcp_url` / `tool_grounding_required` / `run_store` | `PLATFORM_AUTH_MODE=local`（MCP が token を検査しない）、鍵が 32 文字未満、MCP の URL が未設定、Run の保存先が memory（再起動で承認待ちと取消の記録が消える）。根拠のガードの無効化と `environment=local` は warning |
 | health / ready | Agent・RAG・NL2SQL の `/api/health` と `/api/ready` | 接続できない、200 以外（ready は `checks` の ok でない項目を出す） |
 | auth | 製品ごとに `no_token`（期待 401）・`wrong_audience`（401）・`unknown_subject`（Agent の鍵で署名した存在しない利用者。403） | 期待と違う応答。`unknown_subject` が 401 なら Agent と呼び先の鍵の不一致 |
 | contract | `--as-user` の利用者で `tools/list`。契約のツールがそろうか | 一覧の取得の失敗（欠けたツールは warning）。`--as-user` が無ければ not_run |

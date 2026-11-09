@@ -69,22 +69,6 @@ function seedRun(mockApi: MockApi) {
     updated_at: MOCK_NOW,
     artifacts: [
       {
-        id: "artifact-validation",
-        kind: "answer_validation",
-        name: "資料との照合",
-        created_at: MOCK_NOW,
-        content: {
-          status: "completed",
-          reason: null,
-          valid: true,
-          result: { status: "completed", valid: true, claims: [], findings: [], missing_evidence: [], stale_evidence: [] },
-          passage_marks: [],
-          removed_passages: [],
-          answer_warnings: [],
-          withheld: { removed: 0, unverified: 0, warnings: 0, all: false, listed: 0 },
-        },
-      },
-      {
         id: "artifact-evidence",
         kind: "answer_evidence",
         name: "回答の根拠",
@@ -94,12 +78,10 @@ function seedRun(mockApi: MockApi) {
           passed: 2,
           cited: 2,
           markers: [],
-          passages: [
-            { text: LEAD, chunk_ids: [CHUNK_A] },
-            { text: "| 一般社員 | **12,000円** |", chunk_ids: [CHUNK_B] },
+          references: [
+            { quote: "合成の原文 A", chunk_ids: [CHUNK_A] },
+            { quote: "合成の原文 B", chunk_ids: [CHUNK_B] },
           ],
-          binding: "validation",
-          references: [],
           citation_lines: [],
         },
       },

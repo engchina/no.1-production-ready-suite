@@ -183,12 +183,7 @@ export function RunDetail({
             statusLabel={runStatusLabel(run.status)}
             badges={
               outcome && latestAnswer ? (
-                <>
-                  {outcome && latestAnswer ? (
-                    <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
-                  ) : null}
-                  {/* 印の数のバッジ（チャットの「資料との照合」・RAG と同じ共有の部品。0 件は出さない。#2738）。 */}
-                </>
+                <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
               ) : null
             }
             question={run.goal}
@@ -294,7 +289,7 @@ export function RunDetail({
                 // 回答の本文はチャットと同じ節の形（根拠の行つき。#2328）。結び付けられなければ Markdown のまま
                 // （表は共通の結果の表。#1158 / #1808）。
                 const blocks =
-                  evidence ? structureAnswer(text, evidence, null, answerStructureTitles(), null) : null;
+                  evidence ? structureAnswer(text, evidence, answerStructureTitles()) : null;
                 return blocks ? (
                   <StructuredAnswer
                     key={artifact.id}

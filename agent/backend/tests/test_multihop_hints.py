@@ -86,7 +86,6 @@ GOAL = "HRM の変更の承認者の代理は誰ですか？"
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    # 最終の検証（#1246）はこのテストの対象外。
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
@@ -625,7 +624,6 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
 def test_business_rag_research_instructions_do_not_report_the_work() -> None:
     """回答に作業の経過（ツール名・検索の状態・業務ガイドの有無・旧版の有無）を書かない（#1452）。
 
-    #1362 の評価で、これらの段落が最終の検証で「根拠で確かめられない」になって外れ、資料の答えは
     正しいのに回答が conditional になっていた（`da-regional-report-export` の「業務ガイドは
     見つかりませんでした」、`km-license-fee` の「rag_search の結果は insufficient_evidence」、
     `ir-emergency-change` の「旧版もあることが確認できました」、`br-crm-retention` の
@@ -1100,25 +1098,6 @@ def test_unresolved_hops_skip_codes_the_question_names() -> None:
     # 質問に無い値（重要度 A）は、回答が使えば挙げる。
     steps = _scope_steps("極秘 システム", "人事評価システム")
     assert [item["value"] for item in unresolved_hops(steps, answer, "極秘のシステムは？")] == ["A"]
-
-
-def _validation_by_answer(bad: str) -> Any:
-    """`bad` の回答の段落だけを根拠で確かめられないとする `rag_validate_answer`。"""
-
-    def validate(argument: Any) -> dict[str, Any]:
-        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
-        status = "unsupported" if argument.answer == bad else "supported"
-        output.update(
-            valid=status == "supported",
-            counts={
-                "supported": int(status == "supported"),
-                "unsupported": int(status != "supported"),
-            },
-            claims=[{"answer_quote": argument.answer, "status": status, "chunk_id": "incident-1"}],
-        )
-        return output
-
-    return validate
 
 
 def _hop_retry_run(

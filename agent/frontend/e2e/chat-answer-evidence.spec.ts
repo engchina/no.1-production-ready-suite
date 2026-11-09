@@ -6,7 +6,6 @@ import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 // - 本文: 要約 →「資料により確認できた事項」（各項目の下に「根拠：文書 p.N」）→「資料から確認できなかった事項」。
 //   本文の根拠の ID の印は文字で出さず、根拠の行にする。
 // - 根拠の塊: 「AI に渡した N 件 ／ 回答で引用 M 件 …」の折りたたみ（既定は閉じる）、カード、一定の高さの中のスクロール。
-// - 外した内容は本文の節に 1 回だけ全件を出し、「資料との照合」は件数のバッジだけ（節の項目の数と一致。#2361）。
 //   項目が多い節は共通の「すべて表示」で畳む（「ほか N 件」で切らない）。
 // - 根拠のパネルの下に、RAG と同じ共通の原文のプレビュー（ページの画像・強調・ツールバー）を出す（#2389）。
 //   原文は Agent の backend が閲覧者として RAG に作らせた短命の署名つきの URL（`http://rag.e2e.test/**`）で読む。
@@ -117,10 +116,11 @@ function seedRun(mockApi: MockApi, excerptA?: string) {
           passed: 3,
           cited: 2,
           markers: [{ text: "【証拠 ID: 0f3a9c2…:7】", chunk_ids: [CHUNK_A] }],
-          passages: [
-            { text: "- 申請は 30 日前までに行います【証拠 ID: 0f3a9c2…:7】。", chunk_ids: [CHUNK_A] },
-            { text: "- 承認は担当の部署が行います。", chunk_ids: [CHUNK_B] },
+          references: [
+            { quote: "申請は 30 日前までに行います。", chunk_ids: [CHUNK_A] },
+            { quote: "承認は担当の部署が行います。", chunk_ids: [CHUNK_B] },
           ],
+          citation_lines: [],
         },
       },
       { id: "artifact-answer", kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text: ANSWER } },
@@ -144,7 +144,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`回答を RAG と同じ節・根拠の行・根拠の塊で出し、根拠の塊で出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  test(`回答を本文・「参考情報」・根拠の塊で出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     seedRun(mockApi);
     await serveSourcePreviews(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -153,10 +153,10 @@ for (const viewport of VIEWPORTS) {
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
 
-    // 要約の段落 →「資料により確認できた事項」→「資料から確認できなかった事項」。
+    // 本文の段落 →「参考情報」の節（根拠の原文と根拠の行）。
     await expect(body.locator("p").first()).toHaveText("合成の質問 A の答えは次のとおりです。");
     const sections = body.getByTestId("answer-section");
-    await expect(sections.locator("h4")).toHaveText(["資料により確認できた事項"]);
+    await expect(sections.locator("h4")).toHaveText(["参考情報"]);
     // 処理の経過と回答の本文の間に、節の見出しと同じ書式の見出し「回答」（h3）を出す（#3433）。
     const answerHeading = turn.getByRole("heading", { level: 3, name: "回答", exact: true });
     await expect(answerHeading).toBeVisible();
@@ -173,20 +173,18 @@ for (const viewport of VIEWPORTS) {
         const { fontSize, fontWeight, color, lineHeight } = getComputedStyle(element);
         return { fontSize, fontWeight, color, lineHeight };
       });
-    expect(await headingStyle(answerHeading)).toEqual(await headingStyle(sections.nth(0).locator("h4")));
-    const confirmed = sections.nth(0).getByRole("listitem");
-    await expect(confirmed).toHaveCount(2);
+    expect(await headingStyle(answerHeading)).toEqual(await headingStyle(sections.last().locator("h4")));
+    const citationLinks = sections.last().getByTestId("answer-citation-link");
     // 根拠の ID の印は文字で出さず、根拠の行（「根拠：文書 p.N」）にする。
     await expect(body).not.toContainText("証拠 ID");
     await expect(body).not.toContainText("0f3a9c2");
-    await expect(confirmed.nth(0)).toContainText("申請は 30 日前までに行います。");
-    await expect(confirmed.nth(0).getByTestId("answer-citation-link")).toHaveText("根拠：文書 0.pdf p.3");
-    await expect(confirmed.nth(1).getByTestId("answer-citation-link")).toHaveText("根拠：文書 0.pdf p.5");
+    await expect(body).toContainText("申請は 30 日前までに行います。");
+    await expect(citationLinks).toHaveText(["根拠：文書 0.pdf p.3", "根拠：文書 0.pdf p.5"]);
 
     // 根拠の行を押すと、その根拠を右のサイドパネル（RAG と同じ共通の部品。#2360）で開く。上部は根拠の要約
     // （番号・文書名・引用の印・Evidence・スコア）と、既定で閉じた「抜粋と頁・章節」（#2502）、その下に RAG と同じ
     // 原文のプレビュー（#2389）。
-    const citationLink = confirmed.nth(0).getByTestId("answer-citation-link");
+    const citationLink = citationLinks.first();
     await citationLink.click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
     const summary = sheet.getByTestId("evidence-source-summary");
@@ -275,7 +273,7 @@ for (const viewport of VIEWPORTS) {
     await openThread(page);
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
-    await body.getByTestId("answer-section").nth(0).getByTestId("answer-citation-link").first().click();
+    await body.getByTestId("answer-section").last().getByTestId("answer-citation-link").first().click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
     const excerpt = sheet.getByTestId("evidence-source-summary").getByTestId("citation-text");
     // 原文のプレビュー（#2389）に場所を空けるため抜粋は既定で閉じる（RAG と同じ。#2502）。開くと表を出す。
@@ -318,7 +316,7 @@ test("段落に根拠を結び付けられない回答は今までの Markdown �
   };
   run.artifacts = run.artifacts.map((artifact) =>
     artifact.kind === "answer_evidence"
-      ? { ...artifact, content: { ...artifact.content, markers: [], passages: [] } }
+      ? { ...artifact, content: { ...artifact.content, markers: [], references: [] } }
       : artifact
   );
   await page.goto("/chat");
@@ -334,7 +332,7 @@ test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同
   seedRun(mockApi);
   await page.goto(`/runs?id=${RUN_ID}`);
   const section = page.getByTestId("run-answer-section");
-  await expect(section.getByTestId("answer-section").locator("h4")).toHaveText(["資料により確認できた事項"]);
+  await expect(section.getByTestId("answer-section").locator("h4")).toHaveText(["参考情報"]);
   // 根拠の塊は「回答」の Section の中ではなく、別の Section「回答の根拠」（RAG の実行の詳細と同じ。#2707）。
   await expect(section.getByTestId("answer-citations")).toHaveCount(0);
   const evidenceSection = page.getByTestId("run-evidence-section");
@@ -344,7 +342,7 @@ test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同
   );
   const [answerBox, evidenceBox] = await Promise.all([section.boundingBox(), evidenceSection.boundingBox()]);
   expect(evidenceBox!.y).toBeGreaterThan(answerBox!.y + answerBox!.height - 1);
-  // 回答の根拠・資料との照合は「成果物」に重ねない（内部の記録は監査ログで見る。#2403）。
+  // 回答の根拠は「成果物」に重ねない（内部の記録は監査ログで見る。#2403）。
   await expect(page.getByTestId("run-artifact-artifact-evidence")).toHaveCount(0);
   await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
@@ -422,12 +420,10 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-// #2707: 最終の検証が時間切れ・失敗した回答（`answer_validation` が unvalidated）。backend は決定的な照合で根拠を結び付け
-// （`binding: "text"`）、画面は「資料により確認できた事項」を作らず、RAG と同じ「参考情報」（説明の文・根拠の原文・
-// 「根拠：文書 p.N」）を出す。根拠に結び付いた平文の出典の行と、中身が無くなった見出しは本文に出さない。
-const UNVERIFIED_NOTICE = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。";
+// #2707: 回答は本文のまま出し、結び付いた根拠は「参考情報」の節（根拠の原文と「根拠：文書 p.N」）に出す。
+// 根拠に結び付いた平文の出典の行と、中身が無くなった見出しは本文から除く。
 const REFERENCE_NOTE = "以下は資料の原文です。本質問の条件への該当は確認できていません。";
-const UNVALIDATED_ANSWER = [
+const REFERENCE_ANSWER = [
   "合成の質問 A の答えは次のとおりです。",
   "",
   "- 申請は 30 日前までに行います。",
@@ -437,21 +433,12 @@ const UNVALIDATED_ANSWER = [
   "",
   "- 文書 0.pdf p.3",
   "- 文書 0.pdf p.5",
-  "",
-  UNVERIFIED_NOTICE,
 ].join("\n");
 
-function seedUnvalidatedRun(mockApi: MockApi) {
+function seedReferenceRun(mockApi: MockApi) {
   seedRun(mockApi);
   const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as { artifacts: Record<string, unknown>[] };
   run.artifacts = [
-    {
-      id: "artifact-validation",
-      kind: "answer_validation",
-      name: "資料との照合",
-      created_at: MOCK_NOW,
-      content: { status: "unvalidated", reason: "mcp.timeout", message: "時間切れ", valid: null, result: null },
-    },
     {
       id: "artifact-evidence",
       kind: "answer_evidence",
@@ -470,12 +457,6 @@ function seedUnvalidatedRun(mockApi: MockApi) {
         passed: 3,
         cited: 2,
         markers: [],
-        passages: [
-          { text: "- 申請は 30 日前までに行います。", chunk_ids: [CHUNK_A] },
-          { text: "- 文書 0.pdf p.3", chunk_ids: [CHUNK_A] },
-          { text: "- 文書 0.pdf p.5", chunk_ids: [CHUNK_B] },
-        ],
-        binding: "text",
         references: [
           { quote: "合成の原文 A。申請は 30 日前までに行う。", chunk_ids: [CHUNK_A] },
           { quote: "合成の原文 B。承認は担当の部署が行う。", chunk_ids: [CHUNK_B] },
@@ -483,7 +464,7 @@ function seedUnvalidatedRun(mockApi: MockApi) {
         citation_lines: ["- 文書 0.pdf p.3", "- 文書 0.pdf p.5"],
       },
     },
-    { id: "artifact-answer", kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text: UNVALIDATED_ANSWER } },
+    { id: "artifact-answer", kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text: REFERENCE_ANSWER } },
   ];
 }
 
@@ -493,9 +474,8 @@ async function expectReferenceAnswer(body: ReturnType<Page["getByTestId"]>) {
   await expect(sections.locator("h4")).toHaveText(["参考情報"]);
   await expect(body).not.toContainText("資料により確認できた事項");
   await expect(body.getByText("文書 0.pdf p.3", { exact: true })).toHaveCount(0);
-  // 本文の段落には根拠の行を付けない（照合で確かめていない）。
+  // 本文の段落には根拠の行を付けない。
   await expect(body.locator("p").first()).toHaveText("合成の質問 A の答えは次のとおりです。");
-  await expect(body.getByText(UNVERIFIED_NOTICE)).toBeVisible();
   const reference = sections.last();
   await expect(reference.getByText(REFERENCE_NOTE)).toBeVisible();
   const items = reference.locator("li:not(.list-none)");
@@ -508,8 +488,8 @@ async function expectReferenceAnswer(body: ReturnType<Page["getByTestId"]>) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`照合が時間切れの回答は「参考情報」に根拠の原文とリンクを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
-    seedUnvalidatedRun(mockApi);
+  test(`回答は「参考情報」に根拠の原文とリンクを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedReferenceRun(mockApi);
     await serveSourcePreviews(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
@@ -544,9 +524,6 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-// #2700・#2707: 最終の検証が時間の上限までに一部の段落だけを確かめた回答（RAG の status=partial。成果物の
-// `binding: "partial"`）。確かめ終わった段落には根拠の行、確かめ終わらなかった段落は本文に残して根拠の行を付けず、
-// その根拠は「参考情報」に出し、確かめきれなかった点は「資料から確認できなかった事項」に出す（RAG と同じ順）。
 for (const viewport of VIEWPORTS) {
   test(`根拠のパネルに RAG と同じ原文のプレビュー（ページの画像・強調・ツールバー）を出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     seedRun(mockApi);

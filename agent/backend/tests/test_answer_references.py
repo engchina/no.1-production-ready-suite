@@ -1,4 +1,4 @@
-"""回答の段落の分類と、本文の整形の部品のテスト（#4714 で最終の検証のテストから分けた）。"""
+"""回答の段落の分類と、本文の整形の部品のテスト。"""
 
 from __future__ import annotations
 
@@ -230,7 +230,7 @@ def test_numbers_are_not_renumbered_when_the_body_refers_to_them() -> None:
     [
         ("## 確認手順", "heading"),
         ("**手順**", "heading"),
-        # 「確認が必要な点」は最終の検証が足す節の見出し（#2738。unverified_section）。
+        # 「確認が必要な点」の見出し（#2738。unverified_section）。
         ("注意が必要な点：", "heading"),
         ("【portal-operations-manual.pdf, section 2. アカウント管理, page 1】", "citation"),
         ("- 出典：admin-guide.pdf 第3章", "citation"),

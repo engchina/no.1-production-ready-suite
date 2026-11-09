@@ -1,8 +1,8 @@
 """回答の注意書き（設定は製品ごと。#2405・#2449）を、Agent の Run と MCP で確かめる。
 
-文は最終の検証の後に、回答の成果物の `notice` として付ける（本文の `text` とは別）。最終の検証の
+文は回答の成果物の `notice` として付ける（本文の `text` とは別）。
 入力・続きの質問でモデルに渡す会話の履歴には入れない。MCP は API キーで呼んだ外部のクライアントに
-だけ返す。モデルは `ScriptedModel`、RAG は fake の MCP（`tests/test_answer_validation.py` と同じ）。
+だけ返す。モデルは `ScriptedModel`、RAG は fake の MCP。
 """
 
 from __future__ import annotations

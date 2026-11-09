@@ -56,7 +56,6 @@ def _search_output(outcome: str) -> dict[str, Any]:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    # 最終の検証（#1246）はこのテストの対象外。
     for skill_id, requirements in (
         (SKILL_RAG, [SkillMcpRequirement(server_id="rag", tool_names=["rag_search"])]),
         (

@@ -4,9 +4,7 @@ import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1286: チャットの回答の下に、支援タスクの状態（確かめた条件・確認待ちの質問・使った業務ガイド）と
-// 資料との照合の結果を業務の言葉で出す。成果物の JSON・内部の語（budget_exceeded など）は業務の利用者に見せない。
-// #2361: 除いた内容の一覧は回答の本文の節 1 か所に全件を出し、「資料との照合」の行は件数のバッジだけ（節の項目の数と
-// 一致させる）。行を開いた中に小見出し「資料で確かめた結果」・同じバッジ・除いた内容を出し直さない。
+// 回答の対応を業務の言葉で出す。成果物の JSON・内部の語（budget_exceeded など）は業務の利用者に見せない。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -256,7 +254,7 @@ test("確認待ちの質問だけがある回答は、見出しにバッジを�
   await expect(page.getByTestId("chat-review-run-clarify-limit")).toHaveCount(0);
 });
 
-// #2403: 支援タスクの状態・資料との照合は内部の記録。実行の詳細の「成果物」には出さず（利用者が使う出力だけ）、
+// #2403: 支援タスクの状態は内部の記録。実行の詳細の「成果物」には出さず（利用者が使う出力だけ）、
 // 監査ログで 1 行ずつ並べ、行を開くと元の JSON まで見られる。監査の閲覧の権限が無い利用者には監査ログを出さない。
 test("実行の詳細は内部の記録を成果物に出さず、監査ログで元の JSON まで見る", async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi, "run-review-1", [answer(WITHHELD_ANSWER), supportTask()]);
@@ -303,7 +301,7 @@ test("実行の詳細は内部の記録を成果物に出さず、監査ログ�
 // #1314: 回答の対応（成果物 answer の outcome）を、RAG の回答の詳細（#1252）と同じ文言・色のバッジで出す。
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`回答の対応のバッジを照合のバッジと並べて見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    test(`回答の対応のバッジを見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-outcome-1", [
         { ...answer("精算は申請から始めます。", outcome("conditional")), id: "answer-outcome-1" },
         supportTask(),
@@ -334,7 +332,7 @@ for (const viewport of VIEWPORTS) {
         expect(box!.x + box!.width).toBeLessThanOrEqual(answerBox!.x + answerBox!.width + 1);
         expect(await badge.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
       }
-      // 資料との照合は回答の本文の下（処理の経過 → 回答 → 資料との照合。#2123 / #2324）。
+      // 回答の確認事項は回答の本文の下（処理の経過 → 回答 → 回答の確認事項。#2123 / #2324）。
       const bodyBox = await turn.getByTestId("chat-answer-run-outcome-1").boundingBox();
       expect(bodyBox!.y).toBeLessThan(answerBox!.y);
       await expectNoOutcomeInternalWords(turn);
@@ -412,7 +410,7 @@ test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、
   seedRun(mockApi, "run-o-unknown", [answer("知らない対応の回答", outcome("future_value"))]);
   // 照合も支援タスクの状態も無い回答は、開いても中身が無いので、見出しとバッジだけを畳まずに出す。
   seedRun(mockApi, "run-o-only", [answer("対応だけの回答", outcome("needs_human"))]);
-  // 対応も照合も無い古い Run には、資料との照合の行を出さない。
+  // 対応も支援タスクも無い古い Run には、回答の確認事項の行を出さない。
   seedRun(mockApi, "run-o-plain", [answer("対応も検証も無い回答", outcome("answered"))]);
   await page.goto("/chat");
   await openSeedThread(page);
@@ -423,7 +421,7 @@ test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、
     await expect(badge).toHaveText(label);
     await expect(badge).toHaveAttribute("data-status-variant", variant);
     await expect(badge.locator("svg")).toHaveCount(1);
-    // 照合のバッジと並ぶ（照合済みだけなら開いて見るものが無いので ⌄ を出さない）。
+    // 開いて見るものが無いので ⌄ を出さない。
     await expect(turn.getByTestId(`chat-review-${runId}`).locator("[data-status-variant]")).toHaveText([label]);
     await expect(turn.getByTestId(`chat-review-${runId}-summary`)).toHaveCount(0);
     await expectNoOutcomeInternalWords(turn);
