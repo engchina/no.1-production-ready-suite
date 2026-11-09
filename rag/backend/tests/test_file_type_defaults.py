@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
+from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS
 
 from app import config as app_config
 from app.api.routes import documents as documents_route
@@ -739,4 +740,4 @@ def test_json_row_follows_the_global_delimiter_and_xml_tree_stays_selectable() -
         DocumentProcessingConfig(), file_type="json"
     )
     assert resolved.rag_chunk_delimiter == ["\\n\\n"]
-    assert Settings.model_fields["rag_chunk_delimiter"].default_factory() == [JSONL_RECORD_BOUNDARY]
+    assert list(DEFAULT_FIXED_DELIMITERS) == [JSONL_RECORD_BOUNDARY]
