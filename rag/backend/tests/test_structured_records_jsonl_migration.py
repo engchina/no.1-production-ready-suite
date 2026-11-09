@@ -249,8 +249,8 @@ def test_chunk_separators_are_compared_only_for_strategies_using_them() -> None:
     from app.api.routes.documents import _processing_config_drift_groups
 
     separators = ["\n\n", "。"]
-    old_snapshot = {"chunking_strategy": "small_to_big"}
-    effective = {"chunking_strategy": "small_to_big", "chunk_separators": separators}
+    old_snapshot = {"chunking_strategy": "structure_aware"}
+    effective = {"chunking_strategy": "structure_aware", "chunk_separators": separators}
     assert "chunking_strategy" in _processing_config_drift_groups(old_snapshot, effective)
     assert "chunking_strategy" not in _processing_config_drift_groups(effective, effective)
 
