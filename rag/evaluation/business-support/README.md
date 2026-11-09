@@ -84,7 +84,7 @@ uv run suite-evaluation compare A=../../tmp/eval/a.json C=../../tmp/eval/c.json 
 
 A / C は RAG の公開の MCP（`rag_search`）だけを、D は業務 Agent の公開の MCP（`agent_chat`・`agent_get_run`・
 `agent_answer_confirmation`・`agent_get_run_observation`・`agent_cancel_run`）だけを、利用者が発行した API キーで呼びます。
-採点は六指標で、照合・順位・判断は platform の採点の部品（`pr_evaluation_scoring`）を RAG 自身の評価と共有します。
+採点は suite の評価器で行い、照合・順位・判断は platform の採点の部品（`pr_evaluation_scoring`）を RAG 自身の評価と共有します。
 回答の対応（`outcome`）の無い Run・本文を省かれた根拠・見られない根拠は推測で埋めず「評価不能」と理由を残します
 （採点の規則と版は suite の README）。API キーの上限（1 分あたりの呼び出し・直近 24 時間の Run の数。
 `platform/docs/mcp-api-keys.md`）に数えられます。評価は 1 回 5 問ずつ流します（`--case`）。

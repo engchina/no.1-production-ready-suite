@@ -110,7 +110,7 @@
   台帳（xlsx）の根拠は、行を指すシステム ID のセル（`SYS-101` など）にしています。前処理 `excel_to_jsonl` は 1 行を
   1 記録にするため、その行を引用で取れたかを測れます。
 - 対応（`expected_outcomes`）は、すべて答えられる質問なので `answered` / `conditional` を受け入れます（拒答は失敗）。
-  確認済みの必須要点（`required_answer_points`）は、正確性・網羅性の意味上の比較に使います。
+  確認済みの必須要点（`required_answer_points`）は、正確性の意味上の比較に使います。
 
 ## 章節の読み切り（#1438）
 
@@ -130,7 +130,7 @@
 - 必要な根拠（`required_evidence`）は同じ章の別々のページの文で、テストが原稿の改ページ（`multi_hop_corpus.py` の
   `Document.pages`）と同梱の PDF のページで照合します（`test_section_read_cases_need_every_page_of_one_section`）。
 - 見る値: `reasoning_type=section_read` の `required_evidence_recall`（必要な箇所の取得率）と
-  `requirement_coverage`。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
+  `requirement_coverage`（suite の採点の指標）。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
   `section`（属する章節の頁の範囲・文字数）を見て `rag_read_section` で章節を読み切ると取れます（読んだ chunk は D の引用
   に入る）。章節の読み切りが効いたかは、D の Run の `rag_read_section` の呼び出しと、`sr-inspection-equipment-values` で
   `up` を使ったか（節から親の章へ上がったか）で確かめます。
@@ -159,9 +159,9 @@
 
 ## 指標
 
-[../README.md](../README.md#評価の六指標)と同じ六指標だけを使います。
-必要な根拠は `required_evidence_recall`、回答の要点は意味上の正確性・網羅性で測ります。
-`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ六指標と対象件数です。
+[../README.md](../README.md#評価の四指標)と同じ四指標だけを使います。
+必要な根拠は `required_evidence_recall`、回答の要点は意味上の正確性で測ります。
+`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ四指標と対象件数です。
 
 ## 資料を作り直す
 
@@ -232,7 +232,7 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 ```
 
 `evaluation_cli` は、終わったときに標準エラーへ全体の指標と、`required_evidence`・`reasoning_type=<種類>`・
-`hops=<段の数>` の行（六指標と対象件数）を
+`hops=<段の数>` の行（四指標と対象件数）を
 出します。閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。質問ごとに回答（モデルの呼び出し
 3〜5 回）を作るため、dev の 40 問で 40 分前後かかります（#1335 の 33 問の実測から見積もり）。
 
