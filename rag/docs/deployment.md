@@ -145,14 +145,12 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 
 | 形式 | 既定（Docling）のまま | 取り込み方 |
 |---|---|---|
-| PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`） | 解析できる | そのまま「処理を開始」 |
+| PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg`） | 解析できる | そのまま「処理を開始」 |
 | Word・PowerPoint（`.docx` / `.pptx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
 | Excel（`.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Excel→JSONL** を選ぶ（文書解析は構造化レコード JSONL）か、「文書解析」で **Unstructured** を選ぶ。**Office→PDF は Excel を変換しない**（#2470） |
-| 旧形式・マクロ付き・テンプレートの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`・`.dotx` / `.dotm` / `.potx` / `.potm` / `.xltx` / `.xltm`。テンプレートは拡張子・MIME type と原本の package が一致しないと保存しない。#4054） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
-| ODT・RTF（`.odt` / `.rtf`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから解析する）。Unstructured は原本を読まない（pandoc を入れないため。#3351） |
-| テキスト・Markdown・reStructuredText・Org・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.rst` / `.org` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（`.rst` / `.org` はプレーンテキストとして読む。#3351） |
-| メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
-| TIFF・Outlook（`.msg`）・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
+| 旧形式の Office（`.doc` / `.ppt` / `.xls`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
+| テキスト・Markdown・CSV・JSON・HTML（`.txt` / `.md` / `.markdown` / `.csv` / `.json` / `.html` / `.htm`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（XML ツリー JSON の形の `.json` は下の **XML ツリー JSON** を選ぶ） |
+| 上の表にない形式（GIF・WEBP・TIF / TIFF・RST・ORG・TSV・JSONL・NDJSON・XML・XHTML・EML・MSG・マクロ付きとテンプレートの Office・ODT・RTF など） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める。#4730） | 表のいずれかの形式に変換してからアップロードする |
 | HEIC / HEIF の画像（`.heic` / `.heif`）・EPUB（`.epub`） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める） | 画像は JPEG / PNG（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できる）、EPUB は PDF に変換してからアップロードする |
 | 音声・動画（`.mp3` / `.wav` / `.m4a` / `.flac` / `.ogg` / `.aac`・`.mp4` / `.mov` / `.webm` など、`audio/*` / `video/*`） | アップロードできない（画面の選択と API の 415 で止める。#3369） | 内容をテキストに書き起こしてからアップロードする |
 
