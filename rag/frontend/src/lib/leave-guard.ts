@@ -26,8 +26,12 @@ export function draftGuardMessages(): DraftGuardMessages {
  * 編集画面の標準ガード。dirty のときは離脱を確認し、戻り値は画面内の移動前に呼ぶ確認関数。
  * `busy`（保存中など）の間は、共通のシステム設定の画面と同じく離脱そのものを止める。
  */
-export function useLeaveGuard(isDirty: boolean, busy = false): () => Promise<boolean> {
-  return useSettingsDraftGuard(isDirty, busy, draftGuardMessages());
+export function useLeaveGuard(
+  isDirty: boolean,
+  busy = false,
+  messages?: Partial<DraftGuardMessages>,
+): () => Promise<boolean> {
+  return useSettingsDraftGuard(isDirty, busy, { ...draftGuardMessages(), ...messages });
 }
 
 /** 画面固有の確認文言を使うガード（例: 抽出確認の編集）。 */
