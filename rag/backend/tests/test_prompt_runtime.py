@@ -50,7 +50,7 @@ def test_builtin_stage_prompts_pass_placeholder_validation(key: str) -> None:
 
 
 def test_stage_template_requires_original_input_tokens() -> None:
-    key = "vlm_answer"
+    key = "image_retrieval"
     default = default_prompt(key)
     validate_prompt(key, default)
     with pytest.raises(ValueError, match="placeholder"):
