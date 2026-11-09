@@ -546,7 +546,7 @@ async def update_chunking_settings(
 
 @router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])
 async def get_answering_settings() -> ApiResponse[AnsweringSettingsData]:
-    """回答の検索と生成の全体既定(質問の拡張・回答の生成方式など。#593)を返す。"""
+    """回答の検索と生成の全体既定(#593)を返す。"""
     return ApiResponse(data=_answering_settings_data(get_settings()))
 
 
@@ -574,8 +574,6 @@ async def update_answering_settings(
             ("rag_rerank_slot_ratio", payload.rerank_slot_ratio),
             ("rag_runtime_terms_search_enabled", payload.runtime_terms_search_enabled),
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
-            ("rag_query_strategy", payload.query_strategy),
-            ("rag_answer_flow", payload.answer_flow),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
             ("rag_screen_linking_enabled", payload.screen_linking_enabled),
@@ -628,8 +626,6 @@ async def update_answering_settings(
                 "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
                 "RAG_RRF_SOURCE_RATIO": json.dumps(candidate.rag_rrf_source_ratio),
                 "RAG_RERANK_SLOT_RATIO": json.dumps(candidate.rag_rerank_slot_ratio),
-                "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
-                "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
                 "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
@@ -664,8 +660,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         rrf_method_ratio=settings.rag_rrf_method_ratio,
         rrf_source_ratio=settings.rag_rrf_source_ratio,
         rerank_slot_ratio=settings.rag_rerank_slot_ratio,
-        query_strategy=settings.rag_query_strategy,
-        answer_flow=settings.rag_answer_flow,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         screen_linking_enabled=settings.rag_screen_linking_enabled,

@@ -76,7 +76,7 @@ def test_table_values_are_explained_for_table_shapes_only() -> None:
 def _prompt(**knowledge: Any) -> str:
     runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=Path("/nonexistent"), **knowledge)
     return _grounded_prompt(
-        QUESTION, [span()], AnswerContext(records=[], text=""), [], None, None, runtime, None, template=DEFAULT_VLM_ANSWER_PROMPT
+        QUESTION, [span()], AnswerContext(records=[], text=""), [], None, None, runtime, template=DEFAULT_VLM_ANSWER_PROMPT
     )
 
 
@@ -127,7 +127,7 @@ def _steps(prompt: str) -> dict[int, str]:
 def _rendered(spans: list[dict[str, Any]], **knowledge: Any) -> dict[int, str]:
     runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=Path("/nonexistent"), **knowledge)
     prompt = _grounded_prompt(
-        QUESTION, spans, AnswerContext(records=[], text=""), [], None, None, runtime, None, template=DEFAULT_VLM_ANSWER_PROMPT
+        QUESTION, spans, AnswerContext(records=[], text=""), [], None, None, runtime, template=DEFAULT_VLM_ANSWER_PROMPT
     )
     return _steps(prompt)
 

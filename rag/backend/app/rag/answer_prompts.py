@@ -177,22 +177,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         (("system", "app.rag.field_filter_reader:FIELD_FILTER_SYSTEM_PROMPT"),),
     ),
     PromptStage(
-        "routing",
-        "question",
-        (
-            ("system", "rag_engine.generation.answering:QUERY_ROUTING_SYSTEM_PROMPT"),
-            ("template", "rag_engine.generation.query_prompts:QUERY_ROUTING_PROMPT_TEMPLATE"),
-        ),
-    ),
-    PromptStage(
-        "expansion",
-        "question",
-        (
-            ("system", "rag_engine.generation.answering:QUERY_EXPANSION_SYSTEM_PROMPT"),
-            ("template", "rag_engine.generation.query_prompts:QUERY_EXPANSION_PROMPT_TEMPLATE"),
-        ),
-    ),
-    PromptStage(
         "screen_linking",
         "retrieval",
         (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
@@ -210,14 +194,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
-        "crag",
-        "grounding",
-        (
-            ("system", "rag_engine.generation.answering:CRAG_GRADER_SYSTEM_PROMPT"),
-            ("template", "rag_engine.generation.crag_support:CRAG_GRADE_PROMPT_TEMPLATE"),
-        ),
-    ),
-    PromptStage(
         "section_extraction",
         "grounding",
         (("system", "rag_engine.generation.section_extraction:EXTRACTION_SYSTEM_PROMPT"),),
@@ -231,10 +207,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         "generation",
         (
-            ("instruction", "rag_engine.generation.grounded:SCOPE_PLAN_SYSTEM_PROMPT"),
             ("batchReading", "rag_engine.generation.batched_evidence:BATCH_READING_PROMPT"),
             ("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),
-            ("plannedSystem", "rag_engine.generation.grounded:PLANNED_GENERATE_SYSTEM_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
             # 該当する入力のときだけ生成の入力へ足す読み方（タグ・値の種類 / 業務ガイド。#4677）。
             ("evidenceReading", "rag_engine.generation.grounded:EVIDENCE_READING_PROMPT"),

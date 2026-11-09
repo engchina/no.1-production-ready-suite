@@ -18,7 +18,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
 )
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
-# 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
+# 回答系(生成・監査)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
 # 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
@@ -363,8 +363,6 @@ class Settings:
     article_catalog_cache_dir: Path | None = None
     article_catalog_cache_ttl_seconds: float = 86400.0
     article_catalog_cache_max_entries: int = 4096
-    strategy_reasoning_effort: str = ""
-    judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
     # 工程ごとの推論の量(1 回の呼び出しの要求の値)。用途の上書きより後に、その工程の呼び出しにだけ当てる。
     # 値の意味は用途の上書きと同じ(空はモデルの登録値のまま。登録値が none のモデルには送らない)。
@@ -377,18 +375,6 @@ class Settings:
     escalation_llm: str = ""
     # そのモデルの入力の上限(tokens。回答のモデルの `answer_max_input_tokens` の代わりに使う)。
     escalation_max_input_tokens: int = 128_000
-    # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
-    # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
-    # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
-    # 生成後の監査は飛ばさない。
-    crag_skip_on_strong_signals: bool = False
-    crag_skip_min_rerank_score: float = 0.8
-    # CRAG の評価の入力を詰める(#1528): 候補を生成と同じ親の数(max_context_records)にし、JSON を詰めて書き、
-    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects・列挙の項目の働きは変えない。
-    crag_compact_input: bool = False
-    # 詰めた入力の候補の chunk_uid を短い ID（C1・C1-1）にする(#1864)。評価器が判定ごとに書き写す ID が短くなり、
-    # 出力の token と時間が減る。返った ID は chunk_uid に戻すので、判定の働きは変わらない。
-    crag_short_candidate_ids: bool = False
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
     # 判定の速さと間隔は同じ接続・モデルの直近の完了した呼び出しから学ぶ（実測が 3 回たまるまでは検出しない）。
@@ -403,10 +389,6 @@ class Settings:
     # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
     # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
     llm_runaway_detection: bool = False
-    # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
-    section_skip_regrade_at_scope: bool = False
-    # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
-    query_expansion_max_queries: int = 5
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
@@ -639,20 +621,12 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         article_catalog_cache_dir=Path(cache_dir_raw).expanduser() if cache_dir_raw else None,
         article_catalog_cache_ttl_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS", 86400.0)),
         article_catalog_cache_max_entries=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES", 4096)),
-        strategy_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
-        judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
-        crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
-        crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
         llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
         llm_stall_resends=max(0, min(2, _env_int(env, "RAG_ENGINE_LLM_STALL_RESENDS", 1))),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
-        section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
-        crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
-        crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),
-        query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
@@ -684,20 +658,13 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
 
 
 # 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
-# 質問拡張戦略の判定と検索文の生成(strategy)・根拠の評価(judge。CRAG の評価と章節の拡張の十分性の判定)・
 # 回答文の生成(generation)・生成後の監査(audit。#1528)。
-LLM_PURPOSE_STRATEGY = "strategy"
-LLM_PURPOSE_JUDGE = "judge"
 LLM_PURPOSE_GENERATION = "generation"
 LLM_PURPOSE_AUDIT = "audit"
 _PURPOSE_EFFORT_FIELDS = {
-    LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
-    LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
 }
 _PURPOSE_LABELS = {
-    LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
-    LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
     LLM_PURPOSE_AUDIT: "回答の監査",
 }

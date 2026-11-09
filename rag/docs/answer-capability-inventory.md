@@ -47,7 +47,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
-| 質問の embedding（OCI Generative AI） | 任意（全文検索へ縮退。#4663） | 失敗 → 原質問と、ベクトルと全文の両方を使う検索文を全文のみで検索し、ベクトルのみの検索文は外す。全文検索が 1 本も走らないときはエラーにせず 0 件にし、根拠 0 件の経路で終える。失敗は 1 回の回答の中で覚え、検索のたびに呼び直さない（先読みも同じ） | `DS`（`query_embedding`）。検索だけの経路（`retrieval_only`）は `diagnostics.answer.degraded_steps` | 見せない（回答の本文に注意書きを出さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._search`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_query_hits` |
+| 質問の embedding（OCI Generative AI） | 任意（全文検索へ縮退。#4663） | 失敗 → 原質問と、ベクトルと全文の両方を使う検索文を全文のみで検索し、ベクトルのみの検索文は外す。全文検索が 1 本も走らないときはエラーにせず 0 件にし、根拠 0 件の経路で終える。失敗は 1 回の回答の中で覚え、検索のたびに呼び直さない | `DS`（`query_embedding`）。検索だけの経路（`retrieval_only`）は `diagnostics.answer.degraded_steps` | 見せない（回答の本文に注意書きを出さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._search`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
 | vector 検索（Oracle AI Vector Search） | 必須 | 例外を送出 → **エラー** | `SP` | 見せない | `rag/backend/app/clients/oracle.py::OracleClient.search_many`・`_read_vector_branch` |
 | 全文検索（Oracle Text） | 必須（hybrid の方式で検索するとき） | SQL の失敗は例外を送出 → **エラー**。質問から検索語が作れないとき（`_oracle_text_query` が `None`）は全文検索を飛ばす（失敗ではない） | `SP` | 見せない | `rag/backend/app/clients/oracle.py::_read_keyword_branch`・`_oracle_text_query` |
 | 全文検索の語の分割（Sudachi） | 任意 | Sudachi・辞書が使えない・分割に失敗 → 文字種の区切りだけで検索語を作る | `DS`（`text_search_tokenizer`。使えないときは回答ごとに 1 回、分割の失敗は 1 回ごと）。使えるかの確認は process ごとに 1 回（例外を cache する） | 見せない（縮退は `DS` で分かる） | `rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py::_sudachi_failure`・`sudachi_unavailable`・`_content_terms`・`rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
@@ -56,7 +56,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 前後の文脈 | 必須 | 例外を送出 → **エラー** | `SP`・`ST` | 見せる | `rag/backend/app/rag/answer_engine.py::AnswerEngine._context_chunks` |
 | 最終根拠の文書の先頭Chunk・先頭頁全文 | 必須（最終選択後・正式生成前） | 取得例外は**エラー**。範囲外・未解析・無ページは状態を記録。旧欠落値は同じ版の不変解析から復元できなければ不完全と明示 | `SP`・`ST`・`DX` | 見せる（実範囲・版・再利用） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._selected_document_backgrounds`・`rag/packages/rag_engine/rag_engine/generation/document_background.py::DocumentBackgroundReader.append` |
 | 派生の chunk の原文への置き換え（#2641） | 必須（派生の chunk が当たったとき） | 読み込みの例外は**エラー**。原文が無いときは根拠に渡さない | `DX`（`derived_evidence.unresolved_count`） | 見せない（要約の文を確かめた記載にしない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._original_anchors` |
-| 元の質問の検索の先読み（#1499） | 任意 | 失敗 → 続く検索がそのまま読む | `ST`（工程の詳細の文） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_wait_original_query_prefetch` |
 | 主の検索の準備の確認 | — | backend は `check_ready` を何もしない関数にしている（埋め込みの有無を事前に確かめない）。工程にもしない（#3495。rag_engine を単独で使う経路だけが工程を開かずに確かめ、中止したときだけ「文書検索」の工程に理由を残す） | — | — | `rag/backend/app/rag/answer_engine.py::AnswerEngine._answer_sync` |
 
 - rag_engine の `AdbHybridSearchUnavailable`（`ADB hybrid search を使用できません` の回答を返す経路）は rag_engine の Oracle store 用で、backend の注入した検索（`_search`）はこの例外を出さない（静的確認）。backend の主の検索の失敗がエラーになることは `rag/backend/tests/test_answer_degraded_steps.py::test_main_search_failure_is_an_error_not_zero_evidence` が確かめる。
@@ -88,7 +87,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 画面の根拠の chunk | 任意 | 読めない → その画面を足さない | `DS`（`screen_chunks`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._screen_chunks` |
 | 章節の目録（章節の拡張の起点。#1436） | 任意（`RAG_SECTION_EXPANSION_ENABLED`。無効なら目録を読まない） | 読めない → 目録が無い文書と同じに扱う | `DS`（`section_outline`）・`DX`（`section_expansion.unmapped_seeds`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_outline`・`rag/packages/rag_engine/rag_engine/generation/section_expansion.py::expand_sections` |
 | 章節の chunk の読み込み | 任意 | 読めない → その章節を読めなかった章節にする（`read_error`） | `DS`（`section_chunks`）・`DX`（`section_expansion` の止めた理由・読めなかった章節） | 見せない（読めなかった章節として記録に残す） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_chunks`・`rag/packages/rag_engine/rag_engine/generation/section_expansion.py::SectionReader.groups` |
-| 章節の拡張の判定（CRAG の評価器） | 任意 | 失敗 → 読んだ章節のまま回答へ進む（`grade_error` で止める） | `DX`（`section_expansion` の段の `grade_error`。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::expand_sections` |
 | 章節の子の章節の並べ替え（rerank） | 任意 | 失敗 → 語の重なりで並べる | `DS`（`section_child_rerank`）・`DX`（`ranking: lexical`。rerank が無いときと同じ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::_rank_children` |
 | 長い章節の抽出（#1437） | 任意（`RAG_SECTION_EXTRACTION_ENABLED`） | 1 回分の失敗・時間切れ → その分を「回答に未反映の関連章節」の範囲にする（理由 `extraction_error` / 時間の上限） | `DX`（`section_expansion` の読めなかった章節）。分ごとの記録（`parts_unread`）は抽出の trace にだけあり、診断に写していない | 見せない | `rag/packages/rag_engine/rag_engine/generation/section_extraction.py::SectionExtractor._unread` |
 | 条の目録の読み込み（#2254） | 任意（`RAG_ARTICLE_CATALOG_ENABLED`） | 読めない → その文書を飛ばす | `DS`（`article_catalog`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._article_catalogs` |
@@ -104,9 +102,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 |---|---|---|---|---|---|
 | 入力の正規化（LLM なし。独立した推定工程は廃止） | 必須 | 例外は送出 → **エラー**（try が無い） | `SP` | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/question_planning.py::plan_question` |
 | 用語・同義語と回答ルール（runtime knowledge） | 任意 | 読めない → 補助情報なしで続ける | `DS`（`runtime_knowledge`）・`ST`（status「補助情報なしで続行」と詳細の「読込エラー: 例外の型の名前」。例外の文はログだけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/knowledge/runtime_knowledge.py::load_runtime_knowledge`・`_load_failure` |
-| 質問の言い換え・分解（`RAG_QUERY_STRATEGY`） | 任意 | 戦略の判定・検索文の生成の LLM の失敗 → 原質問のみ（言い換え・分解なし）で続ける | `DX`（`strategy` が実際に使った戦略）・`ST`（理由の文。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_query_expansion`・`_degraded_query_expansion` |
-| CRAG の補正検索 | 任意（設定・追加検索予算） | 追加検索の失敗 → 取得済みの根拠を維持して生成へ進む。初回検索の失敗は従来どおりエラー | `DS`（`crag_retrieval`）・`ST`（追加検索のエラー）・`RT`（`stop_reason=retrieval_error`・例外の型） | 取得済み資料だけを使い、未確認の不足を確定しない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
-| CRAG の根拠確認（`RAG_ANSWER_FLOW=crag`） | 任意（設定） | 評価器の失敗 → 取得済みの根拠で生成へ進む（足りるとはしない） | `DS`（`crag_grade`）・`ST`（status「評価に失敗」）・`RT`（`CragRetrievalAttempt.grade_error`） || `rag/packages/rag_engine/rag_engine/generation/answering.py::_grade_crag_retrieval`・`rag/packages/rag_engine/rag_engine/generation/answer_models.py::CragRetrievalAttempt` |
 | 業務ガイドの手順ごとの検索（#2395） | 任意（`RAG_GUIDE_STEP_RETRIEVAL_ENABLED`） | 失敗 → 既存の根拠で回答する | `DX`（`guide_step_retrieval` の `error`。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/guide_steps.py::run_step_searches` |
 
 ### 生成・検証（rag_engine と backend）
@@ -139,7 +134,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `retrieval` | ランキング一覧の取得に失敗。成功した一覧だけを元の重みで使い、全失敗なら検索の失敗を返す | `rag/backend/app/rag/answer_engine.py::_search`・`rag/packages/rag_engine/rag_engine/adapters/oracle/store.py::search_adb_hybrid_chunks` |
 | `query_embedding` | 質問の embedding に失敗し、全文のみの検索で続行（ベクトルのみの検索文は外し、同じ回答では呼び直さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
 | `evidence_section_paths` | 長い根拠を分ける区切りに使う今の章節の読み出しに失敗し、取込の章節で区切って続行 | `rag/backend/app/rag/answer_engine.py` |
-| `query_expansion` | 言い換え・分解に失敗し原質問で続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_degraded_query_expansion` |
 | `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |
 | `entity_expansion` | 実体の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
@@ -168,15 +162,13 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `runtime_knowledge` | 用語・同義語と回答ルールの読み込み（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
 | `rerank` | 原質問の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_rerank_records` |
 | `rerank_extra_query` | 追加の検索文の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
-| `crag_retrieval` | CRAG の追加検索。失敗時は取得済み根拠を維持 | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
-| `crag_grade` | CRAG の根拠確認の評価器（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
 | `section_child_rerank` | 章節の拡張の子の章節の並べ替え（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::_rank_children` |
 
 ## 一覧から分かったこと
 
 - **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、vector 検索（embedding を作れたとき）、全文検索の SQL、引用ラベルの検索、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索（Oracle の SQL）の失敗は 0 件にせずエラーにする（#3259 のテスト）。質問の embedding の失敗はエラーにせず全文検索へ縮退する（#4663）。
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
-- **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・CRAG の判定・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
+- **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語と回答ルールの読み込みは、例外の型の名前だけにした（#3284）。
 - **呼び出し元が判断できない点**: MCP の応答は `DS`（種類と回数）・`ZE`（段と件数）・`GD` を出す（#3262・#3546）。
 

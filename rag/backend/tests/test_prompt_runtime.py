@@ -50,7 +50,7 @@ def test_builtin_stage_prompts_pass_placeholder_validation(key: str) -> None:
 
 
 def test_stage_template_requires_original_input_tokens() -> None:
-    key = "expansion.template"
+    key = "vlm_answer"
     default = default_prompt(key)
     validate_prompt(key, default)
     with pytest.raises(ValueError, match="placeholder"):
@@ -106,17 +106,3 @@ def test_only_confirmed_branch_notes_are_rendered_from_the_guide() -> None:
         plan = GuidePlan.from_payload("g", 1, [{"id": "a", "title": "設定を開く"}], notices=notices)
         assert plan is not None
         assert guide_notice_lines("", [], branch_notes=plan.branch_notes) == expected
-
-
-def test_saved_search_template_is_used_by_runtime_prompt_builder() -> None:
-    from rag_engine.generation.query_prompts import _build_query_routing_prompt
-
-    original = _build_query_routing_prompt("合成の質問")
-    with bind_prompt_overrides(
-        {"routing.template": "## Step 1: 保存した指示\n{{question}}\n{{task_contract}}"}
-    ):
-        actual = _build_query_routing_prompt("合成の質問")
-        assert "保存した指示" in actual
-        assert "合成の質問" in actual
-        assert "{{question}}" not in actual
-    assert _build_query_routing_prompt("合成の質問") == original

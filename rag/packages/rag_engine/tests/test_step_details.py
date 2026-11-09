@@ -9,24 +9,16 @@ from unittest.mock import patch
 
 from grounded_stub import echo_model
 from test_answer_generation import (
-    _answer_context,
-    _chunk_record,
     _chunk_run_stub,
-    _crag_grade,
     _hybrid_result,
     _rerank_ready_settings,
     _stored_child,
 )
 
 from rag_engine.adapters.oci import RerankTextRank
-from rag_engine.config import get_settings
 from rag_engine.generation import step_details
 from rag_engine.generation.answer_models import AnswerRecord
 from rag_engine.generation.answering import (
-    CRAG_ANSWER_FLOW_LABEL,
-    SIMPLE_RETRIEVAL_LABEL,
-    STANDARD_ANSWER_FLOW_LABEL,
-    CragRetrievalGradeOutput,
     answer_question_result,
 )
 from rag_engine.knowledge.classification import ClassificationFilter
@@ -80,9 +72,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
                 "abcdef",
                 ["docling"],
                 settings or _rerank_ready_settings(),
-                query_strategy=SIMPLE_RETRIEVAL_LABEL,
                 rerank_enabled=True,
-                answer_flow=STANDARD_ANSWER_FLOW_LABEL,
                 **options,
             )
 
@@ -105,13 +95,11 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         # 検索の前提の確認は工程にしない（#3495）。普段どおりの検索範囲・準備の状態は示さない。
         self.assertNotIn("検索の準備確認", steps)
         self.assertNotIn("分類フィルタ", _fields(steps["文書検索"]))
-        self.assertEqual(_fields(steps["質問の言い換え・分解"])["設定"], SIMPLE_RETRIEVAL_LABEL)
         queries = steps["検索文をまとめ、検索語を作る"]
         self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
         self.assertIn("全文検索の入力", _fields(queries))
         self.assertIn("内部の検索語・検索式はAPIから返されません", _fields(queries)["全文検索の入力"])
         self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
-        self.assertEqual(_fields(steps["回答生成フロー"])["設定"], STANDARD_ANSWER_FLOW_LABEL)
 
     def test_classification_filter_is_shown_on_search_step_only_when_set(self):
         """分類フィルタを指定したときだけ、文書検索の工程に示す（#3495）。"""
@@ -143,71 +131,6 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         # 記録の文（question_display）からは従来どおり省く。
         result = self.run_flow()
         self.assertNotIn("根拠に画像がありません", result.question_display)
-
-
-class CragFlowStepDetailsTest(unittest.TestCase):
-    """補正の回答フロー: 根拠の確認の判定・理由・次の対処、探し直しの検索文を詳細に残す。"""
-
-    def test_grade_and_rewrite_steps(self):
-        from test_completion_stage_io import PolicyRecorder
-
-        from rag_engine.resources.tracing import bind_trace_observer
-
-        recorder = PolicyRecorder()
-        grades = [
-            _crag_grade(sufficient=False, confidence=0.1, reason="根拠が話題違い", rewritten_query="合成の探し直しの検索文"),
-            _crag_grade(
-                sufficient=True,
-                confidence=0.92,
-                relevant_chunk_ids=["chunk-good"],
-                reason="根拠が直接答えている",
-                support_text="設定画面を開いて保存ボタンを押します。",
-            ),
-        ]
-
-        def model(system, prompt, settings, schema, **options):
-            return grades.pop(0) if schema is CragRetrievalGradeOutput else echo_model(system, prompt, settings, schema, **options)
-
-        initial = _answer_context([_chunk_record("chunk-bad", "child", 1, "", "合成の別の話題")])
-        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "設定画面を開いて保存ボタンを押します。")])
-        with (
-            bind_trace_observer(recorder.observe),
-            patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
-            patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
-            patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", side_effect=[initial, corrected]),
-            patch("rag_engine.generation.answering.parse_text_response", side_effect=model),
-        ):
-            result = answer_question_result(
-                "合成の質問",
-                "abcdef",
-                ["docling"],
-                get_settings(),
-                query_strategy=SIMPLE_RETRIEVAL_LABEL,
-                answer_flow=CRAG_ANSWER_FLOW_LABEL,
-            )
-        steps = _by_name(result)
-        first = _fields(steps["根拠確認（1回目）"])
-        self.assertTrue(first["結果"].startswith("必要な説明が不足"))
-        self.assertEqual(first["判定した根拠"], "1 件")
-        self.assertEqual(first["関係あり / なし"], "0 件 / 0 件")
-        self.assertEqual(first["次の対処"], "検索文を書き換えて探し直す")
-        self.assertEqual(first["書き換えた検索文"], "合成の探し直しの検索文")
-        self.assertIn("理由: 根拠が話題違い", _lines(steps["根拠確認（1回目）"]))
-        rewrite = _fields(steps["補正検索の準備"])
-        self.assertEqual(rewrite["結果"], "追加する検索文: 合成の探し直しの検索文")
-        self.assertTrue(rewrite["探し直しの回数"].startswith("1 回目"))
-        second_search = steps["文書検索（2回目）"]
-        self.assertIn("回答に渡す根拠", _fields(second_search)["結果"])
-        self.assertTrue(any("今回追加した 1 本" in line for line in _lines(second_search)))
-        second = _fields(steps["根拠確認（2回目）"])
-        self.assertTrue(second["結果"].startswith("生成に利用可能"))
-        self.assertEqual(second["関係あり / なし"], "1 件 / 0 件")
-        self.assertNotIn("次の対処", second)
-        self.assertIn("検索文", _fields(steps["検索語の再確定（書き換え後）"]))
-        reprepare = recorder.stage("検索語の再確定（書き換え後）")
-        self.assertEqual(reprepare["input"]["補正検索文"], ("合成の探し直しの検索文",))
-        self.assertIn("合成の探し直しの検索文", reprepare["input"]["検索文"])
-        self.assertEqual(reprepare["output"]["全文検索の入力"]["oracle_text_queries"], result.text_search_queries)
 
 
 class StepDetailsHelpersTest(unittest.TestCase):
@@ -252,7 +175,6 @@ class StepDetailsHelpersTest(unittest.TestCase):
         )
         self.assertEqual(step_details.numbered(["a", "b", "c"], limit=2), ["1. a", "2. b", "ほか 1 件"])
         self.assertEqual(step_details.join_values(["a", "", "b"], limit=1), "a ほか 1 件")
-        self.assertEqual(step_details.aspect_labels(["procedure", "unknown_aspect"]), "操作の手順、unknown_aspect")
 
 
 if __name__ == "__main__":

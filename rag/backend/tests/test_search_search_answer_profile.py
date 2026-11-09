@@ -110,10 +110,7 @@ def test_search_answer_profile_expands_kbs_and_applies_query_config(
     """参照 KB 群が検索対象へ展開され、query 設定が pipeline と diagnostics に効く。"""
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(
-            query_strategy="rag_fusion",
-            answer_flow="standard_rag",
-        ),
+        query=KnowledgeBaseQueryConfig(),
     )
     _install(monkeypatch, {"bv-1": config})
 
@@ -125,10 +122,6 @@ def test_search_answer_profile_expands_kbs_and_applies_query_config(
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert RecordingPipeline.captured_settings is not None
-    assert (
-        RecordingPipeline.captured_settings.rag_query_strategy == get_settings().rag_query_strategy
-    )
-    assert RecordingPipeline.captured_settings.rag_answer_flow == get_settings().rag_answer_flow
     assert diagnostics["search_answer_profile_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
@@ -352,7 +345,7 @@ def test_search_answer_profile_ignores_single_kb_legacy_query(monkeypatch: Monke
     )
     profile_config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(answer_flow="standard_rag"),
+        query=KnowledgeBaseQueryConfig(),
     )
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
@@ -372,8 +365,6 @@ def test_search_answer_profile_ignores_single_kb_legacy_query(monkeypatch: Monke
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    # Search Answer Profile が設定した回答の設定は Search Answer Profile 値が効く。
-    assert settings.rag_answer_flow == "standard_rag"
     # Search Answer Profile が触れていない項目は KB legacy 値ではなく global 既定。
     assert settings.rag_neighbor_child_count == 3
     assert settings.rag_vector_index_profile == "accurate"

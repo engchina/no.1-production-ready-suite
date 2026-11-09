@@ -163,41 +163,6 @@ def test_batch_unit_rejection_feedback_does_not_store_unknown_value():
     assert "end_line" not in feedback
 
 
-def test_scope_links_choose_sent_units_and_code_extracts_original():
-    from rag_engine.generation import grounded
-    from rag_engine.generation.citation_unit_ids import unit_scope_model
-    from rag_engine.models.llm import RequestScopePlan
-
-    span = {"label": "E1", "evidence_id": "E1", "source_id": "p1", "text": "前提です。\n後続です。", "start": 30}
-    units = grounded.citation_units(span["text"])
-    original = EvidenceUnitSnapshot.create(span, units, grounded.CITATION_UNIT_CONTRACT)
-    catalog = SentUnitCatalog([original])
-    assert all(uid in grounded.scope_evidence_text(span) for uid in original.unit_ids)
-    model = unit_scope_model(RequestScopePlan, catalog)
-    payload = {
-        "request_coverage": [
-            {
-                "request_id": "R1",
-                "evidence_scope": [
-                    {
-                        "evidence_id": "E1",
-                        "target": "合成の対象",
-                        "relation": "linked",
-                        "link": {"unit_ids": [original.unit_ids[1]]},
-                    }
-                ],
-            }
-        ]
-    }
-    resolved = grounded.resolve_scope_plan(model.model_validate(payload), [span])
-    assert resolved[0].evidence_scope[0].link_quote == "後続です。"
-    assert "line_start" not in str(model.model_json_schema())
-    assert "line_end" not in str(model.model_json_schema())
-    payload["request_coverage"][0]["evidence_scope"][0]["link"] = {"unit_ids": ["unknown"]}
-    with pytest.raises(ValidationError):
-        model.model_validate(payload)
-
-
 def test_empty_sent_catalog_cannot_return_any_citation_or_link_range():
     from rag_engine.generation.citation_unit_ids import unit_generation_model
     from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model

@@ -12,7 +12,7 @@ import {
 } from "./_helpers";
 
 const GLOBAL_QUERY_FIELDS = [
-  "query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
+  "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
   "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled",
   "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
 ];
@@ -335,14 +335,14 @@ test("業務ガイドは既定 OFF の単一スイッチで保存・再表示す
 test("検索方法の全体設定の項目は表示せず、古い個別設定を保存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
-    query_strategy: "hyde", answer_flow: "crag", neighbor_child_count: 0,
+    neighbor_child_count: 0,
     rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true, graph_expansion_max_chunks: 3,
     screen_linking_enabled: true,
     entity_expansion_enabled: false, entity_expansion_max_chunks: 2, section_expansion_enabled: false, section_expansion_max_levels: 2, section_expansion_input_token_percent: 30,
     guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
   });
   await page.goto("/search-answer-profiles?id=bv-default");
-  for (const name of ["質問の言い換え・分解", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
+  for (const name of ["根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
     await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
   }
   for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "文書構造による検索拡張", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
@@ -1177,7 +1177,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
     config: {
       version: 1,
       knowledge_base_ids: ["kb-1"],
-      query: { query_strategy: "hyde" },
+      query: { neighbor_child_count: 2 },
     },
     knowledge_bases: [{ id: "kb-1", name: "社内規程", status: "ACTIVE" }],
   };
@@ -1209,7 +1209,6 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "質問の言い換え・分解" })).toHaveCount(0);
   await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
   const understanding = page.getByTestId("question-understanding-panel");
   await expect(understanding.getByRole("textbox", { name: "原因を尋ねる語", exact: true })).toBeDisabled();

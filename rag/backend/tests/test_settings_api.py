@@ -3543,10 +3543,6 @@ def test_update_answer_record_settings_persists_retention_and_purges(
 def test_answering_settings_rejects_invalid_values() -> None:
     """選択肢に無い値・範囲外の近傍数は 422(#593)。"""
     assert (
-        client.patch("/api/settings/answering", json={"query_strategy": "unknown"}).status_code
-        == 422
-    )
-    assert (
         client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
         == 422
     )
@@ -3713,7 +3709,6 @@ def test_term_usage_settings_are_independent(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", False)
     monkeypatch.setattr(settings, "rag_runtime_terms_answer_enabled", False)
-    monkeypatch.setattr(settings, "rag_query_strategy", "rag_fusion")
     env_file = _settings_env_file(monkeypatch, tmp_path)
     for key, value in (
         ("runtime_terms_search_enabled", search),
@@ -3729,7 +3724,6 @@ def test_term_usage_settings_are_independent(
     ):
         assert data[key] is value
         assert getattr(reloaded, "rag_" + key) is value
-    assert data["query_strategy"] == "rag_fusion"
 
 
 @pytest.mark.parametrize(
@@ -3772,7 +3766,6 @@ def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: 
     reloaded = Settings(_env_file=env_file)
     assert reloaded.rag_rrf_method_ratio == (1, 3)
     assert reloaded.rag_rrf_source_ratio == (4, 1)
-    assert response.json()["data"]["query_strategy"] == initial["query_strategy"]
     assert response.json()["data"]["rerank_enabled"] == initial["rerank_enabled"]
 
 
@@ -3847,7 +3840,6 @@ def test_retrieval_thresholds_save_reload_and_preserve_other_settings(
     assert saved.rag_min_similarity == values[0]
     assert saved.rag_rerank_min_relevance_score == values[1]
     assert client.get("/api/settings/answering").json()["data"]["min_similarity"] == values[0]
-    assert response.json()["data"]["query_strategy"] == before["query_strategy"]
     assert response.json()["data"]["rerank_enabled"] == before["rerank_enabled"]
 
 

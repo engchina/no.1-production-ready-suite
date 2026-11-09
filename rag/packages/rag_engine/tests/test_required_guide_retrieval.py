@@ -122,7 +122,7 @@ def test_candidate_rejected_from_context_remains_an_explicit_acquisition_gap(mon
 
     _patch_search(monkeypatch, {"reference": context(_paged("new", "d0", 1))})
     original = context(parent("base"))
-    monkeypatch.setattr(a, "_merge_crag_evidence", lambda *args, **kwargs: context(_paged("new", "d0", 1)))
+    monkeypatch.setattr(a, "merge_evidence", lambda *args, **kwargs: context(_paged("new", "d0", 1)))
     merged, trace, _ = _cover(original, _settings(guide_step_max_queries=0), _refs(1))
     assert merged is original
     row = trace["required_acquisition"]["targets"][0]

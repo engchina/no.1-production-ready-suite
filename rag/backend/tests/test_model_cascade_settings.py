@@ -192,8 +192,6 @@ def test_cascade_record_survives_answer_conversion() -> None:
         answer="合成の回答",
         question_display="合成の質問",
         original_question="合成の質問",
-        selected_strategy="simple",
-        effective_strategy="simple",
         generation_trace={"model_cascade": record},
     )
     assert _outcome_from_result(result, _SearchState()).diagnostics["model_cascade"] == record

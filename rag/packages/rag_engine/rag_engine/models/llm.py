@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -16,7 +15,6 @@ from pydantic import (
     PrivateAttr,
     StrictInt,
     ValidationError,
-    create_model,
     field_validator,
     model_validator,
 )
@@ -141,145 +139,6 @@ class PictureDescriptionOutput(_StrictModel):
     search_keywords: list[str] = Field(description="重要語、正式名、別名、略称、表記ゆれ、コード、エラー、画面名、項目名。")
     retrieval_text: str = Field(
         description="RAG 索引用の本文。最初にこの画像だけで回答できる結論を書き、画面名、操作名、項目名、条件、結果、注意、検索されそうな自然表現を自然文でまとめる。複数ケースは条件→結果を分け、見えていない分岐・値・可否・実施済み結果は書かない。"
-    )
-
-
-class QueryRoutingOutput(_StrictModel):
-    """検索戦略と独立した、検索前の暫定データ確認観点を保持します。
-
-    routing_data_required の None は旧形式または未判定です。確認項目は実測値や
-    最終的な不足判定ではなく、回答時に提供済み根拠と照合する対象です。
-    """
-
-    # 戦略は schema の enum で ID に制約する。OpenAI Responses と OCI Generative AI のどちらも strict schema を
-    # 強制するため、LLM の出力がこの外に出ない。answer_models の定数を import すると循環するので文字列で書き、
-    # answering._ROUTABLE_QUERY_STRATEGIES との一致はテストで固定する (#919)。
-    strategy: Literal["simple_retrieval", "rag_fusion", "query_decomposition", "step_back_prompting", "hyde"]
-    reason: str
-    routing_data_required: bool | None = None
-    routing_data_items: list[str] = []
-    # 選んだ戦略の検索文。戦略選択と検索文生成を1回の呼出で行う。空なら従来の拡張呼出で補う。
-    # 本数は後段の MAX_GENERATED_QUERY_COUNT で切り詰める。ここで上限を課すと超過時に回答全体が中断する。
-    queries: list[str] = Field(default_factory=list)
-
-
-class QueryExpansionOutput(_StrictModel):
-    """LLM が生成した検索 query バリエーションを保持します。"""
-
-    queries: list[str]
-
-
-@lru_cache(maxsize=32)
-def query_routing_schema(allowed_strategies: tuple[str, ...] | None = None) -> type[QueryRoutingOutput]:
-    """呼出の用途に応じて、既存のルーティングの候補を schema で制限する。"""
-    if allowed_strategies is None:
-        return QueryRoutingOutput
-    known = set(get_args(QueryRoutingOutput.model_fields["strategy"].annotation))
-    if not allowed_strategies or not set(allowed_strategies) <= known:
-        raise ValueError("ルーティングの候補には既知の戦略 ID を一つ以上指定してください。")
-    fields: dict[str, Any] = {"strategy": (Literal.__getitem__(allowed_strategies), ...)}
-    return create_model("RestrictedQueryRoutingOutput", __base__=QueryRoutingOutput, **fields)
-
-
-# CRAG 評価の出力契約は Field(description) に置く。構造化出力の JSON schema としてモデルへ渡るため、prompt に
-# 出力例を載せない (#983)。判定規則そのものは CRAG_GRADE_PROMPT_TEMPLATE にある。
-class CragEvidenceQuote(_StrictModel):
-    """観点を判断した候補と、その候補からの直接引用。"""
-
-    source_id: str = Field(description="原文を読んだ候補の chunk_uid。")
-    quote: str = Field(description="その候補から文字を変えずに写した直接の根拠。")
-
-
-class CragAnswerablePart(_StrictModel):
-    """原質問への部分回答に使える、直接裏付けた操作・規則・確認方法。"""
-
-    aspect: str = Field(description="直接答えられる required_aspects の観点。business_object だけでは回答内容にしない。")
-    kind: Literal["operation", "rule", "verification", "definition"] = Field(
-        description="原質問に対する操作、規則・禁止、実値の確認方法、定義のいずれか。"
-    )
-    claim: str = Field(description="原文が直接裏付ける部分回答。業務の概説や機能名だけを操作・規則に言い換えない。")
-    evidence: list[CragEvidenceQuote] = Field(default_factory=list, description="この部分回答を直接裏付ける候補のIDと原文。")
-
-
-class CragAspectCheck(_StrictModel):
-    """質問の必要観点ごとの支持と、候補内の一意な出典ID。"""
-
-    aspect: str = Field(
-        description="task_contract.required_aspects の観点名（business_object / requested_result / applicability / procedure など）。"
-    )
-    status: Literal["supported", "missing", "unknown", "data_confirmation"] = Field(
-        description="supported=直接根拠で説明できる。missing=閲覧した候補に必要な説明が無い。unknown=解釈・範囲・対応を確定できない。data_confirmation=一般規則はあり実値の照合だけが残る（requested_result / applicability のみ）。"
-    )
-    source_ids: list[str] = Field(
-        default_factory=list, description="観点を支持する候補の chunk_uid。supported / data_confirmation では必須。"
-    )
-    reason: str = Field(description="判定の根拠を短く。data_confirmation では閲覧するデータと目的。")
-    evidence: list[CragEvidenceQuote] = Field(
-        default_factory=list, description="支持・確認方法の直接引用。複数の候補を組み合わせてよい。項目名だけを定義の根拠にしない。"
-    )
-
-
-class CragCandidateVerdict(_StrictModel):
-    """候補（parent chunk）ごとの関連判定。CRAG の評価器と同じく文書単位の二値判定を先に行う。"""
-
-    chunk_uid: str = Field(description="候補の chunk_uid。")
-    relevant: bool = Field(
-        description="候補が原質問と同じ業務・機能の種類について、要求された操作・規則・確認方法・制限（できない・機能が無い）のいずれかを説明していれば true。質問固有の値が無くてもよい。別の変更項目だけの手順や明らかな話題違いは false。エラーは明確に別で共通処理関係が無い場合だけ irrelevant とし、対応不明は relation=unknown で保持する。"
-    )
-    reason: str = Field(description="判定の根拠を一文で。")
-    relation: Literal["relevant", "irrelevant", "unknown"] | None = Field(
-        default=None, description="回答に役立つかの意味判定。不確定は unknown として保持する。省略時は relevant の互換値。"
-    )
-    error_relation: Literal["same", "shared_handling", "different", "unknown", "not_applicable"] = Field(
-        default="not_applicable",
-        description="same=同じエラー。shared_handling=原文に共通の処理関係がある。different=明確に別のエラーで共通処理なし。unknown=対応を確定できない。not_applicable=エラーの質問ではない。別番号の出現だけで different にしない。",
-    )
-    quote: str = Field(default="", description="エラーの対応または共通処理関係を判断した候補の直接原文。")
-
-
-class CragEnumeratedItem(_StrictModel):
-    """列挙・網羅の問（task_contract.enumeration）で、候補に見える該当の項目 1 つと根拠（#1503）。
-
-    件数・章の範囲の欠けはプログラムが数える（``quote`` が根拠の本文に無い項目は数えない）。
-    """
-
-    item: str = Field(description="該当の項目を短く（例: 入室の予約）。")
-    source_ids: list[str] = Field(default_factory=list, description="項目が書かれた候補の chunk_uid。")
-    quote: str = Field(description="候補の本文から、項目が書かれた箇所を文字を変えずに写した原文（20 字程度）。")
-
-
-# 項目の順序は生成順でもある（strict schema）。候補ごとの判定 → 列挙の項目 → 観点 → 理由 → 結論の順に置き、結論を先に書かせない。
-class CragRetrievalGradeOutput(_StrictModel):
-    """CRAG retrieval の十分性判定と理由を保持します。"""
-
-    candidate_verdicts: list[CragCandidateVerdict] = Field(
-        default_factory=list, description="全候補の関連判定。候補ごとに独立に判定する。relevant=true の候補を回答に使う。"
-    )
-    enumerated_items: list[CragEnumeratedItem] = Field(
-        default_factory=list,
-        description="task_contract.enumeration があるときだけ、候補に見える該当の項目を、重ねずに資料の順で enumeration.max_items 件まで挙げる。候補に無い項目を推測で足さない。enumeration が null なら空の配列。",
-    )
-    aspect_checks: list[CragAspectCheck] = Field(
-        default_factory=list, description="required_aspects ごとの判定。relevant な候補を合わせて確認し、全観点を必ず列挙する。"
-    )
-    answerable_parts: list[CragAnswerablePart] = Field(
-        default_factory=list,
-        description="原質問の操作・規則・確認方法・定義に直接答えられる部分。業務が同じという概説だけなら空。複数資料の共同支持も可。",
-    )
-    reason: str = Field(description="十分・不足の理由を短く。不足なら欠けている観点と、どの候補が最も近いかを書く。")
-    sufficient: bool = Field(
-        description="answerable_parts に直接根拠を示せる部分があるなら true。関連候補や業務概述だけでは true にしない。全観点の充足とは区別する。"
-    )
-    confidence: float = Field(description="判定の確からしさ（0.0〜1.0）。")
-    rewritten_query: str = Field(
-        description="missing 観点を補う短い日本語の検索文。部分回答できても不足があれば返す。unknown だけなら空文字。"
-    )
-    recovery_action: Literal["rewrite", "neighbor_children", "parent", "neighbor_parents"] = Field(
-        default="rewrite",
-        description="不足時の回復手段。rewrite=別の話題・対象を探す。neighbor_children / parent / neighbor_parents=recovery_options にある文脈拡張。",
-    )
-    recovery_anchor_ids: list[str] = Field(
-        default_factory=list, description="文脈拡張の起点にする、閲覧した適合候補の chunk_uid。rewrite なら空。"
     )
 
 
@@ -473,12 +332,6 @@ class RequestCoverageRange(_StrictModel):
         "同じ内容を述べた根拠が複数の文書にあれば（規則・要件・定義を定めた条項と、それを説明・運用する手順書など）、文書ごとに行にする。"
         "同じ文書・頁にあるだけの別操作を direct・linked にしない。items はこの計画の根拠だけで作る。無ければ空にし kind=gap にする。",
     )
-
-
-class RequestScopePlan(_StrictModel):
-    """章節情報が欠けた候補を、本文の生成とは分けて照合する。"""
-
-    request_coverage: list[RequestCoverageRange] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
 
 
 class ExternalDataItem(_StrictModel):

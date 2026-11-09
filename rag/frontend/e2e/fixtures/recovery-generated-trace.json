@@ -1234,7 +1234,7 @@
       "finished_at": "2026-11-05T04:17:33.335389+00:00",
       "parent_id": "f8fe6e4372a16add",
       "kind": "answer_step",
-      "display_name": "回答文を作って根拠と照合する（1 回目）",
+      "display_name": "回答文を作る（1 回目）",
       "params": {
         "name": "回答文の生成と根拠確認（1回目）",
         "accepted": true,
@@ -2112,7 +2112,7 @@
       "finished_at": "2026-11-05T04:17:33.389028+00:00",
       "parent_id": "f8fe6e4372a16add",
       "kind": "answer_step",
-      "display_name": "回答文を作って根拠と照合する（2 回目）",
+      "display_name": "回答文を作る（2 回目）",
       "params": {
         "name": "回答文の生成と根拠確認（2回目）",
         "accepted": true,

@@ -289,7 +289,7 @@ async def search(
     """自然言語クエリで RAG 検索を実行する。
 
     回答は回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
-    Cohere Rerank -> 根拠の評価・補正検索 -> 回答の生成と監査)で作る。
+    Cohere Rerank -> 回答の生成)で作る。
     """
     enforce_rate_limit("search", http_request)
     result = await _run_search_with_timeout(request, run_recorder=_search_run_recorder(request))
@@ -384,7 +384,7 @@ async def _resolve_query_context(
             profile_config = profile_config.model_copy(
                 update={"answer_model_id": explicit_model, "escalation_model_id": None}
             )
-        # 回答を作らない検索も、根拠を集める LLM（質問拡張・条の選択・CRAG など）はチャットと同じ
+        # 回答を作らない検索も、根拠を集める LLM（条の選択など）はチャットと同じ
         # 回答のモデルで呼ぶ（#3506。回答の有無でモデルを変えない）。ただし回答を作らない検索は、
         # 登録を外したモデルを選んだままのプロファイルでも止めず、既定のモデルで根拠を集める。
         settings, applied = resolve_search_answer_profile_settings(

@@ -9,17 +9,15 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_parts_wire import answer_parts_model
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_scope_model
+from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.generation.grounded import generation_output_model, generation_request_ids
-from rag_engine.models.llm import RequestScopePlan
 
 TEXT = "項目Aは12です。"
 QUESTION = "項目Aの値を教えてください。"
@@ -83,16 +81,6 @@ def test_several_requests_take_one_plan_each_even_without_basis():
     model = answer_parts_model(generation_draft_wire_model(), units, request_ids=("Q1", "Q2"))
     canonical = canonical_generation_draft(model.model_validate(draft([], snapshot)), unit_catalog=units)
     assert [(entry.request_id, entry.evidence_ids) for entry in canonical.request_coverage] == [("Q1", ["E1"]), ("Q2", [])]
-
-
-def test_scope_plan_schema_takes_one_plan_per_request():
-    units, _ = catalog()
-    model = unit_scope_model(RequestScopePlan, units, request_ids=("Q1",))
-    schema = coverage_schema(model)
-    assert schema["field"]["minItems"] == schema["field"]["maxItems"] == 1
-    model.model_validate({"request_coverage": [plan("Q1")]})
-    with pytest.raises(ValidationError):
-        model.model_validate({"request_coverage": [plan("Q1"), plan("Q1", "別の言い方")]})
 
 
 def test_generation_call_sends_no_plan_schema():
@@ -165,12 +153,3 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
         canonical = canonical_generation_draft(model.model_validate(replay(name)), unit_catalog=units)
         assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
         assert {scope.relation for scope in canonical.request_coverage[0].evidence_scope} <= {"direct"}
-
-
-def test_scope_plan_row_keeps_target():
-    """計画だけを別に立てる経路は対象の照合が目的なので、行の target を残す（#4594）。"""
-    units, _ = catalog()
-    schema = unit_scope_model(RequestScopePlan, units, request_ids=("Q1",)).model_json_schema()
-    coverage = schema["$defs"][schema["properties"]["request_coverage"]["items"]["$ref"].rsplit("/", 1)[1]]
-    row = schema["$defs"][coverage["properties"]["evidence_scope"]["items"]["$ref"].rsplit("/", 1)[1]]
-    assert "target" in row["properties"]

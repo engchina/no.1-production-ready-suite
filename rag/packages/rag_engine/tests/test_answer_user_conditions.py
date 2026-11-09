@@ -16,6 +16,7 @@ from test_grounded_answer import FakeModel, audit, context, draft, ids, record, 
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_envelope import requires_environment_data
 from rag_engine.models.llm import GroundedDraft
+from rag_engine.retrieval.task_contract import task_contract
 
 MANUAL = "portal-operations-manual.pdf"
 PREMISE = "本書の操作ができるのは「ポータル管理者」ロールを持つ利用者だけです。"
@@ -55,7 +56,7 @@ def answer(question, texts, external_data_items, *, external_data_required=True)
         "external_data_items": external_data_items,
     }
     reviews = [(index, "supported", "matched", "") for index in range(len(texts))]
-    requests = [(unit["id"], "addressed") for unit in grounded.task_contract(question)["request_units"]]
+    requests = [(unit["id"], "addressed") for unit in task_contract(question)["request_units"]]
     return run(FakeModel([steps], [audit(*reviews, requests=requests)]), ctx, question).response
 
 

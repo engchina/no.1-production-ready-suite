@@ -27,7 +27,7 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
             version: 1,
             knowledge_base_ids: ["kb-1", "kb-2"],
             query: {
-              query_strategy: "rag_fusion",
+              neighbor_child_count: 2,
             },
           },
           knowledge_bases: [
@@ -50,7 +50,7 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
         version: 1,
         knowledge_base_ids: ["kb-1", "kb-2"],
         query: {
-          query_strategy: "rag_fusion",
+          neighbor_child_count: 2,
         },
       },
     });
@@ -62,7 +62,7 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
     expect(path).toBe("/api/search-answer-profiles");
     expect(init?.method).toBe("POST");
     const body = JSON.parse(String(init?.body));
-    expect(body.config.query.query_strategy).toBe("rag_fusion");
+    expect(body.config.query.neighbor_child_count).toBe(2);
   });
 
   it("listSearchAnswerProfiles の読み取りの失敗は error_code 付きの ApiError にする", async () => {

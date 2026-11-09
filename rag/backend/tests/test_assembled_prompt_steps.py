@@ -113,7 +113,7 @@ async def test_generation_system_with_assumptions_keeps_continuous_steps(
     oracle = FakeOracle()
     oracle.prompt_overrides = _validated(saved)
     await AnswerEngine(
-        Settings(rag_answer_flow="standard_rag"),
+        Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         runtime_knowledge_payload=prepared("assume"),

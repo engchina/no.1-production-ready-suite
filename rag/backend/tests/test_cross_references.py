@@ -2119,46 +2119,11 @@ _SECTION_ANSWER = "合成の入力画面で確認ボタンを押す。"
 def _section_answer_llm(
     system: str, prompt: str, settings: Any, schema: type, **options: Any
 ) -> Any:
-    """CRAG は不足と判定して章節を広げ、回答は参照先の文書 B の手順を引用する LLM の代役。"""
-    from rag_engine.models.llm import CragRetrievalGradeOutput, GroundedDraft
+    """回答は参照先の文書 B の手順を引用する LLM の代役。"""
+    from rag_engine.models.llm import GroundedDraft
 
     from tests.test_answer_engine import _fake_llm
 
-    if schema is CragRetrievalGradeOutput:
-        candidates = json.loads(
-            prompt.split("BEGIN_UNTRUSTED_CRAG_CANDIDATES\n", 1)[1].split(
-                "END_UNTRUSTED_CRAG_CANDIDATES", 1
-            )[0]
-        )
-        candidate = next((row for row in candidates if _SECTION_ANSWER in row["text"]), None)
-        evidence = (
-            [dict(source_id=candidate["chunk_uid"], quote=_SECTION_ANSWER)] if candidate else []
-        )
-        return CragRetrievalGradeOutput(
-            reason="参照先の操作原文を確認" if candidate else "参照先の操作原文が必要",
-            sufficient=bool(candidate),
-            confidence=0.9 if candidate else 0.4,
-            rewritten_query="",
-            candidate_verdicts=[
-                dict(chunk_uid=row["chunk_uid"], relevant=True, reason="参照先の資料")
-                for row in candidates
-            ],
-            aspect_checks=[
-                dict(
-                    aspect=aspect,
-                    status="supported" if candidate else "missing",
-                    source_ids=[candidate["chunk_uid"]] if candidate else [],
-                    evidence=evidence,
-                    reason="操作原文の有無",
-                )
-                for aspect in ["business_object", "requested_result", "applicability", "procedure"]
-            ],
-            answerable_parts=[
-                dict(aspect="procedure", kind="operation", claim=_SECTION_ANSWER, evidence=evidence)
-            ]
-            if candidate
-            else [],
-        )
     if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
         # CRAGの判定に含まれる引用ではなく、番号付き根拠ブロックから出典を選ぶ。
         parts = re.split(r"\[(E[0-9]+)\]", prompt)
@@ -2221,8 +2186,6 @@ def _section_engine(oracle: ReferenceOracle) -> AnswerEngine:
     return _engine(
         oracle,
         FakeGenAi({"手順": 0.9}),
-        rag_answer_flow="crag",
-        rag_query_strategy="auto_routing",
         rag_section_expansion_enabled=True,
     )
 

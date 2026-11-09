@@ -1,0 +1,83 @@
+"""取得済みの根拠の統合。LLM と検索は呼ばない。"""
+
+from __future__ import annotations
+
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.generation.answer_payload import _evidence_id_key
+from rag_engine.retrieval.context_builder import context_bundle_from_parent_evidence, record_context_key
+from rag_engine.retrieval.evidence_selection import evidence_packet, evidence_relevance
+from rag_engine.retrieval.rerank_scores import best_rerank_score, keeps_original_order, rerank_first_key
+
+
+def merge_evidence(previous: AnswerContext, current: AnswerContext, question: str, *, max_records: int, max_chars: int) -> AnswerContext:
+    """既取得の出典を最大2回分保持する。満杯時は rerank の点数の高い順に選ぶ（#3504）。
+
+    親の点数は、その親の起点の child の rerank の点数の最高値（記録の metadata か根拠の木の起点）。点数の無い
+    親は点数のある親の後ろに置き、語の一致の点数（操作の見出し・質問の語）は同点の順と点数の無い親の順だけに使う。
+    条の目録で選んだ条の親（rerank 最優先の例外。`keeps_original_order`）は切らず、枠の外に元の順で残す
+    （context の組み立てと同じく、関連度に関わらず枠の外に足す）。
+    """
+    if not previous.records:
+        return current
+    by_key = {record_context_key(r) or r.id: r for r in previous.records}
+    by_key.update({record_context_key(r) or r.id: r for r in current.records})
+    records = list(by_key.values())
+    limit = max_records * 2
+    if len(records) > limit:
+        from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
+
+        target_labels = {label for r in records if operation_target_score(question, r) >= 80 for label in operation_labels(r)}
+
+        def priority(record):
+            labels = operation_labels(record)
+            entry = len(labels) == 1 and bool(labels & target_labels) and mentions_operation_section(record.text)
+            return operation_target_score(question, record) + (100 if entry else 0) + evidence_relevance(question, record.text)
+
+        parents = (*previous.evidence_tree, *current.evidence_tree)
+        tree_scores = {
+            record_context_key(p.record) or p.record.id: best_rerank_score(
+                [p.record, *(child.record for child in p.children if child.role == "retrieved_anchor")]
+            )
+            for p in parents
+        }
+        exempt_keys = {
+            record_context_key(p.record) or p.record.id
+            for p in parents
+            if keeps_original_order(p.record) or any(keeps_original_order(child.record) for child in p.children)
+        }
+
+        def score(record: AnswerRecord) -> float | None:
+            own = best_rerank_score([record])
+            return own if own is not None else tree_scores.get(record_context_key(record) or record.id)
+
+        def exempt(record: AnswerRecord) -> bool:
+            return keeps_original_order(record) or (record_context_key(record) or record.id) in exempt_keys
+
+        kept = sorted((r for r in records if not exempt(r)), key=lambda r: (*rerank_first_key(score(r)), -priority(r)))
+        records = kept[:limit] + [r for r in records if exempt(r)]
+    keys = {record_context_key(r) or r.id for r in records}
+    tree = {record_context_key(p.record) or p.record.id: p for p in previous.evidence_tree}
+    tree.update({record_context_key(p.record) or p.record.id: p for p in current.evidence_tree})
+    if tree and all(key in tree for key in keys):
+        bundle = context_bundle_from_parent_evidence(tuple(tree[record_context_key(r) or r.id] for r in records), max_chars=max_chars)
+        return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
+    return AnswerContext(records=records, text=evidence_packet(question, records))
+
+
+def _record_matches_preferred_ids(record: AnswerRecord, keys: set[str]) -> bool:
+    """記録がいずれかの識別子（ID・親 ID・子 ID・引用）で ``keys`` に一致するか。"""
+    record_keys = {
+        _evidence_id_key(value)
+        for value in (
+            record.id,
+            record.chunk_id,
+            record.chunk_uid,
+            record.parent_chunk_id,
+            record.parent_chunk_uid,
+            record_context_key(record),
+            record.citation,
+        )
+        if _evidence_id_key(value)
+    }
+    record_keys.update(_evidence_id_key(value) for value in record.child_chunk_ids if _evidence_id_key(value))
+    return bool(record_keys & keys)

@@ -55,7 +55,7 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 ナレッジベース・回答の設定・業務ガイド）をしてから回答します。指定しなければ全体の既定で評価します（#301）。
 アーカイブ済み・参照するナレッジベースが無いプロファイルは、そのケースを失敗にします。
 
-単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（`query_strategy`・`answer_flow`・
+単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（
 `neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限
 （`context_group_max_chunks`）・Oracle vector target accuracy を一時的に上書きできます。
 

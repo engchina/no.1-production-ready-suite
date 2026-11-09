@@ -99,7 +99,6 @@ from app.config import (
     CHUNK_TABLE_CHILD_TARGET_CHARS_DEFAULT,
     CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
     CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
-    AnswerFlow,
     ChunkingStrategy,
     EvaluationSuite,
     FileType,
@@ -107,7 +106,6 @@ from app.config import (
     GraphProfile,
     ParserAdapterBackend,
     PreprocessProfile,
-    QueryStrategy,
     VectorIndexProfile,
     reject_roadmap_parser_adapter_backend,
 )
@@ -810,8 +808,6 @@ class AnsweringSettingsData(BaseModel):
     rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
-    query_strategy: QueryStrategy
-    answer_flow: AnswerFlow
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
     screen_linking_enabled: bool
@@ -862,8 +858,6 @@ class AnsweringSettingsUpdate(BaseModel):
 
     runtime_terms_search_enabled: bool | None = None
     runtime_terms_answer_enabled: bool | None = None
-    query_strategy: QueryStrategy | None = None
-    answer_flow: AnswerFlow | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     screen_linking_enabled: bool | None = None

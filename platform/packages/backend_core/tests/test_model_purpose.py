@@ -100,7 +100,7 @@ async def test_async_wrappers_keep_concurrent_tasks_isolated_and_preserve_values
                 "answer.generate", operation, sentinel, purpose="answer.generate"
             ),
             async_call_with_model_purpose(
-                "query.expand", operation, sentinel, purpose="query.expand"
+                "query.rewrite", operation, sentinel, purpose="query.rewrite"
             ),
         )
         assert all(value is sentinel for value in results)
@@ -127,7 +127,7 @@ async def test_async_exception_and_cancellation_restore_calling_context() -> Non
             raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
-            await async_call_with_model_purpose("query.expand", cancel)
+            await async_call_with_model_purpose("query.rewrite", cancel)
         assert model_purpose_attributes() == {"pr.gen_ai.purpose": "answer.generate"}
     assert model_purpose_attributes() == {}
 
@@ -207,13 +207,13 @@ async def test_cancelled_task_restores_its_inherited_context_without_changing_pa
     restored: list[dict[str, str]] = []
 
     async def operation() -> None:
-        assert model_purpose_attributes() == {"pr.gen_ai.purpose": "query.expand"}
+        assert model_purpose_attributes() == {"pr.gen_ai.purpose": "query.rewrite"}
         started.set()
         await released.wait()
 
     async def child() -> None:
         try:
-            await async_call_with_model_purpose("query.expand", operation)
+            await async_call_with_model_purpose("query.rewrite", operation)
         finally:
             restored.append(model_purpose_attributes())
 

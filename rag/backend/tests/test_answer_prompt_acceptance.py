@@ -201,7 +201,7 @@ async def test_concurrent_answers_resolve_the_saved_instruction_of_each_request(
             _EVIDENCE: f"### 根拠の読み方\n- 補助情報: {marker} の読み方。\n",
         }
         await AnswerEngine(
-            Settings(rag_answer_flow="standard_rag"),
+            Settings(),
             oracle=oracle,  # type: ignore[arg-type]
             genai=FakeGenAi(),  # type: ignore[arg-type]
         ).run(SearchRequest(query=question))

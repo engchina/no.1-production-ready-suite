@@ -2,7 +2,6 @@
 
 対象は標準回答による回答の評価（`rag_engine.evaluation.answer_eval.evaluate_answer_payload` と、指標
 を足す `app.rag.answer_metrics.score_answer_evaluation`。画面の品質評価・評価の job と同じ経路）。
-検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分ける。
 
 人手の判定は、製品横断の評価の校正と同じ形の JSON（LabelSet: `rubric_id`・`items[]` の `id`・
 `split`・`question`・`answer`・`standard_answer`・`evidence`・観点ごとの `labels`・`origin`）を、

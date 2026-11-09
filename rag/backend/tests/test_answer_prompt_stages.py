@@ -48,12 +48,7 @@ NOT_LISTED = {
     "app.rag.evaluation_screens:SCREEN_JUDGE_PROMPT": UNUSED_SCREEN_JUDGE,
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
     "rag_engine.knowledge.prompt_files:DEFAULT_VLM_ANSWER_PROMPT": EDITABLE_DEFAULT,
-    # 一覧に載せた定数へ組み込み済みの部品。
-    "rag_engine.generation.query_prompts:_EXPANSION_INSTRUCTIONS": (
-        "QUERY_ROUTING_PROMPT_TEMPLATE と QUERY_EXPANSION_PROMPT_TEMPLATE に組み込み済み"
-    ),
     # 検証・確認の CLI だけが使う(回答・取込・品質評価の経路では使わない)。
-    "rag_engine.evaluation.crag_eval:CRAG_JUDGE_SYSTEM_PROMPT": "検証 CLI(answer_verify_cli)だけ",
     "app.rag.enterprise_ai_probe:DEFAULT_LLM_PROMPT": PROBE_ONLY,
     "app.rag.enterprise_ai_probe:DEFAULT_VLM_PROMPT": PROBE_ONLY,
     "app.rag.file_processing_staging:FILE_PROCESSING_STAGING_PROMPT": "staging の確認だけ",
@@ -197,45 +192,6 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
         for part in parts:
             # 監査の理由の規則など、Step に連結する部分は小節のまま表示する。
             assert re.search(r"^#{2,3} \S", str(part["content"]), re.M), (stage["id"], part["id"])
-
-
-def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
-    from rag_engine.generation.answering import CRAG_GRADER_SYSTEM_PROMPT
-    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
-
-    displayed: list[str] = []
-    for stage in readonly_prompt_stages():
-        parts = stage["prompts"]
-        assert isinstance(parts, list)
-        displayed.extend(part["content"] for part in parts)
-    # 画面用の別文ではなく、実行で参照する定数の本文をそのまま登録する。
-    assert CRAG_GRADER_SYSTEM_PROMPT in displayed
-    assert CRAG_GRADE_PROMPT_TEMPLATE in displayed
-
-
-def test_query_strategy_display_uses_actual_step_prompts() -> None:
-    from rag_engine.generation.answering import (
-        QUERY_EXPANSION_SYSTEM_PROMPT,
-        QUERY_ROUTING_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.query_prompts import (
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
-        QUERY_ROUTING_PROMPT_TEMPLATE,
-    )
-
-    displayed: list[object] = []
-    for stage in readonly_prompt_stages():
-        parts = stage["prompts"]
-        assert isinstance(parts, list)
-        displayed.extend(part["content"] for part in parts)
-    for prompt in (
-        QUERY_ROUTING_SYSTEM_PROMPT,
-        QUERY_EXPANSION_SYSTEM_PROMPT,
-        QUERY_ROUTING_PROMPT_TEMPLATE,
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
-    ):
-        assert prompt in displayed
-        assert prompt.startswith("## Step 1:")
 
 
 def test_every_editable_stage_has_a_runtime_override_lookup() -> None:

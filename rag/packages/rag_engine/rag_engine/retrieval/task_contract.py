@@ -281,8 +281,7 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
         "explicit_conditions": [c for c in clauses if cues.has("explicit_condition_cues", c)],
         "hypotheses": [c for c in clauses if cues.has("hypothesis_cues", c)],
         "missing_choice": missing_choice,
-        # 列挙・網羅の要求（件数・章の範囲・読む範囲。#1503）。CRAG の評価器は項目ごとの根拠を出し、件数・範囲の欠けは
-        # プログラムで数える（`enumeration.enumeration_check`）。
+        # 列挙・網羅の要求（件数・章の範囲・読む範囲。#1503）。
         "enumeration": enumeration.to_payload() if enumeration is not None else None,
         "required_aspects": ["business_object", "requested_result", "applicability"]
         + (["procedure"] if procedure_aspect else [])

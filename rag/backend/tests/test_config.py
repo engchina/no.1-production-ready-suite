@@ -134,19 +134,6 @@ def test_evaluation_suite_defaults_to_standard() -> None:
     assert Settings().rag_evaluation_suite == "standard"
 
 
-def test_answer_flow_defaults_to_standard_rag_in_every_layer() -> None:
-    """回答の生成方式の既定は標準 RAG。CRAG は明示して選んだときだけ使う(#3509)。
-
-    backend の全体設定・.env.example・rag_engine の既定(answer_flow を省いた呼び出し)をそろえる。
-    """
-    from rag_engine.generation.answer_models import DEFAULT_ANSWER_FLOW, STANDARD_ANSWER_FLOW
-
-    assert Settings.model_fields["rag_answer_flow"].default == "standard_rag"
-    assert DEFAULT_ANSWER_FLOW == STANDARD_ANSWER_FLOW == "standard_rag"
-    example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
-    assert "RAG_ANSWER_FLOW=standard_rag" in example.splitlines()
-
-
 def test_unknown_evaluation_suite_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_evaluation_suite="autorag_tuner")
@@ -1117,18 +1104,14 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     ] == ["RAG_ARTICLE_CATALOG_ENABLED=true"]
 
 
-def test_history_rewrite_env_example_matches_default_and_precedes_query_strategy() -> None:
-    """履歴の書き換えを雛形でも有効にし、独立した質問拡張より前に案内する。"""
+def test_history_rewrite_env_example_matches_default() -> None:
+    """履歴の書き換えを雛形でも有効にする。"""
     from dotenv import dotenv_values
 
     example = config_module.BACKEND_ROOT / ".env.example"
     values = dotenv_values(example, interpolate=False)
     assert values["RAG_HISTORY_REWRITE_ENABLED"] == "true"
     assert Settings.model_fields["rag_history_rewrite_enabled"].default is True
-    lines = example.read_text(encoding="utf-8").splitlines()
-    assert lines.index("RAG_HISTORY_REWRITE_ENABLED=true") < lines.index(
-        "RAG_QUERY_STRATEGY=simple_retrieval"
-    )
 
 
 def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.MonkeyPatch) -> None:

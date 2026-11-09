@@ -72,8 +72,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 
 - **self_reflective(Self-RAG)**: OCI Enterprise AI が
   `{"answer":..., "confidence":0-1, "grounded_in_context":bool}` を出力し、`confidence<閾値` or
-  `grounded_in_context==false` で **1 回だけ再検索**する。回答フローの CRAG(根拠の評価と補正検索)と
-  回答文の生成後の根拠確認が同じ役割を持つため、足すならその中で扱う。
+  `grounded_in_context==false` で **1 回だけ再検索**する。回答文の生成後の根拠確認が同じ役割を持つため、足すならその中で扱う。
 - **Temporal GraphRAG**: 取込時に entity / relationship へ timestamp(`valid_from/valid_to`)を付与し、
   検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出して Oracle の条件でフィルタする。
   回答の検索で graph を使う経路は #595 で削除したため、検索時の利用から設計し直す。設定は実装と同時に

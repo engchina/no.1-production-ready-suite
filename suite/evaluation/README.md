@@ -128,7 +128,7 @@ uv run suite-evaluation compare A=../../tmp/eval/a.judged.json C=../../tmp/eval/
 - 校正の結果は rubric の sha256 と判定のモデルに結ぶ。どちらかが違えば、判定は合否に使わない（`calibration_status=mismatch`）。
 - 判定のモデルの seed は使わない（#3529 で LLM の呼び出しから外した）。再現の条件は、判定のモデルの ID・rubric の sha256・指示と出力の形の sha256（`prompt_sha256`）を記録し、`--repeats` で測った判定の分散（観点ごとに回の間で判定が変わった項目の率 `variance.<観点>.unstable_rate`）を添えて示す。
 - 故意に壊した回答（`label-template --perturb`）は `origin=synthetic` の合成の対照で、holdout の合否に入れず `synthetic` の区分として別に集計する（壊した回答の誤合格の率）。
-- 検索の評価器の校正（RAG の `rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分ける。一致の集計と校正の閾値の部品は platform で共有し、RAG の回答の評価器（`rag_engine.evaluation.answer_eval`）は同じ LabelSet を RAG の `app.rag.answer_judge_calibration` で校正する。
+- 一致の集計と校正の閾値の部品は platform で共有し、RAG の回答の評価器（`rag_engine.evaluation.answer_eval`）は同じ LabelSet を RAG の `app.rag.answer_judge_calibration` で校正する。
 - テストの人手の判定と判定の応答は合成（`tests/fixtures/judge_calibration/`・`tests/test_labeling.py` の中の合成の記入）で、合否の閾値に届かない件数にしてある（実の校正は利用者の人手の判定で行う）。
 
 ## 版と記録

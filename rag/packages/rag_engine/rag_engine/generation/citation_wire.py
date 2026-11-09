@@ -102,18 +102,6 @@ def guided_generation_wire_model() -> type[BaseModel]:
     return create_model("GuidedGroundedDraftWire", __base__=generation_draft_wire_model(), **fields)
 
 
-@lru_cache(maxsize=2)
-def planned_generation_wire_model(*, guided: bool = False) -> type[BaseModel]:
-    """根拠計画を入力で受け取る生成では、その計画を出力 schema から除く。"""
-    from rag_engine.models.llm import RequestCoverageRange
-
-    return create_model(
-        "PlannedGroundedDraftWire",
-        __base__=guided_generation_wire_model() if guided else generation_draft_wire_model(),
-        request_coverage=(SkipJsonSchema[list[RequestCoverageRange]], Field(default_factory=list, exclude=True)),
-    )
-
-
 def canonical_request_coverage(
     rows: Sequence[RequestCoverageRange], link_text: Callable[[RequestLinkRange], str], *, unit_catalog: Any = None
 ) -> list[RequestCoverage]:

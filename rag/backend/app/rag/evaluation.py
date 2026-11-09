@@ -869,8 +869,6 @@ def evaluation_settings(
     update: dict[str, object] = {}
     if overrides is not None:
         mapping = {
-            "query_strategy": "rag_query_strategy",
-            "answer_flow": "rag_answer_flow",
             "neighbor_child_count": "rag_neighbor_child_count",
             "rerank_enabled": "rag_rerank_enabled",
             "rrf_k": "rag_rrf_k",
@@ -888,15 +886,7 @@ def evaluation_settings(
             ),
             "max_anchors_per_document": "rag_max_anchors_per_document",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
-            "strategy_reasoning_effort": "rag_strategy_reasoning_effort",
-            "judge_reasoning_effort": "rag_judge_reasoning_effort",
             "generation_reasoning_effort": "rag_generation_reasoning_effort",
-            "crag_compact_input": "rag_crag_compact_input",
-            "crag_short_candidate_ids": "rag_crag_short_candidate_ids",
-            "section_skip_regrade_at_scope": "rag_section_skip_regrade_at_scope",
-            "crag_skip_on_strong_signals": "rag_crag_skip_on_strong_signals",
-            "crag_skip_min_rerank_score": "rag_crag_skip_min_rerank_score",
-            "query_expansion_max_queries": "rag_query_expansion_max_queries",
         }
         update.update(
             {mapping[key]: value for key, value in overrides.model_dump(exclude_none=True).items()}

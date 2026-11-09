@@ -126,8 +126,6 @@ def _answer_with_stubs(
             "abcdef",
             ["docling"],
             settings,
-            query_strategy=answering.SIMPLE_RETRIEVAL_LABEL,
-            answer_flow=answer_flow,
         )
     return result, reported
 

@@ -120,7 +120,7 @@ def run_sections(ctx, stub, settings=None, state=None):
         recorded() as calls,
     ):
         result = answering._expand_context_by_sections(
-            "合成の質問", ctx, settings, [], answer_llm_provider=None, rerank_enabled=False, started_at=0, use_grader=False, state=state
+            "合成の質問", ctx, settings, answer_llm_provider=None, rerank_enabled=False, started_at=0, state=state
         )
     return result, next(call for call in calls if call.name == "章節の拡張")
 

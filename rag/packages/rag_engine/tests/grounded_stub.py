@@ -57,7 +57,6 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
             images,
             options.get("question_plan"),
             options.get("runtime_knowledge"),
-            options.get("query_expansion"),
         )
         if mode == "vision_attachments":
             output = answering.parse_multimodal_response(

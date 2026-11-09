@@ -9,7 +9,7 @@ from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests,
 def test_history_and_wish_do_not_add_a_separate_retrieval_query():
     """経緯と希望が混ざった質問でも検索文は原質問だけで、希望の節を別の検索文にしない。"""
     question = "取消を試した。CSVを使って令和10年7月の予約を追加したい。"
-    assert QueryExpansionResult(question, "simple", "simple").retrieval_queries == (question,)
+    assert QueryExpansionResult(question).retrieval_queries == (question,)
     assert "intent_parts" not in task_contract(question)
 
 

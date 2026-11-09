@@ -14,7 +14,7 @@ from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, id
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import GroundedDraft, RequestScopePlan
+from rag_engine.models.llm import GroundedDraft
 
 GOOD = "一覧表を選択し、処理を選択します。"
 PLAN_LIMIT = 64
@@ -159,9 +159,6 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
 
     def model(system, prompt, settings, schema, **options):
         calls.append(schema)
-        if issubclass(schema, RequestScopePlan):
-            assert "evidence" in json.loads(prompt)
-            return schema.model_validate({"request_coverage": [_plan(label)]})
         return generated_fixture(
             schema,
             prompt,
@@ -182,25 +179,5 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
     result = run(model, ctx, question=COMPOUND_QUESTION).response
 
     assert "generation_failure" not in result.generation_trace
-    assert issubclass(calls[0], RequestScopePlan)
-    assert len(calls) >= 2
+    assert len(calls) == 1
     assert answer in result.answer_text
-
-
-def test_invalid_plan_output_at_the_first_round_reaches_the_quote_fallback():
-    """#4091: 生成の前の計画の呼び出しの出力不合格も、HTTP 500 にせず参考情報へ退避する。"""
-    ctx = context(record(0, LONG_RECORD, "合成の項目"))
-
-    def model(system, prompt, settings, schema, **options):
-        assert issubclass(schema, RequestScopePlan)
-        schema.model_validate({})
-
-    result = run(model, ctx, question=COMPOUND_QUESTION).response
-
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert result.envelope["outcome"] == "conditional"
-    failure = result.generation_trace["generation_failure"]
-    assert failure["error"] == "ValidationError"
-    assert failure["stage"] == "answer.generate"
-    assert failure["model"] == "RequestScopePlan"
-    assert LONG_RECORD not in json.dumps(failure, ensure_ascii=False)

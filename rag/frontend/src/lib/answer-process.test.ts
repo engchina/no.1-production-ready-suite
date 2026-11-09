@@ -52,13 +52,11 @@ function spanEvents(
 describe("answerStepDisplayName", () => {
   it("backend の工程名を利用者向けの名前にし、回数つきの工程は回数を添える。知らない工程名はそのまま", async () => {
     const { answerStepDisplayName } = await import("./answer-process");
-    expect(answerStepDisplayName("質問拡張戦略")).toBe("質問の言い換え・分解");
     expect(answerStepDisplayName("Rerank")).toBe("質問との関連度で候補を並べ替える");
     expect(answerStepDisplayName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStageName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStepDisplayName("文書検索（2回目）")).toBe("検索文から根拠の候補を集める（2 回目）");
-    expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答文を作って根拠と照合する（1 回目）");
-    expect(answerStepDisplayName("検索語の再確定（書き換え後）")).toBe("探し直しに使う検索語を決める");
+    expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答文を作る（1 回目）");
     // 用語・同義語と回答ルールは別の工程（設定画面のタブの名前と同じ語。#3451）。
     expect(answerStepDisplayName("用語・同義語の確認")).toBe("一致する用語の別名を検索文に加える");
     expect(answerStepDisplayName("回答ルールの確認")).toBe("確認と回答に使うルールを選ぶ");

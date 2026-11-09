@@ -19,16 +19,12 @@ from test_answer_generation import (
 
 from rag_engine.generation.answer_payload import answer_result_payload
 from rag_engine.generation.answering import (
-    RAG_FUSION_LABEL,
-    SIMPLE_RETRIEVAL_LABEL,
-    STANDARD_ANSWER_FLOW_LABEL,
     answer_question_result,
 )
-from rag_engine.models.llm import QueryExpansionOutput, RerankTextRank
+from rag_engine.models.llm import RerankTextRank
 
 # 業務の内容を含まない合成の質問。ファイル名・ページ・エラーコード・列・2 つの要求を含む。
 QUESTION = "sample_guide.pdf の 2ページ目にある E1234 のとき、AB列は確認が必要ですか。また再実行の手順も教えてください。"
-GENERATED_QUERY = "言い換えた検索文"
 
 
 def _rerank_stub(calls: list[str]):
@@ -43,7 +39,7 @@ class InquiryQueryRemovalTests(unittest.TestCase):
     def setUp(self):
         stub_generation(self)
 
-    def run_answer(self, *, query_strategy, parse_side_effect):
+    def run_answer(self, *, parse_side_effect):
         search_result = _hybrid_result(
             _stored_child("chunk-a", 1, "合成の根拠 A"),
             _stored_child("chunk-b", 2, "合成の根拠 B"),
@@ -61,9 +57,7 @@ class InquiryQueryRemovalTests(unittest.TestCase):
                 "abcdef",
                 ["docling"],
                 _rerank_ready_settings(),
-                query_strategy=query_strategy,
                 rerank_enabled=True,
-                answer_flow=STANDARD_ANSWER_FLOW_LABEL,
             )
         return result, search, rerank_calls
 
@@ -74,7 +68,6 @@ class InquiryQueryRemovalTests(unittest.TestCase):
 
     def test_without_other_expansions_only_the_original_question_is_searched_and_reranked(self):
         result, search, rerank_calls = self.run_answer(
-            query_strategy=SIMPLE_RETRIEVAL_LABEL,
             parse_side_effect=[_answer_output(answer="合成の回答", cited_evidence_id="")],
         )
 
@@ -104,23 +97,6 @@ class InquiryQueryRemovalTests(unittest.TestCase):
         payload = answer_result_payload(result, answer_id="a1", run_id="abcdef")
         self.assertEqual(payload["text_search_query_source"], "原質問")
         self.assertNotIn("inquiry_conditions", payload)
-
-    def test_rewritten_queries_still_reach_search_and_rerank(self):
-        result, search, rerank_calls = self.run_answer(
-            query_strategy=RAG_FUSION_LABEL,
-            parse_side_effect=[
-                QueryExpansionOutput(queries=[GENERATED_QUERY]),
-                _answer_output(answer="合成の回答", cited_evidence_id=""),
-            ],
-        )
-
-        self.assertEqual(search.call_args.kwargs["retrieval_queries"], (QUESTION, GENERATED_QUERY))
-        self.assertEqual(result.retrieval_query_plan["vector_queries"], [QUESTION, GENERATED_QUERY])
-        self.assertEqual(result.retrieval_query_plan["llm_expansion_queries"], [GENERATED_QUERY])
-        # 言い換えた検索文でも関連度を測る（追加の rerank は検索に使った検索文だけ）。
-        self.assertEqual(rerank_calls, [QUESTION, GENERATED_QUERY])
-        self.assertIn(f"2. [質問の言い換え・分解] {GENERATED_QUERY}", result.question_display)
-        self.assertNotIn("[質問理解]", result.question_display)
 
 
 if __name__ == "__main__":

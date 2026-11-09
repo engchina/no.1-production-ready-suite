@@ -210,10 +210,9 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-test("診断の CRAG の情報は処理の詳細に出さず、識別子とモデルに統一する", { tag: "@responsive" }, async ({ page }) => {
-  await mockApi(page, { crag_attempts: [{ sufficient: true, grade_execution: "not_run" }] }, []);
+test("処理の詳細の診断は識別子とモデルに統一する", { tag: "@responsive" }, async ({ page }) => {
+  await mockApi(page, {}, []);
   const panel = await ask(page);
-  await expect(panel.getByTestId("answer-crag-details")).toHaveCount(0);
   await expect(panel.locator("[data-process-identifier]")).toHaveCount(3);
   await expect(panel.locator("[data-run-used-models]")).toBeVisible();
   await expectNoPageOverflow(page);

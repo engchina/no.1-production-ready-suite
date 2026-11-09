@@ -4572,7 +4572,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
         # planning=rag: 検索の画面・チャットと同じ流れで質問の理解・拡張・文書の検索（rerank
-        # を含む）まで行い、その後の根拠の補い（CRAG・章節の拡張・要求ごとの探し直し）と回答の
+        # を含む）まで行い、その後の根拠の補い（章節の拡張・要求ごとの探し直し）と回答の
         # 生成はしない（補いは Agent が rag_read_section などで行う。#3506）。planning=caller
         # （#2651）: 呼び出し元の検索文で検索し、質問に応じた推論の LLM / VLM も呼ばない
         # （hybrid search・rerank・文脈の取得は同じ）。

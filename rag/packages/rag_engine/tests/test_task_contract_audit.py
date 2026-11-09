@@ -9,13 +9,8 @@ from test_evidence_first_answering import PARSE, evaluation_case
 
 from rag_engine.evaluation.answer_eval import _evidence_fragments, evaluate_answer_payload
 from rag_engine.generation.answering import (
-    AnswerContext,
     AnswerRecord,
-    _grade_crag_retrieval,
-    _refine_crag_context,
-    build_crag_answer_context,
 )
-from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.evidence_selection import evidence_spans
 from rag_engine.retrieval.task_contract import filter_queries, task_contract
 
@@ -71,71 +66,6 @@ def test_duplicate_parse_is_consolidated_without_merging_different_versions():
     assert len(evidence_spans("保存操作", [record("x", source=""), record("y", source="")])) == 2
     # 文書の識別子が無い根拠は、表示名が同じでも同じ文書と確かめられないのでまとめない（#2603）。
     assert len(evidence_spans("保存操作", [record("run-a:1"), record("run-b:1")])) == 2
-
-
-def test_crag_keeps_support_when_one_candidate_is_selected():
-    a, b = record("a"), record("b", "入力不可の場合は別の条件を確認する。")
-    context = AnswerContext(records=[a, b], text=a.text + b.text)
-    result = _refine_crag_context(context, ["a"], max_chars=2000)
-    assert {r.chunk_uid for r in result.records} == {"a", "b"}
-
-
-def test_crag_high_confidence_does_not_prove_required_coverage():
-    r = record("a")
-    grade = CragRetrievalGradeOutput(
-        sufficient=True,
-        confidence=0.99,
-        candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="関連")],
-        reason="関連",
-        rewritten_query="",
-        aspect_checks=[],
-    )
-    with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
-        result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[r], text=r.text), object())
-    assert not result.generation_usable and result.required_aspect_coverage == "unknown"
-    assert result.grade_execution == "partial"
-
-
-def test_crag_does_not_resolve_ambiguous_local_ids():
-    a, b = record("a", source="a.pdf"), record("b", source="b.pdf")
-    checks = [
-        dict(aspect=k, status="supported", source_ids=["local"], reason="関連") for k in task_contract("登録方法")["required_aspects"]
-    ]
-    grade = CragRetrievalGradeOutput(
-        sufficient=True,
-        confidence=0.99,
-        candidate_verdicts=[dict(chunk_uid="local", relevant=True, reason="関連")],
-        reason="関連",
-        rewritten_query="",
-        aspect_checks=checks,
-    )
-    with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
-        result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == () and not result.generation_usable
-    assert result.required_aspect_coverage == "unknown"
-    assert all(not c["source_ids"] for c in result.aspect_checks)
-
-
-def test_identical_retry_stops_before_another_grade_call():
-    a = record("a")
-    context = AnswerContext(records=[a], text=a.text)
-    grade = CragRetrievalGradeOutput(
-        sufficient=False,
-        confidence=0.1,
-        reason="不足",
-        rewritten_query="入力の前提",
-        aspect_checks=[
-            dict(aspect=k, status="missing", source_ids=[], reason="必要な操作の説明なし")
-            for k in task_contract("登録方法")["required_aspects"]
-        ],
-    )
-    with (
-        patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", return_value=context) as search,
-        patch("rag_engine.generation.answering.parse_text_response", return_value=grade) as parse,
-    ):
-        result, _, attempts = build_crag_answer_context("登録方法", "", [], object())
-    assert search.call_count == 2 and parse.call_count == 1
-    assert attempts[-1].stop_reason == "no_new_evidence" and result.records
 
 
 def test_uncited_passage_is_unassessed_without_the_model():

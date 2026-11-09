@@ -57,8 +57,6 @@ async function mockRetrieval(page: Page) {
     [
       "**/api/settings/answering",
       {
-        query_strategy: "rag_fusion",
-        answer_flow: "standard_rag",
         neighbor_child_count: 3,
         rerank_enabled: true,
         screen_linking_enabled: false,
@@ -253,7 +251,7 @@ async function mockAnswerPrompts(page: Page) {
             updated_at: "2026-09-26T01:00:00Z",
           },
         ],
-        stages: [{ id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] }],
+        stages: [{ id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] }],
       }),
     })
   );
@@ -672,7 +670,6 @@ const SCREENS: FormScreen[] = [
     path: "/settings/retrieval",
     mock: mockRetrieval,
     open: async (page) => {
-      await expect(page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "広げる段の上限", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true })).toBeVisible();

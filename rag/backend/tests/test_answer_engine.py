@@ -13,11 +13,7 @@ from rag_engine.generation.citation_wire import (
     guided_generation_wire_model,
 )
 from rag_engine.models.llm import (
-    CragRetrievalGradeOutput,
     GroundedDraft,
-    QueryExpansionOutput,
-    QueryRoutingOutput,
-    RequestScopePlan,
 )
 
 import app.rag.answer_engine as answer_engine_module
@@ -169,54 +165,6 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     if schema.__name__ == "QuestionMentionAnchors":
         # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
         return cast(Any, schema).model_validate({"mentions": []})
-    if issubclass(schema, RequestScopePlan):
-        data = json.loads(prompt)
-        ids = [item["evidence_id"] for item in data["evidence"]]
-        return RequestScopePlan.model_validate(
-            {
-                "request_coverage": [
-                    {"request_id": unit["id"], "evidence_ids": ids}
-                    for unit in data["question_contract"]["request_units"]
-                    if unit.get("kind") != "context"
-                ]
-            }
-        )
-    if schema is QueryRoutingOutput:
-        return QueryRoutingOutput(
-            strategy="simple_retrieval", reason="単純な手順の質問", queries=[]
-        )
-    if schema is CragRetrievalGradeOutput:
-        candidates = json.loads(
-            prompt.split("BEGIN_UNTRUSTED_CRAG_CANDIDATES\n", 1)[1].split(
-                "END_UNTRUSTED_CRAG_CANDIDATES", 1
-            )[0]
-        )
-        body = "受注番号を入力し、登録ボタンを押します。"
-        candidate = next(row for row in candidates if body in row["text"])
-        source_id = candidate["chunk_uid"]
-        evidence = [{"source_id": source_id, "quote": body}]
-        return CragRetrievalGradeOutput(
-            reason="登録操作の直接原文がある",
-            sufficient=True,
-            confidence=0.9,
-            rewritten_query="",
-            candidate_verdicts=[
-                dict(chunk_uid=source_id, relevant=True, reason="登録操作を説明する")
-            ],
-            aspect_checks=[
-                dict(
-                    aspect=aspect,
-                    status="supported",
-                    source_ids=[source_id],
-                    evidence=evidence,
-                    reason="候補原文を確認",
-                )
-                for aspect in ["business_object", "requested_result", "applicability", "procedure"]
-            ],
-            answerable_parts=[
-                dict(aspect="procedure", kind="operation", claim=body, evidence=evidence)
-            ],
-        )
     if issubclass(
         schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
     ):
@@ -554,23 +502,17 @@ def test_search_answer_profile_ignores_global_answer_options() -> None:
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
         query=KnowledgeBaseQueryConfig(
-            query_strategy="hyde",
-            answer_flow="standard_rag",
             neighbor_child_count=0,
             rerank_enabled=False,
         ),
     )
 
     base = Settings(
-        rag_query_strategy="rag_fusion",
-        rag_answer_flow="crag",
         rag_neighbor_child_count=3,
         rag_rerank_enabled=True,
     )
     settings, _ = resolve_search_answer_profile_settings(base, config)
 
-    assert settings.rag_query_strategy == "rag_fusion"
-    assert settings.rag_answer_flow == "crag"
     assert settings.rag_neighbor_child_count == 3
     assert settings.rag_rerank_enabled is True
 
@@ -578,16 +520,13 @@ def test_search_answer_profile_ignores_global_answer_options() -> None:
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
-        # 全体の既定は単純検索と標準 RAG(#2747)。
-        (Settings(), ("simple_retrieval", "standard_rag", 3, True)),
+        (Settings(), (3, True)),
         (
             Settings(
-                rag_query_strategy="rag_fusion",
-                rag_answer_flow="standard_rag",
                 rag_neighbor_child_count=7,
                 rag_rerank_enabled=False,
             ),
-            ("rag_fusion", "standard_rag", 7, False),
+            (7, False),
         ),
     ],
 )
@@ -613,8 +552,6 @@ async def test_answer_engine_passes_answer_options(
         await engine.run(SearchRequest(query="受注の登録方法は？"))
 
     assert (
-        captured["query_strategy"],
-        captured["answer_flow"],
         captured["chunk_neighbor_count"],
         captured["rerank_enabled"],
     ) == expected
@@ -665,8 +602,6 @@ async def test_answer_engine_standard_flow_without_rerank_answers(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
         Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
         ),
         oracle=FakeOracle(),  # type: ignore[arg-type]
@@ -742,8 +677,6 @@ async def test_rerank_enabled_calls_backend_rerank(
     engine = AnswerEngine(
         Settings(
             oci_compartment_id="ocid1.compartment.oc1..example",
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
         ),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=genai,  # type: ignore[arg-type]
@@ -783,8 +716,6 @@ async def test_rerank_score_and_rank_reach_citations(
     engine = AnswerEngine(
         Settings(
             oci_compartment_id="ocid1.compartment.oc1..example",
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
         ),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=_ScoredGenAi(),  # type: ignore[arg-type]
@@ -829,7 +760,7 @@ async def test_rerank_skip_is_recorded_with_reason(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
-        Settings(rag_query_strategy="simple_retrieval", rag_answer_flow="standard_rag", **settings),
+        Settings(**settings),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=NoRerankGenAi(),  # type: ignore[arg-type]
     )
@@ -1559,8 +1490,6 @@ async def _answer_two_documents(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
         Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
         ),
         oracle=oracle,  # type: ignore[arg-type]
@@ -2023,8 +1952,6 @@ async def _answer_with_screens(
     answering._SCREEN_LINK_CACHE.clear()
     engine = AnswerEngine(
         Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
             rag_screen_linking_enabled=enabled,
         ),
@@ -2170,50 +2097,14 @@ def test_build_engine_settings_passes_screen_linking(tmp_path: Any) -> None:
 
 
 def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> None:
-    """用途ごとの推論の量・CRAG の評価の省略・検索文の上限を rag_engine へ渡す(#1499)。"""
+    """回答文の生成の推論の量を rag_engine に渡す(#1499)。"""
     from app.rag.answer_engine import build_engine_settings
 
-    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    assert build_engine_settings(Settings(), output_dir=tmp_path).generation_reasoning_effort == ""
     changed = build_engine_settings(
-        Settings(
-            rag_strategy_reasoning_effort="low",
-            rag_judge_reasoning_effort="model",
-            rag_generation_reasoning_effort="none",
-            rag_crag_skip_on_strong_signals=True,
-            rag_crag_skip_min_rerank_score=0.65,
-            rag_query_expansion_max_queries=3,
-        ),
-        output_dir=tmp_path,
+        Settings(rag_generation_reasoning_effort="none"), output_dir=tmp_path
     )
-
-    # 既定: 戦略はモデルの登録値(空)、根拠の評価は medium(#1550)、生成はモデルの登録値。
-    assert (
-        default.strategy_reasoning_effort,
-        default.judge_reasoning_effort,
-        default.generation_reasoning_effort,
-    ) == ("", "medium", "")
-    assert default.crag_skip_on_strong_signals is False
-    assert default.query_expansion_max_queries == 5
-    # model はモデルの登録値のまま(空)、none は送らない。
-    assert (
-        changed.strategy_reasoning_effort,
-        changed.judge_reasoning_effort,
-        changed.generation_reasoning_effort,
-    ) == ("low", "", "none")
-    assert changed.crag_skip_on_strong_signals is True
-    assert changed.crag_skip_min_rerank_score == 0.65
-    assert changed.query_expansion_max_queries == 3
-
-
-def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None:
-    """CRAG の評価の候補の短い ID(#1864。既定 ON)を rag_engine に渡す。"""
-    from app.rag.answer_engine import build_engine_settings
-
-    assert Settings().rag_crag_short_candidate_ids is True
-    default = build_engine_settings(Settings(), output_dir=tmp_path)
-    off = build_engine_settings(Settings(rag_crag_short_candidate_ids=False), output_dir=tmp_path)
-    assert default.crag_short_candidate_ids is True
-    assert off.crag_short_candidate_ids is False
+    assert changed.generation_reasoning_effort == "none"
 
 
 def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None:
@@ -2243,44 +2134,6 @@ def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None
 
 def _engine_effort(value: str) -> str:
     return "" if value == "model" else value
-
-
-async def test_prefetch_warms_search_cache_without_changing_results() -> None:
-    """元の質問の先読み(#1499)は検索の cache に入れるだけで、続く検索の結果を変えない。"""
-    from app.rag.answer_engine import _SearchState
-
-    question = "受注入力画面の使い方は？"
-    queries = [question, "受注の登録手順"]
-
-    async def search(prefetch: bool) -> tuple[Any, QueryRecordingOracle, list[str]]:
-        oracle = QueryRecordingOracle()
-        engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
-        state = _SearchState()
-        request = SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"})
-        if prefetch:
-            await engine._prefetch_query_hits(
-                request,
-                state,
-                query=question,
-                candidate_limit=24,
-            )
-        prefetched = list(oracle.queries)
-        result = await engine._search(
-            request,
-            state,
-            retrieval_queries=queries,
-            candidate_limit=24,
-        )
-        return result, oracle, prefetched
-
-    plain, plain_oracle, _ = await search(False)
-    warmed, warmed_oracle, prefetched = await search(True)
-
-    assert prefetched == [question]
-    # 続く検索は元の質問を読み直さず、残りの検索文だけを読む。
-    assert warmed_oracle.queries == plain_oracle.queries == queries
-    assert warmed_oracle.filters == plain_oracle.filters
-    assert warmed == plain
 
 
 def test_search_answer_profile_ignores_legacy_screen_linking() -> None:
@@ -2458,7 +2311,6 @@ async def _run_with_progress(
     monkeypatch: pytest.MonkeyPatch,
     request: SearchRequest,
     *,
-    answer_flow: str,
     history: list[Any] | None = None,
     complete_evidence: bool = True,
 ) -> tuple[Any, list[tuple[str, str]], list[str], SavingOracle]:
@@ -2476,7 +2328,7 @@ async def _run_with_progress(
     monkeypatch.setattr(engine_oci, "parse_text_response", record_llm)
     oracle = SavingOracle()
     pipeline = pipeline_module.RagPipeline(
-        settings=Settings(rag_query_strategy="auto_routing", rag_answer_flow=answer_flow),
+        settings=Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         complete_evidence=complete_evidence,
@@ -2490,9 +2342,8 @@ async def _run_with_progress(
     return response, observed, schemas, oracle
 
 
-@pytest.mark.parametrize("answer_flow", ["standard_rag", "crag"])
 async def test_search_without_answer_runs_the_chat_evidence_flow(
-    monkeypatch: pytest.MonkeyPatch, answer_flow: str
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RAG 検索(回答オフ)はチャットと同じ工程・入れ子・LLM で根拠を集める(#3506)。
 
@@ -2501,12 +2352,11 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
     根拠の並びが同じことを確かめる。
     """
     chat, chat_steps, chat_llm, _ = await _run_with_progress(
-        monkeypatch, SearchRequest(query="受注の登録方法は？"), answer_flow=answer_flow, history=[]
+        monkeypatch, SearchRequest(query="受注の登録方法は？"), history=[]
     )
     search, search_steps, search_llm, oracle = await _run_with_progress(
         monkeypatch,
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
-        answer_flow=answer_flow,
     )
 
     # チャットの工程を、回答に添付する画像（回答の生成の最初の工程）の手前で切る。
@@ -2521,7 +2371,6 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
         ("evidence", "success"),
     ]
     parallel = {
-        "answer_step:質問の言い換え・分解",
         "answer_step:用語・同義語による検索文の追加",
     }
     assert [e for e in search_steps if e[0] not in parallel] == [
@@ -2534,12 +2383,9 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
         "answer_step:文書検索（1回目）",
         "started",
     ) in search_steps
-    # 根拠を集める LLM（質問拡張・CRAG の根拠確認）は同じ。回答の生成と監査だけがチャットに
-    # 足される。
+    # 根拠を集める LLM は同じ。回答の生成と監査だけがチャットに足される。
     assert search_llm == chat_llm[: len(search_llm)]
     assert not {"GroundedDraft", "GroundedDraftWire"}.intersection(search_llm)
-    if answer_flow == "crag":
-        assert "CragRetrievalGradeOutput" in search_llm
     # 根拠も同じ。回答は引用した根拠を先頭に出すので、それ以外の根拠の並びを比べる。
     assert search.answer == ""
     assert {c.chunk_id for c in search.citations} == {c.chunk_id for c in chat.citations}
@@ -2564,13 +2410,12 @@ async def test_evidence_retrieval_for_agent_stops_after_document_search(
     response, steps, schemas, oracle = await _run_with_progress(
         monkeypatch,
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
-        answer_flow="crag",
         complete_evidence=False,
     )
 
     assert response.answer == ""
     assert response.citations
-    assert schemas == ["QueryRoutingOutput"]
+    assert schemas == []
     started = [stage for stage, outcome in steps if outcome == "started"]
     assert started[0] == "evidence"
     flow = started.index("answer_step:根拠検索フロー")
@@ -3066,12 +2911,6 @@ async def _answer_with_coverage(
     import rag_engine.adapters.oci as engine_oci
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        if issubclass(schema, QueryRoutingOutput) and schema is not QueryRoutingOutput:
-            return schema(
-                strategy="hyde", reason="合成の選択理由", queries=["請求書の再発行方法は？"]
-            )
-        if schema is QueryExpansionOutput:
-            return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
         if (
             issubclass(
@@ -3104,8 +2943,6 @@ async def _answer_with_coverage(
     monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
     engine = AnswerEngine(
         Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
             **settings,
         ),

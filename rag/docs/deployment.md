@@ -1353,12 +1353,10 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 1. 先に #1438 の手順（下の節）でシステムテーブルを更新する。対応の表が無い環境では、章節を読めずに広げない（回答は
    続ける。backend のログに `section outline load failed`）。
 2. backend を再起動する。プロファイルを使わない検索と、拡張を選んでいない（`query.section_expansion_enabled` が
-   未指定 / `null`）プロファイルの検索は、根拠が足りないと判定したときに章節を広げる。1 段ごとに AI の呼び出し
-   （CRAG の判定）が 1 回増え、回答の時間が延びる。上限は段 4・根拠の入力はモデルの入力の上限の 50%・回答の開始から
+   未指定 / `null`）プロファイルの検索は、読む範囲まで章節を広げる。上限は段 4・根拠の入力はモデルの入力の上限の 50%・回答の開始から
    600 秒（`RAG_ANSWER_TIMEOUT_SECONDS` が短ければその上限）で、プロファイルごとに変えられる。
 3. 拡張を使わないプロファイルは「検索・回答設定」で「当たった根拠の章節から親の章節へ広げる」を off にして保存する
    （`false` で保存される）。環境変数は持たない（`backend/.env` に書いても読まない）。
-4. 回答の生成方式が標準 RAG（`RAG_ANSWER_FLOW=standard_rag`）のときは効かない。
 
 ## 既存環境の更新手順（#2002 取込の AI の呼び出しの上限つきの並行と、エラーの種類ごとの扱い）
 
@@ -2159,3 +2157,10 @@ WHERE d.extraction IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM rag_document_extractions e WHERE e.document_id = d.document_id);
 SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
 ```
+
+### 回答の流れを 1 本にする（#4749）
+
+CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選択（`query.route` / `query.expand`）、小問の事前計画（`answer.scope`）を削除し、回答の流れを 1 本（検索して生成）にした。未リリースのため互換を持たない。
+
+- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_ANSWER_FLOW`・`RAG_QUERY_STRATEGY`・`RAG_QUERY_EXPANSION_MAX_QUERIES`・`RAG_CRAG_*`・`RAG_SECTION_SKIP_REGRADE_AT_SCOPE`・`RAG_STRATEGY_REASONING_EFFORT`・`RAG_JUDGE_REASONING_EFFORT`。保存された検索・回答プロファイルの `query_strategy` / `answer_flow` の値は読み捨てられ、次の保存で消える。
+- データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれない。

@@ -26,7 +26,6 @@ def guide_settings(source: str, state: str) -> Settings:
         rag_support_guide={
             "known_conditions": [{"label": LABEL, "value": VALUE, "source": source, "state": state}]
         },
-        rag_query_strategy="simple_retrieval",
         rag_section_expansion_enabled=False,
     )
 

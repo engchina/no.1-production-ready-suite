@@ -6,9 +6,8 @@ import pytest
 
 from rag_engine.generation import section_expansion as sections
 from tests.test_section_expansion import (
-    Grader,
+    ENUM_QUESTION,
     SectionStub,
-    _attempt,
     _child_ids,
     _expand,
     _members,
@@ -19,7 +18,7 @@ from tests.test_section_expansion import (
 
 def test_every_retrieved_owner_is_read_instead_of_only_the_first_two():
     stub = SectionStub()
-    result = _expand(_seed_context("c31a", "c32a", "c4a"), _settings(), Grader(needs=set()), stub)
+    result = _expand(_seed_context("c31a", "c32a", "c4a"), _settings(), stub)
     assert stub.read_calls == ["s3-1", "s3-2", "s4"]
     assert result.trace["minimum_scope_complete"]
     assert set(_members("s4")) <= set(_child_ids(result.context))
@@ -36,9 +35,9 @@ def test_partial_reads_cannot_be_overruled_by_an_optimistic_grader(mode):
         return sections.SectionRead(original(**kwargs)[:1] if mode == "partial" else [], complete=False)
 
     stub.chunks = chunks
-    result = _expand(_seed_context("c31a"), _settings(), Grader(needs=set()), stub, last=_attempt(sufficient=True))
+    result = _expand(_seed_context("c31a"), _settings(), stub)
     assert not result.trace["minimum_scope_complete"]
-    assert result.stop_reason != sections.STOP_SUFFICIENT
+    assert result.stop_reason != sections.STOP_SCOPE_READ
     assert result.unread
 
 
@@ -46,9 +45,9 @@ def test_minimum_scope_requires_every_owner_even_if_the_other_one_was_read():
     stub = SectionStub()
     original = stub.chunks
     stub.chunks = lambda **kw: sections.SectionRead([], complete=False) if kw["section_id"] == "s4" else original(**kw)
-    result = _expand(_seed_context("c31a", "c4a"), _settings(), Grader(needs=set()), stub)
+    result = _expand(_seed_context("c31a", "c4a"), _settings(), stub)
     assert not result.trace["minimum_scope_complete"]
-    assert result.stop_reason != sections.STOP_SUFFICIENT
+    assert result.stop_reason != sections.STOP_SCOPE_READ
     assert "c31b" in _child_ids(result.context)
 
 
@@ -58,23 +57,20 @@ def test_standard_completion_has_no_sufficiency_grader_and_stops_at_owner():
         "操作方法",
         _seed_context("c31a"),
         _settings(),
-        last_attempt=None,
-        grade=None,
         section_outline=stub.outline,
         section_chunks=stub.chunks,
     )
     assert stub.read_calls == ["s3-1"]
     assert result.stop_reason == sections.STOP_SCOPE_READ
-    assert result.trace["judgement"] == "not_requested"
     assert result.trace["minimum_scope_complete"]
 
 
 def test_shared_reader_completes_new_owners_without_rereading_old_ones():
     stub = SectionStub()
     reader = sections.SectionReader(stub.chunks, set())
-    first = _expand(_seed_context("c31a"), _settings(), None, stub, reader=reader)
+    first = _expand(_seed_context("c31a"), _settings(), stub, reader=reader)
     context = sections._merge(first.context, _seed_context("c4a").evidence_tree)
-    second = _expand(context, _settings(), None, stub, reader=reader)
+    second = _expand(context, _settings(), stub, reader=reader)
     assert stub.read_calls == ["s3-1", "s4"]
     assert second.trace["minimum_scope_complete"]
     ids = [record.chunk_uid for record in second.context.records]
@@ -90,42 +86,11 @@ def test_same_uid_with_only_an_excerpt_is_replaced_by_full_original():
         records=[context.records[0], short],
         evidence_tree=(context.evidence_tree[0], replace(context.evidence_tree[1], record=short)),
     )
-    result = _expand(context, _settings(), None, stub)
+    result = _expand(context, _settings(), stub)
     assert result.trace["minimum_scope_complete"]
     records = {record.chunk_uid: record for record in result.context.records}
     assert len(records) == 2
     assert len(records[short.chunk_uid].text) > len(short.text)
-
-
-@pytest.mark.parametrize("max_levels,expected", [(1, "max_levels"), (2, "max_levels"), (3, "sufficient")])
-def test_owner_parent_and_grandparent_are_distinct_levels(max_levels, expected):
-    stub = SectionStub()
-    result = _expand(
-        _seed_context("c31a"), _settings(section_expansion_max_levels=max_levels), Grader(needs=set(_members("document"))), stub
-    )
-    assert result.levels == max_levels
-    assert result.stop_reason == expected
-    assert stub.read_calls[:max_levels] == ["s3-1", "s3", "document"][:max_levels]
-
-
-def test_comparative_benchmark_detects_false_sufficiency_and_budget_gaps():
-    from tests.section_expansion_benchmark import benchmark
-
-    result = benchmark()
-    assert len(result["rows"]) == 25
-    summary = result["summary"]
-    assert summary["none"]["false_sufficient"] > summary["adaptive"]["false_sufficient"] == 0
-    assert summary["owner"]["evidence_recall"] > summary["none"]["evidence_recall"]
-    assert summary["owner"]["judge_calls"] == 0
-    assert summary["adaptive"]["step_fulfillment"] > summary["none"]["step_fulfillment"]
-    assert any(row["case"] == "budget" and row["unread"] for row in result["rows"])
-
-
-def test_full_context_over_input_limit_is_not_accepted_as_complete():
-    result = _expand(_seed_context("c31a", "c31b"), _settings(answer_max_input_tokens=400), Grader(needs=set()), SectionStub())
-    assert not result.trace["minimum_scope_complete"]
-    assert result.stop_reason != sections.STOP_SUFFICIENT
-    assert result.unread
 
 
 def test_generation_budget_does_not_exceed_limit_when_initial_context_is_too_big():
@@ -157,17 +122,17 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
     stub = SectionStub()
     reader = sections.SectionReader(stub.chunks, set())
     settings = _settings(answer_max_input_tokens=2000)
-    first = _expand(_seed_context("c31a"), settings, None, stub, reader=reader, started_at=0.0, clock=lambda: 0.0)
+    first = _expand(_seed_context("c31a"), settings, stub, reader=reader, started_at=0.0, clock=lambda: 0.0, question=ENUM_QUESTION)
     context = sections._merge(first.context, _seed_context("c4a").evidence_tree)
     second = _expand(
         context,
         settings,
-        None,
         stub,
         reader=reader,
         started_at=0.0,
         clock=lambda: 500.0 if exhausted == "time" else 0.0,
         deadline_remaining=lambda: 60.0 if exhausted == "time" else None,
+        question=ENUM_QUESTION,
     )
     assert second.unread
     assert not second.trace["minimum_scope_complete"]
@@ -182,7 +147,7 @@ def test_unreadable_child_after_a_budget_hit_is_not_marked_in_context():
     original = stub.chunks
     stub.chunks = lambda **kw: sections.SectionRead([], complete=False) if kw["section_id"] == "s3-3" else original(**kw)
     result = _expand(
-        _seed_context("c31a"), _settings(answer_max_input_tokens=1600), Grader(needs=None), stub, large_sections=lambda request: None
+        _seed_context("c31a"), _settings(answer_max_input_tokens=1600), stub, large_sections=lambda request: None, question=ENUM_QUESTION
     )
     assert "s3-3" in {item.section_id for item in result.unread}
     assert "s3-3" not in {item["section_id"] for item in result.trace["completed_sections"]}

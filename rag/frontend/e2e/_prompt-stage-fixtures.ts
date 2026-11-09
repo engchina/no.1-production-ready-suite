@@ -1,7 +1,7 @@
 export type StageFixture = { id: string; phase: string; prompts: { id: string; content: string }[] };
 
 export const DEFAULT_STAGES: StageFixture[] = [
-  { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
+  { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
   { id: "generation", phase: "generation", prompts: [{ id: "batchReading", content: "## Step 1: 選択した全文を分けて読む\n原文引用付きの回答候補を返す。" }, { id: "system", content: "生成の system" }, { id: "plannedSystem", content: "## Step 1: 入力の根拠計画に沿って回答する\n計画を作り直さず原文から回答する。" }, { id: "assumptionSystem", content: "## 回答の前提\n- 未確定の条件を明示する。" }] },
 ];
 
@@ -23,11 +23,8 @@ export const FLOW_STAGES: StageFixture[] = [
   { id: "support_guide_conditions", phase: "question", prompts: [{ id: "system", content: "## Step 1: 質問と条件を読む\n合成の条件。\n\n## Step 2: 原文から値を抜き出す\n合成の原文。\n\n## Step 3: 条件の状態を判定する\nknown / unknown / conflicting。\n\n## Step 4: 結果を返す\nJSON のみ。" }] },
   { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
   { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
-  { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
-  { id: "expansion", phase: "question", prompts: [{ id: "system", content: "検索文の指示" }] },
   { id: "screen_linking", phase: "retrieval", prompts: [{ id: "system", content: "画面の system" }] },
   { id: "article_catalog", phase: "retrieval", prompts: [{ id: "system", content: "目録の指示" }] },
-  { id: "crag", phase: "grounding", prompts: [{ id: "system", content: "判定の system" }] },
   { id: "section_extraction", phase: "grounding", prompts: [{ id: "system", content: "抽出の指示" }] },
   { id: "faq_answer", phase: "generation", prompts: [{ id: "system", content: "FAQ の指示" }] },
   { id: "generation", phase: "generation", prompts: [{ id: "batchReading", content: "## Step 1: 選択した全文を分けて読む\n原文引用付きの回答候補を返す。" }, { id: "system", content: "生成の system" }, { id: "plannedSystem", content: "## Step 1: 入力の根拠計画に沿って回答する\n計画を作り直さず原文から回答する。" }, { id: "assumptionSystem", content: "## 回答の前提\n- 未確定の条件を明示する。" }] },

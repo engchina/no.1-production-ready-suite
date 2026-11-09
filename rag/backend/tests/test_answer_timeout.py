@@ -61,9 +61,6 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
         "（時間切れになった工程: 検索文から根拠の候補を集める（1 回目））"
         in answer_timeout_message("answer_step:文書検索（1回目）", 30)
     )
-    assert "（時間切れになった工程: 質問の言い換え・分解）" in answer_timeout_message(
-        "answer_step:質問拡張戦略", 30
-    )
     # 知らない工程名はそのまま出す。
     assert "（時間切れになった工程: 新しい工程（2回目））" in answer_timeout_message(
         "answer_step:新しい工程（2回目）", 30
@@ -166,12 +163,12 @@ async def test_search_reports_started_stages_as_mcp_progress(
     reported: list[str] = []
     monkeypatch.setattr(search_route, "report_tool_progress", reported.append)
     await search_route._report_tool_progress(_progress("answer", "started"))
-    await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "started"))
-    await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "success"))
+    await search_route._report_tool_progress(_progress("answer_step:章節の拡張", "started"))
+    await search_route._report_tool_progress(_progress("answer_step:章節の拡張", "success"))
     await search_route._report_tool_progress(_progress("answer_guardrail", "started"))
     # 終わった工程は知らせない。名前は時間切れの文言と同じ（answer_stage_label）。
     assert reported == [
         "質問の条件を整理して回答を作る",
-        "要求に答える根拠があるか判定する（1 回目）",
+        "関係する章節の原文を根拠に加える",
         "回答に安全上の問題がないか検査する",
     ]

@@ -10,8 +10,6 @@ from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
     QUESTION_DISPLAY_METADATA_SEPARATOR,
     QUESTION_PLAN_SEPARATOR,
-    SIMPLE_RETRIEVAL_LABEL,
-    STANDARD_ANSWER_FLOW_LABEL,
     AnswerContext,
     AnswerRecord,
     answer_question_result,
@@ -75,8 +73,6 @@ class QuestionPlanningTests(unittest.TestCase):
                 "abcdef",
                 ["docling"],
                 settings,
-                query_strategy=SIMPLE_RETRIEVAL_LABEL,
-                answer_flow=STANDARD_ANSWER_FLOW_LABEL,
             )
 
         prompt = parse.call_args.args[1]

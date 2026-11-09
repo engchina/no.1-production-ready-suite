@@ -14,7 +14,6 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
-from rag_engine.models.llm import CragRetrievalGradeOutput
 
 import app.rag.answer_engine as answer_engine
 from app.clients.oracle import _oracle_retrieval_where
@@ -119,32 +118,9 @@ def plans(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[PlanRecorder, PlanR
     yield entity, graph
 
 
-def _crag_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    """CRAG の評価で「不足」とし、補正検索を 1 回させる。"""
-    if schema is CragRetrievalGradeOutput:
-        return CragRetrievalGradeOutput(
-            reason="後続の手順が不足",
-            sufficient=False,
-            confidence=0.2,
-            rewritten_query="登録の手順",
-            # 補正検索に渡す認可の範囲を試すため、意味評価の代役が明確な不足を返す。
-            # 空の観点は未検証であり、補正検索を要求する入力には使わない。
-            aspect_checks=[
-                {
-                    "aspect": "procedure",
-                    "status": "missing",
-                    "source_ids": [],
-                    "reason": "登録後の確認手順の説明が取得できていない。",
-                }
-            ],
-        )
-    return _fake_llm(system, prompt, settings, schema, **options)
-
-
 def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
     return AnswerEngine(
         Settings(
-            rag_answer_flow="crag",
             rag_reference_expansion_enabled=True,
             rag_entity_expansion_enabled=True,
             rag_graph_expansion_enabled=True,
@@ -194,7 +170,7 @@ async def test_user_conditions_as_of_and_access_stay_in_every_search(
     """すべての検索と、実体・関係情報の拡張に、利用者の条件・基準日・認可の範囲が残る。"""
     import rag_engine.adapters.oci as engine_oci
 
-    monkeypatch.setattr(engine_oci, "parse_text_response", _crag_llm)
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     monkeypatch.setattr(answer_engine, "_today", lambda: date(2026, 4, 1))
     oracle = ScopeRecordingOracle()
     filters = {**user_filters, "extraction_fields": _manual_fields()}
@@ -211,9 +187,8 @@ async def test_user_conditions_as_of_and_access_stay_in_every_search(
         (MANUAL_FIELD.name, MANUAL_FIELD.value),
         (AUTO_FIELD.name, AUTO_FIELD.value),
     ]
-    # どの検索も同じ条件で検索する(CRAG の補正検索を含む)。
+    # どの検索も同じ条件で検索する。
     assert all(item == first for item in oracle.filters)
-    assert "登録の手順" in oracle.queries
     # どの検索にも、利用者の条件・基準日が残る。
     for item in oracle.filters:
         assert {key: item.get(key) for key in expected if key != "extraction_fields"} == {
