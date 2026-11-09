@@ -69,7 +69,7 @@ from rag_engine.generation.applications import audit_view as application_audit_v
 from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
-from rag_engine.generation.citation_content import citation_content_unusable
+from rag_engine.generation.citation_content import citation_content_unusable, table_html_as_rows
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_scope_model
 from rag_engine.generation.citation_wire import (
@@ -83,6 +83,7 @@ from rag_engine.generation.citation_wire import (
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.document_inputs import application_documents, document_key, order_document_spans
+from rag_engine.generation.evidence_cuts import _html_tables
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.operation_audit import button_names_absent
@@ -3354,7 +3355,7 @@ def render_answer(
             item = entry.item
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
             labels = answer_labels()
-            text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else item.text
+            text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else table_html_as_rows(item.text)
             if not entry.quote_only and item.applies == "conditional" and item.condition:
                 text = labels.condition(_condition_phrase(item.condition)) + text
             line = (f"{number}. " if numbered else labels.item_bullet) + text
@@ -3417,7 +3418,7 @@ def render_answer(
     removed = [
         item
         for entry in checked
-        if entry.removed and not entry.added and (item := passage_marks.removed_passage(entry.item.text, entry.marks))
+        if entry.removed and not entry.added and (item := passage_marks.removed_passage(table_html_as_rows(entry.item.text), entry.marks))
     ]
     removed = list({item["text"]: item for item in removed}.values())
     merged = passage_marks.merge_marks(marks)
@@ -3581,9 +3582,9 @@ _CITE_LIST = re.compile(r"^\s*(?:\[\s*\d+(?:\s*[,、]\s*\d+)*\s*\]|\d+(?:\s*[,�
 
 
 # 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824・#3847）。
-CITATION_UNIT_CONTRACT = "explicit_units_v5"
+CITATION_UNIT_CONTRACT = "explicit_units_v6"
 # ``citation_units`` で単位を作る版（v2 は ``_legacy_citation_units`` の単位に番号を付けた版）。
-_VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", CITATION_UNIT_CONTRACT})
+_VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", "explicit_units_v5", CITATION_UNIT_CONTRACT})
 _EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", *_VERSIONED_UNIT_CONTRACTS})
 # explicit_units_v5 で短い行のまとめを残す、OCR・表の断片が続くブロックの形: 空行を除く物理行の数の下限と、
 # 行の字数（前後の空白を除く）の中央値の上限。これに当たるブロックは番号で入力を膨らませない。
@@ -3618,15 +3619,24 @@ def citation_units(text: str, *, contract_version: str = CITATION_UNIT_CONTRACT,
     引用単位の番号と読み違える。``explicit_units_v4`` 以降は手順の番号で始まる行を前の行にまとめない（#3824）。
     ``explicit_units_v5`` は、空でない物理行ごとに単位を分ける（#3847）。ただし ``image_text``（画像からの生成説明・
     OCR）と、短い断片の行が多く続く本文（``_fragment_lines``）は v4 と同じく短い行をまとめる。
-    ``explicit_units_v3`` はどちらもしない。
+    ``explicit_units_v3`` はどちらもしない。``explicit_units_v6`` は HTML の表の ``<tr>`` を 1 単位にし、タグの途中で切らない
+    （#4717。読めない表と表の外の本文は v5 と同じ）。
     """
     from rag_parser_core.language.markers import marker_patterns
 
     if contract_version not in _VERSIONED_UNIT_CONTRACTS:
         raise ValueError(f"citation_units は {sorted(_VERSIONED_UNIT_CONTRACTS)} の版だけを扱う: {contract_version}")
     step_lines = contract_version != "explicit_units_v3"
-    physical_lines = contract_version == CITATION_UNIT_CONTRACT and not image_text and not _fragment_lines(text)
-    units: list[tuple[int, int]] = []
+    if contract_version == CITATION_UNIT_CONTRACT and (tables := _html_tables(text)):
+        units: list[tuple[int, int]] = []
+        position = 0
+        for start, end, rows in [*((table.start, table.end, table.rows) for table in tables), (len(text), len(text), ())]:
+            units.extend((position + a, position + b) for a, b in citation_units(text[position:start], image_text=image_text))
+            units.extend(rows)
+            position = end
+        return units
+    physical_lines = contract_version in {"explicit_units_v5", CITATION_UNIT_CONTRACT} and not image_text and not _fragment_lines(text)
+    units = []
     for start, end in _legacy_citation_units(text, step_lines=step_lines, physical_lines=physical_lines):
         body = text[start:end]
         # 物理行ごとの単位では、短い見出しと短い行はそれぞれ番号を持つ。見出しを結ぶのは、短い行のまとめに入らない
