@@ -34,6 +34,7 @@ from app.config import (
     is_roadmap_parser_adapter_backend,
     roadmap_parser_adapter_backend_message,
 )
+from app.rag.kb_adapter_config import _EXTERNAL_PARSER_BACKEND_FLAGS
 from app.rag.mineru_license import (
     MINERU_BACKEND,
     MINERU_LICENSE_REQUIRED_MESSAGE,
@@ -59,7 +60,9 @@ FILE_TYPE_EXTENSIONS: dict[FileType, tuple[str, ...]] = {
     "powerpoint": (".pptx", ".ppt"),
     "excel": (".xlsx", ".xls"),
     "csv": (".csv",),
-    "text": (".txt", ".md", ".markdown", ".json"),
+    "text": (".txt",),
+    "markdown": (".md", ".markdown"),
+    "json": (".json",),
     "html": (".html", ".htm"),
     "image": (".jpg", ".jpeg", ".png"),
 }
@@ -70,6 +73,8 @@ _FILE_TYPE_LABELS: dict[FileType, str] = {
     "excel": "Excel",
     "csv": "CSV",
     "text": "テキスト",
+    "markdown": "Markdown",
+    "json": "JSON",
     "html": "HTML",
     "image": "画像",
 }
@@ -90,8 +95,8 @@ _FILE_TYPE_BY_CONTENT_TYPE: dict[str, FileType] = {
     "text/csv": "csv",
     "application/csv": "csv",
     "text/plain": "text",
-    "text/markdown": "text",
-    "application/json": "text",
+    "text/markdown": "markdown",
+    "application/json": "json",
     "text/html": "html",
     "image/jpeg": "image",
     "image/jpg": "image",
@@ -112,6 +117,59 @@ _PREPROCESS_LABELS: dict[PreprocessProfile, str] = {
     "word_to_jsonl": "Word→JSONL",
 }
 CHUNKING_STRATEGY_OPTIONS: tuple[ChunkingStrategy, ...] = get_args(ChunkingStrategy)
+# 保存値の無い行に使う組み込みの既定（行の順）。この環境で使えない行は全体の既定に従う。
+BUILTIN_FILE_TYPE_DEFAULTS: dict[FileType, FileTypeDefaultEntry] = {
+    "pdf": FileTypeDefaultEntry(
+        preprocess_profile="passthrough",
+        parser_adapter_backend="docling",
+        chunking_strategy="small_to_big",
+    ),
+    "word": FileTypeDefaultEntry(
+        preprocess_profile="office_to_pdf",
+        parser_adapter_backend="docling",
+        chunking_strategy="small_to_big",
+    ),
+    "powerpoint": FileTypeDefaultEntry(
+        preprocess_profile="office_to_pdf",
+        parser_adapter_backend="docling",
+        chunking_strategy="page_level",
+    ),
+    "excel": FileTypeDefaultEntry(
+        preprocess_profile="excel_to_jsonl",
+        parser_adapter_backend="structured_records_jsonl",
+        chunking_strategy="fixed_delimiter",
+    ),
+    "csv": FileTypeDefaultEntry(
+        preprocess_profile="csv_to_jsonl",
+        parser_adapter_backend="structured_records_jsonl",
+        chunking_strategy="fixed_delimiter",
+    ),
+    "text": FileTypeDefaultEntry(
+        preprocess_profile="passthrough",
+        parser_adapter_backend="unstructured",
+        chunking_strategy="small_to_big",
+    ),
+    "markdown": FileTypeDefaultEntry(
+        preprocess_profile="passthrough",
+        parser_adapter_backend="unstructured",
+        chunking_strategy="structure_aware",
+    ),
+    "json": FileTypeDefaultEntry(
+        preprocess_profile="passthrough",
+        parser_adapter_backend="unstructured",
+        chunking_strategy="small_to_big",
+    ),
+    "html": FileTypeDefaultEntry(
+        preprocess_profile="passthrough",
+        parser_adapter_backend="unstructured",
+        chunking_strategy="structure_aware",
+    ),
+    "image": FileTypeDefaultEntry(
+        preprocess_profile="passthrough",
+        parser_adapter_backend="unstructured",
+        chunking_strategy="page_level",
+    ),
+}
 
 
 def classify_file_type(file_name: str | None, content_type: str | None) -> FileType | None:
@@ -127,15 +185,53 @@ def file_type_defaults(settings: Settings) -> Mapping[str, FileTypeDefaultEntry]
     return getattr(settings, "_file_type_defaults", {})
 
 
-def file_type_default_overrides(settings: Settings, file_type: FileType) -> dict[str, object]:
-    """種類の行が決める処理の設定（``DocumentProcessingConfig`` のフィールド）。
+def _builtin_unavailable_reason(entry: FileTypeDefaultEntry, settings: Settings) -> str | None:
+    """組み込みの行がこの環境で使えない理由。使えるなら None。"""
+    preprocess = entry.preprocess_profile
+    if preprocess is not None:
+        available = {
+            status.name
+            for status in preprocess_runtime_settings(settings).profiles
+            if status.available
+        }
+        if preprocess not in available:
+            return (
+                f"ファイル準備「{_PREPROCESS_LABELS[preprocess]}」が無効"
+                "（RAG_PREPROCESS_ENABLED）のため、組み込みの既定を使わず全体の既定に従います。"
+            )
+    backend = entry.parser_adapter_backend
+    flag = _EXTERNAL_PARSER_BACKEND_FLAGS.get(backend) if backend is not None else None
+    if backend is not None and flag is not None and not getattr(settings, flag, False):
+        return (
+            f"解析エンジン「{parser_backend_label(backend)}」が無効（{flag.upper()}）のため、"
+            "組み込みの既定を使わず全体の既定に従います。"
+        )
+    return None
 
-    構造化レコードの JSONL を固定分割符で分ける行は、記録の境界を分割符にする（レシピの画面が
-    同じ組み合わせで入れるのと同じ。全体の分割符が別の値でも 1 記録 1 chunk になる）。
+
+def builtin_file_type_default(
+    settings: Settings, file_type: FileType
+) -> tuple[FileTypeDefaultEntry, str | None]:
+    """この環境で使う組み込みの行と、使えないときの理由。
+
+    一部の項目だけを残すと組み合わせが壊れる（例: 変換なしの Excel と構造化レコード JSONL）ため、
+    使えないときは行全体を全体の既定に従わせる。
+    """
+    entry = BUILTIN_FILE_TYPE_DEFAULTS[file_type]
+    reason = _builtin_unavailable_reason(entry, settings)
+    return (FileTypeDefaultEntry(), reason) if reason else (entry, None)
+
+
+def file_type_default_overrides(settings: Settings, file_type: FileType) -> dict[str, object]:
+    """形式の行が決める処理の設定（``DocumentProcessingConfig`` のフィールド）。
+
+    保存値があればその行、無ければ組み込みの既定。全項目が未設定の行は全体の既定に従う。
+    構造化レコードの行を固定分割符で分けるときは、記録の境界を分割符にする（全体の分割符が別の
+    値でも 1 記録 1 chunk になる）。
     """
     entry = file_type_defaults(settings).get(file_type)
     if entry is None:
-        return {}
+        entry = builtin_file_type_default(settings, file_type)[0]
     values: dict[str, object] = entry.model_dump(exclude_none=True)
     if (
         entry.preprocess_profile in STRUCTURED_RECORDS_PREPROCESS

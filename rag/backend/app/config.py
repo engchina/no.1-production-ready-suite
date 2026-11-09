@@ -372,7 +372,18 @@ def _without_profile_only_fields(
 
 # 形式別の既定（#4732）の種類。受け付ける形式（#4730）に合わせる。分類は
 # app.rag.file_type_defaults の 1 か所。
-FileType = Literal["pdf", "word", "powerpoint", "excel", "csv", "text", "html", "image"]
+FileType = Literal[
+    "pdf",
+    "word",
+    "powerpoint",
+    "excel",
+    "csv",
+    "text",
+    "markdown",
+    "json",
+    "html",
+    "image",
+]
 FILE_TYPES: tuple[FileType, ...] = get_args(FileType)
 
 
@@ -387,9 +398,6 @@ class FileTypeDefaultEntry(BaseModel):
     preprocess_profile: PreprocessProfile | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     chunking_strategy: ChunkingStrategy | None = None
-
-    def is_empty(self) -> bool:
-        return not self.model_dump(exclude_none=True)
 
 
 class _PersistedParserAdapterSettings(BaseModel):
@@ -3144,8 +3152,7 @@ def _load_file_type_defaults(settings: Settings, raw: Mapping[str, Any]) -> None
         if is_roadmap_parser_adapter_backend(entry.parser_adapter_backend):
             logger.warning("rag_file_type_defaults_roadmap_row", extra={"file_type": file_type})
             continue
-        if not entry.is_empty():
-            loaded[str(file_type)] = entry
+        loaded[str(file_type)] = entry
     settings._file_type_defaults = loaded
 
 
@@ -3154,7 +3161,6 @@ def _dump_file_type_defaults(settings: Settings) -> dict[str, Any]:
         "entries": {
             file_type: entry.model_dump(mode="json", exclude_none=True)
             for file_type, entry in settings._file_type_defaults.items()
-            if not entry.is_empty()
         }
     }
 

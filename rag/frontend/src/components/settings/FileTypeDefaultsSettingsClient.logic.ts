@@ -34,11 +34,34 @@ export function draftsEqual(left: FileTypeDraft, right: FileTypeDraft): boolean 
   );
 }
 
-export function updatePayload(draft: FileTypeDraft): FileTypeDefaultsUpdate {
+/** 組み込みの既定の値（「既定に戻す」で下書きに入る。保存までは確定しない）。 */
+export function draftFromBuiltin(settings: FileTypeDefaultsSettingsData): FileTypeDraft {
+  return Object.fromEntries(
+    settings.rows.map((row) => [row.file_type, entryOf(row.builtin)])
+  ) as FileTypeDraft;
+}
+
+function sameEntry(left: FileTypeDefaultEntry, right: FileTypeDefaultEntry): boolean {
+  return JSON.stringify(entryOf(left)) === JSON.stringify(entryOf(right));
+}
+
+/** 下書きの行が組み込みの既定と同じか（この環境で使えない行は「全体の既定に従う」と同じ）。 */
+export function followsBuiltin(row: FileTypeDefaultRow, entry: FileTypeDefaultEntry): boolean {
+  return sameEntry(row.builtin, entry);
+}
+
+/**
+ * 保存する行。組み込みの既定と同じ行は送らない（保存値が無ければ組み込みの既定を使うため）。
+ * 「全体の既定に従う」を選んだ行は、すべて null の行として保存する。
+ */
+export function updatePayload(
+  draft: FileTypeDraft,
+  rows: readonly FileTypeDefaultRow[]
+): FileTypeDefaultsUpdate {
   const entries: FileTypeDefaultsUpdate["entries"] = {};
-  for (const [name, entry] of Object.entries(draft) as [FileTypeName, FileTypeDefaultEntry][]) {
-    if (entry.preprocess_profile || entry.parser_adapter_backend || entry.chunking_strategy) {
-      entries[name] = entry;
+  for (const row of rows) {
+    if (!followsBuiltin(row, draft[row.file_type])) {
+      entries[row.file_type] = draft[row.file_type];
     }
   }
   return { entries };

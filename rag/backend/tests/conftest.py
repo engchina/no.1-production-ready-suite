@@ -332,6 +332,10 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.model_settings_file = str(tmp_path / "model-settings.json")
     settings.rag_parser_settings_file = str(tmp_path / "parser-settings.json")
     settings.rag_file_type_defaults_file = str(tmp_path / "file-type-defaults.json")
+    # 形式別の組み込みの既定（#4732）は専用のテストで確かめる。ほかのテストは全体の既定で動かす。
+    from app.config import FILE_TYPES, FileTypeDefaultEntry
+
+    settings._file_type_defaults = {file_type: FileTypeDefaultEntry() for file_type in FILE_TYPES}
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""
     settings.oci_enterprise_ai_secondary_endpoint = ""

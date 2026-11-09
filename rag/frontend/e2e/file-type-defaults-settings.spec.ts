@@ -8,6 +8,8 @@ const ROW_DEFAULTS = {
   unavailable_preprocess_profiles: [],
   unavailable_parser_backends: [],
   inherited_preprocess_profile: "passthrough",
+  builtin: { preprocess_profile: null, parser_adapter_backend: null, chunking_strategy: null },
+  builtin_unavailable_reason: null,
 };
 
 async function chooseSelectFieldOption(trigger: ReturnType<Page["getByTestId"]>, name: string) {
@@ -57,9 +59,21 @@ function settingsBody(overrides: Record<string, Record<string, unknown>> = {}) {
     },
     {
       file_type: "text",
-      extensions: [".txt", ".md", ".markdown", ".json"],
+      extensions: [".txt"],
       preprocess_options: ["passthrough"],
       parser_options: { passthrough: FULL_PARSERS },
+    },
+    {
+      file_type: "markdown",
+      extensions: [".md", ".markdown"],
+      preprocess_options: ["passthrough"],
+      parser_options: { passthrough: FULL_PARSERS },
+    },
+    {
+      file_type: "json",
+      extensions: [".json"],
+      preprocess_options: ["passthrough"],
+      parser_options: { passthrough: ["unstructured", "xml_tree_json"] },
     },
     {
       file_type: "html",
@@ -115,13 +129,13 @@ for (const viewport of [
     await page.goto("/settings/file-type-defaults");
 
     await expect(page.getByRole("heading", { name: "形式別の既定" }).first()).toBeVisible();
-    for (const fileType of ["pdf", "word", "powerpoint", "excel", "csv", "text", "html", "image"]) {
+    for (const fileType of ["pdf", "word", "powerpoint", "excel", "csv", "text", "markdown", "json", "html", "image"]) {
       await expect(page.getByTestId(`file-type-row-${fileType}`)).toBeVisible();
     }
     // 未設定のセルは「全体の既定に従う」。
     await expect(page.getByTestId("file-type-pdf-parser")).toContainText("全体の既定に従う");
     await expect(page.getByTestId("file-type-word-preprocess")).toContainText("全体の既定に従う");
-    await expect(page.getByTestId("file-type-row-text")).toContainText(".markdown");
+    await expect(page.getByTestId("file-type-row-markdown")).toContainText(".markdown");
     await expectNoPageOverflow(page);
   });
 }
@@ -206,6 +220,48 @@ test("保存の 422 は何を直すかの文言を行の下に出す", async ({ 
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("Excel は「Office→PDF」で変換されません。", { exact: false })).toBeVisible();
+});
+
+test("既定に戻すは組み込みの値を画面に入れ、保存で確定する", async ({ page }) => {
+  const builtin = {
+    preprocess_profile: "office_to_pdf",
+    parser_adapter_backend: "docling",
+    chunking_strategy: "page_level",
+  };
+  let patchBody: unknown;
+  await page.route("**/api/settings/file-type-defaults", async (route) => {
+    if (route.request().method() === "PATCH") patchBody = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        // powerpoint は保存値（全体の既定に従う）がある。
+        data: settingsBody({ powerpoint: { builtin } }),
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.goto("/settings/file-type-defaults");
+  await expect(page.getByTestId("file-type-powerpoint-parser")).toContainText("全体の既定に従う");
+
+  await page.getByRole("button", { name: "既定に戻す" }).click();
+
+  await expect(page.getByTestId("file-type-powerpoint-preprocess")).toContainText("Office→PDF");
+  await expect(page.getByTestId("file-type-powerpoint-parser")).toContainText("Docling");
+  await expect(page.getByTestId("file-type-powerpoint-chunking")).toContainText("ページ単位");
+  expect(patchBody).toBeUndefined();
+
+  await page.getByRole("button", { name: "保存" }).click();
+  // 組み込みの既定と同じ行は保存値にしない（保存値が無ければ組み込みの既定を使う）。
+  await expect.poll(() => patchBody).toEqual({ entries: {} });
+});
+
+test("組み込みの既定を使えない行は理由を出す", async ({ page }) => {
+  const reason = "ファイル準備「Excel→JSONL」が無効（RAG_PREPROCESS_ENABLED）のため、組み込みの既定を使わず全体の既定に従います。";
+  await mockSettings(page, settingsBody({ excel: { builtin_unavailable_reason: reason } }));
+  await page.goto("/settings/file-type-defaults");
+
+  await expect(page.getByText(reason)).toBeVisible();
+  await expect(page.getByTestId("file-type-excel-parser")).toContainText("全体の既定に従う");
 });
 
 test("使えない選択肢があるときは設定への導線を出す", async ({ page }) => {

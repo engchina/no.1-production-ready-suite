@@ -63,7 +63,6 @@ from app.config import (
     PARSER_SECRET_ATTRS,
     PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
-    FileTypeDefaultEntry,
     Settings,
     get_settings,
     is_roadmap_parser_adapter_backend,
@@ -96,6 +95,7 @@ from app.rag.extraction_field_adapter import (
 from app.rag.file_type_defaults import (
     CHUNKING_STRATEGY_OPTIONS,
     FILE_TYPE_EXTENSIONS,
+    builtin_file_type_default,
     file_type_default_issues,
     file_type_defaults,
     file_type_parser_option_table,
@@ -506,9 +506,7 @@ async def update_file_type_defaults_settings(
     レシピより弱く全体の既定より強い層で、保存は取り込み済みの文書を変えない（再処理で反映する）。
     """
     settings = get_settings()
-    entries = {
-        file_type: entry for file_type, entry in payload.entries.items() if not entry.is_empty()
-    }
+    entries = payload.entries
     issues = [
         issue
         for file_type, entry in entries.items()
@@ -1171,7 +1169,8 @@ def _file_type_defaults_data(settings: Settings) -> FileTypeDefaultsSettingsData
     rows: list[FileTypeDefaultRowData] = []
     saved = file_type_defaults(settings)
     for file_type, extensions in FILE_TYPE_EXTENSIONS.items():
-        entry = saved.get(file_type) or FileTypeDefaultEntry()
+        entry = saved.get(file_type) or builtin_file_type_default(settings, file_type)[0]
+        builtin, builtin_reason = builtin_file_type_default(settings, file_type)
         preprocess, unavailable_preprocess = file_type_preprocess_options(file_type, settings)
         inherited, parser_options, unavailable_parsers = file_type_parser_option_table(
             file_type, settings
@@ -1186,6 +1185,8 @@ def _file_type_defaults_data(settings: Settings) -> FileTypeDefaultsSettingsData
                 parser_options=parser_options,
                 unavailable_parser_backends=unavailable_parsers,
                 inherited_preprocess_profile=inherited,
+                builtin=builtin,
+                builtin_unavailable_reason=builtin_reason,
             )
         )
     return FileTypeDefaultsSettingsData(

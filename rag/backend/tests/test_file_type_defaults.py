@@ -28,7 +28,9 @@ from app.config import (
 from app.main import app
 from app.rag.bulk_ingestion import _SettingsCache
 from app.rag.file_type_defaults import (
+    BUILTIN_FILE_TYPE_DEFAULTS,
     FILE_TYPE_EXTENSIONS,
+    builtin_file_type_default,
     classify_file_type,
     file_type_default_issues,
     file_type_parser_options,
@@ -55,10 +57,14 @@ def _set_defaults(settings: Settings, **entries: dict[str, str | None]) -> None:
 
 @pytest.fixture(autouse=True)
 def _clean_defaults() -> Iterator[None]:
+    # Settings は worker の中で使い回すので、テストが変えた値をほかのテストへ残さない。
     settings = get_settings()
+    original = dict(settings.__dict__)
     settings._file_type_defaults = {}
     FILE_TYPE_DEFAULTS_STORE.reset()
     yield
+    settings.__dict__.clear()
+    settings.__dict__.update(original)
     settings._file_type_defaults = {}
     FILE_TYPE_DEFAULTS_STORE.reset()
 
@@ -74,10 +80,10 @@ def _clean_defaults() -> Iterator[None]:
         ("a.xlsx", None, "excel"),
         ("a.xls", None, "excel"),
         ("a.csv", "text/csv", "csv"),
-        ("a.md", None, "text"),
-        ("a.markdown", None, "text"),
+        ("a.md", None, "markdown"),
+        ("a.markdown", None, "markdown"),
         ("a.txt", None, "text"),
-        ("a.json", "application/json", "text"),
+        ("a.json", "application/json", "json"),
         ("a.htm", "text/html", "html"),
         ("a.jpeg", None, "image"),
         ("a.png", "image/png", "image"),
@@ -90,6 +96,8 @@ def _clean_defaults() -> Iterator[None]:
         ),
         ("noext", "text/csv", "csv"),
         ("noext", "text/plain", "text"),
+        ("noext", "text/markdown", "markdown"),
+        ("noext", "application/json", "json"),
         # 一覧に無い形式は全体の既定に従う。
         ("a.tsv", "text/tab-separated-values", None),
         ("a.docm", "application/vnd.ms-word.document.macroEnabled.12", None),
@@ -139,8 +147,9 @@ def test_resolution_order_recipe_over_file_type_over_global() -> None:
 def test_file_type_without_defaults_and_unlisted_format_follow_global() -> None:
     settings = get_settings()
     settings.rag_parser_adapter_backend = "docling"
-    _set_defaults(settings, word={"parser_adapter_backend": "unstructured"})
+    _set_defaults(settings, word={"parser_adapter_backend": "unstructured"}, excel={})
 
+    # 「全体の既定に従う」を保存した行と、一覧に無い形式は全体の既定に従う。
     for file_type in ("excel", None):
         resolved, effective = documents_route._merge_document_processing_config(
             DocumentProcessingConfig(), file_type=file_type
@@ -306,7 +315,7 @@ def test_valid_save_persists_atomically_and_reloads(tmp_path: Path) -> None:
                     "parser_adapter_backend": "structured_records_jsonl",
                     "chunking_strategy": "fixed_delimiter",
                 },
-                # すべて未設定の行は保存しない。
+                # すべて未設定の行も「全体の既定に従う」の選択として保存する。
                 "image": {},
             }
         },
@@ -314,7 +323,7 @@ def test_valid_save_persists_atomically_and_reloads(tmp_path: Path) -> None:
     assert resp.status_code == 200, resp.text
     path = tmp_path / "file-type-defaults.json"
     document = json.loads(path.read_text(encoding="utf-8"))
-    assert set(document["entries"]) == {"word", "excel"}
+    assert set(document["entries"]) == {"word", "excel", "image"}
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert list(tmp_path.glob(".*tmp*")) == []
 
@@ -337,7 +346,7 @@ def test_valid_save_persists_atomically_and_reloads(tmp_path: Path) -> None:
     FILE_TYPE_DEFAULTS_STORE.reset()
     assert client.get(PATH).json()["data"]["rows"][1]["parser_adapter_backend"] == "unstructured"
 
-    # 空にすると全体の既定へ戻る。
+    # 空にすると保存値が無くなり、組み込みの既定へ戻る。
     assert client.patch(PATH, json={"entries": {}}).status_code == 200
     assert settings._file_type_defaults == {}
     assert json.loads(path.read_text(encoding="utf-8"))["entries"] == {}
@@ -540,3 +549,194 @@ def test_inconsistent_chunking_in_recipe_is_still_rejected() -> None:
             DocumentProcessingConfig(chunk_size=500, chunk_overlap=500),
             file_type="pdf",
         )
+
+
+EXPECTED_BUILTIN = {
+    "pdf": ("passthrough", "docling", "small_to_big"),
+    "word": ("office_to_pdf", "docling", "small_to_big"),
+    "powerpoint": ("office_to_pdf", "docling", "page_level"),
+    "excel": ("excel_to_jsonl", "structured_records_jsonl", "fixed_delimiter"),
+    "csv": ("csv_to_jsonl", "structured_records_jsonl", "fixed_delimiter"),
+    "text": ("passthrough", "unstructured", "small_to_big"),
+    "markdown": ("passthrough", "unstructured", "structure_aware"),
+    "json": ("passthrough", "unstructured", "small_to_big"),
+    "html": ("passthrough", "unstructured", "structure_aware"),
+    "image": ("passthrough", "unstructured", "page_level"),
+}
+
+
+def _enable_everything(settings: Settings) -> None:
+    settings.rag_preprocess_enabled = True
+    settings.rag_parser_docling_enabled = True
+    settings.rag_parser_unstructured_enabled = True
+    settings.rag_parser_structured_records_jsonl_enabled = True
+    settings.rag_parser_xml_tree_json_enabled = True
+
+
+def test_builtin_table_matches_the_decided_values_and_order() -> None:
+    assert list(FILE_TYPE_EXTENSIONS) == list(EXPECTED_BUILTIN)
+    assert list(BUILTIN_FILE_TYPE_DEFAULTS) == list(EXPECTED_BUILTIN)
+    assert FILE_TYPE_EXTENSIONS["text"] == (".txt",)
+    assert FILE_TYPE_EXTENSIONS["markdown"] == (".md", ".markdown")
+    assert FILE_TYPE_EXTENSIONS["json"] == (".json",)
+    for file_type, values in EXPECTED_BUILTIN.items():
+        entry = BUILTIN_FILE_TYPE_DEFAULTS[file_type]  # type: ignore[index]
+        assert (
+            entry.preprocess_profile,
+            entry.parser_adapter_backend,
+            entry.chunking_strategy,
+        ) == values
+
+
+@pytest.mark.parametrize("file_type", list(EXPECTED_BUILTIN))
+def test_every_builtin_row_passes_the_save_validation(file_type: Any) -> None:
+    settings = get_settings()
+    _enable_everything(settings)
+    entry = BUILTIN_FILE_TYPE_DEFAULTS[file_type]
+    assert file_type_default_issues(file_type, entry, settings) == []
+    assert builtin_file_type_default(settings, file_type) == (entry, None)
+
+
+def test_builtin_applies_without_saved_value_and_saved_row_wins() -> None:
+    settings = get_settings()
+    _enable_everything(settings)
+    settings.rag_chunking_strategy = "small_to_big"
+    settings.rag_parser_adapter_backend = "unstructured"
+
+    resolved, effective = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(), file_type="powerpoint"
+    )
+    assert resolved.rag_preprocess_profile == "office_to_pdf"
+    assert resolved.rag_parser_adapter_backend == "docling"
+    assert effective.chunking_strategy == "page_level"
+
+    # 保存値がある行はその値。全項目が未設定の行は「全体の既定に従う」の選択。
+    _set_defaults(settings, powerpoint={})
+    saved, _ = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(), file_type="powerpoint"
+    )
+    assert saved.rag_preprocess_profile == settings.rag_preprocess_profile
+    assert saved.rag_parser_adapter_backend == "unstructured"
+    assert saved.rag_chunking_strategy == "small_to_big"
+    # 保存の無いほかの行は組み込みのまま。
+    other, _ = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(), file_type="pdf"
+    )
+    assert other.rag_parser_adapter_backend == "docling"
+
+
+def test_recipe_still_wins_over_builtin() -> None:
+    settings = get_settings()
+    _enable_everything(settings)
+    resolved, _ = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(chunking_strategy="fixed_size"), file_type="powerpoint"
+    )
+    assert resolved.rag_chunking_strategy == "fixed_size"
+
+
+@pytest.mark.parametrize(
+    ("file_type", "attr", "needle"),
+    [
+        ("json", "rag_parser_unstructured_enabled", "RAG_PARSER_UNSTRUCTURED_ENABLED"),
+        ("text", "rag_parser_unstructured_enabled", "RAG_PARSER_UNSTRUCTURED_ENABLED"),
+        ("pdf", "rag_parser_docling_enabled", "RAG_PARSER_DOCLING_ENABLED"),
+        ("word", "rag_preprocess_enabled", "RAG_PREPROCESS_ENABLED"),
+        ("excel", "rag_preprocess_enabled", "RAG_PREPROCESS_ENABLED"),
+        (
+            "csv",
+            "rag_parser_structured_records_jsonl_enabled",
+            "RAG_PARSER_STRUCTURED_RECORDS_JSONL_ENABLED",
+        ),
+    ],
+)
+def test_unavailable_builtin_row_follows_global_with_a_reason(
+    file_type: Any, attr: str, needle: str
+) -> None:
+    settings = get_settings()
+    _enable_everything(settings)
+    settings.rag_parser_adapter_backend = "docling"
+    settings.rag_chunking_strategy = "recursive_character"
+    setattr(settings, attr, False)
+
+    entry, reason = builtin_file_type_default(settings, file_type)
+    assert entry == FileTypeDefaultEntry()
+    assert reason is not None and needle in reason
+
+    # 取込は行全体で全体の既定に従う（組み込みの一部だけを使って組み合わせを壊さない）。
+    resolved, _ = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(), file_type=file_type
+    )
+    assert resolved is settings
+
+    row = next(r for r in client.get(PATH).json()["data"]["rows"] if r["file_type"] == file_type)
+    assert row["parser_adapter_backend"] is None
+    assert row["builtin"] == {
+        "preprocess_profile": None,
+        "parser_adapter_backend": None,
+        "chunking_strategy": None,
+    }
+    assert needle in row["builtin_unavailable_reason"]
+
+
+def test_saving_what_the_screen_shows_never_fails_on_builtin_values() -> None:
+    """どの環境でも、画面の値（組み込みの適用後）をそのまま保存して 422 にならない。"""
+    settings = get_settings()
+    settings.rag_preprocess_enabled = False
+    settings.rag_parser_unstructured_enabled = False
+    settings.rag_parser_structured_records_jsonl_enabled = False
+    settings.rag_parser_xml_tree_json_enabled = False
+
+    rows = client.get(PATH).json()["data"]["rows"]
+    entries = {
+        row["file_type"]: {
+            "preprocess_profile": row["preprocess_profile"],
+            "parser_adapter_backend": row["parser_adapter_backend"],
+            "chunking_strategy": row["chunking_strategy"],
+        }
+        for row in rows
+    }
+    assert client.patch(PATH, json={"entries": entries}).status_code == 200
+
+
+def test_get_reports_builtin_and_saved_values() -> None:
+    settings = get_settings()
+    _enable_everything(settings)
+    _set_defaults(settings, word={"chunking_strategy": "fixed_size"})
+
+    rows = {r["file_type"]: r for r in client.get(PATH).json()["data"]["rows"]}
+
+    assert rows["pdf"]["parser_adapter_backend"] == "docling"
+    assert rows["pdf"]["builtin_unavailable_reason"] is None
+    # 保存値の行は保存値を表示し、「既定に戻す」のための組み込みの値も返す。
+    assert rows["word"]["parser_adapter_backend"] is None
+    assert rows["word"]["chunking_strategy"] == "fixed_size"
+    assert rows["word"]["builtin"]["preprocess_profile"] == "office_to_pdf"
+    assert rows["json"]["parser_options"]["passthrough"] == ["unstructured", "xml_tree_json"]
+
+
+def test_json_row_follows_the_global_delimiter_and_xml_tree_stays_selectable() -> None:
+    settings = get_settings()
+    _enable_everything(settings)
+    settings.rag_chunk_delimiter = "\\n\\n"
+    # XML ツリー JSON は既定には使わないが、選択肢としては保存できる。
+    _set_defaults(
+        settings,
+        json={"parser_adapter_backend": "xml_tree_json", "chunking_strategy": "fixed_delimiter"},
+    )
+    assert (
+        client.patch(
+            PATH,
+            json={"entries": {"json": {"parser_adapter_backend": "xml_tree_json"}}},
+        ).status_code
+        == 200
+    )
+
+    _set_defaults(
+        settings,
+        json={"parser_adapter_backend": "xml_tree_json", "chunking_strategy": "fixed_delimiter"},
+    )
+    resolved, _ = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig(), file_type="json"
+    )
+    assert resolved.rag_chunk_delimiter == "\\n\\n"
+    assert Settings.model_fields["rag_chunk_delimiter"].default == JSONL_RECORD_BOUNDARY

@@ -2747,6 +2747,8 @@ export type FileTypeName =
   | "excel"
   | "csv"
   | "text"
+  | "markdown"
+  | "json"
   | "html"
   | "image";
 
@@ -2767,6 +2769,9 @@ export interface FileTypeDefaultRow extends FileTypeDefaultEntry {
   unavailable_parser_backends: ParserAdapterBackend[];
   /** 行のファイル準備が未設定のときに、解析エンジンの選択肢を決めるファイル準備。 */
   inherited_preprocess_profile: PreprocessProfileName;
+  /** 組み込みの既定（「既定に戻す」で入る値）。この環境で使えない行はすべて null。 */
+  builtin: FileTypeDefaultEntry;
+  builtin_unavailable_reason: string | null;
 }
 
 export interface FileTypeDefaultsSettingsData {

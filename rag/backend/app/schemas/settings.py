@@ -439,6 +439,9 @@ class FileTypeDefaultRowData(FileTypeDefaultEntry):
     unavailable_parser_backends: list[ParserAdapterBackend] = Field(default_factory=list)
     # 行のファイル準備が未設定のときに、解析エンジンの選択肢を決めるファイル準備。
     inherited_preprocess_profile: PreprocessProfile
+    # 組み込みの既定（「既定に戻す」で入る値）。この環境で使えない行はすべて None。
+    builtin: FileTypeDefaultEntry
+    builtin_unavailable_reason: str | None = None
 
 
 class FileTypeDefaultsSettingsData(BaseModel):
@@ -451,10 +454,11 @@ class FileTypeDefaultsSettingsData(BaseModel):
 
 
 class FileTypeDefaultsUpdate(BaseModel):
-    """形式別の既定の保存（全行の置き換え。全項目が未設定の行は保存しない）。"""
+    """形式別の既定の保存（全行の置き換え）。"""
 
     model_config = ConfigDict(extra="forbid")
 
+    # 行が無ければ組み込みの既定、全項目が未設定の行は「全体の既定に従う」の選択。
     entries: dict[FileType, FileTypeDefaultEntry] = Field(default_factory=dict)
 
 

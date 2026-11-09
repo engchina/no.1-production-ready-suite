@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { FileTypeDefaultEntry, FileTypeDefaultRow } from "@/lib/api";
+import type { FileTypeDefaultEntry, FileTypeDefaultRow, FileTypeDefaultsSettingsData } from "@/lib/api";
 
 import {
+  draftFromBuiltin,
   draftsEqual,
   entryWithPreprocess,
   parserOptionsFor,
@@ -30,6 +31,8 @@ function excelRow(overrides: Partial<FileTypeDefaultRow> = {}): FileTypeDefaultR
     },
     unavailable_parser_backends: [],
     inherited_preprocess_profile: "passthrough",
+    builtin: EMPTY,
+    builtin_unavailable_reason: null,
     ...overrides,
   };
 }
@@ -75,9 +78,24 @@ describe("形式別の既定の下書き", () => {
     expect(withCurrentValue(["docling"], null)).toEqual(["docling"]);
   });
 
-  it("保存の内容は設定のある行だけ", () => {
-    const draft = { pdf: EMPTY, word: { ...EMPTY, chunking_strategy: "page_level" } } as FileTypeDraft;
-    expect(updatePayload(draft)).toEqual({ entries: { word: draft.word } });
+  it("保存するのは組み込みの既定と違う行だけで、全体の既定に従う行は空の行で送る", () => {
+    const builtin = { ...EMPTY, chunking_strategy: "page_level" } as const;
+    const same = excelRow({ file_type: "pdf", builtin });
+    const followsGlobal = excelRow({ file_type: "word", builtin });
+    const unavailable = excelRow({ file_type: "csv", builtin: EMPTY, builtin_unavailable_reason: "無効" });
+    const draft = { pdf: { ...builtin }, word: EMPTY, csv: EMPTY } as FileTypeDraft;
+
+    expect(updatePayload(draft, [same, followsGlobal, unavailable])).toEqual({
+      entries: { word: EMPTY },
+    });
+  });
+
+  it("既定に戻すは組み込みの値を下書きに入れる", () => {
+    const builtin = { ...EMPTY, parser_adapter_backend: "unstructured" } as const;
+    const settings = {
+      rows: [excelRow({ builtin })],
+    } as unknown as FileTypeDefaultsSettingsData;
+    expect(draftFromBuiltin(settings)).toEqual({ excel: builtin });
   });
 
   it("差分は行の値で判定する", () => {

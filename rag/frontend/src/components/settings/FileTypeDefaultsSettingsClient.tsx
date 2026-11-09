@@ -14,7 +14,7 @@ import {
 } from "@production-ready/ui";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { RotateCcw, Save, Settings2 } from "lucide-react";
+import { RotateCcw, Save, Settings2, Undo2 } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
@@ -35,9 +35,11 @@ import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 
 import {
+  draftFromBuiltin,
   draftFromSettings,
   draftsEqual,
   entryWithPreprocess,
+  followsBuiltin,
   parserOptionsFor,
   updatePayload,
   withCurrentValue,
@@ -111,7 +113,7 @@ export function FileTypeDefaultsSettingsClient() {
 
   function submit() {
     if (!draft || save.isPending) return;
-    save.mutate(updatePayload(draft), {
+    save.mutate(updatePayload(draft, settings?.rows ?? []), {
       onSuccess: (data) => {
         setBase(data);
         setDraft(draftFromSettings(data));
@@ -139,6 +141,11 @@ export function FileTypeDefaultsSettingsClient() {
             stickyHeader
             visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
             rowProps={(row) => ({ "data-testid": `file-type-row-${row.file_type}` })}
+            renderRowDetail={(row) =>
+              row.builtin_unavailable_reason && followsBuiltin(row, draft[row.file_type]) ? (
+                <p className="text-xs text-fg-muted">{row.builtin_unavailable_reason}</p>
+              ) : null
+            }
             columns={[
               {
                 key: "file_type",
@@ -286,6 +293,16 @@ export function FileTypeDefaultsSettingsClient() {
               },
             ]}
             secondaryActions={[
+              {
+                id: "restore-defaults",
+                label: t("settings.fileTypeDefaults.actions.restoreDefaults"),
+                icon: Undo2,
+                disabled: save.isPending || draftsEqual(draft, draftFromBuiltin(settings)),
+                onClick: () => {
+                  save.reset();
+                  setDraft(draftFromBuiltin(settings));
+                },
+              },
               {
                 id: "reset",
                 label: t("settings.fileTypeDefaults.actions.reset"),
