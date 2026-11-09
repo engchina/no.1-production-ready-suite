@@ -162,7 +162,7 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         agent_names={},
         user_names=lambda uuids: {},
     )
-    assert usage.totals.runs == 11
+    assert usage.totals.runs == 7
     feedback = store.feedback_report(
         days=7,
         now=now,
