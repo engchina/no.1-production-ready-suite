@@ -319,11 +319,8 @@ async def test_search_expands_aliases_and_records_the_breakdown(monkeypatch: Mon
 
 @pytest.mark.usefixtures("system_access")
 async def test_search_clarifies_close_guides_when_enabled(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        search_route,
-        "OracleClient",
-        lambda: _ProfileOracle(support_guide_close_match_clarification_enabled=True),
-    )
+    monkeypatch.setattr(get_settings(), "rag_support_guide_close_match_clarification_enabled", True)
+    monkeypatch.setattr(search_route, "OracleClient", lambda: _ProfileOracle())
     monkeypatch.setattr(search_route, "SupportGuideStore", _published_store(GUIDES))
     request = SearchRequest(query="集計表Bの手順", search_answer_profile_id="bv-1")
     _, settings, _, _ = await search_route._resolve_query_context(request, get_settings())
@@ -354,7 +351,8 @@ async def test_search_clarifies_close_guides_when_enabled(monkeypatch: MonkeyPat
 
 
 def test_chat_suggestion_asks_which_guide(monkeypatch: MonkeyPatch) -> None:
-    fake = _ProfileOracle(support_guide_close_match_clarification_enabled=True)
+    monkeypatch.setattr(get_settings(), "rag_support_guide_close_match_clarification_enabled", True)
+    fake = _ProfileOracle()
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
 
     async def published(_oracle: object, _profile: str) -> list[Any]:
@@ -504,11 +502,7 @@ async def test_semantic_failure_falls_back_to_term_matching(monkeypatch: MonkeyP
 async def test_master_off_skips_all_guide_work_and_keeps_regular_knowledge(
     enabled: bool | None, monkeypatch: MonkeyPatch
 ) -> None:
-    fake = _ProfileOracle(
-        support_guide_enabled=enabled,
-        support_guide_semantic_match_enabled=True,
-        support_guide_close_match_clarification_enabled=True,
-    )
+    fake = _ProfileOracle(support_guide_enabled=enabled)
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
 
     async def forbidden(*args: Any, **kwargs: Any) -> Any:
@@ -520,21 +514,22 @@ async def test_master_off_skips_all_guide_work_and_keeps_regular_knowledge(
     request = SearchRequest(query="NA画面の設定", search_answer_profile_id="bv-1")
     _, settings, _, _ = await search_route._resolve_query_context(
         request,
-        get_settings().model_copy(update={"rag_support_guide_enabled": True}),
+        get_settings().model_copy(
+            update={
+                "rag_support_guide_enabled": True,
+                "rag_support_guide_semantic_match_enabled": True,
+                "rag_support_guide_close_match_clarification_enabled": True,
+            }
+        ),
     )
     assert settings.rag_support_guide_enabled is False
     assert settings.rag_support_guide == {}
     assert settings.rag_runtime_knowledge == TERMS
-    assert settings.rag_support_guide_semantic_match_enabled is True
-    assert settings.rag_support_guide_close_match_clarification_enabled is True
 
 
 def test_master_off_chat_does_not_load_or_confirm_guides(monkeypatch: MonkeyPatch) -> None:
-    fake = _ProfileOracle(
-        support_guide_enabled=False,
-        support_guide_semantic_match_enabled=True,
-        support_guide_close_match_clarification_enabled=True,
-    )
+    monkeypatch.setattr(get_settings(), "rag_support_guide_close_match_clarification_enabled", True)
+    fake = _ProfileOracle(support_guide_enabled=False)
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
 
     async def forbidden(*args: Any, **kwargs: Any) -> Any:
@@ -554,11 +549,7 @@ def test_master_off_mcp_does_not_lookup_guides(auth: Any, monkeypatch: MonkeyPat
     monkeypatch.setattr(
         mcp_tools,
         "OracleClient",
-        lambda: _ProfileOracle(
-            support_guide_enabled=False,
-            support_guide_semantic_match_enabled=True,
-            support_guide_close_match_clarification_enabled=True,
-        ),
+        lambda: _ProfileOracle(support_guide_enabled=False),
     )
 
     async def forbidden(*args: Any, **kwargs: Any) -> Any:

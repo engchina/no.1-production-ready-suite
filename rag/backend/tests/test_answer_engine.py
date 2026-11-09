@@ -475,48 +475,6 @@ async def test_pipeline_blocked_query_does_not_run_answer_flow(
     assert [audit["outcome"] for audit in audits] == ["blocked"]
 
 
-def test_search_answer_profile_ignores_removed_text_search_tokenizer_override() -> None:
-    """全文検索の分割方式の上書きは #588 で削除した。保存済みの値は読み捨てる。"""
-    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
-    from app.rag.search_answer_profile_config import (
-        SearchAnswerProfileConfig,
-        resolve_search_answer_profile_settings,
-    )
-
-    query = KnowledgeBaseQueryConfig.model_validate({"text_search_tokenizer": "sudachi"})
-    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], query=query)
-
-    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
-
-    assert "text_search_tokenizer" not in query.model_dump()
-    assert not hasattr(settings, "rag_text_search_tokenizer")
-
-
-def test_search_answer_profile_ignores_global_answer_options() -> None:
-    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
-    from app.rag.search_answer_profile_config import (
-        SearchAnswerProfileConfig,
-        resolve_search_answer_profile_settings,
-    )
-
-    config = SearchAnswerProfileConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(
-            neighbor_child_count=0,
-            rerank_enabled=False,
-        ),
-    )
-
-    base = Settings(
-        rag_neighbor_child_count=3,
-        rag_rerank_enabled=True,
-    )
-    settings, _ = resolve_search_answer_profile_settings(base, config)
-
-    assert settings.rag_neighbor_child_count == 3
-    assert settings.rag_rerank_enabled is True
-
-
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
@@ -2128,25 +2086,6 @@ def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None
 
 def _engine_effort(value: str) -> str:
     return "" if value == "model" else value
-
-
-def test_search_answer_profile_ignores_legacy_screen_linking() -> None:
-    """画面目録は全体の設定を使い、旧個別値を適用しない。"""
-    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
-    from app.rag.search_answer_profile_config import (
-        SearchAnswerProfileConfig,
-        resolve_search_answer_profile_settings,
-    )
-
-    config = SearchAnswerProfileConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(screen_linking_enabled=True),
-    )
-
-    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
-
-    assert settings.rag_screen_linking_enabled is False
-    assert Settings().rag_screen_linking_enabled is False
 
 
 async def test_oracle_screen_catalog_queries_use_search_scope(

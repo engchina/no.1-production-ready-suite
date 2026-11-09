@@ -31,7 +31,6 @@ def test_empty_config_returns_global_settings_unchanged() -> None:
     config = KnowledgeBaseAdapterConfig()
     assert config.is_empty()
     assert resolve_effective_settings(settings, config, scope="ingestion") is settings
-    assert resolve_effective_settings(settings, config, scope="query") is settings
 
 
 def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
@@ -50,18 +49,13 @@ def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
     assert effective.rag_neighbor_child_count == settings.rag_neighbor_child_count
 
 
-def test_kb_query_scope_is_legacy_noop() -> None:
-    """KB query scope は legacy として読めるが Settings へは反映しない。"""
-    settings = get_settings()
-    config = _config(
-        ingestion={"chunk_size": 1200},
-        query={"answer_flow": "standard_rag", "guardrail_policy": "strict"},
-    )
+def test_kb_config_has_no_query() -> None:
+    """KB は検索・回答の上書き(query)を持たない。残っている値は読まずに捨てる(#4784)。"""
+    config = _config(ingestion={"chunk_size": 1200}, query={"neighbor_child_count": 9})
 
-    effective = resolve_effective_settings(settings, config, scope="query")
-
-    assert effective is settings
-    assert config.settings_overrides("query") == {}
+    assert "query" not in KnowledgeBaseAdapterConfig.model_fields
+    assert config.settings_overrides() == {"rag_chunk_size": 1200}
+    assert "query" not in dump_adapter_config(config)
 
 
 def test_settings_overrides_uses_allowlist_only() -> None:
@@ -69,14 +63,13 @@ def test_settings_overrides_uses_allowlist_only() -> None:
     config = _config(
         ingestion={"parser_adapter_backend": "docling", "chunk_overlap": 60},
     )
-    overrides = config.settings_overrides("ingestion")
+    overrides = config.settings_overrides()
     assert overrides == {
         "rag_parser_adapter_backend": "docling",
         # backend 選択時は対応 feature flag も有効化する。
         "rag_parser_docling_enabled": True,
         "rag_chunk_overlap": 60,
     }
-    assert config.settings_overrides("query") == {}
 
 
 def test_external_parser_backend_enables_feature_flag() -> None:
@@ -89,7 +82,7 @@ def test_external_parser_backend_enables_feature_flag() -> None:
         settings = get_settings().model_copy(update={flag_field: False})
         config = _config(ingestion={"parser_adapter_backend": backend})
 
-        overrides = config.settings_overrides("ingestion")
+        overrides = config.settings_overrides()
         assert overrides[flag_field] is True
 
         effective = resolve_effective_settings(settings, config, scope="ingestion")
@@ -105,14 +98,14 @@ def test_explicit_false_flag_is_not_overridden_by_backend_selection() -> None:
             "parser_unstructured_enabled": False,
         },
     )
-    overrides = config.settings_overrides("ingestion")
+    overrides = config.settings_overrides()
     assert overrides["rag_parser_unstructured_enabled"] is False
 
 
 def test_local_backend_does_not_enable_adapter_flags() -> None:
     """local は特定 adapter flag を有効化しない。"""
     config = _config(ingestion={"parser_adapter_backend": "local"})
-    overrides = config.settings_overrides("ingestion")
+    overrides = config.settings_overrides()
     assert "rag_parser_docling_enabled" not in overrides
     assert "rag_parser_unstructured_enabled" not in overrides
 
@@ -134,15 +127,6 @@ def test_apply_or_global_falls_back_on_inconsistency() -> None:
     assert applied is False
 
 
-def test_apply_or_global_ignores_kb_query_override() -> None:
-    """KB query の legacy 上書きは applied=False でグローバルのまま返す。"""
-    settings = get_settings()
-    config = _config(query={"vector_index_profile": "accurate"})
-    merged, applied = apply_adapter_config_or_global(settings, config, scope="query")
-    assert applied is False
-    assert merged is settings
-
-
 def test_parse_is_tolerant_of_legacy_and_unknown_keys() -> None:
     """旧 free-form retrieval_config や未知キーは捨てて空設定へ縮退する。"""
     assert parse_adapter_config(None).is_empty()
@@ -156,11 +140,9 @@ def test_dump_parse_round_trip() -> None:
     """dump → parse で正規の KB 構築フィールドだけが保たれる。"""
     config = _config(
         ingestion={"chunking_strategy": "page_level", "parser_adapter_backend": "docling"},
-        query={"guardrail_policy": "strict"},
     )
     restored = parse_adapter_config(dump_adapter_config(config))
     assert restored.ingestion == config.ingestion
-    assert restored.query == KnowledgeBaseQueryConfig()
 
 
 @pytest.mark.parametrize(
@@ -183,7 +165,7 @@ def test_removed_parser_engine_in_saved_config_inherits_global_default(removed: 
 
     assert config.ingestion.parser_adapter_backend is None
     assert config.ingestion.chunking_strategy == "page_level"
-    overrides = config.settings_overrides("ingestion")
+    overrides = config.settings_overrides()
     assert "rag_parser_adapter_backend" not in overrides
     assert not [key for key in overrides if removed in key]
     settings = get_settings()
@@ -205,7 +187,7 @@ def test_saved_roadmap_parser_engine_inherits_global_default() -> None:
     assert saved.parser_adapter_backend is None
     assert saved.chunking_strategy == "page_level"
     config = KnowledgeBaseAdapterConfig(ingestion=saved)
-    assert "rag_parser_adapter_backend" not in config.settings_overrides("ingestion")
+    assert "rag_parser_adapter_backend" not in config.settings_overrides()
 
 
 def test_recipe_input_rejects_roadmap_parser_engine_with_reason() -> None:
@@ -247,7 +229,7 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
         },
     )
 
-    overrides = config.settings_overrides("ingestion")
+    overrides = config.settings_overrides()
     assert overrides == {
         "rag_graph_profile": "entities",
         "rag_field_extraction_enabled": True,
@@ -267,10 +249,7 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
 def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
     """構築設定の継承(None)フィールドはグローバル既定で埋められる。"""
     settings = get_settings()
-    config = _config(
-        ingestion={"chunking_strategy": "page_level"},
-        query={"vector_index_profile": "accurate"},
-    )
+    config = _config(ingestion={"chunking_strategy": "page_level"})
 
     effective = resolve_effective_adapter_config(settings, config)
 
@@ -279,8 +258,6 @@ def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
     # 継承フィールドはグローバル既定で解決され、None にはならない。
     assert effective.ingestion.preprocess_profile == settings.rag_preprocess_profile
     assert effective.ingestion.parser_adapter_backend == settings.rag_parser_adapter_backend
-    # query は KB では legacy ignored なので解決済み表示にも出さない。
-    assert effective.query == KnowledgeBaseQueryConfig()
 
 
 def test_resolve_effective_adapter_config_all_global_when_empty() -> None:
@@ -290,7 +267,6 @@ def test_resolve_effective_adapter_config_all_global_when_empty() -> None:
 
     assert effective.ingestion.chunking_strategy == settings.rag_chunking_strategy
     assert effective.ingestion.chunk_size == settings.rag_chunk_size
-    assert effective.query == KnowledgeBaseQueryConfig()
     # 解決済みは表示専用なので継承判定の元データ(config)は変更しない。
     assert KnowledgeBaseAdapterConfig().is_empty()
 
@@ -312,33 +288,33 @@ def test_compose_query_settings_empty_returns_global() -> None:
 def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     """後の overlay(高優先)が同一フィールドを上書きし、別フィールドは両方効く。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(rerank_enabled=False)
-    view = KnowledgeBaseQueryConfig(neighbor_child_count=9)
+    low = KnowledgeBaseQueryConfig(max_anchors_per_document=2, support_guide_enabled=True)
+    high = KnowledgeBaseQueryConfig(max_anchors_per_document=7)
 
-    # 低優先=kb, 高優先=view の順で渡す。
-    merged, applied = compose_query_settings(settings, [kb, view])
+    # 低優先 → 高優先の順で渡す。
+    merged, applied = compose_query_settings(settings, [low, high])
 
     assert applied is True
-    # 同一フィールドは高優先 view が勝つ。
-    assert merged.rag_neighbor_child_count == 9
-    # view が触れていない rerank は下位 overlay の値が残る(per-field merge の肝)。
-    assert merged.rag_rerank_enabled is False
+    # 同一フィールドは高優先が勝つ。
+    assert merged.rag_max_anchors_per_document == 7
+    # 高優先が触れていない欄は下位 overlay の値が残る(per-field merge の肝)。
+    assert merged.rag_support_guide_enabled is True
 
 
 def test_compose_query_settings_null_does_not_wipe_lower_layer() -> None:
     """高優先 overlay の None フィールドは下位層の値を消さない。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(rerank_enabled=False)
-    view = KnowledgeBaseQueryConfig()  # 何も設定しない
+    low = KnowledgeBaseQueryConfig(max_anchors_per_document=2)
+    high = KnowledgeBaseQueryConfig()  # 何も設定しない
 
-    merged, _ = compose_query_settings(settings, [kb, view])
-    assert merged.rag_rerank_enabled is False
+    merged, _ = compose_query_settings(settings, [low, high])
+    assert merged.rag_max_anchors_per_document == 2
 
 
 def test_invalid_literal_value_is_rejected_at_validation() -> None:
     """範囲外の値は pydantic バリデーションで弾く。"""
     with pytest.raises(ValueError):
-        KnowledgeBaseAdapterConfig.model_validate({"query": {"neighbor_child_count": 99}})
+        KnowledgeBaseQueryConfig(max_anchors_per_document=99)
 
 
 def test_removed_parent_child_strategy_is_read_as_small_to_big() -> None:
@@ -384,22 +360,3 @@ def test_small_to_big_params_overlay_ingestion_settings() -> None:
     assert merged.rag_chunk_parent_target_chars == get_settings().rag_chunk_parent_target_chars
     with pytest.raises(ValueError):
         KnowledgeBaseIngestionConfig(chunk_child_target_chars=2000)
-
-
-@pytest.mark.parametrize("value", [0, 15.5, 60])
-def test_query_overlay_step_deadline_is_bounded_and_does_not_mutate_defaults(
-    value: float,
-) -> None:
-    settings = get_settings()
-    original = settings.rag_guide_step_deadline_seconds
-    query = KnowledgeBaseQueryConfig(guide_step_deadline_seconds=value)
-    merged, applied = compose_query_settings(settings, [query])
-    assert merged.rag_guide_step_deadline_seconds == value
-    assert settings.rag_guide_step_deadline_seconds == original
-    assert applied
-
-
-@pytest.mark.parametrize("value", [-1, 61])
-def test_query_overlay_step_deadline_rejects_out_of_range(value: float) -> None:
-    with pytest.raises(ValueError):
-        KnowledgeBaseQueryConfig(guide_step_deadline_seconds=value)

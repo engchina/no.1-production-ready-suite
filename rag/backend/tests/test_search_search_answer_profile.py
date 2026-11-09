@@ -11,7 +11,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.diagnostics import build_search_diagnostics
@@ -152,12 +152,6 @@ def test_saved_standard_options_of_search_answer_profile_are_ignored(
             "knowledge_base_ids": ["kb-1"],
             "system_prompt": "あなたは経理規程アシスタントです。",
             "default_language": "en",
-            "query": {
-                "retrieval_strategy": "keyword",
-                "generation_profile": "structured_json",
-                "post_retrieval_pipeline": "lean",
-                "rerank_enabled": False,
-            },
         }
     )
     _install(monkeypatch, {"bv-1": config})
@@ -170,29 +164,8 @@ def test_saved_standard_options_of_search_answer_profile_are_ignored(
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_rerank_enabled == get_settings().rag_rerank_enabled
     for removed in ("rag_generation_profile", "rag_generation_system_prompt_override"):
         assert not hasattr(settings, removed)
-
-
-def test_search_answer_profile_guardrail_policy_reaches_pipeline_settings(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """検索・回答プロファイルの regulated 設定が実 pipeline 構築に使う Settings へ届く。"""
-    config = SearchAnswerProfileConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"),
-    )
-    _install(monkeypatch, {"bv-1": config})
-
-    response = client.post(
-        "/api/search",
-        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
-    )
-
-    assert response.status_code == 200
-    assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_guardrails_input_enabled is False
 
 
 def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> None:

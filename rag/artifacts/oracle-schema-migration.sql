@@ -4557,3 +4557,9 @@ BEGIN
   NULL; -- crag_missing_aspect_template,crag_quote_only_note,crag_refusal_summary,crag_unknown_aspect_template
 END;
 /
+
+-- migration: 20261110_4784_search_answer_profile_retired_fields
+BEGIN
+  NULL; -- query: max_anchors_per_document,support_guide_enabled / language_pack: answer_check_cues,answer_labels,evidence_cues,grounding_cues,question_cues,search_terms
+END;
+/

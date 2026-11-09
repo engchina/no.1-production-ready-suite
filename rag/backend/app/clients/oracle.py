@@ -78,7 +78,6 @@ from app.rag.graph_index import (
 from app.rag.ingestion_language import ingestion_release_job_id
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
-    KnowledgeBaseQueryConfig,
     parse_adapter_config,
 )
 from app.rag.language_pack_releases import active_release
@@ -19078,7 +19077,6 @@ def _to_knowledge_base_detail(
         if isinstance(structure_override, bool)
         else None,
         structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
-        legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
     )
 
 

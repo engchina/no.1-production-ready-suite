@@ -89,6 +89,11 @@ from app.rag.language_pack_retired_fields import (
 )
 from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
+from app.rag.search_answer_profile_retired_fields import (
+    KEPT_LANGUAGE_PACK_SECTIONS,
+    KEPT_QUERY_FIELDS,
+    remove_retired_search_answer_profile_fields,
+)
 from app.rag.vector_index_adapter import default_vector_index_build
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
@@ -989,6 +994,34 @@ END;
                 "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
                 "項目に保存した語を残す必要があれば適用前に同列を export してください。"
                 "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4784_search_answer_profile_retired_fields",
+            table_name="rag_search_answer_profiles",
+            # 処理は data_step。残す欄と節の一覧を書くので、一覧を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- query: "
+                + ",".join(sorted(KEPT_QUERY_FIELDS))
+                + " / language_pack: "
+                + ",".join(sorted(KEPT_LANGUAGE_PACK_SECTIONS))
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_search_answer_profile_fields,
+            destructive_note=(
+                "検索・回答プロファイル（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG）の query から、"
+                "max_anchors_per_document と support_guide_enabled 以外の欄（適用していなかった"
+                "検索方法の欄・業務ガイドの意味の照合と近い候補の確認の欄・旧データの欄）の値を"
+                "削除し、language_pack から、検索と回答で読まない節（search_terms・question_cues・"
+                "evidence_cues・answer_labels・answer_check_cues・grounding_cues 以外。業務ガイドの"
+                "取込の見出しの語 guide_import_cues など）の上書きを削除します。ナレッジベース"
+                "（RAG_KNOWLEDGE_BASES.RETRIEVAL_CONFIG）からは、読まれていない query を削除"
+                "します。"
+                "ほかの欄・節の値は変えません。業務ガイドの意味の照合・近い候補の確認・取込の"
+                "見出しの語をプロファイルごとに変えていた環境は、適用前に同列を export し、"
+                "全体の設定・全体の言語資源へ写してください。削除後は復元できません。"
             ),
         )
     )
