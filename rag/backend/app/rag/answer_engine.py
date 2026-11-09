@@ -699,7 +699,7 @@ def build_engine_settings(
             settings.rag_section_expansion_followup_reserve_percent
         ),
     }
-    # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
+    # 生成の出力が形式の確認を通らなかったときのモデル(モデルのカスケード。#4581)。
     environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -1089,8 +1089,8 @@ class AnswerEngine:
     ) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
 
-        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成・
-        監査のすべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
+        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成の
+        すべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
         (画像を読めないモデル・画像の無い根拠は 0)。
         rerank は実際に並べたときだけモデル名を出す: 無効・未設定(モデルか compartment が無い。
         rag_engine はこのとき rerank を実行しない)なら空。rerank が失敗して取得の順で続けたとき
@@ -4318,7 +4318,7 @@ def _stored_child(
         # XML ツリー JSON の段落の根拠(#2024)。回答の本文の出典を引用ラベルにする(ページの
         # 無い原本なので「p.1」にしない)。親(単位)の場所は単位のラベル。
         metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
-        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にして説明する。
         metadata[ARTICLE_UNIT_KEY] = True
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として

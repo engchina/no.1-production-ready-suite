@@ -352,7 +352,7 @@ class EvaluationScreen(BaseModel):
 
 
 class EvaluationCase(EvaluationHandlingExpectation):
-    """六指標の評価入力。本文・位置の根拠、正解文書、標準回答・必須要点、応答の期待を持つ。
+    """四指標の評価入力。本文・位置の根拠、正解文書、標準回答・必須要点、応答の期待を持つ。
 
     複数往復では各往復の明示的な応答判断を評価し、検索と回答の意味上の評価は最後の回答を使う。
     評価情報がない指標は未評価とし、標準回答の有無から応答の期待を推定しない。
@@ -526,7 +526,7 @@ class EvaluationTurnResult(BaseModel):
 
 
 class EvaluationCaseResult(BaseModel):
-    """成功したケースの六指標。資料不足は None。"""
+    """成功したケースの四指標。資料不足は None。"""
 
     case_id: str
     trace_id: str
@@ -576,7 +576,7 @@ class EvaluationThresholdFailure(BaseModel):
 
 
 class EvaluationCategorySummary(BaseModel):
-    """ケースの分類ごとの六指標と対象数。"""
+    """ケースの分類ごとの四指標と対象数。"""
 
     case_count: int
     error_count: int = 0

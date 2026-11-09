@@ -1,7 +1,7 @@
-"""RAG の六指標評価。検索二・回答三・応答の判断一を独立して集計する。
+"""RAG の四指標評価。検索二・回答一・応答の判断一を独立して集計する。
 
-必要な根拠は本文・位置、MRR は重複を除いた引用文書の順位、回答は意味上の正確性・網羅性・
-主張の支持を測る。期待する応答の判断は明示入力だけを使う。前提不足は None とし平均に入れない。
+必要な根拠は本文・位置、MRR は重複を除いた引用文書の順位、回答は標準回答に照らした意味上の
+正確性を測る。期待する応答の判断は明示入力だけを使う。前提不足は None とし平均に入れない。
 会話の履歴・条件・区分・種類別の内訳を保ち、実行エラーと評価の未完了を合格にしない。"""
 
 import asyncio
@@ -1276,7 +1276,7 @@ def decision_breakdown(
 
 
 def category_breakdown(results: list[EvaluationCaseResult]) -> dict[str, EvaluationCategorySummary]:
-    """ケース分類別の件数。指標は六指標の集計に統一する。"""
+    """ケース分類別の件数。指標は四指標の集計に統一する。"""
     if not any(item.category for item in results):
         return {}
     grouped: dict[str, list[EvaluationCaseResult]] = {}

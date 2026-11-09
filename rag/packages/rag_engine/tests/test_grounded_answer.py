@@ -1,6 +1,5 @@
 """主張と引用の対による回答生成を、LLM を差し替えて入出力だけで確認する。"""
 
-import json
 import re
 import unittest
 from dataclasses import replace
@@ -757,46 +756,6 @@ class ImageGenerationFallbackTest(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.run_round(failing, None)
         self.assertEqual(self.text_model.prompts, [])
-
-
-class AuditGlossaryTest(unittest.TestCase):
-    """質問に当たった用語（名前と別名）を監査の入力に渡す（#2823）。"""
-
-    def setUp(self):
-        self.ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(self.ctx)[LIST_TEXT]
-        step = "一覧表を選択し、処理を選択します。"
-        self.model = FakeModel([draft(item(eid, step, step, request_id="Q1"))], [audit((0, "supported", "matched", ""))])
-
-    def audit_input(self, glossary=()):
-        grounded.run_round(
-            QUESTION,
-            _grounded_spans(QUESTION, self.ctx, (), None),
-            None,
-            prompt="p",
-            image_paths=[],
-            provider_id=None,
-            parse_text=self.model,
-            parse_images=None,
-            glossary=glossary,
-        )
-        return json.loads(next(prompt for schema, prompt in self.model.prompts if schema == "GroundedAudit"))
-
-    def test_answering_passes_only_terms_with_aliases(self):
-        from pathlib import Path
-
-        from rag_engine.generation.answering import _audit_glossary
-        from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeTerm
-
-        runtime = RuntimeKnowledgeContext(
-            original_question=QUESTION,
-            expanded_question=QUESTION,
-            path=Path("glossary.json"),
-            terms_answer_enabled=True,
-            matched_terms=(RuntimeTerm(term="年次集計", aliases=("年集計",)), RuntimeTerm(term="一覧表")),
-        )
-        self.assertEqual(_audit_glossary(runtime), [{"term": "年次集計", "aliases": ["年集計"]}])
-        self.assertEqual(_audit_glossary(None), [])
 
 
 class SummaryDeniedClaimTest(unittest.TestCase):

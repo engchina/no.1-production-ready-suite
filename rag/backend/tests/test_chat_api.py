@@ -906,7 +906,7 @@ class _StagedPipeline(_FakePipeline):
                 pass
             with answer_step("文書検索"), answer_step("Rerank"):
                 pass
-            with answer_step("回答文の生成と根拠確認（1回目）"):
+            with answer_step("回答文の生成と引用の確認（1回目）"):
                 pass
 
         with answer_trace(trace, trace_id=trace_id or "trace"):
@@ -1013,7 +1013,7 @@ def test_stream_message_writes_answer_spans_to_shared_table(
         ("rag.engine.stage", "answer_step", "質問の理解"),
         ("rag.engine.stage", "answer_step", "文書検索"),
         ("rag.engine.stage", "answer_step", "Rerank"),
-        ("rag.engine.stage", "answer_step", "回答文の生成と根拠確認（1回目）"),
+        ("rag.engine.stage", "answer_step", "回答文の生成と引用の確認（1回目）"),
         ("rag.answer_guardrail", "answer_guardrail", None),
     ]
     by_id = {event["step_id"]: event for event in steps}
