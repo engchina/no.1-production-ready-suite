@@ -1037,18 +1037,16 @@ def _validate_chunk_settings(chunk_size: int, overlap: int) -> None:
         raise ValueError("overlap は chunk_size より小さい必要があります。")
 
 
-def _append_table_projection(
-    value: ProjectedVisionText, element: DocumentElement, supplement: str, occurrence: int
-) -> ProjectedVisionText:
+def _table_supplement_source(element: DocumentElement, occurrence: int) -> VisionTextSource | None:
     projection = load_vision_text_projection(element.metadata.get("vision_text_projection"))
     if projection is None:
-        return ProjectedVisionText.join([value, ProjectedVisionText(supplement)], "\n")
+        return None
     binding = (
         json.loads(str(element.metadata["vision_text_binding"]))
         if "vision_text_binding" in element.metadata
         else {}
     )
-    source = VisionTextSource(
+    return VisionTextSource(
         element.element_id or "",
         occurrence,
         projection,
@@ -1056,6 +1054,21 @@ def _append_table_projection(
         str(binding.get("record_id") or element.element_id or ""),
         text_sha256(element.text),
     )
+
+
+def pending_table_supplement_source(element: DocumentElement) -> VisionTextSource | None:
+    """分割のときに足す表の補足の出所。足さない要素は None。"""
+    if not _pending_table_vision_supplement(element):
+        return None
+    return _table_supplement_source(element, 0)
+
+
+def _append_table_projection(
+    value: ProjectedVisionText, element: DocumentElement, supplement: str, occurrence: int
+) -> ProjectedVisionText:
+    source = _table_supplement_source(element, occurrence)
+    if source is None:
+        return ProjectedVisionText.join([value, ProjectedVisionText(supplement)], "\n")
     addition = ProjectedVisionText(supplement, (VisionTextRange(0, len(supplement), source),))
     return ProjectedVisionText.join([value, addition], "\n")
 
