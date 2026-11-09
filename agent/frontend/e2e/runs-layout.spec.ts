@@ -633,7 +633,8 @@ test("詳細の回答は長い文書名の根拠の行を省略して頁は残�
         passed: 2,
         cited: 2,
         markers: [],
-        passages: bullets.map((text, index) => ({ text, chunk_ids: [chunks[index]] })),
+        references: bullets.map((text, index) => ({ quote: text.replace("- ", ""), chunk_ids: [chunks[index]] })),
+        citation_lines: [],
       },
     },
     {
