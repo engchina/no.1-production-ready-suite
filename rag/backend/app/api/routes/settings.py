@@ -523,9 +523,7 @@ async def update_file_type_defaults_settings(
             candidate._file_type_defaults = {str(key): value for key, value in entries.items()}
             FILE_TYPE_DEFAULTS_STORE.save(candidate)
     except OSError as exc:
-        raise HTTPException(
-            status_code=500, detail="形式別の既定を保存できませんでした。"
-        ) from exc
+        raise HTTPException(status_code=500, detail="形式別の既定を保存できませんでした。") from exc
     FILE_TYPE_DEFAULTS_STORE.load(settings)
     return ApiResponse(data=_file_type_defaults_data(settings))
 

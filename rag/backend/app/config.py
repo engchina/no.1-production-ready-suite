@@ -584,8 +584,7 @@ class Settings(
     rag_file_type_defaults_file: str = Field(
         default=DEFAULT_FILE_TYPE_DEFAULTS_FILE,
         description=(
-            "「形式別の既定」画面から保存した JSON（RAG 専用。#4732）。"
-            "相対 path は backend/ 基準。"
+            "「形式別の既定」画面から保存した JSON（RAG 専用。#4732）。相対 path は backend/ 基準。"
         ),
     )
 
