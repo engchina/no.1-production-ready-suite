@@ -62,6 +62,42 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
   return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;
 }
 
+/** 同じ呼び出しのやり直しの結果: 次の試行を待っている / 後の試行が成功した。 */
+export type SpanRetryOutcome = "retrying" | "recovered";
+
+interface RetrySpan {
+  id: string;
+  status: string;
+  attributes: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * 同じ呼び出しの試行（`pr.call.retry_group` が同じ span。#4736）を束ね、後の試行で回復した失敗の結果を返す。属性が無い span
+ * は対象にせず、属性だけから同じ呼び出しを推測しない。最後の試行まで失敗なら返さない（失敗のまま）。`active` は実行が終わって
+ * いないか。やり直しの予定（`pr.retry.scheduled`）があるのに次の試行が無いまま実行が終わったときは失敗のままにする。
+ */
+export function spanRetryOutcomes(spans: readonly RetrySpan[], active: boolean): Map<string, SpanRetryOutcome> {
+  const groups = new Map<string, { span: RetrySpan; attempt: number }[]>();
+  for (const span of spans) {
+    const group = textAttribute(span.attributes, "pr.call.retry_group");
+    const attempt = span.attributes["pr.attempt"];
+    if (!group || typeof attempt !== "number") continue;
+    groups.set(group, [...(groups.get(group) ?? []), { span, attempt }]);
+  }
+  const outcomes = new Map<string, SpanRetryOutcome>();
+  for (const attempts of groups.values()) {
+    const last = attempts.reduce((latest, item) => (item.attempt > latest.attempt ? item : latest)).span;
+    const outcome: SpanRetryOutcome | undefined = last.status === "done"
+      ? "recovered"
+      : last.status === "running" || last.status === "pending" || (active && last.status === "failed" && last.attributes["pr.retry.scheduled"] === true)
+        ? "retrying"
+        : undefined;
+    if (!outcome) continue;
+    for (const { span } of attempts) if (span.status === "failed") outcomes.set(span.id, outcome);
+  }
+  return outcomes;
+}
+
 /**
  * MCP の手続きの span（OpenTelemetry の MCP の semantic conventions の `mcp.method.name` が `tools/call` 以外。
  * `initialize`・`notifications/*`・`tools/list` など。#3272）。利用者向けの処理の経過の木には出さず（子は親の位置に

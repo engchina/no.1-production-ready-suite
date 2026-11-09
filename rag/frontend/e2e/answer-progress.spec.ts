@@ -1136,6 +1136,64 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
 });
 
 
+test("同じ呼び出しのやり直しで回復した試行は赤の失敗にせず「再試行して成功」と出す（#4736）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const recorder = spanProgressRecorder("trace-retry");
+  const attempt = (group: string, sent: number, scheduled: boolean) => ({
+    "gen_ai.request.model": "synthetic-model",
+    "pr.gen_ai.purpose": "evidence.grade",
+    "pr.call.retry_group": group,
+    "pr.attempt": sent,
+    ...(scheduled ? { "pr.retry.scheduled": true } : {}),
+  });
+  const first = [
+    ...recorder.start("root", ragSpan.root()),
+    ...recorder.start("answer", ragSpan.stage("answer")),
+    ...recorder.start("grade", ragSpan.step("根拠の評価")),
+    ...recorder.start("try-1", ragSpan.technical("gen_ai.chat", "grade", attempt("a".repeat(32), 1, true))),
+    ...recorder.finish("try-1", "failed"),
+  ];
+  const rest = [
+    ...recorder.start("try-2", ragSpan.technical("gen_ai.chat", "grade", attempt("a".repeat(32), 2, false))),
+    ...recorder.finish("try-2"),
+    ...recorder.finish("grade"),
+    ...recorder.start("draft", ragSpan.step("回答の生成")),
+    ...recorder.start("try-3", ragSpan.technical("gen_ai.chat", "draft", attempt("b".repeat(32), 1, true))),
+    ...recorder.finish("try-3", "failed"),
+    ...recorder.start("try-4", ragSpan.technical("gen_ai.chat", "draft", attempt("b".repeat(32), 2, false))),
+    ...recorder.finish("try-4", "failed"),
+    ...recorder.finish("draft"),
+    ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
+  ];
+  const content = "合成の回答です。";
+  await mockSearchPage(page, [[
+    { afterMs: 0, text: sse("run", { trace_id: "trace-retry" }) + traceSse(first) },
+    { afterMs: 1500, text: traceSse(rest) + sse("metadata", { trace_id: "trace-retry", elapsed_ms: 1500, guardrail_warnings: [], diagnostics: {} }) + sse("delta", { text: content }) + sse("done", { answer: content, citations: [] }) },
+  ]]);
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  const prefix = "search-run-progress";
+  const row = (key: string) => page.getByTestId(`${prefix}-step-${spanStepId(key)}`);
+  // 次の試行を待つ間も赤にしない。
+  await expect(row("try-1")).toHaveAttribute("data-retry", "retrying");
+  await expect(row("try-1")).toContainText("再試行中");
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await page.getByTestId(`${prefix}-summary`).click();
+  await expect(row("try-1")).toHaveAttribute("data-retry", "recovered");
+  await expect(row("try-1")).toHaveAttribute("data-status", "done");
+  await expect(row("try-1").locator("[data-run-step-status-duration]")).toContainText("再試行して成功");
+  await expect(row("try-1").locator(".text-danger-fg")).toHaveCount(0);
+  // 最後まで失敗した呼び出しは今までどおり赤。
+  await expect(row("try-3")).toHaveAttribute("data-status", "failed");
+  await expect(row("try-4")).toHaveAttribute("data-status", "failed");
+  await expect(row("try-4").locator("[data-run-step-status-duration]")).toContainText("失敗");
+  await expect(row("try-4").locator(".text-danger-fg")).not.toHaveCount(0);
+  await expect(page.getByTestId(`${prefix}-summary`)).not.toHaveClass(/text-danger-fg/);
+  await row("try-1").scrollIntoViewIfNeeded();
+  await screenshotBothThemes(page, theme => testInfo.outputPath(`retry-recovered-${theme}.png`));
+  await expectNoPageOverflow(page);
+});
+
 test("多様性補充の実績と未実行理由を検索の経過と軌跡で保つ", {tag: "@responsive"}, async ({page}, testInfo) => {
   const recorder = spanProgressRecorder("trace-diversity");
   const events = [...recorder.start("root", ragSpan.root()), ...recorder.start("answer", ragSpan.stage("answer"))];

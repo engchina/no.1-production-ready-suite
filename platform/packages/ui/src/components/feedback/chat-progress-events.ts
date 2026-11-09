@@ -1,7 +1,7 @@
 import { parseCallContent } from "../../lib/call-body";
 import type { CallDetails, RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
 import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
-import { isMcpProtocolSpan, traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
+import { isMcpProtocolSpan, spanRetryOutcomes, traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
 import { CHAT_PROGRESS_STATUS_RANK } from "./chat-progress-steps";
 
@@ -494,16 +494,23 @@ export function labelChatProgressSteps(
   const viewer = traceLabels.product;
   const spanMode = steps.some((step) => step.span);
   const ordered: OrderedStep[] = spanMode ? orderSpanSteps(steps, viewer) : steps.map((step) => ({ step, level: 0 }));
+  // 同じ呼び出しのやり直しで回復した試行（#4736）。利用者の一覧では失敗にしない（技術の一覧は実際の状態のまま）。
+  const retries = spanRetryOutcomes(
+    steps.flatMap((step) => (step.span ? [{ id: step.id, status: step.status, attributes: step.span.attributes ?? EMPTY_PARAMS }] : [])),
+    steps.some((step) => step.span?.root === true && step.status === "running")
+  );
   return ordered.map(({ step, level: treeLevel, product }) => {
     const span = step.span;
     const foreign = Boolean(viewer && span?.product && span.product !== viewer);
     const definition = !foreign && Object.prototype.hasOwnProperty.call(definitions, step.kind) ? definitions[step.kind] : undefined;
     const values = step.params ?? EMPTY_PARAMS;
+    const retry = retries.get(step.id);
+    const status = retry ? "done" : step.status;
     const spanName = span
       ? traceSpanDisplayName(
           {
             operationName: span.name,
-            status: span.cancelled ? "cancelled" : step.status === "running" || step.status === "pending" ? "done" : step.status,
+            status: span.cancelled ? "cancelled" : status === "running" || status === "pending" ? "done" : status,
             root: span.root === true,
             attributes: span.attributes ?? EMPTY_PARAMS,
           },
@@ -512,9 +519,10 @@ export function labelChatProgressSteps(
       : undefined;
     const result: ChatProgressStep = {
       id: step.id,
-      label: definition ? definition.label(step.status, values) : (span?.displayName ?? spanName ?? step.id),
-      status: step.status,
+      label: definition ? definition.label(status, values) : (span?.displayName ?? spanName ?? step.id),
+      status,
     };
+    if (retry) result.retry = retry;
     if (span) result.operationName = span.name;
     if (product) result.product = traceLabels.productName(product);
     // 状態で変わらない名詞の名前（「SQL の生成」）。失敗のカードの止まった段に使う（#2342）。
@@ -522,16 +530,16 @@ export function labelChatProgressSteps(
     if (name && name !== result.label) result.name = name;
     if (step.startedAt) result.startedAt = step.startedAt;
     if (step.finishedAt) result.finishedAt = step.finishedAt;
-    const detail = definition?.detail?.(step.status, values) ?? step.detail ?? (span?.cancelled ? traceLabels.cancelled : undefined);
+    const detail = definition?.detail?.(status, values) ?? step.detail ?? (span?.cancelled ? traceLabels.cancelled : undefined);
     if (detail) result.detail = detail;
-    const outcome = definition?.outcome?.(step.status, values);
+    const outcome = definition?.outcome?.(status, values);
     if (outcome) result.outcome = outcome;
-    const meta = definition?.meta?.(step.status, values);
+    const meta = definition?.meta?.(status, values);
     if (meta) result.meta = meta;
     const level = spanMode ? treeLevel : definition?.level?.(values);
     if (level) result.level = level;
     if (span?.parentId) result.parentId = span.parentId;
-    const productDetails = definition?.details ? definition.details(step.status, values, step.details) : step.details;
+    const productDetails = definition?.details ? definition.details(status, values, step.details) : step.details;
     const details = span
       ? mergeDetails(productDetails, [
           ...traceSpanFields(undefined, span.name, span.attributes ?? EMPTY_PARAMS, traceLabels),

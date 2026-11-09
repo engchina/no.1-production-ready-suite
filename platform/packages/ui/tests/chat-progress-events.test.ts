@@ -14,6 +14,7 @@ import {
   chatProgressLabelState,
   chatProgressStepsFromEvents,
   chatProgressTerminalOf,
+  chatProgressTimelineStep,
   chatProgressTraceIdOf,
   parseChatProgressEvent,
   parseChatProgressEvents,
@@ -415,6 +416,95 @@ describe("span の段（#3226）", () => {
   });
 });
 
+
+// #4736: 同じ呼び出しの試行（`pr.call.retry_group`）は、結果が確定するまで失敗にしない。属性だけの推測で結びつけない。
+describe("同じ呼び出しのやり直し（#4736）", () => {
+  const span = (id: string, parent: string | undefined, status: ChatProgressStepStatus, extra: Partial<ChatProgressStepEvent> = {}): ChatProgressStepEvent => ({
+    ...step(1, id, status),
+    name: "gen_ai.chat",
+    ...(parent ? { parent_id: parent } : {}),
+    ...extra,
+  });
+  const attempt = (group: string | undefined, sent: number, scheduled = false) => ({
+    attributes: {
+      ...(group ? { "pr.call.retry_group": group } : {}),
+      "pr.attempt": sent,
+      ...(scheduled ? { "pr.retry.scheduled": true } : {}),
+    },
+  });
+  const rows = (events: ChatProgressStepEvent[]) =>
+    chatProgressStepsFromEvents(events.map((event, index) => ({ ...event, seq: index + 1 })), {}, "job-1");
+
+  it("後の試行が成功したら、前の試行は失敗にせず「再試行して成功」にする", () => {
+    const steps = rows([
+      span("r", undefined, "done", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt("g1", 1, true)),
+      span("b", "r", "failed", attempt("g1", 2, true)),
+      span("c", "r", "done", attempt("g1", 3)),
+    ]);
+    expect(steps.map((row) => [row.id, row.status, row.retry])).toEqual([
+      ["a", "done", "recovered"],
+      ["b", "done", "recovered"],
+      ["c", "done", undefined],
+    ]);
+  });
+
+  it("最後の試行まで失敗なら赤のまま", () => {
+    const steps = rows([
+      span("r", undefined, "failed", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt("g1", 1, true)),
+      span("b", "r", "failed", attempt("g1", 2)),
+    ]);
+    expect(steps.map((row) => [row.id, row.status, row.retry])).toEqual([
+      ["a", "failed", undefined],
+      ["b", "failed", undefined],
+    ]);
+  });
+
+  it("次の試行の実行中と、やり直しを待つ間は「再試行中」にする", () => {
+    const running = rows([
+      span("r", undefined, "running", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt("g1", 1, true)),
+      span("b", "r", "running", attempt("g1", 2)),
+    ]);
+    expect(running[0]).toMatchObject({ status: "done", retry: "retrying" });
+    const waiting = rows([
+      span("r", undefined, "running", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt("g1", 1, true)),
+    ]);
+    expect(waiting[0]).toMatchObject({ status: "done", retry: "retrying" });
+  });
+
+  it("やり直しの予定があっても、実行が終わって次の試行が無ければ失敗のまま", () => {
+    const steps = rows([
+      span("r", undefined, "failed", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt("g1", 1, true)),
+    ]);
+    expect(steps[0]).toMatchObject({ status: "failed" });
+    expect(steps[0].retry).toBeUndefined();
+  });
+
+  it("束ねの属性の無い失敗・別の呼び出しの成功では結びつけない", () => {
+    const steps = rows([
+      span("r", undefined, "done", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt(undefined, 1)),
+      span("b", "r", "done", attempt(undefined, 2)),
+      span("c", "r", "failed", attempt("g1", 1)),
+      span("d", "r", "done", attempt("g2", 2)),
+    ]);
+    expect(steps.map((row) => row.status)).toEqual(["failed", "done", "failed", "done"]);
+    expect(steps.every((row) => row.retry === undefined)).toBe(true);
+  });
+
+  it("再試行の印は処理の経過の行に渡る", () => {
+    const [row] = rows([
+      span("r", undefined, "done", { root: true, name: "rag.answer" }),
+      span("a", "r", "failed", attempt("g1", 1)),
+      span("b", "r", "done", attempt("g1", 2)),
+    ]);
+    expect(chatProgressTimelineStep(row)).toMatchObject({ status: "done", retry: "recovered" });
+  });
+});
 
 describe("深い木の実際の親 ID（#3790）", () => {
   it("複数 request の SDK を各親に結び、親不在や親なしを近接行へ結び直さない", () => {

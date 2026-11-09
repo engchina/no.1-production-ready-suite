@@ -47,7 +47,6 @@ def test_sdk_boundary_records_private_request_schema_and_response(monkeypatch, s
 
     client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
     monkeypatch.setattr(oci, "_stall_detection_enabled", lambda _: streamed)
-    monkeypatch.setattr(oci, "_stall_limits", lambda *_: None)
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: client)
     monkeypatch.setattr(oci, "_openai_client_with_deadline", lambda client, _: client)
     monkeypatch.setattr(oci, "_stream_parsed", stream)
