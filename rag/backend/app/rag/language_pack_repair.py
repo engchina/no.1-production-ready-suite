@@ -3,7 +3,7 @@
 通常の保存・公開・復元は書き込みの前に現在版を厳格に検証するので、不適合の現在版からは新しい版を
 発行できない。この経路だけが現在版を厳格な検証なしに読み、完全な内容の新しい版を明示の操作で発行する。
 起動・API・読み取りの処理からは呼ばない(互換の補完や自動の公開にしない)。旧版の内容と hash は
-書き換えない。
+書き換えない。配備の確認の読み取りだけの検査(#4695)も、同じ読み取りを使うのでここに置く。
 """
 
 from __future__ import annotations
@@ -14,10 +14,19 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from rag_parser_core.language import FIELD_SPECS, LanguagePack, builtin_pack
+from rag_parser_core.language import (
+    FIELD_SPECS,
+    LanguagePack,
+    LanguagePackError,
+    build_pack,
+    builtin_pack,
+)
 
 from app.clients import language_pack_release_store as release_store
-from app.rag.language_pack_contract import LanguagePackSnapshotError
+from app.rag.language_pack_contract import (
+    LanguagePackNotInitializedError,
+    LanguagePackSnapshotError,
+)
 from app.rag.language_pack_retired_fields import without_retired_fields
 from app.schemas.language_pack_release import LanguagePackRelease
 
@@ -35,6 +44,9 @@ ACTIVE_INGESTION_JOBS = "ACTIVE_INGESTION_JOBS"
 DRAFT_DIFFERS_FROM_CURRENT = "DRAFT_DIFFERS_FROM_CURRENT"
 EXPECTED_CURRENT_MISMATCH = "EXPECTED_CURRENT_MISMATCH"
 EXPECTED_DRAFT_REVISION_MISMATCH = "EXPECTED_DRAFT_REVISION_MISMATCH"
+
+_METADATA_KEYS = ("locale", "version")
+_UNDETERMINED_FIELD = "（項目を特定できない形式の誤り）"
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,14 @@ class LanguagePackRepairResult:
     draft_revision: int
     filled_fields: list[str]
     removed_retired_fields: list[str]
+
+
+@dataclass(frozen=True)
+class LanguagePackContractIssues:
+    """今の公開版と下書きの、現行の契約に合わない項目の名前。言語資源の値は持たない。"""
+
+    current: list[str]
+    draft: list[str]
 
 
 class LanguagePackRepairBlocked(ValueError):
@@ -125,12 +145,12 @@ def _candidate(effective: Any) -> tuple[LanguagePack | None, list[str], list[str
     return pack, sorted(missing), retired
 
 
-def _inspect(
+def _stored_rows(
     connection: OracleConnectionProtocol, *, lock: bool
-) -> tuple[LanguagePackRepairPlan, LanguagePack | None]:
-    from app.clients.oracle import _fetch_one, _json_loads
+) -> tuple[dict[str, object], dict[str, object]]:
+    """不適合の現在版を読むための、厳格な検証を通さない読み取り。(状態の行、現在版の行) を返す。"""
+    from app.clients.oracle import _fetch_one
 
-    # 不適合の現在版を読むための、ここだけの厳格な検証を通さない読み取り。
     state_row = _fetch_one(
         connection,
         "SELECT draft_revision, draft_effective_json, current_release_id "
@@ -146,6 +166,15 @@ def _inspect(
     )
     if release_row is None:
         raise LanguagePackSnapshotError("言語資源の現在の公開版が見つかりません。")
+    return state_row, release_row
+
+
+def _inspect(
+    connection: OracleConnectionProtocol, *, lock: bool
+) -> tuple[LanguagePackRepairPlan, LanguagePack | None]:
+    from app.clients.oracle import _fetch_one, _json_loads
+
+    state_row, release_row = _stored_rows(connection, lock=lock)
     effective = _json_loads(release_row["effective_json"])
     draft = _json_loads(state_row["draft_effective_json"])
     jobs_row = _fetch_one(
@@ -191,6 +220,83 @@ def _inspect(
         blockers=blockers,
     )
     return plan, pack
+
+
+def _snapshot_issues(effective: Mapping[str, Any]) -> list[str]:
+    """保存内容が現行の契約に合わない項目の名前を返す(例外の文には理由や値が入るので使わない)。"""
+    malformed = {
+        section
+        for section, fields in effective.items()
+        if section not in _METADATA_KEYS and not isinstance(fields, Mapping)
+    }
+    sections = {key: value for key, value in effective.items() if key not in malformed}
+    try:
+        normalized = build_pack(sections).to_dict()
+    except LanguagePackError as exc:
+        return sorted(malformed | set(exc.errors))
+    except (TypeError, AttributeError):
+        return sorted(malformed | {_UNDETERMINED_FIELD})
+    # 検証は通るが、保存の形が現行とそろわない項目(release_store._validated の完全一致)。
+    differing: set[str] = set()
+    for section in sections.keys() | normalized.keys():
+        stored, expected = sections.get(section), normalized.get(section)
+        if stored == expected:
+            continue
+        if isinstance(stored, Mapping) and isinstance(expected, Mapping):
+            differing.update(
+                f"{section}.{key}"
+                for key in stored.keys() | expected.keys()
+                if stored.get(key) != expected.get(key)
+            )
+        else:
+            differing.add(section)
+    return sorted(malformed | differing)
+
+
+def _current_release_issues(row: Mapping[str, object], effective: Mapping[str, Any]) -> list[str]:
+    issues = _snapshot_issues(effective)
+    if issues:
+        return issues
+    pack = build_pack(effective)
+    return [
+        column
+        for column, computed in (("content_hash", pack.hash), ("ingest_hash", pack.ingest_hash))
+        if row.get(column) != computed
+    ]
+
+
+async def inspect_language_pack_contract(oracle: OracleClient) -> LanguagePackContractIssues | None:
+    """配備の確認の読み取りだけの検査(#4695)。今の公開版と下書きだけを見る。
+
+    実行時と同じ厳格な読み取りで判定し、合うとき・公開版が 1 つも無いときは None を返す。合わない
+    ときだけ項目の名前を調べる。状態の行や現在版ポインタの不整合は LanguagePackSnapshotError。
+    """
+
+    def operation(connection: OracleConnectionProtocol) -> LanguagePackContractIssues | None:
+        from app.clients.oracle import _json_loads
+
+        try:
+            release_store._state(connection)
+        except LanguagePackNotInitializedError:
+            return None
+        except (ValueError, TypeError, AttributeError):
+            # build_pack は節の形が dict でないと TypeError / AttributeError になる。
+            pass
+        else:
+            return None
+        state_row, release_row = _stored_rows(connection, lock=False)
+        issues = LanguagePackContractIssues(
+            current=_current_release_issues(
+                release_row, _json_loads(release_row["effective_json"])
+            ),
+            draft=_snapshot_issues(_json_loads(state_row["draft_effective_json"])),
+        )
+        if not issues.current and not issues.draft:
+            # 版番号などの項目以外の不適合も、合格にしない。
+            raise LanguagePackSnapshotError("言語資源の公開版の行が現在の契約に合いません。")
+        return issues
+
+    return await oracle._run_transaction(operation)
 
 
 async def inspect_language_pack_repair(oracle: OracleClient) -> LanguagePackRepairPlan:
