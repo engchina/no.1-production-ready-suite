@@ -15,22 +15,19 @@ describe("uploadFileProblem", () => {
     expect(uploadFileProblem(file("規程.md", 10), 10)).toBeNull();
   });
 
-  it("HEIC / HEIF・EPUB は変換を案内する理由で止め、ODT・RTF・RST・Org は送る", () => {
+  it("HEIC / HEIF・EPUB は変換を案内する理由で止める", () => {
     // pandoc・pi-heif を入れないため（#3351）。
     expect(uploadFileProblem(file("photo.HEIC", 5), 10)).toBe("heicImage");
     expect(uploadFileProblem(file("photo.heif", 5), 10)).toBe("heicImage");
     expect(uploadFileProblem(file("book.epub", 5), 10)).toBe("epubBook");
-    for (const name of ["memo.odt", "memo.rtf", "guide.rst", "notes.org"]) {
-      expect(uploadFileProblem(file(name, 5), 10)).toBeNull();
-    }
   });
 
-  // #4054
-  it("Office テンプレートは送り、旧形式のテンプレートは未対応のまま止める", () => {
-    for (const name of ["form.dotx", "form.DOTM", "form.potx", "form.potm", "form.xltx", "form.xltm"]) {
+  // #4730
+  it("主要な形式は送り、それ以外は未対応の理由で止める", () => {
+    for (const name of ["a.pdf", "a.DOC", "a.docx", "a.ppt", "a.pptx", "a.xls", "a.xlsx", "a.csv", "a.txt", "a.md", "a.markdown", "a.json", "a.html", "a.htm", "a.jpg", "a.jpeg", "a.png"]) {
       expect(uploadFileProblem(file(name, 5), 10)).toBeNull();
     }
-    for (const name of ["form.dot", "form.pot", "form.xlt"]) {
+    for (const name of ["a.gif", "a.webp", "a.tif", "a.tiff", "a.rst", "a.org", "a.tsv", "a.jsonl", "a.ndjson", "a.xml", "a.xhtml", "a.eml", "a.msg", "a.docm", "a.pptm", "a.xlsm", "a.dotx", "a.dotm", "a.potx", "a.potm", "a.xltx", "a.xltm", "a.odt", "a.rtf"]) {
       expect(uploadFileProblem(file(name, 5), 10)).toBe("unsupported");
     }
   });

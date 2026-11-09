@@ -748,37 +748,12 @@ def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> N
     assert "rag-parser-core" in pyproject["project"]["dependencies"]
 
 
-def test_tsv_upload_content_type_is_allowed_by_default() -> None:
-    """TSV は table-preserving local parser と整合するため既定 upload whitelist に含める。"""
-    assert "text/tab-separated-values" in Settings().allowed_upload_content_types
-
-
-def test_json_lines_upload_content_types_are_allowed_by_default() -> None:
-    """JSONL / NDJSON は local text parser と整合するため既定 upload whitelist に含める。"""
-    allowed = set(Settings().allowed_upload_content_types)
-
-    assert {
-        "application/jsonl",
-        "application/jsonlines",
-        "application/ndjson",
-        "application/x-ndjson",
-    } <= allowed
-
-
 def test_browser_previewable_image_content_types_are_allowed_by_default() -> None:
-    """Enterprise AI image payload と整合する画像 MIME は既定 upload whitelist に含める。"""
+    """既定の upload whitelist の画像は JPEG / PNG だけ(#4730)。"""
     allowed = set(Settings().allowed_upload_content_types)
 
-    assert {"image/gif", "image/jpeg", "image/jpg", "image/png", "image/webp"} <= allowed
-    assert {"image/tif", "image/tiff"} <= allowed
-
-
-def test_semantic_html_and_outlook_msg_content_types_are_allowed_by_default() -> None:
-    """SourceProfile が判定できる XHTML / Outlook MSG MIME は upload whitelist に含める。"""
-    allowed = set(Settings().allowed_upload_content_types)
-
-    assert "application/xhtml+xml" in allowed
-    assert {"application/vnd.ms-outlook", "application/x-msg"} <= allowed
+    assert {"image/jpeg", "image/jpg", "image/png"} <= allowed
+    assert allowed.isdisjoint({"image/gif", "image/webp", "image/tif", "image/tiff"})
 
 
 def test_audio_and_video_content_types_are_not_allowed_by_default() -> None:

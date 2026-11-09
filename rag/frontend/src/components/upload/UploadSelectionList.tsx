@@ -5,7 +5,6 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { formatByteSize, totalUploadBytes } from "@/lib/upload-requests";
 import {
   uploadFileProblem,
-  type RejectedUploadFormat,
   type UploadFileProblem,
 } from "@/lib/upload-selection";
 import { listScrollLabel } from "@/lib/pagination-labels";
@@ -20,20 +19,13 @@ const PROBLEM_LABEL: Record<UploadFileProblem, I18nKey> = {
   audioVideo: "upload.selection.problem.audioVideo",
 };
 
-/** 受け付けない形式の変換の方法（API の 415 の文言と同じ。#3351・#3369）。 */
-const REJECTED_FORMAT_GUIDE: Record<RejectedUploadFormat, I18nKey> = {
+/** 受け付けない形式の変換の方法（API の 415 の文言と同じ。#3351・#3369・#4730）。 */
+const FORMAT_GUIDE: Partial<Record<UploadFileProblem, I18nKey>> = {
+  unsupported: "upload.rejected.unsupported",
   heicImage: "upload.rejected.heicImage",
   epubBook: "upload.rejected.epubBook",
   audioVideo: "upload.rejected.audioVideo",
 };
-
-function isRejectedUploadFormat(problem: UploadFileProblem | null): problem is RejectedUploadFormat {
-  return problem !== null && Object.hasOwn(REJECTED_FORMAT_GUIDE, problem);
-}
-
-function rejectedFormatGuide(problem: UploadFileProblem | null): I18nKey | null {
-  return isRejectedUploadFormat(problem) ? REJECTED_FORMAT_GUIDE[problem] : null;
-}
 
 /**
  * 送る前に選んだファイルの一覧（#701）。選ぶだけでは送らず、ここで見直してから「アップロードを開始」する。
@@ -105,9 +97,9 @@ export function UploadSelectionList({
                     className="mt-1"
                   />
                 ) : null}
-                {rejectedFormatGuide(problem) ? (
+                {problem && FORMAT_GUIDE[problem] ? (
                   <p className="mt-1 text-xs text-fg-muted" data-testid="upload-selection-guide">
-                    {t(rejectedFormatGuide(problem) as I18nKey)}
+                    {t(FORMAT_GUIDE[problem])}
                   </p>
                 ) : null}
               </div>

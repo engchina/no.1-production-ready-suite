@@ -226,7 +226,7 @@ test("アップロード画面は現在の保存先を表示し、保存先設�
     page.getByRole("heading", { name: "所属させるナレッジベース" }),
   ).toBeVisible();
   await expect(
-    page.getByText("PDF・画像・テキスト・HTML・メール・Office"),
+    page.getByText("PDF・Office・テキスト・HTML・画像"),
   ).toBeVisible();
   await expect(page.getByText("最大 200 MB")).toBeVisible();
   const acceptedTypes = await page
@@ -236,7 +236,7 @@ test("アップロード画面は現在の保存先を表示し、保存先設�
   expect(acceptedTypes).toContain(".pptx");
   expect(acceptedTypes).toContain(".xlsx");
   expect(acceptedTypes).toContain(".html");
-  expect(acceptedTypes).toContain(".eml");
+  expect(acceptedTypes).not.toContain(".eml");
   // 音声・動画は取り込まない形式で、ファイル選択に出さない（#3369）。
   expect(acceptedTypes).not.toContain("audio/");
   expect(acceptedTypes).not.toContain(".mp3");

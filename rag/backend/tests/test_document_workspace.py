@@ -29,6 +29,7 @@ from app.rag.source_profile import (
     AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
     EPUB_UPLOAD_REJECTED_MESSAGE,
     HEIC_UPLOAD_REJECTED_MESSAGE,
+    UNSUPPORTED_UPLOAD_FORMAT_MESSAGE,
 )
 from app.schemas.document import (
     DocumentChunkView,
@@ -1017,6 +1018,7 @@ def test_document_upload_returns_source_profile() -> None:
     assert profile["quality_warnings"] == []
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_tsv_as_local_text_table_source() -> None:
     """TSV upload は unknown 扱いにせず local table parser へ渡す。"""
     resp = client.post(
@@ -1114,6 +1116,52 @@ def test_document_upload_has_no_ingestion_mode_and_never_enqueues() -> None:
     assert jobs.json()["data"]["items"] == []
 
 
+@pytest.fixture
+def upload_input_gate_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """入力の段で外した形式(#4730)の後段を確かめる。登録済みの文書のために、後段の処理は残している。"""
+    monkeypatch.setattr(documents_route, "_is_allowed_upload_content_type", lambda *_, **__: True)
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("macro.docm", "application/octet-stream"),
+        ("macro.docm", "application/pdf"),
+        ("mail.eml", "message/rfc822"),
+        ("scan.tiff", "image/tiff"),
+        ("records.jsonl", "application/octet-stream"),
+        ("README", "text/plain"),
+    ],
+    ids=["octet-stream", "allowed-mime", "email", "tiff", "jsonl", "no-extension"],
+)
+def test_document_upload_rejects_formats_outside_main_list_before_storing(
+    file_name: str, content_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """主要な形式の外は、MIME type に関係なく保存前に 415 で止める(#4730)。"""
+
+    def fail_if_stored() -> None:
+        raise AssertionError("外した形式の原本を保存しない")
+
+    monkeypatch.setattr("app.api.routes.documents.ObjectStorageClient", fail_if_stored)
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, b"PK\x03\x04synthetic", content_type)},
+    )
+
+    assert resp.status_code == 415
+    assert resp.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
+
+
+def test_document_upload_keeps_json_for_xml_tree_parser() -> None:
+    """XML ツリー JSON の解析エンジンの入力の .json は受ける(#4730)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("tree.json", b'{"tag": "root"}', "application/json")},
+    )
+
+    assert resp.status_code == 200
+
+
 def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
     """application/octet-stream でも拡張子から未知の binary は保存前に 415 にする。"""
     resp = client.post(
@@ -1122,9 +1170,10 @@ def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
     )
 
     assert resp.status_code == 415
-    assert resp.json()["error_messages"] == ["対応していないファイル形式です。"]
+    assert resp.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_reports_unsupported_outlook_msg_without_enqueue() -> None:
     """Outlook MSG は未対応 email として source profile を返す。"""
     resp = client.post(
@@ -1154,6 +1203,7 @@ def test_document_upload_reports_unsupported_outlook_msg_without_enqueue() -> No
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_reports_unsupported_tiff_image_without_enqueue() -> None:
     """TIFF 画像は upload 時に VLM へ送らず source profile を返す。"""
     resp = client.post(
@@ -1768,6 +1818,7 @@ def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reinge
     assert segments.json()["data"] == []
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_ingestion_job_endpoint_skips_unsupported_outlook_msg() -> None:
     """未対応 Outlook MSG の手動 job 投入も skipped 履歴だけ残す。"""
     document_id = _upload(
@@ -1790,6 +1841,7 @@ def test_document_ingestion_job_endpoint_skips_unsupported_outlook_msg() -> None
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_ingestion_job_endpoint_skips_unsupported_tiff_image() -> None:
     """TIFF 画像の手動 job 投入も skipped 履歴だけ残す。"""
     document_id = _upload("scan.tiff", b"II*\x00tiff", "image/tiff")
@@ -1845,6 +1897,7 @@ def test_document_ingestion_job_endpoint_runs_legacy_office_with_office_to_pdf(
     assert job["skip_reason"] is None
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_macro_enabled_office() -> None:
     """マクロ付きの Office はアップロードでき、変換が要る形式として案内する(#2470)。"""
     resp = client.post(
@@ -1931,6 +1984,7 @@ _TEMPLATE_UPLOADS = [
     ("file_name", "content_type", "main_part_type", "reason", "preprocess"), _TEMPLATE_UPLOADS
 )
 @pytest.mark.parametrize("sends_mime", [True, False])
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_office_template(
     file_name: str,
     content_type: str,
@@ -1986,6 +2040,7 @@ def test_document_upload_accepts_office_template(
     ],
     ids=["broken", "not_package", "renamed_docx", "vba_in_plain", "mime_pdf", "ext_docx"],
 )
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_rejects_invalid_office_template_before_storing(
     file_name: str, content_type: str, data: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2002,6 +2057,7 @@ def test_document_upload_rejects_invalid_office_template_before_storing(
     assert "受け付けませんでした" in resp.json()["error_messages"][0]
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_batch_upload_reports_rejected_template_without_conversion_profile() -> None:
     """確認で止めたテンプレートには「変換が必要」の判定を添えない(#4054)。"""
     resp = client.post(
@@ -2026,7 +2082,7 @@ def test_document_upload_keeps_rejecting_other_extensions(file_name: str) -> Non
     )
 
     assert resp.status_code == 415
-    assert resp.json()["error_messages"] == ["対応していないファイル形式です。"]
+    assert resp.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
 
 
 @pytest.mark.parametrize(
@@ -2100,6 +2156,7 @@ def test_document_upload_rejects_unsupported_formats_with_guide(
     ],
     ids=["odt", "rtf-text", "rtf-application"],
 )
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_odt_rtf_as_office_conversion(
     file_name: str, content_type: str
 ) -> None:
@@ -2128,6 +2185,7 @@ def test_document_upload_accepts_odt_rtf_as_office_conversion(
     ],
     ids=["rst-mime", "rst-octet-stream", "org-mime", "org-text"],
 )
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_rst_org_as_text(file_name: str, content_type: str) -> None:
     """reStructuredText・Org はプレーンテキストとして受け付ける(pandoc を通さない。#3351)。"""
     resp = client.post(
@@ -2142,6 +2200,7 @@ def test_document_upload_accepts_rst_org_as_text(file_name: str, content_type: s
     assert profile["preview_kind"] == "text"
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_text_xml() -> None:
     """.xml は text/xml でも受け付ける(#3360)。"""
     resp = client.post(
@@ -2867,6 +2926,7 @@ def test_document_content_returns_original_bytes() -> None:
     assert "filename*=UTF-8''policy.txt" in resp.headers["content-disposition"]
 
 
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_content_prefers_stored_content_type_without_extension() -> None:
     """拡張子がなくても upload 時に保存した content-type で配信する。"""
     body = "拡張子なしテキスト".encode()

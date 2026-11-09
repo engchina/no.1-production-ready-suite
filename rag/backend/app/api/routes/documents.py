@@ -146,7 +146,12 @@ from app.rag.section_rules import (
     extraction_sections,
     load_section_rules,
 )
-from app.rag.source_profile import build_source_profile, rejected_upload_format_message
+from app.rag.source_profile import (
+    ACCEPTED_UPLOAD_EXTENSIONS,
+    UNSUPPORTED_UPLOAD_FORMAT_MESSAGE,
+    build_source_profile,
+    rejected_upload_format_message,
+)
 from app.rag.staging_recipes import StagingRuntimeOptions, apply_staging_runtime
 from app.rag.variant_keys import (
     compute_chunk_set_id,
@@ -448,21 +453,15 @@ def _is_allowed_upload_content_type(
     sanitized_file_name: str,
     allowed_content_types: list[str],
 ) -> bool:
-    """MIME whitelist と拡張子 profile を組み合わせて upload 可否を判定する。"""
+    """MIME whitelist と拡張子 whitelist の両方を満たすアップロードだけを受ける。
+
+    application/octet-stream はどの拡張子でも送られるので、MIME type だけでは絞れない(#4730)。
+    """
     normalized_allowed = {_normalized_content_type(allowed) for allowed in allowed_content_types}
-    if content_type not in normalized_allowed:
-        return False
-    if content_type != "application/octet-stream":
-        return True
-    profile = build_source_profile(
-        original_file_name=sanitized_file_name,
-        sanitized_file_name=sanitized_file_name,
-        content_type=content_type,
-        file_size_bytes=0,
-        content_sha256="",
-        data=None,
+    return (
+        content_type in normalized_allowed
+        and PurePath(sanitized_file_name).suffix.lower() in ACCEPTED_UPLOAD_EXTENSIONS
     )
-    return profile.unsupported_reason != "unknown_file_type"
 
 
 async def _store_uploaded_document(
@@ -495,7 +494,7 @@ async def _store_uploaded_document(
         sanitized_file_name=file_name,
         allowed_content_types=settings.allowed_upload_content_types,
     ):
-        raise HTTPException(status_code=415, detail="対応していないファイル形式です。")
+        raise HTTPException(status_code=415, detail=UNSUPPORTED_UPLOAD_FORMAT_MESSAGE)
 
     data = await _read_upload_file(file, settings.max_upload_bytes)
     if not data:
