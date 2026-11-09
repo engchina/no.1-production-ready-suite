@@ -118,7 +118,7 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 
 ### 1. API キーを発行する
 
-1. RAG・NL2SQL・Agent のどれかの画面にログインし、左下のアカウントの欄（名前・ロール）→「API キー」のタブ（`/account?tab=api-keys`）を開きます。
+1. RAG・NL2SQL・Agent のどれかの画面にログインし、左下のアカウントの欄（名前・ロール）→ メニューの「アカウント」→「API キー」のタブ（`/account?tab=api-keys`）を開きます。
 2. 名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選んで発行します。Agent は使える業務 Agent を絞れます（Agent の画面で発行するとき）。
 3. 秘密（`prak_…`）は **発行の直後に 1 回だけ** 表示されます。すぐに次の手順のファイルに保存します。
 

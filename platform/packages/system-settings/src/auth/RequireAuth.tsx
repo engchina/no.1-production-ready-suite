@@ -70,11 +70,11 @@ export interface SidebarAccount {
   roles: string;
   /** ロールの行の全文（「ロール: …」）。title と読み上げに使う。 */
   rolesLabel: string;
-  /** 欄の行全体のリンク（アカウントの画面。API キーとパスワード変更のタブ。#1873）。 */
+  /** 利用者のメニューの「アカウント」の項目（アカウントの画面。API キーとパスワード変更のタブ。#1873・#4724）。 */
   account: SidebarAccountLink;
   /** ローカル DEBUG（ログイン省略）では undefined。 */
   onLogout?: () => void;
-  labels: { logout: string; switchToLight: string; switchToDark: string };
+  labels: { logout: string; switchToLight: string; switchToDark: string; accountMenu: string };
   /** ローカル DEBUG（ログイン省略）で入っているか。製品はその旨の notice を出す。 */
   debugMode: boolean;
 }
@@ -103,8 +103,8 @@ export function sidebarAccountName(
 }
 
 /**
- * `SidebarAccountFooter` に渡す値（ログイン ID・ロール名・アカウントの画面へのリンク・ログアウト）を作る（#220・#1696・#1873）。
- * 未ログインなら null。ログアウト後はログイン画面へ移す。個人の操作（API キー・パスワード変更）は、欄から開く
+ * `SidebarAccountFooter` に渡す値（ログイン ID・ロール名・メニューのアカウントの項目・ログアウト）を作る（#220・#1696・#1873・#4724）。
+ * 未ログインなら null。ログアウト後はログイン画面へ移す。個人の操作（API キー・パスワード変更）は、欄のメニューから開く
  * アカウントの画面のタブにまとめる（サイドナビの行には出さない）。
  */
 export function useSidebarAccount({
@@ -129,10 +129,10 @@ export function useSidebarAccount({
     roles,
     rolesLabel: formatMessage(m.sidebarRoles, { roles }),
     debugMode: user.debug_mode,
-    labels: { logout: m.sidebarLogout, switchToLight: "", switchToDark: "" },
+    labels: { logout: m.sidebarLogout, switchToLight: "", switchToDark: "", accountMenu: m.sidebarAccountMenu },
     account: {
       href: accountHref,
-      label: formatMessage(m.sidebarOpenAccount, { name }),
+      label: m.accountTitle,
       active: pathname === accountPath || pathname.startsWith(`${accountPath}/`),
       onNavigate: () => navigate(accountPath),
     },

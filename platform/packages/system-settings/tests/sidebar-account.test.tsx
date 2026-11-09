@@ -16,9 +16,9 @@ function base(overrides: Partial<SidebarAccount>): SidebarAccount {
     name: "営業ユーザー",
     roles: "営業",
     rolesLabel: "ロール: 営業",
-    account: { href: "/rag/account", label: "アカウント設定を開く（営業ユーザー）", active: false },
+    account: { href: "/rag/account", label: "アカウント", active: false },
     onLogout: () => undefined,
-    labels: { logout: "ログアウト", switchToLight: "", switchToDark: "" },
+    labels: { logout: "ログアウト", switchToLight: "", switchToDark: "", accountMenu: "アカウントのメニュー" },
     debugMode: false,
     ...overrides,
   };
@@ -30,31 +30,31 @@ describe("サイドバーのアカウント欄（#307）", () => {
     expect(renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed={false} />)).toBe("");
   });
 
-  it("ログイン中は利用者名・ロール・ログアウトを出し、ログイン省略の表示は出さない", () => {
+  it("ログイン中は利用者名とロールだけを出し、ログアウトとログイン省略の表示は出さない（#4724）", () => {
     account.current = base({});
     const html = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed={false} />);
     expect(html).toContain("営業ユーザー");
     // 見える行はロールの表示名だけ、title と読み上げは「ロール: …」の全文（#1644）。
     expect(html).toContain('title="ロール: 営業"');
     expect(html).toContain('<span class="sr-only">ロール: 営業</span><span aria-hidden="true">営業</span>');
-    expect(html).toContain("ログアウト");
+    expect(html).not.toContain("ログアウト");
     expect(html).not.toContain("ログイン省略");
-    // 欄の行全体がアカウントの画面へのリンク。個人の操作（API キー・パスワード変更）の行は出さない（#1873）。
-    expect(html).toContain('href="/rag/account"');
-    expect(html).toContain('aria-label="アカウント設定を開く（営業ユーザー） 営業ユーザー 営業"');
+    // 欄の行全体がメニューを開くボタン。個人の操作（API キー・パスワード変更）の行は出さない（#1873）。
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('aria-label="アカウントのメニュー 営業ユーザー 営業"');
     expect(html).not.toContain('aria-current="page"');
     expect(html).not.toContain("パスワード変更");
     expect(html).not.toContain("API キー");
   });
 
   it("アカウントの画面を開いているときは欄を現在地にする（#1873）", () => {
-    account.current = base({ account: { href: "/rag/account", label: "アカウント設定を開く（営業ユーザー）", active: true } });
+    account.current = base({ account: { href: "/rag/account", label: "アカウント", active: true } });
     const html = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed={false} />);
     expect(html).toContain('aria-current="page"');
-    // 折りたたみ時もアイコンの行のリンクとして残す（読み上げ名は同じ）。
+    // 折りたたみ時もアイコンのボタンとして残す。
     const collapsed = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed />);
-    expect(collapsed).toContain('href="/rag/account"');
-    expect(collapsed).toContain('aria-label="アカウント設定を開く（営業ユーザー）"');
+    expect(collapsed).toContain('aria-haspopup="menu"');
+    expect(collapsed).toContain('aria-label="アカウントのメニュー 営業ユーザー"');
   });
 
   it("ログイン省略では利用者名とログイン省略の表示を出し、ログアウトは出さない", () => {
