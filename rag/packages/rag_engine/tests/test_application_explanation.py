@@ -128,10 +128,7 @@ def test_gate_hides_text_that_names_an_internal_input_section(label):
 
 def test_wording_sections_are_not_internal_labels():
     labels = explanation.internal_labels({key: "" for key in explanation.SECTION_KEYS})
-    text = (
-        f"{explanation.KEY_SOURCES}によれば、{explanation.KEY_OTHERS}も踏まえ、"
-        f"{explanation.KEY_QUESTION}の値6と7を掛けると42です。"
-    )
+    text = f"{explanation.KEY_SOURCES}によれば、{explanation.KEY_OTHERS}も踏まえ、{explanation.KEY_QUESTION}の値6と7を掛けると42です。"
     assert gate(text, labels=labels)["status"] == "confirmed"
 
 

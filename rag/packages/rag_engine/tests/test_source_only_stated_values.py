@@ -140,9 +140,7 @@ def run(
     records = [
         _record(f"record-{index}", text, f"synthetic-{index}.md", metadata if index == 0 else None) for index, text in enumerate(texts)
     ]
-    settings = replace(
-        get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0
-    )
+    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
             QUESTION, AnswerContext(records=records, text="\n".join(texts)), settings, image_prompt_mode="text_only"
