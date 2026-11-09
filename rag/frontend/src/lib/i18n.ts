@@ -3877,7 +3877,7 @@ export const ja = {
   "settings.answerPrompts.loading": "プロンプトを読み込んでいます",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.retrieval.prompts.title": "検索に使うプロンプト",
-  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の補完ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略・再実行され、CRAG では検索と判定を繰り返す場合があります。各指示を編集し、保存すると次の処理から反映されます。",
+  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の補完ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略される場合があります。各指示を編集し、保存すると次の処理から反映されます。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
     "回答生成の工程ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。各指示を編集・保存できます。",
