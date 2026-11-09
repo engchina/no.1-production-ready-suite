@@ -18,10 +18,13 @@ export const API_KEYS_MESSAGES = {
     "https の URL が配備の自作の CA の証明書のときは、MCP クライアントにも CA を信頼させます（Claude Code は例の NODE_EXTRA_CA_CERTS）。CA の証明書:",
   "apiKeys.endpoint.example": "Claude Code の登録の例",
   "apiKeys.endpoint.exampleNote":
-    "PR_API_KEY に発行したキーを入れます。--header は単一引用符のまま登録し、キーの値を設定ファイルに書かせません。MCP のサーバー名は組み込みのスキルに合わせて rag / nl2sql にします。",
-  "apiKeys.example.keyComment": "発行したキー（シェルの起動ファイルや secret の管理に置き、repo に書かない）",
-  "apiKeys.example.timeoutComment": "MCP のツールの待ち時間（ミリ秒）。既定の 60 秒では rag_search が切れる",
-  "apiKeys.example.caComment": "自作の CA の証明書（{url} を保存したファイル）",
+    "PR_API_KEY に発行したキーを入れます（repo に書きません）。--header は単一引用符のまま登録し、キーの値を設定ファイルに書かせません。MCP のサーバー名は rag / nl2sql / agent にします（組み込みのスキルは rag / nl2sql を使います。agent は業務 Agent を呼ぶためのものです）。",
+  "apiKeys.endpoint.exampleTimeoutNote":
+    "MCP_TOOL_TIMEOUT は MCP のツールの待ち時間（ミリ秒）です。rag_search のサーバーの上限 600 秒より長くします。",
+  "apiKeys.endpoint.exampleCaNote":
+    "curl は自作の CA の証明書を保存し、NODE_EXTRA_CA_CERTS はそのファイルを信頼させます。curl の -k は、信頼する前の自作の CA を取得するためのものです。正規の証明書に替えた環境では、この 2 行は要りません。",
+  "apiKeys.endpoint.exampleExportNote":
+    "export はこのシェルだけで有効です。次回も使うなら、シェルの起動ファイルか ~/.claude/settings.json の env（パスは絶対パス）に置きます。",
   "apiKeys.create.title": "API キーを発行",
   "apiKeys.create.description":
     "キーは端末・用途ごとに分けて発行します（1 人 {max} 件まで）。秘密は発行の直後に 1 回だけ表示します。",

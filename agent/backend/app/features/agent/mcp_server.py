@@ -113,8 +113,8 @@ from app.security.permissions import ADMIN, RUNS_OPERATE, RUNS_VIEW
 from app.settings import get_settings
 
 MCP_SERVER_NAME = "production-ready-agent"
-# 既定の待ち時間は、MCP のクライアントのツールの待ち時間の既定（Claude Code は 60 秒）より短く
-# する。終わらなければ途中の状態を返すので、クライアントの時間切れで結果を失わない。
+# 既定の待ち時間は、MCP のクライアントの 1 要求の最初の応答までのタイマー（Claude Code は 60 秒）
+# より短くする。終わらなければ途中の状態を返すので、クライアントの時間切れで結果を失わない。
 CHAT_DEFAULT_WAIT_SECONDS = 50
 GET_RUN_DEFAULT_WAIT_SECONDS = 30
 MAX_WAIT_SECONDS = 300

@@ -44,37 +44,42 @@ export function caCertificateUrl(url: string): string | null {
   }
 }
 
-export interface McpRegistrationExampleLabels {
-  keyComment: string;
-  timeoutComment: string;
-  caComment: string;
-}
-
-/**
- * Claude Code の登録の例（`skills/README.md`「2. MCP を設定する」「3. 質問する」と同じ形。#1846・#1870）。
- *
- * - サーバー名は `rag` / `nl2sql`（スキルがこの名前を前提にする）。
- * - `--header` は単一引用符で `${PR_API_KEY}` のまま保存させる（キーの値を `~/.claude.json` に書かない）。
- * - `rag_search` は既定の 60 秒を超えることがあるので `MCP_TOOL_TIMEOUT`、自作の CA の HTTPS は `NODE_EXTRA_CA_CERTS`。
- * - URL は公開の URL を優先する（無ければこの画面の URL）。
- */
-export function mcpRegistrationExample(rows: McpEndpointRow[], labels: McpRegistrationExampleLabels): string {
-  const targets = rows.flatMap((row) => {
+/** 登録の例に書く接続先。URL は公開の URL を優先する（無ければこの画面の URL）。 */
+function registrationTargets(rows: McpEndpointRow[]): { product: ApiKeyProduct; url: string }[] {
+  return rows.flatMap((row) => {
     const url = row.publicUrl ?? row.localUrl;
     return url ? [{ product: row.product, url }] : [];
   });
+}
+
+/** 登録の例で保存する CA の証明書の場所。例の URL が https でなければ null（例に CA の行を出さない）。 */
+export function mcpRegistrationCaUrl(rows: McpEndpointRow[]): string | null {
+  return registrationTargets(rows).map((target) => caCertificateUrl(target.url)).find((value) => value !== null) ?? null;
+}
+
+/**
+ * Claude Code の登録の例（`platform/docs/mcp-api-keys.md`「Claude Code」と同じ形。#1846・#1870・#4726）。
+ *
+ * - サーバー名は `rag` / `nl2sql` / `agent`（組み込みのスキルは `rag` / `nl2sql` を使う。`agent` は業務 Agent を呼ぶ）。
+ * - `--header` は単一引用符で `${PR_API_KEY}` のまま保存させる（キーの値を `~/.claude.json` に書かない）。
+ * - `MCP_TOOL_TIMEOUT` は `rag_search` のサーバーの上限 600 秒より長くする（配備の Nginx の 660 秒と同じ）。
+ * - https の URL は、自作の CA の証明書を保存してから `NODE_EXTRA_CA_CERTS` で信頼させる。`-k` は信頼する前の CA を取得するため。
+ * - 行末に `#` のコメントを書かない（zsh に貼るとエラーになる）。説明は画面の注記に書く。
+ */
+export function mcpRegistrationExample(rows: McpEndpointRow[]): string {
+  const targets = registrationTargets(rows);
   if (targets.length === 0) return "";
-  const caUrl = targets.map((target) => caCertificateUrl(target.url)).find((value) => value !== null) ?? null;
-  const lines = [`export PR_API_KEY='prak_...'   # ${labels.keyComment}`];
+  const caUrl = mcpRegistrationCaUrl(rows);
+  const lines = ["export PR_API_KEY='prak_...'"];
   for (const target of targets) {
     lines.push(
       `claude mcp add --scope user --transport http ${target.product} ${target.url} \\`,
       "  --header 'Authorization: Bearer ${PR_API_KEY}'"
     );
   }
-  lines.push(`export MCP_TOOL_TIMEOUT=600000   # ${labels.timeoutComment}`);
+  lines.push("export MCP_TOOL_TIMEOUT=660000");
   if (caUrl) {
-    lines.push(`export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt   # ${labels.caComment.replace("{url}", caUrl)}`);
+    lines.push(`curl -sk ${caUrl} -o ~/production-ready-ca.crt`, "export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt");
   }
   lines.push("claude");
   return lines.join("\n");

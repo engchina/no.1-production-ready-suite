@@ -68,7 +68,6 @@ describe("mcpEndpoints（#1805）", () => {
 });
 
 describe("接続先の行と登録の例（#1870）", () => {
-  const labels = { keyComment: "KEY", timeoutComment: "TIMEOUT", caComment: "CA {url}" };
 
   it("公開の URL があれば 3 製品の行に足す（この画面から分からない URL は null）", () => {
     const local = mcpEndpoints("nl2sql", "/", "http://localhost:5174");
@@ -91,24 +90,27 @@ describe("接続先の行と登録の例（#1870）", () => {
 
   it("登録の例は skills/README.md と同じ形（サーバー名 rag / nl2sql / agent・単一引用符の ${PR_API_KEY}・待ち時間・CA）", () => {
     const rows = mcpEndpointRows(mcpEndpoints("rag", "/rag/", "https://203.0.113.10"), "https://203.0.113.10");
-    expect(mcpRegistrationExample(rows, labels)).toBe(
+    // 行末の # のコメントは zsh に貼るとエラーになるので、コピーするコードに入れない（説明は注記）。
+    expect(mcpRegistrationExample(rows)).toBe(
       [
-        "export PR_API_KEY='prak_...'   # KEY",
+        "export PR_API_KEY='prak_...'",
         "claude mcp add --scope user --transport http rag https://203.0.113.10/rag/api/mcp \\",
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
         "claude mcp add --scope user --transport http nl2sql https://203.0.113.10/nl2sql/api/mcp \\",
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
         "claude mcp add --scope user --transport http agent https://203.0.113.10/agent/api/mcp \\",
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
-        "export MCP_TOOL_TIMEOUT=600000   # TIMEOUT",
-        "export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt   # CA https://203.0.113.10/platform/ca.crt",
+        "export MCP_TOOL_TIMEOUT=660000",
+        "curl -sk https://203.0.113.10/platform/ca.crt -o ~/production-ready-ca.crt",
+        "export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt",
         "claude",
       ].join("\n")
     );
     // http（開発）では CA の行を出さず、公開の URL が無い製品はこの画面の URL で書く。
-    const dev = mcpRegistrationExample(mcpEndpointRows(mcpEndpoints("rag", "/", "http://localhost:3000"), ""), labels);
+    const dev = mcpRegistrationExample(mcpEndpointRows(mcpEndpoints("rag", "/", "http://localhost:3000"), ""));
     expect(dev).toContain("claude mcp add --scope user --transport http rag http://localhost:3000/api/mcp");
     expect(dev).not.toContain("NODE_EXTRA_CA_CERTS");
+    expect(dev).not.toContain("curl");
     expect(dev).not.toContain("nl2sql");
   });
 });
@@ -207,6 +209,37 @@ describe("API キーの画面（#1805）", () => {
     expect(same).toContain("この画面の URL（公開の URL と同じ）");
     expect(same).not.toContain("公開の URL（OCI）");
     expect(same.match(/URL をコピー<\/span><\/button>/g)).toHaveLength(3);
+  });
+
+  it("登録の例の注記は、サーバー名・待ち時間・export の有効範囲を説明し、CA の手順は例に CA の行があるときだけ説明する（#4726）", () => {
+    const https = render(<MyApiKeysPanel api={myApi} endpoints={mcpEndpoints("rag", "/rag/", "https://203.0.113.10")} />, {
+      mine: [],
+    });
+    expect(https).toContain("MCP のサーバー名は rag / nl2sql / agent にします");
+    expect(https).toContain("組み込みのスキルは rag / nl2sql を使います");
+    expect(https).toContain("agent は業務 Agent を呼ぶためのものです");
+    expect(https).toContain("rag_search のサーバーの上限 600 秒より長くします");
+    expect(https).not.toContain("既定の 60 秒");
+    expect(https).toContain("export はこのシェルだけで有効です");
+    expect(https).toContain("~/.claude/settings.json の env");
+    expect(https).toContain('data-testid="api-keys-example-ca-note"');
+    expect(https).toContain("信頼する前の自作の CA を取得するため");
+
+    // http（開発）の例には CA の行が無いので、CA の説明も出さない。
+    const http = render(<MyApiKeysPanel api={myApi} endpoints={mcpEndpoints("rag", "/", "http://localhost:3000")} />, {
+      mine: [],
+    });
+    expect(http).toContain("export はこのシェルだけで有効です");
+    expect(http).not.toContain('data-testid="api-keys-example-ca-note"');
+
+    // 例は公開の URL で書くので、公開の URL が http なら、この画面が https でも例に CA の行は無い。
+    const publicHttp = render(
+      <MyApiKeysPanel api={myApi} endpoints={mcpEndpoints("rag", "/rag/", "https://203.0.113.10")} />,
+      { mine: [], publicBaseUrl: "http://203.0.113.10" }
+    );
+    expect(publicHttp).toContain('data-testid="api-keys-ca-note"');
+    expect(publicHttp).not.toContain('data-testid="api-keys-example-ca-note"');
+    expect(publicHttp).not.toContain("curl -sk");
   });
 
   it("上限の件数に達したら発行を止めて案内する", () => {
