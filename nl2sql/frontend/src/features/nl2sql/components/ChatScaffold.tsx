@@ -117,10 +117,10 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
           seesAllUsers && item.owned === false
             ? // system_admin が見る他の利用者の会話には、日時に利用者の表示名を添える（#1889）。
               t("chat.historyOwner", {
-                date: historyDateFormatter.format(new Date(item.created_at)),
+                date: historyDateFormatter.format(item.created_at),
                 name: item.actor_display_name || t("chat.historyOwnerMissing"),
               })
-            : historyDateFormatter.format(new Date(item.created_at)),
+            : historyDateFormatter.format(item.created_at),
       }))}
       currentId={currentId}
       onSelect={(row) => {

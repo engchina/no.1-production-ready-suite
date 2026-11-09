@@ -4,10 +4,10 @@
 再利用し、ASSISTANT メッセージは生成モデル・引用・trace を保持する。
 """
 
-from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
+from pr_backend_core.timezones import UtcDatetime
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
 
@@ -80,7 +80,7 @@ class ChatMessage(BaseModel):
     trace_id: str | None = None
     status: MessageStatus = MessageStatus.COMPLETE
     reply_to_message_id: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
     # 回答に付けた注意書き（ASSISTANT の回答だけ。#2405）。確認の質問・失敗・停止・この機能より前の
     # 回答は None。会話の履歴としてモデルに渡す本文（content）には含めない。
     notice: str | None = None
@@ -116,8 +116,8 @@ class ConversationSummary(BaseModel):
     title: str | None = None
     status: ConversationStatus = ConversationStatus.ACTIVE
     message_count: int = 0
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     # 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（画面は会話の
     # 履歴に利用者の表示名を添え、入力欄・名前の変更・評価を出さない。閲覧・停止・削除だけ。
     # #1889・#3244）。
