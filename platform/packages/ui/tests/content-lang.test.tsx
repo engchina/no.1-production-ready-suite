@@ -17,7 +17,6 @@ import {
   MarkdownText,
   normalizeContentLang,
   resolveContentLang,
-  type AnswerPassageRecords,
   type EvidenceListItem,
 } from "../src";
 import { SIMPLIFIED_ONLY_HAN, TRADITIONAL_ONLY_HAN } from "../src/lib/han-script-sets";
@@ -192,12 +191,6 @@ function byText(host: HTMLElement, text: string): Element {
 }
 
 describe("部品・製品の文言は内容の lang を継承しない（#3349）", () => {
-  const passages: AnswerPassageRecords = {
-    marks: [{ text: ZH_HANS, state: "unverified", reasons: [{ code: "unsupported", label: "合成の理由", detail: "" }] }],
-    removed: [{ text: ZH_HANT, reasons: [{ code: "contradicted", label: "合成の除いた理由", detail: "" }] }],
-    warnings: [],
-  };
-
   it("AnswerSections の見出し・根拠の行・ボタン・extra・決まった文言は画面の言語、内容は回答の言語", () => {
     const entries = Array.from({ length: 12 }, (_, index) => ({
       key: `e${index}`,
@@ -220,7 +213,6 @@ describe("部品・製品の文言は内容の lang を継承しない（#3349�
           },
           { kind: "section", key: "zh", title: "这些示例说明了什么", entries: [{ key: "z", content: ZH_HANS }] },
         ]}
-        passages={passages}
       />
     );
     // 内容は回答の言語。
@@ -236,20 +228,12 @@ describe("部品・製品の文言は内容の lang を継承しない（#3349�
       "以下は合成の説明です。",
       "章節の原文を開く",
       "すべて表示（全 12 件）",
-      "確認が必要な点",
-      "根拠と矛盾し除いた内容",
-      "合成の除いた理由",
     ]) {
       // 付けないか、見出しの文字から判定した日本語（画面の言語と同じ）。
       expect([null, "ja"], text).toContain(nearestLang(byText(host, text)));
     }
     // 回答の見出しは見出しの文字の言語。
     expect(nearestLang(byText(host, "这些示例说明了什么"))).toBe("zh-Hans");
-    // 印の付いた段落の引用・外した段落の引用は回答の言語、印のボタンは画面の言語。
-    const marked = host.querySelector('[data-testid="answer-marked-passage"]');
-    expect(nearestLang(marked?.querySelector("[lang]"))).toBe("zh-Hans");
-    expect(nearestLang(host.querySelector('[data-testid="answer-passage-mark-toggle"]'))).toBeNull();
-    expect(nearestLang(host.querySelector('[data-testid="answer-removed-passage"] [lang]'))).toBe("zh-Hans");
   });
 
   it("AnswerPlainText の後ろに置くもの（生成中のカーソルなど）は画面の言語", () => {

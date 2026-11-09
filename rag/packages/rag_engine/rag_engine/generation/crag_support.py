@@ -11,7 +11,7 @@ from typing import Any
 from rag_engine.generation.answer_images import _prompt_safe_warnings, _trim_generated_text, prompt_injection_warnings_for_records
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _dedupe_query_key
 from rag_engine.generation.answer_payload import _evidence_id_key, _records_for_prompt_injection_scan
-from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS, _answer_context_from_ranked
+from rag_engine.generation.answer_records import _answer_context_from_ranked
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers, render_prompt_template
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_width
@@ -561,21 +561,6 @@ def _record_matches_crag_relevant_ids(record: AnswerRecord, keys: set[str]) -> b
     }
     record_keys.update(_evidence_id_key(value) for value in record.child_chunk_ids if _evidence_id_key(value))
     return bool(record_keys & keys)
-
-
-def _sanitize_crag_chunk_ids(values: Sequence[str]) -> tuple[str, ...]:
-    selected: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        text = _trim_generated_text(value, 200)
-        key = _evidence_id_key(text)
-        if not key or key in seen:
-            continue
-        selected.append(text)
-        seen.add(key)
-        if len(selected) >= MAX_CONTEXT_RECORDS:
-            break
-    return tuple(selected)
 
 
 def _valid_crag_rewrite(value: str, original_question: str, existing: Sequence[str]) -> str:

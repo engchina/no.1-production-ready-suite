@@ -120,7 +120,7 @@ def test_generation_call_sends_no_plan_schema():
         source_run_id="synthetic",
         metadata={},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
     with (
         bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)),
         pytest.raises(RuntimeError, match="schema を確かめたら止める"),

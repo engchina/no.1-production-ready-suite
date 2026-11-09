@@ -472,7 +472,7 @@ for (const viewport of [
       // 件数は括弧を使わず区切りで並べ、0 件の項目は出さない。
       const summary = page
         .locator("summary")
-        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 参考 1 件" })
+        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ 参考 1 件" })
         .first();
       await expect(summary).toBeVisible();
       await summary.click();
@@ -1112,102 +1112,6 @@ for (const viewport of [
   });
 }
 
-// #2738: 根拠と矛盾した段落だけを本文から外し、確かめられない段落（未確認）と規則の検査の段落（要注意）は本文に
-// 残して印を付ける（Agent と同じ共有の部品）。印を押すと理由、「確認が必要な点」から本文の段落へ移る。回答全体の注意は
-// 本文の上、印の数のバッジは本文の下。内容は合成のデータ。
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 800 },
-  { name: "mobile", width: 375, height: 812 },
-]) {
-  test(`矛盾した段落だけを外し、確かめられない段落に印・理由・確認が必要な点・バッジを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    const unverified = "合成の手続きは翌日に自動で通知されます。";
-    const text = [
-      "合成の手続きは 2 段階です。",
-      "",
-      "資料により確認できた事項",
-      "",
-      "・対象の行の終了日を入力します。",
-      "根拠：合成の文書 A.pdf p.2",
-      "・新しい開始日の行を追加します。",
-      "根拠：合成の文書 A.pdf p.3",
-      "",
-      unverified,
-    ].join("\n");
-    const answerDiagnostics = {
-      execution_steps: [],
-      evidence_tree: [],
-      passage_marks: [
-        {
-          text: "・新しい開始日の行を追加します。",
-          state: "warning",
-          reasons: [{ code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 A。" }, { code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 C。" }],
-        },
-        {
-          text: unverified,
-          state: "unverified",
-          reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "" }],
-        },
-      ],
-      removed_passages: [
-        { text: "合成の変更は翌月から反映されます。", reasons: [{ code: "contradicted", label: "根拠と矛盾", detail: "合成の理由 B。" }] },
-      ],
-      answer_warnings: [{ code: "off_goal", label: "質問からずれている可能性", detail: "" }],
-    };
-    const streamBody = [
-      sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
-      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
-      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
-    ].join("");
-    await mockChat(page, "ready", [], { streamBody });
-
-    await page.goto("/chat");
-    await selectSearchAnswerProfile(page, "経理アシスタント");
-    await page.getByRole("button", { name: "新しい会話" }).click();
-    await page.getByRole("textbox").fill("合成の質問です。");
-    await page.getByRole("button", { name: "送信" }).click();
-
-    await expect(page.getByText("複数のモデルの回答を並べて比べることもできる")).toHaveCount(0);
-    const answer = page.getByTestId("answer-text");
-    // 回答全体の注意は本文の上の warning の Banner。
-    await expect(answer.getByTestId("answer-passage-warnings")).toHaveText("質問からずれている可能性");
-    const marked = answer.getByTestId("answer-passage-mark");
-    await expect(marked).toHaveCount(2);
-    await expect(marked.nth(0)).toHaveAttribute("data-passage-state", "warning");
-    await expect(marked.nth(0)).toContainText("新しい開始日の行を追加します。");
-    // 印の付いた項目の根拠の行は残る。
-    await expect(marked.nth(0)).toContainText("根拠：合成の文書 A.pdf p.3");
-    await expect(marked.nth(1)).toHaveAttribute("data-passage-state", "unverified");
-    await expect(marked.nth(1)).toContainText(unverified);
-    const toggle = marked.nth(0).getByTestId("answer-passage-mark-toggle");
-    await expect(toggle).toHaveText("要注意の理由");
-    await toggle.focus();
-    await page.keyboard.press("Enter");
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(marked.nth(0).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠の表の対応と違う可能性合成の理由 A。根拠の表の対応と違う可能性合成の理由 C。");
-    // 詳しい理由（detail）の無い印は短い理由だけを出す。
-    await marked.nth(1).getByTestId("answer-passage-mark-toggle").click();
-    await expect(marked.nth(1).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠で確かめられない");
-
-    await expect(answer.getByTestId("answer-removed-passages").getByTestId("answer-removed-passage")).toHaveText(
-      "「合成の変更は翌月から反映されます。」根拠と矛盾：合成の理由 B。"
-    );
-    const points = answer.getByTestId("answer-marked-passages");
-    await expect(points.locator("h4")).toHaveText("確認が必要な点");
-    await expect(points.getByTestId("answer-marked-passage")).toHaveText([
-      "「新しい開始日の行を追加します。」要注意：根拠の表の対応と違う可能性",
-      `「${unverified}」未確認：根拠で確かめられない`,
-    ]);
-    await points.getByTestId("answer-marked-passage-link").nth(1).click();
-    await expect(marked.nth(1)).toBeFocused();
-
-    await expect(page.getByTestId("answer-passage-badges")).toHaveCount(0);
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`answer-marks-rag-chat-${viewport.name}.png`), fullPage: true });
-  });
-}
-
 // #2096 / #3226: 回答の処理の経過は、回答の trace の span の木（工程の span は種類 answer_step と工程名・LLM の回数）を
 // 1 か所に出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {
@@ -1415,7 +1319,7 @@ test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブ�
   // 見出しは Agent と同じ書き方（まとまりの数を出さない。#2388）。
   const summary = page
     .locator("summary")
-    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件" });
   await expect(summary).toBeVisible();
   await expect(page.getByText(/のまとまり/)).toHaveCount(0);
   await summary.click();
@@ -2640,7 +2544,7 @@ for (const compare of [false, true]) {
       await expect(answer.getByTestId("chat-answer-progress-summary")).toContainText("16 ステップ");
     }
     const last = page.locator(`[id="message-${replies.at(-1)!.message_id}"]`);
-    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件" });
     const feedback = last.getByRole("group", { name: "この回答は役に立ちましたか？" });
     // scrollTop の代入だけで済ませず、会話の欄の上でホイールを動かして末尾へ進む。
     await log.hover();
@@ -2971,46 +2875,6 @@ test("初回の会話作成に失敗しても質問を残し、再送信で会�
 });
 
 for (const legacy of [false, true]) {
-  test(`摘要の引用対応と旧記録の警告を区別する (${legacy ? "legacy" : "linked"})`, async ({ page }, testInfo) => {
-    const summary = "項目 A は記録を識別します。";
-    const text = `${summary}\n\n資料により確認できた事項\n\n・項目 A は記録の識別子です。\n根拠：synthetic-a.txt p.1`;
-    const answerDiagnostics = {
-      execution_steps: [],
-      evidence_tree: [],
-      passage_marks: legacy ? [{
-        text: summary,
-        state: "warning",
-        reasons: [{ code: "summary_unaudited", label: "要約を根拠で確かめていない", detail: "旧記録には摘要の引用対応がありません。" }],
-      }] : [],
-      ...(legacy ? {} : { summary_evidence: {
-        citations: { status: "linked", links: [{ item_index: 0, text: "項目 A は記録の識別子です。", citations: [{ evidence_id: "E1", quote: "項目 A は記録の識別子です。" }] }] },
-        semantic_validation: { execution: "not_run", adopted: false },
-      } }),
-    };
-    const streamBody = [
-      sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
-      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
-      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
-    ].join("");
-    await mockChat(page, "ready", [], { streamBody });
-    await page.goto("/chat");
-    await selectSearchAnswerProfile(page, searchAnswerProfile.name);
-    await page.getByRole("button", { name: "新しい会話" }).click();
-    await page.getByRole("textbox").fill("項目 A の意味を教えてください。");
-    await page.getByRole("button", { name: "送信" }).click();
-    const answer = page.getByTestId("answer-text");
-    await expect(answer).toContainText(summary);
-    await expect(page.getByRole("button", { name: "送信", exact: true })).toBeVisible();
-    await expect(answer.getByTestId("answer-passage-mark")).toHaveCount(legacy ? 1 : 0);
-    if (legacy) {
-      await expect(answer.getByTestId("answer-marked-passages")).toContainText("要約を根拠で確かめていない");
-    } else {
-      await expect(answer.getByTestId("answer-marked-passages")).toHaveCount(0);
-    }
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`summary-evidence-${legacy ? "legacy" : "linked"}.png`), fullPage: true });
-  });
 }
 
 // #3949: 会話の作成中は草稿を保ち、送信と作成完了の後始末を競合させない。
@@ -3129,126 +2993,18 @@ for (const outcome of ["success", "failure"] as const) {
 
 
 for (const savedFormat of [false, true]) {
-  test(`保存したチャットの未確認の節を独立表示し理由を保つ (format-${savedFormat})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    const format = savedFormat ? { rules_section: "確認済みの節 A", unsourced_section: "未確認の節 B" } : undefined;
-    const titles = format ?? { rules_section: "資料により確認できた事項", unsourced_section: "資料の出典を確かめられない説明" };
-    const confirmed = "項目 A は識別子です。";
-    const unverified = "項目 B の値は未確認です。";
-    const reason = "指定された単位は送信時の根拠にありません。";
-    const response = {
-      ...assistantMessage, citations: [], answer_format: format,
-      content: [titles.rules_section, "・" + confirmed, titles.unsourced_section, "原文と照合できない説明です。", "・" + unverified].join("\n"),
-      passage_marks: [{ text: unverified, state: "unverified", reasons: [{ code: "citation_range_out_of_bounds", label: "引用行が根拠の範囲外", detail: reason }] }],
-      removed_passages: [], answer_warnings: [],
-    };
-    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問です。" }, response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    for (const reload of [false, true]) {
-      if (reload) await page.reload();
-      const answer = page.getByTestId("answer-text");
-      const confirmedSection = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: titles.rules_section, exact: true }) });
-      const unverifiedSection = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: titles.unsourced_section, exact: true }) });
-      await expect(confirmedSection).toContainText(confirmed);
-      await expect(confirmedSection).not.toContainText(unverified);
-      await expect(unverifiedSection).toContainText(unverified);
-      await expect(unverifiedSection).toContainText("原文と照合できない説明です。");
-      const marker = unverifiedSection.getByTestId("answer-passage-mark");
-      await expect(marker).toHaveAttribute("data-passage-state", "unverified");
-      await marker.getByTestId("answer-passage-mark-toggle").click();
-      await expect(marker.getByTestId("answer-passage-mark-reasons")).toContainText(reason);
-      await expectNoPageOverflow(page);
-    }
-    await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath("saved-answer-sections.png") });
-  });
 }
 
 
 for (const withWarning of [false, true]) {
-  test(`保存した導出結論と本文だけの注意を保持する (warning-${withWarning})`, { tag: "@responsive" }, async ({page}, testInfo) => {
-    const text = ["合成の回答。", "資料により確認できた事項", "・合成の単価は 3。", "根拠：合成 A.pdf p.1", "", "資料をもとに導いた結論", "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1", "", "確認が必要な点", "", "・合成の未確認事項", ...(withWarning ? ["・合成警告: 合成詳細"] : [])].join("\n");
-    const diagnostics = {passage_marks:[], removed_passages:[], answer_warnings:withWarning ? [{code:"off_goal",label:"合成警告",detail:"合成詳細"}] : []};
-    const response = {...assistantMessage, content:text, citations:[{...citationChunk,file_name:"合成 A.pdf",metadata:{page:1}}], ...diagnostics};
-    await mockChat(page,"ready",[{...userMessage,content:"合成の質問。"},response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    for (const reload of [false,true]) {
-      if (reload) await page.reload();
-      const answer = page.getByTestId("answer-text");
-      const derived = answer.getByTestId("answer-section").filter({has:page.getByRole("heading",{name:"資料をもとに導いた結論",exact:true})});
-      await expect(derived.locator("h4")).toHaveText("資料をもとに導いた結論");
-      await expect(derived.getByRole("listitem")).toHaveCount(1);
-      await expect(derived).toContainText("前提：2 回使用");
-      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(1);
-      const notes = answer.getByTestId("answer-marked-passages");
-      await expect(notes).toHaveCount(1);
-      await expect(notes.getByText("合成の未確認事項",{exact:true})).toHaveCount(1);
-      if (withWarning) await expect(answer.getByTestId("answer-passage-warnings")).toContainText("合成警告");
-      await expectNoPageOverflow(page);
-    }
-    await page.getByTestId("answer-text").screenshot({path:testInfo.outputPath("derived-notes-chat.png")});
-  });
 }
 
 for (const generated of generatedAnswers) {
-  test(`生成契約の原文と導出結果をチャットで分けて表示する (${generated.id})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    const citations = generated.sources.map((file_name, index) => ({ ...citationChunk, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: 1 } }));
-    const response = { ...assistantMessage, content: generated.answer, citations, passage_marks: [], removed_passages: [], answer_warnings: [] };
-    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問。" }, response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    for (const reload of [false, true]) {
-      if (reload) await page.reload();
-      const answer = page.getByTestId("answer-text");
-      const facts = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料により確認できた事項", exact: true }) });
-      const derived = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料をもとに導いた結論", exact: true }) });
-      await expect(facts).toContainText(generated.fact);
-      await expect(derived).toContainText(generated.result);
-      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(2);
-      await expect(answer.getByRole("heading", { name: "資料から確認できなかった事項", exact: true })).toHaveCount(0);
-      await expectNoPageOverflow(page);
-    }
-    await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath(`generated-${generated.id}-chat.png`) });
-  });
 }
 
 // 結論の説明（#4393）は Markdown（段落・箇条書き・コードの囲み）を含む。説明の中の行を回答の項目・根拠の行として
 // 読まず、共通の Markdown の部品で描き、コードは枠の中だけで横にスクロールする。
 for (const theme of ["light", "dark"] as const) {
-  test(`結論の説明の Markdown を共通の部品で描く (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.addInitScript((value) => {
-      window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
-    }, theme);
-    const sql = "SELECT COUNT(*) FROM SYNTHETIC_ITEMS WHERE SYNTHETIC_STATUS = 'ACTIVE' AND SYNTHETIC_REGION IN ('A', 'B', 'C');";
-    const text = [
-      "合成の回答。", "資料により確認できた事項", "・合成の確認には次の SQL を実行します。", "根拠：合成 A.pdf p.1", "",
-      "資料をもとに導いた結論",
-      "・合成の確認には次の SQL を実行します。",
-      "当てはめ：合成の確認には、資料に記載された次の SQL を実行します。", "```", sql, "```",
-      "根拠：合成 A.pdf p.1",
-      "・合成の合計は 3400 です。",
-      "当てはめ：項目ごとに数量と単価を掛けて足します。", "", "1. 項目A: 3 × 800 = 2400", "2. 項目B: 2 × 500 = 1000", "", "合計は 2400 + 1000 = 3400 です。",
-      "根拠：合成 B.pdf p.2",
-    ].join("\n");
-    const citations = ["合成 A.pdf", "合成 B.pdf"].map((file_name, index) => ({
-      ...citationChunk, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: index + 1 },
-    }));
-    const response = { ...assistantMessage, content: text, citations, passage_marks: [], removed_passages: [], answer_warnings: [] };
-    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問。" }, response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    await expect(page.locator("html")).toHaveClass(theme === "dark" ? /\bdark\b/ : /^(?!.*\bdark\b)/);
-    const answer = page.getByTestId("answer-text");
-    const derived = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料をもとに導いた結論", exact: true }) });
-    const reasoning = derived.getByTestId("answer-application-reasoning");
-    await expect(reasoning).toHaveCount(2);
-    // 説明の中の番号付きの行は回答の項目にならず、根拠の行は項目ごとに 1 つのまま。
-    await expect(derived.getByTestId("answer-citation-link")).toHaveCount(2);
-    await expect(reasoning.nth(0).locator("pre code")).toHaveText(sql);
-    await expect(reasoning.nth(0)).not.toContainText("```");
-    await expect(reasoning.nth(1).locator("ol > li")).toHaveCount(2);
-    await expect(reasoning.nth(1)).toContainText("合計は 2400 + 1000 = 3400 です。");
-    await expectNoPageOverflow(page);
-    await answer.screenshot({ path: testInfo.outputPath(`application-explanation-markdown-${theme}.png`) });
-    await reasoning.nth(0).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`application-explanation-viewport-${theme}.png`) });
-  });
 }
 
 test("保存済みチャットの0spanでも書込欠落を隠さない", {tag:"@responsive"}, async ({page}, testInfo) => {

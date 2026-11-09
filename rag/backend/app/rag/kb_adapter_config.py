@@ -124,7 +124,6 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "neighbor_child_count": "rag_neighbor_child_count",
     "rerank_enabled": "rag_rerank_enabled",
     "screen_linking_enabled": "rag_screen_linking_enabled",
-    "request_coverage_retrieval_enabled": "rag_request_coverage_retrieval_enabled",
     # 業務ガイドの手順ごとの検索(#2395)。None は全体の既定(on / 上限 4)。
     "guide_step_retrieval_enabled": "rag_guide_step_retrieval_enabled",
     "guide_step_max_queries": "rag_guide_step_max_queries",
@@ -370,8 +369,6 @@ class KnowledgeBaseQueryConfig(BaseModel):
     rerank_enabled: bool | None = None
     # 画面目録で操作画面を探す(#554)。LLM の呼び出しが 1 回増える。
     screen_linking_enabled: bool | None = None
-    # 根拠の無い要求だけを再検索する(#1279)。LLM は呼ばない(検索が 1 要求 1 回増える)。
-    request_coverage_retrieval_enabled: bool | None = None
     # 照合した業務ガイドの手順ごとに検索し、手順の参照の頁の根拠を入れる(#2395)。LLM は呼ばない
     # (検索が手順ごとに増える)。None は全体の既定(on)。
     guide_step_retrieval_enabled: bool | None = None

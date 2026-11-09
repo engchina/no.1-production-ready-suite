@@ -1183,7 +1183,6 @@ export interface KnowledgeBaseQueryConfig {
   // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
   screen_linking_enabled?: boolean | null;
   // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
-  request_coverage_retrieval_enabled?: boolean | null;
   // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。ON / OFF と回数・期限の上限は
   // 全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。
   guide_step_retrieval_enabled?: boolean | null;
@@ -1608,13 +1607,6 @@ export interface ChatMessage {
   sender_display_name?: string;
   /** 質問に添付したファイル（#2517）。 */
   attachments?: ChatAttachmentApiReference[];
-  /**
-   * 回答の段落の印・根拠と矛盾して外した段落・回答全体の注意（ASSISTANT の完了した回答。#2738。契約は
-   * platform/contracts/answer-passages/passage-marks.json）。この記録より前の回答は未指定（今までの表示のまま）。
-   */
-  passage_marks?: AnswerPassageMarkData[];
-  removed_passages?: AnswerRemovedPassageData[];
-  answer_warnings?: AnswerPassageReasonData[];
   /** 生成時の表示形式。未完了・古い回答は null / 未指定。 */
   answer_format?: Record<string, string> | null;
   /**
@@ -1622,25 +1614,6 @@ export interface ChatMessage {
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
   answer_attached_images?: number;
-}
-
-/** 段落の印・外した段落・回答全体の注意の理由（#2738）。label は利用者に見せる短い文（backend の文をそのまま出す）。 */
-export interface AnswerPassageReasonData {
-  code: string;
-  label: string;
-  detail?: string;
-}
-
-export interface AnswerPassageMarkData {
-  /** 回答の本文の段落の原文（段落の照合に使う）。 */
-  text: string;
-  state: "unverified" | "warning";
-  reasons: AnswerPassageReasonData[];
-}
-
-export interface AnswerRemovedPassageData {
-  text: string;
-  reasons: AnswerPassageReasonData[];
 }
 
 export interface ConversationSummary {
@@ -1899,7 +1872,6 @@ export type AnswerPromptPhase =
   | "retrieval"
   | "grounding"
   | "generation"
-  | "audit"
   | "evaluation";
 
 export interface AnswerPromptStage {
@@ -2989,14 +2961,11 @@ export interface AnsweringSettingsData {
   runtime_rules_answer_enabled?: boolean;
   runtime_terms_search_enabled?: boolean;
   runtime_terms_answer_enabled?: boolean;
-  answer_audit_mode: "none" | "standard" | "detailed";
-  answer_evidence_refinement_mode: "legacy" | "cited_only" | "cited_required";
   query_strategy: QueryStrategyName;
   answer_flow: AnswerFlowName;
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;
-  request_coverage_retrieval_enabled: boolean;
   auto_field_filter_enabled: boolean;
   /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
   graph_expansion_enabled: boolean;
@@ -3006,13 +2975,11 @@ export interface AnsweringSettingsData {
   section_expansion_max_levels: number;
   section_expansion_input_token_percent: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
-  question_subject_role_model: string;
   /** 段ごとのモデルで選べる登録モデル（接続情報を含まない）。 */
-  step_model_choices: { model_id: string; display_name: string }[];
   config_source: "runtime";
 }
 
-export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source" | "step_model_choices">>;
+export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source">>;
 
 /** 回答の記録の保持日数(0 は無期限)。 */
 export interface AnswerRecordSettingsData {

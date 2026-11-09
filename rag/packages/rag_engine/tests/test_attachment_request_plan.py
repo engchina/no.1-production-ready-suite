@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from test_grounded_answer import FakeModel, context, ids, marks, record
+from test_grounded_answer import FakeModel, context, ids, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -56,9 +56,7 @@ def _run(drafts: list[dict]):
         raise AssertionError("外部呼び出しは不要")
 
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        result = synthesize_grounded_answer(
-            QUESTION, _ctx(), replace(get_settings(), answer_audit_mode="none"), image_prompt_mode="text_only"
-        ).response
+        result = synthesize_grounded_answer(QUESTION, _ctx(), replace(get_settings()), image_prompt_mode="text_only").response
     return result, model
 
 
@@ -82,20 +80,6 @@ def test_attachment_spans_are_marked_and_skip_the_target_matching():
     rows_span = next(span for span in spans if span["text"] == ROWS)
     rows_item = GroundedItem(kind="rule", request_id="Q1", text=ROWS_ITEM, citations=[GroundedCitation(evidence_id=labels[ROWS])])
     assert not _outside_request_plan(rows_item, rows_span, draft, spans)
-
-
-def test_unsettled_plan_keeps_the_explanations_with_a_mark_instead_of_refusing():
-    labels = ids(_ctx(), QUESTION)
-    invalid = _draft(labels, [{"evidence_id": labels[ROWS], "target": "作業表", "relation": "linked", "link_quote": ""}])
-    # 作り直しても資料の規則の照合が抜けたまま（実際に観測した形）。
-    result, model = _run([invalid, invalid])
-
-    assert "invalid_request_plan" in model.prompts[1][1]
-    assert RULE_ITEM in result.answer_text and ROWS_ITEM in result.answer_text
-    assert result.envelope["outcome"] != "insufficient_evidence"
-    # 計画が決まらなかった規則の説明は、本文に残して「確かめが終わっていない」の印。添付の説明には印を付けない。
-    assert marks(result).get(RULE_ITEM) == ["unassessed"]
-    assert ROWS_ITEM not in marks(result)
 
 
 def test_an_explicitly_unrelated_evidence_is_still_excluded():

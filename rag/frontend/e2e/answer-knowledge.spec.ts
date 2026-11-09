@@ -238,7 +238,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   const citations = page.getByTestId("answer-citations");
   const citationSummary = citations
     .locator("summary")
-    .filter({ hasText: "AI に渡した 1 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" })
+    .filter({ hasText: "AI に渡した 1 件 ／ 回答で引用 1 件" })
     .first();
   await expect(citationSummary).toBeVisible();
   await expect(citations.getByTestId("citation-text")).toBeHidden();

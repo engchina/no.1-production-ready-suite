@@ -2,7 +2,6 @@
 
 標準回答がない場合は正確性・網羅性を未評価とし、主張の支持は回答と引用だけで測る。"""
 
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -21,58 +20,18 @@ UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 REFERENCE_ONLY_METRICS: frozenset[str] = frozenset()
 
 
-def system_section_headings() -> frozenset[str]:
-    """回答の本文の末尾の、主張ではない節の見出し（言語資源の answer_labels。#2738）。
-
-    根拠と矛盾して外した内容・確認が必要な点の節で、外した段落・印の段落の引用と理由を持つ。
-    """
-    labels = answer_labels()
-    return frozenset({labels.removed_section, labels.marked_section})
-
-
-# 見出しの行（Markdown の見出し・太字だけの行。後ろの「：」は許す）。
-_HEADING_LINE = re.compile(r"(?:#{1,6}\s+(?P<md>.+?)|\*\*(?P<bold>[^*\n]+)\*\*)\s*[:：]?")
-
-
-def _heading_title(line: str) -> str | None:
-    match = _HEADING_LINE.fullmatch(line.strip())
-    if match is None:
-        return None
-    return (match.group("md") or match.group("bold") or "").strip().strip("*").strip()
-
-
-def without_system_sections(answer: str) -> str:
-    """主張ではない節（``system_section_headings``。次の見出しの前まで）を除く。
-
-    節は外した段落・印の段落の原文と理由なので、忠実さ（語句の一致）に数えない。印の段落そのものは
-    本文に残るので数える（#2738）。
-    """
-    headings = system_section_headings()
-    kept: list[str] = []
-    inside = False
-    for line in answer.splitlines():
-        title = _heading_title(line)
-        if title is not None:
-            inside = title in headings
-        if not inside:
-            kept.append(line)
-    return "\n".join(kept)
-
-
 def grounding_text(answer: str) -> str:
     """忠実さの照合に使う回答の本文。
 
     回答生成が付けた見出し・出典行・定型文（「参考情報」の節の直下の説明を含む。#2040）と、
-    「根拠と矛盾し除いた内容」「確認が必要な点」の節（#2738）は主張ではないので外す。印の付いた
-    段落は本文の主張として数える（#2738）。Agent の回答の節（旧形式を含む）の扱いは suite の
+    Agent の回答の節（旧形式を含む）の扱いは suite の
     Agent の adapter（`suite/evaluation`。#3240）にあり、RAG は Agent の回答の形式を持たない。
     """
-    body = without_system_sections(answer)
     # 読めなかった章節・時間の上限で省いた処理の行もシステムの案内なので外す（#2040）。
-    generated = generated_section_lines(body)
+    generated = generated_section_lines(answer)
     return "\n".join(
         line
-        for line in body.splitlines()
+        for line in answer.splitlines()
         if line.strip()
         and not is_structural_line(line)
         and line.strip() != answer_labels().neutral_summary

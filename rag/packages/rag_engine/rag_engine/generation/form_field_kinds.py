@@ -92,11 +92,6 @@ def _record_form_fields_with_page(record: Any) -> list[tuple[str, str, int | Non
     return fields
 
 
-def record_form_fields(record: Any) -> list[tuple[str, str]]:
-    """構造化解析の項目名と種類（所在は内部の観測へ引き継ぐ）。"""
-    return [(name, kind) for name, kind, _page in _record_form_fields_with_page(record)]
-
-
 def _source_id(record: Any) -> str:
     return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
 

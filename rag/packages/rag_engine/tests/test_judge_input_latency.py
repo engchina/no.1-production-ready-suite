@@ -12,113 +12,21 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from audit_fixtures import legacy_audit_result
 from test_answer_llm_latency import _settings as _engine_settings
 from test_enumeration_sufficiency import BUSINESS_DAY_FIVE, DO_NOT_TOUCH, REPORT, RESERVE, _items
 from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context
 from test_section_expansion import _settings as _section_settings
 
 import rag_engine.generation.answering as generation
-from rag_engine.config import ENTERPRISE_AI_LLM_PROVIDER, LLM_PURPOSE_AUDIT, get_settings, llm_reasoning_effort_note
+from rag_engine.config import get_settings
 from rag_engine.generation import crag_support
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT
 
-
-def test_env_values_for_the_judge_settings():
-    settings = get_settings(
-        environ={
-            "RAG_ENGINE_AUDIT_REASONING_EFFORT": " Low ",
-            "RAG_ENGINE_CRAG_COMPACT_INPUT": "1",
-            "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": "true",
-        },
-        dotenv_path=None,
-    )
-    assert settings.audit_reasoning_effort == "low"
-    assert settings.crag_compact_input is True and settings.section_skip_regrade_at_scope is True
-    defaults = get_settings(environ={}, dotenv_path=None)
-    # 既定（空）は監査もモデルの登録値のまま。圧縮・評価し直しの省略は off。
-    assert defaults.audit_reasoning_effort == ""
-    assert defaults.crag_compact_input is False and defaults.section_skip_regrade_at_scope is False
-
-
 # ---- 監査の推論の量 ---------------------------------------------------------------------------------------
-
-
-def test_audit_uses_its_own_effort_separately_from_generation():
-    from rag_engine.generation import grounded
-
-    settings = _engine_settings(generation_reasoning_effort="high", audit_reasoning_effort="low")
-    seen = []
-
-    def fake_round(question, spans, round_settings, **options):
-        seen.append(
-            (
-                round_settings.llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort,
-                options["audit_settings"].llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort,
-            )
-        )
-        raise RuntimeError("stop after the first round")
-
-    context = generation.AnswerContext(records=[_parent("r1", "経費精算の申請方法")], text="経費精算の申請方法")
-    with patch.object(grounded, "run_round", side_effect=fake_round), pytest.raises(RuntimeError):
-        generation.synthesize_grounded_answer("経費精算の申請方法は？", context, settings, image_prompt_mode="text_only")
-    # 生成は回答文の生成の量（high）、監査は監査の量（low）で呼ぶ。
-    assert seen == [("high", "low")]
-    assert llm_reasoning_effort_note(settings, LLM_PURPOSE_AUDIT) == "推論の量: low（回答の監査の設定。モデルの登録値は medium）"
-
-
-def test_run_round_calls_the_audit_with_the_audit_settings():
-    from rag_engine.generation import grounded
-    from rag_engine.generation.citation_wire import generation_draft_wire_model
-    from rag_engine.models.llm import GroundedAudit, GroundedDraft
-
-    generation_settings = get_settings(environ={}, dotenv_path=None)
-    audit_settings = replace(generation_settings, audit_reasoning_effort="low")
-    calls = []
-
-    def parse_text(system, prompt, settings, schema, **options):
-        calls.append((schema.canonical_schema if is_audit_wire(schema) else schema, settings))
-        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
-            return GroundedDraft(summary="", confidence="low", items=[])
-        result = GroundedAudit(
-            reviews=[],
-            request_reviews=[{"request_id": "R1", "status": "missing", "reason": "なし"}],
-            summary_supported=False,
-            goal_alignment="partial",
-        )
-        return legacy_audit_result(result, schema) if is_audit_wire(schema) else result
-
-    question = "経費精算の申請方法は？"
-    context = AnswerContext(
-        records=[_parent("r1", "経費精算の申請方法: 経費精算画面で申請します。")], text="経費精算の申請方法: 経費精算画面で申請します。"
-    )
-    spans = generation._grounded_spans(question, context, (), None)
-    grounded.run_round(
-        question,
-        spans,
-        generation_settings,
-        prompt="p",
-        image_paths=(),
-        provider_id=None,
-        parse_text=parse_text,
-        parse_images=None,
-        audit_settings=audit_settings,
-    )
-    assert [(schema.__name__, settings) for schema, settings in calls] == [
-        ("GroundedDraftWire", generation_settings),
-        ("GroundedAudit", audit_settings),
-    ]
-    calls.clear()
-    # 渡さなければ監査も生成と同じ設定（従来の動き）。
-    grounded.run_round(
-        question, spans, generation_settings, prompt="p", image_paths=(), provider_id=None, parse_text=parse_text, parse_images=None
-    )
-    assert [settings for _schema, settings in calls] == [generation_settings, generation_settings]
 
 
 # ---- CRAG の評価の入力の圧縮 ---------------------------------------------------------------------------------

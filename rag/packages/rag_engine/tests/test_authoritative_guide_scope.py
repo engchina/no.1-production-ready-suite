@@ -2,14 +2,10 @@
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
-import pytest
-from test_guide_steps import context, parent
+from test_guide_steps import context
 
-from rag_engine.config import get_settings
 from rag_engine.generation import answering, grounded
-from rag_engine.generation.execution_record import AnswerExecutionError
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep
 
@@ -57,7 +53,7 @@ def test_scope_reaches_generation_without_any_material_association() -> None:
         original_question=QUESTION, expanded_question=QUESTION, path=Path("synthetic.json"), guide_task_scope=plan().task_scope
     )
     assert not runtime.has_matches
-    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, None, runtime, None, template="{{question}}\n{{answer_context}}")
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, runtime, None, template="{{question}}\n{{answer_context}}")
     assert '"guide_id": "synthetic-guide"' in prompt
     assert '"step_id": "conditional"' in prompt
     assert '"required": false' in prompt
@@ -75,9 +71,9 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
         guide_condition_notices=(note,),
     )
     template = "{{question}}\n{{answer_context}}"
-    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, None, runtime, None, template=template)
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, runtime, None, template=template)
     without = answering._grounded_prompt(
-        QUESTION, [], context(), (), None, None, replace(runtime, guide_condition_notices=()), None, template=template
+        QUESTION, [], context(), (), None, replace(runtime, guide_condition_notices=()), None, template=template
     )
     assert prompt.count(note) == 1
     assert prompt.index("guide_task_scope:\n") < prompt.index("guide_condition_notices:\n") < prompt.index(note)
@@ -85,61 +81,3 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
     # 補足の読み方は、業務ガイドの部品があるときに渡す 1 か所にだけある。
     assert grounded.GUIDE_RULES_PROMPT.count("guide_condition_notices") == 1
     assert "guide_condition_notices" not in grounded.GENERATE_SYSTEM_PROMPT
-
-
-@pytest.mark.parametrize("reason", ["disabled", "no_budget", "empty"])
-def test_formal_answer_keeps_scope_when_guide_search_has_no_material(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, reason: str) -> None:
-    ctx = context(parent("a", "画面を開きます。"))
-    settings = replace(
-        get_settings(),
-        output_dir=tmp_path,
-        section_expansion_enabled=False,
-        document_selection_enabled=False,
-        screen_linking_enabled=False,
-        article_catalog_enabled=False,
-        default_rerank_enabled=False,
-        request_coverage_retrieval_enabled=False,
-        guide_step_retrieval_enabled=reason != "disabled",
-        extra_retrieval_max_queries=0 if reason == "no_budget" else 3,
-        answer_audit_mode="none",
-        confirmed_premises=(("操作条件", "条件A"),),
-        confirmed_premise_sources=(("操作条件", "条件A", "question"),),
-    )
-    runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=tmp_path / "synthetic.json")
-    monkeypatch.setattr(answering, "build_runtime_knowledge_context", lambda *args, **kwargs: runtime)
-    monkeypatch.setattr(answering, "check_adb_hybrid_search_ready", lambda *args, **kwargs: None)
-    monkeypatch.setattr(answering, "build_adb_hybrid_answer_context", lambda *args, **kwargs: ctx)
-    monkeypatch.setattr(answering, "_start_original_query_prefetch", lambda *args, **kwargs: None)
-    observed: dict[str, Any] = {}
-
-    class StopBeforeModel(Exception):
-        pass
-
-    def capture(*args: Any, **kwargs: Any) -> Any:
-        observed.update(kwargs)
-        raise StopBeforeModel()
-
-    if reason == "empty":
-        monkeypatch.setattr(
-            answering,
-            "_cover_guide_steps",
-            lambda question, context, settings, plan, **kwargs: (context, {"skipped": "synthetic_empty"}, ()),
-        )
-    monkeypatch.setattr(grounded, "run_round", capture)
-    with pytest.raises(AnswerExecutionError) as failure:
-        answering.answer_question_result(
-            QUESTION,
-            "synthetic-run",
-            ["docling"],
-            settings,
-            query_strategy="simple_retrieval",
-            answer_flow="standard_rag",
-            retrieval_scope="knowledge_base",
-            guide_plan=plan(),
-        )
-    assert isinstance(failure.value.__cause__, StopBeforeModel)
-    assert observed["guide_task_scope"] == plan().task_scope
-    assert observed["confirmed_premises"] == (("操作条件", "条件A"),)
-    assert observed["confirmed_premise_sources"] == (("操作条件", "条件A", "question"),)
-    assert '"step_id": "conditional"' in observed["prompt"]
-    assert observed["audit_mode"] == "none"

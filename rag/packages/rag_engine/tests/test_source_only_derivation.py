@@ -19,10 +19,9 @@ from rag_engine.adapters.oci import LlmRunawayOutput
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.generation.answer_parts_wire import DERIVATION_QUESTION_TYPES, source_only_derivation
+from rag_engine.generation.answer_parts_wire import DERIVATION_QUESTION_TYPES
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.citation_wire import canonical_generation_draft
 from rag_engine.generation.grounded import generation_output_model
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "source_only_derivation_outputs.json").read_text(encoding="utf-8"))
@@ -151,7 +150,7 @@ def run(name: str, *, repair: str = "derive"):
         raise AssertionError("追加の検索・画像の呼び出しは不要")
 
     records = [_record("table-a", TABLE, "synthetic-table.md"), _record("rule-a", RULE, "synthetic-rule.md")]
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
 
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
@@ -169,37 +168,6 @@ def test_recorded_source_only_outputs_contradict_their_declared_derivation(name)
     output = FIXTURE["outputs"][name]
     assert set(output["question_type"]) & set(DERIVATION_QUESTION_TYPES)
     assert {part["answer"]["kind"] for part in output["answer_parts"]} == {"source"}
-
-
-@pytest.mark.parametrize("name", sorted(FIXTURE["outputs"]))
-def test_source_only_derivation_is_regenerated_without_source_and_publishes_the_derivation(name):
-    response, calls = run(name)
-    assert calls[:2] == ["GroundedDraftWire", "GroundedDraftWire"]
-    assert calls[2:] == ["ApplicationExplanation"]
-    assert DERIVED in response.answer_text
-    trace = response.generation_trace
-    assert trace["applications"][0]["published"] is True
-    round_ = trace["rounds"][0]
-    assert round_["timing"]["answer_part_role_repair"]["outcome"] == "repaired"
-    assert round_["timing"]["answer_part_role_repair"]["requests"] == ["Q1"]
-    assert round_["timing"]["generation_calls"] == 2
-    assert [part["result_kind"] for part in round_["draft"]["answer_parts"]] == ["derived"]
-    assert [part["text"] for part in round_["draft"]["answer_parts"]] == [_first_requirement(name)]
-
-
-@pytest.mark.parametrize("name", sorted(FIXTURE["outputs"]))
-def test_failed_regeneration_leaves_a_gap_instead_of_the_row_listing_as_the_answer(name):
-    response, calls = run(name, repair="invalid")
-    assert calls[:2] == ["GroundedDraftWire", "GroundedDraftWire"]
-    round_ = response.generation_trace["rounds"][0]
-    assert round_["timing"]["answer_part_role_repair"]["outcome"] == "underived"
-    draft = round_["draft"]
-    assert not draft["applications"]
-    assert {part["result_kind"] for part in draft["answer_parts"]} == {"derived"}
-    # 原文の列挙を要約（冒頭の答え）にしない。要点は欠けた要点として不足の記載になる。
-    assert draft["summary"] == "" and draft["summary_item_indexes"] == []
-    assert "根拠付きの説明を十分に示せていません" in response.answer_text
-    assert not response.answer_text.startswith("| A1")
 
 
 def _single_unit_case(question_type: list[str]):
@@ -223,32 +191,6 @@ def _single_unit_case(question_type: list[str]):
         }
     )
     return value, catalog
-
-
-@pytest.mark.parametrize("question_type", [["fact"], [], ["definition", "comparison"]])
-def test_direct_fact_source_stays_direct(question_type):
-    """原文の記載で答えられる種類（または宣言なし）の source 型は、従来どおり直接の記載（#4448）。"""
-    value, catalog = _single_unit_case(question_type)
-    assert source_only_derivation(value) == []
-    draft = canonical_generation_draft(value, unit_catalog=catalog)
-    assert draft.answer_parts[0].result_kind == "direct"
-    assert draft.summary == "項目Aは12です。"
-
-
-def test_mixed_source_and_derivation_is_not_a_contradiction():
-    value, _catalog = _single_unit_case(["calculation"])
-    raw = value.model_dump(exclude_unset=True)
-    basis = raw["answer_parts"][0]["answer"]["basis"]
-    raw["answer_parts"].append(
-        {
-            "request_id": "Q1",
-            "requirement": "2件分",
-            "answer": {"kind": "answer", "basis": basis, "reasoning": "12×2=24", "result": "24です。"},
-        }
-    )
-    assert source_only_derivation(type(value).model_validate(raw)) == []
-    raw["answer_parts"][1] = {"request_id": "Q1", "requirement": "2件分", "answer": {"kind": "gap", "text": "件数の資料が必要です。"}}
-    assert source_only_derivation(type(value).model_validate(raw)) == []
 
 
 def test_question_type_is_a_closed_vocabulary():

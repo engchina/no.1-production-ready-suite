@@ -262,7 +262,6 @@ class AnswerEvidenceTests(unittest.TestCase):
             None,
             None,
             None,
-            None,
             template="{{question}}\n{{answer_context}}",
             field_kind_note="NOTE-LINE",
         )

@@ -8,7 +8,6 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
-from rag_engine.generation.application_explanation import KEY_SOURCES, is_explanation_schema
 from rag_engine.generation.citation_wire import (
     generation_draft_wire_model,
     guided_generation_wire_model,
@@ -27,7 +26,6 @@ from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
-from tests._ai_stubs import application_audit_reply
 from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 
 PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
@@ -171,12 +169,6 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     if schema.__name__ == "QuestionMentionAnchors":
         # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
         return cast(Any, schema).model_validate({"mentions": []})
-    if is_explanation_schema(schema):
-        # 推導の説明の段（#4393）。入力の資料の原文だけから説明を返す。
-        sources = json.loads(prompt)[KEY_SOURCES]
-        return schema.model_validate({"explanation": "資料の原文によると、" + " ".join(sources)})
-    if (reply := application_audit_reply(schema, prompt)) is not None:
-        return reply
     if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)
         ids = [item["evidence_id"] for item in data["evidence"]]
@@ -294,121 +286,6 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             },
         )
     raise AssertionError(f"unexpected schema: {schema.__name__}")
-
-
-@pytest.mark.parametrize("custom_format", [False, True])
-async def test_answer_engine_answers_with_backend_search_and_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-    custom_format: bool,
-) -> None:
-    import rag_engine.adapters.oci as engine_oci
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    oracle = FakeOracle()
-    engine = AnswerEngine(
-        Settings(rag_domain_keywords=["受注番号"]),
-        oracle=oracle,  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-    request = SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
-
-    from rag_parser_core.language import bind_pack, current_pack, resolve
-
-    pack = (
-        resolve(
-            current_pack(),
-            {"answer_labels": {"rules_section": "確認結果[例]", "citation_prefix": "出典[例]："}},
-        )
-        if custom_format
-        else current_pack()
-    )
-    with bind_pack(pack):
-        outcome = await engine.run(request)
-    assert outcome.diagnostics["answer_format"]["rules_section"] == pack.text(
-        "answer_labels", "rules_section"
-    )
-    assert outcome.diagnostics["answer_format"]["citation_prefix"] == pack.text(
-        "answer_labels", "citation_prefix"
-    )
-    assert pack.text("answer_labels", "citation_prefix") in outcome.answer
-
-    assert "登録ボタン" in outcome.answer
-    assert oracle.filters and oracle.filters[0]["knowledge_base_id"] == "kb-1"
-    assert outcome.citations
-    assert outcome.citations[0].chunk_id == "doc-1:c1"
-    assert "evidence_role" in outcome.citations[0].metadata
-    # 検索で当たった子は関連度の順位を持ち、前後の文脈は持たない（MCP の根拠の並び。#1348）。
-    for citation in outcome.citations:
-        rank = citation.metadata.get("evidence_retrieval_rank")
-        if citation.metadata["evidence_role"] == "retrieved_anchor":
-            assert isinstance(rank, int) and rank >= 1
-        else:
-            assert rank is None
-    assert any(c.metadata["evidence_role"] == "retrieved_anchor" for c in outcome.citations)
-    diagnostics = outcome.diagnostics
-    # このスタブは rule だけを返すため、操作の引用の各件数は 0。
-    assert diagnostics["procedure_quotes"] == {
-        "original": 0,
-        "unmatched": 0,
-    }
-    # rag_poc の回答 viewer と同じく外部データの確認・問い合わせ型も診断に載せる(#651)。
-    assert diagnostics["external_data_items"] == []
-    assert diagnostics["question_type"] == []
-    assert "external_data_required" in diagnostics
-    # 採用した草稿の構造（確認の項目の事実と規則の分け方。#1492）を replay の材料に残す。
-    draft = diagnostics["grounded_draft"]
-    assert draft["confirmation_items"] == []
-    assert draft["settled_confirmations"] == {
-        "user": [],
-        "system": [],
-        "document": [],
-        "excluded": [],
-    }
-    assert [item["kind"] for item in draft["items"]]
-    assert diagnostics["summary_evidence"]["citations"]["status"] == "linked"
-    assert diagnostics["summary_evidence"]["citations"]["document_scope_status"] == "complete"
-    assert diagnostics["summary_evidence"]["citations"]["document_ids"] == ["doc-1"]
-    assert diagnostics["summary_evidence"]["semantic_validation"]["adopted"] is False
-    assert diagnostics["execution_steps"]
-    assert diagnostics["evidence_tree"]
-    assert diagnostics["evidence_tree"][0]["children"]
-
-
-async def test_answer_diagnostics_keep_llm_usage_and_round_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """工程ごとの LLM の token の数と、是正の round の時間の配分を診断に残す(#1516)。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.resources.llm_usage import record_llm_usage
-
-    def fake_with_usage(system: str, prompt: str, settings: Any, schema: Any, **_: Any) -> Any:
-        # 本番の adapter（`_record_usage`）と同じく、1 回の呼び出しの usage を累積に足す。
-        record_llm_usage(
-            {"input_tokens": 1000, "output_tokens": 200, "reasoning_tokens": 150, "seconds": 2.5}
-        )
-        return _fake_llm(system, prompt, settings, schema)
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", fake_with_usage)
-    engine = AnswerEngine(
-        Settings(rag_domain_keywords=["受注番号"]),
-        oracle=FakeOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-
-    outcome = await engine.run(
-        SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
-    )
-
-    steps = outcome.diagnostics["execution_steps"]
-    generation = next(step for step in steps if step["name"].startswith("回答文の生成と根拠確認"))
-    assert generation["llm_usage"]["input_tokens"] == 1000 * generation["llm_calls"]
-    assert generation["llm_usage"]["reasoning_tokens"] == 150 * generation["llm_calls"]
-    # LLM を呼ばない工程には載せない。
-    assert all("llm_usage" not in step for step in steps if not step.get("llm_calls"))
-    budget = outcome.diagnostics["round_budget"]
-    assert len(budget["round_seconds"]) >= 1
-    assert budget["reserve_seconds"] == 30.0
-    assert "stop" not in budget
 
 
 async def test_answer_diagnostics_keep_the_evidence_budget(
@@ -2328,41 +2205,6 @@ def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> Non
     assert changed.query_expansion_max_queries == 3
 
 
-def test_build_engine_settings_passes_judge_latency_settings(tmp_path: Any) -> None:
-    """監査の推論の量・CRAG の評価の入力の圧縮・評価し直しの省略を渡す(#1528)。"""
-    from app.rag.answer_engine import build_engine_settings
-
-    default = build_engine_settings(Settings(), output_dir=tmp_path)
-    changed = build_engine_settings(
-        Settings(
-            rag_audit_reasoning_effort="high",
-            rag_crag_compact_input=False,
-            rag_section_skip_regrade_at_scope=False,
-        ),
-        output_dir=tmp_path,
-    )
-    omitted = build_engine_settings(
-        Settings(rag_audit_reasoning_effort="none"), output_dir=tmp_path
-    )
-
-    assert default.audit_reasoning_effort == _engine_effort(Settings().rag_audit_reasoning_effort)
-    assert default.crag_compact_input is Settings().rag_crag_compact_input
-    assert default.section_skip_regrade_at_scope is Settings().rag_section_skip_regrade_at_scope
-    assert changed.audit_reasoning_effort == "high"
-    assert changed.crag_compact_input is False and changed.section_skip_regrade_at_scope is False
-    assert omitted.audit_reasoning_effort == "none"
-    model = build_engine_settings(
-        Settings(
-            rag_audit_reasoning_effort="model",
-            rag_crag_compact_input=True,
-            rag_section_skip_regrade_at_scope=True,
-        ),
-        output_dir=tmp_path,
-    )
-    assert model.audit_reasoning_effort == ""
-    assert model.crag_compact_input is True and model.section_skip_regrade_at_scope is True
-
-
 def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None:
     """CRAG の評価の候補の短い ID(#1864。既定 ON)を rag_engine に渡す。"""
     from app.rag.answer_engine import build_engine_settings
@@ -2372,24 +2214,6 @@ def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None
     off = build_engine_settings(Settings(rag_crag_short_candidate_ids=False), output_dir=tmp_path)
     assert default.crag_short_candidate_ids is True
     assert off.crag_short_candidate_ids is False
-
-
-def test_build_engine_settings_passes_answer_round_latency(tmp_path: Any) -> None:
-    """監査の通った判定の reason を空にする(既定 OFF)・是正の組の回数の上限(既定 2)を
-    rag_engine に渡す(#1912)。"""
-    from app.rag.answer_engine import build_engine_settings
-
-    assert Settings().rag_answer_audit_compact_reasons is False
-    assert Settings().rag_answer_max_correction_rounds == 2
-    default = build_engine_settings(Settings(), output_dir=tmp_path)
-    changed = build_engine_settings(
-        Settings(rag_answer_audit_compact_reasons=True, rag_answer_max_correction_rounds=1),
-        output_dir=tmp_path,
-    )
-    assert default.answer_audit_compact_reasons is False
-    assert default.answer_max_correction_rounds == 2
-    assert changed.answer_audit_compact_reasons is True
-    assert changed.answer_max_correction_rounds == 1
 
 
 def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None:
@@ -2759,7 +2583,6 @@ async def test_evidence_retrieval_for_agent_stops_after_document_search(
     models = cast(dict[str, Any], answer["models"])
     assert set(models) == {
         "llm",
-        "question_subject_role",
         "attached_images",
         "embedding",
         "rerank",
@@ -2787,8 +2610,6 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
     outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
     assert outcome.diagnostics["models"] == {
         "llm": {"model_id": "model-a", "label": "Model A"},
-        # 質問の対象の役割の判定の段のモデル(#4351。既定の設定、登録の表示名が無ければ ID)。
-        "question_subject_role": {"model_id": "xai.grok-4.7", "label": "xai.grok-4.7"},
         # 表の行の条件の段(#4349)、推導の監査の判定(#4565)・理由(#4564)の段のモデル(既定)。
         "attached_images": 0,
         "embedding": settings.oci_genai_embedding_model,
@@ -3281,7 +3102,6 @@ async def _answer_with_coverage(
         return result
 
     monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
-    settings.setdefault("rag_request_coverage_retrieval_enabled", True)
     engine = AnswerEngine(
         Settings(
             rag_query_strategy="simple_retrieval",
@@ -3293,54 +3113,6 @@ async def _answer_with_coverage(
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
     return await engine.run(SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"}))
-
-
-async def test_request_coverage_re_retrieves_only_missing_request(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """根拠の無い要求だけを自動選択の検索文で探し、その根拠を回答の材料と診断に足す(#1279・#4114)。"""
-    oracle = CoverageOracle()
-
-    outcome = await _answer_with_coverage(
-        monkeypatch, oracle, "受注の登録方法は？請求書の再発行方法は？"
-    )
-
-    coverage = outcome.diagnostics["request_coverage"]
-    statuses = {row["id"]: row["status"] for row in coverage["requests"]}
-    assert statuses == {"Q1": "unassessed"}
-    after_trace = coverage["after_generation"][0]
-    re_retrieval = after_trace["re_retrieval"]
-    assert re_retrieval["applied"] is True
-    assert [query["request_id"] for query in re_retrieval["queries"]] == ["Q1"]
-    assert re_retrieval["queries"][0]["queries"][0] == "請求書の再発行方法は？"
-    assert after_trace["llm_calls"] == 1
-    assert all(row["status"] == "unassessed" for row in after_trace["requests"])
-    # 足した根拠が回答の材料(根拠の木)に入る。
-    assert any(key.startswith("doc-invoice:") for key in re_retrieval["added_chunk_ids"])
-    # 合成モデルは新資料を引用しないため、公開候補には以前の回答を維持できる。
-    assert "doc-order:c1" in _evidence_ids(outcome)
-    assert any(
-        step["name"] == "未回答の要求の探し直し" for step in outcome.diagnostics["execution_steps"]
-    )
-
-
-async def test_request_coverage_disabled_does_not_re_retrieve(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """設定で無効なら、判定だけを記録し再検索しない(#1279)。"""
-    oracle = CoverageOracle()
-
-    outcome = await _answer_with_coverage(
-        monkeypatch,
-        oracle,
-        "受注の登録方法は？請求書の再発行方法は？",
-        rag_request_coverage_retrieval_enabled=False,
-    )
-
-    coverage = outcome.diagnostics["request_coverage"]
-    assert coverage["re_retrieval"] == {"applied": False, "skipped": "disabled"}
-    assert "請求書の再発行方法は？" not in oracle.queries
-    assert "doc-invoice:c1" not in _evidence_ids(outcome)
 
 
 # --- 元の質問の要求の単位と、検索用に言い換えた検索文(#2665) ---
@@ -3361,147 +3133,6 @@ class ApprovalOnlyOracle(CoverageOracle):
     ) -> list[RetrievedChunk]:
         self.queries.append(query)
         return [_doc_chunk("doc-approval", "承認の担当は課長です。")] if "承認" in query else []
-
-
-@pytest.mark.parametrize(
-    "query",
-    [
-        "受注を登録する。請求書を再発行する。承認の担当を知りたい。",
-        "受注 登録 請求書 再発行 承認 担当",
-    ],
-)
-async def test_original_question_keeps_numbered_requests_through_coverage(
-    monkeypatch: pytest.MonkeyPatch, query: str
-) -> None:
-    """元の質問の番号つきの 3 要求を、検索用に言い換えた検索文から作り直さずに、要求ごとの
-    根拠の確認と探し直し・診断まで保つ(#2665)。検索は検索文で行う。"""
-    import rag_engine.adapters.oci as engine_oci
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    oracle = ApprovalOnlyOracle()
-    engine = AnswerEngine(
-        Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
-            rag_rerank_enabled=False,
-            rag_request_coverage_retrieval_enabled=True,
-        ),
-        oracle=oracle,  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-
-    outcome = await engine.run(
-        SearchRequest(
-            query=query,
-            original_question=_NUMBERED_ORIGINAL,
-            filters={"knowledge_base_id": "kb-1"},
-        )
-    )
-
-    coverage = outcome.diagnostics["request_coverage"]
-    assert {row["id"]: (row["kind"], row["status"]) for row in coverage["requests"]} == {
-        "Q1": ("request", "unassessed"),
-    }
-    # 1 要求として探し直しを省かず、根拠の無い要求ごとに要求の文で探し直す。
-    assert coverage["re_retrieval"]["skipped"] == "no_explicit_gap"
-    for trace in coverage.get("after_generation", ()):
-        assert {item["request_id"] for item in trace["re_retrieval"].get("queries", ())} <= {
-            "Q1",
-            "Q2",
-            "Q3",
-        }
-    # 主の検索は言い換えた検索文で行う(元の質問の全文の検索は、条の目録の候補の補いだけ)。
-    assert oracle.queries[0] == query
-    # 回答の要求(rag_search の requests。回答の検査の入力)も元の質問の 3 要求(充足は監査が決める)。
-    requests = outcome.diagnostics["envelope"]["requests"]
-    assert [(item["id"], item["text"]) for item in requests] == [
-        ("Q1", " ".join(_NUMBERED_ORIGINAL.split())),
-    ]
-
-
-async def test_without_original_question_requests_come_from_the_query(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """元の質問を渡さなければ、要求は検索文から作る(省略時の挙動を変えない。#2665)。"""
-    import rag_engine.adapters.oci as engine_oci
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    engine = AnswerEngine(
-        Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
-            rag_rerank_enabled=False,
-            rag_request_coverage_retrieval_enabled=True,
-        ),
-        oracle=ApprovalOnlyOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-
-    outcome = await engine.run(
-        SearchRequest(
-            query="受注 登録 請求書 再発行 承認 担当", filters={"knowledge_base_id": "kb-1"}
-        )
-    )
-
-    coverage = outcome.diagnostics["request_coverage"]
-    assert [row["id"] for row in coverage["requests"]] == ["Q1"]
-    # 1 要求で、最初の検索と違う検索文を作れないので探し直さない(#2810)。
-    assert coverage["re_retrieval"]["skipped"] == "no_explicit_gap"
-
-
-def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
-    """根拠の無い要求の再検索の設定と予算を rag_engine の設定へ渡す(#1279)。"""
-    from app.rag.answer_engine import build_engine_settings
-
-    default = build_engine_settings(Settings(), output_dir=tmp_path)
-    custom = build_engine_settings(
-        Settings(
-            rag_request_coverage_retrieval_enabled=True,
-            rag_request_coverage_max_queries=1,
-            rag_request_coverage_max_chunks=2,
-            rag_request_coverage_deadline_seconds=3.5,
-            rag_request_coverage_max_subquestions=3,
-            rag_request_coverage_chunks_per_subquestion=1,
-        ),
-        output_dir=tmp_path,
-    )
-
-    assert default.request_coverage_retrieval_enabled is False
-    assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
-    assert default.request_coverage_deadline_seconds == 10.0
-    assert custom.request_coverage_retrieval_enabled is True
-    assert (custom.request_coverage_max_queries, custom.request_coverage_max_chunks) == (1, 2)
-    assert custom.request_coverage_deadline_seconds == 3.5
-    # 小問ごとの検索の上限(#2399)。
-    assert (
-        default.request_coverage_max_subquestions,
-        default.request_coverage_chunks_per_subquestion,
-    ) == (5, 2)
-    assert (
-        custom.request_coverage_max_subquestions,
-        custom.request_coverage_chunks_per_subquestion,
-    ) == (3, 1)
-
-
-def test_search_answer_profile_ignores_legacy_request_coverage() -> None:
-    """不足要求の再検索は全体の設定を使い、旧個別値を適用しない。"""
-    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
-    from app.rag.search_answer_profile_config import (
-        SearchAnswerProfileConfig,
-        resolve_search_answer_profile_settings,
-    )
-
-    config = SearchAnswerProfileConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(request_coverage_retrieval_enabled=True),
-    )
-
-    settings, _ = resolve_search_answer_profile_settings(
-        Settings(rag_request_coverage_retrieval_enabled=False), config
-    )
-
-    assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings().rag_request_coverage_retrieval_enabled is False
 
 
 async def test_guide_preview_is_recorded_without_extra_model_calls(

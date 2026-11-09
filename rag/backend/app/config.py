@@ -1561,15 +1561,6 @@ class Settings(
             "0 は 2 段目を行わない。"
         ),
     )
-    rag_article_catalog_review_enabled: bool = Field(
-        default=False,
-        description=(
-            "条の目録で選んだ条を回答の生成が引かなかったとき、条ごとに原文が支える説明を"
-            "別の LLM の呼び出しで検討し、その説明の出典に足す(#3526)。"
-            "足した出典も原文照合と条の出典の監査に掛ける。評価で確かめた説明に根拠の無い条の"
-            "出典が付いたので既定は無効。無効なら検討の呼び出しをしない。"
-        ),
-    )
     rag_article_catalog_refine_candidates: int = Field(
         default=60,
         ge=0,
@@ -1628,16 +1619,6 @@ class Settings(
         description=(
             "条の選択の記録の件数の上限(1 件は文書 1 つの選択か範囲の文書の選択 1 回)。"
             "超えたら古い記録から消す。0 は process をまたぐ記録を使わない。"
-        ),
-    )
-    rag_request_coverage_retrieval_enabled: bool = Field(
-        default=False,
-        description=(
-            "生成が根拠の無い要求を明示したとき(または実行済みの監査が材料の不足と判定したとき)だけ、"
-            "その要求を探し直す(#1279・#4114)。違う検索文を作れない要求は、原質問のみを除く"
-            "自動ルーティングで検索文を作る(LLM を呼ぶ。生成文は検索と rerank の比較にだけ使う)。"
-            "不足の無い回答では呼ばない。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_request_coverage_max_queries: int = Field(
@@ -1751,22 +1732,6 @@ class Settings(
             "監査は RAG_AUDIT_REASONING_EFFORT(#1528)。"
         ),
     )
-    rag_audit_reasoning_effort: ReasoningEffortOverride = Field(
-        default="model",
-        description=(
-            "生成後の監査(主張と引用の適用性の確認)の LLM の呼び出しの推論の量(#1528。"
-            "既定 model = モデルの登録値)。"
-        ),
-    )
-    rag_question_subject_role_model: str = Field(
-        default="xai.grok-4.7",
-        description=(
-            "質問の対象の名前の役割(問い・前提・例)の判定の段の LLM のモデル ID"
-            "(#4351。モデル設定の登録モデル)。空は回答のモデルのまま。"
-            "登録していないモデルでは段が失敗し、回答は対象の名前の照合を飛ばして続ける。"
-            "推論の量と出力の上限はそのモデルの登録値。"
-        ),
-    )
     rag_crag_skip_on_strong_signals: bool = Field(
         default=False,
         description=(
@@ -1794,45 +1759,6 @@ class Settings(
             " chunk_uid を短い ID(C1・C1-1)にする。評価器は候補ごとの判定・観点の根拠・回復の起点に"
             "ID を書き写すので、長い chunk_uid(文書 ID の 32 桁と chunk の名前)が出力の token と"
             "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
-        ),
-    )
-    rag_answer_audit_compact_reasons: bool = Field(
-        default=False,
-        description=(
-            "(既定 OFF。#1912)生成後の監査の reason を、判定が通った説明"
-            "(supported かつ matched)と答えている要求(addressed)では空文字にさせる。"
-            "監査の見える出力は約 5 割減るが、同じ入力の対の比較で監査が甘くなった"
-            "(通らなかった判定が 5 件 → 1 件)ため既定では使わない。品質評価の比較用。"
-        ),
-    )
-    rag_answer_max_correction_rounds: int = Field(
-        default=2,
-        ge=0,
-        le=2,
-        description=(
-            "回答文の生成と根拠確認の是正の組(作り直し)の回数の上限(#1912。0〜2。"
-            "既定 2 は従来と同じ)。是正 1 組は生成と監査の LLM の呼び出しを 1 回ずつ足す"
-            "(#1864 の記録で 1 組 5〜63 秒)。"
-            "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
-        ),
-    )
-    rag_answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"] = Field(
-        default="legacy",
-        description=(
-            "生成後の根拠の選別。legacy は既存方式を維持し、cited_only は引用済みの原文だけ、"
-            "cited_required は引用済みの原文と必須の補完根拠へ絞る。明示的に選んだ場合だけ、"
-            "既存の是正回数・時間予算内で最大 1 回再生成する。監査・補検索は自動で有効にしない。"
-        ),
-    )
-    rag_answer_audit_mode: Literal["none", "standard", "detailed"] = Field(
-        default="none",
-        description=(
-            "(#2795・#2800)回答の監査の型。none(既定)は生成の後の LLM の監査と作り直しをせず、"
-            "原文との照合と規則の検査(決定的)だけで印を付ける(WeKnora と同じく生成の後に確認の"
-            " LLM を呼ばない)。要求の充足は説明の有無、業務ガイドの手順の充足は決定的な対応付けで"
-            "決める。standard は 1 回の監査(主張・要求・要件)と事実の問題の作り直し 1 組まで。"
-            "detailed は未使用の根拠も列挙させ、完全性の不足でも最大 3 組まで作り直す"
-            "(業務ガイドの下書きの試答は常に detailed)。"
         ),
     )
     rag_llm_stall_detection_enabled: bool = Field(

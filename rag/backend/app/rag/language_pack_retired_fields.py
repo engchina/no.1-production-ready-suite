@@ -1,4 +1,4 @@
-"""言語資源の保存データから、廃止した質問の手がかりの項目を取り除く migration の処理(#4666)。
+"""言語資源の保存データから、廃止した項目を取り除く migration の処理(#4666・#4714)。
 
 公開版と下書きは全項目のスナップショットで、`build_pack` は余分な項目を拒否する。公開版の
 `content_hash` は全項目から計算するので、項目を消したら計算し直す必要があり、SQL だけでは書けない。
@@ -32,17 +32,72 @@ RETIRED_QUESTION_CUE_FIELDS = frozenset(
         "condition_cues",
     }
 )
-_SECTION = "question_cues"
+# 回答の生成後の確認をやめて、どの処理も読まなくなった項目と節(#4714)。
+RETIRED_ANSWER_LABEL_FIELDS = frozenset(
+    {
+        "removed_section",
+        "removed_section_note",
+        "marked_section",
+        "marked_section_note",
+        "unsourced_section",
+        "unsourced_section_note",
+        "marked_rules_section",
+        "marked_rules_section_note",
+        "passage_note_template",
+        "answer_warning_template",
+        "passage_reason_labels",
+        "off_goal_gap",
+        "subject_unconfirmed_gap",
+        "cause_gap",
+        "missing_request_template",
+    }
+)
+RETIRED_ANSWER_CHECK_CUE_FIELDS = frozenset(
+    {
+        "completion_negations",
+        "heading_screen_words",
+        "field_label_followers",
+        "guarantee_verbs",
+        "guarantee_endings",
+        "guarantee_exceptions",
+        "match_claims",
+        "speculation_words",
+        "report_suffixes",
+        "screen_object_suffixes",
+        "proviso_words",
+        "navigation_residue_words",
+        "version_units",
+        "abolish_words",
+        "abolish_particles",
+        "abolished_forms",
+        "version_question_cues",
+        "quote_operation_words",
+        "evidence_id_labels",
+        "output_artifact_words",
+        "output_field_words",
+        "heading_bracket_pairs",
+    }
+)
+RETIRED_SECTIONS = frozenset({"guide_check_cues"})
+_RETIRED_BY_SECTION = {
+    "question_cues": RETIRED_QUESTION_CUE_FIELDS,
+    "answer_labels": RETIRED_ANSWER_LABEL_FIELDS,
+    "answer_check_cues": RETIRED_ANSWER_CHECK_CUE_FIELDS,
+}
 PROFILE_TABLE = "rag_search_answer_profiles"
 
 
 def without_retired_fields(pack: Mapping[str, Any]) -> dict[str, Any] | None:
     """廃止した項目を除いた写しを返す。除くものが無ければ None(同じ行を何回流しても変えない)。"""
-    fields = pack.get(_SECTION)
-    if not isinstance(fields, Mapping) or not RETIRED_QUESTION_CUE_FIELDS & fields.keys():
+    stripped: dict[str, Any] = {}
+    for section, retired in _RETIRED_BY_SECTION.items():
+        fields = pack.get(section)
+        if isinstance(fields, Mapping) and retired & fields.keys():
+            stripped[section] = {k: v for k, v in fields.items() if k not in retired}
+    dropped = RETIRED_SECTIONS & pack.keys()
+    if not stripped and not dropped:
         return None
-    kept = {k: v for k, v in fields.items() if k not in RETIRED_QUESTION_CUE_FIELDS}
-    return {**pack, _SECTION: kept}
+    return {k: v for k, v in {**pack, **stripped}.items() if k not in dropped}
 
 
 def _table_exists(connection: Any, table: str) -> bool:
@@ -118,7 +173,7 @@ def _strip_profiles(connection: Any) -> None:
     for row in _fetch_all(
         connection,
         f"SELECT search_answer_profile_id, profile_config FROM {PROFILE_TABLE} "
-        f"WHERE JSON_EXISTS(profile_config, '$.language_pack.{_SECTION}') FOR UPDATE",
+        "WHERE JSON_EXISTS(profile_config, '$.language_pack') FOR UPDATE",
         {},
     ):
         config = _json_loads(row["profile_config"])
@@ -127,8 +182,7 @@ def _strip_profiles(connection: Any) -> None:
         if stripped is None:
             continue
         # 上書きが無くなった節は残さない(「上書きなし」と同じ保存値にする)。
-        if not stripped[_SECTION]:
-            del stripped[_SECTION]
+        stripped = {section: fields for section, fields in stripped.items() if fields}
         _execute(
             connection,
             f"UPDATE {PROFILE_TABLE} SET profile_config=:config WHERE search_answer_profile_id=:id",

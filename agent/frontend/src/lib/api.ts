@@ -1005,13 +1005,6 @@ export interface RunSourcePreview {
   expires_in_seconds: number;
 }
 
-/** 段落の印・外した段落・回答全体の注意の理由（#2738。契約は platform/contracts/answer-passages/passage-marks.json）。 */
-export interface AnswerPassageReasonData {
-  code: string;
-  label: string;
-  detail?: string;
-}
-
 export interface Artifact {
   id: string;
   name: string;

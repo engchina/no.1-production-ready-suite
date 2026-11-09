@@ -199,49 +199,6 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
             assert re.search(r"^#{2,3} \S", str(part["content"]), re.M), (stage["id"], part["id"])
 
 
-def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
-    stages = {stage.id: stage for stage in PROMPT_STAGES if stage.phase == "evaluation"}
-    assert set(stages) == {"evaluation"}
-    assert (
-        next(stage for stage in PROMPT_STAGES if stage.id == "answer_validation").phase == "audit"
-    )
-    assert {part for part, _ in stages["evaluation"].parts} == {
-        "scope",
-        "coverage",
-        "claim",
-        "correctness",
-        "evidenceCoverage",
-        "absenceScope",
-    }
-
-
-def test_catalog_separates_independent_preparation_and_orders_evaluation_calls() -> None:
-    stages = {stage.id: stage for stage in PROMPT_STAGES}
-    assert stages["raptor_summary"].phase == "indexing"
-    assert stages["support_guide_draft"].phase == "knowledge"
-    assert [part for part, _ in stages["evaluation"].parts] == [
-        "scope",
-        "coverage",
-        "claim",
-        "correctness",
-        "evidenceCoverage",
-        "absenceScope",
-    ]
-    assert [part for part, _ in stages["audit"].parts] == [
-        "detailedSystem",
-        "factSystem",
-        "compactRule",
-    ]
-    # 取込内の順は設定の概要が参照するレシピの実行順と同じ。
-    assert [stage.id for stage in PROMPT_STAGES if stage.phase == "ingestion"] == [
-        "external_ocr",
-        "picture_description",
-        "heading_levels",
-        "field_extraction",
-        "navigation_summary",
-    ]
-
-
 def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
     from rag_engine.generation.answering import CRAG_GRADER_SYSTEM_PROMPT
     from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE

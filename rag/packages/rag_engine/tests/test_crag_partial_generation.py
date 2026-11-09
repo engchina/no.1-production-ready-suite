@@ -50,8 +50,6 @@ def run_answer(text, grade_output, generation):
     context = a.AnswerContext(records=[record("c0", 0, text)], text=text)
     settings = replace(
         get_settings(environ={}, dotenv_path=None),
-        answer_audit_mode="none",
-        answer_max_correction_rounds=0,
         section_expansion_enabled=False,
     )
     calls = []
@@ -82,45 +80,6 @@ def test_same_business_overview_cannot_reach_operation_generation():
     assert result.crag_attempts[-1]["generation_usable"] is False
     assert "直接裏付ける根拠を確認できていません" in result.answer_text
     assert not result.generation_trace["crag_generation_gate"]["generation_calls"]
-
-
-def test_unaudited_partial_answer_keeps_the_claim_and_summary_and_shows_the_missing_aspect():
-    # 監査なしでは説明を外さない（#3843・#2738）。確かめた部分の写しを引く説明は印なしで残し、確かめていない観点は
-    # 不足の行で示す。要約の引用対応と意味監査の実施状態は別に記録する。
-    def generation(context):
-        eid = ids(context, QUESTION)[OPEN]
-        return draft(
-            {
-                "kind": "operation",
-                "request_id": "Q1",
-                "text": "設定を保存して処理を完了します。",
-                "citations": [{"evidence_id": eid, "quote": OPEN}],
-            },
-            summary="設定の保存まで完了できます。",
-        )
-
-    result, calls = run_answer(OPEN, grade(OPEN, partial=True), generation)
-    prompts = [prompt for schema, prompt in calls if schema == "GroundedDraftWire"]
-    assert len(prompts) == 1
-    assert "crag_assessment" in prompts[0] and OPEN in prompts[0]
-    assert '"status": "supported"' in prompts[0] and '"status": "missing"' in prompts[0] and '"status": "unknown"' in prompts[0]
-    assert "設定を保存して処理を完了します。" in result.answer_text
-    assert "設定の保存まで完了できます。" in result.answer_text
-    assert "手順については、検索評価で直接の根拠を確認できていません。" in result.answer_text
-    assert "未確認" in result.answer_text
-    trace = result.generation_trace
-    assert trace["crag_assessment"]["required_aspect_coverage"] == "partial"
-    # parser呼出が成功しても、この準備用spansだけで実送信の証明にはしない。
-    assert trace["crag_assessment"]["input_stage"] == "prepared_for_generation"
-    projection = trace["crag_partial_projection"]
-    assert projection["applied"] and projection["omitted_claims"] == [] and not projection["summary_replaced"]
-    assert (projection["bound_claims"], projection["marked_claims"]) == (1, 0)
-    marks = {mark["text"]: {reason["code"] for reason in mark["reasons"]} for mark in result.envelope["passage_marks"]}
-    assert "unassessed" not in marks.get("設定を保存して処理を完了します。", set())
-    assert "summary_unaudited" not in marks.get("設定の保存まで完了できます。", set())
-    assert trace["finalization"]["summary"]["citations"]["status"] == "linked"
-    assert trace["finalization"]["summary"]["semantic_validation"]["execution"] == "not_run"
-    assert result.needs_human_review
 
 
 def test_overview_gate_precedes_legacy_generation_dispatch():
@@ -170,66 +129,6 @@ def test_new_material_without_reassessment_preserves_gap_as_unknown():
     assert view["aspect_checks"][0]["status"] == "unknown"
     assert view["aspect_checks"][0]["retained_reason"] == "new_context_without_aspect_reassessment"
     assert "未確認" in crag_generation.gap_lines(QUESTION, view)[0]
-
-
-def test_crag_user_messages_follow_the_active_language_pack():
-    from dataclasses import dataclass, field
-
-    from rag_parser_core.language import bind_pack, builtin_pack, resolve
-
-    from rag_engine.generation import crag_generation
-    from rag_engine.retrieval.task_contract import task_contract
-
-    custom = resolve(
-        builtin_pack(),
-        {
-            "answer_labels": {
-                "crag_refusal_summary": "直接説明できる資料は未確認です。",
-                "crag_missing_aspect_template": "不足の観点：{label}",
-                "crag_unknown_aspect_template": "未確認の観点：{label}",
-                "crag_quote_only_note": "資料の記載をそのまま表示します。",
-                "crag_definition_aspect_template": "定義（{label}）",
-                "item_bullet": "※",
-            }
-        },
-    )
-    view = {
-        "generation_usable": False,
-        "generation_decision": crag_generation.GATE_NO_ANSWERABLE_PART,
-        "aspect_checks": [{"aspect": "procedure", "status": "missing"}, {"aspect": "applicability", "status": "unknown"}],
-    }
-
-    @dataclass
-    class Partial:
-        checked: list = field(default_factory=list)
-        summary: str = ""
-        applications: list = field(default_factory=list)
-
-    with bind_pack(custom):
-        response = crag_generation.refusal_response(QUESTION, view)
-        assert response.answer_text.startswith("直接説明できる資料は未確認です。")
-        assert "※不足の観点：" in response.answer_text and "※未確認の観点：" in response.answer_text
-        empty = crag_generation.refusal_response(
-            QUESTION, {"generation_usable": False, "generation_decision": crag_generation.GATE_NO_ANSWERABLE_PART}
-        )
-        assert empty.insufficient_reason == "直接説明できる資料は未確認です。"
-        definition_question = "「項目A」の意味は？"
-        target = task_contract(definition_question)["definition_targets"][0]
-        assert crag_generation.gap_lines(
-            definition_question, {"aspect_checks": [{"aspect": "definition:" + target["id"], "status": "missing"}]}
-        ) == ["不足の観点：定義（項目A）"]
-        projected, _ = crag_generation.project_partial_answer(
-            Partial(),
-            {
-                "required_aspect_coverage": "partial",
-                "answerable_parts": [
-                    {"status": "supported", "evidence": [{"source_id": "source-a", "evidence_ids": ["e1"], "quote": OPEN}]}
-                ],
-            },
-            [{"evidence_id": "e1", "source_id": "source-a", "text": OPEN}],
-            audited=False,
-        )
-        assert projected.checked[0].reasons == ["資料の記載をそのまま表示します。"]
 
 
 def grade_with_part_quote(text, quote):

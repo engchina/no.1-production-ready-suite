@@ -346,20 +346,6 @@ def test_edited_legacy_block_is_sent_without_a_replacement_warning():
     assert managed_block_warning("管理ブロックのない旧テンプレート") == ""
 
 
-def test_rules_use_caller_purpose_without_widening_values_or_discarding_operations():
-    # 解析用途と後段回答policyの切替は別の小項目。ここでは既存後段policyを変えない。
-    from rag_engine.generation.answer_policy import DOCUMENT_VALUE_POLICY
-    from rag_engine.parsing.vision_prompt_rules import vision_extraction_rules
-
-    rules = vision_extraction_rules()
-    assert "metadata.vision_image_purpose" in rules
-    assert "record の可視値" in rules and "対象と記録時点に限る" in rules
-    assert "example の可視値" in rules and "操作条件" in rules
-    assert "用途が未記録なら" in rules and "現在の状態、未記載の条件" in rules
-    assert "原則として文書の例示" not in rules
-    assert "「画面例では〇〇」と書き" in DOCUMENT_VALUE_POLICY
-
-
 def test_default_vision_request_has_one_ordered_step_sequence_for_each_target():
     """共通 field 規則は小節にし、対象別指示と実行時の schema まで連番にする。"""
     import re

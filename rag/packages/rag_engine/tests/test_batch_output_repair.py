@@ -13,12 +13,10 @@ from rag_engine.adapters import oci
 from rag_engine.generation import batched_evidence
 from rag_engine.generation.answering import _invalid_structured_output
 from rag_engine.generation.batch_output_repair import (
-    BatchRangeInvalid,
     batch_failure_summary,
     batch_repair_prompt,
     batch_validation_detail,
     range_error_reason,
-    range_mismatch_diagnostic,
     repair_feedback_upper_bound,
 )
 from rag_engine.generation.batched_evidence import BatchReading, _reading_model, reading_unit_counts
@@ -237,32 +235,6 @@ def findings_of(*rows: tuple[str, str]) -> dict:
     return {"findings": [{"start_line": start, "end_line": end, "answer": "合成の回答"} for start, end in rows]}
 
 
-def legacy_range_error(*rows: tuple[str, str]) -> ValidationError:
-    """旧記録の匿名診断は、旧構造の例外を使って保持する。新 producer は整数を返さない。"""
-    counts = {"B1": 3, "B2": 1}
-    invalid = [row for row in rows if range_error_reason(*row, counts) is not None]
-    assert invalid
-    return ValidationError.from_exception_data(
-        "BatchReading",
-        [
-            {
-                "type": "value_error",
-                "loc": (),
-                "input": {},
-                "ctx": {"error": BatchRangeInvalid(range_mismatch_diagnostic(invalid, counts))},
-            }
-        ],
-    )
-
-
-def mismatch_detail(*rows: tuple[str, str]) -> dict:
-    detail = batch_validation_detail(legacy_range_error(*rows), reading_model().model_json_schema())
-    assert json.dumps(detail, ensure_ascii=False).count("合成") == 0
-    row = detail["validation_errors"][0]
-    assert row["protocol_code"] == "batch_range_invalid"
-    return row["range_mismatch"]
-
-
 def test_legacy_valid_ranges_pass_the_check():
     assert all(
         range_error_reason(start, end, {"B1": 3, "B2": 1}) is None
@@ -272,53 +244,6 @@ def test_legacy_valid_ranges_pass_the_check():
             (" B1-2 ", "B1-2"),
         ]
     )
-
-
-@pytest.mark.parametrize(
-    ("row", "reason", "retained"),
-    [
-        (("B9-1", "B9-1"), "evidence_id_unknown", []),
-        (("B1-4", "B1-4"), "range_out_of_bounds", ["B1"]),
-        (("B1-0", "B1-1"), "line_label_invalid", ["B1"]),
-        (("B1-3", "B1-1"), "range_inverted", ["B1"]),
-        (("B1-1", "B2-1"), "range_across_inputs", []),
-        (("第一の行です。", "B1-1"), "line_label_invalid", []),
-    ],
-    ids=["unknown_id", "out_of_bounds", "zero", "inverted", "across_inputs", "not_a_label"],
-)
-def test_range_mismatch_is_classified_without_contents(row, reason, retained):
-    mismatch = mismatch_detail(row)
-    assert mismatch["unmatched_count"] == 1
-    assert mismatch["reasons"] == {reason: 1}
-    assert mismatch["samples"][0]["reason"] == reason
-    assert mismatch["retained_evidence_ids"] == retained
-    assert "第一" not in json.dumps(mismatch, ensure_ascii=False)
-
-
-def test_range_mismatch_keeps_counts_for_all_findings_and_a_bounded_sample():
-    rows = [(f"B1-{number}", f"B1-{number}") for number in range(10, 30)]
-    mismatch = mismatch_detail(("B1-1", "B1-1"), *rows)
-    assert mismatch["unmatched_count"] == 20
-    assert mismatch["reasons"] == {"range_out_of_bounds": 20}
-    assert len(mismatch["samples"]) == 8
-
-
-@pytest.mark.parametrize(
-    ("payload", "code"),
-    [
-        (findings_of(("B1-9", "B1-9")), "batch_range_invalid"),
-        ({}, None),
-        ({**findings_of(), "extra": 1}, None),
-        ({"findings": [{"start_line": "B1-1", "answer": "合成の回答"}]}, None),
-    ],
-    ids=["range", "missing_field", "extra_field", "missing_end"],
-)
-def test_each_contract_violation_keeps_its_own_class(payload, code):
-    model = reading_model()
-    failure = legacy_range_error(("B1-9", "B1-9")) if code == "batch_range_invalid" else _rejected(model, payload)
-    detail = batch_validation_detail(failure, model.model_json_schema())
-    assert detail["category"] == "schema_field"
-    assert [row.get("protocol_code") for row in detail["validation_errors"]][0] == code
 
 
 def test_broken_json_is_classified_as_invalid_json():
@@ -350,24 +275,6 @@ def test_retry_prompt_names_the_valid_lines_without_the_diagnostic(monkeypatch):
     assert "合成" not in feedback
     failure = diagnostic["batches"][0]["validation_failures"][0]["validation_errors"][0]
     assert failure["protocol_code"] == "batch_unit_invalid"
-
-
-def test_failed_batch_summary_has_only_class_counts_and_capacity():
-    """#4090: 回答の診断には、失敗の類別・件数・容量だけを渡す（質問・原文を渡さない）。"""
-    model = reading_model()
-    failure = legacy_range_error(("B1-9", "B1-9"))
-    detail = batch_validation_detail(failure, model.model_json_schema())
-    receipt = {"index": 1, "input_count": 2, "input_chars": 120, "validation_failures": [detail, detail]}
-
-    assert batch_failure_summary(receipt, failure) == {
-        "category": "batch_range_invalid",
-        "batch_index": 1,
-        "input_count": 2,
-        "input_chars": 120,
-        "invalid_attempts": 2,
-        "unmatched_count": 1,
-        "unmatched_reasons": {"range_out_of_bounds": 1},
-    }
 
 
 @pytest.mark.parametrize("bad_id", ["unknown-unit", "U" + "0" * 24])

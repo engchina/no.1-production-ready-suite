@@ -18,12 +18,6 @@
       "note": "読めなかった章節の行はシステムの案内なので数えない（#2040）。",
       "answer": "{rules_section}\n\n・合成の記載 A です。\n\n{unverified_section}\n\n・「a.pdf」の「第2章」は、読み込み量の上限に達したため未反映です。",
       "grounding": "・合成の記載 A です。"
-    },
-    {
-      "id": "removed-and-marked-sections",
-      "note": "印の段落は本文の主張として数え、外した段落・確認が必要な点の節（見出し・説明・引用）は数えない（#2738）。",
-      "answer": "設定は 2 段階で変更します。\n\n{rules_section}\n\n・区分Ⅱの選択肢の値は 01 です。\n{citation_prefix}設定.pdf p.1\n\n{removed_section}\n\n{removed_section_note}\n・「変更は翌月から反映されます。」：根拠と矛盾（当月から反映）\n\n{marked_section}\n\n{marked_section_note}\n・「区分Ⅱの選択肢の値は 01 です。」：根拠の表の対応と違う可能性",
-      "grounding": "設定は 2 段階で変更します。\n・区分Ⅱの選択肢の値は 01 です。"
     }
   ]
 }

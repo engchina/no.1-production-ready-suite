@@ -9,14 +9,13 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from audit_fixtures import synthetic_explanation
+from audit_fixtures import is_explanation_schema, synthetic_explanation
 from test_grounded_answer import context, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.application_explanation import is_explanation_schema
 
 QUESTION = "項目Aの保存年数を教えてください。"
 RESULT = "項目Aの保存年数は5年です。"
@@ -62,7 +61,7 @@ def _answer() -> tuple[Any, list[str]]:
     def unused(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("不要な外部呼出")
 
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0)
+    settings = replace(get_settings(environ={}, dotenv_path=None))
     ctx = context(record(0, TABLE, "合成の保存期間", source="synthetic-table.md"))
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         response = synthesize_grounded_answer(QUESTION, ctx, settings, image_prompt_mode="text_only").response
@@ -78,12 +77,6 @@ def test_conclusion_and_summary_stay_when_the_evidence_has_a_table() -> None:
 
 def test_answered_request_is_not_listed_as_unconfirmed() -> None:
     response, _calls = _answer()
-    missing = answer_labels().missing_request_template.replace("{text}", "")
-    assert missing not in response.answer_text
+    assert answer_labels().gaps_section not in response.answer_text
     assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["status"] == "linked"
     assert response.insufficient_reason in (None, "")
-
-
-def test_table_rows_and_conclusions_are_not_judged_by_a_model() -> None:
-    _response, calls = _answer()
-    assert calls == ["GroundedDraftWire", "ApplicationExplanation"]

@@ -101,7 +101,6 @@ async function mockApi(page: Page) {
         neighbor_child_count: 3,
         rerank_enabled: true,
         screen_linking_enabled: false,
-        request_coverage_retrieval_enabled: false,
         auto_field_filter_enabled: false,
         config_source: "runtime",
       },

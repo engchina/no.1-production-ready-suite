@@ -57,16 +57,6 @@ describe("citationEvidenceItem", () => {
   });
 });
 
-it.each(["not_run", "error", "timeout", "timed_out", "completed", "partial", "unknown"])("内容確認の%s状態は根拠のタグに表示せず、元の記録を保持する", (execution) => {
-  const metadata = { evidence_model_used: true, evidence_answer_use: "confirmed", evidence_claim_support: { scope: "answer", execution, status: "unknown", policy: "diagnostic_only" } };
-  const before = structuredClone(metadata);
-  const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, rerank_score: null, file_name: null, category_name: null, metadata });
-  expect(item.usedInAnswer).toBe(true);
-  expect(item.answerUse).toBeNull();
-  expect(item.tags).toEqual([]);
-  expect(metadata).toEqual(before);
-});
-
 it.each([true, false, undefined])("文脈ヘッダの状態%sは表示せず、ヘッダ本文を残す", (enabled) => {
   const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, rerank_score: null, file_name: null, category_name: null, metadata: { context_header: "文書 A > 節 A", ...(enabled === undefined ? {} : { context_header_enabled: enabled }) } });
   expect(item.chips).toContainEqual({ id: "context_header", label: "検索用の文脈ヘッダ", value: "文書 A > 節 A" });

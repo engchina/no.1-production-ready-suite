@@ -55,7 +55,7 @@ async def test_empty_database_only_bootstraps_when_no_legacy_files_exist(
 ) -> None:
     path = tmp_path / "synthetic-language-pack.json"
     if existing == "configuration":
-        path.write_text('{"overrides":{"answer_labels":{"cause_gap":"合成の独自値"}}}')
+        path.write_text('{"overrides":{"answer_labels":{"gaps_section":"合成の独自値"}}}')
     elif existing == "history":
         path.with_name("synthetic-language-pack.history.json").write_text('{"versions":[]}')
     pool = FakeOraclePool(execute_results=[[], []])

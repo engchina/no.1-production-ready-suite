@@ -10,7 +10,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
@@ -26,7 +26,6 @@ from rag_engine.generation.answering import (
     synthesize_grounded_answer,
 )
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.models.storage import StoredChunk
 from rag_engine.retrieval.context_builder import (
@@ -685,7 +684,7 @@ def test_unread_sections_make_the_answer_conditional():
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         plain = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only")
         limited = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=unread)
-    assert plain.response.envelope["outcome"] == "conditional"
+    assert plain.response.envelope["outcome"] == "answered"
     assert limited.response.envelope["outcome"] == "conditional"
     assert unread[0] in limited.response.envelope["gaps"]
     assert f"{grounded.answer_labels().unverified_section}\n\n・{unread[0]}" in limited.response.answer_text
@@ -962,50 +961,6 @@ def test_answer_unread_view_caps_the_lines():
     assert len(view.lines) == sections.MAX_UNREAD_LINES + 1 and view.overflow == 3
     assert view.lines[-1] == "ほか 3 件の関連章節も未反映です。"
     assert view.to_payload() == {"shown": sections.MAX_UNREAD_LINES + 1, "hidden": [], "overflow": 3}
-
-
-def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
-    context = _seed_context("c31a")
-    spans = _grounded_spans("質問", context, (), None)
-    evidence_id, quote = spans[0]["evidence_id"], spans[0]["text"][:20]
-    draft = {
-        "summary": "空調の点検の項目です。",
-        "confidence": "high",
-        "items": [{"kind": "rule", "text": quote, "citations": [{"evidence_id": evidence_id, "quote": quote}]}],
-    }
-    audit = {
-        "goal_alignment": "aligned",
-        "summary_supported": True,
-        "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"}],
-        "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": "合成の要求に回答済み"}],
-        "unused_evidence_ids": [],
-    }
-
-    def model(system, prompt, settings, schema, **options):
-        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
-            # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
-            return canonical_fixture(draft)
-        if is_audit_wire(schema):
-            return legacy_audit_result(audit, schema)
-        return schema.model_validate(audit)
-
-    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
-    cited, other = _unread(DOC, "s3-2"), _unread(OTHER_DOC, "o1")
-    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        only_other = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=[other])
-        both = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=[cited, other])
-        guided = synthesize_grounded_answer(
-            "質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=[other], unread_documents={OTHER_DOC}
-        )
-
-    # 回答が根拠にしない別の文書の章節は出さず、条件つきにもしない。診断に残す。
-    assert only_other.response.envelope["outcome"] == "conditional"
-    assert grounded.answer_labels().unverified_section not in only_other.response.answer_text
-    assert only_other.response.generation_trace["unread_sections"]["hidden"][0]["document_id"] == OTHER_DOC
-    assert both.response.envelope["outcome"] == "conditional"
-    assert cited.gap_line() in both.response.answer_text and other.gap_line() not in both.response.answer_text
-    # 業務ガイドの手順の参照の文書の章節は、回答が根拠にしていなくても出す。
-    assert other.gap_line() in guided.response.answer_text
 
 
 def test_guide_plan_reference_ranges():

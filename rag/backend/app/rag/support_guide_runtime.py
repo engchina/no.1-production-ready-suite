@@ -1134,9 +1134,6 @@ def guide_short_circuit_outcome(guide: Mapping[str, Any]) -> Any:
         "gaps": [],
         "confirmations": [],
         # 段落の印・外した段落・回答全体の警告（#2738）。確認・引き継ぎは本文の段落を検証しない。
-        "passage_marks": [],
-        "removed_passages": [],
-        "answer_warnings": [],
         "reference_materials": [],
         "handoff_reasons": ["clarification" if clarify else "handoff"],
         "clarifications": list(guide.get("clarifications") or []),

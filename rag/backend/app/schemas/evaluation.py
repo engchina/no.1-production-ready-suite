@@ -822,16 +822,9 @@ class EvaluationRagOverrides(BaseModel):
     strategy_reasoning_effort: ReasoningEffortOverride | None = None
     judge_reasoning_effort: ReasoningEffortOverride | None = None
     generation_reasoning_effort: ReasoningEffortOverride | None = None
-    # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
-    audit_reasoning_effort: ReasoningEffortOverride | None = None
     crag_compact_input: bool | None = None
     # CRAG の評価の候補の短い ID(#1864)。
     crag_short_candidate_ids: bool | None = None
-    # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
-    answer_audit_compact_reasons: bool | None = None
-    answer_max_correction_rounds: int | None = Field(default=None, ge=0, le=2)
-    # 回答の監査の型(#2795)。
-    answer_audit_mode: Literal["none", "standard", "detailed"] | None = None
     section_skip_regrade_at_scope: bool | None = None
     crag_skip_on_strong_signals: bool | None = None
     crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)

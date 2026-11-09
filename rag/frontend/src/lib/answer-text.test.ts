@@ -163,33 +163,6 @@ describe("parseAnswerText", () => {
   });
 
   // 印の付いた説明の節（Issue 3394）。
-  it("確かめきれていない説明の節は、確認できた事項の節と分ける（表示形式の無い回答）", () => {
-    const blocks = parseAnswerText(
-      [
-        "資料により確認できた事項",
-        "",
-        "・確かめた説明",
-        "根拠：a.pdf p.1",
-        "",
-        "根拠で確かめきれていない事項",
-        "",
-        "次の説明は根拠で確かめきれていないか、注意が必要です。",
-        "・印の付いた説明",
-        "根拠：b.pdf p.2",
-      ].join("\n")
-    );
-    expect(blocks).toMatchObject([
-      { kind: "section", title: "資料により確認できた事項", entries: [{ kind: "item", text: "確かめた説明" }] },
-      {
-        kind: "section",
-        title: "根拠で確かめきれていない事項",
-        entries: [
-          { kind: "text", text: "次の説明は根拠で確かめきれていないか、注意が必要です。" },
-          { kind: "item", text: "印の付いた説明", citations: ["根拠：b.pdf p.2"] },
-        ],
-      },
-    ]);
-  });
 
   it("参考・未確認・確認することの節も節に分け、参考の節の直下の説明は節の中の文にする", () => {
     const blocks = parseAnswerText(
@@ -504,28 +477,6 @@ describe("引用ラベルの頁範囲", () => {
 });
 
 
-describe("保存した回答の節の所属", () => {
-  for (const saved of [false, true]) {
-    it(`出典を確かめられない説明を独立した節にする（形式記録: ${saved}）`, () => {
-      const format = saved ? { rules_section: "確認済みの節 A", unsourced_section: "未確認の節 B" } : undefined;
-      const titles = format ?? { rules_section: "資料により確認できた事項", unsourced_section: "資料の出典を確かめられない説明" };
-      const blocks = parseAnswerText([
-        titles.rules_section, "・合成の確認済み説明。", titles.unsourced_section,
-        "原文と照合できない説明です。", "・合成の未確認説明。",
-      ].join("\n"), answerFormat({ answer_format: format }));
-      expect(blocks).toEqual([
-        { kind: "section", title: titles.rules_section, ordered: false, entries: [
-          { kind: "item", text: "合成の確認済み説明。", citations: [], citationLines: [] },
-        ] },
-        { kind: "section", title: titles.unsourced_section, ordered: false, entries: [
-          { kind: "text", text: "原文と照合できない説明です。" },
-          { kind: "item", text: "合成の未確認説明。", citations: [], citationLines: [] },
-        ] },
-      ]);
-    });
-  }
-});
-
 
 describe("推導結論の節", () => {
   const formats: (Readonly<Record<string, string>> | undefined)[] = [undefined, { rules_section: "資料により確認できた事項" }, { applications_section: "合成の導出" }];
@@ -561,7 +512,7 @@ describe("推導結論の節", () => {
 });
 
 
-it("旧記録の業務ガイド・小問・注意の見出しも同じ節として読む", () => {
-  const blocks = parseAnswerText("業務ガイドの案内\n・合成の案内\n質問A：合成の小問\n・合成の説明\n確認が必要な点\n・合成の注意");
-  expect(blocks?.filter(block => block.kind === "section").map(block => block.title)).toEqual(["業務ガイドの案内","質問A：合成の小問","確認が必要な点"]);
+it("旧記録の業務ガイド・小問の見出しも同じ節として読む", () => {
+  const blocks = parseAnswerText("業務ガイドの案内\n・合成の案内\n質問A：合成の小問\n・合成の説明");
+  expect(blocks?.filter(block => block.kind === "section").map(block => block.title)).toEqual(["業務ガイドの案内","質問A：合成の小問"]);
 });

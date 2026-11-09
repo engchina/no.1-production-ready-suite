@@ -87,7 +87,6 @@ from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
-from app.rag.citation_status import citation_support_display
 from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -133,11 +132,9 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
-from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_params
 from app.rag.step_details import step_details_payload
-from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
-from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
+from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.search import (
     MAX_PAGE_RANGES,
@@ -644,9 +641,6 @@ def build_engine_settings(
         "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": str(
             settings.rag_article_catalog_call_timeout_seconds
         ),
-        "RAG_ENGINE_ARTICLE_CATALOG_REVIEW": (
-            "1" if settings.rag_article_catalog_review_enabled else "0"
-        ),
         # 条の選択の結果を process をまたいで使う記録(#3507)。置き場所が無ければ process の中だけ。
         "RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR": str(article_catalog_cache_dir(settings) or ""),
         "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS": str(
@@ -656,9 +650,8 @@ def build_engine_settings(
             settings.rag_article_catalog_cache_max_entries
         ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
-        "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
-            "1" if settings.rag_request_coverage_retrieval_enabled else "0"
-        ),
+        # 小問ごとの検索の上限(#2399。期限は再検索と共通)。
+        # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
@@ -705,9 +698,6 @@ def build_engine_settings(
         "RAG_ENGINE_GENERATION_REASONING_EFFORT": _reasoning_effort_override(
             settings.rag_generation_reasoning_effort
         ),
-        "RAG_ENGINE_AUDIT_REASONING_EFFORT": _reasoning_effort_override(
-            settings.rag_audit_reasoning_effort
-        ),
         "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": (
             "1" if settings.rag_crag_skip_on_strong_signals else "0"
         ),
@@ -717,14 +707,6 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
             "1" if settings.rag_crag_short_candidate_ids else "0"
         ),
-        # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
-        "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS": (
-            "1" if settings.rag_answer_audit_compact_reasons else "0"
-        ),
-        "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
-        # 回答の監査の型(#2795)。
-        "RAG_ENGINE_ANSWER_AUDIT_MODE": settings.rag_answer_audit_mode,
-        "RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE": settings.rag_answer_evidence_refinement_mode,
         # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
@@ -744,7 +726,6 @@ def build_engine_settings(
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
     # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
-    environ.update(step_model_environ(settings))
     environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -1155,11 +1136,6 @@ class AnswerEngine:
         answer_model = self._answer_model_id or enterprise_ai_default_model_id(settings)
         return {
             "llm": model(answer_model),
-            # 段ごとのモデル(#4351・#4564・#4565。空の設定は回答のモデル)。
-            **{
-                step.key: model(step_model_id(settings, step) or answer_model)
-                for step in STEP_MODEL_SETTINGS
-            },
             "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
@@ -1211,7 +1187,6 @@ class AnswerEngine:
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
-        from rag_engine.generation.question_subjects import extract_question_subjects
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -1232,8 +1207,6 @@ class AnswerEngine:
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
-            # 説明・要約に書いた質問の対象の名前を原文に照らす検査の、対象と役割の抽出(#4351)。
-            question_subjects=extract_question_subjects,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
@@ -4860,7 +4833,6 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
 
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
-    support_display = citation_support_display(result.generation_trace)
     tree: list[dict[str, Any]] = []
     # (並びの順位, chunk_id, 根拠の子, 検索で当たった子の関連度の順位（無ければ 0）)。
     ordered: list[tuple[int, str, dict[str, Any], int]] = []
@@ -4927,11 +4899,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             **chunk.metadata,
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
-            **(
-                {"evidence_claim_support": dict(support_display)}
-                if support_display is not None
-                else {}
-            ),
         }
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
@@ -5033,9 +5000,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 回答の構造（AnswerEnvelope。#1235）。outcome は回答の対応（answered / conditional / …）。
         "outcome": (result.envelope or {}).get("outcome"),
         "envelope": dict(result.envelope or {}),
-        # 段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738。形は
-        # platform/contracts/answer-passages/passage-marks.json）。画面・MCP・評価が読む。
-        **passage_mark_record(result.envelope),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,
@@ -5045,22 +5009,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "text_search_tokens": list(result.text_search_tokens),
         "crag_attempt_count": len(result.crag_attempts or ()),
         "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
-        # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
-        "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
-        "request_recovery": [
-            dict(row["request_recovery"])
-            for row in (result.generation_trace or {}).get("rounds", ())
-            if isinstance(row, Mapping) and isinstance(row.get("request_recovery"), Mapping)
-        ],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
             {"guide_step_retrieval": dict(trace)}
             if isinstance(trace := (result.generation_trace or {}).get("guide_steps"), Mapping)
             else {}
         ),
-        # 業務ガイドの手順ごとの充足(#2491)と、手順の対応付けの embedding の呼び出し(#2649)。
-        # 業務ガイドの記録(diagnostics.guide)に移す(#2686)。
-        **_guide_step_diagnostics(result.generation_trace),
         # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
         # 読めなかった章節)。
         "section_expansion": _section_expansion_diagnostics(result.generation_trace),
@@ -5070,10 +5024,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "generation_failure": dict((result.generation_trace or {}).get("generation_failure") or {}),
         # モデルのカスケード(#4581。確認を通らなかったときのモデルで回答し直したか・理由)。
         "model_cascade": dict((result.generation_trace or {}).get("model_cascade") or {}),
-        # 摘要の引用対応と意味検査の実施は分けて保存する。旧記録は空のまま扱う。
-        "summary_evidence": dict(
-            ((result.generation_trace or {}).get("finalization") or {}).get("summary") or {}
-        ),
         # 原文と生応答は回答の保存・権限確認に従う。計測やモデル入力へ再注入しない。
         "generation_citation_traces": [
             dict(row["generation_citation_trace"])
@@ -5081,34 +5031,17 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             if isinstance(row, Mapping)
             and isinstance(row.get("generation_citation_trace"), Mapping)
         ],
-        # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
-        "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
         # 根拠の文字予算の設定値・実際に使った値・送った根拠ブロックの文字数(#3776。数値だけ)。
         "evidence_budget": dict((result.generation_trace or {}).get("evidence_budget") or {}),
         "generation_input_budget": dict(
             (result.generation_trace or {}).get("generation_input_budget") or {}
         ),
-        "evidence_refinement": dict(
-            (result.generation_trace or {}).get("evidence_refinement") or {}
-        ),
         # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
         "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
-        # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
-        # 目的外の割合を集計する。
-        "goal_alignment": adopted_goal_alignment(result.generation_trace),
-        "generation_review": adopted_review_contract(result.generation_trace),
-        **(
-            {"semantic_audit_policy": dict(policy)}
-            if isinstance(
-                policy := (result.generation_trace or {}).get("semantic_audit_policy"), Mapping
-            )
-            else {}
-        ),
         "crag_assessment": dict((result.generation_trace or {}).get("crag_assessment") or {}),
         "crag_generation_gate": dict(
             (result.generation_trace or {}).get("crag_generation_gate") or {}
         ),
-        "procedure_quotes": dict((result.generation_trace or {}).get("procedure_quotes") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }
@@ -5125,93 +5058,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
 
 _GUIDE_STEP_COVERAGE_FIELDS = ("step_id", "status", "required")
 _GUIDE_STEP_EMBEDDING_FIELDS = ("calls", "texts", "elapsed_ms", "failed")
-
-
-def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
-    """回答の記録に残す業務ガイドの手順の充足と embedding の呼び出し(#2686)。
-
-    手順は id・状態・必須かと、対応の方法・item の index・各段の根拠 ID を残す。手順の題名・
-    根拠の本文・引用は記録に増やさない。業務ガイドに沿わない回答・呼ばなかった回答では空。
-    """
-    trace = generation_trace if isinstance(generation_trace, Mapping) else {}
-    diagnostics: dict[str, Any] = {}
-    coverage = trace.get("guide_step_coverage")
-    if isinstance(coverage, list) and coverage:
-        diagnostics["guide_step_coverage"] = [
-            {
-                **{key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS},
-                **{
-                    key: step[key]
-                    for key in ("assignment", "evidence_flow")
-                    if isinstance(step.get(key), Mapping)
-                },
-            }
-            for step in coverage
-            if isinstance(step, Mapping)
-        ]
-    embedding = trace.get("guide_step_embedding")
-    if isinstance(embedding, Mapping):
-        diagnostics["guide_step_embedding"] = {
-            key: embedding.get(key) for key in _GUIDE_STEP_EMBEDDING_FIELDS
-        }
-    return diagnostics
-
-
-def adopted_review_contract(generation_trace: object) -> dict[str, Any]:
-    """採用した草稿の引用照合と意味の監査を別々に記録する。"""
-    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
-    adopted = (
-        next(
-            (row for row in reversed(rounds) if isinstance(row, Mapping) and row.get("accepted")),
-            None,
-        )
-        if isinstance(rounds, list)
-        else None
-    )
-    if adopted is None:
-        return {"execution": "not_run", "items": []}
-    return {
-        "execution": adopted.get("review_execution", "not_run"),
-        **(
-            {"dimensions": dict(adopted["validation_dimensions"])}
-            if isinstance(adopted.get("validation_dimensions"), Mapping)
-            else {}
-        ),
-        "items": [
-            {
-                key: row.get(key)
-                for key in (
-                    "evidence_id",
-                    "quote_match",
-                    "citation_resolution",
-                    "review_assessment",
-                    "removed",
-                    "withdrawn",
-                )
-            }
-            for row in adopted.get("items", [])
-            if isinstance(row, Mapping)
-        ],
-    }
-
-
-def adopted_goal_alignment(generation_trace: object) -> str | None:
-    """採用した草稿（最後に採用した round）の監査の目的との合い方（#2402）。
-
-    監査の無い round（時間の上限で監査を切った round など）・記録の無い回答は None。
-    """
-    if isinstance(generation_trace, Mapping) and semantic_audit_is_diagnostic_only(
-        generation_trace
-    ):
-        return None
-    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
-    adopted: Mapping[str, Any] | None = None
-    for item in rounds if isinstance(rounds, list) else ():
-        if isinstance(item, Mapping) and item.get("accepted"):
-            adopted = item
-    audit = adopted.get("audit") if adopted is not None else None
-    value = audit.get("goal_alignment") if isinstance(audit, Mapping) else None
-    return value if isinstance(value, str) and value else None
 
 
 def guide_step_plan(guide: Mapping[str, Any] | None) -> Any:

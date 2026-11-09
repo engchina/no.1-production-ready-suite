@@ -39,7 +39,7 @@ def call_of(summary: TraceSummary, name: str) -> Any:
 
 def engine(**kwargs: Any) -> AnswerEngine:
     return AnswerEngine(
-        Settings(rag_answer_audit_mode="standard"),
+        Settings(),
         oracle=cast(Any, FakeOracle()),
         genai=cast(Any, FakeGenAi()),
         **kwargs,

@@ -2,8 +2,7 @@
 
 import json
 import re
-from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import ValidationError
@@ -14,7 +13,6 @@ from rag_engine.resources.structured_failures import failure_summary_fields, lon
 RANGE_INVALID_CODE = "batch_range_invalid"
 UNIT_INVALID_CODE = "batch_unit_invalid"
 _PROTOCOL_CODES = {RANGE_INVALID_CODE}
-_MAX_MISMATCH_SAMPLES = 8
 
 
 class BatchRangeInvalid(ValueError):
@@ -61,33 +59,6 @@ def range_error_reason(start_line: str, end_line: str, unit_counts: Mapping[str,
         return "evidence_id_unknown"
     code = bind_wire_range(first, last, unit_count=unit_counts[evidence_id], numbered=True).reason_code
     return {"citation_range_out_of_bounds": "range_out_of_bounds", "citation_range_invalid": "range_inverted"}.get(code or "", code)
-
-
-def range_mismatch_diagnostic(invalid: Sequence[tuple[str, str]], unit_counts: Mapping[str, int]) -> dict[str, Any]:
-    """不合格の findings の理由の件数と、先頭の数件の番号（形の合う番号と件数だけで、原文を持たない。#4090）。"""
-    rows = []
-    known: list[str] = []
-    for start_line, end_line in invalid:
-        evidence_id, first, last = parse_line_range(start_line, end_line)
-        if evidence_id in unit_counts and evidence_id not in known:
-            known.append(evidence_id)
-        rows.append(
-            {
-                "reason": range_error_reason(start_line, end_line, unit_counts),
-                "line_start": first,
-                "line_end": last,
-                "unit_count": unit_counts.get(evidence_id, 0),
-            }
-        )
-    return {
-        "unmatched_count": len(rows),
-        "reasons": dict(Counter(str(row["reason"]) for row in rows)),
-        "samples": rows[:_MAX_MISMATCH_SAMPLES],
-        # 入力の番号と単位の数だけ（モデルが書いた未知の番号は持たない）。不合格の範囲の入力は原文の全体を残す。
-        "retained_evidence_ids": known,
-        "unit_counts": {key: unit_counts[key] for key in known},
-        "input_count": len(unit_counts),
-    }
 
 
 def batch_validation_detail(error: Exception, schema: Mapping[str, Any]) -> dict[str, Any]:

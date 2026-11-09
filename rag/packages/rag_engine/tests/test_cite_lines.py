@@ -2,7 +2,7 @@
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 # 各行は 1 行で引用の単位になる長さ（2 行を続けると単位の上限を超える）。
 LONG = "\n".join(
@@ -91,18 +91,6 @@ def test_a_stored_quote_does_not_override_the_id_selected_original():
     assert grounded._citation_extraction(cited)["requested_quote"] == copied.quote
     gap = GroundedItem(kind="gap", text="資料に記載が無い")
     assert grounded.cited_quote(gap, spans()) == (gap, "")
-
-
-def test_verify_publishes_the_item_cited_by_lines():
-    draft = GroundedDraft.model_validate(
-        {"summary": "s", "confidence": "high", "items": [item("E1", "3").model_dump(), item("E1", "9").model_dump()]}
-    )
-    checked, dropped = grounded.verify("対象を選ぶ方法", draft, spans())
-    first = next(entry for entry in checked if entry.draft_index == 0)
-    assert first.span is not None and first.span["evidence_id"] == "Ea"
-    assert "quote_unmatched" not in [mark.get("code") for mark in first.marks]
-    assert [entry["index"] for entry in dropped] == [1]
-    assert "範囲" in dropped[0]["reason"]
 
 
 def test_generation_instructions_name_only_the_public_citation_fields():

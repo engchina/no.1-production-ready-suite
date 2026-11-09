@@ -4,25 +4,8 @@ import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } fro
 import { detectContentLang, resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Tooltip } from "../ui/tooltip";
 import { AnswerHeading } from "./answer-heading";
-import {
-  ANSWER_PASSAGE_STATE_ICON,
-  AnswerPassageMarked,
-  AnswerPassageWarnings,
-  DEFAULT_ANSWER_PASSAGE_LABELS,
-  answerPassageQuote,
-  answerPassageReasonText,
-  focusAnswerPassage,
-  type AnswerPassageLabels,
-} from "./answer-passage-marks";
-import {
-  matchAnswerPassageMarks,
-  visibleAnswerPassageRecords,
-  type AnswerPassageMarkGroup,
-  type AnswerPassageRecords,
-} from "./answer-passage-records";
 
 /**
  * 回答の本文の節と根拠の行（RAG のチャット・RAG 検索・Agent のチャットで共通。#2328）。
@@ -35,12 +18,8 @@ import {
  * `ANSWER_SECTION_COLLAPSE_AFTER` 件だけを出し、「すべて表示（全 N 件）」で残りを同じ書式のまま開く（#2361。
  * 「ほか N 件」の行で切らず、同じ種類の項目を 2 か所に分けない）。
  *
- * 段落の印の記録（`passages`。#2738）を渡すと、印の付いた段落・項目に左の区切りの線と末尾の印を付け、
- * 本文の上に回答全体の注意、本文の後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す。段落の照合は
- * 段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` で行う。
- *
  * 回答の言語の `lang`（`lang`。渡さなければ本文から判定する。#3335）は、段落・項目の文・表やコードの塊・引用だけを包む
- * 要素に付ける。部品と製品の文言（節の見出し・根拠の行・ボタン・段落の印・注意・`extra`）は包まず、画面の言語
+ * 要素に付ける。部品と製品の文言（節の見出し・根拠の行・ボタン・`extra`）は包まず、画面の言語
  * （`<html lang>`）のまま描く（中国語の回答の中の日本語の文言を中国語の字形にしない。#3349）。節の見出しは見出しの文字から
  * 判定した言語にする（判定できなければ画面の言語）。製品の決まった文言の段落・項目は `lang: null` で除く。
  */
@@ -211,32 +190,10 @@ export interface AnswerSectionsProps {
   testId?: string;
   labels?: AnswerSectionsLabels;
   /**
-   * 段落の印・外した段落・回答全体の注意（#2738。`parseAnswerPassageRecords` で読んだもの）。新しい記録の無い
-   * 過去の回答は null（今までの表示のまま）。
-   */
-  passages?: AnswerPassageRecords | null;
-  passageLabels?: AnswerPassageLabels;
-  /** 構造化した記録から復元できない、保存済み本文の補足。信頼状態の判定には使わない。 */
-  passageNotes?: { removed?: readonly string[]; marks?: readonly string[] };
-  /**
    * 回答の言語（BCP 47。#3335。`resolveContentLang`）。渡さなければ段落・項目の文（文字列の `content` と
    * `passageText`）から判定して段落・項目の文に `lang` を付け、`null` なら付けない。
    */
   lang?: string | null;
-}
-
-/** 印を当てた段落（照合の結果と、移る先の id）。 */
-interface MarkedTarget {
-  group: AnswerPassageMarkGroup;
-  anchorId: string;
-}
-
-type MarkedTargets = ReadonlyMap<string, MarkedTarget>;
-
-const NO_MARKS: MarkedTargets = new Map();
-
-function entryTargetKey(blockKey: string, entryKey: string): string {
-  return `${blockKey}/${entryKey}`;
 }
 
 function passageTextOf(passageText: string | undefined, content: ReactNode): string | undefined {
@@ -315,51 +272,16 @@ export function AnswerSections({
   className,
   testId = "answer-text",
   labels = DEFAULT_ANSWER_SECTIONS_LABELS,
-  passages: rawPassages = null,
-  passageLabels = DEFAULT_ANSWER_PASSAGE_LABELS,
-  passageNotes,
   lang,
 }: AnswerSectionsProps) {
-  const passages = useMemo(() => rawPassages ? visibleAnswerPassageRecords(rawPassages) : null, [rawPassages]);
-  const baseId = useId();
   // 回答の本文の言語（中国語の回答は中国語の字形で描く。#3335）。
   const contentLang = useMemo(() => resolveContentLang(lang, answerText(blocks)), [lang, blocks]);
-  // 本文の段落・項目（表示の順）に印を当てる。
-  const { marked, anchors } = useMemo(() => {
-    if (!passages?.marks.length) return { marked: NO_MARKS, anchors: [] as string[] };
-    const keys: string[] = [];
-    const texts: (string | undefined)[] = [];
-    for (const block of blocks) {
-      if (block.kind === "section") {
-        // 補足の行（`muted`）も本文の段落なので照合する（RAG の節の後ろに続く段落など）。
-        for (const entry of block.entries) {
-          keys.push(entryTargetKey(block.key, entry.key));
-          texts.push(passageTextOf(entry.passageText, entry.content));
-        }
-      } else {
-        keys.push(block.key);
-        texts.push(passageTextOf(block.passageText, block.content));
-      }
-    }
-    const { groups, targets } = matchAnswerPassageMarks(texts, passages.marks);
-    const map = new Map<string, MarkedTarget>();
-    groups.forEach((group, index) => {
-      if (group) map.set(keys[index], { group, anchorId: `${baseId}-passage-${index}` });
-    });
-    return {
-      marked: map as MarkedTargets,
-      anchors: targets.map((index) => (index < 0 ? "" : `${baseId}-passage-${index}`)),
-    };
-  }, [blocks, passages, baseId]);
-
-  const extraSections = passages ? passageSections(passages, anchors, passageLabels, contentLang, passageNotes) : [];
   return (
     <div
       className={cn("space-y-3 text-sm leading-relaxed text-fg", className)}
       aria-live={live ? "polite" : undefined}
       data-testid={testId}
     >
-      {passages?.warnings.length ? <AnswerPassageWarnings warnings={passages.warnings} labels={passageLabels} /> : null}
       {blocks.map((block) => {
         if (block.kind === "section") {
           // 節の見出しの前は、段落の間（0.75rem）より広い 1.25rem（`--space-5`。0.75rem + pt-2）を空け、節の区切りを
@@ -369,45 +291,12 @@ export function AnswerSections({
               key={block.key}
               block={block}
               labels={labels}
-              marked={marked}
-              passageLabels={passageLabels}
               answerLang={contentLang}
             />
           );
         }
         const blockLang = partLang(block.lang, contentLang);
-        const target = marked.get(block.key);
         const citations = block.citations?.length ? <AnswerCitationLinks citations={block.citations} /> : null;
-        if (target) {
-          return (
-            <AnswerPassageMarked
-              key={block.key}
-              group={target.group}
-              anchorId={target.anchorId}
-              labels={passageLabels}
-              render={(marker) =>
-                block.kind === "content" ? (
-                  <>
-                    <div className="min-w-0" lang={blockLang}>
-                      {block.content}
-                    </div>
-                    {/* 表・コードの後ろには文が続かないので、印は塊の下の行に置く。 */}
-                    <p>{marker}</p>
-                    {citations}
-                  </>
-                ) : (
-                  <>
-                    <p className="whitespace-pre-wrap">
-                      <ContentLang lang={blockLang}>{block.content}</ContentLang>
-                      {marker}
-                    </p>
-                    {citations}
-                  </>
-                )
-              }
-            />
-          );
-        }
         if (block.kind === "content") {
           return (
             <div key={block.key} className="min-w-0">
@@ -431,129 +320,18 @@ export function AnswerSections({
           </p>
         );
       })}
-      {extraSections.map((block) => (
-        <AnswerSection
-          key={block.key}
-          block={block}
-          labels={labels}
-          marked={NO_MARKS}
-          passageLabels={passageLabels}
-          answerLang={contentLang}
-        />
-      ))}
       {children}
     </div>
   );
 }
 
-/**
- * 本文の後ろの節（#2738）: 「根拠と矛盾し除いた内容」（外した段落と理由）と「確認が必要な点」（印の付いた段落の
- * 引用と理由。押すと本文の段落へ移る）。どちらも項目が多ければ畳む。
- */
-function passageSections(
-  passages: AnswerPassageRecords,
-  anchors: readonly string[],
-  labels: AnswerPassageLabels,
-  answerLang: string | undefined,
-  notes?: AnswerSectionsProps["passageNotes"],
-): Extract<AnswerSectionsBlock, { kind: "section" }>[] {
-  // 節の見出し・説明・理由は部品の文言（画面の言語）。引用だけが回答の言語（#3349）。
-  const sections: Extract<AnswerSectionsBlock, { kind: "section" }>[] = [];
-  if (passages.removed.length || notes?.removed?.length) {
-    sections.push({
-      kind: "section",
-      key: "passage-removed",
-      title: labels.removedTitle,
-      collapsible: true,
-      testId: "answer-removed-passages",
-      entries: [
-        { key: "note", content: labels.removedNote, muted: true, lang: null },
-        ...(notes?.removed ?? []).map((content, index) => ({ key: `body-removed-${index}`, content })),
-        ...passages.removed.map((item, index) => ({
-          key: `removed-${index}`,
-          lang: null,
-          content: (
-            <span className="block whitespace-normal" data-testid="answer-removed-passage">
-              <span className="[overflow-wrap:anywhere]" lang={answerLang}>
-                {answerPassageQuote(item.text, 200)}
-              </span>
-              {item.reasons.length ? (
-                <span className="block text-xs text-fg-muted [overflow-wrap:anywhere]">
-                  {item.reasons.map(answerPassageReasonText).join(" / ")}
-                </span>
-              ) : null}
-            </span>
-          ),
-        })),
-      ],
-    });
-  }
-  if (passages.marks.length || notes?.marks?.length) {
-    sections.push({
-      kind: "section",
-      key: "passage-marks",
-      title: labels.marksTitle,
-      collapsible: true,
-      testId: "answer-marked-passages",
-      entries: [
-        ...(notes?.marks ?? []).map((content, index) => ({ key: `body-mark-${index}`, content })),
-        ...(passages.marks.length ? [{ key: "note", content: labels.marksNote, muted: true, lang: null }] : []),
-        ...passages.marks.map((mark, index) => {
-          const Icon = ANSWER_PASSAGE_STATE_ICON[mark.state];
-          const quote = answerPassageQuote(mark.text);
-          const anchor = anchors[index];
-          const reasons = [...new Set(mark.reasons.map((reason) => reason.label))].join("・");
-          return {
-            key: `mark-${index}`,
-            lang: null,
-            content: (
-              <span className="block whitespace-normal" data-testid="answer-marked-passage" data-passage-state={mark.state}>
-                {anchor ? (
-                  <button
-                    type="button"
-                    // button は inline でも inline-block として並び、折り返すと最後の行の基線にそろう。align-top で箇条書きの印を 1 行目にそろえる。
-                    className="pr-touch-target relative rounded-sm text-left align-top text-accent-fg underline-offset-2 hover:underline [overflow-wrap:anywhere]"
-                    aria-label={labels.jumpLabel(quote)}
-                    onClick={() => focusAnswerPassage(anchor)}
-                    data-testid="answer-marked-passage-link"
-                  >
-                    <ContentLang lang={answerLang}>{quote}</ContentLang>
-                  </button>
-                ) : (
-                  <span className="[overflow-wrap:anywhere]" lang={answerLang}>
-                    {quote}
-                  </span>
-                )}
-                <span className="flex items-start gap-1 text-xs text-fg-muted">
-                  <span className="pr-icon-line">
-                    <Icon size={TEXT_ICON_SIZE.xs} aria-hidden />
-                  </span>
-                  <span className="min-w-0 [overflow-wrap:anywhere]">
-                    {labels.state[mark.state]}
-                    {reasons ? `：${reasons}` : ""}
-                  </span>
-                </span>
-              </span>
-            ),
-          };
-        }),
-      ],
-    });
-  }
-  return sections;
-}
-
 function AnswerSection({
   block,
   labels,
-  marked,
-  passageLabels,
   answerLang,
 }: {
   block: Extract<AnswerSectionsBlock, { kind: "section" }>;
   labels: AnswerSectionsLabels;
-  marked: MarkedTargets;
-  passageLabels: AnswerPassageLabels;
   answerLang: string | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -563,7 +341,7 @@ function AnswerSection({
   const toggle = Boolean(block.collapsible) && items > ANSWER_SECTION_COLLAPSE_AFTER;
   const entries = toggle && !expanded ? firstItems(block.entries, ANSWER_SECTION_COLLAPSE_AFTER) : block.entries;
   const render = (entry: AnswerSectionEntry) =>
-    renderEntry(entry, marked.get(entryTargetKey(block.key, entry.key)), passageLabels, partLang(entry.lang, answerLang));
+    renderEntry(entry, partLang(entry.lang, answerLang));
   // 見出しは製品の決まった見出しのことも回答の見出しのこともあるので、見出しの文字だけで決める（判定できなければ画面の
   // 言語。#3349）。
   const titleLang = useMemo(() => detectContentLang(block.title), [block.title]);
@@ -616,60 +394,19 @@ function firstItems(entries: readonly AnswerSectionEntry[], limit: number): Answ
   return result;
 }
 
-function renderEntry(
-  entry: AnswerSectionEntry,
-  target: MarkedTarget | undefined,
-  passageLabels: AnswerPassageLabels,
-  entryLang: string | undefined,
-) {
-  // 項目の文だけを言語で包み、根拠の行・`extra`・段落の印は画面の言語のまま（#3349）。
+function renderEntry(entry: AnswerSectionEntry, entryLang: string | undefined) {
+  // 項目の文だけを言語で包み、根拠の行・`extra` は画面の言語のまま（#3349）。
   if (entry.muted) {
     return (
       <li key={entry.key} className="list-none whitespace-pre-wrap text-fg-muted">
-        {target ? (
-          <AnswerPassageMarked
-            group={target.group}
-            anchorId={target.anchorId}
-            labels={passageLabels}
-            render={(marker) => (
-              <span>
-                <ContentLang lang={entryLang}>{entry.content}</ContentLang>
-                {marker}
-              </span>
-            )}
-          />
-        ) : (
-          <ContentLang lang={entryLang}>{entry.content}</ContentLang>
-        )}
-      </li>
-    );
-  }
-  const citations = entry.citations?.length ? <AnswerCitationLinks citations={entry.citations} /> : null;
-  if (target) {
-    return (
-      <li key={entry.key} className="whitespace-pre-wrap">
-        <AnswerPassageMarked
-          group={target.group}
-          anchorId={target.anchorId}
-          labels={passageLabels}
-          render={(marker) => (
-            <>
-              <span>
-                <ContentLang lang={entryLang}>{entry.content}</ContentLang>
-                {marker}
-              </span>
-              {citations}
-              {entry.extra}
-            </>
-          )}
-        />
+        <ContentLang lang={entryLang}>{entry.content}</ContentLang>
       </li>
     );
   }
   return (
     <li key={entry.key} className="whitespace-pre-wrap">
       <ContentLang lang={entryLang}>{entry.content}</ContentLang>
-      {citations}
+      {entry.citations?.length ? <AnswerCitationLinks citations={entry.citations} /> : null}
       {entry.extra}
     </li>
   );

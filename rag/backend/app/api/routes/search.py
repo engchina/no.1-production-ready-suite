@@ -511,7 +511,6 @@ async def _resolve_query_context(
                 settings = settings.model_copy(
                     update={
                         "rag_guide_preview": guide_preview.marker(),
-                        "rag_answer_audit_mode": "detailed",
                     }
                 )
             guide_text = "\n".join([*guide_context, request.query])

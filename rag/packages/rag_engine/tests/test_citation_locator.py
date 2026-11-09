@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from application_verdict_stub import audit_reply, is_application_schema
-from audit_fixtures import synthetic_explanation
+from audit_fixtures import is_explanation_schema, synthetic_explanation
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -16,7 +16,6 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.citation_locator import clean_evidence_locators
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
@@ -131,28 +130,6 @@ def verified(text: str):
     return next(entry for entry in checked if entry.draft_index == 0)
 
 
-def test_verify_publishes_the_sentence_without_the_copy() -> None:
-    entry = verified(f"{SENTENCE}（E1, 行4）。")
-    assert entry.item.text == f"{SENTENCE}。"
-    assert entry.span is not None and entry.span["evidence_id"] == "E1"
-    assert not entry.internal_label_issues
-    assert not [mark for mark in entry.marks if mark["code"] == "item_check"]
-
-
-def test_verify_marks_a_mixed_id_without_rewriting_the_rest() -> None:
-    entry = verified("E1 によると費用は申請者が負担します。")
-    assert entry.internal_label_issues == ["E1"]
-    assert "によると費用は申請者が負担します。" in entry.item.text
-    assert any(mark["code"] == "item_check" and grounded.INTERNAL_LABEL_CHECK in mark["detail"] for mark in entry.marks)
-
-
-def test_the_correction_is_part_of_the_audit_none_feedback() -> None:
-    feedback = {"internal_label_issues": [{"text": "によると費用は申請者が負担します。"}]}
-    assert grounded.correction_feedback(feedback, grounded.AUDIT_MODE_NONE) == feedback
-    assert grounded.feedback_signature(feedback)["internal_label_issues"] == 1
-    assert grounded.pending_feedback_labels(feedback) == ["説明の文に混ざった内部の番号 1 件"]
-
-
 # ---- 回答の全体の経路（監査なし） ----
 
 LONG_RULE = "\n".join(f"第{index}の規定の本文です。費用の扱いは申請の区分ごとに定めます。" * 2 for index in range(1, 5))
@@ -200,7 +177,7 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
         metadata={"section_path": ["第1節"]},
     )
     context = AnswerContext(records=[record], text=FULL_RULE)
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none")
+    settings = replace(get_settings(environ={}, dotenv_path=None))
     with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
         return synthesize_grounded_answer(FULL_QUESTION, context, settings, image_prompt_mode="text_only").response, prompts
 
@@ -211,7 +188,6 @@ def test_a_copied_position_needs_no_extra_call_and_leaves_no_fragment() -> None:
     assert f"{SENTENCE}。" in result.answer_text
     assert "行5" not in result.answer_text
     assert "（," not in result.answer_text
-    assert not [mark for row in result.envelope.get("passage_marks") or [] for mark in row["reasons"] if mark["code"] == "item_check"]
 
 
 def test_a_sent_id_in_the_derivation_becomes_the_source_name() -> None:
@@ -221,21 +197,3 @@ def test_a_sent_id_in_the_derivation_becomes_the_source_name() -> None:
     assert "E1" not in result.answer_text
     assert f"「synthetic.txt p.1」によると{SENTENCE}。" in result.answer_text
     assert result.generation_trace["applications"][0]["published"] is True
-
-
-def test_a_mixed_id_is_regenerated_once() -> None:
-    # 送っていない根拠の ID（E7）は内部の番号の漏れとして作り直す。
-    result, prompts = answer(output(f"E7 によると{SENTENCE}。"), output(f"{SENTENCE}。"))
-    assert len(prompts) == 2
-    assert "internal_label_issues" in prompts[1]
-    assert f"{SENTENCE}。" in result.answer_text
-
-
-def test_unrepaired_mixed_id_withholds_result_and_preserves_original_source() -> None:
-    result, prompts = answer(output(f"E7 によると{SENTENCE}。"), output(f"E7 によると{SENTENCE}。"))
-    assert len(prompts) == 2
-    assert "E7" not in result.answer_text
-    assert SENTENCE in result.answer_text
-    assert result.generation_trace["applications"][0]["published"] is False
-    assert result.generation_trace["applications"][0]["reasons"]
-    assert result.generation_trace["rounds"][-1]["timing"]["answer_parts"]["status"] == "incomplete"

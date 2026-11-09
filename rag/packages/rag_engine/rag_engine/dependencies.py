@@ -54,9 +54,6 @@ class AnswerDependencies:
     語の判定だけで決める。
     report_degraded は補助の処理（画面の選択など）が失敗して空のまま続けたことを、処理の種類と例外を受け取って
     呼び出し元の診断に残す（#3259。例外の文は呼び出し元が残さない）。省略時は残さない。
-    question_subjects は説明・要約に書いた質問の対象の名前を引いた原文に照らす検査（#4351）の、質問の対象と役割の
-    抽出（`question_subjects.extract_question_subjects` と同じ引数）。question・settings を位置で、provider_id を
-    keyword で受け取り `question_subjects.QuestionSubjects` を返す。回答の中で 1 回だけ呼ぶ。省略時は対象の名前を確かめない。
     current_section_paths は長い根拠を分ける区切りに使う、子の chunk の今の章節（章節ナビゲーションが正本。#4682）。
     chunk の ID の列を受け取り {chunk の ID: 章節の名前の列} を返す（どの章節にも入らない chunk は空の列、対応の無い chunk は
     含めない）。省略時や読めないときは取込の章節で区切る。
@@ -84,7 +81,6 @@ class AnswerDependencies:
     record_retrieval: Callable[[Mapping[str, Any]], None] | None = None
     # 正式生成に選んだ文書だけを、その版と検索範囲で読む。
     document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
-    question_subjects: Callable[..., Any] | None = None
     current_section_paths: Callable[[Sequence[str]], Mapping[str, Sequence[str]]] | None = None
 
 
@@ -175,12 +171,6 @@ def injected_embedder() -> "Embedder | None":
     """注入された embedding（#2649）。注入が無ければ None（業務ガイドの手順の充足を語の判定だけで決める）。"""
     current = _active.get()
     return None if current is None else current.embedder
-
-
-def injected_question_subjects() -> Callable[..., Any] | None:
-    """注入された質問の対象の抽出（#4351）。注入が無ければ None（対象の名前を確かめない）。"""
-    current = _active.get()
-    return None if current is None else current.question_subjects
 
 
 def injected_current_section_paths(chunk_ids: Sequence[str]) -> Mapping[str, Sequence[str]]:

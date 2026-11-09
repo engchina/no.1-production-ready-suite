@@ -75,7 +75,6 @@ PROMPT_PHASES = (
     "retrieval",
     "grounding",
     "generation",
-    "audit",
     "evaluation",
 )
 
@@ -240,58 +239,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             # 該当する入力のときだけ生成の入力へ足す読み方（タグ・値の種類 / 業務ガイド。#4677）。
             ("evidenceReading", "rag_engine.generation.grounded:EVIDENCE_READING_PROMPT"),
             ("guideRules", "rag_engine.generation.grounded:GUIDE_RULES_PROMPT"),
-            (
-                "citationRepair",
-                "rag_engine.generation.citation_range_repair:CITATION_RANGE_REPAIR_SYSTEM_PROMPT",
-            ),
-            # 目録で選んだ条を生成が引かなかったときだけ、支える説明を検討する（#3526）。
-            ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
-            # 要点がすべて原文の提示だった導出の質問の作り直しで、入力に足す部品（#4586）。
-            (
-                "sourceOnlyDerivation",
-                "rag_engine.generation.answer_parts_wire:SOURCE_ONLY_DERIVATION_PROMPT",
-            ),
-            # 表の見出しの行だけを示した要点の作り直しで、入力に足す部品（#4592）。
-            (
-                "headerOnlySource",
-                "rag_engine.generation.answer_parts_wire:HEADER_ONLY_SOURCE_PROMPT",
-            ),
-        ),
-    ),
-    # 説明・要約に書いた質問の対象の名前を引いた原文に照らす検査の、対象の抽出と役割の判定(#4351)。
-    # 品質評価も同じ指示で取り出す。
-    PromptStage(
-        "question_subjects",
-        "audit",
-        (
-            ("extraction", "rag_engine.generation.question_subjects:SUBJECT_EXTRACTION_PROMPT"),
-            ("role", "rag_engine.generation.question_subjects:SUBJECT_ROLE_PROMPT"),
-        ),
-    ),
-    PromptStage(
-        "audit",
-        "audit",
-        (
-            ("detailedSystem", "rag_engine.generation.grounded:AUDIT_SYSTEM_PROMPT"),
-            # 標準の監査。未使用の根拠は列挙せず、主張・要求・要件を判定する。
-            ("factSystem", "rag_engine.generation.grounded:FACT_AUDIT_SYSTEM_PROMPT"),
-            ("compactRule", "rag_engine.generation.grounded:AUDIT_COMPACT_REASON_RULE"),
-        ),
-    ),
-    PromptStage(
-        "application",
-        "audit",
-        (
-            ("system", "rag_engine.generation.applications:APPLICATION_SYSTEM_PROMPT"),
-            ("auditSystem", "rag_engine.generation.applications:APPLICATION_AUDIT_SYSTEM_PROMPT"),
-        ),
-    ),
-    PromptStage(
-        "answer_validation",
-        "audit",
-        (
-            # 表の対応と取り違えた段落を、表の正しい値に直す（#3005。取り違えがあるときだけ）。
-            ("tableRevision", "rag_engine.generation.table_revision:REVISION_SYSTEM_PROMPT"),
         ),
     ),
     PromptStage(

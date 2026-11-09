@@ -126,19 +126,6 @@ def passage_spans(line: str) -> list[tuple[int, int, str]]:
     return spans
 
 
-def answer_passage_positions(answer: str) -> list[tuple[int, int, str]]:
-    """回答の段落の、回答の中の位置（開始・終了）と原文（行ごとの `passage_spans` の位置を回答の
-    位置にしたもの）。"""
-    positions: list[tuple[int, int, str]] = []
-    offset = 0
-    for line in answer.split("\n"):
-        positions.extend(
-            (offset + start, offset + end, text) for start, end, text in passage_spans(line)
-        )
-        offset += len(line) + 1
-    return positions
-
-
 # ---- 主張ではない段落の判定 --------------------------------------------------------
 
 # 箇条書き・番号の印。
@@ -667,29 +654,6 @@ def _covered_end(run: str, text: str, pieces: list[str]) -> int | None:
                 reach[end] = part
     last = reach[len(run)]
     return text.rfind(last) + len(last) if last else None
-
-
-def label_operation_end(label: str, text: str) -> int | None:
-    """名前 `label`（`list_item_label`）が段落 `text` と同じ操作を名前だけで指すとき、名前の
-    最後の語が段落の中で終わる位置（指さなければ None。#2692）。
-
-    名前の語（漢字・片仮名・英数字の並び）がすべて段落の語の部分で書け（「属性訂正」は「属性を
-    先に訂正する」の「属性」と「訂正」）、名前が段落の語の一定の割合を占めるとき対応させる。業務の
-    語は見ない。位置は、1 つの段落が複数の名前を含むとき、文末の述語に近い名前（主の操作）を
-    選ぶのに使う。
-    """
-    runs = _name_runs(label)
-    size = sum(len(run) for run in runs)
-    flat = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
-    pieces = _NAME_RUN.findall(flat)
-    if size < _LABEL_MIN_CHARS or size < _LABEL_MIN_SHARE * sum(len(piece) for piece in pieces):
-        return None
-    end: int | None = None
-    for run in runs:
-        end = _covered_end(run, flat, pieces)
-        if end is None:
-            return None
-    return end
 
 
 def is_heading(text: str) -> bool:

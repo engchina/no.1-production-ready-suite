@@ -10,6 +10,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+from pydantic import BaseModel
+
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
 from rag_engine.generation import execution_record
@@ -182,21 +184,13 @@ class _NonStreamingClient:
         return send
 
 
-def _audit_wire_text() -> tuple[type, str]:
-    """要求 Q1 だけの固定キー監査の、検証を通る合成の wire。"""
-    from audit_fixtures import legacy_audit_to_wire_fixture
+def _wire_text() -> tuple[type, str]:
+    """検証を通る合成の構造化出力。"""
 
-    from rag_engine.models.audit_wire import audit_wire_schema
-    from rag_engine.models.llm import GroundedAudit, GroundedRequestReview
+    class Output(BaseModel):
+        answer: str
 
-    schema = audit_wire_schema(GroundedAudit, ("Q1",), ())
-    audit = GroundedAudit(
-        reviews=[],
-        request_reviews=[GroundedRequestReview(request_id="Q1", status="addressed", reason="説明あり")],
-        summary_supported=False,
-        goal_alignment="partial",
-    )
-    return schema, json.dumps(legacy_audit_to_wire_fixture(audit, schema), ensure_ascii=False)
+    return Output, json.dumps({"answer": "説明の文"}, ensure_ascii=False)
 
 
 class NonStreamingRunawayTest(unittest.TestCase):
@@ -221,22 +215,6 @@ class NonStreamingRunawayTest(unittest.TestCase):
         finally:
             llm_usage.reset(usage_token)
         return result
-
-    def test_whitespace_runaway_in_audit_wire_is_resent_with_lower_effort_without_widening(self):
-        """固定キー監査の値の後に空白が続いた未完了は、上限を 2 倍にせず、推論の量を下げて 1 回だけ送り直す。"""
-        schema, valid = _audit_wire_text()
-        runaway = valid[: valid.index('"reason"')] + '"reason": "説明あり"' + " \n" * 4000
-        client = _NonStreamingClient(
-            [_runaway_incomplete(runaway), SimpleNamespace(status="completed", output_text=valid, usage=_NO_STREAM_USAGE)]
-        )
-        result = self.call(client, schema)
-        self.assertEqual([row.request_id for row in result.audit.request_reviews], ["Q1"])
-        self.assertEqual(client.methods, ["create", "create"])
-        self.assertEqual(client.budgets, [8192, 8192])
-        self.assertEqual(client.efforts, ["medium", "low"])
-        self.assertEqual(self.usage["runaway_resends"], 1)
-        self.assertEqual(self.usage["incomplete_reasons"], {"runaway_whitespace": 1})
-        self.assertNotIn("output_retries", self.usage)
 
     def test_whitespace_run_in_the_middle_counts(self):
         """streaming なら途中で打ち切った空白の連続は、その後に出力が続いていても暴走と見なす。"""

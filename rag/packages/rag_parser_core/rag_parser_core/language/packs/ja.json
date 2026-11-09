@@ -2160,9 +2160,6 @@
     "abstention_guidance": "対象業務の操作説明書で操作方法と適用条件を確認し、質問の対象・条件や検索範囲を見直してください。",
     "citation_prefix": "根拠：",
     "deadline_summary": "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。",
-    "off_goal_gap": "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。",
-    "cause_gap": "原因は取得した資料に記載がありません。",
-    "subject_unconfirmed_gap": "「{names}」については、引用した資料で確認できません。",
     "crag_refusal_summary": "検索した資料には、原質問の操作・規則・確認方法を直接裏付ける根拠を確認できていません。",
     "crag_missing_aspect_template": "{label}については、検索評価で直接の根拠を確認できていません。",
     "crag_unknown_aspect_template": "{label}については、質問との対応または確認結果が未確認です。",
@@ -2179,22 +2176,11 @@
     "condition_suffix": "場合",
     "condition_link": "の",
     "subquestion_heading_template": "質問{label}：{text}",
-    "missing_request_template": "『{text}』については、根拠付きの説明を十分に示せていません。",
-    "removed_section": "根拠と矛盾し除いた内容",
-    "removed_section_note": "次の内容は根拠と矛盾するため、回答から除きました。",
-    "marked_section": "確認が必要な点",
-    "marked_section_note": "次の点は根拠で確かめきれていないか、注意が必要です（内容は回答に載せています）。",
-    "unsourced_section": "資料の出典を確かめられない説明",
-    "unsourced_section_note": "次の説明は検索した資料の原文と照合できないため、資料の記載としては示していません。",
-    "marked_rules_section": "根拠で確かめきれていない事項",
-    "marked_rules_section_note": "次の説明は根拠で確かめきれていないか、注意が必要です。理由は「確認が必要な点」に示します。",
     "guide_notes_section": "業務ガイドの案内",
     "guide_notes_note_template": "次は業務ガイド「{title}」の案内で、資料の記載ではありません。",
     "guide_handoff_template": "次の場合は{contact}へお問い合わせください: {conditions}",
     "guide_approval_template": "実施の前に承認が必要です。{note}",
     "guide_acquisition_incomplete_template": "必須の参照範囲について、取得または回答材料への保持を確認できていません（手順: {steps}）。資料に記載がないことや、回答の誤りを意味しません。",
-    "passage_note_template": "{reasons}: 「{text}」",
-    "answer_warning_template": "{reasons}",
     "predicate_endings": [
       "た",
       "だ",
@@ -2218,39 +2204,6 @@
       "構成明細=member_details",
       "集計対象の一致=population_membership",
       "列挙の網羅（件数・範囲）=enumeration_coverage"
-    ],
-    "passage_reason_labels": [
-      "根拠で確かめられない=unsupported",
-      "出典を確かめられない=citation_error",
-      "引用の原文が根拠に見当たらない=quote_unmatched",
-      "引用先の根拠 ID が無効=citation_id_invalid",
-      "引用先の根拠 ID が複数ある=citation_id_ambiguous",
-      "引用する行の範囲が未指定=citation_range_missing",
-      "引用する行の範囲が無効=citation_range_invalid",
-      "引用行が根拠の範囲外=citation_range_out_of_bounds",
-      "引用原文を抽出できない=citation_extraction_failed",
-      "引用した範囲が見出しだけ=citation_heading_only",
-      "引用が区切り線・書式のみ=citation_content_unusable",
-      "ガイドIDは資料根拠でない=citation_id_namespace",
-      "引用元の版を確認できない=citation_version_mismatch",
-      "確かめが終わっていない=unassessed",
-      "図の画像を読めておらず確かめられない=figure_not_read",
-      "根拠は別の対象についての記載=target_mismatch",
-      "根拠の表の対応と違う可能性=value_unbound",
-      "根拠の表の値に直した=table_corrected",
-      "システムの検査で注意が必要=item_check",
-      "旧版・廃止の資料に基づく=superseded",
-      "前の手順が根拠と矛盾=after_contradicted_step",
-      "前提の手順が未確認=after_unverified_step",
-      "要約を根拠で確かめていない=summary_unaudited",
-      "条件への当てはめを確かめていない=application_unaudited",
-      "資料に無い業務ガイドの文=guide_text",
-      "根拠と矛盾=contradicted",
-      "業務ガイドの手順の確認で問題が見つかった=guide_check",
-      "根拠を読めず、すべての段落が未確認=no_evidence",
-      "質問からずれている可能性=off_goal",
-      "質問の要求の一部に答えていない=requests",
-      "回答の作り直しに失敗し、前の回答を示している=correction_failed"
     ]
   },
   "answer_check_cues": {
@@ -2284,12 +2237,6 @@
       "確定",
       "完了"
     ],
-    "completion_negations": [
-      "しない",
-      "しません",
-      "されない",
-      "不要"
-    ],
     "constraint_words": [
       "のみ",
       "に限る",
@@ -2313,55 +2260,12 @@
       "に",
       "のみ"
     ],
-    "heading_screen_words": [
-      "画面"
-    ],
-    "field_label_followers": [
-      "欄",
-      "項目",
-      "ボタン",
-      "タブ",
-      "チェック",
-      "一覧",
-      "リスト"
-    ],
     "unexplained_words": [
       "説明していません",
       "記載がありません",
       "記載はありません",
       "記載していません",
       "未確認"
-    ],
-    "guarantee_verbs": [
-      "確認",
-      "取得",
-      "特定",
-      "把握",
-      "判断"
-    ],
-    "guarantee_endings": [
-      "できます",
-      "できる"
-    ],
-    "guarantee_exceptions": [
-      "とは限",
-      "かは",
-      "かどうか",
-      "わけでは"
-    ],
-    "match_claims": [
-      "と一致します",
-      "に一致します"
-    ],
-    "speculation_words": [
-      "考えられ",
-      "可能性",
-      "かもしれ",
-      "いずれか",
-      "恐れ",
-      "おそれ",
-      "と思われ",
-      "推測"
     ],
     "ignored_quote_chars": [
       "|",
@@ -2421,20 +2325,6 @@
     "repeated_ellipsis_chars": [
       ".",
       "。"
-    ],
-    "report_suffixes": [
-      "表",
-      "書",
-      "票",
-      "証",
-      "券",
-      "名簿",
-      "帳票"
-    ],
-    "screen_object_suffixes": [
-      "画面",
-      "タブ",
-      "メニュー"
     ],
     "condition_sentence_endings": [
       "ください",
@@ -2501,14 +2391,6 @@
     "condition_adverb_particles": [
       "に"
     ],
-    "proviso_words": [
-      "なお",
-      "ただし",
-      "但し",
-      "※",
-      "（＊",
-      "(*"
-    ],
     "bare_label_chars": [
       "・",
       "／",
@@ -2528,34 +2410,6 @@
       "。",
       "）",
       ")"
-    ],
-    "navigation_residue_words": [
-      "（",
-      "(",
-      "）",
-      ")",
-      "「",
-      "」",
-      "『",
-      "』",
-      "の",
-      "画面",
-      "タブ",
-      "を",
-      "へ",
-      "に",
-      "で",
-      "開く",
-      "開き",
-      "開きます",
-      "選択",
-      "表示",
-      "します",
-      "する",
-      "移動",
-      "遷移",
-      "。",
-      "、"
     ],
     "related_stopwords": [
       "変更",
@@ -2583,64 +2437,6 @@
       "可能",
       "必要"
     ],
-    "version_units": [
-      "版"
-    ],
-    "abolish_words": [
-      "廃止"
-    ],
-    "abolish_particles": [
-      "は",
-      "を",
-      "が",
-      "も"
-    ],
-    "abolished_forms": [
-      "廃止された",
-      "廃止した"
-    ],
-    "version_question_cues": [
-      "どう変わ",
-      "何が変わ",
-      "どこが変わ",
-      "変わりました",
-      "変わった",
-      "違い",
-      "差分",
-      "比較",
-      "比べ",
-      "変更点",
-      "変更前",
-      "改訂前",
-      "旧版",
-      "前の版",
-      "以前の版",
-      "新旧"
-    ],
-    "quote_operation_words": [
-      "選択",
-      "押",
-      "クリック",
-      "入力",
-      "抽出",
-      "検索",
-      "実行",
-      "登録",
-      "保存",
-      "更新",
-      "削除",
-      "出力",
-      "印刷",
-      "追加",
-      "設定",
-      "確認",
-      "チェック",
-      "表示",
-      "遷移",
-      "変更",
-      "修正",
-      "訂正"
-    ],
     "process_mode_words": [
       "処理区分"
     ],
@@ -2667,31 +2463,6 @@
       "：",
       "とは",
       "場合"
-    ],
-    "evidence_id_labels": [
-      "証拠",
-      "根拠",
-      "原文"
-    ],
-    "output_artifact_words": [
-      "CSV",
-      "ファイル",
-      "出力データ",
-      "出力結果"
-    ],
-    "output_field_words": [
-      "列",
-      "カラム",
-      "フィールド",
-      "項目"
-    ],
-    "heading_bracket_pairs": [
-      "〔〕",
-      "[]",
-      "［］",
-      "【】",
-      "（）",
-      "()"
     ]
   },
   "operation_audit_cues": {
@@ -3140,50 +2911,6 @@
       "々",
       "〆",
       "ヶ"
-    ]
-  },
-  "guide_check_cues": {
-    "impact_group_terms": [
-      "グループ"
-    ],
-    "impact_all_terms": [
-      "全体",
-      "全員",
-      "すべての",
-      "全ての"
-    ],
-    "approval_terms": [
-      "承認"
-    ],
-    "premise_met_markers": [
-      "満たしています",
-      "満たしている",
-      "満たされています",
-      "満たされている",
-      "済み",
-      "済んでいます",
-      "済んでいる",
-      "完了しています",
-      "完了している"
-    ],
-    "guide_list_marks": [
-      "-",
-      "*",
-      "・",
-      "•"
-    ],
-    "guide_number_closers": [
-      ".",
-      ")",
-      "．",
-      "、",
-      "）"
-    ],
-    "boolean_aliases": [
-      "true=はい",
-      "yes=はい",
-      "false=いいえ",
-      "no=いいえ"
     ]
   },
   "guide_import_cues": {

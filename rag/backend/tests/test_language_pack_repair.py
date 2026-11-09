@@ -23,7 +23,7 @@ _MISSING = ("answer_labels.applications_section", "grounding_cues.citation_unit_
 
 def _effective() -> dict[str, Any]:
     effective = builtin_pack().to_dict()
-    effective["answer_labels"]["cause_gap"] = _CUSTOM
+    effective["answer_labels"]["gaps_section"] = _CUSTOM
     for name in _MISSING:
         section, key = name.split(".")
         del effective[section][key]
@@ -51,7 +51,7 @@ def _state_row(draft: dict[str, Any] | None = None) -> dict[str, object]:
 
 def _complete() -> dict[str, Any]:
     complete = builtin_pack().to_dict()
-    complete["answer_labels"]["cause_gap"] = _CUSTOM
+    complete["answer_labels"]["gaps_section"] = _CUSTOM
     return complete
 
 
@@ -103,7 +103,7 @@ async def test_dry_run_reads_only_and_reports_names() -> None:
 async def test_blocks_when_draft_differs_from_current() -> None:
     """下書きの未公開の変更を、適用で黙って置き換えない。"""
     draft = _effective()
-    draft["answer_labels"]["cause_gap"] = "合成の下書きの文言"
+    draft["answer_labels"]["gaps_section"] = "合成の下書きの文言"
     oracle, _ = _client([_state_row(draft)], [_release_row()], [{"total": 0}])
     plan = await repair.inspect_language_pack_repair(oracle)
     assert plan.draft_matches_current is False
@@ -124,7 +124,7 @@ def _non_mapping_section() -> dict[str, Any]:
 
 def _bad_value() -> dict[str, Any]:
     effective = _effective()
-    effective["answer_labels"]["cause_gap"] = 3
+    effective["answer_labels"]["gaps_section"] = 3
     return effective
 
 

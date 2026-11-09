@@ -107,7 +107,7 @@ def prepare_plan(
         if total_caps:
             raise ValueError("補救の比較と候補上限の比較は別の実験にしてください。")
         variants = []
-        for crag, coverage in ((False, False), (True, False), (False, True), (True, True)):
+        for crag in (False, True):
             overrides = (
                 request.rag_overrides.model_dump(exclude_none=True) if request.rag_overrides else {}
             )
@@ -120,11 +120,9 @@ def prepare_plan(
             )
             variants.append(
                 {
-                    "id": f"recovery-crag-{int(crag)}-coverage-{int(coverage)}",
+                    "id": f"recovery-crag-{int(crag)}",
                     "request": changed.model_dump(mode="json", exclude_none=True),
-                    "environment_overlay": {
-                        "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": str(coverage).lower()
-                    },
+                    "environment_overlay": {},
                 }
             )
     digest = hashlib.sha256(

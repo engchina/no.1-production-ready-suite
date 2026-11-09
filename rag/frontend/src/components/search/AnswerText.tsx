@@ -13,7 +13,6 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { answerPassageLabels, answerPassages, projectAnswerPassageSections } from "@/lib/answer-passages";
 import {
   answerFormat,
   citationLocation,
@@ -22,7 +21,6 @@ import {
   parseCitationLine,
   REASONING_LABEL,
   resolveCitationLineTargets,
-  type AnswerTextBlock,
   type AnswerTextEntry,
   type CitationTarget,
 } from "@/lib/answer-text";
@@ -44,9 +42,6 @@ const GAPS_SECTION_TITLE = "資料から確認できなかった事項";
  * 根拠の行は、当たる引用（`citations`）があれば押せるようにし、その引用の原文のプレビューを開く（#657）。
  * 当たる引用は、回答エンジンが付けた出典行の番号で決める（無ければファイル名と頁。#1330）。位置が確定できない行は
  * 候補の引用を開き、位置は未確定と示して原文を強調しない（#2710）。
- * 回答の記録の診断（`diagnostics`）に段落の印の記録（#2738）があれば、印の付いた段落・項目に線と印を付け、本文の上に
- * 回答全体の注意、本文の後ろに「根拠と矛盾し除いた内容」「確認が必要な点」を出す（Agent と同じ共有の部品）。書式に
- * 合わない本文も、記録があれば空行で段落に分けて印を付ける。記録の無い過去の回答は今までの表示のまま。
  */
 export function AnswerText({
   text,
@@ -75,11 +70,7 @@ export function AnswerText({
 }) {
   const source = useEvidenceSource<CitationTarget>();
   const format = answerFormat(diagnostics);
-  const passages = streaming ? null : answerPassages(diagnostics);
-  // 記録から復元できる行と、本文だけに残る補足を同じ節へ投影する。本文だけの注意も失わない。
-  const projection = passages ? projectAnswerPassageSections(text, passages, format) : null;
-  const body = projection?.body ?? text;
-  const blocks = streaming ? null : (parseAnswerText(body, format) ?? (passages ? plainParagraphs(body) : null));
+  const blocks = streaming ? null : parseAnswerText(text, format);
   // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
   const fixedTexts = new Set(Object.values(format ?? {}));
   const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);
@@ -95,9 +86,6 @@ export function AnswerText({
   return (
     <AnswerSections
       live={live}
-      passages={passages}
-      passageNotes={projection?.notes}
-      passageLabels={answerPassageLabels()}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
         block.kind === "paragraph"
           ? { kind: "paragraph", key: String(index), content: block.text, lang: fixedLang(block.text) }
@@ -178,7 +166,6 @@ export function AnswerText({
         {entry.details?.map((detail, position) => <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
         {entry.reasoning ? <ReasoningText text={entry.reasoning} /> : null}
       </> : entry.text,
-      passageText: [entry.text, ...(entry.details ?? []), ...(entry.reasoning ? [REASONING_LABEL + entry.reasoning] : [])].join("\n"),
       citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
       extra: renderSectionLink(entry.text, title),
     };
@@ -204,13 +191,4 @@ function ReasoningText({ text }: { text: string }) {
       <MarkdownText text={text} headingLevel={6} className="text-fg-muted" />
     </div>
   );
-}
-
-/** 書式の見出しの無い本文を、空行で段落に分ける（段落の印の記録のある回答だけ。#2738）。 */
-function plainParagraphs(text: string): AnswerTextBlock[] {
-  return text
-    .split(/\n\s*\n/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => ({ kind: "paragraph", text: part }));
 }

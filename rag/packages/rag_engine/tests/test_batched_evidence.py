@@ -162,76 +162,6 @@ def test_partition_respects_model_tokens_and_preserves_nonzero_parent_offsets():
     assert not any("start" in value or "source_id" in value for value in seen)
 
 
-def test_synthesis_reads_all_twelve_parents_before_final_answer(monkeypatch):
-    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-    from rag_engine.generation import answering, grounded
-    from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, RequestScopePlan
-
-    records = [
-        answering.AnswerRecord(
-            id=f"p{i}",
-            engine="synthetic",
-            engine_label="Synthetic",
-            page=1,
-            seq_no=1,
-            category="Chunk",
-            text=f"条件{i}は値{i}です。\n" + "補足。" * (9000 if i == 0 else 1000),
-            source=f"document-{i}.txt",
-        )
-        for i in range(12)
-    ]
-    captured = []
-    seen = set()
-    final_spans = []
-    original_round = grounded.run_round
-
-    def round_capture(question, spans, *args, **kwargs):
-        final_spans[:] = spans
-        return original_round(question, spans, *args, **kwargs)
-
-    monkeypatch.setattr(grounded, "run_round", round_capture)
-
-    def model(system, prompt, settings, schema, **kwargs):
-        captured.append(schema)
-        if issubclass(schema, BatchReading):
-            inputs = json.loads(prompt)["evidence"]
-            seen.update(s["source"] for s in inputs)
-            return schema(
-                findings=[finding(s, answer=body(s).split("。", 1)[0] + "。") for s in inputs if body(s).startswith("条件")],
-            )
-        assert seen == {r.source for r in records}
-        if issubclass(schema, RequestScopePlan):
-            return schema(request_coverage=[])
-        assert "分割読取の回答候補" in prompt
-        return GroundedDraft(
-            items=[
-                GroundedItem(
-                    kind="rule",
-                    text=s["text"].split("\n", 1)[0],
-                    citations=[GroundedCitation(evidence_id=s["label"], quote=s["text"].split("\n", 1)[0])],
-                )
-                for s in final_spans
-            ],
-            summary="",
-            confidence="medium",
-        )
-
-    def unused(*args, **kwargs):
-        pytest.fail("検索や画像の追加呼出はしない")
-
-    settings = replace(config(), evidence_budget_chars=12000, answer_audit_mode="none", answer_max_correction_rounds=0)
-    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        response = answering.synthesize_grounded_answer(
-            "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
-        ).response
-    for i in range(12):
-        assert f"条件{i}は値{i}です。" in response.answer_text
-    diagnostic = response.generation_trace["generation_input_budget"]
-    assert diagnostic["read_source_count"] == 12
-    assert diagnostic["excluded_span_count"] == 0
-    assert response.generation_trace["llm_calls"] == len(captured)
-
-
 def test_map_results_are_reduced_again_when_they_cannot_fit_together():
     inputs = [span(i, f"条件{i}です。" + "補足原文。" * 200) for i in range(12)]
     reduction_calls = []
@@ -416,7 +346,7 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=12000, answer_audit_mode="none", answer_max_correction_rounds=0)
+    settings = replace(config(), evidence_budget_chars=12000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
@@ -426,49 +356,6 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
     assert generated
     assert "採らない合成の回答" not in generated[0]
     assert "条件0は値0です。" in generated[0]
-
-
-def test_invalid_batch_reading_returns_unverified_source_material_without_an_answer():
-    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-    from rag_engine.generation import answering, grounded
-
-    records = [
-        answering.AnswerRecord(
-            id=f"p{i}",
-            engine="synthetic",
-            engine_label="Synthetic",
-            page=1,
-            seq_no=1,
-            category="Chunk",
-            text=f"条件{i}は値{i}です。\n" + "補足。" * 9000,
-            source=f"document-{i}.txt",
-        )
-        for i in range(2)
-    ]
-
-    def model(system, prompt, settings, schema, **kwargs):
-        assert issubclass(schema, BatchReading)
-        return schema.model_validate({"findings": [{"start_line": "x"}]})
-
-    def unused(*args, **kwargs):
-        pytest.fail("不要な呼出し")
-
-    settings = replace(config(), evidence_budget_chars=12000, answer_audit_mode="none", answer_max_correction_rounds=0)
-    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        result = answering.synthesize_grounded_answer(
-            "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
-        ).response
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert result.envelope["outcome"] == "conditional"
-    assert result.needs_human_review
-    failure = result.generation_trace["generation_failure"]
-    assert failure["error"] == "ValidationError"
-    assert failure["stage"] == "evidence.batch_read"
-    assert failure["category"] == "schema_field"
-    assert failure["batch_index"] >= 1
-    assert failure["input_count"] >= 1
-    assert failure["input_chars"] > 0
-    assert all(item["applies"] == "quote_only" for item in result.envelope["items"])
 
 
 def _validation_error() -> ValidationError:
@@ -507,7 +394,7 @@ def test_stream_output_missing_in_batch_read_falls_back_to_quotes_and_keeps_trac
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=12000, answer_audit_mode="none", answer_max_correction_rounds=0)
+    settings = replace(config(), evidence_budget_chars=12000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
@@ -654,7 +541,7 @@ def _synthesize(records, read_findings, *, budget=12000):
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=budget, answer_audit_mode="none", answer_max_correction_rounds=0)
+    settings = replace(config(), evidence_budget_chars=budget)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "合成の申請の承認者は？", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
