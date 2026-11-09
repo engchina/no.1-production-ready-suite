@@ -1080,6 +1080,16 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
     await expect(skipped).toHaveAttribute("data-status", "skipped");
     await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");
+    // バーを出す幅では右端の列が固定の幅になる。いちばん長い表示が収まること（#4778）。
+    if (await skipped.locator("[data-run-timeline-bar]").isVisible()) {
+      expect(await skipped.locator("[data-run-step-status-duration]").evaluate(node => {
+        const context = document.createElement("canvas").getContext("2d")!;
+        const style = getComputedStyle(node);
+        // 数字の字形の指定（tnum）があると font の一括指定は空になるので、個別の値から組み立てる。
+        context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        return context.measureText("スキップ · 0.1 秒未満").width <= node.clientWidth;
+      })).toBe(true);
+    }
     await expect(skipped.locator("[data-run-result-summary]")).toHaveText(reason);
     await expect(page.getByTestId(prefix)).not.toContainText("skipped");
     await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveText("設定がオフのため、検索文の追加をスキップしました。");
