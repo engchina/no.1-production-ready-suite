@@ -3730,7 +3730,7 @@ LLM の回答など Markdown の本文を、記号のまま出さずに要素で
 ```tsx
 import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-ready/ui";
 
-// 表は先に取り出して共通の結果の表で出し、残りを MarkdownText で描く（Agent の AnswerBody）。
+// 表は先に取り出して共通の結果の表で出し、残りを MarkdownText で描く（共有の AnswerBody。下の節。#4734）。
 {splitMarkdownTables(answer).map((segment, index) =>
   segment.kind === "text" ? (
     <MarkdownText key={index} text={segment.text} headingLevel={3} />
@@ -3752,6 +3752,19 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 
 - 描くもの: 見出し（`#`〜`######`）・段落（中の改行は `<br>`）・`-` / `*` / `+` / `1.` の箇条書き（字下げで入れ子）・` ``` ` / `~~~` のコードブロック（`data-language`）・`>` の引用・`---` の区切り線、行の中の `` `code` ``・`**強調**`・`*斜体*`・`[文字](https://…)`・`<https://…>`・裸の URL、`\*` の取り消し。
 - 描かないもの: 生の HTML（文字のまま）・表（段落の文字のまま。`splitMarkdownTables` で先に取り出す）・画像・`_斜体_`（識別子の `_` を斜体にしない）・`http(s)` / `mailto` 以外のリンク。
+
+### AnswerBody（#4734。Agent の `AnswerBody` を移した）
+
+回答の本文の中の表を共通の結果の表で出す部品。`text` を `splitMarkdownTables` で分け、表は `ResultTable`、表以外は `MarkdownText`（`renderText` を渡せば製品の描き方）で描く。3 製品で表の切り出しと名前の付け方を 1 つにするため、製品で `splitMarkdownTables` と `ResultTable` を組み合わせて書かない（Agent は文言だけを渡す、RAG は節に分けない本文・段落・項目・結論の説明で使う）。
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `text` | `string` | — | 表を含みうる本文 |
+| `headingLevel` | `2 \| 3 \| 4 \| 5 \| 6` | `MarkdownText` の既定 | `renderText` を渡さないときの本文の見出しの段 |
+| `renderText` | `(text: string) => ReactNode` | `MarkdownText` | 表以外の部分の描き方 |
+| `splitOptions` | `SplitMarkdownTablesOptions` | — | `{ headerlessRows: true }` で区切りの行の無い `\| A \| B \|` の行の並び（2 行以上）も表にする。文書の表から切り出した本文用で、列の名前は番号（RAG） |
+| `labels` | `AnswerBodyLabels` | `DEFAULT_ANSWER_BODY_LABELS` | `tableName(number)`（表が 1 つなら `number` は null）・`table(name)`（その表の `ResultTable` の文言） |
+| `className` / `testId` | `string` | — | 外側の `div`。表は `{testId}-table-{番号}` |
 
 ---
 
@@ -3964,7 +3977,7 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 | `SourceVersionStaleNotice` / `isSourceVersionStale` | `message?`（既定は共通の文言）/ `error` | 再索引などで引用の版を表示できない根拠の案内（info の `Banner`。エラーと再試行を出さない）と、失敗がそれに当たるかの判定（`errorCode === "source_stale"`）。`EvidenceReader` と原本の対応箇所は内部で使い、製品は自前の取得（Agent のプレビューの発行・RAG の ID からの根拠の読み取り）の失敗に使う（#4092） |
 | `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
 | `evidenceCountLabel` | `(items, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
-| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`）・`passages?`・`passageLabels?` | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ）。`passages`（#2738）を渡すと、段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` を照合して印を付け、本文の上に回答全体の注意、後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す |
+| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`）・`passages?`・`passageLabels?` | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足。項目の `content` が表などのブロックを含むなら `block`。#4734）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ）。`passages`（#2738）を渡すと、段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` を照合して印を付け、本文の上に回答全体の注意、後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す |
 | `MarkdownInlineText` | `text`・`labels?` | 段落・項目の中の太字・斜体・コード・リンクだけを描く（`<p>` / `<li>` の中に置く） |
 
 **データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。

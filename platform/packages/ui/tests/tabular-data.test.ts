@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { splitMarkdownTables, toTabularData } from "../src";
+import { hasMarkdownTable, splitMarkdownTables, toTabularData } from "../src";
 
 // #1158: ツールの結果の JSON・回答の Markdown の表を、結果の表（ChatResultTable）の列と行にする判定（製品に依存しない）。
 
@@ -198,5 +198,66 @@ describe("splitMarkdownTables", () => {
   it("続けて置いた表は別の表にする", () => {
     const segments = splitMarkdownTables("| a |\n|---|\n| 1 |\n\n| b |\n|---|\n| 2 |");
     expect(segments.map((segment) => segment.kind)).toEqual(["table", "table"]);
+  });
+});
+
+describe("splitMarkdownTables の headerlessRows（#4734）", () => {
+  const rows = "前の文。\n| 項目 A | 1,000 |\n| 項目 B | 2,000 |\n後の文。";
+
+  it("既定では区切りの行の無い行の並びを表にしない", () => {
+    expect(splitMarkdownTables(rows)).toEqual([{ kind: "text", text: rows }]);
+  });
+
+  it("指定すると表の本文の行にし、列の名前は番号、数の列は右寄せにする", () => {
+    const segments = splitMarkdownTables(rows, { headerlessRows: true });
+    expect(segments).toEqual([
+      { kind: "text", text: "前の文。" },
+      {
+        kind: "table",
+        data: {
+          columns: [{ name: "1" }, { name: "2", type: "number" }],
+          rows: [
+            ["項目 A", "1,000"],
+            ["項目 B", "2,000"],
+          ],
+          truncated: false,
+          totalRowCount: null,
+          elapsedMs: null,
+        },
+      },
+      { kind: "text", text: "後の文。" },
+    ]);
+  });
+
+  it("セルの数の違う行は足りない列を空にする（結合のある表の行）", () => {
+    const [segment] = splitMarkdownTables("| a | b | c |\n| d |", { headerlessRows: true });
+    expect(segment).toMatchObject({ kind: "table", data: { rows: [["a", "b", "c"], ["d", "", ""]] } });
+  });
+
+  it("1 行だけ・1 列だけ・両端が | でない行は表にしない", () => {
+    expect(splitMarkdownTables("| a | b |", { headerlessRows: true })).toEqual([{ kind: "text", text: "| a | b |" }]);
+    expect(splitMarkdownTables("| a |\n| b |", { headerlessRows: true })).toEqual([{ kind: "text", text: "| a |\n| b |" }]);
+    const prose = "A | B の比較\nC | D の比較";
+    expect(splitMarkdownTables(prose, { headerlessRows: true })).toEqual([{ kind: "text", text: prose }]);
+  });
+
+  it("コードブロックの中の行は表にしない", () => {
+    const fenced = "```\n| a | b |\n| c | d |\n```";
+    expect(splitMarkdownTables(fenced, { headerlessRows: true })).toEqual([{ kind: "text", text: fenced }]);
+  });
+
+  it("表頭と区切りのある行は Markdown の表のまま読む（区切りの行を本文の行にしない）", () => {
+    const segments = splitMarkdownTables("| a | b |\n| --- | --- |\n| 1 | 2 |", { headerlessRows: true });
+    expect(segments).toHaveLength(1);
+    expect(segments[0]).toMatchObject({ kind: "table", data: { columns: [{ name: "a" }, { name: "b" }], rows: [["1", "2"]] } });
+  });
+});
+
+describe("hasMarkdownTable（#4734）", () => {
+  it("表の有無を返す（| の無い本文は表にならない）", () => {
+    expect(hasMarkdownTable("| a | b |\n| --- | --- |\n| 1 | 2 |")).toBe(true);
+    expect(hasMarkdownTable("| a | b |\n| c | d |")).toBe(false);
+    expect(hasMarkdownTable("| a | b |\n| c | d |", { headerlessRows: true })).toBe(true);
+    expect(hasMarkdownTable("表の無い本文。\n2 行目。")).toBe(false);
   });
 });

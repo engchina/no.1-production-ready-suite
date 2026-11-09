@@ -1,12 +1,17 @@
 import {
+  AnswerBody,
   AnswerPlainText,
   AnswerSections,
+  cn,
+  hasMarkdownTable,
   MarkdownInlineText,
   MarkdownText,
   useEvidenceSource,
+  type AnswerBodyLabels,
   type AnswerCitationRef,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
+  type SplitMarkdownTablesOptions,
 } from "@production-ready/ui";
 import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -35,6 +40,9 @@ const UNREAD_SECTION_TITLE = "回答に未反映の関連章節";
 // rag_engine の grounded.py の GAPS_SECTION_TITLE。項目が多ければ共通の「すべて表示」で畳む（Agent の同じ節と
 // 同じ規則。#2361）。
 const GAPS_SECTION_TITLE = "資料から確認できなかった事項";
+// 回答の本文の表（#4734）。モデルが書いた Markdown の表に加えて、回答エンジンが文書の表から切り出した区切りの行の無い
+// 行の並び（rag_engine の table_html_as_rows。#4717）も表にする。判定は行の形だけ。
+const ANSWER_TABLE_OPTIONS: SplitMarkdownTablesOptions = { headerlessRows: true };
 
 /**
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
@@ -75,6 +83,18 @@ export function AnswerText({
   const fixedTexts = new Set(Object.values(format ?? {}));
   const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);
   if (!blocks) {
+    // 表があれば結果の表で出す（#4734）。AnswerSections の content に入れ、回答の言語の lang と読み上げをそろえる。
+    // 生成の途中は、Agent と同じく表頭と区切りの行がそろった時点から表にする（それまでは文字のまま）。
+    if (hasTable(text)) {
+      return (
+        <AnswerSections
+          live={live}
+          blocks={[{ kind: "content", key: "body", content: <AnswerTableBody text={text} />, passageText: text }]}
+        >
+          {cursor}
+        </AnswerSections>
+      );
+    }
     return (
       // 節に分けない本文も共通の部品で出し、回答の言語の字形で描く（#3335）。
       <AnswerPlainText text={text} live={live}>
@@ -88,7 +108,9 @@ export function AnswerText({
       live={live}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
         block.kind === "paragraph"
-          ? { kind: "paragraph", key: String(index), content: block.text, lang: fixedLang(block.text) }
+          ? hasTable(block.text)
+            ? { kind: "content", key: String(index), content: <AnswerTableBody text={block.text} />, passageText: block.text, lang: fixedLang(block.text) }
+            : { kind: "paragraph", key: String(index), content: block.text, lang: fixedLang(block.text) }
           : {
               kind: "section",
               key: String(index),
@@ -157,19 +179,61 @@ export function AnswerText({
 
   function toEntry(entry: AnswerTextEntry, index: number, title: string): AnswerSectionEntry {
     if (entry.kind === "text") {
-      return { key: String(index), content: entry.text, muted: true, lang: fixedLang(entry.text) };
+      return { key: String(index), content: textOrTable(entry.text), passageText: entry.text, muted: true, lang: fixedLang(entry.text), block: hasTable(entry.text) };
     }
+    const hasDetails = Boolean(entry.details?.length || entry.reasoning);
     return {
       key: String(index),
-      content: entry.details?.length || entry.reasoning ? <>
-        {entry.text}
-        {entry.details?.map((detail, position) => <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
+      content: hasDetails ? <>
+        {textOrTable(entry.text)}
+        {entry.details?.map((detail, position) => hasTable(detail)
+          ? <AnswerTableBody key={position} text={detail} className="text-fg-muted" />
+          : <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
         {entry.reasoning ? <ReasoningText text={entry.reasoning} /> : null}
-      </> : entry.text,
+      </> : textOrTable(entry.text),
+      // 文字列の content と同じ言語の判定を、表を描く要素になっても続ける（#3335）。
+      passageText: hasDetails ? undefined : entry.text,
+      block: [entry.text, entry.reasoning ?? "", ...(entry.details ?? [])].some(hasTable),
       citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
       extra: renderSectionLink(entry.text, title),
     };
   }
+}
+
+function hasTable(text: string): boolean {
+  return hasMarkdownTable(text, ANSWER_TABLE_OPTIONS);
+}
+
+function answerTableLabels(): AnswerBodyLabels {
+  return {
+    tableName: (number) =>
+      number === null ? t("search.answerText.tableName") : t("search.answerText.tableNameIndexed", { number }),
+    table: (name) => ({
+      tableLabel: name,
+      scrollLabel: t("search.answerText.tableScrollLabel", { name }),
+      sheetTitle: (count) => t("search.answerText.tableSheetTitle", { name, count }),
+      close: t("search.answerText.tableClose", { name }),
+    }),
+  };
+}
+
+/** 表を含む本文（表は共通の結果の表、表以外は改行を保った文。#4734）。 */
+function AnswerTableBody({ text, className }: { text: string; className?: string }) {
+  return (
+    <AnswerBody
+      text={text}
+      splitOptions={ANSWER_TABLE_OPTIONS}
+      labels={answerTableLabels()}
+      className={cn("whitespace-normal", className)}
+      testId="answer-table-body"
+      renderText={(segment) => <p className="whitespace-pre-wrap">{segment.trim()}</p>}
+    />
+  );
+}
+
+/** 表があれば表を描く要素、無ければ文字列のまま（表の無い本文の描き方を変えない）。 */
+function textOrTable(text: string): ReactNode {
+  return hasTable(text) ? <AnswerTableBody text={text} /> : text;
 }
 
 /**
@@ -188,7 +252,18 @@ function ReasoningText({ text }: { text: string }) {
   return (
     <div className="text-fg-muted" data-testid="answer-application-reasoning">
       <span className="block">{REASONING_LABEL}</span>
-      <MarkdownText text={text} headingLevel={6} className="text-fg-muted" />
+      {hasTable(text) ? (
+        <AnswerBody
+          text={text}
+          splitOptions={ANSWER_TABLE_OPTIONS}
+          labels={answerTableLabels()}
+          className="whitespace-normal"
+          testId="answer-table-body"
+          renderText={(segment) => <MarkdownText text={segment} headingLevel={6} className="text-fg-muted" />}
+        />
+      ) : (
+        <MarkdownText text={text} headingLevel={6} className="text-fg-muted" />
+      )}
     </div>
   );
 }
