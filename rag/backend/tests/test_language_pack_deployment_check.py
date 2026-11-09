@@ -81,7 +81,7 @@ def _assert_reports(output: str) -> None:
     """suite-health は最後の行を要約に使うので 1 行で出し、修復の手順を含め、値は出さない。"""
     assert len(output.strip().splitlines()) == 1
     assert _REPAIR_CLI in output
-    assert "#4697" in output
+    assert "#4697・#4745" in output
     assert _SAVED_VALUE not in output
 
 
