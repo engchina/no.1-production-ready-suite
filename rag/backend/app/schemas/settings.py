@@ -789,7 +789,7 @@ class AnsweringSettingsData(BaseModel):
     section_expansion_max_levels: int
     section_expansion_input_token_percent: int
     graph_expansion_enabled: bool
-    # 段ごとのモデル(空は回答のモデル): 質問の対象の名前の役割の判定(#4351)。選べる登録モデルは段で共通。
+    # 段ごとのモデル(空は回答のモデル): 質問の対象の名前の役割の判定(#4351)。
     question_subject_role_model: str = ""
     step_model_choices: list[AnsweringModelChoice] = Field(default_factory=list)
     config_source: Literal["runtime"] = "runtime"
