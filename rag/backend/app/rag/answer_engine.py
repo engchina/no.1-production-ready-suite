@@ -1196,7 +1196,6 @@ class AnswerEngine:
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
-        from rag_engine.generation.question_subjects import extract_question_subjects
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -1217,8 +1216,6 @@ class AnswerEngine:
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
-            # 説明・要約に書いた質問の対象の名前を原文に照らす検査の、対象と役割の抽出(#4351)。
-            question_subjects=extract_question_subjects,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
@@ -5032,11 +5029,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
         # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
         "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
-        "request_recovery": [
-            dict(row["request_recovery"])
-            for row in (result.generation_trace or {}).get("rounds", ())
-            if isinstance(row, Mapping) and isinstance(row.get("request_recovery"), Mapping)
-        ],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
             {"guide_step_retrieval": dict(trace)}

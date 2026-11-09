@@ -2,4 +2,3 @@
 
 from __future__ import annotations
 
-CURRENT_VALUE_REASON = "文書の表示例・Vision説明だけでは今回の実値を確認できない"

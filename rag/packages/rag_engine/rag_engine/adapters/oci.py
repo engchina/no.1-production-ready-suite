@@ -42,7 +42,6 @@ from rag_engine.knowledge.prompt_files import (
     read_prompt,
     render_prompt_template,
 )
-from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import (
     GroundedDraft,
     PictureDescriptionOutput,
@@ -885,9 +884,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
                     # text_format を渡すと SDK が応答の組み立ての中で本文を検証し、上限で切れた応答（未完了）も検証の失敗になって
                     # 下の送り直しに届かない（#4145）。
-                    response = (
-                        client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**wire_request)
-                    )
+                    response = client.responses.parse(**wire_request)
                 if capture is None or not capture.has_terminal:
                     observation.response(response)
                 observation_attributes(observation, {"pr.call.transport_status": "returned"})
@@ -1781,17 +1778,6 @@ def _parsed_response[StructuredOutputT: BaseModel](
     if status == "incomplete":
         reason = str(_value(_value(response, "incomplete_details"), "reason") or "unknown")
         raise IncompleteResponse(f"{provider.label} の Responses API 応答が未完了です: {reason}", reason)
-
-    if is_audit_wire(text_format):
-        refusal = _response_refusal(response)
-        if refusal:
-            raise RuntimeError(f"{provider.label} の Responses API が拒否を返しました: {refusal}")
-        text = _response_output_text(response)
-        try:
-            # 戻り値はBaseModelだがwire型ではない。呼出側がcanonicalと原wire診断を明示的に取り出す。
-            return cast(StructuredOutputT, decode_audit_wire(text, text_format))
-        except (ValueError, TypeError) as exc:
-            raise InvalidStructuredOutput("固定キー監査の応答を構造検証できません。") from exc
 
     refusal = _response_refusal(response)
     if refusal:

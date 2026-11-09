@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
 from dataclasses import dataclass
 
 from rag_parser_core.language import LanguagePack, per_pack
 from rag_parser_core.language.text import alternation, numbered, text_patterns
 
 from rag_engine.generation.answer_passage_vocabulary import alt as _v
-from rag_engine.generation.check_cues import check_cues
 from rag_engine.parsing.structural_text import is_table_rule as is_table_rule
-from rag_engine.retrieval.task_contract import generic_target_words
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
 # 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
@@ -420,10 +417,6 @@ _LINK_LINE = re.compile(r"(?:\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)[\s、,，]*)+|h
 _SENTENCE_END = re.compile(r"(?:ます|ません|です|でした|ました|ください|ない|無い|ある|する|できる|れる|った|いた|した|だ)[。．.!！]?$")
 # 後ろの注記の括弧（「（はい／いいえ）」「【clarification: target】」）は許す (#1317)。
 _QUESTION = re.compile(r".*[？?]\s*(?:[（(【][^）)】\n]{1,40}[）)】]\s*)*。?")
-_INFO_REQUEST = re.compile(
-    r".*(?:教えてください|お知らせください|お教えください|お聞かせください|ご回答ください|お答えください|確認させてください)[。．!！]?"
-)
-_BUNDLED_CLAIM = re.compile(r"ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし")
 
 
 def table_header_lines(text: str) -> set[str]:
@@ -599,12 +592,6 @@ def is_citation_line(text: str) -> bool:
     return _is_reference_only(value) or _is_document_location(value) or _is_document_section(value)
 
 
-def is_question_to_user(text: str) -> bool:
-    """利用者への確認の質問・情報を求める依頼の文か。主張を抱き合わせた文（「〜できますが、〜か？」）は除く (#1306)。"""
-    value = _LIST_MARK.sub("", text.strip(), count=1).strip()
-    if not (_QUESTION.fullmatch(value) or _INFO_REQUEST.fullmatch(value)):
-        return False
-    return not _BUNDLED_CLAIM.search(value)
 
 
 # 業務ガイドが見つからなかったことだけを述べる文 (#1452。「補足：この内容に当たる公開の業務ガイドは見つかりませんでした
@@ -630,23 +617,6 @@ def is_guide_not_found(text: str) -> bool:
     return not is_operation_instruction(value)
 
 
-def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (), heading_lines: Collection[str] = ()) -> bool:
-    """回答の最終の検証で主張として監査しない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・
-    業務ガイドが見つからなかったことだけを述べる文）か (#1306 / #1317 / #1452)。
-
-    表の見出しの行と、番号つき・箇条書きの見出しの行は次の行で決まるので、呼び出し側が回答全体の
-    ``table_header_lines`` と ``list_heading_lines``（#1481 / #1482 / #1486）を渡す。
-    """
-    value = text.strip()
-    return (
-        is_heading(text)
-        or is_citation_line(text)
-        or is_table_rule(text)
-        or value in table_headers
-        or value in heading_lines
-        or is_question_to_user(text)
-        or is_guide_not_found(text)
-    )
 
 
 @dataclass(frozen=True)
@@ -682,31 +652,8 @@ def is_operation_instruction(text: str) -> bool:
     return bool(_operation_cues().instruction.search(text))
 
 
-# ボタン名とみなす最短の字数。1 字（「各ボタン」「同ボタン」）は指示語・接頭語で、ボタンの名前ではないことが多い。
-_MIN_BUTTON_NAME_CHARS = 2
-# 名前に付いたファンクションキー（「F5実行ボタン」）。キーの書き方（「(F5)実行」）は原文と違い得るので、名前から除いて比べる。
-_BUTTON_FUNCTION_KEY = re.compile(r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])")
 
 
-def button_names_absent(text: str, cited_texts: Collection[str], question: str = "") -> list[str]:
-    """説明が案内したボタン名（「実行ボタン」の「実行」）のうち、引いた根拠のどの本文にも名前が無いもの（#3822）。
-
-    説明が引いた原文より細かい操作（「入力して実行ボタンを押す」）を、画面を開く手順だけの原文で裏付けた形を見つける。
-    名前の文字列そのものが、引いたすべての根拠に無いことだけを見る。書き方の違い（「実行のボタン」「"実行"ボタン」）
-    では判定せず、名前が原文にあれば、その操作を原文が支えるか（意味の支持）は判定しない。質問にある名前、総称語、
-    1 字の名前は対象にしない。呼ぶ側は説明・根拠・質問を同じ文字の形（``check_view``）にそろえて渡す。
-    """
-
-    def compact(value: str) -> str:
-        return _BUTTON_FUNCTION_KEY.sub("", re.sub(r"\s+", "", value))
-
-    body, asked, generic = compact("\n".join(cited_texts)), compact(question), set(generic_target_words())
-    names = (compact(name) for name in check_cues().button.findall(re.sub(r"\s+", "", text)))
-    return [
-        name
-        for name in dict.fromkeys(names)
-        if len(name) >= _MIN_BUTTON_NAME_CHARS and name not in generic and name not in body and name not in asked
-    ]
 
 
 # 総称語だけの削除対象。「データを削除」は資料の具体名（「履歴情報」「行」）と一致しないので対象にしない (#696)。

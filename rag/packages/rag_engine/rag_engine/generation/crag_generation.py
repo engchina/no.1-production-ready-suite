@@ -253,16 +253,8 @@ def project_partial_answer(
 ) -> tuple[Any, dict[str, Any]]:
     """部分回答の説明を、評価が確かめた部分の原文と照らして扱う。
 
-    監査なし（``audited=False``）では説明を外さない（#3843・#2738）。確かめた部分の写しを引く説明は印なしで残し、
-    そのほかの説明は本文に残して ``unassessed`` の印を付け、確かめた写しを直接の原文として足す。要約・当てはめは
-    残す（監査なしの警告は通常の検査が付ける）。未確認・不足の観点は ``gap_lines`` で示す。
-    監査あり（意味監査を採用したとき）は、意味の支持を確かめた説明と確かめた写しだけに戻す。
+    説明は外さない（#3843）。確かめた写しを原文として足し、未確認の観点は ``gap_lines`` で示す。
     """
-    from rag_engine.generation.semantic_observation import diagnostic_only
-
-    timing = getattr(current, "timing", {})
-    if diagnostic_only(timing) and timing.get("audit") != "none":
-        return current, {"applied": False, "reason": "semantic_audit_diagnostic_only"}
     if view is None or view.get("required_aspect_coverage") == "complete":
         return current, {"applied": False}
     if not any(part.get("status") == "supported" for part in view.get("answerable_parts") or ()):

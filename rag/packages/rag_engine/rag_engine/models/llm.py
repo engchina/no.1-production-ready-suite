@@ -283,14 +283,6 @@ class CragRetrievalGradeOutput(_StrictModel):
     )
 
 
-class CitedEvidenceOutput(_StrictModel):
-    """回答生成で実際に参照した証拠 evidence を表します。"""
-
-    evidence_id: str
-    source: str
-    page: str
-    look_at: str
-    visible_evidence: str
 
 
 class SectionExtractionQuote(_StrictModel):
@@ -491,33 +483,10 @@ class RequestScopePlan(_StrictModel):
     request_coverage: list[RequestCoverageRange] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
 
 
-class CatalogClaimSupport(_StrictModel):
-    """条の根拠が支える説明 1 つ（#3526）。"""
-
-    item_index: int = Field(description="items の index（0 始まり）。")
-    lines: str = Field(
-        default="",
-        max_length=20,
-        description="text を支える行の番号か範囲（例: 3、3-5）。行番号（`3| `）の付いた根拠では必ず書き、行番号の無い根拠は空。",
-    )
 
 
-class CatalogEvidenceReview(_StrictModel):
-    """条の目録で選んだ条の根拠 1 つの検討の結果（#3526）。"""
-
-    evidence_id: str = Field(description="evidence の evidence_id。")
-    supports: list[CatalogClaimSupport] = Field(
-        default_factory=list,
-        max_length=4,
-        description="この根拠の原文がそれだけで text の全体を支える items。原文が text の一部だけを述べる、別の対象・場面の規定なら選ばない。"
-        "支える item が無ければ空。",
-    )
 
 
-class CatalogEvidenceReviews(_StrictModel):
-    """条の目録で選んだ条の根拠を、回答の説明の出典に使えるか 1 つずつ検討する（#3526）。"""
-
-    reviews: list[CatalogEvidenceReview] = Field(max_length=16, description="evidence の各根拠を 1 回ずつ判定する。")
 
 
 class ExternalDataItem(_StrictModel):
@@ -852,30 +821,8 @@ class GroundedApplicationReview(_StrictModel):
     reason: str = Field(description="判定の根拠を短く。")
 
 
-class ApplicationDraft(_StrictModel):
-    """規則の当てはめだけを作る段の出力（#2159）。結論の文は当てはめと規則でつないだものだけ。"""
-
-    response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
-
-    applications: list[GroundedApplication] = Field(
-        default_factory=list,
-        max_length=MAX_ANSWER_PARTS,
-        description="質問に書かれた事実に、items の規則を当てはめた結果。当てはめられる規則と事実が無ければ空。",
-    )
-    summary: str = Field(
-        description="items の規則と applications の結果でつないだ結論を 1〜2 文で。当てはめが無ければ空文字。見出し・出典・Markdown は書かない。"
-    )
 
 
-class ApplicationAudit(_StrictModel):
-    """当てはめの段の監査（#2159）。"""
-
-    application_reviews: list[GroundedApplicationReview] = Field(
-        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application の監査。"
-    )
-    summary_supported: bool = Field(
-        description="summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。"
-    )
 
 
 class MissingContentEvidence(_StrictModel):
@@ -930,33 +877,6 @@ class GuideRequirementReview(_StrictModel):
     reason: str = Field(max_length=600, description="不足している操作・条件。充足なら空文字。")
 
 
-class GroundedFactAudit(_StrictModel):
-    """通常の回答の監査（#2795）。主張の支持・適用、summary、目的との一致、要求と業務ガイドの要件の充足を判定する。
-
-    未使用の根拠は列挙しない（詳しい監査 ``GroundedAudit`` の項目）。受け取った後は ``GroundedAudit`` に写して使う
-    （判定しない項目は空）。
-    """
-
-    reviews: list[GroundedItemReview] = Field(description="各 item の局所監査。")
-    guide_requirement_reviews: list[GuideRequirementReview] = Field(
-        default_factory=list,
-        max_length=200,
-        description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
-    )
-    application_reviews: list[GroundedApplicationReview] = Field(
-        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
-    )
-    request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
-    summary_output_fields: OutputFieldEvidence | None = Field(
-        default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
-    )
-    summary_basis: list[str] = Field(default_factory=list, description="summary を支える items の text 全文。")
-    summary_supported: bool = Field(
-        description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
-    )
-    goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
-        description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
-    )
 
 
 class GroundedAudit(_StrictModel):

@@ -48,7 +48,6 @@ from rag_engine.dependencies import (
     injected_context_chunks,
     injected_embedder,
     injected_prefetch_search,
-    injected_question_subjects,
     parse_multimodal_response,
     parse_text_response,
     record_retrieval_stage,
@@ -173,7 +172,6 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
-from rag_engine.generation.application_explanation import explain_applications
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.confirmed_context import confirmed_premise_records
@@ -215,7 +213,6 @@ from rag_engine.generation.query_prompts import (
     _retrieval_queries,
     _text_search_query_source,
 )
-from rag_engine.generation.request_recovery import request_recovery_plan
 from rag_engine.generation.step_details import (
     add_evidence_lines,
     aspect_labels,
@@ -2459,7 +2456,6 @@ def _grounded_prompt(
     spans: Sequence[dict[str, Any]],
     context: AnswerContext,
     images: Sequence[dict[str, Any]],
-    feedback: dict[str, Any] | None,
     question_plan: QuestionPlan | None,
     runtime_knowledge: RuntimeKnowledgeContext | None,
     query_expansion: QueryExpansionResult | None,
@@ -2535,7 +2531,6 @@ def _grounded_prompt(
                 question,
                 spans,
                 preface=preface,
-                feedback=feedback,
                 known_gaps=known_gaps,
                 guide_steps=runtime_knowledge.guide_steps if runtime_knowledge is not None else (),
                 guide_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge is not None else (),
@@ -2890,7 +2885,6 @@ def synthesize_grounded_answer(
             selected,
             context,
             images,
-            None,
             question_plan,
             runtime_knowledge,
             query_expansion,

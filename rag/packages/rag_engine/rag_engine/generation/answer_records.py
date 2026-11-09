@@ -651,16 +651,6 @@ def _records_by_rerank_ranks(
     return selected
 
 
-def _records_by_rerank_indices(records: Sequence[AnswerRecord], indices: Sequence[int]) -> list[AnswerRecord]:
-    selected: list[AnswerRecord] = []
-    seen: set[int] = set()
-    for index in indices:
-        if index in seen or index < 0 or index >= len(records):
-            continue
-        selected.append(records[index])
-        seen.add(index)
-    selected.extend(record for index, record in enumerate(records) if index not in seen)
-    return selected
 
 
 def _original_candidate_index(index: int, candidate_indices: Sequence[int] | None) -> int:
