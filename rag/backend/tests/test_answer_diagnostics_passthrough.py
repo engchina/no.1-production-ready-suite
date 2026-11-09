@@ -82,7 +82,7 @@ def test_generation_citation_traces_are_copied_from_the_excluded_rounds() -> Non
 def test_new_keys_do_not_grow_the_stored_record_much() -> None:
     # diagnostics_json は本文・プロンプトの写しで肥大させない（新たに写るのは数値と短い状態だけ）。
     large = "合成の本文" * 4000
-    trace = {key: large for key in _TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS}
+    trace: dict[str, object] = {key: large for key in _TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS}
     base = len(json.dumps(_diagnostics(trace), ensure_ascii=False))
     trace.update(
         pipeline="grounded",
