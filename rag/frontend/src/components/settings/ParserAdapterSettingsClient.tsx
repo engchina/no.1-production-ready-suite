@@ -10,24 +10,16 @@ import {
   Button,
   FormActionBar,
   FormStatus,
-  ProcessingIndicator,
   TimedLoadingState,
   FormSkeleton,
   RoadmapBadge,
-  StatusBadge,
-  TextField,
-  type FieldWidth,
 } from "@production-ready/ui";
-import {
-  SettingsTestResultPanel,
-  toSettingsTestResultDetails,
-  type SettingsTestResultTone,
-} from "@production-ready/system-settings";
 import { useMemo, useState } from "react";
 import {
   Plug,
   RotateCcw,
   Save,
+  Settings,
 } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
@@ -40,8 +32,6 @@ import {
   ApiError,
   type ExternalParserBackendName,
   type ExternalParserConnectionData,
-  type ExternalParserConnectionStatus,
-  type ExternalParserConnectionStatusData,
   type ParserAdapterBackend,
   type ParserAdapterBackendName,
   type ParserAdapterSettingsData,
@@ -50,7 +40,6 @@ import {
   type ParserServiceBackendName,
   type ServiceProfile,
 } from "@/lib/api";
-import { formatDateTime } from "@/lib/format";
 import { sortParserBackends } from "@/lib/parser-backend-order";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -61,13 +50,16 @@ import {
 } from "@/lib/parser-capabilities";
 import {
   useParserAdapterSettings,
-  useExternalParserStatus,
   useServiceStatusQueries,
   useUpdateParserAdapterSettings,
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
+import {
+  ConnectionConfiguredBadge,
+  ExternalConnectionSheet,
+  externalConnectionSheetId,
+} from "./ExternalConnectionSheet";
 import { PostParseSettingsCard } from "./PostParseSettingsCard";
 
 type ParserAdapterForm = {
@@ -77,23 +69,10 @@ type ParserAdapterForm = {
   dots_ocr_enabled: boolean;
   structured_records_jsonl_enabled: boolean;
   xml_tree_json_enabled: boolean;
-  connections: Record<ExternalParserBackendName, ExternalParserConnectionForm>;
 };
-type ExternalParserConnectionForm = {
-  endpoint: string;
-  model: string;
-  api_key: string;
-  clear_api_key: boolean;
-};
-type ParserAdapterFlagField = Exclude<keyof ParserAdapterForm, "adapter_backend" | "connections">;
-type ConnectionFieldErrors = Record<string, string>;
+type ParserAdapterFlagField = Exclude<keyof ParserAdapterForm, "adapter_backend">;
 
 const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["dots_ocr"];
-const EXTERNAL_PROTOCOL_LABEL = "OpenAI /v1/chat/completions";
-const EXTERNAL_ENDPOINT_PLACEHOLDER = "https://api.example.com/v1";
-
-/** 外部 GPU 接続の欄の上限（backend の ExternalParserConnectionUpdate の max_length と同じ。#976）。 */
-const EXTERNAL_CONNECTION_MAX_LENGTH = { endpoint: 2048, model: 512, apiKey: 4096 } as const;
 
 const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
   docling: "docling_enabled",
@@ -149,7 +128,6 @@ export function ParserAdapterSettingsClient() {
   const query = useParserAdapterSettings();
   const save = useUpdateParserAdapterSettings();
   const [form, setForm] = useState<ParserAdapterForm | null>(null);
-  const [connectionErrors, setConnectionErrors] = useState<ConnectionFieldErrors>({});
   // 直前に取り込んだ解析エンジンの server 値。server 値が変わったレンダーだけ、未編集ならフォームをそろえる。
   // 「解析後の処理」の保存でも query.data は変わるため、解析エンジンの部分だけを比べる（#528）。
   // 保存の開始・終了（isPending）ではフォームを戻さない（失敗しても入力を残す。#976）。
@@ -211,44 +189,12 @@ export function ParserAdapterSettingsClient() {
 
   function resetForm() {
     save.reset();
-    setConnectionErrors({});
     setForm(formFromSettings(settings));
-  }
-
-  function updateConnection(
-    backend: ExternalParserBackendName,
-    update: Partial<ExternalParserConnectionForm>
-  ) {
-    save.reset();
-    setConnectionErrors((current) => {
-      const next = { ...current };
-      for (const field of Object.keys(update)) delete next[`${backend}.${field}`];
-      return next;
-    });
-    setForm((current) =>
-      current
-        ? {
-            ...current,
-            connections: {
-              ...current.connections,
-              [backend]: { ...current.connections[backend], ...update },
-            },
-          }
-        : current
-    );
   }
 
   function submit() {
     if (!form || save.isPending) return;
-    const roadmap = roadmapBackendsFromSettings(settings);
-    const errors = validateConnections(form, roadmap);
-    setConnectionErrors(errors);
-    const firstError = Object.keys(errors)[0];
-    if (firstError) {
-      requestAnimationFrame(() => focusConnectionError(firstError));
-      return;
-    }
-    save.mutate(parserSettingsUpdate(form, roadmap), {
+    save.mutate(parserSettingsUpdate(form), {
       onSuccess: (data) => {
         const next = formFromSettings(data);
         setBase(serializeForm(next));
@@ -267,9 +213,7 @@ export function ParserAdapterSettingsClient() {
         settings={settings}
         saving={save.isPending}
         errorMessage={save.isError ? saveError : null}
-        connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
-        onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
       />
@@ -285,9 +229,7 @@ function OverviewCard({
   settings,
   saving,
   errorMessage,
-  connectionErrors,
   onBackendChange,
-  onConnectionChange,
   onReset,
   onSubmit,
 }: {
@@ -296,12 +238,7 @@ function OverviewCard({
   settings: ParserAdapterSettingsData;
   saving: boolean;
   errorMessage: string | null;
-  connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
-  onConnectionChange: (
-    backend: ExternalParserBackendName,
-    update: Partial<ExternalParserConnectionForm>
-  ) => void;
   onReset: () => void;
   onSubmit: () => void;
 }) {
@@ -355,6 +292,8 @@ function OverviewCard({
       ),
     [settings.connections]
   );
+  // 接続の設定を開いているエンジン（#4740）。開くだけで使用エンジンの選択は変えない。
+  const [connectionSheetBackend, setConnectionSheetBackend] = useState<ExternalParserBackendName | null>(null);
   return (
     <Card>
       <CardHeader>
@@ -380,7 +319,7 @@ function OverviewCard({
             aria-label={t("settings.parserAdapters.backend")}
             className="space-y-2"
           >
-            {/* 1 行 2 枚で横幅いっぱいに並べる（下の外部 GPU 接続カードと同じ 2 列）。 */}
+            {/* 1 行 2 枚で横幅いっぱいに並べる。 */}
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {orderedBackends.map((backend) => {
                   const roadmap = roadmapBackends.has(backend);
@@ -399,6 +338,8 @@ function OverviewCard({
                   const capability = findParserCapability(settings.capabilities, backend);
                   const supportedFormats = formatSupportedFormats(capability);
                   const supportedExtensions = formatSupportedExtensions(capability);
+                  // 外部 GPU のエンジンは、カードの「設定」から接続を開く（準備中は出さない）。
+                  const connectionBackend = isExternalBackend(backend) && !roadmap ? backend : null;
                   return (
                     <div key={backend} className="relative min-w-0">
                       <input
@@ -418,7 +359,8 @@ function OverviewCard({
                         data-surface-tint={selected ? "accent" : undefined}
                         htmlFor={`settings-parser-backend-${backend}`}
                         className={cn(
-                          "block h-full cursor-pointer min-h-[5.43rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                          connectionBackend ? "flex flex-col" : "block",
+                          "h-full cursor-pointer min-h-[5.43rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                           roadmap
                             ? // 準備中は無効の地と灰色の名前にし、理由は読める濃さのまま残す（全体を薄くしない。#3374）。
                               "border-border bg-surface-disabled text-fg-disabled peer-disabled:opacity-100"
@@ -453,7 +395,13 @@ function OverviewCard({
                             {supportedExtensions}
                           </span>
                         ) : null}
-                        <span className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span
+                          className={cn(
+                            "flex flex-wrap items-center gap-1.5",
+                            // 「設定」のボタンと同じ行に、重ならないよう右を空けて並べる。
+                            connectionBackend ? "mt-auto min-h-[var(--control-height-touch)] pt-2 pr-24" : "mt-2"
+                          )}
+                        >
                           {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
                           {service && !roadmap && !service.configured ? (
                             <ConnectionConfiguredBadge configured={false} />
@@ -463,6 +411,27 @@ function OverviewCard({
                           ) : null}
                         </span>
                       </label>
+                      {/* ラベルの外（ラジオの上の層）に置き、押してもエンジンを選ばない（#4740）。 */}
+                      {connectionBackend ? (
+                        <div className="absolute bottom-2 right-3 z-20 flex h-[var(--control-height-touch)] items-center">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            icon={Settings}
+                            disabled={saving}
+                            aria-label={t("settings.parserAdapters.connection.settingsLabel", {
+                              backend: backendLabel(connectionBackend),
+                            })}
+                            aria-haspopup="dialog"
+                            aria-expanded={connectionSheetBackend === connectionBackend}
+                            aria-controls={externalConnectionSheetId(connectionBackend)}
+                            onClick={() => setConnectionSheetBackend(connectionBackend)}
+                          >
+                            {t("settings.parserAdapters.connection.settings")}
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -474,29 +443,6 @@ function OverviewCard({
             </p>
           ) : null}
         </div>
-        <section className="space-y-3 border-t border-border pt-5">
-          <div>
-            <h3 className="text-sm font-semibold text-fg">
-              {t("settings.parserAdapters.connection.title")}
-            </h3>
-            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-              {t("settings.parserAdapters.connection.description")}
-            </p>
-          </div>
-          <div className="grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-2">
-            {EXTERNAL_BACKENDS.filter((backend) => !roadmapBackends.has(backend)).map((backend) => (
-              <ExternalConnectionCard
-                key={backend}
-                backend={backend}
-                connection={connectionByBackend.get(backend)}
-                value={form.connections[backend]}
-                errors={connectionErrors}
-                saving={saving}
-                onChange={(update) => onConnectionChange(backend, update)}
-              />
-            ))}
-          </div>
-        </section>
         <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <RuntimeFact
             label={t("settings.parserAdapters.backend")}
@@ -540,279 +486,18 @@ function OverviewCard({
             ) : null
           }
         />
+        {EXTERNAL_BACKENDS.filter((backend) => !roadmapBackends.has(backend)).map((backend) => (
+          <ExternalConnectionSheet
+            key={backend}
+            backend={backend}
+            backendLabel={backendLabel(backend)}
+            connection={connectionByBackend.get(backend)}
+            open={connectionSheetBackend === backend}
+            onClose={() => setConnectionSheetBackend(null)}
+          />
+        ))}
       </CardContent>
     </Card>
-  );
-}
-
-function ExternalConnectionCard({
-  backend,
-  connection,
-  value,
-  errors,
-  saving,
-  onChange,
-}: {
-  backend: ExternalParserBackendName;
-  connection: ExternalParserConnectionData | undefined;
-  value: ExternalParserConnectionForm;
-  errors: ConnectionFieldErrors;
-  saving: boolean;
-  onChange: (update: Partial<ExternalParserConnectionForm>) => void;
-}) {
-  const statusQuery = useExternalParserStatus(backend);
-  // 接続確認の所要時間（API は返さないため、押してから結果が返るまでを画面で測る。messaging.md §10.3）。
-  const [elapsedMs, setElapsedMs] = useState<number | undefined>(undefined);
-  const runConnectionTest = async () => {
-    const startedAt = Date.now();
-    await statusQuery.refetch();
-    setElapsedMs(Date.now() - startedAt);
-  };
-  const dirty =
-    value.endpoint.trim() !== (connection?.endpoint ?? "") ||
-    value.model.trim() !== (connection?.model ?? "") ||
-    Boolean(value.api_key) ||
-    value.clear_api_key;
-  const endpointError = errors[`${backend}.endpoint`];
-  const modelError = errors[`${backend}.model`];
-  const endpointId = `external-parser-${backend}-endpoint`;
-  const modelId = `external-parser-${backend}-model`;
-  const apiKeyId = `external-parser-${backend}-api-key`;
-  const clearApiKeyId = `external-parser-${backend}-clear-api-key`;
-
-  return (
-    <div data-testid={`external-parser-connection-${backend}`} data-surface-tint="neutral" className="min-w-0 rounded-md border border-border bg-surface-hover p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h4 className="text-sm font-semibold text-fg">{backendLabel(backend)}</h4>
-          <p className="mt-0.5 break-all text-xs text-fg-muted">
-            {EXTERNAL_PROTOCOL_LABEL}
-          </p>
-        </div>
-        <ConnectionConfiguredBadge configured={Boolean(connection?.configured)} />
-      </div>
-
-      <div className="mt-4 space-y-3">
-        <ConnectionTextField
-          id={endpointId}
-          label={t("settings.parserAdapters.connection.endpoint")}
-          width="full"
-          type="url"
-          maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.endpoint}
-          value={value.endpoint}
-          placeholder={EXTERNAL_ENDPOINT_PLACEHOLDER}
-          error={endpointError}
-          disabled={saving}
-          onChange={(endpoint) => onChange({ endpoint })}
-        />
-        <ConnectionTextField
-          id={modelId}
-          label={t("settings.parserAdapters.connection.model")}
-          width="md"
-          maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.model}
-          value={value.model}
-          placeholder="model-id"
-          // Endpoint を入力したときだけ Model が要る（validateConnections と同じ条件。#531）
-          required={Boolean(value.endpoint.trim())}
-          error={modelError}
-          disabled={saving}
-          onChange={(model) => onChange({ model })}
-        />
-        <ConnectionTextField
-          id={apiKeyId}
-          label={t("settings.parserAdapters.connection.apiKey")}
-          width="lg"
-          type="password"
-          maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.apiKey}
-          value={value.api_key}
-          // 任意の欄は placeholder で「任意」と示さない（#531）。保存済みのときだけ保持の説明を出す。
-          placeholder={
-            connection?.api_key_configured ? t("settings.parserAdapters.connection.apiKeyRetained") : undefined
-          }
-          disabled={saving || value.clear_api_key}
-          onChange={(api_key) => onChange({ api_key, clear_api_key: false })}
-        />
-        <label
-          htmlFor={clearApiKeyId}
-          className="flex min-h-[var(--control-height-touch)] cursor-pointer items-center gap-2 rounded-md text-xs text-fg"
-        >
-          <input
-            id={clearApiKeyId}
-            type="checkbox"
-            checked={value.clear_api_key}
-            disabled={saving || !connection?.api_key_configured}
-            onChange={(event) =>
-              onChange({ clear_api_key: event.target.checked, api_key: "" })
-            }
-            className="h-4 w-4 rounded border-border accent-accent-emphasis"
-          />
-          {t("settings.parserAdapters.connection.clearApiKey")}
-        </label>
-      </div>
-
-      <div className="mt-4 space-y-2 border-t border-border pt-3">
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full sm:w-auto"
-          loading={statusQuery.isFetching}
-          disabled={saving || dirty || !connection?.configured}
-          onClick={() => void runConnectionTest()} icon={Plug}>
-          {t("settings.parserAdapters.connection.test")}
-        </Button>
-        {statusQuery.isFetching ? (
-          // 外部の GPU parser へ実際に接続するため、起動直後や高負荷時は数秒以上かかる。
-          <ProcessingIndicator
-            active
-            label={t("settings.parserAdapters.connection.testing", { backend: backendLabel(backend) })}
-            operationKey={`external-parser-status-${backend}`}
-            placement="action"
-            activityIcon="none"
-            testId={`external-parser-status-processing-${backend}`}
-          />
-        ) : null}
-        {dirty ? (
-          <p className="text-xs leading-relaxed text-fg-muted">
-            {t("settings.parserAdapters.connection.saveBeforeTest")}
-          </p>
-        ) : null}
-        {/* 結果は「接続を確認」の直下にカードの全幅で出し、入力を変えたら消す（messaging.md §10）。 */}
-        {!dirty && !statusQuery.isFetching && (statusQuery.data || statusQuery.isError) ? (
-          <ConnectionTestResult
-            backend={backend}
-            data={statusQuery.isError ? undefined : statusQuery.data}
-            error={statusQuery.isError ? statusQuery.error : null}
-            elapsedMs={elapsedMs}
-            checkedAt={
-              statusQuery.isError ? statusQuery.errorUpdatedAt : statusQuery.dataUpdatedAt
-            }
-          />
-        ) : null}
-      </div>
-      {backend === "dots_ocr" ? <div className="mt-4"><FeaturePromptDisclosure promptKey="external_ocr" /></div> : null}
-    </div>
-  );
-}
-
-function ConnectionTextField({
-  id,
-  label,
-  value,
-  width,
-  type = "text",
-  maxLength,
-  placeholder,
-  required = false,
-  error,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  /** 値の種類の幅（URL は full、モデル名は md、API キーは lg。#1891）。 */
-  width: FieldWidth;
-  type?: "text" | "url" | "password";
-  /** backend（ExternalParserConnectionUpdate）と同じ上限（#976）。 */
-  maxLength: number;
-  placeholder?: string;
-  required?: boolean;
-  error?: string;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <TextField
-      id={id}
-      className="min-w-0"
-      label={label}
-      width={width}
-      type={type}
-      maxLength={maxLength}
-      value={value}
-      placeholder={placeholder}
-      required={required}
-      disabled={disabled}
-      autoComplete="off"
-      error={error}
-      onValueChange={onChange}
-    />
-  );
-}
-
-/** 接続設定の有無（リソースの状態）。共有の StatusBadge で出す（messaging.md §10.2）。 */
-function ConnectionConfiguredBadge({ configured }: { configured: boolean }) {
-  return (
-    <StatusBadge
-      variant={configured ? "success" : "warning"}
-      label={
-        configured
-          ? t("settings.parserAdapters.connection.configured")
-          : t("settings.parserAdapters.serviceBackend.unconfigured")
-      }
-    />
-  );
-}
-
-const CONNECTION_TEST_TONE: Record<ExternalParserConnectionStatus, SettingsTestResultTone> = {
-  available: "success",
-  unconfigured: "warning",
-  unreachable: "danger",
-  model_missing: "danger",
-  invalid_response: "danger",
-};
-
-/**
- * 接続確認の結果パネル（システム設定の接続テストと同じ部品。messaging.md §10）。
- * 1 文目に何が起きたか、次に所要時間。backend・状態・version・警告コードは「詳細」に畳む。
- */
-function ConnectionTestResult({
-  backend,
-  data,
-  error,
-  elapsedMs,
-  checkedAt,
-}: {
-  backend: ExternalParserBackendName;
-  data: ExternalParserConnectionStatusData | undefined;
-  error: unknown;
-  elapsedMs: number | undefined;
-  checkedAt: number;
-}) {
-  const checkedAtText = checkedAt ? formatDateTime(new Date(checkedAt).toISOString()) : undefined;
-  const testId = `external-parser-test-result-${backend}`;
-  if (error || !data) {
-    const apiError = error instanceof ApiError ? error : null;
-    return (
-      <SettingsTestResultPanel
-        tone="danger"
-        message={apiError?.message ?? t("settings.parserAdapters.connection.testFailed")}
-        elapsedMs={elapsedMs}
-        checkedAt={checkedAtText}
-        details={toSettingsTestResultDetails({
-          backend,
-          status_code: apiError?.status,
-          error_code: apiError?.errorCode,
-          request_id: apiError?.requestId,
-        })}
-        testId={testId}
-      />
-    );
-  }
-  return (
-    <SettingsTestResultPanel
-      tone={CONNECTION_TEST_TONE[data.status]}
-      message={t(`settings.parserAdapters.connection.status.${data.status}` as I18nKey)}
-      elapsedMs={elapsedMs}
-      checkedAt={checkedAtText}
-      details={toSettingsTestResultDetails({
-        backend: data.backend,
-        status: data.status,
-        version: data.version,
-        warning_code: data.warning_code,
-      })}
-      testId={testId}
-    />
   );
 }
 
@@ -891,22 +576,6 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
     structured_records_jsonl_enabled: enabledByBackend.get("structured_records_jsonl") ?? false,
     xml_tree_json_enabled: enabledByBackend.get("xml_tree_json") ?? false,
-    connections: Object.fromEntries(
-      EXTERNAL_BACKENDS.map((backend) => {
-        const connection = (settings.connections ?? []).find(
-          (candidate) => candidate.backend === backend
-        );
-        return [
-          backend,
-          {
-            endpoint: connection?.endpoint ?? "",
-            model: connection?.model ?? defaultExternalModel(backend),
-            api_key: "",
-            clear_api_key: false,
-          },
-        ];
-      })
-    ) as Record<ExternalParserBackendName, ExternalParserConnectionForm>,
   };
 }
 
@@ -933,14 +602,10 @@ function serializeForm(form: ParserAdapterForm) {
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
-    connections: form.connections,
   });
 }
 
-function parserSettingsUpdate(
-  form: ParserAdapterForm,
-  roadmap: ReadonlySet<ParserAdapterBackend>
-): ParserAdapterSettingsUpdate {
+function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpdate {
   return {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
@@ -948,60 +613,5 @@ function parserSettingsUpdate(
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
-    connections: EXTERNAL_BACKENDS.filter((backend) => !roadmap.has(backend)).map((backend) => {
-      const connection = form.connections[backend];
-      return {
-        backend,
-        endpoint: connection.endpoint.trim(),
-        model: connection.model.trim(),
-        ...(connection.api_key ? { api_key: connection.api_key } : {}),
-        ...(connection.clear_api_key ? { clear_api_key: true } : {}),
-      };
-    }),
   };
-}
-
-function validateConnections(
-  form: ParserAdapterForm,
-  roadmap: ReadonlySet<ParserAdapterBackend>
-): ConnectionFieldErrors {
-  const errors: ConnectionFieldErrors = {};
-  for (const backend of EXTERNAL_BACKENDS) {
-    if (roadmap.has(backend)) continue;
-    const connection = form.connections[backend];
-    const endpoint = connection.endpoint.trim();
-    if (endpoint) {
-      try {
-        const parsed = new URL(endpoint);
-        if (
-          // backend（ExternalParserConnectionUpdate）と同じく `http(s)://host` の形だけを受け付ける。
-          // `new URL("http:foo")` は `http://foo/` として通るため、書き方も確かめる（#976）。
-          !/^https?:\/\/[^/?#]/i.test(endpoint) ||
-          !["http:", "https:"].includes(parsed.protocol) ||
-          parsed.username ||
-          parsed.password ||
-          parsed.search ||
-          parsed.hash
-        ) {
-          errors[`${backend}.endpoint`] = t("settings.parserAdapters.connection.invalidEndpoint");
-        }
-      } catch {
-        errors[`${backend}.endpoint`] = t("settings.parserAdapters.connection.invalidEndpoint");
-      }
-    }
-    if (endpoint && !connection.model.trim()) {
-      errors[`${backend}.model`] = t("settings.parserAdapters.connection.modelRequired");
-    }
-  }
-  return errors;
-}
-
-function focusConnectionError(key: string) {
-  const [backend, field] = key.split(".");
-  document.getElementById(`external-parser-${backend}-${field}`)?.focus();
-}
-
-function defaultExternalModel(backend: ExternalParserBackendName) {
-  if (backend === "dots_ocr") return "rednote-hilab/dots.mocr";
-  return "";
 }
