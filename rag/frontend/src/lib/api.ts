@@ -4839,6 +4839,7 @@ export const api = {
   updateFileTypeDefaultsSettings: (body: FileTypeDefaultsUpdate) =>
     request<FileTypeDefaultsSettingsData>("/api/settings/file-type-defaults", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   getPreprocessSettings: () =>

@@ -1,7 +1,6 @@
 """正式生成入口の直接原文と導出公開門を、同じ合成資料で確認する。"""
 
 import re
-from dataclasses import replace
 
 from audit_fixtures import is_explanation_schema, synthetic_explanation
 
@@ -63,7 +62,7 @@ def run(*, derived: bool, readback: str | None = None):
         source_run_id="synthetic",
         metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(text)}]}},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
+    settings = get_settings(environ={}, dotenv_path=None)
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
             "項目Aの値と2件分を教えてください。" if derived else "項目Aの値を教えてください。",

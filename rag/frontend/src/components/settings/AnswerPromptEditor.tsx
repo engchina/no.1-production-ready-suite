@@ -14,7 +14,7 @@ import {
   TimedLoadingState,
 } from "@production-ready/ui";
 import { History, RotateCcw, Save } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type AnswerPromptKey, type AnswerPromptView } from "@/lib/api";
@@ -51,7 +51,16 @@ export function AnswerPromptCard({ promptKey }: { promptKey: AnswerPromptKey }) 
  * カードの枠を持たないプロンプトの編集欄。ほかの設定の節の中に置くときに使う
  * （文書解析の「解析後の処理」の Vision の中の読み取りプロンプト。#528）。
  */
-export function AnswerPromptPanel({ promptKey, fieldLabel }: { promptKey: AnswerPromptKey; fieldLabel?: string }) {
+export function AnswerPromptPanel({
+  promptKey,
+  fieldLabel,
+  onDirtyChange,
+}: {
+  promptKey: AnswerPromptKey;
+  fieldLabel?: string;
+  /** 未保存の編集があるかを親に知らせる（パネルを閉じるときの確認に使う。#4740）。 */
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const query = useAnswerPrompts();
   const prompt = query.data?.prompts.find((item) => item.key === promptKey);
   if (query.isPending) {
@@ -73,12 +82,20 @@ export function AnswerPromptPanel({ promptKey, fieldLabel }: { promptKey: Answer
   }
   return (
     <div className="space-y-4">
-      <AnswerPromptEditor prompt={prompt} fieldLabel={fieldLabel} />
+      <AnswerPromptEditor prompt={prompt} fieldLabel={fieldLabel} onDirtyChange={onDirtyChange} />
     </div>
   );
 }
 
-function AnswerPromptEditor({ prompt, fieldLabel: suppliedLabel }: { prompt: AnswerPromptView; fieldLabel?: string }) {
+function AnswerPromptEditor({
+  prompt,
+  fieldLabel: suppliedLabel,
+  onDirtyChange,
+}: {
+  prompt: AnswerPromptView;
+  fieldLabel?: string;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const save = useSaveAnswerPrompt();
   const [content, setContent] = useState(prompt.content);
   // 編集欄が基にした保存値。保存値が変わったレンダーで、未編集なら編集欄を保存値へ揃える。
@@ -96,6 +113,10 @@ function AnswerPromptEditor({ prompt, fieldLabel: suppliedLabel }: { prompt: Ans
   const error = answerPromptError(content, fieldLabel, prompt.required_placeholders, prompt.required_tokens);
   // 保存中は離脱を止める。
   useLeaveGuard(dirty, save.isPending);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
   const inputId = `answer-prompt-${prompt.key}`;
 
   function submit() {
@@ -207,14 +228,20 @@ function AnswerPromptEditor({ prompt, fieldLabel: suppliedLabel }: { prompt: Ans
 }
 
 /** 各機能の設定で共通のプロンプト編集操作を示す。 */
-export function FeaturePromptDisclosure({ promptKey }: { promptKey: AnswerPromptKey }) {
+export function FeaturePromptDisclosure({
+  promptKey,
+  onDirtyChange,
+}: {
+  promptKey: AnswerPromptKey;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   return (
     <Disclosure
       summary={t(`settings.answerPrompts.${promptKey}.title` as I18nKey)}
       description={t(`settings.answerPrompts.${promptKey}.description` as I18nKey)}
       surface="sunken"
     >
-      <AnswerPromptPanel promptKey={promptKey} />
+      <AnswerPromptPanel promptKey={promptKey} onDirtyChange={onDirtyChange} />
       {promptKey === "image_retrieval" ? <VisionPromptRules /> : null}
     </Disclosure>
   );

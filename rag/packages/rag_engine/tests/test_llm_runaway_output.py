@@ -51,13 +51,11 @@ def _table_rows(count: int) -> list[str]:
 
 class RunawayOutputTest(unittest.TestCase):
     def setUp(self) -> None:
-        oci._stream_baselines.clear()
         oci._output_rates.clear()
         self.clock = _Clock()
         patcher = mock.patch("time.monotonic", self.clock)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.addCleanup(oci._stream_baselines.clear)
         self.addCleanup(oci._output_rates.clear)
         self.settings = replace(
             get_settings(environ={"RAG_ENGINE_LLM_STALL_DETECTION": "1", "RAG_ENGINE_LLM_RUNAWAY_DETECTION": "1"}, dotenv_path=None),
@@ -120,16 +118,16 @@ class RunawayOutputTest(unittest.TestCase):
 
     def test_resends_are_bounded(self):
         runaway = ["同じ説明。"] * 5000
-        client = _RecordingClient(self.clock, [_text_script(runaway), _text_script(runaway)])
+        client = _RecordingClient(self.clock, [_text_script(runaway) for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)])
         with self.assertRaises(oci.LlmRunawayOutput):
             self.call(client)
-        self.assertEqual(len(client.streams), 2)
+        self.assertEqual(len(client.streams), 1 + oci.LLM_CALL_MAX_RETRIES)
 
     def test_streaming_exhausted_runaway_keeps_the_cutoff_reason(self):
         from rag_engine.resources.structured_failures import structured_failure_details
 
         whitespace = ['{"text": "a"', *(["\n   "] * 2000)]
-        client = _RecordingClient(self.clock, [_text_script(whitespace), _text_script(whitespace)])
+        client = _RecordingClient(self.clock, [_text_script(whitespace) for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)])
         with self.assertRaises(oci.LlmRunawayOutput) as raised:
             self.call(client)
         details = structured_failure_details(raised.exception)
@@ -233,10 +231,10 @@ class NonStreamingRunawayTest(unittest.TestCase):
         from rag_engine.resources.structured_failures import structured_failure_details
 
         whitespace = '{"text": "a"' + "\n" * 3000
-        client = _NonStreamingClient([_runaway_incomplete(whitespace), _runaway_incomplete(whitespace)])
+        client = _NonStreamingClient([_runaway_incomplete(whitespace) for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)])
         with self.assertRaises(oci.LlmRunawayOutput) as raised:
             self.call(client)
-        self.assertEqual(len(client.budgets), 2)
+        self.assertEqual(len(client.budgets), 1 + oci.LLM_CALL_MAX_RETRIES)
         details = structured_failure_details(raised.exception)
         self.assertEqual(details["category"], "runaway_output")
         self.assertEqual(details["cutoff_reason"], "runaway_whitespace")

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -150,7 +149,7 @@ def run(name: str, *, repair: str = "derive"):
         raise AssertionError("追加の検索・画像の呼び出しは不要")
 
     records = [_record("table-a", TABLE, "synthetic-table.md"), _record("rule-a", RULE, "synthetic-rule.md")]
-    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
+    settings = get_settings(environ={}, dotenv_path=None)
 
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(

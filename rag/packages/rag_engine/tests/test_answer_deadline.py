@@ -27,9 +27,6 @@ def _settings(**overrides):
     base = get_settings(environ={}, dotenv_path=None)
     values = {
         "llm_request_timeout_seconds": 600,
-        "llm_retries": 3,
-        "llm_retry_initial_wait_seconds": 0.0,
-        "llm_retry_max_wait_seconds": 0.0,
     }
     values.update(overrides)
     return replace(base, **values)
@@ -67,7 +64,6 @@ def _parse(client, settings):
             lambda: oci._openai_parsed([], settings, TextOutput, PROVIDER),
             "Responses text",
             settings,
-            retries=oci._llm_transport_retries(settings),
         )
 
 
@@ -143,9 +139,9 @@ class LlmCallDeadlineTests(unittest.TestCase):
 
     def test_does_not_retry_when_wait_exceeds_remaining(self):
         client = _FakeClient(errors=[TimeoutError("slow")])
-        settings = _settings(llm_retry_initial_wait_seconds=30.0, llm_retry_max_wait_seconds=30.0)
-        with bind_deadline(Deadline(1.0)), self.assertRaises(DeadlineExceeded):
-            _parse(client, settings)
+        # 最初のやり直しの前の待ちは 1 秒。残りはそれより短い。
+        with bind_deadline(Deadline(0.5)), self.assertRaises(DeadlineExceeded):
+            _parse(client, _settings())
         self.assertEqual(len(client.calls), 1)
 
     def test_does_not_retry_after_cancel_during_call(self):

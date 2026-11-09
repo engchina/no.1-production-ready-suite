@@ -168,22 +168,23 @@ def generation_view(
     }
 
 
+# 内部の ID はモデルに見せない（回答の文に写される。引用は evidence_ids で示す）。
+_INTERNAL_PROMPT_KEYS = {"source_id", "source_ids", "reported_source_ids", "source_candidate_ids", "binding_reason"}
+
+
+def _without_internal_keys(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _without_internal_keys(item) for key, item in value.items() if key not in _INTERNAL_PROMPT_KEYS}
+    if isinstance(value, list | tuple):
+        return [_without_internal_keys(item) for item in value]
+    return value
+
+
 def prompt_context(view: Mapping[str, Any] | None) -> str:
     if view is None:
         return ""
     # 診断だけの提示記録は生成指示へ加えず、既存の観点・実引用だけを渡す。
-    prompt_view = {key: value for key, value in view.items() if key not in _DIAGNOSTIC_KEYS}
-    for key in ("aspect_checks", "answerable_parts"):
-        prompt_view[key] = [
-            {
-                **row,
-                "evidence": [
-                    {name: value for name, value in proof.items() if name not in {"source_candidate_ids", "binding_reason"}}
-                    for proof in row.get("evidence") or ()
-                ],
-            }
-            for row in view.get(key) or ()
-        ]
+    prompt_view = _without_internal_keys({key: value for key, value in view.items() if key not in _DIAGNOSTIC_KEYS})
     return (
         "検索評価の観点別の支持状態（crag_assessment）:\n"
         "supportedでも引用が支える範囲だけを書く。missingはその観点の直接根拠が未確認、unknownは対応が未確認であり、欠けた操作を補ってはいけない。"
@@ -235,7 +236,7 @@ def _add_verified_quotes(kept: list[Any], allowed: Sequence[Mapping[str, Any]], 
             continue
         span = candidates[0]
         if span["evidence_id"] not in seen and span["text"].strip():
-            kept.append(grounded._quote_item(span, 0, min(600, len(span["text"])), answer_labels().crag_quote_only_note))
+            kept.append(grounded._quote_item(span, 0, min(600, len(span["text"]))))
             seen.add(span["evidence_id"])
             added += 1
     return added

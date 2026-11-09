@@ -212,7 +212,11 @@ async function mockParserAdapters(page: Page) {
 }
 
 async function openParserAdapters(page: Page) {
+  // Dots.OCR の接続の欄はカードの「設定」のパネルの中（#4740）。開いて確かめてから閉じ、下の項目を開く。
+  await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Endpoint" }).first()).toBeVisible();
+  await page.getByTestId("external-parser-connection-dots_ocr").getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(page.getByTestId("external-parser-connection-dots_ocr")).toHaveAttribute("data-state", "closed");
   await page.locator("summary", { hasText: "抽出する項目の定義" }).click();
   await expect(page.getByRole("textbox", { name: /項目名/ }).first()).toBeVisible();
   await page.locator("#post-parse-section-rules").scrollIntoViewIfNeeded();

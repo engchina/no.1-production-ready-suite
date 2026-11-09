@@ -211,24 +211,21 @@ streaming しない呼び出し（停滞の検出が OFF・回答の期限が無
 `incomplete_reasons` に残り、送り直しても暴走した呼び出しの失敗の詳細は分類 `runaway_output` と
 打ち切りの理由（`cutoff_reason`）を持つ。
 
-**停滞した LLM の呼び出しの送り直し（#1926）**: OCI Enterprise AI の呼び出しは、まれ（#1912 の記録の 206 件で約 1%）に
-通常の 1/10 以下の速さ（13〜23 token/秒。中央値 224）に落ち、同じ token 数で 36 秒 → 183 秒かかった。回答の期限がある文脈では
-LLM の呼び出しを streaming で受け（`rag_engine.adapters.oci._stream_parsed`）、次のとき stream を閉じて同じ要求を送り直す
-（`RAG_LLM_STALL_RESENDS` 回まで。最後の送信は検出せずに期限まで待つ。期限の残りが停滞の秒より短いときの timeout は停滞ではなく
-期限切れ）。
+**無音で止まった LLM の呼び出しの送り直し（#1926・#4736）**: 回答の期限がある文脈では LLM の呼び出しを streaming で受け
+（`rag_engine.adapters.oci._stream_parsed`）、応答の event（最初の event を含む）が `RAG_LLM_STALL_IDLE_SECONDS`（既定 120 秒。httpx の
+read timeout）来ないとき（`stall_idle`）に stream を閉じて同じ要求を送り直す。止まった判定は無音だけで、遅いだけの出力は打ち切らない。
+期限の残りが無音の秒より短いときの timeout は、止まったのではなく期限切れ。取込などの期限の無い呼び出しは従来どおり streaming しない
+（`responses.parse`）。`RAG_LLM_STALL_DETECTION_ENABLED=false` で従来の受け方に戻る。打ち切った呼び出しは `llm_status=failed` と理由
+（`stall_idle`）で log と `llm_usage` の `incomplete_reasons` に、送り直しの回数は `stall_resends` に残る。streaming で受けた呼び出しは、
+log に最初の event までの秒（`llm_first_event_seconds`）・出力の速さ（`llm_delta_rate`）・最大の間隔（`llm_max_gap_seconds`）を、工程の
+`llm_usage` にその工程の最大の待ち（`first_event_seconds_max`）と最も遅い速さ（`delta_rate_min`）を残す。
 
-- event（最初の event を含む）が `RAG_LLM_STALL_IDLE_SECONDS`（既定 20 秒）来ない（`stall_idle`。httpx の read timeout）。
-  同じ接続・モデルの直近の呼び出しの最大の間隔の中央値の 3 倍が長ければそちら（推論を stream しないモデル）。
-- 最初の delta（推論・出力の event）から 10 秒が経った後、直近 10 秒の delta の数（event/秒）が、同じ接続・モデルの直近 8 回の
-  完了した呼び出し（delta 256 件以上）の速さの中央値 × `RAG_LLM_STALL_MIN_RATE_RATIO`（既定 0.25）を下回った（`stall_slow`）。
-
-判定の基準は process の中の直近の呼び出しから学び、3 回たまるまでは検出しない（基準の無いモデルを誤って打ち切らない）。
-取込などの期限の無い呼び出しは従来どおり streaming しない（`responses.parse`）。`RAG_LLM_STALL_DETECTION_ENABLED=false` で従来の
-受け方に戻る。打ち切った呼び出しは `llm_status=failed` と理由（`stall_idle` / `stall_slow`）で log と `llm_usage` の
-`incomplete_reasons` に、送り直しの回数は `stall_resends` に残る。streaming で受けた呼び出しは、log に最初の event までの秒
-（`llm_first_event_seconds`。待ち）・出力の速さ（`llm_delta_rate`。停滞）・最大の間隔（`llm_max_gap_seconds`）を、工程の
-`llm_usage` にその工程の最大の待ち（`first_event_seconds_max`）と最も遅い速さ（`delta_rate_min`）を残し、遅い呼び出しが待ちか
-出力の途中の停滞かを記録から見分けられる。
+**LLM の 1 回の呼び出しのやり直しの枠（#4736）**: やり直しは 1 回の呼び出し（`_parse_with_retry`）で最大 2 回（`LLM_CALL_MAX_RETRIES`。送信は最大
+3 回）。通信系の失敗・止まった stream・失敗の event・暴走（`LlmRunawayOutput`）・不正な出力・`U+FFFD`・出力の上限での送り直しをすべてこの枠で
+数え、`_parse_with_retry` と `_openai_parsed` の間で枠を共有するので、外側のやり直しで数が 0 に戻らない。待ちは通信系と止まった stream だけで
+1 秒・2 秒、`Retry-After` があれば 30 秒まで従う（待ちの間の取り消しはすぐに効く）。モデルの出力の不合格（不正な出力・`U+FFFD`・暴走・上限）は
+待たずに送り直す。SDK の再試行は切っている。試行の span は `pr.call.retry_group`（同じ呼び出しで同じ値）を持ち、やり直す試行は
+`pr.retry.scheduled` を持つ。利用者の処理の経過は、後の試行で回復した試行を赤の失敗にせず「再試行して成功」と出す（技術の一覧は実際の状態のまま）。
 
 **stream の受け方（#4197）**: SDK の組み立て（`responses.stream`）を通さず、`responses.create(stream=True)` の event をそのまま読む。
 delta は停滞・暴走の検出と途中経過の記録にだけ使い、応答は完了の event（`response.completed` / `response.incomplete`）が持つ全体を

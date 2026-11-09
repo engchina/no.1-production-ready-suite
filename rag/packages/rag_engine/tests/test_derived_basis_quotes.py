@@ -1,7 +1,6 @@
 """導出の要点は、依存する basis の原文を引用として必ず隣に持つ（結論の言い換えで条件が消えても原文が残る）。"""
 
 import re
-from dataclasses import replace
 from types import SimpleNamespace
 
 from rag_engine.config import get_settings
@@ -132,7 +131,7 @@ def run():
         source_run_id="synthetic",
         metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(TEXT)}]}},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), llm_retries=0)
+    settings = get_settings(environ={}, dotenv_path=None)
     with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
         response = synthesize_grounded_answer(
             "申請の期限はいつですか。", AnswerContext(records=[record], text=TEXT), settings, image_prompt_mode="text_only"

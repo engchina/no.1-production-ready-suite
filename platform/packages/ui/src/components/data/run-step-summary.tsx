@@ -31,16 +31,16 @@ export function RunStepSummary({step, size, statusLabel, bar, showBars = true, s
   return <span className="@container grid min-w-0 gap-1" data-run-step-summary="">
     <span className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3", showBars && "@xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_7rem] @xl:items-center")}>
       <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))} style={runTimelineStepIndentStyle(step.level)} data-run-step-name="">
-        <span className="pr-icon-line"><RunStepStatusIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={spin} /></span>
+        <span className="pr-icon-line"><RunStepStatusIcon status={step.status} retry={step.retry} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={spin} /></span>
         {renderName ? renderName(name) : name}
         {step.meta ? <span className="flex shrink-0 flex-wrap items-center gap-1">{step.meta}</span> : null}
       </span>
       {showBars ? <span className={cn(RUN_TIME_TRACK, "hidden overflow-hidden @xl:block")} aria-hidden="true"
         {...(surface === "timeline" ? {"data-run-timeline-bar": ""} : {"data-trace-time-bar": ""})}>
-        {bar ? <span className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status])} data-run-step-bar="" data-measured-width={bar.width ?? "unknown"}
+        {bar ? <span className={cn(RUN_TIME_FILL, step.retry ? RUN_TIME_COLOR.skipped : RUN_TIME_COLOR[step.status])} data-run-step-bar="" data-measured-width={bar.width ?? "unknown"}
           style={{left: `${bar.offset}%`, width: `${bar.width ?? 0}%`}} /> : null}
       </span> : null}
-      <span className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tnum" data-duration-kind={view.durationKind}
+      <span className={cn("text-right text-xs leading-5 text-fg-muted tnum", !step.retry && "whitespace-nowrap")} data-duration-kind={view.durationKind}
         {...(surface === "timeline" ? {"data-run-step-status-duration": ""} : {"data-trace-step-status-duration": ""})}>{statusLabel}{view.durationText != null ? <> · <span data-testid={durationTestId}>{view.durationText}</span></> : null}</span>
     </span>
     {view.result ? <span className="ml-6 text-xs leading-5 text-fg-muted" style={runTimelineStepIndentStyle(step.level)}
