@@ -100,14 +100,14 @@ async def test_dry_run_reads_only_and_reports_names() -> None:
     assert all("FOR UPDATE" not in call.statement for call in pool.connection.calls)
 
 
-async def test_dry_run_reports_draft_that_differs_from_current() -> None:
-    """下書きの未公開の変更は適用で置き換わるので、dry-run で分かるようにする。"""
+async def test_blocks_when_draft_differs_from_current() -> None:
+    """下書きの未公開の変更を、適用で黙って置き換えない。"""
     draft = _effective()
     draft["answer_labels"]["cause_gap"] = "合成の下書きの文言"
     oracle, _ = _client([_state_row(draft)], [_release_row()], [{"total": 0}])
     plan = await repair.inspect_language_pack_repair(oracle)
     assert plan.draft_matches_current is False
-    assert plan.blockers == []
+    assert plan.blockers == [repair.DRAFT_DIFFERS_FROM_CURRENT]
 
 
 def _with_extra() -> dict[str, Any]:

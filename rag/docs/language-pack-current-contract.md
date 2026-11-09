@@ -34,12 +34,12 @@
    |---|---|
    | `current_release_id` / `current_version` / `draft_revision` | 現在版と下書きの状態（適用の期待値に使います） |
    | `current_conforms` / `draft_conforms` | 現在版・下書きが現行の契約に合っているか |
-   | `draft_matches_current` | 下書きが現在版と同じ内容か。`false` のときは、適用で下書きの未公開の変更が新しい版の内容に置き換わります |
+   | `draft_matches_current` | 下書きが現在版と同じ内容か。`false` のときは、未公開の変更を消さないよう適用を止めます（`DRAFT_DIFFERS_FROM_CURRENT`） |
    | `missing_fields` / `retired_fields` | 組み込みの値を足す項目 / 除く廃止の項目の名前 |
    | `candidate_valid` / `ingest_hash_unchanged` | 候補が厳格な検証に通るか / 候補の `ingest_hash` が現在版と同じか |
    | `active_ingestion_jobs` | QUEUED / RUNNING の取込 job の件数 |
 
-   止める条件（`blockers`）: `CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。
+   止める条件（`blockers`）: `DRAFT_DIFFERS_FROM_CURRENT`（下書きに未公開の変更がある）、`CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。
 
 2. **許可。** dry-runの結果を対象の環境の利用者へ示し、発行の明示の許可を得ます（上の門禁の 5）。
 3. **適用。** dry-runで確かめた値を指定します。値が違えば何も書き込まずに止まります。

@@ -32,6 +32,7 @@ NO_FIELDS_TO_REPAIR = "NO_FIELDS_TO_REPAIR"
 CANDIDATE_INVALID = "CANDIDATE_INVALID"
 INGEST_HASH_CHANGED = "INGEST_HASH_CHANGED"
 ACTIVE_INGESTION_JOBS = "ACTIVE_INGESTION_JOBS"
+DRAFT_DIFFERS_FROM_CURRENT = "DRAFT_DIFFERS_FROM_CURRENT"
 EXPECTED_CURRENT_MISMATCH = "EXPECTED_CURRENT_MISMATCH"
 EXPECTED_DRAFT_REVISION_MISMATCH = "EXPECTED_DRAFT_REVISION_MISMATCH"
 
@@ -166,6 +167,9 @@ def _inspect(
         blockers.append(INGEST_HASH_CHANGED)
     if active_jobs:
         blockers.append(ACTIVE_INGESTION_JOBS)
+    if draft != effective:
+        # 適用は下書きを新しい版の内容に置き換えるので、未公開の変更を黙って消さない。
+        blockers.append(DRAFT_DIFFERS_FROM_CURRENT)
     plan = LanguagePackRepairPlan(
         current_release_id=str(release_row["release_id"]),
         current_version=int(str(release_row["version"])),
