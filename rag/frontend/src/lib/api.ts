@@ -2178,9 +2178,10 @@ export interface EvaluationThresholdFailure {
 }
 
 /** 評価結果。各指標は測れたケースだけの平均で、測れなかった指標は null。 */
-export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | null>> & {
+export type EvaluationReferenceMetricName = "evidence_coverage" | "precision_at_10" | "ndcg_at_3" | "ndcg_at_10" | "map" | "bleu_1" | "bleu_2" | "bleu_4" | "rouge_1" | "rouge_2" | "rouge_l";
+export type EvaluationMetrics = Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName, number | null>> & {
  metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
- metric_case_counts?:Partial<Record<EvaluationMetricName,number>>; passed:boolean|null;
+ metric_case_counts?:Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName,number>>; passed:boolean|null;
  applied_thresholds?:Partial<Record<EvaluationMetricName,number>>;
  threshold_failures:EvaluationThresholdFailure[]; failure_reason_counts:Partial<Record<string,number>>;
  category_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;

@@ -22,20 +22,27 @@ from pr_backend_core.bounded_calls import (
 from pr_evaluation_scoring import (
     MetricAggregate,
     ThresholdFailure,
+    average_precision,
+    bleu,
     count_reasons,
     evidence_matches,
     expected_decisions,
+    ndcg_at_k,
     overall_passed,
+    precision_at_k,
     reciprocal_rank,
     response_decision,
+    rouge_l,
+    rouge_n,
     rounded_mean,
     skips_retrieval,
     threshold_failures,
     unique_in_order,
 )
 from pydantic import ValidationError
-from rag_engine.evaluation.answer_eval import standard_scope_cache
+from rag_engine.evaluation.answer_eval import scored_answer_text, standard_scope_cache
 from rag_engine.resources.shared_cache import bypass_shared_cache
+from rag_engine.retrieval.text_search_tokenizer import surface_tokens
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
@@ -990,6 +997,32 @@ def _expected_case_decisions(case: EvaluationCase) -> list[str]:
     )
 
 
+def _ranking_metrics(retrieved_ids: list[str], relevant: set[str]) -> dict[str, float]:
+    """引用の文書列の順位の参考値（外れの文書も順位に残す）。"""
+    return {
+        "precision_at_10": precision_at_k(retrieved_ids, relevant, 10),
+        "ndcg_at_3": ndcg_at_k(retrieved_ids, relevant, 3),
+        "ndcg_at_10": ndcg_at_k(retrieved_ids, relevant, 10),
+        "map": average_precision(retrieved_ids, relevant),
+    }
+
+
+def _overlap_metrics(case: EvaluationCase, response: SearchResponse) -> dict[str, float]:
+    """回答と標準回答の語の重なりの参考値。標準回答か分割の結果が無ければ測らない。"""
+    reference = surface_tokens(case.standard_answer or "")
+    candidate = surface_tokens(scored_answer_text(response.answer))
+    if not reference or not candidate:
+        return {}
+    return {
+        "bleu_1": bleu(candidate, reference, order=1),
+        "bleu_2": bleu(candidate, reference, order=2),
+        "bleu_4": bleu(candidate, reference, order=4),
+        "rouge_1": rouge_n(candidate, reference, 1),
+        "rouge_2": rouge_n(candidate, reference, 2),
+        "rouge_l": rouge_l(candidate, reference),
+    }
+
+
 def _case_result(
     case: EvaluationCase,
     response: SearchResponse,
@@ -1014,9 +1047,11 @@ def _case_result(
     abstained = is_abstained(response)
     hits: list[str] = []
     rank: float | None = None
+    reference_metrics: dict[str, float] = _overlap_metrics(case, response)
     if relevant and not _skips_retrieval(response):
         hits = [doc_id for doc_id in retrieved_ids if doc_id in relevant]
         rank = reciprocal_rank(retrieved_ids, relevant)
+        reference_metrics |= _ranking_metrics(retrieved_ids, relevant)
 
     evidence_recall, missing_evidence = _evidence_scores(case, response)
     observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
@@ -1095,6 +1130,7 @@ def _case_result(
         failure_reasons=list(failure_reasons),
         diagnostics=response.diagnostics,
         elapsed_ms=round(sum(run.response.elapsed_ms for run in runs), 3),
+        **reference_metrics,
     )
 
 
@@ -1174,6 +1210,9 @@ def _accumulate_case_metrics(aggregate: MetricAggregate, result: EvaluationCaseR
     aggregate.add("mrr", result.mrr)
     aggregate.add("answer_correctness", result.answer_correctness)
     aggregate.add("response_decision_accuracy", result.response_decision_accuracy)
+    for name in EVALUATION_REPORT_ONLY_METRIC_NAMES:
+        if name != "evidence_coverage":
+            aggregate.add(name, getattr(result, name))
     judgement = result.answer_evaluation
     if judgement is not None and judgement.status == "completed":
         aggregate.add("claim_support_rate", judgement.claim_support_rate)
