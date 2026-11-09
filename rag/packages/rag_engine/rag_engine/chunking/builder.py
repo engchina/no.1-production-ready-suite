@@ -482,15 +482,10 @@ def _record_text_units(text: str, target_chars: int, separators: Sequence[str]) 
     if not separators:
         return _sentence_boundary_pattern().split(text)
     starts = [start for start, _end in separator_unit_spans(text, separators, target_chars)]
-    return [
-        text[start : starts[index + 1] if index + 1 < len(starts) else len(text)]
-        for index, start in enumerate(starts)
-    ]
+    return [text[start : starts[index + 1] if index + 1 < len(starts) else len(text)] for index, start in enumerate(starts)]
 
 
-def _split_long_text_record(
-    record: dict[str, Any], target_chars: int, separators: Sequence[str] = ()
-) -> list[dict[str, Any]]:
+def _split_long_text_record(record: dict[str, Any], target_chars: int, separators: Sequence[str] = ()) -> list[dict[str, Any]]:
     """目標文字数を超える地の文の record を、文末を境界にした複数 record へ分けます。
 
     表の行や図と違い地の文は分割できます。分割しないと child が検索文の上限を超え、ファイル名や
