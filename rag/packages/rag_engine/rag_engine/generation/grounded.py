@@ -46,7 +46,7 @@ from rag_engine.generation.applications import (
 )
 from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.check_cues import check_cues
-from rag_engine.generation.citation_content import table_html_as_rows
+from rag_engine.generation.citation_content import structure_only_quote, table_html_as_rows
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.citation_wire import (
@@ -59,7 +59,7 @@ from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.document_inputs import document_key, order_document_spans
 from rag_engine.generation.evidence_cuts import _html_tables
 from rag_engine.generation.guide_authority import authoritative_guide_inputs
-from rag_engine.generation.response_language import generation_language_schema
+from rag_engine.generation.response_language import generation_language_schema, render_language_placeholder
 from rag_engine.generation.table_binding import has_table_structure
 from rag_engine.knowledge.prompt_files import (
     continue_prompt_steps,
@@ -81,6 +81,7 @@ from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text_with_positions, fold_width
 from rag_engine.retrieval.operation_context import operation_labels
+from rag_engine.retrieval.task_contract import task_contract
 
 logger = logging.getLogger(__name__)
 CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</補助情報>"
@@ -124,6 +125,7 @@ GENERATE_SYSTEM_PROMPT = """## Step 1: 役割と信頼境界を確認する
 - 質問の語（画面名・メッセージ文・帳票名）が原文に無くても、同じ対象の条件・操作を述べた原文があれば、その原文を basis にした要点を作り、語の対応が未確認なことは gap に書く（全面拒答にしない）。
 
 ## Step 5: 答えを確かめて JSON を返す
+- 回答の既定の言語は {{language}}。原質問が別の言語を明示したときだけ、その言語にする。
 - 答えを終える前に、事実の主張が根拠で支えられているか、完了したことと残っていることを分けているかを確かめる。
 - 各根拠は、その根拠の本文だけを裏付ける。
 - 資料が述べていることと、自分の推論を分ける。
@@ -176,7 +178,13 @@ def _reading_block(template: str, keys: set[str]) -> str:
 
 def generation_system_prompt() -> str:
     """保存済みまたは既定の生成指示。"""
-    return resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT)
+    return render_language_placeholder(resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT))
+
+
+def generation_subquestions(question: str) -> tuple[str, ...]:
+    """原質問の小問の印（無ければ空）。要点はこの印で小問に結ぶ（#4755）。"""
+    labels = (unit.get("subquestion") for unit in task_contract(question)["request_units"])
+    return tuple(dict.fromkeys(str(label) for label in labels if label))
 
 
 def _generation_base_model(*, guided: bool = False) -> type[BaseModel]:
@@ -192,7 +200,10 @@ def generation_request_ids(question: str) -> tuple[str, ...]:
 def generation_output_model(question: str, *, guided: bool = False, unit_catalog: SentUnitCatalog | None = None) -> type[BaseModel]:
     """表示と実行が共有する要点単位の生成契約。未提示原文のIDは選ばせない。"""
     return unit_generation_model(
-        _generation_base_model(guided=guided), unit_catalog or SentUnitCatalog(()), request_ids=generation_request_ids(question)
+        _generation_base_model(guided=guided),
+        unit_catalog or SentUnitCatalog(()),
+        request_ids=generation_request_ids(question),
+        subquestions=generation_subquestions(question),
     )
 
 
@@ -1653,7 +1664,13 @@ def _body_sections(
     order = _document_order(checked)
     shown = _by_document(published, order)
     sections: list[tuple[str, list[str]]] = []
-    if rules := [entry for entry in shown if entry.item.kind == "rule"]:
+    rules = [entry for entry in shown if entry.item.kind == "rule"]
+    # 見出し・表の見出しの行・JSON の文書の断片だけの原文は確認できた事実として並べない（#4755。出典は残る）。
+    # ほかに示す内容が無いときは本文が空にならないよう残す。
+    facts = [entry for entry in rules if not _is_structure_only(entry)]
+    if facts or any(application.published for application in applications):
+        rules = facts
+    if rules:
         sections.append((answer_labels().rules_section, lines(rules, False)))
     # 規則を質問の事実に当てはめた結果（#2155）。出典は当てはめた規則の出典。
     if applied := application_lines(applications, _citation, add_citation):
@@ -1676,7 +1693,14 @@ def _body_sections(
         sections.append((labels.steps_heading(heading, title), lines(entries, len(entries) > 1)))
     # 単語だけの引用は説明を含まないので表示しない（#1120）。
     quotes = _by_document(
-        [entry for entry in checked if _shown_as_quote(entry) and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry))],
+        [
+            entry
+            for entry in checked
+            if _shown_as_quote(entry)
+            and _displayed_quote(entry)
+            and not _bare_label(_displayed_quote(entry))
+            and not _is_structure_only(entry, _displayed_quote(entry))
+        ],
         order,
     )
     if quotes:
@@ -1685,6 +1709,10 @@ def _body_sections(
     if gaps := _by_document([entry for entry in checked if entry.item.kind == "gap"], order):
         sections.append((answer_labels().gaps_section, lines(gaps, False)))
     return sections
+
+
+def _is_structure_only(entry: CheckedItem, text: str | None = None) -> bool:
+    return structure_only_quote(entry.item.text if text is None else text, entry.span or {})
 
 
 def _subquestion_text(unit: dict) -> str:
@@ -2267,8 +2295,9 @@ def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
     groups = [list(members) for _, members in groupby(ordered, key=lambda span: (document_key(span), span["function"]))]
     blocks = []
     group_headings = {}
-    for number, members in enumerate(groups, 1):
-        header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
+    for members in groups:
+        # 見出しの番号は内部の順番で、資料の語ではない（回答の文に写されないよう見出しに持たない）。
+        header = f"=== 機能: {_function_label(members[0])} ==="
         shown_header = fold_width(header) if model_view else header
         for member in members:
             group_headings[id(displayed_views[id(member)])] = shown_header
@@ -2595,7 +2624,10 @@ def run_round(
     unit_catalog = generation_unit_catalog(spans, sent_only=True)
     generation_base = _generation_base_model(guided=bool(guide_step_contracts))
     request_ids = generation_request_ids(question)
-    generation_model = generation_language_schema(unit_generation_model(generation_base, unit_catalog, request_ids=request_ids), question)
+    generation_model = generation_language_schema(
+        unit_generation_model(generation_base, unit_catalog, request_ids=request_ids, subquestions=generation_subquestions(question)),
+        question,
+    )
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",

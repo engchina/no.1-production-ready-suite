@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
@@ -10,6 +10,7 @@ from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
 
+from rag_engine.generation.citation_content import structure_only_quote
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
@@ -56,6 +57,7 @@ def answer_parts_model(
     direct_source: bool = True,
     requirements: Collection[str] = (),
     request_ids: Sequence[str] = (),
+    subquestions: Sequence[str] = (),
 ) -> type[BaseModel]:
     """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。
 
@@ -65,6 +67,8 @@ def answer_parts_model(
     不足の文に出る要求の名前を、作り直しで別の文・識別子に変えさせない。#4586）。
     ``request_ids`` はその回の要求の id。要求ごとの根拠の計画はモデルに書かせず、``canonical_answer_parts`` が要点の
     basis から要求ごとに 1 件だけ導く（``basis_request_plans``。#4611）。
+    ``subquestions`` は原質問の小問の印。要点をどの小問に答えるかで結び、冒頭の結論に小問が抜けないように
+    ``canonical_answer_parts`` が小問ごとに補う（#4755）。
     """
     source = catalog.selection_model()
     direct = create_model(
@@ -98,6 +102,12 @@ def answer_parts_model(
             ),
         ),
     }
+    if subquestions:
+        # 既定値は小問の欄の無い録画を読むためだけ。モデルに渡す schema には出さない（strict schema は全欄が必須）。
+        common["subquestion"] = (
+            cast(Any, Literal)[tuple(subquestions)],
+            Field(default="", description="この要点が答える小問の印を、原質問の表記のまま選ぶ。", json_schema_extra=_without_default),
+        )
     part: Any
     if direct_source and catalog.unit_ids:
         # 要点の役割（導出か記載か）を答えの型より先に決めさせ、導出の要点では source 型を選べなくする（#4611。#4586 の
@@ -164,6 +174,7 @@ def answer_parts_model(
     cast(Any, model)._uses_typed_answer_parts = True
     cast(Any, model)._uses_unit_ids = True
     cast(Any, model)._request_ids = tuple(dict.fromkeys(request_ids))
+    cast(Any, model)._subquestions = tuple(subquestions)
     return model
 
 
@@ -231,6 +242,32 @@ def basis_request_plans(request_ids: Sequence[str], basis: Sequence[tuple[str, S
     ]
 
 
+def _summary_parts(
+    chosen: Sequence[int],
+    parts: Sequence[Mapping[str, Any]],
+    texts: Sequence[str],
+    structure_only: Sequence[bool],
+    labels: Sequence[str],
+    subquestions: Sequence[str],
+) -> list[int]:
+    """冒頭に示す要点。見出しだけの要点を除き（他が無ければ残す）、結論のある小問が必ず 1 行は載るようにする。"""
+    answered = [index for index in range(len(parts)) if texts[index] and parts[index]["result_kind"] != "gap" and not structure_only[index]]
+    picked = list(
+        dict.fromkeys(index for index in chosen if 0 <= index < len(parts) and texts[index] and parts[index]["result_kind"] != "gap")
+    )
+    selected = [index for index in picked if index in answered] or picked
+    if not subquestions:
+        return selected
+    covered = {labels[index] for index in selected}
+    for label in subquestions:
+        options = [index for index in answered if labels[index] == label]
+        if label not in covered and options:
+            # 導いた結論を原文の提示より優先する（読み手が先に欲しいのは答え）。
+            selected.append(min(options, key=lambda index: (parts[index]["result_kind"] != "derived", index)))
+    order = {label: position for position, label in enumerate(subquestions)}
+    return sorted(selected, key=lambda index: (order.get(labels[index], len(order)), index))
+
+
 def canonical_answer_parts(
     value: BaseModel,
     catalog: SentUnitCatalog,
@@ -252,6 +289,8 @@ def canonical_answer_parts(
     texts = []
     part_sources = []
     part_applications = []
+    part_structure_only = []
+    part_labels = []
     plan_basis: list[tuple[str, list[BoundUnitRange]]] = []
     for position, part in enumerate(wire_parts):
         answer = part["answer"]
@@ -315,14 +354,14 @@ def canonical_answer_parts(
             }
         )
         texts.append(text)
+        part_structure_only.append(
+            kind == "source" and bool(selected) and all(structure_only_quote(binding.text, binding.snapshot.span()) for binding in selected)
+        )
+        part_labels.append(str(part.get("subquestion") or ""))
         part_sources.append(indexes if kind != "answer" else [])
         part_applications.append(app_indexes)
     _attach_basis_quotes(parts, applications)
-    chosen = list(
-        dict.fromkeys(
-            index for index in summary_indexes if 0 <= index < len(parts) and texts[index] and parts[index]["result_kind"] != "gap"
-        )
-    )
+    chosen = _summary_parts(summary_indexes, parts, texts, part_structure_only, part_labels, getattr(type(value), "_subquestions", ()))
     raw.update(
         items=items,
         applications=applications,
