@@ -139,7 +139,7 @@ from app.rag.ingestion_prompts import (
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
 from app.rag.ingestion_segment_receipts import SEGMENT_RECEIPT_KEY, accepted_segment_receipt
 from app.rag.ingestion_slots import release_heavy_ingestion_slot
-from app.rag.ingestion_strategy import extraction_strategy_for_source
+from app.rag.ingestion_strategy import parser_profile_for_source
 from app.rag.layer_fingerprint import (
     FIELD_SCHEMA_HASH_ARTIFACT_KEY,
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
@@ -1376,7 +1376,6 @@ class IngestionPipeline:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
@@ -1397,7 +1396,6 @@ class IngestionPipeline:
             return await self._ingest(
                 document_id,
                 image_bytes,
-                prompt,
                 content_type=content_type,
                 source_profile=source_profile,
                 chunk_set_id=chunk_set_id,
@@ -1414,7 +1412,6 @@ class IngestionPipeline:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
@@ -1439,10 +1436,7 @@ class IngestionPipeline:
         self.deferred_success_outcome = None
         started_at = now()
         trace_id = new_trace_id()
-        strategy = extraction_strategy_for_source(
-            source_profile=source_profile,
-            base_prompt=prompt,
-        )
+        parser_profile = parser_profile_for_source(source_profile)
         checkpoint_segments: list[IngestionSegment] = []
         try:
             # status は cancel を確かめてから書く。取り消し後に中間の status を書き戻さない(#305)。
@@ -1521,7 +1515,7 @@ class IngestionPipeline:
                 "source_modality": (
                     source_profile.modality.value if source_profile is not None else "unknown"
                 ),
-                "parser_profile": strategy.parser_profile,
+                "parser_profile": parser_profile,
                 "preprocess_profile": source_derivation.preprocess_profile,
                 "preprocess_converted": source_derivation.converted,
             }
@@ -1592,7 +1586,7 @@ class IngestionPipeline:
             self._raise_if_selected_parser_was_not_used(parser_result)
             effective_parser_profile = _checkpoint_parser_profile(
                 parser_result,
-                fallback=strategy.parser_profile,
+                fallback=parser_profile,
             )
             if not segmented_parse:
                 checkpoint_segments = await self._prepare_segment_checkpoints(
@@ -1617,7 +1611,7 @@ class IngestionPipeline:
                         document_id=document_id,
                         source_bytes=parse_bytes,
                         content_type=parse_content_type,
-                        parser_profile=strategy.parser_profile,
+                        parser_profile=parser_profile,
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
                     )
@@ -1797,7 +1791,7 @@ class IngestionPipeline:
                 document_id=document_id,
                 extraction=extraction,
                 quality_report=quality_report,
-                parser_profile=strategy.parser_profile,
+                parser_profile=parser_profile,
                 checkpoint_segments=checkpoint_segments,
                 source_bytes=image_bytes,
                 started_at=started_at,

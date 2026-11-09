@@ -50,12 +50,8 @@ NOT_LISTED = {
     "rag_engine.knowledge.prompt_files:DEFAULT_VLM_ANSWER_PROMPT": EDITABLE_DEFAULT,
     # 検証・確認の CLI だけが使う(回答・取込・品質評価の経路では使わない)。
     "app.rag.enterprise_ai_probe:DEFAULT_LLM_PROMPT": PROBE_ONLY,
+    "app.rag.enterprise_ai_probe:PROBE_SYSTEM_PROMPT": PROBE_ONLY,
     "app.rag.enterprise_ai_probe:DEFAULT_VLM_PROMPT": PROBE_ONLY,
-    "app.rag.file_processing_staging:FILE_PROCESSING_STAGING_PROMPT": "staging の確認だけ",
-    # 解析の指示(ExtractionStrategy.prompt)は組み立てるが、OCI Generative AI (Vision) の解析を
-    # 削除した後(#2042)はどのモデルにも渡していない。
-    "app.rag.ingestion_strategy:BASE_EXTRACTION_REQUIREMENTS": "モデルに渡していない",
-    "app.rag.ingestion_strategy:PROFILE_INSTRUCTIONS": "モデルに渡していない",
 }
 
 

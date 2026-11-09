@@ -67,7 +67,8 @@ class DeterministicEnterpriseAi(OciEnterpriseAiClient):
         prompt: str,
         context: str,
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        instruction: str = "",
         response_schema: Mapping[str, Any] | None = None,
         response_schema_name: str = "structured_answer",
     ) -> str:

@@ -1517,8 +1517,8 @@ def test_model_settings_test_enterprise_text_uses_candidate_without_mutating_run
         def __init__(self, settings: Settings) -> None:
             observed_settings.append(settings)
 
-        async def generate(self, prompt: str, context: str) -> str:
-            assert prompt
+        async def generate(self, prompt: str, context: str, *, system_prompt: str) -> str:
+            assert system_prompt
             assert context
             return "接続テスト応答"
 
@@ -1632,7 +1632,7 @@ def test_model_settings_test_returns_real_error_with_troubleshooting_and_masks_s
         def __init__(self, settings: Settings) -> None:
             self.settings = settings
 
-        async def generate(self, prompt: str, context: str) -> str:
+        async def generate(self, prompt: str, context: str, *, system_prompt: str) -> str:
             raise RuntimeError(
                 f"401 Unauthorized: bearer {self.settings.oci_enterprise_ai_api_key}"
             )

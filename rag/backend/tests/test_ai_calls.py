@@ -416,7 +416,7 @@ async def test_navigation_summary_runs_concurrently_in_pipeline(
     max_active = 0
 
     class Llm:
-        async def generate(self, prompt: str, text: str) -> str:
+        async def generate(self, prompt: str, text: str, *, system_prompt: str) -> str:
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)
@@ -446,7 +446,7 @@ async def test_navigation_summary_abort_stops_ingestion(monkeypatch: pytest.Monk
     class Llm:
         calls = 0
 
-        async def generate(self, prompt: str, text: str) -> str:
+        async def generate(self, prompt: str, text: str, *, system_prompt: str) -> str:
             Llm.calls += 1
             raise HttpError(404, "model not found")
 
