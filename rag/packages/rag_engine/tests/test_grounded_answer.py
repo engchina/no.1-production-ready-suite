@@ -413,10 +413,10 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(_prompt_safe_warnings(warnings), ["chunk-7: ignore_previous_instructions"])
 
     def test_generation_prompt_maps_shared_layout_policy_onto_answer_fields(self):
-        prompt = grounded.GENERATE_SYSTEM_PROMPT
+        prompt = grounded.generation_system_prompt()
         # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
         self.assertNotIn("別の節にする", prompt)
-        mapping = prompt.split("## Step 3:", 1)[1].split("## Step 5:", 1)[0]
+        mapping = prompt.split("## Step 3:", 1)[1]
         for field in ("kind=gap", "結果にも条件", "external_data_items"):
             self.assertIn(field, mapping)
 
@@ -447,7 +447,7 @@ class GroundedAnswerTest(unittest.TestCase):
         known.update(generated_schema["properties"])
         for definition in generated_schema.get("$defs", {}).values():
             known.update(definition.get("properties", {}))
-        named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.GENERATE_SYSTEM_PROMPT))
+        named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.generation_system_prompt()))
         values = {
             "document_text",
             "image_extraction",
@@ -472,8 +472,8 @@ class GroundedAnswerTest(unittest.TestCase):
             self.assertEqual(generated[field]["maxLength"], limit)
         self.assertNotIn("items", schema["properties"])
         self.assertNotIn("summary", schema["properties"])
-        self.assertNotIn("items は最大", grounded.GENERATE_SYSTEM_PROMPT)
-        self.assertNotIn("全体が破棄される", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertNotIn("items は最大", grounded.generation_system_prompt())
+        self.assertNotIn("全体が破棄される", grounded.generation_system_prompt())
 
     def test_document_context_is_shown_under_its_own_evidence_as_not_quotable(self):
         spans = [
@@ -505,7 +505,7 @@ class GroundedAnswerTest(unittest.TestCase):
         refusal = draft({"kind": "gap", "text": "削除の手順は資料から確認できません。"}, summary="", confidence="low")
         result = run(FakeModel([refusal], [audit()]), ctx).response
         # prompt は「根拠が無ければ summary は空、不足は gap に書く」と指示する。公開される本文もその形になる。
-        self.assertIn("冒頭の選択を空にする", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn("冒頭の選択を空にする", grounded.generation_system_prompt())
         self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
         self.assertIn("削除の手順は資料から確認できません。", result.answer_text)
 

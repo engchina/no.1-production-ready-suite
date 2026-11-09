@@ -137,8 +137,8 @@ class WhoCanAnswerDefinitionTest(unittest.TestCase):
 
     def test_system_prompt_defers_the_item_facts_to_the_response_schema(self):
         # 3 つの事実の定義は schema の 1 か所だけ（指示に重ねない）。
-        self.assertNotIn("who_can_answer", grounded.GENERATE_SYSTEM_PROMPT)
-        self.assertIn("項目の書き方は応答 schema に従う", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertNotIn("who_can_answer", grounded.generation_system_prompt())
+        self.assertIn("項目の書き方は応答 schema に従う", grounded.generation_system_prompt())
 
 
 V1_TITLE = "地域別集計表 出力手順 第1版"

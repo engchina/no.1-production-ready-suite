@@ -31,7 +31,6 @@ from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, Evid
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
-from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.rerank_scores import rerank_first_key
@@ -45,9 +44,6 @@ question は完全な原質問です。generation_context の条件・否定・�
 その範囲が支える回答を answer に書いてください。
 条件、例外、否定、数値、比較対象の違いを保ってください。回答候補自体を事実の出典にはせず、evidence の原文で確かめてください。
 一つの結論に離れた箇所が必要なら、それぞれの引用単位 ID を選んでください。
-
-## Step 3: 読取結果を返す
-findings を指定の構造で返してください。該当がなければ空にしてください。
 """
 # 句点も改行も無い長い行を、番号で選べる大きさに分ける上限（読取の入力だけ。最終生成の引用単位は変えない）。
 READING_UNIT_MAX_CHARS = 400
@@ -176,7 +172,7 @@ def prepare_batched_evidence(
     ``failed_batches`` には失敗した組の記録を足す（例外で返せない診断を呼び出し側へ渡す。#4090）。
     ``source_scores`` は出典の ID ごとの原質問への rerank の点数。読取で選ばれなかった原文を予算まで補う順に使う（#4113）。
     """
-    reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
+    reading_system = BATCH_READING_PROMPT
     document_order = document_priority(spans, source_scores)
     selected = order_document_spans(spans, priority=document_order)
     batches: list[dict[str, Any]] = []
