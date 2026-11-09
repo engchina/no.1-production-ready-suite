@@ -4096,6 +4096,8 @@ export const ja = {
   "search.citationPosition.unresolvedTitle": "この根拠の行の位置は確定していません",
   "search.citationPosition.candidatesBody":
     "回答が同じまとまりを参照したため、行が指す箇所を 1 つに決められません（候補 {count} 件）。表示中の 1 件の原文は強調しません。根拠の一覧で候補を確かめてください。",
+  "search.citationPosition.singleCandidateBody":
+    "回答はこの箇所を含むまとまりを参照しました。候補はこの 1 件だけですが、行の内容がこの箇所にあることは確かめられていないため、原文は強調しません。",
   "search.citationPosition.legacyBody":
     "この回答の記録は、行が同じ文書・頁のどの箇所を指すかを持っていません（文書名と頁が合う箇所 {count} 件）。表示中の 1 件の原文は強調しません。",
   // 「回答に未反映の関連章節」の行から章節の原文を開く（#2040）。読み上げの名前は見える文言を含める。
