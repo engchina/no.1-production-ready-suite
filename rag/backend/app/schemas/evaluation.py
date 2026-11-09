@@ -108,9 +108,6 @@ EvaluationFailureReason = Literal[
     "unexpected_refusal",
     "answer_keyword_miss",
     "low_groundedness",
-    "unsupported_claim",
-    "claim_unassessed",
-    "missing_content",
     "answer_failed",
     "answer_evaluation_error",
     "guardrail_warning",
@@ -131,28 +128,23 @@ EvaluationFailureReason = Literal[
     "case_error",
 ]
 
-# 評価の指標(#591)。検索・根拠・回答の 3 つの観点に整理した 9 つと、業務支援の対応の 4 つ（#1231）。
-EVALUATION_METRICS_VERSION = "six_metrics_v1"
+# 評価の指標(#591)。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。
+EVALUATION_METRICS_VERSION = "four_metrics_v1"
 EvaluationMetricName = Literal[
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
-    "requirement_coverage",
-    "claim_support_rate",
     "response_decision_accuracy",
 ]
 EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
-    "requirement_coverage",
-    "claim_support_rate",
     "response_decision_accuracy",
 )
 # 合否と閾値には使わない参考の指標（#4341）。
 # 順位の指標は引用の文書列で、語の重なりは標準回答との比較で計算する（#4714）。
 EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
-    "evidence_coverage",
     "precision_at_10",
     "ndcg_at_3",
     "ndcg_at_10",
@@ -491,52 +483,30 @@ class EvaluationCase(EvaluationHandlingExpectation):
 class EvaluationJudgeDiagnostics(BaseModel):
     """標準回答による評価の判定の診断（rag_engine の ``judge_diagnostics``）。
 
-    ``standard_scope_reused`` は比較範囲（標準回答の比較項目）を同じ評価の job の記録から
-    使い回したか、``standard_scope_retries`` / ``judge_retries`` は比較範囲の固定 / 照合・
-    監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
-    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、指した
-    標準回答の単位の ID がどれも標準回答に無いので比較範囲から外した項目の数。
-    ``judge_calls`` は網羅・正確性・主張の判定の LLM の呼び出しの数（再試行を含む。比較範囲の
-    固定を除く）、``claim_calls`` はそのうち段落ごとの主張の判定の数、``claim_failures`` は判定を
-    完了できず unassessed にした段落の数、``uncited_claims`` は出典が無くモデルを呼ばずに
-    unsupported にした段落の数（#3576）。
+    ``judge_calls`` は正確性の判定の LLM の呼び出しの数（再試行を含む）、``judge_retries`` は出力の
+    誤りを指摘して出し直させた回数、``retry_reasons`` はその原因の例外の型
+    （「correctness:InvalidStructuredOutput」）。
     """
 
-    standard_scope_reused: bool = False
-    standard_scope_retries: int = Field(default=0, ge=0)
-    standard_scope_dropped: int = Field(default=0, ge=0)
     judge_retries: int = Field(default=0, ge=0)
     retry_reasons: list[str] = Field(default_factory=list)
     # 判定に使ったモデルの ID（#3574。共通のモデル設定の既定の判定モデルで解決した ID）。
     judge_model_id: str | None = None
     judge_calls: int = Field(default=0, ge=0)
-    claim_calls: int = Field(default=0, ge=0)
-    claim_failures: int = Field(default=0, ge=0)
-    uncited_claims: int = Field(default=0, ge=0)
 
 
 class EvaluationAnswerJudgement(BaseModel):
-    """標準回答による評価(評価の基準の指標と閾値による合否・主張の監査・必要な項目の網羅)の要約。
+    """標準回答による評価(正確性の判定と、評価の基準の閾値による合否)の要約。
 
-    詳細(指標ごとの値・主張ごとの判定)は trace_id の回答の記録に保存する(#680)。`status` は
+    詳細(指標の値・判定の理由)は trace_id の回答の記録に保存する(#680)。`status` は
     completed / error / input_too_large / timeout / unavailable(評価の記録が無いなど)。
     """
 
     status: str
     passed: bool | None = None
-    claims_supported: bool | None = None
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
-    claim_support_rate: float | None = Field(default=None, ge=0, le=1)
-    requirement_coverage: float | None = None
-    # 標準回答の要点が取得した根拠にある割合（参考値。合否に使わない。#4341）。
-    evidence_coverage: float | None = None
-    # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
-    missing_content: bool | None = None
-    # 追加相談の項目（follow_up）のうち、説明の無い項目があったか。
-    # 参考の情報で、指標・合否・失敗理由（failure_reasons）には入れない（#4062）。
-    missing_follow_up_content: bool | None = None
     message: str | None = None
-    # 判定の診断（比較範囲を job の記録から使い回したか・出力の誤りで再試行した回数）。
+    # 判定の診断（呼び出しの数・出力の誤りで再試行した回数）。
     # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
     judge_diagnostics: EvaluationJudgeDiagnostics | None = None
     # 判定のモデルの ID（#3574）。判定を完了できなかった（時間切れ・失敗）ケースにも残す。
@@ -571,10 +541,7 @@ class EvaluationCaseResult(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
-    requirement_coverage: float | None = None
-    claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
-    evidence_coverage: float | None = None
     precision_at_10: float | None = None
     ndcg_at_3: float | None = None
     ndcg_at_10: float | None = None
@@ -652,7 +619,7 @@ class EvaluationSplitSummary(BaseModel):
 
 
 class EvaluationMetrics(BaseModel):
-    """検索二・回答三・応答判断一の六指標。対象外は None。"""
+    """検索二・回答一・応答判断一の四指標。対象外は None。"""
 
     metrics_version: str = EVALUATION_METRICS_VERSION
     case_count: int
@@ -661,10 +628,7 @@ class EvaluationMetrics(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
-    requirement_coverage: float | None = None
-    claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
-    evidence_coverage: float | None = None
     precision_at_10: float | None = None
     ndcg_at_3: float | None = None
     ndcg_at_10: float | None = None
@@ -772,14 +736,12 @@ EvaluationMetrics.model_rebuild()
 
 
 class EvaluationThresholds(BaseModel):
-    """現行の六指標にだけ適用する最低値。"""
+    """現行の四指標にだけ適用する最低値。"""
 
     model_config = ConfigDict(extra="forbid")
     required_evidence_recall: float | None = Field(default=None, ge=0, le=1)
     mrr: float | None = Field(default=None, ge=0, le=1)
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
-    requirement_coverage: float | None = Field(default=None, ge=0, le=1)
-    claim_support_rate: float | None = Field(default=None, ge=0, le=1)
     response_decision_accuracy: float | None = Field(default=None, ge=0, le=1)
 
 
@@ -914,9 +876,8 @@ def _sync_knowledge_base_filter(
     )
 
 
-# run: 品質評価（#390）。calibration: 判定の校正（人手の判定と評価器の一致。#3578。
-# 結果は `rag_evaluation_calibrations` に書き、`run_result` は持たない）。
-EvaluationJobKind = Literal["run", "calibration"]
+# run: 品質評価（#390）。
+EvaluationJobKind = Literal["run"]
 EvaluationJobStatus = Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 

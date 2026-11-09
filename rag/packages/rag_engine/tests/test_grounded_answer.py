@@ -7,7 +7,6 @@ from dataclasses import replace
 from typing import Any
 from unittest.mock import patch
 
-from audit_fixtures import is_audit_wire, is_explanation_schema, legacy_audit_result, synthetic_explanation
 from citation_unit_support import canonical_fixture, without_unit_annotations
 from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
@@ -61,22 +60,15 @@ class FakeModel:
         self.captured_system_prompts = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        observed = schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        if is_explanation_schema(schema):
-            if not self.explanations:
-                return synthetic_explanation(schema, prompt)
-            text = self.explanations.pop(0) if len(self.explanations) > 1 else self.explanations[0]
-            return schema.model_validate({"explanation": text})
         is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
         source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
         canonical_schema = GroundedDraft if is_generation else schema
         payload = value(prompt) if callable(value) else value
-        if is_audit_wire(schema):
-            return legacy_audit_result(payload, schema)
         return canonical_fixture(payload) if is_generation else canonical_schema.model_validate(payload)
 
 

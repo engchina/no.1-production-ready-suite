@@ -5330,14 +5330,12 @@ def evaluate_answer_record(
     standard_answer: str,
     settings: Settings,
     *,
-    citations: Sequence[RetrievedChunk],
     judge_model_id: str | None = None,
 ) -> dict[str, Any]:
     """保存した回答を標準回答で評価する。
 
-    LLM(rag_engine の evaluate_answer_payload)が標準回答の項目の照合と主張の監査を行い、
-    評価の基準の指標と閾値で合否を付ける(#680)。``citations`` は回答の引用(決定的な指標に使う)。
-    同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+    LLM(rag_engine の evaluate_answer_payload)が標準回答に照らした正確性を 1 回で判定し、
+    評価の基準の閾値で合否を付ける(#680)。同期関数で、呼び出し側は worker thread で動かす。
 
     ``judge_model_id`` は判定のモデル(#3574。呼び出し側が回答を作ったモデルから
     `enterprise_ai_judge_model_id` で解決した ID)。省略時は回答のモデルが分からないものとして
@@ -5353,13 +5351,7 @@ def evaluate_answer_record(
             settings, output_dir=Path(work), answer_model_id=judge_model
         )
         evaluation = evaluate_answer_payload(
-            {
-                **evaluation_input,
-                "standard_answer": standard_answer,
-                "allow_without_standard": True,
-                "six_metrics": True,
-            },
-            engine_settings,
+            {**evaluation_input, "standard_answer": standard_answer}, engine_settings
         )
     diagnostics = evaluation.get("judge_diagnostics")
     evaluation = {
@@ -5369,10 +5361,4 @@ def evaluate_answer_record(
             "judge_model_id": judge_model,
         },
     }
-    return score_answer_evaluation(
-        evaluation,
-        answer=str(evaluation_input.get("answer_text") or ""),
-        citations=citations,
-        insufficient_reason=str(evaluation_input.get("insufficient_reason") or ""),
-        settings=settings,
-    )
+    return score_answer_evaluation(evaluation, settings=settings)
