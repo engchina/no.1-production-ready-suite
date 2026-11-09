@@ -78,9 +78,10 @@ test.describe("API キー", { tag: "@responsive" }, () => {
 
     await page.goto("/search");
     const sidebar = await openSidebarNav(page);
-    // 個人の「API キー」はサイドナビの行に無く、アカウントの欄から開くアカウントの画面のタブ（#1873）。
+    // 個人の「API キー」はサイドナビの行に無く、アカウントの欄のメニューから開くアカウントの画面のタブ（#1873・#4724）。
     await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
-    await sidebar.getByRole("link", { name: /^アカウント設定を開く/ }).click();
+    await sidebar.getByTestId("sidebar-account").click();
+    await page.getByRole("menuitem", { name: "アカウント" }).click();
     await expect(page).toHaveURL(/\/account$/);
     await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
     await expect(page.getByRole("tab", { name: "API キー" })).toHaveAttribute("aria-selected", "true");

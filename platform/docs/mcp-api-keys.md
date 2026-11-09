@@ -21,7 +21,7 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 
 ## API キー
 
-- **各利用者が自分で発行する**: 画面の左下のアカウントの欄（名前・ロール）から開くアカウントの画面の「API キー」のタブ（`/account?tab=api-keys`。#1873）。名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選ぶ。メニュー権限は要らない。1 人 10 件まで。
+- **各利用者が自分で発行する**: 画面の左下のアカウントの欄（名前・ロール）を押して開くメニューの「アカウント」から移る、アカウントの画面の「API キー」のタブ（`/account?tab=api-keys`。#1873）。名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選ぶ。メニュー権限は要らない。1 人 10 件まで。
 - 秘密（`prak_<id>_<秘密>`）は **発行の直後に 1 回だけ** 表示する。DB には SHA-256 だけを保存する（表 `PLATFORM_API_KEYS`）。
 - キーは **発行した利用者として動く**。呼び先は認証のたびに利用者の現在のロールから権限とデータの範囲（検索・回答プロファイル・ナレッジベース・業務プロファイル・Deep Data Security）を組み立てる。ツールの一覧（`tools/list`）も利用者の権限で決まる。
 - 利用者が無効化・削除されたら、そのキーは使えない（削除ではキーも消える）。初回のパスワード変更が済んでいない利用者のキーも使えない。
@@ -111,7 +111,7 @@ NL2SQL の読み取りのツールの例は `nl2sql_list_profiles`、Agent は `
 ## 実装（開発者向け）
 
 - 共通: `pr_system_settings.auth.api_keys`（形式・保存・入出力・製品ごとの範囲 `resource_scopes`・1 分あたりの回数 `ApiKeyRateLimiter`）、`AuthService.create_api_key` / `list_api_keys` / `revoke_api_key` / `authenticate_api_key`、`authorize_request(..., api_key_paths={"/mcp"})`、`build_auth_router(..., api_keys=True)`（`/account/api-keys*` と `/security/api-keys*`）。DDL は共通認証の `PLATFORM_AUTH_DDL`。
-- 画面: `@production-ready/system-settings` の `AccountPage`（`ACCOUNT_PATH`。「API キー」のタブの中身は `MyApiKeysPanel`）・`ApiKeysAdminPage`（`API_KEY_ADMIN_NAV_ITEM`）・`mcpEndpoints`。アカウントの画面へは `SidebarAccountSection` のアカウントの欄（`routes.account`）から移る（#1873）。
+- 画面: `@production-ready/system-settings` の `AccountPage`（`ACCOUNT_PATH`。「API キー」のタブの中身は `MyApiKeysPanel`）・`ApiKeysAdminPage`（`API_KEY_ADMIN_NAV_ITEM`）・`mcpEndpoints`。アカウントの画面へは `SidebarAccountSection` のアカウントの欄のメニュー（`routes.account`）から移る（#1873・#4724）。
 - 製品の manifest: `/account/api-keys*` はログインだけ（`OPEN_API_OPERATIONS`）、`/security/api-keys*` は RAG / NL2SQL が `menu.security_api_keys`、Agent は Agent 管理（`agent.admin`。画面は RAG / NL2SQL）。
 - Agent: `features/agent/mcp_server.py`（ツールとキーの範囲・Run の数の上限）、`runtime.is_mcp_run`（承認の要るツールを呼ばない）。画面で業務 Agent を絞るのは `AccountPage` の `apiKeys.agentScopeOptions`（Agent の画面が、業務 Agent を読める利用者に渡す。#1873）。
 - Agent → RAG / NL2SQL の連携は今までどおりサービストークン（`backend-standard.md`「製品間の連携」）。

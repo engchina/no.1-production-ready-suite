@@ -51,7 +51,7 @@ function Shell({ path = "/documents", collapsed = true }: { path?: string; colla
           onSetSectionCollapsed={() => undefined}
           linkComponent={Link}
           labels={labels}
-          footer={<SidebarAccountFooter name="山田" collapsed={collapsed} onLogout={() => undefined} />}
+          footer={<SidebarAccountFooter name="山田" collapsed={collapsed} account={{ href: "/account", label: "アカウント" }} onLogout={() => undefined} />}
         />
       }
     >
@@ -129,6 +129,46 @@ describe("AppShell のナビのドロワー（md 未満、#367）", () => {
     expect(drawer().querySelector("aside")?.getAttribute("data-state")).toBe("expanded");
     // フッターも展開（利用者名が出る）
     expect(drawer().textContent).toContain("山田");
+  });
+
+  it("利用者のメニューの Escape はメニューだけを閉じ、ドロワーは開いたまま（#4724）", () => {
+    render(<Shell />);
+    click(trigger());
+    const account = drawer().querySelector<HTMLElement>('[data-testid="sidebar-account"]')!;
+    click(account);
+    const item = document.querySelector<HTMLElement>('[role="menuitem"]')!;
+    expect(document.activeElement).toBe(item);
+    key(item, { key: "Escape" });
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(account);
+  });
+
+  it("利用者のメニューの Tab はドロワーのフォーカスの閉じ込めの中に留まる（#4724）", () => {
+    render(<Shell />);
+    click(trigger());
+    const account = drawer().querySelector<HTMLElement>('[data-testid="sidebar-account"]')!;
+    click(account);
+    const before = focusableIn(drawer());
+    expect(before[before.length - 1]).toBe(account);
+    key(document.querySelector('[role="menuitem"]')!, { key: "Tab" });
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    // ボタンがドロワーの最後の要素なので、次の Tab は先頭へ回る。
+    expect(document.activeElement).toBe(before[0]);
+  });
+
+  it("利用者のメニューの「アカウント」を押すとドロワーを閉じる（#4724）", () => {
+    render(<Shell />);
+    click(trigger());
+    click(drawer().querySelector('[data-testid="sidebar-account"]')!);
+    const link = document.querySelector<HTMLElement>('a[role="menuitem"]')!;
+    act(() => {
+      // happy-dom の既定の移動を止める（ドロワーを閉じるのは React の click の伝播）。
+      link.addEventListener("click", (event) => event.preventDefault(), { once: true });
+      link.click();
+    });
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 
   it("Escape で閉じ、「メニュー」ボタンへフォーカスを戻す", () => {
