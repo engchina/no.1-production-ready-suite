@@ -15,7 +15,7 @@ ESCALATION_STAGE = "answer.generate"
 
 
 class EscalationRequested(Exception):  # noqa: N818 - 失敗ではなく、2 つ目のモデルへの昇格の要求
-    """1 つ目のモデルの生成の段が確認を通らなかった（修正の回を 1 つ目のモデルで続けない）。"""
+    """1 つ目のモデルの生成の段の出力が形式の検査を通らなかった。"""
 
     def __init__(self, signals: tuple[str, ...]) -> None:
         super().__init__("model_cascade_escalation")

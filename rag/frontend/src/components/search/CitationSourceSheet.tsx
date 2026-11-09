@@ -67,7 +67,9 @@ export function CitationSourceSheet({
               body: t(
                 unresolved.reason === "legacy"
                   ? "search.citationPosition.legacyBody"
-                  : "search.citationPosition.candidatesBody",
+                  : unresolved.candidates.length === 1
+                    ? "search.citationPosition.singleCandidateBody"
+                    : "search.citationPosition.candidatesBody",
                 { count: unresolved.candidates.length },
               ),
             }

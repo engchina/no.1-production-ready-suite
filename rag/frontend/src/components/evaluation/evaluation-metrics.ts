@@ -52,7 +52,6 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   known_condition_reasked: "evaluation.failureReason.known_condition_reasked",
   screen_missing: "evaluation.failureReason.screen_missing",
   wrong_screen: "evaluation.failureReason.wrong_screen",
-  off_target: "evaluation.failureReason.off_target",
   case_error: "evaluation.failureReason.case_error",
 };
 

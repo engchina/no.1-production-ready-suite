@@ -347,8 +347,7 @@ function AssistantColumn({
   guardrailWarnings: string[];
   answerDiagnostics?: unknown;
   /**
-   * 段落の印の記録（#2738）を読む、診断の無い保存した回答の会話のメッセージ（会話を開き直したとき）。診断があれば
-   * 診断から読む。
+   * 診断の無い保存した回答の会話のメッセージ（会話を開き直したとき）。診断があれば診断から読む。
    */
   passageSource?: unknown;
   /** 回答の注意書き（回答の本文と根拠の後に出す。#2405）。 */
@@ -493,7 +492,7 @@ function AssistantColumn({
           {answer.trim() ? <ChatAnswerBody testId="chat-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
           {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
           {finished && (answerDiagnostics || passageSource) ? (
-            <AnswerNotices diagnostics={answerDiagnostics} passageSource={passageSource} />
+            <AnswerNotices diagnostics={answerDiagnostics} />
           ) : null}
         </>
       )}
@@ -1828,7 +1827,7 @@ export function ChatClient() {
                         stoppedMessage: reply.status === "CANCELLED" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
                         notice: reply.status === "COMPLETE" ? (reply.notice ?? null) : null,
-                        // 段落の印の記録（#2738）。会話のメッセージに記録があるときだけ読む（無ければ今までの表示）。
+                        // 診断の無い保存した回答は、会話のメッセージから読む。
                         passageSource: reply.status === "COMPLETE" ? reply : null,
                         savedAnswer: Boolean(
                           reply.trace_id && answerTraceIds.has(reply.trace_id)

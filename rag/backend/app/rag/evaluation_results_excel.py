@@ -79,7 +79,6 @@ FAILURE_REASONS = {
     "known_condition_reasked": "分かっている条件を聞き直した",
     "screen_missing": "案内すべき画面を案内していない",
     "wrong_screen": "別の画面を案内した",
-    "off_target": "目的外の回答",
 }
 CASE_STATUSES = {"success": "成功", "error": "失敗"}
 NOT_RUN_LABEL = "未実行"
