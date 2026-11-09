@@ -108,9 +108,9 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   });
   const fields = [
     { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
-    { section: "answer_check_cues", key: "guarantee_verbs", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "answer_check_cues", key: "completion_words", kind: "words", choices: [], ingest: false, max_chars: 40 },
   ];
-  const effective = { numbers: { article_units: ["条"] }, answer_check_cues: { guarantee_verbs: ["なぜ", "原因"] } };
+  const effective = { numbers: { article_units: ["条"] }, answer_check_cues: { completion_words: ["なぜ", "原因"] } };
   await page.route("**/api/settings/language-pack", (route) =>
     route.fulfill({
       json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "a" }, error_messages: [], warning_messages: [] },
@@ -123,7 +123,7 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await expect(section).toHaveAttribute("open", "");
   // 取込の項目（条の単位）は出さない。
   await expect(section.getByLabel("条の単位", { exact: true })).toHaveCount(0);
-  const cause = section.getByLabel("保証の動詞", { exact: true });
+  const cause = section.getByLabel("確定・完了の語", { exact: true });
   await expect(cause).toHaveValue("なぜ\n原因");
   await cause.fill("なぜ\n原因\n理屈");
   await expect(section.getByText("上書き 1 項目")).toBeVisible();
@@ -132,7 +132,7 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect
     .poll(() => (updateBody?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ answer_check_cues: { guarantee_verbs: ["なぜ", "原因", "理屈"] } });
+    .toEqual({ answer_check_cues: { completion_words: ["なぜ", "原因", "理屈"] } });
   await section.locator("summary").click();
   await expect(cause).not.toBeVisible();
   await page.screenshot({ path: test.info().outputPath("language-overrides-collapsed.png"), fullPage: true });
@@ -1411,7 +1411,7 @@ for (const viewport of [
 test("言語資源の全体再取得は継承欄だけを更新し、編集中と保存済みの上書きを保持する", { tag: "@responsive" }, async ({ page }) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
-  const fields = ["guarantee_verbs", "guarantee_endings", "guarantee_exceptions"].map((key) => ({
+  const fields = ["completion_words", "completion_connectors", "constraint_words"].map((key) => ({
     section: "answer_check_cues", key, kind: "words", choices: [], ingest: false, max_chars: 40,
   }));
   let causeValue = "なぜ";
@@ -1419,7 +1419,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   let calls = 0;
   await page.route("**/api/settings/language-pack", (route) => {
     calls++;
-    const effective = { answer_check_cues: { guarantee_verbs: [causeValue], guarantee_endings: [pastValue], guarantee_exceptions: ["以後"] } };
+    const effective = { answer_check_cues: { completion_words: [causeValue], completion_connectors: [pastValue], constraint_words: ["以後"] } };
     return route.fulfill({ json: { data: { fields, effective, builtin: effective, overrides: {}, hash: causeValue }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/search-answer-profiles?id=bv-default");
@@ -1447,7 +1447,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の説明");
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ answer_check_cues: { guarantee_endings: ["過去"], guarantee_exceptions: ["今後"] } });
+    .toEqual({ answer_check_cues: { completion_connectors: ["過去"], constraint_words: ["今後"] } });
   causeValue = "理由";
   pastValue = "過去";
   const savedCalls = calls;
@@ -1468,7 +1468,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   await future.fill("将来");
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ answer_check_cues: { guarantee_endings: ["過去"], guarantee_exceptions: ["将来"] } });
+    .toEqual({ answer_check_cues: { completion_connectors: ["過去"], constraint_words: ["将来"] } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("inherited-language-refresh.png"), fullPage: true });
 });

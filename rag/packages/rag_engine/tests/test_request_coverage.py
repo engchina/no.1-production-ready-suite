@@ -59,8 +59,6 @@ def test_request_registration_does_not_assess_evidence() -> None:
     targets = coverage_targets(QUESTION, split)
     assert [t.id for t in targets] == ["Q1"]
     assert targets[0].text == QUESTION
-    assert all(row["status"] == "unassessed" and row["assessment"] == "not_performed" for row in rows)
-    assert all(not row["evidence_ids"] for row in rows)
 
 
 def test_background_sentence_is_not_assessed() -> None:

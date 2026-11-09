@@ -21,7 +21,6 @@ import {
   parseCitationLine,
   REASONING_LABEL,
   resolveCitationLineTargets,
-  type AnswerTextBlock,
   type AnswerTextEntry,
   type CitationTarget,
 } from "@/lib/answer-text";

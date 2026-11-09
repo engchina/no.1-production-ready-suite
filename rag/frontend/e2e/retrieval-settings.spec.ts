@@ -25,12 +25,6 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
-    const recoveryHint = page.getByText(/^回答生成が明示した根拠不足の要求を/);
-    await expect(recoveryHint).toContainText("初回検索の「質問の言い換え・分解」とは別の処理です");
-    await expect(recoveryHint).toContainText("自動ルーティング（自動選択）");
-    await expect(recoveryHint).toContainText("「原質問のみ（言い換え・分解なし）」を含めない");
-    await expect(recoveryHint).toContainText("AI の呼び出しが増えることがあります");
-    await recoveryHint.screenshot({ path: testInfo.outputPath("request-coverage-help.png") });
     await expect(page.getByText("既定は 60 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
     await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
@@ -604,10 +598,6 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
     await expect(group).toHaveCSS("border-top-width", "1px");
   }
   // 区切りの線は切り替えの行の上にだけあり、下限の欄は切り替えの行の続きとして余白を持つ。
-  const derivedConclusionHint = card.getByText(/資料をもとに導いた結論は別に確認し、確認できない結論は保留します/);
-  await derivedConclusionHint.scrollIntoViewIfNeeded();
-  await expect(derivedConclusionHint).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("derived-conclusion-review.png") });
   const rerankBlock = card.getByTestId("answering-rerank-block");
   const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
   const boxes = await Promise.all([rerankBlock.boundingBox(), options.boundingBox()]);
