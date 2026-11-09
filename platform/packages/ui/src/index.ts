@@ -55,9 +55,11 @@ export {
   type OptimisticChatStatus,
 } from "./lib/chat-optimistic";
 export {
+  hasMarkdownTable,
   splitMarkdownTables,
   toTabularData,
   type MarkdownTableSegment,
+  type SplitMarkdownTablesOptions,
   type TabularCellValue,
   type TabularColumn,
   type TabularData,
@@ -382,6 +384,13 @@ export {
   type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
+// 回答の本文（表を共通の結果の表で出す。3 製品共通。#4734）
+export {
+  AnswerBody,
+  DEFAULT_ANSWER_BODY_LABELS,
+  type AnswerBodyLabels,
+  type AnswerBodyProps,
+} from "./components/chat/answer-body";
 // 回答の見出しと、チャットの回答の本文の見出し「回答」（3 製品共通。#3433）
 export {
   AnswerHeading,

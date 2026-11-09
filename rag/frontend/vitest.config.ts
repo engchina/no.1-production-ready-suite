@@ -8,6 +8,8 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
   },
   resolve: {
+    // 部品を描くテスト（AnswerText など）で、共有 UI と同じ React を使う（Agent の vitest.config.ts と同じ）。
+    dedupe: ["react", "react-dom"],
     alias: { "@": resolve(import.meta.dirname, "src") },
   },
 });

@@ -914,7 +914,7 @@ B 型（マスタ詳細の閲覧）の一覧 + 詳細の部品です。以前は
 
 ### `MarkdownText`（新規）— ★ LLM の回答の Markdown を記号のまま出さない（#1808）
 
-LLM の回答など Markdown で書かれた本文は、この部品で描きます。見出し・段落・**太字**・*斜体*・箇条書き（入れ子）・番号付き・インラインコード・コードブロック・リンク・引用・区切り線を React の要素で描き、表は扱いません（本文の表は `splitMarkdownTables` で先に取り出して `ResultTable` で出す。Agent の `AnswerBody`）。製品で Markdown の解析・描画を書かない（依存のライブラリも足さない）。
+LLM の回答など Markdown で書かれた本文は、この部品で描きます。見出し・段落・**太字**・*斜体*・箇条書き（入れ子）・番号付き・インラインコード・コードブロック・リンク・引用・区切り線を React の要素で描き、表は扱いません（本文の表は `splitMarkdownTables` で先に取り出して `ResultTable` で出す。共有の `AnswerBody`。#4734）。製品で Markdown の解析・描画を書かない（依存のライブラリも足さない）。
 
 | 決めたこと | 理由 |
 |---|---|
@@ -1446,6 +1446,7 @@ QA に事前共有してください。**189点あります。**
 | 193 | **RAG・NL2SQL の欄の読み込み中の形で、ラベルが文で出て、読み込み後とラベルの行の高さがそろう**（#4654。`FieldSkeleton`） | ラベルは灰色の棒で、高さが製品ごとに違った（RAG `h-4`・NL2SQL `h-5`）→ Agent と同じく決まった文を出し、棒にするときも文字の行の高さ（`1lh`）にする。ツールバーの欄はラベルなしのまま |
 | 194 | **チャットのツールバーの高さが、対象の読み込みの前後で変わらない**（#4656。`SearchableSelectField` の compact） | 値を選んだ compact の必須の欄は外枠がボタンより 0.375rem 高く、RAG・NL2SQL は読み込み後にツールバーが 5.25px 高くなっていた → 外枠の高さをボタンと同じにする（読み上げ名は変えない） |
 | 195 | **サイドナビ下部の利用者の欄がメニューを開くボタンになり、ログアウトの行が無くなる**（#4724。`SidebarAccountFooter`） | 欄の行全体が `/account` へのリンクで、下にログアウトの行（折りたたみ時はアイコンの行）を常に表示 → 欄（アイコン・ログイン名・ロール名）を押すと上に「アカウント」「ログアウト」の `FloatingActionMenu` が開く。折りたたみ時はアイコンを押して同じメニュー。ログイン省略の環境は「アカウント」だけで、「ログイン省略」の表示は欄の下に残す。アカウントの画面を開いている間は欄が塗り + 左バー + `aria-current="page"`。開いている間の欄は hover と同じ面 | 利用者の情報と操作を 1 か所にまとめ、ナビの下部の高さを空ける。ログアウトを誤って押しにくくする |
+| 196 | **RAG の回答の本文の表が、文字のままでなく共通の結果の表で出る**（#4734。`AnswerBody`・`hasMarkdownTable`） | `\| 設定名 \| 既定値 \|` と `\| --- \| --- \|` が節に分けない本文・段落・箇条書き・結論の説明に文字のまま出た → Agent と同じ `ResultTable` で出す（節の根拠の行は表の下で押せるまま）。文書の表から切り出した区切りの行の無い行の並び（2 行以上）は列の名前を番号にして表にする。表の無い本文は今までどおり | Agent と同じ部品で 3 製品の表の見た目をそろえる。Agent の見た目は変えない |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 
@@ -1486,6 +1487,7 @@ QA に事前共有してください。**189点あります。**
 | `Pagination` ほか（#1266） | **変更・新規 export。** `Pagination` に `labels` / `range`（`summary` / `prevLabel` / `nextLabel` / `pageIndicator` は任意に）、`PagedDataTable` の `paginationLabels` は任意に。新規 `OffsetPagination` / `CursorPagination` / `useCursorPages` / `cursorPagination` / `paginationRange` / `lastPageOffset` / `outOfRangeOffset` / `formatPaginationNumber` / `DEFAULT_PAGINATION_LABELS` / `PageSizeSelect` / `PAGE_SIZE_OPTIONS` / `DEFAULT_PAGE_SIZE_SELECT_LABELS` / `loadMoreErrorMessage`。`PaginationLabels` の定義は `pagination.tsx` へ移動（export 元は同じ） |
 | `ResultTable`（#1178） | **新規 export（改名）。** `ResultTable` / `ResultTableProps` / `ResultTableColumn` / `ResultTableLabels` / `ResultFullResultLink` / `DEFAULT_RESULT_TABLE_LABELS` / `RESULT_PREVIEW_ROWS` / `RESULT_PAGE_SIZES` / `resultSummaryText`。`ChatResultTable` などの旧名は別名として残す（非推奨）。`meta`（要約の右の補足）を追加。シートの見出しの CSV のボタンの testid を `<testId>-all-csv` に分けた（以前は 2 つとも `<testId>-csv`） |
 | 表の形の判定（#1158） | **新規 export。** `toTabularData` / `splitMarkdownTables` / `TabularData` / `TabularColumn`（= `ResultTableColumn`）/ `TabularCellValue` / `MarkdownTableSegment` |
+| `AnswerBody` / `DEFAULT_ANSWER_BODY_LABELS` / `hasMarkdownTable` / `SplitMarkdownTablesOptions`（#4734） | **新規 export。** Agent の `AnswerBody` を `packages/ui` に移した（Agent の見た目は変えない）。`splitMarkdownTables` に `headerlessRows` の指定を足した（既定の動きは変えない）。`AnswerSectionEntry` に `block?` を足した |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `DEFAULT_PAGE_SIZE`・`DEFAULT_PAGE_LIMIT`（#1952） | **既定値の変更。** `DEFAULT_PAGE_SIZE`（`@production-ready/ui`）は 10 → 25、`PAGE_SIZE_OPTIONS` は `[10, DEFAULT_PAGE_SIZE, 50, 100]`（値は 10 / 25 / 50 / 100 のまま）、`RESULT_PAGE_SIZES` は 25 / 50 / 100。`pr_backend_core.api.DEFAULT_PAGE_LIMIT`（`offset_params()` / `cursor_params()` / `empty_page()` の既定）は 50 → 25 |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |

@@ -87,6 +87,14 @@ function sectionTitle(line: string, format?: AnswerFormat): boolean {
   ) + "$").test(line));
 }
 
+function nextNonEmptyLine(lines: readonly string[], start: number): string | undefined {
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (line) return line;
+  }
+  return undefined;
+}
+
 export function parseAnswerText(text: string, format?: AnswerFormat): AnswerTextBlock[] | null {
   const lines = text.split("\n");
   const citation = format?.citation_prefix ? new RegExp("^" + escapePattern(format.citation_prefix)) : CITATION;
@@ -110,7 +118,8 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   // 結論の説明（#4393）を集めている項目。根拠の行（回答エンジンは説明の後に必ず根拠の行を置く）か節の見出しで閉じる。
   let reasoning: { entry: Extract<AnswerTextEntry, { kind: "item" }>; lines: string[] } | null = null;
   // 本文の続きの行を受ける項目（#4632）。回答エンジンは項目の文の改行（隣り合う表の行をまとめた引用など）をそのまま
-  // 出すので、項目の直後の行は空行・箇条書き・節の見出し・根拠の行で区切られるまで項目の本文の続きにする。
+  // 出すので、項目の直後の行は空行（後ろが表の行のときを除く。#4734）・箇条書き・節の見出し・根拠の行で区切られるまで
+  // 項目の本文の続きにする。
   // 区切りは書式の印だけで決める。結論の節の項目は説明の行を details に分けるので受けない。
   let continued: Extract<AnswerTextEntry, { kind: "item" }> | null = null;
   const closeReasoning = () => {
@@ -119,10 +128,15 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
     if (value) reasoning.entry.reasoning = value;
     reasoning = null;
   };
-  for (const raw of lines) {
+  for (const [lineIndex, raw] of lines.entries()) {
     const line = raw.trim();
-    const item = continued;
+    const item: Extract<AnswerTextEntry, { kind: "item" }> | null = continued;
     continued = null;
+    if (item && !line && nextNonEmptyLine(lines, lineIndex + 1)?.startsWith("|")) {
+      // 項目の直後の空行の後ろが表の行なら、表も項目の続きにする（#4734。後ろの根拠の行を項目に残す）。判定は行の形だけ。
+      continued = item;
+      continue;
+    }
     if (reasoning) {
       if (!citation.test(line) && !sectionTitle(line, format)) {
         reasoning.lines.push(raw.trimEnd());

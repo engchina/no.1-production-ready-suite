@@ -4099,6 +4099,11 @@ export const ja = {
   "search.citationPosition.legacyBody":
     "この回答の記録は、行が同じ文書・頁のどの箇所を指すかを持っていません（文書名と頁が合う箇所 {count} 件）。表示中の 1 件の原文は強調しません。",
   // 「回答に未反映の関連章節」の行から章節の原文を開く（#2040）。読み上げの名前は見える文言を含める。
+  "search.answerText.tableName": "回答の表",
+  "search.answerText.tableNameIndexed": "回答の表 {number}",
+  "search.answerText.tableScrollLabel": "{name}。表の中をスクロールできます。",
+  "search.answerText.tableSheetTitle": "{name}（{count} 行）",
+  "search.answerText.tableClose": "{name}を閉じる",
   "search.answerText.openUnreadSection": "原文を開く",
   "search.answerText.openUnreadSectionLabel": "{section}の原文を開く",
   // 回答の段落の印（共有の AnswerSections。Agent の chat.answer.passage.* と同じ文言。#2738）。理由の文は backend が
