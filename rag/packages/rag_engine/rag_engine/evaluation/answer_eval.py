@@ -1402,23 +1402,15 @@ def _summary_body_candidates(
 _SECTION_KINDS = (
     ("rules_section", ""),
     ("quote_only_section", ""),
-    ("unsourced_section", ""),
-    ("marked_rules_section", ""),
     ("guide_notes_section", ""),
     ("gaps_section", "not_a_claim"),
     ("unverified_section", "not_a_claim"),
     ("deadline_section", "not_a_claim"),
-    ("removed_section", "not_a_claim"),
-    ("marked_section", "not_a_claim"),
     ("confirmations_section", "data_confirmation"),
 )
 # 節の注記・定型の文（文ごとに分けた段落でも、どの文も主張ではない）。
 _NOTE_LABELS = (
     "quote_only_note",
-    "removed_section_note",
-    "marked_section_note",
-    "unsourced_section_note",
-    "marked_rules_section_note",
     "confirmation_only_summary",
     "deadline_summary",
     "insufficient_evidence_summary",

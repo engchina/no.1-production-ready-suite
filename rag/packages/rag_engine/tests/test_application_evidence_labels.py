@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from application_verdict_stub import audit_reply, is_application_schema
-from audit_fixtures import synthetic_explanation
 from citation_unit_support import canonical_fixture
 from test_grounded_answer import context, ids, record
 
@@ -112,8 +111,6 @@ def answer(generated_for: Any) -> tuple[Any, list[str]]:
 
     def model(_system: str, prompt: str, _settings: Any, schema: Any, **_options: Any) -> Any:
         calls.append(schema.__name__)
-        if explanation.is_explanation_schema(schema):
-            return synthetic_explanation(schema, prompt)
         if is_application_schema(schema):
             return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         if issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft:

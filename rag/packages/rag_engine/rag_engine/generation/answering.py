@@ -54,7 +54,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import crag_generation, form_field_kinds, model_cascade, passage_marks
+from rag_engine.generation import crag_generation, form_field_kinds, model_cascade
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -283,18 +283,10 @@ from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
 from rag_engine.retrieval.request_coverage import (
-    COVERAGE_SCHEMA_VERSION,
     CoverageBudget,
     CoverageUsage,
-    RequestTarget,
     TargetedRetrieval,
-    coverage_counts,
-    coverage_targets,
-    re_retrieval_skip_reason,
-    request_rows,
-    run_targeted_retrievals,
     select_new_parents,
-    within_extra_budget,
 )
 from rag_engine.retrieval.rerank_order import COLUMN_RERANK, COLUMN_SEARCH, DEFAULT_SLOT_RATIO, order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score

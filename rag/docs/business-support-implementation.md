@@ -82,13 +82,6 @@
   根拠の原文が廃止を明記した版（「第1版は第2版の施行により廃止」。見出し・文書名の「第N版」で照らす）なら、その文書の
   説明は本文に残して段落に警告（`superseded`）を付け、版の確認を確認の項目に挙げない（`grounded.superseded_evidence_ids`）。
   旧版の警告だけでは人の確認に回さない。版を比べる・旧版を尋ねる質問、旧版の版・年を名指しする質問は除く。
-- **本文から外すのは根拠と矛盾する説明だけ（#2738）。** 監査が `contradicted` と判定した説明だけを本文から外し、
-  根拠で確かめられない説明（監査の `unsupported`・原文と一致しない引用・未知の根拠・監査が終わらない）は本文に残して
-  未確認の印を、規則の検査（ボタン名・年の一致・質問の対象の名前・内部の番号・表の行の対応）と監査の
-  `not_applicable` は警告を付ける。監査が質問からずれたと判定した回答（off_goal）も本文を残し、回答全体の警告にする。
-  回答の構造・回答の記録・会話のメッセージ・MCP の `rag_search` に `passage_marks`・`removed_passages`・
-  `answer_warnings`（形は `platform/contracts/answer-passages/passage-marks.json`）を持ち、本文の末尾に「根拠と矛盾し
-  除いた内容」「確認が必要な点」の節を足す。判定ごとの扱いの表は [rag-engine.md](./rag-engine.md)「段落の印」。
 - **別の資料の確認は実データではない（#1491）。** 「回答を確定するために確認すること」の「資料: …」の行（草稿の
   `reference_materials`）は `needs_environment_data` の判定に数えない（`handoff_reasons` は `reference_materials`）。
   実行できる説明が無く、監査した要求がすべて `missing` なら、実データ・別の資料の確認があっても `insufficient_evidence`

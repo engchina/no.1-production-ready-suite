@@ -29,11 +29,6 @@ def _run(model, ctx, mode, **overrides):
         )
 
 
-def _fact(value):
-    """事実の監査の応答（standard の schema に無い項目を除く）。"""
-    return {key: value[key] for key in value if key in GroundedFactAudit.model_fields}
-
-
 def _audit_inputs(model):
     return [json.loads(prompt) for name, prompt in model.prompts if name in {"GroundedAudit", "GroundedFactAudit"}]
 

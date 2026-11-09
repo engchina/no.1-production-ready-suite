@@ -5,13 +5,11 @@
 入力は合成の文で、外部の I/O は使わない。
 """
 
-import json
 from unittest.mock import patch
 
 import pytest
 
 from rag_engine.generation import grounded
-from rag_engine.generation.query_prompts import _prompt_task_contract
 from rag_engine.retrieval.request_coverage import coverage_targets
 from rag_engine.retrieval.task_contract import COUNT_REQUEST, LIST_REQUEST, STEPS_REQUEST, explicit_requests, task_contract
 
@@ -74,18 +72,6 @@ def test_pinned_evidence_keeps_the_upper_bound():
     with patch.object(grounded, "SPAN_TAGGERS", [_fake_tagger]):
         tagged = grounded.tag_spans("項目について。", spans)
     assert sum(span["pinned"] for span in tagged) == grounded.MAX_PINNED
-
-
-def test_llm_context_has_no_goal_and_keeps_requests():
-    """生成・監査・検索文の生成へ渡す質問の情報に goal を入れず、要求単位は保つ。"""
-    view = grounded._contract_view(PLAIN_QUESTION)
-    assert "goal" not in view
-    assert [unit["id"] for unit in view["request_units"]] == ["Q1"]
-    assert '"goal"' not in _prompt_task_contract("帳票Aを出力する方法を教えてください。")
-    assert "goal" not in json.dumps(task_contract("対象は何件ありますか。"), ensure_ascii=False)
-    for prompt in (grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT):
-        assert "goal、" not in prompt
-    assert "task_contract の current_request に答えていれば aligned" in grounded.AUDIT_SYSTEM_PROMPT
 
 
 def test_per_request_coverage_targets_do_not_depend_on_a_category():

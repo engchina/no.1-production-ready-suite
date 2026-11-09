@@ -650,6 +650,8 @@ def build_engine_settings(
             settings.rag_article_catalog_cache_max_entries
         ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
+        # 小問ごとの検索の上限(#2399。期限は再検索と共通)。
+        # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
@@ -4998,8 +5000,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 回答の構造（AnswerEnvelope。#1235）。outcome は回答の対応（answered / conditional / …）。
         "outcome": (result.envelope or {}).get("outcome"),
         "envelope": dict(result.envelope or {}),
-        # 段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738。形は
-        # platform/contracts/answer-passages/passage-marks.json）。画面・MCP・評価が読む。
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,
@@ -5009,8 +5009,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "text_search_tokens": list(result.text_search_tokens),
         "crag_attempt_count": len(result.crag_attempts or ()),
         "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
-        # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
-        "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
             {"guide_step_retrieval": dict(trace)}

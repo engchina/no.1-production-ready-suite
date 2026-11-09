@@ -147,7 +147,6 @@ async def test_formal_review_no_change_keeps_source_and_no_revision(
     def unchanged(
         recipe: Mapping[str, object], artifact: Mapping[str, object]
     ) -> ReviewedExtractionWrite:
-
         assert recipe["recipe_id"] == recipe_id
         assert artifact["source_sha256"] == "a" * 64
         assert artifact["recipe_subset"] == {"rag_preprocess_profile": "passthrough"}

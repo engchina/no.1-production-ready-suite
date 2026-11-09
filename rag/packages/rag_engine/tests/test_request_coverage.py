@@ -11,19 +11,11 @@ import pytest
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeRule, RuntimeTerm
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.request_coverage import (
-    CoverageBudget,
-    RequestTarget,
     TargetedRetrieval,
     coverage_targets,
-    re_retrieval_skip_reason,
-    request_hints,
-    request_rows,
-    run_targeted_retrievals,
     select_new_parents,
-    targeted_queries,
 )
 
 _VOCABULARY = re.compile("請求書|請求|再発行|受注|登録|方法|業務|種別|追加|担当|インボイス|承認|取消|締め|語[0-9]")
@@ -63,13 +55,8 @@ def context(*parents: ContextParentEvidence) -> AnswerContext:
 QUESTION = "受注の登録方法は？請求書の再発行方法は？"
 
 
-def rows_for(question: str, ctx: AnswerContext) -> tuple[list[RequestTarget], list[dict[str, Any]]]:
-    targets = coverage_targets(question, split)
-    return targets, request_rows(targets)
-
-
 def test_request_registration_does_not_assess_evidence() -> None:
-    targets, rows = rows_for(QUESTION, context(parent("p1", QUESTION)))
+    targets = coverage_targets(QUESTION, split)
     assert [t.id for t in targets] == ["Q1"]
     assert targets[0].text == QUESTION
     assert all(row["status"] == "unassessed" and row["assessment"] == "not_performed" for row in rows)
@@ -89,119 +76,6 @@ def test_parallel_targets_are_assessed_separately() -> None:
     assert [t.text for t in targets] == ["業務と種別を追加したい。"]
 
 
-def test_only_explicit_answer_status_enables_search() -> None:
-    rows = [{"id": "Q1", "status": "missing"}]
-    assert re_retrieval_skip_reason(rows, CoverageBudget()) == "no_explicit_gap"
-    rows[0]["answer_status"] = "missing"
-    assert re_retrieval_skip_reason(rows, CoverageBudget()) == ""
-    assert re_retrieval_skip_reason(rows, CoverageBudget(enabled=False)) == "disabled"
-    assert re_retrieval_skip_reason(rows, CoverageBudget(max_queries=0)) == "no_budget"
-
-
-def _missing(n: int) -> tuple[list[RequestTarget], list[dict[str, Any]]]:
-    targets = [RequestTarget(f"Q{i}", "request", f"要求{i}", (f"語{i}",)) for i in range(1, n + 1)]
-    return targets, [{"id": t.id, "status": "unassessed", "answer_status": "missing"} for t in targets]
-
-
-def test_targeted_retrieval_respects_max_queries() -> None:
-    targets, rows = _missing(3)
-    calls: list[str] = []
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        calls.append(text)
-        return context(parent(f"new-{text}", text))
-
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=2), retrieve=retrieve, tokenize=split)
-
-    assert calls == ["要求1", "要求2"]
-    assert [r.request_id for r in results] == ["Q1", "Q2"]
-    assert stop == "max_queries"
-
-
-def test_targeted_retrieval_stops_at_deadline() -> None:
-    targets, rows = _missing(3)
-    now = [0.0]
-    calls: list[str] = []
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        calls.append(text)
-        now[0] += 6.0  # 1 回の検索に 6 秒かかる
-        return context()
-
-    results, stop = run_targeted_retrievals(
-        rows, targets, budget=CoverageBudget(max_queries=5, deadline_seconds=10), retrieve=retrieve, tokenize=split, clock=lambda: now[0]
-    )
-
-    # 2 回目は 6 秒の時点で始まり（期限内）、3 回目は 12 秒の時点なので始めない。
-    assert calls == ["要求1", "要求2"]
-    assert [r.elapsed_ms for r in results] == [6000, 6000]
-    assert stop == "deadline"
-
-
-def test_targeted_retrieval_failure_is_recorded_and_continues() -> None:
-    targets, rows = _missing(2)
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        if text == "要求1":
-            raise RuntimeError("search down")
-        return context(parent("new", "語2"))
-
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=split)
-
-    assert results[0].error.startswith("RuntimeError")
-    assert results[0].parents == ()
-    assert results[1].parents and not results[1].error
-    assert stop == ""
-
-
-def test_missing_requests_are_searched_before_weak_ones() -> None:
-    targets = [RequestTarget(f"Q{i}", "request", f"要求{i}", (f"語{i}", "共通")) for i in range(1, 4)]
-    rows = [
-        {"id": "Q1", "status": "unassessed", "answer_status": "partial", "terms": ["語1", "共通"], "matched_terms": ["共通"]},
-        {"id": "Q2", "status": "supported"},
-        {"id": "Q3", "status": "unassessed", "answer_status": "missing"},
-    ]
-    calls: list[tuple[str, tuple[str, ...]]] = []
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        calls.append((text, queries))
-        return context()
-
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=1), retrieve=retrieve, tokenize=split)
-
-    # 枠が 1 回なら根拠の無い要求を先に検索する。
-    assert [r.request_id for r in results] == ["Q3"]
-    assert stop == "max_queries"
-    calls.clear()
-    run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=2), retrieve=retrieve, tokenize=split)
-    # 一部だけの要求は、要求の文に加えて根拠に現れなかった語だけの文でも検索する。
-    assert calls == [("要求3", ("要求3",)), ("要求1", ("要求1",))]
-
-
-def test_single_request_is_searched_only_with_a_new_query() -> None:
-    """1 要求の質問は、最初の検索と同じ文では検索せず、違う検索文があるときだけ検索する（#2810）。"""
-    target = RequestTarget("Q1", "request", "請求書の再発行方法は？", ("請求書", "再発行", "締め"))
-    calls: list[tuple[str, ...]] = []
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        calls.append(queries)
-        return context()
-
-    searched = ("請求書の再発行方法は?",)  # 全角・半角の違いは同じ文として扱う
-    missing = [{"id": "Q1", "status": "unassessed", "answer_status": "missing", "terms": list(target.terms), "matched_terms": []}]
-    results, stop = run_targeted_retrievals(
-        missing, [target], budget=CoverageBudget(), retrieve=retrieve, tokenize=split, searched_queries=searched
-    )
-    assert (results, stop, calls) == ([], "same_query", [])
-
-    weak = [{"id": "Q1", "status": "unassessed", "answer_status": "partial", "terms": list(target.terms), "matched_terms": ["請求書"]}]
-    results, stop = run_targeted_retrievals(
-        weak, [target], budget=CoverageBudget(), retrieve=retrieve, tokenize=split, searched_queries=searched
-    )
-    assert calls == []
-    assert results == [] and stop == "same_query"
-
-
 def test_select_new_parents_round_robin_skips_existing_and_caps() -> None:
     first = TargetedRetrieval("Q1", ("a",), (parent("old", "x"), parent("a1", "x"), parent("a2", "x"), parent("a3", "x")))
     second = TargetedRetrieval("Q2", ("b",), (parent("b1", "x"), parent("a1", "x")))
@@ -209,26 +83,6 @@ def test_select_new_parents_round_robin_skips_existing_and_caps() -> None:
     selected = select_new_parents([first, second], {"run:old"}, max_chunks=3)
 
     assert [(rid, p.record.chunk_uid) for rid, p in selected] == [("Q1", "run:a1"), ("Q2", "run:b1"), ("Q1", "run:a2")]
-
-
-def test_hints_come_from_aliases_and_guide_triggers_sharing_request_terms() -> None:
-    target = RequestTarget("Q2", "request", "請求書の再発行方法は？", ("請求書", "再発行"))
-    knowledge = RuntimeKnowledgeContext(
-        original_question=QUESTION,
-        expanded_question=QUESTION,
-        path=None,  # type: ignore[arg-type]
-        matched_terms=(RuntimeTerm(term="請求書", aliases=("インボイス",)), RuntimeTerm(term="受注", aliases=("オーダー",))),
-        matched_rules=(RuntimeRule(rule_id="g", title="t", triggers=("再発行 承認", "受注 取消"), tags=("pinned",)),),
-        terms_search_enabled=True,
-    )
-
-    hints = request_hints(target, knowledge, split)
-
-    assert hints == ["インボイス", "再発行 承認"]
-    assert targeted_queries(target, hints) == ("請求書の再発行方法は？", "請求書の再発行方法は？ インボイス 再発行 承認")
-    assert targeted_queries(target, []) == ("請求書の再発行方法は？",)
-    # 最初の検索の文と同じ文は除く。
-    assert targeted_queries(target, hints, searched=["請求書の再発行方法は？"]) == ("請求書の再発行方法は？ インボイス 再発行 承認",)
 
 
 def _settings(**changes: Any) -> Any:
@@ -308,17 +162,3 @@ def _answer_with_request_question(
         request_question=request_question,
     )
     return result, searched, generated
-
-
-def test_confirmation_only_rules_do_not_supply_generation_retrieval_hints() -> None:
-    target = RequestTarget("Q1", "request", "設定方法", ("設定",))
-    knowledge = RuntimeKnowledgeContext(
-        original_question="設定方法",
-        expanded_question="設定方法",
-        path=None,
-        matched_rules=(
-            RuntimeRule(rule_id="confirm", title="確認", triggers=("設定 確認専用",), purpose="confirmation"),
-            RuntimeRule(rule_id="generate", title="生成", triggers=("設定 生成専用",), purpose="generation"),
-        ),
-    )
-    assert request_hints(target, knowledge, lambda text: text.split()) == []

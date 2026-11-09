@@ -10,6 +10,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+from pydantic import BaseModel
+
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
 from rag_engine.generation import execution_record
@@ -182,21 +184,13 @@ class _NonStreamingClient:
         return send
 
 
-def _audit_wire_text() -> tuple[type, str]:
-    """要求 Q1 だけの固定キー監査の、検証を通る合成の wire。"""
-    from audit_fixtures import legacy_audit_to_wire_fixture
+def _wire_text() -> tuple[type, str]:
+    """検証を通る合成の構造化出力。"""
 
-    pass
-    from rag_engine.models.llm import GroundedAudit, GroundedRequestReview
+    class Output(BaseModel):
+        answer: str
 
-    schema = audit_wire_schema(GroundedAudit, ("Q1",), ())
-    audit = GroundedAudit(
-        reviews=[],
-        request_reviews=[GroundedRequestReview(request_id="Q1", status="addressed", reason="説明あり")],
-        summary_supported=False,
-        goal_alignment="partial",
-    )
-    return schema, json.dumps(legacy_audit_to_wire_fixture(audit, schema), ensure_ascii=False)
+    return Output, json.dumps({"answer": "説明の文"}, ensure_ascii=False)
 
 
 class NonStreamingRunawayTest(unittest.TestCase):

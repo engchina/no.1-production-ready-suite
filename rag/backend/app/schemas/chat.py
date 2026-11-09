@@ -93,8 +93,6 @@ class ChatMessage(BaseModel):
     sender_display_name: str = ""
     # 質問に添付したファイル（#2517。名前・種類・大きさ）。添付の無い質問・回答は空。
     attachments: list[ChatAttachmentReference] = Field(default_factory=list)
-    # 回答の段落の印・根拠と矛盾して外した段落・回答全体の警告（ASSISTANT の回答だけ。#2738。形は
-    # platform/contracts/answer-passages/passage-marks.json）。記録の無い回答は空。
     # 生成時の表示形式。古い回答・未完了の回答では None。
     answer_format: dict[str, str] | None = None
     # 回答のモデル（``model``）へ添付した根拠の画像の件数（ASSISTANT の終わった回答だけ。回答の

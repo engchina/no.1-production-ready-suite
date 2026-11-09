@@ -107,8 +107,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 質問の言い換え・分解（`RAG_QUERY_STRATEGY`） | 任意 | 戦略の判定・検索文の生成の LLM の失敗 → 原質問のみ（言い換え・分解なし）で続ける | `DX`（`strategy` が実際に使った戦略）・`ST`（理由の文。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_query_expansion`・`_degraded_query_expansion` |
 | CRAG の補正検索 | 任意（設定・追加検索予算） | 追加検索の失敗 → 取得済みの根拠を維持して生成へ進む。初回検索の失敗は従来どおりエラー | `DS`（`crag_retrieval`）・`ST`（追加検索のエラー）・`RT`（`stop_reason=retrieval_error`・例外の型） | 取得済み資料だけを使い、未確認の不足を確定しない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
 | CRAG の根拠確認（`RAG_ANSWER_FLOW=crag`） | 任意（設定） | 評価器の失敗 → 取得済みの根拠で生成へ進む（足りるとはしない） | `DS`（`crag_grade`）・`ST`（status「評価に失敗」）・`RT`（`CragRetrievalAttempt.grade_error`） || `rag/packages/rag_engine/rag_engine/generation/answering.py::_grade_crag_retrieval`・`rag/packages/rag_engine/rag_engine/generation/answer_models.py::CragRetrievalAttempt` |
-| 要求ごとの根拠の探し直し（#1279） | 既定で無効（`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED`。#4114） | 再検索の失敗 → 既存の根拠で回答する | `DS`（`request_coverage_retrieval`）・`DX`（`request_coverage.re_retrieval.queries[].error`。例外の型の名前だけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::run_targeted_retrievals` |
-| 要求の分かち書き | 任意 | 失敗 → その要求を判定しない（unassessed） | なし（判定の結果が unassessed になる） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::coverage_targets` |
 | 業務ガイドの手順ごとの検索（#2395） | 任意（`RAG_GUIDE_STEP_RETRIEVAL_ENABLED`） | 失敗 → 既存の根拠で回答する | `DX`（`guide_step_retrieval` の `error`。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/guide_steps.py::run_step_searches` |
 
 ### 生成・検証（rag_engine と backend）
@@ -116,7 +114,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
 | 回答の生成（OCI Enterprise AI） | 必須 | 1 組目の生成の失敗 → **エラー**。回答の期限で切れたときは、確かめ終わった round か「関係する資料の記載だけ」を示す | `SP`・`DX`（`round_budget`） | 見せない（期限で切れた回答は時間切れの回答として示す） | `rag/packages/rag_engine/rag_engine/generation/answering.py`（`budget.cut_round`） |
-| 是正（作り直し）の round | 任意 | 失敗 → 直前に採用した回答を公開し、回答全体の警告に残す（#2729） | `ST`・回答の警告（段落の印） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py`（`correction_failure`） |
 | モデルのカスケード（#4581） | 任意（検索・回答プロファイルの「確認を通らなかったときのモデル」。空は使わない。質問でモデルを選んだ実行には使わない） | 1 つ目のモデルの生成の段が機械で判定できる確認（構造化出力の不正・引用の ID と原文の不一致・計算の不一致・要約や結論の保留・監査が有効なときの「資料と矛盾」）を通らない → 取得した根拠のまま生成の段を 2 つ目のモデルでやり直す（1 回の質問で 1 回だけ。以後の修正の回も 2 つ目のモデル）。2 つ目も通らない → 既存の失敗の扱い。接続・429・5xx の失敗は昇格せず従来どおり | `ST`（工程「高性能モデルで回答し直す」）・`DX`（`model_cascade`。昇格しなかった実行も記録）・`RT`（`escalation_signals`）・実行履歴の `usage.by_model` | 本文に出さない。「処理の詳細」に 1 行と理由 | `platform/packages/backend_core/src/pr_backend_core/model_cascade.py`・`rag/packages/rag_engine/rag_engine/generation/model_cascade.py`・`answering.py::synthesize_with_model_cascade` |
 | 規則の当てはめの段（#2155） | 任意 | 失敗 → 当てはめを足さず、結論は確かめていないまま | `RT`（`application_step.error`。型の名前だけ。backend の診断に写していない） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py`（`application_step`） |
 | 根拠の画像の添付 | 任意（回答モデルが「画像入力に対応」のときだけ。設定の項目は無い。#3444） | 回答モデルが画像を読めない・画像ファイルが無い → 添付せず、取り込み時の図の説明（根拠の本文）で答える。添付した生成の出力が壊れた → 同じモデルで画像なしで作り直す。どの場合も既定の Vision モデルへは切り替えない | `ST`（工程「回答に添付する画像」）・`DX`（`models.attached_images`）・`RT`（`image_fallback`） | 見出しに「（画像も参照）」（添付した回答だけ） | `rag/packages/rag_engine/rag_engine/generation/answer_images.py::_image_prompt_mode`・`rag/backend/app/rag/answer_engine.py::answer_model_reads_images`・`AnswerEngine._materialize_image_evidence` |
@@ -173,8 +170,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `rerank_extra_query` | 追加の検索文の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
 | `crag_retrieval` | CRAG の追加検索。失敗時は取得済み根拠を維持 | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
 | `crag_grade` | CRAG の根拠確認の評価器（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
-| `request_coverage_expansion` | 補助検索の戦略判定・検索文生成に失敗し既存の根拠を保持 |
-| `request_coverage_retrieval` | 要求ごとの根拠の探し直しの検索（rag_engine） | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::run_targeted_retrievals` |
 | `section_child_rerank` | 章節の拡張の子の章節の並べ替え（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::_rank_children` |
 
 ## 一覧から分かったこと

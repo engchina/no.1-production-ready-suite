@@ -340,7 +340,7 @@ _CRAG_COMPAT_KEYS = (
 @pytest.mark.parametrize("mask", range(32))
 def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
     raw = builtin_pack().to_dict()
-    raw["answer_labels"]["cause_gap"] = "合成の独自文言"
+    raw["answer_labels"]["gaps_section"] = "合成の独自文言"
     for index, key in enumerate(_CRAG_COMPAT_KEYS):
         if mask & (1 << index):
             del raw["answer_labels"][key]
@@ -349,7 +349,7 @@ def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
         with pytest.raises(LanguagePackError):
             build_pack(raw)
     else:
-        assert build_pack(raw).text("answer_labels", "cause_gap") == "合成の独自文言"
+        assert build_pack(raw).text("answer_labels", "gaps_section") == "合成の独自文言"
     assert json.dumps(raw, ensure_ascii=False) == saved
 
 
@@ -363,8 +363,8 @@ def test_new_crag_label_explicit_invalid_value_is_not_defaulted(value: object) -
 
 def test_other_missing_language_fields_still_fail() -> None:
     raw = builtin_pack().to_dict()
-    del raw["answer_labels"]["cause_gap"]
-    with pytest.raises(LanguagePackError, match="cause_gap"):
+    del raw["answer_labels"]["gaps_section"]
+    with pytest.raises(LanguagePackError, match="gaps_section"):
         build_pack(raw)
 
 
@@ -452,11 +452,6 @@ def test_field_changes_match_the_current_storage_contract() -> None:
     assert snapshot == {(spec.section, spec.key) for spec in FIELD_SPECS}
 
 
-def test_published_release_without_the_unconfirmed_gap_label_is_rejected() -> None:
-    raw = builtin_pack().to_dict()
-    del raw["answer_labels"]["subject_unconfirmed_gap"]
-    with pytest.raises(LanguagePackError):
-        build_pack(raw)
 
 
 def test_published_release_without_applications_section_is_rejected() -> None:

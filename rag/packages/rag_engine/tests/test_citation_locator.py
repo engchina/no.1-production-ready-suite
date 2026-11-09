@@ -188,7 +188,6 @@ def test_a_copied_position_needs_no_extra_call_and_leaves_no_fragment() -> None:
     assert f"{SENTENCE}。" in result.answer_text
     assert "行5" not in result.answer_text
     assert "（," not in result.answer_text
-    assert not [mark for row in result.envelope.get("passage_marks") or [] for mark in row["reasons"] if mark["code"] == "item_check"]
 
 
 def test_a_sent_id_in_the_derivation_becomes_the_source_name() -> None:

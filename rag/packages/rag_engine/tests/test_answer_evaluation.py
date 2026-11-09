@@ -311,17 +311,6 @@ def test_system_sections_and_notes_are_classified_without_the_model():
             "・当てはめの説明です。",
             "根拠：manual.pdf p.3",
             "",
-            labels.marked_rules_section,
-            "",
-            labels.marked_rules_section_note,
-            "・確かめきれない説明です。",
-            "根拠：manual.pdf p.3",
-            "",
-            labels.marked_section,
-            "",
-            labels.marked_section_note,
-            "・確かめが終わっていない: 「確かめきれない説明です。」",
-            "",
             labels.gaps_section,
             "",
             "・『取消』については、根拠付きの説明を十分に示せていません。",
@@ -336,20 +325,14 @@ def test_system_sections_and_notes_are_classified_without_the_model():
     statuses = dict((claim["answer_quote"], claim["status"]) for claim in result["claim_checks"])
     for text in (
         "質問の条件への当てはめ",
-        labels.marked_rules_section,
-        labels.marked_section,
         labels.gaps_section,
         labels.confirmations_section,
     ):
         assert statuses.get(text, "not_a_claim") == "not_a_claim", text
-    # 2 文の注記は文ごとの段落でも主張にしない。
-    note_sentences = [text for text in statuses if text in labels.marked_rules_section_note]
-    assert len(note_sentences) == 2 and all(statuses[text] == "not_a_claim" for text in note_sentences)
-    assert statuses.get("・確かめが終わっていない: 「確かめきれない説明です。」", "not_a_claim") == "not_a_claim"
     assert statuses["・『取消』については、根拠付きの説明を十分に示せていません。"] == "not_a_claim"
     assert statuses["・実データ: 今回の設定値を確認する"] == "data_confirmation"
     judged = sorted(inputs["passage"]["text"] for inputs in calls_of(calls, ClaimJudgement))
-    assert judged == ["・当てはめの説明です。", "・確かめきれない説明です。", "結論です。"]
+    assert judged == ["・当てはめの説明です。", "結論です。"]
 
 
 def test_premise_line_quoting_the_question_is_supported_by_code():
@@ -1274,7 +1257,7 @@ def test_summary_candidates_do_not_flow_to_uncited_body_or_warning_sections():
         + answer_labels().rules_section
         + "\n\n"
         + "・合成の本文。\n根拠：manual.pdf p.3\n\n・別の未引用の本文。\n\n"
-        + answer_labels().marked_section
+        + answer_labels().gaps_section
         + "\n\n・参考の説明。\n根拠：manual.pdf p.9"
     )
     calls = []

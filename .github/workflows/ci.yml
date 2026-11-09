@@ -220,8 +220,6 @@ jobs:
               - "platform/docs/design-system/**"
               - "platform/package.json"
               - "platform/package-lock.json"
-              # 共有 UI のテスト（tests/answer-passage-marks.test.tsx）が読む段落の印の契約（#2738）。
-              - "platform/contracts/answer-passages/passage-marks.json"
               - "!platform/docs/design-system/**/*.md"
             platform_backend:
               - "platform/packages/backend_core/**"

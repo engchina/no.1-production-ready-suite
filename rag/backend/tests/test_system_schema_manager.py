@@ -743,6 +743,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261107_4185_drop_document_preprocess_artifact",
         "20261108_4617_drop_document_extraction_processing_config",
         "20261109_4666_language_pack_retired_question_cues",
+        "20261109_4714_language_pack_retired_answer_checks",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

@@ -65,8 +65,7 @@ class _Cursor:
             self.rows = [
                 tuple(copy.deepcopy(row[name]) for name in names)
                 for row in rows
-                if "JSON_EXISTS" not in sql
-                or row["profile_config"].get("language_pack", {}).get("question_cues") is not None
+                if "JSON_EXISTS" not in sql or row["profile_config"].get("language_pack")
             ]
             return
         assert sql.startswith("UPDATE")
@@ -236,3 +235,17 @@ def test_data_step_runs_once_when_the_migration_is_pending(
 
     manager.initialize()
     assert len(calls) == 1
+
+
+def test_answer_check_fields_and_guide_check_section_are_retired() -> None:
+    """回答の生成後の確認の項目と節を除き、作り直した公開版は今の契約で読める(#4714)。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    old["answer_labels"]["removed_section"] = "合成語"
+    old["guide_check_cues"] = {"approval_terms": ["合成語"]}
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    assert "guide_check_cues" not in stripped
+    assert "removed_section" not in stripped["answer_labels"]
+    assert build_pack(stripped).hash == build_pack(pack).hash
+    assert module.without_retired_fields(pack) is None

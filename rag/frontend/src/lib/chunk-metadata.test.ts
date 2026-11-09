@@ -147,5 +147,3 @@ describe("citationSourceUrl", () => {
  });
 
 
-describe("citation support display", () => {
-});

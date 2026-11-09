@@ -26,7 +26,7 @@ from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
-from tests.audit_fixtures import is_audit_schema, is_explanation_schema, legacy_audit_result
+from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 
 PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
 
@@ -3102,7 +3102,6 @@ async def _answer_with_coverage(
         return result
 
     monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
-    settings.setdefault("rag_request_coverage_retrieval_enabled", True)
     engine = AnswerEngine(
         Settings(
             rag_query_strategy="simple_retrieval",

@@ -77,7 +77,6 @@ def test_conclusion_and_summary_stay_when_the_evidence_has_a_table() -> None:
 
 def test_answered_request_is_not_listed_as_unconfirmed() -> None:
     response, _calls = _answer()
-    missing = answer_labels().missing_request_template.replace("{text}", "")
-    assert missing not in response.answer_text
+    assert answer_labels().gaps_section not in response.answer_text
     assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["status"] == "linked"
     assert response.insufficient_reason in (None, "")

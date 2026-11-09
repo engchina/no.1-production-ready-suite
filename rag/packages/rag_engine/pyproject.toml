@@ -69,7 +69,6 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # 指示の文を行の幅で切ると読みにくく、prompt の差分も追いにくいため、行の長さを検査しない。
 "rag_engine/generation/grounded.py" = ["E501"]
 "rag_engine/generation/crag_support.py" = ["E501"]
-"rag_engine/generation/answer_policy.py" = ["E501"]
 "rag_engine/generation/query_prompts.py" = ["E501"]
 "rag_engine/generation/section_extraction.py" = ["E501"]
 "rag_engine/parsing/vision_prompt_rules.py" = ["E501"]

@@ -13,7 +13,7 @@ from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, id
 
 from rag_engine.adapters import oci
 from rag_engine.generation import execution_record, grounded
-from rag_engine.models.llm import GroundedAudit, GroundedDraft
+from rag_engine.models.llm import GroundedDraft
 from rag_engine.resources import deadline as deadlines
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, check_deadline
 from rag_engine.resources.llm_usage import LlmUsage, llm_usage, record_llm_usage, usage_line
@@ -153,7 +153,7 @@ class LlmUsageTest(unittest.TestCase):
             ("llm_call_usage", "GroundedDraft", 42.0, 5000, 600),
         )
         # usage の無い応答（スタブ・古い endpoint）でも失敗しない。
-        oci._record_usage(SimpleNamespace(status="completed"), SimpleNamespace(model="m"), GroundedAudit, 1.0)
+        oci._record_usage(SimpleNamespace(status="completed"), SimpleNamespace(model="m"), GroundedDraft, 1.0)
 
 
 if __name__ == "__main__":

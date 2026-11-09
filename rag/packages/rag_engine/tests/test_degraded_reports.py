@@ -19,7 +19,6 @@ from unittest.mock import patch
 
 import pytest
 from test_answer_generation import _answer_context, _chunk_record, _chunk_run_stub
-from test_request_coverage import _missing, context, parent, split
 
 import rag_engine.generation.answering as answering
 from rag_engine.config import get_settings
@@ -28,7 +27,6 @@ from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answering import AnswerRecord, answer_question_result, rerank_records
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context, load_runtime_knowledge
 from rag_engine.retrieval import text_search_tokenizer as tokenizer
-from rag_engine.retrieval.request_coverage import CoverageBudget, run_targeted_retrievals
 
 # 例外の文に入れる値。記録・工程の詳細のどこにも出てはいけない（DB のエラー・SQL・path の代役）。
 SECRET = "ORA-00942 SELECT secret_column FROM doc-secret /work/secret-dir"
@@ -60,40 +58,6 @@ def _recording(**fields: Any) -> Iterator[list[tuple[str, str]]]:
 
 
 # ---- 要求ごとの根拠の探し直し（#3284） ----
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-def test_targeted_retrieval_failure_keeps_only_the_type_name(fail: bool) -> None:
-    targets, rows = _missing(1)
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> Any:
-        if fail:
-            raise Boom(SECRET)
-        return context()
-
-    with _recording() as reported:
-        results, _ = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=split)
-
-    assert results[0].parents == ()
-    if fail:
-        # 記録に残すのは例外の型の名前だけ（DB のエラーの文を診断に出さない）。
-        assert results[0].error == "Boom"
-        assert reported == [("request_coverage_retrieval", "Boom")]
-    else:
-        assert results[0].error == ""
-        assert reported == []
-
-
-def test_targeted_retrieval_with_new_evidence_is_not_reported() -> None:
-    targets, rows = _missing(1)
-
-    with _recording() as reported:
-        results, _ = run_targeted_retrievals(
-            rows, targets, budget=CoverageBudget(), retrieve=lambda text, queries: context(parent("new", "語1")), tokenize=split
-        )
-
-    assert results[0].parents and not results[0].error
-    assert reported == []
 
 
 # ---- 用語・同義語と回答ルールの読み込み（#3284） ----

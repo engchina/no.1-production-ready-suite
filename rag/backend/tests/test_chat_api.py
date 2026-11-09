@@ -1588,7 +1588,7 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
         *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
         seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
-        seen.append(current_pack().text("answer_labels", "cause_gap"))
+        seen.append(current_pack().text("answer_labels", "gaps_section"))
         return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
 
     monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)

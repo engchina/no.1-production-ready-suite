@@ -9,7 +9,7 @@ import {
 
 /**
  * RAG 検索の回答（#3488）: チャットと同じ見出し（「回答モデル: …」、根拠の画像を添付した回答は「（画像も参照）」）を
- * 出し、回答エンジンが本文の末尾に足した「根拠と矛盾し除いた内容」「確認が必要な点」は記録から作る節の 1 回だけ出す。
+ * 出す。
  * 内容は合成。desktop / 375px は playwright の project。
  */
 
@@ -62,7 +62,6 @@ async function mockApi(page: Page, attachedImages: number) {
                 embedding: "",
                 rerank: "",
               },
-              answer_format: { removed_section: "根拠と矛盾し除いた内容", marked_section: "確認が必要な点" },
             },
           },
         })}\n\n`,

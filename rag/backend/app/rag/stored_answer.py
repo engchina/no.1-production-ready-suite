@@ -18,10 +18,6 @@
 
 親子階層（small-to-big）の要素の表示領域は ``engine_metadata_json.layout.display_regions`` から
 ``display_regions`` へ取り出して持つ（画面は ``metadata.display_regions`` も読む）。
-
-回答の診断（``diagnostics``）には、段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738）を、
-契約（``platform/contracts/answer-passages/passage-marks.json``）の項目だけにして持つ
-（``passage_mark_record``）。保存済みの過去の回答は書き換えない（無ければ空の一覧として読む）。
 """
 
 from __future__ import annotations

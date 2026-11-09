@@ -132,8 +132,7 @@ def test_a_rejected_part_gets_no_line_added_by_the_program() -> None:
         },
     )
     assert calls == ["GroundedDraftWire"]
-    missing = answer_labels().missing_request_template.replace("{text}", "")
-    assert missing not in response.answer_text
+    assert answer_labels().gaps_section not in response.answer_text
     assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["parts"][0]["status"] == "missing"
     assert response.envelope["outcome"] == "conditional"
 

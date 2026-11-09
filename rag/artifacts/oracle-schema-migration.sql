@@ -4527,3 +4527,9 @@ UPDATE RAG_ANSWER_PROMPTS
 SET CONTENT = REPLACE(CONTENT,
     '{{answer_context}}', '{{reading_rules}}' || CHR(10) || CHR(10) || '{{answer_context}}')
 WHERE PROMPT_KEY = 'vlm_answer' AND INSTR(CONTENT, '{{reading_rules}}') = 0;
+
+-- migration: 20261109_4714_language_pack_retired_answer_checks
+BEGIN
+  NULL; -- abolish_particles,abolish_words,abolished_forms,answer_warning_template,cause_gap,completion_negations,evidence_id_labels,field_label_followers,guarantee_endings,guarantee_exceptions,guarantee_verbs,guide_check_cues,heading_bracket_pairs,heading_screen_words,marked_rules_section,marked_rules_section_note,marked_section,marked_section_note,match_claims,missing_request_template,navigation_residue_words,off_goal_gap,output_artifact_words,output_field_words,passage_note_template,passage_reason_labels,proviso_words,quote_operation_words,removed_section,removed_section_note,report_suffixes,screen_object_suffixes,speculation_words,subject_unconfirmed_gap,unsourced_section,unsourced_section_note,version_question_cues,version_units
+END;
+/

@@ -13,7 +13,6 @@ from rag_engine.adapters import oci
 from rag_engine.generation import batched_evidence
 from rag_engine.generation.answering import _invalid_structured_output
 from rag_engine.generation.batch_output_repair import (
-    BatchRangeInvalid,
     batch_failure_summary,
     batch_repair_prompt,
     batch_validation_detail,
@@ -234,32 +233,6 @@ def reading_model():
 
 def findings_of(*rows: tuple[str, str]) -> dict:
     return {"findings": [{"start_line": start, "end_line": end, "answer": "合成の回答"} for start, end in rows]}
-
-
-def legacy_range_error(*rows: tuple[str, str]) -> ValidationError:
-    """旧記録の匿名診断は、旧構造の例外を使って保持する。新 producer は整数を返さない。"""
-    counts = {"B1": 3, "B2": 1}
-    invalid = [row for row in rows if range_error_reason(*row, counts) is not None]
-    assert invalid
-    return ValidationError.from_exception_data(
-        "BatchReading",
-        [
-            {
-                "type": "value_error",
-                "loc": (),
-                "input": {},
-                "ctx": {"error": BatchRangeInvalid(range_mismatch_diagnostic(invalid, counts))},
-            }
-        ],
-    )
-
-
-def mismatch_detail(*rows: tuple[str, str]) -> dict:
-    detail = batch_validation_detail(legacy_range_error(*rows), reading_model().model_json_schema())
-    assert json.dumps(detail, ensure_ascii=False).count("合成") == 0
-    row = detail["validation_errors"][0]
-    assert row["protocol_code"] == "batch_range_invalid"
-    return row["range_mismatch"]
 
 
 def test_legacy_valid_ranges_pass_the_check():

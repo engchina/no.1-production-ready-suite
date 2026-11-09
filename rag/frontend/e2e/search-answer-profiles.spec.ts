@@ -13,7 +13,7 @@ import {
 
 const GLOBAL_QUERY_FIELDS = [
   "query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
-  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled", "request_coverage_retrieval_enabled",
+  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled",
   "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
 ];
 
@@ -337,7 +337,7 @@ test("検索方法の全体設定の項目は表示せず、古い個別設定�
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
     query_strategy: "hyde", answer_flow: "crag", neighbor_child_count: 0,
     rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true, graph_expansion_max_chunks: 3,
-    screen_linking_enabled: true, request_coverage_retrieval_enabled: false,
+    screen_linking_enabled: true,
     entity_expansion_enabled: false, entity_expansion_max_chunks: 2, section_expansion_enabled: false, section_expansion_max_levels: 2, section_expansion_input_token_percent: 30,
     guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
   });

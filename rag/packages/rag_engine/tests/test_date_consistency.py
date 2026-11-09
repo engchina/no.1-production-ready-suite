@@ -73,7 +73,6 @@ def test_a_correct_year_adds_no_call_and_no_mark() -> None:
     result, prompts = answer(draft(RIGHT))
     assert len(prompts) == 1
     assert RIGHT in result.answer_text
-    assert not result.envelope.get("passage_marks")
 
 
 def test_summary_selection_cannot_add_a_year_absent_from_the_existing_result() -> None:

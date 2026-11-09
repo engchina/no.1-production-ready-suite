@@ -471,7 +471,6 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     for key in (
         "RAG_ENTITY_EXPANSION_ENABLED",
         "RAG_SCREEN_LINKING_ENABLED",
-        "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)

@@ -71,7 +71,7 @@ BRANCH_NOTE = "権限 B を持たない場合は同じ手順を説明し、登�
 def _section_order(text: str) -> list[str]:
     """本文の段落のうち、要約と節の見出しだけを順に返す（節の位置の確かめ用）。"""
     labels = grounded.answer_labels()
-    headings = {labels.guide_notes_section, labels.rules_section, labels.marked_section, labels.unsourced_section}
+    headings = {labels.guide_notes_section, labels.rules_section}
     paragraphs = [paragraph.strip() for paragraph in text.split("\n\n")]
     return [paragraphs[0], *(paragraph for paragraph in paragraphs[1:] if paragraph in headings)]
 

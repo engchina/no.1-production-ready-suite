@@ -76,7 +76,10 @@ from app.clients.support_guide_store import (
 )
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
+    RETIRED_ANSWER_CHECK_CUE_FIELDS,
+    RETIRED_ANSWER_LABEL_FIELDS,
     RETIRED_QUESTION_CUE_FIELDS,
+    RETIRED_SECTIONS,
     remove_retired_language_pack_fields,
 )
 from app.rag.request_context import with_system_access
@@ -870,6 +873,35 @@ END;
             name="20261109_4712_answer_prompt_reading_rules",
             table_name="rag_answer_prompts",
             sql=answer_prompt_reading_rules_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261109_4714_language_pack_retired_answer_checks",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- "
+                + ",".join(
+                    sorted(
+                        RETIRED_ANSWER_LABEL_FIELDS
+                        | RETIRED_ANSWER_CHECK_CUE_FIELDS
+                        | RETIRED_SECTIONS
+                    )
+                )
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、回答の生成後の"
+                "確認をやめて読まれなくなった項目（answer_labels の一部・answer_check_cues の一部・"
+                "guide_check_cues の節）の値を削除し、公開版の CONTENT_HASH を計算し直します。"
+                "ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
         )
     )
     return sections

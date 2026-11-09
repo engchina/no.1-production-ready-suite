@@ -86,20 +86,6 @@ def test_invalid_table_citation_does_not_get_a_guessed_replacement_in_feedback()
     assert dropped[0]["citation_resolution"]["requested_quote"] == miscopied["citations"][0]["quote"]
 
 
-def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
-    generate, audit_prompt = grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT
-    assert "複数の根拠をつないで答える質問" in generate
-    assert "各段を述べる原文の単位を basis に選び" in generate
-    assert "方法を reasoning に、最終の答えを result" in generate
-    assert "足りない段を推測で埋めない" in generate
-    assert "その item だけで最終の答えにならないこと" in audit_prompt
-    assert "「この item だけでは質問に直接答えていない」は not_applicable の理由にならない" in audit_prompt
-    assert "尋ねている項目を quote が述べていないことは not_applicable の理由にならない" in audit_prompt
-    assert "つなぐ段のどれかが supported な item に無ければ false" in audit_prompt
-    # 監査の prompt は 1 行 1 規則（節見出しと空行を除く）。
-    assert all(line.startswith(("- ", "## ", "### ")) or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
-
-
 def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     """同じ内容を述べた規則の原文と手順書の両方を出典にし、出典を 1 つに絞る言い方を残さない（#3526）。"""
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange

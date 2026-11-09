@@ -5,7 +5,7 @@ schema の evidence_ids は「direct の根拠と、原文に関係が明記さ�
 evidence_scope は引いた根拠を direct と照合した）を匿名の文で作る。unrelated と食い違う判断は今までどおり許可しない。
 """
 
-from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors, _unknown_plan_label_errors, verify
+from rag_engine.generation.grounded import _outside_request_plan, _unknown_plan_label_errors
 from rag_engine.models.llm import GroundedDraft, GroundedItem
 
 OPEN = "メニューから設定を選び、設定タブの登録画面を開きます。"
@@ -43,14 +43,6 @@ def outside(draft, label):
     span = next(span for span in SPANS if span["label"] == label)
     item = GroundedItem.model_validate(cited(span["text"], label))
     return _outside_request_plan(item, span, draft, SPANS)
-
-
-def unassessed(draft):
-    unsettled = [*_request_plan_errors(draft, SPANS, unknown_labels=False), *_plan_undecided_errors(draft, SPANS)]
-    checked, dropped = verify("設定の手順は？", draft, SPANS, plan_unsettled=unsettled)
-    marked = {entry.item.text for entry in checked if any(mark["code"] == "unassessed" for mark in entry.marks)}
-    kept = {entry.item.text for entry in checked if not entry.added}
-    return unsettled, kept, marked, dropped
 
 
 def test_a_linked_label_needs_the_relation_quote_the_code_cut_from_its_range():

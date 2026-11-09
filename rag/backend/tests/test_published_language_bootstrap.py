@@ -61,7 +61,7 @@ async def test_fresh_bootstrap_never_uses_legacy_override_reader(
         ensure_initialized=AsyncMock(),
     )
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
-    legacy = Mock(return_value={"answer_labels": {"cause_gap": "合成の旧ファイル値"}})
+    legacy = Mock(return_value={"answer_labels": {"gaps_section": "合成の旧ファイル値"}})
     monkeypatch.setattr(LANGUAGE_PACK_STORE, "overrides", legacy)
     await published_language.initialized_release_store(OracleClient())
     legacy.assert_not_called()

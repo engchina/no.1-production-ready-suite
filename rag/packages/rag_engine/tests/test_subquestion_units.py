@@ -13,14 +13,8 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import (
-    CoverageBudget,
     TargetedRetrieval,
-    coverage_targets,
-    plan_targeted_retrievals,
-    request_rows,
-    run_targeted_retrievals,
     select_new_parents,
-    targeted_queries,
 )
 from rag_engine.retrieval.task_contract import (
     _sentence_units,
@@ -174,55 +168,6 @@ def parent(uid: str, text: str) -> ContextParentEvidence:
 
 def context(*parents: ContextParentEvidence) -> AnswerContext:
     return AnswerContext(records=[p.record for p in parents], text="x", evidence_tree=tuple(parents))
-
-
-def test_subquestion_targets_judge_body_and_search_with_preamble() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-
-    assert [t.id for t in targets] == ["Q1"]
-    assert targets[0].text == LINE_QUESTION
-    assert not targets[0].subquestion
-    assert targeted_queries(targets[0], ()) == (LINE_QUESTION,)
-
-
-def test_subquestions_require_explicit_gap_before_search() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-    rows = request_rows(targets)
-    assert all(row["status"] == "unassessed" for row in rows)
-    assert plan_targeted_retrievals(rows, targets, CoverageBudget())[0] == []
-    rows[0]["answer_status"] = "missing"
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget())
-    assert [item.target.id for item in plan] == ["Q1"] and not stop
-
-
-def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-    rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
-
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_subquestions=2))
-    assert [p.target.id for p in plan] == ["Q1"]
-    assert not stop
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_queries=0))
-    assert plan == [] and stop == "max_queries"
-
-
-def test_each_subquestion_keeps_its_own_top_evidence() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-    rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
-    calls: list[str] = []
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        calls.append(text)
-        key = "q" + str(len(calls))
-        return context(*(parent(f"{key}-{n}", text) for n in range(4)))
-
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=split)
-
-    assert calls == [LINE_QUESTION]
-    assert not stop
-    selected = select_new_parents(results, set(), max_chunks=2)
-    assert len(selected) == 2
-    assert all(request_id == "Q1" for request_id, _ in selected)
 
 
 def test_select_new_parents_keeps_shared_cap_for_missing_requests() -> None:

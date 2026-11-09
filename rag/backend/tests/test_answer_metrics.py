@@ -133,16 +133,6 @@ def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() ->
             "",
             "・区分Ⅱの選択肢の値は 01 です。",
             "根拠：設定.pdf p.1",
-            "",
-            labels.removed_section,
-            "",
-            labels.removed_section_note,
-            "・「変更は翌月から反映されます。」：根拠と矛盾（当月から反映）",
-            "",
-            labels.marked_section,
-            "",
-            labels.marked_section_note,
-            "・「区分Ⅱの選択肢の値は 01 です。」：根拠の表の対応と違う可能性",
         ]
     )
     assert grounding_text(rag_answer).splitlines() == [

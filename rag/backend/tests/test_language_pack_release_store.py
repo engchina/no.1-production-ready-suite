@@ -126,7 +126,7 @@ def legacy_release_row(mask: int = 63) -> dict[str, object]:
     """旧形式の項目集合から独立に元の保存 hash を計算する。"""
     row = release_row()
     effective = builtin_pack().to_dict()
-    effective["answer_labels"]["cause_gap"] = "合成の保存済み文言"
+    effective["answer_labels"]["gaps_section"] = "合成の保存済み文言"
     effective["answer_labels"]["crag_quote_only_note"] = "合成の保存済み注記"
     for index, key in enumerate(_COMPAT_KEYS):
         if mask & (1 << index):
@@ -159,7 +159,9 @@ def test_release_requires_current_fields_without_changing_custom_values(mask: in
             _release(row)
     else:
         release = _release(row)
-        assert pack_from_release(release).text("answer_labels", "cause_gap") == "合成の保存済み文言"
+        assert (
+            pack_from_release(release).text("answer_labels", "gaps_section") == "合成の保存済み文言"
+        )
     assert row == untouched
 
 
@@ -178,13 +180,13 @@ def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
     elif mutation == "ingest":
         row["ingest_hash"] = "incorrect"
     elif mutation == "mandatory":
-        del effective["answer_labels"]["cause_gap"]
+        del effective["answer_labels"]["gaps_section"]
     elif mutation == "extra":
         effective["answer_labels"]["unknown_key"] = "合成の余剰項目"
     elif mutation == "coerced":
         effective["answer_labels"]["crag_refusal_summary"] = 3
     else:
-        effective["answer_labels"]["cause_gap"] += " "
+        effective["answer_labels"]["gaps_section"] += " "
     with pytest.raises(ValueError):
         _release(row)
     broken = original.model_copy(
@@ -237,7 +239,7 @@ async def test_explicit_publish_preserves_complete_custom_draft_without_rewritin
     unchanged = deepcopy(row)
     old = _release(row)
     draft = deepcopy(old.effective)
-    draft["answer_labels"]["cause_gap"] = "合成の保存済み文言"
+    draft["answer_labels"]["gaps_section"] = "合成の保存済み文言"
     state = LanguagePackReleaseState(draft_revision=1, draft_effective=draft, current=old)
     inserted: list[LanguagePackRelease] = []
     monkeypatch.setattr(store_module, "_state", lambda *_args, **_kwargs: state)
@@ -256,7 +258,7 @@ async def test_explicit_publish_preserves_complete_custom_draft_without_rewritin
     assert new.ingest_hash == old.ingest_hash
     assert _validated(new.effective).hash == new.hash
     assert pack_from_release(new).hash == new.hash
-    assert new.effective["answer_labels"]["cause_gap"] == "合成の保存済み文言"
+    assert new.effective["answer_labels"]["gaps_section"] == "合成の保存済み文言"
     assert row == unchanged
     assert old.effective == row["effective_json"]
     assert old.hash == row["content_hash"]

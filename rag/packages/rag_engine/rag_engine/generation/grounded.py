@@ -34,7 +34,6 @@ from pydantic import BaseModel, ValidationError
 from rag_parser_core.language import current_pack
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
-from rag_engine.generation import passage_marks
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     SettledConfirmations,
@@ -708,13 +707,12 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
 def generated_section_lines(answer_text: str) -> set[str]:
     """render() がシステムの節に出した行を返します。
 
-    「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節（回答に入っていない範囲・省いた処理の案内。
-    #2040）と、「根拠と矛盾し除いた内容」「確認が必要な点」の節（外した段落と、本文の印の段落の引用と理由。#2738）。
-    どれもシステムが書いた行で、本文の主張ではない（印の段落は本文に残る）。見出し行と同じく、主張監査・評価・
+    「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節（回答に入っていない範囲の案内。#2040）の行です。
+    システムが書いた行で、本文の主張ではない。見出し行と同じく、主張監査・評価・
     指標の対象にしない。
     """
     labels = answer_labels()
-    titles = {labels.unverified_section, labels.deadline_section, labels.removed_section, labels.marked_section}
+    titles = {labels.unverified_section, labels.deadline_section}
     lines: set[str] = set()
     in_section = False
     for raw in answer_text.splitlines():
@@ -723,8 +721,6 @@ def generated_section_lines(answer_text: str) -> set[str]:
             continue
         if line in titles:
             in_section = True
-        elif in_section and line in {labels.removed_section_note, labels.marked_section_note}:
-            continue
         elif in_section and line.startswith(answer_labels().item_bullet):
             lines.add(line)
         else:
@@ -2257,7 +2253,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     named = _line_citation_spans(item, spans)
     if item.kind != "gap" and item.evidence_id and not named and item.evidence_id in guide_ids:
         metadata.update(requested_id_namespace="business_guide", expected_id_namespace="document_evidence")
-        return fail("citation_id_namespace", passage_marks.reason("citation_id_namespace")["label"])
+        return fail("citation_id_namespace", "業務ガイドの ID は資料の根拠に使えません。")
     if item.kind == "gap":
         return item, ""
     if not named:

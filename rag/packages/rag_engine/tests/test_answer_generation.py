@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from grounded_stub import AnswerOutput
+from grounded_stub import AnswerOutput, CitedEvidenceOutput
 
 from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable, HybridSearchResult, StoredChunk
 from rag_engine.chunking import ChunkingConfig, create_chunk_run
