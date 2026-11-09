@@ -3,10 +3,9 @@ export type StageFixture = { id: string; phase: string; prompts: { id: string; c
 export const DEFAULT_STAGES: StageFixture[] = [
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
   { id: "generation", phase: "generation", prompts: [{ id: "batchReading", content: "## Step 1: 選択した全文を分けて読む\n原文引用付きの回答候補を返す。" }, { id: "system", content: "生成の system" }, { id: "plannedSystem", content: "## Step 1: 入力の根拠計画に沿って回答する\n計画を作り直さず原文から回答する。" }, { id: "assumptionSystem", content: "## 回答の前提\n- 未確定の条件を明示する。" }] },
-  { id: "audit", phase: "audit", prompts: [{ id: "system", content: "監査の system\n\n## 手順\n\n1. `quote` を照合する。\n2. 不足なら指摘する。\n\n<script>window.promptInjected = true</script>" }] },
 ];
 
-// 9 つの区分にまたがる段（backend の PROMPT_STAGES の一部。内容は合成）。
+// 8 つの区分にまたがる段（backend の PROMPT_STAGES の一部。内容は合成）。
 export const FLOW_STAGES: StageFixture[] = [
   {
     id: "picture_description",
@@ -32,16 +31,6 @@ export const FLOW_STAGES: StageFixture[] = [
   { id: "section_extraction", phase: "grounding", prompts: [{ id: "system", content: "抽出の指示" }] },
   { id: "faq_answer", phase: "generation", prompts: [{ id: "system", content: "FAQ の指示" }] },
   { id: "generation", phase: "generation", prompts: [{ id: "batchReading", content: "## Step 1: 選択した全文を分けて読む\n原文引用付きの回答候補を返す。" }, { id: "system", content: "生成の system" }, { id: "plannedSystem", content: "## Step 1: 入力の根拠計画に沿って回答する\n計画を作り直さず原文から回答する。" }, { id: "assumptionSystem", content: "## 回答の前提\n- 未確定の条件を明示する。" }] },
-  {
-    id: "audit",
-    phase: "audit",
-    prompts: [
-      { id: "system", content: "監査の system\n\n## 手順\n\n1. `quote` を照合する。\n2. 不足なら指摘する。\n\n<script>window.promptInjected = true</script>" },
-      { id: "compactRule", content: "理由の規則" },
-    ],
-  },
-  { id: "application", phase: "audit", prompts: [{ id: "system", content: "当てはめの指示" }] },
-  { id: "answer_validation", phase: "audit", prompts: [{ id: "system", content: "合成の資料照合の指示" }] },
   { id: "evaluation", phase: "evaluation", prompts: [{ id: "scope", content: "範囲の指示" }, { id: "system", content: "網羅性・忠実性の指示" }, { id: "correctness", content: "正確性の指示" }] },
 ];
 

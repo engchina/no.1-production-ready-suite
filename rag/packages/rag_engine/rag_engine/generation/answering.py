@@ -18,8 +18,6 @@ from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
-from httpx import TimeoutException
-from openai import APITimeoutError
 from pr_backend_core.model_cascade import SIGNAL_STRUCTURED_OUTPUT_INVALID, decide_escalation, escalation_reasons
 from pr_backend_core.model_cascade import cascade_record as model_cascade_record
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
@@ -2965,7 +2963,7 @@ def synthesize_grounded_answer(
             if note := llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION, provider):
                 step.add("生成の" + note)
         except Exception as exc:
-            timed_out = isinstance(exc, (TimeoutError, TimeoutException, APITimeoutError)) or deadline_cut_short()
+            timed_out = deadline_cut_short()
             input_limited = isinstance(exc, GenerationInputBudgetExceeded)
             if input_limited:
                 input_diagnostic = exc.diagnostic

@@ -169,10 +169,6 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     if schema.__name__ == "QuestionMentionAnchors":
         # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
         return cast(Any, schema).model_validate({"mentions": []})
-    if is_explanation_schema(schema):
-        # 推導の説明の段（#4393）。入力の資料の原文だけから説明を返す。
-        sources = json.loads(prompt)[KEY_SOURCES]
-        return schema.model_validate({"explanation": "資料の原文によると、" + " ".join(sources)})
     if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)
         ids = [item["evidence_id"] for item in data["evidence"]]

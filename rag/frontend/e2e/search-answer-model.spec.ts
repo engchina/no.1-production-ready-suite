@@ -26,13 +26,7 @@ const summary = {
   archived_at: null,
 };
 
-const ANSWER = [
-  "合成の画面 A の下に保存のボタンがあります。",
-  "根拠と矛盾し除いた内容",
-  "次の内容は根拠と矛盾するため、回答から除きました。\n・根拠と矛盾: 「合成の外した段落です。」",
-  "確認が必要な点",
-  "次の点は根拠で確かめきれていないか、注意が必要です。\n・要約を根拠で確かめていない: 「合成の画面 A の下に保存のボタンがあります。」",
-].join("\n\n");
+const ANSWER = "合成の画面 A の下に保存のボタンがあります。";
 
 async function mockApi(page: Page, attachedImages: number) {
   await mockDatabaseReady(page);
@@ -69,17 +63,6 @@ async function mockApi(page: Page, attachedImages: number) {
                 rerank: "",
               },
               answer_format: { removed_section: "根拠と矛盾し除いた内容", marked_section: "確認が必要な点" },
-              passage_marks: [
-                {
-                  text: "合成の画面 A の下に保存のボタンがあります。",
-                  state: "warning",
-                  reasons: [{ code: "summary_unaudited", label: "要約を根拠で確かめていない", detail: "" }],
-                },
-              ],
-              removed_passages: [
-                { text: "合成の外した段落です。", reasons: [{ code: "contradicted", label: "根拠と矛盾", detail: "合成の理由。" }] },
-              ],
-              answer_warnings: [],
             },
           },
         })}\n\n`,
@@ -107,11 +90,6 @@ test.describe("RAG 検索の回答の見出しと段落の印の節", { tag: "@r
 
     await expect(page.getByTestId("search-answer-model-heading")).toHaveText("回答モデル: 合成のモデル A（画像も参照）");
     const answer = page.getByTestId("answer-text");
-    await expect(answer.getByTestId("answer-removed-passages")).toHaveCount(1);
-    await expect(answer.getByTestId("answer-removed-passage")).toHaveText("「合成の外した段落です。」根拠と矛盾：合成の理由。");
-    await expect(answer.getByText("根拠と矛盾し除いた内容", { exact: true })).toHaveCount(1);
-    await expect(answer.getByText("確認が必要な点", { exact: true })).toHaveCount(1);
-    await expect(answer).not.toContainText("回答から除きました");
     await expectNoPageOverflow(page);
     if (process.env.RAG_E2E_SCREENSHOT_DIR) {
       await page.getByTestId("search-answer-model-heading").scrollIntoViewIfNeeded();

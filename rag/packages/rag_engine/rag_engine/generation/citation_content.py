@@ -4,7 +4,6 @@ import html
 import re
 
 from rag_engine.chunking.constants import _flatten_table_html
-from rag_engine.parsing.structural_text import structural_only
 
 _TABLE_TAG = re.compile(r"</?(?:table|thead|tbody|tfoot|tr|t[dh]|caption|colgroup)\b[^<>]*>", re.IGNORECASE)
 _TABLE_WRAPPER = re.compile(r"</?(?:table|thead|tbody|tfoot|caption|colgroup)\b[^<>]*>|<col\b[^<>]*>", re.IGNORECASE)
@@ -14,11 +13,6 @@ _COL_SPAN = re.compile(r"\bcolspan\s*=\s*[\"']?(\d+)", re.IGNORECASE)
 _INLINE_TAG = re.compile(r"<[^<>]{1,40}>")
 # colspan は文書由来の値なので、空のセルを足す数に上限を置く。
 _MAX_COL_SPAN = 20
-
-
-def citation_content_unusable(quote: str) -> bool:
-    """短い文字・数字・記号を一律に除かず、構造的な行だけの範囲を識別する。"""
-    return structural_only(quote)
 
 
 def _table_row(match: re.Match[str]) -> str:
