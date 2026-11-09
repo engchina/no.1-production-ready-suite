@@ -211,3 +211,163 @@ async def test_retired_fields_migration_restores_saved_snapshots(
                 _execute(connection, f"DROP TABLE {table} CASCADE CONSTRAINTS PURGE", {})
 
         await client._run_transaction(drop)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_repair_issues_complete_release_from_nonconforming_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """不適合の現在版から、旧版を変えずに完全な新しい版へ切り替える(#4697)。"""
+    from app.rag import language_pack_repair as repair
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    suffix = uuid4().hex[:10]
+    release_table = f"rag_test_lang_releases_{suffix}"
+    state_table = f"rag_test_lang_state_{suffix}"
+    jobs_table = f"rag_test_lang_jobs_{suffix}"
+    monkeypatch.setattr(module, "RELEASE_TABLE", release_table)
+    monkeypatch.setattr(module, "STATE_TABLE", state_table)
+    monkeypatch.setattr(repair, "INGESTION_JOBS_TABLE", jobs_table)
+    sql = module.language_pack_release_statements().replace("rag_lang_", f"rag_test_{suffix}_")
+    client = OracleClient()
+
+    def create(connection: OracleConnectionProtocol) -> None:
+        for statement in sql.split(";"):
+            if statement.strip():
+                _execute(connection, statement, {})
+        _execute(
+            connection,
+            f"CREATE TABLE {jobs_table} (job_id VARCHAR2(64) PRIMARY KEY, status VARCHAR2(32))",
+            {},
+        )
+
+    await client._run_transaction(create)
+    store = module.LanguagePackReleaseStore(client)
+    initial = builtin_pack().to_dict()
+    try:
+        before = await store.ensure_initialized(initial)
+        # 取込に使わない 2 項目を欠いた形にする(ingest_hash は変わらない)。
+        old = deepcopy(initial)
+        del old["answer_labels"]["applications_section"]
+        del old["grounding_cues"]["citation_unit_words"]
+
+        def seed(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                f"UPDATE {release_table} SET effective_json=:effective, content_hash='stale'",
+                {"effective": _json_bind(old)},
+                input_sizes=_json_input_sizes("effective"),
+            )
+            _execute(
+                connection,
+                f"UPDATE {state_table} SET draft_effective_json=:effective",
+                {"effective": _json_bind(old)},
+                input_sizes=_json_input_sizes("effective"),
+            )
+
+        await client._run_transaction(seed)
+
+        def stored(connection: OracleConnectionProtocol) -> tuple[object, object, object]:
+            row = _fetch_one(
+                connection,
+                f"SELECT effective_json, content_hash, ingest_hash FROM {release_table} "
+                "WHERE release_id=:id",
+                {"id": before.current.id},
+            )
+            assert row is not None
+            return _json_loads(row["effective_json"]), row["content_hash"], row["ingest_hash"]
+
+        untouched = await client._run_transaction(stored)
+        with pytest.raises(LanguagePackSnapshotError):
+            await store.state()
+        with pytest.raises(LanguagePackSnapshotError):
+            await store.save_draft(initial, expected_revision=before.draft_revision)
+
+        plan = await repair.inspect_language_pack_repair(client)
+        assert plan.blockers == []
+        assert plan.current_release_id == before.current.id
+        assert plan.missing_fields == [
+            "answer_labels.applications_section",
+            "grounding_cues.citation_unit_words",
+        ]
+        assert plan.ingest_hash_unchanged
+        assert await client._run_transaction(stored) == untouched
+
+        async def apply_repair() -> repair.LanguagePackRepairResult:
+            return await repair.apply_language_pack_repair(
+                client,
+                expected_current_id=before.current.id,
+                expected_draft_revision=plan.draft_revision,
+            )
+
+        async def set_job(status: str) -> None:
+            def operation(connection: OracleConnectionProtocol) -> None:
+                _execute(connection, f"DELETE FROM {jobs_table}", {})
+                _execute(
+                    connection,
+                    f"INSERT INTO {jobs_table} VALUES ('job-a', :status)",
+                    {"status": status},
+                )
+
+            await client._run_transaction(operation)
+
+        await set_job("RUNNING")
+        with pytest.raises(repair.LanguagePackRepairBlocked) as blocked:
+            await apply_repair()
+        assert blocked.value.plan.blockers == [repair.ACTIVE_INGESTION_JOBS]
+        await set_job("SUCCEEDED")
+
+        with pytest.raises(repair.LanguagePackRepairBlocked) as blocked:
+            await repair.apply_language_pack_repair(
+                client,
+                expected_current_id="release-other",
+                expected_draft_revision=plan.draft_revision,
+            )
+        assert blocked.value.plan.blockers == [repair.EXPECTED_CURRENT_MISMATCH]
+
+        # 読み戻しの失敗で、発行した版とポインタの変更がすべて取り消される。
+        def fail_readback(*_args: object, **_kwargs: object) -> None:
+            raise LanguagePackSnapshotError("合成の読み戻しの失敗")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_state", fail_readback)
+            with pytest.raises(LanguagePackSnapshotError):
+                await apply_repair()
+        assert (await store.list()).total == 1
+        assert await client._run_transaction(stored) == untouched
+
+        # 同じ期待値で同時に適用しても 1 回だけ発行される(2 回目は状態行の lock の後に止まる)。
+        outcomes = await asyncio.gather(apply_repair(), apply_repair(), return_exceptions=True)
+        assert sum(isinstance(item, repair.LanguagePackRepairBlocked) for item in outcomes) == 1
+        applied = next(
+            item for item in outcomes if isinstance(item, repair.LanguagePackRepairResult)
+        )
+        assert applied.version == before.current.version + 1
+        state = await store.state()
+        assert state.current.id == applied.release_id
+        assert state.current.previous_id == before.current.id
+        assert state.current.effective == initial
+        assert state.current.ingest_hash == before.current.ingest_hash
+        assert state.draft_effective == initial
+        assert state.draft_revision == plan.draft_revision + 1
+        assert (await store.current()).id == applied.release_id
+        assert (await store.list()).total == 2
+        assert await client._run_transaction(stored) == untouched
+        # 発行の後は通常の保存が使え、この経路はやることがないので止まる
+        # (保存した下書きは未公開の変更なので、それも止める理由に出る)。
+        changed = deepcopy(initial)
+        changed["search_terms"]["stopwords"].append("合成語")
+        saved = await store.save_draft(changed, expected_revision=state.draft_revision)
+        assert saved.draft_revision == state.draft_revision + 1
+        again = await repair.inspect_language_pack_repair(client)
+        assert again.blockers == [
+            repair.CURRENT_ALREADY_CONFORMS,
+            repair.DRAFT_DIFFERS_FROM_CURRENT,
+        ]
+    finally:
+
+        def drop(connection: OracleConnectionProtocol) -> None:
+            for table in (state_table, release_table, jobs_table):
+                _execute(connection, f"DROP TABLE {table} CASCADE CONSTRAINTS PURGE", {})
+
+        await client._run_transaction(drop)
