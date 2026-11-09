@@ -9,31 +9,6 @@ from typing import Any
 
 from rag_engine.retrieval.answer_requirements import answer_requirements
 
-# 別名・手がかりの照合では、一般的な問い方の語を除く。
-_QUESTION_FORM_TERMS = frozenset(
-    {
-        "方法",
-        "手順",
-        "やり方",
-        "仕方",
-        "可否",
-        "必要",
-        "可能",
-        "場合",
-        "とき",
-        "教え",
-        "知り",
-        "意味",
-        "どう",
-        "どこ",
-        "なぜ",
-        "いつ",
-        "何",
-        "について",
-        "ください",
-    }
-)
-
 
 @dataclass(frozen=True)
 class CoverageBudget:
@@ -91,12 +66,12 @@ def _normalize(text: Any) -> str:
 
 
 def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
-    """検索の手がかりに使う語。2 文字以上で、問い方の語を除き、部分の語が揃う複合語（「登録方法」）は部分に任せる。
+    """検索の手がかりに使う語。2 文字以上で、部分の語が揃う複合語（「登録方法」）は部分に任せる。
 
     分かち書きは複合語とその部分の両方を返す。複合語のまま数えると、資料が「登録」「方法」を別々に書く
     ときに一致しないので、部分の語がある複合語は数えない。
     """
-    terms = [t for t in dict.fromkeys(_normalize(term).strip() for term in raw_terms) if len(t) >= 2 and t not in _QUESTION_FORM_TERMS]
+    terms = [t for t in dict.fromkeys(_normalize(term).strip() for term in raw_terms) if len(t) >= 2]
     candidates = set(terms) | {_normalize(t).strip() for t in raw_terms}
     return tuple(t for t in terms if not any(other != t and len(other) >= 2 and other in t for other in candidates))
 

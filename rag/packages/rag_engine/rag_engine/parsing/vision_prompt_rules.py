@@ -29,22 +29,6 @@ VISION_LIST_FIELD_LIMITS = {
     "form_fields": MAX_FORM_FIELDS,
 }
 
-# 語の列挙だけの行の field (#773)。根拠の判定・監査（result_granularity / operation_audit）はこれらの行と
-# グループ見出しを本文として使わない。ラベルは言語資源（content_labels。#2181）。
-VISION_ENUMERATION_FIELDS = (
-    "main_topic",
-    "menu_route",
-    "visible_screen_names",
-    "visible_buttons",
-    "visible_fields",
-    "visible_values",
-    "codes_and_errors",
-    "search_keywords",
-    "query_rewrites",
-    "answerable_questions",
-)
-
-
 # 画面に写っている値そのものを載せる行の field。項目名は「項目:」に残るため、検索用テキストからは
 # この行とその箇条書きを落とす。prompt の接頭辞（「画面例: 」）はモデルが守るとは限らず、
 # 実文書で守られない例が出たため、アプリが決定的に判別できる行ラベルで除く (#778)。
@@ -70,15 +54,6 @@ def without_vision_screen_values(text: str) -> str:
         dropping = False
         kept.append(line)
     return "\n".join(kept)
-
-
-def is_vision_enumeration_line(line: str) -> bool:
-    """生成説明のうち、語の列挙とグループ見出しだけの行かを返します。
-
-    本文として引用・判定に使うと、ボタン名や検索語が根拠の記述として扱われるため除きます。
-    """
-    labels = content_labels()
-    return line.lstrip().startswith(labels.group_prefix) or bool(re.match(r"\s*" + labels.field_line(*VISION_ENUMERATION_FIELDS), line))
 
 
 RULES_START = "[Vision extraction rules v1]"

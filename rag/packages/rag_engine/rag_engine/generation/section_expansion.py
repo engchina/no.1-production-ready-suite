@@ -6,8 +6,7 @@
 
 広げる順は、当たった chunk → 所有の章節（leaf）→ 親の章節 → … → 最上位の章節 → 文書全体（根の章節）。
 
-- 読む範囲（``minimum_scope``。当たった章節 = leaf、列挙・網羅の問は文書全体 = 根の章節。#1503）までを読む。
-  足りるかの判定はせず、上限（段・token・時間）で止める。
+- 読む範囲（当たった章節 = leaf）までを読む。足りるかの判定はせず、上限（段・token・時間）で止める。
 - 上の段の章節は、予算に入れば全体を読む。入らなければ、子の章節の見出し（目次）を質問との関連度（rerank。使えなければ
   語の重なり）で並べ、関連の高い子の章節から、予算に入る章節を全体で読む。入らない子の章節は読まない。
 - 章節が予算に入るかは、章節の chunk のうち、まだ文脈に無いものの token で決める（最初の根拠・前の段で読んだ
@@ -20,7 +19,7 @@
 - 上限（入力 token・段の数・時間）で止めたときは、読めなかった章節を返し、呼び出し元は回答を条件つき
   （``conditional``）にして「回答に未反映の関連章節」に出す。ただし、当たった章節より上の段で子の章節を読むときに、
   関連度の順でより上の兄弟の章節を全体で読んだ後に予算で読めなかった章節のうち、どの起点の chunk も含まないものは、
-  読む範囲が文書全体でなければ回答に出さず、診断（``unread_omitted``）にだけ残す（#2816。質問に合わせて広げた参考の
+  回答に出さず、診断（``unread_omitted``）にだけ残す（#2816。質問に合わせて広げた参考の
   範囲で、読めなくても当たった章節の読了は崩れない）。読取の失敗は、どの章節でも回答に出す。
 - 1 回の回答の中で後に別の起点から広げる段（業務ガイドの手順ごとの検索の後など）があるときは、呼び出し元が
   ``reserve_tokens`` で残す token を渡し、先の段はその分を使わずに止める（#2816）。後の段は、前の段で起点に
@@ -57,7 +56,6 @@ from rag_engine.retrieval.context_builder import (
     ContextParentEvidence,
     context_bundle_from_parent_evidence,
 )
-from rag_engine.retrieval.enumeration import minimum_scope
 
 # 根の章節（文書全体）の id。backend の ``section_chunk_map.ROOT_SECTION_ID`` と同じ。
 ROOT_SECTION_ID = "document"
@@ -742,9 +740,7 @@ def expand_sections(
     if not getattr(settings, "section_expansion_enabled", True) or limits.max_levels <= 0:
         trace["enabled"] = False
         return finish(STOP_DISABLED)
-    # 最低でも所有の章節を読む。列挙・網羅の問がさらに広い範囲を求めればそちらを優先する。
-    need = minimum_scope(question) or "leaf"
-    trace["minimum_scope"] = need
+    # 最低でも所有の章節を読む。
     seeds = seed_chunk_ids(context)
     owners: set[tuple[str, str, str]] = set()
     for uid in seeds:
@@ -790,8 +786,8 @@ def expand_sections(
             (c.outline.document_id, c.outline.chunk_set_id, c.outline.owner_section_id) in reader.seeded_owners,
         )
     )
-    if need != "document" and any(rank < _RANK_OTHER for rank in ranks.values()):
-        # 範囲の外の文書の起点は段の外に置き、範囲の起点の章節を先に読む（#2828。列挙の問は文書全体が読む範囲）。
+    if any(rank < _RANK_OTHER for rank in ranks.values()):
+        # 範囲の外の文書の起点は段の外に置き、範囲の起点の章節を先に読む（#2828）。
         deferred = [chain for chain in chains if ranks[id(chain)] == _RANK_OTHER]
         chains = [chain for chain in chains if ranks[id(chain)] < _RANK_OTHER]
         if deferred:
@@ -814,10 +810,8 @@ def expand_sections(
     level_seconds = DEFAULT_LEVEL_SECONDS
 
     def scope_reached() -> bool:
-        """読む範囲まで読んだか（leaf: 全起点の所有の章節、document: 全起点の文書全体）。"""
-        return all(
-            reader.section_key(chain.outline, chain.sections[0 if need == "leaf" else -1]) in reader.read_sections for chain in chains
-        )
+        """読む範囲（全起点の所有の章節）まで読んだか。"""
+        return all(reader.section_key(chain.outline, chain.sections[0]) in reader.read_sections for chain in chains)
 
     replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
     extracting = large_sections is not no_large_section_handler
@@ -873,11 +867,9 @@ def expand_sections(
 
         当たった章節（読む範囲が leaf のとき）より上の段で読む子の章節のうち、関連度の順でより上の兄弟の章節を
         全体で読んだ後に読めなかったもので（``after_read``）、どの起点の chunk も含まず、読取に失敗していないもの。
-        読む範囲が文書全体（列挙の問）なら、どの章節も読む範囲に入るので出す。
         """
         if (
             not after_read
-            or need == "document"
             or chain.position <= 0
             or section.section_id == chain.sections[chain.position].section_id
             or reader.section_key(chain.outline, section) in reader.failures
@@ -1054,8 +1046,6 @@ def expand_sections(
             return finish(STOP_TIME_LIMIT)
         level_trace: dict[str, Any] = {"level": level, "sections": []}
         trace["levels"].append(level_trace)
-        # 未確認の観点のために読む段では、入らない章節を抜き出さない（抜き出しはモデルを呼ぶ）。
-        extract_now = extracting
         added: list[ContextParentEvidence] = []
         replaced = 0
         budget_hit = False
@@ -1088,7 +1078,7 @@ def expand_sections(
             ]
             if not children:
                 # 子の章節が無い章節（大きな leaf・子をすべて読んだ章節）は、抽出してから統合（#1437）に渡す。
-                if extract_now:
+                if extracting:
                     budget_hit = hand_off(chain, section, [(section, entry)], entry, added) or budget_hit
                 else:
                     without_extraction(chain, section, entry, added)
@@ -1124,7 +1114,7 @@ def expand_sections(
                     # 読取に失敗した子の章節は、失敗として出す（予算で読めなかった章節にしない）。
                     budget_hit = True
                     continue
-                if extract_now:
+                if extracting:
                     pending.append((child, child_entry))
                 else:
                     without_extraction(chain, child, child_entry, added, read_above)
@@ -1134,13 +1124,7 @@ def expand_sections(
                 budget_hit = hand_off(chain, section, pending, entry, added, read_above) or budget_hit
         if budget_hit or any(item.get("read") == "extracted" for item in _entries(level_trace)):
             # 全体を読む必要のある章節は、抽出してから統合（#1437）に渡す（差し込み口が無ければ予算で打ち切る）。
-            trace["large_section_handoff"] = (
-                "extract_then_integrate"
-                if extract_now
-                else "not_used_for_unverified_aspects"
-                if extracting
-                else "extract_then_integrate_unavailable"
-            )
+            trace["large_section_handoff"] = "extract_then_integrate" if extracting else "extract_then_integrate_unavailable"
         result.levels = level
         level_trace["labels"] = labels
         if added:

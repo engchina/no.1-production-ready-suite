@@ -262,7 +262,7 @@ def test_invalid_unit_selection_uses_existing_structured_output_retry(invalid_se
                 reasons.append({entry["type"] for entry in exc.errors()})
                 raise
 
-        return _parse_with_retry(operation, "synthetic", config(), retries=0)
+        return _parse_with_retry(operation, "synthetic", config())
 
     inputs = [span(i, "合成の本文。" * 200) for i in range(4)]
     _, _, diagnostic = prepare(inputs, read)

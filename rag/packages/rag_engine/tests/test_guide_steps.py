@@ -294,8 +294,8 @@ def test_guide_steps_and_request_coverage_share_one_budget(monkeypatch: pytest.M
 
 def test_build_context_block_lists_step_evidence_labels() -> None:
     spans = [
-        {"label": "E1", "source_id": "run:a1", "pinned": False, "function": ("doc", "F"), "text": "a"},
-        {"label": "E2", "source_id": "run:b1", "pinned": False, "function": ("doc", "F"), "text": "b"},
+        {"label": "E1", "source_id": "run:a1", "function": ("doc", "F"), "text": "a"},
+        {"label": "E2", "source_id": "run:b1", "function": ("doc", "F"), "text": "b"},
     ]
     steps = (("s1", "画面 A", ("run:a1",)), ("s2", "画面 B", ("run:b1", "run:zz")), ("s3", "画面 C", ()))
 

@@ -324,22 +324,6 @@ test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを�
 });
 
 
-test("数量の混在表記の語は質問用の言語資源で確認できる", async ({ page }) => {
-  const fields = [...FIELDS, { section: "question_cues", key: "mixed_number_notation_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }];
-  const builtin = { ...BUILTIN, question_cues: { mixed_number_notation_cues: ["混在", "組み合"] } };
-  await mockLanguagePack(page, builtin);
-  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }));
-  await page.goto("/settings/language-pack");
-  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "質問を読む" }).click();
-  for (const width of [1280, 375]) {
-    await page.setViewportSize({ width, height: 900 });
-    await expect(page.getByLabel("数字と位取りを混ぜる指定の語", { exact: true })).toHaveValue("混在\n組み合");
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: test.info().outputPath(`mixed-number-${width}.png`) });
-  }
-});
-
-
 test("公開が競合したら現在版を成功表示せず再確認する", { tag: "@responsive" }, async ({ page }) => {
   await mockLanguagePack(page);
   await page.route("**/api/settings/language-pack/publish", route => route.fulfill({ status: 409, json: { data: null, error_messages: ["公開版が更新されました。再読み込みしてください。"], warning_messages: [] } }));
@@ -480,7 +464,7 @@ test("導出結論の見出しと根拠不足の定型文はラベルと説明�
 
 
 test("旧草稿の追加表示文言は補完して試せるが公開版を書き換えない（#3932）", { tag: "@responsive" }, async ({ page }) => {
-  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "crag_definition_aspect_template", "guide_acquisition_incomplete_template"];
+  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "guide_acquisition_incomplete_template"];
   const labels = Object.fromEntries(keys.map(key => [key, "合成の表示文言"]));
   const builtin = { ...BUILTIN, answer_labels: { ...labels, cause_gap: "合成の保存済み文言" } };
   const published = { ...BUILTIN, answer_labels: { cause_gap: "合成の保存済み文言" } };

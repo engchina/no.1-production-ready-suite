@@ -185,10 +185,8 @@ def _settings(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-# 列挙・網羅の問（「すべて」。#1503 の読む範囲の規則）ではない質問。列挙の問は test_enumeration_sufficiency.py。
 QUESTION = "第3章の設備ごとの点検の項目を教えて"
 # 読む範囲が文書全体になる列挙の問（親の章節まで上がる段の確認に使う）。
-ENUM_QUESTION = "点検要領で、設備ごとの点検の項目をすべて挙げてください。"
 
 
 def _expand(
@@ -216,64 +214,15 @@ def _child_ids(context: AnswerContext) -> list[str]:
 def test_keeps_most_relevant_first_and_reading_order_with_chunk_ids():
     stub = SectionStub()
 
-    result = _expand(_seed_context("c31a"), _settings(), stub, question=ENUM_QUESTION)
+    result = _expand(_seed_context("c31a"), _settings(), stub)
 
     # 当たった chunk（最も関連の高い根拠）を先頭に、章節の chunk を章節の中の読み順で後ろに置く。
-    assert _child_ids(result.context)[:6] == ["c31a", "c31b", "c32a", "c32b", "c33a", "c33b"]
+    assert _child_ids(result.context) == ["c31a", "c31b"]
     # 引用の ID は chunk のまま（章節の id や合成の id を作らない）。
     added = [child for parent in result.context.evidence_tree[1:] for child in parent.children]
     assert {child.role for child in added} == {sections.SECTION_CONTEXT_ROLE}
     assert all(child.record.chunk_id == child.record.chunk_uid for child in added)
     assert [record.chunk_uid for record in result.context.records][0] == f"{DOC}:c31a"
-
-
-def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
-    stub = SectionStub()
-    # 入力の上限 1,200 token（モデルの入力の上限 2,400 × 50%）。当たった chunk 300 + 3.1 の残り 300 の後は、
-    # 第3章の全体（残り 1,200）は入らず、子の章節（600 ずつ）が 1 つだけ入る。
-    settings = _settings(answer_max_input_tokens=2400)
-
-    def prefer_last(question, documents, settings, top_n=None):
-        # 見出しの関連度: 3.3（消火設備）を先に。
-        return [SimpleNamespace(index=index) for index in reversed(range(len(documents)))]
-
-    result = _expand(_seed_context("c31a"), settings, stub, rerank=prefer_last, question=ENUM_QUESTION)
-
-    limit = sections.SectionExpansionLimits.from_settings(settings).input_tokens
-    assert limit == 1200
-    assert sections.context_tokens(result.context) <= limit
-    # 入るかは、章節の chunk のうち文脈に無い分で確かめる（#1504。第3章の残りは 1,200 で入らない）。
-    # 関連の高い子の章節（3.3）を全体で読み、入らない 3.2 は文脈に入れない。
-    assert stub.read_calls == ["s3-1", "s3", "s3-3", "s3-2"]
-    assert "c33a" in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
-    assert result.stop_reason == sections.STOP_PARTIAL
-    # 文書全体が読む範囲の列挙の問では、読めなかった 3.2 も回答に示す。
-    assert [item.section_id for item in result.unread] == ["s3-2"]
-    # 全体を読む必要があるのに入らない章節は、第 3 段階（#1437）の差し込み口に渡る（今は未実装）。
-    assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
-
-
-def test_token_budget_keeps_unread_sections_even_when_grader_says_enough():
-    stub = SectionStub()
-    # 読む範囲が文書全体の網羅の問では、どの章節も読む範囲に入るので、読めなかった兄弟の章節も回答に出す。
-    question = "点検要領で、作業者がしないと決められていることをすべて挙げてください。"
-    assert sections.minimum_scope(question) == "document"
-
-    result = _expand(
-        _seed_context("c31a"),
-        _settings(answer_max_input_tokens=2400),
-        stub,
-        question=question,
-        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
-    )
-
-    assert result.stop_reason == sections.STOP_PARTIAL
-    assert [item.section_id for item in result.unread] == ["s3-2"] and result.omitted == []
-    assert "読み込み量の上限" in result.gap_lines[0]
-    # 本文の行と同じ文と、原文を開くための文書・頁を回答の診断に載せる（#2040）。
-    unread = result.trace["unread"][0]
-    assert unread["line"] == result.gap_lines[0]
-    assert (unread["document_id"], unread["reason"], unread["page"]) == (DOC, sections.STOP_TOKEN_BUDGET, 6)
 
 
 class OwnerStub(SectionStub):
@@ -323,36 +272,6 @@ def test_followup_reserve_is_share_of_the_input_limit():
     assert (
         sections.SectionExpansionLimits.from_settings(_settings(section_expansion_followup_reserve_percent=0)).followup_reserve_tokens == 0
     )
-
-
-def test_large_section_handler_receives_sections_that_do_not_fit():
-    stub = SectionStub()
-    handed: list[sections.LargeSectionRequest] = []
-
-    def handler(request):
-        handed.append(request)
-        return None
-
-    _expand(
-        _seed_context("c31a"),
-        _settings(answer_max_input_tokens=2400),
-        stub,
-        large_sections=handler,
-        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
-        question=ENUM_QUESTION,
-    )
-
-    # 入らない子の章節（3.2）は、広げている章節（第3章）の要求としてまとめて渡す。
-    assert [request.section.section_id for request in handed] == ["s3"]
-    assert [section.section_id for section in handed[0].unread_sections] == ["s3-2"]
-    # 渡すのは、章節の親（章節の中の読み順）。まだ文脈に無い親（3.2）に加えて、すでに文脈にある章節の親
-    # （当たった chunk 3.1a・1 段目に読んだ 3.1b）も渡し、その分を残りの入力 token に戻す（#1504。二重に数えない）。
-    # 2 段目に全体で読んだ 3.3 は、この段で足した根拠なので渡さない。
-    assert [item.record.chunk_uid for item in handed[0].tree] == [f"{DOC}:c31a", f"{DOC}:c31b", f"{DOC}:c32a", f"{DOC}:c32b"]
-    assert handed[0].context_keys == {f"{DOC}:c31a", f"{DOC}:c31b"}
-    # 上限 1,200 − 文脈（3.1）− 3.3 に、文脈の 3.1 の分を戻す（= 上限 − 3.3）。
-    section_3_3 = sum(sections.estimate_tokens(_text(chunk)) for chunk in LEAVES["s3-3"])
-    assert handed[0].remaining_tokens == 1200 - section_3_3
 
 
 def test_elapsed_time_does_not_impose_a_separate_expansion_deadline():
@@ -525,17 +444,6 @@ def test_answer_section_phase_passes_the_followup_reserve(reserve):
     assert result.trace.get("reserved_tokens", 0) == (expected if reserve else 0)
 
 
-def test_unread_siblings_are_reported_when_no_sibling_was_read():
-    # より上の兄弟の章節を 1 つも読めなければ、起点を含まない兄弟の章節も回答に出す（欠けの手がかりを消さない）。
-    stub = SectionStub()
-
-    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=1200), stub, question=ENUM_QUESTION)
-
-    assert result.stop_reason == sections.STOP_PARTIAL
-    assert {item.section_id for item in result.unread} == {"s3-2", "s3-3"} and result.omitted == []
-
-
-# 別の文書（業務ガイドの手順が参照しない文書。#2828）: 文書全体 > 1 章（p.1）・2 章（p.2）。leaf は 2 chunk ずつ。
 OTHER_DOC = "doc-2"
 OTHER_FILE = "別の文書.pdf"
 OTHER_LEAVES = {"o1": ["o1a", "o1b"], "o2": ["o2a", "o2b"]}
@@ -802,30 +710,3 @@ def test_a_section_with_chunks_that_returns_nothing_stays_unread(response: secti
     outline, reader = _reader_for(Stub(), section)
     assert reader.read(outline, section) == []
     assert reader.failures[reader.section_key(outline, section)] == sections.STOP_PARTIAL
-
-
-def test_a_heading_only_child_does_not_make_the_answer_partial():
-    """#4138: 親の章節の子を読む段で、見出しだけの子は読めなかった章節に入らない。"""
-    empty = replace(_heading_only("s3-h"), parent_section_id="s3")
-
-    class Stub(SectionStub):
-        def outline(self, **options: object) -> sections.SectionOutline | None:
-            outline = super().outline(**options)
-            return replace(outline, sections=(*outline.sections, empty)) if outline else None
-
-        def chunks(self, *, section_id: str, **options: object) -> list[StoredChunk]:
-            if section_id == "s3-h":
-                self.read_calls.append(section_id)
-                return sections.SectionRead(complete=True)
-            return super().chunks(section_id=section_id, **options)
-
-    stub = Stub()
-    result = _expand(
-        _seed_context("c31a"),
-        _settings(answer_max_input_tokens=2400),
-        stub,
-        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
-        question=ENUM_QUESTION,
-    )
-    assert "s3-h" in stub.read_calls
-    assert "s3-h" not in [item.section_id for item in (*result.unread, *result.omitted)]

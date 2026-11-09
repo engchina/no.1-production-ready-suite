@@ -2114,22 +2114,16 @@ def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None
 
     default = build_engine_settings(Settings(), output_dir=tmp_path)
     assert default.llm_stall_detection is True
-    assert default.llm_stall_idle_seconds == 20.0
-    assert default.llm_stall_min_rate_ratio == 0.25
-    assert default.llm_stall_resends == 1
+    assert default.llm_stall_idle_seconds == 120.0
     changed = build_engine_settings(
         Settings(
             rag_llm_stall_detection_enabled=False,
             rag_llm_stall_idle_seconds=45,
-            rag_llm_stall_min_rate_ratio=0.5,
-            rag_llm_stall_resends=2,
         ),
         output_dir=tmp_path,
     )
     assert changed.llm_stall_detection is False
     assert changed.llm_stall_idle_seconds == 45.0
-    assert changed.llm_stall_min_rate_ratio == 0.5
-    assert changed.llm_stall_resends == 2
 
 
 def _engine_effort(value: str) -> str:

@@ -99,10 +99,7 @@ async def test_invalid_paging_does_not_connect(limit: int, offset: int) -> None:
     assert pool.acquire_calls == 0
 
 
-_COMPAT_KEYS = (
-    "crag_definition_aspect_template",
-    "guide_acquisition_incomplete_template",
-)
+_COMPAT_KEYS = ("guide_acquisition_incomplete_template",)
 
 
 def _stored_hash(effective: dict[str, object]) -> str:
@@ -118,7 +115,7 @@ def _stored_hash(effective: dict[str, object]) -> str:
     return hashlib.sha256(f"{effective['locale']}\n{canonical}".encode()).hexdigest()[:16]
 
 
-def legacy_release_row(mask: int = 3) -> dict[str, object]:
+def legacy_release_row(mask: int = (1 << len(_COMPAT_KEYS)) - 1) -> dict[str, object]:
     """旧形式の項目集合から独立に元の保存 hash を計算する。"""
     row = release_row()
     effective = builtin_pack().to_dict()
@@ -144,7 +141,7 @@ def test_incomplete_release_is_rejected_without_defaulting() -> None:
     assert row == untouched
 
 
-@pytest.mark.parametrize("mask", range(4))
+@pytest.mark.parametrize("mask", range(1 << len(_COMPAT_KEYS)))
 def test_release_requires_current_fields_without_changing_custom_values(mask: int) -> None:
     from app.rag.language_pack_releases import pack_from_release
 

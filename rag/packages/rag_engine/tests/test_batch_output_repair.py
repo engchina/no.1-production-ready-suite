@@ -87,7 +87,7 @@ def test_first_success_keeps_prompt_bytes_and_call_count(monkeypatch):
     assert all("repair_input" not in batch for batch in diagnostic["batches"])
 
 
-def test_two_invalid_outputs_do_not_add_a_third_call_and_restore_context(monkeypatch):
+def test_invalid_outputs_stop_at_the_shared_retry_limit_and_restore_context(monkeypatch):
     calls = []
     diagnostics = []
 
@@ -99,8 +99,9 @@ def test_two_invalid_outputs_do_not_add_a_third_call_and_restore_context(monkeyp
     monkeypatch.setattr(batched_evidence, "record_retrieval_stage", diagnostics.append)
     with pytest.raises(ValidationError):
         prepare([span(0, "合成の条件A。" * 600)], reader)
-    assert len(calls) == 2 * len(diagnostics)
-    assert all(len(row["validation_failures"]) == 2 for row in diagnostics)
+    sends = 1 + oci.LLM_CALL_MAX_RETRIES
+    assert len(calls) == sends * len(diagnostics)
+    assert all(len(row["validation_failures"]) == sends for row in diagnostics)
     assert all(row["status"] == "failed" for row in diagnostics)
     assert structured_output_prompt("ordinary") == "ordinary"
 
@@ -293,10 +294,10 @@ def test_unknown_unit_after_retry_keeps_input_without_adopting_unbound_answer(mo
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     selected, prompt, diagnostic = prepare(inputs, reader)
     failed = [row for row in diagnostic["batches"] if row["status"] == "failed"]
-    assert len(failed) == 1 and len(failed[0]["validation_failures"]) == 2
+    assert len(failed) == 1 and len(failed[0]["validation_failures"]) == 1 + oci.LLM_CALL_MAX_RETRIES
     assert failed[0]["retained_input_count"] == 1
     assert diagnostic["read_source_count"] == 1
-    assert len(calls) == diagnostic["batch_count"] + 1
+    assert len(calls) == diagnostic["batch_count"] + oci.LLM_CALL_MAX_RETRIES
     assert "採らない合成の回答" not in prompt
     assert [value["text"] for value in selected if value["source_id"] == "p0"] == [inputs[0]["text"]]
     assert all(value["source_id"] in {"p0", "p1"} for value in selected)

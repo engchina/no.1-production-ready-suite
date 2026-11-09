@@ -211,9 +211,6 @@ class Settings:
     oci_compartment_id: str
     oci_vision_endpoint: str
     llm_request_timeout_seconds: int
-    llm_retries: int
-    llm_retry_initial_wait_seconds: float
-    llm_retry_max_wait_seconds: float
     # 構造化出力の呼び出し 1 回の出力の上限(tokens。既定 32768。#1719)。送る値はこれと呼ぶモデルの出力の上限
     # (`LlmProviderSettings.max_output_tokens`)の小さい方(`llm_output_token_limit`)。
     answer_max_tokens: int
@@ -375,16 +372,11 @@ class Settings:
     escalation_llm: str = ""
     # そのモデルの入力の上限(tokens。回答のモデルの `answer_max_input_tokens` の代わりに使う)。
     escalation_max_input_tokens: int = 128_000
-    # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
-    # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
-    # 判定の速さと間隔は同じ接続・モデルの直近の完了した呼び出しから学ぶ（実測が 3 回たまるまでは検出しない）。
+    # 回答の期限のある LLM の呼び出しを streaming で受け、応答の event が来なくなったら打ち切って送り直す
+    # (#1926・#4736。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。止まった判定は無音だけ。
     llm_stall_detection: bool = False
-    # event が来ない秒の下限（直近の呼び出しの最大の間隔の 3 倍がこれより長ければそちら）。
-    llm_stall_idle_seconds: float = 20.0
-    # 直近 10 秒の出力の速さ（delta の event/秒）が、直近の完了した呼び出しの速さの中央値のこの割合を下回ったら停滞。
-    llm_stall_min_rate_ratio: float = 0.25
-    # 停滞で打ち切って送り直す回数の上限（1 回の呼び出しあたり。最後の送信は検出せずに待つ）。
-    llm_stall_resends: int = 1
+    # 止まったとする無音の秒数（最初の event を含む）。送り直しはやり直しの共通の枠で数える。
+    llm_stall_idle_seconds: float = 120.0
     # streaming で受ける呼び出しで、出力が同じ並びの繰り返し・空白だけで続いたら打ち切って送り直す(#2966。既定 off。
     # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
     # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
@@ -536,11 +528,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         # 旧名 VISION_* は Vision 限定に見えるため改名した。リポジトリ外の既存 .env が黙って既定値へ
         # 戻らないよう、新しい名前が未設定のときだけ旧名を読む (#912)。
         llm_request_timeout_seconds=_env_int(env, "LLM_REQUEST_TIMEOUT_SECONDS", _env_int(env, "VISION_REQUEST_TIMEOUT_SECONDS", 90)),
-        llm_retries=_env_int(env, "LLM_RETRIES", _env_int(env, "VISION_RETRIES", 3)),
-        llm_retry_initial_wait_seconds=_env_float(
-            env, "LLM_RETRY_INITIAL_WAIT_SECONDS", _env_float(env, "VISION_RETRY_INITIAL_WAIT_SECONDS", 2.0)
-        ),
-        llm_retry_max_wait_seconds=_env_float(env, "LLM_RETRY_MAX_WAIT_SECONDS", _env_float(env, "VISION_RETRY_MAX_WAIT_SECONDS", 30.0)),
         answer_max_tokens=_positive_int(env, "ANSWER_MAX_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
         default_rerank_enabled=_env_bool(env, "RAG_ENGINE_DEFAULT_RERANK_ENABLED", True),
         approved_faq_semantic_matching_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_MATCHING_ENABLED", True),
@@ -623,9 +610,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         article_catalog_cache_max_entries=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES", 4096)),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
-        llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
-        llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
-        llm_stall_resends=max(0, min(2, _env_int(env, "RAG_ENGINE_LLM_STALL_RESENDS", 1))),
+        llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",

@@ -158,13 +158,13 @@ from app.rag.figure_url import (
     issue_figure_token,
 )
 from app.rag.observability import new_trace_id
+from app.rag.profile_language import profile_language_scope
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
     RECOMMEND_LIMIT_MAX,
     ProfileCandidate,
     recommend_search_answer_profiles,
 )
-from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings

@@ -57,7 +57,7 @@ RAG が文書と質問を読むときの「言語の書き方」（数・単位�
 | 組み込み | `rag_parser_core/language/packs/ja.json`（読み取り専用） | 「既定に戻す」の値 |
 | 全体 | Oracle の変更できない公開版（実効値の完全な snapshot）・現在版の参照・編集用の草稿 | 取込・検索・回答設定 >「言語資源」（権限 `menu.settings_language_pack`） |
 | 文書レシピ | 文書の処理レシピ（取込の節だけ。3 層モデルで取込の設定は文書レシピが持ち、KB は純スコープなので持たない） | 文書のレシピ（後の段階） |
-| 検索・回答プロファイル | プロファイルの設定の `language_pack`（検索・回答の項目 = `ingest=False` だけ。取込の項目は文書の分割と食い違うので持てない） | 検索・回答プロファイルの「質問の理解」と、他用途の「言語資源の上書き」。全体の公開中の値へ重ね、会話の準備・確認・検索・回答の要求範囲で `bind_pack`（[契約](./question-understanding.md)） |
+| 検索・回答プロファイル | プロファイルの設定の `language_pack`（検索・回答の項目 = `ingest=False` だけ。取込の項目は文書の分割と食い違うので持てない） | 検索・回答プロファイルの「言語資源の上書き」。全体の公開中の値へ重ね、会話の準備・確認・検索・回答の要求範囲で `bind_pack` |
 
 - 初回の移行時だけ既存のローカル設定を読み取り、公開版の完全な snapshot を Oracle に作る。元のファイルは変更・削除しない。以後の公開・草稿・履歴の正本は Oracle とし、ローカルファイルへ書き戻さない。
 - 環境変数（`RAG_REFERENCE_*`）には持たない。#2157〜#2179 で足した `rag_reference_*` の設定は言語資源へ移し、消す（未リリースのため互換は持たない）。
@@ -99,7 +99,7 @@ RAG が文書と質問を読むときの「言語の書き方」（数・単位�
 | 1b | **数と単位**（漢数字・単位・元号・文末）の重複（約 10 か所）を言語資源の 1 つの関数にまとめる。解析・分割のサービスへ要求で渡す。chunk に言語資源の hash を残す | `section_rules.py`・`rag_engine/chunking/headings.py`・`rag_parser_core/extraction.py`・`xml_tree_json.py`・`rag_pipeline_core/chunking.py`・`graph_expansion.py`・`pdf_segment_merge.py`・`enumeration.py`・`operation_audit.py`・`inquiry_conditions.py`・`value_grounding.py` |
 | 2 | 取込の語: XML ツリー JSON の助数詞・止める字・検索の文の見出し、見出しの階層、定型文、ページの表記、装飾の画像の判定、表・図の内容のラベル（表の行のまとまりの見出し・表内画像・画像の説明の項目とまとまり・OCR の欄。書く側と回答の検査で読む側が同じ言語資源から作る） | `xml_tree_json.py`・`headings.py`・`layout.py`・`decorative_pictures.py` ほか |
 | 3 | 全文検索の語: 止め語・一般語・語の端の助詞・丁寧語・英語の変化（検索だけの項目。言語資源に取込の項目だけの hash を足し、chunk にはそれを残すので、検索の語を変えても文書は古くならない） | `text_search_tokenizer.py` |
-| 4 | 質問の理解の語（文書の種類・疑問・網羅・図の語）。業務に寄るものはドメインプロファイルと分ける。4a: 質問で求める内容（手順・一覧・件数など）・条件・経緯・対象の手がかり（`question_cues`。task_contract）。4b: 問い合わせの条件（`inquiry_cues`。文書の種類・種別の手がかり・条件とファイルの語は取込でも使う）・列挙・網羅（`enumeration_cues`）・項目の定義（`definition_cues`）。4c: 根拠の選び方（`evidence_cues`。根拠の関連度・引用の窓・手順の行・機能の見出し・画像の要否・機能の接続）。LLM への指示の文と、検索文の不採用の理由（実行記録の文）はコードに残す | `inquiry_conditions.py`・`task_contract.py`・`enumeration.py`・`definition_evidence.py` ほか |
+| 4 | 質問の理解の語（文書の種類・疑問・網羅・図の語）。業務に寄るものはドメインプロファイルと分ける。4a: 質問の区切りの字と小問の印（`question_cues`。task_contract は記号で分かる小問だけを扱い、語で質問の種類を判定しない。#4668）。4b: 問い合わせの条件（`inquiry_cues`。文書の種類・種別の手がかり・条件とファイルの語は取込でも使う）。4c: 根拠の選び方（`evidence_cues`。機能の見出し・番号の形など。語の一致による順位づけはしない）。LLM への指示の文はコードに残す | `inquiry_conditions.py`・`task_contract.py` ほか |
 | 5 | 回答の検査の語・実体の索引の語。5a: 回答の表示（`answer_labels`。節の見出し・定型文・出典・引用と条件の型。回答の検査・評価・指標も同じ語で読む）。5b: 回答の検査の手がかり（`answer_check_cues`。grounded の確定の操作・限定・未説明・保証・推測・条件の句・但し書き・版の廃止など）。5c: 回答の操作の指示（`operation_audit_cues`。操作の指示・操作の語の族・削除の対象。製品をまたぐ契約の語は除く）。5d: 回答の値と操作部品の裏付け（`grounding_cues`。数の規則・今回の値・ボタンとキー・別名・算式の単位・画像の操作）。プロンプトの注入の検出（安全の検査）はコードに残す。5e: 実体の索引（`entity_cues`。取込）・項目抽出の値（`field_value_cues`。取込）・業務ガイドの照らし合わせ（`guide_check_cues`）・安全チェックの根拠との重なりの止め語（`grounding_cues.grounding_stopwords`）。機微情報のマスクとプロンプトの注入の検出はコードに残す | `grounded.py`・`value_grounding.py`・`entity_index.py` ほか |
 | 6 | 履歴と前の版への戻し（#2202）、画面の整理（#2203）、検索・回答プロファイルの上書き（検索・回答の項目だけ） | — |
 

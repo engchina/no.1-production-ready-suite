@@ -116,7 +116,7 @@ def test_repetition_resend_receives_feedback_and_preserves_original_question(rec
     feedback = client.inputs[1][-1]["content"][0]["text"]
     assert feedback.startswith("## Step 1:") and "## Step 2:" in feedback
     assert "同じ項目を同じ配列に繰り返さず" in feedback
-    assert len(client.streams) == 2
+    assert len(client.streams) == (2 if recovered else 1 + oci.LLM_CALL_MAX_RETRIES)
     reserve = len(json.dumps(client.inputs[1][1:], ensure_ascii=False).encode("utf-8"))
     assert client.budgets[0] - client.budgets[1] == reserve
 
@@ -161,7 +161,7 @@ def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback(small_budge
         if small_budget:
             with pytest.raises(oci.LlmRunawayOutput):
                 oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
-            assert client.inputs == [messages, messages]
+            assert client.inputs == [messages] * (1 + oci.LLM_CALL_MAX_RETRIES)
         else:
             result = oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
             assert not result.items and len(client.inputs) == 2

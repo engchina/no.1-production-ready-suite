@@ -104,7 +104,6 @@ def _page_spans(template: dict[str, Any], page: Mapping[str, Any], selected: Seq
                 "page": 1,
                 "page_end": 1,
                 "tags": [],
-                "pinned": False,
                 "section_path": [],
                 "source_context": {},
                 "origin": "document_background",
@@ -256,6 +255,6 @@ class DocumentBackgroundReader:
         self.rounds.append(diagnostic)
         return (
             replace(context, records=records, evidence=tuple(evidence), evidence_tree=tuple(trees)),
-            tag_spans(question, spans),
+            tag_spans(spans),
             diagnostic,
         )

@@ -27,21 +27,18 @@ import {
   useImportDomainKeywords,
 } from "@/lib/queries";
 
-import { QuestionUnderstandingPanel } from "./QuestionUnderstandingPanel";
 import { DomainKeywordExcelImport } from "./DomainKeywordExcelImport";
 import { ApprovedFaqManager } from "./ApprovedFaqManager";
 import { RuntimeKnowledgeManager, runtimeKindLabel } from "./RuntimeKnowledgeManager";
 import { SupportGuideManager } from "./SupportGuideManager";
 
-type KnowledgeTab = "approvedFaq" | "questionUnderstanding" | "terms" | "domainKeywords" | "rules" | "supportGuides";
+type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules" | "supportGuides";
 
 /** 検索・回答プロファイル単位の知識(ドメインキーワード等)。編集中の検索・回答プロファイルにだけ表示する。 */
 export function SearchAnswerProfileKnowledgePanel({
   searchAnswerProfileId,
-  readOnly = false,
 }: {
   searchAnswerProfileId: string;
-  readOnly?: boolean;
 }) {
   // よく使う Approved FAQ を先頭・既定のタブにする(#636)。
   const [tab, setTab] = useState<KnowledgeTab>("approvedFaq");
@@ -66,7 +63,6 @@ export function SearchAnswerProfileKnowledgePanel({
           // 最初の主な利用段階の順。分岐や後の再利用で実行する段階は変わる。
           items={[
             { id: "approvedFaq", label: t("searchAnswerProfiles.faq.title") },
-            { id: "questionUnderstanding", label: t("searchAnswerProfiles.questionUnderstanding.title") },
             { id: "terms", label: runtimeKindLabel("terms") },
             { id: "rules", label: runtimeKindLabel("rules") },
             { id: "supportGuides", label: t("supportGuides.title") },
@@ -78,9 +74,7 @@ export function SearchAnswerProfileKnowledgePanel({
           id={`search-answer-profile-knowledge-panel-${tab}`}
           aria-labelledby={`search-answer-profile-knowledge-tab-${tab}`}
         >
-          {tab === "questionUnderstanding" ? (
-            <QuestionUnderstandingPanel key={searchAnswerProfileId} searchAnswerProfileId={searchAnswerProfileId} readOnly={readOnly} />
-          ) : tab === "domainKeywords" ? (
+          {tab === "domainKeywords" ? (
             <DomainKeywordsEditor searchAnswerProfileId={searchAnswerProfileId} />
           ) : tab === "approvedFaq" ? (
             <ApprovedFaqManager searchAnswerProfileId={searchAnswerProfileId} />

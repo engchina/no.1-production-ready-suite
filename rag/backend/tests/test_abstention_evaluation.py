@@ -76,11 +76,9 @@ def test_abstention_claims_and_case_failure_reasons(
     assert ("claim_unassessed" in result.failure_reasons) is bool(case.get("unassessed"))
 
 
-@pytest.mark.parametrize("raw", ["わかりません", "分かりません", "不明です"])
-def test_generation_and_judgement_share_custom_abstention_labels(raw: str) -> None:
+def test_generation_and_judgement_share_custom_abstention_labels() -> None:
     from unittest.mock import Mock
 
-    from rag_engine.generation.answer_payload import parse_answer_response
     from rag_engine.generation.service import GenerationService
     from rag_engine.models.contracts import GenerationRequest
     from rag_parser_core.language import bind_pack, builtin_pack, resolve
@@ -101,10 +99,8 @@ def test_generation_and_judgement_share_custom_abstention_labels(raw: str) -> No
     with bind_pack(pack):
         generated = GenerationService(generator).generate(GenerationRequest("項目 A は？", ()))
         assert generated.text == summary
-        normalized = parse_answer_response(raw)
-        assert normalized.answer_text == summary + guidance
         evaluated = evaluate_answer_payload(
-            {"answer_text": normalized.answer_text, "allow_without_standard": True},
+            {"answer_text": summary + guidance, "allow_without_standard": True},
             object(),
         )
     generator.generate.assert_not_called()

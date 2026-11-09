@@ -79,7 +79,9 @@ from app.rag.language_pack_retired_fields import (
     RETIRED_ANSWER_CHECK_CUE_FIELDS,
     RETIRED_ANSWER_LABEL_FIELDS,
     RETIRED_CRAG_ANSWER_LABEL_FIELDS,
+    RETIRED_EVIDENCE_TAG_FIELDS,
     RETIRED_QUESTION_CUE_FIELDS,
+    RETIRED_QUESTION_WORD_FIELDS,
     RETIRED_SECTIONS,
     RETIRED_UNREAD_FIELDS,
     RETIRED_UNREAD_SECTIONS,
@@ -927,6 +929,44 @@ END;
                 "CONTENT_HASH を計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は"
                 "変えません。項目に保存した語を残す必要があれば適用前に同列を export してください。"
                 "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4668_language_pack_retired_evidence_tags",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_EVIDENCE_TAG_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、根拠の語の印と"
+                "本文の語の書き換えをやめて読まれなくなった項目（question_cues・evidence_cues・"
+                "answer_check_cues・grounding_cues の一部）の値を削除し、公開版の CONTENT_HASH を"
+                "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4668_language_pack_retired_question_word_checks",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_QUESTION_WORD_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、質問の種類の"
+                "語の判定と根拠の順位づけの語をやめて読まれなくなった項目（question_cues・"
+                "evidence_cues・grounding_cues・answer_labels の一部）と節（enumeration_cues・"
+                "definition_cues）の値を削除し、公開版の CONTENT_HASH を計算し直します。"
+                "ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。項目に保存した語を"
+                "残す必要があれば適用前に同列を export してください。削除後は復元できません。"
             ),
         )
     )

@@ -6,7 +6,6 @@ import pytest
 
 from rag_engine.generation import section_expansion as sections
 from tests.test_section_expansion import (
-    ENUM_QUESTION,
     SectionStub,
     _child_ids,
     _expand,
@@ -122,7 +121,7 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
     stub = SectionStub()
     reader = sections.SectionReader(stub.chunks, set())
     settings = _settings(answer_max_input_tokens=2000)
-    first = _expand(_seed_context("c31a"), settings, stub, reader=reader, started_at=0.0, clock=lambda: 0.0, question=ENUM_QUESTION)
+    first = _expand(_seed_context("c31a"), settings, stub, reader=reader, started_at=0.0, clock=lambda: 0.0)
     context = sections._merge(first.context, _seed_context("c4a").evidence_tree)
     second = _expand(
         context,
@@ -132,7 +131,6 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
         started_at=0.0,
         clock=lambda: 500.0 if exhausted == "time" else 0.0,
         deadline_remaining=lambda: 60.0 if exhausted == "time" else None,
-        question=ENUM_QUESTION,
     )
     assert second.unread
     assert not second.trace["minimum_scope_complete"]
@@ -140,14 +138,3 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
     assert stub.read_calls.count("s3-1") == 1
     if exhausted == "time":
         assert second.stop_reason == sections.STOP_TIME_LIMIT
-
-
-def test_unreadable_child_after_a_budget_hit_is_not_marked_in_context():
-    stub = SectionStub()
-    original = stub.chunks
-    stub.chunks = lambda **kw: sections.SectionRead([], complete=False) if kw["section_id"] == "s3-3" else original(**kw)
-    result = _expand(
-        _seed_context("c31a"), _settings(answer_max_input_tokens=1600), stub, large_sections=lambda request: None, question=ENUM_QUESTION
-    )
-    assert "s3-3" in {item.section_id for item in result.unread}
-    assert "s3-3" not in {item["section_id"] for item in result.trace["completed_sections"]}

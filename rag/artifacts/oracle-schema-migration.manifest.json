@@ -739,6 +739,20 @@
     },
     {
       "destructive": true,
+      "name": "20261110_4668_language_pack_retired_evidence_tags",
+      "sha256": "70a51de9751b2ebbce12e6d29891c7c9d0b14b7ce907fd3fe9bf07bab8a106aa",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4668_language_pack_retired_question_word_checks",
+      "sha256": "4e61756d52bd979ba0097184d4fce755891435ce33d6e2c457dcc1f9fb2374a2",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
       "name": "20261110_4749_language_pack_retired_crag_labels",
       "sha256": "1de172362d3b88e33ed6d0b0e487a34d8b8f11e97290de9512d2489087ec1432",
       "statement_count": 1,
@@ -747,6 +761,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "8fc3b37d05d03ee7b4b410c78deef89d937d3cb24989a238023555f76660b9a1",
-  "statement_count": 162
+  "sha256": "1de3d7b326134c881930c03c62de67b4183c7f5be6911b2f0880f4ecaed9fe1a",
+  "statement_count": 164
 }

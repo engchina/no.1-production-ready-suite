@@ -171,7 +171,6 @@ class QuestionTextSearchInfo:
     query_source: str = "原質問のみ"
     tokenization_traces: tuple[dict[str, Any], ...] = ()
     domain_keyword_expansion: dict[str, Any] = field(default_factory=dict)
-    target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
     error: str = ""
 
 
@@ -188,7 +187,6 @@ class RetrievalQueryPlan:
     text_search_tokenization_traces: tuple[dict[str, Any], ...] = ()
     llm_expansion_queries: tuple[str, ...] = ()
     lexical_queries: tuple[str, ...] = ()
-    target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
     top_k: int = DEFAULT_RETRIEVAL_TOP_K
     candidate_limit: int = 0  # 実行時に `_retrieval_candidate_limit(top_k)` を入れる。trace 表示用
@@ -206,7 +204,6 @@ class RetrievalQueryPlan:
             "text_search_tokenization_traces": list(self.text_search_tokenization_traces),
             "llm_expansion_queries": list(self.llm_expansion_queries),
             "lexical_queries": list(self.lexical_queries),
-            "target_text_queries": list(self.target_text_queries),
             "retrieval_scope": self.retrieval_scope,
             "top_k": self.top_k,
             "candidate_limit": self.candidate_limit,

@@ -3,7 +3,6 @@
 import json
 from unittest.mock import patch
 
-import pytest
 from judge_stub import judge
 from test_evidence_first_answering import PARSE, evaluation_case
 
@@ -12,7 +11,7 @@ from rag_engine.generation.answering import (
     AnswerRecord,
 )
 from rag_engine.retrieval.evidence_selection import evidence_spans
-from rag_engine.retrieval.task_contract import filter_queries, task_contract
+from rag_engine.retrieval.task_contract import filter_queries
 
 
 def record(uid, text="入口を押すと編集画面が開く。保存ボタンで確定する。", source="guide.pdf", metadata=None):
@@ -29,28 +28,6 @@ def record(uid, text="入口を押すと編集画面が開く。保存ボタン�
         source=source,
         metadata=dict(metadata or {}),
     )
-
-
-@pytest.mark.parametrize(
-    "question,bad,good",
-    [
-        ("調査対象者を確認したい", "調査加入人数の集計", "対象者一覧の取得方法"),
-        ("項目の選択肢に該当するものがない", "項目が表示されない原因", "候補にない値の入力方法"),
-        ("顧客からCSV提供の依頼があった", "地域別CSVの出力", "CSVの出力方法"),
-        ("顧客から在庫数をCSVで受け取れるかの問い合わせがあった", "地域別在庫CSVの出力", "在庫CSVの出力方法"),
-        ("申請の更新ができない", "ソフトウェアのバージョン更新", "申請の更新条件"),
-    ],
-)
-def test_query_guard_preserves_goal_without_disabling_valid_expansion(question, bad, good):
-    accepted, rejected = filter_queries(question, [question, bad, good])
-    assert accepted == (question, good)
-    assert rejected[0]["query"] == bad and rejected[0]["reason"]
-
-
-def test_explicit_count_request_and_regional_filter_are_not_rejected():
-    question = "地域別の取引先数を確認したい"
-    assert filter_queries(question, ["地域別の件数集計"])[1] == ()
-    assert task_contract("登録がないためではないかと思う。履歴を確認したい")["hypotheses"]
 
 
 def test_duplicate_parse_is_consolidated_without_merging_different_versions():
@@ -99,20 +76,6 @@ def test_missing_coverage_can_cite_refusal_without_getting_credit():
     assert result["coverage_checks"][0]["answer_passage_id"] == "A1"
 
 
-def test_recipient_goal_reserves_list_operations_over_repeated_report_labels():
-    from rag_engine.retrieval.evidence_selection import evidence_excerpt
-
-    question = "四半期集計表の会員来店数，店舗・曜日別の対象者を確認したい。"
-    text = (
-        "画面/メニュー: " + ("会員来店数 店舗 曜日 四半期集計表 / " * 12) + "\n"
-        "操作: 会員別の一覧表にチェックし条件を選択、CSV出力を選んで実行ボタンを押す。\n"
-        "検索語: " + ("四半期集計表 会員来店数 店舗 曜日 対象者 / " * 12)
-    )
-    selected = evidence_excerpt(question, text, 180)
-    assert "会員別の一覧表にチェックし条件を選択" in selected
-    assert "CSV出力を選んで実行ボタンを押す。" in selected
-
-
 def test_extra_coverage_item_is_retried_with_explicit_fixed_ids_and_feedback():
     from rag_engine.evaluation.answer_eval import CoverageJudgement, CoverageOutput
 
@@ -138,8 +101,9 @@ def test_extra_coverage_item_is_retried_with_explicit_fixed_ids_and_feedback():
     assert len(calls) == 2 and len(result["standard_answer_scope"]["requirements"]) == 1
 
 
-def test_requester_terms_use_generic_language_resources():
-    from rag_engine.retrieval import task_contract as module
-
-    assert module.task_contract("顧客から一覧のCSV提供の依頼があった")["requester_mentions"]
-    assert not module.task_contract("組織Aから一覧のCSV提供の依頼があった")["requester_mentions"]
+def test_filter_queries_rejects_only_business_ids_not_in_the_question():
+    question = "申請を変更する方法を教えて"
+    accepted, rejected = filter_queries(question, ["申請の変更手順", "XY99 の変更手順"])
+    assert accepted == ("申請の変更手順",)
+    assert rejected == ({"query": "XY99 の変更手順", "reason": "原質問・明示別名にない業務識別子"},)
+    assert filter_queries(question, ["XY99 の変更手順"], grounded_text="XY99")[0] == ("XY99 の変更手順",)

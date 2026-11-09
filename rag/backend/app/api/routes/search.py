@@ -59,7 +59,7 @@ from app.rag.observability import (
     record_rag_request,
 )
 from app.rag.pipeline import RagPipeline, SearchStageProgress
-from app.rag.question_understanding import profile_language_scope
+from app.rag.profile_language import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections

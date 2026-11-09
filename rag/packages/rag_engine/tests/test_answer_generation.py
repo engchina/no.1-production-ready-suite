@@ -64,32 +64,14 @@ class AnswerGenerationTests(unittest.TestCase):
 
         stub_generation(self)
 
-    def test_bare_abstentions_explain_evidence_gap_in_each_language(self):
-        for text, expected in (
-            ("わかりません。", "十分な根拠"),
-            ("分かりません", "十分な根拠"),
-            ("不明です", "十分な根拠"),
-            ("I don't know.", "sufficient evidence"),
-            ("不知道。", "足够的依据"),
-        ):
+    def test_bare_abstention_text_is_not_rewritten(self):
+        """短い拒答文の完全一致の置換はしない。モデルの本文をそのまま返す（#4668）。"""
+        for text in ("わかりません。", "I don't know.", "不知道。"):
             for structured in (False, True):
                 with self.subTest(text=text, structured=structured):
-                    raw = (
-                        json.dumps(
-                            {
-                                "answer": text,
-                                "confidence": "high",
-                                "needs_human_review": False,
-                            }
-                        )
-                        if structured
-                        else text
-                    )
+                    raw = json.dumps({"answer": text, "confidence": "high", "needs_human_review": False}) if structured else text
                     response = parse_answer_response(raw)
-                    self.assertIn(expected, response.answer_text)
-                    self.assertEqual(response.confidence, "low")
-                    self.assertTrue(response.needs_human_review)
-                    self.assertTrue(response.insufficient_reason)
+                    self.assertEqual(response.answer_text, text)
                     self.assertEqual(response.raw_text, raw)
 
     def test_partial_answer_preserves_evidence_and_marks_missing_data_for_review(self):

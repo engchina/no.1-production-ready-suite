@@ -135,7 +135,7 @@ from rag_engine.generation.answer_records import (
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.confirmed_context import confirmed_premise_records
-from rag_engine.generation.evidence_merge import _record_matches_preferred_ids, merge_evidence
+from rag_engine.generation.evidence_merge import merge_evidence
 from rag_engine.generation.execution_record import (
     AnswerExecutionError,
     _execution_lines,
@@ -201,8 +201,7 @@ from rag_engine.retrieval.context_builder import (
     context_bundle_from_records,
     record_has_image_evidence,
 )
-from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records
 from rag_engine.retrieval.evidence_selection import EVIDENCE_BUDGET_CHARS, evidence_spans
 from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
 from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVERAGE_KIND, ExtraRetrievalBudget
@@ -239,9 +238,7 @@ from rag_engine.retrieval.scope import (
 )
 from rag_engine.retrieval.search_stages import ORIGINAL_QUESTION_SEARCH_STAGE
 from rag_engine.retrieval.task_contract import (
-    COUNT_REQUEST,
-    LIST_REQUEST,
-    explicit_requests,
+    REQUIRED_ASPECTS,
     filter_queries,
     query_rejection_reason,
     task_contract,
@@ -1156,7 +1153,6 @@ def build_adb_hybrid_answer_context(
     if getattr(settings, "original_query_only", False):
         # 拡張の寄与を測る比較実験用。原質問は _retrieval_queries が常に先頭へ置く。
         queries = queries[:1]
-    target_queries = _target_text_queries(question, settings)
     search_options = {
         "chunk_run_id": chunk_run_id,
         "retrieval_queries": queries,
@@ -1167,7 +1163,6 @@ def build_adb_hybrid_answer_context(
         "classification_filter": classification_filter,
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
         **({"query_embedder": query_embedder} if query_embedder is not None else {}),
-        **({"extra_text_queries": tuple(target_queries)} if target_queries else {}),
         **({"vector_only_queries": tuple(vector_only_queries)} if vector_only_queries else {}),
         **({"page_ranges": [dict(item) for item in page_ranges]} if page_ranges else {}),
     }
@@ -1304,7 +1299,7 @@ def _grounded_spans(
     whole_records: bool = False,
     preserve_records: bool = False,
 ) -> list[dict[str, Any]]:
-    """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
+    """全出典へ本文予算を配分して原文を選び、機能キーとタグを付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
@@ -1332,20 +1327,8 @@ def _grounded_spans(
     records = [
         with_child_contexts(r, [c.record for p in context.evidence_tree if p.record is r for c in p.children]) for r in context.records
     ]
-    # 意味を尋ねる項目が質問にあれば、その定義の行を根拠の anchor にする（質問の目的の分類は使わない。#3498）。
-    labels = definition_labels(question)
     children = [child.record for parent in context.evidence_tree for child in parent.children]
-    anchors = [
-        c
-        for c in children
-        if labels
-        and (
-            definition_ranges(c.text.split("Child text:\n", 1)[-1], labels)
-            or _record_matches_preferred_ids(c, set(context.preferred_child_ids))
-        )
-    ]
-    if not labels:
-        anchors = _visual_evidence_anchors(context, image_evidence)
+    anchors = _visual_evidence_anchors(context, image_evidence)
     # 指定された子、または指定された親の検索命中子を保護する。隣接子を一律に必須扱いしない。
     # 検索表現と違う元本文も、所属と位置は抜粋時に再検証する。
     guide_sources = {source for sources in budget_option.get("priority_source_groups", ()) for source in sources}
@@ -1363,19 +1346,12 @@ def _grounded_spans(
     ]
     preparation: list[dict[str, Any]] = []
     spans = evidence_spans(selection_question, records, anchors=anchors, scope_records=children, diagnostics=preparation, **budget_option)
-    available = {d["label"] for r in records for d in definition_ranges(r.text, labels)}
-    if available - {d["label"] for s in spans for d in definition_ranges(s["text"], labels)}:
-        # 本文予算で落ちた定義は、追加検索せず取得済み原文から先に回復する。
-        preparation.clear()
-        spans = evidence_spans(
-            question, records, anchors=anchors, definitions_only=True, scope_records=children, diagnostics=preparation, **budget_option
-        )
     if preparation:
         record_retrieval_stage(
             {"stage": "generation_evidence_preparation", "input_stage": "prepared_for_generation", "groups": preparation}
         )
     spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
-    return tag_spans(question, spans)
+    return tag_spans(spans)
 
 
 def _grounded_prompt(
@@ -1395,7 +1371,13 @@ def _grounded_prompt(
     template 未指定では保存済みテンプレートを読む。是正ループは1回答で同じ内容を使うため明示する。
     field_kind_note は根拠の画面の図の項目の種類の注記（#2404。``form_field_kinds.prompt_note``）。
     """
-    from rag_engine.generation.grounded import NO_READING_RULES, build_context_block, evidence_reading_rules, guide_rules_context
+    from rag_engine.generation.grounded import (
+        NO_READING_RULES,
+        build_context_block,
+        evidence_reading_rules,
+        evidence_subset_reading_rule,
+        guide_rules_context,
+    )
 
     has_guide = runtime_knowledge is not None and bool(
         runtime_knowledge.guide_task_scope
@@ -1428,6 +1410,7 @@ def _grounded_prompt(
         part
         for part in (
             evidence_reading_rules(spans, attached_images=bool(images)),
+            evidence_subset_reading_rule(*_evidence_subset_counts(context, spans)),
             guide_rules_context(scope=bool(runtime_knowledge.guide_task_scope), notices=bool(runtime_knowledge.guide_condition_notices))
             if runtime_knowledge is not None and has_guide
             else "",
@@ -1468,20 +1451,18 @@ def _expand_context_from_pool(
     modes: Sequence[str] = _REMEDY_MODES,
     max_records: int = 6,
     max_chars: int = MAX_CONTEXT_CHARS,
-    definitions: bool = True,
     deferred: bool = True,
 ) -> tuple[AnswerContext | None, dict[str, Any]]:
     """既取得poolから同機能の根拠を最大 max_records 件足す。既存の根拠を追い出す拡張は採用しない。
 
-    definitions=True では明示項目の定義原文の回復を先に試す。modes は `recover_context_records` の
-    方式を順に試し、最初に見つかった方式の結果を採用する。deferred=True では、文書の選択で後回しにした
+    modes は `recover_context_records` の方式を順に試し、最初に見つかった方式の結果を採用する。deferred=True では、文書の選択で後回しにした
     文書の親を近傍より先に足す（是正の回退。#1028）。生成前の同単元の補充（`_fill_same_unit`）は
     deferred=False で呼び、後回しの文書を答えていない要求が出る前に消費しない。
     """
     visible = list(context.records)
     anchors = [r.chunk_uid for r in visible if r.chunk_uid][:3]
-    recovered = recover_definition_records(question, visible, context.expansion_records) if definitions else ContextRecovery()
-    mode = "definition"
+    recovered = ContextRecovery()
+    mode = ""
     if not recovered.records and deferred and context.deferred_records:
         # 護欄: 覆盖度による回退（生成側。#1028）。答えていない要求があるとき、文書の選択で後回しにした文書の
         # 親を pool から足す。可視の起点と同じ文書しか探さない近傍・同単元の回復では届かないため先に試す。
@@ -1604,7 +1585,6 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
         modes=("same_unit",),
         max_records=SAME_UNIT_FILL_RECORDS,
         max_chars=SAME_UNIT_FILL_CHARS,
-        definitions=False,
         deferred=False,
     )
     if filled is None:
@@ -1820,7 +1800,7 @@ def synthesize_grounded_answer(
                     "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
                 ),
                 unusable_output=_invalid_structured_output,
-                tag=lambda values: grounded.tag_spans(question, values),
+                tag=lambda values: grounded.tag_spans(values),
                 render=render_generation,
                 evidence_text=grounded.evidence_block_text,
                 system=generation_system,
@@ -2052,6 +2032,17 @@ def _no_candidates_response(context: AnswerContext) -> AnswerResponse:
             generation_trace={"pipeline": "grounded", "llm_calls": 0, "retrieval_counts": _retrieval_counts(context, ())},
         )
     )
+
+
+def _evidence_subset_counts(context: AnswerContext, spans: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
+    """モデルに渡した根拠の数と検索の候補の数（どちらも検索の子の単位）。親の根拠は束ねた子の数で数える。"""
+    shown_parents = {str(span["source_id"]) for span in spans}
+    shown = sum(
+        sum(1 for child in parent.children if child.role == "retrieved_anchor")
+        for parent in context.evidence_tree
+        if (parent.record.chunk_uid or parent.record.id) in shown_parents
+    )
+    return (shown or len(shown_parents)), int(_retrieval_counts(context, spans)["candidate_count"])
 
 
 def _retrieval_counts(context: AnswerContext, spans: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -2693,7 +2684,6 @@ def _retrieval_query_plan_payload(
     top_k: int,
     vector_queries: Sequence[str] | None = None,
     lexical_queries: Sequence[str] = (),
-    target_text_queries: Sequence[str] = (),
 ) -> dict[str, Any]:
     runtime_question = runtime_knowledge.expanded_question if runtime_knowledge is not None else expansion.original_question
     queries = _dedupe_queries(vector_queries or text_search_info.query_variants or expansion.retrieval_queries)
@@ -2707,7 +2697,6 @@ def _retrieval_query_plan_payload(
         text_search_tokenization_traces=tuple(text_search_info.tokenization_traces),
         llm_expansion_queries=tuple(expansion.generated_queries),
         lexical_queries=_dedupe_queries(lexical_queries),
-        target_text_queries=tuple(target_text_queries),
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
         top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
         candidate_limit=_retrieval_candidate_limit(top_k, settings),
@@ -2840,7 +2829,6 @@ def build_question_text_search_info(
             query_variants=tuple(variants),
             query_source=query_source,
             tokenization_traces=tuple(tokenization_traces),
-            target_text_queries=tuple(_target_text_queries(question, settings)),
         )
     except Exception as exc:
         return QuestionTextSearchInfo(
@@ -3710,20 +3698,6 @@ def _catalog_article_children(
         return [*marked, *added], loaded
 
 
-def _target_text_queries(question: str, settings: Settings) -> list[str]:
-    """質問の対象語の部分語から作る Oracle Text のフレーズ検索式 (#730)。質問文と同じ tokenizer で分かち書きする。"""
-    from rag_engine.retrieval.target_text_queries import target_text_queries
-
-    config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
-    domain_keywords = (
-        settings.domain_keywords_override if settings.domain_keywords_override is not None else load_domain_keywords(settings.output_dir)
-    )
-    try:
-        return target_text_queries(question, lambda text: tokenize_text_search_query(text, domain_keywords=domain_keywords, config=config))
-    except Exception:
-        return []
-
-
 def _question_text_search_tokenizer_config(settings: Settings) -> TextSearchTokenizerConfig:
     return TextSearchTokenizerConfig(
         sudachi_dict_type=settings.text_search_tokenizer_sudachi_dict,
@@ -4027,11 +4001,6 @@ def answer_question_result(
             step.add(f"      原質問から外れるため使わない検索文: {len(rejected)} 本")
         if note := _text_search_limit_note(_text_search_variants(retrieval_queries, expansion), settings):
             step.add(note)
-        if text_search_info.target_text_queries:
-            step.add(
-                f"      対象語の部分語による全文検索: {len(text_search_info.target_text_queries)} 本 "
-                + " ".join(text_search_info.target_text_queries)
-            )
         _add_text_search_details(step, text_search_info)
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
@@ -4892,7 +4861,6 @@ def _answer_question_result(
     rerank_scores = _rerank_scores_from_evidence(records, evidence_tree)
     retrieval_query_plan = _retrieval_query_plan_payload(
         settings=settings,
-        target_text_queries=text_search.target_text_queries if text_search is not None else (),
         expansion=expansion,
         text_search_info=text_search,
         runtime_knowledge=runtime_knowledge,
