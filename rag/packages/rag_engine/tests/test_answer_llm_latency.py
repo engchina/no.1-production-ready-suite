@@ -55,8 +55,6 @@ class PurposeReasoningEffortTests(unittest.TestCase):
                 "RAG_ENGINE_STRATEGY_REASONING_EFFORT": "Medium",
                 "RAG_ENGINE_JUDGE_REASONING_EFFORT": " LOW ",
                 "RAG_ENGINE_GENERATION_REASONING_EFFORT": "model",
-                "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": "1",
-                "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": "1.7",
                 "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": "3",
             },
             dotenv_path=None,
@@ -65,14 +63,11 @@ class PurposeReasoningEffortTests(unittest.TestCase):
         self.assertEqual(settings.strategy_reasoning_effort, "medium")
         # 選択肢に無い値（model など）はモデルの登録値のまま。
         self.assertEqual(settings.generation_reasoning_effort, "")
-        self.assertTrue(settings.crag_skip_on_strong_signals)
-        self.assertEqual(settings.crag_skip_min_rerank_score, 1.0)
         self.assertEqual(settings.query_expansion_max_queries, 3)
         defaults = get_settings(environ={}, dotenv_path=None)
         self.assertEqual(
             (defaults.strategy_reasoning_effort, defaults.judge_reasoning_effort, defaults.generation_reasoning_effort), ("", "", "")
         )
-        self.assertFalse(defaults.crag_skip_on_strong_signals)
         self.assertEqual(defaults.query_expansion_max_queries, generation.MAX_GENERATED_QUERY_COUNT)
 
     def test_override_replaces_only_sent_efforts(self):
@@ -179,68 +174,6 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
 
 QUESTION = "経費精算の申請方法を教えてください"
 EVIDENCE = "経費精算の申請方法: 経費精算画面で申請内容を入力し、申請ボタンを押します。"
-
-
-def _scored_context(score):
-    record = _record("r1", "docling", 1, 1, EVIDENCE)
-    if score is not None:
-        record = replace(record, metadata={"rerank": {"rank": 1, "relevance_score": score}})
-    return replace(_answer_context([record]), ranked_candidates=(record,))
-
-
-class CragGradeSkipTests(unittest.TestCase):
-    """規則の信号が強いときだけ CRAG の評価（1 回目）を飛ばす。"""
-
-    def setUp(self):
-        self.settings = _settings(crag_skip_on_strong_signals=True, crag_skip_min_rerank_score=0.8)
-        self.enterContext(patch.object(generation, "load_latest_or_source_chunk_run", return_value=_chunk_run_stub()))
-
-    def build(self, context, settings=None, question=QUESTION):
-        grade = _crag_grade(sufficient=True, relevant_chunk_ids=["r1"], support_text=context.records[0].text)
-        with (
-            patch.object(generation, "build_adb_hybrid_answer_context", return_value=context),
-            patch.object(generation, "parse_text_response", return_value=grade) as parse,
-        ):
-            built, _rewrites, attempts = generation.build_crag_answer_context(question, "abcdef", ["docling"], settings or self.settings)
-        return built, attempts, parse.call_count
-
-    def test_strong_signals_skip_the_grade_and_keep_the_context(self):
-        context = _scored_context(0.93)
-        built, attempts, calls = self.build(context)
-        self.assertEqual(calls, 1)
-        self.assertEqual([r.id for r in built.records], ["r1"])
-        self.assertNotEqual(attempts[0].stop_reason, generation.CRAG_SKIP_STOP_REASON)
-
-    def test_weak_or_disabled_signals_call_the_grade(self):
-        cases = {
-            "disabled": (_scored_context(0.93), replace(self.settings, crag_skip_on_strong_signals=False), QUESTION),
-            "low-score": (_scored_context(0.5), None, QUESTION),
-            "no-rerank": (_scored_context(None), None, QUESTION),
-            "missing-request": (_scored_context(0.93), None, "経費精算の申請方法と、出張旅費の上限額を教えてください"),
-            "error-message": (_scored_context(0.93), None, "「E0123 申請できません」と表示されたときの対処は？"),
-            # 列挙・網羅・件数の質問は飛ばさない（#1503。根拠が欠けても語の一致では根拠ありに見える）。
-            "enumeration-all": (_scored_context(0.93), None, "経費精算の申請方法をすべて教えてください"),
-            "enumeration-each": (_scored_context(0.93), None, "各部署の経費精算の申請方法を教えてください"),
-            "enumeration-list": (_scored_context(0.93), None, "経費精算の申請方法の一覧を教えてください"),
-            "count": (_scored_context(0.93), None, "経費精算の申請方法は何件ありますか"),
-        }
-        for name, (context, settings, question) in cases.items():
-            with self.subTest(name):
-                _built, attempts, calls = self.build(context, settings, question)
-                self.assertEqual(calls, 1)
-                self.assertNotEqual(attempts[0].stop_reason, generation.CRAG_SKIP_STOP_REASON)
-
-    def test_skipped_step_records_the_reason(self):
-        lines = []
-        token = generation._execution_lines.set(lines)
-        try:
-            self.build(_scored_context(0.93))
-        finally:
-            generation._execution_lines.reset(token)
-        display = generation.format_question_display(QUESTION, lines)
-        self.assertIn("根拠確認（1回目）", display)
-        self.assertNotIn("状態: 省略", display)
-        self.assertIn("語の一致による充足性の判定は行わない", display)
 
 
 class OriginalQueryPrefetchTests(unittest.TestCase):

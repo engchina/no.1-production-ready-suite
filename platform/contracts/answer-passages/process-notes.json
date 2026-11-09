@@ -1,5 +1,5 @@
 {
-  "description": "回答の検証で主張として数えない作業の経過の文（業務ガイドが見つからなかったことだけを述べる文）と、似ていても主張として残す文の事例（#1452）。RAG（rag_engine.generation.operation_audit.is_guide_not_found / is_non_claim_passage）と Agent（app.features.agent.answer_passages.is_guide_not_found / passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。作業の経過の文は、業務ガイドが見つからない・登録されていないことだけを述べる文で、強調・箇条書きの印・文末のツールの名前を挙げた括弧（「（`rag_lookup_guides` の結果は0件）」）は除いて確かめる。業務ガイドの前置きに主張（は・が・を・数字・引用「」『』）を含む文、操作の指示を含む文、検索の状態（rag_search の outcome など）を述べる文は主張として残す。形は headings.json と同じで、各事例は id・note（任意。事例の出どころの評価の問と Run か、主張として残す理由）・passage。",
+  "description": "回答の検証で主張として数えない作業の経過の文（業務ガイドが見つからなかったことだけを述べる文）と、似ていても主張として残す文の事例（#1452）。Agent（app.features.agent.answer_passages.is_guide_not_found / passage_kind / non_claim_passages）のテストがこのファイルを読み、規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。作業の経過の文は、業務ガイドが見つからない・登録されていないことだけを述べる文で、強調・箇条書きの印・文末のツールの名前を挙げた括弧（「（`rag_lookup_guides` の結果は0件）」）は除いて確かめる。業務ガイドの前置きに主張（は・が・を・数字・引用「」『』）を含む文、操作の指示を含む文、検索の状態（rag_search の outcome など）を述べる文は主張として残す。形は headings.json と同じで、各事例は id・note（任意。事例の出どころの評価の問と Run か、主張として残す理由）・passage。",
   "process_passages": [
     {
       "id": "guide-not-found-with-tool-note",

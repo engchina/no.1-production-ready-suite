@@ -59,13 +59,6 @@ LEGACY_KIND_WHO: dict[str, WhoCanAnswer] = {"environment": "system", "user_condi
 EXCLUDED_ALREADY_KNOWN = "already_known"
 EXCLUDED_NOT_DECISIVE = "not_decisive"
 EXCLUDED_KNOWN_CONDITION = "known_condition"
-EXCLUDED_VERSION_SETTLED = "version_settled"
-# 版を確かめる項目（「適用されている版」「どの版か」「第1版と第2版のどちらか」）。根拠が旧版・廃止の版を
-# 決めているときは確認の項目にしない（#1492）。
-_VERSION_ITEM = re.compile(
-    r"第\s*[0-9０-９一二三四五六七八九十]+\s*版|(?:どの|適用(?:され(?:てい)?る|する)|有効な|使う|最新の?|新しい|今の)版"
-    r"|版(?:の(?:確認|違い|別)|が(?:異な|違))|旧版|新版|改訂版|バージョン"
-)
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -141,13 +134,11 @@ def settle_confirmation_items(
     items: Sequence[Mapping[str, Any] | str],
     *,
     known_conditions: Sequence[tuple[str, str]] = (),
-    version_settled: bool = False,
 ) -> SettledConfirmations:
     """確認の項目を、観察できる事実から規則で分ける（#1492）。
 
     - 対応の決定に数えない: すでに分かっている（already_known）、結論がその値で分かれない（decides=false）、
-      分かっている条件（known_conditions。業務ガイドの条件の名前と値。MCP の conditions など）を確かめる項目、
-      根拠が旧版・廃止の版を決めているとき（version_settled）の版を確かめる項目。
+      分かっている条件（known_conditions。業務ガイドの条件の名前と値。MCP の conditions など）を確かめる項目。
     - 残りを誰が答えられるかで分ける: user → 利用者に確かめる条件、system → システムだけが持つ値、
       document → 別の資料で分かる点。
 
@@ -167,8 +158,6 @@ def settle_confirmation_items(
             reason = EXCLUDED_NOT_DECISIVE
         elif _known_condition(text, known_conditions):
             reason = EXCLUDED_KNOWN_CONDITION
-        elif version_settled and _VERSION_ITEM.search(unicodedata.normalize("NFKC", text)):
-            reason = EXCLUDED_VERSION_SETTLED
         if reason:
             excluded.append({"text": text, "who_can_answer": facts["who_can_answer"], "reason": reason})
             continue
@@ -306,7 +295,6 @@ __all__ = [
     "EXCLUDED_ALREADY_KNOWN",
     "EXCLUDED_KNOWN_CONDITION",
     "EXCLUDED_NOT_DECISIVE",
-    "EXCLUDED_VERSION_SETTLED",
     "LEGACY_KIND_WHO",
     "REFERENCE_CONFIRMATION_PREFIX",
     "WHO_CAN_ANSWER",

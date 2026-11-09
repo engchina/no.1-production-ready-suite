@@ -80,7 +80,6 @@ from rag_engine.generation.answer_models import (
     CRAG_ANSWER_FLOW,
     CRAG_ANSWER_FLOW_LABEL,
     CRAG_CAUSE_GRADE_ERROR,
-    CRAG_CAUSE_GRADE_SKIPPED,
     CRAG_CAUSE_NO_NEW_EVIDENCE,
     CRAG_CAUSE_UNVERIFIED,
     CRAG_MAX_RETRIEVAL_ATTEMPTS,
@@ -1560,33 +1559,6 @@ def build_crag_answer_context(
             )
             context = best_context
 
-        skip_check = _crag_grade_skip_check(question, context, settings) if attempt_number == 1 else {}
-        skip = skip_check if skip_check.get("skip") else None
-        if skip is not None:
-            # 規則の信号が強いときは LLM の評価を飛ばして生成へ進む (#1499。既定 off)。生成後の監査は飛ばさない。
-            with _execution_step("根拠確認（1回目）", "集めた根拠で質問に答えられるかを LLM が判定します。") as step:
-                step.input(partial(context_snapshot, context, **{"質問": question, "回": attempt_number, "省略判断": skip_check}))
-                step.output(partial(context_snapshot, context, **{"モデル評価実行": False, "省略判断": skip_check}))
-                step.skip("規則の信号が強いため、LLM の評価を省略しました")
-                step.result("規則の信号が強いため、LLM の評価を省略しました", *skip["lines"])
-                step.impact("取得した根拠をそのまま回答の生成に渡します。生成後の監査は通常どおり行います。")
-            attempts.append(
-                CragRetrievalAttempt(
-                    attempt=attempt_number,
-                    query=active_query.strip(),
-                    retrieval_queries=_dedupe_queries(retrieval_queries),
-                    executed_queries=executed_queries,
-                    sufficient=True,
-                    reason="規則の信号が強いため LLM の評価を省略: " + " / ".join(skip["lines"]),
-                    new_evidence_count=new_evidence_count,
-                    document_selection=dict(context.document_selection),
-                    stop_reason=CRAG_SKIP_STOP_REASON,
-                    recovery_trace={"grade_skipped": skip["trace"]},
-                    recovery_cause=CRAG_CAUSE_GRADE_SKIPPED,
-                )
-            )
-            return context, tuple(rewrites), tuple(attempts)
-
         with _execution_step(
             f"根拠確認（{attempt_number}回目）", "集めた根拠で質問に答えられるかを LLM が判定します。" if attempt_number == 1 else ""
         ) as step:
@@ -1600,7 +1572,6 @@ def build_crag_answer_context(
                         "検索文": tuple(retrieval_queries),
                         "回": attempt_number,
                         "評価候補数上限": max_records,
-                        "省略判断": skip_check,
                         "詰めた入力": bool(getattr(settings, "crag_compact_input", False)),
                         "短い候補ID": bool(getattr(settings, "crag_short_candidate_ids", False)),
                     },
@@ -1608,9 +1579,6 @@ def build_crag_answer_context(
             )
             if attempt_number == 1 and (note := llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
                 step.add(note)
-            if skip_check.get("reason") and skip_check["reason"] != "disabled":
-                # 省略の設定が有効でも評価器を呼んだ理由（曖昧な帯・必ず呼ぶ質問。#1528）。
-                step.add(f"LLM の評価を省略しない理由: {skip_check['reason']}")
             try:
                 attempt = _grade_crag_retrieval(
                     attempt_number,
@@ -1876,77 +1844,6 @@ def build_crag_answer_context(
             step.result("取得した候補はすべて質問と別の話題・機能と判定されたため、回答に使える根拠がありません。")
             step.impact("回答は根拠不足の案内になります。")
     return best_context, tuple(rewrites), tuple(attempts)
-
-
-# CRAG の評価を規則の信号で飛ばしたときの stop_reason (#1499)。
-CRAG_SKIP_STOP_REASON = "grade_skipped_strong_signals"
-
-
-def _top_rerank_score(context: AnswerContext) -> float | None:
-    """候補の rerank の点数の最高値。rerank していない（score が無い）ときは None。
-
-    先頭の候補とは限らない（画面名の先頭寄せ・交差参照の参照先・位置を保つ候補が先頭に来る。#3504）。
-    """
-    return best_rerank_score(context.ranked_candidates)
-
-
-def _crag_grade_skip(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any] | None:
-    """CRAG の評価（1 回目）を飛ばす条件と理由 (#1499 / #1528)。飛ばさないときは None。"""
-    check = _crag_grade_skip_check(question, context, settings)
-    return check if check.get("skip") else None
-
-
-def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any]:
-    """旧省略設定でも文字の一致から根拠の充足性を確定しない。"""
-    if not getattr(settings, "crag_skip_on_strong_signals", False):
-        return {"skip": False, "reason": "disabled"}
-    if not context.records or not context.text.strip():
-        return {"skip": False, "reason": "根拠が無い"}
-    contract = task_contract(question)
-    if contract["error_messages"]:
-        return {"skip": False, "reason": "エラー文を問う質問"}
-    # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
-    if explicit_requests(question) & {COUNT_REQUEST, LIST_REQUEST} or contract.get("enumeration"):
-        return {"skip": False, "reason": "列挙・網羅・件数を問う質問"}
-    if exclusion := _crag_exclusion_needed(context):
-        return {"skip": False, "reason": exclusion}
-    threshold = float(getattr(settings, "crag_skip_min_rerank_score", 1.0))
-    score = _top_rerank_score(context)
-    if score is None:
-        return {"skip": False, "reason": "rerank の score が無い"}
-    if score < threshold:
-        return {"skip": False, "reason": f"rerank の最上位の score {score:.3f} が閾値 {threshold:.3f} 未満"}
-    labels = definition_labels(question)
-    if labels:
-        covered = {d["label"] for r in context.records for d in definition_ranges(r.text, labels)}
-        if any(label not in covered for label in labels):
-            return {"skip": False, "reason": "定義を問う語の定義本文が無い"}
-    # 文字上の一致や精排スコアは、回答に足りる根拠があることを保証しない。
-    return {"skip": False, "reason": "語の一致による充足性の判定は行わない"}
-
-
-# 重複とみなす本文の長さの下限（字）。短い定型文（「以上」「目的」など）は文書をまたいで一致しても重複にしない。
-_DUPLICATE_MIN_CHARS = 40
-
-
-def _crag_exclusion_needed(context: AnswerContext) -> str:
-    """評価器による候補の除外（relevant=false）が要る根拠があれば理由を返す (#1528)。
-
-    新しい版に置き換えた旧版の文書の根拠（backend の ``document_superseded``。#1492）と、別の文書に同じ本文がある
-    根拠（版の違う文書・写しの文書）は、評価器が候補ごとに判定して末尾へ回す。決定的な規則では選べない。
-    """
-    records = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
-    if any((getattr(record, "metadata", None) or {}).get("document_superseded") is True for record in records):
-        return "新しい版に置き換えた旧版の文書の根拠がある"
-    owners: dict[str, str] = {}
-    for record in records:
-        body = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(getattr(record, "body_text", "") or record.text or "")))
-        if len(body) < _DUPLICATE_MIN_CHARS:
-            continue
-        source = str(getattr(record, "source", "") or getattr(record, "source_run_id", "") or "")
-        if owners.setdefault(body, source) != source:
-            return "別の文書に同じ本文の根拠がある"
-    return ""
 
 
 def _recover_crag_context(

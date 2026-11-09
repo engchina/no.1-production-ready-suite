@@ -87,9 +87,8 @@ from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import failure_summary_fields, structured_failure_details
 from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
-from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
+from rag_engine.retrieval.character_forms import fold_model_view, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
-from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
 from rag_engine.retrieval.task_contract import explicit_requests, task_contract
@@ -348,7 +347,6 @@ def tag_spans(question: str, spans: Sequence[dict]) -> list[dict]:
         tagged.append({**span, "tags": sorted(tags), "function": function_key(span), "pinned": is_pinned, "label": f"E{len(tagged) + 1}"})
     _unify_prefixed_function_labels(tagged)
     for span in tagged:
-        span["limits"] = function_limits(span, tagged)
         # 画面キャプチャの説明。画面に表示されるキー番号とボタン名の対応（実行(F5)）は本文に書かれないことが
         # 多く、その画面の説明だけが根拠になる (#637)。span 自身が画面説明の場合もその text を含める。
         # screen_texts は対応の照合にだけ使うため本文の代用にはならず、除くと画面が 1 枚の文書で画像内だけに
@@ -1253,66 +1251,6 @@ def _original_range_at(text: str, positions: list[int], start: int, end: int) ->
     return re.sub(r"\s*\|\s*(?:\|\s*)*", " | ", _MARKUP_TAG.sub(" | ", original)).strip(" |")
 
 
-_CONDITION_MAX = 40
-# 文の形の condition: 句点を含む、文末表現で終わる。
-# 最初の条件句（「〜の場合」「〜とき」「〜時」「〜際」まで）。「時」「際」は助詞・読点・文末が続くときだけ（「時間」を切らない）。
-
-
-def _condition_clause(condition: str) -> str:
-    """condition が原文の文全体のとき、最初の文の条件句だけを返す (#1046)。
-
-    監査 LLM は conditional の condition に「〜の場合は、…してください。」の文全体を返すことがあり、そのまま
-    「（…してください。の場合）」と表示されていた。文の形（`check_cues().condition_sentence`）か `_CONDITION_MAX` を超える
-    長さのときだけ切り出し、条件句を切り出せない文は空にする（原文の条件を書けない conditional として、生成側は
-    matched、監査側は unverified（「参考情報」の節）になる既存の流れに乗せる）。短い条件はそのまま。
-    """
-    condition = condition.strip()
-    sentence = condition.rstrip("。")
-    if not (check_cues().condition_sentence.search(sentence) or len(sentence) > _CONDITION_MAX):
-        return condition
-    clause = check_cues().condition_clause.match(sentence.split("。", 1)[0])
-    return clause.group(0) if clause and len(clause.group(0)) <= _CONDITION_MAX else ""
-
-
-def _normalized(item: GroundedItem, span: dict) -> GroundedItem:
-    """モデルの分類を原文で補正する。操作指示でない説明を手順に並べず、原文にない条件を公開しない。
-
-    condition は文全体なら条件句に切り詰め（`_condition_clause`）、末尾の「の場合」などを落として表示用にする。
-    """
-    from rag_engine.generation.operation_audit import is_operation_instruction
-
-    update: dict[str, str] = {}
-    if item.kind == "operation" and not is_operation_instruction(item.text):
-        update["kind"] = "rule"
-    condition = check_cues().condition_strip.sub("", _condition_clause(item.condition))
-    if item.applies == "conditional" and not (condition and _compact(fold_text(condition)) in _compact(fold_text(span["text"]))):
-        # 条件は原文の限定を運ぶための欄。原文にない前提は条件として表示しない。
-        update.update(applies="matched", condition="")
-    elif condition != item.condition:
-        update["condition"] = condition
-    return item.model_copy(update=update) if update else item
-
-
-# 名詞の後に残った格助詞・係助詞（「検証用アカウントには」）。原文の句をそのまま condition に写すと残る (#1501)。
-# 直前が漢字・カタカナ・英数字・閉じ括弧のときだけ落とす（「読んで」「〜ので」のような用言・接続の形は落とさない）。
-# 範囲を表す「までは」「からは」は「まで」「から」を残す（「は」だけを落とす）。
-# 漢字 1 字＋「に」の副詞（「既に」「特に」「順に」）は助詞ではないので残す。
-
-
-def _condition_phrase(condition: str) -> str:
-    """条件を「〜の場合」に整える。用言で終わる条件（「有効期限を過ぎた」）には「の」を挟まない (#644)。
-
-    名詞の後の助詞（「検証用アカウントには」）は落としてから「の場合」を付ける (#1501)。
-    """
-    # 原文の句の末尾の読点（「ロールを持たない利用者は、」）も落とす。
-    condition = condition.strip().rstrip("、，,").rstrip()
-    if not check_cues().condition_adverb.search(condition):
-        condition = check_cues().condition_trailing_particle.sub("", condition) or condition
-    labels = answer_labels()
-    predicate = condition.endswith(labels.predicate_endings) and not re.search(rf"{evidence_cues().kana_kanji}$", condition)
-    return f"{condition}{'' if predicate else labels.condition_link}{labels.condition_suffix}"
-
-
 # 漢字・英数字だけの短い語。かな・句読点・括弧を含まないので、文でも見出し記号付きの節名でもない。
 
 
@@ -1632,11 +1570,9 @@ def _compact_text(text: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
-def settle_confirmations(
-    draft: GroundedDraft, *, known_conditions: Sequence[tuple[str, str]] = (), version_settled: bool = False
-) -> SettledConfirmations:
+def settle_confirmations(draft: GroundedDraft, *, known_conditions: Sequence[tuple[str, str]] = ()) -> SettledConfirmations:
     """草稿の確認の項目を規則で分ける（#1492。`answer_envelope.settle_confirmation_items`）。"""
-    return settle_confirmation_items(draft.confirmation_items(), known_conditions=known_conditions, version_settled=version_settled)
+    return settle_confirmation_items(draft.confirmation_items(), known_conditions=known_conditions)
 
 
 def confirmation_lines(
@@ -1828,8 +1764,6 @@ def render_answer(
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
             labels = answer_labels()
             text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else table_html_as_rows(item.text)
-            if not entry.quote_only and item.applies == "conditional" and item.condition:
-                text = labels.condition(_condition_phrase(item.condition)) + text
             out.append((f"{number}. " if numbered else labels.item_bullet) + text)
             # 同じ文書・頁・chunk を再利用しても、各説明の直下に出典を付ける。
             for key in _citation_keys(entry):
@@ -1962,18 +1896,6 @@ def _subquestion_groups(
 
 
 # ---- 生成・監査・是正 ---------------------------------------------------------
-
-
-def function_limits(span: dict, spans: Sequence[dict]) -> list[str]:
-    """同じ機能の原文にある限定・未説明の文。引用だけを見る局所監査に、保証してはいけない範囲を渡す。"""
-    limits: list[str] = []
-    for other in spans:
-        if other["function"] != span["function"]:
-            continue
-        for sentence in check_cues().sentence_split.split(other["text"]):
-            if sentence.strip() and check_cues().limit.search(sentence):
-                limits.append(sentence.strip()[:200])
-    return list(dict.fromkeys(limits))[:6]
 
 
 # 引用の行（#2830）。根拠の本文を行で分け、長い行は文の区切りで分ける。モデルは行番号の範囲で引用を指し、

@@ -107,8 +107,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # CRAG の評価の候補の短い ID(#1864)。
         "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,
         "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
-        "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
-        "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,
         "query_expansion_max_queries": resolved_settings.rag_query_expansion_max_queries,
         "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
         "search_top_k_default": resolved_settings.rag_search_top_k_default,

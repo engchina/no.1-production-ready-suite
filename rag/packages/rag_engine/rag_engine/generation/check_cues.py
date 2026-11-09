@@ -1,6 +1,6 @@
 """回答の検査の手がかりの語（言語資源の answer_check_cues。#2181 段 5）。
 
-確定の操作・限定・未説明・条件の句・但し書き・版の廃止などを見分ける語は言語資源のデータで、
+確定の操作・限定の語や、手順の番号・引用の区切りを見分ける語は言語資源のデータで、
 ここは語を正規表現に組み立てるだけを持つ（言語資源の hash ごとに 1 回だけ）。
 """
 
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from rag_parser_core.language import FIELD_SPECS, LanguagePack, per_pack
 from rag_parser_core.language.markers import marker_patterns
-from rag_parser_core.language.text import alternation, char_class, range_class
+from rag_parser_core.language.text import alternation, range_class
 
 _SECTION = "answer_check_cues"
 
@@ -25,7 +25,6 @@ class CheckCues:
     # 文字の種類（漢字・カタカナ、英数字を足したもの、ひらがなも足したもの）。
     kana_kanji: str
     any_word_chars: str
-    sentence_split: re.Pattern[str]
     completion: re.Pattern[str]
     constraint: re.Pattern[str]
     ignored_quote_chars: frozenset[str]
@@ -34,15 +33,9 @@ class CheckCues:
     # 行の先頭で ``match`` する手順の番号（①・⑴・(1)・（１）・1.・１．）。小数（1.5）には当たらない。
     step_line_start: re.Pattern[str]
     ellipsis_split: re.Pattern[str]
-    condition_sentence: re.Pattern[str]
-    condition_clause: re.Pattern[str]
-    condition_strip: re.Pattern[str]
-    condition_trailing_particle: re.Pattern[str]
-    condition_adverb: re.Pattern[str]
     bare_label: re.Pattern[str]
     sentence_line: re.Pattern[str]
     name_value_pair: re.Pattern[str]
-    limit: re.Pattern[str]
     multi_condition_modes: tuple[re.Pattern[str], re.Pattern[str]]
     quoted_name: re.Pattern[str]
     bare_title_marks: re.Pattern[str]
@@ -97,19 +90,12 @@ def _build(pack: LanguagePack) -> CheckCues:
     number_open = markers.number_open
     number_close = markers.number_close
     constraint = rf"{alt['constraint_words']}|{alt['condition_preceders']}{alt['condition_nouns']}{alt['condition_followers']}"
-    unexplained = alt["unexplained_words"]
-    adverb_kanji = char_class(words["condition_adverb_kanji"])
-    range_particles = "|".join(f"(?<={re.escape(word)})" for word in words["condition_range_particles"])
-    trailing_particles = alt["condition_trailing_particles"]
-    particle_head = _body((*kanji_items, "〆", "ヵ", "ヶ", *katakana_items, "A-Z", "a-z", "0-9", "Ａ-Ｚ", "ａ-ｚ", "０-９"))
-    closers = re.escape("".join(pair[1] for pair in quotes) + "".join(pair[1] for pair in pack.words("markers", "number_brackets")))
     dashes = re.escape("".join(pack.words("evidence_cues", "function_number_dashes")))
     return CheckCues(
         words=words,
         alt=alt,
         kana_kanji=kana_kanji,
         any_word_chars=any_word_chars,
-        sentence_split=re.compile(rf"(?<=[{sentence}])|\n"),
         completion=re.compile(
             rf"({alt['completion_verbs']})[{chars('closing_quote_chars')}]?{alt['button_words']}?"
             rf"{alternation(pack.words('question_cues', 'object_particles'))}?"
@@ -133,27 +119,9 @@ def _build(pack: LanguagePack) -> CheckCues:
             + (f"|[{chars('ellipsis_chars')}]+" if words["ellipsis_chars"] else "")
             + r")\s*"
         ),
-        condition_sentence=re.compile(rf"[{sentence}]|{alt['condition_sentence_endings']}$"),
-        condition_clause=re.compile(
-            rf"^.*?(?:{alt['condition_clause_nouns']}|{alt['condition_time_nouns']}"
-            rf"(?=[{chars('condition_time_followers')}]|$))"
-        ),
-        condition_strip=re.compile(
-            rf"(?:{re.escape(pack.text('answer_labels', 'condition_link'))})?"
-            rf"(?:{alt['condition_clause_nouns']}|{alt['condition_time_nouns']}){alt['condition_strip_particles']}?$"
-        ),
-        # 名詞の後に残った格助詞・係助詞（「検証用アカウントには」）。直前が漢字・カタカナ・英数字・閉じ括弧のとき
-        # だけ落とす。範囲を表す「までは」「からは」は「は」だけを落とす (#1501)。
-        condition_trailing_particle=re.compile(
-            rf"(?:(?<=[{particle_head}{closers}]){trailing_particles}"
-            + (rf"|(?:{range_particles}){alt['condition_topic_particles']}" if range_particles else "")
-            + ")$"
-        ),
-        condition_adverb=re.compile(rf"(?:^|[^{kanji}]){adverb_kanji}{alt['condition_adverb_particles']}$"),
         bare_label=re.compile(rf"[{kanji}A-Za-z0-9{chars('bare_label_chars')}]{{1,12}}"),
         sentence_line=re.compile(rf"{alt['sentence_line_endings']}[{chars('sentence_line_closers')}]?$"),
         name_value_pair=re.compile(rf"[^\s/={quote_opens}{quote_closes}]+\s*=\s*[^\s/{quote_closes}]+"),
-        limit=re.compile(rf"{unexplained}|{constraint}"),
         multi_condition_modes=(
             re.compile(rf"(?m)^([^\n{sentence}{colon}{heading_bullets}{item_bullets}{notes}]{{2,32}})\n(?=[{item_bullets}{notes}])"),
             re.compile(rf"([{any_body}_]{{2,32}}){alt['mode_topic_particles']}"),

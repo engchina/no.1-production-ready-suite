@@ -31,22 +31,6 @@ RETENTION = {
 BRIDGE_ANSWER = "人事評価システムは「極秘」扱いなので、データは **10 年間** 保管されます。"
 
 
-# 出典の行の事例（RAG と Agent の両方のテストが読む。#1370）。
-CITATION_CASES = json.loads(
-    (Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/citation-lines.json").read_text("utf-8")
-)
-
-
-# 作業の経過の文の事例（業務ガイドが見つからなかった。RAG と Agent の両方のテストが読む。#1452）。
-PROCESS_CASES = json.loads(
-    (Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/process-notes.json").read_text("utf-8")
-)
-
-
-# 見出しの名詞句・導入の文の事例（RAG と Agent の両方のテストが読む。#1469）。
-HEADING_CASES = json.loads((Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/headings.json").read_text("utf-8"))
-
-
 # #1362 の評価の Run の形（#1391）。業務支援の da-trial-account-setup: 運用手順書の章ごとの chunk と、手順の回答。
 PORTAL = "d71d90b414a74ad99ccfc7a9dc4b3cb5:2e474d0310926b739eeed94bfc31012518db916cc382524721434a8baa1d629d"
 PORTAL_EVIDENCE = [
@@ -332,12 +316,11 @@ def test_unverified_section_titles_match_the_builtin_language_pack() -> None:
     Agent は RAG の言語資源を読まず、契約の語彙でこの節を見分ける）。"""
     from rag_parser_core.language import builtin_pack
 
-    from rag_engine.generation.answer_passage_vocabulary import vocabulary
-
+    vocabulary = json.loads((Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/vocabulary.json").read_text("utf-8"))
     pack = builtin_pack()
     titles = [pack.text("answer_labels", key) for key in ("gaps_section", "unverified_section", "deadline_section")]
 
-    assert vocabulary()["unverified_section_titles"] == titles
+    assert vocabulary["unverified_section_titles"] == titles
 
 
 def test_passage_ranges_locate_each_passage_in_the_answer() -> None:

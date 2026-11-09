@@ -408,7 +408,6 @@ CRAG_CAUSE_UNVERIFIED = "unverified"  # 不足と確かめていない未確認�
 CRAG_CAUSE_NO_RELEVANT = "no_relevant_evidence"  # 生成に使えず、関係ありと判定した候補が無い
 CRAG_CAUSE_GENERATION_UNUSABLE = "generation_unusable"  # 関係する候補はあるが、生成に使える根拠を確かめられない
 CRAG_CAUSE_GRADE_ERROR = "grade_error"  # 評価の実行に失敗した
-CRAG_CAUSE_GRADE_SKIPPED = "grade_skipped"  # 規則の信号で評価を飛ばした
 CRAG_CAUSE_NO_NEW_EVIDENCE = "no_new_evidence"  # 探し直しで新しい本文が得られなかった
 
 

@@ -818,7 +818,7 @@ class EvaluationRagOverrides(BaseModel):
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
     # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成・監査の推論の量、
-    # CRAG の評価の省略、質問拡張の検索文の上限を比べる。
+    # 質問拡張の検索文の上限を比べる。
     strategy_reasoning_effort: ReasoningEffortOverride | None = None
     judge_reasoning_effort: ReasoningEffortOverride | None = None
     generation_reasoning_effort: ReasoningEffortOverride | None = None
@@ -826,8 +826,6 @@ class EvaluationRagOverrides(BaseModel):
     # CRAG の評価の候補の短い ID(#1864)。
     crag_short_candidate_ids: bool | None = None
     section_skip_regrade_at_scope: bool | None = None
-    crag_skip_on_strong_signals: bool | None = None
-    crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
     query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 

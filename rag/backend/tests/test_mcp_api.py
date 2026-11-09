@@ -773,8 +773,6 @@ def test_search_maps_evidence_and_uses_token_user_context(
     assert (evidence["header_range"], evidence["next_offset"]) == (None, None)
     assert body["evidence_text_omitted"] == 0
     assert evidence["used_in_answer"] is True
-    # 表の無い本文の根拠は、表の行・列の対応の検査の対象ではない（#3262）。
-    assert evidence["table_binding"] is None
     assert evidence["role"] == "retrieved_anchor"
     assert (evidence["score"], evidence["rerank_score"]) == (0.5, 0.9)
     unused = body["evidence"][1]
@@ -1084,57 +1082,6 @@ def test_search_evidence_with_an_incomplete_table_position_has_no_rows(
 
 
 _MARKDOWN_TABLE = "| 区分 | 値 |\n| --- | --- |\n| 区分 A | X-01 |\n| 区分 B | X-02 |"
-
-
-@pytest.mark.parametrize(
-    ("text", "metadata", "expected"),
-    [
-        # 2 行以上の表（Markdown・HTML）は検査が読める。
-        (_MARKDOWN_TABLE, {"content_kind": "table"}, "checkable"),
-        (
-            "<table><tr><th>区分</th><th>値</th></tr><tr><td>区分 A</td><td>X-01</td></tr>"
-            "<tr><td>区分 B</td><td>X-02</td></tr></table>",
-            {"content_kind": "table"},
-            "checkable",
-        ),
-        # 本文の中の表も検査が読む。
-        (f"前書き。\n{_MARKDOWN_TABLE}", {"content_kind": "text"}, "checkable"),
-        # 表の根拠でも、列の並びが崩れた本文・1 行の記録は読めない。
-        ("区分 A X-01 区分 B X-02", {"content_kind": "table"}, "not_checkable"),
-        (
-            "区分: 区分 A / 値: X-01",
-            {"content_kind": "record", "sheet_block_kind": "row"},
-            "not_checkable",
-        ),
-        (
-            "列 1: 値 1 / 列 2: 値 2",
-            {"content_kind": "record", "record_kind": "row"},
-            "not_checkable",
-        ),
-        # 表の無い本文の根拠・表でない記録（手順）は対象ではない。
-        ("本文。", {"content_kind": "text"}, None),
-        ("1. 手順の本文", {"content_kind": "record", "sheet_block_kind": "procedure_step"}, None),
-    ],
-    ids=[
-        "markdown",
-        "html",
-        "table-in-text",
-        "broken-columns",
-        "sheet-row",
-        "csv-row",
-        "text",
-        "procedure",
-    ],
-)
-def test_search_evidence_tells_whether_the_table_binding_check_can_read_it(
-    auth: ProductionAuth,
-    monkeypatch: MonkeyPatch,
-    text: str,
-    metadata: dict[str, Any],
-    expected: str | None,
-) -> None:
-    """表の行・列の対応の検査が根拠を表として読めるかを返す（読めない表の根拠を示す。#3262）。"""
-    assert _evidence_of(auth, monkeypatch, text=text, **metadata)["table_binding"] == expected
 
 
 @pytest.mark.parametrize(

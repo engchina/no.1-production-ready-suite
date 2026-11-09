@@ -18,7 +18,6 @@ from rag_engine.generation.answer_envelope import (
     EXCLUDED_ALREADY_KNOWN,
     EXCLUDED_KNOWN_CONDITION,
     EXCLUDED_NOT_DECISIVE,
-    EXCLUDED_VERSION_SETTLED,
     confirmation_item_facts,
     requires_environment_data,
     settle_confirmation_items,
@@ -30,7 +29,6 @@ ROLE = "操作する利用者が「ポータル管理者」ロールを持つか
 APPROVAL = "削除対象アカウントの所属部署の部門長の承認が得られているか（承認の無い削除を行わないため）"
 AUTH_LOG = "エラー発生時刻の認証ログ（auth.log）の該当行（原因 A と原因 B のどちらかを確定するため）"
 CODE_TABLE = "「支払区分コード表」の区分の定義（区分の意味を確かめる）"
-VERSION = "利用中のポータルに適用されている版（第1版と第2版のどちらの出力手順を使うかの判定）"
 
 
 def fact(text, who, *, known=False, decides=True):
@@ -71,13 +69,6 @@ class SettleConfirmationItemsTest(unittest.TestCase):
         # 値の無い条件・1 文字の名前では外さない。
         self.assertEqual(settle_confirmation_items(items, known_conditions=[("部門長の承認", " ")]).user, (APPROVAL, ROLE))
         self.assertEqual(settle_confirmation_items(items, known_conditions=[("承", "はい")]).user, (APPROVAL, ROLE))
-
-    def test_version_items_are_removed_only_when_the_evidence_settles_the_version(self):
-        items = [fact(VERSION, "system"), fact(AUTH_LOG, "system")]
-        self.assertEqual(settle_confirmation_items(items).system, (VERSION, AUTH_LOG))
-        settled = settle_confirmation_items(items, version_settled=True)
-        self.assertEqual(settled.system, (AUTH_LOG,))
-        self.assertEqual(settled.excluded[0]["reason"], EXCLUDED_VERSION_SETTLED)
 
     def test_requires_environment_data_follows_the_settled_items(self):
         system = settle_confirmation_items([fact(AUTH_LOG, "system")])

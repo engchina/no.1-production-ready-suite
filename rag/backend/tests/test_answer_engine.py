@@ -2179,8 +2179,6 @@ def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> Non
             rag_strategy_reasoning_effort="low",
             rag_judge_reasoning_effort="model",
             rag_generation_reasoning_effort="none",
-            rag_crag_skip_on_strong_signals=True,
-            rag_crag_skip_min_rerank_score=0.65,
             rag_query_expansion_max_queries=3,
         ),
         output_dir=tmp_path,
@@ -2192,7 +2190,6 @@ def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> Non
         default.judge_reasoning_effort,
         default.generation_reasoning_effort,
     ) == ("", "medium", "")
-    assert default.crag_skip_on_strong_signals is False
     assert default.query_expansion_max_queries == 5
     # model はモデルの登録値のまま(空)、none は送らない。
     assert (
@@ -2200,8 +2197,6 @@ def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> Non
         changed.judge_reasoning_effort,
         changed.generation_reasoning_effort,
     ) == ("low", "", "none")
-    assert changed.crag_skip_on_strong_signals is True
-    assert changed.crag_skip_min_rerank_score == 0.65
     assert changed.query_expansion_max_queries == 3
 
 
