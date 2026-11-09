@@ -69,7 +69,7 @@ const agentJa = {
   "nav.section.improve": "改善・運用",
   "nav.feedback": "フィードバック",
   "page.feedback.subtitle":
-    "利用者の評価と、評価の付いていない実行に残るシグナル（資料との照合・ツール・承認・実行の状態）から、確かめるべき回答を見つけます。",
+    "利用者の評価と、評価の付いていない実行に残るシグナル（ツール・承認・実行の状態）から、確かめるべき回答を見つけます。",
   "loading.feedback": "フィードバックを読み込んでいます",
   // 確かめるべき実行（暗黙のシグナル。#1822）。
   "loading.feedbackSignals": "確かめるべき実行を読み込んでいます",
@@ -78,19 +78,11 @@ const agentJa = {
   "feedback.view.ratings": "利用者の評価",
   "feedback.filter.signal": "シグナル",
   "feedback.signal.not_helpful": "役に立たなかった",
-  "feedback.signal.validation_failed": "資料との照合で確かめられない内容",
-  "feedback.signal.unvalidated": "資料と照合できなかった",
-  "feedback.signal.ungrounded_no_tools": "根拠を使わずに答えた",
   "feedback.signal.unanswered": "答えられなかった",
   "feedback.signal.approval_rejected": "承認の却下",
   "feedback.signal.tool_failed": "ツールの失敗",
   "feedback.signal.run_failed": "実行の失敗・取り消し",
   "feedback.signalHint.not_helpful": "本人か管理者が「役に立たなかった」と評価した回答です。",
-  "feedback.signalHint.validation_failed":
-    "資料との照合が、根拠で確かめられない・矛盾する内容を回答から外したか、「資料から確認できなかった事項」の節を足しました。",
-  "feedback.signalHint.unvalidated": "資料との照合そのものが失敗し、回答を根拠と照らし合わせられませんでした。",
-  "feedback.signalHint.ungrounded_no_tools":
-    "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。モデルの知識だけで作った回答かもしれません。",
   "feedback.signalHint.unanswered": "資料から答えられない（根拠不足）か、人への引き継ぎとした回答です。",
   "feedback.signalHint.approval_rejected": "承認が却下されたツールがあります。",
   "feedback.signalHint.tool_failed": "ツールの呼び出しが失敗しました。",
@@ -115,7 +107,7 @@ const agentJa = {
   "feedback.signals.empty.title": "この期間の実行はありません",
   "feedback.signals.empty.hint": "チャット・自動実行で実行が終わると、ここに集計されます。",
   "feedback.signals.none.title": "確かめるべき実行はありません",
-  "feedback.signals.none.hint": "この期間の実行には、評価・資料との照合・ツール・承認・実行の状態のシグナルがありません。",
+  "feedback.signals.none.hint": "この期間の実行には、評価・ツール・承認・実行の状態のシグナルがありません。",
   "feedback.signals.noMatch.title": "選んだシグナルの実行はありません",
   "feedback.signals.detail.title": "確かめるべき実行の詳細",
   "feedback.signals.detail.emptyTitle": "実行を選んでください",
@@ -833,9 +825,8 @@ const agentJa = {
   // RAG の根拠の原文のプレビュー（#2389）。
   "evidence.previewUnsupported": "この形式の資料は原文を表示できません。ファイルをダウンロードして確かめてください。",
   "evidence.previewTextFailed": "原文の本文を読み込めませんでした。URL の期限が切れたか、資料が更新された可能性があります。",
-  // 資料との照合（回答の文を AI に渡した資料と照らし合わせた結果と、支援タスクの状態を業務の言葉で出す。#1286・#2361）。
-  // 3 製品で同じ概念は「資料との照合」と呼ぶ。内部の語（予算・reason の値）は出さない。
-  "chat.review.title": "資料との照合",
+  // 回答の確認事項（確かめた条件・確認待ちの質問・足りない情報と回答の対応）。
+  "chat.review.title": "回答の確認事項",
   "chat.review.conditions": "確かめた条件",
   "chat.review.clarifications": "確認待ちの質問",
   "chat.review.guide": "使った業務ガイド",
@@ -848,30 +839,12 @@ const agentJa = {
   "chat.review.options": "選択肢：{options}",
   "chat.review.guideUntitled": "名前の無い業務ガイド",
   "chat.review.guideRevision": "（第 {revision} 版）",
-  "chat.review.state.verified": "照合済み",
-  // 段落の印の記録の無い過去の Run（#2738 より前）。件数は回答の本文の節「資料から確認できなかった事項」の項目の数
-  // （節と一致させる。#2361）。今の Run は印の数のバッジ（chat.answer.passage.badge*）。
-  "chat.review.state.unverifiedPoints": "確かめられない点 {count} 件",
-  "chat.review.state.unverifiedPointsNoCount": "確かめられない点あり",
-  "chat.review.state.unvalidated": "照合できませんでした",
-  "chat.review.state.skipped": "照合の対象外",
   // 回答の対応（#1314）。RAG の回答の詳細の対応のバッジ（search.answerDetails.outcome.*。#1252）と同じ文言。
   "chat.review.outcome.conditional": "条件付きの回答",
   "chat.review.outcome.needsClarification": "確認が必要",
   "chat.review.outcome.needsEnvironmentData": "現場のデータが必要",
   "chat.review.outcome.needsHuman": "人への引き継ぎ",
   "chat.review.outcome.insufficientEvidence": "根拠不足",
-  "chat.review.message.noEvidence": "この回答は資料を使わずに作ったため、資料と照らし合わせて確かめていません。",
-  "chat.review.message.unvalidated":
-    "資料との照らし合わせが途中で止まったため、この回答は確かめられていません。内容を資料で確かめてから使ってください。",
-  "chat.review.message.skipped": "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。",
-  "chat.review.message.skippedEmpty": "回答が空のため、資料との照らし合わせの対象外です。",
-  "chat.review.message.skippedClarification": "確認の質問だけの回答のため、資料との照らし合わせの対象外です。",
-  "chat.review.message.skippedAbsenceOnly":
-    "資料に根拠が見つからず答えられないことだけを伝えた回答のため、資料との照らし合わせの対象外です。",
-  "chat.review.message.skippedRagDeclined": "資料の検索は不要とされたため、資料との照らし合わせの対象外です。",
-  "chat.review.message.skippedNoToolGrounding":
-    "社内の資料・業務データのツールで確かめずに作られた回答だったため、推測の回答は出さず、お答えできない旨を返しました。",
   "chat.review.limitReached":
     "資料を調べられる回数の上限に達したため、ここまでに集めた資料で答えています。足りない点は、質問を分けて聞き直してください。",
   // 回答の処理の段階（3 製品共通の ChatProgress。#1145 / #1147）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。
@@ -1759,7 +1732,6 @@ const agentJa = {
   "status.artifact.rag_evidence": "検索の根拠",
   "status.artifact.structured_table": "構造化データ",
   "status.artifact.support_task": "支援タスクの状態",
-  "status.artifact.answer_validation": "資料との照合",
   "status.artifact.answer_evidence": "回答の根拠",
   "status.artifact.runtime_artifact": "実行環境の成果物",
   "status.event.created": "作成",

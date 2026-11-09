@@ -5,12 +5,9 @@
 """
 
 import json
-from unittest.mock import patch
 
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
-from validation_unit_support import wire_text
 
-from rag_engine.evaluation.answer_validation import validate_answer_claims
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.models.llm import GroundedDraft
@@ -118,41 +115,6 @@ def test_grounded_answer_reads_half_width_and_cites_the_original():
     assert TEXT in result.answer_text and grounded.answer_labels().quote_only_section not in result.answer_text
     assert [fact["quote"] for fact in result.evidence_facts] == ["ＨＲＭ：第２水曜 22:00〜24:00"]
     assert any("ＨＲＭ：第２水曜" in span["text"] for span in result.generation_trace["selected_evidence"])
-
-
-def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
-    evidence = [{"id": "c1", "source": "保守計画.pdf", "page_start": 3, "page_end": 3, "text": PLAN}]
-    answer = "HRM の変更は第2水曜 22:00〜24:00 の保守枠で実施します。\n根拠：保守計画.pdf p.3"
-    seen = {}
-
-    def parse(system, inputs, settings, schema, provider_id=None):
-        payload = json.loads(inputs)
-        seen["payload"] = payload
-        passage = payload["answer_passages"][0]["id"]
-        document = next(i for i in payload["evidence_items"] if i.get("id") != "question:1")
-        selected = next(unit["unit_id"] for unit in document["units"] if unit["text"] == QUOTE)
-        return schema.model_validate(
-            {
-                "claim_checks": [
-                    {
-                        "answer_quote": "段落",
-                        "answer_passage_id": passage,
-                        "status": "supported",
-                        "evidence_unit_ids": [selected],
-                        "reason": "根拠に記載",
-                    }
-                ]
-            },
-        )
-
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        result = validate_answer_claims(QUESTION, answer, evidence, settings=None)
-    assert "HRM:第2水曜" in wire_text([i for i in seen["payload"]["evidence_items"] if i.get("id") != "question:1"][0])
-    assert "ＨＲＭ" not in json.dumps(seen["payload"], ensure_ascii=False)
-    assert seen["payload"]["answer_text"] == answer
-    assert result["status"] == "completed" and result["counts"] == {"supported": 1}
-    supported = result["claim_checks"][0]
-    assert supported["source_id"] == "c1" and "ＨＲＭ：第２水曜" in supported["evidence_quote"]
 
 
 def test_figure_dash_is_folded_only_for_comparison() -> None:

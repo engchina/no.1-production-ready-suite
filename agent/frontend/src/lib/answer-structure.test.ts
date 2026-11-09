@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { answerEvidenceData } from "@/lib/answer-evidence";
-import { validationReview } from "@/lib/answer-review";
-import { noticeHeading, structureAnswer, withoutFrameHeading, type StructuredBlock } from "@/lib/answer-structure";
+import { parseAnswerPassageRecords } from "@production-ready/ui";
+import { structureAnswer, withoutFrameHeading, type StructuredBlock } from "@/lib/answer-structure";
 
 // #2328: Agent の回答を RAG のチャットと同じ節に組み立てる（表示だけ。本文の文は書き換えない）。内容は合成のデータ。
 
@@ -104,12 +104,6 @@ describe("structureAnswer", () => {
     expect(structureAnswer("期限は 30 日です。", evidence([]), null, TITLES)).toBeNull();
     expect(structureAnswer("期限は 30 日です。", null, null, TITLES)).toBeNull();
   });
-
-  it("節の見出しは資料との照合の成果物の notice から読む", () => {
-    expect(noticeHeading({ notice: { heading: HEADING } })).toBe(HEADING);
-    expect(noticeHeading({})).toBeNull();
-    expect(noticeHeading(null)).toBeNull();
-  });
 });
 
 describe("answerEvidenceData", () => {
@@ -120,30 +114,6 @@ describe("answerEvidenceData", () => {
   });
 });
 
-describe("validationReview", () => {
-  // #2361: 除いた内容の一覧は本文の節の 1 か所だけ。照合の結果には節の項目の数（件数のバッジ）だけを持つ。
-  it("件数は本文の節の項目の数（notice.items）を持ち、除いた内容の一覧は持たない", () => {
-    const claims = Array.from({ length: 6 }, (_, index) => ({ answer_quote: `段落 ${index}`, status: "unsupported", reason: "r" }));
-    const content = {
-      status: "completed",
-      result: { status: "completed", valid: false, claims, findings: [], stale_evidence: [], missing_evidence: [] },
-      withheld: { claims: 6, findings: 0, all: false },
-      notice: { items: 6, heading: HEADING },
-    };
-    expect(validationReview(content)).toEqual({
-      state: "withheld",
-      cause: null,
-      withheldClaims: 6,
-      withheldAll: false,
-      listedItems: 6,
-      passages: null,
-    });
-    // 節の記録が無い古い Run は 0（画面は外した段落の数で出す）。
-    expect(validationReview({ ...content, notice: undefined })?.listedItems).toBe(0);
-  });
-});
-
-// #2707: 最終の検証が時間切れ・失敗のときは、決定的な照合の根拠を「参考情報」にする。
 describe("structureAnswer の照合が判定を出さなかった回答", () => {
   const UNVERIFIED = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。";
   const answer = [
@@ -292,28 +262,6 @@ describe("段落の印の記録のある回答", () => {
     answer_warnings: [],
   };
 
-  it("照合の結果は印の記録を持ち、過去の判定（確かめられない段落で外す）を使わない", () => {
-    const content = {
-      status: "completed",
-      result: {
-        status: "completed",
-        valid: false,
-        claims: [{ answer_quote: "承認は部署が行います。", status: "unsupported", reason: "" }],
-        findings: [{ check: "guide", severity: "error", message: "手順の順序" }],
-      },
-      withheld: { removed: 1, unverified: 1, warnings: 0, all: false, listed: 2 },
-      ...marks,
-    };
-    const review = validationReview(content);
-    expect(review?.state).toBe("marked");
-    expect(review?.passages?.marks).toHaveLength(1);
-    expect(review?.passages?.removed).toHaveLength(1);
-    // 印も外した段落も回答の注意も無ければ「照合済み」（規則の検査の結果だけでは本文を外さない）。
-    expect(
-      validationReview({ ...content, passage_marks: [], removed_passages: [], answer_warnings: [] })
-    ).toMatchObject({ state: "verified", passages: null });
-  });
-
   it("印の付いた項目は「確認できた」節に入れず、記録の節の見出し（過去の節・確認が必要な点）は本文から除く", () => {
     const answer = [
       "答えは次のとおりです。",
@@ -336,7 +284,7 @@ describe("段落の印の記録のある回答", () => {
       ),
       HEADING,
       TITLES,
-      validationReview({ status: "completed", ...marks })?.passages ?? null
+      parseAnswerPassageRecords({ status: "completed", ...marks })
     );
     expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.confirmed)).toBe(false);
     expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.unconfirmed)).toBe(false);

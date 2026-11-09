@@ -492,7 +492,7 @@ def test_cases_can_be_imported_and_exported_as_excel(agent: None) -> None:
     [sample] = parsed.json()["data"]["cases"]
     assert (sample["id"], sample["expected_tools"], sample["expected_tools_in_order"]) == (
         "expense-deadline",
-        ["rag_retrieve_evidence", "rag_validate_answer"],
+        ["rag_retrieve_evidence", "rag_read_source"],
         True,
     )
 

@@ -201,10 +201,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
         # 最終照合の入力の分け方(#4141)。
-        "answer_validation_batch_passages": resolved_settings.rag_answer_validation_batch_passages,
-        "answer_validation_max_input_bytes": (
-            resolved_settings.rag_answer_validation_max_input_bytes
-        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

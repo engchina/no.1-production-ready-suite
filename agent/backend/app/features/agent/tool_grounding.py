@@ -58,7 +58,7 @@ BLOCK と同じ考え方）。
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent import external_writes
@@ -109,7 +109,6 @@ _CONTROL_PLANE_TRACE_PREFIXES = (
     CANCEL_TRACE_PREFIX,
     RUN_CANCEL_TRACE_PREFIX,
     GUIDE_CHECK_TRACE_PREFIX,
-    "answer_validation_",
 )
 
 _RETRY_HEAD = (
@@ -495,26 +494,6 @@ def hops_retried(metadata: object) -> bool:
     return isinstance(record, dict) and bool(record.get("hop_retries"))
 
 
-def hop_original_answer(events: Sequence[Any]) -> str | None:
-    """差し戻しの前の回答（経過に残したもの。無ければ None）。
-
-    差し戻しは略号・別名（`hop_retry`。#1958）か業務データ（`data_retry`。#1979）か業務ガイドの
-    手順（`guide_step_retry`。#2396）の 1 回だけ。章節の続きの差し戻し（`section_retry`。#2492）は
-    含めない（前の回答は手順・条件の後半を欠くと分かっているので、前の回答に戻さない）。
-    """
-    for event in reversed(list(events)):
-        payload = getattr(event, "payload", None)
-        record = payload.get("tool_grounding") if isinstance(payload, dict) else None
-        if isinstance(record, dict) and record.get("action") in {
-            "hop_retry",
-            "data_retry",
-            "guide_step_retry",
-        }:
-            original = record.get("original_answer")
-            return original if isinstance(original, str) else None
-    return None
-
-
 def retried(metadata: object) -> int:
     """この Run で差し戻した回数。"""
     record = metadata.get(METADATA_KEY) if isinstance(metadata, dict) else None
@@ -624,7 +603,6 @@ __all__ = [
     "grounded_in_thread",
     "grounding_tools",
     "grounding_used",
-    "hop_original_answer",
     "hops_retried",
     "is_exempt_answer",
     "is_greeting_reply",

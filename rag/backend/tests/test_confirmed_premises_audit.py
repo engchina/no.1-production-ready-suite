@@ -1,29 +1,20 @@
 """利用者が確定した前提だけを、正式入口から同次監査へ渡す。実モデル呼出0。"""
 
-import json
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock
 
 import pytest
 from rag_engine.config import LLM_PURPOSE_AUDIT, settings_for_llm_purpose
-from rag_engine.generation import grounded
-from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.llm import GroundedDraft
 
 from app.config import Settings
 from app.rag.answer_engine import (
-    AnswerEngine,
     AnswerScope,
     _confirmed_validation_premises,
     build_engine_settings,
 )
-from app.rag.answer_validation import AnswerValidation
 from app.rag.history_question import HistoryConfirmation
 from app.rag.pipeline import RagPipeline, scope_with_history_confirmations
 from app.schemas.search import SearchRequest
-from tests.audit_fixtures import is_audit_schema, legacy_audit_result
-from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 LABEL = "操作担当の種別"
 VALUE = "担当A"
@@ -98,115 +89,6 @@ def test_scope_source_is_preserved_without_promoting_untrusted_source(
     assert _confirmed_validation_premises(Settings(), scope) == (
         [{"question": LABEL, "answer": VALUE}] if accepted else []
     )
-
-
-@pytest.mark.parametrize("mode", ["none", "standard"])
-async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_next_request(
-    monkeypatch: pytest.MonkeyPatch, mode: str
-) -> None:
-    calls: list[str] = []
-    audit_inputs: list[dict[str, Any]] = []
-
-    subject_calls: list[str] = []
-
-    def parser(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        # 質問の対象の抽出(#4351)は別に数える(回答ごとに 1 回)。
-        name = getattr(schema, "canonical_schema", schema).__name__
-        (subject_calls if name == "QuestionMentionAnchors" else calls).append(name)
-        if is_audit_schema(schema):
-            data = json.loads(prompt)
-            audit_inputs.append(data)
-            assert data["question"] == QUESTION
-            assert [unit["id"] for unit in data["task_contract"]["request_units"]] == ["Q1"]
-            return legacy_audit_result(
-                schema,
-                {
-                    "goal_alignment": "aligned",
-                    "summary_supported": True,
-                    "summary_basis": [row["text"] for row in data["items"]],
-                    "reviews": [
-                        {
-                            "index": row["index"],
-                            "support": "supported",
-                            "applicability": "matched",
-                            "reason": "合成の支持観察",
-                        }
-                        for row in data["items"]
-                    ],
-                    "request_reviews": [
-                        {"request_id": "Q1", "status": "addressed", "reason": "合成の回答対応"}
-                    ],
-                },
-            )
-        result = _fake_llm(system, prompt, config, schema, **options)
-        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
-            if getattr(schema, "_uses_typed_answer_parts", False):
-                return result  # 共通桩が同じ送達IDに対応する要求計画も返す。
-            # 実際に送った単位 ID の所属から、同次の要求計画を返す。
-            data = result.model_dump()
-            catalog = grounded.generation_unit_catalog(
-                [span for span, _view in (grounded._CITATION_VIEWS.get() or {}).values()]
-            )
-            ids = list(
-                dict.fromkeys(
-                    str(binding.snapshot.span()["evidence_id"])
-                    for row in data["items"]
-                    for citation in row["citations"]
-                    for binding in catalog.bind(citation["unit_ids"])
-                )
-            )
-            data["request_coverage"] = [
-                {
-                    "request_id": "Q1",
-                    "evidence_scope": [
-                        {"evidence_id": identity, "target": "登録", "relation": "direct"}
-                        for identity in ids
-                    ],
-                }
-            ]
-            for row in data["items"]:
-                row["request_id"] = "Q1"
-            return schema.model_validate(data)
-        return result
-
-    monkeypatch.setattr("rag_engine.adapters.oci.parse_text_response", parser)
-    validator = AsyncMock(return_value=AnswerValidation(status="completed", valid=True))
-    monkeypatch.setattr("app.rag.answer_validation.validate_answer", validator)
-    first = AnswerEngine(
-        guide_settings("user", "known", mode=mode),
-        oracle=cast(Any, FakeOracle()),
-        genai=cast(Any, FakeGenAi()),
-        scope=AnswerScope(
-            context=f"利用者が回答済み: {LABEL}={VALUE}", confirmed_premises=((LABEL, VALUE),)
-        ),
-    )
-    second = AnswerEngine(
-        guide_settings("assumption", "unknown", mode=mode),
-        oracle=cast(Any, FakeOracle()),
-        genai=cast(Any, FakeGenAi()),
-        scope=AnswerScope(context=f"仮定: {LABEL}={VALUE}"),
-    )
-    for engine in (first, second):
-        outcome = await engine.run(SearchRequest(query=QUESTION))
-        assert "登録ボタン" in outcome.answer
-    assert len(subject_calls) == 2
-    generation_names = {GroundedDraft.__name__, generation_draft_wire_model().__name__}
-    assert sum(name in generation_names for name in calls) == 2
-    if mode == "none":
-        assert not audit_inputs
-        # 共通桩は原文の写しを返すので、要点は選んだ ID の原文の直接の記載になり、
-        # 導出の独立の監査（判定・理由）と推導の説明の段は呼ばない。生成だけを各要求で 1 回ずつ。
-        assert len(calls) == 2
-        assert not {"ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"} & set(calls)
-        validator.assert_not_awaited()
-    else:
-        assert len(audit_inputs) == 2
-        assert audit_inputs[0]["confirmed_premises"] == [
-            {"question": LABEL, "answer": VALUE, "source": "user"}
-        ]
-        assert "confirmed_premises" not in audit_inputs[1]
-        assert len(calls) == 4
-        assert validator.await_count == 2
 
 
 def test_history_preserves_question_source_and_marks_actual_confirmation_user(

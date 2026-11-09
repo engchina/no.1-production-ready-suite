@@ -75,14 +75,6 @@ export function withoutFrameHeading(answer: string, frameHeading: string): strin
   return answer.slice(match[0].length).replace(/^\s*\n/, "");
 }
 
-/** 回答の節（`notice.heading`）。資料との照合の成果物の内容から読む。 */
-export function noticeHeading(validation: Record<string, unknown> | null): string | null {
-  const notice = validation?.notice;
-  if (!notice || typeof notice !== "object" || Array.isArray(notice)) return null;
-  const heading = (notice as Record<string, unknown>).heading;
-  return typeof heading === "string" && heading ? heading : null;
-}
-
 function headingText(line: string): string | null {
   const match = HEADING.exec(line);
   if (!match) return null;

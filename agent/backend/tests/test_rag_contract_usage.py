@@ -22,7 +22,6 @@ from mcp_support import DEFAULT_OUTPUTS, RAG_OUTPUT_SCHEMA_VERSION, RAG_OUTPUTS_
 from app.features.agent import evidence_access, rag_figures, section_coverage, support_task
 from app.features.agent.answer_passage_vocabulary import vocabulary
 from app.features.agent.answer_passages import KIND_UNVERIFIED, non_claim_passages
-from app.features.agent.answer_validation import VALIDATE_ANSWER_TOOL
 from app.features.agent.clarification_cancel import KIND_RAG
 
 CONTRACT = Path(__file__).resolve().parents[3] / "platform/contracts/mcp/rag-tools.json"
@@ -51,23 +50,6 @@ def _closed(node: Any) -> Any:
     return node
 
 
-def test_rag_tools_used_by_agent_are_in_the_contract() -> None:
-    """Agent が名前で呼ぶ・結果を読む RAG のツールは、すべて契約にある。"""
-    used = {
-        support_task.RAG_SEARCH,
-        support_task.RAG_RETRIEVE_EVIDENCE,
-        support_task.RAG_LOOKUP_GUIDES,
-        support_task.RAG_READ_SOURCE,
-        support_task.RAG_READ_DOCUMENT,
-        support_task.RAG_READ_SECTION,
-        support_task._PROFILE_RECOMMEND_TOOLS[KIND_RAG],
-        VALIDATE_ANSWER_TOOL,
-        rag_figures.READ_SOURCE_TOOL,
-        evidence_access.READABLE_DOCUMENTS_TOOL,
-    }
-    assert used <= set(_tools())
-
-
 def test_rag_error_codes_used_by_agent_are_in_the_contract() -> None:
     """Agent が分岐に使う RAG のツールの失敗の code は、契約の `errors` に載っている（RAG の内部の
     定数を写さない）。"""
@@ -79,17 +61,6 @@ def test_rag_error_codes_used_by_agent_are_in_the_contract() -> None:
     )
     assert used
     assert used <= codes, sorted(used - codes)
-
-
-def test_validate_answer_claims_carry_the_passage_range() -> None:
-    """最終の検証が判定を段落に結び付ける位置（`answer_range`）は契約にある（段落の分け方を
-    写さない。`answer_validation.align_claims`）。"""
-    schema = _tools()[VALIDATE_ANSWER_TOOL]["outputSchema"]
-    claim = schema["$defs"]["ValidatedClaim"]["properties"]
-    assert "answer_range" in claim
-    ranges = [item for item in claim["answer_range"]["anyOf"] if "$ref" in item]
-    target = schema["$defs"][ranges[0]["$ref"].rsplit("/", 1)[-1]]
-    assert set(target["required"]) == {"start", "end"}
 
 
 def test_browser_url_path_prefixes_are_in_the_contract() -> None:

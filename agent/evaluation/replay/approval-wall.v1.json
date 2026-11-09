@@ -237,7 +237,6 @@
       ],
       "artifacts": [
         "answer",
-        "answer_validation",
         "support_task"
       ],
       "answer": "品目 A-1 を 3 個登録しました。"

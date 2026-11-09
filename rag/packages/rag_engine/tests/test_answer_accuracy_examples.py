@@ -5,86 +5,18 @@ import json
 import re
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, record
-from validation_unit_support import unit_audit_output
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.evaluation.answer_validation import (
-    PremiseConsistencyOutput,
-    validate_answer_claims,
-)
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import CoverageBudget, coverage_targets, request_rows, run_targeted_retrievals
 
 EXAMPLES = Path(__file__).with_name("fixtures") / "answer_accuracy"
 CASES = json.loads((EXAMPLES / "cases.json").read_text())
-
-
-@pytest.mark.parametrize("question", [CASES["state"]["question"], "処理 A の出力後の訂正方法を教えてください。"])
-def test_original_question_state_is_checked_without_a_clarification_answer(question):
-    case = CASES["state"]
-    observed = []
-
-    def parse(system, inputs, settings, schema, **options):
-        payload = json.loads(inputs)
-        passage = payload["answer_passages"][0]
-        if schema is PremiseConsistencyOutput:
-            observed.append(payload)
-            return schema.model_validate(
-                {
-                    "checks": [
-                        {
-                            "answer_passage_id": passage["id"],
-                            "constraints": "対象は処理 A",
-                            "recommendation": "処理 B の確定後の訂正と具体値の設定",
-                            "fit": "conflicts",
-                            "constraint_scope": "content",
-                            "passage_mode": "execution",
-                            "constraint_quote": payload["question"],
-                            "passage_quote": passage["text"],
-                        }
-                    ]
-                }
-            )
-        assert schema.__name__ == "FinalValidationUnitAudit"
-        evidence = next(e for e in payload["evidence_items"] if e["id"] == "example")
-        return unit_audit_output(
-            schema,
-            payload,
-            {
-                "claim_checks": [
-                    {
-                        "answer_quote": passage["text"],
-                        "answer_passage_id": passage["id"],
-                        "evidence_id": evidence["evidence_id"],
-                        "evidence_quote": case["evidence"],
-                        "source_id": "",
-                        "applicability": "matched",
-                        "status": "supported",
-                        "reason": "資料に記載あり",
-                    }
-                ]
-            },
-        )
-
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        result = validate_answer_claims(
-            question,
-            case["wrong_answer"],
-            [
-                {"id": "example", "source": "operations.txt", "text": case["evidence"]},
-            ],
-            settings=None,
-        )
-    assert len(observed) == 1
-    assert observed[0]["question"] == question
-    assert result["claim_checks"][0]["status"] == "contradicted"
-    assert result["claim_checks"][0]["support_check"] == "premise_conflict"
 
 
 def test_context_is_required_before_coverage_can_skip_additional_retrieval():

@@ -19,7 +19,6 @@ from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
 from app.features.agent import builtin_runtime, mcp_server
-from app.features.agent.answer_validation import combine_validations, validation_content
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.confirmation import (
     CONFIRMATION_TOOL,
@@ -70,7 +69,6 @@ def agents(monkeypatch: MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
     settings = get_settings()
     # 台本のモデルはツールを呼ばずに答えるので、最終の検証と拒答のガードは外す。
-    monkeypatch.setattr(settings, "agent_final_validation_enabled", False)
     monkeypatch.setattr(settings, "agent_tool_grounding_required", False)
     for agent_id, name in ((AGENT_ID, "経理の Agent"), (OTHER_AGENT_ID, "人事の Agent")):
         runtime_repository.create_agent(
@@ -538,79 +536,6 @@ def test_audit_shows_mcp_runs_with_the_key_name(agents: None) -> None:
     assert ",mcp,経理" in exported
 
 
-def test_run_output_returns_the_passage_marks_of_the_validation() -> None:
-    """agent_chat・agent_get_run は、最終の検証の段落の印・外した段落・回答の警告を返す（#2738）。
-
-    本文（answer）には同じ内容の節が付く（本文だけを読む利用者のため）。
-    """
-    kept = "申請は翌月10日までです。"
-    unverified = "申請後は自動で通知されます。"
-    removed = "申請は郵送でもできます。"
-    answer = f"{kept}\n\n{unverified}\n\n{removed}"
-    result = {
-        "valid": False,
-        "status": "completed",
-        "claims": [
-            {"answer_quote": kept, "status": "supported", "chunk_id": "c1", "reason": "記載"},
-            {"answer_quote": unverified, "status": "unsupported", "reason": "記載が無い"},
-            {"answer_quote": removed, "status": "contradicted", "reason": "窓口だけ"},
-        ],
-        "findings": [
-            {
-                "check": "requests",
-                "code": "request_missing",
-                "severity": "error",
-                "message": "要求「費用」に答えていません。",
-            }
-        ],
-        "missing_evidence": [],
-        "stale_evidence": [],
-    }
-    content, published = combine_validations(
-        answer, [validation_content("completed", connection="rag", result=result)]
-    )
-    run = RunState(
-        id="run_marks",
-        goal="申請の期限は？",
-        agent_id=AGENT_ID,
-        status=RunStatus.COMPLETED,
-        artifacts=[
-            Artifact(name="回答", kind="answer", content={"text": published}),
-            Artifact(name="資料との照合", kind="answer_validation", content=content),
-        ],
-    )
-
-    output = mcp_server.run_output(run).model_dump()
-
-    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION
-    assert output["answer"].startswith(f"{kept}\n\n{unverified}\n\n**根拠と矛盾し除いた内容**")
-    assert output["passage_marks"] == [
-        {
-            "text": unverified,
-            "state": "unverified",
-            "reasons": [
-                {"code": "unsupported", "label": "根拠で確かめられない", "detail": "記載が無い"}
-            ],
-        }
-    ]
-    assert output["removed_passages"] == [
-        {
-            "text": removed,
-            "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": "窓口だけ"}],
-        }
-    ]
-    assert output["answer_warnings"] == [
-        {
-            "code": "requests",
-            "label": "質問の要求の一部に答えていない",
-            "detail": "要求「費用」に答えていません。",
-        }
-    ]
-    # 完了していない Run には返さない。
-    running = run.model_copy(update={"status": RunStatus.RUNNING})
-    assert mcp_server.run_output(running).passage_marks == []
-
-
 def _evidence_run(items: list[dict[str, Any]], *, outcome: object = None) -> RunState:
     """成果物「回答の根拠」を保存した完了の Run（合成の値）。"""
     answer: dict[str, Any] = {"text": "合成の回答"}
@@ -649,7 +574,7 @@ def test_run_output_v3_returns_the_outcome_and_the_rag_ids_of_the_sources() -> N
         outcome={"schema_version": 1, "value": "conditional", "basis": "basis-canary"},
     )
     output = mcp_server.run_output(run).model_dump()
-    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION == 4
+    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION == 5
     assert (output["outcome"], output["withheld_evidence_count"]) == ("conditional", 0)
     # 引用した根拠だけ。会話の添付の根拠は RAG の文書ではないので ID を出さない。
     assert [

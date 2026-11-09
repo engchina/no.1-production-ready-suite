@@ -391,11 +391,6 @@ def _full_run(setup: Setup) -> RunState:
                     ],
                 },
             ),
-            Artifact(
-                name="資料との照合",
-                kind="answer_validation",
-                content={"status": "completed", "detail": CANARIES["error"]},
-            ),
         ],
         created_at=T0,
     )
@@ -414,11 +409,7 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "thread_id": run.thread_id,
     }
     assert (output["agent_version"], output["trace_id"]) == (3, TRACE_ID)
-    assert (output["status"], output["outcome"], output["validation_status"]) == (
-        "completed",
-        "answered",
-        "completed",
-    )
+    assert (output["status"], output["outcome"]) == ("completed", "answered")
     assert output["created_at"].startswith("2026-10-25T01:00:00")
     assert output["finished_at"].startswith("2026-10-25T01:10:00")
     assert output["usage"] == {

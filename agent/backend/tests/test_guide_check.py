@@ -120,7 +120,6 @@ def _lookup_output(argument: Any) -> dict[str, Any]:
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch, outputs={"rag_lookup_guides": _lookup_output})
     # 最終の検証（#1246）はこのテストの対象外（対応は回答の段落と step から決める）。
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
@@ -446,7 +445,6 @@ def test_agent_question_on_a_guide_condition_becomes_the_condition_card(
 
     答え（自由入力）は次の Run で業務ガイドの条件になり、照合・最終の検証の業務ガイドに渡る。
     """
-    from app.features.agent.answer_validation import connection_check_inputs
     from app.features.agent.confirmation import CONFIRMATION_TOOL, ConfirmationAnswer
 
     ask = {
@@ -497,7 +495,3 @@ def test_agent_question_on_a_guide_condition_becomes_the_condition_card(
     assert state is not None
     assert state["pending_clarifications"] == []
     assert state["known_conditions"]["target"]["value"] == SCOPE_REPLY
-    # 最終の検証には、条件の分かった業務ガイドを渡す。
-    inputs = connection_check_inputs(list(second.steps), "rag__rag_retrieve_evidence")
-    assert inputs["guide"]["guide_id"] == "g-access"
-    assert inputs["guide"]["conditions"] == {"target": SCOPE_REPLY}

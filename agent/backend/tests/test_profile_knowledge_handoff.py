@@ -115,7 +115,6 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     return model
 
 
@@ -162,14 +161,12 @@ def test_profile_knowledge_reaches_the_model_apart_from_the_evidence(
     assert output["profile_knowledge"]["rules_omitted"] == 1
     assert APPROVED_POLICY not in json.dumps(output["evidence"], ensure_ascii=False)
 
-    # 回答の根拠（AI に渡した根拠・引用）と最終の検証の根拠は資料の根拠だけ。
+    # 回答の根拠（AI に渡した根拠・引用）は資料の根拠だけ。
     [artifact] = [item for item in finished.artifacts if item.kind == ANSWER_EVIDENCE_KIND]
     assert APPROVED_POLICY not in json.dumps(artifact.content, ensure_ascii=False)
     assert {item["chunk_id"] for item in artifact.content["items"]} == {
         item["chunk_id"] for item in retrieved["evidence"]
     }
-    [validation] = mcp.calls_of("rag_validate_answer")
-    assert "r-approved" not in {item["chunk_id"] for item in validation["arguments"]["evidence"]}
 
     # 渡した内容は Run の step（全文）とログ（数と版だけ）で追える。
     [step] = [

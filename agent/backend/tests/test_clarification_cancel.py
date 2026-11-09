@@ -95,7 +95,6 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(
         monkeypatch, outputs={"nl2sql_query": _nl2sql_query, "rag_search": _rag_search}
     )
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     # nl2sql_query は承認が要る（readOnlyHint=false）。会話の流れの確認では承認なしで呼ぶ。
     monkeypatch.setattr(
         builtin_runtime, "_active_policy", lambda: ToolPolicy(allow={"nl2sql__nl2sql_query"})
@@ -414,7 +413,6 @@ def test_cancelling_the_rag_clarification_continues_without_rag_with_the_same_re
     [pending] = _state(first)["pending_clarifications"]
     assert (pending["kind"], pending["condition_id"]) == ("rag", "screen")
 
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     model = _script(monkeypatch, [assistant_message("一般的には、取り消しは管理者に依頼します。")])
     run = _run(goal, thread_id=first.thread_id, cancel=cancel)
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
@@ -433,12 +431,6 @@ def test_cancelling_the_rag_clarification_continues_without_rag_with_the_same_re
     state = _state(run)
     assert state["pending_clarifications"] == []
     assert state["clarification_cancellations"] == [record]
-    # 資料を使わずに答えた回答に「資料で確かめていない」を足さない（照合の対象外）。
-    validation = next(item for item in run.artifacts if item.kind == "answer_validation")
-    assert (validation.content["status"], validation.content["reason"]) == (
-        "skipped",
-        "rag_declined",
-    )
     answer = next(item for item in run.artifacts if item.kind == "answer")
     assert answer.content["text"] == "一般的には、取り消しは管理者に依頼します。"
 

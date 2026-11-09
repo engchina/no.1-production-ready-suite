@@ -2,20 +2,16 @@ import { useId, type ReactNode } from "react";
 import { Info, ShieldCheck } from "lucide-react";
 import { Disclosure, StatusBadge, TEXT_ICON_SIZE, type StatusVariant } from "@production-ready/ui";
 
-import type { AnswerReview, ConditionSource, ReviewOutcome, ReviewValidation } from "@/lib/answer-review";
+import type { AnswerReview, ConditionSource, ReviewOutcome } from "@/lib/answer-review";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /**
- * 資料との照合（#1286・#2361）。回答の下に、照合の結果（回答の対応と照合のバッジ）を 1 行で出す。確かめた条件・
- * 確認待ちの質問・使った業務ガイド・足りない情報、照合できなかった・対象外の理由があるときだけ、同じ行を開いて
- * 見られるようにする（出典と同じ plain の Disclosure）。印の付いた段落・外した段落の一覧は回答の本文の節
- * 「確認が必要な点」「根拠と矛盾し除いた内容」（段落の印の記録の無い過去の Run は「資料から確認できなかった事項」）の
- * 1 か所だけに出し、ここには件数のバッジだけを出す（#2738）。
- * 成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の監査ログで、監査の閲覧の権限のある利用者だけが見る。#2403）。
+ * 回答の確認事項（#1286・#2361）。回答の下に、回答の対応のバッジと、確かめた条件・確認待ちの質問・
+ * 使った業務ガイド・足りない情報を、見られるようにする（出典と同じ plain の Disclosure）。
+ * 成果物の JSON・内部の語は出さない（handoff §13）。
  */
 export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; testId: string }) {
   const hasDetails =
-    (review.validation !== null && validationMessage(review.validation) !== null) ||
     review.conditions.length > 0 ||
     review.clarifications.length > 0 ||
     review.guide !== null ||
@@ -26,7 +22,6 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
     <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 [&_[data-status-variant]]:-my-0.5">
       <span className="whitespace-nowrap">{t("chat.review.title")}</span>
       {review.outcome ? <OutcomeBadge outcome={review.outcome} testId={`${testId}-outcome`} /> : null}
-      {review.validation ? <ValidationBadge validation={review.validation} /> : null}
     </span>
   );
   return (
@@ -43,8 +38,8 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
         >
           <AnswerReviewSections review={review} />
         </Disclosure>
-      ) : review.outcome || review.validation ? (
-        // 開いても中身が無い（対応と照合のバッジだけ）ときは、畳まずに見出しだけを出す（⌄ を出さない）。
+      ) : review.outcome ? (
+        // 開いても中身が無い（対応のバッジだけ）ときは、畳まずに見出しだけを出す（⌄ を出さない）。
         <p className="flex items-start gap-1.5 text-xs font-medium text-fg" data-testid={testId}>
           <span className="pr-icon-line text-fg-muted">
             <ShieldCheck size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
@@ -56,7 +51,7 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
   );
 }
 
-/** 資料との照合の中身（チャットの回答の下で使う）。 */
+/** 回答の確認事項の中身（チャットの回答の下で使う）。 */
 function AnswerReviewSections({ review }: { review: AnswerReview }) {
   return (
     <div className="space-y-3 text-xs [overflow-wrap:anywhere]">
@@ -122,7 +117,6 @@ function AnswerReviewSections({ review }: { review: AnswerReview }) {
         </ReviewGroup>
       ) : null}
 
-      {review.validation ? <ValidationGroup validation={review.validation} /> : null}
     </div>
   );
 }
@@ -136,20 +130,6 @@ function ReviewGroup({ title, testId, children }: { title: string; testId: strin
       </p>
       {children}
     </div>
-  );
-}
-
-/**
- * 照合の結果の説明（照合できなかった・対象外の理由だけ。#2361）。見出しのバッジと同じ内容（小見出し・バッジ）と、
- * 回答の本文の節にある除いた内容・その説明は出し直さない。
- */
-function ValidationGroup({ validation }: { validation: ReviewValidation }) {
-  const message = validationMessage(validation);
-  if (message === null) return null;
-  return (
-    <p className="break-words text-fg" data-testid="answer-review-validation">
-      {message}
-    </p>
   );
 }
 
@@ -182,7 +162,7 @@ const OUTCOME_BADGE: Record<ReviewOutcome, { variant: StatusVariant; label: I18n
   insufficient_evidence: { variant: "danger", label: "chat.review.outcome.insufficientEvidence" },
 };
 
-/** 回答の対応のバッジ（チャットの資料との照合の見出しと、実行の詳細の回答で使う。アイコン付き）。 */
+/** 回答の対応のバッジ（チャットの回答の確認事項の見出しと、実行の詳細の回答で使う。アイコン付き）。 */
 export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; testId: string }) {
   const { variant, label } = OUTCOME_BADGE[outcome];
   return (
@@ -190,61 +170,4 @@ export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; test
       <StatusBadge variant={variant} label={t(label)} />
     </span>
   );
-}
-
-/**
- * 旧記録の照合状態。段落ごとの印がある回答では詳細の注意事項だけを表示する。
- */
-function ValidationBadge({ validation }: { validation: ReviewValidation }) {
-  if (validation.state === "marked") {
-    return null;
-  }
-  const { variant, label } = validationBadge(validation);
-  return <StatusBadge variant={variant} label={label} />;
-}
-
-function validationBadge(validation: ReviewValidation): { variant: StatusVariant; label: string } {
-  switch (validation.state) {
-    case "verified":
-      return { variant: "success", label: t("chat.review.state.verified") };
-    case "marked":
-      // 印の数のバッジ（ValidationBadge が出す）。ここには来ない。
-      return { variant: "warning", label: t("chat.review.state.unverifiedPointsNoCount") };
-    case "withheld": {
-      // 段落の印の記録の無い過去の Run（#2738）。件数は本文の節の項目の数（節と一致させる。#2361）。節の記録が無い
-      // 古い Run は外した段落の数。本文を載せなかった Run は件数なし。
-      const count = validation.withheldAll ? 0 : validation.listedItems || validation.withheldClaims;
-      return count > 0
-        ? { variant: "warning", label: t("chat.review.state.unverifiedPoints", { count }) }
-        : { variant: "warning", label: t("chat.review.state.unverifiedPointsNoCount") };
-    }
-    case "unvalidated":
-      return { variant: "warning", label: t("chat.review.state.unvalidated") };
-    case "skipped":
-      return { variant: "neutral", label: t("chat.review.state.skipped") };
-  }
-}
-
-/**
- * 開いた中に出す説明。照合できなかった・対象外の理由だけで、照合済み・除いた内容があるとき（バッジと本文の節で
- * 分かる）は null。
- */
-function validationMessage(validation: ReviewValidation): string | null {
-  switch (validation.state) {
-    case "verified":
-    case "marked":
-    case "withheld":
-      return null;
-    case "unvalidated":
-      return validation.cause === "noEvidence"
-        ? t("chat.review.message.noEvidence")
-        : t("chat.review.message.unvalidated");
-    case "skipped":
-      if (validation.cause === "emptyAnswer") return t("chat.review.message.skippedEmpty");
-      if (validation.cause === "clarification") return t("chat.review.message.skippedClarification");
-      if (validation.cause === "absenceOnly") return t("chat.review.message.skippedAbsenceOnly");
-      if (validation.cause === "ragDeclined") return t("chat.review.message.skippedRagDeclined");
-      if (validation.cause === "noToolGrounding") return t("chat.review.message.skippedNoToolGrounding");
-      return t("chat.review.message.skipped");
-  }
 }

@@ -121,57 +121,9 @@ class RagReadableDocumentsIn(_ContractInput):
     document_ids: list[str] = Field(min_length=1, max_length=200)
 
 
-class RagValidateRequestIn(_ContractInput):
-    id: str = Field(min_length=1, max_length=64)
-    text: str = Field(default="", max_length=2000)
-    status: Literal["addressed", "partial", "missing", "unknown"]
-
-
-class RagValidateGuideIn(_ContractInput):
-    search_answer_profile_id: str = Field(min_length=1, max_length=128)
-    guide_id: str = Field(min_length=1, max_length=64)
-    revision: int = Field(ge=1)
-    conditions: dict[str, str] | None = None
-
-
-class RagValidatePremiseIn(_ContractInput):
-    # 利用者が回答前の確認で答えた前提（#1898）。
-    question: str = Field(default="", max_length=1000)
-    answer: str = Field(min_length=1, max_length=2000)
-
-
-class RagValidateDataResultIn(_ContractInput):
-    # 業務データの照会の結果（#1950）。
-    source: str = Field(default="", max_length=200)
-    question: str = Field(default="", max_length=1000)
-    sql: str = Field(default="", max_length=4000)
-    result: str = Field(min_length=1, max_length=4000)
-
-
 class RagAnswerRangeIn(_ContractInput):
     start: int = Field(ge=0, le=20000)
     end: int = Field(ge=0, le=20000)
-
-
-class RagPassageCitationIn(_ContractInput):
-    # 段落ごとの出典（#104）。
-    answer_range: RagAnswerRangeIn
-    chunk_ids: list[str] = Field(min_length=1, max_length=30)
-
-
-class RagValidateAnswerIn(_ContractInput):
-    query: str = Field(min_length=1, max_length=8000)
-    answer: str = Field(min_length=1, max_length=20000)
-    evidence: list[RagEvidenceRefIn] = Field(min_length=1, max_length=30)
-    # 決定的な検査の任意の入力（#1276）。
-    requests: list[RagValidateRequestIn] | None = Field(default=None, max_length=30)
-    gaps: list[str] | None = Field(default=None, max_length=30)
-    guide: RagValidateGuideIn | None = None
-    # 監査の判定を再利用する rag_search の回答の記録（#1527）。
-    answer_trace_ids: list[str] = Field(default_factory=list, max_length=10)
-    premises: list[RagValidatePremiseIn] = Field(default_factory=list, max_length=10)
-    data_results: list[RagValidateDataResultIn] = Field(default_factory=list, max_length=10)
-    passage_citations: list[RagPassageCitationIn] = Field(default_factory=list, max_length=300)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):
@@ -449,7 +401,6 @@ class FakeProductMcp:
                     self._tool("rag_outline", RagOutlineIn),
                     self._tool("rag_read_document", RagReadDocumentIn),
                     self._tool("rag_read_section", RagReadSectionIn),
-                    self._tool("rag_validate_answer", RagValidateAnswerIn),
                     McpTool(
                         name="rag_readable_documents",
                         description="rag_readable_documents",

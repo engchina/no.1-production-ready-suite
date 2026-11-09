@@ -20,7 +20,6 @@ from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, McpToolError, fake_prod
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_validation import ANSWER_VALIDATION_KIND
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.runtime import (
     AgentProfile,
@@ -290,7 +289,6 @@ def _read_section(argument: Any) -> dict[str, Any]:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch, outputs={"rag_read_section": _read_section})
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
@@ -543,33 +541,6 @@ def test_cancelled_run_is_not_sent_back(monkeypatch: MonkeyPatch, mcp: FakeProdu
     # 取消の前に送った読み取りの結果は、事実のまま記録する。
     [step] = run.steps
     assert step.status == "completed"
-
-
-def test_coverage_is_kept_apart_from_the_claim_validation(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
-    validate: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
-    validate["claims"] = [
-        {"answer_quote": PART_1, "status": "supported", "chunk_id": "doc-a:sec-a:27"}
-    ]
-    mcp.outputs["rag_validate_answer"] = validate
-    _script(
-        monkeypatch,
-        _read("c1", section_id="sec-a"),
-        [assistant_message(PART_1)],
-        [assistant_message(PART_1)],
-    )
-
-    run = _run()
-
-    validation = [item for item in run.artifacts if item.kind == ANSWER_VALIDATION_KIND][-1]
-    # 主張は根拠で確かめられた（照合は通る）が、手順の全体は確かめられていない。
-    assert validation.content["valid"] is True
-    coverage = validation.content["coverage"]
-    assert coverage["status"] == "incomplete"
-    assert [item["section_id"] for item in coverage["sections"]] == ["sec-a"]
-    assert f"**{UNREAD_SECTIONS_HEADING}**" in _answer(run)["text"]
 
 
 # ---- 読み始めていない章節（根拠の抜粋だけで答えた。#2503） ------------------------------------

@@ -18,7 +18,6 @@ export const USER_OUTPUT_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
 
 /**
  * 最終回答に付けた回答の注意書き（#2405。`answer` の成果物の `notice`）。付けていない回答・古い Run は null。
- * 資料との照合（`answer_validation`）の `notice`（照合の結果の見出し）とは別のもの。
  */
 export function answerNoticeText(artifacts: readonly Pick<Artifact, "kind" | "content">[]): string | null {
   for (const artifact of [...artifacts].reverse()) {

@@ -280,7 +280,6 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             "rag_retrieve_evidence": retrieve,
         },
     )
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,

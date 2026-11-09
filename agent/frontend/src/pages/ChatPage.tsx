@@ -68,14 +68,12 @@ import {
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
 import {
-  ANSWER_VALIDATION_KIND,
   answerReview,
   cancelledClarificationKinds,
   pendingClarificationKinds,
-  runAnswerPassages,
 } from "@/lib/answer-review";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
-import { answerStructureTitles, noticeHeading, structureAnswer, withoutFrameHeading } from "@/lib/answer-structure";
+import { answerStructureTitles, structureAnswer, withoutFrameHeading } from "@/lib/answer-structure";
 import { chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
@@ -1017,20 +1015,10 @@ function RunChatTurn({
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 回答の本文の節（要約 →「資料により確認できた事項」と根拠の行 →「資料から確認できなかった事項」。RAG のチャットと
   // 同じ形。#2328）。段落に根拠を結び付けられないときは今までの Markdown の描き方にする。
-  // 段落の印・外した段落・回答全体の注意（#2738）。記録の無い過去の Run は null（今までの表示のまま）。
-  const passages = useMemo(() => runAnswerPassages(run.artifacts), [run.artifacts]);
   const answerBlocks = useMemo(
     () =>
-      answer && (evidence || passages)
-        ? structureAnswer(
-            answer,
-            evidence,
-            noticeHeading(latestContent(run.artifacts, ANSWER_VALIDATION_KIND)),
-            answerStructureTitles(),
-            passages
-          )
-        : null,
-    [answer, evidence, passages, run.artifacts]
+      answer && evidence ? structureAnswer(answer, evidence, null, answerStructureTitles(), null) : null,
+    [answer, evidence]
   );
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
   const cancelledKinds = cancelledClarificationKinds(run);
@@ -1150,7 +1138,6 @@ function RunChatTurn({
                 runId={run.id}
                 blocks={answerBlocks}
                 evidence={evidence}
-                passages={passages}
                 markdownHeadingLevel={4}
                 testId={`chat-answer-${run.id}`}
               />
@@ -1387,14 +1374,6 @@ function answerText(artifacts: Artifact[]): string | null {
       // 本文の先頭の「## 回答」は枠の見出し（ChatAnswerBody）と重なるので除く（#4061）。
       return withoutFrameHeading(artifact.content.text, DEFAULT_CHAT_ANSWER_BODY_LABELS.heading);
     }
-  }
-  return null;
-}
-
-/** 最も新しい成果物の内容（無ければ null）。 */
-function latestContent(artifacts: Artifact[], kind: string): Record<string, unknown> | null {
-  for (const artifact of [...artifacts].reverse()) {
-    if (artifact.kind === kind) return artifact.content;
   }
   return null;
 }

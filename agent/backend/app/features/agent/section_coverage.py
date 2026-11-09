@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from app.features.agent.answer_validation import cited_chunk_ids
+from app.features.agent.answer_references import cited_chunk_ids
 from app.features.agent.evidence_match import EvidenceText, answer_features, matched_features
 from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,

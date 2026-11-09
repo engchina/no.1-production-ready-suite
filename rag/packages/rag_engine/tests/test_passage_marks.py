@@ -11,7 +11,6 @@ import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.evaluation.answer_eval import _answer_passages
-from rag_engine.evaluation.answer_validation import claim_mark_code
 from rag_engine.generation import grounded, passage_marks
 from rag_engine.generation.answer_labels import answer_labels
 
@@ -221,29 +220,6 @@ def test_system_sections_are_not_claims():
     assert not any("根拠と矛盾（" in text for text in passages)
     assert any("対象の行の終了日を入力します。" in text for text in passages)  # 印の段落は本文の主張として数える
     assert not any("区分Ⅱの選択肢の値は 01 です。" in text for text in passages)  # 外した説明は数えない
-
-
-@pytest.mark.parametrize(
-    ("status", "support_check", "expected"),
-    [
-        ("contradicted", "", "contradicted"),
-        ("unsupported", "", "unsupported"),
-        ("unsupported", "target_mismatch", "target_mismatch"),
-        ("unsupported", "value_unbound", "value_unbound"),
-        ("citation_error", "", "citation_error"),
-        ("citation_error", "quote_unmatched", "quote_unmatched"),
-        ("unassessed", "", "unassessed"),
-        ("figure_only", "", "figure_not_read"),
-        ("supported", "", ""),
-        ("data_confirmation", "", ""),
-        ("not_a_claim", "", ""),
-    ],
-)
-def test_validation_verdicts_map_to_contract_codes(status, support_check, expected):
-    """最終の検証の判定（語彙は変えない）を、契約の理由の code に写す。"""
-    code = claim_mark_code(status, support_check)
-    assert code == expected
-    assert not code or code in CODES
 
 
 def test_legacy_language_labels_fall_back_for_new_citation_causes():

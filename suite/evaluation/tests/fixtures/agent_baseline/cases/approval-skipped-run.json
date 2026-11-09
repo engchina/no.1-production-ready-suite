@@ -80,7 +80,6 @@
           "elapsed_ms": 1200.0,
           "outcome": null,
           "outcome_source": null,
-          "validation_status": "completed",
           "model_requests": 2,
           "tool_calls": {
             "rag_retrieve_evidence": 1,

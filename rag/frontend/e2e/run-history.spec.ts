@@ -59,7 +59,6 @@ interface RunRow {
   answer_generated: boolean;
   status: "success" | "blocked" | "error";
   answer_outcome: string | null;
-  verification: "verified" | "partial" | "unverified" | null;
   validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
@@ -114,7 +113,6 @@ function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
     answer_generated: chat,
     status: "success",
     answer_outcome: chat ? "answered" : null,
-    verification: chat ? "verified" : null,
     confidence: chat ? "high" : null,
     needs_human_review: chat ? false : null,
     citation_count: 2,
@@ -375,7 +373,6 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       await expect(page.getByTestId("run-history-row-run-1")).toContainText("自分");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("利用者 2");
       await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
-      await expect(page.getByTestId("run-history-row-run-1")).toContainText("確認状態が不明");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
@@ -723,7 +720,6 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(summary.locator("[data-run-status]")).toHaveCount(0);
     await summary.screenshot({path: testInfo.outputPath("summary-without-badges.png")});
     await expect(summary).toContainText("受注の登録方法 21");
-    await expect(summary.locator("[data-run-summary-heading]")).not.toContainText("照合済み");
     await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
     await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
     // 自分が実行した自分の会話は「会話の持ち主」を出さない。
@@ -1855,30 +1851,6 @@ test("実行履歴の主一覧は高い画面へ拡張してページ送りを�
 });
 
 
-test("資料照合の実行状態は未照合にまとめず、一覧と詳細で区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockLocalAuth(page);
-  const states = [
-    ["disabled", "設定で無効"], ["not_run", "未実行"], ["error", "確認処理でエラー"],
-    ["timed_out", "確認が時間切れ"], ["passed", "確認完了・問題なし"], ["failed", "確認完了・問題あり"],
-  ];
-  const rows = states.map(([execution], index) => run(index + 1, { answer_generated: true, verification: "unverified", validation_execution: execution }));
-  await mockRuns(page, rows);
-  await page.goto("/history");
-  if (testInfo.project.name === "desktop") {
-    for (const [index, [, label]] of states.entries()) {
-      await expect(page.getByTestId(`run-history-row-run-${index + 1}`)).toContainText(label);
-    }
-  }
-  for (const [index] of states.entries()) {
-    await page.goto(`/history/run-${index + 1}`);
-    await page.getByTestId("run-history-timeline-summary").click();
-    await page.getByTestId("run-history-process-details").click();
-    await expect(page.getByTestId("answer-validation-status")).toHaveCount(0);
-  }
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
-});
-
 test("全工程の詳細を五つのタブで確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1);
@@ -1901,31 +1873,6 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("LLM 4 回");
   await confirmTraceExplorer(page, testInfo, expect, true);
-});
-
-
-test("旧集約だけの履歴は照合済みと表示せず、実行結果を優先する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockLocalAuth(page);
-  const legacy = run(1, { answer_generated: true, verification: "verified", validation_execution: null });
-  const checked = run(2, { answer_generated: true, verification: "verified", validation_execution: "passed" });
-  await mockRuns(page, [legacy, checked]);
-  await page.goto("/history");
-  await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
-  if (testInfo.project.name === "desktop") {
-    await expect(page.getByTestId("run-history-row-run-1")).toContainText("確認状態が不明");
-    await expect(page.getByTestId("run-history-row-run-1")).not.toContainText("照合済み");
-    await expect(page.getByTestId("run-history-row-run-2")).toContainText("確認完了・問題なし");
-  } else {
-    await expect(page.getByRole("columnheader", { name: "資料との照合" })).toBeHidden();
-  }
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("history-verification-evidence.png") });
-  await page.goto("/history/run-1");
-  await expect(page.getByRole("heading", { name: "実行の詳細", exact: true })).toBeVisible();
-  await expect(page.getByRole("main")).not.toContainText("照合済み");
-  await page.goto("/history/run-2");
-  await expect(page.getByRole("main")).not.toContainText("照合済み");
-  await expectNoPageOverflow(page);
 });
 
 

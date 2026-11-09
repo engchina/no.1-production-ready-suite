@@ -14,8 +14,8 @@ from fastapi import Request
 from mcp_support import FakeProductMcp
 from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT, AnswerNoticeRecord
 from pytest import MonkeyPatch
-from test_answer_validation import AGENT_ID, ANSWER, USER_UUID, _searched_run
-from test_answer_validation import mcp as mcp  # noqa: F401 - fixture
+from answer_run_fixtures import AGENT_ID, ANSWER, USER_UUID, _searched_run
+from answer_run_fixtures import mcp as mcp  # noqa: F401 - fixture
 
 from app.features.agent import mcp_server
 from app.features.agent.answer_notice import answer_takes_notice
@@ -34,7 +34,7 @@ def _answer_content(run: Any) -> dict[str, Any]:
     return cast(dict[str, Any], artifact.content)
 
 
-def test_answer_gets_notice_after_final_validation(
+def test_answer_gets_notice_outside_the_body(
     monkeypatch: MonkeyPatch,
     mcp: FakeProductMcp,  # noqa: F811
 ) -> None:
@@ -44,10 +44,8 @@ def test_answer_gets_notice_after_final_validation(
     content = _answer_content(run)
     assert content["notice"] == DEFAULT_ANSWER_NOTICE_TEXT
     assert run_answer_notice(run) == DEFAULT_ANSWER_NOTICE_TEXT
-    # 本文と最終の検証の入力には入れない。
+    # 本文には入れない。
     assert run_answer_text(run) == ANSWER
-    [call] = mcp.calls_of("rag_validate_answer")
-    assert DEFAULT_ANSWER_NOTICE_TEXT not in call["arguments"]["answer"]
 
     # 続きの質問でモデルに渡す会話の履歴（前の回答の本文）にも入れない。
     follow_up = runtime_repository.create_builtin_run(

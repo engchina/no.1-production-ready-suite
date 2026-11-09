@@ -192,14 +192,13 @@ class _Tree:
 def rag(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
     fake.outputs["rag_retrieve_evidence"] = _rag_server(fake, "rag_retrieve_evidence")
-    with _agent({"rag": ["rag_retrieve_evidence", "rag_lookup_guides", "rag_validate_answer"]}):
+    with _agent({"rag": ["rag_retrieve_evidence", "rag_lookup_guides"]}):
         yield fake
 
 
 def test_tool_call_with_mcp_to_rag_nests_each_step_under_its_owner(
     monkeypatch: MonkeyPatch, rag: FakeProductMcp
 ) -> None:
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     _script(
         monkeypatch,
         [
@@ -229,8 +228,6 @@ def test_tool_call_with_mcp_to_rag_nests_each_step_under_its_owner(
         (CHAT, "plan", None),
         (TOOL, "tool", "rag__rag_retrieve_evidence"),
         (CHAT, "respond", None),
-        # 回答の最終の検証（#1246）は Runtime の独立の工程。
-        (TOOL, "tool", "rag__rag_validate_answer"),
     ]
     evidence = tree.tool("rag__rag_retrieve_evidence")
     # 業務ガイドの照合（#1322）は根拠の取得の一部なので、根拠の取得のツールの子（#3471）。
@@ -244,8 +241,6 @@ def test_tool_call_with_mcp_to_rag_nests_each_step_under_its_owner(
     assert tree.parent(evidence_call) == evidence
     [guides_call] = tree.tools_call("rag_lookup_guides")
     assert tree.parent(guides_call) == guides
-    [validate_call] = tree.tools_call("rag_validate_answer")
-    assert tree.parent(validate_call) == tree.tool("rag__rag_validate_answer")
     # 呼び先（RAG）の server の span は、送った `tools/call` の `mcp.request` の子で、RAG の工程は
     # その下（同じ trace）。
     [server] = tree.all(SERVER)

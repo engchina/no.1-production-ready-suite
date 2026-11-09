@@ -546,7 +546,6 @@ def test_nl2sql_query_gets_no_approval_guidance_and_can_be_called_again(
         [function_call(function, arguments, call_id="call-2")],
         [assistant_message("合成の回答です。")],
     )
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     try:
         run_id = _create_run()
         anyio.run(builtin_runtime.execute_run, run_id)

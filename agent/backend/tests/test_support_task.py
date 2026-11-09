@@ -378,7 +378,7 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
     assert len(env.mcp.calls_of("rag_search")) == 1
     assert len(env.mcp.calls_of("rag_read_source")) == 1
     # 最後の step は回答の最終の検証（既定 on。予算には数えない。#1277）。
-    assert [step.status for step in run.steps] == ["completed", "failed", "completed", "completed"]
+    assert [step.status for step in run.steps] == ["completed", "failed", "completed"]
     blocked = run.steps[1].tool_result
     assert blocked is not None
     assert blocked.error_code == "budget_exceeded"
@@ -555,9 +555,8 @@ def test_abandoned_run_consumption_counts_calls_stopped_before_the_result() -> N
             # 結果を受け取る前に Run が失敗・取消になった呼び出し（呼び先には届いている見込み）。
             step("rag__rag_search", "running"),
             step(LOOKUP, "cancelled"),
-            # 承認待ちのまま取り消した呼び出しと、Control Plane の検証は数えない。
+            # 承認待ちのまま取り消した呼び出しは数えない。
             step(WRITE, "cancelled", approval_id="approval-1"),
-            step("rag__rag_validate_answer", "running"),
         ]
     )
 

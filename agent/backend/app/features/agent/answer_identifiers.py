@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from app.features.agent.answer_validation import evidence_source_texts
+from app.features.agent.answer_references import evidence_source_texts
 
 if TYPE_CHECKING:
     from app.features.agent.runtime import RunStep

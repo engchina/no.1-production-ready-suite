@@ -148,11 +148,6 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
             context_text="合成の資料",
             diagnostics={
                 "outcome": "answered",
-                "answer_validation": {
-                    "status": "completed",
-                    "valid": True,
-                    "reuse_context": "version-a",
-                },
             },
             evaluation_input={"answer_text": "合成の回答", "evidence_items": []},
         )
@@ -189,14 +184,6 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
     assert json.loads(call.output.text)["sanitized_text"] == final_text
     assert response.answer == final_text == oracle.saved[-1]["answer"]
     assert response.diagnostics.answer is not None
-    validation = response.diagnostics.answer["answer_validation"]
-    assert isinstance(validation, dict)
-    assert validation["valid"] is (not changed)
-    assert validation["status"] == ("body_changed" if changed else "completed")
-    assert validation["reuse_context"] == ("" if changed else "version-a")
-    if changed:
-        assert "claim_checks" not in validation and "counts" not in validation
-        assert isinstance(validation["previous_body_validation"], dict)
     assert oracle.saved[-1]["evaluation_input"]["answer_text"] == final_text
 
 

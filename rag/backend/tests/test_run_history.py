@@ -38,7 +38,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.rag.run_history import RunRecorder, answer_verification, search_run_conditions
+from app.rag.run_history import RunRecorder, search_run_conditions
 from app.schemas.search import SearchRequest, StorageFailure
 from tests.security_support import enable_production_auth, login, login_configured_admin
 from tests.span_progress_support import RecordingTrace
@@ -105,33 +105,6 @@ def _scope(
 # ---- 回答の検証 ----
 
 
-@pytest.mark.parametrize(
-    ("statuses", "expected"),
-    [
-        (["addressed", "addressed"], "unverified"),
-        (["addressed", "partial"], "unverified"),
-        (["addressed", "missing"], "unverified"),
-        (["addressed", "unknown"], "unverified"),
-        (["unknown"], "unverified"),
-        ([], "unverified"),
-    ],
-    ids=["all-addressed", "partial", "missing", "unknown-mixed", "all-unknown", "no-requests"],
-)
-def test_answer_verification_does_not_infer_from_request_coverage(
-    statuses: list[str], expected: str
-) -> None:
-    diagnostics = {
-        "envelope": {"requests": [{"id": str(i), "status": s} for i, s in enumerate(statuses)]}
-    }
-    assert answer_verification(diagnostics) == expected
-
-
-def test_answer_verification_without_diagnostics() -> None:
-    assert answer_verification(None) is None
-    # 回答の構造が無い回答（承認済み FAQ・古い記録）は確かめていない。
-    assert answer_verification({"outcome": "answered"}) == "unverified"
-
-
 # ---- 記録 ----
 
 
@@ -186,7 +159,6 @@ async def test_recorder_saves_summary_trace_record_and_purges_once() -> None:
     assert first["message_id"] == "msg-1"
     assert first["model_id"] == "model-a"
     assert first["answer_outcome"] == "answered"
-    assert first["verification"] == "unverified"
     assert first["confidence"] == "high"
     # 回答を作った実行の根拠は回答の記録にあるので、ここには持たない。
     assert first["citations"] is None
@@ -194,7 +166,6 @@ async def test_recorder_saves_summary_trace_record_and_purges_once() -> None:
     assert first["stages"] == {"trace": progress}
     assert blocked["status"] == "blocked"
     assert blocked["question"] is None
-    assert blocked["verification"] is None
     # 期限切れの削除はプロセスごとに間隔を空けて 1 回。
     assert store.purged == [30]
 
@@ -286,12 +257,10 @@ async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: Monk
     assert search_only["status"] == "success"
     assert search_only["answer_generated"] is False
     assert search_only["question"] == "受注の登録方法は？"
-    assert search_only["verification"] is None
     assert search_only["citation_count"] == len(search_only["citations"]) > 0
     assert {"rag.search", "rag.evidence"} <= span_names(0)
     assert answered["answer_generated"] is True
     assert answered["citations"] is None
-    assert answered["verification"] in {"verified", "partial", "unverified"}
     assert {"rag.answer", "rag.engine.stage"} <= span_names(1)
     engine_steps = [
         update
@@ -399,7 +368,6 @@ def _row(run_id: str = "run-1", **overrides: Any) -> dict[str, object]:
         "answer_generated": 0,
         "status": "success",
         "answer_outcome": None,
-        "verification": None,
         "confidence": None,
         "needs_human_review": None,
         "citation_count": 1,
@@ -541,10 +509,8 @@ def test_list_api_requires_the_history_menu(monkeypatch: MonkeyPatch) -> None:
     assert response.status_code == 403
 
 
-@pytest.mark.parametrize("validation", [None, {"status": "completed", "valid": True}])
 def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     monkeypatch: MonkeyPatch,
-    validation: dict[str, object] | None,
 ) -> None:
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions("viewer", ["menu.history"])
@@ -580,7 +546,6 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
         "diagnostics_json": {
             "outcome": "answered",
             "execution_steps": [],
-            **({"answer_validation": validation} if validation else {}),
         },
         "evaluation_input_json": None,
         "evaluation_json": None,
@@ -597,7 +562,6 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
                         answer_generated=1,
                         conversation_id="conv-1",
                         message_id="synthetic-message",
-                        verification="verified",
                         answer_outcome="answered",
                     ),
                     "question_full": "受注の登録方法は？（全文）",
@@ -632,7 +596,6 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     # 処理の経過（trace）・段・工程の秒の古い形式の項目は返さない。
     assert not {"stages", "steps", "stage_events", "progress_events", "trace_summary"} & set(data)
     assert data["feedback"][0]["feedback_id"] == "fb-1"
-    assert data["verification"] == ("verified" if validation else "unverified")
     assert data["error_code"] is None
     assert data["storage_failures"] == [
         {"step": "chat_message_save", "error_type": "DatabaseError", "error_code": "ORA-40441"}
@@ -857,28 +820,6 @@ async def test_pipeline_returns_answer_when_answer_record_save_fails(
         settings=Settings(rag_answer_record_retention_days=30),
     ).run(SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"))
     assert purged.storage_failures == []
-
-
-@pytest.mark.parametrize(
-    ("validation", "expected"),
-    [
-        ({"status": "completed", "valid": True}, "verified"),
-        (
-            {"status": "completed", "valid": False, "counts": {"supported": 1, "unsupported": 1}},
-            "partial",
-        ),
-        ({"status": "error", "valid": False}, "unverified"),
-    ],
-)
-def test_final_validation_overrides_request_audit_verification(
-    validation: dict[str, object],
-    expected: str,
-) -> None:
-    diagnostics = {
-        "envelope": {"requests": [{"status": "addressed"}]},
-        "answer_validation": validation,
-    }
-    assert answer_verification(diagnostics) == expected
 
 
 async def test_search_recorder_keeps_the_screen_conditions() -> None:
@@ -1299,10 +1240,8 @@ def test_list_api_returns_the_usage_totals_without_reading_the_stages(
     list_sql = pool.connection.calls[0].statement
     assert "JSON_VALUE(r.stages_json, '$.usage.total_tokens'" in list_sql
     assert "JSON_VALUE(r.stages_json, '$.usage.measurement'" in list_sql
-    # 処理の段・trace 全体を読まず、利用量2値と照合実行状態だけを取り出す。
-    assert "JSON_VALUE(r.stages_json, '$.validation_execution'" in list_sql
     assert "JSON_QUERY(r.stages_json, '$.usage.models'" in list_sql
-    assert list_sql.count("stages_json") == 4
+    assert list_sql.count("stages_json") == 3
     # ページ（並べ替えと件数の切り出し）は run_id だけで決め、列はページの行だけで読む。
     assert "WITH run_page AS ( SELECT r.run_id FROM rag_run_history r WHERE" in list_sql
     assert "JOIN run_page pg ON pg.run_id = r.run_id" in list_sql
@@ -1424,29 +1363,6 @@ def test_detail_api_reads_only_recorded_diagnosis_not_exception_type(
     assert response.status_code == 200, response.text
     assert response.json()["data"]["failure_diagnosis"] == expected
     assert "secret" not in response.text
-
-
-@pytest.mark.parametrize("verification", ["verified", "partial", "unverified"])
-def test_legacy_run_summary_does_not_infer_verification(verification: str) -> None:
-    from app.api.routes.history import _summary_fields
-
-    fields = _summary_fields({"answer_generated": 1, "verification": verification}, {})
-    assert fields["validation_execution"] is None
-    assert fields["verification"] == "unverified"
-
-
-@pytest.mark.parametrize(
-    "validation",
-    [
-        {"valid": True},
-        {"status": "disabled", "valid": True},
-        {"status": "error", "counts": {"supported": 1}},
-    ],
-)
-def test_only_completed_validation_can_establish_verification(
-    validation: dict[str, object],
-) -> None:
-    assert answer_verification({"answer_validation": validation}) == "unverified"
 
 
 @pytest.mark.parametrize(

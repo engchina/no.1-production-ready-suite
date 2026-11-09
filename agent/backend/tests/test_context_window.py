@@ -320,7 +320,6 @@ def test_provider_overflow_is_detected_from_the_error(
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     """RAG の根拠の収集と本文の読み取りを使う業務 Agent。"""
     fake = fake_product_mcp(monkeypatch)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
@@ -381,27 +380,6 @@ def _serve_evidence(mcp: FakeProductMcp, count: int) -> None:
     mcp.outputs["rag_retrieve_evidence"] = output
 
 
-def _validate_cited(argument: BaseModel) -> dict[str, Any]:
-    """渡された根拠のうち、回答が書いた chunk の id を裏付けとして返す検証の結果。"""
-    answer = str(getattr(argument, "answer", ""))
-    evidence = list(getattr(argument, "evidence", []) or [])
-    claims = [
-        {
-            "answer_quote": answer,
-            "status": "supported",
-            "chunk_id": ref.chunk_id,
-            "reason": "合成の根拠に書かれている。",
-        }
-        for ref in evidence
-        if ref.chunk_id in answer
-    ]
-    return {
-        **deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"]),
-        "counts": {"supported": len(claims), "unsupported": 0, "contradicted": 0},
-        "claims": claims,
-    }
-
-
 def _tool_outputs(call_input: Any) -> dict[str, str]:
     return {
         item["call_id"]: item["output"]
@@ -425,11 +403,10 @@ def _metric(model: str, trigger: str, outcome: str) -> float:
     return value
 
 
-def test_run_compacts_older_evidence_and_keeps_validation_working(
+def test_run_compacts_older_evidence_and_keeps_full_evidence_in_steps(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
     _serve_evidence(mcp, 40)
-    mcp.outputs["rag_validate_answer"] = _validate_cited
     answer = "合成の本文の文が書かれています（chunk-a-3、chunk-b-7）。"
     model = _script(
         monkeypatch,
@@ -488,15 +465,6 @@ def test_run_compacts_older_evidence_and_keeps_validation_working(
     assert record["estimated_tokens_before"] > record["budget_tokens"]
     assert [(item["call_id"], item["latest"]) for item in record["outputs"]] == [("call-1", False)]
     assert _metric("test-model-2383", "budget", "compacted") == before + 1
-    # 回答の検証は step の根拠（全文）で、回答が書いた根拠の ID と本文の対応のまま動く。
-    [validation_call] = mcp.calls_of("rag_validate_answer")
-    sent = {
-        (ref["document_id"], ref["chunk_id"]) for ref in validation_call["arguments"]["evidence"]
-    }
-    assert {("doc-a-3", "chunk-a-3"), ("doc-b-7", "chunk-b-7")} <= sent
-    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
-    assert validation.content["status"] == "completed"
-    assert validation.content["valid"] is True
 
 
 def test_input_that_cannot_fit_fails_before_calling_the_model(

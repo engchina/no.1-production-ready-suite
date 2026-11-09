@@ -9,7 +9,7 @@
 - 品質の差は #2582 の対応のある比較（`paired_comparison`。単位はケース、95% の MOVER 区間）と、
   悪化 / 改善したケース（`compare_jobs` の行）。
 - 補助が動いたか（`aid_activity`）は Run の記録で数える: 文脈の縮小のイベント
-  （`context_compaction`）・回答の検証の成果物（`answer_validation`。検証した）・差し戻し / 拒答の
+  （`context_compaction`）・差し戻し / 拒答の
   イベント（`tool_grounding`）。基準で動いていない補助は、外しても同じ（`not_applicable`）。
 - 判定（`decision`）: `adopt`（外すと品質が確かに下がる。補助を続ける）、`reconsider`（外すと
   品質が確かに上がる）、`undetermined`（区間が 0 をまたぐ。小標本で差が見えないことは不要の
@@ -58,14 +58,8 @@ def _distribution(values: Sequence[float]) -> dict[str, float | None]:
 def _aid_activity(run: RunState) -> dict[str, int]:
     """Run の中で補助のコード経路が動いた回数。"""
     events = [event for event in run.events if event.type == RunEventType.RUNTIME_EVENT]
-    validated = [
-        item
-        for item in run.artifacts
-        if item.kind == "answer_validation" and item.content.get("status") == "completed"
-    ]
     return {
         "context_compaction": sum(1 for event in events if "context_compaction" in event.payload),
-        "final_validation": len(validated),
         "tool_grounding": sum(1 for event in events if "tool_grounding" in event.payload),
     }
 

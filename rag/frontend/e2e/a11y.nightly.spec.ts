@@ -265,7 +265,6 @@ async function mockHistoryAndApiKeys(page: Page) {
     answer_generated: index % 2 === 0,
     status,
     answer_outcome: index % 2 === 0 ? "answered" : null,
-    verification: index % 2 === 0 ? "verified" : null,
     confidence: index % 2 === 0 ? "high" : null,
     needs_human_review: index % 2 === 0 ? false : null,
     citation_count: 1,

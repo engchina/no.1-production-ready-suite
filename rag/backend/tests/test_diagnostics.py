@@ -196,8 +196,6 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_chunk_set_retention_days",
         "rag_chunk_set_retained_versions",
         "rag_answer_timeout_seconds",
-        "rag_answer_validation_concurrency",
-        "rag_answer_validation_timeout_seconds",
         "rag_article_catalog_call_timeout_seconds",
         "rag_mcp_catalog_article_evidence_limit",
         "rag_native_index_full_optimize_interval_hours",

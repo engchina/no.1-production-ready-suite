@@ -300,12 +300,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 業務 Agent の版の履歴に残す版の数（#2356）。新しい版を公開したとき、公開日時の新しい順に
     # 超えた版を消す（公開中の版は古くても残す。版の番号は振り直さない）。
     agent_max_published_versions: int = Field(default=5, ge=1, le=100)
-    # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、
-    # 保存する前に Control Plane が根拠を返した RAG の接続ごとに MCP rag_validate_answer で検証する
-    # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠と矛盾する段落だけを回答から
-    # 外して「根拠と矛盾し除いた内容」に示し、確かめられない段落は本文に残して印を付ける（#2738）。
-    # 予算（上の 2 つ）には数えない。
-    agent_final_validation_enabled: bool = True
     # 記録済みの出力を本文で繰り返す報告の見出し。語を変える場合はこの設定で選ぶ。
     agent_output_record_section_titles: list[str] = Field(
         default_factory=lambda: [

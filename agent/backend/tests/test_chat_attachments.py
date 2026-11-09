@@ -296,8 +296,6 @@ def test_run_reads_attachment_with_tools(setup: Setup, monkeypatch: MonkeyPatch)
     }
     answer = next(item for item in run.artifacts if item.kind == "answer")
     assert answer.content["text"] == "品目乙の金額は 3400 です。"
-    validation = next(item for item in run.artifacts if item.kind == "answer_validation")
-    assert validation.content["reason"] == "attachment_evidence"
 
 
 def test_run_parses_sent_attachment_on_first_read_and_reuses(

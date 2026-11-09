@@ -307,7 +307,7 @@ def test_claim_limits_reading_tools_to_scoped_knowledge_bases(
     )
 
 
-def test_claim_limits_guides_and_answer_validation(auth: ProductionAuth) -> None:
+def test_claim_limits_guides(auth: ProductionAuth) -> None:
     user = auth.user_with_permissions(
         "searcher", ["menu.search"], search_answer_profile_ids=["bv-1", "bv-2"]
     )
@@ -315,18 +315,6 @@ def test_claim_limits_guides_and_answer_validation(auth: ProductionAuth) -> None
 
     _forbidden(
         _call("rag_lookup_guides", {"query": "精算", "search_answer_profile_id": "bv-2"}, scoped)
-    )
-    _forbidden(
-        _call(
-            "rag_validate_answer",
-            {
-                "query": "精算",
-                "answer": "期限は月末です。",
-                "evidence": [{"document_id": "d1", "chunk_id": "c1"}],
-                "guide": {"search_answer_profile_id": "bv-2", "guide_id": "g-1", "revision": 1},
-            },
-            scoped,
-        )
     )
 
 

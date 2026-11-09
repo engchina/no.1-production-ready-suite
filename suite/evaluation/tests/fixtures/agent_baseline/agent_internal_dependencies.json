@@ -112,28 +112,6 @@
       }
     },
     {
-      "id": "validation-status",
-      "observations": [
-        "artifacts[kind=answer_validation].content.status"
-      ],
-      "used_by": [
-        "Run の記録の validation_status"
-      ],
-      "public_agent_mcp": "public",
-      "public_fields": [
-        "agent_get_run_observation.validation_status"
-      ],
-      "public_note": "completed / skipped / unvalidated（無ければ null）。",
-      "ablation": "strip_validation_status",
-      "witness": {
-        "fixture": "answered-agent-outcome",
-        "score_changes": [],
-        "run_changes": [
-          "validation_status"
-        ]
-      }
-    },
-    {
       "id": "model-usage",
       "observations": [
         "usage.requests"

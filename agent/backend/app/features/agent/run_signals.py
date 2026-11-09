@@ -1,25 +1,12 @@
 """確かめるべき実行（暗黙のシグナル。#1822）。
 
 フィードバックの明示の評価は回答のごく一部にしか付かないため、Run に残る暗黙のシグナルと自動の
-検証の結果から「確かめるべき実行」を集める（LangSmith・Langfuse などの feedback → triage → eval →
+結果から「確かめるべき実行」を集める（LangSmith・Langfuse などの feedback → triage → eval →
 fix の流れ）。モデルは呼ばない（保存した Run の事実だけで決める）。
 
 シグナルの定義（Python の `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則）:
 
 - `not_helpful`: 本人か管理者の評価が「役に立たなかった」。
-- `validation_failed`: 最終の検証が、根拠と矛盾する段落を外した・未確認の印を付けた・回答全体の
-  警告（決定的な検査の error など）を出した・読めない根拠があった（`run_facts.VALIDATION_FAILED`。
-  警告の印だけは数えない。#2738）。
-- `unvalidated`: 最終の検証そのものが失敗した（`run_facts.VALIDATION_UNVALIDATED`）。
-- `ungrounded_no_tools`: 資料の根拠を使わずに答え（RAG の根拠のツールを持つ Agent の
-  `run_facts.VALIDATION_UNGROUNDED` か、持たない Agent の `VALIDATION_NO_EVIDENCE_TOOLS`）、
-  業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）も成功していない
-  （`DATA_TOOL_CALLS = 0`。#1834）。
-  - 業務データの道具で答えた Run（資料とデータの横断の Agent のデータだけの質問）は数えない。
-  - 拒答した Run（回答の対応が `unanswered` の語。ツールを呼ばずに答えた回答を拒答に置き換える
-    ガード #1835 の `no_tool_grounding` を含む）は「答えられなかった」に数え、ここには数えない
-    （ガードをすり抜けて本文を出した Run だけ）。
-  - 記録の無い古い事実（`DATA_TOOL_CALLS` が NULL）も数えない。
 - `unanswered`: 回答の対応が「資料から答えられない」（insufficient_evidence）か「人への引き継ぎ」
   （needs_human）。
 - `approval_rejected`: 承認を却下したツールがある。
@@ -45,10 +32,6 @@ from pydantic import BaseModel, Field
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, NEEDS_HUMAN
 from app.features.agent.run_facts import (
     RUN_SOURCE_EVALUATION,
-    VALIDATION_FAILED,
-    VALIDATION_NO_EVIDENCE_TOOLS,
-    VALIDATION_UNGROUNDED,
-    VALIDATION_UNVALIDATED,
     RunFact,
 )
 from app.features.agent.runtime import FeedbackRating, RunFeedback, RunStatus
@@ -62,9 +45,6 @@ class SignalKind(StrEnum):
     """確かめるべき実行のシグナルの種類（並びは画面の並び）。"""
 
     NOT_HELPFUL = "not_helpful"
-    VALIDATION_FAILED = "validation_failed"
-    UNVALIDATED = "unvalidated"
-    UNGROUNDED_NO_TOOLS = "ungrounded_no_tools"
     UNANSWERED = "unanswered"
     APPROVAL_REJECTED = "approval_rejected"
     TOOL_FAILED = "tool_failed"
@@ -73,8 +53,6 @@ class SignalKind(StrEnum):
 
 # 「答えられなかった」とする回答の対応（#1305 の語彙）。
 UNANSWERED_OUTCOMES: tuple[str, ...] = (INSUFFICIENT_EVIDENCE, NEEDS_HUMAN)
-# 「根拠を使わずに答えた」とする最終の検証の結果（資料の根拠を使わなかった回答。#1834）。
-UNGROUNDED_VALIDATIONS: tuple[str, ...] = (VALIDATION_UNGROUNDED, VALIDATION_NO_EVIDENCE_TOOLS)
 # 「実行の失敗・取り消し」とする状態。
 FAILED_RUN_STATUSES: tuple[str, ...] = (RunStatus.FAILED.value, RunStatus.CANCELLED.value)
 # 対象にする Run の状態（終わった Run）。
@@ -95,12 +73,6 @@ _NOT_HELPFUL = FeedbackRating.NOT_HELPFUL.value
 SIGNAL_CONDITIONS: dict[SignalKind, str] = {
     SignalKind.NOT_HELPFUL: (
         f"(FEEDBACK_RATING = '{_NOT_HELPFUL}' OR ADMIN_RATING = '{_NOT_HELPFUL}')"
-    ),
-    SignalKind.VALIDATION_FAILED: f"VALIDATION_RESULT = '{VALIDATION_FAILED}'",
-    SignalKind.UNVALIDATED: f"VALIDATION_RESULT = '{VALIDATION_UNVALIDATED}'",
-    SignalKind.UNGROUNDED_NO_TOOLS: (
-        f"(VALIDATION_RESULT IN ({_sql_list(UNGROUNDED_VALIDATIONS)}) AND DATA_TOOL_CALLS = 0 "
-        f"AND (ANSWER_OUTCOME IS NULL OR ANSWER_OUTCOME NOT IN ({_sql_list(UNANSWERED_OUTCOMES)})))"
     ),
     SignalKind.UNANSWERED: f"ANSWER_OUTCOME IN ({_sql_list(UNANSWERED_OUTCOMES)})",
     SignalKind.APPROVAL_REJECTED: "APPROVALS_REJECTED > 0",
@@ -123,13 +95,6 @@ def fact_signals(fact: RunFact) -> list[SignalKind]:
     """Run の事実のシグナル（`SIGNAL_CONDITIONS` と同じ規則。並びは `SignalKind` の順）。"""
     checks = {
         SignalKind.NOT_HELPFUL: _not_helpful(fact.feedback) or _not_helpful(fact.admin_review),
-        SignalKind.VALIDATION_FAILED: fact.validation_result == VALIDATION_FAILED,
-        SignalKind.UNVALIDATED: fact.validation_result == VALIDATION_UNVALIDATED,
-        SignalKind.UNGROUNDED_NO_TOOLS: (
-            fact.validation_result in UNGROUNDED_VALIDATIONS
-            and fact.data_tool_calls == 0
-            and fact.answer_outcome not in UNANSWERED_OUTCOMES
-        ),
         SignalKind.UNANSWERED: fact.answer_outcome in UNANSWERED_OUTCOMES,
         SignalKind.APPROVAL_REJECTED: fact.approvals_rejected > 0,
         SignalKind.TOOL_FAILED: fact.tool_failures > 0,
@@ -171,7 +136,6 @@ class SignalItem(BaseModel):
     status: str
     signals: list[SignalKind]
     answer_outcome: str | None = None
-    validation_result: str | None = None
     tool_failures: int = 0
     approvals_rejected: int = 0
     data_tool_calls: int | None = None
@@ -295,7 +259,6 @@ def signal_items(
             status=fact.status,
             signals=fact_signals(fact),
             answer_outcome=fact.answer_outcome,
-            validation_result=fact.validation_result,
             tool_failures=fact.tool_failures,
             approvals_rejected=fact.approvals_rejected,
             data_tool_calls=fact.data_tool_calls,

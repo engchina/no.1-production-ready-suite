@@ -133,7 +133,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             skill_registry.remove(SKILL_ID)
 
 
-def _script(monkeypatch: MonkeyPatch, *steps: Any, validation: bool) -> ScriptedModel:
+def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
     model = ScriptedModel(list(steps))
     monkeypatch.setattr(
         builtin_runtime,
@@ -146,7 +146,6 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any, validation: bool) -> Scripted
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", validation)
     return model
 
 
@@ -177,7 +176,6 @@ def test_runtime_fixes_caller_planning_and_hides_it_from_the_model(
             )
         ],
         [assistant_message(ANSWER)],
-        validation=False,
     )
     run_id = _run()
 
@@ -211,7 +209,6 @@ def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
         [assistant_message(ANSWER)],
         [call],
         [assistant_message(ANSWER)],
-        validation=False,
     )
 
     _run(draft=False)
@@ -228,7 +225,7 @@ def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
 
     # 再公開すると、公開版も Agent 主体の取得になる。
     runtime_repository.publish_agent(AGENT_ID, published_by="admin")
-    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    _script(monkeypatch, [call], [assistant_message(ANSWER)])
     _run(draft=False)
     assert mcp.calls_of("rag_retrieve_evidence")[-1]["arguments"]["planning"] == "caller"
 
@@ -282,13 +279,13 @@ def test_published_version_without_pinned_skills_keeps_rag_planning(
     """
     _legacy_published_version()
     call = function_call("rag__rag_retrieve_evidence", _MODEL_CALLER_ARGUMENTS, call_id="c1")
-    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)])
     published_run = _run(draft=False)
     [published] = mcp.calls_of("rag_retrieve_evidence")
     _assert_rag_planned(published_run, published, model)
 
     # 下書きは今どおり caller（モデルの queries を送り、planning・追跡 ID は実行環境が決める）。
-    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)])
     draft_run = _run(draft=True)
     draft = mcp.calls_of("rag_retrieve_evidence")[-1]
     assert draft["arguments"]["planning"] == "caller"
@@ -308,7 +305,7 @@ def test_latest_policy_version_follows_the_current_skill(
     runtime_repository.publish_agent(AGENT_ID, published_by="admin")
     skill_registry.upsert_custom(_skill("caller"))
     call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
-    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    _script(monkeypatch, [call], [assistant_message(ANSWER)])
 
     _run(draft=False)
 
@@ -327,7 +324,7 @@ def test_builtin_published_agents_keep_rag_planning(
     assert version is not None and version.skills is None
     # モデルが planning=caller と queries を渡しても、呼び先へ送らない（#2676）。
     call = function_call("rag__rag_retrieve_evidence", _MODEL_CALLER_ARGUMENTS, call_id="c1")
-    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)])
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(goal=GOAL, agent_id=agent_id), created_by_user_uuid=USER_UUID
     )
@@ -414,7 +411,7 @@ def test_rag_planned_schema_and_arguments_drop_caller_only_arguments() -> None:
     assert rag_planned_schema("rag__rag_retrieve_evidence", old) is old
 
 
-def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(
+def test_agent_orchestrates_retrieval_figure_reading_and_answer(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
     """本文・表・図の根拠を取得し、図の根拠だけ元の画像を読んでから答え、最終の検証を通す。"""
@@ -441,7 +438,6 @@ def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(
             )
         ],
         [assistant_message(ANSWER)],
-        validation=True,
     )
     run_id = _run()
 
@@ -451,11 +447,6 @@ def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(
     assert mcp.calls_of("rag_search") == []
     assert len(mcp.calls_of("rag_retrieve_evidence")) == 1
     assert mcp.calls_of("rag_read_source")[0]["arguments"]["include_image"] is True
-    # 最終の検証は、取得した根拠と読んだ図の根拠で回答を確かめる。
-    [validation] = mcp.calls_of("rag_validate_answer")
-    checked = {item["chunk_id"] for item in validation["arguments"]["evidence"]}
-    assert {"chunk-text", "chunk-table", "chunk-figure"} <= checked
-    assert validation["arguments"]["answer"].startswith("機器 A の点検は毎月 1 回です。")
 
 
 def test_rule_clarification_of_retrieval_becomes_the_next_step_and_pending(
@@ -478,7 +469,6 @@ def test_rule_clarification_of_retrieval_becomes_the_next_step_and_pending(
         monkeypatch,
         [function_call("rag__rag_retrieve_evidence", {"query": "点検 周期"}, call_id="c1")],
         [assistant_message("どの機器の点検ですか。")],
-        validation=False,
     )
     run_id = _run("点検の周期は？")
 

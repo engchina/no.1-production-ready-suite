@@ -1474,7 +1474,6 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
     def thread_previous_runs(self, run_id: str) -> list[RunState]: ...
-    def thread_answer_validations(self, run_id: str) -> list[JsonObject]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -2577,27 +2576,6 @@ class AgentRuntimeRepository:
                 and run_answer_text(previous) is not None
             ]
 
-    def thread_answer_validations(self, run_id: str) -> list[JsonObject]:
-        """同じ会話の前の完了した Run の、最終の検証の成果物の内容（古い順。#1837）。
-
-        前のターンで根拠で確かめた事実の根拠を、今のターンの最終の検証にも渡すのに使う。読むのは
-        `thread_history` と同じ、同じ会話のこの Run より前の完了した Run だけ（会話は作った利用者・
-        同じ Agent だけが続けられる）。成果物の種類は `answer_validation.ANSWER_VALIDATION_KIND`。
-        """
-        with self._lock:
-            run = self._require_run(run_id)
-            if run.thread_id is None:
-                return []
-            return [
-                deepcopy(artifact.content)
-                for previous in self._thread_runs_locked(run.thread_id)
-                if previous.id != run.id
-                and previous.created_at <= run.created_at
-                and previous.status == RunStatus.COMPLETED
-                for artifact in previous.artifacts
-                if artifact.kind == "answer_validation" and isinstance(artifact.content, dict)
-            ]
-
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
         """支援タスクの目的（会話の最初の質問）と、前の完了した Run の状態（#1243）。
 
@@ -3546,8 +3524,7 @@ class AgentRuntimeRepository:
         引かずに答えたため差し戻した。#1958）か `data_retry`（業務データを引かずに資料に無いとして
         答えたため差し戻した。#1979）か `guide_step_retry`（業務ガイドの手順の根拠を集めずに答えた
         ため差し戻した。#2396）か `section_retry`（回答に使った章節の続きを読まずに答えたため差し
-        戻した。#2492）か `hop_reverted`（差し戻しの後の回答が前より悪いため、
-        前の回答を使った。残すのは使わなかった差し戻しの後の回答。#1978）か `refused`（拒答の文に
+        戻した。#2492）か `refused`（拒答の文に
         置き換えた）か
         `text_clarification`（回答前の確認のツールを渡したのに本文で確認の質問だけを返した。
         回答はそのまま出す。#1881）。元の回答は利用者には出さず、Run の経過（イベント）にだけ
@@ -3616,13 +3593,6 @@ class AgentRuntimeRepository:
                 message = (
                     "出力の項目を記録せずに回答を作ったため、"
                     "項目の値を記録するようモデルに差し戻しました。"
-                )
-            elif action == "hop_reverted":
-                # 差し戻しの後の回答が前の回答より悪かったため、前の回答を使った（#1978）。
-                record["hop_reverted"] = True
-                message = (
-                    "差し戻しの後の回答は最終の検証で外した内容が前の回答より多かったため、"
-                    "差し戻しの前の回答を使いました。"
                 )
             elif action == "refused":
                 record["refused"] = True

@@ -234,7 +234,7 @@ for (const viewport of [
     await expect(generation).not.toContainText("system プロンプト");
     await generation.screenshot({ path: testInfo.outputPath("assumption-system-instructions.png") });
     await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toHaveCount(0);
-    await expect(stages.getByTestId("answer-prompt-stage-answer_validation")).toContainText("資料との照合");
+    await expect(stages.getByTestId("answer-prompt-stage-answer_validation")).toContainText("表の対応の修正");
 
     await expectNoPageOverflow(page);
   });
@@ -355,8 +355,8 @@ for (const width of [1280, 375]) {
 }
 
 // 新しい工程別の編集欄もテンプレートと同じ保存・破棄・復帰の契約を使う。
-test("資料との照合の指示を保存でき、既定への復帰は保存まで取り消せる", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const key = "answer_validation.system";
+test("表の対応の修正の指示を保存でき、既定への復帰は保存まで取り消せる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const key = "answer_validation.tableRevision";
   const builtin = "## Step 1: 資料と説明を確認する\n合成の指示。";
   let custom: string | null = null;
   const methods: string[] = [];
@@ -367,7 +367,7 @@ test("資料との照合の指示を保存でき、既定への復帰は保存�
       custom = method === "DELETE" ? null : route.request().postDataJSON().content;
     }
     const envelope = answerPromptsEnvelope("既定 {{question}} {{answer_context}}", false, [
-      { id: "answer_validation", phase: "audit", prompts: [{ id: "system", content: custom ?? builtin, prompt_key: key }] },
+      { id: "answer_validation", phase: "audit", prompts: [{ id: "tableRevision", content: custom ?? builtin, prompt_key: key }] },
     ]);
     envelope.data.prompts.push({ key, content: custom ?? builtin, default_content: builtin,
       customized: custom !== null, required_placeholders: [], updated_at: null });

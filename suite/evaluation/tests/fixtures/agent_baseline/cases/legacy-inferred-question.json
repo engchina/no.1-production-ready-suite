@@ -72,7 +72,6 @@
         "agent": {
           "run_id": "run-legacy-inferred-question-0",
           "status": "completed",
-          "validation_status": "completed",
           "outcome_source": "inferred",
           "tool_calls": {
             "rag_retrieve_evidence": 1
@@ -91,7 +90,6 @@
           "elapsed_ms": 1250.0,
           "outcome": "needs_clarification",
           "outcome_source": "inferred",
-          "validation_status": "completed",
           "model_requests": 2,
           "tool_calls": {
             "rag_retrieve_evidence": 1

@@ -16,13 +16,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.features.agent.answer_outcome import environment_tool_calls
-from app.features.agent.answer_validation import (
-    ANSWER_VALIDATION_KIND,
-    REASON_NO_RAG_EVIDENCE,
-    STATUS_COMPLETED,
-    STATUS_SKIPPED,
-    STATUS_UNVALIDATED,
-)
 from app.features.agent.runtime import (
     ApprovalStatus,
     RunEventType,
@@ -42,22 +35,6 @@ RUN_SOURCE_AUTOMATION = "automation"
 RUN_SOURCE_MCP = "mcp"
 RUN_SOURCE_REPLAY = "replay"
 RUN_SOURCE_USER = "user"
-
-# 最終の検証の結果（成果物「資料との照合」から決める。#1822）。列 `VALIDATION_RESULT` の値。
-VALIDATION_PASSED = "passed"
-# 根拠と矛盾する段落を外した・未確認の段落がある・回答全体の警告がある・読めない根拠がある
-# （#2738。警告の印だけなら合格）。
-VALIDATION_FAILED = "failed"
-# 検証そのものが失敗した（呼び出し・接続・応答の失敗、長すぎる回答など）。
-VALIDATION_UNVALIDATED = "unvalidated"
-# RAG の根拠のツールを持つ Agent が、資料の根拠を使わずに答えた（`no_rag_evidence`）。
-VALIDATION_UNGROUNDED = "ungrounded"
-# 確かめる対象が無い（確認の質問だけ・資料に無い・答えられないことだけを述べる拒答〔`absence_only`。
-# 根拠を使わずに答えた回答には数えない。#1879〕・RAG の根拠のツールを持たない Agent など）。
-VALIDATION_SKIPPED = "skipped"
-# RAG の根拠のツールを持たない Agent が、資料の根拠なしに答えた（`skipped` の `no_rag_evidence`。
-# #1834）。
-VALIDATION_NO_EVIDENCE_TOOLS = "no_rag_tools"  # 列は VARCHAR2(16)
 
 _TERMINAL_EVENTS = {
     RunEventType.RUN_COMPLETED,
@@ -92,8 +69,6 @@ class RunFact(BaseModel):
     answer: str | None = None
     # 回答の対応（成果物 `answer` の `outcome.value`。#1305）。記録の無い Run は None。
     answer_outcome: str | None = None
-    # 最終の検証の結果（`VALIDATION_*`）。検証の記録が無い Run は None。
-    validation_result: str | None = None
     # 失敗したツールの呼び出しの数と、却下した承認の数（#1822）。
     tool_failures: int = 0
     approvals_rejected: int = 0
@@ -155,50 +130,6 @@ def run_answer_outcome(run: RunState) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _positive(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _has_items(value: object) -> bool:
-    return isinstance(value, list) and len(value) > 0
-
-
-def run_validation_result(run: RunState) -> str | None:
-    """最終の検証の結果（成果物「資料との照合」。#1246・#1277・#1822）。
-
-    判定が出た（`completed`）検証は、根拠と矛盾する段落を外した・未確認の段落がある・回答全体の
-    警告（決定的な検査の error・説明を確かめられない業務ガイドの手順・根拠を読めない）がある・
-    読めない根拠があったら不合格、警告の印（規則の検査・続く手順）だけなら合格にする（#2738。
-    `answer_validation.publish_answer` の `withheld`・`answer_warnings` と結果の根拠）。
-    """
-    content = _latest_artifact_content(run, ANSWER_VALIDATION_KIND)
-    if content is None:
-        return None
-    status = content.get("status")
-    if status == STATUS_UNVALIDATED:
-        if content.get("reason") == REASON_NO_RAG_EVIDENCE:
-            return VALIDATION_UNGROUNDED
-        return VALIDATION_UNVALIDATED
-    if status == STATUS_SKIPPED:
-        if content.get("reason") == REASON_NO_RAG_EVIDENCE:
-            return VALIDATION_NO_EVIDENCE_TOOLS
-        return VALIDATION_SKIPPED
-    if status != STATUS_COMPLETED:
-        return None
-    withheld = content.get("withheld")
-    withheld = withheld if isinstance(withheld, dict) else {}
-    result = content.get("result")
-    result = result if isinstance(result, dict) else {}
-    altered = (
-        _positive(withheld.get("removed"))
-        or _positive(withheld.get("unverified"))
-        or _has_items(content.get("answer_warnings"))
-        or _has_items(result.get("stale_evidence"))
-        or _has_items(result.get("missing_evidence"))
-    )
-    return VALIDATION_FAILED if altered else VALIDATION_PASSED
-
-
 def run_tool_failures(run: RunState) -> int:
     """失敗した呼出しと、呼出し前に停止した必須 MCP 接続の取得失敗。"""
     discovery_failed = any(
@@ -237,7 +168,6 @@ def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
         question=run.goal,
         answer=run_answer_text(run),
         answer_outcome=run_answer_outcome(run),
-        validation_result=run_validation_result(run),
         tool_failures=run_tool_failures(run),
         approvals_rejected=run_approvals_rejected(run),
         data_tool_calls=environment_tool_calls(run.steps),
@@ -253,17 +183,10 @@ __all__ = [
     "RUN_SOURCE_MCP",
     "RUN_SOURCE_REPLAY",
     "RUN_SOURCE_USER",
-    "VALIDATION_FAILED",
-    "VALIDATION_PASSED",
-    "VALIDATION_NO_EVIDENCE_TOOLS",
-    "VALIDATION_SKIPPED",
-    "VALIDATION_UNGROUNDED",
-    "VALIDATION_UNVALIDATED",
     "RunFact",
     "fact_from_run",
     "run_answer_outcome",
     "run_approvals_rejected",
     "run_source",
     "run_tool_failures",
-    "run_validation_result",
 ]
