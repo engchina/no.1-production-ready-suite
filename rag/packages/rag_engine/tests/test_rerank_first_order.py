@@ -110,17 +110,6 @@ def test_crag_merge_cuts_by_rerank_score_not_by_lexical_overlap():
     assert [r.id for r in merged.records] == ["p0", "q0"]
 
 
-def test_top_rerank_score_is_the_highest_score_not_the_first_candidate():
-    """画面名の先頭寄せ・位置を保つ候補で先頭が最高点とは限らない。"""
-    candidates = [
-        child("pinned", 1, "画面", "a.pdf", "pa", 0.2),
-        child("best", 2, "本文", "b.pdf", "pb", 0.9),
-        child("u", 3, "x", "c", "pc"),
-    ]
-    assert a._top_rerank_score(_context((), candidates)) == 0.9
-    assert a._top_rerank_score(_context((), [child("u", 1, "x", "c", "pc")])) is None
-
-
 def test_evidence_items_without_a_tree_are_ordered_by_rerank_score_before_rrf():
     """根拠の木の無い根拠の一覧は、回答に使った順の次に rerank の点数の順。RRF は同点の順だけ。"""
     from rag_engine.generation.answer_payload import answer_evidence_items

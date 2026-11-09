@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1274,7 +1274,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1743,7 +1743,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2530,7 +2530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2779,7 +2779,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2913,7 +2913,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4164,23 +4164,6 @@
                 "title": "Origin",
                 "type": "string"
               },
-              "table_binding": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "checkable",
-                      "not_checkable"
-                    ],
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "回答の生成の検査が、文の値を表の別の行・列の値と取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で確かめる / null=表の無い根拠。",
-                "title": "Table Binding"
-              },
               "superseded": {
                 "default": false,
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
@@ -4283,7 +4266,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5662,23 +5645,6 @@
                 "title": "Origin",
                 "type": "string"
               },
-              "table_binding": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "checkable",
-                      "not_checkable"
-                    ],
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "回答の生成の検査が、文の値を表の別の行・列の値と取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で確かめる / null=表の無い根拠。",
-                "title": "Table Binding"
-              },
               "superseded": {
                 "default": false,
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
@@ -5781,7 +5747,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 41,
+            "default": 42,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

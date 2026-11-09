@@ -6,12 +6,8 @@ import { SERVICE_PROFILE_ORDER } from "@/components/settings/ServicesManagementC
 import { PARSER_BACKEND_ORDER, sortParserBackends } from "./parser-backend-order";
 
 describe("文書解析エンジンの並び", () => {
-  it("Dots.OCR → MinerU → OCI Document Understanding の順（利用者の判断）", () => {
-    expect(PARSER_BACKEND_ORDER.slice(-3)).toEqual([
-      "dots_ocr",
-      "mineru",
-      "oci_document_understanding",
-    ]);
+  it("Dots.OCR → OCI Document Understanding の順（利用者の判断）", () => {
+    expect(PARSER_BACKEND_ORDER.slice(-2)).toEqual(["dots_ocr", "oci_document_understanding"]);
   });
 
   it("処理レシピの選択肢も同じ正本の順", () => {
@@ -26,7 +22,6 @@ describe("文書解析エンジンの並び", () => {
     expect(
       sortParserBackends([
         "oci_document_understanding",
-        "mineru",
         "dots_ocr",
         "local",
         "docling",
@@ -40,7 +35,6 @@ describe("文書解析エンジンの並び", () => {
       "structured_records_jsonl",
       "xml_tree_json",
       "dots_ocr",
-      "mineru",
       "oci_document_understanding",
       "local",
     ]);

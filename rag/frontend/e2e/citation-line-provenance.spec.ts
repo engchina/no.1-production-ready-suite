@@ -67,6 +67,21 @@ const LEGACY = [
   citation("doc-a:c-f", FIGURE, { evidence_model_used: true }),
 ];
 
+// 2 行目の候補が 1 件だけの記録（回答はその箇所を含むまとまりを参照した。#4754）。
+const SINGLE_CANDIDATE = [
+  citation("doc-a:c-o", OPERATION, {
+    evidence_model_used: false,
+    evidence_parent_used: true,
+    answer_citation_candidate_lines: [2],
+  }),
+  citation("doc-a:c-f", FIGURE, {
+    evidence_model_used: true,
+    evidence_answer_use: "confirmed",
+    answer_citation_lines: [1],
+    answer_citation_provenance: "child",
+  }),
+];
+
 const ANSWER = [
   "結果 C は右の枠に出ます。",
   "",
@@ -195,6 +210,20 @@ test.describe("本文の根拠の行と根拠の一覧の対応（issue 2710）"
     expect(noticeBox!.y).toBeLessThan(summaryBox!.y);
     await expectNoPageOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`citation-line-unresolved-${testInfo.project.name}.png`) });
+  });
+
+  test("候補が 1 件の根拠の行は、位置は未確定のまま「決められない」とは出さない", async ({ page }, testInfo) => {
+    const answer = await ask(page, SINGLE_CANDIDATE);
+    await answer.getByRole("button", { name: "根拠：文書 A.pdf p.3 の原文を開く" }).nth(1).click();
+    const opened = await openedSheet(page);
+    expect(opened.excerpt).toBe(OPERATION);
+    const notice = opened.sheet.getByTestId("evidence-source-notice");
+    await expect(notice).toContainText("この根拠の行の位置は確定していません");
+    await expect(notice).toContainText("候補はこの 1 件だけですが");
+    await expect(notice).not.toContainText("1 つに決められません");
+    await expect(notice).not.toContainText("候補 1 件");
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`citation-line-single-candidate-${testInfo.project.name}.png`) });
   });
 
   test("以前の回答の記録の番号は記録のまま開き、同じ頁に別の箇所があれば位置が未確定と出す", async ({ page }) => {

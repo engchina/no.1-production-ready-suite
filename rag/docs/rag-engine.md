@@ -24,18 +24,11 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 名称の変更自体にデータ移行や再構築は不要。構築する設定を変えて既存文書に反映するときは、
 文書の処理レシピを再処理する（実体・別名索引は索引の工程から）。API path・設定 key・保存値は変更しない。
 
-## 回答の監査
+## 回答の確認
 
-引用の原文との一致、主張の裏付け、適用条件、要求の充足、監査の実行状態を別々に記録する。
-近似一致で見つけた引用は参照先の候補であり、それだけで主張を確認済みにしない。監査が支持した
-原文の引用を実際の出典で照合してから採用する。語の有無や重なりでは、主張の支持や要求の充足を決めない。
-表の行・列の結び付け、引用 ID、原文の引用範囲などの構造の検査は継続する。
-手順の説明が案内したボタン名（「実行ボタン」の「実行」）が、説明が引いたどの原文（本文と見出し）にも無いときは、
-本文・出典を変えずにその段落だけに警告（`item_check`）を付ける。名前が原文にあっても、その操作を原文が支えるかは判定しない。
-
-生成の監査では、適用性が `unknown` / `not_applicable` でも、その判定だけで一般の説明を落とさない。元の適用性は変更せず、本文へ反映しなかった方針と理由を別に記録する。`matched` に読み替えるものではない。主張と根拠の矛盾は別に判定し、矛盾した主張は取り除く。実行失敗・時間上限・未実行・一部未確認は、内容の誤りと区別する。
-
-過去の監査は、検査が完了し合格した記録について、質問・回答全体・前提・実データ・ガイドの版・根拠とその版・モデル・プロンプト・判定方針の digest が一致したときだけ再利用する。段落間の依存が分からない変更は回答全体を再監査する。版の無い旧記録も再監査する。最終照合は原質問と実際の確認回答を受け取り、設定文・仮定を利用者の事実にしない。履歴の確認回答は既存の質問補完が今回に適用する ID だけを選び、署名した質問文脈と結び付ける。生成と最終照合は同じ確認回答を使う。新しい明示回答・スキップ・不明な参照では古い確認を流用しない。上限を超えた前提を黙って切り捨てて確認済みにしない。
+回答の生成は 1 回で、生成の後に LLM で採点しない（#4714）。引用の実在と原文との一致、表の行・列の結び付け、引用 ID、原文の引用範囲などの構造の検査だけをコードで行う。
+近似一致で見つけた引用は参照先の候補であり、それだけで主張を確認済みにしない。語の有無や重なりでは、主張の支持や要求の充足を決めない。
+正解つきの評価は品質評価の工程で行う（回答の生成の工程には入れない）。
 
 ## 構成
 
@@ -43,8 +36,7 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 |---|---|
 | `packages/rag_engine` | rag_poc の解析・分割・検索・回答の実装を、`entrypoints`（Gradio / HTTP）を除いてそのまま移したもの。package と import パスは `rag_engine`（#599）。backend と docling サービスが依存する。回帰テストは CI の `RAG / Engine` ジョブで実行する |
 | `services/parsers/docling` | rag_poc から移した Docling 解析（読み順・段組補正、表セル補修、図内 OCR の集約）。`parser_artifacts.layout_records` に LayoutRecord を保持する。Vision は行わない（#497） |
-| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。`layout_records` の record がある文書（Docling・MinerU）は、その record を入力にし、結果を record にも書き戻す（#497・#1334） |
-| `backend/app/clients/mineru_layout.py` | MinerU の Middle JSON から、Docling と同じ形の LayoutRecord（`parser_artifacts.layout_records`）を作る（#1334。下の「MinerU の LayoutRecord」） |
+| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。`layout_records` の record がある文書（Docling）は、その record を入力にし、結果を record にも書き戻す（#497・#1334） |
 | `backend/app/rag/chunking_small_to_big.py` | チャンク戦略 `small_to_big`（画面の表示名は「親子階層（small-to-big）」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/answer_engine.py` | 回答フロー（rag_poc の回答フローを backend の検索・rerank で駆動。#594 から回答はこれだけ） |
 | `backend/app/rag/search_answer_profile_knowledge.py` | 検索・回答プロファイル単位の知識（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール） |
@@ -88,7 +80,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、文書のレシピで Vision（図・画像を AI で読み取る）を有効にする（Docling 以外の解析エンジンでも使える）。有効にすると、画像 1 枚ごとに Vision モデルの呼び出しと時間がかかる。
 2. **分割**：文書分割は既定で親子階層（`small_to_big`。#594 で既定にした）。親は回答の文脈に渡す大きい単位、子は検索に当てる小さい単位（LangChain の ParentDocumentRetriever・LlamaIndex の階層の分割と同じ考え方）で、**どの解析の結果でも親子に分割する**（#3377。解析エンジンの名前では選ばず、抽出の形で親子の作り方を選ぶ。取込の trace の `chunk_parent_source`）。
-   - 解析の結果がレイアウトの記録（`parser_artifacts.layout_records`。Docling の PDF・画像。MinerU〔#1334。準備中〕も同じ記録を作る）を持つ文書は、その記録から親子を作る（`layout_records`。見出し・表・図の領域と根拠の元の要素を保つ）。
+   - 解析の結果がレイアウトの記録（`parser_artifacts.layout_records`。Docling の PDF・画像）を持つ文書は、その記録から親子を作る（`layout_records`。見出し・表・図の領域と根拠の元の要素を保つ）。
    - Excel の行の記録は行を子・表の一部を親（`sheet_records`。#1349）、XML ツリー JSON は段落を子・番号つきの単位を親にする（`xml_tree_units`。#2024）。
    - それ以外の抽出（標準の解析の Markdown・テキスト、Unstructured・OCI などの解析の結果、構造化レコード JSONL の CSV・Word など）は、抽出の構造から親子を作る（`extraction_structure`）。子は構造認識と同じ要素の分割（同じ節・同じ種類の要素だけをつなぐ）を子の目標文字数で行い、表は表の子の目標文字数で行のまとまりに分けて列見出しを繰り返す。見出しだけの子は作らず、続く本文の子の先頭に入れる。構造化レコード JSONL は 1 記録 = 1 子（#2457）。親は続く子を、節（文書を 2 つ以上に分ける最初の見出しの段。題が 1 つの文書はその下の段）をまたがず、親の目標文字数・子の数・ページ数の上限の中でまとめる。見出しの無い文書は順と大きさだけでまとめる。子の metadata は Docling の親子と同じ（`chunk_strategy=small_to_big`・`parent_chunk_id` / `chunk_group_id`・`chunk_group_kind=small_to_big_parent`・`parent_text`・`section_path`・頁・`element_ids`）で、回答は同じ経路で親の本文を文脈にする。
    - 以前（#300〜#3377）は、レイアウトの記録が無い文書を「構造認識」（`structure_aware`）へ縮退し、chunk に `chunk_strategy_fallback_reason=layout_missing` を残していた。その chunk は文書詳細の Chunk タブに「親子階層で分割されていない Chunk です」と表示し、Chunk を作り直すと親子階層で分割する（再解析は要らない）。
@@ -108,7 +100,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
      - 根拠の状態は読むたびに今の文書・KB の状態から計算する（変化の経路ごとに印を付けない）。対象の KB が無い・プロファイルから外れた、引用した文書が削除された・対象の KB から外れた → 停止（提示・回答に使わない）し、管理画面で「要確認」。引用した文書の版（検索に出す版の切替 `indexed_at`・新しい版の文書の設定）が変わった → 使い続け、管理画面で「原文が更新されました」。管理者が「対象を確かめ直す」（`POST …/approved-faq/{faq_id}/confirm`）と、対象を選び直し、残る文書を今の版で記録し直し、承認者と時刻を記録して戻る。
      - **MCP・Agent から FAQ を使うとき（今は使っていない）も、同じ絞り込み（`ApprovedFaqSnapshot.usable_records`）を通す。** 呼んだ利用者（API キー・サービストークンの `sub`）の KB の範囲で判定し、使えない FAQ の質問・回答・存在を返さない。
    - 回答には「処理の経過」（#2096。回答の工程ごとの一覧〔入れ子は字下げ・所要時間・LLM の回数〕。実行中は開き、完了したら閉じる〔#2118〕。その下の「詳細」に信頼度・人手確認・使ったモデル・評価、会話を開き直した回答は保存日時と回答の記録の操作）が付く。チャットと RAG 検索は同じ部品 `components/search/AnswerProcess.tsx` 1 つで、位置・開閉・「詳細」の中身をチャットの形にそろえる（#2118。RAG 検索の「詳細」の開始・トレース ID は無くした）。工程は回答の trace の span（共通の span の表。#3226）で、チャット・RAG 検索とも記録ごとの trace の API の snapshot から作る（`lib/trace-progress.ts`。種類 `answer_step` の値に工程名、入れ子は span の親子）。根拠の構成（AI に渡した箇所を同じ節ごとにまとめた単位）は、根拠の一覧の「まとまりごと」に出す（#2097）。
-   - 回答の本文の節（`rag_engine/generation/grounded.py`。#2040）: 「資料により確認できた事項」・「操作手順（機能名）」「確認手順（機能名）」・「参考情報」（システムが補った原文〔必須根拠・確定操作・但し書き・拒答のときの関連原文・監査が必要とした根拠〕と、該当が未確認〔`applies=unverified`〕の説明の原文。直下に固定の説明「以下は資料の原文です。本質問の条件への該当は確認できていません。」を置き、結論には使わない。規則の検査・監査で確かめられなかった説明の置き場ではない〔#2738〕）・「資料から確認できなかった事項」・「回答に未反映の関連章節」（章節の拡張の上限で読めなかった章節。各行から章節の原文を開ける）・「回答時間の上限により省略した処理」（回答時間の上限で省いた生成・監査・是正）・「回答を確定するために確認すること」・「根拠と矛盾し除いた内容」（監査が根拠と矛盾と判定して本文から外した説明と理由。#2738）・「確認が必要な点」（回答全体の警告と、印の付いた段落の短い引用と理由。#2738）。最後の 2 つは本文だけを読む利用者向けで、正本は回答の構造の段落の印（下の「段落の印」）。見出しと固定の説明は主張ではないので、監査・評価・指標は `is_structural_line` で外す。回答で引用した箇所ごとの使われ方（該当確認済み `confirmed` / 参考 `reference`）は、引用の metadata の `evidence_answer_use` と MCP の `evidence[].answer_use` に載り、画面の件数とバッジ（「回答で引用」「参考」）に使う。
+   - 回答の本文の節（`rag_engine/generation/grounded.py`。#2040）: 「資料により確認できた事項」・「操作手順（機能名）」「確認手順（機能名）」・「参考情報」（システムが補った原文〔必須根拠・確定操作・但し書き・拒答のときの関連原文〕と、該当が未確認〔`applies=unverified`〕の説明の原文。直下に固定の説明「以下は資料の原文です。本質問の条件への該当は確認できていません。」を置き、結論には使わない。規則の検査で確かめられなかった説明の置き場ではない）・「資料から確認できなかった事項」・「回答に未反映の関連章節」（章節の拡張の上限で読めなかった章節。各行から章節の原文を開ける）・「回答時間の上限により省略した処理」（回答時間の上限で省いた生成）・「回答を確定するために確認すること」。見出しと固定の説明は主張ではないので、評価・指標は `is_structural_line` で外す。回答で引用した箇所ごとの使われ方（該当確認済み `confirmed` / 参考 `reference`）は、引用の metadata の `evidence_answer_use` と MCP の `evidence[].answer_use` に載り、画面の件数とバッジ（「回答で引用」「参考」）に使う。
    - 保存された回答（回答の記録）は、チャットの各回答の「処理の経過」の中の「処理の詳細」（処理の経過を開いたときのタイムラインの後ろ。#2325）から回答の記録の詳細を開き直せる（会話の回答の trace_id で保存の有無を引き当てる。#304）。引用の一覧は回答の枠の折りたたみ「AI に渡した N 件（K のまとまり）／ 回答で引用 M 件 ／ うち該当確認済み K 件 ／ 参考 L 件」（0 件の項目は出さない。#2040・#2097）の 1 か所だけに出し、「処理の詳細」の中には重ねて出さない。折りたたみの中は「順に表示」（引用のカード）と「まとまりごと」（同じ節ごとにまとめて AI に渡した単位。各箇所の役割・位置・本文の抜粋と、押すと開く引用箇所。chunk の ID は「処理の詳細」の中）で、まとまりの件数の合計は N に一致する（backend は根拠の木 `evidence_tree` の子を引用にした箇所だけ 1 回ずつ持つ。#2097）。「処理の経過」（工程の一覧と、その後ろの「処理の詳細」）は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）に置き、回答の枠の下は「AI に渡した N 件」→ 回答の評価（「この回答は役に立ちましたか？」）の順（#1202 / #1417 / #2096。`platform/docs/ux-contracts/page-archetypes.md` §6.1。RAG 検索の回答のカードもチャットと同じ部品・並び）。根拠の一覧は回答の文脈に入れた根拠の chunk の全件で、回答に使ったもの（`metadata.evidence_model_used`）が先頭に並び、カードに「回答で引用」が付く。回答を作らない検索の結果は「根拠 N 件」（RAG 検索・検索テストでは「検索結果（N）」）とだけ出す（#1208）。回答の記録は 1 件ずつ削除しない（画面の操作も API も持たない。#2325・#2348。保存期間を過ぎた記録は自動で消える）。検索画面の回答履歴の一覧は #444 で削除した（一覧の API `GET /api/search/answers` は、チャットの引き当て（`trace_id` の指定）が使うため残している）。
    - 扱えるのは自分の回答だけ（詳細・評価・削除も同じ）。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は、利用できる検索・回答プロファイルのすべての利用者の回答を扱える（#304）。
    - 参照するナレッジベースが 0 件の検索・回答プロファイルでは検索・チャットしない（利用者が使える全 KB を検索しない）。画面は選んだ時点で理由を示し、API は 409 と理由（「この検索・回答プロファイルには参照するナレッジベースがありません。…」）を返す（#304）。
@@ -166,17 +158,10 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_SECTION_EXTRACTION_ENABLED` | `false` | 章節の拡張で、根拠の入力の上限に入らない章節から質問に関係する原文を LLM で抜き出す（#1437）。既定 `false`（#2800）は抜き出しの LLM を呼ばず、入らない章節を rerank の順（rerank が無ければ語の重なりの順）で上限まで入れ、読めなかった範囲を本文の「回答に未反映の関連章節」に示す。生成の前の LLM の呼び出しを増やさない（WeKnora の rerank → 上位の絞り込みと同じ考え方） |
 | `RAG_STRATEGY_REASONING_EFFORT` | `model` | 質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論（思考）の量（#1499）。`model` はモデルの登録値（システム設定 › モデルの「推論の量」）のまま、`none` は送らない、`low` / `medium` / `high` はその値を送る。モデルの登録値が `none` のモデルには、上書きしても送らない（推論を受け付けないモデルがある）。rag_engine の `settings_for_llm_purpose` が LLM の呼び出しに渡す設定だけを差し替え、工程の記録（「質問拡張戦略」）に送った量を残す。既定 `model` は A/B の結果（DeepSeek・5 問 × 3 回。`low` では 15 回中 4 回で戦略が検索文 0 本の単純検索に倒れ、1 問で根拠を取り逃した）。品質評価の `rag_overrides` の `strategy_reasoning_effort` で比べられる |
 | `RAG_JUDGE_REASONING_EFFORT` | `medium` | 根拠の評価（CRAG の十分 / 不足の評価と章節の拡張の十分性の判定）の LLM の呼び出しの推論の量（#1499。値は上と同じ）。工程の記録（「根拠確認（1回目）」）に「推論の量: medium（根拠の評価の設定。…）」の形で残す。既定は #1550 で `low` から `medium` に戻した（#1499 の A/B は DeepSeek で、CRAG の評価の中央値 60.5 → 22.3 秒・5 問の品質は同じだった。vLLM の chat template では low が「短く考えて」の指示を足すだけで推論の token は安定して減らず、判定が甘くなる危険（#1503）だけが残るため）。`rag_overrides` の `judge_reasoning_effort` |
-| `RAG_GENERATION_REASONING_EFFORT` | `model` | 回答文の生成の LLM の呼び出しの推論の量（#1499。値は上と同じ）。生成後の監査は `RAG_AUDIT_REASONING_EFFORT`（#1528）。工程の記録（「回答文の生成と根拠確認（1回目）」）に「生成の推論の量」「監査の推論の量」を分けて残す。`rag_overrides` の `generation_reasoning_effort` |
-| `RAG_AUDIT_REASONING_EFFORT` | `model` | 生成後の監査（主張と引用の適用性の確認。`grounded.run_round` の `audit_settings`）の LLM の呼び出しの推論の量（#1528。値は上と同じ）。判定の仕事なので生成より少ない量にできるよう、生成と分けた。既定 `model` は、#1528 の A/B のモデル（vLLM の JEV-27B-VL）が推論の量を反映しなかったため（同じ入力・temperature 0 で推論の token が low 187・medium 192・high 128）。推論の量を反映するモデルで `low` を比べる。`rag_overrides` の `audit_reasoning_effort` |
+| `RAG_GENERATION_REASONING_EFFORT` | `model` | 回答文の生成の LLM の呼び出しの推論の量（#1499。値は上と同じ）。工程の記録（「回答文の生成と根拠確認」）に「生成の推論の量」を残す。`rag_overrides` の `generation_reasoning_effort` |
 | `RAG_QUESTION_SUBJECT_ROLE_MODEL` | `xai.grok-4.7` | 段ごとのモデル（この行と下の 3 つ。`app/rag/step_models.py` の表 `STEP_MODEL_SETTINGS` と rag_engine の `STEP_LLM_PROVIDERS` が同じ段を持つ）の 1 つ目: 質問の対象の名前の役割（問い・前提・例）の判定の段（#4351）。値はシステム設定 › モデル に登録したモデルの ID で、空は回答のモデル。登録モデルの接続・推論の量・入出力の上限を `RAG_ENGINE_<段>_*` で rag_engine へ渡す。登録していないモデルは接続を渡さず（段の provider は model だけ）、その段は失敗・省略として扱って回答は続ける（回答のモデルへ暗黙に切り替えない。#3240 と同じ）。4 つとも検索方法の画面（回答の検索と生成 › 生成後の回答確認）で選べ、回答の診断の `models` に段ごとに残る。この段の失敗では名前の照合を飛ばす |
-| `RAG_CRAG_SKIP_ON_STRONG_SIGNALS` | `false` | 旧設定は退役。語の一致率を根拠に CRAG の評価を省略しない。保存値は評価の省略に適用しない。 |
-| `RAG_CRAG_SKIP_MIN_RERANK_SCORE` | `0.8` | 上の省略の、rerank の最上位の score の閾値（0〜1）。rerank していない回答は飛ばさない。`rag_overrides` の `crag_skip_min_rerank_score` |
 | `RAG_CRAG_COMPACT_INPUT` | `true` | CRAG の根拠の評価（1〜3 回目）の入力を詰める（#1528。`rag_engine/generation/crag_support.py` の `_build_crag_grade_prompt(compact=True)`）。候補を生成に渡す親の数（`RAG_ENGINE_MAX_CONTEXT_RECORDS`、既定 12。従来は 30）にそろえ、JSON を空白なしで書き、候補の欄を `chunk_uid`・文書名・頁・見出し・分類・本文・`excerpt_only`・検索で当たった子の `anchor_uids` だけにする（局所 ID・引用の文字列・子の entry を載せない）。判定は chunk_uid で候補へ結び付くので、候補の除外・missing_aspects・列挙の項目の数え直しは変わらない。章節の拡張の評価し直しは候補の数をそろえない（広げた章節を見せる）。既定 ON は #1528 の A/B の結果（CRAG の入力 tokens が 1/4〜1/9、入力の大きい問では CRAG の時間が 4 割減り、従来の入力では回答の時間の上限で切れた問が答えられた。根拠の再現率・連鎖・期待の語は 4 問で同じ）。`rag_overrides` の `crag_compact_input` |
 | `RAG_CRAG_SHORT_CANDIDATE_IDS` | `true` | 上の詰めた入力で、候補の `chunk_uid` を短い ID（候補は `C1`・`C2`…、検索で当たった子は `C1-1`…、回復の起点も同じ ID）にする（#1864。`crag_support._alias_candidate_ids`）。評価器は候補ごとの判定・観点の根拠（`source_ids`）・列挙の項目・回復の起点に ID を書き写すので、長い `chunk_uid`（文書 ID の 32 桁と chunk の名前）が出力の token と時間を増やしていた。返った ID は `_grade_crag_retrieval` の `canonical` で `chunk_uid` に戻すので、候補の除外・missing_aspects・列挙の数え直しは変わらない。章節の拡張の評価し直しにも効く。既定 ON は #1864 の A/B の結果（PR を参照）。`rag_overrides` の `crag_short_candidate_ids` |
-| `RAG_ANSWER_AUDIT_COMPACT_REASONS` | `false` | 生成後の監査（`grounded.run_round`）の reason を、判定が通った説明（`support=supported` かつ `applicability=matched`）と答えている要求（`addressed`）では空文字にさせる（#1912。`grounded.audit_system_prompt` が `AUDIT_COMPACT_REASON_RULE` を足す）。監査の見える出力は約 5 割減る（793 → 357 token）が、同じ監査の入力を規則あり / なしで送った対の比較（10 対）で、規則ありの監査が通さなかった判定は 1 件、なしは 5 件（`not_applicable`・`unsupported`・`conditional`）と、監査が甘くなった。reason を書くことが監査の確かめの一部になっているとみて、既定では使わない（品質評価の比較用）。`rag_overrides` の `answer_audit_compact_reasons` |
-| `RAG_ANSWER_MAX_CORRECTION_ROUNDS` | `2` | 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限（#1912。0〜2。既定は従来の `MAX_ROUNDS` と同じ）。1 組は生成と監査の LLM の呼び出しを 1 回ずつ足す。上限で止めたときは `round_budget.stop.reason` が `max_correction_rounds`（時間の上限ではないので本文の「回答に未反映の関連章節」には出さない）。`rag_overrides` の `answer_max_correction_rounds` |
-| `RAG_ANSWER_AUDIT_MODE` | `none` | 生成後のAI確認。`none`（既定）は生成後の意味監査・最終のLLM資料検証を実行せず、引用位置・版などの基本検査と既存の限定的な補救を維持する。`standard` は主張・要約・目的・要求・Guide要件を確認し、未使用根拠を列挙させない。`detailed` は未使用根拠の観察も含む。現状の意味判定は未校正のため、両モードとも `semantic_audit_policy.mode=diagnostic_only` とし、生の判定・理由・引用・実行状態を保存するが、それだけで本文を削除・降格、材料不足へ変更、要約を書換え、補検索・重生成を実行しない。実効的な主張支持と材料判断はunknownのまま。最終LLM資料検証の生判定も同様に扱う。基本検査の問題は別で、権限・版・ID・範囲などの検査や対応を止めない。既存の是正上限はstandardで最大1回、detailedで `RAG_ANSWER_MAX_CORRECTION_ROUNDS` 以下（最大2回）で、期限と予算にも従う。意味監査の校正と、既定noneの通常Chat受入は別に実施する。 |
-| `RAG_ANSWER_EVIDENCE_REFINEMENT_MODE` | `legacy` | 生成後に使う原文を選び直す全体設定（`answer_evidence_refinement_mode`）。`legacy` は従来の流れ。`cited_only` は基本引用検査を通った初回の引用元だけで再回答する比較用。`cited_required` はその引用元に、未引用の必須要求・業務ガイドの手順・不明な対応の根拠を加える。必須対応を特定できない場合は全体の原文を保つ。原文・表示ID・順番・引用範囲を保持し、除外した原文が補助文脈から再流入しないようにする。再回答は既存の是正回数・期限の残りで最大1回。`none` でも明示選択した再回答は可能だが、選別のためのLLM監査は行わない。画像添付中は選別しない。再回答を採るのは、(a) 決定的な検査が良くなり（印の無い説明が増えるか印が減り、どちらも悪くならない。引用の照合・範囲の誤りと根拠計画の不整合は増えない）、(b) 初回で確認済みの説明を 1 つも失わず（本文の逐語ではなく、出典の永続 ID と抽出した原文で比べる）、(c) 必須の根拠（選別の保全・業務ガイドの必須手順の説明・充足した要求）と未解決事項を保つときだけ（#3781）。要約の変更だけでは採らない理由にも採る理由にもしない。監査なし（`none`）では、加えた・言い換えた説明に `unassessed`（確かめが終わっていない）の印を付けて採り、要約は監査なしの警告（`summary_unaudited`）のまま出す。初回と同じ文・同じ出典の説明は印を付けない。失敗・期限超過では初回の回答を保つ。言い換えや追加操作の意味支持を自動保証する機能ではない。診断は `generation_trace.evidence_refinement` に選別対象・保全不足・追加呼出し・実行状態・採否（`adoption` は最初の理由、`adoption_reasons` はすべての理由のコード、`adoption_checks` は検査の件数）を記録する。既定値や保存済みプロンプトは変更しない。 |
 | `RAG_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT` | `20` | 業務ガイドの手順ごとの検索（`guide_step_retrieval_enabled`）が後に来る回答で、最初の章節の拡張（`section_expansion.phases[].phase` の `main`）が使わずに残す入力の割合（章節の拡張の根拠の入力の上限に対する %。0〜50。#2816）。手順の根拠から広げる段（`guide_steps`）は上限の全体を使い、前の段で起点にしなかった起点の章節を先に広げる。残した分は診断の `reserved_tokens` |
 | `RAG_SECTION_SKIP_REGRADE_AT_SCOPE` | `true` | 読む範囲（`section_expansion.minimum_scope`）が文書全体の列挙の問（#1503）で、章節の拡張が文書全体まで読んだら、CRAG の評価し直しを省いて生成へ進む（#1528。止めた理由 `scope_read`、段の記録 `grade_skipped: "scope_reached"`）。文書全体を読んだ後は上に読む章節が無く、評価し直しは足りるかの記録にしか使われないため。当たった章節（leaf）が範囲の問・件数のある問は従来どおり評価し直す。生成に渡す既知の欠落からは、広げる前の判定の内容の観点を除く。既定 ON は #1528 の A/B の結果（列挙の問で 484 → 293 秒、根拠の再現率・期待の語・対応は同じ）。`rag_overrides` の `section_skip_regrade_at_scope` |
 | `RAG_QUERY_EXPANSION_MAX_QUERIES` | `5` | 質問拡張で LLM が作る検索文の本数の上限（1〜5。#1499。既定は従来の `MAX_GENERATED_QUERY_COUNT` と同じ）。原質問・用語の別名・語彙の補助の検索文は数えない。プロンプトの「3〜5個」などの指示は変えず、作った検索文の先頭から上限まで使う。`rag_overrides` の `query_expansion_max_queries`。なお、質問拡張が LLM を呼ぶ戦略では、LLM の応答を待つ間に元の質問の検索（embedding と hybrid 検索）を別の thread で先に読み（#1499。設定は持たない。rag_engine の `AnswerDependencies.prefetch_search`、backend の `AnswerEngine._prefetch_query_hits`）、検索文ごとの検索の結果の cache（#1490）に入れる。続く文書検索が同じ検索文・方式・条件・件数の結果を読むので、検索の結果は並行にしないときと同じ（融合・参照先・実体の拡張・条件の緩和は先読みしない）。工程「質問拡張戦略」に先読みの時間を残す |
@@ -184,32 +169,24 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_APPROVED_FAQ_SUGGESTION_MIN_SCORE` | `0.75` | チャットと RAG 検索で類似問を提示する一致度の下限（0〜1）。チャットは送信のたびに類似問を照会し、この値以上の候補を最大 3 件と「どれでもない」を出して、どれかを選ぶまで回答しない。類似問を選ぶと、資料を検索せずに質問と類似問・承認済みの回答だけから LLM が回答する（検索・回答プロファイルの知識の「Approved FAQ（類似問）」でオン / オフ。#684 / #702 / #709） |
 | `RAG_APPROVED_FAQ_SUGGESTION_MAX_GAP` | `0.1` | チャットと RAG 検索で類似問を提示するとき、1 位の一致度からこの差より離れた候補を出さない（#709） |
-| （設定なし: 回答の画像の添付） | — | 回答は選んだ回答モデル（検索・回答プロファイルの回答モデル・チャットの比較の列のモデル・既定のテキストモデル）だけで作り、質問の理解・拡張・生成・作り直し・監査の途中で別のモデルに切り替えない（#3444）。そのモデルがシステム設定 > モデルで「画像入力に対応」なら、回答に渡す根拠の chunk に結び付いた図・画面の画像（切り出しかページの画像。上限 4 件、根拠の順位と質問との関連度の順）を同じ要求に添付する。対応していないモデルは画像を添付せず、取り込み時に作った図の説明（根拠の本文）で答える。質問の語で画像の要否を決めない。既定の Vision モデルは取り込みの処理（図の説明など）だけに使う。旧 `RAG_ANSWER_VISION_ENABLED` は読まない |
+| （設定なし: 回答の画像の添付） | — | 回答は選んだ回答モデル（検索・回答プロファイルの回答モデル・チャットの比較の列のモデル・既定のテキストモデル）だけで作り、質問の理解・拡張・生成の途中で別のモデルに切り替えない（#3444）。そのモデルがシステム設定 > モデルで「画像入力に対応」なら、回答に渡す根拠の chunk に結び付いた図・画面の画像（切り出しかページの画像。上限 4 件、根拠の順位と質問との関連度の順）を同じ要求に添付する。対応していないモデルは画像を添付せず、取り込み時に作った図の説明（根拠の本文）で答える。質問の語で画像の要否を決めない。既定の Vision モデルは取り込みの処理（図の説明など）だけに使う。旧 `RAG_ANSWER_VISION_ENABLED` は読まない |
 | `RAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで、会話履歴から質問を書き換える |
 | `RAG_ANSWER_RECORD_RETENTION_DAYS` | `0` | 回答の記録とチャット・RAG 検索の実行履歴の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、回答の保存時と設定の保存時に期限を過ぎた記録を削除する。取込・検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
 | `RAG_ENGINE_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
-**回答の時間の配分（#1516）**: 回答の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）の中で、章節の拡張・抽出と、
-回答文の生成と根拠確認（生成と監査の 1 組。初回と是正の最大 3 組）は同じ回答の期限を見る。回答の確定（引用の照合・
-本文の組み立て・回答の安全チェック・記録の保存）に 30 秒を残す（`rag_engine.resources.deadline` の
-`ANSWER_FINALIZE_RESERVE_SECONDS`）。是正の組は、残りから確定の分を引いた時間が 1 組の見積もり（直前の組の実測。
-推論するモデルの長い根拠の列挙の問で 1 組 125〜344 秒）より短ければ始めず、それまでの最良の組で確定する（工程
-「是正の打ち切り」）。各組の LLM の呼び出しには確定の分を残した期限を渡し、途中で切れても error にしない: 是正の組が
-切れたら採用済みの組を（監査が切れた是正の組は、監査を通った組より採用しない）、1 組目の監査が切れたら原文と照合済みの説明（監査なし）を、1 組目の生成が切れたら根拠の
-原文の抜粋（質問の語を含む原文を先に、足りなければ根拠の順で最大 4 件。`grounded.deadline_document_quotes`）を原文のみ提示
-（「参考情報」の節）で返す。根拠は回答に渡すと決めた後なので、生成が切れても拒答（`insufficient_evidence`）にはしない（#1548）。
-どの場合も、時間で確かめられなかった点（直していない是正の指摘・終わらなかった監査・生成）
-を本文の「回答時間の上限により省略した処理」に出し、回答を条件つきにする。外側の期限が切れた・利用者が取り消したときは従来どおり
-時間切れの error にする。各組の秒（生成・監査の秒・token・prompt の文字数と、次の組へ渡す是正の指摘の量）と打ち切った理由は回答の診断の `round_budget`、工程ごとの LLM の token の数（入力・
-cache・出力・推論）と呼び出しの秒の和は `execution_steps[].llm_usage`、1 回ごとは backend の log（`LLM の呼び出し:`）で分かる。
+**回答の時間の配分（#1516）**: 回答の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）の中で、章節の拡張・抽出と回答文の生成は同じ回答の期限を見る。
+回答の確定（引用の照合・本文の組み立て・回答の安全チェック・記録の保存）に 30 秒を残す（`rag_engine.resources.deadline` の `ANSWER_FINALIZE_RESERVE_SECONDS`）。
+生成の LLM の呼び出しには確定の分を残した期限を渡し、途中で切れても error にしない: 根拠の原文の抜粋（質問の語を含む原文を先に、足りなければ根拠の順で最大 4 件。`grounded.deadline_document_quotes`）を原文のみ提示（「参考情報」の節）で返す。
+根拠は回答に渡すと決めた後なので、生成が切れても拒答（`insufficient_evidence`）にはしない（#1548）。省いた生成は本文の「回答時間の上限により省略した処理」に出し、回答を条件つきにする。
+外側の期限が切れた・利用者が取り消したときは時間切れの error にする。工程ごとの LLM の token の数（入力・cache・出力・推論）と呼び出しの秒の和は `execution_steps[].llm_usage`、1 回ごとは backend の log（`LLM の呼び出し:`）で分かる。
 
 **期限の中の LLM の 1 回の上限（#1548）**: 回答の期限がある文脈では、LLM の 1 回の呼び出しに、timeout（残りの秒。#1422）に
 加えて、出力の上限（`max_output_tokens`）を残りの秒で出せる token の数に抑えて渡す（`rag_engine.adapters.oci.deadline_output_budget`。
 同じ接続・モデルの直近 8 回の完了した呼び出しの出力の速さの最大 × 1.25 × 残りの秒。実測が無ければ抑えない）。抑えた上限に
 届いて未完了になったら、残りの時間では終わらないので上限を広げた送り直し（#987）をせず、今の期限を切って期限切れと同じに
-扱う（生成と監査の組では、確かめ終わった分で確定する）。こうすると打ち切った呼び出しにも usage が返り、出力・推論の token が
+扱う。こうすると打ち切った呼び出しにも usage が返り、出力・推論の token が
 記録に残る。応答が返らなかった呼び出し（timeout・接続の失敗）も、秒と理由（例外の型）を log（`llm_status=failed`）と
-工程の記録（未完了の応答の理由）に残す。切れた組の LLM の秒・token は `round_budget.stop.usage` に入る。
+工程の記録（未完了の応答の理由）に残す。
 構造化出力の呼び出しの出力の上限は、回答の上限（`answer_max_tokens`。環境変数 `ANSWER_MAX_TOKENS`。既定 32768）と、呼ぶモデル
 （回答のモデル / Vision のモデル）の出力の上限の小さい方（`rag_engine.config.llm_output_token_limit`。#1719）。モデルの出力の上限は
 「システム設定 › モデル」の登録モデルの「出力の上限（tokens）」（既定 32768）で、backend が platform の
@@ -232,9 +209,8 @@ token を出す。
 streaming しない呼び出し（停滞の検出が OFF・回答の期限が無い文脈）は途中で打ち切れないので、出力の上限で未完了になった応答の
 出力の文に同じ基準の暴走（空白が 2,000 文字続いた箇所・末尾の繰り返し）があれば、上限を 2 倍に広げる送り直しをせず、streaming と
 同じく推論の量を下げて 1 回だけ送り直す（#3835。広げても空白・繰り返しが続くだけ。`oci._runaway_response_reason`）。理由は同じく
-`incomplete_reasons` に残り、送り直しても暴走した呼び出しの失敗の詳細（生成後監査では `audit_failure`）は分類 `runaway_output` と
-打ち切りの理由（`cutoff_reason`）を持つ。生成後監査の固定キーの wire では、値と次の key の間（JSON の構造の空白）で空白が続く
-暴走が出る。strict の JSON schema は構造の空白を制限できず、自由記述の欄の `maxLength` では防げない（#3835 の固定入力の比較）。
+`incomplete_reasons` に残り、送り直しても暴走した呼び出しの失敗の詳細は分類 `runaway_output` と
+打ち切りの理由（`cutoff_reason`）を持つ。
 
 **無音で止まった LLM の呼び出しの送り直し（#1926・#4736）**: 回答の期限がある文脈では LLM の呼び出しを streaming で受け
 （`rag_engine.adapters.oci._stream_parsed`）、応答の event（最初の event を含む）が `RAG_LLM_STALL_IDLE_SECONDS`（既定 120 秒。httpx の
@@ -280,8 +256,7 @@ level は使わない。そのため「第 3 章 > 3.1」の 3.1 は第 3 章の
 （解析済みの layout record の fixture）と backend の `tests/test_navigation.py` で確かめる。既存の文書の抽出の章節は、
 抽出結果に保存した章節の木から作るため、取り込み直し（解析からの再処理）で新しい規則になる。分割だけをやり直す再処理
 （抽出を使い回す）では chunk の `section_path` だけが変わり、抽出の章節は変わらない。人が修正した章節は上書きしない（深さが
-変わった章節は id が変わるため、「新しく抽出」の印で足される）。MinerU の要素の `section_path` は、共通の抽出の変換が
-MinerU の見出しの level から作るため、この規則にはまだそろえていない（chunk は同じ規則）。
+変わった章節は id が変わるため、「新しく抽出」の印で足される）。
 
 **章節と chunk の対応（#1438）**: 文書の詳細の「章節ナビゲーション」の章節（人の修正 `rag_document_sections` と、修正が
 無いときの抽出の章節）を章節の正本とし、正しいものとして扱う。章節は何度でも直されるが、分割（chunk）・embedding・
@@ -324,26 +299,11 @@ Docling 以外の解析エンジンの bbox は単位が違うため、Vision �
 | Docling | サービスが描いたページ画像の px（`RAG_ENGINE_RENDER_DPI`） | `layout_records.pages` の寸法から同じ解像度で描き直す。実サービス（docling 2.129.0）で確認済み（A4 の PDF は 2480x3509、画像は元画像の px）。#502 |
 | Unstructured | coordinates の座標系（PixelSpace 等）の px | registry が `layout_width` / `layout_height` を要素と asset の `page_width` / `page_height` に写す。無ければ不明。実サービス（unstructured 0.27.8、hi_res）で確認済み（PDF は PixelSpace で 350 dpi 相当のページ画像の px。A4 で 2893x4094。画像は元画像の px）。#502。座標系が左下原点（`PointSpace` / `RelativeCoordinateSystem`）なら y を反転する（#512） |
 | Dots.OCR | 描いたページ画像の px（`RAG_PARSER_DOTS_OCR_DPI`） | `pages` の寸法。画像ファイルは元画像の px（寸法を `pages` に入れる）。モデルが返す bbox は、入力画像を smart_resize（28 の倍数、画素数 3136〜11289600）した寸法の px なので、backend（`app/clients/external_parser.py`）が受け取ったときに送った画像の px へ戻す（公式の parser の `post_process_cells` と同じ換算）。根拠は下の「座標系の根拠」 |
-| MinerU | ページに対して 0-1000 に正規化した座標（左上原点） | V1 API の Middle JSON（schema 2.0）の 0-1 の bbox を、backend（`app/clients/external_parser.py` の `mineru_middle_json_blocks`）が content list と同じ 0-1000 の整数にする（#1329）。1000 を超えれば不明。根拠は下の「座標系の根拠」（この repo の実サービスでは未確認。ai-foundations-lab の検証と一致。#512） |
 | OCI Enterprise AI の VLM 解析 | 0-1 または 0-100 | 構造化抽出の prompt の指定。100 を超えれば不明 |
 | 全ての解析エンジン | 値が全て 1 以下なら 0-1 | 画像ファイル全体の `source_image` の asset も含む |
 
-### MinerU の LayoutRecord（#1334）
+座標系の根拠（#502。ローカルに接続先がない Dots.OCR は公式のソースで確認した）:
 
-MinerU の解析（V1 API の Middle JSON 2.0）からは、要素（`mineru_middle_json_blocks`）に加えて、Docling と同じ形の LayoutRecord を `parser_artifacts.layout_records`（`version` / `pages` / `records`）に作る（`backend/app/clients/mineru_layout.py`）。親子階層の分割（rag_engine）は変えず、その入力の形にそろえる。
-
-- 座標: Docling と同じ `image_top_left` のページ画像の px。PDF は Middle JSON の `extensions.docvortex_layout.pages` の寸法（`width_pt` / `height_pt`。bbox と同じ向き）を 300 dpi（Docling サービスの既定の `RAG_ENGINE_RENDER_DPI`）の px にし、`pages` に `width` / `height`（px）と `pdf_width` / `pdf_height`（pt）を入れる。画像ファイルは元の画像の px（EXIF の向きを直した寸法）。Middle JSON の 0-1 の bbox にその寸法を掛ける。要素の bbox（0-1000）を上の表の換算でページ画像の px にした値と一致する（#512 の例でテストしている）。寸法の分からない頁や bbox の無い block（Office の文書など）がある文書は record を作らず、親子階層は構造認識へ縮退する。
-- 種類の対応（1 か所の表 `MINERU_LAYOUT_CATEGORIES`）: `doc_title` → `Title`、`paragraph_title` → `Section-header`、`text` / `ref_text` / `aside_text` → `Text`、`list` / `index` → `List-item`、`table` → `Table`（本文は `table_body` の HTML）、`image` / `chart` → `Picture`（本文を空にして Vision の対象にし、図の中の文字（`image_body` / `chart_body`）は同じ bbox の `picture_ocr_text`）、`*_caption` → `Caption`、`*_footnote` / `page_footnote` → `Footnote`、`equation` → `Formula`、`code` → `Text`（`raw_type=code`・`raw.code`）、`header` → `Page-header`、`footer` / `page_number` → `Page-footer`。表に無い種類は `Text` にし、`raw_type` に元の種類を残す。
-- 頁のヘッダー・フッター・頁番号は、要素（本文）には入れない（#1329 のまま）が、record にはする。分割が Docling と同じく頁の定型（毎頁の柱・著作権表示・頁番号）として本文から外し、頁番号を論理頁に使う。
-- 見出しの深さ: MinerU の `level`（`doc_title`=1、`paragraph_title`=2〜6）は `raw.mineru_level` に残すだけで、分割の見出しの深さには使わない。分割の深さは Docling と同じく本文の番号の形（「1.」「1.2」「第1章」など）から決めていて、尺度が違う（章 0・英字 6・丸数字 8）。
-- 頁・段・図をまたいで続く本文・リスト・表（Middle JSON の `continues_prev`）は、Docling と同じく頁ごとの別の record のままにし、`raw.continues_prev` に印を残す。取込の文書全体の整理（`backend/app/rag/pdf_segment_merge.py` の `consolidate_document_extraction`。#2266）が、MinerU と同じ規則で続きの元を探して `raw.continues_record_id` に写し（本文・リストは図・表・脚注・頁の定型を読み飛ばして前の本文・リスト、表は前の頁の最後の表。表の続きには列見出しの行を付ける）、親子階層の分割が同じ子 chunk に入れる（間の図・表は単独の子 chunk）。段ごとの解析（#2001）の段の境目（`raw.mineru_page_idx` が前の頁から続かない頁）は MinerU が判定できないので、Docling と同じ規則で判定する。表の `cell_merge`（MinerU のサーバー側の LLM の後処理のセルの続き。使っていない）は `raw.cell_merge` に残すだけ。
-- record の `id` は要素の `element_id`（`mineru-p{頁}-b{block の番号}`）と同じで、`raw` に MinerU の元の block の番号（`mineru_block_index`）・頁（`mineru_page_idx`）・種類（`mineru_type`）を残す。caption・footnote・図の中の文字は、親の id に `-caption{n}` / `-footnote{n}` / `-ocr` を付けた別の record にする。chunk の `source_parser` は `mineru_layout`（Docling は `docling_layout`）。
-- Vision は record を入力にし（Docling と同じ読み取り・切り出し）、結果を record に書き戻す。要素・asset は共通の抽出の変換で作ったものなので、ほかの解析エンジンと同じ形（図の本文を説明に置き換え、元の本文を `vision_source_text` に残す）でも書き戻し、構造認識など record を読まない分割方式でも説明を使う。読み取る前に説明の無かった図・表だけを書き戻す（読み取り済みの説明を元の本文として残したり、表の説明を二重に足したりしない）。
-- 実サービスの MinerU での確認は未実施（CI は MinerU 4.0 の公開の契約の形の固定の例で確かめる）。dots.ocr も頁ごとの種類と bbox を返すので同じ方法で record を作れる見込みだが、未確認（今回は MinerU だけ）。
-
-座標系の根拠（#502。ローカルに接続先がない MinerU と Dots.OCR は公式のソースで確認した）:
-
-- MinerU: 2.5.4（tag `mineru-2.5.4-released`）の `mineru/backend/pipeline/pipeline_middle_json_mkcontent.py` の `make_blocks_to_content_list` が `int(x0 * 1000 / page_width)` などで 0-1000 にする。4.0.10（tag `mineru-4.0.10-released`）の `mineru/render/_internal/content_list/common.py` の `normalize_bbox` も「MiddleJson の 0-1 の bbox を Content List の 0-1000 の整数にする」（`int(value * 1000)`）。原点（左上）は、backend の変換と同じ前提のまま（ソースでは未確認）。
 - Dots.OCR: github.com/rednote-hilab/dots.ocr（commit `36d7248`、2026-03-24）の `dots_ocr/utils/layout_utils.py` の `post_process_cells` が、bbox を smart_resize した入力画像の寸法（コメント: 「server input width, also has smart_resize in server」）から元画像の寸法へ戻している。`dots_ocr/utils/image_utils.py` の `smart_resize` と `dots_ocr/utils/consts.py`（`IMAGE_FACTOR=28`・`MIN_PIXELS=3136`・`MAX_PIXELS=11289600`）、Hugging Face の `rednote-hilab/dots.ocr` の `preprocessor_config.json`（`Qwen2VLImageProcessor`、`patch_size` 14・`merge_size` 2・同じ min / max pixels）。backend は OpenAI 互換 API を直接呼ぶので、この換算を backend で行う。換算しないと、A4 を 200 dpi で描いたページで縦に約 0.5%（最大 13px）、400 dpi など 11289600 px を超えるページでは約 15% ずれていた。
 - Dots.OCR の Picture（本文のない図）は asset の kind が `picture` になる。#502 までは Vision の対象の種類に入っておらず、読み取っていなかった。
 
@@ -353,14 +313,12 @@ ai-foundations-lab の検証との照合（#512）:
 
 | 解析エンジン | lab の換算（ファイル） | この repo | 判断 |
 |---|---|---|---|
-| MinerU | content_list / content_list_v2 の bbox は 1000x1000 で割り、ページ画像の寸法を掛ける。y は反転しない（左上原点）。middle.json（`pdf_info[].page_size` の pt）と model.json（`page_info.width/height`）は、その寸法で割る（`adapters/mineru.py` の `_bbox_to_page_image`・`_records_from_flat_content_list`、`adapters/mineru_api.py`、`tests/test_mineru_adapter.py`・`tests/test_mineru_api_adapter.py`） | content list と同じ 0-1000 の bbox を使い、1000x1000 で割る（`vision.py` の `_bbox_scale`。4.x は Middle JSON の 0-1 から換算する。#1329） | 一致。#502 で未確認だった原点（左上）を lab の重ね合わせで確認とする。lab の 2 例（A4 の 2480x3500 のページへの換算）をテストにした（`test_mineru_bbox_matches_ai_foundations_lab`） |
 | Dots.OCR | 後継の dots.mocr の bbox を、300 dpi のページ画像の px としてそのまま使い、ページ内へ収めるだけ（`adapters/dots_mocr.py` の `analyze`）。README は、300 dpi の A4 の画像パッチを約 44,000 とし、`prompt_grounding_ocr` の bbox は「processor 側の resize と一致しない」とする | smart_resize 後の入力画像の px から、送った画像の px へ戻す（`external_parser.py` の `_dots_bboxes_to_page_px`） | #502 が正しい。lab の記録（44,000 ≒ 2492x3500 / 14²、resize と合わない）は、bbox が smart_resize 後の寸法の px であることと合う。300 dpi の A4 は縮小されず 28 の倍数への丸め（x 12px・y 9px、0.5% 未満）しか差がないため、lab ではそのままでも重なって見えた。この repo の既定の 200 dpi や、11289600 px を超えるページでは差が出るので換算を残す。dots.mocr の `preprocessor_config.json`（Hugging Face `rednote-hilab/dots.mocr`、revision `e539fbb`）も dots.ocr と同じ値（14・2・3136・11289600）。lab の値をテストにした（`test_dots_300dpi_a4_matches_ai_foundations_lab_observation`） |
 | Unstructured | `metadata.coordinates.points` の最小・最大を、`system.width / height` で割ってページ画像の寸法を掛ける（`adapters/unstructured_adapter.py`、`tests/test_unstructured_adapter.py`: 350 dpi 相当の 2894x1930 から 300 dpi の 2481x1654 へ） | registry が points を最小・最大の bbox にし、座標系の寸法を `page_width` / `page_height` に写す。`vision.py` がその寸法で割る | 一致。lab の例をテストにした（`test_unstructured_bbox_matches_ai_foundations_lab`） |
 | 共通 | 左下原点の bbox は `coordinates.py` の `pdf_bottom_left_to_image_top_left`（`top = (page_height - max(y)) * scale`）で左上原点へ直す（`tests/test_coordinates.py` で往復を確認） | #512 まで、座標系の原点を見ていなかった | 取り込んだ。Unstructured の `PointSpace` と `RelativeCoordinateSystem` は `Orientation.CARTESIAN`（左下原点。`unstructured/documents/coordinates.py`）なので、`bbox_coordinate_system` がこの 2 つなら `vision.py` の `_page_px_bbox` が同じ式で y を反転する。unstructured 0.27.8 の PDF はどの戦略でも `PixelSpace`（pdfminer の左下原点は `rect_to_bbox` で左上へ直してある）なので、今の parser サービスでは通らない（防御）。`test_bottom_left_coordinate_system_is_flipped` |
 
-- lab と #502 の食い違い: MinerU の middle.json の単位。lab（MinerU 2.x の `mineru[core]>=2.0` と mineru-api の hybrid-engine）は pt（`page_size` で割る）、#502 で読んだ 4.0.10 の `normalize_bbox` は「MiddleJson の 0-1」。版で違う。MinerU 4.0 は `/file_parse` を削除し、V1 API は content list を返さないため、この repo は 4.x の Middle JSON（`schema=docvortex.middle`・`schema_version=2.x` を確かめ、bbox は 0-1）を読み、content list と同じ 0-1000 に換算する（#1329）。3.x の middle.json（`pdf_info`）は読まない。
 - 取り込んでいないもの: lab の Dots.OCR の応答の寛容な読み取り（`{"elements": [...]}` などの包み・切れた JSON）、Picture の切り出しの再 OCR と Mermaid 化は、座標の変換ではないので #512 の対象外。
-- 未確認のまま: /Rotate のあるページで、MinerU の `page_width` / `page_height` が回転後の寸法か（lab も回転したページは確かめていない。ビューアの回転は表示だけ）。Dots.OCR と Vision の段は pymupdf が回転を反映して描くので、送った画像と bbox は合う。
+- /Rotate のあるページ: Dots.OCR と Vision の段は pymupdf が回転を反映して描くので、送った画像と bbox は合う。
 - この確認では Unstructured の parser サービス（127.0.0.1:18022）が起動していなかったので、実サービスでは確かめ直していない（#502 の実サービスの確認と、parser サービスの venv の unstructured 0.27.8 のソースで確認した）。
 
 ### 頁番号のフッターの論理頁（#2289）
@@ -479,7 +437,7 @@ SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile
 
 ### 指示の保存と検査状態の区別（#3753）
 
-検索・回答・監査・評価の指示は、各設定画面で保存・変更の破棄・既定への復帰を共通操作で扱う。`既定に戻す` は保存前の編集であり、保存時にその key の上書きを消す。保存した指示は API の要求に固定して worker thread・子 task へ引き継ぎ、構造化出力の型や認可は変更しない。
+検索・回答・評価の指示は、各設定画面で保存・変更の破棄・既定への復帰を共通操作で扱う。`既定に戻す` は保存前の編集であり、保存時にその key の上書きを消す。保存した指示は API の要求に固定して worker thread・子 task へ引き継ぎ、構造化出力の型や認可は変更しない。
 
 手順の根拠の関連付けと、説明・引用による手順への対応付けは別の段である。`guide.step_coverage[].assignment` は引用した item、割り当てた item、対応の方法と公開可能かを残す。`evidence_flow` は関連付けた source の数・実際の回答材料の evidence ID・引用した evidence ID を分けて残す。必須手順の直接の根拠を各手順に一つずつ先に原文予算へ配り、任意の章節だけで予算を使い切らない。予算の上限自体は増やさない。`unused` は資料の不在と断定せず、回答と手順の対応が未確定であることを示す。`round_budget.rounds[].accepted` は草稿の採否で、`acceptance_scope=draft_selection` を記録する。監査を行わなかった要約は `summary_validation=not_run` とし、`summary_supported=true` を記録しない。
 

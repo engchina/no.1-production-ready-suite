@@ -371,3 +371,95 @@ async def test_repair_issues_complete_release_from_nonconforming_current(
                 _execute(connection, f"DROP TABLE {table} CASCADE CONSTRAINTS PURGE", {})
 
         await client._run_transaction(drop)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_repair_completes_only_the_draft_when_current_conforms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公開版は適合で下書きだけが不適合なら、下書きだけを補い、公開版を増やさない(#4745)。"""
+    from app.rag import language_pack_repair as repair
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    suffix = uuid4().hex[:10]
+    release_table = f"rag_test_lang_releases_{suffix}"
+    state_table = f"rag_test_lang_state_{suffix}"
+    jobs_table = f"rag_test_lang_jobs_{suffix}"
+    monkeypatch.setattr(module, "RELEASE_TABLE", release_table)
+    monkeypatch.setattr(module, "STATE_TABLE", state_table)
+    monkeypatch.setattr(repair, "INGESTION_JOBS_TABLE", jobs_table)
+    sql = module.language_pack_release_statements().replace("rag_lang_", f"rag_test_{suffix}_")
+    client = OracleClient()
+
+    def create(connection: OracleConnectionProtocol) -> None:
+        for statement in sql.split(";"):
+            if statement.strip():
+                _execute(connection, statement, {})
+        _execute(
+            connection,
+            f"CREATE TABLE {jobs_table} (job_id VARCHAR2(64) PRIMARY KEY, status VARCHAR2(32))",
+            {},
+        )
+
+    await client._run_transaction(create)
+    store = module.LanguagePackReleaseStore(client)
+    initial = builtin_pack().to_dict()
+    initial["answer_labels"]["applications_section"] = "合成の公開版の文言"
+    try:
+        before = await store.ensure_initialized(initial)
+        draft = deepcopy(initial)
+        draft["answer_labels"]["gaps_section"] = "合成の下書きの文言"
+        del draft["answer_labels"]["applications_section"]
+
+        def seed(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                f"UPDATE {state_table} SET draft_effective_json=:effective",
+                {"effective": _json_bind(draft)},
+                input_sizes=_json_input_sizes("effective"),
+            )
+            _execute(connection, f"INSERT INTO {jobs_table} VALUES ('job-a', 'RUNNING')", {})
+
+        await client._run_transaction(seed)
+        with pytest.raises(LanguagePackSnapshotError):
+            await store.state()
+
+        plan = await repair.inspect_language_pack_repair(client)
+        assert plan.repair_target == repair.REPAIR_TARGET_DRAFT
+        assert plan.blockers == []
+        assert plan.missing_fields == ["answer_labels.applications_section"]
+
+        async def apply_repair() -> repair.LanguagePackRepairResult:
+            return await repair.apply_language_pack_repair(
+                client,
+                expected_current_id=before.current.id,
+                expected_draft_revision=plan.draft_revision,
+            )
+
+        # 同じ期待値で同時に適用しても 1 回だけ書かれる(2 回目は状態行の lock の後に止まる)。
+        outcomes = await asyncio.gather(apply_repair(), apply_repair(), return_exceptions=True)
+        assert sum(isinstance(item, repair.LanguagePackRepairBlocked) for item in outcomes) == 1
+        applied = next(
+            item for item in outcomes if isinstance(item, repair.LanguagePackRepairResult)
+        )
+        assert applied.repair_target == repair.REPAIR_TARGET_DRAFT
+        assert applied.release_id == before.current.id
+
+        expected = deepcopy(initial)
+        expected["answer_labels"]["gaps_section"] = "合成の下書きの文言"
+        state = await store.state()
+        assert state.current.id == before.current.id
+        assert state.current.effective == initial
+        assert state.draft_effective == expected
+        assert state.draft_revision == plan.draft_revision + 1
+        assert (await store.list()).total == 1
+        # 修復の後は通常の保存が使える。
+        saved = await store.save_draft(expected, expected_revision=state.draft_revision)
+        assert saved.draft_revision == state.draft_revision + 1
+    finally:
+
+        def drop(connection: OracleConnectionProtocol) -> None:
+            for table in (state_table, release_table, jobs_table):
+                _execute(connection, f"DROP TABLE {table} CASCADE CONSTRAINTS PURGE", {})
+
+        await client._run_transaction(drop)

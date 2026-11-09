@@ -80,6 +80,9 @@ def test_same_business_overview_cannot_reach_operation_generation():
     assert result.crag_attempts[-1]["generation_usable"] is False
     assert "直接裏付ける根拠を確認できていません" in result.answer_text
     assert not result.generation_trace["crag_generation_gate"]["generation_calls"]
+    # 生成を呼ばずに拒否しても、通常の回答と同じ形で件数を残す（#4735）。
+    counts = result.generation_trace["retrieval_counts"]
+    assert counts["passed_to_model"] == 0 and counts["found"] >= 1 and counts["candidate_count"] >= counts["found"]
 
 
 def test_overview_gate_precedes_legacy_generation_dispatch():
@@ -188,6 +191,37 @@ def test_part_quote_outside_generation_source_is_unknown_not_refusal():
     # 診断だけの欄は生成の指示へ渡さない。
     prompt = crag_generation.prompt_context(view)
     assert "generation_decision" not in prompt and "unverified_binding_reasons" not in prompt
+
+
+def test_verified_quote_is_added_as_quote_only_item():
+    from rag_engine.generation import crag_generation
+
+    span = {"evidence_id": "E1", "label": "E1", "source_id": "run:c0", "text": OPEN, "start": 0, "end": len(OPEN)}
+    kept: list = []
+    added = crag_generation._add_verified_quotes(kept, [{"source_id": "run:c0", "quote": OPEN}], [span])
+    assert added == 1
+    assert kept[0].quote_only is True
+    assert kept[0].item.text == OPEN
+
+
+def test_prompt_context_hides_internal_source_ids():
+    from rag_engine.generation import crag_generation
+
+    row = {"aspect": "procedure", "status": "supported", "source_ids": ["run:c0"]}
+    view = {
+        "aspect_checks": [{**row, "evidence": [{"source_id": "run:c0", "quote": OPEN, "evidence_ids": ["E1"]}]}],
+        "answerable_parts": [
+            {
+                **row,
+                "reported_source_ids": ["run:c0"],
+                "reported_evidence": [{"source_id": "run:c0"}],
+                "evidence": [{"source_id": "run:c0", "quote": OPEN}],
+            }
+        ],
+    }
+    prompt = crag_generation.prompt_context(view)
+    assert "run:c0" not in prompt and "source_id" not in prompt
+    assert OPEN in prompt and '"E1"' in prompt
 
 
 @pytest.mark.parametrize(

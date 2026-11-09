@@ -43,9 +43,6 @@ class AnswerLabels:
     item_bullet: str
     steps_heading_template: str
     quote_template: str
-    condition_template: str
-    condition_suffix: str
-    condition_link: str
     # 小問ごとの見出しの型（{label} に小問の印、{text} に小問の文。#2399）。
     subquestion_heading_template: str
     # 設定の窓口・引き継ぐ条件・承認。{title} に業務ガイドの題名、{contact} に窓口、{conditions} に条件、{note} に承認の補足）。
@@ -55,7 +52,6 @@ class AnswerLabels:
     guide_approval_template: str
     guide_acquisition_incomplete_template: str
     # 用言の終わり（「有効期限を過ぎた」）。条件がこれで終わるときは「の」を挟まない (#644)。
-    predicate_endings: tuple[str, ...]
     # 観点名（task_contract.required_aspects）→ 利用者向けの語 (#986)。
     aspect_labels: dict[str, str]
     # render() が決定的に出力する見出し行と出典行、「参考情報」の節の原文の行と節の箇条の行。
@@ -72,9 +68,6 @@ class AnswerLabels:
 
     def quote(self, text: str) -> str:
         return self.quote_template.format(quote=text)
-
-    def condition(self, text: str) -> str:
-        return self.condition_template.format(condition=text)
 
     def steps_heading(self, heading: str, title: str) -> str:
         return self.steps_heading_template.format(heading=heading, title=title) if title else heading
@@ -150,16 +143,12 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         item_bullet=text("item_bullet"),
         steps_heading_template=text("steps_heading_template"),
         quote_template=text("quote_template"),
-        condition_template=text("condition_template"),
-        condition_suffix=text("condition_suffix"),
-        condition_link=text("condition_link"),
         subquestion_heading_template=text("subquestion_heading_template"),
         guide_notes_section=text("guide_notes_section"),
         guide_notes_note_template=text("guide_notes_note_template"),
         guide_handoff_template=text("guide_handoff_template"),
         guide_approval_template=text("guide_approval_template"),
         guide_acquisition_incomplete_template=text("guide_acquisition_incomplete_template"),
-        predicate_endings=pack.words("answer_labels", "predicate_endings"),
         aspect_labels={aspect: label for label, aspect in pack.mapping("answer_labels", "aspect_labels").items()},
         structural_line=re.compile(
             "|".join(re.escape(title) for title in titles)

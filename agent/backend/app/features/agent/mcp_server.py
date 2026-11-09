@@ -137,8 +137,8 @@ CANCEL_OUTPUT_SCHEMA_VERSION = 1
 # 範囲 source_line_start / source_line_end を足して 3、#3429 で行の番号の基準に解析の表の格子の
 # parsed_table を足して 4、#3546 でツールの呼び出しに RAG の縮退（degraded_steps・
 # guardrail_degraded・zero_evidence_stage）を、根拠に表の行・列の対応の検査が読めるか
-# （table_binding）を足して 5）。
-OBSERVATION_SCHEMA_VERSION = 6
+# （table_binding）を足して 5。#4668 で RAG の根拠の table_binding を削除し 7）。
+OBSERVATION_SCHEMA_VERSION = 7
 # 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
 # pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
@@ -523,9 +523,8 @@ class ObservedUsage(BaseModel):
     output_tokens: int = Field(default=0, ge=0)
 
 
-# RAG の ZeroEvidence.stage と RagEvidence.table_binding の語彙（契約の一致はテストで確かめる）。
+# RAG の ZeroEvidence.stage の語彙（契約の一致はテストで確かめる）。
 ObservedZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
-ObservedTableBinding = Literal["checkable", "not_checkable"]
 
 
 class ObservedDegradedStep(BaseModel):
@@ -613,13 +612,6 @@ class ObservedEvidence(BaseModel):
         description="回答での使われ方（RAG の answer_use と同じ。引用でなければ null）。",
     )
     locator: ObservedLocator = Field(default_factory=ObservedLocator)
-    table_binding: ObservedTableBinding | None = Field(
-        default=None,
-        description=(
-            "RAG の table_binding（表の行・列の対応の検査がこの根拠の本文を読めるか。null は表の"
-            "無い根拠・読み取りのツールの chunk）。"
-        ),
-    )
     text: str = Field(
         default="",
         description=(
@@ -1138,7 +1130,6 @@ def _observed_evidence(
         cited=key in cited,
         answer_use=cast(Literal["confirmed", "reference"], use) if use is not None else None,
         locator=ObservedLocator.model_validate(item.locator),
-        table_binding=cast(ObservedTableBinding | None, item.table_binding),
         text_length=len(item.text),
         truncated=item.truncated,
     )

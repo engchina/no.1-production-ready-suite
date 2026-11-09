@@ -1605,23 +1605,6 @@
               "locator": {
                 "$ref": "#/$defs/ObservedLocator"
               },
-              "table_binding": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "checkable",
-                      "not_checkable"
-                    ],
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "RAG の table_binding（表の行・列の対応の検査がこの根拠の本文を読めるか。null は表の無い根拠・読み取りのツールの chunk）。",
-                "title": "Table Binding"
-              },
               "text": {
                 "default": "",
                 "description": "生成に渡した本文そのもの（切らない。同じ chunk を別の呼び出しが渡した本文は改行でつなぐ）。text_omitted なら空。",
@@ -2112,7 +2095,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

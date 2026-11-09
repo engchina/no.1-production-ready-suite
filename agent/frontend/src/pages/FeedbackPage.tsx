@@ -69,7 +69,7 @@ import { countDelta, formatRate, Metric, rateDelta } from "@/pages/feedbackMetri
 import { signalLabel, SignalsContent, SignalsSkeleton } from "@/pages/FeedbackSignals";
 
 // フィードバック（#774）。2 つの見方を `Tabs` で切り替える（#1822）。
-// - 確かめるべき実行（既定）: 評価の付いていない実行も、回答の検証・回答の対応・ツール・承認・実行の状態の
+// - 確かめるべき実行（既定）: 評価の付いていない実行も、回答の対応・ツール・承認・実行の状態の
 //   暗黙のシグナルから集める（`FeedbackSignals.tsx`）。明示の評価は回答のごく一部にしか付かないため既定にする。
 // - 利用者の評価: チャットの回答への利用者の評価を集計し、役に立たなかった回答と理由を確かめる。
 //   画面の形は RAG のフィードバック（集計 → 理由 → 一覧 → 詳細）にそろえる。

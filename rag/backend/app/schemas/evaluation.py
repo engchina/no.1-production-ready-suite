@@ -1,8 +1,8 @@
 """RAG 評価スキーマ。"""
 
-from datetime import datetime
 from typing import Any, Literal, Self
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
@@ -126,8 +126,6 @@ EvaluationFailureReason = Literal[
     "screen_missing",
     # 案内すべき画面のほかの画面を回答が案内した（#2402）。
     "wrong_screen",
-    # 回答の監査が、回答は質問の目的に答えていない（goal_alignment=off_target）と判定した（#2402）。
-    "off_target",
     # 回答文の生成の出力が検査を通らず、参考情報へ退避した（#4104）。case_error とは別に数える。
     "answer_generation_fallback",
     "case_error",
@@ -817,8 +815,8 @@ class EvaluationRagOverrides(BaseModel):
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
-    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成・監査の推論の量、
-    # CRAG の評価の省略、質問拡張の検索文の上限を比べる。
+    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成の推論の量、
+    # 質問拡張の検索文の上限を比べる。
     strategy_reasoning_effort: ReasoningEffortOverride | None = None
     judge_reasoning_effort: ReasoningEffortOverride | None = None
     generation_reasoning_effort: ReasoningEffortOverride | None = None
@@ -826,8 +824,6 @@ class EvaluationRagOverrides(BaseModel):
     # CRAG の評価の候補の短い ID(#1864)。
     crag_short_candidate_ids: bool | None = None
     section_skip_regrade_at_scope: bool | None = None
-    crag_skip_on_strong_signals: bool | None = None
-    crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
     query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 
@@ -951,14 +947,14 @@ class EvaluationJob(BaseModel):
     total_cases: int
     completed_cases: int
     current_case_id: str | None = None
-    current_case_started_at: datetime | None = None
+    current_case_started_at: UtcDatetime | None = None
     # job 全体の時間の上限（秒）。上限に達したら、残りのケースは実行せずに失敗として記録する。
     time_limit_seconds: int
     error_message: str | None = None
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    heartbeat_at: datetime | None = None
+    created_at: UtcDatetime
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
+    heartbeat_at: UtcDatetime | None = None
     run_result: EvaluationMetrics | None = None
     partial_result: EvaluationMetrics | None = None
     # アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。

@@ -10,7 +10,7 @@ from rag_parser_core.vision_text_map import (
     chunk_projected_text,
     projected_element_text,
 )
-from rag_pipeline_core.chunking import Chunk
+from rag_pipeline_core.chunking import Chunk, pending_table_supplement_source
 
 _ERROR = "保存する抽出と画像本文の出所が一致しません。解析結果と分割結果を確認してください。"
 type _SourceIdentity = tuple[str, str, str, str, str]
@@ -66,5 +66,7 @@ def _validate_chunk_source_projection(
         element = owners[element_id][0]
         projection = projected_element_text(element_id, element.text, element.metadata)
         allowed.update(_source_identity(row.source) for row in projection.ranges)
+        if (source := pending_table_supplement_source(element)) is not None:
+            allowed.add(_source_identity(source))
     if not declared <= allowed:
         raise ValueError(_ERROR)

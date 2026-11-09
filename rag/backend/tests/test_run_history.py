@@ -1380,3 +1380,19 @@ def test_summary_uses_only_recorded_models(
     result = history_route._summary_fields({"usage_models": models, "model_id": model_id}, {})
     assert result["models"] == expected
     assert "usage_models" not in result
+
+
+def test_list_api_marks_naive_oracle_timestamps_as_utc(monkeypatch: MonkeyPatch) -> None:
+    """Oracle が時間帯の無い値を返しても、一覧の created_at は UTC の印つきにする（#4753）。"""
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    _capture(
+        monkeypatch,
+        [
+            [_row("run-1", created_at=datetime(2026, 11, 9, 14, 15, 57, 223334))],
+            [{"count_value": 1}],
+        ],
+    )
+    response = client.get("/api/history/runs", headers=login(client, "viewer"))
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["items"][0]["created_at"] == "2026-11-09T14:15:57.223334Z"

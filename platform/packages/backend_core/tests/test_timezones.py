@@ -1,10 +1,10 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings
 
 from pr_backend_core.config import (
@@ -17,6 +17,7 @@ from pr_backend_core.config import (
 )
 from pr_backend_core.timezones import (
     DEFAULT_TIMEZONE,
+    UtcDatetime,
     configured_timezone,
     configured_timezone_name,
     local_now,
@@ -114,3 +115,25 @@ def test_session_time_zone_offset_is_the_current_offset(
 ) -> None:
     # Oracle の session の TIME_ZONE は地域名ではなく offset（thin mode の DPY-3022。#3265）。
     assert session_time_zone_offset(SimpleNamespace(timezone=name), now=now) == expected
+
+
+class _UtcResponse(BaseModel):
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
+
+
+def test_utc_datetime_marks_naive_oracle_value_as_utc() -> None:
+    """Oracle の時間帯の無い値は UTC に印を付けて ISO 8601 の `Z` で返す（#4753）。"""
+    payload = _UtcResponse(created_at=datetime(2026, 11, 9, 14, 15, 57, 223334))
+    assert payload.created_at.tzinfo is not None
+    assert payload.created_at.utcoffset() == timedelta(0)
+    assert '"created_at":"2026-11-09T14:15:57.223334Z"' in payload.model_dump_json()
+
+
+def test_utc_datetime_converts_aware_and_keeps_none() -> None:
+    """時間帯のある値は UTC に換算し、瞬間を変えない。None は None のまま。"""
+    tokyo = timezone(timedelta(hours=9))
+    payload = _UtcResponse(created_at=datetime(2026, 11, 9, 23, 15, 57, tzinfo=tokyo))
+    assert payload.created_at == datetime(2026, 11, 9, 14, 15, 57, tzinfo=UTC)
+    assert payload.created_at.utcoffset() == timedelta(0)
+    assert payload.finished_at is None

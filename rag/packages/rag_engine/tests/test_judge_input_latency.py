@@ -11,8 +11,6 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-from test_answer_llm_latency import _settings as _engine_settings
 from test_enumeration_sufficiency import BUSINESS_DAY_FIVE, DO_NOT_TOUCH, REPORT, RESERVE, _items
 from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context
 from test_section_expansion import _settings as _section_settings
@@ -217,96 +215,6 @@ def test_short_candidate_ids_are_off_by_default_in_the_engine():
 # ---- CRAG の評価を曖昧な帯だけで呼ぶ -----------------------------------------------------------------------------
 
 QUESTION = "経費精算の申請の期限と承認者を教えてください"
-
-
-def _scored(*records: AnswerRecord, score: float = 0.9) -> AnswerContext:
-    first = replace(records[0], metadata={**records[0].metadata, "rerank": {"rank": 1, "relevance_score": score}})
-    records = (first, *records[1:])
-    return AnswerContext(records=list(records), text="\n".join(r.text for r in records), ranked_candidates=(first,))
-
-
-def _check(context: AnswerContext, question: str = QUESTION, **overrides):
-    settings = _engine_settings(crag_skip_on_strong_signals=True, crag_skip_min_rerank_score=0.8, **overrides)
-    return generation._crag_grade_skip_check(question, context, settings)
-
-
-def test_strong_signals_with_partly_matched_requests_skip_the_grade():
-    # 多段の問は要求の語が 1 つの根拠にそろわない（一部一致 = weak）。根拠の無い要求が無ければ飛ばす。
-    context = _scored(_parent("p1", "経費精算の申請は月末までに行います。"), _parent("p2", "承認は部長が行います。", source="承認規程.pdf"))
-    check = _check(context)
-    assert check["skip"] is False, check
-    assert "充足性の判定は行わない" in check["reason"]
-
-
-@pytest.mark.parametrize(
-    "name, context, question",
-    [
-        ("low-score", _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。"), score=0.5), QUESTION),
-        (
-            "missing-request",
-            _scored(_parent("p1", "経費精算の申請は月末までに行います。")),
-            "経費精算の申請の期限と、出張旅費の上限額を教えてください",
-        ),
-        (
-            "enumeration",
-            _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。")),
-            "経費精算の申請で決められた期限をすべて挙げてください",
-        ),
-        ("open-document-enumeration", _scored(_parent("p1", "作業者は配線に触れません。")), DO_NOT_TOUCH),
-        (
-            "error-message",
-            _scored(_parent("p1", "経費精算で「E0123 申請できません」と表示されたら再申請します。")),
-            "「E0123 申請できません」と表示されたときの対処は？",
-        ),
-        (
-            "superseded",
-            _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。", metadata={"document_superseded": True})),
-            QUESTION,
-        ),
-        (
-            "duplicate",
-            _scored(
-                _parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。" * 3, source="規程.pdf"),
-                _parent("p9", "経費精算の申請の期限は月末で、承認者は部長です。" * 3, source="規程-2023.pdf"),
-            ),
-            QUESTION,
-        ),
-    ],
-    ids=lambda value: value if isinstance(value, str) and len(value) < 30 else "",
-)
-def test_ambiguous_or_must_call_questions_call_the_grade(name, context, question):
-    check = _check(context, question)
-    assert check["skip"] is False and check["reason"], name
-
-
-def test_not_skipped_grade_records_the_reason_in_the_step():
-    context = _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。"), score=0.5)
-    settings = _engine_settings(crag_skip_on_strong_signals=True, crag_skip_min_rerank_score=0.8)
-    grade = CragRetrievalGradeOutput(
-        candidate_verdicts=[{"chunk_uid": "p1", "relevant": True, "reason": "関連"}],
-        aspect_checks=[],
-        reason="足りる",
-        sufficient=True,
-        confidence=0.9,
-        rewritten_query="",
-    )
-    lines: list = []
-    token = generation._execution_lines.set(lines)
-    try:
-        with (
-            patch.object(generation, "load_latest_or_source_chunk_run", return_value=SimpleNamespace(run_id="r")),
-            patch.object(generation, "build_adb_hybrid_answer_context", return_value=context),
-            patch.object(generation, "parse_text_response", return_value=grade) as parse,
-        ):
-            generation.build_crag_answer_context(QUESTION, "abcdef", ["docling"], settings)
-    finally:
-        generation._execution_lines.reset(token)
-    assert parse.call_count == 1
-    display = generation.format_question_display(QUESTION, lines)
-    assert "LLM の評価を省略しない理由: rerank の最上位の score 0.500 が閾値 0.800 未満" in display
-
-
-# ---- 読む範囲（文書全体）まで読んだ後の評価し直しの省略 ----------------------------------------------------------------
 
 
 def test_open_document_enumeration_skips_the_regrade_after_reading_the_document():

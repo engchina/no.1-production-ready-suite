@@ -5,7 +5,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
 from pytest import MonkeyPatch
 from rag_parser_core import registry as parser_registry
 from rag_parser_core.result import ParserRegistryResult
@@ -13,7 +12,6 @@ from rag_parser_core.result import ParserRegistryResult
 from app.config import Settings
 from app.rag import parser_adapter_contract as parser_adapter_contract_module
 from app.rag import parser_adapter_contract_cli, parser_adapter_readiness
-from app.rag.mineru_license import set_mineru_license_acknowledgement
 from app.rag.parser_adapter_contract import (
     ParserAdapterCompatibilityCase,
     ParserAdapterCompatibilityMatrix,
@@ -290,8 +288,7 @@ def test_compatibility_matrix_uses_parser_service_runner_for_dots_ocr(
     assert matrix.cases[0].status == "passed"
 
 
-@pytest.mark.usefixtures("mineru_selectable")
-def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
+def test_compatibility_matrix_dots_ocr_unconfigured_connection_is_missing(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -304,13 +301,12 @@ def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
         "_package_info",
         lambda *_args: (False, None, None),
     )
-    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "mineru")
+    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "dots_ocr")
     settings = Settings(
-        rag_parser_adapter_backend="mineru",
-        rag_parser_mineru_enabled=True,
-        rag_parser_mineru_api_host="",
+        rag_parser_adapter_backend="dots_ocr",
+        rag_parser_dots_ocr_enabled=True,
+        rag_parser_dots_ocr_api_host="",
     )
-    set_mineru_license_acknowledgement(settings, by="", at="2026-10-26T00:00:00+00:00")
 
     matrix = run_parser_adapter_compatibility_matrix(
         settings,
@@ -322,7 +318,7 @@ def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
                 content_type="application/pdf",
             ),
         ),
-        backends=["mineru"],
+        backends=["dots_ocr"],
     )
 
     case = matrix.cases[0]

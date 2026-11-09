@@ -18,7 +18,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
 )
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
-# 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
+# 回答系(生成・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
 # 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
@@ -377,9 +377,6 @@ class Settings:
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
-    # 生成後の監査は飛ばさない。
-    crag_skip_on_strong_signals: bool = False
-    crag_skip_min_rerank_score: float = 0.8
     # CRAG の評価の入力を詰める(#1528): 候補を生成と同じ親の数(max_context_records)にし、JSON を詰めて書き、
     # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects・列挙の項目の働きは変えない。
     crag_compact_input: bool = False
@@ -635,8 +632,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
         section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
-        crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
-        crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),
         query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
@@ -670,11 +665,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
 
 # 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
 # 質問拡張戦略の判定と検索文の生成(strategy)・根拠の評価(judge。CRAG の評価と章節の拡張の十分性の判定)・
-# 回答文の生成(generation)・生成後の監査(audit。#1528)。
+# 回答文の生成(generation)。
 LLM_PURPOSE_STRATEGY = "strategy"
 LLM_PURPOSE_JUDGE = "judge"
 LLM_PURPOSE_GENERATION = "generation"
-LLM_PURPOSE_AUDIT = "audit"
 _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
     LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
@@ -684,7 +678,6 @@ _PURPOSE_LABELS = {
     LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
     LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
-    LLM_PURPOSE_AUDIT: "回答の監査",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
 REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")
