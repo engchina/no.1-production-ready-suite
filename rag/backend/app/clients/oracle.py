@@ -385,11 +385,6 @@ class StoredMessage:
     # 質問に添付したファイル（USER のメッセージだけ。名前・種類・大きさ。#2517）。添付が期限で
     # 消えても発話の表示に残す。添付の無い質問は None。
     attachments: list[dict[str, Any]] | None = None
-    # 回答の段落の印・根拠と矛盾して外した段落・回答全体の警告（ASSISTANT の回答だけ。#2738。
-    # ``passage_marks`` / ``removed_passages`` / ``answer_warnings`` の dict）。メッセージの列には
-    # 保存せず、回答の記録（rag_answer_records の diagnostics_json）から trace_id で読む。
-    # 記録の無い回答（保存の失敗・保存期間の経過・この機能より前の回答）は None。
-    passage_record: dict[str, Any] | None = None
     # 生成時の節・引用の表示形式。回答の記録から読む（メッセージの列は増やさない）。
     answer_format: dict[str, str] | None = None
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
@@ -5411,12 +5406,6 @@ class OracleClient:
                 m.created_at,
                 JSON_QUERY(r.diagnostics_json, '$.answer_format' RETURNING CLOB)
                     AS answer_format_json,
-                JSON_QUERY(r.diagnostics_json, '$.passage_marks' RETURNING CLOB)
-                    AS passage_marks_json,
-                JSON_QUERY(r.diagnostics_json, '$.removed_passages' RETURNING CLOB)
-                    AS removed_passages_json,
-                JSON_QUERY(r.diagnostics_json, '$.answer_warnings' RETURNING CLOB)
-                    AS answer_warnings_json,
                 JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
                     AS answer_attached_images
             FROM rag_messages m
@@ -16811,32 +16800,9 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             if row.get("heartbeat_at") is not None
             else None
         ),
-        passage_record=_message_passage_record(row),
         answer_format=answer_format_record(_json_loads(row.get("answer_format_json"))),
         answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
     )
-
-
-_MESSAGE_PASSAGE_COLUMNS = (
-    ("passage_marks", "passage_marks_json"),
-    ("removed_passages", "removed_passages_json"),
-    ("answer_warnings", "answer_warnings_json"),
-)
-
-
-def _message_passage_record(row: Mapping[str, object]) -> dict[str, Any] | None:
-    """回答の記録から読んだ段落の印の 3 つ（#2738）。どれも無ければ None。"""
-    values: dict[str, Any] = {}
-    for key, column in _MESSAGE_PASSAGE_COLUMNS:
-        raw = row.get(column)
-        if isinstance(raw, str | bytes):
-            try:
-                raw = json.loads(raw)
-            except ValueError:
-                raw = None
-        if isinstance(raw, list):
-            values[key] = raw
-    return values or None
 
 
 def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:

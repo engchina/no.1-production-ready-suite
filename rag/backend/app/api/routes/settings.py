@@ -587,15 +587,13 @@ async def update_answering_settings(
                 "RAG_RERANK_SLOT_RATIO": json.dumps(candidate.rag_rerank_slot_ratio),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
-                "RAG_ANSWER_EVIDENCE_REFINEMENT_MODE": (
-                ),
+                "RAG_ANSWER_EVIDENCE_REFINEMENT_MODE": (),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
                 "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
                     candidate.rag_screen_linking_enabled
                 ),
-                "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": _format_env_bool(
-                ),
+                "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": _format_env_bool(),
                 "RAG_AUTO_FIELD_FILTER_ENABLED": _format_env_bool(
                     candidate.rag_auto_field_filter_enabled
                 ),

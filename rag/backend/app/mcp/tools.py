@@ -194,8 +194,6 @@ from app.rag.source_preview import (
     preview_kind,
 )
 from app.rag.stored_answer import (
-    PASSAGE_MARK_RECORD_KEYS,
-    passage_mark_record,
     stored_citation_metadata,
 )
 from app.rag.support_guide_conditions import resolve_answered_conditions
@@ -313,7 +311,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     support_quote・返した根拠の ID audit_evidence_id）と、その誤りの監査し直しの結果
 #     （reference_reaudit）を足した（#4058）。
 # 40: rag_validate_answer を削除（#4714）。
-MCP_OUTPUT_SCHEMA_VERSION = 40
+# 41: rag_search の段落の印（passage_marks）・外した段落（removed_passages）・回答全体の警告（answer_warnings）を削除した。
+MCP_OUTPUT_SCHEMA_VERSION = 41
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -1578,25 +1577,6 @@ class AnswerRequest(BaseModel):
     )
 
 
-class PassageReason(BaseModel):
-    code: str = Field(description="理由の種類。")
-    label: str = Field(description="利用者に示す短い理由。")
-    detail: str = Field(default="", description="理由の詳細（無ければ空）。")
-
-
-class PassageMark(BaseModel):
-    text: str = Field(description="answer の段落（行）の原文。")
-    state: Literal["unverified", "warning"] = Field(
-        description="unverified=根拠で確かめられない / warning=検査で注意が必要。"
-    )
-    reasons: list[PassageReason] = Field(default_factory=list, description="印の理由。")
-
-
-class RemovedPassage(BaseModel):
-    text: str = Field(description="answer から除いた段落。")
-    reasons: list[PassageReason] = Field(default_factory=list, description="除いた理由。")
-
-
 class GuideClarification(BaseModel):
     condition_id: str = Field(description="条件の id（conditions に値を入れて呼び直す）。")
     label: str = Field(description="条件の名前。")
@@ -1776,17 +1756,6 @@ class SearchOutput(VersionedOutput):
         default=None, description="根拠が足りず答えきれなかった理由（無ければ null）。"
     )
     needs_human_review: bool = Field(default=False, description="人の確認が要る回答か。")
-    passage_marks: list[PassageMark] = Field(
-        default_factory=list,
-        description="answer に残した段落のうち、根拠で確かめられない・注意が必要な段落と理由。",
-    )
-    removed_passages: list[RemovedPassage] = Field(
-        default_factory=list, description="根拠と矛盾するため answer から除いた段落と理由。"
-    )
-    answer_warnings: list[PassageReason] = Field(
-        default_factory=list,
-        description="回答全体の警告（質問からずれている可能性など）。",
-    )
     degraded_steps: list[DegradedStep] = Field(
         default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
     )
@@ -2864,10 +2833,6 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         "guide": _guide_ref(answer.get("guide")),
         "insufficient_reason": reason.strip() or None if isinstance(reason, str) else None,
         "needs_human_review": answer.get("needs_human_review") is True,
-        # 段落の印・外した段落・回答全体の警告（#2738）。古い記録は envelope から読み、無ければ空。
-        **passage_mark_record(
-            answer if any(key in answer for key in PASSAGE_MARK_RECORD_KEYS) else envelope
-        ),
         "degraded_steps": _degraded_steps(answer),
         "zero_evidence": _zero_evidence(answer, result),
         "evidence": [],

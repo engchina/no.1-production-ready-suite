@@ -6,7 +6,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
@@ -95,9 +95,6 @@ class ChatMessage(BaseModel):
     attachments: list[ChatAttachmentReference] = Field(default_factory=list)
     # 回答の段落の印・根拠と矛盾して外した段落・回答全体の警告（ASSISTANT の回答だけ。#2738。形は
     # platform/contracts/answer-passages/passage-marks.json）。記録の無い回答は空。
-    passage_marks: list[dict[str, Any]] = Field(default_factory=list)
-    removed_passages: list[dict[str, Any]] = Field(default_factory=list)
-    answer_warnings: list[dict[str, Any]] = Field(default_factory=list)
     # 生成時の表示形式。古い回答・未完了の回答では None。
     answer_format: dict[str, str] | None = None
     # 回答のモデル（``model``）へ添付した根拠の画像の件数（ASSISTANT の終わった回答だけ。回答の

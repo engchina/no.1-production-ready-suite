@@ -87,7 +87,6 @@ from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
-from app.rag.citation_status import citation_support_display
 from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -133,11 +132,10 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
-from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_params
 from app.rag.step_details import step_details_payload
 from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
-from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
+from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.search import (
     MAX_PAGE_RANGES,
@@ -653,8 +651,7 @@ def build_engine_settings(
             settings.rag_article_catalog_cache_max_entries
         ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
-        "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
-        ),
+        "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
@@ -4842,7 +4839,6 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
 
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
-    support_display = citation_support_display(result.generation_trace)
     tree: list[dict[str, Any]] = []
     # (並びの順位, chunk_id, 根拠の子, 検索で当たった子の関連度の順位（無ければ 0）)。
     ordered: list[tuple[int, str, dict[str, Any], int]] = []
@@ -4909,11 +4905,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             **chunk.metadata,
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
-            **(
-                {"evidence_claim_support": dict(support_display)}
-                if support_display is not None
-                else {}
-            ),
         }
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
@@ -5017,7 +5008,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "envelope": dict(result.envelope or {}),
         # 段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738。形は
         # platform/contracts/answer-passages/passage-marks.json）。画面・MCP・評価が読む。
-        **passage_mark_record(result.envelope),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,
