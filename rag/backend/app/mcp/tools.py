@@ -311,7 +311,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     support_quote・返した根拠の ID audit_evidence_id）と、その誤りの監査し直しの結果
 #     （reference_reaudit）を足した（#4058）。
 # 40: rag_validate_answer を削除（#4714）。
-# 41: rag_search の段落の印（passage_marks）・外した段落（removed_passages）・回答全体の警告（answer_warnings）を削除した。
+# 41: rag_search の段落の印（passage_marks）・外した段落（removed_passages）・
+#     回答全体の警告（answer_warnings）を削除した。
 MCP_OUTPUT_SCHEMA_VERSION = 41
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
