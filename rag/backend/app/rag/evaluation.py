@@ -893,7 +893,6 @@ def evaluation_settings(
             "generation_reasoning_effort": "rag_generation_reasoning_effort",
             "crag_compact_input": "rag_crag_compact_input",
             "crag_short_candidate_ids": "rag_crag_short_candidate_ids",
-            "section_skip_regrade_at_scope": "rag_section_skip_regrade_at_scope",
             "query_expansion_max_queries": "rag_query_expansion_max_queries",
         }
         update.update(

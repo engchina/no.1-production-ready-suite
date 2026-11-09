@@ -63,7 +63,7 @@ def test_visual_anchors_respect_count_and_body_size_limits():
     assert len(_visual_evidence_anchors(replace(context, evidence_tree=tuple(trees)), images)) == 4
 
 
-def test_procedure_uses_existing_context_crop_but_other_questions_keep_target(tmp_path):
+def test_existing_context_crop_is_used_for_any_question_with_visible_context(tmp_path):
     from rag_engine.generation.answering import answer_image_evidence
 
     root = tmp_path / "runs"
@@ -87,11 +87,12 @@ def test_procedure_uses_existing_context_crop_but_other_questions_keep_target(tm
         source_record_refs=(ref,),
         metadata={"image_evidence": [dict(image_id="img", crop_path="target.png")]},
     )
-    procedural = answer_image_evidence([record], root, question="追加する方法は？")[0]
-    assert procedural["prompt_path"] == str(context)
-    assert procedural["asset_kind"] == "context_crop"
-    assert procedural["target_highlight"] == "magenta_rectangle"
-    assert answer_image_evidence([record], root, question="色は？")[0]["prompt_path"] == str(target)
+    selected = answer_image_evidence([record], root, question="追加する方法は？")[0]
+    assert selected["prompt_path"] == str(context)
+    assert selected["asset_kind"] == "context_crop"
+    assert selected["target_highlight"] == "magenta_rectangle"
+    # 質問の語で画像を変えない。
+    assert answer_image_evidence([record], root, question="色は？")[0]["prompt_path"] == str(context)
     context.unlink()
     assert answer_image_evidence([record], root, question="追加する方法は？")[0]["prompt_path"] == str(target)
 
@@ -162,34 +163,3 @@ def test_short_native_steps_are_kept_before_long_generated_descriptions_for_any_
     native = [s for s in spans if s["origin"] == "document_text"]
     assert any("③在庫振替ボタン" in s["text"] for s in native) and any("⑤確認ボタン" in s["text"] for s in native)
     assert sum(len(s["text"]) for s in spans) <= 6000
-
-
-@pytest.mark.parametrize("partial", [False, True])
-def test_image_selection_prefers_visible_native_operation_over_repeated_caption(tmp_path, partial):
-    from rag_engine.generation.answering import answer_image_evidence
-
-    run = tmp_path / "run-a"
-    run.mkdir()
-    for name in ["correct", "caption"]:
-        (run / f"{name}.png").write_bytes(b"image")
-    reference = dict(
-        record_id="correct",
-        vision_context_record_refs=[
-            dict(category="Text", partially_visible=partial, text_preview="配送予定の対象日を入力して追加します。")
-        ],
-    )
-    correct = replace(
-        rec("p1", "parent", 1, "原図"),
-        source_run_id="run-a",
-        source_record_refs=(reference,),
-        metadata={"image_evidence": [dict(image_id="correct", crop_path="correct.png")]},
-    )
-    caption = replace(
-        rec("p2", "parent", 1, "配送予定の追加方法と対象日の入力説明。" * 30),
-        source_run_id="run-a",
-        metadata={
-            "image_evidence": [dict(image_id="caption", crop_path="caption.png", text_preview="配送予定の対象日を入力して追加します。")]
-        },
-    )
-    selected = answer_image_evidence([caption, correct], tmp_path, max_images=1, question="配送予定の対象日を追加する方法は？")
-    assert selected[0]["image_id"] == ("caption" if partial else "correct")

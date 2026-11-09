@@ -5,4 +5,4 @@ from rag_engine.retrieval.task_contract import request_units
 
 def test_request_units_preserve_numbered_questions_and_context():
     question = "既に登録済み。①取込方法は？②取消方法は？"
-    assert [u["text"] for u in request_units(question)] == ["既に登録済み。", "①取込方法は？", "②取消方法は？"]
+    assert [u["text"] for u in request_units(question)] == ["①取込方法は？", "②取消方法は？"]

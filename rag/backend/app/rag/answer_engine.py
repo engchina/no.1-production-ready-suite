@@ -713,9 +713,6 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
             settings.rag_section_expansion_followup_reserve_percent
         ),
-        "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
-            "1" if settings.rag_section_skip_regrade_at_scope else "0"
-        ),
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
     # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。

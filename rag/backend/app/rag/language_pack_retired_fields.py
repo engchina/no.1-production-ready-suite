@@ -152,19 +152,139 @@ RETIRED_UNREAD_FIELDS = (
     | RETIRED_UNREAD_ANSWER_LABEL_FIELDS
     | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS
 )
+# 質問の種類の語の判定と根拠の順位づけの語をやめて、読み手が無くなった項目と節(#4668)。
+# 上の migration の一覧は checksum に入っているので変えず、別の一覧にする。
+RETIRED_QUESTION_WORD_QUESTION_CUE_FIELDS = frozenset(
+    {
+        "object_suffixes",
+        "document_kind_chars",
+        "existential_locatives",
+        "existential_particles",
+        "existential_predicates",
+        "requester_terms",
+        "requester_sides",
+        "requester_particles",
+        "requester_verbs",
+        "past_markers",
+        "contrast_particles",
+        "change_words",
+        "changed_field_particles",
+        "changed_field_endings",
+        "hypothesis_cues",
+        "done_marks",
+        "recipient_subject_words",
+        "recipient_action_words",
+        "recipient_list_words",
+        "list_words",
+        "list_output_words",
+        "choice_words",
+        "absence_words",
+        "count_cues",
+        "member_cues",
+        "basis_cues",
+        "change_verbs",
+        "change_verb_endings",
+        "change_wish_cues",
+        "method_cues",
+        "procedure_cues",
+        "requested_action_words",
+        "output_format_words",
+        "explicit_condition_cues",
+        "aggregation_words",
+        "member_subject_words",
+        "cause_cues",
+        "cause_nouns",
+        "cause_noun_question_endings",
+        "cause_noun_question_leads",
+        "generic_target_words",
+        "object_particles",
+        "manner_words",
+        "action_target_verbs",
+        "action_request_endings",
+        "error_words",
+        "error_connectors",
+        "error_clause_particles",
+        "error_clause_particle_exceptions",
+        "question_final_particles",
+        "request_cues",
+        "facet_method_cues",
+        "facet_impact_cues",
+        "facet_output_cues",
+        "facet_necessity_cues",
+        "facet_withdrawal_objects",
+        "facet_withdrawal_words",
+        "topic_particles",
+        "parallel_connectors",
+        "target_particles",
+        "split_operation_words",
+        "chain_connectors",
+        "count_query_words",
+        "list_query_words",
+        "hidden_field_words",
+        "hidden_field_states",
+        "fetch_failure_cues",
+        "grouping_extra_words",
+        "grouping_suffixes",
+        "filter_words",
+        "update_words",
+        "software_version_words",
+        "answer_instruction_cues",
+        "answer_instruction_endings",
+    }
+)
+RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS = frozenset(
+    {
+        "operation_section_words",
+        "focus_particles",
+        "target_stop_terms",
+        "step_number_closers",
+        "operation_text_cues",
+        "default_question_cues",
+        "default_text_cues",
+        "list_text_cues",
+        "list_action_words",
+        "list_execute_words",
+        "step_condition_cues",
+        "step_action_words",
+    }
+)
+RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS = frozenset({"native_operation_words"})
+RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS = frozenset({"crag_definition_aspect_template"})
+RETIRED_QUESTION_WORD_SECTIONS = frozenset({"definition_cues", "enumeration_cues"})
+RETIRED_QUESTION_WORD_FIELDS = (
+    RETIRED_QUESTION_WORD_QUESTION_CUE_FIELDS
+    | RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS
+    | RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS
+    | RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS
+    | RETIRED_QUESTION_WORD_SECTIONS
+)
 _RETIRED_BY_SECTION = {
-    "question_cues": RETIRED_QUESTION_CUE_FIELDS | RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS,
-    "answer_labels": RETIRED_ANSWER_LABEL_FIELDS | RETIRED_UNREAD_ANSWER_LABEL_FIELDS,
+    "question_cues": (
+        RETIRED_QUESTION_CUE_FIELDS
+        | RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS
+        | RETIRED_QUESTION_WORD_QUESTION_CUE_FIELDS
+    ),
+    "answer_labels": (
+        RETIRED_ANSWER_LABEL_FIELDS
+        | RETIRED_UNREAD_ANSWER_LABEL_FIELDS
+        | RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS
+    ),
     "answer_check_cues": (
         RETIRED_ANSWER_CHECK_CUE_FIELDS
         | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS
         | RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS
     ),
-    "grounding_cues": RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS,
+    "grounding_cues": (
+        RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS | RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS
+    ),
     "search_terms": RETIRED_UNREAD_SEARCH_TERM_FIELDS,
-    "evidence_cues": RETIRED_UNREAD_EVIDENCE_CUE_FIELDS | RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS,
+    "evidence_cues": (
+        RETIRED_UNREAD_EVIDENCE_CUE_FIELDS
+        | RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS
+        | RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS
+    ),
 }
-_ALL_RETIRED_SECTIONS = RETIRED_SECTIONS | RETIRED_UNREAD_SECTIONS
+_ALL_RETIRED_SECTIONS = RETIRED_SECTIONS | RETIRED_UNREAD_SECTIONS | RETIRED_QUESTION_WORD_SECTIONS
 PROFILE_TABLE = "rag_search_answer_profiles"
 
 

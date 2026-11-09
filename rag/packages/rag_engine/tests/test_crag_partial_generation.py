@@ -12,8 +12,8 @@ from test_grounded_answer import draft, ids
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.generation.crag_support import _crag_task_contract
 from rag_engine.models.llm import CragRetrievalGradeOutput
+from rag_engine.retrieval.task_contract import task_contract
 
 QUESTION = "設定画面を開いてから、設定を保存する手順は？"
 OPEN = "設定画面を開きます。"
@@ -22,8 +22,8 @@ OVERVIEW = "このシステムは設定の管理に対応しています。"
 
 def grade(text, *, partial):
     checks = []
-    for aspect in _crag_task_contract(QUESTION)["required_aspects"]:
-        status = "missing" if aspect == "procedure" else "supported" if aspect in {"business_object", "requested_result"} else "unknown"
+    for aspect in task_contract(QUESTION)["required_aspects"]:
+        status = "missing" if aspect == "requested_result" else "supported" if aspect == "business_object" else "unknown"
         checks.append(
             dict(
                 aspect=aspect,
@@ -36,7 +36,7 @@ def grade(text, *, partial):
     return CragRetrievalGradeOutput(
         candidate_verdicts=[dict(chunk_uid="run:c0", relevant=True, reason="同じ対象")],
         aspect_checks=checks,
-        answerable_parts=[dict(aspect="procedure", kind="operation", claim=OPEN, evidence=[dict(source_id="run:c0", quote=OPEN)])]
+        answerable_parts=[dict(aspect="requested_result", kind="operation", claim=OPEN, evidence=[dict(source_id="run:c0", quote=OPEN)])]
         if partial
         else [],
         sufficient=True,
@@ -165,7 +165,7 @@ def test_unverifiable_part_quote_proceeds_to_one_generation_and_keeps_the_answer
     assert trace["crag_assessment"]["answerable_parts"][0]["status"] == "unknown"
     # 確かめた部分が無いので部分回答の範囲へ切り詰めない。未確認・不足の観点は印として残す。
     assert trace["crag_partial_projection"] == {"applied": False, "reason": "answerable_part_unverified"}
-    assert "手順については、検索評価で直接の根拠を確認できていません。" in result.answer_text
+    assert "求める結果については、検索評価で直接の根拠を確認できていません。" in result.answer_text
     assert result.needs_human_review
 
 

@@ -198,17 +198,12 @@ def gap_lines(question: str, view: Mapping[str, Any] | None) -> list[str]:
     if view is None:
         return []
     from rag_engine.generation import grounded
-    from rag_engine.retrieval.task_contract import task_contract
 
     labels = answer_labels()
-    definitions = {
-        "definition:" + target["id"]: labels.crag_definition_aspect_template.format(label=target["label"])
-        for target in task_contract(question)["definition_targets"]
-    }
     lines = []
     for row in view.get("aspect_checks") or ():
         aspect, state = str(row["aspect"]), row.get("status")
-        label = definitions.get(aspect) or grounded.known_gap_labels([aspect])[0]
+        label = grounded.known_gap_labels([aspect])[0]
         if state == "missing":
             lines.append(labels.crag_missing_aspect_template.format(label=label))
         elif state in {"unknown", "data_confirmation"}:

@@ -208,7 +208,6 @@ def _settings(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-# 列挙・網羅の問（「すべて」。#1503 の読む範囲の規則）ではない質問。列挙の問は test_enumeration_sufficiency.py。
 QUESTION = "第3章の設備ごとの点検の項目を教えて"
 
 
@@ -246,7 +245,6 @@ def test_reads_first_section_even_when_crag_judged_enough():
 
     assert result.stop_reason == sections.STOP_SUFFICIENT
     assert result.applied and result.levels == 1
-    assert result.trace["minimum_scope"] == "leaf"
     assert stub.read_calls == ["s3-1"] and grader.calls == [1]
     assert set(_child_ids(result.context)) == set(_members("s3-1"))
 
@@ -360,31 +358,6 @@ def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
     assert (omitted["document_id"], omitted["reason"], omitted["page"]) == (DOC, sections.STOP_TOKEN_BUDGET, 6)
     # 全体を読む必要があるのに入らない章節は、第 3 段階（#1437）の差し込み口に渡る（今は未実装）。
     assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
-
-
-def test_token_budget_keeps_unread_sections_even_when_grader_says_enough():
-    stub = SectionStub()
-    grader = Grader(needs={"c33a", "c33b"})
-    # 読む範囲が文書全体の網羅の問では、どの章節も読む範囲に入るので、読めなかった兄弟の章節も回答に出す。
-    question = "点検要領で、作業者がしないと決められていることをすべて挙げてください。"
-    assert sections.minimum_scope(question) == "document"
-
-    result = _expand(
-        _seed_context("c31a"),
-        _settings(answer_max_input_tokens=2400),
-        grader,
-        stub,
-        question=question,
-        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
-    )
-
-    assert result.stop_reason == sections.STOP_TOKEN_BUDGET
-    assert [item.section_id for item in result.unread] == ["s3-2"] and result.omitted == []
-    assert "読み込み量の上限" in result.gap_lines[0]
-    # 本文の行と同じ文と、原文を開くための文書・頁を回答の診断に載せる（#2040）。
-    unread = result.trace["unread"][0]
-    assert unread["line"] == result.gap_lines[0]
-    assert (unread["document_id"], unread["reason"], unread["page"]) == (DOC, sections.STOP_TOKEN_BUDGET, 6)
 
 
 def test_unread_sibling_without_seed_does_not_block_sufficient():
@@ -915,17 +888,6 @@ def test_other_document_owner_section_is_read_with_the_remaining_budget():
     assert stub.read_calls == ["s3-1", "s3", f"{OTHER_DOC}/o1"]
     assert "o1b" in _child_ids(result.context) and "o2a" not in _child_ids(result.context)
     assert result.trace["deferred"][0]["read"] == "whole" and result.omitted == []
-
-
-def test_enumeration_question_does_not_defer_other_documents():
-    # 読む範囲が文書全体（列挙の問）なら、どの起点も読む範囲なので段の外に置かない。
-    stub, grader = TwoDocumentStub(), Grader(needs=None)
-    question = "点検要領で、作業者がしないと決められていることをすべて挙げてください。"
-
-    result = _expand(_two_document_context("o1a", "c31a"), _settings(), grader, stub, question=question, priority=GUIDE_PAGES)
-
-    assert "deferred_seeds" not in result.trace
-    assert f"{OTHER_DOC}/o1" in stub.read_calls
 
 
 def test_priority_rank_prefers_referenced_pages_then_the_document():

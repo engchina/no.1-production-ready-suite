@@ -3145,7 +3145,13 @@ def _check_email_headers(extraction: StructuredExtraction | None) -> tuple[str, 
 def _check_thread_body(extraction: StructuredExtraction | None) -> tuple[str, str]:
     if extraction is None:
         return "pending", "requires_extraction"
-    return ("passed", "ok") if "承認" in extraction.raw_text else ("failure", "thread_body_missing")
+    # メールのヘッダーの行のほかに本文の行があるかを見る（本文の語では判定しない）。
+    body = [
+        line
+        for line in extraction.raw_text.splitlines()
+        if line.strip() and not line.lstrip().startswith(("Subject:", "From:", "To:"))
+    ]
+    return ("passed", "ok") if body else ("failure", "thread_body_missing")
 
 
 def _check_attachment_metadata(

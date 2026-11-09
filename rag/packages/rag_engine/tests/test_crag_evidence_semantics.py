@@ -8,8 +8,8 @@ from test_crag_context_recovery import record
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
-from rag_engine.generation.crag_support import _crag_task_contract
 from rag_engine.models.llm import CragRetrievalGradeOutput
+from rag_engine.retrieval.task_contract import task_contract
 
 
 def evaluate(question, texts, *, checks=None, verdicts=None, compact=False, answerable_parts=()):
@@ -23,7 +23,7 @@ def evaluate(question, texts, *, checks=None, verdicts=None, compact=False, answ
                 evidence=[dict(source_id="run:c0", quote=texts[0])],
                 reason="原文が要求を説明する",
             )
-            for aspect in _crag_task_contract(question)["required_aspects"]
+            for aspect in task_contract(question)["required_aspects"]
         ]
     output = CragRetrievalGradeOutput(
         candidate_verdicts=verdicts
@@ -44,30 +44,9 @@ def evaluate(question, texts, *, checks=None, verdicts=None, compact=False, answ
     return result, context
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "行の確認が必要になったとき、表示印を付けます。",
-        "表示印\n確認が必要な行を知らせるために付けます。",
-        "<table><tr><th>表示印</th><td>確認が必要な行を知らせるもの</td></tr></table>",
-    ],
-)
-def test_definition_semantics_can_support_text_not_recognized_by_the_rule(text):
-    question = "『表示印』の意味は？"
-    result, _ = evaluate(
-        question,
-        [text],
-        answerable_parts=[dict(aspect="definition:Q1.D1", kind="definition", claim=text, evidence=[dict(source_id="run:c0", quote=text)])],
-    )
-    assert result.rule_signals["definitions"] == [{"label": "表示印", "recognition": "not_identified"}]
-    assert result.generation_usable and result.required_aspect_coverage == "complete"
-    definition = next(c for c in result.aspect_checks if c["aspect"].startswith("definition:"))
-    assert definition["status"] == "supported" and definition["evidence_validation"] == "matched"
-
-
 def test_field_name_alone_does_not_override_semantic_missing():
     question = "『表示印』の意味は？"
-    required = _crag_task_contract(question)["required_aspects"]
+    required = task_contract(question)["required_aspects"]
     checks = [dict(aspect=k, status="missing", source_ids=[], reason="項目名だけで意味の説明がない") for k in required]
     result, _ = evaluate(question, ["項目一覧：名称、表示印、区分"], checks=checks)
     assert not result.generation_usable and result.required_aspect_coverage == "missing"
@@ -79,7 +58,7 @@ def test_unverified_supported_check_becomes_unknown_not_missing(evidence):
     question = "設定を保存するには？"
     checks = [
         dict(aspect=k, status="supported", source_ids=["run:c0"], evidence=evidence, reason="モデルの判定")
-        for k in _crag_task_contract(question)["required_aspects"]
+        for k in task_contract(question)["required_aspects"]
     ]
     result, _ = evaluate(question, ["保存する。"], checks=checks)
     assert result.required_aspect_coverage == "unknown" and result.unknown_aspects
@@ -138,7 +117,7 @@ def test_multiple_sources_jointly_support_an_aspect_without_one_to_one_assignmen
     evidence = [dict(source_id=f"run:c{i}", quote=text) for i, text in enumerate(texts)]
     checks = [
         dict(aspect=k, status="supported", source_ids=["run:c0", "run:c1"], evidence=evidence, reason="二つの原文が操作と条件を共同支持")
-        for k in _crag_task_contract(question)["required_aspects"]
+        for k in task_contract(question)["required_aspects"]
     ]
     result, _ = evaluate(question, texts, checks=checks)
     assert result.required_aspect_coverage == "complete"
@@ -155,7 +134,7 @@ def test_related_candidates_without_direct_answer_part_do_not_enable_generation(
             source_ids=[],
             reason="画面はあるが保存手順はない",
         )
-        for k in _crag_task_contract(question)["required_aspects"]
+        for k in task_contract(question)["required_aspects"]
     ]
     result, _ = evaluate(question, ["設定画面には名前と履歴を表示する。"], checks=checks)
     payload = result.to_payload()
@@ -199,7 +178,7 @@ def test_original_quote_outside_the_actual_grader_input_is_unverified():
             evidence=[dict(source_id="run:c1", quote=texts[1])],
             reason="入力に無い候補を挙げた",
         )
-        for k in _crag_task_contract(question)["required_aspects"]
+        for k in task_contract(question)["required_aspects"]
     ]
     records = [record(f"c{i}", i, text) for i, text in enumerate(texts)]
     context = a.AnswerContext(records=records, text="\n".join(texts))
@@ -261,7 +240,7 @@ def test_rejected_candidate_original_cannot_make_retained_candidate_coverage_com
             evidence=[dict(source_id="run:c0", quote=texts[0])],
             reason="除外する候補を支持に使った",
         )
-        for k in _crag_task_contract(question)["required_aspects"]
+        for k in task_contract(question)["required_aspects"]
     ]
     verdicts = [dict(chunk_uid="run:c0", relevant=False, reason="対象違い"), dict(chunk_uid="run:c1", relevant=True, reason="対象画面")]
     result, _ = evaluate(question, texts, checks=checks, verdicts=verdicts)

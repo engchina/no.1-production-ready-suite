@@ -171,7 +171,6 @@ class RecoveryTests(unittest.TestCase):
                 self.assertIn(UNTRUSTED_CRAG_CANDIDATES_END, prompt)
                 self.assertIn("設定の条件は?", prompt)
                 self.assertIn("recovery_options:", prompt)
-                self.assertIn("task_contract:", prompt)
                 self.assertNotIn("{{", prompt)
                 self.assertEqual(grade.recovery_anchor_ids, (self.child.chunk_uid,))
                 self.assertEqual(grade.recovery_action, "parent")

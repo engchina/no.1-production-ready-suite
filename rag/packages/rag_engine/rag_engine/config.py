@@ -378,7 +378,7 @@ class Settings:
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
     # CRAG の評価の入力を詰める(#1528): 候補を生成と同じ親の数(max_context_records)にし、JSON を詰めて書き、
-    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects・列挙の項目の働きは変えない。
+    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects の働きは変えない。
     crag_compact_input: bool = False
     # 詰めた入力の候補の chunk_uid を短い ID（C1・C1-1）にする(#1864)。評価器が判定ごとに書き写す ID が短くなり、
     # 出力の token と時間が減る。返った ID は chunk_uid に戻すので、判定の働きは変わらない。
@@ -392,8 +392,6 @@ class Settings:
     # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
     # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
     llm_runaway_detection: bool = False
-    # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
-    section_skip_regrade_at_scope: bool = False
     # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
     query_expansion_max_queries: int = 5
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
@@ -631,7 +629,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
-        section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
         query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",

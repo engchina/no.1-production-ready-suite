@@ -11,23 +11,43 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from test_enumeration_sufficiency import BUSINESS_DAY_FIVE, DO_NOT_TOUCH, REPORT, RESERVE, _items
-from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context
-from test_section_expansion import _settings as _section_settings
-
 import rag_engine.generation.answering as generation
 from rag_engine.config import get_settings
 from rag_engine.generation import crag_support
-from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
-from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT
 
 # ---- 監査の推論の量 ---------------------------------------------------------------------------------------
 
 
 # ---- CRAG の評価の入力の圧縮 ---------------------------------------------------------------------------------
+
+RESERVE = AnswerRecord(
+    id="p2",
+    chunk_id="local-p2",
+    chunk_uid="p2",
+    engine="docling",
+    engine_label="Docling",
+    page=1,
+    seq_no=1,
+    category="Chunk",
+    text=(
+        "点検の 5 営業日前までに、総務部にサーバー室の入室の予約をします。点検の 3 営業日前までに、"
+        "点検の日時をサーバー室を使う部署に知らせます。"
+    ),
+    source="点検要領.pdf",
+    chunk_level="parent",
+    metadata={"section_path": ["サーバー室の定期点検要領", "第 2 章 点検の前の準備"]},
+)
+REPORT = replace(
+    RESERVE,
+    id="p12",
+    chunk_id="local-p12",
+    chunk_uid="p12",
+    text="点検の記録は、点検の日から 3 営業日以内に情報システム部長へ提出します。",
+    metadata={"section_path": ["サーバー室の定期点検要領", "第 6 章 点検の後の作業"]},
+)
 
 
 def _parent(uid: str, text: str, *, source: str = "規程.pdf", metadata: dict | None = None) -> AnswerRecord:
@@ -97,8 +117,8 @@ def test_compact_prompt_keeps_only_chunk_uid_and_needed_fields_without_spaces():
     assert len(compact) < len(full) // 2
 
 
-def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
-    question = BUSINESS_DAY_FIVE
+def test_compact_input_keeps_exclusion_and_relevant_candidates():
+    question = "申請の締切を教えてください"
     other = _parent("x1", "サーバー室の空調の温度は 25 度以下に保ちます。")
     records = (RESERVE, REPORT, other)
     tree = tuple(ContextParentEvidence(record=item, role="synthesis_parent", reason="retrieved") for item in records)
@@ -109,7 +129,6 @@ def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
             {"chunk_uid": "p12", "relevant": True, "reason": "関連"},
             {"chunk_uid": "x1", "relevant": False, "reason": "話題が別"},
         ],
-        enumerated_items=_items(("p2", "5 営業日前までに"), ("p2", "3 営業日前までに"), ("p12", "3 営業日以内に")),
         aspect_checks=[
             {
                 "aspect": "business_object",
@@ -118,7 +137,6 @@ def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
                 "evidence": [{"source_id": "p2", "quote": RESERVE.text}],
                 "reason": "関連",
             },
-            {"aspect": ENUMERATION_ASPECT, "status": "missing", "source_ids": [], "reason": "5件のうち3件しか確認できない"},
         ],
         reason="足りる",
         sufficient=True,
@@ -129,12 +147,9 @@ def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
     with patch.object(generation, "parse_text_response", return_value=output) as parse:
         attempt = generation._grade_crag_retrieval(1, question, question, [question], context, settings, max_candidates=12)
     assert "\n  " not in parse.call_args.args[1]
-    # 候補の除外（relevant=false）・関連の候補・列挙の項目の数え直し（3 件 < 5 件で欠け）は詰めた入力でも同じ。
+    # 候補の除外（relevant=false）と関連の候補は詰めた入力でも同じ。
     assert attempt.rejected_chunk_ids == ("x1",)
     assert set(attempt.relevant_chunk_ids) == {"p2", "p12"}
-    assert ENUMERATION_ASPECT in attempt.missing_aspects
-    entry = next(item for item in attempt.aspect_checks if item["aspect"] == ENUMERATION_ASPECT)
-    assert entry["counted_items"] == 3 and entry["status"] == "missing"
 
 
 # ---- CRAG の評価の候補の短い ID (#1864) -------------------------------------------------------------------------
@@ -162,7 +177,7 @@ def test_short_candidate_ids_replace_chunk_uids_in_the_compact_prompt():
 
 
 def test_short_candidate_ids_map_back_to_chunk_uids_in_the_grade():
-    question = BUSINESS_DAY_FIVE
+    question = "申請の締切を教えてください"
     other = _parent("x1", "サーバー室の空調の温度は 25 度以下に保ちます。")
     records = (RESERVE, REPORT, other)
     tree = tuple(ContextParentEvidence(record=item, role="synthesis_parent", reason="retrieved") for item in records)
@@ -174,7 +189,6 @@ def test_short_candidate_ids_map_back_to_chunk_uids_in_the_grade():
             {"chunk_uid": "C2", "relevant": True, "reason": "関連"},
             {"chunk_uid": "C3", "relevant": False, "reason": "話題が別"},
         ],
-        enumerated_items=_items(("C1", "5 営業日前までに"), ("C1", "3 営業日前までに"), ("C2", "3 営業日以内に")),
         aspect_checks=[
             {
                 "aspect": "business_object",
@@ -183,7 +197,6 @@ def test_short_candidate_ids_map_back_to_chunk_uids_in_the_grade():
                 "evidence": [{"source_id": "C1", "quote": RESERVE.text}],
                 "reason": "関連",
             },
-            {"aspect": ENUMERATION_ASPECT, "status": "missing", "source_ids": [], "reason": "5件のうち3件のみ"},
         ],
         reason="足りる",
         sufficient=True,
@@ -196,14 +209,12 @@ def test_short_candidate_ids_map_back_to_chunk_uids_in_the_grade():
         attempt = generation._grade_crag_retrieval(1, question, question, [question], context, settings, max_candidates=12)
     assert f'"chunk_uid":"{REPORT.chunk_uid}"' not in parse.call_args.args[1]
     assert '"chunk_uid":"C2"' in parse.call_args.args[1]
-    # 短い ID は chunk_uid に戻るので、候補の除外・関連の候補・観点の根拠・列挙の数え直しは長い ID のときと同じ。
+    # 短い ID は chunk_uid に戻るので、候補の除外・関連の候補・観点の根拠は長い ID のときと同じ。
     assert attempt.rejected_chunk_ids == ("x1",)
     assert set(attempt.relevant_chunk_ids) == {"p2", "p12"}
     assert [item["source_ids"] for item in attempt.aspect_checks if item["aspect"] == "business_object"] == [["p2"]]
     assert attempt.recovery_anchor_ids == ("p12",)
     assert [verdict["chunk_uid"] for verdict in attempt.candidate_verdicts] == ["p2", "p12", "x1"]
-    entry = next(item for item in attempt.aspect_checks if item["aspect"] == ENUMERATION_ASPECT)
-    assert entry["counted_items"] == 3 and entry["status"] == "missing"
 
 
 def test_short_candidate_ids_are_off_by_default_in_the_engine():
@@ -215,58 +226,3 @@ def test_short_candidate_ids_are_off_by_default_in_the_engine():
 # ---- CRAG の評価を曖昧な帯だけで呼ぶ -----------------------------------------------------------------------------
 
 QUESTION = "経費精算の申請の期限と承認者を教えてください"
-
-
-def test_open_document_enumeration_skips_the_regrade_after_reading_the_document():
-    stub, grader = SectionStub(), Grader(needs=set())
-
-    result = _expand(
-        _seed_context("c31a"),
-        _section_settings(section_skip_regrade_at_scope=True),
-        grader,
-        stub,
-        last=_attempt(sufficient=True, missing=(ENUMERATION_ASPECT, "applicability")),
-        question=DO_NOT_TOUCH,
-    )
-
-    # leaf → 第3章 → 文書全体まで読み、文書全体を読んだ後も評価器を呼ばない（上に読む章節が無い）。
-    assert stub.read_calls == ["s3-1", "s3", "document"]
-    assert grader.calls == []
-    assert result.stop_reason == sections.STOP_SCOPE_READ and result.applied and result.unread == []
-    assert set(_members("document")) <= {child.record.chunk_uid for parent in result.context.evidence_tree for child in parent.children}
-    assert [level.get("grade_skipped") for level in result.trace["levels"]] == ["minimum_scope", "minimum_scope", "scope_reached"]
-    # 生成に渡す既知の欠落から、広げる前の判定の内容の観点（列挙の欠け）を除く。適用の観点は残す。
-    attempts = (_attempt(sufficient=True, missing=(ENUMERATION_ASPECT, "applicability")),)
-    assert generation._known_gaps(attempts, result) == ("applicability",)
-
-
-def test_leaf_scope_and_counted_enumerations_still_regrade():
-    stub, grader = SectionStub(), Grader(needs=set(_members("s3-1")))
-    leaf = _expand(
-        _seed_context("c31a"),
-        _section_settings(section_skip_regrade_at_scope=True),
-        grader,
-        stub,
-        last=_attempt(sufficient=True),
-        question="第3章の設備ごとの点検の項目をすべて教えて",
-    )
-    # 当たった章節が範囲の問は、評価器が足りないと判定すれば親へ広げるので評価し直す。
-    assert grader.calls == [1] and leaf.stop_reason == sections.STOP_SUFFICIENT
-
-    stub2, grader2 = SectionStub(), Grader(needs=set(_members("s3")), missing=(ENUMERATION_ASPECT,))
-    counted = _expand(
-        _seed_context("c31a"),
-        _section_settings(section_skip_regrade_at_scope=True),
-        grader2,
-        stub2,
-        last=_attempt(sufficient=True, missing=(ENUMERATION_ASPECT,)),
-        question=BUSINESS_DAY_FIVE,
-    )
-    # 件数のある問は数えた結果で決めるので、読む範囲の規則を使わず評価し直す。
-    assert grader2.calls == [1, 2] and counted.stop_reason == sections.STOP_SUFFICIENT
-
-
-def test_regrade_is_kept_when_the_setting_is_off():
-    stub, grader = SectionStub(), Grader(needs=set())
-    result = _expand(_seed_context("c31a"), _section_settings(), grader, stub, last=_attempt(sufficient=True), question=DO_NOT_TOUCH)
-    assert grader.calls == [3] and result.stop_reason == sections.STOP_SUFFICIENT

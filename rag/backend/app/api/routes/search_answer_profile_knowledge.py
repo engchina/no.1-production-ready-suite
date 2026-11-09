@@ -28,7 +28,7 @@ from app.rag.domain_keyword_import import (
     import_keywords,
     read_keyword_excel,
 )
-from app.rag.question_understanding import profile_language_scope
+from app.rag.profile_language import profile_language_scope
 from app.rag.rule_selection import recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (

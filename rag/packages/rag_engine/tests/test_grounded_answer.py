@@ -970,14 +970,6 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
 class ContextRequestUnitTest(unittest.TestCase):
     """背景文（kind=context）は答える対象ではなく、未回答にも gap にもならない (#650)。"""
 
-    def test_request_units_mark_background_sentences_as_context(self):
-        from rag_engine.retrieval.task_contract import request_units
-
-        units = request_units("取引先名が変わった。伝票右上の伝票タイトルを変更するにはどこから操作すればよいか。")
-        self.assertEqual([(u["id"], u["kind"]) for u in units], [("Q1", "context"), ("Q2", "request")])
-        self.assertEqual([u["kind"] for u in request_units("既に登録済み。①取込方法は？")], ["context", "request"])
-        self.assertEqual([u["kind"] for u in request_units("伝票タイトルの変更の件。")], ["request"])  # 標識がなければ全文を要求にする
-
 
 class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
     """見出しどおりの【画面経路】は入口化ではなく、ボタン名は同じ機能の本文で確認できればよい (#658)。"""

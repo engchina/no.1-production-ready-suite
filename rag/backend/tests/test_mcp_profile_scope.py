@@ -523,7 +523,7 @@ def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
     from app.api.routes import search as search_route
 
     config = VIEWS["bv-1"].model_copy(
-        update={"language_pack": {"question_cues": {"cause_cues": ["理屈"]}}}
+        update={"language_pack": {"question_cues": {"subquestion_reference_followers": ["理屈"]}}}
     )
     monkeypatch.setitem(VIEWS, "bv-1", config)
     _install_search(monkeypatch)
@@ -534,14 +534,16 @@ def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
     original = with_answer_assumptions
 
     def prepare(*args: Any, **kwargs: Any) -> Any:
-        seen.append(current_pack().words("question_cues", "cause_cues"))
+        seen.append(current_pack().words("question_cues", "subquestion_reference_followers"))
         return original(*args, **kwargs)
 
     monkeypatch.setattr(search_route, "with_answer_assumptions", prepare)
     clarification_seen: list[tuple[str, ...]] = []
 
     def clarify(*_args: Any, **_kwargs: Any) -> None:
-        clarification_seen.append(current_pack().words("question_cues", "cause_cues"))
+        clarification_seen.append(
+            current_pack().words("question_cues", "subquestion_reference_followers")
+        )
 
     monkeypatch.setattr(mcp_tools, "OracleClient", lambda *_a, **_k: ScopedViewOracle(VIEWS))
     monkeypatch.setattr(mcp_tools, "suggest_clarification", clarify)
@@ -559,6 +561,6 @@ def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
     assert result["isError"] is False, result
     assert seen == [("理屈",)]
     assert clarification_seen == [("理屈",)]
-    assert current_pack().words("question_cues", "cause_cues") != ("理屈",)
+    assert current_pack().words("question_cues", "subquestion_reference_followers") != ("理屈",)
     assert RecordingPipeline.captured_settings is not None
     assert RecordingPipeline.captured_settings.rag_language_pack_overrides == config.language_pack

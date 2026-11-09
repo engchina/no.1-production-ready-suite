@@ -331,7 +331,9 @@ def test_ingest_language_changes_invalidate_extraction_and_search_only_changes_d
     settings = Settings(_env_file=None)
     with bind_pack(builtin_pack()):
         original = compute_extraction_recipe_id(SRC, settings)
-    with bind_pack(resolve(builtin_pack(), {"question_cues": {"cause_cues": ["理屈"]}})):
+    with bind_pack(
+        resolve(builtin_pack(), {"question_cues": {"subquestion_reference_followers": ["理屈"]}})
+    ):
         assert compute_extraction_recipe_id(SRC, settings) == original
     with bind_pack(resolve(builtin_pack(), {"labels": {"default_document_type": "合成資料"}})):
         assert compute_extraction_recipe_id(SRC, settings) != original

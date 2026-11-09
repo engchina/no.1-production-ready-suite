@@ -22,7 +22,7 @@ from app.rag.system_schema import SystemSchemaManager
 from tests.test_system_schema_manager import _FakeDatabase
 
 _NAME = "20261109_4666_language_pack_retired_question_cues"
-_KEEP = "hypothesis_cues"
+_KEEP = "comma_chars"
 
 
 def _with_retired(pack: dict[str, Any]) -> dict[str, Any]:
@@ -371,3 +371,37 @@ def test_evidence_tag_fields_are_removed_from_synthetic_rows_and_hash_is_recompu
     assert release["content_hash"] == build_pack(release["effective_json"]).hash
     assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
     assert db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]["language_pack"] == {}
+
+
+_QUESTION_WORD_NAME = "20261110_4668_language_pack_retired_question_word_checks"
+_QUESTION_WORD_SECTIONS = (
+    ("question_cues", module.RETIRED_QUESTION_WORD_QUESTION_CUE_FIELDS),
+    ("evidence_cues", module.RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS),
+    ("grounding_cues", module.RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS),
+    ("answer_labels", module.RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS),
+)
+
+
+def test_question_word_fields_and_sections_are_retired() -> None:
+    """質問の種類の語の判定だけが読んでいた項目と節を除き、作り直した公開版は今の契約で読める。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    for section, fields in _QUESTION_WORD_SECTIONS:
+        old[section].update({key: ["合成語"] for key in fields})
+    for section in module.RETIRED_QUESTION_WORD_SECTIONS:
+        old[section] = {"合成の項目": ["合成語"]}
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    for section, fields in _QUESTION_WORD_SECTIONS:
+        assert not fields & stripped[section].keys()
+    assert not module.RETIRED_QUESTION_WORD_SECTIONS & stripped.keys()
+    assert build_pack(stripped).hash == build_pack(pack).hash
+
+
+def test_question_word_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _QUESTION_WORD_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in module.RETIRED_QUESTION_WORD_FIELDS:
+        assert field in section.sql

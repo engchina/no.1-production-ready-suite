@@ -151,7 +151,7 @@ def test_crag_goldset_returns_rag_poc_exit_code(tmp_path: Path) -> None:
             "expected_evidence_ids": ["e1"],
             "expected_answer_terms": ["赤枠", "実行"],
             "variants": {
-                "standard_rag": {"retrieved_ids": ["e1"], "answer": "わかりません。"},
+                "standard_rag": {"retrieved_ids": ["e1"], "answer": ""},
                 "crag": {"retrieved_ids": ["e1"], "answer": crag_answer},
                 "crag_rerank": {"retrieved_ids": ["e1"], "answer": crag_answer},
             },

@@ -4,7 +4,6 @@ from test_crag_context_recovery import record
 
 from rag_engine.generation.answering import AnswerContext, AnswerResponse
 from rag_engine.retrieval.evidence_scope import evidence_scope_error
-from rag_engine.retrieval.task_contract import task_contract
 
 
 def span(name, text="", **extra):
@@ -16,11 +15,6 @@ def test_document_versions_are_checked_without_classification_restrictions():
     assert not evidence_scope_error([span("登録", business_scope="分類A"), span("登録", business_scope="分類B")])
     assert not evidence_scope_error([span("登録", document_scope=["doc", "1"]), span("登録", document_scope=["doc", "1"])])
     assert not evidence_scope_error([span("登録"), span("登録")])
-
-
-def test_members_and_count_are_independent():
-    assert task_contract("集計に計上されている明細を確認したい")["requested_granularity"] == ["members"]
-    assert task_contract("何人かと算定根拠を確認したい")["requested_granularity"] == ["count", "calculation_basis"]
 
 
 def response(status="partial", supported=()):

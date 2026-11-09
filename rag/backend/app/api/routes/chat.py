@@ -89,7 +89,7 @@ from app.rag.pipeline import (
     scope_with_history_confirmations,
     storage_failure,
 )
-from app.rag.question_understanding import profile_language_scope
+from app.rag.profile_language import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     caller_owns,
