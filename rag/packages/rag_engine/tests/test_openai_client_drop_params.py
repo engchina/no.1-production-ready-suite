@@ -66,7 +66,7 @@ def test_openai_client_drops_temperature_and_remembers(monkeypatch: pytest.Monke
         lambda **kwargs: recording_client(transport=httpx.MockTransport(handler), **kwargs),
     )
     # provider ごとの cache を通さずに作る（テストの間で client を持ち越さない）。
-    client = oci._openai_client.__wrapped__("provider-a", ENDPOINT, "test-key", "", 30, 0)
+    client = oci._openai_client.__wrapped__("provider-a", ENDPOINT, "test-key", "", 30)
 
     client.responses.create(model=REASONING_MODEL, input="x", temperature=oci.LLM_TEMPERATURE)
     assert ["temperature" in body for body in bodies] == [True, False]

@@ -613,7 +613,6 @@ def build_engine_settings(
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
-        "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
         # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
         "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
         # 条の目録から根拠の条を選ぶ段(#2254)。
@@ -704,11 +703,9 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
             "1" if settings.rag_crag_short_candidate_ids else "0"
         ),
-        # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
+        # 無音で止まった LLM の呼び出しの打ち切り(#1926・#4736)。送り直しは共通の枠で数える。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
-        "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO": str(settings.rag_llm_stall_min_rate_ratio),
-        "RAG_ENGINE_LLM_STALL_RESENDS": str(settings.rag_llm_stall_resends),
         "RAG_ENGINE_LLM_RUNAWAY_DETECTION": "1"
         if settings.rag_llm_runaway_detection_enabled
         else "0",

@@ -113,7 +113,7 @@ def send(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(
             oci, "_RecordingHttpClient", lambda **kwargs: recording_client(transport=httpx.MockTransport(handler), **kwargs)
         )
-        client = oci._openai_client.__wrapped__("provider-a", "https://enterprise-ai.example/openai/v1", "test-key", "", 30, 0)
+        client = oci._openai_client.__wrapped__("provider-a", "https://enterprise-ai.example/openai/v1", "test-key", "", 30)
         monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: client)
         settings = replace(get_settings(environ={}, dotenv_path=None), llm_stall_detection=True, answer_max_tokens=1000)
         with bind_deadline(Deadline(600)):
@@ -177,8 +177,8 @@ def test_completed_event_without_output_is_resent_then_fails_with_trace(send, ca
     missing = [_created(), _delta(0), _completed(REASONING)]
     bodies: list[dict[str, Any]] = []
     with caplog.at_level(logging.INFO, logger=oci.__name__), pytest.raises(oci.LlmStreamOutputMissing) as raised:
-        send([missing for _ in range(1 + oci.STREAM_FAILED_RESENDS)], bodies)
-    assert len(bodies) == 1 + oci.STREAM_FAILED_RESENDS
+        send([missing for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)], bodies)
+    assert len(bodies) == 1 + oci.LLM_CALL_MAX_RETRIES
     assert _invalid_structured_output(raised.value)
     detail = generation_failure_detail(raised.value)
     assert detail["category"] == "stream_output_missing"
