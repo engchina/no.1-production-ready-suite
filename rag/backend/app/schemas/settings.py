@@ -102,6 +102,8 @@ from app.config import (
     AnswerFlow,
     ChunkingStrategy,
     EvaluationSuite,
+    FileType,
+    FileTypeDefaultEntry,
     GraphProfile,
     ParserAdapterBackend,
     PreprocessProfile,
@@ -414,6 +416,50 @@ class MineruLicenseAcknowledgementData(BaseModel):
     # 確認した管理者の表示名と日時（UTC の ISO 8601）。未確認なら None。
     acknowledged_by: str | None = None
     acknowledged_at: str | None = None
+
+
+class FileTypeDefaultsGlobalData(BaseModel):
+    """種類の行で未設定のときに使う全体の既定（「全体の既定に従う」の中身）。"""
+
+    preprocess_profile: PreprocessProfile
+    parser_adapter_backend: ParserAdapterBackend
+    chunking_strategy: ChunkingStrategy
+
+
+class FileTypeDefaultRowData(FileTypeDefaultEntry):
+    """種類の 1 行（保存値と、この種類に対応する選択肢）。"""
+
+    file_type: FileType
+    extensions: list[str]
+    preprocess_options: list[PreprocessProfile]
+    # 対応するがサービスが未設定で今は使えないファイル準備（設定画面へ案内する）。
+    unavailable_preprocess_profiles: list[PreprocessProfile] = Field(default_factory=list)
+    # ファイル準備ごとの、対応する解析エンジン（行のファイル準備が決まると絞られる）。
+    parser_options: dict[str, list[ParserAdapterBackend]]
+    unavailable_parser_backends: list[ParserAdapterBackend] = Field(default_factory=list)
+    # 行のファイル準備が未設定のときに、解析エンジンの選択肢を決めるファイル準備。
+    inherited_preprocess_profile: PreprocessProfile
+    # 組み込みの既定（「既定に戻す」で入る値）。この環境で使えない行はすべて None。
+    builtin: FileTypeDefaultEntry
+    builtin_unavailable_reason: str | None = None
+
+
+class FileTypeDefaultsSettingsData(BaseModel):
+    """「形式別の既定」の画面のデータ。"""
+
+    rows: list[FileTypeDefaultRowData]
+    chunking_options: list[ChunkingStrategy]
+    global_defaults: FileTypeDefaultsGlobalData
+    config_source: Literal["runtime"] = "runtime"
+
+
+class FileTypeDefaultsUpdate(BaseModel):
+    """形式別の既定の保存（全行の置き換え）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 行が無ければ組み込みの既定、全項目が未設定の行は「全体の既定に従う」の選択。
+    entries: dict[FileType, FileTypeDefaultEntry] = Field(default_factory=dict)
 
 
 class ParserAdapterSettingsData(BaseModel):

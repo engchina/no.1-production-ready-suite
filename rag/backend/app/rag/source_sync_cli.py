@@ -42,7 +42,7 @@ from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import OracleClient
 from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
-from app.config import Settings, get_settings
+from app.config import FileType, Settings, get_settings
 from app.rag.bulk_ingestion import REASON_DUPLICATE_CONTENT, accept_bulk_ingestion
 from app.rag.request_context import with_system_access
 from app.rag.source_sync import (
@@ -82,8 +82,8 @@ def _safe_file_name(name: str) -> str:
     return cleaned.strip("._") or "document.txt"
 
 
-def _resolve_settings(config: DocumentProcessingConfig) -> Settings:
-    return documents_route._merge_document_processing_config(config)[0]
+def _resolve_settings(config: DocumentProcessingConfig, file_type: FileType | None) -> Settings:
+    return documents_route._merge_document_processing_config(config, file_type=file_type)[0]
 
 
 async def _not_fresh(document_id: str) -> IngestionJob:

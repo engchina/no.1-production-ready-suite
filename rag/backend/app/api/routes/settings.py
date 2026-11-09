@@ -58,6 +58,7 @@ from app.clients.oracle import (
 )
 from app.clients.oracle_run_history import RunHistoryStore
 from app.config import (
+    FILE_TYPE_DEFAULTS_STORE,
     MODEL_SETTINGS_STORE,
     PARSER_SECRET_ATTRS,
     PARSER_SETTINGS_STORE,
@@ -91,6 +92,15 @@ from app.rag.extraction_field_adapter import (
     save_field_schema,
     standard_field_definitions,
 )
+from app.rag.file_type_defaults import (
+    CHUNKING_STRATEGY_OPTIONS,
+    FILE_TYPE_EXTENSIONS,
+    builtin_file_type_default,
+    file_type_default_issues,
+    file_type_defaults,
+    file_type_parser_option_table,
+    file_type_preprocess_options,
+)
 from app.rag.graph_adapter import (
     graph_adapter_runtime_settings,
     normalize_graph_profile,
@@ -114,6 +124,7 @@ from app.rag.parser_adapter_scorecard import (
 from app.rag.preprocess_strategy import (
     normalize_preprocess_profile,
     preprocess_runtime_settings,
+    resolve_preprocess_profile,
 )
 from app.rag.section_map_service import schedule_refresh_all_section_maps
 from app.rag.section_rules import (
@@ -153,6 +164,10 @@ from app.schemas.settings import (
     ExtractionFieldsSettingsData,
     ExtractionFieldsSettingsUpdate,
     FieldDefinitionData,
+    FileTypeDefaultRowData,
+    FileTypeDefaultsGlobalData,
+    FileTypeDefaultsSettingsData,
+    FileTypeDefaultsUpdate,
     GraphProfileStatusData,
     GraphSettingsData,
     GraphSettingsUpdate,
@@ -474,6 +489,41 @@ async def update_preprocess_settings(
     _persist_preprocess_settings(candidate)
     _apply_preprocess_settings(settings, candidate)
     return ApiResponse(data=_preprocess_settings_data(settings))
+
+
+@router.get("/file-type-defaults", response_model=ApiResponse[FileTypeDefaultsSettingsData])
+async def get_file_type_defaults_settings() -> ApiResponse[FileTypeDefaultsSettingsData]:
+    """形式別の既定と、種類ごとに選べる値を返す（#4732）。"""
+    return ApiResponse(data=_file_type_defaults_data(get_settings()))
+
+
+@router.patch("/file-type-defaults", response_model=ApiResponse[FileTypeDefaultsSettingsData])
+async def update_file_type_defaults_settings(
+    payload: FileTypeDefaultsUpdate,
+) -> ApiResponse[FileTypeDefaultsSettingsData]:
+    """形式別の既定（全行）を保存する（#4732）。組み合わせが不正なら 422 で何を直すかを返す。
+
+    レシピより弱く全体の既定より強い層で、保存は取り込み済みの文書を変えない（再処理で反映する）。
+    """
+    settings = get_settings()
+    entries = payload.entries
+    issues = [
+        issue
+        for file_type, entry in entries.items()
+        for issue in file_type_default_issues(file_type, entry, settings)
+    ]
+    if issues:
+        raise HTTPException(status_code=422, detail=" ".join(issues))
+    try:
+        with FILE_TYPE_DEFAULTS_STORE.lock(settings):
+            FILE_TYPE_DEFAULTS_STORE.reload_if_changed(settings)
+            candidate = settings.model_copy()
+            candidate._file_type_defaults = {str(key): value for key, value in entries.items()}
+            FILE_TYPE_DEFAULTS_STORE.save(candidate)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="形式別の既定を保存できませんでした。") from exc
+    FILE_TYPE_DEFAULTS_STORE.load(settings)
+    return ApiResponse(data=_file_type_defaults_data(settings))
 
 
 @router.get("/chunking", response_model=ApiResponse[ChunkingSettingsData])
@@ -1113,6 +1163,41 @@ def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBacke
             warning_code=(None if du_configured else "oci_document_understanding_unconfigured"),
         ),
     ]
+
+
+def _file_type_defaults_data(settings: Settings) -> FileTypeDefaultsSettingsData:
+    rows: list[FileTypeDefaultRowData] = []
+    saved = file_type_defaults(settings)
+    for file_type, extensions in FILE_TYPE_EXTENSIONS.items():
+        entry = saved.get(file_type) or builtin_file_type_default(settings, file_type)[0]
+        builtin, builtin_reason = builtin_file_type_default(settings, file_type)
+        preprocess, unavailable_preprocess = file_type_preprocess_options(file_type, settings)
+        inherited, parser_options, unavailable_parsers = file_type_parser_option_table(
+            file_type, settings
+        )
+        rows.append(
+            FileTypeDefaultRowData(
+                **entry.model_dump(),
+                file_type=file_type,
+                extensions=list(extensions),
+                preprocess_options=preprocess,
+                unavailable_preprocess_profiles=unavailable_preprocess,
+                parser_options=parser_options,
+                unavailable_parser_backends=unavailable_parsers,
+                inherited_preprocess_profile=inherited,
+                builtin=builtin,
+                builtin_unavailable_reason=builtin_reason,
+            )
+        )
+    return FileTypeDefaultsSettingsData(
+        rows=rows,
+        chunking_options=list(CHUNKING_STRATEGY_OPTIONS),
+        global_defaults=FileTypeDefaultsGlobalData(
+            preprocess_profile=resolve_preprocess_profile(settings),
+            parser_adapter_backend=settings.rag_parser_adapter_backend,
+            chunking_strategy=settings.rag_chunking_strategy,
+        ),
+    )
 
 
 def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsData:

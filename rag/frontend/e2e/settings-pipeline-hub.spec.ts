@@ -105,6 +105,12 @@ test("取込・検索・回答設定の概要ハブが工程をフェーズ別�
     "href",
     "/settings/chunking"
   );
+  // 形式別の既定（#4732）は取込の工程で、文書分割の次に並ぶ。
+  await expect(
+    page
+      .getByRole("region", { name: "ナレッジ構築" })
+      .getByRole("link", { name: "形式別の既定 の設定を開く" })
+  ).toHaveAttribute("href", "/settings/file-type-defaults");
   await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toHaveAttribute(
     "href",
     "/settings/retrieval"
@@ -117,10 +123,10 @@ test("取込・検索・回答設定の概要ハブが工程をフェーズ別�
   ).toHaveAttribute("href", "/settings/graph");
 
   const ingestion = page.getByRole("region", { name: "ナレッジ構築" });
-  await expect(ingestion.getByRole("link", { name: "実体・別名索引 の設定を開く" })).toContainText("5.");
-  await expect(ingestion.getByRole("link", { name: "文書構造索引 の設定を開く" })).toContainText("6.");
-  await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("7.");
-  await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("10.");
+  await expect(ingestion.getByRole("link", { name: "実体・別名索引 の設定を開く" })).toContainText("6.");
+  await expect(ingestion.getByRole("link", { name: "文書構造索引 の設定を開く" })).toContainText("7.");
+  await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("8.");
+  await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("11.");
 
   // カードから実際に詳細設定へ遷移できる。
   await page.getByRole("link", { name: "文書分割 の設定を開く" }).click();

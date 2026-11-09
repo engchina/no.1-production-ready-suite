@@ -41,13 +41,18 @@ class ParserSettingsStore:
         load: Callable[[Any, Mapping[str, Any]], None],
         dump: Callable[[Any], Mapping[str, Any]],
         secrets: Sequence[tuple[str, str]],
+        label: str = "文書解析の設定",
     ) -> None:
-        """`secrets` は (Settings の属性名, `.env` の変数名)。`dump` は secret を返さない。"""
+        """`secrets` は (Settings の属性名, `.env` の変数名)。`dump` は secret を返さない。
+
+        `label` は読み込めないときの文言に使う設定の名前（形式別の既定も同じ方式。#4732）。
+        """
         self._resolve_path = resolve_path
         self._env_file = env_file
         self._load = load
         self._dump = dump
         self._secrets = tuple(secrets)
+        self._label = label
         self._loaded: tuple[str, int | None] | None = None
 
     def path(self, settings: Any) -> Path:
@@ -74,7 +79,7 @@ class ParserSettingsStore:
                 raise ValueError("JSON object ではありません。")
             self._load(settings, raw)
         except (OSError, ValueError) as exc:
-            raise ValueError(f"文書解析の設定ファイルを読み込めません: {path}") from exc
+            raise ValueError(f"{self._label}ファイルを読み込めません: {path}") from exc
         self._loaded = (str(path), mtime_ns)
 
     def reload_if_changed(self, settings: Any) -> None:

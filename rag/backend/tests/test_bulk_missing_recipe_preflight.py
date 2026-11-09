@@ -130,7 +130,7 @@ async def test_bulk_preflights_only_formal_recipes(scenario: str) -> None:
         rag_parser_adapter_backend="unstructured", rag_preprocess_profile="passthrough"
     )
 
-    def resolve(config: DocumentProcessingConfig) -> Settings:
+    def resolve(config: DocumentProcessingConfig, _file_type: object) -> Settings:
         resolved.append(config.model_dump(exclude_none=True))
         return resolve_effective_settings(
             base, KnowledgeBaseAdapterConfig(ingestion=config), scope="ingestion"

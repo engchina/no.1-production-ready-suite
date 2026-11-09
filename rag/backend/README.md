@@ -272,7 +272,7 @@ HTTP エラー、リクエスト検証エラー、未処理の 500 エラーは 
 ```json
 {
   "data": null,
-  "error_messages": ["対応していないファイル形式です。"],
+  "error_messages": ["この形式は対応していません。PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・HTML・JPEG / PNG のいずれかに変換してからアップロードしてください。"],
   "warning_messages": []
 }
 ```

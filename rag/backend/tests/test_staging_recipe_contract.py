@@ -184,6 +184,9 @@ async def test_worker_claim_race_has_bounded_wait(monkeypatch: Any) -> None:
     job = SimpleNamespace(id="j1", recipe_id="r1", status=IngestionJobStatus.RUNNING)
 
     class Oracle:
+        async def get_document(self, document_id: Any) -> Any:
+            return SimpleNamespace(file_name="synthetic.pdf", content_type="application/pdf")
+
         async def ensure_default_document_recipe(self, document_id: Any) -> Any:
             return {"recipe_id": "r1"}
 
@@ -218,12 +221,14 @@ async def test_actual_enqueue_persists_only_typed_options(
             return {"processing_config": {}, "config_revision": 1}
 
         async def get_document(self, *args: Any) -> Any:
-            return object()
+            return SimpleNamespace(file_name="synthetic.pdf", content_type="application/pdf")
 
     settings = Settings.model_construct(rag_parser_readiness_probe_enabled=False)
     monkeypatch.setattr(documents, "OracleClient", Oracle)
     monkeypatch.setattr(
-        documents, "_merge_document_processing_config", lambda config: (settings, None)
+        documents,
+        "_merge_document_processing_config",
+        lambda config, **_kwargs: (settings, None),
     )
     monkeypatch.setattr(
         documents,

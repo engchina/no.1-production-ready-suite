@@ -16,6 +16,7 @@ const INGESTION_HREFS = new Set<string>([
   APP_ROUTES.settingsPreprocess,
   APP_ROUTES.settingsParserAdapters,
   APP_ROUTES.settingsChunking,
+  APP_ROUTES.settingsFileTypeDefaults,
   APP_ROUTES.settingsVectorIndex,
   APP_ROUTES.settingsEntityIndex,
   APP_ROUTES.settingsGraph,
