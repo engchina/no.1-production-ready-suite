@@ -31,8 +31,9 @@ jobs:
   oracle:
     name: Oracle integration
     runs-on: ubuntu-24.04
-    # 実測で job 全体は約 12〜15 分。image の取得（1 回 4 分まで、3 回まで）の再試行の分も見込む。
-    timeout-minutes: 30
+    # 実測で job 全体は約 12〜15 分。image の取得は通常 1〜2 分だが、registry が遅いと 13 分以上かかる
+    # ことがある（1 回 8 分まで、3 回まで）ので、その分も見込む。
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: ${{ inputs.product }}/backend
