@@ -1108,7 +1108,7 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         return None
     if match := MARKDOWN_HEADING.match(line):
         return len(match.group("marks")), _clean_heading_title(match.group("title"))
-    if match := numbered_heading().match(line):
+    if match := numbered_heading_line(line):
         prefix = match.group("prefix")
         title = _clean_heading_title(match.group("title"))
         return heading_level_from_prefix(prefix), title
@@ -1135,6 +1135,14 @@ def numbered_heading() -> re.Pattern[str]:
         _numbered_headings.clear()
         _numbered_headings[key] = pattern
     return pattern
+
+
+def numbered_heading_line(line: str) -> re.Match[str] | None:
+    """番号の付いた見出しの行の一致を返す。文末の記号で終わる行は番号付きの本文とする(#4742)。"""
+    match = numbered_heading().match(line)
+    if match and re.search(rf"{text_patterns().heading_terminal}$", line.rstrip()):
+        return None
+    return match
 
 
 def heading_level_from_prefix(prefix: str) -> int:
