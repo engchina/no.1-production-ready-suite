@@ -96,12 +96,12 @@ def test_new_view_numbers_each_step_and_extracts_the_cited_step() -> None:
     evidence = span(STEPS)
     prompt = grounded.format_functions([evidence])
     view = grounded._citation_view(evidence)
-    assert view.contract_version == "explicit_units_v5" and len(view.units) == 3
+    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT and len(view.units) == 3
     assert "1| (1) 画面Aを開く。\n2| (2) 項目Bを選ぶ。\n3| (3) 実行を押す。" in without_unit_annotations(prompt)
     quoted, error = grounded.cited_quote(item(3, 3), [evidence])
     assert not error and quoted.quote == "(3) 実行を押す。"
     extraction = grounded._citation_extraction(quoted)
-    assert extraction["citation_unit_contract"] == "explicit_units_v5"
+    assert extraction["citation_unit_contract"] == grounded.CITATION_UNIT_CONTRACT
     quoted, error = grounded.cited_quote(item(1, 3), [evidence])
     assert not error and quoted.quote == STEPS
 

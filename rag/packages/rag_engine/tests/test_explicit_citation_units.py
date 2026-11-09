@@ -53,7 +53,7 @@ def test_short_multiline_block_numbers_each_physical_line_and_quotes_the_origina
     view = grounded._citation_view(evidence[0])
     assert len(view.units) == 2
     assert view.numbered is True
-    assert view.contract_version == "explicit_units_v5"
+    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT
     assert "1| 開く\n2| 保存" in without_unit_annotations(prompt)
     assert "3|" not in without_unit_annotations(prompt)
     cited, error = extract(draft(1, 2), evidence)
