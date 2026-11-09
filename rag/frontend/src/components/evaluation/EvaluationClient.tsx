@@ -98,6 +98,8 @@ import {
   metricCaseCount,
   metricDescription,
   metricLabel,
+  referenceMetricLabel,
+  EVALUATION_REFERENCE_METRICS,
   metricValue,
   orderedThresholdEntries,
   perspectiveDescription,
@@ -1017,6 +1019,7 @@ function EvaluationResult({
         />
       ))}
 
+      <ReferenceMetrics metrics={metrics} />
       <CategoryBreakdown metrics={metrics} />
       <DecisionBreakdown metrics={metrics} />
 
@@ -1105,6 +1108,37 @@ function MetricGroup({
                   {/* 観点の判定が今の評価器で校正済みか（#3578。指標の値は変えない）。 */}
                   <JudgeCalibrationBadge metric={metric} />
                 </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** 合否と閾値に使わない参考の指標。閾値・未達の印は持たない。 */
+function ReferenceMetrics({ metrics }: { metrics: EvaluationMetrics }) {
+  const titleId = "evaluation-perspective-reference";
+  return (
+    <section aria-labelledby={titleId} className="space-y-2" data-testid={titleId}>
+      <div>
+        <h3 id={titleId} className="text-sm font-semibold text-fg">
+          {t("evaluation.reference.title")}
+        </h3>
+        <p className="text-xs text-fg-muted">{t("evaluation.reference.description")}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {EVALUATION_REFERENCE_METRICS.map((metric) => {
+          const count = metricCaseCount(metrics, metric);
+          return (
+            <Card key={metric} data-testid={`evaluation-reference-${metric}`}>
+              <CardContent className="space-y-1.5 pt-5">
+                <p className="text-xs font-medium text-fg-muted">{referenceMetricLabel(metric)}</p>
+                <p className="tnum text-lg font-semibold text-fg">{formatMetricValue(metricValue(metrics, metric))}</p>
+                {count !== null ? (
+                  <p className="tnum text-xs text-fg-muted">{t("evaluation.metric.caseCount", { count })}</p>
+                ) : null}
               </CardContent>
             </Card>
           );

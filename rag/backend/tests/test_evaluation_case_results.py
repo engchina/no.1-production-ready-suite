@@ -540,7 +540,7 @@ async def test_run_api_saves_cases_and_exports_partial_excel_after_failure(
     assert book["主条件の結果"]["A2"].value == "row-2"
     assert book["主条件の結果"]["A3"].value == "row-3"
     assert [row[0].value for row in book["概要"].iter_rows()][-1] == "途中までの結果"
-    assert book["概要"]["B10"].value == "全 2 ケースのうち 2 ケース"
+    assert book["概要"]["B20"].value == "全 2 ケースのうち 2 ケース"
 
 
 async def test_compared_pass_is_saved_with_its_own_index_and_profile(

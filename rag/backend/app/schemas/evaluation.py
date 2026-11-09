@@ -152,7 +152,20 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "response_decision_accuracy",
 )
 # 合否と閾値には使わない参考の指標（#4341）。
-EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ("evidence_coverage",)
+# 順位の指標は引用の文書列で、語の重なりは標準回答との比較で計算する（#4714）。
+EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
+    "evidence_coverage",
+    "precision_at_10",
+    "ndcg_at_3",
+    "ndcg_at_10",
+    "map",
+    "bleu_1",
+    "bleu_2",
+    "bleu_4",
+    "rouge_1",
+    "rouge_2",
+    "rouge_l",
+)
 
 
 # 期待する手順の別解の上限（列の数）。
@@ -564,6 +577,16 @@ class EvaluationCaseResult(BaseModel):
     claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
     evidence_coverage: float | None = None
+    precision_at_10: float | None = None
+    ndcg_at_3: float | None = None
+    ndcg_at_10: float | None = None
+    map: float | None = None
+    bleu_1: float | None = None
+    bleu_2: float | None = None
+    bleu_4: float | None = None
+    rouge_1: float | None = None
+    rouge_2: float | None = None
+    rouge_l: float | None = None
     expected_decisions: list[str] = Field(default_factory=list)
     observed_outcome: EvaluationOutcome | None = None
     outcome_source: str | None = None
@@ -644,6 +667,16 @@ class EvaluationMetrics(BaseModel):
     claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
     evidence_coverage: float | None = None
+    precision_at_10: float | None = None
+    ndcg_at_3: float | None = None
+    ndcg_at_10: float | None = None
+    map: float | None = None
+    bleu_1: float | None = None
+    bleu_2: float | None = None
+    bleu_4: float | None = None
+    rouge_1: float | None = None
+    rouge_2: float | None = None
+    rouge_l: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool | None = None
     applied_thresholds: dict[str, float] = Field(default_factory=dict)

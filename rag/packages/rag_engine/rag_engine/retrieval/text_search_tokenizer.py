@@ -436,6 +436,24 @@ def tokenize_text_search_query_with_trace(
     )
 
 
+def surface_tokens(text: str, config: TextSearchTokenizerConfig | None = None) -> list[str]:
+    """Sudachi の短い単位の表層形を並び順で返す（記号と空白は除く）。使えなければ空。
+
+    活用語尾や否定の語も残す。語の重なりの比較に使い、検索の語は作らない。
+    """
+    cfg = normalize_text_search_tokenizer_config(config)
+    if not _sudachi_available(cfg):
+        return []
+    tokenizer = _get_sudachi_tokenizer(cfg.sudachi_dict_type, cfg.sudachi_config_path)
+    mode = _sudachi_split_mode("A")
+    return [
+        morpheme.surface()
+        for chunk in _split_for_sudachi(normalize_text_search_text(text))
+        for morpheme in tokenizer.tokenize(chunk, mode)
+        if morpheme.part_of_speech()[0] not in {"補助記号", "空白"}
+    ]
+
+
 def content_term_set(text: str, config: TextSearchTokenizerConfig | None = None) -> frozenset[str]:
     """本文の語の集合（全文検索と同じ分割。Sudachi、無ければ文字種の区切り）。候補同士の語の重なりを測るのに使う。"""
     cfg = normalize_text_search_tokenizer_config(config)

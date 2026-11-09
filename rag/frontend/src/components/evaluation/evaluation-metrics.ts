@@ -2,6 +2,7 @@ import type {
   EvaluationMetricName,
   EvaluationMetrics,
   EvaluationOutcome,
+  EvaluationReferenceMetricName,
   EvaluationSuiteName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -14,6 +15,11 @@ export const EVALUATION_PERSPECTIVES: ReadonlyArray<{id: EvaluationPerspective; 
   {id:"decision", metrics:["response_decision_accuracy"]},
 ];
 export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] = EVALUATION_PERSPECTIVES.flatMap(item => item.metrics);
+/** 合否と閾値に使わない参考の指標。 */
+export const EVALUATION_REFERENCE_METRICS: readonly EvaluationReferenceMetricName[] = [
+  "evidence_coverage", "precision_at_10", "ndcg_at_3", "ndcg_at_10", "map",
+  "bleu_1", "bleu_2", "bleu_4", "rouge_1", "rouge_2", "rouge_l",
+];
 export const LOWER_IS_BETTER_METRICS: ReadonlySet<string> = new Set();
 export const STANDARD_ANSWER_METRICS: ReadonlySet<EvaluationMetricName> = new Set(["answer_correctness", "requirement_coverage"]);
 export const EVALUATION_SUITE_NAMES: readonly EvaluationSuiteName[] = ["standard", "strict"];
@@ -76,6 +82,10 @@ export function metricDescription(name: EvaluationMetricName): string {
   return t(METRIC_KEYS[name].description);
 }
 
+export function referenceMetricLabel(name: EvaluationReferenceMetricName): string {
+  return t(`evaluation.reference.${name}` as I18nKey);
+}
+
 export function perspectiveLabel(perspective: EvaluationPerspective): string {
   return t(PERSPECTIVE_KEYS[perspective].label);
 }
@@ -108,7 +118,7 @@ export function formatMetricValue(value: number | null | undefined): string {
 /** 集計結果の指標の値（保存済みの古い結果で欄が無いときは null）。 */
 export function metricValue(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName
+  name: EvaluationMetricName | EvaluationReferenceMetricName
 ): number | null {
   const value = metrics[name];
   return typeof value === "number" ? value : null;
@@ -117,7 +127,7 @@ export function metricValue(
 /** 指標の対象のケース数。古い結果で件数が無いときは null（件数を表示しない）。 */
 export function metricCaseCount(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName
+  name: EvaluationMetricName | EvaluationReferenceMetricName
 ): number | null {
   const count = metrics.metric_case_counts?.[name];
   return typeof count === "number" ? count : null;
