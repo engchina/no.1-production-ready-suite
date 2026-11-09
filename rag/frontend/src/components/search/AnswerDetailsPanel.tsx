@@ -19,10 +19,17 @@ export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagn
   ];
   const used = <RunUsedModels models={[...models, ...recordedModels.map(value => ({ label: t("search.answerDetails.model.llm"), value, valueKind: "identifier" as const }))]} />;
   const degradedSteps = data?.degradedSteps ?? [];
-  if (!cascadeView && degradedSteps.length === 0) return used;
+  const retrievalCounts = data?.retrievalCounts ?? null;
+  if (!cascadeView && degradedSteps.length === 0 && !retrievalCounts) return used;
   return (
     <div className="grid min-w-0 gap-2">
       {used}
+      {retrievalCounts ? (
+        // 検索の件数（#4735）。内訳と点数は出さない。
+        <p className="text-xs leading-5 text-fg-muted" data-testid="answer-retrieval-counts">
+          {t("search.answerDetails.retrievalCounts", retrievalCounts)}
+        </p>
+      ) : null}
       {cascadeView ? (
         <div className="grid min-w-0 gap-0.5 text-xs leading-5" data-testid="answer-model-cascade">
           <p className="text-fg">{cascadeView.line}</p>
@@ -48,10 +55,9 @@ export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagn
 
 /**
  * 回答を読むときに要る案内（公開の業務ガイドを読めなかった・資料では決まらない値がある）。
- * 回答の本文の下に出す（「詳細」に畳まない。#2096）。段落の印の記録（#2738）は回答の記録の診断から読み、診断の無い
- * 保存した回答（会話を開き直したとき）は `passageSource`（会話のメッセージ）から読む。
+ * 回答の本文の下に出す（「詳細」に畳まない。#2096）。
  */
-export function AnswerNotices({ diagnostics }: { diagnostics: unknown; passageSource?: unknown }) {
+export function AnswerNotices({ diagnostics }: { diagnostics: unknown }) {
   const data = parseAnswerDiagnostics(diagnostics);
   const notices = data && (data.guideLoadFailed || data.externalDataRequired || data.externalDataItems.length > 0);
   if (!notices) return null;

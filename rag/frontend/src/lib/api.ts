@@ -206,7 +206,6 @@ export type EvaluationFailureReason =
   | "known_condition_reasked"
   | "screen_missing"
   | "wrong_screen"
-  | "off_target"
   | "case_error";
 /** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
 export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "requirement_coverage" | "claim_support_rate" | "response_decision_accuracy";

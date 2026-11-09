@@ -136,7 +136,7 @@ async def list_runs(
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunDetail])
 async def get_run(run_id: str) -> ApiResponse[RunDetail]:
-    """実行 1 件（質問の全文・回答・根拠・回答の検証・処理の段と時間・フィードバック）。"""
+    """実行 1 件（質問の全文・回答・根拠・処理の段と時間・フィードバック）。"""
     oracle = OracleClient()
     store = RunHistoryStore(oracle)
     row = await store.get_run(run_id)

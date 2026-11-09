@@ -2400,7 +2400,7 @@ async def get_feedback_signals(
 ) -> ApiResponse[SignalReport]:
     """確かめるべき実行（暗黙のシグナル。#1822）。権限はフィードバックと同じ（`menu.feedback`）。
 
-    評価の付いていない Run も、回答の検証の不合格・答えられなかった回答・承認の却下・ツールの
+    評価の付いていない Run も、答えられなかった回答・承認の却下・ツールの
     失敗・実行の失敗から集める。対象は利用できる業務 Agent の Run だけ。Oracle の構成は保存した
     Run の事実（`AGENT_RUN_FACTS`）を SQL で集計し、一覧はサーバー側でページングする。
     """

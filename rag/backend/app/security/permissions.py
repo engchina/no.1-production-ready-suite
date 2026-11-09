@@ -128,7 +128,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_USE,
         "実行履歴",
         "「実行履歴」の画面を表示し、チャットと RAG 検索の実行の一覧と詳細"
-        "（回答・根拠・回答の検証・処理の経過）を見られます（自分の実行だけ。"
+        "（回答・根拠・処理の経過）を見られます（自分の実行だけ。"
         "すべての利用者の実行を見られるのは SYSTEM_ADMIN だけ）。",
     ),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),

@@ -1827,7 +1827,6 @@ class OracleClient:
         """引用した根拠を ID で読む。``retrievable_chunk`` と同じ条件に、退役した版を加える(#4168)。
 
         切替の前に検索された根拠を保持の間は開ける。権限・テナント・文書の状態の条件は同じ。
-        回答の監査は ``retrievable_chunk`` のまま(旧版の根拠を今の根拠として確かめない)。
         """
         where_sql, binds = _version_read_where()
         row = await self._fetch_one(

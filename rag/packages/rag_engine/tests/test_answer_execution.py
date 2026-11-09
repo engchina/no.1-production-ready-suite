@@ -290,6 +290,17 @@ class AnswerExecutionTests(unittest.TestCase):
         zero = result.generation_trace["zero_evidence"]
         self.assertEqual((zero["stage"], zero["candidate_count"], zero["rejected_count"]), ("retrieval", 0, 0))
 
+    def test_zero_evidence_records_the_same_retrieval_counts_shape(self):
+        # 候補 0 件でも通常の回答と同じ形で残す（基準で全部消えたときは絞り込む前の数が残る。#4735）。
+        self.search.return_value = generation.AnswerContext(records=[], text="", candidate_count=12)
+        result = self.run_answer()
+        self.assertEqual(
+            result.generation_trace["retrieval_counts"],
+            {"candidate_count": 12, "found": 0, "passed_to_model": 0, "top_score": None, "threshold": None},
+        )
+        # 0 件の段の記録はそのまま残す。
+        self.assertEqual(result.generation_trace["zero_evidence"]["stage"], "retrieval")
+
     def run_with_steps(self, **kwargs):
         """回答を作り、工程の開始の順（工程名と入れ子の深さ）と LLM の呼び出しの schema を返す。"""
         from rag_engine.generation.execution_record import bind_step_listener
@@ -362,6 +373,7 @@ class AnswerExecutionTests(unittest.TestCase):
         result = self.run_answer(generate_answer=False)
         self.assertEqual(result.answer_text, "")
         self.assertEqual(result.generation_trace["zero_evidence"]["stage"], "retrieval")
+        self.assertEqual(result.generation_trace["retrieval_counts"]["candidate_count"], 0)
         self.assertIn("状態: 根拠不足で終了", result.question_display)
         self.parse.assert_not_called()
 

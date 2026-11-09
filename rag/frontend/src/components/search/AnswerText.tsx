@@ -65,7 +65,7 @@ export function AnswerText({
    * 文書の詳細を開けない利用者には渡さない（呼び出し側が `canOpenDocumentDetail` で決める）。
    */
   unreadSections?: readonly UnreadSectionLink[];
-  /** 回答の記録の診断（`diagnostics.answer`）。段落の印の記録（#2738）を読む。生成中は渡さない。 */
+  /** 回答の記録の診断（`diagnostics.answer`）。回答の形式を読む。生成中は渡さない。 */
   diagnostics?: unknown;
 }) {
   const source = useEvidenceSource<CitationTarget>();

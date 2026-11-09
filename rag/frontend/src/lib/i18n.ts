@@ -1779,7 +1779,7 @@ export const ja = {
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
-    "回答を作るときに使う各工程の指示を編集します。回答生成・監査のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。",
+    "回答を作るときに使う各工程の指示を編集します。回答生成のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。",
   "settings.guardrail.subtitle":
     "OCI Guardrails による質問と回答の安全チェックを有効・無効にします。",
   "chat.guardrail": "安全チェック",
@@ -2185,8 +2185,8 @@ export const ja = {
   "searchAnswerProfiles.field.answerModel": "回答モデル",
   "searchAnswerProfiles.field.answerModelHelper": "この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。",
   "searchAnswerProfiles.field.unavailableModel": "{model}（登録を確認できません）",
-  "searchAnswerProfiles.field.escalationModel": "確認を通らなかったときのモデル",
-  "searchAnswerProfiles.field.escalationModelHelper": "回答モデルの回答が引用・計算・結論の確認を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します。質問でモデルを選んだ場合は使いません。",
+  "searchAnswerProfiles.field.escalationModel": "出力の検査を通らなかったときのモデル",
+  "searchAnswerProfiles.field.escalationModelHelper": "回答モデルの出力が形式の検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します。質問でモデルを選んだ場合は使いません。",
   "searchAnswerProfiles.field.escalationModelOff": "使わない",
   "searchAnswerProfiles.field.escalationModelOn": "モデルを選ぶ",
   "searchAnswerProfiles.queryStrategy.auto_routing": "自動ルーティング（自動選択）",
@@ -4104,12 +4104,11 @@ export const ja = {
   // 「回答に未反映の関連章節」の行から章節の原文を開く（#2040）。読み上げの名前は見える文言を含める。
   "search.answerText.openUnreadSection": "原文を開く",
   "search.answerText.openUnreadSectionLabel": "{section}の原文を開く",
-  // 回答の段落の印（共有の AnswerSections。Agent の chat.answer.passage.* と同じ文言。#2738）。理由の文は backend が
-  // 返す文をそのまま出す。
-  "search.answerDetails.autoFieldFilter": "質問から読み取った条件",
+    "search.answerDetails.autoFieldFilter": "質問から読み取った条件",
   "search.autoFieldFilter.chip": "自動: {label}",
   "search.autoFieldFilter.remove": "{label} を外して検索し直す",
   "search.answerDetails.reasoning": "判断理由: {reason}",
+  "search.answerDetails.retrievalCounts": "候補 {candidates} 件 → 基準を通過 {found} 件 → 回答に使用 {used} 件",
   "search.answerDetails.degraded.title": "一部の処理を省いて回答しました",
   "search.answerDetails.degraded.hint": "次の処理に失敗したため、その結果を使わずに回答を続けました。",
   "search.answerDetails.degraded.step.retrieval": "検索の一部",
@@ -4153,14 +4152,10 @@ export const ja = {
   "search.answerDetails.externalData.hint": "資料だけでは決まりません。実際のデータで確認してください。",
   "search.answerDetails.model.llm": "LLM",
   "search.answerDetails.model.escalation": "LLM（回答し直し）",
-  "search.answerDetails.cascade.escalated": "最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました",
-  "search.answerDetails.cascade.notEscalated": "回答し直していません（最初のモデルの回答が確認を通りました）",
+  "search.answerDetails.cascade.escalated": "最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました",
+  "search.answerDetails.cascade.notEscalated": "回答し直していません（最初のモデルの出力が検査を通りました）",
   "search.answerDetails.cascade.reason": "理由: {reasons}",
   "search.answerDetails.cascade.reason.structured_output_invalid": "生成の出力が形式の検査を通らなかった",
-  "search.answerDetails.cascade.reason.citation_mismatch": "引用の ID・原文が資料と一致しなかった",
-  "search.answerDetails.cascade.reason.arithmetic_mismatch": "計算を確かめ直すと合わなかった",
-  "search.answerDetails.cascade.reason.conclusion_withheld": "要約・結論を確かめられず保留した",
-  "search.answerDetails.cascade.reason.audit_contradicted": "監査が資料と矛盾すると判定した",
   "search.answerDetails.model.attachedImages": "添付した画像",
   "search.answerDetails.model.attachedImagesValue": "{count} 件（回答モデルが参照）",
   "search.answerDetails.model.embedding": "Embedding",
@@ -4251,7 +4246,7 @@ export const ja = {
   "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略・再実行され、CRAG では検索と判定を繰り返す場合があります。各指示を編集し、保存すると次の処理から反映されます。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
-    "回答生成・監査ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。各指示を編集・保存できます。",
+    "回答生成の工程ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。各指示を編集・保存できます。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
@@ -4427,7 +4422,7 @@ export const ja = {
     "質問を言い換えたり分解したりして、資料を探す検索文を作ります。「用語・同義語による検索文の追加」は別の設定です。",
   "settings.answering.answerFlow": "回答の生成方式",
   "settings.answering.answerFlowHint":
-    "標準 RAG は検索した根拠を使って回答を作ります。CRAG は必要なときだけ選ぶ方式で、回答生成前に AI が材料の十分性を判定し、不足時は検索文の書き換えや根拠の追加を試みます。初回を含め最大 3 段で、検索文の書き換えは最大 2 回です。判定を省略する場合もあります。生成後の再検索・監査とは別の設定で、自動では有効にしません。AI の呼び出しが増え、回答までの時間が長くなることがあります。",
+    "標準 RAG は検索した根拠を使って回答を作ります。CRAG は必要なときだけ選ぶ方式で、回答生成前に AI が材料の十分性を判定し、不足時は検索文の書き換えや根拠の追加を試みます。初回を含め最大 3 段で、検索文の書き換えは最大 2 回です。判定を省略する場合もあります。自動では有効にしません。AI の呼び出しが増え、回答までの時間が長くなることがあります。",
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。",
@@ -4709,18 +4704,12 @@ export const ja = {
   "answer.step.addContext": "取得済みの根拠に文脈を加える",
   "answer.step.selectScreens": "質問に関係する画面を目録から選ぶ",
   "answer.step.expandSections": "関係する章節の原文を根拠に加える",
-  "answer.step.coverRequests": "要求ごとに根拠の対応を確認する",
   "answer.step.attachImages": "回答モデルへ渡す根拠画像を準備する",
   "answer.step.generateAnswer": "回答文を作って根拠と照合する",
   "answer.step.adopted": "採用",
   "answer.step.notAdopted": "不採用",
-  "answer.step.checkRevision": "回答の修正が必要か確認する",
-  "answer.step.skipRevision": "回答の修正",
-  "answer.step.revise": "回答の修正方針を決める",
-  "answer.step.stopRevising": "回答の修正を終了する",
   "answer.step.deferDocumentCandidates": "同じ文書の超過候補を後ろへ回す",
   "answer.step.selectArticles": "根拠に使う条を目録から選ぶ",
-  "answer.step.retrieveUnanswered": "未回答の要求の根拠を探し直す",
   "answer.step.vectorSearch": "質問に意味が近い文書の箇所を探す",
   "answer.step.textSearch": "検索語を含む文書の箇所を探す",
   "answer.step.loadChunkPool": "検索対象の文書片を読み込む",
@@ -5030,7 +5019,6 @@ export const ja = {
   "evaluation.failureReason.known_condition_reasked": "分かっている条件を聞き直した",
   "evaluation.failureReason.screen_missing": "案内すべき画面を案内していない",
   "evaluation.failureReason.wrong_screen": "別の画面を案内した",
-  "evaluation.failureReason.off_target": "目的外の回答",
   // 案内した画面と目的外の割合・検索・回答プロファイルの比較（#2402）。
   "evaluation.perspective.guidance": "案内",
   "evaluation.perspective.guidance.description":
@@ -5041,9 +5029,6 @@ export const ja = {
   "evaluation.metric.wrong_screen_rate": "別の画面への案内",
   "evaluation.metric.wrong_screen_rate.description":
     "案内すべき画面のほかの画面（根拠に写っていた別の画面など）を回答が案内したケースの割合。低いほどよい値です。",
-  "evaluation.metric.off_target_rate": "目的外の回答",
-  "evaluation.metric.off_target_rate.description":
-    "回答の監査が、回答は質問の目的と別の対象・業務に答えていると判定したケースの割合。低いほどよい値です。",
   "evaluation.case.screens": "案内した画面",
   "evaluation.case.screenMatched": "一致",
   "evaluation.case.screenMissing": "不一致",

@@ -662,9 +662,6 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   | シグナル | 定義（Run の事実の列） |
   |---|---|
   | `not_helpful` 役に立たなかった | 本人か管理者の評価が `not_helpful`（`FEEDBACK_RATING` / `ADMIN_RATING`） |
-  | `validation_failed` 検証で確かめられない内容 | 成果物「回答の検証」が `completed` で、根拠と矛盾する段落を外した・未確認の印の段落がある・回答全体の警告がある・読めない根拠があった（`VALIDATION_RESULT = 'failed'`。警告の印だけなら合格。#2738） |
-  | `unvalidated` 検証できなかった | 検証そのものが失敗した `unvalidated`（`VALIDATION_RESULT = 'unvalidated'`。資料の根拠を使わなかった回答 `no_rag_evidence` は `ungrounded` として残し、業務データの道具も使わなかったときだけ下の `ungrounded_no_tools` にする） |
-  | `ungrounded_no_tools` 根拠を使わずに答えた（#1834） | 資料の根拠を使わずに答え（`VALIDATION_RESULT` が `ungrounded`〔RAG の根拠のツールを持つ Agent〕か `no_rag_tools`〔持たない Agent〕）、業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）の成功した呼び出しも無い（`DATA_TOOL_CALLS = 0`）。業務データの道具で答えた Run・拒答した Run（回答の対応が `insufficient_evidence` / `needs_human`。ツールを呼ばずに答えた回答の拒答 #1835 を含み、「答えられなかった」に数える）・記録の無い古い事実（NULL）は数えない |
   | `unanswered` 答えられなかった | 回答の対応（#1305）が `insufficient_evidence` / `needs_human`（`ANSWER_OUTCOME`） |
   | `approval_rejected` 承認の却下 | 承認が `rejected`（`APPROVALS_REJECTED > 0`。終了で無効にした承認は数えない） |
   | `tool_failed` ツールの失敗 | step が `failed`（`TOOL_FAILURES > 0`） |

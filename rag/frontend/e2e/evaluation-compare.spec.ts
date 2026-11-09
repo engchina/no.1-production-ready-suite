@@ -205,8 +205,7 @@ for (const viewport of [
             missing_screens: ["設定画面A"],
             wrong_screens: ["設定画面B"],
             screen_judged_by: "deterministic",
-            goal_alignment: "off_target",
-            failure_reasons: ["screen_missing", "wrong_screen", "off_target"],
+            failure_reasons: ["screen_missing", "wrong_screen"],
           }
         ),
         comparison: {
