@@ -730,6 +730,26 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
 }
 
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
+ test(`参考の指標は合否と閾値から分けて表示する (${viewport.name})`, async ({page}, testInfo)=>{
+  await page.setViewportSize({width:viewport.width,height:viewport.height});
+  const base=evaluationMetrics("standard");
+  await mockEvaluationJobs(page,{runResult:()=>({...base,precision_at_10:0.5,bleu_1:0.25,metric_case_counts:{...base.metric_case_counts,precision_at_10:1,bleu_1:1}}),autoComplete:true});
+  await page.goto("/evaluation");await prepareEvaluationRun(page);
+  await page.getByRole("button",{name:"評価実行"}).click();
+  const group=page.getByTestId("evaluation-perspective-reference");
+  await expect(group.getByRole("heading",{name:"参考の指標",exact:true})).toBeVisible();
+  await expect(group.locator("[data-testid^='evaluation-reference-']")).toHaveCount(11);
+  await expect(page.getByTestId("evaluation-reference-precision_at_10")).toContainText("50%");
+  await expect(page.getByTestId("evaluation-reference-bleu_1")).toContainText("25%");
+  await expect(page.getByTestId("evaluation-reference-rouge_l")).toContainText("未評価");
+  await expect(group.locator("[data-testid^='evaluation-threshold-']")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await group.scrollIntoViewIfNeeded();
+  await group.screenshot({path:testInfo.outputPath(`reference-${viewport.name}.png`)});
+ });
+}
+
+for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
  test(`六指標の閾値未達・対象件数・分類別内訳を表示する (${viewport.name})`,async({page})=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   const base=evaluationMetrics("standard");

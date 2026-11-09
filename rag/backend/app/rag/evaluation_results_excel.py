@@ -35,6 +35,16 @@ METRICS = (
     ("claim_support_rate", "claim_support_rate", "根拠への忠実性"),
     ("response_decision_accuracy", "response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
     ("evidence_coverage", "evidence_coverage", "根拠の網羅率（参考）"),
+    ("precision_at_10", "precision_at_10", "Precision@10（参考）"),
+    ("ndcg_at_3", "ndcg_at_3", "NDCG@3（参考）"),
+    ("ndcg_at_10", "ndcg_at_10", "NDCG@10（参考）"),
+    ("map", "map", "MAP（参考）"),
+    ("bleu_1", "bleu_1", "BLEU-1（参考）"),
+    ("bleu_2", "bleu_2", "BLEU-2（参考）"),
+    ("bleu_4", "bleu_4", "BLEU-4（参考）"),
+    ("rouge_1", "rouge_1", "ROUGE-1（参考）"),
+    ("rouge_2", "rouge_2", "ROUGE-2（参考）"),
+    ("rouge_l", "rouge_l", "ROUGE-L（参考）"),
 )
 DECISIONS = {"answer": "回答", "clarify": "確認", "hold": "保留"}
 # 画面（`evaluation.outcome.*`・`evaluation.failureReason.*`）と同じ文言。無い値は値のまま出す。

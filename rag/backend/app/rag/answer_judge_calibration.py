@@ -455,10 +455,8 @@ def judge_prompt_sha256() -> str:
     """評価器の指示（``answer_eval`` の ``*_PROMPT``）の sha256（校正の結果と照合する。#3578）。
 
     指示の名前・数が変わっても、module の大文字の ``*_PROMPT`` の文字列を名前の順に hash する。
-    評価が使う質問の対象の抽出の指示（``question_subjects``。#4351）も含める。
     """
     from rag_engine.evaluation import answer_eval
-    from rag_engine.generation import question_subjects
     from rag_engine.resources.runtime import resolve_prompt
 
     keys = {
@@ -473,21 +471,6 @@ def judge_prompt_sha256() -> str:
         (name, resolve_prompt(f"evaluation.{keys[name]}", value) if name in keys else value)
         for name, value in vars(answer_eval).items()
         if name.isupper() and name.endswith("PROMPT") and isinstance(value, str)
-    )
-    prompts.extend(
-        (
-            (
-                "SUBJECT_EXTRACTION_PROMPT",
-                resolve_prompt(
-                    "question_subjects.extraction",
-                    question_subjects.SUBJECT_EXTRACTION_PROMPT,
-                ),
-            ),
-            (
-                "SUBJECT_ROLE_PROMPT",
-                resolve_prompt("question_subjects.role", question_subjects.SUBJECT_ROLE_PROMPT),
-            ),
-        )
     )
     return _sha256(prompts)
 

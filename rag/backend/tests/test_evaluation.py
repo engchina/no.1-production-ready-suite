@@ -170,6 +170,16 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
     assert metrics.response_decision_accuracy == 1.0
     assert metrics.metric_case_counts == {
         "evidence_coverage": 0,
+        "precision_at_10": 1,
+        "ndcg_at_3": 1,
+        "ndcg_at_10": 1,
+        "map": 1,
+        "bleu_1": 1,
+        "bleu_2": 1,
+        "bleu_4": 1,
+        "rouge_1": 1,
+        "rouge_2": 1,
+        "rouge_l": 1,
         "required_evidence_recall": 1,
         "mrr": 1,
         "claim_support_rate": 1,
