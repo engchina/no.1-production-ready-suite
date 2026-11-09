@@ -82,6 +82,10 @@ def _passes(check: Callable[[], object]) -> bool:
     return True
 
 
+def _without_retired(pack: Any) -> Any:
+    return (without_retired_fields(pack) or pack) if isinstance(pack, Mapping) else pack
+
+
 def _candidate(effective: Any) -> tuple[LanguagePack | None, list[str], list[str]]:
     """欠けた項目だけ組み込みの値を足し、(候補、足した項目、除いた廃止の項目) を返す。"""
     if not isinstance(effective, Mapping) or not isinstance(effective.get("locale"), str):
@@ -167,7 +171,9 @@ def _inspect(
         blockers.append(INGEST_HASH_CHANGED)
     if active_jobs:
         blockers.append(ACTIVE_INGESTION_JOBS)
-    if draft != effective:
+    # 廃止した項目だけの違いは未公開の変更ではない。
+    draft_matches = _without_retired(draft) == _without_retired(effective)
+    if not draft_matches:
         # 適用は下書きを新しい版の内容に置き換えるので、未公開の変更を黙って消さない。
         blockers.append(DRAFT_DIFFERS_FROM_CURRENT)
     plan = LanguagePackRepairPlan(
@@ -176,7 +182,7 @@ def _inspect(
         draft_revision=int(str(state_row["draft_revision"])),
         current_conforms=current_conforms,
         draft_conforms=_passes(lambda: release_store._validated(draft)),
-        draft_matches_current=draft == effective,
+        draft_matches_current=draft_matches,
         missing_fields=missing,
         retired_fields=retired,
         candidate_valid=pack is not None,

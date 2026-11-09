@@ -178,6 +178,13 @@ async def test_blocks_while_ingestion_jobs_are_active() -> None:
     assert "UPPER(status) IN ('QUEUED', 'RUNNING')" in pool.connection.calls[-1].statement
 
 
+async def test_draft_that_is_not_an_object_blocks_without_crashing() -> None:
+    oracle, _ = _client([_state_row(["壊れた下書き"])], [_release_row()], [{"total": 0}])  # type: ignore[arg-type]
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.draft_conforms is False
+    assert plan.blockers == [repair.DRAFT_DIFFERS_FROM_CURRENT]
+
+
 async def test_retired_fields_are_removed_like_the_saved_data_migration() -> None:
     retired = sorted(RETIRED_QUESTION_CUE_FIELDS)[0]
     effective = _effective()
