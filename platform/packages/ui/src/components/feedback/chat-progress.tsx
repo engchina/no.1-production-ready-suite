@@ -7,6 +7,7 @@ import type { LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
+import type { SpanRetryOutcome } from "../../lib/trace-tree";
 import { cn } from "../../lib/utils";
 import { RunProcessDetails, type RunProcessDetailsProps } from "../data/run-detail";
 import { useTraceDetailsLabels } from "../data/trace-labels-provider";
@@ -46,6 +47,11 @@ export interface ChatProgressStep {
    */
   name?: string;
   status: ChatProgressStepStatus;
+  /**
+   * 同じ呼び出しのやり直しの結果（#4736）。ある試行が失敗した後に、後の試行が成功した（`recovered`）・次の試行を待っている
+   * （`retrying`）とき、`status` は `done` のままこの印を付け、失敗の色・アイコンを使わない。
+   */
+  retry?: SpanRetryOutcome;
   /** ISO 8601。 */
   startedAt?: string;
   /** ISO 8601。 */
@@ -271,6 +277,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   const detail = step.detail;
   const result: RunTimelineStep = { id: step.id, label: step.label, status: step.status };
   if (step.operationName) result.operationName = step.operationName;
+  if (step.retry) result.retry = step.retry;
   if (step.startedAt) result.startedAt = step.startedAt;
   if (step.finishedAt) result.finishedAt = step.finishedAt;
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);

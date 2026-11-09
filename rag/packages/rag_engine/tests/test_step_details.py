@@ -252,7 +252,7 @@ class StepDetailsHelpersTest(unittest.TestCase):
         )
         self.assertEqual(step_details.numbered(["a", "b", "c"], limit=2), ["1. a", "2. b", "ほか 1 件"])
         self.assertEqual(step_details.join_values(["a", "", "b"], limit=1), "a ほか 1 件")
-        self.assertEqual(step_details.aspect_labels(["procedure", "unknown_aspect"]), "操作の手順、unknown_aspect")
+        self.assertEqual(step_details.aspect_labels(["applicability", "unknown_aspect"]), "適用の条件、unknown_aspect")
 
 
 if __name__ == "__main__":

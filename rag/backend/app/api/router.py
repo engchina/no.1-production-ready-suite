@@ -24,7 +24,6 @@ from app.api.routes import (
     language_pack,
     language_pack_reprocessing,
     mcp,
-    question_understanding,
     search,
     search_answer_profile_knowledge,
     search_answer_profiles,
@@ -79,12 +78,6 @@ api_router.include_router(
 )
 api_router.include_router(
     support_guide_process_import.router,
-    dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
-    prefix="/search-answer-profiles",
-    tags=["search-answer-profiles"],
-)
-api_router.include_router(
-    question_understanding.router,
     dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
     prefix="/search-answer-profiles",
     tags=["search-answer-profiles"],

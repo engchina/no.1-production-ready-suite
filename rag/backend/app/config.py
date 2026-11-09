@@ -1760,41 +1760,21 @@ class Settings(
         default=True,
         description=(
             "(#1926)回答(検索の回答・チャット)の LLM の呼び出しを streaming で受け、"
-            "停滞した呼び出しを打ち切って同じ要求を送り直す。OCI Enterprise AI の呼び出しは"
-            "まれ(記録の約 1%)に通常の 1/10 以下の速さ(13〜23 token/秒。中央値 224)に落ち、"
-            "同じ token 数で 36 秒 → 183 秒かかった。"
-            "判定の基準は同じ接続・モデルの直近の完了した呼び出し(3 回以上)から学ぶ。"
+            "応答の event が来なくなった呼び出しを打ち切って送り直す(#4736。"
+            "止まった判定は無音だけで、出力の速さでは打ち切らない。"
+            "送り直しはやり直しの共通の枠で数える)。"
             "回答の期限の無い呼び出し(取込など)は従来どおり streaming しない。"
         ),
     )
     rag_llm_stall_idle_seconds: float = Field(
-        default=20.0,
+        default=120.0,
         ge=5.0,
-        le=120.0,
+        le=600.0,
         description=(
-            "(#1926)応答の event(最初の event を含む)がこの秒だけ来なければ停滞として打ち切る。"
-            "直近の呼び出しの最大の間隔の 3 倍が長ければそちら(推論を stream しないモデル)。"
-            "記録では最初の event まで 0.1〜0.2 秒、event の間隔は 1 秒未満。"
-        ),
-    )
-    rag_llm_stall_min_rate_ratio: float = Field(
-        default=0.25,
-        gt=0.0,
-        le=0.9,
-        description=(
-            "(#1926)直近 10 秒の出力の速さ(delta の event/秒)が、直近の完了した呼び出しの"
-            "速さの中央値のこの割合を下回れば停滞として打ち切る。"
-            "記録の 10 パーセンタイルは中央値の約 0.65、遅い呼び出しは約 0.06〜0.1。"
-        ),
-    )
-    rag_llm_stall_resends: int = Field(
-        default=1,
-        ge=0,
-        le=2,
-        description=(
-            "(#1926)停滞で打ち切って送り直す回数の上限(LLM の呼び出し 1 回あたり)。"
-            "最後の送信は停滞を検出せずに回答の期限まで待つ。"
-            "0 は打ち切らない(streaming の時刻の記録だけ)。"
+            "(#1926・#4736)応答の event(最初の event を含む)がこの秒だけ来なければ"
+            "止まったとして打ち切る。推論を stream しないモデルは最初の出力まで"
+            "event が来ないので、短くしすぎない。"
+            "全体の上限は rag_answer_timeout_seconds。"
         ),
     )
     rag_llm_runaway_detection_enabled: bool = Field(
@@ -1817,14 +1797,6 @@ class Settings(
             "業務ガイドの手順ごとの検索が後に来る回答で、最初の章節の拡張が使わずに残す入力の割合"
             "(#2816。章節の拡張の根拠の入力の上限に対する %。既定 20、0 は残さない)。"
             "手順の根拠から広げる章節の分を残す。"
-        ),
-    )
-    rag_section_skip_regrade_at_scope: bool = Field(
-        default=True,
-        description=(
-            "(既定 ON。#1528 の A/B で列挙の問が 484 → 293 秒、品質は同じ)"
-            "読む範囲が文書全体の列挙の問(#1503)で、章節の拡張が文書全体まで読んだら、"
-            "CRAG の評価し直しを省いて生成へ進む(#1528)。"
         ),
     )
     rag_query_expansion_max_queries: int = Field(

@@ -279,7 +279,6 @@ class QuestionTextSearchInfo:
     query_source: str = "原質問のみ"
     tokenization_traces: tuple[dict[str, Any], ...] = ()
     domain_keyword_expansion: dict[str, Any] = field(default_factory=dict)
-    target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
     error: str = ""
 
 
@@ -296,7 +295,6 @@ class RetrievalQueryPlan:
     text_search_tokenization_traces: tuple[dict[str, Any], ...] = ()
     llm_expansion_queries: tuple[str, ...] = ()
     lexical_queries: tuple[str, ...] = ()
-    target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
     crag_rewrites: tuple[str, ...] = ()
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
     top_k: int = DEFAULT_RETRIEVAL_TOP_K
@@ -315,7 +313,6 @@ class RetrievalQueryPlan:
             "text_search_tokenization_traces": list(self.text_search_tokenization_traces),
             "llm_expansion_queries": list(self.llm_expansion_queries),
             "lexical_queries": list(self.lexical_queries),
-            "target_text_queries": list(self.target_text_queries),
             "crag_rewrites": list(self.crag_rewrites),
             "retrieval_scope": self.retrieval_scope,
             "top_k": self.top_k,
@@ -361,7 +358,6 @@ class CragRetrievalAttempt:
     required_aspect_coverage: str = "unknown"
     unknown_aspects: tuple[str, ...] = ()
     grade_execution: str = "not_run"
-    rule_signals: dict[str, Any] = field(default_factory=dict)
     # 回復を選んだ原因（``crag_recovery_cause`` の値。#3755）。確かめた不足だけに書き換え検索・追加の検索の枠を使う。
     recovery_cause: str = ""
 
@@ -379,7 +375,6 @@ class CragRetrievalAttempt:
             "required_aspect_coverage": self.required_aspect_coverage,
             "unknown_aspects": list(self.unknown_aspects),
             "grade_execution": "error" if self.grade_error else self.grade_execution,
-            "rule_signals": self.rule_signals,
             "confidence": self.confidence,
             "relevant_chunk_ids": list(self.relevant_chunk_ids),
             "rewritten_query": self.rewritten_query,

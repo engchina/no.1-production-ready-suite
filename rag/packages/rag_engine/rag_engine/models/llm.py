@@ -193,7 +193,9 @@ class CragEvidenceQuote(_StrictModel):
 class CragAnswerablePart(_StrictModel):
     """原質問への部分回答に使える、直接裏付けた操作・規則・確認方法。"""
 
-    aspect: str = Field(description="直接答えられる required_aspects の観点。business_object だけでは回答内容にしない。")
+    aspect: str = Field(
+        description="直接答えられる観点（business_object / requested_result / applicability のいずれか）。business_object だけでは回答内容にしない。"
+    )
     kind: Literal["operation", "rule", "verification", "definition"] = Field(
         description="原質問に対する操作、規則・禁止、実値の確認方法、定義のいずれか。"
     )
@@ -204,9 +206,7 @@ class CragAnswerablePart(_StrictModel):
 class CragAspectCheck(_StrictModel):
     """質問の必要観点ごとの支持と、候補内の一意な出典ID。"""
 
-    aspect: str = Field(
-        description="task_contract.required_aspects の観点名（business_object / requested_result / applicability / procedure など）。"
-    )
+    aspect: str = Field(description="確認する観点の名前（business_object / requested_result / applicability）。")
     status: Literal["supported", "missing", "unknown", "data_confirmation"] = Field(
         description="supported=直接根拠で説明できる。missing=閲覧した候補に必要な説明が無い。unknown=解釈・範囲・対応を確定できない。data_confirmation=一般規則はあり実値の照合だけが残る（requested_result / applicability のみ）。"
     )
@@ -237,27 +237,12 @@ class CragCandidateVerdict(_StrictModel):
     quote: str = Field(default="", description="エラーの対応または共通処理関係を判断した候補の直接原文。")
 
 
-class CragEnumeratedItem(_StrictModel):
-    """列挙・網羅の問（task_contract.enumeration）で、候補に見える該当の項目 1 つと根拠（#1503）。
-
-    件数・章の範囲の欠けはプログラムが数える（``quote`` が根拠の本文に無い項目は数えない）。
-    """
-
-    item: str = Field(description="該当の項目を短く（例: 入室の予約）。")
-    source_ids: list[str] = Field(default_factory=list, description="項目が書かれた候補の chunk_uid。")
-    quote: str = Field(description="候補の本文から、項目が書かれた箇所を文字を変えずに写した原文（20 字程度）。")
-
-
-# 項目の順序は生成順でもある（strict schema）。候補ごとの判定 → 列挙の項目 → 観点 → 理由 → 結論の順に置き、結論を先に書かせない。
+# 項目の順序は生成順でもある（strict schema）。候補ごとの判定 → 観点 → 理由 → 結論の順に置き、結論を先に書かせない。
 class CragRetrievalGradeOutput(_StrictModel):
     """CRAG retrieval の十分性判定と理由を保持します。"""
 
     candidate_verdicts: list[CragCandidateVerdict] = Field(
         default_factory=list, description="全候補の関連判定。候補ごとに独立に判定する。relevant=true の候補を回答に使う。"
-    )
-    enumerated_items: list[CragEnumeratedItem] = Field(
-        default_factory=list,
-        description="task_contract.enumeration があるときだけ、候補に見える該当の項目を、重ねずに資料の順で enumeration.max_items 件まで挙げる。候補に無い項目を推測で足さない。enumeration が null なら空の配列。",
     )
     aspect_checks: list[CragAspectCheck] = Field(
         default_factory=list, description="required_aspects ごとの判定。relevant な候補を合わせて確認し、全観点を必ず列挙する。"
@@ -307,9 +292,9 @@ class TextOutput(_StrictModel):
     text: str
 
 
-# 生成・監査の出力契約は Field(description) に置き、構造化出力の JSON schema としてモデルへ渡す (#986)。
+# 生成の出力契約は Field(description) に置き、構造化出力の JSON schema としてモデルへ渡す (#986)。
 # 項目の順序は strict schema の生成順でもあるため、根拠（request_coverage / items、reviews）→ 結論（summary /
-# confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT / AUDIT_SYSTEM_PROMPT。
+# confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT。
 class GroundedCitation(_StrictModel):
     """item の出典 1 つ（根拠の番号と引用する行）。引用の原文はシステムが取り出す（#2830）。"""
 
@@ -339,7 +324,7 @@ class GroundedItem(_StrictModel):
 
     gap 以外は出典が 1 つ以上必須。1 つの主張は、同じ内容を述べた別の文書の原文（規則の条項と、それを説明する
     手順書など）を出典に並べられる（#3526。ALCE・Anthropic Citations の形）。各出典は ID・版・範囲で原文を抽出し、
-    抽出できない出典は公開されない。text は利用者向けの言い換えで、監査で不支持になると印が付く。
+    抽出できない出典は公開されない。text は利用者向けの言い換え。
 
     検査の工程（``grounded.verify`` の後）では、1 つの item は出典を 1 つだけ持ち、``evidence_id`` / ``lines`` /
     ``quote`` はその出典を読む。同じ主張の別の出典は ``CheckedItem.also`` に持つ。
@@ -400,7 +385,7 @@ class GroundedApplication(_StrictModel):
     """資料の事実・規則から導く結論（計算・条件適用・資料間の組み合わせ）。
 
     前提は質問の原文の一部、規則は items の index で指し、計算は算式で書く。システムが前提の照合・規則の
-    支持・算式の計算を確かめ、監査が当てはめの正しさを判定してから公開する。
+    支持・算式の計算を確かめてから公開する。当てはめの正しさは生成のモデルの責務で、生成の後に LLM では確かめない。
     """
 
     request_id: str = Field(default="", description="この当てはめが答える request_units の id。")
@@ -548,7 +533,7 @@ class AnswerPart(_StrictModel):
     text: str = Field(
         min_length=1,
         max_length=600,
-        description="質問が求める要点。requested_granularity に必要な範囲だけを分け、任意の補足は必須にしない。",
+        description="質問が求める要点。任意の補足は必須にしない。",
     )
     result_kind: Literal["direct", "derived", "gap"] = Field(description="この要点の答えが直接記載、導出、不足のいずれか。")
     item_indexes: list[Annotated[int, Field(strict=True, ge=0)]] = Field(

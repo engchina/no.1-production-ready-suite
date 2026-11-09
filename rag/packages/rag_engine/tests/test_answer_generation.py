@@ -85,32 +85,14 @@ class AnswerGenerationTests(unittest.TestCase):
 
         stub_generation(self)
 
-    def test_bare_abstentions_explain_evidence_gap_in_each_language(self):
-        for text, expected in (
-            ("わかりません。", "十分な根拠"),
-            ("分かりません", "十分な根拠"),
-            ("不明です", "十分な根拠"),
-            ("I don't know.", "sufficient evidence"),
-            ("不知道。", "足够的依据"),
-        ):
+    def test_bare_abstention_text_is_not_rewritten(self):
+        """短い拒答文の完全一致の置換はしない。モデルの本文をそのまま返す（#4668）。"""
+        for text in ("わかりません。", "I don't know.", "不知道。"):
             for structured in (False, True):
                 with self.subTest(text=text, structured=structured):
-                    raw = (
-                        json.dumps(
-                            {
-                                "answer": text,
-                                "confidence": "high",
-                                "needs_human_review": False,
-                            }
-                        )
-                        if structured
-                        else text
-                    )
+                    raw = json.dumps({"answer": text, "confidence": "high", "needs_human_review": False}) if structured else text
                     response = parse_answer_response(raw)
-                    self.assertIn(expected, response.answer_text)
-                    self.assertEqual(response.confidence, "low")
-                    self.assertTrue(response.needs_human_review)
-                    self.assertTrue(response.insufficient_reason)
+                    self.assertEqual(response.answer_text, text)
                     self.assertEqual(response.raw_text, raw)
 
     def test_partial_answer_preserves_evidence_and_marks_missing_data_for_review(self):
@@ -910,12 +892,20 @@ class AnswerGenerationTests(unittest.TestCase):
             self.assertEqual(prompt.count(question), 1)
             for key in ("user_assertions", "request_units", "required_aspects", "original_question", "hypotheses"):
                 self.assertNotIn(f'"{key}"', prompt)
-            self.assertNotIn('"goal"', prompt)
-            self.assertIn('"business_objects": ["地区別売上集計表"]', prompt)
-            self.assertIn('"output_formats": ["csv"]', prompt)
-        history = _build_query_routing_prompt("以前は帳票を出力できましたが、今回は出力ボタンが押せません。原因を教えてください。")
-        self.assertIn('"historical_context"', history)
-        self.assertIn('"current_request"', history)
+            self.assertNotIn("task_contract", prompt)
+            self.assertNotIn("{{", prompt)
+
+    def test_saved_prompt_with_retired_contract_placeholder_is_not_passed_literally(self):
+        # 保存済みの上書きに残った差し込みは、値を空にして文字のまま LLM へ届かないようにする（#4668）。
+        from rag_engine.generation import query_prompts
+
+        saved = "原質問:\n{{question}}\n目的・条件:\n{{task_contract}}\nJSON だけを返す。"
+        with patch.object(query_prompts, "resolve_prompt", return_value=saved):
+            routing = query_prompts._build_query_routing_prompt("帳票の出力方法")
+            expansion = query_prompts._build_query_expansion_prompt("帳票の出力方法", RAG_FUSION_STRATEGY)
+        for prompt in (routing, expansion):
+            self.assertNotIn("{{task_contract}}", prompt)
+            self.assertIn("目的・条件:\n{}\n", prompt)
 
     def test_routing_falls_back_to_expansion_call_when_all_routed_queries_are_rejected(self):
         # ルーティングの検索文が全て不採用なら、応答に検索文がない場合と同じく拡張呼出で補う (#923)。

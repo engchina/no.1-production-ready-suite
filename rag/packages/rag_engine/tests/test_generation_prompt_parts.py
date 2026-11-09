@@ -27,7 +27,6 @@ def span(text: str = "設定画面で項目Aを確認します。", **extra: Any
         "text": text,
         "function": ("synthetic.pdf", "合成の説明"),
         "tags": [],
-        "pinned": False,
         **extra,
     }
 
@@ -41,11 +40,45 @@ def test_plain_evidence_gets_no_reading_notes() -> None:
     assert reading_part([span()]) == ""
 
 
-def test_only_tags_present_on_the_evidence_are_explained() -> None:
-    notes = reading_part([span(tags=["constraint", "completion"])])
-    assert "- constraint: " in notes and "- completion: " in notes
-    assert "- definition: " not in notes and "- aggregate_only: " not in notes
-    assert "画面例では" not in notes and "［資料の既定値］" not in notes
+def test_only_marks_present_on_the_evidence_are_explained() -> None:
+    notes = reading_part([span(tags=["image_generated"])])
+    assert "- image_generated: " in notes
+    assert "- 補助情報: " not in notes and "［資料の既定値］" not in notes
+    assert "- catalog: " not in notes
+
+
+def test_word_based_evidence_tags_are_not_part_of_the_reading_rules() -> None:
+    """語の一致で付ける印はやめた。形から分かる読み方だけが残る（#4668）。"""
+    keys = grounded.reading_line_keys(grounded.EVIDENCE_READING_PROMPT)
+    assert keys == ["catalog", "image_generated", "補助情報", "画面の値", "表の値"]
+    assert not any(tag in " ".join(keys) for tag in ("definition", "operation_entry", "completion", "constraint", "multi_condition"))
+    assert "aggregate_only" not in " ".join(keys)
+    tagged = grounded.tag_spans(
+        [
+            {"text": "項目A: 定義。", "evidence_id": "a", "page": 1, "source": "s", "chunk_uid": "a"},
+            {
+                "text": "件数の合計は 3 件です。確定ボタンを押して完了します。",
+                "evidence_id": "b",
+                "page": 2,
+                "source": "s",
+                "chunk_uid": "b",
+            },
+        ]
+    )
+    assert [span["tags"] for span in tagged] == [[], []]
+    assert all("pinned" not in span for span in tagged)
+
+
+def test_common_reading_rules_are_always_in_the_generation_system_prompt() -> None:
+    """共通の 3 行は生成の system に 1 回だけ置く（1 つの規則は 1 つの層）。"""
+    for line in (
+        "答えを終える前に、事実の主張が根拠で支えられているか、完了したことと残っていることを分けているかを確かめる。",
+        "各根拠は、その根拠の本文だけを裏付ける。",
+        "資料が述べていることと、自分の推論を分ける。",
+    ):
+        assert grounded.GENERATE_SYSTEM_PROMPT.count(line) == 1
+        assert line not in grounded.EVIDENCE_READING_PROMPT
+    assert "pinned" not in grounded.GENERATE_SYSTEM_PROMPT and "必須根拠" not in grounded.GENERATE_SYSTEM_PROMPT
 
 
 def test_catalog_mark_and_context_note_are_explained_only_when_present() -> None:

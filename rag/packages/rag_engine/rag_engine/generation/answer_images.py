@@ -10,11 +10,9 @@ from typing import Any
 from rag_engine.config import Settings, answer_model_reads_images
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_payload import _evidence_id_key, _int_value, _metadata_image_evidence, _records_for_prompt_injection_scan
-from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_relevance
-from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests
 
 MAX_ANSWER_IMAGE_ATTACHMENTS = 4
 
@@ -120,8 +118,6 @@ def answer_image_evidence(
     selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     root = Path(output_dir)
-    procedure = bool(question and STEPS_REQUEST in explicit_requests(question))
-    focus = question
     for record in records:
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
         raw_images = _metadata_image_evidence(metadata)
@@ -142,27 +138,21 @@ def answer_image_evidence(
             path, asset_kind, exists = _resolve_image_prompt_path(raw, record, root)
             context_bbox = []
             ref = next((r for r in record.source_record_refs if r.get("record_id") == image_id), {})
-            native_context = [
-                str(r.get("text_preview") or "")
-                for r in ref.get("vision_context_record_refs", ())
-                if r.get("partially_visible") is False and r.get("category") in {"Text", "List-item"}
-            ]
-            if procedure:
-                # 手順の説明が画像外にある場合は、解析時と同じ赤枠付き文脈を添付する。
-                # 他ページや任意ファイルへ展開せず、同じ解析runの既存cropだけを使う。
-                context_path = str(raw.get("context_crop_path") or ref.get("vision_context_crop") or "")
-                refs = ref.get("vision_context_record_refs") or []
-                if (
-                    context_path
-                    and record.source_run_id
-                    and any(r.get("partially_visible") is False and r.get("category") in {"Text", "List-item"} for r in refs)
-                ):
-                    run_root = (root / record.source_run_id).resolve()
-                    candidate = Path(context_path)
-                    candidate = candidate.resolve() if candidate.is_absolute() else (run_root / candidate).resolve()
-                    if run_root.is_relative_to(root.resolve()) and candidate.is_relative_to(run_root) and candidate.is_file():
-                        path, asset_kind, exists = candidate, "context_crop", True
-                        context_bbox = ref.get("vision_context_bbox") or []
+            # 説明の文が画像の外にある図は、解析時と同じ赤枠付きの文脈の画像を添付する。
+            # 他ページや任意ファイルへ展開せず、同じ解析runの既存cropだけを使う。
+            context_path = str(raw.get("context_crop_path") or ref.get("vision_context_crop") or "")
+            refs = ref.get("vision_context_record_refs") or []
+            if (
+                context_path
+                and record.source_run_id
+                and any(r.get("partially_visible") is False and r.get("category") in {"Text", "List-item"} for r in refs)
+            ):
+                run_root = (root / record.source_run_id).resolve()
+                candidate = Path(context_path)
+                candidate = candidate.resolve() if candidate.is_absolute() else (run_root / candidate).resolve()
+                if run_root.is_relative_to(root.resolve()) and candidate.is_relative_to(run_root) and candidate.is_file():
+                    path, asset_kind, exists = candidate, "context_crop", True
+                    context_bbox = ref.get("vision_context_bbox") or []
             entry = {
                 "image_id": image_id,
                 "source": record.source,
@@ -194,22 +184,10 @@ def answer_image_evidence(
                 if question
                 else 0.0
             )
-            # 生成説明の語数で操作の原文を押し出さない。目的の原文と、完全可視の
-            # 周辺操作文の関連度を先に比較し、表示例・部分表示は加点しない。
-            entry["native_operation_score"] = (
-                max(
-                    (evidence_relevance(focus, text) for text in native_context if grounding_cues().has("native_operation_words", text)),
-                    default=0.0,
-                )
-                if procedure
-                else 0.0
-            )
-            entry["selection_reason"] = (
-                "native_operation_relevance" if entry["native_operation_score"] else "question_relevance" if question else "record_order"
-            )
+            entry["selection_reason"] = "question_relevance" if question else "record_order"
             selected.append(entry)
             seen.add(key)
-    selected.sort(key=lambda item: (-item["native_operation_score"], -item["selection_score"]))
+    selected.sort(key=lambda item: -item["selection_score"])
     return tuple(selected[:max_images])
 
 

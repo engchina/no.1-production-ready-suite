@@ -224,8 +224,7 @@ class GroundedAnswerTest(unittest.TestCase):
         step = span("E2", "①取引先名等を変更します。\n②実行ボタンを押します。", ["１．操作手順", "（１）取引先登録"])
         sibling = span("E3", "①納品先名を変更します。\n②登録ボタンを押します。", ["１．操作手順", "（２）納品先登録"])
         other_doc = span("E4", "①確認ボタンを押します。", ["１．操作手順", "（１）取引先登録"], source="別文書.pdf")
-        question = "取引先名を変更するにはどこから操作すればよいか。"
-        tagged = grounded.tag_spans(question, [overview, step, sibling, other_doc])
+        tagged = grounded.tag_spans([overview, step, sibling, other_doc])
         by = {s["evidence_id"]: s for s in tagged}
         self.assertEqual(sorted(by["E1"]["function_texts"]), sorted([step["text"], sibling["text"]]))  # 配下の節（同じ文書）
         self.assertNotIn(step["text"], by["E3"]["function_texts"])  # 兄弟の機能は含めない
@@ -263,8 +262,7 @@ class GroundedAnswerTest(unittest.TestCase):
             ["１．操作手順", "（２）納品先登録"],
             ["section_header", "section_header"],
         )
-        question = "取引先名を変更するにはどこから操作すればよいか。"
-        by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, continued, sibling])}
+        by = {s["evidence_id"]: s for s in grounded.tag_spans([step, continued, sibling])}
         self.assertEqual(by["E1"]["function"], by["E2"]["function"])
         self.assertNotEqual(by["E1"]["function"], by["E3"]["function"])
         self.assertIn(continued["text"], by["E1"]["function_texts"])
@@ -294,8 +292,7 @@ class GroundedAnswerTest(unittest.TestCase):
         continued = span("E2", "②実行ボタンを押します。", ["１データ連携"], 21)  # 柱の誤検出で別機能に分かれた続き
         sibling = span("E3", "①納品先名を変更します。\n②登録ボタンを押します。", ["１．操作手順", "（２）納品先登録"], 20)
         far = span("E4", "①確認ボタンを押します。", ["３．参考"], 23)
-        question = "取引先名を変更するにはどこから操作すればよいか。"
-        by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, continued, sibling, far])}
+        by = {s["evidence_id"]: s for s in grounded.tag_spans([step, continued, sibling, far])}
         self.assertEqual(by["E1"]["adjacent_texts"], [continued["text"]])
         self.assertNotIn(continued["text"], by["E1"]["function_texts"])
 
@@ -323,8 +320,7 @@ class GroundedAnswerTest(unittest.TestCase):
             "■ 要点\n回答用本文: 取引先登録画面のスクリーンショット。\nボタン: (F1) メニュー / (F5) 実行 / 戻る\n値: 取引先名=架空商事",
             ["１．操作手順", "（１）取引先登録"],
         )
-        question = "取引先名を変更するにはどこから操作すればよいか。"
-        by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, screen])}
+        by = {s["evidence_id"]: s for s in grounded.tag_spans([step, screen])}
         self.assertIn(screen["text"], by["E1"]["screen_texts"])
         self.assertNotIn(screen["text"], by["E1"]["function_texts"])  # 原文照合には従来どおり使わない
 
@@ -462,7 +458,7 @@ class GroundedAnswerTest(unittest.TestCase):
             "explicit_facet",
             "calculation_basis",
             "magenta_rectangle",
-        } | {t.__name__.removeprefix("_tag_") for t in grounded.SPAN_TAGGERS}
+        }
         self.assertEqual(named - known - values, set())
 
     def test_generation_limits_are_advertised_by_the_response_schema(self):
@@ -482,20 +478,13 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertNotIn("items は最大", grounded.GENERATE_SYSTEM_PROMPT)
         self.assertNotIn("全体が破棄される", grounded.GENERATE_SYSTEM_PROMPT)
 
-    def test_generation_prompt_explains_every_tag_shown_with_the_evidence(self):
-        # 凡例は「tags は原文の性質を示す。」の下の字下げ箇条書き（次の top-level 箇条書きまで）。
-        # タグは降格の条件に使われる。tagger を足したら読み方も足す（該当するときだけ入力へ渡す）。
-        for tagger in grounded.SPAN_TAGGERS:
-            self.assertIn("- " + tagger.__name__.removeprefix("_tag_") + ": ", grounded.EVIDENCE_READING_PROMPT)
-
     def test_document_context_is_shown_under_its_own_evidence_as_not_quotable(self):
         spans = [
-            {"label": "E1", "text": "一つ目の本文。", "tags": [], "pinned": False, "function": ("f",)},
+            {"label": "E1", "text": "一つ目の本文。", "tags": [], "function": ("f",)},
             {
                 "label": "E2",
                 "text": "二つ目の本文。",
                 "tags": [],
-                "pinned": False,
                 "function": ("f",),
                 "answer_context": "文書種別: 操作説明書",
             },
@@ -510,12 +499,12 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("補助情報の囲み", grounded.EVIDENCE_READING_PROMPT)
 
     def test_policy_names_the_origin_label_as_the_evidence_block_prints_it(self):
-        span = {"label": "E1", "text": "本文。", "tags": [], "pinned": False, "function": ("f",), "origin": "document_text"}
+        span = {"label": "E1", "text": "本文。", "tags": [], "function": ("f",), "origin": "document_text"}
         self.assertIn("origin=document_text", grounded.format_functions([span]))
         self.assertIn("`origin=image_extraction`", grounded.EVIDENCE_READING_PROMPT)
 
     def test_all_gap_answer_shows_the_system_refusal_and_the_gaps_not_the_summary(self):
-        ctx = context(record(0, "帳票の一覧です。", "その他"))  # 必須根拠にならない原文
+        ctx = context(record(0, "帳票の一覧です。", "その他"))
         refusal = draft({"kind": "gap", "text": "削除の手順は資料から確認できません。"}, summary="", confidence="low")
         result = run(FakeModel([refusal], [audit()]), ctx).response
         # prompt は「根拠が無ければ summary は空、不足は gap に書く」と指示する。公開される本文もその形になる。
@@ -868,7 +857,6 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
                 "label": label,
                 "text": f"{label} の本文。",
                 "tags": [],
-                "pinned": False,
                 "page": 1,
                 "source": source,
                 "document_scope": [source],
@@ -982,14 +970,6 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
 class ContextRequestUnitTest(unittest.TestCase):
     """背景文（kind=context）は答える対象ではなく、未回答にも gap にもならない (#650)。"""
 
-    def test_request_units_mark_background_sentences_as_context(self):
-        from rag_engine.retrieval.task_contract import request_units
-
-        units = request_units("取引先名が変わった。伝票右上の伝票タイトルを変更するにはどこから操作すればよいか。")
-        self.assertEqual([(u["id"], u["kind"]) for u in units], [("Q1", "context"), ("Q2", "request")])
-        self.assertEqual([u["kind"] for u in request_units("既に登録済み。①取込方法は？")], ["context", "request"])
-        self.assertEqual([u["kind"] for u in request_units("伝票タイトルの変更の件。")], ["request"])  # 標識がなければ全文を要求にする
-
 
 class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
     """見出しどおりの【画面経路】は入口化ではなく、ボタン名は同じ機能の本文で確認できればよい (#658)。"""
@@ -1054,7 +1034,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
             "section_path_sources": ["running_head", "section_header", "section_header"],
         }
 
-        tagged = grounded.tag_spans("請求処理の手順を教えてほしい。", [steps, screen])
+        tagged = grounded.tag_spans([steps, screen])
         body, capture = tagged[0], tagged[1]
 
         # 柱の扱いが違うため、解析見出しから求める機能は割れている。
@@ -1069,7 +1049,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
             "source": "別の架空業務.pdf",
             "text": "■ 要点\n視覚種別: screenshot\n■ 可視情報\nボタン: (F9) 取消",
         }
-        tagged = grounded.tag_spans("請求処理の手順を教えてほしい。", [steps, other])
+        tagged = grounded.tag_spans([steps, other])
         self.assertNotIn(other["text"], tagged[0]["screen_texts"])
 
     def test_numbered_headings_are_separate_procedures(self):
@@ -1096,8 +1076,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertIn("操作手順（２．設定値の確認）", text)
         self.assertIn("操作手順（３．商品データの取込）", text)
 
-    def test_label_list_ocr_fragment_is_not_pinned_nor_shown_as_document_text(self):
-        """項目名だけが並ぶ OCR 集約は、質問の語を含んでも必須根拠にせず「必須根拠が未使用」で表示しない (#723)。"""
+    def test_label_list_ocr_fragment_is_not_shown_as_document_text(self):
+        """項目名だけが並ぶ OCR 集約は、質問の語を含んでも原文として表示しない (#723)。"""
         ocr = "\n".join(
             [
                 "●●支店",
@@ -1137,8 +1117,6 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         result = run(model, ctx, question).response
         self.assertNotIn("商談予定表", result.answer_text)
-        spans = result.generation_trace["selected_evidence"]
-        self.assertFalse(next(s for s in spans if s["text"] == ocr).get("pinned"))
 
     def test_trace_evidence_omits_check_only_text_copies(self):
         """検査用の同機能・同文書・隣接ページの本文（O(n²)）は回答 JSON の trace に残さない (#829)。"""
@@ -1236,7 +1214,7 @@ class PrefixedFunctionLabelTest(unittest.TestCase):
         screen = self._span("E2", "伝票の印刷内容を設定する画面です。", ["（２）伝票印刷設定", "A 【画面説明】"])
         self.assertNotEqual(grounded.function_key(steps), grounded.function_key(screen))  # 柱の扱いで割れる
 
-        tagged = grounded.tag_spans("伝票の印刷内容を設定したい。", [steps, screen])
+        tagged = grounded.tag_spans([steps, screen])
 
         self.assertEqual(tagged[0]["function"], tagged[1]["function"])
         self.assertIn(screen["text"], tagged[0]["function_texts"])  # 同じ機能の本文として見える
@@ -1248,7 +1226,7 @@ class PrefixedFunctionLabelTest(unittest.TestCase):
         )
         sibling = self._span("E3", "出力様式を設定する画面です。", ["（３）出力様式設定", "A 【画面説明】"])
 
-        tagged = grounded.tag_spans("伝票の印刷内容を設定したい。", [steps, other_doc, sibling])
+        tagged = grounded.tag_spans([steps, other_doc, sibling])
 
         self.assertNotEqual(tagged[0]["function"][-1], tagged[1]["function"][-1])  # 別の文書へは寄せない
         self.assertNotEqual(tagged[0]["function"], tagged[2]["function"])  # 後方一致しない別画面

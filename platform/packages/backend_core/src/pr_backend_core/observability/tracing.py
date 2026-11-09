@@ -81,6 +81,10 @@ _SAFE_ATTRIBUTES = frozenset(
         "pr.batch.index",
         "pr.batch.count",
         "pr.retry.reason",
+        # 同じ呼び出しの試行を束ねる id と、この試行の失敗の後にやり直すか（#4736。
+        # 画面が「再試行して成功」と出す）。
+        "pr.call.retry_group",
+        "pr.retry.scheduled",
         "pr.call.transport_status",
         "pr.call.validation_status",
         "pr.cache.hit",

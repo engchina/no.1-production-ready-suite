@@ -133,7 +133,6 @@ for (const viewport of [
     const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
       "登録済みQ&A",
-      "質問の理解",
       "用語・同義語",
       "確認・回答ルール",
       "業務ガイド",

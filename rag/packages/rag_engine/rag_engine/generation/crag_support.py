@@ -17,10 +17,9 @@ from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.context_builder import ContextParentEvidence, context_bundle_from_parent_evidence, record_context_key
 from rag_engine.retrieval.context_recovery import recover_context_records
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_packet, evidence_relevance
 from rag_engine.retrieval.rerank_scores import best_rerank_score, keeps_original_order, rerank_first_key
-from rag_engine.retrieval.task_contract import query_rejection_reason, task_contract
+from rag_engine.retrieval.task_contract import REQUIRED_ASPECTS, query_rejection_reason
 
 MAX_GENERATED_QUERY_CHARS = 900
 
@@ -41,7 +40,7 @@ def _merge_crag_evidence(
     """既取得の出典を最大2回分保持する。満杯時は rerank の点数の高い順に選ぶ（#3504）。
 
     親の点数は、その親の起点の child の rerank の点数の最高値（記録の metadata か根拠の木の起点）。点数の無い
-    親は点数のある親の後ろに置き、語の一致の点数（操作の見出し・質問の語）は同点の順と点数の無い親の順だけに使う。
+    親は点数のある親の後ろに置き、語の一致の点数（質問の語の重なり）は同点の順と点数の無い親の順だけに使う。
     条の目録で選んだ条の親（rerank 最優先の例外。`keeps_original_order`）は切らず、枠の外に元の順で残す
     （context の組み立てと同じく、関連度に関わらず枠の外に足す）。
     """
@@ -52,15 +51,6 @@ def _merge_crag_evidence(
     records = list(by_key.values())
     limit = max_records * 2
     if len(records) > limit:
-        from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
-
-        target_labels = {label for r in records if operation_target_score(question, r) >= 80 for label in operation_labels(r)}
-
-        def priority(record):
-            labels = operation_labels(record)
-            entry = len(labels) == 1 and bool(labels & target_labels) and mentions_operation_section(record.text)
-            return operation_target_score(question, record) + (100 if entry else 0) + evidence_relevance(question, record.text)
-
         parents = (*previous.evidence_tree, *current.evidence_tree)
         tree_scores = {
             record_context_key(p.record) or p.record.id: best_rerank_score(
@@ -81,7 +71,9 @@ def _merge_crag_evidence(
         def exempt(record: AnswerRecord) -> bool:
             return keeps_original_order(record) or (record_context_key(record) or record.id) in exempt_keys
 
-        kept = sorted((r for r in records if not exempt(r)), key=lambda r: (*rerank_first_key(score(r)), -priority(r)))
+        kept = sorted(
+            (r for r in records if not exempt(r)), key=lambda r: (*rerank_first_key(score(r)), -evidence_relevance(question, r.text))
+        )
         records = kept[:limit] + [r for r in records if exempt(r)]
     keys = {record_context_key(r) or r.id for r in records}
     tree = {record_context_key(p.record) or p.record.id: p for p in previous.evidence_tree}
@@ -94,7 +86,7 @@ def _merge_crag_evidence(
 
 # 判断の規則はここ、原文とIDの検証・状態の集約はコード、出力の形はモデルschemaに置く。
 CRAG_GRADE_PROMPT_TEMPLATE = (
-    """## Step 1: 入力と原質問の契約を確認する
+    """## Step 1: 入力と原質問を確認する
 - Corrective RAG の retrieval evaluator として、検索候補が原質問に回答する根拠として十分かを判定する。観点ごとに独立に判定し、結論を応答 schema どおりに返す。
 - 資料は一般的な手順・規則を書く。質問固有の値（コード名・グループ名・回数・メニュー名の言い回し・利用者の状況）は資料に現れないのが普通で、無いことを不足の理由にしない。実値が未提供でも、根拠にある手順・規則・確認方法を説明できれば十分とする。
 - 画面キャプチャ・Vision 生成説明に見える値は文書の例示であり、今回の実データではない。
@@ -108,13 +100,14 @@ CRAG_GRADE_PROMPT_TEMPLATE = (
 - candidate_verdicts は relevant / irrelevant / unknown の relation を返す。エラーの質問では、候補の原文 quote を確認し、error_relation の応答 schema にある値から対応関係を選ぶ。原文に共通の対処があれば shared_handling、明確に別の処理だけで共通対処なしなら different、対応が確定できない場合は unknown。関連候補があっても全要求の根拠がそろったとは扱わない。
 
 ## Step 3: 要求観点を独立に確認する
-- task_contract.required_aspects を全て aspect_checks に列挙し、観点ごとに独立に status（supported/missing/unknown/data_confirmation）・source_ids・直接引用 evidence・reason を返す。ある観点が missing でも他の観点を missing にしない。
-- task_contract.rule_signals は規則が認識できたかの信号であり、not_identified は根拠不足の判定ではない。definition_targets ごとの definition:ID 観点では、項目の意味・条件を説明する直接原文を探す。跨行・表・異なる文型も読む。項目名だけの一覧は定義を支持しない。引用が存在することと、定義を説明することを区別する。
+- 次の観点を全て aspect_checks に列挙し、観点ごとに独立に status（supported/missing/unknown/data_confirmation）・source_ids・直接引用 evidence・reason を返す: """
+    + " / ".join(REQUIRED_ASPECTS)
+    + """。ある観点が missing でも他の観点を missing にしない。
 - 観点を supported / data_confirmation にするときは、判断に直接使った原文を evidence に返す。複数の引用を合わせて支持してよい。規則未認識・抄録外・判断不確定は unknown とし、missing に置き換えない。
-- business_object は同じ業務・対象・画面の種類、requested_result は求める結果（制限の記載を含む）、applicability は適用条件、procedure は入口から実行までの操作を確認する。一般操作を選んだ出典で説明できれば supported。
-- applicability では、候補の source（文書名）・section（機能見出し。画面経路を含む）・本文が示す対象と変更項目が、原質問の対象・変更項目（task_contract の business_objects / action_targets / requested_actions）と一致するかを確認する。
+- business_object は同じ業務・対象・画面の種類、requested_result は求める結果（制限の記載を含む）、applicability は適用条件を確認する。一般操作を選んだ出典で説明できれば supported。
+- applicability では、候補の source（文書名）・section（機能見出し。画面経路を含む）・本文が示す対象と変更項目が、原質問の対象・変更項目と一致するかを確認する。
 - 同じ画面でも別の変更項目の手順（例: 拠点名の変更手順の画面例に電話番号欄が写っているだけ）は、求める変更項目の説明を支持しない。閲覧範囲に説明が無ければ missing、対応を確定できなければ unknown とし、原質問の変更項目を見出しにした候補を優先する。
-- エラー文・エラーコードの質問（task_contract.error_messages）は、同じエラー、共通の処理関係、明確に別エラーで共通処理なし、対応不明を原文から区別する。別番号があるだけでは無関係としない。略称・OCR差・コード未記載・文脈の曖昧さは、同じ処理関係を原文で確認できれば支持し、確認できなければ unknown のまま残す。
+- エラー文・エラーコードの質問は、同じエラー、共通の処理関係、明確に別エラーで共通処理なし、対応不明を原文から区別する。別番号があるだけでは無関係としない。略称・OCR差・コード未記載・文脈の曖昧さは、同じ処理関係を原文で確認できれば支持し、確認できなければ unknown のまま残す。
 - requested_result / applicability で実値の照合だけが残る場合は data_confirmation にできる。確認方法を支持する source_ids と、閲覧するデータ・目的を reason に必ず記す。操作自体・対象・文書根拠の不足には使わない。
 - 「できない」「機能はない」「個別に行う」などの制限の記載は、可否・方法を尋ねる要求への回答であり supported にする。
 - 「〜でよいか」「〜で合っているか」の確認質問は、その機能・画面経路の説明があれば supported にする。資料が質問文を再掲している必要はない。
@@ -125,9 +118,6 @@ CRAG_GRADE_PROMPT_TEMPLATE = (
 - answerable_parts に、原質問への操作・規則・禁止・確認方法・定義を直接裏付ける部分と原文を示す。requested_result が supported でも業務概説だけなら空にする。sufficient はこの直接答えられる部分があるかを表し、同じ業務の候補が残ることや全観点の充足とは区別する。
 - sufficient=false にするのは、回答に使える材料が無く、候補が明らかに別の話題・機能または別の処理だけの場合。未確認の候補を誤検索と断定しない。
 - excerpt_only=true の候補は抄録。抄録に答えがあれば十分。続き・条件が抄録の外にありそうなら recovery_action で文脈を広げ、記載なしを機能不存在と断定しない。
-- 「すべて挙げて」「5 つすべて」「章ごとに」のような問は、見えている候補で答えられるかではなく、該当の項目が候補にそろっているかを確かめる。候補に見える該当の項目を enumerated_items に資料の順で挙げ（task_contract.enumeration.max_items 件まで。章の範囲（chapters）のある問は章ごとに 1〜2 件）、項目ごとに書かれた候補の chunk_uid と、その箇所の原文の写し（quote。20 字程度。文字を変えない）を付ける。同じ記載を 2 回挙げない。候補に無い項目を推測・一般知識で足さない。
-- aspect_checks の enumeration_coverage は、該当の項目が候補にそろっていれば supported、件数（expected_count）に足りない・範囲の章（chapters）の記載が候補に無い・候補が抄録（excerpt_only=true）や章節の途中で、続きに該当が残っていそうなら missing。件数・章の範囲は enumerated_items からシステムが数え直す。
-- enumeration_coverage が missing でも、部分回答に使える材料があるかと、列挙の完了は分ける。
 
 ## Step 5: 回復方法を選ぶ
 - 対象が一致し条件・続きが不足する場合は rewrite より先に文脈拡張を選ぶ: 手順の続きは neighbor_children、同じ親の条件不足は parent、前後の同一機能説明不足は neighbor_parents（recovery_options にある経路のみ）。話題・対象違いは rewrite。次ページ参照はその本文を読むまで supported にしない。
@@ -139,7 +129,6 @@ CRAG_GRADE_PROMPT_TEMPLATE = (
 {{question}}
 
 recovery_options: {{recovery_options}}
-task_contract: {{task_contract}}
 今回の主検索文:
 {{active_query}}
 
@@ -170,50 +159,12 @@ def _crag_context_fingerprint(context: AnswerContext) -> str:
     return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
 
 
-def _crag_task_contract(question: str) -> dict[str, Any]:
-    contract = task_contract(question)
-    contract["required_aspects"] = [
-        *contract["required_aspects"],
-        *("definition:" + target["id"] for target in contract["definition_targets"]),
-    ]
-    return contract
-
-
 def _crag_quote_matches(quote: str, text: str) -> bool:
     # 表記の幅と空白だけを正規化する。意味の近さを原文一致には使わない。
     def normalize(value: str) -> str:
         return "".join(fold_width(str(value)).split())
 
     return bool(normalize(quote) and normalize(quote) in normalize(text))
-
-
-def _crag_rule_signals(question: str, context: AnswerContext, *, max_candidates: int | None = None) -> dict[str, Any]:
-    from rag_engine.generation.grounded import mentions_error
-
-    labels = definition_labels(question)
-    errors = task_contract(question)["error_messages"]
-    candidates = _crag_grade_candidates(context, question, max_candidates=max_candidates)
-    return {
-        "definition_labels": {"recognition": "identified" if labels else "not_identified", "labels": labels},
-        "definitions": [
-            {
-                "label": label,
-                "recognition": "identified"
-                if any(definition_ranges(candidate["text"], [label]) for candidate in candidates)
-                else "not_identified",
-            }
-            for label in labels
-        ],
-        "errors": [
-            {
-                "source_id": candidate.get("chunk_uid") or candidate.get("chunk_id") or candidate.get("image_id"),
-                "recognition": "identified" if mentions_error(candidate["text"], errors) else "not_identified",
-            }
-            for candidate in candidates
-        ]
-        if errors
-        else [],
-    }
 
 
 def _build_crag_grade_prompt(
@@ -251,8 +202,6 @@ def _build_crag_grade_prompt(
         context.records,
         evidence_tree=context.evidence_tree,
     )
-    contract = _crag_task_contract(question)
-    contract["rule_signals"] = _crag_rule_signals(question, context, max_candidates=max_candidates)
     # 詰めた入力は空白なしで書く。従来の入力は候補・検索文・警告を indent=2 で書く。
     separators = (",", ":") if compact else None
     indent = None if compact else 2
@@ -270,7 +219,8 @@ def _build_crag_grade_prompt(
         {
             "question": fold_width(question).strip(),
             "recovery_options": dump(recovery_options),
-            "task_contract": dump(contract),
+            # 既定の Prompt には無くなった差し込み。保存済みの上書きに残っていても文字のまま LLM に届かないよう、固定の観点を渡す。
+            "task_contract": dump({"required_aspects": list(REQUIRED_ASPECTS)}),
             "active_query": active_query.strip(),
             "retrieval_queries": dump(list(_dedupe_queries(retrieval_queries)), block=True),
             "prompt_injection_warnings": dump(_prompt_safe_warnings(prompt_warnings), block=True),

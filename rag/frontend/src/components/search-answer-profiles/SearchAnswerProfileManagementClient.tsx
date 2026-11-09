@@ -1098,7 +1098,7 @@ function SearchAnswerProfileEditor({
           </CardContent>
         </Card>
         {initial ? (
-          <SearchAnswerProfileKnowledgePanel key={`knowledge-${initial.id}`} searchAnswerProfileId={initial.id} readOnly={isArchived} />
+          <SearchAnswerProfileKnowledgePanel key={`knowledge-${initial.id}`} searchAnswerProfileId={initial.id} />
         ) : null}
       </PageBody>
     </div>

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 import pytest
 from rag_parser_core.language import bind_pack, builtin_pack, resolve
@@ -16,49 +15,32 @@ from rag_engine.retrieval.request_coverage import (
     TargetedRetrieval,
     select_new_parents,
 )
-from rag_engine.retrieval.task_contract import (
-    _sentence_units,
-    _with_request_kind,
-    definition_targets,
-    request_units,
-    subquestion_markers,
-)
+from rag_engine.retrieval.task_contract import request_units, subquestion_markers
 
 PREAMBLE = "システムAの画面Bについて教えてください。"
 LINE_QUESTION = PREAMBLE + "\n①受注の登録方法は？\n②請求書の再発行方法は？\n③承認の担当は誰ですか？"
-
-
-def _base(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """子要求（「Q1.F1」など）を除いた原文の単位。"""
-    return [unit for unit in units if "." not in unit["id"]]
 
 
 # ---- 小問の分割 ----------------------------------------------------------------------------------
 
 
 def test_line_start_subquestions_become_request_units_with_preamble() -> None:
-    units = _base(request_units(LINE_QUESTION))
+    units = request_units(LINE_QUESTION)
 
-    assert [(u["id"], u["kind"], u["text"]) for u in units] == [
-        ("Q1", "context", PREAMBLE),
-        ("Q2", "request", "①受注の登録方法は？"),
-        ("Q3", "request", "②請求書の再発行方法は？"),
-        ("Q4", "request", "③承認の担当は誰ですか？"),
+    assert [(u["id"], u["subquestion"], u["text"]) for u in units] == [
+        ("Q1", "①", "①受注の登録方法は？"),
+        ("Q2", "②", "②請求書の再発行方法は？"),
+        ("Q3", "③", "③承認の担当は誰ですか？"),
     ]
-    # 小問の前の共通の前置きは各小問に付き、前置きの文は背景（答える対象ではない）。
-    assert [u.get("subquestion") for u in units[1:]] == ["①", "②", "③"]
-    assert all(u["preamble"] == PREAMBLE for u in units[1:])
+    # 小問の前の共通の前置きは各小問に付く。
+    assert all(u["preamble"] == PREAMBLE for u in units)
 
 
 def test_subquestions_written_in_one_sentence_are_split() -> None:
-    units = _base(request_units("画面Bの件で①受注の登録方法②請求書の再発行方法を教えてください"))
+    units = request_units("画面Bの件で①受注の登録方法②請求書の再発行方法を教えてください")
 
-    assert [(u["kind"], u["text"]) for u in units] == [
-        ("context", "画面Bの件で"),
-        ("request", "①受注の登録方法"),
-        ("request", "②請求書の再発行方法を教えてください"),
-    ]
-    assert units[1]["preamble"] == "画面Bの件で"
+    assert [u["text"] for u in units] == ["①受注の登録方法", "②請求書の再発行方法を教えてください"]
+    assert all(u["preamble"] == "画面Bの件で" for u in units)
 
 
 @pytest.mark.parametrize(
@@ -109,17 +91,8 @@ def test_step_number_references_are_not_subquestions(question: str) -> None:
 def test_questions_without_subquestion_markers_keep_the_same_units(question: str) -> None:
     units = request_units(question)
 
-    # 小問の印の無い質問は、文ごとの単位（句点・疑問符・改行）と種類がそのまま。
-    assert _base(units) == _with_request_kind(_sentence_units(question))
-    assert not any("subquestion" in u or "preamble" in u for u in units)
-
-
-def test_definition_targets_follow_subquestion_ids() -> None:
-    question = PREAMBLE + "\n①受注の登録方法は？\n②「区分」の意味は？"
-    targets = definition_targets(question)
-    ids = {u["id"] for u in request_units(question) if u.get("subquestion")}
-
-    assert targets and all(t["request_id"] in ids for t in targets)
+    # 小問の印の無い質問は、原文全体を 1 つの単位にする。
+    assert units == [{"id": "Q1", "text": question}]
 
 
 def test_subquestion_markers_come_from_the_language_pack_not_step_markers() -> None:

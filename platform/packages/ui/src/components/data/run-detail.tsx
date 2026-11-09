@@ -4,7 +4,7 @@ import { RunStepSummary } from "./run-step-summary";
 import type { CallBodyLoader } from "../../lib/call-body";
 import { traceOrderedSteps } from "../../lib/trace-explorer";
 import { DEFAULT_TRACE_DETAILS_LABELS } from "../../lib/trace-labels";
-import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, Waypoints, XCircle, type LucideIcon } from "lucide-react";
+import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, RotateCcw, Waypoints, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties } from "react";
 
 import { DEFAULT_TRACE_EXPLORER_LABELS, TraceExplorer, type TraceExplorerLabels } from "./trace-explorer";
@@ -13,7 +13,7 @@ import { CollapsedListToggle, DEFAULT_COLLAPSED_LIST_LABELS, useCollapsedList, t
 import { CopyButton } from "../ui/copy-button";
 import type { TraceDetailsLabels } from "../../lib/trace-labels";
 import { useTraceDetailsLabels } from "./trace-labels-provider";
-import { traceTimeline } from "../../lib/trace-tree";
+import { traceTimeline, type SpanRetryOutcome } from "../../lib/trace-tree";
 import { operationTimestampMs, type OperationTimestamp } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import type { ChatProgressStepStatus } from "../feedback/chat-progress";
@@ -78,7 +78,7 @@ export interface RunDetailLabels {
   /** 段が多いときに畳んだ一覧の開閉のボタン（`COLLAPSED_LIST_LIMIT` 件を超えると畳む。#4636）。 */
   timelineCollapsed: CollapsedListLabels;
   /** 段の状態（アイコンに添える読み上げ・失敗とスキップは画面にも出す）。 */
-  stepStatus: Record<RunTimelineStepStatus, string>;
+  stepStatus: Record<RunTimelineStepStatus | SpanRetryOutcome, string>;
   /** 段の詳細（`RunTimelineStep.details`）の長さを切ったときの印。 */
   stepDetailsTruncated: string;
   status: RunStatusLabels;
@@ -178,6 +178,8 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
     done: "完了",
     failed: "失敗",
     skipped: "スキップ",
+    retrying: "再試行中",
+    recovered: "再試行して成功",
   },
   stepDetailsTruncated: "長い内容は先頭だけを表示しています。",
   status: DEFAULT_RUN_STATUS_LABELS,
@@ -558,6 +560,8 @@ export interface RunTimelineStep {
   /** 段の名前（翻訳済み。例「SQL を生成」「ツール: search_documents」）。 */
   label: string;
   status: RunTimelineStepStatus;
+  /** 同じ呼び出しのやり直しで回復した試行の印（#4736）。あれば行の状態はこの印で出し、失敗にしない。 */
+  retry?: SpanRetryOutcome;
   /** ISO 8601。開始と終了があれば時間の線を実際の位置に描く。 */
   startedAt?: string | null;
   finishedAt?: string | null;
@@ -675,14 +679,18 @@ const RUNNING_STATIC_ICON = { icon: CirclePlay, className: "text-accent-fg" } as
 /** 段の状態のアイコン。大きさは行の文字の大きさ（`sm` 12px / `md` 14px。#2371）。 */
 export function RunStepStatusIcon({
   status,
+  retry,
   size = TEXT_ICON_SIZE.sm,
   spin = true,
 }: {
   status: RunTimelineStepStatus;
+  /** やり直しで回復した試行は専用の印で出す（失敗のアイコン・色を使わない。#4736）。 */
+  retry?: SpanRetryOutcome;
   size?: number;
   /** 実行中の段を `Spinner` で回すか（false は `RUNNING_STATIC_ICON`）。 */
   spin?: boolean;
 }) {
+  if (retry) return <RotateCcw size={size} className="shrink-0 text-fg-muted" aria-hidden="true" />;
   if (status === "running" && spin) return <Spinner size={size} className="text-accent-fg" />;
   const { icon: Icon, className } = status === "running" ? RUNNING_STATIC_ICON : STEP_ICON[status];
   return <Icon size={size} className={cn("shrink-0", className)} aria-hidden="true" />;
@@ -853,12 +861,13 @@ export function RunTimeline({
               key={step.id}
               className="min-w-0 rounded-md"
               data-status={step.status}
+              data-retry={step.retry}
               data-level={level > 0 ? String(level) : undefined}
               data-parent-id={step.parentId}
               data-run-timeline-step={step.id}
               data-testid={stepTestId}
             >
-              <RunStepSummary step={step} size={size} statusLabel={labels.stepStatus[step.status]} bar={bar} showBars={showBars}
+              <RunStepSummary step={step} size={size} statusLabel={labels.stepStatus[step.retry ?? step.status]} bar={bar} showBars={showBars}
                 spin={spinRunning && !hasChildren[index]} surface="timeline" formatDuration={formatDuration}
                 renderName={hasDetails ? name => <button type="button" aria-expanded={open} aria-controls={regionId}
                   className="pr-touch-target relative inline-flex min-w-0 max-w-full flex-1 cursor-pointer items-start gap-1 rounded-sm text-left hover:underline hover:underline-offset-2"
