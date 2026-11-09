@@ -18,7 +18,6 @@ const RECIPE_DEFAULTS = {
   parser_adapter_backend: "docling",
   parser_docling_enabled: true,
   parser_unstructured_enabled: false,
-  parser_mineru_enabled: false,
   parser_dots_ocr_enabled: false,
   vision_enabled: true,
   vision_image_purpose: "record",

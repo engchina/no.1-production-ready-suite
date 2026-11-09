@@ -35,11 +35,6 @@ from app.config import (
     roadmap_parser_adapter_backend_message,
 )
 from app.rag.kb_adapter_config import _EXTERNAL_PARSER_BACKEND_FLAGS
-from app.rag.mineru_license import (
-    MINERU_BACKEND,
-    MINERU_LICENSE_REQUIRED_MESSAGE,
-    mineru_license_acknowledged,
-)
 from app.rag.parser_source_guard import (
     STRUCTURED_RECORDS_PREPROCESS,
     parser_backend_label,
@@ -405,8 +400,6 @@ def file_type_default_issues(
     roadmap = is_roadmap_parser_adapter_backend(backend)
     if roadmap:
         issues.append(roadmap_parser_adapter_backend_message(backend))
-    if backend == MINERU_BACKEND and not mineru_license_acknowledged(settings):
-        issues.append(MINERU_LICENSE_REQUIRED_MESSAGE)
     structured_error = (
         preprocess in STRUCTURED_RECORDS_PREPROCESS and backend != STRUCTURED_RECORDS_JSONL_BACKEND
     )

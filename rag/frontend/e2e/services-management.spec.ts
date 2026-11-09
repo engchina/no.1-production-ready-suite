@@ -237,7 +237,6 @@ for (const viewport of [
     for (const removed of [
       "Marker",
       "Unlimited-OCR",
-      "MinerU",
       "Dots.OCR",
       "GLM-OCR",
       "ASR(音声文字起こし)",

@@ -245,7 +245,6 @@ def test_options_only_list_what_the_type_supports() -> None:
     # 準備中のエンジンはどの行にも出さない。
     for file_type in FILE_TYPE_EXTENSIONS:
         options, _ = file_type_parser_options(file_type, "passthrough", settings)
-        assert "mineru" not in options
         assert "oci_document_understanding" not in options
 
 
@@ -271,7 +270,11 @@ def test_preprocess_needing_the_service_is_reported_as_unavailable() -> None:
         ("word", {"parser_adapter_backend": "docling"}, "Office→PDF"),
         ("html", {"parser_adapter_backend": "docling"}, "HTML"),
         ("text", {"parser_adapter_backend": "xml_tree_json"}, "テキスト"),
-        ("pdf", {"parser_adapter_backend": "mineru"}, "MinerU"),
+        (
+            "pdf",
+            {"parser_adapter_backend": "oci_document_understanding"},
+            "OCI Document Understanding",
+        ),
     ],
 )
 def test_invalid_combination_is_rejected_with_a_fix(
@@ -282,21 +285,6 @@ def test_invalid_combination_is_rejected_with_a_fix(
     body = resp.json()
     message = body.get("detail") or " ".join(body.get("error_messages") or [])
     assert needle in str(message)
-
-
-def test_mineru_license_is_checked_independently_of_the_roadmap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.rag import file_type_defaults as module
-
-    monkeypatch.setattr(module, "is_roadmap_parser_adapter_backend", lambda _value: False)
-    monkeypatch.setattr(module, "mineru_license_acknowledged", lambda _settings: False)
-    issues = file_type_default_issues(
-        "pdf",
-        FileTypeDefaultEntry(parser_adapter_backend="mineru"),
-        get_settings(),
-    )
-    assert any("ライセンス" in issue for issue in issues)
 
 
 def test_valid_save_persists_atomically_and_reloads(tmp_path: Path) -> None:

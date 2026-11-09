@@ -232,34 +232,8 @@ def test_unstructured_without_coordinate_system_is_not_cropped() -> None:
     assert WARNING_BBOX_UNIT_UNKNOWN in result.warnings
 
 
-def test_mineru_bbox_is_normalized_to_1000() -> None:
-    """MinerU の content_list の bbox は 0-1000 に正規化した座標として扱う。"""
-    bbox = [
-        FIGURE_PT[0] / PAGE_PT[0] * 1000,
-        FIGURE_PT[1] / PAGE_PT[1] * 1000,
-        FIGURE_PT[2] / PAGE_PT[0] * 1000,
-        FIGURE_PT[3] / PAGE_PT[1] * 1000,
-    ]
-
-    result, describer = _read(_figure_extraction(bbox), _pdf(), backend="mineru")
-
-    assert len(describer.calls) == 1
-    assert abs(describer.calls[0]["size"][0] - _expected_crop_width(FIGURE_PT)) <= 4
-    assert result.elements[1].metadata["vision_status"] == "succeeded"
-
-
-def test_mineru_bbox_over_1000_is_unknown_unit() -> None:
-    result, describer = _read(
-        _figure_extraction([100.0, 100.0, 1400.0, 900.0]), _pdf(), backend="mineru"
-    )
-
-    assert describer.calls == []
-    assert result.elements[1].metadata["vision_skip_reason"] == "bbox_unit_unknown"
-    assert WARNING_BBOX_UNIT_UNKNOWN in result.warnings
-
-
 # ai-foundations-lab(engchina/ai-foundations-lab、commit 572e9fa の 20260819/)が、ページ画像に
-# 重ねて確かめた換算の例(#512)。lab の tests/test_mineru_adapter.py・test_unstructured_adapter.py の
+# 重ねて確かめた換算の例(#512)。lab の tests/test_unstructured_adapter.py の
 # 座標と期待値だけを使う(文書の本文は使わない)。
 LAB_A4_PAGE = PageImage(
     page=1, width=2480, height=3500, pdf_width=595.0, pdf_height=841.0, image_path=""
@@ -268,28 +242,6 @@ LAB_A4_PAGE = PageImage(
 LAB_A5_LANDSCAPE_PAGE = PageImage(
     page=1, width=2481, height=1654, pdf_width=595.28, pdf_height=396.85, image_path=""
 )
-
-
-@pytest.mark.parametrize(
-    ("bbox", "expected"),
-    [
-        ([166, 810, 820, 829], [411.68, 2835.0, 2033.6, 2901.5]),
-        ([277, 554, 705, 574], [686.96, 1939.0, 1748.4, 2009.0]),
-    ],
-    ids=["content_list", "content_list_v2"],
-)
-def test_mineru_bbox_matches_ai_foundations_lab(bbox: list[float], expected: list[float]) -> None:
-    """MinerU の content_list は 0-1000・左上原点。x と y を別々の寸法で換算する(lab と同じ)。"""
-    mapped = page_px_bbox(
-        bbox,
-        parser_backend="mineru",
-        metadata={},
-        extraction_page=None,
-        page=LAB_A4_PAGE,
-        source_is_image=False,
-    )
-
-    assert mapped == pytest.approx(expected)
 
 
 def test_unstructured_bbox_matches_ai_foundations_lab() -> None:
@@ -333,9 +285,9 @@ def test_figure_ocr_record_names_its_picture() -> None:
     from app.rag.vision import _adapter_records
 
     layout = _adapter_records(
-        _figure_extraction([166, 300, 820, 600]),
-        engine="mineru",
-        parser_backend="mineru",
+        _figure_extraction([0.166, 0.3, 0.82, 0.6]),
+        engine="dots_ocr",
+        parser_backend="dots_ocr",
         pages=[LAB_A4_PAGE],
         source_is_image=False,
     )
@@ -518,7 +470,7 @@ def test_source_image_asset_reads_whole_image() -> None:
         ],
     )
 
-    result, describer = _read(extraction, image, backend="mineru", content_type="image/png")
+    result, describer = _read(extraction, image, backend="dots_ocr", content_type="image/png")
 
     assert len(describer.calls) == 1
     assert describer.calls[0]["size"] == (640, 480)
@@ -737,7 +689,7 @@ def test_unsupported_source_is_reported() -> None:
 def test_vision_failure_keeps_extraction_and_warns() -> None:
     extraction = _figure_extraction([0.1, 0.1, 0.5, 0.5])
 
-    result = vision_failure(extraction, "mineru")
+    result = vision_failure(extraction, "dots_ocr")
 
     assert result.elements == extraction.elements
     assert "vision_failed" in result.warnings
@@ -846,7 +798,7 @@ async def test_ingestion_vision_disabled_keeps_extraction() -> None:
     reader = FakeReader()
     extraction = _figure_extraction([0.168, 0.119, 0.504, 0.297])
 
-    result = await _attach(_pipeline(enabled=False, reader=reader), extraction, "mineru")
+    result = await _attach(_pipeline(enabled=False, reader=reader), extraction, "dots_ocr")
 
     assert result is not extraction
     assert result.raw_text == extraction.raw_text
@@ -896,7 +848,7 @@ async def test_ingestion_vision_stage_failure_keeps_extraction(
     monkeypatch.setattr(ingestion_module, "read_figures_with_vision", broken)
     extraction = _figure_extraction([0.168, 0.119, 0.504, 0.297])
 
-    result = await _attach(_pipeline(enabled=True), extraction, "mineru")
+    result = await _attach(_pipeline(enabled=True), extraction, "dots_ocr")
 
     assert result.elements[1].metadata["vision_image_purpose"] == "record"
     assert [
@@ -949,7 +901,7 @@ async def test_ingestion_vision_outside_job_does_not_track_progress() -> None:
     from app.rag.ingestion_progress import active_ingestion_progress
 
     await _attach(
-        _pipeline(enabled=True), _figure_extraction([0.168, 0.119, 0.504, 0.297]), "mineru"
+        _pipeline(enabled=True), _figure_extraction([0.168, 0.119, 0.504, 0.297]), "dots_ocr"
     )
 
     assert active_ingestion_progress() is None
@@ -1083,7 +1035,7 @@ async def test_unreached_vision_model_fails_ingestion_instead_of_indexing_withou
     pipeline = _pipeline(enabled=True, reader=reader)
 
     with pytest.raises(IngestionUserError) as raised:
-        await _attach(pipeline, _figure_extraction([0.168, 0.119, 0.504, 0.297]), "mineru")
+        await _attach(pipeline, _figure_extraction([0.168, 0.119, 0.504, 0.297]), "dots_ocr")
 
     message = str(raised.value)
     assert "到達できません" in message
@@ -1100,7 +1052,7 @@ async def test_connection_reset_stays_item_failure_because_it_can_depend_on_the_
     reader = _ConnectionFailingReader(ConnectionResetError(errno.ECONNRESET, "reset"))
     extraction = _figure_extraction([0.168, 0.119, 0.504, 0.297])
 
-    result = await _attach(_pipeline(enabled=True, reader=reader), extraction, "mineru")
+    result = await _attach(_pipeline(enabled=True, reader=reader), extraction, "dots_ocr")
 
     assert WARNING_PARTIAL_FAILURE in result.warnings
     assert result.elements[1].metadata["vision_status"] == "failed"
