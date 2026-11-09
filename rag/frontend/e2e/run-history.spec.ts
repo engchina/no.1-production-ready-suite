@@ -985,7 +985,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.getByTestId("run-history-process-details").click();
     const line = page.getByTestId("answer-model-cascade");
     await expect(line).toContainText("最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました");
-    await expect(line).toContainText("理由: 引用の ID・原文が資料と一致しなかった");
+    await expect(line).toContainText("理由: 生成の出力が形式の検査を通らなかった");
     await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light", "model-strong"]);
     await expectNoPageOverflow(page);
     for (const theme of ["light", "dark"]) {
