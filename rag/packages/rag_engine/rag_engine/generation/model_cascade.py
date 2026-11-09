@@ -47,7 +47,6 @@ def answer_cascade(settings: Any, provider_id: str | None) -> ModelCascade:
 def escalated_settings(settings: Any) -> Any:
     """2 つ目のモデルで生成の段をやり直す設定（回答のモデルをそのモデルにし、入力の上限もそのモデルの値にする）。
 
-    段ごとに固定のモデル（``STEP_LLM_PROVIDERS``）はそのまま。固定のモデルの無い段は回答のモデルに従う。
     やり直しの中で再び昇格しないよう、カスケードを外す。
     """
     return replace(

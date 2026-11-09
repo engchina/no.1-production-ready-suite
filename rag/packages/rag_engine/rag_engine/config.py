@@ -21,40 +21,12 @@ from rag_engine.retrieval.text_search_tokenizer import (
 # 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
-# 段ごとのモデルの provider。backend が段のモデルの設定(RAG_<段>_MODEL)の接続を RAG_ENGINE_<段>_* で
-# 渡したときだけ作る(`STEP_LLM_PROVIDERS`)。
-# 質問の対象の役割の判定の段(#4351)。
-QUESTION_SUBJECT_ROLE_LLM_PROVIDER = "enterprise-ai-question-subject-role"
 # 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
 # RAG_ENGINE_ESCALATION_* で渡したときだけ作る(利用者がモデルを明示した実行には渡さない)。
 ESCALATION_LLM_PROVIDER = "enterprise-ai-escalation"
 ESCALATION_ENV_PREFIX = "RAG_ENGINE_ESCALATION"
 
 
-@dataclass(frozen=True)
-class StepLlm:
-    """段のモデルの provider 1 つ(backend の段のモデルの表 `STEP_MODEL_SETTINGS` と同じ段)。"""
-
-    # env の接頭辞(`<prefix>_MODEL`・`_ENDPOINT`・`_API_KEY`・`_PROJECT_OCID`・`_REASONING_EFFORT`・`_MAX_OUTPUT_TOKENS`)。
-    prefix: str
-    provider_id: str
-    label: str
-    # その provider ID を持つ `Settings` のフィールド。
-    field: str
-    # 段の推論の量の上書き(`<prefix>_REASONING_EFFORT_OVERRIDE`)を持つ `Settings` のフィールド。無い段は空。
-    effort_field: str = ""
-    # 段のモデルの入力の上限(`<prefix>_MAX_INPUT_TOKENS`)を持つ `Settings` のフィールド。無い段は空。
-    max_input_field: str = ""
-
-
-STEP_LLM_PROVIDERS: tuple[StepLlm, ...] = (
-    StepLlm(
-        "RAG_ENGINE_QUESTION_SUBJECT_ROLE",
-        QUESTION_SUBJECT_ROLE_LLM_PROVIDER,
-        "Enterprise AI 質問の対象の役割",
-        "question_subject_role_llm",
-    ),
-)
 DEFAULT_LLM_PROVIDER = ENTERPRISE_AI_LLM_PROVIDER
 DEFAULT_CHICAGO_REGION = "us-chicago-1"
 DEFAULT_OSAKA_REGION = "ap-osaka-1"
@@ -398,12 +370,8 @@ class Settings:
     # 値の意味は用途の上書きと同じ(空はモデルの登録値のまま。登録値が none のモデルには送らない)。
     # 質問の対象(#4351): 抽出の段(原文の写しと同じ写しの出現の順番を返す)と、役割の判定の段(文の中での
     # 問い・前提・例)。それぞれの段の呼び出しにだけ当てる。
-    question_subject_extraction_reasoning_effort: str = "medium"
-    question_subject_role_reasoning_effort: str = ""
     # 工程ごとのモデル(1 回の呼び出しの provider ID。`llm_providers` のキー)。空は呼び出し側が渡した provider
     # (回答のモデル)のまま。`get_settings` は RAG_ENGINE_<段>_MODEL があれば段の provider を作ってこれにする
-    # (`STEP_LLM_PROVIDERS`)。質問の対象の役割の判定の段(#4351)、推導の監査の判定の段(#4565)と理由の段(#4564)。
-    question_subject_role_llm: str = ""
     # 確認を通らなかったときのモデルの provider ID(モデルのカスケード。#4581)。空はカスケードしない。
     # 回答のモデルの出力が機械で判定できる確認を通らなかったときだけ、失敗した段をこのモデルでやり直す。
     escalation_llm: str = ""
@@ -529,32 +497,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             max_output_tokens=vision_output_tokens,
         ),
     }
-    # 段ごとのモデル(#4351・#4564・#4565)。接続が不足(登録していないモデル)でも provider は作り、呼び出しの時点で
-    # 設定の不足として失敗させる(段は失敗を返し、回答はその段の結果なしで続ける。回答のモデルへ暗黙に切り替えない)。
-    step_llms: dict[str, str] = {}
-    step_options: dict[str, Any] = {}
-    for step in STEP_LLM_PROVIDERS:
-        prefix = step.prefix
-        if step.effort_field:
-            step_options[step.effort_field] = normalize_reasoning_effort_override(env.get(f"{prefix}_REASONING_EFFORT_OVERRIDE"))
-        if step.max_input_field:
-            step_options[step.max_input_field] = max(1, _env_int(env, f"{prefix}_MAX_INPUT_TOKENS", 128_000))
-        step_model = env.get(f"{prefix}_MODEL", "").strip()
-        if not step_model:
-            step_llms[step.field] = ""
-            continue
-        llm_providers[step.provider_id] = LlmProviderSettings(
-            provider_id=step.provider_id,
-            label=llm_provider_label(step.label, step_model),
-            region="",
-            project_id=env.get(f"{prefix}_PROJECT_OCID", "").strip(),
-            api_key=env.get(f"{prefix}_API_KEY", "").strip(),
-            model=step_model,
-            endpoint=env.get(f"{prefix}_ENDPOINT", "").strip(),
-            reasoning_effort=env.get(f"{prefix}_REASONING_EFFORT", "").strip(),
-            max_output_tokens=_positive_int(env, f"{prefix}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
-        )
-        step_llms[step.field] = step.provider_id
     escalation_model = env.get(f"{ESCALATION_ENV_PREFIX}_MODEL", "").strip()
     if escalation_model:
         llm_providers[ESCALATION_LLM_PROVIDER] = LlmProviderSettings(
@@ -729,7 +671,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
-        question_subject_role_llm=step_llms["question_subject_role_llm"],
         escalation_llm=ESCALATION_LLM_PROVIDER if escalation_model else "",
         escalation_max_input_tokens=max(1, _env_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_INPUT_TOKENS", 128_000)),
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
@@ -786,7 +727,7 @@ def settings_with_reasoning_effort(settings: Settings, value: str | None) -> Set
 
     LLM の呼び出しに渡す設定だけを差し替える(provider の `reasoning_effort` は送る値)。モデルの登録値が
     送らない(空)の provider は、上書きしても送らない。用途の上書き(`settings_for_llm_purpose`)と、工程の
-    呼び出しの上書き(`Settings.question_subject_extraction_reasoning_effort` など)が共有する。
+    呼び出しの上書きが共有する。
     """
     override = normalize_reasoning_effort_override(value)
     if not override:

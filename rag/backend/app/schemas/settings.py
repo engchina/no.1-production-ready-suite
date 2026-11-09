@@ -786,9 +786,6 @@ class AnsweringSettingsData(BaseModel):
     section_expansion_max_levels: int
     section_expansion_input_token_percent: int
     graph_expansion_enabled: bool
-    # 段ごとのモデル(空は回答のモデル): 質問の対象の名前の役割の判定(#4351)。
-    question_subject_role_model: str = ""
-    step_model_choices: list[AnsweringModelChoice] = Field(default_factory=list)
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -841,8 +838,6 @@ class AnsweringSettingsUpdate(BaseModel):
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
-    # 段ごとのモデル。空は回答のモデル。登録モデルの ID だけを受ける(route で確かめる)。
-    question_subject_role_model: str | None = Field(default=None, max_length=256)
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

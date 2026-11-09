@@ -45,12 +45,6 @@ const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
   { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
   { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
 ];
-const ANSWER_AUDIT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_audit_mode"]>[] = (
-  ["none", "standard", "detailed"] as const
-).map((value) => ({ value, label: t(`settings.answering.auditMode.${value}`) }));
-const EVIDENCE_REFINEMENT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_evidence_refinement_mode"]>[] = (
-  ["legacy", "cited_only", "cited_required"] as const
-).map((value) => ({ value, label: t(`settings.answering.evidenceRefinement.${value}`) }));
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
@@ -59,7 +53,7 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
 
 type AnsweringDraft = Omit<
   AnsweringSettingsData,
-  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled" | "step_model_choices"
+  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled"
 >;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
@@ -76,12 +70,9 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
-    answer_audit_mode: settings.answer_audit_mode,
-    answer_evidence_refinement_mode: settings.answer_evidence_refinement_mode,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
-    request_coverage_retrieval_enabled: settings.request_coverage_retrieval_enabled,
     auto_field_filter_enabled: settings.auto_field_filter_enabled,
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
@@ -89,25 +80,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
-    question_subject_role_model: settings.question_subject_role_model ?? "",
   };
-}
-
-/** 段ごとのモデル（#4351）の項目。並びは画面の表示の順（回答の工程の順）。 */
-const STEP_MODEL_FIELDS = [
-  { key: "question_subject_role_model", id: "answering-question-subject-role-model", label: "settings.answering.questionSubjectRoleModel" },
-] as const;
-
-/** 段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351）。 */
-function stepModelOptions(settings: AnsweringSettingsData, current: string): SelectFieldOption<string>[] {
-  const choices = settings.step_model_choices ?? [];
-  return [
-    { value: "", label: t("settings.answering.stepModel.sameAsAnswer") },
-    ...choices.map((choice) => ({ value: choice.model_id, label: choice.display_name || choice.model_id })),
-    ...(current && !choices.some((choice) => choice.model_id === current)
-      ? [{ value: current, label: t("settings.answering.stepModel.unavailable", { model: current }) }]
-      : []),
-  ];
 }
 
 /**
@@ -404,56 +377,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
           </FormGrid> : null}
         </div>
-        <div className="space-y-3 px-3 py-3" data-testid="answering-audit-mode">
-          <h3 className="text-sm font-medium text-fg">{t("settings.answering.auditMode")}</h3>
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditModeHint")}</p>
-          <SelectField
-            id="answering-answer-audit-mode"
-            label={t("settings.answering.auditModeField")}
-            helper={t(`settings.answering.auditModeHint.${form.answer_audit_mode}`)}
-            value={form.answer_audit_mode}
-            options={ANSWER_AUDIT_OPTIONS}
-            width="lg"
-            disabled={disabled}
-            onValueChange={(value) => update({ answer_audit_mode: value })}
-          />
-          {STEP_MODEL_FIELDS.map((field) => (
-            <SelectField
-              key={field.key}
-              id={field.id}
-              label={t(field.label)}
-              helper={t(`${field.label}Hint`)}
-              value={form[field.key]}
-              options={stepModelOptions(saved, saved[field.key] ?? "")}
-              width="md"
-              disabled={disabled}
-              onValueChange={(value) => update({ [field.key]: value })}
-            />
-          ))}
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>
-        </div>
-        <div className="space-y-3 px-3 py-3" data-testid="answering-evidence-refinement">
-          <SelectField
-            id="answering-evidence-refinement-mode"
-            label={t("settings.answering.evidenceRefinement")}
-            helper={t(`settings.answering.evidenceRefinementHint.${form.answer_evidence_refinement_mode}`)}
-            value={form.answer_evidence_refinement_mode}
-            options={EVIDENCE_REFINEMENT_OPTIONS}
-            width="lg"
-            disabled={disabled}
-            onValueChange={(value) => update({ answer_evidence_refinement_mode: value })}
-          />
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.evidenceRefinementBudgetHint")}</p>
-        </div>
-        <SwitchRow
-          id="answering-request-coverage"
-          label={t("settings.answering.requestCoverage")}
-          description={t("settings.answering.requestCoverageHint")}
-          checked={form.request_coverage_retrieval_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ request_coverage_retrieval_enabled: checked })}
-        />
       </div>
       <FormActionBar
         ariaLabel={t("settings.answering.actions.label")}

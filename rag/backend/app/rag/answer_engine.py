@@ -134,7 +134,6 @@ from app.rag.graph_expansion import (
 )
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_params
 from app.rag.step_details import step_details_payload
-from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
 from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.search import (
@@ -726,7 +725,6 @@ def build_engine_settings(
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
     # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
-    environ.update(step_model_environ(settings))
     environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -1137,11 +1135,6 @@ class AnswerEngine:
         answer_model = self._answer_model_id or enterprise_ai_default_model_id(settings)
         return {
             "llm": model(answer_model),
-            # 段ごとのモデル(#4351・#4564・#4565。空の設定は回答のモデル)。
-            **{
-                step.key: model(step_model_id(settings, step) or answer_model)
-                for step in STEP_MODEL_SETTINGS
-            },
             "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
