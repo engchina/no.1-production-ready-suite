@@ -23,7 +23,7 @@ from rag_parser_core.extraction import (
     bullet_line,
     heading_level_from_prefix,
     is_derived_content,
-    numbered_heading,
+    numbered_heading_line,
 )
 from rag_parser_core.language.text import text_patterns
 from rag_parser_core.parsed_table import (
@@ -3022,7 +3022,7 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         return None
     if match := MARKDOWN_HEADING.match(line):
         return len(match.group("marks")), _clean_heading_title(match.group("title"))
-    if match := numbered_heading().match(line):
+    if match := numbered_heading_line(line):
         prefix = match.group("prefix")
         # 参照索引が章・節の番号を照合できるよう、見出しの番号と区切りも保持する。
         title = _clean_heading_title(line)
