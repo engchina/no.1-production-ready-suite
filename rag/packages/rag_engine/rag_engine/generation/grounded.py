@@ -20,7 +20,6 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from difflib import SequenceMatcher
 from itertools import groupby
 from time import monotonic
 from types import SimpleNamespace
@@ -28,7 +27,6 @@ from typing import Any, NamedTuple
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ValidationError
-from rag_parser_core.language import current_pack
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
 from rag_engine.generation.answer_envelope import (
@@ -1146,7 +1144,7 @@ def _mentions_term(term: str, corpus: str) -> bool:
     """corpus に term が完全一致で、または略称として（文字が順に並ぶ term の 2 倍程度までの範囲に）現れるか (#700)。
 
     「支店長名」は「支店営業所長名」に、「エラーリスト」は「出荷検品エラーリスト」に含まれる。エラー文の類似度
-    （`_fuzzy_contains`）は 2〜3 文字の対象名には粗すぎるので、略称の形だけを許す。
+    2〜3 文字の対象名にはあいまいな一致は粗すぎるので、略称の形だけを許す。
     """
     needle = _compact(term)
     if not needle:
@@ -1156,34 +1154,6 @@ def _mentions_term(term: str, corpus: str) -> bool:
     gap = len(needle) + 2
     pattern = (".{0," + str(gap) + "}?").join(re.escape(c) for c in needle)
     return any(len(m.group()) <= len(needle) * 2 + 2 for m in re.finditer(pattern, corpus))
-
-
-_ERROR_MATCH_RATIO = 0.8
-
-
-def _fuzzy_contains(needle: str, haystack: str, ratio: float = _ERROR_MATCH_RATIO) -> bool:
-    """haystack のどこかに needle と 8 割以上似た連続範囲があるか (#686, #694)。
-
-    表記の小さな違い（「出荷金額明細なし」と「出荷明細なし」）は許し、語の断片が散在するだけの文
-    （「定期出荷契約」「取引先番号」が別々にある）は一致としない。2 文字組の割合では後者も一致になったため、
-    同じ長さの窓との `SequenceMatcher.ratio` で判定する。
-    """
-    a = _compact(needle)
-    if not a:
-        return False
-    width = len(a)
-    # 文の区切りの字（言語資源の question_cues）と改行で分ける（空の区切りは下の長さの条件で飛ばす）。
-    ends = re.escape("".join(current_pack().words("question_cues", "sentence_split_chars")))
-    for segment in re.split(rf"[{ends}\n]", _compact(haystack)):
-        if len(segment) < width * 0.6:
-            continue
-        matcher = SequenceMatcher(None, a, "")
-        for start in range(0, max(1, len(segment) - width + 1)):
-            window = segment[start : start + width + 2]
-            matcher.set_seq2(window)
-            if matcher.quick_ratio() >= ratio and matcher.ratio() >= ratio:
-                return True
-    return False
 
 
 def _context_request_ids(question: str) -> set[str]:
