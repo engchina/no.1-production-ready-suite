@@ -381,7 +381,7 @@ class Settings:
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
     # CRAG の評価の入力を詰める(#1528): 候補を生成と同じ親の数(max_context_records)にし、JSON を詰めて書き、
-    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects・列挙の項目の働きは変えない。
+    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects の働きは変えない。
     crag_compact_input: bool = False
     # 詰めた入力の候補の chunk_uid を短い ID（C1・C1-1）にする(#1864)。評価器が判定ごとに書き写す ID が短くなり、
     # 出力の token と時間が減る。返った ID は chunk_uid に戻すので、判定の働きは変わらない。
