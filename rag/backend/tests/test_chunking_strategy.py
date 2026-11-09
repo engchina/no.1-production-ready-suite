@@ -280,7 +280,7 @@ def test_resolve_chunking_params_reads_settings() -> None:
     assert params.chunk_size == 1000
     assert params.overlap == 80
     assert params.min_chars == 30
-    assert params.delimiter == "---"
+    assert params.delimiter == ("---",)
 
 
 def test_chunking_strategy_order_puts_small_to_big_where_parent_child_was() -> None:

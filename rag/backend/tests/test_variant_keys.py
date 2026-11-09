@@ -2,6 +2,7 @@
 
 import pytest
 from rag_parser_core.language import bind_pack, builtin_pack, current_pack, resolve
+from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS
 
 from app.config import Settings, get_settings
 from app.rag.variant_keys import (
@@ -282,8 +283,8 @@ def test_chunk_set_id_keeps_ids_after_parent_child_removal() -> None:
 def test_chunk_set_id_keeps_ids_after_delimiter_default_change() -> None:
     """固定分割符の既定の変更(#2457)で、分割符を使わない方式の chunk_set_id は変わらない。"""
     base = get_settings().model_copy(update={"rag_chunking_strategy": "structure_aware"})
-    new_default = base.model_copy(update={"rag_chunk_delimiter": "<<<JSONL_RECORD_BOUNDARY>>>"})
-    old_default = base.model_copy(update={"rag_chunk_delimiter": "\\n\\n"})
+    new_default = base.model_copy(update={"rag_chunk_delimiter": ["<<<JSONL_RECORD_BOUNDARY>>>"]})
+    old_default = base.model_copy(update={"rag_chunk_delimiter": ["\\n\\n"]})
     assert compute_chunk_set_id(SRC, new_default) == compute_chunk_set_id(SRC, old_default)
 
     fixed_new = new_default.model_copy(update={"rag_chunking_strategy": "fixed_delimiter"})
@@ -361,3 +362,20 @@ def test_unstructured_text_contract_invalidates_old_cached_extraction() -> None:
     assert "unstructured_text_contract" not in extraction_recipe_subset(
         settings.model_copy(update={"rag_parser_adapter_backend": "docling"})
     )
+
+
+def test_chunk_set_id_stays_for_saved_delimiters_after_list_change() -> None:
+    """既定の一覧への変更(#4733)で、固定分割以外の方式と 1 個の分割符の ID を変えない。"""
+    other = get_settings().model_copy(update={"rag_chunking_strategy": "structure_aware"})
+    default = other.model_copy(update={"rag_chunk_delimiter": list(DEFAULT_FIXED_DELIMITERS)})
+    previous = other.model_copy(update={"rag_chunk_delimiter": ["\\n\\n"]})
+    assert compute_chunk_set_id(SRC, default) == compute_chunk_set_id(SRC, previous)
+
+    fixed = other.model_copy(update={"rag_chunking_strategy": "fixed_delimiter"})
+    custom = fixed.model_copy(update={"rag_chunk_delimiter": ["---"]})
+    legacy = fixed.model_copy(update={"rag_chunk_delimiter": "---"})
+    assert compute_chunk_set_id(SRC, custom) == compute_chunk_set_id(SRC, legacy)
+    # 文末の記号は chunk に残るようになったので、ID を変えて新しい結果と分ける。
+    sentence_end = fixed.model_copy(update={"rag_chunk_delimiter": ["。"]})
+    legacy_end = fixed.model_copy(update={"rag_chunk_delimiter": "。"})
+    assert compute_chunk_set_id(SRC, sentence_end) != compute_chunk_set_id(SRC, legacy_end)

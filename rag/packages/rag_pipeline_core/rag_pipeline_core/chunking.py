@@ -3,9 +3,11 @@
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from typing import Annotated
 
+from pydantic import BeforeValidator
 from rag_parser_core.extraction import (
     EXTRACTED_FIELD_KEY,
     FIELD_SOURCE_ELEMENT_KEY,
@@ -401,8 +403,47 @@ CHUNKING_STRATEGIES: tuple[str, ...] = (
     "fixed_delimiter",
 )
 _DEFAULT_CHUNKING_STRATEGY = "structure_aware"
-# 固定分割符の既定は構造化レコード JSONL の記録の境界のマーカー(#2457)。
-_DEFAULT_FIXED_DELIMITER = JSONL_RECORD_BOUNDARY
+# 固定分割符の既定(優先度順。escape 表現)。先頭は構造化レコード JSONL の記録の境界(#2457)。
+DEFAULT_FIXED_DELIMITERS: tuple[str, ...] = (
+    JSONL_RECORD_BOUNDARY,
+    "\\n\\n",
+    "\\n",
+    "。",
+    "！",
+    "？",
+    ". ",
+    "! ",
+    "? ",
+    "；",
+    ";",
+)
+# 文末の記号。chunk から除かず前の文に残す(それ以外の分割符は chunk に残さない)。
+_SENTENCE_END_DELIMITERS = frozenset(DEFAULT_FIXED_DELIMITERS[3:])
+FIXED_DELIMITERS_MAX_ITEMS = 32
+FIXED_DELIMITER_MAX_CHARS = 256
+
+
+def normalize_fixed_delimiters(value: object) -> list[str]:
+    """分割符の一覧(優先度順)を検証する。保存済みの 1 つの文字列・JSON の配列も読む。"""
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        value = parsed if isinstance(parsed, list) else [text]
+    if not isinstance(value, list | tuple) or not all(
+        isinstance(item, str) and item.strip() and len(item) <= FIXED_DELIMITER_MAX_CHARS
+        for item in value
+    ):
+        raise ValueError(f"分割符は {FIXED_DELIMITER_MAX_CHARS} 文字以内で入力してください。")
+    items = list(dict.fromkeys(value))
+    if not 1 <= len(items) <= FIXED_DELIMITERS_MAX_ITEMS:
+        raise ValueError(f"分割符は 1〜{FIXED_DELIMITERS_MAX_ITEMS} 個で指定してください。")
+    return items
+
+
+FixedDelimiters = Annotated[list[str], BeforeValidator(normalize_fixed_delimiters)]
 # 撤去済み戦略の既存設定を後継戦略へ読み替える(sentence_window は小 chunk 化のみで
 # recursive_character + 検索時 neighbor expansion で代替)
 _LEGACY_CHUNKING_STRATEGY_ALIASES: dict[str, str] = {
@@ -417,7 +458,7 @@ def chunk_extraction_with_strategy(
     chunk_size: int = 800,
     overlap: int = 120,
     min_chars: int = 0,
-    delimiter: str = _DEFAULT_FIXED_DELIMITER,
+    delimiter: str | Sequence[str] = DEFAULT_FIXED_DELIMITERS,
 ) -> list[Chunk]:
     """選択された chunking 戦略(Chunking アダプター)で構造化抽出を分割する。
 
@@ -465,7 +506,11 @@ def chunk_extraction_with_strategy(
     elif normalized_strategy == "fixed_size":
         chunks = _chunk_fixed_size(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "fixed_delimiter":
-        chunks = _chunk_fixed_delimiter(extraction, delimiter=delimiter)
+        chunks = _chunk_fixed_delimiter(
+            extraction,
+            delimiters=[delimiter] if isinstance(delimiter, str) else delimiter,
+            chunk_size=chunk_size,
+        )
     else:
         chunks = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
     if normalized_strategy in {"fixed_delimiter", "fixed_size"}:
@@ -570,9 +615,14 @@ def _chunk_fixed_size(
 def _chunk_fixed_delimiter(
     extraction: StructuredExtraction,
     *,
-    delimiter: str,
+    delimiters: Sequence[str],
+    chunk_size: int,
 ) -> list[Chunk]:
-    """指定された固定分割符で全文を機械的に分割する。分割符自体は chunk に残さない。
+    """分割符を優先度順に試して全文を分割する。
+
+    1 番目の分割符では必ず切り、その境界はまたがない。2 番目以降は ``chunk_size`` を超えた断片
+    だけに順に使い、切った断片は ``chunk_size`` まで前からまとめる。overlap は付けず、どの分割符
+    でも切れない断片は ``chunk_size`` を超えてもそのまま 1 chunk にする。
 
     構造化レコード JSONL の解析の抽出(raw_text が記録の境界で区切られている。#2457)は、
     分割符の設定に関係なく記録の境界で 1 記録 1 chunk にする(`_chunk_structured_records`)。
@@ -581,40 +631,84 @@ def _chunk_fixed_delimiter(
         return _chunk_structured_records(extraction)
     projection = _extraction_vision_projection(extraction).line_endings_normalized()
     source = projection.text
-    resolved_delimiter = (
-        decode_fixed_delimiter(delimiter or _DEFAULT_FIXED_DELIMITER)
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-    )
-    if not source.strip() or not resolved_delimiter:
+    decoded = [
+        decode_fixed_delimiter(item).replace("\r\n", "\n").replace("\r", "\n")
+        for item in delimiters
+        if item
+    ]
+    if not source.strip() or not decoded:
         return []
+    first, *rest = decoded
     metadata: ChunkMetadata = {
         "chunk_template": TEXT_CHUNK_PROFILE,
         "chunk_fixed_delimiter": True,
     }
     chunks: list[Chunk] = []
-    cursor = 0
-    for part in source.split(resolved_delimiter):
-        leading = len(part) - len(part.lstrip())
-        trimmed_length = len(part.rstrip())
-        piece = part.strip()
-        if piece:
+    for start, end in _split_delimiter_spans(source, 0, len(source), first):
+        leaves = _split_oversized_span(source, start, end, rest, chunk_size)
+        for piece_start, piece_end in _merge_delimiter_spans(source, leaves, chunk_size):
             chunks.append(
                 Chunk(
-                    text=piece,
+                    text=source[piece_start:piece_end],
                     index=len(chunks),
-                    start_offset=cursor + leading,
-                    end_offset=cursor + trimmed_length,
+                    start_offset=piece_start,
+                    end_offset=piece_end,
                     metadata={
                         **metadata,
                         **chunk_projection_metadata(
-                            projection.slice(cursor, cursor + len(part)).stripped()
+                            projection.slice(piece_start, piece_end).stripped()
                         ),
                     },
                 )
             )
-        cursor += len(part) + len(resolved_delimiter)
     return [_with_chunk_metadata(chunk) for chunk in chunks]
+
+
+def _split_delimiter_spans(
+    text: str, start: int, end: int, delimiter: str
+) -> list[tuple[int, int]]:
+    """``text[start:end]`` を分割符で切り、前後の空白を除いた空でない範囲を返す。"""
+    kept = len(delimiter) if delimiter in _SENTENCE_END_DELIMITERS else 0
+    spans: list[tuple[int, int]] = []
+    cursor = start
+    while (hit := text.find(delimiter, cursor, end)) >= 0:
+        spans.append((cursor, hit + kept))
+        cursor = hit + len(delimiter)
+    spans.append((cursor, end))
+    trimmed: list[tuple[int, int]] = []
+    for span_start, span_end in spans:
+        part = text[span_start:span_end]
+        if part.strip():
+            leading = len(part) - len(part.lstrip())
+            trimmed.append((span_start + leading, span_start + len(part.rstrip())))
+    return trimmed
+
+
+def _split_oversized_span(
+    text: str, start: int, end: int, delimiters: Sequence[str], limit: int
+) -> list[tuple[int, int]]:
+    """``limit`` を超える範囲だけ、残りの分割符で順に切り直す。"""
+    if end - start <= limit or not delimiters:
+        return [(start, end)]
+    head, *tail = delimiters
+    return [
+        leaf
+        for part_start, part_end in _split_delimiter_spans(text, start, end, head)
+        for leaf in _split_oversized_span(text, part_start, part_end, tail, limit)
+    ]
+
+
+def _merge_delimiter_spans(
+    text: str, spans: Sequence[tuple[int, int]], limit: int
+) -> list[tuple[int, int]]:
+    """隣り合う範囲を ``limit`` まで前からまとめる。間に独自の分割符があればまとめない。"""
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and end - merged[-1][0] <= limit and not text[merged[-1][1] : start].strip():
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
 
 
 # 記録の要素の metadata のうち、chunk に引き継ぐもの(場所・列の役割・見出しの位置・記録の ID。

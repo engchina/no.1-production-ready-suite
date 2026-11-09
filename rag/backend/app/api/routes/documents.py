@@ -33,6 +33,7 @@ from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import ValidationError
 from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
 from rag_parser_core.text_encoding import detect_text_match
+from rag_pipeline_core.chunking import normalize_fixed_delimiters
 
 from app.api.errors import (
     DocumentFileMissingError,
@@ -3588,9 +3589,11 @@ def _processing_config_drift_groups(
         value = observed.get(field)
         if value is None and field in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS:
             return Settings.model_fields[f"rag_{field}"].default
-        if value is None and field == "chunk_delimiter":
+        if field == "chunk_delimiter":
             # 分割符をレシピに持つ前(#2457)の snapshot は、旧い既定の分割符で分割したものとする。
-            return PREVIOUS_DEFAULT_CHUNK_DELIMITER
+            return normalize_fixed_delimiters(
+                PREVIOUS_DEFAULT_CHUNK_DELIMITER if value is None else value
+            )
         return value
 
     def _compared_fields(fields: tuple[str, ...]) -> tuple[str, ...]:

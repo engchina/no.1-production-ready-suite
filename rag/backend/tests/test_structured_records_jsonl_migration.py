@@ -134,7 +134,7 @@ def test_settings_migration_renames_env_and_switches_global_parser(tmp_path: Pat
     # 移した値で起動できる（旧い値・旧い変数名は読まない）。
     settings = Settings(_env_file=env_file)
     assert settings.rag_preprocess_profile == "csv_to_jsonl"
-    assert settings.rag_chunk_delimiter == "\\n\\n"
+    assert settings.rag_chunk_delimiter == ["\\n\\n"]
     assert settings.rag_preprocess_csv_to_jsonl_service_url == "http://127.0.0.1:28012"
 
     # 2 回目は何も変えない（冪等）。
@@ -225,14 +225,14 @@ def test_recipe_chunk_delimiter_overrides_global_and_is_compared_only_for_fixed_
         )
     )
     merged = resolve_effective_settings(get_settings(), config, scope="ingestion")
-    assert merged.rag_chunk_delimiter == "---"
+    assert merged.rag_chunk_delimiter == ["---"]
 
     # 分割符をレシピに持つ前の snapshot は旧い既定(\n\n)で分割したものとして比べる。
     old_snapshot = {"chunking_strategy": "fixed_delimiter"}
-    same = {"chunking_strategy": "fixed_delimiter", "chunk_delimiter": "\\n\\n"}
+    same = {"chunking_strategy": "fixed_delimiter", "chunk_delimiter": ["\\n\\n"]}
     marker = {
         "chunking_strategy": "fixed_delimiter",
-        "chunk_delimiter": "<<<JSONL_RECORD_BOUNDARY>>>",
+        "chunk_delimiter": ["<<<JSONL_RECORD_BOUNDARY>>>"],
     }
     assert "chunking_strategy" not in _processing_config_drift_groups(old_snapshot, same)
     assert "chunking_strategy" in _processing_config_drift_groups(old_snapshot, marker)

@@ -14,6 +14,7 @@ from pydantic import (
 )
 from rag_parser_core.extraction import strip_formatting_marks
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
+from rag_pipeline_core.chunking import FixedDelimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_MAX,
@@ -567,7 +568,7 @@ class DocumentChunkPreviewRequest(BaseModel):
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
-    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+    chunk_delimiter: FixedDelimiters | None = None
     chunk_child_target_chars: int | None = Field(
         default=None, ge=CHUNK_CHILD_TARGET_CHARS_MIN, le=CHUNK_CHILD_TARGET_CHARS_MAX
     )

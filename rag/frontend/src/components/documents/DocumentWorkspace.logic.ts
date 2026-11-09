@@ -17,7 +17,7 @@ import {
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
   DEFAULT_SMALL_TO_BIG_PARAMS,
-  JSONL_RECORD_BOUNDARY,
+  DEFAULT_CHUNK_DELIMITERS,
   chunkSizeLabelKey,
   invalidSmallToBigParam,
   overlapLabelKey,
@@ -76,7 +76,7 @@ export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPrevie
     chunk_size: config?.chunk_size ?? 800,
     chunk_overlap: config?.chunk_overlap ?? 120,
     chunk_min_chars: config?.chunk_min_chars ?? 120,
-    chunk_delimiter: config?.chunk_delimiter ?? JSONL_RECORD_BOUNDARY,
+    chunk_delimiter: config?.chunk_delimiter ?? [...DEFAULT_CHUNK_DELIMITERS],
     chunk_child_target_chars:
       config?.chunk_child_target_chars ?? DEFAULT_SMALL_TO_BIG_PARAMS.chunk_child_target_chars,
     chunk_table_child_target_chars:
@@ -94,8 +94,8 @@ export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPrevie
 }
 
 export function chunkPreviewValidationError(form: ChunkPreviewForm): string | null {
-  if (form.chunking_strategy === "fixed_delimiter") {
-    return form.chunk_delimiter.trim() ? null : t("settings.chunking.params.delimiter");
+  if (form.chunking_strategy === "fixed_delimiter" && form.chunk_delimiter.length === 0) {
+    return t("settings.chunking.params.delimiter");
   }
   if (form.chunking_strategy === "small_to_big") {
     // 親子階層（small-to-big）は chunk サイズ等を使わない。5 項目の範囲だけを確かめる。
@@ -111,6 +111,8 @@ export function chunkPreviewValidationError(form: ChunkPreviewForm): string | nu
   ) {
     return t(chunkSizeLabelKey(form.chunking_strategy));
   }
+  // 固定分割符は overlap を使わない。
+  if (form.chunking_strategy === "fixed_delimiter") return null;
   if (
     !Number.isFinite(form.chunk_overlap) ||
     form.chunk_overlap < 0 ||

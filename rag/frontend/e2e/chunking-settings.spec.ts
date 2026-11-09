@@ -99,19 +99,26 @@ for (const viewport of [
 
     await page.getByRole("radio", { name: /固定分割符/ }).click();
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
-    await expect(page.getByLabel("固定分割符文字列")).toHaveValue("\\n\\n");
-    const delimiter = page.getByLabel("固定分割符文字列");
-    await delimiter.fill("<<<JSONL_RECORD_BOUNDARY>>>");
-    await expect.poll(() => delimiter.evaluate((input: HTMLInputElement) => {
-      const style = getComputedStyle(input);
-      const context = document.createElement("canvas").getContext("2d")!;
-      context.font = style.font;
-      const textWidth = context.measureText(input.value).width;
-      const available = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      return textWidth <= available;
-    })).toBe(true);
-    await delimiter.screenshot({ path: test.info().outputPath("chunking-delimiter.png") });
-    await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveCount(0);
+    const delimiterChips = page.locator("[data-searchable-chips]");
+    await expect(delimiterChips.getByRole("listitem")).toHaveText(["空行 (\\n\\n)"]);
+    const delimiter = page.getByRole("combobox", { name: "分割符" });
+    // 候補を順に足すと、選んだ順が優先度の順になる。
+    await delimiter.click();
+    await page.getByRole("option", { name: "記録の境界" }).click();
+    await page.getByRole("option", { name: "句点" }).click();
+    await expect(delimiterChips.getByRole("listitem")).toHaveText([
+      "空行 (\\n\\n)",
+      "記録の境界 (<<<JSONL_RECORD_BOUNDARY>>>)",
+      "句点 (。)",
+    ]);
+    // 一覧に無い文字列も足せる。
+    await delimiter.fill("---CUSTOM---");
+    await page.getByRole("button", { name: "「---CUSTOM---」を分割符に追加" }).click();
+    await expect(delimiterChips.getByRole("listitem").last()).toHaveText("---CUSTOM---");
+    await expect(delimiter).toHaveValue("");
+    await page.getByRole("button", { name: "完了" }).click();
+    await page.locator("[data-searchable-chips]").screenshot({ path: test.info().outputPath("chunking-delimiter.png") });
+    await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toBeVisible();
     await expect(page.getByLabel("overlap(文字)")).toHaveCount(0);
     await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("最小 chunk 文字数")).toHaveCount(0);
@@ -191,7 +198,7 @@ test("文書分割設定は親子階層（small-to-big）のパラメータを�
     chunk_size: 800,
     overlap: 120,
     min_chars: 120,
-    delimiter: "\\n\\n",
+    delimiter: ["\\n\\n"],
     chunk_child_target_chars: 600,
     chunk_table_child_target_chars: 3000,
     chunk_parent_target_chars: 6000,
@@ -214,7 +221,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
           chunk_size: 1000,
           overlap: 120,
           min_chars: 40,
-          delimiter: "\\n\\n",
+          delimiter: ["\\n\\n"],
               }),
       });
       return;
@@ -242,11 +249,38 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
     chunk_size: 1000,
     overlap: 120,
     min_chars: 40,
-    delimiter: "\\n\\n",
+    delimiter: ["\\n\\n"],
     ...SMALL_TO_BIG_DEFAULTS,
   });
   await expectNoHorizontalOverflow(page);
 });
+
+test(
+  "分割符の既定の候補は日本語と英語の区切りを優先度順に出す",
+  { tag: "@responsive" },
+  async ({ page }, testInfo) => {
+    await page.route("**/api/settings/chunking", (route) =>
+      route.fulfill({
+        json: chunkingEnvelope({ strategy: "fixed_delimiter", delimiter: DEFAULT_DELIMITERS }),
+      })
+    );
+    await page.goto("/settings/chunking");
+
+    const chips = page.locator("[data-searchable-chips]").getByRole("listitem");
+    await expect(chips).toHaveCount(DEFAULT_DELIMITERS.length);
+    await expect(chips.first()).toContainText("記録の境界");
+    await expect(chips.last()).toContainText("半角セミコロン");
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByText("分割符: 11 個")).toBeVisible();
+    const field = page.locator("[data-searchable-multi-select]");
+    await field.screenshot({ path: testInfo.outputPath("delimiter-defaults.png") });
+
+    await page.getByRole("combobox", { name: "分割符" }).click();
+    await expect(page.getByRole("option", { name: /英語のピリオド/ })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await field.screenshot({ path: testInfo.outputPath("delimiter-options.png") });
+  }
+);
 
 test("文書分割設定は固定分割符を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -257,7 +291,7 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
       await route.fulfill({
         json: chunkingEnvelope({
           strategy: "fixed_delimiter",
-          delimiter: "---SECTION---",
+          delimiter: ["---SECTION---"],
         }),
       });
       return;
@@ -267,7 +301,11 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
 
   await page.goto("/settings/chunking");
   await page.getByRole("radio", { name: /固定分割符/ }).click();
-  await page.getByLabel("固定分割符文字列").fill("---SECTION---");
+  const delimiter = page.getByRole("combobox", { name: "分割符" });
+  await page.getByRole("button", { name: /空行.*選択から外す/ }).click();
+  await delimiter.fill("---SECTION---");
+  await page.getByRole("button", { name: "「---SECTION---」を分割符に追加" }).click();
+  await page.getByRole("button", { name: "完了" }).click();
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
@@ -276,7 +314,7 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
     chunk_size: 800,
     overlap: 120,
     min_chars: 120,
-    delimiter: "---SECTION---",
+    delimiter: ["---SECTION---"],
     ...SMALL_TO_BIG_DEFAULTS,
   });
   await expectNoHorizontalOverflow(page);
@@ -303,7 +341,7 @@ type ChunkingOverrides = {
   chunk_size?: number;
   overlap?: number;
   min_chars?: number;
-  delimiter?: string;
+  delimiter?: string[];
   context_header_enabled?: boolean;
 } & Partial<typeof SMALL_TO_BIG_DEFAULTS>;
 
@@ -329,7 +367,7 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
       chunk_size: overrides.chunk_size ?? 800,
       overlap: overrides.overlap ?? 120,
       min_chars: overrides.min_chars ?? 120,
-      delimiter: overrides.delimiter ?? "\\n\\n",
+      delimiter: overrides.delimiter ?? ["\\n\\n"],
       context_header_enabled: overrides.context_header_enabled ?? true,
       chunk_child_target_chars:
         overrides.chunk_child_target_chars ?? SMALL_TO_BIG_DEFAULTS.chunk_child_target_chars,
@@ -359,12 +397,26 @@ async function mockChunkingSettings(page: Page) {
   });
 }
 
+const DEFAULT_DELIMITERS = [
+  "<<<JSONL_RECORD_BOUNDARY>>>",
+  "\\n\\n",
+  "\\n",
+  "。",
+  "！",
+  "？",
+  ". ",
+  "! ",
+  "? ",
+  "；",
+  ";",
+];
+
 async function expectStrategyParams(page: Page, radioName: RegExp, visibleLabels: string[]) {
   const allLabels = [
     "chunk サイズ(文字)",
     "overlap(文字)",
     "最小 chunk 文字数",
-    "固定分割符文字列",
+    "分割符",
     ...SMALL_TO_BIG_LABELS,
     "見出し内の再分割上限(文字)",
     "ページ内の再分割上限(文字)",
@@ -376,7 +428,8 @@ async function expectStrategyParams(page: Page, radioName: RegExp, visibleLabels
     // 比べるため、タグを除いた accessible name で探す（#531）。
     const locator = page
       .getByRole("spinbutton", { name: label, exact: true })
-      .or(page.getByRole("textbox", { name: label, exact: true }));
+      .or(page.getByRole("textbox", { name: label, exact: true }))
+      .or(page.getByRole("combobox", { name: label, exact: true }));
     await expect(locator).toHaveCount(visibleLabels.includes(label) ? 1 : 0);
   }
 }

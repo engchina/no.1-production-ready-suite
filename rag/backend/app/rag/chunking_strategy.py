@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
+from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS, normalize_fixed_delimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_DEFAULT,
@@ -112,7 +112,7 @@ class ChunkingStrategyParams:
     chunk_size: int
     overlap: int
     min_chars: int
-    delimiter: str
+    delimiter: tuple[str, ...]
     small_to_big: SmallToBigParams = SmallToBigParams()
 
 
@@ -134,7 +134,7 @@ class ChunkingRuntimeSettings:
     chunk_size: int
     overlap: int
     min_chars: int
-    delimiter: str
+    delimiter: tuple[str, ...]
     small_to_big: SmallToBigParams
     strategies: tuple[ChunkingStrategyStatus, ...]
 
@@ -182,7 +182,11 @@ def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
         chunk_size=int(getattr(settings, "rag_chunk_size", 800)),
         overlap=int(getattr(settings, "rag_chunk_overlap", 120)),
         min_chars=int(getattr(settings, "rag_chunk_min_chars", 120)),
-        delimiter=str(getattr(settings, "rag_chunk_delimiter", JSONL_RECORD_BOUNDARY)).strip(),
+        delimiter=tuple(
+            normalize_fixed_delimiters(
+                getattr(settings, "rag_chunk_delimiter", DEFAULT_FIXED_DELIMITERS)
+            )
+        ),
         small_to_big=resolve_small_to_big_params(settings),
     )
 

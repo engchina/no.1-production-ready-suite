@@ -131,6 +131,28 @@ describe("filterSearchableOptions", () => {
 });
 
 describe("SearchableMultiSelect", () => {
+  it("creatable は候補に無い検索語を選択の末尾に足し、検索語を消す（#4733）", () => {
+    const onChange = vi.fn();
+    const input = mountMulti({ creatable: true, initial: ["kb-1"], onChange });
+    act(() => input.focus());
+    type(input, "独自の値");
+    act(() => vi.advanceTimersByTime(SEARCH_FIELD_DEBOUNCE_MS));
+    const add = Array.from(host.querySelectorAll("button")).find(
+      (button) => button.textContent === "「独自の値」を追加"
+    )!;
+    act(() => add.click());
+    expect(onChange).toHaveBeenLastCalledWith(["kb-1", "独自の値"]);
+    expect(input.value).toBe("");
+  });
+
+  it("creatable でなければ追加のボタンを出さない（#4733）", () => {
+    const input = mountMulti();
+    act(() => input.focus());
+    type(input, "独自の値");
+    act(() => vi.advanceTimersByTime(SEARCH_FIELD_DEBOUNCE_MS));
+    expect(host.textContent).not.toContain("を追加");
+  });
+
   it("検索欄は combobox で、ラベル・必須・一覧との結び付きを持つ。フォーカスで一覧を開く", () => {
     const input = mountMulti({ required: true });
     expect(input.getAttribute("aria-labelledby")).toBeTruthy();

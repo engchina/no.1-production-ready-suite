@@ -78,7 +78,7 @@ from pydantic import (
     model_validator,
 )
 from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
-from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
+from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS, FixedDelimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_DEFAULT,
@@ -630,7 +630,7 @@ class ChunkingSettingsData(BaseModel):
     chunk_size: int
     overlap: int
     min_chars: int
-    delimiter: str
+    delimiter: list[str]
     context_header_enabled: bool
     # 親子階層（small-to-big。`small_to_big`）の分割パラメータ(rag_poc と同じ 5 項目)。
     chunk_child_target_chars: int
@@ -653,7 +653,7 @@ class ChunkingSettingsUpdate(BaseModel):
     )
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
-    delimiter: str = Field(default=JSONL_RECORD_BOUNDARY, min_length=1, max_length=256)
+    delimiter: FixedDelimiters = Field(default_factory=lambda: list(DEFAULT_FIXED_DELIMITERS))
     chunk_child_target_chars: int = Field(
         default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
         ge=CHUNK_CHILD_TARGET_CHARS_MIN,
@@ -679,15 +679,6 @@ class ChunkingSettingsUpdate(BaseModel):
         ge=CHUNK_PARENT_MAX_CHILDREN_MIN,
         le=CHUNK_PARENT_MAX_CHILDREN_MAX,
     )
-
-    @field_validator("delimiter")
-    @classmethod
-    def normalize_delimiter(cls, value: str) -> str:
-        """分割符の前後空白を設定値へ混入させない。"""
-        delimiter = value.strip()
-        if not delimiter:
-            raise ValueError("delimiter を入力してください。")
-        return delimiter
 
     @model_validator(mode="after")
     def validate_chunk_bounds(self) -> "ChunkingSettingsUpdate":
