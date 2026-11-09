@@ -68,6 +68,8 @@ import {
   type ChunkingSettingsUpdate,
   type LanguagePackData,
   type LanguagePackSections,
+  type FileTypeDefaultsSettingsData,
+  type FileTypeDefaultsUpdate,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
   type ServiceAction,
@@ -208,6 +210,7 @@ export const queryKeys = {
   externalParserStatus: (backend: ExternalParserBackendName) =>
     ["settings", "parser-adapters", "status", backend] as const,
   preprocessSettings: ["settings", "preprocess"] as const,
+  fileTypeDefaultsSettings: ["settings", "file-type-defaults"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
   languagePack: ["settings", "language-pack"] as const,
   languagePackHistory: ["settings", "language-pack", "history"] as const,
@@ -2388,6 +2391,24 @@ export function useUpdatePreprocessSettings() {
       api.updatePreprocessSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.preprocessSettings, data);
+    },
+  });
+}
+
+export function useFileTypeDefaultsSettings() {
+  return useQuery<FileTypeDefaultsSettingsData>({
+    queryKey: queryKeys.fileTypeDefaultsSettings,
+    queryFn: api.getFileTypeDefaultsSettings,
+    retry: false,
+  });
+}
+
+export function useUpdateFileTypeDefaultsSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: FileTypeDefaultsUpdate) => api.updateFileTypeDefaultsSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.fileTypeDefaultsSettings, data);
     },
   });
 }

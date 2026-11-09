@@ -34,7 +34,7 @@ from app.clients.oracle import (
     delete_document_rows,
 )
 from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
-from app.config import Settings, get_settings
+from app.config import FileType, Settings, get_settings
 from app.rag.bulk_ingestion import accept_bulk_ingestion
 from app.rag.request_context import with_system_access
 from app.schemas.document import DocumentProcessingConfig, IngestionJob
@@ -42,8 +42,8 @@ from app.schemas.document import DocumentProcessingConfig, IngestionJob
 _IN_CHUNK = 500
 
 
-def _resolve(config: DocumentProcessingConfig) -> Settings:
-    return _merge_document_processing_config(config)[0]
+def _resolve(config: DocumentProcessingConfig, file_type: FileType | None) -> Settings:
+    return _merge_document_processing_config(config, file_type=file_type)[0]
 
 
 async def _no_single(document_id: str) -> IngestionJob:

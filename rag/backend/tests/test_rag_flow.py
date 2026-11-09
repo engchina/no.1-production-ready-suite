@@ -19,6 +19,7 @@ from app.main import app
 from app.rag import ingestion as ingestion_module
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
 from app.rag.navigation import build_navigation_tree
+from app.rag.source_profile import UNSUPPORTED_UPLOAD_FORMAT_MESSAGE
 from app.schemas.document import (
     DocumentDetail,
     DocumentPreprocessArtifact,
@@ -1280,7 +1281,7 @@ def test_upload_rejects_unsupported_content_type() -> None:
         files={"file": ("policy.exe", b"sample", "application/x-msdownload")},
     )
     assert response.status_code == 415
-    assert response.json()["error_messages"] == ["対応していないファイル形式です。"]
+    assert response.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
 
 
 def test_upload_rejects_unknown_octet_stream_binary() -> None:
@@ -1291,7 +1292,7 @@ def test_upload_rejects_unknown_octet_stream_binary() -> None:
     )
 
     assert response.status_code == 415
-    assert response.json()["error_messages"] == ["対応していないファイル形式です。"]
+    assert response.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
 
 
 def test_upload_accepts_content_type_parameters() -> None:
@@ -1303,17 +1304,22 @@ def test_upload_accepts_content_type_parameters() -> None:
     assert response.status_code == 200
 
 
-def test_upload_accepts_jsonl_octet_stream_by_extension() -> None:
-    """JSONL は octet-stream upload でも SourceProfile と local parser 契約に合わせて許可する。"""
+def test_upload_rejects_jsonl_outside_the_accepted_formats() -> None:
+    """受け付ける形式を絞った後（#4730）、JSONL は octet-stream でも保存前に 415 にする。"""
     response = client.post(
         "/api/documents/upload",
-        files={
-            "file": (
-                "events.jsonl",
-                b'{"event":"created"}\n{"event":"done"}',
-                "application/octet-stream",
-            )
-        },
+        files={"file": ("events.jsonl", b'{"event":"created"}', "application/octet-stream")},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
+
+
+def test_upload_accepts_markdown_octet_stream_by_extension() -> None:
+    """受け付ける形式（.md）は octet-stream の upload でも拡張子で許可する。"""
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("notes.md", b"# synthetic\n", "application/octet-stream")},
     )
 
     assert response.status_code == 200

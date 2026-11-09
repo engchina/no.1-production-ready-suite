@@ -634,12 +634,17 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       // 地の文の段落（節の中の文）も listitem なので、2 つだけなら続きの行と根拠の行は段落になっていない。
       const items = section.getByRole("listitem");
       await expect(items).toHaveCount(2);
-      // 1 つ目の項目は表の 8 行をすべて持ち、根拠の行は項目のリンク（地の文の段落ではない）。
-      for (const row of rows) await expect(items.first()).toContainText(row);
+      // 1 つ目の項目は表の 8 行を共有の表で出し（記号のまま出さない。#4734）、根拠の行は項目のリンク（地の文の段落ではない）。
+      await expect(items.first()).not.toContainText("| A1 |");
+      for (const row of rows) {
+        for (const cell of row.split("|").map((value) => value.trim()).filter(Boolean)) {
+          await expect(items.first()).toContainText(cell);
+        }
+      }
       await expect(items.first().getByTestId("answer-citation-link")).toHaveCount(1);
       await expect(items.first().getByTestId("answer-citation-link")).toContainText("合成の表.md");
       await expect(items.nth(1).getByTestId("answer-citation-link")).toHaveCount(1);
-      // 表の行は 1 行ずつ改行して並び、長い値も回答のカードの幅で折り返す。
+      // 長い値があっても回答のカードの幅を超えない（表の中でスクロールする）。
       const metrics = await card.evaluate((element) => ({
         cardOverflow: element.scrollWidth - element.clientWidth,
         itemOverflow: Math.max(

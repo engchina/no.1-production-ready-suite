@@ -102,7 +102,12 @@ class _Oracle:
         }
 
     async def get_document_summary(self, document_id: str) -> SimpleNamespace:
-        return SimpleNamespace(id=document_id, content_sha256=_SHA)
+        return SimpleNamespace(
+            id=document_id,
+            content_sha256=_SHA,
+            file_name="synthetic.pdf",
+            content_type="application/pdf",
+        )
 
     async def list_document_recipe_extraction_revisions(
         self, recipe_id: str
@@ -134,7 +139,7 @@ def use_oracle(monkeypatch: pytest.MonkeyPatch) -> Callable[[_Oracle], _Oracle]:
     def install(fake: _Oracle) -> _Oracle:
         monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
         monkeypatch.setattr(
-            documents_route, "_recipe_parse_extraction_id", lambda *_args: "parse-now"
+            documents_route, "_recipe_parse_extraction_id", lambda *_args, **_kwargs: "parse-now"
         )
 
         async def recipe_view(_oracle: object, row: Mapping[str, object]) -> dict[str, object]:

@@ -2739,6 +2739,56 @@ export interface PreprocessSettingsUpdate {
   profile: PreprocessProfileName;
 }
 
+// --- 設定: 形式別の既定（#4732）---
+export type FileTypeName =
+  | "pdf"
+  | "word"
+  | "powerpoint"
+  | "excel"
+  | "csv"
+  | "text"
+  | "markdown"
+  | "json"
+  | "html"
+  | "image";
+
+/** 種類の行の保存値。null は全体の既定に従う。 */
+export interface FileTypeDefaultEntry {
+  preprocess_profile: PreprocessProfileName | null;
+  parser_adapter_backend: ParserAdapterBackend | null;
+  chunking_strategy: ChunkingStrategyName | null;
+}
+
+export interface FileTypeDefaultRow extends FileTypeDefaultEntry {
+  file_type: FileTypeName;
+  extensions: string[];
+  preprocess_options: PreprocessProfileName[];
+  unavailable_preprocess_profiles: PreprocessProfileName[];
+  /** ファイル準備ごとの、この種類に対応する解析エンジン。 */
+  parser_options: Record<string, ParserAdapterBackend[]>;
+  unavailable_parser_backends: ParserAdapterBackend[];
+  /** 行のファイル準備が未設定のときに、解析エンジンの選択肢を決めるファイル準備。 */
+  inherited_preprocess_profile: PreprocessProfileName;
+  /** 組み込みの既定（「既定に戻す」で入る値）。この環境で使えない行はすべて null。 */
+  builtin: FileTypeDefaultEntry;
+  builtin_unavailable_reason: string | null;
+}
+
+export interface FileTypeDefaultsSettingsData {
+  rows: FileTypeDefaultRow[];
+  chunking_options: ChunkingStrategyName[];
+  global_defaults: {
+    preprocess_profile: PreprocessProfileName;
+    parser_adapter_backend: ParserAdapterBackend;
+    chunking_strategy: ChunkingStrategyName;
+  };
+  config_source: "runtime";
+}
+
+export interface FileTypeDefaultsUpdate {
+  entries: Partial<Record<FileTypeName, FileTypeDefaultEntry>>;
+}
+
 // --- サービス管理（各工程のサービスの稼働可視化・起動/停止）---
 // カテゴリと工程の設定画面の対応は components/settings/service-stages.ts（並びはサイドナビ。#638）。
 export type ServiceCategory = "preprocess" | "parser";
@@ -4815,6 +4865,13 @@ export const api = {
     ),
 
   // 設定: Chunking アダプター
+  getFileTypeDefaultsSettings: () =>
+    request<FileTypeDefaultsSettingsData>("/api/settings/file-type-defaults"),
+  updateFileTypeDefaultsSettings: (body: FileTypeDefaultsUpdate) =>
+    request<FileTypeDefaultsSettingsData>("/api/settings/file-type-defaults", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   getPreprocessSettings: () =>
     request<PreprocessSettingsData>("/api/settings/preprocess"),
   updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>

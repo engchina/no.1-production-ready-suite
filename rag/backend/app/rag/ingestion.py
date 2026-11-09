@@ -225,8 +225,9 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 使い直され、解析からの再処理でも直らない
 # (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140。3: #4154。4: #4224。
 # 5: VLM の前の crop の保存が空の画像本文の投影を書かない。#4569。
-# 6: 図・画像の読み取りの指示を項目の説明と条件ごとの案内に分けた。#4671)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 6
+# 6: 図・画像の読み取りの指示を項目の説明と条件ごとの案内に分けた。#4671。
+# 7: Unstructured の見出しの判定と階層を直した。#4741)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 7
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {

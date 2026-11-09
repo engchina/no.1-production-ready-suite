@@ -202,7 +202,7 @@ async def accept(connection: BulkConnection) -> BulkIngestionResult:
         return await accept_bulk_ingestion(
             list(connection.specs),
             store=OracleBulkIngestionStore(client),
-            resolve_settings=lambda _: Settings.model_construct(),
+            resolve_settings=lambda _config, _file_type: Settings.model_construct(),
             enqueue_single=no_single,
             max_attempts=3,
             parser_message=no_service,

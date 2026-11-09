@@ -1898,6 +1898,34 @@ def test_document_ingestion_job_endpoint_runs_legacy_office_with_office_to_pdf(
 
 
 @pytest.mark.usefixtures("upload_input_gate_open")
+def test_upload_notice_follows_file_type_default_without_copying_it_to_the_recipe(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """形式別の既定は取込の前の案内に効くが、アップロードでレシピへ写さない(#4732)。"""
+    from app.config import FileTypeDefaultEntry, get_settings
+
+    settings = get_settings()
+    settings.rag_parser_adapter_backend = "docling"
+    docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    without_default = client.post(
+        "/api/documents/upload", files={"file": ("before.docx", b"before", docx)}
+    )
+    assert without_default.status_code == 200
+    assert without_default.json()["data"]["parser_notice"]["code"] == "parser_source_unsupported"
+
+    settings._file_type_defaults = {
+        "word": FileTypeDefaultEntry(parser_adapter_backend="unstructured")
+    }
+    uploaded = client.post("/api/documents/upload", files={"file": ("after.docx", b"after", docx)})
+    assert uploaded.status_code == 200
+    body = uploaded.json()["data"]
+    assert body["parser_notice"] is None
+
+    recipe = anyio.run(fake_document_dependencies.ensure_default_document_recipe, body["id"])
+    assert recipe["processing_config"] == {}
+
+
+@pytest.mark.usefixtures("upload_input_gate_open")
 def test_document_upload_accepts_macro_enabled_office() -> None:
     """マクロ付きの Office はアップロードでき、変換が要る形式として案内する(#2470)。"""
     resp = client.post(

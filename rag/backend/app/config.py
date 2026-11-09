@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, get_args
 
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_DEFAULT_MAX_CHARS,
@@ -82,6 +82,7 @@ from pr_system_settings.model import (
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     PrivateAttr,
     ValidationError,
@@ -345,6 +346,7 @@ PLATFORM_ENV_FILE = platform_env_file(BACKEND_ROOT)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 # 文書解析の設定（RAG 専用。#1701）。相対 path は backend/ 基準。
 DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
+DEFAULT_FILE_TYPE_DEFAULTS_FILE = "file-type-defaults.json"
 # 言語資源の全体の上書き(#2181)。
 DEFAULT_LANGUAGE_PACK_FILE = "language-pack.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
@@ -379,6 +381,36 @@ def _without_profile_only_fields(
     # pydantic-settings は source の名前ごとに読んだ値を持つ（debug の表示）。元の名前を保つ。
     read.__name__ = type(source).__name__
     return read
+
+
+# 形式別の既定（#4732）の種類。受け付ける形式（#4730）に合わせる。分類は
+# app.rag.file_type_defaults の 1 か所。
+FileType = Literal[
+    "pdf",
+    "word",
+    "powerpoint",
+    "excel",
+    "csv",
+    "text",
+    "markdown",
+    "json",
+    "html",
+    "image",
+]
+FILE_TYPES: tuple[FileType, ...] = get_args(FileType)
+
+
+class FileTypeDefaultEntry(BaseModel):
+    """文書の種類ごとの既定（全体の設定の層。#4732）。None は全体の既定に従う。
+
+    解決の順は文書のレシピ > 形式別の既定 > 全体の既定。分割のサイズなどのパラメータは持たない。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    preprocess_profile: PreprocessProfile | None = None
+    parser_adapter_backend: ParserAdapterBackend | None = None
+    chunking_strategy: ChunkingStrategy | None = None
 
 
 class _PersistedParserAdapterSettings(BaseModel):
@@ -503,6 +535,8 @@ class Settings(
     # 「文書解析」画面（system_admin）の保存だけで、parser-settings.json から読む
     # （app.rag.mineru_license）。model_copy は private の値も写す。
     _mineru_license_acknowledgement: tuple[str, str] = PrivateAttr(default=("", ""))
+    # 「形式別の既定」の画面で保存した値（file-type-defaults.json。#4732）。
+    _file_type_defaults: dict[str, FileTypeDefaultEntry] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def settings_customise_sources(
@@ -566,6 +600,12 @@ class Settings(
         description=(
             "「文書解析」画面から保存した解析エンジンと外部接続の JSON（RAG 専用。#1701）。"
             "存在する場合は .env より優先する。相対 path は backend/ 基準。"
+        ),
+    )
+    rag_file_type_defaults_file: str = Field(
+        default=DEFAULT_FILE_TYPE_DEFAULTS_FILE,
+        description=(
+            "「形式別の既定」画面から保存した JSON（RAG 専用。#4732）。相対 path は backend/ 基準。"
         ),
     )
 
@@ -2910,6 +2950,7 @@ def _settings_singleton() -> Settings:
     settings = Settings(_env_file=(PLATFORM_ENV_FILE, BACKEND_ENV_FILE))
     load_persisted_model_settings(settings)
     load_persisted_parser_settings(settings)
+    load_persisted_file_type_defaults(settings)
     # 以後の .env の変更を差分で取り込むため、今の .env の内容を基準として覚える。
     reload_env_settings_if_changed(settings)
     return settings
@@ -2921,6 +2962,7 @@ def get_settings() -> Settings:
     reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
+    FILE_TYPE_DEFAULTS_STORE.reload_if_changed(settings)
     return settings
 
 
@@ -2955,6 +2997,7 @@ def reset_settings_cache() -> None:
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
     PARSER_SETTINGS_STORE.reset()
+    FILE_TYPE_DEFAULTS_STORE.reset()
     LANGUAGE_PACK_STORE.reset()
     _ENV_RELOAD_STATE.key = None
     _ENV_RELOAD_STATE.snapshot = None
@@ -3062,6 +3105,14 @@ def resolve_parser_settings_file(path_value: str) -> Path:
     return (BACKEND_ENV_FILE.parent / path).resolve()
 
 
+def resolve_file_type_defaults_file(path_value: str) -> Path:
+    """RAG_FILE_TYPE_DEFAULTS_FILE を RAG の backend/.env と同じディレクトリ基準で解決する。"""
+    path = Path(path_value.strip() or DEFAULT_FILE_TYPE_DEFAULTS_FILE).expanduser()
+    if path.is_absolute():
+        return path
+    return (BACKEND_ENV_FILE.parent / path).resolve()
+
+
 def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any]) -> None:
     """parser-settings.json の内容を Settings へ反映する（無い項目は既定値）。"""
     parser = _PersistedParserAdapterSettings.model_validate(raw)
@@ -3098,6 +3149,57 @@ PARSER_SETTINGS_STORE = ParserSettingsStore(
     dump=_dump_parser_adapters,
     secrets=tuple((attr, settings_env_name("RAG_", attr)) for attr in PARSER_SECRET_ATTRS),
 )
+
+
+def _load_file_type_defaults(settings: Settings, raw: Mapping[str, Any]) -> None:
+    """file-type-defaults.json を Settings へ反映する。読めない行は捨て、全体の既定に従わせる。"""
+    entries = raw.get("entries") or {}
+    if not isinstance(entries, Mapping):
+        raise ValueError("entries が JSON object ではありません。")
+    loaded: dict[str, FileTypeDefaultEntry] = {}
+    logger = logging.getLogger(__name__)
+    for file_type, value in entries.items():
+        if file_type not in FILE_TYPES:
+            logger.warning("rag_file_type_defaults_unknown_type", extra={"file_type": file_type})
+            continue
+        try:
+            entry = FileTypeDefaultEntry.model_validate(value)
+        except ValidationError:
+            logger.warning("rag_file_type_defaults_invalid_row", extra={"file_type": file_type})
+            continue
+        if is_roadmap_parser_adapter_backend(entry.parser_adapter_backend):
+            logger.warning("rag_file_type_defaults_roadmap_row", extra={"file_type": file_type})
+            continue
+        loaded[str(file_type)] = entry
+    settings._file_type_defaults = loaded
+
+
+def _dump_file_type_defaults(settings: Settings) -> dict[str, Any]:
+    return {
+        "entries": {
+            file_type: entry.model_dump(mode="json", exclude_none=True)
+            for file_type, entry in settings._file_type_defaults.items()
+        }
+    }
+
+
+# 形式別の既定（#4732）も parser-settings.json と同じ方式で保存する（atomic 書き込み・
+# flock・mtime の再読込）。secret を持たないので `.env` には書かない。
+FILE_TYPE_DEFAULTS_STORE = ParserSettingsStore(
+    resolve_path=lambda settings: resolve_file_type_defaults_file(
+        settings.rag_file_type_defaults_file
+    ),
+    env_file=lambda _settings: BACKEND_ENV_FILE,
+    load=_load_file_type_defaults,
+    dump=_dump_file_type_defaults,
+    secrets=(),
+    label="形式別の既定の設定",
+)
+
+
+def load_persisted_file_type_defaults(settings: Settings) -> None:
+    """「形式別の既定」画面で保存した JSON があれば Settings へ反映する。"""
+    FILE_TYPE_DEFAULTS_STORE.load(settings)
 
 
 def load_persisted_parser_settings(settings: Settings) -> None:
