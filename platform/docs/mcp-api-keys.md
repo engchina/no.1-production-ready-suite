@@ -59,27 +59,32 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 
 - 業務 Agent は画面のチャットと同じく、公開中の版で RAG / NL2SQL などを調べて答える。会話（`thread_id`）は画面のチャットの会話と同じで、作った利用者だけが続けられる。
 - MCP から作った Run は、**承認の要るツールを呼ばない**（自動実行と同じ。承認する人が画面にいるとは限らないため）。業務 Agent は使えなかったツールを「確かめられなかった点」として答え、`skipped_approval_tools` に出す。
-- 既定の待ち時間（50 秒）は Claude Code のツールの待ち時間の既定（60 秒）より短い。長くかかる質問は `agent_get_run` で続きを読むか、`MCP_TOOL_TIMEOUT` を延ばして `wait_seconds` を大きくする。
+- `agent_chat` の既定の待ち時間（50 秒）は、Claude Code の HTTP の 1 要求の最初の応答までのタイマー（60 秒）より短い。長くかかる質問は `agent_get_run` で続きを読むか、`MCP_TOOL_TIMEOUT` を延ばして（60000 より大きくすると、このタイマーも延びる）`wait_seconds` を大きくする。
 
 ## 例
 
 ### Claude Code
 
 ```bash
-export PR_API_KEY='prak_...'   # 発行したキー（repo や共有の設定に書かない）
+export PR_API_KEY='prak_...'
 claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \
   --header 'Authorization: Bearer ${PR_API_KEY}'
 claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp \
   --header 'Authorization: Bearer ${PR_API_KEY}'
 claude mcp add --scope user --transport http agent https://<host>/agent/api/mcp \
   --header 'Authorization: Bearer ${PR_API_KEY}'
-claude mcp list                 # rag・nl2sql・agent が ✔ Connected
-export MCP_TOOL_TIMEOUT=660000   # rag_search は 20 秒〜2 分かかる（上限 600 秒。既定の 60 秒では切れる）
-export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt   # 自作の CA の HTTPS のとき（https://<host>/platform/ca.crt を保存したファイル）
+export MCP_TOOL_TIMEOUT=660000
+curl -sk https://<host>/platform/ca.crt -o ~/production-ready-ca.crt
+export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt
 claude
 ```
 
-- MCP サーバーの名前は `rag` / `nl2sql` / `agent` にする（組み込みのスキルがこの名前でツールを使う）。
+- `PR_API_KEY` に発行したキーを入れる（repo や共有の設定に書かない）。`claude mcp list` で `rag`・`nl2sql`・`agent` が Connected になることを確かめられる。
+- コピーするコードの行末に `#` のコメントを書かない（zsh に貼るとエラーになる）。
+- `curl` と `NODE_EXTRA_CA_CERTS` の 2 行は https の URL のとき（自作の CA の証明書を保存して信頼させる。`-k` は信頼する前の自作の CA を取得するため。正規の証明書に替えた環境では要らない）。
+- `export` はそのシェルだけで有効。次回も使うなら、シェルの起動ファイルか `~/.claude/settings.json` の `env`（パスは絶対パス）に置く。
+- MCP サーバーの名前は `rag` / `nl2sql` / `agent` にする（組み込みのスキルは `rag` / `nl2sql` を使う。`agent` は業務 Agent を呼ぶためのもの）。
+- `MCP_TOOL_TIMEOUT` の全体の既定は `100000000` ミリ秒（約 28 時間）。60 秒なのは HTTP の 1 要求の最初の応答までのタイマーで、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びる。SSE の進み具合があれば、既定でも 60 秒では切れない。`MCP_TOOL_TIMEOUT` は進み具合では延びない固定の上限。
 - 長くかかるツール（`rag_search`。サーバーの上限 600 秒）の待ち時間は 660 秒を推奨する。client が `_meta.progressToken` と `Accept: text/event-stream` を付けると、3 製品の MCP（共通の `pr_backend_core.mcp`）は 10 秒ごとに進み具合（`notifications/progress`）を送る（#1864。詳細は [skills/README.md](../../skills/README.md)「長くかかるツール」）。
 - `--header` は単引用符で渡す。設定（`~/.claude.json`）にはキーの値ではなく `${PR_API_KEY}` が保存され、Claude Code が起動のたびに環境変数から展開する。
 - スキルの入れ方・`claude -p` の許可（`--allowedTools "Skill,mcp__rag,mcp__nl2sql"`）・設定の JSON・つまずく所は [skills/README.md](../../skills/README.md)。

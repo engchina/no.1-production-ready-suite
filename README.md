@@ -156,7 +156,7 @@ path = home / ".claude" / "settings.json"
 settings = json.loads(path.read_text()) if path.exists() else {}
 settings.setdefault("env", {}).update({
     "NODE_EXTRA_CA_CERTS": str(home / ".config/production-ready/ca.crt"),  # 自作の CA を信頼させる（正規の証明書なら不要）
-    "MCP_TOOL_TIMEOUT": "660000",  # rag_search は 20 秒〜2 分かかる（既定の 60 秒では切れる）
+    "MCP_TOOL_TIMEOUT": "660000",  # rag_search のサーバーの上限 600 秒より長くする
 })
 path.parent.mkdir(exist_ok=True)
 path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
@@ -176,7 +176,7 @@ EOF
 
 ### 3. MCP を登録する
 
-スキルは MCP サーバーの名前を `rag` / `nl2sql` / `agent` として書いているので、この名前で登録します。キーは `headers` に書かず、`headersHelper` に手順 2 のスクリプトを指定します（設定の `~/.claude.json` にはスクリプトのパスだけが入ります）。`claude mcp add` には `headersHelper` の option が無いので、`claude mcp add-json` で登録します。
+MCP サーバーの名前は `rag` / `nl2sql` / `agent` で登録します（組み込みのスキルは `rag` / `nl2sql` を使います。`agent` は業務 Agent を呼ぶためのものです）。キーは `headers` に書かず、`headersHelper` に手順 2 のスクリプトを指定します（設定の `~/.claude.json` にはスクリプトのパスだけが入ります）。`claude mcp add` には `headersHelper` の option が無いので、`claude mcp add-json` で登録します。
 
 ```bash
 for p in rag nl2sql agent; do
