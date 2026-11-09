@@ -1,11 +1,9 @@
 import { ListChecks, Table2 } from "lucide-react";
 import {
+  AnswerBody as SharedAnswerBody,
   ChatSqlBlock,
-  cn,
-  MarkdownText,
   SqlSafetyBadge,
   ResultTable as SharedResultTable,
-  splitMarkdownTables,
   type ResultTableLabels,
   type TabularData,
   displayFileTimestamp,
@@ -129,7 +127,8 @@ export function OutputResultTable({ data, testId }: { data: TabularData; testId?
 
 /**
  * 回答の本文。Markdown の表は共通の結果の表で出し（#1158）、表以外の部分（見出し・太字・箇条書き・コードなど）は
- * 共通の Markdown の本文（`MarkdownText`。#1808）で描く。チャットと実行の詳細で同じ描き方にする。
+ * 共通の Markdown の本文（`MarkdownText`。#1808）で描く。チャットと実行の詳細で同じ描き方にする。描き方は共有の
+ * `AnswerBody`（#4734）で、ここは Agent の文言を渡す。
  */
 export function AnswerBody({
   text,
@@ -143,30 +142,17 @@ export function AnswerBody({
   className?: string;
   testId?: string;
 }) {
-  const segments = splitMarkdownTables(text);
-  // 表に 1 から番号を振る（表が 1 つなら番号を付けない）。
-  const tableNumbers = segments.map((segment, index) =>
-    segment.kind === "table" ? segments.slice(0, index + 1).filter((item) => item.kind === "table").length : 0
-  );
-  const tableCount = tableNumbers.filter((value) => value > 0).length;
   return (
-    <div className={cn("min-w-0 space-y-3", className)} data-testid={testId}>
-      {segments.map((segment, index) =>
-        segment.kind === "text" ? (
-          <MarkdownText key={index} text={segment.text} headingLevel={headingLevel} />
-        ) : (
-          <ResultTable
-            key={index}
-            data={segment.data}
-            name={
-              tableCount === 1
-                ? t("resultTable.answerName")
-                : t("resultTable.answerNameIndexed", { index: tableNumbers[index] })
-            }
-            testId={testId ? `${testId}-table-${tableNumbers[index]}` : undefined}
-          />
-        )
-      )}
-    </div>
+    <SharedAnswerBody
+      text={text}
+      headingLevel={headingLevel}
+      className={className}
+      testId={testId}
+      labels={{
+        tableName: (number) =>
+          number === null ? t("resultTable.answerName") : t("resultTable.answerNameIndexed", { index: number }),
+        table: tableLabels,
+      }}
+    />
   );
 }

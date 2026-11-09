@@ -516,3 +516,54 @@ it("旧記録の業務ガイド・小問の見出しも同じ節として読む"
   const blocks = parseAnswerText("業務ガイドの案内\n・合成の案内\n質問A：合成の小問\n・合成の説明");
   expect(blocks?.filter(block => block.kind === "section").map(block => block.title)).toEqual(["業務ガイドの案内","質問A：合成の小問"]);
 });
+
+describe("parseAnswerText の表の行（issue 4734）", () => {
+  const table = ["| 列 A | 列 B |", "| --- | --- |", "| 値 1 | 値 2 |"];
+
+  it("項目の直後の表は項目の本文の続きにする", () => {
+    const blocks = parseAnswerText(["資料により確認できた事項", "", "・項目です。", ...table, "根拠：文書 A.pdf p.3"].join("\n"));
+    expect(blocks).toEqual([
+      {
+        kind: "section",
+        title: "資料により確認できた事項",
+        ordered: false,
+        entries: [
+          {
+            kind: "item",
+            text: ["項目です。", ...table].join("\n"),
+            citations: ["根拠：文書 A.pdf p.3"],
+            citationLines: [1],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("空行を挟んだ表も項目の続きにして、後ろの根拠の行を項目に残す", () => {
+    const blocks = parseAnswerText(
+      ["資料により確認できた事項", "", "・項目です。", "", ...table, "根拠：文書 A.pdf p.3"].join("\n"),
+    );
+    expect(blocks).toEqual([
+      {
+        kind: "section",
+        title: "資料により確認できた事項",
+        ordered: false,
+        entries: [
+          {
+            kind: "item",
+            text: ["項目です。", ...table].join("\n"),
+            citations: ["根拠：文書 A.pdf p.3"],
+            citationLines: [1],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("空行の後ろが表の行でなければ、今までどおり項目の続きにしない", () => {
+    const blocks = parseAnswerText(["資料により確認できた事項", "", "・項目です。", "", "別の文です。"].join("\n"));
+    expect(blocks?.[0]).toMatchObject({
+      entries: [{ kind: "item", text: "項目です。" }, { kind: "text", text: "別の文です。" }],
+    });
+  });
+});

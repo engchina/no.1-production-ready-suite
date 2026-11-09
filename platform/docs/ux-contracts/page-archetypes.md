@@ -475,7 +475,7 @@ PageBody wide
 | 骨格（履歴のパネルとシート・会話の領域・上端の行・会話の欄・入力欄の領域）、履歴の開閉の判定、履歴の行の名前の変更・削除（`useChatHistoryActions`。その場の欄・空の名前の検証・確認のダイアログ・Toast と文言・行ごとの `canRename`。#1817・#3244）、閲覧だけの会話の入力欄の代わりの案内（`ChatReadOnlyNotice`。#3244）、1 往復の入れ物と回答の入れ物、仮の質問と失敗・再送信の表示、入力欄の行と Enter / IME の判定、自動スクロール、処理の段階（`ChatProgress`）、評価（`FeedbackControls`）、回答前の確認のカードと会話に残す表示（`ClarificationCard` / `ClarificationRecord`。[confirm-before-answer.md](./confirm-before-answer.md)。#1839） | データの取得（会話の一覧・会話・ポーリング / SSE）、送信・置き換え・停止・会話の名前の変更・削除の API、作業状態の保存（下書き・対象・会話・履歴の開閉）、対象の選択の中身、回答の本文と回答に付く操作（RAG の引用・複数モデル・類似問・確認、NL2SQL の SQL と実行、Agent のツール・承認・出典）、処理の段階の組み立て、文言 |
 
 - 共通の部品は業務の語彙を知らない。文言は翻訳済みを props で受け、会話・メッセージのデータは製品が自分の API の型から写して渡す。回答の本文は子要素（スロット）で渡す。
-- 回答の中のデータの表（SQL の実行の結果・表の形のツールの結果・回答の Markdown の表）は、3 製品とも `ResultTable`（#1154 / #1178。旧名 `ChatResultTable`）で回答の入れ物の中に出す。画面のデータの結果も同じ部品にする（上の「データの結果の型」）。JSON・Markdown から列と行を作る判定は共通の `toTabularData` / `splitMarkdownTables`（#1158）で、製品で表を組み立てない。表でない結果は製品の今の表示のまま。RAG の回答は根拠付きの文章で、列と行の結果を返さないので出さない（RAG `docs/frontend-page-archetypes-spec.md` §5。#1159）。
+- 回答の中のデータの表（SQL の実行の結果・表の形のツールの結果・回答の Markdown の表）は、3 製品とも `ResultTable`（#1154 / #1178。旧名 `ChatResultTable`）で回答の入れ物の中に出す。画面のデータの結果も同じ部品にする（上の「データの結果の型」）。JSON・Markdown から列と行を作る判定は共通の `toTabularData` / `splitMarkdownTables`（#1158）で、製品で表を組み立てない。表でない結果は製品の今の表示のまま。RAG の回答は根拠付きの文章で列と行の結果を返さないが、本文に書かれた Markdown の表と、文書の表から切り出した行の並びは同じ部品で出す（`AnswerBody`。#4734。RAG `docs/frontend-page-archetypes-spec.md` §5）。
 - 製品でチャットの骨格を書き写さない。足りない振る舞いは `packages/ui` の部品に足し、3 製品で同時に受け取る（[design-system ARCHITECTURE.md §7](../design-system/ARCHITECTURE.md)）。
 - 骨格を共通の部品へ移す作業は #1161 で、部品ごとに 3 製品をそろえて進める。移し終えるまでの実装は RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。
 

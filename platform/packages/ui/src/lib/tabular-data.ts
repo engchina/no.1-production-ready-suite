@@ -162,6 +162,15 @@ export type MarkdownTableSegment =
   | { kind: "text"; text: string }
   | { kind: "table"; data: TabularData };
 
+export interface SplitMarkdownTablesOptions {
+  /**
+   * 区切りの行の無い `| A | B |` の行の並び（両端が `|` の 2 行以上で、セルが 2 つ以上の行を含む）も表にする
+   * （#4734。文書の表から行を切り出した本文）。どの行が表頭か分からないのですべて本文の行にし、列の名前は番号に
+   * する（Markdown の表の空の表頭と同じ）。判定は行の形だけで、語を見ない。
+   */
+  headerlessRows?: boolean;
+}
+
 const FENCE = /^\s*(```|~~~)/;
 const SEPARATOR_CELL = /^\s*:?-+:?\s*$/;
 
@@ -206,12 +215,56 @@ function isTableRowLine(line: string): boolean {
   return line.trim() !== "" && line.includes("|") && !FENCE.test(line);
 }
 
+function isSeparatorLike(cells: string[]): boolean {
+  return cells.every((cell) => SEPARATOR_CELL.test(cell));
+}
+
+/** 区切りの行の無い表の行（両端が `|` の行）。区切りの形の行は表の行にしない。 */
+function isHeaderlessRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length < 2 || !trimmed.startsWith("|") || !trimmed.endsWith("|") || trimmed.endsWith("\\|")) return false;
+  return !isSeparatorLike(splitTableRow(trimmed));
+}
+
+/** `start` の行から続く区切りの行の無い表の行（表にならなければ null）。次の行が区切りの行なら、そこは Markdown の表の表頭なので含めない。 */
+function headerlessRowsAt(lines: string[], start: number): { rows: string[][]; width: number; end: number } | null {
+  const rows: string[][] = [];
+  let cursor = start;
+  while (cursor < lines.length && isHeaderlessRow(lines[cursor])) {
+    const cells = splitTableRow(lines[cursor]);
+    const next = lines[cursor + 1];
+    if (next !== undefined && isSeparatorRow(next, cells.length)) break;
+    rows.push(cells);
+    cursor += 1;
+  }
+  const width = Math.max(0, ...rows.map((row) => row.length));
+  return rows.length >= 2 && width >= 2 ? { rows, width, end: cursor } : null;
+}
+
+function tableSegment(header: string[], rows: TabularCellValue[][]): MarkdownTableSegment {
+  return {
+    kind: "table",
+    data: {
+      columns: header.map((name, cellIndex) => {
+        const column: TabularColumn = { name: name || String(cellIndex + 1) };
+        // Markdown のセルは文字列。値がすべて数（桁区切り・小数・% を含む）の列は数値の列として右寄せにする。
+        if (isNumericTextColumn(rows, cellIndex)) column.type = "number";
+        return column;
+      }),
+      rows,
+      truncated: false,
+      totalRowCount: null,
+      elapsedMs: null,
+    },
+  };
+}
+
 /**
  * 本文を Markdown の表（GFM: 表頭の行・区切りの行・本文の行）とそれ以外の文に分ける。
  * コードブロック（``` / ~~~）の中の表は表にしない。表が無ければ本文 1 つの配列を返す。
  * 表の本文の行でセルが足りない列は空の文字列（Markdown の表に NULL は無い）、多いセルは捨てる。
  */
-export function splitMarkdownTables(text: string): MarkdownTableSegment[] {
+export function splitMarkdownTables(text: string, options: SplitMarkdownTablesOptions = {}): MarkdownTableSegment[] {
   const lines = text.split("\n");
   const segments: MarkdownTableSegment[] = [];
   let buffer: string[] = [];
@@ -242,22 +295,18 @@ export function splitMarkdownTables(text: string): MarkdownTableSegment[] {
           cursor += 1;
         }
         flushText();
-        segments.push({
-          kind: "table",
-          data: {
-            columns: header.map((name, cellIndex) => {
-              const column: TabularColumn = { name: name || String(cellIndex + 1) };
-              // Markdown のセルは文字列。値がすべて数（桁区切り・小数・% を含む）の列は数値の列として右寄せにする。
-              if (isNumericTextColumn(rows, cellIndex)) column.type = "number";
-              return column;
-            }),
-            rows,
-            truncated: false,
-            totalRowCount: null,
-            elapsedMs: null,
-          },
-        });
+        segments.push(tableSegment(header, rows));
         index = cursor;
+        continue;
+      }
+    }
+    if (!inFence && options.headerlessRows) {
+      const found = headerlessRowsAt(lines, index);
+      if (found) {
+        const rows = found.rows.map((cells) => Array.from({ length: found.width }, (_, cell) => cells[cell] ?? ""));
+        flushText();
+        segments.push(tableSegment(Array.from({ length: found.width }, () => ""), rows));
+        index = found.end;
         continue;
       }
     }
@@ -266,4 +315,9 @@ export function splitMarkdownTables(text: string): MarkdownTableSegment[] {
   }
   flushText();
   return segments;
+}
+
+/** 本文に表（`splitMarkdownTables` の表）があるか。 */
+export function hasMarkdownTable(text: string, options?: SplitMarkdownTablesOptions): boolean {
+  return text.includes("|") && splitMarkdownTables(text, options).some((segment) => segment.kind === "table");
 }
