@@ -5,6 +5,7 @@
 // 部品の形（列の順の値の配列）にする変換と、会話を開き直したときの要約・「SELECT SQL を実行」への受け渡しだけ。
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
+import { parseApiDateTime } from "@production-ready/ui";
 import { t } from "../../lib/i18n";
 import { queryResultCsvFilename } from "./queryResultTable";
 import type { SqlChatExecutionSummary } from "./types";
@@ -37,7 +38,7 @@ export function lastExecutionText(
 
 /** CSV のファイル名（例: nl2sql-chat-result-20261005-140312.csv）。時刻は利用者の地域の時刻。 */
 export function chatResultCsvFilename(executedAt: string): string {
-  return queryResultCsvFilename("nl2sql-chat-result", new Date(executedAt));
+  return queryResultCsvFilename("nl2sql-chat-result", parseApiDateTime(executedAt) ?? new Date(Number.NaN));
 }
 
 /** 「SELECT SQL を実行」へ SQL を渡す履歴の state（URL には載せない）。 */

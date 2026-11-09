@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_DISPLAY_TIME_ZONE,
+  displayDateTimeFormat,
   displayDateTimeParts,
   displayFileTimestamp,
   displayTimeZone,
   formatDisplayCalendarDate,
   formatDisplayDateTime,
   isSupportedTimeZone,
+  operationTimestampMs,
+  parseApiDateTime,
   setDisplayTimeZone,
 } from "../src";
 
@@ -72,5 +75,42 @@ describe("表示の時間帯（#3265）", () => {
     setDisplayTimeZone("Asia/Tokyo");
     expect(formatDisplayCalendarDate(MOMENT, options)).toBe("2026/10/25(日)");
     expect(formatDisplayCalendarDate("2026-13-40", options)).toBe("—");
+  });
+});
+
+describe("時間帯の無い API の日時（#4753）", () => {
+  // Oracle の TIMESTAMP を印なしで返す API の形（保存は UTC）。端末の時間帯に引きずられないことを確かめる。
+  const NAIVE = "2026-11-09T14:15:57.223334";
+  const UTC_MS = Date.UTC(2026, 10, 9, 14, 15, 57, 223);
+
+  beforeEach(() => {
+    vi.stubEnv("TZ", "Asia/Tokyo");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("印の無い ISO の日時は端末の時間帯によらず UTC として読む", () => {
+    expect(parseApiDateTime(NAIVE)?.getTime()).toBe(UTC_MS);
+    expect(displayDateTimeParts(NAIVE)).toMatchObject({ day: 9, hour: 14, minute: 15, second: 57 });
+    expect(operationTimestampMs(NAIVE)).toBe(UTC_MS);
+  });
+
+  it("表示の時間帯（設定）だけで書き、端末の時間帯は見ない", () => {
+    const format = displayDateTimeFormat({ hour: "2-digit", minute: "2-digit" });
+    expect(format.format(NAIVE)).toBe("14:15");
+    expect(formatDisplayDateTime(NAIVE, { hour: "2-digit", minute: "2-digit" })).toBe("14:15");
+    setDisplayTimeZone("Asia/Tokyo");
+    expect(format.format(NAIVE)).toBe("23:15");
+  });
+
+  it("時間帯のある値・暦の日付・読めない値は変えない", () => {
+    expect(parseApiDateTime("2026-11-09T14:15:57Z")?.getTime()).toBe(Date.UTC(2026, 10, 9, 14, 15, 57));
+    expect(parseApiDateTime("2026-11-09T23:15:57+09:00")?.getTime()).toBe(Date.UTC(2026, 10, 9, 14, 15, 57));
+    expect(parseApiDateTime("2026-11-09")?.getTime()).toBe(Date.UTC(2026, 10, 9));
+    expect(parseApiDateTime("not-a-date")).toBeNull();
+    expect(parseApiDateTime("")).toBeNull();
+    expect(parseApiDateTime(null)).toBeNull();
+    expect(parseApiDateTime(undefined)).toBeNull();
   });
 });

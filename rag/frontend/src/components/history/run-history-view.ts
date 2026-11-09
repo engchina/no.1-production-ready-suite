@@ -19,6 +19,7 @@ import {
   type RunStatusLabels,
   type RunTimelineStep,
   type StatusVariant,
+  operationTimestampMs,
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
@@ -174,8 +175,8 @@ export function runSearchHref(
 }
 
 export function runStartedAt(run: Pick<RunSummary, "created_at" | "elapsed_ms">): string {
-  const finished = Date.parse(run.created_at);
-  if (run.elapsed_ms == null || !Number.isFinite(run.elapsed_ms) || Number.isNaN(finished)) return run.created_at;
+  const finished = operationTimestampMs(run.created_at);
+  if (run.elapsed_ms == null || !Number.isFinite(run.elapsed_ms) || finished === null) return run.created_at;
   return new Date(finished - run.elapsed_ms).toISOString();
 }
 

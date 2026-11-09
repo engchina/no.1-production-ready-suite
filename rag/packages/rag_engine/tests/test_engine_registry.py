@@ -29,15 +29,13 @@ class EngineRegistryTests(unittest.TestCase):
         settings = get_settings(
             dotenv_path=None,
             environ={
-                "RAG_ENGINE_ENABLED_ENGINES": "docling,dots_mocr_api,mineru_api",
+                "RAG_ENGINE_ENABLED_ENGINES": "docling,dots_mocr_api",
                 "DOTS_MOCR_BASE_URL": "http://retired.invalid/v1",
-                "MINERU_API_URL": "http://retired.invalid",
             },
         )
         self.assertEqual(list(build_adapters(settings)), ["docling"])
         self.assertFalse(hasattr(settings, "dots_mocr_base_url"))
-        self.assertFalse(hasattr(settings, "mineru_api_url"))
-        self.assertEqual(build_adapters(replace(settings, enabled_engines=["mineru_api"])), {})
+        self.assertEqual(build_adapters(replace(settings, enabled_engines=["dots_mocr_api"])), {})
 
     def test_default_settings_use_docling_only_pipeline(self):
         with (

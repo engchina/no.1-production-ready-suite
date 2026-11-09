@@ -292,8 +292,8 @@ def _two_page_table_extraction(*, continuation: str, rows: int = 0) -> Structure
     ``continuation``: carried=続きの表は表頭なし（取込が前の表の表頭を付ける）/ repeated=続きの表も
     同じ表頭を繰り返す / other_columns=続きの表の列の数が違う。``rows`` を渡すと、続きの表を
     その数の合成のデータの行にする（行のまとまりに分ける大きさ）。取込の文書全体の整理と同じ
-    ``pdf_segment_merge._table_continuation`` で続きの印を付ける（形が合わなければ解析の判定と
-    する）。
+    ``pdf_segment_merge._table_continuation`` で続きの印を付ける（other_columns は形が合わないので
+    続きの印だけを直接付ける）。
     """
     payload: dict[str, Any] = json.loads(FIXTURE.read_text(encoding="utf-8"))
     layout = payload["parser_artifacts"]["layout_records"]
@@ -323,9 +323,10 @@ def _two_page_table_extraction(*, continuation: str, rows: int = 0) -> Structure
         "text": "<table><tbody>" + "".join(continued_rows) + "</tbody></table>",
         "raw": {},
     }
-    pdf_segment_merge._table_continuation(  # noqa: SLF001 - 取込と同じ続きの印を付ける
-        table, piece, known=continuation == "other_columns"
-    )
+    if continuation == "other_columns":
+        piece["raw"] = {"continues_record_id": table["id"]}
+    else:
+        pdf_segment_merge._table_continuation(table, piece)  # noqa: SLF001 - 取込と同じ印を付ける
     layout["records"].append(piece)
     return StructuredExtraction.model_validate(payload)
 

@@ -1,8 +1,8 @@
 """RAG 評価スキーマ。"""
 
-from datetime import datetime
 from typing import Any, Literal, Self
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
@@ -947,14 +947,14 @@ class EvaluationJob(BaseModel):
     total_cases: int
     completed_cases: int
     current_case_id: str | None = None
-    current_case_started_at: datetime | None = None
+    current_case_started_at: UtcDatetime | None = None
     # job 全体の時間の上限（秒）。上限に達したら、残りのケースは実行せずに失敗として記録する。
     time_limit_seconds: int
     error_message: str | None = None
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    heartbeat_at: datetime | None = None
+    created_at: UtcDatetime
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
+    heartbeat_at: UtcDatetime | None = None
     run_result: EvaluationMetrics | None = None
     partial_result: EvaluationMetrics | None = None
     # アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。

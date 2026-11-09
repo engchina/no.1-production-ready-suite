@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
 from pr_backend_core.observability.failure_diagnosis import FailureDiagnosis
 from pr_backend_core.observability.model_usage import RunModelUsage, UsageMeasurement
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, Field
 
 from app.schemas.common import JsonValue
@@ -41,7 +41,7 @@ class RunSummary(BaseModel):
     models: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
     message_id: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
     # 見ている利用者自身が実行したか（#1954。持ち主の会話で system_admin が実行した行は、持ち主には
     # false）。
     executed_by_me: bool = False
@@ -63,7 +63,7 @@ class RunFeedback(BaseModel):
     rating: Literal["helpful", "not_helpful"]
     reason: str | None = None
     document_id: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class RunSearchConditions(BaseModel):

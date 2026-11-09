@@ -127,9 +127,6 @@ async def test_put_route_preserves_missing_and_busy_status(
     client, connection = client_for(recipe, active=active)
     monkeypatch.setattr(documents, "OracleClient", lambda: client)
     monkeypatch.setattr(documents, "_merge_document_processing_config", lambda config: None)
-    monkeypatch.setattr(
-        documents, "_raise_if_recipe_selects_mineru_without_license", lambda config: None
-    )
     with pytest.raises(HTTPException) as caught:
         await documents.update_document_recipe(
             "doc-1", _default_recipe_id(), DocumentProcessingConfigInput(vision_enabled=True)

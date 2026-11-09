@@ -3,7 +3,7 @@ import type { ParserAdapterBackend } from "@/lib/api";
 /**
  * 文書解析エンジンの並びの正本（#3359）。文書解析の画面の使用エンジンのカードと、処理レシピの
  * 「文書解析」の選択肢が同じ順にする。CPU（Docling・Unstructured・構造化レコード JSONL・
- * XML ツリー JSON）→ 外部 GPU（Dots.OCR・MinerU）→ OCI（OCI Document Understanding）。
+ * XML ツリー JSON）→ 外部 GPU（Dots.OCR）→ OCI（OCI Document Understanding）。
  * サービス管理の工程の中の節も CPU → GPU → OCI（`SERVICE_PROFILE_ORDER`）。
  */
 export const PARSER_BACKEND_ORDER = [
@@ -12,7 +12,6 @@ export const PARSER_BACKEND_ORDER = [
   "structured_records_jsonl",
   "xml_tree_json",
   "dots_ocr",
-  "mineru",
   "oci_document_understanding",
 ] as const satisfies readonly ParserAdapterBackend[];
 

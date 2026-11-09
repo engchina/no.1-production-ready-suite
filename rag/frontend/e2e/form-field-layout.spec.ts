@@ -121,7 +121,7 @@ function mockChunking(strategy: string) {
 // ---- 文書解析（外部の解析の接続・章節の抽出規則・抽出する項目） ----
 
 function parserAdapter(backend: string, selected: boolean) {
-  const external = backend === "mineru" || backend === "dots_ocr";
+  const external = backend === "dots_ocr";
   return {
     backend,
     package_name: external ? "external_api" : backend,
@@ -150,19 +150,10 @@ async function mockParserAdapters(page: Page) {
         adapters: [
           parserAdapter("docling", true),
           parserAdapter("unstructured", false),
-          parserAdapter("mineru", false),
           parserAdapter("dots_ocr", false),
         ],
         source_routes: [],
         connections: [
-          {
-            backend: "mineru",
-            protocol: "mineru_v1",
-            endpoint: "",
-            model: null,
-            api_key_configured: false,
-            configured: false,
-          },
           {
             backend: "dots_ocr",
             protocol: "openai_chat_completions",
@@ -371,7 +362,6 @@ const PROCESSING_NULLS = {
   parser_adapter_backend: null,
   parser_docling_enabled: null,
   parser_unstructured_enabled: null,
-  parser_mineru_enabled: null,
   parser_dots_ocr_enabled: null,
   chunking_strategy: null,
   chunk_size: null,

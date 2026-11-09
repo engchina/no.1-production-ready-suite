@@ -1,3 +1,4 @@
+import { operationTimestampMs } from "@production-ready/ui";
 import type {
   QualityEvaluationEngine,
   QualityEvaluationEngineCapability,
@@ -64,9 +65,7 @@ export function qualityEvaluationPollingInterval(status?: QualityEvaluationStatu
 }
 
 function timestampMillis(value?: string | null): number | null {
-  if (!value) return null;
-  const millis = Date.parse(value);
-  return Number.isNaN(millis) ? null : millis;
+  return operationTimestampMs(value);
 }
 
 export function qualityEvaluationLastHeartbeatMs(

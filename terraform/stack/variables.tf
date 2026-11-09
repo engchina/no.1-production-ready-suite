@@ -717,7 +717,7 @@ variable "rag_enable_oci_cloud_parsers" {
   default     = false
 }
 
-# GPU の parser（MinerU / Dots.OCR）はこの stack に含めない。
+# GPU の parser（Dots.OCR）はこの stack に含めない。
 # RAG はこれらを外部 API として「文書解析」設定の API host で指定する。
 
 # ---------------------------------------------------------------- NL2SQL
