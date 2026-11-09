@@ -1,13 +1,15 @@
 """RAG system schema の status / check / initialize / recreate / delete-orphans CLI。
 
 `check` は配備の最後の確認（platform/deploy/suite-health.sh。#1648）が使う。DDL を実行せずに
-状態を読み、ready なら 0、そうでなければ（読めないときも）1 で終わり、1 行の要約を標準出力に
-出す。
+状態と、今の公開版・下書きの言語資源が現行の保存契約に合うか（#4695）を読み、ready で合っていれば
+0、そうでなければ（読めないときも）1 で終わり、1 行の要約を標準出力に出す。項目の名前だけを出し、
+言語資源の値は出さない。自動では直さない。
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from collections.abc import Mapping, Sequence
@@ -20,12 +22,19 @@ from pr_system_settings.system_schema import (
     operation_failure_fields,
 )
 
+from app.rag.language_pack_contract import LanguagePackSnapshotError
+from app.rag.language_pack_repair import inspect_language_pack_contract
 from app.rag.request_context import with_system_access
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     RECREATE_CONFIRMATION,
     SystemSchemaError,
     system_schema_manager,
+)
+
+_LANGUAGE_PACK_REPAIR_GUIDE = (
+    "修復は backend で .venv/bin/python -m app.rag.language_pack_repair_cli の dry-run から"
+    "（rag/docs/language-pack-current-contract.md「不適合の現在版からの修復（#4697）」）"
 )
 
 
@@ -35,7 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="DDL を実行せず現在状態を表示します。")
     subparsers.add_parser(
         "check",
-        help="DDL を実行せず、ready なら 0、そうでなければ 1 で終わります（配備の確認）。",
+        help=(
+            "DDL を実行せず、ready で言語資源が現行の契約に合えば 0、そうでなければ 1 で終わります"
+            "（配備の確認）。"
+        ),
     )
     initialize = subparsers.add_parser("initialize", help="不足 object を作成・更新します。")
     # データを消す未適用の migration（status の pending_destructive_migrations）は、
@@ -141,11 +153,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _check() -> int:
     try:
         ok, summary = deployment_check_summary(system_schema_manager.status())
+        # schema が ready でないときは言語資源の表を読めるとは限らない。schema の要約を先に直す。
+        language_pack_problem = _language_pack_contract_problem() if ok else None
     except Exception as exc:
         print(deployment_check_error_summary(exc, connect_kwargs=_connect_kwargs))
         return 1
+    if language_pack_problem:
+        print(f"{summary}・{language_pack_problem}")
+        return 1
     print(summary)
     return 0 if ok else 1
+
+
+def _language_pack_contract_problem() -> str | None:
+    """今の公開版と下書きが現行の契約に合わないときの、値を含まない 1 行の説明を返す。"""
+    from app.clients.oracle import OracleClient
+
+    try:
+        issues = asyncio.run(inspect_language_pack_contract(OracleClient()))
+    except LanguagePackSnapshotError as exc:
+        return f"{exc}{_LANGUAGE_PACK_REPAIR_GUIDE}"
+    if issues is None:
+        return None
+    details = "／".join(
+        f"{label} {len(names)} 件: {', '.join(names)}"
+        for label, names in (("公開版", issues.current), ("下書き", issues.draft))
+        if names
+    )
+    return f"言語資源が現行の契約に合いません（{details}）。{_LANGUAGE_PACK_REPAIR_GUIDE}"
 
 
 def _connect_kwargs() -> Mapping[str, object]:

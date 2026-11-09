@@ -68,6 +68,8 @@ export interface AnswerSectionEntry {
    * （製品の決まった説明の文など、画面の言語で描く文）。
    */
   lang?: string | null;
+  /** `content` が表などのブロックを含む（`lang` の入れ物を行内の要素にしない。#4734）。 */
+  block?: boolean;
 }
 
 export type AnswerSectionsBlock =
@@ -259,9 +261,16 @@ function partLang(lang: string | null | undefined, answerLang: string | undefine
   return resolveContentLang(lang, null);
 }
 
-/** 利用者の内容だけを包む行内の要素（言語が無ければ包まない）。 */
-function ContentLang({ lang, children }: { lang: string | undefined; children: ReactNode }) {
-  return lang ? <span lang={lang}>{children}</span> : <>{children}</>;
+/** 利用者の内容だけを包む要素（言語が無ければ包まない。表などのブロックを含むなら `block` で div にする）。 */
+function ContentLang({ lang, block, children }: { lang: string | undefined; block?: boolean; children: ReactNode }) {
+  if (!lang) return <>{children}</>;
+  return block ? (
+    <div className="min-w-0" lang={lang}>
+      {children}
+    </div>
+  ) : (
+    <span lang={lang}>{children}</span>
+  );
 }
 
 /** 回答の本文の節（段落・見出しつきの箇条書き・各項目の根拠の行）。 */
@@ -399,13 +408,17 @@ function renderEntry(entry: AnswerSectionEntry, entryLang: string | undefined) {
   if (entry.muted) {
     return (
       <li key={entry.key} className="list-none whitespace-pre-wrap text-fg-muted">
-        <ContentLang lang={entryLang}>{entry.content}</ContentLang>
+        <ContentLang lang={entryLang} block={entry.block}>
+          {entry.content}
+        </ContentLang>
       </li>
     );
   }
   return (
     <li key={entry.key} className="whitespace-pre-wrap">
-      <ContentLang lang={entryLang}>{entry.content}</ContentLang>
+      <ContentLang lang={entryLang} block={entry.block}>
+        {entry.content}
+      </ContentLang>
       {entry.citations?.length ? <AnswerCitationLinks citations={entry.citations} /> : null}
       {entry.extra}
     </li>

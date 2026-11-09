@@ -69,6 +69,7 @@ MENU_SETTINGS_PIPELINE = "menu.settings_pipeline"
 MENU_SETTINGS_PREPROCESS = "menu.settings_preprocess"
 MENU_SETTINGS_PARSER_ADAPTERS = "menu.settings_parser_adapters"
 MENU_SETTINGS_CHUNKING = "menu.settings_chunking"
+MENU_SETTINGS_FILE_TYPE_DEFAULTS = "menu.settings_file_type_defaults"
 # 言語資源(文書と質問を読むときの言語の書き方。#2181)。
 MENU_SETTINGS_LANGUAGE_PACK = "menu.settings_language_pack"
 MENU_SETTINGS_VECTOR_INDEX = "menu.settings_vector_index"
@@ -141,6 +142,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
     _menu_permission(MENU_SETTINGS_CHUNKING, _GROUP_PIPELINE, "文書分割"),
+    _menu_permission(MENU_SETTINGS_FILE_TYPE_DEFAULTS, _GROUP_PIPELINE, "形式別の既定"),
     _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
     _menu_permission(MENU_SETTINGS_ENTITY_INDEX, _GROUP_PIPELINE, "実体・別名索引"),
     _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "文書構造索引"),
@@ -697,6 +699,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
     ("GET", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
     ("PATCH", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
+    ("GET", "/settings/file-type-defaults"): _any(MENU_SETTINGS_FILE_TYPE_DEFAULTS),
+    ("PATCH", "/settings/file-type-defaults"): _any(MENU_SETTINGS_FILE_TYPE_DEFAULTS),
     # 検索・回答プロファイルの言語資源の上書きの欄も、全体の値を読む（#2181）。
     ("GET", "/settings/language-pack"): _any(
         MENU_SETTINGS_LANGUAGE_PACK, SEARCH_ANSWER_PROFILES_MANAGE

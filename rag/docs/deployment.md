@@ -7,7 +7,7 @@
 | ファイル | 内容 | 変数名 |
 |---|---|---|
 | `platform/.env`（雛形 `platform/.env.example`） | 3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース）。システム設定画面の保存先。`model-settings.json` も同じディレクトリに置き、3製品で共有する | `PLATFORM_*` |
-| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など）。「文書解析」画面で保存した解析エンジンと接続は同じディレクトリの `parser-settings.json`（`RAG_PARSER_SETTINGS_FILE`。#1701）に置き、共有の `model-settings.json` には書かない | `RAG_*` |
+| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など）。「文書解析」画面で保存した解析エンジンと接続は同じディレクトリの `parser-settings.json`（`RAG_PARSER_SETTINGS_FILE`。#1701）に、「形式別の既定」画面の保存値は `file-type-defaults.json`（`RAG_FILE_TYPE_DEFAULTS_FILE`。#4732）に置き、共有の `model-settings.json` には書かない | `RAG_*` |
 
 backend は 環境変数 → `platform/.env` → `backend/.env` の順に読む（環境変数が最優先）。共通 `.env` の場所は
 `PLATFORM_ENV_FILE` で上書きできる（既定はリポジトリの `platform/.env`）。旧名（接頭辞のない名前や `HF_TOKEN` /
@@ -445,6 +445,8 @@ uv run python -m rag_engine.knowledge.answer_migration /path/to/answer.json --ap
    ```
 
 `init_script.sh` は承認を付けずに `initialize` を実行する。データを削除する migration が未適用なら、WARNING を出して配備を続ける（backend は起動する）ので、上の手順で書き出してから適用する。
+
+データを削除する migration を当てた DB では、消した表・列を読む前の commit へコードだけを戻すことはできない。配備の後の確認が言語資源の不適合で NG になったときも、コードを戻さず [修復の手順](./language-pack-current-contract.md) で直す。
 
 ### 書き出す前に消えたデータを、DB のバックアップから取り出す
 
@@ -1059,7 +1061,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - 問題が無ければ Docker の資源を消してよい（任意）: `docker volume ls -q | grep '^production-ready-rag_'`、
   `docker images --format '{{.Repository}}' | grep '^production-ready-rag-'` を確認して削除し、Docker 自体が不要なら
   `sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` で外す。
-- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`・`backend/parser-settings.json`）は host のファイルなので、そのまま引き継がれる。
+- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`・`backend/parser-settings.json`・`backend/file-type-defaults.json`）は host のファイルなので、そのまま引き継がれる。
 
 ### ローカル（Docker Compose で前処理 / parser を動かしていた環境）
 

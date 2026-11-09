@@ -380,6 +380,13 @@ describe("resolveCitationLine", () => {
     });
   });
 
+  it("候補が 1 件でも、親の範囲の参照なので位置は未確定のままにする", () => {
+    const citations = [located("only", { answer_citation_candidate_lines: [1] }), located("other", {})];
+    expect(resolveCitationLineTargets(1, ref, citations)).toEqual([
+      { index: 0, position: { kind: "unresolved", reason: "candidates", candidates: [0] } },
+    ]);
+  });
+
   it("以前の回答の番号（確定の印が無い）は、記録の対応のまま開き、同じ頁に別の箇所があれば未確定にする", () => {
     const legacy = [located("H", { answer_citation_lines: [1] }), located("F", {})];
     expect(resolveCitationLine(1, ref, legacy)).toEqual({
@@ -515,4 +522,55 @@ describe("推導結論の節", () => {
 it("旧記録の業務ガイド・小問の見出しも同じ節として読む", () => {
   const blocks = parseAnswerText("業務ガイドの案内\n・合成の案内\n質問A：合成の小問\n・合成の説明");
   expect(blocks?.filter(block => block.kind === "section").map(block => block.title)).toEqual(["業務ガイドの案内","質問A：合成の小問"]);
+});
+
+describe("parseAnswerText の表の行（issue 4734）", () => {
+  const table = ["| 列 A | 列 B |", "| --- | --- |", "| 値 1 | 値 2 |"];
+
+  it("項目の直後の表は項目の本文の続きにする", () => {
+    const blocks = parseAnswerText(["資料により確認できた事項", "", "・項目です。", ...table, "根拠：文書 A.pdf p.3"].join("\n"));
+    expect(blocks).toEqual([
+      {
+        kind: "section",
+        title: "資料により確認できた事項",
+        ordered: false,
+        entries: [
+          {
+            kind: "item",
+            text: ["項目です。", ...table].join("\n"),
+            citations: ["根拠：文書 A.pdf p.3"],
+            citationLines: [1],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("空行を挟んだ表も項目の続きにして、後ろの根拠の行を項目に残す", () => {
+    const blocks = parseAnswerText(
+      ["資料により確認できた事項", "", "・項目です。", "", ...table, "根拠：文書 A.pdf p.3"].join("\n"),
+    );
+    expect(blocks).toEqual([
+      {
+        kind: "section",
+        title: "資料により確認できた事項",
+        ordered: false,
+        entries: [
+          {
+            kind: "item",
+            text: ["項目です。", ...table].join("\n"),
+            citations: ["根拠：文書 A.pdf p.3"],
+            citationLines: [1],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("空行の後ろが表の行でなければ、今までどおり項目の続きにしない", () => {
+    const blocks = parseAnswerText(["資料により確認できた事項", "", "・項目です。", "", "別の文です。"].join("\n"));
+    expect(blocks?.[0]).toMatchObject({
+      entries: [{ kind: "item", text: "項目です。" }, { kind: "text", text: "別の文です。" }],
+    });
+  });
 });

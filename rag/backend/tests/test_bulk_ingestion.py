@@ -144,7 +144,8 @@ class FakeBulkStore:
         ]
 
 
-def _resolve(config: DocumentProcessingConfig) -> Settings:
+def _resolve(config: DocumentProcessingConfig, file_type: object = None) -> Settings:
+    _ = file_type
     return documents_route._merge_document_processing_config(config)[0]
 
 

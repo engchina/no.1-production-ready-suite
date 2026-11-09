@@ -383,3 +383,18 @@ def test_fixed_size_offsets_follow_trimmed_window_text() -> None:
     assert chunks[1].text == "efgh"
     assert (chunks[1].start_offset, chunks[1].end_offset) == (5, 9)
     assert all(source[chunk.start_offset : chunk.end_offset] == chunk.text for chunk in chunks)
+
+
+@pytest.mark.parametrize("strategy", ["recursive_character", "markdown_heading"])
+def test_text_section_split_does_not_read_numbered_sentence_as_heading(strategy: str) -> None:
+    """本文の文字列から章節を作る分割も、文末の記号で終わる番号付きの行を見出しにしない(#4742)。"""
+    extraction = StructuredExtraction(
+        raw_text="1.1 合成の手順を確認する。\n続く本文。\n1.2 概要\n本文 B。"
+    )
+
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=200, overlap=0
+    )
+
+    assert "section_path" not in chunks[0].metadata
+    assert chunks[-1].metadata["section_path"] == "1.2 概要"

@@ -2859,6 +2859,9 @@ class OracleClient:
                 NVL(cs.chunk_count, 0) AS chunk_count,
                 NVL(cs.vector_count, 0) AS vector_count,
                 cs.status AS chunk_set_status,
+                cs.recipe_subset AS active_recipe_subset,
+                d.file_name AS document_file_name,
+                d.content_type AS document_content_type,
                 (
                     SELECT p.chunk_set_id FROM rag_chunk_sets p
                     WHERE p.recipe_id = r.recipe_id AND p.status = 'CHUNKED' AND p.is_active = 0
@@ -2896,6 +2899,9 @@ class OracleClient:
                 NVL(cs.chunk_count, 0) AS chunk_count,
                 NVL(cs.vector_count, 0) AS vector_count,
                 cs.status AS chunk_set_status,
+                cs.recipe_subset AS active_recipe_subset,
+                d.file_name AS document_file_name,
+                d.content_type AS document_content_type,
                 (
                     SELECT p.chunk_set_id FROM rag_chunk_sets p
                     WHERE p.recipe_id = r.recipe_id AND p.status = 'CHUNKED' AND p.is_active = 0
@@ -16872,6 +16878,9 @@ def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
         "chunk_count": _int_value(normalized.get("chunk_count")),
         "vector_count": _int_value(normalized.get("vector_count")),
         "chunk_set_status": _optional_str(normalized.get("chunk_set_status")),
+        "active_recipe_subset": _json_loads(normalized.get("active_recipe_subset")) or None,
+        "document_file_name": _optional_str(normalized.get("document_file_name")),
+        "document_content_type": _optional_str(normalized.get("document_content_type")),
         "pending_chunk_set_id": _optional_str(normalized.get("pending_chunk_set_id")),
         "config_revision": max(1, _int_value(normalized.get("config_revision")) or 1),
         "materialized_revision": _optional_int(normalized.get("materialized_revision")),
