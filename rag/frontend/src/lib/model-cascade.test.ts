@@ -10,7 +10,7 @@ describe("モデルのカスケードの記録（Issue 4581）", () => {
         primary_model: "model-light",
         escalation_model: "model-strong",
         escalated: true,
-        reasons: ["citation_mismatch", "conclusion_withheld"],
+        reasons: ["structured_output_invalid"],
         stage: "answer.generate",
       },
     });
@@ -18,12 +18,12 @@ describe("モデルのカスケードの記録（Issue 4581）", () => {
       primaryModel: "model-light",
       escalationModel: "model-strong",
       escalated: true,
-      reasons: ["citation_mismatch", "conclusion_withheld"],
+      reasons: ["structured_output_invalid"],
     });
     expect(answerModelCascadeView(data?.modelCascade)).toEqual({
       escalated: true,
-      line: "最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました",
-      reasons: "引用の ID・原文が資料と一致しなかった、要約・結論を確かめられず保留した",
+      line: "最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました",
+      reasons: "生成の出力が形式の検査を通らなかった",
     });
   });
 

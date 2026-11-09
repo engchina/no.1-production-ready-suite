@@ -1444,7 +1444,7 @@ class Settings(
             "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
         ),
     )
-    # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
+    # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成)だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
     rag_history_rewrite_enabled: bool = Field(
         default=True,
@@ -1752,7 +1752,6 @@ class Settings(
         default="model",
         description=(
             "回答文の生成の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
-            "監査は RAG_AUDIT_REASONING_EFFORT(#1528)。"
         ),
     )
     rag_crag_compact_input: bool = Field(

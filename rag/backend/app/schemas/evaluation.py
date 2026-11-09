@@ -126,8 +126,6 @@ EvaluationFailureReason = Literal[
     "screen_missing",
     # 案内すべき画面のほかの画面を回答が案内した（#2402）。
     "wrong_screen",
-    # 回答の監査が、回答は質問の目的に答えていない（goal_alignment=off_target）と判定した（#2402）。
-    "off_target",
     # 回答文の生成の出力が検査を通らず、参考情報へ退避した（#4104）。case_error とは別に数える。
     "answer_generation_fallback",
     "case_error",
@@ -817,7 +815,7 @@ class EvaluationRagOverrides(BaseModel):
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
-    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成・監査の推論の量、
+    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成の推論の量、
     # 質問拡張の検索文の上限を比べる。
     strategy_reasoning_effort: ReasoningEffortOverride | None = None
     judge_reasoning_effort: ReasoningEffortOverride | None = None

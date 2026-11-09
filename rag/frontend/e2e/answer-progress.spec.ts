@@ -233,8 +233,6 @@ const retrievalOnlySearchStream: TimedChunk[] = [
       retrievalSearch.start("rerank", ragSpan.step("Rerank", "search")),
       retrievalSearch.finish("rerank"),
       retrievalSearch.finish("search"),
-      retrievalSearch.start("coverage", ragSpan.step("要求ごとの根拠の確認", "flow")),
-      retrievalSearch.finish("coverage"),
       retrievalSearch.finish("flow"),
       retrievalSearch.finish("evidence"),
       retrievalSearch.finish("root"),
@@ -555,7 +553,6 @@ for (const viewport of [
       ["flow", "回答に使う根拠を検索する", "1"],
       ["search", "検索文から根拠の候補を集める", "2"],
       ["rerank", "質問との関連度で候補を並べ替える", "3"],
-      ["coverage", "要求ごとに根拠の対応を確認する", "2"],
     ] as const) {
       const row = page.getByTestId(`search-run-progress-step-${spanStepId(key)}`);
       await expect(row).toBeVisible();

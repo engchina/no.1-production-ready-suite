@@ -6,10 +6,6 @@ import pytest
 
 from pr_backend_core.model_cascade import (
     ESCALATION_SIGNALS,
-    SIGNAL_ARITHMETIC_MISMATCH,
-    SIGNAL_AUDIT_CONTRADICTED,
-    SIGNAL_CITATION_MISMATCH,
-    SIGNAL_CONCLUSION_WITHHELD,
     SIGNAL_STRUCTURED_OUTPUT_INVALID,
     cascade_record,
     decide_escalation,
@@ -69,34 +65,28 @@ def test_non_signals_do_not_escalate(signal: str) -> None:
 def test_no_cascade_never_escalates() -> None:
     cascade = resolve_model_cascade("model-a", "")
     assert not decide_escalation(
-        [SIGNAL_CITATION_MISMATCH], cascade=cascade, escalated=False
+        [SIGNAL_STRUCTURED_OUTPUT_INVALID], cascade=cascade, escalated=False
     ).escalate
 
 
-def test_reasons_are_ordered_and_unique() -> None:
+def test_reasons_keep_only_escalation_signals_and_are_unique() -> None:
     cascade = resolve_model_cascade("model-a", "model-b")
     decision = decide_escalation(
         [
-            SIGNAL_AUDIT_CONTRADICTED,
-            SIGNAL_CITATION_MISMATCH,
             "needs_clarification",
-            SIGNAL_CITATION_MISMATCH,
+            SIGNAL_STRUCTURED_OUTPUT_INVALID,
             SIGNAL_STRUCTURED_OUTPUT_INVALID,
         ],
         cascade=cascade,
         escalated=False,
     )
-    assert decision.reasons == (
-        SIGNAL_STRUCTURED_OUTPUT_INVALID,
-        SIGNAL_CITATION_MISMATCH,
-        SIGNAL_AUDIT_CONTRADICTED,
-    )
+    assert decision.reasons == (SIGNAL_STRUCTURED_OUTPUT_INVALID,)
 
 
 def test_cascade_record() -> None:
     cascade = resolve_model_cascade("model-a", "model-b")
     assert cascade_record(resolve_model_cascade("model-a", ""), escalated=False) == {}
-    assert cascade_record(cascade, escalated=False, reasons=[SIGNAL_ARITHMETIC_MISMATCH]) == {
+    assert cascade_record(cascade, escalated=False, reasons=[SIGNAL_STRUCTURED_OUTPUT_INVALID]) == {
         "primary_model": "model-a",
         "escalation_model": "model-b",
         "escalated": False,
@@ -105,12 +95,12 @@ def test_cascade_record() -> None:
     assert cascade_record(
         cascade,
         escalated=True,
-        reasons=[SIGNAL_CONCLUSION_WITHHELD, "needs_human"],
+        reasons=[SIGNAL_STRUCTURED_OUTPUT_INVALID, "needs_human"],
         stage="answer.generate",
     ) == {
         "primary_model": "model-a",
         "escalation_model": "model-b",
         "escalated": True,
-        "reasons": [SIGNAL_CONCLUSION_WITHHELD],
+        "reasons": [SIGNAL_STRUCTURED_OUTPUT_INVALID],
         "stage": "answer.generate",
     }

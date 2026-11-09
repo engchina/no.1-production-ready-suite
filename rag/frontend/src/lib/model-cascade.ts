@@ -8,10 +8,6 @@ import { t, type I18nKey } from "@/lib/i18n";
 
 const REASONS = [
   "structured_output_invalid",
-  "citation_mismatch",
-  "arithmetic_mismatch",
-  "conclusion_withheld",
-  "audit_contradicted",
 ] as const;
 
 /** 回答の記録のカスケードの表示。カスケードしない実行・古い記録は null。 */

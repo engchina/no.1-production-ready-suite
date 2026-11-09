@@ -380,6 +380,13 @@ describe("resolveCitationLine", () => {
     });
   });
 
+  it("候補が 1 件でも、親の範囲の参照なので位置は未確定のままにする", () => {
+    const citations = [located("only", { answer_citation_candidate_lines: [1] }), located("other", {})];
+    expect(resolveCitationLineTargets(1, ref, citations)).toEqual([
+      { index: 0, position: { kind: "unresolved", reason: "candidates", candidates: [0] } },
+    ]);
+  });
+
   it("以前の回答の番号（確定の印が無い）は、記録の対応のまま開き、同じ頁に別の箇所があれば未確定にする", () => {
     const legacy = [located("H", { answer_citation_lines: [1] }), located("F", {})];
     expect(resolveCitationLine(1, ref, legacy)).toEqual({

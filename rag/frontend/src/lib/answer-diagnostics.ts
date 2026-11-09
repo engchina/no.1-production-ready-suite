@@ -99,7 +99,7 @@ export type AnswerDiagnostics = {
    */
   graphExpansion: { addedCount: number; status: string; graphAvailable: boolean | null; plannedCount: number; skippedExistingCount: number; entities: { name: string; addedCount: number }[] } | null;
   /**
-   * 使ったモデル（#649）。LLM（選んだ回答モデル）は質問の理解・拡張・回答の生成・監査のすべてに使う（#3444）。
+   * 使ったモデル（#649）。LLM（選んだ回答モデル）は質問の理解・拡張・回答の生成のすべてに使う（#3444）。
    * attachedImages はそのモデルへ添付した根拠の画像の件数（画像を読めないモデル・画像の無い根拠は 0）、rerank は
    * 無効なら空。
    */
@@ -108,6 +108,8 @@ export type AnswerDiagnostics = {
   modelCascade: ModelCascadeRecord | null;
   /** 失敗して省いた補助の工程の、利用者向けの名前（#4681）。縮退が無ければ空。 */
   degradedSteps: string[];
+  /** 検索の件数（基準で絞り込む前の候補・基準を通過・回答に使用。#4735）。項目の無い記録は null（行を出さない）。 */
+  retrievalCounts: { candidates: number; found: number; used: number } | null;
   steps: {
     name: string;
     status: string;
@@ -145,6 +147,14 @@ function list(value: unknown): unknown[] {
 
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseRetrievalCounts(value: unknown): AnswerDiagnostics["retrievalCounts"] {
+  const raw = record(value);
+  const candidates = num(raw.candidate_count);
+  const found = num(raw.found);
+  const used = num(raw.passed_to_model);
+  return candidates === null || found === null || used === null ? null : { candidates, found, used };
 }
 
 /**
@@ -227,6 +237,7 @@ export function parseAnswerDiagnostics(
     models: parseModels(raw.models),
     modelCascade: parseModelCascade(raw.model_cascade),
     degradedSteps: parseDegradedSteps(raw.degraded_steps),
+    retrievalCounts: parseRetrievalCounts(raw.retrieval_counts),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
       const details = parseRunStepDetails(item.details);

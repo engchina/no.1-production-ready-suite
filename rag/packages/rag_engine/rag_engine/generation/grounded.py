@@ -1173,6 +1173,29 @@ def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
     return clean_evidence_locators(text, codes=_document_evidence_codes(spans)).text
 
 
+def _without_evidence_labels(draft: GroundedDraft, question: str, spans: Sequence[dict]) -> GroundedDraft:
+    """確認の項目・別の資料・当てはめの前提の表示の文から、根拠の表示 ID を除く（#4752）。
+
+    資料の本文と質問にある同じ字のコードは残す。ID を除いて何も残らない項目は、案内する内容が無いので外す。
+    """
+    sources = [*spans, {"text": question}]
+
+    def cleaned(values: Sequence[str]) -> list[str]:
+        return [text for value in values if (text := _clean_evidence_labels(value, sources))]
+
+    external_items = [
+        item.model_copy(update={"text": text}) for item in draft.external_data_items if (text := _clean_evidence_labels(item.text, sources))
+    ]
+    applications = [application.model_copy(update={"premises": cleaned(application.premises)}) for application in draft.applications]
+    return draft.model_copy(
+        update={
+            "reference_materials": cleaned(draft.reference_materials),
+            "external_data_items": external_items,
+            "applications": applications,
+        }
+    )
+
+
 def _document_evidence_codes(spans: Sequence[dict]) -> set[str]:
     """資料のコードを、モデルが読む文字の形にそろえて取り出す。"""
     return set(EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
@@ -3015,6 +3038,7 @@ def run_round(
 
     draft = format_draft_numbers(question, draft, spans)
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
+    draft = _without_evidence_labels(draft, question, spans)
     # 推導の文の、送った根拠の表示 ID は出典の名前にする（#4626）。
     draft = with_application_sources(draft, unit_catalog)
     timing: dict[str, Any] = {

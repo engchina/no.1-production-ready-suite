@@ -3,7 +3,7 @@
 rag_poc はプロンプトをファイル(`prompts/<key>.txt`)へ保存したが、rag では DB
 (`rag_answer_prompts`)に保存し、rag_engine の runtime の ``prompt_overrides`` で渡す。
 回答生成・文書解析・文書分割の編集可能な指示は、それぞれの設定画面で管理する。
-検索・回答・監査・評価の自然言語の指示も編集でき、応答の型はコードで管理する。
+検索・回答・評価の自然言語の指示も編集でき、応答の型はコードで管理する。
 """
 
 from __future__ import annotations
