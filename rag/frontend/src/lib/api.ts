@@ -1003,7 +1003,7 @@ export interface DocumentChunkPreviewRequest {
   chunk_size?: number;
   chunk_overlap?: number;
   chunk_min_chars?: number;
-  chunk_delimiter?: string;
+  chunk_delimiter?: string[];
   chunk_child_target_chars?: number;
   chunk_table_child_target_chars?: number;
   chunk_parent_target_chars?: number;
@@ -1148,8 +1148,8 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_size: number | null;
   chunk_overlap: number | null;
   chunk_min_chars: number | null;
-  /** 固定分割の分割符（escape 表現。#2457）。null は全体の既定に従う。 */
-  chunk_delimiter?: string | null;
+  /** 固定分割の分割符（優先度順。escape 表現。#2457）。null は全体の既定に従う。 */
+  chunk_delimiter?: string[] | null;
   /** 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。 */
   chunk_child_target_chars?: number | null;
   chunk_table_child_target_chars?: number | null;
@@ -2971,7 +2971,7 @@ export interface ChunkingSettingsData {
   chunk_size: number;
   overlap: number;
   min_chars: number;
-  delimiter: string;
+  delimiter: string[];
   context_header_enabled: boolean;
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   chunk_child_target_chars: number;
@@ -2988,7 +2988,7 @@ export interface ChunkingSettingsUpdate {
   chunk_size: number;
   overlap: number;
   min_chars: number;
-  delimiter: string;
+  delimiter: string[];
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   chunk_child_target_chars: number;
   chunk_table_child_target_chars: number;

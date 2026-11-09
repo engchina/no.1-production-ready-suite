@@ -237,7 +237,7 @@ def file_type_default_overrides(settings: Settings, file_type: FileType) -> dict
         entry.preprocess_profile in STRUCTURED_RECORDS_PREPROCESS
         and entry.chunking_strategy == "fixed_delimiter"
     ):
-        values["chunk_delimiter"] = JSONL_RECORD_BOUNDARY
+        values["chunk_delimiter"] = [JSONL_RECORD_BOUNDARY]
     return values
 
 

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronsDown, ChevronUp, X } from "lucide-react";
+import { Check, ChevronDown, ChevronsDown, ChevronUp, Plus, X } from "lucide-react";
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -194,6 +194,8 @@ export interface SearchableMultiSelectProps {
   onQueryChange?: (query: string) => void;
   /** サーバー側で検索するとき（#578）。渡さなければ `options` を画面側で絞り込む。 */
   remote?: SearchableSelectRemote;
+  /** 候補に無い検索語を値として足せるようにする（画面側で絞り込むときだけ）。足した値は選択の末尾に入る。 */
+  creatable?: boolean;
   disabled?: boolean;
   labels?: Partial<SearchableMultiSelectLabels>;
   /**
@@ -232,6 +234,7 @@ export function SearchableMultiSelect({
   selectedOptions,
   onQueryChange,
   remote,
+  creatable = false,
   disabled = false,
   labels: labelOverrides,
   width,
@@ -283,6 +286,13 @@ export function SearchableMultiSelect({
       selectedOptions?.find((option) => option.value === current) ??
       options.find((option) => option.value === current) ?? { value: current, label: current }
   );
+
+  const canCreate =
+    creatable &&
+    !remote &&
+    Boolean(query) &&
+    !selected.has(query) &&
+    !options.some((option) => option.value === query);
 
   const countText = remote
     ? labels.count(options.length, remote.total)
@@ -371,6 +381,14 @@ export function SearchableMultiSelect({
     );
   }
 
+  function createFromQuery() {
+    if (disabled || !canCreate) return;
+    onValueChange([...value, query]);
+    setQuery("");
+    setActiveIndex(0);
+    inputRef.current?.focus();
+  }
+
   function selectAllVisible() {
     const next = [...value];
     for (const option of visible) if (!selected.has(option.value)) next.push(option.value);
@@ -404,7 +422,15 @@ export function SearchableMultiSelect({
         if (open) moveActive(-1);
         return;
       case "Enter": {
-        if (!open || active < 0 || searching) return;
+        if (!open || searching) return;
+        // 確定前の検索語では古い候補を選ばない（この Enter で SearchField が確定する）。
+        if (creatable && draft.trim() !== query) return;
+        if (active < 0 && canCreate) {
+          event.preventDefault();
+          createFromQuery();
+          return;
+        }
+        if (active < 0) return;
         const option = visible[active];
         if (!option) return;
         // SearchField の Enter（検索語の確定）とフォームの送信をさせない。
@@ -583,6 +609,22 @@ export function SearchableMultiSelect({
               {query ? labels.noMatch(query) : labels.empty}
             </SelectListEmpty>
           )}
+
+          {canCreate ? (
+            <div className="border-t border-border px-3 py-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                icon={Plus}
+                disabled={disabled}
+                onClick={createFromQuery}
+                className="w-full"
+              >
+                {labels.create?.(query)}
+              </Button>
+            </div>
+          ) : null}
 
           {remote?.hasMore ? (
             <div className="border-t border-border px-3 py-1.5">

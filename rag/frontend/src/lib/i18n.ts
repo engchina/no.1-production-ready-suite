@@ -1555,7 +1555,7 @@ export const ja = {
     "章節・文境界を無視し chunk サイズで機械的に固定長分割(RAGFlow General 風)",
   "settings.chunking.strategy.fixed_delimiter": "固定分割符",
   "settings.chunking.strategy.fixed_delimiter.description":
-    "指定した分割符文字列で機械的に分割",
+    "指定した分割符を優先度順に試して分割",
   "settings.chunking.params.title": "戦略別パラメータ",
   "settings.chunking.params.description":
     "選択中の分割方式で使うパラメータだけを設定します。",
@@ -1579,11 +1579,25 @@ export const ja = {
   "settings.chunking.params.fixedSizeDescription":
     "固定長戦略で使う chunk サイズと overlap を設定します。",
   "settings.chunking.params.delimiterDescription":
-    "固定分割符戦略で使う分割符文字列を設定します。",
+    "固定分割符戦略で使う分割符と chunk サイズを設定します。",
   "settings.chunking.params.active": "有効パラメータ",
-  "settings.chunking.params.delimiter": "固定分割符文字列",
+  "settings.chunking.params.delimiter": "分割符",
+  "settings.chunking.params.delimiterPlaceholder": "分割符を選ぶか入力",
+  "settings.chunking.params.delimiterCreate": "「{value}」を分割符に追加",
+  "settings.chunking.params.delimiterCount": "{count} 個",
+  "settings.chunking.delimiter.recordBoundary": "記録の境界 (<<<JSONL_RECORD_BOUNDARY>>>)",
+  "settings.chunking.delimiter.blankLine": "空行 (\\n\\n)",
+  "settings.chunking.delimiter.newline": "改行 (\\n)",
+  "settings.chunking.delimiter.period": "句点 (。)",
+  "settings.chunking.delimiter.exclamation": "感嘆符 (！)",
+  "settings.chunking.delimiter.question": "疑問符 (？)",
+  "settings.chunking.delimiter.englishPeriod": "英語のピリオド (. )",
+  "settings.chunking.delimiter.englishExclamation": "英語の感嘆符 (! )",
+  "settings.chunking.delimiter.englishQuestion": "英語の疑問符 (? )",
+  "settings.chunking.delimiter.fullwidthSemicolon": "全角セミコロン (；)",
+  "settings.chunking.delimiter.semicolon": "半角セミコロン (;)",
   "settings.chunking.params.delimiterHint":
-    "\\n, \\t, \\\\ の escape 表現を使用できます。分割符は chunk には残しません。既定の <<<JSONL_RECORD_BOUNDARY>>> は、構造化レコード JSONL の記録の境界です。",
+    "分割するときに使う文字や文字列です。既定は記録の境界だけです。複数選ぶと上のものから順に試し、chunk サイズを超えた部分だけ次の分割符で切り直します。一覧に無い文字列も入力して追加でき、\\n, \\t, \\\\ の escape 表現を使用できます。",
   "settings.chunking.params.chunkSize": "chunk サイズ(文字)",
   "settings.chunking.params.overlap": "overlap(文字)",
   "settings.chunking.params.headingSplitLimit": "見出し内の再分割上限(文字)",

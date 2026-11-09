@@ -676,7 +676,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     monkeypatch.setattr(settings, "rag_chunk_overlap", 150)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
     monkeypatch.setattr(settings, "rag_chunk_child_target_chars", 800)
-    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n---\\n")
+    monkeypatch.setattr(settings, "rag_chunk_delimiter", ["\\n---\\n"])
     monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", False)
 
     resp = client.get("/api/settings/chunking")
@@ -693,7 +693,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["chunk_parent_target_chars"] == 6000
     assert body["chunk_parent_max_pages"] == 3
     assert body["chunk_parent_max_children"] == 12
-    assert body["delimiter"] == "\\n---\\n"
+    assert body["delimiter"] == ["\\n---\\n"]
     assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
     names = [item["name"] for item in body["strategies"]]
@@ -757,13 +757,13 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert settings.rag_chunking_strategy == "recursive_character"
     assert settings.rag_chunk_size == 1000
     assert settings.rag_chunk_min_chars == 40
-    assert settings.rag_chunk_delimiter == "---"
+    assert settings.rag_chunk_delimiter == ["---"]
     assert settings.rag_chunk_context_header_enabled is True
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_CHUNKING_STRATEGY=recursive_character" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
-    assert "RAG_CHUNK_DELIMITER=---" in persisted
+    assert 'RAG_CHUNK_DELIMITER="[\\"---\\"]"' in persisted
     assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED" not in persisted
 
 
@@ -989,7 +989,7 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
 
     assert resp.status_code == 200
     assert settings.rag_chunking_strategy == "fixed_delimiter"
-    assert "RAG_CHUNK_DELIMITER=---" in env_file.read_text(encoding="utf-8")
+    assert 'RAG_CHUNK_DELIMITER="[\\"---\\"]"' in env_file.read_text(encoding="utf-8")
 
 
 def test_guardrail_settings_exposes_independent_switches(monkeypatch: MonkeyPatch) -> None:

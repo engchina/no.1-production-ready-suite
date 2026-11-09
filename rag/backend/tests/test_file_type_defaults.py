@@ -190,7 +190,7 @@ def test_chunk_set_and_extraction_id_follow_the_file_type_layer() -> None:
 
 def test_structured_records_row_uses_the_record_boundary_delimiter() -> None:
     settings = get_settings()
-    settings.rag_chunk_delimiter = "\\n\\n"
+    settings.rag_chunk_delimiter = ["\\n\\n"]
     _set_defaults(
         settings,
         excel={
@@ -203,14 +203,14 @@ def test_structured_records_row_uses_the_record_boundary_delimiter() -> None:
     resolved, effective = documents_route._merge_document_processing_config(
         DocumentProcessingConfig(), file_type="excel"
     )
-    assert resolved.rag_chunk_delimiter == JSONL_RECORD_BOUNDARY
-    assert effective.chunk_delimiter == JSONL_RECORD_BOUNDARY
+    assert resolved.rag_chunk_delimiter == [JSONL_RECORD_BOUNDARY]
+    assert effective.chunk_delimiter == [JSONL_RECORD_BOUNDARY]
 
     # レシピが分割符を決めていれば、それを優先する。
     explicit, _ = documents_route._merge_document_processing_config(
         DocumentProcessingConfig(chunk_delimiter="---"), file_type="excel"
     )
-    assert explicit.rag_chunk_delimiter == "---"
+    assert explicit.rag_chunk_delimiter == ["---"]
 
 
 def test_external_parser_flag_is_enabled_when_the_row_selects_it() -> None:
@@ -717,7 +717,7 @@ def test_get_reports_builtin_and_saved_values() -> None:
 def test_json_row_follows_the_global_delimiter_and_xml_tree_stays_selectable() -> None:
     settings = get_settings()
     _enable_everything(settings)
-    settings.rag_chunk_delimiter = "\\n\\n"
+    settings.rag_chunk_delimiter = ["\\n\\n"]
     # XML ツリー JSON は既定には使わないが、選択肢としては保存できる。
     _set_defaults(
         settings,
@@ -738,5 +738,5 @@ def test_json_row_follows_the_global_delimiter_and_xml_tree_stays_selectable() -
     resolved, _ = documents_route._merge_document_processing_config(
         DocumentProcessingConfig(), file_type="json"
     )
-    assert resolved.rag_chunk_delimiter == "\\n\\n"
-    assert Settings.model_fields["rag_chunk_delimiter"].default == JSONL_RECORD_BOUNDARY
+    assert resolved.rag_chunk_delimiter == ["\\n\\n"]
+    assert Settings.model_fields["rag_chunk_delimiter"].default_factory() == [JSONL_RECORD_BOUNDARY]

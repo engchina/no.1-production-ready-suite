@@ -129,7 +129,7 @@ describe("CSV→JSONL・Excel→JSONL の選択", () => {
         preprocess_profile: profile,
         parser_adapter_backend: "structured_records_jsonl",
         chunking_strategy: "fixed_delimiter",
-        chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
+        chunk_delimiter: ["<<<JSONL_RECORD_BOUNDARY>>>"],
       });
     }
   });
@@ -143,7 +143,7 @@ describe("CSV→JSONL・Excel→JSONL の選択", () => {
     ).toEqual({ preprocess_profile: "csv_to_jsonl", parser_adapter_backend: "structured_records_jsonl" });
     expect(
       preprocessSelectionPatch(
-        { chunking_strategy: "fixed_delimiter", chunk_delimiter: "---" } as DocumentProcessingConfig,
+        { chunking_strategy: "fixed_delimiter", chunk_delimiter: ["---"] } as DocumentProcessingConfig,
         "excel_to_jsonl"
       )
     ).toEqual({ preprocess_profile: "excel_to_jsonl", parser_adapter_backend: "structured_records_jsonl" });

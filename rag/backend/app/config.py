@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Self, get_args
+from typing import Annotated, Any, Literal, Self, get_args
 
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_DEFAULT_MAX_CHARS,
@@ -89,10 +89,10 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
 from rag_parser_core.sheet_records import ExcelOptions
-from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
 )
@@ -101,6 +101,15 @@ from rag_pipeline_core.chunking import (
 )
 from rag_pipeline_core.chunking import (
     CHUNK_SIZE_MIN_CHARS as CHUNK_SIZE_MIN_CHARS,
+)
+from rag_pipeline_core.chunking import (
+    DEFAULT_FIXED_DELIMITERS as DEFAULT_FIXED_DELIMITERS,
+)
+from rag_pipeline_core.chunking import (
+    ChunkSeparators as ChunkSeparators,
+)
+from rag_pipeline_core.chunking import (
+    FixedDelimiters as FixedDelimiters,
 )
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
@@ -194,6 +203,10 @@ def normalize_parser_adapter_backend_value(value: object) -> object:
 # 固定分割の方式と、#2457 の前の固定分割符の既定(escape 表現)。既定は記録の境界のマーカーに変えた。
 # 既存の chunk_set_id と分割の結果を保つ比較・移行だけに使う。
 FIXED_DELIMITER_STRATEGY: Literal["fixed_delimiter"] = "fixed_delimiter"
+# 本文の区切り(RAG_CHUNK_SEPARATORS)を使う分割方式(#4733)。
+CHUNK_SEPARATOR_STRATEGIES: frozenset[str] = frozenset(
+    {"structure_aware", "recursive_character", "small_to_big"}
+)
 PREVIOUS_DEFAULT_CHUNK_DELIMITER = "\\n\\n"
 
 
@@ -1000,12 +1013,20 @@ class Settings(
             "fixed_delimiter は指定文字列での固定分割。"
         ),
     )
-    rag_chunk_delimiter: str = Field(
-        # 既定は構造化レコード JSONL の記録の境界のマーカー(#2457)。
-        default=JSONL_RECORD_BOUNDARY,
-        min_length=1,
-        max_length=256,
-        description="fixed_delimiter 戦略で使う分割符。\\n / \\t / \\\\ の escape 表現を許可する。",
+    # ponytail: 保存済みのレシピと .env の名前を保つため単数形のまま。値は優先度順の一覧。
+    rag_chunk_delimiter: Annotated[FixedDelimiters, NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_FIXED_DELIMITERS),
+        description=(
+            "fixed_delimiter 戦略だけが優先度順に試す分割符(JSON の配列。1 つの文字列も可)。"
+            "\\n / \\t / \\\\ の escape 表現を許可する。"
+        ),
+    )
+    rag_chunk_separators: Annotated[ChunkSeparators, NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_CHUNK_SEPARATORS),
+        description=(
+            "structure_aware / recursive_character / small_to_big が本文を切るときに"
+            "優先度順に試す区切り(JSON の配列)。"
+        ),
     )
     # 親子階層（small-to-big。`small_to_big`）の分割パラメータ。
     # rag_poc の「チャンキング」tab と同じ 5 項目。
@@ -2877,9 +2898,6 @@ class Settings(
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:
         """chunk size と各 chunking 戦略パラメータの整合性を起動時に検証する。"""
-        self.rag_chunk_delimiter = self.rag_chunk_delimiter.strip()
-        if not self.rag_chunk_delimiter:
-            raise ValueError("RAG_CHUNK_DELIMITER を入力してください。")
         if self.rag_chunking_strategy == "fixed_delimiter":
             return self
         if self.rag_chunk_overlap >= self.rag_chunk_size:

@@ -23,6 +23,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useQuery } from "@tanstack/react-query";
 
+import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect";
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
@@ -2956,17 +2957,16 @@ function ChunkPreviewControls({
           }}
         />
         {fixedDelimiter ? (
-          <TextField
-            id="chunk-preview-delimiter"
-            className="col-span-full"
-            width="sm"
-            label={t("settings.chunking.params.delimiter")}
-            value={form.chunk_delimiter}
-            maxLength={256}
-            required
-            disabled={pending}
-            onValueChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
-          />
+          <>
+            <ChunkDelimiterSelect
+              id="chunk-preview-delimiter"
+              value={form.chunk_delimiter}
+              required
+              disabled={pending}
+              onChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
+            />
+            {chunkSizeField}
+          </>
         ) : form.chunking_strategy === "small_to_big" ? (
           // 親子階層（small-to-big）は chunk サイズ等を使わず、子と親の大きさの 5 項目で分割する。
           SMALL_TO_BIG_PARAMS.map((spec) => (

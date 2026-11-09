@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 from pr_backend_core.config import settings_env_names
 from pydantic import ValidationError
-from rag_pipeline_core.chunking import CHUNK_OVERLAP_MAX_CHARS, CHUNK_SIZE_MAX_CHARS
+from rag_pipeline_core.chunking import (
+    CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_SIZE_MAX_CHARS,
+    DEFAULT_FIXED_DELIMITERS,
+)
 
 from app import config as config_module
 from app.config import (
@@ -29,7 +33,7 @@ def test_chunking_strategy_defaults_to_small_to_big() -> None:
     settings = Settings()
     assert settings.rag_chunking_strategy == "small_to_big"
     assert settings.rag_chunk_min_chars == 120
-    assert settings.rag_chunk_delimiter == "<<<JSONL_RECORD_BOUNDARY>>>"
+    assert settings.rag_chunk_delimiter == list(DEFAULT_FIXED_DELIMITERS)
 
 
 def test_chunk_min_chars_must_be_smaller_than_chunk_size() -> None:

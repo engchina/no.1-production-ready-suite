@@ -2278,6 +2278,7 @@ class IngestionPipeline:
                         overlap=chunking_params.overlap,
                         min_chars=chunking_params.min_chars,
                         delimiter=chunking_params.delimiter,
+                        separators=chunking_params.separators,
                     )
             except RecordBoundaryError as exc:
                 raise IngestionUserError(record_boundary_failure_message(exc)) from exc

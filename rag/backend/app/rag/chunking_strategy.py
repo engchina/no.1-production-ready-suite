@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
+from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS, normalize_fixed_delimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_DEFAULT,
@@ -102,6 +102,8 @@ class SmallToBigParams:
     parent_target_chars: int = CHUNK_PARENT_TARGET_CHARS_DEFAULT
     parent_max_pages: int = CHUNK_PARENT_MAX_PAGES_DEFAULT
     parent_max_children: int = CHUNK_PARENT_MAX_CHILDREN_DEFAULT
+    # 本文の区切り(RAG_CHUNK_SEPARATORS)。空なら文境界で切る。
+    separators: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,7 +114,8 @@ class ChunkingStrategyParams:
     chunk_size: int
     overlap: int
     min_chars: int
-    delimiter: str
+    delimiter: tuple[str, ...]
+    separators: tuple[str, ...] = ()
     small_to_big: SmallToBigParams = SmallToBigParams()
 
 
@@ -134,7 +137,7 @@ class ChunkingRuntimeSettings:
     chunk_size: int
     overlap: int
     min_chars: int
-    delimiter: str
+    delimiter: tuple[str, ...]
     small_to_big: SmallToBigParams
     strategies: tuple[ChunkingStrategyStatus, ...]
 
@@ -148,9 +151,14 @@ def normalize_chunking_strategy(value: object) -> ChunkingStrategyName:
     return DEFAULT_CHUNKING_STRATEGY
 
 
+def _chunk_separators(settings: Settings) -> tuple[str, ...]:
+    return tuple(getattr(settings, "rag_chunk_separators", ()))
+
+
 def resolve_small_to_big_params(settings: Settings) -> SmallToBigParams:
     """Settings から親子階層（small-to-big）の分割パラメータを解決する。"""
     return SmallToBigParams(
+        separators=_chunk_separators(settings),
         child_target_chars=int(
             getattr(settings, "rag_chunk_child_target_chars", CHUNK_CHILD_TARGET_CHARS_DEFAULT)
         ),
@@ -182,7 +190,12 @@ def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
         chunk_size=int(getattr(settings, "rag_chunk_size", 800)),
         overlap=int(getattr(settings, "rag_chunk_overlap", 120)),
         min_chars=int(getattr(settings, "rag_chunk_min_chars", 120)),
-        delimiter=str(getattr(settings, "rag_chunk_delimiter", JSONL_RECORD_BOUNDARY)).strip(),
+        delimiter=tuple(
+            normalize_fixed_delimiters(
+                getattr(settings, "rag_chunk_delimiter", DEFAULT_FIXED_DELIMITERS)
+            )
+        ),
+        separators=_chunk_separators(settings),
         small_to_big=resolve_small_to_big_params(settings),
     )
 

@@ -2712,3 +2712,16 @@ def test_screen_example_removal_keeps_following_items_on_the_same_line():
     assert "対象年月=2026年1月" not in stripped and "区分=01" not in stripped
     assert "エラーコード E2" in stripped and "印刷区分" in stripped and "基本設定画面" in stripped
     assert " /  / " not in stripped
+
+
+def test_long_text_record_uses_separators_in_priority_order():
+    """長い地の文は区切りの優先度順に切り、区切りは本文に残す（#4733）。"""
+    from rag_engine.chunking.builder import _split_long_text_record
+
+    first = "あ" * 20
+    second = "い" * 20
+    record = {"id": "r1", "category": "Text", "text": f"{first}\n\n{second}"}
+
+    pieces = _split_long_text_record(record, 30, ("\n\n", "\n", "。"))
+
+    assert [piece["text"].strip() for piece in pieces] == [first, second]

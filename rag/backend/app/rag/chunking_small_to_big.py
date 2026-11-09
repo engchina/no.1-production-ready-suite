@@ -143,6 +143,7 @@ def small_to_big_chunking_config(params: SmallToBigParams | None = None) -> Chun
         parent_target_chars=params.parent_target_chars,
         parent_max_pages=params.parent_max_pages,
         parent_max_children=params.parent_max_children,
+        separators=params.separators,
     ).validate()
 
 
@@ -270,6 +271,7 @@ def build_structure_parent_child_chunks(
             chunk_size=resolved.child_target_chars,
             overlap=0,
             table_chunk_size=resolved.table_child_target_chars,
+            separators=resolved.separators,
         )
     children = _attach_headings(
         children,
@@ -627,7 +629,12 @@ def build_sheet_parent_child_chunks(
     from app.rag.chunking_strategy import SmallToBigParams
 
     resolved = params or SmallToBigParams()
-    children = chunk_extraction(extraction, chunk_size=resolved.child_target_chars, overlap=0)
+    children = chunk_extraction(
+        extraction,
+        chunk_size=resolved.child_target_chars,
+        overlap=0,
+        separators=resolved.separators,
+    )
     groups: list[list[Chunk]] = []
     for chunk in children:
         current = groups[-1] if groups else None
@@ -680,7 +687,12 @@ def build_xml_tree_parent_child_chunks(
     from app.rag.chunking_strategy import SmallToBigParams
 
     resolved = params or SmallToBigParams()
-    children = chunk_extraction(extraction, chunk_size=resolved.child_target_chars, overlap=0)
+    children = chunk_extraction(
+        extraction,
+        chunk_size=resolved.child_target_chars,
+        overlap=0,
+        separators=resolved.separators,
+    )
     element_texts = {
         element.element_id: element.text for element in extraction.elements if element.element_id
     }
