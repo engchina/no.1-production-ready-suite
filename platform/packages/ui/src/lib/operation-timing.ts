@@ -1,13 +1,14 @@
 // 処理中表示の経過時間の計算（NL2SQL から移設。#120）。
 
+import { parseApiDateTime } from "./date-time";
+
 export type OperationTimestamp = number | string | null | undefined;
 
 /** Date/ISO の開始・終了時刻を epoch milliseconds へ正規化する。 */
 export function operationTimestampMs(value: OperationTimestamp): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
+  return parseApiDateTime(value)?.getTime() ?? null;
 }
 
 /** 開始時刻からの経過 milliseconds。端末時計が戻った場合も負数にしない。 */

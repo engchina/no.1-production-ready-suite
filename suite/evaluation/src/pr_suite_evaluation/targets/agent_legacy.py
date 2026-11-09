@@ -1,6 +1,6 @@
 """Agent の旧形式の回答の扱い（#1305・#1456・#2738。#3240 で RAG から移した）。
 
-- 回答の節: Agent の最終の検証が回答の末尾に足す節（今の見出しは公開の契約
+- 回答の節: Agent の最終の検証（#4714 で削除）が回答の末尾に足していた節（見出しは公開の契約
   `platform/contracts/answer-passages/unverified-section.json` の headings。#2738 より前の Run は
   「資料で確認できず除いた内容」）は、外した段落・印の段落の引用と理由で、回答の本文ではない。
 - 対応の推定: `outcome` の無い完了の Run（#1305 より前の Run）は、利用者が
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-# 今の Agent の最終の検証が足す節の見出し（公開の契約の headings。tests/test_agent_legacy.py が
+# Agent の最終の検証が足していた節の見出し（公開の契約の headings。tests/test_agent_legacy.py が
 # 契約の fixture と比べる）。
 AGENT_SECTION_HEADINGS: tuple[str, ...] = ("根拠と矛盾し除いた内容", "確認が必要な点")
 # #2738 より前の Agent の最終の検証が足していた節の見出し（保存済みの Run のため）。
@@ -21,7 +21,7 @@ LEGACY_UNVERIFIED_HEADING = "資料で確認できず除いた内容"
 SYSTEM_SECTION_HEADINGS: frozenset[str] = frozenset(
     {*AGENT_SECTION_HEADINGS, LEGACY_UNVERIFIED_HEADING}
 )
-# Agent の最終の検証が回答の末尾に足す定型の注記（推定で最後の行を見るときに除く。#1305）。
+# Agent の最終の検証が回答の末尾に足していた定型の注記（推定で最後の行を見るときに除く。#1305）。
 AGENT_NOTICES: frozenset[str] = frozenset(
     {
         "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。",

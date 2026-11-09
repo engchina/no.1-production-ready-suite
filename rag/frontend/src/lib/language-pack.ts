@@ -149,7 +149,7 @@ export const LANGUAGE_PACK_GROUPS: readonly { id: string; sections: readonly str
   },
   {
     id: "answer",
-    sections: ["answer_labels", "answer_check_cues", "operation_audit_cues", "grounding_cues"],
+    sections: ["answer_labels", "answer_check_cues", "grounding_cues"],
   },
 ];
 

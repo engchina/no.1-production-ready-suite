@@ -108,6 +108,7 @@ def test_check_returns_zero_only_when_ready(
 ) -> None:
     """配備の確認（#1648）: ready なら 0、それ以外は 1 と 1 行の要約（ORA コードを含む）。"""
 
+    monkeypatch.setattr(system_schema_cli, "_language_pack_contract_problem", lambda: None)
     monkeypatch.setattr(
         system_schema_manager,
         "status",

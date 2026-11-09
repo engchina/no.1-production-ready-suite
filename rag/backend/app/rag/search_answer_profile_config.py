@@ -88,7 +88,9 @@ class SearchAnswerProfileConfig(BaseModel):
     escalation_model_id: str | None = Field(
         default=None,
         max_length=256,
-        description="確認を通らなかったときに回答し直す登録済みモデル。null はカスケードしない。",
+        description=(
+            "出力の検査を通らなかったときに回答し直す登録済みモデル。null はカスケードしない。"
+        ),
     )
 
     @field_validator("answer_model_id", "escalation_model_id")
@@ -187,7 +189,7 @@ def validate_profile_answer_model(settings: Settings, config: SearchAnswerProfil
     # 失敗にする。
     if config.escalation_model_id and config.escalation_model_id not in registered:
         raise ProfileAnswerModelUnavailableError(
-            "確認を通らなかったときのモデルが登録されていません。検索・回答プロファイルで選び直すか、使わない設定にしてください。"
+            "出力の検査を通らなかったときのモデルが登録されていません。検索・回答プロファイルで選び直すか、使わない設定にしてください。"
         )
 
 

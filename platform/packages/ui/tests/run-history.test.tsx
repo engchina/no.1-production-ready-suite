@@ -216,18 +216,18 @@ describe("書式と絞り込みの値", () => {
   });
 
   it("モデルのカスケードの表示: 昇格・昇格しない・カスケードしない（#4581）", () => {
-    expect(modelCascadeView({ escalated: true, reasons: ["citation_mismatch", "unknown_signal"] })).toEqual({
+    expect(modelCascadeView({ escalated: true, reasons: ["structured_output_invalid", "unknown_signal"] })).toEqual({
       escalated: true,
-      line: "最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました",
-      reasons: "引用の ID・原文が資料と一致しなかった、unknown_signal",
+      line: "最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました",
+      reasons: "生成の出力が形式の検査を通らなかった、unknown_signal",
     });
     expect(modelCascadeView({ escalated: false, reasons: [] })).toEqual({
       escalated: false,
-      line: "回答し直していません（最初のモデルの回答が確認を通りました）",
+      line: "回答し直していません（最初のモデルの出力が検査を通りました）",
       reasons: null,
     });
     expect(modelCascadeView(null)).toBeNull();
-    expect(modelCascadeView({ escalated: true, reasons: ["citation_mismatch"] }, { reasons: { citation_mismatch: "x" } })?.reasons).toBe("x");
+    expect(modelCascadeView({ escalated: true, reasons: ["structured_output_invalid"] }, { reasons: { structured_output_invalid: "x" } })?.reasons).toBe("x");
   });
 
   it("期間の開始は now から引いた ISO、すべては null", () => {

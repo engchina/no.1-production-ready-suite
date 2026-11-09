@@ -1,9 +1,8 @@
-"""回答の段落の分け方の語（RAG と Agent の共有の契約。#2197）。
+"""回答の段落の分け方の語（#2197）。
 
 語の正本は ``platform/contracts/answer-passages/vocabulary.json``。Agent の
-``answer_passages`` と RAG の ``operation_audit`` が同じ語から規則を組み立てる（規則の形は
-両方のコードにあり、``platform/contracts/answer-passages/*.json`` の同じ事例で一致を
-確かめる）。配備はリポジトリの全体を置くので、実行のときもこのファイルを読む。
+``answer_passages`` がこの語から規則を組み立てる（``platform/contracts/answer-passages/*.json``
+の事例で確かめる）。配備はリポジトリの全体を置くので、実行のときもこのファイルを読む。
 """
 
 from __future__ import annotations

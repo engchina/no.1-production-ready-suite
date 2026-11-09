@@ -27,6 +27,7 @@ import {
   PageBody,
   RowTitleButton,
   displayDateTimeFormat,
+  parseApiDateTime,
 } from "@production-ready/ui";
 import {
   ApiError,
@@ -67,8 +68,8 @@ const approvalDateFormat = displayDateTimeFormat({
 
 /** 判断の日時はブラウザの時間帯に依存せず、システムの設定の時間帯（#3265）。古い記録の欠落は補完しない。 */
 function approvalDate(value: string | null | undefined) {
-  const date = value ? new Date(value) : null;
-  return date && !Number.isNaN(date.getTime()) ? approvalDateFormat.format(date) : t("approval.notRecorded");
+  const date = parseApiDateTime(value);
+  return date ? approvalDateFormat.format(date) : t("approval.notRecorded");
 }
 
 function summaryTarget(row: ApprovalSummary): ApprovalTarget {

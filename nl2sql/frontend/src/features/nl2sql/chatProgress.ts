@@ -14,6 +14,7 @@ import {
   type ChatProgressStepDefinitions,
   type ChatProgressStepStatus,
   type TraceDetailsLabels,
+  operationTimestampMs,
 } from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
@@ -249,8 +250,8 @@ export function parseTraceProgressResponse(value: unknown): TraceProgressRespons
 /** 完了後の全体の所要時間（ジョブの作成から終了まで）。段階の時刻が無い古いジョブにも出す。 */
 export function chatJobElapsedMs(job: JobData): number | null {
   if (job.status !== "done" && job.status !== "error") return null;
-  const start = Date.parse(job.created_at);
-  const end = job.finished_at ? Date.parse(job.finished_at) : Number.NaN;
+  const start = operationTimestampMs(job.created_at) ?? Number.NaN;
+  const end = operationTimestampMs(job.finished_at) ?? Number.NaN;
   if (Number.isFinite(start) && Number.isFinite(end)) return Math.max(0, end - start);
   return job.elapsed_ms ?? null;
 }

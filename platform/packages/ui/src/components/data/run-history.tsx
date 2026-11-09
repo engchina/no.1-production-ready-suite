@@ -134,14 +134,10 @@ export interface ModelCascadeLabels {
 }
 
 export const DEFAULT_MODEL_CASCADE_LABELS: ModelCascadeLabels = {
-  escalated: "最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました",
-  notEscalated: "回答し直していません（最初のモデルの回答が確認を通りました）",
+  escalated: "最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました",
+  notEscalated: "回答し直していません（最初のモデルの出力が検査を通りました）",
   reasons: {
     structured_output_invalid: "生成の出力が形式の検査を通らなかった",
-    citation_mismatch: "引用の ID・原文が資料と一致しなかった",
-    arithmetic_mismatch: "計算を確かめ直すと合わなかった",
-    conclusion_withheld: "要約・結論を確かめられず保留した",
-    audit_contradicted: "監査が資料と矛盾すると判定した",
   },
 };
 

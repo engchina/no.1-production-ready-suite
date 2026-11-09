@@ -117,6 +117,8 @@ class AnswerContext:
     # 文書の選択 (#1028): rerank 後の全候補 child（順位順）、後回しにした文書の child、選択の trace。
     # 不足時はこれらから後回しの文書を戻して再評価・再生成する。
     ranked_candidates: tuple[AnswerRecord, ...] = ()
+    # rerank の基準（関連度の下限・採用件数の上限）で絞り込む前の候補数（#4735）。基準で全部落ちたときも 0 にならない。
+    candidate_count: int = 0
     deferred_records: tuple[AnswerRecord, ...] = ()
     document_selection: dict[str, Any] = field(default_factory=dict)
 

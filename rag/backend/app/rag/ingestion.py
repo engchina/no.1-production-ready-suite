@@ -148,10 +148,6 @@ from app.rag.layer_fingerprint import (
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     field_schema_hash,
 )
-from app.rag.mineru_license import (
-    MINERU_LICENSE_REQUIRED_MESSAGE,
-    MINERU_LICENSE_UNACKNOWLEDGED_WARNING,
-)
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_summary_elements,
@@ -226,8 +222,9 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140。3: #4154。4: #4224。
 # 5: VLM の前の crop の保存が空の画像本文の投影を書かない。#4569。
 # 6: 図・画像の読み取りの指示を項目の説明と条件ごとの案内に分けた。#4671。
-# 7: Unstructured の見出しの判定と階層を直した。#4741)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 7
+# 7: Unstructured の見出しの判定と階層を直した。#4741。
+# 8: 文末の記号で終わる番号付きの行を見出しにしない。#4742)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 8
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -2258,7 +2255,7 @@ class IngestionPipeline:
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
         # 親子階層（small-to-big）は、どの解析の結果でも親子に分割する(#3377)。親子を作った入力
-        # (Docling・MinerU のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
+        # (Docling のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
         is_small_to_big = chunking_params.strategy == SMALL_TO_BIG_STRATEGY
 
         def _run_chunking() -> list[Chunk]:
@@ -4214,8 +4211,6 @@ def _selected_parser_failure_message(
         )
     if warning == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING:
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix
-    if warning == MINERU_LICENSE_UNACKNOWLEDGED_WARNING:
-        return MINERU_LICENSE_REQUIRED_MESSAGE + warning_suffix
     if warning and warning.startswith("structured_records_invalid:"):
         return (
             f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」「Word→JSONL」が"
@@ -4301,7 +4296,6 @@ def _parser_backend_label(backend: str) -> str:
         "unstructured": "Unstructured",
         "structured_records_jsonl": "構造化レコード JSONL",
         "xml_tree_json": "XML ツリー JSON",
-        "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
         "oci_document_understanding": "OCI Document Understanding",
     }
@@ -4373,7 +4367,6 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
         "unstructured",
         "structured_records_jsonl",
         "xml_tree_json",
-        "mineru",
         "dots_ocr",
     }
 

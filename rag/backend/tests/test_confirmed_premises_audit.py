@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from rag_engine.config import LLM_PURPOSE_AUDIT, settings_for_llm_purpose
+from rag_engine.config import LLM_PURPOSE_GENERATION, settings_for_llm_purpose
 
 from app.config import Settings
 from app.rag.answer_engine import (
@@ -46,11 +46,11 @@ def test_settings_keep_confirmed_sources_and_preserve_them_for_model_purpose(
     assert settings.confirmed_premises == (((LABEL, VALUE),) if expected else ())
     assert settings.confirmed_premise_sources == (((LABEL, VALUE, source),) if expected else ())
     assert (
-        settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT).confirmed_premise_sources
+        settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION).confirmed_premise_sources
         == settings.confirmed_premise_sources
     )
     assert (
-        settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT).confirmed_premises
+        settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION).confirmed_premises
         == settings.confirmed_premises
     )
 

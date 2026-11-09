@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, Field
 
 from app.schemas.evaluation import EvaluationJob
@@ -22,8 +22,8 @@ class CalibrationSourceJob(BaseModel):
     """記入の集合を作れる、終わった品質評価の job。"""
 
     job_id: str
-    created_at: datetime
-    finished_at: datetime | None = None
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
     case_count: int = 0
     compared: bool = False
 
@@ -112,8 +112,8 @@ class CalibrationSummary(BaseModel):
     calibration_id: str
     label_set_id: str
     status: Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
-    created_at: datetime
-    finished_at: datetime | None = None
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
     repeats: int = 1
     judge_model_id: str | None = None
     judge_rubric_version: str | None = None
@@ -130,7 +130,7 @@ class LabelSetSummary(BaseModel):
     label_set_id: str
     name: str
     origin: Literal["jobs", "import"]
-    created_at: datetime
+    created_at: UtcDatetime
     human_item_count: int
     synthetic_item_count: int
     row_count: int
@@ -285,7 +285,7 @@ class AspectCalibrationStatus(BaseModel):
     calibrated: bool
     kappa: float | None = None
     calibration_id: str | None = None
-    calibrated_at: datetime | None = None
+    calibrated_at: UtcDatetime | None = None
     judge_rubric_version: str | None = None
 
 

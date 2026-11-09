@@ -100,10 +100,6 @@ async def test_invalid_paging_does_not_connect(limit: int, offset: int) -> None:
 
 
 _COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
     "crag_definition_aspect_template",
     "guide_acquisition_incomplete_template",
 )
@@ -122,12 +118,12 @@ def _stored_hash(effective: dict[str, object]) -> str:
     return hashlib.sha256(f"{effective['locale']}\n{canonical}".encode()).hexdigest()[:16]
 
 
-def legacy_release_row(mask: int = 63) -> dict[str, object]:
+def legacy_release_row(mask: int = 3) -> dict[str, object]:
     """旧形式の項目集合から独立に元の保存 hash を計算する。"""
     row = release_row()
     effective = builtin_pack().to_dict()
     effective["answer_labels"]["gaps_section"] = "合成の保存済み文言"
-    effective["answer_labels"]["crag_quote_only_note"] = "合成の保存済み注記"
+    effective["answer_labels"]["insufficient_evidence_summary"] = "合成の保存済み注記"
     for index, key in enumerate(_COMPAT_KEYS):
         if mask & (1 << index):
             del effective["answer_labels"][key]
@@ -148,7 +144,7 @@ def test_incomplete_release_is_rejected_without_defaulting() -> None:
     assert row == untouched
 
 
-@pytest.mark.parametrize("mask", range(64))
+@pytest.mark.parametrize("mask", range(4))
 def test_release_requires_current_fields_without_changing_custom_values(mask: int) -> None:
     from app.rag.language_pack_releases import pack_from_release
 
@@ -184,7 +180,7 @@ def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
     elif mutation == "extra":
         effective["answer_labels"]["unknown_key"] = "合成の余剰項目"
     elif mutation == "coerced":
-        effective["answer_labels"]["crag_refusal_summary"] = 3
+        effective["answer_labels"]["insufficient_evidence_summary"] = 3
     else:
         effective["answer_labels"]["gaps_section"] += " "
     with pytest.raises(ValueError):
@@ -206,7 +202,7 @@ def test_incomplete_draft_read_is_rejected_without_writes(missing_extra: bool) -
 
     row = release_row()
     draft = builtin_pack().to_dict()
-    del draft["answer_labels"]["crag_refusal_summary"]
+    del draft["answer_labels"]["insufficient_evidence_summary"]
     if missing_extra:
         del draft["grounding_cues"]["citation_unit_words"]
     original_draft = deepcopy(draft)
@@ -350,7 +346,7 @@ async def test_history_metadata_lists_unsupported_snapshot_without_executing_it(
     old = release_row()
     effective = deepcopy(old["effective_json"])
     assert isinstance(effective, dict)
-    del effective["answer_labels"]["crag_refusal_summary"]
+    del effective["answer_labels"]["insufficient_evidence_summary"]
     old["effective_json"] = effective
     untouched = deepcopy(old)
     pool = FakeOraclePool(execute_results=[[{"total": 1}], [old]])

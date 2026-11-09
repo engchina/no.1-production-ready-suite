@@ -1,8 +1,8 @@
 """評価結果から作るテストセットの下書きと確認状態。"""
 
-from datetime import datetime
 from typing import Literal, Self
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.evaluation import EVIDENCE_LABEL_MAX_CHARS, STANDARD_ANSWER_MAX_CHARS
@@ -57,8 +57,8 @@ class TestSetDraft(BaseModel):
     draft_id: str
     name: str
     revision: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     items: list[TestSetItem] = Field(max_length=200)
 
     @model_validator(mode="after")
@@ -101,7 +101,7 @@ class TestSetSummary(BaseModel):
     draft_id: str
     name: str
     revision: int
-    updated_at: datetime
+    updated_at: UtcDatetime
     item_count: int
     confirmed_count: int
 

@@ -169,8 +169,8 @@ for (const viewport of [
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "1 つの文書から採る根拠の上限",
       "回答モデル",
-      // 確認を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
-      "確認を通らなかったときのモデル",
+      // 出力の検査を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
+      "出力の検査を通らなかったときのモデル",
       "業務ガイドを使用する",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -273,7 +273,7 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in (config.query ?? {})).toBe(false);
 });
 
-test("確認を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("出力の検査を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=new");
@@ -287,12 +287,12 @@ test("確認を通らなかったときのモデルは既定で使わず、回�
   await model.getByRole("combobox").click();
   await page.getByRole("option", { name: "モデル A", exact: true }).click();
   // 「回答モデル」の直下に置き、既定は「使わない」（全体の既定は持たない）。
-  const escalation = page.getByRole("heading", { name: "確認を通らなかったときのモデル", level: 3 }).locator("..");
+  const escalation = page.getByRole("heading", { name: "出力の検査を通らなかったときのモデル", level: 3 }).locator("..");
   const headings = await page.getByRole("heading", { level: 3 }).allTextContents();
-  expect(headings.indexOf("確認を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
+  expect(headings.indexOf("出力の検査を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
   await expect(escalation.getByRole("button", { name: "使わない" })).toHaveAttribute("aria-pressed", "true");
   await expect(escalation.getByRole("combobox")).toHaveCount(0);
-  await expect(escalation.getByText(/確認を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
+  await expect(escalation.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
   await escalation.getByRole("button", { name: "モデルを選ぶ" }).click();
   await escalation.getByRole("combobox").click();
   // 回答モデルと同じモデルは候補に出さない。

@@ -1143,27 +1143,6 @@
       "【",
       "】"
     ],
-    "feedback_split_words": [
-      "です",
-      "ます",
-      "ください",
-      "する",
-      "した",
-      "して",
-      "し",
-      "で",
-      "を",
-      "に",
-      "へ",
-      "と",
-      "が",
-      "は"
-    ],
-    "feedback_strip_suffixes": [
-      "画面",
-      "欄",
-      "ボタン"
-    ],
     "kanji_chars": [
       "一-龯",
       "々"
@@ -1971,51 +1950,6 @@
       "個人",
       "対象者"
     ],
-    "link_verbs": [
-      "遷移",
-      "移動",
-      "参照",
-      "共通",
-      "連携",
-      "引き継",
-      "開き",
-      "開く"
-    ],
-    "link_negations": [
-      "不可",
-      "できません",
-      "しない",
-      "異なる",
-      "別の"
-    ],
-    "navigation_words": [
-      "開",
-      "選択",
-      "移動",
-      "進み",
-      "クリック"
-    ],
-    "navigation_evidence_words": [
-      "開",
-      "選択",
-      "移動",
-      "クリック",
-      "押"
-    ],
-    "screen_place_words": [
-      "画面",
-      "タブ",
-      "メニュー"
-    ],
-    "place_particles": [
-      "から",
-      "で"
-    ],
-    "entry_action_words": [
-      "出力",
-      "検索",
-      "登録"
-    ],
     "function_number_dashes": [
       "-",
       "－",
@@ -2160,10 +2094,6 @@
     "abstention_guidance": "対象業務の操作説明書で操作方法と適用条件を確認し、質問の対象・条件や検索範囲を見直してください。",
     "citation_prefix": "根拠：",
     "deadline_summary": "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。",
-    "crag_refusal_summary": "検索した資料には、原質問の操作・規則・確認方法を直接裏付ける根拠を確認できていません。",
-    "crag_missing_aspect_template": "{label}については、検索評価で直接の根拠を確認できていません。",
-    "crag_unknown_aspect_template": "{label}については、質問との対応または確認結果が未確認です。",
-    "crag_quote_only_note": "検索評価で許可した部分の直接原文。言い換えの意味は未検証。",
     "crag_definition_aspect_template": "{label}の意味・条件",
     "operation_steps_heading": "操作手順",
     "confirmation_steps_heading": "確認手順",
@@ -2172,30 +2102,12 @@
     "item_bullet": "・",
     "steps_heading_template": "{heading}（{title}）",
     "quote_template": "「{quote}」",
-    "condition_template": "（{condition}）",
-    "condition_suffix": "場合",
-    "condition_link": "の",
     "subquestion_heading_template": "質問{label}：{text}",
     "guide_notes_section": "業務ガイドの案内",
     "guide_notes_note_template": "次は業務ガイド「{title}」の案内で、資料の記載ではありません。",
     "guide_handoff_template": "次の場合は{contact}へお問い合わせください: {conditions}",
     "guide_approval_template": "実施の前に承認が必要です。{note}",
     "guide_acquisition_incomplete_template": "必須の参照範囲について、取得または回答材料への保持を確認できていません（手順: {steps}）。資料に記載がないことや、回答の誤りを意味しません。",
-    "predicate_endings": [
-      "た",
-      "だ",
-      "ない",
-      "る",
-      "う",
-      "く",
-      "す",
-      "つ",
-      "ぬ",
-      "ぶ",
-      "む",
-      "ぐ",
-      "い"
-    ],
     "aspect_labels": [
       "対象の業務・画面=business_object",
       "求める結果=requested_result",
@@ -2260,13 +2172,6 @@
       "に",
       "のみ"
     ],
-    "unexplained_words": [
-      "説明していません",
-      "記載がありません",
-      "記載はありません",
-      "記載していません",
-      "未確認"
-    ],
     "ignored_quote_chars": [
       "|",
       "｜",
@@ -2326,71 +2231,6 @@
       ".",
       "。"
     ],
-    "condition_sentence_endings": [
-      "ください",
-      "ます",
-      "ません",
-      "です"
-    ],
-    "condition_clause_nouns": [
-      "場合",
-      "とき"
-    ],
-    "condition_time_nouns": [
-      "時",
-      "際"
-    ],
-    "condition_time_followers": [
-      "は",
-      "に",
-      "の",
-      "も",
-      "、",
-      ","
-    ],
-    "condition_strip_particles": [
-      "のみ",
-      "は",
-      "に"
-    ],
-    "condition_trailing_particles": [
-      "には",
-      "では",
-      "へは",
-      "は",
-      "に",
-      "で",
-      "へ"
-    ],
-    "condition_range_particles": [
-      "まで",
-      "から"
-    ],
-    "condition_topic_particles": [
-      "は"
-    ],
-    "condition_adverb_kanji": [
-      "既",
-      "特",
-      "更",
-      "共",
-      "順",
-      "別",
-      "主",
-      "常",
-      "直",
-      "実",
-      "現",
-      "仮",
-      "逆",
-      "急",
-      "単",
-      "先",
-      "稀"
-    ],
-    "condition_adverb_particles": [
-      "に"
-    ],
     "bare_label_chars": [
       "・",
       "／",
@@ -2449,10 +2289,6 @@
       "条件",
       "任意入力"
     ],
-    "deletion_words": [
-      "削除",
-      "消去"
-    ],
     "bare_title_marks": [
       "。",
       "＞",
@@ -2463,117 +2299,6 @@
       "：",
       "とは",
       "場合"
-    ]
-  },
-  "operation_audit_cues": {
-    "instruction_stems": [
-      "開き",
-      "押し",
-      "選び",
-      "選択し",
-      "入力し",
-      "変更し",
-      "修正し",
-      "登録し",
-      "保存し",
-      "実行し",
-      "実施し",
-      "クリックし"
-    ],
-    "operation_instruction_endings": [
-      "ます",
-      "てください",
-      "て頂",
-      "ていただ",
-      "、",
-      "て"
-    ],
-    "instruction_phrases": [
-      "を開く",
-      "を押す",
-      "を選択する",
-      "を入力する",
-      "を保存する",
-      "に遷移する",
-      "に遷移します"
-    ],
-    "conditional_operation_verbs": [
-      "登録",
-      "選択",
-      "入力",
-      "変更",
-      "修正",
-      "保存",
-      "実行"
-    ],
-    "conditional_operation_endings": [
-      "すれば",
-      "すると",
-      "することで",
-      "できます",
-      "可能"
-    ],
-    "action_verbs": [
-      "押下",
-      "クリック",
-      "印刷",
-      "再発行"
-    ],
-    "action_endings": [
-      "する",
-      "すれば",
-      "すると",
-      "し",
-      "できます",
-      "可能"
-    ],
-    "control_words": [
-      "ボタン",
-      "画面",
-      "タブ"
-    ],
-    "control_actions": [
-      "を開く",
-      "を押す",
-      "を選択する"
-    ],
-    "deletion_endings": [
-      "し",
-      "する",
-      "すれば",
-      "すると",
-      "できます",
-      "可能"
-    ],
-    "english_instruction_words": [
-      "click",
-      "press",
-      "navigate to",
-      "save changes",
-      "delete",
-      "erase"
-    ],
-    "deletion_manner_words": [
-      "個別",
-      "一括"
-    ],
-    "operation_families": [
-      "再発行=再発行",
-      "再交付=再発行",
-      "印刷=印刷",
-      "プリント=印刷",
-      "印字=印刷",
-      "修正=修正",
-      "編集=修正",
-      "訂正=修正",
-      "書き換え=修正",
-      "書換=修正",
-      "変更=修正",
-      "削除=削除",
-      "消去=削除",
-      "保存=保存",
-      "登録=保存",
-      "更新=保存"
     ]
   },
   "grounding_cues": {

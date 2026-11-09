@@ -178,8 +178,10 @@ function ConfirmDialog({
         first.focus({ preventScroll: true });
       }
     }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    // capture で受ける。Escape の keydown の処理の中から開いたとき、bubble で受けると同じ keydown が
+    // document に届いて開いた途端にキャンセルになる（#4763）。
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [onCancel]);
 
   const confirmVariant = tone === "danger" ? "danger" : "primary";

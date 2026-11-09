@@ -729,10 +729,24 @@
       "sha256": "25da94e7e1b3480e02cfc828b38fc356fb0cf4af6bd093ced0f16affca133598",
       "statement_count": 1,
       "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261109_4668_language_pack_retired_unread_checks",
+      "sha256": "d00c62c84e0443fe9f3ea37eec1c72197079df40399764e63dcd6baec825ff2d",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4749_language_pack_retired_crag_labels",
+      "sha256": "1de172362d3b88e33ed6d0b0e487a34d8b8f11e97290de9512d2489087ec1432",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "6e3ff2faefc71f581c3013595a939a13215b7a79e604fe9ade6825bb4eceb51b",
-  "statement_count": 160
+  "sha256": "8fc3b37d05d03ee7b4b410c78deef89d937d3cb24989a238023555f76660b9a1",
+  "statement_count": 162
 }

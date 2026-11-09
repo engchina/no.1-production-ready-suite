@@ -1,5 +1,5 @@
 import { chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents } from "@production-ready/ui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
 
@@ -63,6 +63,15 @@ describe("実行履歴の表示の対応表", () => {
   it("開始日時は記録の時刻（終わった時刻）から所要時間を引く", () => {
     expect(runStartedAt({ created_at: "2026-10-15T09:00:05.000Z", elapsed_ms: 5000 })).toBe("2026-10-15T09:00:00.000Z");
     expect(runStartedAt({ created_at: "2026-10-15T09:00:05Z", elapsed_ms: null })).toBe("2026-10-15T09:00:05Z");
+  });
+
+  it("時間帯の無い created_at は端末の時間帯によらず UTC として開始の時刻を出す", () => {
+    vi.stubEnv("TZ", "Asia/Tokyo");
+    try {
+      expect(runStartedAt({ created_at: "2026-11-09T14:15:57.223334", elapsed_ms: 11000 })).toBe("2026-11-09T14:15:46.223Z");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("検索・回答プロファイルと利用者は ID を出さずに名前で出す", () => {

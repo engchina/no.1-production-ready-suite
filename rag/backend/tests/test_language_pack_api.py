@@ -320,7 +320,7 @@ def test_metadata_history_keeps_unsupported_release_read_and_restore_strict(
     old = {**release_row(), "release_id": "synthetic-old"}
     effective = deepcopy(old["effective_json"])
     assert isinstance(effective, dict)
-    del effective["answer_labels"]["crag_refusal_summary"]
+    del effective["answer_labels"]["insufficient_evidence_summary"]
     old["effective_json"] = effective
     original = deepcopy(old)
     state = {

@@ -9,15 +9,11 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import alternation
-
 PROJECT_ROOT = Path.cwd()
 DEFAULT_RETRIEVAL_EVAL_DATASET = PROJECT_ROOT / "eval" / "retrieval_representative_questions.json"
 APPROVED_FEEDBACK_STATUSES = {"approved", "accepted"}
 APPROVED_REVIEW_DECISIONS = {"approved", "accept", "accepted", "promote_to_eval"}
 INACTIVE_FEEDBACK_STATUSES = {"review_pending", "draft", "deprecated", "superseded"}
-DEFAULT_EXPECTED_TERM_LIMIT = 8
 
 
 def load_feedback_records(path: str | Path) -> list[dict[str, Any]]:
@@ -72,7 +68,6 @@ def feedback_to_retrieval_eval_case(record: dict[str, Any]) -> dict[str, Any]:
         "question": question,
         "tags": _case_tags(record),
         "classification_filter": _classification_filter(record, answer_trace),
-        "expected_terms": _expected_terms(corrected_answer),
         "source_feedback": {
             "feedback_id": feedback_id,
             "feedback_type": str(record.get("feedback_type") or "").strip(),
@@ -132,33 +127,6 @@ def _classification_filter(record: dict[str, Any], answer_trace: dict[str, Any])
         return dict(value)
     value = answer_trace.get("classification_filter")
     return dict(value) if isinstance(value, dict) else {}
-
-
-def _expected_terms(answer: str, *, limit: int = DEFAULT_EXPECTED_TERM_LIMIT) -> list[str]:
-    normalized = _normalize(answer)
-    tokens = re.findall(r"[0-9A-Za-z_][0-9A-Za-z_.-]*", normalized)
-    # 語の区切り（助詞・文末の語）と、語の末尾から外す画面の部品の語は言語資源（search_terms。#2181）。
-    pack = current_pack()
-    split_words = alternation(pack.words("search_terms", "feedback_split_words"))
-    chunks = re.split(rf"[、。,.()\s]+|{split_words}", normalized)
-    for chunk in chunks:
-        text = re.sub(r"^[^ぁ-んァ-ン一-龯々ー]+|[^ぁ-んァ-ン一-龯々ー]+$", "", chunk)
-        if len(text) >= 2:
-            tokens.append(text)
-            for suffix in pack.words("search_terms", "feedback_strip_suffixes"):
-                if text.endswith(suffix) and len(text) > len(suffix) + 1:
-                    tokens.append(text[: -len(suffix)])
-    selected: list[str] = []
-    seen: set[str] = set()
-    for token in tokens:
-        key = token.casefold()
-        if key in seen:
-            continue
-        selected.append(token)
-        seen.add(key)
-        if len(selected) >= limit:
-            break
-    return selected
 
 
 def _required_text(record: dict[str, Any], key: str) -> str:

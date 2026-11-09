@@ -18,7 +18,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
 )
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
-# 回答系(生成・監査)と Vision(図説明)で model だけを分ける。
+# 回答系(生成)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
 # 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
@@ -658,15 +658,13 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
 
 
 # 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
-# 回答文の生成(generation)・生成後の監査(audit。#1528)。
+# 回答文の生成(generation)。
 LLM_PURPOSE_GENERATION = "generation"
-LLM_PURPOSE_AUDIT = "audit"
 _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
 }
 _PURPOSE_LABELS = {
     LLM_PURPOSE_GENERATION: "回答文の生成",
-    LLM_PURPOSE_AUDIT: "回答の監査",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
 REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")

@@ -65,8 +65,6 @@ describe("source profile labels", () => {
   it("parser backend labels hide external adapter implementation names", () => {
     expect(parserBackendLabel("dots_ocr_adapter")).toBe("Dots.OCR");
     expect(isSameParserBackend("dots_ocr_adapter", "dots_ocr")).toBe(true);
-    expect(parserBackendLabel("mineru_adapter")).toBe("MinerU");
-    expect(isSameParserBackend("mineru_adapter", "mineru")).toBe(true);
   });
 
   it("削除済みの解析エンジン名は過去の解析結果でも生の値のまま表示する", () => {

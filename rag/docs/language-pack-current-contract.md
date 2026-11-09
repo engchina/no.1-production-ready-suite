@@ -16,9 +16,19 @@
 
 この文書や合成テストはデータ移行を実行しません。DBの表定義、認可、版/来歴のfail-closed、索引の版切替の規則は変更しません。
 
-## 不適合の現在版からの修復（#4697）
+## 配備の後の確認（#4695）
 
-現在版が契約に合わない環境では、画面とAPIの保存・公開・復元は例外で止まるため、新しい完全な版を発行できません。`app.rag.language_pack_repair_cli` は、現在版の内容を保ったまま現行の契約で**欠けている項目だけ**組み込みの値を足した新しい公開版を発行する、明示の復旧の経路です。互換の補完や自動の公開はせず、起動・API・`ensure_initialized` の動きは変えません。
+`system_schema_cli check`（`platform/deploy/suite-health.sh` が呼びます）は、今の公開版と下書きが現行の契約に合うかも**読み取りだけ**で確かめ、合わなければ確認を NG にします。古い公開版の履歴は見ません。公開版が 1 つも無い新しい環境は合格です。NG の行には、合わない項目の名前（値は出しません）と次の節の修復の手順を出します。自動では直しません（組み込みの値での補完や自動の公開はしません）。
+
+## 不適合の言語資源の修復（#4697・#4745）
+
+現在版か下書きが契約に合わない環境では、画面とAPIの読み取り・保存・公開・復元は例外で止まるため、画面からは直せません。`app.rag.language_pack_repair_cli` は明示の復旧の経路で、状態に応じて次の 1 つだけを行います（どちらを行うかは dry-run の `repair_target` に出ます）。互換の補完や自動の公開はせず、起動・API・`ensure_initialized` の動きは変えません。
+
+| 状態 | `repair_target` | 適用で行うこと |
+|---|---|---|
+| 現在版が不適合 | `current` | 現在版の内容を保ったまま、**欠けている項目だけ**組み込みの値を足した新しい公開版を発行し、下書きも同じ内容にします |
+| 現在版は適合で、下書きだけが不適合 | `draft` | 下書きの値を保ったまま、**欠けている項目だけ現在版の値**を足し、廃止の項目を除きます。書き換えるのは下書きだけで、新しい版は発行しません。公開は通常の手順で利用者が行います |
+| どちらも適合 | `none` | 何もしません（`CURRENT_ALREADY_CONFORMS` で止まります） |
 
 手順（`rag/backend` で実行します。ADBと認証は `system_schema_cli` と同じ設定を使います）。
 
@@ -32,16 +42,17 @@
 
    | 項目 | 意味 |
    |---|---|
+   | `repair_target` | 修復の対象（`current` / `draft` / `none`。上の表） |
    | `current_release_id` / `current_version` / `draft_revision` | 現在版と下書きの状態（適用の期待値に使います） |
    | `current_conforms` / `draft_conforms` | 現在版・下書きが現行の契約に合っているか |
-   | `draft_matches_current` | 下書きが現在版と同じ内容か。`false` のときは、未公開の変更を消さないよう適用を止めます（`DRAFT_DIFFERS_FROM_CURRENT`） |
-   | `missing_fields` / `retired_fields` | 組み込みの値を足す項目 / 除く廃止の項目の名前 |
-   | `candidate_valid` / `ingest_hash_unchanged` | 候補が厳格な検証に通るか / 候補の `ingest_hash` が現在版と同じか |
-   | `active_ingestion_jobs` | QUEUED / RUNNING の取込 job の件数 |
+   | `draft_matches_current` | 下書きが現在版と同じ内容か。`repair_target` が `current` で `false` のときは、未公開の変更を消さないよう適用を止めます（`DRAFT_DIFFERS_FROM_CURRENT`）。`draft` のときは未公開の変更を保つので止めません |
+   | `missing_fields` / `retired_fields` | 足す項目（`current` は組み込みの値、`draft` は現在版の値）/ 除く廃止の項目の名前 |
+   | `candidate_valid` / `ingest_hash_unchanged` | 候補が厳格な検証に通るか / 候補の `ingest_hash` が現在版と同じか（`draft` では参考の情報で、下書きを公開すると文書の再処理が要るかの目安です） |
+   | `active_ingestion_jobs` | QUEUED / RUNNING の取込 job の件数（`draft` では公開版を変えないので止めません） |
 
-   止める条件（`blockers`）: `DRAFT_DIFFERS_FROM_CURRENT`（下書きに未公開の変更がある）、`CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。
+   止める条件（`blockers`）: `DRAFT_DIFFERS_FROM_CURRENT`（下書きに未公開の変更がある）、`CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。`repair_target` が `draft` のときに止める条件は `CANDIDATE_INVALID`（下書きが JSON のオブジェクトでない、`locale` が無いか現在版と違う、未知の項目や形の誤った値があるなど、欠けた項目を足すだけでは直らない）と、適用の期待値の 2 つです。下書きを現在版や組み込みの値で丸ごと置き換えることはしません。
 
-2. **許可。** dry-runの結果を対象の環境の利用者へ示し、発行の明示の許可を得ます（上の門禁の 5）。
+2. **許可とバックアップ。** dry-runの結果を対象の環境の利用者へ示し、適用の明示の許可を得ます（上の門禁の 5）。適用の前に、対象の環境の DB のバックアップ（Autonomous AI Database の復元できる時点など）を確かめます。除く廃止の項目の値は、適用の後は下書きに残りません。
 3. **適用。** dry-runで確かめた値を指定します。値が違えば何も書き込まずに止まります。
 
    ```bash
@@ -50,11 +61,11 @@
      --expected-draft-revision <dry-run の draft_revision>
    ```
 
-   1 つの transaction の中で状態の行を lock し、同じ条件を確かめ直し、新しい公開版（`previous_id` は現在版）を追加して下書きと現在版のポインタを同時に切り替え、commit の前に厳格な検証で読み戻します。途中で失敗すれば全体を rollback します。旧版の内容と hash は書き換えません。
+   1 つの transaction の中で状態の行を lock し、同じ条件を確かめ直し、commit の前に厳格な検証で読み戻します。途中で失敗すれば全体を rollback します。旧版の内容と hash は書き換えません。`current` は新しい公開版（`previous_id` は現在版）を追加して下書きと現在版のポインタを同時に切り替えます。`draft` は下書きと `draft_revision` だけを更新し、結果の `release_id` は今の現在版のままです。
 
-4. **確認。** 対象の環境で、検索と回答が実際に動くことを確かめます。`ingest_hash` が同じなので文書の再処理は行わず、索引の関係は `EQUIVALENT` になります。
+4. **確認。** `system_schema_cli check` が通ることと、対象の環境で検索と回答が実際に動くことを確かめます。`current` は `ingest_hash` が同じなので文書の再処理は行わず、索引の関係は `EQUIVALENT` になります。`draft` は公開版を変えないので、検索と回答の内容は変わりません。
 
-発行の後も残る制約: 旧版は保存した内容のままなので、個別の取得・比較・復元は不適合のまま 409 です。旧版に固定された成果物は CHUNK / INDEX で再利用できず、再処理するときは「ファイル準備」か「抽出」から始めます。
+`current` の発行の後も残る制約: 旧版は保存した内容のままなので、個別の取得・比較・復元は不適合のまま 409 です。旧版に固定された成果物は CHUNK / INDEX で再利用できず、再処理するときは「ファイル準備」か「抽出」から始めます。
 
 
 ## 公開履歴の一覧と内容の利用

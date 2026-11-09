@@ -47,8 +47,6 @@ from rag_engine.generation.grounded import (
 from rag_engine.generation.operation_audit import (
     answer_passage_ranges,
     answer_passages,
-    is_citation_line,
-    is_heading,
     is_table_rule,
     sentence_ranges,
     standard_answer_unit_ranges,
@@ -115,9 +113,6 @@ class ClaimCheck(BaseModel):
     scope_check: SkipJsonSchema[dict[str, Any]] = Field(default_factory=dict)
     audit_status: SkipJsonSchema[str] = ""
     reference_check: SkipJsonSchema[str] = ""
-    # 段落の分類の照合（#2625）。モデルが not_a_claim とした段落を、コードが見出し・出典の行と認めなければ
-    # non_claim_mismatch（判定は unassessed）、その段落を内容で監査し直した判定なら reaudited。
-    classification_check: SkipJsonSchema[str] = ""
 
 
 class AnswerEvaluationOutput(BaseModel):
@@ -1016,9 +1011,6 @@ REFERENCE_AMBIGUOUS_ID = "ambiguous_id"  # 省いて書いた ID が複数の ch
 REFERENCE_AUDIT_ID_MISSING = "audit_id_missing"  # 監査が ID を返さず、段落も ID を書いていない
 REFERENCE_SUBJECT_UNSUPPORTED = "subject_unsupported"  # 質問の named の名前（役割に関わらず）が、回答が引用した根拠に無い
 REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査が返した引用がその根拠に無い
-# 段落の分類の照合の結果（ClaimCheck.classification_check。#2625）。
-CLASSIFICATION_NON_CLAIM_MISMATCH = "non_claim_mismatch"  # モデルは not_a_claim、コードは見出し・出典の行と認めない
-CLASSIFICATION_REAUDITED = "reaudited"  # 分類が食い違った段落を、内容で監査し直した判定
 REFERENCE_CHECKS = (
     REFERENCE_SUBJECT_UNSUPPORTED,
     REFERENCE_RESOLVED,
@@ -1055,11 +1047,8 @@ def _unresolved_reference(claim, catalog, *, passage_citations):
     return REFERENCE_QUOTE_UNMATCHED
 
 
-def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, heading_lines=(), keep_model_non_claims: bool = False):
+def _bind_claims(output, catalog, passages, *, passage_citations: bool = False):
     """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。
-
-    heading_lines は回答全体の ``list_heading_lines``（最終の検証が渡す。#1481 / #1486）。
-    keep_model_non_claims（品質評価。#4714）では、モデルの not_a_claim を語の判定で覆さない。
 
     passage_citations（最終の検証。#1404）では、モデルの evidence_id で決まらないとき、回答の段落が書いた
     根拠の ID でも結び付ける。モデルが citation_error を返した段落も、引用した ID（evidence_id か段落の ID）が
@@ -1074,7 +1063,7 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
     bound = []
     for claim in output.claim_checks:
         # 診断はシステムが付ける（モデルの出力の値は使わない）。
-        claim = claim.model_copy(update={"audit_status": claim.status, "reference_check": "", "classification_check": ""})
+        claim = claim.model_copy(update={"audit_status": claim.status, "reference_check": ""})
         if passage_citations and claim.status == "citation_error":
             if _spans_for_ids(claim, catalog) or _spans_for_passage_citations(claim, catalog):
                 claim = claim.model_copy(
@@ -1126,20 +1115,6 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
             matches = [p["id"] for p in passages if p["text"] == claim.answer_quote]
             if len(matches) == 1:
                 claim = claim.model_copy(update={"answer_passage_id": matches[0]})
-        # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。それ以外は
-        # 内容を確かめていないので unassessed にし、分類の食い違いとして残す（最終の検証は監査し直す。#2625）。
-        if (
-            not keep_model_non_claims
-            and claim.status == "not_a_claim"
-            and not (is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote) or claim.answer_quote.strip() in heading_lines)
-        ):
-            claim = claim.model_copy(
-                update={
-                    "status": "unassessed",
-                    "reason": "本文を見出しとして監査から除外できません。" + claim.reason,
-                    "classification_check": CLASSIFICATION_NON_CLAIM_MISMATCH,
-                }
-            )
         bound.append(claim)
     return output.model_copy(update={"claim_checks": bound})
 
@@ -1323,7 +1298,7 @@ def scored_answer_text(answer_text: str) -> str:
 
 
 def _passage_citations(
-    answer_text: str, *, is_citation: Callable[[str], bool] = is_citation_line, is_section: Callable[[str], bool] = is_heading
+    answer_text: str, *, is_citation: Callable[[str], bool], is_section: Callable[[str], bool]
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """回答の段落の ID ごとの出典の文と、同じ出典の行を共有する段落の ID（自分を含む）。
 
@@ -1665,7 +1640,7 @@ def _judge_claim(
         if not last:
             raise
         output = last[-1]
-    bound = _bind_claims(AnswerEvaluationOutput(claim_checks=[as_claim(output)]), catalog, [dict(passage)], keep_model_non_claims=True)
+    bound = _bind_claims(AnswerEvaluationOutput(claim_checks=[as_claim(output)]), catalog, [dict(passage)])
     return bound.claim_checks[0], [item for item in inputs["evidence_items"] if item["evidence_id"] != QUESTION_EVIDENCE_ID]
 
 

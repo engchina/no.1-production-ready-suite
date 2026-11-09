@@ -206,7 +206,6 @@ export type EvaluationFailureReason =
   | "known_condition_reasked"
   | "screen_missing"
   | "wrong_screen"
-  | "off_target"
   | "case_error";
 /** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
 export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "requirement_coverage" | "claim_support_rate" | "response_decision_accuracy";
@@ -226,7 +225,6 @@ export type ParserAdapterBackend =
   | "unstructured"
   | "structured_records_jsonl"
   | "xml_tree_json"
-  | "mineru"
   | "dots_ocr"
   | "oci_document_understanding";
 export type ParserServiceBackendName = "oci_document_understanding";
@@ -235,11 +233,10 @@ export type ParserAdapterBackendName =
   | "unstructured"
   | "structured_records_jsonl"
   | "xml_tree_json"
-  | "mineru"
   | "dots_ocr";
-export type ExternalParserBackendName = "mineru" | "dots_ocr";
+export type ExternalParserBackendName = "dots_ocr";
 export type ExternalParserProtocol =
-  "mineru_v1" | "openai_chat_completions";
+  "openai_chat_completions";
 export type ExternalParserConnectionStatus =
   | "available"
   | "unconfigured"
@@ -1136,7 +1133,6 @@ export interface KnowledgeBaseIngestionConfig {
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
-  parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
   parser_structured_records_jsonl_enabled?: boolean | null;
   parser_xml_tree_json_enabled?: boolean | null;
@@ -2514,7 +2510,7 @@ export interface HuggingFaceSettingsUpdate {
 // --- 設定: Parser adapter ---
 export interface ParserAdapterStatusData {
   backend: ParserAdapterBackendName;
-  /** roadmap = 準備中（ロードマップ）で、まだ選べない（MinerU。#3359）。省略は available。 */
+  /** roadmap = 準備中（ロードマップ）で、まだ選べない。省略は available。 */
   availability?: ServiceAvailability;
   package_name: string;
   import_name: string;
@@ -2633,16 +2629,7 @@ export interface ParserAdapterSettingsData {
   raptor_enabled?: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
-  /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
-  mineru_license?: MineruLicenseAcknowledgement;
   config_source: "runtime";
-}
-
-/** MinerU のライセンスの条件を管理者が確認した記録（#3359）。 */
-export interface MineruLicenseAcknowledgement {
-  acknowledged: boolean;
-  acknowledged_by: string | null;
-  acknowledged_at: string | null;
 }
 
 /** `adapter_backend` を省略すると解析エンジンの設定は変えない（「解析後の処理」だけの保存。#528）。 */
@@ -2650,9 +2637,7 @@ export interface ParserAdapterSettingsUpdate {
   adapter_backend?: ParserAdapterBackend;
   docling_enabled?: boolean;
   unstructured_enabled?: boolean;
-  mineru_enabled?: boolean;
   /** true で確認した人・日時を記録し、false で記録を消す（#3359）。 */
-  mineru_license_acknowledged?: boolean;
   dots_ocr_enabled?: boolean;
   structured_records_jsonl_enabled?: boolean;
   xml_tree_json_enabled?: boolean;
@@ -4855,6 +4840,7 @@ export const api = {
   updateFileTypeDefaultsSettings: (body: FileTypeDefaultsUpdate) =>
     request<FileTypeDefaultsSettingsData>("/api/settings/file-type-defaults", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   getPreprocessSettings: () =>

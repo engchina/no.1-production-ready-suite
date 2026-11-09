@@ -2,7 +2,7 @@
 
 1 回の実行（trace_id）を `rag_run_history` に 1 行で残す。回答を作った実行の回答・引用・診断は
 回答の記録（`rag_answer_records`）を正本にし、ここには一覧と絞り込みに使う要約（状態・回答の対応・
-回答の検証・所要時間）と、処理の段（`stages_json`）、回答を作らない RAG 検索の根拠
+回答の確からしさ・所要時間）と、処理の段（`stages_json`）、回答を作らない RAG 検索の根拠
 （`citations_json`）だけを持つ。
 
 見え方（#1889・#1954）: system_admin（`all_users_visible`）は全員の実行。それ以外は、自分が実行した

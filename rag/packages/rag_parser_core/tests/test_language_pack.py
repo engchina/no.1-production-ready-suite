@@ -329,15 +329,11 @@ def test_numeric_layout_gaps_and_mixed_notation():
 
 
 _CRAG_COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
     "crag_definition_aspect_template",
 )
 
 
-@pytest.mark.parametrize("mask", range(32))
+@pytest.mark.parametrize("mask", range(2))
 def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
     raw = builtin_pack().to_dict()
     raw["answer_labels"]["gaps_section"] = "合成の独自文言"
@@ -356,7 +352,7 @@ def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
 @pytest.mark.parametrize("value", [None, ""])
 def test_new_crag_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
     raw = builtin_pack().to_dict()
-    raw["answer_labels"]["crag_refusal_summary"] = value
+    raw["answer_labels"]["insufficient_evidence_summary"] = value
     with pytest.raises(LanguagePackError):
         build_pack(raw)
 

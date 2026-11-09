@@ -220,8 +220,6 @@ def _full_run(setup: Setup) -> RunState:
                 superseded=True,
                 evidence_type="table",
                 origin="derived",
-                # 表の 1 行の記録は表の対応の検査が読めない（#3546）。
-                table_binding="not_checkable",
                 # 表の 1 行の根拠のセルの座標（RAG の EvidenceLocator の table_row・table_cells）。
                 locator={
                     "sheet_name": "シート 1",
@@ -484,7 +482,6 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "cited": True,
         "answer_use": "confirmed",
         "locator": None,
-        "table_binding": None,
         "text": "文書 A の合成の本文。",
         "text_length": len("文書 A の合成の本文。"),
         "text_omitted": False,
@@ -526,8 +523,6 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "table",
         "derived",
     )
-    # 表の行・列の対応の検査が読めるか（RAG の table_binding。読み取りの chunk は null）。
-    assert (second["table_binding"], third["table_binding"]) == ("not_checkable", None)
     assert (third["source"], third["tool_call_index"], third["retrieval_rank"]) == ("read", 2, None)
     assert (third["evidence_type"], third["origin"]) == (None, None)
     assert third["text"] == "シート の 1 行目。"

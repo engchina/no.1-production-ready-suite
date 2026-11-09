@@ -320,6 +320,27 @@ async function expectScrollsInsideTable(page: Page, region: Locator) {
   else expect(metrics.visibleRows).toBeGreaterThanOrEqual(expectedRows);
 }
 
+// 時間帯の無い created_at（Oracle の TIMESTAMP の形）は、端末の時間帯によらず UTC の瞬間（#4753）。
+for (const timezoneId of ["Asia/Tokyo", "UTC"]) {
+  test.describe(`実行履歴の時刻（端末の時間帯 ${timezoneId}）`, () => {
+    test.use({ timezoneId });
+
+    test("時間帯の無い日時を UTC の瞬間として、システムの設定の時間帯で書く", async ({ page }) => {
+      await mockLocalAuth(page);
+      // 分の境目をまたがないよう、分の 30 秒に置く（開始 = 終了 - 11 秒）。
+      const finishedMs = Math.floor(RECENT_BASE_MS / 60_000) * 60_000 + 30_000;
+      const naive = new Date(finishedMs).toISOString().replace(/\.\d+Z$/, ".223334");
+      const startedIso = new Date(finishedMs - 11_000).toISOString();
+      const expected = `${startedIso.slice(0, 10).replaceAll("-", "/")} ${startedIso.slice(11, 16)}`;
+      await mockRuns(page, [run(1, { created_at: naive, elapsed_ms: 11_000 })]);
+
+      await page.goto("/history");
+      await expect(page.getByTestId("run-history-row-run-1").getByText(expected, { exact: false }).locator("visible=true").first()).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
+  });
+}
+
 test.describe("実行履歴", { tag: "@responsive" }, () => {
   test("system_admin: 読み込み中は経過時間と表の Skeleton、全員の実行と実行者の列、ページ番号で移りページは再読込でも残る", async ({
     page,
@@ -955,7 +976,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
         { model: "model-strong", requests: 2, input_tokens: 6000, output_tokens: 600, total_tokens: 6600 },
       ],
     };
-    const cascade = { primary_model: "model-light", escalation_model: "model-strong", escalated: true, reasons: ["citation_mismatch"], stage: "answer.generate" };
+    const cascade = { primary_model: "model-light", escalation_model: "model-strong", escalated: true, reasons: ["structured_output_invalid"], stage: "answer.generate" };
     await mockRuns(page, [
       run(1, {
         question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light", usage,
@@ -983,14 +1004,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(monoSize).toBe("12px");
     expect(await modelIds.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).fontSize))).toEqual([monoSize, monoSize]);
     expect(await fact("modelTokens").evaluate((node) => getComputedStyle(node).fontSize)).toBe("14px");
-    await expect(fact("modelCascade")).toHaveText("あり（引用の ID・原文が資料と一致しなかった）");
+    await expect(fact("modelCascade")).toHaveText("あり（生成の出力が形式の検査を通らなかった）");
     // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
     await expect(page.getByTestId("answer-model-cascade")).toBeHidden();
     await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
     const line = page.getByTestId("answer-model-cascade");
-    await expect(line).toContainText("最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました");
-    await expect(line).toContainText("理由: 引用の ID・原文が資料と一致しなかった");
+    await expect(line).toContainText("最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました");
+    await expect(line).toContainText("理由: 生成の出力が形式の検査を通らなかった");
     await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light", "model-strong"]);
     await expectNoPageOverflow(page);
     for (const theme of ["light", "dark"]) {
@@ -1915,38 +1936,6 @@ test("前後文脈と章節の読取・採用・重複を入力と結果で分�
   await inspector.getByRole("tab", { name: "入力", exact: true }).click();
   await expect(inspector).toContainText("記録されていません");
   await expectNoPageOverflow(page);
-});
-
-test("回答修正の方針・再生成の採否・最終採用回を分けて確認できる", {tag: "@responsive"}, async ({page}, testInfo) => {
-  await mockLocalAuth(page);
-  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
-  await mockRuns(page, [row]);
-  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
-    {key: "root", spec: ragSpan.root(), at: [0, 4]},
-    {key: "round1", spec: ragSpan.step("回答文の生成と根拠確認（1回目）", "root"), at: [0, 1], params: {accepted: true, round: 1}, details: {fields: [{label: "採否", value: "採用"}]}},
-    {key: "check", spec: ragSpan.step("回答の修正が必要か確認する", "root"), at: [1, 1.1], details: {fields: [{label: "結果", value: "修正が必要です"}, {label: "指摘", value: "範囲を確認できない引用 1 件"}]}},
-    {key: "plan", spec: ragSpan.step("是正", "root"), at: [1.1, 1.2], details: {fields: [{label: "次の回答の作成", value: "2 回目"}, {label: "結果", value: "検査の指摘を渡して作り直します"}]}},
-    {key: "round2", spec: ragSpan.step("回答文の生成と根拠確認（2回目）", "root"), at: [1.2, 3], params: {accepted: false, round: 2}, details: {fields: [{label: "採否", value: "不採用（前の回の回答を維持）"}]}},
-    {key: "end", spec: ragSpan.step("是正の打ち切り", "root"), at: [3, 4], details: {fields: [{label: "結果", value: "改善が確認できないため、1回目の回答を採用しました。"}, {label: "最終採用", value: "1 回目"}]}},
-  ])});
-  await page.goto(`/history/${row.run_id}`);
-  await page.getByTestId("run-history-timeline-summary").click();
-  const timeline = page.getByTestId("run-history-timeline");
-  await expect(timeline).toContainText("回答の修正が必要か確認する");
-  await expect(timeline).toContainText("回答の修正方針を決める");
-  await expect(timeline).toContainText("回答の修正を終了する");
-  const first = timeline.locator(`[data-run-timeline-step="${spanStepId("round1")}"]`);
-  const second = timeline.locator(`[data-run-timeline-step="${spanStepId("round2")}"]`);
-  await expect(first).toHaveAttribute("data-status", "done");
-  await expect(first).toContainText("採用");
-  await expect(second).toHaveAttribute("data-status", "done");
-  await expect(second).toContainText("不採用");
-  await timeline.screenshot({path: testInfo.outputPath("correction-adoption-timeline.png")});
-  await inspectTraceStep(page, timeline, spanStepId("end"));
-  const inspector = page.locator("[data-trace-inspector]");
-  await expect(inspector).toContainText("改善が確認できないため、1回目の回答を採用しました。");
-  await expectNoPageOverflow(page);
-  await inspector.screenshot({path: testInfo.outputPath("correction-final-round.png")});
 });
 
 test("Oracle内部で統合済みの場合だけ追加の統合をスキップと表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
