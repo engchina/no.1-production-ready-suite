@@ -42,7 +42,6 @@ from app.features.agent.runtime import (
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.tools import ToolInvocationContext, ToolPolicy
 from app.security.service import set_security_service
-from app.settings import get_settings
 
 SKILL_ID = "test1378-skill"
 AGENT_ID = "test1378-agent"

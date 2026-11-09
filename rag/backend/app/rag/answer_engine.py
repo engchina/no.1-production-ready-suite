@@ -244,7 +244,7 @@ def answer_step_stage(name: str) -> str:
 
 
 def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
-    """回答フローの外で行う回答の工程（資料との照合・承認済み FAQ からの回答）の span（#3226）。
+    """回答フローの外で行う回答の工程（承認済み FAQ からの回答）の span（#3226）。
 
     `rag_engine` の工程（`rag.engine.stage`）と同じ名前・種類にし、処理の経過の行にする。
     """

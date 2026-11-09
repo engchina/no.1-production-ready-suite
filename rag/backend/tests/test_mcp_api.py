@@ -162,7 +162,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_search",
         "rag_lookup_guides",
         "rag_retrieve_evidence",
-            "rag_read_source",
+        "rag_read_source",
         "rag_outline",
         "rag_read_document",
         "rag_read_section",

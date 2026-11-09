@@ -23,7 +23,8 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
 1. `empty_answer`: 回答が空 → insufficient_evidence
-2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した → needs_clarification
+2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した
+   → needs_clarification
    `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
 3. `rag_search`: 回答が最後の `rag_search` に拠る（その後に根拠を集め直していない）とき、その対応。
    現場のデータが要る（needs_environment_data）を現場のデータの道具（RAG 以外の MCP 接続のツール。

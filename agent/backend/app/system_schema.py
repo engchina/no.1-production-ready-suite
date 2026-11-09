@@ -384,8 +384,8 @@ RUN_FACTS_STATEMENTS: tuple[str, ...] = (
 )
 
 # 確かめるべき実行のシグナルの列（#1822。migration 012）。既存のテーブルに足す（データは消さない）。
-# ANSWER_OUTCOME は回答の対応（#1305）、VALIDATION_RESULT は最終の検証の結果
-# （`run_facts.VALIDATION_*`）、TOOL_FAILURES / APPROVALS_REJECTED は失敗したツールの呼び出しと
+# ANSWER_OUTCOME は回答の対応（#1305）、VALIDATION_RESULT は今は書かない（#4714）
+# TOOL_FAILURES / APPROVALS_REJECTED は失敗したツールの呼び出しと
 # 却下した承認の数。
 RUN_FACTS_SIGNAL_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE AGENT_RUN_FACTS ADD (ANSWER_OUTCOME VARCHAR2(32))",

@@ -1011,7 +1011,7 @@ function RunChatTurn({
   // 業務 Agent が記録した出力の項目（#2549）。
   const outputTable = useMemo(() => runOutputTable(run), [run]);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
-  // 資料との照合（照合の結果のバッジと、確かめた条件・確認待ちの質問・業務ガイド。#1286・#2361）。作成中は出さない。
+  // 回答の確認事項（回答の対応のバッジと、確かめた条件・確認待ちの質問・業務ガイド。#1286・#2361）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 回答の本文の節（要約 →「資料により確認できた事項」と根拠の行 →「資料から確認できなかった事項」。RAG のチャットと
   // 同じ形。#2328）。段落に根拠を結び付けられないときは今までの Markdown の描き方にする。
@@ -1271,7 +1271,7 @@ function RunChatTurn({
           />
         ) : null}
 
-        {/* 資料との照合は回答の本文の下・出典の上（#1286。#2123 で元の位置に戻した。#2361 で「回答の確かめ」から改名）。 */}
+        {/* 回答の確認事項は回答の本文の下・出典の上（#1286。#2123 で元の位置に戻した。#2361 で「回答の確かめ」から改名）。 */}
         {review ? (
           <AnswerReviewPanel
             // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。

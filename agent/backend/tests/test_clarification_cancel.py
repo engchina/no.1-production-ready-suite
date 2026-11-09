@@ -50,7 +50,6 @@ from app.features.agent.runtime import (
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import nl2sql_next_step
 from app.features.agent.tools import ToolPolicy
-from app.settings import get_settings
 
 SKILL_ID = "test1441-skill"
 AGENT_ID = "test1441-agent"

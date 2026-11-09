@@ -10,15 +10,12 @@ from typing import Any
 
 import pytest
 
-from app.features.agent import tool_grounding
 from app.features.agent.answer_outcome import ANSWER_OUTCOMES, answer_outcome
 from app.features.agent.answer_passages import (
     asks_environment_data,
     case_labels,
-    passage_spans,
     supplement_passages,
 )
-from app.features.agent.evaluation import EvaluationCase, EvaluationCaseResult, summarize
 from app.features.agent.runtime import RunStep, StepStatus
 from app.features.agent.tools import ToolCall, ToolResult
 
@@ -42,9 +39,7 @@ def _retrieve() -> RunStep:
     return _step("rag__rag_retrieve_evidence", {"evidence": EVIDENCE})
 
 
-def _outcome(
-    answer: str, steps: list[RunStep]
-) -> tuple[str, str]:
+def _outcome(answer: str, steps: list[RunStep]) -> tuple[str, str]:
     content = answer_outcome(answer, steps=steps)
     assert content["schema_version"] == 1
     assert content["value"] in ANSWER_OUTCOMES
@@ -109,15 +104,6 @@ def test_environment_tools_without_rag_answer_the_question() -> None:
 # ---- #1317: 実環境の評価（#1305 の D）で外れた回答の形 ----------------------------------
 
 
-def _verdicts(answer: str, statuses: dict[str, str]) -> list[dict[str, Any]]:
-    """回答の段落ごとの判定（`statuses` に無い段落は supported）。"""
-    return [
-        _claim(text, statuses.get(text, "supported"))
-        for line in answer.split("\n")
-        for _start, _end, text in passage_spans(line)
-    ]
-
-
 TRIAL_EXPIRY_FACT = "検証用アカウントの有効期限は **最長 30日** です。"
 TRIAL_EXPIRY_SECTION = (
     "- セクション: 「サンプル業務ポータル 運用手順書 第3版」 → **2. 検証用アカウントの登録**"
@@ -159,12 +145,6 @@ PASSWORD_REFUSAL = (
     "パスワードの文字数要件に関する記載がありません。そのため、パスワードは何文字以上にすべきかに"
     "ついて根拠のある回答はできません。該当するパスワードポリシー文書をご確認ください。"
 )
-
-
-def test_refusal_with_an_amount_is_still_a_claim() -> None:
-    # 金額を含む文は拒答の文にしない（#1306 の安全側の規則）。
-    answer = "年間ライセンス費用は 120,000 円のため、それ以上の金額はお示しできません。"
-    assert _outcome(answer, [_retrieve()]) == ("answered", "answer_passages")
 
 
 E1023_LOG = (
@@ -504,15 +484,3 @@ OUT_OF_SCOPE_REFUSAL = "\n".join(
 OUT_OF_SCOPE_ADVICE = (
     "天気予報は社内の範囲外の情報なので、一般的な気象情報サイトなどでご確認ください。"
 )
-
-
-def _claims_of(answer: str, status: str) -> list[dict[str, Any]]:
-    """回答の主張の段落（見出し・表の形・出典の行を除く）を、すべて `status` にした判定。"""
-    return [
-        _claim(text, status)
-        for line in answer.split("\n")
-        for _start, _end, text in passage_spans(line)
-        if not text.startswith(("| 区分", "|---", "根拠資料"))
-    ]
-
-

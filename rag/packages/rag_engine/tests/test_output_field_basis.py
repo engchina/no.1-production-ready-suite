@@ -54,5 +54,3 @@ def test_confirmed_export_operation_is_retained_and_unsupported_summary_is_detec
     bad = "出力ファイルの年度列で絞ります。"
     assert grounded.summary_asserts_denied(bad, [bad], [quote])
     assert not grounded.summary_asserts_denied(quote, [bad], [quote])
-
-

@@ -12,7 +12,7 @@ BLOCK と同じ考え方）。
   ツールが残らない Run は対象外（ガードをすり抜けた回答は #1834 の「根拠を使わずに答えた」に出る）。
 - 数える呼び出し: モデルが根拠・データのツールを呼んだ step（成功・失敗・承認の却下・評価の
   dry-run・自動実行で承認が要るため呼ばなかったものも、モデルが確かめようとしたので数える）。
-  Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は数えない。
+  Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。
 - 除外: 同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中）が根拠・
   データのツールで答えた Run（前の回答の言い換え・整形。事実の確かめは #1837 の最終の検証）と、
   利用者が確認を取り消した Run（「資料の検索は不要」など。#1441・#1445）と、
@@ -48,9 +48,7 @@ BLOCK と同じ考え方）。
   拒答にはせずそのまま出し、Run の経過に残す（拒答は範囲外・確かめられない質問のためのもので、
   対象が曖昧な質問の聞き返しを「お答えできません」にすると利用者が次に何をすればよいか分からない）。
 - 回答の対応は `insufficient_evidence`（basis `no_tool_grounding`。調べずに範囲外・答えられないと
-  判断した拒答は `declined_without_tools`）。最終の検証の成果物は
-  `skipped`（reason `no_tool_grounding`）にする（資料の根拠を使わずに答えた `no_rag_evidence`
-  とは分ける。#1834 のシグナルは拒答した Run を「答えられなかった」に数える）。
+  判断した拒答は `declined_without_tools`）。
 
 ここは判定と文だけを持つ（差し戻し・保存は `builtin_runtime`）。
 """
@@ -86,9 +84,8 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 
-# 回答の対応の basis と、最終の検証の成果物の reason。ツールで確かめずに答えた回答を拒答に
+# 回答の対応の basis。ツールで確かめずに答えた回答を拒答に
 # 置き換えたものと、ツールで調べずに範囲外・答えられないと判断した拒答（#2608）を分ける（最終の
-# 検証の成果物の reason はどちらも `no_tool_grounding`）。
 BASIS_NO_TOOL_GROUNDING = "no_tool_grounding"
 BASIS_DECLINED_WITHOUT_TOOLS = "declined_without_tools"
 REASON_NO_TOOL_GROUNDING = "no_tool_grounding"
@@ -239,7 +236,7 @@ def tools_consulted(steps: list[RunStep]) -> bool:
 
     回答前の確認（`ask_user_confirmation`）の前に資料・業務データを調べたかの判定に使う。
     プロファイルの推薦の候補が割れたときの確認は推薦を呼んだ後なので、推薦も数える。
-    Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は数えない。
+    Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。
     """
     for step in steps:
         call = step.tool_call
@@ -273,7 +270,7 @@ def tool_output_texts(steps: list[RunStep]) -> list[str]:
     """この Run でモデルが呼んで成功した MCP 接続のツールの結果（JSON の文。#1934）。
 
     回答前の確認の選択肢がツールの結果にあるかを確かめるのに使う。Control Plane が自分で
-    呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は入れない。
+    呼んだもの（確認の取り消し・業務ガイドの照合）は入れない。
     """
     texts: list[str] = []
     for step in steps:

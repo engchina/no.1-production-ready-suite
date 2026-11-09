@@ -37,7 +37,6 @@ from app.features.agent.tool_grounding import (
     grounding_used,
 )
 from app.features.agent.tools import ToolCall, ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test2504-skill"
 AGENT_ID = "test2504-agent"

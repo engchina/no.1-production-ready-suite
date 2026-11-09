@@ -22,7 +22,6 @@ from mcp_support import DEFAULT_OUTPUTS, RAG_OUTPUT_SCHEMA_VERSION, RAG_OUTPUTS_
 from app.features.agent import evidence_access, rag_figures, section_coverage, support_task
 from app.features.agent.answer_passage_vocabulary import vocabulary
 from app.features.agent.answer_passages import KIND_UNVERIFIED, non_claim_passages
-from app.features.agent.clarification_cancel import KIND_RAG
 
 CONTRACT = Path(__file__).resolve().parents[3] / "platform/contracts/mcp/rag-tools.json"
 

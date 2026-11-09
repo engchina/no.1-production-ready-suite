@@ -16,7 +16,7 @@ from pr_backend_core.observability.tracing import (
 
 from app.config import Settings
 from app.rag import answer_engine as module
-from app.rag.answer_engine import AnswerEngine, AnswerOutcome
+from app.rag.answer_engine import AnswerEngine
 from app.schemas.search import SearchRequest
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 

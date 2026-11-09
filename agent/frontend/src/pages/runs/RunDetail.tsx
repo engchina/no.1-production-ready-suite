@@ -151,7 +151,7 @@ export function RunDetail({
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
   // 最終の回答は「回答」の節（回答の根拠はその下。#2328）。「成果物」の節は利用者が使う出力（表の結果など）だけで、
-  // 支援タスクの状態・資料との照合などの内部の記録は「監査ログ」で元の JSON まで見る（#2403）。
+  // 支援タスクの状態などの内部の記録は「監査ログ」で元の JSON まで見る（#2403）。
   const answers = run.artifacts.filter(isAnswerArtifact);
   const outputs = userOutputArtifacts(run.artifacts);
   const internalRecords = internalRecordArtifacts(run.artifacts);
@@ -484,7 +484,7 @@ function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ 
 
 /**
  * 実行の詳細の監査ログ（#2403）。ツールの呼び出しの記録（判断・権限・承認・処理時間・エラー）と、実行が残した内部の
- * 記録（支援タスクの状態・資料との照合・検索の途中の結果など。成果物の種類で `internalRecordArtifacts` が分ける）を、
+ * 記録（支援タスクの状態・検索の途中の結果など。成果物の種類で `internalRecordArtifacts` が分ける）を、
  * イベントの記録と同じ共通の `RunEventLog` で 1 行ずつ時間の順に並べる（行を開いて詳細と元の JSON。内側だけを
  * スクロールする）。ツールの記録は開いたときだけ読む。
  */

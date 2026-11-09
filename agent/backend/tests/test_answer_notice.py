@@ -10,12 +10,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, cast
 
+from answer_run_fixtures import AGENT_ID, ANSWER, USER_UUID, _searched_run
+from answer_run_fixtures import mcp as mcp  # noqa: F401 - fixture
 from fastapi import Request
 from mcp_support import FakeProductMcp
 from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT, AnswerNoticeRecord
 from pytest import MonkeyPatch
-from answer_run_fixtures import AGENT_ID, ANSWER, USER_UUID, _searched_run
-from answer_run_fixtures import mcp as mcp  # noqa: F401 - fixture
 
 from app.features.agent import mcp_server
 from app.features.agent.answer_notice import answer_takes_notice

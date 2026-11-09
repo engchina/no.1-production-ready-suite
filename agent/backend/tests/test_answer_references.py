@@ -12,9 +12,7 @@ from app.features.agent.answer_passages import (
     is_absence_only,
     is_heading,
     is_operation_step,
-    label_operation_end,
     list_heading_lines,
-    list_item_label,
     non_claim_passages,
     passage_kind,
     passage_spans,
@@ -563,4 +561,3 @@ def test_assertion_in_heading_markup_ends_the_previous_unverified_section(headin
     assert heading not in kinds
     assert claim not in kinds
     assert kinds["- 未確認の項目"] == "unverified_section"
-

@@ -273,8 +273,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_run_max_active_seconds: float = 0.0
     # 品質評価の 1 ケースの上限時間（秒。Run の実行。判定は別。#1432）。0 以下（既定）は自動で、
     # 接続 `rag` の待ち時間 ×（Run の RAG の予算〔agent_max_rag_calls_per_run。0 以下なら
-    # agent_max_tool_calls_per_run〕+ 1）にする。+1 は回答の最終の検証（rag_validate_answer）と
-    # モデルの推論の分。既定では 630 ×（6 + 1）= 4410 秒。300 秒〜86400 秒に収める。
+    # agent_max_tool_calls_per_run〕+ 1）にする。+1 はモデルの推論の分。
+    # 既定では 630 ×（6 + 1）= 4410 秒。300 秒〜86400 秒に収める。
     agent_evaluation_case_timeout_seconds: float = 0.0
     # 品質評価で同時に実行するケースの数の上限（#2004）。判定（LLM-as-judge）は job の中で 1 つの
     # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って

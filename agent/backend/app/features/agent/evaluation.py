@@ -172,7 +172,8 @@ def case_timeout_seconds() -> float:
     `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS` が正ならその値（86400 秒まで）。0 以下は自動で、
     接続 `rag` の待ち時間 ×（Run の RAG の予算 + 1）にする。RAG を使う業務 Agent の Run は RAG を
     予算の回数まで呼び、1 回は RAG の回答生成を通しで待つ（#1425）。+1 はモデルの推論の分。
-    RAG の予算が無制限（0 以下）なら、Run のツールの呼び出しの上限を回数に使う。自動の値は 300 秒〜86400 秒に収める。
+    RAG の予算が無制限（0 以下）なら、Run のツールの呼び出しの上限を回数に使う。
+    自動の値は 300 秒〜86400 秒に収める。
     """
     settings = get_settings()
     configured = float(settings.agent_evaluation_case_timeout_seconds)

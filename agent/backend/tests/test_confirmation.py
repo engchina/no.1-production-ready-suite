@@ -82,7 +82,7 @@ from app.features.agent.support_task import (
     nl2sql_settles,
     nl2sql_skip_step,
 )
-from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
+from app.features.agent.tools import ToolPolicy, ToolResult
 from app.main import app
 from app.settings import get_settings
 

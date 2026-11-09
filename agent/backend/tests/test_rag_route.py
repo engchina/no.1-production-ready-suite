@@ -36,7 +36,6 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import is_environment_tool, rag_next_step
-from app.settings import get_settings
 
 SKILL_RAG = "test1283-rag"
 SKILL_RAG_NL2SQL = "test1283-rag-nl2sql"

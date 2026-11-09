@@ -3972,7 +3972,7 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 **データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。
 
 - RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/citation-evidence.ts`）。根拠のパネルは `CitationSourceSheet`（`EvidenceSourceSheet` に原文のプレビュー `DocumentPreview` を渡す）。
-- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に RAG と同じ `DocumentPreview`（`RagSourcePreview`）を渡す。原文は RAG の画面用の Cookie の API ではなく、Agent の backend（`GET /api/runs/{run_id}/source-preview`）が閲覧者として RAG に作らせた短命の署名つきの URL で読む（#2389）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
+- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に RAG と同じ `DocumentPreview`（`RagSourcePreview`）を渡す。原文は RAG の画面用の Cookie の API ではなく、Agent の backend（`GET /api/runs/{run_id}/source-preview`）が閲覧者として RAG に作らせた短命の署名つきの URL で読む（#2389）。
 - 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`・`answer-passage-marks.test.tsx`（段落の印の契約の事例を読む）・`evidence-figure.test.tsx`。
 
 ---

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import (
     asks_for_request,
     greets,

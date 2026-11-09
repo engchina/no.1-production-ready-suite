@@ -55,5 +55,3 @@ def test_independent_requirement_proofs_can_share_one_item():
     coverage = [{"step_id": key, "status": "unused", "required": True} for key in ["a", "b"]]
     result = grounded.apply_guide_contracts(coverage, [entry(FIRST + SECOND)], contracts, audit)
     assert [step["status"] for step in result] == ["explained", "explained"]
-
-

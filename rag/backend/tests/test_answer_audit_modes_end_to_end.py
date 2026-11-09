@@ -1,18 +1,12 @@
 """正式回答入口で監査モードの設定・呼出・最終状態をつなげて確認する。"""
 
-import asyncio
 from typing import Any, cast
-from unittest.mock import AsyncMock
 
-import httpx
 import pytest
-from fastapi import HTTPException
-from openai import APITimeoutError
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.resources.deadline import DeadlineExceeded
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine, AnswerOutcome, build_engine_settings
+from app.rag.answer_engine import AnswerEngine, build_engine_settings
 from app.schemas.search import SearchRequest
 from tests.audit_fixtures import is_audit_schema
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm

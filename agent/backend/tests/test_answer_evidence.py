@@ -15,9 +15,9 @@ from typing import Any
 import anyio
 import pytest
 from agents.testing import assistant_message, function_call
+from answer_run_fixtures import AGENT_ID, ANSWER, USER_UUID, _script, mcp  # noqa: F401 - fixture
 from mcp_support import FakeProductMcp
 from pytest import MonkeyPatch
-from answer_run_fixtures import AGENT_ID, ANSWER, USER_UUID, _script, mcp  # noqa: F401 - fixture
 
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_evidence import (
@@ -325,8 +325,8 @@ def test_the_run_saves_the_answer_evidence_and_drops_lookup_notes(
     published = run_answer_text(run)
     assert published == ANSWER
     assert "0f3a9c2e7b1d4e5f" not in (published or "")
-    # 回答の根拠: AI に渡した 1 件を回答で引用。
+    # 回答の根拠: AI に渡した 1 件（ID も原文の写しも書いていない回答なので引用は 0 件）。
     [artifact] = [item for item in run.artifacts if item.kind == ANSWER_EVIDENCE_KIND]
     assert artifact.name == "回答の根拠"
-    assert (artifact.content["passed"], artifact.content["cited"]) == (1, 1)
+    assert (artifact.content["passed"], artifact.content["cited"]) == (1, 0)
     assert artifact.content["items"][0]["chunk_id"] == "chunk-1"

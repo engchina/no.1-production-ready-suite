@@ -185,5 +185,3 @@ def test_generated_item_is_corrected_and_kept_with_a_mark() -> None:
     entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
     assert grounded.revise_table_conflicts(entries, _reviser(RuntimeError("x"))) == 0
     assert next(entry for entry in entries if entry.item.text == WRONG).removed
-
-

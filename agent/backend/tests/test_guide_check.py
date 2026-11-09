@@ -44,7 +44,6 @@ from app.features.agent.support_task import (
     guide_check_note,
     rag_next_step,
 )
-from app.settings import get_settings
 
 SKILL_ID = "test1322-skill"
 AGENT_ID = "test1322-agent"

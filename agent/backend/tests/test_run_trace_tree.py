@@ -45,7 +45,6 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.trace_spans import trace_spans
-from app.settings import get_settings
 
 SKILL_ID = "test3471-skill"
 AGENT_ID = "test3471-agent"

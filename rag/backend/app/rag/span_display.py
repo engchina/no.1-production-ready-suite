@@ -6,7 +6,7 @@
 の `CHAT_PROGRESS_DEFINITIONS`）が名前・計測値を付けるときの key で、次の 2 つにする。
 
 - 回答フローの工程（`rag_engine` の `_execution_step` の span `rag.engine.stage`、
-  資料との照合・承認済み FAQ からの回答）: 種類 ``answer_step``。値は工程名 ``name``・
+  承認済み FAQ からの回答）: 種類 ``answer_step``。値は工程名 ``name``・
   LLM の回数 ``llm_calls``（送り直しで送信が多ければ ``llm_sends``）・結果の説明
   ``note``（「該当なし」など）。
 - 回答フローの外の工程（会話を踏まえた質問の書き換え・質問から条件の読み取り・

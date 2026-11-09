@@ -46,7 +46,6 @@ from app.features.agent.support_task import (
 )
 from app.features.agent.tool_grounding import METADATA_KEY
 from app.features.agent.tools import ToolCall, ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test2396-skill"
 AGENT_ID = "test2396-agent"

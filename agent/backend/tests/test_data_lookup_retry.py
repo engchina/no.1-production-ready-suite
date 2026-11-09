@@ -31,7 +31,6 @@ from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement,
 from app.features.agent.support_task import DATA_LOOKUP_HINT, missing_data_lookup
 from app.features.agent.tool_grounding import METADATA_KEY
 from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test1979-skill"
 AGENT_ID = "test1979-agent"

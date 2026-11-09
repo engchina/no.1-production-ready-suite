@@ -26,7 +26,6 @@ from app.features.agent.builtin_runtime import (
 from app.features.agent.runtime import AgentProfile, RunCreateRequest, runtime_repository
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.tools import ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test2498-skill"
 AGENT_ID = "test2498-agent"

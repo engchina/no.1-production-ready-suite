@@ -48,7 +48,6 @@ from app.features.agent.support_task import (
     rag_planned_arguments,
     rag_planned_schema,
 )
-from app.settings import get_settings
 
 SKILL_ID = "test2651-skill"
 AGENT_ID = "test2651-agent"

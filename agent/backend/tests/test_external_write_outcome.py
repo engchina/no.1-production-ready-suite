@@ -52,7 +52,6 @@ from app.features.agent.tools import (
     ToolResult,
     mcp_function_name,
 )
-from app.settings import get_settings
 
 SERVER_ID = "test72-ext"
 SKILL_ID = "test72-skill"

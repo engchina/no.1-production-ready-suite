@@ -2209,7 +2209,7 @@ class _ToolRecorder:
         handler: ToolHandler | None = None,
         cleanup: bool = False,
     ) -> tuple[str, ToolResult]:
-        """Control Plane が自分で呼ぶツール（回答の最終の検証。#1246）を step に記録して呼ぶ。
+        """Control Plane が自分で呼ぶツールを step に記録して呼ぶ。
 
         予算は数えない。ポリシーの「拒否」は守り、「承認」は待たない（読み取りの検証のため。監査には
         `authorization=control_plane` を残す）。終わった Run では呼ばない（#2609）。`cleanup` は

@@ -413,14 +413,6 @@ class Settings:
     article_catalog_cache_dir: Path | None = None
     article_catalog_cache_ttl_seconds: float = 86400.0
     article_catalog_cache_max_entries: int = 4096
-    # 回答の最終の検証（rag_validate_answer）でモデルに渡す入力の上限（UTF-8 の bytes。指示・質問・回答・根拠を含む）。
-    # 根拠は渡された順に収まるだけ渡し、収まらない根拠は検証に使わない（結果の evidence_truncated）。品質評価の
-    # 主張の監査の予算（`MAX_EVALUATION_INPUT_BYTES`）とは別。
-    # 用途ごとの推論(思考)の量の上書き(#1499)。空はモデルの登録値(`LlmProviderSettings.reasoning_effort`)の
-    # まま、none は送らない、low / medium / high はその値を送る。質問拡張戦略の判定と検索文の生成、根拠の評価
-    # (CRAG の評価と章節の拡張の十分性の判定)、回答文の生成、生成後の監査(#1528)で分ける。モデルの登録値が
-    # none(送らない)のモデルには、上書きしても送らない(推論を受け付けないモデルがある。platform の
-    # `pr_system_settings.model` の実測)。
     strategy_reasoning_effort: str = ""
     judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""

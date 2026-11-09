@@ -1,13 +1,11 @@
 """未校正の意味監査を後処理で自動裁決へ戻さない。外部サービスは使わない。"""
 
 from typing import Any, cast
-from unittest.mock import AsyncMock
 
 import pytest
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome, _outcome_from_result, _SearchState
-from app.schemas.search import SearchRequest
 from tests.test_answer_use import _EngineResult
 
 POLICY = {"mode": "diagnostic_only", "calibration": "not_calibrated"}
