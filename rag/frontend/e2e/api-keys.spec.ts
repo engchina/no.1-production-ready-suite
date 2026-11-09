@@ -78,9 +78,10 @@ test.describe("API キー", { tag: "@responsive" }, () => {
 
     await page.goto("/search");
     const sidebar = await openSidebarNav(page);
-    // 個人の「API キー」はサイドナビの行に無く、アカウントの欄から開くアカウントの画面のタブ（#1873）。
+    // 個人の「API キー」はサイドナビの行に無く、アカウントの欄のメニューから開くアカウントの画面のタブ（#1873・#4724）。
     await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
-    await sidebar.getByRole("link", { name: /^アカウント設定を開く/ }).click();
+    await sidebar.getByTestId("sidebar-account").click();
+    await page.getByRole("menuitem", { name: "アカウント" }).click();
     await expect(page).toHaveURL(/\/account$/);
     await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
     await expect(page.getByRole("tab", { name: "API キー" })).toHaveAttribute("aria-selected", "true");
@@ -102,8 +103,12 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(example).toContainText("claude mcp add --scope user --transport http rag https://203.0.113.10/rag/api/mcp");
     await expect(example).toContainText("claude mcp add --scope user --transport http nl2sql https://203.0.113.10/nl2sql/api/mcp");
     await expect(example).toContainText("--header 'Authorization: Bearer ${PR_API_KEY}'");
-    await expect(example).toContainText("export MCP_TOOL_TIMEOUT=600000");
-    await expect(example).toContainText("NODE_EXTRA_CA_CERTS");
+    await expect(example).toContainText("export MCP_TOOL_TIMEOUT=660000");
+    await expect(example).toContainText("curl -sk https://203.0.113.10/platform/ca.crt -o ~/production-ready-ca.crt");
+    await expect(example).toContainText("export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt");
+    // 行末の # のコメントは zsh に貼るとエラーになるので、コピーするコードに入れない（#4726）。
+    await expect(example).not.toContainText("#");
+    await expect(page.getByTestId("api-keys-example-ca-note")).toContainText("-k");
     await expect(page.getByText("API キーはまだありません。")).toBeVisible();
 
     // 名前が空なら発行しない。

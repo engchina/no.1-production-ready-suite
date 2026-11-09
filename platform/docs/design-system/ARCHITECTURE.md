@@ -229,7 +229,7 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 
 今ライト専用なので、**ダークテーマが無償で付いてきます**（`data-theme="dark"` を付けるだけ）。
 
-- **Agent** はサイドバーにフッターが無いので `SidebarAccountFooter`（ユーザー・ロール・ログアウト・テーマ切替）が入ります
+- **Agent** はサイドバーにフッターが無いので `SidebarAccountFooter`（ユーザー・ロール・アカウントとログアウトのメニュー・テーマ切替）が入ります
 - **RAG** は `--font-mono` が無かったので、ID とログが Google Sans Code になります
 
 ### 3アプリ共通

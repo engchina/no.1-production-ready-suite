@@ -31,7 +31,7 @@ import {
 } from "@production-ready/ui";
 
 import { ApiKeysTable } from "./ApiKeysTable";
-import { caCertificateUrl, mcpEndpointRows, mcpRegistrationExample } from "./endpoints";
+import { caCertificateUrl, mcpEndpointRows, mcpRegistrationCaUrl, mcpRegistrationExample } from "./endpoints";
 import { apiKeysTranslator, type ApiKeysMessages } from "./messages";
 import {
   API_KEY_MAX_PER_USER,
@@ -369,11 +369,7 @@ function McpEndpointsCard({
   t: ReturnType<typeof apiKeysTranslator>;
 }) {
   const rows = mcpEndpointRows(endpoints, publicBaseUrl);
-  const example = mcpRegistrationExample(rows, {
-    keyComment: t("apiKeys.example.keyComment"),
-    timeoutComment: t("apiKeys.example.timeoutComment"),
-    caComment: t("apiKeys.example.caComment"),
-  });
+  const example = mcpRegistrationExample(rows);
   const caUrl =
     rows.flatMap((row) => [row.publicUrl, row.localUrl]).map((url) => (url ? caCertificateUrl(url) : null)).find(Boolean) ??
     null;
@@ -435,7 +431,12 @@ function McpEndpointsCard({
             <pre className="overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-fg" data-testid="api-keys-example">
               {example}
             </pre>
-            <p className="text-xs leading-5 text-fg-muted">{t("apiKeys.endpoint.exampleNote")}</p>
+            <div className="grid min-w-0 gap-1 break-words text-xs leading-5 text-fg-muted" data-testid="api-keys-example-note">
+              <p>{t("apiKeys.endpoint.exampleNote")}</p>
+              <p>{t("apiKeys.endpoint.exampleTimeoutNote")}</p>
+              {mcpRegistrationCaUrl(rows) ? <p data-testid="api-keys-example-ca-note">{t("apiKeys.endpoint.exampleCaNote")}</p> : null}
+              <p>{t("apiKeys.endpoint.exampleExportNote")}</p>
+            </div>
           </div>
         </Disclosure>
       </CardContent>

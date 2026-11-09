@@ -54,11 +54,11 @@ export function AppSidebar() {
     sectionToggleCollapse: (section) => t("nav.section.toggle.collapse", { section }),
   };
 
-  // 表示名・ロール・パスワード変更・ログアウト（ログイン省略時はその表示）は共通の部品が出す（#307）。
+  // 表示名・ロールと「アカウント」「ログアウト」のメニュー（ログイン省略時はその表示）は共通の部品が出す（#307・#4724）。
   // ログアウトは画面を離れる操作なので、未保存の編集があれば先に確認する。
   const footer = (
     <SidebarAccountSection
-      // 欄（名前・ロール）からアカウントの画面（API キー / パスワード変更のタブ。#1873）を開く。
+      // 欄のメニューからアカウントの画面（API キー / パスワード変更のタブ。#1873）を開く。
       routes={{ login: APP_ROUTES.login, account: APP_ROUTES.account }}
       collapsed={collapsed}
       confirmLeave={confirmPendingLeave}

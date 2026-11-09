@@ -206,11 +206,15 @@ for (const viewport of VIEWPORTS) {
       // アカウント欄の 1 行目はログイン ID。表示名はほかの画面で使い、アカウント欄には出さない（#1696）。
       await expect(sidebar(page).getByText("admin.user", { exact: true })).toBeVisible();
       await expect(sidebar(page).getByText("管理 太郎")).toHaveCount(0);
-      // 個人の操作（API キー・パスワード変更）はサイドナビの行に出さず、欄（行全体のリンク）からアカウントの画面へ移る。
+      // 個人の操作（API キー・パスワード変更）はサイドナビの行に出さず、欄のメニューからアカウントの画面へ移る（#4724）。
       await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
-      const accountLink = sidebar(page).getByRole("link", { name: "アカウント設定を開く（admin.user）" });
-      expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-      await accountLink.click();
+      const accountMenuButton = sidebar(page).getByRole("button", { name: /^アカウントのメニュー admin\.user/ });
+      expect((await accountMenuButton.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await accountMenuButton.click();
+      await expect(accountMenuButton).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["アカウント", "ログアウト"]);
+      await expect(page.getByRole("menu")).toHaveAttribute("data-floating-menu-placement", "top");
+      await page.getByRole("menuitem", { name: "アカウント" }).click();
       await expect(page).toHaveURL(/\/account$/);
       await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
 
@@ -243,7 +247,10 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/runs");
       await expandSidebarOnMobile(page);
-      await sidebar(page).getByRole("button", { name: "ログアウト" }).click();
+      // ログアウトの行は常時は出さず、欄のメニューの中にある（#4724）。
+      await expect(sidebar(page).getByRole("button", { name: "ログアウト" })).toHaveCount(0);
+      await sidebar(page).getByTestId("sidebar-account").click();
+      await page.getByRole("menuitem", { name: "ログアウト" }).click();
       await expect(page).toHaveURL(/\/login$/);
       expect(mockApi.lastRequest("POST", "/api/auth/logout")?.headers["x-csrf-token"]).toBe(CSRF_TOKEN);
     });
@@ -259,6 +266,10 @@ for (const viewport of VIEWPORTS) {
       await expect(sidebar(page).getByRole("status", { name: "ログイン省略" })).toBeVisible();
       await expect(sidebar(page).getByRole("button", { name: "ログアウト" })).toHaveCount(0);
       await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+      // メニューは「アカウント」だけ（#4724）。
+      await sidebar(page).getByTestId("sidebar-account").click();
+      await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["アカウント"]);
+      await page.keyboard.press("Escape");
       // アカウントの画面のパスワード変更のタブは、ローカルの認証ではパスワードを使わない説明だけ（#1873）。
       await page.goto("/account?tab=password");
       await expect(page.getByText("ローカルの認証（ログインの省略）ではパスワードを使いません。")).toBeVisible();

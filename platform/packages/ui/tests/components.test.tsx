@@ -338,7 +338,8 @@ describe("SidebarAccountFooter", () => {
     expect(html).toContain("山田");
     expect(html).toMatch(/<button type="button" aria-current="page" class="[^"]*bg-accent-emphasis[^"]*">/);
     expect(html).toContain("パスワード変更");
-    expect(html).toContain("ログアウト");
+    // ログアウトは常時の行に出さず、利用者のメニューの中に置く（#4724）。
+    expect(html).not.toContain("ログアウト");
   });
 
   it("名前とロールは 1 行ずつ省略記号で切り、各行の title に全文を出す（括弧で連結しない。#1644）", () => {
@@ -362,19 +363,22 @@ describe("SidebarAccountFooter", () => {
     expect(html).not.toMatch(/line-clamp/);
   });
 
-  it("account を渡すと欄の行全体がアカウントの画面へのリンクになり、現在地は aria-current=page（#1873）", () => {
-    const account = { href: "/rag/account", label: "アカウント設定を開く（山田）" };
-    const html = renderToStaticMarkup(<SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={account} onLogout={() => {}} />);
-    expect(html).toMatch(/<a href="\/rag\/account" aria-label="アカウント設定を開く（山田） 山田 管理者" class="[^"]*\bmin-h-11\b[^"]*"/);
+  it("account を渡すと欄の行全体がメニューを開くボタンになり、現在地は aria-current=page（#4724）", () => {
+    const account = { href: "/rag/account", label: "アカウント" };
+    const labels = { logout: "ログアウト", switchToLight: "", switchToDark: "", accountMenu: "アカウントのメニュー" };
+    const html = renderToStaticMarkup(
+      <SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={account} labels={labels} onLogout={() => {}} />
+    );
+    expect(html).toMatch(/<button type="button" aria-haspopup="menu" aria-expanded="false" aria-label="アカウントのメニュー 山田 管理者" class="[^"]*\bmin-h-11\b[^"]*"/);
+    expect(html).not.toContain("href=");
     expect(html).not.toContain('aria-current="page"');
     const active = renderToStaticMarkup(
-      <SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={{ ...account, active: true }} />
+      <SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={{ ...account, active: true }} labels={labels} />
     );
-    expect(active).toMatch(/<a href="\/rag\/account" aria-current="page"[^>]*class="[^"]*bg-accent-emphasis/);
-    // 折りたたみ時はアイコンの行のリンク（読み上げ名は同じ）。
-    const collapsed = renderToStaticMarkup(<SidebarAccountFooter name="山田" collapsed account={account} />);
-    expect(collapsed).toContain('href="/rag/account"');
-    expect(collapsed).toContain('aria-label="アカウント設定を開く（山田）"');
+    expect(active).toMatch(/<button[^>]*aria-current="page"[^>]*class="[^"]*bg-accent-emphasis/);
+    // 折りたたみ時はアイコンの行のボタン。
+    const collapsed = renderToStaticMarkup(<SidebarAccountFooter name="山田" collapsed account={account} labels={labels} />);
+    expect(collapsed).toMatch(/<button[^>]*aria-haspopup="menu"[^>]*aria-label="アカウントのメニュー 山田"/);
   });
 
   it("rolesLabel を省くとロールの行は roles をそのまま出し、title も roles", () => {
@@ -383,13 +387,13 @@ describe("SidebarAccountFooter", () => {
     expect(html).not.toContain("sr-only");
   });
 
-  it("折りたたみ時は行アクションとログアウトに読み上げ名を付け、ユーザー名は出さない", () => {
+  it("折りたたみ時は行アクションに読み上げ名を付け、ログアウトの行は出さない（#4724）", () => {
     const html = renderToStaticMarkup(
       <SidebarAccountFooter name="山田" collapsed actions={[password]} onLogout={() => {}} />
     );
-    expect(html).not.toContain("山田");
     expect(html).toContain('aria-label="パスワード変更"');
-    expect(html).toContain('aria-label="ログアウト"');
+    expect(html).not.toContain('aria-label="ログアウト"');
+    expect(html).not.toContain("lucide-log-out");
   });
 
   it("notice はログアウトの代わりに置け、name を省くとユーザー領域を出さない", () => {

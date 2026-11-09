@@ -443,7 +443,13 @@ export { MyApiKeysPanel, type MyApiKeysPanelProps } from "./api-keys/MyApiKeysPa
 // アカウントの画面（API キー / パスワード変更のタブ。3 製品で同じ。#1873）
 export { AccountPage, type AccountPageProps } from "./account/AccountPage";
 export { ApiKeysAdminPage, type ApiKeysAdminPageProps } from "./api-keys/ApiKeysAdminPage";
-export { caCertificateUrl, mcpEndpointRows, mcpEndpoints, mcpRegistrationExample } from "./api-keys/endpoints";
+export {
+  caCertificateUrl,
+  mcpEndpointRows,
+  mcpEndpoints,
+  mcpRegistrationCaUrl,
+  mcpRegistrationExample,
+} from "./api-keys/endpoints";
 export {
   API_KEYS_MESSAGES,
   type ApiKeysMessageKey,
