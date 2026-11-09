@@ -645,6 +645,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261110_4668_language_pack_retired_evidence_tags",
         "20261110_4668_language_pack_retired_question_word_checks",
         "20261110_4749_language_pack_retired_crag_labels",
+        "20261110_4782_remove_raptor",
     ]
 
 

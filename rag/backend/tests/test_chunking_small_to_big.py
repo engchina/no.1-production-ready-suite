@@ -661,8 +661,7 @@ async def test_parent_child_generated_search_hits_resolve_only_original_evidence
             *,
             document_id: str,
             chunk_set_id: str,
-            element_id: str = "",
-            chunk_indices: Any = (),
+            element_id: str,
             limit: int,
         ) -> list[RetrievedChunk]:
             assert (document_id, chunk_set_id) == ("doc-a", "set-a")

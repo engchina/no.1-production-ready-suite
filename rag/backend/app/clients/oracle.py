@@ -1571,44 +1571,26 @@ class OracleClient:
         *,
         document_id: str,
         chunk_set_id: str,
-        chunk_indices: Sequence[int] = (),
-        element_id: str = "",
+        element_id: str,
         limit: int,
     ) -> list[RetrievedChunk]:
         """文書の 1 つの版(chunk_set)の chunk を、検索と同じ条件で読み順に返す(#2641)。
 
-        検索で当たった派生の chunk が指す原文を読む。``chunk_indices`` は chunk の番号(RAPTOR の
-        要約の子)、``element_id`` は解析の要素の ID(項目抽出の値の元の要素。部分一致で絞るので、
-        完全一致は呼び出し側で確かめる)で絞る。どちらも無ければ空。見え方は検索と同じ条件
-        (tenant・利用できるナレッジベース・有効な chunk_set)で、版は ``filters`` の
-        ``chunk_set_id``(有効でない版も読む実験の条件)ではなく、有効な版の中で絞る。
+        検索で当たった派生の chunk が指す原文を読む。``element_id`` は解析の要素の ID(章節の要約・
+        項目抽出の値の元の要素。部分一致で絞るので、完全一致は呼び出し側で確かめる)。無ければ空。
+        見え方は検索と同じ条件(tenant・利用できるナレッジベース・有効な chunk_set)で、版は
+        ``filters`` の ``chunk_set_id``(有効でない版も読む実験の条件)ではなく、有効な版の中で絞る。
         """
-        indices = sorted({int(index) for index in chunk_indices if int(index) >= 0})
         element = element_id.strip()
-        if not document_id or not chunk_set_id or (not indices and not element):
+        if not document_id or not chunk_set_id or not element:
             return []
         scoped = {key: value for key, value in filters.items() if key != "chunk_set_id"}
         where_sql, binds = _oracle_retrieval_where({**scoped, "document_id": document_id})
-        predicates: list[str] = []
         source_binds: dict[str, object] = {
             "source_chunk_set_id": chunk_set_id,
             "source_limit": max(1, int(limit)),
+            "source_element_id": element,
         }
-        if indices:
-            index_binds = {
-                f"source_chunk_index_{position}": index
-                for position, index in enumerate(indices[:_MAX_SOURCE_CHUNK_INDICES])
-            }
-            placeholders = ", ".join(f":{key}" for key in index_binds)
-            predicates.append(f"c.chunk_index IN ({placeholders})")
-            source_binds.update(index_binds)
-        if element:
-            predicates.append(
-                "DBMS_LOB.INSTR("
-                "JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :source_element_id"
-                ") > 0"
-            )
-            source_binds["source_element_id"] = element
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -1627,12 +1609,13 @@ class OracleClient:
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
               AND c.chunk_set_id = :source_chunk_set_id
-              AND ({source_sql})
+              AND DBMS_LOB.INSTR(
+                    JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :source_element_id
+                  ) > 0
             ORDER BY c.chunk_index, c.chunk_id
             FETCH FIRST :source_limit ROWS ONLY
             """,
                 where_sql=where_sql,
-                source_sql=" AND ".join(predicates),
             ),
             {**binds, **source_binds},
         )
@@ -15596,8 +15579,6 @@ def _full_width_ascii(value: str) -> str:
 
 # 新しい版に置き換えた文書(旧版)を除く述語(#1248)。
 _NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"
-# 派生の chunk の原文を chunk の番号で読むときの、1 回の番号の数の上限(bind の数を抑える。#2641)。
-_MAX_SOURCE_CHUNK_INDICES = 200
 
 
 def _includes_superseded_documents(filters: Mapping[str, str]) -> bool:

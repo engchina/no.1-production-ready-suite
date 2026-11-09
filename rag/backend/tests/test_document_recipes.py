@@ -1666,7 +1666,6 @@ def _layer_settings(*, enabled: bool) -> Settings:
             rag_graph_profile="off",
             rag_field_extraction_enabled=False,
             rag_navigation_summary_enabled=False,
-            rag_raptor_enabled=False,
         )
     # このテストの設定をそのまま使う（形式別の組み込みの既定を重ねない）。
     settings._file_type_defaults = {file_type: FileTypeDefaultEntry() for file_type in FILE_TYPES}

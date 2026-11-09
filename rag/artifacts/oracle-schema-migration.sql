@@ -4557,3 +4557,10 @@ BEGIN
   NULL; -- crag_missing_aspect_template,crag_quote_only_note,crag_refusal_summary,crag_unknown_aspect_template
 END;
 /
+
+-- migration: 20261110_4782_remove_raptor
+DELETE FROM rag_chunks
+WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';
+
+DELETE FROM rag_answer_prompts
+WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary_archived');

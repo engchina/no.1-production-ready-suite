@@ -31,7 +31,6 @@ def _global_settings() -> Settings:
         rag_graph_profile="off",
         rag_field_extraction_enabled=False,
         rag_navigation_summary_enabled=False,
-        rag_raptor_enabled=False,
     )
 
 

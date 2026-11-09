@@ -119,7 +119,6 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_page_continuation_",
     "rag_heading_level_inference_",
     "rag_navigation_summary_",
-    "rag_raptor_",
     "rag_field_extraction_",
     "rag_auto_",
     # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。

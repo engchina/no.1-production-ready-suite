@@ -28,7 +28,6 @@ INGESTION_PROMPT_REFS = {
     "heading_levels": "app.rag.ingestion_prompts:HEADING_LEVEL_PROMPT",
     "field_extraction": "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT",
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
-    "raptor_summary_system": "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT",
 }
 EDITABLE_PROMPT_KEYS = (VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
 ANSWER_PROMPT_MAX_CHARS = 50_000
@@ -73,7 +72,6 @@ def validate_prompt(key: str, content: str) -> None:
 # 設定の概要の順を土台に、独立した知識の準備と、検索・回答の実行順を区別する。
 PROMPT_PHASES = (
     "ingestion",
-    "indexing",
     "knowledge",
     "question",
     "retrieval",
@@ -138,11 +136,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "navigation_summary",
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT"),),
-    ),
-    PromptStage(
-        "raptor_summary",
-        "indexing",
-        (("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),),
     ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(
@@ -239,7 +232,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
 STAGE_PROMPT_REFS = {
     f"{stage.id}.{part_id}": ref
     for stage in PROMPT_STAGES
-    if stage.phase not in {"ingestion", "indexing"} or stage.id == "picture_description"
+    if stage.phase != "ingestion" or stage.id == "picture_description"
     for part_id, ref in stage.parts
 }
 EDITABLE_PROMPT_KEYS = (*EDITABLE_PROMPT_KEYS, *STAGE_PROMPT_REFS)

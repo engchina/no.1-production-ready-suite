@@ -447,7 +447,8 @@ class GuideDraftLlm(Protocol):
         prompt: str,
         context: str,
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        instruction: str = ...,
         response_schema: Mapping[str, Any] | None = None,
         response_schema_name: str = ...,
     ) -> str: ...
@@ -1027,8 +1028,9 @@ async def draft_guides(
         return await async_call_with_model_purpose(
             "guide.draft",
             llm.generate,
-            resolve_prompt("support_guide_draft.instruction", GUIDE_DRAFT_PROMPT),
+            "",
             draft_context(row, headings),
+            instruction=resolve_prompt("support_guide_draft.instruction", GUIDE_DRAFT_PROMPT),
             system_prompt=resolve_prompt("support_guide_draft.system", GUIDE_DRAFT_SYSTEM_PROMPT),
             response_schema=GUIDE_DRAFT_RESPONSE_SCHEMA,
             response_schema_name="support_guide_draft",

@@ -260,7 +260,8 @@ class ScreenJudgeLlm(Protocol):
         prompt: str,
         context: str,
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        instruction: str = ...,
         response_schema: Mapping[str, Any] | None = None,
         response_schema_name: str = ...,
     ) -> str: ...
@@ -320,8 +321,9 @@ def llm_screen_judge(llm: ScreenJudgeLlm) -> ScreenJudge:
         raw = await async_call_with_model_purpose(
             "evaluation.judge",
             llm.generate,
-            SCREEN_JUDGE_PROMPT,
+            "",
             screen_judge_context(answer, expected, candidates),
+            instruction=SCREEN_JUDGE_PROMPT,
             system_prompt=SCREEN_JUDGE_SYSTEM_PROMPT,
             response_schema=SCREEN_JUDGE_RESPONSE_SCHEMA,
             response_schema_name="evaluation_screen_judgement",

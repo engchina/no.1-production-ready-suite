@@ -500,7 +500,7 @@ def test_annotate_cross_references_resolves_same_document_sections() -> None:
         _chunk(2, "第3章を参照。3.1節を参照。", "第3章 承認 > 3.1 申請"),
         _chunk(3, "申請日を書く。", "別紙1 申請書様式"),
         _chunk(4, "第9章を参照。", "第1章 総則"),
-        _chunk(5, "要約。第3章を参照。", "第1章 総則", raptor_summary=True),
+        _chunk(5, "要約。第3章を参照。", "第1章 総則", nav_summary=True),
         # 章節の要約・項目の値(派生の chunk。印の無い #2590 より前の chunk も。#2641)。
         _chunk(6, "第1章 総則: 第3章を参照。", "第1章 総則", content_kind="section_summary"),
         _chunk(7, "項目: 第3章を参照。", None, content_kind="field", extracted_field=True),

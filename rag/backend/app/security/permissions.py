@@ -807,7 +807,6 @@ ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
     "heading_levels": MENU_SETTINGS_PARSER_ADAPTERS,
     "field_extraction": MENU_SETTINGS_PARSER_ADAPTERS,
     "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
-    "raptor_summary_system": MENU_SETTINGS_PARSER_ADAPTERS,
 }
 
 

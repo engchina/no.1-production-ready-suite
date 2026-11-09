@@ -3446,7 +3446,7 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
             metadata = dict(chunk.metadata)
             chunk_index = _metadata_int(metadata, "chunk_index") or index
             if is_derived_chunk(chunk):
-                # 派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)は文書の本文ではないので
+                # 派生の chunk(章節の要約・項目抽出の値)は文書の本文ではないので
                 # 返さない(#2641)。
                 index = chunk_index + 1
                 offset = 0

@@ -99,9 +99,10 @@ async def resolve_text_conditions(
         raw = await async_call_with_model_purpose(
             "query.conditions",
             condition_client(settings).generate,
-            "質問から明示された条件値を取り出してください。\nJSON Schema:\n"
-            + json.dumps(ConditionValues.model_json_schema(), ensure_ascii=False),
+            "",
             context,
+            instruction="質問から明示された条件値を取り出してください。\nJSON Schema:\n"
+            + json.dumps(ConditionValues.model_json_schema(), ensure_ascii=False),
             system_prompt=resolve_prompt(
                 "support_guide_conditions.system", CONDITION_SYSTEM_PROMPT
             ),
@@ -209,9 +210,10 @@ async def resolve_answered_conditions(
         raw = await async_call_with_model_purpose(
             "query.conditions",
             condition_client(settings).generate,
-            "確認の答えが選んだ選択肢を決めてください。\nJSON Schema:\n"
-            + json.dumps(AnswerChoices.model_json_schema(), ensure_ascii=False),
+            "",
             context,
+            instruction="確認の答えが選んだ選択肢を決めてください。\nJSON Schema:\n"
+            + json.dumps(AnswerChoices.model_json_schema(), ensure_ascii=False),
             system_prompt=resolve_prompt(
                 "support_guide_conditions.answerChoice", ANSWER_SYSTEM_PROMPT
             ),

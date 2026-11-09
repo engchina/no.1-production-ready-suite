@@ -3534,7 +3534,7 @@ def _layer_requested(layer: str, settings: Settings) -> bool:
     if layer == "graph":
         return settings.rag_graph_profile != "off"
     if layer == "navigation":
-        return bool(settings.rag_navigation_summary_enabled or settings.rag_raptor_enabled)
+        return bool(settings.rag_navigation_summary_enabled)
     return False
 
 

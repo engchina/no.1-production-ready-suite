@@ -2734,14 +2734,14 @@ def test_read_document_cuts_a_long_chunk_at_boundaries(
 def test_read_document_skips_derived_chunks(
     auth: ProductionAuth, document_oracle: type[_DocumentOracle]
 ) -> None:
-    """章節の要約・RAPTOR の要約・項目の値（派生の chunk）は本文として返さない（#2641）。"""
+    """章節の要約・項目の値（派生の chunk）は本文として返さない（#2641）。"""
     document_oracle.chunks = [
         _doc_chunk(0, "総則の本文。", "規程 > 第1章 総則", 1),
         # 本文の途中と末尾の派生の chunk（#2590 より前の印の無い要約も）。
         _doc_chunk(1, "要約の文。", "規程 > 第1章 総則", 1, content_kind="section_summary"),
         _doc_chunk(2, "承認の本文。", "規程 > 第3章 承認", 3),
         _doc_chunk(3, "項目: 値", "", 3, content_kind="field", extracted_field=True),
-        _doc_chunk(4, "全体の要約。", "", 3, raptor_summary=True, content_kind="summary"),
+        _doc_chunk(4, "全体の要約。", "", 3, nav_summary=True),
     ]
     user = auth.user_with_permissions("searcher", ["menu.search"])
     headers = _token(user.user_uuid)
