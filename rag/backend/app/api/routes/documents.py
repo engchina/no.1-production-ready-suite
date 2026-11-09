@@ -60,6 +60,7 @@ from app.clients.oracle import (
 from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
 from app.clients.section_revision_store import max_section_revisions
 from app.config import (
+    CHUNK_SEPARATOR_STRATEGIES,
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
     FIXED_DELIMITER_STRATEGY,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
@@ -321,6 +322,7 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunk_overlap",
         "chunk_min_chars",
         "chunk_delimiter",
+        "chunk_separators",
         *SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS,
     ),
     "graph_profile": ("graph_profile",),
@@ -1988,6 +1990,7 @@ async def preview_document_recipe_chunks(
                 overlap=candidate.rag_chunk_overlap,
                 min_chars=candidate.rag_chunk_min_chars,
                 delimiter=candidate.rag_chunk_delimiter,
+                separators=candidate.rag_chunk_separators,
             )
     except RecordBoundaryError as exc:
         raise HTTPException(status_code=422, detail=record_boundary_failure_message(exc)) from exc
@@ -3546,6 +3549,8 @@ def _merge_document_processing_config(
     return effective_settings, DocumentProcessingConfig.model_validate(
         {
             **effective.model_dump(),
+            # 本文の区切りは全体の設定だけが持つ。再処理の判定のために実効値へ写す(#4733)。
+            "chunk_separators": effective_settings.rag_chunk_separators,
             # 章節の抽出規則の方式は Settings ではなく全体の既定のファイルが持つ(#715)。
             "section_rules_mode": config.section_rules_mode or load_section_rules().mode,
         }
@@ -3584,6 +3589,7 @@ def _processing_config_drift_groups(
     """
     small_to_big_in_use = effective.get("chunking_strategy") == SMALL_TO_BIG_STRATEGY
     fixed_delimiter_in_use = effective.get("chunking_strategy") == FIXED_DELIMITER_STRATEGY
+    separators_in_use = effective.get("chunking_strategy") in CHUNK_SEPARATOR_STRATEGIES
 
     def _observed_value(field: str) -> object:
         value = observed.get(field)
@@ -3602,6 +3608,7 @@ def _processing_config_drift_groups(
             for field in fields
             if (small_to_big_in_use or field not in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS)
             and (fixed_delimiter_in_use or field != "chunk_delimiter")
+            and (separators_in_use or field != "chunk_separators")
         )
 
     return [

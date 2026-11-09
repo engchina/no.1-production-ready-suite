@@ -102,6 +102,8 @@ class SmallToBigParams:
     parent_target_chars: int = CHUNK_PARENT_TARGET_CHARS_DEFAULT
     parent_max_pages: int = CHUNK_PARENT_MAX_PAGES_DEFAULT
     parent_max_children: int = CHUNK_PARENT_MAX_CHILDREN_DEFAULT
+    # 本文の区切り(RAG_CHUNK_SEPARATORS)。空なら文境界で切る。
+    separators: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,7 @@ class ChunkingStrategyParams:
     overlap: int
     min_chars: int
     delimiter: tuple[str, ...]
+    separators: tuple[str, ...] = ()
     small_to_big: SmallToBigParams = SmallToBigParams()
 
 
@@ -148,9 +151,14 @@ def normalize_chunking_strategy(value: object) -> ChunkingStrategyName:
     return DEFAULT_CHUNKING_STRATEGY
 
 
+def _chunk_separators(settings: Settings) -> tuple[str, ...]:
+    return tuple(getattr(settings, "rag_chunk_separators", ()))
+
+
 def resolve_small_to_big_params(settings: Settings) -> SmallToBigParams:
     """Settings から親子階層（small-to-big）の分割パラメータを解決する。"""
     return SmallToBigParams(
+        separators=_chunk_separators(settings),
         child_target_chars=int(
             getattr(settings, "rag_chunk_child_target_chars", CHUNK_CHILD_TARGET_CHARS_DEFAULT)
         ),
@@ -187,6 +195,7 @@ def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
                 getattr(settings, "rag_chunk_delimiter", DEFAULT_FIXED_DELIMITERS)
             )
         ),
+        separators=_chunk_separators(settings),
         small_to_big=resolve_small_to_big_params(settings),
     )
 

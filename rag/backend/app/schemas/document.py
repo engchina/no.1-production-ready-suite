@@ -14,7 +14,7 @@ from pydantic import (
 )
 from rag_parser_core.extraction import strip_formatting_marks
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
-from rag_pipeline_core.chunking import FixedDelimiters
+from rag_pipeline_core.chunking import ChunkSeparators, FixedDelimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_MAX,
@@ -635,6 +635,9 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     """文書単位の処理レシピ上書き。None は global 既定を継承する。"""
 
     model_config = ConfigDict(extra="forbid")
+
+    # 本文の区切りの実効値(再処理の判定用)。全体の設定だけが持ち、レシピでは上書きしない。
+    chunk_separators: ChunkSeparators | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -1565,7 +1565,7 @@ export const ja = {
   "settings.chunking.delimiter.fullwidthSemicolon": "全角セミコロン (；)",
   "settings.chunking.delimiter.semicolon": "半角セミコロン (;)",
   "settings.chunking.params.delimiterHint":
-    "分割するときに優先して使う文字や文字列です。上のものから順に試し、chunk サイズを超えた部分だけ次の分割符で切り直します。既定の順序は 記録の境界 → 段落 → 文 → 句読点 です。一覧に無い文字列も入力して追加でき、\\n, \\t, \\\\ の escape 表現を使用できます。",
+    "分割するときに使う文字や文字列です。既定は記録の境界だけです。複数選ぶと上のものから順に試し、chunk サイズを超えた部分だけ次の分割符で切り直します。一覧に無い文字列も入力して追加でき、\\n, \\t, \\\\ の escape 表現を使用できます。",
   "settings.chunking.params.chunkSize": "chunk サイズ(文字)",
   "settings.chunking.params.overlap": "overlap(文字)",
   "settings.chunking.params.headingSplitLimit": "見出し内の再分割上限(文字)",

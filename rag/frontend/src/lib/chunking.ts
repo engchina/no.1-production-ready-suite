@@ -127,7 +127,7 @@ export const SMALL_TO_BIG_PARAMS: readonly SmallToBigParamSpec[] = [
  */
 export const JSONL_RECORD_BOUNDARY = "<<<JSONL_RECORD_BOUNDARY>>>";
 
-/** 分割符の候補（backend の `DEFAULT_FIXED_DELIMITERS` と同じ順。#4733）。値は escape 表現。 */
+/** 分割符の候補（#4733）。値は escape 表現。 */
 export const CHUNK_DELIMITER_OPTIONS: readonly { value: string; labelKey: I18nKey }[] = [
   { value: JSONL_RECORD_BOUNDARY, labelKey: "settings.chunking.delimiter.recordBoundary" },
   { value: "\\n\\n", labelKey: "settings.chunking.delimiter.blankLine" },
@@ -142,10 +142,8 @@ export const CHUNK_DELIMITER_OPTIONS: readonly { value: string; labelKey: I18nKe
   { value: ";", labelKey: "settings.chunking.delimiter.semicolon" },
 ];
 
-/** 既定の分割符（優先度順）。 */
-export const DEFAULT_CHUNK_DELIMITERS: readonly string[] = CHUNK_DELIMITER_OPTIONS.map(
-  (option) => option.value
-);
+/** 固定分割符の既定（backend の `RAG_CHUNK_DELIMITER` の既定と同じ）。記録の境界だけ。 */
+export const DEFAULT_CHUNK_DELIMITERS: readonly string[] = [JSONL_RECORD_BOUNDARY];
 
 /** 分割符の一覧を、優先度の順が分かる 1 行の文にする。 */
 export function chunkDelimiterSummary(values: readonly string[]): string {

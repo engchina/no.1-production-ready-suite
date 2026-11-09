@@ -2,9 +2,8 @@
 
 import pytest
 from rag_parser_core.language import bind_pack, builtin_pack, current_pack, resolve
-from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS
 
-from app.config import Settings, get_settings
+from app.config import CHUNK_SEPARATOR_STRATEGIES, Settings, get_settings
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
@@ -272,6 +271,9 @@ def test_chunk_set_id_keeps_ids_after_parent_child_removal() -> None:
         "rag_chunk_delimiter": "\\n\\n",
         "rag_chunk_context_header_enabled": settings.rag_chunk_context_header_enabled,
     }
+    if settings.rag_chunking_strategy in CHUNK_SEPARATOR_STRATEGIES:
+        # 本文の区切り(#4733)は使う方式の ID にだけ足す。
+        legacy_payload["rag_chunk_separators"] = settings.rag_chunk_separators
     canonical = json.dumps(
         legacy_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
@@ -310,9 +312,9 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     )
     structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
 
-    assert compute_chunk_set_id(SRC, small_to_big) == "cs_280ebf2e10b65d8b"
-    assert compute_chunk_set_id(SRC, tuned) == "cs_43f34f1c57bec7e8"
-    assert compute_chunk_set_id(SRC, structure) == "cs_78dd93b3dc4d80a5"
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_91243f20d36040c1"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_8585bd42174b5c22"
+    assert compute_chunk_set_id(SRC, structure) == "cs_3eb1ea0491558a41"
 
 
 def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
@@ -365,13 +367,8 @@ def test_unstructured_text_contract_invalidates_old_cached_extraction() -> None:
 
 
 def test_chunk_set_id_stays_for_saved_delimiters_after_list_change() -> None:
-    """既定の一覧への変更(#4733)で、固定分割以外の方式と 1 個の分割符の ID を変えない。"""
-    other = get_settings().model_copy(update={"rag_chunking_strategy": "structure_aware"})
-    default = other.model_copy(update={"rag_chunk_delimiter": list(DEFAULT_FIXED_DELIMITERS)})
-    previous = other.model_copy(update={"rag_chunk_delimiter": ["\\n\\n"]})
-    assert compute_chunk_set_id(SRC, default) == compute_chunk_set_id(SRC, previous)
-
-    fixed = other.model_copy(update={"rag_chunking_strategy": "fixed_delimiter"})
+    """一覧への変更(#4733)で、1 個の分割符の ID を変えない。"""
+    fixed = get_settings().model_copy(update={"rag_chunking_strategy": "fixed_delimiter"})
     custom = fixed.model_copy(update={"rag_chunk_delimiter": ["---"]})
     legacy = fixed.model_copy(update={"rag_chunk_delimiter": "---"})
     assert compute_chunk_set_id(SRC, custom) == compute_chunk_set_id(SRC, legacy)
@@ -379,3 +376,24 @@ def test_chunk_set_id_stays_for_saved_delimiters_after_list_change() -> None:
     sentence_end = fixed.model_copy(update={"rag_chunk_delimiter": ["。"]})
     legacy_end = fixed.model_copy(update={"rag_chunk_delimiter": "。"})
     assert compute_chunk_set_id(SRC, sentence_end) != compute_chunk_set_id(SRC, legacy_end)
+
+
+@pytest.mark.parametrize(
+    ("strategy", "uses_separators"),
+    [
+        ("structure_aware", True),
+        ("recursive_character", True),
+        ("small_to_big", True),
+        ("markdown_heading", False),
+        ("page_level", False),
+        ("fixed_delimiter", False),
+        ("fixed_size", False),
+    ],
+)
+def test_chunk_set_id_reflects_separators_only_for_strategies_using_them(
+    strategy: str, uses_separators: bool
+) -> None:
+    base = get_settings().model_copy(update={"rag_chunking_strategy": strategy})
+    changed = base.model_copy(update={"rag_chunk_separators": ["\n"]})
+    differs = compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, changed)
+    assert differs is uses_separators

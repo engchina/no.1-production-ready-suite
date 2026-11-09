@@ -5,10 +5,13 @@ from pathlib import Path
 
 import pytest
 from dotenv import dotenv_values
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
+from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 from rag_pipeline_core.chunking import (
     DEFAULT_FIXED_DELIMITERS,
     chunk_extraction_with_strategy,
+    normalize_chunk_separators,
     normalize_fixed_delimiters,
 )
 
@@ -39,7 +42,8 @@ def test_first_delimiter_is_a_hard_boundary() -> None:
     assert _chunks("あ\n\nい", ["\\n\\n", "。"], 800) == ["あ", "い"]
 
 
-def test_small_document_stays_whole_with_default_delimiters() -> None:
+def test_default_fixed_delimiter_is_only_the_record_boundary() -> None:
+    assert DEFAULT_FIXED_DELIMITERS == (JSONL_RECORD_BOUNDARY,)
     text = "一文目。\n\n二文目。"
     assert _chunks(text, list(DEFAULT_FIXED_DELIMITERS), 800) == [text]
 
@@ -89,10 +93,57 @@ def test_normalize_rejects_invalid_values(value: object) -> None:
         normalize_fixed_delimiters(value)
 
 
-def test_default_delimiters_round_trip_through_env_file(tmp_path: Path) -> None:
+def test_saved_delimiters_round_trip_through_env_file(tmp_path: Path) -> None:
     path = tmp_path / ".env"
-    encoded = json.dumps(list(DEFAULT_FIXED_DELIMITERS), ensure_ascii=False)
+    saved = [JSONL_RECORD_BOUNDARY, "\\n\\n", ". "]
+    encoded = json.dumps(saved, ensure_ascii=False)
     path.write_text(f"RAG_CHUNK_DELIMITER={_format_env_value(encoded)}\n", encoding="utf-8")
-    assert normalize_fixed_delimiters(dotenv_values(path)["RAG_CHUNK_DELIMITER"]) == list(
-        DEFAULT_FIXED_DELIMITERS
+    assert normalize_fixed_delimiters(dotenv_values(path)["RAG_CHUNK_DELIMITER"]) == saved
+
+
+def test_env_example_lists_both_settings_in_order() -> None:
+    env = dotenv_values(Path(__file__).resolve().parents[1] / ".env.example")
+    assert normalize_fixed_delimiters(env["RAG_CHUNK_DELIMITER"]) == list(DEFAULT_FIXED_DELIMITERS)
+    assert normalize_chunk_separators(env["RAG_CHUNK_SEPARATORS"]) == list(DEFAULT_CHUNK_SEPARATORS)
+
+
+def _extraction(text: str) -> StructuredExtraction:
+    return StructuredExtraction(
+        raw_text=text, elements=[DocumentElement(kind="text", text=text, page_number=1)]
     )
+
+
+def test_separators_try_paragraphs_before_sentences() -> None:
+    paragraph = "あいうえおかきくけこ" * 3
+    text = f"{paragraph}\n\n{paragraph}"
+    chunks = chunk_extraction_with_strategy(
+        _extraction(text),
+        strategy="structure_aware",
+        chunk_size=40,
+        overlap=0,
+        separators=DEFAULT_CHUNK_SEPARATORS,
+    )
+    assert [chunk.text for chunk in chunks] == [paragraph, paragraph]
+
+
+def test_separators_are_ignored_by_strategies_that_do_not_use_them() -> None:
+    text = ("あいうえお。" * 10) + "\n\n" + ("かきくけこ。" * 10)
+    for strategy in ("markdown_heading", "fixed_size"):
+        with_separators = chunk_extraction_with_strategy(
+            _extraction(text),
+            strategy=strategy,
+            chunk_size=200,
+            overlap=0,
+            separators=("\n\n",),
+        )
+        without = chunk_extraction_with_strategy(
+            _extraction(text), strategy=strategy, chunk_size=200, overlap=0
+        )
+        assert [c.text for c in with_separators] == [c.text for c in without]
+
+
+def test_separators_read_json_with_real_newlines_and_escapes() -> None:
+    assert normalize_chunk_separators('["\\n\\n", "。"]') == ["\n\n", "。"]
+    assert normalize_chunk_separators(["\\n", "\n"]) == ["\n"]
+    with pytest.raises(ValueError, match="分割符"):
+        normalize_chunk_separators([])

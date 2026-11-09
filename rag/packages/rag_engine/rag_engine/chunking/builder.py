@@ -8,6 +8,7 @@ import time
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from rag_parser_core.chunk_separators import separator_unit_spans
 from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_VERSION
 
 from rag_engine.chunking.constants import (
@@ -433,7 +434,7 @@ def _build_child_chunks_for_engine(
             )
             continue
 
-        for piece in _split_long_text_record(record, config.child_target_chars):
+        for piece in _split_long_text_record(record, config.child_target_chars, config.separators):
             if (
                 text_buffer
                 and _records_char_count(text_buffer) + len(_record_text(piece)) > config.child_target_chars
@@ -476,7 +477,20 @@ def _continued_by(records: Sequence[dict[str, Any]]) -> dict[str, str]:
     return continued
 
 
-def _split_long_text_record(record: dict[str, Any], target_chars: int) -> list[dict[str, Any]]:
+def _record_text_units(text: str, target_chars: int, separators: Sequence[str]) -> list[str]:
+    """本文を切る単位。``separators`` があれば優先度順に切り、区切りの文字も単位に残して連結で元に戻す。"""
+    if not separators:
+        return _sentence_boundary_pattern().split(text)
+    starts = [start for start, _end in separator_unit_spans(text, separators, target_chars)]
+    return [
+        text[start : starts[index + 1] if index + 1 < len(starts) else len(text)]
+        for index, start in enumerate(starts)
+    ]
+
+
+def _split_long_text_record(
+    record: dict[str, Any], target_chars: int, separators: Sequence[str] = ()
+) -> list[dict[str, Any]]:
     """目標文字数を超える地の文の record を、文末を境界にした複数 record へ分けます。
 
     表の行や図と違い地の文は分割できます。分割しないと child が検索文の上限を超え、ファイル名や
@@ -489,7 +503,7 @@ def _split_long_text_record(record: dict[str, Any], target_chars: int) -> list[d
         return [record]
     pieces: list[str] = []
     current = ""
-    for sentence in _sentence_boundary_pattern().split(text):
+    for sentence in _record_text_units(text, target_chars, separators):
         for start in range(0, len(sentence), target_chars):
             segment = sentence[start : start + target_chars]
             if current and len(current) + len(segment) > target_chars:

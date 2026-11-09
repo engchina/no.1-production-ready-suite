@@ -2,6 +2,7 @@
 
 import pytest
 from pytest import MonkeyPatch
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_pipeline_core import chunking as core_chunking
 
 from app.config import Settings
@@ -307,6 +308,7 @@ def test_resolve_chunking_params_reads_small_to_big_params() -> None:
         parent_target_chars=6000,
         parent_max_pages=3,
         parent_max_children=12,
+        separators=DEFAULT_CHUNK_SEPARATORS,
     )
     custom = resolve_chunking_params(
         Settings(
@@ -318,7 +320,9 @@ def test_resolve_chunking_params_reads_small_to_big_params() -> None:
             rag_chunk_parent_max_children=6,
         )
     )
-    assert custom.small_to_big == SmallToBigParams(600, 1200, 3000, 2, 6)
+    assert custom.small_to_big == SmallToBigParams(
+        600, 1200, 3000, 2, 6, separators=DEFAULT_CHUNK_SEPARATORS
+    )
 
 
 def test_chunking_runtime_settings_orders_and_marks_selected() -> None:

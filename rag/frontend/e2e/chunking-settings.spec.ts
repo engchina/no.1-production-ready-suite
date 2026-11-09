@@ -256,7 +256,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
 });
 
 test(
-  "分割符の既定の候補は日本語と英語の区切りを優先度順に出す",
+  "固定分割符の既定は記録の境界だけで、日本語と英語の区切りを候補に出す",
   { tag: "@responsive" },
   async ({ page }, testInfo) => {
     await page.route("**/api/settings/chunking", (route) =>
@@ -267,15 +267,14 @@ test(
     await page.goto("/settings/chunking");
 
     const chips = page.locator("[data-searchable-chips]").getByRole("listitem");
-    await expect(chips).toHaveCount(DEFAULT_DELIMITERS.length);
-    await expect(chips.first()).toContainText("記録の境界");
-    await expect(chips.last()).toContainText("半角セミコロン");
+    await expect(chips).toHaveText([/記録の境界/]);
     await expectNoHorizontalOverflow(page);
-    await expect(page.getByText("分割符: 11 個")).toBeVisible();
+    await expect(page.getByText("分割符: 1 個")).toBeVisible();
     const field = page.locator("[data-searchable-multi-select]");
     await field.screenshot({ path: testInfo.outputPath("delimiter-defaults.png") });
 
     await page.getByRole("combobox", { name: "分割符" }).click();
+    await expect(page.getByRole("option")).toHaveCount(11);
     await expect(page.getByRole("option", { name: /英語のピリオド/ })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await field.screenshot({ path: testInfo.outputPath("delimiter-options.png") });
@@ -397,19 +396,7 @@ async function mockChunkingSettings(page: Page) {
   });
 }
 
-const DEFAULT_DELIMITERS = [
-  "<<<JSONL_RECORD_BOUNDARY>>>",
-  "\\n\\n",
-  "\\n",
-  "。",
-  "！",
-  "？",
-  ". ",
-  "! ",
-  "? ",
-  "；",
-  ";",
-];
+const DEFAULT_DELIMITERS = ["<<<JSONL_RECORD_BOUNDARY>>>"];
 
 async function expectStrategyParams(page: Page, radioName: RegExp, visibleLabels: string[]) {
   const allLabels = [

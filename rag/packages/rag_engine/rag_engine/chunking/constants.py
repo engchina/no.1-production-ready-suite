@@ -123,6 +123,8 @@ class ChunkingConfig:
     child_search_text_max_chars: int = DEFAULT_CHILD_SEARCH_TEXT_MAX_CHARS
     page_number_min_run_pages: int = DEFAULT_PAGE_NUMBER_MIN_RUN_PAGES
     page_number_offset_tolerance: int = DEFAULT_PAGE_NUMBER_OFFSET_TOLERANCE
+    # 長い地の文を優先度順に切る区切り。空なら文境界で切る。
+    separators: tuple[str, ...] = ()
 
     def validate(self) -> ChunkingConfig:
         """チャンキング設定が許容範囲内かを検証します。"""
@@ -185,6 +187,7 @@ class ChunkingConfig:
                 PAGE_NUMBER_OFFSET_TOLERANCE_RANGE[0],
                 PAGE_NUMBER_OFFSET_TOLERANCE_RANGE[1],
             ),
+            separators=tuple(self.separators),
         )
 
     def to_dict(self) -> dict[str, Any]:
