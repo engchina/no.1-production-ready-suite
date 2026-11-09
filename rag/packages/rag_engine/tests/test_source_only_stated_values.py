@@ -117,16 +117,12 @@ def run(
     repair: dict[str, Any],
     *,
     texts: tuple[str, ...] = (TABLE, RULE),
-    undetermined: bool = False,
     metadata: dict[str, Any] | None = None,
 ):
     calls: list[str] = []
 
     def parse(system, prompt, config, schema, **options):
         name = schema.__name__
-        if name == "RowConditionType":
-            calls.append("row")
-            raise ValueError("合成の不受理（行の判定を not_determined にする）")
         if explanation.is_explanation_schema(schema):
             return synthetic_explanation(schema, prompt)
         if is_application_schema(schema):
@@ -144,18 +140,8 @@ def run(
     records = [
         _record(f"record-{index}", text, f"synthetic-{index}.md", metadata if index == 0 else None) for index, text in enumerate(texts)
     ]
-    environ = (
-        {
-            "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
-            "RAG_ENGINE_ROW_CONDITION_MODEL": "row-model",
-            "RAG_ENGINE_ROW_CONDITION_ENDPOINT": "https://row.invalid/v1",
-            "RAG_ENGINE_ROW_CONDITION_API_KEY": "synthetic-row",
-        }
-        if undetermined
-        else {}
-    )
     settings = replace(
-        get_settings(environ=environ, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0
+        get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0
     )
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
@@ -177,23 +163,6 @@ def test_recorded_repair_of_stated_values_answers_the_values():
     assert not response.generation_trace["rounds"][0]["draft"]["applications"]
     assert ROW_A4 in response.answer_text and RULE in response.answer_text
     assert MISSING not in response.answer_text
-
-
-def test_stated_values_are_not_held_by_an_undetermined_table():
-    """表の行の判定が not_determined でも、直接の記載になった値は保留にならない（#4631 の症状）。"""
-    response, calls = run(RECORDED["mr1_multi_request"], RECORDED["mr1_multi_request_repair"], undetermined=True)
-    assert "row" in calls
-    assert [table["table_result"] for table in response.generation_trace["row_conditions"]["tables"]] == ["not_determined"]
-    assert kinds(response) == ["direct", "direct"]
-    assert ROW_A4 in response.answer_text and MISSING not in response.answer_text
-
-
-def test_sum_is_still_held_by_an_undetermined_table():
-    """足し算の答えは導出のままで、表の行の判定が not_determined なら従来どおり保留する。"""
-    repair = _draft(_derived(ROW_REQUIREMENT, "合計点は18点です。", *[f"{{row:{number}}}" for number in range(1, 9)]))
-    response, _calls = run(_draft(_source(ROW_REQUIREMENT, "{row:4}")), repair, undetermined=True)
-    assert kinds(response) == ["derived"]
-    assert "18点" not in response.answer_text and MISSING in response.answer_text
 
 
 @pytest.mark.parametrize(
@@ -258,20 +227,6 @@ def test_first_generation_without_the_stated_mode_is_not_rewritten():
     response, calls = run(first, first)
     assert calls == ["generate"]
     assert kinds(response) == ["derived"]
-
-
-def test_stated_values_of_the_first_generation_are_not_held_by_an_undetermined_table():
-    """1 回目の生成の mode=stated の answer 型も、数字が 1 つの単位にあれば直接の記載になり、保留にならない。"""
-    first = _draft(
-        _derived(ROW_REQUIREMENT, "行A4の点数は4点です。", "{row:4}", mode="stated"),
-        _derived(RANGE_REQUIREMENT, "区分Bになる合計点の範囲は10〜19点です。", "{rule}", mode="stated"),
-    )
-    response, calls = run(first, first, undetermined=True)
-    assert calls[0] == "generate" and "repair" not in calls
-    assert [table["table_result"] for table in response.generation_trace["row_conditions"]["tables"]] == ["not_determined"]
-    assert kinds(response) == ["direct", "direct"]
-    assert ROW_A4 in response.answer_text and RULE in response.answer_text
-    assert MISSING not in response.answer_text
 
 
 def test_derivation_mode_of_the_first_generation_stays_a_derivation():

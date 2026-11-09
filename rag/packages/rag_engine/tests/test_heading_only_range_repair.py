@@ -273,7 +273,7 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
         result = answering.synthesize_grounded_answer(
             QUESTION, AnswerContext(records=[record], text=TEXT), config, image_prompt_mode="text_only"
         )
-    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"]
+    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationExplanation"]
     rounds = result.response.generation_trace["rounds"]
     assert [round_["accepted"] for round_ in rounds] == [True, True]
     assert rounds[1]["timing"]["citation_range_repair"]["status"] == "completed"

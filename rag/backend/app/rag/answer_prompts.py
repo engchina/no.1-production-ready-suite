@@ -284,15 +284,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         (
             ("system", "rag_engine.generation.applications:APPLICATION_SYSTEM_PROMPT"),
             ("auditSystem", "rag_engine.generation.applications:APPLICATION_AUDIT_SYSTEM_PROMPT"),
-            # 独立の監査の判定に、利用者に示す理由を付ける（判定は変えない。#4471）。
-            (
-                "reasonSystem",
-                "rag_engine.generation.application_reason:APPLICATION_REASON_SYSTEM_PROMPT",
-            ),
-            # 推導の前に、表の各行の条件の種類と時点を読み取り（rowTypeSystem）、
-            # 時点以外の条件が質問から成り立つかを判定する（rowJudgeSystem。#4349）。
-            ("rowTypeSystem", "rag_engine.generation.row_conditions:ROW_TYPE_SYSTEM_PROMPT"),
-            ("rowJudgeSystem", "rag_engine.generation.row_conditions:ROW_JUDGE_SYSTEM_PROMPT"),
         ),
     ),
     PromptStage(

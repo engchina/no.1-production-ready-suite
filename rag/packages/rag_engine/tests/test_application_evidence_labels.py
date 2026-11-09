@@ -12,12 +12,20 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from test_row_conditions_answering import TABLE_TEXT, answer
+from application_verdict_stub import audit_reply, is_application_schema
+from audit_fixtures import synthetic_explanation
+from citation_unit_support import canonical_fixture
+from test_grounded_answer import context, ids, record
 
+from rag_engine.config import get_settings
+from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+from rag_engine.generation import application_explanation as explanation
 from rag_engine.generation import grounded
+from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.applications import check_applications
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedApplication, GroundedDraft
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "row_conditions_recorded.json").read_text(encoding="utf-8"))
@@ -106,6 +114,34 @@ def test_draft_without_ids_is_unchanged() -> None:
 
 
 # ---------------------------------------------------------------- 回答の経路（stub）
+
+
+TABLE_TEXT = FIXTURE["cases"]["reg-period-reversed"]["evidence_text"]
+QUESTION = FIXTURE["cases"]["reg-period-reversed"]["question"]
+
+
+def answer(generated_for: Any) -> tuple[Any, list[str]]:
+    ctx = context(record(0, TABLE_TEXT, "合成資料-値と規則", source="synthetic-period.md"))
+    generated = generated_for(ids(ctx, QUESTION)[TABLE_TEXT])
+    calls: list[str] = []
+
+    def model(_system: str, prompt: str, _settings: Any, schema: Any, **_options: Any) -> Any:
+        calls.append(schema.__name__)
+        if explanation.is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
+        if is_application_schema(schema):
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
+        if issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft:
+            return canonical_fixture(generated)
+        raise AssertionError(f"想定外の schema: {schema.__name__}")
+
+    def unused(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("unexpected I/O")
+
+    settings = get_settings(environ={"RAG_ENGINE_ANSWER_AUDIT_MODE": "none"}, dotenv_path=None)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = synthesize_grounded_answer(QUESTION, ctx, settings, image_prompt_mode="text_only")
+    return result.response, calls
 
 
 def _derivation_reasoning(reasoning: str) -> Any:

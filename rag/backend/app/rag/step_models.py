@@ -45,25 +45,6 @@ STEP_MODEL_SETTINGS: tuple[StepModelSetting, ...] = (
         "RAG_ENGINE_QUESTION_SUBJECT_ROLE",
         "質問の対象の役割の判定",
     ),
-    StepModelSetting(
-        "row_condition",
-        "rag_row_condition_model",
-        "RAG_ENGINE_ROW_CONDITION",
-        "表の行の条件の当てはめ",
-        effort_field="rag_row_condition_reasoning_effort",
-    ),
-    StepModelSetting(
-        "application_audit",
-        "rag_application_audit_model",
-        "RAG_ENGINE_APPLICATION_AUDIT",
-        "導いた結論の判定",
-    ),
-    StepModelSetting(
-        "application_reason",
-        "rag_application_reason_model",
-        "RAG_ENGINE_APPLICATION_REASON",
-        "導いた結論の判定の理由",
-    ),
 )
 
 

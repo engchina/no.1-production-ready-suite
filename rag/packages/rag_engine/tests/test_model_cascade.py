@@ -21,7 +21,6 @@ from rag_engine.generation.answering import synthesize_with_model_cascade
 from rag_engine.generation.citation_range_repair import CitationRangeRepair
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.generation.execution_record import _structured_steps
-from rag_engine.generation.summary_projection import APPLICATION_SUMMARY_WITHHELD
 from rag_engine.models.llm import GroundedDraft
 
 QUESTION = "年次集計の明細一覧表を出力する手順を教えてください"
@@ -202,8 +201,6 @@ def test_escalated_settings_use_the_second_model_limits():
     assert escalated.default_answer_llm == ESCALATION_LLM_PROVIDER
     assert escalated.answer_max_input_tokens == 200000
     assert escalated.escalation_llm == ""
-    # 段ごとに固定のモデルは変えない。
-    assert escalated.row_condition_llm == settings.row_condition_llm
     assert model_cascade.answer_cascade(escalated, None).enabled is False
     # 同じモデルを 2 つ目に選んでも使わない。
     same = _settings(escalation=False)
@@ -231,18 +228,6 @@ def _entry(**values):
             ("citation_mismatch",),
         ),
         (_round(summary_reason="要求の根拠計画にない説明を除外したため、要約の結論を保留"), "none", ("conclusion_withheld",)),
-        (_round(summary_reason=APPLICATION_SUMMARY_WITHHELD), "none", ("conclusion_withheld",)),
-        # 表の行が質問から決まらない・判定の呼び出しが失敗した保留は、生成をやり直しても変わらない。
-        (
-            _round(summary_reason=APPLICATION_SUMMARY_WITHHELD, timing={"application_review": {"status": "withheld_table_not_determined"}}),
-            "none",
-            (),
-        ),
-        (
-            _round(summary_reason=APPLICATION_SUMMARY_WITHHELD, timing={"application_review": {"status": "incomplete", "error_type": "X"}}),
-            "none",
-            (),
-        ),
         # 「資料と矛盾」は監査が有効なときだけ。表の対応の取り違えは決定的な検査なので数えない。
         (_round(checked=[_entry(removed=True, withdrawn=True)]), "detailed", ("audit_contradicted",)),
         (_round(checked=[_entry(removed=True, withdrawn=True)]), "none", ()),
@@ -255,9 +240,6 @@ def _entry(**values):
         "unmatched",
         "range",
         "scope-withheld",
-        "application-withheld",
-        "table-undetermined",
-        "review-error",
         "contradicted",
         "contradicted-without-audit",
         "table-conflict",

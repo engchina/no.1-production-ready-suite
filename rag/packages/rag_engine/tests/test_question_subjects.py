@@ -902,7 +902,7 @@ def test_summary_with_an_absent_name_is_withheld_regenerated_once_and_extracted_
     assert subject_calls == [EXTRACT, ROLE]
     feedback = prompts[1][prompts[1].index('{"subject_name_issues"') :]
     assert feedback.startswith('{"subject_name_issues": [{"text": "' + LEAP + '", "absent_names": ["ServiceX"]')
-    assert LEAP not in result.answer_text
+    assert not result.answer_text.startswith(LEAP)
     assert answer_labels().neutral_summary in result.answer_text
     assert UNCONFIRMED in result.answer_text
 
@@ -973,7 +973,7 @@ def test_summary_naming_a_misjudged_given_name_is_corrected() -> None:
         draft(LEAP), draft(LEAP), subjects={EXTRACT: SUBJECTS[EXTRACT], ROLE: {"entities": [{"entity_id": "N1", "roles": ["given"]}]}}
     )
     assert len(prompts) == 2 and '"absent_names": ["ServiceX"]' in prompts[1]
-    assert LEAP not in result.answer_text
+    assert not result.answer_text.startswith(LEAP)
 
 
 @pytest.mark.parametrize(

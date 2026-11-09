@@ -8,17 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from application_verdict_stub import audit_reply
 from audit_fixtures import legacy_audit_to_wire_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.generation.application_explanation import KEY_SOURCES, is_explanation_schema
-from rag_engine.generation.application_reason import AuditReason
-from rag_engine.generation.application_review import review_applications
-from rag_engine.generation.applications import APPLICATION_AUDIT_SYSTEM_PROMPT, CheckedApplication, render_lines
+from rag_engine.generation.applications import APPLICATION_AUDIT_SYSTEM_PROMPT, CheckedApplication, apply_application_audit, render_lines
 from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, FACT_AUDIT_SYSTEM_PROMPT
 from rag_engine.models.audit_wire import audit_wire_schema, decode_audit_wire, is_audit_wire
-from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit, GroundedApplication, GroundedAudit, GroundedFactAudit
+from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedAudit, GroundedFactAudit
 
 RECORDED = {
     case["name"]: case
@@ -63,21 +60,8 @@ def test_existing_audit_is_reused_without_a_review_call_and_without_a_display():
         schema,
     )
     entry = candidate()
-
-    def unused(*a, **kw):
-        pytest.fail("推導の審査を再利用するときは呼び出さない")
-
-    trace = review_applications(
-        QUESTION,
-        [entry],
-        evidence_spans=[{"evidence_id": "E1", "text": SOURCE}],
-        existing_audit=decode_audit_wire(json.dumps(raw), schema).audit,
-        audit_requested=True,
-        parse_text=unused,
-        settings=get_settings(environ={}, dotenv_path=None),
-        provider_id=None,
-    )
-    assert trace["calls"] == 0 and entry.assessment["status"] == "valid" and entry.published
+    apply_application_audit([entry], decode_audit_wire(json.dumps(raw), schema).audit, require_complete=True)
+    assert entry.assessment["status"] == "valid" and entry.published
     # 説明の段の前は説明を出さない（生成の推導の文へ戻さない）。
     before = deepcopy(entry.application.model_dump())
     rendered = "\n".join(render_lines([entry], lambda _: "根拠：synthetic.txt", lambda _: None))
@@ -85,8 +69,17 @@ def test_existing_audit_is_reused_without_a_review_call_and_without_a_display():
     assert entry.application.model_dump() == before
 
 
-@pytest.mark.parametrize("audit_mode", ["none", "standard", "detailed"])
-@pytest.mark.parametrize("state", ["confirmed", "hidden", "call_error", "logic_invalid", "invalid_language"])
+@pytest.mark.parametrize(
+    ("state", "audit_mode"),
+    [
+        *[
+            (state, mode)
+            for state in ("confirmed", "hidden", "call_error", "invalid_language")
+            for mode in ("none", "standard", "detailed")
+        ],
+        *[("logic_invalid", mode) for mode in ("standard", "detailed")],
+    ],
+)
 def test_generation_calls_the_explanation_once_after_review_and_never_falls_back(state, audit_mode):
     from citation_unit_support import selected_answer_payload
 
@@ -106,10 +99,6 @@ def test_generation_calls_the_explanation_once_after_review_and_never_falls_back
                 raise RuntimeError("synthetic transport failure")
             text = RECORDED["explicit_english-r1"]["recorded_explanation"] if state == "hidden" else EXPLANATION
             return schema.model_validate({"explanation": text})
-        if schema in (ApplicationVerdictAudit, AuditReason):
-            # 監査なしの設定の独立の監査（#4471）: 判定（A）と判定の理由（B）の 2 段。
-            calls.append("audit" if schema is ApplicationVerdictAudit else "reason")
-            return audit_reply(schema, [{"index": 0, "valid": valid}], prompt=prompt)
         if is_audit_wire(schema):
             calls.append("audit")
             if schema.canonical_schema is ApplicationAudit:
@@ -162,10 +151,9 @@ def test_generation_calls_the_explanation_once_after_review_and_never_falls_back
             QUESTION, AnswerContext(records=[row], text=SOURCE), settings, image_prompt_mode="text_only"
         ).response
     called = state in {"confirmed", "hidden", "call_error"}
-    # 生成 1 回・推導の審査 1 回（標準・詳細は通常の監査と同じ呼び出し。監査なしは独立の監査の判定と、確定した判定の
-    # 理由の段 1 回）の後に、valid な推導 1 件ごとの説明の段 1 回。
-    reason = ["reason"] if audit_mode == "none" else []
-    assert calls == ["generate", "audit", *reason, *(["explanation"] if called else [])]
+    # 生成 1 回（標準・詳細は推導の審査を含む通常の監査 1 回）の後に、公開する推導 1 件ごとの説明の段 1 回。
+    audit = [] if audit_mode == "none" else ["audit"]
+    assert calls == ["generate", *audit, *(["explanation"] if called else [])]
     # 回答の記録の呼び出し回数にも、説明の段を含める。
     assert response.generation_trace["llm_calls"] == len(calls)
     trace = response.generation_trace["applications"][0]
