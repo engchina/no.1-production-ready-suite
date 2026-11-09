@@ -292,3 +292,32 @@ def test_unread_fields_migration_is_a_destructive_data_step() -> None:
     assert len(split_sql_statements(section.sql)) == 1
     for field in (*module.RETIRED_UNREAD_FIELDS, *module.RETIRED_UNREAD_SECTIONS):
         assert field in section.sql
+
+
+def test_unread_fields_are_removed_from_synthetic_rows_and_hash_is_recomputed() -> None:
+    """公開版・下書き・プロファイルの合成の行から、#4668 で廃止した項目と節を除く。"""
+    current = builtin_pack().to_dict()
+    old = copy.deepcopy(current)
+    old["operation_audit_cues"] = {"instruction_phrases": ["合成語"]}
+    old["answer_check_cues"]["unexplained_words"] = ["合成語"]
+    old["answer_labels"]["predicate_endings"] = ["合成語"]
+    old["search_terms"]["feedback_split_words"] = ["合成語"]
+    old["evidence_cues"]["link_verbs"] = ["合成語"]
+    profile = {
+        "language_pack": {
+            "operation_audit_cues": {"instruction_phrases": ["合成語"]},
+            "evidence_cues": {"link_verbs": ["合成語"]},
+            "answer_check_cues": {"unexplained_words": ["合成語"]},
+        }
+    }
+    db = _db(_release(old), draft=old, profile=profile)
+
+    remove_retired_language_pack_fields(db)
+
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert release["content_hash"] == build_pack(release["effective_json"]).hash
+    assert release["ingest_hash"] == "ingest"
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    config = db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]
+    assert config == {"language_pack": {}}
