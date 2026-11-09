@@ -63,6 +63,7 @@ from app.config import (
     FIXED_DELIMITER_STRATEGY,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
     PREVIOUS_DEFAULT_CHUNK_DELIMITER,
+    FileType,
     IngestionQueueConcurrency,
     Settings,
     get_settings,
@@ -96,6 +97,7 @@ from app.rag.document_sections_service import (
 )
 from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
 from app.rag.extraction_revisions import ExtractionElementChange, extraction_element_changes
+from app.rag.file_type_defaults import classify_file_type, file_type_default_overrides
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
@@ -297,6 +299,8 @@ SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS: tuple[str, ...] = (
     "chunk_parent_max_pages",
     "chunk_parent_max_children",
 )
+# 形式別の既定（#4732）が決める項目（実効値の drift で比べる）。
+_FILE_TYPE_LAYER_FIELDS = ("preprocess_profile", "parser_adapter_backend", "chunking_strategy")
 DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     # 前処理 excel_to_jsonl の選択肢(#1221)も前処理の出力を変える。
     "preprocess_profile": ("preprocess_profile", "excel_options"),
@@ -568,7 +572,13 @@ async def _store_uploaded_document(
         duplicate_of_document_id=detail.duplicate_of_document_id,
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
-        parser_notice=await _parser_notice(settings, source_profile),
+        parser_notice=await _parser_notice(
+            _merge_document_processing_config(
+                DocumentProcessingConfig(),
+                file_type=classify_file_type(file_name, content_type),
+            )[0],
+            source_profile,
+        ),
     )
 
 
@@ -845,6 +855,7 @@ async def _mark_layers_rebuild_required(
                         row.get("recipe_processing_config") or {}
                     ),
                     global_settings,
+                    file_type=_document_file_type(documents_by_id.get(document_id)),
                 )
             except (ValueError, KbAdapterConfigError):
                 continue
@@ -1082,7 +1093,9 @@ async def enqueue_bulk_ingestion_jobs(
     result = await accept_bulk_ingestion(
         request.document_ids,
         store=_bulk_ingestion_store(),
-        resolve_settings=lambda config: _merge_document_processing_config(config)[0],
+        resolve_settings=lambda config, file_type: _merge_document_processing_config(
+            config, file_type=file_type
+        )[0],
         enqueue_single=lambda document_id: _enqueue_ingestion_job_for_document(
             document_id, force=False
         ),
@@ -1345,7 +1358,9 @@ async def _document_recipe_view(
             )
         )
         raise DocumentRecipeConfigInvalidError(fields) from exc
-    recipe_settings, effective = _merge_document_processing_config(config)
+    recipe_settings, effective = _merge_document_processing_config(
+        config, file_type=_recipe_row_file_type(row)
+    )
     recipe_id = str(row["recipe_id"])
     all_jobs = (
         document_jobs
@@ -1399,7 +1414,8 @@ async def _document_recipe_view(
         ),
         needs_reprocessing=(
             materialized_revision is not None and config_revision != materialized_revision
-        ),
+        )
+        or bool(_recipe_processing_defaults_drift(row, effective)),
         error_message=(str(row["error_message"]) if row.get("error_message") else None),
         steps=_recipe_steps(
             row,
@@ -1450,6 +1466,8 @@ async def create_document_recipe(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # 作成直後の行は文書の列を持たない。実効設定（形式別の既定）の解決のため読み直す。
+    row = await oracle.get_document_recipe(document_id, str(row["recipe_id"])) or row
     return ApiResponse(data=await _document_recipe_view(oracle, row))
 
 
@@ -1554,7 +1572,9 @@ async def _enqueue_ingestion_job_for_recipe(
     ):
         raise ValueError("レシピの改訂が変わりました。対象を確認し直してください。")
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    effective_settings, _ = _merge_document_processing_config(config)
+    effective_settings, _ = _merge_document_processing_config(
+        config, file_type=_document_file_type(detail)
+    )
     if staging_runtime is not None:
         effective_settings = apply_staging_runtime(
             effective_settings, {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
@@ -1965,7 +1985,7 @@ async def preview_document_recipe_chunks(
         raise HTTPException(status_code=409, detail="再利用できる抽出結果がありません。")
 
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    settings, _ = _merge_document_processing_config(config)
+    settings, _ = _merge_document_processing_config(config, file_type=_document_file_type(detail))
     candidate = _candidate_chunking_settings(
         settings,
         (request or DocumentChunkPreviewRequest()).settings_overrides(),
@@ -2621,6 +2641,7 @@ async def list_document_recipe_extraction_revisions(
             await oracle.document_extraction_recipe_subset(
                 document_id=document_id, extraction_recipe_id=str(current_id)
             ),
+            file_type=_document_file_type(detail),
         )
         if revisions and current_id and detail.content_sha256
         else None
@@ -2751,6 +2772,7 @@ async def restore_document_recipe_extraction_revision(
             recipe,
             artifact,
             cast("Mapping[str, object]", revision["extraction_json"]),
+            file_type=_document_file_type(detail),
         )
         if revision["parse_extraction_recipe_id"] != write.parse_extraction_recipe_id:
             raise DocumentReviewEditConflictError(
@@ -2942,7 +2964,7 @@ async def _materialize_experiment_candidate(
                 raise
             raise IngestionUserError(str(exc.detail)) from exc
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
-        candidate_config
+        candidate_config, file_type=_document_file_type(detail)
     )
     candidate_settings = apply_staging_runtime(candidate_settings, job.settings_overrides or {})
     base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
@@ -3419,7 +3441,9 @@ async def _recipe_settings_by_id(oracle: OracleClient, document_id: str) -> dict
     result: dict[str, Settings] = {}
     for row in await oracle.list_document_recipes(document_id):
         config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-        result[str(row["recipe_id"])], _effective = _merge_document_processing_config(config)
+        result[str(row["recipe_id"])], _effective = _merge_document_processing_config(
+            config, file_type=_recipe_row_file_type(row)
+        )
     return result
 
 
@@ -3529,13 +3553,53 @@ def _raise_if_recipe_selects_mineru_without_license(config: DocumentProcessingCo
         raise HTTPException(status_code=422, detail=MINERU_LICENSE_REQUIRED_MESSAGE)
 
 
+def _document_file_type(document: DocumentDetail | DocumentSummary | None) -> FileType | None:
+    """形式別の既定（#4732）を引く種類。"""
+    if document is None:
+        return None
+    return classify_file_type(document.file_name, document.content_type)
+
+
+def _recipe_row_file_type(row: Mapping[str, object]) -> FileType | None:
+    """レシピの行（文書のファイル名と content type を持つ）の種類（#4732）。"""
+    file_name, content_type = row.get("document_file_name"), row.get("document_content_type")
+    return classify_file_type(
+        str(file_name) if file_name is not None else None,
+        str(content_type) if content_type is not None else None,
+    )
+
+
+def _with_file_type_defaults(
+    config: DocumentProcessingConfig,
+    base: Settings,
+    file_type: FileType | None,
+) -> DocumentProcessingConfig:
+    """レシピが決めていない項目へ、形式別の既定を重ねた設定を返す（レシピの明示値は変えない）。"""
+    if file_type is None:
+        return config
+    overrides = {
+        field: value
+        for field, value in file_type_default_overrides(base, file_type).items()
+        if getattr(config, field) is None
+    }
+    return config.model_copy(update=overrides) if overrides else config
+
+
 def _merge_document_processing_config(
     config: DocumentProcessingConfig,
     global_settings: Settings | None = None,
+    *,
+    file_type: FileType | None = None,
 ) -> tuple[Settings, DocumentProcessingConfig]:
-    """global 既定へ文書の明示上書きだけを重ねる。KB 設定は参照しない。"""
+    """全体の既定へ、形式別の既定（#4732）→ 文書の明示上書きの順に重ねる。KB 設定は参照しない。
+
+    解決の順は文書のレシピ > 形式別の既定 > 全体の既定。``file_type`` は文書の種類で、None は
+    種類の層を使わない（全体の既定だけを見る）。
+    """
     base = global_settings or get_settings()
-    adapter = KnowledgeBaseAdapterConfig(ingestion=config)
+    adapter = KnowledgeBaseAdapterConfig(
+        ingestion=_with_file_type_defaults(config, base, file_type)
+    )
     effective_settings = resolve_effective_settings(base, adapter, scope="ingestion")
     # 外部 parser 選択時に自動注入される feature flag も含め、実際の Settings を
     # スナップショットへ投影する。これにより runtime と drift 判定が同じ値を見る。
@@ -3606,6 +3670,31 @@ def _processing_config_drift_groups(
         for group, fields in DOCUMENT_PROCESSING_OUTPUT_GROUPS.items()
         if any(_observed_value(field) != effective.get(field) for field in _compared_fields(fields))
     ]
+
+
+def _recipe_processing_defaults_drift(
+    row: Mapping[str, object],
+    effective: DocumentProcessingConfig,
+) -> list[str]:
+    """配信中の chunk_set と今の実効設定で、種類の層（#4732）が決める項目が違う設定群を返す。
+
+    レシピの明示の変更は版の差（needs_reprocessing の revision の比較）で分かる。ここは全体の
+    設定の変更で実効値がずれたことを見せる。比べるのは 3 項目（ファイル準備・解析エンジン・
+    分割方式）だけで、実効値を持たない旧い snapshot は比べない。
+    """
+    if row.get("active_chunk_set_id") is None:
+        return []
+    subset = row.get("active_recipe_subset")
+    observed = subset.get("effective_processing_config") if isinstance(subset, Mapping) else None
+    if not isinstance(observed, Mapping):
+        return []
+    current = effective.model_dump(mode="json")
+    recorded = {
+        field: observed[field]
+        for field in _FILE_TYPE_LAYER_FIELDS
+        if observed.get(field) is not None
+    }
+    return _processing_config_drift_groups({**current, **recorded}, current)
 
 
 def _snapshot_used_removed_chunking_strategy(row: Mapping[str, object] | None) -> bool:
@@ -3880,10 +3969,12 @@ def _recipe_parse_extraction_id(
     content_sha256: str,
     recipe: Mapping[str, object],
     recipe_subset: Mapping[str, object] | None,
+    *,
+    file_type: FileType | None,
 ) -> str:
     """原本と解析の設定で決まる ID(同じ原本・設定の解析の結果なら同じ)。"""
     config = DocumentProcessingConfig.model_validate(recipe.get("processing_config") or {})
-    recipe_settings, _ = _merge_document_processing_config(config)
+    recipe_settings, _ = _merge_document_processing_config(config, file_type=file_type)
     if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
         recipe_settings = recipe_settings.model_copy(
             update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
@@ -3896,13 +3987,17 @@ def _reviewed_extraction_write(
     recipe: Mapping[str, object],
     artifact: Mapping[str, object],
     extraction: Mapping[str, object],
+    *,
+    file_type: FileType | None,
 ) -> ReviewedExtractionWrite:
     """修正・復元の内容を、保存ごとに新しい ID の抽出として書く内容にする(#2644)。
 
     ID を使い回さないので、検索に出している版や過去の版の抽出を上書きしない。
     """
     recipe_subset = _recipe_subset_of(artifact)
-    parse_extraction_recipe_id = _recipe_parse_extraction_id(content_sha256, recipe, recipe_subset)
+    parse_extraction_recipe_id = _recipe_parse_extraction_id(
+        content_sha256, recipe, recipe_subset, file_type=file_type
+    )
     return ReviewedExtractionWrite(
         extraction_recipe_id=compute_isolated_extraction_id(
             parse_extraction_recipe_id, uuid4().hex
@@ -3943,7 +4038,11 @@ async def _apply_recipe_review_text_edits(
             edits,
         )
         return _reviewed_extraction_write(
-            content_sha256, recipe, artifact, extraction.to_document_payload()
+            content_sha256,
+            recipe,
+            artifact,
+            extraction.to_document_payload(),
+            file_type=_document_file_type(detail),
         )
 
     try:
@@ -4538,7 +4637,7 @@ async def _resolve_ingestion_settings(
     document_id: str,
     recipe_id: str | None = None,
 ) -> tuple[Settings, DocumentProcessingConfig]:
-    """レシピ > global 既定で有効な処理設定を解決する。KB は参照しない。
+    """レシピ > 形式別の既定 > 全体の既定で有効な処理設定を解決する。KB は参照しない。
 
     レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
     旧文書列の設定で補わず停止する。
@@ -4552,7 +4651,9 @@ async def _resolve_ingestion_settings(
             detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
         )
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    effective, _resolved = _merge_document_processing_config(config)
+    effective, _resolved = _merge_document_processing_config(
+        config, file_type=_recipe_row_file_type(row)
+    )
     return effective, config
 
 

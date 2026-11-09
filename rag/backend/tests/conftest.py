@@ -156,6 +156,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
     monkeypatch.setenv("RAG_PARSER_SETTINGS_FILE", str(tmp_path / "parser-settings.json"))
+    monkeypatch.setenv("RAG_FILE_TYPE_DEFAULTS_FILE", str(tmp_path / "file-type-defaults.json"))
     # 言語資源の全体の上書き(#2181)は、テストごとに組み込みのパックへ戻す。
     from app.rag.language_pack_store import LANGUAGE_PACK_STORE
 
@@ -330,6 +331,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.app_auth_cookie_secure = False
     settings.model_settings_file = str(tmp_path / "model-settings.json")
     settings.rag_parser_settings_file = str(tmp_path / "parser-settings.json")
+    settings.rag_file_type_defaults_file = str(tmp_path / "file-type-defaults.json")
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""
     settings.oci_enterprise_ai_secondary_endpoint = ""

@@ -44,6 +44,7 @@ import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
 import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
 import { LanguagePackSettingsClient } from "@/components/settings/LanguagePackSettingsClient";
+import { FileTypeDefaultsSettingsClient } from "@/components/settings/FileTypeDefaultsSettingsClient";
 import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
 import { ServicesManagementClient } from "@/components/settings/ServicesManagementClient";
 import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
@@ -132,6 +133,7 @@ export function App() {
         />
         <Route path={APP_ROUTES.settingsPreprocess} element={<SettingsPreprocessRoute />} />
         <Route path={APP_ROUTES.settingsChunking} element={<SettingsChunkingRoute />} />
+        <Route path={APP_ROUTES.settingsFileTypeDefaults} element={<SettingsFileTypeDefaultsRoute />} />
         <Route path={APP_ROUTES.settingsLanguagePack} element={<SettingsLanguagePackRoute />} />
         <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
         {/* 削除した根拠確認・回答スタイル・高度な検索（#595）のブックマークは、回答の設定が移った検索方法へ。
@@ -477,6 +479,19 @@ function SettingsChunkingRoute() {
         subtitle={t("settings.chunking.subtitle")}
       />
       <ChunkingSettingsClient />
+    </div>
+  );
+}
+
+function SettingsFileTypeDefaultsRoute() {
+  return (
+    <div>
+      <PageHeader
+        wide
+        title={t("nav.settingsFileTypeDefaults")}
+        subtitle={t("settings.fileTypeDefaults.subtitle")}
+      />
+      <FileTypeDefaultsSettingsClient />
     </div>
   );
 }
