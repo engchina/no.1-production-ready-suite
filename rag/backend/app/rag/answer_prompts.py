@@ -77,7 +77,6 @@ PROMPT_PHASES = (
     "knowledge",
     "question",
     "retrieval",
-    "grounding",
     "generation",
     "evaluation",
 )
@@ -198,11 +197,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
-        "section_extraction",
-        "grounding",
-        (("system", "rag_engine.generation.section_extraction:EXTRACTION_SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
         "faq_answer",
         "generation",
         (("system", "rag_engine.generation.faq_answer:SYSTEM_PROMPT"),),
@@ -279,11 +273,7 @@ def stage_prompt_permission(key: str) -> str | None:
             return "menu.settings_parser_adapters"
         if stage.phase == "evaluation":
             return "menu.settings_evaluation"
-        if stage.id != "support_guide_conditions" and stage.phase in {
-            "question",
-            "retrieval",
-            "grounding",
-        }:
+        if stage.id != "support_guide_conditions" and stage.phase in {"question", "retrieval"}:
             return "menu.settings_retrieval"
         return "menu.settings_prompts"
     return None

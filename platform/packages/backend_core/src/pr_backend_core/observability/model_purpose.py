@@ -25,7 +25,6 @@ MODEL_CALL_PURPOSES = frozenset(
         "evidence.select_article",
         "evidence.select_document",
         "evidence.refine_article",
-        "evidence.extract",
         "query.route",
         "query.rewrite",
         "query.conditions",

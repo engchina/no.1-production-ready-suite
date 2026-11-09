@@ -74,6 +74,10 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.rag.answer_prompt_retirement_4782_query import (
+    RETIRED_SECTION_EXTRACTION_PROMPT_KEYS,
+    retired_prompt_rows_sql,
+)
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
     RETIRED_ANSWER_CHECK_CUE_FIELDS,
@@ -988,6 +992,19 @@ END;
                 "消して読まれなくなった answer_labels の項目の値を削除し、公開版の CONTENT_HASH を"
                 "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
                 "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_retire_section_extraction_prompts",
+            table_name="rag_answer_prompts",
+            sql=retired_prompt_rows_sql(RETIRED_SECTION_EXTRACTION_PROMPT_KEYS),
+            destructive_note=(
+                "消した段「原文の抜き出し」の保存済みのプロンプト（RAG_ANSWER_PROMPTS の "
+                "PROMPT_KEY が section_extraction.system の行）を削除します。ほかの段の保存値は"
+                "変えません。保存した文を残す必要があれば適用前に同じ行を export してください。"
                 "削除後は復元できません。"
             ),
         )

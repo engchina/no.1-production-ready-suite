@@ -4145,7 +4145,6 @@ def answer_question_result(
                 normalized_question,
                 candidate,
                 settings,
-                answer_llm_provider=answer_llm_provider,
                 rerank_enabled=effective_rerank_enabled,
                 started_at=answer_started_at,
                 state=section_state,
@@ -4569,7 +4568,6 @@ def _expand_context_by_sections(
     context: AnswerContext,
     settings: Settings,
     *,
-    answer_llm_provider: str | None,
     rerank_enabled: bool,
     started_at: float,
     state: dict[str, Any] | None = None,
@@ -4649,16 +4647,10 @@ def _expand_context_by_sections(
             )
 
     rerank = section_rerank if rerank_enabled and _rerank_configured(settings) else None
-    from rag_engine.generation.section_extraction import SectionExtractor
-
-    # 予算に入らない章節は、質問に関係する原文を抜き出してから統合する (#1437)。回答全体の期限と根拠入力の予算を共有する。
-    if "extractor" not in state:
-        state["extractor"] = SectionExtractor(settings, parse_text_response, provider_id=answer_llm_provider)
+    # 入らない章節は rerank の順で上限まで入れ、残りは未反映として示す。読了の記録は 1 回の回答の段で共有する。
+    if "reader" not in state:
         state["reader"] = sections.SectionReader(read_chunks=ports[1], known_ids=set())
         state["outlines"] = {}
-    extractor = state["extractor"]
-    # 抜き出しを使わない設定（#2800）では、入らない章節を rerank の順で上限まで入れ、残りは未反映として示す。
-    large_sections = extractor if getattr(settings, "section_extraction_enabled", True) else sections.no_large_section_handler
 
     def outline(**kwargs: Any) -> Any:
         uid = kwargs["chunk_uid"]
@@ -4684,7 +4676,6 @@ def _expand_context_by_sections(
             section_outline=outline,
             section_chunks=ports[1],
             rerank=rerank,
-            large_sections=large_sections,
             started_at=started_at,
             deadline_remaining=remaining_seconds,
             clock=monotonic,
@@ -4693,9 +4684,6 @@ def _expand_context_by_sections(
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
         )
         result.trace["phase"] = phase
-        result.trace["extraction_enabled"] = bool(getattr(settings, "section_extraction_enabled", True))
-        if result.trace.get("large_section_handoff") == "extract_then_integrate_unavailable":
-            result.trace["large_section_handoff_reason"] = "disabled_by_setting"
         previous = state.get("result")
         if previous is not None:
             result.applied = result.applied or previous.applied
@@ -4704,11 +4692,6 @@ def _expand_context_by_sections(
             *(previous.trace.get("phases", []) if previous else []),
             {key: value for key, value in result.trace.items() if key != "phases"},
         ]
-        if extractor.calls:
-            result.trace["extraction"] = {
-                "calls": extractor.calls,
-                "part_tokens": extractor.limits.part_tokens,
-            }
         events = reader.read_events[event_start:]
         read_ids = {uid for event in events if event["state"] == "read" for uid in event["child_ids"]}
         all_ids = {uid for event in events for uid in event["child_ids"]}
@@ -4772,8 +4755,6 @@ def _expand_context_by_sections(
             step.skip("章節を広げる設定が無効です。")
         else:
             step.result(f"章節 {len(completed_now)} 件を読み終え、新規 {len(new_ids)} Chunk を回答文脈に採用しました。")
-        if extractor.calls:
-            step.add(f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回）。")
         # 広げた段・判定の回数・止めた理由・読めなかった章節（#2341）。
         step.field("広げた段", f"{result.levels} 段")
         step.field("止めた理由", _SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason))

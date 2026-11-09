@@ -3877,14 +3877,13 @@ export const ja = {
   "settings.answerPrompts.loading": "プロンプトを読み込んでいます",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.retrieval.prompts.title": "検索に使うプロンプト",
-  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の補完ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略される場合があります。各指示を編集し、保存すると次の処理から反映されます。",
+  "settings.retrieval.prompts.description": "質問の解釈と検索のそれぞれで、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略される場合があります。各指示を編集し、保存すると次の処理から反映されます。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
     "回答生成の工程ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。各指示を編集・保存できます。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
-  "settings.answerPrompts.phase.grounding": "根拠の補完",
   "settings.answerPrompts.phase.generation": "回答の生成",
   "settings.answerPrompts.phase.evaluation": "評価",
   "settings.answerPrompts.phase.indexing": "文書分割・索引",
@@ -3894,7 +3893,6 @@ export const ja = {
   "settings.answerPrompts.phase.knowledge.description": "回答で使う業務ガイドを準備する独立した処理です。文書の取込ごとに実行するものではありません。",
   "settings.answerPrompts.phase.question.description": "業務ガイドの条件確認、会話を踏まえた書き換え、項目の条件の順です。対象外の段は省略します。",
   "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面や条の目録から根拠を足します。",
-  "settings.answerPrompts.phase.grounding.description": "取得した根拠を章節の原文で補完します。",
   "settings.answerPrompts.phase.generation.description": "登録済みQ&Aを選んだ場合は Q&A の経路、それ以外は検索した根拠による生成です。後者の システムプロンプトと入力テンプレートをこの順に示します。",
   "settings.evaluation.prompts.title": "品質評価のプロンプト",
   "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示を編集・保存します。",
@@ -3954,9 +3952,6 @@ export const ja = {
   "settings.answerPrompts.stage.article_catalog": "条の目録から根拠の条を選ぶ",
   "settings.answerPrompts.stage.article_catalog.condition":
     "条の目録による選択を有効にし、検索候補に条で構成された文書があるとき。候補文書を選び、条を選択し、設定に応じて同じ章から追加します（文書ごと・再試行あり）",
-  "settings.answerPrompts.stage.section_extraction": "長い章節から必要な原文を抜き出す",
-  "settings.answerPrompts.stage.section_extraction.condition":
-    "章節の拡張と LLM による原文抽出を有効にし、章節が根拠の入力上限に入らないとき（原文抽出は既定で無効）",
   "settings.answerPrompts.stage.faq_answer": "登録済みQ&Aからの回答",
   "settings.answerPrompts.stage.faq_answer.condition": "チャットで近い登録済みQ&Aを選んだとき（検索しない）",
   "settings.answerPrompts.stage.generation": "回答の生成",

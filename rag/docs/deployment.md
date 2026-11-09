@@ -2125,3 +2125,10 @@ CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選�
 
 - 削除した設定（`backend/.env` に残っていても読まない）: `RAG_ANSWER_FLOW`・`RAG_QUERY_STRATEGY`・`RAG_QUERY_EXPANSION_MAX_QUERIES`・`RAG_CRAG_*`・`RAG_SECTION_SKIP_REGRADE_AT_SCOPE`・`RAG_STRATEGY_REASONING_EFFORT`・`RAG_JUDGE_REASONING_EFFORT`。保存された検索・回答プロファイルの `query_strategy` / `answer_flow` の値は読み捨てられ、次の保存で消える。
 - データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれない。
+
+### 質問と検索の段を整理する（#4782）
+
+章節の拡張で入らない章節から原文を LLM で抜き出す段（`evidence.extract`）を削除した。入らない章節は rerank の順で上限まで入れ、残りを「回答に未反映の関連章節」に示す（これまでの既定と同じ動き）。未リリースのため互換を持たない。
+
+- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`。
+- データを消す migration `20261110_4782_retire_section_extraction_prompts`: 回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system` の行）を削除する。ほかの段の保存値は変えない。保存した文を残す必要があれば、適用前にその行を export する。承認（`--allow-destructive`）が要る。

@@ -302,9 +302,6 @@ class Settings:
     # 主の検索の後に足す検索（業務ガイドの手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の
     # 合計の枠 (#2395)。種類ごとの上限はこの枠の中で数える（`retrieval.extra_retrieval`）。
     extra_retrieval_max_queries: int = 8
-    # 章節の拡張で入力の上限に入らない章節を LLM で抜き出す(#1437)。False なら rerank の順で上限まで入れ、残りは
-    # 「回答に未反映の関連章節」に示す(#2800。backend の既定は False)。
-    section_extraction_enabled: bool = True
     # 業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に入れる (#2395)。LLM は呼ばない。
     # 必須対象は追加検索の合計枠を先に確保する。回数はその後の補助検索、参照数は最低1件以外の追加候補を制限する。
     guide_step_retrieval_enabled: bool = True
@@ -322,10 +319,8 @@ class Settings:
     section_expansion_followup_reserve_percent: int = 20
     # 回答のモデルの入力の上限（tokens。#1437）。backend が共通のモデル設定の登録モデルの値を
     # `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で渡す（platform の enterprise_ai_max_input_tokens。既定 128000）。
-    # 章節の拡張の根拠の入力の上限と、抽出してから統合の 1 回分の大きさをこの割合で決める。
+    # 章節の拡張の根拠の入力の上限をこの割合で決める。
     answer_max_input_tokens: int = 128_000
-    # 同時に呼ぶ数（既定 4）。
-    section_extraction_concurrency: int = 4
     # 条の目録から条を選ぶ段（#2254）。融合の候補の上位の条で構成された文書（article_catalog_max_documents 件まで）の
     # 章節の目録を LLM に文書ごとに 1 回渡して条を選ばせ（文書ごとに article_catalog_max_articles 件まで）、その条の
     # 根拠を候補に加える。選んだ条は rerank の順に article_catalog_context_records 件まで、context の起点・親の枠の外に
@@ -581,7 +576,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         request_coverage_max_subquestions=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_SUBQUESTIONS", 5)),
         request_coverage_chunks_per_subquestion=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION", 2)),
         extra_retrieval_max_queries=max(0, _env_int(env, "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES", 8)),
-        section_extraction_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXTRACTION_ENABLED", True),
         guide_step_retrieval_enabled=_env_bool(env, "RAG_ENGINE_GUIDE_STEP_RETRIEVAL", True),
         guide_step_max_queries=max(0, _env_int(env, "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES", 4)),
         guide_step_chunks_per_step=max(1, _env_int(env, "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP", 2)),
@@ -594,7 +588,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             0, min(50, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT", 20))
         ),
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
-        section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
         article_catalog_enabled=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG", True),
         article_catalog_max_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS", 16)),
         article_catalog_max_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES", 8)),
