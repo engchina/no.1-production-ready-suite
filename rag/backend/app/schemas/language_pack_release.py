@@ -1,10 +1,10 @@
 """公開した言語資源と、索引が使用した版の追跡契約。"""
 
 from collections.abc import Iterable
-from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
@@ -17,7 +17,7 @@ class LanguagePackReleaseSummary(BaseModel):
     version: int = Field(ge=1)
     hash: str
     ingest_hash: str
-    published_at: datetime
+    published_at: UtcDatetime
     published_by: str | None = None
     previous_id: str | None = None
     restored_from: str | None = None
@@ -106,7 +106,7 @@ class LanguagePackRecipeUse(BaseModel):
     version: int | None = None
     ingest_hash: str | None = None
     relation: LanguagePackIndexRelation
-    built_at: datetime | None = None
+    built_at: UtcDatetime | None = None
     job_id: str | None = None
     target_release_id: str | None = None
     # 待機中・実行中の job が固定した版の番号。版の行が無ければ None（版の数から推定しない）。

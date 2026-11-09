@@ -48,7 +48,24 @@ function formatterFor(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat 
   return formatter;
 }
 
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T/;
+const TIME_ZONE_SUFFIX = /(?:[zZ]|[+-]\d{2}(?::?\d{2})?)$/;
+
+/**
+ * API の日時の文字列を読む（#4753）。時刻は UTC で保存し（`pr_backend_core.timezones`）、Oracle の
+ * TIMESTAMP は時間帯の無い値で返るため、時間帯の無い ISO の日時は UTC の瞬間として読む（`new Date` は
+ * 端末の時間帯として読み、表示の時間帯との差のぶんずれる）。暦の日付（`YYYY-MM-DD`）と時間帯のある値は
+ * そのまま。空・読めない値は null。
+ */
+export function parseApiDateTime(value: string | null | undefined): Date | null {
+  const text = value?.trim();
+  if (!text) return null;
+  const date = new Date(ISO_DATE_TIME.test(text) && !TIME_ZONE_SUFFIX.test(text) ? `${text}Z` : text);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function toDate(value: Date | string | number): Date | null {
+  if (typeof value === "string") return parseApiDateTime(value);
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }

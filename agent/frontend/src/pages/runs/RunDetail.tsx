@@ -31,6 +31,7 @@ import {
   type RunTimelineStep,
   CollapsedListToggle,
   useCollapsedList,
+  operationTimestampMs,
 } from "@production-ready/ui";
 import {
   agentApi,
@@ -532,7 +533,7 @@ function auditLogItems(audit: RunAuditData, records: Artifact[]): RunEventLogIte
 function withSortKeys(items: RunEventLogItem[]): Array<{ item: RunEventLogItem; key: number }> {
   let last = Number.NEGATIVE_INFINITY;
   return items.map((item) => {
-    const time = item.at ? Date.parse(item.at) : Number.NaN;
+    const time = operationTimestampMs(item.at) ?? Number.NaN;
     if (Number.isFinite(time)) last = time;
     return { item, key: last };
   });

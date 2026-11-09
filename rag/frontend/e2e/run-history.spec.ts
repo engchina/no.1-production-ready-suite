@@ -320,6 +320,27 @@ async function expectScrollsInsideTable(page: Page, region: Locator) {
   else expect(metrics.visibleRows).toBeGreaterThanOrEqual(expectedRows);
 }
 
+// 時間帯の無い created_at（Oracle の TIMESTAMP の形）は、端末の時間帯によらず UTC の瞬間（#4753）。
+for (const timezoneId of ["Asia/Tokyo", "UTC"]) {
+  test.describe(`実行履歴の時刻（端末の時間帯 ${timezoneId}）`, () => {
+    test.use({ timezoneId });
+
+    test("時間帯の無い日時を UTC の瞬間として、システムの設定の時間帯で書く", async ({ page }) => {
+      await mockLocalAuth(page);
+      // 分の境目をまたがないよう、分の 30 秒に置く（開始 = 終了 - 11 秒）。
+      const finishedMs = Math.floor(RECENT_BASE_MS / 60_000) * 60_000 + 30_000;
+      const naive = new Date(finishedMs).toISOString().replace(/\.\d+Z$/, ".223334");
+      const startedIso = new Date(finishedMs - 11_000).toISOString();
+      const expected = `${startedIso.slice(0, 10).replaceAll("-", "/")} ${startedIso.slice(11, 16)}`;
+      await mockRuns(page, [run(1, { created_at: naive, elapsed_ms: 11_000 })]);
+
+      await page.goto("/history");
+      await expect(page.getByTestId("run-history-row-run-1").getByText(expected, { exact: false }).locator("visible=true").first()).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
+  });
+}
+
 test.describe("実行履歴", { tag: "@responsive" }, () => {
   test("system_admin: 読み込み中は経過時間と表の Skeleton、全員の実行と実行者の列、ページ番号で移りページは再読込でも残る", async ({
     page,

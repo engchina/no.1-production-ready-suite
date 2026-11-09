@@ -10,6 +10,8 @@
 - **時刻の保存は UTC のまま**: DB の session の時間帯は
   `oracle_session.init_oracle_session` が `'+00:00'` に固定する。
   設定した時間帯で時刻を保存しない（瞬間を一意に保つ）。
+- **API の日時は UTC の印つき**: Oracle の TIMESTAMP は時間帯の無い値で返るので、応答の schema は
+  `UtcDatetime` で UTC に印を付けて返す（#4753）。
 - **業務データの SQL の「今」**: 業務データの SELECT を実行する間だけ、session の時間帯を
   `session_time_zone_offset` の offset にする（`oracle_session.local_session_time_zone`。#3265）。
 """
@@ -18,14 +20,25 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, date, datetime
-from typing import Final
+from typing import Annotated, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import AfterValidator
 
 # 既定（`platform/.env.example`・Terraform の `timezone`・`suite-init.sh` の既定と同じ）。
 DEFAULT_TIMEZONE: Final = "UTC"
 # IANA の地域名の形（`Asia/Tokyo`・`UTC`・`America/Argentina/Buenos_Aires`・`Etc/GMT-9`）。
 # Terraform の validation と `suite-init.sh` も同じ形で確かめる。
 _TIMEZONE_NAME: Final = re.compile(r"[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*")
+
+
+def ensure_utc(value: datetime) -> datetime:
+    """時間帯の無い値は UTC とみなし、ある値は UTC に換算する（瞬間を変えない）。"""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+# API の応答の日時の型。JSON では ISO 8601 の `Z` つきになる（時刻の保存は UTC）。
+UtcDatetime = Annotated[datetime, AfterValidator(ensure_utc)]
 
 
 def validate_timezone_name(value: object) -> str:
@@ -87,8 +100,10 @@ def session_time_zone_offset(settings: object, *, now: datetime | None = None) -
 
 __all__ = [
     "DEFAULT_TIMEZONE",
+    "UtcDatetime",
     "configured_timezone",
     "configured_timezone_name",
+    "ensure_utc",
     "local_now",
     "local_today",
     "session_time_zone_offset",

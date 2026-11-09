@@ -1,10 +1,10 @@
 """利用者フィードバックの低機密スキーマ。"""
 
 import hashlib
-from datetime import datetime
 from enum import StrEnum
 from typing import Self
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import Page
@@ -233,7 +233,7 @@ class FeedbackSubmissionResponse(BaseModel):
 class CurrentFeedbackItem(FeedbackSubmissionResponse):
     """現在の利用者について有効な最新フィードバック。"""
 
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class FeedbackReasonCount(BaseModel):

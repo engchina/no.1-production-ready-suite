@@ -4,9 +4,9 @@ KB は文書 membership の範囲、文書レシピは加工設定を持つ。
 プロファイルは参照 KB・検索/回答/安全チェックの上書き・用途専用の知識をまとめる。
 """
 
-from datetime import datetime
 from enum import StrEnum
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, Field, field_validator
 
 from app.rag.search_answer_profile_config import (
@@ -70,9 +70,9 @@ class SearchAnswerProfileSummary(SearchAnswerProfileRef):
         default=0,
         description="参照 KB のうち tenant に存在しない件数(検索対象にならない。#302)。",
     )
-    created_at: datetime
-    updated_at: datetime
-    archived_at: datetime | None = None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+    archived_at: UtcDatetime | None = None
 
 
 class SearchAnswerProfileDetail(SearchAnswerProfileSummary):

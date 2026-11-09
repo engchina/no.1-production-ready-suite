@@ -42,6 +42,7 @@ export {
   formatDisplayCalendarDate,
   formatDisplayDateTime,
   isSupportedTimeZone,
+  parseApiDateTime,
   setDisplayTimeZone,
   type DisplayDateTimeFormat,
   type DisplayDateTimeParts,

@@ -30,6 +30,7 @@ import {
   useChatHistoryPanel,
   chatAttachmentItems,
   type ChatAttachmentItem,
+  operationTimestampMs,
 } from "@production-ready/ui";
 import {
   RotateCcw,
@@ -1839,7 +1840,7 @@ export function ChatClient() {
                           messageId: reply.message_id,
                           active: streaming,
                           terminalStatus: reply.status === "COMPLETE" ? "done" : reply.status === "ERROR" ? "failed" : reply.status === "CANCELLED" ? "cancelled" : null,
-                          startedAtMs: Date.parse(reply.created_at) || Date.now(),
+                          startedAtMs: operationTimestampMs(reply.created_at) || Date.now(),
                         },
                       };
                     })}

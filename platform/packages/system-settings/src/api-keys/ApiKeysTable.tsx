@@ -27,8 +27,7 @@ const dateTimeFormat = displayDateTimeFormat({
 /** ISO 文字列を「YYYY/MM/DD HH:mm」へ。無効値はダッシュ。 */
 export function formatApiKeyDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : dateTimeFormat.format(date);
+  return dateTimeFormat.format(iso);
 }
 
 export interface ApiKeysTableProps {
