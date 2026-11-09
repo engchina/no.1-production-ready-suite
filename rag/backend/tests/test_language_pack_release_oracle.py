@@ -353,13 +353,17 @@ async def test_repair_issues_complete_release_from_nonconforming_current(
         assert (await store.current()).id == applied.release_id
         assert (await store.list()).total == 2
         assert await client._run_transaction(stored) == untouched
-        # 発行の後は通常の保存が使え、この経路はやることがないので止まる。
+        # 発行の後は通常の保存が使え、この経路はやることがないので止まる
+        # (保存した下書きは未公開の変更なので、それも止める理由に出る)。
         changed = deepcopy(initial)
         changed["search_terms"]["stopwords"].append("合成語")
         saved = await store.save_draft(changed, expected_revision=state.draft_revision)
         assert saved.draft_revision == state.draft_revision + 1
         again = await repair.inspect_language_pack_repair(client)
-        assert again.blockers == [repair.CURRENT_ALREADY_CONFORMS]
+        assert again.blockers == [
+            repair.CURRENT_ALREADY_CONFORMS,
+            repair.DRAFT_DIFFERS_FROM_CURRENT,
+        ]
     finally:
 
         def drop(connection: OracleConnectionProtocol) -> None:
