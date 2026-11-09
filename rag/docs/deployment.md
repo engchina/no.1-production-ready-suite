@@ -182,6 +182,10 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   （`fixed_delimiter`）は、分割符の設定に関係なくこの境界で 1 記録 1 chunk にし（chunk size / overlap で再分割・結合しない）、
   シート・行・セル範囲・列の役割・記録の ID を chunk に残す。chunk の本文・索引・引用にマーカーは残らない。契約に合わない JSONL・
   1 要素の上限（8,000 字）を超える記録・境界の数が記録の数と合わない抽出は、黙って切らずに取込を止める。
+- 分割の区切りの設定は 2 つある（#4733）。どちらも JSON の配列で、優先度順に試す。
+  - `RAG_CHUNK_DELIMITER`（文書レシピの `chunk_delimiter`）: 分割方式 `fixed_delimiter` だけが使う。既定は `<<<JSONL_RECORD_BOUNDARY>>>` だけ。複数のときは 1 番目で必ず切り、その境界はまたがず、2 番目以降は chunk サイズを超えた断片だけに使って chunk サイズまで前からまとめる（overlap なし）。どの分割符でも切れない断片はそのまま 1 chunk にする。
+  - `RAG_CHUNK_SEPARATORS`（環境変数だけ）: `structure_aware`・`recursive_character`・`small_to_big` が本文を切るときに使う。既定は `\n\n`・`\n`・`。`・`！`・`？`・`. `・`! `・`? `・`；`・`;` の順。chunk サイズ（親子階層は子の目標文字数）を超える本文だけを順に切る。`markdown_heading`・`page_level`・`fixed_delimiter`・`fixed_size` は使わない。
+  - 文末の記号（`。！？`・英語の 3 つ・セミコロン 2 つ）は前の文に残す。`RAG_CHUNK_SEPARATORS` は使う 3 方式の `chunk_set_id` と再処理の案内に入るので、変えると（導入時も）それらの文書に再処理の案内が出る。再処理するまで今の chunk のまま。
 
 自前のコードの `docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は #356 で削除した。以前の Docker の環境からの移行は
 「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」を参照する。
@@ -528,7 +532,7 @@ migration は値の書き換えだけで、データを消さない（承認は�
 4. 確かめる: 文書レシピに旧名が残っていないこと（`SELECT COUNT(*) FROM rag_document_recipes WHERE JSON_SERIALIZE(processing_config)
    LIKE '%_to_json"%'` が 0）と、CSV→JSONL・Excel→JSONL のレシピの解析エンジンが「構造化レコード JSONL」になっていること。
    global の分割符を `\n\n` 以外の値で保存していて、固定分割を選んだレシピがその値を継承していた場合は、移行で `\n\n` が明示される。
-   そのレシピの「固定分割符文字列」を保存していた値に直してから再処理する。
+   そのレシピの「分割符」を保存していた値に直してから再処理する。
 
 ## 既存環境の更新手順（#2452 文書の削除の後始末の再試行）
 

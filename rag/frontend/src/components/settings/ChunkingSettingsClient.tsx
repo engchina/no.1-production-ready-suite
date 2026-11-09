@@ -45,7 +45,7 @@ import {
   CHUNK_OVERLAP_MAX_CHARS,
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
-  JSONL_RECORD_BOUNDARY,
+  DEFAULT_CHUNK_DELIMITERS,
   SMALL_TO_BIG_PARAMS,
   type SmallToBigParamField,
   chunkSizeLabelKey,
@@ -53,6 +53,7 @@ import {
   isSemanticBoundaryStrategy,
   overlapLabelKey,
 } from "@/lib/chunking";
+import { ChunkDelimiterSelect } from "./ChunkDelimiterSelect";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { focusFirstInvalidField, numberRangeError } from "@/lib/required-fields";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -93,7 +94,7 @@ const STRATEGY_PARAM_FIELDS: Record<ChunkingStrategyName, ChunkingParamField[]> 
   markdown_heading: ["chunk_size", "overlap", "min_chars"],
   page_level: ["chunk_size", "overlap", "min_chars"],
   fixed_size: ["chunk_size", "overlap"],
-  fixed_delimiter: ["delimiter"],
+  fixed_delimiter: ["delimiter", "chunk_size"],
 };
 
 /** 文書分割方式の現在設定とパラメータを管理する設定画面。 */
@@ -457,17 +458,14 @@ function ParamsCard({
               ))
             : null}
           {hasField("delimiter") ? (
-            <TextField
+            <ChunkDelimiterSelect
               id="chunking-delimiter"
-              maxLength={256}
-              width="md"
-              label={t("settings.chunking.params.delimiter")}
               value={form.delimiter}
               disabled={saving}
               helper={t("settings.chunking.params.delimiterHint")}
               error={errors.delimiter ?? undefined}
               required
-              onValueChange={(value) => onChange({ delimiter: value })}
+              onChange={(value) => onChange({ delimiter: value })}
             />
           ) : null}
           {semanticBoundary ? (
@@ -621,6 +619,9 @@ function paramLabel(field: ChunkingParamField) {
 
 function paramValue(form: ChunkingForm, field: ChunkingParamField) {
   const value = form[field];
+  if (Array.isArray(value)) {
+    return t("settings.chunking.params.delimiterCount", { count: value.length });
+  }
   return typeof value === "number" ? value.toLocaleString("ja-JP") : String(value);
 }
 
@@ -666,7 +667,7 @@ function validateForm(form: ChunkingForm): ChunkingFieldErrors {
   const chunkSizeLabel = t(chunkSizeLabelKey(form.strategy));
   const overlapLabel = t(overlapLabelKey(form.strategy));
   const minCharsLabel = t("settings.chunking.params.minChars");
-  if (hasField("delimiter") && !form.delimiter.trim()) {
+  if (hasField("delimiter") && form.delimiter.length === 0) {
     errors.delimiter = t("validation.required", { field: t("settings.chunking.params.delimiter") });
   }
   if (hasField("chunk_size")) {
@@ -715,7 +716,7 @@ export function chunkingPayload(form: ChunkingForm, saved: ChunkingForm): Chunki
   keep("chunk_size", inRange(CHUNK_SIZE_MIN_CHARS, CHUNK_SIZE_MAX_CHARS));
   keep("overlap", inRange(0, CHUNK_OVERLAP_MAX_CHARS));
   keep("min_chars", inRange(0, 2000));
-  keep("delimiter", (value) => value.trim().length > 0);
+  keep("delimiter", (value) => value.length > 0);
   for (const spec of SMALL_TO_BIG_PARAMS) keep(spec.field, inRange(spec.min, spec.max));
   return payload;
 }
@@ -726,7 +727,7 @@ function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
     chunk_size: settings.chunk_size,
     overlap: settings.overlap,
     min_chars: settings.min_chars,
-    delimiter: settings.delimiter || JSONL_RECORD_BOUNDARY,
+    delimiter: settings.delimiter.length > 0 ? settings.delimiter : [...DEFAULT_CHUNK_DELIMITERS],
     chunk_child_target_chars: settings.chunk_child_target_chars,
     chunk_table_child_target_chars: settings.chunk_table_child_target_chars,
     chunk_parent_target_chars: settings.chunk_parent_target_chars,

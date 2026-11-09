@@ -143,6 +143,7 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_chunk_child_target_chars",
         "rag_chunk_context_header_enabled",
         "rag_chunk_delimiter",
+        "rag_chunk_separators",
         "rag_chunk_min_chars",
         "rag_chunk_parent_max_children",
         "rag_chunk_parent_max_pages",

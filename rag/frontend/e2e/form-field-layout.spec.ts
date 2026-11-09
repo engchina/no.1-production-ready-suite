@@ -93,7 +93,7 @@ function chunkingSettings(strategy: string) {
     chunk_size: 800,
     overlap: 120,
     min_chars: 120,
-    delimiter: "\\n\\n",
+    delimiter: ["\\n\\n"],
     context_header_enabled: true,
     chunk_child_target_chars: 1000,
     chunk_table_child_target_chars: 3000,
@@ -701,7 +701,7 @@ const SCREENS: FormScreen[] = [
     path: "/settings/chunking",
     mock: mockChunking("fixed_delimiter"),
     open: async (page) => {
-      await expect(page.getByRole("textbox", { name: /固定分割符文字列/ })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "分割符" })).toBeVisible();
     },
   },
   {

@@ -29,11 +29,11 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
-    field_validator,
     model_validator,
 )
 from rag_parser_core.image_purpose import ImagePurpose
 from rag_parser_core.sheet_records import ExcelOptions
+from rag_pipeline_core.chunking import FixedDelimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_MAX,
@@ -97,7 +97,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
     "chunk_min_chars": "rag_chunk_min_chars",
-    # 固定分割の分割符(分割方式が fixed_delimiter のときだけ効く。#2457)。
+    # 固定分割の分割符(優先度順。分割方式が fixed_delimiter のときだけ効く。#2457)。
     "chunk_delimiter": "rag_chunk_delimiter",
     # 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。
     "chunk_child_target_chars": "rag_chunk_child_target_chars",
@@ -275,7 +275,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
     # 固定分割の分割符(escape 表現。#2457)。None はグローバル継承。
-    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+    chunk_delimiter: FixedDelimiters | None = None
     chunk_child_target_chars: int | None = Field(
         default=None, ge=CHUNK_CHILD_TARGET_CHARS_MIN, le=CHUNK_CHILD_TARGET_CHARS_MAX
     )
@@ -305,17 +305,6 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     auto_parse_after_preprocess_enabled: bool | None = None
     auto_chunk_after_extract_enabled: bool | None = None
     auto_index_after_chunk_enabled: bool | None = None
-
-    @field_validator("chunk_delimiter")
-    @classmethod
-    def _strip_chunk_delimiter(cls, value: str | None) -> str | None:
-        """global の ``RAG_CHUNK_DELIMITER`` と同じく前後の空白を除き、空は受け付けない。"""
-        if value is None:
-            return None
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("chunk_delimiter を入力してください。")
-        return stripped
 
     @model_validator(mode="before")
     @classmethod

@@ -3,9 +3,16 @@
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from typing import Annotated
 
+from pydantic import BeforeValidator
+from rag_parser_core.chunk_separators import (
+    separator_unit_spans,
+    split_delimiter_spans,
+    split_oversized_span,
+)
 from rag_parser_core.extraction import (
     EXTRACTED_FIELD_KEY,
     FIELD_SOURCE_ELEMENT_KEY,
@@ -236,7 +243,13 @@ def table_vision_supplement(text: str) -> str:
     return f"{TABLE_VISION_SUPPLEMENT_LABEL}\n{body}" if body else ""
 
 
-def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chunk]:
+def chunk_text(
+    text: str,
+    chunk_size: int = 800,
+    overlap: int = 120,
+    *,
+    separators: Sequence[str] = (),
+) -> list[Chunk]:
     """テキストを重複付きで分割する。
 
     OCR / Markdown / Office 由来の文書では改行・句点・見出し・表を含むため、まず章節境界を
@@ -254,7 +267,9 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chu
     if not source.strip():
         return []
 
-    return _chunk_sectioned_text(source, chunk_size=chunk_size, overlap=overlap)
+    return _chunk_sectioned_text(
+        source, chunk_size=chunk_size, overlap=overlap, separators=separators
+    )
 
 
 def _chunk_sectioned_text(
@@ -263,16 +278,18 @@ def _chunk_sectioned_text(
     chunk_size: int,
     overlap: int,
     projection: ProjectedVisionText | None = None,
+    separators: Sequence[str] = (),
 ) -> list[Chunk]:
     """既存の章節・group処理へ任意の同座標投影を並走させる。"""
     chunks: list[Chunk] = []
     for segment in _section_segments(source):
-        segment_projection = (
-            projection.slice(
-                segment.start_offset, segment.start_offset + len(segment.text)
-            ).whitespace_normalized()
+        raw_projection = (
+            projection.slice(segment.start_offset, segment.start_offset + len(segment.text))
             if projection is not None
             else None
+        )
+        segment_projection = (
+            raw_projection.whitespace_normalized() if raw_projection is not None else None
         )
         normalized = (
             segment_projection.text
@@ -290,6 +307,9 @@ def _chunk_sectioned_text(
             base_offset=segment.start_offset,
             metadata=metadata,
             start_index=len(chunks),
+            raw_text=segment.text,
+            raw_projection=raw_projection,
+            separators=separators,
         )
         chunks.extend(
             _with_chunk_group_metadata(
@@ -313,6 +333,7 @@ def chunk_extraction(
     overlap: int = 120,
     *,
     table_chunk_size: int | None = None,
+    separators: Sequence[str] = (),
 ) -> list[Chunk]:
     """構造化抽出 element を優先して分割する。
 
@@ -330,7 +351,10 @@ def chunk_extraction(
     ]
     if not spans:
         return chunk_text(
-            _raw_text_with_table_vision(extraction), chunk_size=chunk_size, overlap=overlap
+            _raw_text_with_table_vision(extraction),
+            chunk_size=chunk_size,
+            overlap=overlap,
+            separators=separators,
         )
 
     chunks: list[Chunk] = []
@@ -346,6 +370,7 @@ def chunk_extraction(
                 chunk_size=chunk_size,
                 overlap=overlap,
                 start_index=len(chunks),
+                separators=separators,
             )
         )
         buffer = []
@@ -401,8 +426,53 @@ CHUNKING_STRATEGIES: tuple[str, ...] = (
     "fixed_delimiter",
 )
 _DEFAULT_CHUNKING_STRATEGY = "structure_aware"
-# 固定分割符の既定は構造化レコード JSONL の記録の境界のマーカー(#2457)。
-_DEFAULT_FIXED_DELIMITER = JSONL_RECORD_BOUNDARY
+# 固定分割符の既定は構造化レコード JSONL の記録の境界のマーカーだけ(#2457・#4733)。
+DEFAULT_FIXED_DELIMITERS: tuple[str, ...] = (JSONL_RECORD_BOUNDARY,)
+FIXED_DELIMITERS_MAX_ITEMS = 32
+FIXED_DELIMITER_MAX_CHARS = 256
+
+
+def _delimiter_items(value: object) -> object:
+    """保存済みの 1 つの文字列・JSON の配列を一覧の形にする。"""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    return parsed if isinstance(parsed, list) else [text]
+
+
+def _checked_delimiters(value: object, *, allow_blank: bool) -> list[str]:
+    if not isinstance(value, list | tuple) or not all(
+        isinstance(item, str)
+        and (item if allow_blank else item.strip())
+        and len(item) <= FIXED_DELIMITER_MAX_CHARS
+        for item in value
+    ):
+        raise ValueError(f"分割符は {FIXED_DELIMITER_MAX_CHARS} 文字以内で入力してください。")
+    items = list(dict.fromkeys(value))
+    if not 1 <= len(items) <= FIXED_DELIMITERS_MAX_ITEMS:
+        raise ValueError(f"分割符は 1〜{FIXED_DELIMITERS_MAX_ITEMS} 個で指定してください。")
+    return items
+
+
+def normalize_fixed_delimiters(value: object) -> list[str]:
+    """固定分割符の一覧(優先度順)を検証する。保存済みの 1 つの文字列・JSON の配列も読む。"""
+    return _checked_delimiters(_delimiter_items(value), allow_blank=False)
+
+
+def normalize_chunk_separators(value: object) -> list[str]:
+    """本文の区切りの一覧(優先度順)を検証する。改行だけの区切りも認める。"""
+    items = _delimiter_items(value)
+    if isinstance(items, list | tuple):
+        items = [decode_fixed_delimiter(item) if isinstance(item, str) else item for item in items]
+    return _checked_delimiters(items, allow_blank=True)
+
+
+FixedDelimiters = Annotated[list[str], BeforeValidator(normalize_fixed_delimiters)]
+ChunkSeparators = Annotated[list[str], BeforeValidator(normalize_chunk_separators)]
 # 撤去済み戦略の既存設定を後継戦略へ読み替える(sentence_window は小 chunk 化のみで
 # recursive_character + 検索時 neighbor expansion で代替)
 _LEGACY_CHUNKING_STRATEGY_ALIASES: dict[str, str] = {
@@ -417,7 +487,8 @@ def chunk_extraction_with_strategy(
     chunk_size: int = 800,
     overlap: int = 120,
     min_chars: int = 0,
-    delimiter: str = _DEFAULT_FIXED_DELIMITER,
+    delimiter: str | Sequence[str] = DEFAULT_FIXED_DELIMITERS,
+    separators: Sequence[str] = (),
 ) -> list[Chunk]:
     """選択された chunking 戦略(Chunking アダプター)で構造化抽出を分割する。
 
@@ -440,6 +511,7 @@ def chunk_extraction_with_strategy(
                 overlap=overlap,
                 min_chars=min_chars,
                 delimiter=delimiter,
+                separators=separators,
             )
             if source.elements or source.raw_text
             else []
@@ -457,7 +529,9 @@ def chunk_extraction_with_strategy(
     if normalized_strategy != "fixed_delimiter":
         _validate_chunk_settings(chunk_size, overlap)
     if normalized_strategy == "recursive_character":
-        chunks = _chunk_recursive_character(extraction, chunk_size=chunk_size, overlap=overlap)
+        chunks = _chunk_recursive_character(
+            extraction, chunk_size=chunk_size, overlap=overlap, separators=separators
+        )
     elif normalized_strategy == "markdown_heading":
         chunks = _chunk_markdown_heading(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "page_level":
@@ -465,9 +539,15 @@ def chunk_extraction_with_strategy(
     elif normalized_strategy == "fixed_size":
         chunks = _chunk_fixed_size(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "fixed_delimiter":
-        chunks = _chunk_fixed_delimiter(extraction, delimiter=delimiter)
+        chunks = _chunk_fixed_delimiter(
+            extraction,
+            delimiters=[delimiter] if isinstance(delimiter, str) else delimiter,
+            chunk_size=chunk_size,
+        )
     else:
-        chunks = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
+        chunks = chunk_extraction(
+            extraction, chunk_size=chunk_size, overlap=overlap, separators=separators
+        )
     if normalized_strategy in {"fixed_delimiter", "fixed_size"}:
         return _with_chunk_strategy_metadata(chunks, normalized_strategy)
     absorbed = _absorb_small_chunks(chunks, min_chars=min_chars, chunk_size=chunk_size)
@@ -502,15 +582,22 @@ def _chunk_recursive_character(
     *,
     chunk_size: int,
     overlap: int,
+    separators: Sequence[str] = (),
 ) -> list[Chunk]:
     """LangChain RecursiveCharacterTextSplitter 風に raw_text を固定長で分割する。"""
     projection = _extraction_vision_projection(extraction)
     if projection.ranges:
         value = projection.line_endings_normalized()
         return _chunk_sectioned_text(
-            value.text, projection=value, chunk_size=chunk_size, overlap=overlap
+            value.text,
+            projection=value,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            separators=separators,
         )
-    return chunk_text(projection.text, chunk_size=chunk_size, overlap=overlap)
+    return chunk_text(
+        projection.text, chunk_size=chunk_size, overlap=overlap, separators=separators
+    )
 
 
 def _chunk_fixed_size(
@@ -570,9 +657,14 @@ def _chunk_fixed_size(
 def _chunk_fixed_delimiter(
     extraction: StructuredExtraction,
     *,
-    delimiter: str,
+    delimiters: Sequence[str],
+    chunk_size: int,
 ) -> list[Chunk]:
-    """指定された固定分割符で全文を機械的に分割する。分割符自体は chunk に残さない。
+    """分割符を優先度順に試して全文を分割する。
+
+    1 番目の分割符では必ず切り、その境界はまたがない。2 番目以降は ``chunk_size`` を超えた断片
+    だけに順に使い、切った断片は ``chunk_size`` まで前からまとめる。overlap は付けず、どの分割符
+    でも切れない断片は ``chunk_size`` を超えてもそのまま 1 chunk にする。
 
     構造化レコード JSONL の解析の抽出(raw_text が記録の境界で区切られている。#2457)は、
     分割符の設定に関係なく記録の境界で 1 記録 1 chunk にする(`_chunk_structured_records`)。
@@ -581,40 +673,50 @@ def _chunk_fixed_delimiter(
         return _chunk_structured_records(extraction)
     projection = _extraction_vision_projection(extraction).line_endings_normalized()
     source = projection.text
-    resolved_delimiter = (
-        decode_fixed_delimiter(delimiter or _DEFAULT_FIXED_DELIMITER)
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-    )
-    if not source.strip() or not resolved_delimiter:
+    decoded = [
+        decode_fixed_delimiter(item).replace("\r\n", "\n").replace("\r", "\n")
+        for item in delimiters
+        if item
+    ]
+    if not source.strip() or not decoded:
         return []
+    first, *rest = decoded
     metadata: ChunkMetadata = {
         "chunk_template": TEXT_CHUNK_PROFILE,
         "chunk_fixed_delimiter": True,
     }
     chunks: list[Chunk] = []
-    cursor = 0
-    for part in source.split(resolved_delimiter):
-        leading = len(part) - len(part.lstrip())
-        trimmed_length = len(part.rstrip())
-        piece = part.strip()
-        if piece:
+    for start, end in split_delimiter_spans(source, 0, len(source), first):
+        leaves = split_oversized_span(source, start, end, rest, chunk_size)
+        for piece_start, piece_end in _merge_delimiter_spans(source, leaves, chunk_size):
             chunks.append(
                 Chunk(
-                    text=piece,
+                    text=source[piece_start:piece_end],
                     index=len(chunks),
-                    start_offset=cursor + leading,
-                    end_offset=cursor + trimmed_length,
+                    start_offset=piece_start,
+                    end_offset=piece_end,
                     metadata={
                         **metadata,
                         **chunk_projection_metadata(
-                            projection.slice(cursor, cursor + len(part)).stripped()
+                            projection.slice(piece_start, piece_end).stripped()
                         ),
                     },
                 )
             )
-        cursor += len(part) + len(resolved_delimiter)
     return [_with_chunk_metadata(chunk) for chunk in chunks]
+
+
+def _merge_delimiter_spans(
+    text: str, spans: Sequence[tuple[int, int]], limit: int
+) -> list[tuple[int, int]]:
+    """隣り合う範囲を ``limit`` まで前からまとめる。間に独自の分割符があればまとめない。"""
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and end - merged[-1][0] <= limit and not text[merged[-1][1] : start].strip():
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
 
 
 # 記録の要素の metadata のうち、chunk に引き継ぐもの(場所・列の役割・見出しの位置・記録の ID。
@@ -1050,14 +1152,18 @@ def _chunk_projected_sentences(
     base_offset: int,
     metadata: ChunkMetadata,
     start_index: int,
+    units: Sequence[ProjectedVisionText] | None = None,
 ) -> list[Chunk]:
-    sentences = []
-    previous = 0
-    for match in sentence_boundary().finditer(value.text):
-        sentences.append(value.slice(previous, match.end()).stripped())
-        previous = match.end()
-    sentences.append(value.slice(previous, len(value.text)).stripped())
-    sentences = [part for part in sentences if part.text]
+    if units is not None:
+        sentences = list(units)
+    else:
+        sentences = []
+        previous = 0
+        for match in sentence_boundary().finditer(value.text):
+            sentences.append(value.slice(previous, match.end()).stripped())
+            previous = match.end()
+        sentences.append(value.slice(previous, len(value.text)).stripped())
+        sentences = [part for part in sentences if part.text]
     chunks = []
     cursor = 0
     buffer = ProjectedVisionText("")
@@ -1108,9 +1214,22 @@ def _chunk_normalized_text(
     metadata: ChunkMetadata,
     start_index: int,
     projection: ProjectedVisionText | None = None,
+    raw_text: str | None = None,
+    raw_projection: ProjectedVisionText | None = None,
+    separators: Sequence[str] = (),
 ) -> list[Chunk]:
-    """正規化済みテキストを文境界優先で chunk 化する。"""
+    """正規化済みテキストを chunk 化する。
+
+    ``separators`` があれば正規化の前の本文(改行が残る)を優先度順に切り、無ければ文境界で切る。
+    """
     if projection is not None and projection.ranges:
+        projected_units = None
+        if separators and raw_projection is not None:
+            projected_units = [
+                unit
+                for start, end in separator_unit_spans(raw_projection.text, separators, chunk_size)
+                if (unit := raw_projection.slice(start, end).whitespace_normalized()).text
+            ]
         return _chunk_projected_sentences(
             projection,
             chunk_size=chunk_size,
@@ -1118,8 +1237,17 @@ def _chunk_normalized_text(
             base_offset=base_offset,
             metadata=metadata,
             start_index=start_index,
+            units=projected_units,
         )
-    sentences = _split_sentences(text)
+    sentences = (
+        [
+            unit
+            for start, end in separator_unit_spans(raw_text, separators, chunk_size)
+            if (unit := re.sub(r"\s+", " ", raw_text[start:end]).strip())
+        ]
+        if separators and raw_text is not None
+        else _split_sentences(text)
+    )
     chunks: list[Chunk] = []
     cursor = 0
     buffer = ""
@@ -1635,6 +1763,7 @@ def _chunk_span_group(
     chunk_size: int,
     overlap: int,
     start_index: int,
+    separators: Sequence[str] = (),
 ) -> list[Chunk]:
     """非 table element group を chunk 化する。"""
     projection = ProjectedVisionText.join(
@@ -1694,6 +1823,9 @@ def _chunk_span_group(
             base_offset=start_offset,
             metadata=metadata,
             start_index=start_index,
+            raw_text=text,
+            raw_projection=projection,
+            separators=separators,
         ),
         group_kind="element_group",
         group_text=normalized,

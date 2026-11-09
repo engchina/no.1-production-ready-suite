@@ -1739,7 +1739,7 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_SIZE": str(settings.rag_chunk_size),
             "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
-            "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
+            "RAG_CHUNK_DELIMITER": json.dumps(settings.rag_chunk_delimiter, ensure_ascii=False),
             **{name.upper(): str(getattr(settings, name)) for name in SMALL_TO_BIG_SETTING_FIELDS},
             # 交差参照の解析の語は言語資源へ移した(#2181)。以前に保存した値は消す。
             **{f"RAG_REFERENCE_{spec.key.upper()}": None for spec in FIELD_SPECS},

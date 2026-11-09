@@ -1,5 +1,5 @@
 import type { ChunkingStrategyName, DocumentChunkView } from "@/lib/api";
-import type { I18nKey } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 
 export const CHUNK_SIZE_MIN_CHARS = 200;
 export const CHUNK_SIZE_MAX_CHARS = 32_000;
@@ -126,6 +126,34 @@ export const SMALL_TO_BIG_PARAMS: readonly SmallToBigParamSpec[] = [
  * 解析が記録と記録の間に置く境界のマーカー。
  */
 export const JSONL_RECORD_BOUNDARY = "<<<JSONL_RECORD_BOUNDARY>>>";
+
+/** 分割符の候補（#4733）。値は escape 表現。 */
+export const CHUNK_DELIMITER_OPTIONS: readonly { value: string; labelKey: I18nKey }[] = [
+  { value: JSONL_RECORD_BOUNDARY, labelKey: "settings.chunking.delimiter.recordBoundary" },
+  { value: "\\n\\n", labelKey: "settings.chunking.delimiter.blankLine" },
+  { value: "\\n", labelKey: "settings.chunking.delimiter.newline" },
+  { value: "。", labelKey: "settings.chunking.delimiter.period" },
+  { value: "！", labelKey: "settings.chunking.delimiter.exclamation" },
+  { value: "？", labelKey: "settings.chunking.delimiter.question" },
+  { value: ". ", labelKey: "settings.chunking.delimiter.englishPeriod" },
+  { value: "! ", labelKey: "settings.chunking.delimiter.englishExclamation" },
+  { value: "? ", labelKey: "settings.chunking.delimiter.englishQuestion" },
+  { value: "；", labelKey: "settings.chunking.delimiter.fullwidthSemicolon" },
+  { value: ";", labelKey: "settings.chunking.delimiter.semicolon" },
+];
+
+/** 固定分割符の既定（backend の `RAG_CHUNK_DELIMITER` の既定と同じ）。記録の境界だけ。 */
+export const DEFAULT_CHUNK_DELIMITERS: readonly string[] = [JSONL_RECORD_BOUNDARY];
+
+/** 分割符の一覧を、優先度の順が分かる 1 行の文にする。 */
+export function chunkDelimiterSummary(values: readonly string[]): string {
+  return values
+    .map((value) => {
+      const option = CHUNK_DELIMITER_OPTIONS.find((candidate) => candidate.value === value);
+      return option ? t(option.labelKey) : value;
+    })
+    .join(" → ");
+}
 
 /** 構造化レコードの JSONL を作るファイル準備（解析エンジンは構造化レコード JSONL だけ）。 */
 export const STRUCTURED_RECORDS_PREPROCESS_PROFILES = ["csv_to_jsonl", "excel_to_jsonl", "word_to_jsonl"] as const;

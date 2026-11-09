@@ -12,13 +12,14 @@ import {
   SelectField,
   type SelectFieldOption,
   Skeleton,
-  TextField,
   ToggleChip,
   TimedLoadingState,
 } from "@production-ready/ui";
 import { canOpenNavRoute } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
+import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect";
 import { MineruLicenseNotice } from "@/components/settings/MineruLicenseNotice";
+import { chunkDelimiterSummary } from "@/lib/chunking";
 import {
   ApiError,
   type DocumentProcessingConfigData,
@@ -769,14 +770,14 @@ function ChunkDelimiterRow({
   onChange,
 }: {
   id: string;
-  value: string | null;
-  effectiveValue: string | null;
+  value: string[] | null;
+  effectiveValue: string[] | null;
   disabled: boolean;
-  onChange: (value: string | null) => void;
+  onChange: (value: string[] | null) => void;
 }) {
   const label = t("settings.chunking.params.delimiter");
   const overriding = value !== null;
-  const lastOverride = useRef<string>(value ?? effectiveValue ?? "");
+  const lastOverride = useRef<string[]>(value ?? effectiveValue ?? []);
   useEffect(() => {
     if (value !== null) lastOverride.current = value;
   }, [value]);
@@ -801,18 +802,20 @@ function ChunkDelimiterRow({
         </div>
       </div>
       {overriding ? (
-        <TextField
+        <ChunkDelimiterSelect
           id={id}
-          label={label}
+          labelHidden
           value={value}
           disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-          className="[&>label]:sr-only"
-          // 分割符の文字列（短い記号から境界のマーカーまで。#1891）。
-          width="md"
+          // すべて外したら上書きをやめる（空の一覧は保存できない）。
+          onChange={(next) => onChange(next.length > 0 ? next : null)}
         />
       ) : (
-        <InheritResolved value={effectiveValue ?? "—"} label={label} globalHref={null} />
+        <InheritResolved
+          value={effectiveValue ? chunkDelimiterSummary(effectiveValue) : "—"}
+          label={label}
+          globalHref={null}
+        />
       )}
       <p className="text-xs text-fg-muted">{t("settings.chunking.params.delimiterHint")}</p>
     </div>

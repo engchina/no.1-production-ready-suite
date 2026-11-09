@@ -435,9 +435,9 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await expect(panel.getByRole("combobox", { name: "文書分割", exact: true })).toContainText(
     "固定分割符"
   );
-  await expect(panel.getByRole("textbox", { name: "固定分割符文字列" })).toHaveValue(
-    "<<<JSONL_RECORD_BOUNDARY>>>"
-  );
+  await expect(
+    panel.locator('[data-config-field="chunk_delimiter"] [data-searchable-chips]').getByRole("listitem")
+  ).toHaveText(["記録の境界 (<<<JSONL_RECORD_BOUNDARY>>>)"]);
   const excel = panel.getByTestId("document-excel-options");
   await expect(excel).toBeVisible();
   await expect(excel.getByTestId("document-excel-options-inherited")).toContainText("自動");
@@ -496,7 +496,7 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
     preprocess_profile: "excel_to_jsonl",
     parser_adapter_backend: "structured_records_jsonl",
     chunking_strategy: "fixed_delimiter",
-    chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
+    chunk_delimiter: ["<<<JSONL_RECORD_BOUNDARY>>>"],
     excel_options: {
       mode: "table",
       header_row: 2,

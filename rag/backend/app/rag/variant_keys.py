@@ -22,11 +22,13 @@ import hashlib
 import json
 
 from rag_engine.parsing.content_labels import VISION_TEXT_FORMAT_VERSION
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_parser_core.language import current_pack
 from rag_parser_core.result import UNSTRUCTURED_TEXT_CONTRACT
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 
 from app.config import (
+    CHUNK_SEPARATOR_STRATEGIES,
     FIXED_DELIMITER_STRATEGY,
     PREVIOUS_DEFAULT_CHUNK_DELIMITER,
     SMALL_TO_BIG_SETTING_FIELDS,
@@ -132,6 +134,9 @@ def chunk_set_subset(settings: Settings) -> dict[str, object]:
         **_fields(settings, _CHUNK_SET_FIELDS),
         "rag_chunk_child_size": _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE,
     }
+    # 本文の区切りは使う方式の ID にだけ入れる(ほかの方式の既存の ID を保つ。#4733)。
+    if getattr(settings, "rag_chunking_strategy", None) in CHUNK_SEPARATOR_STRATEGIES:
+        subset["rag_chunk_separators"] = list(settings.rag_chunk_separators)
     if getattr(settings, "rag_chunking_strategy", None) == _SMALL_TO_BIG_STRATEGY:
         for name in SMALL_TO_BIG_SETTING_FIELDS:
             value = getattr(settings, name, None)
@@ -235,11 +240,17 @@ def _chunk_set_hash_input(subset: dict[str, object]) -> dict[str, object]:
     """chunk_set_id の hash の入力を、#599 の改名の前の名前にそろえる(既存の ID を保つ)。"""
     hashed = {_CHUNK_SET_HASH_NAMES.get(name, name): value for name, value in subset.items()}
     strategy = hashed.get("rag_chunking_strategy")
-    if (
-        strategy != FIXED_DELIMITER_STRATEGY
-        and hashed.get("rag_chunk_delimiter") == JSONL_RECORD_BOUNDARY
-    ):
+    delimiters = hashed.get("rag_chunk_delimiter")
+    if strategy != FIXED_DELIMITER_STRATEGY and delimiters == [JSONL_RECORD_BOUNDARY]:
         hashed["rag_chunk_delimiter"] = PREVIOUS_DEFAULT_CHUNK_DELIMITER
+    elif (
+        isinstance(delimiters, list)
+        and len(delimiters) == 1
+        and delimiters[0] not in DEFAULT_CHUNK_SEPARATORS[2:]
+    ):
+        # 1 個の分割符は分割の結果が以前と同じなので、以前の文字列の形で hash する(ID を保つ)。
+        # 文末の記号は chunk に残すようになり結果が変わるので、一覧のまま hash する。
+        hashed["rag_chunk_delimiter"] = delimiters[0]
     if isinstance(strategy, str):
         hashed["rag_chunking_strategy"] = _CHUNK_SET_HASH_STRATEGY_VALUES.get(strategy, strategy)
     return hashed

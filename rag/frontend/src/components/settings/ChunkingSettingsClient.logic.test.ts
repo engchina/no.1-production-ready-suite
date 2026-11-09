@@ -7,7 +7,7 @@ const SAVED: Parameters<typeof chunkingPayload>[0] = {
   chunk_size: 800,
   overlap: 120,
   min_chars: 120,
-  delimiter: "\\n\\n",
+  delimiter: ["\\n\\n"],
   chunk_child_target_chars: 1000,
   chunk_table_child_target_chars: 3000,
   chunk_parent_target_chars: 6000,
@@ -22,12 +22,12 @@ describe("chunkingPayload（Issue 966）", () => {
         ...SAVED,
         strategy: "small_to_big",
         min_chars: Number.NaN,
-        delimiter: "  ",
+        delimiter: [],
       },
       SAVED
     );
     expect(payload.min_chars).toBe(120);
-    expect(payload.delimiter).toBe("\\n\\n");
+    expect(payload.delimiter).toEqual(["\\n\\n"]);
   });
 
   it("隠れた欄でも正しい値は利用者の入力のまま送る", () => {
