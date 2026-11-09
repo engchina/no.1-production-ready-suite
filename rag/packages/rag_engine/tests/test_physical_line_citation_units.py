@@ -80,7 +80,7 @@ def test_image_text_keeps_the_v4_merge(fields: dict[str, Any]) -> None:
     evidence = {**span(TWO), **fields}
     assert grounded._image_text(evidence)
     view = grounded._citation_view(evidence, explicit_units=True)
-    assert view.contract_version == "explicit_units_v5"
+    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT
     assert view.units == tuple(grounded.citation_units(TWO, contract_version="explicit_units_v4")) == ((0, len(TWO)),)
     assert not grounded._image_text(span(TWO))
 
@@ -116,11 +116,11 @@ def test_new_view_numbers_each_physical_line_and_extracts_the_cited_lines() -> N
     evidence = span(TWO)
     prompt = grounded.format_functions([evidence])
     view = grounded._citation_view(evidence)
-    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT == "explicit_units_v5"
+    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT
     assert "1| 画面Aで対象を選ぶ。\n2| 保存を押して閉じる。" in without_unit_annotations(prompt)
     quoted, error = grounded.cited_quote(item(1, 2), [evidence])
     assert not error and quoted.quote == TWO
-    assert grounded._citation_extraction(quoted)["citation_unit_contract"] == "explicit_units_v5"
+    assert grounded._citation_extraction(quoted)["citation_unit_contract"] == grounded.CITATION_UNIT_CONTRACT
     quoted, error = grounded.cited_quote(item(2, 2), [evidence])
     assert not error and quoted.quote == "保存を押して閉じる。"
 
