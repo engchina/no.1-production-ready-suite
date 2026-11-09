@@ -57,7 +57,7 @@ def test_structure_only_parent_fragment_is_excluded_without_moving_other_offsets
 def test_short_labels_values_and_table_data_remain_quotable(text: str) -> None:
     spans = evidence_spans("表示内容", [record(text)], budget=4000, whole_records=True)
     assert [row["text"] for row in spans] == [text]
-    spans = grounded.tag_spans("表示内容", spans)
+    spans = grounded.tag_spans(spans)
     grounded.format_functions(spans)
     count = len(grounded._citation_view(spans[0]).units)
     lines = "1" if count == 1 else f"1-{count}"
@@ -71,7 +71,7 @@ def test_sibling_offsets_display_labels_and_line_ranges_bind_the_same_original_t
     parent = record("\n---\n".join(bodies))
     siblings = [child(parent, body, f"child-{index}") for index, body in enumerate(bodies)]
     spans = evidence_spans("操作方法", [parent], scope_records=siblings, budget=12000, whole_records=True)
-    spans = grounded.tag_spans("操作方法", spans)
+    spans = grounded.tag_spans(spans)
     display = grounded.format_functions(spans)
     assert len({row["label"] for row in spans}) == len(spans)
     for body in bodies:

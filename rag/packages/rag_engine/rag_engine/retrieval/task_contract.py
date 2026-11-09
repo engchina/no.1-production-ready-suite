@@ -358,12 +358,6 @@ def _answer_instruction_pattern() -> re.Pattern[str]:
     )
 
 
-def answer_instruction_texts(question: str) -> list[str]:
-    """根拠の要求にしない回答指示の原文。表記の解決でも同じ判定を使う。"""
-    pattern = _answer_instruction_pattern()
-    return [unit["text"] for unit in _base_units(question) if pattern.search(unit["text"])]
-
-
 def _with_request_kind(units: list[dict[str, str]]) -> list[dict[str, str]]:
     """各文に kind=request / context を付ける。背景文は単位として残すが、答える対象ではない (#650)。
 

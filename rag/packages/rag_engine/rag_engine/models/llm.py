@@ -307,9 +307,9 @@ class TextOutput(_StrictModel):
     text: str
 
 
-# 生成・監査の出力契約は Field(description) に置き、構造化出力の JSON schema としてモデルへ渡す (#986)。
+# 生成の出力契約は Field(description) に置き、構造化出力の JSON schema としてモデルへ渡す (#986)。
 # 項目の順序は strict schema の生成順でもあるため、根拠（request_coverage / items、reviews）→ 結論（summary /
-# confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT / AUDIT_SYSTEM_PROMPT。
+# confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT。
 class GroundedCitation(_StrictModel):
     """item の出典 1 つ（根拠の番号と引用する行）。引用の原文はシステムが取り出す（#2830）。"""
 
@@ -339,7 +339,7 @@ class GroundedItem(_StrictModel):
 
     gap 以外は出典が 1 つ以上必須。1 つの主張は、同じ内容を述べた別の文書の原文（規則の条項と、それを説明する
     手順書など）を出典に並べられる（#3526。ALCE・Anthropic Citations の形）。各出典は ID・版・範囲で原文を抽出し、
-    抽出できない出典は公開されない。text は利用者向けの言い換えで、監査で不支持になると印が付く。
+    抽出できない出典は公開されない。text は利用者向けの言い換え。
 
     検査の工程（``grounded.verify`` の後）では、1 つの item は出典を 1 つだけ持ち、``evidence_id`` / ``lines`` /
     ``quote`` はその出典を読む。同じ主張の別の出典は ``CheckedItem.also`` に持つ。
@@ -400,7 +400,7 @@ class GroundedApplication(_StrictModel):
     """資料の事実・規則から導く結論（計算・条件適用・資料間の組み合わせ）。
 
     前提は質問の原文の一部、規則は items の index で指し、計算は算式で書く。システムが前提の照合・規則の
-    支持・算式の計算を確かめ、監査が当てはめの正しさを判定してから公開する。
+    支持・算式の計算を確かめてから公開する。当てはめの正しさは生成のモデルの責務で、生成の後に LLM では確かめない。
     """
 
     request_id: str = Field(default="", description="この当てはめが答える request_units の id。")

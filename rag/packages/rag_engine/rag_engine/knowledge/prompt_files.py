@@ -97,7 +97,7 @@ DEFAULT_VLM_ANSWER_PROMPT = (
     "## Step 5: 今回の根拠と業務ガイドの読み方\n"
     "{{reading_rules}}\n"
     "\n"
-    "## Step 6: 根拠（質問契約・必須根拠・機能別の根拠・是正時の指摘）\n"
+    "## Step 6: 根拠（質問契約・機能別の根拠・是正時の指摘）\n"
     "{{answer_context}}\n"
 )
 

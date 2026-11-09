@@ -53,7 +53,7 @@ def deps(reader):
 
 
 def selected(original):
-    return tag_spans("条件は？", evidence_spans("条件は？", [original], preserve_records=True))
+    return tag_spans(evidence_spans("条件は？", [original], preserve_records=True))
 
 
 def test_full_capture_keeps_all_records_repeated_text_and_tail():
@@ -139,7 +139,7 @@ def test_oversized_page_is_read_to_end_with_source_binding():
         schema={},
         read=read,
         unusable_output=lambda error: False,
-        tag=lambda values: tag_spans("条件は？", values),
+        tag=lambda values: tag_spans(values),
     )
     assert "".join(seen) == saved["text"]
     assert diagnostic["batch_count"] > 1

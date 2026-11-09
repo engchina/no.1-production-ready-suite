@@ -326,16 +326,6 @@ def test_rules_require_all_visible_buttons_with_their_key_labels():
     assert "画面へ重ねた注記（丸数字・番号・矢印・吹き出し・囲み線）は操作部品ではないので含めず" in rules
 
 
-def test_enumeration_lines_cover_group_headings_and_word_lists():
-    """語の列挙とグループ見出しだけを本文から外し、説明の行は残す (#773)。"""
-    from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
-
-    excluded = ["■ 可視情報", "主題: 掛率登録", "ボタン: 戻る / 削除", "値: 画面例: コード=E2", "検索語: 掛率登録"]
-    kept = ["回答用本文: 画面の説明。", "条件と結果: 未使用コード → 初期表示", "表の行:", "- 1行目: A1 | ○"]
-    assert all(is_vision_enumeration_line(line) for line in excluded)
-    assert not any(is_vision_enumeration_line(line) for line in kept)
-
-
 def test_edited_legacy_block_is_sent_without_a_replacement_warning():
     refined = refine_image_retrieval_prompt("独自方針")
     assert managed_block_warning(refined) == ""

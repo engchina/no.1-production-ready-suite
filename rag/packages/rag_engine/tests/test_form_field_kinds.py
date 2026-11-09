@@ -360,13 +360,12 @@ class CitableFieldKindTests(unittest.TestCase):
 
         observed = [form_field_kinds.FieldKindObservation("parent", "項目A", "select")]
         original = self._span()
-        spans = grounded.tag_spans("項目Aの種類", form_field_kinds.with_field_kind_evidence(observed, [original]))
+        spans = grounded.tag_spans(form_field_kinds.with_field_kind_evidence(observed, [original]))
         evidence = spans[-1]
         self.assertEqual(evidence["text"], "項目A = 選択")
         self.assertEqual(evidence["origin"], "image_extraction")
         self.assertEqual(evidence["page"], 3)
         self.assertIn("image_generated", evidence["tags"])
-        self.assertFalse(evidence["pinned"])
         self.assertEqual(original["text"], "別の図の説明")
         draft = GroundedDraft(
             summary="",
@@ -390,7 +389,7 @@ class CitableFieldKindTests(unittest.TestCase):
             form_field_kinds.FieldKindObservation("parent", "項目A", "select"),
             form_field_kinds.FieldKindObservation("parent", "項目B", "button"),
         ]
-        spans = grounded.tag_spans("項目Aと項目B", form_field_kinds.with_field_kind_evidence(observed, [self._span()]))
+        spans = grounded.tag_spans(form_field_kinds.with_field_kind_evidence(observed, [self._span()]))
         note = form_field_kinds.prompt_note(observed, [], spans)
         self.assertIn("- E2: 項目A = 選択", note)
         self.assertIn("- E3: 項目B = ボタン", note)
@@ -429,7 +428,7 @@ class CitableFieldKindTests(unittest.TestCase):
 
         original = {**self._span(), "source_aliases": ["alias"]}
         observed = [form_field_kinds.FieldKindObservation("alias", "項目A", "select")]
-        spans = grounded.tag_spans("項目A", form_field_kinds.with_field_kind_evidence(observed, [original]))
+        spans = grounded.tag_spans(form_field_kinds.with_field_kind_evidence(observed, [original]))
         self.assertIn("- E2: 項目A = 選択", form_field_kinds.prompt_note(observed, [], spans))
 
     def test_image_page_selects_its_own_page_in_a_multi_page_parent(self):
