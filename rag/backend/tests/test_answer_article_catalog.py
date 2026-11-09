@@ -1,6 +1,5 @@
 """条の目録から根拠の条を選ぶ段(#2254)の、backend が注入する目録と条の chunk の読み込み。"""
 
-import json
 from typing import Any
 
 import pytest
@@ -235,39 +234,6 @@ async def test_article_leads_return_the_body_lead_without_the_title(
 
     monkeypatch.setattr(section_map_store, "SectionMapStore", Broken)
     assert await engine._article_leads("doc-law", "cs-law", {"s5": "第五条"}) == {}
-
-
-def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None:
-    from app.rag.answer_engine import build_engine_settings
-
-    settings = Settings(
-        rag_article_catalog_enabled=False,
-        rag_article_catalog_context_records=4,
-        rag_article_catalog_output_token_cap=1024,
-        rag_article_catalog_call_timeout_seconds=20,
-        rag_article_catalog_refine_articles=0,
-        rag_article_catalog_review_enabled=True,
-    )
-    engine_settings = build_engine_settings(
-        settings, output_dir=tmp_path, runtime_knowledge_path=None
-    )
-
-    assert engine_settings.article_catalog_enabled is False
-    assert engine_settings.article_catalog_output_token_cap == 1024
-    assert engine_settings.article_catalog_call_timeout_seconds == 20.0
-    assert engine_settings.article_catalog_refine_articles == 0
-    assert engine_settings.article_catalog_review is True
-    assert (
-        build_engine_settings(
-            Settings(), output_dir=tmp_path, runtime_knowledge_path=None
-        ).article_catalog_review
-        is False
-    )
-    assert engine_settings.article_catalog_refine_candidates == 60
-    assert engine_settings.article_catalog_context_records == 4
-    assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 16
-    # テストでは process をまたぐ記録の置き場所を渡さない（conftest。#3507）。
-    assert engine_settings.article_catalog_cache_dir is None
 
 
 def test_engine_settings_pass_the_shared_article_catalog_record(

@@ -9,22 +9,8 @@ from rag_engine.resources.runtime import (
     saved_prompt_overrides,
 )
 
-from app.api.routes.settings import _answer_prompts_data
 from app.rag.answer_judge_calibration import judge_prompt_sha256
 from app.rag.answer_prompts import STAGE_PROMPT_REFS, default_prompt, validate_prompt
-
-
-def test_stage_editor_displays_saved_instruction_and_builtin_default() -> None:
-    key = "audit.factSystem"
-    custom = "## Step 1: 根拠を確認する\n合成の確認指示。"
-    data = _answer_prompts_data({key: {"content": custom, "updated_at": None}})
-    editor = next(prompt for prompt in data.prompts if prompt.key == key)
-    stage = next(stage for stage in data.stages if stage.id == "audit")
-    part = next(part for part in stage.prompts if part.id == "factSystem")
-    assert editor.content == part.content == custom
-    assert part.prompt_key == key
-    assert editor.default_content == default_prompt(key)
-    assert editor.customized
 
 
 @pytest.mark.asyncio

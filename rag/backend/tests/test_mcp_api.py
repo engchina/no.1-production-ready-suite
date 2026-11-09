@@ -680,30 +680,6 @@ def test_search_maps_evidence_and_uses_token_user_context(
                         "gaps": ["期限の例外"],
                         "confirmations": [],
                     },
-                    # 段落の印・外した段落・回答全体の警告（#2738。記録の余分な項目は返さない）。
-                    "passage_marks": [
-                        {
-                            "text": "・精算は 30 日以内です。",
-                            "state": "warning",
-                            "reasons": [
-                                {
-                                    "code": "item_check",
-                                    "label": "システムの検査で注意が必要",
-                                    "detail": "値",
-                                    "internal": "x",
-                                }
-                            ],
-                        }
-                    ],
-                    "removed_passages": [
-                        {
-                            "text": "精算は翌月です。",
-                            "reasons": [{"code": "contradicted", "label": "根拠と矛盾"}],
-                        }
-                    ],
-                    "answer_warnings": [
-                        {"code": "off_goal", "label": "質問からずれている可能性", "detail": ""}
-                    ],
                     # 回答を作った設定の版（#1276）。
                     "provenance": {
                         "search_answer_profile": {
@@ -746,22 +722,6 @@ def test_search_maps_evidence_and_uses_token_user_context(
     assert body["insufficient_reason"] == "期限の例外が資料に無い"
     assert body["needs_human_review"] is True
     assert body["outcome"] == "conditional"
-    assert body["passage_marks"] == [
-        {
-            "text": "・精算は 30 日以内です。",
-            "state": "warning",
-            "reasons": [
-                {"code": "item_check", "label": "システムの検査で注意が必要", "detail": "値"}
-            ],
-        }
-    ]
-    assert body["removed_passages"] == [
-        {
-            "text": "精算は翌月です。",
-            "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": ""}],
-        }
-    ]
-    assert [warning["code"] for warning in body["answer_warnings"]] == ["off_goal"]
     # 縮退した任意の補助の処理は種類と回数だけ（例外の型の名前・壊れた記録は出さない。#3262）。
     assert body["degraded_steps"] == [
         {"kind": "rerank", "count": 3},
@@ -1819,11 +1779,6 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     assert (body["insufficient_reason"], body["needs_human_review"]) == (None, False)
     # 構造の無い回答は、引用があり人の確認が要らなければ answered。印の記録の無い回答の印は空。
     assert (body["outcome"], body["requests"], body["gaps"]) == ("answered", [], [])
-    assert (body["passage_marks"], body["removed_passages"], body["answer_warnings"]) == (
-        [],
-        [],
-        [],
-    )
 
 
 # 承認規程の文書のかたまり（文書の順）と、別の文書のかたまり（#1348 の sh-approval-record-retention

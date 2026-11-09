@@ -14,7 +14,6 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
-from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import CragRetrievalGradeOutput
 
 import app.rag.answer_engine as answer_engine
@@ -359,82 +358,3 @@ class ScopeRecordingCoverageOracle(CoverageOracle):
         scoped = dict(filters or {})
         self.searches.append((query, scoped, current_audit_request_context()))
         return await super().hybrid_search(query, embedding, top_k, mode, scoped)
-
-
-async def test_request_coverage_re_search_keeps_user_conditions(
-    monkeypatch: pytest.MonkeyPatch, access: AuditRequestContext
-) -> None:
-    """根拠の無い要求だけの再検索も、利用者の条件・基準日・認可の範囲で検索する。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.models.llm import GroundedDraft, QueryExpansionOutput, QueryRoutingOutput
-
-    def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        if issubclass(schema, QueryRoutingOutput):
-            expansion = explicit_gap(system, prompt, config, QueryExpansionOutput, **options)
-            return schema(strategy="hyde", reason="合成の検索文を選択", queries=expansion.queries)
-        if schema is QueryExpansionOutput:
-            return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
-        result = _fake_llm(system, prompt, config, schema, **options)
-        if (
-            issubclass(schema, (GroundedDraft, generation_draft_wire_model()))
-            and "請求書の再発行は、請求一覧" not in prompt
-        ):
-            data = result.model_dump(exclude_unset=True)
-            if getattr(schema, "_uses_typed_answer_parts", False):
-                data["answer_parts"].append(
-                    {
-                        "request_id": "Q1",
-                        "requirement": "追加の合成要求",
-                        "answer": {"kind": "gap", "text": "請求書の再発行方法は？"},
-                    }
-                )
-                return schema.model_validate(data)
-            data["items"].append(
-                {
-                    "kind": "gap",
-                    "text": "請求書の再発行方法は？",
-                    "request_id": "Q1",
-                    "citations": [],
-                }
-            )
-            return schema.model_validate(data)
-        return result
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
-    oracle = ScopeRecordingCoverageOracle()
-    filters = {
-        "knowledge_base_id": "kb-1",
-        "large_category": "分類A",
-        "as_of": "2020-06-30",
-        "extraction_fields": _manual_fields(),
-    }
-    engine = AnswerEngine(
-        Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
-            rag_rerank_enabled=False,
-            rag_request_coverage_retrieval_enabled=True,
-        ),
-        oracle=cast(Any, oracle),
-        genai=cast(Any, FakeGenAi()),
-        auto_field_conditions=[AUTO_FIELD],
-    )
-
-    outcome = await engine.run(
-        SearchRequest(query="受注の登録方法は？請求書の再発行方法は？", filters=filters)
-    )
-
-    assert (
-        outcome.diagnostics["request_coverage"]["after_generation"][0]["re_retrieval"]["applied"]
-        is True
-    )
-    re_searches = [item for item in oracle.searches if item[0] == "請求書の再発行方法は？"]
-    assert re_searches
-    scalar = {key: value for key, value in filters.items() if key != "extraction_fields"}
-    for _query, scoped, _context in re_searches:
-        assert {key: scoped.get(key) for key in scalar} == scalar
-        assert _field_values(scoped) == [
-            (MANUAL_FIELD.name, MANUAL_FIELD.value),
-            (AUTO_FIELD.name, AUTO_FIELD.value),
-        ]
-    assert {context for _query, _scoped, context in oracle.searches} == {access}

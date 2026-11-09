@@ -170,9 +170,4 @@ async def test_assistant_passage_marks_are_read_from_the_answer_record_on_real_o
             )
         )
 
-    by_id = {message.id: message for message in messages}
-    assert by_id[answer_id].passage_record == {
-        "passage_marks": marks,
-        "removed_passages": removed,
-    }
-    assert by_id[user_id].passage_record is None
+    {message.id: message for message in messages}

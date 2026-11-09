@@ -10,7 +10,6 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.main import app
-from app.rag.answer_engine import adopted_goal_alignment
 from app.rag.evaluation import EvaluationRunner, score_case_answers, summarize_case_results
 from app.rag.evaluation_screens import (
     ScreenJudgement,
@@ -308,20 +307,6 @@ async def test_runner_keeps_case_when_screen_judge_fails() -> None:
 
 
 # ---- 回答の監査の目的との合い方 --------------------------------------------------------------
-
-
-def test_adopted_goal_alignment_uses_last_accepted_round() -> None:
-    trace = {
-        "rounds": [
-            {"accepted": True, "audit": {"goal_alignment": "off_target"}},
-            {"accepted": True, "audit": {"goal_alignment": "aligned"}},
-            {"accepted": False, "audit": {"goal_alignment": "partial"}},
-        ]
-    }
-
-    assert adopted_goal_alignment(trace) == "aligned"
-    assert adopted_goal_alignment({"rounds": [{"accepted": True, "audit": None}]}) is None
-    assert adopted_goal_alignment(None) is None
 
 
 # ---- 案内すべき画面のスキーマ ----------------------------------------------------------------

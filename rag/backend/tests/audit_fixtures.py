@@ -1,31 +1,19 @@
-"""旧形式の監査fixtureを明示的に再生する。通信や新wireの検証を成功扱いしない。"""
+"""生成後の監査を削除した後も、古いテストの stub が読めるようにする。"""
 
-from typing import Any, cast
-
-from pydantic import BaseModel
-from rag_engine.models.audit_wire import AuditWireResult, is_audit_wire
-from rag_engine.models.llm import ApplicationAudit, GroundedAudit, GroundedFactAudit
+from typing import Any
 
 
-def is_audit_schema(schema: type) -> bool:
-    return schema in (GroundedAudit, GroundedFactAudit) or (
-        is_audit_wire(schema) and getattr(schema, "canonical_schema", None) is not ApplicationAudit
-    )
+def is_audit_wire(_schema: Any) -> bool:
+    return False
 
 
-def legacy_audit_result(schema: type, data: dict[str, Any]) -> Any:
-    if not is_audit_wire(schema):
-        return cast(type[BaseModel], schema).model_validate(data)
-    # 既存の意味判定fixtureを読むだけで、実際のwire形や転送を検証したとは記録しない。
-    canonical_schema = cast(type[BaseModel], cast(Any, schema).canonical_schema)
-    canonical = canonical_schema.model_validate(data)
-    return AuditWireResult(
-        audit=canonical
-        if isinstance(canonical, ApplicationAudit)
-        else GroundedAudit.model_validate(canonical.model_dump(mode="json")),
-        validation={
-            "source": "legacy_fixture",
-            "strict_wire_validation": "not_observed",
-            "transport_not_observed": True,
-        },
-    )
+def is_audit_schema(_schema: Any) -> bool:
+    return False
+
+
+def is_explanation_schema(_schema: Any) -> bool:
+    return False
+
+
+def legacy_audit_result(*_args: Any, **_kwargs: Any) -> Any:
+    raise AssertionError("監査は呼ばれない")

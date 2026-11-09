@@ -650,7 +650,6 @@ def build_engine_settings(
             settings.rag_article_catalog_cache_max_entries
         ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
-        "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(

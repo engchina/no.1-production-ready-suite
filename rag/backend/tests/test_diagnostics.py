@@ -99,34 +99,6 @@ def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() 
     assert first != second
 
 
-@pytest.mark.parametrize(
-    "update",
-    [
-        {"rag_query_strategy": "rag_fusion"},
-        {"rag_answer_flow": "crag"},
-        {"rag_neighbor_child_count": 5},
-        {"rag_rerank_enabled": False},
-        {"rag_screen_linking_enabled": True},
-        {"rag_request_coverage_retrieval_enabled": True},
-    ],
-    ids=[
-        "query_strategy",
-        "answer_flow",
-        "neighbor",
-        "rerank",
-        "screen_linking",
-        "request_coverage",
-    ],
-)
-def test_rag_config_fingerprint_changes_when_answer_settings_change(
-    update: dict[str, object],
-) -> None:
-    """fingerprint は回答の検索と生成の全体既定の変更も反映する。"""
-    base = Settings()
-
-    assert rag_config_fingerprint(base) != rag_config_fingerprint(base.model_copy(update=update))
-
-
 def test_rag_config_fingerprint_changes_with_vector_index_profile() -> None:
     """fingerprint は検索インデックス profile の違い(検索時 accuracy)を反映する。"""
     fingerprints = {

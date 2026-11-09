@@ -483,21 +483,9 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     # 任意の検索拡張は明示的に有効化した場合だけ使う。
     assert settings.rag_entity_expansion_enabled is False
     assert settings.rag_screen_linking_enabled is False
-    assert settings.rag_request_coverage_retrieval_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
-
-
-@pytest.mark.parametrize(
-    "field", ["entity_expansion", "screen_linking", "request_coverage_retrieval"]
-)
-def test_optional_search_expansion_accepts_explicit_environment_enable(
-    monkeypatch: pytest.MonkeyPatch, field: str
-) -> None:
-    monkeypatch.setenv(f"RAG_{field.upper()}_ENABLED", "true")
-    settings = Settings(_env_file=None)
-    assert getattr(settings, f"rag_{field}_enabled") is True
 
 
 def test_entity_expansion_uses_global_environment_settings(

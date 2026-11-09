@@ -276,7 +276,6 @@ class FakeChatOracle:
         current.status = message.status
         current.elapsed_ms = message.elapsed_ms
         current.progress = message.progress
-        current.passage_record = message.passage_record
         current.answer_format = message.answer_format
         current.heartbeat_at = datetime.now(UTC)
         return True

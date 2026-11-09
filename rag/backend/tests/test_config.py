@@ -1129,8 +1129,6 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert all(origin.startswith("http://") for origin in settings.cors_origins)
     assert settings.oci_enterprise_ai_models == []
     assert settings.oracle_password in ("", None)
-    assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings.model_fields["rag_request_coverage_retrieval_enabled"].default is False
     assert settings.rag_article_catalog_enabled is True
     assert Settings.model_fields["rag_article_catalog_enabled"].default is True
     assert [
