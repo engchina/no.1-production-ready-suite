@@ -139,7 +139,7 @@ def use_oracle(monkeypatch: pytest.MonkeyPatch) -> Callable[[_Oracle], _Oracle]:
     def install(fake: _Oracle) -> _Oracle:
         monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
         monkeypatch.setattr(
-            documents_route, "_recipe_parse_extraction_id", lambda *_args: "parse-now"
+            documents_route, "_recipe_parse_extraction_id", lambda *_args, **_kwargs: "parse-now"
         )
 
         async def recipe_view(_oracle: object, row: Mapping[str, object]) -> dict[str, object]:
