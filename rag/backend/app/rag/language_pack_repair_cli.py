@@ -1,6 +1,7 @@
-"""現在版が保存契約に合わない環境の言語資源を修復する CLI(#4697)。
+"""現在版か下書きが保存契約に合わない環境の言語資源を修復する CLI(#4697・#4745)。
 
-既定は読み取りだけの dry-run。`--apply` のときだけ新しい公開版を発行し、dry-run で確かめた現在版の
+既定は読み取りだけの dry-run。`--apply` のときだけ書き込み(現在版が不適合なら新しい公開版の発行、
+下書きだけが不適合なら下書きの書き換え。公開はしない)、dry-run で確かめた現在版の
 ID と下書きの revision を引数で求める。出力は項目の名前だけで、言語資源の値は出さない。
 対象の環境での `--apply` は利用者の明示の許可を得てから行う
 (rag/docs/language-pack-current-contract.md)。条件を満たすなら 0、止めたか失敗したら 1 で終わる。
@@ -33,21 +34,24 @@ from app.rag.request_context import with_system_access
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="現在版が保存契約に合わないときに、欠けた項目だけを補った新しい公開版を発行します。"
+        description=(
+            "現在版か下書きが保存契約に合わないときに、欠けた項目だけを補います"
+            "（現在版は新しい公開版の発行、下書きは下書きだけの書き換え）。"
+        )
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="新しい公開版を発行します。指定しなければ読み取りだけの dry-run です。",
+        help="dry-run の repair_target を修復します。指定しなければ読み取りだけの dry-run です。",
     )
     parser.add_argument(
         "--expected-current-id",
-        help="dry-run の current_release_id。--apply に必須です。違えば発行しません。",
+        help="dry-run の current_release_id。--apply に必須です。違えば書き込みません。",
     )
     parser.add_argument(
         "--expected-draft-revision",
         type=int,
-        help="dry-run の draft_revision。--apply に必須です。違えば発行しません。",
+        help="dry-run の draft_revision。--apply に必須です。違えば書き込みません。",
     )
     return parser
 

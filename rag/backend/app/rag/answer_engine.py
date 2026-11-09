@@ -1,6 +1,6 @@
 """rag_poc の根拠付き回答フローを backend の検索・rerank・LLM で実行する。
 
-rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子文脈 / 生成 + 監査ラウンド)を
+rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子文脈 / 生成)を
 そのまま使い、``AnswerDependencies`` の I/O だけを差し替える。
 
 - 検索: backend の Oracle hybrid 検索(
@@ -4990,7 +4990,14 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         for step in result.execution_steps or ()
         if isinstance(step, Mapping)
     ]
+    trace = result.generation_trace or {}
+    # 除く一覧に無いキーはそのまま写す（写し漏れで診断が黙って欠けない。#4735）。
     diagnostics = {
+        **{
+            key: value
+            for key, value in trace.items()
+            if key not in _TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS
+        },
         "retrieval_stages": list(state.retrieval_stages),
         "answer_flow": result.answer_flow,
         "strategy": result.effective_strategy,
@@ -5011,37 +5018,20 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
-            {"guide_step_retrieval": dict(trace)}
-            if isinstance(trace := (result.generation_trace or {}).get("guide_steps"), Mapping)
+            {"guide_step_retrieval": dict(guide_steps)}
+            if isinstance(guide_steps := trace.get("guide_steps"), Mapping)
             else {}
         ),
         # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
-        # 読めなかった章節)。
-        "section_expansion": _section_expansion_diagnostics(result.generation_trace),
-        # 採用した草稿の構造(#1492。確認の項目の事実と規則の分け方・説明の種類と適用)。
-        # LLM を呼ばずに対応の決定を replay する材料。
-        "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
-        "generation_failure": dict((result.generation_trace or {}).get("generation_failure") or {}),
-        # モデルのカスケード(#4581。確認を通らなかったときのモデルで回答し直したか・理由)。
-        "model_cascade": dict((result.generation_trace or {}).get("model_cascade") or {}),
+        # 読めなかった章節)。評価器の判定の全文(grades)は除く。
+        "section_expansion": _section_expansion_diagnostics(trace),
         # 原文と生応答は回答の保存・権限確認に従う。計測やモデル入力へ再注入しない。
         "generation_citation_traces": [
             dict(row["generation_citation_trace"])
-            for row in (result.generation_trace or {}).get("rounds", ())
+            for row in trace.get("rounds", ())
             if isinstance(row, Mapping)
             and isinstance(row.get("generation_citation_trace"), Mapping)
         ],
-        # 根拠の文字予算の設定値・実際に使った値・送った根拠ブロックの文字数(#3776。数値だけ)。
-        "evidence_budget": dict((result.generation_trace or {}).get("evidence_budget") or {}),
-        "generation_input_budget": dict(
-            (result.generation_trace or {}).get("generation_input_budget") or {}
-        ),
-        # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
-        "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
-        "crag_assessment": dict((result.generation_trace or {}).get("crag_assessment") or {}),
-        "crag_generation_gate": dict(
-            (result.generation_trace or {}).get("crag_generation_gate") or {}
-        ),
         "execution_steps": steps,
         "evidence_tree": tree,
     }
@@ -5219,6 +5209,35 @@ def _graph_expansion_diagnostics(
         "entities": list(entities.values())[:_GRAPH_DIAGNOSTICS_ENTITIES],
         "chunks": list(expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
     }
+
+
+# 回答の生成の記録（generation_trace）のうち、応答・Chat・実行の記録へ写さない項目（#4735）。
+# ここに書いた項目だけを除き、ほかのキーは足されたらそのまま diagnostics_json に残る。
+# 本文・プロンプトの写しや大きいデータ、内部の検索式はここに足す。
+_TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS = frozenset(
+    {
+        # 生成の回の全記録（草稿・生の応答）。引用の記録だけ generation_citation_traces に写す。
+        "rounds",
+        # 生成に渡した根拠の本文（span の本文・prompt の入力ブロック）。
+        "selected_evidence",
+        "provided_evidence_scope",
+        # 本文の出典行の写し（引用の chunk の metadata に番号として写す）。
+        "citation_lines",
+        # 当てはめの文（回答の本文の写し）と内部の番号を含む不採用の理由。
+        "applications",
+        # 質問の全文と解析の内部の値（プロンプトの入力）。
+        "task_contract",
+        # 全文検索の内部の検索式（oracle_text_query）。
+        "query_overflow",
+        # 文書ごとの読み取りの内部の状況（文書の数だけ増える）。
+        "document_background",
+        # 読めなかった章節の一覧（section_expansion の unread と重なり、章節の数だけ増える）。
+        "unread_sections",
+        # 別の名前で写す項目（guide_step_retrieval・zero_evidence の呼び出し側の組み立て）。
+        "guide_steps",
+        "zero_evidence",
+    }
+)
 
 
 def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:

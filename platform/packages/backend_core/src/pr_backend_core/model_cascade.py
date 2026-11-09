@@ -8,7 +8,7 @@
 - 信号は機械で判定できるものだけ（モデルの自己評価は使わない）。``ESCALATION_SIGNALS`` に無い語
   （根拠 0 件・確認の質問・人への引き継ぎ・未確認や警告の印だけ・接続や 429・5xx などの障害）は
   昇格の理由にしない。障害の切り替えと品質の昇格を混ぜない。
-- 1 回の質問で昇格は最多 1 回。昇格した後の修正の回はすべて 2 つ目のモデルのまま（戻さない）。
+- 1 回の質問で昇格は最多 1 回。
 - 利用者が明示したモデル（モデルの比較・要求のモデル）ではカスケードしない。2 つ目のモデルが空、
   または 1 つ目と同じなら使わない。
 """
@@ -21,17 +21,7 @@ from typing import Any
 
 # 昇格する信号（機械で判定できる確認の不合格）。並びは表示の順。
 SIGNAL_STRUCTURED_OUTPUT_INVALID = "structured_output_invalid"  # 構造化出力が再試行の後も不正
-SIGNAL_CITATION_MISMATCH = "citation_mismatch"  # 引用の ID・原文が一致しない
-SIGNAL_ARITHMETIC_MISMATCH = "arithmetic_mismatch"  # 計算を再計算すると合わない
-SIGNAL_CONCLUSION_WITHHELD = "conclusion_withheld"  # 要約・結論を門で保留した
-SIGNAL_AUDIT_CONTRADICTED = "audit_contradicted"  # 監査が有効なときの「資料と矛盾」
-ESCALATION_SIGNALS: tuple[str, ...] = (
-    SIGNAL_STRUCTURED_OUTPUT_INVALID,
-    SIGNAL_CITATION_MISMATCH,
-    SIGNAL_ARITHMETIC_MISMATCH,
-    SIGNAL_CONCLUSION_WITHHELD,
-    SIGNAL_AUDIT_CONTRADICTED,
-)
+ESCALATION_SIGNALS: tuple[str, ...] = (SIGNAL_STRUCTURED_OUTPUT_INVALID,)
 
 
 @dataclass(frozen=True)
@@ -114,10 +104,6 @@ def cascade_record(
 
 __all__ = [
     "ESCALATION_SIGNALS",
-    "SIGNAL_ARITHMETIC_MISMATCH",
-    "SIGNAL_AUDIT_CONTRADICTED",
-    "SIGNAL_CITATION_MISMATCH",
-    "SIGNAL_CONCLUSION_WITHHELD",
     "SIGNAL_STRUCTURED_OUTPUT_INVALID",
     "EscalationDecision",
     "ModelCascade",

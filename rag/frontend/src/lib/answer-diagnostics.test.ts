@@ -353,3 +353,21 @@ describe("answerAttachedImages", () => {
     expect(answerAttachedImages(undefined, { content: "回答" })).toBe(0);
   });
 });
+
+describe("retrievalCounts（検索の件数）", () => {
+  const counts = { candidate_count: 12, found: 5, passed_to_model: 3 };
+
+  it("絞り込む前・基準を通過・回答に使用の件数を読む", () => {
+    expect(parseAnswerDiagnostics({ retrieval_counts: counts })?.retrievalCounts).toEqual({ candidates: 12, found: 5, used: 3 });
+  });
+
+  it("候補 0 件の記録も行として読む", () => {
+    expect(parseAnswerDiagnostics({ retrieval_counts: { candidate_count: 0, found: 0, passed_to_model: 0 } })?.retrievalCounts).toEqual({ candidates: 0, found: 0, used: 0 });
+  });
+
+  it("項目が無い・数でない記録は null（行を出さない）", () => {
+    expect(parseAnswerDiagnostics({})?.retrievalCounts).toBeNull();
+    expect(parseAnswerDiagnostics({ retrieval_counts: { found: 5, passed_to_model: 3 } })?.retrievalCounts).toBeNull();
+    expect(parseAnswerDiagnostics({ retrieval_counts: { ...counts, found: "5" } })?.retrievalCounts).toBeNull();
+  });
+});

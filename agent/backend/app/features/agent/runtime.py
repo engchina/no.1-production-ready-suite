@@ -2630,7 +2630,7 @@ class AgentRuntimeRepository:
     def save_builtin_artifact(
         self, run_id: str, *, kind: str, name: str, content: JsonObject
     ) -> None:
-        """Control Plane が作る成果物（回答の検証など。#1246）を残す（同じ Run・種類は上書き）。"""
+        """Control Plane が作る成果物を残す（同じ Run・種類は上書き）。"""
         with self._lock:
             run = self._require_run(run_id)
             if _is_terminal(run.status):

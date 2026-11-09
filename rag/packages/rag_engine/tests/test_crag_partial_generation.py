@@ -80,6 +80,9 @@ def test_same_business_overview_cannot_reach_operation_generation():
     assert result.crag_attempts[-1]["generation_usable"] is False
     assert "直接裏付ける根拠を確認できていません" in result.answer_text
     assert not result.generation_trace["crag_generation_gate"]["generation_calls"]
+    # 生成を呼ばずに拒否しても、通常の回答と同じ形で件数を残す（#4735）。
+    counts = result.generation_trace["retrieval_counts"]
+    assert counts["passed_to_model"] == 0 and counts["found"] >= 1 and counts["candidate_count"] >= counts["found"]
 
 
 def test_overview_gate_precedes_legacy_generation_dispatch():
