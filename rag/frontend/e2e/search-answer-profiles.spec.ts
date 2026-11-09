@@ -11,11 +11,8 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-const GLOBAL_QUERY_FIELDS = [
-  "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
-  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled",
-  "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
-];
+/** 検索・回答プロファイルの query が持つ欄（ほかの欄は backend が検証エラーにする。#4784）。 */
+const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled"];
 
 // #3719: 空・単一ページでも表示し、4一覧のページ操作と作業状態を確かめる。
 for (const [tab, paginationId, kind] of [
@@ -108,9 +105,16 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   });
   const fields = [
     { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
+    { section: "question_cues", key: "subquestion_reference_followers", kind: "words", choices: [], ingest: false, max_chars: 40 },
     { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "guide_import_cues", key: "process_headings", kind: "enum_map", choices: ["steps", "notes"], ingest: false, max_chars: 40 },
   ];
-  const effective = { numbers: { article_units: ["条"] }, answer_check_cues: { related_stopwords: ["なぜ", "原因"] } };
+  const effective = {
+    numbers: { article_units: ["条"] },
+    question_cues: { subquestion_reference_followers: ["の欄"] },
+    answer_check_cues: { related_stopwords: ["なぜ", "原因"] },
+    guide_import_cues: { process_headings: { 手順: "steps" } },
+  };
   await page.route("**/api/settings/language-pack", (route) =>
     route.fulfill({
       json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "a" }, error_messages: [], warning_messages: [] },
@@ -123,6 +127,16 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await expect(section).toHaveAttribute("open", "");
   // 取込の項目（条の単位）は出さない。
   await expect(section.getByLabel("条の単位", { exact: true })).toHaveCount(0);
+  // 検索と回答で読む節だけを出す（質問の節は出し、業務ガイドの取込の節は出さない。#4784）。
+  await expect(section.getByRole("tablist", { name: "言語資源の使い道", exact: true }).getByRole("tab")).toHaveText([
+    "質問を読む",
+    "回答を確かめて表す",
+  ]);
+  await expect(section.getByLabel("小問の印の後の言及の語", { exact: true })).toHaveValue("の欄");
+  await expect(section.getByText("回答の過程の見出し")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("language-pack-profile-sections.png"), fullPage: true });
+  await section.getByRole("tab", { name: "回答を確かめて表す", exact: true }).click();
   const cause = section.getByLabel("関連の原文で使わない語", { exact: true });
   await expect(cause).toHaveValue("なぜ\n原因");
   await cause.fill("なぜ\n原因\n理屈");
@@ -228,10 +242,6 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   for (const removed of ["retrieval_strategy", "post_retrieval_pipeline", "generation_profile"]) {
     expect(removed in ((config.query as Record<string, unknown>) ?? {})).toBe(false);
   }
-  expect(
-    "vector_index_profile" in
-      ((createBody?.config as { query?: Record<string, unknown> })?.query ?? {})
-  ).toBe(false);
   // 配信モード（serving_mode）は持たない（文書の全 active レシピを常に融合する。#1331）。
   expect("serving_mode" in config).toBe(false);
 
@@ -270,7 +280,7 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   expect(config.answer_model_id).toBe("model-b");
   expect(config.query?.max_anchors_per_document).toBe(0);
   expect(config.query?.support_guide_enabled).toBe(true);
-  for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in (config.query ?? {})).toBe(false);
+  expect(Object.keys(config.query ?? {}).filter((key) => !PROFILE_QUERY_FIELDS.includes(key))).toEqual([]);
 });
 
 test("出力の検査を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -330,16 +340,13 @@ test("業務ガイドは既定 OFF の単一スイッチで保存・再表示す
   }
 });
 
-// #3053・#3523: 実体・章節・関係情報の拡張と業務ガイドの手順ごとの検索（上限・期限を含む）は全体設定だけで決め、
-// 検索・回答プロファイルは表示も保存もしない。
-test("検索方法の全体設定の項目は表示せず、古い個別設定を保存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// #3053・#3523・#4784: 実体・章節・関係情報の拡張と業務ガイドの手順ごとの検索（上限・期限を含む）は全体設定だけで決め、
+// 検索・回答プロファイルは表示しない。プロファイルの query は適用する欄だけを持ち、保存もその欄だけ。
+test("検索方法の全体設定の項目は表示せず、適用する欄だけを保存する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
-    neighbor_child_count: 0,
-    rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true, graph_expansion_max_chunks: 3,
-    screen_linking_enabled: true,
-    entity_expansion_enabled: false, entity_expansion_max_chunks: 2, section_expansion_enabled: false, section_expansion_max_levels: 2, section_expansion_input_token_percent: 30,
-    guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
+    max_anchors_per_document: 2,
+    support_guide_enabled: true,
   });
   await page.goto("/search-answer-profiles?id=bv-default");
   for (const name of ["根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
@@ -355,7 +362,7 @@ test("検索方法の全体設定の項目は表示せず、古い個別設定�
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => body).not.toBeNull();
   const query = (body?.config as { query?: Record<string, unknown> })?.query ?? {};
-  for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in query).toBe(false);
+  expect(query).toEqual({ max_anchors_per_document: 2, support_guide_enabled: true });
   await page.reload();
   await page.getByTestId("search-answer-profile-guide-matching").scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("global-search-options.png") });
@@ -1177,7 +1184,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
     config: {
       version: 1,
       knowledge_base_ids: ["kb-1"],
-      query: { neighbor_child_count: 2 },
+      query: { max_anchors_per_document: 2 },
     },
     knowledge_bases: [{ id: "kb-1", name: "社内規程", status: "ACTIVE" }],
   };

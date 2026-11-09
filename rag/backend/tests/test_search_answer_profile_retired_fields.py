@@ -15,6 +15,9 @@ from app.rag.search_answer_profile_retired_fields import (
     KEPT_LANGUAGE_PACK_SECTIONS,
     KEPT_QUERY_FIELDS,
     remove_retired_search_answer_profile_fields,
+    removed_names,
+    without_knowledge_base_query,
+    without_retired_profile_fields,
 )
 from tests.test_language_pack_retired_fields import _Db
 
@@ -100,6 +103,24 @@ def test_only_retired_fields_are_removed_and_kept_values_do_not_change() -> None
     assert config.model_dump(mode="json") == {**_KEPT_PROFILE, "escalation_model_id": None}
     restored = parse_adapter_config(db.tables["RAG_KNOWLEDGE_BASES"][0]["retrieval_config"])
     assert restored.ingestion.chunk_size == 1200
+
+
+def test_dry_run_reports_only_the_names_that_will_be_removed() -> None:
+    old = _old_profile()
+    stripped = without_retired_profile_fields(old)
+    assert stripped is not None
+    assert removed_names(old, stripped) == [
+        "language_pack.guide_import_cues",
+        "query.answer_engine",
+        "query.graph_expansion_max_chunks",
+        "query.neighbor_child_count",
+        "query.rerank_enabled",
+        "query.support_guide_close_match_clarification_enabled",
+        "query.support_guide_semantic_match_enabled",
+        "query.vector_index_profile",
+    ]
+    kb = {"ingestion": {"chunk_size": 800}, "query": {"rerank_enabled": False}}
+    assert removed_names(kb, without_knowledge_base_query(kb) or {}) == ["query"]
 
 
 def test_old_profile_is_a_validation_error_before_the_migration() -> None:

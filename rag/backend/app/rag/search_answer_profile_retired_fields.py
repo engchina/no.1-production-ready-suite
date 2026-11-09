@@ -7,6 +7,10 @@
 
 残す欄と節の一覧は、この migration を足した時点の定義の写し(migration の SQL に書いて checksum に
 入れる)。後で定義が変わっても、ここは変えない。
+
+適用の前の確認(読み取りだけの dry-run)は
+``python -m app.rag.search_answer_profile_retired_fields``。行の ID と、消える欄・節の名前だけを出す
+(値は出さない)。
 """
 
 from __future__ import annotations
@@ -56,50 +60,75 @@ def without_knowledge_base_query(config: Mapping[str, Any]) -> dict[str, Any] | 
     return {key: item for key, item in config.items() if key != "query"}
 
 
-def _strip(
-    connection: Any,
-    table: str,
-    id_column: str,
-    json_column: str,
-    strip: Callable[[Mapping[str, Any]], dict[str, Any] | None],
-) -> None:
-    from app.clients.oracle import _execute, _fetch_all, _json_bind, _json_input_sizes, _json_loads
+_TARGETS: tuple[tuple[str, str, str, Callable[[Mapping[str, Any]], dict[str, Any] | None]], ...] = (
+    (PROFILE_TABLE, "search_answer_profile_id", "profile_config", without_retired_profile_fields),
+    (KNOWLEDGE_BASE_TABLE, "knowledge_base_id", "retrieval_config", without_knowledge_base_query),
+)
 
-    for row in _fetch_all(
-        connection,
-        f"SELECT {id_column}, {json_column} FROM {table} "  # nosec B608 - 固定の表と列の名前
-        f"WHERE {json_column} IS NOT NULL FOR UPDATE",
-        {},
-    ):
-        stripped = strip(_json_loads(row[json_column]))
-        if stripped is None:
+
+def _pending(connection: Any, *, for_update: bool) -> list[tuple[str, str, str, Any, dict, dict]]:
+    """直す行の (表, ID の列, JSON の列, ID, 今の値, 直した値)。表が無ければ飛ばす。"""
+    from app.clients.oracle import _fetch_all, _json_loads
+    from app.rag.language_pack_retired_fields import _table_exists
+
+    pending = []
+    for table, id_column, json_column, strip in _TARGETS:
+        if not _table_exists(connection, table):
             continue
-        _execute(
+        for row in _fetch_all(
             connection,
-            f"UPDATE {table} SET {json_column}=:config WHERE {id_column}=:id",  # nosec B608
-            {"id": row[id_column], "config": _json_bind(stripped)},
-            input_sizes=_json_input_sizes("config"),
-        )
+            f"SELECT {id_column}, {json_column} FROM {table} "  # nosec B608 - 固定の表と列の名前
+            f"WHERE {json_column} IS NOT NULL" + (" FOR UPDATE" if for_update else ""),
+            {},
+        ):
+            current = _json_loads(row[json_column])
+            stripped = strip(current)
+            if stripped is not None:
+                pending.append((table, id_column, json_column, row[id_column], current, stripped))
+    return pending
+
+
+def removed_names(current: Mapping[str, Any], stripped: Mapping[str, Any]) -> list[str]:
+    """消える key の名前(``query.<欄>``・``language_pack.<節>``・``query``)。値は含めない。"""
+    names: list[str] = []
+    for key, value in current.items():
+        if key not in stripped:
+            names.append(key)
+        elif value != stripped[key]:
+            names.extend(f"{key}.{name}" for name in value.keys() - stripped[key].keys())
+    return sorted(names)
 
 
 def remove_retired_search_answer_profile_fields(connection: Any) -> None:
-    """プロファイルと KB の保存値から、定義から消した欄を除く。表ごとに 1 transaction。"""
-    from app.rag.language_pack_retired_fields import _table_exists
+    """プロファイルと KB の保存値から、定義から消した欄を除く。"""
+    from app.clients.oracle import _execute, _json_bind, _json_input_sizes
 
-    for table, id_column, json_column, strip in (
-        (
-            PROFILE_TABLE,
-            "search_answer_profile_id",
-            "profile_config",
-            without_retired_profile_fields,
-        ),
-        (
-            KNOWLEDGE_BASE_TABLE,
-            "knowledge_base_id",
-            "retrieval_config",
-            without_knowledge_base_query,
-        ),
+    for table, id_column, json_column, row_id, _current, stripped in _pending(
+        connection, for_update=True
     ):
-        if _table_exists(connection, table):
-            _strip(connection, table, id_column, json_column, strip)
-            connection.commit()
+        _execute(
+            connection,
+            f"UPDATE {table} SET {json_column}=:config WHERE {id_column}=:id",  # nosec B608
+            {"id": row_id, "config": _json_bind(stripped)},
+            input_sizes=_json_input_sizes("config"),
+        )
+    connection.commit()
+
+
+if __name__ == "__main__":  # pragma: no cover - 読み取りだけの dry-run
+    import json
+
+    import oracledb
+    from pr_backend_core.oracle_dsn import enable_cli_connect_mode
+
+    from app.clients.oracle import shared_pool_connect_kwargs
+
+    enable_cli_connect_mode()
+    with oracledb.connect(**shared_pool_connect_kwargs()) as _connection:
+        for _table, _, _, _row_id, _current, _stripped in _pending(_connection, for_update=False):
+            print(
+                json.dumps(
+                    {"table": _table, "id": _row_id, "removed": removed_names(_current, _stripped)},
+                    ensure_ascii=False,
+                )
+            )

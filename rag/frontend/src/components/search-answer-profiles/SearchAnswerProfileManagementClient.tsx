@@ -170,18 +170,6 @@ const MAX_ANCHORS_PER_DOCUMENT_OPTIONS: SelectFieldOption<string>[] = Array.from
   value: String(n),
   label: n === 0 ? t("searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited") : String(n),
 }));
-/**
- * 全体設定だけで決める検索方法の項目（backend の PROFILE_GLOBAL_QUERY_FIELDS と同じ。#3053・#3523）。
- * 検索・回答プロファイルでは表示も保存もせず、古い保存値は読み込みで捨てる。
- */
-const PROFILE_GLOBAL_QUERY_FIELDS = [
-  "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
-  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled",
-  "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
-  "entity_expansion_enabled", "entity_expansion_max_chunks",
-  "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent",
-] as const satisfies readonly (keyof KnowledgeBaseQueryConfig)[];
-
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {};
 }
@@ -190,11 +178,8 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
 function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): SearchAnswerProfileConfig {
   const retained = { ...config };
   delete (retained as Record<string, unknown>).spec_then_contact;
-  const query = { ...config.query };
-  for (const key of PROFILE_GLOBAL_QUERY_FIELDS) delete query[key];
   return {
     ...retained,
-    query,
     clarification_policy: config.clarification_policy ?? "confirm",
     language_pack: config.language_pack ?? {},
     contact_override: config.contact_override ?? "",
