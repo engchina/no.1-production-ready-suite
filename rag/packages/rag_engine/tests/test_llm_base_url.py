@@ -30,7 +30,6 @@ def _settings(endpoint: str):
             "OCI_ENTERPRISE_AI_ENDPOINT": endpoint,
             "OCI_ENTERPRISE_AI_API_KEY": "sk-test",
             "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "vendor.text",
-            "LLM_RETRIES": "0",
         },
         dotenv_path=None,
     )

@@ -1,6 +1,7 @@
 import { mockFeaturePrompts, verifyFeaturePrompt } from "./_feature-prompt-helpers";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -157,11 +158,10 @@ for (const viewport of [
         expect(cardBoxes[index].y).toBeGreaterThan(cardBoxes[index - 1].y);
       }
     }
-    await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
-    // 外部接続の欄は Dots.OCR の 1 組だけ。
-    await expect(page.getByLabel("Endpoint")).toHaveCount(1);
-    await expect(page.getByLabel("Model")).toHaveCount(1);
-    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(1);
+    // 接続の設定は節として並べず、Dots.OCR のカードの「設定」から右のパネルで開く（#4740）。
+    await expect(page.getByText("外部 GPU 解析エンジンの接続")).toHaveCount(0);
+    await expect(page.getByLabel("Endpoint")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /の設定$/ })).toHaveCount(1);
     await expect(page.getByText("運用診断", { exact: true })).toHaveCount(0);
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -799,6 +799,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+  // 接続の設定はパネルの中で保存するので、使用エンジンの保存には含めない（#4740）。
   expect(savedPayload).toEqual({
     adapter_backend: "dots_ocr",
     docling_enabled: false,
@@ -806,11 +807,6 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     dots_ocr_enabled: true,
     structured_records_jsonl_enabled: false,
     xml_tree_json_enabled: false,
-    connections: defaultConnections().map((connection) => ({
-      backend: connection.backend,
-      endpoint: connection.endpoint,
-      model: connection.model,
-    })),
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -994,11 +990,11 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   });
 
   await page.goto("/settings/parser-adapters");
-  const endpoint = page.locator("#external-parser-dots_ocr-endpoint");
-  const model = page.locator("#external-parser-dots_ocr-model");
-  const card = endpoint.locator(
-    "xpath=ancestor::*[.//button[normalize-space()='接続を確認']][1]"
-  );
+  await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
+  const card = page.getByTestId("external-parser-connection-dots_ocr");
+  const endpoint = card.locator("#external-parser-dots_ocr-endpoint");
+  const model = card.locator("#external-parser-dots_ocr-model");
+  const save = card.getByRole("group", { name: "Dots.OCR の接続設定の操作" }).getByRole("button", { name: "保存", exact: true });
 
   await card.getByRole("button", { name: "接続を確認" }).click();
   await expect(card.getByText("接続できました。")).toBeVisible();
@@ -1009,7 +1005,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(result.locator("details")).not.toHaveAttribute("open", "");
 
   await endpoint.fill("ftp://invalid.example.com");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await save.click();
   await expect(
     page.getByText(
       "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
@@ -1020,7 +1016,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
 
   // `http:foo` は URL としては読めるが、backend は `http(s)://host` の形だけを受け付ける（#976）。
   await endpoint.fill("http:dots.example.com");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await save.click();
   await expect(
     page.getByText(
       "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
@@ -1033,14 +1029,17 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
 
   await endpoint.fill("https://dots-new.example.com/v1");
   await model.fill("served-dots");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await save.click();
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
-  const firstConnections = payloads[0].connections as Array<Record<string, unknown>>;
-  const firstDots = firstConnections.find((item) => item.backend === "dots_ocr");
-  expect(firstDots).toEqual({
-    backend: "dots_ocr",
-    endpoint: "https://dots-new.example.com/v1",
-    model: "served-dots",
+  // パネルの保存は接続だけを送る（使用エンジンの選択は送らない。#4740）。
+  expect(payloads[0]).toEqual({
+    connections: [
+      {
+        backend: "dots_ocr",
+        endpoint: "https://dots-new.example.com/v1",
+        model: "served-dots",
+      },
+    ],
   });
   await expect(card.getByText("接続できました。")).toHaveCount(0);
 
@@ -1054,15 +1053,240 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(result.getByText("external_parser_model_missing")).toBeVisible();
 
   await card.getByLabel("保存済み API key を削除").check();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  const secondConnections = payloads[1].connections as Array<Record<string, unknown>>;
-  expect(secondConnections.find((item) => item.backend === "dots_ocr")).toEqual({
-    backend: "dots_ocr",
-    endpoint: "https://dots-new.example.com/v1",
-    model: "served-dots",
-    clear_api_key: true,
+  await save.click();
+  await expect.poll(() => payloads.length).toBe(2);
+  expect(payloads[1]).toEqual({
+    connections: [
+      {
+        backend: "dots_ocr",
+        endpoint: "https://dots-new.example.com/v1",
+        model: "served-dots",
+        clear_api_key: true,
+      },
+    ],
   });
   await expectNoHorizontalOverflow(page);
+});
+
+/** Dots.OCR の接続の GET / PATCH。PATCH の payload を記録し、接続だけ保存後の値を返す（使用エンジンは Docling のまま）。 */
+async function mockParserAdaptersForConnectionSheet(page: Page) {
+  const patches: Array<Record<string, unknown>> = [];
+  let connection = { ...defaultConnections()[0] } as Omit<ReturnType<typeof defaultConnections>[number], "endpoint" | "model"> & {
+    endpoint: string;
+    model: string;
+  };
+  await page.route("**/api/settings/parser-adapters", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const payload = route.request().postDataJSON() as { connections?: Array<{ endpoint: string; model: string }> };
+      patches.push(payload);
+      const update = payload.connections?.[0];
+      if (update) connection = { ...connection, endpoint: update.endpoint, model: update.model };
+    }
+    await route.fulfill({
+      json: parserAdapterEnvelope({
+        adapter_backend: "docling",
+        effective_order: ["docling"],
+        config_source: "runtime",
+        connections: [connection],
+        adapters: [
+          { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
+          disabledAdapter("unstructured"),
+          disabledAdapter("dots_ocr"),
+        ],
+      }),
+    });
+  });
+  return patches;
+}
+
+const dotsSettingsButton = (page: Page) => page.getByRole("button", { name: "Dots.OCR の設定", exact: true });
+const dotsSheet = (page: Page) => page.getByTestId("external-parser-connection-dots_ocr");
+const dotsSheetActions = (page: Page) => dotsSheet(page).getByRole("group", { name: "Dots.OCR の接続設定の操作" });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`Dots.OCR の「設定」はエンジンの選択を変えず右のパネルで開く（#4740, ${viewport.name}）`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockParserAdaptersForConnectionSheet(page);
+    await mockFeaturePrompts(page);
+
+    await page.goto("/settings/parser-adapters");
+    const docling = page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ });
+    const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
+    await expect(docling).toBeChecked();
+    const button = dotsSettingsButton(page);
+    // 「設定」はカードの中にあり、カードの文字に重ならない。
+    const overlap = await page.locator('label[for="settings-parser-backend-dots_ocr"]').evaluate((label) => {
+      const target = label.parentElement!.querySelector("button")!.getBoundingClientRect();
+      const box = label.getBoundingClientRect();
+      const inside = target.left >= box.left && target.right <= box.right && target.top >= box.top && target.bottom <= box.bottom;
+      const covered = [...label.querySelectorAll("span")].filter((span) => span.children.length === 0 && span.textContent?.trim()).some((span) => {
+        const rect = span.getBoundingClientRect();
+        return rect.left < target.right && rect.right > target.left && rect.top < target.bottom && rect.bottom > target.top;
+      });
+      return { inside, covered };
+    });
+    expect(overlap).toEqual({ inside: true, covered: false });
+
+    await button.click();
+    const sheet = dotsSheet(page);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    await expect(page.getByRole("dialog", { name: "Dots.OCR の設定" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Dots.OCR の設定" })).toBeVisible();
+    // 押してもエンジンの選択は変わらない（未保存の変更にもならない）。
+    await expect(docling).toBeChecked();
+    await expect(dots).not.toBeChecked();
+    await expect(page.getByRole("group", { name: "文書解析の設定の操作" }).getByText("未保存の変更があります。")).toHaveCount(0);
+
+    // 根拠を表示するパネルと同じ形: 右端に付き、開くとパネルへフォーカスする。sm 未満は全画面。
+    await expect(sheet).toBeFocused();
+    await expect
+      .poll(() => sheet.evaluate((node) => Math.round(node.getBoundingClientRect().right)))
+      .toBe(viewport.width);
+    const box = (await sheet.boundingBox())!;
+    if (viewport.name === "mobile") expect(Math.round(box.x)).toBe(0);
+    else expect(box.x).toBeGreaterThan(0);
+
+    // 中身は Endpoint / Model / API key / 保存済みのキーの削除 / 接続確認 / 読み取りプロンプト。欄は 1 組だけ。
+    await expect(sheet.getByLabel("Endpoint")).toHaveValue("https://dots.example.com/v1");
+    await expect(sheet.getByLabel("Model")).toHaveValue("rednote-hilab/dots.mocr");
+    await expect(page.getByLabel("Endpoint")).toHaveCount(1);
+    await expect(page.getByLabel("Model")).toHaveCount(1);
+    const apiKey = sheet.getByLabel("API key", { exact: true });
+    await expect(apiKey).toHaveCount(1);
+    // 保存済みの値は欄にも出さず、設定済みかどうかだけを示す。
+    await expect(apiKey).toHaveValue("");
+    await expect(apiKey).toHaveAttribute("type", "password");
+    await expect(apiKey).toHaveAttribute("placeholder", "設定済み（空欄なら保持）");
+    await expect(sheet.getByLabel("保存済み API key を削除")).toBeEnabled();
+    await expect(sheet.getByRole("button", { name: "接続を確認" })).toBeEnabled();
+    await expect(sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" })).toHaveCount(1);
+    expect(await findClippedPlaceholders(page, { root: '[data-testid="external-parser-connection-dots_ocr"]' })).toEqual([]);
+
+    await expectNoHorizontalOverflow(page);
+    expect(await sheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-sheet-${viewport.name}.png` });
+
+    // 変更が無ければ Escape 1 回で確認なしに閉じ、開いたボタンへ戻る。
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveAttribute("data-state", "closed");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(button).toBeFocused();
+    await expect(docling).toBeChecked();
+    if (SCREENSHOT_DIR) {
+      await page.locator('label[for="settings-parser-backend-dots_ocr"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-card-${viewport.name}.png` });
+    }
+  });
+
+  test(`Dots.OCR のパネルは未保存のまま閉じるときに確認する（#4740, ${viewport.name}）`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const patches = await mockParserAdaptersForConnectionSheet(page);
+    await mockFeaturePrompts(page);
+
+    await page.goto("/settings/parser-adapters");
+    await dotsSettingsButton(page).click();
+    const sheet = dotsSheet(page);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    const endpoint = sheet.getByLabel("Endpoint");
+    await endpoint.fill("https://edited.example.com/v1");
+    await expect(dotsSheetActions(page).getByText("未保存の変更があります。")).toBeVisible();
+
+    // × で確認し、取り消すと編集中のまま残る。
+    await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("変更を破棄しますか");
+    // 確認はパネルの上に出る。
+    const confirmButton = dialog.getByRole("button", { name: "破棄して閉じる" });
+    await expect(confirmButton).toBeVisible();
+    await expect(confirmButton).toBeInViewport();
+    expect(
+      await confirmButton.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return Boolean(top && node.contains(top));
+      })
+    ).toBe(true);
+    if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-unsaved-confirm-${viewport.name}.png` });
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    await expect(endpoint).toHaveValue("https://edited.example.com/v1");
+
+    // Escape でも確認する。破棄すると閉じ、開き直すと保存済みの値に戻る。
+    await endpoint.focus();
+    // 閉じるボタンの Tooltip が残っている間の Escape は Tooltip だけを閉じる（共有の Tooltip の仕様）。
+    // 名前と同じ文言の Tooltip は aria-hidden なので role ではなく属性で待つ。
+    await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    // Escape の keydown から開いた確認は、その keydown では閉じない（#4763）。次の Escape で取り消す。
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    await expect(endpoint).toBeFocused();
+    await page.keyboard.press("Escape");
+    await page.getByRole("alertdialog").getByRole("button", { name: "破棄して閉じる" }).click();
+    await expect(sheet).toHaveAttribute("data-state", "closed");
+    expect(patches).toEqual([]);
+    await dotsSettingsButton(page).click();
+    await expect(sheet.getByLabel("Endpoint")).toHaveValue("https://dots.example.com/v1");
+
+    // 読み取りプロンプトの未保存の編集でも確認する。
+    await sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" }).click();
+    await sheet.locator("#answer-prompt-external_ocr").fill("合成の編集中の指示");
+    // 375px のパネルは全画面で scrim に届かないので、× で閉じる。desktop は scrim で確かめる。
+    if (viewport.name === "desktop") await page.getByTestId("external-parser-connection-dots_ocr-scrim").click({ position: { x: 5, y: 5 }, force: true });
+    else await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("変更を破棄しますか");
+    await page.getByRole("alertdialog").getByRole("button", { name: "破棄して閉じる" }).click();
+    await expect(sheet).toHaveAttribute("data-state", "closed");
+    // 破棄した後は、画面を離れるときの確認も出ない。
+    await expect(page.getByRole("group", { name: "文書解析の設定の操作" }).getByText("未保存の変更があります。")).toHaveCount(0);
+    await dotsSettingsButton(page).click();
+    await sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" }).click();
+    await expect(sheet.locator("#answer-prompt-external_ocr")).toHaveValue("合成の既定指示");
+  });
+}
+
+test("Dots.OCR のパネルの保存は未保存のエンジンの選択を送らず、選択を残す（#4740）", async ({ page }) => {
+  const patches = await mockParserAdaptersForConnectionSheet(page);
+  await mockFeaturePrompts(page);
+
+  await page.goto("/settings/parser-adapters");
+  const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
+  await dots.check();
+  const pageActions = page.getByRole("group", { name: "文書解析の設定の操作" });
+  await expect(pageActions.getByText("未保存の変更があります。")).toBeVisible();
+
+  await dotsSettingsButton(page).click();
+  const sheet = dotsSheet(page);
+  await sheet.getByLabel("API key", { exact: true }).fill("synthetic-key");
+  await dotsSheetActions(page).getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+  expect(patches).toEqual([
+    {
+      connections: [
+        {
+          backend: "dots_ocr",
+          endpoint: "https://dots.example.com/v1",
+          model: "rednote-hilab/dots.mocr",
+          api_key: "synthetic-key",
+        },
+      ],
+    },
+  ]);
+  // 保存した後は欄を空に戻し、パネルは開いたまま（続けて接続を確認できる）。閉じても確認は出ない。
+  await expect(sheet.getByLabel("API key", { exact: true })).toHaveValue("");
+  await expect(sheet).toHaveAttribute("data-state", "open");
+  await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(sheet).toHaveAttribute("data-state", "closed");
+  // 画面のエンジンの選択（未保存）はそのまま残る。
+  await expect(dots).toBeChecked();
+  await expect(pageActions.getByText("未保存の変更があります。")).toBeVisible();
 });
 
 async function mockParserAdapters(
@@ -1369,7 +1593,8 @@ for (const viewport of [
     await page.route("**/api/settings/parser-adapters", async (route) => {
       if (route.request().method() === "PATCH") {
         patchCount += 1;
-        if (patchCount === 1) {
+        // 1 回目はエンジンの保存、3 回目はパネルの接続の保存を失敗させる。
+        if (patchCount === 1 || patchCount === 3) {
           await route.fulfill({
             status: 500,
             json: {
@@ -1400,16 +1625,13 @@ for (const viewport of [
 
     const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
     await dots.check();
-    const apiKey = page.locator("#external-parser-dots_ocr-api-key");
-    await apiKey.fill("new-secret");
     const actions = page.getByRole("group", { name: "文書解析の設定の操作" });
     const saveButton = actions.getByRole("button", { name: "保存", exact: true });
     await saveButton.click();
 
-    // 失敗は操作の行に出し、選んだエンジン・入力した API key・保存のボタンを残す。
+    // 失敗は操作の行に出し、選んだエンジン・保存のボタンを残す。
     await expect(actions).toContainText("設定を共有永続化ファイルへ保存できませんでした。");
     await expect(dots).toBeChecked();
-    await expect(apiKey).toHaveValue("new-secret");
     await expect(saveButton).toBeEnabled();
     await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeEnabled();
     await expectNoHorizontalOverflow(page);
@@ -1418,9 +1640,25 @@ for (const viewport of [
     await saveButton.click();
     await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
     await expect(dots).toBeChecked();
-    await expect(apiKey).toHaveValue("");
     await expect(saveButton).toBeDisabled();
     expect(patchCount).toBe(2);
+
+    // パネルの保存の失敗は、パネルの操作の行に出し、入力した API key を残す（#4740）。
+    await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
+    const sheet = page.getByTestId("external-parser-connection-dots_ocr");
+    const apiKey = sheet.locator("#external-parser-dots_ocr-api-key");
+    await apiKey.fill("new-secret");
+    const sheetActions = sheet.getByRole("group", { name: "Dots.OCR の接続設定の操作" });
+    const sheetSave = sheetActions.getByRole("button", { name: "保存", exact: true });
+    await sheetSave.click();
+    await expect(sheetActions).toContainText("設定を共有永続化ファイルへ保存できませんでした。");
+    await expect(apiKey).toHaveValue("new-secret");
+    await expect(sheetSave).toBeEnabled();
+
+    await sheetSave.click();
+    await expect(apiKey).toHaveValue("");
+    await expect(sheetSave).toBeDisabled();
+    expect(patchCount).toBe(4);
   });
 }
 
@@ -1430,6 +1668,7 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   await mockExtractionFields(page);
   const requests = await mockFeaturePrompts(page);
   await page.goto("/settings/parser-adapters");
+  await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
   const dotsCard = page.getByTestId("external-parser-connection-dots_ocr");
   const prompt = dotsCard.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" });
   await expect(prompt).toHaveCount(1);
@@ -1440,8 +1679,11 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   expect(position!.y - connection!.y - connection!.height).toBeGreaterThanOrEqual(minimumGap - 1);
   await expect(page.getByText("GPU 解析エンジンは外部 API を直接呼びます。", {exact: false})).toHaveCount(0);
 
+  // Dots.OCR のプロンプトはパネルの中で確かめてから閉じ、残りは画面の項目で確かめる（#4740）。
+  await verifyFeaturePrompt(page, "external_ocr", "Dots.OCR の読み取りプロンプト");
+  await dotsCard.getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(dotsCard).toHaveAttribute("data-state", "closed");
   for (const [key, title] of [
-    ["external_ocr", "Dots.OCR の読み取りプロンプト"],
     ["heading_levels", "見出しの階層の推定プロンプト"],
     ["field_extraction", "メタデータ/項目抽出プロンプト"],
     ["navigation_summary", "章節の要約プロンプト"],

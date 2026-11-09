@@ -113,16 +113,16 @@ class OutputRetryRecordTest(unittest.TestCase):
 
     def test_repeated_corruption_fails_with_existing_retry_limit(self):
         corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="説明\ufffd").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted, corrupted])
+        client = _Client([corrupted] * (1 + oci.LLM_CALL_MAX_RETRIES))
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertRaises(oci.InvalidStructuredOutput):
             oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
-        self.assertEqual(len(client.budgets), 2)
+        self.assertEqual(len(client.budgets), 1 + oci.LLM_CALL_MAX_RETRIES)
 
     def test_rejected_corruption_names_the_fields_but_not_the_text(self):
         # 退けた出力の原文は残らないので、どの欄に置換文字があったかを例外と log に残す（#3849）。本文は残さない。
         corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="合成の説明�").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted, corrupted])
+        client = _Client([corrupted] * (1 + oci.LLM_CALL_MAX_RETRIES))
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with (
             mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
@@ -133,7 +133,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertIn("欄: text", str(raised.exception))
         self.assertNotIn("合成の説明", str(raised.exception))
         rejected = [record for record in logs.records if getattr(record, "event", "") == "llm_output_rejected"]
-        self.assertEqual(len(rejected), 2)
+        self.assertEqual(len(rejected), 1 + oci.LLM_CALL_MAX_RETRIES)
         self.assertEqual(rejected[0].llm_rejected_paths, ["text"])
         self.assertEqual(rejected[0].llm_rejected_reason, "replacement_character")
         self.assertNotIn("合成の説明", rejected[0].getMessage())

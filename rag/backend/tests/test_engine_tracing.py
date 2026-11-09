@@ -218,7 +218,6 @@ def test_handled_engine_failure_is_not_marked_done(status: str) -> None:
 def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dataclasses import replace
     from types import SimpleNamespace
 
     from pr_backend_core.observability.model_purpose import model_call_purpose
@@ -276,7 +275,7 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         api_key="",
         model="synthetic-model",
     )
-    settings = replace(engine_settings(environ={}, dotenv_path=None), llm_retries=0)
+    settings = engine_settings(environ={}, dotenv_path=None)
     configure_tracing(TracingSettings(), service_name="synthetic")
     try:
         with (
@@ -303,6 +302,10 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         assert len(sent) == len(calls) == 2
         assert [span.status for span in calls] == ["failed", "done"]
         assert [span.attributes["pr.attempt"] for span in calls] == [1, 2]
+        # 同じ呼び出しの試行は同じ束ねの値を持ち、やり直す試行にだけ予定の印が付く（#4736）。
+        groups = {span.attributes["pr.call.retry_group"] for span in calls}
+        assert len(groups) == 1 and all(groups)
+        assert ["pr.retry.scheduled" in span.attributes for span in calls] == [True, False]
         assert [span.attributes["pr.gen_ai.purpose"] for span in calls] == [
             "evidence.read_batch",
             "evidence.repair_batch_range",

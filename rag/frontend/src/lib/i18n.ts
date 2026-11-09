@@ -237,7 +237,12 @@ export const ja = {
   "settings.parserAdapters.backend.xml_tree_json": "XML ツリー JSON",
   "settings.parserAdapters.backend.xml_tree_json.description":
     "XML の要素の木（tag / attr / children）を JSON にした文書を、要素の階層のまま解析。選んだ場合だけ使用",
-  "settings.parserAdapters.connection.title": "外部 GPU 解析エンジンの接続",
+  "settings.parserAdapters.connection.settings": "設定",
+  "settings.parserAdapters.connection.settingsLabel": "{backend} の設定",
+  "settings.parserAdapters.connection.actionsLabel": "{backend} の接続設定の操作",
+  "settings.parserAdapters.connection.discardDescription":
+    "保存されていない変更があります。閉じると編集内容は破棄されます。",
+  "settings.parserAdapters.connection.discardConfirm": "破棄して閉じる",
   "settings.parserAdapters.connection.description":
     "接続先とモデルを保存してから接続を確認します。API key は再表示されず、空欄のまま保存すると現在値を保持します。",
   "settings.parserAdapters.connection.endpoint": "Endpoint",

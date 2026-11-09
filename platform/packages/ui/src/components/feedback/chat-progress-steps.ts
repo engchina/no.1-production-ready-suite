@@ -47,6 +47,7 @@ function sameStep(a: ChatProgressStep, b: ChatProgressStep): boolean {
     a.id === b.id &&
     a.label === b.label &&
     a.status === b.status &&
+    a.retry === b.retry &&
     a.startedAt === b.startedAt &&
     a.finishedAt === b.finishedAt &&
     a.detail === b.detail &&
