@@ -16,6 +16,46 @@
 
 この文書や合成テストはデータ移行を実行しません。DBの表定義、認可、版/来歴のfail-closed、索引の版切替の規則は変更しません。
 
+## 不適合の現在版からの修復（#4697）
+
+現在版が契約に合わない環境では、画面とAPIの保存・公開・復元は例外で止まるため、新しい完全な版を発行できません。`app.rag.language_pack_repair_cli` は、現在版の内容を保ったまま現行の契約で**欠けている項目だけ**組み込みの値を足した新しい公開版を発行する、明示の復旧の経路です。互換の補完や自動の公開はせず、起動・API・`ensure_initialized` の動きは変えません。
+
+手順（`rag/backend` で実行します。ADBと認証は `system_schema_cli` と同じ設定を使います）。
+
+1. **dry-run（読み取りだけ）。** 引数なしで実行します。
+
+   ```bash
+   uv run python -m app.rag.language_pack_repair_cli
+   ```
+
+   JSONで次を出します（項目の名前だけで、値は出しません）。`status` が `ready` なら終了コードは 0、`blocked` なら 1 で、`blockers` に止めた理由が入ります。
+
+   | 項目 | 意味 |
+   |---|---|
+   | `current_release_id` / `current_version` / `draft_revision` | 現在版と下書きの状態（適用の期待値に使います） |
+   | `current_conforms` / `draft_conforms` | 現在版・下書きが現行の契約に合っているか |
+   | `draft_matches_current` | 下書きが現在版と同じ内容か。`false` のときは、適用で下書きの未公開の変更が新しい版の内容に置き換わります |
+   | `missing_fields` / `retired_fields` | 組み込みの値を足す項目 / 除く廃止の項目の名前 |
+   | `candidate_valid` / `ingest_hash_unchanged` | 候補が厳格な検証に通るか / 候補の `ingest_hash` が現在版と同じか |
+   | `active_ingestion_jobs` | QUEUED / RUNNING の取込 job の件数 |
+
+   止める条件（`blockers`）: `CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。
+
+2. **許可。** dry-runの結果を対象の環境の利用者へ示し、発行の明示の許可を得ます（上の門禁の 5）。
+3. **適用。** dry-runで確かめた値を指定します。値が違えば何も書き込まずに止まります。
+
+   ```bash
+   uv run python -m app.rag.language_pack_repair_cli --apply \
+     --expected-current-id <dry-run の current_release_id> \
+     --expected-draft-revision <dry-run の draft_revision>
+   ```
+
+   1 つの transaction の中で状態の行を lock し、同じ条件を確かめ直し、新しい公開版（`previous_id` は現在版）を追加して下書きと現在版のポインタを同時に切り替え、commit の前に厳格な検証で読み戻します。途中で失敗すれば全体を rollback します。旧版の内容と hash は書き換えません。
+
+4. **確認。** 対象の環境で、検索と回答が実際に動くことを確かめます。`ingest_hash` が同じなので文書の再処理は行わず、索引の関係は `EQUIVALENT` になります。
+
+発行の後も残る制約: 旧版は保存した内容のままなので、個別の取得・比較・復元は不適合のまま 409 です。旧版に固定された成果物は CHUNK / INDEX で再利用できず、再処理するときは「ファイル準備」か「抽出」から始めます。
+
 
 ## 公開履歴の一覧と内容の利用
 

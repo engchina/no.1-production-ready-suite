@@ -1,0 +1,248 @@
+"""現在版が保存契約に合わない環境で、欠けた項目だけを補った新しい公開版を発行する(#4697)。
+
+通常の保存・公開・復元は書き込みの前に現在版を厳格に検証するので、不適合の現在版からは新しい版を
+発行できない。この経路だけが現在版を厳格な検証なしに読み、完全な内容の新しい版を明示の操作で発行する。
+起動・API・読み取りの処理からは呼ばない(互換の補完や自動の公開にしない)。旧版の内容と hash は
+書き換えない。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+from rag_parser_core.language import FIELD_SPECS, LanguagePack, builtin_pack
+
+from app.clients import language_pack_release_store as release_store
+from app.rag.language_pack_contract import LanguagePackSnapshotError
+from app.rag.language_pack_retired_fields import without_retired_fields
+from app.schemas.language_pack_release import LanguagePackRelease
+
+if TYPE_CHECKING:
+    from app.clients.oracle import OracleClient, OracleConnectionProtocol
+
+INGESTION_JOBS_TABLE = "rag_ingestion_jobs"
+PUBLISHED_BY = "language-pack-repair-cli"
+
+CURRENT_ALREADY_CONFORMS = "CURRENT_ALREADY_CONFORMS"
+NO_FIELDS_TO_REPAIR = "NO_FIELDS_TO_REPAIR"
+CANDIDATE_INVALID = "CANDIDATE_INVALID"
+INGEST_HASH_CHANGED = "INGEST_HASH_CHANGED"
+ACTIVE_INGESTION_JOBS = "ACTIVE_INGESTION_JOBS"
+EXPECTED_CURRENT_MISMATCH = "EXPECTED_CURRENT_MISMATCH"
+EXPECTED_DRAFT_REVISION_MISMATCH = "EXPECTED_DRAFT_REVISION_MISMATCH"
+
+
+@dataclass(frozen=True)
+class LanguagePackRepairPlan:
+    """修復の判定の結果。項目の名前だけを持ち、言語資源の値は持たない。"""
+
+    current_release_id: str
+    current_version: int
+    draft_revision: int
+    current_conforms: bool
+    draft_conforms: bool
+    draft_matches_current: bool
+    missing_fields: list[str]
+    retired_fields: list[str]
+    candidate_valid: bool
+    ingest_hash_unchanged: bool
+    active_ingestion_jobs: int
+    blockers: list[str]
+
+
+@dataclass(frozen=True)
+class LanguagePackRepairResult:
+    previous_release_id: str
+    release_id: str
+    version: int
+    draft_revision: int
+    filled_fields: list[str]
+    removed_retired_fields: list[str]
+
+
+class LanguagePackRepairBlocked(ValueError):
+    """止める条件に当たった。transaction は書き込まずに rollback する。"""
+
+    def __init__(self, plan: LanguagePackRepairPlan) -> None:
+        super().__init__("言語資源の修復の条件を満たしません。")
+        self.plan = plan
+
+
+def _passes(check: Callable[[], object]) -> bool:
+    try:
+        check()
+    except (ValueError, TypeError, AttributeError):
+        # build_pack は節の形が dict でないと TypeError / AttributeError になる。
+        return False
+    return True
+
+
+def _candidate(effective: Any) -> tuple[LanguagePack | None, list[str], list[str]]:
+    """欠けた項目だけ組み込みの値を足し、(候補、足した項目、除いた廃止の項目) を返す。"""
+    if not isinstance(effective, Mapping) or not isinstance(effective.get("locale"), str):
+        return None, [], []
+    base = without_retired_fields(effective) or effective
+    if any(
+        not isinstance(fields, Mapping)
+        for section, fields in base.items()
+        if section not in ("locale", "version")
+    ):
+        return None, [], []
+    try:
+        builtin = builtin_pack(base["locale"]).to_dict()
+    except (OSError, ValueError):
+        return None, [], []
+    candidate: dict[str, Any] = {
+        section: dict(fields) if isinstance(fields, Mapping) else fields
+        for section, fields in base.items()
+    }
+    retired = sorted(
+        f"{section}.{key}"
+        for section, fields in effective.items()
+        if isinstance(fields, Mapping)
+        for key in fields
+        if key not in base[section]
+    )
+    missing: list[str] = []
+    for spec in FIELD_SPECS:
+        fields = candidate.setdefault(spec.section, {})
+        if spec.key not in fields:
+            fields[spec.key] = builtin[spec.section][spec.key]
+            missing.append(f"{spec.section}.{spec.key}")
+    try:
+        pack = release_store._validated(candidate)
+    except (ValueError, TypeError, AttributeError):
+        return None, sorted(missing), retired
+    return pack, sorted(missing), retired
+
+
+def _inspect(
+    connection: OracleConnectionProtocol, *, lock: bool
+) -> tuple[LanguagePackRepairPlan, LanguagePack | None]:
+    from app.clients.oracle import _fetch_one, _json_loads
+
+    # 不適合の現在版を読むための、ここだけの厳格な検証を通さない読み取り。
+    state_row = _fetch_one(
+        connection,
+        "SELECT draft_revision, draft_effective_json, current_release_id "
+        f"FROM {release_store.STATE_TABLE} WHERE singleton_id=1" + (" FOR UPDATE" if lock else ""),
+        {},
+    )
+    if state_row is None or not state_row.get("current_release_id"):
+        raise LanguagePackSnapshotError("言語資源の状態行または現在版ポインタがありません。")
+    release_row = _fetch_one(
+        connection,
+        f"SELECT * FROM {release_store.RELEASE_TABLE} WHERE release_id=:id",
+        {"id": state_row["current_release_id"]},
+    )
+    if release_row is None:
+        raise LanguagePackSnapshotError("言語資源の現在の公開版が見つかりません。")
+    effective = _json_loads(release_row["effective_json"])
+    draft = _json_loads(state_row["draft_effective_json"])
+    jobs_row = _fetch_one(
+        connection,
+        f"SELECT COUNT(*) total FROM {INGESTION_JOBS_TABLE} "
+        "WHERE UPPER(status) IN ('QUEUED', 'RUNNING')",
+        {},
+    )
+    active_jobs = int(str(jobs_row["total"])) if jobs_row else 0
+    current_conforms = _passes(lambda: release_store._release(release_row))
+    pack, missing, retired = _candidate(effective)
+    ingest_unchanged = pack is not None and pack.ingest_hash == release_row["ingest_hash"]
+
+    blockers: list[str] = []
+    if current_conforms:
+        blockers.append(CURRENT_ALREADY_CONFORMS)
+    elif not missing and not retired:
+        # 項目は揃っているのに不適合(hash の不一致など)。発行すると不正な保存物を正にしてしまう。
+        blockers.append(NO_FIELDS_TO_REPAIR)
+    if pack is None:
+        blockers.append(CANDIDATE_INVALID)
+    elif not ingest_unchanged:
+        blockers.append(INGEST_HASH_CHANGED)
+    if active_jobs:
+        blockers.append(ACTIVE_INGESTION_JOBS)
+    plan = LanguagePackRepairPlan(
+        current_release_id=str(release_row["release_id"]),
+        current_version=int(str(release_row["version"])),
+        draft_revision=int(str(state_row["draft_revision"])),
+        current_conforms=current_conforms,
+        draft_conforms=_passes(lambda: release_store._validated(draft)),
+        draft_matches_current=draft == effective,
+        missing_fields=missing,
+        retired_fields=retired,
+        candidate_valid=pack is not None,
+        ingest_hash_unchanged=ingest_unchanged,
+        active_ingestion_jobs=active_jobs,
+        blockers=blockers,
+    )
+    return plan, pack
+
+
+async def inspect_language_pack_repair(oracle: OracleClient) -> LanguagePackRepairPlan:
+    """読み取りだけで修復の候補を判定する(lock も書き込みもしない)。"""
+    return await oracle._run_transaction(lambda connection: _inspect(connection, lock=False)[0])
+
+
+async def apply_language_pack_repair(
+    oracle: OracleClient, *, expected_current_id: str, expected_draft_revision: int
+) -> LanguagePackRepairResult:
+    """dry-run で確かめた現在版と下書きの revision のままなら、新しい公開版へ切り替える。"""
+
+    def operation(connection: OracleConnectionProtocol) -> LanguagePackRepairResult:
+        from app.clients.oracle import _execute, _json_bind, _json_input_sizes
+
+        plan, pack = _inspect(connection, lock=True)
+        blockers = list(plan.blockers)
+        if plan.current_release_id != expected_current_id:
+            blockers.append(EXPECTED_CURRENT_MISMATCH)
+        if plan.draft_revision != expected_draft_revision:
+            blockers.append(EXPECTED_DRAFT_REVISION_MISMATCH)
+        if blockers or pack is None:
+            raise LanguagePackRepairBlocked(replace(plan, blockers=blockers))
+        release = LanguagePackRelease(
+            id=uuid4().hex,
+            version=plan.current_version + 1,
+            effective=pack.to_dict(),
+            hash=pack.hash,
+            ingest_hash=pack.ingest_hash,
+            published_at=datetime.now(UTC),
+            published_by=PUBLISHED_BY,
+            previous_id=plan.current_release_id,
+            change_note=(
+                f"保存契約の修復: 欠けていた {len(plan.missing_fields)} 項目に組み込みの値を追加、"
+                f"廃止した {len(plan.retired_fields)} 項目を除去"
+            ),
+        )
+        release_store._insert(connection, release)
+        _execute(
+            connection,
+            f"UPDATE {release_store.STATE_TABLE} SET current_release_id=:id, "
+            "draft_revision=draft_revision+1, draft_effective_json=:effective "
+            "WHERE singleton_id=1",
+            {"id": release.id, "effective": _json_bind(release.effective)},
+            input_sizes=_json_input_sizes("effective"),
+        )
+        # commit の前に厳格な検証で読み戻す。合わなければ例外で全体を rollback する。
+        state = release_store._state(connection)
+        if (
+            state.current.id != release.id
+            or state.current.effective != release.effective
+            or state.draft_effective != release.effective
+            or state.draft_revision != plan.draft_revision + 1
+        ):
+            raise LanguagePackSnapshotError("発行した言語資源の読み戻しの照合に失敗しました。")
+        return LanguagePackRepairResult(
+            previous_release_id=plan.current_release_id,
+            release_id=release.id,
+            version=release.version,
+            draft_revision=state.draft_revision,
+            filled_fields=plan.missing_fields,
+            removed_retired_fields=plan.retired_fields,
+        )
+
+    return await oracle._run_transaction(operation)

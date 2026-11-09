@@ -366,3 +366,40 @@ async def test_history_metadata_lists_unsupported_snapshot_without_executing_it(
     with pytest.raises(LanguagePackSnapshotError):
         await LanguagePackReleaseStore(oracle).get(str(old["release_id"]))
     assert all(call.statement.startswith("SELECT") for call in pool.connection.calls)
+
+
+def _nonconforming_state() -> tuple[dict[str, object], dict[str, object]]:
+    """契約の切替より前に公開された、現行の項目が欠けた現在版と同じ内容の下書き(#4697)。"""
+    row = release_row()
+    effective = deepcopy(row["effective_json"])
+    assert isinstance(effective, dict)
+    del effective["answer_labels"]["applications_section"]
+    del effective["grounding_cues"]["citation_unit_words"]
+    row["effective_json"] = effective
+    state = {
+        "draft_revision": 1,
+        "draft_effective_json": deepcopy(effective),
+        "current_release_id": row["release_id"],
+    }
+    return state, row
+
+
+@pytest.mark.parametrize("operation", ["save_draft", "publish", "restore"])
+async def test_nonconforming_current_keeps_save_and_publish_blocked(operation: str) -> None:
+    """通常の保存・公開・復元は不適合の現在版を拒否し続ける(復旧は別の明示の経路。#4697)。"""
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    state, row = _nonconforming_state()
+    pool = FakeOraclePool(execute_results=[[state], [row]])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    store = LanguagePackReleaseStore(oracle)
+    with pytest.raises(LanguagePackSnapshotError):
+        if operation == "save_draft":
+            await store.save_draft(builtin_pack().to_dict(), expected_revision=1)
+        elif operation == "publish":
+            await store.publish(expected_revision=1, expected_current_id="release-a")
+        else:
+            await store.restore("release-a", expected_revision=1, expected_current_id="release-a")
+    statements = [call.statement.upper() for call in pool.connection.calls]
+    assert all("INSERT" not in sql and "UPDATE RAG_" not in sql for sql in statements)
+    assert pool.connection.commits == 0
