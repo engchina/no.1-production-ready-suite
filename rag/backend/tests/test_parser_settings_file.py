@@ -163,6 +163,7 @@ def test_schema_cli_status_initialize_check_with_v4_shared_file(
     _write(Path(settings.model_settings_file), V4_SHARED_DOCUMENT)
     monkeypatch.setattr(OracleClient, "acquire_connection", lambda self: _FakeConnection())
     monkeypatch.setattr(system_schema_manager, "_status_on", _ready_status)
+    monkeypatch.setattr(system_schema_cli, "_language_pack_contract_problem", lambda: None)
 
     def initialize(**_kwargs: Any) -> dict[str, Any]:
         # 実際の初期化と同じく、接続（設定の読み込みを含む）を開いてから操作する。
