@@ -187,6 +187,9 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_support_guide",
         # 言語資源の差のファイルの置き場所。値は path で、内容の版ではない。
         "rag_language_pack_file",
+        # 形式別の既定（#4732）のファイルの置き場所。値は path で、内容は取込の設定（結果は
+        # chunk_set の id に残る）。
+        "rag_file_type_defaults_file",
     }
 )
 

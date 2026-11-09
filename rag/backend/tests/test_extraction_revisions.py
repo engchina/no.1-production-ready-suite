@@ -102,7 +102,12 @@ class _Oracle:
         }
 
     async def get_document_summary(self, document_id: str) -> SimpleNamespace:
-        return SimpleNamespace(id=document_id, content_sha256=_SHA)
+        return SimpleNamespace(
+            id=document_id,
+            content_sha256=_SHA,
+            file_name="synthetic.pdf",
+            content_type="application/pdf",
+        )
 
     async def list_document_recipe_extraction_revisions(
         self, recipe_id: str
