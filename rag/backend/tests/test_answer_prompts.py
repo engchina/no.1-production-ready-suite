@@ -33,7 +33,7 @@ from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 
 client = AsgiTestClient(app)
-CUSTOM_ANSWER = "独自の指示\n{{question}}\n{{answer_context}}"
+CUSTOM_ANSWER = "独自の指示\n{{question}}\n{{reading_rules}}\n{{answer_context}}"
 
 
 def test_validate_prompt_rejects_empty_missing_placeholder_and_unknown_key() -> None:
@@ -93,7 +93,7 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     answer = _prompt(initial, VLM_ANSWER_PROMPT_KEY)
     assert answer["customized"] is False
     assert answer["content"] == answer["default_content"] == default_prompt(VLM_ANSWER_PROMPT_KEY)
-    assert answer["required_placeholders"] == ["question", "answer_context"]
+    assert answer["required_placeholders"] == ["question", "reading_rules", "answer_context"]
     # 各段は取込から評価まで処理の順(一覧とコードの照合は test_answer_prompt_stages.py。#2054)。
     assert [(stage["id"], stage["phase"]) for stage in initial["stages"]] == [
         (stage.id, stage.phase) for stage in PROMPT_STAGES
@@ -294,7 +294,7 @@ async def test_answer_prompts_round_trip_on_real_oracle() -> None:
             connection.commit()
         after = await oracle.list_answer_prompts()
         assert after[VLM_ANSWER_PROMPT_KEY]["content"] == (
-            "独自の指示\n{{question}}\n{{answer_context}}\n{{evidence_metadata}}"
+            "独自の指示\n{{question}}\n{{reading_rules}}\n{{answer_context}}\n{{evidence_metadata}}"
         )
         assert (
             after[VLM_ANSWER_PROMPT_KEY]["updated_at"]
@@ -302,7 +302,7 @@ async def test_answer_prompts_round_trip_on_real_oracle() -> None:
         )
         assert after[IMAGE_RETRIEVAL_PROMPT_KEY] == before[IMAGE_RETRIEVAL_PROMPT_KEY]
         await oracle.save_answer_prompt(
-            VLM_ANSWER_PROMPT_KEY, "一回目 {{question}} {{answer_context}}"
+            VLM_ANSWER_PROMPT_KEY, "一回目 {{question}} {{reading_rules}} {{answer_context}}"
         )
         await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, CUSTOM_ANSWER)
         assert (await oracle.answer_prompt_overrides())[VLM_ANSWER_PROMPT_KEY] == CUSTOM_ANSWER

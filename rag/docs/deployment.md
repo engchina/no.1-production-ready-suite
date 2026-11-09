@@ -2109,6 +2109,14 @@ schema の更新で `20261021_001_answer_prompt_placeholders` を適用すると
 ファイルに保存する SDK の構成では、`prompts/vlm_answer.txt` をバックアップしてから同じ
 placeholder を置き換えます。旧名を実行時に展開する互換処理はありません。
 
+### 回答テンプレートの読み方の差し込み（#4712）
+
+`{{reading_rules}}` は回答テンプレートの必須の差し込み項目です。schema の更新で
+`20261109_4712_answer_prompt_reading_rules` を適用すると、保存済みの `vlm_answer` の
+`{{answer_context}}` の前に `{{reading_rules}}` が足されます。指示の本文は保持します。
+schema の更新と backend の更新を合わせて行ってください。ファイルに保存する SDK の構成では、
+`prompts/vlm_answer.txt` をバックアップしてから同じ位置に足します。実行時の互換処理はありません。
+
 組み込みの指示は Markdown の節・手順・条件で表示します。編集済みの独自の指示本文は
 自動で書き直しません。組み込みの新しい書式へ戻す場合は、内容を確認してから設定画面の
 「既定に戻す」を使います。外部根拠を囲む `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` /

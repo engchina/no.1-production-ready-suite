@@ -342,9 +342,9 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         ("picture_description", "table"): 6,
         ("picture_description", "contract"): 7,
         ("generation", "assumptionSystem"): 6,
-        # 回答生成の user の入力（既定は Step 5 まで）の後ろに足す作り直しの部品（#4586）。
-        ("generation", "sourceOnlyDerivation"): 6,
-        ("generation", "headerOnlySource"): 6,
+        # 回答生成の user の入力（既定は Step 6 まで）の後ろに足す作り直しの部品（#4586）。
+        ("generation", "sourceOnlyDerivation"): 7,
+        ("generation", "headerOnlySource"): 7,
     }
     for stage in readonly_prompt_stages():
         parts = stage["prompts"]

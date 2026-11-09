@@ -865,6 +865,13 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261109_4712_answer_prompt_reading_rules",
+            table_name="rag_answer_prompts",
+            sql=answer_prompt_reading_rules_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -1932,6 +1939,16 @@ SET CONTENT = REPLACE(REPLACE(CONTENT,
     '{{images}}', '{{answer_context}}'),
     '{{image_metadata}}', '{{evidence_metadata}}')
 WHERE PROMPT_KEY = 'vlm_answer'
+""".strip()
+
+
+def answer_prompt_reading_rules_migration_sql() -> str:
+    """保存済みの回答テンプレートの本文を保ち、読み方の placeholder を根拠の前に足す。"""
+    return """
+UPDATE RAG_ANSWER_PROMPTS
+SET CONTENT = REPLACE(CONTENT,
+    '{{answer_context}}', '{{reading_rules}}' || CHR(10) || CHR(10) || '{{answer_context}}')
+WHERE PROMPT_KEY = 'vlm_answer' AND INSTR(CONTENT, '{{reading_rules}}') = 0
 """.strip()
 
 

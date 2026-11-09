@@ -46,8 +46,19 @@ _OWNER = {
 def _executed(key: str) -> str:
     """実行の経路でモデルへ渡す部分を組み立てる（該当する入力があるときの内容）。"""
     if key == _EVIDENCE:
-        tagged = [{"tags": ["completion"]}]
-        return grounded._evidence_reading(tagged, "", attached_images=False)
+        tagged = [
+            {
+                "evidence_id": "id-1",
+                "label": "E1",
+                "source_id": "p1",
+                "source": "synthetic.pdf",
+                "text": "合成の原文。",
+                "function": ("synthetic.pdf", "合成の説明"),
+                "tags": ["completion"],
+                "pinned": False,
+            }
+        ]
+        return grounded.evidence_reading_rules(tagged, attached_images=False)
     if key == _GUIDE:
         return grounded.guide_rules_context(scope=True, notices=True)
     metadata: dict[str, Any] = (
