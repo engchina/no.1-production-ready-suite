@@ -1186,14 +1186,6 @@ def _fuzzy_contains(needle: str, haystack: str, ratio: float = _ERROR_MATCH_RATI
     return False
 
 
-def mentions_error(text: str, asked: Sequence[str]) -> bool:
-    """text が質問のいずれかのエラー文に 8 割以上似た連続範囲で触れているか。
-
-    CRAG 評価器の決定的検査（#999）が使う公開関数。
-    """
-    return any(_fuzzy_contains(e, text) for e in asked)
-
-
 def _context_request_ids(question: str) -> set[str]:
     """経緯・背景の要求単位の id。答えたり未回答にしたりしない (#650)。"""
     return {unit["id"] for unit in answer_requirements(question) if unit.get("kind") == "context"}
@@ -2578,6 +2570,18 @@ def evidence_reading_rules(spans: Sequence[dict[str, Any]], *, attached_images: 
     if any(has_table_structure(str(span.get("text") or "")) for span in spans):
         keys.add("表の値")
     return _reading_block(resolve_prompt("generation.evidenceReading", EVIDENCE_READING_PROMPT), keys)
+
+
+def evidence_subset_reading_rule(shown: int, candidates: int) -> str:
+    """渡した根拠が検索の候補の一部のときだけ渡す読み方。数はコードが数えた値で、語で質問を判定しない。"""
+    if shown <= 0 or candidates <= shown:
+        return ""
+    return (
+        "### 根拠の範囲\n"
+        f"- 根拠は検索の候補 {candidates} 件のうち上位 {shown} 件だけである。"
+        "質問が件数や全件の一覧を求めるなら、回答の要点にこの範囲であることを書き、根拠の件数を全体の件数として扱わない。"
+        "それ以外の質問では、このことの注記を足さずに答える。\n"
+    )
 
 
 def guide_rules_context(*, scope: bool, notices: bool) -> str:

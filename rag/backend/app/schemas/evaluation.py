@@ -823,7 +823,6 @@ class EvaluationRagOverrides(BaseModel):
     crag_compact_input: bool | None = None
     # CRAG の評価の候補の短い ID(#1864)。
     crag_short_candidate_ids: bool | None = None
-    section_skip_regrade_at_scope: bool | None = None
     query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 

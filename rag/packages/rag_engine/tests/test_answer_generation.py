@@ -892,12 +892,20 @@ class AnswerGenerationTests(unittest.TestCase):
             self.assertEqual(prompt.count(question), 1)
             for key in ("user_assertions", "request_units", "required_aspects", "original_question", "hypotheses"):
                 self.assertNotIn(f'"{key}"', prompt)
-            self.assertNotIn('"goal"', prompt)
-            self.assertIn('"business_objects": ["地区別売上集計表"]', prompt)
-            self.assertIn('"output_formats": ["csv"]', prompt)
-        history = _build_query_routing_prompt("以前は帳票を出力できましたが、今回は出力ボタンが押せません。原因を教えてください。")
-        self.assertIn('"historical_context"', history)
-        self.assertIn('"current_request"', history)
+            self.assertNotIn("task_contract", prompt)
+            self.assertNotIn("{{", prompt)
+
+    def test_saved_prompt_with_retired_contract_placeholder_is_not_passed_literally(self):
+        # 保存済みの上書きに残った差し込みは、値を空にして文字のまま LLM へ届かないようにする（#4668）。
+        from rag_engine.generation import query_prompts
+
+        saved = "原質問:\n{{question}}\n目的・条件:\n{{task_contract}}\nJSON だけを返す。"
+        with patch.object(query_prompts, "resolve_prompt", return_value=saved):
+            routing = query_prompts._build_query_routing_prompt("帳票の出力方法")
+            expansion = query_prompts._build_query_expansion_prompt("帳票の出力方法", RAG_FUSION_STRATEGY)
+        for prompt in (routing, expansion):
+            self.assertNotIn("{{task_contract}}", prompt)
+            self.assertIn("目的・条件:\n{}\n", prompt)
 
     def test_routing_falls_back_to_expansion_call_when_all_routed_queries_are_rejected(self):
         # ルーティングの検索文が全て不採用なら、応答に検索文がない場合と同じく拡張呼出で補う (#923)。

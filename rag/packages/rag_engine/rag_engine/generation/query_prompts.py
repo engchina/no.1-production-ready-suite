@@ -33,7 +33,6 @@ from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.models.llm import query_routing_schema
 from rag_engine.resources.runtime import resolve_prompt
-from rag_engine.retrieval.task_contract import task_contract
 
 MAX_GENERATED_QUERY_COUNT = 5
 
@@ -91,40 +90,6 @@ def _query_expansion_details(expansion: QueryExpansionResult) -> list[str]:
     if expansion.vector_only_queries:
         details.append("      仮説文は創作した語を含むため、意味検索（vector）だけに使い、全文検索（Oracle Text）には使いません。")
     return details
-
-
-# 検索文生成のプロンプトへ渡す契約の項目。原質問の写し（original_question / current_request / request_units /
-# user_assertions）はプロンプトの「原質問」と重複し、required_aspects は回答生成・監査用なので渡さない (#917)。
-_PROMPT_CONTRACT_KEYS = (
-    "asks_cause",
-    "requested_actions",
-    "action_targets",
-    "business_objects",
-    "error_messages",
-    "output_formats",
-    "changed_fields",
-    "explicit_conditions",
-    "hypotheses",
-    "requester_mentions",
-    "missing_choice",
-)
-
-
-def _prompt_task_contract(question: str) -> str:
-    """検索文生成に必要な契約項目だけを JSON にします。空の項目は省き、定義項目はラベルだけにします。
-
-    「以前…が、今回…」のように経緯と今回の要求が分かれる質問では、どちらが今回の要求かを示す
-    historical_context / current_request も渡します。
-    """
-    contract = task_contract(question)
-    selected = {key: contract[key] for key in _PROMPT_CONTRACT_KEYS if contract.get(key)}
-    labels = [target["label"] for target in contract["definition_targets"]]
-    if labels:
-        selected["definition_targets"] = labels
-    if contract["historical_context"]:
-        selected["historical_context"] = contract["historical_context"]
-        selected["current_request"] = contract["current_request"]
-    return json.dumps(selected, ensure_ascii=False)
 
 
 _EXPANSION_INSTRUCTIONS = {
@@ -191,12 +156,9 @@ _ROUTING_STRATEGIES = [
 _ROUTING_GUIDANCE = "戦略は選択肢の use_when で判断し、実データ確認とは独立に決める。エラーコードや完全なメッセージが1つだけなら単純検索、エラー文・対象・論点が2つ以上あれば質問分解。質問が明確・具体的というだけでは単純検索を選ばず、主要な語が文書の正式な用語と一致しているかで判断し、迷ったら RAG フュージョンを選ぶ。"
 
 QUERY_ROUTING_PROMPT_TEMPLATE = (
-    """## Step 1: 原質問と保持する条件を読む
+    """## Step 1: 原質問を読む
 原質問:
 {{question}}
-
-変更してはいけない目的・条件:
-{{task_contract}}
 
 ## Step 2: 戦略を選び検索文を作る
 次の問い合わせに対して、検索前処理として最適な戦略を1つだけ選んでください。strategy には選んだ選択肢の strategy の値（ID）をそのまま返し、label は返さない。
@@ -227,9 +189,8 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
 
 QUERY_EXPANSION_PROMPT_TEMPLATE = (
     (
-        "## Step 1: 原質問と保持する条件を読む\n"
+        "## Step 1: 原質問を読む\n"
         "原質問:\n{{question}}\n\n"
-        "変更してはいけない目的・条件:\n{{task_contract}}\n\n"
         "## Step 2: 指定した戦略で検索文を作る\n"
         "戦略「{{strategy_label}}」の指示に従い、検索に使う"
         "追加質問または検索文を作ってください。一覧にない戦略の場合は、検索に"
@@ -250,6 +211,10 @@ QUERY_EXPANSION_PROMPT_TEMPLATE = (
 )
 
 
+# 既定の Prompt には無くなった差し込み。保存済みの上書きに残っていても文字のまま LLM に届かないよう空の値を渡す。
+_RETIRED_CONTRACT_VALUE = "{}"
+
+
 def _build_query_routing_prompt(question: str, allowed_strategies: tuple[str, ...] | None = None) -> str:
     """検索方法と実データ依存を混同しない二軸のルーティング指示を作成します。"""
     schema = query_routing_schema(allowed_strategies)
@@ -259,7 +224,7 @@ def _build_query_routing_prompt(question: str, allowed_strategies: tuple[str, ..
         resolve_prompt("routing.template", QUERY_ROUTING_PROMPT_TEMPLATE),
         {
             "question": question.strip(),
-            "task_contract": _prompt_task_contract(question),
+            "task_contract": _RETIRED_CONTRACT_VALUE,
             "routing_strategies": json.dumps(
                 [entry for entry in _ROUTING_STRATEGIES if entry["strategy"] in available], ensure_ascii=False, indent=2
             ),
@@ -280,7 +245,7 @@ def _build_query_expansion_prompt(question: str, strategy: str) -> str:
         {
             "strategy_label": query_strategy_label(strategy),
             "question": question.strip(),
-            "task_contract": _prompt_task_contract(question),
+            "task_contract": _RETIRED_CONTRACT_VALUE,
         },
     )
 

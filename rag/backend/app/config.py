@@ -1819,14 +1819,6 @@ class Settings(
             "手順の根拠から広げる章節の分を残す。"
         ),
     )
-    rag_section_skip_regrade_at_scope: bool = Field(
-        default=True,
-        description=(
-            "(既定 ON。#1528 の A/B で列挙の問が 484 → 293 秒、品質は同じ)"
-            "読む範囲が文書全体の列挙の問(#1503)で、章節の拡張が文書全体まで読んだら、"
-            "CRAG の評価し直しを省いて生成へ進む(#1528)。"
-        ),
-    )
     rag_query_expansion_max_queries: int = Field(
         default=5,
         ge=1,

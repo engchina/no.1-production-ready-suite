@@ -61,7 +61,7 @@ def test_crag_score_penalizes_wrong_answers_more_than_missing_answers():
     def case(case_id, answer):
         return CragEvalCase(case_id, "質問", (), ("赤枠", "実行"), {"crag": CragEvalVariantResult(answer=answer)})
 
-    cases = (case("perfect", "赤枠の実行ボタンを押します。"), case("missing", "わかりません。"), case("wrong", "青枠を押します。"))
+    cases = (case("perfect", "赤枠の実行ボタンを押します。"), case("missing", ""), case("wrong", "青枠を押します。"))
 
     metrics = evaluate_crag_goldset(cases)["variants"]["crag"]
 

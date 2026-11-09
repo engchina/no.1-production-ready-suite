@@ -20,9 +20,6 @@ CRAG_EVAL_VARIANTS = ("standard_rag", "crag", "crag_rerank")
 CragJudgement = Literal["Perfect", "Acceptable", "Missing", "Incorrect"]
 CRAG_JUDGEMENT_SCORES: dict[str, float] = {"Perfect": 1.0, "Acceptable": 0.5, "Missing": 0.0, "Incorrect": -1.0}
 
-# 回答不能の表明とみなす語句。決定的判定で Missing（0 点）と Incorrect（−1 点）を分ける。
-_MISSING_MARKERS = ("わかりません", "分かりません", "見つかりません", "見つけられません", "確認できません")
-
 CRAG_JUDGE_SYSTEM_PROMPT = """\
 与えられた問題のground_truthとanswerを比較してその結果を"Perfect", "Acceptable", "Missing", "Incorrect"の中から一つだけ選んで答えてください. それぞれの定義と規則は以下の通り.
 # 定義
@@ -93,14 +90,12 @@ def load_crag_goldset(path: str | Path) -> tuple[CragEvalCase, ...]:
 def judge_by_terms(case: CragEvalCase, answer: str) -> str:
     """LLM を呼ばずに 4 段階判定を返す、オフライン回帰検査用の既定の判定です。
 
-    期待語句がすべて含まれれば Perfect、空または回答不能の表明は Missing、それ以外は Incorrect。
-    回答不能が正解のケースは期待語句にその表明を持つため、先に Perfect と判定されます。
+    期待語句がすべて含まれれば Perfect、空は Missing、それ以外は Incorrect。
     """
     # ponytail: 語句一致では軽微な誤りを測れないため Acceptable は返さない。必要なら llm_crag_judge を使う。
     if _answer_correct(case.expected_answer_terms, answer):
         return "Perfect"
-    comparable = _key(answer)
-    if not comparable or any(_key(marker) in comparable for marker in _MISSING_MARKERS):
+    if not _key(answer):
         return "Missing"
     return "Incorrect"
 

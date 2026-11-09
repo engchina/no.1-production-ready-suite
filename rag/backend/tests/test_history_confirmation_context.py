@@ -353,7 +353,11 @@ async def test_recognized_rule_scope_preserves_history_facts_and_language_scope(
     from app.schemas.search import SearchRequest, SearchResponse
 
     settings = Settings().model_copy(
-        update={"rag_language_pack_overrides": {"question_cues": {"cause_cues": ["理屈"]}}}
+        update={
+            "rag_language_pack_overrides": {
+                "question_cues": {"subquestion_reference_followers": ["理屈"]}
+            }
+        }
     )
     pipeline = RagPipeline(
         settings=settings,
@@ -366,11 +370,11 @@ async def test_recognized_rule_scope_preserves_history_facts_and_language_scope(
         assert _self._scope.confirmed_premises == (("対象は？", "合成 A"),)
         assert _self._scope.context == "履歴の条件\n確認ルールの条件"
         assert _self._scope.search_terms == ("合成",)
-        assert current_pack().words("question_cues", "cause_cues") == ("理屈",)
+        assert current_pack().words("question_cues", "subquestion_reference_followers") == ("理屈",)
         return SearchResponse(
             query=request.query, answer="合成回答", citations=[], trace_id="trace-a", elapsed_ms=0
         )
 
     monkeypatch.setattr(RagPipeline, "_run", run)
     await pipeline.run(request)
-    assert current_pack().words("question_cues", "cause_cues") != ("理屈",)
+    assert current_pack().words("question_cues", "subquestion_reference_followers") != ("理屈",)

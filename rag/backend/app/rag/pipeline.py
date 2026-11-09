@@ -70,7 +70,7 @@ from app.rag.observability import (
     record_rag_stage,
     record_trace_span,
 )
-from app.rag.question_understanding import profile_language_scope
+from app.rag.profile_language import profile_language_scope
 from app.rag.run_history import RunRecorder
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,

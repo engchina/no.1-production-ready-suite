@@ -5025,19 +5025,6 @@ class OracleClient:
             update_fields=update_fields,
         )
 
-    async def update_question_understanding(
-        self, search_answer_profile_id: str, overrides: dict[str, dict[str, object]]
-    ) -> SearchAnswerProfileDetail:
-        """行をロックして質問理解の項目だけを置換し、他の設定を保持する。"""
-        return await self._update_search_answer_profile_with_oracle(
-            search_answer_profile_id=search_answer_profile_id,
-            name=None,
-            description=None,
-            config=None,
-            update_fields={"config"},
-            language_pack_patch=overrides,
-        )
-
     async def archive_search_answer_profile(
         self, search_answer_profile_id: str
     ) -> SearchAnswerProfileDetail:
@@ -9487,7 +9474,6 @@ class OracleClient:
         description: str | None,
         config: SearchAnswerProfileConfig | None,
         update_fields: set[str] | None,
-        language_pack_patch: dict[str, dict[str, object]] | None = None,
     ) -> SearchAnswerProfileDetail:
         """Oracle search answer profile table を更新する。"""
         fields = update_fields or {
@@ -9519,28 +9505,6 @@ class OracleClient:
             if existing is None:
                 raise KeyError(
                     f"search_answer_profile_id={search_answer_profile_id} は存在しません。"
-                )
-            if language_pack_patch is None and config is not None:
-                from app.rag.question_understanding import question_understanding_overrides
-
-                current_config = _to_search_answer_profile_detail(existing).config
-                if question_understanding_overrides(
-                    config.language_pack
-                ) != question_understanding_overrides(current_config.language_pack):
-                    raise ValueError(
-                        "質問の理解の設定が変わりました。最新情報を取得して、専用のタブから保存してください。"
-                    )
-            if language_pack_patch is not None:
-                from app.rag.question_understanding import replace_question_understanding
-
-                current_config = _to_search_answer_profile_detail(existing).config
-                requested_config = SearchAnswerProfileConfig.model_validate(
-                    {
-                        **current_config.model_dump(),
-                        "language_pack": replace_question_understanding(
-                            current_config.language_pack, language_pack_patch
-                        ),
-                    }
                 )
             if existing.status != SearchAnswerProfileStatus.ACTIVE:
                 # アーカイブ済みは編集・保存しない（画面の読み取り専用と同じ。#961）。

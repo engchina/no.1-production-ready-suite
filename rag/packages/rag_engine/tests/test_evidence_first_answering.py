@@ -93,7 +93,7 @@ def test_crag_prompt_limits_insufficiency_and_carries_no_output_example():
     assert order.index("candidate_verdicts") < order.index("aspect_checks") < order.index("reason") < order.index("sufficient")
 
 
-def test_crag_grade_preserves_error_candidates_when_the_relation_is_unverified():
+def test_crag_grade_keeps_the_verdict_when_the_model_reports_no_error_relation():
     """エラー文字列の未認識だけでは不適合にしない。旧schemaの判定も未知として保持する。"""
     from rag_engine.generation.answering import _grade_crag_retrieval
     from rag_engine.models.llm import CragRetrievalGradeOutput
@@ -111,9 +111,10 @@ def test_crag_grade_preserves_error_candidates_when_the_relation_is_unverified()
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[candidate], text=text), object())
-    assert result.candidate_verdicts[0]["relation"] == "unknown"
-    assert result.rejected_chunk_ids == () and not result.generation_usable
-    assert result.required_aspect_coverage == "unknown"
+    # エラーの質問か否かを語で見分けないので、モデルが対応を返さなければ判定を変えない。
+    assert result.candidate_verdicts[0]["relation"] == "relevant"
+    assert result.candidate_verdicts[0]["error_relation"] == "not_applicable"
+    assert result.rejected_chunk_ids == ()
 
 
 def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
@@ -129,7 +130,7 @@ def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
     grade = CragRetrievalGradeOutput(
         candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="同じ機能"), dict(chunk_uid="b", relevant=False, reason="別機能")],
         aspect_checks=checks,
-        answerable_parts=[dict(aspect="procedure", kind="operation", claim=a.text, evidence=[dict(source_id="a", quote=a.text)])],
+        answerable_parts=[dict(aspect="requested_result", kind="operation", claim=a.text, evidence=[dict(source_id="a", quote=a.text)])],
         reason="関連",
         sufficient=True,
         confidence=0.9,

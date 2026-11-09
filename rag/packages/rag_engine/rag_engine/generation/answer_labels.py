@@ -35,7 +35,6 @@ class AnswerLabels:
     crag_missing_aspect_template: str
     crag_unknown_aspect_template: str
     crag_quote_only_note: str
-    crag_definition_aspect_template: str
     operation_steps_heading: str
     confirmation_steps_heading: str
     page_location: str
@@ -52,7 +51,7 @@ class AnswerLabels:
     guide_approval_template: str
     guide_acquisition_incomplete_template: str
     # 用言の終わり（「有効期限を過ぎた」）。条件がこれで終わるときは「の」を挟まない (#644)。
-    # 観点名（task_contract.required_aspects）→ 利用者向けの語 (#986)。
+    # 観点名 → 利用者向けの語 (#986)。
     aspect_labels: dict[str, str]
     # render() が決定的に出力する見出し行と出典行、「参考情報」の節の原文の行と節の箇条の行。
     structural_line: re.Pattern[str]
@@ -135,7 +134,6 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         crag_missing_aspect_template=text("crag_missing_aspect_template"),
         crag_unknown_aspect_template=text("crag_unknown_aspect_template"),
         crag_quote_only_note=text("crag_quote_only_note"),
-        crag_definition_aspect_template=text("crag_definition_aspect_template"),
         operation_steps_heading=text("operation_steps_heading"),
         confirmation_steps_heading=text("confirmation_steps_heading"),
         page_location=text("page_location"),

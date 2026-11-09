@@ -400,8 +400,6 @@ class Settings:
     # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
     # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
     llm_runaway_detection: bool = False
-    # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
-    section_skip_regrade_at_scope: bool = False
     # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
     query_expansion_max_queries: int = 5
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
@@ -646,7 +644,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
         llm_stall_resends=max(0, min(2, _env_int(env, "RAG_ENGINE_LLM_STALL_RESENDS", 1))),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
-        section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
         query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",

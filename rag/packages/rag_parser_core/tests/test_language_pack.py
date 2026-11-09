@@ -333,11 +333,10 @@ _CRAG_COMPAT_KEYS = (
     "crag_missing_aspect_template",
     "crag_unknown_aspect_template",
     "crag_quote_only_note",
-    "crag_definition_aspect_template",
 )
 
 
-@pytest.mark.parametrize("mask", range(32))
+@pytest.mark.parametrize("mask", range(1 << len(_CRAG_COMPAT_KEYS)))
 def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
     raw = builtin_pack().to_dict()
     raw["answer_labels"]["gaps_section"] = "合成の独自文言"

@@ -464,7 +464,7 @@ test("導出結論の見出しと根拠不足の定型文はラベルと説明�
 
 
 test("旧草稿の追加表示文言は補完して試せるが公開版を書き換えない（#3932）", { tag: "@responsive" }, async ({ page }) => {
-  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "crag_refusal_summary", "crag_missing_aspect_template", "crag_unknown_aspect_template", "crag_quote_only_note", "crag_definition_aspect_template", "guide_acquisition_incomplete_template"];
+  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "crag_refusal_summary", "crag_missing_aspect_template", "crag_unknown_aspect_template", "crag_quote_only_note", "guide_acquisition_incomplete_template"];
   const labels = Object.fromEntries(keys.map(key => [key, "合成の表示文言"]));
   const builtin = { ...BUILTIN, answer_labels: { ...labels, cause_gap: "合成の保存済み文言" } };
   const published = { ...BUILTIN, answer_labels: { cause_gap: "合成の保存済み文言" } };
