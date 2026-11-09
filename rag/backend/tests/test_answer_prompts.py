@@ -23,6 +23,7 @@ from app.rag.answer_prompts import (
     PROMPT_STAGES,
     default_prompt,
     prompt_overrides,
+    required_placeholders,
     validate_prompt,
 )
 from app.schemas.search import SearchRequest
@@ -34,6 +35,12 @@ from tests.test_answer_engine import FakeGenAi, FakeOracle
 
 client = AsgiTestClient(app)
 CUSTOM_ANSWER = "独自の指示\n{{question}}\n{{reading_rules}}\n{{answer_context}}"
+
+
+def test_saved_generation_prompt_does_not_need_the_language_placeholder() -> None:
+    """既定の言語の差し込みは任意。無い指示も保存でき、差し込まれないだけ（#4755）。"""
+    assert "language" not in required_placeholders("generation.system")
+    validate_prompt("generation.system", "## Step 1: 合成の回答\n合成の内容を返す。")
 
 
 def test_validate_prompt_rejects_empty_missing_placeholder_and_unknown_key() -> None:
