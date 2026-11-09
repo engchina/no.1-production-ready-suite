@@ -29,7 +29,7 @@ export function RunStepSummary({step, size, statusLabel, bar, showBars = true, s
     {step.product ? <RunTimelineProduct product={step.product} /> : null}
   </span>;
   return <span className="@container grid min-w-0 gap-1" data-run-step-summary="">
-    <span className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3", showBars && "@xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_7rem] @xl:items-center")}>
+    <span className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3", showBars && "@xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_9rem] @xl:items-center")}>
       <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))} style={runTimelineStepIndentStyle(step.level)} data-run-step-name="">
         <span className="pr-icon-line"><RunStepStatusIcon status={step.status} retry={step.retry} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={spin} /></span>
         {renderName ? renderName(name) : name}
