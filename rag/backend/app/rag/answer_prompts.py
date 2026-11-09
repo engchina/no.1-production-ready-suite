@@ -42,11 +42,15 @@ def default_prompt(key: str) -> str:
     return PROMPT_FILES[key].default_content or ""
 
 
+# 欠けても LLM への入力が落ちない差し込み（回答の既定の言語）。
+# 保存した指示に無ければ差し込まれないだけなので、必須にしない。
+_OPTIONAL_PLACEHOLDERS = frozenset({"language"})
+
+
 def required_placeholders(key: str) -> tuple[str, ...]:
     if key in STAGE_PROMPT_REFS:
-        return tuple(
-            dict.fromkeys(re.findall(r"{{([A-Za-z_][A-Za-z_0-9]*)}}", default_prompt(key)))
-        )
+        names = re.findall(r"{{([A-Za-z_][A-Za-z_0-9]*)}}", default_prompt(key))
+        return tuple(dict.fromkeys(name for name in names if name not in _OPTIONAL_PLACEHOLDERS))
     return () if key in INGESTION_PROMPT_REFS else PROMPT_FILES[key].required_placeholders
 
 
