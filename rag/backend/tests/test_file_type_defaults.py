@@ -561,7 +561,7 @@ EXPECTED_BUILTIN = {
     "markdown": ("passthrough", "unstructured", "structure_aware"),
     "json": ("passthrough", "unstructured", "small_to_big"),
     "html": ("passthrough", "unstructured", "structure_aware"),
-    "image": ("passthrough", "unstructured", "page_level"),
+    "image": ("passthrough", "docling", "page_level"),
 }
 
 

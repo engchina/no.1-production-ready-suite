@@ -166,7 +166,7 @@ BUILTIN_FILE_TYPE_DEFAULTS: dict[FileType, FileTypeDefaultEntry] = {
     ),
     "image": FileTypeDefaultEntry(
         preprocess_profile="passthrough",
-        parser_adapter_backend="unstructured",
+        parser_adapter_backend="docling",
         chunking_strategy="page_level",
     ),
 }
