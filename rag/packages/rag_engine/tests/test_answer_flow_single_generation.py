@@ -168,7 +168,6 @@ def test_a_citation_that_does_not_exist_disappears_without_a_mark() -> None:
         "text": ROW,
         "function": ("synthetic.md", "合成"),
         "tags": [],
-        "pinned": False,
     }
     checked, dropped = grounded.verify("項目Aは？", draft, [span])
     assert checked == []

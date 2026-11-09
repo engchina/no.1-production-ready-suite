@@ -30,7 +30,7 @@ _GUIDE = "generation.guideRules"
 _IMAGE = "picture_description.contextImage"
 _RECORDS = "picture_description.contextRecords"
 _SAVED = {
-    _EVIDENCE: "### 合成の根拠の読み方\n- completion: 合成の完了の読み方。",
+    _EVIDENCE: "### 合成の根拠の読み方\n- image_generated: 合成の読み方。",
     _GUIDE: "### 合成のガイドの扱い\n- 業務ガイド: 合成のガイドの扱い。",
     _IMAGE: "### 合成の周辺の画像の案内\n枠を確認する。",
     _RECORDS: "### 合成の周辺の記録の案内\n前後の記録を確認する。",
@@ -54,8 +54,7 @@ def _executed(key: str) -> str:
                 "source": "synthetic.pdf",
                 "text": "合成の原文。",
                 "function": ("synthetic.pdf", "合成の説明"),
-                "tags": ["completion"],
-                "pinned": False,
+                "tags": ["image_generated"],
             }
         ]
         return grounded.evidence_reading_rules(tagged, attached_images=False)

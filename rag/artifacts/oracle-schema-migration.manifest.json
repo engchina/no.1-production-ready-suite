@@ -736,10 +736,17 @@
       "sha256": "d00c62c84e0443fe9f3ea37eec1c72197079df40399764e63dcd6baec825ff2d",
       "statement_count": 1,
       "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4668_language_pack_retired_evidence_tags",
+      "sha256": "70a51de9751b2ebbce12e6d29891c7c9d0b14b7ce907fd3fe9bf07bab8a106aa",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "ee5d6f604408ad47b21391a308c5b706046f29abf0ad40681293f876e69ef454",
-  "statement_count": 161
+  "sha256": "9e14c30a67b5bcea67e32992252f7361e7aa7e3f5202d2585f2fadc6afff3d08",
+  "statement_count": 162
 }

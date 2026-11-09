@@ -1,7 +1,6 @@
 """明細確認の要求と、同じ機能の選択から完了までの本文を保持する。"""
 
 from rag_engine.retrieval.evidence_selection import evidence_excerpt
-from rag_engine.retrieval.result_granularity import aggregate_only_evidence
 from rag_engine.retrieval.task_contract import LIST_REQUEST, explicit_requests, task_contract
 
 
@@ -48,12 +47,6 @@ def test_circled_steps_survive_report_title_and_sample_repetition():
     excerpt = evidence_excerpt("月次集計に計上されている明細を確認したい。", text, 300)
     assert all(step in excerpt for step in steps)
     assert len(excerpt) <= 300
-
-
-def test_counts_cannot_prove_details_but_explicit_details_remain_candidates():
-    assert aggregate_only_evidence([{"text": "集計表に人数を表示します。\n検索語: 個人 明細"}])
-    assert not aggregate_only_evidence([{"text": "個人一覧に氏名と対象区分を表示します。"}])
-    assert not aggregate_only_evidence([])
 
 
 def test_parallel_objects_accept_comma_and_ya_separators():

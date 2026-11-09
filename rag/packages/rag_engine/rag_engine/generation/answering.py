@@ -2266,7 +2266,7 @@ def _grounded_spans(
     preserve_records: bool = False,
     crag_assessment: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
+    """全出典へ本文予算を配分して原文を選び、機能キーとタグを付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
@@ -2341,7 +2341,7 @@ def _grounded_spans(
             {"stage": "generation_evidence_preparation", "input_stage": "prepared_for_generation", "groups": preparation}
         )
     spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
-    return tag_spans(question, spans)
+    return tag_spans(spans)
 
 
 def _grounded_prompt(
@@ -2824,7 +2824,7 @@ def synthesize_grounded_answer(
                     "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
                 ),
                 unusable_output=_invalid_structured_output,
-                tag=lambda values: grounded.tag_spans(question, values),
+                tag=lambda values: grounded.tag_spans(values),
                 render=render_generation,
                 evidence_text=grounded.evidence_block_text,
                 system=generation_system,

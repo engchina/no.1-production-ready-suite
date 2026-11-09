@@ -1750,13 +1750,6 @@
       "して下さい",
       "してほしい",
       "して欲しい"
-    ],
-    "mixed_number_notation_cues": [
-      "混在",
-      "混ざ",
-      "混ぜ",
-      "組み合",
-      "交じり"
     ]
   },
   "enumeration_cues": {
@@ -1935,21 +1928,6 @@
     ]
   },
   "evidence_cues": {
-    "aggregate_value_words": [
-      "人数",
-      "人員",
-      "件数",
-      "合計",
-      "集計値"
-    ],
-    "detail_words": [
-      "明細",
-      "名簿",
-      "氏名",
-      "取引番号",
-      "個人",
-      "対象者"
-    ],
     "function_number_dashes": [
       "-",
       "－",
@@ -2123,59 +2101,6 @@
     ]
   },
   "answer_check_cues": {
-    "completion_verbs": [
-      "実行",
-      "保存",
-      "確定",
-      "登録",
-      "更新"
-    ],
-    "closing_quote_chars": [
-      "」",
-      "』",
-      "”",
-      "\"",
-      "'"
-    ],
-    "button_words": [
-      "ボタン"
-    ],
-    "press_words": [
-      "押す",
-      "押し",
-      "押下"
-    ],
-    "completion_connectors": [
-      "で",
-      "して"
-    ],
-    "completion_words": [
-      "確定",
-      "完了"
-    ],
-    "constraint_words": [
-      "のみ",
-      "に限る",
-      "に限り",
-      "対象外",
-      "不可",
-      "できません",
-      "しないでください"
-    ],
-    "condition_preceders": [
-      "の",
-      "た",
-      "る",
-      "い"
-    ],
-    "condition_nouns": [
-      "場合"
-    ],
-    "condition_followers": [
-      "は",
-      "に",
-      "のみ"
-    ],
     "ignored_quote_chars": [
       "|",
       "｜",
@@ -2280,18 +2205,6 @@
       "データ",
       "可能",
       "必要"
-    ],
-    "process_mode_words": [
-      "処理区分"
-    ],
-    "mode_topic_particles": [
-      "では"
-    ],
-    "mode_condition_words": [
-      "場合",
-      "登録済",
-      "条件",
-      "任意入力"
     ],
     "bare_title_marks": [
       "。",
@@ -2433,25 +2346,6 @@
       "行目",
       "line",
       "lines"
-    ],
-    "amount_units": [
-      "万円",
-      "億円",
-      "円",
-      "万",
-      "億",
-      "か月",
-      "ヶ月",
-      "ケ月",
-      "カ月",
-      "月",
-      "日",
-      "年",
-      "歳",
-      "%",
-      "人",
-      "件",
-      "回"
     ],
     "fact_counters": [
       "歳",

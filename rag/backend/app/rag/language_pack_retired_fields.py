@@ -118,6 +118,34 @@ RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS = frozenset(
     }
 )
 RETIRED_UNREAD_SECTIONS = frozenset({"operation_audit_cues"})
+# 根拠の語の印と本文の語の書き換えをやめて、読み手が無くなった項目(#4668)。上の migration の一覧は
+# checksum に入っているので変えず、別の一覧にする。
+RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS = frozenset({"mixed_number_notation_cues"})
+RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS = frozenset({"aggregate_value_words", "detail_words"})
+RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS = frozenset(
+    {
+        "completion_verbs",
+        "closing_quote_chars",
+        "button_words",
+        "press_words",
+        "completion_connectors",
+        "completion_words",
+        "constraint_words",
+        "condition_preceders",
+        "condition_nouns",
+        "condition_followers",
+        "process_mode_words",
+        "mode_topic_particles",
+        "mode_condition_words",
+    }
+)
+RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS = frozenset({"amount_units"})
+RETIRED_EVIDENCE_TAG_FIELDS = (
+    RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS
+    | RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS
+    | RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS
+    | RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS
+)
 RETIRED_UNREAD_FIELDS = (
     RETIRED_UNREAD_SEARCH_TERM_FIELDS
     | RETIRED_UNREAD_EVIDENCE_CUE_FIELDS
@@ -125,11 +153,16 @@ RETIRED_UNREAD_FIELDS = (
     | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS
 )
 _RETIRED_BY_SECTION = {
-    "question_cues": RETIRED_QUESTION_CUE_FIELDS,
+    "question_cues": RETIRED_QUESTION_CUE_FIELDS | RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS,
     "answer_labels": RETIRED_ANSWER_LABEL_FIELDS | RETIRED_UNREAD_ANSWER_LABEL_FIELDS,
-    "answer_check_cues": RETIRED_ANSWER_CHECK_CUE_FIELDS | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS,
+    "answer_check_cues": (
+        RETIRED_ANSWER_CHECK_CUE_FIELDS
+        | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS
+        | RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS
+    ),
+    "grounding_cues": RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS,
     "search_terms": RETIRED_UNREAD_SEARCH_TERM_FIELDS,
-    "evidence_cues": RETIRED_UNREAD_EVIDENCE_CUE_FIELDS,
+    "evidence_cues": RETIRED_UNREAD_EVIDENCE_CUE_FIELDS | RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS,
 }
 _ALL_RETIRED_SECTIONS = RETIRED_SECTIONS | RETIRED_UNREAD_SECTIONS
 PROFILE_TABLE = "rag_search_answer_profiles"

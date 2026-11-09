@@ -321,3 +321,53 @@ def test_unread_fields_are_removed_from_synthetic_rows_and_hash_is_recomputed() 
     assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
     config = db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]
     assert config == {"language_pack": {}}
+
+
+_EVIDENCE_TAG_NAME = "20261110_4668_language_pack_retired_evidence_tags"
+_EVIDENCE_TAG_SECTIONS = (
+    ("question_cues", module.RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS),
+    ("evidence_cues", module.RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS),
+    ("answer_check_cues", module.RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS),
+    ("grounding_cues", module.RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS),
+)
+
+
+def test_evidence_tag_fields_are_retired() -> None:
+    """根拠の語の印と本文の語の書き換えだけが読んでいた項目を除き、作り直した公開版は今の契約で読める。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    for section, fields in _EVIDENCE_TAG_SECTIONS:
+        old[section].update({key: ["合成語"] for key in fields})
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    for section, fields in _EVIDENCE_TAG_SECTIONS:
+        assert not fields & stripped[section].keys()
+    assert build_pack(stripped).hash == build_pack(pack).hash
+    assert not module.RETIRED_EVIDENCE_TAG_FIELDS & {
+        key for fields in pack.values() if isinstance(fields, dict) for key in fields
+    }
+
+
+def test_evidence_tag_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _EVIDENCE_TAG_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in module.RETIRED_EVIDENCE_TAG_FIELDS:
+        assert field in section.sql
+
+
+def test_evidence_tag_fields_are_removed_from_synthetic_rows_and_hash_is_recomputed() -> None:
+    """公開版・下書き・プロファイルの合成の行から、#4668 で廃止した項目を除く。"""
+    current = builtin_pack().to_dict()
+    old = copy.deepcopy(current)
+    for section, fields in _EVIDENCE_TAG_SECTIONS:
+        old[section].update({key: ["合成語"] for key in fields})
+    profile = {"language_pack": {"answer_check_cues": {"constraint_words": ["合成語"]}}}
+    db = _db(_release(old), draft=old, profile=profile)
+    remove_retired_language_pack_fields(db)
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert release["content_hash"] == build_pack(release["effective_json"]).hash
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    assert db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]["language_pack"] == {}
