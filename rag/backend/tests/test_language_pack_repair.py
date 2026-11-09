@@ -368,3 +368,275 @@ def test_cli_requires_expected_values_only_with_apply(
     with pytest.raises(SystemExit) as caught:
         cli.main(argv)
     assert caught.value.code == 2
+
+
+# 公開版は適合で、下書きだけが不適合の環境の修復(#4745)。
+_PUBLISHED_ONLY = "合成の公開版の文言"
+_DRAFT_ONLY = "合成の下書きの文言"
+_DRAFT_REPAIR_MISSING = "answer_labels.applications_section"
+
+
+def _published() -> dict[str, Any]:
+    published = _complete()
+    published["answer_labels"]["applications_section"] = _PUBLISHED_ONLY
+    return published
+
+
+def _published_row() -> dict[str, object]:
+    pack = build_pack(_published())
+    return {
+        "release_id": "release-a",
+        "version": 7,
+        "effective_json": pack.to_dict(),
+        "content_hash": pack.hash,
+        "ingest_hash": pack.ingest_hash,
+        "published_at": datetime.now(UTC),
+    }
+
+
+def _partial_draft() -> dict[str, Any]:
+    """利用者の未公開の変更を持ち、1 項目が欠けた下書き。"""
+    draft = _complete()
+    draft["answer_labels"]["gaps_section"] = _DRAFT_ONLY
+    del draft["answer_labels"]["applications_section"]
+    return draft
+
+
+def _repaired_draft() -> dict[str, Any]:
+    """欠けた項目は公開版の値、それ以外は下書きの値のままの、独立に作った期待値。"""
+    repaired = _complete()
+    repaired["answer_labels"]["gaps_section"] = _DRAFT_ONLY
+    repaired["answer_labels"]["applications_section"] = _PUBLISHED_ONLY
+    return repaired
+
+
+def _draft_readback() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    state = {
+        "draft_revision": 4,
+        "draft_effective_json": build_pack(_repaired_draft()).to_dict(),
+        "current_release_id": "release-a",
+    }
+    return [state], [_published_row()]
+
+
+async def test_draft_only_dry_run_plans_draft_repair_without_writing() -> None:
+    oracle, pool = _client([_state_row(_partial_draft())], [_published_row()], [{"total": 0}])
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.repair_target == repair.REPAIR_TARGET_DRAFT
+    assert plan.blockers == []
+    assert plan.current_conforms is True and plan.draft_conforms is False
+    assert plan.draft_matches_current is False
+    assert plan.missing_fields == [_DRAFT_REPAIR_MISSING]
+    assert plan.retired_fields == []
+    assert plan.candidate_valid is True
+    assert _writes(pool) == []
+    assert all("FOR UPDATE" not in call.statement for call in pool.connection.calls)
+
+
+async def test_draft_repair_removes_retired_fields_and_sections() -> None:
+    retired = sorted(RETIRED_QUESTION_CUE_FIELDS)[0]
+    draft = _partial_draft()
+    draft["question_cues"][retired] = ["合成語"]
+    draft["guide_check_cues"] = {"approval_terms": ["合成語"]}
+    oracle, _ = _client([_state_row(draft)], [_published_row()], [{"total": 0}])
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.blockers == []
+    assert plan.retired_fields == sorted(
+        [f"question_cues.{retired}", "guide_check_cues.approval_terms"]
+    )
+
+
+async def test_draft_repair_is_not_blocked_by_running_jobs() -> None:
+    """下書きの修復は公開版を変えないので、取込の実行中でも止めない。"""
+    oracle, _ = _client([_state_row(_partial_draft())], [_published_row()], [{"total": 2}])
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.active_ingestion_jobs == 2
+    assert plan.blockers == []
+
+
+def _draft_with_extra() -> dict[str, Any]:
+    draft = _partial_draft()
+    draft["answer_labels"]["unknown_key"] = "合成の余剰項目"
+    return draft
+
+
+def _draft_with_bad_value() -> dict[str, Any]:
+    draft = _partial_draft()
+    draft["answer_labels"]["gaps_section"] = 3
+    return draft
+
+
+def _draft_with_non_mapping_section() -> dict[str, Any]:
+    draft = _partial_draft()
+    draft["answer_labels"] = "合成の壊れた節"
+    return draft
+
+
+def _draft_with_other_locale() -> dict[str, Any]:
+    return {**_partial_draft(), "locale": "synthetic"}
+
+
+def _draft_without_locale() -> dict[str, Any]:
+    draft = _partial_draft()
+    del draft["locale"]
+    return draft
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        _draft_with_extra,
+        _draft_with_bad_value,
+        _draft_with_non_mapping_section,
+        _draft_with_other_locale,
+        _draft_without_locale,
+        lambda: ["合成の壊れた下書き"],
+    ],
+)
+async def test_draft_that_cannot_be_completed_is_not_replaced(make: Any) -> None:
+    """機械的に補えない下書きを、公開版や組み込みの値で置き換えて消さない。"""
+    oracle, pool = _client([_state_row(make())], [_published_row()], [{"total": 0}])
+    with pytest.raises(repair.LanguagePackRepairBlocked) as caught:
+        await repair.apply_language_pack_repair(
+            oracle, expected_current_id="release-a", expected_draft_revision=3
+        )
+    assert caught.value.plan.repair_target == repair.REPAIR_TARGET_DRAFT
+    assert caught.value.plan.blockers == [repair.CANDIDATE_INVALID]
+    assert _writes(pool) == [] and pool.connection.commits == 0
+
+
+async def test_apply_updates_only_the_draft_and_keeps_user_values() -> None:
+    state_back, release_back = _draft_readback()
+    oracle, pool = _client(
+        [_state_row(_partial_draft())],
+        [_published_row()],
+        [{"total": 0}],
+        state_back,
+        release_back,
+    )
+    result = await repair.apply_language_pack_repair(
+        oracle, expected_current_id="release-a", expected_draft_revision=3
+    )
+    assert result.repair_target == repair.REPAIR_TARGET_DRAFT
+    assert result.previous_release_id == result.release_id == "release-a"
+    assert result.version == 7 and result.draft_revision == 4
+    assert result.filled_fields == [_DRAFT_REPAIR_MISSING]
+    assert "FOR UPDATE" in pool.connection.calls[0].statement
+    assert pool.connection.commits == 1 and pool.connection.rollbacks == 0
+
+    [update] = _writes(pool)
+    assert update.startswith("UPDATE rag_language_pack_state")
+    assert "draft_revision=draft_revision+1" in update
+    assert "current_release_id" not in update
+    written = next(c.parameters for c in pool.connection.calls if c.statement == update)
+    assert json.loads(str(written["effective"])) == _repaired_draft()
+
+
+@pytest.mark.parametrize(
+    ("current_id", "revision", "code"),
+    [
+        ("release-other", 3, repair.EXPECTED_CURRENT_MISMATCH),
+        ("release-a", 2, repair.EXPECTED_DRAFT_REVISION_MISMATCH),
+    ],
+)
+async def test_draft_apply_stops_on_expected_mismatch(
+    current_id: str, revision: int, code: str
+) -> None:
+    oracle, pool = _client([_state_row(_partial_draft())], [_published_row()], [{"total": 0}])
+    with pytest.raises(repair.LanguagePackRepairBlocked) as caught:
+        await repair.apply_language_pack_repair(
+            oracle, expected_current_id=current_id, expected_draft_revision=revision
+        )
+    assert caught.value.plan.blockers == [code]
+    assert _writes(pool) == [] and pool.connection.commits == 0
+
+
+@pytest.mark.parametrize("case", ["other_pointer", "other_content", "broken_readback"])
+async def test_draft_apply_rolls_back_when_readback_fails(case: str) -> None:
+    state_back, release_back = _draft_readback()
+    effective = state_back[0]["draft_effective_json"]
+    assert isinstance(effective, dict)
+    if case == "other_pointer":
+        state_back[0]["current_release_id"] = "release-b"
+        release_back[0]["release_id"] = "release-b"
+    elif case == "other_content":
+        effective["answer_labels"]["gaps_section"] = "合成の別の文言"
+    else:
+        del effective["answer_labels"]["applications_section"]
+    oracle, pool = _client(
+        [_state_row(_partial_draft())],
+        [_published_row()],
+        [{"total": 0}],
+        state_back,
+        release_back,
+    )
+    with pytest.raises(ValueError, match="読み戻し|契約|完全"):
+        await repair.apply_language_pack_repair(
+            oracle, expected_current_id="release-a", expected_draft_revision=3
+        )
+    assert pool.connection.commits == 0 and pool.connection.rollbacks == 1
+
+
+async def test_nonconforming_current_stays_the_repair_target() -> None:
+    """公開版が不適合なら、下書きが不適合でも公開版の修復のままにする。"""
+    oracle, _ = _client([_state_row()], [_release_row()], [{"total": 0}])
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.repair_target == repair.REPAIR_TARGET_CURRENT
+    assert plan.blockers == []
+
+
+async def test_nothing_to_repair_when_both_conform() -> None:
+    oracle, _ = _client(
+        [_state_row(build_pack(_published()).to_dict())], [_published_row()], [{"total": 0}]
+    )
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.repair_target == repair.REPAIR_TARGET_NONE
+    assert plan.blockers == [repair.CURRENT_ALREADY_CONFORMS]
+
+
+async def test_retired_section_in_nonconforming_current_is_reported() -> None:
+    effective = _effective()
+    effective["guide_check_cues"] = {"approval_terms": ["合成語"]}
+    oracle, _ = _client([_state_row()], [_release_row(effective)], [{"total": 0}])
+    plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.retired_fields == ["guide_check_cues.approval_terms"]
+    assert plan.blockers == []
+
+
+def test_cli_draft_dry_run_prints_names_without_values(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    oracle, pool = _client([_state_row(_partial_draft())], [_published_row()], [{"total": 0}])
+    _patch_cli(monkeypatch, oracle)
+    assert cli.main([]) == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["mode"] == "dry-run" and payload["status"] == "ready"
+    assert payload["repair_target"] == "draft"
+    assert payload["missing_fields"] == [_DRAFT_REPAIR_MISSING]
+    assert _DRAFT_ONLY not in captured.out and _PUBLISHED_ONLY not in captured.out
+    assert _writes(pool) == []
+
+
+def test_cli_draft_apply_reports_without_new_release(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state_back, release_back = _draft_readback()
+    oracle, pool = _client(
+        [_state_row(_partial_draft())],
+        [_published_row()],
+        [{"total": 0}],
+        state_back,
+        release_back,
+    )
+    _patch_cli(monkeypatch, oracle)
+    code = cli.main(
+        ["--apply", "--expected-current-id", "release-a", "--expected-draft-revision", "3"]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["status"] == "applied" and payload["repair_target"] == "draft"
+    assert payload["release_id"] == "release-a" and payload["draft_revision"] == 4
+    assert _DRAFT_ONLY not in captured.out and _PUBLISHED_ONLY not in captured.out
+    assert not any("INSERT" in statement for statement in _writes(pool))

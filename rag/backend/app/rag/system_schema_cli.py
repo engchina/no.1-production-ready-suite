@@ -34,7 +34,7 @@ from app.rag.system_schema import (
 
 _LANGUAGE_PACK_REPAIR_GUIDE = (
     "修復は backend で .venv/bin/python -m app.rag.language_pack_repair_cli の dry-run から"
-    "（rag/docs/language-pack-current-contract.md「不適合の現在版からの修復（#4697）」）"
+    "（rag/docs/language-pack-current-contract.md「不適合の言語資源の修復（#4697・#4745）」）"
 )
 
 
