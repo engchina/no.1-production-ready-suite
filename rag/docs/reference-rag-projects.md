@@ -120,7 +120,6 @@
 | プロジェクト | 種別 | 重要性 |
 |---|---|---|
 | **Docling** (IBM) | 文書解析 | PDF 等多形式を解析。企業 RAG ingestion パイプラインへの組込みに適す。 |
-| **MinerU** (opendatalab) | PDF/Office/画像 → Markdown/JSON | 高精度文書抽出。複雑 PDF・スキャン・Office を検索可能な構造に変換。 |
 | **Marker** (datalab-to) | 文書 → Markdown/JSON/chunks | PDF・画像・PPTX・DOCX・XLSX・HTML・EPUB 対応。表・数式・コードも処理。 |
 | **Unstructured** | 汎用文書前処理 | 企業 RAG の定番 ingestion 部品。PDF/HTML/Word/画像/テキストの非構造化処理。 |
 | **Knowhere** (ontos-ai) | 文書解析 API / RAG-ready chunks | PDF・Office・画像などを構造化 JSON / Markdown / chunks へ変換。表・数式・layout・source traceability・階層 memory / progressive disclosure を重視。商用 API / オンプレ対応の位置づけのため、採用時は本プロジェクト schema と OCI/Oracle stack へ adapter として再マップする。 |
@@ -140,7 +139,7 @@
 | **SCAR: Semantic Continuity-Aware Retrieval** | adaptive context expansion | 固定 window の token 増を避け、retrieved chunk の隣接 chunk を query relevance と構造連続性で必要時だけ展開する。parent-child chunk と chunk_group_id を使い、OCI Cohere embedding/rerank の範囲で再実装する。旧 standard の `rag_context_adaptive_expansion_enabled` で段階導入していたが #595 で削除した。今は回答フローの small-to-big(親本文と前後の child。`RAG_NEIGHBOR_CHILD_COUNT`)が同じ役割を持つ。 |
 | **M3DocDep** | マルチモーダル・マルチページ dependency chunking | cross-page parent-child、figure/table-caption、boundary cue を tree として復元してから chunk を作る。StructuredExtraction の parent_id / assets / tables / bbox / section_path を使い、依存関係 chunking の評価を追加する。旧 standard の `rag_context_dependency_promotion_enabled`(rerank 後に関連 parent/child chunk を昇格)は #595 で削除した。今は回答フローの small-to-big が親子を復元する。 |
 | **MultiDocFusion** | 階層・マルチモーダル chunking | vision parser → OCR → document hierarchy tree → hierarchical chunk の流れ。OCI Enterprise AI VLM の抽出結果を本プロジェクト schema に再マップし、DFS/階層 chunk のテンプレートを拡張する。 |
-| **From PDF to RAG-Ready** | 文書変換フレームワーク評価 | Docling / MinerU / Marker 等の比較では、変換ツール単体より metadata enrichment と hierarchy-aware chunking が支配的。adapter feature flag の採否も downstream QA / page hit / table QA / section coverage で判定する。 |
+| **From PDF to RAG-Ready** | 文書変換フレームワーク評価 | Docling / Marker 等の比較では、変換ツール単体より metadata enrichment と hierarchy-aware chunking が支配的。adapter feature flag の採否も downstream QA / page hit / table QA / section coverage で判定する。 |
 
 > これらは研究・設計参考であり、実装時は必ず OCI Enterprise AI / OCI Generative AI Cohere / Oracle AI Database に再マッピングする。
 
@@ -229,14 +228,14 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 | **engchina/No.1-PdfParser-Free** | シナリオ型(取込後に**削除**) | PDF をページ画像に変換して VLM/OCR で Markdown 化する解析サンプル。「先变换、再 parse」の手法を前処理(Preprocess)ステージの `pdf_to_page_images`(PyMuPDF でラスタライズ→画像 PDF→後段の OCR / VLM)として取り込んだが、#3347 で削除した。スキャンの PDF は既定の解析エンジン Docling が OCR(RapidOCR)で読み、ページの単位で検索したいときは分割方式「ページ単位」(`page_level`)を使う。backend の PDF の描画・文字の層の読み取りも pypdfium2 に置き換え(#3343)、AGPL の PyMuPDF への依存は無くなった。 |
 | **hkuds/rag-anything** | 非常に高 | マルチモーダル RAG の重点プロジェクト。長期トラッキング推奨。 |
 | **FareedKhan-dev/rag-zero-hallucinations** | 非常に高 | **near-zero hallucination RAG の end-to-end 参照(チュートリアル + コード)**。引用付き生成・claim faithfulness 検証・校正済み棄権・CRAG 自己修正を一通り通す。プロダクトではないが、本プロジェクトの「ハルシネーション抑止 preset」設計の中核参考。確定スタックへの再マップは §2.1(LanceDB / Qwen3+vLLM / bm25s は導入せず Oracle AI Database / OCI Enterprise AI / OCI Cohere へ)。 |
-| **oceanbase/powerrag** | シナリオ型(**取込済**) | RAGFlow ベースの OceanBase 強化版。優点を確定スタックへ再マップ済み: scalar/日付/カテゴリ pre-filter(Oracle AI Database `JSON_VALUE`/`TIMESTAMP`/`IN`)、schema 駆動 field/entity 抽出(`extraction_field_adapter`、LangExtract→OCI Enterprise AI structured output)、prompt 版管理(`prompt_versions`、custom generation profile。#595 で削除し、回答は回答生成のプロンプト(`rag_answer_prompts`)で編集する)、MinerU/Dots.OCR を parser adapter 候補として登録(`rag_parser_mineru_enabled`/`rag_parser_dots_ocr_enabled`、未導入時は安全に fallback)。 |
+| **oceanbase/powerrag** | シナリオ型(**取込済**) | RAGFlow ベースの OceanBase 強化版。優点を確定スタックへ再マップ済み: scalar/日付/カテゴリ pre-filter(Oracle AI Database `JSON_VALUE`/`TIMESTAMP`/`IN`)、schema 駆動 field/entity 抽出(`extraction_field_adapter`、LangExtract→OCI Enterprise AI structured output)、prompt 版管理(`prompt_versions`、custom generation profile。#595 で削除し、回答は回答生成のプロンプト(`rag_answer_prompts`)で編集する)、Dots.OCR を parser adapter 候補として登録(`rag_parser_dots_ocr_enabled`、未導入時は安全に fallback)。 |
 | **ontos-ai/knowhere** | 高(**取込済**) | 文書解析 API / RAG-ready chunks。優点を再実装済み: 章節 navigation tree + node 要約 + progressive disclosure(`app/rag/navigation.py`。取込時に抽出結果の `navigation` へ保存する)、図表の VLM 要約は #497 で「図・画像を AI で読み取る(Vision)」(`rag_vision_enabled`、`app/rag/vision.py`)へ統合し、図の要素の本文を説明文にして検索可能な chunk に入れる。source traceability は既存 citation lineage を継続活用。外部 API 直接依存ではなく adapter として再マップ。 |
 
 ## 6. 用途別おすすめ短縮リスト
 
 - **企業ナレッジベースのプロダクト化**: Dify / RAGFlow / AnythingLLM / Open WebUI / FastGPT / MaxKB / QAnything / R2R
-- **高品質・複雑文書 RAG**: RAGFlow / Dify Knowledge Pipeline / RAG-Anything / Docling / MinerU / Marker / Unstructured / Knowhere
-- **PDF OCR / Parser 実装参考**: Docling / MinerU / Marker / Unstructured / Knowhere / engchina/No.1-PdfParser-Free
+- **高品質・複雑文書 RAG**: RAGFlow / Dify Knowledge Pipeline / RAG-Anything / Docling / Marker / Unstructured / Knowhere
+- **PDF OCR / Parser 実装参考**: Docling / Marker / Unstructured / Knowhere / engchina/No.1-PdfParser-Free
 - **GraphRAG / ナレッジグラフ増強**: Microsoft GraphRAG / LightRAG / RAG-Anything / KAG / Graphiti / Cognee / Neo4j GraphRAG / Understand-Anything
 - **Agentic RAG**: LangGraph / LlamaIndex / agentic-rag-for-dummies / LangChain / Graphiti / Cognee
 - **ハルシネーション抑止 / 引用・faithfulness 検証 / 棄権**: FareedKhan-dev/rag-zero-hallucinations / Ragas
@@ -287,7 +286,6 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 - Cognita — https://github.com/truefoundry/cognita
 - Canopy — https://github.com/pinecone-io/canopy
 - Docling — https://github.com/docling-project/docling
-- MinerU — https://github.com/opendatalab/MinerU
 - Marker — https://github.com/datalab-to/marker
 - Unstructured — https://github.com/Unstructured-IO/unstructured
 - Knowhere — https://github.com/ontos-ai/knowhere

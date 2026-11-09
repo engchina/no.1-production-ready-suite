@@ -1087,16 +1087,15 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     assert job_detail.json()["data"]["attempt_count"] == 1
 
 
-@pytest.mark.usefixtures("mineru_selectable")
 def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
     """レシピの上書きは KB を介さず、取込の Settings へ渡る（#488。レシピの job と同じ合成）。"""
     settings, effective = documents_route._merge_document_processing_config(
-        DocumentProcessingConfig(parser_adapter_backend="mineru", chunking_strategy="page_level")
+        DocumentProcessingConfig(parser_adapter_backend="dots_ocr", chunking_strategy="page_level")
     )
 
-    assert settings.rag_parser_adapter_backend == "mineru"
+    assert settings.rag_parser_adapter_backend == "dots_ocr"
     assert settings.rag_chunking_strategy == "page_level"
-    assert effective.parser_adapter_backend == "mineru"
+    assert effective.parser_adapter_backend == "dots_ocr"
     assert effective.chunking_strategy == "page_level"
 
 

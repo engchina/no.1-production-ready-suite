@@ -100,7 +100,6 @@ def test_extraction_recipe_id_changes_with_parser_axis() -> None:
 @pytest.mark.parametrize(
     ("backend", "field", "value"),
     [
-        ("mineru", "rag_parser_mineru_tier", "standard"),
         ("dots_ocr", "rag_parser_dots_ocr_model", "dots-v2"),
         ("dots_ocr", "rag_parser_dots_ocr_dpi", 400),
     ],
@@ -124,7 +123,6 @@ def test_extraction_recipe_id_changes_with_output_affecting_parser_setting(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("rag_parser_mineru_tier", "standard"),
         ("rag_parser_dots_ocr_dpi", 400),
         ("rag_parser_dots_ocr_model", "dots-v2"),
     ],
@@ -172,7 +170,6 @@ def test_extraction_recipe_diagnostics_match_hashed_non_secret_settings() -> Non
     assert "rag_parser_dots_ocr_api_key" not in subset
     assert "rag_parser_dots_ocr_api_host" not in subset
     assert "rag_parser_dots_ocr_pdf_workers" not in subset
-    assert "rag_parser_mineru_tier" not in subset
 
 
 def test_extraction_recipe_id_changes_with_preprocess_axis_and_source() -> None:

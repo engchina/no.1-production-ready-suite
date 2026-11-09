@@ -37,7 +37,6 @@ ParserAdapterName = Literal[
     "unstructured",
     "structured_records_jsonl",
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
@@ -75,12 +74,6 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("rag-parser-core",),
         install_package="rag-parser-core",
     ),
-    # 外部 native API の接続設定を実装証跡として扱う。
-    "mineru": ParserAdapterPackageSpec(
-        import_name="external_api",
-        distribution_names=("mineru_v1",),
-        install_package="外部 MinerU API",
-    ),
     # 外部 OpenAI 互換 API の接続設定を実装証跡として扱う。
     "dots_ocr": ParserAdapterPackageSpec(
         import_name="external_api",
@@ -93,7 +86,6 @@ ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
     "unstructured",
     "structured_records_jsonl",
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
 )
 ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
@@ -102,7 +94,6 @@ ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "unstructured",
     "structured_records_jsonl",
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
     # service 系 backend(OCI クラウドサービスを呼ぶ)。package readiness の対象外だが、
     # 選択値の正規化では受理する。

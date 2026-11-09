@@ -84,7 +84,7 @@ const PROFILE_META: Record<ServiceProfile, { className: string; labelKey: I18nKe
   gpu: { className: "bg-accent-muted text-accent-fg-strong", labelKey: "settings.services.profile.gpu" },
   oci: { className: "bg-info-subtle text-info-fg", labelKey: "settings.services.profile.oci" },
 };
-// 並びは CPU → GPU → OCI（#3359。文書解析のエンジンは Dots.OCR → MinerU → OCI Document Understanding。
+// 並びは CPU → GPU → OCI（#3359。文書解析のエンジンは Dots.OCR → OCI Document Understanding。
 // 正本は lib/parser-backend-order.ts の PARSER_BACKEND_ORDER）。サービス管理の工程の中の節の順。
 export const SERVICE_PROFILE_ORDER: ServiceProfile[] = ["cpu", "gpu", "oci"];
 const PROFILE_GROUP_META: Record<

@@ -120,11 +120,10 @@ ParserAdapterBackendName = Literal[
     "unstructured",
     "structured_records_jsonl",
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
 ]
-ExternalParserBackendName = Literal["mineru", "dots_ocr"]
-ExternalParserProtocol = Literal["mineru_v1", "openai_chat_completions"]
+ExternalParserBackendName = Literal["dots_ocr"]
+ExternalParserProtocol = Literal["openai_chat_completions"]
 ExternalParserConnectionStatus = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
 ]
@@ -132,7 +131,6 @@ ParserAdapterScoreBackendName = Literal[
     "local",
     "docling",
     "unstructured",
-    "mineru",
     "dots_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
@@ -410,15 +408,6 @@ class ParserBackendCapabilityData(BaseModel):
     extensions: list[str] = Field(default_factory=list)
 
 
-class MineruLicenseAcknowledgementData(BaseModel):
-    """MinerU のライセンスの条件の確認の状態（#3359）。確認するまで MinerU を選べない。"""
-
-    acknowledged: bool = False
-    # 確認した管理者の表示名と日時（UTC の ISO 8601）。未確認なら None。
-    acknowledged_by: str | None = None
-    acknowledged_at: str | None = None
-
-
 class FileTypeDefaultsGlobalData(BaseModel):
     """種類の行で未設定のときに使う全体の既定（「全体の既定に従う」の中身）。"""
 
@@ -486,9 +475,6 @@ class ParserAdapterSettingsData(BaseModel):
     navigation_summary_max_nodes: int
     # 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。#2002）。
     vision_concurrency: int = 4
-    mineru_license: MineruLicenseAcknowledgementData = Field(
-        default_factory=MineruLicenseAcknowledgementData
-    )
     config_source: Literal["runtime"]
 
 
@@ -515,14 +501,10 @@ class ParserAdapterSettingsUpdate(BaseModel):
     adapter_backend: ParserAdapterBackend | None = None
     docling_enabled: bool | None = None
     unstructured_enabled: bool | None = None
-    mineru_enabled: bool | None = None
-    # MinerU のライセンスの条件の確認（#3359）。true で確認した人・日時を記録し、false で
-    # 記録を消す。省略・null は変えない。確認するまで MinerU を有効にも選択にもできない。
-    mineru_license_acknowledged: bool | None = None
     dots_ocr_enabled: bool | None = None
     structured_records_jsonl_enabled: bool | None = None
     xml_tree_json_enabled: bool | None = None
-    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
+    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=1)
     vision_image_purpose: ImagePurpose | None = None
     vision_enabled: bool | None = None
     heading_level_inference_enabled: bool | None = None
