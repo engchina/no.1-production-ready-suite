@@ -364,7 +364,11 @@ def _vision_projection_status(record: dict[str, Any]) -> str | None:
                 states.add("unrecorded")
                 continue
             projection = load_vision_text_projection(saved[image_id])
-            if projection is None or not projection.answer_description.strip() or text != projection.answer_description:
+            if (
+                projection is None
+                or not projection.answer_description.strip()
+                or _normalized_record_text(text) != _normalized_record_text(projection.answer_description)
+            ):
                 raise InvalidVisionProjectionError("表内画像の本文投影が不正です。再分割してください。")
             states.add("verified")
     if len(states) > 1:
@@ -482,8 +486,13 @@ def _table_visual_evidence_label(visual: dict[str, Any]) -> str:
     return " / ".join(pieces)
 
 
+def _normalized_record_text(text: str) -> str:
+    """行末の空白と空行を畳む。`table_visual_texts` はこの形で持つので、投影の原文とは両方をこの形にして比べます (#4710)。"""
+    return re.sub(r"\s+\n", "\n", text).strip()
+
+
 def _record_text(record: dict[str, Any]) -> str:
-    return re.sub(r"\s+\n", "\n", str(record.get("text") or record.get("sentence") or "")).strip()
+    return _normalized_record_text(str(record.get("text") or record.get("sentence") or ""))
 
 
 def _records_char_count(records: Sequence[dict[str, Any]]) -> int:
