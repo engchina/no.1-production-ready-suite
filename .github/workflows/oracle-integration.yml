@@ -31,8 +31,8 @@ jobs:
   oracle:
     name: Oracle integration
     runs-on: ubuntu-24.04
-    # Oracle Free の起動は runner で約 1〜2 分、migration とテストは数分（実測 約 5 分）。
-    timeout-minutes: 20
+    # 実測で job 全体は約 12〜15 分。image の取得（1 回 4 分まで、3 回まで）の再試行の分も見込む。
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.product }}/backend
@@ -63,6 +63,10 @@ jobs:
           df -h /
 
       # DB の起動を待つ間に依存を入れる。password は run ごとに作り、log に出さない。
+      - name: Pull Oracle AI Database Free image
+        working-directory: .
+        run: bash .github/scripts/oracle-free-pull.sh
+
       - name: Start Oracle AI Database Free
         working-directory: .
         run: |
