@@ -31,9 +31,9 @@ QUESTION_TYPE_DESCRIPTION = (
 )
 
 # source 型だけの出力を作り直すときに、生成の user の入力の後ろへ足す部品（#4586）。何が違反でどう直すかだけを書く。
-# 既定の user の入力（Step 5 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
+# 既定の user の入力（Step 6 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
 SOURCE_ONLY_DERIVATION_PROMPT = (
-    "## Step 6: 導出が要る要求の要点を作り直す\n"
+    "## Step 7: 導出が要る要求の要点を作り直す\n"
     f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
     "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
     "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
@@ -45,7 +45,7 @@ SOURCE_ONLY_DERIVATION_PROMPT = (
 # 表の見出しの行だけを basis に選んだ source 型の要点を作り直すときに、生成の user の入力の後ろへ足す部品（#4592）。
 # 見出しの行かは表の chunk の分割の記録で決まり（``retrieval.table_header_lines``）、この部品は違反と直し方だけを書く。
 HEADER_ONLY_SOURCE_PROMPT = (
-    "## Step 6: 表の見出しの行だけを示した要点を作り直す\n"
+    "## Step 7: 表の見出しの行だけを示した要点を作り直す\n"
     "- header_only_requests の要求の要点は、前回の出力で source 型の basis に表の見出しの行（列名の行）だけを選び、"
     "表のデータの行を選んでいなかった。見出しの行だけでは答えにならない。\n"
     "- その要点の basis に、答えが書かれた表のデータの行の単位を選ぶ。根拠に答えが書かれた行が無ければ gap 型に書く。\n"

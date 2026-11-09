@@ -4521,3 +4521,9 @@ BEGIN
   NULL; -- clause_split_chars,condition_cues,contrast_clause_endings,done_state_verbs,means_cues,observed_state_cues,passive_state_endings,tried_action_cues,uncertainty_cues,wish_endings,withdrawn_cues
 END;
 /
+
+-- migration: 20261109_4712_answer_prompt_reading_rules
+UPDATE RAG_ANSWER_PROMPTS
+SET CONTENT = REPLACE(CONTENT,
+    '{{answer_context}}', '{{reading_rules}}' || CHR(10) || CHR(10) || '{{answer_context}}')
+WHERE PROMPT_KEY = 'vlm_answer' AND INSTR(CONTENT, '{{reading_rules}}') = 0;

@@ -94,7 +94,10 @@ DEFAULT_VLM_ANSWER_PROMPT = (
     "{{evidence_metadata}}\n"
     "END_TRUSTED_RETRIEVAL_METADATA\n"
     "\n"
-    "## Step 5: 根拠（質問契約・必須根拠・機能別の根拠・是正時の指摘）\n"
+    "## Step 5: 今回の根拠と業務ガイドの読み方\n"
+    "{{reading_rules}}\n"
+    "\n"
+    "## Step 6: 根拠（質問契約・必須根拠・機能別の根拠・是正時の指摘）\n"
     "{{answer_context}}\n"
 )
 
@@ -135,7 +138,7 @@ PROMPT_FILES: dict[str, PromptFile] = {
         label="vlm_answer.txt",
         path=PROMPTS_DIR / "vlm_answer.txt",
         default_content=DEFAULT_VLM_ANSWER_PROMPT,
-        required_placeholders=("question", "answer_context"),
+        required_placeholders=("question", "reading_rules", "answer_context"),
     ),
 }
 

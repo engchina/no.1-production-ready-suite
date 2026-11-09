@@ -261,7 +261,10 @@ class PromptFileTests(unittest.TestCase):
                 self.assertEqual(read_prompt(VLM_ANSWER_PROMPT_KEY), "補足 {{question}} {{answer_context}}")
 
     def test_known_prompts_require_the_placeholders_that_carry_input(self):
-        self.assertEqual(prompt_files.PROMPT_FILES[VLM_ANSWER_PROMPT_KEY].required_placeholders, ("question", "answer_context"))
+        self.assertEqual(
+            prompt_files.PROMPT_FILES[VLM_ANSWER_PROMPT_KEY].required_placeholders,
+            ("question", "reading_rules", "answer_context"),
+        )
         self.assertEqual(prompt_files.PROMPT_FILES[IMAGE_RETRIEVAL_PROMPT_KEY].required_placeholders, ("image_metadata",))
 
     def test_reset_prompt_moves_saved_file_to_backup_and_restores_default(self):
@@ -294,10 +297,10 @@ if __name__ == "__main__":
 def test_default_answer_template_keeps_steps_placeholders_and_trust_boundaries():
     import re
 
-    assert [int(n) for n in re.findall(r"^## Step (\d+):", DEFAULT_VLM_ANSWER_PROMPT, re.M)] == list(range(1, 6))
+    assert [int(n) for n in re.findall(r"^## Step (\d+):", DEFAULT_VLM_ANSWER_PROMPT, re.M)] == list(range(1, 7))
     rendered = render_prompt_template(
         DEFAULT_VLM_ANSWER_PROMPT,
-        {"question": "合成の質問", "evidence_metadata": "{}", "answer_context": "合成の根拠"},
+        {"question": "合成の質問", "evidence_metadata": "{}", "reading_rules": "合成の読み方", "answer_context": "合成の根拠"},
     )
     assert "{{" not in rendered
     assert "BEGIN_TRUSTED_RETRIEVAL_METADATA\n{}\nEND_TRUSTED_RETRIEVAL_METADATA" in rendered

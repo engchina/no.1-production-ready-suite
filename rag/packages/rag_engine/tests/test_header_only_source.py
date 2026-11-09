@@ -121,7 +121,7 @@ def test_header_only_source_is_regenerated_once_and_the_data_row_is_shown():
     response, calls, prompts = run()
     assert calls[:2] == ["GroundedDraftWire", "GroundedDraftWire"]
     assert '"header_only_requests": ["Q1"]' in prompts[1]
-    assert "## Step 6: 表の見出しの行だけを示した要点を作り直す" in prompts[1]
+    assert "## Step 7: 表の見出しの行だけを示した要点を作り直す" in prompts[1]
     timing = response.generation_trace["rounds"][0]["timing"]
     assert timing["header_only_source_repair"] == {"requests": ["Q1"], "outcome": "repaired"}
     assert timing["generation_calls"] == 2

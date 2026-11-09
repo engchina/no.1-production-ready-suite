@@ -49,7 +49,7 @@
 
 ## 編集できるテンプレート
 
-回答テンプレートは、質問・根拠・原画像の対応を現行の `question`・`answer_context`・`evidence_metadata` で渡している。外部文書は生成時に `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` で囲み、文書由来の境界表記も無害化する。六指標の評価は回答生成の後の独立処理なので、標準回答や評価用の期待を回答テンプレートへ追加しない。
+回答テンプレートは、質問・根拠・原画像の対応を現行の `question`・`reading_rules`・`answer_context`・`evidence_metadata` で渡している。外部文書は生成時に `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` で囲み、文書由来の境界表記も無害化する。六指標の評価は回答生成の後の独立処理なので、標準回答や評価用の期待を回答テンプレートへ追加しない。
 
 画像テンプレートも現行の抽出 schema と一致する。独自の保存値を勝手に書き換えず、取込と同じ `refine_image_retrieval_prompt` の結果を一覧で確認できるようにする。編集の保存先と適用範囲は変更しない。
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from openai.lib._parsing._responses import type_to_text_format_param
 
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import AnswerContext, _grounded_prompt
-from rag_engine.knowledge.prompt_files import DEFAULT_VLM_ANSWER_PROMPT
+from rag_engine.knowledge.prompt_files import DEFAULT_VLM_ANSWER_PROMPT, PROMPT_FILES, VLM_ANSWER_PROMPT_KEY
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.models.llm import ExternalDataItem, GroundedDraft
 from rag_engine.resources.runtime import bind_prompt_overrides
@@ -32,40 +33,34 @@ def span(text: str = "設定画面で項目Aを確認します。", **extra: Any
     }
 
 
-def context_block(spans: list[dict[str, Any]], **options: Any) -> str:
-    return grounded.build_context_block(QUESTION, spans, preface="", feedback=None, **options)
-
-
-def reading_part(block: str) -> str:
+def reading_part(spans: list[dict[str, Any]], *, attached_images: bool = False) -> str:
     """根拠の読み方の節だけ（無ければ空）。"""
-    if "### 根拠の読み方" not in block:
-        return ""
-    return block.split("### 根拠の読み方", 1)[1].split("機能別の根拠", 1)[0]
+    return grounded.evidence_reading_rules(spans, attached_images=attached_images)
 
 
 def test_plain_evidence_gets_no_reading_notes() -> None:
-    assert reading_part(context_block([span()])) == ""
+    assert reading_part([span()]) == ""
 
 
 def test_only_tags_present_on_the_evidence_are_explained() -> None:
-    notes = reading_part(context_block([span(tags=["constraint", "completion"])]))
+    notes = reading_part([span(tags=["constraint", "completion"])])
     assert "- constraint: " in notes and "- completion: " in notes
     assert "- definition: " not in notes and "- aggregate_only: " not in notes
     assert "画面例では" not in notes and "［資料の既定値］" not in notes
 
 
 def test_catalog_mark_and_context_note_are_explained_only_when_present() -> None:
-    assert "- catalog: " not in reading_part(context_block([span()]))
+    assert "- catalog: " not in reading_part([span()])
     marked = span(**{grounded.ARTICLE_CATALOG_KEY: True})
-    assert "- catalog: " in reading_part(context_block([marked]))
+    assert "- catalog: " in reading_part([marked])
     noted = span(answer_context="文書種別: 合成の説明書")
-    assert "- 補助情報: " in reading_part(context_block([noted]))
+    assert "- 補助情報: " in reading_part([noted])
 
 
 def test_screen_values_are_explained_for_image_evidence_or_attached_images() -> None:
-    assert "- 画面の値: " in reading_part(context_block([span(tags=["image_generated"], origin="image_extraction")]))
-    assert "- 画面の値: " in reading_part(context_block([span()], attached_images=True))
-    assert "- 画面の値: " not in reading_part(context_block([span()]))
+    assert "- 画面の値: " in reading_part([span(tags=["image_generated"], origin="image_extraction")])
+    assert "- 画面の値: " in reading_part([span()], attached_images=True)
+    assert "- 画面の値: " not in reading_part([span()])
 
 
 def test_table_values_are_explained_for_table_shapes_only() -> None:
@@ -75,8 +70,8 @@ def test_table_values_are_explained_for_table_shapes_only() -> None:
         "項目A 既定値［資料の既定値］: 30",
     )
     for text in table_forms:
-        assert "- 表の値: " in reading_part(context_block([span(text)])), text
-    assert "- 表の値: " not in reading_part(context_block([span("文章だけの説明です。")]))
+        assert "- 表の値: " in reading_part([span(text)]), text
+    assert "- 表の値: " not in reading_part([span("文章だけの説明です。")])
 
 
 def _prompt(**knowledge: Any) -> str:
@@ -141,10 +136,10 @@ def test_saved_reading_instructions_replace_the_builtin_only_for_the_bound_scope
     evidence_only = {"generation.evidenceReading": evidence}
     tagged = span(tags=["completion"])
     with bind_prompt_overrides(evidence_only):
-        saved_block = context_block([tagged])
+        saved_block = reading_part([tagged])
     assert "- completion: 合成の完了の読み方。" in saved_block
     assert "手順の最後まで答える" not in saved_block
-    assert "合成の完了の読み方" not in context_block([tagged])
+    assert "合成の完了の読み方" not in reading_part([tagged])
 
     steps = {"guide_steps": (("s1", "手順A", ("r0",)),)}
     with bind_prompt_overrides({"generation.guideRules": guide}):
@@ -152,3 +147,38 @@ def test_saved_reading_instructions_replace_the_builtin_only_for_the_bound_scope
     assert "- 業務ガイド: 合成のガイドの扱い。" in saved_prompt
     assert "- 業務ガイド: 本問の業務範囲" not in saved_prompt
     assert "合成のガイドの扱い" not in _prompt(**steps)
+
+
+def _steps(prompt: str) -> dict[int, str]:
+    """``## Step N:`` ごとの本文（見出しを含む）。"""
+    parts = re.split(r"^(?=## Step \d+:)", prompt, flags=re.M)
+    return {int(re.match(r"## Step (\d+):", part).group(1)): part for part in parts if part.startswith("## Step ")}
+
+
+def _rendered(spans: list[dict[str, Any]], **knowledge: Any) -> dict[int, str]:
+    runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=Path("/nonexistent"), **knowledge)
+    prompt = _grounded_prompt(
+        QUESTION, spans, AnswerContext(records=[], text=""), [], None, None, runtime, None, template=DEFAULT_VLM_ANSWER_PROMPT
+    )
+    return _steps(prompt)
+
+
+def test_reading_rules_are_their_own_step_before_the_evidence() -> None:
+    steps = _rendered([span(tags=["completion"])], guide_steps=(("s1", "手順A", ("r0",)),))
+    assert list(steps) == [1, 2, 3, 4, 5, 6]
+    assert "### 根拠の読み方" in steps[5] and "- completion: " in steps[5]
+    assert "### 業務ガイドの扱い" in steps[5]
+    assert "BEGIN_UNTRUSTED_RETRIEVED_CONTEXT" not in steps[5]
+    assert "BEGIN_UNTRUSTED_RETRIEVED_CONTEXT" in steps[6]
+    assert "### " not in steps[6]
+
+
+def test_step_numbers_do_not_depend_on_which_reading_rules_apply() -> None:
+    steps = _rendered([span()])
+    assert list(steps) == [1, 2, 3, 4, 5, 6]
+    assert grounded.NO_READING_RULES in steps[5]
+    assert "### " not in steps[5]
+
+
+def test_reading_rules_placeholder_is_required_when_saving() -> None:
+    assert "reading_rules" in PROMPT_FILES[VLM_ANSWER_PROMPT_KEY].required_placeholders
