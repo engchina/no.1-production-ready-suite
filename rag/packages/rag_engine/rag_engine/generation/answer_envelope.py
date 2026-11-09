@@ -36,7 +36,7 @@ from typing import Any, Literal
 
 # 2: 段落の印（passage_marks）・外した段落（removed_passages）・回答全体の警告（answer_warnings）と、
 #    items の印（mark）を足した（#2738）。
-ENVELOPE_SCHEMA_VERSION = 2
+ENVELOPE_SCHEMA_VERSION = 3
 AnswerOutcome = Literal[
     "answered",
     "conditional",
@@ -45,21 +45,6 @@ AnswerOutcome = Literal[
     "needs_human",
     "insufficient_evidence",
 ]
-# 要求の状態。unknown は監査が無く充足を確かめていない要求。
-RequestStatus = Literal["addressed", "partial", "missing", "unknown"]
-# 業務ガイドの手順の充足を載せる要求の ID の接頭辞（#2491。`guide:<手順 id>`）と、手順の状態から要求の状態への写し。
-GUIDE_STEP_REQUEST_PREFIX = "guide:"
-GUIDE_STEP_REQUEST_ID_CHARS = 64
-_GUIDE_STEP_STATUS: dict[str, RequestStatus] = {
-    "explained": "addressed",
-    "unknown": "unknown",
-    "partial": "partial",
-    "reference_only": "partial",
-    "unused": "missing",
-    "no_evidence": "missing",
-    # 手順ごとの検索を打ち切って検索しなかった手順（#2706）。確かめていないので答えたことにしない。
-    "not_searched": "missing",
-}
 # 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
 # ではないので、needs_environment_data の判定に数えない（#1491）。
 REFERENCE_CONFIRMATION_PREFIX = "資料: "
@@ -209,42 +194,12 @@ def requires_environment_data(
     return external_data_required and not any(confirmation_item_facts(item)["text"] for item in items)
 
 
-def envelope_requests(requests: Sequence[Mapping[str, Any]], reviews: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
-    """要求単位ごとの充足。背景（kind=context）の要求は含めない。"""
-    by_id = {str(review.get("request_id")): review for review in reviews or ()}
-    result: list[dict[str, str]] = []
-    for unit in requests:
-        if unit.get("kind") == "context":
-            continue
-        request_id = str(unit.get("id") or "")
-        review = by_id.get(request_id)
-        if reviews is None:
-            status = "unknown"
-        elif review is None:
-            # 対応する結果がない要求は、充足も材料不足も確定していない。
-            status = "unknown"
-        else:
-            status = str(review.get("status") or "unknown")
-            if status == "context":
-                continue
-        result.append({"id": request_id, "text": _request_text(unit), "status": status})
-    return result
-
-
-def guide_step_requests(guide_steps: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
-    """業務ガイドの必須の手順の充足を、要求と同じ形にする（#2491）。
-
-    手順の根拠を引いた説明を公開した手順は addressed、原文を参考情報として示しただけの手順は partial、
-    説明に使わなかった・根拠の無い手順は missing。必須に数えない手順（条件が決まらない分岐の手順）は載せない。
-    """
+def envelope_requests(requests: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """質問の要求単位。背景（kind=context）の要求は含めない。"""
     return [
-        {
-            "id": f"{GUIDE_STEP_REQUEST_PREFIX}{step.get('step_id')}"[:GUIDE_STEP_REQUEST_ID_CHARS],
-            "text": f"業務ガイドの手順: {step.get('title') or step.get('step_id')}",
-            "status": _GUIDE_STEP_STATUS.get(str(step.get("status")), "unknown"),
-        }
-        for step in guide_steps
-        if step.get("required", True)
+        {"id": str(unit.get("id") or ""), "text": _request_text(unit), "status": "unknown"}
+        for unit in requests
+        if unit.get("kind") != "context"
     ]
 
 
@@ -261,57 +216,37 @@ def envelope_item(entry: Any) -> dict[str, Any]:
         "location": str(span.get("location") or (f"p.{span['page']}" if span.get("page") else "")),
         "applies": applies,
         "condition": str(item.condition or ""),
-        "mark": str(getattr(entry, "state", "") or ""),
     }
 
 
 def build_envelope(
     *,
     requests: Sequence[Mapping[str, Any]],
-    reviews: Sequence[Mapping[str, Any]] | None,
     items: Sequence[Mapping[str, Any]],
     gaps: Sequence[str],
     confirmations: Sequence[str],
     external_data_required: bool,
     reference_materials: Sequence[str] = (),
-    off_goal: bool = False,
     user_conditions: Sequence[str] = (),
     document_items: Sequence[str] = (),
-    guide_steps: Sequence[Mapping[str, Any]] = (),
-    passage_marks: Sequence[Mapping[str, Any]] = (),
-    removed_passages: Sequence[Mapping[str, Any]] = (),
-    answer_warnings: Sequence[Mapping[str, Any]] = (),
+    unsupported_parts: int = 0,
 ) -> dict[str, Any]:
-    """回答の構造を組み立てる。
+    """回答の構造を組み立てる。状態の材料は、モデルが返した不足と有効な引用の有無だけ（#4714）。
 
-    confirmations は現場の実データ・別の資料の確認、user_conditions は利用者に確かめる条件（#1453）。
-    利用者に確かめる条件は適用の条件（conditions）に載せ、現場の実データの確認には数えない。別の資料の
-    確認（「資料:」の行）も現場の実データではないので、needs_environment_data の判定に数えない（#1491）。
-    document_items は結論を分けるのに別の資料で確かめる点（確認の項目の who_can_answer=document。#1492）で、
-    資料の不足として回答を条件付きにし、reference_materials に載せる。
-    guide_steps は業務ガイドの手順ごとの充足（#2491。grounded の `guide_step_coverage`）で、必須の手順を要求に足す。
-    説明できていない手順は未回答の要求として回答を条件付きにする。
-    passage_marks・removed_passages・answer_warnings は段落の印・外した段落・回答全体の警告（#2738。形は
-    ``platform/contracts/answer-passages/passage-marks.json``）。矛盾で外した段落か未確認の段落があれば条件付き、
-    警告だけなら answered のまま handoff_reasons に rule_warnings を付ける。本文の説明（items の mark）がすべて
-    未確認なら insufficient_evidence（本文は出す）。
+    confirmations は現場の実データ・別の資料の確認、user_conditions は利用者に確かめる条件。
+    document_items は結論を分けるのに別の資料で確かめる点で、資料の不足として回答を条件付きにする。
+    unsupported_parts は引用がすべて消えた要点の数で、モデルの不足と同じく回答を条件付きにする。
     """
-    request_entries = [*envelope_requests(requests, reviews), *guide_step_requests(guide_steps)]
+    request_entries = envelope_requests(requests)
     actionable = [item for item in items if item.get("applies") != "quote_only"]
     unsettled = [item for item in actionable if item.get("applies") in {"conditional", "unverified"}]
-    unanswered = [entry for entry in request_entries if entry["status"] in {"partial", "missing"}]
-    unverified_requests = reviews is not None and any(entry["status"] == "unknown" for entry in request_entries)
     environment = [line for line in confirmations if not line.startswith(REFERENCE_CONFIRMATION_PREFIX)]
-    # 実行できる説明が無く、監査した要求がすべて答えられていない: 資料から答えられない（#1491）。
-    no_answer = not actionable and bool(request_entries) and all(entry["status"] == "missing" for entry in request_entries)
     conditions = _unique([*(str(item.get("condition") or "") for item in unsettled), *user_conditions])
     handoff: list[str] = []
-    if unanswered:
-        handoff.append("unanswered_requests")
-    if unverified_requests:
-        handoff.append("unverified_requests")
     if gaps:
         handoff.append("gaps")
+    if unsupported_parts:
+        handoff.append("unsupported_parts")
     if external_data_required or environment:
         handoff.append("environment_data")
     if any(item.get("applies") == "unverified" for item in unsettled):
@@ -320,37 +255,12 @@ def build_envelope(
         handoff.append("user_conditions")
     if reference_materials or document_items:
         handoff.append("reference_materials")
-    if off_goal:
-        handoff.append("off_goal")
-    unverified_marks = [mark for mark in passage_marks if mark.get("state") == "unverified"]
-    if removed_passages:
-        handoff.append("contradicted_removed")
-    if unverified_marks:
-        handoff.append("unverified_passages")
-    if any(mark.get("state") == "warning" for mark in passage_marks):
-        handoff.append("rule_warnings")
-    # 本文の説明がすべて根拠で確かめられない（確かめた段落が 1 つも無い）。
-    all_unverified = bool(actionable) and all(item.get("mark") == "unverified" for item in actionable)
-
     outcome: AnswerOutcome
-    if no_answer:
-        outcome = "insufficient_evidence"
-    elif external_data_required or (environment and not actionable):
+    if external_data_required or (environment and not actionable):
         outcome = "needs_environment_data"
-    elif not items or all_unverified:
+    elif not items:
         outcome = "insufficient_evidence"
-    elif (
-        not actionable
-        or unanswered
-        or unverified_requests
-        or gaps
-        or unsettled
-        or off_goal
-        or user_conditions
-        or document_items
-        or removed_passages
-        or unverified_marks
-    ):
+    elif not actionable or gaps or unsupported_parts or unsettled or user_conditions or document_items:
         outcome = "conditional"
     else:
         outcome = "answered"
@@ -364,9 +274,6 @@ def build_envelope(
         "confirmations": _unique(confirmations),
         "reference_materials": _unique([*reference_materials, *document_items]),
         "handoff_reasons": handoff,
-        "passage_marks": [dict(mark) for mark in passage_marks],
-        "removed_passages": [dict(item) for item in removed_passages],
-        "answer_warnings": [dict(item) for item in answer_warnings],
     }
 
 
@@ -384,7 +291,6 @@ def fallback_envelope(
     """
     envelope = build_envelope(
         requests=(),
-        reviews=None,
         items=(),
         gaps=[insufficient_reason] if insufficient_reason else [],
         confirmations=list(external_data_items),
@@ -401,7 +307,6 @@ __all__ = [
     "EXCLUDED_KNOWN_CONDITION",
     "EXCLUDED_NOT_DECISIVE",
     "EXCLUDED_VERSION_SETTLED",
-    "GUIDE_STEP_REQUEST_PREFIX",
     "LEGACY_KIND_WHO",
     "REFERENCE_CONFIRMATION_PREFIX",
     "WHO_CAN_ANSWER",
@@ -413,7 +318,6 @@ __all__ = [
     "envelope_item",
     "envelope_requests",
     "fallback_envelope",
-    "guide_step_requests",
     "requires_environment_data",
     "settle_confirmation_items",
 ]

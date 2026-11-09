@@ -76,9 +76,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "article_catalog_max_documents": resolved_settings.rag_article_catalog_max_documents,
         "article_catalog_context_records": resolved_settings.rag_article_catalog_context_records,
         "article_catalog_scope_documents": resolved_settings.rag_article_catalog_scope_documents,
-        "request_coverage_retrieval_enabled": (
-            resolved_settings.rag_request_coverage_retrieval_enabled
-        ),
         # 業務ガイドの手順ごとの検索と追加の検索の枠(#2395)。
         "guide_step_retrieval_enabled": resolved_settings.rag_guide_step_retrieval_enabled,
         "guide_step_max_queries": resolved_settings.rag_guide_step_max_queries,
@@ -107,8 +104,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "strategy_reasoning_effort": resolved_settings.rag_strategy_reasoning_effort,
         "judge_reasoning_effort": resolved_settings.rag_judge_reasoning_effort,
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
-        # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
-        "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
         # 段ごとのモデルと段の推論の量(質問の対象の役割の判定 #4351・表の行の条件 #4349・
         # 推導の監査の判定 #4565 と理由 #4564)。
         **{
@@ -123,11 +118,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "crag_compact_input": resolved_settings.rag_crag_compact_input,
         # CRAG の評価の候補の短い ID(#1864)。
         "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,
-        # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
-        "answer_audit_compact_reasons": resolved_settings.rag_answer_audit_compact_reasons,
-        "answer_max_correction_rounds": resolved_settings.rag_answer_max_correction_rounds,
-        "answer_audit_mode": resolved_settings.rag_answer_audit_mode,
-        "answer_evidence_refinement_mode": resolved_settings.rag_answer_evidence_refinement_mode,
         "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
         "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,
@@ -183,7 +173,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             resolved_settings.rag_article_catalog_refine_candidates
         ),
         "article_catalog_output_token_cap": resolved_settings.rag_article_catalog_output_token_cap,
-        "article_catalog_review_enabled": resolved_settings.rag_article_catalog_review_enabled,
         # 用語・回答ルール・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
         "runtime_rules_confirmation_enabled": (
             resolved_settings.rag_runtime_rules_confirmation_enabled

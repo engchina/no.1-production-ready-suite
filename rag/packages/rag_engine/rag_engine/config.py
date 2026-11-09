@@ -324,9 +324,6 @@ class Settings:
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
-    # 明示された材料不足の要求だけを再検索する。未実行の検索文を作れなければ、原質問のみを除く
-    # 自動選択で検索文を作る。回数・足す根拠の数・期限で抑える。
-    request_coverage_retrieval_enabled: bool = False
     request_coverage_max_queries: int = 2
     request_coverage_max_chunks: int = 4
     request_coverage_deadline_seconds: float = 10.0
@@ -388,10 +385,6 @@ class Settings:
     article_catalog_refine_candidates: int = 60
     article_catalog_output_token_cap: int = 8192
     article_catalog_call_timeout_seconds: float = 180.0
-    # 目録で選んだ条を生成が引かなかったとき、条ごとに原文が支える説明を別の呼び出しで検討させ、その説明の出典に足す
-    # （#3526。`grounded.CATALOG_REVIEW_SYSTEM_PROMPT`）。評価で確かめた説明に根拠の無い条の出典が付いたので既定は無効。
-    # 無効なら検討の呼び出しをしない。
-    article_catalog_review: bool = False
     # 条の選択と範囲の文書の選択の結果を、process をまたいで時間を区切って使う記録の置き場所・有効期間（秒）・件数の
     # 上限（#3507）。key は索引の版（chunk_set）・目録の内容・質問・モデル・選択の設定。ディレクトリが無い・有効期間か
     # 件数が 0 なら process の中の記録だけを使う。選び方は変えない（同じ入力の LLM の結果を使い回すだけ）。
@@ -401,7 +394,6 @@ class Settings:
     strategy_reasoning_effort: str = ""
     judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
-    audit_reasoning_effort: str = ""
     # 工程ごとの推論の量(1 回の呼び出しの要求の値)。用途の上書きより後に、その工程の呼び出しにだけ当てる。
     # 値の意味は用途の上書きと同じ(空はモデルの登録値のまま。登録値が none のモデルには送らない)。
     # 質問の対象(#4351): 抽出の段(原文の写しと同じ写しの出現の順番を返す)と、役割の判定の段(文の中での
@@ -429,17 +421,6 @@ class Settings:
     # 詰めた入力の候補の chunk_uid を短い ID（C1・C1-1）にする(#1864)。評価器が判定ごとに書き写す ID が短くなり、
     # 出力の token と時間が減る。返った ID は chunk_uid に戻すので、判定の働きは変わらない。
     crag_short_candidate_ids: bool = False
-    # 生成後の監査の reason を、判定が通った item（supported かつ matched）と答えている要求（addressed）では空文字に
-    # させる(#1912)。見える出力は減るが、同じ入力の対の比較で監査が甘くなったため既定 OFF（品質評価の比較用）。
-    answer_audit_compact_reasons: bool = False
-    # 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限(#1912。0〜2)。既定 2 は従来の MAX_ROUNDS と同じ。
-    answer_max_correction_rounds: int = 2
-    # 回答の監査の型(#2795・#2800)。none は生成の後の LLM の監査と作り直しをしない(決定的な検査だけ)。
-    # standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで(完全性の不足は本文に
-    # 示す)。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す(従来)。engine の既定は従来どおり detailed、
-    # backend の既定は none。
-    answer_evidence_refinement_mode: str = "legacy"
-    answer_audit_mode: str = "detailed"
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
     # 判定の速さと間隔は同じ接続・モデルの直近の完了した呼び出しから学ぶ（実測が 3 回たまるまでは検出しない）。
@@ -683,7 +664,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         },
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
-        request_coverage_retrieval_enabled=_env_bool(env, "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL", False),
         request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
         request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),
         request_coverage_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS", 10.0)),
@@ -714,24 +694,14 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         article_catalog_refine_candidates=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES", 60)),
         article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 8192)),
         article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 180.0)),
-        article_catalog_review=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_REVIEW", False),
         article_catalog_cache_dir=Path(cache_dir_raw).expanduser() if cache_dir_raw else None,
         article_catalog_cache_ttl_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS", 86400.0)),
         article_catalog_cache_max_entries=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES", 4096)),
         strategy_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
-        audit_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_AUDIT_REASONING_EFFORT")),
         crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
-        answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
-        answer_max_correction_rounds=max(0, min(2, _env_int(env, "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS", 2))),
-        answer_evidence_refinement_mode=(
-            refinement
-            if (refinement := env.get("RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE", "legacy")) in {"legacy", "cited_only", "cited_required"}
-            else "legacy"
-        ),
-        answer_audit_mode=(mode if (mode := env.get("RAG_ENGINE_ANSWER_AUDIT_MODE", "")) in {"none", "standard"} else "detailed"),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
         llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
@@ -783,7 +753,6 @@ _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
     LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
-    LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
 }
 _PURPOSE_LABELS = {
     LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",

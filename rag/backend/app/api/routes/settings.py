@@ -533,15 +533,9 @@ async def update_answering_settings(
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
             ("rag_query_strategy", payload.query_strategy),
             ("rag_answer_flow", payload.answer_flow),
-            ("rag_answer_audit_mode", payload.answer_audit_mode),
-            ("rag_answer_evidence_refinement_mode", payload.answer_evidence_refinement_mode),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
             ("rag_screen_linking_enabled", payload.screen_linking_enabled),
-            (
-                "rag_request_coverage_retrieval_enabled",
-                payload.request_coverage_retrieval_enabled,
-            ),
             ("rag_auto_field_filter_enabled", payload.auto_field_filter_enabled),
             ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
@@ -593,9 +587,7 @@ async def update_answering_settings(
                 "RAG_RERANK_SLOT_RATIO": json.dumps(candidate.rag_rerank_slot_ratio),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
-                "RAG_ANSWER_AUDIT_MODE": candidate.rag_answer_audit_mode,
                 "RAG_ANSWER_EVIDENCE_REFINEMENT_MODE": (
-                    candidate.rag_answer_evidence_refinement_mode
                 ),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
@@ -603,7 +595,6 @@ async def update_answering_settings(
                     candidate.rag_screen_linking_enabled
                 ),
                 "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": _format_env_bool(
-                    candidate.rag_request_coverage_retrieval_enabled
                 ),
                 "RAG_AUTO_FIELD_FILTER_ENABLED": _format_env_bool(
                     candidate.rag_auto_field_filter_enabled
@@ -670,12 +661,9 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         rerank_slot_ratio=settings.rag_rerank_slot_ratio,
         query_strategy=settings.rag_query_strategy,
         answer_flow=settings.rag_answer_flow,
-        answer_audit_mode=settings.rag_answer_audit_mode,
-        answer_evidence_refinement_mode=settings.rag_answer_evidence_refinement_mode,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         screen_linking_enabled=settings.rag_screen_linking_enabled,
-        request_coverage_retrieval_enabled=settings.rag_request_coverage_retrieval_enabled,
         auto_field_filter_enabled=settings.rag_auto_field_filter_enabled,
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,

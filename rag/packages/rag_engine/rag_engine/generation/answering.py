@@ -12,12 +12,14 @@ from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
-from functools import cache, partial
+from functools import partial
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
+from httpx import TimeoutException
+from openai import APITimeoutError
 from pr_backend_core.model_cascade import SIGNAL_STRUCTURED_OUTPUT_INVALID, decide_escalation, escalation_reasons
 from pr_backend_core.model_cascade import cascade_record as model_cascade_record
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
@@ -73,6 +75,7 @@ from rag_engine.generation.answer_images import (
     prompt_injection_warnings_for_records,
 )
 from rag_engine.generation.answer_labels import answer_labels
+from rag_engine.resources.deadline import deadline_cut_short
 from rag_engine.generation.answer_models import (
     ANSWER_FLOW_DISPLAY_SEPARATOR,
     ANSWER_FLOWS,
@@ -2704,79 +2707,11 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
 _CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
 
 
-# 是正の組の回数の上限（`answer_max_correction_rounds`）で止めた理由（`RoundBudget.stop["reason"]`。#1912）。
-MAX_CORRECTION_ROUNDS_STOP = "max_correction_rounds"
-
-# 是正を改善が見込めないので止めたときの工程の説明（#1527。`grounded.NO_IMPROVEMENT_*`）。
-_NO_IMPROVEMENT_RESULTS = {
-    "no_improvement_not_accepted": "作り直した回答が前の回答より良くならなかったため、作り直しを止め、採用済みの回答で確定します",
-    "no_improvement_same_feedback": "作り直した回答にも前と同じ指摘が残ったため、同じ指摘で作り直さずに確定します",
-    "no_improvement_downgraded_only": "作り直した後に残った指摘は、根拠で確かめられず印を付けた説明だけで、"
-    "作り直しても印の付いた説明は減らないため、作り直しをせずに確定します",
-    "no_improvement_evidence_only": "残った指摘は、回答が「資料に記載が無い」とした要求（根拠の不足）だけで、"
-    "同じ根拠のまま作り直しても直らないため、作り直しをせずに確定します",
-}
 
 
-def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason: str, number: int, feedback: dict[str, Any] | None) -> None:
-    """是正を改善が見込めないので止めた理由を、時間の配分・round の記録・工程に残す（#1527）。"""
-    budget.stop_without_improvement(reason, number, feedback)
-    rounds[-1]["improvement_stop"] = reason
 
 
-def _record_round_audit(
-    step: _ExecutionStep, current: Any, *, accepted: bool, first: bool, audited: bool = True, round_number: int = 1
-) -> None:
-    """回答の作成と根拠の確認の 1 組の結果（監査の判定の件数・残った指摘・採否）を見出しと値で書く（#2341）。
 
-    ``audited`` が False（監査の型が none。#2800）なら、要求の充足は決定的な照合の結果として書き、行っていない監査の
-    件数は書かない（#2966。実行しない監査を実績と読ませない）。
-    """
-    from rag_engine.generation import grounded
-
-    label = "要求の充足（監査）" if audited else "要求の充足（原文との照合）"
-    reviews = current.audit.request_reviews if current.audit is not None else []
-    if reviews:
-        counts = {
-            status: sum(1 for review in reviews if review.status == status) for status in ("addressed", "partial", "missing", "unknown")
-        }
-        unknown = counts["unknown"] + len(current.unreviewed_requests)
-        summary = f"答えた {counts['addressed']}・一部 {counts['partial']}・未回答 {counts['missing']}"
-        step.field(label, summary + (f"・未確認 {unknown}" if unknown else ""))
-    elif current.requests:
-        state = "対応する判定なし" if current.audit is not None else "監査なし"
-        step.field(label, f"{state}（要求 {len(current.requests)} 件を未確認として扱う）")
-    if audited:
-        step.field("監査した説明", f"{current.audited_items} 件（監査の呼び出し {current.audit_calls} 回）")
-    if current.withdrawn:
-        step.field("監査で撤回した説明", f"{current.withdrawn} 件")
-    if current.marked or current.removed:
-        # 段落の印（#2738）: 本文に残して印を付けた説明と、根拠と矛盾して外した説明。
-        step.field("段落の印", f"印を付けた説明 {current.marked} 件・根拠と矛盾して除いた説明 {current.removed} 件")
-    if current.applications:
-        step.field("規則の当てはめ", f"{sum(1 for item in current.applications if item.published)} / {len(current.applications)} 件を公開")
-    if current.guide_steps:
-        # 業務ガイドの手順ごとの充足（#2491）。
-        counts = {
-            status: sum(1 for item in current.guide_steps if item["status"] == status)
-            for status in (
-                grounded.GUIDE_STEP_EXPLAINED,
-                grounded.GUIDE_STEP_REFERENCE_ONLY,
-                grounded.GUIDE_STEP_UNUSED,
-                grounded.GUIDE_STEP_NO_EVIDENCE,
-                grounded.GUIDE_STEP_NOT_SEARCHED,
-            )
-        }
-        step.field(
-            "業務ガイドの手順",
-            f"説明 {counts[grounded.GUIDE_STEP_EXPLAINED]}・参考情報のみ {counts[grounded.GUIDE_STEP_REFERENCE_ONLY]}"
-            f"・根拠を未使用 {counts[grounded.GUIDE_STEP_UNUSED]}・根拠なし {counts[grounded.GUIDE_STEP_NO_EVIDENCE]}"
-            + (f"・検索を打ち切り {counts[grounded.GUIDE_STEP_NOT_SEARCHED]}" if counts[grounded.GUIDE_STEP_NOT_SEARCHED] else ""),
-        )
-    step.field("残った指摘", join_values(grounded.pending_feedback_labels(current.feedback())))
-    step.field("採否", "採用" if accepted else "不採用（前の回の回答を維持）")
-    if step.observation is not None:
-        step.observation.display(params={"accepted": accepted, "round": round_number})
 
 
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
@@ -2870,46 +2805,38 @@ def synthesize_grounded_answer(
     unread_sections: Sequence[Any] = (),
     unread_documents: Collection[str] = (),
     evidence_budget_chars: int | None = None,
-    recover_requests: Callable[[AnswerContext, Sequence[Mapping[str, Any]]], tuple[AnswerContext, dict[str, Any]]] | None = None,
     escalation_probe: bool = False,
     shared_steps: model_cascade.SharedSteps | None = None,
 ) -> GroundedAnswer:
-    """主張と引用の対で回答を生成し、検査・局所監査・最大2回の是正を行う。
+    """主張と引用の対で回答を 1 回生成し、引用の実在と形式だけを確かめて本文にする（#4714）。
 
-    known_gaps は CRAG 評価器が根拠を確認できなかった観点（`CragRetrievalAttempt.missing_aspects`）。
-    生成の context block と監査入力に既知の欠落として渡す (#986)。
-    unread_sections は章節の拡張が上限で読めなかった章節（``UnreadSection`` か文。#1436）。本文の「回答に未反映の
-    関連章節」に出し、回答を条件つき（conditional）にする。出すのは、回答が根拠にした文書と ``unread_documents``
-    （業務ガイドの手順の参照の文書）の章節だけで、行数に上限がある（#2828。``answer_unread_view``）。
-    evidence_budget_chars は章節を広げたときの原文の予算（文字）で、渡すと広げた根拠を予算の中で切らずに渡す
-    （None は `settings.evidence_budget_chars`）。
+    known_gaps は CRAG 評価器が根拠を確認できなかった観点。生成の context block に既知の欠落として渡す（#986）。
+    unread_sections は章節の拡張が上限で読めなかった章節（#1436）。本文の「回答に未反映の関連章節」に出し、
+    回答を条件つきにする。出すのは、回答が根拠にした文書と ``unread_documents`` の章節だけ（#2828）。
+    evidence_budget_chars は章節を広げたときの原文の予算（None は `settings.evidence_budget_chars`）。
+    検索で候補が残らなければ、モデルを呼ばず定型文を返す。
 
-    是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
-    支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
-    recover_requests があれば、未回答の要求を共有予算内で1回だけ探し直す。通常は各回で生成と監査を1回ずつ行う。
-    生成した根拠計画の構造が不正な場合だけ、1回修正する。
-
-    escalation_probe はモデルのカスケード（#4581）の 1 つ目のモデルの実行で、生成の段の結果が確認を通らなければ
-    修正の回を続けずに ``model_cascade.EscalationRequested`` を送出する（以後の修正の回は 2 つ目のモデルで行う）。
-    shared_steps は 1 つ目と 2 つ目のモデルの実行が共有する、やり直さない段の結果。
+    escalation_probe はモデルのカスケード（#4581）の 1 つ目のモデルの実行で、構造化出力が契約を満たさなければ
+    ``model_cascade.EscalationRequested`` を送出する。
     """
     shared = shared_steps if shared_steps is not None else model_cascade.SharedSteps()
     if runtime_knowledge is not None:
         runtime_knowledge = runtime_knowledge.with_rule_usage(
             confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled
         ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
+    if not context.records:
+        return GroundedAnswer(_no_candidates_response(context), context, tuple(image_evidence), image_prompt_mode)
 
     from rag_engine.generation import grounded
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.batched_evidence import prepare_batched_evidence
-    from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.models.llm import GroundedItem
     from rag_engine.retrieval.search_stages import DOCUMENT_INFO_STAGE
 
+    budget_chars = evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
     document_background_reader = DocumentBackgroundReader()
-    best_input_budget: dict[str, Any] = {}
     input_diagnostic: dict[str, Any] = {}
     if crag_assessment is not None:
         gate_spans = _grounded_spans(
@@ -2917,1209 +2844,266 @@ def synthesize_grounded_answer(
             context,
             image_evidence,
             runtime_knowledge,
-            budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+            budget=budget_chars,
             crag_assessment=crag_assessment,
             preserve_records=True,
         )
-        gate_view = crag_generation.generation_view(
-            crag_assessment, gate_spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
-        )
+        gate_view = crag_generation.generation_view(crag_assessment, gate_spans, context, budget_chars=budget_chars)
         refusal = crag_generation.refusal_response(question, gate_view, runtime_knowledge=runtime_knowledge)
         if refusal is not None:
             return GroundedAnswer(
                 _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
             )
     provider = answer_llm_provider
-    source_provider = answer_llm_provider or settings.default_answer_llm
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
-    # 監査は生成と別の推論の量で呼ぶ (#1528。判定の仕事なので生成ほど推論を要らない)。
-    audit_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT)
     images, mode = tuple(image_evidence), image_prompt_mode
-    rounds: list[dict[str, Any]] = []
-    best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
-    feedback: dict[str, Any] | None = None
-    expanded = corrected = range_repair_attempted = False
-    retrieval_attempted = False
-    # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか, 草稿の summary)。
-    summary_flags: list[tuple[int, bool, str]] = []
-    best_number = 0
-    best_unread_sections = tuple(unread_sections)
-    image_decision = {
-        "reason": "already_multimodal" if mode == "vision_attachments" else "not_needed",
-        "regeneration_calls": 0,
-        "source_provider": source_provider,
-    }
-    # 生成中に Prompt 設定が保存されても、1回答の全ラウンドで同じテンプレートを使う。
     template = read_prompt(VLM_ANSWER_PROMPT_KEY)
     context, unit_fill = _fill_same_unit(question, context)
-    # 是正の round の時間の配分（#1516）: 回答の期限の残りから次の round を始めるかを決め、round の LLM の呼び出しには
-    # 回答の確定の分を残した期限を渡す（期限が無い文脈では何もしない）。
-    from rag_engine.resources.deadline import remaining_seconds
-
-    budget = grounded.RoundBudget(remaining_seconds)
-    # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
-    max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
-    assume_unconfirmed = bool(runtime_knowledge and runtime_knowledge.assume_unconfirmed)
-    # 監査の型（#2795）。通常の回答（standard）の作り直しは事実の問題があるときの 1 組まで。完全性の不足（答えていない
-    # 要求・説明していない手順）は作り直さず、本文の不足・確認の節に示す。
-    audit_mode = str(getattr(settings, "answer_audit_mode", grounded.AUDIT_MODE_DETAILED))
-    if audit_mode not in grounded.AUDIT_MODES:
-        audit_mode = grounded.AUDIT_MODE_DETAILED
-    if audit_mode == grounded.AUDIT_MODE_STANDARD:
-        max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
-    # 監査なしでも引用範囲の修復と説明の是正を区別し、設定済みの回数・時間内で説明の是正を1回残す。
-    # 対象外の指摘は correction_feedback が返さないので、通常は1回の生成で終える。
-    compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
-    # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
-    correction_failure = ""
-    # 生成の出力が再試行の後も構造化出力の契約を満たさなかった（モデルのカスケードの昇格の信号。#4581）。
-    structured_output_failed = False
-    # 1 つ目のモデルの生成の段が確認を通らなかったときの昇格の信号（escalation_probe のときだけ集める。#4581）。
-    early_escalation: tuple[str, ...] = ()
-    # 1 組目の生成の出力が契約を満たさず草稿が無い（元の例外の型名。#3849）。関係する資料の記載だけを示す。
-    generation_failure = ""
-    generation_failure_stage = "answer.generate"
-    # 退避の原因の類別・件数・容量（質問・原文は持たない。#4090・#4091）。
-    generation_failure_detail: dict[str, Any] = {}
-    # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
-    # 根拠の画面の図で業務ガイドの条件が決まったら、round ごとにその条件の手順の計画に切り替える（#2689）。
-    base_knowledge = runtime_knowledge
-    evidence_plans = tuple(getattr(settings, "evidence_plans", ()) or ())
-
-    def guide_view(
-        knowledge: RuntimeKnowledgeContext | None,
-    ) -> tuple[tuple[tuple[str, str, tuple[str, ...]], ...], tuple[str, ...], dict[str, tuple[str, ...]]]:
-        # (手順ごとの根拠, 必須に数えない手順, 手順ごとの検索の手がかり。共有の根拠の item を手順に対応付ける語。#2649)
-        if knowledge is None:
-            return (), (), {}
-        return knowledge.guide_steps, knowledge.guide_optional_steps, dict(knowledge.guide_step_terms)
-
-    guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
-    # 手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。
-    guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
-    # 共有の根拠の item を語で決められないときに意味の近さで決める embedding（#2649）。round と回答の確定で同じ文の
-    # vector を再利用する。注入が無ければ語の判定だけ。
-    embedder = injected_embedder() if guide_steps else None
-    guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
-    # 質問の対象と役割（#4351）。最初に必要になった round で 1 回だけ抽出し、是正の round でも同じ結果を使う。
-    subject_reader = injected_question_subjects()
-    if shared.question_subjects is None and subject_reader:
-        shared.question_subjects = cache(partial(subject_reader, question, audit_settings, provider_id=provider))
-    question_subjects = shared.question_subjects
-
-    def generate_round(
-        round_spans: Sequence[dict[str, Any]],
-        round_prompt: str,
-        *,
-        previous_round: Any = None,
-        round_knowledge: RuntimeKnowledgeContext | None = None,
-    ) -> Any:
-        round_steps, round_optional, round_terms = guide_view(round_knowledge)
-        return grounded.run_round(
-            question,
-            round_spans,
-            generation_settings,
-            prompt=round_prompt,
-            provider_id=provider,
-            audit_settings=audit_settings,
-            parse_text=parse_text_response,
-            parse_images=parse_multimodal_response,
-            previous=previous_round.checked if previous_round is not None else (),
-            previous_draft=previous_round.draft if previous_round is not None else None,
-            previous_dropped=previous_round.dropped if previous_round is not None else (),
-            repair_citation_ranges=not range_repair_attempted,
-            known_gaps=known_gaps,
-            compact_audit_reasons=compact_audit_reasons,
-            guide_steps=round_steps,
-            guide_optional_steps=round_optional,
-            guide_step_terms=round_terms,
-            guide_step_semantics=guide_semantics,
-            guide_unsearched_steps=guide_unsearched,
-            guide_step_contracts=round_knowledge.guide_step_contracts if round_knowledge else (),
-            guide_notices=round_knowledge.guide_notices if round_knowledge else (),
-            audit_mode=audit_mode,
-            assume_unconfirmed=round_knowledge.assume_unconfirmed if round_knowledge else False,
-            image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
-            invalid_output=_invalid_structured_output,
-            glossary=_audit_glossary(round_knowledge),
-            confirmed_premises=settings.confirmed_premises,
-            confirmed_premise_sources=settings.confirmed_premise_sources,
-            guide_task_scope=round_knowledge.guide_task_scope if round_knowledge else (),
-            question_subjects=question_subjects,
-        )
-
-    # 用語の照合結果は 1 回の回答の中で変わらない。プロンプトの組み立ての回数によらず 1 回だけ残す（#4095）。
     if not shared.term_usage_recorded:
-        _record_term_usage(base_knowledge, answer=True)
+        _record_term_usage(runtime_knowledge, answer=True)
         shared.term_usage_recorded = True
-    for number in range(max_rounds):
-        document_background_reader.remember(context)
-        context = without_embedded_background(context)
-        # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
-        field_kinds = form_field_kinds.question_field_kinds(question, context)
-        resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
-        runtime_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, resolved_conditions, evidence_plans)
-        guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
-        guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
-        spans = _grounded_spans(
+    document_background_reader.remember(context)
+    context = without_embedded_background(context)
+    field_kinds = form_field_kinds.question_field_kinds(question, context)
+    resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
+    evidence_plans = tuple(getattr(settings, "evidence_plans", ()) or ())
+    runtime_knowledge = form_field_kinds.with_resolved_plan(runtime_knowledge, resolved_conditions, evidence_plans)
+    spans = _grounded_spans(
+        question, context, images, runtime_knowledge, budget=budget_chars, preserve_records=True, crag_assessment=crag_assessment
+    )
+    with _execution_step(DOCUMENT_INFO_STAGE) as background_step:
+        background_step.input(
+            lambda spans=spans: {
+                "selected_source_ids": [value["source_id"] for value in spans],
+                "selected_documents": [list(key) for key in dict.fromkeys(tuple(value["document_scope"]) for value in spans)],
+                "timing": "正式生成の根拠を選択した後",
+            }
+        )
+        context, spans, background_detail = document_background_reader.append(question, context, spans)
+        background_step.output(background_detail)
+        background_step.field("選択した文書数", background_detail["selected_documents"])
+    crag_view = crag_generation.generation_view(crag_assessment, spans, context, budget_chars=budget_chars)
+
+    def render_generation(selected: Sequence[dict[str, Any]]) -> str:
+        return _grounded_prompt(
             question,
+            selected,
             context,
             images,
-            runtime_knowledge,
-            budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
-            preserve_records=True,
-            crag_assessment=crag_assessment,
-        )
-        with _execution_step(DOCUMENT_INFO_STAGE) as background_step:
-            background_step.input(
-                lambda number=number, spans=spans: {
-                    "round": number + 1,
-                    "selected_source_ids": [value["source_id"] for value in spans],
-                    "selected_documents": [list(key) for key in dict.fromkeys(tuple(value["document_scope"]) for value in spans)],
-                    "timing": "正式生成の根拠を選択した後",
-                }
-            )
-            context, spans, background_detail = document_background_reader.append(question, context, spans)
-            background_step.output(background_detail)
-            background_step.field("選択した文書数", background_detail["selected_documents"])
-        crag_view = crag_generation.generation_view(
-            crag_assessment, spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
-        )
-
-        round_inputs = (context, images, feedback, runtime_knowledge, field_kinds, resolved_conditions, crag_view)
-
-        def render_generation(selected: Sequence[dict[str, Any]], frozen: tuple[Any, ...] = round_inputs) -> str:
-            context, images, feedback, runtime_knowledge, field_kinds, resolved_conditions, crag_view = frozen
-            return _grounded_prompt(
-                question,
-                selected,
-                context,
-                images,
-                feedback,
-                question_plan,
-                runtime_knowledge,
-                query_expansion,
-                template=template,
-                known_gaps=known_gaps,
-                field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, selected),
-                crag_assessment=crag_view,
-                confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
-            )
-
-        prompt = render_generation(spans)
-        with (
-            budget.round(),
-            _execution_step(
-                f"回答文の生成と根拠確認（{number + 1}回目）",
-                (
-                    # 未実行の LLM 監査を、進捗の説明で実行済みと表示しない。
-                    "主張と原文引用の対で回答を作り、引用を原文と照合します。生成後の LLM 監査は実行しません。"
-                    if audit_mode == grounded.AUDIT_MODE_NONE
-                    else "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。"
-                )
-                if number == 0
-                else "",
-            ) as step,
-        ):
-            step.input(
-                lambda number=number, spans=spans, feedback=feedback: {
-                    "round": number + 1,
-                    "質問": question,
-                    "根拠": [
-                        {"evidence_id": span.get("evidence_id"), "source_id": span.get("source_id"), "label": span.get("label")}
-                        for span in spans
-                    ],
-                    "監査の方式": audit_mode,
-                    "修正の指摘": feedback,
-                }
-            )
-            preparing_evidence = False
-            failed_batches: list[dict[str, Any]] = []
-            try:
-                # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
-                # 呼び出しにだけ使う)。
-                generation_system = grounded.generation_system_prompt(question)
-                if runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed:
-                    generation_system += grounded.continue_prompt_steps(
-                        generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
-                    )
-                preparing_evidence = True
-
-                def selected_generation_schema(
-                    values: Sequence[dict[str, Any]],
-                    *,
-                    guided: bool = bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts),
-                ) -> Mapping[str, Any]:
-                    return grounded.generation_output_model(
-                        question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
-                    ).model_json_schema()
-
-                spans, prompt, input_diagnostic = prepare_batched_evidence(
-                    spans,
-                    generation_settings,
-                    question=question,
-                    read=lambda system, user, schema: grounded.call_with_model_purpose(
-                        "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
-                    ),
-                    unusable_output=_invalid_structured_output,
-                    tag=lambda values: grounded.tag_spans(question, values),
-                    render=render_generation,
-                    evidence_text=grounded.evidence_block_text,
-                    system=generation_system,
-                    schema_for=selected_generation_schema,
-                    schema=grounded.generation_output_model(
-                        question, guided=bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts)
-                    ).model_json_schema(),
-                    provider_id=provider,
-                    failed_batches=failed_batches,
-                    source_scores=_source_question_scores(context),
-                )
-                preparing_evidence = False
-                current = generate_round(
-                    spans, prompt, previous_round=best[0] if best is not None else None, round_knowledge=runtime_knowledge
-                )
-                if batch_calls := input_diagnostic.get("batch_count", 0):
-                    current.timing["batch_reading_calls"] = batch_calls
-                    current.timing["generation_calls"] = current.timing.get("generation_calls", 0) + batch_calls
-                if number == 0:
-                    # 監査の推論の量は、監査をする型のときだけ書く（#2966）。
-                    purposes = (
-                        (LLM_PURPOSE_GENERATION,) if audit_mode == grounded.AUDIT_MODE_NONE else (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT)
-                    )
-                    for purpose in purposes:
-                        if note := llm_reasoning_effort_note(settings, purpose, provider):
-                            step.add(("監査の" if purpose == LLM_PURPOSE_AUDIT else "生成の") + note)
-            except Exception as exc:
-                # 回答の確定の分を残した期限で切れた（#1516）なら、確かめ終わった round で確定する。1 組目の生成が
-                # 切れたときは草稿が無いので、関係する資料の記載だけを示す。外側の期限・取り消し・他の失敗は送出する。
-                cut = budget.cut_round(number, has_draft=best is not None)
-                # 1 組目の生成の出力が再実行の後も契約を満たさなかった（#3849）。根拠は回答に渡すと決めた後なので、
-                # 回答全体を失敗にせず、草稿の無い round で関係する資料の記載を示す。工程を問わず同じ判定にする（#4091）。
-                # 構造化出力の検証の失敗以外の実装の例外は、ここに入れず送出する。
-                input_limited = isinstance(exc, GenerationInputBudgetExceeded)
-                if input_limited:
-                    input_diagnostic = exc.diagnostic
-                invalid_draft = (
-                    best is None
-                    and not cut
-                    and (isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc) or input_limited)
-                )
-                if best is None and not cut and not invalid_draft:
-                    raise
-                # 生成の出力の不合格は、包む前の例外の型名（InvalidStructuredOutput・ValidationError）で残す。
-                error_name = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
-                # 構造化出力の不正（再試行の後）だけをカスケードの信号にする。入力の予算・時間の上限・接続の失敗は数えない。
-                if not cut and not input_limited and (isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc)):
-                    structured_output_failed = True
-                    if escalation_probe:
-                        early_escalation = (SIGNAL_STRUCTURED_OUTPUT_INVALID,)
-                # 是正はより良くする試みなので、その LLM 呼出（生成・監査）の失敗で採用済みの回答を捨てない (#748)。
-                # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
-                rounds.append(
-                    {
-                        "error": error_name,  # 例外の型の名前だけ（本文は残さない。#3259）
-                        "accepted": False,
-                        "audit_calls": 0,
-                        **({"timing": {"generation_calls": input_diagnostic.get("batch_count", 0)}} if input_limited else {}),
-                        **({"deadline_cut": True} if cut else {}),
-                    }
-                )
-                if invalid_draft:
-                    generation_failure = error_name
-                    generation_failure_stage = "evidence.batch_read" if preparing_evidence else "answer.generate"
-                    generation_failure_detail = (
-                        {"category": "input_budget_exceeded", "reason": str(input_diagnostic.get("reason", ""))}
-                        if input_limited
-                        else batch_failure_summary(failed_batches[-1], exc)
-                        if preparing_evidence and failed_batches
-                        else grounded.generation_failure_detail(exc)
-                    )
-                    logger.warning(
-                        "answer generation fell back to document quotes: stage=%s error=%s detail=%s",
-                        generation_failure_stage,
-                        generation_failure,
-                        json.dumps(generation_failure_detail, ensure_ascii=False),
-                    )
-                    best = (
-                        grounded.timed_out_round(
-                            question,
-                            reason="モデルの入力予算に必須の根拠または指示が入らない"
-                            if input_limited
-                            else "生成の出力が構造化出力の契約を満たさなかった",
-                        ),
-                        context,
-                        spans,
-                        images,
-                        mode,
-                    )
-                    work = "資料の分割読取" if preparing_evidence else "回答文の生成"
-                    problem = (
-                        "の応答に本文が無かった"
-                        if generation_failure_detail.get("category") == "stream_output_missing"
-                        else "の出力が形式の検査を通らなかった"
-                    )
-                    step.result(
-                        "モデルの入力予算に必須の根拠または指示が入らないため、生成を送信せず資料の記載を示します"
-                        if input_limited
-                        # モデルのカスケード（#4581）で昇格するときは、資料の記載だけを示さずに回答し直す。
-                        else f"{work}{problem}ため、確認を通らなかったときのモデルで回答し直します（{generation_failure}）"
-                        if early_escalation
-                        else f"{work}{problem}ため、{'回答文を生成せず、' if preparing_evidence else ''}"
-                        f"質問に関係する資料の記載だけを示します（{generation_failure}）"
-                    )
-                elif best is None:
-                    best = (grounded.timed_out_round(question), context, spans, images, mode)
-                    step.result("回答の時間の上限までに回答文の生成が終わらなかったため、質問に関係する資料の記載だけを示します")
-                elif cut:
-                    step.result("回答の時間の上限が近いため、この作り直しを打ち切り、直前に採用した回答を公開します")
-                else:
-                    step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{error_name}）")
-                    # 作り直しの失敗は根拠の不足と区別し、回答全体の警告に残す（#2729）。
-                    correction_failure = error_name
-                step.output(
-                    {
-                        "round": number + 1,
-                        "accepted": False,
-                        "error_type": type(exc).__name__,
-                        "deadline_cut": cut,
-                        "fallback_available": best is not None,
-                        "input_budget": input_diagnostic,
-                    }
-                )
-                break
-            quote_only = sum(e.quote_only for e in current.checked)
-            step.result(
-                f"確かめた説明 {current.verified} 件"
-                + (f"、印を付けた説明 {current.marked} 件" if current.marked else "")
-                + (f"、根拠と矛盾して除いた説明 {current.removed} 件" if current.removed else "")
-                + (f"、原文のまま示す記載 {quote_only} 件" if quote_only else "")
-            )
-            # 生成と監査の秒と token の数（遅い round の理由を確かめる。#1516）。
-            if timing_line := grounded.round_timing_line(current):
-                step.add(timing_line)
-            if current.audit_cut:
-                step.impact(
-                    "回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。"
-                )
-            accepted = best is None or grounded.better(current, best[0])
-            _record_round_audit(
-                step,
-                current,
-                accepted=accepted,
-                first=best is None,
-                audited=audit_mode != grounded.AUDIT_MODE_NONE,
-                round_number=number + 1,
-            )
-            step.output(
-                lambda number=number, accepted=accepted, current=current: {
-                    "round": number + 1,
-                    "accepted": accepted,
-                    "result": current.trace(),
-                }
-            )
-        if accepted:
-            best = (current, context, spans, images, mode)
-            best_number = number
-            best_input_budget = dict(input_diagnostic)
-            best_unread_sections = tuple(unread_sections)
-        assert best is not None
-        if not grounded.diagnostic_only(current.timing) and current.audit is not None and not current.audit.summary_supported:
-            summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
-        if current.timing.get("citation_range_repair"):
-            range_repair_attempted = True
-            # 原文の範囲だけを変える処理は、説明内容の是正を済ませたことにしない。
-            corrected = False
-        rounds.append({**current.trace(), "accepted": accepted})
-        if escalation_probe and (early_escalation := model_cascade.round_signals(current, audit_mode=audit_mode)):
-            # 1 つ目のモデルの生成の段が確認を通らなかった（#4581）。修正の回を 1 つ目のモデルで続けない。
-            rounds[-1]["escalation_signals"] = list(early_escalation)
-            break
-        # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
-        previous_feedback, feedback = (
-            feedback,
-            grounded.correction_feedback(best[0].feedback(), audit_mode, assume_unconfirmed=assume_unconfirmed),
-        )
-        retrieval_remedy = None
-        # 生成の gap は監査の要求判定と独立して補查する。監査が要求を返さない場合も失わない。
-        recovery_plan = request_recovery_plan(
-            best[0].unanswered if audit_mode != grounded.AUDIT_MODE_NONE else (),
-            [item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id],
-            {str(span["evidence_id"]) for span in best[2]},
-            expected_request_ids={row["id"] for row in best[0].requests},
-            blocked_request_ids=(
-                *best[0].duplicate_request_ids,
-                *(row["id"] for row in best[0].requests if best[0].review_execution in {"error", "timed_out"}),
-            ),
-        )
-        rounds[-1]["request_recovery"] = {"phase": "after_generation", "decisions": recovery_plan}
-        correction_ids = {row["request_id"] for row in recovery_plan if row["action"] == "correction"}
-        material_missing_ids = {row["request_id"] for row in recovery_plan if row["action"] == "retrieval"}
-        remedy_ids = correction_ids | (material_missing_ids if audit_mode == grounded.AUDIT_MODE_DETAILED else set())
-        if feedback.get("unanswered_requests"):
-            feedback["unanswered_requests"] = [row for row in feedback["unanswered_requests"] if row["request_id"] in remedy_ids]
-            if not feedback["unanswered_requests"]:
-                feedback.pop("unanswered_requests")
-            if set(feedback) == {"supported_items"}:
-                feedback = {}
-        retrieval_requests = [
-            {"request_id": row["request_id"], "status": row["status"]} for row in recovery_plan if row["action"] == "retrieval"
-        ]
-        if recover_requests is not None and retrieval_requests and not retrieval_attempted and number < max_rounds - 1:
-            retrieval_attempted = True
-            if budget.allows_round(number + 1):
-                with _execution_step("未回答の要求の探し直し") as retrieval_step:
-                    retrieval_step.input(
-                        lambda number=number, retrieval_requests=retrieval_requests, recovery_plan=recovery_plan, context=context: {
-                            "質問": question,
-                            "元の回答の回": number + 1,
-                            "再検索する要求": retrieval_requests,
-                            "判断": recovery_plan,
-                            "既存根拠": candidate_snapshot(context.records),
-                        }
-                    )
-                    try:
-                        retrieved_context, retrieval_trace = recover_requests(context, retrieval_requests)
-                    except Exception as exc:  # noqa: BLE001 - 補助の検索の失敗で採用済みの回答を捨てない。
-                        report_degraded("unanswered_request_retrieval", exc)
-                        retrieved_context, retrieval_trace = context, {"error": type(exc).__name__, "applied": False}
-                        retrieval_step.status = "failed"
-                    retrieval_step.output(
-                        lambda retrieval_trace=retrieval_trace, retrieved_context=retrieved_context, context=context: {
-                            "検索の記録": retrieval_trace,
-                            "返却根拠": candidate_snapshot(retrieved_context.records),
-                            "新規追加ID": sorted(
-                                {r.chunk_uid or r.id for r in retrieved_context.records} - {r.chunk_uid or r.id for r in context.records}
-                            ),
-                        }
-                    )
-                    rounds[-1]["request_retrieval"] = retrieval_trace
-                    added_ids = {r.chunk_uid or r.id for r in retrieved_context.records} - {r.chunk_uid or r.id for r in context.records}
-                    if added_ids:
-                        context = retrieved_context
-                        feedback = {**feedback, "unanswered_requests": retrieval_requests}
-                        retrieval_remedy = {"remedy": "retrieval", "added_chunk_ids": sorted(added_ids)}
-                        retrieval_step.result(f"未回答の要求を探し直し、新しい根拠 {len(added_ids)} 件で回答を作り直します")
-                    else:
-                        retrieval_step.result("新しい根拠を追加できなかったため、取得済みの資料で回答を確定します")
-            else:
-                rounds[-1]["request_retrieval"] = {"applied": False, "skipped": "deadline"}
-                with _execution_step("未回答の要求の探し直し") as retrieval_step:
-                    retrieval_step.input(
-                        lambda number=number, retrieval_requests=retrieval_requests, recovery_plan=recovery_plan, context=context: {
-                            "質問": question,
-                            "元の回答の回": number + 1,
-                            "再検索する要求": retrieval_requests,
-                            "判断": recovery_plan,
-                            "既存根拠": candidate_snapshot(context.records),
-                        }
-                    )
-                    retrieval_step.skip("回答の時間予算が不足しているため、追加検索を実行しません。")
-                    retrieval_step.output({"検索の記録": rounds[-1]["request_retrieval"], "新規追加ID": []})
-        for decision in recovery_plan:
-            if decision["action"] == "retrieval":
-                retrieval_result = rounds[-1].get("request_retrieval", {})
-                details = retrieval_result.get("re_retrieval", {})
-                skipped = retrieval_result.get("skipped") or details.get("skipped")
-                failed = retrieval_result.get("error") or any(query.get("error") for query in details.get("queries", ()))
-                decision["execution"] = (
-                    "partial"
-                    if failed and retrieval_remedy
-                    else "error"
-                    if failed
-                    else "not_run"
-                    if skipped or not retrieval_result
-                    else "completed"
-                )
-                decision["stop_reason"] = (
-                    "disabled"
-                    if recover_requests is None
-                    else "correction_limit"
-                    if number >= max_rounds - 1
-                    else "already_attempted"
-                    if "request_retrieval" not in rounds[-1] and retrieval_attempted
-                    else "retrieval_error"
-                    if failed
-                    else skipped or ("no_new_evidence" if not retrieval_remedy else "")
-                )
-                decision["added_evidence_count"] = len(retrieval_remedy["added_chunk_ids"]) if retrieval_remedy else 0
-            elif decision["action"] == "correction":
-                decision["execution"] = "planned" if audit_mode == grounded.AUDIT_MODE_DETAILED and feedback else "not_run"
-                decision["stop_reason"] = "" if decision["execution"] == "planned" else "audit_mode"
-            else:
-                decision["execution"] = "not_run"
-                decision["stop_reason"] = "unverified"
-        budget.note(current, feedback, accepted=accepted)
-        with _execution_step("回答の修正が必要か確認する") as check_step:
-            issues = grounded.pending_feedback_labels(feedback)
-            check_step.input({"round": number + 1, "adopted_round": best_number + 1, "issues": issues})
-            check_step.result("修正が必要です" if feedback else "修正は不要です")
-            check_step.field("確認した回答", f"{best_number + 1} 回目")
-            if feedback:
-                check_step.field("指摘", join_values(issues))
-            check_step.output({"correction_required": bool(feedback), "issues": issues})
-        if not feedback or number == max_rounds - 1:
-            if feedback:
-                # 設定の上限で是正を止めた（#1912）。時間の上限ではないので本文の「回答時間の上限により省略した処理」には出さない。
-                budget.stop = {
-                    "reason": MAX_CORRECTION_ROUNDS_STOP,
-                    "round": number + 2,
-                    "feedback": grounded.pending_feedback_labels(feedback),
-                }
-                with _execution_step("回答の修正") as skipped_step:
-                    skipped_step.input({"round": number + 1, "issues": issues, "max_rounds": max_rounds})
-                    skipped_step.skip("修正回数の上限に達したため、次の回答は生成しません。")
-                    skipped_step.output({"executed": False, "reason": "max_correction_rounds", "next_round": number + 2})
-            break
-        needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
-        if correction_ids and retrieval_remedy is None:
-            needs_content = False
-        remedy: dict[str, Any] | None = retrieval_remedy
-        if remedy is None and needs_content and not expanded:
-            expanded = True
-            candidate, remedy = _expand_context_from_pool(question, context)
-            if candidate is None:
-                rounds[-1].setdefault("skipped_remedies", []).append(remedy)
-                remedy = None
-            else:
-                context = candidate
-        image_candidates: tuple[dict[str, Any], ...] = ()
-        if remedy is None and needs_content and mode != "vision_attachments" and answer_model_reads_images(settings, provider):
-            candidates = tuple(
-                i for i in answer_image_evidence(context.records, settings.output_dir, question=question) if i.get("prompt_path")
-            )
-            # 画像を添付する是正は、回答のモデルが画像を読めるときだけ行い、モデルは変えない（#3444）。読めない
-            # モデルは文字の説明で答えられる範囲に留めて、次の是正（指摘の反映）へ進む。
-            if candidates and _image_prompt_mode(candidates, settings, provider) == "vision_attachments":
-                image_candidates = candidates
-                remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in candidates]}
-        if remedy is None:
-            if corrected:
-                budget.stop = {
-                    "reason": MAX_CORRECTION_ROUNDS_STOP,
-                    "scope": "content_correction",
-                    "round": number + 2,
-                    "feedback": grounded.pending_feedback_labels(feedback),
-                }
-                with _execution_step("回答の修正") as skipped_step:
-                    skipped_step.input({"round": number + 1, "issues": issues, "content_correction_attempted": corrected})
-                    skipped_step.skip("修正回数の上限に達したため、次の回答は生成しません。")
-                    skipped_step.output({"executed": False, "reason": "max_correction_rounds", "next_round": number + 2})
-                break
-            remedy = {"remedy": "correction"}
-        # 次の組を始める前に、改善が見込めるかを確かめる（#1527）。作り直した組が採用されない・指摘が前の組と
-        # 同じなら、次の組も良くならない。同じ根拠のまま作り直す（指摘の反映）のは、残った指摘が根拠の不足
-        # （草稿が「資料に記載が無い」と答えた要求）だけのときはしない。
-        # 範囲だけの修復で判明した内容の不一致には、まだ説明の是正を試していない。
-        comparison_round = 0 if accepted and current.timing.get("citation_range_repair") else number
-        stop_reason = grounded.no_improvement_reason(comparison_round, accepted=accepted, feedback=feedback, previous=previous_feedback)
-        if (
-            not stop_reason
-            and remedy["remedy"] == "correction"
-            and not correction_ids
-            and (
-                grounded.evidence_shortage_only(feedback, best[0])
-                or (
-                    material_missing_ids
-                    and not any(feedback.get(key) for key in (*grounded.STANDARD_CORRECTION_KEYS, "document_value_issues"))
-                )
-            )
-        ):
-            stop_reason = grounded.NO_IMPROVEMENT_EVIDENCE_ONLY
-        if stop_reason:
-            _stop_without_improvement(budget, rounds, stop_reason, number, feedback)
-            break
-        if remedy["remedy"] == "correction":
-            corrected = True
-        elif image_candidates:
-            images, mode = image_candidates, "vision_attachments"
-            image_decision.update(reason="attempted", regeneration_calls=1)
-        if not budget.allows_round(number + 1):
-            # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
-            # 最良の round で確定し、直していない不足を「回答時間の上限により省略した処理」に出す。
-            rounds[-1]["deadline_stop"] = dict(budget.stop)
-            with _execution_step("回答の修正") as stop_step:
-                stop_step.input({"round": number + 1, "issues": issues, "plan": remedy, "budget": dict(budget.stop)})
-                stop_step.skip(
-                    f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
-                    f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
-                    f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します"
-                )
-                stop_step.output({"executed": False, "reason": "time_budget", "budget": dict(budget.stop)})
-                stop_step.impact("直していない不足を「回答時間の上限により省略した処理」に示し、条件つきの回答にします。")
-            break
-        rounds[-1]["remedy"] = remedy
-        with _execution_step("是正") as remedy_step:
-            remedy_step.input({"round": number + 1, "issues": grounded.pending_feedback_labels(feedback)})
-            remedy_step.output({"next_round": number + 2, "plan": remedy})
-            remedy_step.result(
-                {
-                    "context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
-                    "images": "答えていない要求があるため、根拠の原画像を添付して作り直します",
-                    "correction": "検査の指摘を渡して作り直します",
-                    "retrieval": "未回答の要求ごとに探し直し、新しい根拠を使って作り直します",
-                }[remedy["remedy"]]
-            )
-            # 直す指摘と、作り直しに使う材料（#2341）。
-            remedy_step.field("直す指摘", join_values(grounded.pending_feedback_labels(feedback)))
-            remedy_step.field("次の回答の作成", f"{number + 2} 回目（上限 {max_rounds} 回）")
-            if remedy["remedy"] in {"context", "retrieval"}:
-                remedy_step.field("加えた根拠", f"{len(remedy.get('added_chunk_ids') or ())} 件")
-                remedy_step.field("回答の材料の根拠", evidence_summary(context.records))
-            elif remedy["remedy"] == "images":
-                remedy_step.field("添付する画像", f"{len(images)} 件")
-
-    if early_escalation:
-        raise model_cascade.EscalationRequested(early_escalation)
-
-    from rag_engine.generation.refinement_round import project_crag_view, project_knowledge, prompt_context_for, refine_answer
-
-    assert best is not None
-    baseline, baseline_context, baseline_spans, baseline_images, baseline_mode = best
-    baseline_conditions = form_field_kinds.resolve_conditions(
-        form_field_kinds.question_field_kinds(question, baseline_context), settings.evidence_conditions
-    )
-    baseline_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, baseline_conditions, evidence_plans)
-
-    def generate_refinement(selected_spans: Sequence[dict[str, Any]], draft_review: dict[str, Any]) -> Any:
-        selected_knowledge = project_knowledge(baseline_knowledge, selected_spans)
-        selected_keys = {str(value) for span in selected_spans for value in (span.get("source_id"), span.get("evidence_id")) if value}
-        selected_images = [
-            image
-            for image in baseline_images
-            if any(str(image.get(key) or "") in selected_keys for key in ("chunk_id", "image_id", "source_id"))
-        ]
-        selected_prompt = _grounded_prompt(
-            question,
-            selected_spans,
-            prompt_context_for(baseline_context, selected_spans),
-            selected_images,
-            draft_review,
+            None,
             question_plan,
-            selected_knowledge,
+            runtime_knowledge,
             query_expansion,
             template=template,
             known_gaps=known_gaps,
-            crag_assessment=project_crag_view(crag_generation.generation_view(crag_assessment, selected_spans, baseline_context)),
+            field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, selected),
+            crag_assessment=crag_view,
             confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
         )
-        with _execution_step("選別した根拠で回答を作り直す") as refinement_step:
-            refinement_step.input(
-                lambda: {
-                    "質問": question,
-                    "選別した根拠": list(selected_spans),
-                    "生成への入力": selected_prompt,
-                    "選別前の指摘": draft_review,
-                }
-            )
-            result = generate_round(selected_spans, selected_prompt, round_knowledge=selected_knowledge)
-            refinement_step.field("根拠の数", len(selected_spans))
-            refinement_step.output(result.trace)
-            return result
 
-    refinement = refine_answer(
-        baseline,
-        baseline_spans,
-        strategy=str(getattr(settings, "answer_evidence_refinement_mode", "legacy")),
-        knowledge=baseline_knowledge,
-        known_gaps=known_gaps,
-        next_round=len(rounds),
-        max_rounds=max_rounds,
-        budget=budget,
-        generate=generate_refinement,
-        images_present=mode == "vision_attachments" or baseline_mode == "vision_attachments",
-    )
-    if refinement.candidate is not None:
-        rounds.append({**refinement.candidate.trace(), "accepted": refinement.adopted, "remedy": {"remedy": "evidence_refinement"}})
-        if refinement.adopted:
-            best = (refinement.candidate, baseline_context, list(refinement.spans), baseline_images, baseline_mode)
-            best_number = len(rounds) - 1
-
-    assert best is not None
-    current, context, spans, images, mode = best
-    with _execution_step("是正の打ち切り") as final_step:
-        final_step.input(
-            lambda: {
-                "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
-                "stop": dict(budget.stop),
-                "evidence_refinement": refinement.diagnostics,
+    guided = bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts)
+    generation_failure = ""
+    generation_failure_stage = "answer.generate"
+    generation_failure_detail: dict[str, Any] = {}
+    structured_output_failed = False
+    with _execution_step("回答文の生成", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
+        step.input(
+            lambda spans=spans: {
+                "質問": question,
+                "根拠": [
+                    {"evidence_id": span.get("evidence_id"), "source_id": span.get("source_id"), "label": span.get("label")} for span in spans
+                ],
             }
         )
-        reason = str(budget.stop.get("reason", "correction_not_needed"))
-        if reason.startswith("no_improvement"):
-            explanation = "改善が確認できないため"
-        elif reason == MAX_CORRECTION_ROUNDS_STOP:
-            explanation = "修正回数の上限に達したため"
-        elif rounds and rounds[-1].get("deadline_stop"):
-            explanation = "修正に必要な時間が残っていないため"
-        else:
-            explanation = "修正処理の判断を終えたため"
-        final_step.field("終了理由", explanation)
-        if len(rounds) > 1 and not rounds[-1]["accepted"]:
-            final_step.result(f"改善が確認できないため、{best_number + 1}回目の回答を採用しました。")
-        else:
-            final_step.result(f"{explanation}、{best_number + 1}回目の回答を採用しました。")
-        final_step.field("最終採用", f"{best_number + 1} 回目")
-        final_step.output(
-            {
-                "reason": reason,
-                "adopted_round": best_number + 1,
-                "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
-            }
-        )
-    unread_sections = best_unread_sections
-    # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
-    field_kinds = form_field_kinds.question_field_kinds(question, context)
-    resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
-    runtime_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, resolved_conditions, evidence_plans)
-    guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
-    guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
-    # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary にも警告を付ける
-    # （#2738。以前は中立の文に置き換えていた）。初回の監査が見逃した保証（「〜により対象者を確認できる」）が、後続
-    # round の指摘に関係なく残っていた (#621)。引き継ぐのは、採用 round の summary が不支持の summary の文を繰り返す
-    # ときだけ（別の結論に書き直した summary は採用 round の監査の判定に従う）。また、不支持の round に確かめられ
-    # なかった主張（印・除外）があり、その後の是正 round が採用されて自身の監査が summary を支持したなら、不支持の
-    # 理由は summary が頼る item を確かめられなかったことで、是正で直っている (#1383)。
-    summary_flagged = any(
-        not (unpublished and number < best_number) and grounded.repeats_summary(str(current.draft.summary), flagged)
-        for number, unpublished, flagged in summary_flags
-    )
-    if (
-        summary_flagged
-        and current.summary != grounded.answer_labels().neutral_summary
-        and str(current.summary or "").strip()
-        and not current.summary_warning
-    ):
-        current = replace(current, summary_warning="前の回の監査が同じ summary を不支持")
-    # 規則の当てはめが要る質問で、草稿が当てはめを書かずに結論が確かめられなかった（中立の文・警告つき）なら、
-    # 当てはめだけを作る段を 1 回行う（生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが
-    # 書かないことがあるため、専用の段で作る。失敗しても回答は作り直さず、理由を診断に残す。
-    application_step: dict[str, Any] = {"ran": False}
-    application_summary = ""
-    application_basis: tuple = ()
-    application_state: tuple = ()
-    if (
-        not grounded.diagnostic_only(current.timing)
-        and audit_mode != grounded.AUDIT_MODE_NONE
-        and answer_applications.application_step_needed(
-            question,
-            current.summary == grounded.answer_labels().neutral_summary or bool(current.summary_warning),
-            current.checked,
-            current.applications,
-        )
-    ):
-        application_step["ran"] = True
-        step_items = list(answer_applications.application_step_inputs(question, current.checked, current.requests)[1].values())
-        step_basis = grounded.summary_basis_snapshot(step_items)
+        preparing_evidence = False
+        failed_batches: list[dict[str, Any]] = []
         try:
-            step_applications, step_summary = answer_applications.run_application_step(
-                question,
-                current.checked,
-                current.requests,
-                evidence_spans=spans,
-                parse_text=parse_text_response,
-                settings=generation_settings,
-                audit_settings=audit_settings,
+            generation_system = grounded.generation_system_prompt(question)
+            if runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed:
+                generation_system += grounded.continue_prompt_steps(
+                    generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
+                )
+            preparing_evidence = True
+
+            def selected_generation_schema(values: Sequence[dict[str, Any]], *, guided: bool = guided) -> Mapping[str, Any]:
+                return grounded.generation_output_model(
+                    question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
+                ).model_json_schema()
+
+            spans, prompt, input_diagnostic = prepare_batched_evidence(
+                spans,
+                generation_settings,
+                question=question,
+                read=lambda system, user, schema: grounded.call_with_model_purpose(
+                    "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
+                ),
+                unusable_output=_invalid_structured_output,
+                tag=lambda values: grounded.tag_spans(question, values),
+                render=render_generation,
+                evidence_text=grounded.evidence_block_text,
+                system=generation_system,
+                schema_for=selected_generation_schema,
+                schema=grounded.generation_output_model(question, guided=guided).model_json_schema(),
                 provider_id=provider,
-                render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
+                failed_batches=failed_batches,
+                source_scores=_source_question_scores(context),
             )
-        except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
-            application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
+            preparing_evidence = False
+            current = grounded.run_round(
+                question,
+                spans,
+                generation_settings,
+                prompt=prompt,
+                provider_id=provider,
+                parse_text=parse_text_response,
+                parse_images=parse_multimodal_response,
+                guide_steps=runtime_knowledge.guide_steps if runtime_knowledge else (),
+                guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
+                assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
+                image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
+                invalid_output=_invalid_structured_output,
+                glossary=_audit_glossary(runtime_knowledge),
+                confirmed_premises=settings.confirmed_premises,
+                confirmed_premise_sources=settings.confirmed_premise_sources,
+                guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
+            )
+            if batch_calls := input_diagnostic.get("batch_count", 0):
+                current.timing["batch_reading_calls"] = batch_calls
+                current.timing["generation_calls"] = current.timing.get("generation_calls", 0) + batch_calls
+            if note := llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION, provider):
+                step.add("生成の" + note)
+        except Exception as exc:
+            timed_out = isinstance(exc, (TimeoutError, TimeoutException, APITimeoutError)) or deadline_cut_short()
+            input_limited = isinstance(exc, GenerationInputBudgetExceeded)
+            if input_limited:
+                input_diagnostic = exc.diagnostic
+            invalid_draft = not timed_out and (
+                isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc) or input_limited
+            )
+            if not timed_out and not invalid_draft:
+                raise
+            generation_failure = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
+            generation_failure_stage = "evidence.batch_read" if preparing_evidence else "answer.generate"
+            if invalid_draft and not input_limited:
+                structured_output_failed = True
+                if escalation_probe:
+                    raise model_cascade.EscalationRequested((SIGNAL_STRUCTURED_OUTPUT_INVALID,)) from exc
+            generation_failure_detail = (
+                {"category": "input_budget_exceeded", "reason": str(input_diagnostic.get("reason", ""))}
+                if input_limited
+                else {"category": "deadline"}
+                if timed_out
+                else batch_failure_summary(failed_batches[-1], exc)
+                if preparing_evidence and failed_batches
+                else grounded.generation_failure_detail(exc)
+            )
+            logger.warning(
+                "answer generation fell back to document quotes: stage=%s error=%s detail=%s",
+                generation_failure_stage,
+                generation_failure,
+                json.dumps(generation_failure_detail, ensure_ascii=False),
+            )
+            current = grounded.timed_out_round(question)
+            step.result("回答文を生成できなかったため、質問に関係する資料の記載だけを示します")
+            step.output({"error_type": type(exc).__name__, "input_budget": input_diagnostic})
         else:
-            application_summary = step_summary
-            application_basis = step_basis if step_summary else ()
-            application_state = grounded.application_summary_snapshot(step_applications) if step_summary else ()
-            application_step["published"] = sum(1 for application in step_applications if application.published)
-            current = replace(
-                current,
-                applications=[*current.applications, *step_applications],
-                summary=step_summary or current.summary,
-                # 当てはめの監査が支持した結論に置き換えたら、確かめた summary にする。
-                summary_warning="" if step_summary else current.summary_warning,
-            )
-    # 採用した回の推導の審査がすべて済んだ後に、論理が valid な推導ごとに説明の段を 1 回呼ぶ（#4393）。
-    # 監査の型（none / standard / detailed）と当てはめの段で同じ。説明の失敗は説明だけを隠し、結論と原文は残す。
-    if current.applications:
-        with _execution_step(
-            "資料をもとに導いた結論の説明を作る", "質問と資料の原文から、結論の導き方を利用者に示す説明を作ります。"
-        ) as explanation_step:
-            explanation_step.input({"question": question, "applications": len(current.applications)})
-            explanation = explain_applications(
-                question,
-                current.applications,
-                getattr(current.draft, "response_language", None),
-                parse_text=parse_text_response,
-                settings=generation_settings,
-                provider_id=provider,
-            )
-            current.timing["application_explanation"] = explanation
-            explanation_step.output(explanation)
-            shown_count = sum(1 for row in explanation.get("results", []) if row.get("status") == "confirmed")
-            if not explanation["calls"]:
-                reason = next((str(row.get("reason")) for row in explanation.get("results", []) if row.get("reason")), "")
-                explanation_step.skip("説明を作らず、結論と資料の原文だけを示します。", reason_code=reason or "no_valid_derivations")
-            else:
-                explanation_step.result(f"説明 {explanation['calls']} 件を作成、表示 {shown_count} 件")
-    if image_decision["reason"] == "attempted":
-        image_decision["reason"] = (
-            "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
-        )
-    # 廃止・旧版の文書の説明には警告を付ける（#1492・#2738）。生成の是正では直せないので、採用した round の確定の段で
-    # 決定的に行う。
-    superseded = grounded.superseded_evidence_ids(question, spans)
-    superseded_withheld = grounded.withhold_superseded(current.checked, superseded)
-    # 旧版の警告だけの説明は検査の不合格ではないので、信頼度・人の確認の判定に数えない。
-    problems = current.problems - sum(
-        1 for entry in current.checked if entry.marks and all(mark["code"] == "superseded" for mark in entry.marks)
-    )
-    # 監査が目的不一致とした round も本文は残し、回答全体の警告（off_goal）を出す（#2738。以前は #950 で公開した
-    # 説明をすべて捨てていた）。
-    off_goal = grounded.off_goal(current, question)
-    answer_warnings = [passage_marks.answer_warning("off_goal", grounded.answer_labels().off_goal_gap)] if off_goal else []
-    if correction_failure:
-        answer_warnings.append(passage_marks.answer_warning("correction_failed", correction_failure))
-    crag_view = crag_generation.generation_view(
-        crag_assessment,
-        spans,
-        context,
-        budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
-    )
-    current, crag_projection = crag_generation.project_partial_answer(
-        current, crag_view, spans, audited=audit_mode != grounded.AUDIT_MODE_NONE and current.audit is not None
-    )
+            step.result(f"説明 {current.verified} 件")
+            step.output(current.trace)
+    rounds = [
+        {
+            **current.trace(),
+            **({"error": generation_failure} if generation_failure else {}),
+            **({"timing": {"generation_calls": input_diagnostic.get("batch_count", 0)}} if generation_failure else {}),
+        }
+    ]
+    current, crag_projection = crag_generation.project_partial_answer(current, crag_view, spans)
     crag_gaps = crag_generation.gap_lines(question, crag_view)
-    # 資料の原文と照合できない説明・業務ガイドの文から来た説明は、資料の出典・回答の根拠の一覧から外す（#2792）。
-    grounded.detach_unsourced(current.checked)
-    current = grounded.finalize_summary(
-        current, application_summary=application_summary, application_basis=application_basis, application_state=application_state
-    )
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
     guide_notes = (runtime_knowledge.guide_title, guide_notices) if runtime_knowledge is not None and guide_notices else None
-    # 分かっている条件で選んだ分岐の補足（担当者への依頼など）があれば、案内の節を要約の直後に置く（#3769）。
-    # 生成が本文に書いたかどうかに依らず、業務ガイドの設定と確定した条件から決める。
     guide_notes_first = bool(guide_notes and runtime_knowledge is not None and runtime_knowledge.guide_condition_notices)
-    withheld_buttons = grounded.withhold_unconfirmed_button_operations(current.checked) if audit_mode == grounded.AUDIT_MODE_NONE else []
-    if withheld_buttons:
-        # 検査で残った操作を要約からも案内しない。草稿の原文は診断に残す。
-        current = replace(current, summary=grounded.answer_labels().neutral_summary, summary_warning="")
-    # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
-    # 出す item（引用元の決まらない印つきの説明を含む）。
-    published = [entry for entry in current.checked if entry.span and not entry.removed]
-    removed_entries = [entry for entry in current.checked if entry.removed]
+    published = [entry for entry in current.checked if entry.span and entry.published]
     gaps = [*[entry.item.text for entry in current.checked if entry.item.kind == "gap"], *crag_gaps]
-    # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を条件つきにする。
-    # 回答時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）は
-    # 「回答時間の上限により省略した処理」の節に分けて出す（#2040）。不足・条件つきの判定には両方を使う。
-    # 回答が根拠にした文書と業務ガイドの手順の参照の文書の章節だけを出す（#2828。関係の弱い別の文書の章節で一覧を
-    # 占めない）。
     from rag_engine.generation.section_expansion import answer_unread_view
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
-    unread_lines = list(unread_view.lines)
-    if excluded_count := (best_input_budget or input_diagnostic).get("excluded_span_count", 0):
-        unread_lines.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
-    deadline_lines = [line for line in dict.fromkeys(budget.gap_lines(current, feedback)) if line and line not in unread_lines]
-    unread = [*unread_lines, *deadline_lines]
-    # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
-    # 内部 ID を含む差分説明になりやすく、監査が返さなかった id は実際には答えている可能性があるため、
-    # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
-    # 本文に出す文は要求原文の定型日本語。監査の reason（LLM の自由文）は言語が揺れるので trace と
-    # insufficient_reason にだけ使う (#728)。
-    # 丸数字・(1) などで並べた小問（#2399）。説明があれば小問ごとの見出しで分け、根拠の無い小問だけを「確認できない」にする。
-    subquestions = [unit for unit in current.requests if unit.get("subquestion")]
-    reviewed_unanswered = [
-        grounded.missing_request_line(entry, current.requests)
-        for entry in current.unanswered
-        if entry["reviewed"] and entry["status"] == "missing"
-    ]
-    unanswered = [entry["reason"] for entry in current.unanswered]
-    # 業務ガイドの必須の手順を、利用者が行う説明として公開できたか（#2491）。採用した round の確定の後の説明で
-    # 決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の要求にも載せて、
-    # 充足済みとして確定しない。
-    guide_coverage = (
-        grounded.guide_step_coverage(
-            guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics, guide_unsearched
-        )
-        if guide_steps
-        else []
-    )
-    guide_coverage = grounded.apply_guide_contracts(
-        guide_coverage,
-        current.checked,
-        # 監査なしの型は要件を判定しない（決定的な対応付けの充足。#2800）。
-        runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
-        current.audit if audit_mode != grounded.AUDIT_MODE_NONE else None,
-        guide_notices,
-        review_execution=current.review_execution,
-    )
-    acquisition_pending = {
-        step_id
-        for row in (runtime_knowledge.guide_acquisition if runtime_knowledge else ())
-        if not row.get("retained_source_ids")
-        for step_id in row.get("step_ids", ())
-    }
-    for row in guide_coverage:
-        if row["step_id"] in acquisition_pending:
-            row["status"] = grounded.GUIDE_STEP_UNKNOWN
-            row.setdefault("validation", {})["acquisition"] = {
-                "execution": "not_run",
-                "status": "unknown",
-                "reason": "required_acquisition_unverified",
-            }
-    guide_pending = grounded.unexplained_guide_steps(guide_coverage)
-    unverified_guide_statuses = {grounded.GUIDE_STEP_UNKNOWN, grounded.GUIDE_STEP_PARTIAL, grounded.GUIDE_STEP_NOT_SEARCHED}
-    guide_gaps = [grounded.guide_step_gap_line(step) for step in guide_pending if step["status"] not in unverified_guide_statuses]
-    guide_unverified = [grounded.guide_step_gap_line(step) for step in guide_pending if step["status"] in unverified_guide_statuses]
-    unanswered += [*guide_gaps, *guide_unverified]
-    # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
-    needed = grounded.audit_needed_quotes(current, spans, question=question)
-    if crag_projection.get("applied") and not any(entry.published for entry in current.checked):
-        needed = [entry for entry in current.checked if entry.quote_only and entry.span]
-    actionable = [entry for entry in current.checked if entry.published]
-    # 回答に実際に出す根拠。参照欄と画像の参照はこれに同期する。
-    shown = published
-    gap_items = [grounded.CheckedItem(GroundedItem(kind="gap", text=gap)) for gap in gaps]
-    # 確認の項目をモデルが書いた事実（誰が答えられるか・すでに分かっているか・結論を分けるか）から規則で分ける
-    # （#1492）。分かっている条件（業務ガイドの条件）を確かめる項目と、旧版・廃止の版を根拠が決めているときの版の
-    # 確認は数えない。
+    unread = list(unread_view.lines)
+    if excluded_count := input_diagnostic.get("excluded_span_count", 0):
+        unread.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
     settled = grounded.settle_confirmations(
         current.draft,
         known_conditions=(*settings.known_conditions, *((item.label, item.value) for item in resolved_conditions)),
-        version_settled=bool(superseded) and any(str(span.get("evidence_id")) not in superseded for span in spans),
     )
-    # 回答の確定に必要な実データ・別の資料の確認。どの分岐でも本文の最後の節に出す (#688)。
     confirmations = grounded.confirmation_lines(current.draft, question, spans, settled)
-    # 利用者に聞けば分かる条件（対象・ロール・承認など）。本文では同じ節の先頭に出し、回答の構造では
-    # 現場の実データではなく適用の条件にする (#1453)。
     user_conditions = list(settled.user)
     confirmation_section = [*grounded.user_condition_lines(settled), *confirmations]
     external_data_required = requires_environment_data(
         settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required
     )
-    current = grounded.link_summary_evidence(current, published_summary=bool(actionable or (published and not needed)))
-    # summary を確かめきれなかった理由（#2738）。モデルの summary を出す分岐でだけ、summary の段落に警告を付ける。
-    summary_reasons = [passage_marks.reason("summary_unaudited", current.summary_warning)] if current.summary_warning else []
-    # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
-    envelope_entries: list[grounded.CheckedItem] = []
-    if actionable:
-        # 実行できる説明があっても、監査が未回答とした要求があれば、監査が挙げた根拠のうちまだ示していないものを
-        # 手順の後に原文として加える。正しい画面の記載が手元にあるのに示さないことを避ける (#1106)。
-        cited = {entry.span["evidence_id"] for entry in grounded.cited_entries(published) if entry.span}
-        extra = [entry for entry in needed if cast(dict[str, Any], entry.span)["evidence_id"] not in cited] if reviewed_unanswered else []
-        shown = [*published, *extra]
-        envelope_entries = [*[entry for entry in current.checked if entry.published or (entry.span and not entry.removed)], *extra]
-        rendered = grounded.render_answer(
-            current.summary,
-            [*current.checked, *extra],
-            [*reviewed_unanswered, *guide_gaps, *crag_gaps],
-            confirmation_section,
-            unverified=unread_lines,
-            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
-            deadline=deadline_lines,
-            applications=current.applications,
-            subquestions=subquestions,
-            summary_reasons=summary_reasons,
-            answer_warnings=answer_warnings,
-            guide_notes=guide_notes,
-            guide_notes_first=guide_notes_first,
-        )
-    elif needed:
-        # 本文に出す説明が無い（公開 item が無い、またはシステムが補った原文だけ）なら、根拠全体を見た監査が必要と
-        # 挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
-        shown = needed
-        envelope_entries = needed
-        rendered = grounded.render_answer(
-            grounded.answer_labels().neutral_summary,
-            [*needed, *gap_items, *removed_entries],
-            confirmations=confirmation_section,
-            unverified=unread_lines,
-            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
-            deadline=deadline_lines,
-            answer_warnings=answer_warnings,
-            guide_notes=guide_notes,
-            guide_notes_first=guide_notes_first,
-        )
-    elif published:
-        envelope_entries = published
-        rendered = grounded.render_answer(
-            current.summary,
-            current.checked,
-            [*reviewed_unanswered, *guide_gaps],
-            confirmation_section,
-            unverified=unread_lines,
-            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
-            deadline=deadline_lines,
-            applications=current.applications,
-            subquestions=subquestions,
-            summary_reasons=summary_reasons,
-            answer_warnings=answer_warnings,
-            guide_notes=guide_notes,
-            guide_notes_first=guide_notes_first,
-        )
+    shown = [entry for entry in current.checked if entry.span]
+    if generation_failure:
+        # 生成の出力が無い。質問に関係する資料の記載だけを示す。
+        shown = grounded.deadline_document_quotes(question, spans)
+        summary = grounded.answer_labels().neutral_summary
+        rendered_items = shown
     else:
-        # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
-        # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
-        deadline_no_draft = budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
-        # 1 組目の生成の出力が契約を満たさず草稿が無い（#3849）ときも、時間の上限と同じく根拠の抜粋を示す。
-        no_draft = deadline_no_draft or bool(generation_failure)
-        related = (
-            grounded.deadline_document_quotes(
-                question,
-                spans,
-                **({} if deadline_no_draft else {"note": "生成の出力が契約を満たさなかったときの根拠の抜粋"}),
-            )
-            if no_draft
-            else grounded.related_document_quotes(question, spans)
-        )
-        shown = related
-        if no_draft:
-            # 1 組目の生成が時間の上限までに終わらなかった（#1516）・出力が契約を満たさなかった（#3849）。根拠は回答に
-            # 渡すと決めた後なので、拒答（insufficient_evidence）ではなく、示した根拠の抜粋を回答の構造にも載せ、
-            # 原文のみ提示（適用は未確認）の条件つきの回答にする（#1548）。
-            envelope_entries = related
-        # 拒答文では要求ごとの missing 行を重ねない。拒答文と gap がすでに「答えていない」ことを述べており、gap だけの
-        # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
-        # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
-        rendered = grounded.render_answer(
-            grounded.answer_labels().confirmation_only_summary
-            if confirmation_section
-            else grounded.answer_labels().deadline_summary
-            if deadline_no_draft
-            # 生成の出力が契約を満たさなかった（#3849）。時間の上限の文は使わず、資料の記載を示す定型の文にする。
-            else grounded.answer_labels().neutral_summary
-            if no_draft
-            else answer_labels().insufficient_evidence_summary,
-            [*related, *gap_items, *removed_entries],
-            confirmations=confirmation_section,
-            unverified=unread_lines,
-            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
-            deadline=deadline_lines,
-            answer_warnings=answer_warnings,
-            guide_notes=guide_notes,
-            guide_notes_first=guide_notes_first,
-        )
-    answer_text, citation_lines = rendered.text, rendered.citation_lines
-    passage_record = rendered.record()
-    # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
-    # 適用（applicability）は別の判定で、適用未確認（unverified）は人手確認の対象にする (#1012)。
-    unsettled = [e for e in published if not e.quote_only and e.item.applies != "matched"]
-    confidence = current.draft.confidence
-    if not current.verified or off_goal:
-        confidence = "low"
-    elif confidence == "high" and (problems or unanswered or unsettled or unread):
+        summary = str(current.summary or "").strip() or grounded.answer_labels().insufficient_evidence_summary
+        rendered_items = current.checked
+    rendered = grounded.render_answer(
+        summary if published or not confirmation_section else grounded.answer_labels().confirmation_only_summary,
+        [*rendered_items, *(grounded.CheckedItem(GroundedItem(kind="gap", text=line)) for line in crag_gaps)],
+        confirmation_section,
+        unverified=unread,
+        applications=current.applications,
+        subquestions=[unit for unit in current.requests if unit.get("subquestion")],
+        guide_notes=guide_notes,
+        guide_notes_first=guide_notes_first,
+    )
+    unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(1 for entry in current.applications if not entry.published)
+    confidence = "low" if not published else current.draft.confidence
+    unsettled = [e for e in published if e.item.applies != "matched"]
+    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
         confidence = "medium"
-    unverified = any(e.item.applies == "unverified" for e in unsettled)
-    # 印・外した段落の数（#2738。評価と比較に使う）。
-    mark_counts = passage_marks.mark_counts(passage_record)
     from rag_engine.generation.provided_scope import capture_provided_scope
 
+    envelope_entries = [entry for entry in shown if entry.span]
     trace: dict[str, Any] = {
         "provided_evidence_scope": capture_provided_scope(current.citation_trace),
         "pipeline": "grounded",
         **({"crag_assessment": crag_view, "crag_partial_projection": crag_projection} if crag_view is not None else {}),
-        "audit_mode": audit_mode,
-        **{key: current.timing[key] for key in ("semantic_audit_policy", "semantic_audit_observation") if key in current.timing},
-        "evidence_refinement": refinement.diagnostics,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
-        # 根拠の文字予算: 設定値・実際に使った値・送った根拠ブロックの文字数と見積もり token（#3776）。
         "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
-        "generation_input_budget": best_input_budget or input_diagnostic,
-        **(
-            {"button_operation_fallback": {"item_indexes": withheld_buttons, "reason": "button_name_absent_from_cited_text"}}
-            if withheld_buttons
-            else {}
-        ),
+        "generation_input_budget": input_diagnostic,
         "same_unit_fill": unit_fill,
+        "retrieval_counts": _retrieval_counts(context, spans),
         "rounds": rounds,
-        "round_budget": budget.trace(current),
-        # 採用した回答に残る、モデルのカスケードの昇格の信号（#4581。カスケードしない実行でも記録する）。
-        "escalation_signals": list(
-            escalation_reasons(
-                [
-                    *((SIGNAL_STRUCTURED_OUTPUT_INVALID,) if structured_output_failed else ()),
-                    *model_cascade.round_signals(current, audit_mode=audit_mode),
-                ]
-            )
-        ),
-        # 1 組目の生成の出力が契約を満たさず、関係する資料の記載だけを示した（元の例外の型名。#3849）。
+        "escalation_signals": list(escalation_reasons((SIGNAL_STRUCTURED_OUTPUT_INVALID,) if structured_output_failed else ())),
         **(
             {"generation_failure": {"error": generation_failure, "stage": generation_failure_stage, **generation_failure_detail}}
             if generation_failure
             else {}
         ),
-        "llm_calls": sum(
-            r.get("timing", {}).get("generation_calls", 1)
-            + r.get("audit_calls", int(bool(r.get("audit"))))
-            # 論理が valid な推導ごとの説明の段（#4393）。
-            + r.get("timing", {}).get("application_explanation", {}).get("calls", 0)
-            for r in rounds
-        ),
-        "image_fallback": image_decision,
+        "llm_calls": rounds[0].get("timing", {}).get("generation_calls", 1),
         "final_fact_count": len(published),
-        "procedure_quotes": dict(current.timing.get("procedure_quotes") or {}),
-        # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件（#2404）。
         **({"form_field_kinds": form_field_kinds.trace_payload(field_kinds, resolved_conditions, evidence_plans)} if field_kinds else {}),
-        # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
-        # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
-        "grounded_draft": draft_structure(current.draft, settled, superseded=superseded, withheld=superseded_withheld),
-        # 規則を質問の事実に当てはめた結果と、検査・監査で公開しなかった理由（#2155）。
+        "grounded_draft": draft_structure(current.draft, settled),
         "applications": [application.to_payload() for application in current.applications],
-        "application_step": application_step,
-        # 「回答に未反映の関連章節」に出さなかった章節と、行の上限でまとめた数（#2828）。
         **({"unread_sections": unread_view.to_payload()} if unread_view.hidden or unread_view.overflow else {}),
-        # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
-        "citation_lines": citation_lines,
-        # 業務ガイドの手順ごとの充足（#2491）。
-        **(
-            {"guide_step_coverage": [{k: v for k, v in step.items() if k != "evidence_refs"} for step in guide_coverage]}
-            if guide_coverage
-            else {}
-        ),
-        # 手順の充足を意味の近さで決めた embedding の呼び出しの回数・文の数・時間（#2649。呼んだときだけ）。
-        **({"guide_step_embedding": guide_semantics.trace()} if guide_semantics.calls else {}),
-        # 参照欄は公開した引用だけに同期する。
-        "finalization": {
-            "summary": {
-                "status": "withheld" if current.summary_reason else "unverified" if current.summary_warning else "kept",
-                "reason": current.summary_reason or current.summary_warning,
-                "citations": current.timing["summary_citations"],
-                "semantic_validation": {
-                    "execution": current.review_execution,
-                    "adopted": False if grounded.diagnostic_only(current.timing) else current.review_execution == "completed",
-                },
-            },
-            "filtered": bool(problems),
-            "citations_synchronized": True,
-            "off_goal": off_goal,
-            "retained_evidence_ids": sorted({e.span["evidence_id"] for e in grounded.cited_entries(shown) if e.span}),
-            "retained_passage_ids": [],
-            # 段落の印の数（矛盾で外した・未確認・要注意・回答全体の警告。#2738）。
-            "passage_mark_counts": mark_counts,
-        },
+        "citation_lines": rendered.citation_lines,
     }
     envelope = build_envelope(
         requests=current.requests,
-        reviews=[review.model_dump() for review in current.audit.request_reviews] if current.audit else None,
         items=[envelope_item(entry) for entry in envelope_entries],
         gaps=[*gaps, *unread],
         confirmations=confirmations,
         user_conditions=user_conditions,
         external_data_required=external_data_required,
         reference_materials=_string_list(current.draft.reference_materials),
-        off_goal=off_goal,
-        # 別の資料で確かめる確認の項目（who_can_answer=document。#1492）は資料の不足として条件付きにする。
-        # 本文に出した行（資料名を創作していない行）だけを載せ、本文と食い違わないようにする。
         document_items=[text for text in settled.document if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
-        guide_steps=guide_coverage,
-        # 段落の印・外した段落・回答全体の警告（#2738。platform/contracts/answer-passages/passage-marks.json）。
-        **passage_record,
+        unsupported_parts=unsupported_parts,
     )
-    # 回答に使った箇所ごとの使われ方（確かめた説明か参考か。#2040）。画面の件数・バッジと MCP の evidence が使う。
-    # 印の付いた説明の根拠は参考（#2738）。箇所は引用を支える子の chunk（#2710）。子が決まらない説明だけを親
-    # （まとまり）の参照にし、親の ID で兄弟の子すべてを「回答で引用」にしない。
     shown_ids: list[tuple[grounded.CheckedItem, list[str]]] = []
     shown_uses: dict[str, str] = {}
-    # 同じ主張の別の出典（#3526）も、出典ごとに回答で引用した箇所にする。
     for entry in grounded.cited_entries(shown):
         if entry.span is None:
             continue
@@ -4131,7 +3115,7 @@ def synthesize_grounded_answer(
     response = _normalize_answer_response(
         AnswerResponse(
             envelope=envelope,
-            answer_text=answer_text,
+            answer_text=rendered.text,
             confidence=confidence,
             question_type=tuple(_string_list(current.draft.question_type)),
             cited_evidence=tuple(
@@ -4143,7 +3127,6 @@ def synthesize_grounded_answer(
                             "page": cast(dict[str, Any], e.span).get("page", ""),
                             "look_at": "引用",
                             "visible_evidence": e.item.quote[:200],
-                            # 同じ箇所を使った item のうち 1 つでも確かめた説明なら confirmed（#2040）。
                             "answer_use": shown_uses.get(used_id) or "",
                         }
                         for e, ids in shown_ids
@@ -4151,25 +3134,10 @@ def synthesize_grounded_answer(
                     ]
                 )
             ),
-            reasoning_summary=(
-                f"確かめた説明 {current.verified} 件、"
-                f"印を付けた説明 {mark_counts['unverified'] + mark_counts['warning']} 件、"
-                f"根拠と矛盾して除いた説明 {mark_counts['removed']} 件、"
-                f"原文のみ提示 {sum(e.quote_only for e in current.checked)} 件。"
-            ),
-            insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
+            reasoning_summary=f"説明 {current.verified} 件",
+            insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread])),
             needs_human_review=bool(
-                gaps
-                or unread
-                or unanswered
-                or problems
-                or external_data_required
-                or unverified
-                or current.draft.reference_materials
-                or settled.document
-                or mark_counts["removed"]
-                or mark_counts["unverified"]
-                or answer_warnings
+                gaps or unread or external_data_required or current.draft.reference_materials or settled.document or unsupported_parts
             ),
             external_data_required=external_data_required,
             external_data_items=settled.system,
@@ -4188,14 +3156,35 @@ def synthesize_grounded_answer(
     return GroundedAnswer(response, context, tuple(images), mode)
 
 
-# モデルのカスケードの昇格の理由の表示（処理の経過）。語彙は platform の ``pr_backend_core.model_cascade``。
-_ESCALATION_REASON_LABELS = {
-    "structured_output_invalid": "生成の出力が形式の検査を通らなかった",
-    "citation_mismatch": "引用の ID・原文が資料と一致しなかった",
-    "arithmetic_mismatch": "計算を確かめ直すと合わなかった",
-    "conclusion_withheld": "要約・結論を確かめられず保留した",
-    "audit_contradicted": "監査が資料と矛盾すると判定した",
-}
+def _no_candidates_response(context: AnswerContext) -> AnswerResponse:
+    """検索で候補が残らなかった回答（モデルを呼ばない）。"""
+    text = answer_labels().insufficient_evidence_summary
+    return _normalize_answer_response(
+        AnswerResponse(
+            envelope=build_envelope(requests=(), items=(), gaps=[], confirmations=(), external_data_required=False),
+            answer_text=text,
+            confidence="low",
+            insufficient_reason=text,
+            needs_human_review=True,
+            generation_trace={"pipeline": "grounded", "llm_calls": 0, "retrieval_counts": _retrieval_counts(context, ())},
+        )
+    )
+
+
+def _retrieval_counts(context: AnswerContext, spans: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """検索で見つかった件数とモデルに渡した件数を分けて記録する（閾値で全部消えた場合と区別する）。"""
+    ranked = context.ranked_candidates or tuple(context.records)
+    reranked = [record.metadata["rerank"] for record in ranked if isinstance(record.metadata.get("rerank"), dict)]
+    scores = [float(row["relevance_score"]) for row in reranked if row.get("relevance_score") is not None]
+    return {
+        "found": len(ranked),
+        "passed_to_model": len(spans),
+        "top_score": max(scores) if scores else None,
+        "threshold": next((row["min_relevance_score"] for row in reranked if row.get("min_relevance_score") is not None), None),
+    }
+
+
+_ESCALATION_REASON_LABELS = {"structured_output_invalid": "生成の出力が形式の検査を通らなかった"}
 
 
 def synthesize_with_model_cascade(
@@ -4284,7 +3273,7 @@ def _with_model_cascade(answer: GroundedAnswer, record: dict[str, Any]) -> Groun
     return replace(answer, response=response)
 
 
-def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set[str] = (), withheld: int = 0) -> dict[str, Any]:
+def draft_structure(draft: Any, settled: Any) -> dict[str, Any]:
     """回答の診断に残す草稿の構造（#1492）。
 
     確認の項目（text と事実）・規則で分けた結果・説明の種類と適用（本文・引用は除く）・別の資料・旧版として
@@ -4309,8 +3298,6 @@ def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set
             for item in draft.items
         ],
         "confidence": draft.confidence,
-        "superseded_evidence_ids": sorted(superseded),
-        "superseded_withheld": withheld,
     }
 
 
@@ -4326,244 +3313,8 @@ def _request_coverage_budget(settings: Settings) -> CoverageBudget:
     )
 
 
-def _coverage_tokenizer(settings: Settings) -> Callable[[str], Sequence[str]]:
-    """覆域の判定に使う分かち書き。全文検索の質問と同じ tokenizer・業務語を使う。"""
-    config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
-    domain_keywords = (
-        settings.domain_keywords_override if settings.domain_keywords_override is not None else load_domain_keywords(settings.output_dir)
-    )
-    return lambda text: tokenize_text_search_query(text, domain_keywords=domain_keywords, config=config)
 
 
-def _cover_missing_requests(
-    question: str,
-    context: AnswerContext,
-    settings: Settings,
-    *,
-    run_id: Any,
-    preferred_engines: Sequence[str],
-    top_k: int,
-    neighbor_child_count: int,
-    rerank_enabled: bool,
-    retrieval_scope: str,
-    classification_filter: ClassificationFilter | None,
-    runtime_knowledge: RuntimeKnowledgeContext | None,
-    extra_budget: ExtraRetrievalBudget | None = None,
-    searched_queries: Sequence[str] = (),
-    clock: Callable[[], float] = monotonic,
-    unanswered_requests: Sequence[Mapping[str, Any]] | None = None,
-    usage: CoverageUsage | None = None,
-    answer_llm_provider: str | None = None,
-) -> tuple[AnswerContext, dict[str, Any]]:
-    """生成・実行済み監査が示した不足を、元の要求 ID と原文に解決して予算内で探し直す。
-
-    原資料の文字上の一致は判定しない。補助検索は既存の権限・範囲・予算を維持し、既存根拠を追い出さない。
-    違う検索文をプログラムで作れない要求は、原質問のみを除く既存の自動選択で検索文を作る。
-    生成文は検索と rerank の比較にだけ使い、根拠にも回答の入力にもしない。rerank の基準の文は要求の原文のまま。
-    """
-    tokenize = _coverage_tokenizer(settings)
-    targets = coverage_targets(question, tokenize)
-    rows = request_rows(targets)
-    known_ids = {str(unit.get("id") or "") for unit in answer_requirements(question)}
-    unmapped = [
-        str(entry.get("request_id") or "") for entry in unanswered_requests or () if str(entry.get("request_id") or "") not in known_ids
-    ]
-    if unanswered_requests is not None:
-        # 生成後の不足を語の一致で上書きしない。監査の理由や草稿の文は検索入力にしない。
-        for row in rows:
-            statuses = [
-                str(entry.get("status"))
-                for entry in unanswered_requests
-                if str(entry.get("request_id") or "") in known_ids
-                and (str(entry.get("request_id") or "") == row["id"] or str(entry.get("request_id") or "").startswith(row["id"] + "."))
-                and entry.get("status") in {"missing", "partial"}
-            ]
-            if statuses:
-                row["answer_status"] = "missing" if "missing" in statuses else "partial"
-    budget = _request_coverage_budget(settings)
-    if usage is not None:
-        budget = usage.remaining(budget)
-    if extra_budget is not None:
-        # 小問ごとの検索（#2399）と根拠の無い要求の再検索を、追加の検索の枠の残りの中に収める（小問が先）。
-        budget = within_extra_budget(rows, budget, extra_budget.remaining)
-    trace: dict[str, Any] = {
-        "schema_version": COVERAGE_SCHEMA_VERSION,
-        "unmapped_request_ids": unmapped,
-        "requests": rows,
-        "counts": coverage_counts(rows),
-        "budget": asdict(budget),
-        "llm_calls": 0,
-        "assessment": "not_performed",
-        "answerability": "unassessed",
-        "phase": "after_generation" if unanswered_requests is not None else "before_generation",
-    }
-    skip = re_retrieval_skip_reason(rows, budget)
-    if skip == "no_explicit_gap" and unanswered_requests and not any(row.get("answer_status") for row in rows):
-        skip = "unmapped_requests"
-    if skip:
-        trace["re_retrieval"] = {"applied": False, "skipped": skip}
-        return context, trace
-
-    # 欠けた要求の検索では、文書の選択（後回し）と画面目録（LLM を呼ぶ）を使わない。
-    catalog_policy = _catalog_skip_policy(settings, "missing_requirement", screen_only=True)
-    search_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
-    # 上位が読取済みの親だけでも新しい親を選べるよう、読取済みの数だけ広げる（足す数は下の select_new_parents の上限のまま）。
-    per_query = max(1, min(int(top_k), max(budget.max_chunks, budget.chunks_per_subquestion) + len(context.records)))
-    vector_only: set[str] = set()
-    allowed = tuple(
-        strategy for strategy, _ in QUERY_STRATEGIES if strategy in _ROUTABLE_QUERY_STRATEGIES and strategy != SIMPLE_RETRIEVAL_STRATEGY
-    )
-
-    def count_model_call() -> None:
-        trace["llm_calls"] += 1
-
-    def expand(target: RequestTarget) -> Sequence[str]:
-        entry: dict[str, Any] = {"request_id": target.id, "selected_strategy": AUTO_ROUTING_STRATEGY}
-        trace.setdefault("query_expansions", []).append(entry)
-        try:
-            expansion = build_query_expansion(
-                target.query or target.text,
-                AUTO_ROUTING_STRATEGY,
-                settings,
-                answer_llm_provider=answer_llm_provider,
-                allowed_strategies=allowed,
-                on_model_call=count_model_call,
-            )
-        except Exception as exc:
-            entry.update(status="failed", error=type(exc).__name__)
-            raise
-        generated = expansion.generated_queries
-        entry.update(
-            status="generated" if generated else "no_queries",
-            effective_strategy=expansion.effective_strategy,
-            routing_reason=expansion.routing_reason,
-            queries=list(generated),
-            rejected_queries=list(expansion.rejected_queries),
-        )
-        vector_only.update(_dedupe_query_key(query) for query in expansion.vector_only_queries)
-        return generated
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        hypotheses = tuple(query for query in queries if _dedupe_query_key(query) in vector_only)
-        return build_adb_hybrid_answer_context(
-            text,
-            run_id,
-            preferred_engines,
-            search_settings,
-            top_k=per_query,
-            neighbor_child_count=neighbor_child_count,
-            max_records=per_query,
-            retrieval_queries=queries,
-            rerank_phase="missing_requirement",
-            catalog_skip_reasons=catalog_policy,
-            rerank_enabled=rerank_enabled,
-            retrieval_scope=retrieval_scope,
-            classification_filter=classification_filter,
-            runtime_knowledge=runtime_knowledge,
-            vector_only_queries=hypotheses,
-            trusted_queries=hypotheses,
-        )
-
-    started = clock()
-    results, stop = run_targeted_retrievals(
-        rows,
-        targets,
-        budget=budget,
-        retrieve=retrieve,
-        runtime_knowledge=runtime_knowledge,
-        tokenize=tokenize,
-        searched_queries=(*searched_queries, *(usage.searched_queries if usage else ())),
-        clock=clock,
-        expand=expand if unanswered_requests is not None else None,
-    )
-    elapsed = max(0.0, clock() - started)
-    if usage is not None:
-        subquestion_ids = {target.id for target in targets if target.subquestion}
-        usage.subquestions += sum(result.request_id in subquestion_ids and not result.reused and bool(result.queries) for result in results)
-        usage.queries += sum(result.request_id not in subquestion_ids and not result.reused and bool(result.queries) for result in results)
-        usage.elapsed_seconds += elapsed
-        usage.searched_queries.extend(query for result in results for query in result.queries)
-    if not results and stop == "same_query":
-        trace["re_retrieval"] = {"applied": False, "skipped": stop}
-        return context, trace
-    if extra_budget is not None:
-        extra_budget.take(REQUEST_COVERAGE_KIND, sum(not result.reused and bool(result.queries) for result in results))
-    existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
-    selected = select_new_parents(results, existing, budget.max_chunks)
-    added_ids: list[str] = []
-    rejected = ""
-    if selected:
-        parents = tuple(replace(parent, reason="request_coverage") for _, parent in selected)
-        added = context_bundle_from_parent_evidence(parents, max_chars=MAX_CONTEXT_CHARS)
-        visible = list(context.records)
-        candidate = _merge_crag_evidence(
-            context,
-            AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence, evidence_tree=added.evidence_tree),
-            question,
-            max_records=max(1, len(visible), len(added.records)),
-            max_chars=MAX_CONTEXT_CHARS * 2,
-        )
-        merged_keys = {r.chunk_uid or r.id for r in candidate.records}
-        if visible and not {r.chunk_uid or r.id for r in visible} <= merged_keys:
-            rejected = "would_drop_existing_evidence"
-        else:
-            added_ids = [key for key in merged_keys - existing if key]
-            pool = {r.chunk_uid or r.id: r for r in (*context.expansion_records, *(r for res in results for r in res.expansion_records))}
-            context = replace(
-                candidate,
-                expansion_records=tuple(pool.values()),
-                preferred_child_ids=context.preferred_child_ids,
-                ranked_candidates=context.ranked_candidates,
-                deferred_records=context.deferred_records,
-                document_selection=context.document_selection,
-            )
-    added_set = set(added_ids)
-    if usage is not None:
-        usage.chunks += sum(
-            request_id not in subquestion_ids and (parent.record.chunk_uid or parent.record.id) in added_set
-            for request_id, parent in selected
-        )
-    trace["re_retrieval"] = {
-        "applied": bool(added_ids),
-        "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
-        "elapsed_ms": int((clock() - started) * 1000),
-        "queries": [
-            {
-                "request_id": result.request_id,
-                "queries": list(result.queries),
-                "candidates": len(result.parents),
-                "reused": result.reused,
-                "added_chunk_ids": [
-                    (p.record.chunk_uid or p.record.id)
-                    for rid, p in selected
-                    if rid == result.request_id and (p.record.chunk_uid or p.record.id) in added_set
-                ],
-                "elapsed_ms": result.elapsed_ms,
-                **({"error": result.error} if result.error else {}),
-            }
-            for result in results
-        ],
-        "added_chunk_ids": sorted(added_set),
-    }
-    by_request = {result.request_id: result for result in results}
-    for row in rows:
-        if result := by_request.get(row["id"]):
-            row["retrieval_status"] = (
-                "not_executed"
-                if not result.queries
-                else "failed"
-                if result.error
-                else "candidates_found"
-                if result.parents
-                else "no_candidates"
-            )
-            if not result.queries and result.error:
-                row["skip_reason"] = "query_expansion_failed"
-            row["evidence_ids"] = [p.record.chunk_uid or p.record.id for p in result.parents]
-        elif row.get("answer_status"):
-            row["retrieval_status"] = "not_executed"
-            row["skip_reason"] = stop or "budget"
-    return context, trace
 
 
 def _cover_guide_steps(
@@ -4833,29 +3584,8 @@ def _guide_step_lines(trace: dict[str, Any]) -> list[str]:
     return lines
 
 
-# 要求ごとの根拠の探し直しをしなかった理由（`re_retrieval_skip_reason`）の表示名（#2341）。
-_COVERAGE_SKIP_LABELS = {
-    "disabled": "しない（設定で無効）",
-    "no_budget": "しない（探し直しの上限が 0）",
-    "same_query": "しない（最初の検索と違う検索文を作れない）",
-    "no_explicit_gap": "しない（生成・監査による明示的な不足なし）",
-    "deadline": "しない（探し直しの時間上限）",
-    "unmapped_requests": "しない（未回答の要求を元の質問の要求単位に対応できない）",
-}
 
 
-def _coverage_step_lines(trace: dict[str, Any]) -> list[str]:
-    """覆域の工程の記録の行。"""
-    lines = [
-        f"{row['id']}: {row.get('retrieval_status', 'not_planned')}（{_display_query(row['text'])}）" for row in trace.get("requests", ())
-    ]
-    re_retrieval = trace.get("re_retrieval") or {}
-    for query in re_retrieval.get("queries", ()):
-        lines.append(
-            f"{query['request_id']} を再検索: 根拠 {len(query['added_chunk_ids'])} 件を追加"
-            + (f"（失敗: {query['error']}）" if query.get("error") else "")
-        )
-    return lines
 
 
 def _synthesize_answer_from_context(question: str, context: AnswerContext, settings: Settings, **options: Any) -> AnswerResponse:
@@ -7140,21 +5870,9 @@ def answer_question_result(
                 )
             )
 
-        # 生成前は要求 ID だけを登録し、本文の文字上の一致から追加検索を決めない。
-        request_coverage: dict[str, Any] = {
-            "schema_version": COVERAGE_SCHEMA_VERSION,
-            "requests": request_rows(coverage_targets(request_text, _coverage_tokenizer(settings))),
-            "phase": "before_generation",
-            "assessment": "not_performed",
-            "answerability": "unassessed",
-            "re_retrieval": {"applied": False, "skipped": "no_explicit_gap" if settings.request_coverage_retrieval_enabled else "disabled"},
-        }
-
-        # 不足要求の追加検索も同じ読取記録・時間・入力・抽出呼び出しの予算を使う。
         context, section_expansion = complete_sections(context, "request_coverage")
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = {
-            "request_coverage": request_coverage,
             "query_overflow": overflow_trace,
             **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
             **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
@@ -7233,33 +5951,6 @@ def answer_question_result(
 
         unread_for_answer = list(section_expansion.unread) if section_expansion is not None else []
 
-        def recover_requests(candidate: AnswerContext, unanswered: Sequence[Mapping[str, Any]]) -> tuple[AnswerContext, dict[str, Any]]:
-            recovered, trace = _cover_missing_requests(
-                request_text,
-                candidate,
-                settings,
-                run_id=run_id,
-                preferred_engines=preferred_engine_ids,
-                top_k=chunk_top_k,
-                neighbor_child_count=chunk_neighbor_count,
-                rerank_enabled=effective_rerank_enabled,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-                runtime_knowledge=runtime_knowledge,
-                extra_budget=extra_budget,
-                usage=coverage_usage,
-                unanswered_requests=unanswered,
-                searched_queries=coverage_usage.searched_queries if crag_attempts else retrieval_queries,
-                answer_llm_provider=answer_llm_provider,
-            )
-            request_coverage.setdefault("after_generation", []).append(trace)
-            if trace.get("re_retrieval", {}).get("applied"):
-                recovered, completed = complete_sections(recovered, "after_generation")
-                if completed is not None:
-                    unread_for_answer[:] = completed.unread
-                    evidence_trace["section_expansion"] = completed.trace
-            return recovered, trace
-
         # 生成の入口で判定し、別の生成実装からも直接根拠の条件を迂回させない。
         # 通常検索の章補完だけでは、CRAGの部分回答制限を適用しない。
         crag_assessment = (
@@ -7301,7 +5992,6 @@ def answer_question_result(
                 unread_sections=unread_for_answer,
                 unread_documents={document_id for document_id, _start, _end in guide_ranges},
                 evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
-                recover_requests=recover_requests if settings.request_coverage_retrieval_enabled else None,
             )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context

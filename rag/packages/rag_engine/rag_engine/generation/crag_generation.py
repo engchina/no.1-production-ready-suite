@@ -8,7 +8,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from rag_engine.generation import passage_marks
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.crag_support import _crag_context_fingerprint, _crag_quote_matches
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
@@ -216,8 +215,6 @@ def gap_lines(question: str, view: Mapping[str, Any] | None) -> list[str]:
     return lines
 
 
-# 監査なしで、検索評価が確かめた部分の原文に結び付かない説明に付ける印の理由（#3843）。
-CRAG_UNBOUND_CLAIM_DETAIL = "検索評価で確かめた部分の原文に結び付かない説明で、監査なしのため意味の支持を確かめていない"
 
 
 def _bound_to_verified(entry: Any, allowed: Sequence[Mapping[str, Any]]) -> bool:
@@ -252,7 +249,7 @@ def _add_verified_quotes(kept: list[Any], allowed: Sequence[Mapping[str, Any]], 
 
 
 def project_partial_answer(
-    current: Any, view: Mapping[str, Any] | None, spans: Sequence[dict], *, audited: bool
+    current: Any, view: Mapping[str, Any] | None, spans: Sequence[dict]
 ) -> tuple[Any, dict[str, Any]]:
     """部分回答の説明を、評価が確かめた部分の原文と照らして扱う。
 
@@ -272,48 +269,15 @@ def project_partial_answer(
         # 確かめた直接の原文が無いので、部分回答の範囲を決められない。生成の説明は通常の検査のまま残し、
         # 未確認の観点は gap_lines で示す（写しの照合の失敗を、回答の削除に変えない）。
         return current, {"applied": False, "reason": view.get("generation_decision") or GATE_UNVERIFIED_PART}
-    from rag_engine.generation import grounded
 
     allowed = [
         value for part in view.get("answerable_parts") or () if part.get("status") == "supported" for value in part.get("evidence") or ()
     ]
-    if not audited:
-        # 確かめた部分が増えても説明を減らさない（確かめた部分が無い回は上の分岐で説明をそのまま残す）。
-        kept = list(current.checked)
-        bound = marked = 0
-        for entry in kept:
-            if not entry.published:
-                continue
-            if _bound_to_verified(entry, allowed):
-                bound += 1
-            elif entry.state != passage_marks.UNVERIFIED:
-                entry.mark("unassessed", CRAG_UNBOUND_CLAIM_DETAIL)
-                marked += 1
-        added = _add_verified_quotes(kept, allowed, spans)
-        return replace(current, checked=kept), {
-            "applied": True,
-            "omitted_claims": [],
-            "bound_claims": bound,
-            "marked_claims": marked,
-            "added_quotes": added,
-            "summary_replaced": False,
-            "retained_reason": "unaudited_partial_answer_keeps_claims_with_marks",
-        }
-    kept, omitted = [], []
-    for entry in current.checked:
-        if entry.item.kind == "gap" or (
-            entry.review_assessment.get("effective_support") == "supported" and _bound_to_verified(entry, allowed)
-        ):
-            kept.append(entry)
-        else:
-            omitted.append({"text": entry.item.text, "reason": "no_semantic_support_within_answerable_parts"})
-    _add_verified_quotes(kept, allowed, spans)
-    return replace(current, checked=kept, summary=grounded.answer_labels().neutral_summary, applications=[]), {
-        "applied": True,
-        "omitted_claims": omitted,
-        "summary_replaced": True,
-        "retained_reason": "partial_answer_requires_verified_semantics_or_direct_quotes",
-    }
+    # 確かめた部分が増えても説明を減らさない。確かめた原文は参考として足す。
+    kept = list(current.checked)
+    bound = sum(1 for entry in kept if entry.published and _bound_to_verified(entry, allowed))
+    added = _add_verified_quotes(kept, allowed, spans)
+    return replace(current, checked=kept), {"applied": True, "omitted_claims": [], "bound_claims": bound, "added_quotes": added, "summary_replaced": False}
 
 
 def gate_record(view: Mapping[str, Any] | None) -> dict[str, Any]:

@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from collections.abc import Collection, Sequence
-from decimal import Decimal
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
 from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.json_schema import SkipJsonSchema
-from rag_parser_core.language.text import arabic_numbers
 
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
-from rag_engine.generation.evidence_cuts import evidence_cuts
 from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
-from rag_engine.retrieval.table_header_lines import span_header_lines
 
 # 質問の種類（question_type）の閉じた語彙（#4586）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の記載で
 # 答えられる種類を分ける。種類の判定はモデルの構造化出力だけが行い、コードは値の集合を比べるだけで語の意味を読まない。
@@ -32,27 +26,8 @@ QUESTION_TYPE_DESCRIPTION = (
 
 # source 型だけの出力を作り直すときに、生成の user の入力の後ろへ足す部品（#4586）。何が違反でどう直すかだけを書く。
 # 既定の user の入力（Step 6 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
-SOURCE_ONLY_DERIVATION_PROMPT = (
-    "## Step 7: 導出が要る要求の要点を作り直す\n"
-    f"- source_only_requests の要求は、前回の出力で question_type に {' / '.join(DERIVATION_QUESTION_TYPES)} のどれかを"
-    "選んだのに、要点がすべて source 型（原文の提示だけ）で、質問の既知値を原文に当てはめた答えが無かった。\n"
-    "- その要求の要点を、basis の原文と質問の既知値から導く answer 型（reasoning に方法、result に答え）で返す。"
-    "導くのに足りない資料・値は gap 型に書く。\n"
-    "- 応答 schema どおりの完全な草稿を返す。\n"
-)
-
-
 # 表の見出しの行だけを basis に選んだ source 型の要点を作り直すときに、生成の user の入力の後ろへ足す部品（#4592）。
 # 見出しの行かは表の chunk の分割の記録で決まり（``retrieval.table_header_lines``）、この部品は違反と直し方だけを書く。
-HEADER_ONLY_SOURCE_PROMPT = (
-    "## Step 7: 表の見出しの行だけを示した要点を作り直す\n"
-    "- header_only_requests の要求の要点は、前回の出力で source 型の basis に表の見出しの行（列名の行）だけを選び、"
-    "表のデータの行を選んでいなかった。見出しの行だけでは答えにならない。\n"
-    "- その要点の basis に、答えが書かれた表のデータの行の単位を選ぶ。根拠に答えが書かれた行が無ければ gap 型に書く。\n"
-    "- 応答 schema どおりの完全な草稿を返す。\n"
-)
-
-
 def _without_default(schema: dict[str, Any]) -> None:
     schema.pop("default", None)
 
@@ -191,61 +166,6 @@ def answer_parts_model(
     return model
 
 
-def source_only_derivation(value: BaseModel) -> list[str]:
-    """導出が要る種類を question_type で宣言した出力で、要点がすべて source 型なら、その要求 ID を返す（#4586）。
-
-    source 型は原文の提示だけで、質問の既知値を当てはめた答えを持たない。モデル自身が計算・区分・条件の当てはめの
-    質問と宣言したのに導出（answer 型）も不足（gap 型）も無い出力は、自分の宣言と矛盾し、質問に答えていない。
-    比べるのは閉じた語彙の値と要点の型だけで、質問・原文の語の意味は読まない。
-    """
-    if not getattr(type(value), "_uses_typed_answer_parts", False):
-        return []
-    raw = value.model_dump(exclude_unset=True)
-    if not set(raw.get("question_type") or ()) & set(DERIVATION_QUESTION_TYPES):
-        return []
-    parts = raw.get("answer_parts") or []
-    if not parts or any(part["answer"]["kind"] != "source" for part in parts):
-        return []
-    return list(dict.fromkeys(str(part["request_id"]) for part in parts))
-
-
-def _header_only(selected: Sequence[BoundUnitRange]) -> bool:
-    """選んだ単位がすべて、根拠に記録した表の見出しの行（データの行を 1 つも含まない）か。
-
-    見出しの行かは、表の chunk の分割の記録と一致した行の原文との一致だけで決める（語の意味は読まない）。
-    """
-    if not selected:
-        return False
-    for binding in selected:
-        headers = span_header_lines(binding.snapshot.span())
-        text = str(binding.snapshot.span().get("text") or "")
-        units = binding.snapshot.units[binding.first : binding.last + 1]
-        if not headers or any(text[start:end].strip() not in headers for start, end in units):
-            return False
-    return True
-
-
-def header_only_source_parts(value: BaseModel, catalog: SentUnitCatalog) -> list[str]:
-    """source 型の要点の basis が表の見出しの行だけのとき、その要求 ID を返す（#4592）。
-
-    見出しの行は列名で、行の値を示さない。見出しの行だけを答えの原文にした要点は、表の値に答えていない。
-    原文の写しだけの導出（``_copies_one_original``）は直接の記載になるので、同じく数える。
-    """
-    if not getattr(type(value), "_uses_typed_answer_parts", False):
-        return []
-    found = []
-    for part in value.model_dump(exclude_unset=True).get("answer_parts") or []:
-        answer = part["answer"]
-        if answer["kind"] == "gap":
-            continue
-        selected = list(catalog.bind(answer["basis"]["unit_ids"]))
-        if answer["kind"] == "answer" and not _copies_one_original(_without_bound_locators(answer["result"], selected), selected):
-            continue
-        if _header_only(selected):
-            found.append(str(part["request_id"]))
-    return list(dict.fromkeys(found))
-
-
 def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
     """実際に選んだ出典と一致する位置だけの括弧を、既存の出典表示へ一本化する。"""
     citations = [
@@ -258,69 +178,10 @@ def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
     return cleaned.text
 
 
-def _formal_text(text: str) -> str:
-    """空白（改行・全角空白を含む）だけを除く。表記・語の意味は変えない。"""
-    return "".join(text.split())
 
 
-def _copies_one_original(result: str, selected: list[BoundUnitRange]) -> bool:
-    """導出の結果が、選んだ1つの原文範囲の写しだけで成り立つかを形式で確かめる。
-
-    次をすべて満たすときだけ真にする（文字列の包含の検査で、語の意味は判定しない）。
-    1. basis が1つの文書の連続した1範囲だけを選ぶ（ほかの原文を前提・条件に使っていない）。
-    2. 空白を除いた結果が、空白を除いたその範囲の原文に含まれる。
-    3. 範囲の両端の単位を外すと含まれなくなる（写しに要らない単位を選んでいない）。
-    結果が原文に無い計算・組合せ・条件の当てはめは 2 を満たさず、導出のまま独立の検証を通る。
-    """
-    if len(selected) != 1:
-        return False
-    target = _formal_text(result)
-    binding = selected[0]
-    if not target or target not in _formal_text(binding.text):
-        return False
-    if binding.first == binding.last:
-        return True
-    narrower = (
-        BoundUnitRange(binding.snapshot, binding.first + 1, binding.last),
-        BoundUnitRange(binding.snapshot, binding.first, binding.last - 1),
-    )
-    return all(target not in _formal_text(candidate.text) for candidate in narrower)
 
 
-_ARABIC_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
-
-
-def _number_values(text: str) -> set[Decimal]:
-    """文の算用数字の値の集合。全角・桁区切り・位取りの混在をそろえるだけの形式の解析（語の意味は読まない）。"""
-    normalized = arabic_numbers(unicodedata.normalize("NFKC", text), kanji=False, spaced=True)
-    return {Decimal(value) for value in _ARABIC_NUMBER.findall(normalized)}
-
-
-def _units_without_table_headers(selected: list[BoundUnitRange]) -> list[str]:
-    """選んだ単位の本文（表の見出しの行を除く）。見出しは区切りの行か取込の記録だけで決める（``evidence_cuts``。列名を推測しない）。"""
-    texts = []
-    for binding in selected:
-        span = binding.snapshot.span()
-        text = str(span.get("text") or "")
-        tables = evidence_cuts(span, {}).tables  # 表の範囲だけを使うので、章節の切れ目の入力は要らない。
-        for start, end in binding.snapshot.units[binding.first : binding.last + 1]:
-            if not any(table.start <= start < table.body_start for table in tables):
-                texts.append(text[start:end])
-    return texts
-
-
-def _states_values_of_one_unit(result: str, selected: list[BoundUnitRange]) -> bool:
-    """結果の数字がすべて、引用した 1 つの原文の単位に書かれているかを形式で確かめる（#4631）。
-
-    表の見出しの行は単位の数に入れない。複数の単位を引用している・どれかの数字が単位に無い（足し算で出した合計など）・
-    数字が無い結果は真にしない。数の値を比べるだけで、語の意味は判定しない。1 つの単位だけを引用して合計がたまたまその
-    単位の値と同じ結果は形式では区別できず、真になる。
-    """
-    units = _units_without_table_headers(selected)
-    if len(units) != 1:
-        return False
-    numbers = _number_values(result)
-    return bool(numbers) and numbers <= _number_values(units[0])
 
 
 def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[str, Any]]) -> None:
@@ -380,21 +241,10 @@ def canonical_answer_parts(
     catalog: SentUnitCatalog,
     *,
     question: str | None = None,
-    underived_requests: Collection[str] = (),
-    stated_values: bool = False,
 ) -> GroundedDraft:
     """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。
 
     要求ごとの根拠の計画は要点の basis から導く（``basis_request_plans``。#4611）。
-
-    ``underived_requests`` は、導出が要るのに導出を作れなかった要求（``source_only_derivation`` の作り直しが契約を
-    満たさなかったとき。#4586）。その要求の source 型の要点は、原文を引用に残したまま導出の無い derived にし、
-    要約に使わない（``check_answer_parts`` が欠けた要点として不足の記載を足す）。原文の列挙を答えとして示さない。
-
-    ``stated_values`` は ``source_only_derivation`` の作り直しの出力のとき真にする（#4631）。作り直しの契約は導出か不足しか
-    受けないので要点に mode が無く、原文に書かれた値も answer 型の言い換えで返る。この出力と、mode=stated を選んだ answer 型の
-    要点で、結果の数字が引用した 1 つの単位にあるものは、その原文の直接の記載にする（導出にすると、表の行の判定が決まらない
-    題で保留になり値を答えない）。mode=derivation の要点には掛けない。モデルの文は表示しない。
     """
     raw = value.model_dump(exclude_unset=True)
     wire_parts = raw.pop("answer_parts", [])
@@ -414,17 +264,6 @@ def canonical_answer_parts(
         if kind not in {"source", "answer", "gap"}:
             raise ValueError("回答要点の役割を確認できません。")
         selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
-        if kind == "answer":
-            result = _without_bound_locators(answer["result"], selected)
-            may_state_value = stated_values or part.get("mode") == "stated"
-            if _copies_one_original(result, selected) or (may_state_value and _states_values_of_one_unit(result, selected)):
-                # 原文の写しだけ・原文の値だけの結果は、選んだ ID の原文を直接の記載にする。モデルの文は表示しない。
-                kind = "source"
-        underived = kind == "source" and part["request_id"] in underived_requests
-        # 表の見出しの行だけを示す要点は答えとして受けない（#4592）。見出しの行を確認できた事項に出さず、欠けた要点にする。
-        header_only = kind == "source" and _header_only(selected)
-        if header_only:
-            selected = []
         if selected:
             plan_basis.append((part["request_id"], selected))
         indexes = []
@@ -468,8 +307,6 @@ def canonical_answer_parts(
             items.append({"kind": "gap", "request_id": part["request_id"], "text": answer["text"], "citations": []})
             bindings.append(None)
             text = answer["text"]
-        elif underived or header_only:  # 導出が要るのに作れなかった・見出しの行だけの要点。答えの文は無い。
-            text = ""
         else:  # source は選んだ原文だけを直接提示する。
             text = "\n".join(items[index]["text"] for index in indexes)
         parts.append(
@@ -477,9 +314,7 @@ def canonical_answer_parts(
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "derived"
-                if underived or header_only
-                else "direct"
+                "result_kind": "direct"
                 if kind == "source"
                 else "derived"
                 if kind == "answer"
@@ -489,7 +324,7 @@ def canonical_answer_parts(
             }
         )
         texts.append(text)
-        part_sources.append(indexes if kind != "answer" and not underived and not header_only else [])
+        part_sources.append(indexes if kind != "answer" else [])
         part_applications.append(app_indexes)
     _attach_basis_quotes(parts, applications)
     chosen = list(
