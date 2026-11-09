@@ -1,8 +1,9 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
-from datetime import datetime
 from typing import Literal
 from urllib.parse import urlsplit
+
+from pr_backend_core.timezones import UtcDatetime
 
 # OCI 認証の schema は3製品共通（platform の pr_system_settings。#100）。互換のため re-export する。
 # データベース設定の schema は3製品共通（pr_system_settings。#108）。互換のため re-export する。
@@ -757,7 +758,7 @@ class AnswerPromptView(BaseModel):
     customized: bool
     required_placeholders: list[str]
     required_tokens: list[str] = Field(default_factory=list)
-    updated_at: datetime | None = None
+    updated_at: UtcDatetime | None = None
 
 
 class AnswerPromptPart(BaseModel):

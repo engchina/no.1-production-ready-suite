@@ -17,6 +17,7 @@ import {
   type RunStatus as CommonRunStatus,
   type RunStatusFilter as CommonRunStatusFilter,
   type RunTimelineStep,
+  operationTimestampMs,
 } from "@production-ready/ui";
 
 import type { RunExecutorFilter, RunListKind, RunListKindQuery, RunListStatus, RunState, RunStep } from "@/lib/api";
@@ -180,7 +181,7 @@ export function runFinishedAt(run: RunState): string | null {
 export function runDurationMs(run: RunState): number | null {
   const finished = runFinishedAt(run);
   if (!finished) return null;
-  const ms = Date.parse(finished) - Date.parse(run.created_at);
+  const ms = (operationTimestampMs(finished) ?? Number.NaN) - (operationTimestampMs(run.created_at) ?? Number.NaN);
   return Number.isFinite(ms) ? Math.max(0, ms) : null;
 }
 

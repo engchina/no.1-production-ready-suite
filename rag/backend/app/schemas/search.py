@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any, Literal, Self
 
 from pr_backend_core.api.validation import validation_error_messages
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -703,7 +704,7 @@ class AnswerRecordSummary(BaseModel):
     question: str
     rewritten_question: str | None = None
     confidence: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class AnswerRecordDetail(AnswerRecordSummary):

@@ -1,9 +1,9 @@
 """ナレッジベース関連スキーマ。"""
 
-from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
@@ -44,9 +44,9 @@ class KnowledgeBaseSummary(KnowledgeBaseRef):
         default=None,
         description="検索対象Chunk数。一覧では集計せずnull。正確な値は詳細で取得する。",
     )
-    created_at: datetime
-    updated_at: datetime
-    archived_at: datetime | None = None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+    archived_at: UtcDatetime | None = None
 
 
 class KnowledgeBaseDetail(KnowledgeBaseSummary):

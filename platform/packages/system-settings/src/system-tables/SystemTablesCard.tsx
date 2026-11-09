@@ -79,9 +79,7 @@ function formatNumber(value: number): string {
 /** ISO 文字列を「MM/DD HH:mm」へ。未設定・無効値はダッシュ。 */
 function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return dateTimeFormat.format(date);
+  return dateTimeFormat.format(iso);
 }
 
 /** Migration head の表示（番号は `v17`、名前はそのまま）。 */
