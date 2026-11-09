@@ -1,7 +1,6 @@
 """利用者が確定した前提だけを、正式入口から同次監査へ渡す。実モデル呼出0。"""
 
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 from rag_engine.config import LLM_PURPOSE_AUDIT, settings_for_llm_purpose
@@ -21,13 +20,12 @@ VALUE = "担当A"
 QUESTION = "登録方法は?"
 
 
-def guide_settings(source: str, state: str, *, mode: str = "standard") -> Settings:
+def guide_settings(source: str, state: str) -> Settings:
     return Settings(
         rag_support_guide_enabled=True,
         rag_support_guide={
             "known_conditions": [{"label": LABEL, "value": VALUE, "source": source, "state": state}]
         },
-        rag_answer_audit_mode=cast(Any, mode),
         rag_query_strategy="simple_retrieval",
         rag_section_expansion_enabled=False,
     )

@@ -452,8 +452,6 @@ def test_field_changes_match_the_current_storage_contract() -> None:
     assert snapshot == {(spec.section, spec.key) for spec in FIELD_SPECS}
 
 
-
-
 def test_published_release_without_applications_section_is_rejected() -> None:
     raw = builtin_pack().to_dict()
     del raw["answer_labels"]["applications_section"]
