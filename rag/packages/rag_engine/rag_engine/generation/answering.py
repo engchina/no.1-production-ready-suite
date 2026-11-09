@@ -55,7 +55,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import crag_generation, form_field_kinds, model_cascade, passage_marks, row_conditions
+from rag_engine.generation import crag_generation, form_field_kinds, model_cascade, passage_marks
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -2854,35 +2854,6 @@ def _invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, LlmRunawayOutput | LlmStreamOutputMissing) or is_invalid_structured_output(exc)
 
 
-def _row_condition_step(question: str, sent_units: SentUnitCatalog, *, settings: Settings) -> row_conditions.RowConditionsResult | None:
-    """送った根拠の表の各行の条件を、質問に当てはめる段（#4349）。投影できる表が無ければ None（段を開かない）。
-
-    動かすかはコードが決める: 採用した回が実際に送った単位の目録（``Round.sent_units``。#4620）に投影できる表が
-    1 つ以上あれば動かし、推導（applications）の有無には依らない。結果は推導の審査・当てはめの段・説明の段へ渡す。
-    この段のモデルは段ごとの設定（``row_condition_call_settings``）で、使えなければ実行せず理由を残す。
-    """
-    from rag_engine.generation import grounded
-
-    tables, skipped = grounded.sent_table_views(sent_units)
-    if not tables:
-        return None
-    with _execution_step(
-        "表の各行の条件を質問に当てはめる", "送った資料の表の各行の条件が、質問の内容から成り立つかを行ごとに確かめます。"
-    ) as step:
-        step.input(
-            {"question": question, "tables": [{"evidence_id": table["evidence_id"], "rows": len(table["rows"])} for table in tables]}
-        )
-        result = row_conditions.evaluate_tables(question, tables, skipped, parse_text=parse_text_response, settings=settings)
-        step.output(result.trace())
-        if result.status == "model_unavailable":
-            step.skip("この段のモデルを使えないため、表の行の判定を行いません。", reason_code="row_condition_model_unavailable")
-        elif undetermined := result.undetermined():
-            step.result(f"表 {len(result.tables)} 件のうち、決められない行のある表 {len(undetermined)} 件（推導を保留）")
-        else:
-            step.result(f"表 {len(result.tables)} 件の行をすべて判定")
-    return result
-
-
 def synthesize_grounded_answer(
     question: str,
     context: AnswerContext,
@@ -3695,63 +3666,6 @@ def synthesize_grounded_answer(
                 "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
             }
         )
-    # 送った根拠に投影できる表があれば、推導の有無に関わらず行の判定の段を 1 回動かす（#4349）。結果は推導の審査・
-    # 当てはめの段・説明の段へ渡す。生成の草稿は作り直さない（既存の門はそのまま）。表は採用した回の結果に結び付けた
-    # 送達の目録から投影する（後の回が不採用でも、前の回が送った表で動く。#4620）。
-    row_key = tuple(str(span.get("evidence_id") or "") for span in spans)
-    if row_key not in shared.row_conditions:
-        shared.row_conditions[row_key] = _row_condition_step(question, current.sent_units, settings=settings)
-    row_result = shared.row_conditions[row_key]
-    if audit_mode == grounded.AUDIT_MODE_NONE:
-        from rag_engine.generation.answer_parts import check_answer_parts
-        from rag_engine.generation.application_review import review_applications
-
-        with _execution_step(
-            "資料をもとに導いた結論を確認する", "選択した原文と質問の条件から、その結論が導けるかを確認します。"
-        ) as review_step:
-            review_step.input({"question": question, "applications": [entry.to_payload() for entry in current.applications]})
-            diagnostic = review_applications(
-                question,
-                current.applications,
-                evidence_spans=spans,
-                existing_audit=None,
-                audit_requested=False,
-                parse_text=parse_text_response,
-                settings=audit_settings,
-                provider_id=provider,
-                row_conditions=row_result,
-            )
-            current.timing["application_review"] = diagnostic
-            review_step.output(diagnostic)
-            if diagnostic["status"] == "not_applicable":
-                review_step.skip("確認対象の導出結論がありません。", reason_code="no_derivations")
-            elif diagnostic["status"] == "withheld_table_not_determined":
-                review_step.skip("表に質問から決められない行があるため、表から導く結論を保留します。", reason_code="table_not_determined")
-            elif diagnostic.get("error_type"):
-                review_step.fail("確認を完了できなかったため、未確認の結論を保留します。", reason_code="application_review_failed")
-            else:
-                review_step.result(
-                    f"導出結論 {len(current.applications)} 件、公開 {sum(entry.published for entry in current.applications)} 件"
-                )
-        current.timing["answer_parts"] = check_answer_parts(
-            current.draft,
-            {entry.draft_index: entry for entry in current.checked if entry.draft_index is not None and not entry.carried},
-            current.applications,
-            {unit["id"] for unit in current.requests if unit.get("kind") != "context"},
-        )
-        for part in current.timing["answer_parts"]["parts"]:
-            text = grounded.answer_labels().missing_request_template.replace("{text}", part["text"])
-            if part["status"] == "missing" and not any(entry.item.kind == "gap" and entry.item.text == text for entry in current.checked):
-                current.checked.append(grounded.CheckedItem(GroundedItem(kind="gap", request_id=part["request_id"], text=text), added=True))
-        withheld = {index for index, entry in enumerate(current.applications) if not entry.published}
-        if withheld and (not current.draft._composed_summary or withheld.intersection(current.draft.summary_application_indexes)):
-            current = replace(
-                current,
-                summary=grounded.answer_labels().neutral_summary,
-                summary_warning="",
-                summary_reason=grounded.APPLICATION_SUMMARY_WITHHELD,
-            )
-        rounds[best_number] = {**rounds[best_number], **current.trace()}
     unread_sections = best_unread_sections
     # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
     field_kinds = form_field_kinds.question_field_kinds(question, context)
@@ -3807,7 +3721,6 @@ def synthesize_grounded_answer(
                 audit_settings=audit_settings,
                 provider_id=provider,
                 render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
-                row_conditions=row_result,
             )
         except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
             application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
@@ -3837,7 +3750,6 @@ def synthesize_grounded_answer(
                 parse_text=parse_text_response,
                 settings=generation_settings,
                 provider_id=provider,
-                row_conditions=row_result,
             )
             current.timing["application_explanation"] = explanation
             explanation_step.output(explanation)
@@ -4138,13 +4050,10 @@ def synthesize_grounded_answer(
         "llm_calls": sum(
             r.get("timing", {}).get("generation_calls", 1)
             + r.get("audit_calls", int(bool(r.get("audit"))))
-            + r.get("timing", {}).get("application_review", {}).get("calls", 0)
             # 論理が valid な推導ごとの説明の段（#4393）。
             + r.get("timing", {}).get("application_explanation", {}).get("calls", 0)
             for r in rounds
-        )
-        # 表の行の判定の段（#4349。回答ごとに 1 回）。
-        + (row_result.calls if row_result is not None else 0),
+        ),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
         "procedure_quotes": dict(current.timing.get("procedure_quotes") or {}),
@@ -4156,8 +4065,6 @@ def synthesize_grounded_answer(
         # 規則を質問の事実に当てはめた結果と、検査・監査で公開しなかった理由（#2155）。
         "applications": [application.to_payload() for application in current.applications],
         "application_step": application_step,
-        # 送った根拠の表の行の判定（#4349。投影できる表があったときだけ）。
-        **({"row_conditions": row_result.trace()} if row_result is not None else {}),
         # 「回答に未反映の関連章節」に出さなかった章節と、行の上限でまとめた数（#2828）。
         **({"unread_sections": unread_view.to_payload()} if unread_view.hidden or unread_view.overflow else {}),
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。

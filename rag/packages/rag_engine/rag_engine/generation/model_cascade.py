@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pr_backend_core.model_cascade import (
@@ -28,12 +28,8 @@ from pr_backend_core.model_cascade import (
     resolve_model_cascade,
 )
 
-from rag_engine.generation.summary_projection import APPLICATION_SUMMARY_WITHHELD
-
 # 2 つ目のモデルでやり直す段（回答文の生成と根拠確認。段が特定できないときもこの段）。
 ESCALATION_STAGE = "answer.generate"
-# 結論の判定の診断の状態のうち、2 つ目のモデルで生成をやり直しても変わらない保留。
-_UNCHANGED_BY_REGENERATION = frozenset({"withheld_table_not_determined"})
 
 
 class EscalationRequested(Exception):  # noqa: N818 - 失敗ではなく、2 つ目のモデルへの昇格の要求
@@ -48,12 +44,10 @@ class EscalationRequested(Exception):  # noqa: N818 - 失敗ではなく、2 つ
 class SharedSteps:
     """1 回の質問の中で、1 つ目と 2 つ目のモデルの実行が共有する段の結果（やり直さない段）。
 
-    質問の対象の抽出は質問だけで決まり、表の行の判定は段のモデルで送った根拠だけから決まるので、2 つ目のモデルの
-    実行で呼び直さない。用語の照合結果は 1 回の回答で 1 回だけ記録する。
+    質問の対象の抽出は質問だけで決まるので、2 つ目の実行で呼び直さない。用語の照合結果は 1 回の回答で 1 回だけ記録する。
     """
 
     question_subjects: Callable[[], Any] | None = None
-    row_conditions: dict[tuple[str, ...], Any] = field(default_factory=dict)
     term_usage_recorded: bool = False
 
 
@@ -109,11 +103,5 @@ def round_signals(current: Any, *, audit_mode: str) -> tuple[str, ...]:
 
 
 def conclusion_withheld(current: Any) -> bool:
-    """要約・結論を門で保留したか（2 つ目のモデルで生成をやり直しても変わらない保留を除く）。"""
-    reason = str(getattr(current, "summary_reason", "") or "")
-    if not reason:
-        return False
-    if reason != APPLICATION_SUMMARY_WITHHELD:
-        return True
-    review = (getattr(current, "timing", None) or {}).get("application_review") or {}
-    return not (review.get("status") in _UNCHANGED_BY_REGENERATION or review.get("error_type"))
+    """要約・結論を門で保留したか。"""
+    return bool(getattr(current, "summary_reason", ""))

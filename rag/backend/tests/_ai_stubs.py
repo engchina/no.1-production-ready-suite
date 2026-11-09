@@ -181,14 +181,11 @@ def _first_evidence(prompt: str) -> tuple[str, str] | None:
 def application_audit_reply(
     text_format: type[BaseModel], prompt: str, *, valid: bool = True, summary_supported: bool = True
 ) -> BaseModel | None:
-    """推導の監査（当てはめの監査、独立の監査の判定と理由）の合成応答。ほかは None。"""
-    from rag_engine.generation.application_reason import AuditReason
-    from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit
+    """推導の監査（当てはめの監査）の合成応答。ほかは None。"""
+    from rag_engine.models.llm import ApplicationAudit
 
-    if text_format is AuditReason:
-        return AuditReason(reason="合成の判定の理由です。")
     bound = getattr(text_format, "canonical_schema", None) is ApplicationAudit
-    if not bound and text_format not in (ApplicationAudit, ApplicationVerdictAudit):
+    if not bound and text_format is not ApplicationAudit:
         return None
     data = json.loads(prompt)
     if bound:
@@ -209,25 +206,10 @@ def application_audit_reply(
             ),
         )
 
-    def detail(application: dict[str, Any]) -> dict[str, Any]:
-        if text_format is not ApplicationVerdictAudit:
-            return {"reason": "合成の原文対応"}
-        # 根拠は引用元の evidence_id（引用元を含まない valid は未確認になる。basis_not_cited）。
-        return {
-            "basis_evidence_ids": list(
-                dict.fromkeys(
-                    str(binding["evidence_id"])
-                    for position in application.get("item_indexes") or ()
-                    for binding in data["items"][position].get("citation_bindings") or ()
-                    if binding.get("evidence_id")
-                )
-            )
-        }
-
     return text_format.model_validate(
         {
             "application_reviews": [
-                {"index": row["index"], "valid": valid, **detail(row)}
+                {"index": row["index"], "valid": valid, "reason": "合成の原文対応"}
                 for row in data["applications"]
             ],
             "summary_supported": summary_supported,

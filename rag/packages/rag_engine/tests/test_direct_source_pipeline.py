@@ -3,23 +3,23 @@
 import re
 from dataclasses import replace
 
-import pytest
-from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
+from audit_fixtures import synthetic_explanation
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
+from rag_engine.generation.application_explanation import is_explanation_schema
 
 
-def run(*, derived: bool, valid: bool = True, readback: str | None = None):
+def run(*, derived: bool, readback: str | None = None):
     calls = []
     text = "項目Aは12です。"
 
     def parse(system, prompt, config, schema, **options):
         calls.append(schema.__name__)
-        if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": valid}], prompt=prompt, summary_supported=valid)
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
         ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
         assert ids
         direct = (
@@ -86,16 +86,12 @@ def test_source_formal_flow_publishes_original_without_derivation_call():
     assert draft["summary_application_indexes"] == []
 
 
-@pytest.mark.parametrize("valid", [True, False])
-def test_mixed_direct_and_derived_keep_gate_and_final_summary_dependencies(valid):
-    response, calls = run(derived=True, valid=valid)
-    assert calls[0] == "GroundedDraftWire" and calls[1] == "ApplicationVerdictAudit"
+def test_mixed_direct_and_derived_keep_final_summary_dependencies():
+    response, calls = run(derived=True)
+    assert calls == ["GroundedDraftWire", "ApplicationExplanation"]
     assert "項目Aは12です。" in response.answer_text
-    assert response.generation_trace["applications"][0]["published"] is valid
-    if valid:
-        assert "24です。" in response.answer_text
-    else:
-        assert "24です。" not in response.answer_text
+    assert response.generation_trace["applications"][0]["published"]
+    assert "24です。" in response.answer_text
     draft = response.generation_trace["rounds"][0]["draft"]
     assert draft["summary_item_indexes"] == [0]
     assert draft["summary_application_indexes"] == [0]

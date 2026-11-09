@@ -1,25 +1,21 @@
-"""論理の審査で valid とした推導ごとに、利用者に示す説明を独立した短い段で作る（#4393）。
+"""本文に出す推導ごとに、利用者に示す説明を独立した短い段で作る（#4393）。
 
-説明の段に渡すのは原質問と、その推導が当てはめた資料の原文と、独立の審査が valid の根拠にした送った単位のうち
-推導の引用の原文が全文を含まないものの全文（``CheckedApplication.audit_basis``。#4589）だけ（明示の回答言語の指定があるときだけ、
-その原文の引用も渡す）。審査が結論を受け入れた原文を説明の段も見るので、審査が依った規則を説明の段が「資料に無い」
-と書いて公開の結論と食い違うことを、入力の範囲で防ぐ。審査済みの結論・生成の推導の文・要求は渡さない。照らす相手が
-入力に無いので、説明が入力の写しや「結論と一致します」という自己確認の文にならない。
+説明の段に渡すのは原質問と、その推導が当てはめた資料の原文だけ。生成の推導の文は入力に無いので、説明が入力の写しや
+「結論と一致します」という自己確認の文にならない。
 
-同じ回答で公開した（valid の）ほかの推導があれば、その結論（``KEY_OTHERS``）を渡し、その推導の原文（推導の引用と
-``audit_basis`` の全文）を自分の原文の後に「資料の原文」へ合わせる（#4589・#4615）。結論を複数の推導に分け、ある推導が
-ほかの推導の結論に依るとき、説明の段がほかの推導の事実を「資料に無い」と書いて公開の結論と食い違うことを、入力の範囲で
-防ぐ。自分の結論は渡さない。
+同じ回答で公開したほかの推導があれば、その結論（``KEY_OTHERS``）を渡し、その原文を自分の原文の後に「資料の原文」へ
+合わせる（#4589・#4615）。結論がほかの推導の結論に依るとき、説明の段がほかの推導の事実を「資料に無い」と書いて
+公開の結論と食い違うことを防ぐ。自分の結論は渡さない。
 
 表示するかはコードが形式だけで決める（意味の判定はしない。語の一覧・正規表現の語彙を持たない）:
 
 - 空でない。
 - 既定の言語（明示の指定が無い）では、Unicode の文字名でかな（平仮名・片仮名）を 1 字以上含み、入力の原文に
   逐字で無い Latin の 3 語以上の連なりを含まない。
-- 審査済みの結論の数値（Unicode の 10 進数字の連なり。3 桁区切りを除く）がすべて説明にある。
+- 結論の数値（Unicode の 10 進数字の連なり。3 桁区切りを除く）がすべて説明にある。
 - 本文の出典行の印で始まる行を含まない（画面が出典行を数えて根拠に結ぶため）。
 - その呼び出しで送った入力の節の名前のうち、説明の語にしてよい節（``WORDING_KEYS``。利用者の文に出ても自然な「質問」「資料の原文」と
-  表の行の節の名前）以外の名前を、入力の原文に逐字で無いのに含まない（利用者に見えない入力の構造を出典のように書かないため。#4603・#4615）。
+  ）以外の名前を、入力の原文に逐字で無いのに含まない（利用者に見えない入力の構造を出典のように書かないため。#4603・#4615）。
   比べる名前は入力を組み立てる定数そのもので、語の一覧ではない。
 
 検査の前に、改行・タブのエスケープの写し（逆斜線と ``n`` / ``r`` / ``t`` の 2 文字。構造化出力の文字列の中で
@@ -33,6 +29,7 @@ from __future__ import annotations
 import json
 import unicodedata
 from collections.abc import Callable, Sequence
+from concurrent.futures import CancelledError
 from functools import lru_cache
 from time import monotonic
 from typing import Any, TypeGuard
@@ -41,36 +38,27 @@ from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from rag_engine.generation.answer_labels import answer_labels
-from rag_engine.generation.application_reason import propagates
 from rag_engine.generation.applications import CheckedApplication
 from rag_engine.generation.input_budget import ensure_model_input
 from rag_engine.generation.response_language import response_language_contract
 from rag_engine.models.llm import ResponseLanguage
-from rag_engine.resources.deadline import check_cancelled, remaining_seconds
+from rag_engine.resources.deadline import DeadlineExceeded, check_cancelled, current_deadline, deadline_cut_short, remaining_seconds
 
 # 既定の回答言語（response_language_contract の既定 "ja"）の、説明の段への書き方。
 DEFAULT_LANGUAGE_LABEL = "日本語"
 KEY_QUESTION = "質問"
 KEY_SOURCES = "資料の原文"
 KEY_LANGUAGE = "回答言語の指定"
-# 推導が使った表の行の判定（row_conditions。#4349）。判定はコードと行の段が決め、説明の段は写すだけ。行の段の判定ごとの節に
-# 行の条件の原文を並べる。節の名前は利用者の文に出ても自然な内容そのもの（どの行が質問に当てはまるか）にし、出典のように
-# 言い換えられる成果物の名前を付けない（#4615）。
-ROW_KEYS = {
-    "applies": "質問に当てはまる表の行",
-    "does_not_apply": "質問に当てはまらない表の行",
-    "cannot_determine": "質問からは決められない表の行",
-}
 # 同じ回答で公開した（審査が valid の）ほかの推導の結論（#4589）。結論を複数の推導に分け、ある推導がほかの推導の結論に
 # 依るとき（premises に無くても）、説明の段がほかの推導の事実を「資料に無い」と書かないよう入力に渡す。その推導の原文は
 # 「資料の原文」に合わせる。節の名前は利用者の文に出ても自然な語にする（#4615）。
 KEY_OTHERS = "この回答で導いたほかの結論"
 # 入力の節（explanation_input の key。この順で置く）。
-SECTION_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_LANGUAGE, *ROW_KEYS.values(), KEY_OTHERS)
-# 説明の文の語にしてよい節の名前: 利用者の文に出ても自然な語（質問・資料の原文・どの表の行が質問に当てはまるか・この回答で
-# 導いたほかの結論）。ほかの節の名前（INTERNAL_SECTION_KEYS）は入力の構造を指すだけの名前なので、説明に写れば表示の門が
+SECTION_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_LANGUAGE, KEY_OTHERS)
+# 説明の文の語にしてよい節の名前: 利用者の文に出ても自然な語（質問・資料の原文・この回答で導いたほかの結論）。
+# ほかの節の名前（INTERNAL_SECTION_KEYS）は入力の構造を指すだけの名前なので、説明に写れば表示の門が
 # 隠す（#4603）。
-WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES, *ROW_KEYS.values(), KEY_OTHERS)
+WORDING_KEYS = (KEY_QUESTION, KEY_SOURCES, KEY_OTHERS)
 INTERNAL_SECTION_KEYS = tuple(key for key in SECTION_KEYS if key not in WORDING_KEYS)
 # 入力の原文に無い Latin の語がこの数以上連なれば、既定の言語の説明ではないとみなして隠す。
 LATIN_RUN_WORDS = 3
@@ -83,28 +71,19 @@ def language_label(instruction: str | None) -> str:
     return DEFAULT_LANGUAGE_LABEL if instruction is None else f"「{KEY_LANGUAGE}」が求める言語"
 
 
-def explanation_system(instruction: str | None, *, row_keys: Sequence[str] = (), with_others: bool = False) -> str:
-    """``row_keys`` は入力に送った表の行の節（``ROW_KEYS`` の値。この順で示す）、``with_others`` は同じ回答のほかの結論
-    （``KEY_OTHERS``）があるとき。無いときの文は変えない。Step 2 は節の名前を引かず、内容（表のどの行が質問に当てはまるか・
-    入力に無い値）を指す（#4615）。"""
+def explanation_system(instruction: str | None, *, with_others: bool = False) -> str:
+    """``with_others`` は同じ回答のほかの結論（``KEY_OTHERS``）があるとき。無いときの文は変えない。Step 2 は節の名前を
+    引かず、内容（入力に無い値）を指す（#4615）。"""
     label = language_label(instruction)
-    sent_rows = [key for key in ROW_KEYS.values() if key in row_keys]
     return "\n".join(
         [
             "## Step 1: 入力を読む",
             f"入力の「{KEY_QUESTION}」は利用者の質問、「{KEY_SOURCES}」は資料から引いた原文です。"
             + ("" if instruction is None else f"「{KEY_LANGUAGE}」は、質問のうち回答の言語を指定した原文です。")
-            + (
-                ""
-                if not sent_rows
-                else "".join(f"「{key}」" for key in sent_rows)
-                + "は、表の各行が質問に当てはまるかを確かめた結果で、行の条件を並べています。"
-            )
             + ("" if not with_others else f"「{KEY_OTHERS}」は、同じ回答で確かめたほかの結論です。"),
             "",
             "## Step 2: 説明を書く",
             f"質問への答えが、質問の条件と{KEY_SOURCES}の値からどう導かれるかを、利用者に示す{label}の文で書きます。"
-            + ("" if not sent_rows else "表のどの行が質問に当てはまるかは、行の条件を挙げて書きます。当てはまるかを決め直しません。")
             + "計算を含むときは、使った値と式と途中の結果を示します。"
             "入力に無い値・条件を足しません。"
             "原文の数値・記号・固有名詞・SQL は原文のまま書きます。",
@@ -128,6 +107,18 @@ def _explanation_model(label: str) -> type[BaseModel]:
     )
 
 
+def propagates(exc: BaseException) -> bool:
+    """権限・取消・期限切れは、説明の段の失敗として握らずに呼び出し元へ返す。"""
+    deadline = current_deadline()
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    return (
+        isinstance(exc, (PermissionError, CancelledError))
+        or status in {401, 403}
+        or (deadline is not None and (deadline.cancelled or (deadline.expired and not deadline_cut_short())))
+        or (isinstance(exc, DeadlineExceeded) and not deadline_cut_short())
+    )
+
+
 def is_explanation_schema(schema: Any) -> TypeGuard[type[BaseModel]]:
     return isinstance(schema, type) and issubclass(schema, _ExplanationBase)
 
@@ -140,15 +131,11 @@ def explanation_input(
     question: str,
     sources: Sequence[str],
     instruction: str | None,
-    rows: dict[str, list[str]] | None = None,
     others: Sequence[str] = (),
 ) -> dict[str, Any]:
     value: dict[str, Any] = {KEY_QUESTION: question, KEY_SOURCES: list(sources)}
     if instruction is not None:
         value[KEY_LANGUAGE] = instruction
-    for key in ROW_KEYS.values():
-        if (rows or {}).get(key):
-            value[key] = list((rows or {})[key])
     if others:
         value[KEY_OTHERS] = list(others)
     return value
@@ -158,10 +145,9 @@ def explanation_prompt(
     question: str,
     sources: Sequence[str],
     instruction: str | None,
-    rows: dict[str, list[str]] | None = None,
     others: Sequence[str] = (),
 ) -> str:
-    return json.dumps(explanation_input(question, sources, instruction, rows, others), ensure_ascii=False, indent=2)
+    return json.dumps(explanation_input(question, sources, instruction, others), ensure_ascii=False, indent=2)
 
 
 def internal_labels(value: dict[str, Any]) -> list[str]:
@@ -170,47 +156,20 @@ def internal_labels(value: dict[str, Any]) -> list[str]:
 
 
 def other_conclusions(entry: CheckedApplication, targets: Sequence[CheckedApplication]) -> list[str]:
-    """同じ回答で公開した（valid の）ほかの推導の結論。自分は含めない。"""
+    """同じ回答で公開したほかの推導の結論。自分は含めない。"""
     return [other.application.result for other in targets if other is not entry and other.application.result.strip()]
 
 
 def explanation_sources(entry: CheckedApplication, targets: Sequence[CheckedApplication]) -> list[str]:
-    """説明の段の「資料の原文」: 自分の推導の原文を先に、結論のあるほかの公開した推導の原文をその後に置く（どれも検証済みの
-    引用と、審査の根拠の送った単位の全文。同じ原文は 1 回）。"""
+    """説明の段の「資料の原文」: 自分の推導の原文を先に、結論のあるほかの公開した推導の原文をその後に置く（同じ原文は 1 回）。"""
     others = [other for other in targets if other is not entry and other.application.result.strip()]
     texts = [*application_sources(entry), *(text for other in others for text in application_sources(other))]
     return list(dict.fromkeys(texts))
 
 
-def application_rows(entry: CheckedApplication, row_conditions: Any, others: Sequence[CheckedApplication] = ()) -> dict[str, list[str]]:
-    """推導（と ``others`` のほかの推導）が当てはめた根拠の表と審査が根拠にした表の、条件のある行の条件の原文を、行の段の
-    判定ごとの節（``ROW_KEYS`` の値）に分ける（無ければ空）。同じ表の行は 1 回。行の無い節は置かない。"""
-    if row_conditions is None or getattr(row_conditions, "status", "") != "completed":
-        return {}
-    facts = row_conditions.facts_by_evidence()
-    evidence_ids = dict.fromkeys(
-        value
-        for current in (entry, *others)
-        for value in (
-            *(str((getattr(item, "span", None) or {}).get("evidence_id") or "") for item in current.entries),
-            *(unit["evidence_id"] for unit in current.audit_basis),
-        )
-    )
-    grouped: dict[str, list[str]] = {}
-    for evidence_id in evidence_ids:
-        for row in (facts.get(evidence_id) or {}).get("rows", []):
-            if row.get("condition") and row.get("applicability") in ROW_KEYS:
-                grouped.setdefault(ROW_KEYS[row["applicability"]], []).append(str(row["condition"]))
-    return {key: grouped[key] for key in ROW_KEYS.values() if key in grouped}
-
-
 def application_sources(entry: CheckedApplication) -> list[str]:
-    """推導が当てはめた資料の原文（監査の items の quote と同じ値）と、審査が根拠にした送った原文（``audit_basis``）。
-
-    推導の引用を先に、審査の根拠をその後に置く。同じ原文は 1 回だけ渡す。
-    """
+    """推導が当てはめた資料の原文（監査の items の quote と同じ値）。同じ原文は 1 回だけ渡す。"""
     texts = [str(item.item.quote or item.item.text or "").strip() for item in entry.entries]
-    texts += [str(unit.get("text") or "").strip() for unit in entry.audit_basis]
     return [text for text in dict.fromkeys(texts) if text]
 
 
@@ -337,8 +296,8 @@ def display_gate(
 
 
 def explanation_target(entry: CheckedApplication) -> bool:
-    """論理の審査で valid とし、本文に出す推導だけに説明を作る。"""
-    return entry.published and entry.assessment.get("status") == "valid"
+    """本文に出す推導に説明を作る（監査をする型では valid としたものだけ）。"""
+    return entry.published and entry.assessment.get("status", "valid") == "valid"
 
 
 def explain_applications(
@@ -349,13 +308,8 @@ def explain_applications(
     parse_text: Callable[..., Any],
     settings: Any,
     provider_id: str | None,
-    row_conditions: Any = None,
 ) -> dict[str, Any]:
-    """valid な推導ごとに 1 回、説明の段を呼び、表示の門を通った説明だけを ``presentation`` に置く。
-
-    ``row_conditions``（表の行の判定。#4349）があれば、推導が当てはめた表の行の判定を入力に渡す。説明の文が
-    確かめた行の判定と食い違わないよう、判定は渡すだけで、説明の段に決め直させない。
-    """
+    """推導ごとに 1 回、説明の段を呼び、表示の門を通った説明だけを ``presentation`` に置く。"""
     targets = [entry for entry in checked if explanation_target(entry)]
     for entry in checked:
         if not explanation_target(entry):
@@ -380,11 +334,9 @@ def explain_applications(
             diagnostic["status"] = "incomplete"
             continue
         sources = explanation_sources(entry, targets)
-        siblings = [other for other in targets if other is not entry]
         others = other_conclusions(entry, targets)
-        rows = application_rows(entry, row_conditions, siblings)
-        system = explanation_system(instruction, row_keys=tuple(rows), with_others=bool(others))
-        value = explanation_input(question, sources, instruction, rows, others)
+        system = explanation_system(instruction, with_others=bool(others))
+        value = explanation_input(question, sources, instruction, others)
         prompt = json.dumps(value, ensure_ascii=False, indent=2)
         diagnostic["prompt_chars"].append(len(system) + len(prompt))
         try:

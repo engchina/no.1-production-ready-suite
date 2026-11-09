@@ -11,30 +11,20 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.application_explanation import is_explanation_schema
-from rag_engine.generation.application_reason import AuditReason
-from rag_engine.models.llm import ApplicationVerdictAudit
 
 from app.api.routes import chat as chat_route
 from app.schemas.search import SearchResponse
-from tests._ai_stubs import application_audit_reply
 from tests.test_chat_api import FakeChatOracle, _FakePipeline, _stub_stream, client
 
 SOURCE_A = "操作Aは2営業日前の17時までなら0%、その期限後は50%です。"
 SOURCE_B = "操作Bの申請期限は前営業日の17時までです。"
 
 
-@pytest.mark.parametrize("valid", [True, False], ids=["correct-period", "mixed-period"])
-def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
-    monkeypatch: MonkeyPatch, valid: bool
-) -> None:
+def test_followup_preserves_original_and_saves_the_conclusion(monkeypatch: MonkeyPatch) -> None:
     calls: list[type[Any]] = []
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         calls.append(schema)
-        if (
-            reply := application_audit_reply(schema, prompt, valid=valid, summary_supported=valid)
-        ) is not None:
-            return reply
         unit = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)[0]
         return schema.model_validate(
             {
@@ -58,10 +48,8 @@ def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
                         "answer": {
                             "kind": "answer",
                             "basis": {"unit_ids": [unit]},
-                            "reasoning": "前営業日は期限後です。"
-                            if valid
-                            else "前営業日の17時までなら0%です。",
-                            "result": "割合は50%です。" if valid else "割合は0%です。",
+                            "reasoning": "前営業日は期限後です。",
+                            "result": "割合は50%です。",
                         },
                     }
                 ],
@@ -134,13 +122,8 @@ def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
     )
     assert followup.status_code == 200 and "event: all_done" in followup.text
     saved = client.get(f"/api/chat/conversations/{conversation}").json()["data"]["messages"][-1]
-    assert calls.count(ApplicationVerdictAudit) == 1 and calls.count(AuditReason) == 1
-    # 推導の説明の段（#4393）は論理が valid な推導だけに 1 回。
-    assert sum(is_explanation_schema(schema) for schema in calls) == (1 if valid else 0)
+    # 推導の説明の段（#4393）は公開する推導に 1 回。
+    assert sum(is_explanation_schema(schema) for schema in calls) == 1
     assert SOURCE_A in saved["content"]
     assert saved["citations"][0]["text"] == SOURCE_A
-    if valid:
-        assert saved["content"].startswith("割合は50%です。")
-    else:
-        assert "割合は0%です。" not in saved["content"]
-        assert "前営業日の17時までなら0%です。" not in saved["content"]
+    assert saved["content"].startswith("割合は50%です。")

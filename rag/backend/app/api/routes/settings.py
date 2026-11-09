@@ -635,7 +635,7 @@ def _step_model_choices(settings: Settings) -> list[AnsweringModelChoice]:
 
 
 def _step_model_update(settings: Settings, step: StepModelSetting, value: str | None) -> str | None:
-    """送られた段のモデル(#4351・#4564・#4565)。空は回答のモデル、それ以外は登録モデルの ID だけ。
+    """送られた段のモデル(#4351)。空は回答のモデル、それ以外は登録モデルの ID だけ。
 
     画面は欄の全体を送るので、保存済みの値と同じなら登録が外れていても受ける(別の項目の保存を止めない)。
     """
@@ -684,9 +684,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
         section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
         question_subject_role_model=settings.rag_question_subject_role_model.strip(),
-        row_condition_model=settings.rag_row_condition_model.strip(),
-        application_audit_model=settings.rag_application_audit_model.strip(),
-        application_reason_model=settings.rag_application_reason_model.strip(),
         step_model_choices=_step_model_choices(settings),
     )
 
