@@ -276,7 +276,10 @@ async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.Monkey
 async def test_answer_prompts_round_trip_on_real_oracle() -> None:
     """実 Oracle AI Database で、編集したプロンプトの保存・上書き・削除ができる。"""
     from app.clients.oracle import OracleClient
-    from app.rag.oracle_schema import answer_prompt_placeholders_migration_sql
+    from app.rag.oracle_schema import (
+        answer_prompt_placeholders_migration_sql,
+        answer_prompt_reading_rules_migration_sql,
+    )
 
     oracle = OracleClient()
     try:
@@ -291,10 +294,12 @@ async def test_answer_prompts_round_trip_on_real_oracle() -> None:
         ):
             cursor.execute(answer_prompt_placeholders_migration_sql())
             cursor.execute(answer_prompt_placeholders_migration_sql())
+            cursor.execute(answer_prompt_reading_rules_migration_sql())
+            cursor.execute(answer_prompt_reading_rules_migration_sql())
             connection.commit()
         after = await oracle.list_answer_prompts()
         assert after[VLM_ANSWER_PROMPT_KEY]["content"] == (
-            "独自の指示\n{{question}}\n{{reading_rules}}\n{{answer_context}}\n{{evidence_metadata}}"
+            "独自の指示\n{{question}}\n{{reading_rules}}\n\n{{answer_context}}\n{{evidence_metadata}}"
         )
         assert (
             after[VLM_ANSWER_PROMPT_KEY]["updated_at"]

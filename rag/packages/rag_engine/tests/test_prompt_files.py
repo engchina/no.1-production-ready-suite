@@ -261,7 +261,10 @@ class PromptFileTests(unittest.TestCase):
                 self.assertEqual(read_prompt(VLM_ANSWER_PROMPT_KEY), "補足 {{question}} {{answer_context}}")
 
     def test_known_prompts_require_the_placeholders_that_carry_input(self):
-        self.assertEqual(prompt_files.PROMPT_FILES[VLM_ANSWER_PROMPT_KEY].required_placeholders, ("question", "reading_rules", "answer_context"))
+        self.assertEqual(
+            prompt_files.PROMPT_FILES[VLM_ANSWER_PROMPT_KEY].required_placeholders,
+            ("question", "reading_rules", "answer_context"),
+        )
         self.assertEqual(prompt_files.PROMPT_FILES[IMAGE_RETRIEVAL_PROMPT_KEY].required_placeholders, ("image_metadata",))
 
     def test_reset_prompt_moves_saved_file_to_backup_and_restores_default(self):
