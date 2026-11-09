@@ -195,8 +195,6 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert "required_budget_exhausted" in calls[0][1]
     assert BODY in outcome.answer
     assert "取得または回答材料への保持を確認できていません" in outcome.answer
-    assert outcome.diagnostics["answer_validation"]["status"] == "not_run"
-    assert outcome.diagnostics["answer_validation"]["reason"] == "audit_disabled"
     assert all(row["status"] == "unknown" for row in outcome.diagnostics["guide_step_coverage"])
     review = outcome.diagnostics["generation_review"]
     assert review["execution"] == "not_run"
@@ -253,7 +251,6 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     )
     assert len(oracle.saved) == 1 and oracle.saved[0]["answer"] == outcome.answer
     stored = cast(dict[str, Any], oracle.saved[0]["diagnostics"])
-    assert stored["answer_validation"]["reason"] == "audit_disabled"
     assert stored["generation_citation_traces"] == captures
     assert stored["guide_step_retrieval"]["required_acquisition"]["incomplete_step_ids"] == [
         "common"

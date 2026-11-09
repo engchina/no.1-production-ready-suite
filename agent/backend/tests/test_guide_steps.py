@@ -46,7 +46,6 @@ from app.features.agent.support_task import (
 )
 from app.features.agent.tool_grounding import METADATA_KEY
 from app.features.agent.tools import ToolCall, ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test2396-skill"
 AGENT_ID = "test2396-agent"
@@ -280,7 +279,6 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             "rag_retrieve_evidence": retrieve,
         },
     )
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,

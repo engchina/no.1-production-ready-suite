@@ -116,7 +116,6 @@ const runs = Array.from({ length: TOTAL }, (_, index) => ({
   answer_generated: index % 2 === 0,
   status: "success",
   answer_outcome: null,
-  verification: null,
   confidence: null,
   needs_human_review: null,
   citation_count: 2,

@@ -22,14 +22,12 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import { validationExecutionBadge } from "@/lib/answer-validation";
 import type {
   RunDetail,
   RunExecutorFilter,
   RunStatus,
   RunSummary,
   RunSurface,
-  RunVerification,
 } from "@/lib/api";
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
@@ -115,13 +113,6 @@ export function runOutcomeView(run: Pick<RunSummary, "answer_generated" | "statu
   const badge = outcomeBadge(run.answer_outcome as AnswerOutcome);
   if (badge) return { variant: badge.variant as StatusVariant, label: t(badge.key) };
   return { variant: "success", label: t("history.outcome.answered") };
-}
-
-/** 資料との照合のバッジ。回答を作らなかった・止めた・失敗した実行は null（「—」）。 */
-export function runVerificationView(verification: RunVerification | null, execution?: string | null): BadgeView | null {
-  const explicit = validationExecutionBadge(execution);
-  if (explicit) return explicit;
-  return verification == null ? null : validationExecutionBadge("unknown");
 }
 
 /** 検索・回答プロファイルの表示名（ID は出さない）。 */

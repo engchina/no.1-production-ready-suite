@@ -104,7 +104,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 - `rag_search` は回答を作るので、モデルを 3〜8 回呼ぶ（質問拡張・根拠の評価・章節の拡張の判定・回答文の生成と監査）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は 600 秒（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
 - **推奨の待ち時間は 660 秒**（`MCP_TOOL_TIMEOUT=660000`）。サーバーの上限（600 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（660 秒）と同じ。
 - **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。Claude Code が進み具合で待ち時間を延ばすかは確かめていない（未確認）ので、`MCP_TOOL_TIMEOUT` は付ける。
-- 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。モデルを呼ばない。4〜8 秒）で根拠を集め、公開の前に `rag_validate_answer` で監査する。
+- 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。モデルを呼ばない。4〜8 秒）で根拠を集める。
 
 ## 業務 Agent を専門家として呼ぶ（Agent の MCP）
 

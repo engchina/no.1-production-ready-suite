@@ -75,8 +75,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from rag_engine.evaluation.answer_eval import AUDIT_REFERENCE_FAILURES
-from rag_engine.generation.operation_audit import answer_passage_ranges
 from rag_engine.generation.table_binding import evidence_tables
 from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_RULES,
@@ -118,22 +116,10 @@ from app.mcp.profile_scope import (
     within_profile_scope,
 )
 from app.rag.answer_engine import (
-    ANSWER_VALIDATION_STEP,
     CATALOG_ARTICLE_ROLE,
     AnswerScope,
-    _answer_step_span,
 )
 from app.rag.answer_failure import ANSWER_API_FAILED_ERROR_CODE, describe_answer_api_failure
-from app.rag.answer_validation import (
-    MAX_ANSWER_TRACE_IDS,
-    MAX_DATA_RESULTS,
-    MAX_PREMISES,
-    EvidenceRef,
-    GuideCheckRef,
-    GuideProfileNotFoundError,
-    is_premise_id,
-    validate_answer,
-)
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
@@ -326,7 +312,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 39: rag_validate_answer の claims に、監査の応答の参照の誤りの診断（監査が写した原文
 #     support_quote・返した根拠の ID audit_evidence_id）と、その誤りの監査し直しの結果
 #     （reference_reaudit）を足した（#4058）。
-MCP_OUTPUT_SCHEMA_VERSION = 39
+# 40: rag_validate_answer を削除（#4714）。
+MCP_OUTPUT_SCHEMA_VERSION = 40
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -743,205 +730,6 @@ class LookupGuidesInput(BaseModel):
         default_factory=dict, max_length=30, description="分かっている条件の値（条件の id → 値）。"
     )
     limit: int = Field(default=3, ge=1, le=10, description="返す業務ガイドの最大件数。")
-
-
-class EvidenceRefInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    document_id: str = Field(..., min_length=1, max_length=128)
-    chunk_id: str = Field(..., min_length=1, max_length=512)
-
-
-# 呼び出し側が渡せる段落の出典の件数の上限（回答の上限 20000 文字の段落の数より十分に大きい）と、
-# 1 つの段落に結び付けられる根拠の上限（evidence の上限と同じ）。#104。
-MAX_PASSAGE_CITATIONS = 300
-
-
-class AnswerRangeInput(BaseModel):
-    """answer の中の段落の位置（文字の位置。[start, end)）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    start: int = Field(..., ge=0, le=20000)
-    end: int = Field(..., ge=0, le=20000)
-
-
-class PassageCitationInput(BaseModel):
-    """呼び出し側が回答の段落に結び付けた根拠（段落の位置と、その段落の根拠の chunk_id）。"""
-
-    # 本文に出典を書かない呼び出し側（業務 Agent）が渡す（#104）。
-
-    model_config = ConfigDict(extra="forbid")
-
-    answer_range: AnswerRangeInput = Field(
-        ...,
-        description=(
-            "answer の中の段落の位置（rag_validate_answer の claims の answer_range と"
-            "同じ数え方）。"
-        ),
-    )
-    chunk_ids: list[Annotated[str, Field(min_length=1, max_length=512)]] = Field(
-        ...,
-        min_length=1,
-        max_length=30,
-        description=(
-            "その段落の根拠の chunk_id（evidence に含めたもの）。evidence に無い chunk_id は"
-            "使わない。"
-        ),
-    )
-
-
-class ValidateRequestInput(BaseModel):
-    """AnswerEnvelope の要求 1 件（rag_search の requests と同じ形）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(..., min_length=1, max_length=64, description="要求の ID（Q1 など）。")
-    text: str = Field(default="", max_length=2000, description="要求の原文。")
-    status: Literal["addressed", "partial", "missing", "unknown"] = Field(
-        description=(
-            "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。"
-        )
-    )
-
-
-class ValidateGuideInput(BaseModel):
-    """回答が沿った業務ガイド（rag_search の guide・rag_lookup_guides の guides の 1 件）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    search_answer_profile_id: str = Field(
-        ..., min_length=1, max_length=128, description="業務ガイドの検索・回答プロファイルの id。"
-    )
-    guide_id: str = Field(..., min_length=1, max_length=64, description="業務ガイドの id。")
-    revision: int = Field(..., ge=1, description="回答に使った公開の版。")
-    conditions: dict[str, str] = Field(
-        default_factory=dict,
-        max_length=30,
-        description=(
-            "分かっている条件の値（条件の id → 値）。当たらない分岐の手順を見分けるのに使う。"
-        ),
-    )
-
-
-class ValidatePremiseInput(BaseModel):
-    """利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え）。"""
-
-    # 前提を根拠と並べて確かめる（#1898）。
-
-    model_config = ConfigDict(extra="forbid")
-
-    question: str = Field(default="", max_length=1000, description="確認の質問の文。")
-    answer: str = Field(
-        ...,
-        min_length=1,
-        max_length=2000,
-        description="利用者の答え（選んだ選択肢の名前・自由入力）。",
-    )
-
-
-class ValidateDataResultInput(BaseModel):
-    """業務データの照会の結果 1 件（照会の質問・SQL・結果）。"""
-
-    # 業務データの結果を根拠と並べて確かめる（#1950）。
-
-    model_config = ConfigDict(extra="forbid")
-
-    source: str = Field(
-        default="",
-        max_length=200,
-        description="照会の出所（例: データ問い合わせ（NL2SQL）の業務プロファイル名）。",
-    )
-    question: str = Field(default="", max_length=1000, description="照会の質問の文。")
-    sql: str = Field(default="", max_length=4000, description="実行した SQL。")
-    result: str = Field(
-        ...,
-        min_length=1,
-        max_length=4000,
-        description="結果（列と行。JSON などの文）。",
-    )
-
-
-class ValidateAnswerInput(BaseModel):
-    """回答の最終の検証の条件（requests・guide は渡したときだけ確かめる）。"""
-
-    # #1246。requests・guide の決定的な確認は #1276。
-
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(..., min_length=1, max_length=8000, description="利用者の質問。")
-    answer: str = Field(..., min_length=1, max_length=20000, description="検証する回答の本文。")
-    evidence: list[EvidenceRefInput] = Field(
-        ...,
-        min_length=1,
-        max_length=30,
-        description=(
-            "回答の根拠（rag_search / rag_retrieve_evidence が返した document_id と chunk_id）。"
-            "本文はサーバーが今の権限と版で読み直す。"
-        ),
-    )
-    requests: list[ValidateRequestInput] | None = Field(
-        default=None,
-        max_length=30,
-        description=(
-            "回答の要求ごとの充足（AnswerEnvelope の requests）。渡すと partial・missing の要求を"
-            "確かめる（回答に不足として示していなければ error）。"
-        ),
-    )
-    gaps: list[Annotated[str, Field(max_length=2000)]] = Field(
-        default_factory=list,
-        max_length=30,
-        description="回答に示した資料から確かめられない点（AnswerEnvelope の gaps）。",
-    )
-    guide: ValidateGuideInput | None = Field(
-        default=None,
-        description=(
-            "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順ごとの説明の有無・手順の順序・"
-            "依存・分岐と影響範囲・承認の記載を確かめる。"
-        ),
-    )
-    answer_trace_ids: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
-        default_factory=list,
-        max_length=MAX_ANSWER_TRACE_IDS,
-        description=(
-            # その回答の監査を通った段落は、根拠を今の権限と版で読み直して本文が変わっていなければ
-            # 判定を使い、モデルに渡さない。記録は呼び出した利用者が読めるものだけ（#1527）。
-            "回答に使った rag_search の trace_id。渡すと、その回答で監査を通った段落の判定を"
-            "使う（速くなる）。"
-        ),
-    )
-    premises: list[ValidatePremiseInput] = Field(
-        default_factory=list,
-        max_length=MAX_PREMISES,
-        description=(
-            "利用者が回答の前の確認で答えた前提（確認の質問と答え）。資料ではなく利用者の"
-            "状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた"
-            "結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落の"
-            "chunk_id は null。"
-        ),
-    )
-    data_results: list[ValidateDataResultInput] = Field(
-        default_factory=list,
-        max_length=MAX_DATA_RESULTS,
-        description=(
-            "回答に使った業務データの照会の結果（照会の質問・SQL・結果）。資料ではない根拠として"
-            "根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる"
-            "（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は"
-            " null。"
-        ),
-    )
-    passage_citations: list[PassageCitationInput] = Field(
-        default_factory=list,
-        max_length=MAX_PASSAGE_CITATIONS,
-        description=(
-            # 回答の本文に出典（根拠の ID・出典の行）を書かない呼び出し側（業務 Agent。根拠は
-            # 回答とは別に示す）が、段落ごとの根拠を渡す（#104）。本文が出典を書いた段落は本文の
-            # 出典を使い、これで広げない。
-            "段落ごとの出典（answer の中の段落の位置と、その段落の根拠の chunk_id）。本文に出典"
-            "（根拠の ID・出典の行）が無い段落だけ、ここで渡した根拠をその段落の出典として監査する"
-            "（本文が出典を書いた段落は本文の出典を使う）。evidence に無い chunk_id は使わない。"
-        ),
-    )
 
 
 class ReadSourceInput(BaseModel):
@@ -1707,7 +1495,7 @@ class RagEvidence(BaseModel):
     table_binding: TableBinding | None = Field(
         default=None,
         description=(
-            "回答の検査（回答の生成と rag_validate_answer）が、文の値を表の別の行・列の値と"
+            "回答の生成の検査が、文の値を表の別の行・列の値と"
             "取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・"
             "Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない"
             "（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で"
@@ -2250,277 +2038,6 @@ class RetrieveEvidenceOutput(VersionedOutput):
     )
 
 
-class ValidatedClaim(BaseModel):
-    answer_quote: str = Field(description="回答の段落（原文）。")
-    answer_range: ExcerptRange | None = Field(
-        default=None,
-        description=(
-            "渡した answer の中の段落の位置（文字の位置。answer の [start, end) が answer_quote）。"
-            "段落の分け方は呼び出し側に写さず、この位置で回答の段落を特定する。位置を決められない"
-            "段落は null。"
-        ),
-    )
-    status: str = Field(
-        description=(
-            "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
-            "矛盾 / data_confirmation=実データの確認を促すだけ / "
-            "citation_error=出典を照合できない / unassessed=監査されなかった / "
-            "figure_only=図の見た目（配置・矢印・つながり・所属）だけで決まり、図の本文では確かめ"
-            "られない（chunk_id はその図。図の画像を読んで確かめたかは呼び出し側が決める）"
-        )
-    )
-    chunk_id: str | None = Field(
-        default=None,
-        description=(
-            "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕・業務データの照会の結果"
-            "〔data_results〕だけで裏付けた段落と、根拠の ID を照合できなかった矛盾は null）。"
-        ),
-    )
-    reason: str
-    audit_status: str | None = Field(
-        default=None,
-        description=(
-            "監査が返した判定（status は根拠の ID を照合できないと変わる。例: supported の ID を"
-            "照合できなければ status は citation_error）。"
-        ),
-    )
-    reference_check: str | None = Field(
-        default=None,
-        description=(
-            "裏付け・矛盾の根拠の ID の照合の結果（resolved / "
-            "resolved_by_answer=回答が書いた ID で照合 / "
-            "answer_id_invalid=回答が書いた ID が根拠に無い / "
-            "audit_id_invalid=監査が返した ID だけが根拠に無い / "
-            "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
-            "quote_unmatched=引用が根拠に無い / "
-            "not_figure=figure_only の根拠が図ではない〔status は unsupported〕 / "
-            "single_figure=figure_only の ID が決まらず、根拠の唯一の図に結び付けた）。"
-            "照合しない判定は null。"
-        ),
-    )
-    classification_check: str | None = Field(
-        default=None,
-        description=(
-            "段落の分類の照合の結果（non_claim_mismatch=監査が見出しとしたが本文の段落で、"
-            "内容を確かめていない〔status は unassessed〕 / "
-            "reaudited=その段落を内容で監査し直した判定）。食い違いが無ければ null。"
-        ),
-    )
-    support_check: str | None = Field(
-        default=None,
-        description=(
-            "監査の supported を採らなかった理由（target_mismatch=根拠は別の対象"
-            "〔処理・画面・成果物・状態〕の記載 / "
-            "value_unbound=段落が根拠の表の別の行・列の値を結び付けている〔status は contradicted。"
-            "理由に表の正しい対応〕か、監査の理由だけが表と違う対応を述べている〔unsupported〕 / "
-            "quote_unmatched=裏付けとして写した原文が根拠に無い / "
-            "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
-            "とした / premise_conflict=段落が勧める内容が、利用者が確認で答えた条件・制約と"
-            "両立しない〔status は contradicted〕 / table_corrected=段落の表の対応の取り違えを、"
-            "表の正しい値に直した〔status は contradicted。直した文は revised_text〕）。"
-            "採ったときは null。"
-        ),
-    )
-    revised_text: str | None = Field(
-        default=None,
-        description=(
-            "support_check が table_corrected のとき、段落を根拠の表の正しい値に直した文"
-            "（表の照合で確かめた）。段落を外す代わりに、この文に置き換えて示せる。"
-            "それ以外は null。"
-        ),
-    )
-    support_quote: str | None = Field(
-        default=None,
-        description=(
-            "reference_check が監査の応答の誤り（audit_id_invalid / ambiguous_id / "
-            "audit_id_missing / quote_unmatched）のとき、監査が裏付けとして写した原文（先頭 "
-            f"{CLAIM_DIAGNOSTIC_CHARS} 字。渡した根拠・質問に対する監査の出力で、照合の失敗の"
-            "原因を確かめる診断）。それ以外は null。"
-        ),
-    )
-    audit_evidence_id: str | None = Field(
-        default=None,
-        description=(
-            "reference_check が監査の応答の誤りのとき、監査が返した根拠の ID（照合に使う"
-            f"内部の ID で、chunk_id ではない。先頭 {CLAIM_DIAGNOSTIC_CHARS} 字。診断）。"
-            "それ以外は null。"
-        ),
-    )
-    reference_reaudit: Literal["adopted", "rejected"] | None = Field(
-        default=None,
-        description=(
-            "監査は裏付けたが、監査の応答の参照（写した原文・返した ID）を根拠に照合できな"
-            "かった段落を監査し直した結果（adopted=監査し直しの判定が同じ照合を通り、その"
-            "判定〔supported〕にした / rejected=監査し直しても照合を通らず、citation_error の"
-            "まま）。監査し直していなければ null。"
-        ),
-    )
-
-
-class ValidationFinding(BaseModel):
-    check: Literal["requests", "guide", "guide_steps", "impact"] = Field(
-        description=(
-            "検査（requests=要求の充足 / guide=業務ガイドの版 / guide_steps=手順 / "
-            "impact=影響範囲）。"
-        )
-    )
-    code: str = Field(
-        description=(
-            "request_missing / request_partial / request_unverified / guide_unavailable / "
-            "guide_revision_stale / guide_steps_unmatched / guide_step_unexplained / step_order / "
-            "step_wrong_branch / step_dependency_missing / step_following_missing / "
-            "impact_scope_missing / approval_missing"
-        )
-    )
-    severity: Literal["error", "warning"] = Field(
-        description="error は valid にしない。warning は確かめたい点。"
-    )
-    message: str
-    request_id: str | None = None
-    step_id: str | None = None
-    related_step_id: str | None = Field(
-        default=None, description="関係する手順（前の手順・後の手順）。"
-    )
-
-
-class GuideBodyCoverageValidation(BaseModel):
-    execution: Literal["completed", "not_run", "error", "timed_out", "partial", "unknown"]
-    status: Literal["explained", "missing", "partial", "unknown"]
-    reason: str | None = None
-
-
-class GuideSourceAssociationValidation(BaseModel):
-    execution: Literal["completed", "not_run", "error", "timed_out", "partial", "unknown"]
-    linked: bool
-
-
-class GuideStepValidation(BaseModel):
-    body_coverage: GuideBodyCoverageValidation
-    source_association: GuideSourceAssociationValidation | None = None
-
-
-class ValidatedGuideStep(BaseModel):
-    """業務ガイドの手順 1 つの、回答での説明の充足（#2708）。"""
-
-    step_id: str
-    title: str
-    required: bool = Field(
-        description="回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。"
-    )
-    validation: GuideStepValidation | None = Field(
-        default=None,
-        description="出典の対応と本文の充足の検査状態。未実行・未完了は不足や誤りの確認を意味しない。古い結果では省略。",
-    )
-    status: Literal[
-        "explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"
-    ] = Field(
-        description=(
-            "explained=必須の操作・対象・条件・順序を、根拠で裏付けた説明として確認した / "
-            "partial=手順の一部だけ説明を確認した / unknown=説明の充足を検証できていない / "
-            "reference_only=根拠の原文を参考として示しただけ / "
-            "unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / "
-            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）/ "
-            "not_searched=上限で検索を打ち切り、充足を検証していない。"
-        )
-    )
-
-
-class PremiseConsistencyResult(BaseModel):
-    """段落が勧める内容と、原質問・確認の答えの条件・制約との両立の比較 1 件の採否。"""
-
-    # 値は ID・状態・語彙の code だけ（#3800。モデルが書いた制約・推奨・原文は返さない）。
-    answer_range: ExcerptRange | None = Field(
-        default=None,
-        description=(
-            "渡した answer の中の段落の位置（段落に結び付かない記録・位置を決められない段落は"
-            " null）。"
-        ),
-    )
-    status: str | None = Field(
-        default=None,
-        description="比較の実行（completed / not_run / failed / timed_out）。",
-    )
-    decision: str = Field(
-        description=(
-            "採否の理由（conflict_adopted=矛盾として採った / not_conflicting / "
-            "execution_prohibition_does_not_prohibit_proposal / scope_unverified / "
-            "constraint_quote_unmatched / passage_quote_unmatched / unknown_passage_id / "
-            "duplicate_passage_id / missing_passage_id / not_required / deadline_exceeded / "
-            "check_failed）。"
-        )
-    )
-    adopted: bool = Field(description="矛盾として判定（contradicted）に採ったか。")
-    fit: str | None = Field(default=None, description="比較の判断（fits / conflicts / unknown）。")
-    constraint_scope: str | None = Field(
-        default=None,
-        description="制約の対象（execution_only / proposal / content / unknown）。",
-    )
-    passage_mode: str | None = Field(
-        default=None,
-        description="段落の様相（proposal / execution / explanation / unknown）。",
-    )
-
-
-class ValidateAnswerOutput(VersionedOutput):
-    valid: bool = Field(
-        description=(
-            "矛盾・裏付けの無い主張・読めない根拠・error の finding が無く、裏付けのある主張が"
-            " 1 つ以上あるか。"
-        )
-    )
-    status: str = Field(
-        description=(
-            "completed / partial（時間の上限までに一部の段落の監査が終わらず、"
-            "その段落は unassessed）/ timed_out（どの段落の監査も終わらなかった）"
-            "/ no_claims / no_evidence / input_too_large。"
-        )
-    )
-    counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
-    claims: list[ValidatedClaim] = Field(default_factory=list)
-    missing_evidence: list[EvidenceRefInput] = Field(
-        default_factory=list, description="見つからない（削除・権限の外）根拠。"
-    )
-    stale_evidence: list[EvidenceRefInput] = Field(
-        default_factory=list, description="文書の古い版の根拠（検索し直す）。"
-    )
-    evidence_truncated: bool = Field(
-        default=False, description="根拠が多く、後ろの根拠を監査に渡しきれなかったか。"
-    )
-    checks: list[Literal["requests", "guide", "guide_steps", "impact"]] = Field(
-        default_factory=list,
-        description="行った決定的な検査（requests・guide を渡したときだけ。モデルは呼ばない）。",
-    )
-    findings: list[ValidationFinding] = Field(
-        default_factory=list, description="決定的な検査で見つけた点。"
-    )
-    guide_revision: int | None = Field(
-        default=None, description="検査に使った業務ガイドの今の公開の版。"
-    )
-    guide_steps: list[ValidatedGuideStep] = Field(
-        default_factory=list,
-        description=(
-            "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を"
-            "渡さないか、段落の判定が出なければ空）。本文の充足検査が完了し、不足を確認した必須の"
-            "手順だけを guide_step_unexplained の finding にする。"
-            "未実行・未確認は validation に残る。"
-        ),
-    )
-    reused_claims: int = Field(
-        default=0,
-        description=(
-            "answer_trace_ids の回答の監査の判定を使い、モデルに渡さなかった段落の数（#1527）。"
-        ),
-    )
-    premise_checks: list[PremiseConsistencyResult] = Field(
-        default_factory=list,
-        description=(
-            "段落が勧める内容と、query・premises の条件・制約との両立の比較の採否。"
-            "adopted=true の段落は claims で contradicted になる。比較しなかったときは"
-            " status=not_run の 1 件。"
-        ),
-    )
-
-
 class ReadSourceOutput(VersionedOutput):
     evidence_id: str
     document_id: str
@@ -2915,36 +2432,6 @@ def _table_binding(text: str, metadata: dict[str, Any]) -> TableBinding | None:
     if evidence_tables(text):
         return "checkable"
     return "not_checkable" if _is_table_evidence(metadata) else None
-
-
-def _answer_range(
-    claim: Mapping[str, Any], passage_ranges: Mapping[str, tuple[int, int]], answer: str
-) -> ExcerptRange | None:
-    """段落の判定の、回答の中の位置（段落の ID の位置。ID が無ければ原文が回答に 1 回だけ
-    現れる位置）。
-
-    位置の原文が段落の原文と違えば null（呼び出し側は原文で探す）。
-    """
-    quote = str(claim.get("answer_quote") or "")
-    if not quote:
-        return None
-    span = passage_ranges.get(str(claim.get("answer_passage_id") or ""))
-    if span is None and answer.count(quote) == 1:
-        start = answer.find(quote)
-        span = (start, start + len(quote))
-    if span is None or answer[span[0] : span[1]] != quote:
-        return None
-    return ExcerptRange(start=span[0], end=span[1])
-
-
-def _passage_range(
-    passage_id: object, passage_ranges: Mapping[str, tuple[int, int]], answer: str
-) -> ExcerptRange | None:
-    """段落の ID の、回答の中の位置（ID が無い・位置が回答の範囲の外なら null）。"""
-    span = passage_ranges.get(str(passage_id or ""))
-    if span is None or not 0 <= span[0] < span[1] <= len(answer):
-        return None
-    return ExcerptRange(start=span[0], end=span[1])
 
 
 def _excerpt_range(value: object) -> ExcerptRange | None:
@@ -4762,29 +4249,6 @@ def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput
     check_profile(scope, arguments.search_answer_profile_id)
 
 
-def _reference_diagnostic(claim: Mapping[str, Any], key: str) -> str | None:
-    """監査の応答の参照の誤り（`AUDIT_REFERENCE_FAILURES`）の判定の診断の値（上限で切る。#112）。
-
-    値は呼び出し側が渡した根拠（今の権限と版で読み直した本文）・質問・前提に対する監査の出力なので、
-    呼び出し側の権限の外の本文を含まない。それ以外の判定は None（応答を大きくしない）。
-    """
-    if claim.get("reference_check") not in AUDIT_REFERENCE_FAILURES:
-        return None
-    value = " ".join(str(claim.get(key) or "").split())
-    return value[:CLAIM_DIAGNOSTIC_CHARS] or None
-
-
-def _claim_chunk_id(source_id: object) -> str | None:
-    """判定の根拠の chunk_id（利用者の前提〔premise:…〕だけで裏付けた段落は None。#1898）。"""
-    value = str(source_id or "")
-    return value if value and not is_premise_id(value) else None
-
-
-def _check_validate_scope(scope: ProfileScope | None, arguments: ValidateAnswerInput) -> None:
-    if arguments.guide is not None:
-        check_profile(scope, arguments.guide.search_answer_profile_id)
-
-
 LIST_PROFILES_TOOL = "rag_list_search_answer_profiles"
 RECOMMEND_PROFILE_TOOL = "rag_recommend_search_answer_profile"
 QUERY_UNMATCHED_NEXT_STEP = (
@@ -5238,111 +4702,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             figure_url_request=_figure_url_request(http_request) if browser_url else None,
         )
 
-    async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:
-        enforce_rate_limit("search", http_request)
-        guide = arguments.guide
-        try:
-            # 回答フローの「資料との照合」と同じ工程の span で包む（呼び出し元の Agent の
-            # 処理の経過で、MCP の呼び出しの下に RAG の工程として出る。#3470）。
-            with _answer_step_span(ANSWER_VALIDATION_STEP):
-                result = await validate_answer(
-                    arguments.query,
-                    arguments.answer,
-                    [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
-                    get_settings(),
-                    requests=(
-                        [item.model_dump() for item in arguments.requests]
-                        if arguments.requests is not None
-                        else None
-                    ),
-                    gaps=arguments.gaps,
-                    answer_trace_ids=arguments.answer_trace_ids,
-                    premises=[item.model_dump() for item in arguments.premises],
-                    data_results=[item.model_dump() for item in arguments.data_results],
-                    passage_citations=[
-                        {
-                            "start": item.answer_range.start,
-                            "end": item.answer_range.end,
-                            "chunk_ids": list(item.chunk_ids),
-                        }
-                        for item in arguments.passage_citations
-                    ],
-                    guide=(
-                        GuideCheckRef(
-                            guide.search_answer_profile_id,
-                            guide.guide_id,
-                            guide.revision,
-                            dict(guide.conditions),
-                        )
-                        if guide is not None
-                        else None
-                    ),
-                )
-        except GuideProfileNotFoundError as exc:
-            assert guide is not None  # 業務ガイドを渡したときだけ起きる
-            raise await profile_not_found_error(guide.search_answer_profile_id) from exc
-        passage_ranges = {
-            passage_id: (start, end)
-            for passage_id, start, end in answer_passage_ranges(arguments.answer)
-        }
-        return ValidateAnswerOutput(
-            valid=result.valid,
-            status=result.status,
-            counts=result.counts,
-            claims=[
-                ValidatedClaim(
-                    answer_quote=str(claim.get("answer_quote") or ""),
-                    # 段落の位置（#3240。呼び出し側が段落の分け方を写さずに段落を特定する）。
-                    answer_range=_answer_range(claim, passage_ranges, arguments.answer),
-                    status=str(claim.get("status") or ""),
-                    chunk_id=_claim_chunk_id(claim.get("source_id")),
-                    reason=str(claim.get("reason") or ""),
-                    # 監査の判定と ID の照合の結果（#2622。判定を変えた理由を追えるようにする）。
-                    audit_status=str(claim.get("audit_status") or "") or None,
-                    reference_check=str(claim.get("reference_check") or "") or None,
-                    # 段落の分類の食い違いと監査し直し（#2625）。
-                    classification_check=str(claim.get("classification_check") or "") or None,
-                    # 裏付けを採らなかった理由（#2659。監査の判定は audit_status）。
-                    support_check=str(claim.get("support_check") or "") or None,
-                    # 表の正しい値に直した段落（#3005）。
-                    revised_text=str(claim.get("revised_text") or "") or None,
-                    # 監査の応答の参照の誤りの診断と監査し直し（#112）。
-                    support_quote=_reference_diagnostic(claim, "support_quote"),
-                    audit_evidence_id=_reference_diagnostic(claim, "audit_evidence_id"),
-                    reference_reaudit=claim.get("reference_reaudit") or None,
-                )
-                for claim in result.claim_checks
-            ],
-            missing_evidence=[
-                EvidenceRefInput(document_id=ref.document_id, chunk_id=ref.chunk_id)
-                for ref in result.missing_evidence
-            ],
-            stale_evidence=[
-                EvidenceRefInput(document_id=ref.document_id, chunk_id=ref.chunk_id)
-                for ref in result.stale_evidence
-            ],
-            evidence_truncated=result.evidence_truncated,
-            checks=result.checks,
-            findings=[ValidationFinding.model_validate(item.as_dict()) for item in result.findings],
-            guide_revision=result.guide_revision,
-            guide_steps=[ValidatedGuideStep.model_validate(step) for step in result.guide_steps],
-            reused_claims=result.reused_claims,
-            premise_checks=[
-                PremiseConsistencyResult(
-                    answer_range=_passage_range(
-                        check.get("answer_passage_id"), passage_ranges, arguments.answer
-                    ),
-                    status=check.get("status"),
-                    decision=str(check.get("decision") or ""),
-                    adopted=bool(check.get("adopted")),
-                    fit=check.get("fit"),
-                    constraint_scope=check.get("constraint_scope"),
-                    passage_mode=check.get("passage_mode"),
-                )
-                for check in result.premise_consistency_checks
-            ],
-        )
-
     return McpServer(
         name=MCP_SERVER_NAME,
         version=get_settings().app_version,
@@ -5411,21 +4770,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=RetrieveEvidenceInput,
                 handler=scoped(_with_profile_selection(retrieve_evidence), _check_search_scope),
                 output_model=RetrieveEvidenceOutput,
-                permissions=(SEARCH_PERMISSIONS,),
-            ),
-            McpTool(
-                name="rag_validate_answer",
-                title="資料との照合",
-                description=(
-                    "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
-                    "公開する前の最終の検証に使います。見出し・出典の行・"
-                    "利用者への質問の段落は主張ではないので監査せず、claims に含めません。"
-                    "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順ごとの"
-                    "説明と順序・分岐・影響範囲も確かめます。"
-                ),
-                input_model=ValidateAnswerInput,
-                handler=scoped(validate, _check_validate_scope),
-                output_model=ValidateAnswerOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(

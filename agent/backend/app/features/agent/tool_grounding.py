@@ -12,9 +12,9 @@ BLOCK と同じ考え方）。
   ツールが残らない Run は対象外（ガードをすり抜けた回答は #1834 の「根拠を使わずに答えた」に出る）。
 - 数える呼び出し: モデルが根拠・データのツールを呼んだ step（成功・失敗・承認の却下・評価の
   dry-run・自動実行で承認が要るため呼ばなかったものも、モデルが確かめようとしたので数える）。
-  Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は数えない。
+  Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。
 - 除外: 同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中）が根拠・
-  データのツールで答えた Run（前の回答の言い換え・整形。事実の確かめは #1837 の最終の検証）と、
+  データのツールで答えた Run（前の回答の言い換え・整形）と、
   利用者が確認を取り消した Run（「資料の検索は不要」など。#1441・#1445）と、
   利用者への確認の質問だけの回答（`is_clarification_only`）と、NL2SQL の SQL の生成前の確認で
   止まった Run（`nl2sql_clarification_pending`）。曖昧で対象が分からない質問は拒答ではなく確認に
@@ -48,9 +48,7 @@ BLOCK と同じ考え方）。
   拒答にはせずそのまま出し、Run の経過に残す（拒答は範囲外・確かめられない質問のためのもので、
   対象が曖昧な質問の聞き返しを「お答えできません」にすると利用者が次に何をすればよいか分からない）。
 - 回答の対応は `insufficient_evidence`（basis `no_tool_grounding`。調べずに範囲外・答えられないと
-  判断した拒答は `declined_without_tools`）。最終の検証の成果物は
-  `skipped`（reason `no_tool_grounding`）にする（資料の根拠を使わずに答えた `no_rag_evidence`
-  とは分ける。#1834 のシグナルは拒答した Run を「答えられなかった」に数える）。
+  判断した拒答は `declined_without_tools`）。
 
 ここは判定と文だけを持つ（差し戻し・保存は `builtin_runtime`）。
 """
@@ -58,7 +56,7 @@ BLOCK と同じ考え方）。
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent import external_writes
@@ -86,9 +84,8 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 
-# 回答の対応の basis と、最終の検証の成果物の reason。ツールで確かめずに答えた回答を拒答に
+# 回答の対応の basis。ツールで確かめずに答えた回答を拒答に
 # 置き換えたものと、ツールで調べずに範囲外・答えられないと判断した拒答（#2608）を分ける（最終の
-# 検証の成果物の reason はどちらも `no_tool_grounding`）。
 BASIS_NO_TOOL_GROUNDING = "no_tool_grounding"
 BASIS_DECLINED_WITHOUT_TOOLS = "declined_without_tools"
 REASON_NO_TOOL_GROUNDING = "no_tool_grounding"
@@ -103,13 +100,11 @@ REFUSAL_AFTER_TOOLS = "after_tools"
 # 根拠・データを確かめないツール（`support_task.NON_GROUNDING_TOOLS`。回答の対応の現場のデータの
 # 道具の判定と同じ。#108）。
 _NON_GROUNDING_TOOLS = NON_GROUNDING_TOOLS
-# Control Plane が自分で呼んだ step の trace_id の接頭辞（最終の検証は回答の確定の後なので
-# ここでは現れないが、念のため数えない）。
+# Control Plane が自分で呼んだ step の trace_id の接頭辞。
 _CONTROL_PLANE_TRACE_PREFIXES = (
     CANCEL_TRACE_PREFIX,
     RUN_CANCEL_TRACE_PREFIX,
     GUIDE_CHECK_TRACE_PREFIX,
-    "answer_validation_",
 )
 
 _RETRY_HEAD = (
@@ -240,7 +235,7 @@ def tools_consulted(steps: list[RunStep]) -> bool:
 
     回答前の確認（`ask_user_confirmation`）の前に資料・業務データを調べたかの判定に使う。
     プロファイルの推薦の候補が割れたときの確認は推薦を呼んだ後なので、推薦も数える。
-    Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は数えない。
+    Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。
     """
     for step in steps:
         call = step.tool_call
@@ -274,7 +269,7 @@ def tool_output_texts(steps: list[RunStep]) -> list[str]:
     """この Run でモデルが呼んで成功した MCP 接続のツールの結果（JSON の文。#1934）。
 
     回答前の確認の選択肢がツールの結果にあるかを確かめるのに使う。Control Plane が自分で
-    呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は入れない。
+    呼んだもの（確認の取り消し・業務ガイドの照合）は入れない。
     """
     texts: list[str] = []
     for step in steps:
@@ -365,9 +360,7 @@ def grounded_in_thread(previous_steps: Iterable[list[RunStep]]) -> bool:
     """同じ会話の前の Run（会話の履歴の上限の中）のどれかが、根拠・データのツールで答えたか。
 
     そうなら、今の Run がツールを呼ばずに前の回答を言い換え・整形・要約しても拒答にしない
-    （「前の回答を表にして」「もっと短く」など）。前のターンの事実の確かめは、前のターンで
-    裏付けた根拠を今のターンの最終の検証に渡す仕組み（#1837）に任せる（今のターンに根拠が無くても、
-    その根拠だけで検証する。#1879）。
+    （「前の回答を表にして」「もっと短く」など）。
     """
     return any(grounding_used(steps) for steps in previous_steps)
 
@@ -495,26 +488,6 @@ def hops_retried(metadata: object) -> bool:
     return isinstance(record, dict) and bool(record.get("hop_retries"))
 
 
-def hop_original_answer(events: Sequence[Any]) -> str | None:
-    """差し戻しの前の回答（経過に残したもの。無ければ None）。
-
-    差し戻しは略号・別名（`hop_retry`。#1958）か業務データ（`data_retry`。#1979）か業務ガイドの
-    手順（`guide_step_retry`。#2396）の 1 回だけ。章節の続きの差し戻し（`section_retry`。#2492）は
-    含めない（前の回答は手順・条件の後半を欠くと分かっているので、前の回答に戻さない）。
-    """
-    for event in reversed(list(events)):
-        payload = getattr(event, "payload", None)
-        record = payload.get("tool_grounding") if isinstance(payload, dict) else None
-        if isinstance(record, dict) and record.get("action") in {
-            "hop_retry",
-            "data_retry",
-            "guide_step_retry",
-        }:
-            original = record.get("original_answer")
-            return original if isinstance(original, str) else None
-    return None
-
-
 def retried(metadata: object) -> int:
     """この Run で差し戻した回数。"""
     record = metadata.get(METADATA_KEY) if isinstance(metadata, dict) else None
@@ -624,7 +597,6 @@ __all__ = [
     "grounded_in_thread",
     "grounding_tools",
     "grounding_used",
-    "hop_original_answer",
     "hops_retried",
     "is_exempt_answer",
     "is_greeting_reply",

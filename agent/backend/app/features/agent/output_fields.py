@@ -478,7 +478,7 @@ def meaning_candidates(results: Sequence[OutputFieldResult]) -> list[int]:
 
 
 def without_output_record_sections(answer: str, report_titles: Sequence[str] = ()) -> str:
-    """記録報告の節を、資料との照合の前に外す。"""
+    """記録報告の節を外す。"""
     titles = {title.strip().rstrip(":：") for title in report_titles if title.strip()}
     lines: list[str] = []
     skipping = False

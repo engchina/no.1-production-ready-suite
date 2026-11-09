@@ -382,8 +382,8 @@ test("監査ログはツールの記録と内部の記録を 1 行ずつ並べ�
   run.artifacts.push(
     ...Array.from({ length: 4 }, (_, index) => ({
       id: `internal-${index}`,
-      kind: index % 2 === 0 ? "support_task" : "answer_validation",
-      name: index % 2 === 0 ? "支援タスクの状態" : "資料との照合",
+      kind: index % 2 === 0 ? "support_task" : "context_compaction",
+      name: index % 2 === 0 ? "支援タスクの状態" : "合成の内部の記録",
       content: { schema_version: 1, sequence: index },
       created_at: MOCK_NOW,
     }))
@@ -633,7 +633,8 @@ test("詳細の回答は長い文書名の根拠の行を省略して頁は残�
         passed: 2,
         cited: 2,
         markers: [],
-        passages: bullets.map((text, index) => ({ text, chunk_ids: [chunks[index]] })),
+        references: bullets.map((text, index) => ({ quote: text.replace("- ", ""), chunk_ids: [chunks[index]] })),
+        citation_lines: [],
       },
     },
     {

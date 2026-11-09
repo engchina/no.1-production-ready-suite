@@ -536,9 +536,6 @@ function feedbackReportFromRuns(
 /** 確かめるべき実行のシグナルの種類（表示の順。#1822。backend の `run_signals.SignalKind`）。 */
 export const SIGNAL_KINDS = [
   "not_helpful",
-  "validation_failed",
-  "unvalidated",
-  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -586,13 +583,6 @@ function dataToolCalls(run: Json): number {
   }).length;
 }
 
-/** 最終の検証が「資料の根拠を使わなかった」（`no_rag_evidence`。RAG の根拠のツールの有無を問わない）か。 */
-function ungrounded(run: Json): boolean {
-  const validation = [...((run.artifacts as Json[] | undefined) ?? [])].reverse().find((artifact) => artifact.kind === "answer_validation");
-  const content = validation?.content as Json | undefined;
-  return (content?.status === "unvalidated" || content?.status === "skipped") && content?.reason === "no_rag_evidence";
-}
-
 /** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証は根拠の有無だけを見る）。 */
 function runSignals(run: Json): string[] {
   const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
@@ -602,10 +592,6 @@ function runSignals(run: Json): string[] {
   const rejected = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length;
   const checks: Record<string, boolean> = {
     not_helpful: notHelpful,
-    validation_failed: false,
-    unvalidated: false,
-    // 拒答した Run（#1835。回答の対応が根拠不足・人への引き継ぎ）は「答えられなかった」だけに数える。
-    ungrounded_no_tools: ungrounded(run) && dataToolCalls(run) === 0 && outcome !== "insufficient_evidence" && outcome !== "needs_human",
     unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
     approval_rejected: rejected > 0,
     tool_failed: toolFailures > 0,
@@ -657,7 +643,6 @@ function signalReportFromRuns(
         status: run.status,
         signals: runSignals(run),
         answer_outcome: outcome,
-        validation_result: null,
         tool_failures: ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length,
         approvals_rejected: ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length,
         data_tool_calls: dataToolCalls(run),

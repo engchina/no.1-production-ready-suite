@@ -396,7 +396,7 @@ def test_publish_needs_evaluation_after_last_draft_change(
     _jobs(
         monkeypatch,
         # 実行補助を外した除去実験（#2587）は公開する構成の評価ではない（新しくても数えない）。
-        _job(pass_rate=1.0, offset_seconds=30, disabled_aids=["final_validation"]),
+        _job(pass_rate=1.0, offset_seconds=30, disabled_aids=["tool_grounding"]),
         _job(pass_rate=0.5, offset_seconds=10),
         _job(pass_rate=1.0, offset_seconds=-10),
         _job(pass_rate=1.0, offset_seconds=20, agent_version=1),

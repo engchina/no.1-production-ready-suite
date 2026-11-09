@@ -64,7 +64,7 @@ _SAMPLE = EvaluationCase(
     id="expense-deadline",
     question="経費精算の締め日はいつですか？",
     expected="毎月 25 日が締め日で、過ぎた分は翌月の精算になること",
-    expected_tools=["rag_retrieve_evidence", "rag_validate_answer"],
+    expected_tools=["rag_retrieve_evidence", "rag_read_source"],
     expected_tools_in_order=True,
 )
 

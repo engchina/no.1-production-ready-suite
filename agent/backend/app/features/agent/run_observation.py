@@ -26,11 +26,6 @@ from datetime import datetime
 from typing import Any, Literal
 
 from app.features.agent.answer_evidence import ATTACHMENT_DOCUMENT_PREFIX
-from app.features.agent.answer_validation import (
-    STATUS_COMPLETED,
-    STATUS_SKIPPED,
-    STATUS_UNVALIDATED,
-)
 from app.features.agent.data_scope import NL2SQL_CONNECTION_ID
 from app.features.agent.rag_figures import RAG_CONNECTION_ID
 from app.features.agent.rag_retrieval_state import (
@@ -105,7 +100,6 @@ ObservedToolStatus = Literal[
     "approval_skipped",
 ]
 EvidenceSource = Literal["search", "read"]
-ValidationStatus = Literal["completed", "skipped", "unvalidated"]
 
 
 @dataclass(slots=True)
@@ -465,15 +459,3 @@ def answer_citations(
 def run_agent_version(run: RunState) -> int | None:
     """Run に使った業務 Agent の公開の版（下書きの実行・記録の無い Run は None）。"""
     return _int(run.metadata.get("agent_version"))
-
-
-def validation_status(content: Mapping[str, Any]) -> ValidationStatus | None:
-    """最終の検証の状態（成果物「資料との照合」の `status`。無い・知らない値は None）。"""
-    status = content.get("status")
-    if status == STATUS_COMPLETED:
-        return "completed"
-    if status == STATUS_SKIPPED:
-        return "skipped"
-    if status == STATUS_UNVALIDATED:
-        return "unvalidated"
-    return None

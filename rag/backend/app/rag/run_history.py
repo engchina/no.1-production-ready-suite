@@ -27,9 +27,7 @@ from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
 from app.rag.answer_failure import answer_error_identity, failed_stage
-from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.stored_answer import stored_citations
-from app.schemas.history import ValidationExecution
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
     SUPPORTED_SEARCH_CLASSIFICATION_FILTERS,
@@ -42,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 RunSurface = Literal["search", "chat"]
 RunStatus = Literal["success", "blocked", "error"]
-RunVerification = Literal["verified", "partial", "unverified"]
 
 # RAG 検索の画面が送る絞り込みの条件（文書の分類・基準日・抽出項目の値）。実行の詳細の
 # 「RAG 検索で開く」が画面に戻す条件で、画面が送れない条件は残さない（#3309）。
@@ -85,53 +82,6 @@ def search_run_conditions(request: SearchRequest) -> dict[str, object]:
         if isinstance(value := request.filters.get(key), str) and value.strip()
     }
     return {"top_k": request.top_k, **({"filters": filters} if filters else {})}
-
-
-def answer_validation_execution(
-    diagnostics: Mapping[str, Any] | None,
-) -> ValidationExecution | None:
-    """照合の実行状態だけを記録する。実行失敗を合格や内容不支持へ変換しない。"""
-    validation = diagnostics.get("answer_validation") if diagnostics is not None else None
-    if not isinstance(validation, Mapping):
-        return None
-    status = str(validation.get("status") or "").strip().lower()
-    if status == "disabled" or (
-        status == "not_run" and validation.get("reason") == "audit_disabled"
-    ):
-        return "disabled"
-    if status in {"not_run", "no_claims"}:
-        return "not_run"
-    if status == "error":
-        return "error"
-    if status in {"timed_out", "timeout"}:
-        return "timed_out"
-    if status == "partial":
-        return "partial"
-    if semantic_audit_is_diagnostic_only(diagnostics or {}):
-        return "unknown"
-    if status in {"completed", "ok", "validated"}:
-        if validation.get("valid") is True:
-            return "passed"
-        if validation.get("valid") is False:
-            return "failed"
-    return "unknown"
-
-
-def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerification | None:
-    """資料照合の実行結果を読む。要求への回答状況から照合済みとは推定しない。"""
-    if diagnostics is None:
-        return None
-    execution = answer_validation_execution(diagnostics)
-    if execution == "passed":
-        return "verified"
-    if execution == "partial":
-        return "partial"
-    if execution == "failed":
-        validation = diagnostics.get("answer_validation")
-        counts = validation.get("counts") if isinstance(validation, Mapping) else None
-        supported = counts.get("supported") if isinstance(counts, Mapping) else 0
-        return "partial" if isinstance(supported, int) and supported > 0 else "unverified"
-    return "unverified"
 
 
 @dataclass
@@ -223,11 +173,6 @@ class RunRecorder:
             "answer_generated": answer_generated,
             "status": status,
             "answer_outcome": (diagnostics or {}).get("outcome") or None,
-            "verification": (
-                answer_verification(diagnostics)
-                if status == "success" and diagnostics is not None
-                else None
-            ),
             "confidence": str((diagnostics or {}).get("confidence") or "") or None,
             "needs_human_review": (diagnostics or {}).get("needs_human_review"),
             "citation_count": len(cited),
@@ -238,12 +183,6 @@ class RunRecorder:
             "conversation_id": self.conversation_id,
             "message_id": self.message_id,
             "stages": {
-                **(
-                    {"validation_execution": validation_execution}
-                    if (validation_execution := answer_validation_execution(diagnostics))
-                    is not None
-                    else {}
-                ),
                 # 詳細の処理の経過（共通の span の表の trace id と工程の詳細。#3226）。
                 **({"trace": trace} if (trace := self._trace_record()) is not None else {}),
                 # 実行の条件（詳細の「RAG 検索で開く」が画面に戻す。#3309）。

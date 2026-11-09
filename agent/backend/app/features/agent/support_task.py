@@ -62,14 +62,13 @@ BUDGET_EXCEEDED_CODE = "budget_exceeded"
 _DRY_RUN_CODE = "evaluation.dry_run"
 
 # 根拠・データを確かめないツール（業務プロファイル・検索・回答プロファイルの一覧と推薦）と、
-# Control Plane が自分で呼ぶツール（最終の検証・SQL の生成前の確認の取り消し）。拒答が調べる前か後か
+# Control Plane が自分で呼ぶツール（SQL の生成前の確認の取り消し）。拒答が調べる前か後か
 # （`tool_grounding.refusal_stage`。#2608）と、回答の対応の現場のデータの確認
 # （`answer_outcome` の `environment_tools`。#108）が同じ定義を使う。
 NON_GROUNDING_TOOLS = frozenset(
     {
         "rag_list_search_answer_profiles",
         "rag_recommend_search_answer_profile",
-        "rag_validate_answer",
         "nl2sql_list_profiles",
         "nl2sql_recommend_profile",
         "nl2sql_cancel_requirement",
@@ -85,14 +84,12 @@ RAG_READ_DOCUMENT = "rag_read_document"
 # 章節（章節ナビゲーションの章節）の本文を章節の終わりまで読む（#1438）。
 RAG_READ_SECTION = "rag_read_section"
 # Control Plane が自分で呼ぶ業務ガイドの照合（#1322）の呼び出しの trace_id の接頭辞。
-# モデルの予算・消費には数えない（回答の最終の検証と同じく Control Plane の呼び出し）。
+# モデルの予算・消費には数えない（Control Plane の呼び出し）。
 GUIDE_CHECK_TRACE_PREFIX = "guide_check_"
 # Run ごとの上限に数える RAG のツール。検索（と rag_search は回答の生成）を行い、1 回が重い
 # （rag_search は 50〜110 秒）もの。rag_lookup_guides（業務ガイドの照合）と rag_read_source
 # （根拠の本文の読み取り）は軽いため数えない（タスクの通しの上限には数える）。
 RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
-# Control Plane が自分で呼ぶ回答の最終の検証（#1246）。モデルの予算には数えない。
-_UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # NL2SQL の SQL の生成・実行。SQL を作る前に確認の項目（SQL の生成前の確認）を返すことが
@@ -233,8 +230,6 @@ def _executed(step: RunStep) -> bool:
     if step.tool_call is None or step.tool_result is None:
         return False
     if step.status not in {"completed", "failed"}:
-        return False
-    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
     if (step.tool_call.trace_id or "").startswith(
         (GUIDE_CHECK_TRACE_PREFIX, CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)
@@ -1827,8 +1822,6 @@ def _in_flight(step: RunStep) -> bool:
     取り消した）と、Control Plane の検証は数えない。
     """
     if step.tool_call is None or step.tool_result is not None:
-        return False
-    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
     if step.status == "running":
         return True

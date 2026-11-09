@@ -42,7 +42,6 @@ from app.features.agent.runtime import (
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.tools import ToolInvocationContext, ToolPolicy
 from app.security.service import set_security_service
-from app.settings import get_settings
 
 SKILL_ID = "test1378-skill"
 AGENT_ID = "test1378-agent"
@@ -201,7 +200,6 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     return model
 
 
@@ -589,25 +587,6 @@ def test_run_source_is_sent_to_the_product_as_a_token_claim(
     [query] = mcp.calls_of("nl2sql_query")
     assert query["claims"]["run_source"] == expected
     assert query["claims"]["run_id"] == run_id
-
-
-def test_final_validation_uses_the_scope_claim(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    """回答の最終の検証（根拠の読み直し）も、Run と同じ範囲の token で呼ぶ（#1379）。"""
-    _agent(rag=_scope("bv-sales"))
-    _script(
-        monkeypatch,
-        [function_call("rag__rag_search", {"query": "契約"}, call_id="call-1")],
-        [assistant_message("契約の更新は第 5 条で定めています。")],
-    )
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
-    run_id = _run()
-
-    run = runtime_repository.get_run(run_id)
-    assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    [validate] = mcp.calls_of("rag_validate_answer")
-    assert validate["claims"]["profile_ids"] == ["bv-sales"]
 
 
 def test_missing_profile_id_is_left_to_the_product_to_select(

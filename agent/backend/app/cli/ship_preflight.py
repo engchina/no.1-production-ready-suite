@@ -171,10 +171,7 @@ def check_config(settings: Settings) -> list[Check]:
                     "agent/backend/.env に URL を設定し、Agent を再起動する。",
                 )
             )
-    for name, enabled in (
-        ("tool_grounding_required", settings.agent_tool_grounding_required),
-        ("final_validation_enabled", settings.agent_final_validation_enabled),
-    ):
+    for name, enabled in (("tool_grounding_required", settings.agent_tool_grounding_required),):
         checks.append(
             Check(
                 "config",
@@ -471,7 +468,6 @@ def _fingerprint(settings: Settings) -> str:
         "dispatch_mode": settings.agent_runtime_dispatch_mode,
         "max_retries": settings.agent_external_mcp_max_retries,
         "grounding_required": settings.agent_tool_grounding_required,
-        "final_validation": settings.agent_final_validation_enabled,
     }
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:12]
 

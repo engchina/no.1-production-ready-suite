@@ -789,7 +789,7 @@ def _reindex_applications(applications: Any, index: Mapping[int, int]) -> Any:
 
 
 class OutputFieldEvidence(_StrictModel):
-    """出力データの項目と根拠の役割。生成時と最終検証で同じ契約を使う。"""
+    """出力データの項目と根拠の役割。生成時の契約。"""
 
     # 列の主張の有無をモデルの null / object の選び方に任せない（空の object が「主張なし」と「定義なし」の両方になる。#2821）。
     asserts_output_fields: bool = Field(

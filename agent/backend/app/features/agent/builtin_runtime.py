@@ -121,47 +121,12 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
-    run_validation_passage_citations,
 )
-from app.features.agent.answer_identifiers import IdentifierCheck, identifier_index
+from app.features.agent.answer_identifiers import identifier_index
 from app.features.agent.answer_notice import answer_takes_notice, current_answer_notice
 from app.features.agent.answer_outcome import answer_outcome
-from app.features.agent.answer_passages import is_absence_only, is_clarification_only
-from app.features.agent.answer_validation import (
-    ANSWER_VALIDATION_KIND,
-    ANSWER_VALIDATION_NAME,
-    EVIDENCE_TOOLS,
-    MAX_ANSWER_CHARS,
-    MAX_QUERY_CHARS,
-    NO_EVIDENCE_NOTICE,
-    REASON_ABSENCE_ONLY,
-    REASON_ANSWER_TOO_LONG,
-    REASON_ATTACHMENT_EVIDENCE,
-    REASON_CLARIFICATION_ONLY,
-    REASON_CONNECTION_NOT_FOUND,
-    REASON_EMPTY_ANSWER,
-    REASON_NO_RAG_EVIDENCE,
-    REASON_RAG_DECLINED,
-    REASON_UNUSABLE_RESULT,
-    REASON_VALIDATION_ERROR,
-    REASON_VALIDATION_TIMED_OUT,
-    REASON_VALIDATOR_UNAVAILABLE,
-    RESULT_TIMED_OUT,
-    STATUS_COMPLETED,
-    STATUS_SKIPPED,
-    STATUS_UNVALIDATED,
-    VALIDATE_ANSWER_TOOL,
-    carried_evidence,
-    carried_evidence_groups,
-    combine_validations,
-    connection_check_inputs,
-    run_evidence_groups,
-    usable_result,
-    validation_content,
-    validation_data_results,
-    validation_figure_readings,
-    with_no_evidence_notice,
-    with_unverified_notice,
+from app.features.agent.answer_passages import is_clarification_only
+from app.features.agent.answer_references import (
     without_lookup_notes,
 )
 from app.features.agent.chat_progress import (
@@ -197,7 +162,7 @@ from app.features.agent.clarification_cancel import (
     message_cancel_kinds,
     pending_of,
 )
-from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.config import runtime_config_store
 from app.features.agent.confirmation import (
     CONFIRMATION_TOOL,
     POLICY_ASSUME,
@@ -220,7 +185,6 @@ from app.features.agent.confirmation import (
     rag_conditions,
     response_instructions,
     used_rounds,
-    validation_premises,
 )
 from app.features.agent.context_window import (
     FALLBACK_PROVIDER_SCALE,
@@ -294,7 +258,6 @@ from app.features.agent.support_task import (
     has_support_task_activity,
     is_environment_tool,
     missing_data_lookup,
-    nl2sql_clarification_pending,
     nl2sql_next_step,
     nl2sql_skip_step,
     profile_knowledge_summary,
@@ -2246,7 +2209,7 @@ class _ToolRecorder:
         handler: ToolHandler | None = None,
         cleanup: bool = False,
     ) -> tuple[str, ToolResult]:
-        """Control Plane が自分で呼ぶツール（回答の最終の検証。#1246）を step に記録して呼ぶ。
+        """Control Plane が自分で呼ぶツールを step に記録して呼ぶ。
 
         予算は数えない。ポリシーの「拒否」は守り、「承認」は待たない（読み取りの検証のため。監査には
         `authorization=control_plane` を残す）。終わった Run では呼ばない（#2609）。`cleanup` は
@@ -3972,7 +3935,6 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     run_id,
                     result,
                     task,
-                    rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                     data_scopes=agent.data_scopes,
                     refusal=_refusal_text(agent, sdk_agent) if refused else None,
                 )
@@ -4094,7 +4056,6 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     run_id,
                     result,
                     task,
-                    rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                     data_scopes=agent.data_scopes,
                     refusal=_refusal_text(agent, sdk_agent) if refused else None,
                 )
@@ -4740,8 +4701,8 @@ def _raise_on_grounding_failure(run_id: str, result: Any) -> None:
     """根拠・データのツールが 1 つも結果を返さず実行に失敗したまま確定した回答を、Run の失敗にする。
 
     #2475。
-    検索・照会を終えられなかった回答を出すと、利用者は「資料に根拠が無い」と読む（最終の検証も根拠が
-    無いので本文を外す）。ツールの失敗の理由を出して Run を失敗にし、再実行で直せることを示す。
+    検索・照会を終えられなかった回答を出すと、利用者は「資料に根拠が無い」と読む。
+    ツールの失敗の理由を出して Run を失敗にし、再実行で直せることを示す。
     承認で止まった Run・確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run は対象外。
     """
     from app.features.agent.runtime import runtime_repository
@@ -4838,14 +4799,13 @@ async def _finish(
     result: Any,
     task: _SupportTaskRun | None = None,
     *,
-    rag_tools: bool = False,
     data_scopes: data_scope.AgentDataScopes | None = None,
     refusal: str | None = None,
 ) -> None:
     """Run を承認待ちにするか、回答を確定する。
 
     `refusal` があれば（根拠・データのツールを呼ばずに作った回答。#1835）、モデルの回答の代わりに
-    その拒答の文を回答にし、最終の検証はせずに `skipped`（`no_tool_grounding`）を残す。回答の対応の
+    その拒答の文を回答にする。
     basis は、調べずに範囲外・答えられないと判断した拒答なら `declined_without_tools`（#2608）。
     """
     from app.features.agent.runtime import runtime_repository
@@ -4876,14 +4836,6 @@ async def _finish(
         )
         return
     if refusal is not None:
-        runtime_repository.save_builtin_artifact(
-            run_id,
-            kind=ANSWER_VALIDATION_KIND,
-            name=ANSWER_VALIDATION_NAME,
-            content=validation_content(
-                STATUS_SKIPPED, reason=tool_grounding.REASON_NO_TOOL_GROUNDING
-            ),
-        )
         # 拒答も回答なので、回答の注意書きを付ける（#2405）。
         runtime_repository.complete_builtin_run(
             run_id,
@@ -4897,8 +4849,8 @@ async def _finish(
     if tool_confirmations and is_confirmation_payload(answer):
         # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。
         answer = card_answer(tool_confirmations)
-    # 調べるのに使ったツール・プロファイル・内部の ID だけを述べる行は、資料の主張ではないので
-    # 検証の前に外す（#2328。使ったツールと根拠は画面と MCP の sources が別に示す）。
+    # 調べるのに使ったツール・プロファイル・内部の ID だけを述べる行は外す（#2328。使ったツールと
+    # 根拠は画面と MCP の sources が別に示す）。
     answer = without_lookup_notes(answer)
     if output_recorded(runtime_repository.get_run(run_id).artifacts):
         answer = without_output_record_sections(
@@ -4906,80 +4858,27 @@ async def _finish(
         )
     identifiers = identifier_index(runtime_repository.get_run(run_id).steps).answer(answer)
     answer = identifiers.text
-    # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
-    validation: dict[str, Any] | None = None
-    if aid_enabled(run_id, "final_validation"):
-        try:
-            answer, validation = await _validate_final_answer(
-                run_id, answer, rag_tools=rag_tools, data_scopes=data_scopes
-            )
-            reverted = await _answer_before_hop_retry(
-                run_id, model_answer, validation, rag_tools=rag_tools, data_scopes=data_scopes
-            )
-            if reverted is not None:
-                model_answer, answer, validation = reverted
-                identifiers = IdentifierCheck(
-                    model_answer, **validation.get("identifier_check", {})
-                )
-        except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
-            logger.warning(
-                "builtin_runtime_answer_validation_failed",
-                extra={"run_id": run_id, "exception_type": type(exc).__name__},
-            )
-            # 確かめられなかったことを成果物にも残す（#1277。黙って通さない）。
-            validation = validation_content(
-                STATUS_UNVALIDATED,
-                reason=REASON_VALIDATION_ERROR,
-                message="資料との照合の途中で予期しない失敗が起きました。",
-            )
-            runtime_repository.save_builtin_artifact(
-                run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
-            )
-            answer = with_unverified_notice(answer)
-    if identifiers.corrected or identifiers.ambiguous:
-        validation = validation or validation_content(
-            STATUS_SKIPPED, reason="identifier_check_only"
-        )
-        validation["identifier_check"] = identifiers.counts
-        if identifiers.ambiguous:
-            validation.update(
-                status=STATUS_UNVALIDATED,
-                valid=False,
-                reason="identifier_ambiguous",
-                message="資料に表記の異なる値があり、識別子を一意に照合できませんでした。",
-            )
-            answer = with_unverified_notice(answer)
-        runtime_repository.save_builtin_artifact(
-            run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
-        )
-    # 主張の照合（最終の検証）とは別に、回答に使った章節を終わりまで読んだかを残し、読めていない
-    # 章節は回答に示す（#2492。続きを読まずに確定した手順の不足を、照合は見つけられない）。
+    # 回答に使った章節を終わりまで読んだかを確かめ、読めていない章節は回答に示す（#2492）。
     coverage = _coverage(runtime_repository.get_run(run_id), model_answer, task)
-    if coverage is not None:
-        if validation is not None:
-            validation = {**validation, "coverage": coverage}
-            runtime_repository.save_builtin_artifact(
-                run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
-            )
-        if coverage["status"] == COVERAGE_INCOMPLETE:
-            answer = with_unread_sections_notice(answer, coverage["sections"])
-            logger.info(
-                "builtin_runtime_unread_sections_noticed",
-                extra={
-                    "run_id": run_id,
-                    "sections": [item["section_id"] for item in coverage["sections"]],
-                    "reasons": [item["reason"] for item in coverage["sections"]],
-                },
-            )
-    _save_answer_evidence(run_id, answer, validation)
-    outcome = _answer_outcome(run_id, model_answer, validation, coverage)
+    if coverage is not None and coverage["status"] == COVERAGE_INCOMPLETE:
+        answer = with_unread_sections_notice(answer, coverage["sections"])
+        logger.info(
+            "builtin_runtime_unread_sections_noticed",
+            extra={
+                "run_id": run_id,
+                "sections": [item["section_id"] for item in coverage["sections"]],
+                "reasons": [item["reason"] for item in coverage["sections"]],
+            },
+        )
+    _save_answer_evidence(run_id, answer)
+    outcome = _answer_outcome(run_id, model_answer, coverage)
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
         outcome=outcome,
         confirmations=tool_confirmations,
-        # 回答の注意書き（#2405）。最終の検証の後に、本文とは別の項目として付ける。回答前の確認
+        # 回答の注意書き（#2405）。本文とは別の項目として付ける。回答前の確認
         # （カード）と確認の質問だけの回答には付けない。
         notice=(
             current_answer_notice()
@@ -4989,84 +4888,18 @@ async def _finish(
     )
 
 
-def _save_answer_evidence(run_id: str, answer: str, validation: Mapping[str, Any] | None) -> None:
+def _save_answer_evidence(run_id: str, answer: str) -> None:
     """回答の根拠（AI に渡した根拠と回答で引用した根拠。#2328）を成果物に残す。
 
     根拠を返すツールを呼ばなかった Run には残さない。
     """
     from app.features.agent.runtime import runtime_repository
 
-    content = answer_evidence(runtime_repository.get_run(run_id).steps, answer, validation)
+    content = answer_evidence(runtime_repository.get_run(run_id).steps, answer)
     if content["items"]:
         runtime_repository.save_builtin_artifact(
             run_id, kind=ANSWER_EVIDENCE_KIND, name=ANSWER_EVIDENCE_NAME, content=content
         )
-
-
-def _withheld_rank(validation: Mapping[str, Any] | None) -> tuple[int, int, int] | None:
-    """最終の検証の指摘の重さ（矛盾で外した段落の数, 未確認の段落の数, 警告の数。#1978・#2738）。
-
-    警告の数は、警告の印の段落と回答全体の警告の和。判定が出なかった検証（`unvalidated`・
-    `skipped`）は比べない（None）。
-    """
-    if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
-        return None
-    withheld = validation.get("withheld")
-    withheld = withheld if isinstance(withheld, Mapping) else {}
-    warnings = validation.get("answer_warnings")
-    return (
-        int(withheld.get("removed") or 0),
-        int(withheld.get("unverified") or 0),
-        int(withheld.get("warnings") or 0) + (len(warnings) if isinstance(warnings, list) else 0),
-    )
-
-
-async def _answer_before_hop_retry(
-    run_id: str,
-    answer: str,
-    validation: dict[str, Any] | None,
-    *,
-    rag_tools: bool,
-    data_scopes: data_scope.AgentDataScopes | None,
-) -> tuple[str, str, dict[str, Any]] | None:
-    """差し戻し（`hop_retry`。#1958）の後の回答が前の回答より悪ければ、前の回答を使う（#1978）。
-
-    差し戻しを受けたモデルが、要らない区分を引き直して最初の回答の根拠から離れることがある。
-    差し戻しの後の回答の最終の検証が指摘（矛盾で外した段落・未確認の段落・警告）を出したときだけ、
-    経過に残した前の回答も同じ根拠で検証し、前の回答のほうが指摘が軽ければ（矛盾で外した段落 →
-    未確認の段落 → 警告の数の順に少ない。#2738）、
-    （モデルの回答, 利用者に見せる回答, 検証の内容）を前の回答のものにして返す。差し戻しの後の
-    回答は経過（`tool_grounding` の `hop_reverted`）に残す。そうでなければ None（検証の成果物は
-    差し戻しの後の回答のものに戻す）。
-    """
-    from app.features.agent.runtime import runtime_repository
-
-    after = _withheld_rank(validation)
-    if after is None or after == (0, 0, 0):
-        return None
-    original = tool_grounding.hop_original_answer(runtime_repository.get_run(run_id).events)
-    original = without_lookup_notes(original) if original else original
-    if not original or original.strip() == answer.strip() or is_clarification_only(original):
-        return None
-    identifiers = identifier_index(runtime_repository.get_run(run_id).steps).answer(original)
-    original = identifiers.text
-    published, before = await _validate_final_answer(
-        run_id, original, rag_tools=rag_tools, data_scopes=data_scopes
-    )
-    rank = _withheld_rank(before)
-    if rank is not None and rank < after:
-        runtime_repository.record_tool_grounding(run_id, "hop_reverted", answer)
-        logger.info(
-            "builtin_runtime_hop_retry_reverted",
-            extra={"run_id": run_id, "before": list(rank), "after": list(after)},
-        )
-        before["identifier_check"] = identifiers.counts
-        return original, published, before
-    if validation is not None:
-        runtime_repository.save_builtin_artifact(
-            run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
-        )
-    return None
 
 
 def _tools_consulted(run_id: str) -> bool:
@@ -5201,260 +5034,20 @@ def _tool_confirmations(
 
 
 def _answer_outcome(
-    run_id: str,
-    answer: str,
-    validation: dict[str, Any] | None,
-    coverage: dict[str, Any] | None = None,
+    run_id: str, answer: str, coverage: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
     """回答の対応（#1305。`answer_outcome`）。決められなくても回答は保存する（対応は付けない）。"""
     from app.features.agent.runtime import runtime_repository
 
     try:
         steps = runtime_repository.get_run(run_id).steps
-        return answer_outcome(answer, steps=steps, validation=validation, coverage=coverage)
+        return answer_outcome(answer, steps=steps, coverage=coverage)
     except Exception as exc:  # noqa: BLE001 - 対応は補助。決められなくても回答は返す
         logger.warning(
             "builtin_runtime_answer_outcome_failed",
             extra={"run_id": run_id, "exception_type": type(exc).__name__},
         )
         return None
-
-
-def _validator_connection(evidence_tool: str) -> McpConnectionConfig | None:
-    """根拠を返したツール（`<接続>__rag_search` など）の MCP 接続。"""
-    base = mcp_base_tool_name(evidence_tool)
-    for config in runtime_config_store.list_mcp_servers():
-        if mcp_function_name(config.server_id, base) == evidence_tool:
-            return config
-    return None
-
-
-def has_rag_evidence_tools(
-    sdk_agent: Agent[Any] | None,
-    skill_ids: list[str],
-    cancellations: list[dict[str, Any]] | None = None,
-) -> bool:
-    """Agent が RAG の根拠のツール（`rag_search` / `rag_retrieve_evidence`）を持つか（#1277）。
-
-    Run に渡したツールにあるか、Skill の requirement が名前で求めていれば持つとみなす（RAG の
-    接続のツールを取れなかった Run でも、根拠を使えなかった回答として注記するため）。
-    利用者が「資料の検索は不要」と取り消した Run（#1445）は持たないとみなす（資料を使わない）。
-    """
-    if KIND_RAG in declined_kinds({CANCEL_METADATA_KEY: cancellations or []}):
-        return False
-    tools = list(getattr(sdk_agent, "tools", []) or [])
-    if any(mcp_base_tool_name(str(getattr(tool, "name", ""))) in EVIDENCE_TOOLS for tool in tools):
-        return True
-    return any(
-        allowed is not None and bool(allowed & EVIDENCE_TOOLS)
-        for allowed in agent_mcp_requirements(skill_ids).values()
-    )
-
-
-def _read_attachments(steps: list[Any]) -> bool:
-    """この Run でモデルが添付を読むツールを呼んで結果を得たか（#2517）。"""
-    from app.features.agent.chat_attachments import ATTACHMENT_READ_TOOLS
-
-    return any(
-        step.tool_call is not None
-        and step.tool_call.name in ATTACHMENT_READ_TOOLS
-        and step.tool_result is not None
-        and step.tool_result.success
-        for step in steps
-    )
-
-
-async def _validate_final_answer(
-    run_id: str,
-    answer: str,
-    *,
-    rag_tools: bool = False,
-    data_scopes: data_scope.AgentDataScopes | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """回答の最終の検証（#1246・#1277）。検証の結果を成果物に残し、利用者に見せる回答と、
-    成果物の内容（回答の対応を決めるのに使う。#1305）を返す。
-
-    モデルではなく Control Plane が、根拠を返した RAG の MCP 接続ごとに `rag_validate_answer` を
-    呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
-    利用者が回答前の確認で答えた内容は前提（`premises`）として渡す（#1898）。
-    判定が valid でなければ根拠と矛盾する段落を外し、確かめられない段落に印を付けて理由を足し
-    （#2738）、検証が失敗したら
-    照合を終えられなかったことを足す（回答は消さない。`answer_validation.combine_validations`）。
-    `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
-
-    今のターンに根拠が無いとき（#1879）: 資料に無い・答えられないことだけを述べる回答は注記せずに
-    `skipped`（`absence_only`）。会話の続きで、今のターンが資料の根拠を得ずに答えた（前の回答の
-    整形・言い換え。#1835 の `grounded_in_thread` で拒答にしない回答。検索を呼んで 0 件だった
-    ときも同じ。#3314）なら、前のターンの検証で裏付けた根拠（`carried_evidence`）だけで検証する。
-    """
-    from app.features.agent.runtime import runtime_repository
-
-    def save(content: dict[str, Any]) -> dict[str, Any]:
-        runtime_repository.save_builtin_artifact(
-            run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=content
-        )
-        return content
-
-    run = runtime_repository.get_run(run_id)
-    # 会話の続きでは、前のターン（モデルに渡す往復の数まで）の検証で回答の段落を裏付けた根拠も
-    # 渡す（#1837。前のターンの事実を言い直した段落を、今のターンの根拠だけで外さない）。
-    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
-    previous = runtime_repository.thread_answer_validations(run_id) if max_turns > 0 else []
-    carried = carried_evidence(previous[-max_turns:] if max_turns > 0 else [])
-    # 回答が引用した根拠を先にして、上限で切っても検証に入れる（#1364）。
-    groups = run_evidence_groups(run.steps, answer, carried=carried)
-    if not groups:
-        if KIND_RAG in declined_kinds(run.metadata):
-            # 利用者が「資料の検索は不要」とした（#1445）。資料と照らし合わせない（注記しない）。
-            return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_RAG_DECLINED))
-        if rag_tools and (is_clarification_only(answer) or nl2sql_clarification_pending(run.steps)):
-            # 確認の質問だけの回答は資料の主張を含まない（「確かめていない」を足さない。#1306）。
-            return answer, save(
-                validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY)
-            )
-        if rag_tools and is_absence_only(answer):
-            # 資料に無い・答えられないことだけを述べる回答（拒答）は資料の主張を含まない（#1879）。
-            return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_ABSENCE_ONLY))
-        if carried and not _read_attachments(run.steps):
-            # 今のターンで資料の根拠を得なかった回答（ツールを呼ばずに前の回答を整形・言い換えた。
-            # #1879。検索・照会が 0 件だったときも同じ。#3314）は、前のターンで裏付けた根拠で
-            # 確かめる（ツールが成功しただけでは根拠を得たことにしない）。添付を読んだ回答は下で
-            # 資料と照らし合わせない。
-            groups = carried_evidence_groups(carried, answer)
-    if not groups and _read_attachments(run.steps):
-        # 利用者が添付したファイルを読んで答えた（#2517）。資料と照らし合わせない（注記しない）。
-        return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_ATTACHMENT_EVIDENCE))
-    if not groups:
-        if rag_tools and answer.strip():
-            content = validation_content(
-                STATUS_UNVALIDATED, reason=REASON_NO_RAG_EVIDENCE, message=NO_EVIDENCE_NOTICE
-            )
-            return with_no_evidence_notice(answer), save(content)
-        return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_NO_RAG_EVIDENCE))
-    refs = [ref for _tool, items in groups for ref in items]
-    if not answer.strip():
-        content = validation_content(STATUS_SKIPPED, reason=REASON_EMPTY_ANSWER, evidence=refs)
-        return answer, save(content)
-    validations = [
-        await _validate_with_connection(run, answer, evidence_tool, items, data_scopes)
-        for evidence_tool, items in groups
-    ]
-    # 図の見た目の段落は、この Run（と前のターンの検証）で図の画像がモデルへ届いたかで判定する
-    # （#2678。画像の有無は Run の記録から決める）。
-    figures = validation_figure_readings(run.steps, previous[-max_turns:] if max_turns > 0 else [])
-    content, published = combine_validations(answer, validations, figures)
-    return published, save(content)
-
-
-async def _validate_with_connection(
-    run: Any,
-    answer: str,
-    evidence_tool: str,
-    refs: list[dict[str, Any]],
-    data_scopes: data_scope.AgentDataScopes | None = None,
-) -> dict[str, Any]:
-    """1 つの MCP 接続の根拠で `rag_validate_answer` を呼び、接続ごとの内容を返す。
-
-    判定が出たら `completed`、呼べない・失敗した・判定として使えない応答なら `unvalidated`。
-    """
-
-    def unvalidated(reason: str, message: str | None, **extra: Any) -> dict[str, Any]:
-        return validation_content(
-            STATUS_UNVALIDATED, reason=reason, message=message, evidence=refs, **extra
-        )
-
-    config = _validator_connection(evidence_tool)
-    if config is None:
-        return unvalidated(REASON_CONNECTION_NOT_FOUND, "根拠を返した MCP 接続が見つかりません。")
-    connection: dict[str, Any] = {"connection": config.server_id}
-    if len(answer) > MAX_ANSWER_CHARS:
-        return unvalidated(
-            REASON_ANSWER_TOO_LONG,
-            f"回答が長すぎるため検証できません（{MAX_ANSWER_CHARS} 文字まで）。",
-            **connection,
-        )
-    context = _run_tool_context(run)
-    try:
-        listed = await asyncio.to_thread(
-            list_mcp_connection_tools, config.server_id, context=context
-        )
-    except KeyError:
-        return unvalidated(
-            REASON_CONNECTION_NOT_FOUND, "根拠を返した MCP 接続が見つかりません。", **connection
-        )
-    except ExternalToolError as exc:
-        return unvalidated(exc.code, exc.message, **connection)
-    tool = next((item for item in listed.tools if item.name == VALIDATE_ANSWER_TOOL), None)
-    if tool is None:
-        return unvalidated(
-            REASON_VALIDATOR_UNAVAILABLE,
-            f"MCP 接続「{config.label or config.server_id}」は資料との照合を提供していません。",
-            **connection,
-        )
-    definition = mcp_tool_definition(config, tool)
-    recorder = _ToolRecorder(run.id)
-    # 根拠の読み直しも Run と同じデータの範囲で行う（サービストークンの claim。#1379）。
-    recorder.data_scopes = dict(data_scopes or {})
-    # 利用者が回答前の確認で答えた前提（#1898）。答えをそのまま述べた段落と、資料の規則を答えに
-    # 当てはめた結論を、資料の根拠だけで「確かめられない」として外さない。
-    premises = validation_premises(run.metadata, run.confirmations)
-    # この Run の業務データ（NL2SQL）の照会の結果（#1950）。件数・金額・一覧の段落を、資料の根拠
-    # だけで「確かめられない」として外さない。
-    data_results = validation_data_results(run.steps)
-    # 段落ごとの出典（#104）。業務 Agent の回答は根拠を本文とは別に示すので、段落に出典を
-    # 書かない。RAG は段落の実際の出典だけで裏付けるため、渡さないと正しい段落も unassessed に
-    # なる。古い RAG（契約に `passage_citations` が無い）には渡さない（extra=forbid で失敗する）。
-    passage_citations = (
-        run_validation_passage_citations(run.steps, answer, refs)
-        if _accepts_input(tool.input_schema, "passage_citations")
-        else []
-    )
-    step_id, result = await recorder.call(
-        ToolCall(
-            name=definition.name,
-            arguments={
-                "query": run.goal[:MAX_QUERY_CHARS],
-                "answer": answer,
-                "evidence": refs,
-                # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
-                **connection_check_inputs(run.steps, evidence_tool),
-                **({"premises": premises} if premises else {}),
-                **({"data_results": data_results} if data_results else {}),
-                **({"passage_citations": passage_citations} if passage_citations else {}),
-            },
-            trace_id=f"answer_validation_{run.id}_{config.server_id}",
-        ),
-        definition=definition,
-        handler=mcp_tool_handler(config, tool),
-    )
-    common: dict[str, Any] = {**connection, "tool_name": definition.name, "step_id": step_id}
-    if not result.success or not isinstance(result.output, dict):
-        reason = result.error_code or (
-            "policy_denied" if result.policy_decision == ToolPolicyDecision.DENY else "tool_failed"
-        )
-        return unvalidated(reason, result.error, **common)
-    if result.output.get("status") == RESULT_TIMED_OUT:
-        # RAG が時間の上限までにどの段落も確かめ終わらなかった（#2700。回答は消さずに注記する）。
-        return unvalidated(
-            REASON_VALIDATION_TIMED_OUT,
-            "資料との照合が時間の上限までに終わりませんでした。",
-            result=result.output,
-            **common,
-        )
-    if not usable_result(result.output):
-        return unvalidated(
-            REASON_UNUSABLE_RESULT,
-            f"検証の結果（{result.output.get('status')}）を判定に使えません。",
-            result=result.output,
-            **common,
-        )
-    return validation_content(STATUS_COMPLETED, result=result.output, evidence=refs, **common)
-
-
-def _accepts_input(schema: object, name: str) -> bool:
-    """MCP のツールの inputSchema が入力の項目 `name` を持つか（契約の版の違いを吸収する）。"""
-    properties = schema.get("properties") if isinstance(schema, dict) else None
-    return isinstance(properties, dict) and name in properties
 
 
 def _record_usage(run_id: str, source: object, model_id: str) -> None:

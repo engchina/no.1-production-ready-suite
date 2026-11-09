@@ -32,7 +32,6 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
 )
 from pydantic import ValidationError
-from rag_engine.evaluation.answer_validation import MAX_PREMISES
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
@@ -131,6 +130,8 @@ ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
 # 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。KB の検索テストの
 # 「retrieval」（回答フローを通らない検索だけ）とは分ける。
 EVIDENCE_STAGE = "evidence"
+# 会話の履歴から引き継ぐ確認済みの前提の上限。
+MAX_HISTORY_PREMISES = 10
 
 
 def storage_failure(step: StorageFailureStep, exc: BaseException) -> StorageFailure:
@@ -172,7 +173,7 @@ def history_confirmation_facts(history: Sequence[ChatTurn]) -> dict[str, History
             for fact in turn.confirmed_facts:
                 latest.pop(fact.key or fact.question, None)
                 latest[fact.key or fact.question] = fact
-    return {fact.id: fact for fact in list(latest.values())[-MAX_PREMISES:]}
+    return {fact.id: fact for fact in list(latest.values())[-MAX_HISTORY_PREMISES:]}
 
 
 def scope_with_history_confirmations(
@@ -890,17 +891,6 @@ class RagPipeline:
         if outcome.evaluation_input is not None:
             outcome.evaluation_input["answer_text"] = final_answer
         if final_answer != outcome.answer:
-            # 安全処理後の本文へ、変更前の本文の検査済み表示を引き継がない。
-            previous_validation = outcome.diagnostics.get("answer_validation")
-            outcome.diagnostics["answer_validation"] = {
-                "previous_body_validation": previous_validation,
-                "status": "body_changed",
-                "valid": False,
-                "reuse_context": "",
-                "previous_status": previous_validation.get("status")
-                if isinstance(previous_validation, dict)
-                else None,
-            }
             outcome.diagnostics["needs_human_review"] = True
             outcome.diagnostics["confidence"] = "low"
         # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。

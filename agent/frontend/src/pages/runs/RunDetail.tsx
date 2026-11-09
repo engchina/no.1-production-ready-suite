@@ -47,7 +47,7 @@ import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
-import { ANSWER_KIND, ANSWER_VALIDATION_KIND, answerOutcome, runAnswerPassages } from "@/lib/answer-review";
+import { ANSWER_KIND, answerOutcome } from "@/lib/answer-review";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
@@ -56,7 +56,6 @@ import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
 import {
   answerStructureTitles,
-  noticeHeading,
   structureAnswer,
   withoutFrameHeading,
 } from "@/lib/answer-structure";
@@ -152,17 +151,13 @@ export function RunDetail({
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
   // 最終の回答は「回答」の節（回答の根拠はその下。#2328）。「成果物」の節は利用者が使う出力（表の結果など）だけで、
-  // 支援タスクの状態・資料との照合などの内部の記録は「監査ログ」で元の JSON まで見る（#2403）。
+  // 支援タスクの状態などの内部の記録は「監査ログ」で元の JSON まで見る（#2403）。
   const answers = run.artifacts.filter(isAnswerArtifact);
   const outputs = userOutputArtifacts(run.artifacts);
   const internalRecords = internalRecordArtifacts(run.artifacts);
   const evidence = runAnswerEvidence(run.artifacts);
   // 保存した根拠のうち、今の権限で見られない根拠の数（#3252）。
   const withheldEvidence = run.withheld_evidence_count ?? 0;
-  const validationContent =
-    [...run.artifacts].reverse().find((artifact) => artifact.kind === ANSWER_VALIDATION_KIND)?.content ?? null;
-  // 段落の印・外した段落・回答全体の注意（#2738）。記録の無い過去の Run は null（今までの表示のまま）。
-  const passages = runAnswerPassages(run.artifacts);
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
   // 処理の経過は Run の trace（span の木。#3226）の投影で、チャットと同じ記録・名前にする。span は共通の span の表に
@@ -187,13 +182,8 @@ export function RunDetail({
             status={commonRunStatus(run.status)}
             statusLabel={runStatusLabel(run.status)}
             badges={
-              (outcome && latestAnswer) || passages ? (
-                <>
-                  {outcome && latestAnswer ? (
-                    <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
-                  ) : null}
-                  {/* 印の数のバッジ（チャットの「資料との照合」・RAG と同じ共有の部品。0 件は出さない。#2738）。 */}
-                </>
+              outcome && latestAnswer ? (
+                <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
               ) : null
             }
             question={run.goal}
@@ -299,22 +289,13 @@ export function RunDetail({
                 // 回答の本文はチャットと同じ節の形（根拠の行つき。#2328）。結び付けられなければ Markdown のまま
                 // （表は共通の結果の表。#1158 / #1808）。
                 const blocks =
-                  evidence || passages
-                    ? structureAnswer(
-                        text,
-                        evidence,
-                        noticeHeading(validationContent),
-                        answerStructureTitles(),
-                        passages
-                      )
-                    : null;
+                  evidence ? structureAnswer(text, evidence, answerStructureTitles()) : null;
                 return blocks ? (
                   <StructuredAnswer
                     key={artifact.id}
                     runId={run.id}
                     blocks={blocks}
                     evidence={evidence}
-                    passages={passages}
                     testId={`run-answer-${artifact.id}`}
                   />
                 ) : (
@@ -498,7 +479,7 @@ function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ 
 
 /**
  * 実行の詳細の監査ログ（#2403）。ツールの呼び出しの記録（判断・権限・承認・処理時間・エラー）と、実行が残した内部の
- * 記録（支援タスクの状態・資料との照合・検索の途中の結果など。成果物の種類で `internalRecordArtifacts` が分ける）を、
+ * 記録（支援タスクの状態・検索の途中の結果など。成果物の種類で `internalRecordArtifacts` が分ける）を、
  * イベントの記録と同じ共通の `RunEventLog` で 1 行ずつ時間の順に並べる（行を開いて詳細と元の JSON。内側だけを
  * スクロールする）。ツールの記録は開いたときだけ読む。
  */

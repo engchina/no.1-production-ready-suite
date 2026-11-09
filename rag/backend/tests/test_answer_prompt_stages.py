@@ -256,45 +256,6 @@ def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
     assert CRAG_GRADE_PROMPT_TEMPLATE in displayed
 
 
-def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts() -> None:
-    from rag_engine.evaluation.answer_eval import (
-        CLAIM_PROMPT,
-        CORRECTNESS_PROMPT,
-        COVERAGE_PROMPT,
-        SCOPE_PROMPT,
-    )
-    from rag_engine.evaluation.answer_validation import (
-        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
-        VALIDATION_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.grounded import (
-        AUDIT_SYSTEM_PROMPT,
-        GENERATE_SYSTEM_PROMPT,
-        PLANNED_GENERATE_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT
-
-    displayed: list[str] = []
-    for stage in readonly_prompt_stages():
-        parts = stage["prompts"]
-        assert isinstance(parts, list)
-        displayed.extend(part["content"] for part in parts)
-    for executed in (
-        GENERATE_SYSTEM_PROMPT,
-        PLANNED_GENERATE_SYSTEM_PROMPT,
-        AUDIT_SYSTEM_PROMPT,
-        VALIDATION_SYSTEM_PROMPT,
-        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
-        REVISION_SYSTEM_PROMPT,
-        SCOPE_PROMPT,
-        COVERAGE_PROMPT,
-        CLAIM_PROMPT,
-        CORRECTNESS_PROMPT,
-    ):
-        assert executed in displayed
-        assert executed.startswith("## Step 1:")
-
-
 def test_query_strategy_display_uses_actual_step_prompts() -> None:
     from rag_engine.generation.answering import (
         QUERY_EXPANSION_SYSTEM_PROMPT,

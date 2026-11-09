@@ -2,16 +2,9 @@
 
 import json
 from typing import Any
-from unittest.mock import patch
 
 import pytest
-from validation_unit_support import unit_audit_output
 
-from rag_engine.evaluation.answer_validation import (
-    QUESTION_ID,
-    SUPPORT_TABLE_CORRECTED,
-    validate_answer_claims,
-)
 from rag_engine.generation import grounded
 from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT, TableRevision, revise_table_passage
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
@@ -192,39 +185,3 @@ def test_generated_item_is_corrected_and_kept_with_a_mark() -> None:
     entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
     assert grounded.revise_table_conflicts(entries, _reviser(RuntimeError("x"))) == 0
     assert next(entry for entry in entries if entry.item.text == WRONG).removed
-
-
-def test_final_validation_returns_the_corrected_passage() -> None:
-    """最終の検証は、表の対応を取り違えた段落の直した文（revised_text）を返す。status は contradicted のまま。"""
-
-    def parse(system, inputs, settings, schema, provider_id=None):
-        if schema is TableRevision:
-            return TableRevision(revised_text=REVISED)
-        payload = json.loads(inputs)
-        evidence = next(item["evidence_id"] for item in payload["evidence_items"] if item["id"] != QUESTION_ID)
-        return unit_audit_output(
-            schema,
-            payload,
-            {
-                "claim_checks": [
-                    {
-                        "answer_quote": "段落",
-                        "answer_passage_id": passage["id"],
-                        "evidence_id": evidence,
-                        "evidence_quote": "",
-                        "applicability": "matched",
-                        "status": "supported",
-                        "source_id": "",
-                        "reason": "資料に記載されている",
-                    }
-                    for passage in payload["answer_passages"]
-                ]
-            },
-        )
-
-    items = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": TABLE}]
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        result = validate_answer_claims("質問", WRONG, items, settings=None)
-    [claim] = result["claim_checks"]
-    assert (claim["status"], claim["support_check"], claim["revised_text"]) == ("contradicted", SUPPORT_TABLE_CORRECTED, REVISED)
-    assert claim["reason"].startswith("根拠の表の値に直しました（『区分Ⅱ』の値は『02』")

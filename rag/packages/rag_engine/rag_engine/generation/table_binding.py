@@ -25,7 +25,7 @@
 値を示す。確かめられなければ値を書き換えない。
 
 「同じ所」は文の読点・句点で区切った区間で、値の無い区間（「区分Ⅱの場合、」）は続く区間と合わせて見る。
-最終の検証（`evaluation.answer_validation`）と回答の生成の検査（`generation.grounded`）が同じ判定を使う。
+回答の生成の検査（`generation.grounded`）が使う。
 """
 
 from __future__ import annotations

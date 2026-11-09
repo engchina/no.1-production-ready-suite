@@ -104,7 +104,7 @@ def _run(
 ) -> dict[str, Any]:
     """`agent_chat` / `agent_get_run` / `agent_answer_confirmation` の出力（RunOutput）。"""
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "run_id": run_id,
         "agent_id": "agent-1",
         "thread_id": THREAD,
@@ -147,7 +147,6 @@ def _observation(
         "trace_id": None,
         "status": "completed",
         "outcome": None,
-        "validation_status": "completed",
         "created_at": "2026-10-25T01:00:00Z",
         "finished_at": "2026-10-25T01:01:00Z",
         "usage": {"model": None, "requests": 3, "input_tokens": 0, "output_tokens": 0},
@@ -376,7 +375,7 @@ def test_multi_turn_case_follows_the_thread() -> None:
     turn = record.observations[0].turns[1]
     assert turn.payload["agent_get_run"]["run_id"] == "run-2"
     assert turn.output_versions == {
-        "agent_get_run": 4,
+        "agent_get_run": 5,
         "agent_get_run_observation": OBSERVATION_SCHEMA_VERSION,
     }
 

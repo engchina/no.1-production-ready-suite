@@ -9,7 +9,7 @@
 - 表の正しい値（セル全体か、セルの中のコード）をすべて述べている。
 - 元の段落との差が小さい（誤った値の置き換えの範囲。文を書き換えていない）。
 
-回答の生成の検査（`generation.grounded`）と最終の検証（`evaluation.answer_validation`）が同じ部品を使う。
+回答の生成の検査（`generation.grounded`）が使う。
 """
 
 from __future__ import annotations

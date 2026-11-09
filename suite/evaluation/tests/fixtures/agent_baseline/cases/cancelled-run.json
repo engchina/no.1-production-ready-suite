@@ -72,7 +72,6 @@
           "elapsed_ms": 500.0,
           "outcome": null,
           "outcome_source": null,
-          "validation_status": null,
           "model_requests": null,
           "tool_calls": {},
           "superseded_searches": 0,

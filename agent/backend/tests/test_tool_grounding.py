@@ -61,7 +61,6 @@ UNGROUNDED = "日本の首都は東京です。"
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     """RAG の検索と NL2SQL の問い合わせを持つ業務 Agent と、ツールを持たない業務 Agent。"""
     fake = fake_product_mcp(monkeypatch)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
     # ツール権限は保存先の状態（ほかのテストの変更）に依らず、データのツールと登録のツールだけ承認に
     # する（並列・直列のどちらでも同じ結果にする）。
@@ -303,12 +302,6 @@ def test_answer_without_a_tool_after_the_retry_is_refused(
         "rag_outcome": None,
         "signals": [],
     }
-    # 最終の検証の成果物は「拒答した」（資料の根拠を使わずに答えた no_rag_evidence と分ける）。
-    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
-    assert (validation.content["status"], validation.content["reason"]) == (
-        "skipped",
-        "no_tool_grounding",
-    )
     assert _grounding_events(run) == [
         {"action": "retry", "original_answer": UNGROUNDED},
         {"action": "refused", "original_answer": "首都は東京です。"},

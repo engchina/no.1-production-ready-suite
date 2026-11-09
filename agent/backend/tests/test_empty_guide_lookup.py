@@ -37,7 +37,6 @@ from app.features.agent.tool_grounding import (
     grounding_used,
 )
 from app.features.agent.tools import ToolCall, ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test2504-skill"
 AGENT_ID = "test2504-agent"
@@ -97,7 +96,6 @@ def test_empty_guide_lookup_by_the_model_gets_the_next_step() -> None:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch, outputs={"rag_lookup_guides": _empty_lookup()})
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,

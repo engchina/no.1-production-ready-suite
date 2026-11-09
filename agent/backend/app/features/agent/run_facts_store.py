@@ -76,7 +76,6 @@ _AGENT_NAME_MAX = 400
 _MODEL_MAX = 256
 _COMMENT_MAX = 1000
 _OUTCOME_MAX = 32
-_VALIDATION_MAX = 16
 _ORACLE_BACKENDS = {"oracle", "oracle_checkpoint", "oracle_normalized"}
 
 UserNames = Callable[[list[str]], Mapping[str, str]]
@@ -264,7 +263,6 @@ _MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
 # 確かめるべき実行のシグナルの列（#1822。migration 012 で足した）。
 _SIGNAL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("answer_outcome", "ANSWER_OUTCOME"),
-    ("validation_result", "VALIDATION_RESULT"),
     ("tool_failures", "TOOL_FAILURES"),
     ("approvals_rejected", "APPROVALS_REJECTED"),
 )
@@ -385,7 +383,6 @@ def fact_binds(fact: RunFact) -> dict[str, Any]:
         "created_at": to_utc_naive(fact.created_at),
         "finished_at": to_utc_naive(fact.finished_at),
         "answer_outcome": _clip(fact.answer_outcome, _OUTCOME_MAX),
-        "validation_result": _clip(fact.validation_result, _VALIDATION_MAX),
         "tool_failures": fact.tool_failures,
         "approvals_rejected": fact.approvals_rejected,
         "data_tool_calls": fact.data_tool_calls,
@@ -528,14 +525,14 @@ def feedback_page_sql(where: str) -> str:
 
 # 確かめるべき実行（#1822）。対象は期間に作った、終わった Run（品質評価の Run を除く）。
 _SIGNAL_SOURCE_COLUMNS = (
-    "STATUS, FEEDBACK_RATING, ADMIN_RATING, VALIDATION_RESULT, ANSWER_OUTCOME, "
+    "STATUS, FEEDBACK_RATING, ADMIN_RATING, ANSWER_OUTCOME, "
     "TOOL_FAILURES, APPROVALS_REJECTED, DATA_TOOL_CALLS"
 )
 _SIGNAL_ITEM_COLUMNS = (
     "RUN_ID, THREAD_ID, AGENT_ID, AGENT_NAME, CREATED_BY_USER_UUID, QUESTION, ANSWER, "
     "FEEDBACK_RATING, FEEDBACK_REASON, FEEDBACK_COMMENT, FEEDBACK_USER_UUID, FEEDBACK_AT, "
     "ADMIN_RATING, ADMIN_REASON, ADMIN_COMMENT, ADMIN_USER_UUID, ADMIN_AT, "
-    "STATUS, CREATED_AT, ANSWER_OUTCOME, VALIDATION_RESULT, TOOL_FAILURES, APPROVALS_REJECTED, "
+    "STATUS, CREATED_AT, ANSWER_OUTCOME, TOOL_FAILURES, APPROVALS_REJECTED, "
     "RUN_SOURCE, DATA_TOOL_CALLS"
 )
 
@@ -589,11 +586,10 @@ def fact_from_signal_row(row: Sequence[Any]) -> RunFact:
     return fact.model_copy(
         update={
             "answer_outcome": str(row[19]) if row[19] else None,
-            "validation_result": str(row[20]) if row[20] else None,
-            "tool_failures": _int(row[21]),
-            "approvals_rejected": _int(row[22]),
-            "source": str(row[23] or fact.source),
-            "data_tool_calls": None if row[24] is None else _int(row[24]),
+            "tool_failures": _int(row[20]),
+            "approvals_rejected": _int(row[21]),
+            "source": str(row[22] or fact.source),
+            "data_tool_calls": None if row[23] is None else _int(row[23]),
         }
     )
 

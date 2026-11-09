@@ -409,10 +409,6 @@ def _strip_answer_outcome(run: dict[str, Any]) -> None:
     _observation(run)["outcome"] = None
 
 
-def _strip_validation_status(run: dict[str, Any]) -> None:
-    _observation(run)["validation_status"] = None
-
-
 def _strip_usage(run: dict[str, Any]) -> None:
     _observation(run)["usage"] = None
 
@@ -426,7 +422,6 @@ ABLATIONS: dict[str, Callable[[dict[str, Any]], None]] = {
     "strip_citation_ids": _strip_citation_ids,
     "strip_locators": _strip_locators,
     "strip_answer_outcome": _strip_answer_outcome,
-    "strip_validation_status": _strip_validation_status,
     "strip_usage": _strip_usage,
     "strip_include_superseded": _strip_include_superseded,
 }

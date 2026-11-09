@@ -5543,8 +5543,6 @@ export interface SupportGuideProcessPreviewData {
 // --- 実行履歴（チャット・RAG 検索の実行。#1890） ---
 export type RunSurface = "search" | "chat";
 export type RunStatus = "success" | "blocked" | "error";
-/** 資料との照合（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
-export type RunVerification = "verified" | "partial" | "unverified";
 
 /** 実行履歴の「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。 */
 export type RunExecutorFilter = "all" | "mine" | "others";
@@ -5570,8 +5568,6 @@ export interface RunSummary {
   answer_generated: boolean;
   status: RunStatus;
   answer_outcome: string | null;
-  verification: RunVerification | null;
-  validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
   citation_count: number;

@@ -2,7 +2,7 @@
 
 RAG は Agent 主体の取得（planning=caller）で回答を作らないので、承認済みのルールの本文と用語の
 説明は根拠の取得の結果（`profile_knowledge`）で Agent に届く。組み込み Runtime はそれを根拠
-（`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）・最終の検証の根拠には
+（`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）の根拠には
 入れない。渡したことは Run の step とログに残る。合成の設定・根拠で、モデルは台本（ScriptedModel）。
 """
 
@@ -27,7 +27,6 @@ from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.runtime import AgentProfile, RunCreateRequest, RunStatus, runtime_repository
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import profile_knowledge_summary
-from app.settings import get_settings
 
 SKILL_ID = "test2701-skill"
 AGENT_ID = "test2701-agent"
@@ -115,7 +114,6 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     return model
 
 
@@ -162,14 +160,12 @@ def test_profile_knowledge_reaches_the_model_apart_from_the_evidence(
     assert output["profile_knowledge"]["rules_omitted"] == 1
     assert APPROVED_POLICY not in json.dumps(output["evidence"], ensure_ascii=False)
 
-    # 回答の根拠（AI に渡した根拠・引用）と最終の検証の根拠は資料の根拠だけ。
+    # 回答の根拠（AI に渡した根拠・引用）は資料の根拠だけ。
     [artifact] = [item for item in finished.artifacts if item.kind == ANSWER_EVIDENCE_KIND]
     assert APPROVED_POLICY not in json.dumps(artifact.content, ensure_ascii=False)
     assert {item["chunk_id"] for item in artifact.content["items"]} == {
         item["chunk_id"] for item in retrieved["evidence"]
     }
-    [validation] = mcp.calls_of("rag_validate_answer")
-    assert "r-approved" not in {item["chunk_id"] for item in validation["arguments"]["evidence"]}
 
     # 渡した内容は Run の step（全文）とログ（数と版だけ）で追える。
     [step] = [

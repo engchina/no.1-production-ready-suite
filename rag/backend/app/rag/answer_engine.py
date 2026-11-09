@@ -32,14 +32,11 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
-import httpx
-from fastapi import HTTPException
-from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.timezones import configured_timezone_name
@@ -47,7 +44,7 @@ from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.context_expansion_trace import context_read_receipt
-from rag_engine.resources.deadline import DeadlineExceeded, check_deadline, current_deadline
+from rag_engine.resources.deadline import check_deadline, current_deadline
 from rag_engine.resources.runtime import saved_prompt_overrides
 from rag_engine.resources.tracing import CallObservation, observe_call
 from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
@@ -137,7 +134,7 @@ from app.rag.graph_expansion import (
     plan_graph_expansion,
 )
 from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
-from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
+from app.rag.span_display import ANSWER_STEP_KIND, answer_step_params
 from app.rag.step_details import step_details_payload
 from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
@@ -246,13 +243,8 @@ def answer_step_stage(name: str) -> str:
     return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
 
 
-# 回答の本文を根拠と照合する工程の名前（回答フローの最後の検証と MCP の
-# rag_validate_answer。#3470）。
-ANSWER_VALIDATION_STEP = "資料との照合"
-
-
 def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
-    """回答フローの外で行う回答の工程（資料との照合・承認済み FAQ からの回答）の span（#3226）。
+    """回答フローの外で行う回答の工程（承認済み FAQ からの回答）の span（#3226）。
 
     `rag_engine` の工程（`rag.engine.stage`）と同じ名前・種類にし、処理の経過の行にする。
     """
@@ -261,50 +253,6 @@ def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
         attributes={"pr.stage": name},
         display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": name}),
     )
-
-
-def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
-    """資料との照合の工程の詳細（照合の結果・判定した段落の数）。"""
-    return {
-        "fields": [
-            {"label": "照合の結果", "value": "確認済み" if validation.get("valid") else "未確認"},
-            {
-                "label": "照合の実行",
-                "value": {
-                    "completed": "完了",
-                    "partial": "一部未確認",
-                    "timed_out": "時間上限",
-                    "error": "実行失敗",
-                    "not_run": "未実行",
-                    "no_evidence": "根拠なし",
-                    "body_changed": "本文の変更後は未確認",
-                    "input_too_large": "照合の入力上限超過",
-                }.get(str(validation.get("status")), "未確認"),
-            },
-            {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
-            *(
-                [
-                    {
-                        "label": "未照合の確認条件",
-                        "value": str(validation["unassessed_premises_count"]),
-                    }
-                ]
-                if validation.get("unassessed_premises_count")
-                else []
-            ),
-        ],
-    }
-
-
-def _diagnostic_validation(validation: dict[str, Any]) -> dict[str, Any]:
-    """実行結果を残し、意味の正否を未検証として区別する。"""
-    return {
-        **validation,
-        "raw_valid": validation.get("valid"),
-        "valid": None,
-        "semantic_status": "unknown",
-        "automatic_actions": False,
-    }
 
 
 @dataclass(frozen=True)
@@ -707,10 +655,6 @@ def build_engine_settings(
         "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES": str(
             settings.rag_article_catalog_cache_max_entries
         ),
-        # 回答の最終の検証の入力の上限。
-        "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
-            settings.rag_answer_validation_max_input_bytes
-        ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
         "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
             "1" if settings.rag_request_coverage_retrieval_enabled else "0"
@@ -1046,7 +990,6 @@ class AnswerEngine:
                 outcome = replace(
                     outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
                 )
-        await self._validate_outcome(request, outcome, step_callback=step_callback)
         outcome.diagnostics["models"] = self._models_used(
             attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),
@@ -1109,170 +1052,6 @@ class AnswerEngine:
         ):
             outcome.diagnostics["zero_evidence"] = zero_evidence
         return outcome
-
-    async def _validate_outcome(
-        self,
-        request: SearchRequest,
-        outcome: AnswerOutcome,
-        *,
-        step_callback: StepCallback | None = None,
-    ) -> None:
-        """LLM 監査が有効な回答の最終の本文を、MCP と共通の検証で確かめる。"""
-        if self._settings.rag_answer_audit_mode == "none" or not outcome.answer.strip():
-            outcome.diagnostics["answer_validation"] = {
-                "status": "not_run",
-                "valid": False,
-                "reason": "audit_disabled"
-                if self._settings.rag_answer_audit_mode == "none"
-                else "empty_answer",
-            }
-            if semantic_audit_is_diagnostic_only(outcome.diagnostics):
-                outcome.diagnostics["answer_validation"] = _diagnostic_validation(
-                    outcome.diagnostics["answer_validation"]
-                )
-            return
-        # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
-        from app.rag.answer_validation import (
-            MAX_PREMISES,
-            AnswerValidation,
-            EvidenceRef,
-            validate_answer,
-        )
-
-        name = ANSWER_VALIDATION_STEP
-        started = time.monotonic()
-        if step_callback is not None:
-            await step_callback(name, "started", 0.0, {})
-        state = "success"
-        llm_usage: dict[str, Any] = {}
-        diagnostic_only = semantic_audit_is_diagnostic_only(outcome.diagnostics)
-        # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
-        with _answer_step_span(name) as span:
-            references = [
-                EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations
-            ]
-            span.set_call_input(
-                lambda: {
-                    "質問": request.original_question or request.query,
-                    "回答": outcome.answer,
-                    "根拠 ID": [asdict(item) for item in references],
-                    "監査モード": self._settings.rag_answer_audit_mode,
-                },
-                restricted=True,
-            )
-            recorded_result: AnswerValidation | None = None
-            recorded_error: str | None = None
-            validator_called = False
-            try:
-                premises = _confirmed_validation_premises(self._settings, self._scope)
-                span.set_call_input(
-                    lambda: {
-                        "質問": request.original_question or request.query,
-                        "回答": outcome.answer,
-                        "根拠 ID": [asdict(item) for item in references],
-                        "監査モード": self._settings.rag_answer_audit_mode,
-                        "確認前提": premises,
-                        "確認前提の上限": MAX_PREMISES,
-                    },
-                    restricted=True,
-                )
-                if len(premises) > MAX_PREMISES:
-                    # 一部の確定条件を黙って省いて「確認済み」にしない。
-                    result = AnswerValidation(status="input_too_large", valid=False)
-                else:
-                    validator_called = True
-                    result = await validate_answer(
-                        request.original_question or request.query,
-                        outcome.answer,
-                        references,
-                        self._settings,
-                        oracle=self._oracle,
-                        premises=premises,
-                    )
-                recorded_result = result
-                llm_usage = dict(result.llm_usage)
-                validation: dict[str, Any] = {
-                    "status": result.status,
-                    "valid": result.valid,
-                    "reuse_context": result.reuse_context,
-                    "counts": dict(result.counts),
-                    "claim_checks": list(result.claim_checks),
-                    # 原質問・確認の答えとの両立の比較の、段落ごとの採否（#3800。ID と code だけ）。
-                    "premise_consistency_checks": list(result.premise_consistency_checks),
-                    "missing_evidence_count": len(result.missing_evidence),
-                    "stale_evidence_count": len(result.stale_evidence),
-                    "confirmed_premises_count": len(premises),
-                    "unassessed_premises_count": len(premises)
-                    if len(premises) > MAX_PREMISES
-                    else 0,
-                }
-            except Exception as exc:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
-                if isinstance(exc, (DeadlineExceeded, PermissionError)) or (
-                    isinstance(exc, HTTPException) and exc.status_code in {401, 403}
-                ):
-                    raise
-                logger.warning("answer final validation failed", exc_info=True)
-                recorded_error = type(exc).__name__
-                validation = {
-                    "status": "timed_out"
-                    if isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
-                    else "error",
-                    "valid": False,
-                }
-                state = "error"
-                span.set_status("failed")
-            if diagnostic_only:
-                validation = _diagnostic_validation(validation)
-            span.set_call_output(
-                lambda: {
-                    "照合関数を呼び出した": validator_called,
-                    "返却された検証結果": asdict(recorded_result)
-                    if recorded_result is not None
-                    else None,
-                    "適用した検証結果": validation,
-                    "例外の型": recorded_error,
-                }
-            )
-            span.set_display(
-                params=answer_step_params({"llm_calls": int(llm_usage.get("calls") or 0)}),
-                details=answer_step_details(_validation_details(validation)),
-            )
-        if diagnostic_only:
-            outcome.diagnostics["needs_human_review"] = True
-        outcome.diagnostics["answer_validation"] = validation
-        deterministic_failure = bool(
-            validation.get("missing_evidence_count") or validation.get("stale_evidence_count")
-        )
-        if deterministic_failure or (not diagnostic_only and not validation["valid"]):
-            outcome.diagnostics["needs_human_review"] = True
-            outcome.diagnostics["confidence"] = "low"
-            envelope = outcome.diagnostics.get("envelope")
-            if isinstance(envelope, dict) and envelope.get("outcome") == "answered":
-                envelope["outcome"] = "conditional"
-            if outcome.diagnostics.get("outcome") == "answered":
-                outcome.diagnostics["outcome"] = "conditional"
-            reason = (
-                "資料との照合で回答の裏付けを確認できていません。内容と根拠を確認してください。"
-            )
-            previous = str(outcome.diagnostics.get("insufficient_reason") or "")
-            outcome.diagnostics["insufficient_reason"] = "\n".join(filter(None, (previous, reason)))
-        elapsed = round(time.monotonic() - started, 3)
-        details = _validation_details(validation)
-        metrics = {
-            "llm_calls": int(llm_usage.get("calls") or 0),
-            "llm_usage": llm_usage,
-            "details": details,
-        }
-        outcome.diagnostics.setdefault("execution_steps", []).append(
-            {
-                "name": name,
-                "status": "complete" if state == "success" else "error",
-                "elapsed_seconds": elapsed,
-                **metrics,
-            }
-        )
-        if step_callback is not None:
-            await step_callback(name, state, elapsed, metrics)
 
     async def _answer_from_approved_faq(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None

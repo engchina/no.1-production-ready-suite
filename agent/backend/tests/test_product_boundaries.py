@@ -287,7 +287,7 @@ def test_checker_ignores_docstrings_and_agent_code(tmp_path: Path) -> None:
     path = tmp_path / "sample.py"
     path.write_text(
         '"""RAG の `rag_engine` と `rag/backend` の説明。"""\n'
-        "from app.features.agent.answer_validation import align_claims\n"
+        "from app.features.agent.answer_references import cited_chunk_ids\n"
         "from app import settings\n"
         'CONTRACT = "platform/contracts/mcp/rag-tools.json"\n'
         'URL = "http://rag.test/api/mcp"\n'

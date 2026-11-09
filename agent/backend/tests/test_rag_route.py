@@ -36,7 +36,6 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import is_environment_tool, rag_next_step
-from app.settings import get_settings
 
 SKILL_RAG = "test1283-rag"
 SKILL_RAG_NL2SQL = "test1283-rag-nl2sql"
@@ -57,8 +56,6 @@ def _search_output(outcome: str) -> dict[str, Any]:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    # 最終の検証（#1246）はこのテストの対象外。
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     for skill_id, requirements in (
         (SKILL_RAG, [SkillMcpRequirement(server_id="rag", tool_names=["rag_search"])]),
         (
