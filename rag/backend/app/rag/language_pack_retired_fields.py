@@ -1,4 +1,4 @@
-"""言語資源の保存データから、廃止した項目を取り除く migration の処理(#4666・#4714)。
+"""言語資源の保存データから、廃止した項目を取り除く migration の処理(#4666・#4714・#4668)。
 
 公開版と下書きは全項目のスナップショットで、`build_pack` は余分な項目を拒否する。公開版の
 `content_hash` は全項目から計算するので、項目を消したら計算し直す必要があり、SQL だけでは書けない。
@@ -79,11 +79,59 @@ RETIRED_ANSWER_CHECK_CUE_FIELDS = frozenset(
     }
 )
 RETIRED_SECTIONS = frozenset({"guide_check_cues"})
+# 動いていない語の判定を消して、どの処理も読まなくなった項目と節(#4668)。#4714 の migration は上の
+# 一覧を SQL に書いて checksum にしているので、上の一覧は変えずに別の一覧にする。
+RETIRED_UNREAD_SEARCH_TERM_FIELDS = frozenset({"feedback_split_words", "feedback_strip_suffixes"})
+RETIRED_UNREAD_EVIDENCE_CUE_FIELDS = frozenset(
+    {
+        "link_verbs",
+        "link_negations",
+        "navigation_words",
+        "navigation_evidence_words",
+        "screen_place_words",
+        "place_particles",
+        "entry_action_words",
+    }
+)
+RETIRED_UNREAD_ANSWER_LABEL_FIELDS = frozenset(
+    {
+        "condition_template",
+        "condition_suffix",
+        "condition_link",
+        "predicate_endings",
+    }
+)
+RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS = frozenset(
+    {
+        "unexplained_words",
+        "condition_sentence_endings",
+        "condition_clause_nouns",
+        "condition_time_nouns",
+        "condition_time_followers",
+        "condition_strip_particles",
+        "condition_trailing_particles",
+        "condition_range_particles",
+        "condition_topic_particles",
+        "condition_adverb_kanji",
+        "condition_adverb_particles",
+        "deletion_words",
+    }
+)
+RETIRED_UNREAD_SECTIONS = frozenset({"operation_audit_cues"})
+RETIRED_UNREAD_FIELDS = (
+    RETIRED_UNREAD_SEARCH_TERM_FIELDS
+    | RETIRED_UNREAD_EVIDENCE_CUE_FIELDS
+    | RETIRED_UNREAD_ANSWER_LABEL_FIELDS
+    | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS
+)
 _RETIRED_BY_SECTION = {
     "question_cues": RETIRED_QUESTION_CUE_FIELDS,
-    "answer_labels": RETIRED_ANSWER_LABEL_FIELDS,
-    "answer_check_cues": RETIRED_ANSWER_CHECK_CUE_FIELDS,
+    "answer_labels": RETIRED_ANSWER_LABEL_FIELDS | RETIRED_UNREAD_ANSWER_LABEL_FIELDS,
+    "answer_check_cues": RETIRED_ANSWER_CHECK_CUE_FIELDS | RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS,
+    "search_terms": RETIRED_UNREAD_SEARCH_TERM_FIELDS,
+    "evidence_cues": RETIRED_UNREAD_EVIDENCE_CUE_FIELDS,
 }
+_ALL_RETIRED_SECTIONS = RETIRED_SECTIONS | RETIRED_UNREAD_SECTIONS
 PROFILE_TABLE = "rag_search_answer_profiles"
 
 
@@ -94,7 +142,7 @@ def without_retired_fields(pack: Mapping[str, Any]) -> dict[str, Any] | None:
         fields = pack.get(section)
         if isinstance(fields, Mapping) and retired & fields.keys():
             stripped[section] = {k: v for k, v in fields.items() if k not in retired}
-    dropped = RETIRED_SECTIONS & pack.keys()
+    dropped = _ALL_RETIRED_SECTIONS & pack.keys()
     if not stripped and not dropped:
         return None
     return {k: v for k, v in {**pack, **stripped}.items() if k not in dropped}

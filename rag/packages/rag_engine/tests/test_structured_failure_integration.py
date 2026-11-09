@@ -61,8 +61,6 @@ def test_failed_call_logger_keeps_safe_chain_as_extra(caplog: pytest.LogCaptureF
 def run_crag(monkeypatch: pytest.MonkeyPatch, grade: object) -> tuple[Any, Mock]:
     ctx = cast(Callable[..., Any], context)(cast(Callable[..., Any], record)(0, "対象Aを確認します。", "対象A"))
     monkeypatch.setattr(answering, "build_adb_hybrid_answer_context", lambda *args, **kwargs: ctx)
-    monkeypatch.setattr(answering, "_crag_grade_skip_check", lambda *args, **kwargs: {"reason": "disabled"})
-    monkeypatch.setattr(answering, "_crag_grade_skip", lambda *args, **kwargs: None)
     monkeypatch.setattr(answering, "CRAG_MAX_RETRIEVAL_ATTEMPTS", 1)
     mock = Mock(side_effect=grade) if isinstance(grade, BaseException) else Mock(return_value=grade)
     monkeypatch.setattr(answering, "_grade_crag_retrieval", mock)

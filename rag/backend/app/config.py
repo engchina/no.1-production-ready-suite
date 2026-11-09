@@ -1738,17 +1738,6 @@ class Settings(
             "回答文の生成の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
         ),
     )
-    rag_crag_skip_on_strong_signals: bool = Field(
-        default=False,
-        description=(
-            "規則の信号が強いとき CRAG の根拠の評価(1 回目の LLM の呼び出し)を飛ばし、"
-            "曖昧な帯だけで呼ぶ(#1499・#1528。既定 OFF)。rerank の最上位の score が閾値以上で、"
-            "質問の要求に語の一致で根拠の無いもの(missing)が無く、定義を問う語の定義本文が"
-            "あるときだけ飛ばす。"
-            "エラー文・列挙・網羅・件数を問う質問(#1503)と、候補の除外が要る根拠(旧版の文書・"
-            "別の文書と同じ本文)があるときは必ず呼ぶ。"
-        ),
-    )
     rag_crag_compact_input: bool = Field(
         default=True,
         description=(
@@ -1837,12 +1826,6 @@ class Settings(
             "読む範囲が文書全体の列挙の問(#1503)で、章節の拡張が文書全体まで読んだら、"
             "CRAG の評価し直しを省いて生成へ進む(#1528)。"
         ),
-    )
-    rag_crag_skip_min_rerank_score: float = Field(
-        default=0.8,
-        ge=0.0,
-        le=1.0,
-        description="CRAG の評価を飛ばす rerank の最上位の score の閾値(#1499。0〜1)。",
     )
     rag_query_expansion_max_queries: int = Field(
         default=5,

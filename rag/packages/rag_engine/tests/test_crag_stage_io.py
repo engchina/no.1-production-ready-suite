@@ -89,22 +89,6 @@ def test_search_and_grade_inputs_are_bound_to_the_actual_round(monkeypatch, enab
         assert prepare["output"]["次の回"] == 2
 
 
-def test_skip_records_the_actual_signal_without_claiming_a_model_call(monkeypatch):
-    recorder = PolicyRecorder()
-    original = ctx()
-    signal = {"skip": True, "trace": {"synthetic": True}, "lines": ["合成の省略理由"]}
-    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", lambda *args, **kwargs: original)
-    monkeypatch.setattr(a, "_crag_grade_skip_check", lambda *args: signal)
-    monkeypatch.setattr(a, "_grade_crag_retrieval", lambda *args, **kwargs: pytest.fail("skipped model called"))
-    with bind_trace_observer(recorder.observe):
-        result, _, attempts = a.build_crag_answer_context(QUESTION, "synthetic-run", ["docling"], config())
-    call = recorder.stage("根拠確認（1回目）")
-    assert call["input"]["省略判断"] == signal
-    assert call["output"]["モデル評価実行"] is False
-    assert result.records == original.records
-    assert attempts[0].stop_reason == a.CRAG_SKIP_STOP_REASON
-
-
 @pytest.mark.parametrize("mode", ["added", "foreign", "budget", "invalid_anchor"])
 def test_recovery_records_actual_checks_including_completed_zero(mode):
     child = record("c1", 1, "合成の起点")

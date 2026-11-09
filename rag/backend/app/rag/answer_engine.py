@@ -698,9 +698,6 @@ def build_engine_settings(
         "RAG_ENGINE_GENERATION_REASONING_EFFORT": _reasoning_effort_override(
             settings.rag_generation_reasoning_effort
         ),
-        "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": (
-            "1" if settings.rag_crag_skip_on_strong_signals else "0"
-        ),
         # CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
         "RAG_ENGINE_CRAG_COMPACT_INPUT": "1" if settings.rag_crag_compact_input else "0",
         # 詰めた入力の候補の ID を短くする(#1864)。
@@ -722,7 +719,6 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
             "1" if settings.rag_section_skip_regrade_at_scope else "0"
         ),
-        "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": str(settings.rag_crag_skip_min_rerank_score),
         "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
     # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。

@@ -75,7 +75,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from rag_engine.generation.table_binding import evidence_tables
 from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_RULES,
     MAX_MATCHED_TERMS,
@@ -313,7 +312,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 40: rag_validate_answer を削除（#4714）。
 # 41: rag_search の段落の印（passage_marks）・外した段落（removed_passages）・
 #     回答全体の警告（answer_warnings）を削除した。
-MCP_OUTPUT_SCHEMA_VERSION = 41
+# 42: 根拠の table_binding を削除した（読み手の無い表の検査の可否。#4668）。
+MCP_OUTPUT_SCHEMA_VERSION = 42
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -1389,10 +1389,6 @@ class EvidenceSection(BaseModel):
     parent_chars: int | None = Field(default=None, description="親の章節の本文の文字数。")
 
 
-# 根拠の本文を表の行・列の対応の検査（``rag_engine.generation.table_binding``）が読めるか（#3262）。
-TableBinding = Literal["checkable", "not_checkable"]
-
-
 class RagEvidence(BaseModel):
     """検索・回答の根拠 1 件。"""
 
@@ -1490,16 +1486,6 @@ class RagEvidence(BaseModel):
         description=(
             "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った"
             "要約・抽出した値（引用する前に原文を読んで確かめる）。"
-        ),
-    )
-    table_binding: TableBinding | None = Field(
-        default=None,
-        description=(
-            "回答の生成の検査が、文の値を表の別の行・列の値と"
-            "取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・"
-            "Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない"
-            "（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で"
-            "確かめる / null=表の無い根拠。"
         ),
     )
     superseded: bool = Field(
@@ -2374,34 +2360,12 @@ def _evidence(
         origin="derived"
         if is_derived_content(metadata.get("content_kind"), metadata)
         else "source",
-        table_binding=_table_binding(chunk.text, metadata),
         superseded=metadata.get("document_superseded") is True,
         references=_references(metadata),
         reference_from=_metadata_str(metadata, REFERENCE_FROM_KEY),
         reference_label=_metadata_str(metadata, REFERENCE_LABEL_KEY),
         section=_evidence_section((sections or {}).get(chunk.chunk_id)),
     )
-
-
-def _is_table_evidence(metadata: dict[str, Any]) -> bool:
-    """表の根拠か（表の chunk・表計算と CSV の表の 1 行の記録）。"""
-    return (
-        _metadata_str(metadata, "content_kind") == "table"
-        or _metadata_str(metadata, "sheet_block_kind") == "row"
-        or _metadata_str(metadata, "record_kind") == "row"
-        or _metadata_int(metadata, TABLE_ROW_KEY) is not None
-    )
-
-
-def _table_binding(text: str, metadata: dict[str, Any]) -> TableBinding | None:
-    """表の行・列の対応の検査がこの根拠の本文を表として読めるか（#3262）。
-
-    検査（``rag_engine.generation.table_binding``）と同じ読み方で、本文から 2 行以上の表を読めれば
-    checkable。表の根拠なのに読めなければ not_checkable（検査が働かないことを呼び出し元に示す）。
-    """
-    if evidence_tables(text):
-        return "checkable"
-    return "not_checkable" if _is_table_evidence(metadata) else None
 
 
 def _excerpt_range(value: object) -> ExcerptRange | None:
