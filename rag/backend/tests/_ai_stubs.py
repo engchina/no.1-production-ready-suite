@@ -183,22 +183,11 @@ def deterministic_parse_text_response(
     """回答の生成の LLM 呼び出しを決定論的に返す（最初の根拠の 1 行を引用する 1 項目の回答）。"""
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.llm import (
-        CragRetrievalGradeOutput,
         GroundedDraft,
-        QueryExpansionOutput,
-        QueryRoutingOutput,
         SectionExtractionOutput,
         TextOutput,
     )
 
-    if text_format is QueryRoutingOutput:
-        return QueryRoutingOutput(strategy="simple_retrieval", reason="決定論スタブ", queries=[])
-    if text_format is QueryExpansionOutput:
-        return QueryExpansionOutput(queries=[])
-    if text_format is CragRetrievalGradeOutput:
-        return CragRetrievalGradeOutput(
-            reason="決定論スタブ", sufficient=True, confidence=0.9, rewritten_query=""
-        )
     if text_format is SectionExtractionOutput:
         return SectionExtractionOutput(quotes=[])
     if text_format is TextOutput:

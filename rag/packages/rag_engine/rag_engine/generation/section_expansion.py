@@ -2,15 +2,11 @@
 
 章節の正本は文書の「章節ナビゲーション」で、章節と chunk の対応（#1438）は呼び出し元（backend）が持つ。この module は
 対応を ``AnswerDependencies.section_outline`` / ``section_chunks`` から読み、広げる順・予算・止める条件だけを決める
-（I/O と LLM は注入された関数と ``grade`` を通す。決定論のテストはスタブで行う）。
+（I/O は注入された関数を通す。決定論のテストはスタブで行う）。
 
 広げる順は、当たった chunk → 所有の章節（leaf）→ 親の章節 → … → 最上位の章節 → 文書全体（根の章節）。
 
-- 最初の判定が十分でも、最低 1 段（所有の章節）を読んでから、既存の CRAG の十分性の判定（``grade``）で
-  足りるかを確かめ、足りれば止める。所有の章節がすでに全量文脈にあれば、再判定せず最後の判定を使う。
-  足りるは「十分と判定され、内容の観点（``CONTENT_ASPECTS``）に
-  確かめられていないものが無い」。適用の観点（applicability）は利用者の状況の確認で、章節を読んでも埋まらないため
-  広げる理由にしない。
+- 読む範囲（当たった章節 = leaf）までを読む。足りるかの判定はせず、上限（段・token・時間）で止める。
 - 上の段の章節は、予算に入れば全体を読む。入らなければ、子の章節の見出し（目次）を質問との関連度（rerank。使えなければ
   語の重なり）で並べ、関連の高い子の章節から、予算に入る章節を全体で読む。入らない子の章節は読まない。
 - 章節が予算に入るかは、章節の chunk のうち、まだ文脈に無いものの token で決める（最初の根拠・前の段で読んだ
@@ -52,7 +48,7 @@ from time import monotonic
 from typing import Any
 
 from rag_engine.dependencies import report_degraded
-from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
+from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
 from rag_engine.retrieval.context_builder import (
@@ -66,8 +62,6 @@ ROOT_SECTION_ID = "document"
 # 広げた章節の根拠の役割（context の parent の理由と child の役割）。
 SECTION_EXPANSION_REASON = "section_expansion"
 SECTION_CONTEXT_ROLE = "section_context"
-# 「足りる」の判定で、確かめられていないと広げる内容の観点（``task_contract`` の required_aspects のうち）。
-CONTENT_ASPECTS = frozenset({"requested_result"})
 # 1 つの章節で読む chunk の上限（文書全体でも、これより多い章節は予算に関係なく読まない）。
 MAX_SECTION_CHUNKS = 400
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
@@ -76,22 +70,20 @@ DEFAULT_MODEL_INPUT_TOKENS = 128_000
 # （#1516。150 秒は、長い根拠で 1 組 125〜344 秒かかるモデルの 1 組目に足りなかった）。是正の round は、残りの時間と
 # 直前の組の実測から grounded の `RoundBudget` が決める。
 GENERATION_RESERVE_SECONDS = DEFAULT_GENERATION_ROUND_SECONDS + ANSWER_FINALIZE_RESERVE_SECONDS
-# 次の段の見積もりの秒数（評価器の 1 回の実測が無いとき）。
+# 次の段を読む処理の見積もりの秒数。
 DEFAULT_LEVEL_SECONDS = 20.0
 _ASCII = re.compile(r"[\x00-\x7f]")
 
 # 止めた理由。LIMIT_STOPS は上限で止めた（読めなかった章節があれば条件つきの回答にする）。
-STOP_SUFFICIENT = "sufficient"
 STOP_DOCUMENT = "document_read"
 STOP_MAX_LEVELS = "max_levels"
 STOP_TOKEN_BUDGET = "token_budget"
 STOP_TIME_LIMIT = "time_limit"
 STOP_NO_SECTIONS = "no_sections"
-STOP_GRADE_ERROR = "grade_error"
 STOP_READ_ERROR = "read_error"
 STOP_PARTIAL = "partial_read"
 STOP_DISABLED = "disabled"
-# 判定を呼ばない経路（``grade`` が無い）で読む範囲まで読んで止めた。
+# 読む範囲まで読んで止めた。
 STOP_SCOPE_READ = "scope_read"
 # 抽出してから統合（#1437）で読めなかった範囲の理由（章節の拡張の止めた理由には使わない）。
 STOP_EXTRACTION_CALLS = "extraction_calls"
@@ -399,13 +391,6 @@ def context_tokens(context: AnswerContext) -> int:
     return sum(estimate_tokens(str(getattr(record, "text", "") or "")) for record in context.records)
 
 
-def is_enough(attempt: CragRetrievalAttempt | None) -> bool:
-    """CRAG の判定で足りるか（十分で、内容の観点に確かめられていないものが無い）。"""
-    if attempt is None or attempt.grade_error:
-        return False
-    return bool(attempt.sufficient) and not (set(attempt.missing_aspects) & CONTENT_ASPECTS)
-
-
 def section_label(outline: SectionOutline, section: SectionInfo) -> str:
     """利用者向けの章節の表記（例: 「点検要領.pdf」の「第3章 設備ごとの点検」（p.5〜7））。"""
     document = f"「{outline.file_name}」" if outline.file_name else "文書"
@@ -435,18 +420,15 @@ def _context_chunk_ids(context: AnswerContext) -> set[str]:
     return ids
 
 
-def seed_chunk_ids(context: AnswerContext, relevant_ids: Sequence[str] = ()) -> list[str]:
-    """起点にする当たった chunk（関連度の順。CRAG が関連とした child を先に）。"""
-    relevant = [uid for uid in dict.fromkeys(relevant_ids) if uid]
+def seed_chunk_ids(context: AnswerContext) -> list[str]:
+    """起点にする当たった chunk（関連度の順）。"""
     anchors: list[str] = []
     for parent in context.evidence_tree:
         for child in parent.children:
             uid = _record_key(child.record)
             if uid and child.role == "retrieved_anchor":
                 anchors.append(uid)
-    known = {_record_key(child.record) for parent in context.evidence_tree for child in parent.children}
-    ordered = [uid for uid in relevant if uid in known] + anchors
-    return list(dict.fromkeys(ordered))
+    return list(dict.fromkeys(anchors))
 
 
 @dataclass
@@ -694,8 +676,6 @@ def expand_sections(
     context: AnswerContext,
     settings: Any,
     *,
-    last_attempt: CragRetrievalAttempt | None,
-    grade: Callable[[AnswerContext, int], CragRetrievalAttempt] | None,
     section_outline: Callable[..., Any],
     section_chunks: Callable[..., Sequence[Any]],
     rerank: Callable[..., Any] | None = None,
@@ -707,9 +687,9 @@ def expand_sections(
     reserve_tokens: int = 0,
     priority: Sequence[PriorityRange] = (),
 ) -> SectionExpansionResult:
-    """当たった chunk の章節から段階的に広げる。grade が None なら最低範囲の補完だけを行う。
+    """当たった chunk の章節から段階的に広げ、読む範囲までの原文を文脈に足す。
 
-    ``grade(context, level)`` は既存の CRAG の十分性の判定、``started_at`` は回答の開始の時刻（``clock`` の値）、
+    ``started_at`` は回答の開始の時刻（``clock`` の値）、
     ``deadline_remaining`` は回答の期限までの残りの秒数（無ければ None）。``reserve_tokens`` は、後の段のために
     この呼び出しで使わずに残す入力 token（#2816）。``priority`` は先に読む範囲（業務ガイドの手順の参照。#2828）。
     """
@@ -749,7 +729,6 @@ def expand_sections(
             unread=[item.to_payload() for item in result.unread],
             unread_omitted=[item.to_payload() for item in result.omitted],
             minimum_scope_complete=bool(chains) and scope_reached() if reader is not None and chains else False,
-            judgement="llm" if grade is not None else "not_requested",
             completed_sections=[
                 {"document_id": key[0], "chunk_set_id": key[1], "section_id": key[2]} for key in sorted(reader.read_sections)
             ]
@@ -762,7 +741,7 @@ def expand_sections(
         trace["enabled"] = False
         return finish(STOP_DISABLED)
     # 最低でも所有の章節を読む。
-    seeds = seed_chunk_ids(context, last_attempt.relevant_chunk_ids if last_attempt is not None else ())
+    seeds = seed_chunk_ids(context)
     owners: set[tuple[str, str, str]] = set()
     for uid in seeds:
         try:
@@ -829,7 +808,6 @@ def expand_sections(
         )
     }
     level_seconds = DEFAULT_LEVEL_SECONDS
-    latest = last_attempt  # 最後の判定（読む範囲に届くまでの段は判定しない）
 
     def scope_reached() -> bool:
         """読む範囲（全起点の所有の章節）まで読んだか。"""
@@ -839,7 +817,7 @@ def expand_sections(
     extracting = large_sections is not no_large_section_handler
 
     def seconds_left() -> float:
-        """抽出に使える残りの秒数（回答全体の期限から、生成と次の判定の分を引く）。"""
+        """抽出に使える残りの秒数（回答全体の期限から、生成と次の段の分を引く）。"""
         remaining_deadline = deadline_remaining()
         left = math.inf if remaining_deadline is None else remaining_deadline
         return left - GENERATION_RESERVE_SECONDS - level_seconds
@@ -1154,44 +1132,8 @@ def expand_sections(
             level_trace["added_parents"] = len(added)
         if replaced:
             level_trace["replaced_parents"] = replaced
-        if grade is None and (scope_reached() or budget_hit):
-            level_trace["grade_skipped"] = "not_requested"
+        if scope_reached() or budget_hit:
             return finish(STOP_PARTIAL if result.unread else STOP_SCOPE_READ)
-        if not added and not replaced:
-            if budget_hit:
-                return finish(STOP_TOKEN_BUDGET)
-            # 判定を飛ばした段で足した根拠がまだ判定・生成に渡っていない（#1526）。評価し直しの省略（#1528）は、
-            # 下の判定の前で扱う（足した根拠が判定に渡っていないときだけ）。
-            unjudged = current is not result.context or (latest is None and grade is not None)
-            if scope_reached() and is_enough(latest) and not unjudged:
-                # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
-                return finish(STOP_SUFFICIENT)
-            if not (unjudged and scope_reached()):
-                continue
-            # 読む範囲に届いた段で足す根拠が無くても（表題の章節が文書の全部を持ち、文書全体の段が in_context）、
-            # それまでの段で足した根拠で判定する（#1526）。
-        if not scope_reached() and not budget_hit:
-            # 読む範囲に届くまでは判定しない（#1503）。
-            level_trace["grade_skipped"] = "minimum_scope"
-            continue
-        result.context = current
-        result.applied = True
-        before = clock()
-        try:
-            assert grade is not None
-            attempt = grade(current, level)
-        except Exception as exc:  # noqa: BLE001 - 判定の失敗は、読んだ章節のまま回答へ進む
-            if type(exc).__name__ == "DeadlineExceeded":
-                raise
-            level_trace["grade_error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
-            return finish(STOP_GRADE_ERROR)
-        level_seconds = max(1.0, clock() - before)
-        latest = attempt
-        level_trace.update(sufficient=attempt.sufficient, missing_aspects=list(attempt.missing_aspects))
-        if is_enough(attempt) and scope_reached() and not result.unread:
-            return finish(STOP_SUFFICIENT)
-        if budget_hit:
-            return finish(STOP_TOKEN_BUDGET)
     remaining_targets = [chain for chain in chains if chain.next_section is not None]
     if not remaining_targets:
         return finish(STOP_DOCUMENT)
@@ -1241,7 +1183,6 @@ def _mark_unread(result: SectionExpansionResult, reader: SectionReader, chains: 
 
 
 __all__ = [
-    "CONTENT_ASPECTS",
     "GENERATION_RESERVE_SECONDS",
     "DEFAULT_MODEL_INPUT_TOKENS",
     "LIMIT_STOPS",
@@ -1266,7 +1207,6 @@ __all__ = [
     "context_tokens",
     "estimate_tokens",
     "expand_sections",
-    "is_enough",
     "no_large_section_handler",
     "model_input_tokens",
     "section_label",

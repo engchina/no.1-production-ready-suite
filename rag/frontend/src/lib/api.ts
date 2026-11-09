@@ -1172,8 +1172,6 @@ export interface KnowledgeBaseQueryConfig {
   // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
   // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は回答フローだけ)。
   /** 回答フローの設定。null / 未指定はグローバル継承。 */
-  query_strategy?: QueryStrategyName | null;
-  answer_flow?: AnswerFlowName | null;
   neighbor_child_count?: number | null;
   rerank_enabled?: boolean | null;
   // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
@@ -1236,17 +1234,6 @@ export interface InheritedAnswerContactData {
 export interface EntityIndexCoverageData {
   document_count: number;
 }
-
-export type QueryStrategyName =
-  | "auto_routing"
-  | "simple_retrieval"
-  | "rag_fusion"
-  | "query_decomposition"
-  | "step_back_prompting"
-  | "hyde";
-
-export type AnswerFlowName = "crag" | "standard_rag";
-
 
 /** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
 export interface KnowledgeBaseAdapterConfig {
@@ -1551,7 +1538,7 @@ export interface SearchRequestBody {
   search_answer_profile_id?: string | null;
   /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
-  /** false なら回答を生成しない（RAG 検索の画面。CRAG と回答の LLM を使わない。#649）。 */
+  /** false なら回答を生成しない（RAG 検索の画面。回答の LLM を使わない。#649）。 */
   generate_answer?: boolean;
   /** 質問から読み取った条件のうち、利用者が外した項目の名前（#652）。 */
   auto_field_filter_excluded?: string[];
@@ -2990,8 +2977,6 @@ export interface AnsweringSettingsData {
   runtime_rules_answer_enabled?: boolean;
   runtime_terms_search_enabled?: boolean;
   runtime_terms_answer_enabled?: boolean;
-  query_strategy: QueryStrategyName;
-  answer_flow: AnswerFlowName;
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;

@@ -48,8 +48,6 @@ CONTACT_OVERRIDE_MAX_CHARS = ANSWER_NOTICE_CONTACT_MAX_CHARS
 # 検索方法の全体設定だけで決め、プロファイルへは保存・適用しない。
 PROFILE_GLOBAL_QUERY_FIELDS = frozenset(
     (
-        "query_strategy",
-        "answer_flow",
         "neighbor_child_count",
         "rerank_enabled",
         "auto_field_filter_enabled",

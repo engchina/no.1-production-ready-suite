@@ -419,7 +419,7 @@ class RagPipeline:
         self._history_question_prepared = history_question_prepared
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
-        # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取り・質問拡張など）を呼ばない。
+        # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取りなど）を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         # 回答を作らない検索で根拠の補いまでするか（#3506。`AnswerEngine` の同名の引数）。False は
         # 業務 Agent の根拠の取得（MCP の rag_retrieve_evidence）だけが渡す。

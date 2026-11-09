@@ -134,8 +134,6 @@ const ANSWERING_SETTINGS = {
   runtime_terms_answer_enabled: false,
   runtime_rules_confirmation_enabled: false,
   runtime_rules_answer_enabled: false,
-  query_strategy: "auto_routing",
-  answer_flow: "standard_rag",
   neighbor_child_count: 3,
   rerank_enabled: true,
   screen_linking_enabled: false,
@@ -238,21 +236,21 @@ test("回答の検索と生成の保存に失敗しても入力を残して操�
   const actions = page.getByRole("group", { name: "回答の検索と生成の設定の操作" });
   const confirm = page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true });
   await confirm.click();
-  const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
-  await strategy.click();
-  await page.getByRole("option", { name: /RAG フュージョン/ }).click();
+  const neighbor = page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true });
+  await neighbor.click();
+  await page.getByRole("option", { name: "5", exact: true }).click();
   await actions.getByRole("button", { name: "回答の設定を保存" }).click();
   // 保存中は欄を変えられない（保存の後に保存値で作り直すため、保存中の変更は消える）。
-  await expect(strategy).toBeDisabled();
+  await expect(neighbor).toBeDisabled();
   await expect(confirm).toBeDisabled();
   release();
 
   await expect(actions).toContainText("回答の検索と生成の設定を backend/.env へ保存できませんでした。");
-  await expect(strategy).toContainText("RAG フュージョン");
-  await expect(strategy).toBeEnabled();
+  await expect(neighbor).toContainText("5");
+  await expect(neighbor).toBeEnabled();
   await expect(confirm).toBeChecked();
   await actions.getByRole("button", { name: "変更を破棄" }).click();
-  await expect(strategy).toContainText("自動ルーティング");
+  await expect(neighbor).toContainText("3");
   await expect(confirm).not.toBeChecked();
   await expect(actions.getByRole("button", { name: "回答の設定を保存" })).toBeDisabled();
 });
@@ -300,7 +298,7 @@ for (const width of [1280, 375]) {
     expect(Math.abs(bounds!.width-reference!.width)).toBeLessThanOrEqual(1);
     expect(await card.evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
 
-    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
+    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の補完"]);
     const expected = displayStages.filter((stage) => stage.id !== "support_guide_conditions" && ["question", "retrieval", "grounding"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);
     for (const stage of expected) {
@@ -358,16 +356,16 @@ for (const width of [1280, 375]) {
 test("検索方法の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
   await mockRetrievalCards(page);
   const { mockEditableStage } = await import("./_feature-prompt-helpers");
-  const requests = await mockEditableStage(page, "routing", "question", "system");
+  const requests = await mockEditableStage(page, "field_filter", "question", "system");
   await page.goto("/settings/retrieval");
-  const stage = page.getByTestId("answer-prompt-stage-routing");
+  const stage = page.getByTestId("answer-prompt-stage-field_filter");
   await stage.locator("summary").click();
   await expect(stage.getByRole("group", { name: "編集内容の操作" }).getByRole("button"))
     .toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
   await stage.getByRole("textbox").fill("## Step 1: 合成の検索指示");
   await stage.getByRole("button", { name: "プロンプトを保存" }).click();
   await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
-  expect(requests).toEqual([{ key: "routing.system", method: "PUT", content: "## Step 1: 合成の検索指示" }]);
+  expect(requests).toEqual([{ key: "field_filter.system", method: "PUT", content: "## Step 1: 合成の検索指示" }]);
   await expectNoPageOverflow(page);
 });
 
@@ -388,9 +386,8 @@ for (const width of [1280, 375]) {
       const confirm = page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true });
       await expect(search).not.toBeChecked();
       await expect(confirm).not.toBeChecked();
+      await expect(search).toHaveAccessibleDescription(/原質問.*検索文を追加します/);
       const area = page.getByRole("region", { name: "検索文の作成" });
-      await expect(area.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toContainText("自動");
-      await expect(search).toHaveAccessibleDescription(/原質問.*生成した検索文には.*行いません/);
       const card = page.getByTestId("answering-settings-card");
       await expect(card.getByRole("region", { name: "回答前の確認", exact: true }).getByRole("switch")).toHaveAccessibleName("登録ルールによる確認の使用");
       await expect(page.getByTestId("runtime_rules_confirmation_enabled")).toHaveCount(0);
@@ -405,7 +402,7 @@ for (const width of [1280, 375]) {
       await expect(page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true })).not.toHaveAttribute("aria-busy", "true");
       await expect(card.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeDisabled();
       await expect(search).toBeChecked();
-      expect(saved.at(-1)).toMatchObject({ runtime_rules_confirmation_enabled: true, runtime_terms_search_enabled: true, query_strategy: "auto_routing" });
+      expect(saved.at(-1)).toMatchObject({ runtime_rules_confirmation_enabled: true, runtime_terms_search_enabled: true });
       expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
       expect(saved.at(-1)).not.toHaveProperty("runtime_rules_answer_enabled");
       await expect(page.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).toHaveCount(0);

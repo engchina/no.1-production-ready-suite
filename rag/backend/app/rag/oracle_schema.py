@@ -78,6 +78,7 @@ from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
     RETIRED_ANSWER_CHECK_CUE_FIELDS,
     RETIRED_ANSWER_LABEL_FIELDS,
+    RETIRED_CRAG_ANSWER_LABEL_FIELDS,
     RETIRED_EVIDENCE_TAG_FIELDS,
     RETIRED_QUESTION_CUE_FIELDS,
     RETIRED_QUESTION_WORD_FIELDS,
@@ -966,6 +967,28 @@ END;
                 "definition_cues）の値を削除し、公開版の CONTENT_HASH を計算し直します。"
                 "ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。項目に保存した語を"
                 "残す必要があれば適用前に同列を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4749_language_pack_retired_crag_labels",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- "
+                + ",".join(sorted(RETIRED_CRAG_ANSWER_LABEL_FIELDS))
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、CRAG の工程を"
+                "消して読まれなくなった answer_labels の項目の値を削除し、公開版の CONTENT_HASH を"
+                "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
             ),
         )
     )

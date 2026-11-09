@@ -87,8 +87,6 @@ async def _answer(monkeypatch: pytest.MonkeyPatch, oracle: GuideStepOracle, **se
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
         Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
             **{"rag_support_guide_enabled": True, **settings},
         ),

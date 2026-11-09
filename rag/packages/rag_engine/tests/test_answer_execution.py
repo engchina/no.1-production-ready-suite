@@ -10,7 +10,6 @@ from grounded_stub import echo_model
 from test_answer_generation import (
     _answer_context,
     _chunk_run_stub,
-    _crag_grade,
     _record,
     _rerank_ready_settings,
     heading,
@@ -33,7 +32,7 @@ class AnswerExecutionTests(unittest.TestCase):
 
     def run_answer(self, question="質問", **kwargs):
         """実環境に接続せず、通常 RAG を既定として回答を作る。"""
-        options = dict(query_strategy=generation.SIMPLE_RETRIEVAL_LABEL, answer_flow=generation.STANDARD_ANSWER_FLOW_LABEL)
+        options = {}
         options.update(kwargs)
         return generation.answer_question_result(question, "abcdef", ["docling"], self.settings, **options)
 
@@ -268,7 +267,7 @@ class AnswerExecutionTests(unittest.TestCase):
 
     def test_missing_chunks_does_not_claim_strategy_or_flow_ran(self):
         with patch.object(generation, "load_latest_or_source_chunk_run", return_value=None):
-            result = self.run_answer(query_strategy=generation.AUTO_ROUTING_LABEL)
+            result = self.run_answer()
         # 検索の前提が無いときだけ、検索せずに中止したことを「文書検索」の工程に残す（#3495）。
         self.assertNotRegex(result.question_display, heading("検索の準備確認"))
         self.assert_order(result.question_display, heading("文書検索"), "状態: 中止")
@@ -288,7 +287,7 @@ class AnswerExecutionTests(unittest.TestCase):
         # どの段で 0 件になったかを工程の詳細と回答の記録に残す（#2401）。
         self.assertIn("根拠が 0 件になった段: 文書検索（検索の候補が 0 件）", result.question_display)
         zero = result.generation_trace["zero_evidence"]
-        self.assertEqual((zero["stage"], zero["candidate_count"], zero["rejected_count"]), ("retrieval", 0, 0))
+        self.assertEqual((zero["stage"], zero["candidate_count"]), ("retrieval", 0))
 
     def test_zero_evidence_records_the_same_retrieval_counts_shape(self):
         # 候補 0 件でも通常の回答と同じ形で残す（基準で全部消えたときは絞り込む前の数が残る。#4735）。
@@ -348,10 +347,8 @@ class AnswerExecutionTests(unittest.TestCase):
         return search_steps, search_calls
 
     def test_retrieval_stopping_after_search_skips_crag_and_evidence_completion(self):
-        # 業務 Agent の根拠の取得（complete_evidence=False）は主の文書の検索の後で止め、CRAG も使わない。
-        result, steps, calls = self.run_with_steps(
-            answer_flow=generation.CRAG_ANSWER_FLOW_LABEL, generate_answer=False, complete_evidence=False
-        )
+        # 業務 Agent の根拠の取得（complete_evidence=False）は主の文書の検索の後で止める。
+        result, steps, calls = self.run_with_steps(generate_answer=False, complete_evidence=False)
         self.search.assert_called_once()
         self.assertEqual(calls, [])
         self.assertEqual(result.answer_text, "")
@@ -398,38 +395,10 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertEqual(result, self.context.records)
         self.assertTrue(any(line.startswith("Rerank 終了（失敗・取得順を保持）") for line in lines), lines)
 
-    def test_second_crag_search_failure_keeps_first_attempt(self):
-        self.search.side_effect = [self.context, generation.AdbHybridSearchUnavailable("search unavailable")]
-
-        def parse(system, prompt, settings, schema, **options):
-            if schema is generation.CragRetrievalGradeOutput:
-                return _crag_grade(sufficient=False, rewritten_query="追加検索")
-            return echo_model(system, prompt, settings, schema, **options)
-
-        self.parse.side_effect = parse
-        result = self.run_answer(answer_flow=generation.CRAG_ANSWER_FLOW_LABEL)
-        self.assert_order(
-            result.question_display,
-            heading("文書検索（1回目）"),
-            heading("根拠確認（1回目）"),
-            heading("補正検索の準備"),
-            heading("文書検索（2回目）"),
-            "状態: エラーで中断",
-        )
-        self.assertNotRegex(result.question_display, heading("根拠確認（2回目）"))
-        self.assertEqual(result.crag_attempts[0]["stop_reason"], "retrieval_error")
-        self.assertEqual(result.crag_attempts[0]["recovery_trace"]["retrieval_error"], "AdbHybridSearchUnavailable")
-        self.assertEqual(self.search.call_count, 2)
-        self.assertEqual([call.args[3].__name__ for call in self.parse.call_args_list], ["CragRetrievalGradeOutput"])
-        self.assertEqual(result.generation_trace["crag_generation_gate"]["generation_calls"], 0)
-        self.assertNotRegex(result.question_display, heading("回答文の生成と根拠確認（1回目）"))
-        self.assertTrue(result.answer_text)
-
     def test_new_and_legacy_memos_are_removed_on_retry(self):
         for separator in (
             generation.QUESTION_DISPLAY_METADATA_SEPARATOR,
             "--- 回答生成メモ ---",
-            generation.QUERY_STRATEGY_DISPLAY_SEPARATOR,
         ):
             with self.subTest(separator=separator):
                 result = self.run_answer(f"原質問\n\n{separator}\n以前の記録")

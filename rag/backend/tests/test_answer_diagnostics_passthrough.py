@@ -17,8 +17,6 @@ def _result(trace: dict[str, Any]) -> AnswerQuestionResult:
         answer="合成の回答",
         question_display="合成の質問",
         original_question="合成の質問",
-        selected_strategy="simple",
-        effective_strategy="simple",
         generation_trace=trace,
     )
 
@@ -66,8 +64,8 @@ def test_every_body_or_prompt_key_is_excluded() -> None:
 
 
 def test_explicit_fields_still_win_over_the_trace() -> None:
-    # 章節の拡張は評価器の判定の全文（grades）を除いた形だけを出す。
-    diagnostics = _diagnostics({"section_expansion": {"applied": True, "grades": ["合成の判定"]}})
+    # 章節の拡張は専用の欄の形で出す。
+    diagnostics = _diagnostics({"section_expansion": {"applied": True}})
     assert diagnostics["section_expansion"] == {"applied": True}
 
 

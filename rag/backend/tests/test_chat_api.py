@@ -1587,7 +1587,7 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     async def capture_create(
         *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
-        seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
+        seen.append(current_pack().text("answer_labels", "insufficient_evidence_summary"))
         seen.append(current_pack().text("answer_labels", "gaps_section"))
         return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
 
@@ -1601,7 +1601,7 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     assert seen == []
     effective = row["effective_json"]
     assert isinstance(effective, dict)
-    assert effective["answer_labels"].get("crag_refusal_summary") is None
+    assert effective["answer_labels"].get("guide_acquisition_incomplete_template") is None
 
 
 def test_chat_stream_reports_inner_ai_network_failure(

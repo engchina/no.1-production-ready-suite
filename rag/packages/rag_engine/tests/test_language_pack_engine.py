@@ -121,7 +121,7 @@ class LanguagePackEngineTest(unittest.TestCase):
     def test_answer_labels_follow_the_pack(self):
         """回答の表示（見出し・出典・条件の型）は言語資源から作り、検査も同じ語で読む(#2181 段 5)。"""
         from rag_engine.generation.answer_labels import answer_labels
-        from rag_engine.generation.grounded import is_structural_line, known_gap_labels
+        from rag_engine.generation.grounded import is_structural_line
 
         self.assertTrue(is_structural_line("資料により確認できた事項"))
         self.assertTrue(is_structural_line("根拠：a.pdf p.3"))
@@ -140,7 +140,6 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(answer_labels().applications_section, "合成の導出結論")
             self.assertFalse(is_structural_line("資料により確認できた事項"))
             self.assertEqual(answer_labels().page(3), "3 頁")
-            self.assertEqual(known_gap_labels(["procedure"]), ["手順"])
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import llm_call_count
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation import section_extraction as extraction
-from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
+from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import _stored_chunk_answer_record
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.models.llm import SectionExtractionOutput, SectionExtractionQuote
@@ -520,33 +520,22 @@ class _Sections:
         return [*(_child(index) for index in indexes), *(_parent(index) for index in indexes)]
 
 
-def _attempt(*, sufficient: bool, missing: tuple[str, ...] = ()) -> CragRetrievalAttempt:
-    return CragRetrievalAttempt(attempt=1, query="q", retrieval_queries=("q",), sufficient=sufficient, missing_aspects=missing)
-
-
 def test_expansion_hands_large_section_to_extraction_and_answer_uses_only_extracted_text():
     stub = ExtractionStub()
     settings = _settings()
     extractor = extraction.SectionExtractor(settings, stub)
     store = _Sections()
-    graded: list[int] = []
-
-    def grade(context, level):
-        graded.append(level)
-        return _attempt(sufficient=True)
 
     result = sections.expand_sections(
         QUESTION,
         _seed_context(1),
         settings,
-        last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
-        grade=grade,
         section_outline=store.outline,
         section_chunks=store.chunks,
         large_sections=extractor,
     )
 
-    assert result.applied and result.unread and not result.trace["minimum_scope_complete"] and graded == [1]
+    assert result.applied and result.unread and not result.trace["minimum_scope_complete"]
     assert result.trace["large_section_handoff"] == "extract_then_integrate"
     entry = result.trace["levels"][0]["sections"][0]
     assert entry["read"] == "extracted" and entry["extraction"]["quotes"] == PARENTS
@@ -569,15 +558,13 @@ def test_extracted_sections_remain_partial_without_a_call_cap():
         QUESTION,
         _seed_context(1),
         settings,
-        last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
-        grade=lambda context, level: _attempt(sufficient=True, missing=("requested_result",)),
         section_outline=store.outline,
         section_chunks=store.chunks,
         large_sections=extraction.SectionExtractor(settings, stub),
     )
 
     assert stub.calls >= PARENTS
-    assert result.stop_reason == sections.STOP_TOKEN_BUDGET
+    assert result.stop_reason == sections.STOP_PARTIAL
     assert [item.reason for item in result.unread] == [sections.STOP_PARTIAL]
     assert result.gap_lines
     assert result.unread[0].reason == sections.STOP_PARTIAL
@@ -613,7 +600,7 @@ def _context_in_section(anchors: tuple[int, ...], others: tuple[int, ...] = ()) 
 
 
 def _expand_section(
-    context: AnswerContext, settings: SimpleNamespace, stub: ExtractionStub, grade=None
+    context: AnswerContext, settings: SimpleNamespace, stub: ExtractionStub
 ) -> tuple[sections.SectionExpansionResult, extraction.SectionExtractor]:
     extractor = extraction.SectionExtractor(settings, stub)
     store = _Sections()
@@ -621,8 +608,6 @@ def _expand_section(
         QUESTION,
         context,
         settings,
-        last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
-        grade=grade or (lambda candidate, level: _attempt(sufficient=True, missing=("requested_result",))),
         section_outline=store.outline,
         section_chunks=store.chunks,
         large_sections=extractor,
@@ -726,19 +711,17 @@ def test_skipped_extraction_is_not_reported_as_extracted():
 def test_section_already_in_context_is_reported_as_in_context():
     """章節の chunk がすべて最初の根拠にあれば、抜き出さずに ``in_context`` にする（``extracted``・parts 0 にしない）。"""
     stub = ExtractionStub()
-    graded: list[int] = []
     context = _context_in_section(tuple(range(1, PARENTS + 1)))
 
     result, extractor = _expand_section(
         context,
         _settings(answer_max_input_tokens=128_000),
         stub,
-        grade=lambda candidate, level: graded.append(level) or _attempt(sufficient=True),
     )
 
     entry = result.trace["levels"][0]["sections"][0]
     assert entry["read"] == "in_context" and "extraction" not in entry
-    assert extractor.calls == 0 and graded == [] and not result.applied
+    assert extractor.calls == 0 and not result.applied
     assert result.context is context
 
 

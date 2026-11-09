@@ -57,7 +57,7 @@ def test_configs_disable_one_stage_each_and_skip_already_off() -> None:
     assert (no_rerank.rerank_enabled, no_rerank.rrf_k) == (False, 10)
     assert configs[2].skipped_reason == "already_off"
     with pytest.raises(ValueError, match="除去できない工程"):
-        ablation_configs(settings, None, ["query_expansion"])
+        ablation_configs(settings, None, ["image_channel"])
 
 
 async def test_stage_switch_reaches_production_pipeline_settings(monkeypatch: MonkeyPatch) -> None:
@@ -203,7 +203,7 @@ def test_report_shows_quality_evidence_time_and_calls() -> None:
     assert stage["wall_seconds"]["difference"] == pytest.approx(-3.0)
     assert stage["case_median_ms"]["difference"] == pytest.approx(-500.0)
     assert report["order"] == ["full", "no-rerank"]
-    assert "query_expansion" in report["unsupported"]
+    assert "image_channel" in report["unsupported"]
 
 
 def test_report_marks_no_effect_skip_and_unexpected_conditions() -> None:

@@ -75,7 +75,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
 )
 from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_rankings, fusion_details, source_weights
 
-# ponytail: プロセス内の単純な TTL キャッシュ。CRAG の各回（最大3回）が同じ検索範囲の
+# ponytail: プロセス内の単純な TTL キャッシュ。1 回の回答の中で同じ検索範囲の
 # 全 chunk を読み直すのを避ける。複数プロセス構成や即時反映が必要になれば、保存側の
 # 版番号をキーに含める形へ置き換える。
 POOL_CACHE_TTL_SECONDS = 120.0

@@ -51,7 +51,6 @@ ABLATIONS: dict[str, tuple[str, dict[str, object]]] = {
 }
 # 評価の上書きで無効にできず、ここでは測らない工程（成功を装わずに表示する）。
 UNSUPPORTED_STAGES: dict[str, str] = {
-    "query_expansion": "質問の拡張は検索の方式（query_strategy）の選択で、単独の on / off が無い",
     "ingestion_preamble_and_chunking": "取込の前置き・分割は別の文書レシピの成果物を比べる",
     "image_channel": "画像の検索・回答時の原画像の添付は評価の上書きで切り替えられない",
 }

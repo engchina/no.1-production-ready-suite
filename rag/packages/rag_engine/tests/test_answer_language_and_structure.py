@@ -24,9 +24,8 @@ SUBQUESTIONS = "次の3点を教えてください。(1) 項目Aの値は何で�
 # ---- 回答の言語の差し込み ----
 
 
-@pytest.mark.parametrize("question", [PLAIN_QUESTION, SUBQUESTIONS])
-def test_generation_prompt_states_the_default_language_from_the_language_pack(question: str) -> None:
-    prompt = grounded.generation_system_prompt(question)
+def test_generation_prompt_states_the_default_language_from_the_language_pack() -> None:
+    prompt = grounded.generation_system_prompt()
     assert "{{language}}" not in prompt
     assert default_response_language() in prompt
     # 規定の文の差し込みが残っていない。
@@ -35,14 +34,14 @@ def test_generation_prompt_states_the_default_language_from_the_language_pack(qu
 
 def test_saved_prompt_can_use_the_language_placeholder() -> None:
     with bind_prompt_overrides({"generation.system": "## Step 1: 回答する\n- 既定の言語: {{language}}"}):
-        prompt = grounded.generation_system_prompt(PLAIN_QUESTION)
+        prompt = grounded.generation_system_prompt()
     assert prompt.endswith(f"既定の言語: {default_response_language()}")
 
 
 def test_saved_prompt_without_the_placeholder_is_sent_unchanged() -> None:
     saved = "## Step 1: 回答する\n- 保存した指示"
     with bind_prompt_overrides({"generation.system": saved}):
-        assert grounded.generation_system_prompt(PLAIN_QUESTION) == saved
+        assert grounded.generation_system_prompt() == saved
 
 
 def test_unknown_locale_falls_back_to_the_tag(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -21,30 +21,12 @@ import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type AnsweringSettingsData,
-  type AnswerFlowName,
-  type QueryStrategyName,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 選択肢の名前は `searchAnswerProfiles.queryStrategy.*` の文言を使う（backend の QueryStrategy と同じ順）。
-const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
-  [
-    "auto_routing",
-    "simple_retrieval",
-    "rag_fusion",
-    "query_decomposition",
-    "step_back_prompting",
-    "hyde",
-  ] as const
-).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
-// 既定（標準 RAG）を先頭に置く。CRAG は AI の呼び出しが増えるので、明示して選んだときだけ使う（#3509）。
-const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
-  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
-];
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
@@ -68,8 +50,6 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
-    query_strategy: settings.query_strategy,
-    answer_flow: settings.answer_flow,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
@@ -84,7 +64,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 }
 
 /**
- * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
+ * 回答の検索と生成の全体既定（根拠の前後の数・rerank・画面目録。#593）。
  * 検索・回答プロファイルでは上書きしない（`PROFILE_GLOBAL_QUERY_FIELDS`）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 /** 見出しと枠のある設定の群。枠の中の切り替えの一覧と同じ線と余白にそろえる（#4238）。 */
@@ -170,7 +150,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   return (
     <div className="space-y-4">
       {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
-          選択肢の名前が長い（20 字ほど）質問の拡張・回答の生成方式は lg、数は xs（#1891）。 */}
+          数は xs（#1891）。 */}
       <SettingsGroup id="answer-confirmation-title" title={t("settings.answering.confirmationTitle")}>
         <SwitchRow
           id="answering-runtime-rules-confirmation"
@@ -183,17 +163,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
       </SettingsGroup>
       <SettingsGroup id="search-expression-title" title={t("settings.answering.searchExpressionTitle")}>
       <FormGrid>
-        <SelectField
-          id="answering-query-strategy"
-          className="min-w-0"
-          disabled={disabled}
-          label={t("settings.answering.queryStrategy")}
-          helper={t("settings.answering.queryStrategyHint")}
-          value={form.query_strategy}
-          options={QUERY_STRATEGY_OPTIONS}
-          width="lg"
-          onValueChange={(value) => update({ query_strategy: value })}
-        />
         <SwitchRow
           id="answering-runtime-terms-search"
           label={t("settings.answering.runtimeTermsSearch")}
@@ -271,17 +240,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
       </SettingsGroup>
       <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
       <FormGrid>
-        <SelectField
-          id="answering-answer-flow"
-          className="min-w-0"
-          disabled={disabled}
-          label={t("settings.answering.answerFlow")}
-          helper={t("settings.answering.answerFlowHint")}
-          value={form.answer_flow}
-          options={ANSWER_FLOW_OPTIONS}
-          width="lg"
-          onValueChange={(value) => update({ answer_flow: value })}
-        />
         <SelectField
           id="answering-neighbor-child-count"
           className="min-w-0"

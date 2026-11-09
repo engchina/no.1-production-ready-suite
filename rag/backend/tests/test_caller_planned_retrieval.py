@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 from app.config import EnterpriseAiConfiguredModel, Settings
-from app.rag.answer_engine import AnswerEngine
 from app.rag.pipeline import RagPipeline
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from tests.test_answer_engine import FakeGenAi, FakeOracle
@@ -80,8 +79,6 @@ def _reasoning_settings() -> Settings:
     """質問に応じた推論の工程をすべて有効にした設定（caller ではどれも使わないことを確かめる）。"""
     return Settings(
         oci_compartment_id="ocid1.compartment.oc1..example",
-        rag_query_strategy="auto_routing",
-        rag_answer_flow="crag",
         rag_article_catalog_enabled=True,
         rag_screen_linking_enabled=True,
         rag_auto_field_filter_enabled=True,
@@ -152,34 +149,6 @@ async def test_caller_planned_retrieval_calls_no_reasoning_model(
     steps: list[dict[str, Any]] = list(answer.get("execution_steps") or [])
     assert steps
     assert all(not step.get("llm_calls") for step in steps)
-
-
-async def test_rag_planned_retrieval_still_uses_query_expansion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """planning=rag（既定）は今までどおり RAG が検索戦略の判定（LLM）を行う（意味を変えない）。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.models.llm import QueryRoutingOutput
-
-    schemas: list[str] = []
-
-    def routing_only(system: str, prompt: str, settings: Any, schema: type, **_: Any) -> Any:
-        schemas.append(schema.__name__)
-        if schema is QueryRoutingOutput:
-            return QueryRoutingOutput(strategy="simple_retrieval", reason="単純", queries=[])
-        raise AssertionError(f"unexpected schema: {schema.__name__}")
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", routing_only)
-    engine = AnswerEngine(
-        Settings(rag_query_strategy="auto_routing", rag_article_catalog_enabled=False),
-        oracle=FakeOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-
-    outcome = await engine.run(SearchRequest(query="受注の登録方法は？", generate_answer=False))
-
-    assert outcome.citations
-    assert schemas == ["QueryRoutingOutput"]
 
 
 async def test_caller_queries_are_only_for_retrieval_without_answer(

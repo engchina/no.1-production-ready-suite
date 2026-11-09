@@ -139,12 +139,9 @@ def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
 
 
 def _engine(**settings: Any) -> AnswerEngine:
-    # 既存の親への追加拡張のテストは CRAG、共通の最低範囲は両方式で確かめる。
     # 章節の抜き出しの LLM（#1437）を確かめるテストがあるので、
     # 既定 OFF（#2800）の抜き出しを有効にする。
     settings = {
-        "rag_query_strategy": "auto_routing",
-        "rag_answer_flow": "crag",
         "rag_section_extraction_enabled": True,
         **settings,
     }
@@ -189,79 +186,13 @@ async def test_answer_reads_the_section_of_the_hit_chunk_and_cites_chunks(
     assert section_map.outline_calls >= 1
 
 
-@pytest.mark.usefixtures("stub_llm")
-async def test_max_levels_limit_makes_the_answer_conditional(
+async def test_section_text_is_added_to_generation(
     section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import rag_engine.adapters.oci as engine_oci
-    from rag_engine.models.llm import CragRetrievalGradeOutput
-
-    def missing_procedure(
-        system: str, prompt: str, settings: Any, schema: type, **options: Any
-    ) -> Any:
-        if schema is CragRetrievalGradeOutput:
-            # 読み取り段数の上限を試すので、未評価ではなく未充足の操作を明示する。
-            supported = _fake_llm(system, prompt, settings, schema, **options)
-            return supported.model_copy(
-                update={
-                    "sufficient": False,
-                    "reason": "文書全体にある後続操作の説明が不足",
-                    "aspect_checks": [
-                        check.model_copy(
-                            update={"status": "missing", "source_ids": [], "evidence": []}
-                        )
-                        if check.aspect == "procedure"
-                        else check
-                        for check in supported.aspect_checks
-                    ],
-                }
-            )
-        return _fake_llm(system, prompt, settings, schema, **options)
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", missing_procedure)
-    outcome = await _engine(rag_section_expansion_max_levels=1).run(
-        SearchRequest(query="受注の登録方法は？")
-    )
-
-    expansion = outcome.diagnostics["section_expansion"]
-    assert expansion["stop_reason"] == "max_levels"
-    assert [item["section_id"] for item in expansion["unread"]] == ["document"]
-    assert outcome.diagnostics["outcome"] == "conditional"
-    assert "回答に未反映の関連章節" in outcome.answer
-    assert "「manual.pdf」の全体" in outcome.answer
-
-
-async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
-    section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation import answering
-    from rag_engine.generation.answer_models import CragRetrievalAttempt
     from rag_engine.models.llm import GroundedDraft
 
     prompts: list[str] = []
-
-    def enough(
-        attempt: int,
-        question: str,
-        query: str,
-        queries: Any,
-        context: Any,
-        settings: Any,
-        **options: Any,
-    ) -> CragRetrievalAttempt:
-        return CragRetrievalAttempt(
-            attempt=attempt,
-            query=query,
-            retrieval_queries=tuple(queries),
-            sufficient=True,
-            answerable_parts=(_direct_answer_part(question, context),),
-            relevant_chunk_ids=tuple(
-                child.record.chunk_uid
-                for parent in context.evidence_tree
-                for child in parent.children
-            ),
-        )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         if issubclass(
@@ -270,7 +201,6 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
             prompts.append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
-    monkeypatch.setattr(answering, "_grade_crag_retrieval", enough)
     monkeypatch.setattr(engine_oci, "parse_text_response", llm)
     outcome = await _engine().run(SearchRequest(query="受注の登録方法は？"))
 
@@ -570,8 +500,6 @@ async def test_long_section_is_extracted_but_fixed_generation_input_exceeds_mode
     engine = AnswerEngine(
         Settings(
             rag_domain_keywords=["受注番号"],
-            rag_query_strategy="auto_routing",
-            rag_answer_flow="crag",
             rag_section_extraction_enabled=True,
             oci_enterprise_ai_models=[
                 EnterpriseAiConfiguredModel(model_id="llm-a", max_input_tokens=4096)
@@ -604,36 +532,14 @@ async def test_long_section_is_extracted_but_fixed_generation_input_exceeds_mode
     assert not budget["fits"]
 
 
-@pytest.mark.parametrize("flow", ["standard_rag", "crag"])
 @pytest.mark.parametrize("enabled", [False, True])
-async def test_section_completion_reaches_generation_in_both_answer_flows(
-    flow: str, enabled: bool, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
+async def test_section_completion_reaches_generation(
+    enabled: bool, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation import answering
-    from rag_engine.generation.answer_models import CragRetrievalAttempt
     from rag_engine.models.llm import GroundedDraft
 
     prompts: list[str] = []
-    grades: list[int] = []
-
-    def grade(
-        attempt: int,
-        question: str,
-        query: str,
-        queries: Any,
-        context: Any,
-        settings: Any,
-        **options: Any,
-    ) -> CragRetrievalAttempt:
-        grades.append(attempt)
-        return CragRetrievalAttempt(
-            attempt=attempt,
-            query=query,
-            retrieval_queries=tuple(queries),
-            sufficient=True,
-            answerable_parts=(_direct_answer_part(question, context),),
-        )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         if issubclass(
@@ -642,16 +548,13 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
             prompts.append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
-    monkeypatch.setattr(answering, "_grade_crag_retrieval", grade)
     monkeypatch.setattr(engine_oci, "parse_text_response", llm)
-    outcome = await _engine(rag_answer_flow=flow, rag_section_expansion_enabled=enabled).run(
+    outcome = await _engine(rag_section_expansion_enabled=enabled).run(
         SearchRequest(query="登録方法は？")
     )
 
     assert bool(section_map.reads) is enabled
     assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled, outcome.diagnostics
-    if flow == "standard_rag":
-        assert grades == []
     if enabled:
         assert outcome.diagnostics["section_expansion"]["minimum_scope_complete"] is True
         assert [section_id for section_id, _ in section_map.reads] == ["s1"]
@@ -676,7 +579,7 @@ async def test_incomplete_or_unreadable_sections_never_count_as_complete(
         )
 
     monkeypatch.setattr(section_map_service, "read_section", incomplete)
-    outcome = await _engine(rag_answer_flow="standard_rag").run(SearchRequest(query="登録方法は？"))
+    outcome = await _engine().run(SearchRequest(query="登録方法は？"))
     trace = outcome.diagnostics["section_expansion"]
     assert trace["minimum_scope_complete"] is False
     assert trace["unread"]

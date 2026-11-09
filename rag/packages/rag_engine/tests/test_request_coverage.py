@@ -154,8 +154,6 @@ def _answer_with_request_question(
         "",
         ["docling"],
         replace(_settings(), output_dir=tmp_path),
-        query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
-        answer_flow=a.STANDARD_ANSWER_FLOW,
         retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
         request_question=request_question,
     )

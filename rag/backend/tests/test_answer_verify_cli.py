@@ -141,24 +141,3 @@ def test_regression_runs_repeats_resumes_and_summarizes(tmp_path: Path) -> None:
 
     main([*args, "--summary-only"], transport=httpx.MockTransport(api))
     assert len(api.requests) == 4
-
-
-def test_crag_goldset_returns_rag_poc_exit_code(tmp_path: Path) -> None:
-    def case(case_id: str, crag_answer: str) -> dict[str, Any]:
-        return {
-            "case_id": case_id,
-            "question": "質問",
-            "expected_evidence_ids": ["e1"],
-            "expected_answer_terms": ["赤枠", "実行"],
-            "variants": {
-                "standard_rag": {"retrieved_ids": ["e1"], "answer": ""},
-                "crag": {"retrieved_ids": ["e1"], "answer": crag_answer},
-                "crag_rerank": {"retrieved_ids": ["e1"], "answer": crag_answer},
-            },
-        }
-
-    better = _write(tmp_path / "better.json", {"cases": [case("c1", "赤枠の実行を押します。")]})
-    worse = _write(tmp_path / "worse.json", {"cases": [case("c1", "青枠を押します。")]})
-
-    assert main(["crag-goldset", str(better)]) == 0
-    assert main(["crag-goldset", str(worse)]) == 1

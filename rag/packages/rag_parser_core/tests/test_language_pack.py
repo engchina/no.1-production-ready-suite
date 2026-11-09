@@ -328,34 +328,10 @@ def test_numeric_layout_gaps_and_mixed_notation():
         assert "48000" not in arabic_numbers(text)
 
 
-_CRAG_COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
-)
-
-
-@pytest.mark.parametrize("mask", range(1 << len(_CRAG_COMPAT_KEYS)))
-def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
-    raw = builtin_pack().to_dict()
-    raw["answer_labels"]["gaps_section"] = "合成の独自文言"
-    for index, key in enumerate(_CRAG_COMPAT_KEYS):
-        if mask & (1 << index):
-            del raw["answer_labels"][key]
-    saved = json.dumps(raw, ensure_ascii=False)
-    if mask:
-        with pytest.raises(LanguagePackError):
-            build_pack(raw)
-    else:
-        assert build_pack(raw).text("answer_labels", "gaps_section") == "合成の独自文言"
-    assert json.dumps(raw, ensure_ascii=False) == saved
-
-
 @pytest.mark.parametrize("value", [None, ""])
-def test_new_crag_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
+def test_explicit_invalid_label_value_is_not_defaulted(value: object) -> None:
     raw = builtin_pack().to_dict()
-    raw["answer_labels"]["crag_refusal_summary"] = value
+    raw["answer_labels"]["insufficient_evidence_summary"] = value
     with pytest.raises(LanguagePackError):
         build_pack(raw)
 

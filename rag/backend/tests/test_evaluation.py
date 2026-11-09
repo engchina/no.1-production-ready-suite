@@ -996,8 +996,6 @@ async def test_evaluation_time_budget_stops_remaining_cases() -> None:
 def test_evaluation_settings_map_overrides() -> None:
     """評価は全体の既定のまま動かし、評価の上書き（rag_overrides）だけを一時適用する。"""
     base = Settings(
-        rag_query_strategy="auto_routing",
-        rag_answer_flow="crag",
         rag_neighbor_child_count=3,
         rag_rerank_enabled=True,
         rag_rrf_k=60,
@@ -1009,8 +1007,6 @@ def test_evaluation_settings_map_overrides() -> None:
     overridden = evaluation_settings(
         base,
         EvaluationRagOverrides(
-            query_strategy="rag_fusion",
-            answer_flow="standard_rag",
             neighbor_child_count=1,
             rerank_enabled=False,
             rrf_k=30,
@@ -1019,16 +1015,14 @@ def test_evaluation_settings_map_overrides() -> None:
         ),
     )
 
-    assert default.rag_query_strategy == "auto_routing"
-    assert overridden.rag_query_strategy == "rag_fusion"
-    assert overridden.rag_answer_flow == "standard_rag"
+    assert default.rag_neighbor_child_count == 3
     assert overridden.rag_neighbor_child_count == 1
     assert overridden.rag_rerank_enabled is False
     assert overridden.rag_rrf_k == 30
     assert overridden.rag_context_group_max_chunks == 2
     assert overridden.oracle_vector_target_accuracy == 90
     # 元の Settings は変えない。
-    assert base.rag_query_strategy == "auto_routing"
+    assert base.rag_rrf_k == 60
 
 
 def test_evaluation_settings_map_llm_latency_overrides() -> None:
@@ -1036,26 +1030,11 @@ def test_evaluation_settings_map_llm_latency_overrides() -> None:
     base = Settings()
     overridden = evaluation_settings(
         base,
-        EvaluationRagOverrides(
-            strategy_reasoning_effort="high",
-            judge_reasoning_effort="low",
-            generation_reasoning_effort="low",
-            query_expansion_max_queries=2,
-        ),
+        EvaluationRagOverrides(generation_reasoning_effort="low"),
     )
 
-    assert overridden.rag_strategy_reasoning_effort == "high"
-    assert overridden.rag_judge_reasoning_effort == "low"
     assert overridden.rag_generation_reasoning_effort == "low"
-    assert overridden.rag_query_expansion_max_queries == 2
-    # 既定は「戦略はモデルの登録値・根拠の評価 medium(#1550)・生成はモデルの登録値」、
-    # 検索文の上限は従来の 5。
-    assert (
-        base.rag_strategy_reasoning_effort,
-        base.rag_judge_reasoning_effort,
-        base.rag_generation_reasoning_effort,
-    ) == ("model", "medium", "model")
-    assert base.rag_query_expansion_max_queries == 5
+    assert base.rag_generation_reasoning_effort == "model"
 
 
 async def test_evaluation_run_applies_rag_overrides(
@@ -1087,11 +1066,10 @@ async def test_evaluation_run_applies_rag_overrides(
     await runner.run(
         cases=cases,
         top_k=3,
-        rag_overrides=EvaluationRagOverrides(query_strategy="rag_fusion", rrf_k=10),
+        rag_overrides=EvaluationRagOverrides(rrf_k=10),
     )
 
     assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
-    assert observed_settings[1].rag_query_strategy == "rag_fusion"
 
 
 def test_evaluation_api_rejects_empty_cases() -> None:
@@ -1187,10 +1165,9 @@ def test_evaluation_api_rejects_invalid_case_ids(
     "rag_overrides",
     [
         {"context_window_chars": 4096},
-        {"query_strategy": "unknown"},
         {"neighbor_child_count": 21},
     ],
-    ids=["removed-override", "bad-strategy", "bad-neighbors"],
+    ids=["removed-override", "bad-neighbors"],
 )
 def test_evaluation_api_rejects_invalid_rag_overrides(rag_overrides: dict[str, Any]) -> None:
     """削除した上書きのキーと、範囲外・未知の値は受け付けない。"""

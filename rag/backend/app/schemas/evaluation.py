@@ -5,7 +5,7 @@ from typing import Any, Literal, Self
 from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
+from app.config import EvaluationSuite, ReasoningEffortOverride
 from app.schemas.search import (
     SEARCH_TOP_K_MAX,
     SearchDiagnostics,
@@ -786,7 +786,7 @@ class EvaluationThresholds(BaseModel):
 class EvaluationRagOverrides(BaseModel):
     """評価の実行に一時適用する非 secret の回答設定(#591)。
 
-    回答エンジンの全体の既定(質問拡張戦略・回答生成フロー・近傍 child 数・rerank)と、検索の
+    回答エンジンの全体の既定(近傍 child 数・rerank)と、検索の
     RRF 定数・同じ group から足す child の上限・交差参照で足す chunk(#1280)・ベクトル検索の
     target accuracy を上書きする。
     削除したキー(query_expansion_* / context_window_chars など)は受け付けない。
@@ -794,8 +794,6 @@ class EvaluationRagOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query_strategy: QueryStrategy | None = None
-    answer_flow: AnswerFlow | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
@@ -815,15 +813,8 @@ class EvaluationRagOverrides(BaseModel):
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
-    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成の推論の量、
-    # 質問拡張の検索文の上限を比べる。
-    strategy_reasoning_effort: ReasoningEffortOverride | None = None
-    judge_reasoning_effort: ReasoningEffortOverride | None = None
+    # 回答文の生成の推論の量(#1499)。
     generation_reasoning_effort: ReasoningEffortOverride | None = None
-    crag_compact_input: bool | None = None
-    # CRAG の評価の候補の短い ID(#1864)。
-    crag_short_candidate_ids: bool | None = None
-    query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 
 def _reject_duplicate_case_ids(cases: list[EvaluationCase]) -> None:

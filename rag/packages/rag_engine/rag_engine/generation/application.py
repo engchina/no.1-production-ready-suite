@@ -1,4 +1,4 @@
-"""既存の multi-query / CRAG を UI なしで利用するアプリケーションサービス。"""
+"""検索と回答の流れを UI なしで利用するアプリケーションサービス。"""
 
 from __future__ import annotations
 
@@ -24,8 +24,6 @@ class AnswerRequest:
     engines: tuple[str, ...] = ()
     top_k: int = 20
     neighbor_count: int = 3
-    query_strategy: str = "simple"
-    answer_flow: str = "standard"
     retrieval_scope: str = "knowledge_base"
     rerank_enabled: bool | None = None
     provider: str | None = None
@@ -59,8 +57,6 @@ class AnswerService:
                 self.settings,
                 chunk_top_k=request.top_k,
                 chunk_neighbor_count=request.neighbor_count,
-                query_strategy=request.query_strategy,
-                answer_flow=request.answer_flow,
                 retrieval_scope=request.retrieval_scope,
                 rerank_enabled=request.rerank_enabled,
                 answer_llm_provider=request.provider,
@@ -101,8 +97,6 @@ def answer_question_result(question, run_id, preferred_engines, settings, **opti
         engines=tuple(preferred_engines),
         top_k=options.pop("chunk_top_k", 20),
         neighbor_count=options.pop("chunk_neighbor_count", 3),
-        query_strategy=options.pop("query_strategy", "simple"),
-        answer_flow=options.pop("answer_flow", "standard"),
         retrieval_scope=options.pop("retrieval_scope", "current_chunk_run"),
         rerank_enabled=options.pop("rerank_enabled", None),
         provider=options.pop("answer_llm_provider", None),

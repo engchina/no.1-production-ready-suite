@@ -2,8 +2,6 @@
 
 - ``regression``: rag_poc の ``cases.json`` の質問に回答し、文字列の規則で判定する
   (rag_poc の ``scripts/regression/run_regression.py``)。
-- ``crag-goldset``: CRAG goldset をオフラインで評価する
-  (rag_poc の ``scripts/evaluate_crag_goldset.py``)。
 
 ``regression`` は実行中の backend の API を呼ぶ(``evaluation_cli`` と同じ)。
 1 件ずつ ``<out>/<id>.json`` へ保存し、既にあれば飛ばすので、中断後は同じコマンドで
@@ -12,7 +10,6 @@
 
     uv run python -m app.rag.answer_verify_cli regression --cases cases.json \\
         --search-answer-profile <id> --out .runs/regression/<label> --repeat 2
-    uv run python -m app.rag.answer_verify_cli crag-goldset crag_goldset.json
 """
 
 from __future__ import annotations
@@ -22,7 +19,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -258,42 +254,6 @@ def summarize_regression(cases: Sequence[Mapping[str, Any]], out: Path, repeat: 
     return text
 
 
-# ---- crag-goldset ----------------------------------------------------------------------------
-
-
-def run_crag_goldset(goldset: Path, *, llm_judge: bool, log: Callable[[str], None] = print) -> int:
-    """CRAG goldset を評価し、rag_poc と同じ条件で終了コードを返す(CRAG が劣れば 1)。"""
-    from rag_engine.evaluation.crag_eval import (
-        evaluate_crag_goldset,
-        format_crag_eval_summary,
-        llm_crag_judge,
-        load_crag_goldset,
-    )
-
-    judge_fn = None
-    work = None
-    if llm_judge:
-        from app.config import get_settings
-        from app.rag.answer_engine import build_engine_settings
-
-        work = tempfile.TemporaryDirectory(prefix="rag-engine-crag-eval-")
-        judge_fn = llm_crag_judge(build_engine_settings(get_settings(), output_dir=Path(work.name)))
-    try:
-        summary = evaluate_crag_goldset(load_crag_goldset(goldset), judge_fn)
-    finally:
-        if work is not None:
-            work.cleanup()
-    log(format_crag_eval_summary(summary))
-    variants = summary["variants"]
-    if variants["crag"]["retrieval_hit_rate"] < variants["standard_rag"]["retrieval_hit_rate"]:
-        return 1
-    if variants["crag_rerank"]["retrieval_hit_rate"] < variants["crag"]["retrieval_hit_rate"]:
-        return 1
-    if variants["crag"]["crag_score"] < variants["standard_rag"]["crag_score"]:
-        return 1
-    return 0
-
-
 # ---- entrypoint ------------------------------------------------------------------------------
 
 
@@ -338,20 +298,12 @@ def _build_parser() -> argparse.ArgumentParser:
     regression.add_argument("--repeat", type=int, default=2)
     api_options(regression)
 
-    goldset = subparsers.add_parser("crag-goldset", help="CRAG goldset をオフラインで評価する")
-    goldset.add_argument("goldset", type=Path)
-    goldset.add_argument(
-        "--llm-judge", action="store_true", help="模範解答との比較を LLM で判定する"
-    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None) -> int:
     configure_cli_logging("rag")
     args = _build_parser().parse_args(argv)
-    if args.command == "crag-goldset":
-        return run_crag_goldset(args.goldset, llm_judge=args.llm_judge)
-
     api = RagApi(
         args.api_base_url,
         timeout=args.timeout,

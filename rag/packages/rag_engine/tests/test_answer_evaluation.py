@@ -175,8 +175,6 @@ def test_error_does_not_prevent_answer_persistence_or_leak_details():
             answer_text="回答",
             original_question="質問",
             question_display="質問",
-            selected_strategy="simple",
-            effective_strategy="simple",
             primary_source_run_id="run1",
         )
         with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=RuntimeError("private connection details")):
@@ -216,8 +214,6 @@ def test_successful_evaluation_is_saved_and_keeps_generation_external_state():
             answer_text="回答",
             original_question="質問",
             question_display="質問",
-            selected_strategy="simple",
-            effective_strategy="simple",
             primary_source_run_id="run1",
             external_data_required=True,
             external_data_items=("実行ログ",),
@@ -664,8 +660,6 @@ def test_unfinished_evaluation_preserves_original_review_state(status):
             answer="回答",
             original_question="質問",
             question_display="質問",
-            selected_strategy="simple",
-            effective_strategy="simple",
             primary_source_run_id="run1",
             external_data_required=True,
             external_data_items=("実行ログ",),

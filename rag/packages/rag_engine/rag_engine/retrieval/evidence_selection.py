@@ -512,7 +512,7 @@ def evidence_spans(
         )
         native_ranges = _native_ranges(record)
         verified = sorted({quote_ranges[item] for item in quote_requests.get(key, ()) if item in quote_ranges})
-        # CRAGのchild本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
+        # child の本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
         pinned = [(a, b) for a, b, _ in located]
         # 原文（解析本文）の短い範囲は質問の種類・画像の有無に関係なく先に確保し、残りの予算で生成説明・OCR を
         # 入れる (#687)。親 6,000 字では画面の生成説明（1 枚 1,000〜3,000 字）が予算を食い、原文の手順行

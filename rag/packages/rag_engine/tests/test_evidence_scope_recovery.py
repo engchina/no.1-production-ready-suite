@@ -1,9 +1,27 @@
 """異機能合成の防止と最終監査からの一度限りの回復を検証する。"""
 
-from test_crag_context_recovery import record
-
-from rag_engine.generation.answering import AnswerContext, AnswerResponse
+from rag_engine.generation.answering import AnswerContext, AnswerRecord, AnswerResponse
 from rag_engine.retrieval.evidence_scope import evidence_scope_error
+
+
+def record(name, seq, text, level="child", parent="p1", operation="管理-(1)登録", run="run"):
+    return AnswerRecord(
+        id=name,
+        engine="docling",
+        engine_label="Docling",
+        page=seq,
+        seq_no=seq,
+        category="Chunk",
+        text=text,
+        source="manual.pdf",
+        source_run_id="source",
+        chunk_id=name,
+        chunk_uid=f"{run}:{name}",
+        chunk_level=level,
+        chunk_seq=seq,
+        parent_chunk_uid=f"{run}:{parent}" if parent else "",
+        metadata={"section_path": [operation]},
+    )
 
 
 def span(name, text="", **extra):

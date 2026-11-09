@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_records import _records_by_rerank_ranks
-from rag_engine.generation.crag_support import _merge_crag_evidence
+from rag_engine.generation.evidence_merge import merge_evidence
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
@@ -104,7 +104,7 @@ def test_crag_merge_cuts_by_rerank_score_not_by_lexical_overlap():
             if scores[record.id] is not None:
                 records[index] = replace(record, metadata={"rerank": {"relevance_score": scores[record.id]}})
 
-    merged = _merge_crag_evidence(_context(previous, ()), _context(current, ()), question, max_records=1, max_chars=10000)
+    merged = merge_evidence(_context(previous, ()), _context(current, ()), question, max_records=1, max_chars=10000)
 
     # 語の一致の少ない p0（rerank 0.95）を残し、語の一致の多い p1（0.2）・点数の無い q1 を切る。
     assert [r.id for r in merged.records] == ["p0", "q0"]
@@ -170,7 +170,7 @@ def test_crag_merge_keeps_catalog_article_parents_outside_the_rerank_cut():
     previous = context(["m0", "art9"], [0.9, 0.01], catalog=("art9",))
     current = context(["m1", "m2"], [0.8, 0.7])
 
-    merged = _merge_crag_evidence(previous, current, "質問", max_records=1, max_chars=10000)
+    merged = merge_evidence(previous, current, "質問", max_records=1, max_chars=10000)
 
     assert [r.id for r in merged.records] == ["m0-p", "m1-p", "art9-p"]
 

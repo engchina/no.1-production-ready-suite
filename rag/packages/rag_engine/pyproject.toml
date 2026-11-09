@@ -68,12 +68,10 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # E501: LLM への指示（prompt）と、structured output の Field の description を書く場所。
 # 指示の文を行の幅で切ると読みにくく、prompt の差分も追いにくいため、行の長さを検査しない。
 "rag_engine/generation/grounded.py" = ["E501"]
-"rag_engine/generation/crag_support.py" = ["E501"]
 "rag_engine/generation/query_prompts.py" = ["E501"]
 "rag_engine/generation/section_extraction.py" = ["E501"]
 "rag_engine/parsing/vision_prompt_rules.py" = ["E501"]
 "rag_engine/evaluation/answer_eval.py" = ["E501"]
-"rag_engine/evaluation/crag_eval.py" = ["E501"]
 "rag_engine/knowledge/prompt_files.py" = ["E501"]
 "rag_engine/models/llm.py" = ["E501"]
 

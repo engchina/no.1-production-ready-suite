@@ -96,8 +96,6 @@ async function mockApi(page: Page) {
     const retrievalCards: Record<string, unknown> = {
       "/api/settings/answer-prompts": { prompts: [], stages: [] },
       "/api/settings/answering": {
-        query_strategy: "auto_routing",
-        answer_flow: "crag",
         neighbor_child_count: 3,
         rerank_enabled: true,
         screen_linking_enabled: false,

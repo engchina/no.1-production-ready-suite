@@ -12,7 +12,6 @@ from rag_engine.generation.citation_wire import (
     canonical_generation_draft,
     generation_draft_wire_model,
     guided_generation_wire_model,
-    planned_generation_wire_model,
 )
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
@@ -312,12 +311,8 @@ def test_unnumbered_single_unit_block_extracts_the_whole_text_for_one_and_null(s
 def test_guide_coverage_is_in_the_output_schema_only_when_guide_requirements_are_given():
     """#4236: 用途の無い欄を見せない。業務ガイドの要件を渡す生成だけ、計画の後・items の前に欄がある。"""
     assert "guide_coverage" not in generation_draft_wire_model().model_json_schema()["properties"]
-    assert "guide_coverage" not in planned_generation_wire_model().model_json_schema()["properties"]
     guided = list(guided_generation_wire_model().model_json_schema()["properties"])
     assert guided.index("request_coverage") < guided.index("guide_coverage") < guided.index("items")
-    planned = list(planned_generation_wire_model(guided=True).model_json_schema()["properties"])
-    assert "request_coverage" not in planned
-    assert planned.index("guide_coverage") < planned.index("items")
 
 
 def test_guided_output_keeps_guide_coverage_in_the_canonical_draft():

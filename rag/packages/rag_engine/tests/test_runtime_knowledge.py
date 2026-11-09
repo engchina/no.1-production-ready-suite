@@ -15,8 +15,6 @@ from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
     QUESTION_DISPLAY_METADATA_SEPARATOR,
     RUNTIME_KNOWLEDGE_SEPARATOR,
-    SIMPLE_RETRIEVAL_LABEL,
-    STANDARD_ANSWER_FLOW_LABEL,
     AnswerContext,
     AnswerRecord,
     answer_question_result,
@@ -267,8 +265,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                     "abcdef",
                     ["docling"],
                     settings,
-                    query_strategy=SIMPLE_RETRIEVAL_LABEL,
-                    answer_flow=STANDARD_ANSWER_FLOW_LABEL,
                 )
 
         tokenized_questions = [call.args[0] for call in tokenize.call_args_list]

@@ -1,6 +1,6 @@
 """既存の高度な回答フローへ I/O 関数を注入する境界。
 
-公開 SDK の Protocol と併用し、CRAG や multi-query の既存挙動も保護する。
+公開 SDK の Protocol と併用し、既存の回答の挙動を保護する。
 互換呼び出しの既定実装は composition root で遅延構築する。
 """
 
@@ -33,10 +33,6 @@ class AnswerDependencies:
     対応が無い chunk は None）を返す。section_chunks は document_id・chunk_set_id・section_id を受け取り、
     章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。部分取得や失敗は
     `SectionRead(complete=False)` で区別する。省略時は章節で広げない。
-    prefetch_search は、質問拡張の LLM と並行に元の質問の検索を先に読む入力（#1499）。query・candidate_limit・
-    metadata_filter・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
-    cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。
-    省略時は先に読まない。
     article_catalogs / article_chunks は条の目録から条を選ぶ段（#2254）の入力。章節と chunk の対応を持つ呼び出し元が
     渡す。article_catalogs は document_ids（候補の文書の id。順位の順）・limit・settings を受け取り、そのうち条で
     構成された文書の章節の目録（`article_catalog.ArticleCatalog`）を順位の順に limit 件まで返す。article_chunks は
@@ -68,7 +64,6 @@ class AnswerDependencies:
     screen_chunks: Callable[..., Sequence[Any]] | None = None
     section_outline: Callable[..., Any] | None = None
     section_chunks: Callable[..., Sequence[Any]] | None = None
-    prefetch_search: Callable[..., Any] | None = None
     article_catalogs: Callable[..., Sequence[Any]] | None = None
     article_chunks: Callable[..., Sequence[Any]] | None = None
     article_documents: Callable[..., Sequence[tuple[str, str]]] | None = None
@@ -184,12 +179,6 @@ def report_degraded(kind: str, exc: BaseException) -> None:
     current = _active.get()
     if current is not None and current.report_degraded is not None:
         current.report_degraded(kind, exc)
-
-
-def injected_prefetch_search() -> Callable[..., Any] | None:
-    """注入された元の質問の先読み（#1499）。注入が無ければ None（先に読まない）。"""
-    current = _active.get()
-    return None if current is None else current.prefetch_search
 
 
 def search_adb_hybrid_chunks(**kwargs):

@@ -15,7 +15,7 @@ from rag_parser_core.language.text import alternation
 
 # 小問の印の型は言語資源（question_cues）。このモジュールは印を見つける文法だけを持つ。
 
-# CRAG の評価器が確かめる観点（質問によらず固定）。観点の語は応答の項目（aspect_checks）の値でもある。
+# 質問契約に載せる観点（質問によらず固定）。
 REQUIRED_ASPECTS = ("business_object", "requested_result", "applicability")
 
 

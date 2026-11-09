@@ -166,15 +166,12 @@ def test_generated_answer_still_has_a_length_limit_separate_from_source_length()
 
 def test_formal_generation_entry_uses_answer_parts_and_keeps_every_plan_hidden():
     from rag_engine.generation import grounded
-    from rag_engine.generation.citation_wire import planned_generation_wire_model
 
     _, _, catalog = case()
     schema = grounded.generation_output_model("対象の値は何ですか。", unit_catalog=catalog)
     assert schema._uses_typed_answer_parts
     assert "items" not in schema.model_json_schema()["properties"]
     assert "request_coverage" not in schema.model_json_schema()["properties"]
-    planned = answer_parts_model(planned_generation_wire_model(), catalog)
-    assert "request_coverage" not in planned.model_json_schema()["properties"]
 
 
 @pytest.mark.parametrize("request_count,source_count", [(1, 7), (40, 2)])

@@ -4,7 +4,6 @@
 （`Settings.extra_retrieval_max_queries`）から回数を取る。必須の参照先を先に予約し、
 任意の検索は予約していない残数だけを使う。予約で総枠を増やさない。
 
-- CRAG の補正検索（`crag`）
 - 業務ガイドの必須取得（`guide_required`）と任意の手順検索（`guide_steps`）
 - 小問ごとの検索と根拠の無い要求の再検索（`request_coverage`。#2399・#1279）
 

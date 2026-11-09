@@ -19,8 +19,6 @@ from rag_engine.resources.filesystem import FileArtifactStore
 
 APPROVED_FAQ_DIRECT_ANSWER_FLOW = "approved_faq_direct"
 
-APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL = "Approved FAQ直接回答"
-
 APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL = "Approved FAQ"
 
 
@@ -69,17 +67,11 @@ def _approved_faq_direct_answer_payload(
         "insufficient_reason": "",
         "needs_human_review": False,
         "answer_flow": APPROVED_FAQ_DIRECT_ANSWER_FLOW,
-        "answer_flow_label": APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL,
         "retrieval_scope": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
         "retrieval_scope_label": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL,
         "classification_filter": classification_metadata,
-        "selected_strategy": APPROVED_FAQ_DIRECT_ANSWER_FLOW,
-        "effective_strategy": APPROVED_FAQ_DIRECT_ANSWER_FLOW,
-        "selected_strategy_label": APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL,
-        "effective_strategy_label": APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL,
         "generated_queries": [question_text],
         "query_expansion_summary": "",
-        "routing_reason": "Approved FAQ候補で高閾値一致したため、RAG生成を行わず承認済み回答を返しました。",
         "question_plan": {},
         "runtime_knowledge": {},
         "text_search_tokenizer": "",
@@ -90,7 +82,6 @@ def _approved_faq_direct_answer_payload(
         "text_search_queries": [question_text],
         "text_search_query_source": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
         "text_search_tokenization_error": "",
-        "crag_attempts": [],
         "prompt_injection_risk": False,
         "prompt_injection_warnings": [],
         "rerank_scores": [],

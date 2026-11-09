@@ -161,7 +161,7 @@ async function mockSettingsAndFeedback(page: Page) {
             updated_at: NOW,
           },
         ],
-        stages: [{ id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] }],
+        stages: [{ id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] }],
       }),
     }),
   );

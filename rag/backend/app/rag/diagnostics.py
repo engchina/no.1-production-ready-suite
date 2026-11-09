@@ -65,8 +65,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "rrf_k": resolved_settings.rag_rrf_k,
         "vector_index_profile": resolved_settings.rag_vector_index_profile,
         "oracle_vector_target_accuracy": _effective_vector_target_accuracy(resolved_settings),
-        "query_strategy": resolved_settings.rag_query_strategy,
-        "answer_flow": resolved_settings.rag_answer_flow,
         "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
         "rerank_enabled": resolved_settings.rag_rerank_enabled,
         "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
@@ -100,13 +98,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
         # 回答の LLM の時間の短縮(#1499)。
-        "strategy_reasoning_effort": resolved_settings.rag_strategy_reasoning_effort,
-        "judge_reasoning_effort": resolved_settings.rag_judge_reasoning_effort,
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
-        "crag_compact_input": resolved_settings.rag_crag_compact_input,
-        # CRAG の評価の候補の短い ID(#1864)。
-        "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,
-        "query_expansion_max_queries": resolved_settings.rag_query_expansion_max_queries,
         "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
         "search_top_k_default": resolved_settings.rag_search_top_k_default,
         "guardrails_input_enabled": resolved_settings.rag_guardrails_input_enabled,

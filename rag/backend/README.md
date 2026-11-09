@@ -56,7 +56,7 @@ uv run bandit -r app          # セキュリティ
 | `POST /api/documents/ingestion-jobs/drain` | 永続化済み QUEUED job を再実行 |
 | `POST /api/documents/ingestion-jobs/{job_id}/retry` | 失敗・完了・キャンセル済み job の対象文書を新規 job として再投入 |
 | `POST /api/documents/ingestion-jobs/{job_id}/cancel` | QUEUED/RUNNING job を CANCELLED にし、worker 終了時の上書きを防ぐ |
-| `POST /api/search` | 回答フロー（質問の理解・質問拡張・hybrid 検索（RRF）・rerank・CRAG・small-to-big）による citation-grounded 回答生成 |
+| `POST /api/search` | 回答フロー（質問の理解・hybrid 検索（RRF）・rerank・small-to-big）による citation-grounded 回答生成 |
 | `POST /api/search/stream` | SSE 形式で回答・引用をストリーミング |
 | `POST /api/evaluation/jobs/run` | golden set 評価を job として投入（#390） |
 | `GET /api/evaluation/jobs/{job_id}` | 評価の job の進捗と結果（`POST .../cancel` で取り消し） |
@@ -215,13 +215,13 @@ keyword retrieval の local score は重複を除いた query token の coverage
 chunk metadata には章節・ページ・要素 ID に加えて `chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count` を保存します。長い表・リスト・本文が複数 chunk に分かれても、同じ親要素/章節から来た引用を後で集約できます。
 Hybrid retrieval は Reciprocal Rank Fusion を使います。`RAG_RRF_K` で RRF 定数を調整できます。検索結果の citation metadata には `retrieval_mode`、`vector_rank`、`keyword_rank`、`vector_score`、`keyword_score`、`rrf_k`、`rrf_score` を可能な範囲で含めます。query 本文は入れず、hybrid 検索で vector/keyword のどちらが候補を拾ったかを trace id と合わせて調査できます。
 
-回答は回答フロー（`app/rag/answer_engine.py`・`packages/rag_engine`。#594）だけが行います。質問の理解と質問拡張戦略（`RAG_QUERY_STRATEGY`）で作った検索文ごとに hybrid 検索し、原質問を主軸にした重み付き RRF で融合して、Cohere Rerank（`RAG_RERANK_ENABLED`）で並べ替えます。根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文で親子を復元し（small-to-big）、根拠の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`）を文脈に足します。CRAG（`RAG_ANSWER_FLOW=crag`）は根拠を評価し、足りなければ質問を補正して再検索します。回答文の生成後に根拠との整合を確かめ（監査）、根拠が足りないときは理由と人手確認の要否を付けます。設定と仕組みは `docs/rag-engine.md` を参照してください。
+回答は回答フロー（`app/rag/answer_engine.py`・`packages/rag_engine`。#594）だけが行います。質問の理解で作った検索文ごとに hybrid 検索し、原質問を主軸にした重み付き RRF で融合して、Cohere Rerank（`RAG_RERANK_ENABLED`）で並べ替えます。根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文で親子を復元し（small-to-big）、根拠の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`）を文脈に足します。CRAG（`RAG_ANSWER_FLOW=crag`）は根拠を評価し、足りなければ質問を補正して再検索します。回答文の生成後に根拠との整合を確かめ（監査）、根拠が足りないときは理由と人手確認の要否を付けます。設定と仕組みは `docs/rag-engine.md` を参照してください。
 
 旧 standard の回答エンジンの検索前後の処理（業務同義語の query expansion・本文 hash の重複除去・MMR の多様化・同じ group / 前後の chunk の追加・圧縮・context window と、`RAG_QUERY_EXPANSION_*`・`RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_COMPRESSION_*` などの設定）は #595 で削除しました。`backend/.env` に残っていても読みません（`docs/deployment.md` の「既存環境の更新手順（#595）」）。
 
 検索レスポンスの `diagnostics` は、`retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps` など）、安全チェックの `guardrails_input_enabled` / `guardrail_degraded`、filter key、ナレッジベースの件数、適用した KB / 検索・回答プロファイルの設定、非機密の RAG 設定 fingerprint を返します。query 本文や secret は含めず、評価回帰の原因調査に使います（検索の内訳・候補・context の件数などの旧 standard の診断は #595 で削除しました）。
 
-`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒で上限と同じ。#1425）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。回答フローが質問の理解・根拠の評価（CRAG）・回答の生成・監査で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を job の上限（回答の回数 × `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`〔最小値。既定 3600 秒〕の大きいほうで、86400 秒まで。#1430。同期の API は 600 秒）で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 回答フローの「文書検索（1回目）」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
+`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒で上限と同じ。#1425）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。回答フローが質問の理解・回答の生成・監査で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を job の上限（回答の回数 × `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`〔最小値。既定 3600 秒〕の大きいほうで、86400 秒まで。#1430。同期の API は 600 秒）で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 回答フローの「文書検索（1回目）」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
 
 安全チェックは `RAG_GUARDRAILS_INPUT_ENABLED`（質問）と `RAG_GUARDRAILS_OUTPUT_ENABLED`（回答）を独立に選びます。既定は両方 false で、有効な側だけ OCI Guardrails を呼びます。PII の検出位置はアプリでマスクし、攻撃・不適切な内容・検査失敗は処理を止めます。Local 検査と根拠の一致率による方針は使いません。詳しくは `docs/evaluation-observability-guardrails.md` を参照してください。
 

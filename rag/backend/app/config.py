@@ -302,16 +302,6 @@ SMALL_TO_BIG_SETTING_FIELDS: tuple[str, ...] = (
     "rag_chunk_parent_max_pages",
     "rag_chunk_parent_max_children",
 )
-# 回答フローの選択肢(rag_engine.generation.answer_models の ID と一致させる)。
-QueryStrategy = Literal[
-    "auto_routing",
-    "simple_retrieval",
-    "rag_fusion",
-    "query_decomposition",
-    "step_back_prompting",
-    "hyde",
-]
-AnswerFlow = Literal["crag", "standard_rag"]
 # 回答の LLM の用途ごとの推論(思考)の量(#1499)。model はモデルの登録値(共通のモデル設定)のまま、
 # none は送らない、low / medium / high はその値を送る(platform の推論の量の選択肢と同じ)。
 ReasoningEffortOverride = Literal["model", "none", "low", "medium", "high"]
@@ -1160,10 +1150,9 @@ class Settings(
         default=True,
         description=(
             "回答で、当たった chunk の章節（章節ナビゲーション）から親の章節へ段階的に広げて"
-            "文脈に入れる（#1436。既定 ON）。根拠が十分でも最低 1 段（所有の章節）を読み、"
-            "新たな根拠を加えた後に CRAG の十分性を確かめ、足りれば止める"
-            "（判定ごとに LLM の呼び出しが 1 回増える）。標準 RAG では必要な範囲の原文を補完し、"
-            "十分性の評価器は呼ばない。一部取得は読了にしない。"
+            "文脈に入れる（#1436。既定 ON）。最低 1 段（所有の章節）を読み、"
+            "必要な範囲の原文を補完する。"
+            "一部取得は読了にしない。"
             "検索方法の全体設定で選ぶ。"
         ),
     )
@@ -1428,7 +1417,7 @@ class Settings(
             "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
         ),
     )
-    # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成)だけ
+    # 回答は rag_poc の根拠付き回答だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
     rag_history_rewrite_enabled: bool = Field(
         default=True,
@@ -1455,19 +1444,6 @@ class Settings(
     rag_runtime_terms_answer_enabled: bool = Field(
         default=False,
         description="登録した用語・同義語と説明を回答生成の補助情報に使用する。全体設定だけで決める。",
-    )
-    rag_query_strategy: QueryStrategy = Field(
-        default="simple_retrieval",
-        description="質問の拡張(query rewriting / expa"
-        "nsion)の方式。全体設定だけで決め、検索・回答プロファイルでは上書きしない。",
-    )
-    rag_answer_flow: AnswerFlow = Field(
-        default="standard_rag",
-        description=(
-            "回答の生成方式。standard_rag(標準 RAG。既定)は補正しない。"
-            "crag(CRAG)は検索結果を評価して必要なら補正検索する"
-            "(AI の呼び出しと時間が増えるので明示して選ぶ。#3509)。"
-        ),
     )
     rag_neighbor_child_count: int = Field(
         default=3,
@@ -1717,43 +1693,10 @@ class Settings(
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
-    rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
-        default="model",
-        description=(
-            "質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論の量(#1499。既定 model = "
-            "モデルの登録値。low では戦略の選択がぶれ、検索文 0 本の単純検索に倒れることがあった)。"
-        ),
-    )
-    rag_judge_reasoning_effort: ReasoningEffortOverride = Field(
-        default="medium",
-        description=(
-            "根拠の評価(CRAG の評価と章節の拡張の十分性の判定)の LLM の呼び出しの推論の量"
-            "(#1499。既定 medium。#1550)。model はモデルの登録値のまま。モデルの登録値が none の"
-            "モデルには送らない。"
-        ),
-    )
     rag_generation_reasoning_effort: ReasoningEffortOverride = Field(
         default="model",
         description=(
             "回答文の生成の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
-        ),
-    )
-    rag_crag_compact_input: bool = Field(
-        default=True,
-        description=(
-            "CRAG の根拠の評価の入力を詰める(#1528。既定 ON。A/B で入力 tokens が"
-            " 1/4〜1/9)。候補を生成に渡す親の数にそろえ、JSON を"
-            "空白なしで書き、候補の ID を chunk_uid だけにする。章節の拡張の判定は候補の数を"
-            "そろえない(広げた章節を見せる)。"
-        ),
-    )
-    rag_crag_short_candidate_ids: bool = Field(
-        default=True,
-        description=(
-            "(既定 ON。#1864)CRAG の根拠の評価の詰めた入力(rag_crag_compact_input)で、候補の"
-            " chunk_uid を短い ID(C1・C1-1)にする。評価器は候補ごとの判定・観点の根拠・回復の起点に"
-            "ID を書き写すので、長い chunk_uid(文書 ID の 32 桁と chunk の名前)が出力の token と"
-            "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
         ),
     )
     rag_llm_stall_detection_enabled: bool = Field(
@@ -1797,16 +1740,6 @@ class Settings(
             "業務ガイドの手順ごとの検索が後に来る回答で、最初の章節の拡張が使わずに残す入力の割合"
             "(#2816。章節の拡張の根拠の入力の上限に対する %。既定 20、0 は残さない)。"
             "手順の根拠から広げる章節の分を残す。"
-        ),
-    )
-    rag_query_expansion_max_queries: int = Field(
-        default=5,
-        ge=1,
-        le=5,
-        description=(
-            "質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来と同じ 5)。"
-            "原質問・用語の別名・"
-            "語彙の補助の検索文は数えない。"
         ),
     )
     rag_auto_field_filter_enabled: bool = Field(

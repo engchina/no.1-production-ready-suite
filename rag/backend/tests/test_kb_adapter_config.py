@@ -39,7 +39,7 @@ def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
     settings = get_settings()
     config = _config(
         ingestion={"chunking_strategy": "markdown_heading", "chunk_size": 1200},
-        query={"query_strategy": "rag_fusion"},
+        query={"neighbor_child_count": 9},
     )
 
     effective = resolve_effective_settings(settings, config, scope="ingestion")
@@ -47,7 +47,7 @@ def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
     assert effective.rag_chunking_strategy == "markdown_heading"
     assert effective.rag_chunk_size == 1200
     # query 系はグローバルのまま。
-    assert effective.rag_query_strategy == settings.rag_query_strategy
+    assert effective.rag_neighbor_child_count == settings.rag_neighbor_child_count
 
 
 def test_kb_query_scope_is_legacy_noop() -> None:
@@ -261,7 +261,7 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
     assert effective.rag_vision_enabled is True
     assert effective.rag_navigation_summary_enabled is True
     # query 系は不変。
-    assert effective.rag_query_strategy == settings.rag_query_strategy
+    assert effective.rag_neighbor_child_count == settings.rag_neighbor_child_count
 
 
 def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
@@ -312,15 +312,15 @@ def test_compose_query_settings_empty_returns_global() -> None:
 def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     """後の overlay(高優先)が同一フィールドを上書きし、別フィールドは両方効く。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(rerank_enabled=False, query_strategy="hyde")
-    view = KnowledgeBaseQueryConfig(query_strategy="rag_fusion")
+    kb = KnowledgeBaseQueryConfig(rerank_enabled=False)
+    view = KnowledgeBaseQueryConfig(neighbor_child_count=9)
 
     # 低優先=kb, 高優先=view の順で渡す。
     merged, applied = compose_query_settings(settings, [kb, view])
 
     assert applied is True
-    # 同一フィールド(質問拡張戦略)は高優先 view が勝つ。
-    assert merged.rag_query_strategy == "rag_fusion"
+    # 同一フィールドは高優先 view が勝つ。
+    assert merged.rag_neighbor_child_count == 9
     # view が触れていない rerank は下位 overlay の値が残る(per-field merge の肝)。
     assert merged.rag_rerank_enabled is False
 
@@ -336,9 +336,9 @@ def test_compose_query_settings_null_does_not_wipe_lower_layer() -> None:
 
 
 def test_invalid_literal_value_is_rejected_at_validation() -> None:
-    """存在しない戦略名は pydantic バリデーションで弾く。"""
+    """範囲外の値は pydantic バリデーションで弾く。"""
     with pytest.raises(ValueError):
-        KnowledgeBaseAdapterConfig.model_validate({"query": {"query_strategy": "does_not_exist"}})
+        KnowledgeBaseAdapterConfig.model_validate({"query": {"neighbor_child_count": 99}})
 
 
 def test_removed_parent_child_strategy_is_read_as_small_to_big() -> None:

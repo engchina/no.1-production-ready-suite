@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 
-from rag_engine.generation import crag_support
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import _evidence_subset_counts
 from rag_engine.generation.grounded import evidence_subset_reading_rule
@@ -53,12 +52,3 @@ def test_counts_use_the_retrieved_child_units_of_the_parents_passed_to_the_model
     spans = [{"source_id": "p1", "evidence_id": "E1"}, {"source_id": "p1", "evidence_id": "E2"}]
     assert _evidence_subset_counts(context, spans) == (2, 9)
     assert _evidence_subset_counts(replace(context, evidence_tree=()), spans) == (1, 9)
-
-
-def test_saved_crag_prompt_with_retired_placeholder_gets_the_fixed_aspects(monkeypatch) -> None:
-    saved = "task_contract: {{task_contract}}\n{{candidates}}"
-    monkeypatch.setattr(crag_support, "resolve_prompt", lambda key, default: saved if key == "crag.template" else default)
-    context = AnswerContext(records=[], text="")
-    prompt = crag_support._build_crag_grade_prompt("質問", "質問", ["質問"], context)
-    assert "{{task_contract}}" not in prompt
-    assert '"required_aspects": ["business_object", "requested_result", "applicability"]' in prompt

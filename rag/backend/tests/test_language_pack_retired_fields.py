@@ -405,3 +405,19 @@ def test_question_word_migration_is_a_destructive_data_step() -> None:
     assert len(split_sql_statements(section.sql)) == 1
     for field in module.RETIRED_QUESTION_WORD_FIELDS:
         assert field in section.sql
+
+
+def test_crag_labels_are_retired_by_a_destructive_data_step() -> None:
+    """CRAG の工程と一緒に、表示の文の保存値も消す（#4749）。"""
+    old = builtin_pack().to_dict()
+    old["answer_labels"].update({key: "合成語" for key in module.RETIRED_CRAG_ANSWER_LABEL_FIELDS})
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    assert not module.RETIRED_CRAG_ANSWER_LABEL_FIELDS & stripped["answer_labels"].keys()
+    section = next(
+        s
+        for s in oracle_schema_migration_sections()
+        if s.name == "20261110_4749_language_pack_retired_crag_labels"
+    )
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note

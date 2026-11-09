@@ -258,6 +258,15 @@ RETIRED_QUESTION_WORD_FIELDS = (
     | RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS
     | RETIRED_QUESTION_WORD_SECTIONS
 )
+# CRAG の工程を消して読まれなくなった表示の文(#4749)。
+RETIRED_CRAG_ANSWER_LABEL_FIELDS = frozenset(
+    {
+        "crag_refusal_summary",
+        "crag_missing_aspect_template",
+        "crag_unknown_aspect_template",
+        "crag_quote_only_note",
+    }
+)
 _RETIRED_BY_SECTION = {
     "question_cues": (
         RETIRED_QUESTION_CUE_FIELDS
@@ -268,6 +277,7 @@ _RETIRED_BY_SECTION = {
         RETIRED_ANSWER_LABEL_FIELDS
         | RETIRED_UNREAD_ANSWER_LABEL_FIELDS
         | RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS
+        | RETIRED_CRAG_ANSWER_LABEL_FIELDS
     ),
     "answer_check_cues": (
         RETIRED_ANSWER_CHECK_CUE_FIELDS

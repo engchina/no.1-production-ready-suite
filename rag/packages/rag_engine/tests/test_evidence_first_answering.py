@@ -15,10 +15,9 @@ from rag_engine.evaluation.answer_eval import (
     _evidence_fragments,
     evaluate_answer_payload,
 )
-from rag_engine.generation.answering import AnswerContext, AnswerRecord, _crag_grade_candidates, _merge_crag_evidence, answer_image_evidence
+from rag_engine.generation.answering import AnswerContext, AnswerRecord, answer_image_evidence, merge_evidence
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.evidence_selection import evidence_packet
-from rag_engine.retrieval.task_contract import task_contract
 
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
 
@@ -43,116 +42,15 @@ def test_late_parameter_rule_survives_long_html_and_low_rank():
     records = [record(f"p{i}", "無関係の表" * 800) for i in range(11)]
     records.append(record("p12", "<td>入力例</td>" * 300 + rule + "<td>項目</td>" * 100))
     original = records[-1].text
-    context = AnswerContext(records=records, text="full")
-    candidates = _crag_grade_candidates(context, "会計年度のデフォルトはいつ切り替わるか")
-    assert len(candidates) == 12
-    assert rule in candidates[-1]["text"]
+    AnswerContext(records=records, text="full")
     assert rule in evidence_packet("会計年度のデフォルトはいつ切り替わるか", records)
     assert records[-1].text == original
-    assert "[…]" in candidates[-1]["text"]
-
-
-def test_crag_candidates_carry_the_section_heading_and_the_prompt_checks_the_change_target():
-    """判定 LLM に機能見出しを渡し、別項目の手順の画面例だけで applicability を supported にさせない (#952)。"""
-    from rag_engine.generation.answering import _build_crag_grade_prompt
-    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
-
-    heading = ["拠点情報の変更手順", "（１）拠点名の変更"]
-    rec = record("p1", "〔マスタ管理⇒マスタ管理2タブ⇒基本設定〕 電話番号 0123-45-6788", metadata={"section_path": heading})
-    context = AnswerContext(records=[rec, record("p2", "見出しなし")], text="full")
-    candidates = _crag_grade_candidates(context, "拠点の電話番号を変更する手順は")
-    assert [c["section"] for c in candidates] == ["拠点情報の変更手順 > （１）拠点名の変更", ""]
-    prompt = _build_crag_grade_prompt("拠点の電話番号を変更する手順は", "拠点 電話番号 変更", ["拠点 電話番号 変更"], context)
-    # 候補（評価の記録）は原文のまま、評価器への入力は全角・半角の違いをそろえる（#1350）。
-    assert '"section": "拠点情報の変更手順 > (1)拠点名の変更"' in prompt
-    rules = [line for line in CRAG_GRADE_PROMPT_TEMPLATE.splitlines() if line.startswith("- ")]
-    assert any("section（機能見出し" in line and "変更項目" in line for line in rules)
-    assert any("別の変更項目の手順" in line and "missing" in line for line in rules)
-
-
-def test_crag_prompt_limits_insufficiency_and_carries_no_output_example():
-    """一般手順で十分・制限の記載は回答・複数要求は候補をまたぐ・エラー文は一致が必要、を規則に持ち、出力例 JSON を載せない (#983)。"""
-    from rag_engine.generation.answering import _build_crag_grade_prompt
-    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
-    from rag_engine.models.llm import CragRetrievalGradeOutput
-
-    rules = [line for line in CRAG_GRADE_PROMPT_TEMPLATE.splitlines() if line.startswith("- ")]
-    assert any("質問固有の値" in line and "不足の理由にしない" in line for line in rules)
-    assert any("制限の記載" in line and "supported" in line for line in rules)
-    assert any("複数の要求" in line and "別々の候補" in line for line in rules)
-    assert any("エラー文・エラーコード" in line and "unknown" in line for line in rules)
-    assert any("観点ごとに独立" in line for line in rules)
-    assert "sufficient=false にするのは" in CRAG_GRADE_PROMPT_TEMPLATE
-    context = AnswerContext(records=[record("p1", "登録画面で実行を押す")], text="full")
-    prompt = _build_crag_grade_prompt("登録方法", "登録方法", ["登録方法"], context)
-    assert '"status": "missing"' not in prompt and '"sufficient": false' not in prompt
-    schema = CragRetrievalGradeOutput.model_json_schema()
-    assert all(schema["properties"][name].get("description") for name in ("sufficient", "candidate_verdicts", "aspect_checks"))
-    # 候補ごとの判定と観点・理由を結論（sufficient）より前に生成させる（strict schema は項目順に生成する）。
-    order = list(schema["properties"])
-    assert order.index("candidate_verdicts") < order.index("aspect_checks") < order.index("reason") < order.index("sufficient")
-
-
-def test_crag_grade_keeps_the_verdict_when_the_model_reports_no_error_relation():
-    """エラー文字列の未認識だけでは不適合にしない。旧schemaの判定も未知として保持する。"""
-    from rag_engine.generation.answering import _grade_crag_retrieval
-    from rag_engine.models.llm import CragRetrievalGradeOutput
-
-    question = "処理画面で『対象が未登録です』のエラーが出る。対処方法は？"
-    text = "対象の登録がない場合は登録画面で追加して再実行する。"
-    candidate = record("a", text)
-    grade = CragRetrievalGradeOutput(
-        candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="同じ対処の可能性")],
-        aspect_checks=[],
-        reason="関連未確定",
-        sufficient=True,
-        confidence=0.5,
-        rewritten_query="",
-    )
-    with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
-        result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[candidate], text=text), object())
-    # エラーの質問か否かを語で見分けないので、モデルが対応を返さなければ判定を変えない。
-    assert result.candidate_verdicts[0]["relation"] == "relevant"
-    assert result.candidate_verdicts[0]["error_relation"] == "not_applicable"
-    assert result.rejected_chunk_ids == ()
-
-
-def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
-    """relevant=true の候補だけが relevant_chunk_ids になり、relevant な候補が無ければ十分としない (#983)。"""
-    from rag_engine.generation.answering import _grade_crag_retrieval
-    from rag_engine.models.llm import CragRetrievalGradeOutput
-
-    a, b = record("a", "登録画面で実行を押す"), record("b", "別機能の説明")
-    checks = [
-        dict(aspect=k, status="supported", source_ids=["a"], evidence=[dict(source_id="a", quote=a.text)], reason="関連")
-        for k in task_contract("登録方法")["required_aspects"]
-    ]
-    grade = CragRetrievalGradeOutput(
-        candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="同じ機能"), dict(chunk_uid="b", relevant=False, reason="別機能")],
-        aspect_checks=checks,
-        answerable_parts=[dict(aspect="requested_result", kind="operation", claim=a.text, evidence=[dict(source_id="a", quote=a.text)])],
-        reason="関連",
-        sufficient=True,
-        confidence=0.9,
-        rewritten_query="",
-    )
-    with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
-        result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == ("a",) and result.sufficient
-    assert [v["relevant"] for v in result.candidate_verdicts] == [True, False]
-    from rag_engine.models.llm import CragCandidateVerdict
-
-    none_relevant = grade.model_copy(update={"candidate_verdicts": [CragCandidateVerdict(chunk_uid="a", relevant=False, reason="別機能")]})
-    with patch("rag_engine.generation.answering.parse_text_response", return_value=none_relevant):
-        result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == () and not result.sufficient
-    assert result.required_aspect_coverage == "unknown"
 
 
 def test_crag_keeps_earlier_rule_when_rewrite_finds_other_context():
     first = record("p1", "パラメータによる切替規則")
     second = record("p2", "現在値は実環境で確認する")
-    result = _merge_crag_evidence(
+    result = merge_evidence(
         AnswerContext(records=[first], text=first.text),
         AnswerContext(records=[second], text=second.text),
         "切替日",

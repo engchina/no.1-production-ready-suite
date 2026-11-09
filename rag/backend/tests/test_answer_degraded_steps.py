@@ -547,8 +547,6 @@ async def test_screen_link_failure_in_rag_engine_is_recorded(
     oracle = ScreenOracle()
     engine = _engine(
         oracle,
-        rag_query_strategy="simple_retrieval",
-        rag_answer_flow="standard_rag",
         rag_rerank_enabled=False,
         rag_screen_linking_enabled=True,
     )
@@ -737,29 +735,6 @@ async def test_query_embedding_failure_keeps_oracle_failure_as_error() -> None:
         await _degraded_search(_SearchLog("failed"), _EmbedFails(), state, ["原質問"])
 
     assert {step["kind"] for step in state.degraded_steps()} == {"query_embedding", "retrieval"}
-
-
-async def test_query_embedding_failure_in_prefetch_is_remembered() -> None:
-    """先読みの失敗を覚え、続く検索は embedding を呼ばず、先読みの全文の結果を使う。"""
-    oracle = _SearchLog()
-    genai = _EmbedFails()
-    state = _SearchState()
-    engine = AnswerEngine(
-        Settings(),
-        oracle=oracle,  # type: ignore[arg-type]
-        genai=genai,  # type: ignore[arg-type]
-    )
-    request = SearchRequest(query="原質問")
-
-    await engine._prefetch_query_hits(request, state, query="原質問")
-    result = await engine._search(
-        request, state, retrieval_queries=["原質問"], expand_references=False
-    )
-
-    assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:c1"]
-    assert oracle.searches == [("原質問", "keyword", 0)]
-    assert genai.calls == 1
-    _assert_degraded(state, "query_embedding")
 
 
 async def _run_with_failing_embedding(
@@ -1089,8 +1064,6 @@ async def test_rerank_failure_does_not_show_the_rerank_model(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     settings = Settings(
         oci_compartment_id="ocid1.compartment.oc1..example",
-        rag_query_strategy="simple_retrieval",
-        rag_answer_flow="standard_rag",
         rag_rerank_enabled=True,
     )
     engine = AnswerEngine(

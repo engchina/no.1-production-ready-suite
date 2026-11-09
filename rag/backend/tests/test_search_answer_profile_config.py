@@ -31,7 +31,7 @@ def test_query_overrides_apply() -> None:
     assert merged.rag_max_anchors_per_document == 2
     assert merged.rag_guardrails_input_enabled is settings.rag_guardrails_input_enabled
     # グローバルは破壊しない。
-    assert settings.rag_query_strategy == "simple_retrieval"
+    assert settings.rag_guardrails_input_enabled is merged.rag_guardrails_input_enabled
 
 
 def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
@@ -209,8 +209,6 @@ def test_support_guide_switch_round_trip_preserves_internal_matching_settings() 
 def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_save() -> None:
     settings = get_settings().model_copy(
         update={
-            "rag_query_strategy": "simple_retrieval",
-            "rag_answer_flow": "crag",
             "rag_neighbor_child_count": 3,
             "rag_rerank_enabled": True,
             "rag_auto_field_filter_enabled": False,
@@ -228,8 +226,6 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
         }
     )
     old = {
-        "query_strategy": "hyde",
-        "answer_flow": "standard_rag",
         "neighbor_child_count": 0,
         "rerank_enabled": False,
         "auto_field_filter_enabled": True,

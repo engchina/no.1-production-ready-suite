@@ -1,4 +1,4 @@
-"""CRAG の評価済み起点から、既取得 pool の文脈を限定的に回復する。"""
+"""既取得 pool の文脈を、指定した起点から限定的に回復する。"""
 
 from __future__ import annotations
 

@@ -101,7 +101,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 
 ### 長くかかるツール
 
-- `rag_search` は回答を作るので、モデルを 3〜8 回呼ぶ（質問拡張・根拠の評価・章節の拡張の判定・回答文の生成と監査）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は 600 秒（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
+- `rag_search` は回答を作るので、モデルを 1 回以上呼ぶ（回答文の生成。根拠が長いときは分割して読む）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は 600 秒（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
 - **推奨の待ち時間は 660 秒**（`MCP_TOOL_TIMEOUT=660000`）。サーバーの上限（600 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（660 秒）と同じ。
 - **Claude Code の待ち時間**: `MCP_TOOL_TIMEOUT` の全体の既定は `100000000` ミリ秒（約 28 時間）。60 秒なのは HTTP の 1 要求の最初の応答までのタイマーで、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びる。SSE の進み具合があれば、既定でも 60 秒では切れない。`MCP_TOOL_TIMEOUT` は進み具合では延びない固定の上限。
 - **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。

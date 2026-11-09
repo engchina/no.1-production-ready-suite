@@ -50,12 +50,10 @@ from app.config import (
     CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
     CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
     REMOVED_PARSER_ADAPTER_BACKENDS,
-    AnswerFlow,
     ChunkingStrategy,
     GraphProfile,
     ParserAdapterBackend,
     PreprocessProfile,
-    QueryStrategy,
     Settings,
     VectorIndexProfile,
     is_roadmap_parser_adapter_backend,
@@ -118,8 +116,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "auto_index_after_chunk_enabled": "rag_auto_index_after_chunk_enabled",
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
-    "query_strategy": "rag_query_strategy",
-    "answer_flow": "rag_answer_flow",
     "neighbor_child_count": "rag_neighbor_child_count",
     "rerank_enabled": "rag_rerank_enabled",
     "screen_linking_enabled": "rag_screen_linking_enabled",
@@ -346,8 +342,6 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # 回答エンジンの選択(``answer_engine``)は #594 で削除した(回答は回答フローだけ)。保存済みの
     # 値は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
     # 回答フローの設定。None はグローバル継承。
-    query_strategy: QueryStrategy | None = None
-    answer_flow: AnswerFlow | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     # 画面目録で操作画面を探す(#554)。LLM の呼び出しが 1 回増える。
@@ -374,7 +368,7 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # プロファイルでは保存・適用しない(PROFILE_GLOBAL_QUERY_FIELDS)。
     graph_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     # 当たった chunk の章節から親の章節へ段階的に広げる(#1436)。None は既定(on)、false は使わない。
-    # 段ごとに CRAG の判定(LLM)が 1 回増える。上限(段・根拠の入力 token の割合・秒)も選べる。
+    # 上限(段・根拠の入力 token の割合・秒)も選べる。
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)

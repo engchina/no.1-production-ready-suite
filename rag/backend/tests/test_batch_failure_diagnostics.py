@@ -39,8 +39,6 @@ def test_generation_failure_detail_survives_answer_conversion(
         answer="合成の参考情報",
         question_display="合成の質問",
         original_question="合成の質問",
-        selected_strategy="simple",
-        effective_strategy="simple",
         generation_trace={"generation_failure": failure},
     )
     diagnostics = _outcome_from_result(result, _SearchState()).diagnostics

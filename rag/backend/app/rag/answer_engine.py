@@ -1,6 +1,6 @@
 """rag_poc の根拠付き回答フローを backend の検索・rerank・LLM で実行する。
 
-rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子文脈 / 生成)を
+rag_poc の ``answer_question_result``(親子文脈 / 生成)を
 そのまま使い、``AnswerDependencies`` の I/O だけを差し替える。
 
 - 検索: backend の Oracle hybrid 検索(
@@ -154,8 +154,6 @@ logger = logging.getLogger(__name__)
 
 ANSWER_ENGINE = "grounded"
 ENGINE_SOURCE_RUN_ID = "0" * 16
-# 呼び出し元が検索文を作った検索（#2651）の質問拡張の戦略（LLM を呼ばない単純検索）。
-CALLER_QUERY_STRATEGY = "simple_retrieval"
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
 # 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
@@ -189,7 +187,7 @@ _REFERENCE_DOCUMENT_CANDIDATES = 20
 _DOCUMENT_REFERENCE_CANDIDATES = 8
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
-# 診断に出す交差参照の起点の記録の、検索の回数の上限(CRAG の各回・要求ごとの再検索)。
+# 診断に出す交差参照の起点の記録の、検索の回数の上限(要求ごとの再検索)。
 _REFERENCE_DIAGNOSTICS_SEARCHES = 4
 # 実体の 1 段の拡張(#1362)で足した chunk を置く候補の位置(先頭からこの件数の後ろ)。rag_engine は
 # この chunk を rerank で並べ替えず(位置を保つ)、文書の選択で後回しにしない。
@@ -299,10 +297,10 @@ class _SearchState:
     # 同じ回答の検索で同じ chunk が何度も当たるので、切り出しと metadata の書き換えは chunk ごとに
     # 1 回にする(#2805)。
     materialized_images: dict[str, str | None] = field(default_factory=dict)
-    # 質問の文書名・ページを足した検索条件(#546)。CRAG の各回で同じなので、最初の検索で
+    # 質問の文書名・ページを足した検索条件(#546)。同じ回答の中で同じなので、最初の検索で
     # 1 回だけ決める。
     filters: dict[str, str] | None = None
-    # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
+    # 画面目録(#554)。同じ回答の中で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
     # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)。
     auto_field_conditions: list[ExtractionFieldCondition] = field(default_factory=list)
@@ -312,7 +310,7 @@ class _SearchState:
     document_backgrounds: dict[tuple[str, str, tuple[tuple[str, str], ...]], dict[str, Any]] = (
         field(default_factory=dict)
     )
-    # 交差参照(#1280)の参照先の chunk(参照先ごと。CRAG の各回で同じ参照先を読み直さない)と、
+    # 交差参照(#1280)の参照先の chunk(参照先ごと。同じ参照先を読み直さない)と、
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
     reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -326,12 +324,12 @@ class _SearchState:
     # #1549)。根拠の木に出す。
     fused_ranks: dict[str, tuple[int, float]] = field(default_factory=dict)
     # 実体の 1 段の拡張(#1362)で足した chunk の記録(診断に出す。chunk_id → 実体・段・起点)と、
-    # 同じ起点での計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
+    # 同じ起点での計画(同じ起点なら SQL を読み直さない)。
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     entity_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     entity_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
     # 関係情報(#2055)で足した chunk の記録(診断に出す。chunk_id → entity・理由)と、同じ起点での
-    # 計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
+    # 計画(同じ起点なら SQL を読み直さない)。
     graph_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     graph_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     graph_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
@@ -346,7 +344,7 @@ class _SearchState:
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
     )
-    # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。CRAG の 2 回目・要求ごとの
+    # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。要求ごとの
     # 再検索で同じ検索文を読み直さない(1 回の回答の中だけ)。
     search_hits: dict[tuple[str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]] = (
         field(default_factory=dict)
@@ -365,7 +363,7 @@ class _SearchState:
     # だけを渡す。
     requested_as_of: str = ""
     # 検索で当たった派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)と、置き換えた原文の
-    # chunk(#2641。chunk_id → 種類・原文の chunk_id。CRAG の各回で読み直さない。診断に出す)。
+    # chunk(#2641。chunk_id → 種類・原文の chunk_id。読み直さない。診断に出す)。
     derived_hits: dict[str, dict[str, Any]] = field(default_factory=dict)
     derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
         default_factory=dict
@@ -686,22 +684,9 @@ def build_engine_settings(
         "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
-        # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・
-        # 検索文の上限。
-        "RAG_ENGINE_STRATEGY_REASONING_EFFORT": _reasoning_effort_override(
-            settings.rag_strategy_reasoning_effort
-        ),
-        "RAG_ENGINE_JUDGE_REASONING_EFFORT": _reasoning_effort_override(
-            settings.rag_judge_reasoning_effort
-        ),
+        # 回答文の生成の推論の量(#1499。model は空 = モデルの登録値のまま)。
         "RAG_ENGINE_GENERATION_REASONING_EFFORT": _reasoning_effort_override(
             settings.rag_generation_reasoning_effort
-        ),
-        # CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
-        "RAG_ENGINE_CRAG_COMPACT_INPUT": "1" if settings.rag_crag_compact_input else "0",
-        # 詰めた入力の候補の ID を短くする(#1864)。
-        "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
-            "1" if settings.rag_crag_short_candidate_ids else "0"
         ),
         # 無音で止まった LLM の呼び出しの打ち切り(#1926・#4736)。送り直しは共通の枠で数える。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
@@ -713,7 +698,6 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
             settings.rag_section_expansion_followup_reserve_percent
         ),
-        "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
     # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
     environ.update(escalation_model_environ(settings, answer_model))
@@ -841,20 +825,19 @@ class AnswerEngine:
         degraded: DegradedSteps | None = None,
         complete_evidence: bool = True,
     ) -> None:
-        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し・CRAG）までするか
+        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し）までするか
         # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が
         # MCP でする）。
         # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
         self._complete_evidence = complete_evidence
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
-        # 質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）と根拠の
+        # 質問に応じた推論の LLM（条の目録の選択・画面目録の連携）と根拠の
         # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
         # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         if self._caller_queries is not None:
             settings = settings.model_copy(
                 update={
-                    "rag_query_strategy": CALLER_QUERY_STRATEGY,
                     "rag_article_catalog_enabled": False,
                     "rag_screen_linking_enabled": False,
                 }
@@ -1140,7 +1123,7 @@ class AnswerEngine:
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
         """回答を作らずに検索だけを行い、候補の chunk を順位順に返す(#593)。
 
-        回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・質問の拡張・rerank・CRAG・回答の
+        回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・rerank・回答の
         生成は行わず、LLM を呼ばない(embedding と Oracle の検索だけ)。KB の検索テストとレシピの
         検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
         """
@@ -1230,10 +1213,6 @@ class AnswerEngine:
             current_section_paths=lambda chunk_ids: run_async(
                 lambda: self._current_section_paths(state, chunk_ids)
             ),
-            # 質問拡張の LLM と並行に、元の質問の検索を先に読む(#1499。結果は変えない)。
-            prefetch_search=lambda **kwargs: run_async(
-                lambda: self._prefetch_query_hits(request, state, **kwargs)
-            ),
             # 条の目録から根拠の条を選ぶ段(#2254)。章節と chunk の対応(#1438)を読む。
             article_catalogs=lambda *, document_ids, limit, **kwargs: run_async(
                 lambda: self._article_catalogs(
@@ -1288,8 +1267,6 @@ class AnswerEngine:
                 engine_settings,
                 chunk_top_k=max(1, int(request.top_k)),
                 chunk_neighbor_count=self._settings.rag_neighbor_child_count,
-                query_strategy=self._settings.rag_query_strategy,
-                answer_flow=self._settings.rag_answer_flow,
                 rerank_enabled=self._settings.rag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
                 # RAG 検索の画面は回答を作らない(#649)。根拠はチャットと同じ流れで集め、回答の生成の
@@ -2224,46 +2201,6 @@ class AnswerEngine:
             filters, self._auto_field_conditions
         )
 
-    async def _prefetch_query_hits(
-        self,
-        request: SearchRequest,
-        state: _SearchState,
-        *,
-        query: str,
-        candidate_limit: int = 24,
-        **_: object,
-    ) -> None:
-        """元の質問の検索を、質問拡張の LLM と並行に先に読む(#1499)。
-
-        検索文ごとの検索の結果(``state.search_hits``)に入れるだけで、融合・参照先・実体の拡張・条件の
-        緩和はしない。続く ``_search`` が同じ検索文・方式・条件・件数の結果を読むので、回答の検索の
-        結果は先読みしないときと同じ(条件の緩和は ``_search`` が全検索文の結果で決める)。
-        """
-        text = query.strip()
-        if not text:
-            return
-        await self._ensure_search_filters(request, state)
-        assert state.filters is not None
-        embeddings = await self._query_embeddings(state, [text])
-        if embeddings == []:
-            return
-        searches: list[tuple[str, list[float], SearchMode]]
-        if embeddings is None:
-            searches = [(text, [], SearchMode.KEYWORD)]
-        elif self._settings.rag_hybrid_search_backend == "oracle_native":
-            searches = [(text, embeddings[0], SearchMode.HYBRID)]
-        else:
-            searches = [
-                (text, embeddings[0], SearchMode.VECTOR),
-                (text, embeddings[0], SearchMode.KEYWORD),
-            ]
-        await self._query_hits(
-            state,
-            searches,
-            candidate_limit=self._read_depth(candidate_limit),
-            filters=dict(state.filters),
-        )
-
     async def _query_embeddings(
         self, state: _SearchState, texts: list[str]
     ) -> list[list[float]] | None:
@@ -2294,7 +2231,7 @@ class AnswerEngine:
 
         まだ読んでいない検索文は 1 回の SQL でまとめて読む(``OracleClient.search_many``。結果は
         検索文ごとの ``hybrid_search`` と同じ。#1498)。同じ回答の中で同じ検索文・方式・条件・件数を
-        読んだことがあれば、その結果を使う(CRAG の 2 回目と要求ごとの再検索)。
+        読んだことがあれば、その結果を使う(要求ごとの再検索)。
         """
         filter_key = tuple(sorted(filters.items()))
         keys = [(query, mode.value, filter_key, candidate_limit) for query, _, mode in searches]
@@ -4990,7 +4927,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         },
         "retrieval_stages": list(state.retrieval_stages),
         "answer_flow": result.answer_flow,
-        "strategy": result.effective_strategy,
         "confidence": result.confidence,
         "needs_human_review": result.needs_human_review,
         "insufficient_reason": result.insufficient_reason,
@@ -5004,8 +4940,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "question_type": list(result.question_type or ()),
         "generated_queries": list(result.generated_queries),
         "text_search_tokens": list(result.text_search_tokens),
-        "crag_attempt_count": len(result.crag_attempts or ()),
-        "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
             {"guide_step_retrieval": dict(guide_steps)}
@@ -5119,7 +5053,7 @@ def _zero_evidence_diagnostics(
 ) -> dict[str, Any]:
     """根拠 0 件で回答を作らずに終えたときの、0 件になった段と検索の記録(#2401)。
 
-    段は rag_engine が決め(検索の候補が無い・根拠確認で全部外した・根拠の組み立て)、検索の候補が
+    段は rag_engine が決め(検索の候補が無い・根拠の組み立て)、検索の候補が
     無く、自動で足した検索条件が効いたままだったときは ``filter``
     にする。検索の条件は値を出さず、項目の名前だけを残す(値は質問・文書の内容を含みうる)。
     """
@@ -5231,11 +5165,11 @@ _TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS = frozenset(
 
 
 def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:
-    """章節の拡張の記録(#1436)。評価器の判定の全文(grades)は除き、段ごとの判定だけを残す。"""
+    """章節の拡張の記録(#1436)。"""
     raw = (trace or {}).get("section_expansion") if isinstance(trace, Mapping) else None
     if not isinstance(raw, Mapping):
         return {}
-    return {key: value for key, value in raw.items() if key != "grades"}
+    return dict(raw)
 
 
 # 本文の出典行（「根拠：」）の順番（1 始まり）を、出典行が指す根拠の chunk の metadata に
