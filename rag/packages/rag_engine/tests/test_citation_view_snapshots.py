@@ -1,21 +1,15 @@
 """引用の表示・提取と生応答の受管診断を、同じ版の合成入力で検証する。"""
 
-import hashlib
-import json
-from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from typing import Any
 
-import httpx
 import pytest
 from citation_unit_support import selected_answer_payload
-from openai import OpenAI
 
-from rag_engine.adapters import oci
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 LONG = "対象を選択します。" * 30 + "\n" + "結果を保存します。" * 30
 
@@ -112,4 +106,3 @@ def test_wire_conversion_preserves_private_raw_but_does_not_invent_missing_raw()
     canonical = canonical_generation_draft(value)
     assert canonical._provider_output_text == value._provider_output_text
     assert "合成の原始応答" not in canonical.model_dump_json()
-

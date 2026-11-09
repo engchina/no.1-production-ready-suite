@@ -3,16 +3,14 @@
 from dataclasses import replace
 from typing import Any
 
-import pytest
-from test_grounded_answer import FakeModel, draft, ids, item, observed_audit
-from test_request_coverage import _patch_search, context, parent
+from test_grounded_answer import FakeModel, draft, ids, item
+from test_request_coverage import context, parent
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import QueryExpansionResult
-from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
-from rag_engine.retrieval.request_coverage import CoverageUsage, RequestTarget, request_rows
+from rag_engine.retrieval.request_coverage import RequestTarget, request_rows
 
 QUESTION = "対象Aの設定を変更する方法は？"
 OLD_TEXT = "対象Aの設定を変更する機能の概要。手順の記載はありません。"
@@ -157,4 +155,3 @@ def test_equal_token_sets_preserve_distinct_original_request_ids(monkeypatch):
 
 def _routing_candidates():
     return tuple(value for value, _ in a.QUERY_STRATEGIES if value in a._ROUTABLE_QUERY_STRATEGIES and value != a.SIMPLE_RETRIEVAL_STRATEGY)
-

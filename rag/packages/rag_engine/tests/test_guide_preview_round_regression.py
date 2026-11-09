@@ -1,14 +1,6 @@
 """共有根拠・検索打切り・二組の生成監査の合成再生（#2733）。"""
 
-from dataclasses import replace
-
 import pytest
-from test_grounded_answer import FakeModel, audit, draft, item
-from test_guide_step_fulfillment import SHARED, SHARED_END, SHARED_GUIDE, SHARED_TERMS, _context, _ids, _knowledge, _record
-
-from rag_engine.config import get_settings
-from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.generation.answering import synthesize_grounded_answer
 
 
 def test_wrapped_execution_error_retains_the_original_frame_in_safe_diagnostics():

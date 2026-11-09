@@ -79,4 +79,3 @@ def test_the_unknown_label_errors_do_not_point_to_guide_coverage():
     for error in _unknown_plan_label_errors(draft, SPANS, scope_plan=True):
         assert "は Evidence の ID ではありません。" in error and "guide_coverage" not in error
     assert not any("guide_coverage" in error for error in _unknown_plan_label_errors(draft, SPANS))
-

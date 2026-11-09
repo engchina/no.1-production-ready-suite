@@ -10,7 +10,6 @@ from test_grounded_answer import FakeModel, audit, context, draft, ids, item, re
 
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
-from rag_engine.models.llm import GroundedDraft
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.text_search_tokenizer import normalize_text_search_index_text
 

@@ -6,7 +6,7 @@
 
 from dataclasses import replace
 
-from rag_engine.generation.grounded import _request_plan_errors, _unknown_plan_label_errors, verify
+from rag_engine.generation.grounded import _request_plan_errors, _unknown_plan_label_errors
 from rag_engine.models.llm import GroundedDraft
 
 OPEN = "メニューから設定を選び、設定タブの登録画面を開きます。"
@@ -72,9 +72,7 @@ def _answer(drafts):
         raise AssertionError("外部呼び出しは不要")
 
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        result = synthesize_grounded_answer(
-            "設定の手順は？", ctx, replace(get_settings()), image_prompt_mode="text_only"
-        ).response
+        result = synthesize_grounded_answer("設定の手順は？", ctx, replace(get_settings()), image_prompt_mode="text_only").response
     return result, model
 
 
@@ -87,4 +85,3 @@ def _labels():
     spans = _grounded_spans("設定の手順は？", context(record(0, OPEN, "登録"), record(1, STEPS, "割当")), (), None)
     labels = {span["text"]: span["label"] for span in spans}
     return labels[OPEN], labels[STEPS]
-

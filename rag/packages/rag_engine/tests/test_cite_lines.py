@@ -2,7 +2,7 @@
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 # 各行は 1 行で引用の単位になる長さ（2 行を続けると単位の上限を超える）。
 LONG = "\n".join(

@@ -215,8 +215,6 @@ def gap_lines(question: str, view: Mapping[str, Any] | None) -> list[str]:
     return lines
 
 
-
-
 def _bound_to_verified(entry: Any, allowed: Sequence[Mapping[str, Any]]) -> bool:
     """説明の出典（別の出典を含む）のどれかが、評価が確かめた部分の写しの範囲を引くか（幅と空白だけを同一視）。"""
     return any(
@@ -248,9 +246,7 @@ def _add_verified_quotes(kept: list[Any], allowed: Sequence[Mapping[str, Any]], 
     return added
 
 
-def project_partial_answer(
-    current: Any, view: Mapping[str, Any] | None, spans: Sequence[dict]
-) -> tuple[Any, dict[str, Any]]:
+def project_partial_answer(current: Any, view: Mapping[str, Any] | None, spans: Sequence[dict]) -> tuple[Any, dict[str, Any]]:
     """部分回答の説明を、評価が確かめた部分の原文と照らして扱う。
 
     説明は外さない（#3843）。確かめた写しを原文として足し、未確認の観点は ``gap_lines`` で示す。
@@ -269,7 +265,13 @@ def project_partial_answer(
     kept = list(current.checked)
     bound = sum(1 for entry in kept if entry.published and _bound_to_verified(entry, allowed))
     added = _add_verified_quotes(kept, allowed, spans)
-    return replace(current, checked=kept), {"applied": True, "omitted_claims": [], "bound_claims": bound, "added_quotes": added, "summary_replaced": False}
+    return replace(current, checked=kept), {
+        "applied": True,
+        "omitted_claims": [],
+        "bound_claims": bound,
+        "added_quotes": added,
+        "summary_replaced": False,
+    }
 
 
 def gate_record(view: Mapping[str, Any] | None) -> dict[str, Any]:

@@ -3,8 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from rag_engine.generation.grounded import CheckedItem, verify
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
@@ -238,4 +236,3 @@ def test_unsectioned_contiguous_chunks_keep_separate_numbered_headings():
     # 未取得の章境界を飛び越えた本文へ、前章の名前を与えない。
     gap = _retrieved_heading_context([span for span in spans if span["text"] in [parts[0], parts[5]]])
     assert next(span for span in gap if span["text"] == parts[5])["function"][-1] == ""
-

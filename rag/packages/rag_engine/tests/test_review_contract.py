@@ -1,9 +1,6 @@
 """原判定・適用方針・引用修復を区別する契約。実モデルは呼ばない。"""
 
-import pytest
-
-from rag_engine.generation.grounded import CheckedItem, answer_use, verify
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem, GroundedItemReview
+from rag_engine.models.llm import GroundedAudit, GroundedItemReview
 
 
 def span(text: str) -> dict:
@@ -31,4 +28,3 @@ def test_generation_audit_schema_has_no_unread_copy_fields() -> None:
     """本番に読み手の無い欄を、モデルの応答の schema に戻さない（#4152）。"""
     properties = GroundedItemReview.model_json_schema()["properties"]
     assert not {"support_quote", "supported_fragments"} & properties.keys()
-

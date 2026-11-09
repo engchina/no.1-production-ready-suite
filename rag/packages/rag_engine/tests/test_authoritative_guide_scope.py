@@ -2,14 +2,10 @@
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
-import pytest
-from test_guide_steps import context, parent
+from test_guide_steps import context
 
-from rag_engine.config import get_settings
 from rag_engine.generation import answering, grounded
-from rag_engine.generation.execution_record import AnswerExecutionError
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep
 
@@ -57,7 +53,7 @@ def test_scope_reaches_generation_without_any_material_association() -> None:
         original_question=QUESTION, expanded_question=QUESTION, path=Path("synthetic.json"), guide_task_scope=plan().task_scope
     )
     assert not runtime.has_matches
-    prompt = answering._grounded_prompt(QUESTION, [], context(), (),  None, runtime, None, template="{{question}}\n{{answer_context}}")
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, runtime, None, template="{{question}}\n{{answer_context}}")
     assert '"guide_id": "synthetic-guide"' in prompt
     assert '"step_id": "conditional"' in prompt
     assert '"required": false' in prompt
@@ -75,9 +71,9 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
         guide_condition_notices=(note,),
     )
     template = "{{question}}\n{{answer_context}}"
-    prompt = answering._grounded_prompt(QUESTION, [], context(), (),  None, runtime, None, template=template)
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, runtime, None, template=template)
     without = answering._grounded_prompt(
-        QUESTION, [], context(), (),  None, replace(runtime, guide_condition_notices=()), None, template=template
+        QUESTION, [], context(), (), None, replace(runtime, guide_condition_notices=()), None, template=template
     )
     assert prompt.count(note) == 1
     assert prompt.index("guide_task_scope:\n") < prompt.index("guide_condition_notices:\n") < prompt.index(note)
@@ -85,4 +81,3 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
     # 補足の読み方は、業務ガイドの部品があるときに渡す 1 か所にだけある。
     assert grounded.GUIDE_RULES_PROMPT.count("guide_condition_notices") == 1
     assert "guide_condition_notices" not in grounded.GENERATE_SYSTEM_PROMPT
-

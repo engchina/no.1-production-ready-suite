@@ -10,11 +10,9 @@ import json
 import pytest
 from citation_unit_support import generated_fixture
 from pydantic import ValidationError
-from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
-from rag_engine.adapters.oci import InvalidStructuredOutput, LlmRunawayOutput, LlmStreamOutputMissing
 from rag_engine.generation import grounded
-from rag_engine.generation.answering import _grounded_spans
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft, RequestScopePlan
 

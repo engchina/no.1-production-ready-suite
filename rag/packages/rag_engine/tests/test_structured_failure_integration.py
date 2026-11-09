@@ -9,7 +9,6 @@ from unittest.mock import Mock
 
 import pytest
 from pydantic import BaseModel, ValidationError
-from test_audit_failure_preserves_draft import run_failed_audit
 from test_grounded_answer import context, record
 
 from rag_engine.adapters import oci

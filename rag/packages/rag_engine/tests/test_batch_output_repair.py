@@ -12,7 +12,14 @@ from test_batched_evidence import block, config, finding, prepare, span
 from rag_engine.adapters import oci
 from rag_engine.generation import batched_evidence
 from rag_engine.generation.answering import _invalid_structured_output
-from rag_engine.generation.batch_output_repair import BatchRangeInvalid, batch_failure_summary, batch_repair_prompt, batch_validation_detail, range_error_reason, repair_feedback_upper_bound
+from rag_engine.generation.batch_output_repair import (
+    BatchRangeInvalid,
+    batch_failure_summary,
+    batch_repair_prompt,
+    batch_validation_detail,
+    range_error_reason,
+    repair_feedback_upper_bound,
+)
 from rag_engine.generation.batched_evidence import BatchReading, _reading_model, reading_unit_counts
 from rag_engine.generation.input_budget import model_input_measurement
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline

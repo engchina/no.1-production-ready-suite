@@ -153,7 +153,11 @@ def test_only_the_gap_written_by_the_model_is_shown_as_unconfirmed() -> None:
 def test_a_citation_that_does_not_exist_disappears_without_a_mark() -> None:
     draft = GroundedDraft(
         request_coverage=[],
-        items=[GroundedItem(kind="rule", request_id="Q1", text="存在しない根拠の説明", citations=[GroundedCitation(evidence_id="E99", lines="1")])],
+        items=[
+            GroundedItem(
+                kind="rule", request_id="Q1", text="存在しない根拠の説明", citations=[GroundedCitation(evidence_id="E99", lines="1")]
+            )
+        ],
         summary="",
         confidence="low",
     )
@@ -199,7 +203,11 @@ def test_retrieval_counts_separate_found_and_passed() -> None:
     response, _calls = _run(
         question,
         ctx,
-        lambda units: {"answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW])], "summary_part_indexes": [0], "confidence": "high"},
+        lambda units: {
+            "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW])],
+            "summary_part_indexes": [0],
+            "confidence": "high",
+        },
     )
     counts = response.generation_trace["retrieval_counts"]
     assert counts["found"] == 1 and counts["passed_to_model"] >= 1
@@ -237,4 +245,3 @@ def test_audit_settings_are_gone() -> None:
     assert not hasattr(_settings(), "answer_audit_mode")
     assert not hasattr(_settings(), "answer_max_correction_rounds")
     assert replace(_settings()) is not None
-

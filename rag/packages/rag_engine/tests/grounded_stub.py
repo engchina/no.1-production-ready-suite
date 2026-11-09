@@ -8,13 +8,12 @@ payload の検証を生成の出力形式から独立させる。
 import re
 from unittest.mock import patch
 
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture, without_unit_annotations
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 
 

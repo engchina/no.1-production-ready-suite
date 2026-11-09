@@ -14,7 +14,6 @@ from rag_engine.generation.answering import AnswerContext, _grounded_prompt
 from rag_engine.knowledge.prompt_files import DEFAULT_VLM_ANSWER_PROMPT, PROMPT_FILES, VLM_ANSWER_PROMPT_KEY
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.models.llm import ExternalDataItem, GroundedDraft
-from rag_engine.resources.runtime import bind_prompt_overrides
 
 QUESTION = "項目Aの設定を確認する手順を教えてください。"
 

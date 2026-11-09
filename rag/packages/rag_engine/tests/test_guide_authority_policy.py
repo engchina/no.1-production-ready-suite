@@ -1,26 +1,11 @@
 """ガイドの業務範囲と資料の適用性を分離する採用契約。意味判定は合成oracle。"""
 
-import json
-import re
 from copy import deepcopy
-from dataclasses import replace
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import pytest
-from audit_fixtures import legacy_audit_to_wire_fixture
-from citation_unit_support import canonical_fixture
-from openai.lib._parsing._responses import type_to_text_format_param
-
-from rag_engine.config import get_settings
-from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.generation import answering, grounded
-from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.generation.confirmed_context import confirmed_premise_records
+from rag_engine.generation import grounded
 from rag_engine.generation.guide_authority import authoritative_guide_inputs
-from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedDraft, GroundedItem, GroundedItemReview, GroundedRequestReview
+from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedDraft, GroundedItem
 
 QUESTION = "対象の設定を複製する手順は？"
 CORRECT = "対象を選び、複製ボタンを押してから参照元を選択します。"
@@ -128,4 +113,3 @@ def test_authoritative_inputs_keep_required_steps_without_material_and_override_
     assert all(not {"evidence_ids", "source_ids"} & row.keys() for row in contracts)
     assert {identity for _step, _title, sources in steps for identity in sources} == {"actual-source"}
     assert before == (scope, previous_steps, previous_contracts)
-

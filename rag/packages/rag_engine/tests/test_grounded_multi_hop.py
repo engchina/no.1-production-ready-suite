@@ -6,7 +6,7 @@
 支持）を決定的に再現する。
 """
 
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, observed_supports, record, run
+from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedItem

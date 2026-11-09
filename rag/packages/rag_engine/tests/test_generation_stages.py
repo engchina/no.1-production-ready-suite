@@ -3,13 +3,12 @@
 import json
 from typing import Any
 
-import pytest
-from citation_unit_support import generated_fixture, without_unit_annotations
+from citation_unit_support import generated_fixture
 from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
-from rag_engine.generation.citation_wire import generation_draft_wire_model, guided_generation_wire_model
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import RequestScopePlan
 from rag_engine.resources.runtime import bind_prompt_overrides
 

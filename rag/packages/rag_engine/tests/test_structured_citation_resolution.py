@@ -5,7 +5,7 @@ from citation_unit_support import selected_answer_payload
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import canonical_generation_draft
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 SOURCE = "合成の設定画面を開きます。\n合成の内容を入力して保存します。"
 
@@ -68,4 +68,3 @@ def test_real_generation_schema_selects_one_of_identical_sources_by_unit_id(sele
     assert not dropped
     assert checked[0].span["source_id"] == evidence[selected]["source_id"]
     assert checked[0].citation_resolution["selected_unit_ids"] == '["' + chosen + '"]'
-

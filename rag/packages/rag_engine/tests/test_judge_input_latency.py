@@ -12,22 +12,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from audit_fixtures import legacy_audit_result
 from test_answer_llm_latency import _settings as _engine_settings
 from test_enumeration_sufficiency import BUSINESS_DAY_FIVE, DO_NOT_TOUCH, REPORT, RESERVE, _items
 from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context
 from test_section_expansion import _settings as _section_settings
 
 import rag_engine.generation.answering as generation
-from rag_engine.config import ENTERPRISE_AI_LLM_PROVIDER, LLM_PURPOSE_AUDIT, get_settings, llm_reasoning_effort_note
+from rag_engine.config import get_settings
 from rag_engine.generation import crag_support
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT
-
 
 # ---- 監査の推論の量 ---------------------------------------------------------------------------------------
 

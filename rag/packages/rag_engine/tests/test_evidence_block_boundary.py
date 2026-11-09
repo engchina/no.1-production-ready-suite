@@ -49,4 +49,3 @@ def test_the_end_line_does_not_change_units_or_extracted_quotes():
     item = GroundedItem(kind="operation", text="名前を選びます。", citations=[GroundedCitation(evidence_id="E2", lines=last)])
     quoted, error = grounded.cited_quote(item, [evidence])
     assert not error and "[/E2]" not in quoted.quote and quoted.quote in SECOND
-

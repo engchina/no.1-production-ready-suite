@@ -1,17 +1,10 @@
 """監査の実行失敗と材料不足を区別し、初回の有用な本文を保つ。"""
 
-import asyncio
-from concurrent.futures import CancelledError
-from types import SimpleNamespace
-
-import httpx
 import pytest
-from openai import APITimeoutError
 from test_grounded_answer import FakeModel, context, draft, ids, item, record
 
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
-from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline
 
 QUESTION = "対象Aの画面を開く方法は？"
 TEXT = "設定メニューから対象Aの画面を開きます。"
@@ -53,4 +46,3 @@ def test_generation_failure_is_outside_audit_fallback(monkeypatch):
     with pytest.raises(RuntimeError, match="generation failed"):
         grounded.run_round(QUESTION, [], None, prompt="p", image_paths=[], provider_id=None, parse_text=fail, parse_images=None)
     assert calls == [True]
-

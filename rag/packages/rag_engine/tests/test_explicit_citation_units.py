@@ -133,4 +133,3 @@ def test_reordered_siblings_resolve_current_labels_and_never_old_view_content() 
     assert current.citations[0]._extraction["source_id"] == "parent-2"
     assert previous.quote == "開く"
     assert current.citations[0]._extraction["view_sha256"] != previous.citations[0]._extraction["view_sha256"]
-

@@ -74,7 +74,6 @@ from rag_engine.generation.answer_images import (
     prompt_injection_warnings_for_records,
 )
 from rag_engine.generation.answer_labels import answer_labels
-from rag_engine.resources.deadline import deadline_cut_short
 from rag_engine.generation.answer_models import (
     ANSWER_FLOW_DISPLAY_SEPARATOR,
     ANSWER_FLOWS,
@@ -242,6 +241,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank, query_routing_schema
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.context_expansion_trace import bind_context_read_receipt
+from rag_engine.resources.deadline import deadline_cut_short
 from rag_engine.resources.rerank_diagnostics import bind_rerank_context
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
@@ -2702,13 +2702,6 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
 _CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
 
 
-
-
-
-
-
-
-
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
@@ -2904,12 +2897,13 @@ def synthesize_grounded_answer(
     generation_failure_stage = "answer.generate"
     generation_failure_detail: dict[str, Any] = {}
     structured_output_failed = False
-    with _execution_step("回答文の生成", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
+    with _execution_step("回答文の生成と根拠確認", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
         step.input(
             lambda spans=spans: {
                 "質問": question,
                 "根拠": [
-                    {"evidence_id": span.get("evidence_id"), "source_id": span.get("source_id"), "label": span.get("label")} for span in spans
+                    {"evidence_id": span.get("evidence_id"), "source_id": span.get("source_id"), "label": span.get("label")}
+                    for span in spans
                 ],
             }
         )
@@ -3024,7 +3018,7 @@ def synthesize_grounded_answer(
     from rag_engine.generation.section_expansion import answer_unread_view
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
-    unread = list(unread_view.lines)
+    unread = [*unread_view.lines, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())]
     if excluded_count := input_diagnostic.get("excluded_span_count", 0):
         unread.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
     settled = grounded.settle_confirmations(
@@ -3058,7 +3052,9 @@ def synthesize_grounded_answer(
         guide_notes=guide_notes,
         guide_notes_first=guide_notes_first,
     )
-    unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(1 for entry in current.applications if not entry.published)
+    unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(
+        1 for entry in current.applications if not entry.published
+    )
     confidence = "low" if not published else current.draft.confidence
     unsettled = [e for e in published if e.item.applies != "matched"]
     if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
@@ -3313,10 +3309,6 @@ def _request_coverage_budget(settings: Settings) -> CoverageBudget:
     )
 
 
-
-
-
-
 def _cover_guide_steps(
     question: str,
     context: AnswerContext,
@@ -3551,7 +3543,7 @@ def _with_guide_acquisition_notices(response: AnswerResponse, knowledge: Runtime
         return response
     from rag_engine.generation.grounded import render_answer
 
-    rendered = render_answer(response.answer_text, (), unverified_requirements=knowledge.guide_acquisition_notices)
+    rendered = render_answer(response.answer_text, (), unverified=knowledge.guide_acquisition_notices)
     return replace(response, answer_text=rendered.text)
 
 
@@ -3582,10 +3574,6 @@ def _guide_step_lines(trace: dict[str, Any]) -> list[str]:
         note = "、参照の頁に絞った検索あり" if any(s["kind"] == "reference" for s in searches) else ""
         lines.append(f"{step['id']}「{step['title']}」: 根拠 {step['evidence_count']} 件{note}")
     return lines
-
-
-
-
 
 
 def _synthesize_answer_from_context(question: str, context: AnswerContext, settings: Settings, **options: Any) -> AnswerResponse:

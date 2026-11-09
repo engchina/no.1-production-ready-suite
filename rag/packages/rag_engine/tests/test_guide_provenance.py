@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from test_grounded_answer import FakeModel, draft, item, marks
+from test_grounded_answer import FakeModel, draft, item
 from test_grounded_answer import audit as make_audit
-from test_guide_contracts import audit, coverage, review
 from test_guide_step_fulfillment import GUIDE, STEP_A, STEP_B, _ab_context, _ids, _knowledge, _run
 
 from rag_engine.generation import grounded

@@ -43,4 +43,3 @@ def test_question_about_a_written_value_is_still_factual():
 )
 def test_question_about_an_answer_instruction_remains_factual(question):
     assert task_contract(question)["request_units"][0]["kind"] == "request"
-

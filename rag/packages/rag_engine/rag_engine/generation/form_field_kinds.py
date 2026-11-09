@@ -92,8 +92,6 @@ def _record_form_fields_with_page(record: Any) -> list[tuple[str, str, int | Non
     return fields
 
 
-
-
 def _source_id(record: Any) -> str:
     return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
 

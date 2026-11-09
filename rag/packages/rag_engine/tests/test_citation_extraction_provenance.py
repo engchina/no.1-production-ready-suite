@@ -5,11 +5,9 @@ import json
 from contextvars import copy_context
 
 import pytest
-from pydantic import ValidationError
 from test_cite_lines import LONG, item
-from test_grounded_answer import FakeModel, audit, context, draft, record
+from test_grounded_answer import context, record
 
-from rag_engine.config import get_settings
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.models.llm import GroundedCitation, GroundedDraft

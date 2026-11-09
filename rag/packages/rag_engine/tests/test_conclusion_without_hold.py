@@ -9,14 +9,13 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from audit_fixtures import synthetic_explanation
+from audit_fixtures import is_explanation_schema, synthetic_explanation
 from test_grounded_answer import context, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answering import synthesize_grounded_answer
-from audit_fixtures import is_explanation_schema
 
 QUESTION = "項目Aの保存年数を教えてください。"
 RESULT = "項目Aの保存年数は5年です。"
@@ -82,4 +81,3 @@ def test_answered_request_is_not_listed_as_unconfirmed() -> None:
     assert missing not in response.answer_text
     assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["status"] == "linked"
     assert response.insufficient_reason in (None, "")
-

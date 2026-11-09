@@ -259,7 +259,6 @@ class AnswerEvidenceTests(unittest.TestCase):
             [],
             _context(),
             [],
-            
             None,
             None,
             None,

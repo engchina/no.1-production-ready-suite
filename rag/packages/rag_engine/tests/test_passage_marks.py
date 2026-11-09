@@ -10,8 +10,7 @@ from pathlib import Path
 import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
 
-from rag_engine.evaluation.answer_eval import _answer_passages
-from rag_engine.generation import grounded, passage_marks
+from rag_engine.generation import passage_marks
 from rag_engine.generation.answer_labels import answer_labels
 
 

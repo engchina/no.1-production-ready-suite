@@ -283,8 +283,6 @@ class CragRetrievalGradeOutput(_StrictModel):
     )
 
 
-
-
 class SectionExtractionQuote(_StrictModel):
     """長い章節の 1 回分から抜き出した原文 1 つ（#1437。抽出してから統合）。"""
 
@@ -481,12 +479,6 @@ class RequestScopePlan(_StrictModel):
     """章節情報が欠けた候補を、本文の生成とは分けて照合する。"""
 
     request_coverage: list[RequestCoverageRange] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
-
-
-
-
-
-
 
 
 class ExternalDataItem(_StrictModel):
@@ -821,10 +813,6 @@ class GroundedApplicationReview(_StrictModel):
     reason: str = Field(description="判定の根拠を短く。")
 
 
-
-
-
-
 class MissingContentEvidence(_StrictModel):
     """回答の不足内容を補うための原文と出典。意味支持は要求監査が判定する。"""
 
@@ -875,8 +863,6 @@ class GuideRequirementReview(_StrictModel):
         description="要件を扱った回答の items / gap_items / guide_notes の index。",
     )
     reason: str = Field(max_length=600, description="不足している操作・条件。充足なら空文字。")
-
-
 
 
 class GroundedAudit(_StrictModel):

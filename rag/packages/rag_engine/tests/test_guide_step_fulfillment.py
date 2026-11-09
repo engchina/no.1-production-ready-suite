@@ -10,15 +10,12 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from test_grounded_answer import FakeModel, audit, context, draft, item, marks, record
+from test_grounded_answer import context, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.generation import grounded
-from rag_engine.generation.answer_envelope import build_envelope
 from rag_engine.generation.answering import _grounded_spans, synthesize_grounded_answer
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan
 
 QUESTION = "設定 A を変更する手順を教えてください"

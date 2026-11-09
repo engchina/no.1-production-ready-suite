@@ -138,4 +138,3 @@ def run():
             "申請の期限はいつですか。", AnswerContext(records=[record], text=TEXT), settings, image_prompt_mode="text_only"
         ).response
     return response, calls
-

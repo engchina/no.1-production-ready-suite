@@ -1,10 +1,7 @@
 """摘要と最終本文の引用対応を、意味監査の実施とは別に検証する。"""
 
-import pytest
-from test_audit_modes import _run
-from test_grounded_answer import FakeModel, context, draft, ids, item, record
+from test_grounded_answer import context, draft, ids, item, record
 
-from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedDraft
 
 
@@ -25,4 +22,3 @@ def test_collapsed_identical_items_reindex_summary_links():
     model = GroundedDraft.model_validate(value)
     assert len(model.items) == 1
     assert model.summary_item_indexes == [0]
-

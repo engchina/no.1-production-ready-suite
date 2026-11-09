@@ -61,8 +61,6 @@ def range_error_reason(start_line: str, end_line: str, unit_counts: Mapping[str,
     return {"citation_range_out_of_bounds": "range_out_of_bounds", "citation_range_invalid": "range_inverted"}.get(code or "", code)
 
 
-
-
 def batch_validation_detail(error: Exception, schema: Mapping[str, Any]) -> dict[str, Any]:
     """共有の匿名診断へ、分割読取の固定プロトコル違反だけを添える。"""
     detail = {"schema": "BatchReading", **structured_failure_details(error, schema)}

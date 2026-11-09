@@ -14,7 +14,7 @@ import unittest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, record, run
 
 from rag_engine.generation import grounded
-from rag_engine.generation.answer_envelope import build_envelope, requires_environment_data
+from rag_engine.generation.answer_envelope import requires_environment_data
 from rag_engine.models.llm import GroundedDraft
 
 MANUAL = "portal-operations-manual.pdf"

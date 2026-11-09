@@ -1,7 +1,5 @@
 """手順の全要件と順序の検査。"""
 
-import pytest
-
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan
@@ -93,4 +91,3 @@ def _statuses_from_audit(texts, reviews):
     coverage = grounded.guide_step_coverage(_SHARED_STEPS, checked, [span], (), dict(_SHARED_TERMS))
     result = grounded.apply_guide_contracts(coverage, checked, _SHARED_CONTRACTS, audit(*reviews))
     return [step["status"] for step in result]
-

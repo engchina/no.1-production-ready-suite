@@ -592,8 +592,6 @@ def is_citation_line(text: str) -> bool:
     return _is_reference_only(value) or _is_document_location(value) or _is_document_section(value)
 
 
-
-
 # 業務ガイドが見つからなかったことだけを述べる文 (#1452。「補足：この内容に当たる公開の業務ガイドは見つかりませんでした
 # （`rag_lookup_guides` の結果は0件）。」)。業務ガイドの検索の結果は検証の根拠に無いので、主張として監査すると必ず外れる。
 # 前置きは業務ガイドを修飾するだけの語（は・が・を・数字・引用を含まない）に限る（「部門長の承認が要る業務ガイドはありません」は主張）。
@@ -615,8 +613,6 @@ def is_guide_not_found(text: str) -> bool:
     if not match or _GUIDE_NOT_FOUND_LEAD.search(match.group("lead")):
         return False
     return not is_operation_instruction(value)
-
-
 
 
 @dataclass(frozen=True)
@@ -650,10 +646,6 @@ _operation_cues = per_pack(_build_operation_cues)
 def is_operation_instruction(text: str) -> bool:
     """具体的な操作指示を確認留保として無引用で通さないための補助判定（語は言語資源）。"""
     return bool(_operation_cues().instruction.search(text))
-
-
-
-
 
 
 # 総称語だけの削除対象。「データを削除」は資料の具体名（「履歴情報」「行」）と一致しないので対象にしない (#696)。

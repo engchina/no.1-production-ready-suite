@@ -11,8 +11,6 @@ import itertools
 import unittest
 from dataclasses import replace
 
-from test_grounded_answer import FakeModel, audit, context, draft, ids
-
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
@@ -21,7 +19,6 @@ from rag_engine.generation.answer_envelope import (
     EXCLUDED_KNOWN_CONDITION,
     EXCLUDED_NOT_DECISIVE,
     EXCLUDED_VERSION_SETTLED,
-    build_envelope,
     confirmation_item_facts,
     requires_environment_data,
     settle_confirmation_items,
@@ -151,6 +148,7 @@ class WhoCanAnswerDefinitionTest(unittest.TestCase):
         # 3 つの事実の定義は schema の 1 か所だけ（指示に重ねない）。
         self.assertNotIn("who_can_answer", grounded.GENERATE_SYSTEM_PROMPT)
         self.assertIn("項目の書き方は応答 schema に従う", grounded.GENERATE_SYSTEM_PROMPT)
+
 
 V1_TITLE = "地域別集計表 出力手順 第1版"
 V2_TITLE = "地域別集計表 出力手順 第2版"

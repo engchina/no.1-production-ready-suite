@@ -245,4 +245,3 @@ def _entry(request_id: str, text: str, page: int) -> grounded.CheckedItem:
         ),
         span=span,
     )
-

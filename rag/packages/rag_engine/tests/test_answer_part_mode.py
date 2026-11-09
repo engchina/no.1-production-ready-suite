@@ -1,12 +1,10 @@
 """要点の役割（mode）を答えの型より先に決め、導出の要点では source 型を選べなくする（#4611。#4586 の規則を schema で）。"""
 
-import pytest
 from openai.lib._parsing._responses import type_to_text_format_param
-from pydantic import ValidationError
 
 from rag_engine.generation.answer_parts_wire import answer_parts_model
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 
 TEXT = "単価は300円です。\n数量は4個です。"
 

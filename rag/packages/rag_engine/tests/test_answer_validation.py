@@ -515,4 +515,3 @@ def test_quote_format_normalization_does_not_accept_changed_content(quote: str, 
     from rag_engine.generation.grounded import quote_in_text
 
     assert not quote_in_text(quote, text)
-

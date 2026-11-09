@@ -4,13 +4,12 @@
 確定の分を残した期限が切れても error にせず、確かめ終わった分で条件つきの回答を返す。
 """
 
-import time
 import unittest
 from contextvars import copy_context
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, marks, record, run
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.adapters import oci
 from rag_engine.generation import execution_record, grounded
@@ -155,6 +154,7 @@ class LlmUsageTest(unittest.TestCase):
         )
         # usage の無い応答（スタブ・古い endpoint）でも失敗しない。
         oci._record_usage(SimpleNamespace(status="completed"), SimpleNamespace(model="m"), GroundedAudit, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

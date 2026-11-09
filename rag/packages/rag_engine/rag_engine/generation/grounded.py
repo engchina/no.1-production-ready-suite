@@ -519,8 +519,6 @@ AUDIT_SYSTEM_PROMPT = (
 )
 
 
-
-
 # ---- 原文へのタグ付け -------------------------------------------------------
 
 
@@ -1030,9 +1028,7 @@ _PROCEDURE_KINDS = frozenset({"operation", "confirmation"})
 
 
 def answer_use(entry: CheckedItem) -> str:
-    """回答に出した item が、その箇所をどう使ったか（``ANSWER_USE_CONFIRMED`` / ``ANSWER_USE_REFERENCE``）。
-
-    """
+    """回答に出した item が、その箇所をどう使ったか（``ANSWER_USE_CONFIRMED`` / ``ANSWER_USE_REFERENCE``）。"""
     if entry.quote_only or entry.item.kind == "gap" or entry.item.applies == "unverified":
         return ANSWER_USE_REFERENCE
     return ANSWER_USE_CONFIRMED
@@ -1076,10 +1072,6 @@ def _document_order(checked: Sequence[CheckedItem]) -> dict[tuple[str, ...], int
 def _by_document(entries: Sequence[CheckedItem], order: Mapping[tuple[str, ...], int]) -> list[CheckedItem]:
     """同じ文書の説明を続けて並べる。文書の中は items の順のまま、出典の無い説明は後ろに置く。"""
     return sorted(entries, key=lambda entry: order.get(_document_key(entry.span), len(order)) if entry.span else len(order) + 1)
-
-
-
-
 
 
 def _scope_decisions(plan: Any, label: str) -> list[Any]:
@@ -1566,8 +1558,6 @@ def _normalized(item: GroundedItem, span: dict) -> GroundedItem:
     elif condition != item.condition:
         update["condition"] = condition
     return item.model_copy(update=update) if update else item
-
-
 
 
 # 名詞の後に残った格助詞・係助詞（「検証用アカウントには」）。原文の句をそのまま condition に写すと残る (#1501)。
@@ -2514,12 +2504,6 @@ def _line_citation_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict
     return direct if direct else _named_spans(item, spans)
 
 
-
-
-
-
-
-
 def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequence[str] = ()) -> tuple[GroundedItem, str]:
     """本検証の ID と行から原文を抽出する。抽出・提示版・意味支持を別々に記録する。"""
     item = _with_extraction(item, {})  # モデルや旧 round の内部 flag は採用しない。
@@ -3085,9 +3069,7 @@ def run_round(
     """
     premise_records = confirmed_premise_records(confirmed_premises, confirmed_premise_sources)
     if guide_task_scope:
-        guide_steps, _optional_steps, guide_step_contracts = authoritative_guide_inputs(
-            guide_task_scope, guide_steps, guide_step_contracts
-        )
+        guide_steps, _optional_steps, guide_step_contracts = authoritative_guide_inputs(guide_task_scope, guide_steps, guide_step_contracts)
     started, usage_before = monotonic(), usage_snapshot()
     image_fallback = ""
     presentation = _retrieved_heading_context(spans)
@@ -3304,7 +3286,9 @@ def run_round(
     plan_sources: set[str] = set()
 
     def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
-        canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans), unit_catalog=unit_catalog, question=question)
+        canonical = canonical_generation_draft(
+            value, lambda link: _scope_range_text(link, spans), unit_catalog=unit_catalog, question=question
+        )
         if getattr(type(value), "_uses_typed_answer_parts", False):
             # 要点の型の生成では、計画は basis から導いた（#4611）。引いた根拠はすべて計画にあるので足す行は無い。
             plan_sources.add("derived_from_basis")
@@ -3437,9 +3421,7 @@ def run_round(
         ref = _evidence_ref(entry["evidence_id"], spans)
         if ref:
             entry["evidence_ref"] = ref
-    applications = check_applications(
-        draft.applications, {entry.draft_index: entry for entry in checked if entry.draft_index is not None}
-    )
+    applications = check_applications(draft.applications, {entry.draft_index: entry for entry in checked if entry.draft_index is not None})
     from rag_engine.generation.answer_parts import check_answer_parts
 
     # 要求ごとの要点の対応は診断の記録にだけ残す。不足の行は足さない（モデルが gap と書いたものだけを出す。#4714）。
@@ -3504,8 +3486,6 @@ def deterministic_request_audit(request_units: Sequence[Mapping[str, Any]], chec
     )
 
 
-
-
 class DraftGenerationInvalid(RuntimeError):
     """回答文の生成の出力が、再実行の後も構造化出力の契約を満たさなかった（この round の草稿が無い。#3849）。
 
@@ -3538,6 +3518,10 @@ def generation_failure_detail(exc: Exception) -> dict[str, Any]:
 
 def timed_out_round(question: str) -> Round:
     """生成が終わらなかったときの、草稿の無い round（#1516）。"""
-    return Round(answer_labels().neutral_summary, GroundedDraft(items=[], summary="", confidence="low"), [], [], requests=list(answer_requirements(question)))
-
-
+    return Round(
+        answer_labels().neutral_summary,
+        GroundedDraft(items=[], summary="", confidence="low"),
+        [],
+        [],
+        requests=list(answer_requirements(question)),
+    )

@@ -5,9 +5,6 @@ from copy import deepcopy
 from typing import Any
 
 
-
-
-
 def authoritative_guide_inputs(
     task_scope: Sequence[dict[str, Any]],
     steps: Sequence[tuple[str, str, Sequence[str]]],
@@ -35,5 +32,3 @@ def authoritative_guide_inputs(
         )
         selected_contracts.append(contract)
     return tuple(selected_steps), tuple(optional), tuple(selected_contracts)
-
-

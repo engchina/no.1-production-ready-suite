@@ -144,6 +144,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         result = self.run_flow()
         self.assertNotIn("根拠に画像がありません", result.question_display)
 
+
 class CragFlowStepDetailsTest(unittest.TestCase):
     """補正の回答フロー: 根拠の確認の判定・理由・次の対処、探し直しの検索文を詳細に残す。"""
 

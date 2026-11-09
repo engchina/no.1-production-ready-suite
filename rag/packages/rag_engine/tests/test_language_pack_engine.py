@@ -196,5 +196,6 @@ class LanguagePackEngineTest(unittest.TestCase):
         ):
             self.assertTrue(is_operation_instruction("申請書を提出します"))
 
+
 if __name__ == "__main__":
     unittest.main()

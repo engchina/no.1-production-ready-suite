@@ -651,8 +651,6 @@ def _records_by_rerank_ranks(
     return selected
 
 
-
-
 def _original_candidate_index(index: int, candidate_indices: Sequence[int] | None) -> int:
     if candidate_indices is None or index < 0 or index >= len(candidate_indices):
         return index

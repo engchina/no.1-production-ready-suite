@@ -1,20 +1,11 @@
 """用語の検索拡張と回答補助を個別に制御する。"""
 
 import json
-import tempfile
-import unittest
-from dataclasses import replace
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from test_answer_generation import _answer_output, _chunk_run_stub, _hybrid_result, _stored_child
 
 from rag_engine.config import get_settings
-from rag_engine.generation.answering import SIMPLE_RETRIEVAL_LABEL, STANDARD_ANSWER_FLOW_LABEL, answer_question_result
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context
-from rag_engine.retrieval.query_channels import expression_channels
-from rag_engine.retrieval.weighted_rrf import query_key
 
 
 @pytest.mark.parametrize("search,answer", [(False, False), (True, False), (False, True), (True, True)])
@@ -80,4 +71,3 @@ def test_injected_context_cannot_bypass_disabled_term_policy(tmp_path):
     assert disabled.expanded_question == "用語A"
     assert disabled.prompt_context() == ""
     assert not disabled.retrieval_terms
-

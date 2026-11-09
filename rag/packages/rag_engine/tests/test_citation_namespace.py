@@ -1,8 +1,5 @@
 """Guide識別子は要求のIDであり、文書の事実根拠IDにしない。"""
 
-import pytest
-from pydantic import ValidationError
-
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 

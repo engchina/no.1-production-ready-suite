@@ -22,7 +22,6 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_parts_wire import DERIVATION_QUESTION_TYPES
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.citation_wire import canonical_generation_draft
 from rag_engine.generation.grounded import generation_output_model
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "source_only_derivation_outputs.json").read_text(encoding="utf-8"))

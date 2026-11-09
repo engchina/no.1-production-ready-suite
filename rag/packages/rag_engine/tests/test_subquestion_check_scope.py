@@ -1,6 +1,5 @@
 """小問の語の有無から、支持や不足を自動判定しない。"""
 
-import pytest
 from test_grounded_answer import context, draft, item, record
 
 from rag_engine.generation import grounded
@@ -32,4 +31,3 @@ def test_missing_error_word_does_not_invent_a_gap():
     assert not gaps
     assert all(entry.request_id == "Q1" for entry in gaps)
     assert all("項目A" not in entry.text for entry in gaps)
-

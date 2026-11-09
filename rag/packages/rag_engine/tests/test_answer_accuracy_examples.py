@@ -1,17 +1,12 @@
 """合成の操作説明書・CSV・応答で、修正前後を同じ入力で検証する。"""
 
-import csv
 import json
 import re
 from dataclasses import replace
 from pathlib import Path
 
-import pytest
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, record
+from test_grounded_answer import context, record
 
-from rag_engine.config import get_settings
-from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import CoverageBudget, coverage_targets, request_rows, run_targeted_retrievals
 
@@ -51,4 +46,3 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
     assert stop == ""
     after = request_rows(targets)
     assert after[0]["status"] == "unassessed"
-

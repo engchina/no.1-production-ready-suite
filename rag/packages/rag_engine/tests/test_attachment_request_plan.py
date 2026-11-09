@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from test_grounded_answer import FakeModel, context, ids, marks, record
+from test_grounded_answer import FakeModel, context, ids, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -56,9 +56,7 @@ def _run(drafts: list[dict]):
         raise AssertionError("外部呼び出しは不要")
 
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        result = synthesize_grounded_answer(
-            QUESTION, _ctx(), replace(get_settings()), image_prompt_mode="text_only"
-        ).response
+        result = synthesize_grounded_answer(QUESTION, _ctx(), replace(get_settings()), image_prompt_mode="text_only").response
     return result, model
 
 

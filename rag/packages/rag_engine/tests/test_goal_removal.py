@@ -6,15 +6,11 @@
 """
 
 import json
-import unittest
 from unittest.mock import patch
 
 import pytest
-from test_answer_generation import _answer_output, _chunk_run_stub, _hybrid_result, _stored_child
 
-from rag_engine.config import get_settings
 from rag_engine.generation import grounded
-from rag_engine.generation.answering import SIMPLE_RETRIEVAL_LABEL, STANDARD_ANSWER_FLOW_LABEL, answer_question_result
 from rag_engine.generation.query_prompts import _prompt_task_contract
 from rag_engine.retrieval.request_coverage import coverage_targets
 from rag_engine.retrieval.task_contract import COUNT_REQUEST, LIST_REQUEST, STEPS_REQUEST, explicit_requests, task_contract
@@ -95,4 +91,3 @@ def test_llm_context_has_no_goal_and_keeps_requests():
 def test_per_request_coverage_targets_do_not_depend_on_a_category():
     targets = coverage_targets(PLAIN_QUESTION, lambda text: text.replace("。", " ").split())
     assert [target.id for target in targets] == ["Q1"]
-

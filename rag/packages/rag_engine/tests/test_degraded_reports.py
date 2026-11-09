@@ -12,14 +12,13 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from test_answer_generation import _answer_context, _answer_output, _chunk_record, _chunk_run_stub, _crag_grade
+from test_answer_generation import _answer_context, _chunk_record, _chunk_run_stub
 from test_request_coverage import _missing, context, parent, split
 
 import rag_engine.generation.answering as answering

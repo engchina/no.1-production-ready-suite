@@ -24,6 +24,7 @@ QUESTION_TYPE_DESCRIPTION = (
     "definition=語・項目の意味、procedure=手順・操作、comparison=複数の対象の比較、other=それ以外。"
 )
 
+
 # source 型だけの出力を作り直すときに、生成の user の入力の後ろへ足す部品（#4586）。何が違反でどう直すかだけを書く。
 # 既定の user の入力（Step 6 まで）の続きの番号で書き、組み立てる時に ``continue_prompt_steps`` で振り直す。
 # 表の見出しの行だけを basis に選んだ source 型の要点を作り直すときに、生成の user の入力の後ろへ足す部品（#4592）。
@@ -178,12 +179,6 @@ def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
     return cleaned.text
 
 
-
-
-
-
-
-
 def _attach_basis_quotes(parts: list[dict[str, Any]], applications: list[dict[str, Any]]) -> None:
     """導出の要点に、依存する basis の原文の items を引用として結ぶ（結論の言い換えで条件が消えても原文を示す）。
 
@@ -314,11 +309,7 @@ def canonical_answer_parts(
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "direct"
-                if kind == "source"
-                else "derived"
-                if kind == "answer"
-                else "gap",
+                "result_kind": "direct" if kind == "source" else "derived" if kind == "answer" else "gap",
                 "item_indexes": [] if kind == "answer" else indexes,
                 "application_indexes": app_indexes,
             }

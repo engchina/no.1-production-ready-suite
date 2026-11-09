@@ -6,11 +6,10 @@ from pathlib import Path
 
 from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
-from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION, build_envelope, envelope_requests, fallback_envelope
+from rag_engine.generation.answer_envelope import fallback_envelope
 
 
 class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
-
     def test_refusal_is_insufficient_evidence_even_when_related_quotes_are_shown(self):
         rule = "⑤本部からの連絡メモが届くと「連」と表示されるので、ボタンを押します。"
         ctx = context(record(0, rule, "［販売管理⇒関連情報⇒取引先メモ管理］", page=3))
@@ -35,7 +34,6 @@ class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
 
 
 class AnswerEnvelopeBuildTest(unittest.TestCase):
-
     def test_fallback_envelope_for_answers_without_grounded_structure(self):
         self.assertEqual(fallback_envelope(answered=False, insufficient_reason="根拠なし")["outcome"], "insufficient_evidence")
         self.assertEqual(fallback_envelope(answered=True)["outcome"], "answered")

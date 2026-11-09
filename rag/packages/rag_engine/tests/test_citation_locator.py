@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from application_verdict_stub import audit_reply, is_application_schema
-from audit_fixtures import synthetic_explanation
+from audit_fixtures import is_explanation_schema, synthetic_explanation
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -16,7 +16,6 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from audit_fixtures import is_explanation_schema
 from rag_engine.generation.citation_locator import clean_evidence_locators
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
@@ -199,4 +198,3 @@ def test_a_sent_id_in_the_derivation_becomes_the_source_name() -> None:
     assert "E1" not in result.answer_text
     assert f"「synthetic.txt p.1」によると{SENTENCE}。" in result.answer_text
     assert result.generation_trace["applications"][0]["published"] is True
-

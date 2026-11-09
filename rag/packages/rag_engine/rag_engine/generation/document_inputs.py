@@ -56,5 +56,3 @@ def document_priority(spans: Sequence[dict[str, Any]], source_scores: Mapping[st
     ranked = iter(sorted((members for index, members in enumerate(groups) if index not in catalog), key=rank))
     ordered = [members if index in catalog else next(ranked) for index, members in enumerate(groups)]
     return {document_key(members[0]): index for index, members in enumerate(ordered)}
-
-

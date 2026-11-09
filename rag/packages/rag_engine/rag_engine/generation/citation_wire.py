@@ -172,9 +172,7 @@ def canonical_generation_draft(
         if unit_catalog is None:
             raise ValueError("送達した引用単位の対応がありません。")
         # 要求ごとの根拠の計画はモデルの出力に無く、要点の basis から導く（#4611）。
-        return canonical_answer_parts(
-            value, unit_catalog, question=question
-        )
+        return canonical_answer_parts(value, unit_catalog, question=question)
 
     if getattr(type(value), "_uses_unit_ids", False):
         if unit_catalog is None:

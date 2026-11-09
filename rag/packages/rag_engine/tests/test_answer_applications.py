@@ -2,12 +2,11 @@
 
 import unittest
 
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture
-from test_grounded_answer import FakeModel, audit, context, draft, ids, observed_audit, observed_supports, record, run
+from test_grounded_answer import FakeModel, audit, context, draft, ids, record, run
 
 from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE
-from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 
 RULE_TEXT = "延滞料の計算\n延滞料は、延滞日数に100円を掛けた額とする。"
@@ -43,7 +42,6 @@ def answer(applications, *, rule_review=("supported", "matched"), application_re
 
 
 class ApplicationTest(unittest.TestCase):
-
     def test_application_with_internal_labels_is_not_published(self):
         """「規則0」「E12」のような内部の番号を利用者向けの文に書いた当てはめは公開しない（#2165）。"""
         result = answer([application(reasoning="規則0により12日×100円＝1200円")])
@@ -93,4 +91,3 @@ def neutral_answer(question, step_draft, step_audit):
         }
     )
     return run(model, ctx, question).response, model
-

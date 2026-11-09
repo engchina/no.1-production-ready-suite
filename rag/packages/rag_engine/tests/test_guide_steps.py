@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,8 +11,7 @@ import pytest
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.generation.grounded import build_context_block, guide_step_evidence_lines
-from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.generation.grounded import guide_step_evidence_lines
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import (
@@ -322,4 +320,3 @@ def test_engine_settings_default_and_env_for_guide_steps() -> None:
     assert default.guide_step_deadline_seconds == 60.0  # 期限の既定は上限の 60 秒（#2826）
     assert (custom.guide_step_retrieval_enabled, custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (False, 2, 3)
     assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds, custom.extra_retrieval_max_queries) == (1, 2.5, 5)
-

@@ -3,13 +3,12 @@
 import re
 from dataclasses import replace
 
-from audit_fixtures import synthetic_explanation
+from audit_fixtures import is_explanation_schema, synthetic_explanation
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from audit_fixtures import is_explanation_schema
 
 
 def run(*, derived: bool, readback: str | None = None):
@@ -84,4 +83,3 @@ def test_source_formal_flow_publishes_original_without_derivation_call():
     assert draft["answer_parts"][0]["result_kind"] == "direct"
     assert draft["summary_item_indexes"] == [0]
     assert draft["summary_application_indexes"] == []
-

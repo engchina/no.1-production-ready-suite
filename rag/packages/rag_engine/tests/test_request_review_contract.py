@@ -46,4 +46,3 @@ def test_invalid_status_enum_is_a_schema_error_not_a_missing_result():
     with pytest.raises(ValidationError) as error:
         GroundedAudit.model_validate(payload)
     assert any(row["type"] == "literal_error" and row["loc"] == ("request_reviews", 0, "status") for row in error.value.errors())
-

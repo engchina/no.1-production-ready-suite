@@ -5,18 +5,14 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-import pytest
 from application_verdict_stub import audit_reply, is_application_schema
-from audit_fixtures import synthetic_explanation
+from audit_fixtures import is_explanation_schema, synthetic_explanation
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.generation import applications, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from audit_fixtures import is_explanation_schema
-from rag_engine.models.llm import GroundedApplication, GroundedCitation, GroundedItem
 
 RULE = "受付の日を含め14暦日なので4月14日まで有効で、4月15日に停止する。"
 QUESTION = "対象Xを2031年4月1日に受け付けました。いつまで有効ですか？"
@@ -85,4 +81,3 @@ def test_summary_selection_cannot_add_a_year_absent_from_the_existing_result() -
     assert len(prompts) == 1
     assert WRONG not in result.answer_text and RIGHT in result.answer_text
     assert result.answer_text.startswith(RIGHT)
-

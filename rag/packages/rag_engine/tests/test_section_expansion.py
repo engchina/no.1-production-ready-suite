@@ -10,7 +10,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
@@ -26,7 +26,6 @@ from rag_engine.generation.answering import (
     synthesize_grounded_answer,
 )
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.models.storage import StoredChunk
 from rag_engine.retrieval.context_builder import (

@@ -3,14 +3,11 @@
 import json
 
 import pytest
-from application_verdict_stub import audit_reply, is_application_schema
-from audit_fixtures import synthetic_explanation
 from openai.lib._parsing._responses import type_to_text_format_param
 from pydantic import ValidationError
 from test_citation_unit_ids import snapshot
 
 from rag_engine.generation.answer_parts_wire import answer_parts_model
-from audit_fixtures import is_explanation_schema
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 
@@ -210,4 +207,3 @@ def test_maximum_length_result_survives_canonicalization_without_truncation():
     raw["answer_parts"][0]["answer"]["result"] = "あ" * 600
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert draft.applications[0].result == "あ" * 600
-

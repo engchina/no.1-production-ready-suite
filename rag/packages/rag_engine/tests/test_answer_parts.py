@@ -1,6 +1,5 @@
 """複合要求の各要点の出力参照を検証し、意味支持と区別する。"""
 
-from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest

@@ -563,8 +563,6 @@ def _record_matches_crag_relevant_ids(record: AnswerRecord, keys: set[str]) -> b
     return bool(record_keys & keys)
 
 
-
-
 def _valid_crag_rewrite(value: str, original_question: str, existing: Sequence[str]) -> str:
     text = _trim_generated_text(value, MAX_GENERATED_QUERY_CHARS)
     if query_rejection_reason(original_question, text):

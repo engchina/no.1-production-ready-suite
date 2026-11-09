@@ -1,14 +1,11 @@
 """引用の ID・範囲の検証と、本文の内部根拠ラベルの除去。"""
 
-import json
-
 import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, item, record
 
 from rag_engine.config import get_settings
-from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
-from rag_engine.generation.answering import _grounded_spans, synthesize_grounded_answer
+from rag_engine.generation.answering import _grounded_spans
 from rag_engine.models.llm import GroundedDraft
 
 QUESTION = "一覧から対象を送信する方法"
@@ -70,4 +67,3 @@ def test_a_real_document_code_is_not_an_internal_label():
     spans = [{"text": "エラーコード E6（E6）は接続エラーです。", "evidence_id": "a", "label": "E1"}]
     assert grounded._clean_evidence_labels("エラーコード E6（E6）を確認します。（E1）", spans) == "エラーコード E6（E6）を確認します。"
     assert grounded._clean_evidence_labels("コード E60 を確認します。E6", [{"text": "コード E60"}]) == "コード E60 を確認します。"
-

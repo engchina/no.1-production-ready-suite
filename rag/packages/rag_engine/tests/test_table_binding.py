@@ -5,7 +5,6 @@ import pytest
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.table_binding import evidence_tables, unbound_table_values
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 # 区分と選択肢の値の表（見出しは <th>）。区分の名前はローマ数字だけが違う。
 TABLE = (

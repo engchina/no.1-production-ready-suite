@@ -7,8 +7,6 @@ from pydantic import BaseModel, Field, create_model
 from rag_engine.models.llm import DefaultResponseLanguage, ExplicitResponseLanguage, ResponseLanguage
 
 
-
-
 def generation_language_schema(base: type[BaseModel], question: str) -> type[BaseModel]:
     """引用候補を原質問の全文と空白区切りの連続部分に固定し、言語名を生成させない。"""
     fragments = tuple(dict.fromkeys([question, *question.split()]))

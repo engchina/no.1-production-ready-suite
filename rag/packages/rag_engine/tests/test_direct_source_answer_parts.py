@@ -178,4 +178,3 @@ def test_empty_catalog_keeps_only_gap():
     raw["answer_parts"][0]["answer"] = {"kind": "source", "basis": {"unit_ids": []}}
     with pytest.raises(ValidationError):
         model.model_validate(raw)
-

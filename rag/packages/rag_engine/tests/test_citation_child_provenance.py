@@ -3,7 +3,7 @@
 同じ親（まとまり）・同じ頁に、見出し・注意の子 H と図の説明の子 F がある合成の文書で確かめる。
 """
 
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -12,7 +12,6 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_payload import answer_evidence_items
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from audit_fixtures import is_audit_wire
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans

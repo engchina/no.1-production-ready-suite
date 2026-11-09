@@ -21,7 +21,6 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.applications import check_applications
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.citation_wire import generation_draft_wire_model
@@ -151,4 +150,3 @@ def _derivation_reasoning(reasoning: str) -> Any:
         return value
 
     return generated
-
