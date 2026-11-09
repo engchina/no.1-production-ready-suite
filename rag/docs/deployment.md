@@ -446,6 +446,8 @@ uv run python -m rag_engine.knowledge.answer_migration /path/to/answer.json --ap
 
 `init_script.sh` は承認を付けずに `initialize` を実行する。データを削除する migration が未適用なら、WARNING を出して配備を続ける（backend は起動する）ので、上の手順で書き出してから適用する。
 
+データを削除する migration を当てた DB では、消した表・列を読む前の commit へコードだけを戻すことはできない。配備の後の確認が言語資源の不適合で NG になったときも、コードを戻さず [修復の手順](./language-pack-current-contract.md) で直す。
+
 ### 書き出す前に消えたデータを、DB のバックアップから取り出す
 
 削除した表は `PURGE` のため recyclebin にも無く、`FLASHBACK TABLE` では戻せない。ADB（Oracle Autonomous AI Database）なら、自動バックアップから過去の時点の**別の DB（クローン）**を作り、そこから必要な表だけを取り出す。元の DB をその時点へ戻す復元（in-place のリストア）は、3 製品が共有する schema 全体とその後の更新を巻き戻すので使わない。
