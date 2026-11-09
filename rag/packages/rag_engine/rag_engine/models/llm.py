@@ -878,29 +878,6 @@ class ApplicationAudit(_StrictModel):
     )
 
 
-# 推導の独立監査（application_review.review_applications）だけが使う判定の型（#4471）。
-# GroundedApplicationReview の reason を同じ位置で basis_evidence_ids に置き換え、ほかの欄・説明・順序は同じにする
-# （docstring は schema の description として渡るため、検証した版のまま変えない）。表示の理由は別の段
-# （application_reason）が日本語だけの入力から作る。
-class ApplicationVerdict(_StrictModel):
-    """1 つの当てはめの監査（#2155）。"""
-
-    index: int = Field(description=GroundedApplicationReview.model_fields["index"].description)
-    valid: bool = Field(description=GroundedApplicationReview.model_fields["valid"].description)
-    basis_evidence_ids: list[str] = Field(description="判定に使った documents の evidence_id。")
-
-
-class ApplicationVerdictAudit(_StrictModel):
-    """当てはめの段の監査（#2159）。"""
-
-    application_reviews: list[ApplicationVerdict] = Field(
-        default_factory=list,
-        max_length=MAX_ANSWER_PARTS,
-        description=ApplicationAudit.model_fields["application_reviews"].description,
-    )
-    summary_supported: bool = Field(description=ApplicationAudit.model_fields["summary_supported"].description)
-
-
 class MissingContentEvidence(_StrictModel):
     """回答の不足内容を補うための原文と出典。意味支持は要求監査が判定する。"""
 

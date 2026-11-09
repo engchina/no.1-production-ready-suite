@@ -3571,9 +3571,6 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     # 段ごとのモデルと候補は別のテストで確かめる(#4351・#4564・#4565)。
     for key in (
         "question_subject_role_model",
-        "row_condition_model",
-        "application_audit_model",
-        "application_reason_model",
         "step_model_choices",
     ):
         current.pop(key)
@@ -3661,13 +3658,11 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         assert getattr(reloaded, f"rag_{name}") == expected
 
 
-@pytest.mark.parametrize(
-    "key", ["question_subject_role", "row_condition", "application_audit", "application_reason"]
-)
+@pytest.mark.parametrize("key", ["question_subject_role"])
 def test_answering_step_model_round_trip(
     monkeypatch: MonkeyPatch, tmp_path: Path, key: str
 ) -> None:
-    """段ごとのモデル(#4351・#4349・#4564・#4565)は登録モデルか空(回答のモデル)だけを受け、
+    """段ごとのモデル(#4351)は登録モデルか空(回答のモデル)だけを受け、
     .env と現在プロセスへ保存する。ほかの段の設定は変えない。"""
     field = f"rag_{key}_model"
     item = f"{key}_model"
@@ -3681,7 +3676,7 @@ def test_answering_step_model_round_trip(
         ],
     )
     monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "model-answer")
-    steps = ("question_subject_role", "row_condition", "application_audit", "application_reason")
+    steps = ("question_subject_role",)
     for step in steps:
         monkeypatch.setattr(settings, f"rag_{step}_model", "model-answer")
         monkeypatch.delenv(f"RAG_{step.upper()}_MODEL", raising=False)

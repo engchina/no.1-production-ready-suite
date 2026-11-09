@@ -6,7 +6,6 @@ import re
 from dataclasses import replace
 
 import pytest
-from application_verdict_stub import audit_reply
 from audit_fixtures import legacy_audit_to_wire_fixture
 from citation_unit_support import selected_answer_payload
 from test_application_source_bindings import QUESTION, TEXT, sources, verified
@@ -15,10 +14,9 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.generation.application_reason import AuditReason
 from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.models.audit_wire import is_audit_wire
-from rag_engine.models.llm import ApplicationVerdictAudit, GroundedDraft
+from rag_engine.models.llm import GroundedDraft
 
 
 @pytest.mark.parametrize("field", ["content_sha256", "view_sha256", "char_end"])
@@ -65,16 +63,14 @@ def test_same_name_different_sections_keep_their_own_snapshots(monkeypatch):
     assert left["document_scope"] != right["document_scope"]
 
 
-@pytest.mark.parametrize("mode", ["none", "standard", "detailed"])
+@pytest.mark.parametrize("mode", ["standard", "detailed"])
 @pytest.mark.parametrize("legacy", [False, True], ids=["sent-units", "legacy-lines"])
 def test_actual_generation_audit_reuse_preserves_fullwidth_raw_and_sent_view(mode, legacy):
     raw = "機器Ａの測定値は２８です。ｶﾞｲﾄﾞの表示です。"
     observations = []
 
     def parse(system, prompt, settings, schema, **options):
-        if schema is AuditReason:
-            return audit_reply(schema)
-        if schema is ApplicationVerdictAudit or is_audit_wire(schema):
+        if is_audit_wire(schema):
             data = json.loads(prompt)
             observations.append(data)
             for row in data["items"]:
@@ -86,8 +82,6 @@ def test_actual_generation_audit_reuse_preserves_fullwidth_raw_and_sent_view(mod
                 if "citations" in row:
                     assert row["citations"] == [{"evidence_id": row["citation_bindings"][0]["evidence_id"], "quote": row["quote"]}]
             review = {"application_reviews": [{"index": 0, "valid": True, "reason": "形式fixture"}], "summary_supported": True}
-            if schema is ApplicationVerdictAudit:
-                return audit_reply(schema, review["application_reviews"], prompt=prompt)
             return schema.model_validate(
                 legacy_audit_to_wire_fixture(
                     {
@@ -143,8 +137,7 @@ def test_actual_generation_audit_reuse_preserves_fullwidth_raw_and_sent_view(mod
             QUESTION, AnswerContext(records=[row], text=raw), settings, image_prompt_mode="text_only"
         ).response
     assert len(observations) == 1
-    # 監査なしの設定では、独立の監査の判定に理由の段が 1 回付き、valid な推導の説明の段（#4393）が 1 回付く。
-    assert result.generation_trace["llm_calls"] == (4 if mode == "none" else 2)
+    assert result.generation_trace["llm_calls"] == 2
     assert raw in result.answer_text
 
 

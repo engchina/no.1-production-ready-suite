@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
 from pydantic import ValidationError
 
 from rag_engine.adapters.oci import LlmRunawayOutput
@@ -128,13 +127,11 @@ def _first_requirement(name: str) -> str:
     return FIXTURE["outputs"][name]["answer_parts"][0]["requirement"]
 
 
-def run(name: str, *, repair: str = "derive", valid: bool = True):
+def run(name: str, *, repair: str = "derive"):
     calls: list[tuple[str, str]] = []
 
     def parse(system, prompt, config, schema, **options):
         calls.append((options.get("purpose") or "", schema.__name__))
-        if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": valid}], prompt=prompt, summary_supported=valid)
         if schema.__name__ == "ApplicationExplanation":
             return schema.model_validate({"explanation": "表の行の点数を合計し、区分の規則に当てはめた。"})
         assert schema.__name__ == "GroundedDraftWire", schema.__name__
@@ -178,7 +175,7 @@ def test_recorded_source_only_outputs_contradict_their_declared_derivation(name)
 def test_source_only_derivation_is_regenerated_without_source_and_publishes_the_derivation(name):
     response, calls = run(name)
     assert calls[:2] == ["GroundedDraftWire", "GroundedDraftWire"]
-    assert "ApplicationVerdictAudit" in calls
+    assert calls[2:] == ["ApplicationExplanation"]
     assert DERIVED in response.answer_text
     trace = response.generation_trace
     assert trace["applications"][0]["published"] is True
@@ -188,15 +185,6 @@ def test_source_only_derivation_is_regenerated_without_source_and_publishes_the_
     assert round_["timing"]["generation_calls"] == 2
     assert [part["result_kind"] for part in round_["draft"]["answer_parts"]] == ["derived"]
     assert [part["text"] for part in round_["draft"]["answer_parts"]] == [_first_requirement(name)]
-
-
-@pytest.mark.parametrize("name", sorted(FIXTURE["outputs"]))
-def test_unpublished_regenerated_derivation_names_the_original_requirement_in_the_gap(name):
-    """作り直しの導出が審査で公開されないとき、不足の文は 1 回目の要求の文で示す（識別子を出さない）。"""
-    response, _calls = run(name, valid=False)
-    assert DERIVED not in response.answer_text
-    assert f"『{_first_requirement(name)}』" in response.answer_text
-    assert IDENTIFIER_REQUIREMENT not in response.answer_text
 
 
 @pytest.mark.parametrize("name", sorted(FIXTURE["outputs"]))

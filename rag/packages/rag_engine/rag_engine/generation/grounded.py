@@ -62,13 +62,14 @@ from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_g
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
     CheckedApplication,
+    apply_application_audit,
     check_applications,
 )
 from rag_engine.generation.applications import audit_view as application_audit_view
 from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
-from rag_engine.generation.citation_content import citation_content_unusable
+from rag_engine.generation.citation_content import citation_content_unusable, table_html_as_rows
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_scope_model
 from rag_engine.generation.citation_wire import (
@@ -81,7 +82,8 @@ from rag_engine.generation.citation_wire import (
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.date_consistency import absent_years, span_texts
-from rag_engine.generation.document_inputs import document_key, order_document_spans
+from rag_engine.generation.document_inputs import application_documents, document_key, order_document_spans
+from rag_engine.generation.evidence_cuts import _html_tables
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.operation_audit import button_names_absent
@@ -89,13 +91,6 @@ from rag_engine.generation.question_subjects import QuestionSubjects, absent_que
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.response_language import generation_language_schema
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
-from rag_engine.generation.summary_projection import (
-    APPLICATION_SUMMARY_WITHHELD,
-    SummaryProjection,
-    invalidate_projection,
-    projection_valid,
-    recover_partial_summary,
-)
 from rag_engine.generation.table_binding import has_table_structure, table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON
@@ -595,6 +590,7 @@ AUDIT_COMPACT_REASON_RULE = (
 # 付ける（WeKnora と同じく、生成の後に確認の LLM を呼ばない。引用の原文との照合はシステムが行う）。standard は主張の
 # 信頼性と要求・業務ガイドの要件の充足を 1 回の監査で判定し、未使用の根拠は列挙しない。detailed（業務ガイドの下書きの
 # 試答・評価）は未使用の根拠も列挙する。作り直しの違いは `correction_feedback`（standard は事実の問題だけ）。
+AUDITED_APPLICATION_SUMMARY_WITHHELD = "推導の条件と結論を確認できないため摘要を保留"
 AUDIT_MODE_NONE = "none"
 AUDIT_MODE_STANDARD = "standard"
 AUDIT_MODE_DETAILED = "detailed"
@@ -3359,7 +3355,7 @@ def render_answer(
             item = entry.item
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
             labels = answer_labels()
-            text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else item.text
+            text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else table_html_as_rows(item.text)
             if not entry.quote_only and item.applies == "conditional" and item.condition:
                 text = labels.condition(_condition_phrase(item.condition)) + text
             line = (f"{number}. " if numbered else labels.item_bullet) + text
@@ -3422,7 +3418,7 @@ def render_answer(
     removed = [
         item
         for entry in checked
-        if entry.removed and not entry.added and (item := passage_marks.removed_passage(entry.item.text, entry.marks))
+        if entry.removed and not entry.added and (item := passage_marks.removed_passage(table_html_as_rows(entry.item.text), entry.marks))
     ]
     removed = list({item["text"]: item for item in removed}.values())
     merged = passage_marks.merge_marks(marks)
@@ -3586,9 +3582,9 @@ _CITE_LIST = re.compile(r"^\s*(?:\[\s*\d+(?:\s*[,、]\s*\d+)*\s*\]|\d+(?:\s*[,�
 
 
 # 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824・#3847）。
-CITATION_UNIT_CONTRACT = "explicit_units_v5"
+CITATION_UNIT_CONTRACT = "explicit_units_v6"
 # ``citation_units`` で単位を作る版（v2 は ``_legacy_citation_units`` の単位に番号を付けた版）。
-_VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", CITATION_UNIT_CONTRACT})
+_VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", "explicit_units_v5", CITATION_UNIT_CONTRACT})
 _EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", *_VERSIONED_UNIT_CONTRACTS})
 # explicit_units_v5 で短い行のまとめを残す、OCR・表の断片が続くブロックの形: 空行を除く物理行の数の下限と、
 # 行の字数（前後の空白を除く）の中央値の上限。これに当たるブロックは番号で入力を膨らませない。
@@ -3623,15 +3619,24 @@ def citation_units(text: str, *, contract_version: str = CITATION_UNIT_CONTRACT,
     引用単位の番号と読み違える。``explicit_units_v4`` 以降は手順の番号で始まる行を前の行にまとめない（#3824）。
     ``explicit_units_v5`` は、空でない物理行ごとに単位を分ける（#3847）。ただし ``image_text``（画像からの生成説明・
     OCR）と、短い断片の行が多く続く本文（``_fragment_lines``）は v4 と同じく短い行をまとめる。
-    ``explicit_units_v3`` はどちらもしない。
+    ``explicit_units_v3`` はどちらもしない。``explicit_units_v6`` は HTML の表の ``<tr>`` を 1 単位にし、タグの途中で切らない
+    （#4717。読めない表と表の外の本文は v5 と同じ）。
     """
     from rag_parser_core.language.markers import marker_patterns
 
     if contract_version not in _VERSIONED_UNIT_CONTRACTS:
         raise ValueError(f"citation_units は {sorted(_VERSIONED_UNIT_CONTRACTS)} の版だけを扱う: {contract_version}")
     step_lines = contract_version != "explicit_units_v3"
-    physical_lines = contract_version == CITATION_UNIT_CONTRACT and not image_text and not _fragment_lines(text)
-    units: list[tuple[int, int]] = []
+    if contract_version == CITATION_UNIT_CONTRACT and (tables := _html_tables(text)):
+        units: list[tuple[int, int]] = []
+        position = 0
+        for start, end, rows in [*((table.start, table.end, table.rows) for table in tables), (len(text), len(text), ())]:
+            units.extend((position + a, position + b) for a, b in citation_units(text[position:start], image_text=image_text))
+            units.extend(rows)
+            position = end
+        return units
+    physical_lines = contract_version in {"explicit_units_v5", CITATION_UNIT_CONTRACT} and not image_text and not _fragment_lines(text)
+    units = []
     for start, end in _legacy_citation_units(text, step_lines=step_lines, physical_lines=physical_lines):
         body = text[start:end]
         # 物理行ごとの単位では、短い見出しと短い行はそれぞれ番号を持つ。見出しを結ぶのは、短い行のまとめに入らない
@@ -3790,17 +3795,6 @@ def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -
         original = json.loads(view.span_json) if view.span_json else span
         snapshots.append(EvidenceUnitSnapshot.create(original, view.units, view.contract_version))
     return SentUnitCatalog(snapshots)
-
-
-def sent_table_views(catalog: SentUnitCatalog) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """実際に送った単位だけの目録（``Round.sent_units``）から投影した表（#4349。投影は sent_table_projection）。
-
-    目録は回の結果に結び付けたものを渡す。spans から送達の記録を引き直すと、後の回の送信で記録が置き換わった
-    前の回では表が投影されない（#4620）。
-    """
-    from rag_engine.generation.sent_table_projection import sent_tables
-
-    return sent_tables(catalog)
 
 
 def _sent_view(span: Mapping[str, Any]) -> CitationView:
@@ -4357,7 +4351,6 @@ class Round:
     # summary を中立文に置き換えた理由（空なら草稿の summary を公開）。根拠と矛盾して外した主張を summary が
     # 断定したときだけ置き換える（#1013・#2738）。trace 用。
     summary_reason: str = ""
-    summary_projection: SummaryProjection | None = None
     # summary を確かめきれなかった理由（監査なし・不支持・保証の過剰・原因の推測など）。summary は残し、段落に
     # 警告（summary_unaudited）を付ける（#2738）。空でも意味監査の成功とは限らず、実施状態は別に記録する。
     summary_warning: str = ""
@@ -5949,21 +5942,14 @@ def application_summary_snapshot(applications: Sequence[CheckedApplication]) -> 
 def link_summary_evidence(current: Round, *, published_summary: bool = True) -> Round:
     """摘要が指す最終本文の引用を結ぶ。参照の整合性で意味の支持を判定しない。"""
     summary = str(current.summary or "").strip()
-    if current.summary_projection is not None and not projection_valid(current):
-        current = invalidate_projection(current)
-        summary = str(current.summary or "").strip()
-    indexes = [] if current.summary_projection else list(dict.fromkeys(current.draft.summary_item_indexes))
-    application_indexes = (
-        list(current.summary_projection.indexes)
-        if current.summary_projection
-        else list(dict.fromkeys(current.draft.summary_application_indexes))
-    )
+    indexes = list(dict.fromkeys(current.draft.summary_item_indexes))
+    application_indexes = list(dict.fromkeys(current.draft.summary_application_indexes))
     links: list[dict[str, Any]] = []
     missing: list[int] = []
     missing_applications: list[int] = []
     unverified_application = False
     applicable = published_summary and bool(summary) and summary != answer_labels().neutral_summary
-    if applicable and (current.summary_projection is not None or summary == current.draft.summary.strip()):
+    if applicable and summary == current.draft.summary.strip():
         for index in indexes:
             original = current.draft.items[index] if 0 <= index < len(current.draft.items) else None
             entry = next(
@@ -6107,9 +6093,6 @@ def finalize_summary(
 ) -> Round:
     """最終本文の状態を使い、未確認・撤回した主張を要約で確定し直さない。"""
     # 全体監査の観測は採用せず、既存の推導専用公開門を通った結果だけを複写する。
-    current = recover_partial_summary(current)
-    if current.summary_projection is not None:
-        return current
     if diagnostic_only(current.timing):
         return current
     summary = str(current.summary or "").strip()
@@ -7011,8 +6994,6 @@ def run_round(
         if guide_task_scope:
             question_contract["original_question"] = question
         effective_contract = compile_guide_task_contract(question_contract, guide_task_scope)
-        from rag_engine.generation.application_review import application_documents
-
         inputs = {
             "documents": application_documents(spans),
             "question": effective_contract.get("current_request", question) if guide_task_scope else question,
@@ -7228,22 +7209,8 @@ def run_round(
                 }
             application_audit = audit
             audit = unverified_projection(audit)
-    from rag_engine.generation.application_review import review_applications
-
-    timing["application_review"] = (
-        review_applications(
-            question,
-            applications,
-            evidence_spans=spans,
-            existing_audit=application_audit,
-            audit_requested=True,
-            parse_text=parse_text,
-            settings=audit_settings,
-            provider_id=provider_id,
-        )
-        if audit_mode != AUDIT_MODE_NONE
-        else {"status": "deferred", "calls": 0}
-    )
+    if audit_mode != AUDIT_MODE_NONE:
+        apply_application_audit(applications, application_audit, require_complete=True)
     from rag_engine.generation.answer_parts import check_answer_parts
 
     timing["answer_parts"] = check_answer_parts(
@@ -7349,9 +7316,14 @@ def run_round(
     summary_names = absent_question_names(str(draft.summary), subjects, [*cited_texts, *gap_texts])
     if summary_names:
         summary_reason = summary_reason or f"引いた原文に無い対象を要約が述べている: {'、'.join(summary_names)}"
+    # 監査をする型で公開しなかった結論は、要約にも出さない（監査なしの型は結論を保留しない。#4716）。
     withheld_applications = {index for index, entry in enumerate(applications) if not entry.published}
-    if withheld_applications and (not draft._composed_summary or withheld_applications.intersection(draft.summary_application_indexes)):
-        summary_reason = summary_reason or APPLICATION_SUMMARY_WITHHELD
+    if (
+        audit_mode != AUDIT_MODE_NONE
+        and withheld_applications
+        and (not draft._composed_summary or withheld_applications.intersection(draft.summary_application_indexes))
+    ):
+        summary_reason = summary_reason or AUDITED_APPLICATION_SUMMARY_WITHHELD
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     # 質問の名前（役割に関わらずすべて）が引いた原文に無ければ、モデルが gap を書かなくても確認できないことを本文で伝える

@@ -1767,43 +1767,6 @@ class Settings(
             "推論の量と出力の上限はそのモデルの登録値。"
         ),
     )
-    rag_application_audit_model: str = Field(
-        default="xai.grok-4.7",
-        description=(
-            "回答で資料をもとに導いた結論(推導)を確認する監査の判定の段の LLM のモデル ID"
-            "(#4565。モデル設定の登録モデル)。空は回答のモデルのまま。"
-            "登録していないモデルでは段が失敗し、推導は未確認のまま回答を続ける。"
-            "推論の量と出力の上限はそのモデルの登録値"
-            "(監査の推論の量の設定が model 以外ならその値)。"
-        ),
-    )
-    rag_application_reason_model: str = Field(
-        default="xai.grok-4.7",
-        description=(
-            "推導の監査の判定が確定した推導ごとに、利用者に示す理由の文を作る段の LLM のモデル ID"
-            "(#4564。モデル設定の登録モデル)。空は回答のモデルのまま。"
-            "登録していないモデルでは段が失敗し、理由は定型の文になる(判定は変えない)。"
-            "推論の量と出力の上限はそのモデルの登録値"
-            "(監査の推論の量の設定が model 以外ならその値)。"
-        ),
-    )
-    rag_row_condition_model: str = Field(
-        default="xai.grok-4.7",
-        max_length=256,
-        description=(
-            "表の各行の条件を質問に当てはめる段(#4349)の LLM のモデル ID(モデル設定の登録モデル)。"
-            "空は回答のモデルのまま。登録していないモデルではこの段を実行せず、理由を実行の記録に"
-            "残す(別のモデルへ暗黙に切り替えない)。推論の量は RAG_ROW_CONDITION_REASONING_EFFORT、"
-            "入出力の上限はそのモデルの登録値。"
-        ),
-    )
-    rag_row_condition_reasoning_effort: ReasoningEffortOverride = Field(
-        default="low",
-        description=(
-            "表の各行の条件を質問に当てはめる段(#4349)の推論の量(既定 low)。model はモデルの"
-            "登録値のまま。モデルの登録値が none のモデルには送らない。"
-        ),
-    )
     rag_crag_skip_on_strong_signals: bool = Field(
         default=False,
         description=(

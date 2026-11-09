@@ -1,18 +1,14 @@
 """推導監査へ、検証済み引用の出典・版・単位を欠落なく渡す。外部I/Oなし。"""
 
-import json
 from types import SimpleNamespace
 
 import pytest
-from application_verdict_stub import audit_reply
 
-from rag_engine.config import get_settings
 from rag_engine.generation import grounded
-from rag_engine.generation.application_review import review_applications
-from rag_engine.generation.applications import CheckedApplication
+from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.citation_unit_ids import unit_generation_model
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import ApplicationVerdictAudit, GroundedApplication, GroundedDraft
+from rag_engine.models.llm import GroundedDraft
 
 TEXT = "機器Aの測定値は28です。"
 QUESTION = "機器Aの測定値を教えてください。"
@@ -89,30 +85,8 @@ def verified(selected=(0,), *, stable_units=True):
 
 
 def captured(entry, spans):
-    application = CheckedApplication(
-        GroundedApplication(item_indexes=[0], reasoning="選択原文の値を示す。", result="測定値は28です。"), [entry]
-    )
-    inputs = []
-
-    def parse(system, prompt, settings, schema, **options):
-        if schema is ApplicationVerdictAudit:
-            inputs.append(json.loads(prompt))
-        # 入力捕捉用。意味成功を表さない。
-        return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
-
-    trace = review_applications(
-        QUESTION,
-        [application],
-        evidence_spans=spans,
-        existing_audit=None,
-        audit_requested=False,
-        parse_text=parse,
-        settings=get_settings(environ={}, dotenv_path=None),
-        provider_id=None,
-    )
-    # 判定 1 回と、判定が確定した推導の理由 1 回。
-    assert len(inputs) == 1 and trace["calls"] == 2
-    return inputs[0]
+    """監査へ渡す引用の結び付き（`application_item_citations` の形）。"""
+    return {"items": [{"citation_bindings": application_item_citations(entry)}]}
 
 
 def test_different_verified_selection_cannot_have_identical_audit_input():

@@ -4472,11 +4472,6 @@ export const ja = {
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
   "settings.answerPrompts.part.auditSystem": "監査の システムプロンプト",
-  "settings.answerPrompts.part.reasonSystem": "監査の判定の理由を書く システムプロンプト",
-  "settings.answerPrompts.part.rowTypeSystem":
-    "表の各行の条件の種類と時点を読み取る システムプロンプト（推導に使う表があるときだけ）",
-  "settings.answerPrompts.part.rowJudgeSystem":
-    "表の各行の時点以外の条件が質問から成り立つか判定する システムプロンプト（推導に使う表があるときだけ）",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
   "settings.answerPrompts.part.citationRepair":
@@ -4597,12 +4592,6 @@ export const ja = {
   "settings.answering.auditModeHint.detailed": "標準の診断に加えて未使用の根拠も調べ、結果を確認用に記録します。意味判定や説明の抜けの診断だけでは作り直しません。基本検査による救済の是正予算は最大 2 回、初回の生成を含め合計最大 3 回の上限を維持します。",
   "settings.answering.questionSubjectRoleModel": "質問の対象の役割を判定するモデル",
   "settings.answering.questionSubjectRoleModelHint": "回答の要約・説明に書いた質問の対象の名前を資料と照合する前に、その名前が問い・前提・例のどれかを判定するモデルです。モデル設定に登録したモデルから選びます。対象の名前がある質問だけで、回答ごとに 1 回呼びます。品質評価の照合も同じモデルを使います。",
-  "settings.answering.rowConditionModel": "表の行の条件を当てはめるモデル",
-  "settings.answering.rowConditionModelHint": "根拠として送った資料の表の各行の条件が、質問の内容から成り立つかを行ごとに判定するモデルです。モデル設定に登録したモデルから選びます。表を送った回答だけで呼びます。推論の量はこの段の設定（既定 low）です。",
-  "settings.answering.applicationAuditModel": "導いた結論を判定するモデル",
-  "settings.answering.applicationAuditModelHint": "回答で資料をもとに導いた結論が、選んだ原文と質問の条件から導けるかを判定するモデルです。モデル設定に登録したモデルから選びます。AIによる確認が「実行しない」のときに、導いた結論がある回答だけで 1 回呼びます。",
-  "settings.answering.applicationReasonModel": "判定の理由を書くモデル",
-  "settings.answering.applicationReasonModelHint": "導いた結論の判定が決まったあと、利用者に示す理由の文を書くモデルです。モデル設定に登録したモデルから選びます。判定の結果は変えません。導いた結論ごとに 1 回呼びます。",
   "settings.answering.stepModel.sameAsAnswer": "回答のモデルと同じ",
   "settings.answering.stepModel.unavailable": "{model}（登録を確認できません）",
   "settings.answering.auditBudgetHint": "是正回数の設定と共有の時間予算によって、実際の回数は減ります。引用範囲などの基本検査による救済は続けます。業務ガイドの下書きの試答は常に詳細で診断し、未校正の意味判定は自動採用しません。",
