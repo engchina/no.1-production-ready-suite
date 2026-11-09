@@ -31,7 +31,7 @@ class RunSummary(BaseModel):
     status: RunStatus
     # 回答の対応（answered / conditional / insufficient_evidence など。#1235）。
     answer_outcome: str | None = None
-    # 回答の検証（回答の監査で要求ごとに根拠で答えられたか）。回答を作らない実行は None。
+    # 回答の確からしさ（回答の確信度と人手確認の要否）。回答を作らない実行は None。
     confidence: str | None = None
     needs_human_review: bool | None = None
     citation_count: int = 0

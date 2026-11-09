@@ -7,7 +7,7 @@ RAG は Agent の Runtime の強制とは別に、呼び先でも同じ範囲を
 - 使える検索・回答プロファイルは「利用者の権限 ∩ claim」。使えるナレッジベースは「利用者の権限 ∩
   範囲のプロファイルの参照先」。ツールはこの 2 つに絞った監査 context（`AuditRequestContext`）の中で
   実行するので、一覧・検索・文書を読むツール（`rag_read_source` / `rag_outline` /
-  `rag_read_document`）・回答の検証は、画面と同じ判定のまま範囲の中だけを見る。
+  `rag_read_document`）は、画面と同じ判定のまま範囲の中だけを見る。
 - 検索（`rag_search` / `rag_retrieve_evidence`）は `search_answer_profile_id` が要る
   （`knowledge_base_ids` だけの検索はしない）。範囲の外のプロファイルと、指定したプロファイルの
   参照先の外の `knowledge_base_ids` は 403（`PROFILE_SCOPE_FORBIDDEN`）。

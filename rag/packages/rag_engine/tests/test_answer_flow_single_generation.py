@@ -210,7 +210,24 @@ def test_retrieval_counts_separate_found_and_passed() -> None:
     )
     counts = response.generation_trace["retrieval_counts"]
     assert counts["found"] == 1 and counts["passed_to_model"] >= 1
+    assert counts["candidate_count"] == 1
     assert {"top_score", "threshold"} <= set(counts)
+
+
+def test_retrieval_counts_keep_the_candidates_before_the_threshold() -> None:
+    question = "項目Aの保存年数は？"
+    ctx = replace(context(record(0, ROW, "合成の規程", source="synthetic.md")), candidate_count=12)
+    response, _calls = _run(
+        question,
+        ctx,
+        lambda units: {
+            "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW])],
+            "summary_part_indexes": [0],
+            "confidence": "high",
+        },
+    )
+    counts = response.generation_trace["retrieval_counts"]
+    assert (counts["candidate_count"], counts["found"]) == (12, 1)
 
 
 def test_guide_steps_stay_as_instructions_and_coverage_is_not_judged() -> None:

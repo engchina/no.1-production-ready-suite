@@ -32,7 +32,6 @@ from rag_engine.chunking import (
     load_latest_or_source_chunk_run,
 )
 from rag_engine.config import (
-    LLM_PURPOSE_AUDIT,
     LLM_PURPOSE_GENERATION,
     LLM_PURPOSE_JUDGE,
     LLM_PURPOSE_STRATEGY,
@@ -1157,6 +1156,7 @@ def _restore_deferred_context(
             insufficient_reason=bundle.insufficient_reason,
             expansion_records=context.expansion_records,
             ranked_candidates=context.ranked_candidates,
+            candidate_count=context.candidate_count,
             deferred_records=(),
             document_selection={**context.document_selection, "restored": True},
         )
@@ -1310,6 +1310,7 @@ def build_adb_hybrid_answer_context(
         record_retrieval_stage({"stage": "rerank_input", **candidate_trace})
         step.output({"判断": candidate_trace, "採用候補": candidate_snapshot(ranked_children)})
         step.result(f"再ランキングへ渡す候補 {len(ranked_children)} 件")
+    candidate_count = len(ranked_children)
     ranked_children = rerank_records(
         question,
         ranked_children,
@@ -1366,6 +1367,7 @@ def build_adb_hybrid_answer_context(
         status=bundle.status,
         insufficient_reason=bundle.insufficient_reason,
         ranked_candidates=tuple(ranked_children),
+        candidate_count=candidate_count,
         deferred_records=tuple(deferred_children),
         document_selection=selection,
     )
@@ -1555,6 +1557,7 @@ def build_crag_answer_context(
                 expansion_records=pool,
                 preferred_child_ids=preferred,
                 ranked_candidates=context.ranked_candidates or best_context.ranked_candidates,
+                candidate_count=context.candidate_count or best_context.candidate_count,
                 deferred_records=context.deferred_records,
                 document_selection=context.document_selection or best_context.document_selection,
             )
@@ -1563,13 +1566,13 @@ def build_crag_answer_context(
         skip_check = _crag_grade_skip_check(question, context, settings) if attempt_number == 1 else {}
         skip = skip_check if skip_check.get("skip") else None
         if skip is not None:
-            # 規則の信号が強いときは LLM の評価を飛ばして生成へ進む (#1499。既定 off)。生成後の監査は飛ばさない。
+            # 規則の信号が強いときは LLM の評価を飛ばして生成へ進む (#1499。既定 off)。
             with _execution_step("根拠確認（1回目）", "集めた根拠で質問に答えられるかを LLM が判定します。") as step:
                 step.input(partial(context_snapshot, context, **{"質問": question, "回": attempt_number, "省略判断": skip_check}))
                 step.output(partial(context_snapshot, context, **{"モデル評価実行": False, "省略判断": skip_check}))
                 step.skip("規則の信号が強いため、LLM の評価を省略しました")
                 step.result("規則の信号が強いため、LLM の評価を省略しました", *skip["lines"])
-                step.impact("取得した根拠をそのまま回答の生成に渡します。生成後の監査は通常どおり行います。")
+                step.impact("取得した根拠をそのまま回答の生成に渡します。")
             attempts.append(
                 CragRetrievalAttempt(
                     attempt=attempt_number,
@@ -1726,6 +1729,7 @@ def build_crag_answer_context(
                             expansion_records=best_context.expansion_records,
                             preferred_child_ids=best_context.preferred_child_ids,
                             ranked_candidates=best_context.ranked_candidates,
+                            candidate_count=best_context.candidate_count,
                             deferred_records=best_context.deferred_records,
                             document_selection=best_context.document_selection,
                         ),
@@ -1781,6 +1785,7 @@ def build_crag_answer_context(
                 expansion_records=best_context.expansion_records,
                 preferred_child_ids=best_context.preferred_child_ids,
                 ranked_candidates=best_context.ranked_candidates,
+                candidate_count=best_context.candidate_count,
                 deferred_records=best_context.deferred_records,
                 document_selection=best_context.document_selection,
             )
@@ -2032,6 +2037,7 @@ def _recover_crag_context(
                 evidence_tree=bundle.evidence_tree,
                 expansion_records=context.expansion_records,
                 ranked_candidates=context.ranked_candidates,
+                candidate_count=context.candidate_count,
                 deferred_records=context.deferred_records,
                 document_selection=context.document_selection,
             )
@@ -2601,6 +2607,7 @@ def _expand_context_from_pool(
         expansion_records=context.expansion_records,
         preferred_child_ids=context.preferred_child_ids,
         ranked_candidates=context.ranked_candidates,
+        candidate_count=context.candidate_count,
         deferred_records=() if mode == "deferred_documents" else context.deferred_records,
         document_selection={**context.document_selection, "restored": True} if mode == "deferred_documents" else context.document_selection,
     )
@@ -3158,11 +3165,17 @@ def _no_candidates_response(context: AnswerContext) -> AnswerResponse:
 
 
 def _retrieval_counts(context: AnswerContext, spans: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """検索で見つかった件数とモデルに渡した件数を分けて記録する（閾値で全部消えた場合と区別する）。"""
+    """検索の件数を段ごとに記録する（基準で全部落ちた場合と、検索で見つからなかった場合を区別する）。
+
+    candidate_count は基準（rerank の関連度の下限・採用件数の上限）で絞り込む前の候補、found は基準を通った候補、
+    passed_to_model はモデルに渡した根拠の単位の数（生成を呼ばない経路は 0）。
+    """
     ranked = context.ranked_candidates or tuple(context.records)
     reranked = [record.metadata["rerank"] for record in ranked if isinstance(record.metadata.get("rerank"), dict)]
     scores = [float(row["relevance_score"]) for row in reranked if row.get("relevance_score") is not None]
     return {
+        # 件数を持たない context（SDK の組み立てなど）でも「候補 < 通過」にしない。
+        "candidate_count": max(context.candidate_count, len(ranked)),
         "found": len(ranked),
         "passed_to_model": len(spans),
         "top_score": max(scores) if scores else None,
@@ -3183,13 +3196,12 @@ def synthesize_with_model_cascade(
     image_prompt_mode: str,
     **options: Any,
 ) -> GroundedAnswer:
-    """回答の生成の段を、確認を通らなかったときだけ 2 つ目のモデルでやり直す（モデルのカスケード。#4581）。
+    """回答の生成の段を、出力が形式の検査を通らなかったときだけ 2 つ目のモデルでやり直す（モデルのカスケード。#4581）。
 
-    確認を通らなかったときのモデル（``settings.escalation_llm``）が無ければ、``synthesize_grounded_answer`` と同じ。
-    あれば 1 つ目のモデルで生成し、生成の段の結果が機械で判定できる確認を通らなければ（昇格の信号は
-    ``model_cascade.round_signals`` と構造化出力の不正）、検索の結果（``context``）をそのまま使って生成の段を
-    2 つ目のモデルでやり直す。1 回の質問で昇格は 1 回だけで、やり直しの修正の回はすべて 2 つ目のモデルで行う
-    （回数の上限は同じ）。2 つ目のモデルも通らなければ、その結果を既存の失敗の扱いで返す。
+    2 つ目のモデル（``settings.escalation_llm``）が無ければ、``synthesize_grounded_answer`` と同じ。
+    あれば 1 つ目のモデルで生成し、構造化出力が契約を満たさなければ、検索の結果（``context``）をそのまま使って
+    生成の段を 2 つ目のモデルでやり直す。1 回の質問で昇格は 1 回だけ。2 つ目のモデルも通らなければ、
+    その結果を既存の失敗の扱いで返す。
     カスケードの記録（``generation_trace["model_cascade"]``）は、昇格しなかった実行にも残す（昇格率を数える）。
     """
     primary_provider = answer_llm_provider or settings.default_answer_llm
@@ -3221,7 +3233,7 @@ def synthesize_with_model_cascade(
     escalation_provider = settings.escalation_llm
     with _execution_step(
         "高性能モデルで回答し直す",
-        "最初のモデルの回答が確認を通らなかったため、取得した根拠をそのまま使い、確認を通らなかったときのモデルで回答を作り直します。",
+        "最初のモデルの出力が検査を通らなかったため、取得した根拠をそのまま使い、出力の検査を通らなかったときのモデルで回答を作り直します。",
     ) as step:
         step.input(
             {
@@ -5815,15 +5827,21 @@ def answer_question_result(
             flow_step.field("検索の候補", f"{zero_evidence['candidate_count']} 件")
             if zero_evidence["rejected_count"]:
                 flow_step.field("根拠確認で外した候補", f"{zero_evidence['rejected_count']} 件")
+            # 候補 0 件でも回答と同じ形で件数を残す（#4735）。
+            zero_trace = {
+                "zero_evidence": zero_evidence,
+                "query_overflow": overflow_trace,
+                "retrieval_counts": _retrieval_counts(context, ()),
+            }
             if not generate_answer:
-                return evidence_result(context, trace={"zero_evidence": zero_evidence, "query_overflow": overflow_trace})
+                return evidence_result(context, trace=zero_trace)
             # 空検索では LLM に推測させず、表示本文と保存 payload の不足情報を揃える。
             response = AnswerResponse(
                 answer_text=(answer_labels().insufficient_evidence_summary + answer_labels().empty_search_guidance),
                 confidence="low",
                 insufficient_reason="現在の検索範囲では、回答に使える文書の根拠が取得できませんでした。",
                 needs_human_review=True,
-                generation_trace={"zero_evidence": zero_evidence, "query_overflow": overflow_trace},
+                generation_trace=zero_trace,
             )
             response = _with_guide_acquisition_notices(response, runtime_knowledge)
             if legacy_notice:
@@ -5951,6 +5969,8 @@ def answer_question_result(
         )
         refusal = crag_generation.refusal_response(request_text, gate_view, runtime_knowledge=runtime_knowledge)
         if refusal is not None:
+            # 拒否でもモデルを呼ばなかった件数を同じ形で残す（#4735）。
+            refusal = replace(refusal, generation_trace={**refusal.generation_trace, "retrieval_counts": _retrieval_counts(context, ())})
             grounded_answer = GroundedAnswer(
                 _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
             )
