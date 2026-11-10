@@ -142,6 +142,25 @@ class LanguagePackEngineTest(unittest.TestCase):
         for text in ("－ ３ －", "Ⅳ", "Ｐ．１２ / ２０", "ii"):
             self.assertEqual(_compact_page_text(text), re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)))
 
+    def test_added_question_stopwords_are_dropped_from_the_query(self):
+        """同梱の止め語の英語 5 語と疑問の副詞 3 語は質問の語にしない(#4784)。足す前の一覧では語に残る。"""
+        from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
+
+        added = {"as", "into", "through", "whom", "whose", "なぜ", "どうして", "いかが"}
+        questions = (
+            "なぜ区画の上限を超えるのですか",
+            "設定はいかがですか",
+            "records into the archive through the console",
+            "whom and whose records as default",
+        )
+        self.assertTrue(added <= set(builtin_pack().words("search_terms", "stopwords")))
+        current = {term for question in questions for term in tokenize_text_search_query(question)}
+        self.assertFalse(added & current)
+        before = [word for word in builtin_pack().words("search_terms", "stopwords") if word not in added]
+        with bind_pack(_custom(search_terms={"stopwords": before})):
+            previous = {term for question in questions for term in tokenize_text_search_query(question)}
+        self.assertTrue({"なぜ", "いかが", "into", "through", "whom", "as"} <= previous)
+
 
 if __name__ == "__main__":
     unittest.main()

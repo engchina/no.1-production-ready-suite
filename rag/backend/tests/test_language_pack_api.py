@@ -41,6 +41,23 @@ def test_get_returns_complete_published_snapshot() -> None:
     assert data["current_release"]["version"] == 1
 
 
+def test_added_builtin_stopwords_come_back_with_reset_to_default() -> None:
+    """同梱に足した止め語(#4784)は保存済みの値を書き換えず、「既定に戻す」(組み込みとの差なし)で入る。"""
+    added = {"as", "into", "through", "whom", "whose", "なぜ", "どうして", "いかが"}
+    builtin = client.get("/api/settings/language-pack").json()["data"]["builtin"]
+    assert added <= set(builtin["search_terms"]["stopwords"])
+    before = [w for w in builtin["search_terms"]["stopwords"] if w not in added]
+    saved = client.put(
+        "/api/settings/language-pack/draft",
+        json={"overrides": {"search_terms": {"stopwords": before}}, "expected_revision": 1},
+    ).json()["data"]
+    assert not added & set(saved["draft_effective"]["search_terms"]["stopwords"])
+    reset = client.put(
+        "/api/settings/language-pack/draft", json={"overrides": {}, "expected_revision": 2}
+    ).json()["data"]
+    assert added <= set(reset["draft_effective"]["search_terms"]["stopwords"])
+
+
 def test_draft_comparison_is_read_only_and_bound_to_both_revisions() -> None:
     saved = client.put(
         "/api/settings/language-pack/draft",
