@@ -6,7 +6,8 @@ import { History, Send } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiErrorState } from "@/components/StateViews";
+import { DataLoadFailure } from "@/components/DataLoadStates";
+import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import { api, type LanguagePackData, type LanguagePackRelease, type LanguagePackReleaseState, type LanguagePackReleaseComparison, type IngestionJobPhase } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -25,7 +26,8 @@ export function LanguagePackComparison({ comparison }: { comparison: LanguagePac
     <Banner severity={comparison.ingest_changed ? "warning" : "info"} title={t(comparison.ingest_changed ? "settings.language.release.ingestChanged" : "settings.language.release.ingestSame")}>
       {comparison.impact_requires_review ? t("settings.language.release.impactUnknown") : comparison.affected_stages.map((stage) => t(phaseLabelKey(stage as IngestionJobPhase))).join(" / ") || t("settings.language.release.noIngestImpact")}
     </Banner>
-    <DataTable ariaLabel={t("settings.language.release.diff")} rows={comparison.differences} getRowKey={(row) => `${row.section}.${row.key}`} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} columns={[
+    {/* 差分が 0 件のときは空の行ではなく、比べた結果として差分が無いことを出す（#3718）。 */}
+    <DataTable ariaLabel={t("settings.language.release.diff")} rows={comparison.differences} getRowKey={(row) => `${row.section}.${row.key}`} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} empty={<EmptyState title={t("settings.language.release.noDifferences")} hint={t("settings.language.release.noDifferencesHint")} />} columns={[
       { key: "field", header: t("settings.language.release.field"), render: (row) => t(`settings.language.field.${row.key}` as I18nKey) },
       { key: "before", header: t("settings.language.release.before"), render: (row) => <span className="whitespace-pre-wrap break-words">{valueText(row.before)}</span> },
       { key: "after", header: t("settings.language.release.after"), render: (row) => <span className="whitespace-pre-wrap break-words">{valueText(row.after)}</span> },
@@ -99,7 +101,8 @@ export function LanguagePackHistoryCard({ dirty, metadata, state }: { dirty: boo
           <OffsetPagination offset={offset} limit={size} total={history.data.total} count={history.data.releases.length} onPageChange={(page) => setPaging((current) => ({ ...current, offset: (page - 1) * current.size }))} pageSizeOptions={[10, 25, 50, 100]} onPageSizeChange={(value) => { setPaging({ size: value, offset: 0 }); }} labels={paginationLabels()} />
         </>}
         {selectedId && selectedQuery.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="language-release-content"><TableSkeleton columns={2} /></TimedLoadingState> : null}
-        {selectedQuery.isError ? <ApiErrorState error={selectedQuery.error} fallback={t("settings.language.history.loadError")} onRetry={() => void selectedQuery.refetch()} /> : null}
+        {/* 選んだ公開版の内容（読み取り専用の欄の値）を読み取れなかった。欄の位置に失敗と再試行を出す（#4817）。 */}
+        {selectedQuery.isError ? <DataLoadFailure error={selectedQuery.error} fallback={t("settings.language.release.detailsLoadError")} onRetry={() => void selectedQuery.refetch()} layout="field" testId="language-release-details-load-failed" /> : null}
         {selected ? <section aria-label={t("settings.language.release.details")} className="space-y-4">
           <h3 className="text-sm font-semibold">{t("settings.language.release.details")} v{selected.version}</h3>
           <LanguagePackFieldsPanel idPrefix="language-release-readonly" fields={metadata.fields} baseline={selected.effective} texts={textsFromSections(metadata.fields, selected.effective)} errors={{}} disabled state={panel} changedLabel={t("settings.language.changed")} resetLabel={t("settings.language.resetField")} onChange={() => undefined} />

@@ -438,6 +438,8 @@ export const ja = {
   "settings.language.release.note": "変更説明",
   "settings.language.release.review": "差分と影響を確認する",
   "settings.language.release.diff": "設定の差分",
+  "settings.language.release.noDifferences": "設定の差分はありません。",
+  "settings.language.release.noDifferencesHint": "比べた 2 つの設定は同じです。",
   "settings.language.release.field": "項目",
   "settings.language.release.before": "変更前",
   "settings.language.release.after": "変更後",
@@ -454,6 +456,8 @@ export const ja = {
   "settings.language.release.published": "言語資源 v{version} を公開しました。",
   "settings.language.release.snapshot": "公開時の完全な設定",
   "settings.language.release.details": "公開版の内容（読み取り専用）",
+  "settings.language.release.detailsLoadError": "公開版の内容を読み込めませんでした。",
+  "settings.language.release.snapshotLoadError": "公開時の完全な設定を読み込めませんでした。",
   "settings.language.history.title": "公開版の履歴",
   "settings.language.history.description": "公開した完全な設定を保存します。版を選ぶと内容と現在版との差分を確認できます。回退も新しい公開操作として記録し、参照中の版は保持します。",
   "settings.language.history.loading": "保存の履歴を読み込んでいます",
@@ -1556,6 +1560,7 @@ export const ja = {
   "fileList.col.actions": "操作",
   "fileList.statusFilter.label": "状態",
   "fileList.knowledgeBaseFilter.label": "ナレッジベース",
+  "fileList.knowledgeBaseFilter.loadError": "絞り込みに使うナレッジベースを読み込めませんでした。",
   "fileList.knowledgeBaseFilter.all": "利用できるすべてのナレッジベース",
   "fileList.selected": "{count} 件選択中",
   "fileList.selectionHint": "行を選ぶと、まとめて取込・削除できます。",
@@ -1712,6 +1717,7 @@ export const ja = {
   "searchAnswerProfiles.languagePack.count": "上書き {count} 項目",
   "searchAnswerProfiles.languagePack.changed": "全体の値から変更",
   "searchAnswerProfiles.languagePack.reset": "全体の値に戻す",
+  "searchAnswerProfiles.languagePack.loadError": "言語資源の上書きの欄を読み込めませんでした。",
   "searchAnswerProfiles.field.guideEnabledOn": "ON",
   "searchAnswerProfiles.field.guideEnabledOff": "OFF",
   "searchAnswerProfiles.field.guideEnabled": "業務ガイドを使用する",
@@ -1725,7 +1731,8 @@ export const ja = {
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
   "searchAnswerProfiles.field.guideStepRetrievalHelper":
     "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。継承時は検索方法の現在の設定を使います。",
-  "searchAnswerProfiles.field.answerModelLoadFailed": "モデルの候補を取得できませんでした。画面を再読み込みしてください。全体の既定を継承する設定は保存できます。",
+  "searchAnswerProfiles.field.answerModelLoadError": "回答モデルの候補を読み込めませんでした。",
+  "searchAnswerProfiles.field.escalationModelLoadError": "出力の検査を通らなかったときのモデルの候補を読み込めませんでした。",
   "searchAnswerProfiles.field.answerModel": "回答モデル",
   "searchAnswerProfiles.field.answerModelHelper": "この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。",
   "searchAnswerProfiles.field.unavailableModel": "{model}（登録を確認できません）",
@@ -2319,9 +2326,7 @@ export const ja = {
   "knowledgeBaseScope.label": "ナレッジベース",
   "knowledgeBaseScope.helper": "未選択の場合は、利用できるすべてのナレッジベースを対象にします。",
   "knowledgeBaseScope.loading": "ナレッジベースを読み込んでいます",
-  "knowledgeBaseScope.loadWarning": "ナレッジベース一覧を取得できませんでした。",
-  "knowledgeBaseScope.loadWarningHint":
-    "未選択のまま実行すると、利用できるすべてのナレッジベースを対象にします。",
+  "knowledgeBaseScope.loadError": "ナレッジベースの候補を読み込めませんでした。",
   "knowledgeBaseScope.documentCount": "{count} 文書",
   "knowledgeBaseScope.selected": "{count} 件選択中",
   "knowledgeBaseScope.all": "利用できるすべてのナレッジベースを対象にします。",
@@ -2422,8 +2427,8 @@ export const ja = {
   "upload.storageNotice.unset": "未設定",
   "upload.knowledgeBases.title": "所属させるナレッジベース",
   "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます",
-  "upload.knowledgeBases.loadWarning": "ナレッジベース一覧を取得できませんでした。",
-  "upload.knowledgeBases.loadWarningHint":
+  "upload.knowledgeBases.loadError": "登録先のナレッジベースの候補を読み込めませんでした。",
+  "upload.knowledgeBases.loadErrorHint":
     "未選択のままアップロードすると、DEFAULT へ登録されます。",
   "upload.knowledgeBases.emptyHint":
     "まだナレッジベースがありません。未選択のままアップロードすると DEFAULT へ登録されます。",
@@ -2434,8 +2439,8 @@ export const ja = {
   "upload.knowledgeBases.requiredError": "所属させるナレッジベースを 1 件以上選択してください。",
   "upload.knowledgeBases.emptyRestrictedHint":
     "登録先にできるナレッジベースがありません。管理者にナレッジベースの利用権限を依頼してください。",
-  "upload.knowledgeBases.loadWarningRequiredHint":
-    "登録先のナレッジベースを選択できないため、アップロードできません。再読み込みしてください。",
+  "upload.knowledgeBases.loadErrorRequiredHint":
+    "登録先のナレッジベースを選択できないため、アップロードできません。",
 
   "sourceProfile.documentWorkspaceTitle": "原本情報",
   "sourceProfile.documentId": "文書 ID",
@@ -3332,7 +3337,7 @@ export const ja = {
   "documentCategories.select.none": "指定なし",
   "documentCategories.select.parentFirst.middle_category": "先に大分類を選びます。",
   "documentCategories.select.parentFirst.small_category": "先に中分類を選びます。",
-  "documentCategories.select.loadError": "分類の候補を読み込めませんでした。",
+  "documentCategories.select.loadError": "文書の分類の候補を読み込めませんでした。",
   // 文書の版（#1248）。新しい版に置き換えた文書（旧版）は、既定で回答の検索の対象から外れる。
   "documents.version.title": "版",
   "documents.version.description":
@@ -3350,9 +3355,9 @@ export const ja = {
   "documents.version.saved": "新しい版を保存しました。この文書は旧版として回答の検索の対象から外れます。",
   "documents.version.cleared": "置き換えを解除しました。この文書は今有効な版として回答の検索の対象に戻ります。",
   "documents.version.saveError": "版の保存に失敗しました。選んだ文書を確認して再試行してください。",
-  "documents.knowledgeBases.loadWarning": "現在の所属ナレッジベースを取得できませんでした。",
-  "documents.knowledgeBases.loadWarningHint":
-    "文書詳細に含まれる所属情報を表示しています。保存前に接続状態を確認してください。",
+  "documents.knowledgeBases.loadError": "今の所属ナレッジベースを読み込めませんでした。",
+  "documents.knowledgeBases.loadErrorHint":
+    "文書詳細に含まれる所属情報を表示しています。",
 
   "action.enqueueIngestion": "ファイル準備を実行",
   "action.enqueueDuplicateIngestion": "重複を無視してファイル準備",
@@ -3507,7 +3512,7 @@ export const ja = {
   "search.filters.fields.helper":
     "項目抽出で取り出した値で文書を絞り込みます。項目は選んだ検索・回答プロファイルのナレッジベースで定義されたものです。値の無い文書と、数値・日付として読めない値の文書は除かれます。条件はすべて満たす文書だけを使います。",
   "search.filters.fields.loading": "絞り込みに使える項目を読み込んでいます",
-  "search.filters.fields.loadError": "絞り込みに使える項目を取得できませんでした。",
+  "search.filters.fields.loadError": "絞り込みに使える項目を読み込めませんでした。",
   "search.filters.fields.none": "選んだ検索・回答プロファイルのナレッジベースには抽出する項目がありません。",
   "search.filters.fields.chooseScope": "検索・回答プロファイルを選ぶと、絞り込みに使える項目が表示されます。",
   "search.filters.fields.field": "項目",

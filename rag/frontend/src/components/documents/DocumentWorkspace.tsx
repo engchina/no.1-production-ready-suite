@@ -23,6 +23,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useQuery } from "@tanstack/react-query";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect";
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
@@ -3493,9 +3494,17 @@ function DocumentKnowledgeBaseEditor({
       </div>
 
       {membership.isError ? (
-        <Banner severity="warning" title={t("documents.knowledgeBases.loadWarning")}>
-          <p>{errorMessage(membership.error, t("documents.knowledgeBases.loadWarningHint"))}</p>
-        </Banner>
+        // 欄の値（今の所属先）を読み取れなかった。欄は文書詳細に含まれる所属情報で出し、失敗と再試行を添える（#4817）。
+        <div className="space-y-1">
+          <DataLoadFailure
+            error={membership.error}
+            fallback={t("documents.knowledgeBases.loadError")}
+            onRetry={() => void membership.refetch()}
+            layout="field"
+            testId="document-knowledge-bases-load-failed"
+          />
+          <p className="text-xs text-fg-muted">{t("documents.knowledgeBases.loadErrorHint")}</p>
+        </div>
       ) : null}
 
       <div id={DOCUMENT_KB_PICKER_ID}>

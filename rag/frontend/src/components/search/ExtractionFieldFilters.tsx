@@ -12,7 +12,7 @@ import {
 } from "@production-ready/ui";
 import { Plus, Trash2 } from "lucide-react";
 
-import { ApiErrorState } from "@/components/StateViews";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { type ExtractionFieldDefinition } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -58,10 +58,13 @@ export function ExtractionFieldFilters({
   }
   if (fieldsState.status === "error") {
     return (
-      <ApiErrorState
+      // 絞り込みの「項目」の候補を読み取れなかった。条件の欄の位置に失敗と再試行を出す（#4817）。
+      <DataLoadFailure
         error={fieldsState.error}
         fallback={t("search.filters.fields.loadError")}
         onRetry={fieldsState.retry}
+        layout="field"
+        testId="search-extraction-fields-load-failed"
       />
     );
   }

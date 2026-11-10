@@ -3,7 +3,6 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { Download, RefreshCw } from "lucide-react";
 import {
   compareNames,
-  Banner,
   Button,
   Card,
   CardContent,
@@ -31,6 +30,7 @@ import {
   useActionPending,
   apiErrorMessage,
 } from "@production-ready/ui";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
 import { listTotal } from "@/components/ListFilters";
 import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedPageSize } from "@/components/ListViews";
@@ -324,7 +324,16 @@ export function AuditPage() {
                 testId="audit-csv-processing"
               />
             ) : null}
-            {tools.error ? <Banner severity="warning">{apiErrorMessage(tools.error, t("common.error.load"))}</Banner> : null}
+            {tools.isError && tools.data === undefined ? (
+              // ツール名の候補を読み取れなかった（記録に出たツール名だけが候補になる）。条件の欄の直下に出す（#4817）。
+              <DataLoadFailure
+                error={tools.error}
+                fallback={t("audit.toolNameLoadError")}
+                onRetry={() => void tools.refetch()}
+                layout="field"
+                testId="audit-tool-name-load-failed"
+              />
+            ) : null}
           </CardContent>
         </Card>
 

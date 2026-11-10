@@ -1,9 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
 import {
-  ApiErrorBanner,
   Banner,
-  Button,
   Card,
   CardContent,
   CardDescription,
@@ -25,6 +22,7 @@ import {
   type AgentDataScopes,
   type DataScopeCandidate,
 } from "@/lib/api";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /** データの範囲を持てる接続（画面に出す順）。 */
@@ -33,7 +31,7 @@ export const DATA_SCOPE_CONNECTIONS: readonly AgentDataScopeConnection[] = ["nl2
 /** 接続ごとの文言の key（業務プロファイル / 検索・回答プロファイル）。 */
 const CONNECTION_KEYS: Record<
   AgentDataScopeConnection,
-  { title: I18nKey; description: I18nKey; label: I18nKey; defaultLabel: I18nKey; loading: I18nKey }
+  { title: I18nKey; description: I18nKey; label: I18nKey; defaultLabel: I18nKey; loading: I18nKey; loadError: I18nKey }
 > = {
   nl2sql: {
     title: "agent.dataScope.nl2sql.title",
@@ -41,6 +39,7 @@ const CONNECTION_KEYS: Record<
     label: "agent.dataScope.nl2sql.label",
     defaultLabel: "agent.dataScope.nl2sql.default",
     loading: "agent.dataScope.nl2sql.loading",
+    loadError: "agent.dataScope.nl2sql.loadError",
   },
   rag: {
     title: "agent.dataScope.rag.title",
@@ -48,6 +47,7 @@ const CONNECTION_KEYS: Record<
     label: "agent.dataScope.rag.label",
     defaultLabel: "agent.dataScope.rag.default",
     loading: "agent.dataScope.rag.loading",
+    loadError: "agent.dataScope.rag.loadError",
   },
 };
 
@@ -199,23 +199,6 @@ function DataScopeCard({
               <div data-testid={`agent-data-scope-${connection}-forbidden`}>
                 <Banner severity="info">{t("agent.dataScope.forbidden", { product: t(keys.title) })}</Banner>
               </div>
-            ) : candidates.error ? (
-              <ApiErrorBanner
-                error={candidates.error}
-                fallback={t("agent.dataScope.loadError")}
-                testId={`agent-data-scope-${connection}-error`}
-                action={
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    loading={candidates.isFetching}
-                    onClick={() => void candidates.refetch()}
-                  >
-                    {t("common.retry")}
-                  </Button>
-                }
-              />
             ) : null}
             <SearchableMultiSelect
               id={fieldId}
@@ -233,6 +216,16 @@ function DataScopeCard({
                 searchPlaceholder: t("agent.dataScope.search"),
               }}
             />
+            {candidates.error && !forbidden ? (
+              // 候補を読み取れなかった。欄の直下に、欄ごとの文と再試行を出す（#4817）。
+              <DataLoadFailure
+                error={candidates.error}
+                fallback={t(keys.loadError)}
+                onRetry={() => void candidates.refetch()}
+                layout="field"
+                testId={`agent-data-scope-${connection}-error`}
+              />
+            ) : null}
             {missing.length ? (
               <p className="text-xs text-warning-fg" data-testid={`agent-data-scope-${connection}-missing`}>
                 {t("agent.dataScope.missing", { ids: missing.join("、") })}
