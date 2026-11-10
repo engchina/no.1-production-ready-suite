@@ -41,6 +41,7 @@ export function SchemaReferencePanel({
   catalog,
   loading,
   loadingIndicator = true,
+  loadFailed = false,
   profileUnselected = false,
   disabled,
   insertMode = "logical",
@@ -66,6 +67,11 @@ export function SchemaReferencePanel({
 }: {
   catalog: SchemaCatalog | null;
   loading: boolean;
+  /**
+   * 表の一覧を読み取れなかった（#4222）。表が 1 件も無いときは「一致する表または項目がありません」・空のスキーマの
+   * 案内・件数を出さない（0 件と言い切れない）。原因と再試行はページの先頭の案内が出す。
+   */
+  loadFailed?: boolean;
   /**
    * 読み込み中に文言と経過時間を出すか（既定 true）。同じ領域の先頭が別の読み込みの経過時間を出している間は
    * false にして、表の一覧の形の Skeleton だけを出す（1 つの領域に経過時間は 1 か所。#4649）。
@@ -177,6 +183,8 @@ export function SchemaReferencePanel({
   const [knownUnfilteredCount, setKnownUnfilteredCount] = useState<number | null>(null);
   // 一覧の読み込み中と業務プロファイルの未選択では、表の一覧・件数・空の案内を出さない。
   const listHidden = loading || profileUnselected;
+  // 読み取れずに表が 1 件も無いときは、空の案内と件数を出さない（#4222）。
+  const loadUnavailable = !listHidden && loadFailed && (catalog?.tables.length ?? 0) === 0;
   const loadedAllUnfiltered = !listHidden && !searching && !hasMore && catalog !== null;
   const loadedUnfilteredCount = scopedTables.length;
   // render の中で前の値と比べて合わせる（effect で setState しない。React の「props の変化で state を合わせる」型）。
@@ -184,7 +192,7 @@ export function SchemaReferencePanel({
     setKnownUnfilteredCount(loadedUnfilteredCount);
   }
   const listCount = schemaReferenceListCount({
-    loading: listHidden,
+    loading: listHidden || loadUnavailable,
     searching,
     hasMore,
     scoped: allowedSet !== null,
@@ -304,7 +312,16 @@ export function SchemaReferencePanel({
         </div>
       ) : null}
 
-      {!listHidden && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
+      {loadUnavailable ? (
+        <p
+          className="min-w-0 rounded-md border border-dashed border-border p-3 text-sm text-fg-muted [overflow-wrap:anywhere]"
+          data-testid="nl2sql-schema-load-unavailable"
+        >
+          {t("common.list.loadUnavailable")}
+        </p>
+      ) : null}
+
+      {!listHidden && !loadUnavailable && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
         <div className="grid min-w-0 gap-3 rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">
           <p className="[overflow-wrap:anywhere]">{t("nl2sql.schema.emptyCatalog")}</p>
           <div>
@@ -321,7 +338,7 @@ export function SchemaReferencePanel({
         </div>
       )}
 
-      {!listHidden && filteredTables.length === 0 && !(catalogEmpty && onRefreshSchema) && (
+      {!listHidden && !loadUnavailable && filteredTables.length === 0 && !(catalogEmpty && onRefreshSchema) && (
         <p className="min-w-0 rounded-md border border-dashed border-border p-3 text-sm text-fg-muted [overflow-wrap:anywhere]">
           {t("nl2sql.schema.empty")}
         </p>

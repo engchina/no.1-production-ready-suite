@@ -281,6 +281,7 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
   | それ以外 | 500 | `database_read_failed` など | backend の利用者向けの文 | 再試行だけ |
 
 - **部品**: 判定は `dataLoadView(query, { isEmpty })`（`loading` / `failed` / `stale` / `ready`）。`failed` は `DataLoadFailureState`（領域だけを占める `ErrorState`。`role="alert"`、再試行へフォーカスを移す。入力中の欄・開いているダイアログからは奪わない）、`stale` は `StaleDataNotice`（前回の一覧を残し、見出しで「いつの内容か」を示す。warning なので `role="status"`（§2）、ほかにフォーカスがあれば動かさない）。`ready` になるまで空の状態を出さない。`failed` では件数を出さない。前回が 0 件のまま失敗したら、残す内容が無いので `failed` にする。ダイアログ・全画面のブロックは使わない。`DatabaseGate` は本当に接続できない・未設定のときだけ（§3.4.1）。
+- **選択欄の候補**: 候補の読み取りの失敗も「候補なし」と同じ表示にしない（#4222）。候補が無いまま失敗したら `DataLoadFailureState` の `layout="field"`（欄の位置の danger の `Banner`。同じ文・導線・再試行）を欄の直下に出す。一覧のツールバーの絞り込みはツールバーの直下に出し、一覧そのものは読めるのでそのまま出す。検索つきの選択欄の開いたパネルは、失敗の間「候補がありません」と言わない。
 - **作成を止める**: `dataLoadView` の `blockCreate` の間は一覧の「新規作成」を `disabled` にする（読み取れていないのに作ると重複するおそれがある。理由は失敗の表示が示す）。
 - **自動の再試行は控えめに**: 製品の `QueryClient` の既定に `retryDataLoad` / `dataLoadRetryDelay` を渡す。上限 2 回。DB の読み取りの失敗の後は 5 秒・15 秒の間隔を空ける（同じ読み取りをすぐ繰り返しても混雑を増やすだけ）。4xx は試さない。待ちの間は読み込み中のまま（`TimedLoadingState` の経過時間が続く）。その後は利用者の再試行に任せる。定期の取り直しも失敗の間は止める。
 
