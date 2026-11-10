@@ -1077,6 +1077,22 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_remove_raptor",
+            table_name="rag_chunks",
+            sql=remove_raptor_sql(),
+            destructive_note=(
+                "取込の RAPTOR の階層の要約を消したので、保存済みの RAPTOR の要約の chunk"
+                "（RAG_CHUNKS の METADATA_JSON に raptor_summary の印がある行）と、RAPTOR の要約の"
+                "プロンプトの保存値（RAG_ANSWER_PROMPTS の raptor_summary_system・"
+                "raptor_summary_archived）を削除します。原文の chunk・章節の要約・項目抽出の値・"
+                "ほかのプロンプトは変えません。保存したプロンプトを残す必要があれば適用前に同表を "
+                "export してください。削除後は復元できません（要約の chunk は再取込でも"
+                "作りません）。"
+            ),
+        )
+    )
     return sections
 
 
@@ -1179,6 +1195,21 @@ EXCEPTION
         END IF;
 END;
 /
+""".strip()
+
+
+def remove_raptor_sql() -> str:
+    """消した RAPTOR の階層の要約の、保存済みの chunk とプロンプトを消す（#4782）。
+
+    残すと、要約の chunk が原文の chunk として検索・引用に出る（派生の chunk の印を読まなくなる）。
+    何度当てても同じ結果になる。
+    """
+    return """
+DELETE FROM rag_chunks
+WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';
+
+DELETE FROM rag_answer_prompts
+WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary_archived');
 """.strip()
 
 

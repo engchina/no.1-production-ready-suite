@@ -138,13 +138,12 @@ class RecipeStagingIngestion:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
     ) -> DocumentDetail:
         # 原本はcreate_documentで保存済み。正式jobはそのURIから読む。
-        _ = image_bytes, prompt, content_type, source_profile
+        _ = image_bytes, content_type, source_profile
         from app.api.routes.documents import (
             _enqueue_ingestion_job_for_recipe,
             _merge_document_processing_config,

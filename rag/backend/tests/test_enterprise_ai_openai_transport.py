@@ -54,7 +54,9 @@ async def test_generate_posts_responses_via_openai_sdk(monkeypatch: pytest.Monke
         requests.append(request)
         return httpx.Response(200, json={"output_text": "回答です"})
 
-    answer = await _client(monkeypatch, handler).generate("質問", "根拠")
+    answer = await _client(monkeypatch, handler).generate(
+        "質問", "根拠", system_prompt="合成の指示"
+    )
 
     assert answer == "回答です"
     request = requests[0]
@@ -77,7 +79,9 @@ async def test_generate_retries_retryable_status(monkeypatch: pytest.MonkeyPatch
             return httpx.Response(200, json={"output_text": "ok"}, headers=headers)
         return httpx.Response(status, json={"error": "busy"}, headers=headers)
 
-    answer = await _client(monkeypatch, handler, max_retries=1).generate("q", "c")
+    answer = await _client(monkeypatch, handler, max_retries=1).generate(
+        "q", "c", system_prompt="合成の指示"
+    )
 
     assert answer == "ok"
 
@@ -87,7 +91,7 @@ async def test_http_error_keeps_response_body(monkeypatch: pytest.MonkeyPatch) -
         return httpx.Response(400, json={"error": {"message": "model not found"}})
 
     with pytest.raises(httpx.HTTPStatusError, match="model not found"):
-        await _client(monkeypatch, handler).generate("q", "c")
+        await _client(monkeypatch, handler).generate("q", "c", system_prompt="合成の指示")
 
 
 async def test_timeout_maps_to_enterprise_ai_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,7 +99,7 @@ async def test_timeout_maps_to_enterprise_ai_timeout(monkeypatch: pytest.MonkeyP
         raise httpx.ReadTimeout("slow", request=request)
 
     with pytest.raises(EnterpriseAiTimeoutError):
-        await _client(monkeypatch, handler).generate("q", "c")
+        await _client(monkeypatch, handler).generate("q", "c", system_prompt="合成の指示")
 
 
 async def test_upload_file_sends_multipart(monkeypatch: pytest.MonkeyPatch) -> None:

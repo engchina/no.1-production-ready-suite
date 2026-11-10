@@ -514,10 +514,20 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 167
+    assert len(statements) == 169
     assert all(
         statement.startswith(
-            ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
+            (
+                "-- migration:",
+                "DECLARE",
+                "INSERT",
+                "MERGE",
+                "UPDATE",
+                "DELETE",
+                "COMMIT",
+                "CREATE",
+                "BEGIN",
+            )
         )
         for statement in statements
     )
@@ -647,6 +657,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261110_4781_retire_removed_answer_prompts",
         "20261110_4784_search_answer_profile_retired_fields",
         "20261110_4784_language_pack_retired_unread",
+        "20261110_4782_remove_raptor",
     ]
 
 

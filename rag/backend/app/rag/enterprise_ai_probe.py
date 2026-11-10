@@ -15,6 +15,7 @@ from app.config import Settings, get_settings
 
 ProbeSurface = Literal["llm", "vlm", "both"]
 
+PROBE_SYSTEM_PROMPT = "根拠コンテキストだけに基づいて、質問に短く答えてください。"
 DEFAULT_LLM_PROMPT = "Enterprise AI LLM contract probe の確認用キーワードを答えてください。"
 DEFAULT_LLM_CONTEXT = (
     "[enterprise-ai-probe.txt#probe:0]\n"
@@ -213,7 +214,7 @@ def _request_preview(
 ) -> dict[str, object]:
     """client の request preview を JSON 化する。"""
     if surface == "llm":
-        preview = client.preview_llm_request(prompt, context)
+        preview = client.preview_llm_request(prompt, context, system_prompt=PROBE_SYSTEM_PROMPT)
     else:
         preview = client.preview_vlm_request(
             vlm_text.encode("utf-8"),
@@ -235,7 +236,11 @@ async def _invoke_surface(
     """実 endpoint を呼び、raw content なしの parse 結果 summary を返す。"""
     if surface == "llm":
         answer = await async_call_with_model_purpose(
-            "connection.check", client.generate, prompt, context
+            "connection.check",
+            client.generate,
+            prompt,
+            context,
+            system_prompt=PROBE_SYSTEM_PROMPT,
         )
         return {"text_chars": len(answer)}
     extraction = await async_call_with_model_purpose(

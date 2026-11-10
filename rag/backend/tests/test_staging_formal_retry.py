@@ -179,7 +179,7 @@ async def test_formal_adapter_retry_preserves_failed_attempt_and_reads_activated
     monkeypatch.setattr(documents, "IngestionPipeline", factory)
     adapter = RecipeStagingIngestion(oracle=cast(Any, oracle), settings=settings)
     with pytest.raises(IngestionUserError):
-        await adapter.ingest("doc-1", source, "合成の取込", content_type="application/pdf")
+        await adapter.ingest("doc-1", source, content_type="application/pdf")
     before = await _collect_staging_evidence(cast(Any, oracle), cast(Any, storage), "doc-1")
     frozen_before = json.dumps([r.model_dump(mode="json") for r in before.segments], sort_keys=True)
     assert before.status == "ERROR"
@@ -187,7 +187,7 @@ async def test_formal_adapter_retry_preserves_failed_attempt_and_reads_activated
     assert oracle.activated == []
     assert oracle.events == ["receipt"]
     runner.fail_on_call = None
-    result = await adapter.ingest("doc-1", source, "合成の取込", content_type="application/pdf")
+    result = await adapter.ingest("doc-1", source, content_type="application/pdf")
     after = await _collect_staging_evidence(cast(Any, oracle), cast(Any, storage), "doc-1")
     assert result.status == FileStatus.INDEXED
     assert runner.calls == [[1], [2], [2]]

@@ -10,7 +10,7 @@ byte 単位の chunk 比較ではなく、artifact 層を「効く軸だけ」�
         -> chunk_set (+ chunking) <- embedding は chunk text 従属で自動共有
         -> metadata 層 (+ field_extraction)
         -> graph 層    (+ graph_profile)
-        -> nav 層      (+ navigation_summary / raptor)
+        -> nav 層      (+ navigation_summary)
 
 すべて決定論(canonical JSON + SHA1)で、CI で実 Oracle なしに検証できる。実際の
 materialize / 永続化 / refcount / GC は別モジュール(要 DDL・実 Oracle 検証)で行う。
@@ -100,7 +100,7 @@ _CHUNK_SET_HASH_STRATEGY_VALUES: dict[str, str] = {_SMALL_TO_BIG_STRATEGY: "docr
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。
 _METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled",)
 _GRAPH_FIELDS: tuple[str, ...] = ("rag_graph_profile",)
-_NAV_FIELDS: tuple[str, ...] = ("rag_navigation_summary_enabled", "rag_raptor_enabled")
+_NAV_FIELDS: tuple[str, ...] = ("rag_navigation_summary_enabled",)
 
 _HASH_HEX_LEN = 16
 
@@ -265,7 +265,7 @@ def compute_graph_layer_id(chunk_set_id: str, settings: Settings) -> str:
 
 
 def compute_nav_layer_id(chunk_set_id: str, settings: Settings) -> str:
-    """ナビゲーション/RAPTOR 層の ID(chunk_set に nav 軸を重ねる)。"""
+    """ナビゲーション層の ID(chunk_set に nav 軸を重ねる)。"""
     return _digest("nv", {"v": KEY_VERSION, "cs": chunk_set_id, **_fields(settings, _NAV_FIELDS)})
 
 
