@@ -1629,7 +1629,7 @@ DEGRADED_STEPS_DESCRIPTION = (
 
 # 根拠 0 件の診断（回答の診断の zero_evidence）の公開の形（#3546）。検索の条件の値・検索文・
 # 例外の文は出さない（段と件数だけ）。
-ZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
+ZeroEvidenceStage = Literal["retrieval", "evidence_check", "context"]
 
 
 class ZeroEvidence(BaseModel):
@@ -1637,8 +1637,7 @@ class ZeroEvidence(BaseModel):
 
     stage: ZeroEvidenceStage = Field(
         description=(
-            "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・"
-            "頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と"
+            "retrieval=検索の候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と"
             "判定 / context=候補はあるが回答に渡す根拠が 0 件。"
         )
     )

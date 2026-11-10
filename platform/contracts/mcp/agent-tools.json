@@ -2029,7 +2029,6 @@
                   {
                     "enum": [
                       "retrieval",
-                      "filter",
                       "evidence_check",
                       "context"
                     ],

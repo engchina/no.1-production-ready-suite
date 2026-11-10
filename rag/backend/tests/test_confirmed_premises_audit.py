@@ -12,8 +12,7 @@ from app.rag.answer_engine import (
     build_engine_settings,
 )
 from app.rag.history_question import HistoryConfirmation
-from app.rag.pipeline import RagPipeline, scope_with_history_confirmations
-from app.schemas.search import SearchRequest
+from app.rag.pipeline import scope_with_history_confirmations
 
 LABEL = "操作担当の種別"
 VALUE = "担当A"
@@ -103,34 +102,4 @@ def test_history_preserves_question_source_and_marks_actual_confirmation_user(
     assert settings.confirmed_premise_sources == (
         ("確認項目B", "選択B", "user"),
         (LABEL, VALUE, "question"),
-    )
-
-
-async def test_pipeline_keeps_recognized_pairs_and_explicit_confirmation_precedence(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    class StopBeforeSearch(Exception):
-        pass
-
-    def stop() -> str:
-        raise StopBeforeSearch()
-
-    monkeypatch.setattr("app.rag.pipeline.new_trace_id", stop)
-    request = SearchRequest(query=QUESTION)
-    request._rule_selection_scope = {
-        "context": "質問で特定した選択",
-        "confirmed_premises": ((LABEL, VALUE), ("項目B", "値B")),
-        "confirmed_premise_sources": ((LABEL, VALUE, "question"), ("項目B", "値B", "question")),
-    }
-    pipeline = RagPipeline(
-        settings=Settings(),
-        scope=AnswerScope(context="確認済み", confirmed_premises=((LABEL, VALUE),)),
-    )
-    with pytest.raises(StopBeforeSearch):
-        await pipeline.run(request)
-    settings = build_engine_settings(Settings(), output_dir=tmp_path, scope=pipeline._scope)
-    assert settings.confirmed_premises == ((LABEL, VALUE), ("項目B", "値B"))
-    assert settings.confirmed_premise_sources == (
-        (LABEL, VALUE, "user"),
-        ("項目B", "値B", "question"),
     )

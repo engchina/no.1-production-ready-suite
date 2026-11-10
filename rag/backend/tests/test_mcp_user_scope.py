@@ -1,4 +1,4 @@
-"""MCP の入口(``POST /api/mcp``)から、自動の検索条件を足しても、呼び出し元が指定した条件・基準日・
+"""MCP の入口(``POST /api/mcp``)から、呼び出し元が指定した条件・基準日・
 サービストークンの範囲(検索・回答プロファイルと KB)が残ることを確かめる(#3260)。
 
 ``rag_search``(回答あり)と ``rag_retrieve_evidence``(planning=rag /
@@ -31,20 +31,16 @@ from app.main import app
 from app.mcp import profile_scope
 from app.mcp import tools as mcp_tools
 from app.rag import section_map_service
-from app.rag.pipeline import RagPipeline
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
     set_audit_request_context,
 )
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
-from app.schemas.search import ExtractionFieldCondition, SearchRequest
 from tests.security_support import ProductionAuth, enable_production_auth
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, _fake_llm
 from tests.test_answer_user_scope import (
-    AUTO_FIELD,
-    AUTO_SAME_FIELD,
     MANUAL_FIELD,
     ContextReferenceOracle,
     PlanRecorder,
@@ -118,7 +114,6 @@ def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
     settings = get_settings()
     monkeypatch.setattr(settings, "app_service_token_secret", SECRET)
     for name, value in {
-        "rag_auto_field_filter_enabled": True,
         "rag_reference_expansion_enabled": True,
         "rag_entity_expansion_enabled": True,
         "rag_graph_expansion_enabled": True,
@@ -138,7 +133,7 @@ def plans(monkeypatch: MonkeyPatch) -> Iterator[tuple[PlanRecorder, PlanRecorder
 
 
 def _install(monkeypatch: MonkeyPatch, oracle: Any, genai: Any) -> None:
-    """検索 API・MCP・pipeline の Oracle と embedding を代役にし、自動の項目の条件を読ませる。"""
+    """検索 API・MCP・pipeline の Oracle と embedding を代役にする。"""
     for module in (search_route, mcp_tools, pipeline_module):
         monkeypatch.setattr(module, "OracleClient", lambda *_a, **_k: oracle)
     monkeypatch.setattr(pipeline_module, "OciGenAiClient", lambda *_a, **_k: genai)
@@ -147,14 +142,6 @@ def _install(monkeypatch: MonkeyPatch, oracle: Any, genai: Any) -> None:
         return {}  # 根拠の所属の章節(結果の表示の補助)は読まない
 
     monkeypatch.setattr(mcp_tools, "evidence_sections", no_sections)
-
-    async def read_auto_fields(
-        self: RagPipeline, request: SearchRequest, **kwargs: Any
-    ) -> list[ExtractionFieldCondition]:
-        # 質問から読み取った(自動の)項目の条件。1 つは呼び出し元の手の条件と同じ項目で別の値。
-        return [AUTO_SAME_FIELD, AUTO_FIELD]
-
-    monkeypatch.setattr(RagPipeline, "_read_field_conditions", read_auto_fields)
 
 
 def _headers(auth: ProductionAuth) -> dict[str, str]:
@@ -271,16 +258,13 @@ def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     assert oracle.filters
     first = oracle.filters[0]
     # 質問の文書名・ページは DB 条件にしない。呼び出し元の明示条件を維持する。
-    # caller が検索文を作った場合は独立した LLM 項目条件も足さない。
     if "file_name" in caller_filters:
         assert (first.get("file_name"), first.get("page_number_min")) == ("manual", "1")
     else:
         assert (first.get("file_name"), first.get("page_number_min")) == (None, None)
     manual = (MANUAL_FIELD.name, MANUAL_FIELD.value)
-    if extra.get("planning") == "caller":
-        assert _field_values(first) == [manual]
-    else:
-        assert _field_values(first) == [manual, (AUTO_FIELD.name, AUTO_FIELD.value)]
+    # 項目の条件は呼び出し元が明示したものだけ（質問から条件を足さない）。
+    assert _field_values(first) == [manual]
     # どの検索も同じ条件で検索する(caller の追加の検索文を含む)。
     assert all(item == first for item in oracle.filters)
     if extra.get("planning") == "caller":
@@ -289,8 +273,7 @@ def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     scalar = {key: value for key, value in expected.items() if key != "extraction_fields"}
     for item in oracle.filters:
         assert {key: item.get(key) for key in scalar} == scalar
-        assert manual in _field_values(item)
-        assert AUTO_SAME_FIELD.value not in [value for _name, value in _field_values(item)]
+        assert _field_values(item) == [manual]
     # 実体・関係情報の拡張は、主の検索と同じ呼び出し元の範囲の中で広げる。
     entity, graph = plans
     assert entity.scopes and graph.scopes
@@ -338,7 +321,7 @@ def test_mcp_reference_entity_and_graph_keep_caller_file_name(
     assert reference_filters
     kept = {**filters, "knowledge_base_id": "kb-1,kb-2", "include_superseded": "true"}
     assert all(item == kept for item in reference_filters)
-    # 実体・関係情報の拡張は、呼び出し元の文書名・分類を残す(自動の項目の条件は含めない)。
+    # 実体・関係情報の拡張は、呼び出し元の文書名・分類を残す。
     entity, graph = plans
     expected = {**filters, **kept}
     assert entity.scopes and graph.scopes

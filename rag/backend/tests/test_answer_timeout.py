@@ -78,7 +78,6 @@ def test_stage_labels_cover_answer_stages() -> None:
         "retrieval",
         "history_rewrite",
         "attachment_evidence",
-        "field_filter",
         "answer",
         # 回答を作らない RAG 検索の全体（#3506）。
         "evidence",

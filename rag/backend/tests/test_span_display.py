@@ -31,18 +31,11 @@ def _update(name: str) -> SpanUpdate:
     )
 
 
-@pytest.mark.parametrize(
-    ("name", "label"),
-    [
-        ("用語・同義語の確認", "一致する用語の別名を検索文に加える"),
-        ("回答ルールの確認", "確認と回答に使うルールを選ぶ"),
-    ],
-    ids=["terms", "rules"],
-)
-def test_terms_and_rules_steps_have_their_own_names(name: str, label: str) -> None:
-    """用語・同義語と回答ルールは別の工程の名前（設定画面のタブの名前と同じ語）にする（#3451）。"""
-    assert answer_step_display_name(name) == label
-    assert span_display_name(_update(name)) == label
+def test_terms_step_has_its_own_name() -> None:
+    """用語・同義語の工程の名前（#3451）。登録ルールの工程は無い（#4799）。"""
+    assert answer_step_display_name("用語・同義語の確認") == "一致する用語の別名を検索文に加える"
+    assert span_display_name(_update("用語・同義語の確認")) == "一致する用語の別名を検索文に加える"
+    assert answer_step_display_name("回答ルールの確認") == "回答ルールの確認"
 
 
 def test_old_combined_step_name_is_not_known() -> None:

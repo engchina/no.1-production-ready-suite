@@ -1,4 +1,4 @@
-"""検索・回答プロファイル単位の用語・ルール(runtime knowledge)API と検索時の反映。"""
+"""検索・回答プロファイル単位の用語・同義語(runtime knowledge)API と検索時の反映。"""
 
 import pytest
 from pytest import MonkeyPatch
@@ -22,84 +22,54 @@ def fake_oracle(monkeypatch: pytest.MonkeyPatch) -> FakeKnowledgeOracle:
     return fake
 
 
-def test_edit_terms_rules_and_preview(fake_oracle: FakeKnowledgeOracle) -> None:
-    assert client.get(BASE).json()["data"] == {
-        "search_answer_profile_id": "bv-1",
-        "terms": [],
-        "rules": [],
-    }
+def test_edit_terms_and_preview(fake_oracle: FakeKnowledgeOracle) -> None:
+    assert client.get(BASE).json()["data"] == {"search_answer_profile_id": "bv-1", "terms": []}
 
     term = client.post(
         f"{BASE}/edit",
-        json={
-            "kind": "terms",
-            "name": "受注",
-            "labels": "オーダー\n注文",
-            "content": "顧客からの注文",
-        },
+        json={"name": "受注", "labels": "オーダー\n注文", "content": "顧客からの注文"},
     )
     assert term.status_code == 200
     assert term.json()["data"]["terms"][0]["aliases"] == ["オーダー", "注文"]
-    rule = client.post(
-        f"{BASE}/edit",
-        json={
-            "kind": "rules",
-            "name": "R1",
-            "title": "取消の注意",
-            "labels": "取消",
-            "content": "取消後は元に戻せません。",
-        },
-    )
-    assert rule.json()["data"]["rules"][0]["id"] == "R1"
 
     preview = client.post(f"{BASE}/preview", json={"question": "オーダーを取消したい"})
     data = preview.json()["data"]
-    assert data["matched_terms"] == ["受注"]
-    assert data["matched_rules"] == ["取消の注意"]
+    assert data == {"expanded_question": data["expanded_question"], "matched_terms": ["受注"]}
     assert "受注" in data["expanded_question"]
 
-    duplicate = client.post(f"{BASE}/edit", json={"kind": "terms", "name": "受注"})
+    duplicate = client.post(f"{BASE}/edit", json={"name": "受注"})
     assert duplicate.status_code == 422
-    deleted = client.post(
-        f"{BASE}/edit", json={"kind": "terms", "selected": "受注", "delete": True}
-    )
+    deleted = client.post(f"{BASE}/edit", json={"selected": "受注", "delete": True})
     assert deleted.json()["data"]["terms"] == []
 
 
-@pytest.mark.parametrize(
-    ("payload", "message"),
-    [
-        ({"kind": "terms", "name": "  "}, "用語を入力してください。"),
-        (
-            {"kind": "rules", "name": "", "title": "t", "content": "c"},
-            "照合キーワードを入力してください。",
-        ),
-        (
-            {"kind": "rules", "name": "R1", "title": "", "content": "c"},
-            "ルール名を入力してください。",
-        ),
-        (
-            {"kind": "rules", "name": "R1", "title": "t", "labels": "合成語", "content": " "},
-            "ルール内容を入力してください。",
-        ),
-    ],
-    ids=["term", "rule-keywords", "rule-title", "rule-content"],
-)
-def test_edit_rejects_empty_required_fields_like_the_screen(
-    fake_oracle: FakeKnowledgeOracle, payload: dict[str, str], message: str
-) -> None:
-    """用語・ルールの必須は backend が正本（#540）。画面と同じ文言の 422 を返し、保存しない。"""
-    response = client.post(f"{BASE}/edit", json=payload)
+def test_edit_rejects_empty_term_like_the_screen(fake_oracle: FakeKnowledgeOracle) -> None:
+    """用語の必須は backend が正本（#540）。画面と同じ文言の 422 を返し、保存しない。"""
+    response = client.post(f"{BASE}/edit", json={"name": "  "})
     assert response.status_code == 422
-    assert response.json()["error_messages"] == [message]
+    assert response.json()["error_messages"] == ["用語を入力してください。"]
     assert client.get(BASE).json()["data"]["terms"] == []
-    assert client.get(BASE).json()["data"]["rules"] == []
+
+
+def test_registered_rules_are_not_editable_or_returned(fake_oracle: FakeKnowledgeOracle) -> None:
+    """登録ルールは無い（#4799）。確認の保存の経路は無く、payload に残った rules も返さない。"""
+    fake_oracle.payloads[("bv-1", "runtime_knowledge")] = {
+        "schema_version": 1,
+        "terms": [{"term": "用語 A"}],
+        "rules": [{"id": "R1", "title": "合成ルール", "triggers": ["用語 A"], "content": "x"}],
+    }
+    data = client.get(BASE).json()["data"]
+    assert data == {"search_answer_profile_id": "bv-1", "terms": [{"term": "用語 A"}]}
+    preview = client.post(f"{BASE}/preview", json={"question": "用語 A について"}).json()["data"]
+    assert "matched_rules" not in preview
+    removed = client.put(f"{BASE}/rules/R1/clarification", json={"clarification": None})
+    assert removed.status_code in {404, 405}
 
 
 def test_search_context_carries_search_answer_profile_runtime_knowledge(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    payload = {"schema_version": 1, "terms": [{"term": "受注", "aliases": ["注文"]}], "rules": []}
+    payload = {"schema_version": 1, "terms": [{"term": "受注", "aliases": ["注文"]}]}
 
     class KnowledgeViewOracle(search_tests.FakeViewOracle):
         async def get_search_answer_profile_knowledge(
@@ -127,171 +97,3 @@ def test_search_context_carries_search_answer_profile_runtime_knowledge(
     revision = settings.rag_search_answer_profile_revision
     assert revision["id"] == "bv-1"
     assert isinstance(revision["updated_at"], str) and revision["config_sha256"]
-
-
-def test_rule_identity_is_generated_and_retained_on_edit(fake_oracle: FakeKnowledgeOracle) -> None:
-    values = {
-        "kind": "rules",
-        "title": "合成ルール A",
-        "labels": "合成語 A",
-        "content": "合成の注意点。",
-    }
-    first = client.post(f"{BASE}/edit", json=values)
-    assert first.status_code == 200
-    identity = first.json()["data"]["rules"][0]["id"]
-    assert identity.startswith("rule_")
-    second = client.post(f"{BASE}/edit", json={**values, "title": "合成ルール B"})
-    assert second.status_code == 200
-    rules = second.json()["data"]["rules"]
-    assert len({rule["id"] for rule in rules}) == 2
-    edited = client.post(
-        f"{BASE}/edit", json={**values, "selected": identity, "title": "合成ルール C"}
-    )
-    assert edited.status_code == 200
-    assert edited.json()["data"]["rules"][0]["id"] == identity
-    assert edited.json()["data"]["rules"][0]["title"] == "合成ルール C"
-
-
-@pytest.mark.parametrize("labels", ["", " \n ", "、,，\n"])
-def test_rule_keywords_require_a_nonempty_value(
-    fake_oracle: FakeKnowledgeOracle, labels: str
-) -> None:
-    response = client.post(
-        f"{BASE}/edit",
-        json={
-            "kind": "rules",
-            "title": "合成ルール A",
-            "labels": labels,
-            "content": "合成の注意点。",
-        },
-    )
-    assert response.status_code == 422
-    assert response.json()["error_messages"] == ["照合キーワードを入力してください。"]
-    assert client.get(BASE).json()["data"]["rules"] == []
-
-
-def test_confirmation_only_rule_accepts_empty_content_and_preserves_contract_on_legacy_edit(
-    fake_oracle: FakeKnowledgeOracle,
-) -> None:
-    response = client.post(
-        f"{BASE}/edit",
-        json={
-            "kind": "rules",
-            "title": "合成の確認",
-            "labels": "設定",
-            "purpose": "confirmation",
-            "content": "",
-            "instruction_kind": "verification",
-            "exclusive_group": "g",
-            "priority": 3,
-        },
-    )
-    assert response.status_code == 200
-    row = response.json()["data"]["rules"][0]
-    updated = client.post(
-        f"{BASE}/edit",
-        json={
-            "kind": "rules",
-            "selected": row["id"],
-            "title": "名前を変更",
-            "labels": "設定",
-            "content": "",
-        },
-    )
-    assert updated.status_code == 200
-    saved = updated.json()["data"]["rules"][0]
-    assert (
-        saved["purpose"],
-        saved["instruction_kind"],
-        saved["exclusive_group"],
-        saved["priority"],
-    ) == ("confirmation", "verification", "g", 3)
-    generation = client.post(
-        f"{BASE}/edit",
-        json={
-            "kind": "rules",
-            "title": "合成の指示",
-            "labels": "設定",
-            "purpose": "generation",
-            "content": "",
-        },
-    )
-    assert generation.status_code == 422
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"purpose": "unknown"},
-        {"instruction_kind": "unknown"},
-        {"priority": True},
-        {"priority": -1},
-        {"priority": 101},
-    ],
-)
-def test_rule_application_contract_rejects_invalid_values(
-    fake_oracle: FakeKnowledgeOracle, extra: dict[str, object]
-) -> None:
-    response = client.post(
-        f"{BASE}/edit",
-        json={
-            "kind": "rules",
-            "title": "合成の指示",
-            "labels": "設定",
-            "content": "資料を確認する。",
-            **extra,
-        },
-    )
-    assert response.status_code == 422
-
-
-def test_preview_reports_exclusive_conflict_without_passing_opposed_rules(
-    fake_oracle: FakeKnowledgeOracle,
-) -> None:
-    for title in ("合成ルール A", "合成ルール B"):
-        response = client.post(
-            f"{BASE}/edit",
-            json={
-                "kind": "rules",
-                "title": title,
-                "labels": "設定",
-                "content": title,
-                "exclusive_group": "group-a",
-            },
-        )
-        assert response.status_code == 200
-    response = client.post(f"{BASE}/preview", json={"question": "設定の手順"})
-    assert response.status_code == 200
-    assert response.json()["data"]["matched_rules"] == []
-    assert response.json()["data"]["conflicting_rules"] == ["合成ルール A", "合成ルール B"]
-
-
-@pytest.mark.parametrize(
-    ("purpose", "expected"), [("confirmation", True), ("generation", False), ("both", True)]
-)
-def test_rule_purpose_controls_confirmation_and_keeps_known_conditions(
-    purpose: str, expected: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.config import get_settings
-    from app.rag.search_answer_profile_knowledge import unanswered_rule_clarifications
-
-    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
-    data = {
-        "rules": [
-            {
-                "id": "rule-a",
-                "title": "設定",
-                "triggers": ["設定"],
-                "content": "資料に沿って説明する。",
-                "purpose": purpose,
-                "clarification": {
-                    "question": "対象は？",
-                    "options": [{"id": "a", "label": "対象 A"}, {"id": "b", "label": "対象 B"}],
-                },
-            }
-        ]
-    }
-    assert bool(unanswered_rule_clarifications(data, "設定の手順")) is expected
-    assert bool(unanswered_rule_clarifications(data, "対象 A の設定の手順")) is expected
-    data["rules"][0]["status"] = "deprecated"
-    assert unanswered_rule_clarifications(data, "設定の手順") == []
