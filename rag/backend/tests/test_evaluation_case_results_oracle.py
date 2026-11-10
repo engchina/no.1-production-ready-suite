@@ -111,7 +111,7 @@ async def test_case_results_are_not_written_without_the_lease(job_ids: list[str]
 
 
 async def test_case_results_are_read_only_through_a_visible_job(job_ids: list[str]) -> None:
-    """ケースの結果は job を見られる利用者にだけ返す（#4811。プロファイルの無い job は本人だけ）。"""
+    """ケースの結果は job を見られる利用者にだけ返す（#4811。プロファイルの無い job は本人）。"""
     store = OracleEvaluationJobStore()
     job_id = await _create_job(store, job_ids)
     assert await _save(store, job_id, case_index=0)
