@@ -84,9 +84,8 @@ _HEAD_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)(?:\.(?!\d)|(?=\s|$|[^\d.]))")
 
 
 def normalize_text(value: str) -> str:
-    """全角の数字・記号を半角にそろえる(既定 NFKC。「参照の解析」の設定で NFC・しない。#2177)。"""
-    form = current_pack().value("symbols", "normalization")
-    return unicodedata.normalize(form, value or "") if form != "none" else value or ""
+    """全角の数字・記号を半角にそろえる(NFKC に固定。検索の側と同じ形。#4784)。"""
+    return unicodedata.normalize("NFKC", value or "")
 
 
 def title_key(value: str) -> str:

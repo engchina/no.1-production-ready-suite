@@ -2249,6 +2249,7 @@ const load = dataLoadView(query, { isEmpty: page?.total === 0 });
 - `databaseAction` は接続の失敗のときだけ再試行の前に出る。開ける利用者のときだけ渡す。データベース設定へのリンクは `@production-ready/system-settings` の `DatabaseSettingsLink`。
 - `QueryClient` の既定に `retryDataLoad` / `dataLoadRetryDelay` を渡す。
 - `ErrorState` の `focusRetry`（再試行へフォーカス）と `action`（再試行の前の導線）はこの部品が使う。
+- 選択欄の候補など、画面の一部の欄を支える読み取りの失敗は `layout="field"`（#4222）。同じ文・導線・再試行を、欄の位置に収まる danger の `Banner` で出し、「詳細」は畳む。ほかにフォーカスがあれば動かさない。候補が無いまま失敗したら「すべて」「指定なし」だけの選択肢を候補なしと見せず、この表示を欄の直下（ツールバーの絞り込みはツールバーの直下）に出す。
 
 ## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
 

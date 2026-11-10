@@ -32,6 +32,7 @@ import {
   TextField,
   apiErrorMessage,
   compareNames,
+  dataLoadView,
 } from "@production-ready/ui";
 import { agentApi, type AgentSkill } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -201,7 +202,15 @@ export function SkillsPage() {
                     loading: reloadMutation.isPending,
                     onClick: () => reloadMutation.mutate(),
                   },
-                  { id: "create", kind: "primary", label: t("skills.add"), icon: Plus, onClick: editor.openNew },
+                  {
+                    id: "create",
+                    kind: "primary",
+                    label: t("skills.add"),
+                    icon: Plus,
+                    // 一覧を読み取れていない間は作らない（messaging.md §3.6.1。#4222）。
+                    disabled: dataLoadView(skills, { isEmpty: skills.data?.skills.length === 0 }).blockCreate,
+                    onClick: editor.openNew,
+                  },
                 ]
               : []
           }

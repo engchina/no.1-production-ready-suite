@@ -213,6 +213,48 @@ test.describe("AI Agent Control Plane", () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 900 },
+    { name: "mobile-375", width: 375, height: 812 },
+  ]) {
+    test(`モデルとスキルの候補を読み取れないときは、候補なしと見せず欄の位置に失敗と再試行を出す (#4222, ${viewport.name})`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await installControlPlaneApi(page);
+      let candidatesFail = true;
+      const failure = (message: string) => ({
+        status: 500,
+        json: { data: null, error_messages: [message], warning_messages: [], error_code: "database_read_failed" },
+      });
+      // 後から登録した route が先に呼ばれる（installControlPlaneApi の成功の応答を上書きする）。
+      await page.route("**/api/runtime/status", (route) =>
+        candidatesFail ? route.fulfill(failure("モデルの一覧を読み取れませんでした。")) : route.fallback()
+      );
+      await page.route("**/api/skills", (route) =>
+        candidatesFail ? route.fulfill(failure("スキルの一覧を読み取れませんでした。")) : route.fallback()
+      );
+      await page.goto("/agents?id=default");
+
+      const modelFailure = page.getByTestId("agent-model-load-failed");
+      await expect(modelFailure).toBeVisible({ timeout: 15_000 });
+      await expect(modelFailure.getByRole("alert")).toContainText("モデルの一覧を読み取れませんでした。");
+      const skillsFailure = page.getByTestId("agent-skills-load-failed");
+      await expect(skillsFailure.getByRole("alert")).toContainText("スキルの一覧を読み取れませんでした。");
+      await expectNoHorizontalOverflow(page);
+      await modelFailure.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-${viewport.name}.png`) });
+
+      candidatesFail = false;
+      await modelFailure.getByRole("button", { name: "再試行" }).click();
+      await expect(modelFailure).toHaveCount(0);
+      await skillsFailure.getByRole("button", { name: "再試行" }).click();
+      await expect(skillsFailure).toHaveCount(0);
+      await page.getByRole("combobox", { name: "モデル" }).click();
+      await expect(page.getByRole("option", { name: "gpt-oss-120b" })).toBeVisible();
+    });
+  }
+
   test("Run は Agent とゴールだけで作成し、組み込み Runtime が実行する", async ({ page }) => {
     await installControlPlaneApi(page);
     await page.goto("/runs?id=new");

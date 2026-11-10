@@ -114,7 +114,6 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
-from app.rag.language_pack_store import LANGUAGE_PACK_STORE
 from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX
 
 UploadStorageBackend = Literal["local", "oci"]
@@ -333,7 +332,6 @@ DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
 DEFAULT_FILE_TYPE_DEFAULTS_FILE = "file-type-defaults.json"
 # 言語資源の全体の上書き(#2181)。
-DEFAULT_LANGUAGE_PACK_FILE = "language-pack.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
@@ -580,14 +578,6 @@ class Settings(
         default=DEFAULT_FILE_TYPE_DEFAULTS_FILE,
         description=(
             "「形式別の既定」画面から保存した JSON（RAG 専用。#4732）。相対 path は backend/ 基準。"
-        ),
-    )
-
-    rag_language_pack_file: str = Field(
-        default=DEFAULT_LANGUAGE_PACK_FILE,
-        description=(
-            "「言語資源」画面から保存した、組み込みの言語資源との差の JSON(#2181)。"
-            "相対 path は backend/ 基準。"
         ),
     )
 
@@ -2696,7 +2686,6 @@ def reset_settings_cache() -> None:
     MODEL_SETTINGS_STORE.reset()
     PARSER_SETTINGS_STORE.reset()
     FILE_TYPE_DEFAULTS_STORE.reset()
-    LANGUAGE_PACK_STORE.reset()
     _ENV_RELOAD_STATE.key = None
     _ENV_RELOAD_STATE.snapshot = None
 
@@ -2781,12 +2770,6 @@ def resolve_model_settings_file(path_value: str) -> Path:
 _PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
 PARSER_SECRET_ATTRS = ("rag_parser_dots_ocr_api_key",)
-
-
-def resolve_language_pack_file(settings: Settings) -> Path:
-    """RAG_LANGUAGE_PACK_FILE を RAG の backend/.env と同じディレクトリ基準で解決する(#2181)。"""
-    path = Path(settings.rag_language_pack_file.strip() or DEFAULT_LANGUAGE_PACK_FILE).expanduser()
-    return path if path.is_absolute() else (BACKEND_ENV_FILE.parent / path).resolve()
 
 
 def resolve_parser_settings_file(path_value: str) -> Path:

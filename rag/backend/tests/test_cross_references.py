@@ -2434,7 +2434,7 @@ def test_document_name_appendix_and_edition_words_come_from_settings(
 def test_number_symbol_and_english_settings_change_extraction(
     reference_words: Callable[..., None],
 ) -> None:
-    """数の書き方・記号・助詞・英語の書き方・正規化は設定で変わる(#2177)。"""
+    """数の書き方・記号・助詞・英語の書き方は設定で変わる(#2177)。"""
     # 年度・版・日付の型。
     assert "定期保守計画" in document_name_aliases("定期保守計画 2026年度.pdf")
     reference_words(edition_patterns=["第N稿"], edition_words=[])
@@ -2461,10 +2461,9 @@ def test_number_symbol_and_english_settings_change_extraction(
     assert extract_references("see Section 3.2") == []
     assert [(s.kind, s.key) for s in extract_references("consult Part 2")] == [("chapter", "2")]
 
-    # 正規化: しないなら全角の「３．２節」を節の番号として読まない。
+    # 正規化は NFKC に固定(#4784): 全角の「３．２節」も節の番号として読み、設定の項目は無い。
     assert [s.key for s in extract_references("詳細は３．２節参照。")] == ["3.2"]
-    reference_words(normalization="none")
-    assert [s.key for s in extract_references("詳細は３．２節参照。")] == []
+    assert "normalization" not in {spec.key for spec in FIELD_SPECS}
 
 
 def test_number_units_kanji_name_chars_and_coordination_come_from_settings(
@@ -2719,3 +2718,13 @@ async def test_reference_chunks_count_lob_prefix_in_utf16_units(
 
     assert seen["reference_prefix_length"] == len("\U00020bb7章 > ")
     assert seen["reference_prefix_lob_length"] == len("\U00020bb7章 > ") + 1
+
+
+@pytest.mark.parametrize("text", ["詳細は３．２節参照。", "Ⅳ ｱｲｳ ①（別紙）", "第2条の2", ""])
+def test_fixed_nfkc_matches_the_previous_default(text: str) -> None:
+    """正規化を NFKC に固定しても、既定（NFKC）のまま取り込んだ文書と同じ形になる(#4784)。"""
+    import unicodedata
+
+    from app.rag.cross_references import normalize_text
+
+    assert normalize_text(text) == unicodedata.normalize("NFKC", text)

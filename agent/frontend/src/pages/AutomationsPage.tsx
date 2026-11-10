@@ -39,6 +39,7 @@ import {
   apiErrorMessage,
   displayTimeZone,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  dataLoadView,
 } from "@production-ready/ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
@@ -331,7 +332,17 @@ function AutomationList({
         subtitle={t("page.automations.subtitle")}
         actions={
           canManage
-            ? [{ id: "create", kind: "primary", label: t("automation.create"), icon: Plus, onClick: onCreate }]
+            ? [
+                {
+                  id: "create",
+                  kind: "primary",
+                  label: t("automation.create"),
+                  icon: Plus,
+                  // 一覧を読み取れていない間は作らない（messaging.md §3.6.1。#4222）。
+                  disabled: dataLoadView(list, { isEmpty: allItems.length === 0 }).blockCreate,
+                  onClick: onCreate,
+                },
+              ]
             : []
         }
       />

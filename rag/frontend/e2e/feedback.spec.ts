@@ -399,6 +399,47 @@ test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の�
   await expectNoPageOverflow(page);
 });
 
+test("絞り込みの検索・回答プロファイルを読み取れないときは「すべて」だけを候補なしと見せず、ツールバーの直下に失敗と再試行を出す (#4222)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockFeedback(page, []);
+  let profilesFail = true;
+  let profileRequests = 0;
+  // 後の route が優先する（beforeEach の成功の応答を上書きする）。
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    profileRequests += 1;
+    if (profilesFail) {
+      await route.fulfill({
+        status: 500,
+        json: {
+          data: null,
+          error_messages: ["検索・回答プロファイルを読み取れませんでした。"],
+          warning_messages: [],
+          error_code: "database_read_failed",
+        },
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+
+  const failure = page.getByTestId("feedback-profile-filter-load-failed");
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(failure.getByRole("alert")).toContainText("検索・回答プロファイルを読み取れませんでした。");
+  // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
+  await expect(page.getByText("全体の有用率", { exact: true }).first()).toBeVisible();
+  const toolbarBox = await page.getByTestId("feedback-filters-toolbar").boundingBox();
+  const failureBox = await failure.boundingBox();
+  expect(toolbarBox !== null && failureBox !== null && failureBox.y >= toolbarBox.y + toolbarBox.height).toBe(true);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath(`feedback-profile-filter-load-failed-${testInfo.project.name}.png`) });
+
+  profilesFail = false;
+  const before = profileRequests;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  expect(profileRequests).toBeGreaterThan(before);
+});
+
 for (const width of [1280, 1920]) {
   test(`一覧は全幅で、行の値が列の境界を超えず、タイトルと左端がそろう (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "desktop table contract");

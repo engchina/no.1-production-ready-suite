@@ -14,8 +14,9 @@ def test_numbered_functions_do_not_match_shared_subheadings():
     assert not operation_labels(a) & operation_labels(b)
     queries = alternative_operation_queries("文言を変更したい", [a, b])
     assert len(queries) == 2
-    assert all(q.startswith("文言を変更したい") for q in queries)
-    assert "(1)帳票設定" in queries[0] and "(2)伝票印刷設定" in queries[1]
+    # 検索文は原質問と機能の見出しだけで、固定の語を足さない（#4784）。
+    assert queries[0] == "文言を変更したい B管理-(1)帳票設定"
+    assert queries[1] == "文言を変更したい B管理-(2)伝票印刷設定"
 
 
 @pytest.mark.parametrize("reverse", [False, True])

@@ -156,10 +156,10 @@ def test_both_report_their_own_fields(
 def test_invalid_value_reports_only_the_name(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    spec = next(item for item in FIELD_SPECS if item.kind is FieldKind.CHOICE)
+    spec = next(item for item in FIELD_SPECS if item.kind is FieldKind.ENUM_MAP)
     invalid_value = "合成の不正な選択肢"
     effective = _complete()
-    effective[spec.section][spec.key] = invalid_value
+    effective[spec.section][spec.key] = [f"合成の語={invalid_value}"]
     code, output, _ = _run_check(monkeypatch, capsys, _unread(effective, _complete()))
     assert code == 1
     assert f"{spec.section}.{spec.key}" in output

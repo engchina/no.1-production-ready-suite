@@ -3239,6 +3239,68 @@ test("スキーマ参照の読込状態は利用者向けの日本語ラベル�
   await expect(loading).toBeHidden();
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`スキーマ参照は表の一覧を読み取れないとき「一致する表または項目がありません」と出さない (#4222, ${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockNl2SqlApi(page);
+    let schemaFail = true;
+    await page.unroute("**/api/schema/objects?*");
+    await page.route("**/api/schema/objects?*", (route) => {
+      if (schemaFail) {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({
+            data: null,
+            error_messages: ["スキーマの一覧を読み取れませんでした。"],
+            warning_messages: [],
+            error_code: "database_read_failed",
+          }),
+        });
+      }
+      return fulfillJson(route, {
+        items: schemaCatalog.tables.map((table) => ({
+          owner: table.owner,
+          object_name: table.table_name,
+          object_type: table.table_type,
+          logical_name: table.logical_name,
+          comment: table.comment,
+          row_count: table.row_count,
+          column_count: table.columns.length,
+          last_ddl_at: "",
+        })),
+        next_cursor: null,
+        total: schemaCatalog.tables.length,
+        catalog_version: 1,
+      });
+    });
+
+    await page.goto("/query");
+
+    const panel = page.getByTestId("nl2sql-schema-reference");
+    const unavailable = panel.getByTestId("nl2sql-schema-load-unavailable");
+    await expect(unavailable).toBeVisible({ timeout: 15_000 });
+    await expect(unavailable).toHaveText("読み取れなかったため、一覧を表示できません。");
+    await expect(panel.getByText("一致する表または項目がありません。")).toHaveCount(0);
+    // 原因と再試行はページの先頭の案内（#4217）。
+    const retry = page.getByTestId("query-page-notice-retry");
+    await expect(retry).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`schema-reference-load-failed-notice-${viewport.name}.png`) });
+    await panel.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`schema-reference-load-failed-${viewport.name}.png`) });
+
+    schemaFail = false;
+    await retry.click();
+    await expect(unavailable).toHaveCount(0);
+    await expect(panel.getByText("一致する表または項目がありません。")).toHaveCount(0);
+  });
+}
+
 test("query workbench waits for a real profile id before profile detail and schema requests", async ({ page }) => {
   const profileId = "0f2767ed-da07-4d35-bee0-52b5a92ec694";
   const profile = {

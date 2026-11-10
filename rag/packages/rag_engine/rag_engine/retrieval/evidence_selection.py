@@ -39,7 +39,7 @@ def _terms(value: str) -> set[str]:
     for word in re.findall(rf"{cues.kana_kanji}{{2,}}", text):
         terms.add(word)
         terms.update(word[i : i + 2] for i in range(len(word) - 1))
-    return terms - set(cues.words["relevance_stop_terms"])
+    return terms
 
 
 def evidence_relevance(question: str, text: str) -> float:
