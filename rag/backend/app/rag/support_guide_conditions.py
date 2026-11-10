@@ -84,6 +84,7 @@ async def resolve_text_conditions(
         return match
     context = json.dumps(
         {
+            "question": text,
             "conditions": [
                 {"id": key, "label": state.condition.label, "question": state.condition.question}
                 for key, state in pending.items()
@@ -95,7 +96,7 @@ async def resolve_text_conditions(
         raw = await async_call_with_model_purpose(
             "query.conditions",
             condition_client(settings).generate,
-            text,
+            "質問から明示された条件値を取り出してください。",
             context,
             system_prompt=resolve_prompt(
                 "support_guide_conditions.system", CONDITION_SYSTEM_PROMPT
@@ -181,10 +182,6 @@ async def resolve_answered_conditions(
     pending = unresolved_answers(match, provided)
     if not pending:
         return match
-    answers = json.dumps(
-        [{"id": key, "answer": answer} for key, (_condition, answer) in pending.items()],
-        ensure_ascii=False,
-    )
     context = json.dumps(
         {
             "conditions": [
@@ -193,8 +190,9 @@ async def resolve_answered_conditions(
                     "label": condition.label,
                     "question": condition.question,
                     "options": list(condition.allowed_values),
+                    "answer": answer,
                 }
-                for key, (condition, _answer) in pending.items()
+                for key, (condition, answer) in pending.items()
             ]
         },
         ensure_ascii=False,
@@ -203,7 +201,7 @@ async def resolve_answered_conditions(
         raw = await async_call_with_model_purpose(
             "query.conditions",
             condition_client(settings).generate,
-            answers,
+            "確認の答えが選んだ選択肢を決めてください。",
             context,
             system_prompt=resolve_prompt(
                 "support_guide_conditions.answerChoice", ANSWER_SYSTEM_PROMPT

@@ -48,11 +48,10 @@ def stub(monkeypatch: pytest.MonkeyPatch, output: Any = None, *, error: bool = F
     calls: list[Any] = []
 
     class Client:
-        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        async def generate(self, _prompt: str, context: str, **kwargs: Any) -> str:
             assert kwargs["system_prompt"] == recognition.CONDITION_SYSTEM_PROMPT
             assert all(f"## Step {step}:" in kwargs["system_prompt"] for step in range(1, 4))
-            # 質問の原文は質問の欄に、条件は文脈に渡す（指示・schema を質問の欄に入れない）。
-            calls.append(({"question": prompt, **json.loads(context)}, kwargs))
+            calls.append((json.loads(context), kwargs))
             if error:
                 raise RuntimeError("synthetic failure")
             return (
