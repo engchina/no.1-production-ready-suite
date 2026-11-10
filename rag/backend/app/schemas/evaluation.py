@@ -910,6 +910,42 @@ class EvaluationJob(BaseModel):
     partial_result: EvaluationMetrics | None = None
     # アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。
     source_workbook_id: str | None = None
+    # 使った検索・回答プロファイル（主・比べる）と名前（#4811。記録の無い古い job は None）。
+    search_answer_profile_id: str | None = None
+    compare_search_answer_profile_id: str | None = None
+    search_answer_profile_name: str | None = None
+    compare_search_answer_profile_name: str | None = None
+    # 実行した利用者の表示名（分からない古い job・引けない利用者は None）。UUID は表示名を引く
+    # ためだけに使い、応答には出さない。
+    actor_user_uuid: str | None = Field(default=None, exclude=True)
+    actor_display_name: str | None = None
+    # 見ている利用者が実行した job か、取り消せるか（本人と system_admin。#4811）。
+    owned: bool = True
+    can_cancel: bool = True
+
+
+class EvaluationJobSummary(BaseModel):
+    """過去の品質評価の一覧の行（#4811）。結果の本体は持たず、全体の判定だけを持つ。"""
+
+    job_id: str
+    status: EvaluationJobStatus
+    # 評価したケースの数（比べるプロファイルの 2 回目は数えない）。
+    case_count: int
+    total_cases: int
+    completed_cases: int
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
+    # 全体の判定（成功した job だけ。閾値の判定が無い・終わっていない job は None）。
+    passed: bool | None = None
+    search_answer_profile_id: str | None = None
+    compare_search_answer_profile_id: str | None = None
+    search_answer_profile_name: str | None = None
+    compare_search_answer_profile_name: str | None = None
+    # 実行した利用者の UUID は表示名を引くためだけに使い、応答には出さない。
+    actor_user_uuid: str | None = Field(default=None, exclude=True)
+    actor_display_name: str | None = None
+    owned: bool = False
+    can_cancel: bool = False
 
 
 class EvaluationImportIssue(BaseModel):

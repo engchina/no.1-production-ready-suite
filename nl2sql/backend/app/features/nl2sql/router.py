@@ -74,7 +74,6 @@ from .models import (
     AdminFeedbackReviewRequest,
     AgentConversationCreateData,
     AgentConversationCreateRequest,
-    AgentConversationsData,
     AgentPrivilegeCheckData,
     AgentTeamRunData,
     AgentTeamRunRequest,
@@ -1930,23 +1929,6 @@ def cleanup_select_ai_agent_assets(
     """Oracle Select AI Agent low-level assets の cleanup を実行する。"""
     _assert_profile_access(request, req.profile_id, default_profile=True)
     return ApiResponse(data=nl2sql_service.cleanup_select_ai_agent_assets_low_level(req))
-
-
-@router.get(
-    "/select-ai-agent/conversations",
-    response_model=ApiResponse[AgentConversationsData],
-)
-def select_ai_agent_conversations(
-    team_name: str | None = None,
-    limit: int = 20,
-) -> ApiResponse[AgentConversationsData]:
-    """Oracle Select AI Agent conversation 履歴を返す。"""
-    return ApiResponse(
-        data=nl2sql_service.list_select_ai_agent_conversations(
-            team_name=team_name,
-            limit=max(1, min(limit, 100)),
-        )
-    )
 
 
 @router.get(
