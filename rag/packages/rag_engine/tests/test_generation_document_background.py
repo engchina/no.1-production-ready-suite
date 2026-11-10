@@ -13,7 +13,6 @@ from rag_engine.generation.document_inputs import document_key, document_priorit
 from rag_engine.generation.grounded import format_functions, generation_unit_catalog, tag_spans
 from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_first_page_context
 from rag_engine.models.storage import StoredChunk
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.evidence_selection import evidence_spans
 from rag_engine.retrieval.metadata_context import document_context_key
 
@@ -157,14 +156,14 @@ def test_dedup_requires_matching_original_unit_in_same_version():
     assert diagnostic["documents"][0]["first_page_deduplicated_units"] == 1
 
 
-def test_document_rank_uses_best_valid_score_and_preserves_catalog_slot():
+def test_document_rank_uses_best_valid_score():
     values = [
         {"source_id": "a1", "document_scope": ["a"]},
-        {"source_id": "catalog", "document_scope": ["c"], ARTICLE_CATALOG_KEY: True},
+        {"source_id": "c1", "document_scope": ["c"]},
         {"source_id": "b1", "document_scope": ["b"]},
         {"source_id": "b2", "document_scope": ["b"]},
         {"source_id": "d1", "document_scope": ["d"]},
     ]
     priority = document_priority(values, {"a1": 0.3, "b1": 0.1, "b2": 0.9, "d1": float("nan")})
     ordered = order_document_spans(values, priority=priority)
-    assert list(dict.fromkeys(document_key(value) for value in ordered)) == [("b",), ("c",), ("a",), ("d",)]
+    assert list(dict.fromkeys(document_key(value) for value in ordered)) == [("b",), ("a",), ("c",), ("d",)]

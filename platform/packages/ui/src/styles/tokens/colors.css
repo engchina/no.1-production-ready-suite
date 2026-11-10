@@ -201,3 +201,11 @@
 }
 [data-surface-tint]:not([data-surface-tint="success"]) { --color-success-fg: var(--color-success-fg-strong); }
 [data-surface-tint]:not([data-surface-tint="warning"]) { --color-warning-fg: var(--color-warning-fg-strong); }
+/* ホバー中だけ灰色の地（bg-surface-hover）を塗る要素（DataTable の押せる行。#4639）。塗る間だけ上と同じ値にする
+   （fg-muted は neutral-100 の上で 4.39:1 → 4.63:1 以上）。a11y.css の forced-colors / prefers-contrast も対象にしている。 */
+[data-surface-tint-hover]:hover {
+  --color-fg-muted:   light-dark(var(--neutral-650), var(--neutral-350));
+  --color-accent-fg:  var(--color-accent-fg-strong);
+  --color-success-fg: var(--color-success-fg-strong);
+  --color-warning-fg: var(--color-warning-fg-strong);
+}

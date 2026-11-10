@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { LOCAL_CURRENT_USER } from "./fixtures/auth";
 import { MOCK_NOW, emptyUsageReport, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #772: 利用状況（Run のモデル利用量の集計）と、Run の詳細の利用量。
 
@@ -9,13 +10,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
@@ -100,7 +94,7 @@ for (const viewport of VIEWPORTS) {
       await expect(days.getByRole("row").nth(1)).toContainText("44,000");
       await expect(page.getByText("1–25 / 30 件")).toBeVisible();
 
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`usage-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }
@@ -183,7 +177,7 @@ test("90 日を超える期間（180・365 日）を選べ、集計元を出す"
   expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("days")).toBe("365");
   await page.getByRole("tab", { name: "日ごと" }).click();
   await expect(page.getByText("1–25 / 365 件")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("読み込み中は経過時間と集計の形の Skeleton を出す", async ({ page }) => {
@@ -279,7 +273,7 @@ for (const viewport of VIEWPORTS) {
     await page.goto("/usage");
     await expect(page.getByTestId("usage-summary")).toContainText("100,000");
     expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("Asia/Tokyo");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`usage-system-timezone-${viewport.name}.png`), fullPage: true });
   });
 }

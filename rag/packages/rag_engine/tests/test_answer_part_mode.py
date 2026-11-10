@@ -27,10 +27,16 @@ def test_strict_schema_puts_the_mode_before_the_answer_and_derivation_has_no_sou
     for name in ("DerivationAnswerPart", "StatedAnswerPart"):
         assert list(defs[name]["properties"]) == defs[name]["required"] == ["request_id", "requirement", "mode", "answer"]
         assert "default" not in defs[name]["properties"]["mode"]
-    assert [ref(node) for node in defs["DerivationAnswerPart"]["properties"]["answer"]["anyOf"]] == ["SupportedAnswerPart", "GapAnswerPart"]
+    # 表で示す答え（TableAnswerPart。#4796）はどちらの役割でも選べる。
+    assert [ref(node) for node in defs["DerivationAnswerPart"]["properties"]["answer"]["anyOf"]] == [
+        "SupportedAnswerPart",
+        "TableAnswerPart",
+        "GapAnswerPart",
+    ]
     assert [ref(node) for node in defs["StatedAnswerPart"]["properties"]["answer"]["anyOf"]] == [
         "SourceAnswerPart",
         "SupportedAnswerPart",
+        "TableAnswerPart",
         "GapAnswerPart",
     ]
 

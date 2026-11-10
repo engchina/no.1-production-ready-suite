@@ -31,7 +31,6 @@ import {
   TextField,
   type ListPickerItem,
   type SelectFieldOption,
-  ApiErrorBanner,
   apiErrorMessage,
 } from "@production-ready/ui";
 import {
@@ -47,6 +46,7 @@ import {
   type BuiltinRuntimeModel,
   type SkillPolicy,
 } from "@/lib/api";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { matchesSearch } from "@/components/ListFilters";
 import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
 import {
@@ -135,9 +135,12 @@ export function AgentEditorView({
   availableSkills,
   skillsLoading,
   skillsError,
+  onRetrySkills,
   models,
   defaultModelId,
   modelsLoading,
+  modelsError,
+  onRetryModels,
   actions,
   readOnly,
   sharing,
@@ -149,11 +152,16 @@ export function AgentEditorView({
   /** Skill を取得中は「取得できません」と誤って出さず、読み込み中の表示にする。 */
   skillsLoading: boolean;
   skillsError: Error | null;
+  /** スキルの候補の取り直し（読み取りの失敗の再試行。#4222）。 */
+  onRetrySkills: () => void;
   /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
   models: BuiltinRuntimeModel[];
   /** 空を選んだときに使う既定のテキストモデル（表示用）。 */
   defaultModelId: string;
   modelsLoading: boolean;
+  /** モデルの候補の読み取りの失敗（候補なしと分けて再試行を出す。#4222）。 */
+  modelsError: Error | null;
+  onRetryModels: () => void;
   actions: EntityAction[];
   /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
   readOnly: boolean;
@@ -722,6 +730,18 @@ export function AgentEditorView({
                         onValueChange={setModelId}
                       />
                     )}
+                    {modelsError ? (
+                      // 既定のモデルだけを候補なしと見せず、欄の直下に失敗と再試行を出す（#4222）。保存は既定か今の値のまま。
+                      <div className="col-span-full min-w-0">
+                        <DataLoadFailure
+                          error={modelsError}
+                          fallback={t("agent.modelLoadError")}
+                          onRetry={onRetryModels}
+                          layout="field"
+                          testId="agent-model-load-failed"
+                        />
+                      </div>
+                    ) : null}
                     {!agent ? (
                       // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
                       <label className="flex items-center gap-2 self-end text-sm text-fg">
@@ -739,7 +759,16 @@ export function AgentEditorView({
               </Card>
             </Section>
             <Section title={t("agent.skills")}>
-              {skillsError ? <ApiErrorBanner error={skillsError} fallback={t("common.error.load")} /> : null}
+              {skillsError ? (
+                // 候補を読み取れなかったことを、再試行と一緒に出す（#4222）。
+                <DataLoadFailure
+                  error={skillsError}
+                  fallback={t("agent.skillsUnavailable")}
+                  onRetry={onRetrySkills}
+                  layout="field"
+                  testId="agent-skills-load-failed"
+                />
+              ) : null}
               {missingSkillIds.length ? (
                 <Banner severity="warning">
                   {t("agent.skillPicker.missingBanner", { skills: missingSkillIds.join("、") })}

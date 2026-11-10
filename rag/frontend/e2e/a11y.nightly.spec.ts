@@ -148,6 +148,35 @@ async function mockSettingsAndFeedback(page: Page) {
       }),
     }),
   );
+  // 形式別の既定（#4732）。選択欄に値がある行と、全体の既定を継ぐ行を並べる。
+  const fileTypeRow = (fileType: string, extensions: string[], entry: Record<string, string | null>) => ({
+    file_type: fileType,
+    extensions,
+    preprocess_profile: null,
+    parser_adapter_backend: null,
+    chunking_strategy: null,
+    ...entry,
+    preprocess_options: ["passthrough"],
+    unavailable_preprocess_profiles: [],
+    parser_options: { passthrough: ["docling", "unstructured"] },
+    unavailable_parser_backends: [],
+    inherited_preprocess_profile: "passthrough",
+    builtin: { preprocess_profile: null, parser_adapter_backend: null, chunking_strategy: null },
+    builtin_unavailable_reason: null,
+  });
+  await page.route("**/api/settings/file-type-defaults", (route) =>
+    route.fulfill({
+      json: apiEnvelope({
+        rows: [
+          fileTypeRow("pdf", [".pdf"], { parser_adapter_backend: "docling", chunking_strategy: "small_to_big" }),
+          fileTypeRow("text", [".txt"], {}),
+        ],
+        chunking_options: strategies,
+        global_defaults: { preprocess_profile: "passthrough", parser_adapter_backend: "docling", chunking_strategy: "small_to_big" },
+        config_source: "runtime",
+      }),
+    }),
+  );
   await page.route("**/api/settings/answer-prompts**", (route) =>
     route.fulfill({
       json: apiEnvelope({
@@ -336,6 +365,14 @@ const SCREENS: Screen[] = [
   { path: "/settings/preprocess" },
   { path: "/settings/parser-adapters" },
   { path: "/settings/chunking" },
+  {
+    path: "/settings/file-type-defaults",
+    // mock の行が出た後（読み込みの失敗の表示ではない）の画面を確かめる。
+    act: async (page) => {
+      await expect(page.getByTestId("file-type-row-pdf")).toBeVisible();
+      await expect(page.getByTestId("file-type-row-text")).toBeVisible();
+    },
+  },
   { path: "/settings/vector-index" },
   { path: "/settings/entity-index" },
   { path: "/settings/graph" },
@@ -456,7 +493,7 @@ async function openScreen(page: Page, screen: Screen, theme: Theme) {
   await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
   if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
   else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
-  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。描画の失敗（CardErrorBoundary）は mock の不足。
+  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。描画の失敗（RenderErrorBoundary）は mock の不足。
   // mock の無い API は 503 で、TanStack Query の再試行（既定 3 回）を終えてから失敗の表示になる。
   await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByText(/^(この項目|「.+」)を表示できません$/)).toHaveCount(0);

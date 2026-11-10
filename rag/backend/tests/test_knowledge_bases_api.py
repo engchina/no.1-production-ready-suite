@@ -15,7 +15,7 @@ from app.clients.structure_graph_store import StructureGraphStore
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.extraction_field_adapter import FieldDefinition
-from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, parse_adapter_config
+from app.rag.kb_adapter_config import parse_adapter_config
 from app.rag.search_answer_profile_config import MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
 from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus, IngestionJobPhase
 from app.schemas.knowledge_base import (
@@ -93,7 +93,6 @@ class FakeKnowledgeBaseOracle:
             default_search_mode=default_search_mode,
             retrieval_config=retrieval_config or {},
             adapter_config=adapter_config,
-            legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
             document_count=0,
             indexed_document_count=0,
             error_document_count=0,
@@ -210,7 +209,6 @@ class FakeKnowledgeBaseOracle:
                     else detail.retrieval_config
                 ),
                 "adapter_config": adapter_config,
-                "legacy_query_config_ignored": (adapter_config.query != KnowledgeBaseQueryConfig()),
                 "updated_at": datetime(2026, 1, 2, tzinfo=UTC),
             }
         )
@@ -704,30 +702,21 @@ def test_patch_knowledge_base_rejects_adapter_config(
     assert reloaded["adapter_config"]["ingestion"]["chunking_strategy"] == "structure_aware"
 
 
-def test_knowledge_base_legacy_query_config_is_flagged(
+def test_knowledge_base_has_no_query_config(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
-    """既存 retrieval_config に残る query は読めるが legacy ignored として返る。"""
+    """KB は検索・回答の上書き(query)を持たない。送られても読まず、応答に出さない(#4784)。"""
     created = client.post(
         "/api/knowledge-bases",
         json={
-            "name": "Legacy KB",
+            "name": "KB A",
             "description": "説明",
             "retrieval_config": {"query": {"rerank_enabled": False}},
         },
     ).json()["data"]
 
-    assert created["adapter_config"]["query"]["rerank_enabled"] is False
-    assert created["legacy_query_config_ignored"] is True
-
-    # 名前・説明の更新では legacy の保存値を書き換えない(読み取りのみ)。
-    patched = client.patch(
-        f"/api/knowledge-bases/{created['id']}",
-        json={"description": "更新後"},
-    ).json()["data"]
-
-    assert patched["description"] == "更新後"
-    assert patched["adapter_config"]["query"]["rerank_enabled"] is False
+    assert "query" not in created["adapter_config"]
+    assert "legacy_query_config_ignored" not in created
 
 
 def test_list_knowledge_bases_filters_by_ids_including_archived(

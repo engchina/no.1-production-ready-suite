@@ -15,14 +15,11 @@ import {
   type ListCountLabels,
   type ListToolbarLabels,
   type PaginationLabels,
-  DataLoadFailureState,
-  StaleDataNotice,
-  type DataLoadFailureLabels,
   formatPaginationNumber,
   offsetForPage,
 } from "@production-ready/ui";
 
-import { formatDateTime } from "@/lib/format";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { t } from "@/lib/i18n";
 import { useWorkspaceState, type WorkspaceField, type WorkspaceValidator } from "@/lib/workspace-state";
 
@@ -166,17 +163,6 @@ export function listScrollLabel(name: string | undefined): string | undefined {
   return name ? t("list.scrollLabel", { name }) : undefined;
 }
 
-function dataLoadLabels(): DataLoadFailureLabels {
-  return {
-    timeout: t("common.dataLoad.timeout"),
-    unavailable: t("common.dataLoad.unavailable"),
-    unavailableRestricted: t("common.dataLoad.unavailableRestricted"),
-    retry: t("common.retry"),
-    staleTitle: (time) => t("common.dataLoad.staleTitle", { time }),
-    staleOther: t("common.dataLoad.staleOther"),
-  };
-}
-
 /** 前回の内容が 0 件か（配列・`items` を持つページ）。残す内容が無いので失敗の表示にする。 */
 function isEmptyData(data: unknown): boolean {
   if (Array.isArray(data)) return data.length === 0;
@@ -236,10 +222,9 @@ export function QueryState<T>({
       // 前回の内容があれば残し、いつの内容かを示す。
       return (
         <>
-          <StaleDataNotice
+          <DataLoadStaleNotice
             error={query.error}
-            updatedAt={formatDateTime(new Date(query.dataUpdatedAt).toISOString())}
-            labels={dataLoadLabels()}
+            dataUpdatedAt={query.dataUpdatedAt}
             onRetry={retry}
             retrying={query.isFetching}
           />
@@ -247,14 +232,8 @@ export function QueryState<T>({
         </>
       );
     }
-    return (
-      <DataLoadFailureState
-        error={query.error}
-        fallback={t("common.error.load")}
-        labels={dataLoadLabels()}
-        onRetry={retry}
-      />
-    );
+    // 接続の失敗は、開ける利用者にだけデータベース設定への導線を再試行の前に出す（#4222）。
+    return <DataLoadFailure error={query.error} fallback={t("common.error.load")} onRetry={retry} />;
   }
   return <>{children}</>;
 }

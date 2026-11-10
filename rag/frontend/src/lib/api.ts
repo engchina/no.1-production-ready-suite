@@ -1163,58 +1163,15 @@ export interface KnowledgeBaseIngestionConfig {
   auto_index_after_chunk_enabled: boolean | null;
 }
 
-/** 検索・回答設定。Search Answer Profile の query 設定として使う。 */
+/** 検索・回答プロファイルの query（適用する欄だけ。ほかの検索方法は全体設定だけで決める。#4784）。 */
 export interface KnowledgeBaseQueryConfig {
-  // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
-  // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は回答フローだけ)。
-  /** 回答フローの設定。null / 未指定はグローバル継承。 */
-  neighbor_child_count?: number | null;
-  rerank_enabled?: boolean | null;
-  // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
-  screen_linking_enabled?: boolean | null;
-  // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
-  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。ON / OFF と回数・期限の上限は
-  // 全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。
-  guide_step_retrieval_enabled?: boolean | null;
-  guide_step_max_queries?: number | null;
-  guide_step_deadline_seconds?: number | null;
-  // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
-  auto_field_filter_enabled?: boolean | null;
-  /**
-   * 実体・別名による検索拡張(LLM は呼ばない)。検索方法の全体設定だけで決め、プロファイルでは保存しない。
-   * 文書レシピで実体・別名索引を有効にした文書にだけ効く。
-   */
-  entity_expansion_enabled?: boolean | null;
-  /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
-  entity_expansion_max_chunks?: number | null;
-  /**
-   * 文書構造索引で根拠の候補を広げる(AI は呼ばない)。検索方法の全体設定だけで決める。
-   * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
-   */
-  graph_expansion_enabled?: boolean | null;
-  /** 1 回の検索で加える根拠の上限(1〜20)。全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。 */
-  graph_expansion_max_chunks?: number | null;
-  /**
-   * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
-   * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50%)。
-   */
-  section_expansion_enabled?: boolean | null;
-  section_expansion_max_levels?: number | null;
-  section_expansion_input_token_percent?: number | null;
   /**
    * rerank の後、根拠の起点に採る同じ文書の chunk の上限(0〜20。0 は上限なし。#2167)。超えた chunk は後ろへ回す。
    * null は既定(5)。
    */
   max_anchors_per_document?: number | null;
-  /**
-   * 業務ガイドの照合で、質問と質問の例の埋め込みの近さを点に足す(#2398。質問ごとに埋め込みの呼び出しが 1 回増える)。
-   * null / 未指定は全体の既定(使わない)。
-   */
   /** 業務ガイドの使用。未指定・null は OFF（全体の ON を継承しない）。 */
   support_guide_enabled?: boolean | null;
-  support_guide_semantic_match_enabled?: boolean | null;
-  /** 上位の 2 つの業務ガイドの点が近いとき、どれに沿うかを確かめる(#2398)。null / 未指定は全体の既定(確かめない)。 */
-  support_guide_close_match_clarification_enabled?: boolean | null;
 }
 
 /**
@@ -1231,11 +1188,10 @@ export interface EntityIndexCoverageData {
   document_count: number;
 }
 
-/** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
+/** KB 単位の構築設定。 */
 export interface KnowledgeBaseAdapterConfig {
   version: number;
   ingestion: KnowledgeBaseIngestionConfig;
-  query: KnowledgeBaseQueryConfig;
 }
 
 export type StructureBuildMode = "missing" | "rebuild" | "retry" | "continue";
@@ -1249,8 +1205,6 @@ export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   structure_index_global_enabled?: boolean;
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
-  /** 既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。 */
-  legacy_query_config_ignored?: boolean;
 }
 
 export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
@@ -1848,7 +1802,6 @@ export type AnswerPromptPhase =
   | "knowledge"
   | "question"
   | "retrieval"
-  | "grounding"
   | "generation"
   | "evaluation";
 

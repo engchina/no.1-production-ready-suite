@@ -33,6 +33,11 @@ def test_migration_is_registered_as_destructive_and_removes_no_editable_key() ->
     assert {key for key in REMOVED_PROMPT_KEYS if "." in key} - listed == {
         # 役割の文と固定の部分に分けて無くなった部分。
         "generation.system",
+        # 段ごと消した原文の抜き出しと条の目録。
+        "section_extraction.system",
+        "article_catalog.documentSystem",
+        "article_catalog.system",
+        "article_catalog.refineSystem",
     }
 
 

@@ -4480,6 +4480,12 @@ END;
 -- migration: 20261110_4781_retire_removed_answer_prompts
 DELETE FROM rag_answer_prompts WHERE prompt_key IN ('evaluation.scope', 'evaluation.coverage', 'evaluation.claim', 'evaluation.evidenceCoverage', 'evaluation.absenceScope', 'crag.system', 'crag.template', 'routing.system', 'routing.template', 'expansion.system', 'expansion.template', 'generation.instruction', 'generation.plannedSystem');
 
+-- migration: 20261110_4784_search_answer_profile_retired_fields
+BEGIN
+  NULL; -- query: max_anchors_per_document,support_guide_enabled / language_pack: answer_check_cues,answer_labels,evidence_cues,grounding_cues,question_cues,search_terms
+END;
+/
+
 -- migration: 20261110_4782_remove_raptor
 DELETE FROM rag_chunks
 WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';

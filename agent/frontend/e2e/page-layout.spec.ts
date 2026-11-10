@@ -4,6 +4,7 @@ import { expect, test } from "./fixtures/mock-api";
 
 import { APP_ROUTES, AUTH_ROUTE_PATHS } from "../src/lib/routes";
 import { findEscapedAbsoluteElements, measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 const CONTENT_MAX_WIDTH = 1440;
 
@@ -30,6 +31,26 @@ async function measureLayout(page: Page) {
     };
   });
 }
+
+// 全 route で、ページ全体（documentElement と main）が横にあふれない（#4806）。desktop と 375px の project で回す。
+test.describe("全画面の横あふれ", { tag: "@responsive" }, () => {
+  test("AppShell の中の全画面が横にあふれない", async ({ page }) => {
+    test.setTimeout(120_000);
+    for (const route of Object.values(APP_ROUTES).filter((path) => !AUTH_ROUTE_PATHS.includes(path))) {
+      await page.goto(route);
+      await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+      await expectNoPageHorizontalOverflow(page, `${route} の横あふれ`);
+    }
+  });
+
+  // ログインとパスワード変更の画面は auth-login.spec.ts が desktop と 375px で横あふれを測る。
+  // 権限なしの画面は見出しがカードの h2 なので、見出しの段を問わずに待つ。
+  test("権限なしの画面も横にあふれない", async ({ page }) => {
+    await page.goto(APP_ROUTES.forbidden);
+    await expect(page.getByRole("heading").first()).toBeVisible();
+    await expectNoPageHorizontalOverflow(page, `${APP_ROUTES.forbidden} の横あふれ`);
+  });
+});
 
 // Agent の全画面は画面幅いっぱい（共有 PageHeader / PageBody の `wide`）で統一する（#28。#13 の Run・監査だけの wide を置き換え）。
 test.describe("画面幅（PageHeader / PageBody の wide）", { tag: "@responsive" }, () => {

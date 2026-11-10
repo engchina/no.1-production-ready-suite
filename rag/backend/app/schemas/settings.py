@@ -773,7 +773,7 @@ class AnsweringSettingsData(BaseModel):
     """回答の検索と生成の全体既定(回答エンジン。#593)。
 
     全体設定だけで決め、検索・回答プロファイルでは上書きしない
-    (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
+    (プロファイルの ``query`` に欄を持たない)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
     retrieval_query_limit: int = Field(default=60, ge=0, le=2000, strict=True)

@@ -1,8 +1,8 @@
 """設定の説明が「検索・回答プロファイルで上書き可」と実装のずれを起こさないようにする(#3516)。
 
-``PROFILE_GLOBAL_QUERY_FIELDS``(``app/rag/search_answer_profile_config.py``)の項目は、全体設定だけで
-決める。プロファイルへは保存せず、適用の前に null にする。その項目の説明が次のどこでも
-プロファイルでの上書き・選択を案内していないことを、リストから引いて確かめる(項目を手で並べない)。
+検索・回答プロファイルが上書きできる設定は、``kb_adapter_config._QUERY_FIELD_MAP`` の欄だけ(#4784)。
+それ以外の設定は全体設定だけで決める。その説明が次のどこでもプロファイルでの上書き・選択を
+案内していないことを、``Settings`` の項目から引いて確かめる(項目を手で並べない)。
 
 - ``backend/.env.example`` の、その環境変数の直前のコメント
 - ``app/config.py`` の ``Settings`` の項目の ``description``
@@ -21,7 +21,6 @@ from pr_backend_core.config.env import settings_env_name
 
 from app.config import Settings
 from app.rag import kb_adapter_config
-from app.rag.search_answer_profile_config import PROFILE_GLOBAL_QUERY_FIELDS
 
 BACKEND = Path(__file__).resolve().parents[1]
 RAG = BACKEND.parent
@@ -43,14 +42,17 @@ def _claims_profile_override(text: str) -> list[str]:
     return [sentence for sentence in flat.split("。") if _OVERRIDE_CLAIM.search(sentence)]
 
 
-def _settings_field(query_field: str) -> str:
-    """プロファイルの query の項目名 → Settings の項目名(``kb_adapter_config`` の対応表が正本)。"""
-    mapping: dict[str, str] = kb_adapter_config._QUERY_FIELD_MAP
-    return mapping[query_field]
+# 検査が空振りしていないことを確かめる下限(見つけた説明の数)。
+_MIN_CHECKED = 7
+
+# プロファイルが要求ごとに解決して入れる内部の項目(.env で決める設定ではない)。
+_PROFILE_RESOLVED_FIELDS = {"rag_language_pack_overrides", "rag_answer_contact_override"}
 
 
 def _global_settings_fields() -> list[str]:
-    return sorted(_settings_field(name) for name in PROFILE_GLOBAL_QUERY_FIELDS)
+    """全体設定だけで決める項目(プロファイルの query の対応表に無い Settings の項目)。"""
+    overridable = set(kb_adapter_config._QUERY_FIELD_MAP.values()) | _PROFILE_RESOLVED_FIELDS
+    return sorted(set(Settings.model_fields) - overridable)
 
 
 def _env_comment_blocks() -> dict[str, str]:
@@ -103,24 +105,20 @@ def test_checker_detects_override_claims_and_accepts_global_only_notes() -> None
     )
 
 
-def test_global_only_fields_resolve_to_settings_and_env_names() -> None:
-    """全体設定だけの項目は、Settings と .env.example の環境変数に対応する(検査が空振りしない)。"""
+def test_env_example_does_not_claim_profile_override_for_global_only_fields() -> None:
     blocks = _env_comment_blocks()
-    assert _global_settings_fields()
+    checked = 0
     for field in _global_settings_fields():
-        assert field in Settings.model_fields, field
         env_name = settings_env_name("RAG_", field)
-        assert env_name in blocks, f"{env_name} が .env.example に無い"
-
-
-@pytest.mark.parametrize("field", _global_settings_fields())
-def test_env_example_does_not_claim_profile_override_for_global_only_fields(field: str) -> None:
-    env_name = settings_env_name("RAG_", field)
-    note = _env_comment_blocks()[env_name]
-    assert _claims_profile_override(note) == [], (
-        f"{env_name} は全体設定だけの項目(PROFILE_GLOBAL_QUERY_FIELDS)。"
-        ".env.example のコメントが検索・回答プロファイルでの上書きを案内している"
-    )
+        note = blocks.get(env_name)
+        if note is None:
+            continue
+        checked += 1
+        assert _claims_profile_override(note) == [], (
+            f"{env_name} は全体設定だけの項目。"
+            ".env.example のコメントが検索・回答プロファイルでの上書きを案内している"
+        )
+    assert checked >= _MIN_CHECKED
 
 
 @pytest.mark.parametrize("field", _global_settings_fields())
@@ -129,7 +127,7 @@ def test_config_description_does_not_claim_profile_override_for_global_only_fiel
 ) -> None:
     description = Settings.model_fields[field].description or ""
     assert _claims_profile_override(description) == [], (
-        f"{field} は全体設定だけの項目(PROFILE_GLOBAL_QUERY_FIELDS)。"
+        f"{field} は全体設定だけの項目。"
         "Settings の description が検索・回答プロファイルでの上書きを案内している"
     )
 
@@ -145,10 +143,10 @@ def test_engine_doc_does_not_claim_profile_override_for_global_only_fields() -> 
             continue
         checked += 1
         assert _claims_profile_override(row) == [], (
-            f"{env_name} は全体設定だけの項目(PROFILE_GLOBAL_QUERY_FIELDS)。"
+            f"{env_name} は全体設定だけの項目。"
             "rag/docs/rag-engine.md の行が検索・回答プロファイルでの上書きを案内している"
         )
-    assert checked >= len(PROFILE_GLOBAL_QUERY_FIELDS) // 2
+    assert checked >= _MIN_CHECKED
 
 
 def test_screen_text_does_not_claim_profile_override_for_global_only_fields() -> None:
@@ -160,7 +158,7 @@ def test_screen_text_does_not_claim_profile_override_for_global_only_fields() ->
         for key in entries
         if key.startswith("settings.answering.") and f"{key}Hint" in entries
     }
-    assert len(labels) >= len(PROFILE_GLOBAL_QUERY_FIELDS) // 2, labels
+    assert len(labels) >= _MIN_CHECKED, labels
     offenders: list[str] = []
     for key, value in entries.items():
         in_answering_screen = key.startswith("settings.answering.")

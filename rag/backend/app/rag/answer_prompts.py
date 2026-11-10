@@ -70,7 +70,6 @@ PROMPT_PHASES = (
     "knowledge",
     "question",
     "retrieval",
-    "grounding",
     "generation",
     "evaluation",
 )
@@ -172,23 +171,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "screen_linking",
         "retrieval",
         (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
-        "article_catalog",
-        "retrieval",
-        (
-            (
-                "documentSystem",
-                "rag_engine.retrieval.article_catalog:ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT",
-            ),
-            ("system", "rag_engine.retrieval.article_catalog:ARTICLE_SELECTION_SYSTEM_PROMPT"),
-            ("refineSystem", "rag_engine.retrieval.article_catalog:ARTICLE_REFINE_SYSTEM_PROMPT"),
-        ),
-    ),
-    PromptStage(
-        "section_extraction",
-        "grounding",
-        (("system", "rag_engine.generation.section_extraction:EXTRACTION_SYSTEM_PROMPT"),),
     ),
     PromptStage(
         "faq_answer",

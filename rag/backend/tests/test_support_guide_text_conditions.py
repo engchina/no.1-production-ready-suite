@@ -50,7 +50,7 @@ def stub(monkeypatch: pytest.MonkeyPatch, output: Any = None, *, error: bool = F
     class Client:
         async def generate(self, _prompt: str, context: str, **kwargs: Any) -> str:
             assert kwargs["system_prompt"] == recognition.CONDITION_SYSTEM_PROMPT
-            assert all(f"## Step {step}:" in kwargs["system_prompt"] for step in range(1, 5))
+            assert all(f"## Step {step}:" in kwargs["system_prompt"] for step in range(1, 4))
             calls.append((json.loads(context), kwargs))
             if error:
                 raise RuntimeError("synthetic failure")
@@ -103,7 +103,7 @@ async def test_exact_question_span_makes_text_condition_known(
     assert calls[0][0]["question"] == QUESTION
     assert "response_schema" in calls[0][1]
     assert calls[0][1]["system_prompt"] == recognition.CONDITION_SYSTEM_PROMPT
-    assert all(f"## Step {step}:" in calls[0][1]["system_prompt"] for step in range(1, 5))
+    assert all(f"## Step {step}:" in calls[0][1]["system_prompt"] for step in range(1, 4))
     from app.rag.answer_prompts import readonly_prompt_stages
 
     stage = next(

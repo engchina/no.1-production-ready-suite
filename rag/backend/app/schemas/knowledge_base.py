@@ -60,14 +60,7 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
         default_factory=KnowledgeBaseAdapterConfig,
         description=(
             "KB 単位の legacy 構築設定(互換のための保存値)。3 層モデルでは文書レシピが"
-            "global から解決するため、ingestion も query も取込・検索・回答 runtime へは"
-            "反映しない。"
-        ),
-    )
-    legacy_query_config_ignored: bool = Field(
-        default=False,
-        description=(
-            "既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。"
+            "global から解決するため、取込・検索・回答 runtime へは反映しない。"
         ),
     )
 

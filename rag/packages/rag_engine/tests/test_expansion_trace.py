@@ -119,9 +119,7 @@ def run_sections(ctx, stub, settings=None, state=None):
         ),
         recorded() as calls,
     ):
-        result = answering._expand_context_by_sections(
-            "合成の質問", ctx, settings, answer_llm_provider=None, rerank_enabled=False, started_at=0, state=state
-        )
+        result = answering._expand_context_by_sections("合成の質問", ctx, settings, rerank_enabled=False, started_at=0, state=state)
     return result, next(call for call in calls if call.name == "章節の拡張")
 
 
@@ -194,7 +192,6 @@ def test_section_budget_exclusion_keeps_actual_reason():
         get_settings(environ={}, dotenv_path=None),
         section_expansion_max_levels=1,
         answer_max_input_tokens=1,
-        section_extraction_enabled=False,
     )
     (_, result), step = run_sections(_seed_context("c31a"), SectionStub(), settings)
     assert result.stop_reason == "partial_read"

@@ -1752,18 +1752,24 @@ test("画像の自然言語指示は保存・再読込でき、出力契約は�
     await vision.locator("summary", { hasText: "図・画像の指示と出力形式" }).click();
     return vision.getByTestId("vision-prompt-parts");
   }
+  // 6 つの部分をそれぞれ保存・破棄・既定に戻すので、nightly の負荷（JS の coverage・再試行の trace）でも足りる時間にする。
+  test.setTimeout(60_000);
+  const fieldOf = (label: string) => instructions.getByRole("textbox", { name: label, exact: true });
+  const actionsOf = (label: string) => fieldOf(label).locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
+  const customOf = (part: string) => `## Step 1: 保存する合成の指示（${part}）`;
+  // 再読込は 1 回 3 秒ほどかかるので、部分ごとではなく、保存・既定に戻す・確かめるの段ごとに 1 回だけ行う（#4808）。
   let instructions = await openInstructions();
   for (const [part, label] of parts) {
+    await fieldOf(label).fill(customOf(part));
+    await actionsOf(label).getByRole("button", { name: "プロンプトを保存", exact: true }).click();
+    await expect.poll(() => saved.get(`picture_description.${part}`)).toBe(customOf(part));
+  }
+  instructions = await openInstructions();
+  for (const [part, label] of parts) {
     const key = `picture_description.${part}`;
-    let field = instructions.getByRole("textbox", { name: label, exact: true });
-    let actions = field.locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
-    await field.fill("## Step 1: 保存する合成の指示");
-    const custom = await field.inputValue();
-    await actions.getByRole("button", { name: "プロンプトを保存", exact: true }).click();
-    await expect.poll(() => saved.get(key)).toBe(custom);
-    instructions = await openInstructions();
-    field = instructions.getByRole("textbox", { name: label, exact: true });
-    actions = field.locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
+    const field = fieldOf(label);
+    const actions = actionsOf(label);
+    const custom = customOf(part);
     await expect(field).toHaveValue(custom);
     await field.fill("破棄する内容");
     await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
@@ -1779,6 +1785,9 @@ test("画像の自然言語指示は保存・再読込でき、出力契約は�
     await expect.poll(() => saved.has(key)).toBe(false);
     await expect(field).toHaveValue(builtin);
   }
+  instructions = await openInstructions();
+  for (const [, label] of parts) await expect(fieldOf(label)).toHaveValue(builtin);
+  expect(saved.size).toBe(0);
   await expect(instructions.getByRole("textbox", { name: "出力形式と上限（読み取り専用）", exact: true })).toHaveAttribute("readonly", "");
   await expect(instructions.getByText("既定値", { exact: true })).toHaveCount(0);
   await expectNoPageOverflow(page);

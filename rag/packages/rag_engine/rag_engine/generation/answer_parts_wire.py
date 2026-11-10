@@ -7,13 +7,14 @@ from types import GenericAlias
 from typing import Annotated, Any, Literal, Union, cast
 
 from annotated_types import MaxLen
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from rag_engine.generation.answer_table import table_markdown
 from rag_engine.generation.citation_content import structure_only_quote
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
-from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, GroundedCitation, GroundedDraft
+from rag_engine.models.llm import MAX_ANSWER_PARTS, AnswerPart, AnswerTable, GroundedCitation, GroundedDraft
 
 # 質問の種類（question_type）の閉じた語彙（#4586）。導出（計算・区分・条件の当てはめ）が要る種類と、原文の記載で
 # 答えられる種類を分ける。種類の判定はモデルの構造化出力だけが行い、コードは値の集合を比べるだけで語の意味を読まない。
@@ -48,6 +49,55 @@ def _question_type_first(schema: dict[str, Any]) -> None:
     schema["properties"] = {name: properties[name] for name in order}
     if "required" in schema:
         schema["required"] = [name for name in order if name in schema["required"]]
+
+
+# 表の型の上限（列・行・セルの字数）。表の結論の題は導出の結論（result）と同じ上限。
+MAX_TABLE_COLUMNS = 8
+MAX_TABLE_ROWS = 30
+MAX_TABLE_CELL_CHARS = 300
+
+
+def _cells_within_columns(value: Any) -> Any:
+    """行のセルは列より多くできない（少ない行は ``table_markdown`` が空のセルで埋める）。"""
+    width = len(value.columns)
+    for number, row in enumerate(value.rows, 1):
+        if len(row.cells) > width:
+            raise ValueError(
+                f"表の {number} 行目の cells が {len(row.cells)} 個で、columns の {width} 個より多い。"
+                "cells は columns と同じ順に、列ごとに 1 つの値を書く。"
+            )
+    return value
+
+
+def _table_answer_model(source: Any) -> type[BaseModel]:
+    """表で示す答え（#4796）。列名と行の値だけを受け、Markdown の表はコードが組み立てる。根拠は行ごと。"""
+    row = create_model(
+        "AnswerTableRowWire",
+        __config__=ConfigDict(extra="forbid"),
+        cells=(
+            list[Annotated[str, Field(max_length=MAX_TABLE_CELL_CHARS)]],
+            Field(min_length=1, max_length=MAX_TABLE_COLUMNS, description="columns と同じ順の、この行の値。"),
+        ),
+        basis=(source, Field(description="この行の値を裏付ける原文の単位だけ。")),
+    )
+    return create_model(
+        "TableAnswerPart",
+        __config__=ConfigDict(extra="forbid"),
+        __validators__=cast(Any, {"cells_within_columns": model_validator(mode="after")(_cells_within_columns)}),
+        kind=(
+            cast(Any, Literal["table"]),
+            Field(description="質問が表での提示を求めた要点だけに使う。原文から読み取った値を行と列に分けて示す。"),
+        ),
+        title=(str, Field(min_length=1, max_length=600, description="表が示す内容の短い題。")),
+        columns=(
+            list[Annotated[str, Field(min_length=1, max_length=80)]],
+            Field(min_length=2, max_length=MAX_TABLE_COLUMNS, description="列の名前。左から順に。"),
+        ),
+        rows=(
+            cast(Any, GenericAlias(list, row)),
+            Field(min_length=1, max_length=MAX_TABLE_ROWS, description="表の行。1 行が 1 つの対象・項目。"),
+        ),
+    )
 
 
 def answer_parts_model(
@@ -85,6 +135,7 @@ def answer_parts_model(
         reasoning=(str, Field(min_length=1, max_length=600, description="依存する原文と既知値から導く方法。計算は算式で表す。")),
         result=(str, Field(min_length=1, max_length=600, description="reasoning から導いた、この要点への最終的な答え。途中の値ではない。")),
     )
+    table = _table_answer_model(source)
     gap = create_model(
         "GapAnswerPart",
         __config__=ConfigDict(extra="forbid"),
@@ -119,9 +170,9 @@ def answer_parts_model(
             **common,
             mode=(
                 cast(Any, Literal["derivation"]),
-                Field(description="計算・区分・条件の当てはめで答えを導く要点。答えは answer 型か、導けなければ gap 型。"),
+                Field(description="計算・区分・条件の当てはめで答えを導く要点。答えは answer 型か table 型、導けなければ gap 型。"),
             ),
-            answer=(cast(Any, Union.__getitem__((derived, gap))), Field()),
+            answer=(cast(Any, Union.__getitem__((derived, table, gap))), Field()),
         )
         stated_part = create_model(
             "StatedAnswerPart",
@@ -132,7 +183,7 @@ def answer_parts_model(
                 cast(Any, Literal["stated"]),
                 Field(default="stated", description="資料の記載がそのまま答えになる要点。", json_schema_extra=_without_default),
             ),
-            answer=(cast(Any, Union.__getitem__((direct, derived, gap))), Field()),
+            answer=(cast(Any, Union.__getitem__((direct, derived, table, gap))), Field()),
         )
         part = Union.__getitem__((derivation_part, stated_part))
     else:
@@ -140,7 +191,7 @@ def answer_parts_model(
             "RequiredAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            answer=(cast(Any, Union.__getitem__((derived, gap)) if catalog.unit_ids else gap), Field()),
+            answer=(cast(Any, Union.__getitem__((derived, table, gap)) if catalog.unit_ids else gap), Field()),
         )
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
@@ -292,17 +343,12 @@ def canonical_answer_parts(
     part_structure_only = []
     part_labels = []
     plan_basis: list[tuple[str, list[BoundUnitRange]]] = []
-    for position, part in enumerate(wire_parts):
-        answer = part["answer"]
-        kind = answer["kind"]
-        if kind not in {"source", "answer", "gap"}:
-            raise ValueError("回答要点の役割を確認できません。")
-        selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
-        if selected:
-            plan_basis.append((part["request_id"], selected))
+
+    def bind_items(request_id: str, selected: Sequence[BoundUnitRange]) -> list[int]:
+        """選んだ原文の単位を items にし、その index を返す（同じ要求・同じ範囲の item は 1 つ）。"""
         indexes = []
         for binding in selected:
-            key = (part["request_id"], binding.snapshot.snapshot_id, binding.first, binding.last)
+            key = (request_id, binding.snapshot.snapshot_id, binding.first, binding.last)
             if key not in source_indexes:
                 index = len(items)
                 source_indexes[key] = index
@@ -310,7 +356,7 @@ def canonical_answer_parts(
                     {
                         "kind": "rule",
                         "text": binding.text,
-                        "request_id": part["request_id"],
+                        "request_id": request_id,
                         "citations": [
                             {
                                 "evidence_id": binding.snapshot.span()["evidence_id"],
@@ -323,8 +369,51 @@ def canonical_answer_parts(
                 )
                 bindings.append(binding)
             indexes.append(source_indexes[key])
+        return indexes
+
+    for position, part in enumerate(wire_parts):
+        answer = part["answer"]
+        kind = answer["kind"]
+        if kind not in {"source", "answer", "table", "gap"}:
+            raise ValueError("回答要点の役割を確認できません。")
+        # 表は行ごとに根拠を持つ（#4796）。要点の根拠は行の根拠を行の順に並べたもの。
+        row_selected = [list(catalog.bind(row["basis"]["unit_ids"])) for row in answer["rows"]] if kind == "table" else []
+        if kind == "table":
+            selected = [binding for row in row_selected for binding in row]
+        else:
+            selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
+        if selected:
+            plan_basis.append((part["request_id"], selected))
+        row_indexes = [bind_items(part["request_id"], row) for row in row_selected]
+        indexes = (
+            list(dict.fromkeys(index for row in row_indexes for index in row))
+            if kind == "table"
+            else bind_items(part["request_id"], selected)
+        )
         app_indexes = []
-        if kind == "answer":
+        if kind == "table":
+            table = AnswerTable.model_validate(
+                {
+                    "columns": answer["columns"],
+                    "rows": [
+                        {"cells": [_without_bound_locators(cell, row_bound) for cell in row["cells"]], "item_indexes": row_items}
+                        for row, row_bound, row_items in zip(answer["rows"], row_selected, row_indexes, strict=True)
+                    ],
+                }
+            )
+            app_indexes = [len(applications)]
+            applications.append(
+                {
+                    "request_id": part["request_id"],
+                    "premises": [],
+                    "item_indexes": indexes,
+                    "reasoning": "",
+                    "result": _without_bound_locators(answer["title"], selected),
+                    "table": table.model_dump(),
+                }
+            )
+            text = applications[-1]["result"] + "\n" + table_markdown(table)
+        elif kind == "answer":
             app_indexes = [len(applications)]
             applications.append(
                 {
@@ -348,8 +437,8 @@ def canonical_answer_parts(
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "direct" if kind == "source" else "derived" if kind == "answer" else "gap",
-                "item_indexes": [] if kind == "answer" else indexes,
+                "result_kind": "direct" if kind == "source" else "gap" if kind == "gap" else "derived",
+                "item_indexes": indexes if kind in {"source", "gap"} else [],
                 "application_indexes": app_indexes,
             }
         )
@@ -358,7 +447,7 @@ def canonical_answer_parts(
             kind == "source" and bool(selected) and all(structure_only_quote(binding.text, binding.snapshot.span()) for binding in selected)
         )
         part_labels.append(str(part.get("subquestion") or ""))
-        part_sources.append(indexes if kind != "answer" else [])
+        part_sources.append(indexes if kind in {"source", "gap"} else [])
         part_applications.append(app_indexes)
     _attach_basis_quotes(parts, applications)
     chosen = _summary_parts(summary_indexes, parts, texts, part_structure_only, part_labels, getattr(type(value), "_subquestions", ()))

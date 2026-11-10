@@ -8,7 +8,6 @@ import pytest
 from rag_engine.config import get_settings
 from rag_engine.generation import answering
 from rag_engine.models.llm import RerankTextRank
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.reference_follow import REFERENCE_EXPANSION_KEY
@@ -151,12 +150,10 @@ def test_similar_candidates_are_moved_back_only_in_the_rerank_column(monkeypatch
 def test_fixed_candidates_stay_in_place(monkeypatch):
     records = _records(14)
     records[3].metadata[ATTACHMENT_EVIDENCE_KEY] = True
-    records[5].metadata[ARTICLE_CATALOG_KEY] = {"added": True}
     records[9].metadata[REFERENCE_EXPANSION_KEY] = {"from_chunk_uid": "run:c0", "rank": 1}
     scores = [round(0.95 - i * 0.03, 2) for i in range(14)]
     ranked, _ = _run(monkeypatch, records, scores, _settings(rerank_slot_ratio=(1, 1)))
     assert [r.id for r in ranked].index("c3") == 3
-    assert [r.id for r in ranked].index("c5") == 5
     # 参照先は参照元の直後へ移る（follow_reference_sources は rerank_records の外側の段）。
     assert sorted(r.id for r in ranked) == sorted(r.id for r in records)
 
