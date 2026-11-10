@@ -795,6 +795,13 @@
     },
     {
       "destructive": false,
+      "name": "20261110_4811_evaluation_job_visibility",
+      "sha256": "4a9d7f29f41cf5d0423810d05ecb519c79087ad371f3fd385ad35686131a10b1",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "destructive": false,
       "name": "20261110_4793_document_summaries",
       "sha256": "d281e64b295c86fd13aa4e02819cab0b5d0cbb16eb937a56447de57cc80310dd",
       "statement_count": 1,
@@ -803,6 +810,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "a2bbcceba4b10ae9746fc69c54ecfcdfdda6d38f7d6c2d3122421756257fe012",
-  "statement_count": 171
+  "sha256": "c3b20d59a9635995d6841d239709f1698377dd92bee5ee3d2d1c93f6c3fff742",
+  "statement_count": 172
 }

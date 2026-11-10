@@ -1,4 +1,6 @@
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
+import { DATABASE_READ_FAILED_MESSAGE, failDatabaseReads } from "./fixtures/read-failure";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
 
 // #983: 監査ログのツール名の絞り込みは、監査に記録されたツール（MCP 接続のツールを含む）から選べる。
@@ -65,3 +67,31 @@ test("MCP 接続のツールをツール名で選んで絞り込める", async (
     await expect(listbox.locator(`[role="option"][data-value="${name}"]`)).toBeVisible();
   }
 });
+
+// #4222: backend は監査の記録を読めないとき、手元の実行だけの記録を 200 で返さず、失敗として返す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile-375", width: 375, height: 812 },
+]) {
+  test(`監査の記録を読み取れないときは 0 件と出さず、失敗を出して再試行で回復する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedAuditRecord(mockApi, 1, "echo");
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const reads = await failDatabaseReads(page, "/api/audit/tool-calls");
+    await page.goto("/audit");
+
+    // 自動の再試行（1・2 秒）の後に失敗を出す。
+    const failure = page.locator('[data-failure-kind="other"]');
+    await expect(failure.getByRole("alert")).toContainText(DATABASE_READ_FAILED_MESSAGE, { timeout: 15_000 });
+    await expect(page.getByText("条件に一致する監査レコードはありません")).toHaveCount(0);
+    await expect(page.getByTestId("audit-list-toolbar")).toHaveCount(0);
+    // 絞り込みは読めているのでそのまま出す。
+    await expect(page.getByTestId("audit-filters")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`audit-read-failed-${viewport.name}.png`) });
+
+    reads.recover();
+    await failure.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(failure).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "監査レコード" })).toContainText("監査の対象 1");
+  });
+}

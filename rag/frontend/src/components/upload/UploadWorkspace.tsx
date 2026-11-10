@@ -24,7 +24,6 @@ import {
   HardDrive,
   List,
   ListChecks,
-  RefreshCw,
   RotateCcw,
   Upload,
 } from "lucide-react";
@@ -50,6 +49,7 @@ import {
   useUploadDocument,
   useUploadStorageSettings,
 } from "@/lib/queries";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import {
@@ -444,27 +444,22 @@ function UploadKnowledgeBasePicker({
           >
             <Skeleton className="h-8 w-full" />
           </TimedLoadingState>
-        ) : query.isError ? (
-          // 取得に失敗したまま（必須の利用者は）送れないため、案内とその場の再読み込みを出す。
-          <Banner severity="warning" title={t("upload.knowledgeBases.loadWarning")}>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                {required
-                  ? t("upload.knowledgeBases.loadWarningRequiredHint")
-                  : t("upload.knowledgeBases.loadWarningHint")}
-              </p>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                icon={RefreshCw}
-                loading={query.isFetching}
-                onClick={() => void query.refetch()}
-              >
-                {t("common.retry")}
-              </Button>
-            </div>
-          </Banner>
+        ) : query.loadFailed ? (
+          // 取得に失敗したまま（必須の利用者は）送れないため、欄の位置に失敗と再試行を出す（#4817）。
+          <div className="space-y-1">
+            <DataLoadFailure
+              error={query.error}
+              fallback={t("upload.knowledgeBases.loadError")}
+              onRetry={query.refetch}
+              layout="field"
+              testId="upload-knowledge-base-load-failed"
+            />
+            <p className="text-xs text-fg-muted">
+              {required
+                ? t("upload.knowledgeBases.loadErrorRequiredHint")
+                : t("upload.knowledgeBases.loadErrorHint")}
+            </p>
+          </div>
         ) : hasKnowledgeBases ? (
           <KnowledgeBaseMultiSelect
             id={UPLOAD_KNOWLEDGE_BASE_INPUT_ID}

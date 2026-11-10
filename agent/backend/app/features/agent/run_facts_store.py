@@ -14,7 +14,9 @@
 - 日時は UTC の `TIMESTAMP`（タイムゾーンなし）で保存する。session のタイムゾーンに左右されず、
   日の区切りは `FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone)`（利用者のタイムゾーン）。
 - memory / file の構成は保存しない（`reporting_store()` が None。メモリの Run を集計する）。
-- テーブルはシステムテーブル（`app.system_schema`）が作る。無い間は集計をメモリの Run に戻す。
+- テーブルはシステムテーブル（`app.system_schema`）が作る。テーブル・列が無い間（作成・更新の前）は
+  集計をメモリの Run に戻す。それ以外の読み取りの失敗は、API が失敗として返す（#4222。同じ保存先に
+  書く別のプロセスの Run はメモリに無いことがあり、メモリの集計は保存先の全件と同じとは限らない）。
 """
 
 from __future__ import annotations
@@ -82,7 +84,10 @@ UserNames = Callable[[list[str]], Mapping[str, str]]
 
 
 class RunFactsUnavailableError(RuntimeError):
-    """事実のテーブルが無い（システムテーブルが未作成）。集計はメモリの Run に戻す。"""
+    """事実のテーブル・列が無い（システムテーブルの作成・更新の前）。集計はメモリの Run に戻す。
+
+    それ以外の読み取りの失敗は、メモリの Run に戻さず失敗として返す（#4222）。
+    """
 
 
 class RunFactsStore(Protocol):
@@ -730,7 +735,9 @@ class OracleRunFactsStore:
                         [tuple(_lob_text(v) if hasattr(v, "read") else v for v in r) for r in rows]
                     )
         except Exception as exc:
-            if _is_table_missing(exc):
+            # システムテーブルの作成・更新（migration 012 / 014）の前は、保存した事実では集計
+            # できない。
+            if _is_table_missing(exc) or _is_column_missing(exc):
                 raise RunFactsUnavailableError(RUN_FACTS_TABLE) from exc
             raise
         return results

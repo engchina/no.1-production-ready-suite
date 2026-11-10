@@ -43,6 +43,7 @@ import { SelectAiCredentialPrecondition } from "../components/SelectAiCredential
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 import { SyntheticReview } from "../SyntheticReview";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
@@ -1730,7 +1731,14 @@ function CsvUploadWorkspace({
             rows={5}
           />
         ) : tablesError ? (
-          <ErrorState message={tablesError} onRetry={onTablesRetry} />
+          // 対象の表の候補を読み取れなかった。候補の位置に、欄ごとの文と再試行を出す（#4817）。
+          <DataLoadFailure
+            error={tablesError}
+            fallback={t("dataMgmt.csv.tablesLoadError")}
+            onRetry={onTablesRetry}
+            layout="field"
+            testId="data-csv-table-load-failed"
+          />
         ) : (
           <>
             <DbSingleObjectPickerList

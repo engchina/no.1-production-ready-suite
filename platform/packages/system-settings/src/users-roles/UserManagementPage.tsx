@@ -7,6 +7,7 @@ import {
   CardTitle,
   CopyButton,
   EmptyState,
+  DataLoadFailureState,
   ErrorState,
   FormStatus,
   toast,
@@ -945,7 +946,24 @@ export function UserManagementPage({
                   <FieldLegend id="security-users-role-legend" required={!userFormReadOnly} requiredAnnouncedByControl>
                     {t("security.users.roles")}
                   </FieldLegend>
-                  {roleOptions.length === 0 ? (
+                  {loadError && roleOptions.length === 0 ? (
+                    // ロールの候補を読み取れないまま「利用可能なロールがありません」と見せず、欄の位置に失敗と再試行を出す（#4817）。
+                    <DataLoadFailureState
+                      error={new Error(loadError)}
+                      fallback={t("security.users.rolesLoadError")}
+                      labels={{
+                        timeout: t("common.dataLoad.timeout"),
+                        unavailable: t("common.dataLoad.unavailable"),
+                        unavailableRestricted: t("common.dataLoad.unavailableRestricted"),
+                        retry: t("common.retry"),
+                        staleTitle: (time) => t("common.dataLoad.staleTitle", { time }),
+                        staleOther: t("common.dataLoad.staleOther"),
+                      }}
+                      onRetry={() => void load()}
+                      layout="field"
+                      testId="security-users-roles-load-failed"
+                    />
+                  ) : roleOptions.length === 0 ? (
                     <p className="text-sm text-fg-muted">{t("security.users.noRole")}</p>
                   ) : (
                     <div

@@ -43,6 +43,9 @@ export type WorkspaceField =
   | "evaluation.runInput"
   | "evaluation.runJobId"
   | "evaluation.runCaseLabels"
+  // 見出し・実行時の入力を残した評価の job id と、過去の評価の一覧のページ（#4811）
+  | "evaluation.runLabelsJobId"
+  | "evaluation.historyPaging"
   | "evaluation.compareEnabled"
   | "evaluation.compareProfileId"
   | "evaluation.runCompareName"

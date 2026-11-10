@@ -20,6 +20,24 @@ export interface ApiErrorDetailListProps {
 }
 
 /**
+ * 失敗の技術的な詳細の項目の並び（折りたたみを持たない中身）。開閉を自分で持つ部品（欄の直下の失敗の表示）が使う。
+ * 項目が無ければ描かない。
+ */
+export function ApiErrorDetailItems({ details }: { details: readonly ApiErrorDetail[] }) {
+  if (details.length === 0) return null;
+  return (
+    <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
+      {details.map((item) => (
+        <div key={item.label} className="min-w-0">
+          <dt className="break-words font-medium text-fg">{item.label}</dt>
+          <dd className="whitespace-pre-line break-all">{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
  * 失敗の技術的な詳細（要求・待ち時間の上限・HTTP ステータス・エラーコード・エラー種別・元の文・request ID）を
  * 「詳細」の折りたたみ（`Disclosure`）に並べる（UX 契約 messaging.md §9 P3 / §10.3）。項目が無ければ描かない。
  */
@@ -31,14 +49,7 @@ export function ApiErrorDetailList({
   if (details.length === 0) return null;
   return (
     <Disclosure variant="plain" size="sm" summary={label} defaultOpen={defaultOpen}>
-      <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
-        {details.map((item) => (
-          <div key={item.label} className="min-w-0">
-            <dt className="break-words font-medium text-fg">{item.label}</dt>
-            <dd className="whitespace-pre-line break-all">{item.value}</dd>
-          </div>
-        ))}
-      </dl>
+      <ApiErrorDetailItems details={details} />
     </Disclosure>
   );
 }

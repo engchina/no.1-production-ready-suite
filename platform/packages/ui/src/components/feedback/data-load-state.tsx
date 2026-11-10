@@ -1,16 +1,17 @@
-import { RefreshCw } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import {
   DEFAULT_API_ERROR_DETAIL_LABELS,
   presentApiError,
+  type ApiErrorDetail,
   type ApiErrorDetailLabels,
 } from "../../lib/api-error";
-import { dataLoadFailureKind, focusDataLoadRecovery } from "../../lib/data-load";
+import { dataLoadFailureKind, focusDataLoadRecovery, type DataLoadFailureKind } from "../../lib/data-load";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { MessageText } from "../ui/message-text";
-import { ApiErrorDetailList } from "./api-error-banner";
+import { ApiErrorDetailItems, ApiErrorDetailList } from "./api-error-banner";
 import { ErrorState } from "./state-views";
 
 /** 読み取りの失敗の文言（製品の i18n を渡す）。 */
@@ -31,7 +32,10 @@ export interface DataLoadFailureLabels {
 export interface DataLoadFailureStateProps {
   /** 取得の失敗（製品の `ApiError` など）。 */
   error: unknown;
-  /** 時間の上限・接続の失敗以外で、要約に使える文が無いときの文（「〜を読み込めませんでした。」）。 */
+  /**
+   * 何を読めなかったかの文（「〜を読み込めませんでした。」）。`region` では、時間の上限・接続の失敗以外で要約に
+   * 使える文が無いときに出す。`field` では常に見出しになる（欄ごとの文を必ず渡す。#4817）。
+   */
   fallback: string;
   labels: DataLoadFailureLabels;
   onRetry: () => void;
@@ -42,9 +46,10 @@ export interface DataLoadFailureStateProps {
   databaseAction?: ReactNode;
   detailLabels?: ApiErrorDetailLabels;
   /**
-   * 出し方（#4222）。`region`（既定）はデータ領域を占める `ErrorState`。`field` は選択欄の候補など、画面の一部の
-   * 欄を支える読み取りの失敗で、欄の位置に収まる danger の `Banner`（同じ文・導線・再試行）。`field` は欄の操作から
-   * フォーカスを奪わない（ほかにフォーカスがあれば動かさない）。
+   * 出し方。`region`（既定）はデータ領域を占める `ErrorState`。`field` は選択欄の候補・欄の値など、画面の一部の
+   * 欄を支える読み取りの失敗で、欄の直下に収まる 1 行の表示（#4222・#4817）: danger のアイコンと `fallback`
+   * （欄ごとの文）・「詳細」・導線・再試行。原因の文（backend の文・時間の上限・接続の失敗）と技術的な情報は
+   * 畳んだ「詳細」に入れる。`field` はフォーカスを動かさない。
    */
   layout?: "region" | "field";
   testId?: string;
@@ -78,29 +83,27 @@ export function DataLoadFailureState({
   const kind = dataLoadFailureKind(error);
   const presentation = presentApiError(error, fallback, detailLabels);
   const action = kind === "unavailable" ? databaseAction : undefined;
-  const message =
-    failureMessage(error, labels, Boolean(action)) ??
-    [presentation.summary, presentation.nextAction].filter(Boolean).join("");
+  const causeMessage = failureMessage(error, labels, Boolean(action));
   if (layout === "field") {
+    // 見出しは欄ごとの文。原因の文は「詳細」に入れる（見出しと同じ文は重ねない）。
+    const cause =
+      causeMessage ??
+      [presentation.summary === fallback ? "" : presentation.summary, presentation.nextAction].filter(Boolean).join("");
     return (
-      <div data-testid={testId} data-failure-kind={kind} data-failure-layout="field">
-        <FieldLoadFailure
-          message={message}
-          retryLabel={labels.retry}
-          onRetry={onRetry}
-          action={action}
-          // 欄の位置では畳んでおく（開くと欄の並びを大きく押し下げる）。
-          details={
-            <ApiErrorDetailList
-              details={presentation.details}
-              label={detailLabels.details}
-              defaultOpen={false}
-            />
-          }
-        />
-      </div>
+      <FieldLoadFailure
+        message={fallback}
+        cause={cause}
+        details={presentation.details}
+        detailsLabel={detailLabels.details}
+        retryLabel={labels.retry}
+        onRetry={onRetry}
+        action={action}
+        kind={kind}
+        testId={testId}
+      />
     );
   }
+  const message = causeMessage ?? [presentation.summary, presentation.nextAction].filter(Boolean).join("");
   return (
     <div data-testid={testId} data-failure-kind={kind}>
       <ErrorState
@@ -115,39 +118,102 @@ export function DataLoadFailureState({
   );
 }
 
-/** 欄を支える読み取りの失敗（`layout="field"`）。danger の Banner に文・導線・再試行を置く。 */
+/**
+ * 欄を支える読み取りの失敗（`layout="field"`。#4817）。欄の直下の 1 行: danger のアイコンと欄ごとの文、
+ * 「詳細」の開閉、導線、再試行。狭い幅では操作の組が文の下へ折り返す。
+ *
+ * - 読み上げるのは見出しの文だけ（`role="alert"`）。操作は見出しの文を説明として持つ（複数の欄が同時に失敗しても
+ *   どの欄の再試行かが分かる）。
+ * - フォーカスは動かさない（欄の操作から奪わない。離れた欄へ画面を動かさない）。
+ * - 「詳細」は button + region（`aria-expanded` / `aria-controls`）。開いても見出しの行の操作の位置は変わらない。
+ */
 function FieldLoadFailure({
   message,
+  cause,
+  details,
+  detailsLabel,
   retryLabel,
   onRetry,
   action,
-  details,
+  kind,
+  testId,
 }: {
   message: string;
+  cause: string;
+  details: readonly ApiErrorDetail[];
+  detailsLabel: string;
   retryLabel: string;
   onRetry: () => void;
   action?: ReactNode;
-  details?: ReactNode;
+  kind: DataLoadFailureKind;
+  testId?: string;
 }) {
-  const retryRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    focusDataLoadRecovery(retryRef.current, { onlyIfUnfocused: true });
-  }, []);
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const messageId = `${id}-message`;
+  const regionId = `${id}-details`;
+  const hasDetails = Boolean(cause) || details.length > 0;
   return (
-    <Banner
-      severity="danger"
-      action={
-        <>
+    <div
+      className="min-w-0 text-sm"
+      data-testid={testId}
+      data-failure-kind={kind}
+      data-failure-layout="field"
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <p
+          id={messageId}
+          role="alert"
+          className="pr-message-text flex min-w-0 items-start gap-1.5 font-medium leading-relaxed text-danger-fg"
+        >
+          <span className="pr-icon-line">
+            <AlertCircle size={16} aria-hidden />
+          </span>
+          <MessageText text={message} />
+        </p>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {hasDetails ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              trailingIcon={open ? ChevronDown : ChevronRight}
+              aria-expanded={open}
+              aria-controls={regionId}
+              aria-describedby={messageId}
+              onClick={() => setOpen((current) => !current)}
+            >
+              {detailsLabel}
+            </Button>
+          ) : null}
           {action}
-          <Button ref={retryRef} type="button" variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            icon={RefreshCw}
+            aria-describedby={messageId}
+            onClick={onRetry}
+          >
             {retryLabel}
           </Button>
-        </>
-      }
-    >
-      <MessageText text={message} />
-      {details ? <div className="mt-1 min-w-0">{details}</div> : null}
-    </Banner>
+        </div>
+      </div>
+      {hasDetails ? (
+        <div
+          id={regionId}
+          hidden={!open}
+          className="mt-1 grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3"
+        >
+          {cause ? (
+            <p className="leading-relaxed text-fg">
+              <MessageText text={cause} />
+            </p>
+          ) : null}
+          <ApiErrorDetailItems details={details} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

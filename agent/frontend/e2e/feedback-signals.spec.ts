@@ -4,6 +4,7 @@ import { dbUser } from "./fixtures/auth";
 import { withListFilters } from "./fixtures/select-field";
 import { findToolbarMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { DATABASE_READ_FAILED_MESSAGE, failDatabaseReads } from "./fixtures/read-failure";
 
 // #1822: フィードバックの「確かめるべき実行」（暗黙のシグナル）。評価の付いていない実行も、回答の検証・回答の対応・
 // ツール・承認・実行の状態から集め、実行の詳細と評価ケースへの追加に進める。
@@ -254,6 +255,31 @@ test("実行の無い期間は空の状態を出し、読み込み中は経過�
   await expect(page.getByText("この期間の実行はありません")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
+
+// #4222: backend は保存した実行の履歴を読めないとき、手元の実行だけの集計を 200 で返さず、失敗として返す。
+for (const viewport of VIEWPORTS.filter((item) => item.name !== "1920px")) {
+  test(`確かめるべき実行を読み取れないときは 0 件の集計を出さず、失敗を出して再試行で回復する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedSignals(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const reads = await failDatabaseReads(page, "/api/feedback/signals");
+    await page.goto("/feedback");
+
+    // 自動の再試行（1・2 秒）の後に失敗を出す。
+    const failure = page.locator('[data-failure-kind="other"]');
+    await expect(failure.getByRole("alert")).toContainText(DATABASE_READ_FAILED_MESSAGE, { timeout: 15_000 });
+    await expect(page.getByText("この期間の実行はありません")).toHaveCount(0);
+    await expect(page.getByTestId("signals-summary")).toHaveCount(0);
+    // 絞り込みは読めているのでそのまま出す。
+    await expect(page.getByTestId("signals-filters")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`signals-read-failed-${viewport.name}.png`) });
+
+    reads.recover();
+    await failure.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(failure).toHaveCount(0);
+    await expect(page.getByTestId("signals-summary")).toBeVisible();
+  });
+}
 
 for (const viewport of VIEWPORTS) {
   test(

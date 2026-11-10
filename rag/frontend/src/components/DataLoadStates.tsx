@@ -39,7 +39,10 @@ export function DataLoadFailure({
   error: unknown;
   fallback: string;
   onRetry: () => void;
-  /** `field` は選択欄の候補など、欄を支える読み取りの失敗（欄の位置の Banner。#4222）。 */
+  /**
+   * `field` は選択欄の候補・欄の値など、欄を支える読み取りの失敗（欄の直下の 1 行。#4222・#4817）。
+   * `fallback` が見出しになるので、欄ごとの文（何を読めなかったか）を渡す。
+   */
   layout?: "region" | "field";
   testId?: string;
 }) {

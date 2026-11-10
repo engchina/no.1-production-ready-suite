@@ -44,6 +44,7 @@ import {
   dataLoadView,
 } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { AnswerBody } from "@/components/chat/ResultTables";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listTotal } from "@/components/ListFilters";
@@ -170,10 +171,22 @@ export function EvaluationPage() {
     retry: false,
   });
 
+  // 業務 Agent の候補を読み取れないまま、エディタの欄を候補なしと見せない（#4817）。
+  const agentsFailure =
+    agents.isError && agents.data === undefined ? (
+      <DataLoadFailure
+        error={agents.error}
+        fallback={t("evaluation.set.agentLoadError")}
+        onRetry={() => void agents.refetch()}
+        layout="field"
+        testId="evaluation-set-agent-load-failed"
+      />
+    ) : undefined;
   if (editorTarget.kind === "new") {
     return (
       <EvaluationSetEditor
         agents={usableAgents}
+        agentsFailure={agentsFailure}
         defaultAgentId={selectedAgentId}
         onBack={() => editor.backToList()}
         onSaved={(saved) => {
@@ -206,6 +219,7 @@ export function EvaluationPage() {
         key={editingSet.data.id}
         evaluationSet={editingSet.data}
         agents={usableAgents}
+        agentsFailure={agentsFailure}
         defaultAgentId={selectedAgentId}
         onBack={() => editor.backToList()}
         onSaved={(saved) => queryClient.setQueryData(["evaluation-set", saved.id], saved)}

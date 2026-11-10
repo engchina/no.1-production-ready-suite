@@ -85,14 +85,13 @@ describe("AnswerSections の項目の block（#4734）", () => {
   });
 });
 
-describe("AnswerBody の回答の表と出典の印（#4812）", () => {
-  it("tableMode と renderTableCell を表に渡し、セルに表の番号と列を添える", () => {
+describe("AnswerBody の回答の表と出典の印（#4812・#4822）", () => {
+  it("renderTableCell を表に渡し、セルに表の番号と列を添える。表はデータの結果と同じ表示（すべての行のシートあり）", () => {
     const seen: string[] = [];
     act(() =>
       root.render(
         <AnswerBody
           text={"| 項目 | 出典 |\n| --- | --- |\n| 値 | [1] |"}
-          tableMode="answer"
           testId="body"
           renderTableCell={({ value, columnIndex, table }) => {
             seen.push(`${table.number}:${table.columns[columnIndex].name}:${String(value)}`);
@@ -101,7 +100,7 @@ describe("AnswerBody の回答の表と出典の印（#4812）", () => {
         />
       )
     );
-    expect(host.querySelector('[data-testid="body-table-1-view-all"]')).toBeNull();
+    expect(host.querySelector('[data-testid="body-table-1-view-all"]')).not.toBeNull();
     expect([...new Set(seen)]).toEqual(["1:項目:値", "1:出典:[1]"]);
   });
 });

@@ -239,6 +239,14 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 4. 言語資源に、要約を根拠にしたときの出典の場所の表示（`answer_labels.document_summary_location`。既定「文書の要約」）を足した。公開済みの言語資源は項目が欠けて契約に合わなくなるので、[言語資源の現在版の契約](./language-pack-current-contract.md)の手順（`language_pack_repair_cli` の dry-run → 許可 → 適用）で、欠けた項目に組み込みの値を足した版を発行する（`ingest_hash` は変わらず、文書の再処理は要らない）。
 5. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
 
+## 既存環境の更新手順（#4811 品質評価の過去の評価の一覧と見え方）
+
+品質評価の「評価の実行」に過去の評価の一覧を足し、`/evaluation?job=<評価 ID>` で別のブラウザーからも保存済みの結果を開けるようにした。評価に使った検索・回答プロファイルを使える利用者が見られる（プロファイルの分からない評価は実行した本人と system_admin だけ）。
+
+1. システムテーブルを更新する（migration `20261110_4811_evaluation_job_visibility`。`rag_evaluation_jobs` に列 `search_answer_profile_id`・`compare_search_answer_profile_id`・`user_uuid` を足す。行は消さない）。既存の行のプロファイルは、保存した結果の実行条件（`result_json` の `run_manifest.request`。比べる方は `comparison` も）とケースごとの結果（`rag_evaluation_job_case_results` の pass ごとの `search_answer_profile_id`）から埋める。どちらにも無い行は NULL のままで、実行した本人と system_admin だけが見られる。利用者の UUID は既存の行には埋めない（一覧の実行者は「—」）。
+2. backend と frontend を更新する。新しい評価は使ったプロファイルと実行した利用者の UUID を必ず記録する。
+3. 権限（`menu.evaluation`）を持ち、評価に使った検索・回答プロファイルを使える利用者は、他の利用者の評価の結果を閲覧し、結果の Excel をダウンロードできるようになる（取り消しは実行した本人と system_admin だけ）。広げたくない評価は、プロファイルの割り当て（権限管理）で絞る。
+
 ## 既存環境の更新手順（#4799 抽出項目の条件の自動読み取りと登録ルールの削除）
 
 質問から抽出項目の条件を LLM で読み取る段と、検索・回答プロファイルの登録ルール（回答前の確認・回答への差し込み）を

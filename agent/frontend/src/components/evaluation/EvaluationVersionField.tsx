@@ -73,7 +73,10 @@ export function EvaluationVersionField({
         ]
       : []),
   ];
-  const helper = !canDraft
+  // 業務 Agent が決まっていない（未選択・候補の読み取りの失敗）ときは、版が無いとは言わない（#4817）。
+  const helper = !agent
+    ? undefined
+    : !canDraft
     ? published === null
       ? t("evaluation.version.noPublishedNoDraft")
       : t("evaluation.version.publishedOnly")

@@ -250,7 +250,7 @@
     },
     {
       "name": "evaluation_jobs",
-      "sha256": "14f2fba4ba1d08e75ed149d33e4b3078803df9a0e30674e1446975593c943596",
+      "sha256": "d0711efd94f9228163223380fa1eeb6d7be2eddb34f43172d0e80256a2c32da0",
       "statement_count": 4,
       "table_name": "rag_evaluation_jobs"
     },
@@ -273,7 +273,7 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "b04bc2f7199e3057a728281e7fb9de033a6feb90d3fee32de9952f478b2b2c78",
+  "sha256": "b3042760f047d6b4c65dffcba2c51e5945bd96d9ab2e418c5e335bce99c025dc",
   "statement_count": 162,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {

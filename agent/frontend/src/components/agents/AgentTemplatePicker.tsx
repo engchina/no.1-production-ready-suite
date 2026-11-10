@@ -1,8 +1,9 @@
 import { useId } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
-import { ListSkeleton, Section, TimedLoadingState, ApiErrorBanner } from "@production-ready/ui";
+import { ListSkeleton, Section, TimedLoadingState } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { agentApi, type AgentTemplate } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -32,7 +33,14 @@ export function AgentTemplatePicker({
           <ListSkeleton rows={4} className="sm:grid-cols-2 xl:grid-cols-4" />
         </TimedLoadingState>
       ) : templates.error ? (
-        <ApiErrorBanner error={templates.error} fallback={t("common.error.load")} />
+        // 選べるテンプレートを読み取れなかった。選ぶ欄の位置に、失敗と再試行を出す（#4817）。
+        <DataLoadFailure
+          error={templates.error}
+          fallback={t("agent.template.loadError")}
+          onRetry={() => void templates.refetch()}
+          layout="field"
+          testId="agent-templates-load-failed"
+        />
       ) : (
         <div className="space-y-3" data-testid="agent-templates">
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">

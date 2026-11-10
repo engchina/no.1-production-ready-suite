@@ -50,6 +50,7 @@ import {
 
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ErrorState } from "@/components/StateViews";
 import { PageNotice } from "@/components/page-notice";
 import {
@@ -527,23 +528,14 @@ function DeepSecTargetObjectPicker({
         }}
       />
       {error ? (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <FormStatus
-            tone="danger"
-            message={t("security.deepsec.entitlements.objectLoadMoreError", { message: error })}
-          />
-          <Button
-            icon={RefreshCw}
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={disabled}
-            data-testid={`security-deepsec-object-picker-retry-${index}`}
-            onClick={onRetry}
-          >
-            {t("common.retry")}
-          </Button>
-        </div>
+        // 対象の候補を読み取れなかった（最初の読み取りと続きの読み込み）。欄の直下に出す（#4817）。
+        <DataLoadFailure
+          error={error}
+          fallback={t("security.deepsec.entitlements.objectLoadError")}
+          onRetry={onRetry}
+          layout="field"
+          testId={`security-deepsec-object-picker-load-failed-${index}`}
+        />
       ) : null}
     </div>
   );
@@ -2434,9 +2426,17 @@ export function SecurityDeepSecPage() {
                                             <ListSkeleton rows={3} rowClassName="h-8" />
                                           </TimedLoadingState>
                                         ) : detailError ? (
-                                          <p data-surface-tint="danger" className="rounded-md border border-danger-border bg-danger-subtle p-3 text-sm text-danger-fg">
-                                            {detailError}
-                                          </p>
+                                          // 許可列の候補を読み取れなかった。候補の位置に、欄ごとの文と再試行を出す（#4817）。
+                                          <DataLoadFailure
+                                            error={detailError}
+                                            fallback={t("security.deepsec.entitlements.columnsLoadError")}
+                                            onRetry={() => {
+                                              const object = targetObjectMap.get(targetKey);
+                                              if (object) void loadTargetDetail(object);
+                                            }}
+                                            layout="field"
+                                            testId={`security-deepsec-entitlement-columns-load-failed-${index}`}
+                                          />
                                         ) : detail?.columns.length ? (
                                           <div
                                             className={`mt-1 grid gap-2 rounded-md border border-border bg-surface-sunken p-2 sm:grid-cols-2 xl:grid-cols-3 ${INFORMATION_LIST_SCROLL_CLASS}`}

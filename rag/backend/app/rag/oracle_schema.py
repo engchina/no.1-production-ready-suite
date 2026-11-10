@@ -1116,6 +1116,13 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4811_evaluation_job_visibility",
+            table_name="rag_evaluation_jobs",
+            sql=evaluation_job_visibility_migration_sql(),
+        )
+    )
     # 文書全体の要約の表（#4793）。無い表だけを作り、既存のデータは変えない。
     sections.append(
         OracleSchemaSection(
@@ -1323,6 +1330,68 @@ BEGIN
 END;
 /"""
     return f"{objects}\n\n{column}"
+
+
+def evaluation_job_visibility_migration_sql() -> str:
+    """品質評価の job に、使った検索・回答プロファイルと実行した利用者の UUID の列を足す（#4811）。
+
+    列を足すだけで行は消さない。既存の行のプロファイルは、保存した結果の実行条件
+    （``result_json`` の ``run_manifest.request``）と、ケースごとの結果
+    （``rag_evaluation_job_case_results`` の pass ごとの ``search_answer_profile_id``）から埋める。
+    どちらにも無い行（プロファイルを使わない評価・結果の無い行）は NULL のままで、実行した本人と
+    system_admin だけが見られる。利用者の UUID は既存の行には無い（hash からは戻せない）ので
+    埋めない。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        RETURN;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SEARCH_ANSWER_PROFILE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD (search_answer_profile_id VARCHAR2(128))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND column_name = 'COMPARE_SEARCH_ANSWER_PROFILE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD (compare_search_answer_profile_id VARCHAR2(128))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'USER_UUID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (user_uuid VARCHAR2(64))';
+    END IF;
+    EXECUTE IMMEDIATE q'[
+        UPDATE rag_evaluation_jobs j
+        SET search_answer_profile_id = COALESCE(
+                JSON_VALUE(j.result_json, '$.run_manifest.request.search_answer_profile_id'),
+                (SELECT MAX(r.search_answer_profile_id)
+                 FROM rag_evaluation_job_case_results r
+                 WHERE r.job_id = j.job_id AND r.pass_index = 0)
+            ),
+            compare_search_answer_profile_id = COALESCE(
+                JSON_VALUE(
+                    j.result_json, '$.run_manifest.request.compare_search_answer_profile_id'
+                ),
+                JSON_VALUE(j.result_json, '$.comparison.search_answer_profile_id'),
+                (SELECT MAX(r.search_answer_profile_id)
+                 FROM rag_evaluation_job_case_results r
+                 WHERE r.job_id = j.job_id AND r.pass_index = 1)
+            )
+        WHERE j.search_answer_profile_id IS NULL
+          AND j.compare_search_answer_profile_id IS NULL
+    ]';
+END;
+/"""
 
 
 # 工程を消して読まれなくなった指示の保存キー（#4749 の検索の振り分け・質問の広げ直し・旧い生成の

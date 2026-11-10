@@ -606,14 +606,15 @@ export function FileListClient() {
           testId="file-list-toolbar"
         />
 
-        {knowledgeBases.isError ? (
-          <Banner severity="warning" title={t("knowledgeBaseScope.loadWarning")}>
-            <p>
-              {knowledgeBases.error instanceof ApiError
-                ? knowledgeBases.error.message
-                : t("knowledgeBaseScope.loadWarningHint")}
-            </p>
-          </Banner>
+        {knowledgeBases.loadFailed ? (
+          // 絞り込みの候補を読み取れないまま「すべて」だけを候補なしと見せない（#4817）。一覧は読めるのでそのまま出す。
+          <DataLoadFailure
+            error={knowledgeBases.error}
+            fallback={t("fileList.knowledgeBaseFilter.loadError")}
+            onRetry={knowledgeBases.refetch}
+            layout="field"
+            testId="file-list-knowledge-base-filter-load-failed"
+          />
         ) : null}
 
         {/* 前回取得した一覧があるときの再取得（自動更新を含む）の失敗は、一覧と選択を残して知らせる

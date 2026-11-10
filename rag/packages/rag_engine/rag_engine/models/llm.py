@@ -134,7 +134,7 @@ class PictureDescriptionOutput(_StrictModel):
     operation_steps: list[str] = Field(description="読み取れる操作手順。順番が読めれば順番を保つ。")
     condition_result_pairs: list[ConditionResultPairOutput] = Field(description="条件と結果の対応。")
     exception_or_cautions: list[str] = Field(description="例外、対象外、制限、前提条件、禁止事項、未対応、別途必要な資料や外部確認。")
-    answerable_questions: list[str] = Field(description="この画像で回答できる問い合わせ文を文書の言語で複数。")
+    answerable_questions: list[str] = Field(description="この画像で回答できる問い合わせ文を複数。")
     query_rewrites: list[str] = Field(description="利用者が言いそうな別表現、略称、言い換え。")
     search_keywords: list[str] = Field(description="重要語、正式名、別名、略称、表記ゆれ、コード、エラー、画面名、項目名。")
     retrieval_text: str = Field(

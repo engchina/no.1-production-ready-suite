@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeySquare } from "lucide-react";
 import {
@@ -69,6 +69,11 @@ export interface MyApiKeysPanelProps {
    * 「使える業務 Agent」の欄が現れて下を押し下げない（経過時間は足さない）。
    */
   agentScopeLoading?: boolean;
+  /**
+   * `agentScopeOptions` を読み取れなかったときの表示（#4817）。製品が共有の `DataLoadFailureState` の
+   * `layout="field"`（欄ごとの文と再試行）を渡す。欄を黙って消さず、欄の位置に出す。
+   */
+  agentScopeFailure?: ReactNode;
 }
 
 /**
@@ -86,6 +91,7 @@ export function MyApiKeysPanel({
   messages,
   agentScopeOptions,
   agentScopeLoading = false,
+  agentScopeFailure,
 }: MyApiKeysPanelProps) {
   const t = apiKeysTranslator(messages);
   const queryClient = useQueryClient();
@@ -275,6 +281,11 @@ export function MyApiKeysPanel({
                 )
               ) : null}
             </div>
+          ) : agentSelected && agentScopeFailure ? (
+            // 候補を読み取れなかった。欄を黙って消さず、見出しの下に失敗と再試行を出す（#4817）。
+            <Fieldset legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
+              {agentScopeFailure}
+            </Fieldset>
           ) : agentSelected ? (
             <p className="text-xs leading-5 text-fg-muted" data-testid="api-key-agent-scope-elsewhere">
               {t("apiKeys.create.agentScope.elsewhere")}

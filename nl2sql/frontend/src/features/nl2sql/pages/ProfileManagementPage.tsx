@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -697,6 +698,8 @@ function SchemaGroupedSelectionPanel({
   loading,
   disabled,
   hasActiveFilter,
+  loadError,
+  onRetryLoad,
   hasNextPage,
   loadingNextPage,
   loadMoreError,
@@ -714,6 +717,9 @@ function SchemaGroupedSelectionPanel({
   emptyHint: string;
   onToggle: (name: string) => void;
   loading: boolean;
+  /** 候補を 1 件も読み取れないままの失敗の文。一覧の中に失敗と再試行を出し、空の案内を出さない（#4817）。 */
+  loadError: string;
+  onRetryLoad: () => void;
   disabled: boolean;
   hasActiveFilter: boolean;
   hasNextPage: boolean;
@@ -785,6 +791,8 @@ function SchemaGroupedSelectionPanel({
       total={totalCount}
       hasActiveFilter={hasActiveFilter}
       loading={loading}
+      error={loadError || undefined}
+      onRetry={onRetryLoad}
       disabled={disabled}
       hasMore={hasNextPage}
       loadingMore={loadingNextPage}
@@ -837,6 +845,11 @@ function ProfileEditor({
   nameError,
   requiredErrors,
   engineOptions,
+  engineLoadFailure,
+  tableLoadError,
+  viewLoadError,
+  onRetryTables,
+  onRetryViews,
   oracleConfirmation,
   rebuildAgentAssets,
   canClearOracleExecution,
@@ -898,6 +911,13 @@ function ProfileEditor({
   requiredErrors: ProfileRequiredErrors;
   /** 既定の生成方式の選択肢（この環境で使える方式。#1524）。 */
   engineOptions: readonly SelectFieldOption<Nl2SqlEngine>[];
+  /** 既定の生成方式の候補の読み取りの失敗（共有の `DataLoadFailure` の `layout="field"`。欄の直下に出す。#4817）。 */
+  engineLoadFailure?: ReactNode;
+  /** 表・ビューの候補を 1 件も読み取れないままの失敗の文（「表がありません」と見せない。#4817）。 */
+  tableLoadError: string;
+  viewLoadError: string;
+  onRetryTables: () => void;
+  onRetryViews: () => void;
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
   canClearOracleExecution: boolean;
@@ -1029,6 +1049,10 @@ function ProfileEditor({
             onValueChange={(value) => onFormChange((current) => ({ ...current, defaultEngine: value }))}
             className="order-4 mt-2 min-w-0 @2xl:order-none"
           />
+          {/* この環境で使える方式を読み取れなかった（Select AI と今の値だけを候補なしと見せない。#4817）。 */}
+          {engineLoadFailure ? (
+            <div className="order-5 col-span-full min-w-0 @2xl:order-none">{engineLoadFailure}</div>
+          ) : null}
         </FormGrid>
       </section>
 
@@ -1128,6 +1152,8 @@ function ProfileEditor({
             emptyHint={t("profiles.objects.emptyTablesHint")}
             onToggle={onToggleTable}
             loading={tableObjectsLoading}
+            loadError={tableLoadError}
+            onRetryLoad={onRetryTables}
             disabled={busy}
             hasActiveFilter={Boolean(objectFilter.trim())}
             hasNextPage={tableHasNextPage}
@@ -1148,6 +1174,8 @@ function ProfileEditor({
             emptyHint={t("profiles.objects.emptyViewsHint")}
             onToggle={onToggleView}
             loading={viewObjectsLoading}
+            loadError={viewLoadError}
+            onRetryLoad={onRetryViews}
             disabled={busy}
             hasActiveFilter={Boolean(objectFilter.trim())}
             hasNextPage={viewHasNextPage}
@@ -2041,6 +2069,25 @@ export function ProfileManagementPage() {
     <ProfileEditor
       selectedProfile={selectedProfile}
       engineOptions={engineOptions}
+      engineLoadFailure={
+        enginesQuery.isError && enginesQuery.data === undefined ? (
+          <DataLoadFailure
+            error={enginesQuery.error}
+            fallback={t("profiles.field.defaultEngineLoadError")}
+            onRetry={() => void enginesQuery.refetch()}
+            layout="field"
+            testId="profile-default-engine-load-failed"
+          />
+        ) : undefined
+      }
+      tableLoadError={
+        tableObjectsQuery.isError && tableObjectsQuery.data === undefined ? t("profiles.objects.tablesLoadError") : ""
+      }
+      viewLoadError={
+        viewObjectsQuery.isError && viewObjectsQuery.data === undefined ? t("profiles.objects.viewsLoadError") : ""
+      }
+      onRetryTables={() => void tableObjectsQuery.refetch()}
+      onRetryViews={() => void viewObjectsQuery.refetch()}
       profileAccessProfile={selectedProfileAccessProfile}
       form={form}
       tableObjects={tableObjects}

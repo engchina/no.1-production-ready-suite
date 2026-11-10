@@ -74,6 +74,8 @@
 
 正本は [`messaging.md` §10](../../platform/docs/ux-contracts/messaging.md#10-操作の結果状態の出し方位置幅形出す情報705)。新しい画面は最初から、既存の画面は触るときに従う。結果は起点の操作の**直下**に**全幅**で出し、テスト・接続確認は結果パネル、保存は Toast / `FormStatus`、処理の失敗は danger の `Banner`、対象の状態は見出しの `StatusBadge`。技術的な詳細は「詳細」に畳み、自動で消さない。
 
+- **欄の候補・欄の値の読み取りの失敗は、共有の `DataLoadFailureState` の `layout="field"`（製品の `components/DataLoadStates.tsx` の `DataLoadFailure`）で欄の直下に出す**（#4817。正本は `messaging.md` §3.6.1）。`fallback` には欄ごとの文（「〈欄の名前〉の候補を読み込めませんでした。」。i18n）を渡し、製品で `Banner`・警告の文・`helper` / `error` の文・手書きの枠を作らない。候補が無いままの失敗を「候補なし」「すべて」だけと見せない・欄ごと消さない。e2e は `findFieldLoadFailureViolations` で確かめる。
+
 ## lint
 
 - 遵守ルールの正本は `platform/docs/design-system/adherence.oxlintrc.json` と `design-system-plugin.mjs`。各製品は **コピーせず相対パスで参照する**（書き方は [platform/AGENTS.md](../../platform/AGENTS.md)「lint」）。

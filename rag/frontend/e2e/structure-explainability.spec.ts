@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 import {
@@ -666,7 +667,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ] as const) {
-  test(`文書詳細の分類と新しい版の候補を読み取れないときは、候補なしと見せず失敗と再試行を出す (#4222, ${viewport.name})`, async ({
+  test(`文書詳細の分類と新しい版の候補を読み取れないときは、候補なしと見せず欄ごとの文の 1 行の失敗と再試行を出す (#4222・#4817, ${viewport.name})`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -693,7 +694,9 @@ for (const viewport of [
     // 分類: 3 つの欄の直下に失敗と再試行（保存済みの値の欄は残す）。
     const categoryFailure = page.getByTestId("document-classification-category-load-failed");
     await expect(categoryFailure).toBeVisible({ timeout: 15_000 });
-    await expect(categoryFailure.getByRole("alert")).toContainText("候補を読み取れませんでした。");
+    // 見出しは欄ごとの文（何を読めなかったか）。backend の文は畳んだ「詳細」に入れる（#4817）。
+    await expect(categoryFailure.getByRole("alert")).toHaveText("文書の分類の候補を読み込めませんでした。");
+    await expect(categoryFailure.getByText("候補を読み取れませんでした。")).toBeHidden();
     await expect(page.getByRole("combobox", { name: "大分類" })).toBeVisible();
 
     // 新しい版: 欄に触れて候補を読み、失敗したら開いたパネルでも「候補がありません」と言わない。
@@ -702,24 +705,88 @@ for (const viewport of [
     await expect.poll(() => candidateRequests, { timeout: 15_000 }).toBe(3);
     const versionFailure = page.getByTestId("document-version-candidates-load-failed");
     await expect(versionFailure).toBeVisible();
-    await expect(versionFailure.getByRole("alert")).toContainText("候補を読み取れませんでした。");
+    await expect(versionFailure.getByRole("alert")).toHaveText("新しい版の候補の文書を読み込めませんでした。");
     const panel = page.getByRole("dialog", { name: "この文書を置き換えた新しい版" });
     await expect(panel).toContainText("新しい版の候補の文書を読み込めませんでした。");
     await expect(panel).not.toContainText("候補がありません");
     await page.keyboard.press("Escape");
     await expect(page.getByText("候補がありません。")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
-    await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();
+    // 2 つの欄が同じ原因で失敗しても、同じ文の大きい枠を 2 つ出さない（欄ごとの文・1 行・コントラスト・あふれ）。
+    expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+    // ダークテーマでも同じ基準（文のコントラスト 4.5:1 以上など）を満たす。
+    // テーマを切り替えた後は、色の transition が終わってから測る。
+    const setDark = (dark: boolean) =>
+      page.evaluate(async (value) => {
+        document.documentElement.classList.toggle("dark", value);
+        await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+      }, dark);
+    await setDark(true);
+    expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`document-candidates-load-failed-${viewport.name}-dark.png`) });
+    await setDark(false);
+    // 分類の失敗と新しい版の失敗が両方見える位置で撮る（375px は 2 枚に分ける）。
+    await categoryFailure.evaluate(
+      (element, block) => element.scrollIntoView({ block }),
+      viewport.name === "desktop" ? ("center" as const) : ("end" as const),
+    );
     await page.screenshot({ path: testInfo.outputPath(`document-candidates-load-failed-${viewport.name}.png`) });
+    if (viewport.name === "mobile") {
+      await versionFailure.evaluate((element) => element.scrollIntoView({ block: "end" }));
+      await page.screenshot({ path: testInfo.outputPath(`document-version-load-failed-${viewport.name}.png`) });
+    }
 
-    // 再試行で読み取れたら、失敗の表示を消して候補を選べる。
+    // 「詳細」を開くと backend の文と技術的な情報が出る（見出しの行の操作の位置は変わらない）。
+    const retry = categoryFailure.getByRole("button", { name: "再試行" });
+    // 画面のスクロールに左右されないよう、失敗の表示の上端からの位置で比べる。
+    const retryOffset = async () => ((await retry.boundingBox())?.y ?? 0) - ((await categoryFailure.boundingBox())?.y ?? 0);
+    const retryBefore = await retryOffset();
+    await categoryFailure.getByRole("button", { name: "詳細" }).click();
+    await expect(categoryFailure.getByText("候補を読み取れませんでした。")).toBeVisible();
+    await expect(categoryFailure).toContainText("database_read_failed");
+    expect(await retryOffset()).toBe(retryBefore);
+    await expectNoHorizontalOverflow(page);
+
+    // 再試行はキーボードで押せる。読み取れたら、失敗の表示を消して候補を選べる。
     categoriesFail = false;
-    await categoryFailure.getByRole("button", { name: "再試行" }).click();
+    await retry.focus();
+    await page.keyboard.press("Enter");
     await expect(categoryFailure).toHaveCount(0);
     await page.getByRole("combobox", { name: "大分類" }).click();
     await expect(page.getByRole("option")).toHaveText(["指定なし", "10_業務A", "20_業務B"]);
   });
 }
+
+test("文書詳細の所属ナレッジベースの候補と今の値を読み取れないときは、それぞれ欄ごとの文の失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockDocumentDetail(page);
+  let fail = true;
+  // 後から登録した route が先に呼ばれる（mockDocumentDetail の成功の応答を上書きする）。
+  await page.route("**/api/knowledge-bases**", (route) =>
+    fail ? fulfillDocumentInspection(route, CANDIDATE_READ_FAILURE) : route.fallback()
+  );
+  await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
+    fail && route.request().method() === "GET" ? fulfillDocumentInspection(route, CANDIDATE_READ_FAILURE) : route.fallback()
+  );
+  await page.goto("/documents/doc-1");
+
+  // 今の値（所属先）の失敗と、候補の失敗は別の読み取り。見出しは欄ごとに違う文にする。
+  const membership = page.getByTestId("document-knowledge-bases-load-failed");
+  await expect(membership.getByRole("alert")).toHaveText("今の所属ナレッジベースを読み込めませんでした。", { timeout: 15_000 });
+  const candidates = page.getByTestId("knowledge-base-scope-load-failed");
+  await expect(candidates.getByRole("alert")).toHaveText("ナレッジベースの候補を読み込めませんでした。");
+  await expect(page.getByText("有効なナレッジベースがありません", { exact: false })).toHaveCount(0);
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+  await candidates.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`document-knowledge-bases-load-failed-${testInfo.project.name}.png`) });
+
+  fail = false;
+  await candidates.getByRole("button", { name: "再試行" }).click();
+  await expect(candidates).toHaveCount(0);
+  await membership.getByRole("button", { name: "再試行" }).click();
+  await expect(membership).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /所属先/ })).toBeVisible();
+});
 
 /** 文書の分類の一覧（#2131）。名前は合成の値。 */
 const CATEGORY_TREE = [

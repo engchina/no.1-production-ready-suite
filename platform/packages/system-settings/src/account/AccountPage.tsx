@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { KeyRound, KeySquare } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -40,6 +40,8 @@ export interface AccountPageProps {
     agentScopeOptions?: ApiKeyScopeOption[];
     /** `agentScopeOptions` を読み込んでいる間（欄の形の Skeleton を出す。#4649）。 */
     agentScopeLoading?: boolean;
+    /** `agentScopeOptions` を読み取れなかったときの表示（共有の `DataLoadFailureState` の `layout="field"`。#4817）。 */
+    agentScopeFailure?: ReactNode;
   };
   /** パスワードの変更の失敗の表示文言（製品の API の失敗の説明）。 */
   describePasswordError?: (cause: unknown) => string | undefined;
@@ -107,6 +109,7 @@ export function AccountPage({ loginRoute, apiKeys, describePasswordError, messag
             messages={apiKeys.messages}
             agentScopeOptions={apiKeys.agentScopeOptions}
             agentScopeLoading={apiKeys.agentScopeLoading}
+            agentScopeFailure={apiKeys.agentScopeFailure}
           />
         </TabPanel>
         <TabPanel idPrefix={TAB_ID_PREFIX} id="password" value={tab} className="grid content-start gap-6">

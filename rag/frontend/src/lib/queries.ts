@@ -1348,6 +1348,9 @@ export function useKnowledgeBaseChoices(params: { status?: KnowledgeBaseStatus; 
     matchedTotal: remote ? (search.data?.pages[0]?.total ?? 0) : items.length,
     isPending: head.isPending || (remote && search.isPending),
     isError: head.isError || (remote && search.isError),
+    /** 候補を 1 件も読み取れないまま失敗した（候補なしと分けて、欄の直下に失敗と再試行を出す。#4817）。 */
+    loadFailed:
+      (head.isError && head.data === undefined) || (remote && search.isError && search.data === undefined),
     error: head.error ?? search.error,
     isFetching: head.isFetching || search.isFetching,
     /** 検索語を変えて取り直している（前の結果を出したまま）。 */
@@ -2090,13 +2093,18 @@ export function useEnqueueDocumentIngestionJob() {
 
 /** 品質評価の job の query key（#390）。 */
 export const evaluationJobQueryKey = (jobId: string) => ["evaluation", "jobs", jobId] as const;
+/** 過去の品質評価の一覧の query key（#4811。job の key と前方一致させない）。 */
+export const evaluationJobListQueryKey = ["evaluation", "job-list"] as const;
 
 /** RAG golden set 評価を job として投入する（#390）。 */
 export function useSubmitRunEvaluationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: EvaluationRunRequestBody) => api.submitRunEvaluationJob(payload),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    onSuccess: (job) => {
+      qc.setQueryData(evaluationJobQueryKey(job.job_id), job);
+      void qc.invalidateQueries({ queryKey: evaluationJobListQueryKey });
+    },
   });
 }
 
@@ -2150,7 +2158,26 @@ export function useCancelEvaluationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (jobId: string) => api.cancelEvaluationJob(jobId),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    onSuccess: (job) => {
+      qc.setQueryData(evaluationJobQueryKey(job.job_id), job);
+      void qc.invalidateQueries({ queryKey: evaluationJobListQueryKey });
+    },
+  });
+}
+
+/**
+ * 見られる過去の品質評価の一覧（#4811。offset 型）。ページを移る間は前のページを出したままにし、
+ * 実行中の評価がある間は状態を取り直す（状態の列を進める）。
+ */
+export function useEvaluationJobs(offset: number, limit: number) {
+  return useQuery({
+    queryKey: [...evaluationJobListQueryKey, offset, limit],
+    queryFn: () => api.listEvaluationJobs(offset, limit),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      !query.state.error && query.state.data?.items.some((job) => job.status === "RUNNING")
+        ? EVALUATION_JOB_POLL_INTERVAL_MS
+        : false,
   });
 }
 

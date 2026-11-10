@@ -763,7 +763,7 @@ export function AgentEditorView({
                 // 候補を読み取れなかったことを、再試行と一緒に出す（#4222）。
                 <DataLoadFailure
                   error={skillsError}
-                  fallback={t("agent.skillsUnavailable")}
+                  fallback={t("agent.skillsLoadError")}
                   onRetry={onRetrySkills}
                   layout="field"
                   testId="agent-skills-load-failed"
