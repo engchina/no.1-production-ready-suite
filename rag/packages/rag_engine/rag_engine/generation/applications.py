@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from rag_engine.generation.answer_table import table_cells, table_markdown
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.llm import GroundedApplication
 
@@ -71,7 +72,7 @@ def check_applications(applications: Sequence[GroundedApplication], items_by_ind
                 entry.reject(f"items[{index}] は引用のある規則ではない")
             else:
                 entry.entries.append(item)
-        if label := _internal_label().search(f"{application.reasoning}\n{application.result}"):
+        if label := _internal_label().search("\n".join([application.reasoning, application.result, *table_cells(application.table)])):
             entry.reject(f"内部の番号『{label.group(0)}』を利用者向けの文に書いている")
         checked.append(entry)
     return checked
@@ -92,6 +93,9 @@ def render_lines(
             continue
         application = entry.application
         lines.append(f"・{application.result.strip()}")
+        # 表の結論は題の行の後ろに表の行を続ける（表の記法はコードが決める。#4796）。
+        if application.table is not None:
+            lines.extend(table_markdown(application.table).splitlines())
         premises = "".join(f"「{premise.strip()}」" for premise in application.premises if premise.strip())
         if premises:
             lines.append(PREMISES_LABEL + premises)

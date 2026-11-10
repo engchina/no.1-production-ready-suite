@@ -58,6 +58,12 @@ for (const viewport of [
       await expect(conditions).not.toContainText("約 2 倍");
       await expect(conditions.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" })).toBeVisible();
       await conditions.screenshot({ path: testInfo.outputPath("evaluation-guidance.png") });
+      // 結果の空の案内は、条件の欄と同じ入力（検索・回答プロファイル）を選ぶように案内する（#3597）。
+      await expect(page.getByText("まだ評価結果がありません。")).toBeVisible();
+      await expect(
+        page.getByText("検索・回答プロファイルを選び、評価リクエストの Excel をアップロードして評価を実行してください。")
+      ).toBeVisible();
+      await expect(page.getByRole("main")).not.toContainText("ナレッジベースを選び");
       // JSON の入力・設定比較・サンプルは無い。
       await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "比較実行" })).toHaveCount(0);
@@ -212,6 +218,37 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+test("評価するプロファイルの候補を読み取れないときは、候補なしと見せず欄の位置に失敗と再試行を出す (#4222)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let profilesFail = true;
+  // 後の route が優先する（beforeEach の成功の応答を上書きする）。
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    if (!profilesFail) return route.fallback();
+    await route.fulfill({
+      status: 500,
+      json: {
+        data: null,
+        error_messages: ["検索・回答プロファイルを読み取れませんでした。"],
+        warning_messages: [],
+        error_code: "database_read_failed",
+      },
+    });
+  });
+  await page.goto("/evaluation");
+
+  const failure = page.getByTestId("evaluation-profiles-load-failed");
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(failure.getByRole("alert")).toContainText("検索・回答プロファイルを読み取れませんでした。");
+  await expect(page.locator("#evaluation-profile")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.getByTestId("evaluation-conditions").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`evaluation-profiles-load-failed-${testInfo.project.name}.png`) });
+
+  profilesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.locator("#evaluation-profile")).toBeVisible();
+});
 
 test("テンプレートをダウンロードでき、選んだナレッジベースの文書の一覧を求める", async ({ page }) => {
   const urls: string[] = [];

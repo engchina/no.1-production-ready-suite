@@ -41,6 +41,7 @@ import {
   ApiErrorState,
   apiErrorMessage,
   adjacentListItems,
+  dataLoadView,
 } from "@production-ready/ui";
 
 import { AnswerBody } from "@/components/chat/ResultTables";
@@ -431,7 +432,8 @@ function EvaluationOverview({
             kind: "primary",
             label: t("evaluation.set.create"),
             icon: Plus,
-            disabled: !agentId,
+            // 評価セットの一覧を読み取れていない間も作らない（messaging.md §3.6.1。#4222）。
+            disabled: !agentId || dataLoadView(sets, { isEmpty: (sets.data?.sets ?? []).length === 0 }).blockCreate,
             onClick: onCreate,
           },
         ]}

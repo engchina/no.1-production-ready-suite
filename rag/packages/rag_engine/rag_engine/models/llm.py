@@ -237,11 +237,28 @@ class GroundedItem(_StrictModel):
         return [self.model_copy(update={"citations": [citation]}) for citation in self.citations]
 
 
+class AnswerTableRow(_StrictModel):
+    """回答の表の 1 行。``item_indexes`` はこの行の値を裏付ける items の index（行ごとの根拠。#4796）。"""
+
+    cells: list[str] = Field(default_factory=list)
+    item_indexes: list[Annotated[int, Field(strict=True, ge=0)]] = Field(default_factory=list)
+
+
+class AnswerTable(_StrictModel):
+    """回答の表（列名と行）。Markdown の表は ``answer_table.table_markdown`` がこの値から組み立てる（#4796）。"""
+
+    columns: list[str] = Field(min_length=1)
+    rows: list[AnswerTableRow] = Field(min_length=1)
+
+
 class GroundedApplication(_StrictModel):
     """資料の事実・規則から導く結論（計算・条件適用・資料間の組み合わせ）。
 
     前提は質問の原文の一部、規則は items の index で指し、計算は算式で書く。システムが前提の照合・規則の
     支持・算式の計算を確かめてから公開する。当てはめの正しさは生成のモデルの責務で、生成の後に LLM では確かめない。
+
+    ``table`` は表で示す結論（#4796）。``result`` は表の題で、表の本文は ``table`` の列名と行からコードが組み立てる。
+    表の結論は導く方法（reasoning）を持たなくてよい。
     """
 
     request_id: str = Field(default="", description="この当てはめが答える request_units の id。")
@@ -256,11 +273,19 @@ class GroundedApplication(_StrictModel):
         description="導出の根拠となる資料の事実・規則・操作の items の index（0 始まり）。引用のある item を1件以上指す。",
     )
     reasoning: str = Field(
-        min_length=1,
+        default="",
         max_length=600,
         description="規則を前提にどう当てはめたか。計算は「44万円＋180万円÷12＝59万円」のように数と＋−×÷＝の算式で書く。規則と前提に無い値・条件を足さない。",
     )
     result: str = Field(min_length=1, max_length=600, description="当てはめの結果（要求への答え）。1〜2 文。")
+    # 表の結論は生成の要点の型（answer_parts_wire の table 型）からコードが作る。モデルに渡す schema には出さない。
+    table: SkipJsonSchema[AnswerTable | None] = None
+
+    @model_validator(mode="after")
+    def _reasoning_unless_table(self) -> GroundedApplication:
+        if not self.reasoning and self.table is None:
+            raise ValueError("reasoning（導く方法）が空です。表で示す結論のほかは、依存する原文と既知値から導く方法を書いてください。")
+        return self
 
 
 class RequestEvidenceScope(_StrictModel):

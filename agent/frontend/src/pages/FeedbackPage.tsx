@@ -33,6 +33,7 @@ import {
   useUrlSelection,
 } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { AnswerBody } from "@/components/chat/ResultTables";
 import { AGENT_LIST_DETAIL_STORAGE_PREFIX } from "@/components/EntityLayout";
 import { listCount } from "@/components/ListFilters";
@@ -231,6 +232,19 @@ export function FeedbackPage() {
     </>
   );
 
+  // 業務 Agent の絞り込みの候補を読み取れないまま「すべて」だけを候補なしと見せない（#4222）。一覧は読めるので
+  // そのまま出し、ツールバーの直下に失敗と再試行を出す。
+  const agentFilterFailure =
+    agents.isError && agents.data === undefined ? (
+      <DataLoadFailure
+        error={agents.error}
+        fallback={t("feedback.filter.agentLoadError")}
+        onRetry={() => void agents.refetch()}
+        layout="field"
+        testId="feedback-agent-filter-load-failed"
+      />
+    ) : null;
+
   return (
     <>
       <PageHeader
@@ -304,6 +318,7 @@ export function FeedbackPage() {
             testId="signals-filters"
             className={signalSelection.selectedId ? "hidden" : undefined}
           />
+          {signalSelection.selectedId ? null : agentFilterFailure}
           <QueryState
             query={signals}
             loadingLabel={t("loading.feedbackSignals")}
@@ -361,6 +376,7 @@ export function FeedbackPage() {
             labels={listToolbarLabels()}
             testId="feedback-filters"
           />
+          {agentFilterFailure}
           <QueryState
             query={report}
             loadingLabel={t("loading.feedback")}

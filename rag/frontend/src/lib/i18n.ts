@@ -1405,7 +1405,7 @@ export const ja = {
   "settings.evaluation.suite.strict": "厳格",
   "settings.evaluation.suite.strict.description": "リリース前の確認に使う高い閾値です。MRR は 80%、ほかの三指標は 100% を求めます。測定できた範囲の合否であり、評価器がすべての誤りを検出できる保証ではありません。",
   "settings.evaluation.applyHint":
-    "変更は次に実行する品質評価から使います。実行済みの評価の合否は変わりません。品質評価の画面で評価の基準を選んで実行した場合は、そちらを使います。",
+    "保存した基準は、次に実行する品質評価から使います。実行済みの評価の合否は変わりません。",
   "settings.evaluation.actions.label": "評価の基準の操作",
   "settings.evaluation.actions.save": "保存",
   "settings.evaluation.actions.saved": "評価の基準を保存しました。",
@@ -3333,6 +3333,7 @@ export const ja = {
   "documentCategories.select.none": "指定なし",
   "documentCategories.select.parentFirst.middle_category": "先に大分類を選びます。",
   "documentCategories.select.parentFirst.small_category": "先に中分類を選びます。",
+  "documentCategories.select.loadError": "分類の候補を読み込めませんでした。",
   // 文書の版（#1248）。新しい版に置き換えた文書（旧版）は、既定で回答の検索の対象から外れる。
   "documents.version.title": "版",
   "documents.version.description":
@@ -3344,6 +3345,7 @@ export const ja = {
   "documents.version.unknownDocument": "表示できない文書（ID: {id}）",
   "documents.version.pickerLabel": "この文書を置き換えた新しい版",
   "documents.version.pickerPlaceholder": "新しい版の文書を選択",
+  "documents.version.candidatesLoadError": "新しい版の候補の文書を読み込めませんでした。",
   "documents.version.save": "版を保存",
   "documents.version.clear": "置き換えを解除",
   "documents.version.saved": "新しい版を保存しました。この文書は旧版として回答の検索の対象から外れます。",
@@ -4045,6 +4047,7 @@ export const ja = {
   "feedback.filters.all": "すべて",
   "feedback.filters.searchAnswerProfile": "検索・回答プロファイル",
   "feedback.filters.allSearchAnswerProfiles": "すべて",
+  "feedback.filters.searchAnswerProfileLoadError": "絞り込みに使う検索・回答プロファイルを読み込めませんでした。",
   "feedback.filters.target": "評価対象",
   "feedback.filters.allTargets": "すべて",
   "feedback.filters.rating": "評価",
@@ -4229,7 +4232,7 @@ export const ja = {
   "evaluation.result.title": "評価結果",
   "evaluation.result.empty": "まだ評価結果がありません。",
   "evaluation.result.emptyHint":
-    "ナレッジベースを選び、評価リクエストの Excel をアップロードして評価を実行してください。",
+    "検索・回答プロファイルを選び、評価リクエストの Excel をアップロードして評価を実行してください。",
   "evaluation.ingestionQuality.warning.table": "表構造確認",
   "evaluation.ingestionQuality.warning.figure": "画像 OCR 確認",
   "evaluation.ingestionQuality.warning.longDocument": "長文書",

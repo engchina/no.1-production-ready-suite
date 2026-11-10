@@ -651,6 +651,76 @@ test("文書詳細の版の保存の失敗は、操作の行に理由を出す",
   await expectNoHorizontalOverflow(page);
 });
 
+/** 候補の読み取りの失敗（自動の再試行の間隔が短い「その他」の失敗。#4222）。 */
+const CANDIDATE_READ_FAILURE = {
+  status: 500,
+  json: {
+    data: null,
+    error_messages: ["候補を読み取れませんでした。"],
+    warning_messages: [],
+    error_code: "database_read_failed",
+  },
+};
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+] as const) {
+  test(`文書詳細の分類と新しい版の候補を読み取れないときは、候補なしと見せず失敗と再試行を出す (#4222, ${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockDocumentDetail(page);
+    let categoriesFail = true;
+    let candidateRequests = 0;
+    // 後から登録した route が先に呼ばれる（mockDocumentDetail の成功の応答を上書きする）。
+    await page.route("**/api/document-categories", async (route) => {
+      if (categoriesFail) return fulfillDocumentInspection(route, CANDIDATE_READ_FAILURE);
+      return fulfillDocumentInspection(route, {
+        json: { data: CATEGORY_TREE, error_messages: [], warning_messages: [] },
+      });
+    });
+    await page.route(
+      (url) => url.pathname === "/api/documents",
+      async (route) => {
+        candidateRequests += 1;
+        await fulfillDocumentInspection(route, CANDIDATE_READ_FAILURE);
+      },
+    );
+
+    await page.goto("/documents/doc-1");
+
+    // 分類: 3 つの欄の直下に失敗と再試行（保存済みの値の欄は残す）。
+    const categoryFailure = page.getByTestId("document-classification-category-load-failed");
+    await expect(categoryFailure).toBeVisible({ timeout: 15_000 });
+    await expect(categoryFailure.getByRole("alert")).toContainText("候補を読み取れませんでした。");
+    await expect(page.getByRole("combobox", { name: "大分類" })).toBeVisible();
+
+    // 新しい版: 欄に触れて候補を読み、失敗したら開いたパネルでも「候補がありません」と言わない。
+    const section = page.getByTestId("document-version");
+    await section.getByRole("button", { name: /^この文書を置き換えた新しい版/ }).click();
+    await expect.poll(() => candidateRequests, { timeout: 15_000 }).toBe(3);
+    const versionFailure = page.getByTestId("document-version-candidates-load-failed");
+    await expect(versionFailure).toBeVisible();
+    await expect(versionFailure.getByRole("alert")).toContainText("候補を読み取れませんでした。");
+    const panel = page.getByRole("dialog", { name: "この文書を置き換えた新しい版" });
+    await expect(panel).toContainText("新しい版の候補の文書を読み込めませんでした。");
+    await expect(panel).not.toContainText("候補がありません");
+    await page.keyboard.press("Escape");
+    await expect(page.getByText("候補がありません。")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+    await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`document-candidates-load-failed-${viewport.name}.png`) });
+
+    // 再試行で読み取れたら、失敗の表示を消して候補を選べる。
+    categoriesFail = false;
+    await categoryFailure.getByRole("button", { name: "再試行" }).click();
+    await expect(categoryFailure).toHaveCount(0);
+    await page.getByRole("combobox", { name: "大分類" }).click();
+    await expect(page.getByRole("option")).toHaveText(["指定なし", "10_業務A", "20_業務B"]);
+  });
+}
+
 /** 文書の分類の一覧（#2131）。名前は合成の値。 */
 const CATEGORY_TREE = [
   {

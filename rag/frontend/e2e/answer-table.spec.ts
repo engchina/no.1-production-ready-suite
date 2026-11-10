@@ -11,6 +11,7 @@ import {
 
 // #4734: 回答の本文の Markdown の表と、コードが切り出した表の行の並びを、文字のまま出さずに共通の結果の表で描く。
 // 広い表は表の中で横にスクロールし、ページをはみ出さない。表の後ろの根拠の行は押せるまま。内容はすべて合成のデータ。
+// #4796: 表を求めた質問の答えは、回答エンジンが題の行の直後に表を組み立てる（要約と「資料をもとに導いた結論」の項目）。
 
 const PROFILE = {
   id: "profile-a",
@@ -30,7 +31,6 @@ const COLUMNS = Array.from({ length: 8 }, (_, index) => `長い列の名前 ${in
 
 const ANSWER = [
   "合成の要約です。",
-  "",
   "| 設定名 | 既定値 | 単位 |",
   "| --- | --- | --- |",
   "| 設定 A | 10 | 秒 |",
@@ -55,6 +55,12 @@ const ANSWER = [
   "| 条件 | 結果 |",
   "| --- | --- |",
   "| 条件 A | 結果 A |",
+  "根拠：文書 A.pdf p.3",
+  "・表の題です。",
+  "| 項目 | 扱い |",
+  "| --- | --- |",
+  "| 項目 A | 扱い A |",
+  "| 項目 B | 扱い B |",
   "根拠：文書 A.pdf p.3",
 ].join("\n");
 
@@ -123,9 +129,9 @@ test.describe("回答の本文の表（issue 4734）", { tag: "@responsive" }, (
     const answer = await ask(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-table-${testInfo.project.name}.png`), fullPage: true });
 
-    // 要約・項目の Markdown の表・コードが切り出した表の行の並び・結論の説明の表の 4 つ。
+    // 要約・項目の Markdown の表・コードが切り出した表の行の並び・結論の説明の表・結論の表の 5 つ。
     const tables = answer.getByRole("table");
-    await expect(tables).toHaveCount(4);
+    await expect(tables).toHaveCount(5);
     const text = await answer.innerText();
     expect(text).not.toContain("| ---");
     expect(text).not.toContain("| 設定名");
@@ -134,6 +140,12 @@ test.describe("回答の本文の表（issue 4734）", { tag: "@responsive" }, (
     await expect(tables.nth(1)).toContainText("長い列の名前 8");
     await expect(tables.nth(2)).toContainText("行 2 の列");
     await expect(tables.nth(3)).toContainText("条件 A");
+    await expect(tables.nth(4)).toContainText("項目 B");
+    expect(text).not.toContain("| 項目 A");
+    // 結論の表の題の行は表の上に文として残り、表の後ろの根拠の行はその項目の根拠になる。
+    const tableItem = answer.getByRole("listitem").filter({ hasText: "表の題です。" });
+    await expect(tableItem.getByRole("table")).toContainText("扱い B");
+    await expect(tableItem.getByRole("button", { name: "根拠：文書 A.pdf p.3 の原文を開く" })).toHaveCount(1);
     await expect(answer.getByTestId("answer-application-reasoning")).toContainText("説明の文です。");
     await answer.screenshot({ path: testInfo.outputPath(`answer-table-body-${testInfo.project.name}.png`) });
 
@@ -149,7 +161,7 @@ test.describe("回答の本文の表（issue 4734）", { tag: "@responsive" }, (
 
     // 表の後ろの根拠の行は、表が入っても押せて原文を開く。
     const citations = answer.getByRole("button", { name: "根拠：文書 A.pdf p.3 の原文を開く" });
-    await expect(citations).toHaveCount(3);
+    await expect(citations).toHaveCount(4);
     await citations.first().click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
     await expect(sheet).toBeVisible();
