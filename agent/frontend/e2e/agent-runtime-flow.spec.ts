@@ -1,5 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { LOCAL_CURRENT_USER } from "./fixtures/auth";
 import { expect, test } from "./fixtures/mock-api";
 
@@ -217,7 +218,7 @@ test.describe("AI Agent Control Plane", () => {
     { name: "desktop", width: 1280, height: 900 },
     { name: "mobile-375", width: 375, height: 812 },
   ]) {
-    test(`モデルとスキルの候補を読み取れないときは、候補なしと見せず欄の位置に失敗と再試行を出す (#4222, ${viewport.name})`, async ({
+    test(`モデルとスキルの候補を読み取れないときは、候補なしと見せず欄ごとの文の 1 行の失敗と再試行を出す (#4222・#4817, ${viewport.name})`, async ({
       page,
     }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -238,15 +239,23 @@ test.describe("AI Agent Control Plane", () => {
 
       const modelFailure = page.getByTestId("agent-model-load-failed");
       await expect(modelFailure).toBeVisible({ timeout: 15_000 });
-      await expect(modelFailure.getByRole("alert")).toContainText("モデルの一覧を読み取れませんでした。");
+      // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+      await expect(modelFailure.getByRole("alert")).toHaveText("モデルの候補を読み込めませんでした。");
+      await expect(modelFailure.getByText("モデルの一覧を読み取れませんでした。")).toBeHidden();
       const skillsFailure = page.getByTestId("agent-skills-load-failed");
-      await expect(skillsFailure.getByRole("alert")).toContainText("スキルの一覧を読み取れませんでした。");
+      await expect(skillsFailure.getByRole("alert")).toHaveText("スキルの候補を読み込めませんでした。");
+      expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+      await modelFailure.getByRole("button", { name: "詳細" }).click();
+      await expect(modelFailure.getByText("モデルの一覧を読み取れませんでした。")).toBeVisible();
+      await modelFailure.getByRole("button", { name: "詳細" }).click();
       await expectNoHorizontalOverflow(page);
       await modelFailure.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-${viewport.name}.png`) });
 
+      // 再試行はキーボードで押せる。
       candidatesFail = false;
-      await modelFailure.getByRole("button", { name: "再試行" }).click();
+      await modelFailure.getByRole("button", { name: "再試行" }).focus();
+      await page.keyboard.press("Enter");
       await expect(modelFailure).toHaveCount(0);
       await skillsFailure.getByRole("button", { name: "再試行" }).click();
       await expect(skillsFailure).toHaveCount(0);

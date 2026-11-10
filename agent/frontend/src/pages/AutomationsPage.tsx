@@ -526,6 +526,15 @@ function AutomationEditor({
   const savedAgentId = automation?.agent_id ?? "";
   const savedAgentUnavailable = Boolean(savedAgentId) && !agents.some((agent) => agent.id === savedAgentId);
   const savedAgent = allAgents.find((agent) => agent.id === savedAgentId);
+  // 候補を読み取れなかったときは「使える業務 Agent がありません」と言わない（失敗は欄の直下に出す。#4817）。
+  const agentCandidatesFailed = agentsLoadFailed && agents.length === 0;
+  const agentHelper = agentCandidatesFailed
+    ? undefined
+    : agents.length === 0
+      ? t("automation.agentNone")
+      : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
+        ? t("automation.agentUnavailableHint")
+        : undefined;
   const agentOptions = [
     ...agents.map((agent) => ({ value: agent.id, label: agent.name })),
     ...(savedAgentUnavailable && !agentsLoading
@@ -672,19 +681,11 @@ function AutomationEditor({
                         value={draft.agentId}
                         options={agentOptions}
                         error={agentError}
-                        helper={
-                          agentsLoadFailed && agents.length === 0
-                            ? undefined
-                            : agents.length === 0
-                            ? t("automation.agentNone")
-                            : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
-                              ? t("automation.agentUnavailableHint")
-                              : undefined
-                        }
+                        helper={agentHelper}
                         onValueChange={(value) => setField("agentId", value)}
                       />
                     )}
-                    {agentsLoadFailed && agents.length === 0 ? (
+                    {agentCandidatesFailed ? (
                       // 候補を読み取れないまま「使える業務 Agent がありません」と見せず、欄の直下に出す（#4817）。
                       <div className="col-span-full min-w-0">
                         <DataLoadFailure

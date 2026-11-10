@@ -152,7 +152,7 @@ test("読み込み中も入力欄に書いた文字は残す（作業状態）",
 
 test("業務プロファイルの一覧を読めなかったときは、空の状態ではなく失敗と再試行を出す", async ({
   page,
-}, testInfo) => {
+}) => {
   await setup(page);
   let fail = true;
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
@@ -177,7 +177,6 @@ test("業務プロファイルの一覧を読めなかったときは、空の�
   await expect(
     page.getByText("利用できる業務プロファイルがありません", { exact: true }),
   ).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath(`sql-chat-profiles-load-failed-${testInfo.project.name}.png`) });
 
   fail = false;
   await error.getByRole("button", { name: "再読み込み" }).click();

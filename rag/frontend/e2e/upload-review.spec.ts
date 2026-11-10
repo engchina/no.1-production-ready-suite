@@ -361,7 +361,10 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   await page.goto("/upload");
   const picker = page.getByTestId("upload-knowledge-base-picker");
   // TanStack Query の既定の再試行（3 回）を終えてから失敗を表示する。
-  await expect(picker.getByText("ナレッジベース一覧を取得できませんでした。")).toBeVisible({ timeout: 15_000 });
+  // 欄の位置に、欄ごとの文の失敗と再試行を出す（共有の部品。#4817）。
+  const failure = picker.getByTestId("upload-knowledge-base-load-failed");
+  await expect(failure.getByRole("alert")).toHaveText("登録先のナレッジベースの候補を読み込めませんでした。", { timeout: 15_000 });
+  await expect(picker).toContainText("登録先のナレッジベースを選択できないため、アップロードできません。");
   // 必須の利用者がファイルを選んでも黙って何も起きないのではなく、案内を出す。
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   await page.getByRole("button", { name: /アップロードを開始/ }).click();

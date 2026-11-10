@@ -15,6 +15,8 @@ const nl2sqlJa = {
   "answer.notice.label": "回答の注意書き",
   "chat.profile.loading": "業務プロファイルを読み込んでいます",
   "chat.profile.loadFailed": "業務プロファイルを読み込めませんでした。",
+  "chat.profile.candidatesLoadError": "業務プロファイルの候補を読み込めませんでした。",
+  "chat.profile.detailLoadError": "選んだ業務プロファイルを読み込めませんでした。",
   "chat.profile.placeholder": "業務プロファイルを検索して選択…",
   "chat.profile.searchPlaceholder": "業務プロファイルの名前・説明で検索…",
   "chat.profile.count": "{shown} / {total} 件",

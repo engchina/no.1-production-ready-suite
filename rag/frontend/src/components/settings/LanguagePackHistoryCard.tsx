@@ -6,7 +6,6 @@ import { History, Send } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import { api, type LanguagePackData, type LanguagePackRelease, type LanguagePackReleaseState, type LanguagePackReleaseComparison, type IngestionJobPhase } from "@/lib/api";
@@ -101,8 +100,7 @@ export function LanguagePackHistoryCard({ dirty, metadata, state }: { dirty: boo
           <OffsetPagination offset={offset} limit={size} total={history.data.total} count={history.data.releases.length} onPageChange={(page) => setPaging((current) => ({ ...current, offset: (page - 1) * current.size }))} pageSizeOptions={[10, 25, 50, 100]} onPageSizeChange={(value) => { setPaging({ size: value, offset: 0 }); }} labels={paginationLabels()} />
         </>}
         {selectedId && selectedQuery.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="language-release-content"><TableSkeleton columns={2} /></TimedLoadingState> : null}
-        {/* 選んだ公開版の内容（読み取り専用の欄の値）を読み取れなかった。欄の位置に失敗と再試行を出す（#4817）。 */}
-        {selectedQuery.isError ? <DataLoadFailure error={selectedQuery.error} fallback={t("settings.language.release.detailsLoadError")} onRetry={() => void selectedQuery.refetch()} layout="field" testId="language-release-details-load-failed" /> : null}
+        {selectedQuery.isError ? <ApiErrorState error={selectedQuery.error} fallback={t("settings.language.history.loadError")} onRetry={() => void selectedQuery.refetch()} /> : null}
         {selected ? <section aria-label={t("settings.language.release.details")} className="space-y-4">
           <h3 className="text-sm font-semibold">{t("settings.language.release.details")} v{selected.version}</h3>
           <LanguagePackFieldsPanel idPrefix="language-release-readonly" fields={metadata.fields} baseline={selected.effective} texts={textsFromSections(metadata.fields, selected.effective)} errors={{}} disabled state={panel} changedLabel={t("settings.language.changed")} resetLabel={t("settings.language.resetField")} onChange={() => undefined} />

@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { expect, test, type Page, type Route } from "./fixtures/test";
 
 import {
@@ -424,7 +425,10 @@ test("絞り込みの検索・回答プロファイルを読み取れないと�
 
   const failure = page.getByTestId("feedback-profile-filter-load-failed");
   await expect(failure).toBeVisible({ timeout: 15_000 });
-  await expect(failure.getByRole("alert")).toContainText("検索・回答プロファイルを読み取れませんでした。");
+  // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+  await expect(failure.getByRole("alert")).toHaveText("絞り込みに使う検索・回答プロファイルを読み込めませんでした。");
+  await expect(failure.getByText("検索・回答プロファイルを読み取れませんでした。")).toBeHidden();
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
   // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
   await expect(page.getByText("全体の有用率", { exact: true }).first()).toBeVisible();
   const toolbarBox = await page.getByTestId("feedback-filters-toolbar").boundingBox();

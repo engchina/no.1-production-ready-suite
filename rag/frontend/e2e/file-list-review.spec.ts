@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expectGrowingList } from "./_list-viewport";
 import type { SourceProfile } from "../src/lib/api";
@@ -423,6 +424,43 @@ test("自動更新の失敗では一覧と選択を残し、失敗を知らせ�
   await warning.getByRole("button", { name: "再試行" }).click();
   await expect(warning).toHaveCount(0);
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
+});
+
+test("絞り込みのナレッジベースの候補を読み取れないときは「すべて」だけを候補なしと見せず、ツールバーの直下に失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockFileListApi(page, [documentSummary("doc-idx", "indexed.pdf", "INDEXED")]);
+  let knowledgeBasesFail = true;
+  // 後の route が優先する（mockFileListApi の成功の応答を上書きする）。
+  await page.route("**/api/knowledge-bases**", (route) =>
+    knowledgeBasesFail
+      ? route.fulfill({
+          status: 500,
+          json: {
+            data: null,
+            error_messages: ["ナレッジベースを読み取れませんでした。"],
+            warning_messages: [],
+            error_code: "database_read_failed",
+          },
+        })
+      : route.fallback()
+  );
+  await page.goto("/file-list");
+
+  const failure = page.getByTestId("file-list-knowledge-base-filter-load-failed");
+  // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる。
+  await expect(failure.getByRole("alert")).toHaveText("絞り込みに使うナレッジベースを読み込めませんでした。", { timeout: 15_000 });
+  await expect(failure.getByText("ナレッジベースを読み取れませんでした。")).toBeHidden();
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
+  await expect(page.getByRole("link", { name: "indexed.pdf" })).toBeVisible();
+  const toolbarBox = await page.getByTestId("file-list-toolbar").boundingBox();
+  const failureBox = await failure.boundingBox();
+  expect(toolbarBox !== null && failureBox !== null && failureBox.y >= toolbarBox.y + toolbarBox.height).toBe(true);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath(`file-list-knowledge-base-filter-load-failed-${testInfo.project.name}.png`) });
+
+  knowledgeBasesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
 });
 
 async function mockFileListApi(

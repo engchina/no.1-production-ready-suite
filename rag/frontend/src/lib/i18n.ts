@@ -456,7 +456,6 @@ export const ja = {
   "settings.language.release.published": "言語資源 v{version} を公開しました。",
   "settings.language.release.snapshot": "公開時の完全な設定",
   "settings.language.release.details": "公開版の内容（読み取り専用）",
-  "settings.language.release.detailsLoadError": "公開版の内容を読み込めませんでした。",
   "settings.language.release.snapshotLoadError": "公開時の完全な設定を読み込めませんでした。",
   "settings.language.history.title": "公開版の履歴",
   "settings.language.history.description": "公開した完全な設定を保存します。版を選ぶと内容と現在版との差分を確認できます。回退も新しい公開操作として記録し、参照中の版は保持します。",
