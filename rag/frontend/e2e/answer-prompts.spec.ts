@@ -252,3 +252,42 @@ test("役割の文は保存・破棄でき、既定への復帰は保存まで�
   expect(requests).toEqual([{ key, method: "PUT", content: custom }, { key, method: "DELETE", content: null }]);
   await expectNoPageOverflow(page);
 });
+
+
+test("編集・読み取り専用のプロンプトは所属区画の全幅を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.route("**/api/settings/answer-prompts**", route => route.fulfill({ json: answerPromptsEnvelope(DEFAULT_ROLE, false) }));
+  await page.goto("/settings/prompts");
+  const role = await openRoleField(page);
+  const fixed = page.getByRole("textbox", { name: "必ず足す指示：信頼の境界・引用・出力の形（読み取り専用）", exact: true });
+  const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("dark", theme === "dark"), theme);
+      const metrics = await role.evaluate(node => {
+        const parent = node.closest("[data-form-grid]")!.parentElement!;
+        const style = getComputedStyle(parent);
+        return { field: node.getBoundingClientRect().width, available: parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
+      });
+      expect(Math.abs(metrics.field - metrics.available)).toBeLessThanOrEqual(2);
+      expect(Math.abs((await fixed.boundingBox())!.width - metrics.field)).toBeLessThanOrEqual(2);
+      await expectNoPageOverflow(page);
+      await role.screenshot({ path: testInfo.outputPath(`rag-role-${width}-${theme}.png`) });
+    }
+  }
+});
+
+
+test("登録済み FAQ の編集プロンプトも全幅を使う", { tag: "@responsive" }, async ({ page }) => {
+  await mockEditableStage(page, "faq_answer", "generation", "system");
+  await page.goto("/settings/prompts");
+  await page.getByTestId("answer-prompt-stage-faq_answer").locator("summary").click();
+  const field = page.getByTestId("answer-prompt-stage-faq_answer").locator("textarea:not([readonly])");
+  await expect(field).toBeEditable();
+  const delta = await field.evaluate(node => {
+    const parent = node.closest("[data-form-grid]")!.parentElement!;
+    const style = getComputedStyle(parent);
+    return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+  });
+  expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+});

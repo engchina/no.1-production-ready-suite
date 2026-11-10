@@ -861,7 +861,7 @@ test("ログインの試行が多すぎるときは 429 の文をそのまま出
   expect(loginAttempts).toBe(1);
 });
 
-test("構成管理者はアカウントの欄のメニューからログアウトとアカウントの画面に移れる", async ({ page }) => {
+test("構成管理者はアカウントの欄のメニューからログアウトとアカウントの画面に移れる", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.goto("/query");
 
@@ -876,6 +876,9 @@ test("構成管理者はアカウントの欄のメニューからログアウ�
   await accountMenuButton.click();
   await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["アカウント", "ログアウト"]);
   await expect(page.getByRole("menu")).toHaveAttribute("data-floating-menu-placement", "top");
+  // 背景の初回読取が失敗しても、再試行へ焦点を奪ってメニューの Esc を失わない（#4857）。
+  await expect(page.getByTestId("query-page-data-load-failed")).toBeVisible();
+  await expect(page.getByRole("menu").getByRole("menuitem").first()).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(accountMenuButton).toBeFocused();

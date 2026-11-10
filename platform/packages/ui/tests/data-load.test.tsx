@@ -362,3 +362,18 @@ describe("StaleDataNotice", () => {
     expect(document.activeElement).toBe(retryButton(host));
   });
 });
+
+
+describe("読み取りの復旧は操作中のポップアップの焦点を奪わない（#4857）", () => {
+  it.each(["menu", "listbox", "combobox", "trigger"])("%s の操作中に失敗しても焦点を保つ", (kind) => {
+    const activeHost = mount(
+      kind === "trigger" ? <button aria-haspopup="listbox" aria-expanded="true">合成の選択</button> :
+        <div role={kind}><button role={kind === "menu" ? "menuitem" : "option"}>合成の操作</button></div>
+    );
+    const active = activeHost.querySelector("button")!;
+    active.focus();
+    const failed = mount(<DataLoadFailureState error={apiError(DATABASE_READ_FAILED_CODE)} fallback="合成の読み取り失敗" labels={LABELS} onRetry={() => {}} />);
+    expect(retryButton(failed)).toBeTruthy();
+    expect(document.activeElement).toBe(active);
+  });
+});
