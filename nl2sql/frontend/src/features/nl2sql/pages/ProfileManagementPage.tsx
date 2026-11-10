@@ -650,8 +650,8 @@ function SelectAiConfigFields({
           </label>
         ))}
       </div>
-      {/* 文章の欄は full（FormGrid の 60rem まで）で 1 列に積む。 */}
-      <FormGrid columns={1}>
+      {/* 役割・追加指示は通常フォームの幅で止めず、所属区画の全幅で 1 列に積む。 */}
+      <FormGrid columns={1} width="full">
         <TextareaField
           id="profile-select-ai-role"
           label={t("profiles.field.role")}
