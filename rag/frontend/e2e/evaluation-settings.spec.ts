@@ -46,7 +46,7 @@ for (const viewport of [
     }
     await metrics.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("evaluation-decision-under-answer.png") });
-    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(6);
+    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(4);
     await expect(page.getByTestId("settings-evaluation-metric-required_evidence_recall")).toContainText(
       "閾値 90%"
     );

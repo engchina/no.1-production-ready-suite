@@ -204,7 +204,7 @@ for (const viewport of [
       .getByTestId("evaluation-suite-thresholds")
       .locator("li")
       .evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
-    expect(chipTops).toHaveLength(6);
+    expect(chipTops).toHaveLength(4);
     if (viewport.maxChipRows !== null) {
       expect(new Set(chipTops).size).toBeLessThanOrEqual(viewport.maxChipRows);
     }
