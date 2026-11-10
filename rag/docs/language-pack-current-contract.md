@@ -26,7 +26,7 @@
 
 | 状態 | `repair_target` | 適用で行うこと |
 |---|---|---|
-| 現在版が不適合 | `current` | 現在版の内容を保ったまま、**欠けている項目だけ**組み込みの値を足した新しい公開版を発行し、下書きも同じ内容にします |
+| 現在版が不適合 | `current` | 現在版の内容を保ったまま、**欠けている項目だけ**組み込みの値を足した新しい公開版を発行します。下書きは、現在版と同じ内容なら新しい版と同じ内容にし、未公開の変更があれば**その値を保ったまま**欠けている項目だけ新しい版の値を足します（dry-run の `draft_changes_kept` が `true`。#4832） |
 | 現在版は適合で、下書きだけが不適合 | `draft` | 下書きの値を保ったまま、**欠けている項目だけ現在版の値**を足し、廃止の項目を除きます。書き換えるのは下書きだけで、新しい版は発行しません。公開は通常の手順で利用者が行います |
 | どちらも適合 | `none` | 何もしません（`CURRENT_ALREADY_CONFORMS` で止まります） |
 
@@ -45,12 +45,13 @@
    | `repair_target` | 修復の対象（`current` / `draft` / `none`。上の表） |
    | `current_release_id` / `current_version` / `draft_revision` | 現在版と下書きの状態（適用の期待値に使います） |
    | `current_conforms` / `draft_conforms` | 現在版・下書きが現行の契約に合っているか |
-   | `draft_matches_current` | 下書きが現在版と同じ内容か。`repair_target` が `current` で `false` のときは、未公開の変更を消さないよう適用を止めます（`DRAFT_DIFFERS_FROM_CURRENT`）。`draft` のときは未公開の変更を保つので止めません |
+   | `draft_matches_current` | 下書きが現在版と同じ内容か。`repair_target` が `current` で `false` のときは、未公開の変更を保って下書きを補います（`draft_changes_kept` が `true`）。補った下書きが厳格な検証に通らないときだけ、未公開の変更を消さないよう適用を止めます（`DRAFT_DIFFERS_FROM_CURRENT`）。`draft` のときは未公開の変更を保つので止めません |
+   | `draft_changes_kept` | `repair_target` が `current` で、下書きの未公開の変更を保ったまま欠けている項目だけ補えるか（未公開の変更が無いときは `false`） |
    | `missing_fields` / `retired_fields` | 足す項目（`current` は組み込みの値、`draft` は現在版の値）/ 除く廃止の項目の名前 |
    | `candidate_valid` / `ingest_hash_unchanged` | 候補が厳格な検証に通るか / 候補の `ingest_hash` が現在版と同じか（`draft` では参考の情報で、下書きを公開すると文書の再処理が要るかの目安です） |
    | `active_ingestion_jobs` | QUEUED / RUNNING の取込 job の件数（`draft` では公開版を変えないので止めません） |
 
-   止める条件（`blockers`）: `DRAFT_DIFFERS_FROM_CURRENT`（下書きに未公開の変更がある）、`CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。`repair_target` が `draft` のときに止める条件は `CANDIDATE_INVALID`（下書きが JSON のオブジェクトでない、`locale` が無いか現在版と違う、未知の項目や形の誤った値があるなど、欠けた項目を足すだけでは直らない）と、適用の期待値の 2 つです。下書きを現在版や組み込みの値で丸ごと置き換えることはしません。
+   止める条件（`blockers`）: `DRAFT_DIFFERS_FROM_CURRENT`（下書きに未公開の変更があり、その値を保ったままでは補えない）、`CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。`repair_target` が `draft` のときに止める条件は `CANDIDATE_INVALID`（下書きが JSON のオブジェクトでない、`locale` が無いか現在版と違う、未知の項目や形の誤った値があるなど、欠けた項目を足すだけでは直らない）と、適用の期待値の 2 つです。下書きを現在版や組み込みの値で丸ごと置き換えることはしません。
 
 2. **許可とバックアップ。** dry-runの結果を対象の環境の利用者へ示し、適用の明示の許可を得ます（上の門禁の 5）。適用の前に、対象の環境の DB のバックアップ（Autonomous AI Database の復元できる時点など）を確かめます。除く廃止の項目の値は、適用の後は下書きに残りません。
 3. **適用。** dry-runで確かめた値を指定します。値が違えば何も書き込まずに止まります。
