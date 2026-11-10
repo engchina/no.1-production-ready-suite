@@ -547,12 +547,24 @@ def test_missing_table_is_reported_as_unavailable() -> None:
         )
 
 
-def test_reports_fall_back_to_memory_when_the_database_fails() -> None:
+def test_missing_column_is_reported_as_unavailable() -> None:
+    """システムテーブルの更新の前（列が無い）は、保存した事実では集計できない。"""
+    connection = _Connection()
+    connection.error = RuntimeError('ORA-00904: "ANSWER_OUTCOME": invalid identifier')
+    with pytest.raises(RunFactsUnavailableError):
+        _oracle(connection).usage_report(
+            days=7, now=NOW, tz=TOKYO, agent_ids=None, agent_names={}, user_names=_no_names
+        )
+
+
+def test_reports_do_not_fall_back_to_memory_when_the_database_fails() -> None:
+    """DB の障害ではメモリの Run の集計に戻さない（#4222。全件と同じとは限らない）。"""
     connection = _Connection()
     connection.error = RuntimeError("DPY-6005: cannot connect to database")
     run_facts_store.configure(_oracle(connection))
 
     response = client.get("/api/usage")
 
-    assert response.status_code == 200
-    assert response.json()["data"]["source"] == "memory"
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "agent_storage_unavailable"
+    assert response.json()["data"] is None

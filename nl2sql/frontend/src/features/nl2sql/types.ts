@@ -1886,20 +1886,6 @@ export interface AgentConversationCreateData {
   warnings: string[];
 }
 
-export interface AgentConversationItem {
-  conversation_id: string;
-  prompt: string;
-  response: string;
-  created_at: string;
-  team_name: string;
-}
-
-export interface AgentConversationsData {
-  runtime: string;
-  items: AgentConversationItem[];
-  warnings: string[];
-}
-
 export interface AgentPrivilegeCheckData {
   runtime: string;
   status: string;

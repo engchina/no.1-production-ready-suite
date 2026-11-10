@@ -654,8 +654,14 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   日時は UTC の `TIMESTAMP`（タイムゾーンなし）。Runtime repository が作成・状態の変化・利用量・評価の時点で
   事実をキューに入れ、バックグラウンドのスレッドがまとめて MERGE する（`run_facts_store`。Run を待たせない・止めない。
   失敗はログ `agent_run_facts_not_saved` に残して捨てる）。起動時に Runtime repository の全 Run を backfill する。
-- テーブルが無い・DB の障害のあいだは、メモリの Run の集計に戻す（応答の `source` が `memory`。画面に集計元を出す）。
-  memory / file の構成は保存せず、メモリの Run を集計する（`source=memory`）。
+- テーブル・列が無いあいだ（システムテーブルの作成・更新の前）は、メモリの Run の集計に戻す（応答の `source` が
+  `memory`。画面に集計元を出す）。memory / file の構成は保存せず、メモリの Run を集計する（`source=memory`）。
+- それ以外の読み取りの失敗（DB の障害）は、メモリの Run の集計に戻さず失敗として返す（#4222。`read_failures.py`）。
+  同じ保存先に書く別のプロセス（runtime-dispatcher・2 つ目の backend・CLI）の Run は、このプロセスが次に保存先へ
+  書くまでメモリに無く、メモリの集計は保存先の全件と同じとは限らない。pool の待ちの timeout は 503
+  `database_read_timeout`、接続の失敗は 503 `agent_storage_unavailable`、それ以外は 500 `database_read_failed`
+  （画面は失敗と再試行を出す。messaging.md §3.6.1）。ツール監査の一覧（`GET /api/audit/tool-calls`・CSV）が
+  projection を読めないときも同じ（projection を持たない構成は、今までどおりメモリの Run の記録を返す）。
 - 確かめるべき実行（#1822。フィードバックの既定の見方。`GET /api/feedback/signals`）: 明示の評価は回答のごく一部にしか
   付かないため、評価の付いていない Run も暗黙のシグナルから集める（モデルは呼ばない。定義は `run_signals.py`、Python の
   `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則で、テストが SQLite で突き合わせる）。

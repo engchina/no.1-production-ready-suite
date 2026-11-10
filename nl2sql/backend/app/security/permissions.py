@@ -1085,7 +1085,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/nl2sql/select-ai-agent/assets"): _SELECT_AI_ASSETS_READ,
     ("POST", "/nl2sql/select-ai-agent/assets/cleanup"): _SELECT_AI_ASSETS_MANAGE,
     ("POST", "/nl2sql/select-ai-agent/assets/refresh"): _SELECT_AI_ASSETS_REFRESH,
-    ("GET", "/nl2sql/select-ai-agent/conversations"): _SELECT_AI_ASSETS_READ,
     ("POST", "/nl2sql/select-ai-agent/conversations/create"): _SELECT_AI_ASSETS_MANAGE,
     ("GET", "/nl2sql/select-ai-agent/privileges/check"): _SELECT_AI_ASSETS_READ,
     ("POST", "/nl2sql/select-ai-agent/run-team"): _SELECT_AI_ASSETS_MANAGE,
