@@ -1,7 +1,7 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader, PageLoadingState } from "@production-ready/ui";
+import { AppShell, PageBody, PageHeader, PageLoadingState, RenderErrorBoundary } from "@production-ready/ui";
 import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
@@ -237,6 +237,7 @@ function RoutePermissionGuard({ children }: { children: ReactNode }) {
 
 function AuthorizedLayout() {
   const { user } = useAuth();
+  const { pathname } = useLocation();
   // 利用者や権限・対象範囲が変わったら、画面の state ごと作り直す（cache は AuthProvider が破棄する）。
   return (
     <AppShell
@@ -247,9 +248,13 @@ function AuthorizedLayout() {
     >
       {/* DB が使えるまで本文だけを案内に替える（サイドナビは残し、システム設定の 5 画面は開ける。#325）。 */}
       <DatabaseGate>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <Outlet />
-        </Suspense>
+        {/* 本文の描画の例外を main の中に閉じ込め、サイドナビと画面の移動を残す（#4800）。
+            pathname を key にして、別の画面へ移ったらエラーの状態を解く。 */}
+        <RenderErrorBoundary key={pathname} serviceName="production-ready-agent">
+          <Suspense fallback={<RouteLoadingFallback />}>
+            <Outlet />
+          </Suspense>
+        </RenderErrorBoundary>
       </DatabaseGate>
     </AppShell>
   );
