@@ -714,6 +714,11 @@ for (const viewport of [
     await expectNoHorizontalOverflow(page);
     // 2 つの欄が同じ原因で失敗しても、同じ文の大きい枠を 2 つ出さない（欄ごとの文・1 行・コントラスト・あふれ）。
     expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+    // ダークテーマでも同じ基準（文のコントラスト 4.5:1 以上など）を満たす。
+    await page.evaluate(() => document.documentElement.classList.add("dark"));
+    expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`document-candidates-load-failed-${viewport.name}-dark.png`) });
+    await page.evaluate(() => document.documentElement.classList.remove("dark"));
     // 分類の失敗と新しい版の失敗が両方見える位置で撮る（375px は 2 枚に分ける）。
     await categoryFailure.evaluate(
       (element, block) => element.scrollIntoView({ block }),
