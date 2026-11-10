@@ -567,6 +567,13 @@ describe("parseAnswerText の表の行（issue 4734）", () => {
     ]);
   });
 
+  it("結論の表（題の行・表・根拠の行。#4796）は表を項目の説明に分け、根拠の行を項目に残す", () => {
+    const blocks = parseAnswerText(["資料をもとに導いた結論", "", "・表の題です。", ...table, "根拠：文書 A.pdf p.3"].join("\n"));
+    expect(blocks?.[0]).toMatchObject({
+      entries: [{ kind: "item", text: "表の題です。", details: [table.join("\n")], citations: ["根拠：文書 A.pdf p.3"] }],
+    });
+  });
+
   it("空行の後ろが表の行でなければ、今までどおり項目の続きにしない", () => {
     const blocks = parseAnswerText(["資料により確認できた事項", "", "・項目です。", "", "別の文です。"].join("\n"));
     expect(blocks?.[0]).toMatchObject({
