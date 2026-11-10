@@ -33,7 +33,6 @@ from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, mo
 from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.rerank_scores import rerank_first_key
 
 BATCH_READING_PROMPT = """## Step 1: 質問と根拠を読む
@@ -362,9 +361,8 @@ def prepare_batched_evidence(
         出典の照合は最終生成で従来どおり掛かる。同じ原文の抜粋は全文へ置き換え、読取の回答候補は保つ。
         """
 
-        def rank(value: Mapping[str, Any]) -> tuple[int, tuple[int, float]]:
-            # 条の目録で選んだ条は rerank 最優先の例外（rerank_scores.keeps_original_order と同じ扱い）。
-            return (0 if value.get(ARTICLE_CATALOG_KEY) else 1, rerank_first_key((source_scores or {}).get(str(value["source_id"]))))
+        def rank(value: Mapping[str, Any]) -> tuple[int, float]:
+            return rerank_first_key((source_scores or {}).get(str(value["source_id"])))
 
         def inside(excerpt: Mapping[str, Any], value: Mapping[str, Any]) -> bool:
             return bool(

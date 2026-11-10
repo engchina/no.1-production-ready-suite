@@ -195,58 +195,6 @@ async def test_structure_plan_counts_long_heading(field: str, parent: str) -> No
     assert item["reason"] is None
 
 
-@pytest.mark.usefixtures("oracle_db")
-@pytest.mark.parametrize("parent", _LONG)
-async def test_article_document_title_reads_long_value(parent: str) -> None:
-    client = OracleClient()
-    token = uuid4().hex[:12]
-    long_name, short_name = f"article-{token}-a.pdf", f"article-{token}-b.pdf"
-    long_id = await _indexed_document(
-        client,
-        file_name=long_name,
-        chunks=[
-            _metadata_chunk(
-                0, "条の本文", xml_tree_label_arabic="第1条", xml_tree_document_title=parent
-            )
-        ],
-    )
-    short_id = await _indexed_document(
-        client,
-        file_name=short_name,
-        chunks=[
-            _metadata_chunk(
-                0, "条の本文", xml_tree_label_arabic="第1条", xml_tree_document_title="短い題名"
-            )
-        ],
-    )
-    documents = await client.retrieval_article_documents({"file_name": f"article-{token}"})
-
-    assert documents == [(long_id, parent), (short_id, "短い題名")]
-
-
-@pytest.mark.usefixtures("oracle_db")
-async def test_article_documents_do_not_add_a_query_without_long_title(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client = OracleClient()
-    token = uuid4().hex[:12]
-    document_id = await _indexed_document(
-        client,
-        file_name=f"article-{token}.pdf",
-        chunks=[
-            _metadata_chunk(
-                0, "条の本文", xml_tree_label_arabic="第1条", xml_tree_document_title="短い題名"
-            )
-        ],
-    )
-    statements = _count_queries(client, monkeypatch)
-
-    documents = await client.retrieval_article_documents({"file_name": f"article-{token}"})
-
-    assert documents == [(document_id, "短い題名")]
-    assert len(statements) == 1
-
-
 def test_section_filter_uses_like_for_short_value_and_instr_for_large_value() -> None:
     """短い語は従来の LIKE のまま超えた行だけ CLOB でも比べ、CLOB の bind は LIKE に渡さない。"""
     clause, bind = _metadata_text_filter("section_path", "A_b%")
@@ -259,32 +207,6 @@ def test_section_filter_uses_like_for_short_value_and_instr_for_large_value() ->
     assert bind == ("Ａ" + word).casefold()
     assert clause.startswith("INSTR(LOWER(JSON_VALUE(c.metadata_json, '$.section_title'")
     assert "LIKE" not in clause
-
-
-async def test_article_documents_read_long_titles_only_when_marked(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client = OracleClient(settings=Settings())
-    statements: list[str] = []
-
-    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
-        statements.append(statement)
-        if len(statements) == 2:
-            return [{"document_id": "doc-1", "title": "長" * 2000}]
-        return [
-            {"document_id": "doc-1", "file_name": "a.pdf", "title": None, "title_overflow": 1},
-            {"document_id": "doc-2", "file_name": "b.pdf", "title": "短い", "title_overflow": 0},
-            {"document_id": "doc-3", "file_name": "c.pdf", "title": None, "title_overflow": 0},
-        ]
-
-    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
-
-    assert await client.retrieval_article_documents({"knowledge_base_id": "kb-1"}) == [
-        ("doc-1", "長" * 2000),
-        ("doc-2", "短い"),
-        ("doc-3", "c.pdf"),
-    ]
-    assert len(statements) == 2
 
 
 async def test_reading_index_and_older_versions_use_one_query_for_long_paths(

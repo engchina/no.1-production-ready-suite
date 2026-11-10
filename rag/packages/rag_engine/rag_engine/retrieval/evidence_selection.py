@@ -12,11 +12,14 @@ from typing import Any
 from rag_parser_core.language import current_pack
 
 from rag_engine.parsing.structural_text import structural_only
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.character_forms import find_width_folded
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.table_header_lines import TABLE_HEADER_LINES_KEY, header_lines, header_lines_in
+
+# 条で構成された文書（XML ツリー JSON の段落）の根拠の印（record の metadata と、回答の根拠 span の key）。
+# 文書の構造で決める（語の一覧を持たない）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+ARTICLE_UNIT_KEY = "article_unit"
 
 
 def _record_page_end(record: Any) -> int:
@@ -344,12 +347,6 @@ def evidence_spans(
         if located_quote is not None:
             quote_ranges[item] = located_quote
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
-
-    # 条の目録で選んだ条の child（#3526）。その child に重なる根拠に印を付ける。
-    catalog_children = {
-        str(getattr(child, "chunk_uid", "") or getattr(child, "id", "")) for child in scope_records if is_catalog_article(child)
-    }
-
     from rag_engine.retrieval.source_context import prompt_source_context_text, source_context
 
     def note_cost(context: dict[str, Any], record: Any) -> int:
@@ -632,8 +629,6 @@ def evidence_spans(
                     "conversation_attachment": is_attachment_evidence(record),
                     # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
                     ARTICLE_UNIT_KEY: (getattr(record, "metadata", {}) or {}).get(ARTICLE_UNIT_KEY) is True,
-                    # 条の目録で選んだ条の根拠（#3526）。回答は要求の計画で必ず使うか unrelated かを決める。
-                    ARTICLE_CATALOG_KEY: any(entry["id"] in catalog_children for entry in child_ranges),
                     # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
                     "location": record_location_label(record),
                     # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
@@ -827,8 +822,6 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
             text = previous["text"] + span["text"]
             if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
                 previous["child_ranges"] = ranges
-            if span.get(ARTICLE_CATALOG_KEY):
-                previous[ARTICLE_CATALOG_KEY] = True
             previous.update(
                 text=text,
                 end=span["end"],

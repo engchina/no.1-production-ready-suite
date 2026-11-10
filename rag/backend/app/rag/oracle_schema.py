@@ -75,6 +75,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_schema_sql,
 )
 from app.rag.answer_prompt_retirement_4782_query import (
+    RETIRED_ARTICLE_CATALOG_PROMPT_KEYS,
     RETIRED_SECTION_EXTRACTION_PROMPT_KEYS,
     retired_prompt_rows_sql,
 )
@@ -1005,6 +1006,20 @@ END;
                 "消した段「原文の抜き出し」の保存済みのプロンプト（RAG_ANSWER_PROMPTS の "
                 "PROMPT_KEY が section_extraction.system の行）を削除します。ほかの段の保存値は"
                 "変えません。保存した文を残す必要があれば適用前に同じ行を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_retire_article_catalog_prompts",
+            table_name="rag_answer_prompts",
+            sql=retired_prompt_rows_sql(RETIRED_ARTICLE_CATALOG_PROMPT_KEYS),
+            destructive_note=(
+                "消した段「条の目録」の保存済みのプロンプト（RAG_ANSWER_PROMPTS の PROMPT_KEY が "
+                "article_catalog.documentSystem / article_catalog.system / "
+                "article_catalog.refineSystem の行）を削除します。ほかの段の保存値は変えません。"
+                "保存した文を残す必要があれば適用前に同じ行を export してください。"
                 "削除後は復元できません。"
             ),
         )

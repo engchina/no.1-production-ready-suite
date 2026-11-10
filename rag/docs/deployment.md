@@ -2128,7 +2128,11 @@ CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選�
 
 ### 質問と検索の段を整理する（#4782）
 
-章節の拡張で入らない章節から原文を LLM で抜き出す段（`evidence.extract`）を削除した。入らない章節は rerank の順で上限まで入れ、残りを「回答に未反映の関連章節」に示す（これまでの既定と同じ動き）。未リリースのため互換を持たない。
+章節の拡張で入らない章節から原文を LLM で抜き出す段（`evidence.extract`）を削除した。入らない章節は rerank の順で上限まで入れ、残りを「回答に未反映の関連章節」に示す（これまでの既定と同じ動き）。
 
-- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`。
+条の目録から根拠の条を LLM で選ぶ段（`evidence.select_document` / `evidence.select_article` / `evidence.refine_article`）も削除した。条で構成された文書も、ほかの文書と同じ検索・rerank・章節の拡張で根拠を集める。MCP の `rag_retrieve_evidence` の根拠に `role=catalog_article` は出なくなる（ツールの名前・引数・出力の形は変えない）。未リリースのため互換を持たない。
+
+- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`・`RAG_ARTICLE_CATALOG_ENABLED`・`RAG_ARTICLE_CATALOG_MAX_DOCUMENTS`・`RAG_ARTICLE_CATALOG_MAX_ARTICLES`・`RAG_ARTICLE_CATALOG_CONTEXT_RECORDS`・`RAG_ARTICLE_CATALOG_SCOPE_DOCUMENTS`・`RAG_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH`・`RAG_ARTICLE_CATALOG_REFINE_ARTICLES`・`RAG_ARTICLE_CATALOG_REFINE_CANDIDATES`・`RAG_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP`・`RAG_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_DIR`・`RAG_ARTICLE_CATALOG_CACHE_TTL_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_MAX_ENTRIES`・`RAG_MCP_CATALOG_ARTICLE_EVIDENCE_LIMIT`。
+- 条の選択の結果の記録のファイル（既定は `PLATFORM_LOCAL_STORAGE_DIR` の下の `cache/rag-article-catalog`、または `RAG_ARTICLE_CATALOG_CACHE_DIR` に設定した場所）は読まれなくなる。ディレクトリごと消してよい。
 - データを消す migration `20261110_4782_retire_section_extraction_prompts`: 回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system` の行）を削除する。ほかの段の保存値は変えない。保存した文を残す必要があれば、適用前にその行を export する。承認（`--allow-destructive`）が要る。
+- データを消す migration `20261110_4782_retire_article_catalog_prompts`: 回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `article_catalog.documentSystem`・`article_catalog.system`・`article_catalog.refineSystem` の行）を削除する。ほかの段の保存値は変えない。保存した文を残す必要があれば、適用前にその行を export する。承認（`--allow-destructive`）が要る。

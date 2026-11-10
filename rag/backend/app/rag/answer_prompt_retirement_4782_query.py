@@ -2,6 +2,12 @@
 
 # 原文の抜き出しの段（evidence.extract）。段を消したので、保存値は読まれない。
 RETIRED_SECTION_EXTRACTION_PROMPT_KEYS = ("section_extraction.system",)
+# 条の目録の段（evidence.select_document / select_article / refine_article）。
+RETIRED_ARTICLE_CATALOG_PROMPT_KEYS = (
+    "article_catalog.documentSystem",
+    "article_catalog.system",
+    "article_catalog.refineSystem",
+)
 
 
 def retired_prompt_rows_sql(keys: tuple[str, ...]) -> str:

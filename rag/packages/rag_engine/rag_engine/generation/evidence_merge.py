@@ -5,7 +5,7 @@ from __future__ import annotations
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.retrieval.context_builder import context_bundle_from_parent_evidence, record_context_key
 from rag_engine.retrieval.evidence_selection import evidence_packet, evidence_relevance
-from rag_engine.retrieval.rerank_scores import best_rerank_score, keeps_original_order, rerank_first_key
+from rag_engine.retrieval.rerank_scores import best_rerank_score, rerank_first_key
 
 
 def merge_evidence(previous: AnswerContext, current: AnswerContext, question: str, *, max_records: int, max_chars: int) -> AnswerContext:
@@ -13,8 +13,6 @@ def merge_evidence(previous: AnswerContext, current: AnswerContext, question: st
 
     親の点数は、その親の起点の child の rerank の点数の最高値（記録の metadata か根拠の木の起点）。点数の無い
     親は点数のある親の後ろに置き、語の一致の点数（質問の語の重なり）は同点の順と点数の無い親の順だけに使う。
-    条の目録で選んだ条の親（rerank 最優先の例外。`keeps_original_order`）は切らず、枠の外に元の順で残す
-    （context の組み立てと同じく、関連度に関わらず枠の外に足す）。
     """
     if not previous.records:
         return current
@@ -30,23 +28,12 @@ def merge_evidence(previous: AnswerContext, current: AnswerContext, question: st
             )
             for p in parents
         }
-        exempt_keys = {
-            record_context_key(p.record) or p.record.id
-            for p in parents
-            if keeps_original_order(p.record) or any(keeps_original_order(child.record) for child in p.children)
-        }
 
         def score(record: AnswerRecord) -> float | None:
             own = best_rerank_score([record])
             return own if own is not None else tree_scores.get(record_context_key(record) or record.id)
 
-        def exempt(record: AnswerRecord) -> bool:
-            return keeps_original_order(record) or (record_context_key(record) or record.id) in exempt_keys
-
-        kept = sorted(
-            (r for r in records if not exempt(r)), key=lambda r: (*rerank_first_key(score(r)), -evidence_relevance(question, r.text))
-        )
-        records = kept[:limit] + [r for r in records if exempt(r)]
+        records = sorted(records, key=lambda r: (*rerank_first_key(score(r)), -evidence_relevance(question, r.text)))[:limit]
     keys = {record_context_key(r) or r.id for r in records}
     tree = {record_context_key(p.record) or p.record.id: p for p in previous.evidence_tree}
     tree.update({record_context_key(p.record) or p.record.id: p for p in current.evidence_tree})

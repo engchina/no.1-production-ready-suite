@@ -2,7 +2,10 @@
 
 import pytest
 
-from app.rag.answer_prompt_retirement_4782_query import RETIRED_SECTION_EXTRACTION_PROMPT_KEYS
+from app.rag.answer_prompt_retirement_4782_query import (
+    RETIRED_ARTICLE_CATALOG_PROMPT_KEYS,
+    RETIRED_SECTION_EXTRACTION_PROMPT_KEYS,
+)
 from app.rag.answer_prompts import PROMPT_STAGES
 from app.rag.oracle_schema import oracle_schema_migration_sections
 from app.rag.system_schema import SystemSchemaManager
@@ -11,7 +14,10 @@ from tests.test_system_schema_manager import _FakeDatabase
 
 @pytest.mark.parametrize(
     ("name", "keys"),
-    [("20261110_4782_retire_section_extraction_prompts", RETIRED_SECTION_EXTRACTION_PROMPT_KEYS)],
+    [
+        ("20261110_4782_retire_section_extraction_prompts", RETIRED_SECTION_EXTRACTION_PROMPT_KEYS),
+        ("20261110_4782_retire_article_catalog_prompts", RETIRED_ARTICLE_CATALOG_PROMPT_KEYS),
+    ],
 )
 def test_retired_stage_prompt_rows_are_deleted_once(name: str, keys: tuple[str, ...]) -> None:
     section = next(s for s in oracle_schema_migration_sections() if s.name == name)

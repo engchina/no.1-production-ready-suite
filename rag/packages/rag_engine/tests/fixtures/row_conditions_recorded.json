@@ -9,7 +9,6 @@
   {
    "span": {
     "adjacent_texts": [],
-    "article_catalog": false,
     "article_unit": false,
     "conversation_attachment": false,
     "document_scope": [
@@ -123,7 +122,6 @@
   {
    "span": {
     "adjacent_texts": [],
-    "article_catalog": false,
     "article_unit": false,
     "conversation_attachment": false,
     "document_scope": [
