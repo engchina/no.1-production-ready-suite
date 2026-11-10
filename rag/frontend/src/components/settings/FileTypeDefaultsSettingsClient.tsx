@@ -235,17 +235,6 @@ export function FileTypeDefaultsSettingsClient() {
                           })
                         }
                       />
-                      {row.unavailable_parser_backends.length ? (
-                        <ButtonLink
-                          to={APP_ROUTES.settingsParserAdapters}
-                          linkComponent={Link}
-                          variant="ghost"
-                          size="sm"
-                          icon={Settings2}
-                        >
-                          {t("settings.fileTypeDefaults.goParser")}
-                        </ButtonLink>
-                      ) : null}
                     </div>
                   );
                 },
