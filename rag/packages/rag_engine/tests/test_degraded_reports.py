@@ -21,7 +21,6 @@ import pytest
 from test_answer_generation import _answer_context, _chunk_record, _chunk_run_stub
 
 import rag_engine.generation.answering as answering
-from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answering import AnswerRecord, answer_question_result, rerank_records

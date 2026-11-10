@@ -1,7 +1,7 @@
 """画面目録の選択・再利用・実読取と返却候補を合成データで確認する。"""
 
 import json
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest

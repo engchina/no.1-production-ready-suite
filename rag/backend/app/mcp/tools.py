@@ -1253,9 +1253,7 @@ class EvidenceReference(BaseModel):
         description="同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
     )
     resolved: bool = Field(
-        description=(
-            "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。"
-        )
+        description=("同じ文書の参照先の節が決まっているか（他の文書への参照は false）。")
     )
 
 
