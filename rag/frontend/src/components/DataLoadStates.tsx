@@ -35,6 +35,7 @@ export function DataLoadFailure({
   onRetry,
   layout,
   testId,
+  retrying,
 }: {
   error: unknown;
   fallback: string;
@@ -45,6 +46,7 @@ export function DataLoadFailure({
    */
   layout?: "region" | "field";
   testId?: string;
+  retrying?: boolean;
 }) {
   const databaseAction = useDatabaseAction();
   return (
@@ -56,6 +58,7 @@ export function DataLoadFailure({
       databaseAction={databaseAction}
       layout={layout}
       testId={testId}
+      retrying={retrying}
     />
   );
 }

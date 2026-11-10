@@ -3289,7 +3289,7 @@ for (const viewport of [
     await expect(unavailable).toHaveText("読み取れなかったため、一覧を表示できません。");
     await expect(panel.getByText("一致する表または項目がありません。")).toHaveCount(0);
     // 原因と再試行はページの先頭の案内（#4217）。
-    const retry = page.getByTestId("query-page-notice-retry");
+    const retry = page.getByTestId("query-page-data-load-failed").getByRole("button", { name: "再試行" });
     await expect(retry).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`schema-reference-load-failed-notice-${viewport.name}.png`) });
     await panel.scrollIntoViewIfNeeded();
@@ -20749,4 +20749,19 @@ test("SQL 生成は最初の取得が終わる前から開始待ちを表示す�
   } finally {
     release();
   }
+});
+
+
+test("SQLから質問の読み取り失敗は共有の案内と再試行で回復する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let failing = true;
+  await page.route("**/api/nl2sql/profiles/search?*", (route) => failing ? route.fulfill({ status: 500, json: { detail: "合成の読み取り失敗" } }) : route.fallback());
+  await page.goto("/sql-to-question");
+  const panel = page.getByTestId("page-data-load-failed");
+  await expect(panel).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("sql-to-question-load-failed.png") });
+  failing = false;
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
 });

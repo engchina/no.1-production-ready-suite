@@ -1,3 +1,4 @@
+import { failDatabaseReads } from "./fixtures/read-failure";
 import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
@@ -789,4 +790,20 @@ test("業務 Agent を読み取れないときは「評価セットはまだあ�
 
   await expect(page.getByRole("alert").filter({ hasText: "読み取れませんでした。" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("この業務 Agent の評価セットはまだありません")).toHaveCount(0);
+});
+
+
+test("詳細の読み取り失敗を対象なしと見せず、再試行で回復する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  mockApi.state.evaluationSets.push({ id: "synthetic-detail", agent_id: "default", name: "合成の評価セット A", description: "", cases: [], created_by_user_uuid: "local", created_at: MOCK_NOW, updated_at: MOCK_NOW });
+  const failure = await failDatabaseReads(page, "/api/evaluation-sets/synthetic-detail");
+  await page.goto("/evaluation?id=synthetic-detail");
+  const panel = page.getByTestId("evaluationpage-detail-load-failed");
+  await expect(panel).toBeVisible();
+  await expect(page.getByText("見つかりません", { exact: false })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("detail-read-failure.png") });
+  failure.recover();
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "合成の評価セット A", level: 1 })).toBeVisible();
+  await expectNoPageHorizontalOverflow(page);
 });

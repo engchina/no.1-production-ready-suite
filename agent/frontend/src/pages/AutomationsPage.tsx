@@ -1,3 +1,4 @@
+import { ApiError } from "@/lib/api";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -160,6 +161,19 @@ export function AutomationsPage() {
           <TimedLoadingState label={t("loading.automation")} testId="automation-loading">
             <ListSkeleton rows={4} />
           </TimedLoadingState>
+        </PageBody>
+      );
+    }
+    if (detail.isError && detail.data === undefined && !(detail.error instanceof ApiError && detail.error.status === 404)) {
+      return (
+        <PageBody wide>
+          <DataLoadFailure
+            error={detail.error}
+            fallback={t("common.error.load")}
+            onRetry={() => void detail.refetch()}
+            retrying={detail.isFetching}
+            testId="automationspage-detail-load-failed"
+          />
         </PageBody>
       );
     }

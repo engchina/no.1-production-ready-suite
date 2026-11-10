@@ -263,7 +263,7 @@ test("学習の結果の警告はボタンの直下の 1 か所だけに出し�
   expect(warningBox!.y).toBeGreaterThan(buttonBox!.y);
 });
 
-test("読み込みの失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す (#2034)", async ({ page }) => {
+test("読み込みの失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す (#2034)", async ({ page }, testInfo) => {
   await mockClassifierApi(page);
   let failing = true;
   let releaseRetry: () => void = () => undefined;
@@ -288,17 +288,12 @@ test("読み込みの失敗の「再試行」は案内を残したまま押し�
   const retry = page.getByRole("button", { name: "再試行" });
   await expect(retry).toBeVisible();
   failing = false;
+  await page.screenshot({ path: testInfo.outputPath("page-read-failure.png") });
   await retry.click();
-  // 押しても案内は消えず、進行は案内の中のボタンの直下に出る。
-  const processing = page.getByTestId("question-learning-retry-processing");
-  await expect(processing).toBeVisible();
+  // 取り直す間も失敗の案内を保ち、共有の再試行ボタンだけを処理中にする。
+  await expect(retry).toBeVisible();
   await expect(retry).toHaveAttribute("aria-busy", "true");
-  await expect(page.getByTestId("question-learning-workspace-processing")).toHaveCount(0);
-  const buttonBox = await retry.boundingBox();
-  const processingBox = await processing.boundingBox();
-  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
   releaseRetry();
   await expect(retry).toHaveCount(0);
-  await expect(processing).toHaveCount(0);
   expect(calls).toBeGreaterThanOrEqual(2);
 });

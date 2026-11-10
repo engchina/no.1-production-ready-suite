@@ -127,6 +127,16 @@ describe("dataLoadView", () => {
 });
 
 describe("DataLoadFailureState", () => {
+  it("再試行中も失敗の案内を保ち、同じ読み取りを重ねて送らない", () => {
+    const onRetry = vi.fn();
+    const host = mount(<DataLoadFailureState error={apiError(DATABASE_READ_FAILED_CODE)} fallback="読み込めませんでした" labels={LABELS} onRetry={onRetry} retrying />);
+    expect(host.querySelector("[role='alert']")).not.toBeNull();
+    const retry = retryButton(host);
+    expect(retry.getAttribute("aria-busy")).toBe("true");
+    act(() => retry.click());
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("timeout は role=alert で事実を出し、再試行へフォーカスを移し、DB 設定の導線を出さない", () => {
     const onRetry = vi.fn();
     const host = mount(

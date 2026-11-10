@@ -53,6 +53,7 @@ export interface DataLoadFailureStateProps {
    */
   layout?: "region" | "field";
   testId?: string;
+  retrying?: boolean;
 }
 
 function failureMessage(
@@ -79,6 +80,7 @@ export function DataLoadFailureState({
   detailLabels = DEFAULT_API_ERROR_DETAIL_LABELS,
   layout = "region",
   testId,
+  retrying = false,
 }: DataLoadFailureStateProps) {
   const kind = dataLoadFailureKind(error);
   const presentation = presentApiError(error, fallback, detailLabels);
@@ -111,6 +113,7 @@ export function DataLoadFailureState({
         onRetry={onRetry}
         retryLabel={labels.retry}
         focusRetry
+        retrying={retrying}
         action={action}
         details={<ApiErrorDetailList details={presentation.details} label={detailLabels.details} />}
       />

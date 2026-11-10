@@ -1,3 +1,4 @@
+import { failDatabaseReads } from "./fixtures/read-failure";
 import type { Page } from "@playwright/test";
 
 import { LOCAL_CURRENT_USER, dbUser } from "./fixtures/auth";
@@ -354,3 +355,19 @@ for (const viewport of VIEWPORTS) {
     });
   }
 }
+
+
+test("詳細の読み取り失敗を対象なしと見せず、再試行で回復する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  mockApi.state.automations.push({ id: "synthetic-detail", agent_id: "default", name: "合成の自動実行 A", goal: "合成の確認", enabled: false, schedule: { frequency: "daily", time: "09:00", weekdays: [], minute: 0, timezone: "Asia/Tokyo" }, run_as_user_uuid: "local", created_by_user_uuid: "local", created_at: MOCK_NOW, updated_at: MOCK_NOW });
+  const failure = await failDatabaseReads(page, "/api/automations/synthetic-detail");
+  await page.goto("/automations?id=synthetic-detail");
+  const panel = page.getByTestId("automationspage-detail-load-failed");
+  await expect(panel).toBeVisible();
+  await expect(page.getByText("見つかりません", { exact: false })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("detail-read-failure.png") });
+  failure.recover();
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "合成の自動実行 A", level: 1 })).toBeVisible();
+  await expectNoPageHorizontalOverflow(page);
+});
