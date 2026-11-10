@@ -157,8 +157,11 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
         "category": "structure_unknown",
     }
     # SDK の error event は本文を記録せず、共通の分類と数値の status だけを残す。
-    if any(type(cause).__module__.split(".")[0] in {"openai", "httpx", "httpcore", "oci"} for cause in chain):
-        failure = classify_error(exc)
+    provider_error = next(
+        (cause for cause in chain if type(cause).__module__.split(".")[0] in {"openai", "httpx", "httpcore", "oci"}), None
+    )
+    if provider_error is not None:
+        failure = classify_error(provider_error)
         result["category"] = "provider_error"
         result["provider_error_kind"] = failure.kind.value
         if failure.status is not None:

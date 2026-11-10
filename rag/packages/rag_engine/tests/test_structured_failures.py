@@ -179,7 +179,11 @@ def test_sdk_stream_error_does_not_invent_a_status() -> None:
     from openai import APIError
 
     error = APIError("Upstream Responses stream returned an error event", httpx.Request("POST", "https://stub"), body={"message": "secret"})
-    details = structured_failure_details(error)
+    from rag_engine.adapters.oci import LlmStreamFailed, _StreamTiming
+
+    wrapped = LlmStreamFailed("stream failed", _StreamTiming())
+    wrapped.__cause__ = error
+    details = structured_failure_details(wrapped)
     assert details["provider_error_kind"] == "unknown"
     assert "provider_http_status" not in details
     assert "secret" not in json.dumps(details)

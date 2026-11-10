@@ -475,3 +475,16 @@ def test_stream_api_failure_uses_ai_failure_message_instead_of_search_fallback()
     assert failure.message != EVALUATION_CASE_ERROR_MESSAGE
     assert "AI の API" in failure.message
     assert "synthetic" not in failure.message
+
+
+def test_sdk_stream_error_is_not_misclassified_by_its_connection_error_wrapper() -> None:
+    failure = _stream_api_failure({"message": "synthetic upstream stream error"})
+    original = failure.__cause__
+    stream = oci.LlmStreamFailed("stream failed", oci._StreamTiming())
+    stream.__cause__ = original
+    failure.__cause__ = stream
+    api = describe_answer_api_failure(failure)
+    assert api is not None
+    assert api.kind == "unknown"
+    assert api.provider_status is None
+    assert "接続の失敗" not in api.message
