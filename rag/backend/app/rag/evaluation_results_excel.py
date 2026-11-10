@@ -117,6 +117,7 @@ def evaluation_results_xlsx(
     inputs: EvaluationResultExportRequest,
     *,
     partial_of_total: int | None = None,
+    evidence: Mapping[str, str] | None = None,
 ) -> bytes:
     """全ページ分の結果を出す。文字列は式として評価させない。
 
@@ -172,6 +173,7 @@ def evaluation_results_xlsx(
                 "失敗理由",
                 "Trace",
                 "エラー",
+                "回答に使用した根拠",
             ],
         )
         for item in result.case_results:
@@ -214,11 +216,12 @@ def evaluation_results_xlsx(
                     ),
                     item.trace_id,
                     item.error_message or "",
+                    (evidence or {}).get(item.trace_id, ""),
                 ],
             )
             for cell in sheet[sheet.max_row][7:13]:
                 cell.number_format = "0.0%"
-        _format(sheet, [24, 48, 40, 60, 40, 20, 60, *([20] * 6), 16, 36, 36, 48])
+        _format(sheet, [24, 48, 40, 60, 40, 20, 60, *([20] * len(METRICS)), 12, 36, 36, 48, 60])
     _format(overview, [36, *([36] * len(groups))])
     for row in overview.iter_rows(min_row=3, min_col=2):
         for cell in row:
@@ -240,16 +243,17 @@ def _result_columns(prefix: str) -> list[AppendedColumn]:
         AppendedColumn(f"{prefix}: 失敗理由", width=_RESULT_COLUMN_WIDTHS["failure"]),
         AppendedColumn(f"{prefix}: Trace", width=_RESULT_COLUMN_WIDTHS["trace"]),
         AppendedColumn(f"{prefix}: エラー", width=_ERROR_COLUMN_WIDTH),
+        AppendedColumn(f"{prefix}: 回答に使用した根拠", width=60),
     ]
 
 
 def _result_values(
-    item: EvaluationCaseResult | None, answers: Mapping[str, str]
+    item: EvaluationCaseResult | None, answers: Mapping[str, str], evidence: Mapping[str, str]
 ) -> list[CellValue]:
     if item is None:
         # 途中までの結果（#4208）で実行していない行。
         blank: list[CellValue] = [None] * (2 + len(METRICS))
-        return [*blank, NOT_RUN_LABEL, None, None, None]
+        return [*blank, NOT_RUN_LABEL, None, None, None, None]
     answer: str | None = answers.get(item.trace_id)
     if answer is None and item.status == "success":
         answer = ANSWER_RECORD_MISSING_LABEL
@@ -265,11 +269,16 @@ def _result_values(
         "\n".join(FAILURE_REASONS.get(reason, reason) for reason in item.failure_reasons) or None,
         item.trace_id,
         item.error_message,
+        evidence.get(item.trace_id) or None,
     ]
 
 
 def evaluation_workbook_with_results(
-    data: bytes, metrics: EvaluationMetrics, answers: Mapping[str, str]
+    data: bytes,
+    metrics: EvaluationMetrics,
+    answers: Mapping[str, str],
+    *,
+    evidence: Mapping[str, str] | None = None,
 ) -> bytes:
     """アップロードした Excel のケースの行の右に、結果の列を足したファイルを返す。
 
@@ -292,6 +301,8 @@ def evaluation_workbook_with_results(
     for row in parsed.rows:
         case_id = evaluation_case_id(row.row)
         rows[row.row] = [
-            value for results in by_case for value in _result_values(results.get(case_id), answers)
+            value
+            for results in by_case
+            for value in _result_values(results.get(case_id), answers, evidence or {})
         ]
     return append_columns(data, sheet_title=parsed.sheet_title, columns=columns, rows=rows)

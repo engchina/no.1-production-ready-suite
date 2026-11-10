@@ -4543,6 +4543,41 @@ class OracleClient:
             answers.update({str(row["trace_id"]): str(row.get("answer") or "") for row in rows})
         return answers
 
+    async def evaluation_citations_by_trace_ids(
+        self, trace_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """品質評価の最終 trace ごとの引用を、回答記録と同じ可視範囲で返す。"""
+        unique = list(dict.fromkeys(trace_id for trace_id in trace_ids if trace_id))
+        citations: dict[str, list[dict[str, Any]]] = {}
+        for start in range(0, len(unique), _EVALUATION_ANSWER_BATCH):
+            batch = unique[start : start + _EVALUATION_ANSWER_BATCH]
+            names = [f"trace_id_{index}" for index in range(len(batch))]
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT trace_id, citations_json
+                FROM rag_answer_records
+                WHERE trace_id IN ({placeholders})
+                  AND {scope_sql}
+                """,
+                    placeholders=", ".join(f":{name}" for name in names),
+                    scope_sql=_answer_record_scope_sql(),
+                ),
+                _with_answer_record_scope_bind(dict(zip(names, batch, strict=True))),
+            )
+            for row in rows:
+                raw = row.get("citations_json")
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                if isinstance(raw, list):
+                    citations[str(row["trace_id"])] = [
+                        item for item in raw if isinstance(item, dict)
+                    ]
+        return citations
+
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
         """保存済み回答を 1 件返す（利用できる検索・回答プロファイルの回答だけ。#214）。"""
         row = await self._fetch_one(
