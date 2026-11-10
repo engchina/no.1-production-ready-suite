@@ -513,7 +513,7 @@ function AssistantColumn({
         // そろえるため、回答の枠の下端にそろえる。
         <AnswerFooter
           className="mt-auto"
-          notice={finished ? notice : null}
+          notice={finished && !faqDirect ? notice : null}
           noticeLabel={t("answer.notice.label")}
           evidence={
             <AnswerCitations

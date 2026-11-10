@@ -1893,7 +1893,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   const streamBody = [
     sseStart,
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: answerText })}\n\n`,
-    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics, notice: NOTICE })}\n\n`,
     `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
   ].join("");
   await mockChat(
@@ -1901,7 +1901,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
     "ready",
     [
       { ...userMessage, content: faqQuestion },
-      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_direct_score: 1 },
+      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_direct_score: 1, notice: NOTICE },
     ],
     { streamBody },
   );
@@ -1933,6 +1933,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 承認済み FAQ「${faqQuestion}」`);
   await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
   const notice = page.getByTestId("answer-faq-direct");
   await expect(notice).toContainText("登録済みQ&Aの回答をそのまま表示しています");
   await expect(notice).toContainText(
@@ -1960,6 +1961,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true }).last()).toBeVisible();
   await expect(page.getByTestId("answer-faq-direct").last()).toBeVisible();
   await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
   await expectNoPageOverflow(page);
   expect(streamBodies[0]).toMatchObject({ content: "合成の設定 A はどこ？" });
   expect(streamBodies[0]).not.toHaveProperty("approved_faq_id");
