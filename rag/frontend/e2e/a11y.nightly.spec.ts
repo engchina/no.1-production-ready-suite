@@ -456,7 +456,7 @@ async function openScreen(page: Page, screen: Screen, theme: Theme) {
   await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
   if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
   else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
-  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。描画の失敗（CardErrorBoundary）は mock の不足。
+  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。描画の失敗（RenderErrorBoundary）は mock の不足。
   // mock の無い API は 503 で、TanStack Query の再試行（既定 3 回）を終えてから失敗の表示になる。
   await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByText(/^(この項目|「.+」)を表示できません$/)).toHaveCount(0);

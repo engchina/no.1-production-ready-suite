@@ -21,7 +21,8 @@ export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElemen
 
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
   return (
-    <h2 className={cn("text-sm font-semibold text-fg", className)} {...props} />
+    // min-w-0 と overflow-wrap:anywhere: 改行の機会の無い長い名前でもカードを押し広げず、横の要素に重ならない（#4801）。
+    <h2 className={cn("min-w-0 text-sm font-semibold text-fg [overflow-wrap:anywhere]", className)} {...props} />
   );
 }
 
@@ -29,7 +30,7 @@ export function CardDescription({
   className,
   ...props
 }: HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("text-xs text-fg-muted", className)} {...props} />;
+  return <p className={cn("min-w-0 text-xs text-fg-muted [overflow-wrap:anywhere]", className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {

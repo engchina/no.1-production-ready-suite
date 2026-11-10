@@ -434,6 +434,8 @@ export function DataTable<T>({
                       data-row-kind="data"
                       data-selected={selectable ? (selected ? "true" : "false") : undefined}
                       data-surface-tint={selected ? "accent" : undefined}
+                      // ホバー中だけ灰色の地を塗る行は、その間だけ内側の副次の文字を 1 段深くする（tokens/colors.css。#4639）。
+                      data-surface-tint-hover={!selected && onRowClick ? "neutral" : undefined}
                       aria-current={current ? "true" : undefined}
                       aria-label={extra?.["aria-label"]}
                       data-testid={extra?.["data-testid"]}
