@@ -1359,7 +1359,7 @@ function CaseTable({
 
 /**
  * ケースの質問（Excel の行と質問）と、失敗したケース（status=error）の理由・時間切れになった工程（#383）。
- * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い古い結果は id。
+ * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い結果は Excel の行（#4811）。
  */
 function CaseQuestionCell({
   result,
@@ -1379,7 +1379,9 @@ function CaseQuestionCell({
           <span>{label.question}</span>
         </>
       ) : (
-        <span>{result.case_id}</span>
+        // 見出しの無い結果（一覧・URL で開いた評価。質問の本文は job に保存しない。#4107・#4811）は
+        // Excel の行（「5 行目」）で出す。Excel から作ったケースでなければ id のまま。
+        <span>{evaluationCaseRowLabel(result.case_id)}</span>
       )}
       {error ? (
         <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">
