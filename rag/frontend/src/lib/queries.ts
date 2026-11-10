@@ -2058,13 +2058,18 @@ export function useEnqueueDocumentIngestionJob() {
 
 /** 品質評価の job の query key（#390）。 */
 export const evaluationJobQueryKey = (jobId: string) => ["evaluation", "jobs", jobId] as const;
+/** 過去の品質評価の一覧の query key（#4811。job の key と前方一致させない）。 */
+export const evaluationJobListQueryKey = ["evaluation", "job-list"] as const;
 
 /** RAG golden set 評価を job として投入する（#390）。 */
 export function useSubmitRunEvaluationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: EvaluationRunRequestBody) => api.submitRunEvaluationJob(payload),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    onSuccess: (job) => {
+      qc.setQueryData(evaluationJobQueryKey(job.job_id), job);
+      void qc.invalidateQueries({ queryKey: evaluationJobListQueryKey });
+    },
   });
 }
 
@@ -2118,7 +2123,26 @@ export function useCancelEvaluationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (jobId: string) => api.cancelEvaluationJob(jobId),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    onSuccess: (job) => {
+      qc.setQueryData(evaluationJobQueryKey(job.job_id), job);
+      void qc.invalidateQueries({ queryKey: evaluationJobListQueryKey });
+    },
+  });
+}
+
+/**
+ * 見られる過去の品質評価の一覧（#4811。offset 型）。ページを移る間は前のページを出したままにし、
+ * 実行中の評価がある間は状態を取り直す（状態の列を進める）。
+ */
+export function useEvaluationJobs(offset: number, limit: number) {
+  return useQuery({
+    queryKey: [...evaluationJobListQueryKey, offset, limit],
+    queryFn: () => api.listEvaluationJobs(offset, limit),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      !query.state.error && query.state.data?.items.some((job) => job.status === "RUNNING")
+        ? EVALUATION_JOB_POLL_INTERVAL_MS
+        : false,
   });
 }
 

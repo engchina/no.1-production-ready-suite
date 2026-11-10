@@ -2125,6 +2125,36 @@ export interface EvaluationJob {
   partial_result: EvaluationMetrics | null;
   /** アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。 */
   source_workbook_id: string | null;
+  /** 使った検索・回答プロファイル（主・比べる）と名前（#4811。記録の無い古い job は null）。 */
+  search_answer_profile_id: string | null;
+  compare_search_answer_profile_id: string | null;
+  search_answer_profile_name: string | null;
+  compare_search_answer_profile_name: string | null;
+  /** 実行した利用者の表示名（分からない古い job は null）。 */
+  actor_display_name: string | null;
+  /** 見ている利用者が実行した job か、取り消せるか（本人と system_admin。#4811）。 */
+  owned: boolean;
+  can_cancel: boolean;
+}
+
+/** 過去の品質評価の一覧の行（#4811）。結果の本体は持たず、全体の判定（成功した job だけ）を持つ。 */
+export interface EvaluationJobSummary {
+  job_id: string;
+  status: EvaluationJobStatus;
+  /** 評価したケースの数（比べるプロファイルの 2 回目は数えない）。 */
+  case_count: number;
+  total_cases: number;
+  completed_cases: number;
+  created_at: string;
+  finished_at: string | null;
+  passed: boolean | null;
+  search_answer_profile_id: string | null;
+  compare_search_answer_profile_id: string | null;
+  search_answer_profile_name: string | null;
+  compare_search_answer_profile_name: string | null;
+  actor_display_name: string | null;
+  owned: boolean;
+  can_cancel: boolean;
 }
 
 // --- 設定: モデル ---
@@ -4299,6 +4329,11 @@ export const api = {
     rows: EvaluationImportRow[]; cases: EvaluationCase[];
     profile_name: string | null; compare_profile_name: string | null;
   }) => requestFile(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/results.xlsx`, "evaluation_results.xlsx", jsonBody(body)),
+  /** 見られる過去の品質評価（新しい順。offset 型。#4811）。 */
+  listEvaluationJobs: (offset: number, limit: number) =>
+    request<Page<EvaluationJobSummary>>(
+      `/api/evaluation/jobs?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`
+    ),
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>
