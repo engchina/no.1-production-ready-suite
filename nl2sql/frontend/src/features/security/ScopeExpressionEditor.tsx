@@ -8,7 +8,7 @@ import {
   TextField,
   useConfirm,
 } from "@production-ready/ui";
-import { ErrorState } from "@/components/StateViews";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { useId, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
@@ -428,16 +428,9 @@ function GroupEditor({
   );
 }
 
-function QueryStatus({
-  loading,
-  error,
-  retry,
-}: {
-  loading: boolean;
-  error: Error | null;
-  retry: () => void;
-}) {
+function QueryStatus({ loading }: { loading: boolean }) {
   // 入力欄は出したまま候補を取得するため、Skeleton ではなく経過時間つきの処理中の表示にする（#265）。
+  // 失敗は、読めなかった候補の欄の直下に出す（共有の `DataLoadFailure` の `layout="field"`。#4817）。
   return loading ? (
     <ProcessingIndicator
       active
@@ -445,8 +438,6 @@ function QueryStatus({
       placement="panel"
       testId="scope-expression-loading"
     />
-  ) : error ? (
-    <ErrorState message={error.message} onRetry={retry} />
   ) : null;
 }
 function RelatedEditor({
@@ -552,15 +543,7 @@ function RelatedEditor({
       <p className="text-xs text-fg-muted">
         {text("expression.protectedRelated")}
       </p>
-      <QueryStatus
-        loading={profiles.isLoading || catalog.isLoading || detail.isLoading}
-        error={profiles.error ?? catalog.error ?? detail.error}
-        retry={() => {
-          void profiles.refetch();
-          if (node.profile_id) void catalog.refetch();
-          if (node.target_object) void detail.refetch();
-        }}
-      />
+      <QueryStatus loading={profiles.isLoading || catalog.isLoading || detail.isLoading} />
       <SelectField
         id={`deepsec-scope-related-profile-${path}`}
         label={text("expression.profile")}
@@ -596,6 +579,15 @@ function RelatedEditor({
             })
           }
       />
+      {profiles.error ? (
+        <DataLoadFailure
+          error={profiles.error}
+          fallback={text("expression.profilesLoadError")}
+          onRetry={() => void profiles.refetch()}
+          layout="field"
+          testId={`deepsec-scope-related-profile-load-failed-${path}`}
+        />
+      ) : null}
       {!profiles.isLoading && !profiles.error && !eligible.length && (
         <p className="text-sm text-fg-muted">{text("expression.noProfiles")}</p>
       )}
@@ -638,6 +630,24 @@ function RelatedEditor({
             });
           }}
       />
+      {catalog.error ? (
+        <DataLoadFailure
+          error={catalog.error}
+          fallback={text("expression.relatedTablesLoadError")}
+          onRetry={() => void catalog.refetch()}
+          layout="field"
+          testId={`deepsec-scope-related-table-load-failed-${path}`}
+        />
+      ) : null}
+      {detail.error ? (
+        <DataLoadFailure
+          error={detail.error}
+          fallback={text("expression.relatedColumnsLoadError")}
+          onRetry={() => void detail.refetch()}
+          layout="field"
+          testId={`deepsec-scope-related-columns-load-failed-${path}`}
+        />
+      ) : null}
       {stale && <InlineError message="expression.stale" />}
       {node.target_object && (
         <>

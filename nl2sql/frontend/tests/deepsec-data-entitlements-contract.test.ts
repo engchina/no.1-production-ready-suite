@@ -103,7 +103,8 @@ test("DeepSec object picker は単一選択なので共通の検索できる選�
 test("DeepSec object picker の読み込みの失敗は再試行付きで出す", () => {
   assert.match(
     objectPicker,
-    /security\.deepsec\.entitlements\.objectLoadMoreError[\s\S]*security-deepsec-object-picker-retry-\$\{index\}[\s\S]*onClick=\{onRetry\}/u
+    // 共有の部品（欄の直下の失敗）に、欄ごとの文と再試行を渡す（#4817）。
+    /<DataLoadFailure[\s\S]*security\.deepsec\.entitlements\.objectLoadError[\s\S]*onRetry=\{onRetry\}[\s\S]*layout="field"/u
   );
 });
 

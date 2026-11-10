@@ -57,6 +57,7 @@ import {
   isTransportError,
 } from "@/lib/api";
 import { useSearchParams } from "react-router-dom";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -138,8 +139,6 @@ const CHAT_POLL_INTERVAL_MS = 1500;
  * {@link CHAT_POLL_INTERVAL_MS} ごとなので、その数回分。応答しない取得を打ち切って新しく取り直す。
  */
 const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
-const errorMessage = (error: unknown, fallback: string) =>
-  error instanceof Error ? error.message : fallback;
 
 /** 送った質問（#907）と、その送信の内容。 */
 interface PendingSend {
@@ -722,16 +721,27 @@ export function SqlChatPage() {
                 searching: t("chat.profile.searching"),
                 loadMore: t("chat.profile.loadMore"),
               }}
-              error={
-                profiles.isError || detail.isError
-                  ? errorMessage(
-                      profiles.error || detail.error,
-                      t("profiles.error.load"),
-                    )
-                  : undefined
-              }
             />
           )}
+          {/* 候補の検索・選んだ業務プロファイルの読み取りの失敗は、欄の直下に欄ごとの文と再試行で出す（#4817）。
+              最初の読み込みの失敗（会話の欄ごと出さない）は上の分岐が出す。 */}
+          {!profilesLoading && !profilesFailed && !noProfiles && profiles.isError ? (
+            <DataLoadFailure
+              error={profiles.error}
+              fallback={t("chat.profile.candidatesLoadError")}
+              onRetry={() => void profiles.refetch()}
+              layout="field"
+              testId="sql-chat-profile-candidates-load-failed"
+            />
+          ) : !profilesLoading && !profilesFailed && !noProfiles && detail.isError ? (
+            <DataLoadFailure
+              error={detail.error}
+              fallback={t("chat.profile.detailLoadError")}
+              onRetry={() => void detail.refetch()}
+              layout="field"
+              testId="sql-chat-profile-detail-load-failed"
+            />
+          ) : null}
 
   </>);
   return (

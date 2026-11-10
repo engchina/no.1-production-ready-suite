@@ -2249,7 +2249,17 @@ const load = dataLoadView(query, { isEmpty: page?.total === 0 });
 - `databaseAction` は接続の失敗のときだけ再試行の前に出る。開ける利用者のときだけ渡す。データベース設定へのリンクは `@production-ready/system-settings` の `DatabaseSettingsLink`。
 - `QueryClient` の既定に `retryDataLoad` / `dataLoadRetryDelay` を渡す。
 - `ErrorState` の `focusRetry`（再試行へフォーカス）と `action`（再試行の前の導線）はこの部品が使う。
-- 選択欄の候補など、画面の一部の欄を支える読み取りの失敗は `layout="field"`（#4222）。同じ文・導線・再試行を、欄の位置に収まる danger の `Banner` で出し、「詳細」は畳む。ほかにフォーカスがあれば動かさない。候補が無いまま失敗したら「すべて」「指定なし」だけの選択肢を候補なしと見せず、この表示を欄の直下（ツールバーの絞り込みはツールバーの直下）に出す。
+- 選択欄の候補・欄の値など、画面の一部の欄を支える読み取りの失敗は `layout="field"`（#4222・#4817）。欄の直下の 1 行で出す: danger のアイコンと `fallback`（**欄ごとの文**。何を読めなかったか）・「詳細」（button + region。畳んで出す）・`databaseAction`（条件は `region` と同じ）・再試行。原因の文（backend の文・`labels.timeout`・`labels.unavailable`）と技術的な情報は「詳細」の中。danger の面・枠で囲まず、フォーカスは動かさない。`region`（既定）の見出しと形は変えない。
+
+```tsx
+// 欄の直下（FormGrid の中では col-span-full の箱に入れる）。fallback は欄ごとの i18n の文（common.* は lint が止める）。
+{query.isError && query.data === undefined ? (
+  <DataLoadFailureState error={query.error} fallback={t("…candidatesLoadError")} labels={labels} onRetry={() => void query.refetch()} databaseAction={…} layout="field" testId="…-load-failed" />
+) : null}
+```
+
+- 製品は `components/DataLoadStates.tsx` の `DataLoadFailure`（文言と `databaseAction` を束ねたラッパー。RAG・Agent・NL2SQL）から使う。製品で `Banner`・警告の文・`helper` / `error` の文・手書きの枠で欄の読み取りの失敗を出さない。共有の部品に欄を持つとき（`MyApiKeysPanel` の `agentScopeFailure` など）は、製品がこの表示を渡す口を付ける。
+- 単体テストは `packages/ui/tests/data-load.test.tsx`、実ブラウザの検査は `packages/ui/e2e/field-load-failure.ts`（`findFieldLoadFailureViolations`）。
 
 ## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
 
@@ -3395,7 +3405,6 @@ import { ResultTable, toast } from "@production-ready/ui";
 ```ts
 export interface ResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
 export interface ResultTableProps {
-  mode?: "data" | "answer";                    // 既定 data。answer = 回答の本文の表（全行・全文を折り返し、シートなし・CSV あり。#4812）
   renderCell?: (value: unknown, rowIndex: number, columnIndex: number) => React.ReactNode | undefined;  // undefined は既定のセル
   columns: readonly ResultTableColumn[];
   rows: readonly (readonly unknown[])[];       // 取得した行（列の順）。NULL は null
@@ -3767,11 +3776,10 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 | `renderText` | `(text: string) => ReactNode` | `MarkdownText` | 表以外の部分の描き方 |
 | `splitOptions` | `SplitMarkdownTablesOptions` | — | `{ headerlessRows: true }` で区切りの行の無い `\| A \| B \|` の行の並び（2 行以上）も表にする。文書の表から切り出した本文用で、列の名前は番号（RAG） |
 | `labels` | `AnswerBodyLabels` | `DEFAULT_ANSWER_BODY_LABELS` | `tableName(number)`（表が 1 つなら `number` は null）・`table(name)`（その表の `ResultTable` の文言） |
-| `tableMode` | `"data" \| "answer"` | `data` | 表の `ResultTable` の `mode`。回答の本文の表は `answer`（全行・全文を折り返す。RAG。#4812） |
 | `renderTableCell` | `(cell: AnswerBodyTableCell) => ReactNode \| undefined` | — | 表のセルの描き方（`value`・`rowIndex`・`columnIndex`・`table.number`・`table.columns`）。RAG は出典の列の `[1][2]` を `AnswerSourceMarks` にする |
 | `className` / `testId` | `string` | — | 外側の `div`。表は `{testId}-table-{番号}` |
 
-回答の表の出典の列（#4812）: `AnswerSourceMarks`（`marks`: `key`・`label`（「[1]」）・`targetId`・`ariaLabel`）は印ごとのリンクで、押すと `targetId` の根拠の行へ移ってフォーカスする（当たり判定 24px、タッチ端末 44px）。移り先は `AnswerSections` の根拠の行で、`AnswerCitationRef` の `marker`（行の前の「[1]」）と `anchorId`（押せる行はボタン、押せない行は文字の要素の id）で付ける。
+回答の表の出典の列（#4812）: `AnswerSourceMarks`（`marks`: `key`・`label`（「[1]」）・`targetId`・`ariaLabel`）は印ごとのリンクで、押すと `targetId` の根拠の行の原文を開く（行がボタンのとき。#4822。表のプレビューでもすべての行のシートでも同じ。行が押せないときは、その行へ移ってフォーカスする）。当たり判定 24px、タッチ端末 44px。対応する行は `AnswerSections` の根拠の行で、`AnswerCitationRef` の `marker`（行の前の「[1]」）と `anchorId`（押せる行はボタン、押せない行は文字の要素の id）で付ける。
 
 ---
 

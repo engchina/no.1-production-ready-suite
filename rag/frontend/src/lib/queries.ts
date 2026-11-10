@@ -1316,6 +1316,9 @@ export function useKnowledgeBaseChoices(params: { status?: KnowledgeBaseStatus; 
     matchedTotal: remote ? (search.data?.pages[0]?.total ?? 0) : items.length,
     isPending: head.isPending || (remote && search.isPending),
     isError: head.isError || (remote && search.isError),
+    /** 候補を 1 件も読み取れないまま失敗した（候補なしと分けて、欄の直下に失敗と再試行を出す。#4817）。 */
+    loadFailed:
+      (head.isError && head.data === undefined) || (remote && search.isError && search.data === undefined),
     error: head.error ?? search.error,
     isFetching: head.isFetching || search.isFetching,
     /** 検索語を変えて取り直している（前の結果を出したまま）。 */

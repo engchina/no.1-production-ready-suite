@@ -42,6 +42,7 @@ import {
   dataLoadView,
 } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { useAuth } from "@/components/security/AuthProvider";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
@@ -143,6 +144,8 @@ export function AutomationsPage() {
         allAgents={allAgents}
         agentsLoading={agents.isLoading}
         agentsLoadFailed={agents.isError}
+        agentsError={agents.error}
+        onRetryAgents={() => void agents.refetch()}
         readOnly={!canManage}
         onBack={() => editor.backToList()}
         onCreated={(item) => editor.openItem(item.id, { replace: true })}
@@ -173,6 +176,8 @@ export function AutomationsPage() {
         allAgents={allAgents}
         agentsLoading={agents.isLoading}
         agentsLoadFailed={agents.isError}
+        agentsError={agents.error}
+        onRetryAgents={() => void agents.refetch()}
         readOnly={!canManage}
         onBack={() => editor.backToList()}
         onCreated={() => undefined}
@@ -437,6 +442,8 @@ function AutomationEditor({
   allAgents,
   agentsLoading,
   agentsLoadFailed,
+  agentsError,
+  onRetryAgents,
   readOnly,
   onBack,
   onCreated,
@@ -453,6 +460,9 @@ function AutomationEditor({
   agentsLoading: boolean;
   /** 読み取りに失敗した（「使える業務 Agent がありません」と言わない。#4217）。 */
   agentsLoadFailed: boolean;
+  /** 業務 Agent の候補の読み取りの失敗と取り直し（欄の直下に失敗と再試行を出す。#4817）。 */
+  agentsError: unknown;
+  onRetryAgents: () => void;
   readOnly: boolean;
   onBack: () => void;
   onCreated: (item: Automation) => void;
@@ -516,6 +526,15 @@ function AutomationEditor({
   const savedAgentId = automation?.agent_id ?? "";
   const savedAgentUnavailable = Boolean(savedAgentId) && !agents.some((agent) => agent.id === savedAgentId);
   const savedAgent = allAgents.find((agent) => agent.id === savedAgentId);
+  // 候補を読み取れなかったときは「使える業務 Agent がありません」と言わない（失敗は欄の直下に出す。#4817）。
+  const agentCandidatesFailed = agentsLoadFailed && agents.length === 0;
+  const agentHelper = agentCandidatesFailed
+    ? undefined
+    : agents.length === 0
+      ? t("automation.agentNone")
+      : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
+        ? t("automation.agentUnavailableHint")
+        : undefined;
   const agentOptions = [
     ...agents.map((agent) => ({ value: agent.id, label: agent.name })),
     ...(savedAgentUnavailable && !agentsLoading
@@ -662,18 +681,22 @@ function AutomationEditor({
                         value={draft.agentId}
                         options={agentOptions}
                         error={agentError}
-                        helper={
-                          agentsLoadFailed && agents.length === 0
-                            ? t("common.error.load")
-                            : agents.length === 0
-                            ? t("automation.agentNone")
-                            : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
-                              ? t("automation.agentUnavailableHint")
-                              : undefined
-                        }
+                        helper={agentHelper}
                         onValueChange={(value) => setField("agentId", value)}
                       />
                     )}
+                    {agentCandidatesFailed ? (
+                      // 候補を読み取れないまま「使える業務 Agent がありません」と見せず、欄の直下に出す（#4817）。
+                      <div className="col-span-full min-w-0">
+                        <DataLoadFailure
+                          error={agentsError}
+                          fallback={t("automation.agentLoadError")}
+                          onRetry={onRetryAgents}
+                          layout="field"
+                          testId="automation-agent-load-failed"
+                        />
+                      </div>
+                    ) : null}
                   </FormGrid>
                   <ApprovalToolsNotice data={approvalTools.data} canOpenToolPolicy={canOpenToolPolicy} />
                   <TextareaField

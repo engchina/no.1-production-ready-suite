@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
 import { findClippedPlaceholders, findFloatingFormActionBars, jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
@@ -314,6 +315,68 @@ test("出力の検査を通らなかったときのモデルは既定で使わ�
   const config = body?.config as { answer_model_id?: string; escalation_model_id?: string | null };
   expect(config.answer_model_id).toBe("model-a");
   expect(config.escalation_model_id).toBe("model-b");
+});
+
+test("モデル・継承する窓口・言語資源の読み取りの失敗は、それぞれの欄の直下に欄ごとの文と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockSearchAnswerProfiles(page, []);
+  let fail = true;
+  const failure = (message: string) => ({
+    status: 500,
+    json: { data: null, error_messages: [message], warning_messages: [], error_code: "database_read_failed" },
+  });
+  // 後から登録した route が先に呼ばれる（mockSearchAnswerProfiles の成功の応答を上書きする）。
+  await page.route("**/api/search-answer-profiles/answer-models", (route) =>
+    fail ? route.fulfill(failure("登録モデルを読み取れませんでした。")) : route.fallback()
+  );
+  const ok = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
+  await page.route("**/api/search-answer-profiles/inherited-contact", (route) =>
+    route.fulfill(fail ? failure("窓口の設定を読み取れませんでした。") : ok({ enabled: true, contact: "窓口 A" }))
+  );
+  await page.route("**/api/settings/language-pack", (route) =>
+    route.fulfill(
+      fail
+        ? failure("言語資源を読み取れませんでした。")
+        : ok({ fields: [], builtin: {}, overrides: {}, effective: {}, hash: "a" })
+    )
+  );
+  await page.goto("/search-answer-profiles?id=new");
+
+  // モデルの 2 つの欄は同じ読み取りに支えられるが、見出しは欄ごとの文（同じ文を 2 つ出さない）。
+  const answerModel = page.getByTestId("search-answer-profile-answer-model-load-failed");
+  await expect(answerModel.getByRole("alert")).toHaveText("回答モデルの候補を読み込めませんでした。", { timeout: 15_000 });
+  const escalationModel = page.getByTestId("search-answer-profile-escalation-model-load-failed");
+  await expect(escalationModel.getByRole("alert")).toHaveText(
+    "出力の検査を通らなかったときのモデルの候補を読み込めませんでした。"
+  );
+  // 欄の説明はそのまま出す（読み取りの失敗を説明の文に差し替えない）。
+  await expect(page.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
+  const contact = page.getByTestId("search-answer-profile-contact-load-failed");
+  await expect(contact.getByRole("alert")).toHaveText("継承するシステム設定の窓口を読み込めませんでした。");
+  await expect(page.locator("#search-answer-profile-contact-override")).toBeEditable();
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 3 })).toEqual([]);
+  await answerModel.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`profile-models-load-failed-${testInfo.project.name}.png`) });
+  await contact.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`profile-contact-load-failed-${testInfo.project.name}.png`) });
+
+  // 言語資源の上書きは開いたときに欄の位置へ出す。
+  await page.getByTestId("search-answer-profile-language-pack").locator("summary").click();
+  const languagePack = page.getByTestId("search-answer-profile-language-pack-load-failed");
+  await expect(languagePack.getByRole("alert")).toHaveText("言語資源の上書きの欄を読み込めませんでした。");
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 4 })).toEqual([]);
+  await expectNoPageOverflow(page);
+  await languagePack.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`profile-language-pack-load-failed-${testInfo.project.name}.png`) });
+
+  // 再試行で読み取れたら、失敗の表示を消す（モデルは 1 つの読み取りなので 2 つとも消える）。
+  fail = false;
+  await answerModel.getByRole("button", { name: "再試行" }).click();
+  await expect(answerModel).toHaveCount(0);
+  await expect(escalationModel).toHaveCount(0);
+  await contact.getByRole("button", { name: "再試行" }).click();
+  await expect(contact).toHaveCount(0);
+  await languagePack.getByRole("button", { name: "再試行" }).click();
+  await expect(languagePack).toHaveCount(0);
 });
 
 test("業務ガイドは既定 OFF の単一スイッチで保存・再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {

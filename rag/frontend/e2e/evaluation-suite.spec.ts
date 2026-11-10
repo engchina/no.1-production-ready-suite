@@ -240,7 +240,9 @@ test("評価するプロファイルの候補を読み取れないときは、�
 
   const failure = page.getByTestId("evaluation-profiles-load-failed");
   await expect(failure).toBeVisible({ timeout: 15_000 });
-  await expect(failure.getByRole("alert")).toContainText("検索・回答プロファイルを読み取れませんでした。");
+  // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+  await expect(failure.getByRole("alert")).toHaveText("検索・回答プロファイルを読み込めませんでした。");
+  await expect(failure.getByText("検索・回答プロファイルを読み取れませんでした。")).toBeHidden();
   await expect(page.locator("#evaluation-profile")).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.getByTestId("evaluation-conditions").scrollIntoViewIfNeeded();

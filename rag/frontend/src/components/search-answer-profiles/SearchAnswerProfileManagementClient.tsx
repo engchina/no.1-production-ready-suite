@@ -42,7 +42,7 @@ import {
   dataLoadView,
 } from "@production-ready/ui";
 import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { ContactGuidanceFieldset } from "@/components/search-answer-profiles/ContactGuidanceFieldset";
@@ -674,6 +674,8 @@ function SearchAnswerProfileEditor({
   const mode: "create" | "edit" = initial ? "edit" : "create";
   const answerModels = useProfileAnswerModels();
   const registeredModels = Array.isArray(answerModels.data) ? answerModels.data : [];
+  // モデルの候補を読み取れないまま、候補なしと見せない（欄の直下に失敗と再試行を出す。#4817）。
+  const answerModelsFailed = answerModels.isError && answerModels.data === undefined;
   const create = useCreateSearchAnswerProfile();
   const update = useUpdateSearchAnswerProfile();
   const actionsFor = useSearchAnswerProfileActions(onArchived);
@@ -949,7 +951,18 @@ function SearchAnswerProfileEditor({
                     id="search-answer-profile-answer-model"
                     width="md"
                     label={t("searchAnswerProfiles.field.answerModel")}
-                    helper={answerModels.isError ? t("searchAnswerProfiles.field.answerModelLoadFailed") : t("searchAnswerProfiles.field.answerModelHelper")}
+                    helper={t("searchAnswerProfiles.field.answerModelHelper")}
+                    failure={
+                      answerModelsFailed ? (
+                        <DataLoadFailure
+                          error={answerModels.error}
+                          fallback={t("searchAnswerProfiles.field.answerModelLoadError")}
+                          onRetry={() => void answerModels.refetch()}
+                          layout="field"
+                          testId="search-answer-profile-answer-model-load-failed"
+                        />
+                      ) : null
+                    }
                     value={config.answer_model_id ?? null}
                     options={[
                       ...registeredModels.map((model) => ({ value: model.model_id, label: model.display_name })),
@@ -966,7 +979,18 @@ function SearchAnswerProfileEditor({
                     id="search-answer-profile-escalation-model"
                     width="md"
                     label={t("searchAnswerProfiles.field.escalationModel")}
-                    helper={answerModels.isError ? t("searchAnswerProfiles.field.answerModelLoadFailed") : t("searchAnswerProfiles.field.escalationModelHelper")}
+                    helper={t("searchAnswerProfiles.field.escalationModelHelper")}
+                    failure={
+                      answerModelsFailed ? (
+                        <DataLoadFailure
+                          error={answerModels.error}
+                          fallback={t("searchAnswerProfiles.field.escalationModelLoadError")}
+                          onRetry={() => void answerModels.refetch()}
+                          layout="field"
+                          testId="search-answer-profile-escalation-model-load-failed"
+                        />
+                      ) : null
+                    }
                     offLabel={t("searchAnswerProfiles.field.escalationModelOff")}
                     onLabel={t("searchAnswerProfiles.field.escalationModelOn")}
                     value={config.escalation_model_id ?? null}
@@ -1172,6 +1196,7 @@ function QuerySelectRow<T extends string>({
   width,
   defaultOnOverride,
   helper,
+  failure,
   offLabel,
   onLabel,
   disabled = false,
@@ -1181,6 +1206,8 @@ function QuerySelectRow<T extends string>({
   label: string;
   /** 項目の説明（継承・上書きのどちらでも出す）。 */
   helper?: string;
+  /** 候補の読み取りの失敗（共有の `DataLoadFailure` の `layout="field"`。欄の直下に出す。#4817）。 */
+  failure?: ReactNode;
   /** 値が無い側・値を選ぶ側の切り替えの文言（既定は「グローバル既定を継承」「検索・回答プロファイルで上書き」）。 */
   offLabel?: string;
   onLabel?: string;
@@ -1226,6 +1253,7 @@ function QuerySelectRow<T extends string>({
             className="[&>label]:sr-only"
           />
         ) : null}
+        {failure}
       </div>
     </div>
   );

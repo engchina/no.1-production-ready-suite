@@ -228,6 +228,22 @@ test("草稿保存は公開版を変えず、差分確認後の公開だけが�
   await page.screenshot({ path: test.info().outputPath("language-release-published.png"), fullPage: true });
 });
 
+test("比較で差分が 0 件のときは、空の表ではなく差分が無いことを出す（#3718）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  // 草稿と現在の公開版が同じ（差分 0 件）。
+  await mockLanguagePack(page);
+  await page.goto("/settings/language-pack");
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  const diff = page.getByRole("table", { name: "設定の差分" });
+  await expect(diff).toBeVisible();
+  await diff.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`language-comparison-empty-${testInfo.project.name}.png`) });
+  await expect(diff).toContainText("設定の差分はありません。");
+  // 取込への影響の案内はそのまま出し、差分が無いので公開はできない。
+  await expect(page.getByText("取込設定は同じです")).toBeVisible();
+  await expect(page.getByRole("button", { name: "公開する", exact: true })).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
 test("言語資源は使い道の組と節の 2 段のタブで開き、項目を名前で探せる（#2181）", { tag: "@responsive" }, async ({ page }) => {
   const fields = [
     ...FIELDS,

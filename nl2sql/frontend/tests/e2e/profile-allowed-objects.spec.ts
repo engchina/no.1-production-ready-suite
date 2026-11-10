@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../../platform/packages/ui/e2e/field-load-failure";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
@@ -1814,6 +1815,50 @@ test("既定の生成方式はこの環境で使える方式だけから選ん�
   await expect(page.getByTestId("profile-save-progress")).toHaveAttribute("data-job-status", "succeeded");
   expect((savedPayload as { default_engine?: string } | null)?.default_engine).toBe("select_ai_agent");
   await expectNoDocumentHorizontalOverflow(page);
+});
+
+test("既定の生成方式の候補を読み取れないときは、候補なしと見せず欄の直下に欄ごとの文の失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  let enginesFail = true;
+  await page.route("**/api/nl2sql/engines", (route) =>
+    enginesFail
+      ? route.fulfill({
+          status: 500,
+          json: { error: "生成の方式の一覧を読み取れませんでした。", error_code: "database_read_failed" },
+        })
+      : fulfillJson(route, {
+          engines: [
+            { engine: "select_ai", available: true, reason: "" },
+            { engine: "select_ai_agent", available: true, reason: "" },
+          ],
+        })
+  );
+  await page.goto("/profiles?profile=default");
+
+  const engine = page.getByRole("combobox", { name: "既定の生成方式" });
+  await expect(engine).toBeVisible();
+  const failure = page.getByTestId("profile-default-engine-load-failed");
+  // 取得は TanStack Query の自動の再試行の後に失敗になる。
+  await failure.scrollIntoViewIfNeeded({ timeout: 20_000 });
+  await page.screenshot({ path: testInfo.outputPath(`profile-default-engine-load-failed-${testInfo.project.name}.png`) });
+  // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる。
+  await expect(failure.getByRole("alert")).toHaveText("既定の生成方式の候補を読み込めませんでした。");
+  await expect(failure.getByText("生成の方式の一覧を読み取れませんでした。")).toBeHidden();
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  // 欄の直下に出す。欄は今の値のまま残す。
+  expect((await failure.boundingBox())!.y).toBeGreaterThanOrEqual((await engine.boundingBox())!.y);
+  await failure.getByRole("button", { name: "詳細" }).click();
+  await expect(failure.getByText("生成の方式の一覧を読み取れませんでした。")).toBeVisible();
+  await expectNoDocumentHorizontalOverflow(page);
+
+  // 再試行はキーボードで押せる。読み取れたら失敗の表示を消し、使える方式を候補に出す。
+  enginesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(failure).toHaveCount(0);
+  await engine.click();
+  const listbox = page.locator(`[id="${await engine.getAttribute("aria-controls")}"]`);
+  await expect(listbox.getByRole("option")).toHaveText(["Select AI", "Select AI Agent"]);
 });
 
 test("回答前の確認の方針と確認の上限（往復）を業務プロファイルに保存する (#1839)", { tag: "@responsive" }, async ({ page }, testInfo) => {

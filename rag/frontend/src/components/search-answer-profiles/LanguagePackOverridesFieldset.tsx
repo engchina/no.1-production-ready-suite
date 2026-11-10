@@ -3,7 +3,7 @@
 import { Disclosure, FormSkeleton, StatusBadge, TimedLoadingState } from "@production-ready/ui";
 import { useState } from "react";
 
-import { ApiErrorState } from "@/components/StateViews";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import type { LanguagePackSections } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -84,10 +84,13 @@ export function LanguagePackOverridesFieldset({
           <FormSkeleton fields={2} />
         </TimedLoadingState>
       ) : query.isError || !data ? (
-        <ApiErrorState
+        // 上書きの欄の今の値（言語資源）を読み取れなかった。欄の位置に失敗と再試行を出す（#4817）。
+        <DataLoadFailure
           error={query.error}
-          fallback={t("settings.language.loadError")}
+          fallback={t("searchAnswerProfiles.languagePack.loadError")}
           onRetry={() => void query.refetch()}
+          layout="field"
+          testId="search-answer-profile-language-pack-load-failed"
         />
       ) : (
         <LanguagePackFieldsPanel
