@@ -102,6 +102,7 @@ test.describe("承認済み FAQ の対象と根拠の状態", { tag: "@responsiv
       question: "合成の質問",
       answer: "合成の回答",
       target_knowledge_base_ids: ["kb-1", "kb-2"],
+      negative_questions: [],
     });
   });
 });

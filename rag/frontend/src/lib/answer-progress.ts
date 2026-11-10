@@ -22,6 +22,8 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   history_rewrite: "search.stage.historyRewrite",
   // 検索の要らない発話（挨拶・雑談）への応答（#4787）
   small_talk_reply: "search.stage.smallTalkReply",
+  // 承認済み FAQ との照合（一致度が高ければ回答をそのまま返す。#4788）
+  faq_direct_match: "search.stage.faqDirectMatch",
   // 会話の添付からの根拠の選択（#3475）
   attachment_evidence: "search.stage.attachmentEvidence",
   field_filter: "search.stage.fieldFilter",

@@ -134,6 +134,18 @@ describe("parseAnswerDiagnostics", () => {
     ).toEqual({ question: "Q", answer: "" });
   });
 
+  // #4788
+  it("FAQ の回答をそのまま返した回答は、一致度を読む", () => {
+    expect(
+      parseAnswerDiagnostics({
+        answer_source: "approved_faq",
+        approved_faq_question: "合成の質問",
+        approved_faq_answer: "合成の回答",
+        approved_faq_direct: { faq_id: "faq-1", score: 0.95, min_score: 0.92 },
+      })?.approvedFaq,
+    ).toEqual({ question: "合成の質問", answer: "合成の回答", direct: { score: 0.95 } });
+  });
+
   // 関係情報で加えた根拠（Issue 2055）。
   it("関係情報で加えた根拠の数と使った見出しを読む", () => {
     expect(

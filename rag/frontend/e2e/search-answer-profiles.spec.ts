@@ -27,7 +27,7 @@ for (const [tab, paginationId, kind] of [
     const rows = () => Array.from({ length: count }, (_, index) => {
       const name = `項目 ${String(index + 1).padStart(3, "0")}`;
       return {
-        id: `item-${index}`, question: name, answer: "合成の回答", alternate_questions: [],
+        id: `item-${index}`, question: name, answer: "合成の回答", alternate_questions: [], negative_questions: [],
         term: name, aliases: [], description: "合成の説明", title: name, content: "合成の指示",
         triggers: [], status: kind === "guides" ? "active" : "approved",
         guide_id: `guide-${index}`, published_revision: null, draft_revision: 1,

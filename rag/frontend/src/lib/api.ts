@@ -1583,6 +1583,8 @@ export interface ChatMessageRequestBody {
   top_k?: number;
   /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
   approved_faq_id?: string;
+  /** 利用者が類似問の候補を「どれでもない」と断った質問（FAQ の回答をそのまま返さない。#4788）。 */
+  approved_faq_declined?: boolean;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
   clarification?: ClarificationAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
@@ -3941,7 +3943,12 @@ export const api = {
     ),
   addApprovedFaq: (
     id: string,
-    body: { question: string; answer: string; target_knowledge_base_ids: string[] },
+    body: {
+      question: string;
+      answer: string;
+      target_knowledge_base_ids: string[];
+      negative_questions?: string[];
+    },
   ) =>
     request<ApprovedFaqMutationData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
@@ -3952,6 +3959,12 @@ export const api = {
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/confirm`,
       jsonBody({ target_knowledge_base_ids: targetKnowledgeBaseIds }),
+    ),
+  /** FAQ の否定の質問（この FAQ を当てたくない質問の例）を置き換える（#4788）。 */
+  setApprovedFaqNegativeQuestions: (id: string, faqId: string, negativeQuestions: string[]) =>
+    request<ApprovedFaqListData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/negative-questions`,
+      { ...jsonBody({ negative_questions: negativeQuestions }), method: "PUT" },
     ),
   deleteApprovedFaq: (id: string, ids: string[]) =>
     request<ApprovedFaqMutationData>(
@@ -3997,20 +4010,31 @@ export const api = {
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
       { ...jsonBody({ query, purpose }), signal },
     ),
-  suggestClarification: (id: string, query: string, conversationId?: string | null) =>
+  /** `approvedFaqDeclined` は、利用者が類似問の候補を「どれでもない」と断った質問（#4788）。 */
+  suggestClarification: (
+    id: string,
+    query: string,
+    conversationId?: string | null,
+    approvedFaqDeclined = false,
+  ) =>
     request<{ suggestion: ClarificationSuggestionData | null; question_context_token?: string | null }>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
-      jsonBody({ query, ...(conversationId ? { conversation_id: conversationId } : {}) }),
+      jsonBody({
+        query,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(approvedFaqDeclined ? { approved_faq_declined: true } : {}),
+      }),
     ),
   saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
     request<RuntimeKnowledgeData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/rules/${encodeURIComponent(ruleId)}/clarification`,
       { ...jsonBody({ clarification }), method: "PUT" },
     ),
-  setApprovedFaqEnabled: (id: string, enabled: boolean) =>
+  /** プロファイルごとの FAQ の設定を保存する（送った項目だけを変える。#684・#4788）。 */
+  setApprovedFaqSettings: (id: string, settings: ApprovedFaqSettingsUpdate) =>
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/settings`,
-      { ...jsonBody({ enabled }), method: "PUT" },
+      { ...jsonBody(settings), method: "PUT" },
     ),
   listAnswerRecords: (params: {
     searchAnswerProfileId: string;
@@ -4662,6 +4686,8 @@ export interface ApprovedFaqRecordData {
   question: string;
   answer: string;
   alternate_questions: string[];
+  /** 否定の質問（この FAQ を当てたくない質問の例。当たったら候補から外す。#4788）。 */
+  negative_questions: string[];
   status: string;
   /** FAQ を使える範囲（この KB をすべて使える利用者だけに提示・回答で使う。#4621）。 */
   target_knowledge_base_ids: string[];
@@ -4688,7 +4714,17 @@ export interface ApprovedFaqListData {
   records: ApprovedFaqRecordData[];
   /** 回答の前に類似問を提示するか（検索・回答プロファイルごと。未設定はオン。#684）。 */
   enabled: boolean;
+  /** 一致度が下限以上のとき、チャットで FAQ の回答をそのまま返すか（未設定はオフ。#4788）。 */
+  direct_answer_enabled: boolean;
+  /** そのまま返す一致度の下限（全体設定の値。説明に出す）。 */
+  direct_answer_min_score: number;
   knowledge_bases: ApprovedFaqKnowledgeBaseData[];
+}
+
+/** FAQ の設定の変更（送った項目だけを変える）。 */
+export interface ApprovedFaqSettingsUpdate {
+  enabled?: boolean;
+  direct_answer_enabled?: boolean;
 }
 
 export interface ApprovedFaqMutationData extends ApprovedFaqListData {
@@ -4799,6 +4835,8 @@ export interface ApprovedFaqSuggestionData {
 
 export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
+  /** チャットで、送信の後に FAQ の回答をそのまま返す見込み（候補を出さずに送る。#4788）。 */
+  direct_answer?: boolean;
 }
 
 // --- 検索・回答プロファイルの知識: 用語・同義語と回答ルール(runtime knowledge) ---

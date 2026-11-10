@@ -1738,6 +1738,24 @@ export const ja = {
   "searchAnswerProfiles.faq.enabled.help":
     "チャットでは、質問に近い登録済みQ&Aを最大 3 件と「どれでもない」を出し、選んでから回答します。選んだQ&Aは質問と一緒に LLM に渡します。RAG 検索でも候補を出します。",
   "searchAnswerProfiles.faq.enabled.error": "類似問の提示の設定を保存できませんでした。",
+  "searchAnswerProfiles.faq.directAnswer.label": "一致度が高いときは、Q&A の回答をそのまま返す",
+  "searchAnswerProfiles.faq.directAnswer.help":
+    "チャットで、質問が登録済みQ&Aの質問と下限以上の一致度で一致したとき、資料の検索と回答の生成をせずに、登録された回答をそのまま返します（LLM を使いません）。下限に届かないときは、候補を出して選ぶ流れのままです。「回答の前に関連するQ&Aを提示する」がオンのときに使えます。",
+  "searchAnswerProfiles.faq.directAnswer.error": "Q&A の回答をそのまま返す設定を保存できませんでした。",
+  "searchAnswerProfiles.faq.directAnswer.minScore": "一致度の下限は {value}% です（全体設定）。",
+  "searchAnswerProfiles.faq.negative.label": "当てはめない質問",
+  "searchAnswerProfiles.faq.negative.help":
+    "この Q&A を当てたくない質問の例を、1 行に 1 つ書きます（20 件まで）。質問がこの例に近いときは、この Q&A を候補に出さず、回答にも使いません。",
+  "searchAnswerProfiles.faq.negative.tooMany": "当てはめない質問は 20 件までです。",
+  "searchAnswerProfiles.faq.negative.tooLong": "当てはめない質問は 1 件 1000 文字までです。",
+  "searchAnswerProfiles.faq.negative.summary": "当てはめない質問: {count} 件",
+  "searchAnswerProfiles.faq.negative.edit.action": "当てはめない質問を編集",
+  "searchAnswerProfiles.faq.negative.edit.title": "当てはめない質問を編集",
+  "searchAnswerProfiles.faq.negative.edit.close": "閉じる",
+  "searchAnswerProfiles.faq.negative.edit.submit": "保存",
+  "searchAnswerProfiles.faq.negative.edit.cancel": "キャンセル",
+  "searchAnswerProfiles.faq.negative.edit.done": "当てはめない質問を保存しました。",
+  "searchAnswerProfiles.faq.negative.edit.error": "当てはめない質問を保存できませんでした。",
   "searchAnswerProfiles.faq.question": "質問（QUESTION）",
   "searchAnswerProfiles.faq.answer": "回答（ANSWER）",
   "searchAnswerProfiles.faq.error.questionRequired": "質問を入力してください。",
@@ -3732,6 +3750,11 @@ export const ja = {
   "search.answerDetails.faqSource.answerMissing": "この回答の記録には、登録された回答の原文が残っていません。",
   "search.answerDetails.faqSource.note":
     "回答は、この登録された回答だけをもとに作成しました。表示は回答した時点の内容です。",
+  "search.answerDetails.faqDirect.title": "登録済みQ&Aの回答をそのまま表示しています",
+  "search.answerDetails.faqDirect.body":
+    "質問が登録済みQ&A「{question}」と一致したため、資料の検索と回答の生成はしていません（一致度 {score}%）。",
+  "search.answerDetails.faqDirect.bodyWithoutScore":
+    "質問が登録済みQ&A「{question}」と一致したため、資料の検索と回答の生成はしていません。",
   "search.history.loadError": "保存された回答を読み込めませんでした。",
   "search.previewSource.loading": "引用した版のファイルを確認しています",
   "search.previewSource.error": "引用した版のファイルを確認できませんでした。",
@@ -4129,6 +4152,7 @@ export const ja = {
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "質問を補い、検索が要るかを分ける",
   "search.stage.smallTalkReply": "検索せずに短く応じる",
+  "search.stage.faqDirectMatch": "登録済みQ&Aと照合する",
   "search.stage.attachmentEvidence": "会話の添付から根拠を選ぶ",
   "search.stage.fieldFilter": "質問から検索の絞り込み条件を読み取る",
   "search.stage.answer": "質問の条件を整理して回答を作る",

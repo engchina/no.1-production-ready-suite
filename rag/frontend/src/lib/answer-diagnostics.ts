@@ -88,7 +88,12 @@ export type AnswerDiagnostics = {
    * 利用者が選んだ承認済み FAQ だけから回答したときの出典（回答した時点の原文。#737）。
    * answer は変更前に保存した回答では空。FAQ から回答していなければ null。
    */
-  approvedFaq: { question: string; answer: string } | null;
+  approvedFaq: {
+    question: string;
+    answer: string;
+    /** 一致度が下限以上で、FAQ の回答をそのまま返した回答（LLM を使っていない。#4788）。 */
+    direct?: { score: number | null };
+  } | null;
   /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
   rewrittenQuestion: string;
   generatedQueries: string[];
@@ -226,6 +231,9 @@ export function parseAnswerDiagnostics(
         ? {
             question: String(raw.approved_faq_question ?? ""),
             answer: String(raw.approved_faq_answer ?? ""),
+            ...(raw.approved_faq_direct && typeof raw.approved_faq_direct === "object"
+              ? { direct: { score: num(record(raw.approved_faq_direct).score) } }
+              : {}),
           }
         : null,
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
