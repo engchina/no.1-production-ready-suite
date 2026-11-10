@@ -43,7 +43,7 @@ function rows(count: number) {
     CUSTOMER_NAME: `顧客 ${index + 1}`,
     REGION: ["東日本", "西日本"][index % 2],
     CREATED_AT: "2026-10-01T09:00:00",
-    DESCRIPTION: `とても長い説明の文字列です。${"説明".repeat(40)}`,
+    DESCRIPTION: `とても長い説明の文字列です。${"説明".repeat(300)}`,
   }));
 }
 
@@ -339,6 +339,27 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   await viewAll.click();
   const sheet = page.getByRole("dialog", { name: "実行結果（60 行）" });
   await expect(sheet).toBeVisible();
+  const longCell = sheet.getByTestId("sql-chat-result-all-table").locator("tbody tr").first().locator("td").last();
+  const expand = longCell.getByRole("button", { name: "全文を表示" });
+  await expect(expand).toBeVisible();
+  const content = longCell.locator("span").first();
+  expect(await content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1);
+  await expand.click();
+  await expect(longCell.getByRole("button", { name: "折りたたむ" })).toHaveAttribute("aria-expanded", "true");
+  expect(await content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+  const originalViewport = page.viewportSize()!;
+  const widths = originalViewport.width >= 1280 ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: originalViewport.height });
+    for (const dark of [false, true]) {
+      await page.evaluate((value) => document.documentElement.classList.toggle("dark", value), dark);
+      await page.screenshot({ path: testInfo.outputPath(`long-cell-${width}-${dark ? "dark" : "light"}.png`) });
+    }
+  }
+  await page.setViewportSize(originalViewport);
+  await page.evaluate(() => document.documentElement.classList.remove("dark"));
+  await longCell.getByRole("button", { name: "折りたたむ" }).click();
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
   const viewport = page.viewportSize()!;
   const sheetBox = (await sheet.boundingBox())!;
   if (viewport.width < 640) expect(sheetBox.width).toBeGreaterThanOrEqual(viewport.width - 1);

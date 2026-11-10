@@ -31,7 +31,7 @@ const envelope = (data: unknown) => ({ data, error_messages: [], warning_message
 
 const CITATION_TEXT = "合成の根拠の本文です。";
 const COLUMNS = Array.from({ length: 8 }, (_, index) => `長い列の名前 ${index + 1}`);
-const LONG_CELL = "合成の長いセルの文章です。省略せずに折り返して全文を出します。".repeat(4);
+const LONG_CELL = "合成の長いセルの文章です。省略せずに折り返して全文を出します。".repeat(24);
 const TABLE_NOTE = "上の表を参照してください。";
 
 const ANSWER = [
@@ -189,7 +189,26 @@ test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@re
         Math.round(element.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(element).lineHeight))
       )
     ).toBeGreaterThan(1);
-    await page.screenshot({ path: testInfo.outputPath(`answer-table-sheet-${testInfo.project.name}.png`) });
+    const expand = sheetCell.getByRole("button", { name: "全文を表示" });
+    await expect(expand).toBeVisible();
+    const content = sheetCell.locator("span").first();
+    expect(await content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1);
+    await expand.click();
+    await expect(sheetCell.getByRole("button", { name: "折りたたむ" })).toHaveAttribute("aria-expanded", "true");
+    expect(await content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+    const originalViewport = page.viewportSize()!;
+    const widths = originalViewport.width >= 1280 ? [1280, 1920] : [375];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: originalViewport.height });
+      for (const dark of [false, true]) {
+        await page.evaluate((value) => document.documentElement.classList.toggle("dark", value), dark);
+        await page.screenshot({ path: testInfo.outputPath(`long-cell-${width}-${dark ? "dark" : "light"}.png`) });
+      }
+    }
+    await page.setViewportSize(originalViewport);
+    await page.evaluate(() => document.documentElement.classList.remove("dark"));
+    await sheetCell.getByRole("button", { name: "折りたたむ" }).click();
+    await expect(expand).toHaveAttribute("aria-expanded", "false");
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
 

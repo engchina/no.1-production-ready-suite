@@ -10,6 +10,7 @@ const THREAD_ID = `thread_${"b".repeat(32)}`;
 const RUN_ID = "run-result-tables";
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
+  { name: "desktop-1920", width: 1920, height: 1080 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
 
@@ -23,7 +24,7 @@ const QUERY_OUTPUT = {
     DEPARTMENT: `部門 ${index + 1}`,
     AMOUNT: (index + 1) * 100,
     // 1 行目の NOTE は NULL（空の文字列と区別して出す）。長い値は省略して全文を title に出す。
-    NOTE: index === 0 ? null : index === 1 ? "" : `備考 ${index + 1} ${"長い説明の文。".repeat(index === 2 ? 20 : 1)}`,
+    NOTE: index === 0 ? null : index === 1 ? "" : `備考 ${index + 1} ${"長い説明の文。".repeat(index === 2 ? 120 : 1)}`,
   })),
   returned_count: ROW_COUNT,
   total: 1234,
@@ -145,6 +146,18 @@ async function expectLargeResultTable(page: Page, table: Locator, testId: string
   // が DOM に残っている間は 2 つに当たる（#1519）。
   const sheet = page.getByTestId(`${testId}-sheet`);
   await expect(sheet).toBeVisible();
+  const longCell = sheet.getByTestId(`${testId}-all-table`).locator("tbody tr").nth(2).locator("td").nth(2);
+  const expand = longCell.getByRole("button", { name: "全文を表示" });
+  await expect(expand).toBeVisible();
+  const content = longCell.locator("span").first();
+  expect(await content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1);
+  await expand.focus();
+  await page.keyboard.press("Enter");
+  await expect(longCell.getByRole("button", { name: "折りたたむ" })).toHaveAttribute("aria-expanded", "true");
+  expect(await content.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: test.info().outputPath(`long-cell-${testId}.png`) });
+  await page.keyboard.press("Space");
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
   const pagination = sheet.getByTestId(`${testId}-all-pagination`);
   await expect(pagination).toBeVisible();
   await expect(pagination.getByRole("button", { name: "次へ" })).toBeInViewport();
