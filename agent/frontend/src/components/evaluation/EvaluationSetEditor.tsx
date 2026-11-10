@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Download, FileDown, FlaskConical, Plus, RotateCcw, Save, Trash2, Upload } from "lucide-react";
 import {
@@ -229,6 +229,7 @@ export function downloadBlob(blob: Blob, fileName: string) {
 export function EvaluationSetEditor({
   evaluationSet,
   agents,
+  agentsFailure,
   defaultAgentId,
   onBack,
   onSaved,
@@ -238,6 +239,8 @@ export function EvaluationSetEditor({
 }: {
   evaluationSet?: EvaluationSet;
   agents: AgentProfile[];
+  /** 業務 Agent の候補の読み取りの失敗（共有の `DataLoadFailure` の `layout="field"`。欄の直下に出す。#4817）。 */
+  agentsFailure?: ReactNode;
   defaultAgentId: string;
   onBack: () => void;
   onSaved: (saved: EvaluationSet, created: boolean) => void;
@@ -494,8 +497,10 @@ export function EvaluationSetEditor({
                       onChange={setVersionChoice}
                     />
                   </div>
+                  {agentsFailure}
                 </>
               ) : (
+                <>
                 <SelectField<string>
                   id="evaluation-set-agent"
                   label={t("evaluation.form.agent")}
@@ -505,6 +510,8 @@ export function EvaluationSetEditor({
                   options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
                   onValueChange={(value) => setField("agentId", value)}
                 />
+                {agentsFailure}
+                </>
               )}
             </CardContent>
           </Card>

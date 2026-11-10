@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { dbUser } from "./fixtures/auth";
 import { withListFilters } from "./fixtures/select-field";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
@@ -354,7 +355,10 @@ for (const viewport of VIEWPORTS) {
 
     const failure = page.getByTestId("feedback-agent-filter-load-failed");
     await expect(failure).toBeVisible({ timeout: 15_000 });
-    await expect(failure.getByRole("alert")).toContainText("業務 Agent の一覧を読み取れませんでした。");
+    // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+    await expect(failure.getByRole("alert")).toHaveText("絞り込みに使う業務 Agent を読み込めませんでした。");
+    await expect(failure.getByText("業務 Agent の一覧を読み取れませんでした。")).toBeHidden();
+    expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
     // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
     const toolbarBox = await page.getByTestId("feedback-filters").boundingBox();
     const failureBox = await failure.boundingBox();

@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
 import { measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1378: 業務 Agent のデータの範囲。NL2SQL の業務プロファイル・RAG の検索・回答プロファイルを複数選び、
@@ -149,8 +150,14 @@ test("候補を読み込めないときは理由と再試行を出し、範囲�
   };
   await openAgent(page);
 
+  // 欄の直下に、欄ごとの文の失敗と再試行を出す。理由（backend の文）は畳んだ「詳細」に入れる（#4817）。
   const error = page.getByTestId("agent-data-scope-nl2sql-error");
-  await expect(error).toContainText("URL が設定されていないため、プロファイルを選べません");
+  await expect(error.getByRole("alert")).toHaveText("使える業務プロファイルの候補を読み込めませんでした。");
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  const field = page.locator(`#${AGENT_ID}-data-scope-nl2sql`);
+  expect((await error.boundingBox())!.y).toBeGreaterThan((await field.boundingBox())!.y);
+  await error.getByRole("button", { name: "詳細" }).click();
+  await expect(error.getByText(/URL が設定されていないため、プロファイルを選べません/)).toBeVisible();
   await expectNoPageHorizontalOverflow(page);
   // 選んである ID は chip で出し、外せる。
   const nl2sql = page.getByTestId("agent-data-scope-nl2sql");

@@ -1543,6 +1543,7 @@ QA に事前共有してください。**189点あります。**
 | `OpenRunInputAction`（#3309） | **新規 export。** 実行の詳細の概要の見出しの右の「〜で開く」（`ButtonLink` + `SquarePen`。文言は製品が渡す）。RAG 検索の本人の実行に「RAG 検索で開く」、NL2SQL の SQL 生成の本人の実行に「SQL 生成で開く」が出る（チャットの実行は「会話を開く」のまま。どちらか 1 つ）。押すと元の画面が質問と条件を入れた状態で開き、実行はしない |
 | `EvidenceListItem` / `evidenceCountLabel` / `EvidenceSourceSheet`（#2710） | `EvidenceListItem.usedAsContext`（任意）を追加。回答がまとまり（親）だけを参照した箇所は「回答で引用」に数えず、カードに neutral の「まとまりで参照」（`Layers`）のバッジ、件数の末尾に「まとまりで参照 N 件」を出す。`EvidenceLabels` に `context` / `contextBadge` を追加。`EvidenceSourceSheet` に `notice`（任意。要約の上の info の `Banner`）を追加し、RAG は本文の根拠の行が指す箇所を確定できないとき「この根拠の行の位置は確定していません」と候補の数を出して原文を強調しない。渡さなければ見た目は変わらない |
 | `PageLoadingState`（#3311） | `wide` プロップを削除。常に全幅（`PageBody wide`）で出す |
+| `DataLoadFailureState` の `layout="field"`（#4817） | 欄の直下の読み取りの失敗が、danger の `Banner`（面と枠・backend の文が見出し）から、**欄ごとの文の 1 行**（danger のアイコンと文・「詳細」・導線・再試行。面と枠なし）になる。backend の文と技術的な情報は畳んだ「詳細」の中。`region`（既定）は変えない |
 
 ---
 

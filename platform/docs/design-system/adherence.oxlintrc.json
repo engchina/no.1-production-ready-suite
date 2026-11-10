@@ -182,6 +182,14 @@
           {
             "selector": "MemberExpression[property.name='clipboard']:matches([object.name='navigator'], [object.property.name='navigator'])",
             "message": "クリップボードへ直接書かない（navigator.clipboard）。コピーのボタンは共有の CopyButton（アイコン Copy → 成功で Check と読み上げ、失敗は Toast か onCopyError で同じ場所。http の配備の execCommand と Safari の ClipboardItem にも対応）を使う（docs/design-system/components-reference.md「CopyButton」、#2099）。"
+          },
+          {
+            "selector": "JSXOpeningElement:has(JSXAttribute[name.name='layout'][value.value='field']) > JSXAttribute[name.name='fallback'] Literal[value=/^common\\./]",
+            "message": "欄の直下の読み取りの失敗（layout=\"field\"）の fallback に汎用の文（common.*）を渡さない。見出しになるので、欄ごとの文（何を読めなかったか。「〈欄の名前〉の候補を読み込めませんでした。」の i18n のキー）を渡す（docs/ux-contracts/messaging.md §3.6.1「欄の候補・欄の値」、#4817）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name=/^(?:SelectField|SearchableSelectField|SearchableMultiSelect|FilterSelect)$/] > JSXAttribute[name.name=/^(?:helper|error)$/] :matches(MemberExpression[property.name='isError'], Identifier[name=/[lL]oad(?:Failed|Error)$/], MemberExpression[property.name=/[lL]oad(?:Failed|Error)$/])",
+            "message": "選択欄の候補の読み取りの失敗を、欄の helper / error の文で出さない（候補なしと区別できず、再試行も無い）。欄の直下に共有の DataLoadFailureState の layout=\"field\"（製品の components/DataLoadStates.tsx の DataLoadFailure）を置き、fallback に欄ごとの文を渡す（docs/ux-contracts/messaging.md §3.6.1「欄の候補・欄の値」、#4817）。"
           }
         ],
         "design-system/list-height": [

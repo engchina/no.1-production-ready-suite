@@ -32,6 +32,7 @@ const agentJa = {
   "nav.section.operations": "運用設定",
   // 業種テンプレート（#780）。
   "agent.template.title": "テンプレートから始める",
+  "agent.template.loadError": "テンプレートを読み込めませんでした。",
   "agent.template.description":
     "よくある業務の指示とスキルの組み合わせから始められます。選ぶとフォームに入り、保存の前に自由に直せます。",
   "agent.template.loading": "テンプレートを読み込んでいます",
@@ -120,6 +121,7 @@ const agentJa = {
   "feedback.filter.period": "期間",
   "feedback.filter.agent": "業務 Agent",
   "feedback.filter.agentLoadError": "絞り込みに使う業務 Agent を読み込めませんでした。",
+  "account.apiKeys.agentScopeLoadError": "使える業務 Agent の候補を読み込めませんでした。",
   "feedback.filter.rating": "評価",
   "feedback.filter.reason": "理由",
   "feedback.filter.all": "すべて",
@@ -248,6 +250,7 @@ const agentJa = {
   "automation.name": "名前",
   "automation.nameRequired": "名前を入力してください。",
   "automation.agent": "業務 Agent",
+  "automation.agentLoadError": "業務 Agent の候補を読み込めませんでした。",
   // #927: 業務 Agent の未選択・保存済みの業務 Agent が使えなくなったとき・タイムゾーンの誤り。
   "automation.agentRequired": "業務 Agent を選んでください。",
   "automation.agentPlaceholder": "業務 Agent を選ぶ",
@@ -488,6 +491,7 @@ const agentJa = {
   "evaluation.compare.score": "スコア {score}",
   "evaluation.compare.label": "評価の比較",
   "evaluation.set.evaluatedAgent": "評価する業務 Agent",
+  "evaluation.set.agentLoadError": "業務 Agent の候補を読み込めませんでした。",
   "evaluation.set.evaluatedAgentHelper": "評価セットの業務 Agent 以外を選ぶと、同じ評価ケースでその業務 Agent を評価します（「評価を比べる」で並べて比べられます）。",
   "loading.evaluationCompare": "評価の比較を読み込んでいます",
   "loading.evaluations": "最近の評価を読み込んでいます",
@@ -1222,6 +1226,7 @@ const agentJa = {
   "agent.disabled": "無効",
   "agent.skills": "スキル",
   "agent.skillsUnavailable": "利用できるスキルを取得できません。",
+  "agent.skillsLoadError": "スキルの候補を読み込めませんでした。",
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
@@ -1399,6 +1404,7 @@ const agentJa = {
   "audit.runGoal": "実行の目標",
   "audit.runStatus": "実行の状態",
   "audit.toolName": "ツール名",
+  "audit.toolNameLoadError": "ツール名の候補を読み込めませんでした。",
   "audit.stepStatus": "ステップの状態",
   "audit.approvalStatus": "承認の状態",
   "audit.errorCode": "エラーコード",
@@ -1800,7 +1806,8 @@ const agentJa = {
   "agent.dataScope.empty": "あなたが使えるプロファイルがありません",
   "agent.dataScope.emptyOnError": "候補を読み込めませんでした",
   "agent.dataScope.forbidden": "{product}を使う権限がないため、範囲は選べません。",
-  "agent.dataScope.loadError": "プロファイルの候補を読み込めませんでした。",
+  "agent.dataScope.nl2sql.loadError": "使える業務プロファイルの候補を読み込めませんでした。",
+  "agent.dataScope.rag.loadError": "使える検索・回答プロファイルの候補を読み込めませんでした。",
   "agent.dataScope.unavailable": "使えません",
   "agent.dataScope.missing":
     "あなたが使えないか見つからないプロファイルが範囲にあります（{ids}）。そのまま保存できますが、新しく加えることはできません。",

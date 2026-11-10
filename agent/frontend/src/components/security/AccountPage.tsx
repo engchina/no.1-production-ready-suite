@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { AccountPage, mcpEndpoints } from "@production-ready/system-settings";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi } from "@/lib/api";
 import { APP_BASE_PATH } from "@/lib/base-path";
+import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { myApiKeysApi } from "@/lib/security-api";
@@ -33,6 +35,17 @@ export function AccountRoute() {
         agentScopeOptions,
         // 候補の読み込み中は欄の形で場所を確保する（読み込み後に欄が現れて下を押し下げない。#4649）。
         agentScopeLoading: agents.isLoading,
+        // 候補を読み取れないまま、欄を黙って消さない（#4817）。
+        agentScopeFailure:
+          agents.isError && agents.data === undefined ? (
+            <DataLoadFailure
+              error={agents.error}
+              fallback={t("account.apiKeys.agentScopeLoadError")}
+              onRetry={() => void agents.refetch()}
+              layout="field"
+              testId="api-key-agent-scope-load-failed"
+            />
+          ) : undefined,
       }}
     />
   );

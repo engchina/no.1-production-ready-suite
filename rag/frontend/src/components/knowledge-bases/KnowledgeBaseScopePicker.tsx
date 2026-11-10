@@ -3,8 +3,8 @@
 import { useId, useMemo, useState } from "react";
 
 import { KnowledgeBaseMultiSelect } from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
-import { Banner, type FieldWidth, TimedLoadingState, Skeleton } from "@production-ready/ui";
-import { ApiError } from "@/lib/api";
+import { type FieldWidth, TimedLoadingState, Skeleton } from "@production-ready/ui";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { t } from "@/lib/i18n";
 import {
   type KnowledgeBaseRefLike,
@@ -92,14 +92,15 @@ export function KnowledgeBaseScopePicker({
 
   return (
     <div className={cn("space-y-2", className)} data-testid="knowledge-base-scope-picker">
-      {choices.isError ? (
-        <Banner severity="warning" title={t("knowledgeBaseScope.loadWarning")}>
-          <p>
-            {choices.error instanceof ApiError
-              ? choices.error.message
-              : t("knowledgeBaseScope.loadWarningHint")}
-          </p>
-        </Banner>
+      {choices.loadFailed ? (
+        // 候補を読み取れないまま「有効なナレッジベースがありません」と見せず、欄の位置に失敗と再試行を出す（#4817）。
+        <DataLoadFailure
+          error={choices.error}
+          fallback={t("knowledgeBaseScope.loadError")}
+          onRetry={choices.refetch}
+          layout="field"
+          testId="knowledge-base-scope-load-failed"
+        />
       ) : choices.isPending ? (
         <TimedLoadingState
           label={t("knowledgeBaseScope.loading")}

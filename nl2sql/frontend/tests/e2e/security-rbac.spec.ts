@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../../platform/packages/ui/e2e/field-load-failure";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import {
   expect,
@@ -6713,8 +6714,14 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   await expect(related.getByRole("status")).toBeVisible();
   await expect.poll(() => Boolean(pending)).toBe(true);
   await fulfill(pending!, "関連候補を取得できませんでした", 503);
-  await expect(related.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
-  await related.getByRole("button", { name: "再試行", exact: true }).click();
+  // 読めなかった欄の直下に、欄ごとの文の失敗と再試行を出す（共有の部品。backend の文は畳んだ「詳細」。#4817）。
+  const profilesFailure = related.locator('[data-failure-layout="field"]');
+  await expect(profilesFailure.getByRole("alert")).toHaveText("候補を選ぶ業務プロファイルを読み込めませんでした。");
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  await profilesFailure.getByRole("button", { name: "詳細", exact: true }).click();
+  await expect(profilesFailure.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
+  await profilesFailure.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(profilesFailure).toHaveCount(0);
   await chooseSelectFieldOption(related.getByLabel("候補を選ぶ業務プロファイル"), "hr");
   await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
   await expectSelectFieldValue(related.getByLabel("関連キーの設定方法"), "");
@@ -6986,13 +6993,17 @@ test("DeepSec 再取得修正: 関連情報の待機と失敗を成功扱いせ�
   await expect(page.getByRole("region", { name: "通知", exact: true }).getByRole("status")).toHaveCount(0);
   state.hold = false;
   await fulfill(state.pending!, "関連メタデータの取得失敗", 503);
-  await expect(related.getByText("関連メタデータの取得失敗", { exact: true })).toBeVisible();
+  // 関連テーブルの欄の直下に、欄ごとの文の失敗を出す（backend の文は畳んだ「詳細」。#4817）。
+  const relatedFailure = related.locator('[data-failure-layout="field"]');
+  await expect(relatedFailure.getByRole("alert")).toHaveText("関連テーブルの候補を読み込めませんでした。");
+  await relatedFailure.getByRole("button", { name: "詳細", exact: true }).click();
+  await expect(relatedFailure.getByText("関連メタデータの取得失敗", { exact: true })).toBeVisible();
   await expect(refresh).toBeEnabled();
   await expect(page.getByRole("region", { name: "通知", exact: true }).getByRole("status")).toHaveCount(0);
   await expect(related.getByLabel("値", { exact: true })).toHaveValue("東京");
   await refresh.click();
   await expect.poll(() => state.reads.relations).toBe(3);
-  await expect(related.getByText("関連メタデータの取得失敗", { exact: true })).toHaveCount(0);
+  await expect(relatedFailure).toHaveCount(0);
   await expect(page.getByRole("region", { name: "通知", exact: true }).getByRole("status")).toHaveCount(1);
 });
 

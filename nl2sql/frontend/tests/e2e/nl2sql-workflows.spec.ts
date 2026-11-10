@@ -2,6 +2,7 @@ import { inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-exp
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
 import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
+import { findFieldLoadFailureViolations } from "../../../../platform/packages/ui/e2e/field-load-failure";
 import {jobProgressEvents, jobProgressTraceId, withJobProgress, withRecordedTrace, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
@@ -14358,6 +14359,34 @@ test("data management CSV upload layout keeps table, file, mode, and execution i
   await expectCsvUploadLayout(mobileCsvPanel);
   await expect(mobileCsvPanel.getByText("CSV / XLSX / XLS ファイルを選択してください。")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
+});
+
+test("CSV のアップロード先テーブルの候補を読み取れないときは、候補の位置に欄ごとの文の失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let tablesFail = true;
+  // 後から登録した route が先に呼ばれる（mockNl2SqlApi の成功の応答を上書きする）。
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    tablesFail
+      ? route.fulfill({ status: 500, json: { error: "表の一覧を読み取れませんでした。", error_code: "database_read_failed" } })
+      : route.fallback()
+  );
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const csvPanel = page.locator("#data-management-panel-csv");
+
+  const failure = csvPanel.getByTestId("data-csv-table-load-failed");
+  // 取得は TanStack Query の自動の再試行の後に失敗になる。見出しは欄ごとの文、backend の文は畳んだ「詳細」。
+  await expect(failure.getByRole("alert")).toHaveText("アップロード先テーブルの候補を読み込めませんでした。", { timeout: 20_000 });
+  await expect(failure.getByText("表の一覧を読み取れませんでした。")).toBeHidden();
+  await expect(csvPanel.getByTestId("data-csv-table-list")).toHaveCount(0);
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  await failure.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`data-csv-table-load-failed-${testInfo.project.name}.png`) });
+
+  tablesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
 });
 
 test("data management CSV upload hides unmatched columns when Oracle reports none", async ({ page }) => {

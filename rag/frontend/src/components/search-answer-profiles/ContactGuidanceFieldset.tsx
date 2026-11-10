@@ -1,5 +1,6 @@
 import { TextField } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { profileContactInheritance, type ContactInheritance } from "@/lib/contact-inheritance";
 import { t } from "@/lib/i18n";
 import { useInheritedAnswerContact } from "@/lib/queries";
@@ -58,7 +59,6 @@ export function ContactGuidanceFieldset({
               helper={t("searchAnswerProfiles.contact.overrideHelper")}
               effective={profileEffectiveContactText(inheritance)}
               sameAs={inheritance.sameAs === "system" ? t("searchAnswerProfiles.contact.sameAsSystem") : null}
-              loadError={system.isError}
               testId="search-answer-profile-contact"
             />
           }
@@ -66,6 +66,16 @@ export function ContactGuidanceFieldset({
           disabled={disabled}
           width="full"
         />
+        {system.isError && system.data === undefined ? (
+          // 継承する窓口（欄の placeholder と「有効な窓口」）を読み取れなかった。欄は入力できるまま、直下に出す（#4817）。
+          <DataLoadFailure
+            error={system.error}
+            fallback={t("contactInheritance.loadError")}
+            onRetry={() => void system.refetch()}
+            layout="field"
+            testId="search-answer-profile-contact-load-failed"
+          />
+        ) : null}
       </div>
     </fieldset>
   );
