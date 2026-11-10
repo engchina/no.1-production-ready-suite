@@ -3693,7 +3693,7 @@ export const ja = {
   "settings.answerPrompts.phase.knowledge": "業務ガイドの準備",
   "settings.answerPrompts.phase.ingestion.description": "ファイル準備の後、図・画像の読み取り、見出しの階層、項目抽出、章節の要約の順です。図の先読みが解析と並行する場合があります。",
   "settings.answerPrompts.phase.knowledge.description": "回答で使う業務ガイドを準備する独立した処理です。文書の取込ごとに実行するものではありません。",
-  "settings.answerPrompts.phase.question.description": "業務ガイドの条件確認、会話を踏まえた書き換え、項目の条件の順です。対象外の段は省略します。",
+  "settings.answerPrompts.phase.question.description": "業務ガイドの条件確認、会話を踏まえた書き換えの順です。対象外の段は省略します。",
   "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面の目録から根拠を足します。",
   "settings.answerPrompts.phase.generation.description": "登録済みQ&Aを選んだ場合は Q&A の経路、それ以外は検索した根拠による生成です。後者は、編集できる「役割と回答の書き方」に固定の指示を必ず足してシステムプロンプトにします。",
   "settings.evaluation.prompts.title": "品質評価のプロンプト",
