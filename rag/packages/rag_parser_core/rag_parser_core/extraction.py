@@ -29,7 +29,14 @@ type ExtractionArtifactValue = (
 # 分割で原文の要素と結合せず、章節の本文に入れない。
 SECTION_SUMMARY_CONTENT_KIND = "section_summary"
 EXTRACTED_FIELD_CONTENT_KIND = "field"
-DERIVED_CONTENT_KINDS = frozenset({SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD_CONTENT_KIND})
+# 文書全体の要約の chunk（#4793）。取込の後に 1 文書 1 回の LLM で作り、chunk として 1 つだけ索引に
+# 入れる（抽出の要素にはしない）。原文ではないので派生として扱うが、指す原文が文書の全体なので、
+# 検索で当たったときは原文の chunk に置き換えず、要約と分かる根拠として渡す
+# （``app.rag.derived_evidence``）。
+DOCUMENT_SUMMARY_CONTENT_KIND = "document_summary"
+DERIVED_CONTENT_KINDS = frozenset(
+    {SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD_CONTENT_KIND, DOCUMENT_SUMMARY_CONTENT_KIND}
+)
 NAV_SUMMARY_KEY = "nav_summary"
 EXTRACTED_FIELD_KEY = "extracted_field"
 # 項目抽出の値を読み取った元の要素の ID。分割で chunk に引き継ぎ、検索で当たった値の chunk を

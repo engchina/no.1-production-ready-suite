@@ -1228,6 +1228,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
         navigation_summary_max_nodes=settings.rag_navigation_summary_max_nodes,
+        document_summary_enabled=settings.rag_document_summary_enabled,
         vision_concurrency=settings.rag_vision_concurrency,
         config_source="runtime",
     )
@@ -1259,6 +1260,7 @@ def _persist_post_parse_settings(settings: Settings) -> None:
             "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
                 settings.rag_navigation_summary_enabled
             ),
+            "RAG_DOCUMENT_SUMMARY_ENABLED": _format_env_bool(settings.rag_document_summary_enabled),
             "RAG_VISION_CONCURRENCY": str(settings.rag_vision_concurrency),
         },
         section_comment="# 文書解析: 解析後の処理",

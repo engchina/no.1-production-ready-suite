@@ -410,6 +410,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
+    # 文書全体の要約（#4793）。読むのは文書の詳細と同じ権限、作り直しは文書の作業の権限。
+    ("GET", f"{_D}/summary"): _DOCUMENT_VIEW,
+    ("POST", f"{_D}/summary"): _DOCUMENT_WORKSPACE,
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
@@ -755,6 +758,7 @@ ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
     "heading_levels": MENU_SETTINGS_PARSER_ADAPTERS,
     "field_extraction": MENU_SETTINGS_PARSER_ADAPTERS,
     "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
+    "document_summary": MENU_SETTINGS_PARSER_ADAPTERS,
 }
 
 

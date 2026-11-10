@@ -46,6 +46,7 @@ from rag_engine.retrieval.search_stages import (
     TEXT_SEARCH_STAGE,
     VECTOR_SEARCH_STAGE,
 )
+from rag_parser_core.extraction import DOCUMENT_SUMMARY_CONTENT_KIND
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
@@ -4149,8 +4150,11 @@ class OracleClient:
                 WHERE src.chunk_set_id = :source AND src.recipe_id = :recipe_id
                     AND src.is_active = 1 AND src.status = 'INDEXED'
                     AND {access_predicate}
+                    AND {not_document_summary}
             """,
                     access_predicate=_oracle_access_predicate_sql(alias="d"),
+                    # 文書全体の要約の chunk は複製しない（切替の後の後段が入れ直す。#4793）。
+                    not_document_summary=_NOT_DOCUMENT_SUMMARY_CHUNK_SQL,
                 ),
                 binds,
             )
@@ -15598,6 +15602,10 @@ def _full_width_ascii(value: str) -> str:
 
 # 新しい版に置き換えた文書(旧版)を除く述語(#1248)。
 _NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"
+# 文書全体の要約の chunk を除く述語(``c`` = rag_chunks。content_kind の無い chunk は残す。#4793)。
+_NOT_DOCUMENT_SUMMARY_CHUNK_SQL = (
+    f"NVL(JSON_VALUE(c.metadata_json, '$.content_kind'), '-') <> '{DOCUMENT_SUMMARY_CONTENT_KIND}'"
+)
 
 
 def _includes_superseded_documents(filters: Mapping[str, str]) -> bool:

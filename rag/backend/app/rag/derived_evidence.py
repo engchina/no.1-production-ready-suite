@@ -7,6 +7,9 @@
 - 章節の要約: 同じ版（chunk_set）の、要約と同じ章節（``section_path``）の chunk。その章節の直下の
   chunk が無ければ、下の章節の chunk。
 - 項目抽出の値: 値を読み取った元の要素（``field_source_element_id``）を含む同じ版の chunk。
+- 文書全体の要約（#4793）: 指す原文が文書の全体で、置き換える原文の chunk を決められない。
+  置き換えず、要約と分かる印（``content_kind=document_summary``）を付けたまま根拠に渡す
+  （``keeps_own_evidence``）。前後の文脈・参照先・章節の拡張の起点にはしない。
 
 原文が読めなければ空を返す（呼び出し側は派生の chunk を根拠から外し、根拠不足として扱う）。
 読む範囲は検索と同じ条件（tenant・ナレッジベース・有効な chunk_set・ページ・旧版の扱い）で、
@@ -20,6 +23,7 @@ from collections.abc import Iterable, Mapping
 from typing import Literal, Protocol
 
 from rag_parser_core.extraction import (
+    DOCUMENT_SUMMARY_CONTENT_KIND,
     EXTRACTED_FIELD_CONTENT_KIND,
     EXTRACTED_FIELD_KEY,
     FIELD_SOURCE_ELEMENT_KEY,
@@ -33,7 +37,7 @@ from app.schemas.search import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-DerivedKind = Literal["section_summary", "field"]
+DerivedKind = Literal["section_summary", "field", "document_summary"]
 
 # 派生の chunk 1 件から根拠に渡す原文の chunk の数の上限（読み順の先頭から。並びは rerank が
 # 決める）。
@@ -79,11 +83,18 @@ def derived_kind(metadata: Mapping[str, object]) -> DerivedKind | None:
     if not is_derived_content(metadata.get("content_kind"), metadata):
         return None
     content_kind = metadata.get("content_kind")
+    if content_kind == DOCUMENT_SUMMARY_CONTENT_KIND:
+        return "document_summary"
     if content_kind == SECTION_SUMMARY_CONTENT_KIND or metadata.get(NAV_SUMMARY_KEY):
         return "section_summary"
     if content_kind == EXTRACTED_FIELD_CONTENT_KIND or metadata.get(EXTRACTED_FIELD_KEY):
         return "field"
     return None
+
+
+def keeps_own_evidence(chunk: RetrievedChunk) -> bool:
+    """原文の chunk に置き換えず、そのまま根拠に渡す派生の chunk か（文書全体の要約。#4793）。"""
+    return derived_kind(chunk.metadata) == "document_summary"
 
 
 def original_chunks[C: RetrievedChunk](chunks: Iterable[C]) -> list[C]:
@@ -105,7 +116,7 @@ async def derived_source_chunks(
 ) -> list[RetrievedChunk]:
     """派生の chunk が指す原文の chunk（読み順。読めない・見つからなければ空）。"""
     kind = derived_kind(chunk.metadata)
-    if kind is None or limit <= 0:
+    if kind is None or kind == "document_summary" or limit <= 0:
         return []
     scope = source_filters(filters)
     try:

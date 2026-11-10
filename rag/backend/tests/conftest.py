@@ -356,6 +356,10 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     # 本番既定は False(PREPROCESSED で停止)。既存テストは preprocess を越えて
     # REVIEW まで進む前提なのでテスト既定は自動進行とし、停止挙動は専用テストで検証する。
     settings.rag_auto_parse_after_preprocess_enabled = True
+    # 文書全体の要約（#4793）は本番既定で有効。取込のたびに LLM と埋め込みを呼び、索引に要約の
+    # chunk を 1 つ足す。既存テストは要約の chunk の無い索引を前提にするのでテスト既定は無効とし、
+    # 要約は専用テスト（test_document_summary*.py）で確かめる。
+    settings.rag_document_summary_enabled = False
 
 
 @pytest.fixture(autouse=True)

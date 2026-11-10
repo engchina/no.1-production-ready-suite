@@ -1323,6 +1323,29 @@ CREATE INDEX rag_recipe_version_log_rcp_idx
 CREATE INDEX rag_recipe_version_log_doc_idx
     ON rag_recipe_version_log (document_id);
 
+-- section: document_summaries
+CREATE TABLE rag_document_summaries (
+    document_id      VARCHAR2(64) NOT NULL,
+    status           VARCHAR2(16) NOT NULL,
+    summary_text     CLOB,
+    topics_json      JSON,
+    input_hash       VARCHAR2(64),
+    input_truncated  NUMBER(1) DEFAULT 0 NOT NULL,
+    input_chars      NUMBER(10),
+    source_chars     NUMBER(10),
+    chunk_set_id     VARCHAR2(64),
+    failure_code     VARCHAR2(40),
+    generating_since TIMESTAMP WITH TIME ZONE,
+    generated_at     TIMESTAMP WITH TIME ZONE,
+    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_document_summaries_pk PRIMARY KEY (document_id),
+    CONSTRAINT rag_document_summaries_document_fk
+        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_document_summaries_status_ck
+        CHECK (status IN ('PENDING', 'READY', 'FAILED')),
+    CONSTRAINT rag_document_summaries_truncated_ck CHECK (input_truncated IN (0, 1))
+);
+
 -- section: citation_feedback
 CREATE TABLE rag_citation_feedback (
     feedback_id       VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,

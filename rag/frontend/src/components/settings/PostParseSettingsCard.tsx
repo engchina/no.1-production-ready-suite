@@ -34,7 +34,8 @@ type PostParseField =
   | "vision_enabled"
   | "heading_level_inference_enabled"
   | "field_extraction_enabled"
-  | "navigation_summary_enabled";
+  | "navigation_summary_enabled"
+  | "document_summary_enabled";
 type PostParseForm = Record<PostParseField, boolean> & {
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（入力中の文字列。#2002）。 */
   vision_concurrency: string;
@@ -56,7 +57,7 @@ export function parseVisionConcurrency(value: string): number | null {
 
 /**
  * 解析の後の処理の順（取込の `_attach_vision` → `_attach_heading_levels` → `_attach_extraction_fields`
- * → `_attach_navigation_tree`）。
+ * → `_attach_navigation_tree`）。最後の「文書の要約」は、分割・埋め込み・索引まで終えた後の後段（#4793）。
  */
 const POST_PARSE_STEPS: readonly {
   field: PostParseField;
@@ -88,6 +89,12 @@ const POST_PARSE_STEPS: readonly {
     hint: "settings.parserAdapters.postParse.navigationSummary.hint",
     anchor: SETTINGS_ANCHORS.navigationSummary,
   },
+  {
+    field: "document_summary_enabled",
+    label: "settings.parserAdapters.postParse.documentSummary.label",
+    hint: "settings.parserAdapters.postParse.documentSummary.hint",
+    anchor: SETTINGS_ANCHORS.documentSummary,
+  },
 ];
 
 function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
@@ -97,6 +104,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
     heading_level_inference_enabled: settings.heading_level_inference_enabled ?? false,
     field_extraction_enabled: settings.field_extraction_enabled,
     navigation_summary_enabled: settings.navigation_summary_enabled,
+    document_summary_enabled: settings.document_summary_enabled ?? true,
     vision_concurrency: String(settings.vision_concurrency ?? VISION_CONCURRENCY_DEFAULT),
   };
 }
@@ -110,8 +118,8 @@ function sameForm(left: PostParseForm, right: PostParseForm) {
 }
 
 /**
- * 文書解析の「解析後の処理」（#528）。Vision・見出し階層・項目抽出・章節規則・章節要約の全体の既定を、
- * 取込の処理順に並べて保存する（保存先は backend/.env。文書のレシピで上書きできる）。
+ * 文書解析の「解析後の処理」（#528）。Vision・見出し階層・項目抽出・章節規則・章節要約・文書の要約の全体の既定を、
+ * 取込の処理順に並べて保存する（保存先は backend/.env。文書の要約のほかは文書のレシピで上書きできる）。
  * Vision の読み取りプロンプトと、項目抽出の項目の定義も、それぞれの項目の中で編集する。
  */
 export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSettingsData }) {
@@ -158,6 +166,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
       heading_level_inference_enabled: form.heading_level_inference_enabled,
       field_extraction_enabled: form.field_extraction_enabled,
       navigation_summary_enabled: form.navigation_summary_enabled,
+      document_summary_enabled: form.document_summary_enabled,
       vision_concurrency: concurrency,
     };
     save.mutate(payload, {
@@ -256,6 +265,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
       </>
     ),
     navigation_summary_enabled: <FeaturePromptDisclosure promptKey="navigation_summary" />,
+    document_summary_enabled: <FeaturePromptDisclosure promptKey="document_summary" />,
   };
 
   return (

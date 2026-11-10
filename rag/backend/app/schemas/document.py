@@ -430,6 +430,33 @@ class DocumentSupersededByRequest(BaseModel):
         return value or None
 
 
+class DocumentContentSummary(BaseModel):
+    """文書全体の要約（#4793）。取込の後に 1 文書 1 回の LLM で作る文書の説明。
+
+    ``status`` は保存済みの結果（``pending`` はまだ結果が無い）、``generating`` は今作っている
+    途中か。作り直しの途中・失敗の後も、同じ版の要約があれば ``ready`` のまま前の文を返す
+    （``failure_code`` に最後の失敗の理由が入る）。
+    """
+
+    status: Literal["pending", "ready", "failed"]
+    generating: bool = False
+    text: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    # 入力の予算を超えたため、文書の先頭の本文と見出しの一覧から作った要約か。
+    input_truncated: bool = False
+    failure_code: str | None = None
+    generated_at: UtcDatetime | None = None
+
+
+class DocumentContentSummaryState(BaseModel):
+    """文書の詳細に出す文書全体の要約の状態（#4793）。"""
+
+    # 取込の後に要約を作る設定（RAG_DOCUMENT_SUMMARY_ENABLED）が有効か。無効なら作り直せない。
+    enabled: bool
+    # まだ作っていない文書は None。
+    summary: DocumentContentSummary | None = None
+
+
 class DocumentDetail(DocumentSummary):
     """詳細表示用。抽出・処理設定はレシピの層（文書レシピの API）から読む（#4617）。"""
 
