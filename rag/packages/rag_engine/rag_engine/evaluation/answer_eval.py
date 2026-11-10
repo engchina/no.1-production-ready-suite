@@ -163,6 +163,7 @@ _NOTE_LABELS = (
     "insufficient_evidence_summary",
     "empty_search_guidance",
     "abstention_guidance",
+    "table_above_note",
 )
 
 

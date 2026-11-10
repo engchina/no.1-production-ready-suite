@@ -38,6 +38,8 @@
   "answer_labels.sheet_location",
   "answer_labels.steps_heading_template",
   "answer_labels.subquestion_heading_template",
+  "answer_labels.table_above_note",
+  "answer_labels.table_source_column",
   "answer_labels.unverified_section",
   "boilerplate.boilerplate_words",
   "boilerplate.business_words",

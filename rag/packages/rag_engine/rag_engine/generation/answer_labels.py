@@ -46,6 +46,9 @@ class AnswerLabels:
     guide_handoff_template: str
     guide_approval_template: str
     guide_acquisition_incomplete_template: str
+    # 冒頭の回答の表の右端の出典の列名と、「資料をもとに導いた結論」で表の題の下に出す案内（#4812）。
+    table_source_column: str
+    table_above_note: str
     # 用言の終わり（「有効期限を過ぎた」）。条件がこれで終わるときは「の」を挟まない (#644)。
     # 観点名 → 利用者向けの語 (#986)。
     aspect_labels: dict[str, str]
@@ -109,6 +112,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         text("unverified_section"),
         text("deadline_section"),
         text("guide_notes_section"),
+        text("table_above_note"),
     )
     return AnswerLabels(
         rules_section=text("rules_section"),
@@ -139,6 +143,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         guide_handoff_template=text("guide_handoff_template"),
         guide_approval_template=text("guide_approval_template"),
         guide_acquisition_incomplete_template=text("guide_acquisition_incomplete_template"),
+        table_source_column=text("table_source_column"),
+        table_above_note=text("table_above_note"),
         aspect_labels={aspect: label for label, aspect in pack.mapping("answer_labels", "aspect_labels").items()},
         structural_line=re.compile(
             "|".join(re.escape(title) for title in titles)
