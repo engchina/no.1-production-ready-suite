@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { LOCAL_CURRENT_USER } from "./fixtures/auth";
 import { MOCK_NOW, emptyUsageReport, expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
+import { DATABASE_READ_FAILED_MESSAGE, failDatabaseReads } from "./fixtures/read-failure";
 
 // #772: 利用状況（Run のモデル利用量の集計）と、Run の詳細の利用量。
 
@@ -209,6 +210,30 @@ test("取得エラーを利用量未記録と混同せず、再試行で内訳�
   await page.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(page.getByTestId("usage-summary")).toContainText("100,000");
 });
+
+// #4222: backend は保存した実行の履歴を読めないとき、手元の実行だけの集計を 200 で返さず、失敗として返す。
+for (const viewport of VIEWPORTS) {
+  test(`集計を読み取れないときは 0 件の集計を出さず、失敗を出して再試行で回復する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedReport(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const reads = await failDatabaseReads(page, "/api/usage");
+    await page.goto("/usage");
+
+    // 自動の再試行（1・2 秒）の後に失敗を出す。
+    const failure = page.locator('[data-failure-kind="other"]');
+    await expect(failure.getByRole("alert")).toContainText(DATABASE_READ_FAILED_MESSAGE, { timeout: 15_000 });
+    await expect(page.getByTestId("usage-summary")).toHaveCount(0);
+    await expect(page.getByTestId("report-source")).toHaveCount(0);
+    await expect(page.getByText("この期間の実行はありません")).toHaveCount(0);
+    await expectNoPageHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`usage-read-failed-${viewport.name}.png`) });
+
+    reads.recover();
+    await failure.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(failure).toHaveCount(0);
+    await expect(page.getByTestId("usage-summary")).toContainText("100,000");
+  });
+}
 
 test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi }) => {
   mockApi.state.runs.push({
