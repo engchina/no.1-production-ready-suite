@@ -43,22 +43,12 @@ test.describe("全画面の横あふれ", { tag: "@responsive" }, () => {
     }
   });
 
-  test("ログイン・パスワード変更・権限なしの画面も横にあふれない", async ({ page, mockApi }) => {
+  // ログインとパスワード変更の画面は auth-login.spec.ts が desktop と 375px で横あふれを測る。
+  // 権限なしの画面は見出しがカードの h2 なので、見出しの段を問わずに待つ。
+  test("権限なしの画面も横にあふれない", async ({ page }) => {
     await page.goto(APP_ROUTES.forbidden);
-    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+    await expect(page.getByRole("heading").first()).toBeVisible();
     await expectNoPageHorizontalOverflow(page, `${APP_ROUTES.forbidden} の横あふれ`);
-
-    const user = mockApi.state.auth.currentUser;
-    if (!user) throw new Error("既定の利用者が無い");
-    mockApi.setCurrentUser({ ...user, force_password_change: true, password_change_allowed: true });
-    await page.goto(APP_ROUTES.passwordChange);
-    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
-    await expectNoPageHorizontalOverflow(page, `${APP_ROUTES.passwordChange} の横あふれ`);
-
-    mockApi.setCurrentUser(null);
-    await page.goto(APP_ROUTES.login);
-    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
-    await expectNoPageHorizontalOverflow(page, `${APP_ROUTES.login} の横あふれ`);
   });
 });
 
