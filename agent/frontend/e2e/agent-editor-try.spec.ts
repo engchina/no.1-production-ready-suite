@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #2515: 業務 Agent の編集画面の「試す」。保存した下書きで会話し、下書きの会話はチャットの会話と分ける。
 
@@ -25,13 +26,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     updated_at: MOCK_NOW,
     ...overrides,
   });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 async function openTryTab(page: Page) {
@@ -81,7 +75,7 @@ for (const viewport of [
     await page.getByRole("tab", { name: "試す" }).click();
     await expect(page.getByText("「続きの質問」への回答です。")).toBeVisible();
 
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-editor-try-${viewport.name}.png`), fullPage: true });
   });
 }

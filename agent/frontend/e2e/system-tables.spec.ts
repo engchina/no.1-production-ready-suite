@@ -1,7 +1,7 @@
-import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 import { openSidebarNav } from "./fixtures/nav";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // 運用設定 > システムテーブル（#751。RAG / NL2SQL と同じ共通のカード）。
 // 旧版の DB（検索・回答プロファイルの割り当ての表が残る）は、削除される内容を確認ダイアログで承認してから更新する。
@@ -10,12 +10,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile-375", width: 375, height: 812 },
 ] as const;
-
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
-}
 
 test(
   "全再作成の削除範囲と保持範囲を操作前と最終確認で示し、キャンセルでは削除しない",
@@ -43,7 +37,7 @@ test(
     await confirmation.fill("RECREATE_AGENT_SYSTEM_TABLES");
     await expect(recreateSection.getByText("確認済み", { exact: true })).toBeVisible();
     await expect(recreate).toBeEnabled();
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await recreateSection.screenshot({ path: testInfo.outputPath("recreate-warning.png") });
     await recreate.click();
     const dialog = page.getByRole("alertdialog");
@@ -53,7 +47,7 @@ test(
     await expect(dialog).toContainText("復元できません");
     await expect(dialog.getByRole("button", { name: "キャンセル", exact: true })).toBeInViewport();
     await expect(dialog.getByRole("button", { name: "すべて再作成", exact: true })).toBeInViewport();
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await dialog.screenshot({ path: testInfo.outputPath("recreate-confirmation.png") });
     expect(mockApi.lastRequest("POST", "/api/settings/database/system-tables/initialize")).toBeUndefined();
     await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
@@ -74,7 +68,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("一部不足").first()).toBeVisible();
       await expect(page.getByText("データを削除する更新があります")).toBeVisible();
       await expect(page.getByText("AGENT_ROLE_BUSINESS_VIEWS").first()).toBeVisible();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await page.getByRole("button", { name: "作成・更新" }).click();
       const dialog = page.getByRole("alertdialog");
@@ -84,7 +78,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("初期化済み").first()).toBeVisible();
       const request = mockApi.lastRequest("POST", "/api/settings/database/system-tables/initialize");
       expect(request?.body).toMatchObject({ recreate: false, allow_destructive: true });
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
   });
 }
@@ -112,7 +106,7 @@ test(
     const actionBox = await initialize.boundingBox();
     const noticeBox = await notice.boundingBox();
     expect(actionBox && noticeBox && noticeBox.y >= actionBox.y + actionBox.height).toBeTruthy();
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
 
     // 状態を取り直したら消す（次の操作まで残す。messaging.md §10.4）。
     await page.getByRole("button", { name: "最新情報を取得" }).click();
@@ -173,7 +167,7 @@ test(
       "AGENT_RUN_FACTS.DATA_TOOL_CALLS",
       "AGENT_RUNTIME_CHECKPOINTS.WRITER_ID",
     ]);
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await missing.screenshot({
       path: testInfo.outputPath(`system-tables-missing-columns-${testInfo.project.name}.png`),
     });
@@ -185,7 +179,7 @@ test(
     await expect(operationAlert).toContainText("更新を再試行しても直りません");
     // 列は戻っていないので、一覧は残す。
     await expect(missing).toBeVisible();
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   },
 );
 

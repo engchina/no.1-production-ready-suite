@@ -1,5 +1,6 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Page, type Route } from "./_helpers/test";
+import { expectNoPageHorizontalOverflow } from "./_helpers/page-overflow";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
@@ -204,16 +205,6 @@ async function mockProfilePage(page: Page, persistenceMode: "memory" | "oracle" 
   );
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
-      )
-    )
-    .toBeTruthy();
-}
-
 const DATABASE_UNAVAILABLE_MESSAGE =
   "データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。";
 const DATABASE_SETTINGS_HINT =
@@ -267,7 +258,7 @@ test("DB 到達不可では Profile を空表示せず ADB 管理へ誘導する
   await expect(page).toHaveURL(/\/settings\/database#adb-management$/);
   await expect(page.locator("#adb-management")).toBeVisible();
   await expect(page.getByRole("button", { name: "起動" })).toBeEnabled();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("DB 到達不可ではシステムテーブル管理も共通の起動案内を表示する", async ({ page }) => {
@@ -285,7 +276,7 @@ test("DB 到達不可ではシステムテーブル管理も共通の起動案�
   await expectDatabaseGate(page);
   await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toHaveCount(0);
   expect(systemTablesRequests).toBe(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("未設定でも共通の起動案内から設定ページを Gate 外で開ける", async ({ page }) => {
@@ -302,7 +293,7 @@ test("未設定でも共通の起動案内から設定ページを Gate 外で�
     actionHref: "/settings/database",
   });
   await expect(page.getByText(/RAG 機能/)).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   // 未設定は接続情報の入力（ページの先頭）へ案内する（#820）。
   await settingsLink.click();
@@ -372,7 +363,7 @@ test("migration 未適用では通常機能を止め、システムテーブル�
     page.locator("#system-tables").locator("span").filter({ hasText: /^未初期化$/ }).first()
   ).toBeVisible();
   expect(persistenceRequests).toBe(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("STOPPED から起動し AVAILABLE 後もサービス利用状態と戻る導線を表示しない", async ({
@@ -442,7 +433,7 @@ test("STOPPED から起動し AVAILABLE 後もサービス利用状態と戻る�
   await expect(page.getByRole("link", { name: "元の画面に戻る" })).toHaveCount(0);
   await expect(page).toHaveURL(/\/settings\/database#adb-management$/);
   expect(recoveryRequests).toBe(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("ADB 起動済みでも設定画面にはサービス利用状態を表示しない", async ({ page }) => {
@@ -518,13 +509,13 @@ test("保存領域が閉じていても設定画面には分離表示と再接�
   await expect(page.getByText(/incremental_schema_search_failed/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "保存領域へ再接続" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "元の画面に戻る" })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(page.locator("#adb-management")).toBeVisible();
   await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible();
   await expect(page.getByText("サービス利用状態")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("明示 memory モードでは利用を許可し再起動で失う警告を常設する", async ({ page }) => {
@@ -575,7 +566,7 @@ test("接続設定の不備は診断コードと補足を示し、ok の診断�
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
   await expect(page.getByText(/診断コード/)).toHaveCount(0);
   await expect(page.getByText(/ORA-12514/)).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("バックエンドの状態確認失敗では再試行だけを出す（設定を直しても解消しないため）", async ({ page }) => {
@@ -702,7 +693,7 @@ test("設定を開けない利用者には導線を出さず、システム管�
   await expect(card.getByText("Autonomous Database: 停止済み", { exact: true })).toBeVisible();
   await expect(card.getByRole("link")).toHaveCount(0);
   await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   status = { status: "setup_required", check: "migration_required", detail: null, adb_lifecycle_state: null };
   await card.getByRole("button", { name: "再試行" }).click();

@@ -1,19 +1,13 @@
-import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
 import { RUNTIME_STORAGE_MEMORY, RUNTIME_STORAGE_PERSISTENT, expect, test } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // 保存先（#839）。保存先がメモリのときは、作成・変更した内容が再起動で消えることを、定義・実行を作る画面と
 // 運用設定の画面に出し、直し方は実行環境の「保存先」に 1 か所だけ書く。DB が設定済みなら DB の設定へは案内しない。
 
 const NOTICE_TITLE = "作成・変更した内容は、バックエンドの再起動で消えます";
 const SETTING = "AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint";
-
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
-}
 
 test("保存しているときは、実行環境に「保存しています」を出し、他の画面に案内を出さない", async ({ page }) => {
   await page.goto("/runtimes");
@@ -45,7 +39,7 @@ test("保存先がメモリなら、各画面に案内を出し、実行環境�
     await expect(notice, path).toContainText("データベースは設定済みですが、保存先がメモリのため");
     await expect(notice, path).not.toContainText("データベースを設定してください");
   }
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.goto("/agents");
   await page.getByTestId("storage-notice-open-runtime").click();
@@ -62,7 +56,7 @@ test("保存先がメモリなら、各画面に案内を出し、実行環境�
   await expect(page.getByTestId("runtime-storage-open-database-settings")).toHaveCount(0);
   // 実行環境の画面には、他の画面の案内（実行環境へのリンク）を重ねない。
   await expect(page.getByTestId("storage-not-persistent-notice")).toHaveCount(0);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("DB も未設定なら、データベースの設定へ案内する（既定の auto なら設定の値は要らない）", async ({ page, mockApi }) => {
@@ -113,7 +107,7 @@ test("実行環境のメニュー権限だけの運用担当も、保存先の�
   await expect(page.getByTestId("builtin-runtime-card")).toBeVisible();
   await expect(page.getByTestId("runtime-storage-fix")).toContainText("保存先にメモリを指定しています");
   await expect(page.getByText("この画面のデータを表示する権限がありません")).toHaveCount(0);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("実行環境を開けない利用者には、管理者への依頼を出す（リンクは出さない）", async ({ page, mockApi }) => {
@@ -144,7 +138,7 @@ test("起動時に直した実行と、読み込めなかった記録の件数�
   await expect(skipped).toContainText("quarantined");
   // バックアップと復元の画面は削除した（#1961）ので、そこへの案内は出さない。
   await expect(page.getByTestId("runtime-storage-open-backup")).toHaveCount(0);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("直した・読み込めなかった記録が無いときは件数を出さない", async ({ page }) => {
@@ -168,5 +162,5 @@ test("checkpoint 全体が読めず memory で起動したときは、退避と�
   await expect(fix).toContainText("全体を読み込めなかった");
   await expect(fix).toContainText("CHECKPOINT_KEY='default'");
   await expect(fix).not.toContainText(SETTING);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });

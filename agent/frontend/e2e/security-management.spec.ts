@@ -3,6 +3,7 @@ import { closeSidebarNav, openSidebarNav } from "./fixtures/nav";
 
 import { ALL_PERMISSION_CODES, dbUser } from "./fixtures/auth";
 import { expect, test } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // ユーザー管理・ロール管理（3製品共通の画面）と Agent の権限管理（#215）。
 // 権限管理は機能権限に加えて、利用できる業務 Agentを PUT /api/security/roles/{id}/access で保存する。
@@ -25,12 +26,6 @@ const SECURITY_ADMIN = dbUser({
   allowed_agent_ids: null,
 });
 
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
-}
-
 /** 編集の画面の保存はフォームの末尾の確定の行（#1786。#618 の PageHeader の右端から移した）。 */
 function editActions(page: Page) {
   return page.locator("[data-form-action-bar][data-testid$='-form-actions']");
@@ -50,7 +45,7 @@ for (const viewport of VIEWPORTS) {
       const users = page.getByTestId("security-users-grid");
       await expect(users.getByText("実行 花子", { exact: true })).toBeVisible();
       await expect(users.getByText("管理 太郎")).toBeVisible();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await page.goto("/settings/security/roles");
       await expect(page.getByRole("heading", { name: "ロール管理", level: 1 })).toBeVisible();
@@ -60,14 +55,14 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("security-roles-editor")).toBeVisible();
       const summary = page.getByTestId("security-roles-permission-summary");
       await expect(summary).toContainText("付与している機能権限: 2 件");
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await summary.getByTestId("security-roles-open-permissions").click();
 
       // 権限管理は同じロールの全幅のエディタを開き、ロール管理の同じロールへ戻る導線を持つ（A 型。#4635）。
       await expect(page).toHaveURL(/\/settings\/security\/permissions\?role=role-operator$/);
       await expect(page.getByRole("heading", { name: "Agent 実行担当", level: 1 })).toBeVisible();
       await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.getByTestId("security-permissions-open-role").click();
       await expect(page).toHaveURL(/\/settings\/security\/roles\?role=role-operator$/);
       await expect(page.getByTestId("security-roles-editor")).toBeVisible();
@@ -92,7 +87,7 @@ for (const viewport of VIEWPORTS) {
 
       await agents.getByRole("option", { name: /経理 Agent/ }).check();
       expect(mockApi.lastRequest("PUT", "/api/security/roles/role-operator/access")).toBeUndefined();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await editActions(page).getByRole("button", { name: "保存" }).click();
       await expect(page.getByText("変更を保存しました。")).toBeVisible();
@@ -154,7 +149,7 @@ for (const viewport of VIEWPORTS) {
       await expect
         .poll(() => (mockApi.lastRequest("PUT", "/api/security/roles/role-operator/access")?.body as { agent_ids?: string[] })?.agent_ids)
         .toEqual(["default", "agent-177"]);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
   });
 }
@@ -183,7 +178,7 @@ test("API キーの管理は専用権限で開け、削除を確定できる", {
   await closeSidebarNav(page);
   await expect(page.getByRole("table", { name: "API キーの一覧" })).toContainText("利用者 A");
   await expect(page.getByTestId("api-key-create")).toHaveCount(0);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))));
   await page.screenshot({ path: testInfo.outputPath("api-keys-admin.png"), fullPage: true });
   await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });

@@ -11,6 +11,7 @@ import {
   findFieldsOffWidthScale,
   measureHorizontalOverflow,
 } from "../../../../platform/packages/ui/e2e/layout-checks";
+import { expectNoPageHorizontalOverflow } from "./_helpers/page-overflow";
 
 function settingsEnvelope(data: unknown) {
   return {
@@ -386,16 +387,6 @@ async function mockNl2sqlSettingsApi(page: Page) {
   );
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
-      )
-    )
-    .toBeTruthy();
-}
-
 async function expectNoElementOverlap(items: Array<{ label: string; locator: Locator }>) {
   const boxes = await Promise.all(
     items.map(async (item) => ({ ...item, box: await item.locator.boundingBox() }))
@@ -453,7 +444,7 @@ async function expectAdbActionButtonsStableDuringOperation(
     { label: "起動ボタン", locator: startButton },
     { label: "停止ボタン", locator: stopButton },
   ]);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 }
 
 async function expectNoAdbWalletPendingStatus(page: Page) {
@@ -757,7 +748,7 @@ test("NL2SQL のシステム設定画面を表示できる", { tag: "@responsive
   await expectOciConfigFieldsAboveOcidFields(page);
   await expectNl2sqlShellFillsViewport(page);
   await expectNoExcessBottomWhitespace(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.goto("/settings/upload-storage");
   await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
@@ -773,12 +764,12 @@ test("NL2SQL のシステム設定画面を表示できる", { tag: "@responsive
   await expect(page.getByLabel("Object Storage リージョン")).toContainText("ap-osaka-1");
   await expect(page.getByLabel("Object Storage ネームスペース")).toHaveValue("exampletenancy");
   await expect(page.getByLabel("Object Storage バケット")).toHaveValue("nl2sql-originals");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
   await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
   await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.goto("/settings/model");
@@ -808,7 +799,7 @@ test("NL2SQL のシステム設定画面を表示できる", { tag: "@responsive
   expect(modelSavedSecretBadgeStyle.className).toContain("border-success-border");
   expect(modelSavedSecretBadgeStyle.className).toContain("bg-success-subtle");
   expect(modelSavedSecretBadgeStyle.className).toContain("text-success-fg");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.goto("/settings/database");
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
@@ -829,7 +820,7 @@ test("NL2SQL のシステム設定画面を表示できる", { tag: "@responsive
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("OCI 認証設定は保存前に必須値と形式を検証する", async ({ page }) => {
@@ -908,7 +899,7 @@ test("OCI 認証設定は保存前に必須値と形式を検証する", async (
   await expect(page.getByText("Object Storage リージョンを選択してください。")).toBeVisible();
   await expect(page.getByText("Object Storage ネームスペースを入力してください。")).toBeVisible();
   expect(storagePatchRequests).toBe(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("アップロード保存先は OCI の region と namespace 不足を保存前に止める", async ({
@@ -949,12 +940,12 @@ test("アップロード保存先は OCI の region と namespace 不足を保�
     page.getByText("OCI 認証設定で Object Storage ネームスペースを設定してください。")
   ).toBeVisible();
   expect(uploadStoragePatchRequests).toBe(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByLabel("Object Storage リージョン")).toBeVisible();
   await expect(page.getByLabel("Object Storage ネームスペース")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("システム設定のテスト成功結果を共通パネルで表示する", async ({ page }, testInfo) => {
@@ -979,7 +970,7 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
   }
   await expect(ociResult).toContainText("Object Storage GetNamespace");
   await expect(ociResult).toContainText("config_file_mode");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.locator("#oci-user-ocid").fill("ocid1.user.oc1..changed");
   await expect(ociResult).toHaveCount(0);
 
@@ -1010,7 +1001,7 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
     .getByText("cohere.rerank-v4.0-fast の設定を確認しました。", { exact: true })
     .locator("xpath=ancestor::*[@data-settings-test-result][1]");
   await expect(rerankResult).toContainText("top_score");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({
     path: testInfo.outputPath("settings-model-test-result-success.png"),
     fullPage: true,
@@ -1040,7 +1031,7 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
   await expect(databaseResult).toContainText("所要時間: 9 ms");
   await expect(databaseResult).toContainText("確認時刻:");
   await expect(databaseResult).toContainText("network_call");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({
     path: testInfo.outputPath("settings-test-result-success.png"),
     fullPage: true,
@@ -1079,7 +1070,7 @@ test("システム設定の失敗と API エラーを共通 danger パネルで�
   await expect(ociResult).toHaveAttribute("data-tone", "danger");
   await expect(ociResult).toContainText("確認ポイント");
   await expect(ociResult).toContainText("不足項目: fingerprint");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.unroute("**/api/settings/model/test");
   await page.route("**/api/settings/model/test", (route) =>
@@ -1107,7 +1098,7 @@ test("システム設定の失敗と API エラーを共通 danger パネルで�
   await expect(modelResult).toContainText("確認ポイント");
   await expect(modelResult).toContainText("TimeoutError");
   await expect(modelResult).toContainText("gateway timeout");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.unroute("**/api/settings/database/test");
   await page.route("**/api/settings/database/test", (route) =>
@@ -1124,7 +1115,7 @@ test("システム設定の失敗と API エラーを共通 danger パネルで�
   await expect(databaseResult).toHaveAttribute("data-tone", "danger");
   await expect(databaseResult).toContainText("DB 接続サービスに到達できません。");
   await expect(databaseResult).toContainText("再試行してください。");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 const OCI_CONNECTIVITY_FAILURES = [
@@ -1223,7 +1214,7 @@ for (const failure of OCI_CONNECTIVITY_FAILURES) {
     await expect(ociResult).toContainText(failure.action);
     if (failure.detail) await expect(ociResult).toContainText(failure.detail);
     expect(testRequests).toBe(1);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 }
 
@@ -1269,13 +1260,13 @@ test("データベース設定は Wallet ZIP の下にサービス名を置き�
   await revealAgain.press("Enter");
   await expect.poll(() => revealCount).toBe(1);
   await expect(password).toHaveAttribute("type", "text");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectAdbManagementAboveDatabaseSettings(page);
   await expectWalletAboveServiceDsn(page);
   await expectDatabaseSupplementalPanelsAbsent(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("データベース設定は Wallet パスワードを保存し、保存済み値を削除できる", async ({
@@ -1331,7 +1322,7 @@ test("データベース設定は Wallet パスワードを保存し、保存済
     clear_wallet_password: true,
   });
   expect(savedRequests[1]).not.toHaveProperty("wallet_password");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("DB パスワード表示ボタンの取得中 icon は上下に浮動しない共有 Spinner を使う", async ({
@@ -1383,7 +1374,7 @@ test("DB パスワード表示ボタンの取得中 icon は上下に浮動し�
 
   revealGate.release();
   await expect(page.locator("#oracle-password")).toHaveAttribute("type", "text");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("データベース設定は接続セキュリティで Wallet mTLS と Walletless TLS を切り替える", async ({
@@ -1404,7 +1395,7 @@ test("データベース設定は接続セキュリティで Wallet mTLS と Wal
   await expect(page.getByTestId("oracle-wallet-upload")).toHaveCount(0);
   await expect(page.getByLabel("Wallet パスワード", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("接続 DSN")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("アップロード保存先は右側情報カラムを表示しない", async ({
@@ -1420,13 +1411,13 @@ test("アップロード保存先は右側情報カラムを表示しない", as
   await expect(page.getByLabel("ローカル保存ディレクトリ")).toHaveValue(
     "/u01/data/production-ready-nl2sql"
   );
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByRole("heading", { name: "保存先状態" })).toHaveCount(0);
   await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
   await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("データベース設定は右側情報カラムを表示しない", { tag: "@responsive" }, async ({
@@ -1450,11 +1441,11 @@ test("データベース設定は右側情報カラムを表示しない", { tag
   await expectAdbManagementAboveDatabaseSettings(page);
   await expectWalletAboveServiceDsn(page);
   await expectDatabaseSupplementalPanelsAbsent(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectDatabaseSupplementalPanelsAbsent(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("OCI 秘密鍵と Wallet ZIP をドラッグ＆ドロップで即時アップロードできる", { tag: "@responsive" }, async ({
@@ -1515,7 +1506,7 @@ test("OCI 秘密鍵と Wallet ZIP をドラッグ＆ドロップで即時アッ�
   await expect(page.getByText("Wallet ZIP をアップロードしました: wallet.zip")).toBeVisible();
   await expect.poll(() => walletUploadCount).toBe(1);
   expect(walletUploadBody).toContain('filename="wallet.zip"');
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("データベース設定の可視読込は共通スケルトン内に経過時間を表示する", async ({
@@ -1536,7 +1527,7 @@ test("データベース設定の可視読込は共通スケルトン内に経�
   await expect(loading.getByRole("timer")).toHaveAttribute("aria-live", "off");
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   gate.release();
   await expect(page.getByLabel("データベースユーザー")).toBeVisible();
   await expect(loading).toHaveCount(0);
@@ -1596,7 +1587,7 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   );
   await expect(page.getByTestId("settings-database-test-result")).toContainText("network_call");
   await expectNoOperationsMemoOrReadiness(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Endpoint URL の公式ドキュメントをキーボードで開き、未保存入力を保持する", async ({
@@ -1629,7 +1620,7 @@ test("Endpoint URL の公式ドキュメントをキーボードで開き、未�
   await endpoint.fill("https://unsaved.example.com/openai/v1");
   await endpoint.press("Tab");
   await expect(docsLink).toBeFocused();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("endpoint-docs-link.png") });
 
   const popupPromise = page.waitForEvent("popup");
@@ -1668,7 +1659,7 @@ test("モデル設定の読込失敗から再試行し、未設定 Endpoint URL 
   await page.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByRole("textbox", { name: "Endpoint URL" })).toHaveValue("");
   await expect(page.getByRole("link", { name: "公式ドキュメント（新しいタブで開く）" })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("モデル設定を3カードごとに独立保存し、非表示設定と未保存入力を保持する", { tag: "@responsive" }, async ({
@@ -1819,7 +1810,7 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   );
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await expect(page.getByRole("button", { name: "OCI Enterprise AI: 保存" })).toBeVisible();
   await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeVisible();
   await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeVisible();
@@ -1880,7 +1871,7 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
   expect(primaryConnection(requests[1].enterprise_ai).clear_api_key).toBe(true);
   await expect(page.getByText("未設定", { exact: true })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("モデル設定はプライマリ接続とセカンダリ接続をタブで切り替え、登録モデルの接続を選んで保存する (#542)", async ({
@@ -1942,7 +1933,7 @@ test("モデル設定はプライマリ接続とセカンダリ接続をタブ�
   for (const connection of enterprise.connections as Array<Record<string, unknown>>) {
     expect(connection).not.toHaveProperty("display_name");
   }
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("登録モデルは入力の上限の隣に出力の上限を持ち、入力の上限を超える値は欄の直下で止める (#1719)", { tag: "@responsive" }, async ({
@@ -2007,7 +1998,7 @@ test("登録モデルは入力の上限の隣に出力の上限を持ち、入�
     [128000, 32768],
   ]);
   expect(requests[0].enterprise_ai).not.toHaveProperty("llm_max_output_tokens");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   if (process.env.MODEL_OUTPUT_SCREENSHOT_DIR && !test.info().project.name.includes("mobile")) {
     // PR 用の画面（表の形になる 1920px の登録モデル）。
     await page.setViewportSize({ width: 1920, height: 1080 });
@@ -2087,7 +2078,7 @@ test("ターシャリ接続は Endpoint URL と API key だけで設定し、登
     Record<string, unknown>
   >;
   expect(models.map((model) => model.connection_id)).toEqual(["primary", "tertiary"]);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key を保持して移行する", async ({
@@ -2175,7 +2166,7 @@ test("Wallet 不足時はページ表示ごとに OCI 自動取得を一度だ�
   ).toBe(false);
   await expect(page.getByText("設定済み", { exact: true })).toBeVisible();
   await expect.poll(() => downloadCount).toBe(1);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Wallet 自動取得の失敗を保持し、キーボードで再取得できる", async ({ page }) => {
@@ -2295,7 +2286,7 @@ test("ADB 起動中は保存ボタンを無効化して保存表示のままに�
 
   startGate.release();
   await expect(page.getByText("データベース 'NL2SQLDB' の起動を開始しました。")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("ADB 停止中は保存ボタンを無効化して保存表示のままにする", { tag: "@responsive" }, async ({ page }) => {
@@ -2339,7 +2330,7 @@ test("ADB 停止中は保存ボタンを無効化して保存表示のままに�
 
   stopGate.release();
   await expect(page.getByText("データベース 'NL2SQLDB' の停止を開始しました。")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("ADB 情報の status=error は lifecycle がなくても表示する", async ({ page }) => {
@@ -2370,11 +2361,11 @@ test("ADB 情報の status=error は lifecycle がなくても表示する", asy
   await expect(alert).toBeVisible();
   await expect(adbCard.getByText("raw-sdk-detail")).toHaveCount(0);
   await expect(adbCard.getByText("OCI ADB")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(alert).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("ADB 情報の not_configured は lifecycle がなくても表示する", async ({ page }) => {
@@ -2404,7 +2395,7 @@ test("ADB 情報の not_configured は lifecycle がなくても表示する", a
 
   const adbCard = page.locator("#adb-management");
   await expect(adbCard.getByRole("status")).toContainText("ADB OCID が設定されていません。");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("ADB のリージョンは ap-tokyo-1 / ap-osaka-1 だけを候補に出す（#660）", async ({ page }) => {
@@ -2436,7 +2427,7 @@ test("ADB のリージョンの保存値が us-chicago-1 でも画面を出し�
   );
   await expect(region).toContainText("us-chicago-1");
   await expect(unsupported).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await region.click();
   const listbox = page.getByRole("listbox", { name: "リージョン", exact: true });
@@ -2471,7 +2462,7 @@ test("ADB 情報の query error をカード内に表示する", async ({ page }
   const alert = adbCard.getByRole("alert").filter({ hasText: apiError });
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("req-adb-info");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("情報を再取得は ADB 情報更新後に Wallet 取得も実行し進行メッセージは出さない", async ({
@@ -2523,11 +2514,11 @@ test("情報を再取得は ADB 情報更新後に Wallet 取得も実行し進�
   await expect(
     page.getByText("Oracle Wallet を OCI から取得し、サーバーへ設定しました。")
   ).toHaveCount(1);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoAdbWalletPendingStatus(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("保存は ADB 情報更新後に Wallet 取得も実行し進行メッセージは出さない", async ({
@@ -2560,7 +2551,7 @@ test("保存は ADB 情報更新後に Wallet 取得も実行し進行メッセ�
   await expect.poll(() => adbRefreshCount).toBe(1);
   await expect.poll(() => walletDownloadCount).toBe(1);
   await expectNoAdbWalletPendingStatus(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   walletGate.release();
 
@@ -2575,7 +2566,7 @@ test("保存は ADB 情報更新後に Wallet 取得も実行し進行メッセ�
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoAdbWalletPendingStatus(page);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("情報を再取得の Wallet 取得失敗は ADB 操作フィードバックとして表示する", async ({
@@ -2634,11 +2625,11 @@ test("情報を再取得の Wallet 取得失敗は ADB 操作フィードバッ�
   await expect(page.getByRole("button", { name: "OCI から Wallet を再取得" })).toHaveCount(
     0
   );
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(adbAlert).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("ADB OCID がない場合は自動取得せず手動アップロードを案内する", async ({ page }) => {
@@ -2669,7 +2660,7 @@ test("ADB OCID がない場合は自動取得せず手動アップロードを�
     "ドラッグ＆ドロップまたは選択"
   );
   await expect.poll(() => downloadCount).toBe(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Select AI Credential を明示確認で作成し、成功状態だけを表示する", async ({
@@ -2718,7 +2709,7 @@ test("Select AI Credential を明示確認で作成し、成功状態だけを�
   const success = card.getByTestId("select-ai-credential-success");
   await expect(success).toContainText("Select AI Credential を作成");
   await expect(success.getByRole("link")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Select AI Credential のリージョンは短い選択の幅で、placeholder が欄に収まる（#1891）", { tag: "@responsive" }, async ({ page }) => {
@@ -2832,7 +2823,7 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
   await expect.poll(() => statusRequests).toBe(initialStatusRequests + 1);
   await expect(card.getByRole("button", { name: "Credential を作成" })).toBeDisabled();
   await expect(card.getByTestId("execution-confirmation-field").getByRole("textbox")).toBeDisabled();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Select AI Credential 状態の取得中は経過時間付きの読み込み表示と Skeleton を出す", async ({
@@ -2861,7 +2852,7 @@ test("Select AI Credential 状態の取得中は経過時間付きの読み込�
   const loading = card.getByRole("region", { name: "Select AI Credential の状態を読み込んでいます" });
   await expect(loading).toBeVisible();
   await expect(loading.getByRole("timer")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   release();
   await expect(loading).toHaveCount(0);
   await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
@@ -2901,7 +2892,7 @@ test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で�
   await retry.click();
   await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2);
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ、旧データを保持する", async ({
@@ -2955,7 +2946,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
   await expect(card.getByRole("button", { name: "再試行" })).toHaveCount(1);
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Select AI Credential API 失敗は固定 alert だけに表示し Toast を重複させない", async ({
@@ -3127,7 +3118,7 @@ test("OCI 初期取得失敗は編集を許可せず、再試行後の遅延保�
   gate.release();
   await expect(user).toBeEnabled();
   await expect(user).toHaveValue("ocid1.user.oc1..edited");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("アップロード保存先は保存中の編集と重複要求を止め、成功後の入力を保持する", async ({ page }) => {
@@ -3164,7 +3155,7 @@ test("アップロード保存先は保存中の編集と重複要求を止め�
   gate.release();
   await expect(path).toBeEnabled();
   await expect(path).toHaveValue("/tmp/review-draft");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("モデルのテスト中は編集・削除・別テスト・保存を止め、編集後は旧結果を消す", async ({ page }) => {
@@ -3191,7 +3182,7 @@ test("モデルのテスト中は編集・削除・別テスト・保存を止�
   await expect(model).toBeEnabled();
   await model.fill("different-model");
   await expect(page.getByText("レビュー対象モデルの確認成功")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Wallet 更新は未保存 DB ユーザーとパスワードを保持し、接続テスト中は入力を固定する", async ({ page }) => {
@@ -3223,7 +3214,7 @@ test("Wallet 更新は未保存 DB ユーザーとパスワードを保持し、
   await expect(user).toBeEnabled();
   await user.fill("NEXT_DRAFT_USER");
   await expect(page.getByText("編集済み接続の確認成功")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Credential 確認は region 変更と実行失敗で解除し、処理中は region を固定する", async ({ page }) => {
@@ -3423,7 +3414,7 @@ test("レビュー補完: システム設定6画面の表示とキーボード�
       : slug === "system-tables" ? page.locator("#system-tables").getByRole("button", { name: "最新情報を取得" })
       : page.getByRole("button", { name: "ライト", exact: true });
     await expect(ready).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await ready.focus();
     await expect(ready).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath(`settings-${slug}.png`), fullPage: true });

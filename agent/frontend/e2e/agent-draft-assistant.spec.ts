@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #2519: 業務の説明から業務 Agent の下書きを作る・公開前の評価の門で断られたときの表示。
 
@@ -25,13 +26,6 @@ const SUGGESTION = {
     "出力の項目を 2 件入れました。回答を文だけで返す業務なら、「出力の項目」から外してください。",
   ],
 };
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function suggest(page: Page, description: string) {
   await page.getByLabel("業務の説明").fill(description);
@@ -68,7 +62,7 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "評価の問い（3 件）" })).toBeVisible();
     await expect(cases).toContainText("質問 A");
     await expect(cases.getByRole("checkbox")).toBeChecked();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-draft-assistant-${viewport.name}.png`), fullPage: true });
 
     await page.getByRole("button", { name: "作成", exact: true }).click();
