@@ -294,7 +294,7 @@ for (const width of [1280, 375]) {
     expect(Math.abs(bounds!.width-reference!.width)).toBeLessThanOrEqual(1);
     expect(await card.evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
 
-    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索"]);
+    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈"]);
     const expected = displayStages.filter((stage) => stage.id !== "support_guide_conditions" && ["question", "retrieval"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);
     for (const stage of expected) {
@@ -628,6 +628,9 @@ for (const theme of ["light", "dark"] as const) {
     await expect(save).toBeEnabled();
     await save.click();
     expect(saved.at(-1)).toMatchObject({retrieval_query_limit: 0});
+    // 保存後のフォームの再作成が終わってから次の編集を始める。
+    await expect(search).toBeEnabled();
+    await expect(reset).toBeDisabled();
     await expect(search).toHaveAccessibleDescription(/0 は追加制限なし/);
     await search.fill("150");
     for (const invalid of ["", "-1", "1.5", "2001"]) {
