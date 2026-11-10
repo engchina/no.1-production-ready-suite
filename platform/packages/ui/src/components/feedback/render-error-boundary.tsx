@@ -2,6 +2,7 @@ import { Component, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { logBrowserDiagnostic, type BrowserDiagnostic } from "../../lib/diagnostic-log";
+import { PageBody } from "../app-shell/PageBody";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 
@@ -31,6 +32,11 @@ export interface RenderErrorBoundaryProps {
   /** エラーの表示に出す範囲の名前（例: カードの見出し）。省略すると汎用の見出し。 */
   label?: string;
   labels?: Partial<RenderErrorBoundaryLabels>;
+  /**
+   * `page`: route の本文を包む境界。エラーの表示を本文の余白（`PageBody`）の中に出す。
+   * `inline`（既定）: カードなどを包む境界。置かれた場所にそのまま出す。
+   */
+  placement?: "inline" | "page";
 }
 
 interface RenderErrorBoundaryState {
@@ -64,8 +70,7 @@ export class RenderErrorBoundary extends Component<RenderErrorBoundaryProps, Ren
     if (!this.state.error) return this.props.children;
     const { label } = this.props;
     const labels = { ...DEFAULT_RENDER_ERROR_BOUNDARY_LABELS, ...this.props.labels };
-    return (
-      <div data-render-error-boundary="">
+    const banner = (
       <Banner
         severity="danger"
         title={label ? labels.titleWithLabel(label) : labels.title}
@@ -77,7 +82,11 @@ export class RenderErrorBoundary extends Component<RenderErrorBoundaryProps, Ren
       >
         {labels.description}
       </Banner>
-      </div>
+    );
+    return this.props.placement === "page" ? (
+      <PageBody data-render-error-boundary="">{banner}</PageBody>
+    ) : (
+      <div data-render-error-boundary="">{banner}</div>
     );
   }
 }

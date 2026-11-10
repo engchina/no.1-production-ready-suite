@@ -239,7 +239,7 @@ function AppLayout() {
       <DatabaseGate>
           {/* ページ本体の描画例外を main 内に閉じ込め、サイドナビと画面遷移を維持する(#67)。
               location をキーにして、別ページへ移動したらエラー状態を自動で解除する。 */}
-          <RenderErrorBoundary key={location.pathname} serviceName="production-ready-rag">
+          <RenderErrorBoundary key={location.pathname} serviceName="production-ready-rag" placement="page">
             <Outlet />
           </RenderErrorBoundary>
       </DatabaseGate>

@@ -321,7 +321,7 @@ function AuthorizedApplication() {
             <KeepAlivePages />
             {/* 本文の描画の例外を main の中に閉じ込め、サイドナビと画面の移動を残す（#4800）。
                 pathname を key にして、別の画面へ移ったらエラーの状態を解く。 */}
-            <RenderErrorBoundary key={location.pathname} serviceName="production-ready-nl2sql">
+            <RenderErrorBoundary key={location.pathname} serviceName="production-ready-nl2sql" placement="page">
             <Routes>
             <Route path={APP_ROUTES.home} element={<Navigate to={auth.hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.query]) ? APP_ROUTES.query : firstAllowedRoute(auth.hasPermission)} replace />} />
             <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
@@ -418,7 +418,7 @@ function KeepAlivePages() {
       ).map((page) => (
         <WorkspacePage key={page.path} page={page.path} active={page.path === pathname}>
           {/* 常時 mount の画面は画面ごとに閉じ込める（pathname の key で作り直すと保持した状態が消える。#4800）。 */}
-          <RenderErrorBoundary serviceName="production-ready-nl2sql">
+          <RenderErrorBoundary serviceName="production-ready-nl2sql" placement="page">
             <Suspense fallback={<RouteLoadingFallback />}>{page.element}</Suspense>
           </RenderErrorBoundary>
         </WorkspacePage>

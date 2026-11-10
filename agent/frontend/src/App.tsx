@@ -250,7 +250,7 @@ function AuthorizedLayout() {
       <DatabaseGate>
         {/* 本文の描画の例外を main の中に閉じ込め、サイドナビと画面の移動を残す（#4800）。
             pathname を key にして、別の画面へ移ったらエラーの状態を解く。 */}
-        <RenderErrorBoundary key={pathname} serviceName="production-ready-agent">
+        <RenderErrorBoundary key={pathname} serviceName="production-ready-agent" placement="page">
           <Suspense fallback={<RouteLoadingFallback />}>
             <Outlet />
           </Suspense>

@@ -16,13 +16,13 @@ function Boom() {
   return <p>本文</p>;
 }
 
-function Harness({ label, routeKey }: { label?: string; routeKey: string }) {
+function Harness({ label, routeKey, placement }: { label?: string; routeKey: string; placement?: "inline" | "page" }) {
   const [, setTick] = useState(0);
   return (
     <div>
       <nav>ナビ</nav>
       <button type="button" onClick={() => setTick((tick) => tick + 1)}>更新</button>
-      <RenderErrorBoundary key={routeKey} serviceName="production-ready-nl2sql" label={label}>
+      <RenderErrorBoundary key={routeKey} serviceName="production-ready-nl2sql" label={label} placement={placement}>
         <Boom />
       </RenderErrorBoundary>
     </div>
@@ -76,5 +76,12 @@ describe("RenderErrorBoundary（#4800）", () => {
     shouldThrow = false;
     act(() => root.render(<Harness routeKey="/b" />));
     expect(container.textContent).toContain("本文");
+  });
+
+  it("placement=page は本文の余白（PageBody）の中に出し、既定（inline）は置かれた場所にそのまま出す", () => {
+    act(() => root.render(<Harness routeKey="/a" placement="page" />));
+    expect(container.querySelector("[data-render-error-boundary]")?.className).toContain("px-4");
+    act(() => root.render(<Harness routeKey="/b" />));
+    expect(container.querySelector("[data-render-error-boundary]")?.className ?? "").toBe("");
   });
 });
