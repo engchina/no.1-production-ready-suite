@@ -1,3 +1,4 @@
+import { exerciseSelectScrollbar } from "./_select-scrollbar";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -553,4 +554,33 @@ test("文書分割の方式のカードは lucide のアイコンで、手描き
   await expectNoPageOverflow(page);
   await group.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("chunking-strategy-icons.png") });
+});
+
+
+test("分割符はスクロールバーとタッチ操作でも閉じず、選択を保って完了・Esc・外点で閉じる", { tag: "@responsive" }, async ({ page }, info) => {
+  await mockChunkingSettings(page);
+  await page.goto("/settings/chunking");
+  await page.getByRole("radio", { name: /固定分割符/ }).click();
+  const input = page.getByRole("combobox", { name: "分割符", exact: true });
+  const list = page.getByRole("listbox", { name: "分割符", exact: true });
+  const toggle = page.locator("[data-searchable-multi-select]").getByRole("button", { name: "一覧を開閉", exact: true });
+  const chips = page.locator("[data-searchable-chips]").getByRole("listitem");
+  const initial = await chips.allTextContents();
+  await toggle.click();
+  await exerciseSelectScrollbar(page, list, Boolean(info.project.use.isMobile));
+  await expect(input).toHaveAttribute("aria-expanded", "true");
+  await expect(chips).toHaveText(initial);
+  await page.keyboard.press("Escape");
+  await expect(list).toBeHidden();
+  await expect(input).toBeFocused();
+  await toggle.click();
+  await page.getByRole("button", { name: "完了", exact: true }).click();
+  await expect(list).toBeHidden();
+  await expect(input).toBeFocused();
+  await toggle.click();
+  await page.getByRole("heading", { name: "戦略別パラメータ", exact: true }).click();
+  await expect(list).toBeHidden();
+  await toggle.click();
+  await exerciseSelectScrollbar(page, list, Boolean(info.project.use.isMobile));
+  await page.screenshot({ path: info.outputPath("delimiter-scrollbar-open.png") });
 });
