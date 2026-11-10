@@ -363,6 +363,22 @@ def test_unfinished_child_is_partial_and_keeps_original_capture() -> None:
     assert summary.completeness == "partial"
 
 
+def test_prior_operation_keeps_its_measured_duration_without_future_start() -> None:
+    from time import time_ns
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    with operation_trace("task", operation_id="synthetic") as summary:
+        with observed_span("prepared", start_time_ns=time_ns() - 2_000_000_000):
+            pass
+        with observed_span("future", start_time_ns=time_ns() + 60_000_000_000):
+            pass
+    prepared = next(span for span in summary.spans if span.operation_name == "prepared")
+    future = next(span for span in summary.spans if span.operation_name == "future")
+    assert prepared.duration_ms >= 2000
+    assert prepared.finished_at >= prepared.started_at
+    assert 0 <= future.duration_ms < 60_000
+
+
 def test_trace_schema_matches_published_contract() -> None:
     import json
     from pathlib import Path

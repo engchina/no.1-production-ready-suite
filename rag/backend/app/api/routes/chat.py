@@ -74,6 +74,7 @@ from app.rag.chat_attachments import attach_to_conversation, delete_conversation
 from app.rag.chat_question_token import (
     context_digest,
     issue_question_token,
+    read_history_rewrite_elapsed,
     read_question_context,
     read_rule_selection_answers,
     read_rule_selection_elapsed,
@@ -84,6 +85,7 @@ from app.rag.history_question import HistoryConfirmation
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
     ChatTurn,
+    PreparedHistoryRewrite,
     RagPipeline,
     history_confirmation_facts,
     scope_with_history_confirmations,
@@ -766,9 +768,12 @@ async def prepare_chat_question(
             return question, token
         question = checked.sanitized_text
         selected_facts: tuple[HistoryConfirmation, ...] = ()
+        rewrite_elapsed: float | None = None
         if history and settings.rag_history_rewrite_enabled:
             pipeline = RagPipeline(settings=settings, guardrails=guardrails)
+            rewrite_started = perf_counter()
             question = await pipeline._safe_rewritten_query(question, history) or question
+            rewrite_elapsed = perf_counter() - rewrite_started
             selected_facts = pipeline._selected_history_facts
         if confirmed_facts is not None:
             confirmed_facts.extend(selected_facts)
@@ -781,6 +786,7 @@ async def prepare_chat_question(
                 binding,
                 question,
                 confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
+                history_rewrite_elapsed_seconds=rewrite_elapsed,
             )
         except SignedUrlUnavailableError:
             return question, None
@@ -803,6 +809,8 @@ class PreparedChatTurn:
     # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
     scope: AnswerScope | None = None
     history_question_prepared: bool = False
+    # 送信の前（確認の提案）に済ませた履歴による補完。処理の経過に同じ段として残す（#4794）。
+    prepared_history_rewrite: PreparedHistoryRewrite | None = None
 
 
 async def _prepare_chat_turn(
@@ -924,10 +932,18 @@ async def _prepare_chat_turn(
         if request.question_context_token
         else (request.content, None)
     )
+    prepared_rewrite_elapsed = (
+        read_history_rewrite_elapsed(
+            settings.app_service_token_secret, request.question_context_token
+        )
+        if request.question_context_token
+        else None
+    )
     if request.question_context_token and request.clarification is not None:
         # token の準備後に新しく答えた条件を、以前の補完句と古い事実で上書きしない。
         prepared_question = request.content
         inherited_facts = []
+        prepared_rewrite_elapsed = None
     # 同輪の明示回答は履歴より優先する。設定文や展示用 context は読み取らない。
     if scope is not None and guide_reply and clarification_log is not None:
         current_confirmation = ChatClarificationRecord.model_validate(clarification_log)
@@ -951,6 +967,13 @@ async def _prepare_chat_turn(
         inherited_facts = [
             fact for fact in inherited_facts if (fact.key or fact.question) not in reset_questions
         ]
+    prepared_history_rewrite = (
+        PreparedHistoryRewrite(
+            elapsed_seconds=prepared_rewrite_elapsed, confirmed_facts=tuple(inherited_facts)
+        )
+        if prepared_rewrite_elapsed is not None
+        else None
+    )
     scope = scope_with_history_confirmations(scope, inherited_facts)
     base_request = SearchRequest(
         query=prepared_question,
@@ -1052,6 +1075,7 @@ async def _prepare_chat_turn(
         history=history,
         user_message=user_message,
         history_question_prepared=request.question_context_token is not None,
+        prepared_history_rewrite=prepared_history_rewrite,
         approved_faq=approved_faq,
         scope=scope,
     )
@@ -1117,6 +1141,7 @@ async def _generate_chat_answer(
             # 会話の添付（#2517）の節・行を根拠の候補に足す。
             attachment_conversation_id=turn.conversation_id,
             history_question_prepared=turn.history_question_prepared,
+            prepared_history_rewrite=turn.prepared_history_rewrite,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(

@@ -10,7 +10,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from time import perf_counter, time
+from time import perf_counter, time, time_ns
 from typing import Any, Literal, cast
 
 from pr_backend_core.chat_history import (
@@ -161,6 +161,18 @@ class ChatTurn:
     content: str
     confirmed_facts: tuple[HistoryConfirmation, ...] = ()
     confirmation_resets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedHistoryRewrite:
+    """送信の前（確認の提案）に済ませた履歴による補完（#4794）。
+
+    送信の側は補完を呼び直さず、処理の経過に同じ段（所要時間・詳細）として残す。補った質問は
+    検索の request（``query`` / ``original_question``）が持つ。
+    """
+
+    elapsed_seconds: float
+    confirmed_facts: tuple[HistoryConfirmation, ...] = ()
 
 
 def history_confirmation_facts(history: Sequence[ChatTurn]) -> dict[str, HistoryConfirmation]:
@@ -388,6 +400,7 @@ class RagPipeline:
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
         history_question_prepared: bool = False,
+        prepared_history_rewrite: PreparedHistoryRewrite | None = None,
         caller_queries: Sequence[str] | None = None,
         complete_evidence: bool = True,
     ) -> None:
@@ -417,6 +430,9 @@ class RagPipeline:
         # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
         self._attachment_conversation_id = attachment_conversation_id
         self._history_question_prepared = history_question_prepared
+        self._prepared_history_rewrite = (
+            prepared_history_rewrite if history_question_prepared else None
+        )
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
         # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取りなど）を呼ばない。
@@ -678,17 +694,23 @@ class RagPipeline:
         # 回答エンジンの前の段(書き換え・抽出項目の条件・添付)の縮退。回答エンジンへ渡し、回答の
         # 診断の degraded_steps に回答の中の補助の処理と同じ形で出す(#3286)。
         degraded = DegradedSteps()
+        prepared_rewrite = self._prepared_history_rewrite
         if (
             history
             and self._settings.rag_history_rewrite_enabled
-            and not self._history_question_prepared
+            and (not self._history_question_prepared or prepared_rewrite is not None)
         ):
+            # 送信の前に済ませた補完は呼び直さず、その結果と所要時間で同じ段を残す（#4794）。
+            # 採用した確認回答は、送信の側が対象範囲（``self._scope``）へ入れ済み。
             rewritten_query = await _observe_stage(
                 trace_id,
                 "history_rewrite",
-                self._safe_rewritten_query(
+                _completed(rewritten_query)
+                if prepared_rewrite is not None
+                else self._safe_rewritten_query(
                     original_query, history, report_degraded=degraded.record_degraded
                 ),
+                prior_elapsed=prepared_rewrite.elapsed_seconds if prepared_rewrite else 0.0,
                 progress_callback=stage_callback,
                 result_details=lambda rewritten: history_rewrite_details(rewritten, history),
                 request_snapshot=lambda: {
@@ -698,7 +720,12 @@ class RagPipeline:
                 result_snapshot=lambda rewritten: {
                     "返却された補完質問": rewritten,
                     "採用した確認回答": [
-                        item.model_dump(mode="json") for item in self._selected_history_facts
+                        item.model_dump(mode="json")
+                        for item in (
+                            prepared_rewrite.confirmed_facts
+                            if prepared_rewrite is not None
+                            else self._selected_history_facts
+                        )
                     ],
                     "縮退の記録（累計）": degraded.steps(),
                 },
@@ -1350,6 +1377,11 @@ class RagPipeline:
         return "" if rewritten == " ".join(query.split()) else rewritten
 
 
+async def _completed[T](value: T) -> T:
+    """済んだ処理の結果を、工程の記録（``_observe_stage``）へ渡す awaitable にする。"""
+    return value
+
+
 def guardrail_stage_outcome(result: GuardrailResult) -> Literal["success", "skipped", "error"]:
     """検査の実施・省略・検査不能を工程の結果へ写す。検出による拒否は完了した検査。"""
     if result.skipped_reason is not None:
@@ -1369,8 +1401,12 @@ async def _observe_stage[T](
     result_outcome: Callable[[T], Literal["success", "skipped", "error"]] | None = None,
     request_snapshot: Callable[[], object] | None = None,
     result_snapshot: Callable[[T], object] | None = None,
+    prior_elapsed: float = 0.0,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。
+
+    ``prior_elapsed`` は、この呼び出しの前に済ませた処理の時間（秒。送信の前に済ませた履歴による
+    補完など）。開始をその分だけ戻し、所要時間に含める。
 
     stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
     (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
@@ -1379,10 +1415,12 @@ async def _observe_stage[T](
     失敗の要約)を付け、画面の処理の経過にする(#3226)。
     """
     kind = stage if stage in PIPELINE_STEP_KINDS else None
+    prior_elapsed = max(0.0, prior_elapsed)
     with observed_span(
         f"rag.{stage}",
         attributes={"pr.stage": stage},
         display=SpanDisplay(kind=kind) if kind is not None else None,
+        start_time_ns=time_ns() - int(prior_elapsed * 1e9) if prior_elapsed else None,
     ) as span:
         if request_snapshot is not None:
             try:
@@ -1393,7 +1431,7 @@ async def _observe_stage[T](
                     {"recording_status": "incomplete", "error_type": type(exc).__name__},
                     restricted=True,
                 )
-        started_at = perf_counter()
+        started_at = perf_counter() - prior_elapsed
         base_attributes = dict(attributes or {})
         await _emit_stage_progress(
             progress_callback,
