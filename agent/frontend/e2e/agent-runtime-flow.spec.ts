@@ -245,12 +245,20 @@ test.describe("AI Agent Control Plane", () => {
       const skillsFailure = page.getByTestId("agent-skills-load-failed");
       await expect(skillsFailure.getByRole("alert")).toHaveText("スキルの候補を読み込めませんでした。");
       expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+      // モデルの失敗とスキルの失敗が両方見える位置で撮る（375px は 2 枚に分ける）。
+      await (viewport.name === "desktop" ? skillsFailure : modelFailure).evaluate((element) =>
+        element.scrollIntoView({ block: "center" })
+      );
+      await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-${viewport.name}.png`) });
+      if (viewport.name !== "desktop") {
+        await skillsFailure.evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.screenshot({ path: testInfo.outputPath(`agent-skills-load-failed-${viewport.name}.png`) });
+      }
       await modelFailure.getByRole("button", { name: "詳細" }).click();
       await expect(modelFailure.getByText("モデルの一覧を読み取れませんでした。")).toBeVisible();
-      await modelFailure.getByRole("button", { name: "詳細" }).click();
       await expectNoHorizontalOverflow(page);
-      await modelFailure.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-${viewport.name}.png`) });
+      await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-details-${viewport.name}.png`) });
+      await modelFailure.getByRole("button", { name: "詳細" }).click();
 
       // 再試行はキーボードで押せる。
       candidatesFail = false;
