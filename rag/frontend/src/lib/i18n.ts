@@ -3,6 +3,80 @@ import { TRACE_DETAILS_JA } from "@production-ready/ui";
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  "evaluation.testsets.modelLoadError": "回答モデルの候補を読み込めませんでした。",
+  "evaluation.testsets.loadError": "テストセットを読み込めませんでした。",
+  "evaluation.testsets.modelDefault": "プロファイルの既定モデル",
+
+  "evaluation.testsets.model": "回答モデル",
+
+  "evaluation.testsets.pendingHelp": "内容を変更した項目は未確認に戻ります。保存と確認は別の操作です。",
+
+  "evaluation.testsets.noItems": "質問を追加してください。",
+
+  "evaluation.testsets.previous": "前の項目",
+
+  "evaluation.testsets.skip": "後で確認する",
+
+  "evaluation.testsets.referenceHelp": "参考回答は自動で標準回答に採用しません。内容を確かめてください。",
+
+  "evaluation.testsets.itemNo": "第 {count} 問",
+
+  "evaluation.testsets.itemSelector": "確認する項目",
+
+  "evaluation.testsets.referenceTab": "参考",
+
+  "evaluation.testsets.editTab": "編集",
+
+  "evaluation.testsets.invalid": "質問と、回答を期待する項目の標準回答を入力してください。",
+
+  "evaluation.testsets.batchHelp": "質問・標準回答・根拠を確認した項目だけを評価に使ってください。",
+
+  "evaluation.testsets.batchTitle": "{count} 問を確認済みにしますか？",
+
+  "evaluation.testsets.batch": "選んだ項目を確認済みにする",
+
+  "evaluation.testsets.deleteHelp": "この項目をテストセットから除きます。保存後に確定します。過去の評価は変わりません。",
+
+  "evaluation.testsets.deleteTitle": "項目を削除しますか？",
+
+  "evaluation.testsets.deleteItem": "この項目を削除",
+
+  "evaluation.testsets.add": "質問を追加",
+
+  "evaluation.testsets.choose": "テストセットを選ぶ",
+
+  "evaluation.testsets.inputSaved": "保存したテストセット",
+
+  "evaluation.testsets.inputExcel": "Excel をアップロード",
+
+  "evaluation.testsets.runHelp": "確認済み {confirmed} 問を使用します。未確認 {pending} 問は含めません。実行時の入力を結果と一緒に保存します。",
+
+  "evaluation.testsets.runData": "評価するデータ",
+
+  "evaluation.testsets.progress": "確認済み {confirmed} / {total} 問 · 未確認 {pending} 問",
+
+  "evaluation.testsets.run": "確認済み {count} 問で評価",
+
+  "evaluation.testsets.continue": "確認を続ける",
+
+  "evaluation.testsets.preview": "取込内容のプレビュー",
+
+  "evaluation.testsets.manualHelp": "空のテストセットを保存して、質問を追加します。新しい項目は未確認から始まります。",
+
+  "evaluation.testsets.importPending": "{count} 問を取り込みます。すべて未確認で保存されます。",
+
+  "evaluation.testsets.importError": "Excel を取り込めませんでした。",
+
+  "evaluation.testsets.import": "評価リクエストの Excel",
+
+  "evaluation.testsets.method.manual": "空のテストセットから作る",
+
+  "evaluation.testsets.method.excel": "Excel から取り込む",
+
+  "evaluation.testsets.method.evaluation": "評価結果から作る",
+
+  "evaluation.testsets.method": "作成方法",
+
   "flow.inspector.longElement": "長い要素の本文を分割して表示しています。前後の内容はページ送りで確認できます。",
   ...TRACE_DETAILS_JA,
   "app.title": "Production Ready RAG",
@@ -4290,7 +4364,7 @@ export const ja = {
   "evaluation.case.errorStage": "工程: {stage}",
   "evaluation.case.errorUnknown": "理由は trace_id で監査ログを確認してください。",
   "evaluation.subtitle":
-    "評価リクエストの Excel の質問で、検索・根拠・回答の品質を確かめます。",
+    "テストセットや Excel の質問で、検索・根拠・回答の品質を確かめます。",
   "evaluation.suite.title": "評価の基準",
   "evaluation.suite.description":
     "合否の判定に使う閾値です。設定の既定の基準を使います。",
@@ -4304,7 +4378,7 @@ export const ja = {
   "evaluation.knowledgeBaseScope.emptySelection": "未選択です。評価するナレッジベースを選んでください。",
   "evaluation.conditions.title": "評価の条件",
   "evaluation.conditions.description":
-    "評価する検索・回答プロファイルを 1 つ選び、評価リクエストの Excel をアップロードして評価を実行します。",
+    "検索・回答プロファイルと評価するデータを選び、モデル・比較条件を確認して評価を実行します。",
   "evaluation.import.label": "評価リクエストの Excel",
   "evaluation.import.dropzone": "Excel ファイルをドラッグ＆ドロップするか、クリックして選択",
   "evaluation.import.dropzoneReplace": "{name} を選択中。別のファイルをドロップかクリックで置き換えます",
@@ -5064,15 +5138,15 @@ export const ja = {
   "evaluation.testsets.original": "元の入力（保存した時点）",
   "evaluation.testsets.noOriginalStandard": "元の標準回答はありません。",
   "evaluation.testsets.back": "一覧に戻る",
-  "evaluation.testsets.title": "テストセットの作成",
-  "evaluation.testsets.description": "本人が実行した評価結果から、標準回答を確認・修正して評価用のデータを作ります。1 件から利用できます。",
-  "evaluation.testsets.new": "新しい下書きを作る",
+  "evaluation.testsets.title": "テストセット",
+  "evaluation.testsets.description": "確認済みの質問を繰り返し評価に使います。未確認の項目は評価に含めません。",
+  "evaluation.testsets.new": "テストセットを作成",
   "evaluation.testsets.saveError": "下書きを保存できませんでした。入力内容を残したまま、接続を確認してもう一度保存してください。",
-  "evaluation.testsets.name": "下書きの名前",
-  "evaluation.testsets.confirmed": "収録の確認",
+  "evaluation.testsets.name": "テストセット名",
+  "evaluation.testsets.confirmed": "確認の進み具合",
   "evaluation.testsets.updated": "更新日時",
-  "evaluation.testsets.empty": "保存した下書きはありません。",
-  "evaluation.testsets.loading": "下書きを読み込んでいます",
+  "evaluation.testsets.empty": "保存したテストセットはありません。",
+  "evaluation.testsets.loading": "テストセットを読み込んでいます",
   "evaluation.testsets.selectHelp": "本人の完了した評価を選び、整理する項目を選んでください。同じ質問も別々の項目として残します。",
   "evaluation.testsets.sources": "元にする品質評価",
   "evaluation.testsets.noSources": "本人が実行した完了済みの評価がありません。",
@@ -5090,7 +5164,7 @@ export const ja = {
   "evaluation.testsets.missingQuestion": "質問を入力してください",
   "evaluation.testsets.source": "元の評価と項目",
   "evaluation.testsets.comparison": "（比較した結果）",
-  "evaluation.testsets.create": "選んだ項目で下書きを保存",
+  "evaluation.testsets.create": "テストセットを保存",
   "evaluation.testsets.edit": "標準回答と根拠を整理する",
   "evaluation.testsets.editHelp": "内容を確認して、項目ごとに収録を確認してください。変更すると確認が解除されます。",
   "evaluation.testsets.saved": "下書きを保存しました。",
@@ -5117,13 +5191,13 @@ export const ja = {
   "evaluation.testsets.pointsHelp": "回答に必要な内容を 1 行ずつ記入します。空欄の場合、指定した要点の網羅を評価しません。",
   "evaluation.testsets.process": "回答の過程",
   "evaluation.testsets.processHelp": "期待する確認や作業の流れです。テンプレートの同じ列に引き継ぎます。",
-  "evaluation.testsets.confirmItem": "この項目の収録を確認する",
+  "evaluation.testsets.confirmItem": "保存して確認し、次へ",
   "evaluation.testsets.isConfirmed": "確認済み",
   "evaluation.testsets.unconfirmed": "未確認",
-  "evaluation.testsets.save": "下書きを保存",
+  "evaluation.testsets.save": "下書きだけ保存",
   "evaluation.testsets.download": "テストデータをダウンロード",
-  "evaluation.testsets.downloadHelp": "確認済みの項目だけを書き出します。「評価の実行」でそのままアップロードして使えます。変更後は保存してください。",
-  "evaluation.tabs.testsets": "テストセットの作成",
+  "evaluation.testsets.downloadHelp": "確認済みの項目だけを書き出します。変更後は保存してください。",
+  "evaluation.tabs.testsets": "テストセット",
 } as const;
 
 export type I18nKey = keyof typeof ja;

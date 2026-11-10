@@ -3,17 +3,19 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from pydantic import ValidationError
 
 from app.rag import evaluation_testsets as service
-from app.rag.evaluation_excel import XLSX_MEDIA_TYPE
+from app.rag.evaluation_excel import EVALUATION_EXCEL_MAX_BYTES, XLSX_MEDIA_TYPE
 from app.rag.request_context import current_audit_request_context
 from app.schemas.common import ApiResponse
+from app.schemas.evaluation import EvaluationImportResult
 from app.schemas.evaluation_testsets import (
     TestSetCreateRequest,
     TestSetDraft,
     TestSetItem,
+    TestSetPrepareRequest,
     TestSetSaveRequest,
     TestSetSourcesRequest,
     TestSetSummary,
@@ -68,31 +70,62 @@ async def drafts() -> ApiResponse[list[TestSetSummary]]:
 @router.post("", response_model=ApiResponse[TestSetDraft], status_code=201)
 async def create(body: TestSetCreateRequest) -> ApiResponse[TestSetDraft]:
     _owner()
+    if body.source_kind == "evaluation":
+        if not body.job_ids or not body.item_ids or body.items:
+            raise HTTPException(status_code=422, detail="評価結果と収録する項目を選んでください。")
+        try:
+            items = await service.source_items(
+                service.get_reader(), body.job_ids, item_ids=set(body.item_ids)
+            )
+        except (ValidationError, service.TestSetError) as exc:
+            raise HTTPException(
+                status_code=422, detail="評価結果の項目を確認してください。"
+            ) from exc
+        by_id = {item.item_id: item for item in items}
+        selected = list(dict.fromkeys(body.item_ids))
+        if any(item_id not in by_id for item_id in selected):
+            raise HTTPException(
+                status_code=422, detail="選んだ項目が見つかりません。選び直してください。"
+            )
+        items = [by_id[item_id] for item_id in selected]
+    else:
+        if body.job_ids or body.item_ids:
+            raise HTTPException(status_code=422, detail="作成方法を選び直してください。")
+        items = [service.manual_item(fields, source_kind=body.source_kind) for fields in body.items]
     try:
-        items = await service.source_items(
-            service.get_reader(), body.job_ids, item_ids=set(body.item_ids)
-        )
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail="入力が保存できる範囲を超えています。項目を分けるか内容を確認してください。",
-        ) from exc
-    except service.TestSetError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    by_id = {item.item_id: item for item in items}
-    selected = list(dict.fromkeys(body.item_ids))
-    if any(item_id not in by_id for item_id in selected):
-        raise HTTPException(
-            status_code=422, detail="選んだ項目が見つかりません。選び直してください。"
-        )
-    try:
-        draft = service.new_draft(body.name, [by_id[item_id] for item_id in selected])
+        draft = service.new_draft(body.name, items)
     except ValidationError as exc:
         raise HTTPException(
             status_code=422, detail="下書きが大きすぎます。項目を分けてください。"
         ) from exc
     await service.get_store().create(draft)
     return ApiResponse(data=draft)
+
+
+@router.post("/import", response_model=ApiResponse[list[TestSetItem]])
+async def import_items(file: Annotated[UploadFile, File()]) -> ApiResponse[list[TestSetItem]]:
+    _owner()
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="Excel（.xlsx）を選んでください。")
+    content = await file.read(EVALUATION_EXCEL_MAX_BYTES + 1)
+    if len(content) > EVALUATION_EXCEL_MAX_BYTES:
+        raise HTTPException(status_code=422, detail="ファイルが大きすぎます。")
+    try:
+        items = await asyncio.to_thread(service.imported_items, content)
+    except (ValidationError, service.TestSetError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=items)
+
+
+@router.post("/{draft_id}/prepare", response_model=ApiResponse[EvaluationImportResult])
+async def prepare(
+    draft_id: str, body: TestSetPrepareRequest
+) -> ApiResponse[EvaluationImportResult]:
+    from app.api.routes.evaluation import prepare_testset
+
+    return ApiResponse(
+        data=await prepare_testset(draft_id, body.revision, body.search_answer_profile_id)
+    )
 
 
 @router.get("/{draft_id}", response_model=ApiResponse[TestSetDraft])

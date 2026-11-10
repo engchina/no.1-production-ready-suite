@@ -233,6 +233,7 @@ export async function chooseEvaluationProfile(page: Page, name: RegExp = /プロ
 
 /** 評価ページの主条件・比較対象の合成プロファイル。 */
 export async function mockEvaluationProfiles(page: Page) {
+  await page.route("**/api/evaluation/models", route => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
   await page.route("**/api/search-answer-profiles**", route => route.fulfill({json: {
     data: {items: ["A", "B"].map((name, i) => ({
       id: i === 0 ? "profile-base" : "profile-1", name: `プロファイル ${name}`,

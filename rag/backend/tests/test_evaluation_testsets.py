@@ -258,3 +258,80 @@ async def test_api_owner_save_reopen_export_and_conflict(monkeypatch: pytest.Mon
         reopened = (await client.get(base + "/" + draft_id)).json()["data"]
         assert reopened["items"][0]["reference_answer"] == "未確認の生成回答"
         assert reopened["items"][0]["confirmed"]
+
+
+def test_atomic_review_add_remove_and_edit_revokes_confirmation() -> None:
+    from app.rag.evaluation_testsets import manual_item
+
+    initial = new_draft("合成のセット", [manual_item(DraftFields())])
+    edit = DraftEdit(
+        item_id=initial.items[0].item_id, question="合成の質問", standard_answer="合成の標準回答"
+    )
+    reviewed = edited_draft(
+        initial,
+        DraftSaveRequest(
+            name=initial.name, revision=1, items=[edit], confirm_item_ids=[edit.item_id]
+        ),
+    )
+    assert reviewed.items[0].confirmed
+    changed = edited_draft(
+        reviewed,
+        DraftSaveRequest(
+            name=reviewed.name,
+            revision=reviewed.revision,
+            items=[edit.model_copy(update={"question": "変更した合成の質問", "confirmed": True})],
+        ),
+    )
+    assert not changed.items[0].confirmed
+    added = edited_draft(
+        changed,
+        DraftSaveRequest(
+            name=changed.name,
+            revision=changed.revision,
+            items=[
+                DraftEdit(
+                    item_id="new-item",
+                    question="追加の合成質問",
+                    standard_answer="合成の回答",
+                    confirmed=True,
+                )
+            ],
+        ),
+    )
+    assert [row.item_id for row in added.items] == ["new-item"]
+    assert added.items[0].source_kind == "manual" and not added.items[0].reference_answer
+    assert not added.items[0].confirmed
+    with pytest.raises((DraftError, ValidationError)):
+        edited_draft(
+            added,
+            DraftSaveRequest(
+                name=added.name,
+                revision=added.revision,
+                items=[DraftEdit(item_id="new-item")],
+                confirm_item_ids=["new-item"],
+            ),
+        )
+
+
+def test_import_is_pending_and_keeps_all_six_columns() -> None:
+    from app.rag.evaluation_testsets import imported_items
+
+    content = evaluation_cases_xlsx(
+        [
+            EvaluationTemplateRow(
+                question="=合成の質問",
+                standard_answer="合成の回答",
+                evidence=[],
+                required_answer_points=["合成の要点"],
+                response_decision="answer",
+                answer_process="合成の手順",
+            )
+        ]
+    )
+    items = imported_items(content)
+    assert len(items) == 1 and not items[0].confirmed
+    assert items[0].source_kind == "excel"
+    assert items[0].question == "=合成の質問"
+    assert items[0].required_answer_points == ["合成の要点"]
+    assert items[0].answer_process == "合成の手順"
+    assert items[0].reference_answer == ""

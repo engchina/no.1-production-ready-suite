@@ -21,3 +21,15 @@
  */
 @source "../node_modules/@production-ready/ui/dist";
 @source "../node_modules/@production-ready/system-settings/dist";
+
+/* テストセットの編集と参考は desktop で並べ、携帯では DOM を保ったまま切り替える。 */
+.testset-review-workspace { display: grid; grid-template-columns: 15rem minmax(0, 1.3fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+.testset-review-workspace > * { min-width: 0; max-height: max(20rem, calc(100dvh - 25rem)); overflow: auto; }
+.testset-mobile-tools { display: none; }
+@media (max-width: 64rem) {
+  .testset-review-workspace { grid-template-columns: minmax(0, 1fr); }
+  .testset-mobile-tools { display: grid; gap: 1rem; }
+  .testset-item-nav, .testset-editor-pane, .testset-reference-pane { display: none; }
+  .testset-mobile-active { display: block; }
+  .testset-review-workspace > * { max-height: none; overflow: visible; }
+}

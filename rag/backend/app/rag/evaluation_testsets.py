@@ -190,16 +190,18 @@ def edited_draft(previous: TestSetDraft, body: TestSetSaveRequest) -> TestSetDra
     if len({item.item_id for item in body.items}) != len(body.items):
         raise TestSetError("同じ項目が重複しています。")
     originals = {item.item_id: item for item in previous.items}
-    if set(originals) != {item.item_id for item in body.items}:
-        raise TestSetError("保存済みの項目をそのまま指定してください。")
+    if not set(body.confirm_item_ids).issubset({item.item_id for item in body.items}):
+        raise TestSetError("確認する項目を選び直してください。")
     items = []
     for edit in body.items:
-        old = originals[edit.item_id]
         fields = TestSetFields.model_validate(edit.model_dump(exclude={"item_id", "confirmed"}))
+        old = originals.get(edit.item_id) or manual_item(fields, item_id=edit.item_id)
         changed = fields != TestSetFields.model_validate(
             old.model_dump(include=set(TestSetFields.model_fields))
         )
-        confirmed = edit.confirmed and not changed
+        confirmed = edit.item_id in body.confirm_item_ids or (
+            edit.item_id in originals and edit.confirmed and not changed
+        )
         items.append(old.model_copy(update={**fields.model_dump(), "confirmed": confirmed}))
     if confirmed_items := [item for item in items if item.confirmed]:
         validate_templates(confirmed_items)
@@ -255,3 +257,26 @@ def get_store() -> TestSetStore:
 
 def get_reader() -> TestSetSourceReader:
     return _READER or OracleTestSetSourceReader()
+
+
+def manual_item(
+    fields: TestSetFields, *, item_id: str | None = None, source_kind: str = "manual"
+) -> TestSetItem:
+    return TestSetItem.model_validate(
+        {
+            **fields.model_dump(),
+            "item_id": item_id or uuid4().hex,
+            "source_kind": source_kind,
+            "confirmed": False,
+            "original": fields.model_dump(),
+        }
+    )
+
+
+def imported_items(content: bytes) -> list[TestSetItem]:
+    parsed = parse_evaluation_workbook(content)
+    if parsed.issues:
+        raise TestSetError(" / ".join(issue.message for issue in parsed.issues))
+    if not parsed.rows or len(parsed.rows) > 200:
+        raise TestSetError("1 件から 200 件までの Excel を選んでください。")
+    return [manual_item(_fields(row), source_kind="excel") for row in parsed.rows]

@@ -393,3 +393,184 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     assert result["case_results"][0]["status"] == "success"
     assert len(flow.artifacts) == 1
     assert flow.artifacts[0]["result_summary"]["case_count"] == 1
+
+
+async def test_manual_and_excel_create_pending_and_reject_foreign_revision(flow: Flow) -> None:
+    response = await flow.client.post(
+        BASE,
+        json={
+            "name": "合成の手入力セット",
+            "source_kind": "manual",
+            "items": [{"question": QUESTION, "standard_answer": STANDARD}],
+        },
+    )
+    assert response.status_code == 201, response.text
+    draft = response.json()["data"]
+    assert not draft["items"][0]["confirmed"]
+    assert draft["items"][0]["source_kind"] == "manual"
+    preview = await flow.client.post(
+        BASE + "/import",
+        files={
+            "file": (
+                "synthetic.xlsx",
+                workbook(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert not preview.json()["data"][0]["confirmed"]
+    assert preview.json()["data"][0]["evidence"] == EVIDENCE
+    response = await flow.client.post(
+        BASE + "/" + draft["draft_id"] + "/prepare",
+        json={"revision": 99, "search_answer_profile_id": "synthetic-profile"},
+    )
+    assert response.status_code == 409
+    response = await flow.client.post(
+        BASE + "/" + "missing" + "/prepare",
+        json={"revision": 1, "search_answer_profile_id": "synthetic-profile"},
+    )
+    assert response.status_code == 404
+
+
+async def test_saved_set_run_uses_confirmed_revision_and_persists_immutable_input(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.rag.evaluation_source_workbooks import get_evaluation_source_workbook_service
+
+    async def profile_knowledge_bases(profile_id: str) -> list[str]:
+        assert profile_id == "synthetic-profile"
+        return ["kb-a"]
+
+    monkeypatch.setattr(
+        evaluation_routes, "_evaluation_profile_knowledge_bases", profile_knowledge_bases
+    )
+
+    async def resolve_profile(
+        request: SearchRequest, settings: Any, history: Any
+    ) -> tuple[SearchRequest, Any]:
+        return request, settings
+
+    runner = EvaluationRunner(
+        pipeline=flow.pipeline, answer_judge=flow.judge, profile_resolver=resolve_profile
+    )
+    monkeypatch.setattr(evaluation_routes, "EvaluationRunner", lambda: runner)
+    draft = await confirm_first(flow, await create_snapshot(flow, two_jobs=True))
+    prepared = await flow.client.post(
+        BASE + "/" + draft["draft_id"] + "/prepare",
+        json={"revision": draft["revision"], "search_answer_profile_id": "synthetic-profile"},
+    )
+    assert prepared.status_code == 200, prepared.text
+    assert len(prepared.json()["data"]["cases"]) == 1
+    # 任意のケースを混ぜた実行は、保存済み入力より優先せず拒否する。
+    invalid = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+            "cases": prepared.json()["data"]["cases"],
+        },
+    )
+    assert invalid.status_code == 422
+    response = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+        },
+    )
+    assert response.status_code == 202, response.text
+    job = response.json()["data"]
+    assert job["total_cases"] == 1 and job["source_workbook_id"]
+    edits = [
+        {key: value for key, value in row.items() if key in DraftEdit.model_fields}
+        for row in draft["items"]
+    ]
+    edits[0]["standard_answer"] = "後から変更した合成回答"
+    saved = await flow.client.put(
+        BASE + "/" + draft["draft_id"],
+        json={"name": draft["name"], "revision": draft["revision"], "items": edits},
+    )
+    assert saved.status_code == 200 and not saved.json()["data"]["items"][0]["confirmed"]
+    with audit_context():
+        original = await get_evaluation_source_workbook_service().load(job["source_workbook_id"])
+    assert parse_evaluation_workbook(original.content).rows[0].standard_answer == STANDARD
+    stale = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+        },
+    )
+    assert stale.status_code == 409
+    await flow.jobs.wait_for(job["job_id"])
+    completed = await flow.client.get("/api/evaluation/jobs/" + job["job_id"])
+    assert completed.json()["data"]["status"] == "SUCCEEDED", completed.text
+    assert len(flow.pipeline.requests) == 1
+
+
+async def test_snapshot_save_failure_prevents_evaluation(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.rag.evaluation_source_workbooks import get_evaluation_source_workbook_service
+
+    draft = await confirm_first(flow, await create_snapshot(flow))
+
+    async def profile_knowledge_bases(profile_id: str) -> list[str]:
+        return ["kb-a"]
+
+    async def cannot_save(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        evaluation_routes, "_evaluation_profile_knowledge_bases", profile_knowledge_bases
+    )
+    monkeypatch.setattr(get_evaluation_source_workbook_service(), "save", cannot_save)
+    response = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+        },
+    )
+    assert response.status_code == 503, response.text
+    assert flow.pipeline.requests == []
+
+
+async def test_explicit_answer_model_is_registered_and_reaches_the_runner(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import search as search_route
+
+    monkeypatch.setattr(
+        search_route,
+        "registered_answer_model_choices",
+        lambda _settings: [
+            {"model_id": "synthetic-model", "display_name": "合成モデル", "kind": "text"}
+        ],
+    )
+    models = await flow.client.get("/api/evaluation/models")
+    assert models.status_code == 200 and models.json()["data"]
+    model_id = models.json()["data"][0]["model_id"]
+    imported = await import_bytes(flow.client, workbook())
+    response = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "cases": imported["cases"],
+            "knowledge_base_ids": ["kb-a"],
+            "answer_model_id": model_id,
+        },
+    )
+    assert response.status_code == 202, response.text
+    await flow.jobs.wait_for(response.json()["data"]["job_id"])
+    assert flow.pipeline.requests[0].model_id == model_id
+    invalid = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={"cases": imported["cases"], "answer_model_id": "synthetic-unregistered-model"},
+    )
+    assert invalid.status_code == 422, invalid.text
+    assert len(flow.pipeline.requests) == 1

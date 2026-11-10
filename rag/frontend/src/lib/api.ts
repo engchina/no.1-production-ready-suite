@@ -2016,6 +2016,9 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
  * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
 export interface EvaluationRunRequestBody {
+  testset_id?: string;
+  testset_revision?: number;
+  answer_model_id?: string;
   cases: EvaluationCase[];
   search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
@@ -4282,6 +4285,7 @@ export const api = {
   getSearchRunTrace: (runId: string, signal?: AbortSignal) =>
     request<TraceSnapshotData>(`/api/search/runs/${encodeURIComponent(runId)}/trace`, { signal }),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
+  listEvaluationModels: () => request<CompareModel[]>("/api/evaluation/models"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
   listProfileAnswerModels: () => request<CompareModel[]>("/api/search-answer-profiles/answer-models"),
 

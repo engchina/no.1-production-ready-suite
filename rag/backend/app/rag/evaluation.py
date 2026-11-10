@@ -318,6 +318,7 @@ class EvaluationRunner:
         time_budget_seconds: float | None = None,
         progress: EvaluationProgressCallback | None = None,
         on_case_result: EvaluationCaseResultCallback | None = None,
+        answer_model_id: str | None = None,
     ) -> EvaluationMetrics:
         """評価ケースを実行し、集計指標を返す。
 
@@ -342,6 +343,7 @@ class EvaluationRunner:
             time_budget_seconds=time_budget_seconds,
             progress=progress,
             on_case_result=on_case_result,
+            answer_model_id=answer_model_id,
         )
 
     async def _run(
@@ -357,6 +359,7 @@ class EvaluationRunner:
         time_budget_seconds: float | None,
         progress: EvaluationProgressCallback | None,
         on_case_result: EvaluationCaseResultCallback | None,
+        answer_model_id: str | None,
     ) -> EvaluationMetrics:
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
@@ -390,6 +393,7 @@ class EvaluationRunner:
                     filters=filters,
                     knowledge_base_ids=knowledge_base_ids,
                     search_answer_profile_id=search_answer_profile_id,
+                    answer_model_id=answer_model_id,
                 )
                 results[case_index] = case_result
                 if on_case_result is not None:
@@ -429,6 +433,7 @@ class EvaluationRunner:
         filters: dict[str, str] | None,
         knowledge_base_ids: Sequence[str] | None,
         search_answer_profile_id: str | None,
+        answer_model_id: str | None = None,
     ) -> EvaluationCaseResult:
         """1 ケース（最初の質問と確認の質問への返答の往復、判定）を実行して結果を返す。
 
@@ -455,6 +460,7 @@ class EvaluationRunner:
             conditions = {**conditions, **turn_conditions}
             request = SearchRequest(
                 query=query,
+                model_id=answer_model_id,
                 top_k=top_k,
                 filters=_case_filters(case, filters),
                 knowledge_base_ids=list(knowledge_base_ids or []),
