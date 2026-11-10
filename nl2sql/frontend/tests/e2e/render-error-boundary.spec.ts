@@ -30,8 +30,8 @@ test("本文の描画の例外はサイドナビを残して本文だけをエ�
   const sidebar = await openSidebarNav(page);
 
   // ナビで別の画面へ移ると（再読み込みなし）、エラーの状態を解いてその画面を出す。
-  await sidebar.getByRole("link", { name: "外観と証明書" }).click();
-  await expect(page).toHaveURL(/\/settings\/appearance$/);
+  await sidebar.getByRole("link", { name: "権限管理" }).click();
+  await expect(page).toHaveURL(/\/settings\/security\/permissions$/);
   await expect(page.locator("[data-render-error-boundary]")).toHaveCount(0);
   await expect(page.locator("main h1")).toBeVisible();
 });
