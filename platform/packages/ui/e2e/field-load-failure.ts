@@ -84,9 +84,11 @@ export async function measureFieldLoadFailures(page: EvaluatePage): Promise<Fiel
       return base;
     };
     const coarse = window.matchMedia("(pointer: coarse)").matches;
+    // 見えているものだけ。閉じた Disclosure（`<details>`）の中身は箱の寸法を持つことがあるので、
+    // `checkVisibility`（display: none と content-visibility: hidden の祖先を見る）でも確かめる。
     const roots = Array.from(document.querySelectorAll<HTMLElement>('[data-failure-layout="field"]')).filter((el) => {
       const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== "hidden";
+      return rect.width > 0 && rect.height > 0 && el.checkVisibility({ visibilityProperty: true });
     });
     return roots.map((root) => {
       const rect = root.getBoundingClientRect();
