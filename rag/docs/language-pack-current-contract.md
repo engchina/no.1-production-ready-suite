@@ -69,6 +69,79 @@
 `current` の発行の後も残る制約: 旧版は保存した内容のままなので、個別の取得・比較・復元は不適合のまま 409 です。旧版に固定された成果物は CHUNK / INDEX で再利用できず、再処理するときは「ファイル準備」か「抽出」から始めます。
 
 
+### 配備先でそのまま実行するコマンド
+
+`system_schema_cli check` が「言語資源が現行の契約に合いません」と示した場合の手順です。配備先の `opc` で実行します。repo の場所が異なる場合は最初の `cd` だけ合わせます。`initialize --allow-destructive` や索引の再作成は、この不適合の修復には使いません。
+
+**1. 読み取りだけの確認。** dry-run の結果を repo の `tmp/` に保存します。
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite
+mkdir -p tmp/language-pack-repair
+cd rag/backend
+set -o pipefail
+.venv/bin/python -m app.rag.language_pack_repair_cli \
+  | tee ../../tmp/language-pack-repair/plan.json
+```
+
+`status=ready`、`blockers=[]` を確認し、`missing_fields`・`retired_fields`・`draft_changes_kept` を利用者へ示します。`current_conforms=true` かつ `draft_conforms=true` なら修復は不要です。
+
+**2. 適用前のバックアップ確認（読み取りだけ）。** 件数と完了時刻だけを表示し、接続情報・DB 名・OCID は表示しません。
+
+```bash
+.venv/bin/python - <<'PYBACKUP'
+from app.config import get_settings
+from pr_system_settings.oci_database import OciDatabaseClient
+
+settings = get_settings()
+client = OciDatabaseClient(settings)._client()
+backups = client.list_autonomous_database_backups(
+    autonomous_database_id=settings.oracle_adb_ocid,
+).data
+available = [item for item in backups if item.lifecycle_state == "ACTIVE"]
+print("available_backup_count:", len(available))
+print("latest_backup_completed:", max(
+    (str(item.time_ended) for item in available if item.time_ended),
+    default="none",
+))
+PYBACKUP
+```
+
+バックアップが使えることを確認し、**この環境への今回の適用について利用者の明示の許可を得てから**、次へ進みます。バックアップの確認に失敗した場合や `none` の場合は、復旧手段を確認するまで適用しません。
+
+**3. 許可後の適用。** 保存した dry-run の版 ID と下書きの番号をそのまま渡すため、手入力は不要です。途中に別の変更があれば CLI が書き込まずに止まります。その場合は 1 からやり直します。
+
+```bash
+.venv/bin/python - <<'PYAPPLY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+plan = json.loads(Path("../../tmp/language-pack-repair/plan.json").read_text())
+if plan.get("status") != "ready" or plan.get("blockers"):
+    raise SystemExit("dry-run が ready ではありません。適用せずに止めます。")
+if plan.get("repair_target") not in {"current", "draft"}:
+    raise SystemExit("修復の対象がありません。適用せずに止めます。")
+subprocess.run([
+    sys.executable, "-m", "app.rag.language_pack_repair_cli", "--apply",
+    "--expected-current-id", str(plan["current_release_id"]),
+    "--expected-draft-revision", str(plan["draft_revision"]),
+], check=True)
+PYAPPLY
+```
+
+**4. 修復後の確認。** `status=ready` と各サービスの `active` を確認します。続けて管理者でログインし、ナレッジベース・文書・チャットの一覧を開きます。health の成功だけでは、言語資源の不適合で API が 409 になる問題を検出できません。
+
+```bash
+.venv/bin/python -m app.rag.system_schema_cli check
+systemctl is-active production-ready-rag-backend.service \
+  production-ready-nl2sql-backend.service \
+  production-ready-agent-backend.service nginx.service
+```
+
+この修復で既存値と下書きの未公開の変更を保ち、`ingest_hash_unchanged=true` なら文書の再取込は不要です。古い log に `ORA-29855` が残っていても、それだけで索引を作り直さず、現在の `system_schema_cli check` の結果を基準に切り分けます。
+
 ## 公開履歴の一覧と内容の利用
 
 履歴一覧は保存時の版番号・hash・公開情報などのメタデータだけを返します。保存JSONの補完や解釈をせず、一覧に表示できることは内容の検証成功や実行可能を意味しません。旧版が不適合でも、正常な現在版と草稿がある環境では履歴の記録を確認できます。
