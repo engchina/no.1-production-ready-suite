@@ -50,7 +50,7 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
       CHAT_PROGRESS_DEFINITIONS
     );
     expect(steps.map((item) => [item.label, item.status, item.meta ?? null])).toEqual([
-      ["前の会話を踏まえて質問を補う", "done", null],
+      ["質問を補い、検索が要るかを分ける", "done", null],
       ["検索文から根拠の候補を集める", "running", null],
       ["質問から対象と条件を読み取る", "failed", "LLM 1 回・送信 2 回"],
     ]);

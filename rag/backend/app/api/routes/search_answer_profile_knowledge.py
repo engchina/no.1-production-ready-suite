@@ -682,12 +682,8 @@ async def post_clarification_suggest(
             return response(ClarificationSuggestionsData())
         # 補完が検索の要らない発話（挨拶・雑談）と分けたら、送信の側で検索を飛ばすので確認も
         # 出さない（#4787。条件の読み取りのモデルも呼ばない）。
-        if (
-            context_token
-            and settings.rag_small_talk_skip_enabled
-            and skips_retrieval(
-                read_history_intent(settings.app_service_token_secret, context_token)
-            )
+        if context_token and skips_retrieval(
+            read_history_intent(settings.app_service_token_secret, context_token)
         ):
             return response(ClarificationSuggestionsData())
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)

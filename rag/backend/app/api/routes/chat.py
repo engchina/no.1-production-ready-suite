@@ -771,7 +771,8 @@ async def prepare_chat_question(
         selected_facts: tuple[HistoryConfirmation, ...] = ()
         rewrite_elapsed: float | None = None
         history_intent: HistoryIntent = "search"
-        if history and settings.rag_history_rewrite_enabled:
+        # 履歴が無い 1 回目も、同じ 1 回の呼び出しで質問を整え、検索が要るかを分ける（#4787）。
+        if settings.rag_history_rewrite_enabled:
             pipeline = RagPipeline(settings=settings, guardrails=guardrails)
             rewrite_started = perf_counter()
             question = await pipeline._safe_rewritten_query(question, history) or question

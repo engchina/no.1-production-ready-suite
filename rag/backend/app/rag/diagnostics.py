@@ -95,8 +95,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # 回答の LLM の時間の短縮(#1499)。
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
-        # 挨拶・雑談の発話で検索を飛ばす(#4787)。
-        "small_talk_skip_enabled": resolved_settings.rag_small_talk_skip_enabled,
         "search_top_k_default": resolved_settings.rag_search_top_k_default,
         "guardrails_input_enabled": resolved_settings.rag_guardrails_input_enabled,
         "guardrails_output_enabled": resolved_settings.rag_guardrails_output_enabled,

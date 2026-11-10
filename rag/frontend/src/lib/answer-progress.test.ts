@@ -39,7 +39,7 @@ describe("answer-progress（Issue 375）", () => {
     expect(answerProgressLabel([])).toBe("回答を生成しています（検索の準備）");
     expect(answerProgressLabel([], { generateAnswer: false })).toBe("検索しています（検索の準備）");
     expect(answerProgressLabel([{ stage: "history_rewrite", outcome: "started" }])).toBe(
-      "回答を生成しています（前の会話を踏まえて質問を補う）"
+      "回答を生成しています（質問を補い、検索が要るかを分ける）"
     );
     expect(answerProgressLabel([{ stage: "retrieval", outcome: "started" }])).toBe(
       "回答を生成しています（文書から根拠の候補を検索する）"

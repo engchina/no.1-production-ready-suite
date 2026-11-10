@@ -61,7 +61,7 @@ def history_rewrite_details(
 
     turns = sum(1 for _ in history)
     fields: list[tuple[str, object]] = [
-        ("参照した会話", f"{turns} 件の発言"),
+        ("参照した会話", f"{turns} 件の発言" if turns else "なし（会話の最初の発話）"),
         ("書き換えた質問", rewritten) if rewritten else ("結果", "書き換えなし（元の質問のまま）"),
     ]
     reason = SMALL_TALK_REASONS.get(intent)

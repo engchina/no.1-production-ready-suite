@@ -1,4 +1,4 @@
-"""検索の要らない発話（挨拶・雑談）は、補完と同じ呼び出しで分けて検索を飛ばす（#4787）。"""
+"""チャットは毎回 1 回の呼び出しで質問を補い、挨拶・雑談の検索を飛ばす（#4787）。"""
 
 import json
 from time import perf_counter
@@ -22,12 +22,16 @@ from app.rag.chat_question_token import (
     with_rule_selection_answers,
 )
 from app.rag.guardrails import GuardrailResult
-from app.rag.history_question import HistoryRewrite
+from app.rag.history_question import EMPTY_CONVERSATION_HISTORY, HistoryRewrite
 from app.rag.pipeline import ChatTurn, PreparedHistoryRewrite, RagPipeline
 from app.schemas.search import SearchRequest
 from tests.test_answer_engine import FakeGenAi, SavingOracle
 
 SECRET = "synthetic-signing-key-" * 3
+HISTORY = [
+    ChatTurn(role="USER", content="合成の質問 A"),
+    ChatTurn(role="ASSISTANT", content="合成の回答 A"),
+]
 
 
 @pytest.fixture(autouse=True)
@@ -46,10 +50,13 @@ class FakeLlm:
         self.intent = intent
         self.reply = reply
         self.calls: list[str] = []
+        self.rewrite_contexts: list[str] = []
 
     async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
         name = kwargs["response_schema_name"]
         self.calls.append(name)
+        if name == "history_rewrite":
+            self.rewrite_contexts.append(context)
         if name == "history_rewrite":
             return json.dumps({"question": prompt, "confirmed_fact_ids": [], "intent": self.intent})
         if isinstance(self.reply, Exception):
@@ -65,6 +72,7 @@ async def _run(
     prepared: PreparedHistoryRewrite | None = None,
     scope: AnswerScope | None = None,
     approved_faq: tuple[str, str] | None = None,
+    history: list[ChatTurn] | None = HISTORY,
 ) -> tuple[Any, TraceSummary, list[str]]:
     engine_queries: list[str] = []
 
@@ -106,10 +114,7 @@ async def _run(
                 allowed=True, sanitized_text=request.query, findings=[]
             ),
             token_callback=None,
-            history=[
-                ChatTurn(role="USER", content="合成の質問 A"),
-                ChatTurn(role="ASSISTANT", content="合成の回答 A"),
-            ],
+            history=history,
         )
     saved = TraceSummary.model_validate_json(summary.model_dump_json())
     return response, saved, engine_queries
@@ -142,7 +147,7 @@ async def test_small_talk_skips_retrieval_and_replies_without_citations(
 
 
 @pytest.mark.parametrize(
-    "case", ["search-intent", "disabled", "reply-failed", "empty-reply", "scope", "approved-faq"]
+    "case", ["search-intent", "reply-failed", "empty-reply", "scope", "approved-faq"]
 )
 async def test_retrieval_runs_when_not_safely_skippable(
     monkeypatch: pytest.MonkeyPatch, case: str
@@ -155,16 +160,9 @@ async def test_retrieval_runs_when_not_safely_skippable(
         if case == "empty-reply"
         else "合成の応答です。",
     )
-    settings = Settings(
-        _env_file=None,
-        rag_history_rewrite_enabled=True,
-        rag_auto_field_filter_enabled=True,
-        rag_small_talk_skip_enabled=case != "disabled",
-    )
     response, summary, engine_queries = await _run(
         monkeypatch,
         llm,
-        settings=settings,
         scope=AnswerScope(context="合成の確認") if case == "scope" else None,
         approved_faq=("合成の FAQ", "合成の FAQ の回答") if case == "approved-faq" else None,
     )
@@ -210,3 +208,54 @@ def test_token_carries_only_known_small_talk_intent() -> None:
     assert read_history_intent(SECRET, issue_question_token(SECRET, binding, "合成の質問")) == (
         "search"
     )
+
+
+async def test_first_turn_goes_through_the_same_single_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """会話の 1 回目（空の履歴）も、補完と同じ 1 回の呼び出しで挨拶を分けて検索を飛ばす。"""
+    llm = FakeLlm(intent="greeting")
+    response, summary, engine_queries = await _run(monkeypatch, llm, history=[])
+    assert llm.calls == ["history_rewrite", "small_talk_reply"]
+    # 履歴が無いときは、空の履歴の形で渡す（指示が履歴を前提にしても読める入力にする）。
+    assert llm.rewrite_contexts == [EMPTY_CONVERSATION_HISTORY]
+    assert engine_queries == []
+    assert response.citations == []
+    rewrite = _stage(summary, "history_rewrite")
+    fields = {f.label: f.value for f in rewrite.display.details.fields}
+    assert fields["参照した会話"] == "なし（会話の最初の発話）"
+    assert _stage(summary, "small_talk_reply").status == "done"
+
+
+async def test_first_turn_question_is_searched_with_the_original_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = FakeLlm(intent="search")
+    response, summary, engine_queries = await _run(monkeypatch, llm, history=[])
+    assert llm.calls == ["history_rewrite"]
+    assert engine_queries == ["field_filter", "合成の挨拶"]
+    assert response.answer == "合成の根拠つき回答"
+    assert response.diagnostics.answer["rewritten_question"] == ""
+
+
+@pytest.mark.parametrize("case", ["no-history-argument", "rewrite-disabled"])
+async def test_paths_without_rewrite_do_not_classify(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """RAG 検索など履歴を渡さない経路と、書き換えが無効のときは、呼び出しを足さない。"""
+    llm = FakeLlm(intent="greeting")
+    settings = Settings(
+        _env_file=None,
+        rag_history_rewrite_enabled=case != "rewrite-disabled",
+        rag_auto_field_filter_enabled=True,
+    )
+    response, summary, engine_queries = await _run(
+        monkeypatch,
+        llm,
+        settings=settings,
+        history=None if case == "no-history-argument" else [],
+    )
+    assert llm.calls == []
+    assert _stage(summary, "history_rewrite") is None
+    assert engine_queries == ["field_filter", "合成の挨拶"]
+    assert response.answer == "合成の根拠つき回答"

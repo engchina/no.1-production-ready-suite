@@ -33,6 +33,9 @@ class HistoryRewrite(BaseModel):
     intent: HistoryIntent = "search"
 
 
+# 前のやり取りが無いとき（会話の 1 回目）に渡す、空の履歴の形（#4787）。
+EMPTY_CONVERSATION_HISTORY = '<conversation_history untrusted="true">\n</conversation_history>'
+
 HISTORY_REWRITE_SYSTEM_PROMPT = (
     "## Step 1: 最新の質問を読む\n"
     "question は利用者の最新の質問です。会話履歴を読まなくても意味が通り、そのまま検索に使える"
@@ -40,6 +43,8 @@ HISTORY_REWRITE_SYSTEM_PROMPT = (
     "対象・条件・否定・比較・すべての小問を確認します。条件の変更や話題の切替は最新の質問を"
     "優先し、無関係になった過去の条件を引き継ぎません。\n\n"
     "## Step 2: 履歴で省略を補う\n"
+    "conversation_history にやり取りが無いときは、補う対象が無いので question を"
+    "そのまま使います。\n"
     "指示語（「それ」「その」「前の」など）と省略を、履歴から一意に分かる対象の名前に置き換えます。"
     "対象の名前・用語・番号は履歴の表記のまま写し、言い換え・要約をしません。"
     "利用者が明示した条件を使い、過去の回答の推測を利用者の事実にしません。"

@@ -1149,7 +1149,7 @@ for (const theme of ["light", "dark"] as const) {
     });
     const progress = [
       { ...step("s0", "s0", 0, 9), name: "rag.answer", parent_id: undefined, root: true },
-      // 前の会話を踏まえて質問を補うの詳細（#2341。パイプラインの工程の詳細）。
+      // 質問を補い、検索が要るかを分けるの詳細（#2341。パイプラインの工程の詳細）。
       step("s1", "history_rewrite", 0, 0.4, undefined, {
         fields: [
           { label: "参照した会話", value: "2 件の発言" },
@@ -1216,7 +1216,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(nestedDetails).toContainText("検索文: 2 本");
     await nestedToggle.click();
     await expect(nestedDetails).toBeHidden();
-    // パイプラインの工程（前の会話を踏まえて質問を補う）の詳細も同じ形で開ける（#2341）。
+    // パイプラインの工程（質問を補い、検索が要るかを分ける）の詳細も同じ形で開ける（#2341）。
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
     await expect(page.getByTestId("chat-answer-progress-step-s1-details")).toContainText("合成の書き換えた質問");
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
@@ -1225,7 +1225,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(bars).toHaveCount(5);
     if ((page.viewportSize()?.width ?? 1280) >= 1280) await expect(bars.first()).toBeVisible();
     else await expect(bars.first()).toBeHidden();
-    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("前の会話を踏まえて質問を補う");
+    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("質問を補い、検索が要るかを分ける");
     // 状態は英語の生の値ではなくアイコンと読み上げの文言で示す。「実行記録」の表示は無い。
     await expect(process.getByText(/complete/)).toHaveCount(0);
     await expect(page.getByText(/実行記録/)).toHaveCount(0);
@@ -1248,6 +1248,75 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+// #4787: 挨拶・雑談と分けた発話は検索を飛ばす。処理の経過に「検索せずに短く応じる」と理由を出し、根拠の一覧は出さない。
+test("挨拶への応答は処理の経過に「検索せずに短く応じる」を出し、根拠を出さない（#4787）", { tag: "@responsive" }, async ({ page }) => {
+  const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
+  let seq = 0;
+  const step = (stepId: string, kind: string, start: number, end: number, details?: Record<string, unknown>) => ({
+    schema_version: 1,
+    seq: ++seq,
+    target_id: "a1",
+    attempt: 0,
+    emitted_at: at(end),
+    type: "step",
+    step_id: stepId,
+    kind,
+    status: "done",
+    started_at: at(start),
+    finished_at: at(end),
+    ...(details ? { details } : {}),
+    name: `rag.${kind}`,
+    parent_id: "s0",
+    trace_id: SPAN_TRACE_ID,
+  });
+  const progress = [
+    { ...step("s0", "s0", 0, 3), name: "rag.answer", parent_id: undefined, root: true },
+    step("s1", "history_rewrite", 0, 1.2, {
+      fields: [
+        { label: "参照した会話", value: "なし（会話の最初の発話）" },
+        { label: "結果", value: "書き換えなし（元の質問のまま）" },
+        { label: "発話の種類", value: "挨拶・お礼（検索の要らない発話）" },
+      ],
+    }),
+    step("s2", "small_talk_reply", 1.2, 3, {
+      fields: [{ label: "結果", value: "挨拶・お礼のため検索せずに応じました（引用なし）" }],
+    }),
+    { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(3), type: "terminal", status: "done" },
+  ];
+  const reply = "合成の挨拶への短い応答です。";
+  await mockChat(page, "ready", [
+    { ...userMessage, content: "合成の挨拶" },
+    { ...assistantMessage, content: reply, citations: [], progress },
+  ]);
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  if (await history.isVisible().catch(() => false)) {
+    await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
+  }
+
+  await expect(page.getByText(reply).first()).toBeVisible();
+  const summary = page.getByTestId("chat-answer-progress-summary");
+  await expect(summary).toHaveText("処理の経過（2 ステップ・3.0 秒）");
+  await summary.click();
+  const process = page.getByRole("region", { name: "処理の経過" });
+  await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("質問を補い、検索が要るかを分ける");
+  const skipped = page.getByTestId("chat-answer-progress-step-s2");
+  await expect(skipped).toContainText("検索せずに短く応じる");
+  // 検索しなかった理由は、畳んだ行の結果にも出る。
+  await expect(process.locator("[data-run-result-summary]")).toHaveText([
+    "書き換えなし（元の質問のまま）",
+    "挨拶・お礼のため検索せずに応じました（引用なし）",
+  ]);
+  await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
+  await expect(page.getByTestId("chat-answer-progress-step-s1-details")).toContainText("挨拶・お礼（検索の要らない発話）");
+  // 検索していないので、根拠の一覧（AI に渡した件数）は出ない。
+  await expect(page.locator("summary").filter({ hasText: /AI に渡した/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブなし）で、カードの「根拠を表示」でパネルを開く（#2388）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // chunk の ID は「文書 ID:chunk set の hash:番号」の長い文字列。既定では画面に出さない。
   const longId = (n: number) => `doc-1:${"a1b2c3d4".repeat(8)}:${n}`;

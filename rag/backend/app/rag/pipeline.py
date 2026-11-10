@@ -59,8 +59,13 @@ from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.field_filter_reader import read_field_conditions
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
+from app.rag.history_question import (
+    EMPTY_CONVERSATION_HISTORY,
+    HistoryConfirmation,
+    HistoryIntent,
+    HistoryRewrite,
+)
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
-from app.rag.history_question import HistoryConfirmation, HistoryIntent, HistoryRewrite
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -704,8 +709,10 @@ class RagPipeline:
         # 診断の degraded_steps に回答の中の補助の処理と同じ形で出す(#3286)。
         degraded = DegradedSteps()
         prepared_rewrite = self._prepared_history_rewrite
+        # チャット（``history`` を渡す経路。1 回目は空の履歴）は、毎回 1 回の呼び出しで質問を補い、
+        # 検索が要るかを分ける（#4787）。RAG 検索など ``history`` を渡さない経路は通さない。
         if (
-            history
+            history is not None
             and self._settings.rag_history_rewrite_enabled
             and (not self._history_question_prepared or prepared_rewrite is not None)
         ):
@@ -752,8 +759,7 @@ class RagPipeline:
         # 応答を作れなければ、いつもの検索と回答に戻す（分からないときは検索する）。
         small_talk_outcome: AnswerOutcome | None = None
         if (
-            self._settings.rag_small_talk_skip_enabled
-            and request.generate_answer
+            request.generate_answer
             and self._approved_faq is None
             and self._scope is None
             and self._caller_queries is None
@@ -1335,16 +1341,12 @@ class RagPipeline:
         *,
         report_degraded: ReportDegraded = not_recorded,
     ) -> str:
-        """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換える。
+        """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換え、発話の種類を分ける。
 
-        書き換え不要・失敗・不自然な応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の
-        失敗は ``report_degraded`` に残す(書き換えが要らなかったときと分ける。#3286)。
+        チャットの毎回の発話で 1 回呼ぶ（1 回目は空の履歴。#4787）。書き換え不要・失敗・不自然な
+        応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の失敗は ``report_degraded`` に
+        残す(書き換えが要らなかったときと分ける。#3286)。
         """
-        history_text = _format_chat_history(
-            history, ChatHistoryBudget.from_settings(self._settings)
-        )
-        if not history_text:
-            return ""
         budget = ChatHistoryBudget.from_settings(self._settings)
         user_positions = [index for index, turn in enumerate(history) if turn.role == "USER"]
         fact_history = (
@@ -1392,7 +1394,8 @@ class RagPipeline:
         )
         if len(history_text) + len(confirmed_data) + len(current_data) > budget.max_chars:
             history_text = ""
-        history_text += confirmed_data + current_data
+        # 1 回目（履歴なし）と、予算に入る往復が無いときは、空の履歴の形で渡す（#4787）。
+        history_text = (history_text or EMPTY_CONVERSATION_HISTORY) + confirmed_data + current_data
         try:
             text = await async_call_with_model_purpose(
                 "query.rewrite",

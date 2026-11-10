@@ -67,7 +67,7 @@ type DisplayParams = dict[str, str | int | float | bool]
 # 名前にする（frontend の `answer-process.test.ts` が照合する）。
 ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "文書から根拠の候補を検索する",
-    "history_rewrite": "前の会話を踏まえて質問を補う",
+    "history_rewrite": "質問を補い、検索が要るかを分ける",
     "small_talk_reply": "検索せずに短く応じる",
     "attachment_evidence": "会話の添付から根拠を選ぶ",
     "field_filter": "質問から検索の絞り込み条件を読み取る",

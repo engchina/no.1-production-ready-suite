@@ -561,3 +561,29 @@ async def test_small_talk_suggestion_skips_clarification_and_keeps_intent(
     assert result.data.suggestion is None
     token = result.data.question_context_token
     assert token and read_history_intent(settings.app_service_token_secret, token) == "greeting"
+
+
+async def test_first_turn_preparation_runs_the_single_call_and_keeps_intent(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """会話の 1 回目（保存済みの発話なし）の準備でも、同じ 1 回の呼び出しを通す（#4787）。"""
+    from app.rag.chat_question_token import read_history_intent, read_history_rewrite_elapsed
+
+    oracle, settings, _calls = context_setup
+    oracle.messages = []
+    seen: list[tuple[str, int]] = []
+
+    async def greeting(self: Any, query: str, history: Any) -> str:
+        seen.append((query, len(history)))
+        self._history_intent = "greeting"
+        return ""
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
+    question, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", "合成の挨拶", settings, force_token=True
+    )
+    assert seen == [("合成の挨拶", 0)]
+    assert question == "合成の挨拶" and token
+    secret = settings.app_service_token_secret
+    assert read_history_intent(secret, token) == "greeting"
+    assert read_history_rewrite_elapsed(secret, token) is not None
