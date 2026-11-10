@@ -482,7 +482,9 @@ async function getSavedSecretBadgeStyle(page: Page, fieldId: string) {
   const badge = page
     .locator(`label[for="${fieldId}"]`)
     .locator("xpath=..")
-    .getByText("保存済み", { exact: true });
+    .getByText("保存済み", { exact: true })
+    // 文字はバッジの中の span（長いラベルを省く箱。#4801）。色と枠はバッジの要素で測る。
+    .locator("xpath=ancestor-or-self::*[@data-status-variant][1]");
   await expect(badge).toBeVisible();
 
   return badge.evaluate((element) => {
