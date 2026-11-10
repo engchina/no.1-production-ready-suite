@@ -779,37 +779,3 @@ def test_actual_evidence_is_literal_text_and_does_not_modify_template_input() ->
     for row in before:
         for cell in row:
             assert sheet.cell(cell.row, cell.column).value == cell.value
-
-
-@pytest.fixture(autouse=True)
-def _empty_saved_citations(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def read(self: OracleClient, trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-        return {}
-    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", read)
-
-
-def test_uploaded_workbook_has_separate_actual_evidence_for_each_condition() -> None:
-    primary = _case("row-2")
-    comparison = _case("row-2")
-    comparison.trace_id = "trace-comparison"
-    metrics = _metrics(primary)
-    metrics.comparison = EvaluationComparison(search_answer_profile_id="profile-b", metrics=_metrics(comparison))
-    result = evaluation_workbook_with_results(_workbook(), metrics, {}, evidence={primary.trace_id: "合成資料.xlsx | シート: Sheet1 | 行: 10-12", comparison.trace_id: "合成資料.pdf | p.4"})
-    sheet = load_workbook(BytesIO(result))["評価リクエスト"]
-    columns = _headers(sheet)
-    assert sheet.cell(2, columns["評価結果（主条件）: 回答に使用した根拠"]).value == "合成資料.xlsx | シート: Sheet1 | 行: 10-12"
-    assert sheet.cell(2, columns["評価結果（比較対象）: 回答に使用した根拠"]).value == "合成資料.pdf | p.4"
-    assert sheet.cell(3, columns["評価結果（主条件）: 回答に使用した根拠"]).value is None
-
-
-def test_actual_evidence_is_literal_text_and_does_not_modify_template_input() -> None:
-    original = _workbook()
-    result = evaluation_workbook_with_results(original, _metrics(_case("row-2")), {}, evidence={"trace-row-2": "=合成.xlsx | シート: Sheet1 | 行: 1"})
-    before = load_workbook(BytesIO(original))["評価リクエスト"]
-    sheet = load_workbook(BytesIO(result))["評価リクエスト"]
-    column = _headers(sheet)["評価結果: 回答に使用した根拠"]
-    assert sheet.cell(2, column).value == "=合成.xlsx | シート: Sheet1 | 行: 1"
-    assert sheet.cell(2, column).data_type == "s"
-    for row in before:
-        for cell in row:
-            assert sheet.cell(cell.row, cell.column).value == cell.value

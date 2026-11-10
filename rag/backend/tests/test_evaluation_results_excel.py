@@ -253,39 +253,3 @@ async def test_export_reads_only_final_trace_citations_and_does_not_mix_profiles
         "trace-b": "比較資料.pdf | p.5",
     }
     assert calls == [["trace-a", "trace-b"]]
-
-
-@pytest.fixture(autouse=True)
-def _empty_saved_citations(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def read(self: Any, trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-        return {}
-    monkeypatch.setattr(route.OracleClient, "evaluation_citations_by_trace_ids", read)
-
-
-def test_generated_export_actual_evidence_is_separate_and_blank_for_old_records() -> None:
-    result = metrics()
-    result.comparison = EvaluationComparison(search_answer_profile_id="profile-b", metrics=metrics())
-    result.comparison.metrics.case_results[0].trace_id = "trace-b"
-    book = load_workbook(BytesIO(evaluation_results_xlsx(result, inputs(), evidence={"trace-a": "合成資料.pdf | p.3"})))
-    primary = book["主条件の結果"]
-    comparison = book["比較対象の結果"]
-    headers = {cell.value: cell.column for cell in primary[1]}
-    column = headers["回答に使用した根拠"]
-    assert primary.cell(2, column).value == "合成資料.pdf | p.3"
-    assert comparison.cell(2, column).value is None
-    assert primary["C2"].value == "資料 A.pdf"
-    assert primary.cell(2, column).alignment.wrap_text is True
-
-
-async def test_export_reads_only_final_trace_citations_and_does_not_mix_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
-    async def read(self: Any, trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-        calls.append(trace_ids)
-        return {"trace-a": [{"source": "合成資料.pdf", "metadata": {"page": 3, "evidence_model_used": True}}],
-                "trace-b": [{"source": "比較資料.pdf", "metadata": {"page": 5, "evidence_model_used": True}}]}
-    monkeypatch.setattr(route.OracleClient, "evaluation_citations_by_trace_ids", read)
-    result = metrics()
-    result.comparison = EvaluationComparison(search_answer_profile_id="profile-b", metrics=metrics())
-    result.comparison.metrics.case_results[0].trace_id = "trace-b"
-    assert await route._case_evidence(result) == {"trace-a": "合成資料.pdf | p.3", "trace-b": "比較資料.pdf | p.5"}
-    assert calls == [["trace-a", "trace-b"]]
