@@ -4274,7 +4274,7 @@ export const ja = {
   "evaluation.result.title": "評価結果",
   "evaluation.result.empty": "まだ評価結果がありません。",
   "evaluation.result.emptyHint":
-    "検索・回答プロファイルを選び、評価リクエストの Excel をアップロードして評価を実行してください。",
+    "検索・回答プロファイルと評価するデータを選び、評価を実行してください。",
   "evaluation.ingestionQuality.warning.table": "表構造確認",
   "evaluation.ingestionQuality.warning.figure": "画像 OCR 確認",
   "evaluation.ingestionQuality.warning.longDocument": "長文書",
