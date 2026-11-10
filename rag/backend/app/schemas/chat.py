@@ -100,6 +100,10 @@ class ChatMessage(BaseModel):
     # 出す。
     # 画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
+    # 承認済み FAQ の回答をそのまま返した回答の一致度（ASSISTANT の終わった回答だけ。回答の記録の
+    # 診断の ``approved_faq_direct.score``。#4788）。値があれば、回答の見出しと案内に、検索と回答の
+    # 生成をしていないことを出す。それ以外の回答・記録の無い回答は None。
+    approved_faq_direct_score: float | None = None
 
 
 class ChatAnswerCancelResult(BaseModel):

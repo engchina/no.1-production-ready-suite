@@ -741,28 +741,46 @@ class DirectFaqMatch:
         return self.best if self.best is not None and self.best.score >= self.min_score else None
 
 
+async def load_direct_faq_snapshot(
+    store: ApprovedFaqStore, search_answer_profile_id: str
+) -> ApprovedFaqSnapshot | None:
+    """FAQ の回答をそのまま返す設定がオンで、今の利用者が使える FAQ があるプロファイルの FAQ。
+
+    設定がオフ(既定)・使える FAQ が無い・読めないときは None(照合しない。embedding も呼ばない)。
+    """
+    try:
+        snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
+    except Exception as exc:  # 照合は補助。呼び出し元はいつもの確認・検索・回答に進む。
+        logger.warning("approved faq direct match failed", extra={**safe_exception_fields(exc)})
+        return None
+    if not approved_faq_direct_answer_enabled(snapshot.payload) or not snapshot.usable_records():
+        return None
+    return snapshot
+
+
 async def match_direct_approved_faq(
     store: ApprovedFaqStore,
     search_answer_profile_id: str,
     question: str,
     settings: Settings,
     genai: Callable[[], FaqEmbeddingClient],
+    *,
+    snapshot: ApprovedFaqSnapshot | None = None,
 ) -> DirectFaqMatch | None:
     """質問を承認済み FAQ と照合し、回答をそのまま返せるかを決める(LLM を呼ばない。#4788)。
 
-    プロファイルの「そのまま返す」がオフ(既定)・FAQ が無いときは None(照合しない。embedding も
-    呼ばない)。使える FAQ・否定の質問の扱いは類似問の提示(``rank_approved_faq``)と同じ。
-    照合は補助なので、失敗しても None(呼び出し元はいつもの確認・検索・回答に進む)。
+    プロファイルの「そのまま返す」がオフ(既定)・FAQ が無いときは None。使える FAQ・否定の質問の
+    扱いは類似問の提示(``rank_approved_faq``)と同じ。照合は補助なので、失敗しても None(呼び出し
+    元はいつもの確認・検索・回答に進む)。``snapshot`` は ``load_direct_faq_snapshot`` で読んだ FAQ
+    (読み直さない)。
     """
     if not question.strip():
         return None
-    try:
-        snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
-        if (
-            not approved_faq_direct_answer_enabled(snapshot.payload)
-            or not snapshot.usable_records()
-        ):
+    if snapshot is None:
+        snapshot = await load_direct_faq_snapshot(store, search_answer_profile_id)
+        if snapshot is None:
             return None
+    try:
         ranking = await rank_approved_faq(
             store,
             search_answer_profile_id,

@@ -395,6 +395,18 @@ export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown
 }
 
 /**
+ * 登録済みQ&A の回答をそのまま返した回答の一致度（0〜1。#4788）。作成した直後の回答は配信の診断の
+ * `approved_faq_direct.score`、保存した回答は会話のメッセージの `approved_faq_direct_score`（回答の記録の診断の
+ * 同じ値）から読む。そのまま返した回答でなければ null。
+ */
+export function answerFaqDirectScore(diagnostics: unknown, savedMessage: unknown): number | null {
+  const live = parseAnswerDiagnostics(diagnostics)?.approvedFaq?.direct?.score;
+  if (typeof live === "number") return live;
+  const saved = record(savedMessage).approved_faq_direct_score;
+  return typeof saved === "number" && Number.isFinite(saved) ? saved : null;
+}
+
+/**
  * 回答の見出し（「回答モデル: {名前}」。根拠の画像を添付した回答は「（画像も参照）」を添える。#3439・#3444）。
  * チャットの列と RAG 検索の回答で同じ文言にする（#3488）。名前が無ければ null。
  */

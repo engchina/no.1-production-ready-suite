@@ -1,5 +1,5 @@
 import { Banner, RunUsedModels } from "@production-ready/ui";
-import { parseAnswerDiagnostics, type AnswerDiagnostics } from "@/lib/answer-diagnostics";
+import { answerFaqDirectScore, parseAnswerDiagnostics, type AnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { answerModelCascadeView } from "@/lib/model-cascade";
 
@@ -57,41 +57,32 @@ export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagn
  * 回答を読むときに要る案内（公開の業務ガイドを読めなかった・資料では決まらない値がある）。
  * 回答の本文の下に出す（「詳細」に畳まない。#2096）。
  */
-export function AnswerNotices({ diagnostics }: { diagnostics: unknown }) {
+export function AnswerNotices({ diagnostics, savedMessage = null }: { diagnostics: unknown; savedMessage?: unknown }) {
   const data = parseAnswerDiagnostics(diagnostics);
-  const notices =
-    data &&
-    (data.approvedFaq?.direct ||
-      data.guideLoadFailed ||
-      data.externalDataRequired ||
-      data.externalDataItems.length > 0);
-  if (!notices) return null;
+  // 登録済みQ&A の回答をそのまま返した回答（保存した回答は会話のメッセージから読む。#4788）。
+  const faqDirectScore = answerFaqDirectScore(diagnostics, savedMessage);
+  const notices = data && (data.guideLoadFailed || data.externalDataRequired || data.externalDataItems.length > 0);
+  if (!notices && faqDirectScore === null) return null;
   return (
     <div className="space-y-2">
-      {data ? <AnswerNoticeBanners data={data} /> : null}
+      {faqDirectScore !== null ? (
+        // 検索と回答の生成をしていないこと（引用が無い理由）を、見出しと文で示す。
+        <div data-testid="answer-faq-direct">
+          <Banner severity="info" title={t("search.answerDetails.faqDirect.title")}>
+            <p className="break-words">
+              {t("search.answerDetails.faqDirect.body", { score: Math.round(faqDirectScore * 100) })}
+            </p>
+          </Banner>
+        </div>
+      ) : null}
+      {notices && data ? <AnswerNoticeBanners data={data} /> : null}
     </div>
   );
 }
 
 function AnswerNoticeBanners({ data }: { data: AnswerDiagnostics }) {
-  const directFaq = data.approvedFaq?.direct ? data.approvedFaq : null;
   return (
     <>
-      {directFaq ? (
-        // 一致度が下限以上で、登録済みQ&Aの回答をそのまま返した回答（検索と生成をしていない。#4788）。
-        <div data-testid="answer-faq-direct">
-          <Banner severity="info" title={t("search.answerDetails.faqDirect.title")}>
-            <p className="break-words">
-              {directFaq.direct?.score == null
-                ? t("search.answerDetails.faqDirect.bodyWithoutScore", { question: directFaq.question })
-                : t("search.answerDetails.faqDirect.body", {
-                    question: directFaq.question,
-                    score: Math.round(directFaq.direct.score * 100),
-                  })}
-            </p>
-          </Banner>
-        </div>
-      ) : null}
       {data.guideLoadFailed ? (
         // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
         <div data-testid="answer-guide-load-failed">

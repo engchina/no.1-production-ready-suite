@@ -1547,6 +1547,8 @@ export interface ChatMessage {
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
   answer_attached_images?: number;
+  /** 登録済みQ&A の回答をそのまま返した回答の一致度（それ以外の回答は null / 未指定。#4788）。 */
+  approved_faq_direct_score?: number | null;
 }
 
 export interface ConversationSummary {

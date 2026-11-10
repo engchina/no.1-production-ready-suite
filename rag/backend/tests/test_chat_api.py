@@ -277,6 +277,7 @@ class FakeChatOracle:
         current.elapsed_ms = message.elapsed_ms
         current.progress = message.progress
         current.answer_format = message.answer_format
+        current.approved_faq_direct_score = message.approved_faq_direct_score
         current.heartbeat_at = datetime.now(UTC)
         return True
 
@@ -766,6 +767,32 @@ def test_generated_answer_format_reaches_saved_chat_response(monkeypatch: Monkey
     assert stored.answer_format == answer_format
     detail = client.get("/api/chat/conversations/conv-format").json()["data"]
     assert detail["messages"][-1]["answer_format"] == answer_format
+
+
+def test_direct_faq_answer_score_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
+    """FAQ の回答をそのまま返した回答の一致度を、開き直した会話へ渡す（#4788）。"""
+
+    class DirectFaqPipeline(_FakePipeline):
+        def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
+            response = super()._response(request, trace_id)
+            response.diagnostics.answer = {
+                "answer_source": "approved_faq",
+                "approved_faq_direct": {"faq_id": "faq-a", "score": 0.95, "min_score": 0.92},
+            }
+            return response
+
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-faq")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    url = "/api/chat/conversations/conv-faq/messages/stream"
+    # いつもの回答には付かない。
+    assert client.post(url, json={"content": "合成の質問 A"}).status_code == 200
+    monkeypatch.setattr(chat_route, "RagPipeline", DirectFaqPipeline)
+    assert client.post(url, json={"content": "合成の質問 B"}).status_code == 200
+
+    detail = client.get("/api/chat/conversations/conv-faq").json()["data"]
+    answers = [m for m in detail["messages"] if m["role"] == "ASSISTANT"]
+    assert [m["approved_faq_direct_score"] for m in answers] == [None, 0.95]
 
 
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:

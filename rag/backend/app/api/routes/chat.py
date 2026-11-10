@@ -81,6 +81,7 @@ from app.rag.chat_question_token import (
     read_rule_selection_elapsed,
 )
 from app.rag.document_sections_service import current_section_pages
+from app.rag.faq_direct_answer import approved_faq_direct_score
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.observability import elapsed_ms, new_trace_id
@@ -284,6 +285,9 @@ def _to_chat_message(
             message.answer_attached_images if message.status == "COMPLETE" else 0
         ),
         answer_format=(message.answer_format if message.status == "COMPLETE" else None),
+        approved_faq_direct_score=(
+            message.approved_faq_direct_score if message.status == "COMPLETE" else None
+        ),
     )
 
 
@@ -1193,6 +1197,7 @@ async def _generate_chat_answer(
             answer_format=answer_format_record(
                 (result.diagnostics.answer or {}).get("answer_format")
             ),
+            approved_faq_direct_score=approved_faq_direct_score(result.diagnostics.answer),
         )
     except Exception as exc:
         await run_recorder.record(

@@ -1904,7 +1904,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
     "ready",
     [
       { ...userMessage, content: faqQuestion },
-      { ...assistantMessage, content: answerText, citations: [], progress },
+      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_direct_score: 1 },
     ],
     { streamBody },
   );
@@ -1930,9 +1930,17 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
     await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
   }
 
-  // 保存済みの回答: 本文は登録された回答そのままで、末尾に出典の行。処理の経過に照合の段と結果を出す。
+  // 保存済みの回答: 本文は登録された回答そのままで、末尾に出典の行。見出しはモデル名ではなく Q&A の回答と示し、
+  // 直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。処理の経過に照合の段と結果を出す。
   await expect(page.getByText(faqAnswer).first()).toBeVisible();
   await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 承認済み FAQ「${faqQuestion}」`);
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  const notice = page.getByTestId("answer-faq-direct");
+  await expect(notice).toContainText("登録済みQ&Aの回答をそのまま表示しています");
+  await expect(notice).toContainText(
+    "質問が登録済みQ&Aと一致したため（一致度 100%）、資料の検索と回答の生成はしていません。引用はありません。",
+  );
   const summary = page.getByTestId("chat-answer-progress-summary");
   await expect(summary).toHaveText("処理の経過（2 ステップ・1.5 秒）");
   await summary.click();
@@ -1951,12 +1959,10 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   await expect.poll(() => streamBodies.length).toBe(1);
   await expect(page.getByTestId("chat-approved-faq-choice")).toHaveCount(0);
   expect(suggestQueries).toEqual([{ query: "合成の設定 A はどこ？", purpose: "chat" }]);
-  // 届いた回答の直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。
-  const notice = page.getByTestId("answer-faq-direct");
-  await expect(notice).toContainText("登録済みQ&Aの回答をそのまま表示しています");
-  await expect(notice).toContainText(
-    `質問が登録済みQ&A「${faqQuestion}」と一致したため、資料の検索と回答の生成はしていません（一致度 100%）。`,
-  );
+  // 届いた回答にも、同じ見出しと案内を出す（配信の診断から読む）。
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true }).last()).toBeVisible();
+  await expect(page.getByTestId("answer-faq-direct").last()).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
   await expectNoPageOverflow(page);
   expect(streamBodies[0]).toMatchObject({ content: "合成の設定 A はどこ？" });
   expect(streamBodies[0]).not.toHaveProperty("approved_faq_id");

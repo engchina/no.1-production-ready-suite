@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
@@ -55,6 +56,15 @@ def direct_faq_outcome(match: DirectFaqMatch, *, embedding_model: str) -> Answer
         # 回答の安全チェックが照合する根拠は、一致した FAQ だけ。
         context_text=f"類似問: {record.question}\n承認済みの回答: {record.approved_answer}",
     )
+
+
+def approved_faq_direct_score(answer_diagnostics: Mapping[str, Any] | None) -> float | None:
+    """回答の診断から、FAQ の回答をそのまま返した回答の一致度を読む（それ以外の回答は None）。"""
+    direct = (answer_diagnostics or {}).get("approved_faq_direct")
+    score = direct.get("score") if isinstance(direct, Mapping) else None
+    if isinstance(score, bool) or not isinstance(score, int | float):
+        return None
+    return float(score)
 
 
 def _suggestion_snapshot(item: ApprovedFaqSuggestion) -> dict[str, Any]:

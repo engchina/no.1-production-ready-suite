@@ -3712,6 +3712,7 @@ export const ja = {
   "search.answerModel.help": "選んだモデルで回答全体を作ります（未選択なら既定のテキストモデル）。画像対応モデルを選ぶと根拠の図や画像も添付し、テキストモデルでは取り込み時に作った図の説明で答えます。",
   "chat.column.model": "回答モデル: {name}",
   "chat.column.modelWithImages": "回答モデル: {name}（画像も参照）",
+  "chat.column.faqDirect": "登録済みQ&Aの回答",
   "search.answerDetails.confidence": "信頼度: {value}",
   "search.answerDetails.outcome.conditional": "条件付きの回答",
   "search.answerDetails.outcome.needs_clarification": "確認が必要",
@@ -3752,9 +3753,7 @@ export const ja = {
     "回答は、この登録された回答だけをもとに作成しました。表示は回答した時点の内容です。",
   "search.answerDetails.faqDirect.title": "登録済みQ&Aの回答をそのまま表示しています",
   "search.answerDetails.faqDirect.body":
-    "質問が登録済みQ&A「{question}」と一致したため、資料の検索と回答の生成はしていません（一致度 {score}%）。",
-  "search.answerDetails.faqDirect.bodyWithoutScore":
-    "質問が登録済みQ&A「{question}」と一致したため、資料の検索と回答の生成はしていません。",
+    "質問が登録済みQ&Aと一致したため（一致度 {score}%）、資料の検索と回答の生成はしていません。引用はありません。",
   "search.history.loadError": "保存された回答を読み込めませんでした。",
   "search.previewSource.loading": "引用した版のファイルを確認しています",
   "search.previewSource.error": "引用した版のファイルを確認できませんでした。",

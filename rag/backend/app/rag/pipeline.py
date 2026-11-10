@@ -80,7 +80,10 @@ from app.rag.observability import (
 )
 from app.rag.profile_language import profile_language_scope
 from app.rag.run_history import RunRecorder
-from app.rag.search_answer_profile_knowledge import match_direct_approved_faq
+from app.rag.search_answer_profile_knowledge import (
+    load_direct_faq_snapshot,
+    match_direct_approved_faq,
+)
 from app.rag.small_talk import SMALL_TALK_SYSTEM_PROMPT, SmallTalkReply, skips_retrieval
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
@@ -802,33 +805,38 @@ class RagPipeline:
             and self._scope is None
             and self._caller_queries is None
         ):
-            direct_faq_started = perf_counter()
-            direct_faq = await match_direct_approved_faq(
-                self._oracle,
-                str(request.search_answer_profile_id),
-                request.query,
-                self._settings,
-                lambda: self._genai,
-            )
-            if direct_faq is not None:
-                # 設定がオンのプロファイルだけ段を残す（照合は済んでいるので、所要時間を足す）。
-                direct_faq_outcome = await _observe_stage(
+            profile_id = str(request.search_answer_profile_id)
+            faq_snapshot = await load_direct_faq_snapshot(self._oracle, profile_id)
+            if faq_snapshot is not None:
+                # 設定がオンで使える FAQ があるプロファイルだけ、照合を段として残す。
+                direct_faq = await _observe_stage(
                     trace_id,
                     FAQ_DIRECT_STAGE,
-                    _completed(
-                        direct_faq_outcome_from(
-                            direct_faq, embedding_model=self._settings.oci_genai_embedding_model
-                        )
+                    match_direct_approved_faq(
+                        self._oracle,
+                        profile_id,
+                        request.query,
+                        self._settings,
+                        lambda: self._genai,
+                        snapshot=faq_snapshot,
                     ),
-                    prior_elapsed=perf_counter() - direct_faq_started,
                     progress_callback=stage_callback,
-                    result_details=lambda _result: faq_direct_details(direct_faq),
+                    result_details=lambda match: (
+                        faq_direct_details(match) if match is not None else None
+                    ),
+                    result_outcome=lambda match: "success" if match is not None else "error",
                     request_snapshot=lambda: {
                         "質問": request.query,
-                        "検索・回答プロファイル ID": request.search_answer_profile_id,
+                        "検索・回答プロファイル ID": profile_id,
                     },
-                    result_snapshot=lambda _result: direct_faq_snapshot(direct_faq),
+                    result_snapshot=lambda match: (
+                        direct_faq_snapshot(match) if match is not None else None
+                    ),
                 )
+                if direct_faq is not None:
+                    direct_faq_outcome = direct_faq_outcome_from(
+                        direct_faq, embedding_model=self._settings.oci_genai_embedding_model
+                    )
         skips_search = small_talk_outcome is not None or direct_faq_outcome is not None
         caller_queries = (
             await self._checked_caller_queries(self._caller_queries)

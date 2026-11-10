@@ -521,6 +521,25 @@ async def test_min_score_setting_and_semantic_match_decide_the_direct_answer(
     assert _fields(_stage(negative_summary))["当てはめない質問に当たって外した Q&A"] == "1 件"
 
 
+@pipeline_test
+async def test_failed_match_is_recorded_and_the_normal_answer_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag import search_answer_profile_knowledge as knowledge
+
+    async def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("synthetic failure")
+
+    oracle = await _oracle()
+    monkeypatch.setattr(knowledge, "rank_approved_faq", broken)
+    response, summary, engine_queries, _llm = await _run(monkeypatch, oracle, QUESTION)
+
+    # 照合できなくても回答は止めない。段は失敗として残す。
+    assert response.answer == "合成の根拠つき回答"
+    assert engine_queries == [QUESTION]
+    assert _stage(summary).status == "failed"
+
+
 @pytest.mark.usefixtures("system_access")
 async def test_match_failure_degrades_to_the_normal_flow() -> None:
     class BrokenStore(FakeKnowledgeOracle):

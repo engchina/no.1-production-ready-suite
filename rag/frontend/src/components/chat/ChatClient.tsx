@@ -87,7 +87,7 @@ import {
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
-import { answerAttachedImages, answerModelHeading, unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerAttachedImages, answerFaqDirectScore, answerModelHeading, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -377,7 +377,9 @@ function AssistantColumn({
   const storageNotice = storageFailureNotice(storageFailures, traceId);
   // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
   const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
-  const heading = answerModelHeading(label, attachedImages);
+  // 登録済みQ&A の回答をそのまま返した回答は、モデルが作っていないので見出しをモデル名にしない（#4788）。
+  const faqDirect = finished && answerFaqDirectScore(answerDiagnostics, passageSource) !== null;
+  const heading = faqDirect ? t("chat.column.faqDirect") : answerModelHeading(label, attachedImages);
   const listId = useId();
   const answerBody = (
     <AnswerText
@@ -494,7 +496,7 @@ function AssistantColumn({
           {answer.trim() ? <ChatAnswerBody testId="chat-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
           {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
           {finished && (answerDiagnostics || passageSource) ? (
-            <AnswerNotices diagnostics={answerDiagnostics} />
+            <AnswerNotices diagnostics={answerDiagnostics} savedMessage={passageSource} />
           ) : null}
         </>
       )}
