@@ -40,10 +40,10 @@
   },
   {
     "key": "caller",
-    "name": "条の選択",
+    "name": "画面の選択",
     "status": "skipped",
     "params": {
-      "name": "条の選択",
+      "name": "画面の選択",
       "result_count": 0,
       "reused": false,
       "execution_kind": "decision",
@@ -66,10 +66,10 @@
   },
   {
     "key": "success",
-    "name": "条の選択",
+    "name": "画面の選択",
     "status": "done",
     "params": {
-      "name": "条の選択",
+      "name": "画面の選択",
       "result_count": 2,
       "reused": false,
       "execution_kind": "processing",

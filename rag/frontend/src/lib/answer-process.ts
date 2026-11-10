@@ -60,7 +60,6 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "回答に添付する画像": "answer.step.attachImages",
   "回答文の生成と引用の確認": "answer.step.generateAnswer",
   "文書ごとの起点の上限": "answer.step.deferDocumentCandidates",
-  "条の選択": "answer.step.selectArticles",
   "検索結果の統合（RRF）": "answer.step.rrfFusion",
   "追加の検索結果統合": "answer.step.additionalFusion",
   "ベクトル検索": "answer.step.vectorSearch",

@@ -68,11 +68,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
         "rerank_enabled": resolved_settings.rag_rerank_enabled,
         "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
-        # 条の目録から根拠の条を選ぶ段(#2254)。
-        "article_catalog_enabled": resolved_settings.rag_article_catalog_enabled,
-        "article_catalog_max_documents": resolved_settings.rag_article_catalog_max_documents,
-        "article_catalog_context_records": resolved_settings.rag_article_catalog_context_records,
-        "article_catalog_scope_documents": resolved_settings.rag_article_catalog_scope_documents,
         # 業務ガイドの手順ごとの検索と追加の検索の枠(#2395)。
         "guide_step_retrieval_enabled": resolved_settings.rag_guide_step_retrieval_enabled,
         "guide_step_max_queries": resolved_settings.rag_guide_step_max_queries,
@@ -141,15 +136,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "guide_step_chunks_per_step": resolved_settings.rag_guide_step_chunks_per_step,
         "guide_step_deadline_seconds": resolved_settings.rag_guide_step_deadline_seconds,
         "guide_reference_max_chunks": resolved_settings.rag_guide_reference_max_chunks,
-        "article_catalog_max_articles": resolved_settings.rag_article_catalog_max_articles,
-        "article_catalog_original_question_search": (
-            resolved_settings.rag_article_catalog_original_question_search
-        ),
-        "article_catalog_refine_articles": resolved_settings.rag_article_catalog_refine_articles,
-        "article_catalog_refine_candidates": (
-            resolved_settings.rag_article_catalog_refine_candidates
-        ),
-        "article_catalog_output_token_cap": resolved_settings.rag_article_catalog_output_token_cap,
         # 用語・回答ルール・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
         "runtime_rules_confirmation_enabled": (
             resolved_settings.rag_runtime_rules_confirmation_enabled

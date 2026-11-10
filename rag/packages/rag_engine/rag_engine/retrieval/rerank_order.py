@@ -19,7 +19,7 @@ from typing import Any
 from .attachment_evidence import is_attachment_evidence
 from .entity_expansion import is_reserved_entity_expansion
 from .reference_follow import reference_source_uids
-from .rerank_scores import keeps_original_order, rerank_score
+from .rerank_scores import rerank_score
 from .text_search_tokenizer import TextSearchTokenizerConfig, content_term_set
 
 # MMR の関連度の重み（1 に近いほど rerank の点数を、0 に近いほど内容の違いを重く見る）。
@@ -41,13 +41,12 @@ def validate_slot_ratio(value: Any) -> tuple[int, int]:
 def keeps_position(record: Any) -> bool:
     """枠と MMR の対象にせず、rerank の工程が決めた位置に残す候補か。
 
-    会話の添付・条の目録で選んだ条・実体の拡張で確保した枠・交差参照の参照先は、rerank の点数や検索の順位で
+    会話の添付・実体の拡張で確保した枠・交差参照の参照先は、rerank の点数や検索の順位で
     動かさない規則がある候補。rerank の点数が無い候補は合格点を通っていないので、検索の順位で前へ出さない。
     """
     return (
         rerank_score(record) is None
         or is_attachment_evidence(record)
-        or keeps_original_order(record)
         or is_reserved_entity_expansion(record)
         or bool(reference_source_uids(record))
     )

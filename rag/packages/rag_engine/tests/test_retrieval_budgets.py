@@ -56,7 +56,7 @@ def test_same_original_does_not_occupy_budget_but_another_source_range_does():
 
 
 def test_default_total_budget_is_first_come_in_stage_order():
-    """既定の総枠 200 は 融合 → 多様化 → 画面 → 条の目録 の順に先着で入る。"""
+    """既定の総枠 200 は 融合 → 多様化 → 画面 の順に先着で入る。"""
 
     def staged(stage: str, count: int) -> list[AnswerRecord]:
         return [
@@ -67,16 +67,16 @@ def test_default_total_budget_is_first_come_in_stage_order():
             for index in range(count)
         ]
 
-    records = [*staged("fusion", 140), *staged("diversity", 20), *staged("screen", 30), *staged("article", 252)]
-    limits = {"fusion": 140, "diversity": 20, "screen": 30, "article": 252}
+    records = [*staged("fusion", 140), *staged("diversity", 20), *staged("screen", 30), *staged("attachment", 252)]
+    limits = {"fusion": 140, "diversity": 20, "screen": 30, "attachment": 252}
     selected, trace = select_candidates(records, 200, stage_limits=limits)
 
     assert len(selected) == 200
-    assert trace["admitted"] == {"fusion": 140, "diversity": 20, "screen": 30, "article": 10}
+    assert trace["admitted"] == {"fusion": 140, "diversity": 20, "screen": 30, "attachment": 10}
     assert {item["reason"] for item in trace["excluded"]} == {"rerank_input_budget"}
     no_screen, trace = select_candidates([*records[:160], *records[190:]], 200, stage_limits=limits)
     assert len(no_screen) == 200
-    assert trace["admitted"] == {"fusion": 140, "diversity": 20, "article": 40}
+    assert trace["admitted"] == {"fusion": 140, "diversity": 20, "attachment": 40}
 
 
 def test_no_source_provenance_is_not_a_duplicate():
