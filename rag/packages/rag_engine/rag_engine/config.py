@@ -226,12 +226,6 @@ class Settings:
     # 命中の件数は判定に使わない（#3504）。
     document_selection_enabled: bool
     document_selection_score_ratio: float
-    # 質問から操作すべき画面を画面目録で選び、その画面の根拠を検索候補に加える (#1108)。1 質問につき LLM 呼出が
-    # 1 回増える。効果を 83 問で確かめるまで既定 off。
-    screen_linking_enabled: bool
-    # 1 以上なら、選んだ画面ごとの最上位の child を rerank 後の順位 N 位（2 つ目は N+1 位…）より下に置かない。
-    # 0（既定）は候補に加えるだけで順位は rerank に任せる。比較実験用 (#1108)。
-    screen_linking_reserve_rank: int
     embedding_region: str
     embedding_endpoint: str
     embedding_model: str
@@ -500,8 +494,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         document_selection_enabled=_env_bool(env, "RAG_ENGINE_DOCUMENT_SELECTION", True),
         document_selection_score_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO", 0.5))),
-        screen_linking_enabled=_env_bool(env, "RAG_ENGINE_SCREEN_LINKING", False),
-        screen_linking_reserve_rank=max(0, _env_int(env, "RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK", 0)),
         embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,
         embedding_endpoint=env.get("EMBEDDING_ENDPOINT", "").strip(),
         embedding_model=env.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip() or DEFAULT_EMBEDDING_MODEL,

@@ -1327,29 +1327,6 @@ class OracleClient:
         )
         return [str(row["large_category"]) for row in rows if row.get("large_category")]
 
-    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
-        """検索と同じ条件の chunk 集合の状態を表す短い値(画面目録の cache の key。#554)。
-
-        文書の追加・削除・再索引(chunk_id が変わる)・文書名の変更で変わる。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        row = await self._fetch_one(
-            _render_sql(
-                """
-            SELECT COUNT(*) AS chunk_count,
-                   NVL(SUM(ORA_HASH(c.chunk_id || '/' || d.file_name)), 0) AS chunk_hash
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        if row is None:
-            return "0:0"
-        return f"{row.get('chunk_count') or 0}:{row.get('chunk_hash') or 0}"
-
     async def count_documents_outside_language_pack(self, pack_hash: str) -> int:
         """今の言語資源(hash)で分割していない、有効な文書の数(#2181。分割し直しが要る文書)。
 
@@ -1368,9 +1345,7 @@ class OracleClient:
         )
         return _int_value((row or {}).get("document_count"))
 
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
+    async def retrieval_section_paths(self, filters: dict[str, str]) -> list[tuple[str, str, int]]:
         """検索と同じ条件の chunk の(文書名、見出しの列、chunk 数)を DISTINCT で返す(#554)。
 
         見出しの列は chunk の ``section_path``(「 > 」でつないだ文字列)。文書ごとに読み順で返す。
@@ -1424,53 +1399,6 @@ class OracleClient:
             for row in rows
             if row.get("file_name") and row.get("section_path")
         ]
-
-    async def retrieval_screen_chunks(
-        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
-    ) -> list[RetrievedChunk]:
-        """検索と同じ条件で、文書名が一致し見出しの列に ``heading`` を含む chunk を返す(#554)。
-
-        SQL は見出しの部分一致で候補を絞り、見出しの列の要素としての一致は呼び出し側で確かめる。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT * FROM (
-                SELECT
-                    c.document_id,
-                    c.chunk_id,
-                    c.chunk_text,
-                    c.metadata_json,
-                    c.chunk_index,
-                    c.chunk_set_id,
-                    d.file_name,
-                    d.category_name,
-                    d.superseded_by_document_id,
-                    0 AS score
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE {where_sql}
-                  AND d.file_name = :screen_file_name
-                  AND (
-                      INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
-                      OR ({overflow_sql} AND INSTR({path_sql}, :screen_heading) > 0)
-                  )
-                ORDER BY c.document_id, c.chunk_index, c.chunk_id
-            ) WHERE ROWNUM <= :screen_limit
-            """,
-                where_sql=where_sql,
-                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
-                path_sql=_SECTION_PATH_CLOB_SQL,
-            ),
-            {
-                **binds,
-                "screen_file_name": file_name,
-                "screen_heading": heading,
-                "screen_limit": max(1, int(limit)),
-            },
-        )
-        return [_retrieved_chunk_from_row(row) for row in rows]
 
     async def retrieval_reference_chunks(
         self,

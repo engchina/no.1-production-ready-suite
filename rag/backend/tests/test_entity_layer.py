@@ -468,10 +468,7 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 
 
 def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in (
-        "RAG_ENTITY_EXPANSION_ENABLED",
-        "RAG_SCREEN_LINKING_ENABLED",
-    ):
+    for key in ("RAG_ENTITY_EXPANSION_ENABLED",):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
     # 索引の構築は既定 OFF。検索時の拡張とは別に設定する。
@@ -481,7 +478,6 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     assert settings.rag_entity_attribute_columns == []
     # 任意の検索拡張は明示的に有効化した場合だけ使う。
     assert settings.rag_entity_expansion_enabled is False
-    assert settings.rag_screen_linking_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)

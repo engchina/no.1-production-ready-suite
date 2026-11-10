@@ -1485,15 +1485,6 @@ class Settings(
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
-    rag_screen_linking_enabled: bool = Field(
-        default=False,
-        description=(
-            "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
-            "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
-            "(LLM の呼び出しが 1 回増える。#554)。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
     rag_request_coverage_max_queries: int = Field(
         default=2,
         ge=0,

@@ -67,7 +67,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "oracle_vector_target_accuracy": _effective_vector_target_accuracy(resolved_settings),
         "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
         "rerank_enabled": resolved_settings.rag_rerank_enabled,
-        "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
         # 業務ガイドの手順ごとの検索と追加の検索の枠(#2395)。
         "guide_step_retrieval_enabled": resolved_settings.rag_guide_step_retrieval_enabled,
         "guide_step_max_queries": resolved_settings.rag_guide_step_max_queries,

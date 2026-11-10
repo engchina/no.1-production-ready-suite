@@ -546,7 +546,6 @@ async def update_answering_settings(
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
-            ("rag_screen_linking_enabled", payload.screen_linking_enabled),
             ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
             ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
@@ -591,9 +590,6 @@ async def update_answering_settings(
                 "RAG_RERANK_SLOT_RATIO": json.dumps(candidate.rag_rerank_slot_ratio),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
-                "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
-                    candidate.rag_screen_linking_enabled
-                ),
                 "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
                     candidate.rag_graph_expansion_enabled
                 ),
@@ -620,7 +616,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         rerank_slot_ratio=settings.rag_rerank_slot_ratio,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
-        screen_linking_enabled=settings.rag_screen_linking_enabled,
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,
         entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,

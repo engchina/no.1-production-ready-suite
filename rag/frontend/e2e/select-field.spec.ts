@@ -99,7 +99,6 @@ async function mockApi(page: Page) {
       "/api/settings/answering": {
         neighbor_child_count: 3,
         rerank_enabled: true,
-        screen_linking_enabled: false,
         config_source: "runtime",
       },
     };
