@@ -998,8 +998,6 @@ export const ja = {
   "settings.fileTypeDefaults.inherit": "全体の既定に従う",
   "settings.fileTypeDefaults.summary": "全体の既定: ファイル準備「{preprocess}」・解析エンジン「{parser}」・分割方式「{chunking}」。一覧に無い形式は全体の既定に従います。分割のサイズなどのパラメータはどの種類も全体の既定に従います。「既定に戻す」を押すと製品の既定値が入り、「保存」で確定します。",
   "settings.fileTypeDefaults.reprocessNote": "保存しても取り込み済みの文書は変わりません。文書の処理レシピに再処理の案内が出たら、再処理すると反映されます。",
-  "settings.fileTypeDefaults.goPreprocess": "ファイル準備のサービスを使えるようにする",
-  "settings.fileTypeDefaults.goParser": "解析エンジンの接続を設定する",
   "settings.fileTypeDefaults.type.pdf": "PDF",
   "settings.fileTypeDefaults.type.word": "Word",
   "settings.fileTypeDefaults.type.powerpoint": "PowerPoint",

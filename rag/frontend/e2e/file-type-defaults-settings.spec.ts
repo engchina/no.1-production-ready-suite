@@ -255,23 +255,31 @@ test("既定に戻すは組み込みの値を画面に入れ、保存で確定�
   await expect.poll(() => patchBody).toEqual({ entries: {} });
 });
 
-test("組み込みの既定を使えない行は理由を出す", async ({ page }) => {
+test("組み込みの既定を使えない行も選択欄だけを出す", async ({ page }) => {
   const reason = "ファイル準備「Excel→JSONL」が無効（RAG_PREPROCESS_ENABLED）のため、組み込みの既定を使わず全体の既定に従います。";
   await mockSettings(page, settingsBody({ excel: { builtin_unavailable_reason: reason } }));
   await page.goto("/settings/file-type-defaults");
 
-  await expect(page.getByText(reason)).toBeVisible();
+  await expect(page.getByText(reason)).toHaveCount(0);
   await expect(page.getByTestId("file-type-excel-parser")).toContainText("全体の既定に従う");
 });
 
-test("使えない選択肢があるときは設定への導線を出す", async ({ page }) => {
-  await mockSettings(page);
+test("使えない選択肢があっても各選択欄の下に補助リンクを出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockSettings(page, settingsBody({
+    pdf: { unavailable_parser_backends: ["dots_ocr"] },
+    powerpoint: { unavailable_parser_backends: ["dots_ocr"] },
+  }));
   await page.goto("/settings/file-type-defaults");
 
   await expect(
-    page.getByTestId("file-type-row-excel").getByRole("link", { name: "ファイル準備のサービスを使えるようにする" })
-  ).toHaveAttribute("href", "/settings/services");
+    page.getByRole("link", { name: "ファイル準備のサービスを使えるようにする" })
+  ).toHaveCount(0);
   await expect(
-    page.getByTestId("file-type-row-word").getByRole("link", { name: "解析エンジンの接続を設定する" })
-  ).toHaveAttribute("href", "/settings/parser-adapters");
+    page.locator("a[href='/settings/parser-adapters']", { hasText: "解析エンジンの接続を設定する" })
+  ).toHaveCount(0);
+  await expect(page.getByTestId("file-type-row-word").getByRole("link")).toHaveCount(0);
+  await expect(page.getByTestId("file-type-row-excel").getByRole("link")).toHaveCount(0);
+  await expect(page.getByTestId("file-type-word-parser")).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("parser-links-removed.png"), fullPage: true });
 });
