@@ -158,7 +158,7 @@ export function AnswerText({
           marks={numbers.map((number) => ({
             key: String(number),
             label: `[${number}]`,
-            // 当たる根拠の行が無い番号は移り先を持たない（リンクは何もしない）。
+            // 当たる根拠の行が無い番号は移り先を持たない（印は文字だけで出す）。
             targetId: number <= lines.length ? anchor(number) : undefined,
             ariaLabel: t("search.answerText.sourceMarkLabel", { mark: `[${number}]` }),
           }))}
