@@ -4485,3 +4485,55 @@ BEGIN
   NULL; -- query: max_anchors_per_document,support_guide_enabled / language_pack: answer_check_cues,answer_labels,evidence_cues,grounding_cues,question_cues,search_terms
 END;
 /
+
+-- migration: 20261110_4811_evaluation_job_visibility
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        RETURN;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SEARCH_ANSWER_PROFILE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD (search_answer_profile_id VARCHAR2(128))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND column_name = 'COMPARE_SEARCH_ANSWER_PROFILE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD (compare_search_answer_profile_id VARCHAR2(128))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'USER_UUID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (user_uuid VARCHAR2(64))';
+    END IF;
+    EXECUTE IMMEDIATE q'[
+        UPDATE rag_evaluation_jobs j
+        SET search_answer_profile_id = COALESCE(
+                JSON_VALUE(j.result_json, '$.run_manifest.request.search_answer_profile_id'),
+                (SELECT MAX(r.search_answer_profile_id)
+                 FROM rag_evaluation_job_case_results r
+                 WHERE r.job_id = j.job_id AND r.pass_index = 0)
+            ),
+            compare_search_answer_profile_id = COALESCE(
+                JSON_VALUE(
+                    j.result_json, '$.run_manifest.request.compare_search_answer_profile_id'
+                ),
+                JSON_VALUE(j.result_json, '$.comparison.search_answer_profile_id'),
+                (SELECT MAX(r.search_answer_profile_id)
+                 FROM rag_evaluation_job_case_results r
+                 WHERE r.job_id = j.job_id AND r.pass_index = 1)
+            )
+        WHERE j.search_answer_profile_id IS NULL
+          AND j.compare_search_answer_profile_id IS NULL
+    ]';
+END;
+/

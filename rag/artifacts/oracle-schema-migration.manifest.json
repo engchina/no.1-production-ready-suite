@@ -771,10 +771,17 @@
       "sha256": "ab583ced52083040a86523101b3707f5a54150404487b473e671870314590098",
       "statement_count": 1,
       "table_name": "rag_search_answer_profiles"
+    },
+    {
+      "destructive": false,
+      "name": "20261110_4811_evaluation_job_visibility",
+      "sha256": "4a9d7f29f41cf5d0423810d05ecb519c79087ad371f3fd385ad35686131a10b1",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_jobs"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "59fd4c2e5952c3ddbfa3668cebe26c4f8ad0c8aaed1ea4f0d9da502e73f33315",
-  "statement_count": 166
+  "sha256": "601bf7a920e4aa0a07004ff2b7d6a5ffe38e0ef67ac82de379293f4650448c5e",
+  "statement_count": 167
 }

@@ -260,6 +260,22 @@ class OraclePoolProtocol(Protocol):
         """pool を閉じる。"""
 
 
+class EvaluationJobVisibility(Protocol):
+    """品質評価の job を見る利用者（`app.rag.evaluation_jobs.EvaluationJobViewer`）。"""
+
+    @property
+    def tenant_id_hash(self) -> str | None: ...
+
+    @property
+    def user_id_hash(self) -> str | None: ...
+
+    @property
+    def all_users_visible(self) -> bool: ...
+
+    @property
+    def allowed_search_answer_profile_ids(self) -> frozenset[str] | None: ...
+
+
 @dataclass
 class StoredDocument:
     """テスト補助で使うドキュメント行。"""
@@ -7522,6 +7538,9 @@ class OracleClient:
                     heartbeat_at,
                     time_limit_seconds,
                     source_workbook_id,
+                    search_answer_profile_id,
+                    compare_search_answer_profile_id,
+                    user_uuid,
                     created_at,
                     started_at,
                     updated_at
@@ -7537,6 +7556,9 @@ class OracleClient:
                     SYSTIMESTAMP,
                     :time_limit_seconds,
                     :source_workbook_id,
+                    :search_answer_profile_id,
+                    :compare_search_answer_profile_id,
+                    :user_uuid,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP
@@ -7551,43 +7573,56 @@ class OracleClient:
                     "lease_owner": job["lease_owner"],
                     "time_limit_seconds": job["time_limit_seconds"],
                     "source_workbook_id": job.get("source_workbook_id"),
+                    "search_answer_profile_id": job.get("search_answer_profile_id"),
+                    "compare_search_answer_profile_id": job.get("compare_search_answer_profile_id"),
+                    "user_uuid": job.get("user_uuid"),
                 },
             )
         )
 
     async def get_evaluation_job(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
+        self, job_id: str, *, viewer: EvaluationJobVisibility
     ) -> dict[str, object] | None:
-        """投入した利用者（tenant と user の hash）の品質評価の job を 1 件返す。"""
+        """見る利用者が見られる品質評価の job を 1 件返す（#4811）。"""
+        visible, binds = evaluation_job_visibility_sql(viewer)
         return await self._fetch_one(
             f"""
             SELECT
-                job_id,
-                kind,
-                status,
-                total_cases,
-                completed_cases,
+                {_EVALUATION_JOB_COLUMNS},
                 current_case_id,
                 current_case_started_at,
-                time_limit_seconds,
-                error_message,
-                result_json,
-                evaluation_run_id,
-                source_workbook_id,
-                created_at,
-                started_at,
-                finished_at,
-                heartbeat_at
+                result_json
             FROM rag_evaluation_jobs
             WHERE job_id = :job_id
-              AND {_EVALUATION_JOB_OWNER_SQL}
+              AND {visible}
             """,
-            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+            {**binds, "job_id": job_id},
         )
+
+    async def list_evaluation_jobs(
+        self, *, viewer: EvaluationJobVisibility, offset: int, limit: int
+    ) -> tuple[list[dict[str, object]], int]:
+        """見る利用者が見られる品質評価の job を新しい順に返す（#4811）。
+
+        結果の本体（`result_json`）は読まず、全体の判定（`$.passed`）だけを読む。件数も返す。
+        """
+        visible, binds = evaluation_job_visibility_sql(viewer)
+        rows = await self._fetch_all(
+            f"""
+            SELECT
+                {_EVALUATION_JOB_COLUMNS},
+                JSON_VALUE(result_json, '$.passed') AS passed
+            FROM rag_evaluation_jobs
+            WHERE {visible}
+            ORDER BY created_at DESC, job_id DESC
+            {offset_fetch_clause()}
+            """,
+            {**binds, **offset_fetch_binds(offset=offset, limit=limit)},
+        )
+        count = await self._fetch_one(
+            f"SELECT COUNT(*) AS total FROM rag_evaluation_jobs WHERE {visible}", binds
+        )
+        return rows, int(cast(int, count.get("total") or 0)) if count else 0
 
     async def update_evaluation_job_progress(
         self,
@@ -7750,42 +7785,31 @@ class OracleClient:
 
         return await self._run_transaction(operation) > 0
 
-    async def list_evaluation_job_case_results(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-    ) -> list[dict[str, object]]:
-        """投入した利用者の job の、保存したケースの結果をケースの順に返す（#4208）。"""
+    async def list_evaluation_job_case_results(self, job_id: str) -> list[dict[str, object]]:
+        """job の保存したケースの結果をケースの順に返す（#4208）。
+
+        呼び出し元が job を見られることを確かめてから呼ぶ（#4811）。
+        """
         rows = await self._fetch_all(
-            f"""
+            """
             SELECT
-                r.pass_index,
-                r.case_index,
-                r.case_id,
-                r.search_answer_profile_id,
-                r.result_json
-            FROM rag_evaluation_job_case_results r
-            JOIN rag_evaluation_jobs j ON j.job_id = r.job_id
-            WHERE r.job_id = :job_id
-              AND {_EVALUATION_JOB_OWNER_SQL}
-            ORDER BY r.pass_index, r.case_index
+                pass_index,
+                case_index,
+                case_id,
+                search_answer_profile_id,
+                result_json
+            FROM rag_evaluation_job_case_results
+            WHERE job_id = :job_id
+            ORDER BY pass_index, case_index
             """,
-            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+            {"job_id": job_id},
         )
         return [{**row, "result_json": _json_loads(row.get("result_json"))} for row in rows]
 
-    async def cancel_evaluation_job(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-        error_message: str,
-    ) -> bool:
-        """投入した利用者の RUNNING job を取り消す。取り消せなければ False。
+    async def cancel_evaluation_job(self, job_id: str, *, error_message: str) -> bool:
+        """RUNNING の job を取り消す。取り消せなければ False。
 
+        呼び出し元が取り消せる利用者（実行した本人・system_admin）かを確かめてから呼ぶ（#4811）。
         実行中のプロセスは、次の heartbeat か進捗の更新で RUNNING でなくなったことを知り、
         評価を止める（別のプロセスが実行している場合も止まる）。
         """
@@ -7793,7 +7817,7 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
                 connection,
-                f"""
+                """
                 UPDATE rag_evaluation_jobs
                 SET status = 'CANCELLED',
                     error_message = :error_message,
@@ -7804,14 +7828,8 @@ class OracleClient:
                     updated_at = SYSTIMESTAMP
                 WHERE job_id = :job_id
                   AND status = 'RUNNING'
-                  AND {_EVALUATION_JOB_OWNER_SQL}
                 """,
-                {
-                    "job_id": job_id,
-                    "tenant_id_hash": tenant_id_hash,
-                    "user_id_hash": user_id_hash,
-                    "error_message": _truncate_text(error_message, 2000),
-                },
+                {"job_id": job_id, "error_message": _truncate_text(error_message, 2000)},
             )
 
         return await self._run_transaction(operation) > 0
@@ -12787,14 +12805,69 @@ def _record_db_execute(started: float, *, rows: int = 0) -> None:
         stats.record_execute(rows=rows, seconds=perf_counter() - started)
 
 
-# 品質評価の job を、投入した利用者（tenant と user の hash）だけが見られるようにする条件（#390）。
-# hash が無い（認証なしの開発環境など）場合は、hash の無い job だけを対象にする。
 # 回答の本文を 1 回に読む trace の数（`IN` の上限は 1000。評価は 1 job で最大 400 ケース）。
 _EVALUATION_ANSWER_BATCH = 500
-_EVALUATION_JOB_OWNER_SQL = (
-    "(tenant_id_hash = :tenant_id_hash OR (tenant_id_hash IS NULL AND :tenant_id_hash IS NULL)) "
-    "AND (user_id_hash = :user_id_hash OR (user_id_hash IS NULL AND :user_id_hash IS NULL))"
-)
+# 品質評価の job の一覧・詳細で読む列（結果の本体・今のケースは詳細だけ。#4811）。
+_EVALUATION_JOB_COLUMNS = """job_id,
+                kind,
+                status,
+                tenant_id_hash,
+                user_id_hash,
+                total_cases,
+                completed_cases,
+                time_limit_seconds,
+                error_message,
+                evaluation_run_id,
+                source_workbook_id,
+                search_answer_profile_id,
+                compare_search_answer_profile_id,
+                user_uuid,
+                created_at,
+                started_at,
+                finished_at,
+                heartbeat_at"""
+
+
+def evaluation_job_visibility_sql(viewer: EvaluationJobVisibility) -> tuple[str, dict[str, object]]:
+    """品質評価の job を見られる条件と bind（#4811。`EvaluationJobViewer.can_view` と同じ規則）。
+
+    - 同じ tenant の job だけ（hash が無い開発環境は、hash の無い job だけ）。
+    - 使った検索・回答プロファイルの分かる job は、そのプロファイル（主と、あれば比べる方）を
+      すべて今使える利用者が見られる（対象範囲の制限の無い system_admin は全部）。
+    - プロファイルの分からない job は、実行した本人（user の hash の一致）と system_admin だけ。
+    """
+    binds: dict[str, object] = {"viewer_tenant_id_hash": viewer.tenant_id_hash}
+    tenant = (
+        "(tenant_id_hash = :viewer_tenant_id_hash "
+        "OR (tenant_id_hash IS NULL AND :viewer_tenant_id_hash IS NULL))"
+    )
+    if viewer.all_users_visible:
+        unknown = "1 = 1"
+    else:
+        unknown = (
+            "(user_id_hash = :viewer_user_id_hash "
+            "OR (user_id_hash IS NULL AND :viewer_user_id_hash IS NULL))"
+        )
+        binds["viewer_user_id_hash"] = viewer.user_id_hash
+    allowed = viewer.allowed_search_answer_profile_ids
+    if allowed is None:
+        known = "1 = 1"
+    elif not allowed:
+        known = "1 = 0"
+    else:
+        names = [f"viewer_profile_id_{index}" for index in range(len(allowed))]
+        binds.update(zip(names, sorted(allowed), strict=True))
+        placeholders = ", ".join(f":{name}" for name in names)
+        known = (
+            f"search_answer_profile_id IN ({placeholders}) "
+            "AND (compare_search_answer_profile_id IS NULL "
+            f"OR compare_search_answer_profile_id IN ({placeholders}))"
+        )
+    return (
+        f"{tenant} AND ((search_answer_profile_id IS NOT NULL AND {known}) "
+        f"OR (search_answer_profile_id IS NULL AND {unknown}))",
+        binds,
+    )
 
 
 def _truncate_text(value: str | None, limit: int) -> str | None:
@@ -18674,7 +18747,8 @@ def oracle_evaluation_job_schema_sql(
 
     質問・回答・根拠の本文は保存しない（結果の回答の診断は外す。#4107）。job は投入を受けた
     backend のプロセスで動き、そのプロセスが止まったら heartbeat が途絶えて失敗になる（別の
-    プロセスは引き継がない）。終わったケースの結果は別の表に残す（#4208）。
+    プロセスは引き継がない）。終わったケースの結果は別の表に残す（#4208）。使った検索・回答
+    プロファイルと実行した利用者の UUID は見え方の判定と一覧の表示に使う（#4811）。
     """
     return f"""
 CREATE TABLE {table_name} (
@@ -18694,6 +18768,9 @@ CREATE TABLE {table_name} (
     result_json             JSON,
     evaluation_run_id       VARCHAR2(64),
     source_workbook_id      VARCHAR2(64),
+    search_answer_profile_id VARCHAR2(128),
+    compare_search_answer_profile_id VARCHAR2(128),
+    user_uuid               VARCHAR2(64),
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
