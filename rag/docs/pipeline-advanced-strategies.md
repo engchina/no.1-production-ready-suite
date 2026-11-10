@@ -22,7 +22,6 @@
 | `colpali_visual_retrieval`(ColPali 型) | 検索方式 | 戦略の登録ごと #595 で削除した。未着手 |
 | `self_reflective`(Self-RAG) | 回答生成 | 未着手。回答フローは生成の後に LLM で確かめない(引用の実在と形式だけをコードで確かめる。#4714) |
 | Temporal GraphRAG | 文書構造索引の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) |
-| RAPTOR 検索時昇格 | 検索 | 取込側で summary node を索引済。通常の検索が summary node にヒットする |
 
 ---
 
@@ -35,7 +34,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 ### 設計メモ
 - **tree 構築(取込時 or 検索時キャッシュ)**: 既存の `DocumentElement.section_path` /
   `parent_id` 階層から、文書ごとに `section tree`(node = {title, summary, page_range,
-  child_ids})を構築。要約は OCI Enterprise AI(RAPTOR と共用可)。
+  child_ids})を構築。要約は OCI Enterprise AI。
   既存 `navigation` JSON(`app/rag/navigation.py`)を再利用して node を永続化する。
 - **検索時 navigation**: OCI Enterprise AI に「query + 現在 node の title/summary 群」を渡し、各 node
   で yes/no(展開/スキップ)を JSON で判断 → 命中 leaf の chunk を Oracle から取得。踏破 node 列は
@@ -78,8 +77,6 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
   回答の検索で graph を使う経路は #595 で削除したため、検索時の利用から設計し直す。設定は実装と同時に
   追加する(未実装の設定は置かない。#301)。今の文書構造索引の構築(`entities`)は文書と章・節の見出しの
   つながりだけを作る(読む経路の無かった claims / community summary は #621 で削除した)。
-- **RAPTOR 検索時昇格**: 既に summary node を索引済。leaf hit 時に対応する summary node を回答の文脈へ
-  昇格する経路を、回答フローの small-to-big(親本文・前後の child)と合わせて追加する(opt-in)。
 
 ---
 

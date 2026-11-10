@@ -998,8 +998,9 @@ async def _run_model_settings_test(
         text = await async_call_with_model_purpose(
             "connection.check",
             OciEnterpriseAiClient(settings=settings).generate,
-            MODEL_TEST_TEXT_PROMPT,
+            "",
             model_test_text_context("Production Ready RAG"),
+            system_prompt=MODEL_TEST_TEXT_PROMPT,
         )
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
@@ -1227,7 +1228,6 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
         navigation_summary_max_nodes=settings.rag_navigation_summary_max_nodes,
-        raptor_enabled=settings.rag_raptor_enabled,
         vision_concurrency=settings.rag_vision_concurrency,
         config_source="runtime",
     )
@@ -1259,7 +1259,6 @@ def _persist_post_parse_settings(settings: Settings) -> None:
             "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
                 settings.rag_navigation_summary_enabled
             ),
-            "RAG_RAPTOR_ENABLED": _format_env_bool(settings.rag_raptor_enabled),
             "RAG_VISION_CONCURRENCY": str(settings.rag_vision_concurrency),
         },
         section_comment="# 文書解析: 解析後の処理",

@@ -8,7 +8,6 @@ import { t } from "../src/lib/i18n";
 const FIELDS = [
   { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
   { section: "numbers", key: "kanji_multipliers", min_value: 1, kind: "char_values", choices: [], ingest: true, max_chars: 40 },
-  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true, max_chars: 40 },
   { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true, max_chars: 40 },
   { section: "references", key: "cue_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
   { section: "titles", key: "edition_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
@@ -23,7 +22,7 @@ const FIELDS = [
 ];
 const BUILTIN = {
   numbers: { article_units: ["条"], kanji_multipliers: ["十=10", "百=100"] },
-  symbols: { normalization: "NFKC", bracket_pairs: ["()", "【】"] },
+  symbols: { bracket_pairs: ["()", "【】"] },
   references: { cue_words: ["を参照", "による"] },
   titles: { edition_words: ["改訂版"] },
   english: { en_section_words: ["section=section"] },
@@ -155,14 +154,12 @@ for (const viewport of [
     await expect(pairs).toBeFocused();
     expect(saved.overrides).toBeNull();
 
-    await pairs.fill("()\n【】");
-    await page.getByRole("combobox", { name: "文字の正規化" }).click();
-    await page.getByRole("option", { name: "NFC（全角と半角をそろえない）" }).click();
+    await pairs.fill("()\n【】\n〔〕");
     await page.getByRole("button", { name: "草稿を保存" }).click();
     await expect(page.getByText("草稿を保存しました。")).toBeVisible();
     expect(saved.overrides).toEqual({
       numbers: { article_units: ["条", "款"] },
-      symbols: { normalization: "NFC" },
+      symbols: { bracket_pairs: ["()", "【】", "〔〕"] },
     });
     await expect(page.getByRole("button", { name: "草稿を保存" })).toBeDisabled();
     await expectNoPageOverflow(page);

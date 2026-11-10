@@ -204,6 +204,80 @@ async def test_prepared_query_reaches_search_while_original_is_saved(
     assert calls == [query]
 
 
+@pytest.mark.parametrize("case", ["rewritten", "rule-selection", "disabled", "answered"])
+async def test_prepared_rewrite_reaches_send_side_for_progress_step(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """準備で補った結果と所要時間を送信の側へ渡し、処理の経過に段を残す（#4794）。"""
+    from app.rag.chat_question_token import (
+        read_history_rewrite_elapsed,
+        with_rule_selection_answers,
+    )
+    from app.schemas.chat import ChatMessageRequest
+    from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+
+    oracle, settings, calls = context_setup
+    if case == "disabled":
+        settings.rag_history_rewrite_enabled = False
+    query = "その手順は？"
+    _question, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", query, settings
+    )
+    assert token is not None
+    secret = settings.app_service_token_secret
+    if case == "rule-selection":
+        # 確認の提案が選択を足して署名し直しても、補完の所要時間を落とさない。
+        token = with_rule_selection_answers(secret, token, [], elapsed_seconds=0.1)
+    elapsed = read_history_rewrite_elapsed(secret, token)
+    assert (elapsed is None) is (case == "disabled")
+
+    async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        return request, effective, None, None
+
+    async def append(message: StoredMessage) -> StoredMessage:
+        return message
+
+    async def no_payload(*args: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(chat, "_resolve_query_context", resolve)
+    monkeypatch.setattr(oracle, "append_message", append, raising=False)
+    turn_request = ChatMessageRequest(content=query, question_context_token=token)
+    if case == "answered":
+        from app.rag.answer_engine import AnswerScope
+
+        async def no_pages(*args: Any) -> dict[str, Any]:
+            return {}
+
+        # 準備の後に確認へ新しく答えたら、補った質問を使わない（段も作らない）。
+        monkeypatch.setattr(
+            chat, "resolve_clarification", lambda *args: (AnswerScope(context="合成"), None)
+        )
+        monkeypatch.setattr(chat, "load_runtime_knowledge_payload", no_payload)
+        monkeypatch.setattr(chat, "current_section_pages", no_pages)
+        monkeypatch.setattr(chat, "clarification_document_ids", lambda *args: [])
+        monkeypatch.setattr(chat, "clarification_record", lambda *args: None)
+        turn_request = turn_request.model_copy(
+            update={"clarification": ClarificationAnswer(rule_id="R01", option_ids=["o1"])}
+        )
+    turn = await chat._prepare_chat_turn(
+        oracle, "conversation-a", "profile-a", turn_request, settings
+    )
+    assert turn.history_question_prepared
+    if case == "answered":
+        assert turn.prepared_history_rewrite is None
+        assert turn.request.query == query
+        return
+    if case == "disabled":
+        assert turn.prepared_history_rewrite is None
+        assert not calls
+        return
+    assert turn.prepared_history_rewrite is not None
+    assert turn.prepared_history_rewrite.elapsed_seconds == elapsed
+    assert turn.request.query == "対象 A の手順は？ 条件 B との違いは？"
+    assert calls == [query]
+
+
 @pytest.mark.parametrize("outcome", ["answered", "skipped"])
 async def test_only_explicit_confirmations_enter_safe_user_history(outcome: str) -> None:
     message = StoredMessage(

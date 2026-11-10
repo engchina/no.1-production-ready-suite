@@ -147,7 +147,7 @@ async def test_text_and_vision_calls_use_each_model_connection() -> None:
     transport = RecordingTransport()
     client = OciEnterpriseAiClient(settings=_settings(), http_transport=transport)
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
     await client.generate_from_images([b"png"], "説明してください")
     await client.generate_from_image(b"%PDF", "説明", mime_type="application/pdf")
 
@@ -181,10 +181,12 @@ async def test_compare_model_override_uses_that_model_connection() -> None:
         settings=_settings(), http_transport=transport, model_id="text-c"
     )
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert _connection_of(transport.calls[0]) == SECONDARY_CONNECTION
-    assert client.preview_llm_request("質問", "根拠").url.startswith(SECONDARY)
+    assert client.preview_llm_request("質問", "根拠", system_prompt="合成の指示").url.startswith(
+        SECONDARY
+    )
 
 
 async def test_tertiary_model_uses_responses_api_without_project_header() -> None:
@@ -192,7 +194,7 @@ async def test_tertiary_model_uses_responses_api_without_project_header() -> Non
     transport = RecordingTransport()
     client = OciEnterpriseAiClient(settings=_settings(), http_transport=transport, model_id="gpt-d")
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert _connection_of(transport.calls[0]) == TERTIARY_CONNECTION
     assert "OpenAI-Project" not in transport.calls[0]["headers"]

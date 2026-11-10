@@ -33,11 +33,14 @@ export function DataLoadFailure({
   error,
   fallback,
   onRetry,
+  layout,
   testId,
 }: {
   error: unknown;
   fallback: string;
   onRetry: () => void;
+  /** `field` は選択欄の候補など、欄を支える読み取りの失敗（欄の位置の Banner。#4222）。 */
+  layout?: "region" | "field";
   testId?: string;
 }) {
   const databaseAction = useDatabaseAction();
@@ -48,6 +51,7 @@ export function DataLoadFailure({
       labels={dataLoadLabels()}
       onRetry={onRetry}
       databaseAction={databaseAction}
+      layout={layout}
       testId={testId}
     />
   );

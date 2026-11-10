@@ -479,7 +479,9 @@ class _ScriptedLlm:
         self.options: list[dict[str, object]] = []
 
     async def generate(self, prompt: str, text: str, **options: object) -> str:
-        self.prompts.append(prompt)
+        # 段の指示はシステムの文で渡し、質問の位置には何も置かない(#4776)。
+        assert prompt == ""
+        self.prompts.append(str(options["system_prompt"]))
         self.texts.append(text)
         self.options.append(options)
         if self.fail_marker and self.fail_marker in text and self.error is not None:

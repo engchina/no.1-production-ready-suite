@@ -119,7 +119,6 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_page_continuation_",
     "rag_heading_level_inference_",
     "rag_navigation_summary_",
-    "rag_raptor_",
     "rag_field_extraction_",
     "rag_auto_",
     # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。
@@ -182,8 +181,6 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_runtime_knowledge",
         "rag_search_answer_profile_revision",
         "rag_support_guide",
-        # 言語資源の差のファイルの置き場所。値は path で、内容の版ではない。
-        "rag_language_pack_file",
         # 形式別の既定（#4732）のファイルの置き場所。値は path で、内容は取込の設定（結果は
         # chunk_set の id に残る）。
         "rag_file_type_defaults_file",

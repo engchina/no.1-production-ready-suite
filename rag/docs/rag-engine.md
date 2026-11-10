@@ -259,15 +259,15 @@ level は使わない。そのため「第 3 章 > 3.1」の 3.1 は第 3 章の
 （終わる）か chunk の見出しの列に名前を持つ chunk → 開始のページ以降で始まる最初の chunk の順で決める（ページの範囲の外の
 要素の ID は使わない。人がページを直した章節）。各 chunk は、始まりがその chunk 以前の最後の章節（所有の章節）と、その祖先の
 章節と、文書全体（仮想の根の章節 `document`）に入る。所有の章節の終了のページより後ろの chunk は、ページを含む祖先へ、
-無ければ文書全体へ移す。章節の無い文書は文書全体が 1 つの章節になる。派生の chunk（RAPTOR・章節の要約、項目抽出の値）は入れない。
+無ければ文書全体へ移す。章節の無い文書は文書全体が 1 つの章節になる。派生の chunk（章節の要約、項目抽出の値）は入れない。
 
 章節の本文は `section_map_service.read_section`（section_id → 章節の中の順の chunk の本文と範囲。検索と同じ見え方の条件）
 で読む。MCP の `rag_read_section` と、回答のときの章節の拡張（#1436 / #1437）が共通で使う。
 
-検索で当たった派生の chunk（章節の要約・RAPTOR の要約・項目抽出の値。判定は `rag_parser_core.extraction.is_derived_content`
+検索で当たった派生の chunk（章節の要約・項目抽出の値。判定は `rag_parser_core.extraction.is_derived_content`
 で、印の無い古い chunk も `content_kind` で判定する）は検索の手がかりとして使い、回答の根拠には渡さない（#2641）。回答の
 検索は、その chunk が指す原文（章節の要約は同じ版の同じ `section_path` の chunk、項目抽出の値は `field_source_element_id`
-の要素を含む chunk、RAPTOR の要約は `raptor_child_indices` の子を元の chunk まで辿ったもの）を検索と同じ条件（chunk の種類の
+の要素を含む chunk）を検索と同じ条件（chunk の種類の
 条件だけを外す）で読み、派生の chunk の位置に置く（`app/rag/derived_evidence.py`。1 件につき 6 件まで）。原文が読めなければ
 何も置かず（根拠不足として扱う）、診断 `derived_evidence` に残す。前後の文脈・交差参照・実体と関係情報の拡張・章節の拡張・
 MCP の `rag_read_document` も派生の chunk を返さない。
@@ -307,7 +307,7 @@ ai-foundations-lab の検証との照合（#512）:
 
 親子階層の分割は、頁の下端の頁番号（`Page-footer` の本文が頁番号だけの形）から各頁の論理頁を決め、chunk の `layout.logical_page_labels`（物理頁 → 論理頁）と検索の文の `Pages: p.3; p.3=logical 1` に入れる（`rag_engine/chunking/page_numbers.py`）。
 
-- **頁番号の形**: 空白を除いた本文の全体が「頁の語・範囲の記号・`/総頁数` を前後に付けた 1 つの数」（`3`・`- 3 -`・`3頁`・`P.3`・`Page 3`・`3/20`・`ii`・`三頁`）。頁の語・範囲の記号は言語資源の `markers`、数の体系（算用数字・ローマ数字 `numbers.roman_digits`・漢数字 `numbers.kanji_digits` / `kanji_multipliers`）は言語資源の `numbers` から作る。比べる前に言語資源の文字の正規化（`symbols.normalization`。既定 NFKC。全角の数字・`Ⅳ`）をする。ローマ数字は標準の書き方（`iv`。`iiii` は読まない）だけを読む。
+- **頁番号の形**: 空白を除いた本文の全体が「頁の語・範囲の記号・`/総頁数` を前後に付けた 1 つの数」（`3`・`- 3 -`・`3頁`・`P.3`・`Page 3`・`3/20`・`ii`・`三頁`）。頁の語・範囲の記号は言語資源の `markers`、数の体系（算用数字・ローマ数字 `numbers.roman_digits`・漢数字 `numbers.kanji_digits` / `kanji_multipliers`）は言語資源の `numbers` から作る。比べる前に NFKC にそろえる（全角の数字・`Ⅳ`。取込と検索で固定。#4784）。ローマ数字は標準の書き方（`iv`。`iiii` は読まない）だけを読む。
 - **並びで確かめる**: 文書全体の候補を頁の順に、同じ数の体系で値が増え、物理頁との差が一定の並びにつなぐ。並びの頁数が `page_number_min_run_pages`（文書の頁数がこれより少なければ文書の頁数）以上の並びだけを長い順に採り、採った並びの頁の範囲と重なる短い並び（並びの途中の外れた数）は使わない。1 頁だけ別の数（年・図の番号）を持つ頁、頁の多い文書の 1 頁だけの数は論理頁にならない。番号の無い頁を挟んでも差が同じなら同じ並び。
 - **数の体系ごとの並び**: 前付きのローマ数字（`i`・`ii`）と本文の算用数字（`1`・`2`）は別の並び。論理頁の値は、算用数字・漢数字は数、ローマ数字は書かれた字のまま（`"ii"`。本文の頁 2 と見分ける）。
 - **設定**（`rag_engine` の `ChunkingConfig`。chunk run の `config_hash` に入る。backend の取込・検索・回答設定と文書レシピには出さず、既定値で分割する）:

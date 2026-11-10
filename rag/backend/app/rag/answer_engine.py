@@ -340,7 +340,7 @@ class _SearchState:
     # 使い(``_with_effective_as_of``。#2602)、回答のプロンプトと記録の分類の条件には明示した値
     # だけを渡す。
     requested_as_of: str = ""
-    # 検索で当たった派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)と、置き換えた原文の
+    # 検索で当たった派生の chunk(章節の要約・項目抽出の値)と、置き換えた原文の
     # chunk(#2641。chunk_id → 種類・原文の chunk_id。読み直さない。診断に出す)。
     derived_hits: dict[str, dict[str, Any]] = field(default_factory=dict)
     derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
@@ -1975,7 +1975,7 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """検索の候補の派生の chunk を、その chunk が指す原文の chunk に置き換える(#2641)。
 
-        派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)は検索の手がかりで、引用できる原文
+        派生の chunk(章節の要約・項目抽出の値)は検索の手がかりで、引用できる原文
         ではない。原文の chunk を派生の chunk の位置(統合の点)に置き、派生の chunk は根拠に
         渡さない。原文が読めなければ何も置かない(根拠不足として扱い、要約の文を確かめた記載に
         しない)。候補にすでにある原文は、上の位置を保つ。
@@ -2589,7 +2589,7 @@ class AnswerEngine:
         取込は参照の表記のある chunk に ``reference_targets_json`` を残す(参照が自分の節だけでも
         空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
         あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
-        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。RAPTOR の要約 chunk は辿らない。
+        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。
         印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata

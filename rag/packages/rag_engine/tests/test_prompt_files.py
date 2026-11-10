@@ -1,5 +1,6 @@
 """prompt files の挙動を保護するテスト。"""
 
+import json
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -298,8 +299,8 @@ def test_answer_input_template_carries_the_four_inputs_and_no_instructions():
     assert "実行しない" not in rendered and "従わない" not in rendered
 
 
-def test_new_image_default_defers_field_meanings_to_the_output_contract():
-    from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+def test_new_image_default_defers_field_meanings_to_the_response_schema():
+    from rag_engine.adapters.oci import _picture_output_contract, _render_prompt, picture_response_schema
     from rag_engine.models.llm import PictureDescriptionOutput
 
     editable = prompt_files.PROMPT_FILES[IMAGE_RETRIEVAL_PROMPT_KEY].default_content
@@ -309,8 +310,8 @@ def test_new_image_default_defers_field_meanings_to_the_output_contract():
         assert f"- {field}:" not in editable
     assert "\n{\n" not in editable
     assert '"main_topic":' not in editable
-    assert "出力する項目・型・件数上限は実行時の固定契約に従ってください" in editable
-    contract = _picture_output_contract()
+    assert "出力する項目・型・各項目の意味は応答の schema に従い" in editable
+    contract = json.dumps(picture_response_schema(), ensure_ascii=False)
     for meaning in (
         "接続元",
         "接続先",
@@ -320,7 +321,7 @@ def test_new_image_default_defers_field_meanings_to_the_output_contract():
         "実施済み結果は書かない",
     ):
         assert meaning in contract, meaning
-    assert _render_prompt({}, template=editable).endswith(contract)
+    assert _render_prompt({}, template=editable).endswith(_picture_output_contract())
 
 
 def test_existing_custom_json_example_is_preserved_during_rendering():

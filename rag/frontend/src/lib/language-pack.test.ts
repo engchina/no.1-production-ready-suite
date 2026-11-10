@@ -12,7 +12,6 @@ import {
 const FIELDS: LanguagePackField[] = [
   { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
   { section: "numbers", key: "kanji_digits", kind: "char_values", choices: [], ingest: true, max_chars: 40 },
-  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true, max_chars: 40 },
   { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true, max_chars: 40 },
   {
     section: "english",
@@ -26,7 +25,7 @@ const FIELDS: LanguagePackField[] = [
 ];
 const BUILTIN: LanguagePackSections = {
   numbers: { article_units: ["条"], kanji_digits: ["一=1"] },
-  symbols: { normalization: "NFKC", bracket_pairs: ["()"], name_chars: ["一-鿿"] },
+  symbols: { bracket_pairs: ["()"], name_chars: ["一-鿿"] },
   english: { en_section_words: ["section=section"] },
 };
 
@@ -43,7 +42,6 @@ describe("言語資源の画面の値（Issue 2181）", () => {
     const texts = {
       ...textsFromSections(FIELDS, BUILTIN),
       "numbers.kanji_digits": "一=いち",
-      "symbols.normalization": "NFKD",
       "symbols.bracket_pairs": "()\n(",
       "english.en_section_words": "part=volume",
       "symbols.name_chars": "あいう",
@@ -53,7 +51,6 @@ describe("言語資源の画面の値（Issue 2181）", () => {
       "numbers.kanji_digits",
       "symbols.bracket_pairs",
       "symbols.name_chars",
-      "symbols.normalization",
     ]);
     expect(languagePackErrors(FIELDS, textsFromSections(FIELDS, BUILTIN))).toEqual({});
   });

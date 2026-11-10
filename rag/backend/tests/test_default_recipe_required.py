@@ -74,7 +74,7 @@ async def test_missing_recipe_stops_real_creation_or_staging_before_later_writes
             await client.create_document_recipe("doc-1")
         else:
             await RecipeStagingIngestion(oracle=client, settings=Settings.model_construct()).ingest(
-                "doc-1", b"synthetic", "synthetic"
+                "doc-1", b"synthetic"
             )
     assert len(_statements(pool)) == 1 and _write_statements(pool) == []
     assert pool.connection.rollbacks == 1 and pool.connection.commits == 0

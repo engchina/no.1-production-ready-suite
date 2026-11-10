@@ -376,7 +376,6 @@ def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
         "heading_levels",
         "field_extraction",
         "navigation_summary",
-        "raptor_summary_system",
     ],
 )
 def test_feature_prompts_save_and_reset_with_their_screen_permission(
@@ -411,10 +410,9 @@ def test_feature_prompts_save_and_reset_with_their_screen_permission(
     assert _prompt(reset, key)["customized"] is False
 
 
-async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leaks() -> None:
+async def test_saved_summary_prompt_reaches_the_model_as_system_text() -> None:
     from typing import cast
 
-    from app.rag.chunking import Chunk
     from app.rag.ingestion import IngestionPipeline
     from app.schemas.extraction import DocumentElement, StructuredExtraction
 
@@ -422,10 +420,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
 
     class Oracle:
         async def answer_prompt_overrides(self) -> dict[str, str]:
-            return {
-                "navigation_summary": "独自の章節指示",
-                "raptor_summary_system": "独自の共通指示\n独自の階層指示",
-            }
+            return {"navigation_summary": "独自の章節指示"}
 
     class Model:
         async def generate(self, prompt: str, context: str, **options: Any) -> str:
@@ -435,12 +430,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
     pipeline = IngestionPipeline(
         oracle=cast(Any, Oracle()),
         vlm=cast(Any, Model()),
-        settings=Settings(
-            rag_navigation_summary_enabled=True,
-            rag_raptor_enabled=True,
-            rag_raptor_cluster_size=2,
-            rag_raptor_max_levels=1,
-        ),
+        settings=Settings(rag_navigation_summary_enabled=True),
     )
     extraction = StructuredExtraction(
         elements=[
@@ -449,14 +439,8 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
     )
     result = await pipeline._attach_navigation_tree("trace", extraction)
     assert result.navigation[0].summary == "合成の要約"
-    chunks = [
-        Chunk(text=f"本文 {i}", index=i, start_offset=i * 10, end_offset=i * 10 + 9)
-        for i in range(4)
-    ]
-    summaries = await pipeline._augment_with_raptor("trace", chunks, None)
-    assert len(summaries) > len(chunks)
-    assert calls[0] == ("独自の章節指示", None)
-    assert all(call == ("", "独自の共通指示\n独自の階層指示") for call in calls[1:])
+    # 段の指示はシステムの文として渡し、利用者側には文書の内容だけを渡す(#4776)。
+    assert calls == [("", "独自の章節指示")]
     unsaved = IngestionPipeline(oracle=cast(Any, UneditedPromptOracle()), settings=Settings())
     assert await unsaved._stage_prompt("navigation_summary", "既定") == "既定"
 

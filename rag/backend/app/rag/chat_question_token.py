@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -27,16 +28,20 @@ def issue_question_token(
     question: str,
     *,
     confirmed_fact_ids: tuple[str, ...] = (),
+    history_rewrite_elapsed_seconds: float | None = None,
 ) -> str:
-    return issue_signed_token(
-        _key(secret),
-        version=_VERSION,
-        claims={
-            "binding": dict(binding),
-            "question": question,
-            "confirmed_fact_ids": list(confirmed_fact_ids),
-        },
-    )[0]
+    """``history_rewrite_elapsed_seconds`` は、準備の中で履歴による補完を実行したときの所要時間。
+
+    送信の側は補完を呼び直さず、この時間で処理の経過に同じ段を残す（実行しなかったときは None）。
+    """
+    claims: dict[str, Any] = {
+        "binding": dict(binding),
+        "question": question,
+        "confirmed_fact_ids": list(confirmed_fact_ids),
+    }
+    if history_rewrite_elapsed_seconds is not None:
+        claims["history_rewrite_elapsed_seconds"] = history_rewrite_elapsed_seconds
+    return issue_signed_token(_key(secret), version=_VERSION, claims=claims)[0]
 
 
 def read_question_context(
@@ -54,3 +59,15 @@ def read_question_context(
 
 def read_question_token(secret: str, token: str, binding: Mapping[str, Any]) -> str:
     return read_question_context(secret, token, binding)[0]
+
+
+def _elapsed(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) and value >= 0 else None
+
+
+def read_history_rewrite_elapsed(secret: str, token: str) -> float | None:
+    """準備の中で履歴による補完を実行したときの所要時間（秒）。実行していなければ None。"""
+    payload = verify_signed_token(_key(secret), token, version=_VERSION)
+    return _elapsed(payload.get("history_rewrite_elapsed_seconds"))

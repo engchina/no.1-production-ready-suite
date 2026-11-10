@@ -23,6 +23,7 @@ import {
   apiErrorMessage,
   compareNames,
   ListScrollRegion,
+  dataLoadView,
 } from "@production-ready/ui";
 import { agentApi, type AgentProfile, type AgentVersion } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -134,7 +135,17 @@ export function AgentsPage() {
           subtitle={t("page.agents.subtitle")}
           actions={
             canCreate
-              ? [{ id: "create", kind: "primary", label: t("agent.create"), icon: Plus, onClick: editor.openNew }]
+              ? [
+                  {
+                    id: "create",
+                    kind: "primary",
+                    label: t("agent.create"),
+                    icon: Plus,
+                    // 一覧を読み取れていない間は作らない（同じものを重ねて作るおそれ。messaging.md §3.6.1。#4222）。
+                    disabled: dataLoadView(agents, { isEmpty: agents.data?.agents.length === 0 }).blockCreate,
+                    onClick: editor.openNew,
+                  },
+                ]
               : []
           }
         />
@@ -237,9 +248,12 @@ export function AgentsPage() {
       availableSkills={skills.data?.skills ?? []}
       skillsLoading={skills.isLoading}
       skillsError={skills.error}
+      onRetrySkills={() => void skills.refetch()}
       models={runtimeStatus.data?.models ?? []}
       defaultModelId={runtimeStatus.data?.model_id ?? ""}
       modelsLoading={runtimeStatus.isLoading}
+      modelsError={runtimeStatus.data === undefined ? runtimeStatus.error : null}
+      onRetryModels={() => void runtimeStatus.refetch()}
       actions={agent ? agentActions(agent) : []}
       readOnly={agent ? !managesAgent(agent) : !canCreate}
       sharing={

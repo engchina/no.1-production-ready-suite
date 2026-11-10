@@ -1,6 +1,6 @@
 """検索で当たった派生の chunk を、回答の根拠に渡す原文の chunk に置き換える（#2641）。
 
-派生の chunk（章節の要約・RAPTOR の要約・項目抽出の値）は検索の手がかりで、引用できる原文では
+派生の chunk（章節の要約・項目抽出の値）は検索の手がかりで、引用できる原文では
 ない。要約だけに含まれる値が、確かめた記載（``answer_use=confirmed``）として回答・MCP の根拠に
 出ないこと、同じ章節の原文は従来どおり根拠になることを、合成の chunk と決まった応答の LLM で
 確かめる（DB と OCI は呼ばない。状態はテストごとに作る）。
@@ -50,12 +50,6 @@ DERIVED_METADATA: dict[str, dict[str, object]] = {
         "field_source_element_id": "el-7",
     },
     "field_without_mark": {"content_kind": "field", "field_source_element_id": "el-7"},
-    "raptor_summary": {
-        "content_kind": "summary",
-        "raptor_summary": True,
-        "raptor_level": 1,
-        "raptor_child_indices": "0,1",
-    },
 }
 
 
@@ -138,8 +132,7 @@ class DerivedSourceStub:
         *,
         document_id: str,
         chunk_set_id: str,
-        chunk_indices: Sequence[int] = (),
-        element_id: str = "",
+        element_id: str,
         limit: int,
     ) -> list[RetrievedChunk]:
         self.chunk_set_calls.append(
@@ -147,7 +140,6 @@ class DerivedSourceStub:
                 "filters": dict(filters),
                 "document_id": document_id,
                 "chunk_set_id": chunk_set_id,
-                "chunk_indices": list(chunk_indices),
                 "element_id": element_id,
             }
         )
@@ -158,11 +150,8 @@ class DerivedSourceStub:
             for row in self.rows
             if row.document_id == document_id and row.metadata.get("chunk_set_id") == chunk_set_id
         ]
-        if chunk_indices:
-            rows = [row for row in rows if row.metadata.get("chunk_index") in set(chunk_indices)]
-        if element_id:
-            # SQL と同じ部分一致（完全一致は呼び出し側が確かめる）。
-            rows = [row for row in rows if element_id in str(row.metadata.get("element_ids"))]
+        # SQL と同じ部分一致（完全一致は呼び出し側が確かめる）。
+        rows = [row for row in rows if element_id in str(row.metadata.get("element_ids"))]
         return sorted(rows, key=lambda row: int(str(row.metadata["chunk_index"])))[:limit]
 
 
@@ -176,9 +165,8 @@ class DerivedSourceStub:
         ("section_summary_without_mark", "section_summary"),
         ("field", "field"),
         ("field_without_mark", "field"),
-        ("raptor_summary", "raptor_summary"),
     ],
-    ids=["section-summary", "section-summary-legacy", "field", "field-legacy", "raptor"],
+    ids=["section-summary", "section-summary-legacy", "field", "field-legacy"],
 )
 def test_derived_kind_reads_marks_and_content_kind(name: str, kind: str) -> None:
     chunk = _derived(name)
@@ -253,39 +241,17 @@ async def test_field_reads_the_chunk_of_the_source_element_exactly() -> None:
     assert stub.chunk_set_calls[0]["filters"] == {}
 
 
-async def test_raptor_summary_follows_upper_levels_down_to_the_leaves() -> None:
-    upper = _derived("raptor_summary", chunk_id="doc-1:r2")
-    upper.metadata.update(raptor_level=2, raptor_child_indices="10,11", chunk_index=12)
-    lower = [
-        _derived("raptor_summary", chunk_id="doc-1:r10"),
-        _derived("raptor_summary", chunk_id="doc-1:r11"),
-    ]
-    lower[0].metadata.update(chunk_index=10, raptor_child_indices="0,1")
-    lower[1].metadata.update(chunk_index=11, raptor_child_indices="2")
-    leaves = [_original(f"doc-1:c{index}", f"本文 {index}", index=index) for index in range(3)]
-    stub = DerivedSourceStub([*leaves, *lower])
-
-    sources = await derived_source_chunks(stub, upper, filters={})
-
-    assert [chunk.chunk_id for chunk in sources] == ["doc-1:c0", "doc-1:c1", "doc-1:c2"]
-    assert [call["chunk_indices"] for call in stub.chunk_set_calls] == [[10, 11], [0, 1, 2]]
-
-
 @pytest.mark.parametrize(
     ("name", "missing"),
     [
         ("section_summary", "section_path"),
         ("field", "field_source_element_id"),
         ("field", "chunk_set_id"),
-        ("raptor_summary", "raptor_child_indices"),
-        ("raptor_summary", "chunk_set_id"),
     ],
     ids=[
         "section-without-path",
         "field-without-source",
         "field-without-chunk-set",
-        "raptor-without-children",
-        "raptor-without-chunk-set",
     ],
 )
 async def test_derived_chunk_without_a_pointer_has_no_source(name: str, missing: str) -> None:
@@ -370,8 +336,8 @@ async def _answer(
     return await engine.run(request), prompts
 
 
-DERIVED_NAMES = ["section_summary", "section_summary_without_mark", "field", "raptor_summary"]
-DERIVED_IDS = ["section-summary", "section-summary-legacy", "field", "raptor"]
+DERIVED_NAMES = ["section_summary", "section_summary_without_mark", "field"]
+DERIVED_IDS = ["section-summary", "section-summary-legacy", "field"]
 
 
 @pytest.mark.parametrize("name", DERIVED_NAMES, ids=DERIVED_IDS)
@@ -489,36 +455,29 @@ async def test_oracle_chunk_set_chunks_use_search_scope(monkeypatch: pytest.Monk
     filters = {"knowledge_base_id": "kb-1", "chunk_set_id": "cs-other"}
 
     rows = await client.retrieval_chunk_set_chunks(
-        filters, document_id="doc-1", chunk_set_id="cs-1", chunk_indices=[3, 1, 3], limit=5
-    )
-    await client.retrieval_chunk_set_chunks(
-        filters, document_id="doc-1", chunk_set_id="cs-1", element_id="el-7", limit=2
+        filters, document_id="doc-1", chunk_set_id="cs-1", element_id="el-7", limit=5
     )
 
     assert [row.chunk_id for row in rows] == ["doc-1:c1"]
     assert rows[0].metadata["chunk_index"] == 4
-    index_sql, index_binds = calls[0]
-    assert "kb-1" in index_binds.values()
-    assert index_binds["filter_document_id"] == "doc-1"
-    assert index_binds["source_chunk_set_id"] == "cs-1"
-    assert [index_binds["source_chunk_index_0"], index_binds["source_chunk_index_1"]] == [1, 3]
-    assert index_binds["source_limit"] == 5
-    # 版は有効な chunk_set の中で絞る（filters の chunk_set_id で有効でない版を読まない）。
-    assert "filter_chunk_set_id" not in index_binds
-    assert "active_cs.is_active = 1" in index_sql
-    assert "c.chunk_index IN" in index_sql
-    element_sql, element_binds = calls[1]
+    element_sql, element_binds = calls[0]
+    assert "kb-1" in element_binds.values()
+    assert element_binds["filter_document_id"] == "doc-1"
+    assert element_binds["source_chunk_set_id"] == "cs-1"
     assert element_binds["source_element_id"] == "el-7"
+    assert element_binds["source_limit"] == 5
+    # 版は有効な chunk_set の中で絞る（filters の chunk_set_id で有効でない版を読まない）。
+    assert "filter_chunk_set_id" not in element_binds
+    assert "active_cs.is_active = 1" in element_sql
     assert "$.element_ids" in element_sql
-    assert "c.chunk_index IN" not in element_sql
     # 絞る値が無ければ読まない。
     assert (
         await client.retrieval_chunk_set_chunks(
-            filters, document_id="doc-1", chunk_set_id="cs-1", limit=5
+            filters, document_id="doc-1", chunk_set_id="cs-1", element_id=" ", limit=5
         )
         == []
     )
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 async def test_rule_summary_resolves_original_elements_when_parser_section_path_differs() -> None:
