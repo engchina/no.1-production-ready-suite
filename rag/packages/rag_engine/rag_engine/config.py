@@ -491,9 +491,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         rerank_model=env.get("RERANK_MODEL", "cohere.rerank-v4.0-fast").strip(),
         oci_rerank_endpoint=env.get("OCI_RERANK_ENDPOINT", "").strip(),
         rerank_request_timeout_seconds=_env_int(env, "RERANK_REQUEST_TIMEOUT_SECONDS", 90),
-        rerank_retries=_env_int(env, "RERANK_RETRIES", 3),
-        rerank_retry_initial_wait_seconds=_env_float(env, "RERANK_RETRY_INITIAL_WAIT_SECONDS", 2.0),
-        rerank_retry_max_wait_seconds=_env_float(env, "RERANK_RETRY_MAX_WAIT_SECONDS", 30.0),
+        rerank_retries=_env_int(env, "RERANK_RETRIES", 5),
+        rerank_retry_initial_wait_seconds=_env_float(env, "RERANK_RETRY_INITIAL_WAIT_SECONDS", 1.0),
+        rerank_retry_max_wait_seconds=_env_float(env, "RERANK_RETRY_MAX_WAIT_SECONDS", 16.0),
         rerank_min_relevance_score=max(
             0.0,
             _env_float(env, "RERANK_MIN_RELEVANCE_SCORE", DEFAULT_RERANK_MIN_RELEVANCE_SCORE),

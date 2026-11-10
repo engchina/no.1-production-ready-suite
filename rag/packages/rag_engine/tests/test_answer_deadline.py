@@ -139,8 +139,8 @@ class LlmCallDeadlineTests(unittest.TestCase):
 
     def test_does_not_retry_when_wait_exceeds_remaining(self):
         client = _FakeClient(errors=[TimeoutError("slow")])
-        # 最初のやり直しの前の待ちは 1 秒。残りはそれより短い。
-        with bind_deadline(Deadline(0.5)), self.assertRaises(DeadlineExceeded):
+        # jitter を 0.75 秒に固定し、残りの 0.5 秒より長い待ちを確かめる。
+        with mock.patch.object(oci.random, "random", return_value=0.75), bind_deadline(Deadline(0.5)), self.assertRaises(DeadlineExceeded):
             _parse(client, _settings())
         self.assertEqual(len(client.calls), 1)
 
