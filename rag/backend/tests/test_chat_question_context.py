@@ -204,6 +204,80 @@ async def test_prepared_query_reaches_search_while_original_is_saved(
     assert calls == [query]
 
 
+@pytest.mark.parametrize("case", ["rewritten", "rule-selection", "disabled", "answered"])
+async def test_prepared_rewrite_reaches_send_side_for_progress_step(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """準備で補った結果と所要時間を送信の側へ渡し、処理の経過に段を残す（#4794）。"""
+    from app.rag.chat_question_token import (
+        read_history_rewrite_elapsed,
+        with_rule_selection_answers,
+    )
+    from app.schemas.chat import ChatMessageRequest
+    from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+
+    oracle, settings, calls = context_setup
+    if case == "disabled":
+        settings.rag_history_rewrite_enabled = False
+    query = "その手順は？"
+    _question, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", query, settings
+    )
+    assert token is not None
+    secret = settings.app_service_token_secret
+    if case == "rule-selection":
+        # 確認の提案が選択を足して署名し直しても、補完の所要時間を落とさない。
+        token = with_rule_selection_answers(secret, token, [], elapsed_seconds=0.1)
+    elapsed = read_history_rewrite_elapsed(secret, token)
+    assert (elapsed is None) is (case == "disabled")
+
+    async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        return request, effective, None, None
+
+    async def append(message: StoredMessage) -> StoredMessage:
+        return message
+
+    async def no_payload(*args: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(chat, "_resolve_query_context", resolve)
+    monkeypatch.setattr(oracle, "append_message", append, raising=False)
+    turn_request = ChatMessageRequest(content=query, question_context_token=token)
+    if case == "answered":
+        from app.rag.answer_engine import AnswerScope
+
+        async def no_pages(*args: Any) -> dict[str, Any]:
+            return {}
+
+        # 準備の後に確認へ新しく答えたら、補った質問を使わない（段も作らない）。
+        monkeypatch.setattr(
+            chat, "resolve_clarification", lambda *args: (AnswerScope(context="合成"), None)
+        )
+        monkeypatch.setattr(chat, "load_runtime_knowledge_payload", no_payload)
+        monkeypatch.setattr(chat, "current_section_pages", no_pages)
+        monkeypatch.setattr(chat, "clarification_document_ids", lambda *args: [])
+        monkeypatch.setattr(chat, "clarification_record", lambda *args: None)
+        turn_request = turn_request.model_copy(
+            update={"clarification": ClarificationAnswer(rule_id="R01", option_ids=["o1"])}
+        )
+    turn = await chat._prepare_chat_turn(
+        oracle, "conversation-a", "profile-a", turn_request, settings
+    )
+    assert turn.history_question_prepared
+    if case == "answered":
+        assert turn.prepared_history_rewrite is None
+        assert turn.request.query == query
+        return
+    if case == "disabled":
+        assert turn.prepared_history_rewrite is None
+        assert not calls
+        return
+    assert turn.prepared_history_rewrite is not None
+    assert turn.prepared_history_rewrite.elapsed_seconds == elapsed
+    assert turn.request.query == "対象 A の手順は？ 条件 B との違いは？"
+    assert calls == [query]
+
+
 @pytest.mark.parametrize("outcome", ["answered", "skipped"])
 async def test_only_explicit_confirmations_enter_safe_user_history(outcome: str) -> None:
     message = StoredMessage(
@@ -456,3 +530,60 @@ async def test_confirmation_api_keeps_unknown_and_shares_positive_choice(
     facts = read_rule_selection_answers(settings.app_service_token_secret, token)
     assert len(facts) == int(known)
     assert captured[0]["user_statements"].endswith(text)
+
+
+async def test_small_talk_suggestion_skips_clarification_and_keeps_intent(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """補完が挨拶と分けたら確認を出さず、条件の読み取りのモデルも呼ばない（#4787）。"""
+    from app.api.routes import search_answer_profile_knowledge as route
+    from app.rag.chat_question_token import read_history_intent
+    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
+
+    oracle, settings, _calls = context_setup
+
+    async def greeting(self: Any, query: str, history: Any) -> str:
+        self._history_intent = "greeting"
+        return ""
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("挨拶では条件の読み取りを呼ばない")
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+    monkeypatch.setattr(route, "recognize_rule_selections", forbidden)
+    result = await route.post_clarification_suggest(
+        "profile-a",
+        ClarificationSuggestRequest(query="合成の挨拶", conversation_id="conversation-a"),
+    )
+    assert result.data is not None
+    assert result.data.suggestion is None
+    token = result.data.question_context_token
+    assert token and read_history_intent(settings.app_service_token_secret, token) == "greeting"
+
+
+async def test_first_turn_preparation_runs_the_single_call_and_keeps_intent(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """会話の 1 回目（保存済みの発話なし）の準備でも、同じ 1 回の呼び出しを通す（#4787）。"""
+    from app.rag.chat_question_token import read_history_intent, read_history_rewrite_elapsed
+
+    oracle, settings, _calls = context_setup
+    oracle.messages = []
+    seen: list[tuple[str, int]] = []
+
+    async def greeting(self: Any, query: str, history: Any) -> str:
+        seen.append((query, len(history)))
+        self._history_intent = "greeting"
+        return ""
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
+    question, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", "合成の挨拶", settings, force_token=True
+    )
+    assert seen == [("合成の挨拶", 0)]
+    assert question == "合成の挨拶" and token
+    secret = settings.app_service_token_secret
+    assert read_history_intent(secret, token) == "greeting"
+    assert read_history_rewrite_elapsed(secret, token) is not None

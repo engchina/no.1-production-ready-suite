@@ -200,7 +200,7 @@ def _section_path(value: object) -> tuple[str, ...]:
 def map_chunk_from_row(row: dict[str, object]) -> MapChunk | None:
     """対応を作る chunk の行（本文でない派生の chunk は None）。"""
     metadata = _metadata_from_json(row.get("metadata_json"))
-    # 派生の chunk（RAPTOR・章節の要約、項目抽出の値）は引用できる原文ではないので、章節の本文に
+    # 派生の chunk（章節の要約、項目抽出の値）は引用できる原文ではないので、章節の本文に
     # 入れない。印の無い #2590 より前の chunk も content_kind で除く。
     if is_derived_content(metadata.get("content_kind"), metadata):
         return None

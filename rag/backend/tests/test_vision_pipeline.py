@@ -190,7 +190,6 @@ async def _ingest(pipeline: IngestionPipeline, pdf: bytes) -> Any:
     return await pipeline.ingest(
         DOCUMENT_ID,
         pdf,
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=len(pdf)),
         # Vision/分段の観点は、元bytes/hashのファイル準備が完了した入力から測る。

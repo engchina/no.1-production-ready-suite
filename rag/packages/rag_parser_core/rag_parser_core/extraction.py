@@ -24,7 +24,7 @@ type ExtractionArtifactValue = (
     | dict[str, "ExtractionArtifactValue"]
 )
 
-# 取込が原文から作った派生の要素・chunk（章節ナビゲーションの要約・項目抽出の値・RAPTOR の要約）の
+# 取込が原文から作った派生の要素・chunk（章節ナビゲーションの要約・項目抽出の値）の
 # content_kind と印（#2590）。索引の手がかりで、引用できる原文ではない。見出しとして読み直さず、
 # 分割で原文の要素と結合せず、章節の本文に入れない。
 SECTION_SUMMARY_CONTENT_KIND = "section_summary"
@@ -32,11 +32,10 @@ EXTRACTED_FIELD_CONTENT_KIND = "field"
 DERIVED_CONTENT_KINDS = frozenset({SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD_CONTENT_KIND})
 NAV_SUMMARY_KEY = "nav_summary"
 EXTRACTED_FIELD_KEY = "extracted_field"
-RAPTOR_SUMMARY_KEY = "raptor_summary"
 # 項目抽出の値を読み取った元の要素の ID。分割で chunk に引き継ぎ、検索で当たった値の chunk を
 # 根拠に渡すときに、この要素を含む原文の chunk を読む（#2641）。
 FIELD_SOURCE_ELEMENT_KEY = "field_source_element_id"
-DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY, RAPTOR_SUMMARY_KEY)
+DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY)
 
 # 書式の飾りとして文字に重ねる結合の線（上線 U+0305・下線 U+0332・二重下線 U+0333・
 # 二重上線 U+033F）。前後の文字の線とつながるように作られた記号で、文字の読みと意味を変えない。

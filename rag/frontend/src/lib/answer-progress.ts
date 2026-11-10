@@ -20,6 +20,8 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   retrieval: "search.stage.retrieval",
   evidence: "search.stage.evidence",
   history_rewrite: "search.stage.historyRewrite",
+  // 検索の要らない発話（挨拶・雑談）への応答（#4787）
+  small_talk_reply: "search.stage.smallTalkReply",
   // 会話の添付からの根拠の選択（#3475）
   attachment_evidence: "search.stage.attachmentEvidence",
   field_filter: "search.stage.fieldFilter",

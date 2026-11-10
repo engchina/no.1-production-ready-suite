@@ -523,11 +523,10 @@ test("文書分割の設定は、方式を切り替えて隠れた欄の不正�
   expect(savedPayload).toMatchObject({ strategy: "small_to_big", min_chars: 120 });
 });
 
-test("文脈ヘッダの切替と RAPTOR の設定は文書分割に出さない", { tag: "@responsive" }, async ({ page }) => {
+test("文脈ヘッダの切替は文書分割に出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockChunkingSettings(page);
   await page.goto("/settings/chunking");
   await expect(page.getByRole("switch", {name: "文脈ヘッダを検索対象へ追加"})).toHaveCount(0);
-  await expect(page.getByText("RAPTOR の階層の要約", {exact:true})).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 

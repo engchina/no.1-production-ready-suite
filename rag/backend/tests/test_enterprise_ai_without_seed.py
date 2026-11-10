@@ -27,7 +27,7 @@ async def test_text_and_image_calls_do_not_send_seed() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
     await client.generate_from_image(PNG, "説明して", mime_type="image/png")
     await client.generate_from_images([PNG], "説明して", mime_type="image/png")
 

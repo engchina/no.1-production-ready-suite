@@ -70,11 +70,17 @@ def _client(model_id: str) -> OciEnterpriseAiClient:
 
 
 async def test_drops_temperature_once_and_remembers(bodies: list[dict[str, Any]]) -> None:
-    assert await _client(REASONING_MODEL).generate("質問", "根拠") == "回答です"
+    assert (
+        await _client(REASONING_MODEL).generate("質問", "根拠", system_prompt="合成の指示")
+        == "回答です"
+    )
     assert ["temperature" in body for body in bodies] == [True, False]
 
     # 2 回目は送り直さずに最初から外す
-    assert await _client(REASONING_MODEL).generate("質問", "根拠") == "回答です"
+    assert (
+        await _client(REASONING_MODEL).generate("質問", "根拠", system_prompt="合成の指示")
+        == "回答です"
+    )
     assert len(bodies) == 3
     assert "temperature" not in bodies[2]
 
@@ -82,8 +88,8 @@ async def test_drops_temperature_once_and_remembers(bodies: list[dict[str, Any]]
 async def test_keeps_temperature_for_models_that_accept_it(
     bodies: list[dict[str, Any]],
 ) -> None:
-    await _client(REASONING_MODEL).generate("質問", "根拠")
-    await _client(SAMPLING_MODEL).generate("質問", "根拠")
+    await _client(REASONING_MODEL).generate("質問", "根拠", system_prompt="合成の指示")
+    await _client(SAMPLING_MODEL).generate("質問", "根拠", system_prompt="合成の指示")
     assert bodies[-1]["model"] == SAMPLING_MODEL
     assert bodies[-1]["temperature"] == 0.0
 
@@ -99,7 +105,7 @@ async def test_non_allow_listed_parameter_still_fails(
         lambda *args, **kwargs: {**original(*args, **kwargs), "tools": []},
     )
     with pytest.raises(httpx.HTTPStatusError, match="tools"):
-        await _client(SAMPLING_MODEL).generate("質問", "根拠")
+        await _client(SAMPLING_MODEL).generate("質問", "根拠", system_prompt="合成の指示")
     assert len(bodies) == 1
 
 

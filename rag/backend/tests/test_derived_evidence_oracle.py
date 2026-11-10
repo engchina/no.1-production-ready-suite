@@ -1,7 +1,7 @@
 """派生の chunk の原文を読む SQL（#2641）を、実 Oracle AI Database で確かめる。
 
-合成の文書（架空の手順書）を、原文の chunk と派生の chunk（章節の要約・項目抽出の値・RAPTOR の
-要約）で保存し、派生の chunk が指す原文の chunk が検索と同じ条件で返ること、範囲の外（別の
+合成の文書（架空の手順書）を、原文の chunk と派生の chunk（章節の要約・項目抽出の値）で
+保存し、派生の chunk が指す原文の chunk が検索と同じ条件で返ること、範囲の外（別の
 ナレッジベース）の文書を返さないことを確かめる。未到達なら oracle_db fixture が skip し、作成行は
 後始末する（AI は使わない）。
 """
@@ -48,14 +48,6 @@ def _chunks() -> list[Chunk]:
             extracted_field=True,
             field_source_element_id="p1-1",
             element_ids="field-0-a",
-        ),
-        _chunk(
-            5,
-            "全体の要約。",
-            content_kind="summary",
-            raptor_summary=True,
-            raptor_level=1,
-            raptor_child_indices="0,1,2",
         ),
     ]
 
@@ -120,7 +112,7 @@ async def test_derived_sources_read_original_chunks_on_real_oracle() -> None:
     document_id, chunk_set_id = await _indexed_document(
         client, file_name=f"derived-{token}.pdf", knowledge_base_id=kb.id
     )
-    ids = [f"{document_id}:{chunk_set_id}:{index}" for index in range(6)]
+    ids = [f"{document_id}:{chunk_set_id}:{index}" for index in range(5)]
     scope = {"knowledge_base_id": kb.id, "content_kind": "section_summary"}
 
     async def sources(index: int, filters: dict[str, str]) -> list[str]:
@@ -133,28 +125,26 @@ async def test_derived_sources_read_original_chunks_on_real_oracle() -> None:
     assert await sources(3, scope) == [ids[1], ids[2]]
     # 項目抽出の値 → 元の要素を含む原文（p1-1 と p1-10 を取り違えない）。
     assert await sources(4, scope) == [ids[0]]
-    # RAPTOR の要約 → 要約した子の原文。
-    assert await sources(5, scope) == [ids[0], ids[1], ids[2]]
     # 範囲の外のナレッジベースからは読まない。
     assert await sources(3, {"knowledge_base_id": other_kb.id}) == []
-    assert await sources(5, {"knowledge_base_id": other_kb.id}) == []
+    assert await sources(4, {"knowledge_base_id": other_kb.id}) == []
 
     rows = await client.retrieval_chunk_set_chunks(
         {"knowledge_base_id": kb.id},
         document_id=document_id,
         chunk_set_id=chunk_set_id,
-        chunk_indices=[5, 1],
+        element_id="p1-1",
         limit=10,
     )
-    assert [row.chunk_id for row in rows] == [ids[1], ids[5]]
-    assert rows[1].metadata["raptor_summary"] is True
+    # SQL は部分一致（p1-10 も返る。完全一致は呼び出し側が確かめる）。
+    assert [row.chunk_id for row in rows] == [ids[0], ids[2]]
     # 有効でない版（別の chunk_set）は読まない。
     assert (
         await client.retrieval_chunk_set_chunks(
             {"knowledge_base_id": kb.id},
             document_id=document_id,
             chunk_set_id=f"cs_missing_{token}",
-            chunk_indices=[1],
+            element_id="p1-1",
             limit=10,
         )
         == []

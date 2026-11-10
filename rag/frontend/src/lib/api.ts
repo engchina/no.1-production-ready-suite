@@ -538,7 +538,6 @@ export interface IngestionCallProgress {
     | "heading_levels"
     | "field_extraction"
     | "navigation_summary"
-    | "raptor_summary"
     | "embedding"
     | "rerank";
   succeeded: number;
@@ -1778,7 +1777,7 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
+export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -1800,7 +1799,6 @@ export interface AnswerPromptsData {
 /** 処理の順の段の区分（backend の answer_prompts.PROMPT_PHASES）。 */
 export type AnswerPromptPhase =
   | "ingestion"
-  | "indexing"
   | "knowledge"
   | "question"
   | "retrieval"
@@ -2349,7 +2347,6 @@ export interface ParserAdapterSettingsData {
   navigation_summary_enabled: boolean;
   /** 1 文書の取込で要約する章節数の実効上限。読み取り専用。 */
   navigation_summary_max_nodes?: number;
-  raptor_enabled?: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
   config_source: "runtime";
@@ -2370,7 +2367,6 @@ export interface ParserAdapterSettingsUpdate {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
-  raptor_enabled?: boolean;
   vision_concurrency?: number;
 }
 

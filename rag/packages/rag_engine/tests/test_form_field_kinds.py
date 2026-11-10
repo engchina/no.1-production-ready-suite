@@ -76,7 +76,7 @@ class OutputContractTests(unittest.TestCase):
             '  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": '
             '"selected / unselected / enabled / disabled / required / optional / unknown"}],'
         )
-        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt, picture_response_schema
 
         saved = "方針\n{\n" + old + "\n}"
         refined = refine_image_retrieval_prompt(saved)
@@ -86,7 +86,7 @@ class OutputContractTests(unittest.TestCase):
         contract = _picture_output_contract()
         # Step の見出しの無いテンプレートの後では、対象の指示が Step 1、出力契約が Step 2 になる(#3810)。
         self.assertTrue(rendered.endswith(contract.replace("## Step 7:", "## Step 2:", 1)))
-        schema = json.loads(contract.rsplit("\n", 1)[1])
+        schema = picture_response_schema()
         field = schema["$defs"]["FormFieldOutput"]
         self.assertIn("kind", field["required"])
         self.assertEqual(tuple(field["properties"]["kind"]["enum"]), FORM_FIELD_KINDS)

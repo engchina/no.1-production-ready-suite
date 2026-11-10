@@ -1403,8 +1403,9 @@ class Settings(
     rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
-            "チャットで回答するとき、会話履歴から最新の質問を"
-            "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
+            "チャットで回答するとき、毎回の発話で LLM を 1 回呼び、会話履歴から最新の質問を"
+            "単独の質問へ書き換え、検索の要らない発話(挨拶・雑談)かを分ける(#4787)。"
+            "1 回目(履歴なし)の発話でも呼ぶ。挨拶・雑談は検索を飛ばして根拠なしの短い応答にする。"
         ),
     )
     rag_search_top_k_default: int = Field(
@@ -2152,36 +2153,6 @@ class Settings(
         ge=0.0,
         le=300.0,
         description="HTTP マイクロサービス retry の最大待機秒数。",
-    )
-    rag_raptor_enabled: bool = Field(
-        default=False,
-        description=(
-            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI で"
-            "要約し、多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ。"
-            "追加 LLM 呼び出しを伴う opt-in。再試行のあとも要約できない cluster は飛ばす(leaf は"
-            "残る)。権限・モデルの設定の誤り・割り当ての使い切りは取込を止める(#2067)。"
-        ),
-    )
-    rag_raptor_cluster_size: int = Field(
-        default=5,
-        ge=2,
-        le=50,
-        description="RAPTOR の 1 cluster あたり chunk 数(要約単位)。",
-    )
-    rag_raptor_max_levels: int = Field(
-        default=2,
-        ge=1,
-        le=5,
-        description="RAPTOR の階層の要約 tree の最大階層数。",
-    )
-    rag_raptor_concurrency: int = Field(
-        default=4,
-        ge=1,
-        le=16,
-        description=(
-            "RAPTOR の階層の要約の LLM を同時に呼ぶ数の上限（#2067。1 つの階層の cluster を並べ、"
-            "階層は順に作る）。429 を受けると自動で減らし（最小 1）、成功が続くとこの上限まで戻す。"
-        ),
     )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,

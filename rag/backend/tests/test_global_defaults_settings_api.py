@@ -30,7 +30,6 @@ POST_PARSE_ATTRS = (
     "rag_vision_enabled",
     "rag_field_extraction_enabled",
     "rag_navigation_summary_enabled",
-    "rag_raptor_enabled",
 )
 AUTO_ADVANCE_ATTRS = (
     "rag_auto_parse_after_preprocess_enabled",
@@ -358,16 +357,6 @@ def test_patch_post_parse_vision_concurrency_persists_env(settings: Settings) ->
     too_many = client.patch("/api/settings/parser-adapters", json={"vision_concurrency": 17})
     assert too_many.status_code == 422
     assert settings.rag_vision_concurrency == 6
-
-
-@pytest.mark.parametrize("enabled", [True, False])
-def test_raptor_setting_is_saved_by_post_parse_api(settings: Settings, enabled: bool) -> None:
-    settings.rag_raptor_enabled = not enabled
-    response = client.patch("/api/settings/parser-adapters", json={"raptor_enabled": enabled})
-    assert response.status_code == 200
-    assert response.json()["data"]["raptor_enabled"] is enabled
-    assert settings.rag_raptor_enabled is enabled
-    assert dotenv_values(_env_file())["RAG_RAPTOR_ENABLED"] == str(enabled).lower()
 
 
 def test_image_purpose_global_api_persists_and_reports_value(settings: Settings) -> None:
