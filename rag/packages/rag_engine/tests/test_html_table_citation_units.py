@@ -2,7 +2,9 @@
 
 from typing import Any
 
+from rag_engine.chunking.constants import _flatten_table_html
 from rag_engine.generation import grounded
+from rag_engine.generation.citation_content import table_html_as_rows
 from rag_engine.models.llm import GroundedItem
 
 ROW_HEADER = '<tr><th colspan="2">合成の区分</th></tr>'
@@ -76,3 +78,45 @@ def test_a_row_cut_by_a_broken_table_shows_no_tags() -> None:
 
 def test_text_without_table_tags_is_unchanged() -> None:
     assert "1 < 2 かつ <値> を入力します。" in rendered("1 < 2 かつ <値> を入力します。")
+
+
+def test_long_attributes_and_nested_inline_tags_do_not_leak_into_the_answer() -> None:
+    text = f'<table><tr data-note="a > b"><td><span title="{"x" * 100}"><strong>合成の本文</strong></span></td><td>10</td></tr></table>'
+    answer = rendered(text)
+    assert "<span" not in answer and "<strong" not in answer
+    assert "| 合成の本文 | 10 |" in answer
+    # 引用単位は表示に変換した本文ではなく、元の HTML の範囲。
+    assert pieces(text) == [text[text.index("<tr ") : text.index("</tr>") + len("</tr>")]]
+
+
+def test_pipe_and_backslash_are_literal_cell_values() -> None:
+    text = "<table><tr><td>A|B</td><td>10</td></tr><tr><td>C\\|D\\</td><td>20</td></tr></table>"
+    assert table_html_as_rows(text) == "| A\\|B | 10 |\n| C\\\\|D\\ | 20 |"
+
+
+def test_caption_and_surrounding_text_are_separate_from_table_rows() -> None:
+    text = f"前文<table><caption>合成の表題</caption>{ROW_A}{ROW_B}</table>後文"
+    assert table_html_as_rows(text).splitlines() == ["前文", "合成の表題", "| 項目A | 10 |", "| 項目B | 20 |", "後文"]
+
+
+def test_plain_fallback_and_quote_only_remove_long_tags_without_cutting_values() -> None:
+    text = f'</td></tr><tr><td><span title="{"x" * 100}">合成の本文</span></td><td>30</td>'
+    for actual in (table_html_as_rows(text), _flatten_table_html(text)):
+        assert "<span" not in actual and "合成の本文" in actual and "30" in actual
+
+
+def test_html_entities_are_text_and_are_not_parsed_as_new_tags() -> None:
+    text = "<table><tr><td>&lt;span&gt; &amp; A&#124;B</td><td>10</td></tr></table>"
+    assert table_html_as_rows(text) == "| <span> & A\\|B | 10 |"
+
+
+def test_nested_tables_fall_back_to_plain_text_without_losing_values() -> None:
+    text = "<table><tr><td>外側<table><tr><td>内側</td></tr></table>続き</td><td>20</td></tr></table>"
+    actual = table_html_as_rows(text)
+    assert "<" not in actual
+    assert all(value in actual for value in ("外側", "内側", "続き", "20"))
+
+
+def test_extreme_colspan_has_bounded_output() -> None:
+    text = f'<table><tr><td colspan="{"9" * 5000}">合成の本文</td></tr></table>'
+    assert table_html_as_rows(text).count("|") == 21
