@@ -730,11 +730,13 @@ async def post_clarification_suggest(
             guide = guide_clarification(selected)
         if guide is None:
             return response(ClarificationSuggestionsData())
-        rule_id, title, guide_question = guide
+        guide_condition_id, title, guide_question = guide
         return response(
             ClarificationSuggestionsData(
                 suggestion=ClarificationSuggestionData(
-                    rule_id=rule_id, rule_title=title, clarification=guide_question
+                    guide_condition_id=guide_condition_id,
+                    guide_title=title,
+                    clarification=guide_question,
                 )
             )
         )

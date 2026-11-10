@@ -253,7 +253,6 @@ from app.features.agent.support_task import (
     build_support_task,
     caller_planned_arguments,
     caller_planned_schema,
-    evidence_clarification_step,
     guide_check_note,
     has_support_task_activity,
     is_environment_tool,
@@ -1542,19 +1541,6 @@ class _ToolRecorder:
             ensure_ascii=False,
         )
 
-    def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
-        if (
-            definition is None
-            or self.confirmation is None
-            or not self.confirmation.skips_tool_clarification
-            or mcp_base_tool_name(name) not in {RAG_SEARCH, RAG_RETRIEVE_EVIDENCE}
-        ):
-            return False
-        properties = (definition.input_schema or {}).get("properties")
-        # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。根拠の取得の
-        # ルールの確認は、呼び出し元が検索文を作る取得（#2651）でだけ出る。
-        return isinstance(properties, dict) and "skip_clarification" in properties
-
     def _original_question(self, name: str, definition: ToolDefinition | None) -> str | None:
         """RAG の根拠を集めるツールに渡す利用者の元の質問（Run の目標。#2261。渡さなければ None）。
 
@@ -1807,10 +1793,6 @@ class _ToolRecorder:
         )
         if scoped is not None:
             call_arguments = scoped.arguments
-        if self._skips_rag_clarification(name, definition):
-            # 利用者に確認しない Run は、RAG にルールの回答前の確認を出させない（#2117。モデルに
-            # 任せず決定的に付ける）。
-            call_arguments = {**call_arguments, "skip_clarification": True}
         original_question = self._original_question(name, definition)
         if original_question is not None and not call_arguments.get("original_question"):
             call_arguments = {**call_arguments, "original_question": original_question}
@@ -1955,10 +1937,6 @@ class _ToolRecorder:
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
-                # 検索・回答プロファイルのルールの確認（#2651。検索文を作る取得だけが返す）。
-                next_step = self._without_asking(evidence_clarification_step(output))
-                if next_step is not None:
-                    output = {**output, "next_step": next_step}
                 knowledge = profile_knowledge_summary(output)
                 if knowledge is not None:
                     # 検索・回答プロファイルのルール・用語は結果のまま（根拠と分けた項目で）モデルへ

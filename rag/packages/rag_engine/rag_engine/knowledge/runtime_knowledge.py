@@ -18,7 +18,7 @@ from typing import Any
 from rag_engine.matching.analysis import normalize_text
 
 from .rule_application import rule_version, select_rule_applications
-from .rule_matching import RuleMatches, rank_rules
+from .rule_matching import RuleMatches, select_guide_rules
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +87,6 @@ class RuntimeRule:
     title: str
     triggers: tuple[str, ...] = ()
     content: str = ""
-    purpose: str = "both"
-    instruction_kind: str = "requirement"
-    exclusive_group: str = ""
-    priority: int = 0
-    confirmation_signature: str = ""
     source: str = ""
     tags: tuple[str, ...] = ()
     status: str = ""
@@ -112,11 +107,6 @@ class RuntimeRule:
                 "tags": self.tags,
                 "status": self.status,
                 "updated_at": self.updated_at,
-                "purpose": self.purpose,
-                "instruction_kind": self.instruction_kind,
-                "exclusive_group": self.exclusive_group,
-                "priority": self.priority,
-                "confirmation": self.confirmation_signature,
             }
         )
 
@@ -136,10 +126,6 @@ class RuntimeRule:
             "title": self.title,
             "triggers": list(self.triggers),
             "content": self.content,
-            "purpose": self.purpose,
-            "instruction_kind": self.instruction_kind,
-            "exclusive_group": self.exclusive_group,
-            "priority": self.priority,
             "version": self.version,
             "source": self.source,
             "tags": list(self.tags),
@@ -285,10 +271,10 @@ class RuntimeKnowledgeContext:
         return " + ".join((ORIGINAL_QUESTION_SOURCE_LABEL, *self.expansion_sources))
 
     def rules_for_stage(self, stage: str) -> tuple[RuntimeRule, ...]:
-        """段階ごとの採用結果（業務ガイドの pinned のルールだけ）。採用の判断が無い文脈では用途だけで区分する。"""
+        """段階ごとの採用結果（業務ガイドの pinned のルールだけ）。確認の質問はガイドの条件で扱い、ここでは回答への指示だけを使う。"""
         allowed = tuple(rule for rule in self.matched_rules if PINNED_RULE_TAG in rule.tags)
         if not self.rule_applications:
-            return tuple(rule for rule in allowed if rule.purpose in (stage, "both"))
+            return allowed if stage == "generation" else ()
         accepted = {item["id"] for item in self.rule_applications if item["stage"] == stage and item["accepted"]}
         return tuple(rule for rule in allowed if rule.rule_id in accepted)
 
@@ -313,7 +299,7 @@ class RuntimeKnowledgeContext:
                 label = rule.title or rule.rule_id
                 triggers = f" (triggers: {', '.join(rule.triggers)})" if rule.triggers else ""
                 source = f" [{rule.source}]" if rule.source else ""
-                lines.append(f"- {label}{triggers} [{rule.instruction_kind}; id={rule.rule_id}]: {rule.content}{source}")
+                lines.append(f"- {label}{triggers} [requirement; id={rule.rule_id}]: {rule.content}{source}")
         if self.scope_context:
             lines.extend(
                 [
@@ -440,7 +426,7 @@ def build_runtime_knowledge_context(
 
     matched_terms = _matched_terms(original_question, knowledge.terms, term_limit) if match_terms else []
     rule_candidates = tuple(rule for rule in knowledge.rules if PINNED_RULE_TAG in rule.tags)
-    rule_matches = rank_rules(question, rule_candidates, MAX_RULES, tokens=_tokens) if rule_candidates else RuleMatches((), ())
+    rule_matches = select_guide_rules(rule_candidates, MAX_RULES) if rule_candidates else RuleMatches((), ())
     applications = select_rule_applications(rule_matches.selected, rule_limit)
     matched_rules = applications.selected
     generation_ids = {item["id"] for item in applications.decisions if item["stage"] == "generation" and item["accepted"]}
@@ -628,13 +614,6 @@ def _parse_rules(payload: Any) -> list[RuntimeRule]:
                     title=title,
                     triggers=tuple(triggers),
                     content=content,
-                    purpose=str(item.get("purpose", "both")),
-                    instruction_kind=str(item.get("instruction_kind", "requirement")),
-                    exclusive_group=_clean_text(item.get("exclusive_group"), 160),
-                    priority=item.get("priority", 0) if type(item.get("priority", 0)) is int else 0,
-                    confirmation_signature=json.dumps(item["clarification"], ensure_ascii=False, sort_keys=True)
-                    if isinstance(item.get("clarification"), dict)
-                    else "",
                     source=source,
                     tags=tuple(tags),
                     status=status,
@@ -678,10 +657,6 @@ def _matched_terms(question: str, terms: Sequence[RuntimeTerm], limit: int) -> l
 PINNED_RULE_TAG = "pinned"
 # 業務ガイドから作ったルールの印（pinned と一緒に付く）。
 SUPPORT_GUIDE_RULE_TAG = "support_guide"
-
-
-def _matched_rules(question: str, rules: Sequence[RuntimeRule], limit: int) -> list[RuntimeRule]:
-    return list(rank_rules(question, rules, limit, tokens=_tokens).selected)
 
 
 def _expansion_additions(

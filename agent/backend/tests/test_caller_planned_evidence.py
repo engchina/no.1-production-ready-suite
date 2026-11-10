@@ -44,7 +44,6 @@ from app.features.agent.skills import (
 from app.features.agent.skills_loader import load_skills_from_dir
 from app.features.agent.support_task import (
     caller_planned_schema,
-    evidence_clarification_step,
     rag_planned_arguments,
     rag_planned_schema,
 )
@@ -446,45 +445,18 @@ def test_agent_orchestrates_retrieval_figure_reading_and_answer(
     assert mcp.calls_of("rag_read_source")[0]["arguments"]["include_image"] is True
 
 
-def test_rule_clarification_of_retrieval_becomes_the_next_step_and_pending(
+def test_retired_retrieval_clarification_does_not_become_pending(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    clarification = {
-        "condition_id": "rule:target",
-        "label": "対象",
-        "question": "どの機器の点検ですか",
-        "options": ["機器 A", "機器 B"],
-        "multiple": False,
-    }
-    asked = {
+    mcp.outputs["rag_retrieve_evidence"] = {
         **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
-        "evidence": [],
-        "clarifications": [clarification],
+        "clarifications": [{"condition_id": "retired", "question": "合成の旧い確認"}],
     }
-    mcp.outputs["rag_retrieve_evidence"] = asked
-    model = _script(
+    _script(
         monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "点検 周期"}, call_id="c1")],
-        [assistant_message("どの機器の点検ですか。")],
+        [function_call("rag__rag_retrieve_evidence", {"query": "合成の質問"}, call_id="c1")],
+        [assistant_message("合成の回答")],
     )
-    run_id = _run("点検の周期は？")
-
-    output = next(
-        item["output"]
-        for item in model.calls[1].input
-        if isinstance(item, dict) and item.get("call_id") == "c1" and "output" in item
-    )
-    assert '"next_step"' in str(output)
-    assert "どの機器の点検ですか" in str(output)
+    run_id = _run("合成の質問")
     state = run_support_task(runtime_repository.get_run(run_id)) or {}
-    pending = state.get("content", state).get("pending_clarifications") or []
-    assert [item["condition_id"] for item in pending] == ["rule:target"]
-
-
-def test_evidence_clarification_step_only_when_asked() -> None:
-    assert evidence_clarification_step({"evidence": [], "clarifications": []}) is None
-    step = evidence_clarification_step(
-        {"clarifications": [{"condition_id": "rule:x", "label": "x", "question": "どれ？"}]}
-    )
-    assert step is not None
-    assert step["reason"] == "needs_clarification"
+    assert not state.get("content", state).get("pending_clarifications")

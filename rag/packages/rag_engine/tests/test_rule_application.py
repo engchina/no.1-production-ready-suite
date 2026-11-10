@@ -1,7 +1,4 @@
-"""ルールの採用（確認・生成の用途、明示優先度、構造化排他と版の記録）。意味判定と外部 I/O は使わない。
-
-ルールは業務ガイドを選んだ呼び出し元が足す pinned のものだけが照合に入る。
-"""
+"""選択済みの業務ガイドの指示・上限・本文の版の保存。登録ルールの設定は解釈しない。"""
 
 import json
 from dataclasses import replace
@@ -22,44 +19,20 @@ def generation_ids(ctx):
     return [r.rule_id for r in ctx.rules_for_stage("generation")]
 
 
-def test_unset_rules_keep_generation_and_confirmation_without_dummy_content(tmp_path):
-    confirmation = {"question": "対象は？", "options": []}
-    ctx = context(
-        tmp_path, rule("legacy"), rule("confirm", "", purpose="confirmation", clarification=confirmation), rule("off", status="deprecated")
-    )
-    assert generation_ids(ctx) == ["legacy"]
-    assert [r.rule_id for r in ctx.rules_for_stage("confirmation")] == ["confirm"]
-    assert "id=legacy" in ctx.prompt_context() and "id=confirm" not in ctx.prompt_context()
-    assert ctx.matched_rules[0].purpose == "both"
-    assert not any(d["id"] == "off" and d["accepted"] for d in ctx.rule_applications)
+def test_only_generation_uses_active_guides_and_empty_instructions_are_excluded(tmp_path):
+    ctx = context(tmp_path, rule("guide-a"), rule("empty", ""), rule("off", status="deprecated"))
+    assert generation_ids(ctx) == ["guide-a"]
+    assert ctx.rules_for_stage("confirmation") == ()
+    assert "id=guide-a" in ctx.prompt_context()
+    assert not any(d["id"] == "off" for d in ctx.rule_applications)
+    assert any(d["id"] == "empty" and d["reason"] == "no_generation_instruction" for d in ctx.rule_applications)
 
 
-def test_explicit_priority_wins_before_ranking_and_budget_is_recorded(tmp_path):
-    ctx = context(tmp_path, rule("a", "説明 A"), rule("b", "説明 B", priority=4), rule("c", "説明 C"), limit=1)
-    assert generation_ids(ctx) == ["b"]
-    assert {d["id"] for d in ctx.rule_applications if d["reason"] == "application_budget"} == {"a", "c"}
-
-
-def test_exclusive_conflict_holds_only_the_group_and_never_passes_conflicting_content(tmp_path):
-    ctx = context(tmp_path, rule("a", "指示 A", exclusive_group="g"), rule("b", "指示 B", exclusive_group="g"), rule("c", "併用指示"))
-    assert generation_ids(ctx) == ["c"]
-    assert "指示 A" not in ctx.prompt_context() and "指示 B" not in ctx.prompt_context()
-    assert {d["id"] for d in ctx.rule_applications if d["reason"] == "unresolved_exclusive_conflict"} == {"a", "b"}
-    higher = context(tmp_path, rule("a", "指示 A", exclusive_group="g", priority=1), rule("b", "指示 B", exclusive_group="g"))
-    assert generation_ids(higher) == ["a"]
-    assert any(d["id"] == "b" and d["reason"] == "lower_priority" for d in higher.rule_applications)
-
-
-def test_conflict_and_budget_are_stage_specific(tmp_path):
-    confirmation = {"question": "対象は？", "options": []}
-    ctx = context(
-        tmp_path,
-        rule("confirm", "", purpose="confirmation", exclusive_group="g", clarification=confirmation),
-        rule("generate", "指示 B", purpose="generation", exclusive_group="g"),
-    )
-    assert generation_ids(ctx) == ["generate"]
-    assert [r.rule_id for r in ctx.rules_for_stage("confirmation")] == ["confirm"]
-    assert not any(d["reason"] == "unresolved_exclusive_conflict" for d in ctx.rule_applications)
+def test_removed_registration_settings_do_not_reorder_or_hold_guides(tmp_path):
+    ctx = context(tmp_path, rule("a", "説明 A", exclusive_group="old"), rule("b", "説明 B", priority=4, exclusive_group="old"), limit=1)
+    assert generation_ids(ctx) == ["a"]
+    assert any(d["id"] == "b" and d["reason"] == "application_budget" for d in ctx.rule_applications)
+    assert ctx.rules_for_stage("confirmation") == ()
 
 
 def test_compatible_instructions_combine_and_exact_duplicates_are_recorded(tmp_path):
@@ -85,22 +58,3 @@ def test_snapshots_use_the_executed_version_and_remain_stable_after_updates(tmp_
     executed = resolved.to_payload()
     assert executed["matched_rules"][0]["version"] != original
     assert all(d["version"] == executed["matched_rules"][0]["version"] for d in executed["rule_applications"])
-
-
-def test_matching_eligibility_does_not_claim_application_after_conflict(tmp_path):
-    ctx = context(tmp_path, rule("a", "指示 A", exclusive_group="g"), rule("b", "指示 B", exclusive_group="g"))
-    assert ctx.is_active and not ctx.has_matches
-    assert ctx.prompt_context() == ""
-    assert all(d["matching_eligible"] and not d["accepted"] for d in ctx.expansion_decisions)
-    assert all(d["reason"] == "unresolved_exclusive_conflict" for d in ctx.expansion_decisions)
-
-
-def test_a_rule_without_confirmation_cannot_shadow_a_configured_confirmation(tmp_path):
-    confirmation = {"question": "対象は？", "options": []}
-    ctx = context(
-        tmp_path,
-        rule("generation", "生成の指示", priority=10, exclusive_group="g"),
-        rule("confirmation", "", purpose="confirmation", priority=0, exclusive_group="g", clarification=confirmation),
-    )
-    assert generation_ids(ctx) == ["generation"]
-    assert [r.rule_id for r in ctx.rules_for_stage("confirmation")] == ["confirmation"]
