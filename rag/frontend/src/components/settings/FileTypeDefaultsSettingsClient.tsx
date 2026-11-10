@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ButtonLink,
   DataTable,
   FormActionBar,
   FormStatus,
@@ -13,8 +12,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { RotateCcw, Save, Settings2, Undo2 } from "lucide-react";
+import { RotateCcw, Save, Undo2 } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
@@ -30,7 +28,6 @@ import {
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useFileTypeDefaultsSettings, useUpdateFileTypeDefaultsSettings } from "@/lib/queries";
-import { APP_ROUTES } from "@/lib/routes";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 
@@ -39,7 +36,6 @@ import {
   draftFromSettings,
   draftsEqual,
   entryWithPreprocess,
-  followsBuiltin,
   parserOptionsFor,
   updatePayload,
   withCurrentValue,
@@ -141,11 +137,6 @@ export function FileTypeDefaultsSettingsClient() {
             stickyHeader
             visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
             rowProps={(row) => ({ "data-testid": `file-type-row-${row.file_type}` })}
-            renderRowDetail={(row) =>
-              row.builtin_unavailable_reason && followsBuiltin(row, draft[row.file_type]) ? (
-                <p className="text-xs text-fg-muted">{row.builtin_unavailable_reason}</p>
-              ) : null
-            }
             columns={[
               {
                 key: "file_type",
@@ -191,17 +182,6 @@ export function FileTypeDefaultsSettingsClient() {
                           )
                         }
                       />
-                      {row.unavailable_preprocess_profiles.length ? (
-                        <ButtonLink
-                          to={APP_ROUTES.settingsServices}
-                          linkComponent={Link}
-                          variant="ghost"
-                          size="sm"
-                          icon={Settings2}
-                        >
-                          {t("settings.fileTypeDefaults.goPreprocess")}
-                        </ButtonLink>
-                      ) : null}
                     </div>
                   );
                 },
