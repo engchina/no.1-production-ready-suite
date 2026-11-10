@@ -1,7 +1,7 @@
 """LLM の 1 回の呼び出しのやり直しの共通の枠（#4736）を、合成の client で確かめる。
 
-送信は最大 3 回（やり直しは 2 回）。止まった判定は無音だけで、やり直しの種類が違っても、内側と外側のループをまたいでも
-同じ枠で数える。通信系の待ちは 1 秒・2 秒で、`Retry-After` があれば 30 秒まで従う。
+送信は最大 6 回（やり直しは 5 回）。止まった判定は無音だけで、やり直しの種類が違っても、内側と外側のループをまたいでも
+同じ枠で数える。待ちは指数 backoff と full jitter とし、`Retry-After` は下限にする。
 """
 
 import unittest
@@ -71,6 +71,9 @@ class _Base(unittest.TestCase):
             patcher = mock.patch(target, replacement)
             patcher.start()
             self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(oci.random, "random", return_value=0.5)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.sleep = oci.time.sleep
         token = llm_usage.set(LlmUsage())
         self.addCleanup(llm_usage.reset, token)
@@ -101,27 +104,24 @@ class _Base(unittest.TestCase):
 
 class SharedBudgetTest(_Base):
     def test_inner_and_outer_retries_share_one_budget(self):
-        """失敗の event（内側）→ 不正な出力（外側）→ 無音（内側）で枠を使い切り、送信は 3 回で止まる。"""
-        client = _Client(
-            self.clock,
-            [
-                _script(1, 200.0, final=FAILED_EVENT),
-                _script(1, 200.0, final=_completed_event(INVALID)),
-                _script(1, 200.0, raise_at=0),
-                _script(1, 200.0),
-                _script(1, 200.0),
-            ],
-        )
+        """失敗 event・不正出力・無音が混ざっても、送信は合計 6 回で止まる。"""
+        failures = [
+            _script(1, 200.0, final=FAILED_EVENT),
+            _script(1, 200.0, final=_completed_event(INVALID)),
+            _script(1, 200.0, raise_at=0),
+        ]
+        client = _Client(self.clock, failures * 2 + [_script(1, 200.0)])
         with self.assertRaises(oci.LlmStreamStalled):
             self.call(client, self.stream_settings)
-        self.assertEqual(len(client.streams), 3)
+        self.assertEqual(len(client.streams), 6)
+        self.assertEqual(sum(self.waits()), 15.5)
 
     def test_replacement_character_is_counted(self):
         """U+FFFD の検査とやり直しは残し、同じ枠で数える。"""
-        client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(REPLACEMENT)) for _ in range(5)])
+        client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(REPLACEMENT)) for _ in range(7)])
         with self.assertRaises(oci.InvalidStructuredOutput):
             self.call(client, self.stream_settings)
-        self.assertEqual(len(client.streams), 3)
+        self.assertEqual(len(client.streams), 6)
 
     def test_replacement_character_recovers_within_budget(self):
         client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(REPLACEMENT)), _script(1, 200.0)])
@@ -144,44 +144,44 @@ class SharedBudgetTest(_Base):
         self.assertEqual(len(client.streams), 3)
 
     def test_transport_errors_are_counted(self):
-        client = _ParseClient([TimeoutError("a"), ConnectionError("b"), TimeoutError("c"), VALID])
+        client = _ParseClient([TimeoutError("a")] * 6 + [VALID])
         with self.assertRaises(TimeoutError):
             self.call(client, self.plain_settings)
-        self.assertEqual(client.calls, 3)
+        self.assertEqual(client.calls, 6)
 
 
 class RetryWaitTest(_Base):
-    def test_transport_retries_wait_one_then_two_seconds(self):
+    def test_transport_retries_use_exponential_full_jitter(self):
         client = _ParseClient([TimeoutError("a"), ConnectionError("b"), VALID])
         self.assertEqual(self.call(client, self.plain_settings).text, "ok")
-        self.assertEqual(sum(self.waits()), 3.0)
+        self.assertEqual(sum(self.waits()), 1.5)
         self.assertEqual(client.calls, 3)
 
     def test_retry_after_is_honoured(self):
         client = _ParseClient([_Http429("7"), VALID])
         self.assertEqual(self.call(client, self.plain_settings).text, "ok")
-        self.assertEqual(sum(self.waits()), 7.0)
+        self.assertEqual(sum(self.waits()), 7.5)
 
-    def test_retry_after_is_capped_at_thirty_seconds(self):
+    def test_retry_after_is_not_shortened(self):
         client = _ParseClient([_Http429("100"), VALID])
         self.assertEqual(self.call(client, self.plain_settings).text, "ok")
-        self.assertEqual(sum(self.waits()), 30.0)
+        self.assertEqual(sum(self.waits()), 100.5)
 
     def test_short_retry_after_does_not_shorten_the_backoff(self):
         client = _ParseClient([_Http429("0"), VALID])
         self.assertEqual(self.call(client, self.plain_settings).text, "ok")
-        self.assertEqual(sum(self.waits()), 1.0)
+        self.assertEqual(sum(self.waits()), 0.5)
 
     def test_stalled_stream_waits_before_the_resend(self):
         client = _Client(self.clock, [_script(1, 200.0, raise_at=0), _script(1, 200.0)])
         self.assertEqual(self.call(client, self.stream_settings).text, "ok")
-        self.assertEqual(sum(self.waits()), 1.0)
+        self.assertEqual(sum(self.waits()), 0.5)
 
-    def test_invalid_output_is_resent_without_waiting(self):
-        """モデルの出力の不合格は待っても変わらないので、待たずに送り直す。"""
+    def test_invalid_output_also_uses_jitter(self):
+        """モデルの出力の不合格も他の再試行と同じ jitter の待ちにする。"""
         client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(INVALID)), _script(1, 200.0)])
         self.assertEqual(self.call(client, self.stream_settings).text, "ok")
-        self.assertEqual(self.waits(), [])
+        self.assertEqual(sum(self.waits()), 0.5)
 
     def test_cancel_during_the_wait_stops_the_call(self):
         """待っている間に取り消されたら、残りを待たず、次の送信もしない。"""
@@ -210,12 +210,73 @@ class SilenceOnlyStallTest(_Base):
 
     def test_default_silence_limit_is_applied_to_every_send(self):
         """無音の既定は 120 秒。基準の学習は無く最初の呼び出しから効き、最後の送信でも無音は止まった扱いにする。"""
-        client = _Client(self.clock, [_script(1, 200.0, raise_at=0) for _ in range(3)])
+        client = _Client(self.clock, [_script(1, 200.0, raise_at=0) for _ in range(6)])
         with self.assertRaises(oci.LlmStreamStalled) as raised:
             self.call(client, self.stream_settings)
         self.assertEqual(raised.exception.reason, "stall_idle")
-        self.assertEqual(client.read_timeouts, [120.0, 120.0, 120.0])
+        self.assertEqual(client.read_timeouts, [120.0] * 6)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_every_stream_retry_is_numbered_and_jittered(monkeypatch, caplog):
+    import logging
+
+    import httpx
+    import pytest
+    from openai import APIError
+
+    error = APIError(
+        "Upstream Responses stream returned an error event", httpx.Request("POST", "https://stub"), body={"message": "synthetic"}
+    )
+    clock = _Clock()
+    client = _Client(clock, [[(None, error)] for _ in range(7)])
+    waits = []
+    monkeypatch.setattr(oci.time, "monotonic", clock)
+    monkeypatch.setattr(oci.time, "sleep", waits.append)
+    monkeypatch.setattr(oci.random, "random", lambda: 0.5)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_stall_detection=True)
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *args, **kwargs: client)
+    with bind_deadline(Deadline(600)), caplog.at_level(logging.INFO, logger=oci.__name__), pytest.raises(oci.LlmStreamFailed):
+        oci._parse_with_retry(lambda: oci._openai_parsed([], settings, TextOutput, PROVIDER), "synthetic", settings)
+    calls = [r for r in caplog.records if getattr(r, "llm_status", None)]
+    assert [r.llm_attempt for r in calls] == list(range(6))
+    assert len(client.streams) == 6
+    assert sum(waits) == 15.5  # 0.5 × (1 + 2 + 4 + 8 + 16)
+
+
+def test_embedding_transport_also_uses_jitter_and_retry_after(monkeypatch):
+    import pytest
+
+    delays = []
+    monkeypatch.setattr(oci.time, "sleep", delays.append)
+    monkeypatch.setattr(oci.random, "random", lambda: 0.5)
+    attempts = 0
+
+    def operation():
+        nonlocal attempts
+        attempts += 1
+        raise _Http429("3")
+
+    with pytest.raises(_Http429):
+        oci._retry_transport(operation, retries=5, initial_wait_seconds=1, max_wait_seconds=16)
+    assert attempts == 6
+    assert sum(delays) == 30.5
+
+
+def test_permanent_sdk_stream_error_is_not_resent(monkeypatch):
+    import httpx
+    import pytest
+    from openai import APIError
+
+    clock = _Clock()
+    error = APIError("synthetic invalid request", httpx.Request("POST", "https://stub"), body={"error": {"code": "invalid_argument"}})
+    client = _Client(clock, [[(None, error)], _script(1, 200.0)])
+    monkeypatch.setattr(oci.time, "monotonic", clock)
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *args, **kwargs: client)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_stall_detection=True)
+    with bind_deadline(Deadline(600)), pytest.raises(oci.LlmStreamFailed):
+        oci._parse_with_retry(lambda: oci._openai_parsed([], settings, TextOutput, PROVIDER), "synthetic", settings)
+    assert len(client.streams) == 1

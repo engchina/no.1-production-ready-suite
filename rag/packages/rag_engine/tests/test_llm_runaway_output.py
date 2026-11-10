@@ -52,6 +52,9 @@ def _table_rows(count: int) -> list[str]:
 class RunawayOutputTest(unittest.TestCase):
     def setUp(self) -> None:
         oci._output_rates.clear()
+        sleeper = mock.patch.object(oci.time, "sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
         self.clock = _Clock()
         patcher = mock.patch("time.monotonic", self.clock)
         patcher.start()

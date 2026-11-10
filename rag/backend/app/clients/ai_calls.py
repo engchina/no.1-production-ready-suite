@@ -124,7 +124,7 @@ def _concurrency(settings: object, stage: str) -> int:
 # モデルの設定の誤り・割り当ての使い切りは評価の全体を止める（同じ失敗をくり返さない）。
 _EVALUATION_RULES: dict[ErrorKind, KindRule] = {
     **{kind: KindRule() for kind in ErrorKind},
-    ErrorKind.RATE_LIMITED: KindRule(retries=3, throttle=True),
+    ErrorKind.RATE_LIMITED: KindRule(retries=5, throttle=True),
     **{
         kind: KindRule(disposition=Disposition.JOB)
         for kind in (
