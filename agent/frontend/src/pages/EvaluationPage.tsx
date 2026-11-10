@@ -1,3 +1,4 @@
+import { ApiError } from "@/lib/api";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
@@ -208,6 +209,19 @@ export function EvaluationPage() {
           <TimedLoadingState label={t("loading.evaluationSet")} testId="evaluation-set-loading">
             <ListSkeleton rows={4} />
           </TimedLoadingState>
+        </PageBody>
+      );
+    }
+    if (editingSet.isError && editingSet.data === undefined && !(editingSet.error instanceof ApiError && editingSet.error.status === 404)) {
+      return (
+        <PageBody wide>
+          <DataLoadFailure
+            error={editingSet.error}
+            fallback={t("common.error.load")}
+            onRetry={() => void editingSet.refetch()}
+            retrying={editingSet.isFetching}
+            testId="evaluationpage-detail-load-failed"
+          />
         </PageBody>
       );
     }

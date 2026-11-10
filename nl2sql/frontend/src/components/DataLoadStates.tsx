@@ -1,11 +1,12 @@
 import { DatabaseSettingsLink } from "@production-ready/system-settings";
-import { DataLoadFailureState, type DataLoadFailureLabels } from "@production-ready/ui";
+import { DataLoadFailureState, StaleDataNotice, type DataLoadFailureLabels } from "@production-ready/ui";
 
 import {
   DATABASE_GATE_ROUTES,
   databaseGateMessages,
   useDatabaseGatePermissions,
 } from "@/components/system/DatabaseUnavailableNotice";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 
 function dataLoadLabels(): DataLoadFailureLabels {
@@ -30,6 +31,7 @@ export function DataLoadFailure({
   onRetry,
   layout,
   testId,
+  retrying,
 }: {
   /** 取得の失敗（`ApiError` など）か、失敗の文。 */
   error: unknown;
@@ -38,6 +40,7 @@ export function DataLoadFailure({
   onRetry: () => void;
   layout?: "region" | "field";
   testId?: string;
+  retrying?: boolean;
 }) {
   const { canManageDatabase } = useDatabaseGatePermissions();
   return (
@@ -54,6 +57,35 @@ export function DataLoadFailure({
       }
       layout={layout}
       testId={testId}
+      retrying={retrying}
+    />
+  );
+}
+
+
+/** 手書きの読み取りでも、前回の成功時刻を明示して古い内容と取得失敗を分ける。 */
+export function DataLoadStaleNotice({
+  error,
+  dataUpdatedAt,
+  onRetry,
+  retrying,
+}: {
+  error: unknown;
+  dataUpdatedAt: number;
+  onRetry: () => void;
+  retrying?: boolean;
+}) {
+  const { canManageDatabase } = useDatabaseGatePermissions();
+  return (
+    <StaleDataNotice
+      error={typeof error === "string" ? new Error(error) : error}
+      updatedAt={formatDateTime(new Date(dataUpdatedAt).toISOString())}
+      labels={dataLoadLabels()}
+      onRetry={onRetry}
+      retrying={retrying}
+      databaseAction={canManageDatabase ? (
+        <DatabaseSettingsLink routes={DATABASE_GATE_ROUTES} messages={databaseGateMessages()} />
+      ) : undefined}
     />
   );
 }

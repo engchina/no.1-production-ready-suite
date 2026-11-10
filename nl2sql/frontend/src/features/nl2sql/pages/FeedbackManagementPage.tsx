@@ -1,3 +1,4 @@
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import {
   type ChangeEvent,
   useEffect,
@@ -226,6 +227,7 @@ export function FeedbackManagementPage() {
   const [message, setMessage] = useState("");
   // 読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadUpdatedAt, setLoadUpdatedAt] = useState(0);
   const [actionResult, setActionResult] = useState<ActionResult>(null);
   const showActionError = (origin: ActionResultOrigin, err: unknown, fallback: string) =>
     setActionResult({ origin, tone: "danger", message: apiErrorMessage(err, fallback) });
@@ -505,6 +507,7 @@ export function FeedbackManagementPage() {
           setSavedFeedbackConfig(configData);
         }
         setLoadedOnce(true);
+        setLoadUpdatedAt(Date.now());
         setLoadFailed(false);
         setMessage("");
         if (announce) toast.success(t("common.action.refreshed"));
@@ -851,8 +854,26 @@ export function FeedbackManagementPage() {
           disabled={Boolean(loading) && !(loading === "app-feedback-load" && activeView === "appFeedback")}
           className="m-0 grid min-w-0 gap-4 border-0 p-0"
         >
+        {loadFailed && message ? (
+          loadUpdatedAt > 0 ? (
+            <DataLoadStaleNotice
+              error={message}
+              dataUpdatedAt={loadUpdatedAt}
+              onRetry={() => void load(false, "notice")}
+              retrying={loading === "load"}
+            />
+          ) : (
+            <DataLoadFailure
+              error={message}
+              fallback={t("feedbackManagement.error.load")}
+              onRetry={() => void load(false, "notice")}
+              retrying={loading === "load"}
+              testId="page-data-load-failed"
+            />
+          )
+        ) : null}
         <PageNotice
-          notice={message ? { tone: "danger", message } : null}
+          notice={message && !loadFailed ? { tone: "danger", message } : null}
           action={
             message && activeView === "entries" ? (
               <Button

@@ -63,6 +63,7 @@ const faqRecord = {
 };
 
 async function mockCommon(page: Page) {
+  await page.route("**/api/feedback/current?**", (route) => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>

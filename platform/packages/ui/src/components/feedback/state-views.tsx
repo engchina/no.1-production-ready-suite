@@ -45,6 +45,7 @@ export function ErrorState({
   details,
   action,
   focusRetry = false,
+  retrying = false,
 }: {
   message: string;
   onRetry?: () => void;
@@ -55,6 +56,7 @@ export function ErrorState({
   action?: ReactNode;
   /** 出たときに再試行へフォーカスを移す（入力中の欄からは奪わない）。データ領域の読み取りの失敗で使う。 */
   focusRetry?: boolean;
+  retrying?: boolean;
 }) {
   const retryRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -75,7 +77,7 @@ export function ErrorState({
         <div className="flex flex-wrap items-center justify-center gap-2">
           {action}
           {onRetry ? (
-            <Button ref={retryRef} type="button" variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>
+            <Button ref={retryRef} type="button" variant="secondary" size="sm" icon={RefreshCw} loading={retrying} onClick={onRetry}>
               <span>{retryLabel}</span>
             </Button>
           ) : null}

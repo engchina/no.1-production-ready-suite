@@ -74,6 +74,7 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
 }
 
 test("引用カードに variant(chunk_set)バッジが出る", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.route("**/api/feedback/current?**", (route) => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await installTraceRecorder(page);

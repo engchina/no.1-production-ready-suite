@@ -3175,3 +3175,24 @@ test("保存済みチャットの0spanでも書込欠落を隠さない", {tag:"
     await page.screenshot({path:testInfo.outputPath(`zero-span-chat-${theme}.png`)});
   }
 });
+
+
+test("評価の読み取り失敗を未評価と見せず、再試行で回復する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockChat(page, "ready", [userMessage, { ...assistantMessage, content: "合成の回答 A" }]);
+  let failing = true;
+  await page.route("**/api/feedback/current**", (route) => route.fulfill(failing ? { status: 500, json: { data: null, error_messages: ["合成の読み取り失敗"], warning_messages: [], error_code: "database_read_failed" } } : { json: { data: [], error_messages: [], warning_messages: [] } }));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  const failure = page.locator('[data-testid="feedback-current-load-failed"]:visible').first();
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "この回答は役に立った", exact: true })).toHaveCount(0);
+  await failure.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("feedback-read-failure.png") });
+  failing = false;
+  await failure.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "この回答は役に立った", exact: true })).toBeEnabled();
+  await expectNoPageOverflow(page);
+});

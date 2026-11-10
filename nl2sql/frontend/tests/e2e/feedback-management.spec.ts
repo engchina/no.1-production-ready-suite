@@ -540,7 +540,7 @@ test("履歴の絞り込みは FilterSelect で 1 行にそろい、狭い画面
   await expect(clear).toHaveCount(0);
 });
 
-test("再読込の失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す (#2034)", async ({ page }) => {
+test("再読込の失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す (#2034)", async ({ page }, testInfo) => {
   await mockFeedbackApi(page);
   let mode: "ok" | "fail" | "gate" = "ok";
   let releaseRetry: () => void = () => undefined;
@@ -574,18 +574,13 @@ test("再読込の失敗の「再試行」は案内を残したまま押した�
   }
   const retry = page.getByRole("button", { name: "再試行" });
   await expect(retry).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("page-read-failure.png") });
   await retry.click();
-  // 押しても案内は消えず、進行は案内の中のボタンの直下だけに出る（パネルの先頭に重ねない）。
-  const processing = page.getByTestId("feedback-management-retry-processing");
-  await expect(processing).toBeVisible();
+  // 取り直す間も失敗の案内を保ち、共有の再試行ボタンだけを処理中にする。
+  await expect(retry).toBeVisible();
   await expect(retry).toHaveAttribute("aria-busy", "true");
-  await expect(page.getByTestId("feedback-management-refresh-processing")).toHaveCount(0);
-  const buttonBox = await retry.boundingBox();
-  const processingBox = await processing.boundingBox();
-  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
   releaseRetry();
   await expect(retry).toHaveCount(0);
-  await expect(processing).toHaveCount(0);
 });
 
 test("読み取りに失敗したら「フィードバックはまだありません」と出さない (#4217)", async ({ page }) => {

@@ -1,3 +1,4 @@
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -155,6 +156,7 @@ export function QuestionClassifierModelsPage() {
   const [candidateError, setCandidateError] = useState("");
   // まとめての読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadUpdatedAt, setLoadUpdatedAt] = useState(0);
   const [candidateActionError, setCandidateActionError] = useState("");
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
@@ -320,6 +322,7 @@ export function QuestionClassifierModelsPage() {
 
       // 失敗の案内の「再試行」は、取り直せるまで案内を残す（押すと消えて結果が分からなくなるのを防ぐ。#2034）。
       setLoadFailed(false);
+        setLoadUpdatedAt(Date.now());
       setMessage("");
       if (announce) toast.success(t("common.action.refreshed"));
     })
@@ -613,8 +616,26 @@ export function QuestionClassifierModelsPage() {
           disabled={Boolean(loading) && !(loading === "candidates-load" && activeView === "candidates")}
           className="m-0 grid min-w-0 gap-4 border-0 p-0"
         >
+        {loadFailed && message ? (
+          loadUpdatedAt > 0 ? (
+            <DataLoadStaleNotice
+              error={message}
+              dataUpdatedAt={loadUpdatedAt}
+              onRetry={() => void load(true, "notice")}
+              retrying={loading === "load"}
+            />
+          ) : (
+            <DataLoadFailure
+              error={message}
+              fallback={t("qcm.error.load")}
+              onRetry={() => void load(true, "notice")}
+              retrying={loading === "load"}
+              testId="page-data-load-failed"
+            />
+          )
+        ) : null}
         <PageNotice
-          notice={message ? { tone: "danger", message } : null}
+          notice={message && !loadFailed ? { tone: "danger", message } : null}
           action={
             message ? (
               <Button

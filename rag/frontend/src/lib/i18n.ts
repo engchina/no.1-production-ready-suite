@@ -3989,6 +3989,7 @@ export const ja = {
     "管理者がこの回答を登録済みQ&Aや品質評価のケースに登録するときに使います。",
   "feedback.controls.save": "フィードバックを保存",
   "feedback.controls.savedToast": "フィードバックを保存しました。",
+  "feedback.controls.loadError": "保存済みの評価を読み込めませんでした。",
   "feedback.controls.savedInline": "保存済み・変更できます",
   "feedback.controls.saveError": "フィードバックを保存できませんでした。もう一度お試しください。",
   "feedback.reason.incorrect": "内容が正しくない",
