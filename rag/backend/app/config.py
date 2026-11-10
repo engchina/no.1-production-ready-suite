@@ -1423,12 +1423,6 @@ class Settings(
         le=SEARCH_TOP_K_MAX,
         description="検索・チャット・MCP で top_k を省略したときの基準件数。",
     )
-    rag_runtime_rules_confirmation_enabled: bool = Field(
-        default=False, description="登録ルールによる確認の使用。必要な確認・安全・権限とは独立。"
-    )
-    rag_runtime_rules_answer_enabled: bool = Field(
-        default=False, description="回答生成での登録ルールの使用。独立した回答処理とは別。"
-    )
     rag_runtime_terms_search_enabled: bool = Field(
         default=False, description="登録した用語・同義語による検索文の追加。全体設定だけで決める。"
     )
@@ -1599,17 +1593,6 @@ class Settings(
             "手順の根拠から広げる章節の分を残す。"
         ),
     )
-    rag_auto_field_filter_enabled: bool = Field(
-        default=False,
-        description=(
-            "質問に書かれた条件(「2025 年以降」「10 万円以"
-            "上」など)を、検索・回答プロファイルの KB で定義した"
-            "抽出項目の条件として LLM で読み取り、検索を絞り込む"
-            "(Metadata Filter Extraction。LLM の呼び出しが 1 回増える。"
-            "#652)。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
     rag_answer_record_retention_days: int = Field(
         default=0,
         ge=0,
@@ -1665,7 +1648,7 @@ class Settings(
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と回答ルール"
+            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と業務ガイドのルール"
             "(rag_poc runtime knowledge payload)。"
             "回答フローだけが使う。"
         ),

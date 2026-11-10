@@ -55,8 +55,6 @@ from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.chat_question_token import context_digest
 from app.rag.degraded_steps import DegradedSteps, ReportDegraded, not_recorded
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
-from app.rag.field_filter_reader import read_field_conditions
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
 from app.rag.history_question import HistoryConfirmation, HistoryRewrite
@@ -82,7 +80,6 @@ from app.rag.span_display import (
 )
 from app.rag.step_details import (
     answer_guardrail_details,
-    field_filter_details,
     history_rewrite_details,
     step_details_model,
 )
@@ -97,7 +94,6 @@ from app.rag.trace_bodies import trace_body_capture
 from app.rag.trace_store import AnswerTrace, operation_trace_parent
 from app.schemas.common import JsonValue
 from app.schemas.search import (
-    ExtractionFieldCondition,
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
@@ -419,7 +415,7 @@ class RagPipeline:
         self._history_question_prepared = history_question_prepared
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
-        # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取りなど）を呼ばない。
+        # 使い、質問に応じた推論の LLM を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         # 回答を作らない検索で根拠の補いまでするか（#3506。`AnswerEngine` の同名の引数）。False は
         # 業務 Agent の根拠の取得（MCP の rag_retrieve_evidence）だけが渡す。
@@ -446,61 +442,6 @@ class RagPipeline:
         い trace に置く(画面・外部の traceparent を親にしない。サービストークンの MCP の要求の中だ
         け Agent の trace を続ける。`operation_trace_parent`)。
         """
-        if request._rule_selection_scope:
-            recognized = AnswerScope(**request._rule_selection_scope)
-            current_sources: dict[tuple[str, str], str] = {}
-            for question, answer, source in (
-                self._scope.confirmed_premise_sources if self._scope else ()
-            ):
-                current_sources.setdefault((question, answer), source)
-            self._scope = AnswerScope(
-                context="\n".join(
-                    value
-                    for value in (self._scope.context if self._scope else "", recognized.context)
-                    if value
-                ),
-                search_terms=tuple(
-                    dict.fromkeys(
-                        [
-                            *(self._scope.search_terms if self._scope else ()),
-                            *recognized.search_terms,
-                        ]
-                    )
-                ),
-                label="、".join(
-                    value
-                    for value in (self._scope.label if self._scope else "", recognized.label)
-                    if value
-                ),
-                confirmed_premises=tuple(
-                    dict.fromkeys(
-                        [
-                            *(self._scope.confirmed_premises if self._scope else ()),
-                            *recognized.confirmed_premises,
-                        ]
-                    )
-                ),
-                confirmed_premise_sources=tuple(
-                    dict.fromkeys(
-                        [
-                            *(
-                                tuple(
-                                    (
-                                        question,
-                                        answer,
-                                        current_sources.get((question, answer), "user"),
-                                    )
-                                    for question, answer in self._scope.confirmed_premises
-                                )
-                                if self._scope
-                                else ()
-                            ),
-                            *recognized.confirmed_premise_sources,
-                        ]
-                    )
-                ),
-            )
-
         trace_id = trace_id or new_trace_id()
         if trace is not None:
             trace.run_id = trace_id
@@ -712,32 +653,6 @@ class RagPipeline:
             if self._caller_queries is not None
             else None
         )
-        # 質問に書かれた条件を抽出項目の条件として読み取る
-        # (Metadata Filter Extraction。有効なときだけ。#652)。
-        # チャットは会話履歴で書き換えた質問から読む。呼び出し元が検索文を作った検索(#2651)は、
-        # 読み取りの LLM を呼ばない(条件は呼び出し元が filters で渡す)。
-        auto_field_conditions: list[ExtractionFieldCondition] = []
-        if (
-            self._settings.rag_auto_field_filter_enabled
-            and request.search_answer_profile_id
-            and caller_queries is None
-        ):
-            auto_field_conditions = await _observe_stage(
-                trace_id,
-                "field_filter",
-                self._read_field_conditions(request, report_degraded=degraded.record_degraded),
-                progress_callback=stage_callback,
-                result_details=field_filter_details,
-                request_snapshot=lambda: {
-                    "質問": request.query,
-                    "検索・回答プロファイル ID": request.search_answer_profile_id,
-                    "除外する項目": request.auto_field_filter_excluded,
-                },
-                result_snapshot=lambda conditions: {
-                    "返却した条件": [item.model_dump(mode="json") for item in conditions],
-                    "縮退の記録（累計）": degraded.steps(),
-                },
-            )
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
         if self._attachment_conversation_id and self._approved_faq is None:
@@ -783,7 +698,6 @@ class RagPipeline:
             genai=self._genai,
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
             answer_model_id=self._answer_model_id,
-            auto_field_conditions=auto_field_conditions,
             approved_faq=self._approved_faq,
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
@@ -825,9 +739,6 @@ class RagPipeline:
                 request_snapshot=lambda: {
                     "検索要求": request.model_dump(mode="json"),
                     "添付の根拠": _trace_chunks(attachment_chunks),
-                    "読取済みの項目条件": [
-                        item.model_dump(mode="json") for item in auto_field_conditions
-                    ],
                     "呼出元の検索文": caller_queries,
                     "根拠補完有効": self._complete_evidence,
                 },
@@ -1185,44 +1096,6 @@ class RagPipeline:
             if result.allowed and result.sanitized_text.strip():
                 checked.append(result.sanitized_text)
         return checked
-
-    async def _read_field_conditions(
-        self, request: SearchRequest, *, report_degraded: ReportDegraded = not_recorded
-    ) -> list[ExtractionFieldCondition]:
-        """検索・回答プロファイルの KB の抽出項目の定義で、質問から条件を読み取る(#652)。
-
-        定義は検索の絞り込みの項目と同じ(利用者が使える有効な KB の定義の和集合。KB に無ければ
-        全体の既定)。定義が無い・読めないときは LLM を呼ばずに空(条件なしで検索を続ける)。
-        読めなかったとき・読み取りの LLM が失敗したときは ``report_degraded`` に残す(定義が無い
-        ときと分ける。#3286)。
-        """
-        try:
-            view = await self._oracle.get_search_answer_profile(
-                request.search_answer_profile_id or ""
-            )
-            field_sets = (
-                await self._oracle.list_knowledge_base_extraction_field_sets(
-                    view.config.normalized_knowledge_base_ids()
-                )
-                if view is not None
-                else []
-            )
-        except Exception as exc:  # 読み取りは補助。条件なしで検索を続ける。
-            logger.warning("field definitions load failed", extra={**safe_exception_fields(exc)})
-            report_degraded("field_filter", exc)
-            return []
-        if not field_sets:
-            return []
-        # 利用者が画面で外した項目は読み取らない(定義から除く)。
-        excluded = {name.strip().casefold() for name in request.auto_field_filter_excluded}
-        field_defs = [
-            definition
-            for definition in resolve_field_definitions(field_sets, load_field_schema().fields)
-            if definition.name.casefold() not in excluded
-        ]
-        return await read_field_conditions(
-            request.query, field_defs, self._llm, report_degraded=report_degraded
-        )
 
     async def _safe_rewritten_query(
         self,

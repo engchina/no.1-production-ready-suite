@@ -13,7 +13,7 @@
 比べ、手がかりがあって合わなければそのガイドを使わない。手がかりが無い項目は ``unverified`` として
 回答の記録・MCP に出す（推測で埋めない）。
 
-業務ガイドの内容は、回答ルールと同じ経路（runtime knowledge のルール。`pinned` で必ず使う）で
+業務ガイドの内容は、runtime knowledge のルール（`pinned` で必ず使う）として
 回答の材料に渡す。手順の検索の手がかりは検索文に足す。分かっている条件で決まる分岐だけを残し、
 合わない分岐の行き先の手順は材料から外す（#1278）。
 
@@ -1032,13 +1032,12 @@ def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
 
 
 def with_guide_rule(payload: Mapping[str, Any] | None, match: GuideMatch) -> dict[str, Any]:
-    """用語・同義語と回答ルールの payload に業務ガイドのルールを先頭に足した写し。"""
+    """用語・同義語の payload に業務ガイドのルールを足した写し。"""
     base = dict(payload or {})
-    rules = [rule for rule in base.get("rules", []) if isinstance(rule, dict)]
     return {
         "schema_version": base.get("schema_version", 1),
         "terms": list(base.get("terms", [])),
-        "rules": [guide_rule(match), *rules],
+        "rules": [guide_rule(match)],
     }
 
 

@@ -91,7 +91,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
-        "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
         # 回答の LLM の時間の短縮(#1499)。
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
@@ -136,11 +135,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "guide_step_chunks_per_step": resolved_settings.rag_guide_step_chunks_per_step,
         "guide_step_deadline_seconds": resolved_settings.rag_guide_step_deadline_seconds,
         "guide_reference_max_chunks": resolved_settings.rag_guide_reference_max_chunks,
-        # 用語・回答ルール・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
-        "runtime_rules_confirmation_enabled": (
-            resolved_settings.rag_runtime_rules_confirmation_enabled
-        ),
-        "runtime_rules_answer_enabled": resolved_settings.rag_runtime_rules_answer_enabled,
+        # 用語・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
         "runtime_terms_search_enabled": resolved_settings.rag_runtime_terms_search_enabled,
         "runtime_terms_answer_enabled": resolved_settings.rag_runtime_terms_answer_enabled,
         "support_guide_enabled": resolved_settings.rag_support_guide_enabled,

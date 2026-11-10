@@ -4485,3 +4485,11 @@ BEGIN
   NULL; -- query: max_anchors_per_document,support_guide_enabled / language_pack: answer_check_cues,answer_labels,evidence_cues,grounding_cues,question_cues,search_terms
 END;
 /
+
+-- migration: 20261110_4799_search_answer_profile_runtime_rules
+UPDATE rag_search_answer_profile_knowledge
+SET payload_json = JSON_TRANSFORM(payload_json, REMOVE '$.rules'),
+    revision = revision + 1,
+    updated_at = SYSTIMESTAMP
+WHERE kind = 'runtime_knowledge'
+  AND JSON_EXISTS(payload_json, '$.rules');

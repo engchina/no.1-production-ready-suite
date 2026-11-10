@@ -36,7 +36,7 @@ ANSWER_STEP_KIND = "answer_step"
 
 # 回答フローの外の工程のうち、種類を付けるもの（工程の名前を種類にする）。
 PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
-    {"history_rewrite", "field_filter", "query_guardrail", "answer_guardrail", "answer_record_save"}
+    {"history_rewrite", "query_guardrail", "answer_guardrail", "answer_record_save"}
 )
 
 # 工程の失敗の詳細の行（段を開いて見る。利用者向けの短い要約とコード。#2342）。
@@ -62,7 +62,6 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "文書から根拠の候補を検索する",
     "history_rewrite": "前の会話を踏まえて質問を補う",
     "attachment_evidence": "会話の添付から根拠を選ぶ",
-    "field_filter": "質問から検索の絞り込み条件を読み取る",
     "answer": "質問の条件を整理して回答を作る",
     "evidence": "質問の条件を整理して根拠を探す",
     "query_guardrail": "質問に安全上の問題がないか検査する",
@@ -77,12 +76,9 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
 ANSWER_STEP_DISPLAY_NAMES: dict[str, str] = {
     "質問の理解": "質問から対象と条件を読み取る",
     "用語・同義語の確認": "一致する用語の別名を検索文に加える",
-    "登録ルールによる確認の使用": "登録ルールによる確認の使用",
-    "回答生成での登録ルールの使用": "回答生成での登録ルールの使用",
     "検索文をまとめ、検索語を作る": "検索文をまとめ、検索語を作る",
     "用語・同義語による検索文の追加": "用語・同義語による検索文の追加",
     "回答生成での用語・同義語の使用": "回答生成での用語・同義語の使用",
-    "回答ルールの確認": "確認と回答に使うルールを選ぶ",
     "検索文と検索語の確定": "検索文をまとめ、検索語を作る",
     "回答生成フロー": "根拠を検索して回答を作る",
     "根拠検索フロー": "回答に使う根拠を検索する",
