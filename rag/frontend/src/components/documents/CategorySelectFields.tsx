@@ -1,5 +1,6 @@
 import { SelectField, type SelectFieldOption } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import type { DocumentCategory } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useDocumentCategories } from "@/lib/queries";
@@ -42,7 +43,10 @@ export function CategorySelectFields({
   onChange: (values: CategoryValues) => void;
   disabled?: boolean;
 }) {
-  const tree = useDocumentCategories().data ?? [];
+  const categories = useDocumentCategories();
+  const tree = categories.data ?? [];
+  // 一覧を読み取れないまま「指定なし」だけを候補なしと見せない（#4222）。保存済みの値は今の値として残す。
+  const loadFailed = categories.isError && categories.data === undefined;
   const large = findByName(tree, values.large_category);
   const middle = large ? findByName(large.children, values.middle_category) : undefined;
   const levels: { key: CategoryKey; nodes: readonly DocumentCategory[]; parentSelected: boolean }[] = [
@@ -78,6 +82,18 @@ export function CategorySelectFields({
           onValueChange={(value) => update(key, value)}
         />
       ))}
+      {loadFailed ? (
+        // FormGrid の中では 2 列にまたがせ、3 つの欄の直下に出す。
+        <div className="col-span-full min-w-0">
+          <DataLoadFailure
+            error={categories.error}
+            fallback={t("documentCategories.select.loadError")}
+            onRetry={() => void categories.refetch()}
+            layout="field"
+            testId={`${idPrefix}-category-load-failed`}
+          />
+        </div>
+      ) : null}
     </>
   );
 }

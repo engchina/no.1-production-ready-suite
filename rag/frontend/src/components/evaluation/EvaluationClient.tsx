@@ -38,6 +38,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { EmptyState } from "@/components/StateViews";
 import {
   SearchAnswerProfileSelect,
@@ -416,7 +417,14 @@ export function EvaluationClient() {
                     <SearchAnswerProfileSelectSkeleton />
                   </TimedLoadingState>
                 ) : profilesQuery.isError ? (
-                  <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
+                  // 候補を読み取れなかったことを、候補なしと分けて再試行と一緒に出す（#4222）。
+                  <DataLoadFailure
+                    error={profilesQuery.error}
+                    fallback={t("evaluation.compare.profilesLoadError")}
+                    onRetry={() => void profilesQuery.refetch()}
+                    layout="field"
+                    testId="evaluation-profiles-load-failed"
+                  />
                 ) : (
                   <SearchAnswerProfileSelect
                     id="evaluation-profile"
@@ -827,7 +835,13 @@ function CompareOption({
             <SearchAnswerProfileSelectSkeleton />
           </TimedLoadingState>
         ) : query.isError ? (
-          <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
+          <DataLoadFailure
+            error={query.error}
+            fallback={t("evaluation.compare.profilesLoadError")}
+            onRetry={() => void query.refetch()}
+            layout="field"
+            testId="evaluation-compare-profiles-load-failed"
+          />
         ) : (
           <SearchAnswerProfileSelect
             id={COMPARE_PROFILE_ID}

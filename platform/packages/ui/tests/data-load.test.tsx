@@ -205,6 +205,65 @@ describe("DataLoadFailureState", () => {
   });
 });
 
+describe("DataLoadFailureState layout=field（選択欄の候補。#4222）", () => {
+  it("欄の位置の danger の Banner に同じ文・導線・再試行を出す", () => {
+    const onRetry = vi.fn();
+    const host = mount(
+      <DataLoadFailureState
+        error={apiError(DATABASE_UNAVAILABLE_CODE)}
+        fallback="候補を読み込めませんでした"
+        labels={LABELS}
+        onRetry={onRetry}
+        databaseAction={databaseAction}
+        layout="field"
+        testId="field-failure"
+      />,
+    );
+    const root = host.querySelector("[data-testid='field-failure']")!;
+    expect(root.getAttribute("data-failure-layout")).toBe("field");
+    expect(root.getAttribute("data-failure-kind")).toBe("unavailable");
+    expect(host.querySelector("[role='alert']")?.textContent).toContain("接続不可の文");
+    const link = host.querySelector("a");
+    expect(link).not.toBeNull();
+    const retry = retryButton(host);
+    expect(link!.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => retry.click());
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("その他の失敗は backend の文を出し、接続できないと言わず導線も出さない", () => {
+    const host = mount(
+      <DataLoadFailureState
+        error={apiError(DATABASE_READ_FAILED_CODE, 500)}
+        fallback="候補を読み込めませんでした。"
+        labels={LABELS}
+        onRetry={() => {}}
+        databaseAction={databaseAction}
+        layout="field"
+      />,
+    );
+    expect(host.querySelector("[role='alert']")?.textContent).toContain("backend の文");
+    expect(host.querySelector("[role='alert']")?.textContent).not.toContain("接続不可");
+    expect(host.querySelector("a")).toBeNull();
+  });
+
+  it("ほかにフォーカスがあれば動かさない（欄の操作から奪わない）", () => {
+    const buttonHost = mount(<button type="button">選択欄</button>);
+    const button = buttonHost.querySelector("button")!;
+    button.focus();
+    mount(
+      <DataLoadFailureState
+        error={apiError(DATABASE_READ_TIMEOUT_CODE)}
+        fallback="候補を読み込めませんでした"
+        labels={LABELS}
+        onRetry={() => {}}
+        layout="field"
+      />,
+    );
+    expect(document.activeElement).toBe(button);
+  });
+});
+
 describe("StaleDataNotice", () => {
   it("いつの内容かと原因を出す。フォーカスのある要素からは動かさない", () => {
     const rowHost = mount(<button type="button">行の操作</button>);

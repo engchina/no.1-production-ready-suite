@@ -1736,6 +1736,8 @@ function ExecutableNl2SqlWorkbench() {
                         loading={loadingCatalog}
                         // 業務プロファイルの一覧の読み込み中は、経過時間を上の領域の表示に任せて Skeleton だけにする（#4649）。
                         loadingIndicator={!profilesQuery.isPending}
+                        // 表の一覧を読み取れなかった（0 件と言い切れない。原因と再試行はページの先頭の案内。#4222）。
+                        loadFailed={schemaObjectsQuery.isError && !schemaObjectsQuery.data}
                         profileUnselected={schemaPanelState === "profile-unselected"}
                         disabled={active}
                         insertMode="logical"

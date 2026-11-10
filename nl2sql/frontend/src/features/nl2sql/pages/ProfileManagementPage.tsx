@@ -42,6 +42,7 @@ import {
   type ListPickerItem,
   TextareaField,
   FormGrid,
+  dataLoadView,
 } from "@production-ready/ui";
 import { RoleNameBadges } from "@production-ready/system-settings";
 import { ErrorState } from "@/components/StateViews";
@@ -2188,6 +2189,8 @@ export function ProfileManagementPage() {
                   kind: "primary",
                   label: t("profiles.action.new"),
                   icon: Plus,
+                  // 一覧を読み取れていない間は作らない（同じものを重ねて作るおそれ。messaging.md §3.6.1。#4222）。
+                  disabled: dataLoadView(profilesQuery, { isEmpty: profiles.length === 0 }).blockCreate,
                   onClick: startNew,
                 },
                 {
