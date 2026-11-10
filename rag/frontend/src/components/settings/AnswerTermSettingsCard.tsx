@@ -8,13 +8,12 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-type UsageField = "runtime_terms_answer_enabled" | "runtime_rules_confirmation_enabled" | "runtime_rules_answer_enabled";
-const labels = { runtime_terms_answer_enabled: "runtimeTermsAnswer", runtime_rules_confirmation_enabled: "runtimeRulesConfirmation", runtime_rules_answer_enabled: "runtimeRulesAnswer" } as const;
+const field = "runtime_terms_answer_enabled";
+const label = "runtimeTermsAnswer";
 
-export function AnswerTermSettingsCard({ field = "runtime_terms_answer_enabled" }: { field?: UsageField }) {
-  const label = labels[field];
+export function AnswerTermSettingsCard() {
   const query = useAnsweringSettings();
-  return <Card data-testid={field === "runtime_terms_answer_enabled" ? "answer-term-settings-card" : field}>
+  return <Card data-testid="answer-term-settings-card">
     <CardHeader>
       <CardTitle>{t(`settings.answering.${label}`)}</CardTitle>
       <CardDescription>{t(`settings.answering.${label}Hint`)}</CardDescription>
@@ -22,13 +21,12 @@ export function AnswerTermSettingsCard({ field = "runtime_terms_answer_enabled" 
     <CardContent>
       {query.isPending ? <TimedLoadingState label={t("settings.answering.loading")} operationKey="answer-term-settings"><FormSkeleton fields={1} /></TimedLoadingState> : null}
       {query.isError ? <ApiErrorState error={query.error} fallback={t("settings.answering.loadError")} onRetry={() => void query.refetch()} /> : null}
-      {query.data ? <AnswerTermForm field={field} key={String(query.data[field] ?? false)} saved={query.data[field] ?? false} /> : null}
+      {query.data ? <AnswerTermForm key={String(query.data[field] ?? false)} saved={query.data[field] ?? false} /> : null}
     </CardContent>
   </Card>;
 }
 
-function AnswerTermForm({ saved, field }: { saved: boolean; field: UsageField }) {
-  const label = labels[field];
+function AnswerTermForm({ saved }: { saved: boolean }) {
   const [enabled, setEnabled] = useState(saved);
   const save = useUpdateAnsweringSettings();
   const dirty = enabled !== saved;

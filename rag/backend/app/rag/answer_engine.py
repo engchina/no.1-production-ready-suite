@@ -655,14 +655,12 @@ def guide_known_conditions(guide: Mapping[str, object] | None) -> tuple[tuple[st
 
 @dataclass(frozen=True)
 class AnswerScope:
-    """利用者が確認の質問で選んだ条件と対象範囲(#717)。"""
+    """利用者が確認の質問で選んだ条件(業務ガイドの条件の確認と、履歴で確認した回答)。"""
 
     # 回答のプロンプトの前置きに入れる説明(質問・選んだ選択肢・前提・その他・対象範囲)。
     context: str
     # 補助の検索文に足す語。
     search_terms: tuple[str, ...] = ()
-    # 回答の末尾に出す対象の範囲(例: 「出張旅費規程」の「第6条」(p.2))。
-    label: str = ""
     # 実際に選んだ答え・自由入力だけ。設定された指示や仮定を利用者の事実にしない。
     confirmed_premises: tuple[tuple[str, str], ...] = ()
     confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
@@ -842,14 +840,9 @@ class AnswerEngine:
         }
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
-                "label": self._scope.label,
                 "context": self._scope.context,
                 "page_ranges": request.filters.get("page_ranges", ""),
             }
-            if self._scope.label and outcome.answer.strip():
-                outcome = replace(
-                    outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
-                )
         outcome.diagnostics["models"] = self._models_used(
             attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),

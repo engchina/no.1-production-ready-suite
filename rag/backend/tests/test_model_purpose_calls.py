@@ -1,4 +1,4 @@
-"""実際の画像読取・条件認識・再帰要約の呼出点で固定用途を引き継ぐ。"""
+"""実際の画像読取・再帰要約の呼出点で固定用途を引き継ぐ。"""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,8 +13,6 @@ from rag_engine.adapters import oci as engine_oci
 
 from app.config import Settings
 from app.rag.chunking import Chunk
-from app.rag.extraction_field_adapter import FieldDefinition
-from app.rag.field_filter_reader import read_field_conditions
 from app.rag.ingestion import IngestionPipeline
 
 
@@ -63,28 +61,6 @@ def test_picture_reading_sets_purpose_for_both_image_paths_and_restores_caller(
     assert len(calls) == 1
     assert calls[0][1] == "固定の合成指示" and calls[0][3] is settings and calls[0][5] is provider
     assert calls[0][2] == ([target, context] if multimodal else target)
-    assert model_purpose_attributes() == {}
-
-
-async def test_metadata_condition_reader_records_purpose_at_actual_generate() -> None:
-    observed: list[dict[str, str]] = []
-
-    class Llm:
-        async def generate(self, question: str, context: str, *, system_prompt: str) -> str:
-            observed.append(model_purpose_attributes())
-            assert question == "合成の条件を確認する" and "項目 A" in context
-            assert system_prompt
-            return "[]"
-
-    assert (
-        await read_field_conditions(
-            "合成の条件を確認する",
-            [FieldDefinition(name="項目 A", value_type="string")],
-            cast(Any, Llm()),
-        )
-        == []
-    )
-    assert observed == [{"pr.gen_ai.purpose": "query.conditions"}]
     assert model_purpose_attributes() == {}
 
 

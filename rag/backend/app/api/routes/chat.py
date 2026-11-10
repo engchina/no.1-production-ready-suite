@@ -869,7 +869,7 @@ async def _prepare_chat_turn(
                 ),
             )
         conditions, context = guide_answer
-        scope = AnswerScope(context=context, search_terms=(), label="")
+        scope = AnswerScope(context=context)
         clarification_log = guide_clarification_record(
             guides,
             request.clarification.rule_id,

@@ -106,16 +106,14 @@ interface SearchRun {
 }
 
 /**
- * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行・類似問を使用しない・
- * 「自動」の条件を外す）はこの条件で送り直す（入力欄を書き換えていても前の質問を送る。#914）。
+ * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行・類似問を使用しない）は
+ * この条件で送り直す（入力欄を書き換えていても前の質問を送る。#914）。
  */
 interface SearchRequestSnapshot {
   query: string;
   searchAnswerProfileId: string;
   generateAnswer: boolean;
   filters: Record<string, string>;
-  /** 質問から読み取った条件のうち、利用者が外した項目（#652）。 */
-  excludedAutoFields: string[];
 }
 
 /**
@@ -277,7 +275,6 @@ export function SearchClient() {
           classification,
           extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
         }),
-        excludedAutoFields: [],
       },
       false
     );
@@ -346,9 +343,6 @@ export function SearchClient() {
           query: request.query,
           search_answer_profile_id: request.searchAnswerProfileId,
           generate_answer: request.generateAnswer,
-          ...(request.excludedAutoFields.length
-            ? { auto_field_filter_excluded: request.excludedAutoFields }
-            : {}),
           ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
         },
         {
@@ -409,15 +403,12 @@ export function SearchClient() {
   const submit = () => guardSubmit(runSubmit);
   /**
    * 表示中の結果（エラー・類似 FAQ の提示）を出した検索を、同じ条件で送り直す。入力欄・選択を書き換えて
-   * いても使わない（#914）。`excludedAutoFields` を渡すと、外した「自動」の条件を差し替える。
+   * いても使わない（#914）。
    */
-  const resubmit = (skipFaq: boolean, excludedAutoFields?: string[]) =>
+  const resubmit = (skipFaq: boolean) =>
     guardSubmit(async () => {
       if (!lastRequest) return;
-      await runRequest(
-        excludedAutoFields ? { ...lastRequest, excludedAutoFields } : lastRequest,
-        skipFaq
-      );
+      await runRequest(lastRequest, skipFaq);
     });
 
   const cancel = () => {
@@ -493,15 +484,7 @@ export function SearchClient() {
       testId="search-run-progress"
     />
   ) : null;
-  const conditionChips = (
-    <SearchConditionChips
-      appliedFilters={appliedFilters}
-      meta={meta}
-      phase={phase}
-      disabled={isStreaming}
-      onRemoveAuto={(name) => void resubmit(true, [...(lastRequest?.excludedAutoFields ?? []), name])}
-    />
-  );
+  const conditionChips = <ActiveFilterChips filters={appliedFilters} />;
 
   return (
     <div>
@@ -951,79 +934,6 @@ function searchProcessSteps(steps: ChatProgressStep[], phase: string): ChatProgr
 
 function runStartedAtMs(): number {
   return Date.now();
-}
-
-/**
- * 質問から読み取って検索に足した条件（#652）。「自動」のチップで出し、外して検索し直せる。
- */
-function AutoFieldFilterChips({
-  diagnostics,
-  disabled,
-  onRemove,
-}: {
-  diagnostics: unknown;
-  disabled: boolean;
-  onRemove: (name: string) => void;
-}) {
-  const auto = parseAnswerDiagnostics(diagnostics)?.autoFieldFilter;
-  if (!auto) return null;
-  const names = [...new Set(auto.conditions.map((condition) => condition.name))];
-  return (
-    <div aria-label={t("search.answerDetails.autoFieldFilter")} className="mb-3 space-y-1.5" data-testid="auto-field-filter-chips">
-      <p className="text-xs font-medium text-fg-muted">{t("search.answerDetails.autoFieldFilter")}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {names.map((name) => {
-          const label = auto.conditions
-            .filter((condition) => condition.name === name)
-            .map(extractionFieldConditionLabel)
-            .join(" / ");
-          return (
-            <span
-              key={name}
-              data-surface-tint="info"
-              className="inline-flex max-w-full items-center gap-0.5 rounded-full border border-border bg-info-subtle py-0.5 pl-2 text-xs font-medium leading-snug text-fg"
-            >
-              <span className="break-all">{t("search.autoFieldFilter.chip", { label })}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                iconOnly
-                icon={X}
-                disabled={disabled}
-                aria-label={t("search.autoFieldFilter.remove", { label })}
-                onClick={() => onRemove(name)}
-              />
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** 検索に使った条件（指定した条件と、質問から読み取った「自動」の条件）。 */
-function SearchConditionChips({
-  appliedFilters,
-  meta,
-  phase,
-  disabled,
-  onRemoveAuto,
-}: {
-  appliedFilters: Record<string, string>;
-  meta: Meta | null;
-  phase: Phase;
-  disabled: boolean;
-  onRemoveAuto: (name: string) => void;
-}) {
-  return (
-    <>
-      <ActiveFilterChips filters={appliedFilters} />
-      {meta && phase === "done" ? (
-        <AutoFieldFilterChips diagnostics={meta.diagnostics?.answer} disabled={disabled} onRemove={onRemoveAuto} />
-      ) : null}
-    </>
-  );
 }
 
 function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {

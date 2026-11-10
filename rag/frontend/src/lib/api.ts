@@ -1491,8 +1491,6 @@ export interface SearchRequestBody {
   retrieval_only?: boolean;
   /** false なら回答を生成しない（RAG 検索の画面。回答の LLM を使わない。#649）。 */
   generate_answer?: boolean;
-  /** 質問から読み取った条件のうち、利用者が外した項目の名前（#652）。 */
-  auto_field_filter_excluded?: string[];
   /** 回答のモデル（既定のテキストモデルか既定の Vision モデル。未指定はテキスト。#675）。 */
   model_id?: string;
 }
@@ -1600,23 +1598,13 @@ export interface ChatAttachmentListData {
   limits: ChatAttachmentApiLimits;
 }
 
-/** ルールの確認の質問（チャットの確認。#717）。 */
-export interface ClarificationSection {
-  document_id: string;
-  document_name: string;
-  section_id: string;
-  title: string;
-  page_start: number | null;
-  page_end: number | null;
-}
-
+/** 回答前の確認の質問（業務ガイドの条件の確認。#1238）。 */
 export interface ClarificationOption {
   id: string;
   label: string;
   description: string;
   search_terms: string[];
   premise: string;
-  sections: ClarificationSection[];
 }
 
 export interface RuleClarification {
@@ -2696,14 +2684,11 @@ export interface AnsweringSettingsData {
   rrf_method_ratio?: [number, number];
   rrf_source_ratio?: [number, number];
   rerank_slot_ratio?: [number, number];
-  runtime_rules_confirmation_enabled?: boolean;
-  runtime_rules_answer_enabled?: boolean;
   runtime_terms_search_enabled?: boolean;
   runtime_terms_answer_enabled?: boolean;
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;
-  auto_field_filter_enabled: boolean;
   /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
   graph_expansion_enabled: boolean;
   entity_expansion_enabled: boolean;
@@ -4007,11 +3992,6 @@ export const api = {
       `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
       jsonBody({ query, ...(conversationId ? { conversation_id: conversationId } : {}) }),
     ),
-  saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
-    request<RuntimeKnowledgeData>(
-      `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/rules/${encodeURIComponent(ruleId)}/clarification`,
-      { ...jsonBody({ clarification }), method: "PUT" },
-    ),
   setApprovedFaqEnabled: (id: string, enabled: boolean) =>
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/settings`,
@@ -4806,27 +4786,18 @@ export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
 }
 
-// --- 検索・回答プロファイルの知識: 用語・同義語と回答ルール(runtime knowledge) ---
-export type RuntimeKnowledgeKind = "terms" | "rules";
-
+// --- 検索・回答プロファイルの知識: 用語・同義語(runtime knowledge) ---
 export interface RuntimeKnowledgeData {
   search_answer_profile_id: string;
   terms: Record<string, JsonValue>[];
-  rules: Record<string, JsonValue>[];
 }
 
 export interface RuntimeKnowledgeEditRequest {
-  kind: RuntimeKnowledgeKind;
   selected?: string | null;
   name?: string;
-  title?: string;
   labels?: string;
   content?: string;
   source?: string;
-  purpose?: "confirmation" | "generation" | "both";
-  instruction_kind?: "presentation" | "requirement" | "verification";
-  exclusive_group?: string;
-  priority?: number;
   enabled?: boolean;
   delete?: boolean;
 }
@@ -4834,8 +4805,6 @@ export interface RuntimeKnowledgeEditRequest {
 export interface RuntimeKnowledgePreviewData {
   expanded_question: string;
   matched_terms: string[];
-  matched_rules: string[];
-  conflicting_rules?: string[];
 }
 
 // --- 業務ガイド（SupportGuide。#1237）。型は backend の app/schemas/support_guide.py と同じ ---
@@ -5152,12 +5121,6 @@ export interface SupportGuideProcessReference {
   candidates: string[];
 }
 
-export interface SupportGuideRuleCandidate {
-  title: string;
-  triggers: string[];
-  content: string;
-}
-
 export interface SupportGuideProcessItem {
   row: number;
   question: string;
@@ -5165,7 +5128,6 @@ export interface SupportGuideProcessItem {
   content: SupportGuideContent | null;
   issues: SupportGuideIssue[];
   references: SupportGuideProcessReference[];
-  rule_candidates: SupportGuideRuleCandidate[];
 }
 
 export interface SupportGuideProcessPreviewData {

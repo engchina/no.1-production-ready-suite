@@ -20,7 +20,6 @@ export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";
 /** 回答フローの外の工程のうち、行にするもの（工程の名前 → 名前の i18n）。 */
 export const PIPELINE_STEP_LABEL: Readonly<Record<string, I18nKey>> = {
   history_rewrite: "search.stage.historyRewrite",
-  field_filter: "search.stage.fieldFilter",
   query_guardrail: "search.stage.queryGuardrail",
   answer_guardrail: "search.stage.answerGuardrail",
   answer_record_save: "search.stage.answerRecordSave",
@@ -40,12 +39,9 @@ const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", 
 const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "質問の理解": "answer.step.understandQuestion",
   "用語・同義語の確認": "answer.step.terms",
-  "登録ルールによる確認の使用": "settings.answering.runtimeRulesConfirmation",
-  "回答生成での登録ルールの使用": "settings.answering.runtimeRulesAnswer",
   "検索文をまとめ、検索語を作る": "answer.step.decideQueries",
   "用語・同義語による検索文の追加": "settings.answering.runtimeTermsSearch",
   "回答生成での用語・同義語の使用": "settings.answering.runtimeTermsAnswer",
-  "回答ルールの確認": "answer.step.rules",
   "検索文と検索語の確定": "answer.step.decideQueries",
   "回答生成フロー": "answer.step.answerFlow",
   "根拠検索フロー": "answer.step.evidenceFlow",
