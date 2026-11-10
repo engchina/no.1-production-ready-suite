@@ -761,13 +761,13 @@
     {
       "destructive": true,
       "name": "20261110_4784_language_pack_retired_unread",
-      "sha256": "d26ef5ba4e7c239ea653c92f1e9f7b518fc38dd886a8d88d9132ebd79cc878cb",
+      "sha256": "70275c4daffe5741090efcd2e0653563e057bf666a7f4d6f5835f672efb4b517",
       "statement_count": 1,
       "table_name": "rag_language_pack_releases"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "6a7a418079be6a1ac80433dff0acca8aad13dde996d55c59d6cb75d1ca725514",
+  "sha256": "6400c3f7765250b4b6993db8d2dda229bb08674f2677a344f42e12339d3c5fb5",
   "statement_count": 165
 }

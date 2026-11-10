@@ -216,7 +216,6 @@ from rag_engine.retrieval.guide_steps import (
     target_records,
     unsearched_steps,
 )
-from rag_engine.retrieval.operation_context import alternative_operation_queries
 from rag_engine.retrieval.query_identity import normalized_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question

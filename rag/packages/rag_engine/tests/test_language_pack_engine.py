@@ -102,21 +102,13 @@ class LanguagePackEngineTest(unittest.TestCase):
         """根拠の選び方の手がかり（機能番号の線）は言語資源から作る(#2181 段 4)。"""
         from types import SimpleNamespace
 
-        from rag_engine.retrieval.operation_context import alternative_operation_queries
+        from rag_engine.retrieval.operation_context import operation_labels
 
-        records = [
-            SimpleNamespace(metadata={"section_path": ["業務~(1)登録画面"]}),
-            SimpleNamespace(metadata={"section_path": ["業務~(2)削除画面"]}),
-        ]
-        self.assertEqual(alternative_operation_queries("登録したい", records), ())
-        with bind_pack(
-            _custom(
-                evidence_cues={
-                    "function_number_dashes": ["-", "~"],
-                }
-            )
-        ):
-            self.assertEqual(len(alternative_operation_queries("登録したい", records)), 2)
+        record = SimpleNamespace(metadata={"section_path": ["合成の章の名前", "業務~(1)登録画面"]})
+        # 線の字に「~」が無ければ番号付きの機能見出しと見なさず、章の名前も残す。
+        self.assertEqual(operation_labels(record), {"合成の章の名前", "業務~(1)登録画面"})
+        with bind_pack(_custom(evidence_cues={"function_number_dashes": ["-", "~"]})):
+            self.assertEqual(operation_labels(record), {"業務~(1)登録画面"})
 
     def test_answer_labels_follow_the_pack(self):
         """回答の表示（見出し・出典・条件の型）は言語資源から作り、検査も同じ語で読む(#2181 段 5)。"""

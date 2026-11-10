@@ -434,6 +434,9 @@ def _with_4784_retired(pack: dict[str, Any]) -> dict[str, Any]:
         {key: ["合成語"] for key in module.RETIRED_4784_GROUNDING_CUE_FIELDS}
     )
     old["answer_labels"]["aspect_labels"] = ["合成語=procedure"]
+    old["evidence_cues"].update(
+        {key: ["合成語"] for key in module.RETIRED_4784_EVIDENCE_CUE_FIELDS}
+    )
     old["inquiry_cues"] = {"condition_terms": ["合成語"]}
     return old
 

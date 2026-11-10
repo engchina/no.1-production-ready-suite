@@ -1200,10 +1200,6 @@
       "「",
       "("
     ],
-    "alternative_query_words": [
-      "操作方法",
-      "適用条件"
-    ],
     "heading_bullet_chars": [
       "●",
       "■",
@@ -1218,14 +1214,6 @@
     "label_colon_chars": [
       ":",
       "："
-    ],
-    "relevance_stop_terms": [
-      "確認",
-      "情報",
-      "場合",
-      "対象",
-      "方法",
-      "表示"
     ],
     "section_label_brackets": [
       "【】"

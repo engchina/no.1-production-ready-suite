@@ -5,17 +5,13 @@ from grounded_stub import AnswerOutput
 from test_rag_evidence_recovery import rec
 
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
-from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
+from rag_engine.retrieval.operation_context import operation_labels
 
 
 def test_numbered_functions_do_not_match_shared_subheadings():
     a = rec("a", "parent", 1, "画面", headings=["B管理 － （1）帳票設定", "印字内容設定"])
     b = rec("b", "parent", 2, "画面", headings=["B管理 － （2）伝票印刷設定", "印字内容設定"])
     assert not operation_labels(a) & operation_labels(b)
-    queries = alternative_operation_queries("文言を変更したい", [a, b])
-    assert len(queries) == 2
-    assert all(q.startswith("文言を変更したい") for q in queries)
-    assert "(1)帳票設定" in queries[0] and "(2)伝票印刷設定" in queries[1]
 
 
 @pytest.mark.parametrize("reverse", [False, True])

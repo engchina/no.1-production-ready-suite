@@ -310,12 +310,16 @@ RETIRED_4784_GROUNDING_CUE_FIELDS = frozenset(
     }
 )
 RETIRED_4784_ANSWER_LABEL_FIELDS = frozenset({"aspect_labels"})
+# 合成の 5 問で「あり・なし」を比べ、検索の候補・根拠・引用に差が無かった項目（読む関数が呼ばれない
+# alternative_query_words を含む。#4784・Q38）。
+RETIRED_4784_EVIDENCE_CUE_FIELDS = frozenset({"alternative_query_words", "relevance_stop_terms"})
 RETIRED_4784_SECTIONS = frozenset({"inquiry_cues"})
 RETIRED_4784_FIELDS = (
     RETIRED_4784_NUMBER_FIELDS
     | RETIRED_4784_SYMBOL_FIELDS
     | RETIRED_4784_GROUNDING_CUE_FIELDS
     | RETIRED_4784_ANSWER_LABEL_FIELDS
+    | RETIRED_4784_EVIDENCE_CUE_FIELDS
     | RETIRED_4784_SECTIONS
 )
 _RETIRED_BY_SECTION = {
@@ -348,6 +352,7 @@ _RETIRED_BY_SECTION = {
         RETIRED_UNREAD_EVIDENCE_CUE_FIELDS
         | RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS
         | RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS
+        | RETIRED_4784_EVIDENCE_CUE_FIELDS
     ),
 }
 _ALL_RETIRED_SECTIONS = (
@@ -461,7 +466,9 @@ def _strip_releases(connection: Any) -> None:
             and row["ingest_hash"] != ingest_hash
             and _same_ingest_output(effective)
         ):
-            changed_ingest.append((row["release_id"], row["ingest_hash"], ingest_hash))
+            changed_ingest.append(
+                (str(row["release_id"]), str(row["ingest_hash"]), str(ingest_hash))
+            )
     for release_id, old, new in changed_ingest:
         _repoint_ingest_hash(connection, release_id, old, new)
 
