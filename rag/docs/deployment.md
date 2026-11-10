@@ -221,6 +221,14 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4811 品質評価の過去の評価の一覧と見え方）
+
+品質評価の「評価の実行」に過去の評価の一覧を足し、`/evaluation?job=<評価 ID>` で別のブラウザーからも保存済みの結果を開けるようにした。評価に使った検索・回答プロファイルを使える利用者が見られる（プロファイルの分からない評価は実行した本人と system_admin だけ）。
+
+1. システムテーブルを更新する（migration `20261110_4811_evaluation_job_visibility`。`rag_evaluation_jobs` に列 `search_answer_profile_id`・`compare_search_answer_profile_id`・`user_uuid` を足す。行は消さない）。既存の行のプロファイルは、保存した結果の実行条件（`result_json` の `run_manifest.request`。比べる方は `comparison` も）とケースごとの結果（`rag_evaluation_job_case_results` の pass ごとの `search_answer_profile_id`）から埋める。どちらにも無い行は NULL のままで、実行した本人と system_admin だけが見られる。利用者の UUID は既存の行には埋めない（一覧の実行者は「—」）。
+2. backend と frontend を更新する。新しい評価は使ったプロファイルと実行した利用者の UUID を必ず記録する。
+3. 権限（`menu.evaluation`）を持ち、評価に使った検索・回答プロファイルを使える利用者は、他の利用者の評価の結果を閲覧し、結果の Excel をダウンロードできるようになる（取り消しは実行した本人と system_admin だけ）。広げたくない評価は、プロファイルの割り当て（権限管理）で絞る。
+
 ## 既存環境の更新手順（#4799 抽出項目の条件の自動読み取りと登録ルールの削除）
 
 質問から抽出項目の条件を LLM で読み取る段と、検索・回答プロファイルの登録ルール（回答前の確認・回答への差し込み）を

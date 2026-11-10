@@ -34,6 +34,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
@@ -60,6 +61,7 @@ import { saveDownloadedFile } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
+  evaluationJobListQueryKey,
   useCancelEvaluationJob,
   useEvaluationJob,
   useEvaluationSettings,
@@ -72,6 +74,7 @@ import { toast } from "@/lib/toast";
 
 import {
   evaluationCaseErrorSummary,
+  evaluationHistoryProfileLabel,
   evaluationJobShownResult,
   isEvaluationJobActive,
   isEvaluationJobId,
@@ -114,6 +117,7 @@ import {
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
 import { TestSetTab } from "./testsets/TestSetTab";
+import { EvaluationHistory } from "./EvaluationHistory";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
@@ -155,9 +159,16 @@ export function EvaluationClient() {
   const runMutation = useSubmitRunEvaluationJob();
   const importMutation = useImportEvaluationCases();
   const settingsQuery = useEvaluationSettings();
-  // 評価は job で動く（#390）。job id だけを作業状態に残し、画面に戻ったらサーバーの状態
-  // （進捗・結果）を確かめる（workspace-state.md）。戻っただけで評価を送り直さない。
-  const runJob = useEvaluationJobState();
+  // 表示する評価（#4811）。正本は URL の `job`（別のブラウザー・共有のリンクから開ける）。URL に無ければ、
+  // 同じタブで続ける便利さとして作業状態の job id（#390）を使う。開くだけで評価を送り直さない。
+  const urlJobId = searchParams.get("job");
+  const openJob = (jobId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("job", jobId);
+    next.delete("tab");
+    setSearchParams(next);
+  };
+  const runJob = useEvaluationJobState(urlJobId, openJob);
   // 評価の条件（プロファイル・検証した Excel）は、ページを行き来しても再読込しても残す
   // （workspace-state.md）。選んだファイルそのものはメモリだけに持つ（プロファイルを変えたら検証し直す）。
   const [profileId, setProfileId] = useWorkspaceState<string | null>(
@@ -178,6 +189,13 @@ export function EvaluationClient() {
     "evaluation.runCaseLabels",
     {},
     isCaseLabels
+  );
+  // 見出し・実行時の入力・名前をどの評価のものとして残したか（#4811）。一覧・URL で別の評価を開いたら
+  // 使わない（質問の本文は job に保存しないので、別の評価のケースは「N 行目」で出す。#4107）。
+  const [runLabelsJobId, setRunLabelsJobId] = useWorkspaceState<string>(
+    "evaluation.runLabelsJobId",
+    "",
+    isEvaluationJobId
   );
   // 検索・回答プロファイルでも評価して比較するか（#2402）。条件と同じく作業状態に残す。
   const [compareEnabled, setCompareEnabled] = useWorkspaceState<boolean>(
@@ -355,6 +373,7 @@ export function EvaluationClient() {
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
+      setRunLabelsJobId(job.job_id);
       setRunInputSnapshot(runInput);
       setRunProfileName(profiles.find((profile) => profile.id === profileId)?.name ?? profileId);
       setRunCompareName(
@@ -510,24 +529,43 @@ export function EvaluationClient() {
           </CardContent>
         </Card>
 
-        {runJob.jobId ? (
+        <EvaluationHistory selectedJobId={runJob.jobId || null} onSelect={openJob} />
+
+        {runJob.invalid ? (
+          <EvaluationJobError notFound message={null} onRetry={() => undefined} />
+        ) : runJob.jobId ? (
           <EvaluationJobSection
             state={runJob}
-            renderResult={(job, metrics) => (
-              <ResultExportContext.Provider value={{jobId:job.job_id,hasSourceWorkbook:Boolean(job.source_workbook_id),input:runInputSnapshot,
-                profileName:runProfileName,compareProfileName:runCompareName}}>
-              {metrics.comparison ? (
-                <EvaluationComparisonResult
-                  metrics={metrics}
-                  baseName={runProfileName}
-                  comparedName={runCompareName}
-                  caseLabels={runCaseLabels}
-                />
-              ) : (
-                <EvaluationResult metrics={metrics} caseLabels={runCaseLabels} />
-              )}
-              </ResultExportContext.Provider>
-            )}
+            renderResult={(job, metrics) => {
+              // この画面で実行した評価だけ、残した見出し・入力を使う。別の評価は保存済みの結果だけで出す。
+              const local = job.job_id === runLabelsJobId;
+              const baseName = job.search_answer_profile_name ?? (local ? runProfileName : null);
+              const comparedName =
+                job.compare_search_answer_profile_name ?? (local ? runCompareName : null);
+              const caseLabels = local ? runCaseLabels : {};
+              return (
+                <ResultExportContext.Provider
+                  value={{
+                    jobId: job.job_id,
+                    hasSourceWorkbook: Boolean(job.source_workbook_id),
+                    input: local ? runInputSnapshot : null,
+                    profileName: baseName,
+                    compareProfileName: comparedName,
+                  }}
+                >
+                  {metrics.comparison ? (
+                    <EvaluationComparisonResult
+                      metrics={metrics}
+                      baseName={baseName}
+                      comparedName={comparedName}
+                      caseLabels={caseLabels}
+                    />
+                  ) : (
+                    <EvaluationResult metrics={metrics} caseLabels={caseLabels} />
+                  )}
+                </ResultExportContext.Provider>
+              );
+            }}
           />
         ) : runMutation.isPending ? (
           <EvaluationResultSkeleton />
@@ -600,6 +638,8 @@ function isCaseLabels(value: unknown): value is EvaluationCaseLabels {
 
 interface EvaluationJobState {
   jobId: string;
+  /** URL の `job` が ID の形でない（中身を問い合わせず「見つからない」を出す）。 */
+  invalid: boolean;
   job: EvaluationJob | null;
   query: ReturnType<typeof useEvaluationJob>;
   start: (job: EvaluationJob) => void;
@@ -608,13 +648,27 @@ interface EvaluationJobState {
 }
 
 /**
- * 評価の job の状態。job id を作業状態に残し、実行中は状態を取得し続ける。
- * 実行中から終わりへ移ったときだけ、完了・失敗を 1 回通知する（messaging.md §4.2）。
+ * 評価の job の状態。表示する job は URL の `job`（#4811）、無ければ作業状態の job id。実行中は状態を
+ * 取得し続け、実行中から終わりへ移ったときだけ、完了・失敗を 1 回通知する（messaging.md §4.2）。
  */
-function useEvaluationJobState(): EvaluationJobState {
-  const [jobId, setJobId] = useWorkspaceState<string>("evaluation.runJobId", "", isEvaluationJobId);
+function useEvaluationJobState(
+  urlJobId: string | null,
+  openJob: (jobId: string) => void
+): EvaluationJobState {
+  const [storedJobId, setStoredJobId] = useWorkspaceState<string>(
+    "evaluation.runJobId",
+    "",
+    isEvaluationJobId
+  );
+  const invalid = urlJobId !== null && (urlJobId === "" || !isEvaluationJobId(urlJobId));
+  const jobId = invalid ? "" : (urlJobId ?? storedJobId);
+  // URL で開いた評価も、同じタブで戻ったときの続きにする（正本は URL とサーバー）。
+  useEffect(() => {
+    if (!invalid && urlJobId && urlJobId !== storedJobId) setStoredJobId(urlJobId);
+  }, [invalid, urlJobId, storedJobId, setStoredJobId]);
   const query = useEvaluationJob(jobId || null);
   const cancelMutation = useCancelEvaluationJob();
+  const queryClient = useQueryClient();
   const confirm = useConfirm();
   const job = query.data ?? null;
   const observed = useRef<{ jobId: string; status: EvaluationJobStatus } | null>(null);
@@ -624,12 +678,14 @@ function useEvaluationJobState(): EvaluationJobState {
     const previous = observed.current;
     observed.current = { jobId: job.job_id, status: job.status };
     if (previous?.jobId !== job.job_id || previous.status !== "RUNNING") return;
+    // 終わった評価の状態・判定を一覧にも反映する。
+    void queryClient.invalidateQueries({ queryKey: evaluationJobListQueryKey });
     if (job.status === "SUCCEEDED") {
       toast.success(t("evaluation.toast.succeeded"));
     } else if (job.status === "FAILED") {
       toast.error(t("evaluation.toast.failed"));
     }
-  }, [job]);
+  }, [job, queryClient]);
 
   const cancel = async (target: EvaluationJob) => {
     const confirmed = await confirm({
@@ -648,11 +704,14 @@ function useEvaluationJobState(): EvaluationJobState {
 
   return {
     jobId,
+    invalid,
     job,
     query,
     start: (started) => {
       observed.current = { jobId: started.job_id, status: started.status };
-      setJobId(started.job_id);
+      // URL だけを変える（作業状態は URL から写す）。URL より先に作業状態の id で表示すると、URL の
+      // 遷移が後から確定して、その間に開いた確認のダイアログが閉じる。
+      openJob(started.job_id);
     },
     cancel,
     cancelling: cancelMutation.isPending,
@@ -689,8 +748,13 @@ function EvaluationJobSection({
     <>
       <EvaluationJobPanel
         job={job}
-        onCancel={(target) => void state.cancel(target)}
+        // 取り消しは実行した本人と system_admin だけ（#4811。他の利用者の評価は閲覧とダウンロードだけ）。
+        onCancel={job.can_cancel ? (target) => void state.cancel(target) : undefined}
         cancelling={state.cancelling}
+        meta={[
+          t("evaluation.job.profile", { profile: evaluationHistoryProfileLabel(job) }),
+          t("evaluation.job.actor", { actor: job.actor_display_name ?? "—" }),
+        ]}
       />
       {pollError ? (
         <Banner severity="warning">
@@ -1296,7 +1360,7 @@ function CaseTable({
 
 /**
  * ケースの質問（Excel の行と質問）と、失敗したケース（status=error）の理由・時間切れになった工程（#383）。
- * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い古い結果は id。
+ * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い結果は Excel の行（#4811）。
  */
 function CaseQuestionCell({
   result,
@@ -1316,7 +1380,9 @@ function CaseQuestionCell({
           <span>{label.question}</span>
         </>
       ) : (
-        <span>{result.case_id}</span>
+        // 見出しの無い結果（一覧・URL で開いた評価。質問の本文は job に保存しない。#4107・#4811）は
+        // Excel の行（「5 行目」）で出す。Excel から作ったケースでなければ id のまま。
+        <span>{evaluationCaseRowLabel(result.case_id)}</span>
       )}
       {error ? (
         <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">

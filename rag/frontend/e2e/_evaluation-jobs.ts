@@ -53,6 +53,35 @@ export async function mockEvaluationJobs(
           ? options.partialResult?.(job.payload) ?? null
           : null,
       source_workbook_id: (job.payload.source_workbook_id as string | undefined) ?? null,
+      search_answer_profile_id: (job.payload.search_answer_profile_id as string | undefined) ?? null,
+      compare_search_answer_profile_id:
+        (job.payload.compare_search_answer_profile_id as string | undefined) ?? null,
+      search_answer_profile_name: null,
+      compare_search_answer_profile_name: null,
+      actor_display_name: "ローカル利用者",
+      owned: true,
+      can_cancel: true,
+    };
+  };
+  const summary = (job: MockJob) => {
+    const detail = view(job);
+    const result = detail.run_result as { passed?: boolean | null } | null;
+    return {
+      job_id: job.job_id,
+      status: job.status,
+      case_count: job.total_cases,
+      total_cases: job.total_cases,
+      completed_cases: job.completed_cases,
+      created_at: job.started_at,
+      finished_at: job.finished_at,
+      passed: result?.passed ?? null,
+      search_answer_profile_id: detail.search_answer_profile_id,
+      compare_search_answer_profile_id: detail.compare_search_answer_profile_id,
+      search_answer_profile_name: null,
+      compare_search_answer_profile_name: null,
+      actor_display_name: detail.actor_display_name,
+      owned: true,
+      can_cancel: true,
     };
   };
   const finish = (job: MockJob, status: JobStatus, message: string | null = null) => {
@@ -63,6 +92,11 @@ export async function mockEvaluationJobs(
   };
   const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
 
+  // 過去の評価の一覧（#4811）。投入した job を新しい順に返す。
+  await page.route(isEvaluationJobListUrl, async (route) => {
+    const items = [...jobs.values()].reverse().map(summary);
+    await route.fulfill({ json: envelope(evaluationJobPage(items)) });
+  });
   await page.route("**/api/evaluation/jobs/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace(/^.*\/api\/evaluation\/jobs\//, "");
@@ -229,4 +263,35 @@ export async function prepareEvaluationRun(
   await uploadEvaluationExcel(page);
   await expect(page.getByTestId("evaluation-import-ready")).toBeVisible();
   return imports;
+}
+
+/** 過去の評価の一覧の API の URL か（query の付いた `/api/evaluation/jobs`）。 */
+export function isEvaluationJobListUrl(url: URL): boolean {
+  return url.pathname.endsWith("/api/evaluation/jobs");
+}
+
+/** 過去の評価の一覧の 1 ページ（#4811。offset 型の `Page`）。 */
+export function evaluationJobPage(items: Record<string, unknown>[], offset = 0, limit = 25) {
+  return {
+    items: items.slice(offset, offset + limit),
+    total: items.length,
+    limit,
+    offset,
+    has_next: offset + limit < items.length,
+  };
+}
+
+/** 過去の評価の一覧の API（`GET /api/evaluation/jobs`）の mock。既定は空（評価を投入する mock はあとから上書きする）。 */
+export async function mockEvaluationJobList(page: Page, items: Record<string, unknown>[] = []) {
+  const requests: URL[] = [];
+  await page.route(isEvaluationJobListUrl, async (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 25);
+    await route.fulfill({
+      json: { data: evaluationJobPage(items, offset, limit), error_messages: [], warning_messages: [] },
+    });
+  });
+  return { requests };
 }

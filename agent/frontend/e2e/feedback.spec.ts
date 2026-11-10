@@ -4,6 +4,7 @@ import { dbUser } from "./fixtures/auth";
 import { withListFilters } from "./fixtures/select-field";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
+import { DATABASE_READ_FAILED_MESSAGE, failDatabaseReads } from "./fixtures/read-failure";
 
 // #774: チャットの回答への評価と、フィードバックの集計の画面。
 
@@ -364,6 +365,31 @@ for (const viewport of VIEWPORTS) {
     agentsFail = false;
     await failure.getByRole("button", { name: "再試行" }).click();
     await expect(failure).toHaveCount(0);
+  });
+}
+
+// #4222: backend は保存した実行の履歴を読めないとき、手元の実行だけの集計を 200 で返さず、失敗として返す。
+for (const viewport of VIEWPORTS) {
+  test(`評価の集計を読み取れないときは 0 件の集計を出さず、失敗を出して再試行で回復する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedReport(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const reads = await failDatabaseReads(page, "/api/feedback");
+    await openRatings(page);
+
+    // 自動の再試行（1・2 秒）の後に失敗を出す。
+    const failure = page.locator('[data-failure-kind="other"]');
+    await expect(failure.getByRole("alert")).toContainText(DATABASE_READ_FAILED_MESSAGE, { timeout: 15_000 });
+    await expect(page.getByTestId("feedback-summary")).toHaveCount(0);
+    await expect(page.getByText("この期間のフィードバックはありません")).toHaveCount(0);
+    // 絞り込みは読めているのでそのまま出す。
+    await expect(page.getByTestId("feedback-filters")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`feedback-read-failed-${viewport.name}.png`) });
+
+    reads.recover();
+    await failure.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(failure).toHaveCount(0);
+    await expect(page.getByTestId("feedback-summary")).toBeVisible();
   });
 }
 

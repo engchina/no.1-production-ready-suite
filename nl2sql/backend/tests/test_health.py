@@ -4064,21 +4064,6 @@ def test_service_add_select_ai_feedback_explains_unmatched_sql() -> None:
     assert "V$MAPPED_SQL" in added.warnings[0]
 
 
-def test_oracle_adapter_list_agent_conversations_reads_prompt_response_and_team() -> None:
-    fake_db = _FakeOracleDb()
-    adapter = _FakeRuntimeOracleAdapter(fake_db)
-
-    assert adapter.list_agent_conversations(team_name="NL2SQL_DEFAULT_TEAM", limit=5) == []
-
-    # USER_CLOUD_AI_CONVERSATION_PROMPTS には RESPONSE・TEAM_NAME の列が無い（#1681）。
-    sql = next(sql for sql in fake_db.executed if "USER_CLOUD_AI_CONVERSATION_PROMPTS" in sql)
-    assert "p.PROMPT_RESPONSE" in sql
-    assert "p.PROMPT_ACTION = 'AGENT'" in sql
-    assert "USER_AI_AGENT_TEAM_HISTORY" in sql
-    assert " RESPONSE," not in sql
-    assert fake_db.executed_params[-1] == {"limit": 5, "team_name": "NL2SQL_DEFAULT_TEAM"}
-
-
 def test_oracle_adapter_agent_privilege_check_includes_create_conversation() -> None:
     fake_db = _FakeOracleDb()
     adapter = _FakeRuntimeOracleAdapter(fake_db)

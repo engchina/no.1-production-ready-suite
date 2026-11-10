@@ -5,6 +5,7 @@ import type { EvaluationJob, EvaluationMetrics } from "@/lib/api";
 import {
   EVALUATION_JOB_STATUS_VARIANT,
   evaluationCaseErrorSummary,
+  evaluationHistoryProfileLabel,
   evaluationJobCountLabel,
   evaluationJobCurrentCaseLabel,
   evaluationJobPartialLabel,
@@ -35,6 +36,13 @@ function job(overrides: Partial<EvaluationJob> = {}): EvaluationJob {
     run_result: null,
     partial_result: null,
     source_workbook_id: null,
+    search_answer_profile_id: null,
+    compare_search_answer_profile_id: null,
+    search_answer_profile_name: null,
+    compare_search_answer_profile_name: null,
+    actor_display_name: null,
+    owned: true,
+    can_cancel: true,
     ...overrides,
   };
 }
@@ -149,5 +157,29 @@ describe("途中までの結果（Issue 4208）", () => {
     expect(label).toContain("3 件");
     expect(label).toContain("全 10 件");
     expect(evaluationJobPartialLabel(job())).toBeNull();
+  });
+});
+
+describe("過去の評価のプロファイルの表示（Issue 4811）", () => {
+  it("名前を優先し、引けなければ ID、記録の無い古い評価は「—」", () => {
+    expect(
+      evaluationHistoryProfileLabel(
+        job({ search_answer_profile_id: "p-1", search_answer_profile_name: "プロファイル A" })
+      )
+    ).toBe("プロファイル A");
+    expect(evaluationHistoryProfileLabel(job({ search_answer_profile_id: "p-1" }))).toBe("p-1");
+    expect(evaluationHistoryProfileLabel(job())).toBe("—");
+  });
+
+  it("比べるプロファイルを括弧で添える", () => {
+    expect(
+      evaluationHistoryProfileLabel(
+        job({
+          search_answer_profile_name: "プロファイル A",
+          compare_search_answer_profile_id: "p-2",
+          compare_search_answer_profile_name: "プロファイル B",
+        })
+      )
+    ).toBe("プロファイル A（比較: プロファイル B）");
   });
 });

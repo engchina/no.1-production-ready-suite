@@ -206,9 +206,15 @@ class EvaluationSourceWorkbookService:
             await self.purge_unreferenced()
         return workbook_id
 
-    async def load(self, workbook_id: str) -> EvaluationSourceWorkbook:
-        """持ち主のファイルを返す。無ければ `EvaluationSourceWorkbookNotFoundError`。"""
-        tenant_id_hash, user_id_hash = self._owner()
+    async def load(
+        self, workbook_id: str, *, owner: tuple[str | None, str | None] | None = None
+    ) -> EvaluationSourceWorkbook:
+        """持ち主のファイルを返す。無ければ `EvaluationSourceWorkbookNotFoundError`。
+
+        `owner`（tenant と user の hash）を渡すと、その利用者のファイルを読む。見られることを
+        確かめた品質評価の job の、実行した利用者のファイルを読むときだけ渡す（#4811）。
+        """
+        tenant_id_hash, user_id_hash = owner if owner is not None else self._owner()
         row = await self.store.get(
             workbook_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
         )
