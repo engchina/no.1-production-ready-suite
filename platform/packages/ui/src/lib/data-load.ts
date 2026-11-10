@@ -110,10 +110,10 @@ export function dataLoadView(query: DataLoadQuery, { isEmpty = false }: { isEmpt
   return { phase: "ready", blockCreate: retrying };
 }
 
-/** 入力中の欄・開いているダイアログからフォーカスを奪わないための判定。 */
+/** 入力中の欄・開いているダイアログや選択・操作メニューからフォーカスを奪わないための判定。 */
 function shouldKeepFocus(active: Element | null): boolean {
   if (!active || active === document.body) return false;
-  if (active.closest("[role='dialog'], [role='alertdialog']")) return true;
+  if (active.closest("[role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='combobox'], [aria-haspopup][aria-expanded='true']")) return true;
   if (active instanceof HTMLElement && active.isContentEditable) return true;
   return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
 }

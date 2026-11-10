@@ -13,7 +13,7 @@
 
 - **回すのは `Spinner` だけ。** `packages/ui` の部品の中でも、`Button` の `loading`・`ProcessingIndicator` / `TimedLoadingState`・`ChatProgress`・`LoadMoreFooter` などは `Spinner` を通す。`Spinner` の形（全周のトラック + 180 度対称の 2 本のアーク）と箱（回転しない固定の正方形の `span.pr-spinner` の中で svg だけが回る）を崩さない（理由は README §4「`Spinner`」。#1180）。
 - アイコンは `lucide-react` のコンポーネントを `LucideIcon` として受け取る（`icon={Upload}`。Lucide 名の文字列では受け取らない）。
-- `wide` の画面では、カード・危険な操作の区画・一覧のコンテナは 100% の幅を使う（max-width を付けない）。例外はフォームの欄の並び（`FormGrid` が `--form-max-width` 60rem で止める）と、一覧の検索欄（`ListToolbar` が `lg` 28rem で固定する）（README §4「wide 画面の 100% 充填」。#1891）。
+- `wide` の画面では、カード・危険な操作の区画・一覧のコンテナは 100% の幅を使う（max-width を付けない）。例外は通常フォームの欄の並び（`FormGrid` が `--form-max-width` 60rem で止める。prompt 専用区画は `width="full"`）と、一覧の検索欄（`ListToolbar` が `lg` 28rem で固定する）（README §4「wide 画面の 100% 充填」。#1891）。
 
 ### `packages/ui` の変更の検証
 

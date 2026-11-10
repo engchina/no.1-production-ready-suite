@@ -2226,8 +2226,8 @@ function SyntheticWorkspace({
           testId="data-synthetic-table"
         />
 
-        {/* 指示（文章）は full で 2 列にまたがせ、オプションはその下（#1891）。placeholder は短い例、説明は helper。 */}
-        <FormGrid>
+        {/* 指示は所属区画の全幅、通常オプションは既定のフォーム幅にする。placeholder は短い例、説明は helper。 */}
+        <FormGrid columns={1} width="full">
           <TextareaField
             id="data-synthetic-prompt"
             label={t("dataTools.syntheticData.prompt")}
@@ -2239,6 +2239,8 @@ function SyntheticWorkspace({
             placeholder={t("dataTools.syntheticData.promptPlaceholder")}
             helper={t("dataTools.syntheticData.promptHelper")}
           />
+        </FormGrid>
+        <FormGrid>
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
             <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
             <TextField

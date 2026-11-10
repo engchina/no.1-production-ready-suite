@@ -129,8 +129,8 @@ function AnswerPromptEditor({
   return (
     <div className="space-y-2">
       {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
-      {/* プロンプトの編集欄はフォームの最大幅まで（1920px で 1 行が長くなりすぎない。#1891）。 */}
-      <FormGrid columns={1}>
+      {/* prompt は所属するカード・パネルの可用幅を使う。 */}
+      <FormGrid columns={1} width="full">
         <TextareaField
           id={inputId}
           width="full"

@@ -25,6 +25,13 @@ export async function verifyFeaturePrompt(page: Page, key: string, title: string
   const disclosure = summary.locator("..");
   const editor = page.locator(`#answer-prompt-${key}`);
   await expect(editor).toBeEditable();
+  const delta = await editor.evaluate(node => {
+    const parent = node.closest("[data-form-grid]")!.parentElement!;
+    const style = getComputedStyle(parent);
+    return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+  });
+  expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+
   await expect(editor).toHaveValue("合成の既定指示");
   const actions = disclosure.getByRole("group", { name: "編集内容の操作" });
   await expect(actions.getByRole("button")).toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
