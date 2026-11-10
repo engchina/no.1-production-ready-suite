@@ -3241,68 +3241,6 @@ class OracleNl2SqlAdapter:
         row = cursor.fetchone()
         return bool(row and int(row[0] or 0) > 0)
 
-    def list_agent_conversations(
-        self, *, team_name: str | None = None, limit: int = 20
-    ) -> list[dict[str, Any]]:
-        """Fetch recent Select AI Agent conversation prompts when dictionary view exists.
-
-        USER_CLOUD_AI_CONVERSATION_PROMPTS の応答の列は PROMPT_RESPONSE で、team の名前は無い。
-        Select AI Agent の prompt は PROMPT_ACTION = 'AGENT' で、team は
-        USER_AI_AGENT_TEAM_HISTORY の CONVERSATION_ID から引く（#1681 で実 ADB で確かめた）。
-        """
-        filters = []
-        binds: dict[str, Any] = {"limit": max(limit, 1)}
-        if team_name:
-            filters.append(
-                "EXISTS (SELECT 1 FROM USER_AI_AGENT_TEAM_HISTORY h "
-                "WHERE h.CONVERSATION_ID = p.CONVERSATION_ID "
-                "AND UPPER(h.TEAM_NAME) = UPPER(:team_name))"
-            )
-            binds["team_name"] = team_name
-        agent_where = " AND ".join(["p.PROMPT_ACTION = 'AGENT'", *filters])
-        conversation_sql = (
-            "SELECT p.CONVERSATION_ID, p.PROMPT, p.PROMPT_RESPONSE, p.CREATED, "  # nosec B608
-            "(SELECT MAX(h.TEAM_NAME) FROM USER_AI_AGENT_TEAM_HISTORY h "
-            "WHERE h.CONVERSATION_ID = p.CONVERSATION_ID) AS TEAM_NAME "
-            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS p "
-            f"WHERE {agent_where} "
-            "ORDER BY p.CREATED DESC "
-            "FETCH FIRST :limit ROWS ONLY"
-        )
-        # team の履歴の view を読めない ADB 向けに、prompt だけを返す（team で絞るときは使わない）。
-        prompt_sql = (
-            "SELECT p.CONVERSATION_ID, p.PROMPT, p.PROMPT_RESPONSE, p.CREATED, NULL "  # nosec B608
-            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS p "
-            "WHERE p.PROMPT_ACTION = 'AGENT' "
-            "ORDER BY p.CREATED DESC "
-            "FETCH FIRST :limit ROWS ONLY"
-        )
-        candidates = [(conversation_sql, binds)]
-        if not team_name:
-            candidates.append((prompt_sql, binds))
-        errors: list[str] = []
-        with self.connection() as conn, conn.cursor() as cursor:
-            for sql, params in candidates:
-                try:
-                    cursor.execute(sql, params)
-                    rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
-                    return [
-                        {
-                            "conversation_id": str(row[0] or ""),
-                            "prompt": _coerce_text(row[1]),
-                            "response": _coerce_text(row[2]) if len(row) > 2 else "",
-                            "created_at": _coerce_text(row[3]) if len(row) > 3 else "",
-                            "team_name": str(row[4] or "") if len(row) > 4 else "",
-                        }
-                        for row in rows
-                    ]
-                except Exception as exc:
-                    errors.append(str(exc))
-                    continue
-        raise OracleAdapterError(
-            "Select AI Agent conversation 履歴を取得できませんでした: " + "; ".join(errors)
-        )
-
     def check_select_ai_agent_privileges(self) -> list[dict[str, str]]:
         """Run side-effect-free Select AI Agent privilege checks."""
 
@@ -3415,17 +3353,6 @@ class OracleNl2SqlAdapter:
                     sql="SELECT PROFILE_NAME FROM USER_CLOUD_AI_PROFILES WHERE 1 = 0",
                     ok_message="USER_CLOUD_AI_PROFILES を参照できます。",
                     warning_message="USER_CLOUD_AI_PROFILES を参照できません。",
-                )
-            )
-            checks.append(
-                check_access(
-                    cursor,
-                    name="user_cloud_ai_conversation_prompts",
-                    sql=(
-                        "SELECT CONVERSATION_ID FROM USER_CLOUD_AI_CONVERSATION_PROMPTS WHERE 1 = 0"
-                    ),
-                    ok_message="USER_CLOUD_AI_CONVERSATION_PROMPTS を参照できます。",
-                    warning_message="USER_CLOUD_AI_CONVERSATION_PROMPTS を参照できません。",
                 )
             )
             return checks

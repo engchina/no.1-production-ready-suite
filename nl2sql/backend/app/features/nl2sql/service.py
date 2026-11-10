@@ -217,8 +217,6 @@ from .models import (
     AdminFeedbackReviewRequest,
     AgentConversationCreateData,
     AgentConversationCreateRequest,
-    AgentConversationItem,
-    AgentConversationsData,
     AgentPrivilegeCheckData,
     AgentTeamRunData,
     AgentTeamRunRequest,
@@ -22695,31 +22693,6 @@ class Nl2SqlService:
             engines=[Nl2SqlEngine.SELECT_AI_AGENT],
             confirmation=request.confirmation,
             reason=request.reason,
-        )
-
-    def list_select_ai_agent_conversations(
-        self, team_name: str | None = None, limit: int = 20
-    ) -> AgentConversationsData:
-        warnings: list[str] = []
-        if self._use_oracle_runtime():
-            try:
-                return AgentConversationsData(
-                    runtime="oracle",
-                    items=[
-                        AgentConversationItem.model_validate(item)
-                        for item in self._oracle_adapter.list_agent_conversations(
-                            team_name=team_name,
-                            limit=limit,
-                        )
-                    ],
-                )
-            except OracleAdapterError as exc:
-                warnings.append(str(exc))
-        return AgentConversationsData(
-            runtime="deterministic",
-            items=[],
-            warnings=warnings
-            or ["Oracle runtime ではないため conversation 履歴は取得していません。"],
         )
 
     def check_select_ai_agent_privileges(self) -> AgentPrivilegeCheckData:
