@@ -465,6 +465,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # FAQ の対象の KB と根拠の確かめ直し（#4621）。
     ("POST", f"{_BV}/approved-faq/{{faq_id}}/confirm"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    # FAQ の否定の質問（その FAQ を当てたくない質問の例）の置き換え（#4788）。
+    ("PUT", f"{_BV}/approved-faq/{{faq_id}}/negative-questions"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
@@ -473,7 +475,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/approved-faq/suggest"): _any(
         MENU_SEARCH, MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES
     ),
-    # 類似問の提示のオン / オフ（#684）。
+    # 類似問の提示のオン / オフ（#684）と、回答をそのまま返すかのオン / オフ（#4788）。
     ("PUT", f"{_BV}/approved-faq/settings"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_SEARCH_ANSWER_PROFILES),
