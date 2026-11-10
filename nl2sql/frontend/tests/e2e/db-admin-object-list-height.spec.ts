@@ -3431,3 +3431,28 @@ test("テーブル取込のフォームは FormGrid の欄の幅の段と placeh
     await expectDbObjectLayoutChecks(page);
   }
 });
+
+
+test("合成データのプロンプトは所属区画の全幅を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockDataManagementApi(page);
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const field = page.locator("#data-synthetic-prompt");
+  await expect(field).toBeEditable();
+  await field.fill("合成データを作成してください。");
+  const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("dark", theme === "dark"), theme);
+      const delta = await field.evaluate(node => {
+        const parent = node.closest("[data-form-grid]")!.parentElement!;
+        const style = getComputedStyle(parent);
+        return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+      });
+      expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      await field.screenshot({ path: testInfo.outputPath(`nl2sql-prompt-${width}-${theme}.png`) });
+    }
+  }
+});

@@ -674,8 +674,8 @@ export function AgentEditorView({
           <fieldset disabled={readOnly} className="min-w-0 space-y-6">
             <Section title={t("agent.basic")}>
               <Card className="min-w-0">
-                {/* 欄の並びは FormGrid（最大 60rem・2 列）。欄は値の種類の幅（名前 md・説明と指示は全幅・モデル lg。#1891）。 */}
-                <CardContent className="pt-5">
+                {/* 欄の並びは FormGrid（最大 60rem・2 列）。欄は値の種類の幅（名前 md・説明 full・モデル lg。指示は別の全幅区画。#1891）。 */}
+                <CardContent className="space-y-4 pt-5">
                   <FormGrid>
                     <TextField
                       id={`${fieldId}-agent-name`}
@@ -697,6 +697,8 @@ export function AgentEditorView({
                       value={agentDescription}
                       onValueChange={setAgentDescription}
                     />
+                  </FormGrid>
+                  <FormGrid columns={1} width="full">
                     <TextareaField
                       id={`${fieldId}-agent-instructions`}
                       label={t("agent.instructions")}
@@ -706,6 +708,8 @@ export function AgentEditorView({
                       onValueChange={setInstructions}
                       rows={8}
                     />
+                  </FormGrid>
+                  <FormGrid>
                     {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。
                         候補の読み込み中は、無効の空の欄ではなく欄の形で場所を確保する（#4649）。 */}
                     {modelsLoading ? (

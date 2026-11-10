@@ -17,6 +17,8 @@ export type FormGridProps = ComponentProps<"div"> & {
    * 既定の 2 列のクラスを付けず、渡した列に任せる（container query の境が違うと、広いほうの既定が後から効いて上書きする）。
    */
   columns?: 1 | 2;
+  /** prompt 専用の区画は所属容器の全幅。通常フォームは既定の 60rem。 */
+  width?: "form" | "full";
 };
 
 /** `className` が列（`grid-cols-*`。variant 付きを含む）を持つか。 */
@@ -32,12 +34,13 @@ function hasCustomColumns(className: string | undefined) {
  * - 欄は値の種類の `width`（`xs`〜`lg`）を渡す。2 列は各セルが `lg`（28rem）以上になる置き場所（57.5rem 以上）だけで、
  *   それより狭いと 1 列になるので、欄はどのセルでも段の幅のまま（セルで切られない。#1891 段 5）。URL・OCID・文章・
  *   SQL・`TextareaField` は `full` のまま（このグリッドの幅まで）にし、セルを 2 列にまたがせる（`className="col-span-full"`）。
+ * - Prompt・Agent / Skill の指示だけは `width="full"` で所属容器の可用幅を使う。通常の欄とは別のグリッドにする。
  * - 意味のペア（ユーザー / パスワード・リージョン / テナンシ）は同じ行に並べ、入力の順は崩さない。
  * - 確定の行（`FormActionBar`）はこのグリッドの外（直後）に置く。左端は欄の左端にそろう。
  */
-export function FormGrid({ columns = 2, className, children, ...props }: FormGridProps) {
+export function FormGrid({ columns = 2, width = "form", className, children, ...props }: FormGridProps) {
   return (
-    <div className="@container w-full min-w-0 max-w-[var(--form-max-width)]" data-form-grid={columns}>
+    <div className={cn("@container w-full min-w-0", width === "form" && "max-w-[var(--form-max-width)]")} data-form-grid={columns} data-form-grid-width={width}>
       {/* 1 列のときも grid-cols-1（minmax(0, 1fr)）を明示する。暗黙の列（auto）は中身の最小幅（長い 1 語・ファイルの
           ドロップ領域など）まで広がり、375px で横にはみ出す（#1891 段 4）。
           2 列の境は 57.5rem（FORM_GRID_TWO_COLUMN_MIN_REM）。以前の 42rem（@2xl）では、42〜57.5rem の間のセル
