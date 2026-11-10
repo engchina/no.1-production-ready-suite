@@ -76,7 +76,7 @@ class OutputContractTests(unittest.TestCase):
             '  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": '
             '"selected / unselected / enabled / disabled / required / optional / unknown"}],'
         )
-        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt, picture_response_schema
 
         saved = "方針\n{\n" + old + "\n}"
         refined = refine_image_retrieval_prompt(saved)
@@ -86,7 +86,7 @@ class OutputContractTests(unittest.TestCase):
         contract = _picture_output_contract()
         # Step の見出しの無いテンプレートの後では、対象の指示が Step 1、出力契約が Step 2 になる(#3810)。
         self.assertTrue(rendered.endswith(contract.replace("## Step 7:", "## Step 2:", 1)))
-        schema = json.loads(contract.rsplit("\n", 1)[1])
+        schema = picture_response_schema()
         field = schema["$defs"]["FormFieldOutput"]
         self.assertIn("kind", field["required"])
         self.assertEqual(tuple(field["properties"]["kind"]["enum"]), FORM_FIELD_KINDS)
@@ -279,7 +279,10 @@ class ResolvedPlanTests(unittest.TestCase):
             original_question="q",
             expanded_question="q",
             path=Path("rk.json"),
-            matched_rules=(RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE"), RuntimeRule("r2", "別", content="OTHER")),
+            matched_rules=(
+                RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE", tags=("pinned", "support_guide")),
+                RuntimeRule("r2", "別", content="OTHER"),
+            ),
             guide_steps=(("screen", "画面", ("c1",)), ("code", "コード", ("c2",)), ("ask", "確認", ("c3",))),
             guide_optional_steps=("code",),
             guide_step_terms=(("code", ("コード",)), ("ask", ("確認",))),
@@ -294,7 +297,7 @@ class ResolvedPlanTests(unittest.TestCase):
         self.assertEqual(knowledge.guide_optional_steps, ())
         self.assertEqual(knowledge.guide_step_terms, (("code", ("コード",)),))
         self.assertEqual([rule.content for rule in knowledge.matched_rules], ["RESOLVED-RULE", "OTHER"])
-        self.assertIn("RESOLVED-RULE", knowledge.with_rule_usage(confirmation=False, answer=True).prompt_context())
+        self.assertIn("RESOLVED-RULE", knowledge.prompt_context())
 
     def test_named_field_resolution_selects_the_required_branch(self) -> None:
         observed = [

@@ -30,7 +30,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useEditRuntimeKnowledge, useImportSupportGuides } from "@/lib/queries";
+import { useImportSupportGuides } from "@/lib/queries";
 
 import { SupportGuideContentView } from "./SupportGuideContentView";
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
@@ -48,14 +48,9 @@ const REFERENCE_VARIANT = {
   ambiguous: "warning",
 } as const;
 
-/** ルールの候補の選択の key（行とその中の位置）。 */
-function ruleKey(row: number, index: number): string {
-  return `${row}:${index}`;
-}
-
 /**
- * 回答の過程を書いた表（Excel の列を選ぶ・テキストの貼り付け）から、AI で業務ガイドの下書きとルールの候補を作る
- * （#2397）。行ごとの下書き・資料の対応・ルールの候補を確かめ、選んだものだけを下書き（ルールは無効のルール）にする。
+ * 回答の過程を書いた表（Excel の列を選ぶ・テキストの貼り付け）から、AI で業務ガイドの下書きを作る
+ * （#2397）。行ごとの下書き・資料の対応を確かめ、選んだものだけを下書きにする。
  */
 export function SupportGuideProcessImport({
   searchAnswerProfileId,
@@ -82,10 +77,8 @@ export function SupportGuideProcessImport({
   const [readNotes, setReadNotes] = useState<SupportGuideProcessWorkbookData | null>(null);
   const [preview, setPreview] = useState<SupportGuideProcessPreviewData | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
-  const [selectedRules, setSelectedRules] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const importGuides = useImportSupportGuides(searchAnswerProfileId);
-  const editKnowledge = useEditRuntimeKnowledge(searchAnswerProfileId);
   useLeaveGuard(Boolean(file || processText.trim() || preview), saving);
 
   const currentSheet = workbook?.sheets.find((item) => item.name === sheet) ?? null;
@@ -167,7 +160,6 @@ export function SupportGuideProcessImport({
       const data = await api.previewSupportGuideProcessImport(searchAnswerProfileId, rows);
       setPreview(data);
       setSelectedRows(new Set(data.items.filter((item) => item.valid).map((item) => item.row)));
-      setSelectedRules(new Set());
     } catch (error) {
       setRequestError(errorMessage(error, t("supportGuides.processImport.draftError")));
     } finally {
@@ -187,12 +179,6 @@ export function SupportGuideProcessImport({
     const guides = preview.items
       .filter((item) => item.valid && item.content && selectedRows.has(item.row))
       .map((item) => item.content);
-    const rules = preview.items.flatMap((item) =>
-      item.rule_candidates
-        .map((rule, index) => ({ rule, key: ruleKey(item.row, index) }))
-        .filter(({ key }) => selectedRules.has(key))
-        .map(({ rule }) => rule),
-    );
     setRequestError(null);
     setSaving(true);
     try {
@@ -200,18 +186,7 @@ export function SupportGuideProcessImport({
       if (guides.length > 0) {
         created = (await importGuides.mutateAsync(guides)).created.length;
       }
-      // ルールの候補は無効のルールとして足す（回答ルールの画面で確かめてから有効にする）。
-      for (const rule of rules) {
-        await editKnowledge.mutateAsync({
-          kind: "rules",
-          selected: null,
-          title: rule.title,
-          labels: rule.triggers.join("\n"),
-          content: rule.content,
-          enabled: false,
-        });
-      }
-      toast.success(t("supportGuides.processImport.saved", { guides: created, rules: rules.length }));
+      toast.success(t("supportGuides.processImport.saved", { guides: created }));
       onDone();
     } catch (error) {
       setRequestError(errorMessage(error, t("supportGuides.processImport.saveError")));
@@ -221,7 +196,7 @@ export function SupportGuideProcessImport({
   };
 
   const busy = reading || drafting || saving;
-  const selectedCount = selectedRows.size + selectedRules.size;
+  const selectedCount = selectedRows.size;
 
   return (
     <div className="min-w-0 space-y-3" data-testid="support-guide-process-import">
@@ -442,10 +417,8 @@ export function SupportGuideProcessImport({
                   key={item.row}
                   item={item}
                   selected={selectedRows.has(item.row)}
-                  selectedRules={selectedRules}
                   disabled={saving}
                   onSelect={(checked) => setSelectedRows((set) => toggle(set, item.row, checked))}
-                  onSelectRule={(key, checked) => setSelectedRules((set) => toggle(set, key, checked))}
                 />
               ))}
             </ul>
@@ -498,21 +471,17 @@ function ReferenceRow({ reference }: { reference: SupportGuideProcessReference }
   );
 }
 
-/** 1 行の下書き（選ぶ・取り込めるか・資料の対応・内容・ルールの候補）。 */
+/** 1 行の下書き（選ぶ・取り込めるか・資料の対応・内容）。 */
 function ProcessItem({
   item,
   selected,
-  selectedRules,
   disabled,
   onSelect,
-  onSelectRule,
 }: {
   item: SupportGuideProcessItem;
   selected: boolean;
-  selectedRules: Set<string>;
   disabled: boolean;
   onSelect: (checked: boolean) => void;
-  onSelectRule: (key: string, checked: boolean) => void;
 }) {
   const title = item.content?.title || t("supportGuides.importPanel.untitled");
   return (
@@ -556,36 +525,6 @@ function ProcessItem({
         <Disclosure size="sm" variant="plain" summary={t("supportGuides.processImport.content")}>
           <SupportGuideContentView content={item.content} />
         </Disclosure>
-      ) : null}
-      {item.rule_candidates.length > 0 ? (
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-fg">{t("supportGuides.processImport.rules")}</p>
-          <ul className="space-y-1.5">
-            {item.rule_candidates.map((rule, index) => {
-              const key = ruleKey(item.row, index);
-              return (
-                <li key={key} className="min-w-0 space-y-0.5" data-testid={`support-guide-process-rule-${key}`}>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-fg">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded border-border accent-accent-emphasis"
-                      checked={selectedRules.has(key)}
-                      disabled={disabled}
-                      onChange={(event) => onSelectRule(key, event.target.checked)}
-                    />
-                    <span className="min-w-0 break-words">{rule.title}</span>
-                  </label>
-                  <p className="break-words pl-6 text-xs text-fg-muted">{rule.content}</p>
-                  {rule.triggers.length > 0 ? (
-                    <p className="break-words pl-6 text-xs text-fg-muted">
-                      {t("supportGuides.processImport.triggers", { words: rule.triggers.join("、") })}
-                    </p>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
       ) : null}
     </li>
   );

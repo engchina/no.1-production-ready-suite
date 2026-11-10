@@ -731,59 +731,6 @@ async def test_history_rewrite_failure_reaches_answer_diagnostics(
     assert SECRET not in json.dumps(answer, ensure_ascii=False, default=str)
 
 
-@pytest.mark.parametrize("reply", [Boom(SECRET), "[]"], ids=["error", "no-condition"])
-async def test_field_filter_read_failure_is_recorded(reply: Any) -> None:
-    from app.rag.degraded_steps import DegradedSteps
-    from app.rag.extraction_field_adapter import FieldDefinition
-    from app.rag.field_filter_reader import read_field_conditions
-    from tests.test_answer_engine import RewriteLlm
-
-    degraded = DegradedSteps()
-
-    conditions = await read_field_conditions(
-        "10万円以上の受注は？",
-        [FieldDefinition(name="金額", value_type="number")],
-        RewriteLlm(reply),  # type: ignore[arg-type]
-        report_degraded=degraded.record_degraded,
-    )
-
-    assert conditions == []
-    expected = [{"kind": "field_filter", "count": 1, "exc_type": "Boom"}]
-    assert degraded.steps() == (expected if isinstance(reply, Exception) else [])
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "no-definition"])
-async def test_field_definitions_load_failure_is_recorded(fail: bool) -> None:
-    """定義を読めなかったときは記録し、定義が無いときは記録しない(どちらも LLM を呼ばない)。"""
-    from app.rag.degraded_steps import DegradedSteps
-    from app.rag.pipeline import RagPipeline
-    from tests.test_answer_engine import RewriteLlm
-
-    class DefinitionOracle(FakeOracle):
-        async def get_search_answer_profile(self, search_answer_profile_id: str) -> Any:
-            if fail:
-                raise Boom(SECRET)
-            return None
-
-    llm = RewriteLlm("[]")
-    pipeline = RagPipeline(
-        settings=Settings(rag_auto_field_filter_enabled=True),
-        oracle=DefinitionOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-        llm=llm,  # type: ignore[arg-type]
-    )
-    degraded = DegradedSteps()
-
-    conditions = await pipeline._read_field_conditions(
-        SearchRequest(query="q", search_answer_profile_id="bv-1"),
-        report_degraded=degraded.record_degraded,
-    )
-
-    assert conditions == [] and llm.calls == []
-    expected = [{"kind": "field_filter", "count": 1, "exc_type": "Boom"}]
-    assert degraded.steps() == (expected if fail else [])
-
-
 @pytest.fixture
 def attachment_service() -> Iterator[Any]:
     from app.rag import chat_attachments

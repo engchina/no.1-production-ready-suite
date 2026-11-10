@@ -229,6 +229,29 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 2. backend と frontend を更新する。新しい評価は使ったプロファイルと実行した利用者の UUID を必ず記録する。
 3. 権限（`menu.evaluation`）を持ち、評価に使った検索・回答プロファイルを使える利用者は、他の利用者の評価の結果を閲覧し、結果の Excel をダウンロードできるようになる（取り消しは実行した本人と system_admin だけ）。広げたくない評価は、プロファイルの割り当て（権限管理）で絞る。
 
+## 既存環境の更新手順（#4799 抽出項目の条件の自動読み取りと登録ルールの削除）
+
+質問から抽出項目の条件を LLM で読み取る段と、検索・回答プロファイルの登録ルール（回答前の確認・回答への差し込み）を
+削除した。絞り込みは利用者が画面・API・MCP で明示した条件（`filters.extraction_fields`）だけで行い、回答の規則は
+回答プロンプトの「役割と回答の書き方」（`generation.role`）に書く（[回答の規則](./confirmation-answer-rules.md)）。
+用語・同義語（`RAG_RUNTIME_TERMS_*`）・業務ガイドの条件の確認・承認済み FAQ の回答は変えない。
+
+1. **データを削除する migration `20261110_4799_search_answer_profile_runtime_rules` を含むので、承認（CLI の
+   `--allow-destructive`・画面の確認ダイアログ）が要る**（上の「既存環境の更新手順の共通の注意」）。
+   `RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE` の `KIND = 'runtime_knowledge'` の行の `PAYLOAD_JSON` から登録ルール
+   （`$.rules`。確認の質問と選択肢を含む）を消す。用語・同義語（`$.terms`）とほかの種別の行は変えない。
+   ルールの文を残す場合は、適用の前に同列を書き出し、適用の後に「役割と回答の書き方」へ手で写す（読み替えはしない）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+2. `backend/.env` の `RAG_AUTO_FIELD_FILTER_ENABLED`・`RAG_RUNTIME_RULES_CONFIRMATION_ENABLED`・
+   `RAG_RUNTIME_RULES_ANSWER_ENABLED` は読まない（消してよい）。
+3. MCP の出力の版は 43 になる。`rag_search`・`rag_retrieve_evidence` の入力から `skip_clarification` を外し、
+   `conditions` の `rule:` の値・`rag_retrieve_evidence` の `clarifications`・`profile_knowledge` の
+   `rules`・`rules_omitted` を外した。
+
 ## 既存環境の更新手順（#4739 解析エンジン MinerU の対応の削除）
 
 使っていなかった解析エンジン MinerU の対応（接続設定・ライセンスの確認・画面のカード）を削除した。保存値の読み替えと migration は持たない（未リリース）。
@@ -1436,7 +1459,7 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
    `clarification_json`（CLOB）を無ければ足す。データを削除しないので承認は要らない）。**更新するまで、チャットの送信は
    列が無くて失敗する**ので、backend の更新と同時に行う。
 2. backend を再起動する。検索・回答プロファイルの設定「曖昧な質問の扱い」は既定が「確認してから回答する」で、今までと同じに
-   ルールの確認・業務ガイドの条件の確認を出す。
+   業務ガイドの条件の確認を出す（登録ルールの確認は #4799 で削除）。
 
 ## 既存環境の更新手順（#1438 章節と chunk の対応・MCP の章節の読み取り）
 
@@ -1991,7 +2014,6 @@ uv run python -m app.rag.file_processing_staging_cli \
   - 取込の図・表の説明（Vision）・ナビゲーション要約・Embedding（と、文書ごとに 1 回の項目抽出・検索のリランク）は、共通の部品 `pr_backend_core.bounded_calls` の上限つきの並行の実行器を通して呼ぶ。段ごとの同時の呼び出しの上限は Vision 4・ナビゲーション要約 4・Embedding 2（既定）。Vision は同じページの図・表を順番に読み（後の図の prompt は同じページの前の図の説明を含むため）、違うページを並べる。結果の順番・内容（図・項目・chunk・Embedding の入力の順）は順番に呼んだときと同じ。
   - エラーは種類に分けて扱う（HTTP status・例外の型・OCI / openai の SDK の例外・応答の本文）。429（流量の制限）は `Retry-After` を守って**同じ段の呼び出し全体で待ち**、並行の数を半分（最小 1）にして成功が続くと上限まで戻す（AIMD）。502 / 503 / 504・接続の誤り・時間切れは指数の backoff と full jitter（上限 `RAG_AI_CALL_BACKOFF_MAX_SECONDS`）で再試行し、続けば（既定 10 回）呼び出しを止めて時間をおいて試す（circuit breaker。回復しなければ止める）。500 は 2 回まで、出力の形の誤り（JSON・schema の不一致・空の応答）は 2 回まで、401 は 1 回だけ再試行する。割り当ての使い切り（429 の quota）・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・501 / 505・TLS の証明書の誤りは再試行せず、残りの呼び出しをせずに取込を止め、直す所（IAM policy・モデルの設定など）を文書の失敗の理由に出す。400・安全のための拒否はその件を記録して飛ばす。413・context の長さの超過は入力を小さくして（Vision は画像の解像度を半分、要約は入力を短く）やり直す。再試行の総数には予算（最初の 10 回 + 成功の数の 20%）がある。
   - 再試行を使い切った件は、段の最後に `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS`（既定 30 秒）待ってからもう一度呼ぶ。それでも失敗した件は記録して続ける（Vision は「説明できなかった図」として要素に理由を残す）。`RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` で、その件があれば取込を失敗にする。
-  - RAPTOR 要約（`RAG_RAPTOR_ENABLED=true` のとき。#2067）も同じ実行器を通す。1 つの階層の cluster を `RAG_RAPTOR_CONCURRENCY`（既定 4、1〜16）まで並べ、階層は前の階層の要約を入力にするため順に作る。429 は段の全体で待って並行の数を下げ、再試行のあとも要約できない cluster は飛ばす（leaf の chunk は残る）。権限・モデルの設定の誤り・割り当ての使い切りは、残りの cluster を呼ばずに取込を止める。
   - 再試行は実行器だけが受け持つ（SDK の再試行は切る: OCI Enterprise AI の openai SDK は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` は、実行器を通さない呼び出し（回答の生成・接続確認など）の SDK の再試行の回数のまま。
   - 待っている間も job の進捗（`progress_json` の `calls`。待ちの理由・残りの秒数・今の並行の数・再試行の数）を 10 秒ごとに更新するため、#2003 の停滞の検出は待ちを停滞と数えない。再試行ごとに種類・回数・待ちの時間をログ（`bounded_call_retry`）に出す。
   - **Vision を段ごとに解析と並べる（流水線）**: PDF を段ごとに解析するとき（#2001）、段の解析が終わるとその段の図・表の Vision を始め、次の段の解析と重ねる（解析は解析サービスの CPU、Vision は VLM の応答待ちなので重ねられる）。段の図は 1 段ずつ読み（段の中は上の並行の上限で並べる）、応答は取込の作業ディレクトリの checkpoint に残す。すべての段の後の全体の読み取り（文書全体の整理・まとめた抽出結果への書き戻し）は同じ入力の応答を使い、VLM を呼び直さない（描いたページも使い回す）。段ごとの応答は段の artifact（`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/vision/<段>.json`。文書の削除で一緒に消える）にも残し、失敗・中断の後の再実行は済んだ段の図を呼び直さない（応答の鍵は入力の画像・prompt・モデルの hash なので、入力の変わった図は読み直す）。文書の詳細の「抽出の進み具合」は、解析の途中から「図・表の説明（Vision）: N / M 件（説明の済んだ段 K / S）」と、並べて説明している段・API の待ちの理由（「API の制限のため N 秒待っています」など）を出す。
@@ -2088,7 +2110,7 @@ schema の更新と backend の更新を合わせて行ってください。フ�
 
 `RAG_ENGINE_DOMAIN_PROFILE_FILE` と作業ディレクトリの `domain_profile.json` を読む機能、および `RAG_ANSWER_PROFILE` / `RAG_ENGINE_PROFILE` の選択を廃止した。これらの変数は別名で受け付けず、残っていても実行には使わない。backend の `.env`、起動 shell、systemd の drop-in に残る定義は運用者が削除する。`DOCRAG_DOMAIN_PROFILE_FILE` の旧定義も新しい名前へ改名しない。
 
-ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「回答ルール」「業務ガイド」へ必要な分だけ登録する。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
+ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「業務ガイド」へ必要な分だけ登録する（回答の規則は回答プロンプトの「役割と回答の書き方」に書く）。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
 
 一般的な日本語の質問理解は設定に依存せず維持する。SDK から `profile=` を渡していた場合は引数を除き、Prompt 上書きだけが必要なら Runtime の `prompt_overrides` を使う。Prompt の本文や保存済みの Prompt 設定は変更しない。
 

@@ -1,6 +1,5 @@
-"""空の初期化と、残存設定・壊れた公開ポインタを区別する。"""
+"""空の初期化と、壊れた公開ポインタを区別する。"""
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -49,15 +48,7 @@ async def test_direct_initializer_never_writes_over_invalid_existing_state(kind:
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
 
 
-@pytest.mark.parametrize("existing", [None, "configuration", "history"])
-async def test_empty_database_only_bootstraps_when_no_legacy_files_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: str | None
-) -> None:
-    path = tmp_path / "synthetic-language-pack.json"
-    if existing == "configuration":
-        path.write_text('{"overrides":{"answer_labels":{"gaps_section":"合成の独自値"}}}')
-    elif existing == "history":
-        path.with_name("synthetic-language-pack.history.json").write_text('{"versions":[]}')
+async def test_empty_database_bootstraps_from_builtin_pack(monkeypatch: pytest.MonkeyPatch) -> None:
     pool = FakeOraclePool(execute_results=[[], []])
 
     async def current() -> LanguagePackRelease:
@@ -65,16 +56,8 @@ async def test_empty_database_only_bootstraps_when_no_legacy_files_exist(
 
     store = SimpleNamespace(current=current, ensure_initialized=AsyncMock())
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
-    monkeypatch.setattr(
-        published_language, "resolve_language_pack_file", lambda _settings: path, raising=False
-    )
-    if existing is None:
-        await published_language.initialized_release_store(OracleClient())
-        store.ensure_initialized.assert_awaited_once_with(builtin_pack().to_dict())
-    else:
-        with pytest.raises(LanguagePackSnapshotError):
-            await published_language.initialized_release_store(OracleClient())
-        store.ensure_initialized.assert_not_awaited()
+    await published_language.initialized_release_store(OracleClient())
+    store.ensure_initialized.assert_awaited_once_with(builtin_pack().to_dict())
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
 
 

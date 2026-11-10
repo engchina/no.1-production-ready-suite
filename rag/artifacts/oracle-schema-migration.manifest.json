@@ -773,6 +773,27 @@
       "table_name": "rag_search_answer_profiles"
     },
     {
+      "destructive": true,
+      "name": "20261110_4784_language_pack_retired_unread",
+      "sha256": "70275c4daffe5741090efcd2e0653563e057bf666a7f4d6f5835f672efb4b517",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4782_remove_raptor",
+      "sha256": "50ee4198c821998c9b9802217639dd00363a9e7b1521b5f8159c1cb64586899a",
+      "statement_count": 2,
+      "table_name": "rag_chunks"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4799_search_answer_profile_runtime_rules",
+      "sha256": "e413dd2fa14f1c8ba158a4cd5fc28bc41ed8d169455469b5c0cf52ae2d5b6c03",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profile_knowledge"
+    },
+    {
       "destructive": false,
       "name": "20261110_4811_evaluation_job_visibility",
       "sha256": "4a9d7f29f41cf5d0423810d05ecb519c79087ad371f3fd385ad35686131a10b1",
@@ -782,6 +803,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "601bf7a920e4aa0a07004ff2b7d6a5ffe38e0ef67ac82de379293f4650448c5e",
-  "statement_count": 167
+  "sha256": "147beb7abc8005af589b5483238b7ca79988fb2a8e3294d954dc4959bb05fef7",
+  "statement_count": 171
 }

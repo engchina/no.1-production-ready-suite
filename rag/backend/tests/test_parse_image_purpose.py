@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from rag_engine.adapters.oci import _compact_schema
+from rag_engine.adapters.oci import picture_response_schema
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_parser_core.image_purpose import ImagePurpose
 
@@ -269,7 +269,6 @@ async def test_pipeline_formal_vlm_and_saved_rules_precedence(
     from PIL import Image
     from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
     from rag_engine.models.layout import LayoutRecord
-    from rag_engine.models.llm import PictureDescriptionOutput
     from rag_engine.parsing.vision_prompt_rules import RULES_END, RULES_START
     from rag_engine.resources.runtime import bind_prompt_overrides
 
@@ -376,7 +375,7 @@ async def test_pipeline_formal_vlm_and_saved_rules_precedence(
     call = reader.calls[0]
     assert len(call["images"]) == 2
     # 応答 schema は項目の説明を持たない形で渡す（項目の説明はプロンプトの出力契約にある）。
-    assert call["response_schema"] == _compact_schema(PictureDescriptionOutput.model_json_schema())
+    assert call["response_schema"] == picture_response_schema()
     assert call["response_schema_name"] == "picture_description"
     assert f'"vision_image_purpose": "{purpose}"' in call["prompt"]
     if rules_source == "builtin":

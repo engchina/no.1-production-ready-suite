@@ -42,7 +42,10 @@ def _function_number(cues: EvidenceCues) -> str:
 
 
 def alternative_operation_queries(question: str, records: Sequence[Any], *, limit: int = 2) -> tuple[str, ...]:
-    """競合する番号付き機能を別々に検索する。原質問を保持し、適用先とは断定しない。"""
+    """競合する番号付き機能を別々に検索する。原質問を保持し、適用先とは断定しない。
+
+    検索文は原質問と機能の見出しだけ（固定の語を足さない。#4784）。
+    """
     numbered = _function_number(evidence_cues())
     candidates = sorted({label for record in records for label in operation_labels(record) if re.search(numbered + ".+", label)})
     if len(candidates) < 2:
@@ -56,5 +59,4 @@ def alternative_operation_queries(question: str, records: Sequence[Any], *, limi
     if not competing:
         return ()
     labels = min(competing, key=lambda values: (-sum(question.count(re.split(r"\)", s, maxsplit=1)[-1]) for s in values), values))
-    extra = " ".join(evidence_cues().words["alternative_query_words"])
-    return tuple(f"{question} {label} {extra}".rstrip() for label in labels[:limit])
+    return tuple(f"{question} {label}" for label in labels[:limit])

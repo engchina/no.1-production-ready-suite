@@ -63,7 +63,6 @@ from app.schemas.support_guide import (
     SupportGuideProcessRow,
     SupportGuideProcessSheet,
     SupportGuideProcessWorkbookData,
-    SupportGuideRuleCandidate,
     SupportGuideSheetRange,
 )
 
@@ -356,14 +355,8 @@ class DraftReference(_Out):
     )
 
 
-class DraftRule(_Out):
-    title: str = Field(description="ルールの題名。")
-    triggers: list[str] = Field(default_factory=list, description="ルールを当てる質問の語。")
-    content: str = Field(description="ルールの内容（回答のときに守ること）。")
-
-
 class GuideDraftOutput(_Out):
-    """LLM の応答（業務ガイドの下書きとルールの候補）。"""
+    """LLM の応答（業務ガイドの下書き）。"""
 
     title: str = Field(description="業務ガイドの題名（利用者がしたいこと）。")
     expected_result: str = Field(description="案内のとおり進めたときの結果。")
@@ -374,7 +367,6 @@ class GuideDraftOutput(_Out):
     references: list[DraftReference] = Field(default_factory=list)
     handoff_contact: str = Field(default="", description="窓口へ連絡するときの窓口の名前。")
     handoff_conditions: list[str] = Field(default_factory=list, description="窓口へ連絡する条件。")
-    rule_candidates: list[DraftRule] = Field(default_factory=list)
 
 
 GUIDE_DRAFT_RESPONSE_SCHEMA = GuideDraftOutput.model_json_schema()
@@ -426,11 +418,7 @@ GUIDE_DRAFT_PROMPT = (
     "- search_terms（検索の語）: match_terms と"
     "、関係する手順の retrieval_hints に入れる。\n"
     "- notes（補足）: 1 つの手順に係る注意はその手順の note"
-    " に入れる。この質問に限らず回答の仕方を決める\n"
-    "  規則（「この種類の質問はこの画面を案内する」「言い切らず可能性にと"
-    "どめる」「Aと Bを区別する」\n"
-    "  「範囲外は窓口へ」など）は rule_candidates に入れ"
-    "る（triggers はその規則を当てる質問の語）。\n"
+    " に入れる。\n"
     "\n"
     "## Step 3: 名前と識別子を設定する\n"
     "title は利用者がしたいことを表す短い名前、expected_re"
@@ -446,7 +434,8 @@ class GuideDraftLlm(Protocol):
         prompt: str,
         context: str,
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        instruction: str = ...,
         response_schema: Mapping[str, Any] | None = None,
         response_schema_name: str = ...,
     ) -> str: ...
@@ -956,15 +945,6 @@ def build_item(
     """LLM の応答を業務ガイドの下書きにし、資料の対応と検証の結果を付ける。"""
     references, issues = _references(output, documents)
     issues.extend(merged_branch_issues(output))
-    rules = [
-        SupportGuideRuleCandidate(
-            title=rule.title[:200] or rule.content[:40],
-            triggers=_clean(rule.triggers, 32, 160),
-            content=rule.content[:2000],
-        )
-        for rule in output.rule_candidates[:10]
-        if rule.content.strip()
-    ]
     content: SupportGuideContent | None = None
     try:
         content = SupportGuideContent.model_validate(
@@ -989,7 +969,6 @@ def build_item(
         content=content,
         issues=issues,
         references=references,
-        rule_candidates=rules,
     )
 
 
@@ -1026,8 +1005,9 @@ async def draft_guides(
         return await async_call_with_model_purpose(
             "guide.draft",
             llm.generate,
-            GUIDE_DRAFT_PROMPT,
+            "",
             draft_context(row, headings),
+            instruction=GUIDE_DRAFT_PROMPT,
             system_prompt=GUIDE_DRAFT_SYSTEM_PROMPT,
             response_schema=GUIDE_DRAFT_RESPONSE_SCHEMA,
             response_schema_name="support_guide_draft",

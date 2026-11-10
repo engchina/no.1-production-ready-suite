@@ -76,10 +76,10 @@ async def test_model_test_client_calls_endpoint_as_is(endpoint: str, expected: s
         http_transport=cast(EnterpriseAiHttpTransport, transport),
     )
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.urls == [expected]
-    assert client.preview_llm_request("質問", "根拠").url == expected
+    assert client.preview_llm_request("質問", "根拠", system_prompt="合成の指示").url == expected
 
 
 @pytest.mark.parametrize(("endpoint", "expected"), ENDPOINT_CASES, ids=ENDPOINT_CASE_IDS)
@@ -116,4 +116,7 @@ def test_parser_service_env_calls_endpoint_as_is(endpoint: str, expected: str) -
     env = service_runtime_env(_settings(endpoint))
     config = OciEnterpriseAiConfig.from_env(env)
 
-    assert ParserClient(config).preview_llm_request("質問", "根拠").url == expected
+    assert (
+        ParserClient(config).preview_llm_request("質問", "根拠", system_prompt="合成の指示").url
+        == expected
+    )

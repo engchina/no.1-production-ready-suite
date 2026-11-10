@@ -124,7 +124,6 @@ from app.rag.entity_expansion import (
     expansion_metadata,
     plan_entity_expansion,
 )
-from app.rag.field_filter_reader import merge_field_conditions
 from app.rag.graph_expansion import (
     GRAPH_EXPANSION_KEY,
     GRAPH_SEED_ANCHORS,
@@ -139,7 +138,6 @@ from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evid
 from app.schemas.search import (
     MAX_PAGE_RANGES,
     PAGE_RANGES_FILTER_KEY,
-    ExtractionFieldCondition,
     PageRange,
     RetrievedChunk,
     SearchMode,
@@ -291,9 +289,7 @@ class _SearchState:
     filters: dict[str, str] | None = None
     # 画面目録(#554)。同じ回答の中で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
-    # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)。
-    auto_field_conditions: list[ExtractionFieldCondition] = field(default_factory=list)
-    # 検索ごとの検索文の数・候補の件数・効いていた自動の条件(#2401。根拠 0 件の診断)。
+    # 検索ごとの検索文の数・候補の件数(#2401。根拠 0 件の診断)。
     search_log: list[dict[str, object]] = field(default_factory=list)
     # 正式生成へ追加する文書背景の既読。版と検索範囲が同じ場合だけ再利用する。
     document_backgrounds: dict[tuple[str, str, tuple[tuple[str, str], ...]], dict[str, Any]] = (
@@ -344,7 +340,7 @@ class _SearchState:
     # 使い(``_with_effective_as_of``。#2602)、回答のプロンプトと記録の分類の条件には明示した値
     # だけを渡す。
     requested_as_of: str = ""
-    # 検索で当たった派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)と、置き換えた原文の
+    # 検索で当たった派生の chunk(章節の要約・項目抽出の値)と、置き換えた原文の
     # chunk(#2641。chunk_id → 種類・原文の chunk_id。読み直さない。診断に出す)。
     derived_hits: dict[str, dict[str, Any]] = field(default_factory=dict)
     derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
@@ -363,11 +359,6 @@ class _SearchState:
     def degraded_steps(self) -> list[dict[str, object]]:
         """失敗した補助の処理の記録(最初に失敗した順)。"""
         return self.degraded.steps()
-
-    @property
-    def automatic_filters(self) -> list[str]:
-        """今の検索条件に効いている自動の条件の種類(検索の条件の値は含めない)。"""
-        return ["auto_field"] if self.auto_field_conditions else []
 
 
 _ZERO_EVIDENCE_SEARCH_LOG_LIMIT = 12
@@ -399,8 +390,7 @@ def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
     ``filters`` は利用者が指定した条件(画面・検索・回答プロファイル・呼び出し元の
     ``request.filters``)で、ナレッジベース・旧版の扱い・基準日に加えて文書名・ページ・分類・項目の
     条件を含む。拡張は主の検索と同じ範囲の中で広げ、利用者が指定した範囲の外から黙って根拠を足さ
-    ない。質問から推測して自動で足した条件(``_question_filters``・``merge_field_conditions``)は
-    含まない。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
+    ない。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
     明記した参照を辿る交差参照も同じ明示範囲を維持する。
     """
     return {key: value for key, value in filters.items() if value.strip()}
@@ -537,10 +527,6 @@ def build_engine_settings(
         "EMBEDDING_ENDPOINT": genai_endpoint(settings.oci_genai_embedding_region),
         "OCI_RERANK_ENDPOINT": genai_endpoint(settings.oci_genai_rerank_region),
         "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
-        "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
-        if settings.rag_runtime_rules_confirmation_enabled
-        else "0",
-        "RUNTIME_RULES_ANSWER_ENABLED": "1" if settings.rag_runtime_rules_answer_enabled else "0",
         "RAG_HYBRID_SEARCH_BACKEND": settings.rag_hybrid_search_backend,
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
         "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
@@ -669,14 +655,12 @@ def guide_known_conditions(guide: Mapping[str, object] | None) -> tuple[tuple[st
 
 @dataclass(frozen=True)
 class AnswerScope:
-    """利用者が確認の質問で選んだ条件と対象範囲(#717)。"""
+    """利用者が確認の質問で選んだ条件(業務ガイドの条件の確認と、履歴で確認した回答)。"""
 
     # 回答のプロンプトの前置きに入れる説明(質問・選んだ選択肢・前提・その他・対象範囲)。
     context: str
     # 補助の検索文に足す語。
     search_terms: tuple[str, ...] = ()
-    # 回答の末尾に出す対象の範囲(例: 「出張旅費規程」の「第6条」(p.2))。
-    label: str = ""
     # 実際に選んだ答え・自由入力だけ。設定された指示や仮定を利用者の事実にしない。
     confirmed_premises: tuple[tuple[str, str], ...] = ()
     confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
@@ -738,7 +722,6 @@ class AnswerEngine:
         genai: OciGenAiClient,
         runtime_knowledge_payload: Mapping[str, object] | None = None,
         answer_model_id: str | None = None,
-        auto_field_conditions: Sequence[ExtractionFieldCondition] = (),
         approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
@@ -785,7 +768,6 @@ class AnswerEngine:
             settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
         )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
-        self._auto_field_conditions = list(auto_field_conditions)
         # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
         # だけから回答する(#684 / #702)。
         self._approved_faq = approved_faq
@@ -858,14 +840,9 @@ class AnswerEngine:
         }
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
-                "label": self._scope.label,
                 "context": self._scope.context,
                 "page_ranges": request.filters.get("page_ranges", ""),
             }
-            if self._scope.label and outcome.answer.strip():
-                outcome = replace(
-                    outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
-                )
         outcome.diagnostics["models"] = self._models_used(
             attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),
@@ -904,10 +881,6 @@ class AnswerEngine:
                 "resolved_count": sum(1 for hit in hits if hit["source_chunk_ids"]),
                 "unresolved_count": sum(1 for hit in hits if not hit["source_chunk_ids"]),
                 "chunks": hits[:_REFERENCE_DIAGNOSTICS_LIMIT],
-            }
-        if state.auto_field_conditions:
-            outcome.diagnostics["auto_field_filter"] = {
-                "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
             }
         if degraded := state.degraded_steps():
             # 失敗して空のまま続けた補助の処理(#3259)。根拠 0 件の診断にも入れる。
@@ -1372,7 +1345,6 @@ class AnswerEngine:
                 {
                     "queries": len(queries),
                     "candidates": len(fused),
-                    "automatic_filters": state.automatic_filters,
                 }
             )
         citation_ids: list[str] = []
@@ -2003,7 +1975,7 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """検索の候補の派生の chunk を、その chunk が指す原文の chunk に置き換える(#2641)。
 
-        派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)は検索の手がかりで、引用できる原文
+        派生の chunk(章節の要約・項目抽出の値)は検索の手がかりで、引用できる原文
         ではない。原文の chunk を派生の chunk の位置(統合の点)に置き、派生の chunk は根拠に
         渡さない。原文が読めなければ何も置かない(根拠不足として扱い、要約の文を確かめた記載に
         しない)。候補にすでにある原文は、上の位置を保つ。
@@ -2075,16 +2047,13 @@ class AnswerEngine:
         return list(resolved.values())
 
     async def _ensure_search_filters(self, request: SearchRequest, state: _SearchState) -> None:
-        """1 回の回答の検索条件(質問の文書名・ページと自動の条件)を、最初の検索の前に決める。
+        """1 回の回答の検索条件(利用者が指定した条件)を、最初の検索の前に決める。
 
         決めた条件は ``state.filters`` に入れる(先読みと ``_search`` で同じ条件を使う。#1499)。
         """
         if state.filters is not None:
             return
-        filters = dict(request.filters)
-        state.filters, state.auto_field_conditions = merge_field_conditions(
-            filters, self._auto_field_conditions
-        )
+        state.filters = dict(request.filters)
 
     async def _query_embeddings(
         self, state: _SearchState, texts: list[str]
@@ -2620,7 +2589,7 @@ class AnswerEngine:
         取込は参照の表記のある chunk に ``reference_targets_json`` を残す(参照が自分の節だけでも
         空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
         あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
-        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。RAPTOR の要約 chunk は辿らない。
+        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。
         印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata
@@ -4713,9 +4682,8 @@ def _zero_evidence_diagnostics(
 ) -> dict[str, Any]:
     """根拠 0 件で回答を作らずに終えたときの、0 件になった段と検索の記録(#2401)。
 
-    段は rag_engine が決め(検索の候補が無い・根拠の組み立て)、検索の候補が
-    無く、自動で足した検索条件が効いたままだったときは ``filter``
-    にする。検索の条件は値を出さず、項目の名前だけを残す(値は質問・文書の内容を含みうる)。
+    段は rag_engine が決める(検索の候補が無い・根拠の組み立て)。検索の条件は値を出さず、項目の
+    名前だけを残す(値は質問・文書の内容を含みうる)。
     """
     from rag_engine.generation.zero_evidence import ZERO_EVIDENCE_STAGE_LABELS
 
@@ -4723,10 +4691,7 @@ def _zero_evidence_diagnostics(
     engine = trace.get("zero_evidence") if isinstance(trace, Mapping) else None
     if not isinstance(engine, Mapping):
         return {}
-    active = state.automatic_filters
     stage = str(engine.get("stage") or "")
-    if stage == "retrieval" and active:
-        stage = "filter"
     return {
         **dict(engine),
         "stage": stage,
@@ -4735,8 +4700,6 @@ def _zero_evidence_diagnostics(
         "request_filter_keys": sorted(
             key for key, value in request.filters.items() if value.strip()
         ),
-        # 効いていた自動の条件。
-        "automatic_filters": active,
         "searches": list(state.search_log),
         # 失敗して空のまま続けた補助の処理(#3259)。0 件が「当たらなかった」のか
         # 「読めなかった」のかを分ける(処理の種類・回数・例外の型の名前だけ)。

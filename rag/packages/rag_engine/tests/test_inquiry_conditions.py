@@ -1,13 +1,13 @@
-"""廃止した規則の設定が旧プロファイルの読込を壊さない。"""
+"""廃止した節の上書きは読み飛ばさず、知らない項目として拒む（保存値は migration で消す。#4784）。"""
 
 import pytest
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
 
-def test_retired_inquiry_overrides_are_ignored():
-    base = builtin_pack()
-    pack = resolve(base, {"inquiry_cues": {"column_words": ["合成"], "external_context_terms": ["合成"]}})
-    assert pack.hash == base.hash
+def test_retired_inquiry_overrides_are_rejected():
+    with pytest.raises(LanguagePackError) as caught:
+        resolve(builtin_pack(), {"inquiry_cues": {"column_words": ["合成"]}})
+    assert "inquiry_cues.column_words" in caught.value.errors
     assert not any(field.section == "inquiry_cues" for field in FIELD_SPECS)
 
 

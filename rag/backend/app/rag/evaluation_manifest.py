@@ -204,7 +204,7 @@ def code_version() -> str:
 
 
 async def _profile(oracle: ManifestOracle, profile_id: str) -> dict[str, Any]:
-    """検索・回答プロファイルの版（設定・用語と回答ルール・ドメインキーワードの内容の hash）。"""
+    """検索・回答プロファイルの版（設定・用語・ドメインキーワードの内容の hash）。"""
     try:
         view = await oracle.get_search_answer_profile(profile_id)
         if view is None:

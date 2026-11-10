@@ -89,7 +89,6 @@ class FieldKind(StrEnum):
     WORD_MAP = "word_map"  # 「語=値」
     ENUM_MAP = "enum_map"  # 「語=決まった値」
     CHAR_RANGES = "char_ranges"  # 1 文字か「最初-最後」
-    CHOICE = "choice"  # 決まった値から 1 つ
     TEXT = "text"  # 1 つの語（表示のラベル・検索の文の見出し）
 
 
@@ -100,7 +99,7 @@ class FieldSpec:
     section: str
     key: str
     kind: FieldKind
-    # ENUM_MAP の値・CHOICE の選択肢（処理が対応する値。言語の書き方ではない）。
+    # ENUM_MAP の値（処理が対応する値。言語の書き方ではない）。
     choices: tuple[str, ...] = ()
     # 取込のときに使う書き方か（変えたら文書の再分割が要る）。
     ingest: bool = True
@@ -155,13 +154,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     *_fields("numbers", _W, "counters"),
     *_fields("numbers", _CR, "number_term_chars"),
     *_fields("numbers", _W, "term_stop_chars"),
-    # 元号の略記（「R6」の「R」= 令和）・西暦を表す語・日付の単位・年度の単位。
-    *_fields("numbers", _WM, "era_letters"),
-    *_fields("numbers", _W, "calendar_words", "date_units", "fiscal_year_units"),
-    # 件数を数える助数詞（「5 つ」「6 件」）と、範囲のつなぎの語（「第 2 章から第 6 章」）。
-    *_fields("numbers", _W, "count_counters", "range_connectors"),
-    # 記号と文字。
-    FieldSpec("symbols", "normalization", FieldKind.CHOICE, choices=("NFKC", "NFC", "none")),
+    # 記号と文字（文字の正規化は NFKC に固定。取込と検索で同じ形にそろえる）。
     *_fields(
         "symbols",
         _W,
@@ -380,12 +373,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         _W,
         "function_number_dashes",
         "heading_label_openers",
-        "alternative_query_words",
         "heading_bullet_chars",
         "item_bullet_chars",
         "note_mark_chars",
         "label_colon_chars",
-        "relevance_stop_terms",
         ingest=False,
     ),
     FieldSpec("evidence_cues", "section_label_brackets", FieldKind.PAIRS, ingest=False),
@@ -423,23 +414,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "guide_handoff_template",
         "guide_approval_template",
         "guide_acquisition_incomplete_template",
+        "table_source_column",
+        "table_above_note",
         ingest=False,
         max_chars=MAX_SENTENCE_CHARS,
-    ),
-    FieldSpec(
-        "answer_labels",
-        "aspect_labels",
-        FieldKind.ENUM_MAP,
-        choices=(
-            "business_object",
-            "requested_result",
-            "applicability",
-            "procedure",
-            "member_details",
-            "population_membership",
-            "enumeration_coverage",
-        ),
-        ingest=False,
     ),
     # 回答の検査の手がかり（確定の操作・限定の語と、引用・手順の形の手がかり）。
     *_fields(
@@ -457,39 +435,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "bare_title_marks",
         ingest=False,
     ),
-    # 回答の値と操作部品の裏付けの手がかり（数の規則・今回の値・ボタンとキー・別名・算式の単位・
-    # 画像の操作）。
+    # 回答の本文と根拠の照らし合わせの語（内部の番号の語・出典の位置の単位・根拠との重なりに
+    # 数えない語）。
     *_fields(
         "grounding_cues",
         _W,
-        "numeric_rule_words",
-        "digit_count_units",
-        "denial_verbs",
-        "denial_endings",
-        "denial_words",
-        "digit_range_labels",
-        "current_subject_words",
-        "attribute_words",
-        "attribute_particles",
-        "hedge_words",
-        "example_words",
-        "rule_denial_prefixes",
-        "source_qualifiers",
-        "user_subject_words",
-        "user_subject_particles",
-        "rule_condition_words",
-        "alternative_connectors",
-        "key_words",
-        "alias_followers",
-        "alias_words",
-        "alias_negations",
         "internal_label_words",
         "citation_unit_words",
-        "fact_counters",
         "grounding_stopwords",
         ingest=False,
     ),
-    FieldSpec("grounding_cues", "amount_scale_units", FieldKind.CHAR_VALUES, ingest=False),
     # 実体の索引（システム・部署・属性の値と別名。#1362）の手がかり。取込で chunk から実体を抜き出す
     # （変えたら文書の分割し直しが要る）。
     *_fields(
@@ -592,9 +547,6 @@ def _clean_words(value: Any) -> tuple[str, ...]:
 
 def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
     """値をそろえ、形の誤りがあれば理由を返す。"""
-    if spec.kind is FieldKind.CHOICE:
-        text = str(value or "").strip()
-        return text, None if text in spec.choices else f"{'・'.join(spec.choices)} のどれかです。"
     if spec.kind is FieldKind.TEXT:
         text = str(value or "").strip()
         if not text:
@@ -697,9 +649,6 @@ def resolve(base: LanguagePack, *overrides: Mapping[str, Mapping[str, Any]] | No
     unknown: dict[str, str] = {}
     for override in overrides:
         for section, fields in (override or {}).items():
-            # 保存済みの廃止した段階の上書きは読み飛ばす。他の未知項目の検証は維持する。
-            if section == "inquiry_cues":
-                continue
             for key, value in (fields or {}).items():
                 if (section, key) not in _SPECS:
                     unknown[f"{section}.{key}"] = "知らない項目です。"

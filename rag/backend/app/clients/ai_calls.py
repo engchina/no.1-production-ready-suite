@@ -33,7 +33,6 @@ AiCallStage = Literal[
     "heading_levels",
     "field_extraction",
     "navigation_summary",
-    "raptor_summary",
     "embedding",
     "rerank",
     "evaluation",
@@ -45,7 +44,6 @@ STAGE_LABELS: dict[str, str] = {
     "heading_levels": "見出しの階層の推定",
     "field_extraction": "メタデータ／項目抽出",
     "navigation_summary": "章節の要約",
-    "raptor_summary": "RAPTOR の階層の要約",
     "embedding": "埋め込み（Embedding）",
     "rerank": "リランク",
     "evaluation": "品質評価",
@@ -109,7 +107,6 @@ def _concurrency(settings: object, stage: str) -> int:
     name = {
         "vision": "rag_vision_concurrency",
         "navigation_summary": "rag_navigation_summary_concurrency",
-        "raptor_summary": "rag_raptor_concurrency",
         "embedding": "rag_embedding_concurrency",
         "evaluation": "rag_evaluation_concurrency",
         "guide_import": "rag_support_guide_import_concurrency",

@@ -437,7 +437,7 @@ async def test_section_rules_work_independently_of_navigation_summaries(enabled:
     calls: list[str] = []
 
     class Summarizer:
-        async def generate(self, prompt: str, text: str) -> str:
+        async def generate(self, prompt: str, text: str, *, system_prompt: str) -> str:
             calls.append(text)
             return "合成の要約"
 
@@ -494,7 +494,7 @@ async def test_rule_summaries_match_visible_sections_and_keep_parser_tree(
     calls: list[str] = []
 
     class Model:
-        async def generate(self, prompt: str, text: str) -> str:
+        async def generate(self, prompt: str, text: str, *, system_prompt: str) -> str:
             calls.append(text)
             return "合成の要約"
 

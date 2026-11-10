@@ -33,7 +33,6 @@ def test_builtin_pack_has_every_field_and_nothing_else() -> None:
         for key in fields
     }
     assert keys == {(spec.section, spec.key) for spec in FIELD_SPECS}
-    assert builtin_pack().value("symbols", "normalization") == "NFKC"
 
 
 def test_resolve_replaces_fields_and_keeps_others() -> None:
@@ -52,7 +51,9 @@ def test_resolve_replaces_fields_and_keeps_others() -> None:
         ("symbols", "bracket_pairs", ["("]),
         ("numbers", "kanji_digits", ["一=いち"]),
         ("english", "en_section_words", ["part=volume"]),
-        ("symbols", "normalization", "NFKD"),
+        # 消した項目（文字の正規化は NFKC に固定）と、消した節の上書きは知らない項目として拒む。
+        ("symbols", "normalization", "NFKC"),
+        ("inquiry_cues", "condition_terms", ["合成の語"]),
         ("symbols", "name_chars", ["あいう"]),
         ("references", "separate_part_patterns", ["改正"]),
         ("references", "appendix_words", ["別添"]),
@@ -62,7 +63,8 @@ def test_resolve_replaces_fields_and_keeps_others() -> None:
         "pair",
         "char-value",
         "enum-map",
-        "choice",
+        "removed-field",
+        "removed-section",
         "char-range",
         "number-pattern",
         "word-map",

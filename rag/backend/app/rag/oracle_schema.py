@@ -75,6 +75,7 @@ from app.clients.support_guide_store import (
 )
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
+    RETIRED_4784_FIELDS,
     RETIRED_ANSWER_CHECK_CUE_FIELDS,
     RETIRED_ANSWER_LABEL_FIELDS,
     RETIRED_CRAG_ANSWER_LABEL_FIELDS,
@@ -88,6 +89,7 @@ from app.rag.language_pack_retired_fields import (
 )
 from app.rag.prompt_overrides_4782_generation_migration import removed_prompt_overrides_sql
 from app.rag.request_context import with_system_access
+from app.rag.runtime_rules_4799_migration import removed_runtime_rules_sql
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.search_answer_profile_retired_fields import (
     KEPT_LANGUAGE_PACK_SECTIONS,
@@ -1053,6 +1055,62 @@ END;
     )
     sections.append(
         OracleSchemaSection(
+            name="20261110_4784_language_pack_retired_unread",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_4784_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、どの処理も"
+                "読まない項目（numbers・grounding_cues・answer_labels の一部）と、語の一覧をやめた"
+                "根拠の手がかり（evidence_cues の 2 項目）と、NFKC に固定した"
+                "文字の正規化（symbols.normalization）と、読み飛ばしていた古い節（inquiry_cues）の"
+                "値を削除し、公開版の CONTENT_HASH と INGEST_HASH を計算し直します。取込の項目を"
+                "消した版は、その版で作った索引の集合（RAG_CHUNK_SETS）・版の切り替えの記録"
+                "（RAG_RECIPE_VERSION_LOG）・抽出の成果物（RAG_DOCUMENT_EXTRACTIONS・"
+                "RAG_DOCUMENT_EXTRACTION_REVISIONS の parser_artifacts）に残した取込 hash も新しい"
+                "値に書き換えます（内容は変わらないので、取込済みの文書の再処理は要りません。"
+                "NFKC 以外の正規化を公開していた版の索引は書き換えず「再処理を推奨」になります）。"
+                "ほかの項目・版の番号・公開の履歴は変えません。項目に保存した語を残す必要があれば"
+                "適用前に同列を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_remove_raptor",
+            table_name="rag_chunks",
+            sql=remove_raptor_sql(),
+            destructive_note=(
+                "取込の RAPTOR の階層の要約を消したので、保存済みの RAPTOR の要約の chunk"
+                "（RAG_CHUNKS の METADATA_JSON に raptor_summary の印がある行）と、RAPTOR の要約の"
+                "プロンプトの保存値（RAG_ANSWER_PROMPTS の raptor_summary_system・"
+                "raptor_summary_archived）を削除します。原文の chunk・章節の要約・項目抽出の値・"
+                "ほかのプロンプトは変えません。保存したプロンプトを残す必要があれば適用前に同表を "
+                "export してください。削除後は復元できません（要約の chunk は再取込でも"
+                "作りません）。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4799_search_answer_profile_runtime_rules",
+            table_name="rag_search_answer_profile_knowledge",
+            sql=removed_runtime_rules_sql(),
+            destructive_note=(
+                "検索・回答プロファイルの知識（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が "
+                "runtime_knowledge の行の PAYLOAD_JSON）から、登録ルール（$.rules。確認の質問と"
+                "選択肢を含む）を削除します。用語・同義語（$.terms）と、ドメインキーワード・"
+                "承認済み FAQ の行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
+                "回答プロンプトの役割の文に書きます。ルールの文を残す必要があれば、適用前に同列を "
+                "export し、役割の文へ手で写してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
             name="20261110_4811_evaluation_job_visibility",
             table_name="rag_evaluation_jobs",
             sql=evaluation_job_visibility_migration_sql(),
@@ -1160,6 +1218,21 @@ EXCEPTION
         END IF;
 END;
 /
+""".strip()
+
+
+def remove_raptor_sql() -> str:
+    """消した RAPTOR の階層の要約の、保存済みの chunk とプロンプトを消す（#4782）。
+
+    残すと、要約の chunk が原文の chunk として検索・引用に出る（派生の chunk の印を読まなくなる）。
+    何度当てても同じ結果になる。
+    """
+    return """
+DELETE FROM rag_chunks
+WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';
+
+DELETE FROM rag_answer_prompts
+WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary_archived');
 """.strip()
 
 

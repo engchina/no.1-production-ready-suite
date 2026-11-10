@@ -114,7 +114,6 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
-from app.rag.language_pack_store import LANGUAGE_PACK_STORE
 from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX
 
 UploadStorageBackend = Literal["local", "oci"]
@@ -333,7 +332,6 @@ DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
 DEFAULT_FILE_TYPE_DEFAULTS_FILE = "file-type-defaults.json"
 # 言語資源の全体の上書き(#2181)。
-DEFAULT_LANGUAGE_PACK_FILE = "language-pack.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
@@ -580,14 +578,6 @@ class Settings(
         default=DEFAULT_FILE_TYPE_DEFAULTS_FILE,
         description=(
             "「形式別の既定」画面から保存した JSON（RAG 専用。#4732）。相対 path は backend/ 基準。"
-        ),
-    )
-
-    rag_language_pack_file: str = Field(
-        default=DEFAULT_LANGUAGE_PACK_FILE,
-        description=(
-            "「言語資源」画面から保存した、組み込みの言語資源との差の JSON(#2181)。"
-            "相対 path は backend/ 基準。"
         ),
     )
 
@@ -1413,8 +1403,9 @@ class Settings(
     rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
-            "チャットで回答するとき、会話履歴から最新の質問を"
-            "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
+            "チャットで回答するとき、毎回の発話で LLM を 1 回呼び、会話履歴から最新の質問を"
+            "単独の質問へ書き換え、検索の要らない発話(挨拶・雑談)かを分ける(#4787)。"
+            "1 回目(履歴なし)の発話でも呼ぶ。挨拶・雑談は検索を飛ばして根拠なしの短い応答にする。"
         ),
     )
     rag_search_top_k_default: int = Field(
@@ -1422,12 +1413,6 @@ class Settings(
         ge=1,
         le=SEARCH_TOP_K_MAX,
         description="検索・チャット・MCP で top_k を省略したときの基準件数。",
-    )
-    rag_runtime_rules_confirmation_enabled: bool = Field(
-        default=False, description="登録ルールによる確認の使用。必要な確認・安全・権限とは独立。"
-    )
-    rag_runtime_rules_answer_enabled: bool = Field(
-        default=False, description="回答生成での登録ルールの使用。独立した回答処理とは別。"
     )
     rag_runtime_terms_search_enabled: bool = Field(
         default=False, description="登録した用語・同義語による検索文の追加。全体設定だけで決める。"
@@ -1599,17 +1584,6 @@ class Settings(
             "手順の根拠から広げる章節の分を残す。"
         ),
     )
-    rag_auto_field_filter_enabled: bool = Field(
-        default=False,
-        description=(
-            "質問に書かれた条件(「2025 年以降」「10 万円以"
-            "上」など)を、検索・回答プロファイルの KB で定義した"
-            "抽出項目の条件として LLM で読み取り、検索を絞り込む"
-            "(Metadata Filter Extraction。LLM の呼び出しが 1 回増える。"
-            "#652)。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
     rag_answer_record_retention_days: int = Field(
         default=0,
         ge=0,
@@ -1665,7 +1639,7 @@ class Settings(
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と回答ルール"
+            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と業務ガイドのルール"
             "(rag_poc runtime knowledge payload)。"
             "回答フローだけが使う。"
         ),
@@ -2162,36 +2136,6 @@ class Settings(
         ge=0.0,
         le=300.0,
         description="HTTP マイクロサービス retry の最大待機秒数。",
-    )
-    rag_raptor_enabled: bool = Field(
-        default=False,
-        description=(
-            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI で"
-            "要約し、多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ。"
-            "追加 LLM 呼び出しを伴う opt-in。再試行のあとも要約できない cluster は飛ばす(leaf は"
-            "残る)。権限・モデルの設定の誤り・割り当ての使い切りは取込を止める(#2067)。"
-        ),
-    )
-    rag_raptor_cluster_size: int = Field(
-        default=5,
-        ge=2,
-        le=50,
-        description="RAPTOR の 1 cluster あたり chunk 数(要約単位)。",
-    )
-    rag_raptor_max_levels: int = Field(
-        default=2,
-        ge=1,
-        le=5,
-        description="RAPTOR の階層の要約 tree の最大階層数。",
-    )
-    rag_raptor_concurrency: int = Field(
-        default=4,
-        ge=1,
-        le=16,
-        description=(
-            "RAPTOR の階層の要約の LLM を同時に呼ぶ数の上限（#2067。1 つの階層の cluster を並べ、"
-            "階層は順に作る）。429 を受けると自動で減らし（最小 1）、成功が続くとこの上限まで戻す。"
-        ),
     )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,
@@ -2696,7 +2640,6 @@ def reset_settings_cache() -> None:
     MODEL_SETTINGS_STORE.reset()
     PARSER_SETTINGS_STORE.reset()
     FILE_TYPE_DEFAULTS_STORE.reset()
-    LANGUAGE_PACK_STORE.reset()
     _ENV_RELOAD_STATE.key = None
     _ENV_RELOAD_STATE.snapshot = None
 
@@ -2781,12 +2724,6 @@ def resolve_model_settings_file(path_value: str) -> Path:
 _PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
 PARSER_SECRET_ATTRS = ("rag_parser_dots_ocr_api_key",)
-
-
-def resolve_language_pack_file(settings: Settings) -> Path:
-    """RAG_LANGUAGE_PACK_FILE を RAG の backend/.env と同じディレクトリ基準で解決する(#2181)。"""
-    path = Path(settings.rag_language_pack_file.strip() or DEFAULT_LANGUAGE_PACK_FILE).expanduser()
-    return path if path.is_absolute() else (BACKEND_ENV_FILE.parent / path).resolve()
 
 
 def resolve_parser_settings_file(path_value: str) -> Path:

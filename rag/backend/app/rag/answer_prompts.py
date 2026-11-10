@@ -25,7 +25,6 @@ INGESTION_PROMPT_REFS = {
     "heading_levels": "app.rag.ingestion_prompts:HEADING_LEVEL_PROMPT",
     "field_extraction": "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT",
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
-    "raptor_summary_system": "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT",
 }
 EDITABLE_PROMPT_KEYS = (IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
 ANSWER_PROMPT_MAX_CHARS = 50_000
@@ -68,7 +67,6 @@ def validate_prompt(key: str, content: str) -> None:
 # 設定の概要の順を土台に、独立した知識の準備と、検索・回答の実行順を区別する。
 PROMPT_PHASES = (
     "ingestion",
-    "indexing",
     "knowledge",
     "question",
     "retrieval",
@@ -133,11 +131,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT"),),
     ),
-    PromptStage(
-        "raptor_summary",
-        "indexing",
-        (("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),),
-    ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(
         "support_guide_draft",
@@ -157,27 +150,20 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
-        "rule_selection",
-        "question",
-        (
-            ("system", "app.rag.rule_selection:RULE_SELECTION_SYSTEM_PROMPT"),
-            ("instruction", "app.rag.rule_selection:RULE_SELECTION_INPUT_PROMPT"),
-        ),
-    ),
-    PromptStage(
         "history_rewrite",
         "question",
         (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
     ),
     PromptStage(
-        "field_filter",
-        "question",
-        (("system", "app.rag.field_filter_reader:FIELD_FILTER_SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
         "screen_linking",
         "retrieval",
         (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
+    ),
+    # 検索の要らない発話（挨拶・雑談）への根拠なしの短い応答（#4787）。
+    PromptStage(
+        "small_talk",
+        "generation",
+        (("system", "app.rag.small_talk:SMALL_TALK_SYSTEM_PROMPT"),),
     ),
     PromptStage(
         "faq_answer",

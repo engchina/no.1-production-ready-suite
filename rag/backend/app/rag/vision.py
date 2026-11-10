@@ -373,16 +373,15 @@ async def _generate(
     *,
     system_prompt: str,
 ) -> str:
-    from rag_engine.adapters.oci import _compact_schema
+    from rag_engine.adapters.oci import picture_response_schema
 
-    # 項目の説明はプロンプトの出力契約に載せているので、応答 schema には重ねない。
     return await async_call_with_model_purpose(
         "document.read",
         reader.generate_from_images,
         images,
         prompt,
         system_prompt=system_prompt,
-        response_schema=_compact_schema(PictureDescriptionOutput.model_json_schema()),
+        response_schema=picture_response_schema(),
         response_schema_name="picture_description",
     )
 

@@ -11,11 +11,9 @@ from typing import Any
 
 from rag_engine.generation.answer_models import AnswerContext
 
-# 段の名前と表示の文。``filter`` は呼び出し側（検索の条件を持つ backend）が、自動で足した検索条件が
-# 効いたまま候補が 0 件だったときに ``retrieval`` を置き換える。
+# 段の名前と表示の文。
 ZERO_EVIDENCE_STAGE_LABELS = {
     "retrieval": "文書検索（検索の候補が 0 件）",
-    "filter": "文書検索（自動で足した検索条件で候補が 0 件）",
     "context": "根拠の組み立て（候補はあるが回答に渡す根拠が 0 件）",
 }
 

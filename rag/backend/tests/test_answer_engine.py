@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import date
 from typing import Any, cast
 
@@ -350,13 +350,11 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert not any((s.params or {}).get("name") == "質問の理解" for s in engine_steps)
     # 登録知識の用途別の工程は既定でスキップし、全ての工程で実際の結果を示す。
     engine_names = [str((s.params or {}).get("name")) for s in engine_steps]
-    policy_names = {
-        "登録ルールによる確認の使用",
-        "回答生成での登録ルールの使用",
-        "用語・同義語による検索文の追加",
-    }
+    policy_names = {"用語・同義語による検索文の追加"}
     assert policy_names <= set(engine_names)
     assert not {
+        "登録ルールによる確認の使用",
+        "回答生成での登録ルールの使用",
         "用語・同義語の確認",
         "回答ルールの確認",
         "用語・ルールの確認",
@@ -1857,7 +1855,7 @@ async def _answer_with_screens(
     oracle: ScreenOracle,
     *,
     enabled: bool,
-    auto_field_conditions: Sequence[Any] = (),
+    extra_filters: dict[str, str] | None = None,
 ) -> tuple[Any, list[str]]:
     import rag_engine.adapters.oci as engine_oci
     from rag_engine.generation import answering
@@ -1875,10 +1873,13 @@ async def _answer_with_screens(
         ),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
-        auto_field_conditions=auto_field_conditions,
     )
     outcome = await engine.run(
-        SearchRequest(query="帳票が印字されない", top_k=10, filters={"knowledge_base_id": "kb-1"})
+        SearchRequest(
+            query="帳票が印字されない",
+            top_k=10,
+            filters={"knowledge_base_id": "kb-1", **(extra_filters or {})},
+        )
     )
     return outcome, calls
 
@@ -1930,12 +1931,12 @@ async def test_screen_linking_adds_screen_missing_from_search_results(
     assert any(step["name"] == "画面の選択" for step in outcome.diagnostics["execution_steps"])
 
 
-async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
+async def test_screen_linking_reads_catalog_with_the_manual_field_conditions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """画面目録と画面の chunk は、質問から読み取った項目の条件を足した検索と同じ条件で読む(#2056)。
+    """画面目録と画面の chunk は、利用者が指定した項目の条件の検索と同じ条件で読む(#2056)。
 
-    要求の filters だけで読むと、条件で外した文書の画面が候補に加わる。
+    条件を外して読むと、条件で外した文書の画面が候補に加わる。
     """
     from app.schemas.search import ExtractionFieldCondition
 
@@ -1945,7 +1946,10 @@ async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
     )
 
     outcome, calls = await _answer_with_screens(
-        monkeypatch, oracle, enabled=True, auto_field_conditions=[condition]
+        monkeypatch,
+        oracle,
+        enabled=True,
+        extra_filters={"extraction_fields": json.dumps([condition.model_dump()])},
     )
 
     assert calls.count("ScreenLinks") == 1
@@ -2252,6 +2256,10 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
     )
 
+    # チャットだけが毎回の発話で最初に通す質問の補完（発話の種類の判定を含む。#4787）は比べない。
+    assert chat_steps[:2] == [("history_rewrite", "started"), ("history_rewrite", "success")]
+    chat_steps = chat_steps[2:]
+    assert not [e for e in search_steps if e[0] == "history_rewrite"]
     # チャットの工程を、回答に添付する画像（回答の生成の最初の工程）の手前で切る。
     cut = chat_steps.index(("answer_step:回答に添付する画像", "started"))
     rename = {
@@ -2372,10 +2380,13 @@ class EmptyWithFieldFilterOracle(FakeOracle):
         return self.chunks[:1]
 
 
-async def test_answer_engine_applies_auto_field_conditions(
+async def test_answer_engine_applies_manual_field_conditions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """質問から読み取った条件を検索条件に足し、診断に出す(#652)。"""
+    """利用者が明示した項目の条件(``filters.extraction_fields``)で、すべての検索を絞る(#549・#4799)。
+
+    質問から条件は読み取らない(条件は利用者が画面・API・MCP で明示したものだけ)。
+    """
     import rag_engine.adapters.oci as engine_oci
 
     from app.schemas.search import ExtractionFieldCondition
@@ -2383,27 +2394,27 @@ async def test_answer_engine_applies_auto_field_conditions(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     oracle = FakeOracle()
     condition = ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="100000")
+    manual = json.dumps([condition.model_dump()], ensure_ascii=False)
     engine = AnswerEngine(
         Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
-        auto_field_conditions=[condition],
     )
-    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+    outcome = await engine.run(
+        SearchRequest(query="10万円以上の受注の登録方法は？", filters={"extraction_fields": manual})
+    )
 
     assert oracle.filters
     assert all(
-        json.loads(item["extraction_fields"])[0]["name"] == "金額" for item in oracle.filters
+        json.loads(item["extraction_fields"]) == [condition.model_dump()] for item in oracle.filters
     )
-    assert outcome.diagnostics["auto_field_filter"] == {
-        "conditions": [condition.model_dump()],
-    }
+    assert "auto_field_filter" not in outcome.diagnostics
 
 
-async def test_answer_engine_keeps_auto_field_conditions_without_hits(
+async def test_answer_engine_keeps_manual_field_conditions_without_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """読み取った条件で 0 件なら、条件を外して検索し直さない。"""
+    """明示した条件で 0 件なら、条件を外して検索し直さない。"""
     import rag_engine.adapters.oci as engine_oci
 
     from app.schemas.search import ExtractionFieldCondition
@@ -2414,18 +2425,21 @@ async def test_answer_engine_keeps_auto_field_conditions_without_hits(
         Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
-        auto_field_conditions=[
-            ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
-        ],
     )
-    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+    condition = ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
+    outcome = await engine.run(
+        SearchRequest(
+            query="受注の登録方法は？",
+            filters={"extraction_fields": json.dumps([condition.model_dump()])},
+        )
+    )
 
     assert oracle.filters
     assert all("extraction_fields" in item for item in oracle.filters)
     assert not outcome.citations
     assert "filter_relaxation" not in outcome.diagnostics
-    assert outcome.diagnostics["zero_evidence"]["stage"] == "filter"
-    assert outcome.diagnostics["zero_evidence"]["automatic_filters"] == ["auto_field"]
+    assert outcome.diagnostics["zero_evidence"]["stage"] == "retrieval"
+    assert outcome.diagnostics["zero_evidence"]["request_filter_keys"] == ["extraction_fields"]
 
 
 class EmptyWithKeysOracle(FakeOracle):
@@ -2454,7 +2468,7 @@ class EmptyWithKeysOracle(FakeOracle):
 
 
 async def _search_once(
-    oracle: FakeOracle, question: str, *, settings: Settings | None = None, conditions: Any = ()
+    oracle: FakeOracle, question: str, *, settings: Settings | None = None
 ) -> Any:
     from app.rag.answer_engine import _SearchState
 
@@ -2462,7 +2476,6 @@ async def _search_once(
         settings or Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
-        auto_field_conditions=list(conditions),
     )
     state = _SearchState()
     await engine._search(
@@ -2474,9 +2487,9 @@ async def _search_once(
 
 
 @pytest.mark.parametrize(
-    ("oracle", "settings", "stage", "automatic_filters"),
+    ("oracle", "settings", "stage"),
     [
-        (EmptyWithKeysOracle("knowledge_base_id"), Settings(), "retrieval", []),
+        (EmptyWithKeysOracle("knowledge_base_id"), Settings(), "retrieval"),
     ],
     ids=["no-candidates-in-scope"],
 )
@@ -2485,7 +2498,6 @@ async def test_zero_evidence_diagnostics_record_the_stage(
     oracle: FakeOracle,
     settings: Settings,
     stage: str,
-    automatic_filters: list[str],
 ) -> None:
     """根拠 0 件で終えたとき、0 件になった段と検索ごとの候補の件数を診断に残す(#2401)。
 
@@ -2509,7 +2521,7 @@ async def test_zero_evidence_diagnostics_record_the_stage(
     zero = outcome.diagnostics["zero_evidence"]
     assert zero["stage"] == stage
     assert zero["candidate_count"] == 0
-    assert zero["automatic_filters"] == automatic_filters
+    assert "automatic_filters" not in zero
     assert zero["request_filter_keys"] == ["knowledge_base_id"]
     assert zero["searches"]
     assert all(search["candidates"] == 0 for search in zero["searches"])
@@ -2521,74 +2533,36 @@ async def test_zero_evidence_diagnostics_record_the_stage(
     assert "根拠が 0 件になった段" in json.dumps(flow, ensure_ascii=False)
 
 
-async def test_pipeline_reads_field_conditions_only_when_enabled(
+async def test_pipeline_does_not_read_field_conditions_from_the_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """設定が有効なときだけ、検索・回答プロファイルの項目の定義で質問から条件を読み取る(#652)。"""
+    """質問から抽出項目の条件を読み取らない(LLM を呼ばず、工程も無い。#4799)。"""
     import rag_engine.adapters.oci as engine_oci
 
     import app.rag.pipeline as pipeline_module
-    from app.rag.extraction_field_adapter import FieldDefinition
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-
-    class ViewOracle(SavingOracle):
-        async def get_search_answer_profile(self, search_answer_profile_id: str) -> Any:
-            from types import SimpleNamespace
-
-            return SimpleNamespace(
-                config=SimpleNamespace(normalized_knowledge_base_ids=lambda: ["kb-1"])
-            )
-
-        async def list_knowledge_base_extraction_field_sets(self, ids: list[str]) -> Any:
-            return [[FieldDefinition(name="金額", value_type="number")]]
-
-    monkeypatch.setattr(pipeline_module, "resolve_field_definitions", lambda sets, default: sets[0])
-    for enabled in (False, True):
-        llm = RewriteLlm('[{"name": "金額", "op": "gte", "value": "100000"}]')
-        oracle = ViewOracle()
-        stages: list[str] = []
-
-        async def capture(progress: Any, stages: list[str] = stages) -> None:
-            stages.append(progress.stage)
-
-        pipeline = pipeline_module.RagPipeline(
-            settings=Settings(rag_auto_field_filter_enabled=enabled),
-            oracle=oracle,  # type: ignore[arg-type]
-            genai=FakeGenAi(),  # type: ignore[arg-type]
-            llm=llm,  # type: ignore[arg-type]
-        )
-        response = await pipeline.run(
-            SearchRequest(query="10万円以上の受注は？", search_answer_profile_id="bv-1"),
-            progress_callback=capture,
-        )
-        answer = cast(dict[str, Any], response.diagnostics.answer or {})
-        if enabled:
-            assert len(llm.calls) == 1
-            assert "field_filter" in stages
-            assert answer["auto_field_filter"]["conditions"][0]["value"] == "100000"
-        else:
-            assert llm.calls == []
-            assert "field_filter" not in stages
-            assert "auto_field_filter" not in answer
-
-    # 画面で外した項目は読み取らない(項目の定義が残らなければ LLM を呼ばない)。
     llm = RewriteLlm('[{"name": "金額", "op": "gte", "value": "100000"}]')
+    oracle = SavingOracle()
+    stages: list[str] = []
+
+    async def capture(progress: Any) -> None:
+        stages.append(progress.stage)
+
     pipeline = pipeline_module.RagPipeline(
-        settings=Settings(rag_auto_field_filter_enabled=True),
-        oracle=ViewOracle(),  # type: ignore[arg-type]
+        settings=Settings(),
+        oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         llm=llm,  # type: ignore[arg-type]
     )
     response = await pipeline.run(
-        SearchRequest(
-            query="10万円以上の受注は？",
-            search_answer_profile_id="bv-1",
-            auto_field_filter_excluded=["金額"],
-        )
+        SearchRequest(query="10万円以上の受注は？"), progress_callback=capture
     )
+    answer = cast(dict[str, Any], response.diagnostics.answer or {})
     assert llm.calls == []
-    assert "auto_field_filter" not in (response.diagnostics.answer or {})
+    assert "field_filter" not in stages
+    assert "auto_field_filter" not in answer
+    assert all("extraction_fields" not in item for item in oracle.filters)
 
 
 async def test_answer_engine_answers_only_from_selected_approved_faq(
@@ -2659,7 +2633,7 @@ async def test_answer_engine_answers_only_from_selected_approved_faq(
 async def test_answer_engine_passes_the_clarification_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """確認で選んだ条件は回答の前提に渡し、回答の末尾と診断に対象の範囲を示す(#717)。"""
+    """確認で選んだ条件は回答の前提に渡し、診断に残す(回答の本文は変えない)。"""
     import rag_engine.adapters.oci as engine_oci
     import rag_engine.generation.answering as answering
 
@@ -2681,7 +2655,6 @@ async def test_answer_engine_passes_the_clarification_scope(
         scope=AnswerScope(
             context="選んだ答え: 受注",
             search_terms=("受注登録",),
-            label="「受注手順」の「登録」（p.2）",
         ),
     )
     request = SearchRequest(
@@ -2692,8 +2665,8 @@ async def test_answer_engine_passes_the_clarification_scope(
     outcome = await engine.run(request)
 
     assert captured["scope"] == ("選んだ答え: 受注", ("受注登録",))
-    assert outcome.answer.endswith("（対象: 「受注手順」の「登録」（p.2））")
-    assert outcome.diagnostics["scope"]["label"] == "「受注手順」の「登録」（p.2）"
+    assert "（対象:" not in outcome.answer
+    assert outcome.diagnostics["scope"]["context"] == "選んだ答え: 受注"
 
 
 async def test_answer_diagnostics_record_profile_and_prompt_versions(

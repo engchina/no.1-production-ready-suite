@@ -60,7 +60,6 @@ async function mockRetrieval(page: Page) {
         neighbor_child_count: 3,
         rerank_enabled: true,
         screen_linking_enabled: false,
-        auto_field_filter_enabled: false,
         graph_expansion_enabled: false,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 6,
         section_expansion_enabled: true, section_expansion_max_levels: 4,
@@ -247,7 +246,6 @@ async function mockAnswerPrompts(page: Page) {
           },
         ],
         stages: [
-          { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
           { id: "generation", phase: "generation", prompts: [{ id: "role", content: "## Step 1: 合成の保存した役割の文", prompt_key: "generation.role" }, { id: "fixed", content: "## Step 2: 合成の固定の指示" }] },
         ],
       }),

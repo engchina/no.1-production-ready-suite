@@ -50,12 +50,8 @@ def test_stage_io_matches_actual_enabled_inputs_and_queries(tmp_path, search, an
         assert call["input"]["回答への使用"] is answer
         assert [term["term"] for term in call["output"]["一致した用語"]] == ([_TERM["term"]] if enabled else [])
         assert call["output"]["状態"] == ("照合完了" if enabled else "設定オフ")
-    rules = recorder.stage(answering.RULE_ANSWER_STEP)
-    assert [rule["rule_id"] for rule in rules["output"]["選択した登録ルール"]] == [_RULE["id"]]
-    assert rules["output"]["状態"] == "選択完了"
-    confirmation = recorder.stage(answering.RULE_CONFIRMATION_STEP)
-    assert confirmation["input"]["有効"] is False
-    assert confirmation["output"]["選択した登録ルール"] == []
+    # payload に残った登録ルールは使わず、その工程も無い。
+    assert not result.runtime_knowledge.matched_rules
     merged = recorder.stage("検索文をまとめ、検索語を作る")
     actual = [item["本文"] for item in merged["output"]["採用した検索文"]]
     assert actual == result.retrieval_query_plan["text_query_variants"]

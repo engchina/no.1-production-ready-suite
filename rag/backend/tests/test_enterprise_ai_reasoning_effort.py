@@ -46,7 +46,7 @@ async def test_generate_sends_reasoning_of_text_model() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=_settings("low", "high"), http_transport=transport)
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls[0]["payload"]["reasoning"] == {"effort": "low"}
 
@@ -56,7 +56,7 @@ async def test_generate_default_sends_low() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls[0]["payload"]["reasoning"] == {"effort": "low"}
 
@@ -66,7 +66,7 @@ async def test_generate_with_none_sends_no_reasoning() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=_settings("none", "high"), http_transport=transport)
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert "reasoning" not in transport.calls[0]["payload"]
 
@@ -82,7 +82,7 @@ async def test_compared_model_uses_its_own_effort() -> None:
         settings=settings, http_transport=transport, model_id="other-llm"
     )
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls[0]["payload"]["reasoning"] == {"effort": "low"}
 

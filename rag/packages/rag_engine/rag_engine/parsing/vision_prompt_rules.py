@@ -86,7 +86,7 @@ TABLE_EXTRACTION_INSTRUCTION = (
 
 # 各項目の意味は PictureDescriptionOutput の Field(description=...) に置き、ここには判断の原則だけを書く。
 VISION_EXTRACTION_INSTRUCTION = """### 読み取りの方針
-原文と検索用の言い換えを分離します。各項目の意味と形式は実行時の契約に従います。
+原文と検索用の言い換えを分離します。各項目の意味と形式は応答の schema に従います。
 
 ### 1. 原文保持
 - table_headers / table_rows / visible_* / codes_and_errors / visible_text は原文の正式名称、否定、条件、数値、単位、句読点を保持し、要約・同義語置換をしない。個人情報の扱いは上記の規則に従う。

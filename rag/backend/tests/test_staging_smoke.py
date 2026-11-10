@@ -362,7 +362,6 @@ class FakeIngestionPipeline:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: object | None = None,
@@ -371,7 +370,6 @@ class FakeIngestionPipeline:
         _ = source_profile, chunk_set_id
         assert document_id == "doc-smoke"
         assert image_bytes == FakeObjectStorageClient.put_body
-        assert "OCR" in prompt
         assert content_type == "text/plain"
         return SimpleNamespace(status=FileStatus.INDEXED)
 

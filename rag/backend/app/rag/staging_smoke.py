@@ -177,7 +177,6 @@ async def run_staging_smoke(
         indexed = await IngestionPipeline(oracle=oracle, settings=resolved_settings).ingest(
             document.id,
             fetched,
-            "staging smoke 用文書を日本語で OCR し、本文テキストを抽出してください。",
             content_type="text/plain",
         )
         if indexed.status != FileStatus.INDEXED:

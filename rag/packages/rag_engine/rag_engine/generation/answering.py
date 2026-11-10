@@ -173,7 +173,6 @@ from rag_engine.knowledge.prompt_files import (
 from rag_engine.knowledge.runtime_knowledge import (
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
-    runtime_rules_status,
     runtime_terms_status,
 )
 from rag_engine.models.llm import RerankTextRank
@@ -214,7 +213,6 @@ from rag_engine.retrieval.guide_steps import (
     target_records,
     unsearched_steps,
 )
-from rag_engine.retrieval.operation_context import alternative_operation_queries
 from rag_engine.retrieval.query_identity import normalized_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
@@ -1116,21 +1114,15 @@ def build_adb_hybrid_answer_context(
 
     # SDK・評価からの直接呼出では未指定。回答入口の各回は読込済みの結果を渡す。
     runtime = (
-        (
-            runtime_knowledge
-            or build_runtime_knowledge_context(
-                question,
-                settings.output_dir,
-                settings.runtime_knowledge_path,
-                rules_confirmation_enabled=settings.runtime_rules_confirmation_enabled,
-                rules_answer_enabled=settings.runtime_rules_answer_enabled,
-                terms_search_enabled=settings.runtime_terms_search_enabled,
-                terms_answer_enabled=settings.runtime_terms_answer_enabled,
-            )
+        runtime_knowledge
+        or build_runtime_knowledge_context(
+            question,
+            settings.output_dir,
+            settings.runtime_knowledge_path,
+            terms_search_enabled=settings.runtime_terms_search_enabled,
+            terms_answer_enabled=settings.runtime_terms_answer_enabled,
         )
-        .with_rule_usage(confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled)
-        .with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
-    )
+    ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
     grounded = " ".join(label for term in runtime.retrieval_terms for label in term.labels())
     candidate_queries = _retrieval_queries(question, retrieval_queries)
     queries, rejected = filter_queries(question, candidate_queries, grounded_text=grounded)
@@ -1661,9 +1653,9 @@ def synthesize_grounded_answer(
     """
     shared = shared_steps if shared_steps is not None else model_cascade.SharedSteps()
     if runtime_knowledge is not None:
-        runtime_knowledge = runtime_knowledge.with_rule_usage(
-            confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled
-        ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
+        runtime_knowledge = runtime_knowledge.with_term_usage(
+            search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled
+        )
     from rag_engine.generation import grounded
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.batched_evidence import prepare_batched_evidence
@@ -2460,55 +2452,6 @@ def _format_classification_filter(classification_filter: ClassificationFilter) -
     return " / ".join(parts)
 
 
-RULE_CONFIRMATION_STEP = "登録ルールによる確認の使用"
-RULE_ANSWER_STEP = "回答生成での登録ルールの使用"
-
-
-def _record_rule_usage(runtime: RuntimeKnowledgeContext, *, confirmation: bool) -> None:
-    name = RULE_CONFIRMATION_STEP if confirmation else RULE_ANSWER_STEP
-    stage = "confirmation" if confirmation else "generation"
-    enabled = runtime.rules_confirmation_enabled if confirmation else runtime.rules_answer_enabled
-    with _execution_step(name) as step:
-        step.input({"原質問": runtime.original_question, "用途": stage, "有効": enabled})
-        step.output(
-            {
-                "状態": "設定オフ" if not enabled else "読込失敗" if runtime.error else "選択完了",
-                "読込エラー": runtime.error,
-                "選択した登録ルール": [asdict(rule) for rule in runtime.rules_for_stage(stage) if "pinned" not in rule.tags]
-                if enabled and not runtime.error
-                else [],
-                "選択の判断": [dict(item) for item in runtime.rule_applications if item["stage"] == stage] if enabled else [],
-            }
-        )
-        if not enabled:
-            step.skip(f"設定がオフのため、{name}をスキップしました。")
-            return
-        if runtime.error:
-            _record_runtime_knowledge_load(step, runtime)
-            return
-        rules = tuple(rule for rule in runtime.rules_for_stage(stage) if "pinned" not in rule.tags)
-        if not rules:
-            step.result("適用する登録ルールはありません。")
-        else:
-            step.result(f"登録ルール {len(rules)} 件を選択しました。確認・回答の実行結果とは別です。")
-            for rule in rules:
-                step.add(f"採用: {rule.title or rule.rule_id}（用途: {'確認' if confirmation else '回答'}、優先度: {rule.priority}）")
-        reasons = {
-            "selected": "採用",
-            "lower_priority": "上位の優先度のルールを採用",
-            "unresolved_exclusive_conflict": "同順位の排他指示が競合",
-            "duplicate_instruction": "指示が重複",
-            "application_budget": "採用件数の上限",
-            "other_purpose": "別の用途",
-            "no_confirmation": "確認設定なし",
-            "no_generation_instruction": "回答指示なし",
-            "invalid_instruction_kind": "未対応の指示の種類",
-        }
-        for item in runtime.rule_applications:
-            if item["stage"] == stage:
-                step.add(f"{item['title'] or item['id']}: {reasons.get(item['reason'], item['reason'])}")
-
-
 TERM_SEARCH_STEP = "用語・同義語による検索文の追加"
 TERM_ANSWER_STEP = "回答生成での用語・同義語の使用"
 
@@ -3038,7 +2981,7 @@ def _keep_trusted_queries(
 
 
 def _record_runtime_knowledge_load(step: _ExecutionStep, runtime_knowledge: RuntimeKnowledgeContext) -> bool:
-    """用語・同義語と回答ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
+    """用語・同義語の読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
 
     詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
     """
@@ -3127,14 +3070,11 @@ def answer_question_result(
         complete_evidence = False
 
     question_plan = plan_question(normalized_question)
-    # 検索・回答プロファイルの知識の「用語・同義語」と「回答ルール」は使い道が違うので、別の工程（別の span）で示す
-    # （#3451）。登録は 1 回だけ読み、最初の工程で読み込みと照合をして、次の工程は同じ結果の回答ルールを示す。
+    # 検索・回答プロファイルの知識の「用語・同義語」は 1 回だけ読む。用語の照合は検索・回答の工程で行う（#3451）。
     runtime_knowledge = build_runtime_knowledge_context(
         normalized_question,
         settings.output_dir,
         settings.runtime_knowledge_path,
-        rules_confirmation_enabled=settings.runtime_rules_confirmation_enabled,
-        rules_answer_enabled=settings.runtime_rules_answer_enabled,
         match_terms=False,
         terms_search_enabled=settings.runtime_terms_search_enabled,
         terms_answer_enabled=settings.runtime_terms_answer_enabled,
@@ -3142,8 +3082,6 @@ def answer_question_result(
     if runtime_knowledge.error and runtime_knowledge.failure is not None:
         report_degraded("runtime_knowledge", runtime_knowledge.failure)
 
-    _record_rule_usage(runtime_knowledge, confirmation=True)
-    _record_rule_usage(runtime_knowledge, confirmation=False)
     if scope is not None:
         runtime_knowledge = runtime_knowledge.with_scope(*scope)
 
@@ -3225,7 +3163,7 @@ def answer_question_result(
             step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、原質問だけで検索します。")
         sources = {_dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-            # 出どころは実際に語を足したもの（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件。#3490）。
+            # 出どころは実際に語を足したもの（用語・同義語 / 業務ガイド / 確認で選んだ条件。#3490）。
             sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         for query in expansion.generated_queries:
             sources.setdefault(_dedupe_query_key(query), "呼び出し元")

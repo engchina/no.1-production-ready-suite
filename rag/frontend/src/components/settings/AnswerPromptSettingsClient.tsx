@@ -40,11 +40,10 @@ export function AnswerPromptSettingsClient() {
       </PageBody>
     );
   }
-  const stages = query.data.stages.filter((stage) => stage.phase !== "ingestion" && stage.phase !== "indexing" && !isRetrievalPromptStage(stage) && stage.id !== "evaluation");
+  const stages = query.data.stages.filter((stage) => stage.phase !== "ingestion" && !isRetrievalPromptStage(stage) && stage.id !== "evaluation");
   return (
     <PageBody wide>
       <AnswerTermSettingsCard />
-      <AnswerTermSettingsCard field="runtime_rules_answer_enabled" />
       <AnswerPromptStages stages={stages} />
     </PageBody>
   );

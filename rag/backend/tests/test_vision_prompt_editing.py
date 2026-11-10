@@ -9,7 +9,11 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
-from rag_engine.adapters.oci import _compact_schema, _picture_output_contract, _render_prompt
+from rag_engine.adapters.oci import (
+    _picture_output_contract,
+    _render_prompt,
+    picture_response_schema,
+)
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description
 from rag_engine.parsing.vision_prompt_rules import (
     MAX_TABLE_ROWS,
@@ -185,7 +189,6 @@ def test_vision_editor_requires_parser_settings_permission(
 async def test_saved_vision_instructions_reach_serialized_http_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from rag_engine.models.llm import PictureDescriptionOutput
     from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiClient, OciEnterpriseAiConfig
 
     from tests.test_oci_enterprise_ai import FakeEnterpriseAiTransport
@@ -231,9 +234,8 @@ async def test_saved_vision_instructions_reach_serialized_http_payload(
             assert _renumbered(saved[f"picture_description.{target}"], 2) in text
             assert saved["picture_description.rules"] in text
             assert text.endswith(_renumbered(_picture_output_contract(), 3))
-            assert payload["text"]["format"]["schema"] == _compact_schema(
-                PictureDescriptionOutput.model_json_schema()
-            )
+            # 項目の意味(Field の説明)は応答の schema だけで渡す(#4782)。
+            assert payload["text"]["format"]["schema"] == picture_response_schema()
             assert f"table_rows={MAX_TABLE_ROWS}" in text
     # HTTP transport は完全なスタブ。モデルの画像対応能力を実サービスで確認するテストではない。
     assert len(transport.calls) == 2

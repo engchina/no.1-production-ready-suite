@@ -332,7 +332,6 @@ async def test_ingestion_records_trace_spans_without_payload_text(
     detail = await pipeline.ingest(
         document.id,
         source,
-        "秘密の規程を抽出する prompt",
         chunk_set_id=chunk_set_id,
         source_profile=_generic_source_profile(document),
         prepared_artifact=_prepared_source_artifact(
@@ -443,7 +442,6 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
     detail = await pipeline.ingest(
         document.id,
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         chunk_set_id=chunk_set_id,
         source_profile=source_profile,
@@ -484,7 +482,6 @@ async def test_ingestion_records_error_trace_span_without_error_message(
         await pipeline.ingest(
             document.id,
             b"test",
-            "prompt",
             chunk_set_id=chunk_set_id,
             source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
@@ -548,7 +545,6 @@ async def test_ingestion_normalizes_untrusted_document_type_in_logs(
         detail = await pipeline.ingest(
             document.id,
             b"test",
-            "prompt",
             chunk_set_id=chunk_set_id,
             source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
@@ -613,7 +609,6 @@ async def test_ingestion_redacts_internal_error_messages(
             await pipeline.ingest(
                 document.id,
                 b"test",
-                "prompt",
                 chunk_set_id=chunk_set_id,
                 source_profile=_generic_source_profile(document),
                 prepared_artifact=_prepared_source_artifact(
@@ -678,7 +673,6 @@ async def test_candidate_mode_isolates_document_state_and_serving(monkeypatch: M
         await pipeline.ingest(
             document.id,
             b"test",
-            "prompt",
             chunk_set_id=serving_cs,
             source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
@@ -709,7 +703,6 @@ async def test_candidate_mode_isolates_document_state_and_serving(monkeypatch: M
         await pipeline.ingest(
             document.id,
             b"test",
-            "prompt",
             chunk_set_id=candidate_cs,
             source_profile=_generic_source_profile(document),
             prepared_artifact=_prepared_source_artifact(
@@ -785,7 +778,6 @@ async def test_candidate_mode_failure_does_not_error_document() -> None:
             await pipeline.ingest(
                 document.id,
                 b"test",
-                "prompt",
                 chunk_set_id="cs_candidate_fail00",
                 source_profile=_generic_source_profile(document),
                 prepared_artifact=_prepared_source_artifact(

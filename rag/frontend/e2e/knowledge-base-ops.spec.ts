@@ -350,7 +350,7 @@ async function mockSearchAnswerProfiles(
       return;
     }
     if (pathname.endsWith("/runtime-knowledge")) {
-      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [], rules: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [] }));
       return;
     }
     const view = views.find((item) => item.id === id);

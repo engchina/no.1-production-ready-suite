@@ -4,7 +4,13 @@ import json
 from copy import deepcopy
 from unittest.mock import patch
 
-from rag_engine.adapters.oci import PictureDescriptionOutput, _compact_schema, _picture_output_contract, _render_prompt
+from rag_engine.adapters.oci import (
+    PictureDescriptionOutput,
+    _compact_schema,
+    _picture_output_contract,
+    _render_prompt,
+    picture_response_schema,
+)
 from rag_engine.knowledge.prompt_files import DEFAULT_IMAGE_RETRIEVAL_PROMPT
 from rag_engine.models.llm import _StrictModel
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description, vision_description_text
@@ -33,10 +39,11 @@ def test_custom_policy_survives_refinement_and_runtime_rules_are_not_duplicated(
             prompt = _render_prompt({"paired_ocr_text": "[OK]", "owning_section": {"text_preview": "確認操作"}})
         assert prompt.count(RULES_START) == 1
         assert "table_rows の原文を検索向けに書き換えない" in prompt
-        assert "flowchart / architecture_diagram" in prompt
         assert "業務タイトル・画面名・操作情報" in prompt
         assert "next_record の見出しは次節の境界" in prompt
-        assert "同じ行のセルの配列" in prompt
+        # 項目の意味は応答の schema だけで渡し、文に重ねない(#4782)。
+        assert "flowchart / architecture_diagram" not in prompt
+        assert "同じ行のセルの配列" not in prompt
         assert f"各行は最大 {MAX_TABLE_COLUMNS} セル" in prompt
         assert "長表は出力契約の上限まで原本の先頭の行を保持する" in prompt
         assert f"table_rows={MAX_TABLE_ROWS}" in prompt
@@ -183,7 +190,7 @@ def test_required_rules_stay_in_every_default_prompt():
             assert rule in prompt, rule
 
 
-def test_output_fields_are_unchanged_and_each_has_a_description_in_the_contract():
+def test_output_fields_are_unchanged_and_each_has_a_description_in_the_response_schema():
     expected = {
         "surrounding_context", "correction_notes", "main_topic", "visual_kind",
         "diagram_title", "diagram_nodes", "diagram_edges", "diagram_summary",
@@ -194,7 +201,9 @@ def test_output_fields_are_unchanged_and_each_has_a_description_in_the_contract(
         "answerable_questions", "query_rewrites", "search_keywords", "retrieval_text",
     }  # fmt: skip
     assert set(PictureDescriptionOutput.model_fields) == expected
-    contract = json.loads(_picture_output_contract().rsplit("\n", 1)[1])
+    contract = picture_response_schema()
+    # 出力の形は応答の schema だけで渡し、文の契約には載せない(#4782)。
+    assert "{" not in _picture_output_contract()
     for name in expected:
         assert contract["properties"][name].get("description"), name
     # 入れ子の項目も説明を持つ（kind は読取方針が見た目の判定を持つ）。
@@ -349,4 +358,4 @@ def test_default_vision_request_has_one_ordered_step_sequence_for_each_target():
         assert "{{image}}" not in prompt
         # 出力契約を Step 形式にしても、文字列値の創作を許さない。
         assert "必須キーを埋めるために情報を創作しない" in prompt
-        assert '"required"' in prompt
+        assert '"required"' not in prompt
