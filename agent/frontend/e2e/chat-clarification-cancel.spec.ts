@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1441・#1445: Agent のチャットで、利用者の答えを待っている確認（NL2SQL の SQL の生成前の確認・RAG の確認）の下に
 // 「データベースの検索は不要」「資料の検索は不要」を同じ部品で置く。押すとその文を送り、取り消した往復には
@@ -90,13 +91,6 @@ async function openSeedThread(page: Page, title = GOAL) {
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText(title).click();
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 test("NL2SQL の確認の下に「データベースの検索は不要」を出し、押すと取り消して補足を出す", async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi, "run-nl2sql-1", "SALES のどの日付の列で期間を絞りますか？（受注日 / 出荷日）", [NL2SQL_PENDING]);
   await page.goto("/chat");
@@ -112,7 +106,7 @@ test("NL2SQL の確認の下に「データベースの検索は不要」を出�
   const button = actions.getByRole("button", { name: "データベースの検索は不要" });
   await expect(button).toBeVisible();
   await expect(actions.getByRole("button", { name: "資料の検索は不要" })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("nl2sql-cancel-before.png"), fullPage: true });
 
   await button.click();
@@ -129,7 +123,7 @@ test("NL2SQL の確認の下に「データベースの検索は不要」を出�
   );
   // 取り消した後は、前の回答の操作を出さない（最後の往復だけに出す）。
   await expect(page.getByRole("group", { name: "確認の取り消し" })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("nl2sql-cancel-after.png"), fullPage: true });
 });
 
@@ -161,7 +155,7 @@ test("RAG の確認には同じ部品で「資料の検索は不要」を出し�
     clarification_cancel: "rag",
   });
   await expect(page.getByTestId("chat-clarification-cancelled-run-chat-3")).toHaveText("資料を使わずに回答を続けます");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("確認を待っていない回答には取り消しの操作を出さない", async ({ page, mockApi }) => {

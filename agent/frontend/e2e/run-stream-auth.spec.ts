@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // Run のイベントの購読（SSE）と、Run の操作（REST）の確認（#215 / #814）。
 // push は SSE、取消・再開・承認は REST だけ（WebSocket の経路は持たない。#2260）。
@@ -28,12 +28,6 @@ function seedRunningRun(mockApi: MockApi) {
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
   });
-}
-
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
 }
 
 for (const viewport of VIEWPORTS) {
@@ -66,7 +60,7 @@ for (const viewport of VIEWPORTS) {
       release();
       await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-stream/resume")).toBeTruthy();
       await expect(resume).not.toHaveAttribute("aria-busy", "true");
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("SSE の接続が切れたら自動の再接続をやめ、停止を示して再接続できる", async ({ page, mockApi }) => {
@@ -84,7 +78,7 @@ for (const viewport of VIEWPORTS) {
       const before = eventRequests();
       await page.waitForTimeout(1_500);
       expect(eventRequests()).toBe(before);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await page.getByRole("button", { name: "再接続" }).click();
       await expect.poll(eventRequests).toBeGreaterThan(before);

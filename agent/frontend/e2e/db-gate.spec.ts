@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 /**
  * DB ゲート（3製品共通の部品。#325）。システム設定の 5 画面以外は、DB が使えるまで本文だけを
@@ -69,12 +70,6 @@ function gateCard(page: Page) {
   return page.locator('section[aria-labelledby="database-unavailable-title"]');
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
-}
-
 async function expectGate(page: Page, title: string, href = "/settings/database") {
   const card = gateCard(page);
   await expect(card.getByRole("heading", { level: 1, name: title })).toBeVisible();
@@ -86,7 +81,7 @@ async function expectGate(page: Page, title: string, href = "/settings/database"
   await expect(card.getByText(SETTINGS_HINT, { exact: true })).toBeVisible();
   // 本文だけを塞ぎ、サイドナビは残す（設定の画面へ移れる）。
   await expect(page.locator('a[href="/settings/database"]:not([data-testid])')).toBeAttached();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   return link;
 }
 
@@ -151,7 +146,7 @@ for (const viewport of VIEWPORTS) {
       const loading = page.getByTestId("database-gate-loading");
       await expect(loading).toBeVisible();
       await expect(loading).toContainText("データベースの状態を確認しています");
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       release();
       await expect(loading).toHaveCount(0);
       await expect(page.getByRole("heading", { level: 1, name: "データベースに接続できません" })).toBeVisible();
@@ -168,7 +163,7 @@ for (const viewport of VIEWPORTS) {
 
       await expect(page.getByRole("heading", { level: 1, name: "実行履歴" })).toBeVisible();
       await expect(gateCard(page)).toHaveCount(0);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("システム設定の 5 画面は DB が使えなくても開け、ユーザー管理はゲートを通す", async ({ page, mockApi }) => {
@@ -231,7 +226,7 @@ for (const viewport of VIEWPORTS) {
         );
         await expect(card.getByRole("link", { name: "データベース設定を開く" })).toHaveCount(0);
         await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
-        await expectNoHorizontalOverflow(page);
+        await expectNoPageHorizontalOverflow(page);
         await saveScreenshot(page, `agent-${viewport.name}-${theme}-setup-required-admin`);
 
         await card.getByRole("link", { name: "システムテーブルを開く" }).click();
@@ -276,7 +271,7 @@ for (const viewport of VIEWPORTS) {
           await expect(card.getByText(SETTINGS_HINT, { exact: true })).toHaveCount(0);
           await expect(card.getByText(CONTACT_ADMIN_FOOTER, { exact: true })).toBeVisible();
           await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
-          await expectNoHorizontalOverflow(page);
+          await expectNoPageHorizontalOverflow(page);
           await saveScreenshot(page, `agent-${viewport.name}-${theme}-${status}-${adb ?? "none"}-viewer`);
         }
         expect(businessRequests(mockApi)).toEqual([]);

@@ -1,7 +1,11 @@
 import { expect, type Page, test } from "./_helpers/test";
 
 import { APP_ROUTES } from "../../src/lib/routes";
-import { findEscapedAbsoluteElements, measureShellHiddenOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
+import {
+  findEscapedAbsoluteElements,
+  measureHorizontalOverflow,
+  measureShellHiddenOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 // NL2SQL は全画面が画面幅いっぱい（#566）。タイトルと本文の左端がそろう。
@@ -52,7 +56,7 @@ test.describe("本文幅", { tag: "@responsive" }, () => {
   });
 
   for (const width of [1920, 2560]) {
-    test(`${width}px で全画面が全幅になり、タイトルと本文の左端・右端がそろう`, async ({ page, isMobile }) => {
+    test(`${width}px で全画面が全幅になり、タイトルと本文の左端・右端がそろい、横にあふれない`, async ({ page, isMobile }) => {
       test.skip(isMobile, "広い画面の計測");
       test.setTimeout(180_000);
       await page.setViewportSize({ width, height: 1000 });
@@ -70,12 +74,14 @@ test.describe("本文幅", { tag: "@responsive" }, () => {
         // （外枠ごとずれて本文の下端が切れる・本文の末尾に空白ができる。#2064）。
         const shell = await measureShellHiddenOverflow(page);
         expect(Math.max(shell.vertical, shell.horizontal), `${route} 外枠の隠れたあふれ`).toBeLessThanOrEqual(1);
+        // 全 route で、ページ全体（documentElement と main）が横にあふれない（#4806）。
+        await expect.poll(() => measureHorizontalOverflow(page), { message: `${route} の横あふれ`, timeout: 2000 }).toBeLessThanOrEqual(1);
         expect(await findEscapedAbsoluteElements(page), `${route} スクロール領域から抜け出した absolute の要素`).toEqual([]);
       }
     });
   }
 
-  test("375px でも全画面のタイトルと本文の左端がそろう", async ({ page, isMobile }) => {
+  test("375px でも全画面のタイトルと本文の左端がそろい、横にあふれない", async ({ page, isMobile }) => {
     test.skip(!isMobile, "モバイル幅の計測");
     test.setTimeout(180_000);
     for (const route of PAGE_ROUTES) {
@@ -83,6 +89,8 @@ test.describe("本文幅", { tag: "@responsive" }, () => {
       const metrics = await measure(page);
       expect(metrics.bodies.length, `${route} に PageBody がある`).toBeGreaterThan(0);
       for (const body of metrics.bodies) expect(body.left, `${route} のタイトルと本文の左端`).toBe(metrics.header.left);
+      // 全 route で、375px でもページ全体（documentElement と main）が横にあふれない（#4806）。
+      await expect.poll(() => measureHorizontalOverflow(page), { message: `${route} の横あふれ`, timeout: 2000 }).toBeLessThanOrEqual(1);
     }
   });
 });

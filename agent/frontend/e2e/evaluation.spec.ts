@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, evaluationSummary, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #776: 業務 Agent の品質評価（評価セットで実行し、LLM で判定して合格率とツールの選択を出す）。
 
@@ -9,13 +10,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
@@ -209,7 +203,7 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByRole("table", { name: "評価セットの一覧" }).getByRole("row", { name: /経理の評価/ })).toContainText(
       "50%"
     );
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 
   for (const theme of ["light", "dark"] as const) {
@@ -232,7 +226,7 @@ for (const viewport of VIEWPORTS) {
       ).toContainText("下書き");
       const results = page.getByRole("table", { name: "ケース別結果" });
       await expect(results.getByRole("row", { name: /sales-total/ })).toContainText("期待と違う");
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`evaluation-${viewport.name}-${theme}.png`), fullPage: true });
 
       await results.getByRole("button", { name: /今月の売上の合計はいくらですか？/ }).click();
@@ -294,7 +288,7 @@ for (const viewport of VIEWPORTS) {
     const table = page.getByRole("table", { name: "ケース別結果" });
     await expect(table.getByRole("row", { name: /expense-deadline/ })).toContainText("順が違う");
     await expect(table.getByRole("row", { name: /register/ })).toContainText("判定できなかった");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
 
     await table.getByRole("button", { name: /取引先を登録して/ }).click();
     const detail = page.getByRole("dialog", { name: "ケースの詳細" });
@@ -317,7 +311,7 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByText("評価セットを保存しました")).toBeVisible();
     const saved = mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)?.body as { cases: Record<string, unknown>[] };
     expect(saved.cases.map((item) => item.expected_tools_in_order)).toEqual([true, false, false]);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 }
 
@@ -337,7 +331,7 @@ for (const viewport of VIEWPORTS) {
     await evaluated.click();
     await page.getByRole("option", { name: "資料調査アシスタント" }).click();
     await expect(evaluated).toContainText("資料調査アシスタント");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     const actions = page.getByTestId("evaluation-set-actions");
     const startButton = actions.getByRole("button", { name: "評価を開始" });
     if (await startButton.count()) {
@@ -372,7 +366,7 @@ for (const viewport of VIEWPORTS) {
     const request = mockApi.lastRequest("GET", "/api/evaluations/compare");
     expect(request?.searchParams.get("base_job_id")).toBe("eval-previous");
     expect(request?.searchParams.get("target_job_id")).toBe("eval-3");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await compare.screenshot({ path: testInfo.outputPath(`evaluation-compare-${viewport.name}.png`) });
   });
 }
@@ -395,7 +389,7 @@ for (const viewport of VIEWPORTS) {
 
     await answer.getByLabel("選ぶ候補").fill("受注（SALES_ORDERS）, cand-orders");
     await answer.getByLabel("その他（自由入力）").fill("今月の確定分だけ");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await sales.screenshot({ path: testInfo.outputPath(`evaluation-clarification-editor-${viewport.name}.png`) });
     await page.getByRole("button", { name: "保存", exact: true }).first().click();
     await expect(page.getByText("評価セットを保存しました")).toBeVisible();
@@ -430,7 +424,7 @@ for (const viewport of VIEWPORTS) {
     await expect(entry.locator("dt")).toHaveText("対象の表: どの表の売上を使いますか？");
     await expect(entry.locator("dd")).toHaveText("受注（SALES_ORDERS）、cand-orders、その他: 今月の確定分だけ");
     await expect(rounds).toContainText("送った答え: 対象の表: 受注（SALES_ORDERS）、cand-orders、今月の確定分だけ");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await dialog.screenshot({ path: testInfo.outputPath(`evaluation-clarification-detail-${viewport.name}.png`) });
     // 閉じると確認事項を隠し、題（往復の番号）だけを残す。
     await summary.click();
@@ -459,7 +453,7 @@ for (const viewport of VIEWPORTS) {
     expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["25", "25"]);
     // 表示している評価は最新の評価のまま（2 ページ目を見ても変わらない）。
     await expect(page.getByTestId("evaluation-summary")).toContainText("67%");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 }
 
@@ -544,7 +538,7 @@ for (const viewport of VIEWPORTS) {
     // 公開していない変更があれば、既定は下書き。公開中の版も選べる。
     const version = page.getByTestId("evaluation-version");
     await expect(version).toContainText("下書き（公開していない変更あり）");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`evaluation-version-${viewport.name}.png`), fullPage: true });
     await version.click();
     await page.getByRole("option", { name: "公開中の版（v1）" }).click();
@@ -648,7 +642,7 @@ for (const viewport of VIEWPORTS) {
     agent.template_id = "internal-policy-helpdesk";
     await page.goto("/evaluation");
     await expect(page.getByText("この業務 Agent は業種テンプレートから作りました。")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`evaluation-from-template-${viewport.name}.png`), fullPage: true });
     await page.getByTestId("evaluation-sets-from-template").click();
     await expect(page.getByText("評価セット「社内規程の問い合わせ（テンプレート）」を作りました")).toBeVisible();
@@ -750,7 +744,7 @@ test("承認による未実行を合格率と分け、停止の期待を保存�
   await expect(page.getByText("承認で評価できなかった", { exact: true })).toBeVisible();
   await expect(page.getByText("1 件を合格率の分母から除外", { exact: true })).toBeVisible();
   await expect(page.getByText("承認で未実行（合格率から除く）", { exact: true })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: test.info().outputPath("evaluation-approval-blocked.png"), fullPage: true });
   await page.goto(`/evaluation?id=${SET.id}`);
   await page.getByTestId("evaluation-case-1-expected-approval").click();
@@ -774,7 +768,7 @@ test("実行条件の変更で無効になった評価を合格と表示しな�
   await expect(page.getByTestId("evaluation-summary")).not.toContainText("100%");
   await expect(page.getByText("うち判定できなかった 1 件（合格率から除く）", { exact: true })).toBeVisible();
   await expect(page.getByText(job.error as string, { exact: true }).first()).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.getByTestId("evaluation-summary").scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("evaluation-definition-changed.png"), fullPage: true });
 });

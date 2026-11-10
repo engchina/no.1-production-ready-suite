@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #3356: 業務 Agent が削除された・使えない会話を「会話を開く」で開いたら、既定の業務 Agent の新しい会話へ黙って
 // 切り替えず、案内を出して会話の履歴を閲覧だけで出す（#3244 の閲覧だけの会話と同じ形）。
@@ -30,13 +30,6 @@ function seedOrphanRun(mockApi: MockApi) {
   });
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 test.describe("業務 Agent が使えない会話（#3356）", { tag: "@responsive" }, () => {
   test("「会話を開く」で開くと案内を出し、会話は閲覧だけで出す。新しい会話で既定の業務 Agent に戻る", async (
     { page, mockApi },
@@ -59,7 +52,7 @@ test.describe("業務 Agent が使えない会話（#3356）", { tag: "@responsi
     await expect(agentSelect).toContainText("業務 Agent を選択");
     // 閲覧だけの会話なので、回答の評価は出さない（#3244）。
     await expect(page.getByRole("group", { name: "この回答は役に立ちましたか？" })).toHaveCount(0);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath("chat-agent-unavailable.png"), fullPage: true });
 
     // 新しい会話を始めると、使える業務 Agent の入力欄に戻る。
