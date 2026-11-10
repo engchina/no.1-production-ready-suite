@@ -592,7 +592,7 @@ export function EvaluationPage() {
                             onChange={() => toggleEngine(capability.engine)}
                           />
                           <span className="min-w-0">
-                            <span className="block font-semibold text-fg">
+                            <span className="block font-semibold text-fg [overflow-wrap:anywhere]">
                               {capability.label}
                             </span>
                             {!capability.available ? (
@@ -955,7 +955,7 @@ export function EvaluationPage() {
                       <article
                         key={job.job_id}
                         data-surface-tint={job.job_id === currentJobId ? "accent" : undefined}
-                        className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-center ${
+                        className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center ${
                           job.job_id === currentJobId
                             ? "border-accent-emphasis bg-accent-subtle"
                             : "border-border bg-surface-sunken"
@@ -963,7 +963,7 @@ export function EvaluationPage() {
                       >
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-semibold text-fg">
+                            <span className="min-w-0 font-semibold text-fg [overflow-wrap:anywhere]">
                               {profileRecordDisplayLabel(job)}
                             </span>
                             <StatusBadge

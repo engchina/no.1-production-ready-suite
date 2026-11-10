@@ -66,10 +66,6 @@ export const ja = {
   "common.leaveGuard.description":
     "保存されていない変更があります。移動すると編集内容は破棄されます。",
   "common.leaveGuard.confirm": "破棄して移動",
-  "common.cardError.title": "この項目を表示できません",
-  "common.cardError.titleWithLabel": "「{label}」を表示できません",
-  "common.cardError.description":
-    "画面の描画中に問題が発生しました。再試行しても解消しない場合は、ページを再読み込みしてください。他の項目は引き続き利用できます。",
   "common.required": "必須",
 
   "settings.preview.copy.copied": "コピーしました",
@@ -1611,7 +1607,7 @@ export const ja = {
     "RAG の内部 schema、migration、索引の状態を確認・初期化します。",
   // システムテーブルのカードは 3 製品共通（#325）。ここには RAG 固有の文言だけを置き、
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。
-  // 見出しは NL2SQL と同じ（#658）。画面の中の境界（CardErrorBoundary）の名前にも使う。
+  // 見出しは NL2SQL と同じ（#658）。画面の中の境界（RenderErrorBoundary）の名前にも使う。
   "settings.database.systemTables.title": "システムテーブル",
   "settings.database.systemTables.description":
     "RAG が使用する Oracle テーブル、ベクトル索引、Oracle Text 索引、migration の状態を確認し、管理者の明示操作で準備します。",

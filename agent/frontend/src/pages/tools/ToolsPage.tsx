@@ -127,7 +127,7 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">
           {tool.audit_tags.map((tag) => (
-            <span key={tag} className="rounded-md border border-border px-2 py-1 text-xs text-fg-muted">
+            <span key={tag} className="min-w-0 max-w-full rounded-md border border-border px-2 py-1 text-xs text-fg-muted [overflow-wrap:anywhere]">
               {tag}
             </span>
           ))}
