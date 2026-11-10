@@ -133,7 +133,7 @@ def test_evaluation_gate_cli_writes_redacted_trend_output(
     assert trend["passed"] is True
     assert trend["metrics"]["case_count"] == 1
     assert trend["metrics"]["answer_correctness"] == 1.0
-    assert trend["metrics"]["requirement_coverage"] is None
+    assert "requirement_coverage" not in trend["metrics"]
     assert trend["metrics"]["metric_case_counts"]["required_evidence_recall"] == 1
     assert "bbox_citation_coverage" not in trend["metrics"]
     assert "case_results" not in trend["metrics"]
@@ -364,7 +364,7 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
         "citation_traceability_coverage": 1.0 if passed else 0.5,
         "answer_correctness": 1.0,
         "response_decision_accuracy": 1.0 if passed else 0.0,
-        "metric_case_counts": {"required_evidence_recall": 1, "requirement_coverage": 0},
+        "metric_case_counts": {"required_evidence_recall": 1, "answer_correctness": 1},
         "passed": passed,
         "threshold_failures": failures,
         "case_results": [],

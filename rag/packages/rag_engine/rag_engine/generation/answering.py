@@ -1638,13 +1638,6 @@ def _span_document_id(span: Mapping[str, Any] | None) -> str:
     return str(scope[-1] or "") if scope else ""
 
 
-def _audit_glossary(runtime_knowledge: RuntimeKnowledgeContext | None) -> list[dict[str, Any]]:
-    """質問に当たった用語のうち別名のあるものの、名前と別名（監査の入力。#2823）。"""
-    if runtime_knowledge is None:
-        return []
-    return [{"term": term.term, "aliases": list(term.aliases)} for term in runtime_knowledge.answer_terms if term.aliases]
-
-
 def _source_question_scores(context: AnswerContext) -> dict[str, float | None]:
     """根拠の出典の ID ごとの、原質問への rerank の点数。親は親と子の最高値（#4113。分割読取で原文を補う順）。"""
     scores: dict[str, float | None] = {}
@@ -1764,7 +1757,7 @@ def synthesize_grounded_answer(
     generation_failure_stage = "answer.generate"
     generation_failure_detail: dict[str, Any] = {}
     structured_output_failed = False
-    with _execution_step("回答文の生成と根拠確認", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
+    with _execution_step("回答文の生成と引用の確認", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
         step.input(
             lambda spans=spans: {
                 "質問": question,
@@ -1819,7 +1812,6 @@ def synthesize_grounded_answer(
                 assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
                 image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 invalid_output=_invalid_structured_output,
-                glossary=_audit_glossary(runtime_knowledge),
                 confirmed_premises=settings.confirmed_premises,
                 confirmed_premise_sources=settings.confirmed_premise_sources,
                 guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),

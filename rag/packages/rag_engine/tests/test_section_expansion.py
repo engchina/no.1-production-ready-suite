@@ -10,7 +10,6 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
@@ -356,8 +355,6 @@ def test_unread_sections_make_the_answer_conditional():
         if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
             return canonical_fixture(draft)
-        if is_audit_wire(schema):
-            return legacy_audit_result(audit, schema)
         return schema.model_validate(audit)
 
     unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]

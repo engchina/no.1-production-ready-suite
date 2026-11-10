@@ -42,10 +42,7 @@ PROMPT_NAME = re.compile(
 # 一覧に載せないプロンプトの定数と、その理由。
 EDITABLE_DEFAULT = "編集できるプロンプトの既定値(画面は編集欄で示す)"
 PROBE_ONLY = "Enterprise AI の契約の確認の CLI だけ"
-UNUSED_SCREEN_JUDGE = "現行の六指標の品質評価から呼ばれない画面専用の補助判定"
 NOT_LISTED = {
-    "app.rag.evaluation_screens:SCREEN_JUDGE_SYSTEM_PROMPT": UNUSED_SCREEN_JUDGE,
-    "app.rag.evaluation_screens:SCREEN_JUDGE_PROMPT": UNUSED_SCREEN_JUDGE,
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
     # 検証・確認の CLI だけが使う(回答・取込・品質評価の経路では使わない)。
     "app.rag.enterprise_ai_probe:DEFAULT_LLM_PROMPT": PROBE_ONLY,

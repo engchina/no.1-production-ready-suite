@@ -84,7 +84,7 @@
   旧版の警告だけでは人の確認に回さない。版を比べる・旧版を尋ねる質問、旧版の版・年を名指しする質問は除く。
 - **別の資料の確認は実データではない（#1491）。** 「回答を確定するために確認すること」の「資料: …」の行（草稿の
   `reference_materials`）は `needs_environment_data` の判定に数えない（`handoff_reasons` は `reference_materials`）。
-  実行できる説明が無く、監査した要求がすべて `missing` なら、実データ・別の資料の確認があっても `insufficient_evidence`
+  実行できる説明が無く、要求がすべて `missing`（説明が無い）なら、実データ・別の資料の確認があっても `insufficient_evidence`
   にする（`rag_engine/generation/answer_envelope.py`）。業務ガイドの手順の検査（`answer_checks.check_guide_steps`）は、
   実行の指示の行だけを照らし、満たした前提の言及（「→ この前提は満たしています」「承認済み」の行と、見出しが
   「満たしている条件」などの節）を手順の実行に数えない。

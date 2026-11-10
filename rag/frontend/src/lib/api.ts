@@ -191,9 +191,6 @@ export type EvaluationFailureReason =
   | "unexpected_refusal"
   | "answer_keyword_miss"
   | "low_groundedness"
-  | "unsupported_claim"
-  | "claim_unassessed"
-  | "missing_content"
   | "answer_failed"
   | "answer_evaluation_error"
   | "answer_generation_fallback"
@@ -207,8 +204,8 @@ export type EvaluationFailureReason =
   | "screen_missing"
   | "wrong_screen"
   | "case_error";
-/** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
-export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "requirement_coverage" | "claim_support_rate" | "response_decision_accuracy";
+/** 評価の指標（#591）。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。 */
+export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "response_decision_accuracy";
 
 /** 回答の対応（#1231）。評価のケースは受け入れる対応を複数持てる。 */
 export type EvaluationOutcome =
@@ -2065,11 +2062,9 @@ export interface EvaluationRunRequestBody {
 export interface EvaluationAnswerJudgement {
   /** completed / error / input_too_large / timeout / unavailable */
   status: string;
-  /** 評価の基準の指標がすべて閾値以上か（#680）。 */
+  /** 正確性が評価の基準の閾値以上か（#680）。保存済みの古い結果は保存した合否のまま。 */
   passed: boolean | null;
-  claims_supported: boolean | null;
-  requirement_coverage: number | null;
-  missing_content: boolean | null;
+  answer_correctness?: number | null;
   message: string | null;
 }
 
@@ -2133,7 +2128,7 @@ export interface EvaluationThresholdFailure {
 }
 
 /** 評価結果。各指標は測れたケースだけの平均で、測れなかった指標は null。 */
-export type EvaluationReferenceMetricName = "evidence_coverage" | "precision_at_10" | "ndcg_at_3" | "ndcg_at_10" | "map" | "bleu_1" | "bleu_2" | "bleu_4" | "rouge_1" | "rouge_2" | "rouge_l";
+export type EvaluationReferenceMetricName = "precision_at_10" | "ndcg_at_3" | "ndcg_at_10" | "map" | "bleu_1" | "bleu_2" | "bleu_4" | "rouge_1" | "rouge_2" | "rouge_l";
 export type EvaluationMetrics = Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName, number | null>> & {
  metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
  metric_case_counts?:Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName,number>>; passed:boolean|null;
@@ -2151,8 +2146,8 @@ export interface EvaluationComparison {
   metrics: EvaluationMetrics;
 }
 
-// run: 品質評価。calibration: 判定の校正（#3578。結果は判定の校正の API で読む）。
-export type EvaluationJobKind = "run" | "calibration";
+// run: 品質評価。
+export type EvaluationJobKind = "run";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 /**
@@ -2178,231 +2173,6 @@ export interface EvaluationJob {
   /** アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。 */
   source_workbook_id: string | null;
 }
-
-// --- 品質評価: 判定の校正（#3578） ---
-
-export type CalibrationAspect = "requirement_coverage" | "answer_correctness" | "claim_support";
-export type CalibrationLabel = "pass" | "fail" | "cannot_judge";
-export type CalibrationRowStatus = "pending" | "agreed" | "disagreed" | "adjudicated";
-export type CalibrationSplit = "dev" | "holdout" | "synthetic";
-
-export interface CalibrationSourceJob {
-  job_id: string;
-  created_at: string;
-  finished_at: string | null;
-  case_count: number;
-  compared: boolean;
-}
-
-export interface CalibrationAspectCriterion {
-  aspect: CalibrationAspect;
-  metric: string;
-  criteria: string;
-  requires_standard_answer: boolean;
-}
-
-export interface CalibrationErrorType {
-  id: string;
-  group: string;
-  title: string;
-  aspects: string;
-  holdout_target: number;
-}
-
-export interface CalibrationAspectProgress {
-  aspect: CalibrationAspect;
-  rows: number;
-  labeled: number;
-  cannot_judge: number;
-  holdout_rows: number;
-  holdout_pass: number;
-  holdout_fail: number;
-}
-
-export interface CalibrationProgress {
-  aspects: CalibrationAspectProgress[];
-  error_types: { id: string; holdout_count: number }[];
-  holdout_target: number;
-  label_target: number;
-}
-
-export interface CalibrationSplitResult {
-  split: CalibrationSplit;
-  total: number;
-  judged: number;
-  coverage: number | null;
-  accuracy: number | null;
-  kappa: number | null;
-  false_pass_rate: number | null;
-  false_fail_rate: number | null;
-}
-
-export interface CalibrationAspectResult {
-  aspect: CalibrationAspect;
-  passed: boolean;
-  failures: string[];
-  splits: CalibrationSplitResult[];
-  variance: { runs: number; items: number; unstable: number; unstable_rate: number | null } | null;
-}
-
-export interface CalibrationSummary {
-  calibration_id: string;
-  label_set_id: string;
-  status: EvaluationJobStatus;
-  created_at: string;
-  finished_at: string | null;
-  repeats: number;
-  judge_model_id: string | null;
-  judge_rubric_version: string | null;
-  prompt_sha256: string | null;
-  labels_sha256: string | null;
-  passed: boolean | null;
-  error_message: string | null;
-  aspects: CalibrationAspectResult[];
-  current: boolean;
-}
-
-export interface LabelSetSummary {
-  label_set_id: string;
-  name: string;
-  origin: "jobs" | "import";
-  created_at: string;
-  human_item_count: number;
-  synthetic_item_count: number;
-  row_count: number;
-  annotator_count: number;
-  my_labeled: number;
-  resolved_rows: number;
-  created_by_me: boolean;
-  latest_calibration: CalibrationSummary | null;
-}
-
-export interface LabelSetListData {
-  items: LabelSetSummary[];
-  can_manage: boolean;
-}
-
-export interface LabelSetDetail {
-  summary: LabelSetSummary;
-  rubric_id: string;
-  rubric_version: string | null;
-  aspects: CalibrationAspectCriterion[];
-  error_types: CalibrationErrorType[];
-  my_code: string | null;
-  my_progress: CalibrationProgress;
-  final_progress: CalibrationProgress | null;
-  can_manage: boolean;
-  skipped: Record<string, number>;
-  holdout_ratio: number | null;
-}
-
-export interface CalibrationEvidence {
-  id: string;
-  text: string;
-}
-
-export interface AnnotationRow {
-  item_id: string;
-  aspect: CalibrationAspect;
-  split: "dev" | "holdout";
-  question: string;
-  answer: string;
-  standard_answer: string | null;
-  evidence: CalibrationEvidence[];
-  label: CalibrationLabel | null;
-  error_type: string | null;
-  note: string | null;
-}
-
-export interface AnnotationRowsData {
-  items: AnnotationRow[];
-  total: number;
-  offset: number;
-  limit: number;
-  unlabeled: number;
-}
-
-export interface CalibrationLabelInput {
-  item_id: string;
-  aspect: CalibrationAspect;
-  label: CalibrationLabel | null;
-  error_type?: string | null;
-  note?: string | null;
-}
-
-export interface AnnotatorLabel {
-  code: string;
-  label: CalibrationLabel;
-  error_type: string | null;
-  note: string | null;
-}
-
-export interface AspectAgreement {
-  aspect: CalibrationAspect;
-  rows: number;
-  agreed: number;
-  disagreed: number;
-  adjudicated: number;
-  pending: number;
-  pairs: { annotators: string[]; compared: number; agreement: number | null; kappa: number | null }[];
-}
-
-export interface AgreementRow {
-  item_id: string;
-  aspect: CalibrationAspect;
-  split: "dev" | "holdout";
-  status: CalibrationRowStatus;
-  question: string;
-  answer: string;
-  standard_answer: string | null;
-  evidence: CalibrationEvidence[];
-  annotations: AnnotatorLabel[];
-  final_label: CalibrationLabel | null;
-  adjudication: AnnotatorLabel | null;
-}
-
-export interface AgreementData {
-  annotators: string[];
-  aspects: AspectAgreement[];
-  rows: AgreementRow[];
-  total: number;
-  offset: number;
-  limit: number;
-}
-
-export interface SyntheticItem {
-  item_id: string;
-  base_item_id: string;
-  kind: string;
-  description: string;
-  fail_aspects: string[];
-  answer: string;
-  excluded: boolean;
-}
-
-export interface JudgeCalibrationAspectStatus {
-  aspect: CalibrationAspect;
-  metric: string;
-  calibrated: boolean;
-  kappa: number | null;
-  calibration_id: string | null;
-  calibrated_at: string | null;
-  judge_rubric_version: string | null;
-}
-
-export interface JudgeCalibrationStatus {
-  judge_model_id: string | null;
-  prompt_sha256: string;
-  aspects: JudgeCalibrationAspectStatus[];
-}
-
-export interface LabelSetCreateBody {
-  name: string;
-  job_ids: string[];
-  include_synthetic: boolean;
-}
-
-export type AgreementFilter = "all" | "disagreed" | "pending" | "agreed" | "adjudicated";
 
 // --- 設定: モデル ---
 // --- 設定: データベース ---
@@ -3531,14 +3301,6 @@ function jsonBody(body: unknown): RequestInit {
   };
 }
 
-function jsonPutBody(body: unknown): RequestInit {
-  return { ...jsonBody(body), method: "PUT" };
-}
-
-function labelSetPath(labelSetId: string): string {
-  return `/api/evaluation/calibration/label-sets/${encodeURIComponent(labelSetId)}`;
-}
-
 function supportGuidesPath(searchAnswerProfileId: string): string {
   return `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/support-guides`;
 }
@@ -4590,67 +4352,6 @@ export const api = {
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST",
     }),
-  // 品質評価: 判定の校正（#3578）。記入は自分の判定だけ、全員の判定・裁定・校正は管理の権限。
-  getJudgeCalibrationStatus: () =>
-    request<JudgeCalibrationStatus>("/api/evaluation/calibration/status"),
-  listCalibrationSources: () =>
-    request<{ jobs: CalibrationSourceJob[] }>("/api/evaluation/calibration/sources"),
-  listLabelSets: () => request<LabelSetListData>("/api/evaluation/calibration/label-sets"),
-  createLabelSet: (body: LabelSetCreateBody) =>
-    request<LabelSetSummary>("/api/evaluation/calibration/label-sets", jsonBody(body)),
-  importLabelSet: (file: File) => {
-    const body = new FormData();
-    body.append("file", file);
-    return request<{ label_set: LabelSetSummary; imported_items: number; imported_labels: number }>(
-      "/api/evaluation/calibration/label-sets/import",
-      { method: "POST", body }
-    );
-  },
-  deleteLabelSet: (labelSetId: string) =>
-    request<{ deleted: boolean }>(labelSetPath(labelSetId), { method: "DELETE" }),
-  getLabelSet: (labelSetId: string) => request<LabelSetDetail>(labelSetPath(labelSetId)),
-  listAnnotationRows: (
-    labelSetId: string,
-    params: { aspect?: string; status?: "all" | "unlabeled" | "labeled"; offset: number; limit: number }
-  ) => {
-    const query = new URLSearchParams();
-    if (params.aspect) query.set("aspect", params.aspect);
-    if (params.status) query.set("status", params.status);
-    query.set("offset", String(params.offset));
-    query.set("limit", String(params.limit));
-    return request<AnnotationRowsData>(`${labelSetPath(labelSetId)}/rows?${query.toString()}`);
-  },
-  saveCalibrationLabel: (labelSetId: string, body: CalibrationLabelInput) =>
-    request<CalibrationProgress>(`${labelSetPath(labelSetId)}/labels`, jsonPutBody(body)),
-  getCalibrationAgreement: (
-    labelSetId: string,
-    params: { aspect?: string; status: AgreementFilter; offset: number; limit: number }
-  ) => {
-    const query = new URLSearchParams();
-    if (params.aspect) query.set("aspect", params.aspect);
-    query.set("status", params.status);
-    query.set("offset", String(params.offset));
-    query.set("limit", String(params.limit));
-    return request<AgreementData>(`${labelSetPath(labelSetId)}/agreement?${query.toString()}`);
-  },
-  saveCalibrationAdjudication: (labelSetId: string, body: CalibrationLabelInput) =>
-    request<AgreementData>(`${labelSetPath(labelSetId)}/adjudications`, jsonPutBody(body)),
-  listSyntheticItems: (labelSetId: string) =>
-    request<{ items: SyntheticItem[] }>(`${labelSetPath(labelSetId)}/synthetic`),
-  setSyntheticExcluded: (labelSetId: string, itemId: string, excluded: boolean) =>
-    request<SyntheticItem>(
-      `${labelSetPath(labelSetId)}/synthetic/${encodeURIComponent(itemId)}`,
-      jsonPutBody({ excluded })
-    ),
-  listCalibrations: (labelSetId: string) =>
-    request<{ items: CalibrationSummary[] }>(`${labelSetPath(labelSetId)}/calibrations`),
-  startCalibration: (labelSetId: string, repeats: number) =>
-    request<{ job: EvaluationJob; calibration: CalibrationSummary }>(
-      `${labelSetPath(labelSetId)}/calibrations`,
-      jsonBody({ repeats })
-    ),
-  downloadLabelSet: (labelSetId: string) =>
-    requestFile(`${labelSetPath(labelSetId)}/export?language=ja`, `labels-${labelSetId.slice(0, 8)}.json`),
 
   // 設定: モデル
   getModelSettings: (options: SettingsRequestOptions = {}) =>

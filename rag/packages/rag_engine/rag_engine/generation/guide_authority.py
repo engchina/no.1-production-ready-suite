@@ -1,4 +1,4 @@
-"""業務ガイドの要求範囲を、資料適用・主張支持の監査から独立して記録する。"""
+"""業務ガイドの要求範囲を、資料の適用から独立して記録する。"""
 
 from collections.abc import Sequence
 from copy import deepcopy

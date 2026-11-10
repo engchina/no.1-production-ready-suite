@@ -148,7 +148,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     from app import config as app_config
     from app.api.routes import settings as settings_routes
     from app.config import get_settings
-    from app.rag.guardrail_adapter import reset_guardrail_static_cache
     from app.rag.rate_limit import reset_rate_limiter
     from app.rag.vector_index_adapter import reset_vector_index_static_cache
     from app.security.service import set_security_service
@@ -170,7 +169,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY", raising=False)
     set_security_service(None)
     reset_rate_limiter()
-    reset_guardrail_static_cache()
     reset_vector_index_static_cache()
     _reset_runtime_settings(get_settings(), tmp_path)
     # サービス管理の systemctl / journalctl / sudo は実行しない(手元の systemd を触らない。#286)。

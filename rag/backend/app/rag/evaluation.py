@@ -1,7 +1,7 @@
-"""RAG の六指標評価。検索二・回答三・応答の判断一を独立して集計する。
+"""RAG の四指標評価。検索二・回答一・応答の判断一を独立して集計する。
 
-必要な根拠は本文・位置、MRR は重複を除いた引用文書の順位、回答は意味上の正確性・網羅性・
-主張の支持を測る。期待する応答の判断は明示入力だけを使う。前提不足は None とし平均に入れない。
+必要な根拠は本文・位置、MRR は重複を除いた引用文書の順位、回答は標準回答に照らした意味上の
+正確性を測る。期待する応答の判断は明示入力だけを使う。前提不足は None とし平均に入れない。
 会話の履歴・条件・区分・種類別の内訳を保ち、実行エラーと評価の未完了を合格にしない。"""
 
 import asyncio
@@ -40,7 +40,7 @@ from pr_evaluation_scoring import (
     unique_in_order,
 )
 from pydantic import ValidationError
-from rag_engine.evaluation.answer_eval import scored_answer_text, standard_scope_cache
+from rag_engine.evaluation.answer_eval import scored_answer_text
 from rag_engine.resources.shared_cache import bypass_shared_cache
 from rag_engine.retrieval.text_search_tokenizer import surface_tokens
 
@@ -55,11 +55,7 @@ from app.config import (
 )
 from app.rag.answer_engine import answer_model_of, evaluate_answer_record
 from app.rag.answer_failure import describe_answer_failure
-from app.rag.answer_metrics import (
-    REFERENCE_ONLY_METRICS,
-    claims_supported,
-    is_abstained_answer,
-)
+from app.rag.answer_metrics import is_abstained_answer
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
@@ -144,10 +140,10 @@ class SearchPipeline(Protocol):
 
 
 class AnswerJudge(Protocol):
-    """標準回答で回答を評価する(LLM を複数回呼ぶ)。
+    """標準回答で回答を評価する(正確性の判定の LLM を 1 回呼ぶ)。
 
-    戻り値は `evaluate_answer_record` の結果(status / passed / metrics / claim_checks /
-    coverage_checks / requirement_coverage など。#680)。時間切れは TimeoutError を送出する。
+    戻り値は `evaluate_answer_record` の結果(status / passed / metrics / answer_correctness /
+    correctness_reason など。#680)。時間切れは TimeoutError を送出する。
     ``judge_model_id`` は判定に使うモデル(#3574。runner が回答を作ったモデルから解決した ID)。
     """
 
@@ -157,7 +153,6 @@ class AnswerJudge(Protocol):
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:
@@ -194,7 +189,6 @@ async def judge_answer_with_standard(
     trace_id: str,
     evaluation_input: Mapping[str, object],
     standard_answer: str,
-    citations: Sequence[RetrievedChunk],
     timeout_seconds: float,
     settings: Settings | None = None,
     judge_model_id: str | None = None,
@@ -214,7 +208,6 @@ async def judge_answer_with_standard(
             evaluation_input,
             standard_answer,
             resolved,
-            citations=citations,
             judge_model_id=judge_model_id,
             timeout_seconds=limit,
         ),
@@ -226,7 +219,7 @@ async def judge_answer_with_standard(
         "evaluated_at": datetime.now(UTC).isoformat(),
     }
     try:
-        # 回答の記録の画面から、指標ごとの値・主張ごとの判定を確かめられるようにする。
+        # 回答の記録の画面から、正確性の値と判定の理由を確かめられるようにする。
         await OracleClient(settings=resolved).save_answer_evaluation(trace_id, saved)
     except Exception as exc:  # noqa: BLE001 - 保存は補助。評価の結果は返す。
         logger.info(
@@ -340,11 +333,9 @@ class EvaluationRunner:
         設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
 
         条の選択の process をまたぐ記録（#3507）は読みも書きもしない（同じ質問の再実行でも
-        実際の費用を測る。process の中の記録は回答と同じに使う）。標準回答の比較範囲は、
-        同じ評価の中（比較の pass を含む）で質問・標準回答・判定のモデルごとに 1 回だけ
-        固定する（#3570）。
+        実際の費用を測る。process の中の記録は回答と同じに使う）。
         """
-        with bypass_shared_cache(), standard_scope_cache():
+        with bypass_shared_cache():
             return await self._run(
                 cases,
                 top_k,
@@ -618,25 +609,21 @@ class EvaluationRunner:
 
         ``judge_model_id`` は判定のモデル(#3574)。判定を完了できなかったケースにも残す。
         """
-        if not (
-            case.standard_answer
-            or case.required_answer_points
-            or case.required_conditions
-            or response.citations
-        ):
+        standard_answer = "\n".join(
+            filter(
+                None,
+                [
+                    case.standard_answer or "",
+                    *case.required_answer_points,
+                    *case.required_conditions,
+                ],
+            )
+        )
+        if not standard_answer:
             return None
         evaluation_input = response.evaluation_input or {
             "question": case.query,
             "answer_text": response.answer,
-            "evidence_items": [
-                {
-                    "id": item.chunk_id,
-                    "chunk_uid": item.chunk_id,
-                    "source": item.file_name or item.document_id,
-                    "text": item.text,
-                }
-                for item in response.citations
-            ],
         }
         if self._answer_judge is None:
             return None
@@ -650,23 +637,12 @@ class EvaluationRunner:
                 judge_model_id=judge_model_id,
             )
         judge = self._answer_judge
-        standard_answer = "\n".join(
-            filter(
-                None,
-                [
-                    case.standard_answer or "",
-                    *case.required_answer_points,
-                    *case.required_conditions,
-                ],
-            )
-        )
 
         async def judge_once(_attempt: Attempt) -> Mapping[str, object]:
             return await judge(
                 trace_id=response.trace_id,
                 evaluation_input=evaluation_input,
                 standard_answer=standard_answer,
-                citations=response.citations,
                 timeout_seconds=timeout,
                 judge_model_id=judge_model_id,
             )
@@ -690,19 +666,9 @@ class EvaluationRunner:
                 message=ANSWER_JUDGE_ERROR_MESSAGE,
                 judge_model_id=judge_model_id,
             )
-        summary = summarize_answer_judgement(evaluation).model_copy(
+        return summarize_answer_judgement(evaluation).model_copy(
             update={"judge_model_id": judge_model_id}
         )
-        if not standard_answer:
-            return summary.model_copy(
-                update={
-                    "answer_correctness": None,
-                    "requirement_coverage": None,
-                    "missing_content": None,
-                    "missing_follow_up_content": None,
-                }
-            )
-        return summary
 
 
 def _judge_model_id(settings: Settings, response: SearchResponse, answer_settings: Settings) -> str:
@@ -762,7 +728,6 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:
@@ -770,7 +735,6 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
             trace_id=trace_id,
             evaluation_input=evaluation_input,
             standard_answer=standard_answer,
-            citations=citations,
             timeout_seconds=timeout_seconds,
             settings=settings,
             judge_model_id=judge_model_id,
@@ -780,7 +744,7 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
 
 
 def _judge_diagnostics(evaluation: Mapping[str, object]) -> EvaluationJudgeDiagnostics | None:
-    """判定の診断（比較範囲の使い回し・再試行の回数）。記録が無い・形が違えば None。"""
+    """判定の診断（呼び出しと再試行の回数）。記録が無い・形が違えば None。"""
     value = evaluation.get("judge_diagnostics")
     if not isinstance(value, Mapping):
         return None
@@ -788,38 +752,6 @@ def _judge_diagnostics(evaluation: Mapping[str, object]) -> EvaluationJudgeDiagn
         return EvaluationJudgeDiagnostics.model_validate(value)
     except ValidationError:
         return None
-
-
-def _requirement_relevances(evaluation: Mapping[str, object]) -> list[str]:
-    """比較範囲の項目ごとの relevance（required / follow_up。項目の番号 - 1 の位置。#4062）。"""
-    scope = evaluation.get("standard_answer_scope")
-    requirements = scope.get("requirements") if isinstance(scope, Mapping) else None
-    return [
-        str(item.get("relevance") or "required") if isinstance(item, Mapping) else "required"
-        for item in (requirements if isinstance(requirements, list) else [])
-    ]
-
-
-def _check_relevance(check: Mapping[str, object], relevances: Sequence[str]) -> str:
-    """網羅の判定の項目の relevance。比較範囲に無い・番号が無い判定は required とみなす。"""
-    index = check.get("requirement_index")
-    if isinstance(index, int) and not isinstance(index, bool) and 0 < index <= len(relevances):
-        return relevances[index - 1]
-    return "required"
-
-
-def _has_missing(
-    coverage_checks: Sequence[Mapping[str, object]], relevances: Sequence[str], relevance: str
-) -> bool:
-    """その relevance の項目に、説明の無い（missing）項目があるか。
-
-    ``missing_content``（失敗理由）は requirement_coverage と同じく原質問に必要な項目（required）
-    だけで決める。追加相談（follow_up）の欠落は指標・合否に入らない参考なので、失敗理由にしない（#4062）。
-    """
-    return any(
-        str(check.get("status")) == "missing" and _check_relevance(check, relevances) == relevance
-        for check in coverage_checks
-    )
 
 
 def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAnswerJudgement:
@@ -833,25 +765,11 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
             message=str(message) if message else ANSWER_JUDGE_ERROR_MESSAGE,
             judge_diagnostics=diagnostics,
         )
-    claims = [
-        claim for claim in _mapping_list(evaluation.get("claim_checks")) if claim.get("status")
-    ]
-    coverage_checks = _mapping_list(evaluation.get("coverage_checks"))
-    relevances = _requirement_relevances(evaluation)
-    coverage = _optional_float(evaluation.get("requirement_coverage"))
     passed = evaluation.get("passed")
     return EvaluationAnswerJudgement(
         status="completed",
         passed=passed if isinstance(passed, bool) else None,
-        claims_supported=claims_supported(claims),
         answer_correctness=_optional_float(evaluation.get("answer_correctness")),
-        claim_support_rate=_optional_float(evaluation.get("claim_support_rate")),
-        evidence_coverage=_optional_float(evaluation.get("evidence_coverage")),
-        requirement_coverage=(
-            round(min(1.0, max(0.0, coverage)), 4) if coverage is not None else None
-        ),
-        missing_content=_has_missing(coverage_checks, relevances, "required"),
-        missing_follow_up_content=_has_missing(coverage_checks, relevances, "follow_up"),
         message=str(message) if message else None,
         judge_diagnostics=diagnostics,
     )
@@ -1080,12 +998,6 @@ def _case_result(
             failure_reasons.append("answer_evaluation_error")
         if judgement.answer_correctness is not None and judgement.answer_correctness < 1:
             failure_reasons.append("answer_failed")
-        if judgement.missing_content:
-            failure_reasons.append("missing_content")
-        if judgement.claim_support_rate is not None and judgement.claim_support_rate < 1:
-            failure_reasons.append("unsupported_claim")
-        if judgement.claims_supported is None and judgement.status == "completed":
-            failure_reasons.append("claim_unassessed")
     # 退避した回答は成功の生成に数えない（#4104）。status は評価の処理の完了のまま。
     if any((run.response.diagnostics.answer or {}).get("generation_failure") for run in runs):
         failure_reasons.append("answer_generation_fallback")
@@ -1100,9 +1012,6 @@ def _case_result(
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=unique_in_order(hits),
         mrr=rank,
-        requirement_coverage=judgement.requirement_coverage if judgement else None,
-        claim_support_rate=judgement.claim_support_rate if judgement else None,
-        evidence_coverage=judgement.evidence_coverage if judgement else None,
         answer_correctness=judgement.answer_correctness if judgement else None,
         response_decision_accuracy=_bool_value(all(decisions)) if decisions else None,
         expected_decisions=sorted(case_decisions),
@@ -1197,13 +1106,7 @@ def _accumulate_case_metrics(aggregate: MetricAggregate, result: EvaluationCaseR
     aggregate.add("answer_correctness", result.answer_correctness)
     aggregate.add("response_decision_accuracy", result.response_decision_accuracy)
     for name in EVALUATION_REPORT_ONLY_METRIC_NAMES:
-        if name != "evidence_coverage":
-            aggregate.add(name, getattr(result, name))
-    judgement = result.answer_evaluation
-    if judgement is not None and judgement.status == "completed":
-        aggregate.add("claim_support_rate", judgement.claim_support_rate)
-        aggregate.add("requirement_coverage", judgement.requirement_coverage)
-        aggregate.add("evidence_coverage", judgement.evidence_coverage)
+        aggregate.add(name, getattr(result, name))
 
 
 def _deadline(time_budget_seconds: float | None) -> float | None:
@@ -1332,19 +1235,8 @@ def _threshold_failures(
     thresholds: EvaluationThresholds | None,
     aggregate_values: Mapping[str, float | None],
 ) -> list[ThresholdFailure]:
-    """設定された最低閾値を下回った aggregate metric（測れなかった指標は判定しない）。
-
-    参考だけの指標（REFERENCE_ONLY_METRICS）は閾値を目安として表示し、合否に使わない（#711）。
-    """
-    return threshold_failures(
-        _threshold_values(thresholds), aggregate_values, reference_only=REFERENCE_ONLY_METRICS
-    )
-
-
-def _mapping_list(value: object) -> list[Mapping[str, object]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, Mapping)]
+    """設定された最低閾値を下回った aggregate metric（測れなかった指標は判定しない）。"""
+    return threshold_failures(_threshold_values(thresholds), aggregate_values)
 
 
 def _optional_float(value: object) -> float | None:
@@ -1384,7 +1276,7 @@ def decision_breakdown(
 
 
 def category_breakdown(results: list[EvaluationCaseResult]) -> dict[str, EvaluationCategorySummary]:
-    """ケース分類別の件数。指標は六指標の集計に統一する。"""
+    """ケース分類別の件数。指標は四指標の集計に統一する。"""
     if not any(item.category for item in results):
         return {}
     grouped: dict[str, list[EvaluationCaseResult]] = {}

@@ -173,8 +173,6 @@ function metrics(overrides: Record<string, unknown>, caseOverrides: Record<strin
       mrr: 1,
       response_decision_accuracy: 1,
       answer_correctness: 1,
-      requirement_coverage: 1,
-      claim_support_rate: 1,
     },
     passed: true,
     threshold_failures: [],
@@ -197,6 +195,7 @@ for (const viewport of [
     const jobs = await mockEvaluationJobs(page, {
       runResult: () => ({
         ...metrics(
+          // requirement_coverage・claim_support_rate は保存済みの古い結果に残る値（#4781。画面には出さない）。
           { answer_correctness: 0, requirement_coverage: 0, claim_support_rate: 0, failure_reason_counts: { answer_failed: 1 } },
           {
             screen_match: false,
@@ -281,17 +280,16 @@ for (const viewport of [
     const correctnessRow=table.getByRole("row",{name:/回答の正確性/});
     await expect(correctnessRow).toContainText("+100pt");
     await expect(correctnessRow).toContainText("改善");
-    const coverageRow=table.getByRole("row",{name:/回答の網羅性/});
-    await expect(coverageRow).toContainText("+100pt");
-    await expect(coverageRow).toContainText("改善");
+    // 古い結果に残る網羅・裏付けの値は、比べる表にも指標の欄にも出さない（#4781）。
+    await expect(table.getByRole("row",{name:/回答の網羅性|根拠への忠実性/})).toHaveCount(0);
     await expect(table.getByRole("row",{name:/必要な根拠の取得率/})).toContainText("変化なし");
-    await expect(table.getByRole("row")).toHaveCount(7);
+    await expect(table.getByRole("row")).toHaveCount(5);
     await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);
     await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("0%");
-    await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toContainText("0%");
+    await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toHaveCount(0);
+    await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toHaveCount(0);
     await page.getByRole("tab",{name:"検索・回答プロファイル: プロファイル B"}).click();
     await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("100%");
-    await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toContainText("100%");
     await expectNoPageOverflow(page);
   });
 }
@@ -319,7 +317,7 @@ test("比べないときは比べる表とタブを出さず、下書きは使�
   expect((payload.cases as Record<string, unknown>[])[0]).not.toHaveProperty("required_conditions");
   await expect(page.getByTestId("evaluation-perspective-retrieval")).toBeVisible();
   await expect(page.getByTestId("evaluation-compare-table")).toHaveCount(0);
-  // ページのタブ（評価の実行 / 判定の校正。#3578）のほかに、比べる結果のタブは出さない。
+  // ページのタブ（評価の実行 / テストセットの作成）のほかに、比べる結果のタブは出さない。
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab", { name: "評価の実行" })).toHaveAttribute("aria-selected", "true");
 });

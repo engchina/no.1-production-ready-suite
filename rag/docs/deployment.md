@@ -2134,4 +2134,14 @@ SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
 CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選択（`query.route` / `query.expand`）、小問の事前計画（`answer.scope`）を削除し、回答の流れを 1 本（検索して生成）にした。未リリースのため互換を持たない。
 
 - 削除した設定（`backend/.env` に残っていても読まない）: `RAG_ANSWER_FLOW`・`RAG_QUERY_STRATEGY`・`RAG_QUERY_EXPANSION_MAX_QUERIES`・`RAG_CRAG_*`・`RAG_SECTION_SKIP_REGRADE_AT_SCOPE`・`RAG_STRATEGY_REASONING_EFFORT`・`RAG_JUDGE_REASONING_EFFORT`。保存された検索・回答プロファイルの `query_strategy` / `answer_flow` の値は読み捨てられ、次の保存で消える。
-- データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれない。
+- データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれず、#4781 の migration が消す。
+
+### 品質評価の判定を正確性の 1 本にし、判定の校正を削除する（#4781）
+
+品質評価の LLM の判定を正確性（`evaluation.correctness`）の 1 本にし、判定の校正（人手の判定との一致を測る機能。#3578）を削除した。未リリースのため後方互換は持たない。
+
+- **migration `20261110_4781_retire_evaluation_calibration` と `20261110_4781_retire_removed_answer_prompts` はデータを削除する。** 承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る（上の「既存環境の更新手順の共通の注意」）。
+  - 前者は判定の校正の表（`RAG_EVALUATION_LABEL_SETS`・`RAG_EVALUATION_LABEL_ITEMS`・`RAG_EVALUATION_LABELS`・`RAG_EVALUATION_CALIBRATIONS`）を削除し、校正の job の行（`RAG_EVALUATION_JOBS` の `kind = 'calibration'`）とロールの権限の「判定の校正の管理」（`rag.evaluation_calibration.manage`）の行を削除する。人手の判定を残すなら、適用の前に 4 表を export する。
+  - 後者は `RAG_ANSWER_PROMPTS` から、評価の判定の 5 本（`evaluation.scope`・`evaluation.coverage`・`evaluation.claim`・`evaluation.evidenceCoverage`・`evaluation.absenceScope`）と #4749 で読まれなくなった `crag.*`・`routing.*`・`expansion.*`・`generation.instruction`・`generation.plannedSystem` の行だけを削除する。保存した文を残すなら、適用の前に同表を export する。
+- 品質評価の job・ケースごとの結果・回答の記録は削除しない。過去の結果の網羅・裏付けの値は DB に残るが、画面と結果の Excel には出さない。合否は保存した値のまま出す。
+- テストセットの作成のタブの URL は `/evaluation?tab=testsets` になった（`?tab=calibration` のブックマークは評価の実行のタブを開く）。

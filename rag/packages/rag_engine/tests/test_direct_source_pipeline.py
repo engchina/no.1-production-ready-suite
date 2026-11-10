@@ -2,8 +2,6 @@
 
 import re
 
-from audit_fixtures import is_explanation_schema, synthetic_explanation
-
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
@@ -16,8 +14,6 @@ def run(*, derived: bool, readback: str | None = None):
 
     def parse(system, prompt, config, schema, **options):
         calls.append(schema.__name__)
-        if is_explanation_schema(schema):
-            return synthetic_explanation(schema, prompt)
         ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
         assert ids
         direct = (

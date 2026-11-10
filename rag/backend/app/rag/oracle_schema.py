@@ -17,7 +17,6 @@ from typing import Any
 from app.clients.document_category_store import oracle_document_category_schema_sql
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
-from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
 from app.clients.evaluation_testset_store import oracle_evaluation_testset_schema_sql
 from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
 from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
@@ -428,12 +427,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_evaluation_job_case_results",
             sql=oracle_evaluation_job_case_result_schema_sql(),
         ),
-        # 品質評価の判定の校正（記入の集合・項目・判定・校正の結果。#3578）。
-        OracleSchemaSection(
-            name="evaluation_calibration",
-            table_name="rag_evaluation_label_sets",
-            sql=oracle_evaluation_calibration_schema_sql(),
-        ),
         OracleSchemaSection(
             name="evaluation_testsets",
             table_name="rag_evaluation_testsets",
@@ -649,20 +642,6 @@ END;
             name="20261022_001_cited_evidence",
             table_name="rag_answer_records",
             sql=cited_evidence_migration_sql(),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
-            name="20261026_001_evaluation_calibration",
-            table_name="rag_evaluation_label_sets",
-            sql=evaluation_calibration_migration_sql(),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
-            name="20261026_002_evaluation_job_calibration_kind",
-            table_name="rag_evaluation_jobs",
-            sql=evaluation_job_calibration_kind_migration_sql(),
         )
     )
     sections.append(
@@ -1011,6 +990,34 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4781_retire_evaluation_calibration",
+            table_name="rag_evaluation_jobs",
+            sql=retire_evaluation_calibration_sql(),
+            destructive_note=(
+                "品質評価の判定の校正をやめたため、校正の表（RAG_EVALUATION_CALIBRATIONS・"
+                "RAG_EVALUATION_LABELS・RAG_EVALUATION_LABEL_ITEMS・RAG_EVALUATION_LABEL_SETS）を"
+                "行ごと削除し、校正の job の行（RAG_EVALUATION_JOBS の kind が calibration）と、"
+                "ロールの権限（RAG_ROLE_PERMISSIONS）の「判定の校正の管理」の行を削除します。"
+                "品質評価の job・ケースごとの結果・回答の記録は変えません。人手の判定を残す必要が"
+                "あれば適用前に同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4781_retire_removed_answer_prompts",
+            table_name="rag_answer_prompts",
+            sql=retire_removed_answer_prompts_sql(),
+            destructive_note=(
+                "保存した指示（RAG_ANSWER_PROMPTS）から、工程を消して読まれなくなったキーの行を"
+                "削除します: " + "・".join(RETIRED_ANSWER_PROMPT_KEYS) + "。ほかのキーの行と、"
+                "品質評価の結果・回答の記録は変えません。保存した文を残す必要があれば適用前に"
+                "同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
     return sections
 
 
@@ -1147,15 +1154,6 @@ WHERE prompt_key = 'raptor_summary';
 """.strip()
 
 
-def evaluation_calibration_migration_sql() -> str:
-    """判定の校正の表（記入の集合・項目・判定・校正の結果）と索引を無ければ作る（#3578）。
-
-    表と索引を足すだけでデータは変えない。DDL は正本
-    （``oracle_evaluation_calibration_schema_sql``）から作る。
-    """
-    return _create_missing_objects_sql(oracle_evaluation_calibration_schema_sql(), "判定の校正")
-
-
 def evaluation_job_case_results_migration_sql() -> str:
     """品質評価の job のケースごとの結果の表を無ければ作る（#4208）。
 
@@ -1206,16 +1204,57 @@ END;
     return f"{objects}\n\n{column}"
 
 
-def evaluation_job_calibration_kind_migration_sql() -> str:
-    """品質評価の job の kind に判定の校正（``calibration``）を足す（#3578）。
+# 工程を消して読まれなくなった指示の保存キー（#4749 の検索の振り分け・質問の広げ直し・旧い生成の
+# 指示と、#4781 の評価の判定 5 本）。一覧を変えると migration の checksum も変わる。
+RETIRED_ANSWER_PROMPT_KEYS: tuple[str, ...] = (
+    "evaluation.scope",
+    "evaluation.coverage",
+    "evaluation.claim",
+    "evaluation.evidenceCoverage",
+    "evaluation.absenceScope",
+    "crag.system",
+    "crag.template",
+    "routing.system",
+    "routing.template",
+    "expansion.system",
+    "expansion.template",
+    "generation.instruction",
+    "generation.plannedSystem",
+)
 
-    CHECK 制約を作り直すだけで行は変えない。表が無ければ何もしない（冪等）。
+
+def retire_removed_answer_prompts_sql() -> str:
+    """読まれなくなった指示の保存値だけを消す。ほかのキーの行は変えない（#4781）。"""
+    keys = ", ".join(f"'{key}'" for key in RETIRED_ANSWER_PROMPT_KEYS)
+    return f"DELETE FROM rag_answer_prompts WHERE prompt_key IN ({keys});"
+
+
+def retire_evaluation_calibration_sql() -> str:
+    """判定の校正の表・job・権限の行を消し、job の kind を run だけに戻す（#4781）。
+
+    表・制約が無い環境でも適用できる（冪等）。品質評価の job と結果の行は変えない。
     """
     return """DECLARE
     v_count NUMBER;
 BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables
+        WHERE table_name IN (
+            'RAG_EVALUATION_CALIBRATIONS', 'RAG_EVALUATION_LABELS',
+            'RAG_EVALUATION_LABEL_ITEMS', 'RAG_EVALUATION_LABEL_SETS'
+        )
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'DELETE FROM rag_role_permissions WHERE permission_code = :1'
+            USING 'rag.evaluation_calibration.manage';
+    END IF;
     SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
     IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DELETE FROM rag_evaluation_jobs WHERE kind = :1' USING 'calibration';
         SELECT COUNT(*) INTO v_count
         FROM user_constraints
         WHERE table_name = 'RAG_EVALUATION_JOBS'
@@ -1226,7 +1265,7 @@ BEGIN
         END IF;
         EXECUTE IMMEDIATE
             'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
-            || 'CHECK (kind IN (''run'', ''calibration''))';
+            || 'CHECK (kind IN (''run''))';
     END IF;
 END;
 /"""

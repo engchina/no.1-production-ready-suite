@@ -31,10 +31,7 @@ METRICS = (
     ("required_evidence_recall", "required_evidence_recall", "必要な根拠の取得率"),
     ("mrr", "mrr", "正解文書の順位（MRR）"),
     ("answer_correctness", "answer_correctness", "回答の正確性"),
-    ("requirement_coverage", "requirement_coverage", "回答の網羅性"),
-    ("claim_support_rate", "claim_support_rate", "根拠への忠実性"),
     ("response_decision_accuracy", "response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
-    ("evidence_coverage", "evidence_coverage", "根拠の網羅率（参考）"),
     ("precision_at_10", "precision_at_10", "Precision@10（参考）"),
     ("ndcg_at_3", "ndcg_at_3", "NDCG@3（参考）"),
     ("ndcg_at_10", "ndcg_at_10", "NDCG@10（参考）"),
@@ -63,6 +60,7 @@ FAILURE_REASONS = {
     "unexpected_refusal": "答えるべき質問に答えなかった",
     "answer_keyword_miss": "期待する語が無い",
     "low_groundedness": "根拠に無い語が多い",
+    # 次の 3 つは新しい評価では出ない。保存済みの結果に残る理由の表示のために残す（#4781）。
     "claim_unassessed": "主張の支持を確認できていない",
     "unsupported_claim": "根拠のない主張がある",
     "missing_content": "標準回答の必要な項目が抜けている",

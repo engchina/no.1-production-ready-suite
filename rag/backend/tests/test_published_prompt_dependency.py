@@ -42,7 +42,6 @@ async def _request(app: FastAPI, method: str, path: str) -> httpx.Response:
         ("POST", "/api/search"),
         ("PUT", "/api/documents/d1"),
         ("PATCH", "/api/history/run-a"),
-        ("GET", "/api/evaluation/calibration/sets"),
     ],
 )
 async def test_failed_read_never_runs_downstream(

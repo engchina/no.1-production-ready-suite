@@ -6,7 +6,6 @@ from dataclasses import replace
 from typing import Any
 
 from application_verdict_stub import audit_reply, is_application_schema
-from audit_fixtures import is_explanation_schema, synthetic_explanation
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -55,8 +54,6 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         if is_application_schema(schema):
             return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
-        if is_explanation_schema(schema):
-            return synthetic_explanation(schema, prompt)
         prompts.append(prompt)
         return generated_fixture(schema, prompt, next(values))
 

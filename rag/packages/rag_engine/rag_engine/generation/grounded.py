@@ -478,7 +478,7 @@ def _original_range(quote: str, text: str) -> str:
 
 # 構造化出力の文字列の中で、改行・タブが二重に escape されて残った字（「\\n」の 2 字。#112）。
 _ESCAPED_BREAK = re.compile(r"\\r\\n|\\[nrt]")
-# 監査モデルが原文の離れた箇所（表の行・各 chunk の見出し）をつなぐ「 / 」（前後に空白のある斜線。#119）。
+# モデルが原文の離れた箇所（表の行・各 chunk の見出し）をつなぐ「 / 」（前後に空白のある斜線。#119）。
 _SLASH_JOIN = re.compile(r"\s+[/／]\s+")
 # 「 / 」でつないだ断片として受け入れる最小の文字数（空白・記号を除く。「第3条(出張旅費)」が 7）。短い断片（「一般社員」「15,000円」）は
 # 表の離れたセルを組み替えて区分と値を取り違えた引用でも原文に見つかるので、行・見出しの長さに限る。
@@ -490,7 +490,7 @@ def _original_quote(quote: str, text: str) -> str:
 
     連続範囲として一致しない複数行の引用は、各行が同じ原文の連続範囲なら受け入れる。図や表では見出しと
     内容が読み順で離れ、モデルは同じ根拠の2か所を改行で継ぎ合わせて引用する。どの行も原文そのままなので
-    推測は含まない。言い換えを支持するかどうかは item 単位の監査が判断する。
+    推測は含まない。言い換えが原文を支持するかの判断は生成のモデルの責務で、ここでは見ない。
 
     モデルの構造化出力が改行を二重に escape し、引用に「\\n」の 2 字（逆斜線と n）が残ることがある（実モデルで
     1 回の応答のすべての引用に起きた。#112）。原文にその 2 字が無く、そのままでは照合できないときだけ、改行と
@@ -551,7 +551,7 @@ def _elided_quote(quote: str, text: str) -> str:
 def _slash_joined_quote(quote: str, text: str) -> str:
     """「 / 」でつないだ引用を、断片ごとに原文と照合します（#119）。
 
-    監査モデルは表の離れた行や複数の見出しを `A / B` とつないで写す（行の順を入れ替えることもある）。改行で
+    モデルは表の離れた行や複数の見出しを `A / B` とつないで写す（行の順を入れ替えることもある）。改行で
     つないだ複数行の引用と同じく、各断片が原文そのままなら受け入れ、読み順は問わない。省略記号・改行も断片の
     区切りにする。断片の語の並びは変えないので、区切りの斜線を落とした引用・値を入れ替えた引用は通さない。
     断片は行・見出しの長さ（`_MIN_JOINED_FRAGMENT_CHARS`）に限る（短いセルの組み替えを通さない）。
@@ -593,7 +593,7 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
     """render() が「参考情報」の節（answer_labels().quote_only_section）に出した、原文のみ提示の行を返します。
 
     これらは決定的な原文照合を通った引用をそのまま示した行で、モデルの主張を含まない。見出し行・出典行と
-    同じく主張監査の対象にしない。他の節の「…」で始まる行は、モデルの言い換えであり得るので含めない。
+    同じく評価の対象にしない。他の節の「…」で始まる行は、モデルの言い換えであり得るので含めない。
     適用が未確認の説明も同じ節に原文の引用で出す（#2213）。「…」でない箇条の行は含めない (#2040)。
     """
     lines: set[str] = set()
@@ -625,7 +625,7 @@ def generated_section_lines(answer_text: str) -> set[str]:
     """render() がシステムの節に出した行を返します。
 
     「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節（回答に入っていない範囲の案内。#2040）の行です。
-    システムが書いた行で、本文の主張ではない。見出し行と同じく、主張監査・評価・
+    システムが書いた行で、本文の主張ではない。見出し行と同じく、評価・
     指標の対象にしない。
     """
     labels = answer_labels()
@@ -902,7 +902,7 @@ def _plan_marks_unrelated(item: GroundedItem, span: dict, draft: GroundedDraft, 
     return False
 
 
-# 1 つの説明に付ける出典の上限（#3526）。超えた分は照合しない（出典ごとに検査・監査するため）。
+# 1 つの説明に付ける出典の上限（#3526）。超えた分は照合しない（出典ごとに検査するため）。
 MAX_ITEM_CITATIONS = 4
 
 CitationCheck = tuple[CheckedItem | None, list[dict]]
@@ -1243,7 +1243,7 @@ def _citation_keys(entry: CheckedItem) -> list[str]:
 def is_structural_line(text: str) -> bool:
     """render() が組み立てた見出し行・出典行かどうかを返します。
 
-    これらはモデルの主張ではなくシステムが付けた体裁なので、主張監査の対象にしない。
+    これらはモデルの主張ではなくシステムが付けた体裁なので、評価の対象にしない。
     item の行は必ず「・」か番号で始まるため、この判定とは衝突しない。
     """
     return bool(answer_labels().structural_line.fullmatch(str(text or "").strip()))
@@ -1279,7 +1279,7 @@ def _displayed_quote(entry: CheckedItem) -> str:
     """原文のみ提示で表示する引用。生成説明の `値:` 欄（画面の表示例の値）は除く (#1114)。
 
     `値:` 欄はスクリーンショットに表示されている例の値で、利用者の実値ではない。画面名・ボタン・項目などの欄は
-    画面の案内に要るので残す。表示だけに使い、引用照合・検査・監査は元の引用で行う。除いて空なら元の引用。
+    画面の案内に要るので残す。表示だけに使い、引用照合・検査は元の引用で行う。除いて空なら元の引用。
     """
     # 表の chunk の HTML は、chunk の要約と同じく ` | ` / ` / ` の平文にする（本文はプレーンテキスト。#2214）。
     quote = _flatten_table_html(entry.item.quote)
@@ -1473,7 +1473,7 @@ def user_condition_lines(settled: SettledConfirmations) -> list[str]:
 def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (), confirmations: Sequence[str] = ()) -> str:
     """kind と検査結果から本文を決定的に組み立てる。プレーンテキスト、出典は説明直後の独立行。
 
-    unanswered は監査が missing とした要求の説明。回答本文に出さないと、質問の一部が
+    unanswered は説明の無い要求の説明。回答本文に出さないと、質問の一部が
     黙って落ちる（insufficient_reason には残っていたが本文には出ていなかった）(#622)。
     confirmations は回答の確定に必要な実データ・別の資料の確認（`confirmation_lines`）。最後の節に出す (#688)。
     """
@@ -1771,7 +1771,7 @@ def _subquestion_groups(
     return groups
 
 
-# ---- 生成・監査・是正 ---------------------------------------------------------
+# ---- 生成と引用の確認 ---------------------------------------------------------
 
 
 # 引用の行（#2830）。根拠の本文を行で分け、長い行は文の区切りで分ける。モデルは行番号の範囲で引用を指し、
@@ -2570,7 +2570,6 @@ def run_round(
     guide_step_contracts: Sequence[dict[str, Any]] = (),
     guide_task_scope: Sequence[dict[str, Any]] = (),
     invalid_output: Callable[[Exception], bool] | None = None,
-    glossary: Sequence[Mapping[str, Any]] = (),
     assume_unconfirmed: bool = False,
     confirmed_premises: Sequence[tuple[str, str]] = (),
     confirmed_premise_sources: Sequence[tuple[str, str, str]] = (),
