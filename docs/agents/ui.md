@@ -48,7 +48,7 @@
 正本は README §4「操作部品の高さと幅」と `page-archetypes.md`「入力欄・選択欄・ボタンの高さと幅」。
 
 - 高さは `size`（`sm` 32 / **`md` 36（既定）** / `lg` 40px。タッチ端末は 44px）。**1 つの行の中の入力欄・選択欄・ボタンには同じ `size` を渡す。**
-- 幅は入る値の種類で `width`（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択 / `md` 名前・ID・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・文章・SQL・`TextareaField`）。**grid のセルの欄にも、grid の外の単独の欄にも渡す**（段の幅が上限。#1891）。フォームの本文は `FormGrid`（最大 60rem）に置く。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力と端をそろえて `full`（#635）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
+- 幅は入る値の種類で `width`（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択 / `md` 名前・ID・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・文章・SQL・`TextareaField`）。**grid のセルの欄にも、grid の外の単独の欄にも渡す**（段の幅が上限。#1891）。通常フォームの本文は `FormGrid`（最大 60rem）に置く。prompt・Agent / Skill の指示は別区画の `FormGrid columns={1} width="full"` で所属容器の全幅を使う。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力と端をそろえて `full`（#635）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
 - **placeholder は欄の幅に収める**（収まらなければ短い例にし、説明は `helper` へ）。e2e は共通の `findClippedPlaceholders`（`platform/packages/ui/e2e/layout-checks.ts`）で確かめる。
 - **製品で書かない**: `touchTarget`、操作部品への `h-*` / `min-h-*`、欄への `w-*` / `max-w-*`（lint が検出する）。
 - **フォームの入力は共有の部品**（`SelectField` / `SearchableSelectField` / `TextField` / `SecretField` / `SearchField` / `TextareaField`）。ネイティブで残すのは checkbox / radio / file / range / hidden / color と部品で表せない所だけで、理由を添えて lint を局所的に除外し `fieldControlClassName({ size, width })` を使う。e2e は combobox を押して選び（`chooseSelectFieldOption`）、高さは入力方式で期待する（`expectedControlHeight`）。
