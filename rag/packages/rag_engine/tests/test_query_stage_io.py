@@ -80,3 +80,14 @@ def test_term_load_failure_is_recorded_without_inventing_a_match(tmp_path, monke
     assert call["output"]["状態"] == "読込失敗"
     assert call["output"]["読込エラー"]
     assert call["output"]["一致した用語"] == []
+
+
+def test_payload_factory_is_not_called_without_an_observer():
+    from rag_engine.generation.execution_record import _execution_step
+
+    def unexpected():
+        raise AssertionError("unexpected payload evaluation")
+
+    with _execution_step("合成の工程") as step:
+        step.input(unexpected)
+        step.output(unexpected)

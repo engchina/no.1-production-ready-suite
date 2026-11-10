@@ -186,6 +186,7 @@ def test_renamed_values_match_the_code() -> None:
         "rag_answer_profile",
         "rag_query_strategy",
         "rag_answer_flow",
+        "rag_screen_linking_enabled",
     }
     assert all(name in Settings.model_fields for name in news - removed if name.startswith("rag_"))
     assert not removed & set(Settings.model_fields)

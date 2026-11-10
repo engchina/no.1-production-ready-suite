@@ -1,6 +1,6 @@
 """呼び出し元（業務 Agent）が検索文を作る根拠の取得（planning=caller。#2651）のテスト。
 
-1 回の取得で、RAG 側の推論用の LLM / VLM（検索戦略の判定・質問拡張・画面目録の
+1 回の取得で、RAG 側の推論用の LLM / VLM（検索戦略の判定・質問拡張の
 連携・抽出項目の条件の読み取り・CRAG・回答の生成と監査・根拠の画像の添付）が呼ばれないことを、
 呼ばれたら失敗するスタブで確かめる。embedding と rerank は別に数え、検索の品質を作る工程
 （hybrid search・rerank・前後の文脈）は通常の検索と同じに動くことを確かめる。
@@ -79,7 +79,6 @@ def _reasoning_settings() -> Settings:
     """質問に応じた推論の工程をすべて有効にした設定（caller ではどれも使わないことを確かめる）。"""
     return Settings(
         oci_compartment_id="ocid1.compartment.oc1..example",
-        rag_screen_linking_enabled=True,
         # 回答のモデルが画像を読めても、回答を作らない検索では根拠の画像を切り出さない（#3444）。
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="vlm", display_name="VLM", vision_enabled=True)

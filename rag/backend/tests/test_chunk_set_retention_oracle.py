@@ -151,10 +151,6 @@ async def test_switch_keeps_old_version_readable_but_hidden_from_search() -> Non
     # 検索・回答の監査・件数には出ない。
     assert await client.retrievable_chunk(document_id, old_chunk) is None
     assert await client.retrievable_chunk(document_id, new_chunk) is not None
-    filters = {"document_id": document_id}
-    assert await client.retrieval_scope_state(filters) == await client.retrieval_scope_state(
-        {"document_id": document_id, "chunk_set_id": new_set}
-    )
     corpus = await client.evaluation_corpus_rows([])
     assert {row["chunk_set_id"] for row in corpus if row["document_id"] == document_id} == {new_set}
     recipe = await client.get_document_recipe(document_id, recipe_id)

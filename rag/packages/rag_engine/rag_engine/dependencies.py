@@ -23,11 +23,6 @@ class AnswerDependencies:
     search/check_ready は chunk_run_id・settings・検索条件を keyword で受け取る。
     parse_text/parse_images は既存 schema 型を受け取り、その型の結果を返す。
     rerank は質問・候補・settings と top_n を受け取り RerankTextRank を返す。
-    screen_catalog / screen_chunks は画面目録の連携（#1108）の入力。検索結果が検索範囲の全 chunk を含まない
-    呼び出し元が、目録と選んだ画面の chunk を検索範囲から読むときに渡す。省略時は検索結果の chunk から作る。
-    screen_catalog は settings を受け取り {文書名: 番号付きの見出し} を返す。screen_chunks は links（選んだ
-    （文書名、見出し）の列）・existing（候補にある chunk_uid）・settings を受け取り、その画面の child と親の
-    StoredChunk を返す。
     section_outline / section_chunks は章節の拡張（#1436）の入力。章節と chunk の対応を持つ呼び出し元が渡す。
     section_outline は chunk_uid を受け取り、その chunk の文書の章節の一覧（`section_expansion.SectionOutline`。
     対応が無い chunk は None）を返す。section_chunks は document_id・chunk_set_id・section_id を受け取り、
@@ -36,7 +31,7 @@ class AnswerDependencies:
     embedder は業務ガイドの手順の充足で、根拠を共有する手順のどれを item が説明したかを語で決められないときに、
     意味の近さで決める embedding（`ports.Embedder`。索引と同じ OCI Generative AI の Cohere Embed。#2649）。省略時は
     語の判定だけで決める。
-    report_degraded は補助の処理（画面の選択など）が失敗して空のまま続けたことを、処理の種類と例外を受け取って
+    report_degraded は補助の処理が失敗して空のまま続けたことを、処理の種類と例外を受け取って
     呼び出し元の診断に残す（#3259。例外の文は呼び出し元が残さない）。省略時は残さない。
     current_section_paths は長い根拠を分ける区切りに使う、子の chunk の今の章節（章節ナビゲーションが正本。#4682）。
     chunk の ID の列を受け取り {chunk の ID: 章節の名前の列} を返す（どの章節にも入らない chunk は空の列、対応の無い chunk は
@@ -48,8 +43,6 @@ class AnswerDependencies:
     parse_text: Callable[..., Any]
     parse_images: Callable[..., Any]
     rerank: Callable[..., Any]
-    screen_catalog: Callable[..., dict[str, list[str]]] | None = None
-    screen_chunks: Callable[..., Sequence[Any]] | None = None
     section_outline: Callable[..., Any] | None = None
     section_chunks: Callable[..., Sequence[Any]] | None = None
     embedder: "Embedder | None" = None
@@ -90,22 +83,6 @@ def _get() -> AnswerDependencies:
     from rag_engine.composition import oracle_answer_dependencies
 
     return oracle_answer_dependencies()
-
-
-def injected_screen_catalog(**kwargs) -> dict[str, list[str]] | None:
-    """注入された画面目録を返す。注入が無ければ None（検索結果の chunk から作る）。"""
-    current = _active.get()
-    if current is None or current.screen_catalog is None:
-        return None
-    return current.screen_catalog(**kwargs)
-
-
-def injected_screen_chunks(**kwargs) -> list[Any] | None:
-    """注入された読み込みで、選んだ画面の chunk を返す。注入が無ければ None（検索結果の chunk から選ぶ）。"""
-    current = _active.get()
-    if current is None or current.screen_chunks is None:
-        return None
-    return list(current.screen_chunks(**kwargs))
 
 
 def section_dependencies() -> tuple[Callable[..., Any], Callable[..., Sequence[Any]]] | None:

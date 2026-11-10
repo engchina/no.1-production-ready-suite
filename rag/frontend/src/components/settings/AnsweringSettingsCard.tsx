@@ -51,7 +51,6 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
-    screen_linking_enabled: settings.screen_linking_enabled,
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
@@ -62,7 +61,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 }
 
 /**
- * 回答の検索と生成の全体既定（根拠の前後の数・rerank・画面目録。#593）。
+ * 回答の検索と生成の全体既定（根拠の前後の数・rerank。#593）。
  * 検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 /** 見出しと枠のある設定の群。枠の中の切り替えの一覧と同じ線と余白にそろえる（#4238）。 */
@@ -263,14 +262,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           checked={form.graph_expansion_enabled}
           disabled={disabled}
           onChange={(checked) => update({ graph_expansion_enabled: checked })}
-        />
-        <SwitchRow
-          id="answering-screen-linking"
-          label={t("settings.answering.screenLinking")}
-          description={t("settings.answering.screenLinkingHint")}
-          checked={form.screen_linking_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ screen_linking_enabled: checked })}
         />
         <div data-testid="answering-rerank-block">
         <SwitchRow

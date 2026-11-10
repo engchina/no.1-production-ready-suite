@@ -381,7 +381,6 @@ def test_diversity_stage_preserves_actual_status_and_counts_without_call_bodies(
         ("configuration_disabled", "skipped"),
         ("no_match", "done"),
         ("selection_failed", "failed"),
-        ("caller_queries", "skipped"),
     ],
 )
 def test_recorded_execution_decisions_keep_status_and_reason_without_client_calls(
@@ -390,7 +389,6 @@ def test_recorded_execution_decisions_keep_status_and_reason_without_client_call
     status: str,
 ) -> None:
     from pr_backend_core.observability.call_policy import call_content_policy
-    from rag_engine.generation.answering import _record_catalog_skip
 
     from app.rag.answer_engine import _expansion_stage_outcome
 
@@ -401,10 +399,8 @@ def test_recorded_execution_decisions_keep_status_and_reason_without_client_call
             operation_trace("rag.search", operation_id="synthetic") as summary,
             bind_trace_observer(_observe_engine_call),
         ):
-            if reason == "caller_queries":
-                _record_catalog_skip("画面の選択", reason)
-            elif reason == "selection_failed":
-                with _execution_step("画面の選択") as step:
+            if reason == "selection_failed":
+                with _execution_step("合成の補助処理") as step:
                     step.fail("取得に失敗したため、既存の候補で続けます。")
             else:
                 with _observe_engine_call("stage", "実体・別名による検索拡張") as observation:

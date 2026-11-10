@@ -1337,6 +1337,14 @@ def retired_profile_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     yield path
 
 
+def _evidence_ids(outcome: Any) -> set[str]:
+    return {
+        child["chunk_id"]
+        for parent in outcome.diagnostics["evidence_tree"]
+        for child in parent["children"]
+    }
+
+
 def _doc_chunk(
     document_id: str,
     text: str,
@@ -1715,25 +1723,6 @@ async def _search_filters(
     return oracle
 
 
-@pytest.mark.parametrize(
-    ("request_filters", "expected", "probed"),
-    [
-        ({"file_name": "guide.pdf"}, {"file_name": "guide.pdf"}, False),
-        ({"document_id": "doc-9"}, {"document_id": "doc-9"}, False),
-        ({"page_number_min": "3"}, {"page_number_min": "3"}, False),
-    ],
-    ids=["screen-file-name", "screen-document", "screen-page"],
-)
-async def test_screen_filters_take_precedence_over_question(
-    request_filters: dict[str, str], expected: dict[str, str], probed: bool
-) -> None:
-    """画面で明示した文書・ページの条件が、質問の文書名・ページより優先する(#546)。"""
-    oracle = await _search_filters(request_filters, "manual.pdf の12ページの登録手順は？")
-
-    assert oracle.filters[0] == expected
-    assert bool(oracle.probes) is probed
-
-
 def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
 
@@ -1764,258 +1753,6 @@ async def test_oracle_retrieval_large_categories_uses_search_scope(
     assert "JSON_VALUE(d.classification, '$.large_category')" in statement
     assert "d.status = 'INDEXED'" in statement
     assert "kb-1" in binds.values()
-
-
-# --- 画面目録の連携(#554) ---
-
-_SCREEN_FILE = "setting.pdf"
-_SCREEN_HEADING = "（２）帳票印字設定"
-
-
-def _screen_chunk(chunk_id: str, text: str, section_path: list[str]) -> RetrievedChunk:
-    chunk = _chunk(chunk_id, text, 1)
-    metadata = json.loads(str(chunk.metadata["engine_metadata_json"]))
-    metadata["section_path"] = section_path
-    return chunk.model_copy(
-        update={
-            "document_id": "doc-setting",
-            "file_name": _SCREEN_FILE,
-            "metadata": {
-                **chunk.metadata,
-                "chunk_group_id": "setting-p1",
-                "parent_text": text,
-                "chunk_strategy": "small_to_big",
-                "engine_search_text": f"Source file: {_SCREEN_FILE}\nChild text: {text}",
-                "section_path": " > ".join(section_path),
-                "chunk_set_id": "cs-setting",
-                "engine_metadata_json": json.dumps(metadata, ensure_ascii=False),
-            },
-        }
-    )
-
-
-class ScreenOracle(FakeOracle):
-    """検索では出ない設定画面を、検索範囲の目録と画面の chunk として返すスタブ(#554)。"""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.state = "1:100"
-        self.state_calls: list[dict[str, str]] = []
-        self.section_calls: list[dict[str, str]] = []
-        self.screen_calls: list[tuple[str, str]] = []
-        self.screen_filters: list[dict[str, str]] = []
-        self.screen_rows = [
-            _screen_chunk(
-                "setting:c1",
-                "帳票の印字の有無は帳票印字設定で切り替えます。",
-                ["設定", _SCREEN_HEADING],
-            ),
-            # 見出しの部分一致だけの chunk(別の画面)は加えない。
-            _screen_chunk("setting:c2", "別画面の説明です。", ["設定", f"{_SCREEN_HEADING}の履歴"]),
-        ]
-
-    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
-        self.state_calls.append(dict(filters))
-        return self.state
-
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
-        self.section_calls.append(dict(filters))
-        return [
-            (_SCREEN_FILE, f"設定 > {_SCREEN_HEADING}", 3),
-            ("manual.pdf", "受注入力画面", 2),
-        ]
-
-    async def retrieval_screen_chunks(
-        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
-    ) -> list[RetrievedChunk]:
-        self.screen_calls.append((file_name, heading))
-        self.screen_filters.append(dict(filters))
-        return list(self.screen_rows)
-
-
-def _screen_llm(calls: list[str]) -> Any:
-    from rag_engine.retrieval.screen_catalog import LinkedScreen, ScreenLinks
-
-    def parse(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        calls.append(schema.__name__)
-        if schema is ScreenLinks:
-            assert _SCREEN_HEADING in prompt  # 目録に検索結果に無い画面が載る
-            return ScreenLinks(
-                candidates=[LinkedScreen(document=_SCREEN_FILE, screen=_SCREEN_HEADING)]
-            )
-        return _fake_llm(system, prompt, settings, schema, **options)
-
-    return parse
-
-
-async def _answer_with_screens(
-    monkeypatch: pytest.MonkeyPatch,
-    oracle: ScreenOracle,
-    *,
-    enabled: bool,
-    extra_filters: dict[str, str] | None = None,
-) -> tuple[Any, list[str]]:
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation import answering
-
-    from app.rag import answer_engine
-
-    calls: list[str] = []
-    monkeypatch.setattr(engine_oci, "parse_text_response", _screen_llm(calls))
-    monkeypatch.setattr(answer_engine, "_SCREEN_CATALOG_CACHE", {})
-    answering._SCREEN_LINK_CACHE.clear()
-    engine = AnswerEngine(
-        Settings(
-            rag_rerank_enabled=False,
-            rag_screen_linking_enabled=enabled,
-        ),
-        oracle=oracle,  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-    outcome = await engine.run(
-        SearchRequest(
-            query="帳票が印字されない",
-            top_k=10,
-            filters={"knowledge_base_id": "kb-1", **(extra_filters or {})},
-        )
-    )
-    return outcome, calls
-
-
-def _evidence_ids(outcome: Any) -> set[str]:
-    return {
-        child["chunk_id"]
-        for parent in outcome.diagnostics["evidence_tree"]
-        for child in parent["children"]
-    }
-
-
-async def test_screen_linking_disabled_does_not_call_llm_or_catalog(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """画面目録の連携が無効(既定)なら、画面の選択の LLM も目録の SQL も呼ばない(#554)。"""
-    oracle = ScreenOracle()
-
-    outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=False)
-
-    assert "ScreenLinks" not in calls
-    assert oracle.state_calls == [] and oracle.section_calls == [] and oracle.screen_calls == []
-    assert "setting:c1" not in _evidence_ids(outcome)
-    steps = [
-        step for step in outcome.diagnostics["execution_steps"] if step["name"] == "画面の選択"
-    ]
-    assert len(steps) == 1
-    assert steps[0]["status"] == "skipped"
-    assert steps[0]["reason_code"] == "configuration_disabled"
-    assert steps[0]["execution_kind"] == "decision"
-
-
-async def test_screen_linking_adds_screen_missing_from_search_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """有効なら、検索で出なかった画面が範囲の目録に載り、その画面の chunk が候補に加わる(#554)。"""
-    oracle = ScreenOracle()
-    monkeypatch.setattr(answer_engine_module, "_today", lambda: date(2026, 4, 1))
-
-    outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=True)
-
-    assert calls.count("ScreenLinks") == 1
-    # 目録と画面の chunk は検索と同じ範囲(filters。回答の初めに決めた基準日を含む。#2602)で読む。
-    assert oracle.section_calls == [{"knowledge_base_id": "kb-1", "as_of": "2026-04-01"}]
-    assert oracle.screen_calls == [(_SCREEN_FILE, _SCREEN_HEADING)]
-    evidence = _evidence_ids(outcome)
-    assert "setting:c1" in evidence
-    assert "setting:c2" not in evidence
-    assert any(step["name"] == "画面の選択" for step in outcome.diagnostics["execution_steps"])
-
-
-async def test_screen_linking_reads_catalog_with_the_manual_field_conditions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """画面目録と画面の chunk は、利用者が指定した項目の条件の検索と同じ条件で読む(#2056)。
-
-    条件を外して読むと、条件で外した文書の画面が候補に加わる。
-    """
-    from app.schemas.search import ExtractionFieldCondition
-
-    oracle = ScreenOracle()
-    condition = ExtractionFieldCondition(
-        name="発行日", value_type="date", op="gte", value="2026-01-01"
-    )
-
-    outcome, calls = await _answer_with_screens(
-        monkeypatch,
-        oracle,
-        enabled=True,
-        extra_filters={"extraction_fields": json.dumps([condition.model_dump()])},
-    )
-
-    assert calls.count("ScreenLinks") == 1
-    assert oracle.section_calls and oracle.state_calls and oracle.screen_filters
-    assert "setting:c1" in _evidence_ids(outcome)
-    for filters in [*oracle.section_calls, *oracle.state_calls, *oracle.screen_filters]:
-        assert filters["knowledge_base_id"] == "kb-1"
-        assert json.loads(filters["extraction_fields"]) == [condition.model_dump()]
-
-
-async def test_screen_chunks_defer_first_page_without_classification_read() -> None:
-    """画面目録の追加候補は分類も先頭頁も先読みしない。"""
-    from app.rag.answer_engine import _SearchState
-
-    oracle = ScreenOracle()
-    oracle.classifications = {"doc-setting": {"large_category": "業務A"}}
-    oracle.first_page_contexts = {"cs-setting": _first_page_context()}
-    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
-    state = _SearchState()
-
-    stored = await engine._screen_chunks(
-        SearchRequest(query="q"), state, [(_SCREEN_FILE, _SCREEN_HEADING)], set()
-    )
-
-    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in stored}
-    assert "first_page_context" not in (documents["setting:c1"] or {})
-    assert "first_page_context" not in (documents["doc-setting:cs-setting:setting-p1"] or {})
-    assert "setting:c2" not in documents
-    assert oracle.classification_calls == []
-    assert oracle.first_page_calls == []
-    # 引用に戻せるよう、検索結果に無かった chunk も state に入れる。
-    assert "setting:c1" in state.chunks
-
-
-async def test_screen_catalog_is_cached_by_scope_and_index_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """目録は(検索条件、索引の状態)ごとに cache し、再索引などで状態が変わったら作り直す(#554)。"""
-    from app.rag.answer_engine import _SearchState
-
-    monkeypatch.setattr("app.rag.answer_engine._SCREEN_CATALOG_CACHE", {})
-    oracle = ScreenOracle()
-    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
-    request = SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"})
-
-    first = await engine._screen_catalog(request, _SearchState())
-    state = _SearchState()
-    await engine._screen_catalog(request, state)
-    await engine._screen_catalog(request, state)  # 同じ回答の 2 回目は状態も読まない
-    oracle.state = "2:200"
-    await engine._screen_catalog(request, _SearchState())
-
-    assert first == {_SCREEN_FILE: [_SCREEN_HEADING]}
-    assert len(oracle.state_calls) == 3
-    assert len(oracle.section_calls) == 2
-
-
-def test_build_engine_settings_passes_screen_linking(tmp_path: Any) -> None:
-    """取込・検索・回答設定の画面目録の連携を rag_engine の設定へ渡す(#554)。"""
-    from app.rag.answer_engine import build_engine_settings
-
-    disabled = build_engine_settings(Settings(), output_dir=tmp_path)
-    enabled = build_engine_settings(Settings(rag_screen_linking_enabled=True), output_dir=tmp_path)
-
-    assert disabled.screen_linking_enabled is False
-    assert enabled.screen_linking_enabled is True
 
 
 def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> None:
@@ -2052,10 +1789,8 @@ def _engine_effort(value: str) -> str:
     return "" if value == "model" else value
 
 
-async def test_oracle_screen_catalog_queries_use_search_scope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """目録・状態・画面の chunk の SQL は、検索と同じ条件(KB など)で読む(#554)。"""
+async def test_oracle_section_paths_use_search_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """交差参照の章節パスは検索範囲の条件で取得する。"""
     from app.clients.oracle import OracleClient
 
     client = OracleClient(settings=Settings())
@@ -2065,31 +1800,17 @@ async def test_oracle_screen_catalog_queries_use_search_scope(
         statement: str, binds: dict[str, object] | None = None
     ) -> list[dict[str, object]]:
         calls.append((statement, dict(binds or {})))
-        if "GROUP BY" in statement:
-            return [{"file_name": "a.pdf", "section_path": "設定 > （１）画面", "chunk_count": 2}]
-        if "chunk_count" in statement:
-            return [{"chunk_count": 5, "chunk_hash": 123}]
-        return []
+        return [
+            {"file_name": "synthetic.pdf", "section_path": "第1章 > 合成の節", "chunk_count": 2}
+        ]
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
-    filters = {"knowledge_base_id": "kb-1"}
-
-    assert await client.retrieval_scope_state(filters) == "5:123"
-    assert await client.retrieval_screen_sections(filters) == [("a.pdf", "設定 > （１）画面", 2)]
-    assert (
-        await client.retrieval_screen_chunks(
-            filters, file_name="a.pdf", heading="（１）画面", limit=7
-        )
-        == []
-    )
-    assert len(calls) == 3
-    for _statement, binds in calls:
-        assert "kb-1" in binds.values()
-    assert "GROUP BY d.file_name" in calls[1][0]
-    screen_sql, screen_binds = calls[2]
-    assert "d.file_name = :screen_file_name" in screen_sql
-    assert screen_binds["screen_heading"] == "（１）画面"
-    assert screen_binds["screen_limit"] == 7
+    assert await client.retrieval_section_paths({"knowledge_base_id": "kb-1"}) == [
+        ("synthetic.pdf", "第1章 > 合成の節", 2)
+    ]
+    assert len(calls) == 1
+    assert "kb-1" in calls[0][1].values()
+    assert "GROUP BY d.file_name" in calls[0][0]
 
 
 def test_build_engine_settings_uses_answer_model_id(tmp_path: Any) -> None:

@@ -201,7 +201,7 @@ def test_retrieval_and_evaluation_permissions_can_read_but_cannot_edit_prompts(
     headers = login(client, "retrieval-admin")
     result = client.get("/api/settings/answer-prompts", headers=headers)
     assert result.status_code == 200
-    assert any(stage["phase"] == "retrieval" for stage in result.json()["data"]["stages"])
+    assert result.json()["data"]["stages"]
     path = f"/api/settings/answer-prompts/{key}"
     allowed = ANSWER_PROMPT_EDIT_PERMISSIONS[key] == permission
     content = default_prompt(key)

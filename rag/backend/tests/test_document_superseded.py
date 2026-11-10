@@ -158,7 +158,7 @@ def test_retrieved_chunk_marks_superseded_document() -> None:
     chunk = _retrieved_chunk_from_row(row)
     assert chunk.metadata["document_superseded"] is True
     assert chunk.metadata["superseded_by_document_id"] == "doc-2"
-    # 文書名そのものは変えない(文書名の絞り込み・画面目録の照合に使うため)。
+    # 文書名そのものは変えない(文書名の絞り込み・交差参照の照合に使うため)。
     assert chunk.file_name == "manual-v1.pdf"
 
     current = _retrieved_chunk_from_row({**row, "superseded_by_document_id": None})

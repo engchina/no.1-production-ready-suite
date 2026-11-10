@@ -783,9 +783,7 @@ class ReferenceOracle:
         }
         return {title: rows for title, rows in found.items() if rows}
 
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
+    async def retrieval_section_paths(self, filters: dict[str, str]) -> list[tuple[str, str, int]]:
         self.section_calls.append(dict(filters))
         document_id = filters.get("document_id")
         chunk_set_id = filters.get("chunk_set_id")
@@ -2543,7 +2541,7 @@ async def test_equally_matching_documents_do_not_select_first_target() -> None:
     assert oracle.reference_calls == []
 
 
-async def test_screen_sections_merge_overflowed_paths_in_reading_order(
+async def test_section_paths_merge_overflowed_paths_in_reading_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """超えたパスの行があるときだけ読み直し、文書の並びと読み順を保ってまとめる(#4144)。"""
@@ -2596,7 +2594,7 @@ async def test_screen_sections_merge_overflowed_paths_in_reading_order(
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
 
-    assert await client.retrieval_screen_sections({"knowledge_base_id": "kb-1"}) == [
+    assert await client.retrieval_section_paths({"knowledge_base_id": "kb-1"}) == [
         ("z.pdf", "第1章", 1),
         ("z.pdf", long_path, 2),
         ("z.pdf", "第3章", 1),
@@ -2630,7 +2628,7 @@ async def test_catalog_queries_do_not_grow_without_overflowed_paths(
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
     filters = {"knowledge_base_id": "kb-1"}
 
-    assert await client.retrieval_screen_sections(filters) == [("合成資料.pdf", "第1章", 1)]
+    assert await client.retrieval_section_paths(filters) == [("合成資料.pdf", "第1章", 1)]
     assert await client.retrieval_reference_documents(filters, title="合成資料", limit=5)
     assert len(calls) == 2
     assert not any("RETURNING CLOB" in statement for statement in calls)
