@@ -162,7 +162,6 @@ async function mockSettingsAndFeedback(page: Page) {
           },
         ],
         stages: [
-          { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
           { id: "generation", phase: "generation", prompts: [{ id: "role", content: "## Step 1: 合成の保存した役割の文", prompt_key: "generation.role" }, { id: "fixed", content: "## Step 2: 合成の固定の指示" }] },
         ],
       }),

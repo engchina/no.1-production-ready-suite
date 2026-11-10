@@ -1596,7 +1596,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expectNoPageOverflow(page);
   });
 
-  test("一致する用語の別名を検索文に加えると回答ルールの確認は別の段で、それぞれの登録・一致・影響を出す（#3451）", async ({
+  test("一致する用語の別名を検索文に加える段に、登録・一致・影響を出す（#3451）", async ({
     page,
   }, testInfo) => {
     await mockLocalAuth(page);
@@ -1623,18 +1623,6 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
               ],
             },
           },
-          {
-            key: "rules",
-            spec: ragSpan.step("回答ルールの確認"),
-            at: [0.12, 0.13],
-            details: {
-              fields: [
-                { label: "目的", value: "登録済みの回答ルールを質問に当て、回答の参考にします。" },
-                { label: "結果", value: "一致なし：登録済みの有効な回答ルールに一致しませんでした" },
-                { label: "有効な登録", value: "1 件（登録 1 件）" },
-              ],
-            },
-          },
         ],
         { base: "2026-10-15T00:00:00Z" }
       ),
@@ -1643,12 +1631,10 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     await page.getByTestId("run-history-timeline-summary").click();
     const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
-    // 包む段 → 質問から対象と条件を読み取る → 一致する用語の別名を検索文に加える → 回答ルールの確認（同じ段の子でこの順）。
-    await expect(steps).toHaveCount(4);
+    // 包む段 → 質問から対象と条件を読み取る → 一致する用語の別名を検索文に加える（同じ段の子でこの順）。
+    await expect(steps).toHaveCount(3);
     await expect(steps.nth(2)).toContainText("一致する用語の別名を検索文に加える");
-    await expect(steps.nth(3)).toContainText("確認と回答に使うルールを選ぶ");
     await expect(steps.nth(2)).toHaveAttribute("data-level", "1");
-    await expect(steps.nth(3)).toHaveAttribute("data-level", "1");
     await expect(page.getByText("用語・ルールの確認")).toHaveCount(0);
 
     await steps.nth(2).locator("[data-run-timeline-toggle]").click();
@@ -1657,12 +1643,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expect(terms).toContainText("2 件（登録 3 件）");
     await expect(terms).toContainText("用語 A（別名: 別名 A1・別名 A2）");
     await expect(terms).toContainText("一致した用語の別名を補助の検索文に加えます。");
-    await steps.nth(3).locator("[data-run-timeline-toggle]").click();
-    const rules = steps.nth(3).locator("[data-run-timeline-details]");
-    await expect(rules).toContainText("一致なし：登録済みの有効な回答ルールに一致しませんでした");
-    await expect(rules).toContainText("1 件（登録 1 件）");
-    await expect(rules).not.toContainText("影響");
-    await page.getByTestId("run-history-timeline").screenshot({ path: testInfo.outputPath("terms-rules-steps.png") });
+    await page.getByTestId("run-history-timeline").screenshot({ path: testInfo.outputPath("terms-steps.png") });
     await expectNoPageOverflow(page);
   });
 

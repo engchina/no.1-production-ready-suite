@@ -155,7 +155,7 @@ const slowSearchStream: TimedChunk[] = [
 
 const knowledgeSearch = searchProgressStream("trace-1");
 
-/** 一致する用語の別名を検索文に加える → 回答ルールの確認 を別の工程（別の span）で進む検索の SSE（#3451）。 */
+/** 一致する用語の別名を検索文に加える工程（span）で進む検索の SSE（#3451）。登録ルールの工程は無い（#4799）。 */
 const knowledgeStepsSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
@@ -175,23 +175,13 @@ const knowledgeStepsSearchStream: TimedChunk[] = [
           ],
         },
       }),
-      knowledgeSearch.start("rules", ragSpan.step("回答ルールの確認")),
+      knowledgeSearch.start("guide", ragSpan.step("文書検索")),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      knowledgeSearch.finish("rules", "done", {
-        details: {
-          fields: [
-            { label: "目的", value: "登録済みの回答ルールを質問に当て、回答の参考にします。" },
-            { label: "結果", value: "一致: 回答ルール A" },
-            { label: "有効な登録", value: "1 件（登録 2 件）" },
-            { label: "一致した回答ルール", value: "回答ルール A" },
-            { label: "影響", value: "一致した回答ルールを回答時の参考情報として渡します。" },
-          ],
-        },
-      }),
+      knowledgeSearch.finish("guide"),
       knowledgeSearch.finish("answer"),
       knowledgeSearch.finish("root"),
       knowledgeSearch.terminal("done"),
@@ -495,7 +485,7 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 
-  test(`一致する用語の別名を検索文に加えると回答ルールの確認を別の工程で順に出す (${viewport.name})`, async ({ page }) => {
+  test(`一致する用語の別名を検索文に加える工程と詳細を出す (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockSearchPage(page, [knowledgeStepsSearchStream]);
 
@@ -503,10 +493,9 @@ for (const viewport of [
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
-    // 実行中: 一致する用語の別名を検索文に加えるが終わり、回答ルールの確認が今の工程（#3451）。
+    // 実行中: 一致する用語の別名を検索文に加えるが終わり、次の工程が今の工程（#3451）。
     const current = page.getByTestId("search-run-progress-current");
-    await expect(current).toContainText("確認と回答に使うルールを選ぶ");
-    await expect(current).toHaveAttribute("data-step-id", spanStepId("rules"));
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("guide"));
     const terms = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}`);
     await expect(terms).toContainText("一致する用語の別名を検索文に加える");
     await page.getByTestId(`search-run-progress-step-${spanStepId("terms")}-toggle`).click();
@@ -514,20 +503,16 @@ for (const viewport of [
     await expect(termsDetails).toContainText("用語 A（別名: 別名 A）");
     await expect(termsDetails).toContainText("一致した用語の別名を補助の検索文に加えます。");
 
-    // 完了後: 2 つの工程はこの順に別の行で、回答ルールの詳細は回答ルールの工程だけに出す。
+    // 完了後: 用語の工程の後に次の工程が別の行で並び、登録ルールの工程は無い。
     const summary = page.getByTestId("search-run-progress-summary");
     await expect(summary).toContainText("処理の経過（3 ステップ", { timeout: 4_000 });
     await summary.click();
     const process = page.getByRole("region", { name: "処理の経過" });
     const termsBox = await terms.boundingBox();
-    const rulesBox = await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}`).boundingBox();
-    expect(termsBox && rulesBox && termsBox.y < rulesBox.y).toBeTruthy();
+    const nextBox = await page.getByTestId(`search-run-progress-step-${spanStepId("guide")}`).boundingBox();
+    expect(termsBox && nextBox && termsBox.y < nextBox.y).toBeTruthy();
     await expect(process.getByText("用語・ルールの確認")).toHaveCount(0);
-    await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-toggle`).click();
-    const rulesDetails = page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-details`);
-    await expect(rulesDetails).toContainText("一致した回答ルール");
-    await expect(rulesDetails).toContainText("一致した回答ルールを回答時の参考情報として渡します。");
-    await expect(rulesDetails).not.toContainText("一致した用語");
+    await expect(process.getByText("確認と回答に使うルールを選ぶ")).toHaveCount(0);
     await process.screenshot({ path: `test-results/answer-progress-terms-rules-${viewport.name}.png` });
     await expectNoPageOverflow(page);
   });
@@ -1050,8 +1035,8 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     ...recorder.finish("rank-cache", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "hit", sdk_attempt_count: 0 }, null, 2) }] } }),
     ...recorder.finish("rank-parent"),
     // 旧記録の note と新記録の省略形を、同じ表示経路で再現する。
-    ...recorder.start("legacy-skip", ragSpan.step("登録ルールによる確認の使用")),
-    ...recorder.finish("legacy-skip", "skipped", { params: { note: "skipped" }, details: { fields: [{ label: "結果", value: "設定がオフのため、登録ルールによる確認の使用をスキップしました。" }] } }),
+    ...recorder.start("legacy-skip", ragSpan.step("回答生成での用語・同義語の使用")),
+    ...recorder.finish("legacy-skip", "skipped", { params: { note: "skipped" }, details: { fields: [{ label: "結果", value: "設定がオフのため、回答生成での用語・同義語の使用をスキップしました。" }] } }),
     ...recorder.start("new-skip", ragSpan.step("用語・同義語による検索文の追加")),
     ...recorder.finish("new-skip", "skipped", { details: { fields: [{ label: "結果", value: "設定がオフのため、検索文の追加をスキップしました。" }] } }),
     ...recorder.start("candidate-result", ragSpan.step("根拠から回答を作る")),
@@ -1076,7 +1061,7 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     const candidate = page.getByTestId(`${prefix}-step-${spanStepId("candidate-result")}`);
     await expect(candidate).toHaveAttribute("data-status", "done");
     await expect(candidate.locator("[data-run-result-summary]")).toHaveText("不採用");
-    const reason = "設定がオフのため、登録ルールによる確認の使用をスキップしました。";
+    const reason = "設定がオフのため、回答生成での用語・同義語の使用をスキップしました。";
     const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
     await expect(skipped).toHaveAttribute("data-status", "skipped");
     await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");

@@ -1376,9 +1376,6 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     outcome: "needs_environment_data",
     guide: { guide_id: "g1", title: "経費の上限を確かめる", revision: 3 },
     question_type: ["規則"],
-    auto_field_filter: {
-      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-    },
     original_question: "それの上限は？",
     rewritten_question: "経費精算の上限額は？",
     generated_queries: [],
@@ -1814,9 +1811,9 @@ for (const viewport of [
   });
 }
 
-// #717: 類似問の後に、検索・回答プロファイルのルールの確認の質問を出し、選んだ答えを送る。
+// #1238: 類似問の後に、業務ガイドの条件の確認の質問を出し、選んだ答えを送る（登録ルールの確認は無い。#4799）。
 const clarificationSuggestion = {
-  rule_id: "R01",
+  rule_id: "guide:g1:c1",
   rule_title: "期限の確認",
   clarification: {
     question: "どの規程についてのご質問ですか？",
@@ -1829,18 +1826,8 @@ const clarificationSuggestion = {
         description: "出張旅費規程",
         search_terms: ["出張"],
         premise: "",
-        sections: [
-          {
-            document_id: "doc-travel",
-            document_name: "出張旅費規程.pdf",
-            section_id: "sec-6",
-            title: "第6条 申請と精算",
-            page_start: 2,
-            page_end: 3,
-          },
-        ],
       },
-      { id: "expense", label: "経費精算", description: "", search_terms: [], premise: "", sections: [] },
+      { id: "expense", label: "経費精算", description: "", search_terms: [], premise: "" },
     ],
   },
 };
@@ -1890,7 +1877,7 @@ for (const viewport of [
     // 送信の直後に出るので、確認事項の文へフォーカスを移す。
     await expect(prompt).toBeFocused();
     await expect(prompt).toHaveCSS("outline-style", "none");
-    await expect(choice).toContainText("対象: 「出張旅費規程.pdf」第6条 申請と精算 p.2–3");
+    await expect(choice).not.toContainText("対象: ");
     const confirm = choice.getByRole("button", { name: "この内容で回答" });
     await expect(confirm).toBeDisabled();
     await expect(confirm).toHaveAccessibleDescription(
@@ -1925,7 +1912,7 @@ for (const viewport of [
     expect(streamBodies[0]).toMatchObject({
       content: "申請の期限は？",
       question_context_token: "synthetic-context-token",
-      clarification: { rule_id: "R01", option_ids: ["travel"], other_text: "海外出張" },
+      clarification: { rule_id: "guide:g1:c1", option_ids: ["travel"], other_text: "海外出張" },
     });
     await expect(choice).toHaveCount(0);
 
@@ -1938,7 +1925,7 @@ for (const viewport of [
     await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
     // 質問はそのまま送り（入力欄には戻さない）、取り消さない。
-    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01", question_context_token: "synthetic-context-token" });
+    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "guide:g1:c1", question_context_token: "synthetic-context-token" });
     expect(clarifyQueries[1]).toMatchObject({ conversation_id: "conv-1" });
     expect(streamBodies[1]).not.toHaveProperty("clarification");
     await expect(choice).toHaveCount(0);
@@ -1990,50 +1977,6 @@ for (const viewport of [
     }
   });
 }
-
-test("範囲を絞った回答の下から、範囲を指定せずに同じ質問を送り直せる（#721）", async ({ page }) => {
-  await mockChat(page);
-  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
-    route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
-  );
-  const clarifyQueries: unknown[] = [];
-  await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
-    clarifyQueries.push(route.request().postDataJSON());
-    await route.fulfill({ json: { data: { suggestion: null }, error_messages: [], warning_messages: [] } });
-  });
-  // 保存された回答は、確認で絞った範囲を末尾に持つ。
-  const scoped = { ...assistantMessage, content: "期限は 1 か月です。（対象: 「出張旅費規程.pdf」の「第6条 申請と精算」）" };
-  await page.route(
-    (url) => url.pathname === "/api/chat/conversations/conv-1",
-    (route) =>
-      route.fulfill({
-        json: { data: conversationDetail([userMessage, scoped]), error_messages: [], warning_messages: [] },
-      })
-  );
-  const streamBodies: Record<string, unknown>[] = [];
-  page.on("request", (request) => {
-    if (request.url().endsWith("/messages/stream")) {
-      streamBodies.push(request.postDataJSON() as Record<string, unknown>);
-    }
-  });
-
-  await page.goto("/chat");
-  await selectSearchAnswerProfile(page, "経理アシスタント");
-  await page.getByRole("textbox", { name: "質問", exact: true }).fill("経費の上限は？");
-  await page.getByRole("button", { name: "送信" }).click();
-  await expect.poll(() => streamBodies.length).toBe(1);
-
-  const askAgain = page.getByRole("button", { name: "範囲を指定せずに質問し直す" });
-  await expect(askAgain).toBeVisible();
-  const suggestCalls = clarifyQueries.length;
-  await askAgain.click();
-  await expect.poll(() => streamBodies.length).toBe(2);
-  // 類似問・確認の質問を出さずに、同じ質問をそのまま送る。
-  expect(streamBodies[1]).toMatchObject({ content: "経費の上限は？" });
-  expect(streamBodies[1]).not.toHaveProperty("clarification");
-  expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
-  expect(clarifyQueries).toHaveLength(suggestCalls);
-});
 
 // #907: 送った質問は、会話の作成・回答（start）を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
 // 失敗・停止のときも質問を残し、失敗は「送信できませんでした」と「再送信」を出す。

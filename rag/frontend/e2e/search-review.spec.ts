@@ -299,24 +299,15 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
 });
 
-test("質問から読み取った条件を「自動」のチップで出し、外して検索し直せる（#652）", async ({ page }) => {
+test("質問から条件を読み取らず、「自動」の条件のチップを出さない（#4799）", async ({ page }) => {
   const requests: Array<Record<string, unknown>> = [];
   await page.route("**/api/search/stream", (route) => {
     requests.push(route.request().postDataJSON() as Record<string, unknown>);
-    const first = requests.length === 1;
+    // 移行前の記録に残りうる診断を渡しても、画面は自動の条件を出さない。
     const answer = {
       execution_steps: [],
       evidence_tree: [],
-      ...(first
-        ? {
-            auto_field_filter: {
-              conditions: [
-                { name: "契約日", value_type: "date", op: "gte", value: "2025-01-01" },
-                { name: "金額", value_type: "number", op: "gte", value: "100000" },
-              ],
-            },
-          }
-        : {}),
+      auto_field_filter: { conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }] },
     };
     return fulfillStream(
       route,
@@ -333,19 +324,10 @@ test("質問から読み取った条件を「自動」のチップで出し、�
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("2025年以降の10万円以上の契約");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
-  const chips = page.getByTestId("auto-field-filter-chips");
-  await expect(chips.getByText("自動: 契約日 ≥ 2025-01-01")).toBeVisible();
-  await expect(chips.getByText("自動: 金額 ≥ 100000")).toBeVisible();
-  await expectNoPageOverflow(page);
-
-  await chips.getByRole("button", { name: "金額 ≥ 100000 を外して検索し直す" }).click();
-  await expect.poll(() => requests.length).toBe(2);
-  expect(requests[1]).toMatchObject({
-    query: "2025年以降の10万円以上の契約",
-    auto_field_filter_excluded: ["金額"],
-  });
+  await expect.poll(() => requests.length).toBe(1);
+  await expect(page.getByText("自動: 金額 ≥ 100000")).toHaveCount(0);
   expect("auto_field_filter_excluded" in requests[0]).toBe(false);
-  await expect(page.getByTestId("auto-field-filter-chips")).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
 
 test("検索・回答プロファイルの読み込み中は読み込み中の状態として読み上げる", async ({ page }) => {
@@ -489,55 +471,6 @@ test("検索のボタンは詳細条件の下にあり、実行中は同じ位�
 });
 
 test.describe("送り直す操作は、表示中の結果を出した検索の条件で送る（#914）", () => {
-  const AUTO_ANSWER = {
-    execution_steps: [],
-    evidence_tree: [],
-    auto_field_filter: {
-      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-    },
-  };
-
-  test("「自動」の条件を外すと、入力欄を書き換えた後でも前の質問・検索・回答プロファイルで検索し直す", async ({
-    page,
-  }) => {
-    const requests: Array<Record<string, unknown>> = [];
-    await page.route("**/api/search/stream", (route) => {
-      requests.push(route.request().postDataJSON() as Record<string, unknown>);
-      const traceId = `t${requests.length}`;
-      return fulfillStream(
-        route,
-        sse([
-          ["metadata", { trace_id: traceId, elapsed_ms: 5, guardrail_warnings: [], diagnostics: { answer: AUTO_ANSWER } }],
-          ["citations", []],
-          ["done", { trace_id: traceId }],
-        ])
-      );
-    });
-
-    await page.goto("/search");
-    await selectSearchAnswerProfile(page, /経理ビュー/);
-    const input = page.getByRole("textbox", { name: "RAG 検索" });
-    await input.fill("10万円以上の契約");
-    await page.getByRole("button", { name: "検索", exact: true }).click();
-    const chips = page.getByTestId("auto-field-filter-chips");
-    await expect(chips).toBeVisible();
-
-    // 次の質問を書きかけ、検索・回答プロファイルも変えてから、表示中の結果のチップを外す。
-    await input.fill("全く別の質問");
-    await selectSearchAnswerProfile(page, /人事ビュー/);
-    await chips.getByRole("button", { name: "金額 ≥ 100000 を外して検索し直す" }).click();
-
-    await expect.poll(() => requests.length).toBe(2);
-    expect(requests[1]).toMatchObject({
-      query: "10万円以上の契約",
-      search_answer_profile_id: "bv-1",
-      auto_field_filter_excluded: ["金額"],
-    });
-    // 書きかけの入力と選択は消さない。
-    await expect(input).toHaveValue("全く別の質問");
-    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("人事ビュー");
-  });
-
   test("エラーの再試行は、入力欄を書き換えた後でも失敗した質問を送り直す", async ({ page }) => {
     const requests: Array<Record<string, unknown>> = [];
     await page.route("**/api/search/stream", (route) => {
@@ -740,8 +673,8 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
     "synthetic-a",
     [
       { key: "root", spec: ragSpan.root(), at: [0, 2] },
-      { key: "filter", spec: ragSpan.stage("field_filter"), at: [0, 2] },
-      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "filter", { "gen_ai.request.model": "synthetic-model", "pr.gen_ai.purpose": "query.conditions" }), at: [0, 2] },
+      { key: "rewrite", spec: ragSpan.stage("history_rewrite"), at: [0, 2] },
+      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "rewrite", { "gen_ai.request.model": "synthetic-model", "pr.gen_ai.purpose": "query.rewrite" }), at: [0, 2] },
     ],
     { terminal: "done", base: "2026-01-01T00:00:00Z" }
   );
@@ -756,7 +689,7 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
   await page.getByTestId("search-run-progress-summary").click();
   const process = page.getByTestId("search-run-progress");
   // 段の名前と技術の span の日本語の名前・モデル名。入れ子は span の親子（root は行にしない）。
-  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["質問から検索の絞り込み条件を読み取る", "質問から絞り込み条件を読み取る"]);
+  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["前の会話を踏まえて質問を補う", "前の会話を踏まえて質問を書き換える"]);
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
   const modelStep = process.locator("[data-run-timeline-step]").nth(1);
