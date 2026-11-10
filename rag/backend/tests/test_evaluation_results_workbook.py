@@ -576,6 +576,26 @@ async def test_export_uses_the_uploaded_workbook_and_names_the_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _fake_runner(monkeypatch)
+
+    async def citations(
+        self: OracleClient, trace_ids: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "trace-row-3": [
+                {
+                    "source": "合成資料.xlsx",
+                    "metadata": {
+                        "sheet_name": "Sheet1",
+                        "row_start": 10,
+                        "row_end": 12,
+                        "evidence_model_used": True,
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", citations)
+
     workbook_id = await _test_owner_workbook(workbooks)
     job = (
         await api_client.post(
@@ -596,6 +616,10 @@ async def test_export_uses_the_uploaded_workbook_and_names_the_file(
     columns = _headers(sheet)
     assert sheet.cell(3, columns["評価結果: 回答"]).value == "合成の回答 trace-row-3"
     assert sheet.cell(3, 3).value == "メモ B"
+    assert (
+        sheet.cell(3, columns["評価結果: 回答に使用した根拠"]).value
+        == "合成資料.xlsx | シート: Sheet1 | 行: 10-12"
+    )
 
 
 async def test_partial_export_marks_the_remaining_rows(
@@ -699,3 +723,93 @@ async def test_submit_rejects_cases_that_are_not_rows_of_the_workbook(
             "/api/evaluation/jobs/run", json=_run_body(workbook_id, case_id)
         )
         assert response.status_code == 422
+
+
+@pytest.fixture(autouse=True)
+def _empty_saved_citations(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def read(self: OracleClient, trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        return {}
+
+    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", read)
+
+
+def test_uploaded_workbook_has_separate_actual_evidence_for_each_condition() -> None:
+    primary = _case("row-2")
+    comparison = _case("row-2")
+    comparison.trace_id = "trace-comparison"
+    metrics = _metrics(primary)
+    metrics.comparison = EvaluationComparison(
+        search_answer_profile_id="profile-b", metrics=_metrics(comparison)
+    )
+    result = evaluation_workbook_with_results(
+        _workbook(),
+        metrics,
+        {},
+        evidence={
+            primary.trace_id: "合成資料.xlsx | シート: Sheet1 | 行: 10-12",
+            comparison.trace_id: "合成資料.pdf | p.4",
+        },
+    )
+    sheet = load_workbook(BytesIO(result))["評価リクエスト"]
+    columns = _headers(sheet)
+    assert (
+        sheet.cell(2, columns["評価結果（主条件）: 回答に使用した根拠"]).value
+        == "合成資料.xlsx | シート: Sheet1 | 行: 10-12"
+    )
+    assert (
+        sheet.cell(2, columns["評価結果（比較対象）: 回答に使用した根拠"]).value
+        == "合成資料.pdf | p.4"
+    )
+    assert sheet.cell(3, columns["評価結果（主条件）: 回答に使用した根拠"]).value is None
+
+
+def test_actual_evidence_is_literal_text_and_does_not_modify_template_input() -> None:
+    original = _workbook()
+    result = evaluation_workbook_with_results(
+        original,
+        _metrics(_case("row-2")),
+        {},
+        evidence={"trace-row-2": "=合成.xlsx | シート: Sheet1 | 行: 1"},
+    )
+    before = load_workbook(BytesIO(original))["評価リクエスト"]
+    sheet = load_workbook(BytesIO(result))["評価リクエスト"]
+    column = _headers(sheet)["評価結果: 回答に使用した根拠"]
+    assert sheet.cell(2, column).value == "=合成.xlsx | シート: Sheet1 | 行: 1"
+    assert sheet.cell(2, column).data_type == "s"
+    for row in before:
+        for cell in row:
+            assert sheet.cell(cell.row, cell.column).value == cell.value
+
+
+@pytest.fixture(autouse=True)
+def _empty_saved_citations(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def read(self: OracleClient, trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        return {}
+    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", read)
+
+
+def test_uploaded_workbook_has_separate_actual_evidence_for_each_condition() -> None:
+    primary = _case("row-2")
+    comparison = _case("row-2")
+    comparison.trace_id = "trace-comparison"
+    metrics = _metrics(primary)
+    metrics.comparison = EvaluationComparison(search_answer_profile_id="profile-b", metrics=_metrics(comparison))
+    result = evaluation_workbook_with_results(_workbook(), metrics, {}, evidence={primary.trace_id: "合成資料.xlsx | シート: Sheet1 | 行: 10-12", comparison.trace_id: "合成資料.pdf | p.4"})
+    sheet = load_workbook(BytesIO(result))["評価リクエスト"]
+    columns = _headers(sheet)
+    assert sheet.cell(2, columns["評価結果（主条件）: 回答に使用した根拠"]).value == "合成資料.xlsx | シート: Sheet1 | 行: 10-12"
+    assert sheet.cell(2, columns["評価結果（比較対象）: 回答に使用した根拠"]).value == "合成資料.pdf | p.4"
+    assert sheet.cell(3, columns["評価結果（主条件）: 回答に使用した根拠"]).value is None
+
+
+def test_actual_evidence_is_literal_text_and_does_not_modify_template_input() -> None:
+    original = _workbook()
+    result = evaluation_workbook_with_results(original, _metrics(_case("row-2")), {}, evidence={"trace-row-2": "=合成.xlsx | シート: Sheet1 | 行: 1"})
+    before = load_workbook(BytesIO(original))["評価リクエスト"]
+    sheet = load_workbook(BytesIO(result))["評価リクエスト"]
+    column = _headers(sheet)["評価結果: 回答に使用した根拠"]
+    assert sheet.cell(2, column).value == "=合成.xlsx | シート: Sheet1 | 行: 1"
+    assert sheet.cell(2, column).data_type == "s"
+    for row in before:
+        for cell in row:
+            assert sheet.cell(cell.row, cell.column).value == cell.value

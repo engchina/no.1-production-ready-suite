@@ -54,6 +54,7 @@ from app.rag.evaluation import (
     EvaluationRunner,
 )
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
+from app.rag.evaluation_evidence import used_evidence_lines
 from app.rag.evaluation_excel import (
     EVALUATION_EXCEL_MAX_BYTES,
     EVALUATION_EXCEL_MAX_ROWS,
@@ -624,7 +625,8 @@ async def export_evaluation_results(job_id: str, body: EvaluationResultExportReq
         raise HTTPException(
             status_code=409, detail="結果のある品質評価（終わったもの）だけを書き出せます。"
         )
-    uploaded = await _results_on_source_workbook(job, metrics, owner)
+    evidence = await _case_evidence(metrics)
+    uploaded = await _results_on_source_workbook(job, metrics, owner, evidence=evidence)
     if uploaded is not None:
         content, file_name = uploaded
         return Response(
@@ -643,6 +645,7 @@ async def export_evaluation_results(job_id: str, body: EvaluationResultExportReq
         metrics,
         body,
         partial_of_total=job.total_cases if job.run_result is None else None,
+        evidence=evidence,
     )
     return Response(
         content,
@@ -655,7 +658,11 @@ async def export_evaluation_results(job_id: str, body: EvaluationResultExportReq
 
 
 async def _results_on_source_workbook(
-    job: EvaluationJob, metrics: EvaluationMetrics, owner: tuple[str | None, str | None]
+    job: EvaluationJob,
+    metrics: EvaluationMetrics,
+    owner: tuple[str | None, str | None],
+    *,
+    evidence: dict[str, str] | None = None,
 ) -> tuple[bytes, str] | None:
     """元の Excel に結果の列を足す。元の Excel が無い・足せないときは None（ログだけ）。
 
@@ -669,7 +676,7 @@ async def _results_on_source_workbook(
         )
         answers = await _case_answers(metrics)
         content = await asyncio.to_thread(
-            evaluation_workbook_with_results, workbook.content, metrics, answers
+            evaluation_workbook_with_results, workbook.content, metrics, answers, evidence=evidence
         )
     except Exception as exc:  # noqa: BLE001 - 結果だけのファイルを返す
         logger.warning(
@@ -679,6 +686,23 @@ async def _results_on_source_workbook(
         return None
     stem = PurePath(workbook.file_name).stem or "evaluation"
     return content, f"{stem}_results.xlsx"
+
+
+async def _case_evidence(metrics: EvaluationMetrics) -> dict[str, str]:
+    """最終回答の採用済み引用だけを整形する。取得できない旧記録は空欄。"""
+    results = [*metrics.case_results]
+    if metrics.comparison:
+        results.extend(metrics.comparison.metrics.case_results)
+    try:
+        citations = await OracleClient().evaluation_citations_by_trace_ids(
+            [result.trace_id for result in results]
+        )
+        return {trace_id: used_evidence_lines(items) for trace_id, items in citations.items()}
+    except Exception as exc:  # noqa: BLE001 - 指標は出す
+        logger.warning(
+            "evaluation_results_citations_unavailable", extra=oracle_error_log_fields(exc)
+        )
+        return {}
 
 
 async def _case_answers(metrics: EvaluationMetrics) -> dict[str, str]:
