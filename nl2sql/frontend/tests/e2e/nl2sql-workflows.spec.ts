@@ -10260,7 +10260,7 @@ test("sql to question page shows a reserved loading state and retries reference-
   const errorBanner = page.getByRole("alert");
   await expect(errorBanner).toContainText("接続状態と入力内容を確認して再試行してください。");
   failObjectRequests = false;
-  await errorBanner.getByRole("button", { name: "プロファイル・スキーマを再読込" }).click();
+  await errorBanner.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(errorBanner).toHaveCount(0);
   await expect(page.getByText("請求情報")).toBeVisible();
   await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
@@ -19624,7 +19624,7 @@ test("sql to question retains candidates through navigation, reload and failed r
   await expect(generate).toBeDisabled();
   await expect(editor).toHaveValue(draft);
   unavailable = false;
-  await page.getByRole("button", { name: "プロファイル・スキーマを再読込" }).click();
+  await page.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(generate).toBeEnabled();
   expect(mutations).toBe(1);
 });
@@ -19875,7 +19875,7 @@ test("query recovery: usage-context の再試行で失敗した Profile だけ�
   await page.goto("/query");
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("再試行で消してはいけない草稿");
-  const error = page.getByRole("alert").filter({ hasText: "Profile の一時取得エラー" });
+  const error = page.getByTestId("query-page-data-load-failed");
   await expect(error).toBeVisible();
   await error.screenshot({ path: testInfo.outputPath("query-profile-retry-error.png") });
   await error.getByRole("button").click();

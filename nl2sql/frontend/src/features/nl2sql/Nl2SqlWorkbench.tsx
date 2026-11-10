@@ -1263,7 +1263,7 @@ function ExecutableNl2SqlWorkbench() {
 
       <PageBody wide className="grid gap-4">
         {visiblePageError && (visiblePageError.source === "profile-load" || visiblePageError.source === "schema-load") ? (() => {
-          const updatedAt = visiblePageError.source === "profile-load" ? profilesQuery.dataUpdatedAt : Math.min(schemaObjectsQuery.dataUpdatedAt, schemaHeadQuery.dataUpdatedAt);
+          const updatedAt = visiblePageError.source === "profile-load" ? (selectedProfileQuery.isError ? selectedProfileQuery.dataUpdatedAt : profilesQuery.dataUpdatedAt) : Math.min(schemaObjectsQuery.dataUpdatedAt, schemaHeadQuery.dataUpdatedAt);
           const error = Object.assign(new Error(visiblePageError.message), { errorCode: visiblePageError.code });
           const retry = () => { if (!noticeRetry.pending) void noticeRetry.track(() => loadCatalog()); };
           return updatedAt > 0 ? <DataLoadStaleNotice error={error} dataUpdatedAt={updatedAt} onRetry={retry} retrying={noticeRetry.pending} /> : <DataLoadFailure error={error} fallback={t("nl2sql.error.loadFailed")} onRetry={retry} retrying={noticeRetry.pending} testId="query-page-data-load-failed" />;
