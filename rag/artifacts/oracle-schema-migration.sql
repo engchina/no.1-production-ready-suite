@@ -4557,3 +4557,9 @@ BEGIN
   NULL; -- crag_missing_aspect_template,crag_quote_only_note,crag_refusal_summary,crag_unknown_aspect_template
 END;
 /
+
+-- migration: 20261110_4784_language_pack_retired_unread
+BEGIN
+  NULL; -- alias_followers,alias_negations,alias_words,alternative_connectors,amount_scale_units,aspect_labels,attribute_particles,attribute_words,calendar_words,count_counters,current_subject_words,date_units,denial_endings,denial_verbs,denial_words,digit_count_units,digit_range_labels,era_letters,example_words,fact_counters,fiscal_year_units,hedge_words,inquiry_cues,key_words,normalization,numeric_rule_words,range_connectors,rule_condition_words,rule_denial_prefixes,source_qualifiers,user_subject_particles,user_subject_words
+END;
+/

@@ -1,8 +1,10 @@
-"""言語資源の保存データから、廃止した項目を取り除く migration の処理(#4666・#4714・#4668)。
+"""言語資源の保存データから、廃止した項目を取り除く migration の処理(#4666・#4714・#4668・#4784)。
 
 公開版と下書きは全項目のスナップショットで、`build_pack` は余分な項目を拒否する。公開版の
 `content_hash` は全項目から計算するので、項目を消したら計算し直す必要があり、SQL だけでは書けない。
-`ingest_hash` は `ingest=False` の項目を含まないので変わらない。
+`ingest_hash` は取込の項目(`ingest=True`)だけから計算する。取込の項目を消した版は `ingest_hash` も
+計算し直し、その版で作った索引・成果物に残した取込 hash も同じ値に書き換える(内容は変わらないので、
+取込済みの文書を「再処理を推奨」にしない)。
 """
 
 from __future__ import annotations
@@ -267,6 +269,55 @@ RETIRED_CRAG_ANSWER_LABEL_FIELDS = frozenset(
         "crag_quote_only_note",
     }
 )
+# 読む所が無い項目と、文字の正規化を NFKC に固定して消した項目・読み飛ばしていた古い節(#4784)。
+# 上の migration の一覧は checksum に入っているので変えず、別の一覧にする。
+RETIRED_4784_NUMBER_FIELDS = frozenset(
+    {
+        "era_letters",
+        "calendar_words",
+        "date_units",
+        "fiscal_year_units",
+        "count_counters",
+        "range_connectors",
+    }
+)
+RETIRED_4784_SYMBOL_FIELDS = frozenset({"normalization"})
+RETIRED_4784_GROUNDING_CUE_FIELDS = frozenset(
+    {
+        "numeric_rule_words",
+        "digit_count_units",
+        "denial_verbs",
+        "denial_endings",
+        "denial_words",
+        "digit_range_labels",
+        "current_subject_words",
+        "attribute_words",
+        "attribute_particles",
+        "hedge_words",
+        "example_words",
+        "rule_denial_prefixes",
+        "source_qualifiers",
+        "user_subject_words",
+        "user_subject_particles",
+        "rule_condition_words",
+        "alternative_connectors",
+        "key_words",
+        "alias_followers",
+        "alias_words",
+        "alias_negations",
+        "fact_counters",
+        "amount_scale_units",
+    }
+)
+RETIRED_4784_ANSWER_LABEL_FIELDS = frozenset({"aspect_labels"})
+RETIRED_4784_SECTIONS = frozenset({"inquiry_cues"})
+RETIRED_4784_FIELDS = (
+    RETIRED_4784_NUMBER_FIELDS
+    | RETIRED_4784_SYMBOL_FIELDS
+    | RETIRED_4784_GROUNDING_CUE_FIELDS
+    | RETIRED_4784_ANSWER_LABEL_FIELDS
+    | RETIRED_4784_SECTIONS
+)
 _RETIRED_BY_SECTION = {
     "question_cues": (
         RETIRED_QUESTION_CUE_FIELDS
@@ -278,6 +329,7 @@ _RETIRED_BY_SECTION = {
         | RETIRED_UNREAD_ANSWER_LABEL_FIELDS
         | RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS
         | RETIRED_CRAG_ANSWER_LABEL_FIELDS
+        | RETIRED_4784_ANSWER_LABEL_FIELDS
     ),
     "answer_check_cues": (
         RETIRED_ANSWER_CHECK_CUE_FIELDS
@@ -285,8 +337,12 @@ _RETIRED_BY_SECTION = {
         | RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS
     ),
     "grounding_cues": (
-        RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS | RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS
+        RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS
+        | RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS
+        | RETIRED_4784_GROUNDING_CUE_FIELDS
     ),
+    "numbers": RETIRED_4784_NUMBER_FIELDS,
+    "symbols": RETIRED_4784_SYMBOL_FIELDS,
     "search_terms": RETIRED_UNREAD_SEARCH_TERM_FIELDS,
     "evidence_cues": (
         RETIRED_UNREAD_EVIDENCE_CUE_FIELDS
@@ -294,8 +350,22 @@ _RETIRED_BY_SECTION = {
         | RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS
     ),
 }
-_ALL_RETIRED_SECTIONS = RETIRED_SECTIONS | RETIRED_UNREAD_SECTIONS | RETIRED_QUESTION_WORD_SECTIONS
+_ALL_RETIRED_SECTIONS = (
+    RETIRED_SECTIONS
+    | RETIRED_UNREAD_SECTIONS
+    | RETIRED_QUESTION_WORD_SECTIONS
+    | RETIRED_4784_SECTIONS
+)
+# 取込の項目(`ingest=True`)を含む、廃止した項目と節。これを消した版だけ `ingest_hash` が変わる。
+_RETIRED_INGEST_FIELDS = {
+    "numbers": RETIRED_4784_NUMBER_FIELDS,
+    "symbols": RETIRED_4784_SYMBOL_FIELDS,
+}
+_RETIRED_INGEST_SECTIONS = RETIRED_4784_SECTIONS
 PROFILE_TABLE = "rag_search_answer_profiles"
+# 版ごとの取込 hash を残す列(索引の集合・版の切り替えの記録)と、成果物の JSON の取込 hash。
+_INGEST_HASH_COLUMN_TABLES = ("rag_chunk_sets", "rag_recipe_version_log")
+_INGEST_HASH_JSON_TABLES = ("rag_document_extractions", "rag_document_extraction_revisions")
 
 
 def without_retired_fields(pack: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -309,6 +379,15 @@ def without_retired_fields(pack: Mapping[str, Any]) -> dict[str, Any] | None:
     if not stripped and not dropped:
         return None
     return {k: v for k, v in {**pack, **stripped}.items() if k not in dropped}
+
+
+def _removes_ingest_fields(pack: Mapping[str, Any]) -> bool:
+    if _RETIRED_INGEST_SECTIONS & pack.keys():
+        return True
+    return any(
+        isinstance(fields := pack.get(section), Mapping) and retired & fields.keys()
+        for section, retired in _RETIRED_INGEST_FIELDS.items()
+    )
 
 
 def _table_exists(connection: Any, table: str) -> bool:
@@ -327,14 +406,18 @@ def _strip_releases(connection: Any) -> None:
     from app.clients.oracle import _execute, _fetch_all, _json_bind, _json_input_sizes, _json_loads
 
     table = release_store.RELEASE_TABLE
+    changed_ingest: list[tuple[str, str, str]] = []
     for row in _fetch_all(
-        connection, f"SELECT release_id, effective_json FROM {table} FOR UPDATE", {}
+        connection,
+        f"SELECT release_id, effective_json, ingest_hash FROM {table} FOR UPDATE",
+        {},
     ):
-        stripped = without_retired_fields(_json_loads(row["effective_json"]))
+        effective = _json_loads(row["effective_json"])
+        stripped = without_retired_fields(effective)
         if stripped is None:
             continue
         try:
-            content_hash = build_pack(stripped).hash
+            pack = build_pack(stripped)
         except ValueError:
             # 別の項目の欠けで今の契約では読めない版。項目だけを消し、hash は変えない。
             logger.warning(
@@ -348,17 +431,53 @@ def _strip_releases(connection: Any) -> None:
                 input_sizes=_json_input_sizes("effective"),
             )
             continue
+        # 検索・回答の項目だけを消した版の取込 hash は変わらないので書かない。
+        ingest_hash = pack.ingest_hash if _removes_ingest_fields(effective) else row["ingest_hash"]
         _execute(
             connection,
-            f"UPDATE {table} SET effective_json=:effective, content_hash=:content_hash "
-            "WHERE release_id=:id",
+            f"UPDATE {table} SET effective_json=:effective, content_hash=:content_hash, "
+            "ingest_hash=:ingest_hash WHERE release_id=:id",
             {
                 "id": row["release_id"],
                 "effective": _json_bind(stripped),
-                "content_hash": content_hash,
+                "content_hash": pack.hash,
+                "ingest_hash": ingest_hash,
             },
             input_sizes=_json_input_sizes("effective"),
         )
+        if row["ingest_hash"] and row["ingest_hash"] != ingest_hash:
+            changed_ingest.append((row["release_id"], row["ingest_hash"], ingest_hash))
+    for release_id, old, new in changed_ingest:
+        _repoint_ingest_hash(connection, release_id, old, new)
+
+
+def _repoint_ingest_hash(connection: Any, release_id: str, old: str, new: str) -> None:
+    """取込 hash が変わった版で作った索引・成果物の取込 hash を、同じ版の新しい値にそろえる。
+
+    版と旧い値の両方が一致する行だけを変える(流し直しても同じ結果)。
+    """
+    from app.clients.oracle import _execute
+
+    binds = {"id": release_id, "old": old, "new": new}
+    for table in _INGEST_HASH_COLUMN_TABLES:
+        if _table_exists(connection, table):
+            _execute(
+                connection,
+                f"UPDATE {table} SET language_pack_ingest_hash=:new "
+                "WHERE language_pack_release_id=:id AND language_pack_ingest_hash=:old",
+                binds,
+            )
+    for table in _INGEST_HASH_JSON_TABLES:
+        if _table_exists(connection, table):
+            _execute(
+                connection,
+                f"UPDATE {table} SET extraction_json=JSON_TRANSFORM(extraction_json, "
+                "SET '$.parser_artifacts.language_pack_ingest_hash'=:new) "
+                "WHERE JSON_VALUE(extraction_json, '$.parser_artifacts.language_pack_release_id')"
+                "=:id AND JSON_VALUE(extraction_json, "
+                "'$.parser_artifacts.language_pack_ingest_hash')=:old",
+                binds,
+            )
 
 
 def _strip_draft(connection: Any) -> None:

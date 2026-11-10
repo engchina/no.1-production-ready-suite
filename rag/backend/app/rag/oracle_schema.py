@@ -76,6 +76,7 @@ from app.clients.support_guide_store import (
 )
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
+    RETIRED_4784_FIELDS,
     RETIRED_ANSWER_CHECK_CUE_FIELDS,
     RETIRED_ANSWER_LABEL_FIELDS,
     RETIRED_CRAG_ANSWER_LABEL_FIELDS,
@@ -989,6 +990,29 @@ END;
                 "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
                 "項目に保存した語を残す必要があれば適用前に同列を export してください。"
                 "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4784_language_pack_retired_unread",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_4784_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、どの処理も"
+                "読まない項目（numbers・grounding_cues・answer_labels の一部）と、NFKC に固定した"
+                "文字の正規化（symbols.normalization）と、読み飛ばしていた古い節（inquiry_cues）の"
+                "値を削除し、公開版の CONTENT_HASH と INGEST_HASH を計算し直します。取込の項目を"
+                "消した版は、その版で作った索引の集合（RAG_CHUNK_SETS）・版の切り替えの記録"
+                "（RAG_RECIPE_VERSION_LOG）・抽出の成果物（RAG_DOCUMENT_EXTRACTIONS・"
+                "RAG_DOCUMENT_EXTRACTION_REVISIONS の parser_artifacts）に残した取込 hash も新しい"
+                "値に書き換えます（内容は変わらないので、取込済みの文書の再処理は要りません）。"
+                "ほかの項目・版の番号・公開の履歴は変えません。項目に保存した語を残す必要があれば"
+                "適用前に同列を export してください。削除後は復元できません。"
             ),
         )
     )

@@ -114,49 +114,9 @@
       "前",
       "次",
       "中"
-    ],
-    "era_letters": [
-      "M=明治",
-      "T=大正",
-      "S=昭和",
-      "H=平成",
-      "R=令和"
-    ],
-    "calendar_words": [
-      "西暦"
-    ],
-    "date_units": [
-      "年度",
-      "年",
-      "月",
-      "日"
-    ],
-    "fiscal_year_units": [
-      "年度"
-    ],
-    "count_counters": [
-      "つ",
-      "件",
-      "個",
-      "項目",
-      "種類",
-      "か所",
-      "箇所",
-      "ヶ所",
-      "カ所"
-    ],
-    "range_connectors": [
-      "から",
-      "より",
-      "〜",
-      "～",
-      "~",
-      "－",
-      "-"
     ]
   },
   "symbols": {
-    "normalization": "NFKC",
     "title_ignored_chars": [
       "_",
       "-",
@@ -1304,16 +1264,7 @@
     "guide_notes_note_template": "次は業務ガイド「{title}」の案内で、資料の記載ではありません。",
     "guide_handoff_template": "次の場合は{contact}へお問い合わせください: {conditions}",
     "guide_approval_template": "実施の前に承認が必要です。{note}",
-    "guide_acquisition_incomplete_template": "必須の参照範囲について、取得または回答材料への保持を確認できていません（手順: {steps}）。資料に記載がないことや、回答の誤りを意味しません。",
-    "aspect_labels": [
-      "対象の業務・画面=business_object",
-      "求める結果=requested_result",
-      "適用条件=applicability",
-      "操作手順=procedure",
-      "構成明細=member_details",
-      "集計対象の一致=population_membership",
-      "列挙の網羅（件数・範囲）=enumeration_coverage"
-    ]
+    "guide_acquisition_incomplete_template": "必須の参照範囲について、取得または回答材料への保持を確認できていません（手順: {steps}）。資料に記載がないことや、回答の誤りを意味しません。"
   },
   "answer_check_cues": {
     "ignored_quote_chars": [
@@ -1434,125 +1385,6 @@
     ]
   },
   "grounding_cues": {
-    "numeric_rule_words": [
-      "許容範囲",
-      "入力範囲",
-      "入力可能範囲",
-      "上限",
-      "下限",
-      "最大",
-      "最小",
-      "必須値",
-      "初期値",
-      "既定値",
-      "デフォルト"
-    ],
-    "digit_count_units": [
-      "桁"
-    ],
-    "denial_verbs": [
-      "確認",
-      "判断",
-      "断定",
-      "特定"
-    ],
-    "denial_endings": [
-      "できません"
-    ],
-    "denial_words": [
-      "不明",
-      "未確認",
-      "とは限りません"
-    ],
-    "digit_range_labels": [
-      "半角数字"
-    ],
-    "current_subject_words": [
-      "今回",
-      "現在",
-      "対象",
-      "あなた",
-      "利用者"
-    ],
-    "attribute_words": [
-      "所属",
-      "グループ",
-      "担当者",
-      "氏名",
-      "区分",
-      "状態"
-    ],
-    "attribute_particles": [
-      "は",
-      "が",
-      "=",
-      ":"
-    ],
-    "hedge_words": [
-      "場合",
-      "なら",
-      "未確認",
-      "不明",
-      "とは限"
-    ],
-    "example_words": [
-      "例",
-      "図",
-      "スクリーンショット"
-    ],
-    "rule_denial_prefixes": [
-      "かどうかは",
-      "かどうか",
-      "かは",
-      "か",
-      "とは"
-    ],
-    "source_qualifiers": [
-      "資料からは",
-      "資料から"
-    ],
-    "user_subject_words": [
-      "あなた",
-      "利用者",
-      "今回",
-      "現在"
-    ],
-    "user_subject_particles": [
-      "の",
-      "は",
-      "が"
-    ],
-    "rule_condition_words": [
-      "場合",
-      "なら"
-    ],
-    "alternative_connectors": [
-      "または",
-      "又は",
-      "か",
-      "もしくは",
-      "や"
-    ],
-    "key_words": [
-      "キー"
-    ],
-    "alias_followers": [
-      "ボタン",
-      "欄",
-      "項目"
-    ],
-    "alias_words": [
-      "同じ",
-      "同一",
-      "別名",
-      "とも呼",
-      "を指す"
-    ],
-    "alias_negations": [
-      "異なる",
-      "別の",
-      "ではない"
-    ],
     "internal_label_words": [
       "規則"
     ],
@@ -1561,19 +1393,6 @@
       "行目",
       "line",
       "lines"
-    ],
-    "fact_counters": [
-      "歳",
-      "年",
-      "月",
-      "日",
-      "円",
-      "割",
-      "か月",
-      "ヶ月",
-      "人",
-      "件",
-      "回"
     ],
     "grounding_stopwords": [
       "検索",
@@ -1585,10 +1404,6 @@
       "です",
       "ます",
       "ください"
-    ],
-    "amount_scale_units": [
-      "万=10000",
-      "億=100000000"
     ]
   },
   "entity_cues": {

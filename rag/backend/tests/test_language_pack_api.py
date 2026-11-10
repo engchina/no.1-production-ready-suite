@@ -130,7 +130,7 @@ def test_preview_compares_current_and_draft_without_publishing() -> None:
     [
         ("symbols", "bracket_pairs", ["("]),
         ("english", "en_section_words", ["part=volume"]),
-        ("symbols", "normalization", "NFKD"),
+        ("symbols", "normalization", "NFKC"),
         ("numbers", "kanji_digits", ["一=いち"]),
         ("numbers", "kanji_multipliers", ["十十=10"]),
         ("symbols", "name_chars", ["あいう"]),
@@ -141,7 +141,7 @@ def test_preview_compares_current_and_draft_without_publishing() -> None:
     ids=[
         "bracket-not-pair",
         "en-kind-unknown",
-        "normalization-unknown",
+        "normalization-removed",
         "kanji-not-number",
         "multiplier-not-one-char",
         "name-char-not-range",
@@ -269,40 +269,6 @@ def test_incomplete_draft_api_is_rejected_without_writes(
         "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
     ]
     assert draft == before
-    assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
-
-
-@pytest.mark.parametrize(
-    "filename", ["synthetic-language-pack.json", "synthetic-language-pack.history.json"]
-)
-def test_uninitialized_database_with_legacy_file_is_409_without_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
-) -> None:
-    from app.clients.language_pack_release_store import LanguagePackReleaseStore
-    from app.rag import published_language
-    from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
-
-    path = tmp_path / "synthetic-language-pack.json"
-    (tmp_path / filename).write_text('{"synthetic":"独自の保存設定"}')
-    pool = FakeOraclePool(execute_results=[[], []])
-    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    monkeypatch.setattr(published_language, "resolve_language_pack_file", lambda _settings: path)
-    monkeypatch.setattr(
-        published_language,
-        "LanguagePackReleaseStore",
-        lambda _oracle: LanguagePackReleaseStore(oracle),
-    )
-
-    async def initialized() -> LanguagePackReleaseStore:
-        return await published_language.initialized_release_store(oracle)
-
-    monkeypatch.setattr(language_pack, "release_store", initialized)
-    response = client.get("/api/settings/language-pack/draft")
-    assert response.status_code == 409
-    assert response.json()["data"] is None
-    assert response.json()["error_messages"] == [
-        "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
-    ]
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
 
 

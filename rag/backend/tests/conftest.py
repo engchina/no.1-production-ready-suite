@@ -157,10 +157,10 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
     monkeypatch.setenv("RAG_PARSER_SETTINGS_FILE", str(tmp_path / "parser-settings.json"))
     monkeypatch.setenv("RAG_FILE_TYPE_DEFAULTS_FILE", str(tmp_path / "file-type-defaults.json"))
-    # 言語資源の全体の上書き(#2181)は、テストごとに組み込みのパックへ戻す。
-    from app.rag.language_pack_store import LANGUAGE_PACK_STORE
+    # 言語資源の全体の既定(#2181)は、テストごとに組み込みのパックへ戻す。
+    from rag_parser_core.language import set_default_pack
 
-    LANGUAGE_PACK_STORE.reset()
+    set_default_pack(None)
     # 共通 .env（モデルの API key・OCI / DB / 保存先の画面保存先）と RAG の backend/.env
     # （parser の API key・RAG 固有の画面保存先）は tmp へ分離する（#211）。
     monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path / "platform.env")

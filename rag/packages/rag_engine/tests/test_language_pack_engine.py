@@ -131,7 +131,6 @@ class LanguagePackEngineTest(unittest.TestCase):
                 "applications_section": "合成の導出結論",
                 "citation_prefix": "出典: ",
                 "page_location": "{page} 頁",
-                "aspect_labels": ["手順=procedure"],
             }
         )
         with bind_pack(custom):

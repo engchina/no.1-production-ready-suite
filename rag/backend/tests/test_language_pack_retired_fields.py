@@ -71,9 +71,9 @@ class _Cursor:
         assert sql.startswith("UPDATE")
         self.db.updates += 1
         assignments = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[0])
-        key, bind = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[1])[0]
+        conditions = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[1])
         for row in rows:
-            if row[key] == binds[bind]:
+            if all(row[key] == binds[bind] for key, bind in conditions):
                 for column, name in assignments:
                     value = binds[name]
                     row[column] = (
@@ -421,3 +421,118 @@ def test_crag_labels_are_retired_by_a_destructive_data_step() -> None:
     )
     assert section.data_step is remove_retired_language_pack_fields
     assert section.destructive_note
+
+
+_UNREAD_4784_NAME = "20261110_4784_language_pack_retired_unread"
+
+
+def _with_4784_retired(pack: dict[str, Any]) -> dict[str, Any]:
+    old = copy.deepcopy(pack)
+    old["numbers"].update({key: ["合成語"] for key in module.RETIRED_4784_NUMBER_FIELDS})
+    old["symbols"]["normalization"] = "NFKC"
+    old["grounding_cues"].update(
+        {key: ["合成語"] for key in module.RETIRED_4784_GROUNDING_CUE_FIELDS}
+    )
+    old["answer_labels"]["aspect_labels"] = ["合成語=procedure"]
+    old["inquiry_cues"] = {"condition_terms": ["合成語"]}
+    return old
+
+
+def test_4784_fields_are_retired_and_ingest_hash_is_repointed() -> None:
+    """取込の項目を消した版は取込 hash も計算し直し、その版の索引の記録もそろえる(#4784)。"""
+    current = builtin_pack().to_dict()
+    old = _with_4784_retired(current)
+    profile = {
+        "language_pack": {
+            "inquiry_cues": {"column_words": ["合成語"]},
+            "grounding_cues": {"hedge_words": ["合成語"], "citation_unit_words": ["合成語"]},
+        }
+    }
+    db = _Db(
+        rag_language_pack_releases=[_release(old) | {"ingest_hash": "old-ingest"}],
+        rag_language_pack_state=[
+            {"singleton_id": 1, "draft_revision": 7, "draft_effective_json": old}
+        ],
+        rag_search_answer_profiles=[{"search_answer_profile_id": "p", "profile_config": profile}],
+        rag_chunk_sets=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"},
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "other"},
+            {"language_pack_release_id": "r2", "language_pack_ingest_hash": "old-ingest"},
+        ],
+        rag_recipe_version_log=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"}
+        ],
+    )
+
+    remove_retired_language_pack_fields(db)
+
+    pack = builtin_pack()
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert (release["content_hash"], release["ingest_hash"]) == (pack.hash, pack.ingest_hash)
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    assert db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"] == {
+        "language_pack": {"grounding_cues": {"citation_unit_words": ["合成語"]}}
+    }
+    assert [row["language_pack_ingest_hash"] for row in db.tables["RAG_CHUNK_SETS"]] == [
+        pack.ingest_hash,
+        "other",
+        "old-ingest",
+    ]
+    assert db.tables["RAG_RECIPE_VERSION_LOG"][0]["language_pack_ingest_hash"] == pack.ingest_hash
+
+    snapshot = copy.deepcopy(db.tables)
+    remove_retired_language_pack_fields(db)
+    assert db.tables == snapshot
+
+
+def test_4784_extraction_artifacts_are_repointed_by_release_and_old_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statements: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(module, "_table_exists", lambda _connection, _table: True)
+    monkeypatch.setattr(
+        "app.clients.oracle._execute",
+        lambda _connection, sql, binds, **_: statements.append((sql, binds)),
+    )
+    module._repoint_ingest_hash(object(), "r1", "old", "new")
+    tables = [sql.split()[1] for sql, _ in statements]
+    assert tables == [
+        "rag_chunk_sets",
+        "rag_recipe_version_log",
+        "rag_document_extractions",
+        "rag_document_extraction_revisions",
+    ]
+    for sql, binds in statements:
+        assert binds == {"id": "r1", "old": "old", "new": "new"}
+        assert ":id" in sql and ":old" in sql
+    assert "JSON_TRANSFORM" in statements[2][0]
+
+
+def test_unchanged_ingest_hash_is_not_repointed() -> None:
+    """検索・回答の項目だけを消した版は取込 hash が変わらず、索引の記録に触らない。"""
+    pack = builtin_pack()
+    old = copy.deepcopy(pack.to_dict())
+    old["grounding_cues"]["hedge_words"] = ["合成語"]
+    db = _Db(
+        rag_language_pack_releases=[_release(old)],
+        rag_chunk_sets=[{"language_pack_release_id": "r1", "language_pack_ingest_hash": "ingest"}],
+    )
+    remove_retired_language_pack_fields(db)
+    assert db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]["ingest_hash"] == "ingest"
+    assert db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]["content_hash"] == pack.hash
+    assert db.updates == 1
+
+
+def test_4784_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _UNREAD_4784_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert "INGEST_HASH" in section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in module.RETIRED_4784_FIELDS:
+        assert field in section.sql
+        assert not any(
+            field in fields
+            for fields in builtin_pack().to_dict().values()
+            if isinstance(fields, dict)
+        )
