@@ -252,7 +252,7 @@ class AnswerOutcome:
 
 def approved_faq_answer_text(answer: str, faq_question: str) -> str:
     """承認済み FAQ からの回答の本文（末尾に出典の行。選んだ FAQ・そのまま返す FAQ で同じ形）。"""
-    return f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）"
+    return f"{answer}\n\n（出典: 登録済みQ&A「{faq_question}」）"
 
 
 # evaluate_answer_payload が読む回答 payload のキー(answer_result_payload の部分集合)。

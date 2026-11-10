@@ -2614,7 +2614,7 @@ async def test_answer_engine_answers_only_from_selected_approved_faq(
         }
     ]
     assert outcome.answer.startswith("宿泊出張の日当は 1 泊 2,000 円です。")
-    assert "承認済み FAQ「出張の日当はいくらですか？」" in outcome.answer
+    assert "登録済みQ&A「出張の日当はいくらですか？」" in outcome.answer
     assert outcome.citations == []
     assert outcome.diagnostics["answer_source"] == "approved_faq"
     # 根拠として出す FAQ の原文(回答した時点のもの。#737)。

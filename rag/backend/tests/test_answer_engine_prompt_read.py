@@ -113,5 +113,5 @@ async def test_approved_faq_early_path_is_unchanged(monkeypatch: pytest.MonkeyPa
     result = await _engine(oracle, approved_faq=("設定 A は？", "設定 A を有効にします。")).run(
         SearchRequest(query="設定 A の操作を教えてください。")
     )
-    assert result.answer == "設定 A を有効にします。\n\n（出典: 承認済み FAQ「設定 A は？」）"
+    assert result.answer == "設定 A を有効にします。\n\n（出典: 登録済みQ&A「設定 A は？」）"
     reader.assert_not_awaited()

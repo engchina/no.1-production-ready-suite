@@ -353,7 +353,7 @@ async def test_direct_match_returns_the_faq_answer_without_generation(
     # モデルの呼び出しは補完の 1 回だけ。検索と回答の生成の流れは通らない。
     assert llm.calls == ["history_rewrite"]
     assert engine_queries == []
-    assert response.answer == f"{ANSWER}\n\n（出典: 承認済み FAQ「{QUESTION}」）"
+    assert response.answer == f"{ANSWER}\n\n（出典: 登録済みQ&A「{QUESTION}」）"
     assert response.citations == []
     answer = response.diagnostics.answer
     assert answer["answer_source"] == "approved_faq"
