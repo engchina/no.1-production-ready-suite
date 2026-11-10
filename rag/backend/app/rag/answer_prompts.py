@@ -25,6 +25,7 @@ INGESTION_PROMPT_REFS = {
     "heading_levels": "app.rag.ingestion_prompts:HEADING_LEVEL_PROMPT",
     "field_extraction": "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT",
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
+    "document_summary": "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT",
 }
 EDITABLE_PROMPT_KEYS = (IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
 ANSWER_PROMPT_MAX_CHARS = 50_000
@@ -130,6 +131,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "navigation_summary",
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT"),),
+    ),
+    # 取込の後に 1 文書につき 1 回だけ作る文書全体の要約（#4793）。
+    PromptStage(
+        "document_summary",
+        "ingestion",
+        (("instruction", "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT"),),
     ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(

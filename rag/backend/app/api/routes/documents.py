@@ -41,6 +41,7 @@ from app.api.errors import (
     SourceVersionStaleError,
 )
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
+from app.clients.document_summary_store import DocumentSummaryStore
 from app.clients.extraction_revision_store import max_extraction_revisions
 from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
@@ -97,6 +98,7 @@ from app.rag.document_sections_service import (
     section_extraction_base,
     sections_source,
 )
+from app.rag.document_summary import content_summary_view, refresh_document_summary
 from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
 from app.rag.extraction_revisions import ExtractionElementChange, extraction_element_changes
 from app.rag.file_type_defaults import classify_file_type, file_type_default_overrides
@@ -177,6 +179,7 @@ from app.schemas.document import (
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
     DocumentClassification,
+    DocumentContentSummaryState,
     DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
@@ -3762,6 +3765,63 @@ async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
     return ApiResponse(data=detail)
 
 
+async def _content_summary_state(
+    document_id: str, oracle: OracleClient
+) -> DocumentContentSummaryState:
+    settings = get_settings()
+    row = await DocumentSummaryStore(oracle).get(document_id)
+    return DocumentContentSummaryState(
+        enabled=bool(settings.rag_document_summary_enabled),
+        summary=content_summary_view(row, settings),
+    )
+
+
+@router.get("/{document_id}/summary", response_model=ApiResponse[DocumentContentSummaryState])
+async def get_document_summary(document_id: str) -> ApiResponse[DocumentContentSummaryState]:
+    """文書全体の要約（#4793）。まだ作っていない文書は ``summary`` が null。"""
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return ApiResponse(data=await _content_summary_state(document_id, oracle))
+
+
+@router.post("/{document_id}/summary", response_model=ApiResponse[DocumentContentSummaryState])
+async def regenerate_document_summary(
+    document_id: str,
+) -> ApiResponse[DocumentContentSummaryState]:
+    """文書全体の要約を作り直す（#4793）。
+
+    取り込み済みの文書に後から要約を作る・失敗した要約を作り直す操作。LLM を 1 回呼び、要約の
+    chunk を入れ替える（原文の chunk・埋め込みは変えない）。失敗の理由は応答の
+    ``summary.failure_code`` に入る（今の版の要約があれば残す）。
+    """
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    settings = get_settings()
+    if not settings.rag_document_summary_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "文書の要約は無効です。文書解析の設定の「解析後の処理」で有効にしてから"
+                "実行してください。"
+            ),
+        )
+    store = DocumentSummaryStore(oracle)
+    current = content_summary_view(await store.get(document_id), settings)
+    if current is not None and current.generating:
+        raise HTTPException(status_code=409, detail="文書の要約を作成中です。")
+    if not await store.targets(document_id):
+        raise HTTPException(
+            status_code=409,
+            detail="検索に出している索引がありません。取込が終わってから実行してください。",
+        )
+    await refresh_document_summary(
+        document_id, oracle=oracle, settings=settings, reason="manual", force=True
+    )
+    return ApiResponse(data=await _content_summary_state(document_id, oracle))
+
+
 async def _attach_duplicate_source(
     detail: DocumentDetail,
     oracle: OracleClient,
@@ -5696,6 +5756,16 @@ async def _run_pinned_ingestion_job(
         await refresh_document_section_map(job.document_id, oracle=oracle, reason="ingestion")
         if recipe_success_outcome is not None:
             _record_recipe_success_outcome(job, recipe_success_outcome)
+            # 索引まで終えて検索に出した job の後段: 文書全体の要約を 1 回の LLM で作り、要約の
+            # chunk を索引に入れる（#4793。失敗・時間切れでも job は成功のまま。理由は文書の要約の
+            # 行に残り、文書の詳細から作り直せる）。
+            await refresh_document_summary(
+                job.document_id,
+                oracle=oracle,
+                settings=get_settings(),
+                reason="ingestion",
+                recipe_id=job.recipe_id,
+            )
         if next_recipe_phase is not None and job.recipe_id is not None:
             # 現在ジョブは SUCCEEDED になったので、同一レシピの次フェーズ job を投入できる
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は

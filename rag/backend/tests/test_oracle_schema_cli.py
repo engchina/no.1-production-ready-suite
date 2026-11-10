@@ -142,6 +142,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "entities",
         "section_map",
         "recipe_version_log",
+        "document_summaries",
         "citation_feedback",
         "feedback_details",
         "evaluation_artifacts",
@@ -514,7 +515,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 169
+    assert len(statements) == 170
     assert all(
         statement.startswith(
             (
@@ -658,6 +659,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261110_4784_search_answer_profile_retired_fields",
         "20261110_4784_language_pack_retired_unread",
         "20261110_4782_remove_raptor",
+        "20261110_4793_document_summaries",
     ]
 
 

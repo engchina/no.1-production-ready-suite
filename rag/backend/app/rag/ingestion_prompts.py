@@ -42,7 +42,28 @@ NAVIGATION_SUMMARY_PROMPT = (
     "- 原文にない情報は補わないでください。\n"
 )
 
+# 文書全体の要約(#4793)。取込の後に 1 文書につき 1 回だけ呼ぶ。データは
+# ``app.rag.document_summary.build_summary_input`` が作る文書の本文(と見出しの一覧)。
+DOCUMENT_SUMMARY_PROMPT = (
+    "## Step 1: 文書の入力を読む\n"
+    "データは 1 つの文書です。document_body は文書の本文で、truncated が true のときは文書の"
+    "先頭の一部だけです。document_outline は文書全体の見出しの一覧で、本文を省いたときだけ"
+    "付きます。\n"
+    "\n"
+    "## Step 2: 文書全体を要約する\n"
+    "- summary には、何について書かれた文書か、主な内容、結論や決まっていることを 3〜5 文で"
+    "書いてください。\n"
+    "- 本文を省いた文書では、省いた部分の内容を見出しの一覧から読み取れる範囲で含めてください。\n"
+    "- topics には、この文書を探す人が使う話題の語を、本文の語のまま 3〜7 個挙げてください。\n"
+    "- 入力にない情報は補わないでください。\n"
+    "- 要約できる内容がないときは、summary を空の文字列、topics を空の配列にしてください。\n"
+    "\n"
+    "## Step 3: 文書の言語で書く\n"
+    "summary と topics は、文書の本文と同じ言語で書いてください。\n"
+)
+
 __all__ = [
+    "DOCUMENT_SUMMARY_PROMPT",
     "FIELD_EXTRACTION_PART_HEADER",
     "FIELD_EXTRACTION_PART_PATH",
     "FIELD_EXTRACTION_PROMPT",

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from rag_parser_core.extraction import DOCUMENT_SUMMARY_CONTENT_KIND
+
 
 def source_context(record: Any) -> dict[str, Any]:
     metadata = getattr(record, "metadata", {}) or {}
@@ -23,6 +25,9 @@ def source_context(record: Any) -> dict[str, Any]:
     caption = metadata.get("table_caption")
     if isinstance(caption, str) and caption.strip():
         context["table_caption"] = caption
+    if metadata.get("content_kind") == DOCUMENT_SUMMARY_CONTENT_KIND:
+        # 文書全体の要約（取込のときに作った説明）。原文の抜粋ではないことをモデルと保存の両方に示す（#4793）。
+        context["evidence_kind"] = DOCUMENT_SUMMARY_CONTENT_KIND
     role = metadata.get("html_region_role")
     if isinstance(role, str) and role in {"header", "footer", "caption"}:
         context["html_region"] = {"role": role, "text": str(getattr(record, "text", "") or "")}
