@@ -102,20 +102,19 @@ class LanguagePackEngineTest(unittest.TestCase):
         """根拠の選び方の手がかり（機能番号の線）は言語資源から作る(#2181 段 4)。"""
         from types import SimpleNamespace
 
-        from rag_engine.retrieval.operation_context import alternative_operation_queries
+        from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
 
+        record = SimpleNamespace(metadata={"section_path": ["合成の章の名前", "業務~(1)登録画面"]})
+        # 線の字に「~」が無ければ番号付きの機能見出しと見なさず、章の名前も残す。
+        self.assertEqual(operation_labels(record), {"合成の章の名前", "業務~(1)登録画面"})
+        with bind_pack(_custom(evidence_cues={"function_number_dashes": ["-", "~"]})):
+            self.assertEqual(operation_labels(record), {"業務~(1)登録画面"})
         records = [
             SimpleNamespace(metadata={"section_path": ["業務~(1)登録画面"]}),
             SimpleNamespace(metadata={"section_path": ["業務~(2)削除画面"]}),
         ]
         self.assertEqual(alternative_operation_queries("登録したい", records), ())
-        with bind_pack(
-            _custom(
-                evidence_cues={
-                    "function_number_dashes": ["-", "~"],
-                }
-            )
-        ):
+        with bind_pack(_custom(evidence_cues={"function_number_dashes": ["-", "~"]})):
             self.assertEqual(len(alternative_operation_queries("登録したい", records)), 2)
 
     def test_answer_labels_follow_the_pack(self):
@@ -131,7 +130,6 @@ class LanguagePackEngineTest(unittest.TestCase):
                 "applications_section": "合成の導出結論",
                 "citation_prefix": "出典: ",
                 "page_location": "{page} 頁",
-                "aspect_labels": ["手順=procedure"],
             }
         )
         with bind_pack(custom):
@@ -140,6 +138,35 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(answer_labels().applications_section, "合成の導出結論")
             self.assertFalse(is_structural_line("資料により確認できた事項"))
             self.assertEqual(answer_labels().page(3), "3 頁")
+
+    def test_page_text_is_fixed_to_nfkc_like_the_previous_default(self):
+        """頁番号の比較は NFKC に固定し、既定（NFKC）で取り込んだ文書と同じ形にする(#4784)。"""
+        import re
+        import unicodedata
+
+        from rag_engine.chunking.constants import _compact_page_text
+
+        for text in ("－ ３ －", "Ⅳ", "Ｐ．１２ / ２０", "ii"):
+            self.assertEqual(_compact_page_text(text), re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)))
+
+    def test_added_question_stopwords_are_dropped_from_the_query(self):
+        """同梱の止め語の英語 5 語と疑問の副詞 3 語は質問の語にしない(#4784)。足す前の一覧では語に残る。"""
+        from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
+
+        added = {"as", "into", "through", "whom", "whose", "なぜ", "どうして", "いかが"}
+        questions = (
+            "なぜ区画の上限を超えるのですか",
+            "設定はいかがですか",
+            "records into the archive through the console",
+            "whom and whose records as default",
+        )
+        self.assertTrue(added <= set(builtin_pack().words("search_terms", "stopwords")))
+        current = {term for question in questions for term in tokenize_text_search_query(question)}
+        self.assertFalse(added & current)
+        before = [word for word in builtin_pack().words("search_terms", "stopwords") if word not in added]
+        with bind_pack(_custom(search_terms={"stopwords": before})):
+            previous = {term for question in questions for term in tokenize_text_search_query(question)}
+        self.assertTrue({"なぜ", "いかが", "into", "through", "whom", "as"} <= previous)
 
 
 if __name__ == "__main__":
