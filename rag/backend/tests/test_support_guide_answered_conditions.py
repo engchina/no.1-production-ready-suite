@@ -50,8 +50,9 @@ def stub(monkeypatch: MonkeyPatch, output: Any = None, *, error: bool = False) -
     calls: list[Any] = []
 
     class Client:
-        async def generate(self, _prompt: str, context: str, **kwargs: Any) -> str:
-            calls.append((json.loads(context), kwargs))
+        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+            # 利用者の答えは質問の欄に、条件の定義は文脈に渡す。
+            calls.append(({"answers": json.loads(prompt), **json.loads(context)}, kwargs))
             if error:
                 raise RuntimeError("synthetic failure")
             body = output
@@ -94,7 +95,7 @@ async def test_free_text_answer_becomes_the_chosen_option(monkeypatch: MonkeyPat
     assert (state.value, state.source) == ("個別の項目", "user")
     [(context, kwargs)] = calls
     [condition] = context["conditions"]
-    assert condition["answer"] == FREE_TEXT
+    assert context["answers"] == [{"id": "scope", "answer": FREE_TEXT}]
     assert condition["options"] == ["個別の項目", "共有グループ"]
     assert "否定" in kwargs["system_prompt"]
 

@@ -998,7 +998,7 @@ class ReadableDocumentsOutput(VersionedOutput):
 
 
 class OutlineSection(BaseModel):
-    """文書の 1 つの章節（章節ナビゲーションの章節。#1438）。"""
+    """文書の 1 つの章節（章節ナビゲーションの章節）。"""
 
     section_id: str = Field(description="章節の id（rag_read_section の section_id に渡す）。")
     title: str = Field(description="章節の名前（文書全体の章節は文書名）。")
@@ -1083,7 +1083,7 @@ class ReadDocumentChunk(BaseModel):
     page_start: int | None = None
     page_end: int | None = None
     # 表計算・表の場所（検索の根拠の locator と同じ。#1471・#3262）。行の位置の無い chunk は null。
-    sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
+    sheet_name: str | None = Field(default=None, description="表計算のシート名。")
     row_basis: RowBasis | None = Field(default=None, description=ROW_BASIS_DESCRIPTION)
     table_index: int | None = Field(default=None, description=TABLE_INDEX_DESCRIPTION)
     row_start: int | None = Field(
@@ -1196,7 +1196,7 @@ class EvidenceLocator(BaseModel):
     section_path: list[str] = Field(default_factory=list, description="節の見出しの列。")
     page_start: int | None = Field(default=None, description="開始の頁（PDF の物理頁）。")
     page_end: int | None = Field(default=None, description="終了の頁（PDF の物理頁）。")
-    sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
+    sheet_name: str | None = Field(default=None, description="表計算のシート名。")
     row_basis: RowBasis | None = Field(default=None, description=ROW_BASIS_DESCRIPTION)
     table_index: int | None = Field(default=None, description=TABLE_INDEX_DESCRIPTION)
     row_start: int | None = Field(
@@ -1210,7 +1210,7 @@ class EvidenceLocator(BaseModel):
     )
     page_label_start: str | None = Field(
         default=None,
-        description="開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+        description="開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ）。",
     )
     page_label_end: str | None = Field(default=None, description="終了の頁の印刷の頁番号。")
     bbox: list[float] | None = Field(
@@ -1222,7 +1222,7 @@ class EvidenceLocator(BaseModel):
     element_locator: str | None = Field(
         default=None,
         description=(
-            "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。"
+            "根拠の先頭の要素の定位子（doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。"
             "文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。"
             "要素を持たない分割の根拠は null。"
         ),
@@ -1242,7 +1242,7 @@ class EvidenceLocator(BaseModel):
 
 
 class EvidenceReference(BaseModel):
-    """根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。"""
+    """根拠の本文が参照する節・文書（「第3章を参照」など）。"""
 
     label: str = Field(description="本文の参照の表記（例: 第3章、別紙1、「権限」）。")
     document_title: str | None = Field(
@@ -1254,18 +1254,17 @@ class EvidenceReference(BaseModel):
     )
     resolved: bool = Field(
         description=(
-            "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から"
-            "決めるので false）。"
+            "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。"
         )
     )
 
 
 class EvidenceImageRef(BaseModel):
-    """図の根拠の元の画像の領域（#1282）。
+    """図の根拠の元の画像の領域。
 
     場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と
-    include_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した
-    場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。
+    include_image=true を渡して読む（読むたびに今の権限・版で確かめる）。文書の古い版（chunk_set）が
+    消えると source_stale になる。
     """
 
     document_id: str
@@ -1273,7 +1272,7 @@ class EvidenceImageRef(BaseModel):
     chunk_set_id: str | None = Field(default=None, description="領域を記録した処理の版。")
     page: int = Field(description="図のある頁（PDF の物理頁。画像ファイルは 1）。")
     page_label: str | None = Field(
-        default=None, description="印刷の頁番号（物理頁と違うときだけ。#1244）。"
+        default=None, description="印刷の頁番号（物理頁と違うときだけ）。"
     )
     bbox: list[float] = Field(description="頁の中の図の領域 [x0, y0, x1, y1]。")
     bbox_unit: Literal["absolute", "ratio", "percent"] = Field(
@@ -1282,7 +1281,7 @@ class EvidenceImageRef(BaseModel):
 
 
 class EvidenceImage(BaseModel):
-    """rag_read_source が content の image で返した図の画像の大きさ（#1282）。"""
+    """rag_read_source が content の image で返した図の画像の大きさ。"""
 
     mime_type: Literal["image/png"] = IMAGE_MIME_TYPE
     width: int = Field(description="画像の幅（px）。")
@@ -1295,10 +1294,10 @@ class EvidenceImage(BaseModel):
 
 
 class EvidenceImageUrl(BaseModel):
-    """図の根拠の元の画像をブラウザで開く短命の URL（rag_read_source の include_image_url。#1311）。
+    """図の根拠の元の画像をブラウザで開く短命の URL（rag_read_source の include_image_url）。
 
-    URL は利用者・根拠・版に縛った署名つきのトークンを path に持ち、期限（5 分）で切れる。読むたびに
-    今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。
+    URL は expires_at で切れる。開くたびに今の権限・版を確かめ直す（版が変われば 409、
+    見えなければ 404）。
     """
 
     url: str = Field(description="図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。")
@@ -1320,10 +1319,10 @@ class EvidencePreviewPage(BaseModel):
 
 
 class EvidencePreview(BaseModel):
-    """根拠の文書の原文をブラウザで開くプレビュー（rag_read_source の include_preview。#2389）。
+    """根拠の文書の原文をブラウザで開くプレビュー（rag_read_source の include_preview）。
 
-    URL は利用者・根拠・版・ファイルに縛った署名つきのトークンを path に持ち、期限（5 分）で
-    切れる。読むたびに今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。
+    URL は expires_at で切れる。開くたびに今の権限・版を確かめ直す（版が変われば 409、
+    見えなければ 404）。
     """
 
     kind: PreviewKind = Field(
@@ -1371,7 +1370,7 @@ class EvidencePreview(BaseModel):
 
 
 class EvidenceSection(BaseModel):
-    """根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの。#1438）。"""
+    """根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの）。"""
 
     section_id: str = Field(description="章節の id（rag_read_section の section_id に渡す）。")
     title: str = Field(description="章節の名前（どの章節にも入らない chunk は文書名）。")
@@ -1452,7 +1451,7 @@ class RagEvidence(BaseModel):
     answer_use: Literal["confirmed", "reference"] | None = Field(
         default=None,
         description=(
-            "回答での使われ方（#2040）。confirmed=質問の条件への該当確認済みの記載として"
+            "回答での使われ方。confirmed=質問の条件への該当確認済みの記載として"
             "引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と"
             "「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が"
             "分からないときは null。"
@@ -1463,7 +1462,7 @@ class RagEvidence(BaseModel):
         description=(
             "根拠の役割（retrieved_anchor / entity_expansion / parent_context"
             " など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）"
-            "から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。"
+            "から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など）。"
         ),
     )
     score: float | None = None
@@ -1490,13 +1489,13 @@ class RagEvidence(BaseModel):
         ),
     )
     references: list[EvidenceReference] = Field(
-        default_factory=list, description="この根拠の本文が参照する節・文書（#1280）。"
+        default_factory=list, description="この根拠の本文が参照する節・文書。"
     )
     reference_from: str | None = Field(
         default=None,
         description=(
             "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の"
-            " evidence_id（#1280）。"
+            " evidence_id。"
         ),
     )
     reference_label: str | None = Field(
@@ -1505,14 +1504,14 @@ class RagEvidence(BaseModel):
     section: EvidenceSection | None = Field(
         default=None,
         description=(
-            "根拠が属する章節（#1438。章節と chunk の対応がまだ無い文書は null）。手順・一覧・"
+            "根拠が属する章節（章節と chunk の対応がまだ無い文書は null）。手順・一覧・"
             "条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
         ),
     )
 
 
 class OlderVersion(BaseModel):
-    """検索で当たった文書を置き換えた旧版（#1405）。"""
+    """検索で当たった文書を置き換えた旧版。"""
 
     document_id: str = Field(description="旧版の文書の id。")
     file_name: str | None = Field(default=None, description="旧版の文書名。")
@@ -1616,7 +1615,7 @@ class GuideRef(BaseModel):
 
 
 class AnswerProvenance(BaseModel):
-    """回答を作った設定の版（回答の記録の provenance。#1276）。"""
+    """回答を作った設定の版（回答の記録の provenance）。"""
 
     search_answer_profile_id: str | None = None
     search_answer_profile_updated_at: str | None = Field(
@@ -1631,7 +1630,7 @@ class AnswerProvenance(BaseModel):
 
 
 class AutoSelectedProfile(BaseModel):
-    """id を誤ったときに自動で選んだ検索・回答プロファイル（#2355）。"""
+    """id を誤ったときに自動で選んだ検索・回答プロファイル。"""
 
     id: str
     name: str
@@ -1706,7 +1705,7 @@ class SearchOutput(VersionedOutput):
             "needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / "
             "insufficient_evidence=資料から答えられない。needs_clarification / needs_human は"
             "利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを"
-            "確かめる回答は conditional（conditions に載る。#1453）。"
+            "確かめる回答は conditional（conditions に載る）。"
         )
     )
     requests: list[AnswerRequest] = Field(
@@ -1866,7 +1865,7 @@ class LookupGuideItem(GuideRef):
         default=True,
         description=(
             "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに"
-            "係るので、回答に影響範囲・承認を書かない。#1320）。"
+            "係るので、回答に影響範囲・承認を書かない）。"
         ),
     )
     handoff_contact: str = ""
@@ -2005,11 +2004,11 @@ class ReadSourceOutput(VersionedOutput):
     )
     image_url: EvidenceImageUrl | None = Field(
         default=None,
-        description="include_image_url=true で返した、図をブラウザで開く短命の URL（#1311）。",
+        description="include_image_url=true で返した、図をブラウザで開く短命の URL。",
     )
     preview: EvidencePreview | None = Field(
         default=None,
-        description="include_preview=true で返した、原文をブラウザで開くプレビュー（#2389）。",
+        description="include_preview=true で返した、原文をブラウザで開くプレビュー。",
     )
     locator: EvidenceLocator
     text: str = Field(
@@ -2043,7 +2042,7 @@ class ReadSourceOutput(VersionedOutput):
     )
     references: list[EvidenceReference] = Field(
         default_factory=list,
-        description="本文が参照する節・文書（#1280。続きは rag_search で参照先を検索する）。",
+        description="本文が参照する節・文書（続きは rag_search で参照先を検索する）。",
     )
 
 
@@ -2985,7 +2984,7 @@ def _read_cursor(chunk_set_id: str, chunk_index: int, offset: int = 0) -> str:
 
 @dataclass(frozen=True)
 class _Cursor:
-    """続きの位置を分けたもの（#2499）。section_id は rag_read_section の cursor だけが持つ。"""
+    """続きの位置を分けたもの。section_id は rag_read_section の cursor だけが持つ。"""
 
     chunk_set_prefix: str
     section_id: str | None

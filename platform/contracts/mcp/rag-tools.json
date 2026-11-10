@@ -666,7 +666,7 @@
               },
               "impact_applies": {
                 "default": true,
-                "description": "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに係るので、回答に影響範囲・承認を書かない。#1320）。",
+                "description": "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに係るので、回答に影響範囲・承認を書かない）。",
                 "title": "Impact Applies",
                 "type": "boolean"
               },
@@ -774,7 +774,7 @@
       "outputSchema": {
         "$defs": {
           "OutlineSection": {
-            "description": "文書の 1 つの章節（章節ナビゲーションの章節。#1438）。",
+            "description": "文書の 1 つの章節（章節ナビゲーションの章節）。",
             "properties": {
               "section_id": {
                 "description": "章節の id（rag_read_section の section_id に渡す）。",
@@ -1140,7 +1140,7 @@
                   }
                 ],
                 "default": null,
-                "description": "表計算のシート名（#1221）。",
+                "description": "表計算のシート名。",
                 "title": "Sheet Name"
               },
               "row_basis": {
@@ -1464,7 +1464,7 @@
             "type": "object"
           },
           "OutlineSection": {
-            "description": "文書の 1 つの章節（章節ナビゲーションの章節。#1438）。",
+            "description": "文書の 1 つの章節（章節ナビゲーションの章節）。",
             "properties": {
               "section_id": {
                 "description": "章節の id（rag_read_section の section_id に渡す）。",
@@ -1609,7 +1609,7 @@
                   }
                 ],
                 "default": null,
-                "description": "表計算のシート名（#1221）。",
+                "description": "表計算のシート名。",
                 "title": "Sheet Name"
               },
               "row_basis": {
@@ -1920,7 +1920,7 @@
       "outputSchema": {
         "$defs": {
           "EvidenceImage": {
-            "description": "rag_read_source が content の image で返した図の画像の大きさ（#1282）。",
+            "description": "rag_read_source が content の image で返した図の画像の大きさ。",
             "properties": {
               "mime_type": {
                 "const": "image/png",
@@ -1965,7 +1965,7 @@
             "type": "object"
           },
           "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。",
+            "description": "図の根拠の元の画像の領域。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめる）。文書の古い版（chunk_set）が\n消えると source_stale になる。",
             "properties": {
               "document_id": {
                 "title": "Document Id",
@@ -2003,7 +2003,7 @@
                   }
                 ],
                 "default": null,
-                "description": "印刷の頁番号（物理頁と違うときだけ。#1244）。",
+                "description": "印刷の頁番号（物理頁と違うときだけ）。",
                 "title": "Page Label"
               },
               "bbox": {
@@ -2036,7 +2036,7 @@
             "type": "object"
           },
           "EvidenceImageUrl": {
-            "description": "図の根拠の元の画像をブラウザで開く短命の URL（rag_read_source の include_image_url。#1311）。\n\nURL は利用者・根拠・版に縛った署名つきのトークンを path に持ち、期限（5 分）で切れる。読むたびに\n今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。",
+            "description": "図の根拠の元の画像をブラウザで開く短命の URL（rag_read_source の include_image_url）。\n\nURL は expires_at で切れる。開くたびに今の権限・版を確かめ直す（版が変われば 409、\n見えなければ 404）。",
             "properties": {
               "url": {
                 "description": "図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。",
@@ -2116,7 +2116,7 @@
                   }
                 ],
                 "default": null,
-                "description": "表計算のシート名（#1221）。",
+                "description": "表計算のシート名。",
                 "title": "Sheet Name"
               },
               "row_basis": {
@@ -2226,7 +2226,7 @@
                   }
                 ],
                 "default": null,
-                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ）。",
                 "title": "Page Label Start"
               },
               "page_label_end": {
@@ -2281,7 +2281,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "description": "根拠の先頭の要素の定位子（doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
                 "title": "Element Locator"
               },
               "table_row": {
@@ -2310,7 +2310,7 @@
             "type": "object"
           },
           "EvidencePreview": {
-            "description": "根拠の文書の原文をブラウザで開くプレビュー（rag_read_source の include_preview。#2389）。\n\nURL は利用者・根拠・版・ファイルに縛った署名つきのトークンを path に持ち、期限（5 分）で\n切れる。読むたびに今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。",
+            "description": "根拠の文書の原文をブラウザで開くプレビュー（rag_read_source の include_preview）。\n\nURL は expires_at で切れる。開くたびに今の権限・版を確かめ直す（版が変われば 409、\n見えなければ 404）。",
             "properties": {
               "kind": {
                 "description": "pdf=ページの画像（Office は処理後の PDF）/ image=画像 / text=本文 / unsupported=表示できない形式。",
@@ -2427,7 +2427,7 @@
             "type": "object"
           },
           "EvidenceReference": {
-            "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など）。",
             "properties": {
               "label": {
                 "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
@@ -2456,7 +2456,7 @@
                 "type": "array"
               },
               "resolved": {
-                "description": "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から決めるので false）。",
+                "description": "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。",
                 "title": "Resolved",
                 "type": "boolean"
               }
@@ -2639,7 +2639,7 @@
               }
             ],
             "default": null,
-            "description": "include_image_url=true で返した、図をブラウザで開く短命の URL（#1311）。"
+            "description": "include_image_url=true で返した、図をブラウザで開く短命の URL。"
           },
           "preview": {
             "anyOf": [
@@ -2651,7 +2651,7 @@
               }
             ],
             "default": null,
-            "description": "include_preview=true で返した、原文をブラウザで開くプレビュー（#2389）。"
+            "description": "include_preview=true で返した、原文をブラウザで開くプレビュー。"
           },
           "locator": {
             "$ref": "#/$defs/EvidenceLocator"
@@ -2724,7 +2724,7 @@
             "type": "boolean"
           },
           "references": {
-            "description": "本文が参照する節・文書（#1280。続きは rag_search で参照先を検索する）。",
+            "description": "本文が参照する節・文書（続きは rag_search で参照先を検索する）。",
             "items": {
               "$ref": "#/$defs/EvidenceReference"
             },
@@ -3099,7 +3099,7 @@
       "outputSchema": {
         "$defs": {
           "AutoSelectedProfile": {
-            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル（#2355）。",
+            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル。",
             "properties": {
               "id": {
                 "title": "Id",
@@ -3162,7 +3162,7 @@
             "type": "object"
           },
           "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。",
+            "description": "図の根拠の元の画像の領域。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめる）。文書の古い版（chunk_set）が\n消えると source_stale になる。",
             "properties": {
               "document_id": {
                 "title": "Document Id",
@@ -3200,7 +3200,7 @@
                   }
                 ],
                 "default": null,
-                "description": "印刷の頁番号（物理頁と違うときだけ。#1244）。",
+                "description": "印刷の頁番号（物理頁と違うときだけ）。",
                 "title": "Page Label"
               },
               "bbox": {
@@ -3279,7 +3279,7 @@
                   }
                 ],
                 "default": null,
-                "description": "表計算のシート名（#1221）。",
+                "description": "表計算のシート名。",
                 "title": "Sheet Name"
               },
               "row_basis": {
@@ -3389,7 +3389,7 @@
                   }
                 ],
                 "default": null,
-                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ）。",
                 "title": "Page Label Start"
               },
               "page_label_end": {
@@ -3444,7 +3444,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "description": "根拠の先頭の要素の定位子（doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
                 "title": "Element Locator"
               },
               "table_row": {
@@ -3473,7 +3473,7 @@
             "type": "object"
           },
           "EvidenceReference": {
-            "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など）。",
             "properties": {
               "label": {
                 "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
@@ -3502,7 +3502,7 @@
                 "type": "array"
               },
               "resolved": {
-                "description": "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から決めるので false）。",
+                "description": "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。",
                 "title": "Resolved",
                 "type": "boolean"
               }
@@ -3515,7 +3515,7 @@
             "type": "object"
           },
           "EvidenceSection": {
-            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの。#1438）。",
+            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの）。",
             "properties": {
               "section_id": {
                 "description": "章節の id（rag_read_section の section_id に渡す）。",
@@ -3718,7 +3718,7 @@
             "type": "object"
           },
           "OlderVersion": {
-            "description": "検索で当たった文書を置き換えた旧版（#1405）。",
+            "description": "検索で当たった文書を置き換えた旧版。",
             "properties": {
               "document_id": {
                 "description": "旧版の文書の id。",
@@ -4101,7 +4101,7 @@
                   }
                 ],
                 "default": null,
-                "description": "回答での使われ方（#2040）。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
+                "description": "回答での使われ方。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
                 "title": "Answer Use"
               },
               "role": {
@@ -4114,7 +4114,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。",
+                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など）。",
                 "title": "Role"
               },
               "score": {
@@ -4171,7 +4171,7 @@
                 "type": "boolean"
               },
               "references": {
-                "description": "この根拠の本文が参照する節・文書（#1280）。",
+                "description": "この根拠の本文が参照する節・文書。",
                 "items": {
                   "$ref": "#/$defs/EvidenceReference"
                 },
@@ -4188,7 +4188,7 @@
                   }
                 ],
                 "default": null,
-                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id（#1280）。",
+                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id。",
                 "title": "Reference From"
               },
               "reference_label": {
@@ -4214,7 +4214,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が属する章節（#1438。章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
+                "description": "根拠が属する章節（章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
               }
             },
             "required": [
@@ -4518,7 +4518,7 @@
       "outputSchema": {
         "$defs": {
           "AnswerProvenance": {
-            "description": "回答を作った設定の版（回答の記録の provenance。#1276）。",
+            "description": "回答を作った設定の版（回答の記録の provenance）。",
             "properties": {
               "search_answer_profile_id": {
                 "anyOf": [
@@ -4608,7 +4608,7 @@
             "type": "object"
           },
           "AutoSelectedProfile": {
-            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル（#2355）。",
+            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル。",
             "properties": {
               "id": {
                 "title": "Id",
@@ -4671,7 +4671,7 @@
             "type": "object"
           },
           "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。",
+            "description": "図の根拠の元の画像の領域。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめる）。文書の古い版（chunk_set）が\n消えると source_stale になる。",
             "properties": {
               "document_id": {
                 "title": "Document Id",
@@ -4709,7 +4709,7 @@
                   }
                 ],
                 "default": null,
-                "description": "印刷の頁番号（物理頁と違うときだけ。#1244）。",
+                "description": "印刷の頁番号（物理頁と違うときだけ）。",
                 "title": "Page Label"
               },
               "bbox": {
@@ -4788,7 +4788,7 @@
                   }
                 ],
                 "default": null,
-                "description": "表計算のシート名（#1221）。",
+                "description": "表計算のシート名。",
                 "title": "Sheet Name"
               },
               "row_basis": {
@@ -4898,7 +4898,7 @@
                   }
                 ],
                 "default": null,
-                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ）。",
                 "title": "Page Label Start"
               },
               "page_label_end": {
@@ -4953,7 +4953,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "description": "根拠の先頭の要素の定位子（doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
                 "title": "Element Locator"
               },
               "table_row": {
@@ -4982,7 +4982,7 @@
             "type": "object"
           },
           "EvidenceReference": {
-            "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など）。",
             "properties": {
               "label": {
                 "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
@@ -5011,7 +5011,7 @@
                 "type": "array"
               },
               "resolved": {
-                "description": "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から決めるので false）。",
+                "description": "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。",
                 "title": "Resolved",
                 "type": "boolean"
               }
@@ -5024,7 +5024,7 @@
             "type": "object"
           },
           "EvidenceSection": {
-            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの。#1438）。",
+            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの）。",
             "properties": {
               "section_id": {
                 "description": "章節の id（rag_read_section の section_id に渡す）。",
@@ -5365,7 +5365,7 @@
             "type": "object"
           },
           "OlderVersion": {
-            "description": "検索で当たった文書を置き換えた旧版（#1405）。",
+            "description": "検索で当たった文書を置き換えた旧版。",
             "properties": {
               "document_id": {
                 "description": "旧版の文書の id。",
@@ -5582,7 +5582,7 @@
                   }
                 ],
                 "default": null,
-                "description": "回答での使われ方（#2040）。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
+                "description": "回答での使われ方。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
                 "title": "Answer Use"
               },
               "role": {
@@ -5595,7 +5595,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。",
+                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など）。",
                 "title": "Role"
               },
               "score": {
@@ -5652,7 +5652,7 @@
                 "type": "boolean"
               },
               "references": {
-                "description": "この根拠の本文が参照する節・文書（#1280）。",
+                "description": "この根拠の本文が参照する節・文書。",
                 "items": {
                   "$ref": "#/$defs/EvidenceReference"
                 },
@@ -5669,7 +5669,7 @@
                   }
                 ],
                 "default": null,
-                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id（#1280）。",
+                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id。",
                 "title": "Reference From"
               },
               "reference_label": {
@@ -5695,7 +5695,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が属する章節（#1438。章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
+                "description": "根拠が属する章節（章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
               }
             },
             "required": [
@@ -5774,7 +5774,7 @@
             "type": "boolean"
           },
           "outcome": {
-            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る。#1453）。",
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る）。",
             "enum": [
               "answered",
               "conditional",
