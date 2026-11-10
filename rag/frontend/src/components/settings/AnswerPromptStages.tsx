@@ -1,16 +1,15 @@
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Disclosure, TextareaField } from "@production-ready/ui";
-import { Fragment } from "react";
 import { FileText } from "lucide-react";
 
 import type { AnswerPromptStage } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
-import { AnswerPromptCard, AnswerPromptPanel } from "./AnswerPromptEditor";
+import { AnswerPromptPanel } from "./AnswerPromptEditor";
 import { groupStagesByPhase } from "./answer-prompt.logic";
 
 /**
  * backend の順序で各段を分類し、使用条件と原文を示す。
- * 回答テンプレートの編集欄は、生成の system 指示の後に置く。
+ * `prompt_key` がある部分だけ編集欄にし、ほかは読み取り専用で出す（#4782）。
  */
 export function AnswerPromptStages({
   stages,
@@ -41,37 +40,33 @@ export function AnswerPromptStages({
             <p className="text-xs leading-relaxed text-fg-muted">
               {t(`settings.answerPrompts.phase.${group.phase}.description` as I18nKey)}
             </p>
-            {group.stages.map((stage) => (
-              <Fragment key={stage.id}>
-                {stage.prompts.length > 0 ? (
-                  <Disclosure
-                    summary={t(`settings.answerPrompts.stage.${stage.id}` as I18nKey)}
-                    description={t("settings.answerPrompts.condition", {
-                      condition: t(`settings.answerPrompts.stage.${stage.id}.condition` as I18nKey),
-                    })}
-                    surface="sunken"
-                    contentClassName="space-y-3"
-                    data-testid={`answer-prompt-stage-${stage.id}`}
-                  >
-                    {stage.prompts.map((part) => (
-                      part.prompt_key ? <AnswerPromptPanel
-                        key={part.id}
-                        promptKey={part.prompt_key}
-                        fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                      /> : <TextareaField
-                        key={part.id}
-                        id={`answer-prompt-${stage.id}-${part.id}`}
-                        label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                        value={part.content}
-                        readOnly
-                        monospace
-                        rows={12}
-                      />
-                    ))}
-                  </Disclosure>
-                ) : null}
-                {stage.id === "generation" ? <AnswerPromptCard promptKey="vlm_answer" /> : null}
-              </Fragment>
+            {group.stages.filter((stage) => stage.prompts.length > 0).map((stage) => (
+              <Disclosure
+                key={stage.id}
+                summary={t(`settings.answerPrompts.stage.${stage.id}` as I18nKey)}
+                description={t("settings.answerPrompts.condition", {
+                  condition: t(`settings.answerPrompts.stage.${stage.id}.condition` as I18nKey),
+                })}
+                surface="sunken"
+                contentClassName="space-y-3"
+                data-testid={`answer-prompt-stage-${stage.id}`}
+              >
+                {stage.prompts.map((part) => (
+                  part.prompt_key ? <AnswerPromptPanel
+                    key={part.id}
+                    promptKey={part.prompt_key}
+                    fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                  /> : <TextareaField
+                    key={part.id}
+                    id={`answer-prompt-${stage.id}-${part.id}`}
+                    label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                    value={part.content}
+                    readOnly
+                    monospace
+                    rows={12}
+                  />
+                ))}
+              </Disclosure>
             ))}
           </section>
         );

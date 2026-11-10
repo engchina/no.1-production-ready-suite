@@ -44,7 +44,6 @@ EDITABLE_DEFAULT = "編集できるプロンプトの既定値(画面は編集�
 PROBE_ONLY = "Enterprise AI の契約の確認の CLI だけ"
 NOT_LISTED = {
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
-    "rag_engine.knowledge.prompt_files:DEFAULT_VLM_ANSWER_PROMPT": EDITABLE_DEFAULT,
     # 検証・確認の CLI だけが使う(回答・取込・品質評価の経路では使わない)。
     "app.rag.enterprise_ai_probe:DEFAULT_LLM_PROMPT": PROBE_ONLY,
     "app.rag.enterprise_ai_probe:DEFAULT_VLM_PROMPT": PROBE_ONLY,
@@ -212,7 +211,9 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         ("picture_description", "picture"): 6,
         ("picture_description", "table"): 6,
         ("picture_description", "contract"): 7,
-        ("generation", "assumptionSystem"): 6,
+        # 生成の system は役割の文（Step 4 まで）に固定の部分と未確定の前提を続けて足す（#4782）。
+        ("generation", "fixed"): 5,
+        ("generation", "assumptionSystem"): 9,
         # 回答生成の user の入力（既定は Step 6 まで）の後ろに足す作り直しの部品（#4586）。
         ("generation", "sourceOnlyDerivation"): 7,
         ("generation", "headerOnlySource"): 7,
@@ -275,12 +276,16 @@ def test_default_prompt_steps_have_one_blank_line_between_sections() -> None:
                     assert lines[index - 2].strip(), identity
 
 
-def test_batch_reading_uses_saved_stage_instruction() -> None:
+def test_batch_reading_uses_the_fixed_instruction_not_a_saved_one() -> None:
     import json
     from dataclasses import replace
 
     from rag_engine.config import get_settings
-    from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
+    from rag_engine.generation.batched_evidence import (
+        BATCH_READING_PROMPT,
+        BatchReading,
+        prepare_batched_evidence,
+    )
 
     from app.rag.answer_prompts import prompt_overrides
 
@@ -298,7 +303,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
     calls = []
 
     def read(system: str, prompt: str, schema: type[BatchReading]) -> BatchReading:
-        assert system == custom
+        assert system == BATCH_READING_PROMPT
         values = json.loads(prompt)["evidence"]
         calls.extend(values)
         return schema(findings=[])
