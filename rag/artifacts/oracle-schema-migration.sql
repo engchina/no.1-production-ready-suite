@@ -4498,3 +4498,11 @@ WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';
 
 DELETE FROM rag_answer_prompts
 WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary_archived');
+
+-- migration: 20261110_4799_search_answer_profile_runtime_rules
+UPDATE rag_search_answer_profile_knowledge
+SET payload_json = JSON_TRANSFORM(payload_json, REMOVE '$.rules'),
+    revision = revision + 1,
+    updated_at = SYSTIMESTAMP
+WHERE kind = 'runtime_knowledge'
+  AND JSON_EXISTS(payload_json, '$.rules');

@@ -29,12 +29,9 @@ def test_both_defaults_are_off():
     settings = get_settings(environ={}, dotenv_path=None)
     assert settings.runtime_terms_search_enabled is False
     assert settings.runtime_terms_answer_enabled is False
-    assert settings.runtime_rules_confirmation_enabled is False
-    assert settings.runtime_rules_answer_enabled is False
 
 
-@pytest.mark.parametrize("confirmation,answer", [(False, False), (True, False), (False, True), (True, True)])
-def test_registered_rule_uses_are_independent_and_never_expand_search(tmp_path, confirmation, answer):
+def test_unpinned_rules_left_in_the_payload_are_never_used(tmp_path):
     path = tmp_path / "runtime.json"
     rule = {
         "id": "rule-a",
@@ -45,21 +42,20 @@ def test_registered_rule_uses_are_independent_and_never_expand_search(tmp_path, 
         "clarification": {"question": "対象は？", "options": [{"id": "a", "label": "対象A"}]},
     }
     path.write_text(json.dumps({"schema_version": 1, "terms": [], "rules": [rule]}, ensure_ascii=False))
-    ctx = build_runtime_knowledge_context("設定は？", tmp_path, path, rules_confirmation_enabled=confirmation, rules_answer_enabled=answer)
-    assert bool(ctx.rules_for_stage("confirmation")) is confirmation
-    assert bool(ctx.rules_for_stage("generation")) is answer
-    assert ("合成の回答指示" in ctx.prompt_context()) is answer
+    ctx = build_runtime_knowledge_context("設定は？", tmp_path, path)
+    assert ctx.rules_for_stage("confirmation") == ()
+    assert ctx.rules_for_stage("generation") == ()
+    assert "合成の回答指示" not in ctx.prompt_context()
     assert ctx.expanded_question == ctx.original_question
-    if not (confirmation or answer):
-        assert not ctx.matched_rules and not ctx.rule_applications
+    assert not ctx.matched_rules and not ctx.rule_applications
 
 
-def test_disabled_registered_rules_do_not_call_matcher(tmp_path, monkeypatch):
+def test_unpinned_rules_do_not_call_matcher(tmp_path, monkeypatch):
     from rag_engine.knowledge import runtime_knowledge as rk
 
     path = tmp_path / "runtime.json"
     path.write_text(json.dumps({"schema_version": 1, "rules": [{"id": "a", "title": "設定", "triggers": ["設定"], "content": "指示"}]}))
-    monkeypatch.setattr(rk, "rank_rules", lambda *args, **kwargs: pytest.fail("無効な登録ルールを照合した"))
+    monkeypatch.setattr(rk, "rank_rules", lambda *args, **kwargs: pytest.fail("pinned でないルールを照合した"))
     assert not build_runtime_knowledge_context("設定", tmp_path, path).matched_rules
 
 

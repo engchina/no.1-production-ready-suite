@@ -132,7 +132,7 @@ def test_unresolved_and_ambiguous_reference_names() -> None:
 # ---- 構造化（録画した LLM の応答）-------------------------------------------------------------
 
 
-def test_recorded_response_becomes_a_validated_draft_with_rule_candidates() -> None:
+def test_recorded_response_becomes_a_validated_draft() -> None:
     item = build_item(_row(), parse_draft_output(RECORDED), DOCUMENTS)
     assert item.content is not None
     content = item.content
@@ -161,8 +161,7 @@ def test_recorded_response_becomes_a_validated_draft_with_rule_candidates() -> N
     error = next(issue for issue in item.issues if issue.code == "reference_unresolved")
     assert error.severity == "error" and error.path == "references[1]"
     assert "ナレッジベースに取り込んで" in error.message
-    assert [rule.title for rule in item.rule_candidates] == ["通知の質問は設定画面Aを案内する"]
-    assert item.rule_candidates[0].triggers == ["通知"]
+    assert "rule_candidates" not in item.model_dump()
 
 
 def test_reference_pages_and_step_references_are_filled() -> None:
@@ -410,7 +409,7 @@ def test_preview_endpoint_drafts_each_row_with_the_recorded_response(
     assert [ref["status"] for ref in first["references"]] == ["resolved", "unresolved"]
     assert first["references"][0]["document_id"] == "doc-a"
     assert first["valid"] is False
-    assert first["rule_candidates"][0]["triggers"] == ["通知"]
+    assert "rule_candidates" not in first
     assert second["valid"] is False
     assert second["issues"][0]["code"] == "draft_failed"
     assert data["importable_count"] == 0

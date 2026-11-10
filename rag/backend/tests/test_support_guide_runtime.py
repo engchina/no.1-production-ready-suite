@@ -204,7 +204,8 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     assert "必要な根拠:" not in rule["content"]
     assert "実施の前に承認が要る" in rule["content"]
     payload = with_guide_rule({"terms": [{"term": "x"}], "rules": [{"id": "r1"}]}, match)
-    assert [item["id"] for item in payload["rules"]] == ["guide-g-grant", "r1"]
+    # 登録ルールは無い（#4799）。payload に残った rules は引き継がず、業務ガイドのルールだけにする。
+    assert [item["id"] for item in payload["rules"]] == ["guide-g-grant"]
     assert payload["terms"] == [{"term": "x"}]
 
 

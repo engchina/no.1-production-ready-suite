@@ -524,7 +524,7 @@ class ObservedUsage(BaseModel):
 
 
 # RAG の ZeroEvidence.stage の語彙（契約の一致はテストで確かめる）。
-ObservedZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
+ObservedZeroEvidenceStage = Literal["retrieval", "evidence_check", "context"]
 
 
 class ObservedDegradedStep(BaseModel):

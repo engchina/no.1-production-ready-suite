@@ -76,9 +76,7 @@ from pydantic import (
     model_validator,
 )
 from rag_engine.knowledge.runtime_knowledge import (
-    MAX_MATCHED_RULES,
     MAX_MATCHED_TERMS,
-    RuntimeRule,
     RuntimeTerm,
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
@@ -114,7 +112,6 @@ from app.mcp.profile_scope import (
     check_search,
     within_profile_scope,
 )
-from app.rag.answer_engine import AnswerScope
 from app.rag.answer_failure import ANSWER_API_FAILED_ERROR_CODE, describe_answer_api_failure
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -137,7 +134,6 @@ from app.rag.document_crop import (
     load_parsed_source,
     page_sizes,
 )
-from app.rag.document_sections_service import current_section_pages
 from app.rag.element_locator import (
     LOCATOR_MAX_LENGTH,
     chunk_element_locator,
@@ -154,7 +150,6 @@ from app.rag.figure_url import (
     FigureUrlUnavailableError,
     issue_figure_token,
 )
-from app.rag.observability import new_trace_id
 from app.rag.profile_language import profile_language_scope
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
@@ -163,16 +158,10 @@ from app.rag.profile_recommendation import (
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
-from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
-    clarification_document_ids,
     load_runtime_knowledge_payload,
     match_runtime_knowledge,
-    resolve_clarification,
-    rule_answer,
-    rule_matches,
-    suggest_clarification,
 )
 from app.rag.section_catalog import compact_section_lines
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
@@ -204,7 +193,6 @@ from app.rag.support_guide_runtime import (
 from app.schemas.document import DocumentPreprocessArtifact
 from app.schemas.search import (
     INCLUDE_SUPERSEDED_FILTER_KEY,
-    PAGE_RANGES_FILTER_KEY,
     SEARCH_TOP_K_DEFAULT,
     SEARCH_TOP_K_MAX,
     RetrievedChunk,
@@ -310,7 +298,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 41: rag_search の段落の印（passage_marks）・外した段落（removed_passages）・
 #     回答全体の警告（answer_warnings）を削除した。
 # 42: 根拠の table_binding を削除した（読み手の無い表の検査の可否。#4668）。
-MCP_OUTPUT_SCHEMA_VERSION = 42
+# 43: 検索・回答プロファイルの登録ルールを削除した（#4799）。rag_search・rag_retrieve_evidence の
+#     skip_clarification と rule: の条件、rag_retrieve_evidence の clarifications、
+#     profile_knowledge の rules・rules_omitted を外した。
+MCP_OUTPUT_SCHEMA_VERSION = 43
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -338,10 +329,9 @@ def _retrieve_evidence_default_schema(schema: dict[str, Any]) -> None:
 # 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
 CALLER_QUERIES_MAX = 5
 CALLER_QUERY_MAX_CHARS = 1000
-# rag_retrieve_evidence が返す検索・回答プロファイルのルール・用語（profile_knowledge。#2701）の
-# 上限。件数は RAG が回答を作るときに prompt へ入れる件数と同じ。字数はルールの本文・用語の説明など
+# rag_retrieve_evidence が返す検索・回答プロファイルの用語（profile_knowledge。#2701）の
+# 上限。件数は RAG が回答を作るときに prompt へ入れる件数と同じ。字数は用語・別名・説明など
 # 返す文字の合計で、超える項目は返さずに省いた数へ数える。
-PROFILE_KNOWLEDGE_RULES_MAX = MAX_MATCHED_RULES
 PROFILE_KNOWLEDGE_TERMS_MAX = MAX_MATCHED_TERMS
 PROFILE_KNOWLEDGE_MAX_CHARS = 4000
 # 根拠の結果に示す旧版（older_versions。#1405）の最大件数。
@@ -428,8 +418,6 @@ SOURCE_PREVIEW_PATH_PREFIX = "/api/source-previews"
 # 根拠の種類（#1282）。figure_description=図を VLM が読んだ説明（元の図で確かめる）/
 # ocr=図の中・周りの文字（解析の OCR・キャプション）。
 EvidenceType = Literal["text", "table", "figure_description", "ocr"]
-# rag_search の conditions のうち、検索・回答プロファイルのルールの確認の答え（#2117）。
-RULE_CONDITION_PREFIX = "rule:"
 GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした。時間をおいて再度お試しください。"
 
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
@@ -443,8 +431,7 @@ INSTRUCTIONS = (
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。\n\n"
-    # 回答前の確認（業務ガイドの条件・検索・回答プロファイルのルールの確認。#2117）。
-    # 引数の組み立ては conditions・skip_clarification の説明にある。
+    # 回答前の確認（業務ガイドの条件）。引数の組み立ては conditions の説明にある。
     "## Step 2: 回答前の確認に答える\n"
     "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
     "利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
@@ -602,17 +589,10 @@ class SearchInput(BaseModel):
         default_factory=dict,
         max_length=30,
         description=(
-            "業務ガイドの条件と、検索・回答プロファイルのルールの確認（rule: で始まる id）の値"
+            "業務ガイドの条件の値"
             "（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値"
             "（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、"
             "分かっている条件は聞き直さない。"
-        ),
-    )
-    skip_clarification: bool = Field(
-        default=False,
-        description=(
-            "true なら検索・回答プロファイルのルールの回答前の確認を出さずに回答する"
-            "（利用者が確認せずに回答を選んだとき・利用者に確認できないとき）。"
         ),
     )
 
@@ -644,13 +624,13 @@ class RetrieveEvidenceInput(SearchInput):
             "planning=rag は質問文でよい。"
         ),
     )
-    # 回答を作らないので、元の質問はルールの確認にだけ使う（rag_search と説明を分ける。#2665）。
+    # 回答を作らないので、元の質問は用語の照合にだけ使う（rag_search と説明を分ける。#2665）。
     original_question: OptionalText = Field(
         default=None,
         max_length=8000,
         description=(
-            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。検索・回答プロファイルの"
-            "ルールの確認に使う（検索は query で行う）。"
+            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。profile_knowledge の"
+            "用語の照合に使う（検索は query で行う）。"
         ),
     )
     planning: Literal["rag", "caller"] = Field(
@@ -673,21 +653,6 @@ class RetrieveEvidenceInput(SearchInput):
         default=None,
         max_length=128,
         description="呼び出し元の追跡 ID（結果の request_id にそのまま返す）。",
-    )
-    conditions: dict[str, str] = Field(
-        default_factory=dict,
-        max_length=30,
-        description=(
-            "planning=caller のとき、検索・回答プロファイルのルールの確認（rule: で始まる id）の"
-            "答え（clarifications の condition_id → 利用者が答えた値。複数は「、」で区切る）。"
-        ),
-    )
-    skip_clarification: bool = Field(
-        default=False,
-        description=(
-            "planning=caller のとき、true ならルールの確認を出さずに検索する"
-            "（利用者が確認せずに進めると選んだとき・利用者に確認できないとき）。"
-        ),
     )
     evidence_limit: int = Field(
         default_factory=_retrieve_evidence_default,
@@ -1664,7 +1629,7 @@ DEGRADED_STEPS_DESCRIPTION = (
 
 # 根拠 0 件の診断（回答の診断の zero_evidence）の公開の形（#3546）。検索の条件の値・検索文・
 # 例外の文は出さない（段と件数だけ）。
-ZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
+ZeroEvidenceStage = Literal["retrieval", "evidence_check", "context"]
 
 
 class ZeroEvidence(BaseModel):
@@ -1672,8 +1637,7 @@ class ZeroEvidence(BaseModel):
 
     stage: ZeroEvidenceStage = Field(
         description=(
-            "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・"
-            "頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と"
+            "retrieval=検索の候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と"
             "判定 / context=候補はあるが回答に渡す根拠が 0 件。"
         )
     )
@@ -1723,8 +1687,7 @@ class SearchOutput(VersionedOutput):
     clarifications: list[GuideClarification] = Field(
         default_factory=list,
         description=(
-            "outcome=needs_clarification のとき、利用者に確かめる条件と問い（業務ガイドと、"
-            "検索・回答プロファイルのルールの確認。ルールの確認は検索・回答をせずに返す）。"
+            "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。"
         ),
     )
     guide: GuideRef | None = Field(
@@ -1884,15 +1847,6 @@ PROFILE_KNOWLEDGE_STATUS_DESCRIPTION = (
 )
 
 
-class ProfileKnowledgeRule(BaseModel):
-    id: str
-    title: str
-    content: str = Field(description="ルールの本文（判断の方針）。")
-    source: str = Field(description="ルールを登録した人が書いた出典（無ければ空）。")
-    status: ProfileKnowledgeStatus = Field(description=PROFILE_KNOWLEDGE_STATUS_DESCRIPTION)
-    updated_at: str = Field(description="ルールを最後に更新した時刻（不明なら空）。")
-
-
 class ProfileKnowledgeTerm(BaseModel):
     term: str
     aliases: list[str] = Field(default_factory=list)
@@ -1906,27 +1860,19 @@ class ProfileKnowledge(BaseModel):
     search_answer_profile_id: str
     revision: str | None = Field(
         description=(
-            "照合した用語・同義語と回答ルールの登録の版（登録の内容の sha256 の先頭。"
-            "読めなければ null）。"
+            "照合した用語・同義語の登録の版（登録の内容の sha256 の先頭。読めなければ null）。"
         )
     )
     matched_on: Literal["original_question", "query"] = Field(
         description="照合に使った文（original_question があればそれ、無ければ query）。"
     )
-    rules: list[ProfileKnowledgeRule] = Field(
-        description="当たったルール（一致の強い順）。資料の原文ではない。"
-    )
     terms: list[ProfileKnowledgeTerm] = Field(
         description="当たった用語と説明（一致の強い順）。資料の原文ではない。"
     )
-    rules_omitted: int = Field(description="件数・字数の上限を超えて返さなかったルールの数。")
     terms_omitted: int = Field(description="件数・字数の上限を超えて返さなかった用語の数。")
     load_failed: bool = Field(
         default=False,
-        description=(
-            "用語・同義語と回答ルールを読めなかった（rules・terms は空。"
-            "当たるものが無いとは限らない）。"
-        ),
+        description=("用語・同義語を読めなかった（terms は空。当たるものが無いとは限らない）。"),
     )
 
 
@@ -1961,23 +1907,14 @@ class RetrieveEvidenceOutput(VersionedOutput):
         default="rag", description="検索文を作った主体（入力の planning）。"
     )
     request_id: str | None = Field(default=None, description="入力の request_id。")
-    clarifications: list[GuideClarification] = Field(
-        default_factory=list,
-        description=(
-            "planning=caller で、検索・回答プロファイルのルールが検索の前に利用者に確かめる条件"
-            "（あれば検索せず、evidence は空）。利用者の答えを conditions の condition_id に入れて"
-            "呼び直す。"
-        ),
-    )
     profile_knowledge: ProfileKnowledge | None = Field(
         default=None,
         description=(
-            "検索・回答プロファイルに登録・承認された判断の方針（rules）と用語の説明（terms）のうち、"
+            "検索・回答プロファイルに登録・承認された用語の説明（terms）のうち、"
             "利用者の元の質問に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として"
-            "引用しない。根拠の読み方と回答の判断に使う。上限（ルール "
-            f"{PROFILE_KNOWLEDGE_RULES_MAX} 件・用語 {PROFILE_KNOWLEDGE_TERMS_MAX} 件・"
-            f"文字の合計 {PROFILE_KNOWLEDGE_MAX_CHARS} 字）を超えた分は rules_omitted・"
-            "terms_omitted に数える。"
+            "引用しない。根拠の読み方と回答の判断に使う。上限（用語 "
+            f"{PROFILE_KNOWLEDGE_TERMS_MAX} 件・文字の合計 {PROFILE_KNOWLEDGE_MAX_CHARS} 字）を"
+            "超えた分は terms_omitted に数える。"
             "検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
         ),
     )
@@ -3722,14 +3659,8 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if "top_k" in arguments.model_fields_set and arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
-    # ルールの確認の答え（rule:）は業務ガイドの条件ではない（rag_search が前提にする。#2117）。
-    conditions = {
-        key: value
-        for key, value in arguments.conditions.items()
-        if not key.startswith(RULE_CONDITION_PREFIX)
-    }
-    if conditions:
-        payload["conditions"] = conditions
+    if arguments.conditions:
+        payload["conditions"] = arguments.conditions
     try:
         return SearchRequest.model_validate(payload)
     except ValidationError as exc:
@@ -3739,110 +3670,6 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
             "検索条件が正しくありません。",
             details={"errors": errors},
         ) from exc
-
-
-async def rule_clarification_step(
-    arguments: SearchInput, request: SearchRequest
-) -> tuple[SearchRequest, AnswerScope | None] | SearchOutput:
-    """検索・回答プロファイルのルールの回答前の確認（RAG のチャットと同じ判定。#1839・#2117）。
-
-    ``conditions`` の ``rule:<id>`` の答えが今の質問に一致するルールのものなら、回答の前提と
-    ``page_ranges`` にして返す（会話の前の答えを別の話題に当てない）。答えが無く、方針が確認で、
-    質問に一致したルールが確認を持てば、検索・回答をせずに needs_clarification を返す。
-    """
-    profile_id = arguments.search_answer_profile_id
-    if (
-        profile_id is None
-        or arguments.skip_clarification
-        or not get_settings().rag_runtime_rules_confirmation_enabled
-    ):
-        return request, None
-    # 利用者の範囲外のプロファイルは、検索と同じく無いもの（None）になる。
-    oracle = OracleClient()
-    view = await oracle.get_search_answer_profile(profile_id)
-    if view is None:
-        # プロファイルが無いときの 404 は検索が返す。
-        return request, None
-    search_route.ensure_search_answer_profile_not_archived(view, profile_id)
-    settings, _ = resolve_search_answer_profile_settings(
-        get_settings(), view.config, apply_answer_model=False
-    )
-    with profile_language_scope(settings):
-        payload = await load_runtime_knowledge_payload(oracle, profile_id)
-        for key, value in arguments.conditions.items():
-            rule_id = key.removeprefix(RULE_CONDITION_PREFIX)
-            if rule_id == key or not rule_matches(payload, arguments.query, rule_id):
-                continue
-            answer = rule_answer(payload, rule_id, value)
-            resolved = (
-                resolve_clarification(
-                    payload,
-                    answer,
-                    await current_section_pages(
-                        oracle, clarification_document_ids(payload, answer)
-                    ),
-                )
-                if answer is not None
-                else None
-            )
-            if resolved is None:
-                continue
-            scope, page_ranges = resolved
-            if page_ranges:
-                request = request.model_copy(
-                    update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
-                )
-            return request, scope
-        if view.config.clarification_policy == "assume":
-            return request, None
-        selection_settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
-        selection_usage: dict[str, float] = {}
-        selected_answers = await recognize_rule_selections(
-            payload, arguments.query, selection_settings, usage=selection_usage
-        )
-        request._rule_selection_state["prepared"] = True
-        request._rule_selection_state["elapsed_seconds"] = selection_usage.get(
-            "elapsed_seconds", 0.0
-        )
-        request = apply_rule_selection_scope(
-            request,
-            payload,
-            selected_answers,
-            current_pages=await current_section_pages(
-                oracle,
-                {
-                    doc
-                    for answer in selected_answers
-                    for doc in clarification_document_ids(payload, answer)
-                },
-            )
-            if selected_answers
-            else None,
-        )
-        found = await asyncio.to_thread(
-            suggest_clarification, payload, arguments.query, answers=selected_answers
-        )
-        if found is None:
-            return request, None
-        rule, clarification = found
-        rule_id = str(rule.get("id", ""))
-        return SearchOutput(
-            answer=f"回答の前に確認が必要です: {clarification.question}",
-            trace_id=new_trace_id(),
-            guardrail_warnings=[],
-            outcome="needs_clarification",
-            clarifications=[
-                GuideClarification(
-                    condition_id=f"{RULE_CONDITION_PREFIX}{rule_id}",
-                    label=str(rule.get("title", "") or rule_id),
-                    question=clarification.question,
-                    options=[option.label for option in clarification.options],
-                    multiple=clarification.multiple,
-                )
-            ],
-            evidence=[],
-            evidence_omitted=0,
-        )
 
 
 async def _older_versions(
@@ -3893,17 +3720,6 @@ def _knowledge_status(status: str) -> ProfileKnowledgeStatus:
     return "stale_review_needed" if status == "stale_review_needed" else "approved"
 
 
-def _knowledge_rule(rule: RuntimeRule) -> ProfileKnowledgeRule:
-    return ProfileKnowledgeRule(
-        id=rule.rule_id,
-        title=rule.title,
-        content=rule.content,
-        source=rule.source,
-        status=_knowledge_status(rule.status),
-        updated_at=rule.updated_at,
-    )
-
-
 def _knowledge_term(term: RuntimeTerm) -> ProfileKnowledgeTerm:
     return ProfileKnowledgeTerm(
         term=term.term,
@@ -3921,12 +3737,12 @@ def _knowledge_revision(payload: Mapping[str, object]) -> str:
 
 
 async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowledge | None:
-    """元の質問に当たる検索・回答プロファイルの承認済みのルールと用語の説明（#2701）。
+    """元の質問に当たる検索・回答プロファイルの承認済みの用語の説明（#2701）。
 
     RAG が回答を作らない根拠の取得では、回答を作る呼び出し元（業務 Agent）へ渡す。照合は回答の
     生成と同じ（有効な登録だけ・語の一致。LLM は呼ばない）で、呼び出し元が言い換えた検索文では
     なく利用者の元の質問に当てる。対象は検索に使った検索・回答プロファイルだけ（利用者の範囲外は
-    無いものになる）。ルールを先に、件数・字数の上限で切り、省いた数を示す。読めなければ
+    無いものになる）。件数・字数の上限で切り、省いた数を示す。読めなければ
     ``load_failed`` を返す（当たるものが無いこと〔null〕と区別する）。
     """
     profile_id = arguments.search_answer_profile_id
@@ -3953,28 +3769,16 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
             search_answer_profile_id=profile_id,
             revision=None,
             matched_on=matched_on,
-            rules=[],
             terms=[],
-            rules_omitted=0,
             terms_omitted=0,
             load_failed=True,
         )
     context = context.with_term_usage(
         search=False, answer=get_settings().rag_runtime_terms_answer_enabled
     )
-    context = context.with_rule_usage(
-        confirmation=False, answer=get_settings().rag_runtime_rules_answer_enabled
-    )
-    generation_rules = context.rules_for_stage("generation")
-    if not (generation_rules or context.answer_terms):
+    if not context.answer_terms:
         return None
     remaining = PROFILE_KNOWLEDGE_MAX_CHARS
-    rules: list[ProfileKnowledgeRule] = []
-    for rule in generation_rules:
-        size = len(rule.title) + len(rule.content) + len(rule.source)
-        if len(rules) < PROFILE_KNOWLEDGE_RULES_MAX and size <= remaining:
-            rules.append(_knowledge_rule(rule))
-            remaining -= size
     terms: list[ProfileKnowledgeTerm] = []
     for term in context.answer_terms:
         size = len(term.term) + sum(map(len, term.aliases)) + len(term.description)
@@ -3986,24 +3790,20 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
         search_answer_profile_id=profile_id,
         revision=_knowledge_revision(payload),
         matched_on=matched_on,
-        rules=rules,
         terms=terms,
-        rules_omitted=len(generation_rules) - len(rules),
         terms_omitted=len(context.answer_terms) - len(terms),
     )
 
 
 def _profile_knowledge_log(knowledge: ProfileKnowledge | None) -> dict[str, object]:
-    """モデルへ渡したルール・用語の記録（数と版だけ。本文・名前は業務の内容なので残さない）。"""
+    """モデルへ渡した用語の記録（数と版だけ。本文・名前は業務の内容なので残さない）。"""
     if knowledge is None:
         return {"profile_knowledge": None}
     return {
         "profile_knowledge": {
             "revision": knowledge.revision,
             "matched_on": knowledge.matched_on,
-            "rules": len(knowledge.rules),
             "terms": len(knowledge.terms),
-            "rules_omitted": knowledge.rules_omitted,
             "terms_omitted": knowledge.terms_omitted,
             "load_failed": knowledge.load_failed,
         }
@@ -4408,11 +4208,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
     async def search(arguments: SearchInput) -> SearchOutput:
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
-        rule = await rule_clarification_step(arguments, request)
-        if isinstance(rule, SearchOutput):
-            return rule
-        request, scope = rule
-        result = await _run_search(request, scope=scope)
+        result = await _run_search(request)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
         returned = mcp_evidence_order(citations, arguments.evidence_limit)[
@@ -4487,33 +4283,12 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         enforce_rate_limit("search", http_request)
         echo = {"planning": arguments.planning, "request_id": arguments.request_id}
         if arguments.planning == "caller":
-            # 検索・回答プロファイルのルールの確認は rag_search と同じ判定（ルールは利用者の質問に
-            # 当てる）。答えがあれば、その範囲（頁）に絞って検索する（範囲は広げない）。
-            rule = await rule_clarification_step(
-                arguments.model_copy(
-                    update={"query": arguments.original_question or arguments.query}
-                ),
-                request,
-            )
-            if isinstance(rule, SearchOutput):
-                return RetrieveEvidenceOutput(
-                    trace_id=rule.trace_id,
-                    guardrail_warnings=[],
-                    evidence=[],
-                    evidence_omitted=0,
-                    clarifications=rule.clarifications,
-                    **echo,
-                )
-            request, scope = rule
             result = await _run_search(
-                request,
-                scope=scope,
-                caller_queries=list(arguments.queries),
-                complete_evidence=False,
+                request, caller_queries=list(arguments.queries), complete_evidence=False
             )
         else:
             result = await _run_search(request, complete_evidence=False)
-        # 回答を作る呼び出し元へ、元の質問に当たる承認済みのルール・用語の説明を渡す（#2701）。
+        # 回答を作る呼び出し元へ、元の質問に当たる承認済みの用語の説明を渡す（#2701）。
         knowledge = await _profile_knowledge(arguments)
         logger.info(
             "rag_mcp_retrieve_evidence",

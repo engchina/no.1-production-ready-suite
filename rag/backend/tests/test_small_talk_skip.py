@@ -16,11 +16,7 @@ from pr_backend_core.observability.tracing import (
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome, AnswerScope
-from app.rag.chat_question_token import (
-    issue_question_token,
-    read_history_intent,
-    with_rule_selection_answers,
-)
+from app.rag.chat_question_token import issue_question_token, read_history_intent
 from app.rag.guardrails import GuardrailResult
 from app.rag.history_question import EMPTY_CONVERSATION_HISTORY, HistoryRewrite
 from app.rag.pipeline import ChatTurn, PreparedHistoryRewrite, RagPipeline
@@ -82,17 +78,9 @@ async def _run(
             answer="合成の根拠つき回答", citations=[], context_text="", diagnostics={}
         )
 
-    async def fields(self: Any, request: Any, **kwargs: Any) -> list[Any]:
-        engine_queries.append("field_filter")
-        return []
-
     monkeypatch.setattr(AnswerEngine, "run", answer)
-    monkeypatch.setattr(RagPipeline, "_read_field_conditions", fields)
     pipeline = RagPipeline(
-        settings=settings
-        or Settings(
-            _env_file=None, rag_history_rewrite_enabled=True, rag_auto_field_filter_enabled=True
-        ),
+        settings=settings or Settings(_env_file=None, rag_history_rewrite_enabled=True),
         oracle=cast(Any, SavingOracle()),
         genai=cast(Any, FakeGenAi()),
         llm=cast(Any, llm),
@@ -170,9 +158,9 @@ async def test_retrieval_runs_when_not_safely_skippable(
     assert "retrieval_skipped" not in response.diagnostics.answer
     step = _stage(summary, "small_talk_reply")
     if case in {"reply-failed", "empty-reply"}:
-        # 応答を作れなければ、いつもの検索と回答に戻す（条件の読み取りも行う）。
+        # 応答を作れなければ、いつもの検索と回答に戻す。
         assert step.status == "failed"
-        assert engine_queries == ["field_filter", "合成の挨拶"]
+        assert engine_queries == ["合成の挨拶"]
     else:
         assert step is None
         assert "small_talk_reply" not in llm.calls
@@ -202,9 +190,6 @@ def test_token_carries_only_known_small_talk_intent() -> None:
     binding = {"owner": "owner-a"}
     token = issue_question_token(SECRET, binding, "合成の挨拶", history_intent="greeting")
     assert read_history_intent(SECRET, token) == "greeting"
-    # 確認の提案が選択を足して署名し直しても保つ。
-    resigned = with_rule_selection_answers(SECRET, token, [], elapsed_seconds=0.1)
-    assert read_history_intent(SECRET, resigned) == "greeting"
     assert read_history_intent(SECRET, issue_question_token(SECRET, binding, "合成の質問")) == (
         "search"
     )
@@ -233,7 +218,7 @@ async def test_first_turn_question_is_searched_with_the_original_text(
     llm = FakeLlm(intent="search")
     response, summary, engine_queries = await _run(monkeypatch, llm, history=[])
     assert llm.calls == ["history_rewrite"]
-    assert engine_queries == ["field_filter", "合成の挨拶"]
+    assert engine_queries == ["合成の挨拶"]
     assert response.answer == "合成の根拠つき回答"
     assert response.diagnostics.answer["rewritten_question"] == ""
 
@@ -247,7 +232,6 @@ async def test_paths_without_rewrite_do_not_classify(
     settings = Settings(
         _env_file=None,
         rag_history_rewrite_enabled=case != "rewrite-disabled",
-        rag_auto_field_filter_enabled=True,
     )
     response, summary, engine_queries = await _run(
         monkeypatch,
@@ -257,5 +241,5 @@ async def test_paths_without_rewrite_do_not_classify(
     )
     assert llm.calls == []
     assert _stage(summary, "history_rewrite") is None
-    assert engine_queries == ["field_filter", "合成の挨拶"]
+    assert engine_queries == ["合成の挨拶"]
     assert response.answer == "合成の根拠つき回答"

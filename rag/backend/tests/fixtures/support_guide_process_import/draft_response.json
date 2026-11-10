@@ -39,12 +39,5 @@
     {"document_name": "未登録の資料B.pdf", "pages": "3", "section": ""}
   ],
   "handoff_contact": "窓口",
-  "handoff_conditions": ["利用者が管理者でない"],
-  "rule_candidates": [
-    {
-      "title": "通知の質問は設定画面Aを案内する",
-      "triggers": ["通知"],
-      "content": "通知が表示されない質問には、設定画面Aの手順を案内する。原因は言い切らず、可能性にとどめる。"
-    }
-  ]
+  "handoff_conditions": ["利用者が管理者でない"]
 }

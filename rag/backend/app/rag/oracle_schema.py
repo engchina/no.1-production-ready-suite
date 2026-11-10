@@ -89,6 +89,7 @@ from app.rag.language_pack_retired_fields import (
 )
 from app.rag.prompt_overrides_4782_generation_migration import removed_prompt_overrides_sql
 from app.rag.request_context import with_system_access
+from app.rag.runtime_rules_4799_migration import removed_runtime_rules_sql
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.search_answer_profile_retired_fields import (
     KEPT_LANGUAGE_PACK_SECTIONS,
@@ -1090,6 +1091,21 @@ END;
                 "ほかのプロンプトは変えません。保存したプロンプトを残す必要があれば適用前に同表を "
                 "export してください。削除後は復元できません（要約の chunk は再取込でも"
                 "作りません）。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4799_search_answer_profile_runtime_rules",
+            table_name="rag_search_answer_profile_knowledge",
+            sql=removed_runtime_rules_sql(),
+            destructive_note=(
+                "検索・回答プロファイルの知識（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が "
+                "runtime_knowledge の行の PAYLOAD_JSON）から、登録ルール（$.rules。確認の質問と"
+                "選択肢を含む）を削除します。用語・同義語（$.terms）と、ドメインキーワード・"
+                "承認済み FAQ の行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
+                "回答プロンプトの役割の文に書きます。ルールの文を残す必要があれば、適用前に同列を "
+                "export し、役割の文へ手で写してください。削除後は復元できません。"
             ),
         )
     )

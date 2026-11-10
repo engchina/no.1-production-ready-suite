@@ -780,8 +780,6 @@ class AnsweringSettingsData(BaseModel):
     rerank_top_n: int = Field(default=60, ge=0, le=2000, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
-    runtime_rules_confirmation_enabled: bool = False
-    runtime_rules_answer_enabled: bool = False
     hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
@@ -791,7 +789,6 @@ class AnsweringSettingsData(BaseModel):
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
     screen_linking_enabled: bool
-    auto_field_filter_enabled: bool
     # 関係情報(章節・表の見出しの entity と chunk の対応)で検索の候補を足す(#2055。既定 OFF)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
@@ -811,8 +808,6 @@ class AnsweringSettingsUpdate(BaseModel):
     rerank_min_relevance_score: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False
     )
-    runtime_rules_confirmation_enabled: bool | None = None
-    runtime_rules_answer_enabled: bool | None = None
     hybrid_search_backend: Literal["oracle_native", "sudachi"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
     rrf_source_ratio: tuple[float, float] | None = None
@@ -841,7 +836,6 @@ class AnsweringSettingsUpdate(BaseModel):
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     screen_linking_enabled: bool | None = None
-    auto_field_filter_enabled: bool | None = None
     graph_expansion_enabled: bool | None = None
 
     entity_expansion_enabled: bool | None = None

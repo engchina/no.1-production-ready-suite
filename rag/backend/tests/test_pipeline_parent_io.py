@@ -19,7 +19,7 @@ from app.rag import chat_attachments
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome
 from app.rag.guardrails import GuardrailResult
 from app.rag.pipeline import ChatTurn, RagPipeline
-from app.schemas.search import ExtractionFieldCondition, RetrievedChunk, SearchRequest
+from app.schemas.search import RetrievedChunk, SearchRequest
 from tests.test_answer_engine import FakeGenAi, SavingOracle
 from tests.test_validation_stage_io import call_of
 
@@ -39,16 +39,11 @@ async def test_pipeline_parent_steps_keep_actual_values(
     monkeypatch: pytest.MonkeyPatch, enabled: bool, generate: bool
 ) -> None:
     chunk = RetrievedChunk(document_id="doc-a", chunk_id="chunk-a", text="合成の根拠", score=0.8)
-    condition = ExtractionFieldCondition(name="field-a", value_type="string", value="value-a")
     seen: dict[str, Any] = {}
 
     async def rewrite(self: Any, question: str, history: Any, **kwargs: Any) -> str:
         seen["rewrite"] = question
         return "合成の補完質問"
-
-    async def fields(self: Any, request: Any, **kwargs: Any) -> list[ExtractionFieldCondition]:
-        seen["fields"] = request.query
-        return [condition]
 
     async def attachment(question: str, conversation: str, **kwargs: Any) -> list[RetrievedChunk]:
         seen["attachment"] = (question, conversation)
@@ -64,7 +59,6 @@ async def test_pipeline_parent_steps_keep_actual_values(
         )
 
     monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", rewrite)
-    monkeypatch.setattr(RagPipeline, "_read_field_conditions", fields)
     monkeypatch.setattr(
         chat_attachments,
         "chat_attachment_service",
@@ -74,9 +68,7 @@ async def test_pipeline_parent_steps_keep_actual_values(
     monkeypatch.setattr(AnswerEngine, "run", answer)
     oracle = SavingOracle()
     pipeline = RagPipeline(
-        settings=Settings(
-            _env_file=None, rag_history_rewrite_enabled=True, rag_auto_field_filter_enabled=True
-        ),
+        settings=Settings(_env_file=None, rag_history_rewrite_enabled=True),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
         attachment_conversation_id="conversation-a",
@@ -100,14 +92,12 @@ async def test_pipeline_parent_steps_keep_actual_values(
         )
     assert seen == {
         "rewrite": "合成の元質問",
-        "fields": "合成の補完質問",
         "attachment": ("合成の補完質問", "conversation-a"),
         "engine": "合成の補完質問",
     }
     assert len(response.citations) == 1
     for stage in [
         "history_rewrite",
-        "field_filter",
         "attachment_evidence",
         "answer" if generate else "evidence",
         *(["answer_record_save"] if generate else []),
@@ -121,10 +111,7 @@ async def test_pipeline_parent_steps_keep_actual_values(
         input_data, output = json.loads(call.input.text), json.loads(call.output.text)
         if stage == "history_rewrite":
             assert input_data["渡した会話履歴"][0]["content"] == "合成の履歴"
-            assert output["返却された補完質問"] == seen["fields"]
-        elif stage == "field_filter":
-            assert input_data["質問"] == seen["fields"]
-            assert output["返却した条件"] == [condition.model_dump(mode="json")]
+            assert output["返却された補完質問"] == seen["engine"]
         elif stage == "attachment_evidence":
             assert input_data["会話 ID"] == seen["attachment"][1]
             assert output["返却した根拠"][0]["chunk_id"] == chunk.chunk_id

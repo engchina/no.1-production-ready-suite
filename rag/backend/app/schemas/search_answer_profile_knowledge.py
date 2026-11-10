@@ -163,33 +163,20 @@ class ApprovedFaqSuggestionsData(BaseModel):
 
 
 class RuntimeKnowledgeData(BaseModel):
-    """検索・回答プロファイルの用語・同義語と回答ルール(rag_poc runtime knowledge の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語(rag_poc runtime knowledge の標準形式)。"""
 
     search_answer_profile_id: str
     terms: list[dict[str, JsonValue]] = Field(default_factory=list)
-    rules: list[dict[str, JsonValue]] = Field(default_factory=list)
 
 
 class RuntimeKnowledgeEditRequest(BaseModel):
-    """1 行の追加・更新・削除。selected 未指定は追加。"""
+    """用語 1 行の追加・更新・削除。selected 未指定は追加。"""
 
-    kind: Literal["terms", "rules"]
     selected: str | None = Field(default=None, max_length=160)
-    name: str = Field(
-        default="",
-        max_length=160,
-        description="用語、またはルール ID（ルール追加時に省略すると自動採番）",
-    )
-    title: str = Field(default="", max_length=160, description="ルール名(rules のみ)")
-    labels: str = Field(
-        default="", max_length=8000, description="別名 / 照合キーワード(改行・読点区切り)"
-    )
-    content: str = Field(default="", max_length=8000, description="説明 / ルール内容")
+    name: str = Field(default="", max_length=160, description="用語")
+    labels: str = Field(default="", max_length=8000, description="別名(改行・読点区切り)")
+    content: str = Field(default="", max_length=8000, description="説明")
     source: str = Field(default="", max_length=800)
-    purpose: Literal["confirmation", "generation", "both"] | None = None
-    instruction_kind: Literal["presentation", "requirement", "verification"] | None = None
-    exclusive_group: str | None = Field(default=None, max_length=160)
-    priority: int | None = Field(default=None, ge=0, le=100, strict=True)
     enabled: bool = True
     delete: bool = False
 
@@ -199,25 +186,10 @@ class RuntimeKnowledgePreviewRequest(BaseModel):
 
 
 class RuntimeKnowledgePreviewData(BaseModel):
-    """照合テスト: 一致した用語・同義語と回答ルールと拡張後の検索文。"""
+    """照合テスト: 一致した用語・同義語と拡張後の検索文。"""
 
     expanded_question: str
     matched_terms: list[str] = Field(default_factory=list)
-    matched_rules: list[str] = Field(default_factory=list)
-    conflicting_rules: list[str] = Field(default_factory=list)
-
-
-class ClarificationSection(BaseModel):
-    """確認の選択肢が指す文書の章節。ページは保存したときの章節のページ範囲。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    document_id: str = Field(min_length=1, max_length=64)
-    document_name: str = Field(default="", max_length=512)
-    section_id: str = Field(min_length=1, max_length=64)
-    title: str = Field(min_length=1, max_length=200)
-    page_start: int | None = Field(default=None, ge=1)
-    page_end: int | None = Field(default=None, ge=1)
 
 
 class ClarificationOption(BaseModel):
@@ -230,10 +202,8 @@ class ClarificationOption(BaseModel):
     description: str = Field(default="", max_length=200)
     # 選んだとき補助の検索文に足す語。
     search_terms: list[str] = Field(default_factory=list, max_length=10)
-    # 選んだとき回答に渡す前提(例: 「利用者は経費精算画面について質問している」)。
+    # 選んだとき回答に渡す前提(例: 「条件 A は値 B」)。
     premise: str = Field(default="", max_length=300)
-    # 選んだとき検索を絞る章節(複数可)。
-    sections: list[ClarificationSection] = Field(default_factory=list, max_length=20)
 
     @field_validator("label")
     @classmethod
@@ -250,7 +220,7 @@ class ClarificationOption(BaseModel):
 
 
 class RuleClarification(BaseModel):
-    """確認の質問。自由入力のみ、または選択肢2〜8件。"""
+    """確認の質問(業務ガイドの条件の確認)。自由入力のみ、または選択肢2〜8件。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -275,12 +245,6 @@ class RuleClarification(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("選択肢の id が重複しています。")
         return self
-
-
-class RuleClarificationRequest(BaseModel):
-    """ルールの確認の保存。None は確認を外す。"""
-
-    clarification: RuleClarification | None = None
 
 
 class ClarificationSuggestRequest(BaseModel):
