@@ -1,12 +1,7 @@
-"""監査モードの入力範囲と、未校正の意味観察の採否を分離する。
-
-standard と detailed の schema・資料入力は維持するが、意味観察だけで本文を削除・修正しない。
-none の決定的な引用検査と条件付き回答の既存是正は維持する。純粋な判定部品は明示した入力で別に検証する。
-"""
+"""前提を示して回答する（#3069）ときも、生成は 1 回だけで作り直さない（#4714）。"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 
 from test_grounded_answer import FakeModel, context, draft, ids, item, record
@@ -14,31 +9,6 @@ from test_grounded_answer import FakeModel, context, draft, ids, item, record
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answering import synthesize_grounded_answer
-
-STEP = "一覧表を選択し、処理を選択します。"
-
-
-def _run(model, ctx, mode, **overrides):
-    def unused(*a, **k):
-        return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
-
-    settings = replace(get_settings(), **overrides)
-    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        return synthesize_grounded_answer(
-            "年次集計の明細一覧表を出力する手順を教えてください", ctx, settings, image_prompt_mode="text_only"
-        )
-
-
-def _audit_inputs(model):
-    return [json.loads(prompt) for name, prompt in model.prompts if name in {"GroundedAudit", "GroundedFactAudit"}]
-
-
-def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
-
-
-# ---- 監査なしの型（#2800）と、要件の監査の観察（#2800） ------------------------------------
-
 
 # ---- 前提を示して回答する（未回答の確認事項。#3069） ------------------------------------
 

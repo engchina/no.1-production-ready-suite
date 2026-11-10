@@ -112,7 +112,6 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
-import { JudgeCalibrationBadge } from "./calibration/JudgeCalibrationBadge";
 import { TestSetTab } from "./testsets/TestSetTab";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
@@ -135,7 +134,7 @@ const COMPARE_PROFILE_ID = "evaluation-compare-profile";
 const EVALUATION_EXCEL_MAX_ROWS = 200;
 const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
 const PAGE_TABS_PREFIX = "evaluation-page";
-type PageTab = "run" | "calibration";
+type PageTab = "run" | "testsets";
 
 /**
  * 品質評価（改善・運用 › 品質評価。#2065）。評価する検索・回答プロファイル（必須）と評価リクエストの Excel
@@ -145,10 +144,10 @@ type PageTab = "run" | "calibration";
 export function EvaluationClient() {
   // 既存 URL は保ち、テストセットの作成を直接開ける（#4396）。
   const [searchParams, setSearchParams] = useSearchParams();
-  const pageTab: PageTab = searchParams.get("tab") === "calibration" ? "calibration" : "run";
+  const pageTab: PageTab = searchParams.get("tab") === "testsets" ? "testsets" : "run";
   const changePageTab = (value: string) => {
     const next = new URLSearchParams(searchParams);
-    if (value === "calibration") next.set("tab", "calibration");
+    if (value === "testsets") next.set("tab", "testsets");
     else next.delete("tab");
     setSearchParams(next, { replace: true });
   };
@@ -381,13 +380,13 @@ export function EvaluationClient() {
             onChange={changePageTab}
             items={[
               { id: "run", label: t("evaluation.tabs.run") },
-              { id: "calibration", label: t("evaluation.tabs.calibration") },
+              { id: "testsets", label: t("evaluation.tabs.testsets") },
             ]}
           />
         }
       />
       <PageBody wide>
-        <TabPanel id="calibration" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
+        <TabPanel id="testsets" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
           <TestSetTab />
         </TabPanel>
         <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
@@ -1105,8 +1104,6 @@ function MetricGroup({
                   {failedMetrics.has(metric) ? (
                     <StatusBadge variant="warning" label={t("evaluation.metric.belowThreshold")} />
                   ) : null}
-                  {/* 観点の判定が今の評価器で校正済みか（#3578。指標の値は変えない）。 */}
-                  <JudgeCalibrationBadge metric={metric} />
                 </div>
               </CardContent>
             </Card>

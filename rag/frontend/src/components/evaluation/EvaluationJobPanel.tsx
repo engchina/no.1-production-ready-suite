@@ -45,7 +45,7 @@ export function EvaluationJobPanel({
   job: EvaluationJob;
   onCancel: (job: EvaluationJob) => void;
   cancelling: boolean;
-  /** 見出し（判定の校正の job は「校正の実行状況」。#3578）。 */
+  /** 見出し（省略時は評価の job の見出し）。 */
   title?: string;
   testPrefix?: string;
   /** 実行中の対象の文言（省略時は評価のケースの行。null なら出さない）。 */

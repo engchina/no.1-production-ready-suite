@@ -699,7 +699,7 @@ def build_engine_settings(
             settings.rag_section_expansion_followup_reserve_percent
         ),
     }
-    # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
+    # 生成の出力が形式の確認を通らなかったときのモデル(モデルのカスケード。#4581)。
     environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -1089,8 +1089,8 @@ class AnswerEngine:
     ) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
 
-        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成・
-        監査のすべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
+        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成の
+        すべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
         (画像を読めないモデル・画像の無い根拠は 0)。
         rerank は実際に並べたときだけモデル名を出す: 無効・未設定(モデルか compartment が無い。
         rag_engine はこのとき rerank を実行しない)なら空。rerank が失敗して取得の順で続けたとき
@@ -4318,7 +4318,7 @@ def _stored_child(
         # XML ツリー JSON の段落の根拠(#2024)。回答の本文の出典を引用ラベルにする(ページの
         # 無い原本なので「p.1」にしない)。親(単位)の場所は単位のラベル。
         metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
-        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にして説明する。
         metadata[ARTICLE_UNIT_KEY] = True
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
@@ -5330,14 +5330,12 @@ def evaluate_answer_record(
     standard_answer: str,
     settings: Settings,
     *,
-    citations: Sequence[RetrievedChunk],
     judge_model_id: str | None = None,
 ) -> dict[str, Any]:
     """保存した回答を標準回答で評価する。
 
-    LLM(rag_engine の evaluate_answer_payload)が標準回答の項目の照合と主張の監査を行い、
-    評価の基準の指標と閾値で合否を付ける(#680)。``citations`` は回答の引用(決定的な指標に使う)。
-    同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+    LLM(rag_engine の evaluate_answer_payload)が標準回答に照らした正確性を 1 回で判定し、
+    評価の基準の閾値で合否を付ける(#680)。同期関数で、呼び出し側は worker thread で動かす。
 
     ``judge_model_id`` は判定のモデル(#3574。呼び出し側が回答を作ったモデルから
     `enterprise_ai_judge_model_id` で解決した ID)。省略時は回答のモデルが分からないものとして
@@ -5353,13 +5351,7 @@ def evaluate_answer_record(
             settings, output_dir=Path(work), answer_model_id=judge_model
         )
         evaluation = evaluate_answer_payload(
-            {
-                **evaluation_input,
-                "standard_answer": standard_answer,
-                "allow_without_standard": True,
-                "six_metrics": True,
-            },
-            engine_settings,
+            {**evaluation_input, "standard_answer": standard_answer}, engine_settings
         )
     diagnostics = evaluation.get("judge_diagnostics")
     evaluation = {
@@ -5369,10 +5361,4 @@ def evaluate_answer_record(
             "judge_model_id": judge_model,
         },
     }
-    return score_answer_evaluation(
-        evaluation,
-        answer=str(evaluation_input.get("answer_text") or ""),
-        citations=citations,
-        insufficient_reason=str(evaluation_input.get("insufficient_reason") or ""),
-        settings=settings,
-    )
+    return score_answer_evaluation(evaluation, settings=settings)

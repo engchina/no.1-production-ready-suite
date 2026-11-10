@@ -9,7 +9,6 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from audit_fixtures import is_explanation_schema, synthetic_explanation
 from test_grounded_answer import context, record
 
 from rag_engine.config import get_settings
@@ -28,8 +27,6 @@ def _answer() -> tuple[Any, list[str]]:
 
     def model(_system: str, prompt: str, _settings: Any, schema: Any, **_options: Any) -> Any:
         calls.append(schema.__name__)
-        if is_explanation_schema(schema):
-            return synthetic_explanation(schema, prompt)
         if not getattr(schema, "_uses_unit_ids", False):
             raise AssertionError(f"生成と説明のほかの呼び出し: {schema.__name__}")
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}

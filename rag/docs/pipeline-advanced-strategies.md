@@ -20,7 +20,7 @@
 |---|---|---|
 | `reasoning_tree_search`(PageIndex 型) | 検索方式 | PageIndex-lite の実装(navigation 要約から LLM が section を選ぶ)と検索モードの選択は #595 で削除した。回答フローでは、画面目録で操作画面を探す(`RAG_SCREEN_LINKING_ENABLED`。番号付きの見出しの目録から LLM が画面を選ぶ)が近い役割を持つ |
 | `colpali_visual_retrieval`(ColPali 型) | 検索方式 | 戦略の登録ごと #595 で削除した。未着手 |
-| `self_reflective`(Self-RAG) | 回答生成 | 未着手。回答フローの回答文の生成後の根拠確認(監査)が近い役割を持つ |
+| `self_reflective`(Self-RAG) | 回答生成 | 未着手。回答フローは生成の後に LLM で確かめない(引用の実在と形式だけをコードで確かめる。#4714) |
 | Temporal GraphRAG | 文書構造索引の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) |
 
 ---
@@ -71,7 +71,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 
 - **self_reflective(Self-RAG)**: OCI Enterprise AI が
   `{"answer":..., "confidence":0-1, "grounded_in_context":bool}` を出力し、`confidence<閾値` or
-  `grounded_in_context==false` で **1 回だけ再検索**する。回答文の生成後の根拠確認が同じ役割を持つため、足すならその中で扱う。
+  `grounded_in_context==false` で **1 回だけ再検索**する。回答フローは生成の後に LLM で確かめない(#4714)ため、足すなら新しい段として測ってから決める。
 - **Temporal GraphRAG**: 取込時に entity / relationship へ timestamp(`valid_from/valid_to`)を付与し、
   検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出して Oracle の条件でフィルタする。
   回答の検索で graph を使う経路は #595 で削除したため、検索時の利用から設計し直す。設定は実装と同時に

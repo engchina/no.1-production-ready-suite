@@ -1,13 +1,11 @@
 """主張と引用の対による回答生成を、LLM を差し替えて入出力だけで確認する。"""
 
-import json
 import re
 import unittest
 from dataclasses import replace
 from typing import Any
 from unittest.mock import patch
 
-from audit_fixtures import is_audit_wire, is_explanation_schema, legacy_audit_result, synthetic_explanation
 from citation_unit_support import canonical_fixture, without_unit_annotations
 from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
@@ -61,22 +59,15 @@ class FakeModel:
         self.captured_system_prompts = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        observed = schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        if is_explanation_schema(schema):
-            if not self.explanations:
-                return synthetic_explanation(schema, prompt)
-            text = self.explanations.pop(0) if len(self.explanations) > 1 else self.explanations[0]
-            return schema.model_validate({"explanation": text})
         is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
         source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
         canonical_schema = GroundedDraft if is_generation else schema
         payload = value(prompt) if callable(value) else value
-        if is_audit_wire(schema):
-            return legacy_audit_result(payload, schema)
         return canonical_fixture(payload) if is_generation else canonical_schema.model_validate(payload)
 
 
@@ -765,46 +756,6 @@ class ImageGenerationFallbackTest(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.run_round(failing, None)
         self.assertEqual(self.text_model.prompts, [])
-
-
-class AuditGlossaryTest(unittest.TestCase):
-    """質問に当たった用語（名前と別名）を監査の入力に渡す（#2823）。"""
-
-    def setUp(self):
-        self.ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(self.ctx)[LIST_TEXT]
-        step = "一覧表を選択し、処理を選択します。"
-        self.model = FakeModel([draft(item(eid, step, step, request_id="Q1"))], [audit((0, "supported", "matched", ""))])
-
-    def audit_input(self, glossary=()):
-        grounded.run_round(
-            QUESTION,
-            _grounded_spans(QUESTION, self.ctx, (), None),
-            None,
-            prompt="p",
-            image_paths=[],
-            provider_id=None,
-            parse_text=self.model,
-            parse_images=None,
-            glossary=glossary,
-        )
-        return json.loads(next(prompt for schema, prompt in self.model.prompts if schema == "GroundedAudit"))
-
-    def test_answering_passes_only_terms_with_aliases(self):
-        from pathlib import Path
-
-        from rag_engine.generation.answering import _audit_glossary
-        from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeTerm
-
-        runtime = RuntimeKnowledgeContext(
-            original_question=QUESTION,
-            expanded_question=QUESTION,
-            path=Path("glossary.json"),
-            terms_answer_enabled=True,
-            matched_terms=(RuntimeTerm(term="年次集計", aliases=("年集計",)), RuntimeTerm(term="一覧表")),
-        )
-        self.assertEqual(_audit_glossary(runtime), [{"term": "年次集計", "aliases": ["年集計"]}])
-        self.assertEqual(_audit_glossary(None), [])
 
 
 class SummaryDeniedClaimTest(unittest.TestCase):

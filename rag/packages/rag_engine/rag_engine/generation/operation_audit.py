@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 
-from rag_engine.parsing.structural_text import is_table_rule as is_table_rule
-
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
 # 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
 _BRACKET_PAIRS = {"「": "」", "『": "』", "（": "）", "(": ")", "【": "】"}
@@ -59,29 +57,12 @@ _PASSAGE_CHARS = 600
 
 
 def answer_passage_ranges(text: str) -> list[tuple[str, int, int]]:
-    """``answer_passages`` の段落の ID と、``text`` の中の位置（開始・終了。``text[start:end]`` が段落の原文）。
+    """回答の段落の ID（``A1``…）と、``text`` の中の位置（開始・終了。``text[start:end]`` が段落の原文）。
 
-    MCP の ``rag_validate_answer`` は段落の判定にこの位置を付けて返し、呼び出し側は段落の分け方を写さずに
-    位置で段落を特定する（#3240）。
+    改写せず文・改行で区切り、長文も 600 文字の連続範囲として保持する。句点直後の閉じ括弧は同じ文に含め、括弧の
+    中の「。」では切らない（``sentence_ranges``。#1455）。行全体が 1 つの「…」の引用は 1 段落として扱う。
     """
     return text_unit_ranges(text, prefix="A", whole_line=_QUOTE_ONLY_LINE)
-
-
-# 1 行を 1 つの単位にする表の行（Markdown の表は「|」で始まる。セルの中の句点で行を切らない）。
-_TABLE_ROW = re.compile(r"\s*\|.*")
-
-
-def standard_answer_unit_ranges(text: str) -> list[tuple[str, int, int]]:
-    """標準回答の単位（品質評価の比較範囲の固定でモデルが ID で指す）の ID（``S1``…）と位置（#3575）。
-
-    回答の段落（``answer_passage_ranges``）と同じ分け方（行 → 括弧の外の文の終わり。空行は除く）に、
-    「！」「？」でも文を分け、表の行と「…」だけの行は 1 行を 1 つの単位にする。箇条書きの項目は行なので
-    前後の項目と混ざらない。
-    """
-    return text_unit_ranges(text, prefix="S", ends="。！？", whole_line=_STANDARD_WHOLE_LINE)
-
-
-_STANDARD_WHOLE_LINE = re.compile(f"(?:{_QUOTE_ONLY_LINE.pattern})|(?:{_TABLE_ROW.pattern})")
 
 
 def text_unit_ranges(text: str, *, prefix: str, ends: str = "。", whole_line: re.Pattern[str]) -> list[tuple[str, int, int]]:
@@ -105,14 +86,3 @@ def text_unit_ranges(text: str, *, prefix: str, ends: str = "。", whole_line: r
                 result.append((f"{prefix}{len(result) + 1}", offset + lead + start, offset + lead + stop))
         offset += len(line) + 1
     return result
-
-
-def answer_passages(text: str) -> list[dict[str, str]]:
-    """改写せず文・改行で区切る。長文も600文字の連続範囲として保持する。
-
-    句点直後の閉じ括弧は同じ文に含める。括弧の中の「。」では切らない（``sentence_ranges``。#1455）。
-    括弧の途中で切ると、検証で前の半分を外したときに閉じ括弧の残る断片が本文に残る。行全体が1つの
-    「…」の引用（原文のみ提示の行。表の引用は複数の文を含む）は、引用の途中で切らずに1段落として扱う。
-    段落の位置は ``answer_passage_ranges``。
-    """
-    return [{"id": passage_id, "text": text[start:end]} for passage_id, start, end in answer_passage_ranges(text)]

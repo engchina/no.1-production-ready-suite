@@ -1168,7 +1168,7 @@ for (const theme of ["light", "dark"] as const) {
         { fields: [{ label: "検索の候補", value: "0 件" }, { label: "結果", value: "回答に渡す根拠 0 件" }], lines: ["検索文: 2 本"] },
         "s3"
       ),
-      step("s5", "answer_step", 2, 9, { name: "回答文の生成と根拠確認（1回目）", llm_calls: 2 }, undefined, "s3"),
+      step("s5", "answer_step", 2, 9, { name: "回答文の生成と引用の確認（1回目）", llm_calls: 2 }, undefined, "s3"),
       { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(9), type: "terminal", status: "done" },
     ];
     await page.emulateMedia({ colorScheme: theme });

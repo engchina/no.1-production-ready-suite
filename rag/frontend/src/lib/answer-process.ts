@@ -58,7 +58,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "画面の選択": "answer.step.selectScreens",
   "章節の拡張": "answer.step.expandSections",
   "回答に添付する画像": "answer.step.attachImages",
-  "回答文の生成と根拠確認": "answer.step.generateAnswer",
+  "回答文の生成と引用の確認": "answer.step.generateAnswer",
   "文書ごとの起点の上限": "answer.step.deferDocumentCandidates",
   "条の選択": "answer.step.selectArticles",
   "検索結果の統合（RRF）": "answer.step.rrfFusion",

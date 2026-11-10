@@ -7,8 +7,8 @@
 ## 前提（今の対策）
 
 - 検知: `rag_engine/generation/answer_images.py` の `prompt_injection_warnings_for_records`（`PROMPT_INJECTION_PATTERNS` の 7 つの正規表現。英語の ignore / disregard / system prompt / role の上書き、日本語の「前の指示を無視」・「システムプロンプト」・「新しい指示」など）。根拠の本文と補助の文脈（`answer_metadata_context`。文書・章節・caption・脚注・表など）を見る。
-- 生成には、警告から抜粋を除いた「根拠の ID: 規則の名前」だけを渡す（`_prompt_safe_warnings`）。生成の prompt は根拠を不可信のデータとして区切り、その中の指示に従わないよう指示する。回答は根拠に結び付いた主張の単位で組み立て、監査する（grounded）。
-- OCI Guardrails と、常に通過する旧 guardrail の段は #37 / #52 で削除した（`app/rag/guardrail_adapter.py` は旧段の静的解決だけで、安全チェックからは呼ばない）。この比較はそれらを前提にしない。
+- 生成には、警告から抜粋を除いた「根拠の ID: 規則の名前」だけを渡す（`_prompt_safe_warnings`）。生成の prompt は根拠を不可信のデータとして区切り、その中の指示に従わないよう指示する。回答は根拠に結び付いた主張の単位で組み立て、引用の実在と形式をコードで確かめる（grounded）。
+- OCI Guardrails と、常に通過する旧 guardrail の段は #37 / #52 で削除した（旧段の静的解決の `guardrail_adapter.py` も #4781 で削除した）。この比較はそれらを前提にしない。
 
 ## 何を比べたか
 
