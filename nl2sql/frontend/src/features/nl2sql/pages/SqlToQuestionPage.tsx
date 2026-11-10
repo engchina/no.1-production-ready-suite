@@ -5,7 +5,6 @@ import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-
 import {
   Button,
   EmptyState,
-  StatusBadge,
   PageHeader,
   FormStatus,
   Skeleton,
@@ -715,10 +714,11 @@ function SchemaPreview({
   }
 
   return (
-    <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
-      <div className="flex flex-wrap gap-2">
-        <StatusBadge icon={false} variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
-      </div>
+    <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
+      {/* 業務プロファイルの名前は状態ではないので、バッジにせず通常の文字で出す（#4801）。 */}
+      <p className="min-w-0 text-xs font-medium text-fg-muted [overflow-wrap:anywhere]" data-testid="sql-to-question-schema-profile">
+        {profile ? profileDisplayLabel(profile) : "-"}
+      </p>
       <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Database size={16} aria-hidden="true" />
         {t("sqlToQuestion.schema.title")}
