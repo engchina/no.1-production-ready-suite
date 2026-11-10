@@ -219,6 +219,37 @@ for (const viewport of [
   });
 }
 
+test("評価するプロファイルの候補を読み取れないときは、候補なしと見せず欄の位置に失敗と再試行を出す (#4222)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let profilesFail = true;
+  // 後の route が優先する（beforeEach の成功の応答を上書きする）。
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    if (!profilesFail) return route.fallback();
+    await route.fulfill({
+      status: 500,
+      json: {
+        data: null,
+        error_messages: ["検索・回答プロファイルを読み取れませんでした。"],
+        warning_messages: [],
+        error_code: "database_read_failed",
+      },
+    });
+  });
+  await page.goto("/evaluation");
+
+  const failure = page.getByTestId("evaluation-profiles-load-failed");
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(failure.getByRole("alert")).toContainText("検索・回答プロファイルを読み取れませんでした。");
+  await expect(page.locator("#evaluation-profile")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.getByTestId("evaluation-conditions").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`evaluation-profiles-load-failed-${testInfo.project.name}.png`) });
+
+  profilesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.locator("#evaluation-profile")).toBeVisible();
+});
+
 test("テンプレートをダウンロードでき、選んだナレッジベースの文書の一覧を求める", async ({ page }) => {
   const urls: string[] = [];
   await page.route("**/api/evaluation/cases/template**", (route) => {
