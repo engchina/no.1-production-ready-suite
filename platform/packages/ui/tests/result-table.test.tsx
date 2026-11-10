@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ChatResultTable,
   ResultTable,
+  ResultCell,
   resultSummaryText,
   isNumericResultColumn,
   resultRowsToCsv,
@@ -179,7 +180,7 @@ describe("ResultTable", () => {
     const fullCell = $('[data-testid="result-all-table"]')!.querySelectorAll("tbody tr")[1].querySelectorAll("td")[3];
     expect(fullCell.querySelector("span")?.className).toContain("whitespace-pre-wrap");
     expect(fullCell.querySelector("span")?.className).toContain("line-clamp-6");
-    expect(fullCell.querySelector("span")?.getAttribute("title")).toBe("x".repeat(300));
+    expect(fullCell.querySelector("span")?.hasAttribute("title")).toBe(false);
 
     // シートの見出しの CSV は別の testid（同じ testid を 2 つ出さない。#1178）。
     expect(document.querySelectorAll('[data-testid="result-csv"]')).toHaveLength(1);
@@ -285,5 +286,43 @@ describe("ResultTable のセルの省略と描き方（#4812・#4822）", () => 
     expect(document.querySelector('[data-testid="t-table"] tbody td:first-child span')?.textContent).toBe("A");
     act(() => $('[data-testid="t-csv"]')!.click());
     expect(csv).toContain("A,[1]");
+  });
+});
+
+
+describe("ResultCell の全文の開閉（#4826）", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("実際に省略された値だけ開閉でき、値が変われば閉じた状態へ戻る", () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(120);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(320);
+    const text = "合成の長い値。".repeat(80);
+    act(() => root.render(<ResultCell value={text} expandLabel="開く" collapseLabel="閉じる" />));
+    const button = container.querySelector("button")!;
+    expect(button.textContent).toBe("開く");
+    const content = document.getElementById(button.getAttribute("aria-controls")!)!;
+    expect(content.textContent).toBe(text);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    act(() => button.click());
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(content.className).not.toContain("line-clamp-6");
+    expect(button.textContent).toBe("閉じる");
+    act(() => button.click());
+    expect(content.className).toContain("line-clamp-6");
+    act(() => button.click());
+    act(() => root.render(<ResultCell value={text + "変更"} />));
+    expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("収まる長い値・短い値・NULL・プレビューには開閉の操作を出さない", () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(120);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(120);
+    for (const value of ["収まる値".repeat(12), "短い値", null]) {
+      act(() => root.render(<ResultCell value={value} />));
+      expect(container.querySelector("button")).toBeNull();
+    }
+    act(() => root.render(<ResultCell value={"長い値".repeat(100)} variant="preview" />));
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("span")?.className).toContain("truncate");
   });
 });
