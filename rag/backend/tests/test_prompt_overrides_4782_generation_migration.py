@@ -42,6 +42,8 @@ def test_migration_is_registered_as_destructive_and_removes_no_editable_key() ->
         "rule_selection.system",
         "rule_selection.instruction",
         "field_filter.system",
+        # 画面目録の工程を廃止（#4845）。適用済みの削除対象の key は保持する。
+        "screen_linking.system",
     }
 
 
