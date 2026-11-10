@@ -2,12 +2,14 @@ import {
   AnswerBody,
   AnswerPlainText,
   AnswerSections,
+  AnswerSourceMarks,
   cn,
   hasMarkdownTable,
   MarkdownInlineText,
   MarkdownText,
   useEvidenceSource,
   type AnswerBodyLabels,
+  type AnswerBodyTableCell,
   type AnswerCitationRef,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
@@ -15,7 +17,7 @@ import {
 } from "@production-ready/ui";
 import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
 import {
@@ -43,6 +45,8 @@ const GAPS_SECTION_TITLE = "資料から確認できなかった事項";
 // 回答の本文の表（#4734）。モデルが書いた Markdown の表に加えて、回答エンジンが文書の表から切り出した区切りの行の無い
 // 行の並び（rag_engine の table_html_as_rows。#4717）も表にする。判定は行の形だけ。
 const ANSWER_TABLE_OPTIONS: SplitMarkdownTablesOptions = { headerlessRows: true };
+// 回答エンジンが冒頭の回答の表の右端の出典の列に入れる番号の印（rag_engine の answer_table.SOURCE_MARK。#4812）。
+const SOURCE_MARKS = /^(?:\[\d+\])+$/;
 
 /**
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
@@ -77,6 +81,8 @@ export function AnswerText({
   diagnostics?: unknown;
 }) {
   const source = useEvidenceSource<CitationTarget>();
+  // 出典の列の印の移り先（根拠の行）の id。同じ画面に回答が複数あっても重ならないよう回答ごとに分ける。
+  const anchorPrefix = useId();
   const format = answerFormat(diagnostics);
   const blocks = streaming ? null : parseAnswerText(text, format);
   // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
@@ -107,7 +113,9 @@ export function AnswerText({
     <AnswerSections
       live={live}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
-        block.kind === "paragraph"
+        block.kind === "paragraph" && block.citations?.length
+          ? sourcedParagraph(block.text, block.citations, block.citationLines ?? [], index)
+          : block.kind === "paragraph"
           ? hasTable(block.text)
             ? { kind: "content", key: String(index), content: <AnswerTableBody text={block.text} />, passageText: block.text, lang: fixedLang(block.text) }
             : { kind: "paragraph", key: String(index), content: block.text, lang: fixedLang(block.text) }
@@ -133,6 +141,52 @@ export function AnswerText({
       ) : null}
     </AnswerSections>
   );
+
+  /**
+   * 冒頭の回答の表と、その下の行ごとの根拠の行（#4812）。根拠の行の n 番目に「[n]」の印と移り先の id を付け、表の
+   * 出典の列の印を、その行へ移るリンクにする。番号は回答エンジンが振った表の下の行の順。
+   */
+  function sourcedParagraph(text: string, lines: readonly string[], ordinals: readonly number[], index: number): AnswerSectionsBlock {
+    const anchor = (number: number) => `${anchorPrefix}-sources-${index}-${number}`;
+    const renderCell = ({ value, columnIndex, table }: AnswerBodyTableCell) => {
+      const column = table.columns[columnIndex]?.name;
+      if (columnIndex !== table.columns.length - 1 || typeof value !== "string" || !SOURCE_MARKS.test(value)) return undefined;
+      if (format?.table_source_column && column !== format.table_source_column) return undefined;
+      const numbers = [...value.matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1]));
+      return (
+        <AnswerSourceMarks
+          marks={numbers.map((number) => ({
+            key: String(number),
+            label: `[${number}]`,
+            // 当たる根拠の行が無い番号は移り先を持たない（リンクは何もしない）。
+            targetId: number <= lines.length ? anchor(number) : undefined,
+            ariaLabel: t("search.answerText.sourceMarkLabel", { mark: `[${number}]` }),
+          }))}
+        />
+      );
+    };
+    return {
+      kind: "content",
+      key: String(index),
+      content: <AnswerTableBody text={text} renderTableCell={renderCell} />,
+      passageText: text,
+      lang: fixedLang(text),
+      citations: lines.flatMap((line, position) =>
+        toCitations(line, ordinals[position]).map((ref, part) =>
+          part === 0
+            ? {
+                ...ref,
+                marker: `[${position + 1}]`,
+                anchorId: anchor(position + 1),
+                ariaLabel: ref.onOpen
+                  ? t("search.answerText.openNumberedCitation", { mark: `[${position + 1}]`, citation: ref.label })
+                  : undefined,
+              }
+            : ref,
+        ),
+      ),
+    };
+  }
 
   function toCitations(citation: string, ordinal: number | undefined): AnswerCitationRef[] {
     const ref = parseCitationLine(citation, format);
@@ -217,12 +271,25 @@ function answerTableLabels(): AnswerBodyLabels {
   };
 }
 
-/** 表を含む本文（表は共通の結果の表、表以外は改行を保った文。#4734）。 */
-function AnswerTableBody({ text, className }: { text: string; className?: string }) {
+/**
+ * 表を含む本文（表は共通の結果の表、表以外は改行を保った文。#4734）。回答の表はセルの全文を折り返し、省略しない
+ * （共通の表の回答のモード。#4812）。
+ */
+function AnswerTableBody({
+  text,
+  className,
+  renderTableCell,
+}: {
+  text: string;
+  className?: string;
+  renderTableCell?: (cell: AnswerBodyTableCell) => ReactNode | undefined;
+}) {
   return (
     <AnswerBody
       text={text}
       splitOptions={ANSWER_TABLE_OPTIONS}
+      tableMode="answer"
+      renderTableCell={renderTableCell}
       labels={answerTableLabels()}
       className={cn("whitespace-normal", className)}
       testId="answer-table-body"
@@ -256,6 +323,7 @@ function ReasoningText({ text }: { text: string }) {
         <AnswerBody
           text={text}
           splitOptions={ANSWER_TABLE_OPTIONS}
+          tableMode="answer"
           labels={answerTableLabels()}
           className="whitespace-normal"
           testId="answer-table-body"

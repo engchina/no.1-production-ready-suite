@@ -2,7 +2,7 @@ import { Fragment, type ReactNode } from "react";
 
 import { splitMarkdownTables, type SplitMarkdownTablesOptions } from "../../lib/tabular-data";
 import { cn } from "../../lib/utils";
-import { ResultTable, type ResultTableLabels } from "../data/result-table";
+import { ResultTable, type ResultTableLabels, type ResultTableMode } from "../data/result-table";
 import { MarkdownText } from "../ui/markdown-text";
 
 export interface AnswerBodyLabels {
@@ -29,6 +29,18 @@ export interface AnswerBodyProps {
   className?: string;
   /** 外側の data-testid。表は `{testId}-table-{番号}` になる。 */
   testId?: string;
+  /** 表の表示のモード（`ResultTable` の `mode`。既定 `data`）。回答の本文の表は `answer`（全行・全文を折り返す。#4812）。 */
+  tableMode?: ResultTableMode;
+  /** 表のセルの描き方（`ResultTable` の `renderCell`）。 */
+  renderTableCell?: (cell: AnswerBodyTableCell) => ReactNode | undefined;
+}
+
+/** `renderTableCell` に渡す表のセル。`table` は本文の中の表の番号（1 から）と列。 */
+export interface AnswerBodyTableCell {
+  value: unknown;
+  rowIndex: number;
+  columnIndex: number;
+  table: { number: number; columns: readonly { name: string }[] };
 }
 
 /**
@@ -44,6 +56,8 @@ export function AnswerBody({
   labels = DEFAULT_ANSWER_BODY_LABELS,
   className,
   testId,
+  tableMode,
+  renderTableCell,
 }: AnswerBodyProps) {
   const segments = splitMarkdownTables(text, splitOptions);
   // 表に 1 から番号を振る（表が 1 つなら番号を付けない）。
@@ -65,6 +79,13 @@ export function AnswerBody({
         return (
           <ResultTable
             key={index}
+            mode={tableMode}
+            renderCell={
+              renderTableCell
+                ? (value, rowIndex, columnIndex) =>
+                    renderTableCell({ value, rowIndex, columnIndex, table: { number: tableNumbers[index], columns: segment.data.columns } })
+                : undefined
+            }
             columns={segment.data.columns}
             rows={segment.data.rows}
             truncated={segment.data.truncated}

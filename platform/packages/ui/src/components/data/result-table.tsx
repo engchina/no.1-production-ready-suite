@@ -22,7 +22,14 @@ import { DEFAULT_PAGE_SIZE, DEFAULT_PAGINATION_LABELS, type PaginationRange } fr
  * 明示する。製品は列・行（取得済みの行）・打ち切りの有無を渡すだけにする。行の操作・選択・編集のある一覧は
  * この部品ではなく従来の一覧の型（`DataTable` / `PagedDataTable`）にする（UX 契約 `page-archetypes.md`）。
  * 以前の名前 `ChatResultTable` は別名として残す（ファイルの末尾）。
+ *
+ * 表示のモード（`mode`。#4812）: `data`（既定）はデータの結果の表で、上のとおり先頭の行のプレビュー（長い値は 1 行で
+ * 省略）とすべての行のシートで見る。`answer` は回答の本文の表（行数の少ない読む表）で、すべての行とセルの全文を折り返して
+ * 出し（省略しない）、表が広いときは表の枠の中で横にスクロールする。シート（「すべての行を見る」）は出さず、CSV は残す。
  */
+
+/** 表示のモード（`data` = データの結果のプレビュー、`answer` = 回答の本文の読む表）。 */
+export type ResultTableMode = "data" | "answer";
 
 /** 結果の列。`type` が `number` の列（または NULL を除く値がすべて数値の列）は右寄せにする。 */
 export interface ResultTableColumn {
@@ -128,6 +135,13 @@ export interface ResultFullResultLink {
 }
 
 export interface ResultTableProps {
+  /** 表示のモード（既定 `data`。`answer` は全行・全文を折り返し、シートを出さない）。 */
+  mode?: ResultTableMode;
+  /**
+   * セルの描き方を製品が変えるとき（回答の表の出典の列の印など）。`undefined` を返したセルは部品の既定で描く。
+   * CSV は描き方に関わらずセルの値のまま。
+   */
+  renderCell?: (value: unknown, rowIndex: number, columnIndex: number) => ReactNode | undefined;
   columns: readonly ResultTableColumn[];
   /** 取得した行（列の順の値の配列）。NULL は `null`。 */
   rows: readonly (readonly unknown[])[];
@@ -222,18 +236,33 @@ export function resultRowsToCsv(
 /** これより長い値は、全行の表でも最小幅と行数の上限を持たせる。 */
 const LONG_VALUE_CHARS = 40;
 
-/** セルの表示。NULL は斜体・淡色の「NULL」（色だけに頼らない）、`preview` は 1 行で省略して title に全文。 */
+/**
+ * セルの表示。NULL は斜体・淡色の「NULL」（色だけに頼らない）、`preview` は 1 行で省略して title に全文、`wrap` は
+ * 全文を折り返して省略しない（回答の表。#4812）。
+ */
 export function ResultCell({
   value,
   variant = "full",
   nullLabel = DEFAULT_RESULT_TABLE_LABELS.nullValue,
 }: {
   value: unknown;
-  variant?: "preview" | "full";
+  variant?: "preview" | "full" | "wrap";
   nullLabel?: string;
 }) {
   if (isNullResultValue(value)) return <span className="italic text-fg-muted">{nullLabel}</span>;
   const text = resultValueText(value);
+  if (variant === "wrap")
+    // 長い値は列が潰れて行が極端に高くならないよう最小幅を持たせる（狭い画面では表の枠の中で横にスクロールする）。
+    return (
+      <span
+        className={cn(
+          "block max-w-[32rem] whitespace-pre-wrap [overflow-wrap:anywhere]",
+          text.length > LONG_VALUE_CHARS && "min-w-[12rem]"
+        )}
+      >
+        {text}
+      </span>
+    );
   if (variant === "preview")
     return (
       <span className="block max-w-[20rem] truncate" title={text}>
@@ -258,8 +287,9 @@ type IndexedRow = { index: number; values: readonly unknown[] };
 function resultColumns(
   columns: readonly ResultTableColumn[],
   rows: readonly (readonly unknown[])[],
-  variant: "preview" | "full",
-  nullLabel: string
+  variant: "preview" | "full" | "wrap",
+  nullLabel: string,
+  renderCell?: ResultTableProps["renderCell"]
 ): DataTableColumn<IndexedRow>[] {
   return columns.map((column, index) => {
     const numeric = isNumericResultColumn(rows, index, column.type);
@@ -267,8 +297,12 @@ function resultColumns(
       key: `${index}:${column.name}`,
       header: column.name,
       align: numeric ? "right" : "left",
-      className: numeric ? "tabular-nums" : undefined,
-      render: (row) => <ResultCell value={row.values[index]} variant={variant} nullLabel={nullLabel} />,
+      // 折り返す行は高さがそろわないので、セルの上端をそろえて読む（回答の表）。
+      className: cn(numeric && "tabular-nums", variant === "wrap" && "align-top") || undefined,
+      render: (row) =>
+        renderCell?.(row.values[index], row.index, index) ?? (
+          <ResultCell value={row.values[index]} variant={variant} nullLabel={nullLabel} />
+        ),
     };
   });
 }
@@ -319,6 +353,8 @@ export function resultSummaryText({
 }
 
 export function ResultTable({
+  mode = "data",
+  renderCell,
   columns,
   rows,
   truncated = false,
@@ -344,13 +380,14 @@ export function ResultTable({
   const [pageSize, setPageSize] = useState<number>(pageSizeOptions[0] ?? DEFAULT_PAGE_SIZE);
   const viewAllRef = useRef<HTMLButtonElement>(null);
   const indexedRows = useMemo<IndexedRow[]>(() => rows.map((values, index) => ({ index, values })), [rows]);
+  const answer = mode === "answer";
   const previewColumns = useMemo(
-    () => resultColumns(columns, rows, "preview", labels.nullValue),
-    [columns, rows, labels.nullValue]
+    () => resultColumns(columns, rows, answer ? "wrap" : "preview", labels.nullValue, renderCell),
+    [columns, rows, answer, labels.nullValue, renderCell]
   );
   const fullColumns = useMemo(
-    () => resultColumns(columns, rows, "full", labels.nullValue),
-    [columns, rows, labels.nullValue]
+    () => resultColumns(columns, rows, "full", labels.nullValue, renderCell),
+    [columns, rows, labels.nullValue, renderCell]
   );
   const rowCount = rows.length;
   const summary = resultSummaryText({
@@ -399,19 +436,22 @@ export function ResultTable({
           <div className="flex flex-wrap items-center gap-2">
             {rowCount > 0 ? (
               <>
-                <Button
-                  type="button"
-                  ref={viewAllRef}
-                  variant="secondary"
-                  size="sm"
-                  icon={Maximize2}
-                  aria-haspopup="dialog"
-                  aria-expanded={sheetOpen}
-                  onClick={() => setSheetOpen(true)}
-                  data-testid={testIdOf("view-all")}
-                >
-                  {labels.viewAll}
-                </Button>
+                {/* 回答の表は全行を出すので、すべての行のシートを出さない（#4812）。 */}
+                {answer ? null : (
+                  <Button
+                    type="button"
+                    ref={viewAllRef}
+                    variant="secondary"
+                    size="sm"
+                    icon={Maximize2}
+                    aria-haspopup="dialog"
+                    aria-expanded={sheetOpen}
+                    onClick={() => setSheetOpen(true)}
+                    data-testid={testIdOf("view-all")}
+                  >
+                    {labels.viewAll}
+                  </Button>
+                )}
                 {csvButton("csv")}
               </>
             ) : null}
@@ -419,7 +459,21 @@ export function ResultTable({
           </div>
         ) : null}
       </div>
-      {rowCount > 0 ? (
+      {rowCount > 0 && answer ? (
+        // 回答の表は全行を出し、縦は本文と一緒にスクロールする。横に広い表だけ表の枠の中でスクロールする。
+        // 枠は表の幅に合わせ（列を本文の幅まで引き伸ばさない）、狭い列（出典の印など）を内容の幅に保つ。
+        <DataTable<IndexedRow>
+          columns={previewColumns}
+          rows={indexedRows}
+          getRowKey={(row) => row.index}
+          className="w-fit max-w-full"
+          tableClassName="min-w-0"
+          ariaLabel={labels.tableLabel}
+          scrollAriaLabel={labels.scrollLabel}
+          scrollTestId={testIdOf("scroll")}
+          testId={testIdOf("table")}
+        />
+      ) : rowCount > 0 ? (
         <DataTable<IndexedRow>
           columns={previewColumns}
           rows={indexedRows.slice(0, previewRows)}
@@ -435,7 +489,7 @@ export function ResultTable({
           testId={testIdOf("table")}
         />
       ) : null}
-      {rowCount > previewRows ? (
+      {!answer && rowCount > previewRows ? (
         <p className="text-xs text-fg-muted" data-testid={testIdOf("preview-note")}>
           {labels.previewNote(labels.formatCount(previewRows), labels.formatCount(rowCount))}
         </p>
@@ -466,7 +520,7 @@ export function ResultTable({
           </Banner>
         </div>
       ) : null}
-      {rowCount > 0 ? (
+      {rowCount > 0 && !answer ? (
         <SideSheet
           open={sheetOpen}
           onClose={() => setSheetOpen(false)}
