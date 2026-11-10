@@ -43,11 +43,12 @@ describe("publishedVersionColumns", () => {
 
   it("公開中の版の行だけに文言のバッジを出す（古い版を公開中にしても同じ）", () => {
     const latest = render(7).html;
-    expect(latest.match(/公開中/g)).toHaveLength(1);
+    // バッジは長いラベルの全文を title に持つ（#4801）ので、本文の文字で数える。
+    expect(latest.match(/>公開中</g)).toHaveLength(1);
     expect(latest.indexOf("公開中")).toBeLessThan(latest.indexOf("v3"));
 
     const old = render(3).html;
-    expect(old.match(/公開中/g)).toHaveLength(1);
+    expect(old.match(/>公開中</g)).toHaveLength(1);
     expect(old.indexOf("公開中")).toBeGreaterThan(old.indexOf("v3"));
     expect(old).toContain("操作 v3");
     expect(old).toContain("メモ B");

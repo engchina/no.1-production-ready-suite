@@ -78,7 +78,6 @@ from rag_engine.resources.llm_usage import usage_delta, usage_snapshot
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import failure_summary_fields, structured_failure_details
 from rag_engine.retrieval.answer_requirements import answer_requirements
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text_with_positions, fold_width
 from rag_engine.retrieval.operation_context import operation_labels
 from rag_engine.retrieval.task_contract import task_contract
@@ -145,10 +144,9 @@ GENERATION_FIXED_PROMPT = """
 - 応答 schema どおりの JSON だけを返す。本文・節・見出しは書かない。
 """
 
-# 入力の形（目録の印・画像の印・補助情報の囲み・表の構造）で該当するときだけ根拠の前に渡す読み方。`- キー: 説明` の行のうち、今の入力にあるキーの行だけを残す（語の意味は読まない）。
+# 入力の形（画像の印・補助情報の囲み・表の構造）で該当するときだけ根拠の前に渡す読み方。`- キー: 説明` の行のうち、今の入力にあるキーの行だけを残す（語の意味は読まない）。
 EVIDENCE_READING_PROMPT = (
     "### 根拠の読み方（今回の根拠に現れるもの）\n"
-    "- catalog: 条で構成された文書の条の目録から、質問の根拠の候補として選ばれた条。\n"
     "- image_generated: 画像からの生成説明・OCR（`origin=image_extraction` と同じ扱い）。\n"
     "- 補助情報: 根拠の見出しの行の下の補助情報の囲みは文書の属性を示し、本文ではない。読んでよいが原文の出典にはしない。\n"
     "- 画面の値: 画面キャプチャ・Vision 生成説明に見える値（年月・金額・氏名・番号・コード・選択状態）は文書の例示で、今回の実データではない。"
@@ -2247,7 +2245,6 @@ def _rendered_evidence_span(
     return (
         f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
         + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
-        + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
         + _source_note(dict(span))
         + "\n"
         + body.rstrip("\n")
@@ -2479,10 +2476,8 @@ def evidence_metadata_text(span: Mapping[str, Any]) -> str:
 
 
 def evidence_reading_rules(spans: Sequence[dict[str, Any]], *, attached_images: bool) -> str:
-    """今回の根拠に現れる印・値の読み方だけを渡す。該当は入力の形（タグ・目録の印・補助情報の囲み・表の構造）で決める。"""
+    """今回の根拠に現れる印・値の読み方だけを渡す。該当は入力の形（タグ・補助情報の囲み・表の構造）で決める。"""
     keys: set[str] = {str(tag) for span in spans for tag in span.get("tags", ())}
-    if any(span.get(ARTICLE_CATALOG_KEY) for span in spans):
-        keys.add("catalog")
     if fold_width(CONTEXT_NOTE_BEGIN) in evidence_block_text(spans):
         keys.add("補助情報")
     if attached_images or "image_generated" in keys:

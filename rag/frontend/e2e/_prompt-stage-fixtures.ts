@@ -24,8 +24,6 @@ export const FLOW_STAGES: StageFixture[] = [
   { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
   { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
   { id: "screen_linking", phase: "retrieval", prompts: [{ id: "system", content: "画面の system" }] },
-  { id: "article_catalog", phase: "retrieval", prompts: [{ id: "system", content: "目録の指示" }] },
-  { id: "section_extraction", phase: "grounding", prompts: [{ id: "system", content: "抽出の指示" }] },
   { id: "faq_answer", phase: "generation", prompts: [{ id: "system", content: "FAQ の指示" }] },
   { id: "generation", phase: "generation", prompts: [{ id: "batchReading", content: "## Step 1: 選択した全文を分けて読む\n原文引用付きの回答候補を返す。" }, { id: "role", content: "## Step 1: 合成の役割の文", prompt_key: "generation.role" }, { id: "fixed", content: "## Step 2: 合成の固定の指示" }, { id: "assumptionSystem", content: "## 回答の前提\n- 未確定の条件を明示する。" }, { id: "template", content: "## Step 1: 合成の入力テンプレート" }] },
   { id: "evaluation", phase: "evaluation", prompts: [{ id: "correctness", content: "正確性の指示" }] },

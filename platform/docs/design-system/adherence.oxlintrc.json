@@ -52,6 +52,10 @@
             "message": "文字サイズ・行間・字間・角丸を任意値（text-[10px] / rounded-[3px] 等）で書かない。text-xs / text-sm / rounded-sm / rounded-md 等のトークンを使う。"
           },
           {
+            "selector": ":matches(Literal[value=/grid-cols-\\[(?:[^\\]\\s]*?(?:_|repeat\\(\\d+,))?[\\d.]+fr(?=[_\\])])/], TemplateElement[value.raw=/grid-cols-\\[(?:[^\\]\\s]*?(?:_|repeat\\(\\d+,))?[\\d.]+fr(?=[_\\])])/])",
+            "message": "grid-cols の任意の値で fr を minmax(0,…) に包まずに書かない。1fr の最小は auto（中身の最小の幅）で、改行の機会の無い長い値で列が広がり横にあふれる。minmax(0,1fr) と書く（意図した最小の幅なら minmax(8rem,1fr)）（#4803）。"
+          },
+          {
             "selector": ":matches(Literal[value=/(?:^|[\\s:!])-?(?:bg|text|border(?:-[xytrblse])?|ring(?:-offset)?|outline|fill|stroke|divide|placeholder|caret|accent|decoration)-(?:background|foreground|card|muted(?:-foreground)?|primary(?:-foreground|-fill(?:-foreground)?)?|ring|success(?:-bg|-fill)?|warning(?:-bg)?|danger(?:-bg|-fill)?|info(?:-bg)?|code(?:-fg)?|control-border|button-border|disabled(?:-bg)?|sidebar-(?:foreground|active))(?:\\/\\d+)?(?![\\w-])/], TemplateElement[value.raw=/(?:^|[\\s:!])-?(?:bg|text|border(?:-[xytrblse])?|ring(?:-offset)?|outline|fill|stroke|divide|placeholder|caret|accent|decoration)-(?:background|foreground|card|muted(?:-foreground)?|primary(?:-foreground|-fill(?:-foreground)?)?|ring|success(?:-bg|-fill)?|warning(?:-bg)?|danger(?:-bg|-fill)?|info(?:-bg)?|code(?:-fg)?|control-border|button-border|disabled(?:-bg)?|sidebar-(?:foreground|active))(?:\\/\\d+)?(?![\\w-])/])",
             "message": "旧トークン名のユーティリティ（bg-card / text-muted / bg-primary-fill 等）は削除済みで色が付かない。bg-surface / text-fg-muted / bg-accent-emphasis 等の新名を使う（docs/design-system/README.md §5）。"
           },

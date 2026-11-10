@@ -1170,7 +1170,7 @@ def test_retrieve_evidence_skips_answer_generation(
         },
         _token(user.user_uuid),
     )["structuredContent"]
-    # 元の質問（#2261）は検索の要求に渡す（条の選択だけが使う）。
+    # 元の質問（#2261）は検索の要求に渡す。
     assert captured == {
         "generate_answer": False,
         "profile": "bv-1",
@@ -1608,101 +1608,6 @@ def test_retrieve_evidence_queries_need_caller_planning(
     assert "planning" in result["structuredContent"]["message"] + json.dumps(
         result["structuredContent"].get("details"), ensure_ascii=False
     )
-
-
-def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
-    auth: ProductionAuth, monkeypatch: MonkeyPatch
-) -> None:
-    """条の目録で選んだ条のうち根拠に無い条を、上限の外で選んだ順に末尾へ足す（#2254）。"""
-    from app.schemas.search import SearchDiagnostics
-
-    loaded: list[tuple[str, str]] = []
-
-    class _ArticleOracle:
-        async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
-            loaded.append((document_id, chunk_id))
-            return None if chunk_id == "art-gone" else _chunk(chunk_id, text="第二条 本文")
-
-        readable_version_chunk = retrievable_chunk
-
-    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
-        del request
-        articles = [
-            {"order": 2, "document_id": "doc-law", "chunk_id": "art-2", "title": "第二条"},
-            {"order": 0, "document_id": "d1", "chunk_id": "c0", "title": "根拠にある条"},
-            {"order": 1, "document_id": "doc-law", "chunk_id": "art-gone", "title": "読めない"},
-            {"order": 3, "document_id": "doc-law", "chunk_id": None, "title": "章節が無い"},
-        ]
-        return SearchResponse(
-            answer="",
-            # context に足した選んだ条（role=catalog_article）は上限に数えない（#2261）。
-            citations=[
-                _chunk("ctx-art", used=False, evidence_role="catalog_article"),
-                *[_chunk(f"c{index}", used=False) for index in range(3)],
-            ],
-            trace_id="trace-a",
-            elapsed_ms=1.0,
-            diagnostics=SearchDiagnostics(answer={"article_catalog": {"articles": articles}}),
-        )
-
-    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
-    monkeypatch.setattr(mcp_tools, "OracleClient", _ArticleOracle)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    body = _call(
-        "rag_retrieve_evidence",
-        {"query": "届出の期限", "evidence_limit": 2},
-        _token(user.user_uuid),
-    )["structuredContent"]
-
-    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "ctx-art", "art-2"]
-    assert [item["role"] for item in body["evidence"][2:]] == ["catalog_article"] * 2
-    assert body["evidence_omitted"] == 1
-    assert loaded == [("doc-law", "art-gone"), ("doc-law", "art-2")]
-
-
-@pytest.mark.parametrize(
-    ("cap", "expected"), [(2, ["ctx-art", "art-1"]), (1, ["ctx-art"]), (0, [])]
-)
-def test_retrieve_evidence_caps_the_catalog_articles(
-    auth: ProductionAuth, monkeypatch: MonkeyPatch, cap: int, expected: list[str]
-) -> None:
-    """条の目録で選んだ条の根拠は、context に足した分と合わせて設定の件数まで（選んだ順）。"""
-    from app.schemas.search import SearchDiagnostics
-
-    class _ArticleOracle:
-        async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
-            return _chunk(chunk_id, text="第二条 本文")
-
-        readable_version_chunk = retrievable_chunk
-
-    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
-        del request
-        articles = [
-            {"order": index, "document_id": "doc-law", "chunk_id": f"art-{index}", "title": "条"}
-            for index in range(1, 6)
-        ]
-        return SearchResponse(
-            answer="",
-            citations=[
-                _chunk("ctx-art", used=False, evidence_role="catalog_article"),
-                _chunk("c0", used=False),
-            ],
-            trace_id="trace-a",
-            elapsed_ms=1.0,
-            diagnostics=SearchDiagnostics(answer={"article_catalog": {"articles": articles}}),
-        )
-
-    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
-    monkeypatch.setattr(mcp_tools, "OracleClient", _ArticleOracle)
-    monkeypatch.setattr(get_settings(), "rag_mcp_catalog_article_evidence_limit", cap)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    body = _call(
-        "rag_retrieve_evidence",
-        {"query": "届出の期限", "evidence_limit": 2},
-        _token(user.user_uuid),
-    )["structuredContent"]
-
-    assert [item["chunk_id"] for item in body["evidence"][1:]] == expected
 
 
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:

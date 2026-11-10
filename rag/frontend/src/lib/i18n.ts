@@ -66,10 +66,6 @@ export const ja = {
   "common.leaveGuard.description":
     "保存されていない変更があります。移動すると編集内容は破棄されます。",
   "common.leaveGuard.confirm": "破棄して移動",
-  "common.cardError.title": "この項目を表示できません",
-  "common.cardError.titleWithLabel": "「{label}」を表示できません",
-  "common.cardError.description":
-    "画面の描画中に問題が発生しました。再試行しても解消しない場合は、ページを再読み込みしてください。他の項目は引き続き利用できます。",
   "common.required": "必須",
 
   "settings.preview.copy.copied": "コピーしました",
@@ -1509,7 +1505,7 @@ export const ja = {
     "RAG の内部 schema、migration、索引の状態を確認・初期化します。",
   // システムテーブルのカードは 3 製品共通（#325）。ここには RAG 固有の文言だけを置き、
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。
-  // 見出しは NL2SQL と同じ（#658）。画面の中の境界（CardErrorBoundary）の名前にも使う。
+  // 見出しは NL2SQL と同じ（#658）。画面の中の境界（RenderErrorBoundary）の名前にも使う。
   "settings.database.systemTables.title": "システムテーブル",
   "settings.database.systemTables.description":
     "RAG が使用する Oracle テーブル、ベクトル索引、Oracle Text 索引、migration の状態を確認し、管理者の明示操作で準備します。",
@@ -3662,13 +3658,6 @@ export const ja = {
   "search.answerDetails.degraded.step.screen_chunks": "画面の根拠の読み込み",
   "search.answerDetails.degraded.step.section_outline": "章節の目次の読み込み",
   "search.answerDetails.degraded.step.section_chunks": "章節の本文の読み込み",
-  "search.answerDetails.degraded.step.article_catalog": "条の一覧の読み込み",
-  "search.answerDetails.degraded.step.article_lead": "条の書き出しの読み込み",
-  "search.answerDetails.degraded.step.article_documents": "条で構成された文書の一覧の読み込み",
-  "search.answerDetails.degraded.step.article_document_selection": "条で構成された文書の選択",
-  "search.answerDetails.degraded.step.article_refine": "条の絞り込み",
-  "search.answerDetails.degraded.step.article_chunks": "条の本文の読み込み",
-  "search.answerDetails.degraded.step.article_original_question": "元の質問での条の検索",
   "search.answerDetails.degraded.step.history_rewrite": "会話の履歴を使った質問の書き換え",
   "search.answerDetails.degraded.step.field_filter": "抽出項目の条件の読み取り",
   "search.answerDetails.degraded.step.chat_attachments": "会話の添付ファイルの読み込み",
@@ -3771,14 +3760,13 @@ export const ja = {
   "settings.answerPrompts.loading": "プロンプトを読み込んでいます",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.retrieval.prompts.title": "検索に使うプロンプト",
-  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の補完ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略される場合があります。指示は読み取り専用です。",
+  "settings.retrieval.prompts.description": "質問の解釈と検索のそれぞれで、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略される場合があります。指示は読み取り専用です。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
     "回答生成の工程ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。編集できるのは「役割と回答の書き方」と登録済みQ&Aの指示で、ほかは読み取り専用です。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
-  "settings.answerPrompts.phase.grounding": "根拠の補完",
   "settings.answerPrompts.phase.generation": "回答の生成",
   "settings.answerPrompts.phase.evaluation": "評価",
   "settings.answerPrompts.phase.indexing": "文書分割・索引",
@@ -3787,8 +3775,7 @@ export const ja = {
   "settings.answerPrompts.phase.indexing.description": "文書分割の後に、任意の RAPTOR の階層の要約を作り、索引へ進みます。ファイル準備・通常の分割・埋め込み・文書構造索引の構築は LLM プロンプトを使いません。",
   "settings.answerPrompts.phase.knowledge.description": "回答で使う業務ガイドを準備する独立した処理です。文書の取込ごとに実行するものではありません。",
   "settings.answerPrompts.phase.question.description": "業務ガイドの条件確認、会話を踏まえた書き換え、項目の条件の順です。対象外の段は省略します。",
-  "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面や条の目録から根拠を足します。",
-  "settings.answerPrompts.phase.grounding.description": "取得した根拠を章節の原文で補完します。",
+  "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面の目録から根拠を足します。",
   "settings.answerPrompts.phase.generation.description": "登録済みQ&Aを選んだ場合は Q&A の経路、それ以外は検索した根拠による生成です。後者は、編集できる「役割と回答の書き方」に固定の指示を必ず足してシステムプロンプトにします。",
   "settings.evaluation.prompts.title": "品質評価のプロンプト",
   "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示を編集・保存します。",
@@ -3845,12 +3832,6 @@ export const ja = {
     "「質問から項目の条件を読み取る」を有効にし、検索・回答プロファイルの対象に抽出項目の定義があるとき。呼び出し元が検索文を指定した場合は使いません",
   "settings.answerPrompts.stage.screen_linking": "画面目録で操作画面を探す",
   "settings.answerPrompts.stage.screen_linking.condition": "「画面目録で操作画面を探す」を有効にしたとき",
-  "settings.answerPrompts.stage.article_catalog": "条の目録から根拠の条を選ぶ",
-  "settings.answerPrompts.stage.article_catalog.condition":
-    "条の目録による選択を有効にし、検索候補に条で構成された文書があるとき。候補文書を選び、条を選択し、設定に応じて同じ章から追加します（文書ごと・再試行あり）",
-  "settings.answerPrompts.stage.section_extraction": "長い章節から必要な原文を抜き出す",
-  "settings.answerPrompts.stage.section_extraction.condition":
-    "章節の拡張と LLM による原文抽出を有効にし、章節が根拠の入力上限に入らないとき（原文抽出は既定で無効）",
   "settings.answerPrompts.stage.faq_answer": "登録済みQ&Aからの回答",
   "settings.answerPrompts.stage.faq_answer.condition": "チャットで近い登録済みQ&Aを選んだとき（検索しない）",
   "settings.answerPrompts.stage.generation": "回答の生成",
@@ -3886,7 +3867,7 @@ export const ja = {
   "settings.answering.retrievalQueryLimitHint": "既定は 60 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。",
   "settings.answering.retrievalQueryLimitInvalid": "0～2000 の整数を入力してください。",
   "settings.answering.rerankTopN": "再ランキング後の採用件数（Top-N）",
-  "settings.answering.rerankTopNHint": "既定は 60 件です。0 は追加制限なしです。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。引用元と参照先は組で選び、収まらない組は採用しません。明示添付・条目録で選んだ根拠とその参照先は別枠で保持します。Rerank が無効・未実行・失敗、または有効な採点がないときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
+  "settings.answering.rerankTopNHint": "既定は 60 件です。0 は追加制限なしです。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。引用元と参照先は組で選び、収まらない組は採用しません。明示添付とその参照先は別枠で保持します。Rerank が無効・未実行・失敗、または有効な採点がないときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
   "settings.answering.rerankTopNInvalid": "0～2000 の整数を入力してください。",
   "settings.answering.confirmationTitle": "回答前の確認",
   "settings.answering.title": "回答の検索と生成",
@@ -3917,7 +3898,7 @@ export const ja = {
   "settings.answering.rerank_slot_ratio": "再ランキング後の並びの比率",
   "settings.answering.rerank_slot_ratio.0": "再ランキングの順から取る件数",
   "settings.answering.rerank_slot_ratio.1": "検索の順から取る件数",
-  "settings.answering.rerank_slot_ratioHint": "関連度の下限を通った候補を、再ランキングの順（内容の似た候補は後ろに回します）と検索の順から、この件数ずつ交互に取って並べます。点数は足し合わせません。Rerank が無効・失敗のときは適用しません。会話の添付・条目録で選んだ条・実体の拡張・交差参照の参照先の位置は変えません。",
+  "settings.answering.rerank_slot_ratioHint": "関連度の下限を通った候補を、再ランキングの順（内容の似た候補は後ろに回します）と検索の順から、この件数ずつ交互に取って並べます。点数は足し合わせません。Rerank が無効・失敗のときは適用しません。会話の添付・実体の拡張・交差参照の参照先の位置は変えません。",
   "settings.answering.rerank_slot_ratioInvalid": "件数は 0 以上の整数で指定し、少なくとも一方を 1 以上にしてください。",
   "answer.step.rrfFusion": "検索結果の統合（RRF）",
   "answer.step.additionalFusion": "追加の検索結果統合",
@@ -4187,7 +4168,6 @@ export const ja = {
   "answer.step.adopted": "採用",
   "answer.step.notAdopted": "不採用",
   "answer.step.deferDocumentCandidates": "同じ文書の超過候補を後ろへ回す",
-  "answer.step.selectArticles": "根拠に使う条を目録から選ぶ",
   "answer.step.vectorSearch": "質問に意味が近い文書の箇所を探す",
   "answer.step.textSearch": "検索語を含む文書の箇所を探す",
   "answer.step.loadChunkPool": "検索対象の文書片を読み込む",
@@ -4205,9 +4185,6 @@ export const ja = {
   "answer.outcome.callerQueries": "呼び出し元が検索文を指定したため目録の選択を行いません。",
   "answer.outcome.overflow": "上限外の検索文の補助検索では目録の選択を行いません。",
   "answer.outcome.catalogEmpty": "検索範囲に利用できる目録がありません。",
-  "answer.outcome.dependenciesUnavailable": "目録の読み込みが提供されていません。",
-  "answer.outcome.documentLimitZero": "文書数の上限が 0 のため実行しません。",
-  "answer.outcome.articleLimitZero": "条の数の上限が 0 のため実行しません。",
   "answer.outcome.noMatch": "該当する候補はありません。",
   "answer.outcome.candidatesFound": "返した候補 {count} 件。",
   "answer.outcome.failed": "取得に失敗したため、既存の候補を保持して続けます。",

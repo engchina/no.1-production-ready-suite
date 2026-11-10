@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1158: チャットと実行履歴の詳細で、表の形のツールの結果・成果物・回答の Markdown の表を、NL2SQL のチャットと
 // 同じ共通の結果の表（ResultTable。#1154 / #1178）で出す。表でない結果は今までどおり（チャットは出さない・詳細は JSON）。
@@ -110,13 +111,6 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 async function openThread(page: Page) {
   const viewport = page.viewportSize();
   await page.getByTestId("chat-history-toggle").click();
@@ -216,7 +210,7 @@ for (const viewport of VIEWPORTS) {
       await expect(empty.getByTestId("chat-tool-table-step-empty-result-summary")).toContainText("該当する行はありません");
       await expect(empty.getByTestId("chat-tool-table-step-empty-result-view-all")).toHaveCount(0);
 
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`chat-${viewport.name}-${theme}.png`), fullPage: true });
     });
 
@@ -235,7 +229,7 @@ for (const viewport of VIEWPORTS) {
       // 利用者向けの出力でない種類の成果物（内部の記録）は「成果物」に出さない（監査ログで見る。#2403）。
       await expect(page.getByTestId("run-artifacts-section").locator('[data-testid^="run-artifact-artifact-"]')).toHaveCount(1);
       await expect(page.getByTestId("run-artifact-artifact-raw")).toHaveCount(0);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`run-result-${viewport.name}-${theme}.png`), fullPage: true });
 
       // 処理の経過（#1955）: 段の行を開くと、表の形のツールの結果は表、元の JSON は畳む。RAG の結果は JSON のまま。
@@ -248,7 +242,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("run-step-table-step-empty-summary")).toContainText("該当する行はありません");
       await expect(page.getByTestId("run-step-table-step-rag")).toHaveCount(0);
       await expect(page.locator("pre").filter({ hasText: "根拠付き回答" })).toBeVisible();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`run-process-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }

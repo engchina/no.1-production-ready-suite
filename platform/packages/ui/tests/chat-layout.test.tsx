@@ -102,6 +102,8 @@ describe("ChatLayout", () => {
     const log = section.querySelector('[role="log"]')!;
     expect(log.getAttribute("aria-label")).toBe("会話");
     expect(log.getAttribute("data-testid")).toBe("chat-conversation");
+    // スクロールする会話の欄にキーボードで入れる（axe scrollable-region-focusable。#4802）。
+    expect(log.getAttribute("tabindex")).toBe("0");
     expect(log.textContent).toBe("質問と回答");
     expect(section.querySelector('[data-testid="chat-composer-region"] textarea')).not.toBeNull();
     // lg 未満は高さを制限して、長い会話でページを伸ばさない。

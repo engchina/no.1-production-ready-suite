@@ -1,4 +1,4 @@
-import { Children, useId, type ReactNode } from "react";
+import { Children, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   Code2,
@@ -334,7 +334,8 @@ export function DbObjectManagementPanelShell({
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
       aria-busy={processing ? true : undefined}
-      className={cn("grid gap-4", framed && "rounded-md border border-border bg-surface p-4 shadow-sm", className)}
+      // min-w-0 と minmax(0,1fr): 親の grid（fieldset）の中で、長い値の子が列を押し広げない（#4801）。
+      className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4", framed && "rounded-md border border-border bg-surface p-4 shadow-sm", className)}
       data-testid="management-panel-shell"
       data-management-id={idPrefix}
     >
@@ -1732,5 +1733,32 @@ export function DropDbObjectDialog({
         </div>
       </section>
     </DialogOverlayPortal>
+  );
+}
+
+const PREVIEW_TEXT_CLASS =
+  "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
+
+/**
+ * 一覧のセルの長い文のプレビュー（高さの上限を超えたら中でスクロールする）。スクロールするときだけ Tab で入れるようにし、
+ * 矢印キーで読めるようにする（axe scrollable-region-focusable。#4802）。短い文のセルは Tab の止まる所を増やさない。
+ */
+export function ScrollablePreviewText({ children, testId }: { children: ReactNode; testId?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [scrollable, setScrollable] = useState(false);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const measure = () => setScrollable(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    // 隠れたタブ（display: none）から表示に戻ったときも測り直す。
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    return () => observer?.disconnect();
+  }, [children]);
+  return (
+    <div ref={ref} tabIndex={scrollable ? 0 : undefined} className={PREVIEW_TEXT_CLASS} data-testid={testId}>
+      {children}
+    </div>
   );
 }

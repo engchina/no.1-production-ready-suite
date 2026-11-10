@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
+from rag_engine.retrieval.evidence_selection import ARTICLE_UNIT_KEY
 from rag_parser_core.registry import ParserRegistryResult
 from rag_parser_core.xml_tree_json import xml_tree_json_extraction
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy

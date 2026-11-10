@@ -3,6 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures/mock-api";
 import { closeSidebarNav, expandSidebarSections, openSidebarNav } from "./fixtures/nav";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // 未保存変更の離脱ガードと、一覧の作業状態の保持（platform UX 契約 workspace-state.md。#87）。
 
@@ -26,13 +27,6 @@ async function beforeUnloadBlocks(page: Page): Promise<boolean> {
     window.dispatchEvent(event);
     return event.defaultPrevented;
   });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 for (const viewport of VIEWPORTS) {
@@ -75,7 +69,7 @@ for (const viewport of VIEWPORTS) {
       await (await sidebarLink(page, "/runs")).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("変更を破棄しますか")).toBeVisible();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       // キャンセルすると移動せず、入力も残る。
       await dialog.getByRole("button", { name: "キャンセル" }).click();
@@ -194,7 +188,7 @@ for (const viewport of VIEWPORTS) {
           return params ? `${params.get("run_id")}|${params.get("tool_name")}|${params.get("has_guardrail_warnings")}|${params.get("error_code")}` : null;
         })
         .toBe("run-e2e-1|echo|true|null");
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("Skill の編集対象は URL が唯一の情報源で、消えた対象は説明して一覧へ戻す", async ({ page }) => {
@@ -220,7 +214,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("「deleted_skill」は削除されたか、存在しません", { exact: false })).toBeVisible();
       await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
       await expect(page).toHaveURL(/\/skills$/);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("Run の目標は残る", async ({ page }) => {

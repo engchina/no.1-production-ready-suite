@@ -41,7 +41,6 @@ from pr_evaluation_scoring import (
 )
 from pydantic import ValidationError
 from rag_engine.evaluation.answer_eval import scored_answer_text
-from rag_engine.resources.shared_cache import bypass_shared_cache
 from rag_engine.retrieval.text_search_tokenizer import surface_tokens
 
 from app.clients.ai_calls import make_ai_caller
@@ -331,23 +330,19 @@ class EvaluationRunner:
 
         `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
         設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
-
-        条の選択の process をまたぐ記録（#3507）は読みも書きもしない（同じ質問の再実行でも
-        実際の費用を測る。process の中の記録は回答と同じに使う）。
         """
-        with bypass_shared_cache():
-            return await self._run(
-                cases,
-                top_k,
-                filters,
-                knowledge_base_ids,
-                thresholds,
-                rag_overrides,
-                search_answer_profile_id=search_answer_profile_id,
-                time_budget_seconds=time_budget_seconds,
-                progress=progress,
-                on_case_result=on_case_result,
-            )
+        return await self._run(
+            cases,
+            top_k,
+            filters,
+            knowledge_base_ids,
+            thresholds,
+            rag_overrides,
+            search_answer_profile_id=search_answer_profile_id,
+            time_budget_seconds=time_budget_seconds,
+            progress=progress,
+            on_case_result=on_case_result,
+        )
 
     async def _run(
         self,

@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #3348: 実行の詳細の「取消」（取り消した人と入口。外部の MCP の取消はキーの名前を添える）。
 
@@ -32,13 +32,6 @@ function cancelledRun(mockApi: MockApi, id: string, cancellation: Record<string,
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
   });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 const CASES = [
@@ -110,7 +103,7 @@ test("取消の事実は 375px でも折り返して横にあふれない", { ta
   const box = await fact.boundingBox();
   const viewport = page.viewportSize();
   expect(box && viewport && box.x + box.width <= viewport.width).toBeTruthy();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   if (SCREENSHOT_DIR) {
     await page.getByTestId("run-summary").screenshot({ path: `${SCREENSHOT_DIR}/agent-run-cancellation-${testInfo.project.name}.png` });
   }

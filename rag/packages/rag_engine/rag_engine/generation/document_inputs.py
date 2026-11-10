@@ -4,8 +4,6 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
-
 
 def document_key(span: Mapping[str, Any]) -> tuple[str, ...]:
     """表示名だけでは同名の別文書をまとめない。版の範囲が無い入力は出典単位で保つ。"""
@@ -39,9 +37,8 @@ def order_document_spans(spans: Sequence[dict[str, Any]], *, priority: Mapping[t
 
 
 def document_priority(spans: Sequence[dict[str, Any]], source_scores: Mapping[str, float | None] | None) -> dict[tuple[str, ...], int]:
-    """選択済みChunkの原質問スコアの最高値で並べ、明示した目録文書の既存位置は保つ。"""
+    """選択済みChunkの原質問スコアの最高値で並べる。"""
     groups = document_groups(spans)
-    catalog = {index for index, members in enumerate(groups) if any(value.get(ARTICLE_CATALOG_KEY) for value in members)}
 
     def rank(members: list[dict[str, Any]]) -> tuple[int, float]:
         scores = [
@@ -53,6 +50,5 @@ def document_priority(spans: Sequence[dict[str, Any]], source_scores: Mapping[st
         ]
         return (0, -max(scores)) if scores else (1, 0.0)
 
-    ranked = iter(sorted((members for index, members in enumerate(groups) if index not in catalog), key=rank))
-    ordered = [members if index in catalog else next(ranked) for index, members in enumerate(groups)]
+    ordered = sorted(groups, key=rank)
     return {document_key(members[0]): index for index, members in enumerate(ordered)}
