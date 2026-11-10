@@ -174,7 +174,8 @@ async def test_llm_screen_judge_sends_schema_and_parses_response() -> None:
             prompt: str,
             context: str,
             *,
-            system_prompt: str | None = None,
+            system_prompt: str,
+            instruction: str = "",
             response_schema: Mapping[str, Any] | None = None,
             response_schema_name: str = "",
         ) -> str:
