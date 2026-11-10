@@ -87,6 +87,7 @@ from app.rag.language_pack_retired_fields import (
     RETIRED_UNREAD_SECTIONS,
     remove_retired_language_pack_fields,
 )
+from app.rag.prompt_overrides_4782_generation_migration import removed_prompt_overrides_sql
 from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.vector_index_adapter import default_vector_index_build
@@ -989,6 +990,24 @@ END;
                 "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
                 "項目に保存した語を残す必要があれば適用前に同列を export してください。"
                 "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_generation_prompt_overrides",
+            table_name="rag_answer_prompts",
+            sql=removed_prompt_overrides_sql(),
+            destructive_note=(
+                "RAG_ANSWER_PROMPTS から、編集欄を外した指示の保存値（PROMPT_KEY が vlm_answer・"
+                "generation.system・generation.batchReading・generation.assumptionSystem・"
+                "generation.evidenceReading・generation.guideRules・support_guide_draft.*・"
+                "support_guide_conditions.*・rule_selection.*・history_rewrite.system・"
+                "field_filter.system・screen_linking.system・article_catalog.*・"
+                "section_extraction.system の行）を削除します。ほかの行（generation.role・"
+                "faq_answer.system・evaluation.*・picture_description.*・image_retrieval・"
+                "取込の指示）は変えません。編集した文を残す必要があれば、適用前に該当の行の "
+                "CONTENT を export してください。削除後は復元できず、新しい編集欄へは写しません。"
             ),
         )
     )

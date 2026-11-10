@@ -3,7 +3,8 @@
 rag_poc はプロンプトをファイル(`prompts/<key>.txt`)へ保存したが、rag では DB
 (`rag_answer_prompts`)に保存し、rag_engine の runtime の ``prompt_overrides`` で渡す。
 回答生成・文書解析・文書分割の編集可能な指示は、それぞれの設定画面で管理する。
-検索・回答・評価の自然言語の指示も編集でき、応答の型はコードで管理する。
+生成は役割と回答の書き方だけを編集でき、信頼の境界・出力の形・引用の決まりと、質問・検索の
+内部の段の文はコードで管理する（画面には読み取り専用で出す。#4782）。
 """
 
 from __future__ import annotations
@@ -16,11 +17,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
-from rag_engine.knowledge.prompt_files import (
-    IMAGE_RETRIEVAL_PROMPT_KEY,
-    PROMPT_FILES,
-    VLM_ANSWER_PROMPT_KEY,
-)
+from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, PROMPT_FILES
 from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
 
 INGESTION_PROMPT_REFS = {
@@ -30,7 +27,7 @@ INGESTION_PROMPT_REFS = {
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
     "raptor_summary_system": "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT",
 }
-EDITABLE_PROMPT_KEYS = (VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
+EDITABLE_PROMPT_KEYS = (IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
 ANSWER_PROMPT_MAX_CHARS = 50_000
 
 
@@ -66,8 +63,6 @@ def validate_prompt(key: str, content: str) -> None:
     missing.extend(token for token in required_tokens(key) if token not in content)
     if missing:
         raise ValueError(f"必須の placeholder がありません: {', '.join(missing)}")
-    if key in KEYED_LINE_PROMPT_KEYS:
-        _validate_keyed_lines(key, content)
 
 
 # 設定の概要の順を土台に、独立した知識の準備と、検索・回答の実行順を区別する。
@@ -212,8 +207,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         (
             ("batchReading", "rag_engine.generation.batched_evidence:BATCH_READING_PROMPT"),
-            ("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),
+            # system = 編集できる役割の文 + 必ず足す固定の部分（+ 未確定の前提）（#4782）。
+            ("role", "rag_engine.generation.grounded:GENERATION_ROLE_PROMPT"),
+            ("fixed", "rag_engine.generation.grounded:GENERATION_FIXED_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
+            # user message の固定のテンプレート。
+            ("template", "rag_engine.knowledge.prompt_files:ANSWER_INPUT_TEMPLATE"),
             # 該当する入力のときだけ生成の入力へ足す読み方（タグ・値の種類 / 業務ガイド。#4677）。
             ("evidenceReading", "rag_engine.generation.grounded:EVIDENCE_READING_PROMPT"),
             ("guideRules", "rag_engine.generation.grounded:GUIDE_RULES_PROMPT"),
@@ -235,12 +234,18 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
 )
 
 
-# 実行の段に対応する自然言語の指示。既存の解析設定の key は維持する。
+# 段の部分のうち編集できるもの（#4782）。生成は役割と回答の書き方、FAQ は回答の指示だけ。
+# 信頼の境界・出力の形・引用の決まりと、質問・検索の内部の段の文は編集させない。
+_EDITABLE_STAGE_PARTS = frozenset({"generation.role", "faq_answer.system"})
+
+# 実行の段に対応する、編集できる自然言語の指示。既存の解析設定の key は維持する。
 STAGE_PROMPT_REFS = {
     f"{stage.id}.{part_id}": ref
     for stage in PROMPT_STAGES
-    if stage.phase not in {"ingestion", "indexing"} or stage.id == "picture_description"
     for part_id, ref in stage.parts
+    if stage.id == "picture_description"
+    or stage.phase == "evaluation"
+    or f"{stage.id}.{part_id}" in _EDITABLE_STAGE_PARTS
 }
 EDITABLE_PROMPT_KEYS = (*EDITABLE_PROMPT_KEYS, *STAGE_PROMPT_REFS)
 
@@ -254,22 +259,6 @@ def required_tokens(key: str) -> tuple[str, ...]:
     )
 
 
-# 該当する入力のときだけ ``- キー: 説明`` の行を渡す指示。キーのない行だけの内容は実行で渡されない。
-KEYED_LINE_PROMPT_KEYS = ("generation.evidenceReading", "generation.guideRules")
-
-
-def _validate_keyed_lines(key: str, content: str) -> None:
-    from rag_engine.generation.grounded import reading_line_keys
-
-    known = reading_line_keys(default_prompt(key))
-    used = reading_line_keys(content)
-    if not used or any(name not in known for name in used):
-        raise ValueError(
-            "「- キー: 説明」の行が使われます。キーは次のいずれかにしてください: "
-            + "、".join(known)
-        )
-
-
 def stage_prompt_permission(key: str) -> str | None:
     """指示の配置先の設定権限。条件の認識は回答プロンプトに置く。"""
     for stage in PROMPT_STAGES:
@@ -279,12 +268,6 @@ def stage_prompt_permission(key: str) -> str | None:
             return "menu.settings_parser_adapters"
         if stage.phase == "evaluation":
             return "menu.settings_evaluation"
-        if stage.id != "support_guide_conditions" and stage.phase in {
-            "question",
-            "retrieval",
-            "grounding",
-        }:
-            return "menu.settings_retrieval"
         return "menu.settings_prompts"
     return None
 

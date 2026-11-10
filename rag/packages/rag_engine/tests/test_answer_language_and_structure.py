@@ -32,16 +32,19 @@ def test_generation_prompt_states_the_default_language_from_the_language_pack() 
     assert "{{" not in prompt
 
 
-def test_saved_prompt_can_use_the_language_placeholder() -> None:
-    with bind_prompt_overrides({"generation.system": "## Step 1: 回答する\n- 既定の言語: {{language}}"}):
+def test_saved_role_can_use_the_language_placeholder() -> None:
+    with bind_prompt_overrides({"generation.role": "## Step 1: 回答する\n- 既定の言語: {{language}}"}):
         prompt = grounded.generation_system_prompt()
-    assert prompt.endswith(f"既定の言語: {default_response_language()}")
+    assert f"- 既定の言語: {default_response_language()}\n" in prompt
+    assert "{{" not in prompt
 
 
-def test_saved_prompt_without_the_placeholder_is_sent_unchanged() -> None:
-    saved = "## Step 1: 回答する\n- 保存した指示"
-    with bind_prompt_overrides({"generation.system": saved}):
-        assert grounded.generation_system_prompt() == saved
+def test_saved_role_without_the_placeholder_still_gets_the_default_language() -> None:
+    """回答の言語は固定の部分が持つので、保存した役割の文に差し込みが無くても渡る。"""
+    with bind_prompt_overrides({"generation.role": "## Step 1: 回答する\n- 保存した指示"}):
+        prompt = grounded.generation_system_prompt()
+    assert prompt.startswith("## Step 1: 回答する\n- 保存した指示\n")
+    assert default_response_language() in prompt
 
 
 def test_unknown_locale_falls_back_to_the_tag(monkeypatch: pytest.MonkeyPatch) -> None:

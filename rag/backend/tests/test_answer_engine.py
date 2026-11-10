@@ -2836,8 +2836,6 @@ async def test_answer_diagnostics_record_profile_and_prompt_versions(
 def test_prompt_and_profile_versions_follow_content() -> None:
     from datetime import UTC, datetime
 
-    from rag_engine.knowledge.prompt_files import VLM_ANSWER_PROMPT_KEY
-
     from app.rag.answer_prompts import default_prompt
     from app.rag.answer_provenance import answer_prompt_version, search_answer_profile_revision
     from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
@@ -2845,9 +2843,9 @@ def test_prompt_and_profile_versions_follow_content() -> None:
     default = answer_prompt_version({})
     assert default.startswith("prompt-") and len(default) == len("prompt-") + 16
     # 既定と同じ内容の上書きは同じ版、内容を変えると別の版。
-    same = {VLM_ANSWER_PROMPT_KEY: default_prompt(VLM_ANSWER_PROMPT_KEY)}
+    same = {"generation.role": default_prompt("generation.role")}
     assert answer_prompt_version(same) == default
-    edited = {VLM_ANSWER_PROMPT_KEY: default_prompt(VLM_ANSWER_PROMPT_KEY) + "\n追記"}
+    edited = {"generation.role": default_prompt("generation.role") + "\n追記"}
     assert answer_prompt_version(edited) != default
 
     def view(config: SearchAnswerProfileConfig) -> Any:
