@@ -92,7 +92,7 @@ test("業務プロファイルを複数選んで既定を決め、検索・回�
 test("データの範囲の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({
   page,
   mockApi,
-}) => {
+}, testInfo) => {
   seedAgent(mockApi);
   await openAgent(page);
   const wide = (page.viewportSize()?.width ?? 0) >= 640;
@@ -112,6 +112,14 @@ test("データの範囲の開いた一覧の下部が 1 行に並び、画面�
     expect(panel.left).toBeGreaterThanOrEqual(0);
     expect(panel.right).toBeLessThanOrEqual(panel.viewport);
     await expectNoPageHorizontalOverflow(page);
+    for (const width of wide ? [1280, 1920] : [375]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await expectNoPageHorizontalOverflow(page);
+        await footer.locator("..").screenshot({ path: testInfo.outputPath(`data-scope-${connection}-${width}-${theme}.png`) });
+      }
+    }
     await footer.getByRole("button", { name: "完了" }).click();
     await expect(footer).toHaveCount(0);
   }

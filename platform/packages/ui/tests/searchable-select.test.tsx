@@ -294,6 +294,20 @@ describe("SearchableMultiSelect", () => {
     expect(onLoadMore).toHaveBeenCalledTimes(2);
   });
 
+  it("スクロール領域へフォーカスが移っても開いたままで、Esc で入力へ戻る", () => {
+    const onChange = vi.fn();
+    const input = mountMulti({ initial: ["kb-1"], onChange });
+    focus(input);
+    const list = document.querySelector<HTMLElement>('[role="listbox"]')!;
+    focus(list);
+    expect(document.activeElement).toBe(list);
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    keydown(list, "Escape");
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("「完了」で一覧を閉じて検索欄へ戻り、戻したことで開き直さない", () => {
     const input = mountMulti();
     focus(input);
@@ -423,6 +437,19 @@ describe("SearchableSelectField", () => {
     advance(SEARCH_FIELD_DEBOUNCE_MS);
     // -25, -250〜-259
     expect(options()).toHaveLength(11);
+  });
+
+  it.each(["listbox", "dialog"])("%s にフォーカスがあるときも Esc と Tab で閉じてボタンへ戻る", (role) => {
+    for (const key of ["Escape", "Tab"]) {
+      const button = mountSingle();
+      click(button);
+      const region = document.querySelector<HTMLElement>(`[role="${role}"]`)!;
+      focus(region);
+      expect(document.activeElement).toBe(region);
+      keydown(region, key);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(button);
+    }
   });
 
   it("Esc で閉じてボタンへ戻り、囲むダイアログへ伝えない。検索語は次に開いたとき残らない", () => {

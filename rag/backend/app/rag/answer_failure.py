@@ -157,7 +157,7 @@ def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
             stage=stage,
         )
     api = describe_answer_api_failure(exc)
-    if api is not None and api.network_failure_cause is not None:
+    if api is not None:
         return AnswerFailure(
             message=api.message,
             error_type=api.error_type,
@@ -260,7 +260,8 @@ def describe_answer_api_failure(exc: BaseException) -> AnswerApiFailure | None:
     )
     if api_error is None:
         return None
-    classified = classify_error(exc)
+    # stream の内部 wrapper の ConnectionError から、接続障害と推測しない。
+    classified = classify_error(api_error)
     kind = classified.kind
     label = KIND_LABELS.get(kind, KIND_LABELS[ErrorKind.UNKNOWN])
     retry_after = (

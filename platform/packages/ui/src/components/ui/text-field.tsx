@@ -45,7 +45,7 @@ export const TEXT_FIELD_TRAILING_FALLBACK_PADDING_CLASS = "pr-[var(--field-heigh
  * 地は枠線の内側だけに塗り（bg-clip-padding）、ホバーの地が入力欄の枠線に重ならない。
  */
 export const TEXT_FIELD_TRAILING_BUTTON_CLASS =
-  "h-full min-h-0 rounded-l-none rounded-r-control bg-clip-padding";
+  "h-full min-h-0 rounded-l-none rounded-r-control bg-clip-padding disabled:border-transparent aria-disabled:border-transparent";
 
 /** 制御された value が空でないか（クリアボタンを出すか）。 */
 export function hasTextValue(value: unknown) {

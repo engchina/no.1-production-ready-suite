@@ -1,3 +1,4 @@
+import { exerciseSelectScrollbar } from "./_select-scrollbar";
 import { expect, test, type Locator, type Page } from "./fixtures/test";
 import { LOCAL_AUTH_ME } from "./_helpers";
 
@@ -349,4 +350,23 @@ test("モーダルの層の中でも一覧を暗幕とモーダルの上に出�
   await listbox.getByRole("option", { name: "ap-tokyo-1" }).click();
   await expect(region).toContainText("ap-tokyo-1");
   await expect(listbox).toBeHidden();
+});
+
+
+for (const kind of ["plain", "searchable"] as const) test(`単一選択はスクロール後も開いたままで Esc と Tab で閉じる (${kind})`, { tag: "@responsive" }, async ({ page }, info) => {
+  if (kind === "searchable") await page.route("**/api/search-answer-profiles?**", route => route.fulfill({ json: { data: { items: Array.from({ length: 45 }, (_, i) => ({ id: `synthetic-${i}`, name: `合成設定 ${i}`, status: "ACTIVE", knowledge_base_count: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" })), total: 45, limit: 50, offset: 0, has_next: false }, error_messages: [], warning_messages: [] } }));
+  await page.goto(kind === "plain" ? "/settings/retrieval" : "/search");
+  const trigger = kind === "plain" ? page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true }) : page.getByRole("button", { name: /検索・回答プロファイル/ }).first();
+  for (const key of ["Escape", "Tab"]) {
+    await trigger.click();
+    const list = page.getByRole("listbox");
+    await exerciseSelectScrollbar(page, list, Boolean(info.project.use.isMobile));
+    await page.keyboard.press(key);
+    await expect(list).toBeHidden();
+    if (key === "Escape") await expect(trigger).toBeFocused();
+  }
+  await trigger.click();
+  await page.getByRole("listbox").getByRole("option").last().click();
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(trigger).toBeFocused();
 });

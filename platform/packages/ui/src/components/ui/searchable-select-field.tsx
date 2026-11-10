@@ -282,7 +282,7 @@ export function SearchableSelectField({
     if (delta > 0 && active === visible.length - 1) loadMoreIfNeeded();
   }
 
-  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Tab") {
       // 開いた選択はボタンに付属する一時的な層。Tab では閉じてボタンへ戻り、そこから次へ進む
       // （Shift+Tab はボタンに止まる）。
@@ -346,6 +346,10 @@ export function SearchableSelectField({
             ref={popoverRef}
             id={popoverId}
             role="dialog"
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.target === event.currentTarget || event.target === listboxRef.current) handleSearchKeyDown(event);
+            }}
             aria-label={label}
             data-floating-menu-placement={position?.placement}
             data-searchable-select-popover=""
@@ -388,6 +392,8 @@ export function SearchableSelectField({
                 ref={listboxRef}
                 id={listboxId}
                 role="listbox"
+                tabIndex={-1}
+                aria-activedescendant={active >= 0 ? searchableOptionId(listboxId, active) : undefined}
                 aria-label={label}
                 aria-busy={searching || undefined}
                 onScroll={handleListScroll}

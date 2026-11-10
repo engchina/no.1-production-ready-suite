@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import mimetypes
+import random
 import re
 import threading
 import time
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from pr_backend_core.bounded_calls import parse_retry_after
+from pr_backend_core.bounded_calls import ErrorKind, classify_error, parse_retry_after
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pr_backend_core.observability.call_stream import CallStreamCapture
 from pr_backend_core.observability.model_purpose import (
@@ -441,17 +442,15 @@ def _parse_multimodal_with_retry[StructuredOutputT: BaseModel](
     )
 
 
-# 1 回の LLM の呼び出しのやり直しの上限（送信は最大 3 回。#4736）。通信系・止まった stream・失敗の event・暴走・
+# 1 回の LLM の呼び出しのやり直しの上限（送信は最大 6 回）。通信系・止まった stream・失敗の event・暴走・
 # 不正な出力・U+FFFD・出力の上限での送り直しのすべてをこの枠で数える。
-LLM_CALL_MAX_RETRIES = 2
-# 呼び先が示した待ち（`Retry-After`）に従う上限の秒数。
-LLM_RETRY_AFTER_MAX_SECONDS = 30.0
+LLM_CALL_MAX_RETRIES = 5
 # 待ちの間に取り消しを確かめる間隔の秒数。
 LLM_RETRY_WAIT_TICK_SECONDS = 0.5
 # 埋め込みの通信系の再試行（LLM の枠とは別）。
-EMBEDDING_RETRIES = 3
-EMBEDDING_RETRY_INITIAL_WAIT_SECONDS = 2.0
-EMBEDDING_RETRY_MAX_WAIT_SECONDS = 30.0
+EMBEDDING_RETRIES = 5
+EMBEDDING_RETRY_INITIAL_WAIT_SECONDS = 1.0
+EMBEDDING_RETRY_MAX_WAIT_SECONDS = 16.0
 
 
 @dataclass
@@ -474,24 +473,31 @@ class _LlmRetryBudget:
 _llm_retry_budget: ContextVar[_LlmRetryBudget | None] = ContextVar("rag_engine_llm_retry_budget", default=None)
 
 
-def _wait_before_retry(exc: Exception, retry: int) -> None:
-    """通信系・止まった stream のやり直しの前の待ち（``retry`` 回目は ``retry`` 秒。`Retry-After` があれば 30 秒まで従う）。
-
-    期限までに待ちきれなければ送り直さずに期限切れにし、待っている間の取り消しはすぐに止める。
-    """
-    wait = float(retry)
-    headers = getattr(getattr(exc, "response", None), "headers", None) or getattr(exc, "headers", None)
-    advised = parse_retry_after(headers)
-    if advised is not None:
-        wait = max(wait, min(advised, LLM_RETRY_AFTER_MAX_SECONDS))
+def _wait_before_retry(exc: Exception, retry: int, *, initial_wait_seconds: float = 1.0, max_wait_seconds: float = 16.0) -> None:
+    """指数 backoff と full jitter で待つ。Retry-After は下限とし、期限や取消を優先する。"""
+    cap = min(max_wait_seconds, initial_wait_seconds * (2 ** max(0, retry - 1)))
+    wait = random.random() * cap  # nosec B311 - 再試行の jitter で、暗号の用途ではない
+    # stream の失敗では SDK の HTTP 情報が原因例外に残る場合もある。
+    source: BaseException | None = exc
+    for _ in range(4):
+        if source is None:
+            break
+        headers = getattr(getattr(source, "response", None), "headers", None) or getattr(source, "headers", None)
+        advised = parse_retry_after(headers)
+        if advised is not None:
+            wait += advised
+            break
+        source = source.__cause__ or source.__context__
     remaining = remaining_seconds()
     if remaining is not None and remaining <= wait:
         raise DeadlineExceeded("回答の期限までに LLM を再試行できません。") from exc
+    check_deadline()
     left = wait
     while left > 0:
-        time.sleep(min(left, LLM_RETRY_WAIT_TICK_SECONDS))
+        tick = min(left, LLM_RETRY_WAIT_TICK_SECONDS)
+        time.sleep(tick)
         check_deadline()
-        left -= LLM_RETRY_WAIT_TICK_SECONDS
+        left -= tick
 
 
 def _parse_with_retry[StructuredOutputT: BaseModel](
@@ -519,11 +525,12 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
                     raise
                 except Exception as exc:
                     if is_invalid_structured_output(exc):
-                        # モデルの出力の不合格（JSON が閉じない・必須項目の欠落・U+FFFD）は、待たずに同じ入力でやり直す (#663)。
+                        # モデルの出力の不合格も共通の待ちと枠で数える。
                         will_retry = retry_budget.take()
                         update_call_context({"pr.retry.reason": "invalid_structured_output"})
                         notify_invalid_output(exc, will_retry)
                         if will_retry:
+                            _wait_before_retry(exc, retry_budget.used)
                             continue
                         raise
                     if not _is_retryable_error(exc) or not retry_budget.take():
@@ -555,12 +562,7 @@ def _retry_transport[ResultT](
         except Exception as exc:
             if attempt >= retry_count or not _is_retryable_error(exc):
                 raise
-            wait = min(initial_wait * (2**attempt), max_wait)
-            remaining = remaining_seconds()
-            if remaining is not None and remaining <= wait:
-                # 待つと期限を過ぎる。送り直さずに期限切れにする。
-                raise DeadlineExceeded("回答の期限までに再試行できません。") from exc
-            time.sleep(wait)
+            _wait_before_retry(exc, attempt + 1, initial_wait_seconds=initial_wait, max_wait_seconds=max_wait)
             attempt += 1
 
 
@@ -902,6 +904,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     # 次の送信の前に待つ、一時的な失敗。待ちは試行の記録（span）の時間に入れない。
     transient_failure: Exception | None = None
     while True:
+        attempt = retry_budget.used
         if transient_failure is not None:
             _wait_before_retry(transient_failure, retry_budget.used)
             transient_failure = None
@@ -1005,9 +1008,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         effort, lowered = lower, True
                     record_llm_runaway_resend()
                     update_call_context({"pr.retry.reason": "runaway_output"})
+                    transient_failure = exc
                     attempt += 1
                     continue
-                if not isinstance(exc, LlmStreamFailed | LlmStreamStalled) or not retry_budget.take():
+                if not isinstance(exc, LlmStreamFailed | LlmStreamStalled) or not _is_retryable_error(exc) or not retry_budget.take():
                     raise
                 # 失敗の event で終わった（#2814）・無音で止まった（#1926。回数を工程の記録の llm_usage に残す）。
                 # provider の一時的な失敗なので、待ってから同じ要求を送り直す。期限は次の送信の前に確かめる。
@@ -1065,6 +1069,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     effort, lowered = lower, True
                     record_llm_effort_retry()
                 update_call_context({"pr.retry.reason": "incomplete_output"})
+                transient_failure = exc
                 attempt += 1
                 continue
             except Exception as exc:
@@ -1831,6 +1836,24 @@ def _image_data_url(image_path: Path) -> str:
 
 
 def _is_retryable_error(exc: Exception) -> bool:
+    classified = classify_error(exc)
+    if classified.kind in {
+        ErrorKind.QUOTA_EXHAUSTED,
+        ErrorKind.AUTHENTICATION,
+        ErrorKind.PERMISSION,
+        ErrorKind.NOT_FOUND,
+        ErrorKind.TLS,
+        ErrorKind.BAD_REQUEST,
+        ErrorKind.TOO_LARGE,
+        ErrorKind.SAFETY,
+        ErrorKind.NOT_SUPPORTED,
+    }:
+        return False
+    # HTTP status の無い SDK の error event も、構造化した code があれば同じ規則で判定する。
+    if classified.status is not None and classified.status >= 400:
+        return classified.status == 429 or classified.status >= 500
+    if classified.kind in {ErrorKind.RATE_LIMITED, ErrorKind.SERVER_ERROR, ErrorKind.UNAVAILABLE, ErrorKind.NETWORK, ErrorKind.TIMEOUT}:
+        return True
     status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
     if isinstance(status, int):
         return status == 429 or status >= 500

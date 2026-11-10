@@ -53,6 +53,11 @@ def _completed():
 
 
 class OutputRetryRecordTest(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(oci.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def call(self, client, provider=PROVIDER):
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         steps: list = []
