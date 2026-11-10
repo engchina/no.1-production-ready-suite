@@ -120,3 +120,10 @@ def test_nested_tables_fall_back_to_plain_text_without_losing_values() -> None:
 def test_extreme_colspan_has_bounded_output() -> None:
     text = f'<table><tr><td colspan="{"9" * 5000}">合成の本文</td></tr></table>'
     assert table_html_as_rows(text).count("|") == 21
+
+
+def test_summary_uses_the_same_html_display_contract_as_the_body() -> None:
+    text = f'<table><caption>合成の表題</caption><tr><td><span title="{"x" * 100}">A|B</span></td><td>10</td></tr></table>'
+    answer = grounded.render_answer(text, []).text
+    assert "<span" not in answer and "<table" not in answer
+    assert answer.startswith("合成の表題\n| A\\|B | 10 |")
