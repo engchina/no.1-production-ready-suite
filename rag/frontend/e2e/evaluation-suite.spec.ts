@@ -58,6 +58,12 @@ for (const viewport of [
       await expect(conditions).not.toContainText("約 2 倍");
       await expect(conditions.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" })).toBeVisible();
       await conditions.screenshot({ path: testInfo.outputPath("evaluation-guidance.png") });
+      // 結果の空の案内は、条件の欄と同じ入力（検索・回答プロファイル）を選ぶように案内する（#3597）。
+      await expect(page.getByText("まだ評価結果がありません。")).toBeVisible();
+      await expect(
+        page.getByText("検索・回答プロファイルを選び、評価リクエストの Excel をアップロードして評価を実行してください。")
+      ).toBeVisible();
+      await expect(page.getByRole("main")).not.toContainText("ナレッジベースを選び");
       // JSON の入力・設定比較・サンプルは無い。
       await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "比較実行" })).toHaveCount(0);
