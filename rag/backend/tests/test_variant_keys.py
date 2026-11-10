@@ -298,6 +298,7 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     期待値は旧い分割名と、質問の推定属性を除いた現在の契約で計算した ID。
     画像説明本文の形式v3と画像用途を含む。
     改名の hash 入力は維持し、解析の内容が変わった場合は別の抽出・Chunk 集合にする。
+    同梱の言語資源の取込の項目を消すと取込の hash が変わるので、期待値も変わる（#4784）。
     """
     # 改名時の明示設定で比較し、その後の既定値変更から独立させる。
     base = Settings(
@@ -309,9 +310,9 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     )
     structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
 
-    assert compute_chunk_set_id(SRC, small_to_big) == "cs_91243f20d36040c1"
-    assert compute_chunk_set_id(SRC, tuned) == "cs_8585bd42174b5c22"
-    assert compute_chunk_set_id(SRC, structure) == "cs_3eb1ea0491558a41"
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_11a6b6e41ee097f5"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_49f407cfb7260eac"
+    assert compute_chunk_set_id(SRC, structure) == "cs_9f66f44238333fc7"
 
 
 def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
