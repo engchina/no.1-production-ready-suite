@@ -1791,13 +1791,14 @@ test("既定の生成方式はこの環境で使える方式だけから選ん�
   ]);
   expect(Math.abs((engineBox?.height ?? 0) - (categoryBox?.height ?? 0))).toBeLessThanOrEqual(1);
   // ライト / ダークの見た目を確かめるための画像（失敗の判定には使わない）。
-  for (const colorScheme of ["light", "dark"] as const) {
-    await page.emulateMedia({ colorScheme });
-    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
-    await testInfo.attach(`default-engine-${colorScheme}`, {
-      body: await engine.locator("xpath=ancestor::section[1]").screenshot(),
-      contentType: "image/png",
-    });
+  for (const width of (page.viewportSize()?.width ?? 0) > 640 ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, colorScheme);
+      await expectNoDocumentHorizontalOverflow(page);
+      await engine.locator("xpath=ancestor::section[1]").screenshot({ path: testInfo.outputPath(`default-engine-${width}-${colorScheme}.png`) });
+    }
   }
   await page.emulateMedia({ colorScheme: "light" });
   await page.evaluate(() => document.documentElement.classList.remove("dark"));

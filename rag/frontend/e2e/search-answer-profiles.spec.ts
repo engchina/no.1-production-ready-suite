@@ -459,7 +459,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`DEFAULT は参照 KB と名前を固定し設定だけ保存できる (${viewport.name})`, async ({
+  test(`DEFAULT は参照 KB と名前を固定し設定だけ保存できる (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -493,6 +493,21 @@ for (const viewport of [
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();
     await expect(page.getByRole("combobox", { name: "参照するナレッジベース" })).toBeDisabled();
     await expect(page.getByText(/DEFAULT ナレッジベースだけを参照します/)).toBeVisible();
+    const field = page.locator("[data-searchable-multi-select]").filter({ has: page.getByRole("combobox", { name: "参照するナレッジベース" }) });
+    for (const width of viewport.name === "desktop" ? [1280, 1920] : [375]) {
+      await page.setViewportSize({ width, height: viewport.height });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await expect.poll(() => field.evaluate(element => {
+        const input = element.querySelector("input")!;
+        const button = element.querySelector("[data-text-field-slot='trailing'] button")!;
+        const inputStyle = getComputedStyle(input), buttonStyle = getComputedStyle(button);
+        return buttonStyle.borderLeftColor === "rgba(0, 0, 0, 0)" && inputStyle.backgroundColor === buttonStyle.backgroundColor && inputStyle.borderLeftColor !== "rgba(0, 0, 0, 0)";
+      })).toBe(true);
+      await field.screenshot({ path: test.info().outputPath(`disabled-kb-${width}-${theme}.png`) });
+    }
+
+    }
 
     // 説明は必須（#521）。説明が空の既存の検索・回答プロファイルは、保存するときに入力を求めて送らない。
     const description = page.getByRole("textbox", { name: "説明", exact: true });
