@@ -149,6 +149,40 @@ describe("ユーザーの編集でほかのロールを残す（#1050）", () =>
   });
 });
 
+describe("ロールの候補の読み取りの失敗（#4817）", () => {
+  it("作成の画面で「利用可能なロールがありません」と言わず、欄の位置に欄ごとの文の失敗と再試行を出す", async () => {
+    let fail = true;
+    const base = setup().api;
+    const api: UserManagementApi = {
+      ...base,
+      users: (...args) => (fail ? Promise.reject(new Error("一覧を読み取れませんでした。")) : base.users(...args)),
+      roles: (...args) => (fail ? Promise.reject(new Error("一覧を読み取れませんでした。")) : base.roles(...args)),
+    };
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/?user=new"]}>
+          <ConfirmProvider>
+            <UserManagementPage api={api} canManage />
+          </ConfirmProvider>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => undefined);
+
+    const failure = host.querySelector<HTMLElement>('[data-testid="security-users-roles-load-failed"]');
+    expect(failure?.getAttribute("data-failure-layout")).toBe("field");
+    // 見出しは何を読めなかったか。backend の文は畳んだ「詳細」の中。
+    expect(failure?.querySelector('[role="alert"]')?.textContent).toBe("ロールの候補を読み込めませんでした。");
+    expect(host.textContent).not.toContain("利用可能なロールがありません");
+
+    fail = false;
+    await click(Array.from(failure!.querySelectorAll("button")).find((button) => button.textContent?.includes("再試行")) ?? null);
+    await act(async () => undefined);
+    expect(host.querySelector('[data-testid="security-users-roles-load-failed"]')).toBeNull();
+    expect(host.querySelectorAll('input[type="radio"][name="security-users-role"]').length).toBe(ROLES.length);
+  });
+});
+
 describe("システム管理者のロールを選択肢に出さない（#1792）", () => {
   const SYSTEM_ADMIN = role("role-system", "SYSTEM_ADMIN", "システム管理者");
 
