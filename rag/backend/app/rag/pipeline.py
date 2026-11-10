@@ -1438,7 +1438,7 @@ class RagPipeline:
         """
         try:
             text = await async_call_with_model_purpose(
-                "answer.generate",
+                "answer.small_talk",
                 self._llm.generate,
                 utterance,
                 "",
