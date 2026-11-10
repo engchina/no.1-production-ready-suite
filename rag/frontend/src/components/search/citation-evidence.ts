@@ -137,6 +137,8 @@ function contentKindLabel(kind: string): string {
       return t("search.filters.contentKind.field");
     case "section_summary":
       return t("search.filters.contentKind.section_summary");
+    case "document_summary":
+      return t("search.filters.contentKind.document_summary");
     default:
       return kind;
   }

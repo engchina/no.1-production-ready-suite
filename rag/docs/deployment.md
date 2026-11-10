@@ -221,6 +221,23 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4793 取込の後の文書全体の要約）
+
+取込（分割・埋め込み・索引）が終わって検索に出した後に、文書全体の要約を 1 文書につき 1 回の LLM（OCI Enterprise AI。既定のテキストモデル）で作り、文書の詳細に出す。要約の chunk（`content_kind=document_summary`）を有効な chunk_set に 1 つ入れ、文書全体を問う質問の検索に当てる。既定で有効（`RAG_DOCUMENT_SUMMARY_ENABLED=true`）。
+
+1. backend を更新し、システムテーブルの「作成・更新」（または `system_schema_cli initialize`）を実行する。migration `20261110_4793_document_summaries` が表 `RAG_DOCUMENT_SUMMARIES` を足す（データは消さない）。
+2. 更新の後の取込から、job の成功の後に要約を作る（LLM 1 回と埋め込み 1 回が増える）。失敗・時間切れ（`RAG_DOCUMENT_SUMMARY_TIMEOUT_SECONDS`。既定 120 秒）でも取込は成功のままで、理由は文書の詳細の「文書の要約」に出る。
+3. 更新の前に取り込んだ文書には要約が無い。文書の詳細の「文書の要約」の「要約を作る」（`POST /api/documents/{document_id}/summary`）で、再取込をせずに作れる（原文の chunk・埋め込みは変えない）。件数は次で確かめる。
+
+   ```sql
+   SELECT COUNT(*) FROM RAG_DOCUMENTS d
+    WHERE d.STATUS = 'INDEXED'
+      AND NOT EXISTS (SELECT 1 FROM RAG_DOCUMENT_SUMMARIES s
+                       WHERE s.DOCUMENT_ID = d.DOCUMENT_ID AND s.STATUS = 'READY');
+   ```
+
+4. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
+
 ## 既存環境の更新手順（#4739 解析エンジン MinerU の対応の削除）
 
 使っていなかった解析エンジン MinerU の対応（接続設定・ライセンスの確認・画面のカード）を削除した。保存値の読み替えと migration は持たない（未リリース）。

@@ -27,6 +27,7 @@ import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
+import { DocumentSummaryPanel } from "./DocumentSummaryPanel";
 import { LanguagePackRecipeSummary, languagePackBuildText } from "./LanguagePackDocumentPanel";
 import { languagePackBuildNotice } from "./LanguagePackDocumentPanel.logic";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
@@ -1617,6 +1618,13 @@ export function DocumentWorkspace({
             </dd>
           </div>
         </dl>
+
+        {/* 文書全体の要約（#4793）。取込の後に作る文書の説明。 */}
+        <DocumentSummaryPanel
+          documentId={documentId}
+          ingesting={ingestionActive}
+          canRegenerate={(recipesQuery.data ?? []).some((recipe) => recipe.active_chunk_set_id != null)}
+        />
 
         <DocumentKnowledgeBaseEditor
           documentId={documentId}
