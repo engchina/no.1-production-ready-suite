@@ -90,8 +90,8 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     """同じ内容を述べた規則の原文と手順書の両方を出典にし、出典を 1 つに絞る言い方を残さない（#3526）。"""
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
-    generate = grounded.GENERATE_SYSTEM_PROMPT
-    section = generate.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
+    generate = grounded.generation_system_prompt()
+    section = generate.split("引用する原文を選ぶ", 1)[1].split("## Step ", 1)[0]
     assert "文書ごとにその文書の原文を basis に選ぶ" in section
     # 別の対象の根拠を basis に選ばない判断は basis の選び方に置く（生成の出力に計画の行は無い。#4611）。
     assert "別の対象・独立した操作の原文は選ばない" in section

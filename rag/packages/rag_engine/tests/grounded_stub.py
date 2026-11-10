@@ -60,7 +60,7 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
         )
         if mode == "vision_attachments":
             output = answering.parse_multimodal_response(
-                grounded.GENERATE_SYSTEM_PROMPT,
+                grounded.generation_system_prompt(),
                 prompt,
                 [i["prompt_path"] for i in images if i.get("prompt_path")],
                 settings,
@@ -68,7 +68,9 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
                 provider_id=provider,
             )  # 画像の回も回答のモデル（#3444）
         else:
-            output = answering.parse_text_response(grounded.GENERATE_SYSTEM_PROMPT, prompt, settings, AnswerOutput, provider_id=provider)
+            output = answering.parse_text_response(
+                grounded.generation_system_prompt(), prompt, settings, AnswerOutput, provider_id=provider
+            )
         response = answering._normalize_answer_response(
             answering.AnswerResponse(
                 answer_text=output.answer,

@@ -731,18 +731,17 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SETTINGS_RETRIEVAL,
         MENU_SETTINGS_EVALUATION,
     ),
+    # 検索方法の画面に編集欄は無い（内部の段の文は読むだけ。#4782）。
     ("PUT", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS,
         MENU_SETTINGS_PARSER_ADAPTERS,
         MENU_SETTINGS_CHUNKING,
-        MENU_SETTINGS_RETRIEVAL,
         MENU_SETTINGS_EVALUATION,
     ),
     ("DELETE", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS,
         MENU_SETTINGS_PARSER_ADAPTERS,
         MENU_SETTINGS_CHUNKING,
-        MENU_SETTINGS_RETRIEVAL,
         MENU_SETTINGS_EVALUATION,
     ),
     # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。
@@ -801,7 +800,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
 # 編集できるプロンプトの key → 変更に要る権限（#1010）。画面はそれぞれ 1 つのプロンプトだけを
 # 編集するので、片方の画面の権限でもう片方のプロンプトを変えられないようにする。
 ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
-    "vlm_answer": MENU_SETTINGS_PROMPTS,
     "image_retrieval": MENU_SETTINGS_PARSER_ADAPTERS,
     "external_ocr": MENU_SETTINGS_PARSER_ADAPTERS,
     "heading_levels": MENU_SETTINGS_PARSER_ADAPTERS,

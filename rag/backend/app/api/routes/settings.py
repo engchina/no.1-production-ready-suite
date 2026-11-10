@@ -681,7 +681,7 @@ async def update_answer_record_settings(
 
 @router.get("/answer-prompts", response_model=ApiResponse[AnswerPromptsData])
 async def get_answer_prompts() -> ApiResponse[AnswerPromptsData]:
-    """編集できるプロンプト(回答生成・図の読み取り)と、回答フローの各段の読み取り専用プロンプトを返す。"""
+    """編集できるプロンプトと、回答フローの各段の読み取り専用プロンプトを返す。"""
     saved = await OracleClient().list_answer_prompts()
     return ApiResponse(data=_answer_prompts_data(saved))
 

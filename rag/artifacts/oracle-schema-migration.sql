@@ -4558,6 +4558,30 @@ BEGIN
 END;
 /
 
+-- migration: 20261110_4782_generation_prompt_overrides
+DELETE FROM RAG_ANSWER_PROMPTS
+WHERE PROMPT_KEY IN (
+    'vlm_answer',
+    'generation.system',
+    'generation.batchReading',
+    'generation.assumptionSystem',
+    'generation.evidenceReading',
+    'generation.guideRules',
+    'support_guide_draft.system',
+    'support_guide_draft.instruction',
+    'support_guide_conditions.system',
+    'support_guide_conditions.answerChoice',
+    'rule_selection.system',
+    'rule_selection.instruction',
+    'history_rewrite.system',
+    'field_filter.system',
+    'screen_linking.system',
+    'article_catalog.documentSystem',
+    'article_catalog.system',
+    'article_catalog.refineSystem',
+    'section_extraction.system'
+);
+
 -- migration: 20261110_4782_remove_raptor
 DELETE FROM rag_chunks
 WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';

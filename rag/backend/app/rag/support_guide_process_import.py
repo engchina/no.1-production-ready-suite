@@ -41,7 +41,6 @@ from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from pr_backend_core.bounded_calls import Attempt
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from rag_engine.resources.runtime import resolve_prompt
 from rag_parser_core.language import LanguagePack
 from rag_parser_core.language.markers import marker_patterns
 
@@ -1030,8 +1029,8 @@ async def draft_guides(
             llm.generate,
             "",
             draft_context(row, headings),
-            instruction=resolve_prompt("support_guide_draft.instruction", GUIDE_DRAFT_PROMPT),
-            system_prompt=resolve_prompt("support_guide_draft.system", GUIDE_DRAFT_SYSTEM_PROMPT),
+            instruction=GUIDE_DRAFT_PROMPT,
+            system_prompt=GUIDE_DRAFT_SYSTEM_PROMPT,
             response_schema=GUIDE_DRAFT_RESPONSE_SCHEMA,
             response_schema_name="support_guide_draft",
         )

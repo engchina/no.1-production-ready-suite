@@ -63,7 +63,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 | 旧版を含める | 検索要求 | `filters` の `include_superseded=true`（既定は含めない。#1248）。MCP の `rag_search` / `rag_retrieve_evidence` は真偽値の引数 `include_superseded: true`（#1392） |
 
-| 回答生成のプロンプト（`vlm_answer`） | global | 取込・検索・回答設定 > 回答プロンプト（検索・回答・評価の各段のプロンプトを、使われる条件とともに各設定画面で編集。一覧は `app/rag/answer_prompts.py` の `PROMPT_STAGES`） |
+| 回答生成の役割と回答の書き方（`generation.role`） | global | 取込・検索・回答設定 > 回答プロンプト（生成の指示のうち、信頼の境界・引用・出力の形の固定の部分はコードが必ず足し、編集できない。検索・回答の内部の段の指示は、使われる条件とともに各設定画面で読むだけ。一覧は `app/rag/answer_prompts.py` の `PROMPT_STAGES`。#4782） |
 | 図・画像の読み取りプロンプト（`image_retrieval`） | global | 取込・検索・回答設定 > 文書解析（常に表示。文書のレシピで Vision を有効にしたとき、解析エンジンに関係なく使う） |
 
 KB（ナレッジベース）は検索対象の範囲を決めるだけで、上記のどれも持たない。

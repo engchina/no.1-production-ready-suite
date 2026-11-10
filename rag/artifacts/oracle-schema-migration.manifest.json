@@ -760,6 +760,13 @@
     },
     {
       "destructive": true,
+      "name": "20261110_4782_generation_prompt_overrides",
+      "sha256": "37bf249887fde1c7abe24415aceeef15ae0bfd03630796fc68fc96aed17dc688",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
+    },
+    {
+      "destructive": true,
       "name": "20261110_4782_remove_raptor",
       "sha256": "50ee4198c821998c9b9802217639dd00363a9e7b1521b5f8159c1cb64586899a",
       "statement_count": 2,
@@ -768,6 +775,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "9f670b8b08a3ac32855f89d38808d5799dd42e6850dbc0e4514ddbcd99c9cc74",
-  "statement_count": 166
+  "sha256": "7691583a8983ad938c0ccfe7d7225ddcf2799a9b66ae552707f0570a5e127123",
+  "statement_count": 167
 }

@@ -78,4 +78,4 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
     assert "guide_condition_notices" not in without
     # 補足の読み方は、業務ガイドの部品があるときに渡す 1 か所にだけある。
     assert grounded.GUIDE_RULES_PROMPT.count("guide_condition_notices") == 1
-    assert "guide_condition_notices" not in grounded.GENERATE_SYSTEM_PROMPT
+    assert "guide_condition_notices" not in grounded.generation_system_prompt()
