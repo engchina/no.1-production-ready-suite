@@ -55,7 +55,6 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
         config=SearchAnswerProfileConfig(knowledge_base_ids=[kb.id]),
     )
     settings = Settings(
-        rag_auto_field_filter_enabled=False,
         rag_support_guide_enabled=False,
         rag_reference_expansion_enabled=False,
         rag_entity_expansion_enabled=False,

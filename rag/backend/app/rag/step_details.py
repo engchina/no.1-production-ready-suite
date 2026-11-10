@@ -49,34 +49,37 @@ def pipeline_step_details(
     return details.model_dump() if details is not None else None
 
 
-_CONDITION_OPERATORS = {"eq": "=", "gte": "≥", "lte": "≤"}
+def history_rewrite_details(
+    rewritten: str, history: Iterable[Any], *, intent: str = "search"
+) -> dict[str, Any] | None:
+    """会話を踏まえた質問の書き換えの詳細（書き換えた質問・参照した会話の数・発話の種類）。"""
 
-
-def history_rewrite_details(rewritten: str, history: Iterable[Any]) -> dict[str, Any] | None:
-    """会話を踏まえた質問の書き換えの詳細（書き換えた質問・参照した会話の数）。"""
+    from app.rag.small_talk import SMALL_TALK_REASONS
 
     turns = sum(1 for _ in history)
+    fields: list[tuple[str, object]] = [
+        ("参照した会話", f"{turns} 件の発言" if turns else "なし（会話の最初の発話）"),
+        ("書き換えた質問", rewritten) if rewritten else ("結果", "書き換えなし（元の質問のまま）"),
+    ]
+    reason = SMALL_TALK_REASONS.get(intent)
+    if reason is not None:
+        fields.append(("発話の種類", f"{reason}（検索の要らない発話）"))
+    return pipeline_step_details(fields=fields)
+
+
+def small_talk_details(intent: str, *, replied: bool) -> dict[str, Any] | None:
+    """検索せずに応じた工程の詳細（理由を含めた結果。畳んだ行にも出る）。"""
+
+    from app.rag.small_talk import SMALL_TALK_REASONS
+
+    reason = SMALL_TALK_REASONS.get(intent, intent)
     return pipeline_step_details(
         fields=[
-            ("参照した会話", f"{turns} 件の発言"),
-            ("書き換えた質問", rewritten)
-            if rewritten
-            else ("結果", "書き換えなし（元の質問のまま）"),
+            ("結果", f"{reason}のため検索せずに応じました（引用なし）")
+            if replied
+            else ("結果", f"{reason}への応答を作れなかったため、検索して回答します"),
         ]
     )
-
-
-def field_filter_details(conditions: Iterable[Any]) -> dict[str, Any] | None:
-    """質問から読み取った抽出項目の条件（項目・比べ方・値）。"""
-
-    items = list(conditions)
-    lines = [
-        f"{getattr(item, 'name', '')} {_CONDITION_OPERATORS.get(getattr(item, 'op', ''), '=')} "
-        f"{getattr(item, 'value', '')}"
-        for item in items
-    ]
-    summary = f"{len(items)} 件" if items else "なし（条件で絞らずに検索します）"
-    return pipeline_step_details(fields=[("読み取った条件", summary)], lines=lines)
 
 
 def answer_guardrail_details(result: Any, answer: str) -> dict[str, Any] | None:

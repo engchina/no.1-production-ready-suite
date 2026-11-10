@@ -150,27 +150,20 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
-        "rule_selection",
-        "question",
-        (
-            ("system", "app.rag.rule_selection:RULE_SELECTION_SYSTEM_PROMPT"),
-            ("instruction", "app.rag.rule_selection:RULE_SELECTION_INPUT_PROMPT"),
-        ),
-    ),
-    PromptStage(
         "history_rewrite",
         "question",
         (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
     ),
     PromptStage(
-        "field_filter",
-        "question",
-        (("system", "app.rag.field_filter_reader:FIELD_FILTER_SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
         "screen_linking",
         "retrieval",
         (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
+    ),
+    # 検索の要らない発話（挨拶・雑談）への根拠なしの短い応答（#4787）。
+    PromptStage(
+        "small_talk",
+        "generation",
+        (("system", "app.rag.small_talk:SMALL_TALK_SYSTEM_PROMPT"),),
     ),
     PromptStage(
         "faq_answer",

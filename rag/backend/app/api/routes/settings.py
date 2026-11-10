@@ -538,8 +538,6 @@ async def update_answering_settings(
             ("rag_rerank_top_n", payload.rerank_top_n),
             ("rag_min_similarity", payload.min_similarity),
             ("rag_rerank_min_relevance_score", payload.rerank_min_relevance_score),
-            ("rag_runtime_rules_confirmation_enabled", payload.runtime_rules_confirmation_enabled),
-            ("rag_runtime_rules_answer_enabled", payload.runtime_rules_answer_enabled),
             ("rag_hybrid_search_backend", payload.hybrid_search_backend),
             ("rag_rrf_method_ratio", payload.rrf_method_ratio),
             ("rag_rrf_source_ratio", payload.rrf_source_ratio),
@@ -549,7 +547,6 @@ async def update_answering_settings(
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
             ("rag_screen_linking_enabled", payload.screen_linking_enabled),
-            ("rag_auto_field_filter_enabled", payload.auto_field_filter_enabled),
             ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
             ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
@@ -578,12 +575,6 @@ async def update_answering_settings(
                 "RAG_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
                     candidate.rag_section_expansion_input_token_percent
                 ),
-                "RAG_RUNTIME_RULES_CONFIRMATION_ENABLED": _format_env_bool(
-                    candidate.rag_runtime_rules_confirmation_enabled
-                ),
-                "RAG_RUNTIME_RULES_ANSWER_ENABLED": _format_env_bool(
-                    candidate.rag_runtime_rules_answer_enabled
-                ),
                 "RAG_RUNTIME_TERMS_SEARCH_ENABLED": _format_env_bool(
                     candidate.rag_runtime_terms_search_enabled
                 ),
@@ -603,9 +594,6 @@ async def update_answering_settings(
                 "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
                     candidate.rag_screen_linking_enabled
                 ),
-                "RAG_AUTO_FIELD_FILTER_ENABLED": _format_env_bool(
-                    candidate.rag_auto_field_filter_enabled
-                ),
                 "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
                     candidate.rag_graph_expansion_enabled
                 ),
@@ -624,8 +612,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         rerank_top_n=settings.rag_rerank_top_n,
         min_similarity=settings.rag_min_similarity,
         rerank_min_relevance_score=settings.rag_rerank_min_relevance_score,
-        runtime_rules_confirmation_enabled=settings.rag_runtime_rules_confirmation_enabled,
-        runtime_rules_answer_enabled=settings.rag_runtime_rules_answer_enabled,
         runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,
         runtime_terms_answer_enabled=settings.rag_runtime_terms_answer_enabled,
         hybrid_search_backend=settings.rag_hybrid_search_backend,
@@ -635,7 +621,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         screen_linking_enabled=settings.rag_screen_linking_enabled,
-        auto_field_filter_enabled=settings.rag_auto_field_filter_enabled,
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,
         entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,

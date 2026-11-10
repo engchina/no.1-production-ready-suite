@@ -658,16 +658,8 @@ class SupportGuideProcessReference(BaseModel):
     )
 
 
-class SupportGuideRuleCandidate(BaseModel):
-    """補足から作ったルールの下書きの候補（質問の種類 → 案内・言い切らない・区別の規則）。"""
-
-    title: str = Field(max_length=_SHORT)
-    triggers: list[str] = Field(default_factory=list, description="ルールに当てる語。")
-    content: str = Field(max_length=_TEXT)
-
-
 class SupportGuideProcessItem(BaseModel):
-    """1 行から作った業務ガイドの下書き（取り込めるか・資料の対応・ルールの候補）。"""
+    """1 行から作った業務ガイドの下書き（取り込めるか・資料の対応）。"""
 
     row: int
     question: str
@@ -675,7 +667,6 @@ class SupportGuideProcessItem(BaseModel):
     content: SupportGuideContent | None = None
     issues: list[SupportGuideIssue] = Field(default_factory=list)
     references: list[SupportGuideProcessReference] = Field(default_factory=list)
-    rule_candidates: list[SupportGuideRuleCandidate] = Field(default_factory=list)
 
 
 class SupportGuideProcessPreviewData(BaseModel):

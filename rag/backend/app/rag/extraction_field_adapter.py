@@ -380,11 +380,6 @@ def find_json_array(raw: str) -> str | None:
     return text[start : end + 1]
 
 
-def extract_json_array(raw: str) -> str:
-    """`find_json_array` の結果。配列が無ければ空の配列(補助の読み取り用)。"""
-    return find_json_array(raw) or "[]"
-
-
 def _safe_confidence(value: object) -> float | None:
     """confidence を 0..1 の float へ寄せる(範囲外/非数は None)。"""
     if isinstance(value, bool) or not isinstance(value, int | float | str):

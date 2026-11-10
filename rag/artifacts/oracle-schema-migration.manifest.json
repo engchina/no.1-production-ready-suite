@@ -785,10 +785,17 @@
       "sha256": "50ee4198c821998c9b9802217639dd00363a9e7b1521b5f8159c1cb64586899a",
       "statement_count": 2,
       "table_name": "rag_chunks"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4799_search_answer_profile_runtime_rules",
+      "sha256": "e413dd2fa14f1c8ba158a4cd5fc28bc41ed8d169455469b5c0cf52ae2d5b6c03",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profile_knowledge"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "02f3072c4be631ff3e298fdd9e4c7f406beb044f375971f693c4b7558a0f64bd",
-  "statement_count": 169
+  "sha256": "330a363c2adc12692ec885c66ba4558515a0f9f5bfecb8720b9b4ba38c273830",
+  "statement_count": 170
 }

@@ -1,4 +1,7 @@
-"""確認・生成の用途、明示優先度、構造化排他と版の記録。意味判定と外部 I/O は使わない。"""
+"""ルールの採用（確認・生成の用途、明示優先度、構造化排他と版の記録）。意味判定と外部 I/O は使わない。
+
+ルールは業務ガイドを選んだ呼び出し元が足す pinned のものだけが照合に入る。
+"""
 
 import json
 from dataclasses import replace
@@ -7,14 +10,12 @@ from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_conte
 
 
 def rule(identity, content="資料を確認する。", **fields):
-    return {"id": identity, "title": "設定", "triggers": ["設定"], "content": content, **fields}
+    return {"id": identity, "title": "設定", "triggers": ["設定"], "content": content, "tags": ["pinned"], **fields}
 
 
 def context(tmp_path, *rules, limit=6):
     (tmp_path / "runtime_knowledge.json").write_text(json.dumps({"rules": list(rules)}, ensure_ascii=False))
-    return build_runtime_knowledge_context(
-        "設定の手順", tmp_path, rule_limit=limit, rules_confirmation_enabled=True, rules_answer_enabled=True
-    )
+    return build_runtime_knowledge_context("設定の手順", tmp_path, rule_limit=limit)
 
 
 def generation_ids(ctx):

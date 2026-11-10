@@ -383,8 +383,10 @@ export {
   AnswerCitationLinks,
   AnswerPlainText,
   AnswerSections,
+  AnswerSourceMarks,
   DEFAULT_ANSWER_SECTIONS_LABELS,
   type AnswerCitationRef,
+  type AnswerSourceMark,
   type AnswerPlainTextProps,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
@@ -397,6 +399,7 @@ export {
   DEFAULT_ANSWER_BODY_LABELS,
   type AnswerBodyLabels,
   type AnswerBodyProps,
+  type AnswerBodyTableCell,
 } from "./components/chat/answer-body";
 // 回答の見出しと、チャットの回答の本文の見出し「回答」（3 製品共通。#3433）
 export {
@@ -705,6 +708,7 @@ export {
   type ResultFullResultLink,
   type ResultTableColumn,
   type ResultTableLabels,
+  type ResultTableMode,
   type ResultTableProps,
   // 以前の名前（#1154。後方互換の別名。#1178）
   ChatResultTable,

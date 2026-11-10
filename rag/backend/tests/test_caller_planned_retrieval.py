@@ -80,7 +80,6 @@ def _reasoning_settings() -> Settings:
     return Settings(
         oci_compartment_id="ocid1.compartment.oc1..example",
         rag_screen_linking_enabled=True,
-        rag_auto_field_filter_enabled=True,
         # 回答のモデルが画像を読めても、回答を作らない検索では根拠の画像を切り出さない（#3444）。
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="vlm", display_name="VLM", vision_enabled=True)

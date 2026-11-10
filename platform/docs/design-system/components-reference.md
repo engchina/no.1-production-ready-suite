@@ -3405,6 +3405,8 @@ import { ResultTable, toast } from "@production-ready/ui";
 ```ts
 export interface ResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
 export interface ResultTableProps {
+  mode?: "data" | "answer";                    // 既定 data。answer = 回答の本文の表（全行・全文を折り返し、シートなし・CSV あり。#4812）
+  renderCell?: (value: unknown, rowIndex: number, columnIndex: number) => React.ReactNode | undefined;  // undefined は既定のセル
   columns: readonly ResultTableColumn[];
   rows: readonly (readonly unknown[])[];       // 取得した行（列の順）。NULL は null
   truncated?: boolean;                         // 上限（行数・応答の大きさ）で打ち切った
@@ -3775,7 +3777,11 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 | `renderText` | `(text: string) => ReactNode` | `MarkdownText` | 表以外の部分の描き方 |
 | `splitOptions` | `SplitMarkdownTablesOptions` | — | `{ headerlessRows: true }` で区切りの行の無い `\| A \| B \|` の行の並び（2 行以上）も表にする。文書の表から切り出した本文用で、列の名前は番号（RAG） |
 | `labels` | `AnswerBodyLabels` | `DEFAULT_ANSWER_BODY_LABELS` | `tableName(number)`（表が 1 つなら `number` は null）・`table(name)`（その表の `ResultTable` の文言） |
+| `tableMode` | `"data" \| "answer"` | `data` | 表の `ResultTable` の `mode`。回答の本文の表は `answer`（全行・全文を折り返す。RAG。#4812） |
+| `renderTableCell` | `(cell: AnswerBodyTableCell) => ReactNode \| undefined` | — | 表のセルの描き方（`value`・`rowIndex`・`columnIndex`・`table.number`・`table.columns`）。RAG は出典の列の `[1][2]` を `AnswerSourceMarks` にする |
 | `className` / `testId` | `string` | — | 外側の `div`。表は `{testId}-table-{番号}` |
+
+回答の表の出典の列（#4812）: `AnswerSourceMarks`（`marks`: `key`・`label`（「[1]」）・`targetId`・`ariaLabel`）は印ごとのリンクで、押すと `targetId` の根拠の行へ移ってフォーカスする（当たり判定 24px、タッチ端末 44px）。移り先は `AnswerSections` の根拠の行で、`AnswerCitationRef` の `marker`（行の前の「[1]」）と `anchorId`（押せる行はボタン、押せない行は文字の要素の id）で付ける。
 
 ---
 

@@ -74,14 +74,12 @@ from app.rag.chat_attachments import attach_to_conversation, delete_conversation
 from app.rag.chat_question_token import (
     context_digest,
     issue_question_token,
+    read_history_intent,
     read_history_rewrite_elapsed,
     read_question_context,
-    read_rule_selection_answers,
-    read_rule_selection_elapsed,
 )
-from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
-from app.rag.history_question import HistoryConfirmation
+from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
     ChatTurn,
@@ -101,11 +99,8 @@ from app.rag.run_history import RunRecorder
 from app.rag.saved_evidence import readable_document_ids, visible_citations
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
-    clarification_document_ids,
-    clarification_record,
     find_approved_faq,
     load_runtime_knowledge_payload,
-    resolve_clarification,
 )
 from app.rag.signed_url import SignedUrlUnavailableError
 from app.rag.stored_answer import (
@@ -135,7 +130,6 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
-from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.security.dependencies import current_principal
 from app.security.user_names import display_names_by_user_hash
 
@@ -769,12 +763,15 @@ async def prepare_chat_question(
         question = checked.sanitized_text
         selected_facts: tuple[HistoryConfirmation, ...] = ()
         rewrite_elapsed: float | None = None
-        if history and settings.rag_history_rewrite_enabled:
+        history_intent: HistoryIntent = "search"
+        # 履歴が無い 1 回目も、同じ 1 回の呼び出しで質問を整え、検索が要るかを分ける（#4787）。
+        if settings.rag_history_rewrite_enabled:
             pipeline = RagPipeline(settings=settings, guardrails=guardrails)
             rewrite_started = perf_counter()
             question = await pipeline._safe_rewritten_query(question, history) or question
             rewrite_elapsed = perf_counter() - rewrite_started
             selected_facts = pipeline._selected_history_facts
+            history_intent = pipeline._history_intent
         if confirmed_facts is not None:
             confirmed_facts.extend(selected_facts)
         # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
@@ -787,6 +784,7 @@ async def prepare_chat_question(
                 question,
                 confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
                 history_rewrite_elapsed_seconds=rewrite_elapsed,
+                history_intent=history_intent,
             )
         except SignedUrlUnavailableError:
             return question, None
@@ -851,23 +849,19 @@ async def _prepare_chat_turn(
                 }
             )
     scope: AnswerScope | None = None
-    filters: dict[str, str] = {}
     conditions: dict[str, str] = {}
     # 会話に残す「回答前に確認した内容」（#1839）。答え・飛ばしたことを、確認事項と一緒に USER の
     # メッセージに保存する（選択肢の名前は答えた時点のもの）。
     clarification_log: dict[str, object] | None = None
     skipped_rule_id = request.clarification_skipped_rule_id
-    if request.clarification is None and skipped_rule_id:
-        if skipped_rule_id.startswith(GUIDE_CLARIFICATION_PREFIX):
-            clarification_log = guide_clarification_record(
-                await _published_guides(oracle, search_answer_profile_id), skipped_rule_id, None
-            )
-        else:
-            clarification_log = clarification_record(
-                await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
-                skipped_rule_id,
-                None,
-            )
+    if (
+        request.clarification is None
+        and skipped_rule_id
+        and skipped_rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)
+    ):
+        clarification_log = guide_clarification_record(
+            await _published_guides(oracle, search_answer_profile_id), skipped_rule_id, None
+        )
     if request.clarification is not None and request.clarification.rule_id.startswith(
         GUIDE_CLARIFICATION_PREFIX
     ):
@@ -888,7 +882,7 @@ async def _prepare_chat_turn(
                 ),
             )
         conditions, context = guide_answer
-        scope = AnswerScope(context=context, search_terms=(), label="")
+        scope = AnswerScope(context=context)
         clarification_log = guide_clarification_record(
             guides,
             request.clarification.rule_id,
@@ -896,27 +890,10 @@ async def _prepare_chat_turn(
             request.clarification.other_text,
         )
     elif request.clarification is not None:
-        payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
-        resolved = resolve_clarification(
-            payload,
-            request.clarification,
-            await current_section_pages(
-                oracle, clarification_document_ids(payload, request.clarification)
-            ),
-        )
-        if resolved is None:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "選んだ確認の答えが見つかりません。検索・回答プロファイルのルールが変わった可能性が"
-                    "あります。もう一度送信して選び直してください。"
-                ),
-            )
-        scope, page_ranges = resolved
-        if page_ranges:
-            filters["page_ranges"] = page_ranges
-        clarification_log = clarification_record(
-            payload, request.clarification.rule_id, request.clarification
+        # 確認は業務ガイドの条件だけ。ほかの id の答えは引き直せない。
+        raise HTTPException(
+            status_code=422,
+            detail="選んだ確認の答えが見つかりません。もう一度送信して選び直してください。",
         )
     inherited_facts: list[HistoryConfirmation] = []
     prepared_question, _ = (
@@ -969,7 +946,11 @@ async def _prepare_chat_turn(
         ]
     prepared_history_rewrite = (
         PreparedHistoryRewrite(
-            elapsed_seconds=prepared_rewrite_elapsed, confirmed_facts=tuple(inherited_facts)
+            elapsed_seconds=prepared_rewrite_elapsed,
+            confirmed_facts=tuple(inherited_facts),
+            intent=read_history_intent(
+                settings.app_service_token_secret, str(request.question_context_token)
+            ),
         )
         if prepared_rewrite_elapsed is not None
         else None
@@ -981,14 +962,8 @@ async def _prepare_chat_turn(
         model_id=request.model_ids[0] if request.model_ids else None,
         top_k=request.top_k,
         search_answer_profile_id=search_answer_profile_id,
-        filters=filters,
         conditions=conditions,
     )
-    if request.question_context_token:
-        base_request._rule_selection_state["prepared"] = True
-        base_request._rule_selection_state["elapsed_seconds"] = read_rule_selection_elapsed(
-            settings.app_service_token_secret, request.question_context_token
-        )
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
     prior_messages = await oracle.list_messages(conversation_id)
     (
@@ -1004,18 +979,6 @@ async def _prepare_chat_turn(
         if request.question_context_token and settings.rag_history_rewrite_enabled
         else _guide_user_context(prior_messages),
         interactive=True,
-        confirmed_rule_answers=tuple(
-            ClarificationAnswer.model_validate(value)
-            for value in read_rule_selection_answers(
-                settings.app_service_token_secret, request.question_context_token
-            )
-        )
-        if request.question_context_token
-        else (),
-        answered_rule_ids=(request.clarification.rule_id,)
-        if request.clarification is not None
-        and not request.clarification.rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)
-        else (),
     )
     guardrails = GuardrailPolicy(effective_settings)
     original_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
