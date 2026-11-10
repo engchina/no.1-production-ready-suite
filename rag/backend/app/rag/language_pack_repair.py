@@ -68,6 +68,8 @@ class LanguagePackRepairPlan:
     current_conforms: bool
     draft_conforms: bool
     draft_matches_current: bool
+    # 現在版の修復で、下書きの未公開の変更を保ったまま欠けた項目だけ補えるか(#4832)。
+    draft_changes_kept: bool
     missing_fields: list[str]
     retired_fields: list[str]
     candidate_valid: bool
@@ -191,7 +193,8 @@ def _stored_rows(
 
 def _inspect(
     connection: OracleConnectionProtocol, *, lock: bool
-) -> tuple[LanguagePackRepairPlan, LanguagePack | None]:
+) -> tuple[LanguagePackRepairPlan, LanguagePack | None, LanguagePack | None]:
+    """(判定、修復した公開版の候補、未公開の変更を保った下書きの候補) を返す。"""
     from app.clients.oracle import _fetch_one, _json_loads
 
     state_row, release_row = _stored_rows(connection, lock=lock)
@@ -221,6 +224,13 @@ def _inspect(
     ingest_unchanged = pack is not None and pack.ingest_hash == release_row["ingest_hash"]
     # 廃止した項目だけの違いは未公開の変更ではない。
     draft_matches = _without_retired(draft) == _without_retired(effective)
+    # 現在版の修復で下書きに未公開の変更があるときは、下書きの値を保ち、欠けた項目だけ新しい公開版の
+    # 値で補う(#4832。置き換えると未公開の変更が消え、止めると製品の手段で復旧できない)。
+    draft_pack = (
+        _candidate(draft, fill_from=pack.to_dict())[0]
+        if target == REPAIR_TARGET_CURRENT and pack is not None and not draft_matches
+        else None
+    )
 
     blockers: list[str] = []
     if target == REPAIR_TARGET_DRAFT:
@@ -239,8 +249,8 @@ def _inspect(
             blockers.append(INGEST_HASH_CHANGED)
         if active_jobs:
             blockers.append(ACTIVE_INGESTION_JOBS)
-        if not draft_matches:
-            # 適用は下書きを新しい版の内容に置き換えるので、未公開の変更を黙って消さない。
+        if not draft_matches and draft_pack is None:
+            # 下書きを補えないときは、新しい版の内容に置き換えて未公開の変更を黙って消さない。
             blockers.append(DRAFT_DIFFERS_FROM_CURRENT)
     plan = LanguagePackRepairPlan(
         repair_target=target,
@@ -250,6 +260,7 @@ def _inspect(
         current_conforms=current_conforms,
         draft_conforms=draft_conforms,
         draft_matches_current=draft_matches,
+        draft_changes_kept=draft_pack is not None,
         missing_fields=missing,
         retired_fields=retired,
         candidate_valid=pack is not None,
@@ -257,7 +268,7 @@ def _inspect(
         active_ingestion_jobs=active_jobs,
         blockers=blockers,
     )
-    return plan, pack
+    return plan, pack, draft_pack
 
 
 def _snapshot_issues(effective: Mapping[str, Any]) -> list[str]:
@@ -380,13 +391,14 @@ async def apply_language_pack_repair(
 ) -> LanguagePackRepairResult:
     """dry-run で確かめた現在版と下書きの revision のままなら、修復の対象を書き換える。
 
-    現在版が不適合なら新しい公開版へ切り替え、下書きだけが不適合なら下書きだけを書き換える。
+    現在版が不適合なら新しい公開版へ切り替え(下書きの未公開の変更は保ち、欠けた項目だけ補う)、
+    下書きだけが不適合なら下書きだけを書き換える。
     """
 
     def operation(connection: OracleConnectionProtocol) -> LanguagePackRepairResult:
         from app.clients.oracle import _execute, _json_bind, _json_input_sizes
 
-        plan, pack = _inspect(connection, lock=True)
+        plan, pack, draft_pack = _inspect(connection, lock=True)
         blockers = list(plan.blockers)
         if plan.current_release_id != expected_current_id:
             blockers.append(EXPECTED_CURRENT_MISMATCH)
@@ -411,12 +423,14 @@ async def apply_language_pack_repair(
             ),
         )
         release_store._insert(connection, release)
+        # 下書きに未公開の変更があればそれを保った内容、無ければ新しい版と同じ内容にする。
+        draft_effective = release.effective if draft_pack is None else draft_pack.to_dict()
         _execute(
             connection,
             f"UPDATE {release_store.STATE_TABLE} SET current_release_id=:id, "
             "draft_revision=draft_revision+1, draft_effective_json=:effective "
             "WHERE singleton_id=1",
-            {"id": release.id, "effective": _json_bind(release.effective)},
+            {"id": release.id, "effective": _json_bind(draft_effective)},
             input_sizes=_json_input_sizes("effective"),
         )
         # commit の前に厳格な検証で読み戻す。合わなければ例外で全体を rollback する。
@@ -424,7 +438,7 @@ async def apply_language_pack_repair(
         if (
             state.current.id != release.id
             or state.current.effective != release.effective
-            or state.draft_effective != release.effective
+            or state.draft_effective != draft_effective
             or state.draft_revision != plan.draft_revision + 1
         ):
             raise LanguagePackSnapshotError("発行した言語資源の読み戻しの照合に失敗しました。")
