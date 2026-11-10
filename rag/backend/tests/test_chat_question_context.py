@@ -530,3 +530,34 @@ async def test_confirmation_api_keeps_unknown_and_shares_positive_choice(
     facts = read_rule_selection_answers(settings.app_service_token_secret, token)
     assert len(facts) == int(known)
     assert captured[0]["user_statements"].endswith(text)
+
+
+async def test_small_talk_suggestion_skips_clarification_and_keeps_intent(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """補完が挨拶と分けたら確認を出さず、条件の読み取りのモデルも呼ばない（#4787）。"""
+    from app.api.routes import search_answer_profile_knowledge as route
+    from app.rag.chat_question_token import read_history_intent
+    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
+
+    oracle, settings, _calls = context_setup
+
+    async def greeting(self: Any, query: str, history: Any) -> str:
+        self._history_intent = "greeting"
+        return ""
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("挨拶では条件の読み取りを呼ばない")
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+    monkeypatch.setattr(route, "recognize_rule_selections", forbidden)
+    result = await route.post_clarification_suggest(
+        "profile-a",
+        ClarificationSuggestRequest(query="合成の挨拶", conversation_id="conversation-a"),
+    )
+    assert result.data is not None
+    assert result.data.suggestion is None
+    token = result.data.question_context_token
+    assert token and read_history_intent(settings.app_service_token_secret, token) == "greeting"

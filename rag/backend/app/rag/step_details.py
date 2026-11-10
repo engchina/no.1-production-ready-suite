@@ -52,16 +52,36 @@ def pipeline_step_details(
 _CONDITION_OPERATORS = {"eq": "=", "gte": "≥", "lte": "≤"}
 
 
-def history_rewrite_details(rewritten: str, history: Iterable[Any]) -> dict[str, Any] | None:
-    """会話を踏まえた質問の書き換えの詳細（書き換えた質問・参照した会話の数）。"""
+def history_rewrite_details(
+    rewritten: str, history: Iterable[Any], *, intent: str = "search"
+) -> dict[str, Any] | None:
+    """会話を踏まえた質問の書き換えの詳細（書き換えた質問・参照した会話の数・発話の種類）。"""
+
+    from app.rag.small_talk import SMALL_TALK_REASONS
 
     turns = sum(1 for _ in history)
+    fields: list[tuple[str, object]] = [
+        ("参照した会話", f"{turns} 件の発言"),
+        ("書き換えた質問", rewritten) if rewritten else ("結果", "書き換えなし（元の質問のまま）"),
+    ]
+    reason = SMALL_TALK_REASONS.get(intent)
+    if reason is not None:
+        fields.append(("発話の種類", f"{reason}（検索の要らない発話）"))
+    return pipeline_step_details(fields=fields)
+
+
+def small_talk_details(intent: str, *, replied: bool) -> dict[str, Any] | None:
+    """検索せずに応じた工程の詳細（理由と結果）。"""
+
+    from app.rag.small_talk import SMALL_TALK_REASONS
+
+    reason = SMALL_TALK_REASONS.get(intent, intent)
     return pipeline_step_details(
         fields=[
-            ("参照した会話", f"{turns} 件の発言"),
-            ("書き換えた質問", rewritten)
-            if rewritten
-            else ("結果", "書き換えなし（元の質問のまま）"),
+            ("理由", f"{reason}のため検索しませんでした"),
+            ("結果", "根拠なしの短い応答（引用なし）")
+            if replied
+            else ("結果", "応答を作れなかったため、検索して回答します"),
         ]
     )
 

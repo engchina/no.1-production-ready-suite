@@ -1,5 +1,7 @@
 """会話履歴による質問補完の共有契約。"""
 
+from typing import Literal
+
 from pr_backend_core.chat_history import CHAT_HISTORY_UNTRUSTED_NOTE
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,13 +16,21 @@ class HistoryConfirmation(BaseModel):
     answer: str
 
 
+# 最新の発話の種類（#4787）。search 以外は検索の要らない発話で、設定が有効なら検索を飛ばす。
+type HistoryIntent = Literal["search", "greeting", "small_talk"]
+
+
 class HistoryRewrite(BaseModel):
-    """補完した質問と保存確認の参照だけを受け取る。説明や新しい事実は受理しない。"""
+    """補完した質問と保存確認の参照、発話の種類だけを受け取る。説明や新しい事実は受理しない。
+
+    ``intent`` を省いた応答は ``search``（検索する）として扱う（分からないときは検索する）。
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     question: str
     confirmed_fact_ids: list[str] = Field(default_factory=list)
+    intent: HistoryIntent = "search"
 
 
 HISTORY_REWRITE_SYSTEM_PROMPT = (
@@ -45,7 +55,12 @@ HISTORY_REWRITE_SYSTEM_PROMPT = (
     "最新の質問と同じ言語で書き、翻訳しません。補完が不要なら元の質問をそのまま使います。\n\n"
     "例: 履歴で「システム A のバックアップ」を話しているとき、「その保存期間をナレッジベースで"
     "詳しく探して」は「システム A のバックアップの保存期間を詳しく教えて」にします。\n\n"
-    "## Step 4: 質問を返す\n"
+    "## Step 4: 検索が要るかを分ける\n"
+    "intent に最新の質問の種類を入れます。挨拶・お礼・別れの言葉だけで尋ねていることが無いときは "
+    "greeting、資料を調べなくても応じられる雑談（相づち・感想・軽い世間話）だけのときは "
+    "small_talk、それ以外は search です。挨拶と質問が混ざっているとき、資料・業務・前の回答に"
+    "ついて尋ねているとき、判断に迷うときは search にします。\n\n"
+    "## Step 5: 結果を返す\n"
     "出力の question に質問の全文を入れます。複数の文を含めて構いません。"
     "回答・説明・分析・Step 番号を含めません。confirmed_fact_ids は入力の "
     "confirmed_facts にある ID のみです。"

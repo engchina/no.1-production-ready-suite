@@ -36,7 +36,14 @@ ANSWER_STEP_KIND = "answer_step"
 
 # 回答フローの外の工程のうち、種類を付けるもの（工程の名前を種類にする）。
 PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
-    {"history_rewrite", "field_filter", "query_guardrail", "answer_guardrail", "answer_record_save"}
+    {
+        "history_rewrite",
+        "small_talk_reply",
+        "field_filter",
+        "query_guardrail",
+        "answer_guardrail",
+        "answer_record_save",
+    }
 )
 
 # 工程の失敗の詳細の行（段を開いて見る。利用者向けの短い要約とコード。#2342）。
@@ -61,6 +68,7 @@ type DisplayParams = dict[str, str | int | float | bool]
 ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "文書から根拠の候補を検索する",
     "history_rewrite": "前の会話を踏まえて質問を補う",
+    "small_talk_reply": "検索せずに短く応じる",
     "attachment_evidence": "会話の添付から根拠を選ぶ",
     "field_filter": "質問から検索の絞り込み条件を読み取る",
     "answer": "質問の条件を整理して回答を作る",

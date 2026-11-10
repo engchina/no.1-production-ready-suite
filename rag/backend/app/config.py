@@ -1417,6 +1417,14 @@ class Settings(
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
     )
+    rag_small_talk_skip_enabled: bool = Field(
+        default=True,
+        description=(
+            "会話履歴による質問の書き換えが、最新の発話を挨拶・雑談と分けたとき、検索を飛ばして"
+            "根拠なしの短い応答にする(#4787)。書き換えと同じ LLM 呼び出しで分けるので、"
+            "書き換えが動く履歴のある発話だけが対象。"
+        ),
+    )
     rag_search_top_k_default: int = Field(
         default=SEARCH_TOP_K_DEFAULT,
         ge=1,
