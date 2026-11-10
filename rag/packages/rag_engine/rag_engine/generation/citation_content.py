@@ -1,21 +1,17 @@
 """引用した原文が構造的な区切り線・書式だけかを検査する。意味支持は判定しない。"""
 
-import html
 import re
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
 
 from rag_engine.chunking.constants import _flatten_table_html
+from rag_engine.generation.answer_table import _cell
 from rag_engine.generation.evidence_cuts import _form, _lines, _markdown_tables
+from rag_engine.html_text import html_table_text
 from rag_engine.retrieval.table_header_lines import span_header_lines
 
 _TABLE_TAG = re.compile(r"</?(?:table|thead|tbody|tfoot|tr|t[dh]|caption|colgroup)\b[^<>]*>", re.IGNORECASE)
-_TABLE_WRAPPER = re.compile(r"</?(?:table|thead|tbody|tfoot|caption|colgroup)\b[^<>]*>|<col\b[^<>]*>", re.IGNORECASE)
-_TABLE_ROW = re.compile(r"<tr\b[^<>]*>(.*?)</tr\s*>", re.IGNORECASE | re.DOTALL)
-_TABLE_CELL = re.compile(r"<t[dh]\b([^<>]*)>(.*?)</t[dh]\s*>", re.IGNORECASE | re.DOTALL)
-_COL_SPAN = re.compile(r"\bcolspan\s*=\s*[\"']?(\d+)", re.IGNORECASE)
-_INLINE_TAG = re.compile(r"<[^<>]{1,40}>")
 # colspan は文書由来の値なので、空のセルを足す数に上限を置く。
 _MAX_COL_SPAN = 20
 _HTML_HEADER_ROW = re.compile(r"\s*<tr\b[^<>]*>(?:\s*<th\b.*?</th\s*>)+\s*</tr\s*>\s*", re.IGNORECASE | re.DOTALL)
@@ -54,16 +50,6 @@ def structure_only_quote(text: str, span: Mapping[str, Any]) -> bool:
     return all(_is_section_heading(line, section_path) or _is_table_header(line, span_text, recorded) for line in lines)
 
 
-def _table_row(match: re.Match[str]) -> str:
-    cells: list[str] = []
-    for attributes, body in _TABLE_CELL.findall(match.group(1)):
-        span = _COL_SPAN.search(attributes)
-        # ponytail: rowspan は列をそろえない。行だけを引用すると結合元のセルが手元に無い。
-        cells += [" ".join(html.unescape(_INLINE_TAG.sub(" ", body)).split())]
-        cells += [""] * (min(int(span.group(1)), _MAX_COL_SPAN) - 1 if span else 0)
-    return f"| {' | '.join(cells)} |\n" if cells else ""
-
-
 def table_html_as_rows(text: str) -> str:
     """回答の本文に出す表の HTML を、タグの無い ``| A | B |`` の行にする（#4717）。
 
@@ -71,7 +57,8 @@ def table_html_as_rows(text: str) -> str:
     """
     if not _TABLE_TAG.search(text):
         return text
-    rows = _TABLE_WRAPPER.sub("", _TABLE_ROW.sub(_table_row, text))
-    if _TABLE_TAG.search(rows):
+    parsed = html_table_text(text, max_colspan=_MAX_COL_SPAN)
+    if not parsed.complete_rows:
         return _flatten_table_html(text)
+    rows = "".join("| " + " | ".join(_cell(cell) for cell in part) + " |" if isinstance(part, tuple) else part for part in parsed.parts)
     return re.sub(r"\n\s*\n", "\n", rows).strip()

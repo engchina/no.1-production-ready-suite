@@ -16,6 +16,8 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import parse_roman, text_patterns
 
+from rag_engine.html_text import html_table_text
+
 CHUNK_SCHEMA_VERSION = 3
 CHUNK_STRATEGY = "small_to_big_parent_child"
 CHUNKS_DIRECTORY = "chunks"
@@ -311,8 +313,8 @@ def _metadata_classification(metadata: dict[str, Any]) -> Any:
     """構築中（top-level）でも投影後（document 配下）でも分類を返す。"""
     if metadata.get("classification") is not None:
         return metadata.get("classification")
-    document = metadata.get("document") if isinstance(metadata.get("document"), dict) else {}
-    return document.get("classification")
+    document = metadata.get("document")
+    return document.get("classification") if isinstance(document, dict) else None
 
 
 # 空白除去後のフッター全体がページ番号だけの表記（3 / - 3 - / 3ページ / 3頁 / P.3 / Page 3 / 3/20 / ii / 三頁）。
@@ -397,9 +399,7 @@ def _flatten_table_html(text: str) -> str:
     """表の HTML を、セルを ` | `、行を ` / ` で区切った平文にします。tag の途中で切れる要約を作らないため。"""
     if "<" not in text:
         return text
-    flat = re.sub(r"</t[dh]>", " | ", text, flags=re.I)
-    flat = re.sub(r"</tr>", " / ", flat, flags=re.I)
-    flat = re.sub(r"<[^<>]{1,40}>", " ", flat)
+    flat = html_table_text(text).plain
     flat = _drop_cell_separators_before_row_end(flat)
     return re.sub(r"\s+", " ", flat).strip(" |/")
 

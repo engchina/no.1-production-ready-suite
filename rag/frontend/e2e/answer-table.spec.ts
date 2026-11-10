@@ -91,7 +91,7 @@ function citation(document: string, file: string, page: number, lines: number[])
   };
 }
 
-async function ask(page: Page) {
+async function ask(page: Page, answerText = ANSWER) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -120,7 +120,7 @@ async function ask(page: Page) {
             },
           },
         })}\n\n`,
-        `event: delta\ndata: ${JSON.stringify({ text: ANSWER })}\n\n`,
+        `event: delta\ndata: ${JSON.stringify({ text: answerText })}\n\n`,
         `event: citations\ndata: ${JSON.stringify([
           citation("doc-a", "文書 A.pdf", 3, [1, 3, 4, 5]),
           citation("doc-b", "文書 B.pdf", 5, [2]),
@@ -141,6 +141,28 @@ async function ask(page: Page) {
 }
 
 test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@responsive" }, () => {
+  test("HTML 表の引用のパイプとバックスラッシュを値のまま 2 列で表示する", async ({ page }, testInfo) => {
+    const answer = await ask(page, [
+      "資料により確認できた事項", "", "・合成の表題",
+      "| A\\|B | 10 |", "| C\\\\|D\\ | 20 |", "根拠：文書 A.pdf p.3",
+    ].join("\n"));
+    const table = answer.getByRole("table");
+    await expect(table).toHaveCount(1);
+    await expect(table.locator("thead th")).toHaveCount(2);
+    await expect(table.getByRole("cell", { name: "A|B", exact: true })).toBeVisible();
+    await expect(table.getByRole("cell", { name: "C\\|D\\", exact: true })).toBeVisible();
+    await expect(answer).toContainText("合成の表題");
+    expect(await answer.innerText()).not.toContain("<span");
+    await answer.getByRole("button", { name: "すべての行を見る" }).click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("cell", { name: "A|B", exact: true })).toBeVisible();
+    await expect(sheet.getByRole("cell", { name: "C\\|D\\", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("html-citation-cells.png") });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expectNoPageOverflow(page);
+  });
+
   test("冒頭の表・項目・結論の説明の表を結果の表で描き、表は冒頭に 1 回だけ出す", async ({ page }, testInfo) => {
     const answer = await ask(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-table-${testInfo.project.name}.png`), fullPage: true });

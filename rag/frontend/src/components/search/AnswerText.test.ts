@@ -22,6 +22,14 @@ function expectRenderedTable(html: string, cell = "値 1") {
 }
 
 describe("AnswerText の表（issue 4734）", () => {
+  it("HTML 引用の表示用行は、エスケープしたパイプとバックスラッシュを元の値として読む", () => {
+    const html = render("資料により確認できた事項\n\n・合成の表題\n| A\\|B | 10 |\n| C\\\\|D\\ | 20 |\n根拠：文書 A.pdf p.3");
+    expectRenderedTable(html, "A|B");
+    expect(html).toContain("C\\|D\\");
+    expect((html.match(/<th\b/g) ?? [])).toHaveLength(2);
+    expect(html).toContain("合成の表題");
+  });
+
   it("節に分けない本文の表を描く", () => {
     expectRenderedTable(render(`前の文です。\n\n${TABLE}\n\n後の文です。`));
   });
