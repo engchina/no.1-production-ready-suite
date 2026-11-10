@@ -1686,7 +1686,7 @@ def render_answer(
             *(title + "\n\n" + "\n".join(content) for title, content in sections),
         ]
     )
-    text = "\n\n".join(part for part in (summary.strip(), *tables, body) if part)
+    text = "\n\n".join(part for part in (table_html_as_rows(summary.strip()), *tables, body) if part)
     return RenderedAnswer(text, [citation_line_ref(entries) for entries in citation_entries])
 
 
