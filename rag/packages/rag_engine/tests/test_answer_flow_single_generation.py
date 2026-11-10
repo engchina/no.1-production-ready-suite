@@ -135,6 +135,125 @@ def test_a_rejected_part_gets_no_line_added_by_the_program() -> None:
     assert answer_labels().gaps_section not in response.answer_text
     assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["parts"][0]["status"] == "missing"
     assert response.envelope["outcome"] == "conditional"
+    assert "保存年数は5年です。" not in response.answer_text
+
+
+@pytest.mark.parametrize("selection", [[], None, [39]])
+def test_single_question_keeps_a_conclusion_when_summary_selection_is_empty(selection: Any) -> None:
+    question = "項目Aの保存年数を教えてください。"
+    result = "保存年数は5年です。"
+
+    def output(units: dict[str, str]) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "answer_parts": [_answer(_ids(question)[0], "保存年数", units[ROW], "原文の年数を読む。", result)],
+            "confidence": "high",
+        }
+        if selection is not None:
+            value["summary_part_indexes"] = selection
+        return value
+
+    response, calls = _run(
+        question,
+        context(record(0, ROW, "合成の資料", source="synthetic.md")),
+        output,
+    )
+    assert calls == ["GroundedDraftWire"]
+    assert response.generation_trace["llm_calls"] == 1
+    assert response.answer_text.startswith(result)
+    assert response.envelope["outcome"] == "answered"
+
+
+def test_summary_fallback_prefers_a_conclusion_over_source_and_table() -> None:
+    question = "項目Aの保存年数を教えてください。"
+    request_id = _ids(question)[0]
+    result = "保存年数は5年です。"
+    response, calls = _run(
+        question,
+        context(record(0, ROW, "合成の資料", source="synthetic.md")),
+        lambda units: {
+            "answer_parts": [
+                _source(request_id, "原文", units[ROW]),
+                {
+                    "request_id": request_id,
+                    "requirement": "表",
+                    "answer": {
+                        "kind": "table",
+                        "title": "合成の表",
+                        "columns": ["項目", "値"],
+                        "rows": [{"cells": ["項目A", "5年"], "basis": {"unit_ids": [units[ROW]]}}],
+                    },
+                },
+                _answer(request_id, "保存年数", units[ROW], "原文の年数を読む。", result),
+            ],
+            "summary_part_indexes": [],
+            "confidence": "high",
+        },
+    )
+    assert calls == ["GroundedDraftWire"]
+    assert response.answer_text.startswith(result)
+    assert "合成の表" in response.answer_text
+
+
+def test_heading_only_quote_is_not_promoted_to_a_fallback_conclusion() -> None:
+    question = "項目Aの保存年数を教えてください。"
+    heading = "# 合成の見出し"
+    response, calls = _run(
+        question,
+        context(record(0, heading + "\n" + ROW, "合成の資料", source="synthetic.md")),
+        lambda units: {
+            "answer_parts": [_source(_ids(question)[0], "要点", units[heading])],
+            "summary_part_indexes": [],
+            "confidence": "low",
+        },
+    )
+    assert calls == ["GroundedDraftWire"]
+    assert not response.generation_trace["rounds"][0]["draft"]["summary"]
+
+
+def test_table_only_answer_keeps_its_title_without_a_second_summary() -> None:
+    question = "項目Aの保存年数を表で示してください。"
+    title = "合成の表"
+    response, calls = _run(
+        question,
+        context(record(0, ROW, "合成の資料", source="synthetic.md")),
+        lambda units: {
+            "answer_parts": [
+                {
+                    "request_id": _ids(question)[0],
+                    "requirement": "表",
+                    "answer": {
+                        "kind": "table",
+                        "title": title,
+                        "columns": ["項目", "値"],
+                        "rows": [{"cells": ["項目A", "5年"], "basis": {"unit_ids": [units[ROW]]}}],
+                    },
+                }
+            ],
+            "summary_part_indexes": [],
+            "confidence": "high",
+        },
+    )
+    assert calls == ["GroundedDraftWire"]
+    assert response.answer_text.startswith(title)
+    assert not response.generation_trace["rounds"][0]["draft"]["summary"]
+
+
+def test_summary_fallback_preserves_a_legitimate_gap_for_another_part() -> None:
+    question = "項目Aの保存年数と例外条件を教えてください。"
+    gap = "例外の条件は資料から確認できません。"
+    response, calls = _run(
+        question,
+        context(record(0, ROW, "合成の資料", source="synthetic.md")),
+        lambda units: {
+            "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW]), _gap(_ids(question)[0], "例外条件", gap)],
+            "summary_part_indexes": [],
+            "confidence": "high",
+        },
+    )
+    assert calls == ["GroundedDraftWire"]
+    assert response.answer_text.startswith(ROW)
+    assert gap in response.answer_text
+    assert response.envelope["outcome"] == "conditional"
 
 
 def test_only_the_gap_written_by_the_model_is_shown_as_unconfirmed() -> None:

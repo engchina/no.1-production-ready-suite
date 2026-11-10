@@ -2807,15 +2807,24 @@ def run_round(
         if ref:
             entry["evidence_ref"] = ref
     applications = check_applications(draft.applications, {entry.draft_index: entry for entry in checked if entry.draft_index is not None})
-    from rag_engine.generation.answer_parts import check_answer_parts
+    from rag_engine.generation.answer_parts import check_answer_parts, with_summary_fallback
 
-    # 要求ごとの要点の対応は診断の記録にだけ残す。不足の行は足さない（モデルが gap と書いたものだけを出す。#4714）。
+    # 要点の構造を診断へ記録し、摘要の候補にも使う。不足の行は足さない（モデルが gap と書いたものだけを出す。#4714）。
     timing["answer_parts"] = check_answer_parts(
         draft,
         {entry.draft_index: entry for entry in checked if entry.draft_index is not None},
         applications,
         {unit["id"] for unit in answer_requirements(question) if unit.get("kind") != "context"},
     )
+    draft, fallback_part = with_summary_fallback(
+        draft,
+        {entry.draft_index: entry for entry in checked if entry.draft_index is not None},
+        applications,
+        timing["answer_parts"],
+    )
+    if fallback_part is not None:
+        timing["summary_fallback_part"] = fallback_part
+        citation_trace["final_draft"] = draft.model_dump(mode="json", exclude_unset=True)
     return Round(
         draft.summary,
         draft,
