@@ -1325,11 +1325,11 @@ def caller_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
 
 
 # Agent 主体の取得を許さない接続（#2676）の根拠の取得で、モデルに見せず、渡されても呼び先へ送らない
-# 引数。planning と追跡 ID は実行環境だけが決め、queries・skip_clarification は planning=caller の
+# 引数。planning と追跡 ID は実行環境だけが決め、queries は planning=caller の
 # ときだけ効く（送らなければ RAG の既定の rag が検索文を計画する）。schema に無い追加の項目として
 # 引数の誤りにすると、caller の手順を書いたスキルの Run が引数の誤りの上限で止まりうるので、
 # 誤りにせずに外す。
-RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries", "skip_clarification")
+RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries")
 
 
 def rag_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
