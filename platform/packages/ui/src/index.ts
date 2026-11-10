@@ -708,7 +708,6 @@ export {
   type ResultFullResultLink,
   type ResultTableColumn,
   type ResultTableLabels,
-  type ResultTableMode,
   type ResultTableProps,
   // 以前の名前（#1154。後方互換の別名。#1178）
   ChatResultTable,

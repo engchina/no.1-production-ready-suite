@@ -245,38 +245,10 @@ describe("ResultTable", () => {
   });
 });
 
-describe("ResultTable の回答の表のモード（#4812）", () => {
+describe("ResultTable のセルの省略と描き方（#4812・#4822）", () => {
   const long = "長い値の文章です。".repeat(20);
 
-  it("answer は全行・全文を折り返して出し、すべての行のシートを出さず、CSV は残す", () => {
-    act(() =>
-      root.render(
-        <ResultTable
-          mode="answer"
-          columns={[{ name: "項目" }, { name: "説明" }]}
-          rows={Array.from({ length: 60 }, (_, index) => [`項目 ${index + 1}`, long])}
-          testId="t"
-        />
-      )
-    );
-    expect($('[data-testid="t-view-all"]')).toBeNull();
-    expect($('[data-testid="t-sheet"]')).toBeNull();
-    expect($('[data-testid="t-preview-note"]')).toBeNull();
-    expect($('[data-testid="t-csv"]')).not.toBeNull();
-    // 先頭のプレビューの行数で切らない。セルは省略（truncate・line-clamp）せず全文を出す。
-    expect(document.querySelectorAll('[data-testid="t-table"] tbody tr')).toHaveLength(60);
-    const cell = document.querySelector<HTMLElement>('[data-testid="t-table"] tbody td:nth-child(2) span')!;
-    expect(cell.textContent).toBe(long);
-    expect(cell.className).not.toMatch(/truncate|line-clamp/);
-    expect(cell.className).toContain("whitespace-pre-wrap");
-    expect(cell.getAttribute("title")).toBeNull();
-    // 縦の高さで切らない（表の中の縦スクロールにしない）。横は枠の中でスクロールできる名前つきの領域。
-    const scroll = $('[data-testid="t-scroll"]')!;
-    expect(scroll.style.maxHeight).toBe("");
-    expect(scroll.getAttribute("role")).toBe("region");
-  });
-
-  it("data（既定）は今までどおり先頭のプレビューで長い値を 1 行で省略し、すべての行のシートを出す", () => {
+  it("先頭のプレビューは長い値を 1 行で省略し、すべての行のシートを出す（表示は 1 つだけで、全文を折り返すモードは無い）", () => {
     act(() => root.render(<ResultTable columns={[{ name: "項目" }, { name: "説明" }]} rows={[["項目 1", long]]} testId="t" />));
     expect($('[data-testid="t-view-all"]')).not.toBeNull();
     const cell = document.querySelector<HTMLElement>('[data-testid="t-table"] tbody td:nth-child(2) span')!;
@@ -284,12 +256,21 @@ describe("ResultTable の回答の表のモード（#4812）", () => {
     expect(cell.getAttribute("title")).toBe(long);
   });
 
+  it("全行の表は、短い値を折り返さず、短くない値に最小幅を持たせる（狭い画面で列が潰れない。#4822）", () => {
+    act(() => root.render(<ResultTable columns={[{ name: "a" }, { name: "b" }]} rows={[["短い値", "短くない値の文章です"]]} testId="t" />));
+    act(() => $('[data-testid="t-view-all"]')!.click());
+    const cells = document.querySelectorAll<HTMLElement>('[data-testid="t-all-table"] tbody td span');
+    expect(cells[0].className).toContain("whitespace-pre");
+    expect(cells[0].className).not.toContain("whitespace-pre-wrap");
+    expect(cells[1].className).toContain("whitespace-pre-wrap");
+    expect(cells[1].className).toContain("min-w-[8rem]");
+  });
+
   it("renderCell が返したセルはその描き方、undefined は既定の描き方にし、CSV は値のまま", () => {
     let csv = "";
     act(() =>
       root.render(
         <ResultTable
-          mode="answer"
           columns={[{ name: "項目" }, { name: "印" }]}
           rows={[["A", "[1]"]]}
           renderCell={(value, _row, column) => (column === 1 ? <b data-testid="custom">{String(value)}</b> : undefined)}

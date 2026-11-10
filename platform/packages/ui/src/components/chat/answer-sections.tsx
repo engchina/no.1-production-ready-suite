@@ -62,15 +62,16 @@ export interface AnswerSourceMark {
   key: string;
   /** 見える印（例「[1]」）。 */
   label: string;
-  /** 移り先の根拠の行の id（`AnswerCitationRef` の `anchorId`）。無ければ印を文字だけで出す。 */
+  /** 対応する根拠の行の id（`AnswerCitationRef` の `anchorId`）。無ければ印を文字だけで出す。 */
   targetId?: string;
-  /** 読み上げの名前（例「[1] の根拠へ移動」。見える印を含める）。 */
+  /** 読み上げの名前（例「[1] の原文を開く」。見える印を含める）。 */
   ariaLabel?: string;
 }
 
 /**
- * 回答の表の出典の列の印（#4812）。印ごとのリンクで、押すと表の下の対応する根拠の行へ移り、その行にフォーカスを
- * 移す（行がボタンなら Enter で原文を開ける）。移り先が無い印は文字だけにする。
+ * 回答の表の出典の列の印（#4812）。印ごとのリンクで、押すと表の下の対応する根拠の行の原文を開く（行がボタンのとき。
+ * 1 回の操作で原文に届き、すべての行のシートの中の印でも同じに動く。#4822）。行が押せないときは、その行へ移って
+ * フォーカスを移す。対応する行が無い印は文字だけにする。
  */
 export function AnswerSourceMarks({ marks }: { marks: readonly AnswerSourceMark[] }) {
   return (
@@ -96,6 +97,8 @@ export function AnswerSourceMarks({ marks }: { marks: readonly AnswerSourceMark[
               const target = document.getElementById(targetId);
               if (!target) return;
               event.preventDefault();
+              // 押せる根拠の行（原文を開くボタン）なら、行へ移らずにそのまま原文を開く（#4822）。
+              if (target instanceof HTMLButtonElement) return target.click();
               const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
               target.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
               target.focus({ preventScroll: true });
