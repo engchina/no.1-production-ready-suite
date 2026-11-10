@@ -268,6 +268,7 @@ def load_approved_faq_excel_rows(path: str | Path) -> list[ApprovedFaqImportRow]
 
     question_column = columns["QUESTION"]
     answer_column = columns["ANSWER"]
+    negative_column = columns.get("NEGATIVE_QUESTIONS")
     rows: list[ApprovedFaqImportRow] = []
     for index, row in frame.iterrows():
         question_value = "" if pd.isna(row.get(question_column)) else row.get(question_column)
@@ -278,9 +279,16 @@ def load_approved_faq_excel_rows(path: str | Path) -> list[ApprovedFaqImportRow]
             continue
         if not question or not approved_answer:
             continue
+        negative_value = row.get(negative_column) if negative_column is not None else None
+        negatives = (
+            ()
+            if negative_value is None or pd.isna(negative_value)
+            else normalize_approved_faq_negative_questions(str(negative_value).splitlines(), (question,))
+        )
         rows.append(
             ApprovedFaqImportRow(
                 question=question,
+                negative_questions=negatives,
                 approved_answer=approved_answer,
                 source_file=file_path.name,
                 sheet=str(sheet_name),

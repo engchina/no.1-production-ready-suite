@@ -372,8 +372,8 @@ class ApprovedFaqTests(unittest.TestCase):
             workbook = Workbook()
             sheet = workbook.active
             sheet.title = "FAQ"
-            sheet.append(["QUESTION", "ANSWER", "NOTE"])
-            sheet.append(["質問1", "回答1", "memo"])
+            sheet.append(["QUESTION", "ANSWER", "NOTE", "NEGATIVE_QUESTIONS"])
+            sheet.append(["質問1", "回答1", "memo", "対象外 A\n対象外 B"])
             sheet.append(["", "", "empty"])
             sheet.append(["質問2", "回答2", "memo"])
             workbook.save(path)
@@ -382,6 +382,8 @@ class ApprovedFaqTests(unittest.TestCase):
 
         self.assertEqual([row.question for row in rows], ["質問1", "質問2"])
         self.assertEqual([row.approved_answer for row in rows], ["回答1", "回答2"])
+        self.assertEqual(rows[0].negative_questions, ("対象外 A", "対象外 B"))
+        self.assertEqual(rows[1].negative_questions, ())
         self.assertEqual(rows[0].source_file, "faq.xlsx")
         self.assertEqual(rows[0].sheet, "FAQ")
         self.assertEqual(rows[0].row, 2)

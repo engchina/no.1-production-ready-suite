@@ -1,5 +1,7 @@
 "use client";
 
+import { answerFaqDirectScore } from "@/lib/answer-diagnostics";
+
 import {
   AnswerFooter,
   DisclosureChevron,
@@ -830,7 +832,7 @@ export function SearchClient() {
                       page-archetypes.md §6.1）。
                     */}
                     <AnswerFooter
-                      notice={meta && phase === "done" ? meta.notice : null}
+                      notice={meta && phase === "done" && answerFaqDirectScore(meta.diagnostics?.answer, null) === null ? meta.notice : null}
                       noticeLabel={t("answer.notice.label")}
                       evidence={
                         <AnswerCitations
@@ -883,7 +885,7 @@ export function SearchClient() {
               {/* 引用 / no-results */}
               {phase === "done" && awaitingClarification ? (
                 <Banner severity="info">{t("search.clarificationHint")}</Banner>
-              ) : noResults ? (
+              ) : noResults && answerFaqDirectScore(meta?.diagnostics?.answer, null) === null ? (
                 <Card>
                   <CardContent className="pt-5">
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />

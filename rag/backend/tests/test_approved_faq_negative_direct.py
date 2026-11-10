@@ -197,10 +197,9 @@ def test_chat_suggest_skips_the_choice_only_when_direct_answer_applies(
     client.put(f"{BASE}/settings", json={"direct_answer_enabled": True})
     direct = client.post(f"{BASE}/suggest", json=chat).json()["data"]
     assert direct == {"suggestions": [], "direct_answer": True}
-    # RAG 検索の画面は、候補を出して選ぶ流れのまま。
+    # RAG 検索も同じ下限で直接回答に進む。
     search = client.post(f"{BASE}/suggest", json={"query": QUESTION}).json()["data"]
-    assert search["direct_answer"] is False
-    assert len(search["suggestions"]) == 1
+    assert search == {"suggestions": [], "direct_answer": True}
 
     # 下限未満の候補は、オンでも今までどおり候補として出す。
     monkeypatch.setattr(get_settings(), "rag_approved_faq_direct_answer_min_score", 1.0)

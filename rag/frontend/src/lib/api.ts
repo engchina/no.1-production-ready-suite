@@ -4751,7 +4751,7 @@ export interface ApprovedFaqMutationData extends ApprovedFaqListData {
 
 export interface ApprovedFaqImportPreviewData {
   total: number;
-  rows: { question: string; answer: string; row: number }[];
+  rows: { question: string; answer: string; row: number; negative_questions?: string[] }[];
 }
 
 /** 文書の章節（章節ナビゲーション。#713）。並び順 + 階層（1〜6）で木を表す。 */

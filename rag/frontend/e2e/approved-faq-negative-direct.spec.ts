@@ -123,3 +123,14 @@ test.describe("登録済みQ&A の当てはめない質問とそのまま返す�
     await expectNoPageOverflow(page);
   });
 });
+
+
+test("Excel のプレビューに当てはめない質問を出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockFaqScopeApi(page);
+  await page.route("**/approved-faq/import/preview", (route) => route.fulfill({ json: envelope({ total: 1, rows: [{ question: "合成の質問 A", answer: "合成の回答 A", row: 2, negative_questions: [NEGATIVE] }] }) }));
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await page.getByLabel("取込む Excel ファイル").setInputFiles({ name: "synthetic.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("mocked preview") });
+  await expect(page.getByText(NEGATIVE, { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("faq-import-preview.png"), fullPage: true });
+});

@@ -1780,7 +1780,7 @@ export const ja = {
     "追加または Excel 取込で登録すると、検索時に類似問として提示されます。",
   "searchAnswerProfiles.faq.importTitle": "Excel 取込",
   "searchAnswerProfiles.faq.importHelp":
-    "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。",
+    "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。任意の NEGATIVE_QUESTIONS 列には、当てはめない質問をセル内で改行して入力できます。",
   "searchAnswerProfiles.faq.importFile": "取込む Excel ファイル",
   "searchAnswerProfiles.faq.importModeLabel": "取込モード",
   "searchAnswerProfiles.faq.importMode.INSERT": "追加（同じ質問はスキップ）",

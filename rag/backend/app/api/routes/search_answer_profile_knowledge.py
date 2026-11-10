@@ -469,7 +469,10 @@ async def preview_approved_faq_import(
             total=len(rows),
             rows=[
                 ApprovedFaqImportRowData(
-                    question=row.question, answer=row.approved_answer, row=row.row
+                    question=row.question,
+                    answer=row.approved_answer,
+                    row=row.row,
+                    negative_questions=list(row.negative_questions),
                 )
                 for row in rows[:APPROVED_FAQ_PREVIEW_ROWS]
             ],
@@ -538,8 +541,7 @@ async def suggest_search_answer_profile_approved_faq(
     suggestions = list(ranking.suggestions)
     direct_min_score = settings.rag_approved_faq_direct_answer_min_score
     if (
-        request.purpose == "chat"
-        and suggestions
+        suggestions
         and approved_faq_direct_answer_enabled(snapshot.payload)
         and is_direct_faq_match(suggestions[0], direct_min_score)
     ):

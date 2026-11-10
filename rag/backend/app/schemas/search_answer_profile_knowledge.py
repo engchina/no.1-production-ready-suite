@@ -149,6 +149,7 @@ class ApprovedFaqMutationData(ApprovedFaqListData):
 
 
 class ApprovedFaqImportRowData(BaseModel):
+    negative_questions: list[str] = Field(default_factory=list)
     question: str
     answer: str
     row: int = 0

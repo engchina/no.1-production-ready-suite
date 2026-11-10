@@ -832,3 +832,21 @@ test("旧取得件数の URL・保存値を無視し、検索・再試行に top
   expect(await page.evaluate(() => sessionStorage.getItem("production-ready-rag.workspace.v1:search.topK"))).toBeNull();
   await expectNoPageOverflow(page);
 });
+
+
+test("直接回答は候補を選ばせず登録済みQ&Aの案内を出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.route("**/approved-faq/suggest", (route) => route.fulfill(envelope({ suggestions: [], direct_answer: true })));
+  await page.route("**/api/search/stream", (route) => fulfillStream(route, sse([
+    ["metadata", { trace_id: "synthetic-direct", elapsed_ms: 5, guardrail_warnings: [], diagnostics: { answer: { answer_source: "approved_faq", approved_faq_direct: { score: 1 } } }, notice: "この回答は AI が生成したものです。" }],
+    ["delta", { text: "合成の登録回答 A" }], ["citations", []], ["done", { trace_id: "synthetic-direct" }],
+  ])));
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, /経理ビュー/);
+  await search(page, "合成の質問 A");
+  await expect(page.getByText("合成の登録回答 A", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("answer-faq-direct")).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "回答の注意書き" })).toHaveCount(0);
+  await expect(page.getByText("一致する根拠が見つかりませんでした。", { exact: true })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("faq-search-direct.png"), fullPage: true });
+});

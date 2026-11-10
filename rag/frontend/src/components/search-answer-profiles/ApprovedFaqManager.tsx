@@ -664,6 +664,7 @@ export function ApprovedFaqManager({
                 {preview.rows.map((row) => (
                   <li key={row.row} className="break-words">
                     {row.question}
+                    {row.negative_questions?.length ? <ul>{row.negative_questions.map((question) => <li key={question}>{question}</li>)}</ul> : null}
                   </li>
                 ))}
               </ul>
