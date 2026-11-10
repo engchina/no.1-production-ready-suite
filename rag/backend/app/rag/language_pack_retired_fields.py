@@ -310,8 +310,8 @@ RETIRED_4784_GROUNDING_CUE_FIELDS = frozenset(
     }
 )
 RETIRED_4784_ANSWER_LABEL_FIELDS = frozenset({"aspect_labels"})
-# 検索文に足す固定の語と、語の重なりの関連度から引く止め語。仕組み（候補別の検索文・語の重なり）は残し、
-# 語の一覧だけをやめた（#4784・Q38）。
+# 検索文に足す固定の語と、語の重なりの関連度から引く止め語。仕組み（候補別の検索文・語の
+# 重なり）は残し、語の一覧だけをやめた（#4784・Q38）。
 RETIRED_4784_EVIDENCE_CUE_FIELDS = frozenset({"alternative_query_words", "relevance_stop_terms"})
 RETIRED_4784_SECTIONS = frozenset({"inquiry_cues"})
 RETIRED_4784_FIELDS = (
