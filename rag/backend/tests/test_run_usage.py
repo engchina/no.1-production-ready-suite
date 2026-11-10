@@ -51,7 +51,7 @@ def test_usage_sums_llm_calls_without_double_counting_stages() -> None:
             record_genai_usage(span, _usage(50, 10))
         with answer_step("質問の理解"):
             _call("model-answer", _usage(100, 20, cached=40))
-        with answer_step("回答文の生成と根拠確認"):
+        with answer_step("回答文の生成と引用の確認"):
             _call("model-answer", _usage(300, 80, reasoning=30))
             # 出力の上限で未完了の送り直し（同じ工程の 2 回目の呼び出し）。
             _call("model-answer", _usage(300, 120, reasoning=50))

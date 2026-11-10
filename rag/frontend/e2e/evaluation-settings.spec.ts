@@ -16,7 +16,7 @@ for (const viewport of [
     await mockEvaluation(page, "standard");
 
     await page.goto("/settings/evaluation");
-    await expect(page.getByText(/ほかの五指標は 100%/)).toBeVisible();
+    await expect(page.getByText(/ほかの三指標は 100%/)).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "評価の基準", exact: true, level: 1 })).toBeVisible();
     // 基準は標準・厳格の 2 つだけ(#591)。
@@ -46,7 +46,7 @@ for (const viewport of [
     }
     await metrics.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("evaluation-decision-under-answer.png") });
-    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(6);
+    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(4);
     await expect(page.getByTestId("settings-evaluation-metric-required_evidence_recall")).toContainText(
       "閾値 90%"
     );
@@ -83,9 +83,12 @@ test("評価の基準は厳格を選んで閾値を表示し保存できる", as
   await strict.click();
   await expect(strict).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
-  await expect(page.getByTestId("settings-evaluation-metric-claim_support_rate")).toContainText(
+  await expect(page.getByTestId("settings-evaluation-metric-answer_correctness")).toContainText(
     "閾値 100%"
   );
+  // 削除した指標（網羅・裏付け）の欄は出さない（#4781）。
+  await expect(page.getByTestId("settings-evaluation-metric-claim_support_rate")).toHaveCount(0);
+  await expect(page.getByTestId("settings-evaluation-metric-requirement_coverage")).toHaveCount(0);
 
   const actions = page.getByRole("group", { name: "評価の基準の操作" });
   await actions.getByRole("button", { name: "保存" }).click();
@@ -164,7 +167,7 @@ async function collapseSidebar(page: Page) {
 function evaluationEnvelope(suite: string) {
   const thresholds = (strict: boolean) => ({
  required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9,
- requirement_coverage:strict?1:0.9,claim_support_rate:strict?1:0.95,response_decision_accuracy:strict?1:0.9,
+ response_decision_accuracy:strict?1:0.9,
   });
   const specs = [
     { name: "standard", thresholds: thresholds(false) },
@@ -203,9 +206,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 test("回答の品質評価だけを評価の基準で読み取れる", { tag: "@responsive" }, async ({ page }) => {
   await mockEvaluation(page, "standard");
   await page.route("**/api/settings/answer-prompts**", (route) => route.fulfill({
-    json: { data: { prompts: [], stages: FLOW_STAGES.map(stage => stage.id === "evaluation"
-      ? { ...stage, prompts: [...stage.prompts, { id: "absenceScope", content: "## Step 1: 提供範囲の未記載報告を確認する" }] }
-      : stage) }, error_messages: [], warning_messages: [] },
+    json: { data: { prompts: [], stages: FLOW_STAGES }, error_messages: [], warning_messages: [] },
   }));
   await page.goto("/settings/evaluation");
   const stage = page.getByTestId("answer-prompt-stage-evaluation");
@@ -216,11 +217,12 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await expect(page.getByTestId("answer-prompt-stage-answer_validation")).toHaveCount(0);
   await stage.locator("summary").click();
   const fields = stage.getByRole("textbox");
-  await expect(fields).toHaveCount(4);
+  // 評価の LLM 判定は正確性の 1 本だけ（#4781）。
+  await expect(fields).toHaveCount(1);
   for (const field of await fields.all()) await expect(field).not.toBeEditable();
   expect(await fields.evaluateAll((elements) => elements.map((element) => (element as HTMLTextAreaElement).value)))
-    .toEqual(["範囲の指示", "網羅性・忠実性の指示", "正確性の指示", "## Step 1: 提供範囲の未記載報告を確認する"]);
-  await expect(stage).toContainText("資料の未記載報告の全範囲判定");
+    .toEqual(["正確性の指示"]);
+  await expect(stage).toContainText("回答の正確性の判定");
   await stage.getByRole("textbox").last().scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("quality-evaluation-prompt.png") });
   await expectNoPageOverflow(page);
@@ -229,7 +231,7 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
 test("評価の基準の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
   await mockEvaluation(page, "standard");
   const { mockEditableStage } = await import("./_feature-prompt-helpers");
-  const requests = await mockEditableStage(page, "evaluation", "evaluation", "coverage");
+  const requests = await mockEditableStage(page, "evaluation", "evaluation", "correctness");
   await page.goto("/settings/evaluation");
   const stage = page.getByTestId("answer-prompt-stage-evaluation");
   await stage.locator("summary").click();
@@ -238,6 +240,6 @@ test("評価の基準の指示の編集内容を保存できる", { tag: "@respo
   await stage.getByRole("textbox").fill("## Step 1: 合成の評価指示");
   await stage.getByRole("button", { name: "プロンプトを保存" }).click();
   await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
-  expect(requests).toEqual([{ key: "evaluation.coverage", method: "PUT", content: "## Step 1: 合成の評価指示" }]);
+  expect(requests).toEqual([{ key: "evaluation.correctness", method: "PUT", content: "## Step 1: 合成の評価指示" }]);
   await expectNoHorizontalOverflow(page);
 });

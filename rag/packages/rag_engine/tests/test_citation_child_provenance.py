@@ -3,7 +3,6 @@
 同じ親（まとまり）・同じ頁に、見出し・注意の子 H と図の説明の子 F がある合成の文書で確かめる。
 """
 
-from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -74,8 +73,6 @@ class _Model:
     def __call__(self, system, prompt, settings, schema, **options):
         if issubclass(schema, generation_draft_wire_model()):
             return generated_fixture(schema, prompt, self.draft)
-        if is_audit_wire(schema):
-            return legacy_audit_result(self.audit, schema)
         return schema.model_validate(self.audit)
 
 

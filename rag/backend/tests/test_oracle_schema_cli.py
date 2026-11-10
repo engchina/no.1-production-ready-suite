@@ -148,7 +148,6 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "evaluation_source_workbooks",
         "evaluation_jobs",
         "evaluation_job_case_results",
-        "evaluation_calibration",
         "evaluation_testsets",
         "role_access",
     ]
@@ -515,7 +514,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 165
+    assert len(statements) == 166
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -613,8 +612,6 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261021_001_answer_prompt_placeholders",
         "20261021_002_document_delete_fk_indexes",
         "20261022_001_cited_evidence",
-        "20261026_001_evaluation_calibration",
-        "20261026_002_evaluation_job_calibration_kind",
         "20261027_001_raptor_prompt_consolidation",
         "20261028_001_language_pack_releases",
         "20261028_002_language_pack_artifacts",
@@ -645,6 +642,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261110_4668_language_pack_retired_evidence_tags",
         "20261110_4668_language_pack_retired_question_word_checks",
         "20261110_4749_language_pack_retired_crag_labels",
+        "20261110_4782_generation_prompt_overrides",
+        "20261110_4781_retire_evaluation_calibration",
+        "20261110_4781_retire_removed_answer_prompts",
         "20261110_4784_search_answer_profile_retired_fields",
     ]
 
@@ -777,28 +777,44 @@ def test_migration_artifact_separates_unterminated_sql_from_plsql() -> None:
     assert statements[1].endswith("END;")
 
 
-def test_oracle_schema_migration_sql_adds_evaluation_calibration() -> None:
-    """判定の校正の表と索引は無いときだけ作り、job の kind に calibration を足す（#3578）。"""
-    sql = oracle_schema.oracle_schema_migration_sql()
-    tables = sql.split("-- migration: 20261026_001_evaluation_calibration", 1)[1].split(
-        "-- migration: ", 1
-    )[0]
+def test_oracle_schema_migration_retires_evaluation_calibration_and_removed_prompts() -> None:
+    """校正の表・job・権限と、読まれなくなった指示の保存値だけを消す（#4781）。"""
+    migrations = {
+        section.name: section for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    calibration = migrations["20261110_4781_retire_evaluation_calibration"]
     for table in (
         "RAG_EVALUATION_LABEL_SETS",
         "RAG_EVALUATION_LABEL_ITEMS",
         "RAG_EVALUATION_LABELS",
         "RAG_EVALUATION_CALIBRATIONS",
     ):
-        assert f"table_name = '{table}'" in tables
-    assert "index_name = 'RAG_EVALUATION_LABELS_ANNOTATOR_IDX'" in tables
-    assert "DROP" not in tables
-    assert "DELETE FROM" not in tables
-    kind = sql.split("-- migration: 20261026_002_evaluation_job_calibration_kind", 1)[1].split(
-        "-- migration: ", 1
-    )[0]
-    assert "constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK'" in kind
-    assert "'CHECK (kind IN (''run'', ''calibration''))'" in kind
-    assert "DELETE" not in kind
+        assert f"'{table}'" in calibration.sql
+        assert table in calibration.destructive_note
+    assert (
+        "'DELETE FROM rag_evaluation_jobs WHERE kind = :1' USING 'calibration'" in calibration.sql
+    )
+    assert "USING 'rag.evaluation_calibration.manage'" in calibration.sql
+    assert "CHECK (kind IN (''run''))" in calibration.sql
+    # 品質評価の結果と回答の記録には触れない。
+    for kept in (
+        "rag_evaluation_job_case_results",
+        "rag_answer_records",
+        "rag_evaluation_testsets",
+    ):
+        assert kept not in calibration.sql.lower()
+
+    prompts = migrations["20261110_4781_retire_removed_answer_prompts"]
+    assert prompts.sql.startswith("DELETE FROM rag_answer_prompts WHERE prompt_key IN (")
+    assert prompts.sql.count("DELETE") == 1
+    # いまの工程が読むキーは消さない。
+    from app.rag.answer_prompts import STAGE_PROMPT_REFS
+
+    assert not set(oracle_schema.RETIRED_ANSWER_PROMPT_KEYS) & set(STAGE_PROMPT_REFS)
+    for key in oracle_schema.RETIRED_ANSWER_PROMPT_KEYS:
+        assert f"'{key}'" in prompts.sql
+        assert key in prompts.destructive_note
+    assert "evaluation.correctness" not in prompts.sql
 
 
 def test_fresh_base_contains_release_tables_and_all_artifact_provenance_columns() -> None:

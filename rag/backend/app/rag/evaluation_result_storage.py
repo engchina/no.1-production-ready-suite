@@ -19,7 +19,7 @@ from typing import Any
 def without_answer_diagnostics(result: Mapping[str, Any]) -> dict[str, Any]:
     """各ケースの回答の診断を外した結果を返す（比べたプロファイルの結果も。元の値は変えない）。
 
-    ケースの結果が無い結果（判定の校正など）は、外すものが無いので内容を変えない。
+    ケースの結果が無い結果は、外すものが無いので内容を変えない。
     """
     compact: dict[str, Any] = dict(result)
     case_results = result.get("case_results")

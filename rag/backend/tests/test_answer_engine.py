@@ -1194,41 +1194,10 @@ async def test_answer_record_save_failure_still_returns_answer(
 def _fake_evaluation_llm(
     system: str, prompt: str, settings: Any, schema: type, **options: Any
 ) -> Any:
-    from rag_engine.evaluation.answer_eval import (
-        AnswerCorrectnessOutput,
-        ClaimJudgement,
-        CoverageOutput,
-        StandardAnswerScope,
-    )
+    from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
 
-    if schema is AnswerCorrectnessOutput:
-        return AnswerCorrectnessOutput(verdict="correct", reason="標準回答と一致")
-    if schema is StandardAnswerScope:
-        return StandardAnswerScope.model_validate(
-            {
-                "requirements": [{"standard_answer_unit_ids": ["S1"], "requirement": "登録の手順"}],
-                "excluded_case_data": [],
-            }
-        )
-    if schema is CoverageOutput:
-        passage = json.loads(prompt)["answer_passages"][0]["id"]
-        return CoverageOutput.model_validate(
-            {
-                "coverage_checks": [
-                    {
-                        "requirement_index": 1,
-                        "reason": "手順の説明",
-                        "status": "addressed",
-                        "answer_passage_id": passage,
-                    }
-                ]
-            }
-        )
-    if schema is ClaimJudgement:
-        return ClaimJudgement(
-            reason="手順の確認の案内", claim_kind="ordinary", status="data_confirmation"
-        )
-    raise AssertionError(f"unexpected schema: {schema.__name__}")
+    assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
+    return AnswerCorrectnessOutput(verdict="correct", reason="標準回答と一致")
 
 
 async def test_saved_answer_is_evaluated_with_standard_answer(
@@ -1252,15 +1221,14 @@ async def test_saved_answer_is_evaluated_with_standard_answer(
         outcome.evaluation_input,
         "受注番号を入力し、登録ボタンを押します。",
         Settings(),
-        citations=outcome.citations,
     )
 
     assert evaluation["status"] == "completed", evaluation
-    assert evaluation["requirement_coverage"] == 1.0
+    assert evaluation["answer_correctness"] == 1.0
     # 評価の基準の指標(1 件の回答で測れるもの)と閾値で合否を付ける(#680)。
     assert evaluation["suite"] == "standard"
     metrics = {metric["name"]: metric for metric in evaluation["metrics"]}
-    assert {"claim_support_rate", "requirement_coverage", "answer_correctness"} == set(metrics)
+    assert {"answer_correctness"} == set(metrics)
     assert not {"context_recall", "mrr", "answer_keyword_hit_rate"} & set(metrics)
     assert evaluation["passed"] is all(
         metric["passed"] for metric in metrics.values() if metric["passed"] is not None
@@ -1270,25 +1238,17 @@ async def test_saved_answer_is_evaluated_with_standard_answer(
 def test_evaluation_without_standard_answer_does_not_call_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import rag_engine.evaluation.answer_eval as evaluator
+    import rag_engine.adapters.oci as engine_oci
 
     from app.rag.answer_engine import evaluate_answer_record
 
-    calls = []
+    def unexpected(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("標準回答が無ければ判定の LLM を呼ばない")
 
-    def fake(payload: Any, settings: Any, **kwargs: Any) -> dict[str, Any]:
-        calls.append(payload)
-        return {"status": "completed", "claim_checks": [], "requirement_coverage": None}
-
-    monkeypatch.setattr(evaluator, "evaluate_answer_payload", fake)
-    evaluation = evaluate_answer_record(
-        {"question": "q", "answer_text": "a"}, " ", Settings(), citations=[]
-    )
-    assert evaluation["status"] == "completed"
-    assert calls[0]["allow_without_standard"] is True
-    assert calls[0]["six_metrics"] is True
-    assert evaluation["claim_support_rate"] is None
-    assert evaluation["passed"] is None
+    monkeypatch.setattr(engine_oci, "parse_text_response", unexpected)
+    evaluation = evaluate_answer_record({"question": "q", "answer_text": "a"}, " ", Settings())
+    assert evaluation["status"] == "no_standard_answer"
+    assert "passed" not in evaluation
 
 
 class SavingQueryOracle(QueryRecordingOracle):
@@ -2775,8 +2735,6 @@ async def test_answer_diagnostics_record_profile_and_prompt_versions(
 def test_prompt_and_profile_versions_follow_content() -> None:
     from datetime import UTC, datetime
 
-    from rag_engine.knowledge.prompt_files import VLM_ANSWER_PROMPT_KEY
-
     from app.rag.answer_prompts import default_prompt
     from app.rag.answer_provenance import answer_prompt_version, search_answer_profile_revision
     from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
@@ -2784,9 +2742,9 @@ def test_prompt_and_profile_versions_follow_content() -> None:
     default = answer_prompt_version({})
     assert default.startswith("prompt-") and len(default) == len("prompt-") + 16
     # 既定と同じ内容の上書きは同じ版、内容を変えると別の版。
-    same = {VLM_ANSWER_PROMPT_KEY: default_prompt(VLM_ANSWER_PROMPT_KEY)}
+    same = {"generation.role": default_prompt("generation.role")}
     assert answer_prompt_version(same) == default
-    edited = {VLM_ANSWER_PROMPT_KEY: default_prompt(VLM_ANSWER_PROMPT_KEY) + "\n追記"}
+    edited = {"generation.role": default_prompt("generation.role") + "\n追記"}
     assert answer_prompt_version(edited) != default
 
     def view(config: SearchAnswerProfileConfig) -> Any:
@@ -3061,6 +3019,8 @@ async def test_history_rewrite_preserves_full_question_or_falls_back(
     assert llm.system_prompts == [HISTORY_REWRITE_SYSTEM_PROMPT]
     assert all(f"## Step {step}:" in HISTORY_REWRITE_SYSTEM_PROMPT for step in range(1, 5))
     assert HISTORY_REWRITE_SYSTEM_PROMPT.count(CHAT_HISTORY_UNTRUSTED_NOTE) == 1
+    # 出力の言語は最新の質問に合わせる。指示で特定の言語に固定しない（#4785）。
+    assert "日本語" not in HISTORY_REWRITE_SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize("fails", [False, True])

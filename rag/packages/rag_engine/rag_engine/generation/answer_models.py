@@ -15,7 +15,7 @@ from rag_engine.retrieval.question_planning import QuestionPlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN, RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
 
 # 回答で引用した箇所の使われ方（#2040）。confirmed は「資料により確認できた事項」・手順の節の説明（質問の条件への該当を
-# 監査で確認した。原文の条件つきを含む）で使用した箇所、reference は「参考情報」の節（降格した原文・該当が
+# 生成のモデルが確認した。原文の条件つきを含む）で使用した箇所、reference は「参考情報」の節（降格した原文・該当が
 # 未確認の説明）と「資料から確認できなかった事項」の説明で使用した箇所。画面の件数とバッジ、MCP の evidence が使う。
 ANSWER_USE_CONFIRMED = "confirmed"
 ANSWER_USE_REFERENCE = "reference"

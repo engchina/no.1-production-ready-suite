@@ -24,7 +24,6 @@ from fastapi import (
     status,
 )
 from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
-from rag_engine.evaluation.answer_eval import standard_scope_cache
 from rag_parser_core.language import current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
@@ -659,8 +658,7 @@ async def _execute_run(
         )
 
     started_manifest = await manifest()
-    # 標準回答の比較範囲は、job の 2 つの pass で同じものを使う（#3570）。
-    with standard_scope_cache(), fixed_today(as_of):
+    with fixed_today(as_of):
         started = time.monotonic()
         metrics = await EvaluationRunner().run(
             cases=request.cases,

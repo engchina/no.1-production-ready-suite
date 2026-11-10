@@ -106,7 +106,7 @@ async def test_spans_are_nested_under_the_step_that_did_the_work(
     assert set(parents("gen_ai.embeddings")) <= {"文書検索"}
     # モデルの呼び出しは、呼び出した工程の子（回答の作成）。
     chat_parents = parents("gen_ai.chat")
-    assert any(parent.startswith("回答文の生成と根拠確認") for parent in chat_parents)
+    assert any(parent.startswith("回答文の生成と引用の確認") for parent in chat_parents)
     assert "rag.answer" not in {*db_parents, *chat_parents}
 
 

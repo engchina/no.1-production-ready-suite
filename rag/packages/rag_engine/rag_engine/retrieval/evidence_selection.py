@@ -630,7 +630,7 @@ def evidence_spans(
                     "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
                     # 会話の添付から選んだ根拠（利用者が明示した入力。#3228）。要求の根拠計画の照合に掛けない。
                     "conversation_attachment": is_attachment_evidence(record),
-                    # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+                    # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にして説明する。
                     ARTICLE_UNIT_KEY: (getattr(record, "metadata", {}) or {}).get(ARTICLE_UNIT_KEY) is True,
                     # 条の目録で選んだ条の根拠（#3526）。回答は要求の計画で必ず使うか unrelated かを決める。
                     ARTICLE_CATALOG_KEY: any(entry["id"] in catalog_children for entry in child_ranges),
@@ -988,7 +988,7 @@ def evidence_packet(question: str, records: Sequence[Any], *, budget: int = EVID
 
 
 def format_evidence_packet(spans: Sequence[dict[str, Any]]) -> str:
-    """選択済みの原文を再切出しせず、計画・生成・監査へ同じIDで渡す。"""
+    """選択済みの原文を再切出しせず、生成と引用の確認へ同じIDで渡す。"""
     return "\n\n".join(
         f"Source ID: {span['source_id']}\nEvidence ID: {span['evidence_id']}\n"
         f"Document: {span['source']} / {span.get('location') or 'page ' + str(span['page'])}\n"

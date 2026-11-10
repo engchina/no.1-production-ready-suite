@@ -56,7 +56,7 @@ describe("answerStepDisplayName", () => {
     expect(answerStepDisplayName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStageName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStepDisplayName("文書検索（2回目）")).toBe("検索文から根拠の候補を集める（2 回目）");
-    expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答文を作る（1 回目）");
+    expect(answerStepDisplayName("回答文の生成と引用の確認（1回目）")).toBe("回答文を作る（1 回目）");
     // 用語・同義語と回答ルールは別の工程（設定画面のタブの名前と同じ語。#3451）。
     expect(answerStepDisplayName("用語・同義語の確認")).toBe("一致する用語の別名を検索文に加える");
     expect(answerStepDisplayName("回答ルールの確認")).toBe("確認と回答に使うルールを選ぶ");
