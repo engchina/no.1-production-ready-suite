@@ -21,6 +21,7 @@
   - #3244 より前に system_admin が送った質問は消さず、`sent_by_owner=false` と `sender_display_name` を付け、画面は質問の上に「〈名前〉 が送信」を出す。
   - RAG 検索: 検索そのものは保存しない。生成した回答の記録（`/api/search/answers*`）は、本人と、system_admin と `rag.feedback.manage`（運用設定の回答の記録の管理と共用の API。#304）。
   - 実行履歴（#1890）は同じ関数で、system_admin は全員・それ以外は自分の実行だけにする。
+- 「改善・運用」の品質評価の過去の評価（`/api/evaluation/jobs*`。#4811）は「AI 活用」の規則の外で、NL2SQL の品質評価と同じく、評価に使った検索・回答プロファイルを今使える利用者が見られる（プロファイルの分からない評価は実行した本人と system_admin だけ。見えない評価は 404）。他の利用者の評価は閲覧と結果の Excel だけで、取り消しは実行した本人と system_admin（ほかは 403）。判定は `app/rag/evaluation_jobs.py` の `EvaluationJobViewer` と、同じ規則の SQL（`app/clients/oracle.py` の `evaluation_job_visibility_sql`）。
 
 - RAG 固有の画面の差分: [docs/frontend-messaging-spec.md](../../docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](../../docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](../../docs/frontend-page-archetypes-spec.md)（ページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）。
 - lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。

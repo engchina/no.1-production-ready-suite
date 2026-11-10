@@ -29,6 +29,14 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
 - ケースが終わるたびに結果を `rag_evaluation_job_case_results` に 1 行ずつ保存する（#4208）。最後の
   保存の失敗・致命的な失敗・取り消し・プロセスの停止でも、終わったケースは残り、`partial_result` で
   返す。ケースの保存の失敗は評価を止めない（最後の結果には入る）。
+
+見え方（#4811）:
+- job に使った検索・回答プロファイル（主・比べる）と実行した利用者の UUID を記録する。
+  プロファイルの分かる job は、そのプロファイルをすべて今使える利用者が見られる（NL2SQL の
+  品質評価と同じ。system_admin は対象範囲の制限が無いので全部）。見えない job は 404。
+- プロファイルの分からない job（プロファイルを使わない評価と、記録の無い古い行）は、実行した本人
+  （tenant と user の hash の一致）と system_admin だけが見られる。
+- 取り消しは、見える job のうち実行した本人と system_admin だけ（ほかの利用者は 403）。
 """
 
 from __future__ import annotations
@@ -60,6 +68,7 @@ from app.schemas.evaluation import (
     EvaluationJob,
     EvaluationJobKind,
     EvaluationJobStatus,
+    EvaluationJobSummary,
     EvaluationMetrics,
 )
 
@@ -94,6 +103,9 @@ EVALUATION_JOB_LIMIT_MESSAGE = (
     "実行中の評価が終わってから、もう一度実行してください。"
 )
 EVALUATION_JOB_NOT_FOUND_MESSAGE = "品質評価の job が見つかりません。"
+EVALUATION_JOB_CANCEL_FORBIDDEN_MESSAGE = (
+    "この品質評価は実行した利用者とシステム管理者だけが取り消せます。"
+)
 EVALUATION_JOB_ALREADY_FINISHED_MESSAGE = "この品質評価は既に終わっているため、取り消せません。"
 
 
@@ -164,6 +176,12 @@ class EvaluationJobLimitError(RuntimeError):
     safe_for_user = True
 
 
+class EvaluationJobForbiddenError(PermissionError):
+    """見える job だが、実行した本人でも system_admin でもないので取り消せない。"""
+
+    safe_for_user = True
+
+
 @dataclass(frozen=True)
 class EvaluationJobOutcome:
     """評価の結果（`EvaluationMetrics` の JSON）と artifact の id。
@@ -213,8 +231,64 @@ class EvaluationJobRecord:
     finished_at: datetime | None = None
     # アップロードした Excel（#4212）。
     source_workbook_id: str | None = None
+    # 使った検索・回答プロファイル（主・比べる）と実行した利用者の UUID（#4811）。古い行は None。
+    search_answer_profile_id: str | None = None
+    compare_search_answer_profile_id: str | None = None
+    user_uuid: str | None = None
+    # 一覧の行だけが持つ全体の判定（結果の本体は読まない。#4811）。
+    passed: bool | None = None
     # 終わった job を読むときだけ入れる、保存したケースの結果（#4208）。
     case_rows: list[EvaluationJobCaseRow] = field(default_factory=list, repr=False)
+
+
+@dataclass(frozen=True)
+class EvaluationJobViewer:
+    """job を見る利用者（#4811。request の文脈から作る）。
+
+    `allowed_search_answer_profile_ids` は今使える検索・回答プロファイル（None は制限なし）。
+    `all_users_visible` は system_admin（`can_view_all_users_data`）。
+    """
+
+    tenant_id_hash: str | None
+    user_id_hash: str | None
+    all_users_visible: bool = False
+    allowed_search_answer_profile_ids: frozenset[str] | None = None
+
+    def owns(self, record: EvaluationJobRecord) -> bool:
+        """実行した本人か（tenant と user の hash の一致）。"""
+        return (
+            record.tenant_id_hash == self.tenant_id_hash
+            and record.user_id_hash == self.user_id_hash
+        )
+
+    def can_view(self, record: EvaluationJobRecord) -> bool:
+        """job を見られるか（SQL の `evaluation_job_visibility_sql` と同じ規則）。"""
+        if record.tenant_id_hash != self.tenant_id_hash:
+            return False
+        if record.search_answer_profile_id is None:
+            return self.all_users_visible or self.owns(record)
+        allowed = self.allowed_search_answer_profile_ids
+        if allowed is None:
+            return True
+        compare = record.compare_search_answer_profile_id
+        return record.search_answer_profile_id in allowed and (
+            compare is None or compare in allowed
+        )
+
+    def can_cancel(self, record: EvaluationJobRecord) -> bool:
+        """取り消せるか（見える job のうち、実行した本人と system_admin）。"""
+        return self.can_view(record) and (self.all_users_visible or self.owns(record))
+
+
+def current_evaluation_job_viewer() -> EvaluationJobViewer:
+    """今の request の利用者を、job を見る利用者にする。"""
+    context = current_audit_request_context()
+    return EvaluationJobViewer(
+        tenant_id_hash=context.tenant_id_hash,
+        user_id_hash=context.user_id_hash,
+        all_users_visible=context.all_users_visible,
+        allowed_search_answer_profile_ids=context.allowed_search_answer_profile_ids,
+    )
 
 
 class EvaluationJobStore(Protocol):
@@ -223,8 +297,12 @@ class EvaluationJobStore(Protocol):
     async def create(self, record: EvaluationJobRecord) -> None: ...
 
     async def get(
-        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
+        self, job_id: str, *, viewer: EvaluationJobViewer
     ) -> EvaluationJobRecord | None: ...
+
+    async def list_visible(
+        self, *, viewer: EvaluationJobViewer, offset: int, limit: int
+    ) -> tuple[list[EvaluationJobRecord], int]: ...
 
     async def update_progress(
         self,
@@ -260,18 +338,9 @@ class EvaluationJobStore(Protocol):
         result: Mapping[str, Any],
     ) -> bool: ...
 
-    async def list_case_results(
-        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
-    ) -> list[EvaluationJobCaseRow]: ...
+    async def list_case_results(self, job_id: str) -> list[EvaluationJobCaseRow]: ...
 
-    async def cancel(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-        error_message: str,
-    ) -> bool: ...
+    async def cancel(self, job_id: str, *, error_message: str) -> bool: ...
 
     async def fail_stale(
         self, *, stale_seconds: float, error_message: str, lease_owner: str | None = None
@@ -284,12 +353,6 @@ class EvaluationJobStore(Protocol):
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _owned(
-    record: EvaluationJobRecord, tenant_id_hash: str | None, user_id_hash: str | None
-) -> bool:
-    return record.tenant_id_hash == tenant_id_hash and record.user_id_hash == user_id_hash
 
 
 class MemoryEvaluationJobStore:
@@ -306,13 +369,21 @@ class MemoryEvaluationJobStore:
             record, status="RUNNING", created_at=now, started_at=now, heartbeat_at=now
         )
 
-    async def get(
-        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
-    ) -> EvaluationJobRecord | None:
+    async def get(self, job_id: str, *, viewer: EvaluationJobViewer) -> EvaluationJobRecord | None:
         record = self._jobs.get(job_id)
-        if record is None or not _owned(record, tenant_id_hash, user_id_hash):
+        if record is None or not viewer.can_view(record):
             return None
         return replace(record)
+
+    async def list_visible(
+        self, *, viewer: EvaluationJobViewer, offset: int, limit: int
+    ) -> tuple[list[EvaluationJobRecord], int]:
+        visible = sorted(
+            (record for record in self._jobs.values() if viewer.can_view(record)),
+            key=lambda record: (record.created_at, record.job_id),
+            reverse=True,
+        )
+        return [replace(record) for record in visible[offset : offset + limit]], len(visible)
 
     def _leased(self, job_id: str, lease_owner: str) -> EvaluationJobRecord | None:
         record = self._jobs.get(job_id)
@@ -399,30 +470,14 @@ class MemoryEvaluationJobStore:
         )
         return True
 
-    async def list_case_results(
-        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
-    ) -> list[EvaluationJobCaseRow]:
-        record = self._jobs.get(job_id)
-        if record is None or not _owned(record, tenant_id_hash, user_id_hash):
-            return []
+    async def list_case_results(self, job_id: str) -> list[EvaluationJobCaseRow]:
         return sorted(
             self._case_rows.get(job_id, []), key=lambda row: (row.pass_index, row.case_index)
         )
 
-    async def cancel(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-        error_message: str,
-    ) -> bool:
+    async def cancel(self, job_id: str, *, error_message: str) -> bool:
         record = self._jobs.get(job_id)
-        if (
-            record is None
-            or record.status != "RUNNING"
-            or not _owned(record, tenant_id_hash, user_id_hash)
-        ):
+        if record is None or record.status != "RUNNING":
             return False
         self._close(record, "CANCELLED", error_message)
         return True
@@ -479,18 +534,25 @@ class OracleEvaluationJobStore:
                 "lease_owner": record.lease_owner,
                 "time_limit_seconds": record.time_limit_seconds,
                 "source_workbook_id": record.source_workbook_id,
+                "search_answer_profile_id": record.search_answer_profile_id,
+                "compare_search_answer_profile_id": record.compare_search_answer_profile_id,
+                "user_uuid": record.user_uuid,
             }
         )
 
-    async def get(
-        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
-    ) -> EvaluationJobRecord | None:
-        row = await self._client.get_evaluation_job(
-            job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
-        )
+    async def get(self, job_id: str, *, viewer: EvaluationJobViewer) -> EvaluationJobRecord | None:
+        row = await self._client.get_evaluation_job(job_id, viewer=viewer)
         if row is None:
             return None
-        return _record_from_row(row, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash)
+        return _record_from_row(row)
+
+    async def list_visible(
+        self, *, viewer: EvaluationJobViewer, offset: int, limit: int
+    ) -> tuple[list[EvaluationJobRecord], int]:
+        rows, total = await self._client.list_evaluation_jobs(
+            viewer=viewer, offset=offset, limit=limit
+        )
+        return [_record_from_row(row) for row in rows], total
 
     async def update_progress(
         self,
@@ -550,12 +612,8 @@ class OracleEvaluationJobStore:
             result=result,
         )
 
-    async def list_case_results(
-        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
-    ) -> list[EvaluationJobCaseRow]:
-        rows = await self._client.list_evaluation_job_case_results(
-            job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
-        )
+    async def list_case_results(self, job_id: str) -> list[EvaluationJobCaseRow]:
+        rows = await self._client.list_evaluation_job_case_results(job_id)
         return [
             EvaluationJobCaseRow(
                 pass_index=int(str(row["pass_index"])),
@@ -567,20 +625,8 @@ class OracleEvaluationJobStore:
             for row in rows
         ]
 
-    async def cancel(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-        error_message: str,
-    ) -> bool:
-        return await self._client.cancel_evaluation_job(
-            job_id,
-            tenant_id_hash=tenant_id_hash,
-            user_id_hash=user_id_hash,
-            error_message=error_message,
-        )
+    async def cancel(self, job_id: str, *, error_message: str) -> bool:
+        return await self._client.cancel_evaluation_job(job_id, error_message=error_message)
 
     async def fail_stale(
         self, *, stale_seconds: float, error_message: str, lease_owner: str | None = None
@@ -614,10 +660,10 @@ _STATUSES: dict[str, EvaluationJobStatus] = {
 }
 
 
-def _record_from_row(
-    row: Mapping[str, object], *, tenant_id_hash: str | None, user_id_hash: str | None
-) -> EvaluationJobRecord:
+def _record_from_row(row: Mapping[str, object]) -> EvaluationJobRecord:
+    """表の行を job にする。一覧の行は結果の本体を読まず、全体の判定（`passed`）だけを持つ。"""
     result = row.get("result_json")
+    passed = row.get("passed")
     return EvaluationJobRecord(
         job_id=str(row["job_id"]),
         kind="run",
@@ -626,8 +672,8 @@ def _record_from_row(
         completed_cases=int(str(row.get("completed_cases") or 0)),
         time_limit_seconds=int(str(row.get("time_limit_seconds") or 0)),
         created_at=_optional_datetime(row.get("created_at")) or _utc_now(),
-        tenant_id_hash=tenant_id_hash,
-        user_id_hash=user_id_hash,
+        tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
+        user_id_hash=_optional_str(row.get("user_id_hash")),
         current_case_id=_optional_str(row.get("current_case_id")),
         current_case_started_at=_optional_datetime(row.get("current_case_started_at")),
         heartbeat_at=_optional_datetime(row.get("heartbeat_at")),
@@ -635,6 +681,10 @@ def _record_from_row(
         result=dict(result) if isinstance(result, Mapping) else None,
         evaluation_run_id=_optional_str(row.get("evaluation_run_id")),
         source_workbook_id=_optional_str(row.get("source_workbook_id")),
+        search_answer_profile_id=_optional_str(row.get("search_answer_profile_id")),
+        compare_search_answer_profile_id=_optional_str(row.get("compare_search_answer_profile_id")),
+        user_uuid=_optional_str(row.get("user_uuid")),
+        passed=None if passed is None else passed in (True, 1, "true"),
         started_at=_optional_datetime(row.get("started_at")),
         finished_at=_optional_datetime(row.get("finished_at")),
     )
@@ -676,8 +726,14 @@ def partial_evaluation_result(rows: Iterable[EvaluationJobCaseRow]) -> Evaluatio
     )
 
 
-def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
-    """API の応答に変換する。結果は成功のときだけ、途中までの結果は失敗・取り消しのときだけ返す。"""
+def evaluation_job_response(
+    record: EvaluationJobRecord, viewer: EvaluationJobViewer | None = None
+) -> EvaluationJob:
+    """API の応答に変換する。結果は成功のときだけ、途中までの結果は失敗・取り消しのときだけ返す。
+
+    `owned` / `can_cancel` は見る利用者から決める（#4811。viewer が無ければ実行した本人とみなす）。
+    名前（プロファイル・実行した利用者）は API の層が足す。
+    """
     run_result: EvaluationMetrics | None = None
     if record.status == "SUCCEEDED" and record.result is not None:
         run_result = EvaluationMetrics.model_validate(record.result)
@@ -701,6 +757,42 @@ def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
         run_result=run_result,
         partial_result=partial_result,
         source_workbook_id=record.source_workbook_id,
+        search_answer_profile_id=record.search_answer_profile_id,
+        compare_search_answer_profile_id=record.compare_search_answer_profile_id,
+        actor_user_uuid=record.user_uuid,
+        owned=viewer.owns(record) if viewer is not None else True,
+        can_cancel=viewer.can_cancel(record) if viewer is not None else True,
+    )
+
+
+def evaluation_job_case_count(record: EvaluationJobRecord) -> int:
+    """評価したケースの数（比べるプロファイルがあれば同じケースを 2 回流すので半分。#2402）。"""
+    passes = 2 if record.compare_search_answer_profile_id else 1
+    return record.total_cases // passes
+
+
+def evaluation_job_summary(
+    record: EvaluationJobRecord, viewer: EvaluationJobViewer
+) -> EvaluationJobSummary:
+    """一覧の行（#4811。結果の本体は持たない）。全体の判定は成功した job だけ。"""
+    passed = record.passed
+    if passed is None and record.result is not None:
+        value = record.result.get("passed")
+        passed = value if isinstance(value, bool) else None
+    return EvaluationJobSummary(
+        job_id=record.job_id,
+        status=record.status,
+        case_count=evaluation_job_case_count(record),
+        total_cases=record.total_cases,
+        completed_cases=record.completed_cases,
+        created_at=record.created_at,
+        finished_at=record.finished_at,
+        passed=passed if record.status == "SUCCEEDED" else None,
+        search_answer_profile_id=record.search_answer_profile_id,
+        compare_search_answer_profile_id=record.compare_search_answer_profile_id,
+        actor_user_uuid=record.user_uuid,
+        owned=viewer.owns(record),
+        can_cancel=viewer.can_cancel(record),
     )
 
 
@@ -764,9 +856,9 @@ class EvaluationJobService:
         return self._memory_store
 
     @staticmethod
-    def _owner() -> tuple[str | None, str | None]:
+    def _owner() -> tuple[str | None, str | None, str | None]:
         context = current_audit_request_context()
-        return context.tenant_id_hash, context.user_id_hash
+        return context.tenant_id_hash, context.user_id_hash, context.user_uuid
 
     async def submit(
         self,
@@ -777,11 +869,14 @@ class EvaluationJobService:
         executor: EvaluationJobExecutor,
         job_id: str | None = None,
         source_workbook_id: str | None = None,
+        search_answer_profile_id: str | None = None,
+        compare_search_answer_profile_id: str | None = None,
     ) -> EvaluationJob:
         """job を作り、このプロセスの task で実行を始める。
 
         task は呼び出し元（request）の文脈（利用者・対象範囲）を引き継ぐ。``job_id`` は、job の
-        結果を別の表に書く呼び出し（ケースごとの結果の保存）が先に決めた ID。
+        結果を別の表に書く呼び出し（ケースごとの結果の保存）が先に決めた ID。使った検索・回答
+        プロファイルと実行した利用者の UUID を記録する（見え方の判定に使う。#4811）。
         """
         store = self._resolve_store()
         await store.fail_stale(
@@ -795,7 +890,7 @@ class EvaluationJobService:
             raise EvaluationJobLimitError(
                 EVALUATION_JOB_LIMIT_MESSAGE.format(limit=self._max_running)
             )
-        tenant_id_hash, user_id_hash = self._owner()
+        tenant_id_hash, user_id_hash, user_uuid = self._owner()
         record = EvaluationJobRecord(
             job_id=job_id or uuid.uuid4().hex,
             kind=kind,
@@ -807,6 +902,9 @@ class EvaluationJobService:
             user_id_hash=user_id_hash,
             lease_owner=self.worker_id,
             source_workbook_id=source_workbook_id,
+            search_answer_profile_id=search_answer_profile_id,
+            compare_search_answer_profile_id=compare_search_answer_profile_id,
+            user_uuid=user_uuid,
         )
         await store.create(record)
         logger.info(
@@ -820,10 +918,37 @@ class EvaluationJobService:
         return await self.get(record.job_id)
 
     async def get(self, job_id: str) -> EvaluationJob:
-        """投入した利用者の job を返す。heartbeat が途絶えた job は失敗にしてから返す。"""
+        """見える job を返す（#4811）。heartbeat が途絶えた job は失敗にしてから返す。"""
+        viewer = current_evaluation_job_viewer()
+        record = await self._visible_record(job_id, viewer)
+        return evaluation_job_response(record, viewer)
+
+    async def get_with_owner(
+        self, job_id: str
+    ) -> tuple[EvaluationJob, tuple[str | None, str | None]]:
+        """見える job と、その job を実行した利用者（tenant と user の hash）を返す。
+
+        結果の Excel で、実行した利用者がアップロードした元の Excel を読むのに使う（#4811）。
+        """
+        viewer = current_evaluation_job_viewer()
+        record = await self._visible_record(job_id, viewer)
+        return evaluation_job_response(record, viewer), (record.tenant_id_hash, record.user_id_hash)
+
+    async def list_jobs(self, *, offset: int, limit: int) -> tuple[list[EvaluationJobSummary], int]:
+        """見える job を新しい順に返す（#4811。結果の本体は読まない）。"""
         store = self._resolve_store()
-        tenant_id_hash, user_id_hash = self._owner()
-        record = await store.get(job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash)
+        await store.fail_stale(
+            stale_seconds=self._stale_seconds, error_message=EVALUATION_JOB_STALE_MESSAGE
+        )
+        viewer = current_evaluation_job_viewer()
+        records, total = await store.list_visible(viewer=viewer, offset=offset, limit=limit)
+        return [evaluation_job_summary(record, viewer) for record in records], total
+
+    async def _visible_record(
+        self, job_id: str, viewer: EvaluationJobViewer
+    ) -> EvaluationJobRecord:
+        store = self._resolve_store()
+        record = await store.get(job_id, viewer=viewer)
         if record is None:
             raise EvaluationJobNotFoundError(EVALUATION_JOB_NOT_FOUND_MESSAGE)
         # 別のプロセスが実行している job は、そのプロセスが止まっていれば失敗にする。
@@ -834,27 +959,23 @@ class EvaluationJobService:
                 stale_seconds=self._stale_seconds, error_message=EVALUATION_JOB_STALE_MESSAGE
             )
         ):
-            refreshed = await store.get(
-                job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
-            )
-            record = refreshed or record
-        return evaluation_job_response(
-            await self._with_case_rows(store, record, tenant_id_hash, user_id_hash)
-        )
+            record = await store.get(job_id, viewer=viewer) or record
+        return await self._with_case_rows(store, record)
 
     async def cancel(self, job_id: str) -> EvaluationJob:
-        """投入した利用者の実行中の job を取り消す。取り消し済みならそのまま返す。"""
+        """実行中の job を取り消す。取り消し済みならそのまま返す。
+
+        見えない job は 404、見えるが実行した本人でも system_admin でもなければ 403（#4811）。
+        """
         store = self._resolve_store()
-        tenant_id_hash, user_id_hash = self._owner()
-        cancelled = await store.cancel(
-            job_id,
-            tenant_id_hash=tenant_id_hash,
-            user_id_hash=user_id_hash,
-            error_message=EVALUATION_JOB_CANCELLED_MESSAGE,
-        )
-        record = await store.get(job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash)
+        viewer = current_evaluation_job_viewer()
+        record = await store.get(job_id, viewer=viewer)
         if record is None:
             raise EvaluationJobNotFoundError(EVALUATION_JOB_NOT_FOUND_MESSAGE)
+        if not viewer.can_cancel(record):
+            raise EvaluationJobForbiddenError(EVALUATION_JOB_CANCEL_FORBIDDEN_MESSAGE)
+        cancelled = await store.cancel(job_id, error_message=EVALUATION_JOB_CANCELLED_MESSAGE)
+        record = await store.get(job_id, viewer=viewer) or record
         if not cancelled and record.status != "CANCELLED":
             raise EvaluationJobStateError(EVALUATION_JOB_ALREADY_FINISHED_MESSAGE)
         task = self._tasks.get(job_id)
@@ -863,24 +984,20 @@ class EvaluationJobService:
             task.cancel()
         if cancelled:
             logger.info("evaluation_job_cancelled", extra={"job_id": job_id})
-        return evaluation_job_response(
-            await self._with_case_rows(store, record, tenant_id_hash, user_id_hash)
-        )
+        return evaluation_job_response(await self._with_case_rows(store, record), viewer)
 
     @staticmethod
     async def _with_case_rows(
-        store: EvaluationJobStore,
-        record: EvaluationJobRecord,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
+        store: EvaluationJobStore, record: EvaluationJobRecord
     ) -> EvaluationJobRecord:
-        """失敗・取り消しの job に、保存したケースの結果を足す。読めなくても job の状態は返す。"""
+        """失敗・取り消しの job に、保存したケースの結果を足す。読めなくても job の状態は返す。
+
+        呼び出し元が job を見られることを確かめてから呼ぶ。
+        """
         if record.status not in ("FAILED", "CANCELLED"):
             return record
         try:
-            rows = await store.list_case_results(
-                record.job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
-            )
+            rows = await store.list_case_results(record.job_id)
         except Exception as exc:  # noqa: BLE001 - 途中までの結果は補助。状態は返す
             logger.warning(
                 "evaluation_job_case_results_read_failed",

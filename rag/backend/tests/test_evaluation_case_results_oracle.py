@@ -14,6 +14,7 @@ import pytest
 
 from app.rag.evaluation_jobs import (
     EVALUATION_JOB_STALE_MESSAGE,
+    EvaluationJobNotFoundError,
     EvaluationJobRecord,
     EvaluationJobService,
     OracleEvaluationJobStore,
@@ -94,7 +95,7 @@ async def test_case_results_round_trip_in_case_order(job_ids: list[str]) -> None
     assert await _save(store, job_id, case_index=0)
     assert await _save(store, job_id, case_index=0, pass_index=1)
 
-    rows = await store.list_case_results(job_id, tenant_id_hash=_TENANT, user_id_hash=_OWNER)
+    rows = await store.list_case_results(job_id)
     assert [(row.pass_index, row.case_index) for row in rows] == [(0, 0), (0, 2), (1, 0)]
     assert rows[1].case_id == "row-4"
     assert rows[1].search_answer_profile_id == "profile-a"
@@ -106,17 +107,29 @@ async def test_case_results_are_not_written_without_the_lease(job_ids: list[str]
     job_id = await _create_job(store, job_ids)
 
     assert not await _save(store, job_id, case_index=0, lease_owner="another-worker")
-    assert await store.list_case_results(job_id, tenant_id_hash=_TENANT, user_id_hash=_OWNER) == []
+    assert await store.list_case_results(job_id) == []
 
 
-async def test_case_results_are_read_only_by_the_job_owner(job_ids: list[str]) -> None:
+async def test_case_results_are_read_only_through_a_visible_job(job_ids: list[str]) -> None:
+    """ケースの結果は job を見られる利用者にだけ返す（#4811。プロファイルの無い job は本人）。"""
     store = OracleEvaluationJobStore()
     job_id = await _create_job(store, job_ids)
     assert await _save(store, job_id, case_index=0)
+    await store.fail_stale(stale_seconds=0.0, error_message="合成の中断", lease_owner=_LEASE)
 
-    assert (
-        await store.list_case_results(job_id, tenant_id_hash=_TENANT, user_id_hash="x" * 64) == []
-    )
+    for user, visible in ((_OWNER, True), ("x" * 64, False)):
+        token = set_audit_request_context(
+            AuditRequestContext(tenant_id_hash=_TENANT, user_id_hash=user)
+        )
+        try:
+            if visible:
+                job = await EvaluationJobService(store, worker_id="other").get(job_id)
+                assert job.partial_result is not None
+            else:
+                with pytest.raises(EvaluationJobNotFoundError):
+                    await EvaluationJobService(store, worker_id="other").get(job_id)
+        finally:
+            reset_audit_request_context(token)
 
 
 async def test_stale_job_returns_saved_cases_as_partial_result(job_ids: list[str]) -> None:
