@@ -23,9 +23,19 @@ function overlay(base: LanguagePackSections, overrides: LanguagePackSections): L
   return merged;
 }
 
+/** 上書きできる節（backend の PROFILE_LANGUAGE_PACK_SECTIONS と同じ。検索と回答の要求の間に読む節だけ。#4784）。 */
+const PROFILE_SECTIONS: readonly string[] = [
+  "search_terms",
+  "question_cues",
+  "evidence_cues",
+  "answer_labels",
+  "answer_check_cues",
+  "grounding_cues",
+];
+
 /**
  * 検索・回答プロファイルの言語資源の上書き（#2181）。全体の言語資源の値に重ね、このプロファイルの検索・回答の
- * 間だけ使う。取込の項目は文書の分割と食い違うので出さない（検索・回答の項目だけ）。
+ * 間だけ使う。取込の項目は文書の分割と食い違うので出さない（検索と回答で読む節の項目だけ）。
  */
 export function LanguagePackOverridesFieldset({
   value,
@@ -41,7 +51,7 @@ export function LanguagePackOverridesFieldset({
   const valueKey = JSON.stringify(value);
   const [draft, setDraft] = useState<{ key: string; texts: LanguagePackTexts }>({ key: valueKey, texts: {} });
   const data = query.data;
-  const fields = data ? data.fields.filter((field) => !field.ingest && field.section !== "question_cues") : [];
+  const fields = data ? data.fields.filter((field) => !field.ingest && PROFILE_SECTIONS.includes(field.section)) : [];
   // 継承値は最新の全体値から描画し、入力途中の文字だけを保持する。保存・破棄では入力も同期する。
   if (draft.key !== valueKey) setDraft({ key: valueKey, texts: {} });
   const baseline = data ? textsFromSections(fields, overlay(data.effective, value)) : {};

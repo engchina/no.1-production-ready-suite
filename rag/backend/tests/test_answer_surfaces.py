@@ -19,11 +19,9 @@ from app.api.routes import search as search_route
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.evaluation import EvaluationRunner
-from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.pipeline import RagPipeline
 from app.rag.search_answer_profile_config import (
     SearchAnswerProfileConfig,
-    resolve_search_answer_profile_settings,
 )
 from app.schemas.evaluation import EvaluationCase
 from tests.support import AsgiTestClient
@@ -68,27 +66,12 @@ def test_settings_ignore_removed_answer_engine_env(monkeypatch: MonkeyPatch) -> 
     assert not hasattr(settings, "rag_answer_engine")
 
 
-def test_saved_search_answer_profile_answer_engine_is_dropped() -> None:
-    """検索・回答プロファイルに保存済みの ``answer_engine`` は読み捨て、ほかの上書きは効かせる。"""
-    query = KnowledgeBaseQueryConfig.model_validate(
-        {"answer_engine": "standard", "max_anchors_per_document": 3}
-    )
-    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], query=query)
-
-    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
-
-    assert "answer_engine" not in query.model_dump()
-    assert settings.rag_max_anchors_per_document == 3
-
-
-def test_search_api_answers_with_answer_engine_for_view_saved_as_standard(
+def test_search_api_with_search_answer_profile_answers_with_answer_engine(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """``answer_engine: "standard"``
-    を保存した検索・回答プロファイルの検索も回答フローで回答する。"""
-    query = KnowledgeBaseQueryConfig.model_validate({"answer_engine": "standard"})
+    """検索・回答プロファイルを指定した検索も回答フローで回答する。"""
     _install_real_pipeline(
-        monkeypatch, {"bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], query=query)}
+        monkeypatch, {"bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])}
     )
 
     response = client.post(

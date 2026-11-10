@@ -247,51 +247,6 @@ def test_section_expansion_settings_are_global(
     assert settings.rag_section_expansion_input_token_percent == 50
 
 
-def test_search_answer_profile_ignores_legacy_section_expansion() -> None:
-    from app.rag.search_answer_profile_config import (
-        parse_search_answer_profile_config,
-        resolve_search_answer_profile_settings,
-    )
-
-    base = Settings()
-    selected, applied = resolve_search_answer_profile_settings(
-        base,
-        parse_search_answer_profile_config(
-            {
-                "knowledge_base_ids": ["kb-1"],
-                "query": {
-                    "section_expansion_enabled": False,
-                    "section_expansion_max_levels": 2,
-                    "section_expansion_input_token_percent": 30,
-                    "section_expansion_time_limit_seconds": 300,
-                },
-            }
-        ),
-    )
-
-    assert applied is False
-    assert (
-        selected.rag_section_expansion_enabled,
-        selected.rag_section_expansion_max_levels,
-        selected.rag_section_expansion_input_token_percent,
-    ) == (True, 4, 50)
-    assert base.rag_section_expansion_enabled is True
-    # 範囲の外の保存値は読まない。
-    broken = parse_search_answer_profile_config(
-        {"knowledge_base_ids": ["kb-1"], "query": {"section_expansion_max_levels": 9}}
-    )
-    assert broken.query.section_expansion_max_levels is None
-    assert "section_expansion_time_limit_seconds" not in type(broken.query).model_fields
-    legacy = parse_search_answer_profile_config(
-        {
-            "query": {
-                "section_expansion_time_limit_seconds": 60,
-            }
-        }
-    )
-    assert "section_expansion_time_limit_seconds" not in legacy.query.model_dump()
-
-
 def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
     default = build_engine_settings(Settings(), output_dir=tmp_path)
     custom = build_engine_settings(

@@ -24,6 +24,11 @@ def test_profile_accepts_only_search_and_answer_fields() -> None:
     assert config.language_pack == {"question_cues": {"subquestion_reference_followers": ["理屈"]}}
     with pytest.raises(ValidationError, match="取込の項目"):
         SearchAnswerProfileConfig(language_pack={"numbers": {"article_units": ["条"]}})
+    # 業務ガイドの取込の節は、検索と回答の要求では読まれない(#4784)。
+    with pytest.raises(ValidationError, match="検索と回答で使わない項目"):
+        SearchAnswerProfileConfig(
+            language_pack={"guide_import_cues": {"process_headings": ["合成の見出し"]}}
+        )
     with pytest.raises(ValidationError, match="知らない項目"):
         SearchAnswerProfileConfig(language_pack={"question_cues": {"nothing": ["x"]}})
     with pytest.raises(ValidationError):

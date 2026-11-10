@@ -2129,6 +2129,30 @@ WHERE d.extraction IS NOT NULL
 SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
 ```
 
+### 検索・回答プロファイルの適用しない欄の削除（#4784）
+
+検索・回答プロファイルの `query` は適用する欄（`max_anchors_per_document`・`support_guide_enabled`）だけを持ち、
+ほかの欄を検証エラーにする。`language_pack` の上書きは、検索と回答の要求の間に読む節（`search_terms`・
+`question_cues`・`evidence_cues`・`answer_labels`・`answer_check_cues`・`grounding_cues`）だけを持てる。
+ナレッジベースは `query` の値を持たない。未リリースのため互換を持たない。
+
+過去の migration は変更せず、`20261110_4784_search_answer_profile_retired_fields` が保存値を直す。
+`RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG` の `query` から上の 2 欄以外を、`language_pack` から上の 6 節以外を消し、
+`RAG_KNOWLEDGE_BASES.RETRIEVAL_CONFIG` の `query` を消す。残す欄と節の値、ほかの key は変えない。値の読み替えはしない。
+何回流しても結果は同じ。
+
+- 適用は、現在の schema 管理の `initialize --allow-destructive` で明示的に行う（`status` の
+  `pending_destructive_migrations` に出る）。
+- **新しいコードの配備の直後に適用する。** 適用するまで、保存値に消した欄・節が残るプロファイルは設定の復元に
+  失敗し、空の設定（ナレッジベースの選択なし・全体設定のまま）で動く。その間に画面で保存すると、空の設定で上書きされる。
+- **適用の前に、読み取りだけの dry-run で消えるものを確かめる。** 行の ID と、消える欄・節の名前だけを出す
+  （値は出さない）。言語資源の上書きを持つプロファイルでは、`language_pack.<節>` の行が出たら、その節の上書きが消える
+  （業務ガイドの取込の節 `guide_import_cues` は、必要なら全体の言語資源へ移してから適用する）。
+
+```bash
+cd rag/backend && .venv/bin/python -m app.rag.search_answer_profile_retired_fields
+```
+
 ### 回答の流れを 1 本にする（#4749）
 
 CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選択（`query.route` / `query.expand`）、小問の事前計画（`answer.scope`）を削除し、回答の流れを 1 本（検索して生成）にした。未リリースのため互換を持たない。

@@ -289,23 +289,11 @@ async def test_no_graph_tables_add_nothing() -> None:
     assert store.calls == ["seed", "name"]
 
 
-def test_settings_default_off_and_query_overlay_can_turn_on() -> None:
-    """重ねる仕組み(compose_query_settings)の確かめ。
-
-    検索・回答プロファイルは ON / OFF も上限も重ねない(#3523)。
-    """
-    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, compose_query_settings
-
+def test_settings_default_off() -> None:
+    """既定は OFF・上限 6。全体設定だけで決める(検索・回答プロファイルは欄を持たない。#4784)。"""
     settings = Settings()
     assert settings.rag_graph_expansion_enabled is False
     assert settings.rag_graph_expansion_max_chunks == 6
-    composed, changed = compose_query_settings(
-        settings,
-        [KnowledgeBaseQueryConfig(graph_expansion_enabled=True, graph_expansion_max_chunks=3)],
-    )
-    assert changed is True
-    assert composed.rag_graph_expansion_enabled is True
-    assert composed.rag_graph_expansion_max_chunks == 3
 
 
 # ---- 回答の検索（AnswerEngine）----
