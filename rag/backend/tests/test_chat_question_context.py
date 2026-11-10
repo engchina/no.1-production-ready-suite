@@ -404,3 +404,60 @@ async def test_prepared_question_rejects_changed_global_language_pack(context_se
         assert rejected.value.status_code == 409
     finally:
         set_default_pack(old)
+
+
+async def test_small_talk_suggestion_skips_clarification_and_keeps_intent(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """補完が挨拶と分けたら確認を出さず、条件の読み取りのモデルも呼ばない（#4787）。"""
+    from app.api.routes import search_answer_profile_knowledge as route
+    from app.rag.chat_question_token import read_history_intent
+    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
+
+    oracle, settings, _calls = context_setup
+
+    async def greeting(self: Any, query: str, history: Any) -> str:
+        self._history_intent = "greeting"
+        return ""
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("挨拶では条件の読み取りを呼ばない")
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+    monkeypatch.setattr(route, "resolve_text_conditions", forbidden)
+    result = await route.post_clarification_suggest(
+        "profile-a",
+        ClarificationSuggestRequest(query="合成の挨拶", conversation_id="conversation-a"),
+    )
+    assert result.data is not None
+    assert result.data.suggestion is None
+    token = result.data.question_context_token
+    assert token and read_history_intent(settings.app_service_token_secret, token) == "greeting"
+
+
+async def test_first_turn_preparation_runs_the_single_call_and_keeps_intent(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """会話の 1 回目（保存済みの発話なし）の準備でも、同じ 1 回の呼び出しを通す（#4787）。"""
+    from app.rag.chat_question_token import read_history_intent, read_history_rewrite_elapsed
+
+    oracle, settings, _calls = context_setup
+    oracle.messages = []
+    seen: list[tuple[str, int]] = []
+
+    async def greeting(self: Any, query: str, history: Any) -> str:
+        seen.append((query, len(history)))
+        self._history_intent = "greeting"
+        return ""
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
+    question, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", "合成の挨拶", settings, force_token=True
+    )
+    assert seen == [("合成の挨拶", 0)]
+    assert question == "合成の挨拶" and token
+    secret = settings.app_service_token_secret
+    assert read_history_intent(secret, token) == "greeting"
+    assert read_history_rewrite_elapsed(secret, token) is not None

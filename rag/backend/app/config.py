@@ -1403,8 +1403,9 @@ class Settings(
     rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
-            "チャットで回答するとき、会話履歴から最新の質問を"
-            "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
+            "チャットで回答するとき、毎回の発話で LLM を 1 回呼び、会話履歴から最新の質問を"
+            "単独の質問へ書き換え、検索の要らない発話(挨拶・雑談)かを分ける(#4787)。"
+            "1 回目(履歴なし)の発話でも呼ぶ。挨拶・雑談は検索を飛ばして根拠なしの短い応答にする。"
         ),
     )
     rag_search_top_k_default: int = Field(

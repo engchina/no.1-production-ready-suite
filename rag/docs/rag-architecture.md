@@ -102,7 +102,7 @@
 
 10. 回答生成
    - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成のプロンプト（取込・検索・回答設定 > 回答プロンプト。`rag_answer_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
-   - チャットでは、会話履歴から質問を単独で意味が通る形に書き換えてから回答する（`RAG_HISTORY_REWRITE_ENABLED`）。書き換えた質問も安全チェックを通す。
+   - チャットでは、毎回の発話で LLM を 1 回呼び（会話の最初の発話も含む）、会話履歴から質問を単独で意味が通る形に書き換え、検索の要らない発話（挨拶・雑談）かを分けてから回答する（`RAG_HISTORY_REWRITE_ENABLED`）。書き換えた質問も安全チェックを通す。挨拶・雑談は検索を飛ばし、根拠なしの短い応答にする（引用なし。分からないときは検索する。#4787）。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
    - 生成後に回答側の安全チェックで secret leakage をブロックし、回答と根拠の文脈の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返す。

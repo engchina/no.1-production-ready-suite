@@ -6,6 +6,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from app.rag.history_question import HistoryIntent
 from app.rag.signed_url import issue_signed_token, signing_key, verify_signed_token
 
 _VERSION = "chat-question-v1"
@@ -29,6 +30,7 @@ def issue_question_token(
     *,
     confirmed_fact_ids: tuple[str, ...] = (),
     history_rewrite_elapsed_seconds: float | None = None,
+    history_intent: str = "search",
 ) -> str:
     """``history_rewrite_elapsed_seconds`` は、準備の中で履歴による補完を実行したときの所要時間。
 
@@ -41,6 +43,9 @@ def issue_question_token(
     }
     if history_rewrite_elapsed_seconds is not None:
         claims["history_rewrite_elapsed_seconds"] = history_rewrite_elapsed_seconds
+    if history_intent != "search":
+        # 補完と同じ呼び出しで分けた発話の種類（#4787。検索の要らない発話のときだけ）。
+        claims["history_intent"] = history_intent
     return issue_signed_token(_key(secret), version=_VERSION, claims=claims)[0]
 
 
@@ -71,3 +76,10 @@ def read_history_rewrite_elapsed(secret: str, token: str) -> float | None:
     """準備の中で履歴による補完を実行したときの所要時間（秒）。実行していなければ None。"""
     payload = verify_signed_token(_key(secret), token, version=_VERSION)
     return _elapsed(payload.get("history_rewrite_elapsed_seconds"))
+
+
+def read_history_intent(secret: str, token: str) -> HistoryIntent:
+    """準備の補完が分けた最新の発話の種類（#4787）。無い・不明な値は search（検索する）。"""
+    payload = verify_signed_token(_key(secret), token, version=_VERSION)
+    value = payload.get("history_intent", "search")
+    return value if value in ("greeting", "small_talk") else "search"

@@ -689,7 +689,7 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
   await page.getByTestId("search-run-progress-summary").click();
   const process = page.getByTestId("search-run-progress");
   // 段の名前と技術の span の日本語の名前・モデル名。入れ子は span の親子（root は行にしない）。
-  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["前の会話を踏まえて質問を補う", "前の会話を踏まえて質問を書き換える"]);
+  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["質問を補い、検索が要るかを分ける", "質問を書き換え、検索が要るかを分ける"]);
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
   const modelStep = process.locator("[data-run-timeline-step]").nth(1);

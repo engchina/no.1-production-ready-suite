@@ -852,7 +852,7 @@ for (const viewport of [
     const progress = page.getByTestId("chat-answer-progress");
     const current = page.getByTestId("chat-answer-progress-current");
     const timer = page.getByTestId("chat-answer-progress-timer");
-    await expect(current).toContainText("前の会話を踏まえて質問を補う");
+    await expect(current).toContainText("質問を補い、検索が要るかを分ける");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
     await expect(current).toContainText("検索文から根拠の候補を集める", { timeout: 4_000 });

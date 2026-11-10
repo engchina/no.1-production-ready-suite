@@ -3736,9 +3736,11 @@ export const ja = {
   "settings.answerPrompts.stage.support_guide_conditions.condition":
     "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
   "settings.answerPrompts.stage.history_rewrite": "会話を踏まえた質問の書き換え",
-  "settings.answerPrompts.stage.history_rewrite.condition": "会話履歴があり、会話を踏まえた質問の書き換えを有効にしたとき。検索用の質問を作ります",
+  "settings.answerPrompts.stage.history_rewrite.condition": "会話を踏まえた質問の書き換えを有効にしたとき、チャットの毎回の発話で 1 回（会話の最初の発話も含む）。検索用の質問を作り、検索が要らない挨拶・雑談かを分けます",
   "settings.answerPrompts.stage.screen_linking": "画面目録で操作画面を探す",
   "settings.answerPrompts.stage.screen_linking.condition": "「画面目録で操作画面を探す」を有効にしたとき",
+  "settings.answerPrompts.stage.small_talk": "挨拶・雑談への応答",
+  "settings.answerPrompts.stage.small_talk.condition": "会話を踏まえた質問の書き換えが、発話を挨拶・雑談と分けたとき（検索しない）",
   "settings.answerPrompts.stage.faq_answer": "登録済みQ&Aからの回答",
   "settings.answerPrompts.stage.faq_answer.condition": "チャットで近い登録済みQ&Aを選んだとき（検索しない）",
   "settings.answerPrompts.stage.generation": "回答の生成",
@@ -4028,7 +4030,8 @@ export const ja = {
   "feedback.detail.fingerprint": "設定 fingerprint",
   // 工程の名前は backend の時間切れの文言（app/rag/span_display.py の ANSWER_STAGE_LABELS）と揃える（#375）。
   "search.stage.processing": "処理中",
-  "search.stage.historyRewrite": "前の会話を踏まえて質問を補う",
+  "search.stage.historyRewrite": "質問を補い、検索が要るかを分ける",
+  "search.stage.smallTalkReply": "検索せずに短く応じる",
   "search.stage.attachmentEvidence": "会話の添付から根拠を選ぶ",
   "search.stage.answer": "質問の条件を整理して回答を作る",
   // 回答を作らない RAG 検索（チャットと同じ流れを回答の生成の手前で止める。#3506）
