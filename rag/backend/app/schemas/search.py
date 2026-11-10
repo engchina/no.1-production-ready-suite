@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import Literal, Self
 
 from pr_backend_core.api.validation import validation_error_messages
 from pr_backend_core.timezones import UtcDatetime
@@ -227,13 +227,9 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    # サーバーで原文照合した選択の前提。外部入力・API出力には含めない。
-    _rule_selection_scope: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _rule_selection_state: dict[str, Any] = PrivateAttr(default_factory=dict)
-
     query: str = Field(..., min_length=1)
     # 利用者の元の質問(#2261)。呼び出し元(業務 Agent)が検索文 query を短く言い換えたときに渡す。
-    # 回答の要求の単位とルールの確認に使う(検索そのものは query で行う)。
+    # 回答の要求の単位とプロファイルの知識の照合に使う(検索そのものは query で行う)。
     original_question: str | None = Field(default=None, max_length=8000)
     top_k: int = Field(
         default_factory=search_top_k_default,
@@ -257,14 +253,6 @@ class SearchRequest(BaseModel):
         description=(
             "回答フローを通らずに検索だけを行う(回答の生成の LLM を呼ばない)。"
             "KB の検索テストとレシピの検索比較が使う(#593)。"
-        ),
-    )
-    auto_field_filter_excluded: list[str] = Field(
-        default_factory=list,
-        max_length=MAX_EXTRACTION_FIELD_CONDITIONS,
-        description=(
-            "質問から読み取った抽出項目の条件のうち、使わない項目の名前(画面で利用者が外した条件。"
-            "#652)。"
         ),
     )
     conditions: dict[str, str] = Field(

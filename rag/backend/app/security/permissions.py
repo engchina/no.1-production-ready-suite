@@ -481,10 +481,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
-    # ルールの確認の質問(#717)。確認の判定はチャットが送信のたびに使う。
-    ("PUT", f"{_BV}/runtime-knowledge/rules/{{rule_id}}/clarification"): _any(
-        MENU_SEARCH_ANSWER_PROFILES
-    ),
+    # 業務ガイドの条件の確認。確認の判定はチャットが送信のたびに使う。
     ("POST", f"{_BV}/clarifications/suggest"): _any(MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES),
     # 業務ガイド（#1237）。他の知識と同じく、プロファイルの管理の画面の権限で扱う。
     ("GET", f"{_BV}/support-guides"): _any(MENU_SEARCH_ANSWER_PROFILES),

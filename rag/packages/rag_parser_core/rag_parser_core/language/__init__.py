@@ -414,6 +414,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "guide_handoff_template",
         "guide_approval_template",
         "guide_acquisition_incomplete_template",
+        "table_source_column",
+        "table_above_note",
         ingest=False,
         max_chars=MAX_SENTENCE_CHARS,
     ),

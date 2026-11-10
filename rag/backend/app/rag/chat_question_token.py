@@ -66,42 +66,10 @@ def read_question_token(secret: str, token: str, binding: Mapping[str, Any]) -> 
     return read_question_context(secret, token, binding)[0]
 
 
-def with_rule_selection_answers(
-    secret: str, token: str, answers: list[dict[str, Any]], *, elapsed_seconds: float = 0.0
-) -> str:
-    """現在の質問の署名に、原文照合済みの選択だけを束縛する。"""
-    payload = verify_signed_token(_key(secret), token, version=_VERSION)
-    claims: dict[str, Any] = {
-        "confirmed_fact_ids": payload.get("confirmed_fact_ids", []),
-        "binding": payload["binding"],
-        "question": payload["question"],
-        "rule_selection_answers": answers,
-        "rule_selection_elapsed_seconds": elapsed_seconds,
-    }
-    for name in ("history_rewrite_elapsed_seconds", "history_intent"):
-        if name in payload:
-            claims[name] = payload[name]
-    return issue_signed_token(_key(secret), version=_VERSION, claims=claims)[0]
-
-
-def read_rule_selection_answers(secret: str, token: str) -> list[dict[str, Any]]:
-    """read_question_token で現在のbindingを検証した後に、同じ署名の選択を読む。"""
-    payload = verify_signed_token(_key(secret), token, version=_VERSION)
-    values = payload.get("rule_selection_answers", [])
-    if not isinstance(values, list) or any(not isinstance(value, dict) for value in values):
-        raise ValueError("確認した選択の形式が正しくありません。")
-    return values
-
-
 def _elapsed(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value) if math.isfinite(value) and value >= 0 else None
-
-
-def read_rule_selection_elapsed(secret: str, token: str) -> float:
-    payload = verify_signed_token(_key(secret), token, version=_VERSION)
-    return _elapsed(payload.get("rule_selection_elapsed_seconds", 0.0)) or 0.0
 
 
 def read_history_rewrite_elapsed(secret: str, token: str) -> float | None:

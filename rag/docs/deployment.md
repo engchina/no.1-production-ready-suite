@@ -238,6 +238,29 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 
 4. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
 
+## 既存環境の更新手順（#4799 抽出項目の条件の自動読み取りと登録ルールの削除）
+
+質問から抽出項目の条件を LLM で読み取る段と、検索・回答プロファイルの登録ルール（回答前の確認・回答への差し込み）を
+削除した。絞り込みは利用者が画面・API・MCP で明示した条件（`filters.extraction_fields`）だけで行い、回答の規則は
+回答プロンプトの「役割と回答の書き方」（`generation.role`）に書く（[回答の規則](./confirmation-answer-rules.md)）。
+用語・同義語（`RAG_RUNTIME_TERMS_*`）・業務ガイドの条件の確認・承認済み FAQ の回答は変えない。
+
+1. **データを削除する migration `20261110_4799_search_answer_profile_runtime_rules` を含むので、承認（CLI の
+   `--allow-destructive`・画面の確認ダイアログ）が要る**（上の「既存環境の更新手順の共通の注意」）。
+   `RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE` の `KIND = 'runtime_knowledge'` の行の `PAYLOAD_JSON` から登録ルール
+   （`$.rules`。確認の質問と選択肢を含む）を消す。用語・同義語（`$.terms`）とほかの種別の行は変えない。
+   ルールの文を残す場合は、適用の前に同列を書き出し、適用の後に「役割と回答の書き方」へ手で写す（読み替えはしない）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+2. `backend/.env` の `RAG_AUTO_FIELD_FILTER_ENABLED`・`RAG_RUNTIME_RULES_CONFIRMATION_ENABLED`・
+   `RAG_RUNTIME_RULES_ANSWER_ENABLED` は読まない（消してよい）。
+3. MCP の出力の版は 43 になる。`rag_search`・`rag_retrieve_evidence` の入力から `skip_clarification` を外し、
+   `conditions` の `rule:` の値・`rag_retrieve_evidence` の `clarifications`・`profile_knowledge` の
+   `rules`・`rules_omitted` を外した。
+
 ## 既存環境の更新手順（#4739 解析エンジン MinerU の対応の削除）
 
 使っていなかった解析エンジン MinerU の対応（接続設定・ライセンスの確認・画面のカード）を削除した。保存値の読み替えと migration は持たない（未リリース）。
@@ -1445,7 +1468,7 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
    `clarification_json`（CLOB）を無ければ足す。データを削除しないので承認は要らない）。**更新するまで、チャットの送信は
    列が無くて失敗する**ので、backend の更新と同時に行う。
 2. backend を再起動する。検索・回答プロファイルの設定「曖昧な質問の扱い」は既定が「確認してから回答する」で、今までと同じに
-   ルールの確認・業務ガイドの条件の確認を出す。
+   業務ガイドの条件の確認を出す（登録ルールの確認は #4799 で削除）。
 
 ## 既存環境の更新手順（#1438 章節と chunk の対応・MCP の章節の読み取り）
 
@@ -2096,7 +2119,7 @@ schema の更新と backend の更新を合わせて行ってください。フ�
 
 `RAG_ENGINE_DOMAIN_PROFILE_FILE` と作業ディレクトリの `domain_profile.json` を読む機能、および `RAG_ANSWER_PROFILE` / `RAG_ENGINE_PROFILE` の選択を廃止した。これらの変数は別名で受け付けず、残っていても実行には使わない。backend の `.env`、起動 shell、systemd の drop-in に残る定義は運用者が削除する。`DOCRAG_DOMAIN_PROFILE_FILE` の旧定義も新しい名前へ改名しない。
 
-ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「回答ルール」「業務ガイド」へ必要な分だけ登録する。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
+ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「業務ガイド」へ必要な分だけ登録する（回答の規則は回答プロンプトの「役割と回答の書き方」に書く）。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
 
 一般的な日本語の質問理解は設定に依存せず維持する。SDK から `profile=` を渡していた場合は引数を除き、Prompt 上書きだけが必要なら Runtime の `prompt_overrides` を使う。Prompt の本文や保存済みの Prompt 設定は変更しない。
 

@@ -51,6 +51,63 @@ export interface AnswerCitationRef {
    */
   location?: string;
   onOpen?: () => void;
+  /** 行の前に出す番号の印（例「[1]」。回答の表の出典の列の印が指す行。#4812）。 */
+  marker?: string;
+  /** 行の要素の id（出典の列の印 `AnswerSourceMarks` の移り先。押せる行はボタン、押せない行は文字の要素に付く）。 */
+  anchorId?: string;
+}
+
+/** 出典の列の印（`AnswerSourceMarks`）。 */
+export interface AnswerSourceMark {
+  key: string;
+  /** 見える印（例「[1]」）。 */
+  label: string;
+  /** 移り先の根拠の行の id（`AnswerCitationRef` の `anchorId`）。無ければ印を文字だけで出す。 */
+  targetId?: string;
+  /** 読み上げの名前（例「[1] の根拠へ移動」。見える印を含める）。 */
+  ariaLabel?: string;
+}
+
+/**
+ * 回答の表の出典の列の印（#4812）。印ごとのリンクで、押すと表の下の対応する根拠の行へ移り、その行にフォーカスを
+ * 移す（行がボタンなら Enter で原文を開ける）。移り先が無い印は文字だけにする。
+ */
+export function AnswerSourceMarks({ marks }: { marks: readonly AnswerSourceMark[] }) {
+  return (
+    // 印は折り返さず 1 行に並べる（出典の列を狭いまま保つ）。
+    <span className="inline-flex gap-0.5 whitespace-nowrap" data-testid="answer-source-marks">
+      {marks.map((mark) => {
+        const targetId = mark.targetId;
+        if (!targetId) {
+          return (
+            <span key={mark.key} className="font-mono text-xs text-fg-muted">
+              {mark.label}
+            </span>
+          );
+        }
+        return (
+          <a
+            key={mark.key}
+            href={`#${targetId}`}
+            aria-label={mark.ariaLabel}
+            // 表のセルの中の小さな印でも当たり判定を 24px（WCAG 2.5.8）にし、タッチ端末では 44px に広げる。
+            className="pr-touch-target relative inline-flex min-h-[var(--control-height-inline)] min-w-[var(--control-height-inline)] items-center justify-center rounded-sm font-mono text-xs font-medium text-accent-fg hover:underline"
+            onClick={(event) => {
+              const target = document.getElementById(targetId);
+              if (!target) return;
+              event.preventDefault();
+              const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+              target.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+              target.focus({ preventScroll: true });
+            }}
+            data-testid="answer-source-mark"
+          >
+            {mark.label}
+          </a>
+        );
+      })}
+    </span>
+  );
 }
 
 export interface AnswerSectionEntry {
@@ -137,10 +194,12 @@ function AnswerCitationLinkButton({ citation }: { citation: AnswerCitationRef })
   }, [head]);
   return (
     // 行の幅に収める（`min-w-0`）。本文の入れ物の最小幅を根拠の行の全長で広げない。
-    <span className="mt-0.5 flex min-w-0">
+    <span className="mt-0.5 flex min-w-0 items-center gap-1">
+      {citation.marker ? <AnswerCitationMarker marker={citation.marker} /> : null}
       <Tooltip content={citation.label} disabled={!truncated} describe={false}>
         <Button
           type="button"
+          id={citation.anchorId}
           variant="ghost"
           size="sm"
           icon={FileText}
@@ -159,6 +218,15 @@ function AnswerCitationLinkButton({ citation }: { citation: AnswerCitationRef })
   );
 }
 
+/** 根拠の行の前の番号の印（出典の列の印と同じ字。読み上げはボタン・行の名前に任せる）。 */
+function AnswerCitationMarker({ marker }: { marker: string }) {
+  return (
+    <span className="shrink-0 font-mono text-xs font-medium text-fg-muted" aria-hidden="true" data-testid="answer-citation-marker">
+      {marker}
+    </span>
+  );
+}
+
 /** 根拠の行の並び。 */
 export function AnswerCitationLinks({ citations }: { citations: readonly AnswerCitationRef[] }) {
   return (
@@ -172,9 +240,12 @@ export function AnswerCitationLinks({ citations }: { citations: readonly AnswerC
             className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-fg-muted"
             data-testid="answer-citation-text"
           >
+            {citation.marker ? <AnswerCitationMarker marker={citation.marker} /> : null}
             <FileText size={14} aria-hidden className="shrink-0" />
             {/* 押せない行は省略せず折り返す（全文を読める）。 */}
-            <span className="min-w-0 [overflow-wrap:anywhere]">{citation.label}</span>
+            <span id={citation.anchorId} tabIndex={citation.anchorId ? -1 : undefined} className="min-w-0 [overflow-wrap:anywhere]">
+              {citation.label}
+            </span>
           </span>
         ),
       )}

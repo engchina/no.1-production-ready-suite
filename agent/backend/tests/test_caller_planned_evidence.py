@@ -246,14 +246,13 @@ def _legacy_published_version() -> None:
 
 
 # caller でだけ効く引数（#2676。門が閉じた Run ではモデルに見せず、送らない）。
-_CALLER_ONLY = frozenset({"planning", "queries", "request_id", "skip_clarification"})
+_CALLER_ONLY = frozenset({"planning", "queries", "request_id"})
 # モデルが自分で caller を指定する（今のスキルの本文が言い換えを queries に入れて引くと指示する）。
 _MODEL_CALLER_ARGUMENTS = {
     "query": "機器 A 点検",
     "planning": "caller",
     "queries": ["機器A 定期点検"],
     "request_id": "model-chosen",
-    "skip_clarification": True,
 }
 
 
@@ -390,7 +389,6 @@ def test_rag_planned_schema_and_arguments_drop_caller_only_arguments() -> None:
             "planning": {"enum": ["rag", "caller"]},
             "queries": {"type": "array", "items": {"type": "string"}},
             "request_id": {"type": "string"},
-            "skip_clarification": {"type": "boolean"},
             "conditions": {"type": "object"},
         },
         "required": ["query", "planning"],

@@ -91,7 +91,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         steps = _by_name(self.run_flow())
         self.assertNotIn("質問の理解", steps)
         self.assertIn("結果", _fields(steps["用語・同義語による検索文の追加"]))
-        self.assertIn("結果", _fields(steps["回答生成での登録ルールの使用"]))
+        self.assertNotIn("回答生成での登録ルールの使用", steps)
         # 検索の前提の確認は工程にしない（#3495）。普段どおりの検索範囲・準備の状態は示さない。
         self.assertNotIn("検索の準備確認", steps)
         self.assertNotIn("分類フィルタ", _fields(steps["文書検索"]))

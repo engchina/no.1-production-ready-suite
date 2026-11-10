@@ -27,7 +27,7 @@ from typing import Any
 JsonObject = dict[str, Any]
 
 # RAG の `ZeroEvidence.stage` の語彙（契約 rag-tools.json）。
-ZERO_EVIDENCE_STAGES = frozenset({"retrieval", "filter", "evidence_check", "context"})
+ZERO_EVIDENCE_STAGES = frozenset({"retrieval", "evidence_check", "context"})
 
 # モデルへの案内の理由。
 NOTICE_GUARDRAIL_DEGRADED = "guardrail_degraded"

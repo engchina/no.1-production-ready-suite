@@ -35,7 +35,7 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
 
 type AnsweringDraft = Omit<
   AnsweringSettingsData,
-  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled"
+  "config_source" | "runtime_terms_answer_enabled"
 >;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
@@ -49,11 +49,9 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
-    runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
-    auto_field_filter_enabled: settings.auto_field_filter_enabled,
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
@@ -151,16 +149,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
     <div className="space-y-4">
       {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
           数は xs（#1891）。 */}
-      <SettingsGroup id="answer-confirmation-title" title={t("settings.answering.confirmationTitle")}>
-        <SwitchRow
-          id="answering-runtime-rules-confirmation"
-          label={t("settings.answering.runtimeRulesConfirmation")}
-          description={t("settings.answering.runtimeRulesConfirmationHint")}
-          checked={form.runtime_rules_confirmation_enabled ?? false}
-          disabled={disabled}
-          onChange={(checked) => update({ runtime_rules_confirmation_enabled: checked })}
-        />
-      </SettingsGroup>
       <SettingsGroup id="search-expression-title" title={t("settings.answering.searchExpressionTitle")}>
       <FormGrid>
         <SwitchRow
@@ -258,14 +246,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         aria-label={t("settings.answering.options")}
         className="divide-y divide-border rounded-md border border-border"
       >
-        <SwitchRow
-          id="answering-auto-field-filter"
-          label={t("settings.answering.autoFieldFilter")}
-          description={t("settings.answering.autoFieldFilterHint")}
-          checked={form.auto_field_filter_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ auto_field_filter_enabled: checked })}
-        />
         <div>
           <SwitchRow id="answering-entity-expansion" label={t("settings.answering.entityExpansion")}
             description={t("settings.answering.entityExpansionHint")} checked={form.entity_expansion_enabled}

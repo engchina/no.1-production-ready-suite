@@ -38,6 +38,10 @@ def test_migration_is_registered_as_destructive_and_removes_no_editable_key() ->
         "article_catalog.documentSystem",
         "article_catalog.system",
         "article_catalog.refineSystem",
+        # 段ごと消した登録ルールの選択の認識と抽出項目の条件の読み取り（#4799）。
+        "rule_selection.system",
+        "rule_selection.instruction",
+        "field_filter.system",
     }
 
 

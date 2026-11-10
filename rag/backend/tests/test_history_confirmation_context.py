@@ -12,9 +12,6 @@ from app.rag.chat_question_token import (
     _key,
     issue_question_token,
     read_question_context,
-    read_rule_selection_answers,
-    read_rule_selection_elapsed,
-    with_rule_selection_answers,
 )
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.history_question import HistoryConfirmation
@@ -26,7 +23,6 @@ from app.rag.pipeline import (
 )
 from app.rag.signed_url import issue_signed_token, verify_signed_token
 from app.schemas.chat import ChatMessageRequest
-from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from tests.test_chat_question_context import ContextOracle
 
 
@@ -99,11 +95,10 @@ def test_legacy_signed_token_reuses_no_confirmed_facts() -> None:
         read_question_context(secret, token, {**binding, "profile": "profile-b"})
 
 
-@pytest.mark.parametrize("legacy,current_reply", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("legacy", [False, True])
 async def test_token_selection_reaches_generation_scope_and_preserves_original(
     monkeypatch: pytest.MonkeyPatch,
     legacy: bool,
-    current_reply: bool,
 ) -> None:
     oracle = ContextOracle()
     oracle.messages[0].clarification = {
@@ -117,20 +112,7 @@ async def test_token_selection_reaches_generation_scope_and_preserves_original(
         return {}
 
     async def knowledge(*args: Any) -> dict[str, Any]:
-        return {
-            "rules": [
-                {
-                    "id": "rule-a",
-                    "clarification": {
-                        "question": "対象は？",
-                        "options": [
-                            {"id": "a", "label": "合成 A"},
-                            {"id": "b", "label": "合成 B", "premise": "指示は利用者の事実ではない"},
-                        ],
-                    },
-                }
-            ]
-        }
+        return {"schema_version": 1, "terms": []}
 
     async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
         return request, effective, None, None
@@ -141,7 +123,6 @@ async def test_token_selection_reaches_generation_scope_and_preserves_original(
 
     monkeypatch.setattr(chat, "_ensure_caller_owns", lambda conversation: None)
     monkeypatch.setattr(chat, "load_runtime_knowledge_payload", knowledge)
-    monkeypatch.setattr(chat, "current_section_pages", empty)
     monkeypatch.setattr(chat, "_published_guides", empty)
     monkeypatch.setattr(chat, "_resolve_query_context", resolve)
     monkeypatch.setattr("app.rag.pipeline.OciEnterpriseAiClient", lambda **kwargs: model)
@@ -164,24 +145,18 @@ async def test_token_selection_reaches_generation_scope_and_preserves_original(
         cast(Any, oracle),
         "conversation-a",
         "profile-a",
-        ChatMessageRequest(
-            content=query,
-            question_context_token=token,
-            clarification=ClarificationAnswer(rule_id="rule-a", option_ids=["b"])
-            if current_reply
-            else None,
-        ),
+        ChatMessageRequest(content=query, question_context_token=token),
         settings,
     )
     assert len(model.calls) == 1
-    assert turn.request.query == (query if current_reply else prepared)
-    assert turn.request.original_question == (None if current_reply else query)
+    assert turn.request.query == prepared
+    assert turn.request.original_question == query
     assert turn.user_message.content == query
     if legacy:
         assert turn.scope is None
         return
     assert turn.scope is not None
-    expected = "合成 B" if current_reply else "合成 A、追加の確認値"
+    expected = "合成 A、追加の確認値"
     assert turn.scope.confirmed_premises == (("対象は？", expected),)
     assert expected in turn.scope.context
 
@@ -331,21 +306,7 @@ async def test_signed_token_cannot_reference_unsupplied_history_fact(
     assert len(model.calls) == 1
 
 
-def test_rule_selection_token_preserves_signed_history_references() -> None:
-    """確認の選択を追記しても、履歴から沿用する事実と設定への束縛を落とさない。"""
-    secret = "synthetic-secret-" * 3
-    binding = {"owner": "owner-a", "profile": "profile-a", "policy": "language-a"}
-    token = issue_question_token(secret, binding, "その手順は？", confirmed_fact_ids=("user-a:0",))
-    answers = [{"rule_id": "r1", "option_ids": ["a"], "other_text": ""}]
-    updated = with_rule_selection_answers(secret, token, answers, elapsed_seconds=3)
-    assert read_question_context(secret, updated, binding) == ("その手順は？", ("user-a:0",))
-    assert read_rule_selection_answers(secret, updated) == answers
-    assert read_rule_selection_elapsed(secret, updated) == 3
-    with pytest.raises(ValueError):
-        read_question_context(secret, updated, {**binding, "policy": "language-b"})
-
-
-async def test_recognized_rule_scope_preserves_history_facts_and_language_scope(
+async def test_run_preserves_history_facts_and_language_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from rag_parser_core.language import current_pack
@@ -364,12 +325,10 @@ async def test_recognized_rule_scope_preserves_history_facts_and_language_scope(
         scope=AnswerScope(context="履歴の条件", confirmed_premises=(("対象は？", "合成 A"),)),
     )
     request = SearchRequest(query="対象 A の理屈は？")
-    request._rule_selection_scope = {"context": "確認ルールの条件", "search_terms": ("合成",)}
 
     async def run(_self: Any, *_args: Any, **_kwargs: Any) -> SearchResponse:
         assert _self._scope.confirmed_premises == (("対象は？", "合成 A"),)
-        assert _self._scope.context == "履歴の条件\n確認ルールの条件"
-        assert _self._scope.search_terms == ("合成",)
+        assert _self._scope.context == "履歴の条件"
         assert current_pack().words("question_cues", "subquestion_reference_followers") == ("理屈",)
         return SearchResponse(
             query=request.query, answer="合成回答", citations=[], trace_id="trace-a", elapsed_ms=0

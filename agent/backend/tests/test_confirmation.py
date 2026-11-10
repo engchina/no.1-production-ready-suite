@@ -793,10 +793,10 @@ def test_tool_clarification_is_skipped_only_when_not_asking() -> None:
     ).skips_tool_clarification
 
 
-def test_rag_search_gets_skip_clarification_when_the_agent_does_not_ask(
+def test_rag_search_never_gets_skip_clarification(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """確認しない Run は Control Plane が rag_search に skip_clarification を付ける（#2117）。"""
+    """RAG の検索に確認を飛ばす引数は無い（RAG #4799）ので、確認しない Run でも付けない。"""
     _script(
         monkeypatch,
         [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
@@ -812,7 +812,7 @@ def test_rag_search_gets_skip_clarification_when_the_agent_does_not_ask(
         [assistant_message("画面ごとに示します。")],
     )
     _run("受注を取り消す手順は？")
-    assert mcp.calls_of("rag_search")[-1]["arguments"]["skip_clarification"] is True
+    assert "skip_clarification" not in mcp.calls_of("rag_search")[-1]["arguments"]
 
 
 def test_multiple_rag_clarification_is_a_multiple_selection_card() -> None:

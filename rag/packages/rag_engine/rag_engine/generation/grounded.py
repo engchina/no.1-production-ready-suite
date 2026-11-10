@@ -43,6 +43,7 @@ from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_g
 from rag_engine.generation.applications import (
     CheckedApplication,
     check_applications,
+    table_block_lines,
 )
 from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.check_cues import check_cues
@@ -1621,6 +1622,9 @@ def render_answer(
 
     ``guide_notes`` は業務ガイドの（題名, 案内の行）。資料の記載と分けて「業務ガイドの案内」の節に出す。
     ``guide_notes_first`` なら、その節を末尾の節ではなく要約の直後に置く（#3769）。
+
+    公開する表の結論（``table`` を持つ当てはめ）は、要約の直後に題・出典の列つきの表・行ごとの出典行の段落で出し、
+    「資料をもとに導いた結論」には題と上の表の案内だけを出す（#4812）。
     """
     # 出典行ごとに、その表示項目を支える根拠だけを対応させる。
     citation_entries: list[list[CheckedItem]] = []
@@ -1642,6 +1646,13 @@ def render_answer(
     def body_sections(checked: Sequence[CheckedItem], applications: Sequence[CheckedApplication]) -> list[tuple[str, list[str]]]:
         """説明・当てはめ・手順・参考情報・不足の節（小問ごとと、小問に付かない分で同じ組み立て）。"""
         return _body_sections(checked, applications, lines, lambda entries: citation_entries.append(list(entries)))
+
+    # 表の結論は要約の直後に 1 回だけ、表の下に行ごとの出典行を付けて出す（#4812）。本文で最初の出典行なので先に数える。
+    tables = [
+        "\n".join(table_block_lines(entry, _citation, lambda entries: citation_entries.append(list(entries))))
+        for entry in applications
+        if entry.published and entry.application.table is not None
+    ]
 
     blocks: list[str] = []
     if groups := _subquestion_groups(subquestions, checked, applications):
@@ -1675,7 +1686,7 @@ def render_answer(
             *(title + "\n\n" + "\n".join(content) for title, content in sections),
         ]
     )
-    text = "\n\n".join(part for part in (summary.strip(), body) if part)
+    text = "\n\n".join(part for part in (summary.strip(), *tables, body) if part)
     return RenderedAnswer(text, [citation_line_ref(entries) for entries in citation_entries])
 
 

@@ -512,12 +512,9 @@ def test_scope_with_only_archived_profiles_denies_knowledge_bases(
         assert context.allowed_knowledge_base_ids == frozenset()
 
 
-def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
+def test_public_mcp_resolves_profile_question_language_before_answer_preparation(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    from app.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
     from rag_parser_core.language import current_pack
 
     from app.api.routes import search as search_route
@@ -538,15 +535,7 @@ def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(search_route, "with_answer_assumptions", prepare)
-    clarification_seen: list[tuple[str, ...]] = []
-
-    def clarify(*_args: Any, **_kwargs: Any) -> None:
-        clarification_seen.append(
-            current_pack().words("question_cues", "subquestion_reference_followers")
-        )
-
     monkeypatch.setattr(mcp_tools, "OracleClient", lambda *_a, **_k: ScopedViewOracle(VIEWS))
-    monkeypatch.setattr(mcp_tools, "suggest_clarification", clarify)
     user = auth.user_with_permissions(
         "synthetic-searcher",
         ["menu.search"],
@@ -560,7 +549,6 @@ def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
     )
     assert result["isError"] is False, result
     assert seen == [("理屈",)]
-    assert clarification_seen == [("理屈",)]
     assert current_pack().words("question_cues", "subquestion_reference_followers") != ("理屈",)
     assert RecordingPipeline.captured_settings is not None
     assert RecordingPipeline.captured_settings.rag_language_pack_overrides == config.language_pack
