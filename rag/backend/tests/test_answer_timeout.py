@@ -48,7 +48,7 @@ def test_answer_timeout_env_example_documents_setting() -> None:
 def test_answer_timeout_message_names_stage_and_retry() -> None:
     message = answer_timeout_message("history_rewrite", 300)
     assert "5 分" in message
-    assert "前の会話を踏まえて質問を補う" in message
+    assert "質問を補い、検索が要るかを分ける" in message
     assert "もう一度送信してください" in message
     assert "90 秒" in answer_timeout_message("answer", 90)
     assert "質問の条件を整理して回答を作る" in answer_timeout_message("answer", 90)
@@ -70,13 +70,14 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 def test_stage_labels_cover_answer_stages() -> None:
     """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)・会話の添付からの根拠の
-    選択(#3475)と検索だけの工程。
+    選択(#3475)・検索の要らない発話への応答(#4787)と検索だけの工程。
 
     旧 standard の工程は #595 で削除した。
     """
     assert set(ANSWER_STAGE_LABELS) == {
         "retrieval",
         "history_rewrite",
+        "small_talk_reply",
         "attachment_evidence",
         "field_filter",
         "answer",
@@ -123,7 +124,7 @@ async def test_run_answer_with_timeout_reports_last_stage() -> None:
 
     assert caught.value.stage == "history_rewrite"
     assert caught.value.timeout_seconds == 0.05
-    assert "前の会話を踏まえて質問を補う" in caught.value.user_message
+    assert "質問を補い、検索が要るかを分ける" in caught.value.user_message
     assert isinstance(caught.value, TimeoutError)
     assert isinstance(caught.value.original_error, TimeoutError)
 

@@ -45,6 +45,7 @@ from app.config import Settings, get_settings
 from app.rag.answer_engine import (
     ANSWER_ENGINE,
     AnswerEngine,
+    AnswerOutcome,
     AnswerScope,
     _trace_chunks,
     answer_step_stage,
@@ -58,8 +59,13 @@ from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.field_filter_reader import read_field_conditions
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
+from app.rag.history_question import (
+    EMPTY_CONVERSATION_HISTORY,
+    HistoryConfirmation,
+    HistoryIntent,
+    HistoryRewrite,
+)
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
-from app.rag.history_question import HistoryConfirmation, HistoryRewrite
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -72,6 +78,7 @@ from app.rag.observability import (
 )
 from app.rag.profile_language import profile_language_scope
 from app.rag.run_history import RunRecorder
+from app.rag.small_talk import SMALL_TALK_SYSTEM_PROMPT, SmallTalkReply, skips_retrieval
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
     ANSWER_STEP_KIND,
@@ -84,6 +91,7 @@ from app.rag.step_details import (
     answer_guardrail_details,
     field_filter_details,
     history_rewrite_details,
+    small_talk_details,
     step_details_model,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
@@ -127,6 +135,8 @@ type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[Non
 
 # 回答の記録の保存の工程（#2342）。失敗しても回答は返し、処理の経過で失敗にする。
 ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
+# 検索の要らない発話（挨拶・雑談）に、検索せずに応じる工程（#4787）。
+SMALL_TALK_STAGE = "small_talk_reply"
 # 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。KB の検索テストの
 # 「retrieval」（回答フローを通らない検索だけ）とは分ける。
 EVIDENCE_STAGE = "evidence"
@@ -173,6 +183,8 @@ class PreparedHistoryRewrite:
 
     elapsed_seconds: float
     confirmed_facts: tuple[HistoryConfirmation, ...] = ()
+    # 補完と同じ呼び出しで分けた最新の発話の種類（#4787）。
+    intent: HistoryIntent = "search"
 
 
 def history_confirmation_facts(history: Sequence[ChatTurn]) -> dict[str, HistoryConfirmation]:
@@ -434,6 +446,8 @@ class RagPipeline:
             prepared_history_rewrite if history_question_prepared else None
         )
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
+        # 会話履歴による補完が分けた最新の発話の種類（#4787。補完しなければ search）。
+        self._history_intent: HistoryIntent = "search"
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
         # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取りなど）を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
@@ -695,13 +709,17 @@ class RagPipeline:
         # 診断の degraded_steps に回答の中の補助の処理と同じ形で出す(#3286)。
         degraded = DegradedSteps()
         prepared_rewrite = self._prepared_history_rewrite
+        # チャット（``history`` を渡す経路。1 回目は空の履歴）は、毎回 1 回の呼び出しで質問を補い、
+        # 検索が要るかを分ける（#4787）。RAG 検索など ``history`` を渡さない経路は通さない。
         if (
-            history
+            history is not None
             and self._settings.rag_history_rewrite_enabled
             and (not self._history_question_prepared or prepared_rewrite is not None)
         ):
             # 送信の前に済ませた補完は呼び直さず、その結果と所要時間で同じ段を残す（#4794）。
             # 採用した確認回答は、送信の側が対象範囲（``self._scope``）へ入れ済み。
+            if prepared_rewrite is not None:
+                self._history_intent = prepared_rewrite.intent
             rewritten_query = await _observe_stage(
                 trace_id,
                 "history_rewrite",
@@ -712,7 +730,9 @@ class RagPipeline:
                 ),
                 prior_elapsed=prepared_rewrite.elapsed_seconds if prepared_rewrite else 0.0,
                 progress_callback=stage_callback,
-                result_details=lambda rewritten: history_rewrite_details(rewritten, history),
+                result_details=lambda rewritten: history_rewrite_details(
+                    rewritten, history, intent=self._history_intent
+                ),
                 request_snapshot=lambda: {
                     "質問": original_query,
                     "渡した会話履歴": [asdict(turn) for turn in history],
@@ -727,6 +747,7 @@ class RagPipeline:
                             else self._selected_history_facts
                         )
                     ],
+                    "判定した発話の種類": self._history_intent,
                     "縮退の記録（累計）": degraded.steps(),
                 },
             )
@@ -734,6 +755,31 @@ class RagPipeline:
                 request = request.model_copy(
                     update={"query": rewritten_query, "original_question": original_query}
                 )
+        # 検索の要らない発話（挨拶・雑談）は検索を飛ばし、根拠なしの短い応答にする（#4787）。
+        # 応答を作れなければ、いつもの検索と回答に戻す（分からないときは検索する）。
+        small_talk_outcome: AnswerOutcome | None = None
+        if (
+            request.generate_answer
+            and self._approved_faq is None
+            and self._scope is None
+            and self._caller_queries is None
+            and skips_retrieval(self._history_intent)
+        ):
+            intent = self._history_intent
+            small_talk_outcome = await _observe_stage(
+                trace_id,
+                SMALL_TALK_STAGE,
+                self._small_talk_reply(original_query, intent),
+                progress_callback=stage_callback,
+                result_details=lambda result: small_talk_details(
+                    intent, replied=result is not None
+                ),
+                result_outcome=lambda result: "success" if result is not None else "error",
+                request_snapshot=lambda: {"発話": original_query, "発話の種類": intent},
+                result_snapshot=lambda result: {
+                    "応答": result.answer if result is not None else None,
+                },
+            )
         caller_queries = (
             await self._checked_caller_queries(self._caller_queries)
             if self._caller_queries is not None
@@ -745,7 +791,8 @@ class RagPipeline:
         # 読み取りの LLM を呼ばない(条件は呼び出し元が filters で渡す)。
         auto_field_conditions: list[ExtractionFieldCondition] = []
         if (
-            self._settings.rag_auto_field_filter_enabled
+            small_talk_outcome is None
+            and self._settings.rag_auto_field_filter_enabled
             and request.search_answer_profile_id
             and caller_queries is None
         ):
@@ -767,7 +814,11 @@ class RagPipeline:
             )
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
-        if self._attachment_conversation_id and self._approved_faq is None:
+        if (
+            small_talk_outcome is None
+            and self._attachment_conversation_id
+            and self._approved_faq is None
+        ):
             from app.rag.chat_attachments import attachment_evidence, chat_attachment_service
 
             attachment_status = chat_attachment_service().reading_status()
@@ -837,7 +888,9 @@ class RagPipeline:
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
         # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は同じ流れを回答の生成の手前で
         # 止め、全体の工程を「質問の理解から根拠の検索まで」（evidence）にする（#649・#3506）。
-        if request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
+        if small_talk_outcome is not None:
+            outcome = small_talk_outcome
+        elif request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
             # 業務ガイドの必要な条件が分からず、確かめるか人へ引き継ぐ（#1238）。
             # 回答（モデル）は作らない。
             outcome = guide_short_circuit_outcome(guide)
@@ -1264,6 +1317,7 @@ class RagPipeline:
         拒否されたら空文字(元の質問で続ける)、許可されたらマスク後の質問を返す。
         """
         self._selected_history_facts = ()
+        self._history_intent = "search"
         rewritten = await self._rewrite_query_with_history(
             query, history, report_degraded=report_degraded
         )
@@ -1272,6 +1326,7 @@ class RagPipeline:
         checked = await self._check_query(rewritten, purpose="history_rewrite")
         if not checked.allowed:
             self._selected_history_facts = ()
+            self._history_intent = "search"
             logger.warning(
                 "history rewrite rejected by guardrail",
                 extra={"codes": [finding.code for finding in checked.findings]},
@@ -1286,16 +1341,12 @@ class RagPipeline:
         *,
         report_degraded: ReportDegraded = not_recorded,
     ) -> str:
-        """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換える。
+        """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換え、発話の種類を分ける。
 
-        書き換え不要・失敗・不自然な応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の
-        失敗は ``report_degraded`` に残す(書き換えが要らなかったときと分ける。#3286)。
+        チャットの毎回の発話で 1 回呼ぶ（1 回目は空の履歴。#4787）。書き換え不要・失敗・不自然な
+        応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の失敗は ``report_degraded`` に
+        残す(書き換えが要らなかったときと分ける。#3286)。
         """
-        history_text = _format_chat_history(
-            history, ChatHistoryBudget.from_settings(self._settings)
-        )
-        if not history_text:
-            return ""
         budget = ChatHistoryBudget.from_settings(self._settings)
         user_positions = [index for index, turn in enumerate(history) if turn.role == "USER"]
         fact_history = (
@@ -1343,7 +1394,8 @@ class RagPipeline:
         )
         if len(history_text) + len(confirmed_data) + len(current_data) > budget.max_chars:
             history_text = ""
-        history_text += confirmed_data + current_data
+        # 1 回目（履歴なし）と、予算に入る往復が無いときは、空の履歴の形で渡す（#4787）。
+        history_text = (history_text or EMPTY_CONVERSATION_HISTORY) + confirmed_data + current_data
         try:
             text = await async_call_with_model_purpose(
                 "query.rewrite",
@@ -1374,7 +1426,38 @@ class RagPipeline:
         if not rewritten or len(rewritten) > max(200, len(query) * 4):
             self._selected_history_facts = ()
             return ""
+        self._history_intent = result.intent
         return "" if rewritten == " ".join(query.split()) else rewritten
+
+    async def _small_talk_reply(
+        self, utterance: str, intent: HistoryIntent
+    ) -> AnswerOutcome | None:
+        """検索の要らない発話へ、回答のモデルで根拠なしの短い応答を作る（#4787。引用なし）。
+
+        失敗・空の応答は None（呼び出し側がいつもの検索と回答に戻す）。
+        """
+        try:
+            text = await async_call_with_model_purpose(
+                "answer.small_talk",
+                self._llm.generate,
+                utterance,
+                "",
+                system_prompt=resolve_prompt("small_talk.system", SMALL_TALK_SYSTEM_PROMPT),
+                response_schema=SmallTalkReply.model_json_schema(),
+                response_schema_name="small_talk_reply",
+            )
+            reply = SmallTalkReply.model_validate_json(text).reply.strip()
+        except Exception as exc:  # 応答は補助。検索と回答に戻す。
+            logger.warning("small talk reply failed", extra={**safe_exception_fields(exc)})
+            return None
+        if not reply:
+            return None
+        return AnswerOutcome(
+            answer=reply,
+            citations=[],
+            context_text="",
+            diagnostics={"retrieval_skipped": {"intent": intent}},
+        )
 
 
 async def _completed[T](value: T) -> T:

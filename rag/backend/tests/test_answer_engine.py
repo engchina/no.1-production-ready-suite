@@ -2252,6 +2252,10 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
     )
 
+    # チャットだけが毎回の発話で最初に通す質問の補完（発話の種類の判定を含む。#4787）は比べない。
+    assert chat_steps[:2] == [("history_rewrite", "started"), ("history_rewrite", "success")]
+    chat_steps = chat_steps[2:]
+    assert not [e for e in search_steps if e[0] == "history_rewrite"]
     # チャットの工程を、回答に添付する画像（回答の生成の最初の工程）の手前で切る。
     cut = chat_steps.index(("answer_step:回答に添付する画像", "started"))
     rename = {

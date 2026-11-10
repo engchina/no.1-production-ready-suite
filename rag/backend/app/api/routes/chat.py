@@ -74,6 +74,7 @@ from app.rag.chat_attachments import attach_to_conversation, delete_conversation
 from app.rag.chat_question_token import (
     context_digest,
     issue_question_token,
+    read_history_intent,
     read_history_rewrite_elapsed,
     read_question_context,
     read_rule_selection_answers,
@@ -81,7 +82,7 @@ from app.rag.chat_question_token import (
 )
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
-from app.rag.history_question import HistoryConfirmation
+from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
     ChatTurn,
@@ -769,12 +770,15 @@ async def prepare_chat_question(
         question = checked.sanitized_text
         selected_facts: tuple[HistoryConfirmation, ...] = ()
         rewrite_elapsed: float | None = None
-        if history and settings.rag_history_rewrite_enabled:
+        history_intent: HistoryIntent = "search"
+        # 履歴が無い 1 回目も、同じ 1 回の呼び出しで質問を整え、検索が要るかを分ける（#4787）。
+        if settings.rag_history_rewrite_enabled:
             pipeline = RagPipeline(settings=settings, guardrails=guardrails)
             rewrite_started = perf_counter()
             question = await pipeline._safe_rewritten_query(question, history) or question
             rewrite_elapsed = perf_counter() - rewrite_started
             selected_facts = pipeline._selected_history_facts
+            history_intent = pipeline._history_intent
         if confirmed_facts is not None:
             confirmed_facts.extend(selected_facts)
         # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
@@ -787,6 +791,7 @@ async def prepare_chat_question(
                 question,
                 confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
                 history_rewrite_elapsed_seconds=rewrite_elapsed,
+                history_intent=history_intent,
             )
         except SignedUrlUnavailableError:
             return question, None
@@ -969,7 +974,11 @@ async def _prepare_chat_turn(
         ]
     prepared_history_rewrite = (
         PreparedHistoryRewrite(
-            elapsed_seconds=prepared_rewrite_elapsed, confirmed_facts=tuple(inherited_facts)
+            elapsed_seconds=prepared_rewrite_elapsed,
+            confirmed_facts=tuple(inherited_facts),
+            intent=read_history_intent(
+                settings.app_service_token_secret, str(request.question_context_token)
+            ),
         )
         if prepared_rewrite_elapsed is not None
         else None
