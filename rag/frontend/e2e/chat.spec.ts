@@ -1889,7 +1889,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
     approved_faq_direct: { faq_id: "faq-1", matched_question: faqQuestion, score: 1, min_score: 0.92, match_method: "text" },
     models: { embedding: "", rerank: "" },
   };
-  const answerText = `${faqAnswer}\n\n（出典: 承認済み FAQ「${faqQuestion}」）`;
+  const answerText = `${faqAnswer}\n\n（出典: 登録済みQ&A「${faqQuestion}」）`;
   const streamBody = [
     sseStart,
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: answerText })}\n\n`,
@@ -1930,7 +1930,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   // 保存済みの回答: 本文は登録された回答そのままで、末尾に出典の行。見出しはモデル名ではなく Q&A の回答と示し、
   // 直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。処理の経過に照合の段と結果を出す。
   await expect(page.getByText(faqAnswer).first()).toBeVisible();
-  await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 承認済み FAQ「${faqQuestion}」`);
+  await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 登録済みQ&A「${faqQuestion}」`);
   await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
   await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
