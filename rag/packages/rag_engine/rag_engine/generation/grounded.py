@@ -1205,7 +1205,7 @@ def sent_evidence_sources(catalog: SentUnitCatalog) -> dict[str, str]:
 
 
 def with_application_sources(draft: GroundedDraft, catalog: SentUnitCatalog) -> GroundedDraft:
-    """推導の方法と結論の文に混ざった、送った根拠の表示 ID を出典の名前に置き換える（#4626）。
+    """推導の方法と結論の文（表の結論はセル）に混ざった、送った根拠の表示 ID を出典の名前に置き換える（#4626）。
 
     表示 ID はモデルが入力の根拠ブロックで見た名前で、送った根拠に対応するものはコードが出典の名前に決定的に
     置き換えられる。送った根拠に無い ID と資料の本文にある同じ字のコードは残し、推導の検査が内部の番号として扱う。
@@ -1219,6 +1219,17 @@ def with_application_sources(draft: GroundedDraft, catalog: SentUnitCatalog) -> 
             update={
                 "reasoning": replace_evidence_labels(application.reasoning, sources, codes=codes),
                 "result": replace_evidence_labels(application.result, sources, codes=codes),
+                "table": application.table.model_copy(
+                    update={
+                        "columns": [replace_evidence_labels(cell, sources, codes=codes) for cell in application.table.columns],
+                        "rows": [
+                            row.model_copy(update={"cells": [replace_evidence_labels(cell, sources, codes=codes) for cell in row.cells]})
+                            for row in application.table.rows
+                        ],
+                    }
+                )
+                if application.table is not None
+                else None,
             }
         )
         for application in draft.applications

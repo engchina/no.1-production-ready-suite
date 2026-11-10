@@ -356,10 +356,8 @@ def _boilerplate_text_key(text: str) -> str:
 
 
 def _compact_page_text(text: str) -> str:
-    """頁番号の形を比べる文（言語資源の文字の正規化（既定 NFKC）をして空白を除く）。"""
-    form = current_pack().value("symbols", "normalization")
-    normalized = unicodedata.normalize(form, text or "") if form != "none" else text or ""
-    return re.sub(r"\s+", "", normalized)
+    """頁番号の形を比べる文（NFKC にそろえて空白を除く。#4784）。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text or ""))
 
 
 def _seq_ranges(refs: Sequence[dict[str, Any]]) -> list[dict[str, int]]:

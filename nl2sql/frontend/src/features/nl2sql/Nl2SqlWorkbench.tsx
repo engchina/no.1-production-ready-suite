@@ -394,6 +394,9 @@ function ExecutableNl2SqlWorkbench() {
   // スキーマ参照の進行の表示が出す（durable job の規則。messaging §3.7、#821）。
   const headerSchemaRefreshStarting = schemaRefresh.startingOrigin === WORKBENCH_SCHEMA_REFRESH_HEADER;
   const panelSchemaRefreshStarting = schemaRefresh.startingOrigin === WORKBENCH_SCHEMA_REFRESH_PANEL;
+  // 表の一覧・件数を 1 度も読み取れないまま失敗している（0 件と言い切れない。#4222）。
+  const schemaObjectsLoadFailed = schemaObjectsQuery.isError && !schemaObjectsQuery.data;
+  const schemaHeadLoadFailed = schemaHeadQuery.isError && !schemaHeadQuery.data;
   const schemaCatalogHasObjects =
     catalog.tables.length > 0 || (schemaHeadQuery.data?.object_count ?? 0) > 0;
   const currentScopedSchemaEmpty =
@@ -574,6 +577,8 @@ function ExecutableNl2SqlWorkbench() {
       profileId,
       profilesQuery.isSuccess,
       schemaCatalogHasObjects,
+      schemaObjectsLoadFailed,
+      schemaHeadLoadFailed,
       selectedProfileQuery.isSuccess,
     ]) &&
     pageError
@@ -584,7 +589,13 @@ function ExecutableNl2SqlWorkbench() {
       (noProfiles || !profileId || selectedProfileQuery.isSuccess)
     ) {
       setPageError(null);
-    } else if (pageError.source === "schema-load" && schemaCatalogHasObjects) {
+    } else if (
+      pageError.source === "schema-load" &&
+      schemaCatalogHasObjects &&
+      // 表の一覧の読み取りに失敗している間は、件数（head）に表があっても失敗の案内を消さない（#4222）。
+      !schemaObjectsLoadFailed &&
+      !schemaHeadLoadFailed
+    ) {
       setPageError(null);
     }
   }
@@ -1736,6 +1747,8 @@ function ExecutableNl2SqlWorkbench() {
                         loading={loadingCatalog}
                         // 業務プロファイルの一覧の読み込み中は、経過時間を上の領域の表示に任せて Skeleton だけにする（#4649）。
                         loadingIndicator={!profilesQuery.isPending}
+                        // 表の一覧を読み取れなかった（0 件と言い切れない。原因と再試行はページの先頭の案内。#4222）。
+                        loadFailed={schemaObjectsLoadFailed}
                         profileUnselected={schemaPanelState === "profile-unselected"}
                         disabled={active}
                         insertMode="logical"

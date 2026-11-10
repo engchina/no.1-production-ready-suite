@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { documentVersionOptions, savedVersionOption } from "./DocumentVersionEditor.logic";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ApiError, type DocumentDetail } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -47,6 +48,8 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
         .map((item) => [item.id, item]),
     ).values(),
   ];
+  // 候補を 1 件も読み取れないまま失敗したら、候補なしと見せずに失敗と再試行を出す（#4222）。
+  const candidatesFailed = documents.isError && documents.data === undefined;
   const options = documentVersionOptions(candidates, doc.id, {
     superseded: t("documents.version.superseded"),
   });
@@ -141,9 +144,29 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
             searching: documents.isFetching && !documents.isFetchingNextPage,
             onLoadMore: () => void documents.fetchNextPage(),
           }}
+          // 失敗の間は開いたパネルでも「候補がありません」と言わない。
+          labels={
+            candidatesFailed
+              ? {
+                  empty: t("documents.version.candidatesLoadError"),
+                  noMatch: () => t("documents.version.candidatesLoadError"),
+                }
+              : undefined
+          }
           disabled={save.isPending}
           width="lg"
         />
+        {candidatesFailed ? (
+          <div className="mt-2 min-w-0">
+            <DataLoadFailure
+              error={documents.error}
+              fallback={t("documents.version.candidatesLoadError")}
+              onRetry={() => void documents.refetch()}
+              layout="field"
+              testId="document-version-candidates-load-failed"
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

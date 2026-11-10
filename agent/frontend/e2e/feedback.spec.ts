@@ -330,6 +330,43 @@ test("評価が無い期間は空の状態を出し、読み込み中は経過�
   await expectNoPageHorizontalOverflow(page);
 });
 
+for (const viewport of VIEWPORTS) {
+  test(`業務 Agent の絞り込みの候補を読み取れないときは「すべて」だけを候補なしと見せず、ツールバーの直下に失敗と再試行を出す (#4222, ${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedReport(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let agentsFail = true;
+    // 後から登録した route が先に呼ばれる（fixture の成功の応答を上書きする）。
+    await page.route("**/api/agents", (route) =>
+      agentsFail
+        ? route.fulfill({
+            status: 500,
+            json: {
+              data: null,
+              error_messages: ["業務 Agent の一覧を読み取れませんでした。"],
+              warning_messages: [],
+              error_code: "database_read_failed",
+            },
+          })
+        : route.fallback()
+    );
+    await openRatings(page);
+
+    const failure = page.getByTestId("feedback-agent-filter-load-failed");
+    await expect(failure).toBeVisible({ timeout: 15_000 });
+    await expect(failure.getByRole("alert")).toContainText("業務 Agent の一覧を読み取れませんでした。");
+    // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
+    const toolbarBox = await page.getByTestId("feedback-filters").boundingBox();
+    const failureBox = await failure.boundingBox();
+    expect(toolbarBox !== null && failureBox !== null && failureBox.y >= toolbarBox.y + toolbarBox.height).toBe(true);
+    await expectNoPageHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`feedback-agent-filter-load-failed-${viewport.name}.png`) });
+
+    agentsFail = false;
+    await failure.getByRole("button", { name: "再試行" }).click();
+    await expect(failure).toHaveCount(0);
+  });
+}
+
 function seedRatedRun(mockApi: MockApi) {
   mockApi.state.runs.push({
     id: "run-admin-774",

@@ -1,6 +1,6 @@
-"""回答の値と操作部品の裏付けの手がかりの語（言語資源の grounding_cues。#2181 段 5）。
+"""回答の本文と根拠の照らし合わせの語（言語資源の grounding_cues。#2181 段 5）。
 
-数の規則・今回の値・ボタンとキー・別名・算式の単位・画像の操作を見分ける語は言語資源のデータで、
+内部の番号の語・出典の位置の単位は言語資源のデータで、
 ここは語を正規表現の部品にするだけを持つ（言語資源の hash ごとに 1 回だけ）。
 """
 
@@ -27,8 +27,6 @@ class GroundingCues:
     sentence_chars: str
     quote_open: str
     quote_close: str
-    # 金額などの桁の単位（「万」→ 10000）。
-    scales: dict[str, int]
 
     def has(self, key: str, text: str) -> bool:
         """語の一覧のどれかが text にあるか。"""
@@ -50,7 +48,6 @@ def _build(pack: LanguagePack) -> GroundingCues:
         sentence_chars=re.escape("".join(pack.words("question_cues", "sentence_split_chars"))),
         quote_open=first[0],
         quote_close=first[1],
-        scales={char: int(value) for char, value in pack.mapping(_SECTION, "amount_scale_units").items()},
     )
 
 

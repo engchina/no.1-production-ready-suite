@@ -9,6 +9,7 @@ import {
 import { dataLoadFailureKind, focusDataLoadRecovery } from "../../lib/data-load";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
+import { MessageText } from "../ui/message-text";
 import { ApiErrorDetailList } from "./api-error-banner";
 import { ErrorState } from "./state-views";
 
@@ -40,6 +41,12 @@ export interface DataLoadFailureStateProps {
    */
   databaseAction?: ReactNode;
   detailLabels?: ApiErrorDetailLabels;
+  /**
+   * 出し方（#4222）。`region`（既定）はデータ領域を占める `ErrorState`。`field` は選択欄の候補など、画面の一部の
+   * 欄を支える読み取りの失敗で、欄の位置に収まる danger の `Banner`（同じ文・導線・再試行）。`field` は欄の操作から
+   * フォーカスを奪わない（ほかにフォーカスがあれば動かさない）。
+   */
+  layout?: "region" | "field";
   testId?: string;
 }
 
@@ -65,6 +72,7 @@ export function DataLoadFailureState({
   onRetry,
   databaseAction,
   detailLabels = DEFAULT_API_ERROR_DETAIL_LABELS,
+  layout = "region",
   testId,
 }: DataLoadFailureStateProps) {
   const kind = dataLoadFailureKind(error);
@@ -73,6 +81,26 @@ export function DataLoadFailureState({
   const message =
     failureMessage(error, labels, Boolean(action)) ??
     [presentation.summary, presentation.nextAction].filter(Boolean).join("");
+  if (layout === "field") {
+    return (
+      <div data-testid={testId} data-failure-kind={kind} data-failure-layout="field">
+        <FieldLoadFailure
+          message={message}
+          retryLabel={labels.retry}
+          onRetry={onRetry}
+          action={action}
+          // 欄の位置では畳んでおく（開くと欄の並びを大きく押し下げる）。
+          details={
+            <ApiErrorDetailList
+              details={presentation.details}
+              label={detailLabels.details}
+              defaultOpen={false}
+            />
+          }
+        />
+      </div>
+    );
+  }
   return (
     <div data-testid={testId} data-failure-kind={kind}>
       <ErrorState
@@ -84,6 +112,42 @@ export function DataLoadFailureState({
         details={<ApiErrorDetailList details={presentation.details} label={detailLabels.details} />}
       />
     </div>
+  );
+}
+
+/** 欄を支える読み取りの失敗（`layout="field"`）。danger の Banner に文・導線・再試行を置く。 */
+function FieldLoadFailure({
+  message,
+  retryLabel,
+  onRetry,
+  action,
+  details,
+}: {
+  message: string;
+  retryLabel: string;
+  onRetry: () => void;
+  action?: ReactNode;
+  details?: ReactNode;
+}) {
+  const retryRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    focusDataLoadRecovery(retryRef.current, { onlyIfUnfocused: true });
+  }, []);
+  return (
+    <Banner
+      severity="danger"
+      action={
+        <>
+          {action}
+          <Button ref={retryRef} type="button" variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>
+            {retryLabel}
+          </Button>
+        </>
+      }
+    >
+      <MessageText text={message} />
+      {details ? <div className="mt-1 min-w-0">{details}</div> : null}
+    </Banner>
   );
 }
 

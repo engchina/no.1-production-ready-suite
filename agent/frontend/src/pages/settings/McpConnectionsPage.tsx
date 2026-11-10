@@ -40,6 +40,7 @@ import {
   SelectField,
   TextField,
   type SelectFieldOption,
+  dataLoadView,
 } from "@production-ready/ui";
 import {
   SettingsTestResultPanel,
@@ -569,6 +570,8 @@ export function McpConnectionsPage() {
                     kind: "primary",
                     label: t("settings.mcpConnections.add"),
                     icon: Plus,
+                    // 一覧を読み取れていない間は作らない（messaging.md §3.6.1。#4222）。
+                    disabled: dataLoadView(connections, { isEmpty: list.length === 0 }).blockCreate,
                     onClick: editor.openNew,
                   },
                 ]

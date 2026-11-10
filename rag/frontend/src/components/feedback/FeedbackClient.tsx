@@ -47,6 +47,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { CitationSourceSheet } from "@/components/search/CitationSourceSheet";
 import { EVIDENCE_LABELS } from "@/components/search/citation-evidence";
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -327,6 +328,16 @@ export function FeedbackClient() {
           count={listCountProps({ matchedTotal: page?.total, filtered, allTotal: allTotal.data })}
           testId="feedback-filters-toolbar"
         />
+        {searchAnswerProfilesQuery.isError && searchAnswerProfilesQuery.data === undefined ? (
+          // 絞り込みの候補を読み取れないまま「すべて」だけを候補なしと見せない（#4222）。一覧は読めるのでそのまま出す。
+          <DataLoadFailure
+            error={searchAnswerProfilesQuery.error}
+            fallback={t("feedback.filters.searchAnswerProfileLoadError")}
+            onRetry={() => void searchAnswerProfilesQuery.refetch()}
+            layout="field"
+            testId="feedback-profile-filter-load-failed"
+          />
+        ) : null}
         </> : null}
 
         {query.isLoading ? (
