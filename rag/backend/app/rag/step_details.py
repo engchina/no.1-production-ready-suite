@@ -71,17 +71,16 @@ def history_rewrite_details(
 
 
 def small_talk_details(intent: str, *, replied: bool) -> dict[str, Any] | None:
-    """検索せずに応じた工程の詳細（理由と結果）。"""
+    """検索せずに応じた工程の詳細（理由を含めた結果。畳んだ行にも出る）。"""
 
     from app.rag.small_talk import SMALL_TALK_REASONS
 
     reason = SMALL_TALK_REASONS.get(intent, intent)
     return pipeline_step_details(
         fields=[
-            ("理由", f"{reason}のため検索しませんでした"),
-            ("結果", "根拠なしの短い応答（引用なし）")
+            ("結果", f"{reason}のため検索せずに応じました（引用なし）")
             if replied
-            else ("結果", "応答を作れなかったため、検索して回答します"),
+            else ("結果", f"{reason}への応答を作れなかったため、検索して回答します"),
         ]
     )
 

@@ -138,8 +138,7 @@ async def test_small_talk_skips_retrieval_and_replies_without_citations(
     assert step.status == "done"
     assert step.display.kind == "small_talk_reply"
     details = {f.label: f.value for f in step.display.details.fields}
-    assert details["理由"].endswith("のため検索しませんでした")
-    assert details["結果"] == "根拠なしの短い応答（引用なし）"
+    assert details["結果"].endswith("のため検索せずに応じました（引用なし）")
 
 
 @pytest.mark.parametrize(
