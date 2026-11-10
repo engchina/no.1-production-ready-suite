@@ -11,7 +11,7 @@ RAG の回答は、単純な「近い chunk を prompt へ入れる」形では�
 1. 依頼を受け、安全チェックで質問を検査する（ブロックしたら検索しない）
 2. Business Context Pack（誰のどの業務か＝検索範囲）を確定する
 3. チャットでは、会話履歴から質問を単独で意味が通る形に書き換える（`RAG_HISTORY_REWRITE_ENABLED`）
-4. 回答フロー: 質問の理解 → 文書検索（Oracle AI Vector Search と Oracle Text の hybrid 検索を RRF で融合）→ Rerank（OCI Generative AI Cohere Rerank）→ small-to-big（親本文と前後の child）で文脈を足す → 回答文の生成と根拠確認（監査）
+4. 回答フロー: 質問の理解 → 文書検索（Oracle AI Vector Search と Oracle Text の hybrid 検索を RRF で融合）→ Rerank（OCI Generative AI Cohere Rerank）→ small-to-big（親本文と前後の child）で文脈を足す → 回答文の生成と引用の確認
 5. 回答側の安全チェックを行い、監査・回答の記録・質問履歴を残す
 
 ## Business Context Pack

@@ -60,6 +60,7 @@ from app.clients.recipe_version_log import (
     RecipeVersionOperation,
 )
 from app.config import Settings, get_settings, settings_today
+from app.rag.answer_prompts import EDITABLE_PROMPT_KEYS
 from app.rag.approved_faq_scope import FaqSourceDocumentState, document_version
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
@@ -4741,9 +4742,11 @@ class OracleClient:
         return await self._run_transaction(operation) > 0
 
     async def answer_prompt_overrides(self) -> dict[str, str]:
-        """回答・解析へ渡す回答生成のプロンプトの上書き({key: content})。"""
+        """回答・解析へ渡すプロンプトの上書き({key: content})。編集できる key だけを渡す。"""
         return {
-            key: str(value["content"]) for key, value in (await self.list_answer_prompts()).items()
+            key: str(value["content"])
+            for key, value in (await self.list_answer_prompts()).items()
+            if key in EDITABLE_PROMPT_KEYS
         }
 
     async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
@@ -18754,7 +18757,7 @@ CREATE TABLE {table_name} (
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_source_workbook_fk FOREIGN KEY (source_workbook_id)
         REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL,
-    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'calibration')),
+    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
 );

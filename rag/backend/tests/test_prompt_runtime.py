@@ -9,7 +9,6 @@ from rag_engine.resources.runtime import (
     saved_prompt_overrides,
 )
 
-from app.rag.answer_judge_calibration import judge_prompt_sha256
 from app.rag.answer_prompts import STAGE_PROMPT_REFS, default_prompt, validate_prompt
 
 
@@ -20,28 +19,21 @@ async def test_saved_instructions_are_isolated_between_tasks_and_threads() -> No
 
     async def request(value: str) -> tuple[str, str]:
         nonlocal count
-        with bind_prompt_overrides({"evaluation.coverage": value}):
+        with bind_prompt_overrides({"evaluation.correctness": value}):
             count += 1
             if count == 2:
                 ready.set()
             await ready.wait()
-            direct = resolve_prompt("evaluation.coverage", "builtin")
-            threaded = await asyncio.to_thread(resolve_prompt, "evaluation.coverage", "builtin")
+            direct = resolve_prompt("evaluation.correctness", "builtin")
+            threaded = await asyncio.to_thread(resolve_prompt, "evaluation.correctness", "builtin")
             return direct, threaded
 
     assert list(await asyncio.gather(request("first"), request("second"))) == [
         ("first", "first"),
         ("second", "second"),
     ]
-    assert resolve_prompt("evaluation.coverage", "builtin") == "builtin"
+    assert resolve_prompt("evaluation.correctness", "builtin") == "builtin"
     assert saved_prompt_overrides() is None
-
-
-def test_prompt_reset_restores_builtin_and_changes_evaluation_identity() -> None:
-    before = judge_prompt_sha256()
-    with bind_prompt_overrides({"evaluation.coverage": "## Step 1: 合成の判定"}):
-        assert judge_prompt_sha256() != before
-    assert judge_prompt_sha256() == before
 
 
 @pytest.mark.parametrize("key", STAGE_PROMPT_REFS)
@@ -50,7 +42,7 @@ def test_builtin_stage_prompts_pass_placeholder_validation(key: str) -> None:
 
 
 def test_stage_template_requires_original_input_tokens() -> None:
-    key = "vlm_answer"
+    key = "image_retrieval"
     default = default_prompt(key)
     validate_prompt(key, default)
     with pytest.raises(ValueError, match="placeholder"):

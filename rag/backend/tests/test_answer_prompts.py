@@ -1,17 +1,12 @@
-"""回答フローのプロンプト(回答生成テンプレート・画像検索)の編集と、回答・解析への反映。"""
+"""回答フローのプロンプト(生成の役割の文・画像検索)の編集と、回答・解析への反映。"""
 
 from __future__ import annotations
 
-from contextlib import closing
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from rag_engine.knowledge.prompt_files import (
-    IMAGE_RETRIEVAL_PROMPT_KEY,
-    VLM_ANSWER_PROMPT_KEY,
-    read_prompt,
-)
+from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt
 
 from app.api.routes import settings as settings_routes
 from app.clients.parser_service import ParserServiceClient
@@ -34,35 +29,45 @@ from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 
 client = AsgiTestClient(app)
-CUSTOM_ANSWER = "独自の指示\n{{question}}\n{{reading_rules}}\n{{answer_context}}"
+# 生成で編集できるのは役割と回答の書き方だけ（#4782）。
+ROLE_KEY = "generation.role"
+CUSTOM_ROLE = "## Step 1: 合成の役割\n合成の内容を返す。"
+CUSTOM_IMAGE = "独自 {{image_metadata}}"
+# 編集欄を外した key（固定の部分・入力テンプレート・内部の段）。保存も既定に戻す操作も受けない。
+FIXED_KEYS = (
+    "vlm_answer",
+    "generation.system",
+    "generation.fixed",
+    "generation.template",
+    "generation.evidenceReading",
+    "history_rewrite.system",
+)
 
 
 def test_saved_generation_prompt_does_not_need_the_language_placeholder() -> None:
     """既定の言語の差し込みは任意。無い指示も保存でき、差し込まれないだけ（#4755）。"""
-    assert "language" not in required_placeholders("generation.system")
-    validate_prompt("generation.system", "## Step 1: 合成の回答\n合成の内容を返す。")
+    assert "language" not in required_placeholders(ROLE_KEY)
+    validate_prompt(ROLE_KEY, CUSTOM_ROLE)
 
 
 def test_validate_prompt_rejects_empty_missing_placeholder_and_unknown_key() -> None:
-    validate_prompt(VLM_ANSWER_PROMPT_KEY, CUSTOM_ANSWER)
+    validate_prompt(ROLE_KEY, CUSTOM_ROLE)
     with pytest.raises(ValueError, match="空"):
-        validate_prompt(VLM_ANSWER_PROMPT_KEY, "  ")
-    with pytest.raises(ValueError, match=r"\{\{answer_context\}\}"):
-        validate_prompt(VLM_ANSWER_PROMPT_KEY, "{{question}} だけ")
+        validate_prompt(ROLE_KEY, "  ")
     with pytest.raises(ValueError, match=r"\{\{image_metadata\}\}"):
         validate_prompt(IMAGE_RETRIEVAL_PROMPT_KEY, "画像を説明して")
-    with pytest.raises(KeyError):
-        validate_prompt("audit", "x")
+    for key in ("audit", *FIXED_KEYS):
+        with pytest.raises(KeyError):
+            validate_prompt(key, "x")
 
 
 def test_prompt_overrides_apply_only_inside_block() -> None:
-    default = read_prompt(VLM_ANSWER_PROMPT_KEY)
+    default = read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
 
-    with prompt_overrides({VLM_ANSWER_PROMPT_KEY: CUSTOM_ANSWER}):
-        assert read_prompt(VLM_ANSWER_PROMPT_KEY) == CUSTOM_ANSWER
-        assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+    with prompt_overrides({IMAGE_RETRIEVAL_PROMPT_KEY: CUSTOM_IMAGE}):
+        assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == CUSTOM_IMAGE
 
-    assert read_prompt(VLM_ANSWER_PROMPT_KEY) == default
+    assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == default
 
 
 class FakePromptOracle:
@@ -88,19 +93,15 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     monkeypatch.setattr(settings_routes, "OracleClient", lambda: fake)
 
     initial = client.get("/api/settings/answer-prompts").json()["data"]
-    saved = client.put(
-        f"/api/settings/answer-prompts/{VLM_ANSWER_PROMPT_KEY}", json={"content": CUSTOM_ANSWER}
-    )
-    invalid = client.put(
-        f"/api/settings/answer-prompts/{VLM_ANSWER_PROMPT_KEY}", json={"content": "{{question}}"}
-    )
+    saved = client.put(f"/api/settings/answer-prompts/{ROLE_KEY}", json={"content": CUSTOM_ROLE})
+    invalid = client.put(f"/api/settings/answer-prompts/{ROLE_KEY}", json={"content": " "})
     unknown = client.put("/api/settings/answer-prompts/audit", json={"content": "x"})
-    reset = client.delete(f"/api/settings/answer-prompts/{VLM_ANSWER_PROMPT_KEY}")
+    reset = client.delete(f"/api/settings/answer-prompts/{ROLE_KEY}")
 
-    answer = _prompt(initial, VLM_ANSWER_PROMPT_KEY)
+    answer = _prompt(initial, ROLE_KEY)
     assert answer["customized"] is False
-    assert answer["content"] == answer["default_content"] == default_prompt(VLM_ANSWER_PROMPT_KEY)
-    assert answer["required_placeholders"] == ["question", "reading_rules", "answer_context"]
+    assert answer["content"] == answer["default_content"] == default_prompt(ROLE_KEY)
+    assert answer["required_placeholders"] == []
     # 各段は取込から評価まで処理の順(一覧とコードの照合は test_answer_prompt_stages.py。#2054)。
     assert [(stage["id"], stage["phase"]) for stage in initial["stages"]] == [
         (stage.id, stage.phase) for stage in PROMPT_STAGES
@@ -108,13 +109,36 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     assert initial["stages"][0]["phase"] == "ingestion"
     assert initial["stages"][-1]["phase"] == "evaluation"
     assert saved.status_code == 200
-    assert _prompt(saved.json()["data"], VLM_ANSWER_PROMPT_KEY)["content"] == CUSTOM_ANSWER
-    assert _prompt(saved.json()["data"], VLM_ANSWER_PROMPT_KEY)["customized"] is True
+    assert _prompt(saved.json()["data"], ROLE_KEY)["content"] == CUSTOM_ROLE
+    assert _prompt(saved.json()["data"], ROLE_KEY)["customized"] is True
     assert invalid.status_code == 422
-    assert "{{answer_context}}" in invalid.json()["error_messages"][0]
     assert unknown.status_code == 404
-    assert _prompt(reset.json()["data"], VLM_ANSWER_PROMPT_KEY)["customized"] is False
+    assert _prompt(reset.json()["data"], ROLE_KEY)["customized"] is False
     assert fake.saved == {}
+
+
+@pytest.mark.parametrize("key", FIXED_KEYS)
+def test_answer_prompts_api_rejects_keys_without_an_edit_field(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    """固定の部分と内部の段は保存できず、残っている保存値も画面・実行に出ない（#4782）。"""
+    fake = FakePromptOracle()
+    fake.saved[key] = {"content": "## Step 1: 残っている保存値", "updated_at": None}
+    monkeypatch.setattr(settings_routes, "OracleClient", lambda: fake)
+    path = f"/api/settings/answer-prompts/{key}"
+
+    assert client.put(path, json={"content": CUSTOM_ROLE}).status_code == 404
+    assert client.delete(path).status_code == 404
+    assert fake.saved[key]["content"] == "## Step 1: 残っている保存値"
+
+    data = client.get("/api/settings/answer-prompts").json()["data"]
+    assert key not in {item["key"] for item in data["prompts"]}
+    shown = {
+        f"{stage['id']}.{part['id']}": part for stage in data["stages"] for part in stage["prompts"]
+    }
+    if key in shown:
+        assert shown[key]["prompt_key"] is None
+        assert shown[key]["content"] != "## Step 1: 残っている保存値"
 
 
 def test_answer_prompt_edit_requires_the_screen_permission_of_each_prompt(
@@ -132,17 +156,17 @@ def test_answer_prompt_edit_requires_the_screen_permission_of_each_prompt(
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions("prompt-admin", ["menu.settings_prompts"])
     auth.user_with_permissions("parser-admin", ["menu.settings_parser_adapters"])
-    image_prompt = "独自 {{image_metadata}}"
+    image_prompt = CUSTOM_IMAGE
 
     prompt_admin = login(client, "prompt-admin")
     parser_admin = login(client, "parser-admin")
     for headers in (prompt_admin, parser_admin):
         assert client.get("/api/settings/answer-prompts", headers=headers).status_code == 200
 
-    answer_path = f"/api/settings/answer-prompts/{VLM_ANSWER_PROMPT_KEY}"
+    answer_path = f"/api/settings/answer-prompts/{ROLE_KEY}"
     image_path = f"/api/settings/answer-prompts/{IMAGE_RETRIEVAL_PROMPT_KEY}"
     forbidden = [
-        client.put(answer_path, json={"content": CUSTOM_ANSWER}, headers=parser_admin),
+        client.put(answer_path, json={"content": CUSTOM_ROLE}, headers=parser_admin),
         client.delete(answer_path, headers=parser_admin),
         client.put(image_path, json={"content": image_prompt}, headers=prompt_admin),
         client.delete(image_path, headers=prompt_admin),
@@ -152,14 +176,14 @@ def test_answer_prompt_edit_requires_the_screen_permission_of_each_prompt(
     assert fake.saved == {}
 
     assert (
-        client.put(answer_path, json={"content": CUSTOM_ANSWER}, headers=prompt_admin).status_code
+        client.put(answer_path, json={"content": CUSTOM_ROLE}, headers=prompt_admin).status_code
         == 200
     )
     assert (
         client.put(image_path, json={"content": image_prompt}, headers=parser_admin).status_code
         == 200
     )
-    assert set(fake.saved) == {VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY}
+    assert set(fake.saved) == {ROLE_KEY, IMAGE_RETRIEVAL_PROMPT_KEY}
     assert client.delete(answer_path, headers=prompt_admin).status_code == 200
     assert client.delete(image_path, headers=parser_admin).status_code == 200
     assert fake.saved == {}
@@ -202,21 +226,22 @@ class PromptFakeOracle(FakeOracle):
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({VLM_ANSWER_PROMPT_KEY: CUSTOM_ANSWER}, [CUSTOM_ANSWER]),
-        ({}, [default_prompt(VLM_ANSWER_PROMPT_KEY)]),
+        ({ROLE_KEY: CUSTOM_ROLE}, [CUSTOM_ROLE]),
+        ({}, [default_prompt(ROLE_KEY)]),
         # 読み込み失敗を未編集と見なして生成へ進まない。
         (RuntimeError("db down"), []),
     ],
 )
-async def test_answer_uses_saved_answer_template(
+async def test_answer_uses_saved_generation_role(
     monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str] | Exception, expected: list[str]
 ) -> None:
     import rag_engine.generation.answering as answering
+    from rag_engine.resources.runtime import resolve_prompt
 
     seen: list[str] = []
 
     def fake_answer(*args: Any, **kwargs: Any) -> Any:
-        seen.append(read_prompt(VLM_ANSWER_PROMPT_KEY))
+        seen.append(resolve_prompt(ROLE_KEY, default_prompt(ROLE_KEY)))
         raise RuntimeError("stop")
 
     monkeypatch.setattr(answering, "answer_question_result", fake_answer)
@@ -232,7 +257,6 @@ async def test_answer_uses_saved_answer_template(
         await engine.run(SearchRequest(query="操作 A の手順は？"))
 
     assert seen == expected
-    assert read_prompt(VLM_ANSWER_PROMPT_KEY) == default_prompt(VLM_ANSWER_PROMPT_KEY)
 
 
 def test_parser_service_does_not_send_vision_options(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -279,52 +303,42 @@ async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.Monkey
     assert await unsaved._image_retrieval_prompt() is None
 
 
+async def test_answer_prompt_overrides_pass_only_editable_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """編集欄の無い key の保存値は、残っていても回答・解析へ渡さない（#4782）。"""
+    from app.clients.oracle import OracleClient
+
+    async def rows(self: OracleClient) -> dict[str, dict[str, object]]:
+        return {
+            ROLE_KEY: {"content": CUSTOM_ROLE},
+            **{key: {"content": "残っている保存値"} for key in FIXED_KEYS},
+        }
+
+    monkeypatch.setattr(OracleClient, "list_answer_prompts", rows)
+    assert await OracleClient().answer_prompt_overrides() == {ROLE_KEY: CUSTOM_ROLE}
+
+
 @pytest.mark.usefixtures("oracle_db")
 async def test_answer_prompts_round_trip_on_real_oracle() -> None:
     """実 Oracle AI Database で、編集したプロンプトの保存・上書き・削除ができる。"""
     from app.clients.oracle import OracleClient
-    from app.rag.oracle_schema import (
-        answer_prompt_placeholders_migration_sql,
-        answer_prompt_reading_rules_migration_sql,
-    )
 
     oracle = OracleClient()
     try:
-        legacy = "独自の指示\n{{question}}\n{{images}}\n{{image_metadata}}"
-        image_content = "画像の指示 {{image_metadata}}"
-        await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, legacy)
-        await oracle.save_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY, image_content)
-        before = await oracle.list_answer_prompts()
-        with (
-            closing(oracle.acquire_connection()) as connection,
-            closing(connection.cursor()) as cursor,
-        ):
-            cursor.execute(answer_prompt_placeholders_migration_sql())
-            cursor.execute(answer_prompt_placeholders_migration_sql())
-            cursor.execute(answer_prompt_reading_rules_migration_sql())
-            cursor.execute(answer_prompt_reading_rules_migration_sql())
-            connection.commit()
-        after = await oracle.list_answer_prompts()
-        assert after[VLM_ANSWER_PROMPT_KEY]["content"] == (
-            "独自の指示\n{{question}}\n{{reading_rules}}\n\n{{answer_context}}\n{{evidence_metadata}}"
-        )
-        assert (
-            after[VLM_ANSWER_PROMPT_KEY]["updated_at"]
-            == before[VLM_ANSWER_PROMPT_KEY]["updated_at"]
-        )
-        assert after[IMAGE_RETRIEVAL_PROMPT_KEY] == before[IMAGE_RETRIEVAL_PROMPT_KEY]
-        await oracle.save_answer_prompt(
-            VLM_ANSWER_PROMPT_KEY, "一回目 {{question}} {{reading_rules}} {{answer_context}}"
-        )
-        await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, CUSTOM_ANSWER)
-        assert (await oracle.answer_prompt_overrides())[VLM_ANSWER_PROMPT_KEY] == CUSTOM_ANSWER
+        await oracle.save_answer_prompt(ROLE_KEY, "## Step 1: 一回目")
+        await oracle.save_answer_prompt(ROLE_KEY, CUSTOM_ROLE)
+        await oracle.save_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY, CUSTOM_IMAGE)
+        overrides = await oracle.answer_prompt_overrides()
+        assert overrides[ROLE_KEY] == CUSTOM_ROLE
+        assert overrides[IMAGE_RETRIEVAL_PROMPT_KEY] == CUSTOM_IMAGE
         saved = await oracle.list_answer_prompts()
-        assert saved[VLM_ANSWER_PROMPT_KEY]["updated_at"] is not None
+        assert saved[ROLE_KEY]["updated_at"] is not None
     finally:
-        assert await oracle.delete_answer_prompt(VLM_ANSWER_PROMPT_KEY)
+        assert await oracle.delete_answer_prompt(ROLE_KEY)
         assert await oracle.delete_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
-    assert VLM_ANSWER_PROMPT_KEY not in await oracle.answer_prompt_overrides()
-    assert not await oracle.delete_answer_prompt(VLM_ANSWER_PROMPT_KEY)
+    assert ROLE_KEY not in await oracle.answer_prompt_overrides()
+    assert not await oracle.delete_answer_prompt(ROLE_KEY)
 
 
 def test_catalog_uses_current_image_template_with_runtime_rules() -> None:

@@ -1,13 +1,11 @@
 """主張と引用の対による回答生成を、LLM を差し替えて入出力だけで確認する。"""
 
-import json
 import re
 import unittest
 from dataclasses import replace
 from typing import Any
 from unittest.mock import patch
 
-from audit_fixtures import is_audit_wire, is_explanation_schema, legacy_audit_result, synthetic_explanation
 from citation_unit_support import canonical_fixture, without_unit_annotations
 from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
@@ -61,22 +59,15 @@ class FakeModel:
         self.captured_system_prompts = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        observed = schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        if is_explanation_schema(schema):
-            if not self.explanations:
-                return synthetic_explanation(schema, prompt)
-            text = self.explanations.pop(0) if len(self.explanations) > 1 else self.explanations[0]
-            return schema.model_validate({"explanation": text})
         is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
         source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
         canonical_schema = GroundedDraft if is_generation else schema
         payload = value(prompt) if callable(value) else value
-        if is_audit_wire(schema):
-            return legacy_audit_result(payload, schema)
         return canonical_fixture(payload) if is_generation else canonical_schema.model_validate(payload)
 
 
@@ -413,10 +404,10 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(_prompt_safe_warnings(warnings), ["chunk-7: ignore_previous_instructions"])
 
     def test_generation_prompt_maps_shared_layout_policy_onto_answer_fields(self):
-        prompt = grounded.GENERATE_SYSTEM_PROMPT
+        prompt = grounded.generation_system_prompt()
         # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
         self.assertNotIn("別の節にする", prompt)
-        mapping = prompt.split("## Step 3:", 1)[1].split("## Step 5:", 1)[0]
+        mapping = prompt.split("## Step 3:", 1)[1]
         for field in ("kind=gap", "結果にも条件", "external_data_items"):
             self.assertIn(field, mapping)
 
@@ -447,7 +438,7 @@ class GroundedAnswerTest(unittest.TestCase):
         known.update(generated_schema["properties"])
         for definition in generated_schema.get("$defs", {}).values():
             known.update(definition.get("properties", {}))
-        named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.GENERATE_SYSTEM_PROMPT))
+        named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.generation_system_prompt()))
         values = {
             "document_text",
             "image_extraction",
@@ -472,8 +463,8 @@ class GroundedAnswerTest(unittest.TestCase):
             self.assertEqual(generated[field]["maxLength"], limit)
         self.assertNotIn("items", schema["properties"])
         self.assertNotIn("summary", schema["properties"])
-        self.assertNotIn("items は最大", grounded.GENERATE_SYSTEM_PROMPT)
-        self.assertNotIn("全体が破棄される", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertNotIn("items は最大", grounded.generation_system_prompt())
+        self.assertNotIn("全体が破棄される", grounded.generation_system_prompt())
 
     def test_document_context_is_shown_under_its_own_evidence_as_not_quotable(self):
         spans = [
@@ -505,7 +496,7 @@ class GroundedAnswerTest(unittest.TestCase):
         refusal = draft({"kind": "gap", "text": "削除の手順は資料から確認できません。"}, summary="", confidence="low")
         result = run(FakeModel([refusal], [audit()]), ctx).response
         # prompt は「根拠が無ければ summary は空、不足は gap に書く」と指示する。公開される本文もその形になる。
-        self.assertIn("冒頭の選択を空にする", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn("冒頭の選択を空にする", grounded.generation_system_prompt())
         self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
         self.assertIn("削除の手順は資料から確認できません。", result.answer_text)
 
@@ -765,46 +756,6 @@ class ImageGenerationFallbackTest(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.run_round(failing, None)
         self.assertEqual(self.text_model.prompts, [])
-
-
-class AuditGlossaryTest(unittest.TestCase):
-    """質問に当たった用語（名前と別名）を監査の入力に渡す（#2823）。"""
-
-    def setUp(self):
-        self.ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(self.ctx)[LIST_TEXT]
-        step = "一覧表を選択し、処理を選択します。"
-        self.model = FakeModel([draft(item(eid, step, step, request_id="Q1"))], [audit((0, "supported", "matched", ""))])
-
-    def audit_input(self, glossary=()):
-        grounded.run_round(
-            QUESTION,
-            _grounded_spans(QUESTION, self.ctx, (), None),
-            None,
-            prompt="p",
-            image_paths=[],
-            provider_id=None,
-            parse_text=self.model,
-            parse_images=None,
-            glossary=glossary,
-        )
-        return json.loads(next(prompt for schema, prompt in self.model.prompts if schema == "GroundedAudit"))
-
-    def test_answering_passes_only_terms_with_aliases(self):
-        from pathlib import Path
-
-        from rag_engine.generation.answering import _audit_glossary
-        from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeTerm
-
-        runtime = RuntimeKnowledgeContext(
-            original_question=QUESTION,
-            expanded_question=QUESTION,
-            path=Path("glossary.json"),
-            terms_answer_enabled=True,
-            matched_terms=(RuntimeTerm(term="年次集計", aliases=("年集計",)), RuntimeTerm(term="一覧表")),
-        )
-        self.assertEqual(_audit_glossary(runtime), [{"term": "年次集計", "aliases": ["年集計"]}])
-        self.assertEqual(_audit_glossary(None), [])
 
 
 class SummaryDeniedClaimTest(unittest.TestCase):

@@ -69,13 +69,8 @@ def _seven_steps(name: str) -> str:
     )
 
 
-GENERATION_SYSTEM_3 = _three_steps("回答")
-GENERATION_SYSTEM_7 = _seven_steps("回答")
-ASSUMPTION_SAVED = (
-    "\n## Step 6: 合成の前提を明記する\n"
-    "- 未確定の条件は前提として示す。\n"
-    "- 選択肢を事実として選ばない。\n"
-)
+GENERATION_ROLE_3 = _three_steps("回答")
+GENERATION_ROLE_7 = _seven_steps("回答")
 
 
 def _validated(saved: dict[str, str]) -> dict[str, str]:
@@ -89,18 +84,17 @@ def _validated(saved: dict[str, str]) -> dict[str, str]:
     "saved",
     [
         {},
-        {"generation.assumptionSystem": ASSUMPTION_SAVED},
-        {"generation.system": GENERATION_SYSTEM_3},
-        {"generation.system": GENERATION_SYSTEM_7},
-        {"generation.system": GENERATION_SYSTEM_3, "generation.assumptionSystem": ASSUMPTION_SAVED},
+        {"generation.role": GENERATION_ROLE_3},
+        {"generation.role": GENERATION_ROLE_7},
     ],
-    ids=["defaults", "assumption", "system-3-steps", "system-7-steps", "both"],
+    ids=["defaults", "role-3-steps", "role-7-steps"],
 )
 async def test_generation_system_with_assumptions_keeps_continuous_steps(
     monkeypatch: pytest.MonkeyPatch, saved: dict[str, str]
 ) -> None:
-    """生成の system と未確定の前提の追加部品を、回答の経路で組み立てた後に確かめる。"""
+    """役割の文に固定の部分と未確定の前提を足した生成の system を、回答の経路で確かめる。"""
     import rag_engine.adapters.oci as engine_oci
+    from rag_engine.generation.grounded import ASSUMPTION_SYSTEM_PROMPT, GENERATION_FIXED_PROMPT
 
     systems: list[str] = []
 
@@ -122,6 +116,14 @@ async def test_generation_system_with_assumptions_keeps_continuous_steps(
     for system in systems:
         assert_continuous_steps(system)
         assert_saved_text_is_sent(saved, system)
+        # 固定の部分は、役割の文を保存していても必ず続きの番号で入る（#4782）。
+        # `{{language}}` は言語の名前に替わるので、その前後に分けて見る。
+        for piece in _without_step_numbers(GENERATION_FIXED_PROMPT.strip()).split("{{language}}"):
+            assert piece in _without_step_numbers(system)
+    assert any(
+        _without_step_numbers(ASSUMPTION_SYSTEM_PROMPT.strip()) in _without_step_numbers(system)
+        for system in systems
+    )
 
 
 AUDIT_SAVED_3 = _three_steps("監査")

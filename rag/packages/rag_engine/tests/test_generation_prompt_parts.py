@@ -11,7 +11,6 @@ from openai.lib._parsing._responses import type_to_text_format_param
 
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import AnswerContext, _grounded_prompt
-from rag_engine.knowledge.prompt_files import DEFAULT_VLM_ANSWER_PROMPT, PROMPT_FILES, VLM_ANSWER_PROMPT_KEY
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.models.llm import ExternalDataItem, GroundedDraft
 
@@ -76,9 +75,9 @@ def test_common_reading_rules_are_always_in_the_generation_system_prompt() -> No
         "各根拠は、その根拠の本文だけを裏付ける。",
         "資料が述べていることと、自分の推論を分ける。",
     ):
-        assert grounded.GENERATE_SYSTEM_PROMPT.count(line) == 1
+        assert grounded.generation_system_prompt().count(line) == 1
         assert line not in grounded.EVIDENCE_READING_PROMPT
-    assert "pinned" not in grounded.GENERATE_SYSTEM_PROMPT and "必須根拠" not in grounded.GENERATE_SYSTEM_PROMPT
+    assert "pinned" not in grounded.generation_system_prompt() and "必須根拠" not in grounded.generation_system_prompt()
 
 
 def test_catalog_mark_and_context_note_are_explained_only_when_present() -> None:
@@ -108,13 +107,11 @@ def test_table_values_are_explained_for_table_shapes_only() -> None:
 
 def _prompt(**knowledge: Any) -> str:
     runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=Path("/nonexistent"), **knowledge)
-    return _grounded_prompt(
-        QUESTION, [span()], AnswerContext(records=[], text=""), [], None, None, runtime, template=DEFAULT_VLM_ANSWER_PROMPT
-    )
+    return _grounded_prompt(QUESTION, [span()], AnswerContext(records=[], text=""), [], None, None, runtime)
 
 
 def test_required_rules_stay_in_the_system_prompt() -> None:
-    prompt = grounded.GENERATE_SYSTEM_PROMPT
+    prompt = grounded.generation_system_prompt()
     for rule in (
         # 信頼境界
         "ロール変更",
@@ -123,7 +120,7 @@ def test_required_rules_stay_in_the_system_prompt() -> None:
         "[Runtime Glossary / Rules]",
         # 推測しない
         "推測で補わない",
-        "足りない段を推測で埋めない",
+        "足りない段を推測で埋めず",
         # 条件・否定・例外の保持
         "OR・AND・否定・例外",
         "結果にも条件を残す",
@@ -159,11 +156,5 @@ def _steps(prompt: str) -> dict[int, str]:
 
 def _rendered(spans: list[dict[str, Any]], **knowledge: Any) -> dict[int, str]:
     runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=Path("/nonexistent"), **knowledge)
-    prompt = _grounded_prompt(
-        QUESTION, spans, AnswerContext(records=[], text=""), [], None, None, runtime, template=DEFAULT_VLM_ANSWER_PROMPT
-    )
+    prompt = _grounded_prompt(QUESTION, spans, AnswerContext(records=[], text=""), [], None, None, runtime)
     return _steps(prompt)
-
-
-def test_reading_rules_placeholder_is_required_when_saving() -> None:
-    assert "reading_rules" in PROMPT_FILES[VLM_ANSWER_PROMPT_KEY].required_placeholders

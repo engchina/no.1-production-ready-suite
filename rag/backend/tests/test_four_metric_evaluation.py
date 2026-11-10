@@ -1,4 +1,4 @@
-"""六指標の評価情報・独立性・応答判断を合成データで検証する。"""
+"""四指標の評価情報・独立性・応答判断を合成データで検証する。"""
 
 from typing import Any
 
@@ -51,7 +51,7 @@ def test_required_fragments_and_document_ranks_are_independent() -> None:
         *EVALUATION_METRIC_NAMES,
         *EVALUATION_REPORT_ONLY_METRIC_NAMES,
     }
-    assert len(EVALUATION_METRIC_NAMES) == 6
+    assert len(EVALUATION_METRIC_NAMES) == 4
 
 
 @pytest.mark.parametrize("expected", ["answer", "clarify", "hold"])
@@ -81,10 +81,8 @@ def test_missing_materials_are_not_zero_or_passed() -> None:
     assert all(count == 0 for count in metrics.metric_case_counts.values())
 
 
-def test_correctness_does_not_follow_faithfulness_or_coverage() -> None:
-    judgement = EvaluationAnswerJudgement(
-        status="completed", answer_correctness=0, requirement_coverage=1, claim_support_rate=1
-    )
+def test_incorrect_answer_fails_the_correctness_threshold() -> None:
+    judgement = EvaluationAnswerJudgement(status="completed", answer_correctness=0)
     scored = score_case_answers(
         EvaluationCase(id="synthetic", query="合成の質問"), [(response(), {})], judgement
     )
@@ -92,12 +90,11 @@ def test_correctness_does_not_follow_faithfulness_or_coverage() -> None:
         [scored], thresholds=EvaluationThresholds(answer_correctness=0.9)
     )
     assert metrics.answer_correctness == 0
-    assert metrics.requirement_coverage == metrics.claim_support_rate == 1
     assert metrics.passed is False
     assert [item.metric for item in metrics.threshold_failures] == ["answer_correctness"]
 
 
-async def test_faithfulness_without_standard_or_saved_record() -> None:
+async def test_case_without_standard_answer_is_not_judged() -> None:
     captured = []
 
     class Pipeline:
@@ -108,21 +105,13 @@ async def test_faithfulness_without_standard_or_saved_record() -> None:
 
     async def judge(**kwargs: Any) -> dict[str, Any]:
         captured.append(kwargs)
-        return {
-            "status": "completed",
-            "claim_support_rate": 1,
-            "requirement_coverage": None,
-            "answer_correctness": None,
-        }
+        return {"status": "completed", "answer_correctness": 1}
 
     result = await EvaluationRunner(
         pipeline=Pipeline(), answer_judge=judge, settings=Settings()
     ).run([EvaluationCase(id="synthetic", query="合成の質問")], top_k=3)
-    assert captured[0]["standard_answer"] == ""
-    assert captured[0]["evaluation_input"]["evidence_items"]
-    assert result.claim_support_rate == 1
+    assert captured == []
     assert result.answer_correctness is None
-    assert result.metric_case_counts["claim_support_rate"] == 1
     assert result.metric_case_counts["answer_correctness"] == 0
 
 
@@ -166,8 +155,6 @@ def test_unassessed_completed_judgement_keeps_null_verdict() -> None:
     summary = summarize_answer_judgement({"status": "completed", "passed": None})
     assert summary.passed is None
     assert summary.answer_correctness is None
-    assert summary.claim_support_rate is None
-    assert summary.requirement_coverage is None
 
 
 @pytest.mark.parametrize("suite", ["standard", "strict"])
@@ -184,11 +171,7 @@ def test_thresholds_use_unrounded_scores(
     values = {name: 1.0 for name in EVALUATION_METRIC_NAMES}
     values[metric] = value
     judgement = EvaluationAnswerJudgement(
-        status="completed",
-        **{
-            name: values[name]
-            for name in ("answer_correctness", "requirement_coverage", "claim_support_rate")
-        },
+        status="completed", answer_correctness=values["answer_correctness"]
     )
     case = EvaluationCaseResult(
         case_id="synthetic-boundary",

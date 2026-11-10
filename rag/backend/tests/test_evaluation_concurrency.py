@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from time import perf_counter
 
 import pytest
@@ -17,7 +17,7 @@ from app.rag.evaluation import EvaluationRunner
 from app.rag.evaluation_jobs import evaluation_job_failed_message
 from app.rag.pipeline import SearchStageProgressCallback
 from app.schemas.evaluation import EvaluationCase
-from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search import SearchRequest, SearchResponse
 from tests.test_evaluation import EVALUATION_INPUT, _approval_response, _completed_judgement
 
 
@@ -71,7 +71,6 @@ class _ThrottledJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:

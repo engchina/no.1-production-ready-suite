@@ -17,14 +17,11 @@ import { paginationLabels } from "@/lib/pagination-labels";
 import { toast } from "@/lib/toast";
 import { testsetApi, type TestSetDraft, type TestSetItem } from "@/lib/testset-api";
 
-import { PreviousCalibration } from "./PreviousCalibration";
-
 /** 本人の評価結果を手で整理する。参考回答の自動採用や自動確認はしない。 */
 export function TestSetTab() {
   const query = useQuery({ queryKey: ["testsets"], queryFn: testsetApi.list });
   const [draft, setDraft] = useState<TestSetDraft | null>(null);
   const [creating, setCreating] = useState(false);
-  const [legacy, setLegacy] = useState(false);
   const open = useMutation({ mutationFn: testsetApi.get, onSuccess: (value) => { setDraft(value); setCreating(false); } });
   const paging = useClientListPaging("evaluation.testsets.paging", "drafts");
   return <div className="grid min-w-0 gap-6" data-testid="testset-creation">
@@ -46,9 +43,6 @@ export function TestSetTab() {
     </Section> : null}
     {creating ? <CreateDraft onCreated={value => { setDraft(value); setCreating(false); }} onCancel={() => setCreating(false)} /> : null}
     {draft ? <DraftEditor key={draft.draft_id} initial={draft} onClose={() => { setDraft(null); void query.refetch(); }} /> : null}
-    {!draft && !creating ? <Disclosure summary={t("evaluation.testsets.previous")} open={legacy} onOpenChange={setLegacy}>
-      {legacy ? <PreviousCalibration /> : null}
-    </Disclosure> : null}
   </div>;
 }
 

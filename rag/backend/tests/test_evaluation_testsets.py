@@ -258,21 +258,3 @@ async def test_api_owner_save_reopen_export_and_conflict(monkeypatch: pytest.Mon
         reopened = (await client.get(base + "/" + draft_id)).json()["data"]
         assert reopened["items"][0]["reference_answer"] == "未確認の生成回答"
         assert reopened["items"][0]["confirmed"]
-
-
-@pytest.mark.asyncio
-async def test_previous_calibration_write_api_is_read_only() -> None:
-    import httpx
-
-    from app.main import app
-    from tests.support import TEST_REQUEST_HEADERS
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://testserver",
-        headers=TEST_REQUEST_HEADERS,
-    ) as client:
-        result = await client.post(
-            "/api/evaluation/calibration/label-sets", json={"name": "合成", "job_ids": ["job-a"]}
-        )
-        assert result.status_code == 410, result.text

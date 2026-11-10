@@ -10,7 +10,7 @@ from typing import Any
 
 from pr_backend_core.model_cascade import ModelCascade, resolve_model_cascade
 
-# 2 つ目のモデルでやり直す段（回答文の生成と根拠確認。段が特定できないときもこの段）。
+# 2 つ目のモデルでやり直す段（回答文の生成と引用の確認。段が特定できないときもこの段）。
 ESCALATION_STAGE = "answer.generate"
 
 
