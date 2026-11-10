@@ -83,9 +83,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
-| 画面目録の読み込み（#554） | 任意（`RAG_SCREEN_LINKING_ENABLED`） | 読めない → 画面を足さずに続ける | `DS`（`screen_catalog`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._load_screen_catalog` |
-| 画面の選択（LLM） | 任意 | 失敗 → 選ばずに続ける | `DS`（`screen_link`。rag_engine から `report_degraded`）。一時的な失敗が cache に残る不具合は #3278 | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/screen_catalog.py::link_screens` |
-| 画面の根拠の chunk | 任意 | 読めない → その画面を足さない | `DS`（`screen_chunks`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._screen_chunks` |
 | 章節の目録（章節の拡張の起点。#1436） | 任意（`RAG_SECTION_EXPANSION_ENABLED`。無効なら目録を読まない） | 読めない → 目録が無い文書と同じに扱う | `DS`（`section_outline`）・`DX`（`section_expansion.unmapped_seeds`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_outline`・`rag/packages/rag_engine/rag_engine/generation/section_expansion.py::expand_sections` |
 | 章節の chunk の読み込み | 任意 | 読めない → その章節を読めなかった章節にする（`read_error`） | `DS`（`section_chunks`）・`DX`（`section_expansion` の止めた理由・読めなかった章節） | 見せない（読めなかった章節として記録に残す） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_chunks`・`rag/packages/rag_engine/rag_engine/generation/section_expansion.py::SectionReader.groups` |
 | 章節の子の章節の並べ替え（rerank） | 任意 | 失敗 → 語の重なりで並べる | `DS`（`section_child_rerank`）・`DX`（`ranking: lexical`。rerank が無いときと同じ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::_rank_children` |
@@ -135,9 +132,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `reference_load` | 参照先の chunk の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | `reference_prefetch` | 参照先の文書の先読み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_reference_documents` |
 | `reference_rerank` | 参照先の文書の中の rerank | `rag/backend/app/rag/answer_engine.py::AnswerEngine._document_reference_chunks` |
-| `screen_catalog` | 画面目録の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._load_screen_catalog` |
-| `screen_link` | 画面の選択の LLM（rag_engine） | `rag/packages/rag_engine/rag_engine/retrieval/screen_catalog.py::link_screens` |
-| `screen_chunks` | 画面の根拠の chunk | `rag/backend/app/rag/answer_engine.py::AnswerEngine._screen_chunks` |
 | `section_outline` | 章節の目録 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_outline` |
 | `section_chunks` | 章節の chunk の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_chunks` |
 | `history_rewrite` | 会話の履歴での質問の書き換えの LLM（回答エンジンの前の段） | `rag/backend/app/rag/pipeline.py::_rewrite_query_with_history` |

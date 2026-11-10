@@ -1,6 +1,6 @@
 """回答の検索の補助の処理の失敗を、診断で「当たらなかった」と分ける(#3259)。
 
-補助の処理(業務の名前・実体・関係情報・参照先・画面目録・章節・編集したプロンプト)は、
+補助の処理(業務の名前・実体・関係情報・参照先・章節・編集したプロンプト)は、
 失敗しても空のまま回答を続ける。失敗は ``_SearchState.degraded`` に処理の種類・回数・例外の型の
 名前だけを残し、回答の診断(``degraded_steps``)と根拠 0 件の診断(``zero_evidence``)に出す。
 例外の文・SQL・本文・識別子は出さない。外部 I/O はすべてスタブ。
@@ -25,7 +25,6 @@ from tests.test_answer_engine import (
     EmptyWithKeysOracle,
     FakeGenAi,
     FakeOracle,
-    ScreenOracle,
     _chunk,
     _fake_llm,
 )
@@ -65,69 +64,6 @@ def _assert_degraded(state: _SearchState, kind: str) -> None:
 
 
 # ---- 処理ごとに、失敗(記録が残る)と空(記録が残らない)を分ける ----
-
-
-class _ScopeOracle(FakeOracle):
-    """画面目録・条の文書の一覧が読む範囲の状態と一覧を返す(``fail`` なら失敗する)。"""
-
-    def __init__(self, *, fail: bool) -> None:
-        super().__init__()
-        self.fail = fail
-
-    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
-        if self.fail:
-            raise Boom(SECRET)
-        return []
-
-    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
-        if self.fail:
-            raise Boom(SECRET)
-        return "1:1"
-
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
-        return []
-
-    async def retrieval_screen_chunks(
-        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
-    ) -> list[RetrievedChunk]:
-        if self.fail:
-            raise Boom(SECRET)
-        return []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_screen_catalog_failure_is_recorded(
-    monkeypatch: pytest.MonkeyPatch, fail: bool
-) -> None:
-    monkeypatch.setattr(answer_engine_module, "_SCREEN_CATALOG_CACHE", {})
-    state = _SearchState()
-
-    catalog = await _engine(_ScopeOracle(fail=fail))._load_screen_catalog(
-        SearchRequest(query="q"), state
-    )
-
-    assert catalog == {}
-    if fail:
-        _assert_degraded(state, "screen_catalog")
-    else:
-        assert state.degraded_steps() == []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_screen_chunks_failure_is_recorded(fail: bool) -> None:
-    state = _SearchState()
-
-    stored = await _engine(_ScopeOracle(fail=fail))._screen_chunks(
-        SearchRequest(query="q"), state, [("画面A.pdf", "画面 A")], set()
-    )
-
-    assert stored == []
-    if fail:
-        _assert_degraded(state, "screen_chunks")
-    else:
-        assert state.degraded_steps() == []
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
@@ -327,14 +263,14 @@ async def test_reference_rerank_failure_is_recorded(fail: bool) -> None:
 def test_degraded_record_counts_per_kind_and_type_without_messages() -> None:
     state = _SearchState()
 
-    state.record_degraded("screen_chunks", Boom(SECRET))
-    state.record_degraded("screen_chunks", Boom("別の文"))
-    state.record_degraded("screen_chunks", TimeoutError(SECRET))
+    state.record_degraded("reference_expansion", Boom(SECRET))
+    state.record_degraded("reference_expansion", Boom("別の文"))
+    state.record_degraded("reference_expansion", TimeoutError(SECRET))
     state.record_degraded("section_outline", Boom(SECRET))
 
     assert state.degraded_steps() == [
-        {"kind": "screen_chunks", "count": 2, "exc_type": "Boom"},
-        {"kind": "screen_chunks", "count": 1, "exc_type": "TimeoutError"},
+        {"kind": "reference_expansion", "count": 2, "exc_type": "Boom"},
+        {"kind": "reference_expansion", "count": 1, "exc_type": "TimeoutError"},
         {"kind": "section_outline", "count": 1, "exc_type": "Boom"},
     ]
     assert SECRET not in json.dumps(state.degraded_steps(), ensure_ascii=False)
@@ -423,40 +359,6 @@ async def test_prompt_read_failure_is_not_an_auxiliary_degradation(
     oracle = _OverridesOracle(fail_overrides=True)
     with pytest.raises(Boom):
         await _run(monkeypatch, oracle)
-
-
-async def test_screen_link_failure_in_rag_engine_is_recorded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """rag_engine の中の画面の選択(LLM)の失敗も、同じ記録に残す(「該当なし」と分ける)。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation import answering
-    from rag_engine.retrieval.screen_catalog import ScreenLinks
-
-    def failing_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is ScreenLinks:
-            raise Boom(SECRET)
-        return _fake_llm(system, prompt, settings, schema, **options)
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", failing_llm)
-    monkeypatch.setattr(answer_engine_module, "_SCREEN_CATALOG_CACHE", {})
-    monkeypatch.setattr(answering, "_SCREEN_LINK_CACHE", {})
-    oracle = ScreenOracle()
-    engine = _engine(
-        oracle,
-        rag_rerank_enabled=False,
-        rag_screen_linking_enabled=True,
-    )
-
-    outcome = await engine.run(
-        SearchRequest(query="帳票が印字されない", top_k=10, filters={"knowledge_base_id": "kb-1"})
-    )
-
-    assert outcome.citations
-    assert oracle.section_calls and oracle.screen_calls == []
-    steps = cast(list[dict[str, Any]], outcome.diagnostics["degraded_steps"])
-    assert {"kind": "screen_link", "count": 1, "exc_type": "Boom"} in steps
-    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
 
 
 async def test_main_search_failure_is_an_error_not_zero_evidence(

@@ -1200,7 +1200,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
   - 「回答エンジン」を継承していた検索・回答プロファイルと、「標準」を明示していた検索・回答プロファイルの RAG 検索・チャット。
   - 検索・回答プロファイルを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
   - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
-- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、質問の言い換え・分解 = 自動ルーティング、回答の生成方式 = CRAG のとき、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。既定は質問の言い換え・分解 = 単純検索、回答の生成方式 = 標準 RAG（#2747）で、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で変える（これらは全体設定だけで決め、検索・回答プロファイルでは上書きしない。#3053）。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、質問の言い換え・分解 = 自動ルーティング、回答の生成方式 = CRAG のとき、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。既定は質問の言い換え・分解 = 単純検索、回答の生成方式 = 標準 RAG（#2747）で、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で変える（これらは全体設定だけで決め、検索・回答プロファイルでは上書きしない。#3053）。
 - 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
 - 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、取込・検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。当時は回答の上書きを検索・回答プロファイルの「質問の言い換え・分解」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行ったが、これらは #3053 で全体設定だけになった（検索・回答プロファイルの保存値は適用しない）。安全チェックは今までどおり質問と回答の両方に適用する。
 
@@ -2227,3 +2227,19 @@ CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選�
 - 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`・`RAG_ARTICLE_CATALOG_ENABLED`・`RAG_ARTICLE_CATALOG_MAX_DOCUMENTS`・`RAG_ARTICLE_CATALOG_MAX_ARTICLES`・`RAG_ARTICLE_CATALOG_CONTEXT_RECORDS`・`RAG_ARTICLE_CATALOG_SCOPE_DOCUMENTS`・`RAG_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH`・`RAG_ARTICLE_CATALOG_REFINE_ARTICLES`・`RAG_ARTICLE_CATALOG_REFINE_CANDIDATES`・`RAG_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP`・`RAG_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_DIR`・`RAG_ARTICLE_CATALOG_CACHE_TTL_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_MAX_ENTRIES`・`RAG_MCP_CATALOG_ARTICLE_EVIDENCE_LIMIT`。
 - 条の選択の結果の記録のファイル（既定は `PLATFORM_LOCAL_STORAGE_DIR` の下の `cache/rag-article-catalog`、または `RAG_ARTICLE_CATALOG_CACHE_DIR` に設定した場所）は読まれなくなる。ディレクトリごと消してよい。
 - 保存値: この 2 つの段の回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system`・`article_catalog.*`）は、#4782 の生成の PR の migration `20261110_4782_generation_prompt_overrides` が消す（この PR に別の migration は無い）。
+
+
+## 画面目録による検索の廃止後の更新（#4845）
+
+専用の開閉・prompt・検索処理は削除した。原文・chunk の章節パスと交差参照は保持する。保存済み prompt の `screen_linking.system` は既存の `20261110_4782_generation_prompt_overrides` migration が削除するため、適用済み migration は書き換えない。言語資源の旧フィールドは既存の退役処理に残し、未更新の資源からも除けるようにする。
+
+旧い `.env` の行を消してから通常の更新を実行する。設定の値は表示しない。以下は repo の直下で実行する。
+
+```bash
+mkdir -p tmp/remove-screen-linking-env
+sudo -n cp -a rag/backend/.env "tmp/remove-screen-linking-env/rag.env.$(date -u +%Y%m%dT%H%M%SZ)"
+sudo -n sed -i -E '/^[[:space:]]*(export[[:space:]]+)?(RAG_DOCRAG_SCREEN_LINKING_ENABLED|RAG_SCREEN_LINKING_ENABLED|RAG_ENGINE_SCREEN_LINKING|RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK)[[:space:]]*=/d' rag/backend/.env
+sudo -n ./platform/deploy/suite-update.sh
+```
+
+独立して rag_engine の `.env` を用意した環境では、そのファイルからも `RAG_ENGINE_SCREEN_LINKING` と `RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK` の行を除く。新しいコードには旧キーを受ける互換動作はない。この手順は配備の承認後に行う。

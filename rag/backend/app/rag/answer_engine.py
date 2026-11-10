@@ -10,9 +10,6 @@ rag_poc の ``answer_question_result``(親子文脈 / 生成)を
   親本文(``parent_text``)で親子を復元する。
   質問の語から検索条件・候補の除外・加点は推定しない。利用者の明示した範囲と認可を保つ。
   1 ページ目の本文と先頭Chunkは、正式生成の根拠の選択後に同じ版と範囲で読む。
-- 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
-  ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
-  読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
 - rerank: backend の Cohere rerank。
 - LLM: openai SDK(OCI_ENTERPRISE_AI_*)。rag_engine 内部の Responses API 経路を使う。
 回答フローは同期関数のため回答の専用の worker thread で動かし、非同期 I/O はイベントループへ戻して
@@ -155,11 +152,6 @@ ANSWER_ENGINE = "grounded"
 ENGINE_SOURCE_RUN_ID = "0" * 16
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
-# 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
-_SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
-_SCREEN_CATALOG_CACHE_SIZE = 32
-# section_path の見出しの区切り(chunking_small_to_big が「 > 」でつないで保存する)。
-_SECTION_PATH_SEPARATOR = " > "
 # 回答の thread が event loop の I/O を待つ間に、回答の期限・取り消しを確かめる間隔(秒。#1422)。
 _IO_DEADLINE_POLL_SECONDS = 0.5
 # 回答フローの工程の通知(進捗)1 件を待つ上限(秒)。通知は補助なので、超えたら待たずに続ける。
@@ -293,8 +285,6 @@ class _SearchState:
     # 質問の文書名・ページを足した検索条件(#546)。同じ回答の中で同じなので、最初の検索で
     # 1 回だけ決める。
     filters: dict[str, str] | None = None
-    # 画面目録(#554)。同じ回答の中で同じなので、1 回の回答で 1 回だけ作る。
-    screen_catalog: dict[str, list[str]] | None = None
     # 検索ごとの検索文の数・候補の件数(#2401。根拠 0 件の診断)。
     search_log: list[dict[str, object]] = field(default_factory=list)
     # 正式生成へ追加する文書背景の既読。版と検索範囲が同じ場合だけ再利用する。
@@ -563,11 +553,7 @@ def build_engine_settings(
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
-        # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
-        "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
-        # 根拠の無い要求だけの再検索と予算(#1279)。
-        # 小問ごとの検索の上限(#2399。期限は再検索と共通)。
-        # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
+        # 根拠の無い要求の再検索と追加の検索の予算。
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
@@ -743,16 +729,10 @@ class AnswerEngine:
         # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
         self._complete_evidence = complete_evidence
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
-        # 質問に応じた推論の LLM（画面目録の連携）と根拠の
+        # 根拠の
         # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
         # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
-        if self._caller_queries is not None:
-            settings = settings.model_copy(
-                update={
-                    "rag_screen_linking_enabled": False,
-                }
-            )
         if not settings.rag_support_guide_enabled:
             settings = settings.model_copy(update={"rag_support_guide": {}})
         self._settings = settings
@@ -1072,11 +1052,6 @@ class AnswerEngine:
             parse_images=parse_multimodal_response,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
-            ),
-            # 画面目録の連携(#554)。rag_engine は設定が有効なときだけ呼ぶ。
-            screen_catalog=lambda **kwargs: run_async(lambda: self._screen_catalog(request, state)),
-            screen_chunks=lambda *, links, existing, **kwargs: run_async(
-                lambda: self._screen_chunks(request, state, links, existing)
             ),
             # 章節の拡張(#1436)。章節と chunk の対応(#1438)を読む。無効なら章節で広げない。
             section_outline=(
@@ -2637,7 +2612,7 @@ class AnswerEngine:
                 filters = {**scope, "document_id": anchor.document_id}
                 if chunk_set_id:
                     filters["chunk_set_id"] = chunk_set_id
-                sections = await self._oracle.retrieval_screen_sections(filters)
+                sections = await self._oracle.retrieval_section_paths(filters)
                 state.reference_section_indexes[key] = SectionIndex(
                     path for _name, path, _count in sections
                 )
@@ -2719,9 +2694,7 @@ class AnswerEngine:
         document_id = await self._referenced_document_id(scope, state, anchor, target)
         if document_id is None:
             return []
-        sections = await self._oracle.retrieval_screen_sections(
-            {**scope, "document_id": document_id}
-        )
+        sections = await self._oracle.retrieval_section_paths({**scope, "document_id": document_id})
         section_path = SectionIndex(path for _name, path, _count in sections).resolve(target.spec)
         if section_path is None:
             return []
@@ -2876,96 +2849,6 @@ class AnswerEngine:
         order.extend(index for index in range(len(rows)) if index not in order)
         return [rows[index] for index in order]
 
-    async def _screen_catalog(
-        self, request: SearchRequest, state: _SearchState
-    ) -> dict[str, list[str]]:
-        """検索範囲の全文書の見出しから画面目録を作る(範囲と索引の状態ごとに cache。#554)。
-
-        1 回の回答では最初の 1 回だけ作る。読めないときは空(rag_engine は LLM を呼ばず
-        画面を足さない)。
-        """
-        if state.screen_catalog is None:
-            state.screen_catalog = await self._load_screen_catalog(request, state)
-        return state.screen_catalog
-
-    async def _load_screen_catalog(
-        self, request: SearchRequest, state: _SearchState
-    ) -> dict[str, list[str]]:
-        from rag_engine.retrieval.screen_catalog import catalog_from_section_paths
-
-        filters = _screen_filters(request, state)
-        try:
-            index_state = await self._oracle.retrieval_scope_state(filters)
-            key = (json.dumps(filters, ensure_ascii=False, sort_keys=True), index_state)
-            cached = _SCREEN_CATALOG_CACHE.get(key)
-            if cached is not None:
-                return cached
-            sections = await self._oracle.retrieval_screen_sections(filters)
-        except Exception as exc:  # noqa: BLE001 - 画面目録は補助。画面を足さずに回答を続ける。
-            logger.warning("screen catalog load failed", exc_info=True)
-            state.record_degraded("screen_catalog", exc)
-            return {}
-        catalog = catalog_from_section_paths(
-            (file_name, _section_headings(section_path), count)
-            for file_name, section_path, count in sections
-        )
-        if len(_SCREEN_CATALOG_CACHE) >= _SCREEN_CATALOG_CACHE_SIZE:
-            _SCREEN_CATALOG_CACHE.clear()
-        _SCREEN_CATALOG_CACHE[key] = catalog
-        return catalog
-
-    async def _screen_chunks(
-        self,
-        request: SearchRequest,
-        state: _SearchState,
-        links: Sequence[tuple[str, str]],
-        existing: set[str],
-    ) -> list[Any]:
-        """選ばれた画面の child(画面ごとに上限まで)と、その親を検索範囲から読む(#554)。
-
-        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。1 ページ目の
-        本文(#557)・根拠画像は検索の候補と同じく付ける。読めない画面は足さない(回答は続ける)。
-        """
-        from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
-
-        filters = _screen_filters(request, state)
-        added: dict[str, RetrievedChunk] = {}
-        for file_name, heading in links:
-            try:
-                rows = await self._oracle.retrieval_screen_chunks(
-                    filters,
-                    file_name=file_name,
-                    heading=heading,
-                    limit=MAX_CHILDREN_PER_SCREEN * 4 + len(existing),
-                )
-            except Exception as exc:  # noqa: BLE001 - 画面の根拠は補助。この画面を足さずに続ける。
-                logger.warning("screen chunks load failed", exc_info=True)
-                state.record_degraded("screen_chunks", exc)
-                continue
-            matched = [
-                chunk
-                for chunk in original_chunks(rows)
-                if chunk.chunk_id not in existing
-                and chunk.chunk_id not in added
-                and heading in _chunk_headings(chunk)
-            ]
-            for chunk in matched[:MAX_CHILDREN_PER_SCREEN]:
-                added[chunk.chunk_id] = state.chunks.setdefault(chunk.chunk_id, chunk)
-        if not added:
-            return []
-        chunks = list(added.values())
-        if self._attach_images:
-            await self._materialize_images(chunks, state)
-            chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
-        children = [
-            _stored_child(
-                chunk,
-                rrf_score=0.0,
-            )
-            for chunk in chunks
-        ]
-        return [*children, *_stored_parents(children, state)]
-
     async def _section_outline(self, state: _SearchState, chunk_id: str) -> Any:
         """当たった chunk の文書の章節の一覧と所有の章節(#1436)。対応が無い・読めなければ None。
 
@@ -3105,7 +2988,7 @@ class AnswerEngine:
         from app.rag.document_background import selected_document_backgrounds
 
         rows = await selected_document_backgrounds(
-            self._oracle, state, _screen_filters(request, state), spans
+            self._oracle, state, _effective_search_filters(request, state), spans
         )
         return [
             {
@@ -3655,7 +3538,7 @@ def _with_effective_as_of(request: SearchRequest) -> SearchRequest:
     """検索の基準日(as_of)を決めた要求(#2602)。
 
     基準日の無い要求は今日にする(``OracleClient`` の有効期間の判定の既定と同じ日)。主検索・先読み・
-    交差参照・実体・関係情報の拡張・画面目録・章節の読み取りはこの要求の条件を使うので、回答の途中で
+    交差参照・実体・関係情報の拡張・章節の読み取りはこの要求の条件を使うので、回答の途中で
     日付が変わっても、すべての検索が同じ日で有効期間を判定する。明示した基準日は変えない。
     """
     if (request.filters.get(AS_OF_FILTER_KEY) or "").strip():
@@ -3665,28 +3548,13 @@ def _with_effective_as_of(request: SearchRequest) -> SearchRequest:
     )
 
 
-def _screen_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:
-    """画面目録と画面の chunk を読む条件。検索と同じ実際の条件(#2056)。
+def _effective_search_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:
+    """章節と文書背景を読む条件。検索と同じ実際の条件。
 
     質問から読み取った項目の条件(#652)と質問の文書名・ページ(#546)を足した ``state.filters``
     (条件で 0 件だったときは外した条件)。最初の検索の前で決まっていなければ要求の ``filters``。
     """
     return dict(state.filters if state.filters is not None else request.filters)
-
-
-def _section_headings(section_path: str) -> list[str]:
-    return [part.strip() for part in section_path.split(_SECTION_PATH_SEPARATOR) if part.strip()]
-
-
-def _chunk_headings(chunk: RetrievedChunk) -> list[str]:
-    """chunk の見出しの列。
-
-    rag_engine の metadata の section_path。無ければ保存した文字列を分ける。
-    """
-    path = _engine_metadata(chunk).get("section_path")
-    if isinstance(path, list):
-        return [str(part).strip() for part in path]
-    return _section_headings(str(chunk.metadata.get("section_path") or ""))
 
 
 def _finite_float(value: object) -> float | None:

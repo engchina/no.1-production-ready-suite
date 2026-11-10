@@ -141,7 +141,7 @@ async def test_other_document_found_by_title_only_in_long_path() -> None:
 
 @pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize("parent", _OVER_RETURNING_LIMIT)
-async def test_screen_sections_keep_long_paths_in_reading_order(parent: str) -> None:
+async def test_section_paths_keep_long_paths_in_reading_order(parent: str) -> None:
     client = OracleClient()
     token = uuid4().hex[:12]
     long_path = f"{parent} > 第2章"
@@ -159,7 +159,7 @@ async def test_screen_sections_keep_long_paths_in_reading_order(parent: str) -> 
     )
     await _indexed_document(client, file_name=second, chunks=[_chunk(0, "別", "第1章")])
 
-    assert await client.retrieval_screen_sections({"file_name": f"sections-{token}"}) == [
+    assert await client.retrieval_section_paths({"file_name": f"sections-{token}"}) == [
         (first, "第1章", 1),
         (first, long_path, 2),
         (first, "第3章", 1),
@@ -168,7 +168,7 @@ async def test_screen_sections_keep_long_paths_in_reading_order(parent: str) -> 
 
 
 @pytest.mark.usefixtures("oracle_db")
-async def test_screen_sections_do_not_add_a_query_without_long_paths(
+async def test_section_paths_do_not_add_a_query_without_long_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = OracleClient()
@@ -191,7 +191,7 @@ async def test_screen_sections_do_not_add_a_query_without_long_paths(
         return await fetch_all(statement, binds)
 
     monkeypatch.setattr(client, "_fetch_all", counting)
-    sections = await client.retrieval_screen_sections({"file_name": f"queries-{token}"})
+    sections = await client.retrieval_section_paths({"file_name": f"queries-{token}"})
 
     assert [(path, count) for _name, path, count in sections] == [
         ("第1章", 1),
@@ -202,8 +202,8 @@ async def test_screen_sections_do_not_add_a_query_without_long_paths(
 
 
 @pytest.mark.usefixtures("oracle_db")
-async def test_screen_sections_ignore_paths_that_are_not_strings() -> None:
-    """配列・JSON null の section_path は従来どおり目録に入れず、長い配列でも失敗しない。"""
+async def test_section_paths_ignore_paths_that_are_not_strings() -> None:
+    """配列・JSON null の section_path は章節のパスとして扱わず、長い配列でも失敗しない。"""
     client = OracleClient()
     token = uuid4().hex[:12]
     paths: list[object] = [None, ["第1章", "第2章"], ["合成の長い親階層" * 170, "第2章"]]
@@ -221,7 +221,7 @@ async def test_screen_sections_ignore_paths_that_are_not_strings() -> None:
     file_name = f"shapes-{token}.pdf"
     await _indexed_document(client, file_name=file_name, chunks=chunks)
 
-    assert await client.retrieval_screen_sections({"file_name": f"shapes-{token}"}) == [
+    assert await client.retrieval_section_paths({"file_name": f"shapes-{token}"}) == [
         (file_name, "第3章", 1)
     ]
 
@@ -290,26 +290,3 @@ async def test_reference_chunks_compare_whole_path(paths: _ReferencePaths) -> No
         filters, document_id=document_id, section_path=paths.target, limit=1
     )
     assert [row.text for row in limited] == ["参照先の節"]
-
-
-@pytest.mark.usefixtures("oracle_db")
-async def test_screen_chunks_read_heading_only_in_long_path() -> None:
-    """目録に入る見出しが長い見出しの列にだけあっても、その chunk を読める。"""
-    client = OracleClient()
-    token = uuid4().hex[:12]
-    screen = "（２）合成の画面"
-    file_name = f"screen-{token}.pdf"
-    await _indexed_document(
-        client,
-        file_name=file_name,
-        chunks=[
-            _chunk(0, "短い節の本文", "第1章"),
-            _chunk(1, "画面の本文", f"{'合成の長い親階層' * 170} > {screen}"),
-            _chunk(2, "長い別の節の本文", f"{'合成の長い親階層' * 170} > （３）別の画面"),
-        ],
-    )
-
-    chunks = await client.retrieval_screen_chunks(
-        {"file_name": f"screen-{token}"}, file_name=file_name, heading=screen, limit=10
-    )
-    assert [chunk.text for chunk in chunks] == ["画面の本文"]

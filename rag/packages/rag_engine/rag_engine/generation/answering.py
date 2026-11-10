@@ -1080,7 +1080,6 @@ def build_adb_hybrid_answer_context(
     vector_only_queries: Sequence[str] = (),
     page_ranges: Sequence[Mapping[str, Any]] = (),
     trusted_queries: Sequence[str] = (),
-    catalog_skip_reasons: Mapping[str, str] | None = None,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
@@ -1156,17 +1155,6 @@ def build_adb_hybrid_answer_context(
             insufficient_reason="retrieval returned no active child chunks",
         )
 
-    linked_screens: list[tuple[str, str]] = []
-    if getattr(settings, "screen_linking_enabled", False):
-        added, linked_screens, expansion = _linked_screen_children(question, search_result.all_chunks, ranked_children, settings)
-        ranked_children = [
-            *ranked_children,
-            *(replace(record, metadata={**record.metadata, "retrieval_admission_stage": "screen"}) for record in added),
-        ]
-        known = {record.chunk_uid for record in active_records}
-        active_records.extend(record for record in expansion if record.chunk_uid not in known)
-    else:
-        _record_catalog_skip("画面の選択", (catalog_skip_reasons or {}).get("screen", "configuration_disabled"))
     with _execution_step("再ランキング候補の選択", "既存の順位を保ち、重複と各経路・総量の上限を適用します。") as step:
         limits = stage_limits(settings, ranked_children)
         configured_limit = max(0, int(getattr(settings, "rerank_candidate_limit", 0)))
@@ -1186,11 +1174,6 @@ def build_adb_hybrid_answer_context(
         rerank_phase=rerank_phase,
     )
     record_retrieval_stage({"stage": "post_rerank_policies", "selected_ids": [retrieval_record_id(record) for record in ranked_children]})
-    reserve_rank = int(getattr(settings, "screen_linking_reserve_rank", 0) or 0)
-    if linked_screens and reserve_rank > 0:
-        from rag_engine.retrieval.screen_catalog import reserve_linked_screens
-
-        ranked_children = reserve_linked_screens(ranked_children, linked_screens, reserve_rank)
     if getattr(settings, "document_selection_enabled", False):
         with _execution_step(
             "文書の選択", "候補を文書ごとに集約し、元の質問との並べ替え（rerank）の点数が明らかに低い文書を後回しにします。"
@@ -2158,7 +2141,7 @@ def _cover_guide_steps(
 ) -> tuple[AnswerContext, dict[str, Any], tuple[tuple[str, str, tuple[str, ...]], ...]]:
     """業務ガイドの手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す (#2395)。
 
-    検索は embedding・hybrid 検索・rerank だけで、文書の選択・画面目録（LLM を呼ぶ）は使わない。
+    検索は embedding・hybrid 検索・rerank だけで、文書の選択は使わない。
     足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。戻り値は (回答に渡す context, 記録,
     手順ごとの根拠（手順 id, 題名, 根拠の chunk_uid の列）)。
     """
@@ -2195,11 +2178,9 @@ def _cover_guide_steps(
         )
         return context, trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
 
-    catalog_policy = _catalog_skip_policy(settings, "guide_step")
     search_settings = replace(
         settings,
         document_selection_enabled=False,
-        screen_linking_enabled=False,
     )
     per_step = max(1, int(getattr(settings, "guide_step_chunks_per_step", 1) or 1))
     reference_cap = max(0, int(getattr(settings, "guide_reference_max_chunks", 0) or 0))
@@ -2216,7 +2197,6 @@ def _cover_guide_steps(
             max_records=per_query,
             retrieval_queries=queries,
             rerank_phase="guide_step",
-            catalog_skip_reasons=catalog_policy,
             rerank_enabled=rerank_enabled,
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
@@ -2787,135 +2767,6 @@ EVIDENCE_RESULT_TITLE = "集めた根拠"
 _SEARCH_PURPOSE = "意味の近さ（ベクトル）と語の一致（全文）で探した順位を融合し、上位の根拠とその前後の文脈を集めます。"
 
 
-# 画面目録と画面の選択の cache。目録は chunk 集合ごと、選択は（質問、chunk 集合）ごと。同じ質問の検索は
-# 検索し直すので、選択の LLM 呼び出しを 1 質問 1 回にする。目録を注入したときは、選択を（質問、目録の内容）ごとにする。
-# 選択に失敗した結果は cache しない（次の回で選び直す。#3278）。
-_SCREEN_CATALOG_CACHE: dict[tuple[int, int], dict[str, list[str]]] = {}
-_SCREEN_LINK_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
-
-
-def _catalog_skip_policy(settings: Settings, reason: str) -> dict[str, str]:
-    return {"screen": reason if getattr(settings, "screen_linking_enabled", False) else "configuration_disabled"}
-
-
-def _record_catalog_skip(name: str, reason: str) -> None:
-    message = {
-        "configuration_disabled": "設定がオフのため実行しません。",
-        "missing_requirement": "未回答の要求の補助検索では画面目録の選択を行いません。",
-        "guide_step": "参照先の検索では目録の選択を行いません。",
-        "caller_queries": "呼び出し元が検索文を指定したため目録の選択を行いません。",
-        "overflow": "上限外の検索文の補助検索では目録の選択を行いません。",
-    }[reason]
-    with _execution_step(name) as step:
-        step.skip(message, reason_code=reason)
-        step.input({"実効設定": {"enabled": False}, "理由": reason})
-        step.output({"選択状態": "skipped", "理由": reason, "モデルを呼び出した": False})
-
-
-def _linked_screen_children(
-    question: str,
-    pool: Sequence[Any],
-    ranked_children: Sequence[AnswerRecord],
-    settings: Settings,
-) -> tuple[list[AnswerRecord], list[tuple[str, str]], list[AnswerRecord]]:
-    """画面目録で選んだ画面の child chunk のうちまだ候補に無いもの、選んだ（文書、見出し）、context の展開に足す record を返す (#1108)。
-
-    目録と画面の chunk は、検索範囲の全 chunk（`pool`）から作る。呼び出し元が `AnswerDependencies.screen_catalog` /
-    `screen_chunks` を注入したときは、検索結果に無い画面も載せるため、そちらから読む。そのときは読んだ child と親を
-    context の展開（親・兄弟）に使えるよう 3 つ目で返す（`pool` から作るときは `pool` に含まれるので空）。
-    """
-    from rag_engine.dependencies import injected_screen_catalog, injected_screen_chunks
-    from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN, build_screen_catalog, link_screens, screen_candidates
-
-    with _execution_step("画面の選択", "画面目録から質問を解決する画面を選び、その画面の根拠を検索候補に加えます。") as step:
-        step.input(lambda: {"質問": question, "既存の候補": candidate_snapshot(ranked_children), "目録": None})
-        catalog = injected_screen_catalog(settings=settings)
-        if catalog is not None:
-            catalog_source = "injected"
-            digest = hashlib.sha256(json.dumps(catalog, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-            link_key: tuple[object, ...] = (question, "catalog", digest)
-        else:
-            pool_key = (id(pool), len(pool))
-            catalog = _SCREEN_CATALOG_CACHE.get(pool_key)
-            catalog_source = "process" if catalog is not None else "pool"
-            if catalog is None:
-                if len(_SCREEN_CATALOG_CACHE) >= 4:
-                    _SCREEN_CATALOG_CACHE.clear()
-                catalog = _SCREEN_CATALOG_CACHE[pool_key] = build_screen_catalog(pool)
-            link_key = (question, *pool_key)
-        step.input(
-            lambda: {
-                "質問": question,
-                "目録": catalog,
-                "目録の取得元": catalog_source,
-                "既存の候補": candidate_snapshot(ranked_children),
-                "利用可能なプール ID": [getattr(item, "chunk_uid", "") for item in pool],
-                "画面ごとの最大 Child 数": MAX_CHILDREN_PER_SCREEN,
-            }
-        )
-        if not catalog:
-            step.skip("検索範囲に画面目録がありません。", reason_code="catalog_empty")
-            step.output(
-                {
-                    "選択状態": "skipped",
-                    "理由": "catalog_empty",
-                    "選択結果の再利用": False,
-                    "選択した画面": [],
-                    "追加候補": [],
-                    "展開用の候補": [],
-                }
-            )
-            return [], [], []
-        links = _SCREEN_LINK_CACHE.get(link_key)
-        reused_selection = links is not None
-        if links is None:
-            links = link_screens(question, catalog, parse_text_response, settings)
-            if links is None:
-                step.output({"選択状態": "failed", "選択結果の再利用": False, "選択した画面": None, "追加候補": [], "展開用の候補": []})
-                step.fail("画面の選択に失敗したため、既存の候補で続けます。")
-                step.add(f"画面目録（{len(catalog)} 文書）からの画面の選択に失敗したため、画面の根拠を加えずに続けます。")
-                return [], [], []
-            if len(_SCREEN_LINK_CACHE) >= 256:
-                _SCREEN_LINK_CACHE.clear()
-            _SCREEN_LINK_CACHE[link_key] = links
-        if not links:
-            step.output(
-                {"選択状態": "no_match", "選択結果の再利用": reused_selection, "選択した画面": [], "追加候補": [], "展開用の候補": []}
-            )
-            step.record_outcome("no_match", reused=reused_selection)
-            step.status = "該当なし"
-            step.result(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
-            return [], [], []
-        existing = {r.chunk_uid for r in ranked_children if r.chunk_uid}
-        loaded = injected_screen_chunks(links=links, existing=existing, settings=settings)
-        if loaded is not None:
-            # 注入された読み込みは child と親を返す。候補に加えるのは画面ごとの上限までの child だけ。
-            added = screen_candidates(loaded, links, existing)
-            expansion = [_stored_chunk_answer_record(chunk) for chunk in loaded]
-        else:
-            added = screen_candidates(pool, links, existing)
-            expansion = []
-        step.field("画面目録", f"{len(catalog)} 文書")
-        step.field("選んだ画面", f"{len(links)} 件")
-        step.add("選んだ画面:", *numbered([f"{Path(source).name or source} {heading}" for source, heading in links], limit=8))
-        step.record_outcome("candidates_found", count=len(added), reused=reused_selection)
-        step.result(f"候補に加えた根拠 {len(added)} 件")
-        added_records = [_stored_chunk_answer_record(chunk) for chunk in added]
-        step.output(
-            lambda: {
-                "選択状態": "selected",
-                "選択結果の再利用": reused_selection,
-                "選択した画面": list(links),
-                "候補の取得元": "injected" if loaded is not None else "pool",
-                "追加候補": candidate_snapshot(added_records),
-                "展開用の候補": candidate_snapshot(expansion),
-                "追加候補数": len(added_records),
-                "最終採用": "この工程の返却候補です。回答文脈への採用は後段で決まります。",
-            }
-        )
-        return added_records, links, expansion
-
-
 def _question_text_search_tokenizer_config(settings: Settings) -> TextSearchTokenizerConfig:
     return TextSearchTokenizerConfig(
         sudachi_dict_type=settings.text_search_tokenizer_sudachi_dict,
@@ -3030,7 +2881,7 @@ def answer_question_result(
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
 
     ``caller_queries`` は呼び出し元（業務 Agent）が作った検索文（#2651）。渡すと検索文は ``question`` と
-    これだけになり、質問に応じた推論の LLM（画面目録の連携）を呼ばない。
+    これだけになり、追加の推論の LLM を呼ばない。
     ``generate_answer=False`` とだけ組み合わせる。規則による質問の理解・用語の別名の検索文・
     hybrid search・rerank・親子と前後の文脈は通常の検索と同じに行う。
 
@@ -3051,14 +2902,12 @@ def answer_question_result(
     if generate_answer and not complete_evidence:
         raise ValueError("根拠の補いを省く検索（complete_evidence=False）は回答を作らない検索だけに使います。")
     trusted_queries: tuple[str, ...] = ()
-    caller_catalog_policy = _catalog_skip_policy(settings, "caller_queries") if caller_planned else {}
     if caller_planned:
         question_key = _dedupe_query_key(normalized_question)
         trusted_queries = _dedupe_queries(
             tuple(query.strip() for query in caller_queries or () if query.strip() and _dedupe_query_key(query) != question_key)
         )
         # 質問に応じて LLM を呼ぶ検索の補助は、設定に関わらずこの経路では使わない。
-        settings = replace(settings, screen_linking_enabled=False)
     # 章節の拡張（#1436）の時間の上限は、回答の開始から数える。
     answer_started_at = monotonic()
 
@@ -3322,7 +3171,6 @@ def answer_question_result(
                     classification_filter=selected_classification_filter,
                     runtime_knowledge=runtime_knowledge,
                     trusted_queries=trusted_queries,
-                    catalog_skip_reasons=caller_catalog_policy,
                 )
                 retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
@@ -3367,8 +3215,7 @@ def answer_question_result(
             )
 
         # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
-        overflow_catalog_policy = _catalog_skip_policy(settings, "overflow")
-        overflow_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
+        overflow_settings = replace(settings, document_selection_enabled=False)
         overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
         overflow_keywords = (
             settings.domain_keywords_override
@@ -3386,7 +3233,6 @@ def answer_question_result(
                 neighbor_child_count=chunk_neighbor_count,
                 retrieval_queries=(query,),
                 rerank_phase="missing_requirement",
-                catalog_skip_reasons=overflow_catalog_policy,
                 rerank_enabled=effective_rerank_enabled,
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,

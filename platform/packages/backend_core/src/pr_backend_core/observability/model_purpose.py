@@ -22,7 +22,6 @@ MODEL_CALL_PURPOSES = frozenset(
         "answer.row_condition_judge",
         "evidence.read_batch",
         "evidence.repair_batch_range",
-        "evidence.select_screen",
         "query.route",
         "query.rewrite",
         "query.conditions",

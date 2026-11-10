@@ -134,7 +134,6 @@ const ANSWERING_SETTINGS = {
   runtime_terms_answer_enabled: false,
   neighbor_child_count: 3,
   rerank_enabled: true,
-  screen_linking_enabled: false,
   graph_expansion_enabled: false,
   config_source: "runtime",
   entity_expansion_enabled: true,
@@ -562,6 +561,7 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
   await mockRetrievalCards(page);
   await mockAnsweringSettings(page, []);
   await page.goto("/settings/retrieval");
+  await expect(page.getByRole("switch", { name: "画面目録で操作画面を探す", exact: true })).toHaveCount(0);
   const card = page.getByTestId("answering-settings-card");
   for (const title of ["検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
     const group = card.getByRole("region", { name: title, exact: true });

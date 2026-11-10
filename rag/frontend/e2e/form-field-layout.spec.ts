@@ -59,7 +59,6 @@ async function mockRetrieval(page: Page) {
       {
         neighbor_child_count: 3,
         rerank_enabled: true,
-        screen_linking_enabled: false,
         graph_expansion_enabled: false,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 6,
         section_expansion_enabled: true, section_expansion_max_levels: 4,
