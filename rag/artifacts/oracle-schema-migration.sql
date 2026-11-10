@@ -4557,3 +4557,11 @@ BEGIN
   NULL; -- crag_missing_aspect_template,crag_quote_only_note,crag_refusal_summary,crag_unknown_aspect_template
 END;
 /
+
+-- migration: 20261110_4782_retire_section_extraction_prompts
+DELETE FROM RAG_ANSWER_PROMPTS
+WHERE PROMPT_KEY IN ('section_extraction.system');
+
+-- migration: 20261110_4782_retire_article_catalog_prompts
+DELETE FROM RAG_ANSWER_PROMPTS
+WHERE PROMPT_KEY IN ('article_catalog.documentSystem', 'article_catalog.system', 'article_catalog.refineSystem');
