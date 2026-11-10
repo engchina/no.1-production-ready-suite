@@ -757,6 +757,37 @@ for (const viewport of [
   });
 }
 
+test("文書詳細の所属ナレッジベースの候補と今の値を読み取れないときは、それぞれ欄ごとの文の失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockDocumentDetail(page);
+  let fail = true;
+  // 後から登録した route が先に呼ばれる（mockDocumentDetail の成功の応答を上書きする）。
+  await page.route("**/api/knowledge-bases**", (route) =>
+    fail ? fulfillDocumentInspection(route, CANDIDATE_READ_FAILURE) : route.fallback()
+  );
+  await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
+    fail && route.request().method() === "GET" ? fulfillDocumentInspection(route, CANDIDATE_READ_FAILURE) : route.fallback()
+  );
+  await page.goto("/documents/doc-1");
+
+  // 今の値（所属先）の失敗と、候補の失敗は別の読み取り。見出しは欄ごとに違う文にする。
+  const membership = page.getByTestId("document-knowledge-bases-load-failed");
+  await expect(membership.getByRole("alert")).toHaveText("今の所属ナレッジベースを読み込めませんでした。", { timeout: 15_000 });
+  const candidates = page.getByTestId("knowledge-base-scope-load-failed");
+  await expect(candidates.getByRole("alert")).toHaveText("ナレッジベースの候補を読み込めませんでした。");
+  await expect(page.getByText("有効なナレッジベースがありません", { exact: false })).toHaveCount(0);
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+  await candidates.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`document-knowledge-bases-load-failed-${testInfo.project.name}.png`) });
+
+  fail = false;
+  await candidates.getByRole("button", { name: "再試行" }).click();
+  await expect(candidates).toHaveCount(0);
+  await membership.getByRole("button", { name: "再試行" }).click();
+  await expect(membership).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /所属先/ })).toBeVisible();
+});
+
 /** 文書の分類の一覧（#2131）。名前は合成の値。 */
 const CATEGORY_TREE = [
   {
