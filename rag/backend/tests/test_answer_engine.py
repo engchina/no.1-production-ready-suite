@@ -1337,6 +1337,14 @@ def retired_profile_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     yield path
 
 
+def _evidence_ids(outcome: Any) -> set[str]:
+    return {
+        child["chunk_id"]
+        for parent in outcome.diagnostics["evidence_tree"]
+        for child in parent["children"]
+    }
+
+
 def _doc_chunk(
     document_id: str,
     text: str,
