@@ -1,5 +1,4 @@
 import {
-  Button,
   FormActionBar,
   FormGrid,
   FormStatus,
@@ -70,6 +69,14 @@ export function ExternalConnectionSheet({
   onClose: () => void;
 }) {
   const save = useUpdateParserAdapterSettings();
+  const statusQuery = useExternalParserStatus(backend);
+  // 接続確認の所要時間は、押してから結果が返るまでを画面で測る。
+  const [elapsedMs, setElapsedMs] = useState<number | undefined>(undefined);
+  async function runConnectionTest() {
+    const startedAt = Date.now();
+    await statusQuery.refetch();
+    setElapsedMs(Date.now() - startedAt);
+  }
   const [form, setForm] = useState<ExternalParserConnectionForm>(() =>
     connectionFormFromSettings(backend, connection)
   );
@@ -246,6 +253,14 @@ export function ExternalConnectionSheet({
             ]}
             secondaryActions={[
               {
+                id: "test-connection",
+                label: t("settings.parserAdapters.connection.test"),
+                icon: Plug,
+                loading: statusQuery.isFetching,
+                disabled: saving || connectionDirty || !connection?.configured,
+                onClick: () => void runConnectionTest(),
+              },
+              {
                 id: "reset",
                 label: t("settings.parserAdapters.actions.reset"),
                 icon: RotateCcw,
@@ -262,11 +277,11 @@ export function ExternalConnectionSheet({
             }
           />
 
-          <ConnectionTestSection
+          <ConnectionTestFeedback
             backend={backend}
             backendLabel={backendLabel}
-            configured={Boolean(connection?.configured)}
-            disabled={saving}
+            statusQuery={statusQuery}
+            elapsedMs={elapsedMs}
             dirty={connectionDirty}
           />
 
@@ -277,40 +292,21 @@ export function ExternalConnectionSheet({
   );
 }
 
-function ConnectionTestSection({
+function ConnectionTestFeedback({
   backend,
   backendLabel,
-  configured,
-  disabled,
+  statusQuery,
+  elapsedMs,
   dirty,
 }: {
   backend: ExternalParserBackendName;
   backendLabel: string;
-  configured: boolean;
-  disabled: boolean;
+  statusQuery: ReturnType<typeof useExternalParserStatus>;
+  elapsedMs: number | undefined;
   dirty: boolean;
 }) {
-  const statusQuery = useExternalParserStatus(backend);
-  // 接続確認の所要時間（API は返さないため、押してから結果が返るまでを画面で測る。messaging.md §10.3）。
-  const [elapsedMs, setElapsedMs] = useState<number | undefined>(undefined);
-  const runConnectionTest = async () => {
-    const startedAt = Date.now();
-    await statusQuery.refetch();
-    setElapsedMs(Date.now() - startedAt);
-  };
   return (
     <div className="space-y-2">
-      <Button
-        type="button"
-        variant="secondary"
-        className="w-full sm:w-auto"
-        loading={statusQuery.isFetching}
-        disabled={disabled || dirty || !configured}
-        onClick={() => void runConnectionTest()}
-        icon={Plug}
-      >
-        {t("settings.parserAdapters.connection.test")}
-      </Button>
       {statusQuery.isFetching ? (
         // 外部の GPU parser へ実際に接続するため、起動直後や高負荷時は数秒以上かかる。
         <ProcessingIndicator
@@ -327,7 +323,7 @@ function ConnectionTestSection({
           {t("settings.parserAdapters.connection.saveBeforeTest")}
         </p>
       ) : null}
-      {/* 結果は「接続を確認」の直下に全幅で出し、入力を変えたら消す（messaging.md §10）。 */}
+      {/* 結果は操作の行の下に全幅で出し、入力を変えたら消す（messaging.md §10）。 */}
       {!dirty && !statusQuery.isFetching && (statusQuery.data || statusQuery.isError) ? (
         <ConnectionTestResult
           backend={backend}
