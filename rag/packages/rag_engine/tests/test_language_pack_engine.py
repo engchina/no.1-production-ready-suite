@@ -140,6 +140,16 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertFalse(is_structural_line("資料により確認できた事項"))
             self.assertEqual(answer_labels().page(3), "3 頁")
 
+    def test_page_text_is_fixed_to_nfkc_like_the_previous_default(self):
+        """頁番号の比較は NFKC に固定し、既定（NFKC）で取り込んだ文書と同じ形にする(#4784)。"""
+        import re
+        import unicodedata
+
+        from rag_engine.chunking.constants import _compact_page_text
+
+        for text in ("－ ３ －", "Ⅳ", "Ｐ．１２ / ２０", "ii"):
+            self.assertEqual(_compact_page_text(text), re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)))
+
 
 if __name__ == "__main__":
     unittest.main()

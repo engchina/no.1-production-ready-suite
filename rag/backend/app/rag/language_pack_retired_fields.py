@@ -390,6 +390,17 @@ def _removes_ingest_fields(pack: Mapping[str, Any]) -> bool:
     )
 
 
+def _same_ingest_output(pack: Mapping[str, Any]) -> bool:
+    """消した取込の項目で取込の結果が変わらない版か。
+
+    文字の正規化は NFKC に固定したので、NFKC 以外を公開していた版で作った索引は取込の結果が違う。
+    その版の索引の取込 hash は付け替えず、「再処理を推奨」のままにする。ほかの消した取込の項目は
+    どの処理も読まないので結果を変えない。
+    """
+    symbols = pack.get("symbols")
+    return not isinstance(symbols, Mapping) or symbols.get("normalization", "NFKC") == "NFKC"
+
+
 def _table_exists(connection: Any, table: str) -> bool:
     from app.clients.oracle import _fetch_all
 
@@ -445,7 +456,11 @@ def _strip_releases(connection: Any) -> None:
             },
             input_sizes=_json_input_sizes("effective"),
         )
-        if row["ingest_hash"] and row["ingest_hash"] != ingest_hash:
+        if (
+            row["ingest_hash"]
+            and row["ingest_hash"] != ingest_hash
+            and _same_ingest_output(effective)
+        ):
             changed_ingest.append((row["release_id"], row["ingest_hash"], ingest_hash))
     for release_id, old, new in changed_ingest:
         _repoint_ingest_hash(connection, release_id, old, new)

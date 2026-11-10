@@ -2837,7 +2837,7 @@ export interface ChunkingStrategyStatusData {
   selected: boolean;
 }
 
-/** 言語資源（#2181）。項目は「節 → 項目 → 値」（値は語の一覧か選択の文字列）。 */
+/** 言語資源（#2181）。項目は「節 → 項目 → 値」（値は語の一覧か 1 つの語）。 */
 export type LanguagePackFieldKind =
   | "words"
   | "pairs"
@@ -2847,14 +2847,13 @@ export type LanguagePackFieldKind =
   | "word_map"
   | "enum_map"
   | "char_ranges"
-  | "choice"
   | "text";
 
 export interface LanguagePackField {
   section: string;
   key: string;
   kind: LanguagePackFieldKind;
-  /** enum_map の値・choice の選択肢。 */
+  /** enum_map の値。 */
   choices: string[];
   /** 取込のときに使う書き方か（変えたら文書の再分割が要る）。 */
   ingest: boolean;

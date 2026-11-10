@@ -536,3 +536,19 @@ def test_4784_migration_is_a_destructive_data_step() -> None:
             for fields in builtin_pack().to_dict().values()
             if isinstance(fields, dict)
         )
+
+
+def test_release_with_non_nfkc_normalization_keeps_documents_reprocess_recommended() -> None:
+    """NFKC 以外の正規化を公開していた版の索引は、結果が違うので取込 hash を付け替えない(#4784)。"""
+    old = _with_4784_retired(builtin_pack().to_dict())
+    old["symbols"]["normalization"] = "NFC"
+    db = _Db(
+        rag_language_pack_releases=[_release(old) | {"ingest_hash": "old-ingest"}],
+        rag_chunk_sets=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"}
+        ],
+    )
+    remove_retired_language_pack_fields(db)
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["ingest_hash"] == builtin_pack().ingest_hash
+    assert db.tables["RAG_CHUNK_SETS"][0]["language_pack_ingest_hash"] == "old-ingest"

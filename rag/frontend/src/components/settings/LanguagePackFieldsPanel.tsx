@@ -4,8 +4,6 @@ import {
   Button,
   FormGrid,
   SearchField,
-  SelectField,
-  type SelectFieldOption,
   StatusBadge,
   TabPanel,
   Tabs,
@@ -221,28 +219,6 @@ function LanguageField({
       </Button>
     </div>
   ) : null;
-  if (field.kind === "choice") {
-    const options: SelectFieldOption<string>[] = field.choices.map((value) => ({
-      value,
-      label: t(`settings.language.choice.${value}` as I18nKey),
-    }));
-    return (
-      <div className="space-y-2">
-        <SelectField
-          id={id}
-          label={label}
-          helper={helper}
-          value={texts[key] ?? ""}
-          options={options}
-          width="lg"
-          disabled={disabled}
-          error={error}
-          onValueChange={onChange}
-        />
-        {resetRow}
-      </div>
-    );
-  }
   if (field.kind === "text") {
     return (
       <div className="space-y-2">
