@@ -154,11 +154,13 @@ test("携帯の編集と参考の読み取り位置を戻し、入力を保持�
   test.skip((page.viewportSize()?.width ?? 1440) > 600, "携帯の切り替えを検証する");
   await mockTestSetPage(page);
   await createFromResults(page);
+  await expect(page.getByRole("tabpanel", { name: "編集", exact: true })).toBeVisible();
   await page.locator("#testset-standard").fill("未保存の合成回答");
   await page.getByRole("main").evaluate(element => element.scrollTo(0, 300));
   const position = await page.getByRole("main").evaluate(element => element.scrollTop);
   expect(position).toBeGreaterThan(0);
   await page.getByRole("tab", { name: "参考", exact: true }).evaluate(element => (element as HTMLElement).click());
+  await expect(page.getByRole("tabpanel", { name: "参考", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "標準回答に使う", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "編集", exact: true }).evaluate(element => (element as HTMLElement).click());
   await expect(page.locator("#testset-standard")).toHaveValue("未保存の合成回答");

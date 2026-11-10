@@ -1,4 +1,4 @@
-import { AnswerPlainText, Banner, Button, Disclosure, FormActionBar, FormGrid, FormStatus, PageBody, PageHeader, SaveErrorBanner, Section, SearchableMultiSelect, SelectField, StatusBadge, Tabs, TextareaField, TextField, apiErrorMessage, useConfirm } from "@production-ready/ui";
+import { AnswerPlainText, Banner, Button, Disclosure, FormActionBar, FormGrid, FormStatus, PageBody, PageHeader, SaveErrorBanner, Section, SearchableMultiSelect, SelectField, StatusBadge, Tabs, TextareaField, TextField, apiErrorMessage, useConfirm, useMediaQuery } from "@production-ready/ui";
 import { Check, ChevronLeft, ChevronRight, Download, FolderOpen, Play, Plus, Save, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -17,6 +17,7 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
   const [selected, setSelected] = useState(initial.items.find(item => !item.confirmed)?.item_id ?? initial.items[0]?.item_id ?? "");
   const [checked, setChecked] = useState<string[]>([]);
   const [tab, setTab] = useState("edit");
+  const mobile = useMediaQuery("(max-width: 64rem)");
   const [downloading, setDownloading] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const referenceRef = useRef<HTMLDivElement>(null);
@@ -29,9 +30,9 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
   const item = draft.items.find(value => value.item_id === selected);
   const index = draft.items.findIndex(value => value.item_id === selected);
   const count = draft.items.filter(value => value.confirmed).length;
-  const remember = () => { const value = positions.current.get(selected) ?? [0, 0]; if (window.matchMedia("(max-width: 64rem)").matches) value[tab === "edit" ? 0 : 1] = document.getElementById("pr-main")?.scrollTop ?? 0; else { value[0] = editorRef.current?.scrollTop ?? 0; value[1] = referenceRef.current?.scrollTop ?? 0; } positions.current.set(selected, value); };
+  const remember = () => { const value = positions.current.get(selected) ?? [0, 0]; if (mobile) value[tab === "edit" ? 0 : 1] = document.getElementById("pr-main")?.scrollTop ?? 0; else { value[0] = editorRef.current?.scrollTop ?? 0; value[1] = referenceRef.current?.scrollTop ?? 0; } positions.current.set(selected, value); };
   const choose = (id: string) => { remember(); setSelected(id); };
-  useEffect(() => { const frame = requestAnimationFrame(() => { const [edit, reference] = positions.current.get(selected) ?? [0, 0]; if (window.matchMedia("(max-width: 64rem)").matches) document.getElementById("pr-main")?.scrollTo({ top: tab === "edit" ? edit : reference, behavior: "instant" }); else { if (editorRef.current) editorRef.current.scrollTop = edit; if (referenceRef.current) referenceRef.current.scrollTop = reference; } }); return () => cancelAnimationFrame(frame); }, [selected, tab]);
+  useEffect(() => { const frame = requestAnimationFrame(() => { const [edit, reference] = positions.current.get(selected) ?? [0, 0]; if (mobile) document.getElementById("pr-main")?.scrollTo({ top: tab === "edit" ? edit : reference, behavior: "instant" }); else { if (editorRef.current) editorRef.current.scrollTop = edit; if (referenceRef.current) referenceRef.current.scrollTop = reference; } }); return () => cancelAnimationFrame(frame); }, [selected, tab, mobile]);
   const change = (patch: Partial<TestSetItem>) => setDraft(previous => ({ ...previous, items: previous.items.map(value => value.item_id === selected ? { ...value, ...patch, confirmed: false } : value) }));
   const next = () => choose(draft.items[(index + 1) % draft.items.length]?.item_id ?? "");
   const saveConfirm = async () => { if (!item || !valid(item)) return; try { const result = await save.mutateAsync({ value: draft, ids: [selected] }); const remaining = result.items.slice(index + 1).concat(result.items.slice(0, index)).find(value => !value.confirmed); if (remaining) choose(remaining.item_id); } catch { /* 保存の案内に残す。 */ } };
@@ -51,7 +52,7 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
         <aside className="testset-item-nav"><Section title={t("evaluation.testsets.items")}><div className="grid gap-3">
           {draft.items.map((value, i) => <div key={value.item_id} className="grid gap-1"><div className="flex items-start gap-2"><input type="checkbox" aria-label={t("evaluation.testsets.selectItem", { question: value.question || String(i + 1) })} checked={checked.includes(value.item_id)} disabled={save.isPending} onChange={() => setChecked(values => values.includes(value.item_id) ? values.filter(id => id !== value.item_id) : [...values, value.item_id])} /><Button variant={selected === value.item_id ? "secondary" : "ghost"} className="flex-1 justify-start whitespace-normal text-left" onClick={() => choose(value.item_id)}>{i + 1}. {value.question || t("evaluation.testsets.missingQuestion")}</Button></div><StatusBadge variant={value.confirmed ? "success" : "neutral"} label={t(value.confirmed ? "evaluation.testsets.isConfirmed" : "evaluation.testsets.unconfirmed")} /></div>)}
         </div></Section></aside>
-        <div ref={editorRef} className={`testset-editor-pane ${tab === "edit" ? "testset-mobile-active" : ""}`}>
+        <div ref={editorRef} id="testset-mobile-panel-edit" role={mobile ? "tabpanel" : undefined} aria-labelledby={mobile ? "testset-mobile-tab-edit" : undefined} tabIndex={mobile ? 0 : undefined} className={`testset-editor-pane ${tab === "edit" ? "testset-mobile-active" : ""}`}>
           <Section title={item ? t("evaluation.testsets.itemNo", { count: index + 1 }) : t("evaluation.testsets.noItems")} actions={<Button icon={Plus} variant="secondary" disabled={save.isPending || draft.items.length >= 200} onClick={() => { const value = blankTestSetItem(); setDraft({ ...draft, items: [...draft.items, value] }); choose(value.item_id); }}>{t("evaluation.testsets.add")}</Button>}>
             {item ? <FormGrid columns={1}>
               {item.source_notice ? <Banner severity="warning">{item.source_notice}</Banner> : null}
@@ -69,7 +70,7 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
             {item ? <div className="mt-4 flex flex-wrap gap-2"><Button variant="ghost" icon={ChevronLeft} disabled={save.isPending || index <= 0} onClick={() => choose(draft.items[index - 1].item_id)}>{t("evaluation.testsets.previous")}</Button><Button variant="ghost" icon={ChevronRight} disabled={save.isPending || draft.items.length < 2} onClick={next}>{t("evaluation.testsets.skip")}</Button><Button variant="ghost" icon={Trash2} disabled={save.isPending} onClick={() => void remove()}>{t("evaluation.testsets.deleteItem")}</Button></div> : null}
           </Section>
         </div>
-        <aside ref={referenceRef} className={`testset-reference-pane ${tab === "reference" ? "testset-mobile-active" : ""}`}><Section title={t("evaluation.testsets.reference")} description={t("evaluation.testsets.referenceHelp")}>
+        <aside ref={referenceRef} id="testset-mobile-panel-reference" role={mobile ? "tabpanel" : undefined} aria-labelledby={mobile ? "testset-mobile-tab-reference" : undefined} tabIndex={mobile ? 0 : undefined} className={`testset-reference-pane ${tab === "reference" ? "testset-mobile-active" : ""}`}><Section title={t("evaluation.testsets.reference")} description={t("evaluation.testsets.referenceHelp")}>
           <div className="grid gap-4"><AnswerPlainText text={item?.reference_answer || t("evaluation.testsets.noReference")} />
           <Button variant="secondary" icon={FolderOpen} disabled={!item?.reference_answer || save.isPending} onClick={() => { if (item) change({ standard_answer: item.reference_answer }); setTab("edit"); }}>{t("evaluation.testsets.adopt")}</Button>
           {item?.reference_evidence.map((entry, i) => <AnswerPlainText key={i} text={[entry.file_name, entry.text ?? entry.content].filter(Boolean).map(String).join("\n")} />)}

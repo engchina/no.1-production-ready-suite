@@ -1,4 +1,4 @@
-import { Button, ListToolbar, PageBody, PageHeader, PagedDataTable, RowTitleButton, Section, Skeleton, Tabs, TimedLoadingState } from "@production-ready/ui";
+import { Button, ListToolbar, PageBody, PageHeader, PagedDataTable, RowTitleButton, Section, Skeleton, TabPanel, Tabs, TimedLoadingState } from "@production-ready/ui";
 import { Play, Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
@@ -30,7 +30,7 @@ export function TestSetTab() {
   if (creating) return <>{header}<PageBody wide><CreateDraft onCreated={value => { void query.refetch(); open(value.draft_id); }} onCancel={() => open(null)} /></PageBody></>;
   const pending = id ? detail.isPending : query.isPending;
   const error = id ? detail.error : query.error;
-  return <>{header}<PageBody wide><Section title={t("evaluation.testsets.title")}><div data-testid="testset-creation">
+  const content = <Section title={t("evaluation.testsets.title")}><div data-testid="testset-creation">
     {pending ? <TimedLoadingState label={t("evaluation.testsets.loading")}><Skeleton className="h-40 w-full" /></TimedLoadingState> : error && !(id ? detail.data : query.data) ? <DataLoadFailure error={error} fallback={t("evaluation.testsets.loadError")} onRetry={() => void (id ? detail.refetch() : query.refetch())} /> : <>
       {query.isError ? <DataLoadStaleNotice error={query.error} dataUpdatedAt={query.dataUpdatedAt} retrying={query.isFetching} onRetry={() => void query.refetch()} /> : null}
       <ListToolbar count={listCountProps({ matchedTotal: query.data?.length ?? 0, filtered: false })} />
@@ -41,5 +41,6 @@ export function TestSetTab() {
         { key: "actions", header: t("common.objectActions.aria", { name: t("evaluation.testsets.title") }), render: row => <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => open(row.draft_id)}>{t("evaluation.testsets.continue")}</Button><Button variant="ghost" icon={Play} disabled={!row.confirmed_count} onClick={() => run(row.draft_id)}>{t("evaluation.testsets.run", { count: row.confirmed_count })}</Button></div> },
       ]} />
     </>}
-  </div></Section></PageBody></>;
+  </div></Section>;
+  return <>{header}<PageBody wide>{id ? content : <TabPanel id="testsets" value="testsets" idPrefix="evaluation-page-tabs">{content}</TabPanel>}</PageBody></>;
 }

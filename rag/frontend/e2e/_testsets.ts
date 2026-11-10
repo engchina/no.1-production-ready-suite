@@ -32,7 +32,11 @@ export async function mockTestSetPage(page: Page, itemCount = 2) {
     if (path === "/draft-a" && method === "GET") return reply(saved);
     if (path === "/draft-a" && method === "PUT" && saved) {
       const body = route.request().postDataJSON();
-      saved = { ...saved, ...body, revision: saved.revision + 1, items: body.items.map((value: TestSetItem) => ({ ...inputs[0], source_kind: "manual", source_job_id: "", source_case_id: "", reference_answer: "", reference_evidence: [], original: { question: value.question, standard_answer: value.standard_answer, evidence: value.evidence, required_answer_points: value.required_answer_points, response_decision: value.response_decision, answer_process: value.answer_process }, ...saved?.items.find(entry => entry.item_id === value.item_id), ...value, confirmed: body.confirm_item_ids?.includes(value.item_id) || value.confirmed })) };
+      saved = { ...saved, ...body, revision: saved.revision + 1, items: body.items.map((value: TestSetItem) => {
+        const previous = saved?.items.find(entry => entry.item_id === value.item_id);
+        const base: TestSetItem = previous ?? { ...inputs[0], source_kind: "manual", source_job_id: "", source_case_id: "", reference_answer: "", reference_evidence: [], original: { question: value.question, standard_answer: value.standard_answer, evidence: value.evidence, required_answer_points: value.required_answer_points, response_decision: value.response_decision, answer_process: value.answer_process } };
+        return { ...base, ...value, confirmed: body.confirm_item_ids?.includes(value.item_id) || value.confirmed };
+      }) };
       return reply(saved);
     }
     if (path.endsWith("export.xlsx")) return route.fulfill({ body: Buffer.from("synthetic-download"), contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers: { "content-disposition": 'attachment; filename="evaluation_testset.xlsx"' } });
