@@ -1804,7 +1804,6 @@ export type AnswerPromptPhase =
   | "knowledge"
   | "question"
   | "retrieval"
-  | "grounding"
   | "generation"
   | "evaluation";
 

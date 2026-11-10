@@ -139,12 +139,6 @@ def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
 
 
 def _engine(**settings: Any) -> AnswerEngine:
-    # 章節の抜き出しの LLM（#1437）を確かめるテストがあるので、
-    # 既定 OFF（#2800）の抜き出しを有効にする。
-    settings = {
-        "rag_section_extraction_enabled": True,
-        **settings,
-    }
     return AnswerEngine(
         Settings(rag_domain_keywords=["受注番号"], **settings),
         oracle=FakeOracle(),  # type: ignore[arg-type]
@@ -266,11 +260,6 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
     )
 
     assert (default.section_expansion_enabled, default.section_expansion_max_levels) == (True, 4)
-    # 章節の抜き出しの LLM は既定で使わない（#2800）。
-    assert default.section_extraction_enabled is False
-    assert build_engine_settings(
-        Settings(rag_section_extraction_enabled=True), output_dir=tmp_path
-    ).section_extraction_enabled
     assert default.section_expansion_input_token_percent == 50
     assert (custom.section_expansion_enabled, custom.section_expansion_max_levels) == (False, 2)
     assert custom.section_expansion_input_token_percent == 30
@@ -355,132 +344,6 @@ def test_evaluation_overrides_switch_section_expansion() -> None:
     )
 
     assert settings.rag_section_expansion_enabled is False
-
-
-# ---------------------------------------------------------------- 抽出してから統合（#1437）
-
-APPROVAL = "承認者は受注一覧で対象を選び、承認ボタンを押します。"
-FILLER = "この段落は画面の項目の並びについての説明で、承認の手順には関係しません。"
-
-
-def _long_text(page: int) -> str:
-    """入力の上限に入らない章節の 1 頁（承認の手順の 1 文と、関係の無い説明の段落）。"""
-    filler = FILLER * 25
-    return f"{filler}\n\n{APPROVAL}\n\n{filler}"
-
-
-@dataclass
-class LongSectionStub(SectionMapStub):
-    """受注入力画面の章節が長い（頁 2〜9 の 8 件。モデルの入力の上限 4096 の半分に入らない）。"""
-
-    def sections(self) -> list[SectionNode]:
-        return [
-            SectionNode("document", "manual.pdf", 0, 0, None, 1, 9, chunk_count=10, chars=20_000),
-            SectionNode("s1", "受注入力画面", 1, 1, "document", 1, 9, chunk_count=10, chars=20_000),
-        ]
-
-    async def read_section(self, document_id: str, section_id: str, **kwargs: Any) -> Any:
-        self.reads.append((section_id, dict(kwargs.get("filters") or {})))
-        chunks = [
-            _chunk("doc-1:c1", "受注番号を入力し、登録ボタンを押します。", 1),
-            _chunk("doc-1:c2", "登録後は受注一覧に表示されます。", 2),
-            *(
-                _section_chunk(f"doc-1:l{page}", _long_text(page), 10 + page, page)
-                for page in range(2, 10)
-            ),
-        ]
-        outline = await self.section_outline(document_id)
-        node = outline.get(section_id)
-        assert node is not None
-        return section_map_service.SectionText(
-            outline=outline,
-            section=node,
-            chunks=[SectionChunkRow(order, chunk) for order, chunk in enumerate(chunks)],
-            complete=True,
-        )
-
-
-@pytest.fixture
-def long_section(monkeypatch: pytest.MonkeyPatch) -> LongSectionStub:
-    stub = LongSectionStub()
-    monkeypatch.setattr(section_map_service, "chunk_section", stub.chunk_section)
-    monkeypatch.setattr(section_map_service, "section_outline", stub.section_outline)
-    monkeypatch.setattr(section_map_service, "read_section", stub.read_section)
-    return stub
-
-
-async def test_long_section_is_extracted_but_fixed_generation_input_exceeds_model_limit(
-    monkeypatch: pytest.MonkeyPatch, long_section: LongSectionStub
-) -> None:
-    import re
-
-    import rag_engine.adapters.oci as engine_oci
-    from pr_system_settings.model import EnterpriseAiConfiguredModel
-    from rag_engine.models.llm import (
-        GroundedDraft,
-        SectionExtractionOutput,
-        SectionExtractionQuote,
-    )
-
-    prompts: dict[str, list[str]] = {"extract": [], "draft": []}
-    block = re.compile(
-        r"^\[(C\d+)[^\]\n]*\]\n(.*?)(?=\n\n\[C\d+|\n\nEND_UNTRUSTED_RETRIEVED_CONTEXT)", re.M | re.S
-    )
-
-    def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is SectionExtractionOutput:
-            prompts["extract"].append(prompt)
-            quotes = [
-                SectionExtractionQuote(chunk_ref=ref, location="", quote=sentence)
-                for ref, text in block.findall(prompt)
-                for sentence in re.findall(r"[^。\n]+。", text)
-                if "承認ボタン" in sentence
-            ]
-            # 作られた引用（原文に無い）も混ぜる。照合で捨てる。
-            quotes.append(
-                SectionExtractionQuote(chunk_ref="C1", location="", quote="承認は不要です。")
-            )
-            return SectionExtractionOutput(quotes=quotes)
-        if issubclass(
-            schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
-        ):
-            prompts["draft"].append(prompt)
-        return _fake_llm(system, prompt, settings, schema, **options)
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", llm)
-    engine = AnswerEngine(
-        Settings(
-            rag_domain_keywords=["受注番号"],
-            rag_section_extraction_enabled=True,
-            oci_enterprise_ai_models=[
-                EnterpriseAiConfiguredModel(model_id="llm-a", max_input_tokens=4096)
-            ],
-            oci_enterprise_ai_default_text_model="llm-a",
-        ),
-        oracle=FakeOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-    )
-
-    outcome = await engine.run(SearchRequest(query="受注の承認の手順は？"))
-
-    expansion = outcome.diagnostics["section_expansion"]
-    entry = expansion["levels"][0]["sections"][0]
-    assert entry["read"] == "extracted"
-    assert expansion["large_section_handoff"] == "extract_then_integrate"
-    # 作られた引用は捨て、原文と一致した引用だけを使う。
-    assert len(prompts["extract"]) >= 1
-    assert entry["extraction"]["dropped_quotes"] == len(prompts["extract"])
-    assert "max_calls" not in entry["extraction"]
-    assert entry["extraction"]["quotes"] == 8
-    # 根拠の入力は、モデルの入力の上限（4096）の 50% の中。
-    assert expansion["input_token_limit"] == 2048
-    assert expansion["used_tokens"] <= expansion["input_token_limit"]
-    # 抜き出しが入っても固定の指示・schema・出力予約が入らないモデルには生成を送らない。
-    assert not prompts["draft"]
-    assert outcome.diagnostics["outcome"] == "conditional"
-    budget = outcome.diagnostics["generation_input_budget"]
-    assert budget["reason"] == "batch_fixed_input_or_source_metadata_exceeds_limit"
-    assert not budget["fits"]
 
 
 @pytest.mark.parametrize("enabled", [False, True])

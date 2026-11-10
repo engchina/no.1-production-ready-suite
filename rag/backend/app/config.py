@@ -1172,15 +1172,6 @@ class Settings(
             "割合（%。#1436。既定 50）。"
         ),
     )
-    rag_section_extraction_enabled: bool = Field(
-        default=False,
-        description=(
-            "(#2800)章節の拡張で、根拠の入力の上限に入らない章節から質問に関係する原文を LLM で"
-            "抜き出す(#1437)。既定 OFF は、入らない章節を rerank の順で上限まで入れ、"
-            "読めなかった範囲を「回答に未反映の関連章節」に示す(生成の前の LLM の呼び出しを"
-            "増やさない)。"
-        ),
-    )
     rag_max_anchors_per_document: int = Field(
         default=5,
         ge=0,
@@ -1337,7 +1328,7 @@ class Settings(
         default=60,
         ge=0,
         le=2000,
-        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付・条目録と参照先は別枠で保持する。",
+        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付と参照先は別枠で保持する。",
     )
     rag_rerank_candidate_limit: int = Field(
         default=200,
@@ -1345,7 +1336,7 @@ class Settings(
         le=2000,
         description=(
             "明示参照・多様化・各種拡張を含む rerank の入力の合計上限。"
-            "候補は段ごとの枠の中で先着で入り、融合 → 多様化 → 画面 → 条の目録の順に"
+            "候補は段ごとの枠の中で先着で入り、融合 → 多様化 → 画面の順に"
             "合計まで採る。0 は有効な各段の上限の合計を使う。"
         ),
     )
@@ -1468,140 +1459,6 @@ class Settings(
             "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
             "(LLM の呼び出しが 1 回増える。#554)。"
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
-    rag_article_catalog_enabled: bool = Field(
-        default=True,
-        description=(
-            "回答で、検索の候補に出た条で構成された文書(XML ツリー JSON で取り込んだ文書など)の"
-            "条の目録から、質問の根拠になる条を LLM で選び、その条の根拠を候補に加えて context の"
-            "枠を確保する(#2254)。条で構成された文書が候補に無ければ LLM を呼ばない"
-            "(候補にあれば文書ごとに 1 回、並行に呼ぶ)。"
-        ),
-    )
-    rag_article_catalog_max_documents: int = Field(
-        default=16,
-        ge=0,
-        le=32,
-        description=(
-            "条の目録を読む文書の上限(検索の候補の文書の、候補の順位の逆数の合計の大きい順。"
-            "#2254・#2261)。0 は選ばない。既定は評価で必要だった文書の順位(最大 8)に"
-            "余裕を持たせた値(#3518)。文書ごとに LLM を 2 回呼ぶ。"
-        ),
-    )
-    rag_article_catalog_max_articles: int = Field(
-        default=8,
-        ge=0,
-        le=20,
-        description=(
-            "条の目録から 1 つの文書で選ぶ条の上限(#2254)。既定は評価で根拠の条が選ばれた"
-            "位置(最大 6)に余裕を持たせた値(#3518)。"
-        ),
-    )
-    rag_article_catalog_context_records: int = Field(
-        default=6,
-        ge=0,
-        le=10,
-        description=(
-            "条の目録で選んだ条のうち、context に足す数(rerank の順。#2254)。検索の根拠の"
-            "起点・親の枠の外に足し、検索の根拠を減らさない。0 は足さない(候補に加えるだけ)。"
-        ),
-    )
-    rag_article_catalog_scope_documents: int = Field(
-        default=2,
-        ge=0,
-        le=5,
-        description=(
-            "検索の範囲の条で構成された文書の一覧から、LLM が選んで目録を読む文書の数"
-            "(検索の候補に出ない文書。手続の一般的な規則の文書など。#2254)。0 は候補の文書だけ。"
-        ),
-    )
-    rag_article_catalog_original_question_search: bool = Field(
-        default=True,
-        description=(
-            "元の質問(業務 Agent が注入する original_question)でも 1 回ベクトル検索し、"
-            "その候補を条の目録を読む文書の順位に足す(候補・context には足さない)。"
-            "短い検索文で事例の論点の文書が候補に出ないことへの対策。"
-        ),
-    )
-    rag_mcp_catalog_article_evidence_limit: int = Field(
-        default=120,
-        ge=0,
-        le=200,
-        description=(
-            "MCP の rag_retrieve_evidence が evidence_limit の外で末尾に足す、"
-            "条の目録で選んだ条の根拠の数の上限(選んだ順。各文書の条を順に回した順)。"
-            "業務 Agent のモデルの入力を抑える。0 は足さない。"
-        ),
-    )
-    rag_article_catalog_refine_articles: int = Field(
-        default=6,
-        ge=0,
-        le=20,
-        description=(
-            "条の選択の 2 段目で、1 段目で選んだ条と同じ章の条と、選んだ条を書き出しで"
-            "名指しする別の章の条を本文の書き出しつきで見せ、文書ごとに足させる条の数の上限。"
-            "0 は 2 段目を行わない。"
-        ),
-    )
-    rag_article_catalog_refine_candidates: int = Field(
-        default=60,
-        ge=0,
-        le=200,
-        description=(
-            "条の選択の 2 段目で見せる条の数の上限(書き出しつき。同じ章の条と、選んだ条を名指しする"
-            "別の章の条の合計。同じ章の条に 3 分の 2、名指しの条に 3 分の 1 を割り当てる。"
-            "名指しの条は 3 分の 1 を超えず、名指しの条の余りは同じ章の条が使う)。"
-            "0 は 2 段目を行わない。"
-        ),
-    )
-    rag_article_catalog_output_token_cap: int = Field(
-        default=8192,
-        ge=0,
-        le=32768,
-        description=(
-            "条の選択の LLM の呼び出し 1 回の出力の上限(token)。"
-            "選ぶ出力は目録の番号の列で通常は数百 token。"
-            "同じ出力を繰り返して書き続ける呼び出しを抑え、"
-            "超えた文書は選ばずに続ける。0 は抑えない。"
-        ),
-    )
-    rag_article_catalog_call_timeout_seconds: float = Field(
-        default=180.0,
-        ge=0.0,
-        le=600.0,
-        description=(
-            "条の選択の LLM の呼び出し 1 回の時間の上限(秒)。並行の呼び出しをすべて待つので、"
-            "1 つの遅い呼び出しで段全体が止まらないようにする。"
-            "超えた文書は選ばずに続ける。0 は抑えない。"
-        ),
-    )
-    rag_article_catalog_cache_dir: str = Field(
-        default="",
-        max_length=1024,
-        description=(
-            "条の選択と範囲の文書の選択の結果を、process をまたいで使う記録の置き場所(#3507)。"
-            "空は PLATFORM_LOCAL_STORAGE_DIR の下の cache/rag-article-catalog。"
-            "同じ Compute の backend の worker が同じ場所を読み書きする。"
-        ),
-    )
-    rag_article_catalog_cache_ttl_seconds: int = Field(
-        default=86400,
-        ge=0,
-        le=30 * 86400,
-        description=(
-            "条の選択の記録の有効期間(秒)。key は索引の版(chunk_set)・目録の内容・質問・"
-            "モデル・選択の設定で、同じ入力の LLM の結果だけを使い回す。"
-            "0 は process をまたぐ記録を使わない(process の中の記録だけ)。"
-        ),
-    )
-    rag_article_catalog_cache_max_entries: int = Field(
-        default=4096,
-        ge=0,
-        le=100_000,
-        description=(
-            "条の選択の記録の件数の上限(1 件は文書 1 つの選択か範囲の文書の選択 1 回)。"
-            "超えたら古い記録から消す。0 は process をまたぐ記録を使わない。"
         ),
     )
     rag_request_coverage_max_queries: int = Field(

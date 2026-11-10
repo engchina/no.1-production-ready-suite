@@ -421,7 +421,7 @@ def test_answer_section_phase_passes_the_followup_reserve(reserve):
 
     stub = SectionStub()
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
-    settings = replace(get_settings(environ={}, dotenv_path=None), section_extraction_enabled=False)
+    settings = get_settings(environ={}, dotenv_path=None)
     with bind_dependencies(
         AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
     ):
@@ -429,7 +429,6 @@ def test_answer_section_phase_passes_the_followup_reserve(reserve):
             QUESTION,
             _seed_context("c31a"),
             settings,
-            answer_llm_provider=None,
             rerank_enabled=False,
             started_at=0.0,
             phase="main",
@@ -602,7 +601,7 @@ def test_answer_section_phase_passes_the_guide_priority():
 
     stub = TwoDocumentStub()
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
-    settings = replace(get_settings(environ={}, dotenv_path=None), section_extraction_enabled=False)
+    settings = get_settings(environ={}, dotenv_path=None)
     with bind_dependencies(
         AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
     ):
@@ -610,7 +609,6 @@ def test_answer_section_phase_passes_the_guide_priority():
             QUESTION,
             _two_document_context("o1a", "c31a"),
             settings,
-            answer_llm_provider=None,
             rerank_enabled=False,
             started_at=monotonic(),
             priority=((DOC, 5, 7),),
@@ -620,7 +618,7 @@ def test_answer_section_phase_passes_the_guide_priority():
     assert stub.read_calls[0] == "s3-1"
 
 
-def test_unavailable_extraction_is_explicitly_identified_as_disabled_setting():
+def test_section_over_the_input_budget_is_reported_as_unread():
     from time import monotonic
 
     from rag_engine.generation.answering import _expand_context_by_sections
@@ -629,7 +627,6 @@ def test_unavailable_extraction_is_explicitly_identified_as_disabled_setting():
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     settings = replace(
         get_settings(environ={}, dotenv_path=None),
-        section_extraction_enabled=False,
         section_expansion_max_levels=4,
         section_expansion_input_token_percent=50,
         answer_max_input_tokens=800,
@@ -641,13 +638,9 @@ def test_unavailable_extraction_is_explicitly_identified_as_disabled_setting():
             QUESTION,
             _seed_context("c31a"),
             settings,
-            answer_llm_provider=None,
             rerank_enabled=False,
             started_at=monotonic(),
         )
-    assert result.trace["extraction_enabled"] is False
-    assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
-    assert result.trace["large_section_handoff_reason"] == "disabled_by_setting"
     assert result.unread or result.omitted
 
 

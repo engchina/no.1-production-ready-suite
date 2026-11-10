@@ -123,16 +123,6 @@ def test_each_followup_rerank_selects_from_its_own_candidates(monkeypatch):
     assert [record.id for record in next_round] == ["2"]
 
 
-def test_catalog_context_keeps_its_existing_separate_budget():
-    from dataclasses import replace
-
-    records = [child(0), replace(child(1), metadata={"article_catalog": {}}), child(2, source=1), child(3)]
-    selected, detail = select_reranked_candidates(records, 1)
-    assert [record.id for record in selected] == ["0", "1", "2"]
-    assert detail["ordinary_selected_count"] == 1
-    assert detail["catalog_related_count"] == 2
-
-
 def test_shared_reference_keeps_all_source_dependencies_in_one_group():
     from dataclasses import replace
 

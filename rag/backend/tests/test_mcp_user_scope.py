@@ -383,7 +383,6 @@ def test_mcp_section_expansion_reads_with_caller_conditions_and_as_of(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     for name, value in {
         "rag_section_expansion_enabled": True,
-        "rag_section_extraction_enabled": True,
         "rag_domain_keywords": ["受注番号"],
     }.items():
         monkeypatch.setattr(get_settings(), name, value)
