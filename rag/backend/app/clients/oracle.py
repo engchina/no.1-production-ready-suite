@@ -79,7 +79,6 @@ from app.rag.graph_index import (
 from app.rag.ingestion_language import ingestion_release_job_id
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
-    KnowledgeBaseQueryConfig,
     parse_adapter_config,
 )
 from app.rag.language_pack_releases import active_release
@@ -1348,62 +1347,6 @@ class OracleClient:
             {"pack_hash": pack_hash},
         )
         return _int_value((row or {}).get("document_count"))
-
-    async def retrieval_article_documents(self, filters: dict[str, str]) -> list[tuple[str, str]]:
-        """検索と同じ条件の、条で構成された文書(chunk が XML ツリー JSON の引用ラベルを持つ)の
-        (document_id, 文書名) を文書名の順に返す(#2254)。
-
-        文書名は XML ツリー JSON の文書の題名(``xml_tree_document_title``)、無ければファイル名。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT d.document_id, d.file_name,
-                   MAX(JSON_VALUE(c.metadata_json, '$.xml_tree_document_title')) AS title,
-                   MAX(CASE WHEN {long_title_sql} THEN 1 ELSE 0 END) AS title_overflow
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-              AND JSON_EXISTS(c.metadata_json, '$.xml_tree_label_arabic')
-            GROUP BY d.document_id, d.file_name
-            ORDER BY d.file_name
-            """,
-                where_sql=where_sql,
-                long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
-            ),
-            binds,
-        )
-        long_titles: dict[str, str] = {}
-        if any(row.get("title_overflow") for row in rows):
-            # MAX は CLOB に使えないので、超えた題名の行だけを読み直す(#4157)。
-            for row in await self._fetch_all(
-                _render_sql(
-                    """
-                SELECT c.document_id, {title_sql} AS title
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE {where_sql}
-                  AND JSON_EXISTS(c.metadata_json, '$.xml_tree_label_arabic')
-                  AND {long_title_sql}
-                """,
-                    where_sql=where_sql,
-                    title_sql=_metadata_text_clob_sql("xml_tree_document_title"),
-                    long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
-                ),
-                binds,
-            ):
-                long_titles.setdefault(str(row["document_id"]), str(row["title"]))
-        return [
-            (
-                str(row["document_id"]),
-                str(
-                    row.get("title") or long_titles.get(str(row["document_id"])) or row["file_name"]
-                ),
-            )
-            for row in rows
-            if row.get("document_id") and row.get("file_name")
-        ]
 
     async def retrieval_screen_sections(
         self, filters: dict[str, str]
@@ -19081,7 +19024,6 @@ def _to_knowledge_base_detail(
         if isinstance(structure_override, bool)
         else None,
         structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
-        legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
     )
 
 

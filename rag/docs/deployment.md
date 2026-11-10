@@ -2129,6 +2129,30 @@ WHERE d.extraction IS NOT NULL
 SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
 ```
 
+### 検索・回答プロファイルの適用しない欄の削除（#4784）
+
+検索・回答プロファイルの `query` は適用する欄（`max_anchors_per_document`・`support_guide_enabled`）だけを持ち、
+ほかの欄を検証エラーにする。`language_pack` の上書きは、検索と回答の要求の間に読む節（`search_terms`・
+`question_cues`・`evidence_cues`・`answer_labels`・`answer_check_cues`・`grounding_cues`）だけを持てる。
+ナレッジベースは `query` の値を持たない。未リリースのため互換を持たない。
+
+過去の migration は変更せず、`20261110_4784_search_answer_profile_retired_fields` が保存値を直す。
+`RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG` の `query` から上の 2 欄以外を、`language_pack` から上の 6 節以外を消し、
+`RAG_KNOWLEDGE_BASES.RETRIEVAL_CONFIG` の `query` を消す。残す欄と節の値、ほかの key は変えない。値の読み替えはしない。
+何回流しても結果は同じ。
+
+- 適用は、現在の schema 管理の `initialize --allow-destructive` で明示的に行う（`status` の
+  `pending_destructive_migrations` に出る）。
+- **新しいコードの配備の直後に適用する。** 適用するまで、保存値に消した欄・節が残るプロファイルは設定の復元に
+  失敗し、空の設定（ナレッジベースの選択なし・全体設定のまま）で動く。その間に画面で保存すると、空の設定で上書きされる。
+- **適用の前に、読み取りだけの dry-run で消えるものを確かめる。** 行の ID と、消える欄・節の名前だけを出す
+  （値は出さない）。言語資源の上書きを持つプロファイルでは、`language_pack.<節>` の行が出たら、その節の上書きが消える
+  （業務ガイドの取込の節 `guide_import_cues` は、必要なら全体の言語資源へ移してから適用する）。
+
+```bash
+cd rag/backend && .venv/bin/python -m app.rag.search_answer_profile_retired_fields
+```
+
 ### 回答の流れを 1 本にする（#4749）
 
 CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選択（`query.route` / `query.expand`）、小問の事前計画（`answer.scope`）を削除し、回答の流れを 1 本（検索して生成）にした。未リリースのため互換を持たない。
@@ -2145,3 +2169,13 @@ CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選�
   - 後者は `RAG_ANSWER_PROMPTS` から、評価の判定の 5 本（`evaluation.scope`・`evaluation.coverage`・`evaluation.claim`・`evaluation.evidenceCoverage`・`evaluation.absenceScope`）と #4749 で読まれなくなった `crag.*`・`routing.*`・`expansion.*`・`generation.instruction`・`generation.plannedSystem` の行だけを削除する。保存した文を残すなら、適用の前に同表を export する。
 - 品質評価の job・ケースごとの結果・回答の記録は削除しない。過去の結果の網羅・裏付けの値は DB に残るが、画面と結果の Excel には出さない。合否は保存した値のまま出す。
 - テストセットの作成のタブの URL は `/evaluation?tab=testsets` になった（`?tab=calibration` のブックマークは評価の実行のタブを開く）。
+
+### 質問と検索の段を整理する（#4782）
+
+章節の拡張で入らない章節から原文を LLM で抜き出す段（`evidence.extract`）を削除した。入らない章節は rerank の順で上限まで入れ、残りを「回答に未反映の関連章節」に示す（これまでの既定と同じ動き）。
+
+条の目録から根拠の条を LLM で選ぶ段（`evidence.select_document` / `evidence.select_article` / `evidence.refine_article`）も削除した。条で構成された文書も、ほかの文書と同じ検索・rerank・章節の拡張で根拠を集める。MCP の `rag_retrieve_evidence` の根拠に `role=catalog_article` は出なくなる（ツールの名前・引数・出力の形は変えない）。未リリースのため互換を持たない。
+
+- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`・`RAG_ARTICLE_CATALOG_ENABLED`・`RAG_ARTICLE_CATALOG_MAX_DOCUMENTS`・`RAG_ARTICLE_CATALOG_MAX_ARTICLES`・`RAG_ARTICLE_CATALOG_CONTEXT_RECORDS`・`RAG_ARTICLE_CATALOG_SCOPE_DOCUMENTS`・`RAG_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH`・`RAG_ARTICLE_CATALOG_REFINE_ARTICLES`・`RAG_ARTICLE_CATALOG_REFINE_CANDIDATES`・`RAG_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP`・`RAG_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_DIR`・`RAG_ARTICLE_CATALOG_CACHE_TTL_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_MAX_ENTRIES`・`RAG_MCP_CATALOG_ARTICLE_EVIDENCE_LIMIT`。
+- 条の選択の結果の記録のファイル（既定は `PLATFORM_LOCAL_STORAGE_DIR` の下の `cache/rag-article-catalog`、または `RAG_ARTICLE_CATALOG_CACHE_DIR` に設定した場所）は読まれなくなる。ディレクトリごと消してよい。
+- 保存値: この 2 つの段の回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system`・`article_catalog.*`）は、#4782 の生成の PR の migration `20261110_4782_generation_prompt_overrides` が消す（この PR に別の migration は無い）。

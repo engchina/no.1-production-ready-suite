@@ -182,14 +182,8 @@ def deterministic_parse_text_response(
 ) -> BaseModel:
     """回答の生成の LLM 呼び出しを決定論的に返す（最初の根拠の 1 行を引用する 1 項目の回答）。"""
     from rag_engine.generation.citation_wire import generation_draft_wire_model
-    from rag_engine.models.llm import (
-        GroundedDraft,
-        SectionExtractionOutput,
-        TextOutput,
-    )
+    from rag_engine.models.llm import GroundedDraft, TextOutput
 
-    if text_format is SectionExtractionOutput:
-        return SectionExtractionOutput(quotes=[])
     if text_format is TextOutput:
         return TextOutput(text="決定論スタブの回答です。")
     if text_format is GroundedDraft:
