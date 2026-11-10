@@ -1,17 +1,10 @@
 import { jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #770: 業務 Agent の下書き・公開・版の履歴・前の版に戻す。Run の「下書きで実行」。
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 function seedDraftAgent(mockApi: MockApi) {
   mockApi.state.agents.push({
@@ -80,7 +73,7 @@ for (const viewport of [
     await expect(page.getByText("v1 に戻しました")).toBeVisible();
     expect(mockApi.lastRequest("POST", "/api/agents/agent-770/versions/1/restore")).toBeDefined();
     await expect(page.getByLabel("指示")).toHaveValue("v1 の指示");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-versions-${viewport.name}.png`), fullPage: true });
   });
 }
@@ -138,7 +131,7 @@ for (const viewport of [
     await expect(row).toContainText("スキルが更新されています");
     // 下書きの項目は変えていないので「公開していない変更あり」は出さない。
     await expect(row).not.toContainText("公開していない変更あり");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
 
     await page.goto("/agents?id=agent-1855");
     const banner = page.getByTestId("agent-skills-updated");
@@ -147,7 +140,7 @@ for (const viewport of [
     const versions = page.getByRole("table", { name: "版の履歴" });
     await expect(versions.getByRole("columnheader", { name: "固定したスキル" })).toBeAttached();
     await expect(versions).toContainText("業務 RAG 調査");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-skills-updated-${viewport.name}.png`), fullPage: true });
 
     // 再公開で今のスキルを固定し直し、印が消える。
@@ -203,7 +196,7 @@ for (const viewport of [
     await expect(diff).toContainText("前の手順で調べる。");
     await expect(diff).toContainText("+ rag:rag_retrieve_evidence");
     await expect(diff.getByRole("list", { name: "業務 RAG 調査 の指示の差分" })).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-skill-updates-${viewport.name}.png`) });
 
     // 1 つを外して、選んだ 1 件を再公開する（確認に対象を出す）。
@@ -425,7 +418,7 @@ for (const viewport of [
     }
     await expect(versions.getByRole("row").filter({ hasText: "v6" })).toContainText("公開中");
     await expect(toolbar).toContainText("全 5 件");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await toolbar.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`agent-versions-retention-${viewport.name}.png`) });
   });
@@ -477,6 +470,6 @@ test("スキル更新の標準ページングで選択を保ち、表示件数�
   await page.getByTestId("agent-skill-updates-open").click();
   await sheet.getByRole("button", { name: "すべて選ぶ", exact: true }).click();
   await expect(sheet.getByTestId("agent-skill-updates-publish")).toHaveText("選んだ 29 件を再公開");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("skill-updates-paging.png"), fullPage: true });
 });

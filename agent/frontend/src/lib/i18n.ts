@@ -36,7 +36,6 @@ const agentJa = {
     "よくある業務の指示とスキルの組み合わせから始められます。選ぶとフォームに入り、保存の前に自由に直せます。",
   "agent.template.loading": "テンプレートを読み込んでいます",
   "agent.template.selected": "適用中",
-  "agent.template.apply": "{name} を適用",
   "agent.template.samples": "質問の例",
   "agent.template.replaceTitle": "入力した内容をテンプレートで置き換えますか?",
   "agent.template.replaceDescription": "名前・説明・指示・スキルを「{name}」の内容に置き換えます。",

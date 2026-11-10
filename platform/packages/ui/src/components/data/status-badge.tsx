@@ -67,9 +67,12 @@ export function StatusBadge({
     <span
       data-status-variant={variant}
       data-surface-tint={surfaceTintFor(VARIANT_STYLES[variant])}
+      // 入れ物より長いラベルは末尾を省くので、全文を title に残す（#4801）。
+      title={label}
       className={cn(
         // 折り返すバッジでもアイコンは 1 行目の中心にそろえる（items-start + 行の高さの箱。#2371）。
-        "inline-flex items-start justify-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        // max-w-full: 長いラベルで入れ物を押し広げない（#4801）。
+        "inline-flex max-w-full items-start justify-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium",
         VARIANT_STYLES[variant],
         className
       )}
@@ -80,7 +83,8 @@ export function StatusBadge({
           <Icon size={TEXT_ICON_SIZE.xs} aria-hidden />
         </span>
       ) : null}
-      {label}
+      {/* 既定（nowrap）は入れ物の幅で末尾を省く。whitespace-normal を渡したバッジは、改行の機会の無い値も折り返す（#4801）。 */}
+      <span className="min-w-0 overflow-hidden text-ellipsis [overflow-wrap:anywhere]">{label}</span>
     </span>
   );
 }

@@ -2,6 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1286: チャットの回答の下に、支援タスクの状態（確かめた条件・確認待ちの質問・使った業務ガイド）と
 // 回答の対応を業務の言葉で出す。成果物の JSON・内部の語（budget_exceeded など）は業務の利用者に見せない。
@@ -36,13 +37,6 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
     window.localStorage.setItem("production-ready-agent.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
   }, theme);
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 async function expectNoInternalWords(locator: Locator) {
@@ -211,7 +205,7 @@ for (const viewport of VIEWPORTS) {
       await expect(panel.getByTestId("answer-review-validation")).toHaveCount(0);
       await expectNoInternalWords(turn);
 
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`review-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }
@@ -283,7 +277,7 @@ test("実行の詳細は内部の記録を成果物に出さず、監査ログ�
   await expect(details).toContainText("元の JSON");
   await expect(details).toContainText("support_task");
   await expect(details).toContainText("budget_exceeded");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("run-detail-audit-records.png"), fullPage: true });
 
   // 実行の閲覧だけの利用者には監査ログ（元の JSON）を出さず、内部の語も出さない。
@@ -336,7 +330,7 @@ for (const viewport of VIEWPORTS) {
       const bodyBox = await turn.getByTestId("chat-answer-run-outcome-1").boundingBox();
       expect(bodyBox!.y).toBeLessThan(answerBox!.y);
       await expectNoOutcomeInternalWords(turn);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`outcome-chat-${viewport.name}-${theme}.png`), fullPage: true });
 
       // 実行の概要の見出しにはバッジを出さない。
@@ -344,7 +338,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("run-summary")).toBeVisible();
       const runBadge = page.getByTestId("run-answer-outcome-answer-outcome-1").locator("[data-status-variant]");
       await expect(runBadge).toHaveCount(0);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`outcome-run-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }
@@ -382,7 +376,7 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByTestId("chat-review-run-no-tool").locator("[data-status-variant]")).toHaveText(["根拠不足"]);
     await expectNoInternalWords(turn);
     await expectNoOutcomeInternalWords(turn);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`no-tool-chat-${viewport.name}.png`), fullPage: true });
 
     await page.goto("/runs?id=run-no-tool");
@@ -391,7 +385,7 @@ for (const viewport of VIEWPORTS) {
     const runBadge = page.getByTestId("run-answer-outcome-answer-no-tool").locator("[data-status-variant]");
     await expect(runBadge).toHaveCount(0);
     await expect(page.getByText("社内の資料・業務データで確かめられなかったため、お答えできません。", { exact: false }).first()).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`no-tool-run-${viewport.name}.png`), fullPage: true });
   });
 }

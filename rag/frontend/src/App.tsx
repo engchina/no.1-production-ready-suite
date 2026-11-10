@@ -10,7 +10,7 @@ import {
   useParams,
 } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader } from "@production-ready/ui";
+import { AppShell, PageBody, PageHeader, RenderErrorBoundary } from "@production-ready/ui";
 import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
@@ -19,7 +19,6 @@ import { SecurityPermissionsPage } from "@/components/security/SecurityPermissio
 import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { AccountRoute, SecurityApiKeysPage } from "@/components/security/ApiKeysPages";
-import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { DocumentCategoriesClient } from "@/components/document-categories/DocumentCategoriesClient";
 import { DocumentDetailPage } from "@/components/documents/DocumentDetailPage";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
@@ -240,9 +239,9 @@ function AppLayout() {
       <DatabaseGate>
           {/* ページ本体の描画例外を main 内に閉じ込め、サイドナビと画面遷移を維持する(#67)。
               location をキーにして、別ページへ移動したらエラー状態を自動で解除する。 */}
-          <CardErrorBoundary key={location.pathname}>
+          <RenderErrorBoundary key={location.pathname} serviceName="production-ready-rag" placement="page">
             <Outlet />
-          </CardErrorBoundary>
+          </RenderErrorBoundary>
       </DatabaseGate>
     </AppShell>
   );
@@ -604,9 +603,9 @@ function SettingsSystemTablesRoute() {
       />
       <PageBody wide>
         {/* カードの描画例外はカードだけに閉じ込め、見出しとナビを残す（#67）。 */}
-        <CardErrorBoundary label={t("settings.database.systemTables.title")}>
+        <RenderErrorBoundary serviceName="production-ready-rag" label={t("settings.database.systemTables.title")}>
           <SystemTablesCard />
-        </CardErrorBoundary>
+        </RenderErrorBoundary>
       </PageBody>
     </div>
   );

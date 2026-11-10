@@ -1,6 +1,7 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #906: 通信断（ブラウザの `TypeError: Failed to fetch`）のとき、英語の文をそのまま出さず、
 // 利用者向けの日本語の文（何が起きたか + 次の操作）を出し、元の文は「詳細」にだけ出す。
@@ -12,13 +13,6 @@ const VIEWPORTS = [
 
 /** TanStack Query の既定の再試行（3 回・計 7 秒）を待つ。 */
 const AFTER_RETRIES = { timeout: 20_000 };
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 /** 要約・次の操作は日本語で、英語の元の文は開いた「詳細」の中にだけある。 */
 async function expectNetworkFailure(failure: Locator, request: string) {
@@ -50,7 +44,7 @@ for (const viewport of VIEWPORTS) {
     await expect(failure).toBeVisible(AFTER_RETRIES);
     await expectNetworkFailure(failure, "GET /api/agents");
     await expect(failure.getByRole("button", { name: "再試行" })).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agents-network-${viewport.name}.png`), fullPage: true });
   });
 
@@ -64,7 +58,7 @@ for (const viewport of VIEWPORTS) {
     const failure = page.getByRole("alert").filter({ hasText: "サーバーに接続できませんでした。" });
     await expect(failure).toBeVisible(AFTER_RETRIES);
     await expectNetworkFailure(failure, "GET /api/agent-templates");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await failure.screenshot({ path: testInfo.outputPath(`agent-templates-network-${viewport.name}.png`) });
   });
 }

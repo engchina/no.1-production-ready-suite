@@ -241,6 +241,12 @@ export {
   type ProcessFailureNoticeProps,
 } from "./components/feedback/process-failure";
 export {
+  DEFAULT_RENDER_ERROR_BOUNDARY_LABELS,
+  RenderErrorBoundary,
+  type RenderErrorBoundaryLabels,
+  type RenderErrorBoundaryProps,
+} from "./components/feedback/render-error-boundary";
+export {
   ApiTransportError,
   DEFAULT_API_ERROR_DETAIL_LABELS,
   DEFAULT_API_TRANSPORT_MESSAGES,

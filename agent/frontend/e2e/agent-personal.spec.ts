@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #2523: 個人の業務 Agent。自分の業務 Agent の作成の権限だけを持つ利用者が作って使い、Agent 管理の承認で
 // 組織の業務 Agent として共有する。
@@ -13,13 +14,6 @@ const BUILDER = dbUser({
   permissions: ["agent.agents.build"],
   allowed_agent_ids: ["default"],
 });
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 function seedPersonalAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
   mockApi.state.agents.push({
@@ -92,7 +86,7 @@ for (const viewport of [
     await expect(share).toContainText("共有を申請しています");
     expect((created?.share_request as { note: string } | null)?.note).toBe("部署で使いたい");
     await expect(page.getByText("共有を申請中").first()).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-personal-${viewport.name}.png`), fullPage: true });
   });
 }
@@ -162,7 +156,7 @@ test("共有の承認後は申請した本人に割り当て待ちを案内す�
   await page.goto("/agents?id=personal-2523");
   await expect(page.getByTestId("agent-share-approved-notice")).toContainText("Agent P");
   await expect(page.getByText("削除されたか、存在しません", { exact: false })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("share-approved-notice.png") });
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByRole("heading", { name: "業務 Agent", exact: true }).first()).toBeVisible();

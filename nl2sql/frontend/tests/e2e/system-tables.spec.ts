@@ -3,6 +3,7 @@ import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectToastPlacement } from "./_helpers/toast";
+import { expectNoPageHorizontalOverflow } from "./_helpers/page-overflow";
 
 function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
   return {
@@ -231,16 +232,6 @@ async function mockDatabasePage(page: Page, user = systemAdminMe) {
   );
 }
 
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
-      )
-    )
-    .toBeTruthy();
-}
-
 function expectedInformationRows(testInfo: TestInfo) {
   return testInfo.project.name === "mobile-375" ? 5 : 8;
 }
@@ -268,7 +259,7 @@ test("運用設定のメニューからシステムテーブル管理を開け�
   await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toBeVisible();
   await expect(page.locator("#system-tables")).toBeVisible();
   await expect(page.locator("#system-tables").getByText("初期化済み", { exact: true })).toBeVisible();
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("dark theme の状態フィードバックは semantic container 色を使う", async ({ page }, testInfo) => {
@@ -315,7 +306,7 @@ test("dark theme の状態フィードバックは semantic container 色を使�
     "color",
     "rgb(178, 186, 197)"
   );
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({
     path: testInfo.outputPath(`system-tables-dark-status-${testInfo.project.name}.png`),
     fullPage: true,
@@ -380,7 +371,7 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
   await expect(card.getByRole("cell", { name: "シーケンス", exact: true })).toHaveCount(1);
   await expect(card.getByRole("cell", { name: "パッケージ（Package）", exact: true })).toHaveCount(1);
   await expect(card.getByRole("cell", { name: "パッケージ本体（Package Body）", exact: true })).toHaveCount(1);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("不足した索引を全管理オブジェクト一覧で特定できる", async ({ page }) => {
@@ -395,7 +386,7 @@ test("不足した索引を全管理オブジェクト一覧で特定できる",
   await expect(missingIndex).toContainText("索引");
   await expect(missingIndex).toContainText("不足");
   await expect(missingIndex.getByText("対象外", { exact: true })).toHaveCount(2);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("旧API応答では既存のテーブル一覧へ安全にフォールバックする", async ({ page }) => {
@@ -414,7 +405,7 @@ test("旧API応答では既存のテーブル一覧へ安全にフォールバ�
   await expect(card.getByRole("cell", { name: "テーブル", exact: true })).toHaveCount(
     EXPECTED_TABLE_COUNT
   );
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("Oracle RDF Network 管理カードと API 呼び出しを表示しない", async ({ page }) => {
@@ -432,7 +423,7 @@ test("Oracle RDF Network 管理カードと API 呼び出しを表示しない",
   await expect(page.locator("#rdf-network")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "RDF Network" })).toHaveCount(0);
   expect(rdfRequests).toBe(0);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("詳細表はデスクトップ8行・モバイル5行の高さに収め、次行から内部スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -528,7 +519,7 @@ test("詳細表はデスクトップ8行・モバイル5行の高さに収め、
   });
   expect(bottomState.headerOffset).toBeLessThanOrEqual(1);
   expect(bottomState.lastRowVisible).toBe(true);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("初期化中は重複操作を無効化し、成功後に Toast と ready 状態を表示する", async ({ page }) => {
@@ -623,7 +614,7 @@ test("システムテーブル管理権限だけの利用者は初期化を実�
 
   await expect(page.getByText("システムテーブルを更新しました。")).toBeVisible();
   expect(requestBody).toEqual({ recreate: false });
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる操作を統一する", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -673,7 +664,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   const closeBox = await close.boundingBox();
   expect(closeBox?.width ?? 0).toBeGreaterThanOrEqual(43.9);
   expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(43.9);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   const lightBackground = await toastStatus.evaluate((node) => getComputedStyle(node).backgroundColor);
   await page.evaluate(() => document.documentElement.classList.add("dark"));
@@ -820,7 +811,7 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
   await expect(operationAlert).toContainText("状態を再取得して再試行");
   await expect(operationAlert).not.toContainText("前回の操作が完了していません");
   await expect(operationAlert.locator("[data-message-sentence]")).not.toHaveCount(0);
-  await expectNoPageOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("再作成確認は再取得・失敗時に解除し、取得失敗中は操作しない", async ({ page }) => {
@@ -888,7 +879,7 @@ test(
       "NL2SQL_SCHEMA_REFRESH_JOBS.WORKER_ID",
       "NL2SQL_ONTOLOGY_REVISIONS.PROFILE_ID",
     ]);
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await missing.screenshot({
       path: testInfo.outputPath(`system-tables-missing-columns-${testInfo.project.name}.png`),
     });
@@ -901,7 +892,7 @@ test(
     expect(initializeCalls).toBe(1);
     // 列は戻っていないので、一覧は残す。
     await expect(missing).toBeVisible();
-    await expectNoPageOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   }
 );
 

@@ -63,11 +63,13 @@ describe("DataTable の一覧向け機能", () => {
     const html = renderToStaticMarkup(
       <DataTable columns={columns} rows={rows} getRowKey={(row) => row.id} selectedRowKey="b" onRowClick={() => undefined} />
     );
-    expect(html).toMatch(/<tr data-row-kind="data" data-selected="false" class="transition-colors cursor-pointer hover:bg-surface-hover">/);
+    // ホバー中だけ灰色の地を塗る行は、その間だけ副次の文字を深くする印を持つ（#4639）。
+    expect(html).toMatch(/<tr data-row-kind="data" data-selected="false" data-surface-tint-hover="neutral" class="transition-colors cursor-pointer hover:bg-surface-hover">/);
     expect(html).toMatch(
       /<tr data-row-kind="data" data-selected="true" data-surface-tint="accent" aria-current="true" class="transition-colors cursor-pointer bg-accent-subtle \[&amp;&gt;:first-child\]:shadow-\[inset_0\.25rem_0_0_var\(--color-accent-fg\)\]">/
     );
-    expect(html.match(/data-surface-tint/g)).toHaveLength(1);
+    expect(html.match(/data-surface-tint=/g)).toHaveLength(1);
+    expect(html.match(/data-surface-tint-hover=/g)).toHaveLength(1);
   });
 
   it("isRowSelected は背景と左バーだけを付け、aria-current は付けない（状態はチェックボックスが伝える）", () => {
