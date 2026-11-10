@@ -24,12 +24,10 @@ import { listCountLabels, listScrollLabel, paginationLabels } from "@/lib/pagina
 import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { downloadBlob } from "../components/DbAdminShared";
-import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader, ScrollablePreviewText } from "../components/DbObjectManagementShared";
 import type { LegacyLearningMaterialData } from "../types";
 
 const GLOSSARY_RULES_ID = "glossary-rules";
-const GLOBAL_PREVIEW_TEXT_CLASS =
-  "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
 
 type LegacyBusyAction = "import" | "export" | null;
 
@@ -405,9 +403,9 @@ function GlobalPreviewTable({
             header: "DEFINITION",
             className: "min-w-0 align-top text-sm",
             render: (row) => (
-              <div className={GLOBAL_PREVIEW_TEXT_CLASS} data-testid="glossary-definition-preview-text">
+              <ScrollablePreviewText testId="glossary-definition-preview-text">
                 {row.definition}
-              </div>
+              </ScrollablePreviewText>
             ),
           },
         ]}

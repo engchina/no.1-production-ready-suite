@@ -24,12 +24,10 @@ import { listCountLabels, listScrollLabel, paginationLabels } from "@/lib/pagina
 import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { downloadBlob } from "../components/DbAdminShared";
-import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader, ScrollablePreviewText } from "../components/DbObjectManagementShared";
 import type { LegacyLearningMaterialData } from "../types";
 
 const GLOBAL_RULES_ID = "global-rules";
-const RULE_PREVIEW_TEXT_CLASS =
-  "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
 
 export function GlobalRulesPage() {
   const [rules, setRules] = useState<string[]>([]);
@@ -325,9 +323,9 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
             header: "RULE",
             className: "min-w-0 align-top text-sm",
             render: (rule) => (
-              <div className={RULE_PREVIEW_TEXT_CLASS} data-testid="global-rules-preview-text">
+              <ScrollablePreviewText testId="global-rules-preview-text">
                 {rule}
-              </div>
+              </ScrollablePreviewText>
             ),
           },
         ]}

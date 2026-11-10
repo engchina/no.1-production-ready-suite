@@ -2065,7 +2065,7 @@ function SyntheticWorkspace({
   const visibleWarnings = selectAiDbProfiles?.warnings ?? [];
 
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DbObjectPanelHeader
         icon={Database}
         title={t("dataTools.synthetic.title")}
@@ -2082,7 +2082,7 @@ function SyntheticWorkspace({
         dataTestId="data-synthetic-steps"
       />
 
-      <fieldset disabled={loading === "generate"} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3" aria-labelledby="synthetic-target-heading">
+      <fieldset disabled={loading === "generate"} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-md border border-border bg-surface-sunken p-3" aria-labelledby="synthetic-target-heading">
         <DbObjectPanelHeader
           headingId="synthetic-target-heading"
           icon={Database}

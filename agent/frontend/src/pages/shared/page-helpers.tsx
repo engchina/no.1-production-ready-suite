@@ -21,14 +21,20 @@ export function JsonPanel({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0">
       <p className="mb-1 text-xs font-medium text-fg-muted">{title}</p>
-      <JsonPreview value={value} />
+      <JsonPreview value={value} label={title} />
     </div>
   );
 }
 
-export function JsonPreview({ value }: { value: unknown }) {
+/** 中でスクロールする JSON。キーボードで入り矢印キーで読めるようにする（axe scrollable-region-focusable。#4802）。 */
+export function JsonPreview({ value, label }: { value: unknown; label?: string }) {
   return (
-    <pre className="mt-2 max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md bg-surface-sunken p-3 text-xs leading-5 text-fg">
+    <pre
+      tabIndex={0}
+      role={label ? "region" : undefined}
+      aria-label={label}
+      className="mt-2 max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md bg-surface-sunken p-3 text-xs leading-5 text-fg"
+    >
       {JSON.stringify(value, null, 2)}
     </pre>
   );

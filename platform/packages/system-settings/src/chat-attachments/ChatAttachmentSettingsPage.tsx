@@ -183,7 +183,7 @@ export function ChatAttachmentSettingsPage({
                   </h3>
                   <p className="text-xs text-fg-muted">{m.limitsDescription}</p>
                 </div>
-                <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]" data-testid="chat-attachments-limits">
+                <dl className="grid grid-cols-[minmax(0,1fr)] gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_minmax(0,1fr)] [&_dd]:min-w-0 [&_dd]:[overflow-wrap:anywhere]" data-testid="chat-attachments-limits">
                   {limits.map((item) => (
                     <div key={item.label} className="contents">
                       <dt className="text-fg-muted">{item.label}</dt>

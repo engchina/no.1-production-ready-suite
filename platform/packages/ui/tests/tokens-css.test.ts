@@ -225,6 +225,18 @@ describe("tokens CSS", () => {
       );
     });
 
+    it("ホバー中だけ灰色の地を塗る要素（[data-surface-tint-hover]:hover。DataTable の行）は、塗る間だけ同じ値にする（#4639）", () => {
+      const hoverBlock = colors.match(/\[data-surface-tint-hover\]:hover \{([^}]*)\}/)?.[1] ?? "";
+      expect(lightDark(hoverBlock, "color-fg-muted")).toEqual(lightDark(tintBlock, "color-fg-muted"));
+      expect(hoverBlock).toMatch(/--color-accent-fg:\s*var\(--color-accent-fg-strong\);/);
+      expect(hoverBlock).toMatch(/--color-success-fg:\s*var\(--color-success-fg-strong\);/);
+      expect(hoverBlock).toMatch(/--color-warning-fg:\s*var\(--color-warning-fg-strong\);/);
+      for (const theme of ["light", "dark"] as const) {
+        const muted = lightDark(hoverBlock, "color-fg-muted")[theme];
+        expect(contrast(rgb(muted), surfaces[theme]["surface-hover"]), `${theme} fg-muted on surface-hover`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+
     for (const theme of ["light", "dark"] as const) {
       for (const surface of Object.keys(surfaces[theme]) as Surface[]) {
         it(`${theme}: ${surface} の上の文字（fg / fg-muted / accent-fg / 状態色の fg）`, () => {
@@ -246,7 +258,7 @@ describe("tokens CSS", () => {
     });
 
     it("prefers-contrast: more の値（[data-surface-tint] も対象）も淡い面の上で 4.5:1 以上", () => {
-      const block = a11y.match(/:root, \[data-theme\], \[data-surface-tint\] \{([^}]*)\}/)?.[1] ?? "";
+      const block = a11y.match(/:root, \[data-theme\], \[data-surface-tint\], \[data-surface-tint-hover\]:hover \{([^}]*)\}/)?.[1] ?? "";
       for (const theme of ["light", "dark"] as const) {
         for (const token of ["color-fg-muted", "color-accent-fg"]) {
           const color = lightDark(block, token)[theme];
@@ -259,8 +271,8 @@ describe("tokens CSS", () => {
 
     it("面のトークン一式は宣言し直さず、a11y の応答層（forced-colors / prefers-contrast）は対象に含める", () => {
       expect(colors).not.toMatch(/\[data-surface\], \[data-surface-tint\]/);
-      expect(a11y.match(/:root, \[data-theme\], \[data-surface\], \[data-surface-tint\] \{/g)).toHaveLength(2);
-      expect(a11y).toMatch(/:root, \[data-theme\], \[data-surface-tint\] \{\s*--color-fg-muted:/);
+      expect(a11y.match(/:root, \[data-theme\], \[data-surface\], \[data-surface-tint\], \[data-surface-tint-hover\]:hover \{/g)).toHaveLength(2);
+      expect(a11y).toMatch(/:root, \[data-theme\], \[data-surface-tint\], \[data-surface-tint-hover\]:hover \{\s*--color-fg-muted:/);
       // :not() の分だけ詳細度が高い success / warning の上書きも、強制カラーモードではシステム色になる
       expect(a11y).toMatch(/--color-success-fg-strong: CanvasText; --color-warning-fg-strong: CanvasText;/);
     });

@@ -859,7 +859,7 @@ function TrainingDataPanel({
   onDelete: (example: ClassifierTrainingExample) => void;
 }) {
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DbObjectPanelHeader
         icon={FileSpreadsheet}
         title={t("qcm.training.title")}
@@ -1190,7 +1190,7 @@ function ModelTrainPanel({
 }) {
   const canTrain = (trainingData?.total_examples ?? status?.example_count ?? 0) > 0;
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DbObjectPanelHeader
         icon={Play}
         title={t("qcm.train.title")}
@@ -1235,7 +1235,7 @@ function ModelTrainPanel({
         disabled
         width="lg"
       />
-      <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
+      <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <div className="flex flex-wrap gap-2">
           <StatusBadge variant={status?.ready ? "success" : "warning"} label={status?.ready ? t("learning.classifier.ready") : t("learning.classifier.notReady")} />
           {status?.stale && <StatusBadge variant="warning" label={t("learning.classifier.stale")} />}
@@ -1248,7 +1248,7 @@ function ModelTrainPanel({
           warnings={error && error === (status?.warnings ?? []).join(" ") ? [] : status?.warnings}
         />
         {status?.metrics && Object.keys(status.metrics).length > 0 && (
-          <dl className="grid gap-2 md:grid-cols-3">
+          <dl className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 md:grid-cols-3">
             {Object.entries(status.metrics).map(([key, value]) => (
               <CompactFact key={key} label={key} value={String(value)} />
             ))}
@@ -1617,7 +1617,7 @@ function TrainingCandidatesPanel({
                   data-testid="qcm-training-candidate"
                   // 淡青面（bg-accent-subtle）の上の副次テキストを 1 段深くする（DataTable の選択行と同じ。#1595・WCAG 1.4.3）。
                   data-surface-tint={selectedItem ? "accent" : undefined}
-                  className={`grid min-w-0 gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
+                  className={`grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
                     selectedItem
                       ? "border-l-accent-fg bg-accent-subtle"
                       : "border-l-transparent hover:bg-surface-hover"
@@ -1743,8 +1743,8 @@ function TrainingCandidatesPanel({
 function CompactFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-md border border-border bg-surface p-3">
-      <p className="text-xs font-medium text-fg-muted">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-fg">{value}</p>
+      <p className="text-xs font-medium text-fg-muted [overflow-wrap:anywhere]">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-fg [overflow-wrap:anywhere]">{value}</p>
     </div>
   );
 }
