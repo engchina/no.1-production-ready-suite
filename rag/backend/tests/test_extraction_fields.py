@@ -393,8 +393,10 @@ class _PromptRecorder:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    async def generate(self, prompt: str, text: str, **_options: object) -> str:
-        self.prompts.append(prompt)
+    async def generate(self, prompt: str, text: str, **options: object) -> str:
+        # 段の指示はシステムの文で渡し、質問の位置には何も置かない(#4776)。
+        assert prompt == ""
+        self.prompts.append(str(options["system_prompt"]))
         return '[{"name":"契約日","value":"2025年4月1日"},{"name":"請求書番号","value":"INV-1"}]'
 
 
@@ -440,8 +442,10 @@ async def test_ingestion_extracts_with_default_when_knowledge_base_has_no_defini
 
 
 class _StandardResponder(_PromptRecorder):
-    async def generate(self, prompt: str, text: str, **_options: object) -> str:
-        self.prompts.append(prompt)
+    async def generate(self, prompt: str, text: str, **options: object) -> str:
+        # 段の指示はシステムの文で渡し、質問の位置には何も置かない(#4776)。
+        assert prompt == ""
+        self.prompts.append(str(options["system_prompt"]))
         return (
             '[{"name":"文書の種類","value":"規程"},'
             '{"name":"発行日・作成日","value":"2026年4月1日"}]'
@@ -481,8 +485,10 @@ class _FixedResponder(_PromptRecorder):
         super().__init__()
         self.response = response
 
-    async def generate(self, prompt: str, text: str, **_options: object) -> str:
-        self.prompts.append(prompt)
+    async def generate(self, prompt: str, text: str, **options: object) -> str:
+        # 段の指示はシステムの文で渡し、質問の位置には何も置かない(#4776)。
+        assert prompt == ""
+        self.prompts.append(str(options["system_prompt"]))
         return self.response
 
 

@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from PIL import Image
+from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT
 from rag_engine.models.layout import PageImage
 from rag_pipeline_core.chunking import chunk_extraction_with_strategy
 
@@ -757,7 +758,7 @@ async def test_enterprise_ai_describer_sends_target_and_context_images() -> None
 
     assert len(reader.calls) == 1
     assert reader.calls[0]["images"] == 2
-    assert "JSON" in reader.calls[0]["system_prompt"]
+    assert reader.calls[0]["system_prompt"] == VISION_SYSTEM_PROMPT
     assert "retrieval_text" in json.dumps(reader.calls[0]["schema"])
     assert describer.provider().model == "vendor.vision"
     assert "既定の Vision モデルの説明" in result.elements[1].text
