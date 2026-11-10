@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
+import { expectNoPageHorizontalOverflow } from "./_helpers/page-overflow";
 import type { CurrentUser } from "../../src/features/security/types";
 
 const SYSTEM_ADMIN_USER: CurrentUser = {
@@ -501,6 +502,8 @@ test("メニュー権限がない root は無権限画面へ移動し、再転�
 
   await expect(page).toHaveURL(/\/forbidden$/);
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+  // 権限なしの画面も横にあふれない（全 route の横あふれの検査。#4806）。
+  await expectNoPageHorizontalOverflow(page);
 
   await page.goto("/query");
   await expect(page).toHaveURL(/\/forbidden$/);

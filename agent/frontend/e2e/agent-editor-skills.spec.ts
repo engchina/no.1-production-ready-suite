@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #925: 業務 Agent のエディタ。登録から消えたスキルを外せること、未保存の変更があるあいだは公開できないこと。
 
@@ -26,13 +26,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
   });
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 test("登録から消えたスキルが「見つかりません」として出て、外して保存できる", async ({ page, mockApi }) => {
   const knownSkill = String(mockApi.state.skills[0]?.id);
   seedAgent(mockApi, { skill_ids: ["deleted_skill_925", knownSkill].sort() });
@@ -46,7 +39,7 @@ test("登録から消えたスキルが「見つかりません」として出�
   await expect(missing).toHaveAttribute("aria-checked", "true");
   await expect(missing).toContainText("見つかりません");
   await expect(page.getByTestId("agent-skill-picker")).toContainText("選択 2 件");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   // 外さずに保存すると backend と同じく断られる（外す手段が画面にあることを確かめる前提）。
   await page.getByLabel("指示").fill("v2 の指示");

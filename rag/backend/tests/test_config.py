@@ -2,6 +2,7 @@
 
 import re
 import tomllib
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -294,6 +295,18 @@ def test_backend_env_example_lists_only_rag_settings() -> None:
     assert keys
     assert [key for key in keys if not key.startswith("RAG_")] == []
     assert [key for key in keys if key not in names] == []
+
+
+def test_backend_env_example_lists_each_variable_once() -> None:
+    """同じ変数を 2 回書かない。説明のコメントも ``# NAME=値`` の形で始めない（#4784）。
+
+    行頭が ``# NAME=`` のコメントは、無効にした変数の行と見分けられず、雛形を機械で読むと
+    同じ変数が 2 つあるように見える。
+    """
+    example = config_module.BACKEND_ROOT / ".env.example"
+    names = re.findall(r"^(?:#\s*)?([A-Z][A-Z0-9_]*)=", example.read_text(encoding="utf-8"), re.M)
+
+    assert sorted(name for name, count in Counter(names).items() if count > 1) == []
 
 
 def test_auth_settings_use_platform_and_rag_env_names() -> None:

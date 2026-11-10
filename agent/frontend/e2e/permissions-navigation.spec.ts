@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { dbUser, type CurrentUserPayload } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { openSidebarNav } from "./fixtures/nav";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // 権限によるナビ・ルート・ページ内の操作の出し分け（#215）。
 // メニュー権限は画面の表示、capability（agent.runs.view / operate / approvals.decide / audit.view / admin）は
@@ -66,12 +67,6 @@ async function sidebarHrefs(page: Page): Promise<string[]> {
     .evaluateAll((links) => links.map((link) => link.getAttribute("href") ?? ""));
 }
 
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
-}
-
 function signIn(mockApi: MockApi, user: CurrentUserPayload) {
   mockApi.setCurrentUser(user);
 }
@@ -101,7 +96,7 @@ for (const viewport of VIEWPORTS) {
       // Run の監査記録は監査の閲覧の権限が必要なので出さない（GET /runs/{id}/audit を呼ばない）。
       await expect(page.getByText("受注状況を確認する").first()).toBeVisible();
       expect(mockApi.requests.some((request) => request.path.endsWith("/audit"))).toBe(false);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       // ナビにない画面を URL で直接開くと権限なしの画面へ移す。
       for (const path of ["/settings/mcp-connections", "/audit", "/settings/security/permissions", "/tools"]) {
@@ -109,7 +104,7 @@ for (const viewport of VIEWPORTS) {
         await expect(page).toHaveURL(/\/forbidden$/);
         await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
       }
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       // 「利用可能な画面へ戻る」は既定の入口（チャット）を開けないので、ナビの最初の画面（実行履歴）へ。
       await page.getByRole("button", { name: "利用可能な画面へ戻る" }).click();
       await expect(page).toHaveURL(/\/runs$/);
@@ -132,7 +127,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/runs");
       await expect(page.getByRole("button", { name: "実行を作成" })).toBeVisible();
       await expect(page.getByTestId("run-row-actions-run-running")).toHaveCount(1);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("承認の判断は approver だけに出し、決定者は送らない", async ({ page, mockApi }) => {
@@ -165,7 +160,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
       await expect(page.getByTestId("capability-required")).toContainText("実行履歴の参照");
       expect(mockApi.requests.some((request) => request.path === "/api/runs")).toBe(false);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("Run を開けない利用者は、/ と未知の URL で開ける最初の画面へ移る", async ({ page, mockApi }) => {
@@ -206,7 +201,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/no-such-page");
       await expect(page).toHaveURL(/\/runs$/);
       await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("どの画面も開けない利用者は、/ で権限なしの画面へ移る", async ({ page, mockApi }) => {
@@ -215,7 +210,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/");
       await expect(page).toHaveURL(/\/forbidden$/);
       await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("Agent 管理の権限がなければ業務 Agent は閲覧だけ（作成・保存を出さない）", async ({
@@ -239,7 +234,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator("#default-agent-name")).toBeDisabled();
       await expect(page.locator("#default-agent-model")).toBeDisabled();
       await expect(page.getByTestId("agent-object-actions")).toHaveCount(0);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
   });
 }

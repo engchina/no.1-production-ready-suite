@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { ALL_PERMISSION_CODES, dbUser } from "./fixtures/auth";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 import { expandSidebarSections, openSidebarNav } from "./fixtures/nav";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // 共通認証のログイン・パスワード変更・セッション切れ（#215）。
 // production（`PLATFORM_AUTH_MODE=authenticated`）の DB ユーザーでログインし、失敗・強制パスワード変更・
@@ -36,12 +37,6 @@ function registerAccounts(mockApi: MockApi) {
   mockApi.state.auth.accounts["first.user"] = { password: "TemporaryPass!123", user: FIRST_USER };
 }
 
-async function expectNoPageOverflow(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
-    .toBeLessThanOrEqual(0);
-}
-
 function sidebar(page: Page) {
   return page.getByRole("complementary", { name: "サイドナビゲーション" });
 }
@@ -68,7 +63,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("Production Ready", { exact: true })).toBeVisible();
       await expect(page.getByText("Agent", { exact: true })).toBeVisible();
       await expect(sidebar(page)).toHaveCount(0);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await page.getByLabel("ログインユーザーID").fill("admin.user");
       await page.getByLabel("パスワード").fill("CorrectPass!123");
@@ -129,7 +124,7 @@ for (const viewport of VIEWPORTS) {
       await expect(error).not.toContainText("login-rate-limited");
       await expect(page).toHaveURL(/\/login$/);
       expect(loginCalls).toBe(1);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("初回ログインは強制パスワード変更へ移り、変更は CSRF header 付きで送ってログインへ戻る", async ({
@@ -152,7 +147,7 @@ for (const viewport of VIEWPORTS) {
       // 強制変更中は他の画面を開いてもパスワード変更へ戻す。
       await page.goto("/runs");
       await expect(page).toHaveURL(/\/password\/change$/);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await page.getByLabel("現在のパスワード").fill("TemporaryPass!123");
       await page.locator("#auth-password-new").fill("IndependentPass!456");
@@ -229,7 +224,7 @@ for (const viewport of VIEWPORTS) {
       const created = mockApi.lastRequest("POST", "/api/account/api-keys");
       expect(created?.headers["x-csrf-token"]).toBe(CSRF_TOKEN);
       expect((created?.body as { products: string[] }).products).toEqual(["rag", "nl2sql", "agent"]);
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       // 「パスワード変更」のタブ（← → で移り、URL に残す）。
       await apiKeysTab.focus();
@@ -238,7 +233,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/account\?tab=password$/);
       await expect(page.getByLabel("現在のパスワード")).toBeVisible();
       await expect(page.getByTestId("account-password-submit")).toBeVisible();
-      await expectNoPageOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("アカウント欄のログアウト（CSRF header 付き）", async ({ page, context, baseURL, mockApi }) => {

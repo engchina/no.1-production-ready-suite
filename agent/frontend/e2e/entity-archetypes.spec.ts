@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // ページの型（platform UX 契約 page-archetypes.md）の Agent への適用（#137）。
 // A 型 = 一覧 → 全画面エディタ（?id= が唯一の情報源、パンくず、行メニュー / ObjectActionBar）、
@@ -11,13 +12,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800, layout: "split" },
   { name: "mobile-375", width: 375, height: 812, layout: "stacked" },
 ] as const;
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 function breadcrumbs(page: Page) {
   return page.getByRole("navigation", { name: "パンくず" });
@@ -93,7 +87,7 @@ for (const viewport of VIEWPORTS) {
       expect(actionsTop).toBeGreaterThanOrEqual(bannerBottom);
       expect(actionsTop - bannerBottom).toBeLessThan(48);
       await expect(page).toHaveURL(/\/agents\?id=new$/);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
 
     test("編集対象は URL で開き、再読込・戻る / 進む・左上の一覧へ戻るで行き来できる", async ({ page }) => {
@@ -111,7 +105,7 @@ for (const viewport of VIEWPORTS) {
       await expect(breadcrumbs(page)).toHaveCount(0);
       await expect(page.getByTestId("editor-back")).toHaveText("一覧へ戻る");
       await expect(page.getByTestId("editor-back")).toHaveAccessibleName("スキルの一覧へ戻る");
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
 
       await page.reload();
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
@@ -185,7 +179,7 @@ for (const viewport of VIEWPORTS) {
       await page.getByRole("menuitem", { name: "削除" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("MCP 接続を削除しますか?")).toBeVisible();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await dialog.getByRole("button", { name: "キャンセル" }).click();
       await expect(trigger).toBeVisible();
       expect(mockApi.lastRequest("DELETE", "/api/settings/mcp-connections/crm")).toBeUndefined();
@@ -247,7 +241,7 @@ for (const viewport of VIEWPORTS) {
         if (viewport.layout === "split") {
           await expect(pane.getByRole("separator", { name: "一覧と詳細の表示比率" })).toBeVisible();
         }
-        await expectNoHorizontalOverflow(page);
+        await expectNoPageHorizontalOverflow(page);
       }
 
       if (viewport.layout === "split") {
@@ -342,7 +336,7 @@ for (const viewport of VIEWPORTS) {
       await expect(longTitleButton).not.toHaveAttribute("aria-describedby", /.*/);
       await page.keyboard.press("Escape");
       await expect(tooltip).toBeHidden();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`run-row-title-${viewport.name}.png`), fullPage: true });
     });
 
@@ -371,7 +365,7 @@ for (const viewport of VIEWPORTS) {
         .toMatchObject({ approved: false });
       // 判断済みの承認は行メニューを持たない。
       await expect(page.getByRole("button", { name: "rag__rag_search の操作" })).toHaveCount(0);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
     });
   });
 }

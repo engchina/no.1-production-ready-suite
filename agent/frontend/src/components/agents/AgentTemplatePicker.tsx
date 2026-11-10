@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
 import { ListSkeleton, Section, TimedLoadingState, ApiErrorBanner } from "@production-ready/ui";
@@ -23,6 +24,7 @@ export function AgentTemplatePicker({
 }) {
   const templates = useQuery({ queryKey: ["agent-templates"], queryFn: agentApi.listAgentTemplates });
   const selected = templates.data?.templates.find((template) => template.id === selectedId) ?? null;
+  const idPrefix = useId();
   return (
     <Section title={t("agent.template.title")} description={t("agent.template.description")}>
       {templates.isLoading ? (
@@ -42,7 +44,9 @@ export function AgentTemplatePicker({
                   data-surface-tint={current ? "accent" : undefined}
                   type="button"
                   aria-pressed={current}
-                  aria-label={t("agent.template.apply", { name: template.name })}
+                  // 名前は見える名前のまま（WCAG 2.5.3。#4801）、分類と説明は補足として読む。
+                  aria-labelledby={`${idPrefix}-${template.id}-name`}
+                  aria-describedby={`${idPrefix}-${template.id}-category ${idPrefix}-${template.id}-description`}
                   onClick={() => onApply(template)}
                   data-testid={`agent-template-${template.id}`}
                   className={
@@ -52,7 +56,7 @@ export function AgentTemplatePicker({
                   }
                 >
                   <span className="flex min-w-0 items-center justify-between gap-2">
-                    <span className="truncate text-xs text-fg-muted">{template.category}</span>
+                    <span id={`${idPrefix}-${template.id}-category`} className="truncate text-xs text-fg-muted">{template.category}</span>
                     {current ? (
                       <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-fg">
                         <CheckCircle2 size={14} aria-hidden="true" />
@@ -60,8 +64,12 @@ export function AgentTemplatePicker({
                       </span>
                     ) : null}
                   </span>
-                  <span className="text-sm font-medium text-fg">{template.name}</span>
-                  <span className="line-clamp-2 text-xs leading-5 text-fg-muted">{template.description}</span>
+                  <span id={`${idPrefix}-${template.id}-name`} className="min-w-0 text-sm font-medium text-fg [overflow-wrap:anywhere]">
+                    {template.name}
+                  </span>
+                  <span id={`${idPrefix}-${template.id}-description`} className="line-clamp-2 min-w-0 text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
+                    {template.description}
+                  </span>
                 </button>
               );
             })}

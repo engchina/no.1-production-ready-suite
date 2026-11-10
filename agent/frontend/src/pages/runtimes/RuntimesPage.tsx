@@ -32,6 +32,10 @@ const PERSISTENT_STORAGE_SETTING = "AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_chec
  * Runtime（組み込み Runtime の状態。#754）。業務 Agent は Control Plane の中の OpenAI Agents SDK で実行し、
  * モデルは「システム設定 > モデル」の OCI Enterprise AI を使う。外部 Runtime の登録・Docker の操作は無い。
  */
+
+// 375px の暗黙の列も sm 以上の値の列も minmax(0,1fr) にし、改行の機会の無い長い値をカードの中で折り返す（#4801）。
+const RUNTIME_FACTS_CLASS =
+  "grid grid-cols-[minmax(0,1fr)] gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_minmax(0,1fr)] [&_dd]:min-w-0 [&_dd]:[overflow-wrap:anywhere]";
 export function RuntimesPage() {
   const { hasPermission } = useAuth();
   const status = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
@@ -103,7 +107,7 @@ export function RuntimesPage() {
                     />
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+                    <dl className={RUNTIME_FACTS_CLASS}>
                       <dt className="text-fg-muted">{t("runtime.builtin.sdk")}</dt>
                       <dd className="break-words">
                         <code>{data.sdk}</code> {data.sdk_version}
@@ -182,7 +186,7 @@ function StorageCard({ status }: { status: RuntimeStorageStatus }) {
         />
       </CardHeader>
       <CardContent className="space-y-4">
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+        <dl className={RUNTIME_FACTS_CLASS}>
           <dt className="text-fg-muted">{t("storage.card.backend")}</dt>
           <dd data-testid="runtime-storage-backend">{t(`storage.backend.${status.backend}`)}</dd>
           <dt className="text-fg-muted">{t("storage.card.database")}</dt>
@@ -279,7 +283,7 @@ function RuntimeCardSkeleton({
         <Skeleton className="h-[1lh] w-24 shrink-0 text-sm" />
       </CardHeader>
       <CardContent>
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+        <dl className={RUNTIME_FACTS_CLASS}>
           {terms.map((term, row) => (
             <div key={term} className="contents">
               <dt className="text-fg-muted">{term}</dt>

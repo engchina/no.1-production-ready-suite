@@ -1448,6 +1448,9 @@ QA に事前共有してください。**189点あります。**
 | 195 | **サイドナビ下部の利用者の欄がメニューを開くボタンになり、ログアウトの行が無くなる**（#4724。`SidebarAccountFooter`） | 欄の行全体が `/account` へのリンクで、下にログアウトの行（折りたたみ時はアイコンの行）を常に表示 → 欄（アイコン・ログイン名・ロール名）を押すと上に「アカウント」「ログアウト」の `FloatingActionMenu` が開く。折りたたみ時はアイコンを押して同じメニュー。ログイン省略の環境は「アカウント」だけで、「ログイン省略」の表示は欄の下に残す。アカウントの画面を開いている間は欄が塗り + 左バー + `aria-current="page"`。開いている間の欄は hover と同じ面 | 利用者の情報と操作を 1 か所にまとめ、ナビの下部の高さを空ける。ログアウトを誤って押しにくくする |
 | 196 | **RAG の回答の本文の表が、文字のままでなく共通の結果の表で出る**（#4734。`AnswerBody`・`hasMarkdownTable`） | `\| 設定名 \| 既定値 \|` と `\| --- \| --- \|` が節に分けない本文・段落・箇条書き・結論の説明に文字のまま出た → Agent と同じ `ResultTable` で出す（節の根拠の行は表の下で押せるまま）。文書の表から切り出した区切りの行の無い行の並び（2 行以上）は列の名前を番号にして表にする。表の無い本文は今までどおり | Agent と同じ部品で 3 製品の表の見た目をそろえる。Agent の見た目は変えない |
 | 197 | **RAG の文書解析の Dots.OCR のカードに「設定」が付き、接続の設定が右のサイドパネルで開く。「外部 GPU 解析エンジンの接続」の節が無くなる**（#4740。`SideSheet`。#4763: `ConfirmDialog` の Escape を capture で受ける） | 使用エンジンのカードの下に「外部 GPU 解析エンジンの接続」の節があり、Endpoint・Model・API key・保存済みのキーの削除・接続の確認・読み取りプロンプトが常に並び、保存は画面の「保存」（使用エンジンと一緒） → Dots.OCR のカードの「設定」（押しても使用エンジンは変わらない）で、根拠を表示するパネルと同じ `SideSheet`（右・`wide`。sm 未満は全画面）を開き、同じ中身をパネルの中で保存する（接続だけを送る）。未保存のまま閉じる（×・Escape・scrim）と「変更を破棄しますか」を出す。Escape の keydown から開いた確認が同じ keydown で閉じていたのを直した | 接続の設定は毎回使わないので、画面の長さを取らないようカードから開く（ユーザーの判断） |
+| 198 | **長いラベルの `StatusBadge` が入れ物の幅で末尾を省く**（#4801） | `whitespace-nowrap` で入れ物を押し広げる → `max-w-full` で入れ物に収め、末尾を「…」で省いて全文を `title` に残す（`whitespace-normal` を渡したバッジは折り返す）。カードの見出しと説明（`CardTitle` / `CardDescription`）は改行の機会の無い長い名前も折り返す | 長い値で横にあふれ、カードの見出しがバッジに重なっていた。利用者が付けた名前は状態のバッジに入れず通常の文字で出す |
+| 199 | **押せる行のホバー中、行の中の副次の文字が 1 段濃くなる**（#4639。`DataTable`） | ホバー中の `--color-fg-muted` neutral-600（4.39:1）→ neutral-650（4.63:1 以上）。ホバーしていない行は変わらない | WCAG 1.4.3。淡い面の上の文字（`[data-surface-tint]`）と同じ値 |
+| 200 | **route の本文の描画の例外で、ナビを残して本文にエラーと「再試行」が出る**（#4800。`RenderErrorBoundary`） | NL2SQL・Agent は画面全体が既定のエラー画面（英語の stack trace）→ 3 製品とも本文の余白の中の danger の `Banner` | 1 画面の描画の例外でほかの画面へ移れなくなっていた |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 
@@ -1455,6 +1458,7 @@ QA に事前共有してください。**189点あります。**
 
 | 対象 | 変更 |
 |---|---|
+| `RenderErrorBoundary`（#4800） | **新規 export** `RenderErrorBoundary` / `RenderErrorBoundaryProps` / `RenderErrorBoundaryLabels` / `DEFAULT_RENDER_ERROR_BOUNDARY_LABELS`。描画の例外を受け止める境界（RAG の `CardErrorBoundary` を移した）。`serviceName`（診断のログ）・`label`・`labels`・`placement`（`page` は本文の余白の中に出す）。別の画面へ移ったら解くには `key` に `pathname` を渡す |
 | `FieldSkeleton`（#4654） | **新規 export** `FieldSkeleton` / `FieldSkeletonProps`。欄（ラベル + 入力欄 + 案内）の形の読み込み中の表示（`width`・`size`・`fieldLabel`・`helperText` / `helperLines`・`label`）。Agent・RAG・NL2SQL が持っていた同じ役割の実装を置き換えた。既存の部品の props は変えない |
 | `ChatComposer` / `ChatReadOnlyNotice` / `useChatHistoryActions`（#3244） | **非互換。** `ChatComposer` の `notice`（送る前の案内。#1954）と `data-chat-composer-notice` を**削除**。**新規 export** `ChatReadOnlyNotice` / `ChatReadOnlyNoticeProps` / `ChatReadOnlyNoticeLabels` / `DEFAULT_CHAT_READ_ONLY_NOTICE_LABELS`（閲覧だけの会話の入力欄の代わりの案内。testid は `<testIdPrefix>-notice` / `-stop`、既定 `chat-read-only`）。`useChatHistoryActions` に `canRename?: (item) => boolean` を追加（false の行は「名前の変更」を出さない） |
 | `ChatProgress`（#2426） | **非互換。** `ChatProgressLabels.slowStep(step)` を**削除**（遅延の案内は `labels.slow` だけ）。見出しの右の 2 行の囲み `<testId>-header-status` を**削除**し、`-timer` は見出しの右に直に置く。見出しの直下の案内の行 `<testId>-notice`（`data-slow` / `data-reconnecting`）を追加し、`-slow` / `-reconnecting` はその中（同じ testid）。`ProcessingIndicator` の `-slow` は処理の名前の直下（同じ testid）。`Disclosure` に `summaryFooter`（見出しの行の下の全幅の補足）を追加 |

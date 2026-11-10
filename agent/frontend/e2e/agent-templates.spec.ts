@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #780: 業種テンプレートから業務 Agent を作る。
 
@@ -8,13 +9,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
@@ -44,7 +38,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("agent-template-samples")).toContainText("今月の地域別の売上を教えてください。");
       // テンプレートの評価ケースで評価セットを作る（既定はオン。#810）。
       await expect(page.getByRole("checkbox", { name: /テンプレートの評価ケース（1 件）で評価セットを作る/ })).toBeChecked();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`agent-templates-${viewport.name}-${theme}.png`), fullPage: true });
 
       await page.getByRole("button", { name: "作成", exact: true }).first().click();

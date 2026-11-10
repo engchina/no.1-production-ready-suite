@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, evaluationSummary, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #2558: 品質評価で、業務 Agent の出力の項目を項目ごとに判定する。
 
@@ -14,13 +14,6 @@ const OUTPUT_FIELDS = [
   { key: "amount", label: "金額", type: "number", required: false, description: "" },
   { key: "matched", label: "一致", type: "boolean", required: false, description: "" },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 function useOutputFields(mockApi: MockApi) {
   const agent = mockApi.state.agents.find((item) => item.id === "default");
@@ -124,7 +117,7 @@ for (const viewport of VIEWPORTS) {
     await row.getByRole("textbox", { name: "金額" }).fill("1,200");
     await row.getByLabel("一致").click();
     await page.getByRole("option", { name: "はい" }).click();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
 
     await page.getByRole("button", { name: "作成", exact: true }).first().click();
     await expect(page.getByText("評価セットを作成しました")).toBeVisible();
@@ -147,7 +140,7 @@ for (const viewport of VIEWPORTS) {
     await expect(summary).toContainText("0 / 1 ケース");
     const results = page.getByRole("table", { name: "ケース別結果" });
     await expect(results.getByRole("row", { name: /output-case/ })).toContainText("3 / 4 項目");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`evaluation-output-${viewport.name}.png`), fullPage: true });
 
     await results.getByRole("button", { name: /書類の値を読んで/ }).click();

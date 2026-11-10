@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #768: 業務利用者のチャット。会話（スレッド）の続き・出典・処理の経過のツールの段・承認待ちを確かめる。
 
@@ -8,13 +9,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
@@ -137,7 +131,7 @@ for (const viewport of VIEWPORTS) {
         await expect(sheet.getByText("2 往復")).toBeVisible();
         await page.keyboard.press("Escape");
       }
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`chat-${viewport.name}-${theme}.png`), fullPage: true });
 
       // 新しい会話は上端の行の 1 か所だけ（#889）。押すと会話を外し、すぐ書けるよう入力欄へフォーカスする。
@@ -272,7 +266,7 @@ for (const viewport of VIEWPORTS) {
       await expect(composer).toHaveValue("次の質問");
       expect(mockApi.lastRequest("POST", "/api/runs")).toBeUndefined();
       expect(mockApi.lastRequest("POST", "/api/runs/run-chat-seed/cancel")).toBeUndefined();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`chat-running-${viewport.name}-${theme}.png`) });
 
       await button.click();
@@ -407,7 +401,7 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
     await expect(pendingTurn.getByTestId("chat-progress")).toHaveCount(0);
     expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     for (const theme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: theme });
       await page.evaluate((value) => {
@@ -457,7 +451,7 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   await expect(failure.locator("details")).toContainText("run-chat-seed");
   // 回答の本文の無い失敗の枠には見出し「回答」を出さない（#3433）。
   await expect(turn.getByTestId("chat-answer-heading")).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("公開していない業務 Agent はチャットで選べない（#792）", async ({ page, mockApi }) => {
@@ -574,7 +568,7 @@ test("会話の履歴は既定で閉じ、開くと会話の左に並び、開�
   await page.reload();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(history).not.toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す", { tag: "@responsive" }, async ({
@@ -598,7 +592,7 @@ test("375px では会話の履歴をシートで開き、Esc・外側・会話�
   await expect(sheet.getByRole("button", { name: "会話の履歴を閉じる" })).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(sheet.getByRole("button", { name: /^契約の更新条件は？/ })).toBeFocused();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -623,7 +617,7 @@ test("375px では会話の履歴をシートで開き、Esc・外側・会話�
   await page.reload();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(sheet).toBeHidden();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 // #907: 送った質問は、Run の作成の応答を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
@@ -681,7 +675,7 @@ for (const viewport of VIEWPORTS) {
     // 処理中の表示は回答の場所の 1 つだけ（messaging.md §3.7）。
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
     await expectConversationScrolledToEnd(page);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     for (const theme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: theme });
       await page.evaluate((value) => {
@@ -856,6 +850,6 @@ for (const viewport of VIEWPORTS) {
     await expect(page).toHaveURL(/\/chat$/);
     await expect(page.getByTestId("chat-turn-run-chat-seed")).toBeVisible();
     await expect(page.getByTestId("chat-turn-run-chat-seed")).toContainText("契約の更新条件は？");
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 }

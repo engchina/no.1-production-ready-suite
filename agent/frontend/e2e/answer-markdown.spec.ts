@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1808: チャットと実行の詳細の回答の Markdown（見出し・太字・斜体・箇条書き・番号付き・インラインコード・コードブロック・
 // リンク・引用）を、記号のまま出さずに共通の部品（MarkdownText）で描く。表は今までどおり共通の結果の表（#1158）。
@@ -68,13 +69,6 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 /** 回答の Markdown が要素で描かれ、記号・生の HTML が要素にならないことを確かめる。 */
 async function expectMarkdownAnswer(page: Page, answer: Locator, testId: string, headingLevel: number) {
   await expect(answer.locator("strong").first()).toHaveText("関数シグネチャを解析して、呼び出しの流れをまとめました。");
@@ -124,7 +118,7 @@ for (const viewport of VIEWPORTS) {
       const body = page.getByTestId(`chat-answer-body-${RUN_ID}`);
       await expect(body.getByRole("heading", { level: 3, name: "回答", exact: true })).toBeVisible();
       await expectMarkdownAnswer(page, answer, `chat-answer-${RUN_ID}`, 4);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`chat-${viewport.name}-${theme}.png`), fullPage: true });
     });
 
@@ -136,7 +130,7 @@ for (const viewport of VIEWPORTS) {
       const answer = page.getByTestId("run-answer-answer");
       // カードの見出し（h2）の下なので、回答の見出しは h3。
       await expectMarkdownAnswer(page, answer, "run-answer-answer", 3);
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`run-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }
