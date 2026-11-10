@@ -94,20 +94,57 @@ async def test_dry_run_reads_only_and_reports_names() -> None:
     assert plan.current_conforms is False
     assert plan.draft_conforms is False
     assert plan.draft_matches_current is True
+    assert plan.draft_changes_kept is False
     assert plan.missing_fields == sorted(_MISSING)
     assert plan.candidate_valid and plan.ingest_hash_unchanged
     assert _writes(pool) == []
     assert all("FOR UPDATE" not in call.statement for call in pool.connection.calls)
 
 
-async def test_blocks_when_draft_differs_from_current() -> None:
-    """下書きの未公開の変更を、適用で黙って置き換えない。"""
+_DRAFT_CHANGE = "合成の下書きの文言"
+
+
+def _changed_draft() -> dict[str, Any]:
     draft = _effective()
-    draft["answer_labels"]["gaps_section"] = "合成の下書きの文言"
-    oracle, _ = _client([_state_row(draft)], [_release_row()], [{"total": 0}])
+    draft["answer_labels"]["gaps_section"] = _DRAFT_CHANGE
+    return draft
+
+
+async def test_draft_changes_are_kept_when_current_is_repaired() -> None:
+    """公開版も下書きも不適合で下書きに未公開の変更があるとき、止めずに下書きの値を保つ(#4832)。"""
+    oracle, pool = _client([_state_row(_changed_draft())], [_release_row()], [{"total": 0}])
     plan = await repair.inspect_language_pack_repair(oracle)
+    assert plan.repair_target == repair.REPAIR_TARGET_CURRENT
     assert plan.draft_matches_current is False
-    assert plan.blockers == [repair.DRAFT_DIFFERS_FROM_CURRENT]
+    assert plan.draft_changes_kept is True
+    assert plan.blockers == []
+    assert _writes(pool) == []
+
+
+async def test_apply_keeps_unpublished_draft_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """発行する版は公開版の内容、下書きは未公開の変更を保ったまま欠けた項目だけ補った内容(#4832)。"""
+    monkeypatch.setattr(repair, "uuid4", lambda: SimpleNamespace(hex="release-b"))
+    kept = _complete()
+    kept["answer_labels"]["gaps_section"] = _DRAFT_CHANGE
+    kept = build_pack(kept).to_dict()
+    state_back, release_back = _readback("release-b")
+    state_back[0]["draft_effective_json"] = kept
+    oracle, pool = _client(
+        [_state_row(_changed_draft())], [_release_row()], [{"total": 0}], state_back, release_back
+    )
+    result = await repair.apply_language_pack_repair(
+        oracle, expected_current_id="release-a", expected_draft_revision=3
+    )
+    assert result.release_id == "release-b" and result.draft_revision == 4
+    assert pool.connection.commits == 1 and pool.connection.rollbacks == 0
+    insert, update = _writes(pool)
+    inserted = next(c.parameters for c in pool.connection.calls if c.statement == insert)
+    assert inserted["hash"] == build_pack(_complete()).hash
+    bound = next(c.parameters for c in pool.connection.calls if c.statement == update)["effective"]
+    written = json.loads(bound) if isinstance(bound, (str, bytes)) else bound
+    assert written == kept
+    assert written["answer_labels"]["gaps_section"] == _DRAFT_CHANGE
+    assert written != build_pack(_complete()).to_dict()
 
 
 def _with_extra() -> dict[str, Any]:
