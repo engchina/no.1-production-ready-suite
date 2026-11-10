@@ -3120,6 +3120,8 @@ async def test_history_rewrite_preserves_full_question_or_falls_back(
     assert llm.system_prompts == [HISTORY_REWRITE_SYSTEM_PROMPT]
     assert all(f"## Step {step}:" in HISTORY_REWRITE_SYSTEM_PROMPT for step in range(1, 5))
     assert HISTORY_REWRITE_SYSTEM_PROMPT.count(CHAT_HISTORY_UNTRUSTED_NOTE) == 1
+    # 出力の言語は最新の質問に合わせる。指示で特定の言語に固定しない（#4785）。
+    assert "日本語" not in HISTORY_REWRITE_SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize("fails", [False, True])
