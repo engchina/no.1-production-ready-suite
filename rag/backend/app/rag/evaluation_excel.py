@@ -973,8 +973,7 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
         STANDARD_ANSWER_HEADER,
         "任意",
         "期待する回答。reference / ground_truth にあたります。",
-        f"{STANDARD_ANSWER_MAX_CHARS} 文字まで。書くと、回答をこの文と比べて採点します"
-        "（正確性）。",
+        f"{STANDARD_ANSWER_MAX_CHARS} 文字まで。書くと、回答をこの文と比べて採点します（正確性）。",
     ),
     (
         SCREENS_HEADER,
