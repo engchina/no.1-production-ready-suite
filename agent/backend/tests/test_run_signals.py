@@ -29,6 +29,7 @@ from app.features.agent.run_facts_store import (
     SIGNAL_BINDS,
     MemoryRunFactsStore,
     OracleRunFactsStore,
+    RunFactsUnavailableError,
     fact_binds,
 )
 from app.features.agent.run_signals import (
@@ -594,13 +595,13 @@ def test_signals_api_lists_runs_to_review_from_saved_facts() -> None:
 
 
 def test_signals_api_falls_back_to_runs_in_memory() -> None:
-    """保存先が無い（memory / file）・DB の障害では、メモリの Run から集める。"""
+    """システムテーブルの更新の前（シグナルの列が無い）は、メモリの Run から集める。"""
 
-    class _Broken(MemoryRunFactsStore):
+    class _NotMigrated(MemoryRunFactsStore):
         def signal_report(self, **_kwargs: Any) -> Any:
-            raise RuntimeError('ORA-00904: "ANSWER_OUTCOME": invalid identifier')
+            raise RunFactsUnavailableError("AGENT_RUN_FACTS")
 
-    run_facts_store.configure(_Broken())
+    run_facts_store.configure(_NotMigrated())
     response = client.get("/api/feedback/signals")
     assert response.status_code == 200, response.text
     assert response.json()["data"]["source"] == "memory"
