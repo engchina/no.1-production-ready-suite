@@ -149,6 +149,13 @@ async def _resolve_evaluation_suite_name(
     return normalize_evaluation_suite(get_settings().rag_evaluation_suite)
 
 
+@router.get("/models")
+async def evaluation_models() -> ApiResponse[list[dict[str, str]]]:
+    from app.api.routes.search import registered_answer_model_choices
+
+    return ApiResponse(data=registered_answer_model_choices(get_settings()))
+
+
 @router.post("/run", response_model=ApiResponse[EvaluationMetrics])
 async def run_evaluation(
     http_request: Request,
@@ -160,6 +167,7 @@ async def run_evaluation(
     （`POST /jobs/run`。#390）を使う。
     """
     enforce_rate_limit("evaluation", http_request)
+    request = await _testset_run_request(request)
     metrics, _ = await _execute_run(request, time_budget_seconds=EVALUATION_RUN_TIMEOUT_SECONDS)
     return ApiResponse(data=metrics)
 
@@ -175,7 +183,11 @@ async def submit_run_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """golden set の評価を job として投入する（#390）。進捗は `GET /jobs/{job_id}` で取得する。"""
     enforce_rate_limit("evaluation", http_request)
-    source_workbook_id = await _usable_source_workbook_id(request)
+    from_testset = request.testset_id is not None
+    request = await _testset_run_request(request)
+    source_workbook_id = (
+        request.source_workbook_id if from_testset else await _usable_source_workbook_id(request)
+    )
     # 比べる検索・回答プロファイルがあれば、同じケースを 2 回流す（#2402）。
     passes = 2 if request.compare_search_answer_profile_id else 1
     time_limit = evaluation_job_time_limit_seconds(
@@ -769,6 +781,7 @@ async def _execute_run(
             knowledge_base_ids=request.knowledge_base_ids,
             thresholds=effective_thresholds,
             rag_overrides=request.rag_overrides,
+            answer_model_id=request.answer_model_id,
             search_answer_profile_id=request.search_answer_profile_id,
             time_budget_seconds=time_budget_seconds,
             progress=_offset_progress(progress, offset=0, final=False)
@@ -791,6 +804,7 @@ async def _execute_run(
                 knowledge_base_ids=[],
                 thresholds=effective_thresholds,
                 rag_overrides=request.rag_overrides,
+                answer_model_id=request.answer_model_id,
                 search_answer_profile_id=request.compare_search_answer_profile_id,
                 time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
                 progress=_offset_progress(progress, offset=len(request.cases), final=True),
@@ -916,3 +930,65 @@ def _metrics_passed(metrics: EvaluationMetrics) -> bool:
 
 def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+async def prepare_testset(draft_id: str, revision: int, profile_id: str) -> EvaluationImportResult:
+    """本人の指定版の確認済み項目だけを解決し、実行時の入力を原本の保存先へ固定する。"""
+    from io import BytesIO
+
+    from app.rag import evaluation_testsets
+    from app.rag.request_context import current_audit_request_context
+
+    if current_audit_request_context().user_id_hash is None:
+        raise HTTPException(status_code=403, detail="本人を確認できません。")
+    draft = await evaluation_testsets.get_store().get(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="テストセットが見つかりません。")
+    if draft.revision != revision:
+        raise HTTPException(
+            status_code=409, detail="テストセットが更新されました。最新の内容を確認してください。"
+        )
+    try:
+        content = await asyncio.to_thread(evaluation_testsets.export_draft, draft)
+    except evaluation_testsets.TestSetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = (
+        await import_evaluation_cases(
+            file=UploadFile(filename=f"{draft.name}-r{revision}.xlsx", file=BytesIO(content)),
+            search_answer_profile_id=profile_id,
+        )
+    ).data
+    if result is None or result.error_count:
+        raise HTTPException(
+            status_code=422,
+            detail="テストセットの根拠を評価先の資料と照合できません。内容を確認してください。",
+        )
+    if not result.source_workbook_id:
+        raise HTTPException(
+            status_code=503, detail="実行時の入力を保存できません。時間をおいて再試行してください。"
+        )
+    return result
+
+
+async def _testset_run_request(request: EvaluationRunRequest) -> EvaluationRunRequest:
+    if request.answer_model_id:
+        from app.api.routes.search import ensure_answer_models_registered
+
+        ensure_answer_models_registered([request.answer_model_id], get_settings())
+    if not request.testset_id:
+        return request
+    if not request.search_answer_profile_id or request.testset_revision is None:
+        raise HTTPException(
+            status_code=422, detail="評価する検索・回答プロファイルを選んでください。"
+        )
+    prepared = await prepare_testset(
+        request.testset_id, request.testset_revision, request.search_answer_profile_id
+    )
+    return request.model_copy(
+        update={
+            "cases": prepared.cases,
+            "source_workbook_id": prepared.source_workbook_id,
+            "testset_id": None,
+            "testset_revision": None,
+        }
+    )

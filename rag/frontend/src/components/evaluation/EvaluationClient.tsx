@@ -18,6 +18,7 @@ import {
   TimedLoadingState,
   useConfirm,
   ListToolbar,
+  SelectField,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -34,7 +35,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
@@ -116,6 +117,7 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
+import { testsetApi } from "@/lib/testset-api";
 import { TestSetTab } from "./testsets/TestSetTab";
 import { EvaluationHistory } from "./EvaluationHistory";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
@@ -244,9 +246,15 @@ export function EvaluationClient() {
   const runActive = runMutation.isPending || isEvaluationJobActive(runJob.job);
   const validating = importMutation.isPending;
   // プロファイルを変えた後の検証の結果は、期待する根拠のファイル名の照合が変わるため使えない。
+  const savedTestsetId = searchParams.get("testset");
+  const testsets = useQuery({ queryKey: ["testsets"], queryFn: testsetApi.list, enabled: pageTab === "run" && Boolean(savedTestsetId) });
+  const selectedSet = useQuery({ queryKey: ["testset", savedTestsetId], queryFn: () => testsetApi.get(savedTestsetId!), enabled: Boolean(savedTestsetId && savedTestsetId !== "choose") });
+  const preparedSet = useQuery({ queryKey: ["testset-prepared", savedTestsetId, selectedSet.data?.revision, profileId], queryFn: () => testsetApi.prepare(savedTestsetId!, selectedSet.data!.revision, profileId!), enabled: Boolean(savedTestsetId && selectedSet.data && profileId) });
+  const [answerModelId, setAnswerModelId] = useWorkspaceState<string>("evaluation.answerModelId", "", (value): value is string => typeof value === "string");
+  const models = useQuery({ queryKey: ["evaluation-models"], queryFn: api.listEvaluationModels, enabled: pageTab === "run" });
   const importStale =
     importResult !== null && importResult.search_answer_profile_id !== profileId;
-  const shownResult = importStale ? null : importResult;
+  const shownResult = savedTestsetId ? preparedSet.data ?? null : importStale ? null : importResult;
   const processRows = shownResult ? evaluationProcessRows(shownResult) : [];
   const uploadNotice = validating
     ? null
@@ -329,7 +337,7 @@ export function EvaluationClient() {
     const nextProfileError = profileId
       ? null
       : t("evaluation.knowledgeBaseScope.required");
-    const nextUploadError = !fileName
+    const nextUploadError = savedTestsetId ? (!preparedSet.data ? t("evaluation.testsets.choose") : null) : !fileName
       ? t("evaluation.import.required")
       : !shownResult
         ? importStale && !file
@@ -362,14 +370,16 @@ export function EvaluationClient() {
     if (!profileId) return;
     const compareId = compareEnabled ? compareProfileId : null;
     // 確かめた期待の下書きを足したケース（#2402。オンにしたときだけ）。
-    const runInput = useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
+    const runInput = !savedTestsetId && useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
     setRunError("");
     runMutation.reset();
     try {
       const job = await runMutation.mutateAsync({
-        cases: runInput.cases,
+        cases: savedTestsetId ? [] : runInput.cases,
+        ...(savedTestsetId && selectedSet.data ? { testset_id: savedTestsetId, testset_revision: selectedSet.data.revision } : {}),
+        ...(answerModelId ? { answer_model_id: answerModelId } : {}),
         search_answer_profile_id: profileId,
-        ...(runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
+        ...(!savedTestsetId && runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
@@ -385,6 +395,8 @@ export function EvaluationClient() {
       setRunError(error instanceof ApiError ? error.message : t("evaluation.error.run"));
     }
   };
+
+  if (pageTab === "testsets") return <TestSetTab />;
 
   return (
     <div>
@@ -406,9 +418,6 @@ export function EvaluationClient() {
         }
       />
       <PageBody wide>
-        <TabPanel id="testsets" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
-          <TestSetTab />
-        </TabPanel>
         <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
         {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}
         <SuiteSummary query={settingsQuery} />
@@ -457,7 +466,13 @@ export function EvaluationClient() {
                 <p className="mt-1 text-xs text-fg-muted">{t("evaluation.knowledgeBaseScope.helper")}</p>
               </div>
 
-              <EvaluationRequestUpload
+              <SelectField width="lg" id="evaluation-input-source" label={t("evaluation.testsets.runData")} value={savedTestsetId ? "saved" : "excel"} disabled={runActive} options={[{ value: "excel", label: t("evaluation.testsets.inputExcel") }, { value: "saved", label: t("evaluation.testsets.inputSaved") }]} onValueChange={value => { const next = new URLSearchParams(searchParams); if (value === "excel") next.delete("testset"); else next.set("testset", "choose"); setSearchParams(next); }} />
+              {savedTestsetId ? <>
+                {testsets.isError ? <DataLoadFailure layout="field" error={testsets.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => void testsets.refetch()} /> : <SelectField width="lg" id="evaluation-testset" label={t("evaluation.testsets.choose")} value={savedTestsetId === "choose" ? "" : savedTestsetId} disabled={runActive || testsets.isPending} options={[{ value: "", label: t("evaluation.testsets.choose") }, ...(testsets.data ?? []).map(value => ({ value: value.draft_id, label: value.name }))]} onValueChange={value => { const next = new URLSearchParams(searchParams); next.set("testset", value); setSearchParams(next); }} />}
+                {selectedSet.data ? <Banner severity="info">{t("evaluation.testsets.runHelp", { confirmed: selectedSet.data.items.filter(value => value.confirmed).length, pending: selectedSet.data.items.filter(value => !value.confirmed).length })}</Banner> : null}
+                {selectedSet.isError || preparedSet.isError ? <DataLoadFailure error={selectedSet.error ?? preparedSet.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => { void selectedSet.refetch(); void preparedSet.refetch(); }} /> : null}
+                {preparedSet.isFetching ? <TimedLoadingState label={t("evaluation.testsets.loading")}><Skeleton className="h-20 w-full" /></TimedLoadingState> : null}
+              </> : <EvaluationRequestUpload
                 fileName={fileName}
                 result={shownResult}
                 validating={validating}
@@ -470,9 +485,10 @@ export function EvaluationClient() {
                 templateError={templateError}
                 onFiles={selectFiles}
                 onDownloadTemplate={() => void downloadTemplate()}
-              />
+              />}
+              {models.isError ? <DataLoadFailure layout="field" error={models.error} fallback={t("evaluation.testsets.modelLoadError")} onRetry={() => void models.refetch()} /> : <SelectField width="lg" id="evaluation-answer-model" label={t("evaluation.testsets.model")} value={answerModelId} disabled={runActive || models.isPending} options={[{ value: "", label: t("evaluation.testsets.modelDefault") }, ...(models.data ?? []).map(value => ({ value: value.model_id, label: value.display_name }))]} onValueChange={setAnswerModelId} />}
 
-              {shownResult && shownResult.error_count === 0 && processRows.length ? (
+              {!savedTestsetId && shownResult && shownResult.error_count === 0 && processRows.length ? (
                 <EvaluationProcessDrafts
                   rows={processRows}
                   knowledgeBaseIds={shownResult.knowledge_base_ids}

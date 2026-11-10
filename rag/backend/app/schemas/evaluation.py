@@ -795,7 +795,22 @@ class EvaluationRunRequest(BaseModel):
     指定は無視する)。
     """
 
-    cases: list[EvaluationCase] = Field(..., min_length=1)
+    cases: list[EvaluationCase] = Field(default_factory=list)
+    testset_id: str | None = Field(default=None, min_length=1, max_length=64)
+    testset_revision: int | None = Field(default=None, ge=1)
+    answer_model_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def input_source(self) -> Self:
+        if self.testset_id:
+            if self.testset_revision is None or self.cases or self.source_workbook_id:
+                raise ValueError(
+                    "テストセットの版だけを指定してください。ケースの差し込みはできません。"
+                )
+        elif not self.cases or self.testset_revision is not None:
+            raise ValueError("評価するケースを指定してください。")
+        return self
+
     # 省略時はチャット・RAG 検索と同じ既定(#3512)。
     top_k: int = Field(
         default_factory=search_top_k_default,

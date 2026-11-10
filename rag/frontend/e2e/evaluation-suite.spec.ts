@@ -37,7 +37,7 @@ for (const viewport of [
       await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
       // 評価の実行とテストセットの作成のタブ。既定は評価の実行。
       await expect(page.getByRole("tab", { name: "評価の実行" })).toHaveAttribute("aria-selected", "true");
-      await expect(page.getByRole("tab", { name: "テストセットの作成" })).toHaveAttribute("aria-selected", "false");
+      await expect(page.getByRole("tab", { name: "テストセット", exact: true })).toHaveAttribute("aria-selected", "false");
       // 評価の基準は表示だけ（#2065）。選択欄・ラベルは無く、設定の既定と閾値と設定へのリンクを出す。
       const suite = page.getByTestId("evaluation-suite");
       await expect(suite.getByRole("combobox")).toHaveCount(0);
@@ -63,7 +63,7 @@ for (const viewport of [
       // 結果の空の案内は、条件の欄と同じ入力（検索・回答プロファイル）を選ぶように案内する（#3597）。
       await expect(page.getByText("まだ評価結果がありません。")).toBeVisible();
       await expect(
-        page.getByText("検索・回答プロファイルを選び、評価リクエストの Excel をアップロードして評価を実行してください。")
+        page.getByText("検索・回答プロファイルと評価するデータを選び、評価を実行してください。")
       ).toBeVisible();
       await expect(page.getByRole("main")).not.toContainText("ナレッジベースを選び");
       // JSON の入力・設定比較・サンプルは無い。

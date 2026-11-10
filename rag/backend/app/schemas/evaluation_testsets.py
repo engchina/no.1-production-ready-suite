@@ -43,8 +43,9 @@ class TestSetEdit(TestSetFields):
 
 
 class TestSetItem(TestSetEdit):
-    source_job_id: str
-    source_case_id: str
+    source_kind: Literal["evaluation", "manual", "excel"] = "evaluation"
+    source_job_id: str = ""
+    source_case_id: str = ""
     source_pass: int = 0
     reference_answer: str = ""
     reference_evidence: list[dict[str, object]] = Field(default_factory=list)
@@ -73,9 +74,13 @@ class TestSetSourcesRequest(BaseModel):
     job_ids: list[str] = Field(min_length=1, max_length=20)
 
 
-class TestSetCreateRequest(TestSetSourcesRequest):
+class TestSetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_kind: Literal["evaluation", "manual", "excel"] = "evaluation"
+    job_ids: list[str] = Field(default_factory=list, max_length=20)
+    item_ids: list[str] = Field(default_factory=list, max_length=200)
+    items: list[TestSetFields] = Field(default_factory=list, max_length=200)
     name: str = Field(min_length=1, max_length=200)
-    item_ids: list[str] = Field(min_length=1, max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -90,6 +95,7 @@ class TestSetSaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     revision: int = Field(ge=1)
     items: list[TestSetEdit] = Field(max_length=200)
+    confirm_item_ids: list[str] = Field(default_factory=list, max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -115,3 +121,9 @@ def draft_summary(draft: TestSetDraft) -> TestSetSummary:
         item_count=len(draft.items),
         confirmed_count=sum(item.confirmed for item in draft.items),
     )
+
+
+class TestSetPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)
+    search_answer_profile_id: str = Field(min_length=1, max_length=128)
