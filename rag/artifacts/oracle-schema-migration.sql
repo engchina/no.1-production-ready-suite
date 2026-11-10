@@ -3598,148 +3598,6 @@ BEGIN
 END;
 /
 
--- migration: 20261026_001_evaluation_calibration
-DECLARE
-    v_count NUMBER;
-BEGIN
-    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_LABEL_SETS';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE TABLE rag_evaluation_label_sets ( '
-            || 'label_set_id    VARCHAR2(64) PRIMARY KEY, '
-            || 'tenant_id_hash  VARCHAR2(64), '
-            || 'name            VARCHAR2(200 CHAR) NOT NULL, '
-            || 'origin          VARCHAR2(16) NOT NULL, '
-            || 'rubric_id       VARCHAR2(80) NOT NULL, '
-            || 'rubric_version  VARCHAR2(40), '
-            || 'rubric_sha256   VARCHAR2(64), '
-            || 'items_sha256    VARCHAR2(64) NOT NULL, '
-            || 'item_count      NUMBER(10) DEFAULT 0 NOT NULL, '
-            || 'split_policy    JSON, '
-            || 'sources         JSON, '
-            || 'created_by_hash VARCHAR2(64), '
-            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
-            || 'updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
-            || 'CONSTRAINT rag_evaluation_label_sets_origin_ck CHECK (origin IN (''jobs'', ''import'')) '
-            || ')';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_LABEL_SETS_TENANT_CREATED_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_evaluation_label_sets_tenant_created_idx '
-            || 'ON rag_evaluation_label_sets (tenant_id_hash, created_at DESC)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_LABEL_ITEMS';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE TABLE rag_evaluation_label_items ( '
-            || 'label_set_id    VARCHAR2(64) NOT NULL, '
-            || 'item_id         VARCHAR2(200 CHAR) NOT NULL, '
-            || 'item_order      NUMBER(10) NOT NULL, '
-            || 'split           VARCHAR2(16) NOT NULL, '
-            || 'origin          VARCHAR2(16) NOT NULL, '
-            || 'excluded        NUMBER(1) DEFAULT 0 NOT NULL, '
-            || 'item_json       JSON NOT NULL, '
-            || 'CONSTRAINT rag_evaluation_label_items_pk PRIMARY KEY (label_set_id, item_id), '
-            || 'CONSTRAINT rag_evaluation_label_items_set_fk FOREIGN KEY (label_set_id) '
-            || 'REFERENCES rag_evaluation_label_sets (label_set_id) ON DELETE CASCADE, '
-            || 'CONSTRAINT rag_evaluation_label_items_split_ck CHECK (split IN (''dev'', ''holdout'')), '
-            || 'CONSTRAINT rag_evaluation_label_items_origin_ck CHECK (origin IN (''human'', ''synthetic'')), '
-            || 'CONSTRAINT rag_evaluation_label_items_excluded_ck CHECK (excluded IN (0, 1)) '
-            || ')';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_LABELS';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE TABLE rag_evaluation_labels ( '
-            || 'label_set_id    VARCHAR2(64) NOT NULL, '
-            || 'item_id         VARCHAR2(200 CHAR) NOT NULL, '
-            || 'aspect          VARCHAR2(80) NOT NULL, '
-            || 'role            VARCHAR2(16) NOT NULL, '
-            || 'annotator_code  VARCHAR2(40) NOT NULL, '
-            || 'annotator_hash  VARCHAR2(64), '
-            || 'label           VARCHAR2(16) NOT NULL, '
-            || 'error_type      VARCHAR2(40), '
-            || 'note            VARCHAR2(2000 CHAR), '
-            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
-            || 'updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
-            || 'CONSTRAINT rag_evaluation_labels_pk '
-            || 'PRIMARY KEY (label_set_id, item_id, aspect, role, annotator_code), '
-            || 'CONSTRAINT rag_evaluation_labels_item_fk FOREIGN KEY (label_set_id, item_id) '
-            || 'REFERENCES rag_evaluation_label_items (label_set_id, item_id) ON DELETE CASCADE, '
-            || 'CONSTRAINT rag_evaluation_labels_role_ck CHECK (role IN (''annotation'', ''adjudication'')), '
-            || 'CONSTRAINT rag_evaluation_labels_label_ck CHECK (label IN (''pass'', ''fail'', ''cannot_judge'')) '
-            || ')';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_LABELS_ANNOTATOR_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_evaluation_labels_annotator_idx '
-            || 'ON rag_evaluation_labels (label_set_id, annotator_hash)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_CALIBRATIONS';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE TABLE rag_evaluation_calibrations ( '
-            || 'calibration_id       VARCHAR2(64) PRIMARY KEY, '
-            || 'label_set_id         VARCHAR2(64) NOT NULL, '
-            || 'tenant_id_hash       VARCHAR2(64), '
-            || 'user_id_hash         VARCHAR2(64), '
-            || 'status               VARCHAR2(16) NOT NULL, '
-            || 'repeats              NUMBER(2) DEFAULT 1 NOT NULL, '
-            || 'judge_model_id       VARCHAR2(200 CHAR), '
-            || 'judge_rubric_version VARCHAR2(40), '
-            || 'prompt_sha256        VARCHAR2(64), '
-            || 'labels_sha256        VARCHAR2(64), '
-            || 'passed               NUMBER(1), '
-            || 'error_message        VARCHAR2(2000 CHAR), '
-            || 'summary_json         JSON, '
-            || 'report_json          JSON, '
-            || 'created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
-            || 'finished_at          TIMESTAMP WITH TIME ZONE, '
-            || 'CONSTRAINT rag_evaluation_calibrations_set_fk FOREIGN KEY (label_set_id) '
-            || 'REFERENCES rag_evaluation_label_sets (label_set_id) ON DELETE CASCADE, '
-            || 'CONSTRAINT rag_evaluation_calibrations_status_ck '
-            || 'CHECK (status IN (''RUNNING'', ''SUCCEEDED'', ''FAILED'', ''CANCELLED'')), '
-            || 'CONSTRAINT rag_evaluation_calibrations_passed_ck CHECK (passed IN (0, 1)) '
-            || ')';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_CALIBRATIONS_SET_CREATED_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_evaluation_calibrations_set_created_idx '
-            || 'ON rag_evaluation_calibrations (label_set_id, created_at DESC)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_CALIBRATIONS_JUDGE_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_evaluation_calibrations_judge_idx '
-            || 'ON rag_evaluation_calibrations (tenant_id_hash, judge_model_id, prompt_sha256, status)';
-    END IF;
-END;
-/
-
--- migration: 20261026_002_evaluation_job_calibration_kind
-DECLARE
-    v_count NUMBER;
-BEGIN
-    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
-    IF v_count > 0 THEN
-        SELECT COUNT(*) INTO v_count
-        FROM user_constraints
-        WHERE table_name = 'RAG_EVALUATION_JOBS'
-          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
-        IF v_count > 0 THEN
-            EXECUTE IMMEDIATE
-                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
-        END IF;
-        EXECUTE IMMEDIATE
-            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
-            || 'CHECK (kind IN (''run'', ''calibration''))';
-    END IF;
-END;
-/
-
 -- migration: 20261027_001_raptor_prompt_consolidation
 MERGE INTO rag_answer_prompts target
 USING (
@@ -4558,10 +4416,66 @@ BEGIN
 END;
 /
 
--- migration: 20261110_4782_retire_section_extraction_prompts
+-- migration: 20261110_4782_generation_prompt_overrides
 DELETE FROM RAG_ANSWER_PROMPTS
-WHERE PROMPT_KEY IN ('section_extraction.system');
+WHERE PROMPT_KEY IN (
+    'vlm_answer',
+    'generation.system',
+    'generation.batchReading',
+    'generation.assumptionSystem',
+    'generation.evidenceReading',
+    'generation.guideRules',
+    'support_guide_draft.system',
+    'support_guide_draft.instruction',
+    'support_guide_conditions.system',
+    'support_guide_conditions.answerChoice',
+    'rule_selection.system',
+    'rule_selection.instruction',
+    'history_rewrite.system',
+    'field_filter.system',
+    'screen_linking.system',
+    'article_catalog.documentSystem',
+    'article_catalog.system',
+    'article_catalog.refineSystem',
+    'section_extraction.system'
+);
 
--- migration: 20261110_4782_retire_article_catalog_prompts
-DELETE FROM RAG_ANSWER_PROMPTS
-WHERE PROMPT_KEY IN ('article_catalog.documentSystem', 'article_catalog.system', 'article_catalog.refineSystem');
+-- migration: 20261110_4781_retire_evaluation_calibration
+DECLARE
+    v_count NUMBER;
+BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables
+        WHERE table_name IN (
+            'RAG_EVALUATION_CALIBRATIONS', 'RAG_EVALUATION_LABELS',
+            'RAG_EVALUATION_LABEL_ITEMS', 'RAG_EVALUATION_LABEL_SETS'
+        )
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'DELETE FROM rag_role_permissions WHERE permission_code = :1'
+            USING 'rag.evaluation_calibration.manage';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DELETE FROM rag_evaluation_jobs WHERE kind = :1' USING 'calibration';
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_EVALUATION_JOBS'
+          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
+        END IF;
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
+            || 'CHECK (kind IN (''run''))';
+    END IF;
+END;
+/
+
+-- migration: 20261110_4781_retire_removed_answer_prompts
+DELETE FROM rag_answer_prompts WHERE prompt_key IN ('evaluation.scope', 'evaluation.coverage', 'evaluation.claim', 'evaluation.evidenceCoverage', 'evaluation.absenceScope', 'crag.system', 'crag.template', 'routing.system', 'routing.template', 'expansion.system', 'expansion.template', 'generation.instruction', 'generation.plannedSystem');

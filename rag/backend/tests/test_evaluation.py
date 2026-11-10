@@ -106,7 +106,6 @@ class FakeJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:
@@ -115,7 +114,6 @@ class FakeJudge:
                 "trace_id": trace_id,
                 "evaluation_input": dict(evaluation_input),
                 "standard_answer": standard_answer,
-                "citations": list(citations),
                 "timeout_seconds": timeout_seconds,
                 "judge_model_id": judge_model_id,
             }
@@ -125,21 +123,11 @@ class FakeJudge:
         return self.result
 
 
-def _completed_judgement(
-    *,
-    passed: bool = True,
-    claim_status: str = "supported",
-    requirement_coverage: float = 1.0,
-    coverage_statuses: tuple[str, ...] = ("addressed",),
-) -> dict[str, object]:
+def _completed_judgement(*, passed: bool = True) -> dict[str, object]:
     return {
         "status": "completed",
         "passed": passed,
         "answer_correctness": 1.0 if passed else 0.0,
-        "claim_support_rate": 1.0 if claim_status == "supported" else 0.0,
-        "claim_checks": [{"status": claim_status}],
-        "coverage_checks": [{"status": status} for status in coverage_statuses],
-        "requirement_coverage": requirement_coverage,
         "message": "",
     }
 
@@ -165,11 +153,8 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
     assert metrics.required_evidence_recall == 1.0
     assert metrics.mrr == 1.0
     assert metrics.answer_correctness == 1.0
-    assert metrics.claim_support_rate == 1.0
-    assert metrics.requirement_coverage == 1.0
     assert metrics.response_decision_accuracy == 1.0
     assert metrics.metric_case_counts == {
-        "evidence_coverage": 0,
         "precision_at_10": 1,
         "ndcg_at_3": 1,
         "ndcg_at_10": 1,
@@ -182,9 +167,7 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "rouge_l": 1,
         "required_evidence_recall": 1,
         "mrr": 1,
-        "claim_support_rate": 1,
         "answer_correctness": 1,
-        "requirement_coverage": 1,
         "response_decision_accuracy": 1,
     }
     assert set(metrics.metric_case_counts) == {
@@ -359,7 +342,6 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
     )
     assert metrics.required_evidence_recall == metrics.mrr == 0
     assert metrics.answer_correctness is None
-    assert metrics.claim_support_rate is None
     result = metrics.case_results[0]
     assert result.retrieved_document_ids == ["doc-x"]
     assert result.hit_document_ids == []
@@ -391,8 +373,7 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
         (failure.metric, failure.actual, failure.threshold)
         for failure in metrics.threshold_failures
     ] == [("required_evidence_recall", 0, 0.9), ("mrr", 0, 0.6)]
-    assert metrics.claim_support_rate is None
-    assert metrics.metric_case_counts["claim_support_rate"] == 0
+    assert metrics.metric_case_counts["answer_correctness"] == 0
 
 
 NO_RESULTS_ANSWER = "資料の中に、この質問に答えられる根拠が見つかりませんでした。"
@@ -436,7 +417,6 @@ async def test_expected_refusal_case_passes_every_suite(suite: str) -> None:
     assert metrics.response_decision_accuracy == 1
     assert metrics.required_evidence_recall is None
     assert metrics.mrr is None
-    assert metrics.claim_support_rate is None
     assert metrics.failure_reason_counts == {}
     result = metrics.case_results[0]
     assert result.observed_outcome == "insufficient_evidence"
@@ -567,34 +547,24 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
         top_k=5,
         thresholds=resolve_evaluation_suite("strict"),
     )
-    assert len(judge.calls) == 2
+    # 標準回答の無いケースは LLM で判定しない（#4781）。
+    assert len(judge.calls) == 1
     call = judge.calls[0]
     assert call["trace_id"] == pipeline.trace_ids[0]
     assert call["evaluation_input"] == EVALUATION_INPUT
     assert call["standard_answer"] == "合成の標準回答"
     assert call["timeout_seconds"] == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
-    assert call["citations"]
-    assert metrics.claim_support_rate == 1
-    assert metrics.answer_correctness == metrics.requirement_coverage == 1
+    assert metrics.answer_correctness == 1
     assert metrics.metric_case_counts["answer_correctness"] == 1
-    assert metrics.metric_case_counts["claim_support_rate"] == 2
     judgement = metrics.case_results[0].answer_evaluation
     assert judgement is not None and judgement.status == "completed"
-    assert judgement.claims_supported and judgement.missing_content is False
     assert metrics.case_results[1].answer_correctness is None
-    assert metrics.case_results[1].claim_support_rate == 1
+    assert metrics.case_results[1].answer_evaluation is None
 
 
-async def test_judgement_failures_are_reported_per_axis() -> None:
-    """根拠のない主張・必要な項目の欠落・不合格を、それぞれの失敗理由として残す。"""
-    judge = FakeJudge(
-        _completed_judgement(
-            passed=False,
-            claim_status="contradicted",
-            requirement_coverage=0.5,
-            coverage_statuses=("addressed", "missing"),
-        )
-    )
+async def test_incorrect_judgement_fails_the_case_and_the_threshold() -> None:
+    """正確性の判定が不合格なら、ケースの失敗理由と閾値の失敗に残す。"""
+    judge = FakeJudge(_completed_judgement(passed=False))
     runner = EvaluationRunner(pipeline=StubPipeline(), answer_judge=judge)
 
     metrics = await runner.run(
@@ -610,19 +580,9 @@ async def test_judgement_failures_are_reported_per_axis() -> None:
         thresholds=resolve_evaluation_suite("standard"),
     )
 
-    assert metrics.claim_support_rate == 0.0
-    assert metrics.requirement_coverage == 0.5
     assert metrics.answer_correctness == 0.0
-    assert set(metrics.case_results[0].failure_reasons) == {
-        "unsupported_claim",
-        "missing_content",
-        "answer_failed",
-    }
-    assert {failure.metric for failure in metrics.threshold_failures} >= {
-        "claim_support_rate",
-        "requirement_coverage",
-        "answer_correctness",
-    }
+    assert metrics.case_results[0].failure_reasons == ["answer_failed"]
+    assert "answer_correctness" in {failure.metric for failure in metrics.threshold_failures}
     assert metrics.passed is False
 
 
@@ -674,99 +634,20 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
     judgement = metrics.case_results[0].answer_evaluation
     assert judgement is not None and judgement.status == "completed"
     assert len(judge.calls) == 1
+    # 回答の記録の入力が無いときは、質問と回答の本文だけを渡す。
     evaluation_input = judge.calls[0]["evaluation_input"]
-    assert isinstance(evaluation_input, dict) and evaluation_input["evidence_items"]
-    assert metrics.metric_case_counts["claim_support_rate"] == 1
-
-
-def test_summarize_answer_judgement_normalizes_coverage() -> None:
-    judgement = summarize_answer_judgement(
-        _completed_judgement(requirement_coverage=0.75, coverage_statuses=("partial",))
-    )
-    assert judgement.requirement_coverage == 0.75
-    assert judgement.missing_content is False
-
-
-def _scoped_judgement(
-    statuses: tuple[str, ...], relevances: tuple[str, ...], *, requirement_coverage: float
-) -> dict[str, object]:
-    """比較範囲（relevance 付き）と、項目の番号付きの網羅の判定を持つ判定の記録（#4062）。"""
-    return {
-        **_completed_judgement(requirement_coverage=requirement_coverage),
-        "standard_answer_scope": {
-            "requirements": [
-                {
-                    "standard_answer_unit_ids": [f"u{index}"],
-                    "requirement": f"項目{index}",
-                    "relevance": relevance,
-                }
-                for index, relevance in enumerate(relevances, 1)
-            ],
-            "excluded_case_data": [],
-        },
-        "coverage_checks": [
-            {"requirement_index": index, "status": status, "answer_quote": ""}
-            for index, status in enumerate(statuses, 1)
-        ],
-    }
-
-
-def test_missing_follow_up_item_is_not_missing_content() -> None:
-    """追加相談（follow_up）の項目の欠落は失敗理由にせず、参考として別に残す（#4062）。"""
-    judgement = summarize_answer_judgement(
-        _scoped_judgement(
-            ("addressed", "missing"), ("required", "follow_up"), requirement_coverage=1
-        )
-    )
-    assert judgement.requirement_coverage == 1
-    assert judgement.missing_content is False
-    assert judgement.missing_follow_up_content is True
-
-
-def test_missing_required_item_is_missing_content() -> None:
-    """原質問に必要な項目（required）の欠落は従来どおり missing_content（#4062）。"""
-    judgement = summarize_answer_judgement(
-        _scoped_judgement(
-            ("missing", "addressed"), ("required", "follow_up"), requirement_coverage=0
-        )
-    )
-    assert judgement.missing_content is True
-    assert judgement.missing_follow_up_content is False
-
-
-async def test_passed_case_with_missing_follow_up_has_no_failure_reason() -> None:
-    """網羅 1.0・合格のケースに、follow_up の欠落で missing_content を付けない（#4062 の再現）。"""
-    judge = FakeJudge(
-        _scoped_judgement(
-            ("addressed", "missing"), ("required", "follow_up"), requirement_coverage=1
-        )
-    )
-    metrics = await EvaluationRunner(pipeline=StubPipeline(), answer_judge=judge).run(
-        cases=[
-            EvaluationCase(
-                id="case-hotel",
-                query="宿泊費の上限",
-                relevant_document_ids=["doc-1"],
-                standard_answer="一般社員は1泊12,000円（課長以上は15,000円）。",
-            )
-        ],
-        top_k=5,
-        thresholds=resolve_evaluation_suite("strict"),
-    )
-    result = metrics.case_results[0]
-    assert result.answer_evaluation is not None and result.answer_evaluation.passed is True
-    assert result.requirement_coverage == 1
-    assert result.failure_reasons == []
-    assert "missing_content" not in metrics.failure_reason_counts
+    assert isinstance(evaluation_input, dict)
+    assert set(evaluation_input) == {"question", "answer_text"}
+    assert metrics.metric_case_counts["answer_correctness"] == 1
 
 
 def test_saved_legacy_metrics_still_validate() -> None:
-    """新規の結果 schema は六指標だけを出力する。"""
+    """新規の結果 schema は四指標だけを出力する。"""
     from app.schemas.evaluation import EVALUATION_METRIC_NAMES
 
     metrics = EvaluationMetrics(case_count=1, mrr=1.0)
     payload = metrics.model_dump()
-    assert payload["metrics_version"] == "six_metrics_v1"
+    assert payload["metrics_version"] == "four_metrics_v1"
     assert set(EVALUATION_METRIC_NAMES) <= payload.keys()
     assert payload["answer_correctness"] is None
     assert payload["response_decision_accuracy"] is None
@@ -1461,22 +1342,20 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
             expected_response_decision="clarify",
         ),
     ]
-    judge = FakeJudge(
-        _completed_judgement(requirement_coverage=0.5, coverage_statuses=("missing",))
-    )
+    judge = FakeJudge(_completed_judgement(passed=False))
     metrics = await EvaluationRunner(pipeline=StubPipeline(), answer_judge=judge).run(
         cases=cases, top_k=5
     )
     first, second = metrics.case_results
     assert (first.observed_outcome, first.outcome_source) == ("answered", "inferred")
     assert first.response_decision_accuracy == 1
-    assert first.requirement_coverage == 0.5
-    assert "missing_content" in first.failure_reasons
+    assert first.answer_correctness == 0
+    assert "answer_failed" in first.failure_reasons
     assert second.response_decision_accuracy == 0
     assert "unexpected_handling" in second.failure_reasons
-    assert second.requirement_coverage is None
+    assert second.answer_correctness is None
     assert metrics.response_decision_accuracy == 0.5
-    assert metrics.metric_case_counts["requirement_coverage"] == 1
+    assert metrics.metric_case_counts["answer_correctness"] == 1
     assert (
         metrics.category_breakdown["clarification_required"].metrics["response_decision_accuracy"]
         == 0
@@ -1918,53 +1797,16 @@ def test_trend_includes_split_breakdown_and_evidence_recall() -> None:
     assert trend["split_breakdown"]["holdout"]["metrics"] == {"mrr": 1.0}
 
 
-async def test_evaluation_runner_shares_one_standard_scope_record_across_cases() -> None:
-    """1 回の評価のケースは、標準回答の比較範囲の記録を共有する（#3570）。"""
-    from rag_engine.evaluation.answer_eval import StandardScopeCache, standard_scope_cache
-
-    seen: list[StandardScopeCache] = []
-
-    class RecordingPipeline(StubPipeline):
-        async def run(
-            self,
-            request: SearchRequest,
-            trace_id: str | None = None,
-            progress_callback: SearchStageProgressCallback | None = None,
-        ) -> SearchResponse:
-            # 共有の中なら、その記録が返る。
-            with standard_scope_cache() as cache:
-                seen.append(cache)
-            return await super().run(request, trace_id, progress_callback)
-
-    runner = EvaluationRunner(pipeline=RecordingPipeline())
-    cases = [
-        EvaluationCase(id="case-1", query="承認条件"),
-        EvaluationCase(id="case-2", query="申請の期限"),
-    ]
-    await runner.run(cases=cases, top_k=5)
-    await runner.run(cases=cases[:1], top_k=5)
-
-    assert len(seen) == 3
-    assert seen[0] is seen[1]
-    # 別の評価（job）は記録を共有しない。
-    assert seen[2] is not seen[0]
 
 
 def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
-    """判定の診断（比較範囲の使い回し・外した項目の数・再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
+    """判定の診断（呼び出しと再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
     diagnostics: dict[str, object] = {
-        "standard_scope_reused": True,
-        "standard_scope_retries": 0,
-        "standard_scope_dropped": 1,
         "judge_retries": 1,
         # 判定に使ったモデル（#3574）。
         "judge_model_id": "model-judge",
-        "retry_reasons": ["coverage:InvalidStructuredOutput"],
-        # 段落ごとの主張の判定の呼び出しの数・失敗・出典の無い段落の数（#3576）。
-        "judge_calls": 6,
-        "claim_calls": 4,
-        "claim_failures": 1,
-        "uncited_claims": 2,
+        "retry_reasons": ["correctness:InvalidStructuredOutput"],
+        "judge_calls": 2,
     }
     completed = summarize_answer_judgement(
         {**_completed_judgement(), "judge_diagnostics": diagnostics}
@@ -1976,11 +1818,11 @@ def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
         {
             "status": "error",
             "message": "",
-            "judge_diagnostics": {**diagnostics, "standard_scope_retries": 1},
+            "judge_diagnostics": {**diagnostics, "judge_retries": 0},
         }
     )
     assert failed.status == "error" and failed.judge_diagnostics is not None
-    assert failed.judge_diagnostics.standard_scope_retries == 1
+    assert failed.judge_diagnostics.judge_retries == 0
 
     assert summarize_answer_judgement({"status": "timeout"}).judge_diagnostics is None
     broken = summarize_answer_judgement({"status": "error", "judge_diagnostics": "壊れた値"})

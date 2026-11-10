@@ -1,4 +1,4 @@
-"""生成・監査へ同じ確認済み前提と出所を渡す。"""
+"""生成と診断へ同じ確認済み前提と出所を渡す。"""
 
 from collections.abc import Sequence
 

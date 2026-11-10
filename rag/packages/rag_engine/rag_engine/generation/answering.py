@@ -166,9 +166,8 @@ from rag_engine.generation.zero_evidence import zero_evidence_stage
 from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.knowledge.prompt_files import (
-    VLM_ANSWER_PROMPT_KEY,
+    ANSWER_INPUT_TEMPLATE,
     neutralize_boundary_markers,
-    read_prompt,
     render_prompt_template,
 )
 from rag_engine.knowledge.runtime_knowledge import (
@@ -1334,9 +1333,9 @@ def _grounded_prompt(
     field_kind_note: str = "",
     confirmed_premises: Sequence[dict[str, str]] = (),
 ) -> str:
-    """編集可能テンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
+    """生成の入力のテンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
 
-    template 未指定では保存済みテンプレートを読む。是正ループは1回答で同じ内容を使うため明示する。
+    template 未指定では固定のテンプレート（``ANSWER_INPUT_TEMPLATE``）を使う。
     field_kind_note は根拠の画面の図の項目の種類の注記（#2404。``form_field_kinds.prompt_note``）。
     """
     from rag_engine.generation.grounded import (
@@ -1386,7 +1385,7 @@ def _grounded_prompt(
         if part
     )
     return render_prompt_template(
-        read_prompt(VLM_ANSWER_PROMPT_KEY) if template is None else template,
+        ANSWER_INPUT_TEMPLATE if template is None else template,
         {
             # 質問も根拠と同じ文字の形で渡す（全角の ＨＲＭ と根拠の HRM を同じ語と読ませる。#1350）。
             "question": fold_width(question).strip(),
@@ -1607,13 +1606,6 @@ def _span_document_id(span: Mapping[str, Any] | None) -> str:
     return str(scope[-1] or "") if scope else ""
 
 
-def _audit_glossary(runtime_knowledge: RuntimeKnowledgeContext | None) -> list[dict[str, Any]]:
-    """質問に当たった用語のうち別名のあるものの、名前と別名（監査の入力。#2823）。"""
-    if runtime_knowledge is None:
-        return []
-    return [{"term": term.term, "aliases": list(term.aliases)} for term in runtime_knowledge.answer_terms if term.aliases]
-
-
 def _source_question_scores(context: AnswerContext) -> dict[str, float | None]:
     """根拠の出典の ID ごとの、原質問への rerank の点数。親は親と子の最高値（#4113。分割読取で原文を補う順）。"""
     scores: dict[str, float | None] = {}
@@ -1693,7 +1685,6 @@ def synthesize_grounded_answer(
     provider = answer_llm_provider
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
     images, mode = tuple(image_evidence), image_prompt_mode
-    template = read_prompt(VLM_ANSWER_PROMPT_KEY)
     context, unit_fill = _fill_same_unit(question, context)
     if not shared.term_usage_recorded:
         _record_term_usage(runtime_knowledge, answer=True)
@@ -1725,7 +1716,6 @@ def synthesize_grounded_answer(
             images,
             question_plan,
             runtime_knowledge,
-            template=template,
             field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, selected),
             confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
         )
@@ -1735,7 +1725,7 @@ def synthesize_grounded_answer(
     generation_failure_stage = "answer.generate"
     generation_failure_detail: dict[str, Any] = {}
     structured_output_failed = False
-    with _execution_step("回答文の生成と根拠確認", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
+    with _execution_step("回答文の生成と引用の確認", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
         step.input(
             lambda spans=spans: {
                 "質問": question,
@@ -1748,11 +1738,9 @@ def synthesize_grounded_answer(
         preparing_evidence = False
         failed_batches: list[dict[str, Any]] = []
         try:
-            generation_system = grounded.generation_system_prompt()
-            if runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed:
-                generation_system += grounded.continue_prompt_steps(
-                    generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
-                )
+            generation_system = grounded.generation_system_prompt(
+                assume_unconfirmed=runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed
+            )
             preparing_evidence = True
 
             def selected_generation_schema(values: Sequence[dict[str, Any]], *, guided: bool = guided) -> Mapping[str, Any]:
@@ -1792,7 +1780,6 @@ def synthesize_grounded_answer(
                 assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
                 image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 invalid_output=_invalid_structured_output,
-                glossary=_audit_glossary(runtime_knowledge),
                 confirmed_premises=settings.confirmed_premises,
                 confirmed_premise_sources=settings.confirmed_premise_sources,
                 guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),

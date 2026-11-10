@@ -730,7 +730,7 @@ class AnswerRecordSettingsData(BaseModel):
 
 
 class AnswerPromptView(BaseModel):
-    """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
+    """編集できるプロンプト(生成の役割の文 generation.role / 図の読み取り image_retrieval など)。"""
 
     key: str
     content: str

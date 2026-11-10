@@ -618,10 +618,9 @@ def _record_from_row(
     row: Mapping[str, object], *, tenant_id_hash: str | None, user_id_hash: str | None
 ) -> EvaluationJobRecord:
     result = row.get("result_json")
-    kind: EvaluationJobKind = "calibration" if row.get("kind") == "calibration" else "run"
     return EvaluationJobRecord(
         job_id=str(row["job_id"]),
-        kind=kind,
+        kind="run",
         status=_STATUSES.get(str(row.get("status") or ""), "FAILED"),
         total_cases=int(str(row.get("total_cases") or 0)),
         completed_cases=int(str(row.get("completed_cases") or 0)),
@@ -680,10 +679,10 @@ def partial_evaluation_result(rows: Iterable[EvaluationJobCaseRow]) -> Evaluatio
 def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
     """API の応答に変換する。結果は成功のときだけ、途中までの結果は失敗・取り消しのときだけ返す。"""
     run_result: EvaluationMetrics | None = None
-    if record.kind == "run" and record.status == "SUCCEEDED" and record.result is not None:
+    if record.status == "SUCCEEDED" and record.result is not None:
         run_result = EvaluationMetrics.model_validate(record.result)
     partial_result: EvaluationMetrics | None = None
-    if record.kind == "run" and record.status in ("FAILED", "CANCELLED"):
+    if record.status in ("FAILED", "CANCELLED"):
         partial_result = partial_evaluation_result(record.case_rows)
     return EvaluationJob(
         job_id=record.job_id,
@@ -782,7 +781,7 @@ class EvaluationJobService:
         """job を作り、このプロセスの task で実行を始める。
 
         task は呼び出し元（request）の文脈（利用者・対象範囲）を引き継ぐ。``job_id`` は、job の
-        結果を別の表に書く呼び出し（判定の校正。#3578）が先に決めた ID。
+        結果を別の表に書く呼び出し（ケースごとの結果の保存）が先に決めた ID。
         """
         store = self._resolve_store()
         await store.fail_stale(
@@ -876,7 +875,7 @@ class EvaluationJobService:
         user_id_hash: str | None,
     ) -> EvaluationJobRecord:
         """失敗・取り消しの job に、保存したケースの結果を足す。読めなくても job の状態は返す。"""
-        if record.kind != "run" or record.status not in ("FAILED", "CANCELLED"):
+        if record.status not in ("FAILED", "CANCELLED"):
             return record
         try:
             rows = await store.list_case_results(

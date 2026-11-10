@@ -2055,6 +2055,16 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 schema の更新と backend の更新を合わせて行ってください。ファイルに保存する SDK の構成では、
 `prompts/vlm_answer.txt` をバックアップしてから同じ位置に足します。実行時の互換処理はありません。
 
+### 編集欄を外した指示の保存値の削除（#4782）
+
+生成の指示は、編集できる「役割と回答の書き方」（`generation.role`）と、コードが必ず足す固定の部分
+（信頼の境界・引用・出力の形）に分かれました。回答入力テンプレート（旧 `vlm_answer`）と、検索・回答の
+内部の段の指示は編集できません。schema の更新で `20261110_4782_generation_prompt_overrides` を
+適用すると、編集欄を外した指示の保存値を `rag_answer_prompts` から削除します（破壊的な migration。
+旧 `generation.system` の保存値は固定の部分を含むため、`generation.role` へ読み替えません）。
+独自の方針を残す場合は、適用の前に保存値を控え、適用の後に「役割と回答の書き方」へ書き直してください。
+ファイルに保存する SDK の構成の `prompts/vlm_answer.txt` は読まれなくなります。
+
 組み込みの指示は Markdown の節・手順・条件で表示します。編集済みの独自の指示本文は
 自動で書き直しません。組み込みの新しい書式へ戻す場合は、内容を確認してから設定画面の
 「既定に戻す」を使います。外部根拠を囲む `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` /
@@ -2124,7 +2134,17 @@ SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
 CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選択（`query.route` / `query.expand`）、小問の事前計画（`answer.scope`）を削除し、回答の流れを 1 本（検索して生成）にした。未リリースのため互換を持たない。
 
 - 削除した設定（`backend/.env` に残っていても読まない）: `RAG_ANSWER_FLOW`・`RAG_QUERY_STRATEGY`・`RAG_QUERY_EXPANSION_MAX_QUERIES`・`RAG_CRAG_*`・`RAG_SECTION_SKIP_REGRADE_AT_SCOPE`・`RAG_STRATEGY_REASONING_EFFORT`・`RAG_JUDGE_REASONING_EFFORT`。保存された検索・回答プロファイルの `query_strategy` / `answer_flow` の値は読み捨てられ、次の保存で消える。
-- データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれない。
+- データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれず、#4781 の migration が消す。
+
+### 品質評価の判定を正確性の 1 本にし、判定の校正を削除する（#4781）
+
+品質評価の LLM の判定を正確性（`evaluation.correctness`）の 1 本にし、判定の校正（人手の判定との一致を測る機能。#3578）を削除した。未リリースのため後方互換は持たない。
+
+- **migration `20261110_4781_retire_evaluation_calibration` と `20261110_4781_retire_removed_answer_prompts` はデータを削除する。** 承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る（上の「既存環境の更新手順の共通の注意」）。
+  - 前者は判定の校正の表（`RAG_EVALUATION_LABEL_SETS`・`RAG_EVALUATION_LABEL_ITEMS`・`RAG_EVALUATION_LABELS`・`RAG_EVALUATION_CALIBRATIONS`）を削除し、校正の job の行（`RAG_EVALUATION_JOBS` の `kind = 'calibration'`）とロールの権限の「判定の校正の管理」（`rag.evaluation_calibration.manage`）の行を削除する。人手の判定を残すなら、適用の前に 4 表を export する。
+  - 後者は `RAG_ANSWER_PROMPTS` から、評価の判定の 5 本（`evaluation.scope`・`evaluation.coverage`・`evaluation.claim`・`evaluation.evidenceCoverage`・`evaluation.absenceScope`）と #4749 で読まれなくなった `crag.*`・`routing.*`・`expansion.*`・`generation.instruction`・`generation.plannedSystem` の行だけを削除する。保存した文を残すなら、適用の前に同表を export する。
+- 品質評価の job・ケースごとの結果・回答の記録は削除しない。過去の結果の網羅・裏付けの値は DB に残るが、画面と結果の Excel には出さない。合否は保存した値のまま出す。
+- テストセットの作成のタブの URL は `/evaluation?tab=testsets` になった（`?tab=calibration` のブックマークは評価の実行のタブを開く）。
 
 ### 質問と検索の段を整理する（#4782）
 
@@ -2134,5 +2154,4 @@ CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選�
 
 - 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`・`RAG_ARTICLE_CATALOG_ENABLED`・`RAG_ARTICLE_CATALOG_MAX_DOCUMENTS`・`RAG_ARTICLE_CATALOG_MAX_ARTICLES`・`RAG_ARTICLE_CATALOG_CONTEXT_RECORDS`・`RAG_ARTICLE_CATALOG_SCOPE_DOCUMENTS`・`RAG_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH`・`RAG_ARTICLE_CATALOG_REFINE_ARTICLES`・`RAG_ARTICLE_CATALOG_REFINE_CANDIDATES`・`RAG_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP`・`RAG_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_DIR`・`RAG_ARTICLE_CATALOG_CACHE_TTL_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_MAX_ENTRIES`・`RAG_MCP_CATALOG_ARTICLE_EVIDENCE_LIMIT`。
 - 条の選択の結果の記録のファイル（既定は `PLATFORM_LOCAL_STORAGE_DIR` の下の `cache/rag-article-catalog`、または `RAG_ARTICLE_CATALOG_CACHE_DIR` に設定した場所）は読まれなくなる。ディレクトリごと消してよい。
-- データを消す migration `20261110_4782_retire_section_extraction_prompts`: 回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system` の行）を削除する。ほかの段の保存値は変えない。保存した文を残す必要があれば、適用前にその行を export する。承認（`--allow-destructive`）が要る。
-- データを消す migration `20261110_4782_retire_article_catalog_prompts`: 回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `article_catalog.documentSystem`・`article_catalog.system`・`article_catalog.refineSystem` の行）を削除する。ほかの段の保存値は変えない。保存した文を残す必要があれば、適用前にその行を export する。承認（`--allow-destructive`）が要る。
+- 保存値: この 2 つの段の回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system`・`article_catalog.*`）は、#4782 の生成の PR の migration `20261110_4782_generation_prompt_overrides` が消す（この PR に別の migration は無い）。

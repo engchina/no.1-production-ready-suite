@@ -507,7 +507,7 @@ async def _resolve_query_context(
             guides, guides_failed = await load_published_guides(oracle, view.id)
             if guide_preview is not None:
                 guides = with_draft(guides, guide_preview)
-                # 下書きの試答は業務ガイドの要件ごとの充足まで詳しく監査する(#2795)。
+                # 下書きの試答は、回答の記録に試答の印を付けて履歴・評価から外す(#2795)。
                 settings = settings.model_copy(
                     update={
                         "rag_guide_preview": guide_preview.marker(),

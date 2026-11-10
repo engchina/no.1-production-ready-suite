@@ -14,7 +14,6 @@ from app.api.routes import (
     document_categories,
     documents,
     evaluation,
-    evaluation_calibration,
     evaluation_testsets,
     feedback,
     figures,
@@ -111,13 +110,6 @@ api_router.include_router(
 api_router.include_router(
     evaluation_testsets.router,
     prefix="/evaluation/testsets",
-    tags=["evaluation"],
-)
-# 判定の校正（#3578）。品質評価の画面のタブ。
-api_router.include_router(
-    evaluation_calibration.router,
-    dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
-    prefix="/evaluation/calibration",
     tags=["evaluation"],
 )
 api_router.include_router(

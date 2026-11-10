@@ -150,7 +150,7 @@ class TextOutput(_StrictModel):
 
 # 生成の出力契約は Field(description) に置き、構造化出力の JSON schema としてモデルへ渡す (#986)。
 # 項目の順序は strict schema の生成順でもあるため、根拠（request_coverage / items、reviews）→ 結論（summary /
-# confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT。
+# confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は generation_system_prompt（grounded.py）。
 class GroundedCitation(_StrictModel):
     """item の出典 1 つ（根拠の番号と引用する行）。引用の原文はシステムが取り出す（#2830）。"""
 

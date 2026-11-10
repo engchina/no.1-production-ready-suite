@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rag_engine.evaluation.answer_eval import _evidence_fragments
 
 from app.api.routes import chat as chat_route
 from app.api.routes import search as search_route
@@ -198,17 +197,6 @@ def test_stored_evaluation_input_keeps_only_what_the_evaluation_reads() -> None:
         key: full[key] for key in full if key != "evidence_items"
     }
     assert "source_record_refs" in full["evidence_items"][0]
-
-
-def test_stored_evaluation_input_gives_the_same_evidence_to_the_evaluation() -> None:
-    """評価（evaluate_answer_payload）がモデルに渡す根拠の断片は、削る前と同じ。"""
-    full = _evaluation_input()
-    compact = stored_evaluation_input(full)
-    assert compact is not None
-
-    assert list(_evidence_fragments(compact["evidence_items"])) == list(
-        _evidence_fragments(full["evidence_items"])
-    )
 
 
 def test_stored_evaluation_input_passes_through_missing_values() -> None:

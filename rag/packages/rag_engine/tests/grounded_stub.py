@@ -8,7 +8,6 @@ payload の検証を生成の出力形式から独立させる。
 import re
 from unittest.mock import patch
 
-from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture, without_unit_annotations
 from pydantic import BaseModel, ConfigDict
 
@@ -60,7 +59,7 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
         )
         if mode == "vision_attachments":
             output = answering.parse_multimodal_response(
-                grounded.GENERATE_SYSTEM_PROMPT,
+                grounded.generation_system_prompt(),
                 prompt,
                 [i["prompt_path"] for i in images if i.get("prompt_path")],
                 settings,
@@ -68,7 +67,9 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
                 provider_id=provider,
             )  # 画像の回も回答のモデル（#3444）
         else:
-            output = answering.parse_text_response(grounded.GENERATE_SYSTEM_PROMPT, prompt, settings, AnswerOutput, provider_id=provider)
+            output = answering.parse_text_response(
+                grounded.generation_system_prompt(), prompt, settings, AnswerOutput, provider_id=provider
+            )
         response = answering._normalize_answer_response(
             answering.AnswerResponse(
                 answer_text=output.answer,
@@ -101,14 +102,4 @@ def echo_model(system, prompt, settings, schema, **options):
         line = re.sub(r"^[0-9]+\| ", "", match.group(2)) if match else ""
         items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
         return canonical_fixture({"summary": "answer", "items": items, "confidence": "high"})
-    # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
-    if is_audit_wire(schema):
-        parse_fixture = (lambda value: legacy_audit_result(value, schema)) if is_audit_wire(schema) else schema.model_validate
-        return parse_fixture(
-            {
-                "goal_alignment": "aligned",
-                "summary_supported": True,
-                "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "reason": "原文どおり"}],
-            }
-        )
     raise AssertionError(f"unexpected schema: {schema.__name__}")

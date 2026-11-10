@@ -10,9 +10,7 @@ from app.clients.oracle import OracleClient
 
 async def published_prompt_dependency(request: Request) -> AsyncIterator[None]:
     """モデルを使う変更系 API の前に指示を読み、並行要求と分離する。"""
-    if request.method not in {"POST", "PUT", "PATCH"} and not request.url.path.startswith(
-        "/api/evaluation/calibration"
-    ):
+    if request.method not in {"POST", "PUT", "PATCH"}:
         yield
         return
     overrides = await OracleClient().answer_prompt_overrides()

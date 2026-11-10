@@ -62,7 +62,7 @@ SECTION_CONTEXT_ROLE = "section_context"
 MAX_SECTION_CHUNKS = 400
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
 DEFAULT_MODEL_INPUT_TOKENS = 128_000
-# 回答の生成に残す秒数。これより残りが少なければ上がらない。生成と監査の 1 組の見積もりの既定と回答の確定の分の和
+# 回答の生成に残す秒数。これより残りが少なければ上がらない。生成の 1 回の見積もりの既定と回答の確定の分の和
 # （#1516。150 秒は、長い根拠で 1 組 125〜344 秒かかるモデルの 1 組目に足りなかった）。是正の round は、残りの時間と
 # 直前の組の実測から grounded の `RoundBudget` が決める。
 GENERATION_RESERVE_SECONDS = DEFAULT_GENERATION_ROUND_SECONDS + ANSWER_FINALIZE_RESERVE_SECONDS

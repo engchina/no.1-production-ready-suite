@@ -2,7 +2,6 @@
 
 import unittest
 
-from audit_fixtures import is_audit_wire, legacy_audit_result
 from citation_unit_support import canonical_fixture
 from test_grounded_answer import FakeModel, audit, context, draft, ids, record, run
 
@@ -65,15 +64,13 @@ class SchemaModel:
         self.responses, self.calls = responses, []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        observed = schema
         self.calls.append(observed.__name__)
         value = self.responses[observed.__name__]
         if isinstance(value, Exception):
             raise value
         # 生成の既存fixtureはcanonical履歴として再生する。wireの型検証とは別。
         canonical_schema = GroundedDraft if schema.__name__ == "GroundedDraftWire" else schema
-        if is_audit_wire(schema):
-            return legacy_audit_result(value, schema)
         return canonical_fixture(value) if canonical_schema is GroundedDraft else canonical_schema.model_validate(value)
 
 
