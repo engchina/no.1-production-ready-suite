@@ -139,8 +139,11 @@ async def recognize_rule_selections(
                 raw = await async_call_with_model_purpose(
                     "query.conditions",
                     condition_client(settings).generate,
-                    resolve_prompt("rule_selection.instruction", RULE_SELECTION_INPUT_PROMPT),
+                    "",
                     context,
+                    instruction=resolve_prompt(
+                        "rule_selection.instruction", RULE_SELECTION_INPUT_PROMPT
+                    ),
                     system_prompt=resolve_prompt(
                         "rule_selection.system", RULE_SELECTION_SYSTEM_PROMPT
                     ),

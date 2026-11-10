@@ -730,7 +730,6 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     detail = await pipeline.ingest(
         "doc-artifact",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -804,7 +803,6 @@ async def test_low_confidence_excel_header_stops_at_review_even_when_gate_is_off
     detail = await pipeline.ingest(
         "doc-low-header",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -867,7 +865,6 @@ async def test_ingestion_pipeline_stops_at_preprocessed_when_parse_gate_off() ->
     detail = await pipeline.ingest(
         "doc-gate",
         b"pdfdata",
-        "本文を抽出してください。",
         manage_document_state=False,
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
@@ -906,7 +903,6 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys(
     await pipeline.ingest(
         "doc/with/slash:artifact?",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -954,7 +950,6 @@ async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure(
     detail = await pipeline.ingest(
         "doc-artifact-cache-failure",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -1017,7 +1012,6 @@ async def test_preprocess_canonical_persist_failure_surfaces_as_error() -> None:
         await pipeline.ingest(
             "doc-canonical-fail",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )
@@ -1122,7 +1116,6 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         await first_pipeline.ingest(
             "doc-full-artifact-retry",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )
@@ -1161,7 +1154,6 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
     detail = await second_pipeline.ingest(
         "doc-full-artifact-retry",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -1202,7 +1194,6 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
         await first_pipeline.ingest(
             "doc-full-artifact-changed",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )
@@ -1222,7 +1213,6 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
     detail = await second_pipeline.ingest(
         "doc-full-artifact-changed",
         b"pdfdata-changed",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=15),
     )
@@ -1288,7 +1278,6 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index(
         await pipeline.ingest(
             "doc-cancel",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
             cancel_checker=cancel_after_extraction,
@@ -1333,7 +1322,6 @@ async def test_ingestion_pipeline_cancel_during_preprocess_does_not_write_later_
         await pipeline.ingest(
             "doc-cancel-preprocess",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
             cancel_checker=cancel_checker,
@@ -1383,7 +1371,6 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
         await pipeline.ingest(
             "doc-cancel-review",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
             cancel_checker=cancel_checker,
@@ -1429,7 +1416,6 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled(
     detail = await pipeline.ingest(
         "doc-graph",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -1949,7 +1935,6 @@ async def test_ingest_audit_uses_given_document_source_instead_of_input_bytes(
         await pipeline.ingest(
             "doc-1",
             b"prepared bytes",
-            "prompt",
             record_outcome=False,
             manage_document_state=False,
             cancel_checker=cancelled,
@@ -2000,7 +1985,6 @@ async def test_pipeline_releases_heavy_slot_after_parse_before_llm_stages(
         detail = await pipeline.ingest(
             "doc-heavy-slot",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )

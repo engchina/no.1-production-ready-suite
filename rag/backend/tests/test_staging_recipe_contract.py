@@ -161,12 +161,12 @@ async def test_adapter_uses_formal_job_and_does_not_mask_failure(
     monkeypatch.setattr(m, "read_staging_recipe", state)
     adapter = m.RecipeStagingIngestion(oracle=Oracle(), settings=settings)
     if terminal == "SUCCEEDED":
-        result = await adapter.ingest("d1", b"source", "synthetic")
+        result = await adapter.ingest("d1", b"source")
         assert result.status == FileStatus.REVIEW
         assert detail.status == FileStatus.UPLOADED
     else:
         with pytest.raises(RuntimeError, match=terminal):
-            await adapter.ingest("d1", b"source", "synthetic")
+            await adapter.ingest("d1", b"source")
     assert calls[0][1:3] == ("d1", "r1")
     assert calls[1] == ("run", "j1", {"propagate_errors": True})
     assert len(calls) == 2
@@ -202,9 +202,7 @@ async def test_worker_claim_race_has_bounded_wait(monkeypatch: Any) -> None:
     monkeypatch.setattr(documents, "_enqueue_ingestion_job_for_recipe", enqueue)
     monkeypatch.setattr(documents, "_run_ingestion_job", run)
     with pytest.raises(TimeoutError):
-        await m.RecipeStagingIngestion(oracle=Oracle(), settings=settings).ingest(
-            "d1", b"a", "synthetic"
-        )
+        await m.RecipeStagingIngestion(oracle=Oracle(), settings=settings).ingest("d1", b"a")
 
 
 @pytest.mark.parametrize("with_options", [False, True])

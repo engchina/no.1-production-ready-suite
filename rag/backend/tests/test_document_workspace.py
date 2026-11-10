@@ -609,7 +609,6 @@ class FakeWorkspaceIngestionPipeline:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: object | None = None,
@@ -618,7 +617,7 @@ class FakeWorkspaceIngestionPipeline:
         prepared_artifact: DocumentPreprocessArtifact | None = None,
         cancel_checker: object | None = None,
     ) -> DocumentDetail:
-        _ = prompt, source_profile, chunk_set_id, cancel_checker, prepared_artifact
+        _ = source_profile, chunk_set_id, cancel_checker, prepared_artifact
         _ = content_type, original_object_storage_path
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
@@ -641,7 +640,6 @@ async def _materialize_with_fake(
     await pipeline.ingest(
         job.document_id,
         data,
-        "prompt",
         content_type=detail.content_type or "application/octet-stream",
         original_object_storage_path=detail.object_storage_path,
         cancel_checker=cancel_checker,

@@ -45,9 +45,6 @@ from app.schemas.document import (
 from app.schemas.knowledge_base import KnowledgeBaseDetail
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest, SearchResponse
 
-FILE_PROCESSING_STAGING_PROMPT = (
-    "文書をページ、表、見出し、bbox、要素IDを保持して日本語で構造化抽出してください。"
-)
 ARTIFACT_CACHE_PROBE_PAYLOAD = (
     b'{"probe":"file_processing_staging_artifact_cache","contains_document_text":false}\n'
 )
@@ -128,7 +125,6 @@ class StagingIngestionProtocol(Protocol):
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
@@ -727,7 +723,6 @@ async def _ingest_fixture_for_staging(
         await ingestion.ingest(
             detail.id,
             data,
-            FILE_PROCESSING_STAGING_PROMPT,
             content_type=content_type,
             source_profile=source_profile,
         )
@@ -771,7 +766,6 @@ async def _retry_existing_document(
         await ingestion.ingest(
             evidence.document_id,
             data,
-            FILE_PROCESSING_STAGING_PROMPT,
             content_type=content_type,
             source_profile=source_profile,
         )
