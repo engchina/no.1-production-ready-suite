@@ -278,6 +278,13 @@ level は使わない。そのため「第 3 章 > 3.1」の 3.1 は第 3 章の
 何も置かず（根拠不足として扱う）、診断 `derived_evidence` に残す。前後の文脈・交差参照・実体と関係情報の拡張・章節の拡張・
 MCP の `rag_read_document` も派生の chunk を返さない。
 
+文書全体の要約の chunk（`content_kind=document_summary`。#4793）は、取込の job の成功の後に 1 文書につき 1 回の LLM で作り
+（`app/rag/document_summary.py`）、有効な chunk_set に 1 つだけ入れる。派生の chunk だが、指す原文が文書の全体で置き換える
+原文を決められないので、検索で当たったときは置き換えずに回答の根拠に渡す（`derived_evidence.keeps_own_evidence`）。モデルへの
+出典情報には `evidence_kind=document_summary` を付け、回答の本文の出典の場所はページではなく「文書の要約」（言語資源の `answer_labels.document_summary_location`）、引用の表示の種類も「文書の要約」にする。前後の文脈・交差参照・章節の
+拡張の起点にはせず、章節と chunk の対応・MCP の `rag_read_document` には入れない。索引だけの作り直しの複製には含めず、切替の
+後の後段が入れ直す（入力の指紋が同じなら LLM を呼ばずに保存済みの文を使う）。
+
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。
 
 Docling 以外の解析エンジンの bbox は単位が違うため、Vision の段がページ画像の px へそろえる。確かでない bbox は切り出さず、要素の metadata に `vision_status=skipped` / `vision_skip_reason=bbox_unit_unknown` と warning `vision_bbox_unit_unknown` を残す。

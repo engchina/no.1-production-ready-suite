@@ -219,6 +219,12 @@
       "table_name": "rag_recipe_version_log"
     },
     {
+      "name": "document_summaries",
+      "sha256": "cf94515fccb6f6b8938b79c658af9716cf379bd83f83dd37d047c47058c53cb8",
+      "statement_count": 1,
+      "table_name": "rag_document_summaries"
+    },
+    {
       "name": "citation_feedback",
       "sha256": "9893d4830e8aa37604b77abbefb4b29401c7583b103f4f813f446b8f31c58da8",
       "statement_count": 5,
@@ -267,8 +273,8 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "b0066666d0b43ade42f3aa5f3d793a7d3d642a2c2a90ddf38992ad25351e5a1f",
-  "statement_count": 161,
+  "sha256": "b3042760f047d6b4c65dffcba2c51e5945bd96d9ab2e418c5e335bce99c025dc",
+  "statement_count": 162,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {
     "distance": "COSINE",

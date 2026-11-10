@@ -49,6 +49,8 @@ class AnswerLabels:
     # 冒頭の回答の表の右端の出典の列名と、「資料をもとに導いた結論」で表の題の下に出す案内（#4812）。
     table_source_column: str
     table_above_note: str
+    # 文書全体の要約（取込のときに作った説明）を根拠にしたときの、出典の場所の表示（#4793）。
+    document_summary_location: str
     # render() が決定的に出力する見出し行と出典行、「参考情報」の節の原文の行と節の箇条の行。
     structural_line: re.Pattern[str]
     quote_only_line: re.Pattern[str]
@@ -142,6 +144,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         guide_acquisition_incomplete_template=text("guide_acquisition_incomplete_template"),
         table_source_column=text("table_source_column"),
         table_above_note=text("table_above_note"),
+        document_summary_location=text("document_summary_location"),
         structural_line=re.compile(
             "|".join(re.escape(title) for title in titles)
             + rf"|(?:{steps})(?:{re.escape(title_open)}.+{re.escape(title_close)})?|"

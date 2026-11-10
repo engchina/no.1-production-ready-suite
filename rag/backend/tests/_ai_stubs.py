@@ -8,6 +8,7 @@ OCI クライアントを決定論スタブへ差し替える。embedding は全
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any, cast
@@ -75,6 +76,13 @@ class DeterministicEnterpriseAi(OciEnterpriseAiClient):
         # 項目抽出は応答の schema を渡して呼ぶ（#2720）。決定論スタブは項目を 1 つも返さない。
         if response_schema_name == "field_extraction":
             return '{"fields": []}'
+        # 文書全体の要約（#4793）は、本文の先頭を写した決まった要約を返す。
+        if response_schema_name == "document_summary":
+            body = context.split("\n", 1)[-1].split("\n</document_body>")[0]
+            return json.dumps(
+                {"summary": f"合成の要約: {' '.join(body.split())[:80]}", "topics": ["合成の話題"]},
+                ensure_ascii=False,
+            )
         if not context.strip():
             return "該当する根拠は見つかりませんでした。条件やキーワードを変えて検索してください。"
         snippet = " ".join(context.split())[:200]
@@ -137,6 +145,9 @@ def patch_ai_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.rag.ingestion.OciGenAiClient", DeterministicGenAi)
     monkeypatch.setattr("app.rag.pipeline.OciEnterpriseAiClient", DeterministicEnterpriseAi)
     monkeypatch.setattr("app.rag.pipeline.OciGenAiClient", DeterministicGenAi)
+    # 取込の後段の文書全体の要約（#4793。テスト既定は無効で、専用テストが有効にする）。
+    monkeypatch.setattr("app.rag.document_summary.OciEnterpriseAiClient", DeterministicEnterpriseAi)
+    monkeypatch.setattr("app.rag.document_summary.OciGenAiClient", DeterministicGenAi)
     # 解析は parser マイクロサービスへ委譲する。
     # 実サービス未起動でも取込できるよう runner を差し替え。
     monkeypatch.setattr(

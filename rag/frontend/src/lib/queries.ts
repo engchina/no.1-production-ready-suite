@@ -126,6 +126,7 @@ export const queryKeys = {
   document: (id: string) => ["documents", id] as const,
   documentCategories: ["document-categories"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
+  documentContentSummary: (id: string) => ["documents", id, "content-summary"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewSource: (id: string | null, recipeId: string | null, chunkSetId: string | null) =>
     ["documents", id, "preview-source", recipeId, chunkSetId] as const,
@@ -425,6 +426,37 @@ export function useDocument(
     // 数秒 Skeleton のままにせず、すぐに見つからない旨を出す(#281)。
     retry: retryUnlessNotFound,
     refetchInterval: options.refetchInterval,
+  });
+}
+
+/** 作成中の文書の要約を読み直す間隔（ms）。 */
+const DOCUMENT_CONTENT_SUMMARY_POLL_MS = 3000;
+
+/**
+ * 文書全体の要約（#4793）。作成中の間だけ定期的に読み直す。`awaiting` は、取込が終わった直後で
+ * 後段がまだ要約の行を作っていない間も読み直すための印（呼び出し側が、取込の完了からの短い間だけ渡す）。
+ */
+export function useDocumentContentSummary(id: string | null, options: { awaiting?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.documentContentSummary(id ?? ""),
+    queryFn: () => api.getDocumentContentSummary(id as string),
+    enabled: id != null,
+    retry: retryUnlessNotFound,
+    refetchInterval: (query) =>
+      query.state.data?.summary?.generating || (options.awaiting && !query.state.data?.summary)
+        ? DOCUMENT_CONTENT_SUMMARY_POLL_MS
+        : false,
+  });
+}
+
+/** 文書全体の要約を作り直す（#4793）。 */
+export function useRegenerateDocumentContentSummary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.regenerateDocumentContentSummary(id),
+    onSuccess: (state, id) => {
+      qc.setQueryData(queryKeys.documentContentSummary(id), state);
+    },
   });
 }
 

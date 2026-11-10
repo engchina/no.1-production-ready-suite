@@ -470,6 +470,9 @@ class ParserAdapterSettingsData(BaseModel):
     field_extraction_enabled: bool = False
     navigation_summary_enabled: bool = False
     navigation_summary_max_nodes: int
+    # 取込の後に文書全体の要約を作るか（RAG_DOCUMENT_SUMMARY_ENABLED。#4793）。全体の設定だけで、
+    # 文書のレシピでは上書きしない。
+    document_summary_enabled: bool = True
     # 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。#2002）。
     vision_concurrency: int = 4
     config_source: Literal["runtime"]
@@ -482,6 +485,7 @@ POST_PARSE_SETTING_FIELDS = (
     "heading_level_inference_enabled",
     "field_extraction_enabled",
     "navigation_summary_enabled",
+    "document_summary_enabled",
     "vision_concurrency",
 )
 
@@ -506,6 +510,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
+    document_summary_enabled: bool | None = None
     vision_concurrency: int | None = Field(default=None, ge=1, le=16)
 
     @field_validator("adapter_backend", mode="before")

@@ -304,6 +304,7 @@ for (const scheme of ["light", "dark"] as const) {
       "3. メタデータ/項目抽出",
       "4. 章節の抽出規則",
       "5. 章節の要約",
+      "6. 文書の要約",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -350,6 +351,8 @@ for (const scheme of ["light", "dark"] as const) {
         heading_level_inference_enabled: false,
         field_extraction_enabled: true,
         navigation_summary_enabled: false,
+        // 文書の要約は保存値の無い応答で有効（既定。#4793）。
+        document_summary_enabled: true,
         vision_concurrency: 4,
       },
     ]);
@@ -392,6 +395,7 @@ test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002
       heading_level_inference_enabled: false,
       field_extraction_enabled: false,
       navigation_summary_enabled: false,
+      document_summary_enabled: true,
       vision_concurrency: 6,
     },
   ]);
@@ -604,6 +608,7 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
     "3. メタデータ/項目抽出",
     "4. 章節の抽出規則",
     "5. 章節の要約",
+    "6. 文書の要約",
   ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
@@ -1683,10 +1688,11 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
     ["heading_levels", "見出しの階層の推定プロンプト"],
     ["field_extraction", "メタデータ/項目抽出プロンプト"],
     ["navigation_summary", "章節の要約プロンプト"],
+    ["document_summary", "文書の要約プロンプト"],
   ]) {
     await verifyFeaturePrompt(page, key, title);
   }
-  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
+  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
 });
@@ -1718,6 +1724,26 @@ test("章節の方式は広い欄と折り返す選択肢で全文を読める",
   await select.screenshot({path: test.info().outputPath("section-rules-mode.png")});
 });
 
+
+test("文書の要約は解析後の処理の最後の項目で、有効・無効を保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const patches = await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page); await mockFeaturePrompts(page);
+  await page.goto("/settings/parser-adapters#post-parse-document-summary");
+  const item = page.locator("#post-parse-document-summary");
+  await expect(item.getByRole("heading", { name: "6. 文書の要約", exact: true })).toBeVisible();
+  await expect(item.getByText(/モデルの呼び出しは 1 文書につき 1 回です/)).toBeVisible();
+  // 保存値が無い応答（既定）は有効。
+  const toggle = item.getByRole("switch", { name: "文書の要約", exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await page.getByRole("button", { name: "解析後の処理を保存", exact: true }).click();
+  await expect.poll(() => patches.at(-1)?.document_summary_enabled).toBe(false);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await expectNoPageOverflow(page);
+  await item.scrollIntoViewIfNeeded();
+  await item.screenshot({ path: testInfo.outputPath(`post-parse-document-summary-${testInfo.project.name}.png`) });
+});
 
 test("章節の要約は実効の対象数上限を示し不要な比較文を出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, {vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false});

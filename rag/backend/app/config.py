@@ -1185,6 +1185,34 @@ class Settings(
         le=200,
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
     )
+    # 文書全体の要約（#4793）。取込（分割・埋め込み・索引）の後に、1 文書につき 1 回だけ
+    # OCI Enterprise AI を呼んで文書の説明を作り、要約の chunk を 1 つ索引に入れる。
+    rag_document_summary_enabled: bool = Field(
+        default=True,
+        description=(
+            "取込の後に文書全体の要約を 1 文書につき 1 回の LLM で作り、文書の説明として保存して"
+            "要約の chunk を 1 つ索引に入れる（#4793。既定 ON）。失敗・時間切れでも取込は"
+            "失敗にせず、文書の詳細から作り直せる。"
+        ),
+    )
+    rag_document_summary_max_input_chars: int = Field(
+        default=16000,
+        ge=2000,
+        le=200000,
+        description=(
+            "文書全体の要約の入力の予算（文字数）。本文は文書の先頭からこの予算まで渡し、"
+            "超える文書は予算の 1/4 までの見出しの一覧を足して、本文を省いたことを入力に書く。"
+        ),
+    )
+    rag_document_summary_timeout_seconds: float = Field(
+        default=120.0,
+        ge=10.0,
+        le=1800.0,
+        description=(
+            "文書全体の要約の 1 文書あたりの時間の上限（再試行・埋め込み・保存を含む秒数）。"
+            "超えたら要約なしとして記録し、取込は成功のままにする。"
+        ),
+    )
     # 見出しの階層の推定（#2277）。しおりの深さを当てられず、番号の体系でも多くの見出しの深さを
     # 決められない文書（Docling の結果）だけ、見出しの文字列を OCI Enterprise AI に渡して階層を
     # 受け取る。

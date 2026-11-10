@@ -772,6 +772,29 @@ export interface StructuredExtraction {
   parser_artifacts: Record<string, string | number | boolean | null>;
 }
 
+/** 文書全体の要約（#4793）。取込の後に 1 文書 1 回の LLM で作る文書の説明。 */
+export interface DocumentContentSummary {
+  /** 保存済みの結果。pending はまだ結果が無い。 */
+  status: "pending" | "ready" | "failed";
+  /** 今作っている途中か（作り直しの途中は、前の要約を出したまま true）。 */
+  generating: boolean;
+  text: string | null;
+  topics: string[];
+  /** 入力の予算を超えたため、文書の先頭の本文と見出しの一覧から作った要約か。 */
+  input_truncated: boolean;
+  /** 最後の失敗の理由（成功すると null）。 */
+  failure_code: string | null;
+  generated_at: string | null;
+}
+
+/** 文書の詳細に出す文書全体の要約の状態（#4793）。 */
+export interface DocumentContentSummaryState {
+  /** 取込の後に要約を作る設定が有効か。無効なら作り直せない。 */
+  enabled: boolean;
+  /** まだ作っていない文書は null。 */
+  summary: DocumentContentSummary | null;
+}
+
 export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
   error_message: string | null;
@@ -1769,7 +1792,7 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary";
+export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "document_summary";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -2369,6 +2392,8 @@ export interface ParserAdapterSettingsData {
   navigation_summary_enabled: boolean;
   /** 1 文書の取込で要約する章節数の実効上限。読み取り専用。 */
   navigation_summary_max_nodes?: number;
+  /** 取込の後に文書全体の要約を作るか（RAG_DOCUMENT_SUMMARY_ENABLED。全体の設定だけ。#4793）。 */
+  document_summary_enabled?: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
   config_source: "runtime";
@@ -2389,6 +2414,7 @@ export interface ParserAdapterSettingsUpdate {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
+  document_summary_enabled?: boolean;
   vision_concurrency?: number;
 }
 
@@ -3330,6 +3356,13 @@ export const api = {
     request<RetrievedChunk>(`/api/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunkId)}`),
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  getDocumentContentSummary: (id: string) =>
+    request<DocumentContentSummaryState>(`/api/documents/${encodeURIComponent(id)}/summary`),
+  /** 文書全体の要約を作り直す（LLM を 1 回呼ぶ。失敗の理由は応答の `summary.failure_code`）。 */
+  regenerateDocumentContentSummary: (id: string) =>
+    request<DocumentContentSummaryState>(`/api/documents/${encodeURIComponent(id)}/summary`, {
+      method: "POST",
+    }),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(
       `/api/documents/${encodeURIComponent(id)}/chunk-sets`,

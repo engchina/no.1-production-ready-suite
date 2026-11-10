@@ -16,6 +16,7 @@ from typing import Any
 
 from app.clients.document_category_store import oracle_document_category_schema_sql
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
+from app.clients.document_summary_store import oracle_document_summary_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_testset_store import oracle_evaluation_testset_schema_sql
 from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
@@ -400,6 +401,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="recipe_version_log",
             table_name="rag_recipe_version_log",
             sql=recipe_version_log_schema_sql(),
+        ),
+        # 文書全体の要約（#4793）。文書を参照する。
+        OracleSchemaSection(
+            name="document_summaries",
+            table_name="rag_document_summaries",
+            sql=oracle_document_summary_schema_sql(),
         ),
         OracleSchemaSection(
             name="citation_feedback",
@@ -1114,6 +1121,14 @@ END;
             name="20261110_4811_evaluation_job_visibility",
             table_name="rag_evaluation_jobs",
             sql=evaluation_job_visibility_migration_sql(),
+        )
+    )
+    # 文書全体の要約の表（#4793）。無い表だけを作り、既存のデータは変えない。
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4793_document_summaries",
+            table_name="rag_document_summaries",
+            sql=_create_missing_objects_sql(oracle_document_summary_schema_sql(), "文書全体の要約"),
         )
     )
     return sections
