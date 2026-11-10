@@ -34,10 +34,11 @@ from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
     set_audit_request_context,
+    user_id_hash_for,
 )
 from app.rag.xlsx_append_columns import AppendedColumn, XlsxAppendError, append_columns
 from app.schemas.evaluation import EvaluationCaseResult, EvaluationComparison, EvaluationMetrics
-from tests.support import TEST_REQUEST_HEADERS, test_audit_request_context
+from tests.support import TEST_REQUEST_HEADERS, TEST_TENANT_ID, TEST_USER_ID
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -558,8 +559,8 @@ def local_owner(monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple[str | None, 
 
     結果の Excel は job を実行した利用者のファイルを読むので（#4811）、同じ利用者にする。
     """
-    with test_audit_request_context() as context:
-        requester = (context.tenant_id_hash, context.user_id_hash)
+    # 要求の header の値を、backend と同じ hash にする（tenant も同じ関数）。
+    requester = (user_id_hash_for(TEST_TENANT_ID), user_id_hash_for(TEST_USER_ID))
     current: dict[str, tuple[str | None, str | None]] = {"owner": requester, "requester": requester}
     monkeypatch.setattr(
         EvaluationSourceWorkbookService, "_owner", staticmethod(lambda: current["owner"])
