@@ -57,7 +57,7 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import type {
   ApprovedFaqSuggestionData,
-  ClarificationAnswer,
+  GuideConditionAnswer,
   ClarificationSuggestionData,
   ChatMessage,
   CompareModel,
@@ -197,9 +197,9 @@ interface DeliverRequest {
   approvedFaqId?: string;
   /** 類似問の候補を「どれでもない」と断った質問（Q&A の回答をそのまま返さない。#4788）。 */
   approvedFaqDeclined?: boolean;
-  clarification?: ClarificationAnswer;
+  clarification?: GuideConditionAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
-  clarificationSkippedRuleId?: string;
+  skippedGuideConditionId?: string;
 }
 
 /**
@@ -1230,7 +1230,7 @@ export function ChatClient() {
   }
 
   /** 確認の答えを確定して送る（`answer` が無ければ「確認せずに回答」。前提を示して回答する。#1839）。 */
-  function chooseClarification(answer?: ClarificationAnswer) {
+  function chooseClarification(answer?: GuideConditionAnswer) {
     if (!clarifyChoice) return;
     const { content, suggestion, questionContextToken, approvedFaqDeclined } = clarifyChoice;
     setClarifyChoice(null);
@@ -1238,7 +1238,7 @@ export function ChatClient() {
     void deliver(
       answer
         ? { content, clarification: answer, questionContextToken, approvedFaqDeclined }
-        : { content, clarificationSkippedRuleId: suggestion.rule_id, questionContextToken, approvedFaqDeclined }
+        : { content, skippedGuideConditionId: suggestion.guide_condition_id, questionContextToken, approvedFaqDeclined }
     );
   }
 
@@ -1266,7 +1266,7 @@ export function ChatClient() {
       approvedFaqId,
       approvedFaqDeclined,
       clarification,
-      clarificationSkippedRuleId,
+      skippedGuideConditionId,
       questionContextToken,
     } = request;
     const controller = existingController ?? new AbortController();
@@ -1394,8 +1394,8 @@ export function ChatClient() {
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
         ...(approvedFaqDeclined ? { approved_faq_declined: true } : {}),
         ...(clarification ? { clarification } : {}),
-        ...(clarificationSkippedRuleId
-          ? { clarification_skipped_rule_id: clarificationSkippedRuleId }
+        ...(skippedGuideConditionId
+          ? { skipped_guide_condition_id: skippedGuideConditionId }
           : {}),
       };
       // 回答の作成は接続から切り離されている（#1175）。`all_done` の前に接続が切れたら、続きから購読し直す。
@@ -1967,7 +1967,7 @@ function isClarifyChoice(value: unknown): value is ClarifyChoice | null {
     (choice.approvedFaqDeclined === undefined || typeof choice.approvedFaqDeclined === "boolean") &&
     typeof suggestion === "object" &&
     suggestion !== null &&
-    typeof suggestion.rule_id === "string" &&
+    typeof suggestion.guide_condition_id === "string" &&
     typeof suggestion.clarification === "object" &&
     suggestion.clarification !== null &&
     Array.isArray(suggestion.clarification.options)

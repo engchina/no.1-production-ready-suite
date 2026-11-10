@@ -288,7 +288,7 @@ def test_system_admin_cannot_continue_another_users_conversation(
     assert sent.json()["error_messages"] == [OTHERS_CONTENT_FORBIDDEN_MESSAGE]
     clarified = client.post(
         f"{path}/messages/stream",
-        json={"content": "質問 A", "clarification_skipped_rule_id": "rule-1"},
+        json={"content": "質問 A", "skipped_guide_condition_id": "rule-1"},
         headers=admin,
     )
     assert clarified.status_code == 403

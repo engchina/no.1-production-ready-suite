@@ -243,7 +243,7 @@ class ClarificationOption(BaseModel):
         return [value.strip()[:50] for value in values if value.strip()]
 
 
-class RuleClarification(BaseModel):
+class GuideConditionClarification(BaseModel):
     """確認の質問(業務ガイドの条件の確認)。自由入力のみ、または選択肢2〜8件。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -262,7 +262,7 @@ class RuleClarification(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def _unique_options(self) -> "RuleClarification":
+    def _unique_options(self) -> "GuideConditionClarification":
         if len(self.options) == 1 or (not self.options and not self.allow_other):
             raise ValueError("選択肢は2つ以上、または自由入力だけの確認にしてください。")
         ids = [option.id for option in self.options]
@@ -279,9 +279,9 @@ class ClarificationSuggestRequest(BaseModel):
 
 
 class ClarificationSuggestionData(BaseModel):
-    rule_id: str
-    rule_title: str
-    clarification: RuleClarification
+    guide_condition_id: str
+    guide_title: str
+    clarification: GuideConditionClarification
 
 
 class ClarificationSuggestionsData(BaseModel):
@@ -291,17 +291,17 @@ class ClarificationSuggestionsData(BaseModel):
     question_context_token: str | None = None
 
 
-class ClarificationAnswer(BaseModel):
+class GuideConditionAnswer(BaseModel):
     """チャットで利用者が確認に答えた内容。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    rule_id: str = Field(min_length=1, max_length=128)
+    guide_condition_id: str = Field(min_length=1, max_length=128)
     option_ids: list[str] = Field(default_factory=list, max_length=8)
     other_text: str = Field(default="", max_length=500)
 
     @model_validator(mode="after")
-    def _require_choice(self) -> "ClarificationAnswer":
+    def _require_choice(self) -> "GuideConditionAnswer":
         if not self.option_ids and not self.other_text.strip():
             raise ValueError("選択肢を選ぶか、その他を入力してください。")
         return self

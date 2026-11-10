@@ -211,7 +211,7 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     """準備で補った結果と所要時間を送信の側へ渡し、処理の経過に段を残す（#4794）。"""
     from app.rag.chat_question_token import read_history_rewrite_elapsed
     from app.schemas.chat import ChatMessageRequest
-    from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+    from app.schemas.search_answer_profile_knowledge import GuideConditionAnswer
 
     oracle, settings, calls = context_setup
     if case == "disabled":
@@ -247,7 +247,11 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
         )
         monkeypatch.setattr(chat, "guide_clarification_record", lambda *args: None)
         turn_request = turn_request.model_copy(
-            update={"clarification": ClarificationAnswer(rule_id="guide:g1:c1", option_ids=["o1"])}
+            update={
+                "clarification": GuideConditionAnswer(
+                    guide_condition_id="guide:g1:c1", option_ids=["o1"]
+                )
+            }
         )
     turn = await chat._prepare_chat_turn(
         oracle, "conversation-a", "profile-a", turn_request, settings

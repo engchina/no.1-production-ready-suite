@@ -1609,9 +1609,9 @@ export interface ChatMessageRequestBody {
   /** 利用者が類似問の候補を「どれでもない」と断った質問（FAQ の回答をそのまま返さない。#4788）。 */
   approved_faq_declined?: boolean;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
-  clarification?: ClarificationAnswer;
+  clarification?: GuideConditionAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
-  clarification_skipped_rule_id?: string;
+  skipped_guide_condition_id?: string;
   /** 画面が決めた質問の id（32 桁の 16 進。#1175）。送信の直後（`start` の前）の停止もこの id で取り消せる。 */
   client_message_id?: string;
   /** 質問に添付するファイル（`uploadChatAttachment` の `attachment_id`。#2517）。 */
@@ -1633,7 +1633,7 @@ export interface ClarificationOption {
   premise: string;
 }
 
-export interface RuleClarification {
+export interface GuideConditionClarification {
   question: string;
   multiple: boolean;
   allow_other: boolean;
@@ -1641,13 +1641,13 @@ export interface RuleClarification {
 }
 
 export interface ClarificationSuggestionData {
-  rule_id: string;
-  rule_title: string;
-  clarification: RuleClarification;
+  guide_condition_id: string;
+  guide_title: string;
+  clarification: GuideConditionClarification;
 }
 
-export interface ClarificationAnswer {
-  rule_id: string;
+export interface GuideConditionAnswer {
+  guide_condition_id: string;
   option_ids: string[];
   other_text: string;
 }

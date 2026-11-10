@@ -55,7 +55,7 @@ def test_unpinned_rules_do_not_call_matcher(tmp_path, monkeypatch):
 
     path = tmp_path / "runtime.json"
     path.write_text(json.dumps({"schema_version": 1, "rules": [{"id": "a", "title": "設定", "triggers": ["設定"], "content": "指示"}]}))
-    monkeypatch.setattr(rk, "rank_rules", lambda *args, **kwargs: pytest.fail("pinned でないルールを照合した"))
+    monkeypatch.setattr(rk, "select_guide_rules", lambda *args, **kwargs: pytest.fail("pinned でないルールを照合した"))
     assert not build_runtime_knowledge_context("設定", tmp_path, path).matched_rules
 
 

@@ -836,11 +836,12 @@ async def _prepare_chat_turn(
                 detail="選んだ類似問が見つかりません。もう一度送信して選び直してください。",
             )
         approved_faq = (record.question, record.approved_answer)
-    guide_reply = request.clarification is not None and request.clarification.rule_id.startswith(
-        GUIDE_CLARIFICATION_PREFIX
+    guide_reply = (
+        request.clarification is not None
+        and request.clarification.guide_condition_id.startswith(GUIDE_CLARIFICATION_PREFIX)
     )
-    guide_skip = bool(request.clarification_skipped_rule_id) and str(
-        request.clarification_skipped_rule_id
+    guide_skip = bool(request.skipped_guide_condition_id) and str(
+        request.skipped_guide_condition_id
     ).startswith(GUIDE_CLARIFICATION_PREFIX)
     if guide_reply or guide_skip:
         view = await oracle.get_search_answer_profile(search_answer_profile_id)
@@ -849,9 +850,9 @@ async def _prepare_chat_turn(
             request = request.model_copy(
                 update={
                     "clarification": None if guide_reply else request.clarification,
-                    "clarification_skipped_rule_id": None
+                    "skipped_guide_condition_id": None
                     if guide_skip
-                    else request.clarification_skipped_rule_id,
+                    else request.skipped_guide_condition_id,
                 }
             )
     scope: AnswerScope | None = None
@@ -859,22 +860,22 @@ async def _prepare_chat_turn(
     # 会話に残す「回答前に確認した内容」（#1839）。答え・飛ばしたことを、確認事項と一緒に USER の
     # メッセージに保存する（選択肢の名前は答えた時点のもの）。
     clarification_log: dict[str, object] | None = None
-    skipped_rule_id = request.clarification_skipped_rule_id
+    skipped_condition_id = request.skipped_guide_condition_id
     if (
         request.clarification is None
-        and skipped_rule_id
-        and skipped_rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)
+        and skipped_condition_id
+        and skipped_condition_id.startswith(GUIDE_CLARIFICATION_PREFIX)
     ):
         clarification_log = guide_clarification_record(
-            await _published_guides(oracle, search_answer_profile_id), skipped_rule_id, None
+            await _published_guides(oracle, search_answer_profile_id), skipped_condition_id, None
         )
-    if request.clarification is not None and request.clarification.rule_id.startswith(
+    if request.clarification is not None and request.clarification.guide_condition_id.startswith(
         GUIDE_CLARIFICATION_PREFIX
     ):
         guides = await _published_guides(oracle, search_answer_profile_id)
         guide_answer = resolve_guide_clarification(
             guides,
-            request.clarification.rule_id,
+            request.clarification.guide_condition_id,
             request.clarification.option_ids,
             request.clarification.other_text,
         )
@@ -891,7 +892,7 @@ async def _prepare_chat_turn(
         scope = AnswerScope(context=context)
         clarification_log = guide_clarification_record(
             guides,
-            request.clarification.rule_id,
+            request.clarification.guide_condition_id,
             request.clarification.option_ids,
             request.clarification.other_text,
         )

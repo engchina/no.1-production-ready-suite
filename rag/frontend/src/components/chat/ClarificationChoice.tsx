@@ -1,6 +1,6 @@
 import { ClarificationCard, type ClarificationBusyAction } from "@production-ready/ui";
 
-import type { ClarificationAnswer, ClarificationSuggestionData } from "@/lib/api";
+import type { GuideConditionAnswer, ClarificationSuggestionData } from "@/lib/api";
 
 /**
  * 回答前の確認（業務ガイドの条件の確認。#1238。3 製品共通の `ClarificationCard` に載せた。#1839）。選択肢は
@@ -18,7 +18,7 @@ export function ClarificationChoice({
   suggestion: ClarificationSuggestionData;
   busyAction?: ClarificationBusyAction | null;
   disabled?: boolean;
-  onAnswer: (answer: ClarificationAnswer) => void;
+  onAnswer: (answer: GuideConditionAnswer) => void;
   onSkip: () => void;
 }) {
   const { clarification } = suggestion;
@@ -28,7 +28,7 @@ export function ClarificationChoice({
       autoFocus
       items={[
         {
-          id: suggestion.rule_id,
+          id: suggestion.guide_condition_id,
           prompt: clarification.question,
           selection: clarification.multiple ? "multiple" : "single",
           options: clarification.options.map((option) => ({
@@ -42,7 +42,7 @@ export function ClarificationChoice({
       disabled={disabled}
       onConfirm={([answer]) =>
         onAnswer({
-          rule_id: suggestion.rule_id,
+          guide_condition_id: suggestion.guide_condition_id,
           option_ids: answer?.optionIds ?? [],
           other_text: answer?.otherText ?? "",
         })

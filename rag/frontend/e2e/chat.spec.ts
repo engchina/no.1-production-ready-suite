@@ -2011,8 +2011,8 @@ for (const viewport of [
 
 // #1238: 類似問の後に、業務ガイドの条件の確認の質問を出し、選んだ答えを送る（登録ルールの確認は無い。#4799）。
 const clarificationSuggestion = {
-  rule_id: "guide:g1:c1",
-  rule_title: "期限の確認",
+  guide_condition_id: "guide:g1:c1",
+  guide_title: "期限の確認",
   clarification: {
     question: "どの規程についてのご質問ですか？",
     multiple: true,
@@ -2110,7 +2110,7 @@ for (const viewport of [
     expect(streamBodies[0]).toMatchObject({
       content: "申請の期限は？",
       question_context_token: "synthetic-context-token",
-      clarification: { rule_id: "guide:g1:c1", option_ids: ["travel"], other_text: "海外出張" },
+      clarification: { guide_condition_id: "guide:g1:c1", option_ids: ["travel"], other_text: "海外出張" },
     });
     await expect(choice).toHaveCount(0);
 
@@ -2123,7 +2123,7 @@ for (const viewport of [
     await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
     // 質問はそのまま送り（入力欄には戻さない）、取り消さない。
-    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "guide:g1:c1", question_context_token: "synthetic-context-token" });
+    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", skipped_guide_condition_id: "guide:g1:c1", question_context_token: "synthetic-context-token" });
     expect(clarifyQueries[1]).toMatchObject({ conversation_id: "conv-1" });
     expect(streamBodies[1]).not.toHaveProperty("clarification");
     await expect(choice).toHaveCount(0);
@@ -2575,8 +2575,8 @@ test("業務ガイドの自由入力条件だけを確認して回答へ進め�
       json: {
         data: {
           suggestion: {
-            rule_id: "guide:g-text:target",
-            rule_title: "資料の項目を確認する",
+            guide_condition_id: "guide:g-text:target",
+            guide_title: "資料の項目を確認する",
             clarification: {
               question: "対象の資料と項目を教えてください。",
               multiple: false,
@@ -2620,7 +2620,7 @@ test("業務ガイドの自由入力条件だけを確認して回答へ進め�
   await confirm.click();
   await expect.poll(() => bodies.length).toBe(1);
   expect(bodies[0]).toMatchObject({
-    clarification: { rule_id: "guide:g-text:target", option_ids: [], other_text: "資料 A の項目 B" },
+    clarification: { guide_condition_id: "guide:g-text:target", option_ids: [], other_text: "資料 A の項目 B" },
   });
   await expect(card).toHaveCount(0);
 });

@@ -586,7 +586,7 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
 
     その確認事項は Run の完了の後に利用者への確認のカードになる（`builtin_runtime` の
     `_tool_confirmations`）。モデルが同じことを `ask_user_confirmation` で聞き直さないように使う。
-    RAG の検索は `rag_search` の `needs_clarification` と、根拠の取得のルールの確認（#2651）。
+    RAG の検索は、業務ガイドの条件の確認（`rag_search` の `needs_clarification`）。
     業務ガイドの判断が条件を確かめる（clarify）ときも、その問いが条件の id 付きのカードになるので
     止まっているとみなす（#2726。Agent 自身の確認で聞くと、答えが業務ガイドの条件に渡らない）。
     `known` は分かっている条件の id。
@@ -602,20 +602,9 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
         if not result.success or not isinstance(result.output, dict):
             return False
         if mcp_base_tool_name(call.name) == RAG_RETRIEVE_EVIDENCE:
-            return bool(_records(result.output.get("clarifications")))
+            return False
         return result.output.get("outcome") == "needs_clarification"
     return False
-
-
-def evidence_clarification_step(output: JsonObject) -> JsonObject | None:
-    """根拠の取得が検索・回答プロファイルのルールの確認を返したときの次の手（#2651）。
-
-    確認が要るときは検索していない（根拠は空）。`rag_search` の確認と同じ次の手にする。
-    """
-    clarifications = _records(output.get("clarifications"))
-    if not clarifications:
-        return None
-    return ask_clarification_step(clarifications, reason="needs_clarification")
 
 
 def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
@@ -2118,18 +2107,11 @@ class _StateBuilder:
             self.gaps = [text for item in gaps if (text := _text(item))][:MAX_GAPS]
 
     def apply_retrieve(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
-        """根拠の取得（呼び出し元が検索文を作る取得。#2651）のルールの確認と、渡した答え。
-
-        確認が返ったときだけ確かめ中にする（根拠を返した取得は、業務ガイドの確認を消さない）。
-        """
+        """根拠の取得へ利用者が渡した条件を保持する。業務ガイドの確認は照合の結果で扱う。"""
         conditions = arguments.get("conditions")
         if isinstance(conditions, dict):
             for condition_id, value in conditions.items():
                 self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
-        clarifications = _records(output.get("clarifications")) if output is not None else []
-        if clarifications:
-            self.add_labels(clarifications)
-            self.set_rag_pending(_rag_pending(clarifications))
 
     def apply_lookup(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
         """`rag_lookup_guides`（モデル・Control Plane の照合。#1322）の最上位の業務ガイド。

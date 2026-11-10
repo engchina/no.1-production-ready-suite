@@ -1430,13 +1430,16 @@ def test_stream_message_rejects_clarification_answers_that_are_not_guide_conditi
 
     bad = client.post(
         url,
-        json={"content": "期限は?", "clarification": {"rule_id": "R01", "option_ids": ["a"]}},
+        json={
+            "content": "期限は?",
+            "clarification": {"guide_condition_id": "R01", "option_ids": ["a"]},
+        },
     )
     assert bad.status_code == 422
     assert fake.messages["conv-x"] == []
 
     # 業務ガイドの確認でない id を飛ばしても、確認の記録は残さずに回答する。
-    skipped = client.post(url, json={"content": "旅費は?", "clarification_skipped_rule_id": "R01"})
+    skipped = client.post(url, json={"content": "旅費は?", "skipped_guide_condition_id": "R01"})
     assert skipped.status_code == 200
     user = next(message for message in fake.messages["conv-x"] if message.role == "USER")
     assert user.clarification is None

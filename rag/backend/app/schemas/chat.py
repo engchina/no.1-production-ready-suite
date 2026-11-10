@@ -12,7 +12,7 @@ from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.search import SEARCH_TOP_K_MAX, RetrievedChunk
-from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+from app.schemas.search_answer_profile_knowledge import GuideConditionAnswer
 from app.search_defaults import search_top_k_default, search_top_k_schema
 
 
@@ -202,14 +202,10 @@ class ChatMessageRequest(BaseModel):
     # 利用者が類似問の候補を「どれでもない」と断った質問。断った質問には、承認済み FAQ の回答を
     # そのまま返さない（資料を検索して回答する。#4788）。
     approved_faq_declined: bool = False
-    # 利用者が確認の質問に答えた内容(#717)。backen
-    # d が検索・回答プロファイルのルールから引き直し、選んだ
-    #
-    # 章節のページに絞って検索し、選んだ条件を回答の前提にする。
-    clarification: ClarificationAnswer | None = None
-    # 回答前の確認を「確認せずに回答」で飛ばしたときの確認の id（#1839）。回答は変えず、会話に
-    # 「確認せずに回答しました」と確認事項を残すためだけに使う（ルール・業務ガイドから引き直す）。
-    clarification_skipped_rule_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # 利用者が業務ガイドの条件の確認に答えた内容。
+    clarification: GuideConditionAnswer | None = None
+    # 確認を飛ばした条件の id。会話に確認せずに回答したことを残すため、業務ガイドから引き直す。
+    skipped_guide_condition_id: str | None = Field(default=None, min_length=1, max_length=200)
     # 画面が決めた質問（USER のメッセージ）の id（#1175）。送信の直後（`start` の前）の停止でも、
     # この id で回答の作成を取り消せる（NL2SQL の `client_job_id`（#900）と同じ考え方）。
     client_message_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")

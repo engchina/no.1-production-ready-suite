@@ -1,4 +1,4 @@
-"""候補の関連度と別に、段階・明示優先度・排他設定から適用を決める。自由文の意味上の矛盾は推測しない。"""
+"""選択済みの業務ガイドの回答指示を適用する。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .runtime_knowledge import RuntimeRule
-
-RULE_PURPOSES = ("confirmation", "generation", "both")
-RULE_INSTRUCTION_KINDS = ("presentation", "requirement", "verification")
 
 
 @dataclass(frozen=True)
@@ -27,73 +24,29 @@ def rule_version(payload: dict[str, Any]) -> str:
 
 
 def select_rule_applications(candidates: Sequence[RuntimeRule], limit: int) -> RuleApplications:
-    """同順位で異なる排他指示はそのグループ全体を保留し、管理設定の問題として記録する。"""
+    """業務ガイドの回答指示を入力順で採用する。同じ本文は一度だけ、上限を超えた分は使わない。"""
+    selected: list[RuntimeRule] = []
     decisions: list[dict[str, Any]] = []
-    accepted: set[str] = set()
-    ordered = sorted(candidates, key=lambda rule: -rule.priority)
-    for stage in ("confirmation", "generation"):
-        scoped = [rule for rule in ordered if rule.purpose in (stage, "both")]
-        eligible = (
-            [rule for rule in scoped if rule.content and rule.instruction_kind in RULE_INSTRUCTION_KINDS]
-            if stage == "generation"
-            else [rule for rule in scoped if rule.confirmation_signature]
+    seen: set[str] = set()
+    for rule in candidates:
+        reason = "selected"
+        if not rule.content:
+            reason = "no_generation_instruction"
+        elif rule.content in seen:
+            reason = "duplicate_instruction"
+        elif len(selected) >= max(1, limit):
+            reason = "application_budget"
+        else:
+            selected.append(rule)
+            seen.add(rule.content)
+        decisions.append(
+            {
+                "id": rule.rule_id,
+                "title": rule.title,
+                "version": rule.version,
+                "stage": "generation",
+                "accepted": reason == "selected",
+                "reason": reason,
+            }
         )
-        groups: dict[str, list[RuntimeRule]] = {}
-        for rule in eligible:
-            if rule.exclusive_group:
-                groups.setdefault(rule.exclusive_group, []).append(rule)
-        rejected: dict[str, str] = {}
-        for group in groups.values():
-            highest = max(rule.priority for rule in group)
-            leaders = [rule for rule in group if rule.priority == highest]
-            if (
-                len(
-                    {
-                        (rule.content, rule.instruction_kind) if stage == "generation" else (rule.confirmation_signature, "confirmation")
-                        for rule in leaders
-                    }
-                )
-                > 1
-            ):
-                rejected.update((rule.rule_id, "unresolved_exclusive_conflict") for rule in group)
-            else:
-                rejected.update((rule.rule_id, "lower_priority") for rule in group if rule.priority < highest)
-        seen: set[tuple[str, str]] = set()
-        count = 0
-        for rule in ordered:
-            reason = "selected"
-            if rule not in scoped:
-                reason = "other_purpose"
-            elif stage == "generation" and rule.instruction_kind not in RULE_INSTRUCTION_KINDS:
-                reason = "invalid_instruction_kind"
-            elif stage == "generation" and not rule.content:
-                reason = "no_generation_instruction"
-            elif stage == "confirmation" and not rule.confirmation_signature:
-                reason = "no_confirmation"
-            elif rule.rule_id in rejected:
-                reason = rejected[rule.rule_id]
-            else:
-                signature = (
-                    (rule.instruction_kind, rule.content) if stage == "generation" else ("confirmation", rule.confirmation_signature)
-                )
-                if signature in seen:
-                    reason = "duplicate_instruction"
-                elif count >= max(1, limit):
-                    reason = "application_budget"
-                else:
-                    seen.add(signature)
-                    count += 1
-                    accepted.add(rule.rule_id)
-            decisions.append(
-                {
-                    "id": rule.rule_id,
-                    "title": rule.title,
-                    "version": rule.version,
-                    "stage": stage,
-                    "accepted": reason == "selected",
-                    "reason": reason,
-                    "priority": rule.priority,
-                    "exclusive_group": rule.exclusive_group,
-                }
-            )
-    return RuleApplications(tuple(rule for rule in ordered if rule.rule_id in accepted), tuple(decisions))
+    return RuleApplications(tuple(selected), tuple(decisions))
