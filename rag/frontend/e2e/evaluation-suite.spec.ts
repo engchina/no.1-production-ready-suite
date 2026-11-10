@@ -6,6 +6,7 @@ import {
   mockEvaluationProfiles,
   evaluationImportResult,
   mockEvaluationImport,
+  mockEvaluationJobList,
   mockEvaluationJobs,
   prepareEvaluationRun,
   uploadEvaluationExcel,
@@ -18,6 +19,7 @@ test.beforeEach(async ({ page }) => {
   await mockKnowledgeBases(page);
   await mockEvaluationProfiles(page);
   await mockEvaluationSuiteSettings(page, "standard");
+  await mockEvaluationJobList(page);
 });
 
 for (const viewport of [

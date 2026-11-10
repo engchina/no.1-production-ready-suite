@@ -136,6 +136,11 @@ def test_export_api_uses_authorized_job_and_rejects_unavailable_results(
     monkeypatch: pytest.MonkeyPatch, state: str, code: int
 ) -> None:
     class Service:
+        async def get_with_owner(
+            self, job_id: str
+        ) -> tuple[EvaluationJob, tuple[str | None, str | None]]:
+            return await self.get(job_id), (None, None)
+
         async def get(self, job_id: str) -> EvaluationJob:
             assert job_id == "job-a"
             if state == "missing":

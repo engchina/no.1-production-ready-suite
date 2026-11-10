@@ -14,7 +14,11 @@ import pytest
 
 from app.clients.evaluation_workbook_store import OracleEvaluationWorkbookStore, SourceWorkbookRow
 from app.clients.oracle import OracleClient
-from app.rag.evaluation_jobs import EvaluationJobRecord, OracleEvaluationJobStore
+from app.rag.evaluation_jobs import (
+    EvaluationJobRecord,
+    EvaluationJobViewer,
+    OracleEvaluationJobStore,
+)
 from tests import _oracle_test_db
 
 _TENANT = "t" * 64
@@ -108,7 +112,9 @@ async def test_job_keeps_the_workbook_and_unused_listing_excludes_it(
     unused = await _workbook(store, created)
     job_id = await _job(jobs, created, used)
 
-    record = await jobs.get(job_id, tenant_id_hash=_TENANT, user_id_hash=_OWNER)
+    record = await jobs.get(
+        job_id, viewer=EvaluationJobViewer(tenant_id_hash=_TENANT, user_id_hash=_OWNER)
+    )
     assert record is not None
     assert record.source_workbook_id == used
 

@@ -34,10 +34,11 @@ from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
     set_audit_request_context,
+    user_id_hash_for,
 )
 from app.rag.xlsx_append_columns import AppendedColumn, XlsxAppendError, append_columns
 from app.schemas.evaluation import EvaluationCaseResult, EvaluationComparison, EvaluationMetrics
-from tests.support import TEST_REQUEST_HEADERS
+from tests.support import TEST_REQUEST_HEADERS, TEST_TENANT_ID, TEST_USER_ID
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -554,8 +555,13 @@ async def _test_owner_workbook(
 
 @pytest.fixture
 def local_owner(monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple[str | None, str | None]]:
-    """API の要求の利用者を、元の Excel の持ち主として固定する（他人の場面は値を変える）。"""
-    current: dict[str, tuple[str | None, str | None]] = {"owner": ("t" * 64, "u" * 64)}
+    """元の Excel の持ち主を、API の要求の利用者にする（他人の場面は値を変える）。
+
+    結果の Excel は job を実行した利用者のファイルを読むので（#4811）、同じ利用者にする。
+    """
+    # 要求の header の値を、backend と同じ hash にする（tenant も同じ関数）。
+    requester = (user_id_hash_for(TEST_TENANT_ID), user_id_hash_for(TEST_USER_ID))
+    current: dict[str, tuple[str | None, str | None]] = {"owner": requester, "requester": requester}
     monkeypatch.setattr(
         EvaluationSourceWorkbookService, "_owner", staticmethod(lambda: current["owner"])
     )
@@ -671,7 +677,7 @@ async def test_submit_rejects_a_workbook_of_another_user(
     local_owner["owner"] = ("t" * 64, "x" * 64)
     other = await workbooks[0].save("他人.xlsx", _workbook())
     assert other is not None
-    local_owner["owner"] = ("t" * 64, "u" * 64)
+    local_owner["owner"] = local_owner["requester"]
 
     response = await api_client.post("/api/evaluation/jobs/run", json=_run_body(other, "row-2"))
     assert response.status_code == 404

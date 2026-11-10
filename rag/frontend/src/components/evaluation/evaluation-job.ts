@@ -8,6 +8,7 @@ import type {
   EvaluationCaseResult,
   EvaluationJob,
   EvaluationJobStatus,
+  EvaluationJobSummary,
   EvaluationMetrics,
 } from "@/lib/api";
 import { answerStageLabel } from "@/lib/answer-progress";
@@ -62,6 +63,24 @@ export function evaluationJobTimeLimitLabel(job: Pick<EvaluationJob, "time_limit
   return t("evaluation.job.timeLimit", {
     minutes: Math.max(1, Math.ceil(job.time_limit_seconds / 60)),
   });
+}
+
+type ProfileFields = Pick<
+  EvaluationJobSummary,
+  | "search_answer_profile_id"
+  | "search_answer_profile_name"
+  | "compare_search_answer_profile_id"
+  | "compare_search_answer_profile_name"
+>;
+
+/**
+ * 評価に使った検索・回答プロファイルの表示（#4811）。名前を引けなければ ID、記録の無い古い評価は「—」。
+ * 比べるプロファイルがあれば「A（比較: B）」。
+ */
+export function evaluationHistoryProfileLabel(job: ProfileFields): string {
+  const base = job.search_answer_profile_name ?? job.search_answer_profile_id ?? "—";
+  const compared = job.compare_search_answer_profile_name ?? job.compare_search_answer_profile_id;
+  return compared ? t("evaluation.history.profileWithCompare", { profile: base, compare: compared }) : base;
 }
 
 /** workspace に保存した job id の検証（空文字は「job なし」）。 */

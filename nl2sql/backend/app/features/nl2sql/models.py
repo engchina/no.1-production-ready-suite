@@ -3136,24 +3136,6 @@ class AgentConversationCreateData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class AgentConversationItem(BaseModel):
-    """Select AI Agent conversation prompt item."""
-
-    conversation_id: str
-    prompt: str
-    response: str = ""
-    created_at: str = ""
-    team_name: str = ""
-
-
-class AgentConversationsData(BaseModel):
-    """Select AI Agent conversation history response."""
-
-    runtime: str = "deterministic"
-    items: list[AgentConversationItem] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
 class ReverseSqlRequest(BaseModel):
     """SQL から自然言語説明を生成する request."""
 

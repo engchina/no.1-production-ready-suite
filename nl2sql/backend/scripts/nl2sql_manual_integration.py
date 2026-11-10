@@ -808,20 +808,6 @@ def _legacy_agent_smoke(*, profile_id: str | None, question: str) -> list[StepRe
         )
     except Exception as exc:
         results.append(StepResult(name="legacy_agent_run_team", ok=False, message=str(exc)))
-    try:
-        conversations = nl2sql_service.list_select_ai_agent_conversations(limit=3)
-        results.append(
-            StepResult(
-                name="legacy_agent_conversations",
-                ok=True,
-                message=(
-                    f"runtime={conversations.runtime}; items={len(conversations.items)}; "
-                    f"warnings={len(conversations.warnings)}"
-                ),
-            )
-        )
-    except Exception as exc:
-        results.append(StepResult(name="legacy_agent_conversations", ok=False, message=str(exc)))
     return results
 
 

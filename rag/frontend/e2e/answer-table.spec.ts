@@ -140,7 +140,7 @@ async function ask(page: Page) {
   return answer;
 }
 
-test.describe("回答の本文の表（issue 4734・4812）", { tag: "@responsive" }, () => {
+test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@responsive" }, () => {
   test("冒頭の表・項目・結論の説明の表を結果の表で描き、表は冒頭に 1 回だけ出す", async ({ page }, testInfo) => {
     const answer = await ask(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-table-${testInfo.project.name}.png`), fullPage: true });
@@ -163,22 +163,35 @@ test.describe("回答の本文の表（issue 4734・4812）", { tag: "@responsiv
     await expect(tableItem.getByRole("button")).toHaveCount(0);
     await expect(answer.getByTestId("answer-application-reasoning")).toContainText("説明の文です。");
 
-    // 回答の表は「すべての行を見る」を出さず、CSV は残す。
-    await expect(answer.getByRole("button", { name: "すべての行を見る" })).toHaveCount(0);
+    // 回答の表もデータの結果と同じ表示（#4822）: 「すべての行を見る」と CSV を表ごとに出す。
+    await expect(answer.getByRole("button", { name: "すべての行を見る" })).toHaveCount(4);
     await expect(answer.getByRole("button", { name: "CSV をダウンロード" })).toHaveCount(4);
 
-    // 長いセルは省略せず、折り返して全文を出す（セルの中で切れていない）。
+    // 長いセルは先頭のプレビューでは 1 行で省略し（全文は title）、全文は「すべての行を見る」のシートで読む。
     const longCell = tables.nth(0).getByRole("cell", { name: LONG_CELL });
     await expect(longCell).toBeVisible();
-    const clipped = await longCell.locator("span").first().evaluate((element) => ({
+    const preview = await longCell.locator("span").first().evaluate((element) => ({
       overflow: element.scrollWidth - element.clientWidth,
-      height: element.scrollHeight - element.clientHeight,
       lines: Math.round(element.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(element).lineHeight)),
+      title: element.getAttribute("title"),
     }));
-    expect(clipped.overflow).toBeLessThanOrEqual(1);
-    expect(clipped.height).toBeLessThanOrEqual(1);
-    expect(clipped.lines).toBeGreaterThan(1);
+    expect(preview.overflow).toBeGreaterThan(0);
+    expect(preview.lines).toBe(1);
+    expect(preview.title).toBe(LONG_CELL);
     await answer.screenshot({ path: testInfo.outputPath(`answer-table-body-${testInfo.project.name}.png`) });
+
+    await answer.getByRole("button", { name: "すべての行を見る" }).first().click();
+    const sheet = page.getByRole("dialog");
+    const sheetCell = sheet.getByRole("cell", { name: LONG_CELL });
+    await expect(sheetCell).toBeVisible();
+    expect(
+      await sheetCell.locator("span").first().evaluate((element) =>
+        Math.round(element.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(element).lineHeight))
+      )
+    ).toBeGreaterThan(1);
+    await page.screenshot({ path: testInfo.outputPath(`answer-table-sheet-${testInfo.project.name}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
 
     // 表で広くなってもページははみ出さない（表の中で横にスクロールする）。
     await expectNoPageOverflow(page);
@@ -191,7 +204,7 @@ test.describe("回答の本文の表（issue 4734・4812）", { tag: "@responsiv
     }
   });
 
-  test("出典の列の印から表の下の番号つきの根拠の行へ移り、そこから原文を開ける", async ({ page }, testInfo) => {
+  test("出典の列の印を押すと原文を開き、すべての行のシートの中の印でも同じに開く", async ({ page }, testInfo) => {
     const answer = await ask(page);
     const table = answer.getByRole("table").first();
     await expect(table.getByRole("columnheader", { name: "出典" })).toBeVisible();
@@ -200,25 +213,42 @@ test.describe("回答の本文の表（issue 4734・4812）", { tag: "@responsiv
     // 表の下の根拠の行は番号の印の順（回答エンジンが振った番号）。
     await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]"]);
 
-    await table.getByRole("link", { name: "[2] の根拠へ移動" }).click();
-    const second = answer.getByRole("button", { name: "[2] 根拠：文書 B.pdf p.5 の原文を開く" });
-    await expect(second).toBeFocused();
-    await expect(second).toBeInViewport();
+    // 印を押すと、その番号の根拠の原文をそのまま開く（#4822）。閉じると印へフォーカスが戻る。
+    const second = table.getByRole("link", { name: "[2] の原文を開く" });
+    await second.click();
+    const source = page.getByRole("dialog", { name: "回答の根拠" });
+    await expect(source).toBeVisible();
+    await expect(source).toContainText("文書 B.pdf");
     await page.screenshot({ path: testInfo.outputPath(`answer-table-mark-${testInfo.project.name}.png`) });
-
-    // キーボードでも印から移り、移った行の Enter で原文を開く。
-    await table.getByRole("link", { name: "[1] の根拠へ移動" }).first().focus();
-    await page.keyboard.press("Enter");
-    const first = answer.getByRole("button", { name: "[1] 根拠：文書 A.pdf p.3 の原文を開く" });
-    await expect(first).toBeFocused();
-    await page.keyboard.press("Enter");
-    const sheet = page.getByRole("dialog", { name: "回答の根拠" });
-    await expect(sheet).toBeVisible();
-    await expect(sheet).toContainText(CITATION_TEXT);
-    await page.screenshot({ path: testInfo.outputPath(`answer-table-citation-${testInfo.project.name}.png`) });
-
-    // 項目・結論の根拠の行は今までどおり押せる（番号は付けない）。
     await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+    await expect(second).toBeFocused();
+
+    // キーボードでも同じ（Enter で原文を開く）。
+    await table.getByRole("link", { name: "[1] の原文を開く" }).first().focus();
+    await page.keyboard.press("Enter");
+    await expect(source).toBeVisible();
+    await expect(source).toContainText(CITATION_TEXT);
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+
+    // すべての行のシートの中の印でも原文を開き、閉じるとシートの印へ戻る（シートは開いたまま）。
+    await answer.getByRole("button", { name: "すべての行を見る" }).first().click();
+    const sheet = page.getByRole("dialog", { name: /回答の表/ });
+    const sheetMark = sheet.getByRole("link", { name: "[2] の原文を開く" });
+    await sheetMark.click();
+    await expect(source).toBeVisible();
+    await expect(source).toContainText("文書 B.pdf");
+    await page.screenshot({ path: testInfo.outputPath(`answer-table-sheet-mark-${testInfo.project.name}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+    await expect(sheet).toBeVisible();
+    await expect(sheetMark).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+
+    // 表の下の根拠の行と、項目・結論の根拠の行は今までどおり押せる。
+    await expect(answer.getByRole("button", { name: "[2] 根拠：文書 B.pdf p.5 の原文を開く" })).toBeVisible();
     await expect(answer.getByRole("button", { name: "根拠：文書 A.pdf p.3 の原文を開く", exact: true })).toHaveCount(3);
   });
 });

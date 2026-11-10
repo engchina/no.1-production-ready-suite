@@ -143,7 +143,8 @@ describe("AnswerSections", () => {
 
 
 describe("回答の表の出典の印と根拠の行の番号（#4812）", () => {
-  it("印を押すと、移り先の根拠の行（押せる行はボタン、押せない行は文字）へフォーカスを移す", () => {
+  it("印を押すと、押せる根拠の行は原文を開き、押せない行（文字）へはフォーカスを移す", () => {
+    const onOpen = vi.fn();
     const scrolled: string[] = [];
     Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
       scrolled.push(this.id);
@@ -165,7 +166,7 @@ describe("回答の表の出典の印と根拠の行の番号（#4812）", () =>
                 key: "t",
                 content: "表",
                 citations: [
-                  { key: "a", label: "根拠：文書 A.pdf p.1", marker: "[1]", anchorId: "src-1", onOpen: () => undefined, ariaLabel: "開く" },
+                  { key: "a", label: "根拠：文書 A.pdf p.1", marker: "[1]", anchorId: "src-1", onOpen, ariaLabel: "開く" },
                   { key: "b", label: "根拠：文書 B.pdf p.2", marker: "[2]", anchorId: "src-2" },
                 ],
               },
@@ -182,11 +183,12 @@ describe("回答の表の出典の印と根拠の行の番号（#4812）", () =>
     // 移り先の無い印はリンクにしない。
     expect(host.querySelector('[data-testid="answer-source-marks"]')?.textContent).toBe("[1][2][3]");
     expect([...host.querySelectorAll('[data-testid="answer-citation-marker"]')].map((marker) => marker.textContent)).toEqual(["[1]", "[2]"]);
+    // 押せる根拠の行の印は、行へ移らずに原文を開く（#4822）。押せない行の印は、その行へ移る。
     act(() => marks[0].click());
-    expect(document.activeElement?.id).toBe("src-1");
-    expect(document.activeElement?.tagName).toBe("BUTTON");
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("src-1")?.tagName).toBe("BUTTON");
     act(() => marks[1].click());
     expect(document.activeElement?.id).toBe("src-2");
-    expect(scrolled).toEqual(["src-1", "src-2"]);
+    expect(scrolled).toEqual(["src-2"]);
   });
 });
