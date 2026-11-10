@@ -66,7 +66,9 @@ _TARGETS: tuple[tuple[str, str, str, Callable[[Mapping[str, Any]], dict[str, Any
 )
 
 
-def _pending(connection: Any, *, for_update: bool) -> list[tuple[str, str, str, Any, dict, dict]]:
+def _pending(
+    connection: Any, *, for_update: bool
+) -> list[tuple[str, str, str, Any, dict[str, Any], dict[str, Any]]]:
     """直す行の (表, ID の列, JSON の列, ID, 今の値, 直した値)。表が無ければ飛ばす。"""
     from app.clients.oracle import _fetch_all, _json_loads
     from app.rag.language_pack_retired_fields import _table_exists
