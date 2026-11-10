@@ -3982,3 +3982,32 @@ test("業務プロファイルの一覧と編集のフォームは 1280 / 1920 /
     }
   }
 });
+
+
+test("Select AI の役割と追加指示は所属区画の全幅を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  await page.goto("/profiles?profile=new");
+  const role = page.locator("#profile-select-ai-role");
+  const instructions = page.locator("#profile-select-ai-additional-instructions");
+  await expect(role).toBeEditable();
+  await role.fill("合成の役割");
+  await instructions.fill("合成の追加指示");
+  const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("dark", theme === "dark"), theme);
+      for (const field of [role, instructions]) {
+        const delta = await field.evaluate(node => {
+          const parent = node.closest("[data-form-grid]")!.parentElement!;
+          const style = getComputedStyle(parent);
+          return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+        });
+        expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+      }
+      if (width === 1920) expect((await page.locator("#profile-select-ai-model").boundingBox())!.width).toBeLessThan((await role.boundingBox())!.width);
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      await page.locator("#profile-select-ai").screenshot({ path: testInfo.outputPath(`select-ai-prompts-${width}-${theme}.png`) });
+    }
+  }
+});
