@@ -1,7 +1,7 @@
 """原質問に語を足した検索文の出どころの表示名（#3490）。
 
 段「検索文をまとめ、検索語を作る」の検索文の出どころ・回答の記録の ``query_source`` は、実際に語を足したもの
-（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件）の名前を並べる。旧名「用語・ルール」は出さない。
+（用語・同義語 / 業務ガイド / 確認で選んだ条件）の名前を並べる。旧名「用語・ルール」は出さない。
 """
 
 from __future__ import annotations
@@ -31,8 +31,6 @@ def _context(tmp_path: Path, question: str, *, terms: list[Any], rules: list[Any
         question,
         tmp_path,
         path,
-        rules_confirmation_enabled=True,
-        rules_answer_enabled=True,
         terms_search_enabled=True,
         terms_answer_enabled=True,
     )
@@ -50,9 +48,8 @@ def _context(tmp_path: Path, question: str, *, terms: list[Any], rules: list[Any
             [{**_RULE, "id": "guide-1", "triggers": ["手がかりC"], "tags": [PINNED_RULE_TAG, SUPPORT_GUIDE_RULE_TAG]}],
             ("業務ガイド",),
         ),
-        ("期限は？", [], [{**_RULE, "triggers": ["手がかりC"], "tags": [PINNED_RULE_TAG]}], ("確認・回答ルール",)),
     ],
-    ids=["terms", "rules", "terms-and-rules", "support-guide", "pinned-rule"],
+    ids=["terms", "unpinned-rules", "terms-and-unpinned-rules", "support-guide"],
 )
 def test_query_source_names_what_added_words(
     tmp_path: Path, question: str, terms: list[Any], rules: list[Any], expected: tuple[str, ...]
@@ -65,9 +62,15 @@ def test_query_source_names_what_added_words(
     assert context.to_payload()["query_source"] == context.query_source
 
 
-def test_rule_words_already_added_by_terms_are_not_counted(tmp_path: Path) -> None:
-    """回答ルールの照合キーワードが用語の別名と同じで、新しい語を足さなければ、回答ルールを出どころに数えない。"""
-    rule = {"id": "rule-a", "title": "R-1", "triggers": ["略称A"], "content": "確認してから答える"}
+def test_guide_words_already_added_by_terms_are_not_counted(tmp_path: Path) -> None:
+    """業務ガイドの手がかりが用語の別名と同じで、新しい語を足さなければ、業務ガイドを出どころに数えない。"""
+    rule = {
+        "id": "guide-1",
+        "title": "R-1",
+        "triggers": ["略称A"],
+        "content": "確認してから答える",
+        "tags": [PINNED_RULE_TAG, SUPPORT_GUIDE_RULE_TAG],
+    }
     context = _context(tmp_path, "略称A の期限は？", terms=[_TERM], rules=[rule])
 
     assert context.matched_rules

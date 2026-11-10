@@ -279,7 +279,10 @@ class ResolvedPlanTests(unittest.TestCase):
             original_question="q",
             expanded_question="q",
             path=Path("rk.json"),
-            matched_rules=(RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE"), RuntimeRule("r2", "別", content="OTHER")),
+            matched_rules=(
+                RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE", tags=("pinned", "support_guide")),
+                RuntimeRule("r2", "別", content="OTHER"),
+            ),
             guide_steps=(("screen", "画面", ("c1",)), ("code", "コード", ("c2",)), ("ask", "確認", ("c3",))),
             guide_optional_steps=("code",),
             guide_step_terms=(("code", ("コード",)), ("ask", ("確認",))),
@@ -294,7 +297,7 @@ class ResolvedPlanTests(unittest.TestCase):
         self.assertEqual(knowledge.guide_optional_steps, ())
         self.assertEqual(knowledge.guide_step_terms, (("code", ("コード",)),))
         self.assertEqual([rule.content for rule in knowledge.matched_rules], ["RESOLVED-RULE", "OTHER"])
-        self.assertIn("RESOLVED-RULE", knowledge.with_rule_usage(confirmation=False, answer=True).prompt_context())
+        self.assertIn("RESOLVED-RULE", knowledge.prompt_context())
 
     def test_named_field_resolution_selects_the_required_branch(self) -> None:
         observed = [
