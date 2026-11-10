@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from json import JSONDecodeError
 from typing import Any
 
+from pr_backend_core.bounded_calls import classify_error
 from pydantic import BaseModel, ValidationError
 
 _MAX_CHAIN = 4
@@ -74,7 +75,15 @@ _PROVIDER_STATUSES = {"incomplete", "completed", "failed", "cancelled", "queued"
 _INCOMPLETE_REASONS = {"max_output_tokens", "content_filter"}
 # 出力の暴走で呼び出しを打ち切った理由（`rag_engine.adapters.oci.LlmRunawayOutput.reason`。#2966・#3835）。
 _CUTOFF_REASONS = {"runaway_whitespace", "runaway_repetition"}
-_SUMMARY_FIELDS = ("provider_status", "incomplete_reason", "cutoff_reason", "contract_code", "stream_trace")
+_SUMMARY_FIELDS = (
+    "provider_status",
+    "incomplete_reason",
+    "cutoff_reason",
+    "contract_code",
+    "stream_trace",
+    "provider_error_kind",
+    "provider_http_status",
+)
 
 
 def _get(value: object, name: str) -> object:
@@ -147,6 +156,13 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
         "cause_classes": [type(cause).__name__[:80] for cause in chain[1:]],
         "category": "structure_unknown",
     }
+    # SDK の error event は本文を記録せず、共通の分類と数値の status だけを残す。
+    if any(type(cause).__module__.split(".")[0] in {"openai", "httpx", "httpcore", "oci"} for cause in chain):
+        failure = classify_error(exc)
+        result["category"] = "provider_error"
+        result["provider_error_kind"] = failure.kind.value
+        if failure.status is not None:
+            result["provider_http_status"] = failure.status
     errors: list[dict[str, Any]] = []
     invalid_json = False
     contract_code = None

@@ -153,3 +153,33 @@ def test_cycle_in_cause_chain_is_bounded() -> None:
     first.__cause__ = second
     second.__cause__ = first
     assert structured_failure_details(first)["cause_classes"] == ["ValueError"]
+
+
+@pytest.mark.parametrize(("code", "kind"), [("rate_limit_exceeded", "rate_limited"), ("internal_error", "server_error")])
+def test_sdk_stream_error_keeps_only_safe_classification(code: str, kind: str) -> None:
+    import httpx
+    from openai import APIError
+
+    from rag_engine.adapters.oci import LlmStreamFailed, _StreamTiming
+    from rag_engine.resources.structured_failures import failure_summary_fields
+
+    cause = APIError("secret-message", httpx.Request("POST", "https://stub"), body={"error": {"code": code, "message": "secret-body"}})
+    error = LlmStreamFailed("secret-wrapper", _StreamTiming())
+    error.__cause__ = cause
+    details = structured_failure_details(error)
+    assert details["category"] == "provider_error"
+    assert details["provider_error_kind"] == kind
+    assert "provider_http_status" not in details  # code から HTTP status を推定して記録しない。
+    assert failure_summary_fields(details)["provider_error_kind"] == kind
+    assert "secret" not in json.dumps(details)
+
+
+def test_sdk_stream_error_does_not_invent_a_status() -> None:
+    import httpx
+    from openai import APIError
+
+    error = APIError("Upstream Responses stream returned an error event", httpx.Request("POST", "https://stub"), body={"message": "secret"})
+    details = structured_failure_details(error)
+    assert details["provider_error_kind"] == "unknown"
+    assert "provider_http_status" not in details
+    assert "secret" not in json.dumps(details)

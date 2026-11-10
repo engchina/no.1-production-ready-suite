@@ -698,3 +698,10 @@ async def test_field_extraction_retries_rate_limit_and_stops_on_quota(
     with pytest.raises(IngestionUserError, match="割り当て"):
         await pipeline._attach_extraction_fields("trace", extraction, document_id="d1")
     assert quota.calls == 1
+
+
+def test_evaluation_rate_limit_uses_five_jittered_retries() -> None:
+    policy = ai_call_policy(_settings(), "evaluation")
+    assert policy.rule(ErrorKind.RATE_LIMITED).retries == 5
+    assert policy.backoff_base_seconds == 1.0
+    assert policy.rule(ErrorKind.RATE_LIMITED).throttle is True

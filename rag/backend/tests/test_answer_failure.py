@@ -462,3 +462,16 @@ def test_search_stream_keeps_safe_network_cause(monkeypatch: MonkeyPatch) -> Non
     assert event["error_type"] == "APIConnectionError"
     assert "管理者" in str(event["message"])
     assert "private-endpoint" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_stream_api_failure_uses_ai_failure_message_instead_of_search_fallback() -> None:
+    """status の無い SDK stream error でも、実際の工程を案内し、本文は公開しない。"""
+    failure = describe_answer_failure(
+        _stream_api_failure({"message": "synthetic secret provider detail"}),
+        EVALUATION_CASE_ERROR_MESSAGE,
+    )
+    assert failure.error_type == "APIError"
+    assert failure.stage == "回答の作成"
+    assert failure.message != EVALUATION_CASE_ERROR_MESSAGE
+    assert "AI の API" in failure.message
+    assert "synthetic" not in failure.message

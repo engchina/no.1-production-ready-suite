@@ -157,7 +157,7 @@ def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
             stage=stage,
         )
     api = describe_answer_api_failure(exc)
-    if api is not None and api.network_failure_cause is not None:
+    if api is not None:
         return AnswerFailure(
             message=api.message,
             error_type=api.error_type,
