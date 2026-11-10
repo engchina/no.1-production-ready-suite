@@ -15,7 +15,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from rag_engine.generation.answer_table import table_cells, table_markdown
+from rag_engine.generation.answer_labels import answer_labels
+from rag_engine.generation.answer_table import source_marks, table_cells, table_markdown
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.llm import GroundedApplication
 
@@ -93,9 +94,10 @@ def render_lines(
             continue
         application = entry.application
         lines.append(f"・{application.result.strip()}")
-        # 表の結論は題の行の後ろに表の行を続ける（表の記法はコードが決める。#4796）。
+        # 表の結論は冒頭の回答に表と行ごとの出典行を 1 回だけ出す（``table_block_lines``。#4812）。ここは題と案内だけ。
         if application.table is not None:
-            lines.extend(table_markdown(application.table).splitlines())
+            lines.append(answer_labels().table_above_note)
+            continue
         premises = "".join(f"「{premise.strip()}」" for premise in application.premises if premise.strip())
         if premises:
             lines.append(PREMISES_LABEL + premises)
@@ -108,4 +110,47 @@ def render_lines(
         for line, items in shown.items():
             lines.append(line)
             cite(items)
+    return lines
+
+
+def table_block_lines(
+    entry: CheckedApplication,
+    citation: Callable[[dict], str],
+    cite: Callable[[Sequence[Any]], None],
+) -> list[str]:
+    """冒頭の回答に出す表の結論の行（題・出典の列つきの表・表の下の出典行。#4812）。
+
+    出典行は行の順に、同じ出典行になる規則をまとめて 1 行にする（``render_lines`` と同じ形）。出典の列の番号は表の下の
+    出典行の順（1 始まり）で、番号はコードが振る。``cite`` にはその行にまとめた規則（CheckedItem）を出典行の順に渡す。
+    """
+    application = entry.application
+    table = application.table
+    if table is None:
+        return []
+    by_index = {item.draft_index: item for item in entry.entries}
+    shown: dict[str, list[Any]] = {}
+    marks: list[str] = []
+    for row in table.rows:
+        numbers: list[int] = []
+        for index in row.item_indexes:
+            item = by_index.get(index)
+            if item is None or not item.span:
+                continue
+            line = citation(item.span)
+            items = shown.setdefault(line, [])
+            if all(item is not other for other in items):
+                items.append(item)
+            numbers.append(list(shown).index(line) + 1)
+        marks.append(source_marks(numbers))
+    # 行に結ばれていない規則（行の根拠の外の item）も、出典行として表の下に残す（番号の印は付かない）。
+    for item in entry.entries:
+        if item.span and all(item is not other for items in shown.values() for other in items):
+            shown.setdefault(citation(item.span), []).append(item)
+    lines = [
+        application.result.strip(),
+        *table_markdown(table, source_column=answer_labels().table_source_column, sources=marks).splitlines(),
+    ]
+    for line, items in shown.items():
+        lines.append(line)
+        cite(items)
     return lines
