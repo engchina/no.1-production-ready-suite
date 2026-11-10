@@ -816,6 +816,8 @@ class PreparedChatTurn:
     history_question_prepared: bool = False
     # 送信の前（確認の提案）に済ませた履歴による補完。処理の経過に同じ段として残す（#4794）。
     prepared_history_rewrite: PreparedHistoryRewrite | None = None
+    # 補完した質問が承認済み FAQ に下限以上で一致したら、FAQ の回答をそのまま返してよいか（#4788）。
+    direct_faq_answer: bool = False
 
 
 async def _prepare_chat_turn(
@@ -1087,6 +1089,12 @@ async def _prepare_chat_turn(
         prepared_history_rewrite=prepared_history_rewrite,
         approved_faq=approved_faq,
         scope=scope,
+        # 利用者が類似問を選んだ・断った発話と、確認に答えた発話には、そのまま返さない。
+        direct_faq_answer=(
+            approved_faq is None
+            and not request.approved_faq_declined
+            and request.clarification is None
+        ),
     )
 
 
@@ -1151,6 +1159,7 @@ async def _generate_chat_answer(
             attachment_conversation_id=turn.conversation_id,
             history_question_prepared=turn.history_question_prepared,
             prepared_history_rewrite=turn.prepared_history_rewrite,
+            direct_faq_answer=turn.direct_faq_answer,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(

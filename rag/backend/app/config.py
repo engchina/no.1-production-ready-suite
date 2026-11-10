@@ -1398,6 +1398,26 @@ class Settings(
             "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
         ),
     )
+    rag_approved_faq_negative_min_score: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "承認済み FAQ の否定の質問(その FAQ を当てたくない質問の例)に当たったとみなす"
+            "一致度の下限(0〜1。#4788)。質問と否定の質問の一致度がこの値以上で、FAQ の質問との"
+            "一致度以上のとき、その FAQ を候補から外す。"
+        ),
+    )
+    rag_approved_faq_direct_answer_min_score: float = Field(
+        default=0.92,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "承認済み FAQ の回答をそのまま返す一致度の下限(0〜1。全体設定だけの値。#4788)。"
+            "そのまま返すかどうかは、検索・回答プロファイルの FAQ の設定(既定はオフ)が持つ。"
+            "類似問の候補の「そのまま使える一致度」の印にも同じ値を使う。"
+        ),
+    )
     # 回答は rag_poc の根拠付き回答だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
     rag_history_rewrite_enabled: bool = Field(

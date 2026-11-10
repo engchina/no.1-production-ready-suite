@@ -85,6 +85,42 @@ def small_talk_details(intent: str, *, replied: bool) -> dict[str, Any] | None:
     )
 
 
+def faq_direct_details(match: Any) -> dict[str, Any] | None:
+    """承認済み FAQ との照合の詳細（結果・一致度と下限・否定の質問で外した FAQ）。
+
+    ``match`` は ``DirectFaqMatch``（1 位の候補 ``best``・下限 ``min_score``・回答に使う候補
+    ``answer``・否定の質問で外した候補 ``negative_excluded``）。
+    """
+
+    best = match.best
+    hit = match.answer
+    threshold = f"下限 {match.min_score:.2f}"
+    fields: list[tuple[str, object]] = []
+    if hit is not None:
+        fields.append(
+            ("結果", "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）")
+        )
+        fields.append(("一致した Q&A", hit.record.question))
+        fields.append(("一致度", f"{hit.score:.2f}（{threshold}）"))
+    else:
+        fields.append(("結果", "下限以上で一致する登録済みQ&Aが無いため、検索して回答します"))
+        fields.append(
+            ("最も近い Q&A の一致度", f"{best.score:.2f}（{threshold}）")
+            if best is not None
+            else ("最も近い Q&A", f"候補なし（{threshold}）")
+        )
+    excluded = list(match.negative_excluded)
+    if excluded:
+        fields.append(("当てはめない質問に当たって外した Q&A", f"{len(excluded)} 件"))
+    return pipeline_step_details(
+        fields=fields,
+        lines=[
+            f"{item.record.question}（当てはめない質問: {item.negative_question}）"
+            for item in excluded
+        ],
+    )
+
+
 def field_filter_details(conditions: Iterable[Any]) -> dict[str, Any] | None:
     """質問から読み取った抽出項目の条件（項目・比べ方・値）。"""
 

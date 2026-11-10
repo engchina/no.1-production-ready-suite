@@ -329,6 +329,56 @@ async def test_clarification_api_matches_resolved_question(
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("declined", [False, True])
+async def test_clarification_is_skipped_when_faq_answer_is_returned_directly(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch, declined: bool
+) -> None:
+    """補完した質問が承認済み FAQ に下限以上で一致するなら、確認を出さない（#4788）。"""
+    from rag_engine.knowledge.approved_faq import ApprovedFaqRecord, ApprovedFaqSuggestion
+
+    from app.api.routes import search_answer_profile_knowledge as route
+    from app.rag.search_answer_profile_knowledge import DirectFaqMatch
+    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
+
+    oracle, settings, _calls = context_setup
+    settings.rag_support_guide_enabled = False
+    oracle.view.config.query.support_guide_enabled = False
+    matched: list[str] = []
+    clarified: list[str] = []
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+
+    async def empty(*args: Any) -> dict[str, Any]:
+        return {}
+
+    async def direct(_store: Any, _profile: str, query: str, *args: Any) -> DirectFaqMatch:
+        matched.append(query)
+        record = ApprovedFaqRecord(id="faq-a", question=query, approved_answer="合成の回答")
+        return DirectFaqMatch(
+            min_score=0.92,
+            best=ApprovedFaqSuggestion(record=record, matched_question=query, score=1.0),
+        )
+
+    monkeypatch.setattr(route, "load_runtime_knowledge_payload", empty)
+    monkeypatch.setattr(route, "match_direct_approved_faq", direct)
+    monkeypatch.setattr(
+        route, "suggest_clarification", lambda _payload, query, **kwargs: clarified.append(query)
+    )
+    result = await route.post_clarification_suggest(
+        "profile-a",
+        ClarificationSuggestRequest(
+            query="その手順は？ 条件 B との違いは？",
+            conversation_id="conversation-a",
+            approved_faq_declined=declined,
+        ),
+    )
+    resolved = "対象 A の手順は？ 条件 B との違いは？"
+    # 照合するのは補完した質問。利用者が類似問を断った質問は照合せず、いつもの確認に進む。
+    assert matched == ([] if declined else [resolved])
+    assert clarified == ([resolved] if declined else [])
+    assert result.data is not None and result.data.question_context_token
+
+
 async def test_blocked_confirmation_also_excludes_assistant_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

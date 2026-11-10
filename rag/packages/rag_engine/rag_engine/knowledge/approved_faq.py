@@ -49,6 +49,11 @@ APPROVED_FAQ_SCOPE_MODES = (
 )
 MAX_APPROVED_FAQ_QUESTION_LENGTH = 1000
 MAX_APPROVED_FAQ_ANSWER_LENGTH = 20000
+# FAQ 1 件に登録できる否定の質問（その FAQ を当てたくない質問の例）の数の上限。
+MAX_APPROVED_FAQ_NEGATIVE_QUESTIONS = 20
+# 否定の質問に当たったとみなす一致度の下限の既定（意味・文字列の類似度。0〜1）。
+DEFAULT_APPROVED_FAQ_NEGATIVE_MIN_SCORE = 0.75
+APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY = "negative_questions"
 # FAQ record の JSON の項目（対象の範囲・根拠の文書・承認）。
 APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY = "target_knowledge_base_ids"
 APPROVED_FAQ_SOURCE_DOCUMENTS_KEY = "source_documents"
@@ -77,12 +82,15 @@ class ApprovedFaqRecord:
 
     target_knowledge_base_ids は FAQ を使える範囲（この KB をすべて使える利用者だけに使う）。
     None は対象を記録していない record（呼び出し元が移行する）。
+    negative_questions は否定の質問（この FAQ を当てたくない質問の例）。質問がこれに当たるときは、
+    この FAQ を候補から外す。
     """
 
     id: str
     question: str
     approved_answer: str
     alternate_questions: tuple[str, ...] = ()
+    negative_questions: tuple[str, ...] = ()
     status: str = ""
     business: str = ""
     classification: dict[str, Any] | None = None
@@ -112,6 +120,17 @@ class ApprovedFaqSuggestion:
     scope_score: float = 0.0
     scope_matches: tuple[str, ...] = ()
     match_method: str = "text"
+    # 質問に最も近い否定の質問と、その一致度（否定の質問が無ければ空と 0）。
+    negative_question: str = ""
+    negative_score: float = 0.0
+
+
+@dataclass(frozen=True)
+class ApprovedFaqRanking:
+    """質問に対する FAQ の候補（順位順）と、否定の質問に当たって外した FAQ。"""
+
+    suggestions: tuple[ApprovedFaqSuggestion, ...] = ()
+    negative_excluded: tuple[ApprovedFaqSuggestion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,6 +171,7 @@ class ApprovedFaqImportRow:
     approval: ApprovedFaqApproval | None = None
     # 回答 feedback の引用の文書 ID（版の印は呼び出し元が今の状態から付ける）。
     cited_document_ids: tuple[str, ...] = ()
+    negative_questions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -342,6 +362,7 @@ def _apply_approved_faq_import_rows_locked(
             target_knowledge_base_ids=(None if row.target_knowledge_base_ids is None else _string_tuple(row.target_knowledge_base_ids)),
             source_documents=_source_documents(row.source_documents),
             approval=row.approval,
+            negative_questions=normalize_approved_faq_negative_questions(row.negative_questions, (question,)),
         )
         record = _new_approved_faq_record(normalized_row, existing_ids, saved_at)
         if replaced is not None:
@@ -377,14 +398,19 @@ def add_approved_faq_record(
     now: datetime | None = None,
     target_knowledge_base_ids: Sequence[str] | None = None,
     approval: ApprovedFaqApproval | None = None,
+    negative_questions: Sequence[str] = (),
 ) -> ApprovedFaqMutationResult:
-    """手入力された QUESTION/ANSWER を Approved FAQ に追加します。"""
+    """手入力された QUESTION/ANSWER を Approved FAQ に追加します。
+
+    negative_questions は否定の質問。QUESTION と同じ文・上限を超える数は ValueError。
+    """
     row = ApprovedFaqImportRow(
         question=question,
         approved_answer=approved_answer,
         source_file="manual",
         target_knowledge_base_ids=None if target_knowledge_base_ids is None else tuple(target_knowledge_base_ids),
         approval=approval,
+        negative_questions=tuple(negative_questions),
     )
     return apply_approved_faq_import_rows(path, [row], mode=APPROVED_FAQ_IMPORT_MODE_INSERT, now=now)
 
@@ -514,7 +540,7 @@ def parse_approved_faq_delete_text(value: str) -> list[str]:
     return _clean_selectors(str(value or "").replace("，", "\n").replace(",", "\n").splitlines())
 
 
-def suggest_approved_faq_questions(
+def rank_approved_faq_questions(
     question: str,
     records: Sequence[ApprovedFaqRecord] | None = None,
     *,
@@ -526,17 +552,24 @@ def suggest_approved_faq_questions(
     semantic_min_score: float = DEFAULT_APPROVED_FAQ_SEMANTIC_MIN_SCORE,
     limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
     min_score: float = DEFAULT_APPROVED_FAQ_MIN_SCORE,
+    negative_min_score: float = DEFAULT_APPROVED_FAQ_NEGATIVE_MIN_SCORE,
     statuses: Iterable[str] = (APPROVED_FAQ_APPROVED_STATUS,),
-) -> list[ApprovedFaqSuggestion]:
-    """質問と分類条件に合う Approved FAQ 候補を順位付けします。"""
+) -> ApprovedFaqRanking:
+    """質問と分類条件に合う Approved FAQ 候補を順位付けし、否定の質問に当たった FAQ を外します。
+
+    否定の質問に当たるのは、質問と否定の質問の一致度が negative_min_score 以上で、かつ FAQ の
+    質問（別名を含む）との一致度以上のとき（質問が FAQ の質問より否定の質問に近い）。照合は FAQ の
+    質問と同じ文字列の類似度と embedding の類似度で、語の一覧では判定しません。
+    """
     normalized_question = str(question or "").strip()
     if not normalized_question:
-        return []
+        return ApprovedFaqRanking()
 
     allowed_statuses = {str(status) for status in statuses if str(status)}
     scope_metadata = _scope_metadata(scope)
     normalized_scope_mode = _normalize_scope_mode(scope_mode)
     suggestions: list[ApprovedFaqSuggestion] = []
+    excluded: list[ApprovedFaqSuggestion] = []
     for record in records if records is not None else load_approved_faq_records():
         if allowed_statuses and record.status not in allowed_statuses:
             continue
@@ -544,7 +577,8 @@ def suggest_approved_faq_questions(
             continue
         matched_question, text_score = _best_question_match(normalized_question, record.match_questions)
         semantic_question, semantic_score = _best_semantic_question_match(
-            record,
+            record.id,
+            record.match_questions,
             semantic_index,
             semantic_query_embedding,
         )
@@ -556,19 +590,26 @@ def suggest_approved_faq_questions(
             score = text_score
             match_method = "text"
         if score >= min_score:
-            scope_score, scope_matches = _scope_match_score(record, scope_metadata)
-            suggestions.append(
-                ApprovedFaqSuggestion(
-                    record=record,
-                    matched_question=matched_question,
-                    score=score,
-                    text_score=text_score,
-                    semantic_score=semantic_score,
-                    scope_score=scope_score,
-                    scope_matches=scope_matches,
-                    match_method=match_method,
-                )
+            negative_question, negative_score = _best_negative_question_match(
+                normalized_question, record, semantic_index, semantic_query_embedding
             )
+            scope_score, scope_matches = _scope_match_score(record, scope_metadata)
+            suggestion = ApprovedFaqSuggestion(
+                record=record,
+                matched_question=matched_question,
+                score=score,
+                text_score=text_score,
+                semantic_score=semantic_score,
+                scope_score=scope_score,
+                scope_matches=scope_matches,
+                match_method=match_method,
+                negative_question=negative_question,
+                negative_score=negative_score,
+            )
+            if negative_question and negative_score >= negative_min_score and negative_score >= score:
+                excluded.append(suggestion)
+            else:
+                suggestions.append(suggestion)
 
     if normalized_scope_mode == APPROVED_FAQ_SCOPE_MODE_STRICT_WHEN_AVAILABLE and any(
         _has_source_scope_match(item) for item in suggestions
@@ -576,7 +617,20 @@ def suggest_approved_faq_questions(
         suggestions = [item for item in suggestions if _has_source_scope_match(item)]
 
     suggestions.sort(key=lambda item: (-_suggestion_rank_score(item), -item.scope_score, item.record.id))
-    return suggestions[: max(0, int(limit))]
+    excluded.sort(key=lambda item: (-item.negative_score, item.record.id))
+    return ApprovedFaqRanking(
+        suggestions=tuple(suggestions[: max(0, int(limit))]),
+        negative_excluded=tuple(excluded),
+    )
+
+
+def suggest_approved_faq_questions(
+    question: str,
+    records: Sequence[ApprovedFaqRecord] | None = None,
+    **options: Any,
+) -> list[ApprovedFaqSuggestion]:
+    """質問と分類条件に合う Approved FAQ 候補を順位付けします（否定の質問に当たった FAQ は含めません）。"""
+    return list(rank_approved_faq_questions(question, records, **options).suggestions)
 
 
 def find_direct_approved_faq_answer(
@@ -785,6 +839,7 @@ def approved_faq_records_signature(records: Sequence[ApprovedFaqRecord]) -> str:
         {
             "id": record.id,
             "match_questions": list(record.match_questions),
+            "negative_questions": list(record.negative_questions),
             "status": record.status,
             "business": record.business,
             "classification": record.classification or {},
@@ -984,6 +1039,7 @@ def _approved_faq_record_from_raw(
         question=question,
         approved_answer=approved_answer,
         alternate_questions=tuple(str(item).strip() for item in raw_record.get("alternate_questions") or [] if str(item).strip()),
+        negative_questions=_string_tuple(_string_list(raw_record.get(APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY))),
         status=str(raw_record.get("status") or "").strip(),
         business=str(raw_record.get("business") or "").strip(),
         classification=_dict_or_none(raw_record.get("classification")),
@@ -999,6 +1055,28 @@ def _approved_faq_record_from_raw(
         source_documents=_source_documents_from_raw(raw_record.get(APPROVED_FAQ_SOURCE_DOCUMENTS_KEY)),
         approval=_approval_from_raw(raw_record.get(APPROVED_FAQ_APPROVAL_KEY)),
     )
+
+
+def normalize_approved_faq_negative_questions(
+    values: Iterable[Any],
+    match_questions: Iterable[Any],
+) -> tuple[str, ...]:
+    """否定の質問を 1 行の文にそろえ、空と重複を除きます。
+
+    FAQ の質問（別名を含む）と同じ文、上限（MAX_APPROVED_FAQ_NEGATIVE_QUESTIONS）を超える数は
+    ValueError（同じ文を当てる質問と当てない質問の両方にはできない）。
+    """
+    # 照合が同じ質問として扱う文（一致度 1.0）は 1 つにする。
+    unique: dict[str, str] = {}
+    for value in values:
+        text = _clean_single_line_text(value, MAX_APPROVED_FAQ_QUESTION_LENGTH)
+        if _same_question_key(text):
+            unique.setdefault(_same_question_key(text), text)
+    if len(unique) > MAX_APPROVED_FAQ_NEGATIVE_QUESTIONS:
+        raise ValueError(f"当てはめない質問は {MAX_APPROVED_FAQ_NEGATIVE_QUESTIONS} 件までです。")
+    if unique.keys() & {_same_question_key(value) for value in match_questions}:
+        raise ValueError("当てはめない質問に、この Q&A の質問と同じ文は登録できません。")
+    return tuple(unique.values())
 
 
 def approved_faq_scope_raw(
@@ -1066,10 +1144,14 @@ def _best_question_match(question: str, candidates: Sequence[str]) -> tuple[str,
 _CONTAINMENT_SAME_QUESTION_MIN_RATIO = 0.8
 
 
+def _same_question_key(value: Any) -> str:
+    # 空白・全角半角・大文字小文字と、末尾の句読点だけの違い（「。」と「？」）は同じ質問として扱う。
+    return _compact_text(str(value or "")).rstrip("。.?？!！")
+
+
 def _similarity_score(left: str, right: str) -> float:
-    # 末尾の句読点だけの違い（「。」と「？」）は同じ質問として扱う。
-    left_key = _compact_text(left).rstrip("。.?？!！")
-    right_key = _compact_text(right).rstrip("。.?？!！")
+    left_key = _same_question_key(left)
+    right_key = _same_question_key(right)
     if not left_key or not right_key:
         return 0.0
     if left_key == right_key:
@@ -1138,7 +1220,8 @@ def _approved_faq_semantic_questions(records: Sequence[ApprovedFaqRecord]) -> li
     questions: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for record in records:
-        for question in record.match_questions:
+        # 否定の質問も同じ index に入れ、質問との意味の近さを FAQ の質問と同じ尺度で比べる。
+        for question in (*record.match_questions, *record.negative_questions):
             normalized_question = str(question or "").strip()
             key = (record.id, _text_hash(normalized_question))
             if not normalized_question or key in seen:
@@ -1148,8 +1231,27 @@ def _approved_faq_semantic_questions(records: Sequence[ApprovedFaqRecord]) -> li
     return questions
 
 
-def _best_semantic_question_match(
+def _best_negative_question_match(
+    question: str,
     record: ApprovedFaqRecord,
+    semantic_index: ApprovedFaqSemanticIndex | None,
+    semantic_query_embedding: Sequence[float] | None,
+) -> tuple[str, float]:
+    """質問に最も近い否定の質問と一致度（文字列と意味の高いほう。否定の質問が無ければ空と 0）。"""
+    if not record.negative_questions:
+        return "", 0.0
+    best_question, best_score = _best_question_match(question, record.negative_questions)
+    semantic_question, semantic_score = _best_semantic_question_match(
+        record.id, record.negative_questions, semantic_index, semantic_query_embedding
+    )
+    if semantic_score is not None and semantic_score > best_score:
+        return semantic_question, semantic_score
+    return best_question, best_score
+
+
+def _best_semantic_question_match(
+    record_id: str,
+    questions: Sequence[str],
     semantic_index: ApprovedFaqSemanticIndex | None,
     semantic_query_embedding: Sequence[float] | None,
 ) -> tuple[str, float | None]:
@@ -1159,11 +1261,11 @@ def _best_semantic_question_match(
     if query_embedding is None:
         return "", None
 
-    question_hashes = {_text_hash(question) for question in record.match_questions}
+    question_hashes = {_text_hash(question) for question in questions}
     best_question = ""
     best_score: float | None = None
     for item in semantic_index.items:
-        if item.record_id != record.id or item.question_hash not in question_hashes:
+        if item.record_id != record_id or item.question_hash not in question_hashes:
             continue
         score = _cosine_similarity(query_embedding, item.embedding)
         if best_score is None or score > best_score:
@@ -1402,6 +1504,7 @@ def _new_approved_faq_record(
         "id": record_id,
         "question": row.question,
         "alternate_questions": [],
+        APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY: list(row.negative_questions),
         "approved_answer": row.approved_answer,
         "status": APPROVED_FAQ_APPROVED_STATUS,
         "business": "",
@@ -1424,6 +1527,8 @@ def _inherit_replaced_record(record: dict[str, Any], replaced: dict[str, Any]) -
     引き継がないと、別名質問での一致と出典ファイルへの scope 一致が feedback のたびに失われます。
     """
     record["alternate_questions"] = _string_list(replaced.get("alternate_questions"))
+    if not record.get(APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY):
+        record[APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY] = _string_list(replaced.get(APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY))
     record["business"] = str(replaced.get("business") or "").strip()
     if not any(record["classification"].get(key) for key in ("major", "middle", "minor")):
         record["classification"] = _approved_faq_classification(replaced.get("classification"))

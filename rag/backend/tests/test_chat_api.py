@@ -630,12 +630,15 @@ class _FakePipeline:
     filters: list[dict[str, str]] = []
     # 作られた pipeline に渡した検索する件数(#3512)。
     top_ks: list[int] = []
+    # 作られた pipeline に渡した、承認済み FAQ の回答をそのまま返してよいか(#4788)。
+    direct_faq_answers: list[object] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
         _FakePipeline.answer_model_ids.append(kwargs.get("answer_model_id"))
         _FakePipeline.approved_faqs.append(kwargs.get("approved_faq"))
         _FakePipeline.scopes.append(kwargs.get("scope"))
+        _FakePipeline.direct_faq_answers.append(kwargs.get("direct_faq_answer"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -1348,6 +1351,7 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     fake.messages["conv-x"] = []
     _stub_stream(monkeypatch, fake, ["m1"])
     monkeypatch.setattr(_FakePipeline, "approved_faqs", [])
+    monkeypatch.setattr(_FakePipeline, "direct_faq_answers", [])
     record = ApprovedFaqRecord(
         id="faq-1", question="住宅ローンの特典は？", approved_answer="QUO カード", status="approved"
     )
@@ -1364,9 +1368,15 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     assert resp.status_code == 200
     assert looked_up == [("bv-1", "faq-1")]
     assert _FakePipeline.approved_faqs == [("住宅ローンの特典は？", "QUO カード")]
+    # 類似問を選んだ質問には、FAQ の回答をそのまま返す段を通さない(選んだ FAQ から回答する。#4788)。
+    assert _FakePipeline.direct_faq_answers == [False]
     # 選ばなかったときは渡さない。
     client.post(url, json={"content": "特典は?"})
     assert _FakePipeline.approved_faqs[-1] is None
+    assert _FakePipeline.direct_faq_answers[-1] is True
+    # 類似問を「どれでもない」と断った質問にも、そのまま返さない。
+    client.post(url, json={"content": "特典は?", "approved_faq_declined": True})
+    assert _FakePipeline.direct_faq_answers[-1] is False
     # 検索・回答プロファイルに無い(またはオフ)の FAQ は、発話を保存する前に 422 で断る。
     saved = len(fake.messages["conv-x"])
     missing = client.post(url, json={"content": "特典は?", "approved_faq_id": "other"})

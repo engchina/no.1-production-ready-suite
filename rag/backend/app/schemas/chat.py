@@ -195,6 +195,9 @@ class ChatMessageRequest(BaseModel):
     #
     # 質問と一緒に回答の LLM へ渡す。利用者の送った文を FAQ として扱わない。
     approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # 利用者が類似問の候補を「どれでもない」と断った質問。断った質問には、承認済み FAQ の回答を
+    # そのまま返さない（資料を検索して回答する。#4788）。
+    approved_faq_declined: bool = False
     # 利用者が確認の質問に答えた内容(#717)。backen
     # d が検索・回答プロファイルのルールから引き直し、選んだ
     #

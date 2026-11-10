@@ -33,9 +33,13 @@ from app.rag.rule_selection import recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
+    FAQ_DIRECT_ANSWER_ENABLED_KEY,
+    FAQ_ENABLED_KEY,
     ApprovedFaqMutation,
     add_approved_faq,
+    approved_faq_direct_answer_enabled,
     approved_faq_enabled,
+    approved_faq_match_options,
     confirm_approved_faq,
     delete_approved_faq,
     edit_runtime_knowledge,
@@ -44,12 +48,14 @@ from app.rag.search_answer_profile_knowledge import (
     load_approved_faq_snapshot,
     load_domain_keywords,
     load_runtime_knowledge_payload,
+    match_direct_approved_faq,
     preview_runtime_knowledge,
+    rank_approved_faq,
     read_approved_faq_excel,
-    save_approved_faq_enabled,
+    save_approved_faq_negative_questions,
+    save_approved_faq_settings,
     save_domain_keywords,
     save_rule_clarification,
-    suggest_approved_faq,
     suggest_clarification,
     suggest_domain_keywords,
 )
@@ -73,6 +79,7 @@ from app.schemas.search_answer_profile_knowledge import (
     ApprovedFaqKnowledgeBaseData,
     ApprovedFaqListData,
     ApprovedFaqMutationData,
+    ApprovedFaqNegativeQuestionsRequest,
     ApprovedFaqRecordData,
     ApprovedFaqReviewReason,
     ApprovedFaqSettingsRequest,
@@ -256,6 +263,7 @@ def _faq_record_data(
         question=record.question,
         answer=record.approved_answer,
         alternate_questions=list(record.alternate_questions),
+        negative_questions=list(record.negative_questions),
         status=record.status,
         target_knowledge_base_ids=list(record.target_knowledge_base_ids or ()),
         source_document_ids=[source.document_id for source in record.source_documents],
@@ -298,6 +306,9 @@ async def _faq_list_data(
         search_answer_profile_id=search_answer_profile_id,
         records=[_faq_record_data(state, approver_names) for state in snapshot.states],
         enabled=approved_faq_enabled(snapshot.payload),
+        # スイッチの保存値をそのまま返す(類似問の提示がオフの間は使わないが、設定は残す)。
+        direct_answer_enabled=(snapshot.payload or {}).get(FAQ_DIRECT_ANSWER_ENABLED_KEY) is True,
+        direct_answer_min_score=get_settings().rag_approved_faq_direct_answer_min_score,
         knowledge_bases=[
             ApprovedFaqKnowledgeBaseData(
                 id=kb_id, name=names.get(kb_id, kb_id), in_profile=kb_id in profile_kbs
@@ -360,11 +371,41 @@ async def confirm_search_answer_profile_approved_faq(
 async def put_approved_faq_settings(
     search_answer_profile_id: str, request: ApprovedFaqSettingsRequest
 ) -> ApiResponse[ApprovedFaqListData]:
-    """回答の前に類似問を提示するかを保存する(検索・回答プロファイルごと。#684)。"""
+    """プロファイルごとの FAQ の設定を保存する(送った項目だけ。#684・#4788)。
+
+    類似問を提示するか・一致度が下限以上のとき FAQ の回答をそのまま返すか。
+    """
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
-    await save_approved_faq_enabled(oracle, search_answer_profile_id, request.enabled)
+    changes: dict[str, bool] = {}
+    if request.enabled is not None:
+        changes[FAQ_ENABLED_KEY] = request.enabled
+    if request.direct_answer_enabled is not None:
+        changes[FAQ_DIRECT_ANSWER_ENABLED_KEY] = request.direct_answer_enabled
+    if changes:
+        await save_approved_faq_settings(oracle, search_answer_profile_id, changes)
     return await get_approved_faq(search_answer_profile_id)
+
+
+@router.put(
+    "/{search_answer_profile_id}/approved-faq/{faq_id}/negative-questions",
+    response_model=ApiResponse[ApprovedFaqListData],
+)
+async def put_approved_faq_negative_questions(
+    search_answer_profile_id: str, faq_id: str, request: ApprovedFaqNegativeQuestionsRequest
+) -> ApiResponse[ApprovedFaqListData]:
+    """FAQ の否定の質問(この FAQ を当てたくない質問の例)を置き換える(#4788)。"""
+    oracle = OracleClient()
+    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    try:
+        await save_approved_faq_negative_questions(
+            oracle, search_answer_profile_id, faq_id, request.negative_questions
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="FAQ が見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
 
 
 @router.post(
@@ -384,6 +425,7 @@ async def post_approved_faq(
             question=request.question,
             answer=request.answer,
             target_knowledge_base_ids=request.target_knowledge_base_ids,
+            negative_questions=request.negative_questions,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -485,10 +527,8 @@ async def suggest_search_answer_profile_approved_faq(
         view.config.normalized_knowledge_base_ids()
     )
     settings = get_settings()
-    genai = (
-        OciGenAiClient(settings=settings) if settings.rag_approved_faq_semantic_enabled else None
-    )
-    suggestions = await suggest_approved_faq(
+    snapshot = await load_approved_faq_snapshot(oracle, search_answer_profile_id)
+    ranking = await rank_approved_faq(
         oracle,
         search_answer_profile_id,
         request.query,
@@ -497,14 +537,20 @@ async def suggest_search_answer_profile_approved_faq(
         if request.purpose == "chat"
         else request.limit,
         min_score=settings.rag_approved_faq_suggestion_min_score,
-        embed=(
-            (lambda texts, input_type: genai.embed(texts, input_type=input_type))
-            if genai is not None
-            else None
-        ),
-        embedding_model=settings.oci_genai_embedding_model,
-        embedding_dimensions=settings.oci_genai_embedding_dim,
+        snapshot=snapshot,
+        **approved_faq_match_options(settings, lambda: OciGenAiClient(settings=settings)),
     )
+    suggestions = list(ranking.suggestions)
+    direct_min_score = settings.rag_approved_faq_direct_answer_min_score
+    if (
+        request.purpose == "chat"
+        and suggestions
+        and approved_faq_direct_answer_enabled(snapshot.payload)
+        and is_direct_faq_match(suggestions[0], direct_min_score)
+    ):
+        # 一致度が下限以上のチャットの質問は、候補を選ばせずに送る。送信の後、補完した質問で
+        # 照合し直して FAQ の回答をそのまま返す(#4788)。
+        return ApiResponse(data=ApprovedFaqSuggestionsData(direct_answer=True))
     if suggestions:
         # 1 位とほぼ同じくらい近い候補だけを出す(#709)。
         top = max(item.score for item in suggestions)
@@ -522,7 +568,7 @@ async def suggest_search_answer_profile_approved_faq(
                     matched_question=item.matched_question,
                     answer=item.record.approved_answer,
                     score=round(item.score, 4),
-                    direct=is_direct_faq_match(item),
+                    direct=is_direct_faq_match(item, direct_min_score),
                 )
                 for item in suggestions
             ]
@@ -686,6 +732,18 @@ async def post_clarification_suggest(
             read_history_intent(settings.app_service_token_secret, context_token)
         ):
             return response(ClarificationSuggestionsData())
+        # 補完した質問が承認済み FAQ に下限以上で一致するなら、送信の側が FAQ の回答をそのまま返す
+        # ので確認も出さない(#4788。利用者が類似問を「どれでもない」と断った質問は照合しない)。
+        if not request.approved_faq_declined:
+            direct = await match_direct_approved_faq(
+                oracle,
+                search_answer_profile_id,
+                query,
+                settings,
+                lambda: OciGenAiClient(settings=settings),
+            )
+            if direct is not None and direct.answer is not None:
+                return response(ClarificationSuggestionsData())
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
         source_text = "\n".join(
             [
