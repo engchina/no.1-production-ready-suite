@@ -203,6 +203,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             return schema.model_validate(
                 {
                     "request_coverage": [{"request_id": "Q1", "evidence_scope": scopes}],
+                    "response_kind": "answered",
                     "answer_parts": [
                         {"request_id": "Q1", "requirement": "合成の操作", "answer": answer}
                     ],

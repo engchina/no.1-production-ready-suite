@@ -256,6 +256,7 @@ def deterministic_parse_text_response(
                     ]
                     if evidence
                     else [],
+                    "response_kind": "answered" if evidence else "insufficient_evidence",
                     "answer_parts": [
                         {"request_id": "Q1", "requirement": "合成の要求", "answer": answer}
                     ],

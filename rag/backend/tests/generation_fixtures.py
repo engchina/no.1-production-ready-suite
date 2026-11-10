@@ -8,9 +8,12 @@ from pydantic import BaseModel
 
 
 def generation_result(schema: type[BaseModel], prompt: str, payload: dict[str, Any]) -> BaseModel:
-    if not getattr(schema, "_uses_typed_answer_parts", False) or "answer_parts" in payload:
+    if not getattr(schema, "_uses_typed_answer_parts", False):
         return schema.model_validate(payload)
     result = deepcopy(payload)
+    result.setdefault("response_kind", "answered")
+    if "answer_parts" in result:
+        return schema.model_validate(result)
     items = result.pop("items", [])
     parts: list[dict[str, Any]] = []
     for position, item in enumerate(items):
