@@ -235,6 +235,8 @@ export function resultRowsToCsv(
 
 /** これより長い値は、全行の表でも最小幅と行数の上限を持たせる。 */
 const LONG_VALUE_CHARS = 40;
+/** 回答の表で、これより長い値は折り返しても 1〜2 字ずつの幅に潰さない（#4812）。 */
+const SHORT_VALUE_CHARS = 4;
 
 /**
  * セルの表示。NULL は斜体・淡色の「NULL」（色だけに頼らない）、`preview` は 1 行で省略して title に全文、`wrap` は
@@ -252,12 +254,13 @@ export function ResultCell({
   if (isNullResultValue(value)) return <span className="italic text-fg-muted">{nullLabel}</span>;
   const text = resultValueText(value);
   if (variant === "wrap")
-    // 長い値は列が潰れて行が極端に高くならないよう最小幅を持たせる（狭い画面では表の枠の中で横にスクロールする）。
+    // 列が潰れて 1〜2 字ずつ折り返さないよう、値の長さで最小幅を持たせる（375px のチャットでも 3 列ほどが枠に収まる幅。収まらない
+    // 広い表は表の枠の中で横にスクロールする）。
     return (
       <span
         className={cn(
           "block max-w-[32rem] whitespace-pre-wrap [overflow-wrap:anywhere]",
-          text.length > LONG_VALUE_CHARS && "min-w-[12rem]"
+          text.length > LONG_VALUE_CHARS ? "min-w-[8rem]" : text.length > SHORT_VALUE_CHARS && "min-w-[4rem]"
         )}
       >
         {text}
