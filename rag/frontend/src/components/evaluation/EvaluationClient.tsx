@@ -709,7 +709,8 @@ function useEvaluationJobState(
     query,
     start: (started) => {
       observed.current = { jobId: started.job_id, status: started.status };
-      setStoredJobId(started.job_id);
+      // URL だけを変える（作業状態は URL から写す）。URL より先に作業状態の id で表示すると、URL の
+      // 遷移が後から確定して、その間に開いた確認のダイアログが閉じる。
       openJob(started.job_id);
     },
     cancel,
