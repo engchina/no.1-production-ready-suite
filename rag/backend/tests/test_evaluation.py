@@ -1797,8 +1797,6 @@ def test_trend_includes_split_breakdown_and_evidence_recall() -> None:
     assert trend["split_breakdown"]["holdout"]["metrics"] == {"mrr": 1.0}
 
 
-
-
 def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
     """判定の診断（呼び出しと再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
     diagnostics: dict[str, object] = {
