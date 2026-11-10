@@ -150,12 +150,10 @@ def save_answer_result(
     standard_answer: str = "",
     store: ArtifactStore | None = None,
     evaluation_provider: str | None = None,
-    evaluation_standard_scope=None,
     evaluation_enabled: bool = True,
 ) -> SavedAnswer | None:
     """標準回答があれば指定 provider（未指定時は既定 LLM）で評価し、回答と履歴を保存する。
 
-    evaluation_standard_scope は同じ質問・標準回答のモデル比較で再利用する事前評価範囲。
     evaluation_enabled=False は LLM 評価を省略し、標準回答・生成時の確認状態を保持する。
     既存の直接呼び出しとの互換性のため既定値は True。UI は明示的に指定する。
     評価失敗でも回答は保存する。出典 run のない不足結果は保存しない。
@@ -172,18 +170,15 @@ def save_answer_result(
     if evaluation_enabled:
         from rag_engine.evaluation.answer_eval import evaluate_answer_payload
 
-        # 同じ質問・標準回答のモデル比較では、事前に固定した評価範囲を共有できる。
-        payload["evaluation"] = evaluate_answer_payload(
-            payload, settings, provider_id=evaluation_provider, standard_scope=evaluation_standard_scope
-        )
+        payload["evaluation"] = evaluate_answer_payload(payload, settings, provider_id=evaluation_provider)
     else:
         payload["evaluation"] = {
             "status": "not_evaluated",
             "message": "LLM による回答評価がオフのため、評価していません。",
         }
     evaluation = payload["evaluation"]
-    if evaluation["status"] in {"completed", "not_applicable"}:
-        # 評価で訂正された外部確認を UI と feedback が同じ値で参照する。
+    if evaluation["status"] == "completed":
+        # 外部確認を UI と feedback が同じ値で参照する。
         payload["external_data_required"] = evaluation["external_data_required"]
         payload["external_data_items"] = list(evaluation["external_data_items"])
         external_label = "外部データ確認が必要"
@@ -191,8 +186,6 @@ def save_answer_result(
         if evaluation["external_data_required"]:
             payload["needs_human_review"] = True
             payload["question_type"].append(external_label)
-        if evaluation.get("evaluation_reliable") is False:
-            payload["needs_human_review"] = True
         # 外部確認が不要でも、根拠不足・専門判断などによる既存の人手確認は解除しない。
         # 旧クライアントが読む整形済み answer にも古い人工確認ラベルを残さない。
         payload["answer"] = format_answer_response(

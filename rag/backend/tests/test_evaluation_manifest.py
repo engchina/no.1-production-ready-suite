@@ -77,7 +77,7 @@ class FakeOracle:
             config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"]),
         )
         self.knowledge: dict[str, object] = {"rules": ["r1"]}
-        self.prompts = {"generation.system": "回答のプロンプト"}
+        self.prompts = {"generation.role": "回答のプロンプト"}
         self.corpus_scopes: list[list[str]] = []
 
     async def evaluation_corpus_rows(
@@ -168,7 +168,7 @@ async def test_manifest_detects_condition_differences() -> None:
     )
     assert comparison_differences(base, other_day) == ["as_of"]
 
-    oracle.prompts = {"generation.system": "直したプロンプト"}
+    oracle.prompts = {"generation.role": "直したプロンプト"}
     assert comparison_differences(base, await _manifest(oracle)) == ["settings.prompt_version"]
 
     # コードの版と外部の呼び出しの扱いは条件の差に入れない（同じ条件でコード・再生を比べる）。

@@ -1,6 +1,6 @@
-"""六指標の評価基準の決定論的な解決。
+"""四指標の評価基準の決定論的な解決。
 
-標準は根拠取得・正確性・網羅性・応答判断の九割、主張の支持の九割五分を目安とする。
+標準は根拠取得・正確性・応答判断の九割を目安とする。
 厳格は MRR を除く全指標で完全一致を求める。MRR は標準 0.6、厳格 0.8。
 設定の解決だけを担当し、前提不足の未評価は合格に置き換えない。"""
 
@@ -37,8 +37,6 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
             "required_evidence_recall": 0.9,
             "mrr": 0.6,
             "answer_correctness": 0.9,
-            "requirement_coverage": 0.9,
-            "claim_support_rate": 0.95,
             "response_decision_accuracy": 0.9,
         },
     ),
@@ -50,8 +48,6 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
             "required_evidence_recall": 1.0,
             "mrr": 0.8,
             "answer_correctness": 1.0,
-            "requirement_coverage": 1.0,
-            "claim_support_rate": 1.0,
             "response_decision_accuracy": 1.0,
         },
     ),

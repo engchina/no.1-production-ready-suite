@@ -353,22 +353,6 @@ for (const width of [1280, 375]) {
   await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
  });
 
-test("検索方法の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
-  await mockRetrievalCards(page);
-  const { mockEditableStage } = await import("./_feature-prompt-helpers");
-  const requests = await mockEditableStage(page, "field_filter", "question", "system");
-  await page.goto("/settings/retrieval");
-  const stage = page.getByTestId("answer-prompt-stage-field_filter");
-  await stage.locator("summary").click();
-  await expect(stage.getByRole("group", { name: "編集内容の操作" }).getByRole("button"))
-    .toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
-  await stage.getByRole("textbox").fill("## Step 1: 合成の検索指示");
-  await stage.getByRole("button", { name: "プロンプトを保存" }).click();
-  await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
-  expect(requests).toEqual([{ key: "field_filter.system", method: "PUT", content: "## Step 1: 合成の検索指示" }]);
-  await expectNoPageOverflow(page);
-});
-
 
 // 選別は回答の全体設定で、監査・補検索を自動で有効にしない。
 

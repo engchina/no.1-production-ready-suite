@@ -9,7 +9,7 @@ import { chooseEvaluationProfile, mockEvaluationImport } from "./_evaluation-job
 // ここでは明示選択・編集・保存再開・取得したファイルのアップロードを実画面で検証する。
 test("本人の評価から一人で下書きを保存し、明示確認してダウンロードと再取り込みへ進む", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const state = await mockTestSetPage(page);
-  await page.goto("/evaluation?tab=calibration");
+  await page.goto("/evaluation?tab=testsets");
   await expectNoPageOverflow(page);
   await page.getByRole("button", { name: "新しい下書きを作る" }).click();
   await page.getByRole("textbox", { name: "下書きの名前", exact: true }).fill("合成テストセット");
@@ -60,7 +60,7 @@ test("本人の評価から一人で下書きを保存し、明示確認して�
 
 test("保存前の離脱に確認が出る", { tag: "@responsive" }, async ({ page }) => {
   await mockTestSetPage(page);
-  await page.goto("/evaluation?tab=calibration");
+  await page.goto("/evaluation?tab=testsets");
   await expectNoPageOverflow(page);
   await page.getByRole("button", { name: "新しい下書きを作る" }).click();
   await page.getByRole("textbox", { name: "下書きの名前", exact: true }).fill("未保存の合成下書き");
@@ -71,7 +71,7 @@ test("保存前の離脱に確認が出る", { tag: "@responsive" }, async ({ pa
 for (const theme of ["light", "dark"] as const) {
   test(`作成と編集の入力幅と局所操作を共通規約にそろえる (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockTestSetPage(page);
-    await page.goto("/evaluation?tab=calibration");
+    await page.goto("/evaluation?tab=testsets");
     await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
     await page.getByRole("button", { name: "新しい下書きを作る" }).click();
     const assertWidth = async (selector: string) => {
@@ -116,7 +116,7 @@ test("作成と保存の失敗を確定行の直上に出し入力を保って�
     }
     return route.fallback();
   });
-  await page.goto("/evaluation?tab=calibration");
+  await page.goto("/evaluation?tab=testsets");
   await page.getByRole("button", { name: "新しい下書きを作る" }).click();
   await page.locator("#testset-name").fill("再試行する合成下書き");
   await page.getByTestId("testset-sources").getByRole("checkbox").first().check();
@@ -142,7 +142,7 @@ test("作成と保存の失敗を確定行の直上に出し入力を保って�
 
 test("候補を25件でページングして選択をページ間で保つ", { tag: "@responsive" }, async ({ page }) => {
   await mockTestSetPage(page, 27);
-  await page.goto("/evaluation?tab=calibration");
+  await page.goto("/evaluation?tab=testsets");
   await page.getByRole("button", { name: "新しい下書きを作る" }).click();
   await page.getByTestId("testset-sources").getByRole("checkbox").first().check();
   await page.getByTestId("testset-sources").getByRole("checkbox").last().check();
@@ -166,7 +166,7 @@ test("作成要求の処理中は送信済みの名前と選択を固定する",
     if (route.request().method() === "POST") await pending;
     await route.fallback();
   });
-  await page.goto("/evaluation?tab=calibration");
+  await page.goto("/evaluation?tab=testsets");
   await page.getByRole("button", { name: "新しい下書きを作る" }).click();
   await page.locator("#testset-name").fill("作成待ちの合成下書き");
   await page.getByTestId("testset-sources").getByRole("checkbox").first().check();
@@ -196,7 +196,7 @@ test("内容保存後に確認だけ失敗しても未確認を保ち再試行�
     }
     return route.fallback();
   });
-  await page.goto("/evaluation?tab=calibration");
+  await page.goto("/evaluation?tab=testsets");
   await page.getByRole("button", { name: "新しい下書きを作る" }).click();
   await page.locator("#testset-name").fill("確認を再試行する合成下書き");
   await page.getByTestId("testset-sources").getByRole("checkbox").first().check();
@@ -232,7 +232,7 @@ for (const theme of ["light", "dark"] as const) {
       }
       return route.fallback();
     });
-    await page.goto("/evaluation?tab=calibration");
+    await page.goto("/evaluation?tab=testsets");
     await page.evaluate(value => {document.documentElement.dataset.theme=value;},theme);
     await page.getByRole("button",{name:"新しい下書きを作る"}).click();
     await page.locator("#testset-name").fill("保存状態の合成下書き");

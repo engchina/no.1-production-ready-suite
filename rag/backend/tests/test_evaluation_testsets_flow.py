@@ -5,23 +5,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import pytest
 
 from app.api.routes import evaluation as evaluation_routes
-from app.clients.evaluation_calibration_store import (
-    LabelItemRecord,
-    LabelRecord,
-    LabelSetRecord,
-    MemoryEvaluationCalibrationStore,
-)
 from app.clients.evaluation_testset_store import MemoryTestSetStore
 from app.clients.oracle import OracleClient
 from app.main import app
-from app.rag import evaluation_calibration, evaluation_testsets
+from app.rag import evaluation_testsets
 from app.rag.evaluation import EvaluationRunner
 from app.rag.evaluation_excel import (
     EvaluationDocumentRef,
@@ -175,7 +169,6 @@ class SyntheticJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:
@@ -184,10 +177,6 @@ class SyntheticJudge:
             "status": "completed",
             "passed": True,
             "answer_correctness": 1.0,
-            "claim_support_rate": 1.0,
-            "requirement_coverage": 1.0,
-            "claim_checks": [{"status": "supported"}],
-            "coverage_checks": [{"status": "addressed"}],
         }
 
 
@@ -399,78 +388,8 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     result = job["run_result"]
     assert result["case_count"] == 1 and result["error_count"] == 0
     assert result["required_evidence_recall"] == result["mrr"] == 1.0
-    assert result["answer_correctness"] == result["requirement_coverage"] == 1.0
+    assert result["answer_correctness"] == 1.0
     assert result["response_decision_accuracy"] == 1.0
     assert result["case_results"][0]["status"] == "success"
     assert len(flow.artifacts) == 1
     assert flow.artifacts[0]["result_summary"]["case_count"] == 1
-
-
-async def test_previous_archive_retains_unresolved_annotations_and_all_gets_are_read_only(
-    flow: Flow, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    legacy = MemoryEvaluationCalibrationStore()
-    monkeypatch.setattr(evaluation_calibration, "_STORE", legacy)
-    record = LabelSetRecord(
-        label_set_id="legacy-a",
-        name="以前の合成データ",
-        origin="jobs",
-        rubric_id="answer_quality",
-        items_sha256="0" * 64,
-        item_count=2,
-        sources={"counts": {"human": 2, "rows": 2}},
-    )
-    items = [
-        LabelItemRecord(
-            item_id=f"i{index}",
-            item_order=index,
-            split="holdout",
-            origin="human",
-            payload={
-                "question": QUESTION,
-                "answer": "合成の生成回答",
-                "standard_answer": STANDARD,
-                "evidence": [{"id": "e1", "text": "合成の原文"}],
-                "aspects": ["claim_support"],
-            },
-        )
-        for index in range(2)
-    ]
-    labels = [
-        LabelRecord(
-            item_id="i0",
-            aspect="claim_support",
-            role="annotation",
-            annotator_code="a1",
-            annotator_hash="a" * 64,
-            label="fail",
-            note="合成の未裁定メモ",
-        )
-    ]
-    with audit_context():
-        await legacy.create_label_set(record, items, labels)
-        before_items = [asdict(row) for row in await legacy.list_items("legacy-a")]
-        before_labels = [asdict(row) for row in await legacy.list_labels("legacy-a")]
-    base = "/api/evaluation/calibration/label-sets/legacy-a"
-    assert (await flow.client.get(base)).status_code == 200
-    assert (await flow.client.get(base + "/rows")).status_code == 200
-    assert (await flow.client.get(base + "/agreement")).status_code == 200
-    # 最終判定用の従来形式は未裁定のため409。保管用出力は未記入も落とさない。
-    assert (await flow.client.get(base + "/export")).status_code == 409
-    response = await flow.client.get(base + "/archive")
-    assert response.status_code == 200, response.text
-    archive = response.json()
-    assert archive["形式"] == "以前の校正データ" and len(archive["項目"]) == 2
-    assert archive["項目"][0]["質問"] == QUESTION
-    assert archive["管理用情報"]["記入"][0]["note"] == "合成の未裁定メモ"
-    assert archive["管理用情報"]["記入"][0]["role"] == "annotation"
-    assert archive["管理用情報"]["記入"][0]["label"] == "fail"
-    assert flow.drafts.rows == {}
-    assert (await flow.client.get(BASE)).json()["data"] == []
-    for method, suffix in [("PUT", "/labels"), ("PUT", "/adjudications"), ("DELETE", "")]:
-        response = await flow.client.request(method, base + suffix, json={})
-        assert response.status_code == 410, response.text
-    with audit_context():
-        assert [asdict(row) for row in await legacy.list_items("legacy-a")] == before_items
-        assert [asdict(row) for row in await legacy.list_labels("legacy-a")] == before_labels
-    assert flow.drafts.rows == {}

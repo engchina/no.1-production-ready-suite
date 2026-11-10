@@ -8,6 +8,7 @@ from typing import Any
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 
+from rag_engine.generation.response_language import render_language_placeholder
 from rag_engine.resources.runtime import resolve_prompt
 
 SYSTEM_PROMPT = (
@@ -15,9 +16,7 @@ SYSTEM_PROMPT = (
     "あなたは社内の承認済み FAQ をもとに回答する担当者です。\n"
     "利用者は、自分の質問と同じ趣旨の承認済み FAQ（類似問とその承認済み"
     "の回答）を選びました。\n"
-    "入力の JSON の question（利用者の質問）に、approv"
-    "ed_faq の answer（承認済みの回答）だけを根拠にして、日本"
-    "語で答えてください。\n"
+    "入力の JSON の question（利用者の質問）に、approved_faq の answer（承認済みの回答）だけを根拠にして答えてください。\n"
     "\n"
     "## Step 2: 承認済みの内容を保つ\n"
     "- 承認済みの回答に書かれていない事実・数値・条件・手順を足さない。推"
@@ -34,7 +33,8 @@ SYSTEM_PROMPT = (
     "- 承認済みの回答が質問に答えていなければ、その旨を正直に伝える。\n"
     "\n"
     "## Step 4: 出力を整える\n"
-    "- 出典の表示は付けない（システムが付ける）。\n"
+    "- 回答の既定の言語は {{language}}。質問が別の言語を明示したときだけ、その言語にする。\n"
+    "- 出典の表示は付けない。\n"
 )
 
 
@@ -59,7 +59,7 @@ def answer_from_approved_faq(question: str, faq_question: str, faq_answer: str, 
     draft = call_with_model_purpose(
         "answer.generate",
         parse_text_response,
-        resolve_prompt("faq_answer.system", SYSTEM_PROMPT),
+        render_language_placeholder(resolve_prompt("faq_answer.system", SYSTEM_PROMPT)),
         faq_answer_prompt(question, faq_question, faq_answer),
         settings,
         FaqAnswerDraft,

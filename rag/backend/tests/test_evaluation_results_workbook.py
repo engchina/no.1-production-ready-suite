@@ -78,7 +78,6 @@ def _case(case_id: str, *, score: float | None = 0.5, **extra: Any) -> Evaluatio
         trace_id=f"trace-{case_id}",
         elapsed_ms=1.0,
         answer_correctness=score,
-        requirement_coverage=0.25,
         observed_outcome="answered",
         **extra,
     )
@@ -320,7 +319,8 @@ def test_results_follow_the_row_number_even_when_questions_repeat() -> None:
     assert sheet.cell(2, correctness).number_format == "0.0%"
     assert sheet.cell(3, answer).value == "回答 B"
     assert sheet.cell(3, correctness).value == 0.25
-    assert sheet.cell(2, columns["評価結果: 回答の網羅性"]).value == 0.25
+    # 網羅・裏付けの列は出さない（#4781）。
+    assert not [name for name in columns if "網羅" in name or "裏付け" in name]
     assert sheet.cell(2, columns["評価結果: 応答の判断"]).value == "回答"
     assert sheet.cell(2, columns["評価結果: 状態"]).value == "成功"
     assert sheet.cell(2, columns["評価結果: Trace"]).value == "trace-row-2"
@@ -355,7 +355,6 @@ def test_failed_case_shows_reason_and_unassessed_metrics() -> None:
     assert sheet.cell(2, columns["評価結果: 状態"]).value == "失敗"
     assert sheet.cell(2, columns["評価結果: 回答"]).value is None
     assert sheet.cell(2, columns["評価結果: 回答の正確性"]).value == "未評価"
-    assert sheet.cell(2, columns["評価結果: 根拠の網羅率（参考）"]).value == "未評価"
     assert sheet.cell(2, columns["評価結果: 失敗理由"]).value == "ケースの実行に失敗"
     assert sheet.cell(2, columns["評価結果: エラー"]).value == "合成の失敗"
 

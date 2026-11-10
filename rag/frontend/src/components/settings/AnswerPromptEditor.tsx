@@ -1,10 +1,5 @@
 import {
   Disclosure,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   FormActionBar,
   FormGrid,
   FormStatus,
@@ -30,26 +25,9 @@ import { answerPromptError } from "./answer-prompt.logic";
 const PROMPT_MAX = 50000;
 
 /**
- * 編集できるプロンプト（回答生成のプロンプト `vlm_answer` / 図・画像の読み取りプロンプト `image_retrieval`）を 1 つ編集する。
+ * 編集できるプロンプト（生成の役割の文 `generation.role`・図の読み取り `image_retrieval` など）を 1 つ編集する。
  * 全体で 1 つの設定（検索・回答プロファイル・文書レシピでは上書きしない）。保存した内容は次の回答・次の解析から使う。
- */
-export function AnswerPromptCard({ promptKey }: { promptKey: AnswerPromptKey }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t(`settings.answerPrompts.${promptKey}.title` as I18nKey)}</CardTitle>
-        <CardDescription>{t(`settings.answerPrompts.${promptKey}.description` as I18nKey)}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <AnswerPromptPanel promptKey={promptKey} />
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * カードの枠を持たないプロンプトの編集欄。ほかの設定の節の中に置くときに使う
- * （文書解析の「解析後の処理」の Vision の中の読み取りプロンプト。#528）。
+ * カードの枠は持たず、ほかの設定の節の中に置く。
  */
 export function AnswerPromptPanel({
   promptKey,

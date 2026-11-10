@@ -238,15 +238,18 @@ async function mockAnswerPrompts(page: Page) {
       json: apiEnvelope({
         prompts: [
           {
-            key: "vlm_answer",
-            content: "次の質問に答えてください。\n{{question}}\n{{answer_context}}",
-            default_content: "既定のテンプレート {{question}} {{answer_context}}",
+            key: "generation.role",
+            content: "## Step 1: 合成の保存した役割の文",
+            default_content: "## Step 1: 合成の役割の文",
             customized: true,
-            required_placeholders: ["question", "answer_context"],
+            required_placeholders: [],
             updated_at: "2026-09-26T01:00:00Z",
           },
         ],
-        stages: [{ id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] }],
+        stages: [
+          { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
+          { id: "generation", phase: "generation", prompts: [{ id: "role", content: "## Step 1: 合成の保存した役割の文", prompt_key: "generation.role" }, { id: "fixed", content: "## Step 2: 合成の固定の指示" }] },
+        ],
       }),
     })
   );
@@ -715,7 +718,8 @@ const SCREENS: FormScreen[] = [
     path: "/settings/prompts",
     mock: mockAnswerPrompts,
     open: async (page) => {
-      await expect(page.locator("#answer-prompt-vlm_answer")).toBeVisible();
+      await page.getByTestId("answer-prompt-stage-generation").locator("summary").click();
+      await expect(page.locator("#answer-prompt-generation\\.role")).toBeVisible();
     },
   },
   {

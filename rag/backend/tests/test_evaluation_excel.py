@@ -917,12 +917,12 @@ def test_template_guide_describes_current_metrics_and_unassessed_results() -> No
     book = load_workbook(BytesIO(template_xlsx()))
     rows = list(book[GUIDE_SHEET_TITLE].iter_rows(values_only=True))
     metrics = [row for row in rows if row[0] in {"検索", "回答", "応答の判断"}]
-    assert [row[0] for row in metrics] == ["検索", "検索", "回答", "回答", "回答", "応答の判断"]
+    assert [row[0] for row in metrics] == ["検索", "検索", "回答", "応答の判断"]
     assert all(row[2] and row[3] for row in metrics)
     text = "\n".join(str(value) for row in rows for value in row if value)
     for phrase in [
         "未評価は 0 点でも合格でもありません",
-        "同じ六指標・閾値",
+        "同じ指標・閾値",
         "所要時間は設定や処理状況",
         "表示用に丸める前",
         "入力しただけでは評価の期待に追加されません",
@@ -930,7 +930,8 @@ def test_template_guide_describes_current_metrics_and_unassessed_results() -> No
         assert phrase in text
     assert "約 2 倍" not in text
     assert "閾値 90%" not in text
-    assert "正確性・網羅性" in book[CASES_SHEET_TITLE]["C1"].comment.text
+    assert "正確性を意味に基づいて採点" in book[CASES_SHEET_TITLE]["C1"].comment.text
+    assert "網羅" not in book[CASES_SHEET_TITLE]["C1"].comment.text
 
 
 @pytest.mark.parametrize("endpoint", ["template", "import"])

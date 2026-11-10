@@ -1,0 +1,280 @@
+{
+  "schema_name": "production-ready-rag-oracle-26ai",
+  "schema_version": "3",
+  "sections": [
+    {
+      "name": "system_schema_control",
+      "sha256": "2dff8b900ed90193e8e8178eb8062d353c00c004c7cb35706aa14ae5ba4fcad8",
+      "statement_count": 3,
+      "table_name": "rag_schema_operations"
+    },
+    {
+      "name": "language_pack_releases",
+      "sha256": "e0905d83fd99c2240c5a8a32a485bed2d99faa9c6d8a732f7546d5c80cb987df",
+      "statement_count": 5,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "name": "documents",
+      "sha256": "b343fc27ccf509b1e8b7cc8a25e894c1bc61e77e3c64711cb9d6399ed04c1dbd",
+      "statement_count": 5,
+      "table_name": "rag_documents"
+    },
+    {
+      "name": "document_recipes",
+      "sha256": "93b840e1cbc6edc57fa12c22945d645773acf9e607889a1b9e74636e7a0db52a",
+      "statement_count": 2,
+      "table_name": "rag_document_recipes"
+    },
+    {
+      "name": "knowledge_bases",
+      "sha256": "5aaf4dfd8fc9df5a07fbe3d5f7d2274c7216b0bf299d646c4e3947fc0f26b360",
+      "statement_count": 6,
+      "table_name": "rag_knowledge_bases"
+    },
+    {
+      "name": "structure_index_jobs",
+      "sha256": "4fde1b823adf438f7f7b3707eff056f0f873161a64b3b63dae2c239ecd5ecde2",
+      "statement_count": 2,
+      "table_name": "rag_structure_index_jobs"
+    },
+    {
+      "name": "search_answer_profiles",
+      "sha256": "96ee2152101b127d80a263bf1cd969ec9cc5ee2ea8472bdddf4a3e9581d02b44",
+      "statement_count": 3,
+      "table_name": "rag_search_answer_profiles"
+    },
+    {
+      "name": "answer_records",
+      "sha256": "19eb3d039ed981ba2e649cca93c5e8f127c0976f623999b4b4d39dd989956a7e",
+      "statement_count": 3,
+      "table_name": "rag_answer_records"
+    },
+    {
+      "name": "answer_prompts",
+      "sha256": "635471566c5918742963b2de0d87fc267db5cfebd2588dd02995c26df44736e6",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
+    },
+    {
+      "name": "run_history",
+      "sha256": "6cde03cddd47ebb759ebc00fa3a108d7969fd4c950f1f7131d7779407334c674",
+      "statement_count": 4,
+      "table_name": "rag_run_history"
+    },
+    {
+      "name": "document_categories",
+      "sha256": "4be468cb42862ffe25eff648fa627520c73d16a62fec5866ea55c5e7ff2cb08e",
+      "statement_count": 3,
+      "table_name": "rag_document_categories"
+    },
+    {
+      "name": "document_cleanups",
+      "sha256": "bd228ba1934446965b37d3b9b459720104b2cfc1e18124794d3fdf631f75574b",
+      "statement_count": 3,
+      "table_name": "rag_document_cleanups"
+    },
+    {
+      "name": "search_answer_profile_knowledge",
+      "sha256": "df04f6833e7a7c2dac0815bad75d1d640328413e4f1080fe75adda30f6d42a45",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profile_knowledge"
+    },
+    {
+      "name": "support_guides",
+      "sha256": "6af9d85af14293fa7417b236462a7758b1ed40741a52900346eae09b6a9b3e21",
+      "statement_count": 2,
+      "table_name": "rag_support_guides"
+    },
+    {
+      "name": "support_guide_revisions",
+      "sha256": "a141be526cbae6ca43363b3e123e93e6a2413319251f78a7d8ce210a8fa1b93d",
+      "statement_count": 1,
+      "table_name": "rag_support_guide_revisions"
+    },
+    {
+      "name": "support_guide_embeddings",
+      "sha256": "72d22a4e305ffce4f9dbff6e9d2ba3d1a303c0f5fbc05f94ecfa00a1302e2d16",
+      "statement_count": 1,
+      "table_name": "rag_support_guide_embeddings"
+    },
+    {
+      "name": "document_sections",
+      "sha256": "42051197d12b18c1328995cfd6e5b616e076bf2ca151cc67aac0a12fc9c6b20f",
+      "statement_count": 1,
+      "table_name": "rag_document_sections"
+    },
+    {
+      "name": "document_section_revisions",
+      "sha256": "6ecc1c7fdfc7ee6c6a79aeaa8e0d96a2b2251f94ef2fc4f427921206ddea94a4",
+      "statement_count": 1,
+      "table_name": "rag_document_section_revisions"
+    },
+    {
+      "name": "conversations",
+      "sha256": "978c23b808df77fc6749d885046d95cf6d03de35c5b2e1db4232719a42d97921",
+      "statement_count": 3,
+      "table_name": "rag_conversations"
+    },
+    {
+      "name": "messages",
+      "sha256": "b8f6f7dfb32aa2812a699fc0b96db240c73b7156c3c495a2b21cb4b91a98a505",
+      "statement_count": 5,
+      "table_name": "rag_messages"
+    },
+    {
+      "name": "ingestion_jobs",
+      "sha256": "49ae48e492f024dad8d501d432ce14dcb1a0f89d1d96c020cb4f614a9417e322",
+      "statement_count": 5,
+      "table_name": "rag_ingestion_jobs"
+    },
+    {
+      "name": "ingestion_segments",
+      "sha256": "deff00ec4af0a54fd4337034ecbfe80f5fb3563411d232d8a26e0dbd04c12a79",
+      "statement_count": 4,
+      "table_name": "rag_ingestion_segments"
+    },
+    {
+      "name": "chunks",
+      "sha256": "ad05e03f30fffc2c883f34946f9917e3f8ddd1491c36e4994cd42f6afa50ee1a",
+      "statement_count": 7,
+      "table_name": "rag_chunks"
+    },
+    {
+      "name": "native_hybrid",
+      "sha256": "49e4121ec836ffcbb1a680f112276a0ecae0caf5aed6f4a7ab8d90fc83b9b3f9",
+      "statement_count": 2,
+      "table_name": "rag_chunks"
+    },
+    {
+      "name": "chunk_sets",
+      "sha256": "cb04e335e9dcb601ae6db71845fbd8814a9a8d91cd85b361dd65eaf262c1da7c",
+      "statement_count": 12,
+      "table_name": "rag_chunk_sets"
+    },
+    {
+      "name": "native_maintenance",
+      "sha256": "bc95b9b96cbe52abbca2732ad4ad070ba5b04e0c76759aa689f8c1c591eb2bab",
+      "statement_count": 7,
+      "table_name": "rag_native_index_maintenance"
+    },
+    {
+      "name": "native_search_scopes",
+      "sha256": "db25cb7b589c678270c3553e2d7147a3c88b7467b359be600b99d3ec58b198fc",
+      "statement_count": 4,
+      "table_name": "rag_native_search_scopes"
+    },
+    {
+      "name": "search_audit",
+      "sha256": "5bb5a68bdd79fa3c684ff12abdd42676a14e645c1eb56a6a625e6ee0f0f652ff",
+      "statement_count": 6,
+      "table_name": "rag_search_audit"
+    },
+    {
+      "name": "ingestion_audit",
+      "sha256": "e9a615b4968a555486efd3f45d2b97dec89445104e59bae1f8b66be18ac09614",
+      "statement_count": 6,
+      "table_name": "rag_ingestion_audit"
+    },
+    {
+      "name": "knowledge_graph",
+      "sha256": "61395b9d187e6c1b8e822d332440cd08f21375b3070125b4d29599980e613358",
+      "statement_count": 9,
+      "table_name": "rag_graph_entities"
+    },
+    {
+      "name": "graph_references",
+      "sha256": "3cc278ac7a91d9609e9187738c9b708d8bd77d65ae8ffeed2db83b3b1d967fde",
+      "statement_count": 3,
+      "table_name": "rag_graph_references"
+    },
+    {
+      "name": "foreign_key_lock_indexes",
+      "sha256": "00cacce2c963823a239361874fe4ec5089b84ea3db0330c205ebf0660b6aa8ec",
+      "statement_count": 4,
+      "table_name": "rag_graph_references"
+    },
+    {
+      "name": "document_extraction_revisions",
+      "sha256": "7464f9f43549f13f19a95962ac16840b552274f557710f15519f6882a5f0017f",
+      "statement_count": 1,
+      "table_name": "rag_document_extraction_revisions"
+    },
+    {
+      "name": "entities",
+      "sha256": "bca5d12a967c8577e3ab9f36a5bd03de4db4bd6f21564441c332883f34346c62",
+      "statement_count": 7,
+      "table_name": "rag_entities"
+    },
+    {
+      "name": "section_map",
+      "sha256": "645b2637677e0d34af5689ecbe9d4bb28e87606ef5765fb51329d0204fb99e0d",
+      "statement_count": 5,
+      "table_name": "rag_chunk_set_sections"
+    },
+    {
+      "name": "recipe_version_log",
+      "sha256": "6eaef5a4b3cb2f554ea8a4258742fc036c3337e5a602af97fa5e282e05d44b55",
+      "statement_count": 3,
+      "table_name": "rag_recipe_version_log"
+    },
+    {
+      "name": "citation_feedback",
+      "sha256": "9893d4830e8aa37604b77abbefb4b29401c7583b103f4f813f446b8f31c58da8",
+      "statement_count": 5,
+      "table_name": "rag_citation_feedback"
+    },
+    {
+      "name": "feedback_details",
+      "sha256": "1397717e187f8aa0208a305c645564084320d84a16ceaf76b8a654f9c3a7d1fd",
+      "statement_count": 4,
+      "table_name": "rag_feedback_details"
+    },
+    {
+      "name": "evaluation_artifacts",
+      "sha256": "c9c9b1cfe2e597d54078b87486ffc9425f39b12b95931a8d823416dd6fbe701f",
+      "statement_count": 3,
+      "table_name": "rag_evaluation_runs"
+    },
+    {
+      "name": "evaluation_source_workbooks",
+      "sha256": "fd755cf8dc304b1bc405b19d876f099b8eac927bf50dce1be82a17f120ae54b5",
+      "statement_count": 2,
+      "table_name": "rag_evaluation_source_workbooks"
+    },
+    {
+      "name": "evaluation_jobs",
+      "sha256": "14f2fba4ba1d08e75ed149d33e4b3078803df9a0e30674e1446975593c943596",
+      "statement_count": 4,
+      "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "name": "evaluation_job_case_results",
+      "sha256": "876f9ca258ac73980dbcfafa27224dbbc9c28406bc7acadb78ee36ffb1a31587",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_job_case_results"
+    },
+    {
+      "name": "evaluation_testsets",
+      "sha256": "27ada7414c1e2df88ff984e97eeba4d3188e65500832203b50753c066986310f",
+      "statement_count": 2,
+      "table_name": "rag_evaluation_testsets"
+    },
+    {
+      "name": "role_access",
+      "sha256": "696a3eddedfd2f6dbbfbde1a774eda90f32aa7bc66e5c8c4f476a90de2591aae",
+      "statement_count": 5,
+      "table_name": "rag_role_permissions"
+    }
+  ],
+  "sha256": "a49cea7e6f779117c009b588cab2aecd78a58b9d5f5ff7c1e7e1eab59381f2bd",
+  "statement_count": 161,
+  "vector_contract": "VECTOR(1536, FLOAT32)",
+  "vector_index": {
+    "distance": "COSINE",
+    "efconstruction": 800,
+    "neighbors": 48,
+    "target_accuracy": 98,
+    "type": "HNSW"
+  }
+}

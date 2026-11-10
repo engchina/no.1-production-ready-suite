@@ -34,7 +34,7 @@ from rag_engine.resources.runtime import resolve_prompt
 # 重なる根拠の印（bool）にも使う。回答はこの根拠を必ず検討する（要求の計画で使うか unrelated かを決める。#3526）。
 ARTICLE_CATALOG_KEY = "article_catalog"
 # 条で構成された文書（XML ツリー JSON の段落）の根拠の印（record の metadata と、回答の根拠 span の key。#3526）。
-# 文書の構造で決める（語の一覧を持たない）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+# 文書の構造で決める（語の一覧を持たない）。回答はこの根拠を出典にして説明する。
 ARTICLE_UNIT_KEY = "article_unit"
 
 ARTICLE_SELECTION_SYSTEM_PROMPT = (

@@ -49,7 +49,7 @@ class _Flow:
 
     def run(self) -> str:
         try:
-            for name in ("質問の理解", "文書検索", "回答文の生成と根拠確認"):
+            for name in ("質問の理解", "文書検索", "回答文の生成と引用の確認"):
                 with _execution_step(name):
                     self.steps.append(name)
                     self._llm()

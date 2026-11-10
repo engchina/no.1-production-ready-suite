@@ -84,9 +84,49 @@ def test_export_keeps_full_inputs_scores_unassessed_and_comparison() -> None:
     assert sheet["I2"].value == 0.5
     assert sheet["I2"].number_format == "0.0%"
     assert sheet["J2"].value == "未評価"
-    assert sheet["AA2"].value == "trace-a"
+    assert sheet["X2"].value == "trace-a"
     assert sheet.freeze_panes == "B2"
     assert book["概要"]["C1"].value == "比較対象: プロファイル B"
+
+
+def test_saved_old_result_keeps_its_verdict_without_retired_columns() -> None:
+    """保存済みの古い結果（網羅・裏付けの値つき）は読めて、合否は保存した値のまま（#4781）。
+
+    画面と Excel は正確性とコードで計算する指標だけを出し、古い列は出さない。合否は計算し直さない。
+    """
+    case = {
+        "case_id": "row-2",
+        "trace_id": "trace-a",
+        "elapsed_ms": 10,
+        "answer_correctness": 1.0,
+        "requirement_coverage": 0.5,
+        "claim_support_rate": 1.0,
+        "evidence_coverage": 0.5,
+        "failure_reasons": ["missing_content"],
+    }
+    saved = {
+        "metrics_version": "six_metrics_v1",
+        "case_count": 1,
+        "answer_correctness": 1.0,
+        "requirement_coverage": 0.5,
+        "claim_support_rate": 1.0,
+        "passed": False,
+        "threshold_failures": [{"metric": "requirement_coverage", "actual": 0.5, "threshold": 0.9}],
+        "failure_reason_counts": {"missing_content": 1},
+        "case_results": [case],
+    }
+    result = EvaluationMetrics.model_validate(saved)
+    assert result.passed is False
+    assert result.metrics_version == "six_metrics_v1"
+    assert result.threshold_failures[0].metric == "requirement_coverage"
+    book = load_workbook(BytesIO(evaluation_results_xlsx(result, inputs())))
+    headers = [cell.value for cell in book["主条件の結果"][1]]
+    assert "回答の正確性" in headers
+    assert not {"回答の網羅性", "根拠への忠実性", "根拠の網羅率（参考）"} & set(headers)
+    summary = [row[0].value for row in book["概要"].iter_rows()]
+    assert "回答の網羅性" not in summary
+    reasons = book["主条件の結果"].cell(row=2, column=headers.index("失敗理由") + 1).value
+    assert reasons == "標準回答の必要な項目が抜けている"
 
 
 @pytest.mark.parametrize(

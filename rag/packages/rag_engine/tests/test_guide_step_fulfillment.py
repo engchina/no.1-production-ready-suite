@@ -5,7 +5,6 @@
 本文の不足と回答の構造の要求（`guide:<手順 id>`）に示す。
 """
 
-import json
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -57,10 +56,6 @@ def _ids(ctx, knowledge, question=QUESTION):
 
 def _drafts(model):
     return [prompt for name, prompt in model.prompts if name.endswith("GroundedDraftWire")]
-
-
-def _audits(model):
-    return [json.loads(prompt) for name, prompt in model.prompts if name == "GroundedAudit"]
 
 
 def _requests(response):
