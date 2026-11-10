@@ -1748,6 +1748,24 @@ export const ja = {
   "searchAnswerProfiles.faq.enabled.help":
     "チャットでは、質問に近い登録済みQ&Aを最大 3 件と「どれでもない」を出し、選んでから回答します。選んだQ&Aは質問と一緒に LLM に渡します。RAG 検索でも候補を出します。",
   "searchAnswerProfiles.faq.enabled.error": "類似問の提示の設定を保存できませんでした。",
+  "searchAnswerProfiles.faq.directAnswer.label": "一致度が高いときは、Q&A の回答をそのまま返す",
+  "searchAnswerProfiles.faq.directAnswer.help":
+    "チャットで、質問が登録済みQ&Aの質問と下限以上の一致度で一致したとき、資料の検索と回答の生成をせずに、登録された回答をそのまま返します（LLM を使いません）。下限に届かないときは、候補を出して選ぶ流れのままです。「回答の前に関連するQ&Aを提示する」がオンのときに使えます。",
+  "searchAnswerProfiles.faq.directAnswer.error": "Q&A の回答をそのまま返す設定を保存できませんでした。",
+  "searchAnswerProfiles.faq.directAnswer.minScore": "一致度の下限は {value}% です（全体設定）。",
+  "searchAnswerProfiles.faq.negative.label": "当てはめない質問",
+  "searchAnswerProfiles.faq.negative.help":
+    "この Q&A を当てたくない質問の例を、1 行に 1 つ書きます（20 件まで）。質問がこの例に近いときは、この Q&A を候補に出さず、回答にも使いません。",
+  "searchAnswerProfiles.faq.negative.tooMany": "当てはめない質問は 20 件までです。",
+  "searchAnswerProfiles.faq.negative.tooLong": "当てはめない質問は 1 件 1000 文字までです。",
+  "searchAnswerProfiles.faq.negative.summary": "当てはめない質問: {count} 件",
+  "searchAnswerProfiles.faq.negative.edit.action": "当てはめない質問を編集",
+  "searchAnswerProfiles.faq.negative.edit.title": "当てはめない質問を編集",
+  "searchAnswerProfiles.faq.negative.edit.close": "閉じる",
+  "searchAnswerProfiles.faq.negative.edit.submit": "保存",
+  "searchAnswerProfiles.faq.negative.edit.cancel": "キャンセル",
+  "searchAnswerProfiles.faq.negative.edit.done": "当てはめない質問を保存しました。",
+  "searchAnswerProfiles.faq.negative.edit.error": "当てはめない質問を保存できませんでした。",
   "searchAnswerProfiles.faq.question": "質問（QUESTION）",
   "searchAnswerProfiles.faq.answer": "回答（ANSWER）",
   "searchAnswerProfiles.faq.error.questionRequired": "質問を入力してください。",
@@ -1767,7 +1785,7 @@ export const ja = {
     "追加または Excel 取込で登録すると、検索時に類似問として提示されます。",
   "searchAnswerProfiles.faq.importTitle": "Excel 取込",
   "searchAnswerProfiles.faq.importHelp":
-    "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。",
+    "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。任意の NEGATIVE_QUESTIONS 列には、当てはめない質問をセル内で改行して入力できます。",
   "searchAnswerProfiles.faq.importFile": "取込む Excel ファイル",
   "searchAnswerProfiles.faq.importModeLabel": "取込モード",
   "searchAnswerProfiles.faq.importMode.INSERT": "追加（同じ質問はスキップ）",
@@ -3658,6 +3676,7 @@ export const ja = {
   "search.answerModel.help": "選んだモデルで回答全体を作ります（未選択なら既定のテキストモデル）。画像対応モデルを選ぶと根拠の図や画像も添付し、テキストモデルでは取り込み時に作った図の説明で答えます。",
   "chat.column.model": "回答モデル: {name}",
   "chat.column.modelWithImages": "回答モデル: {name}（画像も参照）",
+  "chat.column.faqDirect": "登録済みQ&Aの回答",
   "search.answerDetails.confidence": "信頼度: {value}",
   "search.answerDetails.outcome.conditional": "条件付きの回答",
   "search.answerDetails.outcome.needs_clarification": "確認が必要",
@@ -3696,6 +3715,9 @@ export const ja = {
   "search.answerDetails.faqSource.answerMissing": "この回答の記録には、登録された回答の原文が残っていません。",
   "search.answerDetails.faqSource.note":
     "回答は、この登録された回答だけをもとに作成しました。表示は回答した時点の内容です。",
+  "search.answerDetails.faqDirect.title": "登録済みQ&Aの回答をそのまま表示しています",
+  "search.answerDetails.faqDirect.body":
+    "質問が登録済みQ&Aと一致したため（一致度 {score}%）、資料の検索と回答の生成はしていません。引用はありません。",
   "search.history.loadError": "保存された回答を読み込めませんでした。",
   "search.previewSource.loading": "引用した版のファイルを確認しています",
   "search.previewSource.error": "引用した版のファイルを確認できませんでした。",
@@ -4082,6 +4104,7 @@ export const ja = {
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "質問を補い、検索が要るかを分ける",
   "search.stage.smallTalkReply": "検索せずに短く応じる",
+  "search.stage.faqDirectMatch": "登録済みQ&Aと照合する",
   "search.stage.attachmentEvidence": "会話の添付から根拠を選ぶ",
   "search.stage.answer": "質問の条件を整理して回答を作る",
   // 回答を作らない RAG 検索（チャットと同じ流れを回答の生成の手前で止める。#3506）

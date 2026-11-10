@@ -1826,6 +1826,7 @@ for (const viewport of [
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
     await expect(choice).toHaveCount(0);
     expect(streamBodies[0]).toMatchObject({ content: "経費の上限は？", approved_faq_id: "faq-2" });
+    expect(streamBodies[0]).not.toHaveProperty("approved_faq_declined");
 
     // 「どれでもない」は類似問を使わずに送る。
     await composer.fill("交通費は？");
@@ -1834,10 +1835,138 @@ for (const viewport of [
       .getByRole("button", { name: "どれでもない（資料を検索する）" })
       .click();
     await expect.poll(() => streamBodies.length).toBe(2);
-    expect(streamBodies[1]).toMatchObject({ content: "交通費は？" });
+    // 候補を断った質問には、Q&A の回答をそのまま返さないよう伝える（#4788）。
+    expect(streamBodies[1]).toMatchObject({ content: "交通費は？", approved_faq_declined: true });
     expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
   });
 }
+
+// #4788: 一致度が下限以上の質問は候補を選ばせずに送り、登録済みQ&Aの回答をそのまま返した回答に案内と照合の段を出す。
+test("登録済みQ&Aの回答をそのまま返した回答は、案内と照合の段を出し、候補を選ばせない（#4788）", { tag: "@responsive" }, async ({ page }) => {
+  const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
+  let seq = 0;
+  const step = (stepId: string, kind: string, start: number, end: number, details?: Record<string, unknown>) => ({
+    schema_version: 1,
+    seq: ++seq,
+    target_id: "a1",
+    attempt: 0,
+    emitted_at: at(end),
+    type: "step",
+    step_id: stepId,
+    kind,
+    status: "done",
+    started_at: at(start),
+    finished_at: at(end),
+    ...(details ? { details } : {}),
+    name: `rag.${kind}`,
+    parent_id: "s0",
+    trace_id: SPAN_TRACE_ID,
+  });
+  const faqQuestion = "合成の設定 A はどこで変えますか？";
+  const progress = [
+    { ...step("s0", "s0", 0, 1.5), name: "rag.answer", parent_id: undefined, root: true },
+    step("s1", "history_rewrite", 0, 1.2, {
+      fields: [
+        { label: "参照した会話", value: "なし（会話の最初の発話）" },
+        { label: "結果", value: "書き換えなし（元の質問のまま）" },
+      ],
+    }),
+    step("s2", "faq_direct_match", 1.2, 1.5, {
+      fields: [
+        { label: "結果", value: "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）" },
+        { label: "一致した Q&A", value: faqQuestion },
+        { label: "一致度", value: "1.00（下限 0.92）" },
+      ],
+    }),
+    { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(1.5), type: "terminal", status: "done" },
+  ];
+  const faqAnswer = "合成の画面 A の設定タブで変えます。";
+  const answerDiagnostics = {
+    answer_source: "approved_faq",
+    outcome: "answered",
+    approved_faq_question: faqQuestion,
+    approved_faq_answer: faqAnswer,
+    approved_faq_direct: { faq_id: "faq-1", matched_question: faqQuestion, score: 1, min_score: 0.92, match_method: "text" },
+    models: { embedding: "", rerank: "" },
+  };
+  const answerText = `${faqAnswer}\n\n（出典: 承認済み FAQ「${faqQuestion}」）`;
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: answerText })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics, notice: NOTICE })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(
+    page,
+    "ready",
+    [
+      { ...userMessage, content: faqQuestion },
+      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_direct_score: 1, notice: NOTICE },
+    ],
+    { streamBody },
+  );
+  const suggestQueries: Record<string, unknown>[] = [];
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
+    suggestQueries.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      json: { data: { suggestions: [], direct_answer: true }, error_messages: [], warning_messages: [] },
+    });
+  });
+  const streamBodies: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/messages/stream")) {
+      streamBodies.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  if (await history.isVisible().catch(() => false)) {
+    await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
+  }
+
+  // 保存済みの回答: 本文は登録された回答そのままで、末尾に出典の行。見出しはモデル名ではなく Q&A の回答と示し、
+  // 直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。処理の経過に照合の段と結果を出す。
+  await expect(page.getByText(faqAnswer).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 承認済み FAQ「${faqQuestion}」`);
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
+  const notice = page.getByTestId("answer-faq-direct");
+  await expect(notice).toContainText("登録済みQ&Aの回答をそのまま表示しています");
+  await expect(notice).toContainText(
+    "質問が登録済みQ&Aと一致したため（一致度 100%）、資料の検索と回答の生成はしていません。引用はありません。",
+  );
+  const summary = page.getByTestId("chat-answer-progress-summary");
+  await expect(summary).toHaveText("処理の経過（2 ステップ・1.5 秒）");
+  await summary.click();
+  await expect(page.getByTestId("chat-answer-progress-step-s2")).toContainText("登録済みQ&Aと照合する");
+  await expect(page.getByRole("region", { name: "処理の経過" }).locator("[data-run-result-summary]")).toHaveText([
+    "書き換えなし（元の質問のまま）",
+    "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）",
+  ]);
+  // 検索していないので、根拠の一覧（AI に渡した件数）は出ない。
+  await expect(page.locator("summary").filter({ hasText: /AI に渡した/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+
+  // 送信の前の照会が「そのまま返す見込み」を返したら、候補を選ばせずに送る。
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("合成の設定 A はどこ？");
+  await page.getByRole("button", { name: "送信" }).click();
+  await expect.poll(() => streamBodies.length).toBe(1);
+  await expect(page.getByTestId("chat-approved-faq-choice")).toHaveCount(0);
+  expect(suggestQueries).toEqual([{ query: "合成の設定 A はどこ？", purpose: "chat" }]);
+  // 届いた回答にも、同じ見出しと案内を出す（配信の診断から読む）。
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true }).last()).toBeVisible();
+  await expect(page.getByTestId("answer-faq-direct").last()).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  expect(streamBodies[0]).toMatchObject({ content: "合成の設定 A はどこ？" });
+  expect(streamBodies[0]).not.toHaveProperty("approved_faq_id");
+  expect(streamBodies[0]).not.toHaveProperty("approved_faq_declined");
+});
 
 
 // #737: 登録済みQ&Aから回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。

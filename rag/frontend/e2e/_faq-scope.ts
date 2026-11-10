@@ -32,7 +32,7 @@ export const knowledgeBases = [
   { id: "kb-3", name: "ナレッジベース C", in_profile: false },
 ];
 
-const base = { alternate_questions: [], status: "approved", source_document_ids: [] };
+const base = { alternate_questions: [], negative_questions: [], status: "approved", source_document_ids: [] };
 
 export const faqRecords = [
   {
@@ -72,8 +72,16 @@ export const faqRecords = [
   },
 ];
 
-export function faqList(records: unknown[] = faqRecords) {
-  return { search_answer_profile_id: "bv-1", records, enabled: true, knowledge_bases: knowledgeBases };
+export function faqList(records: unknown[] = faqRecords, settings: Record<string, unknown> = {}) {
+  return {
+    search_answer_profile_id: "bv-1",
+    records,
+    enabled: true,
+    direct_answer_enabled: false,
+    direct_answer_min_score: 0.92,
+    knowledge_bases: knowledgeBases,
+    ...settings,
+  };
 }
 
 export async function mockFaqScopeApi(

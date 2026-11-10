@@ -14,18 +14,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pr_backend_core.logging import safe_exception_fields
 from rag_engine.knowledge.approved_faq import (
     APPROVED_FAQ_APPROVED_STATUS,
     APPROVED_FAQ_IMPORT_MODES,
+    APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY,
     APPROVED_FAQ_TARGET_KNOWLEDGE_BASES_KEY,
-    DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
     DEFAULT_APPROVED_FAQ_MIN_SCORE,
+    DEFAULT_APPROVED_FAQ_NEGATIVE_MIN_SCORE,
     DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
     ApprovedFaqImportRow,
     ApprovedFaqMutationResult,
+    ApprovedFaqRanking,
     ApprovedFaqRecord,
     ApprovedFaqSemanticIndex,
     ApprovedFaqSourceDocument,
@@ -41,7 +43,8 @@ from rag_engine.knowledge.approved_faq import (
     load_approved_faq_payload,
     load_approved_faq_records,
     load_approved_faq_semantic_index,
-    suggest_approved_faq_questions,
+    normalize_approved_faq_negative_questions,
+    rank_approved_faq_questions,
 )
 from rag_engine.knowledge.domain_keyword_candidates import (
     DomainKeywordCandidate,
@@ -65,6 +68,7 @@ from rag_engine.knowledge.runtime_knowledge_management import (
 )
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
+from app.config import Settings
 from app.rag.approved_faq_scope import (
     ApprovedFaqScopeState,
     FaqSourceDocumentState,
@@ -233,11 +237,24 @@ class ApprovedFaqSnapshot:
 
 
 FAQ_ENABLED_KEY = "enabled"
+FAQ_DIRECT_ANSWER_ENABLED_KEY = "direct_answer_enabled"
+# FAQ の payload に持つ、検索・回答プロファイルごとの設定の key(FAQ の更新関数は知らない)。
+FAQ_SETTING_KEYS = (FAQ_ENABLED_KEY, FAQ_DIRECT_ANSWER_ENABLED_KEY)
 
 
 def approved_faq_enabled(payload: Mapping[str, object] | None) -> bool:
     """回答の前に類似問を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。"""
     return (payload or {}).get(FAQ_ENABLED_KEY) is not False
+
+
+def approved_faq_direct_answer_enabled(payload: Mapping[str, object] | None) -> bool:
+    """一致度が閾値以上のとき FAQ の回答をそのまま返すか(プロファイルごと。未設定はオフ。#4788)。
+
+    類似問の提示がオフのプロファイルは FAQ を使わないので、こちらもオフ。
+    """
+    return (
+        approved_faq_enabled(payload) and (payload or {}).get(FAQ_DIRECT_ANSWER_ENABLED_KEY) is True
+    )
 
 
 def migrate_approved_faq_targets(
@@ -327,10 +344,18 @@ async def load_approved_faq_enabled(
     return approved_faq_enabled(payload)
 
 
-async def save_approved_faq_enabled(
-    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, enabled: bool
+async def save_approved_faq_settings(
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
+    changes: Mapping[str, bool],
 ) -> None:
-    """類似問の提示のオン / オフを保存する(FAQ の登録内容は変えない)。"""
+    """プロファイルごとの FAQ の設定を保存する(FAQ の登録内容は変えない)。
+
+    ``changes`` は変える設定だけ(``FAQ_SETTING_KEYS``)。
+    """
+    unknown = set(changes) - set(FAQ_SETTING_KEYS)
+    if unknown:
+        raise ValueError(f"FAQ の設定に無い項目です: {sorted(unknown)}")
     payload = await store.get_search_answer_profile_knowledge(
         search_answer_profile_id, APPROVED_FAQ_KIND
     )
@@ -338,7 +363,7 @@ async def save_approved_faq_enabled(
         # 未登録なら FAQ の標準形式(空)に設定だけを持たせる。
         base = load_approved_faq_payload(path)
     await store.save_search_answer_profile_knowledge(
-        search_answer_profile_id, APPROVED_FAQ_KIND, {**base, FAQ_ENABLED_KEY: enabled}
+        search_answer_profile_id, APPROVED_FAQ_KIND, {**base, **changes}
     )
 
 
@@ -374,9 +399,9 @@ async def mutate_approved_faq(
         result = operation(path, profile_knowledge_base_ids)
         updated = load_approved_faq_payload(path)
         records = load_approved_faq_records(path)
-    if payload is not None and FAQ_ENABLED_KEY in payload:
-        # FAQ の更新関数は設定を知らないので、類似問の提示のオン / オフを引き継ぐ。
-        updated = {**updated, FAQ_ENABLED_KEY: payload[FAQ_ENABLED_KEY]}
+    if payload is not None:
+        # FAQ の更新関数は設定を知らないので、プロファイルごとの設定を引き継ぐ。
+        updated = {**updated, **{key: payload[key] for key in FAQ_SETTING_KEYS if key in payload}}
     await store.save_search_answer_profile_knowledge(
         search_answer_profile_id, APPROVED_FAQ_KIND, updated
     )
@@ -394,8 +419,12 @@ async def add_approved_faq(
     question: str,
     answer: str,
     target_knowledge_base_ids: Sequence[str] | None = None,
+    negative_questions: Sequence[str] = (),
 ) -> ApprovedFaqMutation:
-    """手入力の FAQ を追加する。対象の KB は選んだもの(未指定はプロファイルの全 KB)。"""
+    """手入力の FAQ を追加する。対象の KB は選んだもの(未指定はプロファイルの全 KB)。
+
+    ``negative_questions`` は否定の質問(この FAQ を当てたくない質問の例。#4788)。
+    """
     return await mutate_approved_faq(
         store,
         search_answer_profile_id,
@@ -407,7 +436,46 @@ async def add_approved_faq(
                 target_knowledge_base_ids, profile_kbs
             ),
             approval=current_approval(),
+            negative_questions=negative_questions,
         ),
+    )
+
+
+async def save_approved_faq_negative_questions(
+    store: ApprovedFaqStore,
+    search_answer_profile_id: str,
+    faq_id: str,
+    negative_questions: Sequence[str],
+) -> None:
+    """FAQ の否定の質問を置き換える(質問・回答・対象・承認は変えない。#4788)。
+
+    FAQ が無ければ KeyError。FAQ の質問(別名を含む)と同じ文・上限を超える数は ValueError。
+    """
+    profile_knowledge_base_ids = await _profile_knowledge_base_ids(store, search_answer_profile_id)
+    if profile_knowledge_base_ids is None:
+        raise KeyError(search_answer_profile_id)
+    payload = await _load_faq_payload(store, search_answer_profile_id, profile_knowledge_base_ids)
+    raw_records = (payload or {}).get("records")
+    records = raw_records if isinstance(raw_records, list) else []
+    index = next(
+        (
+            position
+            for position, raw in enumerate(records)
+            if isinstance(raw, dict) and str(raw.get("id") or "").strip() == faq_id
+        ),
+        None,
+    )
+    if payload is None or index is None:
+        raise KeyError(faq_id)
+    with _faq_file({**payload, "records": [records[index]]}) as path:
+        record = next(iter(load_approved_faq_records(path)), None)
+    if record is None:
+        raise KeyError(faq_id)
+    cleaned = normalize_approved_faq_negative_questions(negative_questions, record.match_questions)
+    updated_records = list(records)
+    updated_records[index] = {**records[index], APPROVED_FAQ_NEGATIVE_QUESTIONS_KEY: list(cleaned)}
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND, {**payload, "records": updated_records}
     )
 
 
@@ -546,36 +614,40 @@ async def import_approved_faq(
     return await mutate_approved_faq(store, search_answer_profile_id, operation)
 
 
-async def suggest_approved_faq(
+async def rank_approved_faq(
     store: ApprovedFaqStore,
     search_answer_profile_id: str,
     question: str,
     *,
     limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
     min_score: float | None = None,
+    negative_min_score: float = DEFAULT_APPROVED_FAQ_NEGATIVE_MIN_SCORE,
     embed: FaqEmbedder | None = None,
     embedding_model: str = "",
     embedding_dimensions: int = 1536,
-) -> list[ApprovedFaqSuggestion]:
-    """質問に近い承認済み FAQ を返す。
+    snapshot: ApprovedFaqSnapshot | None = None,
+) -> ApprovedFaqRanking:
+    """質問に近い承認済み FAQ(順位順)と、否定の質問に当たって外した FAQ を返す。
 
     文字列類似度に加え、embed 指定時は rag_poc の意味照合(FAQ 質問の embedding index)を使う。
     index は FAQ payload の ``semantic_index_cache`` に保持し、FAQ 集合の署名が変われば作り直す。
     embedding に失敗しても文字列照合で続ける。
 
     照合するのは今の利用者が使える FAQ だけ(停止していない・対象の KB をすべて使える。#4621)。
-    index は全 FAQ で作る(利用者ごとに作り直さない)。
+    index は全 FAQ で作る(利用者ごとに作り直さない)。質問が FAQ の質問より否定の質問に近い FAQ は
+    候補から外す(#4788)。``snapshot`` は呼び出し元が読んだ FAQ(読み直さない)。
     """
     if not question.strip():
-        return []
-    snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
+        return ApprovedFaqRanking()
+    if snapshot is None:
+        snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
     payload = snapshot.payload
     if payload is None or not approved_faq_enabled(payload):
-        return []
+        return ApprovedFaqRanking()
     records = snapshot.records
     usable = snapshot.usable_records()
     if not usable:
-        return []
+        return ApprovedFaqRanking()
     semantic_index: ApprovedFaqSemanticIndex | None = None
     query_embedding: list[float] | None = None
     if embed is not None:
@@ -595,13 +667,127 @@ async def suggest_approved_faq(
                 "approved faq semantic matching failed", extra={**safe_exception_fields(exc)}
             )
             semantic_index, query_embedding = None, None
-    return suggest_approved_faq_questions(
+    return rank_approved_faq_questions(
         question,
         usable,
         semantic_index=semantic_index,
         semantic_query_embedding=query_embedding,
         limit=limit,
         min_score=DEFAULT_APPROVED_FAQ_MIN_SCORE if min_score is None else min_score,
+        negative_min_score=negative_min_score,
+    )
+
+
+async def suggest_approved_faq(
+    store: ApprovedFaqStore,
+    search_answer_profile_id: str,
+    question: str,
+    **options: Any,
+) -> list[ApprovedFaqSuggestion]:
+    """質問に近い承認済み FAQ を返す(否定の質問に当たった FAQ は含めない)。"""
+    ranking = await rank_approved_faq(store, search_answer_profile_id, question, **options)
+    return list(ranking.suggestions)
+
+
+class FaqEmbeddingClient(Protocol):
+    async def embed(
+        self, texts: list[str], *, input_type: FaqEmbedInputType = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]: ...
+
+
+def approved_faq_match_options(
+    settings: Settings, genai: Callable[[], FaqEmbeddingClient]
+) -> dict[str, Any]:
+    """全体設定から決まる FAQ の照合の引数(否定の質問の下限と、意味照合の embedding)。
+
+    類似問の提示・送信の前の確認・回答の前の照合で同じ値を使う。``genai`` は embedding を
+    呼ぶときにだけ作る(意味照合がオフ・照合しないときは作らない)。
+    """
+    embed: FaqEmbedder | None = None
+    if settings.rag_approved_faq_semantic_enabled:
+
+        async def embed(texts: list[str], input_type: FaqEmbedInputType) -> list[list[float]]:
+            return await genai().embed(texts, input_type=input_type)
+
+    return {
+        "negative_min_score": settings.rag_approved_faq_negative_min_score,
+        "embed": embed,
+        "embedding_model": settings.oci_genai_embedding_model,
+        "embedding_dimensions": settings.oci_genai_embedding_dim,
+    }
+
+
+@dataclass(frozen=True)
+class DirectFaqMatch:
+    """FAQ の回答をそのまま返す設定がオンのプロファイルでの、質問と FAQ の照合の結果(#4788)。"""
+
+    min_score: float
+    # 1 位の候補(閾値未満を含む。候補が無ければ None)。
+    best: ApprovedFaqSuggestion | None
+    # 否定の質問に当たって候補から外した FAQ。
+    negative_excluded: tuple[ApprovedFaqSuggestion, ...] = ()
+
+    @property
+    def answer(self) -> ApprovedFaqSuggestion | None:
+        """回答をそのまま返す FAQ(1 位の一致度が閾値以上のときだけ)。"""
+        return self.best if self.best is not None and self.best.score >= self.min_score else None
+
+
+async def load_direct_faq_snapshot(
+    store: ApprovedFaqStore, search_answer_profile_id: str
+) -> ApprovedFaqSnapshot | None:
+    """FAQ の回答をそのまま返す設定がオンで、今の利用者が使える FAQ があるプロファイルの FAQ。
+
+    設定がオフ(既定)・使える FAQ が無い・読めないときは None(照合しない。embedding も呼ばない)。
+    """
+    try:
+        snapshot = await load_approved_faq_snapshot(store, search_answer_profile_id)
+    except Exception as exc:  # 照合は補助。呼び出し元はいつもの確認・検索・回答に進む。
+        logger.warning("approved faq direct match failed", extra={**safe_exception_fields(exc)})
+        return None
+    if not approved_faq_direct_answer_enabled(snapshot.payload) or not snapshot.usable_records():
+        return None
+    return snapshot
+
+
+async def match_direct_approved_faq(
+    store: ApprovedFaqStore,
+    search_answer_profile_id: str,
+    question: str,
+    settings: Settings,
+    genai: Callable[[], FaqEmbeddingClient],
+    *,
+    snapshot: ApprovedFaqSnapshot | None = None,
+) -> DirectFaqMatch | None:
+    """質問を承認済み FAQ と照合し、回答をそのまま返せるかを決める(LLM を呼ばない。#4788)。
+
+    プロファイルの「そのまま返す」がオフ(既定)・FAQ が無いときは None。使える FAQ・否定の質問の
+    扱いは類似問の提示(``rank_approved_faq``)と同じ。照合は補助なので、失敗しても None(呼び出し
+    元はいつもの確認・検索・回答に進む)。``snapshot`` は ``load_direct_faq_snapshot`` で読んだ FAQ
+    (読み直さない)。
+    """
+    if not question.strip():
+        return None
+    if snapshot is None:
+        snapshot = await load_direct_faq_snapshot(store, search_answer_profile_id)
+        if snapshot is None:
+            return None
+    try:
+        ranking = await rank_approved_faq(
+            store,
+            search_answer_profile_id,
+            question,
+            limit=1,
+            snapshot=snapshot,
+            **approved_faq_match_options(settings, genai),
+        )
+    except Exception as exc:
+        logger.warning("approved faq direct match failed", extra={**safe_exception_fields(exc)})
+        return None
+    return DirectFaqMatch(
+        min_score=settings.rag_approved_faq_direct_answer_min_score,
+        best=ranking.suggestions[0] if ranking.suggestions else None,
+        negative_excluded=ranking.negative_excluded,
     )
 
 
@@ -640,9 +826,9 @@ async def _faq_semantic_index(
         return index, json.loads(cache_path.read_text(encoding="utf-8"))
 
 
-def is_direct_faq_match(suggestion: ApprovedFaqSuggestion) -> bool:
-    """rag_poc と同じく 0.92 以上を FAQ 回答をそのまま使える候補とみなす。"""
-    return suggestion.score >= DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE
+def is_direct_faq_match(suggestion: ApprovedFaqSuggestion, min_score: float) -> bool:
+    """一致度が ``min_score``(そのまま返す一致度の下限)以上の候補か。"""
+    return suggestion.score >= min_score
 
 
 @contextmanager

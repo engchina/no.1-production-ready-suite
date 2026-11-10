@@ -1,4 +1,4 @@
-import { CheckCircle2, FileSpreadsheet, ListChecks, Plus, Trash2, Upload } from "lucide-react";
+import { CheckCircle2, FileSpreadsheet, ListChecks, MessageSquareOff, Plus, Save, Trash2, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -35,6 +35,7 @@ import {
   type ApprovedFaqKnowledgeBaseData,
   type ApprovedFaqRecordData,
   type ApprovedFaqReviewReason,
+  type ApprovedFaqSettingsUpdate,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
@@ -45,6 +46,8 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields";
 import { initialLoadError, useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
+
+import { negativeQuestionsError, parseNegativeQuestions } from "./ApprovedFaqManager.logic";
 
 // 停止（要確認）の理由の文（#4621）。
 const REVIEW_REASON_KEYS: Record<ApprovedFaqReviewReason, I18nKey> = {
@@ -101,6 +104,11 @@ function FaqScopeSummary({
             })
           : t("searchAnswerProfiles.faq.targets.none")}
       </p>
+      {row.negative_questions.length > 0 ? (
+        <p data-testid={`approved-faq-negative-${row.id}`}>
+          {t("searchAnswerProfiles.faq.negative.summary", { count: row.negative_questions.length })}
+        </p>
+      ) : null}
       <p data-testid={`approved-faq-approval-${row.id}`}>
         {row.approved_at
           ? t("searchAnswerProfiles.faq.approval.summary", {
@@ -156,8 +164,17 @@ export function ApprovedFaqManager({
   );
   const add = useApprovedFaqMutation(
     searchAnswerProfileId,
-    (body: { question: string; answer: string; target_knowledge_base_ids: string[] }) =>
-      api.addApprovedFaq(searchAnswerProfileId, body),
+    (body: {
+      question: string;
+      answer: string;
+      target_knowledge_base_ids: string[];
+      negative_questions: string[];
+    }) => api.addApprovedFaq(searchAnswerProfileId, body),
+  );
+  const saveNegative = useApprovedFaqMutation(
+    searchAnswerProfileId,
+    (args: { faqId: string; questions: string[] }) =>
+      api.setApprovedFaqNegativeQuestions(searchAnswerProfileId, args.faqId, args.questions),
   );
   const confirmScope = useApprovedFaqMutation(
     searchAnswerProfileId,
@@ -167,9 +184,12 @@ export function ApprovedFaqManager({
   const remove = useApprovedFaqMutation(searchAnswerProfileId, (ids: string[]) =>
     api.deleteApprovedFaq(searchAnswerProfileId, ids),
   );
-  const setEnabled = useApprovedFaqMutation(searchAnswerProfileId, (enabled: boolean) =>
-    api.setApprovedFaqEnabled(searchAnswerProfileId, enabled),
+  const saveSettings = useApprovedFaqMutation(searchAnswerProfileId, (settings: ApprovedFaqSettingsUpdate) =>
+    api.setApprovedFaqSettings(searchAnswerProfileId, settings),
   );
+  const suggestionsEnabled = query.data?.enabled ?? true;
+  const directAnswerEnabled = query.data?.direct_answer_enabled ?? false;
+  const directMinScore = query.data?.direct_answer_min_score;
   const importFaq = useApprovedFaqMutation(
     searchAnswerProfileId,
     (args: { file: File; mode: ApprovedFaqImportMode; targets: string[] }) =>
@@ -177,6 +197,11 @@ export function ApprovedFaqManager({
   );
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [negativeText, setNegativeText] = useState("");
+  // 当てはめない質問を編集している FAQ と、欄の入力。
+  const [editingNegative, setEditingNegative] = useState<ApprovedFaqRecordData | null>(null);
+  const [editNegativeText, setEditNegativeText] = useState("");
+  const [editNegativeError, setEditNegativeError] = useState<string | null>(null);
   // null は既定（プロファイルの全 KB）。利用者が選び直したときだけ値を持つ。
   const [addTargets, setAddTargets] = useState<string[] | null>(null);
   const [importTargets, setImportTargets] = useState<string[] | null>(null);
@@ -187,6 +212,7 @@ export function ApprovedFaqManager({
   const [addErrors, setAddErrors] = useState<{
     question?: string | null;
     answer?: string | null;
+    negative?: string | null;
     targets?: string | null;
   }>({});
   const effectiveAddTargets = addTargets ?? allTargets;
@@ -218,6 +244,33 @@ export function ApprovedFaqManager({
       },
     );
   };
+  const openNegativeEdit = (row: ApprovedFaqRecordData) => {
+    setEditNegativeText(row.negative_questions.join("\n"));
+    setEditNegativeError(null);
+    setEditingNegative(row);
+  };
+  const submitNegativeEdit = () => {
+    if (!editingNegative) return;
+    const questions = parseNegativeQuestions(editNegativeText);
+    const invalid = negativeQuestionsError(questions);
+    if (invalid) {
+      setEditNegativeError(invalid);
+      document.getElementById("approved-faq-negative-edit")?.focus();
+      return;
+    }
+    saveNegative.mutate(
+      { faqId: editingNegative.id, questions },
+      {
+        onSuccess: () => {
+          setEditingNegative(null);
+          toast.success(t("searchAnswerProfiles.faq.negative.edit.done"));
+        },
+        // 保存できない理由（Q&A の質問と同じ文など）は欄の直下に出す。
+        onError: (error) =>
+          setEditNegativeError(errorMessage(error, t("searchAnswerProfiles.faq.negative.edit.error"))),
+      },
+    );
+  };
   const [file, setFile] = useState<File | null>(null);
   const [mode, setMode] = useState<ApprovedFaqImportMode>("INSERT");
   const [preview, setPreview] = useState<ApprovedFaqImportPreviewData | null>(
@@ -245,7 +298,7 @@ export function ApprovedFaqManager({
     });
   };
   // 追加前の Q&A 入力があるときだけ離脱を確認する。
-  useLeaveGuard(Boolean(question.trim() || answer.trim()));
+  useLeaveGuard(Boolean(question.trim() || answer.trim() || negativeText.trim()));
 
   const selectFile = async (next: File | null) => {
     setFile(next);
@@ -274,17 +327,55 @@ export function ApprovedFaqManager({
         <Switch
           checked={query.data?.enabled ?? true}
           // 読み込めていない間（読み込み中・失敗）は今の設定が分からないので切り替えさせない。
-          disabled={!query.data || setEnabled.isPending}
+          disabled={!query.data || saveSettings.isPending}
           onCheckedChange={(checked) =>
-            setEnabled.mutate(checked, {
-              onError: (error) =>
-                toast.error(errorMessage(error, t("searchAnswerProfiles.faq.enabled.error"))),
-            })
+            saveSettings.mutate(
+              { enabled: checked },
+              {
+                onError: (error) =>
+                  toast.error(errorMessage(error, t("searchAnswerProfiles.faq.enabled.error"))),
+              },
+            )
           }
           aria-labelledby="approved-faq-enabled-label"
           aria-describedby="approved-faq-enabled-help"
           data-testid="approved-faq-enabled"
         />
+      </div>
+      {/* 一致度が下限以上のとき、Q&A の回答をそのまま返す（プロファイルごと。既定はオフ。#4788）。 */}
+      <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p id="approved-faq-direct-label" className="text-sm font-medium text-fg">
+              {t("searchAnswerProfiles.faq.directAnswer.label")}
+            </p>
+            <p id="approved-faq-direct-help" className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+              {directMinScore === undefined
+                ? t("searchAnswerProfiles.faq.directAnswer.help")
+                : `${t("searchAnswerProfiles.faq.directAnswer.help")}${t(
+                    "searchAnswerProfiles.faq.directAnswer.minScore",
+                    { value: Math.round(directMinScore * 100) },
+                  )}`}
+            </p>
+          </div>
+          <Switch
+            checked={directAnswerEnabled}
+            // 類似問の提示がオフの間は Q&A を使わないので、切り替えさせない（保存値は残す）。
+            disabled={!query.data || !suggestionsEnabled || saveSettings.isPending}
+            onCheckedChange={(checked) =>
+              saveSettings.mutate(
+                { direct_answer_enabled: checked },
+                {
+                  onError: (error) =>
+                    toast.error(errorMessage(error, t("searchAnswerProfiles.faq.directAnswer.error"))),
+                },
+              )
+            }
+            aria-labelledby="approved-faq-direct-label"
+            aria-describedby="approved-faq-direct-help"
+            data-testid="approved-faq-direct-enabled"
+          />
+        </div>
       </div>
       {/* 件数は一覧の上の右に 1 か所（ListCount。#1891）。 */}
       <ListToolbar
@@ -360,6 +451,12 @@ export function ApprovedFaqManager({
                     onSelect: () => openConfirm(row),
                   },
                   {
+                    id: "negative",
+                    label: t("searchAnswerProfiles.faq.negative.edit.action"),
+                    icon: MessageSquareOff,
+                    onSelect: () => openNegativeEdit(row),
+                  },
+                  {
                     id: "delete",
                     label: t("searchAnswerProfiles.faq.delete"),
                     icon: Trash2,
@@ -425,6 +522,19 @@ export function ApprovedFaqManager({
             maxLength={20000}
             width="full"
           />
+          <TextareaField
+            id="approved-faq-negative"
+            label={t("searchAnswerProfiles.faq.negative.label")}
+            helper={t("searchAnswerProfiles.faq.negative.help")}
+            error={addErrors.negative ?? undefined}
+            value={negativeText}
+            onChange={(event) => {
+              setNegativeText(event.target.value);
+              setAddErrors((current) => ({ ...current, negative: null }));
+            }}
+            rows={3}
+            width="full"
+          />
           <SearchableMultiSelect
             id="approved-faq-targets"
             width="lg"
@@ -448,9 +558,11 @@ export function ApprovedFaqManager({
             icon={Plus}
             loading={add.isPending}
             onClick={() => {
+              const negativeQuestions = parseNegativeQuestions(negativeText);
               const nextErrors = {
                 question: requiredTextError(question, t("searchAnswerProfiles.faq.error.questionRequired")),
                 answer: requiredTextError(answer, t("searchAnswerProfiles.faq.error.answerRequired")),
+                negative: negativeQuestionsError(negativeQuestions),
                 targets: effectiveAddTargets.length ? null : targetsRequired,
               };
               setAddErrors(nextErrors);
@@ -458,6 +570,7 @@ export function ApprovedFaqManager({
                 focusFirstInvalidField([
                   ["approved-faq-question", nextErrors.question],
                   ["approved-faq-answer", nextErrors.answer],
+                  ["approved-faq-negative", nextErrors.negative],
                   ["approved-faq-targets", nextErrors.targets],
                 ])
               ) {
@@ -468,11 +581,13 @@ export function ApprovedFaqManager({
                   question: question.trim(),
                   answer: answer.trim(),
                   target_knowledge_base_ids: effectiveAddTargets,
+                  negative_questions: negativeQuestions,
                 },
                 {
                   onSuccess: () => {
                     setQuestion("");
                     setAnswer("");
+                    setNegativeText("");
                     setAddTargets(null);
                     toast.success(t("searchAnswerProfiles.faq.added"));
                   },
@@ -549,6 +664,7 @@ export function ApprovedFaqManager({
                 {preview.rows.map((row) => (
                   <li key={row.row} className="break-words">
                     {row.question}
+                    {row.negative_questions?.length ? <ul>{row.negative_questions.map((question) => <li key={question}>{question}</li>)}</ul> : null}
                   </li>
                 ))}
               </ul>
@@ -640,6 +756,46 @@ export function ApprovedFaqManager({
               </Button>
               <Button variant="secondary" onClick={() => setConfirming(null)}>
                 {t("searchAnswerProfiles.faq.confirm.cancel")}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </SideSheet>
+
+      {/* Q&A ごとの当てはめない質問（この Q&A を当てたくない質問の例。#4788）。 */}
+      <SideSheet
+        open={editingNegative !== null}
+        onClose={() => setEditingNegative(null)}
+        title={t("searchAnswerProfiles.faq.negative.edit.title")}
+        closeLabel={t("searchAnswerProfiles.faq.negative.edit.close")}
+        side="right"
+        size="md"
+        id="approved-faq-negative-sheet"
+      >
+        {editingNegative ? (
+          <div className="space-y-4" data-testid="approved-faq-negative-editor">
+            <div className="min-w-0 rounded-md border border-border p-3">
+              <p className="break-words text-sm font-medium text-fg">{editingNegative.question}</p>
+            </div>
+            <TextareaField
+              id="approved-faq-negative-edit"
+              label={t("searchAnswerProfiles.faq.negative.label")}
+              helper={t("searchAnswerProfiles.faq.negative.help")}
+              error={editNegativeError ?? undefined}
+              value={editNegativeText}
+              onChange={(event) => {
+                setEditNegativeText(event.target.value);
+                setEditNegativeError(null);
+              }}
+              rows={6}
+              width="full"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button icon={Save} loading={saveNegative.isPending} onClick={submitNegativeEdit}>
+                {t("searchAnswerProfiles.faq.negative.edit.submit")}
+              </Button>
+              <Button variant="secondary" onClick={() => setEditingNegative(null)}>
+                {t("searchAnswerProfiles.faq.negative.edit.cancel")}
               </Button>
             </div>
           </div>

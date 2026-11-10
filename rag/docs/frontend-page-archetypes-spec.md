@@ -56,7 +56,7 @@
 | ナレッジベース / 詳細 | ナレッジベース | アーカイブ（danger。DEFAULT は理由付きで無効） | 詳細の「基本情報」の見出しに同じ定義（危険な操作だけなので「その他の操作」に入る）。名前・説明は欄でそのまま編集するため「編集」の操作は持たない（#555。#302 の「編集」を置き換えた） | `knowledge-bases/knowledge-base-actions.ts` の `useKnowledgeBaseActions` |
 | ナレッジベース詳細 | 所属文書 | 外す（確認は warning。所属の行だけを消し、chunk へ波及しない） | — | `KnowledgeBaseDetailClient.tsx` |
 | 検索・回答プロファイル | 検索・回答プロファイル | アーカイブ（danger。DEFAULT は理由付きで無効） | エディタの「基本情報と検索・回答設定」の見出しに同じ定義 | `SearchAnswerProfileManagementClient.tsx` の `useSearchAnswerProfileActions` |
-| 検索・回答プロファイル（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
+| 検索・回答プロファイル（知識パネル） | 承認済み FAQ | 当てはめない質問を編集（シートで保存。#4788）、削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
 | 検索・回答プロファイル（用語・同義語。#682） | 用語・同義語 | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
 | 検索・回答プロファイル（業務ガイド。#1237） | 業務ガイド / 公開の履歴 | 業務ガイドは —（行は選択専用。名前のボタンと行のクリックで一覧の下の編集フォームへ読み込む）。公開の履歴は行のメニューに「この版を見る」「この版に戻す」（確認ダイアログを通す） | 編集フォームの見出しの `ObjectActionBar` に アーカイブ（確認ダイアログを通す）/ アーカイブから戻す。フォーム末尾の操作行は 保存（primary）→ 検証 → 公開（確認ダイアログを通す）、反対の端に 閉じる | `SupportGuideManager.tsx` / `SupportGuideEditor.tsx` |
 | フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースを書き出す（評価リクエストの Excel の 1 行をダウンロードする。#2065）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |

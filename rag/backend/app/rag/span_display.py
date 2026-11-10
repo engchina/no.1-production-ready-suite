@@ -39,6 +39,7 @@ PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
     {
         "history_rewrite",
         "small_talk_reply",
+        "faq_direct_match",
         "query_guardrail",
         "answer_guardrail",
         "answer_record_save",
@@ -68,6 +69,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "文書から根拠の候補を検索する",
     "history_rewrite": "質問を補い、検索が要るかを分ける",
     "small_talk_reply": "検索せずに短く応じる",
+    "faq_direct_match": "登録済みQ&Aと照合する",
     "attachment_evidence": "会話の添付から根拠を選ぶ",
     "answer": "質問の条件を整理して回答を作る",
     "evidence": "質問の条件を整理して根拠を探す",

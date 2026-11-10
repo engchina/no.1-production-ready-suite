@@ -78,6 +78,7 @@ from app.rag.chat_question_token import (
     read_history_rewrite_elapsed,
     read_question_context,
 )
+from app.rag.faq_direct_answer import approved_faq_direct_score
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.observability import elapsed_ms, new_trace_id
@@ -277,6 +278,9 @@ def _to_chat_message(
             message.answer_attached_images if message.status == "COMPLETE" else 0
         ),
         answer_format=(message.answer_format if message.status == "COMPLETE" else None),
+        approved_faq_direct_score=(
+            message.approved_faq_direct_score if message.status == "COMPLETE" else None
+        ),
     )
 
 
@@ -809,6 +813,8 @@ class PreparedChatTurn:
     history_question_prepared: bool = False
     # 送信の前（確認の提案）に済ませた履歴による補完。処理の経過に同じ段として残す（#4794）。
     prepared_history_rewrite: PreparedHistoryRewrite | None = None
+    # 補完した質問が承認済み FAQ に下限以上で一致したら、FAQ の回答をそのまま返してよいか（#4788）。
+    direct_faq_answer: bool = False
 
 
 async def _prepare_chat_turn(
@@ -1041,6 +1047,12 @@ async def _prepare_chat_turn(
         prepared_history_rewrite=prepared_history_rewrite,
         approved_faq=approved_faq,
         scope=scope,
+        # 利用者が類似問を選んだ・断った発話と、確認に答えた発話には、そのまま返さない。
+        direct_faq_answer=(
+            approved_faq is None
+            and not request.approved_faq_declined
+            and request.clarification is None
+        ),
     )
 
 
@@ -1105,6 +1117,7 @@ async def _generate_chat_answer(
             attachment_conversation_id=turn.conversation_id,
             history_question_prepared=turn.history_question_prepared,
             prepared_history_rewrite=turn.prepared_history_rewrite,
+            direct_faq_answer=turn.direct_faq_answer,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(
@@ -1138,6 +1151,7 @@ async def _generate_chat_answer(
             answer_format=answer_format_record(
                 (result.diagnostics.answer or {}).get("answer_format")
             ),
+            approved_faq_direct_score=approved_faq_direct_score(result.diagnostics.answer),
         )
     except Exception as exc:
         await run_recorder.record(

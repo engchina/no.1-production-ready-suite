@@ -407,6 +407,9 @@ class StoredMessage:
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
     # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
+    # 承認済み FAQ の回答をそのまま返した回答の一致度（ASSISTANT の回答だけ。回答の記録の診断の
+    # ``approved_faq_direct.score``。#4788）。それ以外の回答・記録の無い回答は None。
+    approved_faq_direct_score: float | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -5348,7 +5351,9 @@ class OracleClient:
                 JSON_QUERY(r.diagnostics_json, '$.answer_format' RETURNING CLOB)
                     AS answer_format_json,
                 JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
-                    AS answer_attached_images
+                    AS answer_attached_images,
+                JSON_VALUE(r.diagnostics_json, '$.approved_faq_direct.score' RETURNING NUMBER)
+                    AS approved_faq_direct_score
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -16779,6 +16784,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         ),
         answer_format=answer_format_record(_json_loads(row.get("answer_format_json"))),
         answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
+        approved_faq_direct_score=_optional_float(row.get("approved_faq_direct_score")),
     )
 
 

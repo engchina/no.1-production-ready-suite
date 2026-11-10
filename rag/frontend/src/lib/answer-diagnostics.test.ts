@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   answerAttachedImages,
+  answerFaqDirectScore,
   unreadSectionLinks,
   confidenceVariant,
   outcomeBadge,
@@ -123,6 +124,29 @@ describe("parseAnswerDiagnostics", () => {
     expect(
       parseAnswerDiagnostics({ answer_source: "approved_faq", approved_faq_question: "Q" })?.approvedFaq,
     ).toEqual({ question: "Q", answer: "" });
+  });
+
+  // #4788
+  it("FAQ の回答をそのまま返した回答は、一致度を読む", () => {
+    expect(
+      parseAnswerDiagnostics({
+        answer_source: "approved_faq",
+        approved_faq_question: "合成の質問",
+        approved_faq_answer: "合成の回答",
+        approved_faq_direct: { faq_id: "faq-1", score: 0.95, min_score: 0.92 },
+      })?.approvedFaq,
+    ).toEqual({ question: "合成の質問", answer: "合成の回答", direct: { score: 0.95 } });
+  });
+
+  it("そのまま返した回答の一致度は、配信の診断か保存した会話のメッセージから読む", () => {
+    const live = { answer_source: "approved_faq", approved_faq_direct: { score: 0.95 } };
+    expect(answerFaqDirectScore(live, null)).toBe(0.95);
+    expect(answerFaqDirectScore(null, { approved_faq_direct_score: 1 })).toBe(1);
+    // 利用者が選んだ Q&A からの回答・いつもの回答・壊れた値は、そのまま返した回答ではない。
+    expect(answerFaqDirectScore({ answer_source: "approved_faq" }, null)).toBeNull();
+    expect(answerFaqDirectScore(null, { approved_faq_direct_score: null })).toBeNull();
+    expect(answerFaqDirectScore(null, { approved_faq_direct_score: "1" })).toBeNull();
+    expect(answerFaqDirectScore(null, null)).toBeNull();
   });
 
   // 関係情報で加えた根拠（Issue 2055）。

@@ -52,6 +52,7 @@ const faqRecord = {
   question: faqSuggestion.question,
   answer: faqSuggestion.answer,
   alternate_questions: [],
+  negative_questions: [],
   status: "approved",
   target_knowledge_base_ids: ["kb-1"],
   source_document_ids: [],

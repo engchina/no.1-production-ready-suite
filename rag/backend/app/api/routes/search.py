@@ -770,6 +770,7 @@ async def _run_search_with_timeout(
                 answer_notice=current_answer_notice,
                 caller_queries=caller_queries,
                 complete_evidence=complete_evidence,
+                direct_faq_answer=True,
             ).run(
                 request,
                 trace_id=trace_id,
@@ -988,6 +989,7 @@ async def _stream_search_events_with_timeout(
                     answer_model_id=answer_model_id,
                     run_recorder=run_recorder,
                     answer_notice=current_answer_notice,
+                    direct_faq_answer=True,
                 ).run(
                     request,
                     trace_id=trace_id,

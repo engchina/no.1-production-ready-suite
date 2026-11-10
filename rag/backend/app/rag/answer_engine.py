@@ -250,6 +250,11 @@ class AnswerOutcome:
     evaluation_input: dict[str, Any] | None = None
 
 
+def approved_faq_answer_text(answer: str, faq_question: str) -> str:
+    """承認済み FAQ からの回答の本文（末尾に出典の行。選んだ FAQ・そのまま返す FAQ で同じ形）。"""
+    return f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）"
+
+
 # evaluate_answer_payload が読む回答 payload のキー(answer_result_payload の部分集合)。
 EVALUATION_INPUT_KEYS = (
     "question",
@@ -949,7 +954,7 @@ class AnswerEngine:
         # 回答エンジンの前の段(会話の履歴での書き換え・抽出項目の条件)の縮退(#3286)。
         degraded = self._degraded.steps() if self._degraded is not None else []
         return AnswerOutcome(
-            answer=f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）",
+            answer=approved_faq_answer_text(answer, faq_question),
             citations=[],
             diagnostics={
                 "answer_source": "approved_faq",

@@ -100,6 +100,10 @@ class ChatMessage(BaseModel):
     # 出す。
     # 画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
+    # 承認済み FAQ の回答をそのまま返した回答の一致度（ASSISTANT の終わった回答だけ。回答の記録の
+    # 診断の ``approved_faq_direct.score``。#4788）。値があれば、回答の見出しと案内に、検索と回答の
+    # 生成をしていないことを出す。それ以外の回答・記録の無い回答は None。
+    approved_faq_direct_score: float | None = None
 
 
 class ChatAnswerCancelResult(BaseModel):
@@ -195,6 +199,9 @@ class ChatMessageRequest(BaseModel):
     #
     # 質問と一緒に回答の LLM へ渡す。利用者の送った文を FAQ として扱わない。
     approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # 利用者が類似問の候補を「どれでもない」と断った質問。断った質問には、承認済み FAQ の回答を
+    # そのまま返さない（資料を検索して回答する。#4788）。
+    approved_faq_declined: bool = False
     # 利用者が確認の質問に答えた内容(#717)。backen
     # d が検索・回答プロファイルのルールから引き直し、選んだ
     #

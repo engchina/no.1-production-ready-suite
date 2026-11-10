@@ -70,7 +70,7 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 def test_stage_labels_cover_answer_stages() -> None:
     """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)・会話の添付からの根拠の
-    選択(#3475)・検索の要らない発話への応答(#4787)と検索だけの工程。
+    選択(#3475)・検索の要らない発話への応答(#4787)・承認済み FAQ との照合(#4788)と検索だけの工程。
 
     旧 standard の工程は #595 で削除した。
     """
@@ -78,6 +78,7 @@ def test_stage_labels_cover_answer_stages() -> None:
         "retrieval",
         "history_rewrite",
         "small_talk_reply",
+        "faq_direct_match",
         "attachment_evidence",
         "answer",
         # 回答を作らない RAG 検索の全体（#3506）。
