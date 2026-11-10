@@ -1,12 +1,14 @@
 """標準回答による評価の指標と合否(評価の基準の閾値。#680)。"""
 
+from collections.abc import Mapping
+
 import pytest
 
 from app.config import Settings
 from app.rag.answer_metrics import score_answer_evaluation
 
 
-def _score(evaluation: dict[str, object], suite: str = "standard") -> dict[str, object]:
+def _score(evaluation: Mapping[str, object], suite: str = "standard") -> dict[str, object]:
     return score_answer_evaluation(evaluation, settings=Settings(rag_evaluation_suite=suite))
 
 
@@ -33,5 +35,5 @@ def test_correctness_alone_decides_the_result(
 
 
 def test_unfinished_evaluation_is_returned_as_is() -> None:
-    evaluation = {"status": "error", "message": "評価を完了できませんでした。"}
+    evaluation: dict[str, object] = {"status": "error", "message": "評価を完了できませんでした。"}
     assert _score(evaluation) == evaluation
