@@ -9,6 +9,15 @@ export const USERS_ROLES_MESSAGES = {
   "common.action.refreshed": "最新の状態に更新しました。",
   "common.delete": "削除",
   "common.retry": "再試行",
+  // 読み取りの失敗（3 製品の同じ機能と同じ文。messaging.md §3.6.1。#4817）。
+  "common.dataLoad.timeout":
+    "読み取りがタイムアウトしました。データベースが混み合っている可能性があります。データは失われていません。少し待ってから再試行してください。",
+  "common.dataLoad.unavailable":
+    "データベースに接続できません。データは失われていません。データベースの起動状態と接続の設定を確かめてから、再試行してください。",
+  "common.dataLoad.unavailableRestricted":
+    "データベースに接続できません。データは失われていません。少し待ってから再試行し、続くときはシステム管理者に連絡してください。",
+  "common.dataLoad.staleTitle": "{time} 時点の内容を表示しています",
+  "common.dataLoad.staleOther": "最新の内容を読み取れませんでした。データは失われていません。再試行してください。",
   "nav.securityRoles": "ロール管理",
   "nav.securityUsers": "ユーザー管理",
   "security.common.actions": "操作",
@@ -145,6 +154,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.noResultsTitle": "条件に一致するユーザーがありません",
   "security.users.pagination": "ユーザー一覧のページ",
   "security.users.noRole": "利用可能なロールがありません。先にロールを作成してください。",
+  "security.users.rolesLoadError": "ロールの候補を読み込めませんでした。",
   "security.users.otherRoles": "ほかに割り当てられているロール（保存しても変わりません）: {roles}",
   "security.users.notFoundHint": "削除されたか、URL が正しくありません。一覧から選び直してください。",
   "security.users.notFoundTitle": "ユーザーが見つかりません",

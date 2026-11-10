@@ -182,6 +182,22 @@ describe("API キーの画面（#1805）", () => {
     expect(html).not.toContain('name="api-key-agent-scope"');
   });
 
+  it("業務 Agent の候補を読み取れなかったときは、欄を黙って消さず、製品が渡した失敗の表示を見出しの下に出す（#4817）", () => {
+    const html = render(
+      <MyApiKeysPanel
+        api={myApi}
+        endpoints={[]}
+        agentScopeFailure={<div data-testid="agent-scope-failure">使える業務 Agent の候補を読み込めませんでした。</div>}
+      />,
+      { mine: [] }
+    );
+    expect(html).toContain("使える業務 Agent");
+    expect(html).toContain('data-testid="agent-scope-failure"');
+    // 「絞るのは Agent の画面」の案内（候補を渡さない製品向け）と取り違えない。
+    expect(html).not.toContain('data-testid="api-key-agent-scope-elsewhere"');
+    expect(html).not.toContain('name="api-key-agent-scope"');
+  });
+
   it("対象を絞ったキーは、使える製品の列に件数を添える（#1874）", () => {
     const html = render(<MyApiKeysPanel api={myApi} endpoints={[]} />, {
       mine: [{ ...KEY, products: ["rag", "agent"], resource_scopes: { agent: ["sales", "hr"] } }],
