@@ -8,7 +8,6 @@ import pytest
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.main import app
 from app.rag.search_answer_profile_config import (
-    PROFILE_GLOBAL_QUERY_FIELDS,
     SearchAnswerProfileConfig,
     parse_search_answer_profile_config,
 )
@@ -193,14 +192,7 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
             "description": "経理規程の問い合わせ窓口",
             "config": {
                 "knowledge_base_ids": ["kb-1", "kb-2"],
-                "query": {
-                    "max_anchors_per_document": 3,
-                    "vector_index_profile": "accurate",
-                    # 検索・回答プロファイルは品質評価を上書きしない。送られても保存しない(#301)。
-                    "evaluation_suite": "strict_ci",
-                    # 旧 standard の回答スタイル(#595 で削除)。送られても保存しない。
-                    "generation_profile": "detailed_cited",
-                },
+                "query": {"max_anchors_per_document": 3},
                 # 旧 standard の persona(#595 で削除)。送られても保存しない。
                 "system_prompt": "あなたは経理規程アシスタントです。",
                 "default_language": "日本語",
@@ -213,9 +205,7 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
     assert data["name"] == "経理アシスタント"
     assert data["knowledge_base_count"] == 2
     assert data["config"]["query"]["max_anchors_per_document"] == 3
-    assert "vector_index_profile" not in data["config"]["query"]
-    assert "evaluation_suite" not in data["config"]["query"]
-    assert "generation_profile" not in data["config"]["query"]
+    assert set(data["config"]["query"]) == {"max_anchors_per_document", "support_guide_enabled"}
     assert "system_prompt" not in data["config"]
     assert "default_language" not in data["config"]
     assert [ref["name"] for ref in data["knowledge_bases"]] == ["社内規程", "製品 FAQ"]
@@ -225,10 +215,19 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
     assert get_resp.json()["data"]["id"] == data["id"]
 
 
-def test_profile_api_does_not_accept_or_return_global_only_query_fields(
-    fake_oracle: FakeSearchAnswerProfileOracle,
+@pytest.mark.parametrize(
+    "field",
+    [
+        "graph_expansion_max_chunks",
+        "support_guide_semantic_match_enabled",
+        "support_guide_close_match_clarification_enabled",
+        "vector_index_profile",
+    ],
+)
+def test_profile_api_rejects_retired_query_fields(
+    fake_oracle: FakeSearchAnswerProfileOracle, field: str
 ) -> None:
-    """全体設定だけの項目(PROFILE_GLOBAL_QUERY_FIELDS)は送られても保存・応答しない(#3523)。"""
+    """定義から消した欄を送ると検証エラーになり、保存しない(#4784)。"""
     resp = client.post(
         "/api/search-answer-profiles",
         json={
@@ -236,23 +235,14 @@ def test_profile_api_does_not_accept_or_return_global_only_query_fields(
             "description": "合成の設定の検証用",
             "config": {
                 "knowledge_base_ids": ["kb-1"],
-                "query": {
-                    "max_anchors_per_document": 3,
-                    "graph_expansion_max_chunks": 3,
-                    "guide_step_max_queries": 7,
-                    "guide_step_deadline_seconds": 37.5,
-                },
+                "query": {"max_anchors_per_document": 3, field: None},
             },
         },
     )
 
-    assert resp.status_code == 200, resp.text
-    data = resp.json()["data"]
-    get_resp = client.get(f"/api/search-answer-profiles/{data['id']}")
-    assert get_resp.status_code == 200
-    for query in (data["config"]["query"], get_resp.json()["data"]["config"]["query"]):
-        assert query["max_anchors_per_document"] == 3
-        assert not set(PROFILE_GLOBAL_QUERY_FIELDS) & set(query)
+    assert resp.status_code == 422, resp.text
+    assert field in resp.text
+    assert fake_oracle.views == {}
 
 
 def test_list_search_answer_profiles(fake_oracle: FakeSearchAnswerProfileOracle) -> None:

@@ -164,7 +164,7 @@ def test_renamed_values_match_the_code() -> None:
         LAYOUT_SOURCE_PARSER,
         SMALL_TO_BIG_STRATEGY,
     )
-    from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig, KnowledgeBaseQueryConfig
+    from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
     from app.rag.layer_fingerprint import CHUNK_METADATA_CONTRACT_INPUT
 
     news = {new.strip('"') for _old, new in STORED_NAME_RENAMES_599}
@@ -192,11 +192,8 @@ def test_renamed_values_match_the_code() -> None:
     assert {name for name in news if name in KnowledgeBaseIngestionConfig.model_fields} == {
         name.removeprefix("rag_") for name in SMALL_TO_BIG_SETTING_FIELDS
     }
-    assert {name for name in news if name in KnowledgeBaseQueryConfig.model_fields} == {
-        "neighbor_child_count",
-        "rerank_enabled",
-        "screen_linking_enabled",
-    }
+    # プロファイルの query の欄は定義から消した(#4784)。全体の設定には残る。
+    assert {"neighbor_child_count", "rerank_enabled", "screen_linking_enabled"} <= news
 
 
 def test_stored_names_migration_rewrites_each_column_in_order() -> None:
