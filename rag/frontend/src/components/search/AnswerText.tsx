@@ -143,11 +143,13 @@ export function AnswerText({
   );
 
   /**
-   * 冒頭の回答の表と、その下の行ごとの根拠の行（#4812）。根拠の行の n 番目に「[n]」の印と移り先の id を付け、表の
-   * 出典の列の印を、その行へ移るリンクにする。番号は回答エンジンが振った表の下の行の順。
+   * 冒頭の回答の表と、その下の行ごとの根拠の行（#4812）。根拠の行の n 番目に「[n]」の印と id を付け、表の出典の列の
+   * 印を、その行の原文を開くリンクにする（原文を開けない行は、その行へ移る。#4822）。番号は回答エンジンが振った表の
+   * 下の行の順。
    */
   function sourcedParagraph(text: string, lines: readonly string[], ordinals: readonly number[], index: number): AnswerSectionsBlock {
     const anchor = (number: number) => `${anchorPrefix}-sources-${index}-${number}`;
+    const sourceCitations = lines.map((line, position) => toCitations(line, ordinals[position]));
     const renderCell = ({ value, columnIndex, table }: AnswerBodyTableCell) => {
       const column = table.columns[columnIndex]?.name;
       if (columnIndex !== table.columns.length - 1 || typeof value !== "string" || !SOURCE_MARKS.test(value)) return undefined;
@@ -160,7 +162,10 @@ export function AnswerText({
             label: `[${number}]`,
             // 当たる根拠の行が無い番号は移り先を持たない（印は文字だけで出す）。
             targetId: number <= lines.length ? anchor(number) : undefined,
-            ariaLabel: t("search.answerText.sourceMarkLabel", { mark: `[${number}]` }),
+            ariaLabel: t(
+              sourceCitations[number - 1]?.[0]?.onOpen ? "search.answerText.openSourceMark" : "search.answerText.sourceMarkLabel",
+              { mark: `[${number}]` },
+            ),
           }))}
         />
       );
@@ -171,8 +176,8 @@ export function AnswerText({
       content: <AnswerTableBody text={text} renderTableCell={renderCell} />,
       passageText: text,
       lang: fixedLang(text),
-      citations: lines.flatMap((line, position) =>
-        toCitations(line, ordinals[position]).map((ref, part) =>
+      citations: sourceCitations.flatMap((refs, position) =>
+        refs.map((ref, part) =>
           part === 0
             ? {
                 ...ref,
@@ -288,7 +293,6 @@ function AnswerTableBody({
     <AnswerBody
       text={text}
       splitOptions={ANSWER_TABLE_OPTIONS}
-      tableMode="answer"
       renderTableCell={renderTableCell}
       labels={answerTableLabels()}
       className={cn("whitespace-normal", className)}
@@ -323,7 +327,6 @@ function ReasoningText({ text }: { text: string }) {
         <AnswerBody
           text={text}
           splitOptions={ANSWER_TABLE_OPTIONS}
-          tableMode="answer"
           labels={answerTableLabels()}
           className="whitespace-normal"
           testId="answer-table-body"

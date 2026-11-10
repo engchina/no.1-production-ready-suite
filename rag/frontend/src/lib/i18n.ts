@@ -3564,6 +3564,7 @@ export const ja = {
   "search.answerText.tableClose": "{name}を閉じる",
   // 回答の表の出典の列の印と、表の下の番号つきの根拠の行（#4812）。読み上げの名前は見える印を含める。
   "search.answerText.sourceMarkLabel": "{mark} の根拠へ移動",
+  "search.answerText.openSourceMark": "{mark} の原文を開く",
   "search.answerText.openNumberedCitation": "{mark} {citation} の原文を開く",
   "search.answerText.openUnreadSection": "原文を開く",
   "search.answerText.openUnreadSectionLabel": "{section}の原文を開く",
