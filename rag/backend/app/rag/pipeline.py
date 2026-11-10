@@ -733,7 +733,7 @@ class RagPipeline:
                     "応答": result.answer if result is not None else None,
                 },
             )
-        # 補完した質問が承認済み FAQ に下限以上で一致したら、検索・条件の読み取り・回答の生成を
+        # 補完した質問が承認済み FAQ に下限以上で一致したら、検索・会話の添付の根拠・回答の生成を
         # 通さず、FAQ の回答をそのまま返す（#4788。モデルを呼ばない）。照合できなければ、いつもの
         # 検索と回答に進む。
         direct_faq_outcome: AnswerOutcome | None = None
