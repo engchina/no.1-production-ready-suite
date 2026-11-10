@@ -204,30 +204,27 @@ async def test_prepared_query_reaches_search_while_original_is_saved(
     assert calls == [query]
 
 
-@pytest.mark.parametrize("case", ["rewritten", "rule-selection", "disabled", "answered"])
+@pytest.mark.parametrize("case", ["rewritten", "disabled", "answered"])
 async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     """準備で補った結果と所要時間を送信の側へ渡し、処理の経過に段を残す（#4794）。"""
-    from app.rag.chat_question_token import (
-        read_history_rewrite_elapsed,
-        with_rule_selection_answers,
-    )
+    from app.rag.chat_question_token import read_history_rewrite_elapsed
     from app.schemas.chat import ChatMessageRequest
     from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 
     oracle, settings, calls = context_setup
     if case == "disabled":
         settings.rag_history_rewrite_enabled = False
+    if case == "answered":
+        # 業務ガイドを使うプロファイル（確認への答えを受ける）。設定は準備の前に決める。
+        oracle.view.config.query.support_guide_enabled = True
     query = "その手順は？"
     _question, token = await chat.prepare_chat_question(
         oracle, "conversation-a", "profile-a", query, settings
     )
     assert token is not None
     secret = settings.app_service_token_secret
-    if case == "rule-selection":
-        # 確認の提案が選択を足して署名し直しても、補完の所要時間を落とさない。
-        token = with_rule_selection_answers(secret, token, [], elapsed_seconds=0.1)
     elapsed = read_history_rewrite_elapsed(secret, token)
     assert (elapsed is None) is (case == "disabled")
 
@@ -244,21 +241,13 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     monkeypatch.setattr(oracle, "append_message", append, raising=False)
     turn_request = ChatMessageRequest(content=query, question_context_token=token)
     if case == "answered":
-        from app.rag.answer_engine import AnswerScope
-
-        async def no_pages(*args: Any) -> dict[str, Any]:
-            return {}
-
-        # 準備の後に確認へ新しく答えたら、補った質問を使わない（段も作らない）。
+        # 準備の後に業務ガイドの確認へ新しく答えたら、補った質問を使わない（段も作らない）。
         monkeypatch.setattr(
-            chat, "resolve_clarification", lambda *args: (AnswerScope(context="合成"), None)
+            chat, "resolve_guide_clarification", lambda *args: ({"c1": "値 A"}, "合成")
         )
-        monkeypatch.setattr(chat, "load_runtime_knowledge_payload", no_payload)
-        monkeypatch.setattr(chat, "current_section_pages", no_pages)
-        monkeypatch.setattr(chat, "clarification_document_ids", lambda *args: [])
-        monkeypatch.setattr(chat, "clarification_record", lambda *args: None)
+        monkeypatch.setattr(chat, "guide_clarification_record", lambda *args: None)
         turn_request = turn_request.model_copy(
-            update={"clarification": ClarificationAnswer(rule_id="R01", option_ids=["o1"])}
+            update={"clarification": ClarificationAnswer(rule_id="guide:g1:c1", option_ids=["o1"])}
         )
     turn = await chat._prepare_chat_turn(
         oracle, "conversation-a", "profile-a", turn_request, settings
