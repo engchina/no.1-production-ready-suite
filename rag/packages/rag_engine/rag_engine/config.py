@@ -328,6 +328,7 @@ class Settings:
     # 回答の期限のある LLM の呼び出しを streaming で受け、応答の event が来なくなったら打ち切って送り直す
     # (#1926・#4736。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。止まった判定は無音だけ。
     llm_stall_detection: bool = False
+    llm_max_retries: int = 1
     # 止まったとする無音の秒数（最初の event を含む）。送り直しはやり直しの共通の枠で数える。
     llm_stall_idle_seconds: float = 120.0
     # streaming で受ける呼び出しで、出力が同じ並びの繰り返し・空白だけで続いたら打ち切って送り直す(#2966。既定 off。
@@ -543,6 +544,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
+        llm_max_retries=max(0, _env_int(env, "RAG_ENGINE_LLM_MAX_RETRIES", 1)),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
         text_search_tokenizer_sudachi_dict=env.get(

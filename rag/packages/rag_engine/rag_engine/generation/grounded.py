@@ -2723,25 +2723,16 @@ def run_round(
 
     try:
         if image_paths:
-            try:
-                draft = call_with_model_purpose(
-                    "answer.generate",
-                    parse_images,
-                    generation_system,
-                    prompt,
-                    list(image_paths),
-                    settings,
-                    generation_model,
-                    provider_id=provider_id,
-                )
-            except Exception as exc:
-                if invalid_output is None or not invalid_output(exc):
-                    raise
-                # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で呼ぶ（#2772）。
-                image_fallback = type(exc).__name__
-                draft = call_with_model_purpose(
-                    "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
-                )
+            draft = call_with_model_purpose(
+                "answer.generate",
+                parse_images,
+                generation_system,
+                prompt,
+                list(image_paths),
+                settings,
+                generation_model,
+                provider_id=provider_id,
+            )
         else:
             draft = call_with_model_purpose(
                 "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id

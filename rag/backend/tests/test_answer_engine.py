@@ -1774,15 +1774,18 @@ def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None
     default = build_engine_settings(Settings(), output_dir=tmp_path)
     assert default.llm_stall_detection is True
     assert default.llm_stall_idle_seconds == 120.0
+    assert default.llm_max_retries == 1
     changed = build_engine_settings(
         Settings(
             rag_llm_stall_detection_enabled=False,
             rag_llm_stall_idle_seconds=45,
+            rag_llm_max_retries=0,
         ),
         output_dir=tmp_path,
     )
     assert changed.llm_stall_detection is False
     assert changed.llm_stall_idle_seconds == 45.0
+    assert changed.llm_max_retries == 0
 
 
 def _engine_effort(value: str) -> str:

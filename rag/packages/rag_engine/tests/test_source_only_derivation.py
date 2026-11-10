@@ -77,6 +77,7 @@ def _replay(name: str, prompt: str) -> dict[str, Any]:
         text = text.replace(key, value)
     assert "{" + "row:" not in text and "{E:" not in text
     output = json.loads(text)
+    output["response_kind"] = "answered"
     # 生成の schema は要求ごとに計画を 1 件だけ受ける（#4587）。同じ要求の計画を繰り返した録画は
     # test_request_coverage_cardinality が拒まれることを確かめ、ここでは要求ごとの最初の計画で再生する。
     first: dict[str, Any] = {}
@@ -90,6 +91,7 @@ def _derivation(prompt: str, requirement: str) -> dict[str, Any]:
     mapping = _placeholders(prompt)
     rows = [mapping[f"{{row:{number}}}"] for number in range(1, 10)]
     return {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -177,6 +179,7 @@ def _single_unit_case(question_type: list[str]):
     model = generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
     value = model.model_validate(
         {
+            "response_kind": "answered",
             "answer_parts": [
                 {
                     "request_id": "Q1",

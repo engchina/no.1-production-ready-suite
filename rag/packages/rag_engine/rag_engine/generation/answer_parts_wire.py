@@ -10,6 +10,7 @@ from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from rag_engine.generation.answer_envelope import AnswerOutcome
 from rag_engine.generation.citation_content import structure_only_quote
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
@@ -194,6 +195,15 @@ def answer_parts_model(
         )
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {
+        "response_kind": (
+            AnswerOutcome,
+            Field(
+                description="今回の返信の種類。answered=質問に回答、conditional=一部に回答し不足や条件を明示、"
+                "insufficient_evidence=資料不足で質問への答えは出せない（関連原文の紹介だけも含む）、"
+                "needs_clarification=質問の意味の確認、needs_environment_data=現場の値の確認待ち、"
+                "needs_human=人への引継ぎ。回答の正確さの認証ではない。"
+            ),
+        ),
         "answer_parts": (
             GenericAlias(list, part),
             Field(min_length=1, max_length=MAX_ANSWER_PARTS, description="要点ごとに 1 件。要点と結果を別々に重複して生成しない。"),
@@ -329,6 +339,7 @@ def canonical_answer_parts(
     要求ごとの根拠の計画は要点の basis から導く（``basis_request_plans``。#4611）。
     """
     raw = value.model_dump(exclude_unset=True)
+    response_kind = raw.pop("response_kind", None)
     wire_parts = raw.pop("answer_parts", [])
     summary_indexes = raw.pop("summary_part_indexes", [])
     items: list[dict[str, Any]] = []
@@ -463,6 +474,7 @@ def canonical_answer_parts(
         summary_application_indexes=list(dict.fromkeys(app for index in chosen for app in part_applications[index])),
     )
     draft = GroundedDraft.model_validate(raw)
+    draft._response_kind = response_kind
     if isinstance(value, GroundedDraft):
         draft._provider_output_text = value._provider_output_text
         draft._collapsed_duplicates = dict(value._collapsed_duplicates)

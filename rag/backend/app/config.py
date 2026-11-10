@@ -1580,6 +1580,11 @@ class Settings(
             "回答文の生成の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
         ),
     )
+    rag_llm_max_retries: int = Field(
+        default=1,
+        ge=0,
+        description="一時的な通信障害・出力形式不正の同一モデルでの再試行回数。回答全体の期限内で実行する。",
+    )
     rag_llm_stall_detection_enabled: bool = Field(
         default=True,
         description=(

@@ -78,6 +78,7 @@ def test_generates_once_even_when_a_calculation_answer_only_quotes_the_source() 
         question,
         context(record(0, ROW, "合成の規程", source="synthetic.md")),
         lambda units: {
+            "response_kind": "answered",
             "question_type": ["calculation"],
             "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW])],
             "summary_part_indexes": [0],
@@ -126,6 +127,7 @@ def test_a_rejected_part_gets_no_line_added_by_the_program() -> None:
         question,
         context(record(0, ROW, "合成の規程", source="synthetic.md")),
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [_answer(_ids(question)[0], "保存年数", units[ROW], "E12 を読む。", "保存年数は5年です。")],
             "summary_part_indexes": [],
             "confidence": "high",
@@ -134,7 +136,7 @@ def test_a_rejected_part_gets_no_line_added_by_the_program() -> None:
     assert calls == ["GroundedDraftWire"]
     assert answer_labels().gaps_section not in response.answer_text
     assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["parts"][0]["status"] == "missing"
-    assert response.envelope["outcome"] == "conditional"
+    assert response.envelope["outcome"] == "answered"
     assert "保存年数は5年です。" not in response.answer_text
 
 
@@ -145,6 +147,7 @@ def test_single_question_keeps_a_conclusion_when_summary_selection_is_empty(sele
 
     def output(units: dict[str, str]) -> dict[str, Any]:
         value: dict[str, Any] = {
+            "response_kind": "answered",
             "answer_parts": [_answer(_ids(question)[0], "保存年数", units[ROW], "原文の年数を読む。", result)],
             "confidence": "high",
         }
@@ -171,6 +174,7 @@ def test_summary_fallback_prefers_a_conclusion_over_source_and_table() -> None:
         question,
         context(record(0, ROW, "合成の資料", source="synthetic.md")),
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [
                 _source(request_id, "原文", units[ROW]),
                 {
@@ -201,6 +205,7 @@ def test_heading_only_quote_is_not_promoted_to_a_fallback_conclusion() -> None:
         question,
         context(record(0, heading + "\n" + ROW, "合成の資料", source="synthetic.md")),
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [_source(_ids(question)[0], "要点", units[heading])],
             "summary_part_indexes": [],
             "confidence": "low",
@@ -217,6 +222,7 @@ def test_table_only_answer_keeps_its_title_without_a_second_summary() -> None:
         question,
         context(record(0, ROW, "合成の資料", source="synthetic.md")),
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [
                 {
                     "request_id": _ids(question)[0],
@@ -245,6 +251,7 @@ def test_summary_fallback_preserves_a_legitimate_gap_for_another_part() -> None:
         question,
         context(record(0, ROW, "合成の資料", source="synthetic.md")),
         lambda units: {
+            "response_kind": "conditional",
             "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW]), _gap(_ids(question)[0], "例外条件", gap)],
             "summary_part_indexes": [],
             "confidence": "high",
@@ -262,7 +269,12 @@ def test_only_the_gap_written_by_the_model_is_shown_as_unconfirmed() -> None:
     response, _calls = _run(
         question,
         context(record(0, ROW, "合成の規程", source="synthetic.md")),
-        lambda _units: {"answer_parts": [_gap(_ids(question)[0], "保存年数", text)], "summary_part_indexes": [], "confidence": "low"},
+        lambda _units: {
+            "response_kind": "insufficient_evidence",
+            "answer_parts": [_gap(_ids(question)[0], "保存年数", text)],
+            "summary_part_indexes": [],
+            "confidence": "low",
+        },
     )
     assert text in response.answer_text
     assert response.envelope["outcome"] != "answered"
@@ -301,6 +313,7 @@ def test_two_parts_use_the_first_generation_text_without_another_explanation_cal
         question,
         context(record(0, f"{ROW}\n{OTHER}", "合成の規程", source="synthetic.md")),
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [
                 _answer(request_id, "期限", units[ROW], reasoning, "保存年数は5年です。"),
                 _source(request_id, "委託先の義務", units[OTHER]),
@@ -321,6 +334,7 @@ def test_retrieval_counts_separate_found_and_passed() -> None:
         question,
         ctx,
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW])],
             "summary_part_indexes": [0],
             "confidence": "high",
@@ -339,6 +353,7 @@ def test_retrieval_counts_keep_the_candidates_before_the_threshold() -> None:
         question,
         ctx,
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [_source(_ids(question)[0], "保存年数", units[ROW])],
             "summary_part_indexes": [0],
             "confidence": "high",
@@ -358,7 +373,12 @@ def test_guide_steps_stay_as_instructions_and_coverage_is_not_judged() -> None:
     def model(_system: str, prompt: str, _settings: Any, schema: Any, **_kwargs: Any) -> Any:
         seen.append(prompt)
         return schema.model_validate(
-            {"answer_parts": [_source(_ids(question)[0], "手続き", _units(prompt)[ROW])], "summary_part_indexes": [0], "confidence": "high"}
+            {
+                "response_kind": "answered",
+                "answer_parts": [_source(_ids(question)[0], "手続き", _units(prompt)[ROW])],
+                "summary_part_indexes": [0],
+                "confidence": "high",
+            }
         )
 
     with bind_dependencies(AnswerDependencies(_unused, _unused, model, _unused, _unused)):

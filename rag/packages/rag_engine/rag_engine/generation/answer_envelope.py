@@ -1,29 +1,7 @@
-"""回答の構造（AnswerEnvelope。#1235、handoff §12）。
+"""回答の説明・確認事項と既存の回答種別を保存する envelope。
 
-根拠付き回答（grounded）の確定の段で、すでにある草稿・公開した説明から、回答の対応・要求ごとの
-充足・適用の条件・不足・実データの確認を決定的に組み立てる。モデルは呼ばない。本文（`grounded.render`）と
-同じ材料から作るので、本文と食い違わない。
-
-対応（outcome）:
-
-- answered: 公開した説明があり、未回答の要求・不足・条件付きの説明が無い。段落の警告（warning）だけがある回答も
-  ここ（handoff_reasons に rule_warnings。#2738）。
-- conditional: 公開した説明はあるが、未回答の要求・不足・適用の条件（未確認を含む）がある。または原文の
-  提示だけ（適用は未確認）で答えた。利用者が答えられる確認の項目（`who_can_answer=user`）・別の資料で
-  分かる項目（`who_can_answer=document`）だけを確かめる回答もここ（#1453、#1492）。根拠と矛盾して外した段落
-  （contradicted_removed）か、根拠で確かめられない段落（unverified_passages）がある回答もここ（#2738）。
-- needs_environment_data: 回答の確定に、システムだけが持つ値（設定値・記録・ログ。確認の項目の
-  `who_can_answer=system`）の確認が要る。別の資料の確認（`confirmation_lines` の「資料:」の行）は実データに
-  数えない（#1491）。
-
-確認の項目（草稿の external_data_items）の分け方は `settle_confirmation_items`（#1492）。モデルには観察できる
-事実（誰が答えられるか・すでに分かっているか・結論がその値で分かれるか）だけを答えさせ、どの対応にするかは
-ここの規則で決める（selective prediction / clarifying question の判定と同じく、自己申告の分類に頼らない）。
-- insufficient_evidence: 公開できる説明も原文も無く、資料から答えられない。実行できる説明が無く、要求が
-  すべて答えられていない（missing）ときも、実データ・別の資料の確認より先にここにする（#1491）。本文の説明が
-  すべて根拠で確かめられない（unverified）ときもここ（本文は出す。#2738）。
-- needs_clarification / needs_human: 利用者への確認・人への引き継ぎ（業務ガイドと会話の段で決める。
-  ここでは作らない）。
+新しい生成は同じ呼び出しで回答種別を宣言する。ここでは宣言を記録し、正確さや網羅性は判定しない。
+種別は本文の公開・再検索・再生成の条件ではない。宣言のない過去の記録・固定応答だけを従来の構造で分類する。
 """
 
 from __future__ import annotations
@@ -219,6 +197,7 @@ def build_envelope(
     user_conditions: Sequence[str] = (),
     document_items: Sequence[str] = (),
     unsupported_parts: int = 0,
+    response_kind: AnswerOutcome | None = None,
 ) -> dict[str, Any]:
     """回答の構造を組み立てる。状態の材料は、モデルが返した不足と有効な引用の有無だけ（#4714）。
 
@@ -245,7 +224,9 @@ def build_envelope(
     if reference_materials or document_items:
         handoff.append("reference_materials")
     outcome: AnswerOutcome
-    if external_data_required or (environment and not actionable):
+    if response_kind is not None:
+        outcome = response_kind
+    elif external_data_required or (environment and not actionable):
         outcome = "needs_environment_data"
     elif not items:
         outcome = "insufficient_evidence"

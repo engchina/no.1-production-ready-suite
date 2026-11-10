@@ -17,6 +17,7 @@ def case():
     catalog = SentUnitCatalog([original])
     schema = answer_parts_model(generation_draft_wire_model(), catalog)
     raw = {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -76,6 +77,7 @@ def test_no_sent_source_allows_only_a_gap_at_the_generation_boundary():
     catalog = SentUnitCatalog(())
     schema = answer_parts_model(generation_draft_wire_model(), catalog)
     raw = {
+        "response_kind": "answered",
         "answer_parts": [{"request_id": "Q1", "requirement": "不足の値", "answer": {"kind": "gap", "text": "資料が必要です。"}}],
         "confidence": "low",
     }

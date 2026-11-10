@@ -67,6 +67,7 @@ def _subquestion_case() -> tuple[dict[str, Any], type, SentUnitCatalog]:
     catalog = SentUnitCatalog([original])
     schema = answer_parts_model(generation_draft_wire_model(), catalog, request_ids=("Q1",), subquestions=("(1)", "(2)", "(3)"))
     raw = {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -219,6 +220,7 @@ def test_a_source_part_of_only_a_heading_is_not_used_as_the_summary() -> None:
     original, catalog = _catalog_for(f"項目 2\n{BODY}", "synthetic.md", [(0, 4), (5, 5 + len(BODY))])
     schema = answer_parts_model(generation_draft_wire_model(), catalog, request_ids=("Q1",))
     raw = {
+        "response_kind": "answered",
         "answer_parts": [
             {"request_id": "Q1", "requirement": "見出し", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_ids[0]]}}},
             {"request_id": "Q1", "requirement": "本文", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_ids[1]]}}},
@@ -233,6 +235,7 @@ def test_summary_keeps_a_heading_part_when_no_other_part_is_chosen() -> None:
     original, catalog = _catalog_for(f"項目 2\n{BODY}", "synthetic.md", [(0, 4), (5, 5 + len(BODY))])
     schema = answer_parts_model(generation_draft_wire_model(), catalog, request_ids=("Q1",))
     raw = {
+        "response_kind": "answered",
         "answer_parts": [
             {"request_id": "Q1", "requirement": "見出し", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_ids[0]]}}},
         ],

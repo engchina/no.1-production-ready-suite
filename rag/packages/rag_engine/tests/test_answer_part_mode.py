@@ -42,7 +42,13 @@ def test_strict_schema_puts_the_mode_before_the_answer_and_derivation_has_no_sou
 
 
 def raw(*parts: dict) -> dict:
-    return {"answer_parts": list(parts), "question_type": ["calculation"], "summary_part_indexes": [0], "confidence": "high"}
+    return {
+        "response_kind": "answered",
+        "answer_parts": list(parts),
+        "question_type": ["calculation"],
+        "summary_part_indexes": [0],
+        "confidence": "high",
+    }
 
 
 def test_regeneration_without_source_has_no_mode():

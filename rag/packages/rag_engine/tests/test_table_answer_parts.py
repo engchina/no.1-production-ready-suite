@@ -58,7 +58,7 @@ def table_part(rows: list[tuple[list[str], list[str]]], columns: tuple[str, ...]
 
 def draft_of(part: dict[str, Any]) -> Any:
     model, catalog, _ = catalog_case()
-    raw = {"answer_parts": [part], "summary_part_indexes": [0], "confidence": "medium"}
+    raw = {"response_kind": "answered", "answer_parts": [part], "summary_part_indexes": [0], "confidence": "medium"}
     return canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
 
 
@@ -119,7 +119,7 @@ def test_row_with_more_cells_than_columns_is_rejected_with_how_to_fix() -> None:
     model, _, snapshot = catalog_case()
     part = table_part([(["失敗の判定", "30 秒", "余分"], [snapshot.unit_ids[0]])])
     with pytest.raises(ValidationError, match="1 行目の cells が 3 個で、columns の 2 個より多い"):
-        model.model_validate({"answer_parts": [part], "summary_part_indexes": [0], "confidence": "medium"})
+        model.model_validate({"response_kind": "answered", "answer_parts": [part], "summary_part_indexes": [0], "confidence": "medium"})
 
 
 def test_row_basis_must_be_a_sent_unit() -> None:
@@ -204,7 +204,13 @@ def _table_parts(units: dict[str, str]) -> dict[str, Any]:
     first, second = units[FIRST], units[SECOND]
     part = table_part([(["失敗の判定", "応答が 30 秒ない要求を失敗とする"], [first]), (["再試行の回数", "最大 5 回"], [second])])
     part["request_id"] = _ids(QUESTION)[0]
-    return {"question_type": ["fact"], "answer_parts": [part], "summary_part_indexes": [0], "confidence": "high"}
+    return {
+        "response_kind": "answered",
+        "question_type": ["fact"],
+        "answer_parts": [part],
+        "summary_part_indexes": [0],
+        "confidence": "high",
+    }
 
 
 def test_answer_text_shows_the_table_once_with_the_source_column_and_citation_lines_below() -> None:
@@ -243,6 +249,7 @@ def test_a_question_without_a_table_request_keeps_the_answer_shape() -> None:
         question,
         context(record(0, SECOND, "合成の文書", source="synthetic.txt")),
         lambda units: {
+            "response_kind": "answered",
             "answer_parts": [_source(_ids(question)[0], "再試行の回数", units[SECOND])],
             "summary_part_indexes": [0],
             "confidence": "high",

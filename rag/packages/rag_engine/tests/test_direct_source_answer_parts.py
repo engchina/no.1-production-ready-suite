@@ -16,6 +16,7 @@ def case(text: str = "項目Aは12です。"):
     catalog = SentUnitCatalog([snapshot])
     model = generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
     raw = {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -83,6 +84,7 @@ def two_unit_case():
 
 def readback(unit_ids, result, reasoning="選択した原文を示す。"):
     return {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -171,6 +173,7 @@ def test_source_preserves_long_original_and_repeated_selection_without_rewriting
 def test_empty_catalog_keeps_only_gap():
     model = generation_output_model("記録値を教えてください。", unit_catalog=SentUnitCatalog(()))
     raw = {
+        "response_kind": "answered",
         "answer_parts": [{"request_id": "Q1", "requirement": "資料の値", "answer": {"kind": "gap", "text": "資料が必要です。"}}],
         "confidence": "low",
     }

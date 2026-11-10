@@ -463,6 +463,8 @@ class GroundedDraft(_StrictModel):
     _citation_snapshots: tuple[Any, ...] = PrivateAttr(default=())
     # 新wireの摘要は既出出力の選択だけ。依存が非公開になれば機械的に保留する。
     _composed_summary: bool = PrivateAttr(default=False)
+    # 新しい生成の自己申告。本文を公開する条件には使わず、既存の履歴は未宣言のまま読む。
+    _response_kind: str | None = PrivateAttr(default=None)
 
     response_language: ResponseLanguage = Field(
         default_factory=ResponseLanguage, description="最初に決めた回答言語。次段はこの契約を保持する。"

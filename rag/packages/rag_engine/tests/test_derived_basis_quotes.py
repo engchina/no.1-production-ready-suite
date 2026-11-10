@@ -35,7 +35,7 @@ def part(kind, unit_ids, requirement="期限", result=DROPPED):
 
 def draft_of(parts, summary=(0,)):
     model, catalog, _ = catalog_case()
-    raw = {"answer_parts": parts, "summary_part_indexes": list(summary), "confidence": "medium"}
+    raw = {"response_kind": "answered", "answer_parts": parts, "summary_part_indexes": list(summary), "confidence": "medium"}
     return canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
 
 
@@ -105,6 +105,7 @@ def run():
         ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
         return schema.model_validate(
             {
+                "response_kind": "answered",
                 "answer_parts": [part("answer", ids)],
                 "summary_part_indexes": [0],
                 "request_coverage": [
