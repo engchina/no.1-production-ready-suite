@@ -48,14 +48,15 @@ def used_evidence_lines(citations: Sequence[Mapping[str, Any]]) -> str:
             meta.get("page_start") or meta.get("page_number") or meta.get("page"),
             meta.get("page_end"),
         )
-        if pages:
-            parts.append(
-                f"スライド: {pages}" if document_format(name) == "slides" else f"p.{pages}"
-            )
-        if sheet := str(meta.get("sheet_name") or "").strip():
-            parts.append(f"シート: {sheet}")
-        if rows := _range(meta.get("row_start"), meta.get("row_end")):
-            parts.append(f"行: {rows}")
+        kind = document_format(name)
+        # template の位置の契約に合わせ、表計算の内部の頁番号と PDF の表の行を混同しない。
+        if pages and kind not in {"sheet", "text"}:
+            parts.append(f"スライド: {pages}" if kind == "slides" else f"p.{pages}")
+        if kind in {"sheet", "unknown"}:
+            if sheet := str(meta.get("sheet_name") or "").strip():
+                parts.append(f"シート: {sheet}")
+            if rows := _range(meta.get("row_start"), meta.get("row_end")):
+                parts.append(f"行: {rows}")
         section = meta.get("section_path") or meta.get("section_title")
         if isinstance(section, list):
             section = " > ".join(str(item) for item in section if item)

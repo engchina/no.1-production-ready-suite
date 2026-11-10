@@ -39,6 +39,21 @@ def test_template_location_round_trip(citation: dict[str, Any], expected: str) -
     assert isinstance(parse_evidence_line(expected), EvidenceSpec)
 
 
+@pytest.mark.parametrize(
+    ("citation", "expected"),
+    [
+        (
+            cite("合成.xlsx", page=2, sheet_name="Sheet1", row_start=10, row_end=12),
+            "合成.xlsx | シート: Sheet1 | 行: 10-12",
+        ),
+        (cite("合成.md", page=1, section_path="設定"), "合成.md | 章節: 設定"),
+        (cite("合成.pdf", page=3, row_start=10, row_end=12), "合成.pdf | p.3"),
+    ],
+)
+def test_locations_follow_template_document_format(citation: dict[str, Any], expected: str) -> None:
+    assert used_evidence_lines([citation]) == expected
+
+
 def test_candidates_parent_only_and_legacy_records_are_not_actual_evidence() -> None:
     assert (
         used_evidence_lines(
