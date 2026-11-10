@@ -1411,12 +1411,10 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     assert len(fake.messages["conv-x"]) == saved
 
 
-def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ranges(
+def test_stream_message_rejects_clarification_answers_that_are_not_guide_conditions(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """確認の答えは検索・回答プロファイルのルールから引き直し、章節の範囲と回答の前提にする(#717)。"""
-    from tests.test_search_answer_profile_clarification import CLARIFICATION
-
+    """確認は業務ガイドの条件だけ（#4799）。ほかの id の答えは保存前に 422 にする。"""
     fake = FakeChatOracle()
     fake.conversations["conv-x"] = StoredConversation(
         id="conv-x",
@@ -1428,65 +1426,21 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     fake.messages["conv-x"] = []
     _stub_stream(monkeypatch, fake, ["m1"])
     monkeypatch.setattr(_FakePipeline, "scopes", [])
-    monkeypatch.setattr(_FakePipeline, "filters", [])
-
-    async def payload(_store: object, search_answer_profile_id: str) -> dict[str, object]:
-        assert search_answer_profile_id == "bv-1"
-        return {"rules": [{"id": "R01", "clarification": CLARIFICATION}]}
-
-    monkeypatch.setattr(chat_route, "load_runtime_knowledge_payload", payload)
-    read_documents: list[str] = []
-
-    async def sections(_oracle: object, document_id: str, _recipe_id: None) -> None:
-        # 文書が無いときは、確認を保存したときのページで絞る(#721)。
-        read_documents.append(document_id)
-
-    from app.rag import document_sections_service
-
-    monkeypatch.setattr(document_sections_service, "document_sections", sections)
     url = "/api/chat/conversations/conv-x/messages/stream"
 
-    resp = client.post(
-        url,
-        json={
-            "content": "申請の期限は?",
-            "clarification": {"rule_id": "R01", "option_ids": ["travel"]},
-        },
-    )
-    assert resp.status_code == 200
-    scope = _FakePipeline.scopes[0]
-    assert getattr(scope, "label", "") == "「出張旅費規程.pdf」の「第6条 申請と精算」（p.2–3）"
-    assert '"document_id":"doc-travel"' in _FakePipeline.filters[0]["page_ranges"]
-    assert read_documents == ["doc-travel"]
-    # 回答前に確認した内容を USER のメッセージに残し、会話の API で返す（#1839）。
-    user = next(message for message in fake.messages["conv-x"] if message.role == "USER")
-    assert user.clarification == {
-        "outcome": "answered",
-        "entries": [
-            {"prompt": CLARIFICATION["question"], "selected": ["出張旅費"], "other_text": ""}
-        ],
-    }
-    assert chat_route._to_chat_message(user).clarification is not None
-
-    # 「確認せずに回答」は回答を変えず、飛ばしたことと確認事項を残す。
-    skipped = client.post(url, json={"content": "旅費は?", "clarification_skipped_rule_id": "R01"})
-    assert skipped.status_code == 200
-    last_user = [message for message in fake.messages["conv-x"] if message.role == "USER"][-1]
-    assert last_user.clarification == {
-        "outcome": "skipped",
-        "entries": [{"prompt": CLARIFICATION["question"]}],
-    }
-    record = chat_route._to_chat_message(last_user).clarification
-    assert record is not None and record.outcome == "skipped"
-
-    # ルールに無い選択肢は、発話を保存する前に 422 で断る。
-    saved = len(fake.messages["conv-x"])
     bad = client.post(
         url,
-        json={"content": "期限は?", "clarification": {"rule_id": "R01", "option_ids": ["x"]}},
+        json={"content": "期限は?", "clarification": {"rule_id": "R01", "option_ids": ["a"]}},
     )
     assert bad.status_code == 422
-    assert len(fake.messages["conv-x"]) == saved
+    assert fake.messages["conv-x"] == []
+
+    # 業務ガイドの確認でない id を飛ばしても、確認の記録は残さずに回答する。
+    skipped = client.post(url, json={"content": "旅費は?", "clarification_skipped_rule_id": "R01"})
+    assert skipped.status_code == 200
+    user = next(message for message in fake.messages["conv-x"] if message.role == "USER")
+    assert user.clarification is None
+    assert _FakePipeline.scopes == [None]
 
 
 class _DatabaseError(Exception):

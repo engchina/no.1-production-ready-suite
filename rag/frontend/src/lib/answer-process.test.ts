@@ -57,10 +57,7 @@ describe("answerStepDisplayName", () => {
     expect(answerStageName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStepDisplayName("文書検索（2回目）")).toBe("検索文から根拠の候補を集める（2 回目）");
     expect(answerStepDisplayName("回答文の生成と引用の確認（1回目）")).toBe("回答文を作る（1 回目）");
-    // 用語・同義語と回答ルールは別の工程（設定画面のタブの名前と同じ語。#3451）。
     expect(answerStepDisplayName("用語・同義語の確認")).toBe("一致する用語の別名を検索文に加える");
-    expect(answerStepDisplayName("回答ルールの確認")).toBe("確認と回答に使うルールを選ぶ");
-    expect(answerStageName("回答ルールの確認")).toBe("確認と回答に使うルールを選ぶ");
     expect(answerStepDisplayName("新しい工程")).toBe("新しい工程");
     expect(answerStepDisplayName("新しい工程（2回目）")).toBe("新しい工程（2回目）");
   });
@@ -182,7 +179,7 @@ describe("RAG_TRACE_DETAILS_LABELS（トレースの span の名前）", () => {
   });
 
   it("処理の経過の段の名前と trace の段の名前は同じ関数から作る", () => {
-    for (const stage of ["query_guardrail", "history_rewrite", "field_filter", "answer", "evidence", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠検索フロー", "根拠確認（2回目）"]) {
+    for (const stage of ["query_guardrail", "history_rewrite", "answer", "evidence", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠検索フロー", "根拠確認（2回目）"]) {
       expect(RAG_TRACE_DETAILS_LABELS.stageName?.(stage, "done")).toBe(answerStageName(stage));
     }
     expect(answerStageName("evidence")).toBe("質問の条件を整理して根拠を探す");

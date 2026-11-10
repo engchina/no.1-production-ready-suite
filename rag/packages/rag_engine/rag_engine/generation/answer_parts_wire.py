@@ -10,7 +10,6 @@ from annotated_types import MaxLen
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from rag_engine.generation.answer_table import table_markdown
 from rag_engine.generation.citation_content import structure_only_quote
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog
@@ -342,6 +341,7 @@ def canonical_answer_parts(
     part_applications = []
     part_structure_only = []
     part_labels = []
+    part_tables = []
     plan_basis: list[tuple[str, list[BoundUnitRange]]] = []
 
     def bind_items(request_id: str, selected: Sequence[BoundUnitRange]) -> list[int]:
@@ -412,7 +412,8 @@ def canonical_answer_parts(
                     "table": table.model_dump(),
                 }
             )
-            text = applications[-1]["result"] + "\n" + table_markdown(table)
+            # 表は本文の組み立て（``render_answer``）が要約の直後に出典の列と出典行つきで出す（#4812）。要約には入れない。
+            text = applications[-1]["result"]
         elif kind == "answer":
             app_indexes = [len(applications)]
             applications.append(
@@ -447,6 +448,7 @@ def canonical_answer_parts(
             kind == "source" and bool(selected) and all(structure_only_quote(binding.text, binding.snapshot.span()) for binding in selected)
         )
         part_labels.append(str(part.get("subquestion") or ""))
+        part_tables.append(kind == "table")
         part_sources.append(indexes if kind in {"source", "gap"} else [])
         part_applications.append(app_indexes)
     _attach_basis_quotes(parts, applications)
@@ -456,7 +458,7 @@ def canonical_answer_parts(
         applications=applications,
         answer_parts=parts,
         request_coverage=basis_request_plans(getattr(type(value), "_request_ids", ()), plan_basis),
-        summary="\n".join(texts[index] for index in chosen),
+        summary="\n".join(texts[index] for index in chosen if not part_tables[index]),
         summary_item_indexes=list(dict.fromkeys(source for index in chosen for source in part_sources[index])),
         summary_application_indexes=list(dict.fromkeys(app for index in chosen for app in part_applications[index])),
     )

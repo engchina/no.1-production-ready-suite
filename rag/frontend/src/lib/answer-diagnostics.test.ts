@@ -51,12 +51,6 @@ describe("parseAnswerDiagnostics", () => {
       external_data_required: true,
       external_data_items: ["対象の受注の登録状態", ""],
       question_type: ["操作方法"],
-      auto_field_filter: {
-        conditions: [
-          { name: "金額", value_type: "number", op: "gte", value: "100000" },
-          { name: "壊れた条件", value_type: "number", op: "between", value: "1" },
-        ],
-      },
       rewritten_question: "受注入力画面での受注の登録方法は？",
       generated_queries: ["受注 登録"],
       models: {
@@ -95,9 +89,6 @@ describe("parseAnswerDiagnostics", () => {
     expect(parsed?.externalDataRequired).toBe(true);
     expect(parsed?.externalDataItems).toEqual(["対象の受注の登録状態"]);
     expect(parsed?.questionType).toEqual(["操作方法"]);
-    expect(parsed?.autoFieldFilter).toEqual({
-      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-    });
     expect(parsed?.models).toEqual({
       llm: { modelId: "model-a", label: "Model A" },
       attachedImages: 2,
@@ -190,7 +181,6 @@ describe("parseAnswerDiagnostics", () => {
   it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
     expect(parseAnswerDiagnostics(null)).toBeNull();
     // モデルを持たない古い回答の記録でも壊れない。
-    expect(parseAnswerDiagnostics({})?.autoFieldFilter).toBeNull();
     expect(parseAnswerDiagnostics({})?.models).toEqual({ llm: null, attachedImages: 0, embedding: "", rerank: "" });
     expect(parseAnswerDiagnostics({})?.approvedFaq).toBeNull();
     expect(confidenceVariant("high")).toBe("success");

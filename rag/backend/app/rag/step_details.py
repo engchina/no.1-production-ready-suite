@@ -49,9 +49,6 @@ def pipeline_step_details(
     return details.model_dump() if details is not None else None
 
 
-_CONDITION_OPERATORS = {"eq": "=", "gte": "≥", "lte": "≤"}
-
-
 def history_rewrite_details(
     rewritten: str, history: Iterable[Any], *, intent: str = "search"
 ) -> dict[str, Any] | None:
@@ -119,19 +116,6 @@ def faq_direct_details(match: Any) -> dict[str, Any] | None:
             for item in excluded
         ],
     )
-
-
-def field_filter_details(conditions: Iterable[Any]) -> dict[str, Any] | None:
-    """質問から読み取った抽出項目の条件（項目・比べ方・値）。"""
-
-    items = list(conditions)
-    lines = [
-        f"{getattr(item, 'name', '')} {_CONDITION_OPERATORS.get(getattr(item, 'op', ''), '=')} "
-        f"{getattr(item, 'value', '')}"
-        for item in items
-    ]
-    summary = f"{len(items)} 件" if items else "なし（条件で絞らずに検索します）"
-    return pipeline_step_details(fields=[("読み取った条件", summary)], lines=lines)
 
 
 def answer_guardrail_details(result: Any, answer: str) -> dict[str, Any] | None:

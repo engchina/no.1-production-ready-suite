@@ -38,6 +38,7 @@ from rag_engine.config import (
     llm_output_token_limit,
     oci_inference_endpoint,
 )
+from rag_engine.generation.response_language import default_response_language
 from rag_engine.knowledge.prompt_files import (
     IMAGE_RETRIEVAL_PROMPT_KEY,
     continue_prompt_steps,
@@ -53,6 +54,7 @@ from rag_engine.models.llm import (
 from rag_engine.parsing.vision_prompt_rules import (
     MAX_CHART_SERIES_VALUES,
     MAX_TABLE_COLUMNS,
+    PAGE_TEXT_SAMPLE_KEY,
     PICTURE_EXTRACTION_INSTRUCTION,
     TABLE_EXTRACTION_INSTRUCTION,
     VISION_LIST_FIELD_LIMITS,
@@ -257,13 +259,21 @@ def picture_response_schema() -> dict[str, Any]:
 
 
 def _picture_output_contract() -> str:
-    """応答の schema では表せない、空の値の扱いと構造配列の件数の上限（保存の処理と同じ定数）。"""
+    """応答の schema では表せない、空の値の扱い・構造配列の件数の上限（保存の処理と同じ定数）・説明を書く言語。
+
+    言語の決まりはここだけに書く（#4821）。基準の本文は metadata の key で渡し、無いときの既定は回答と同じ既定の言語。
+    """
     return (
         "## Step 7: 結果を返す\n"
         "該当しない文字列は空文字、配列は空配列にしてください。\n"
         + "構造配列の上限: "
         + "、".join(f"{field}={limit}" for field, limit in VISION_LIST_FIELD_LIMITS.items())
-        + f"。table_rows の各行は最大 {MAX_TABLE_COLUMNS} セル、chart_series の values は各系列最大 {MAX_CHART_SERIES_VALUES} 件。"
+        + f"。table_rows の各行は最大 {MAX_TABLE_COLUMNS} セル、chart_series の values は各系列最大 {MAX_CHART_SERIES_VALUES} 件。\n"
+        "\n"
+        "### 説明の言語\n"
+        "画像から写す文字は原文の表記のまま残し、あなたが書く文（要約・説明・質問例・言い換え）は、"
+        f"metadata.{PAGE_TEXT_SAMPLE_KEY}（対象と同じページの本文の抜粋）と同じ言語で書いてください。"
+        f"{PAGE_TEXT_SAMPLE_KEY} が空なら画像の中の文字と同じ言語、画像に文字も無ければ{default_response_language()}で書いてください。"
     )
 
 

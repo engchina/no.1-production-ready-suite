@@ -58,7 +58,6 @@ from rag_engine.knowledge.domain_keywords import (
     normalize_domain_keywords,
 )
 from rag_engine.knowledge.runtime_knowledge import (
-    MAX_RULES,
     MAX_TERMS,
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
@@ -69,8 +68,7 @@ from rag_engine.knowledge.runtime_knowledge_management import (
 )
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
-from app.config import Settings, get_settings
-from app.rag.answer_engine import AnswerScope
+from app.config import Settings
 from app.rag.approved_faq_scope import (
     ApprovedFaqScopeState,
     FaqSourceDocumentState,
@@ -81,13 +79,7 @@ from app.rag.approved_faq_scope import (
     permitted_for_current_user,
     validate_target_knowledge_base_ids,
 )
-from app.schemas.search import PageRange, format_page_ranges
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
-from app.schemas.search_answer_profile_knowledge import (
-    ClarificationAnswer,
-    ClarificationSection,
-    RuleClarification,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -848,7 +840,7 @@ def _faq_file(payload: Mapping[str, object] | None) -> Iterator[Path]:
         yield path
 
 
-# --- 用語・同義語と回答ルール(runtime knowledge)-------------------------------------------
+# --- 用語・同義語(runtime knowledge)-------------------------------------------
 
 RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 
@@ -856,28 +848,22 @@ RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 async def load_runtime_knowledge_payload(
     store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> dict[str, object]:
-    """検索・回答プロファイルの用語・同義語と回答ルールの payload を返す(未登録は空の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語の payload を返す(未登録は空の標準形式)。"""
     payload = await store.get_search_answer_profile_knowledge(
         search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND
     )
-    return payload or {"schema_version": 1, "terms": [], "rules": []}
+    return payload or {"schema_version": 1, "terms": []}
 
 
 async def edit_runtime_knowledge(
     store: SearchAnswerProfileKnowledgeStore,
     search_answer_profile_id: str,
     *,
-    kind: str,
     selected: str | None,
     name: str = "",
-    title: str = "",
     labels: str = "",
     content: str = "",
     source: str = "",
-    purpose: str | None = None,
-    instruction_kind: str | None = None,
-    exclusive_group: str | None = None,
-    priority: int | None = None,
     enabled: bool = True,
     delete: bool = False,
 ) -> dict[str, object]:
@@ -887,17 +873,11 @@ async def edit_runtime_knowledge(
         snapshot = load_knowledge_snapshot(work_dir, path)
         updated, _ = edit_knowledge(
             snapshot,
-            kind,
             selected,
             name=name,
-            title=title,
             labels=labels,
             content=content,
             source=source,
-            purpose=purpose,
-            instruction_kind=instruction_kind,
-            exclusive_group=exclusive_group,
-            priority=priority,
             enabled=enabled,
             delete=delete,
             confirmed=delete,
@@ -911,14 +891,12 @@ async def edit_runtime_knowledge(
 def preview_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
+    """質問に一致する用語・同義語と拡張後の検索文を返す(保存しない)。"""
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(
             question,
             work_dir,
             path,
-            rules_confirmation_enabled=True,
-            rules_answer_enabled=True,
             terms_search_enabled=True,
             terms_answer_enabled=True,
         )
@@ -927,21 +905,12 @@ def preview_runtime_knowledge(
 def match_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に当たる用語と、用途・排他・明示優先度で採用した確認・回答ルールを返す（保存しない）。
+    """質問に当たる用語を返す（保存しない）。照合・有効状態の判定は回答生成と同じ。
 
-    照合・有効状態・用途と排他の判定は回答生成と同じ。生成側は rules_for_stage で取り出す。
     件数・字数で切って省いた数を示すのは呼び出し元(MCP の根拠の取得。#2701)。
     """
     with _runtime_knowledge_dir(payload) as (work_dir, path):
-        return build_runtime_knowledge_context(
-            question,
-            work_dir,
-            path,
-            term_limit=MAX_TERMS,
-            rule_limit=MAX_RULES,
-            rules_confirmation_enabled=get_settings().rag_runtime_rules_confirmation_enabled,
-            rules_answer_enabled=get_settings().rag_runtime_rules_answer_enabled,
-        )
+        return build_runtime_knowledge_context(question, work_dir, path, term_limit=MAX_TERMS)
 
 
 @contextmanager
@@ -951,246 +920,3 @@ def _runtime_knowledge_dir(payload: Mapping[str, object]) -> Iterator[tuple[Path
         path = work_dir / "runtime_knowledge.json"
         path.write_text(json.dumps(dict(payload), ensure_ascii=False), encoding="utf-8")
         yield work_dir, path
-
-
-# --- ルールの確認の質問(チャットの確認。#717)-------------------------------------------
-
-
-def _rules(payload: Mapping[str, object]) -> list[dict[str, object]]:
-    rules = payload.get("rules")
-    return [rule for rule in rules if isinstance(rule, dict)] if isinstance(rules, list) else []
-
-
-def rule_clarification(rule: Mapping[str, object]) -> RuleClarification | None:
-    """ルールの確認(無い・壊れているときは None)。"""
-    if rule.get("purpose", "both") not in ("confirmation", "both"):
-        return None
-    raw = rule.get("clarification")
-    if not isinstance(raw, Mapping):
-        return None
-    try:
-        return RuleClarification.model_validate(dict(raw))
-    except ValueError:
-        return None
-
-
-async def save_rule_clarification(
-    store: SearchAnswerProfileKnowledgeStore,
-    search_answer_profile_id: str,
-    rule_id: str,
-    clarification: RuleClarification | None,
-) -> dict[str, object]:
-    """ルールに確認の質問を保存する(None は外す)。ルールが無ければ KeyError。"""
-    payload = await load_runtime_knowledge_payload(store, search_answer_profile_id)
-    rules = _rules(payload)
-    rule = next((item for item in rules if str(item.get("id", "")) == rule_id), None)
-    if rule is None:
-        raise KeyError(rule_id)
-    if clarification is None:
-        rule.pop("clarification", None)
-    else:
-        rule["clarification"] = clarification.model_dump()
-    updated = {**payload, "rules": rules}
-    await store.save_search_answer_profile_knowledge(
-        search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND, updated
-    )
-    return updated
-
-
-def _already_answered(clarification: RuleClarification, answer: ClarificationAnswer | None) -> bool:
-    """語の出現ではなく、現在の選択肢に対する明示的な選択だけを確定する。"""
-    if answer is None or not answer.option_ids or answer.other_text.strip():
-        return False
-    selected = set(answer.option_ids)
-    return (
-        len(selected) == len(answer.option_ids)
-        and selected <= {option.id for option in clarification.options}
-        and (clarification.multiple or len(selected) == 1)
-    )
-
-
-def suggest_clarification(
-    payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
-) -> tuple[Mapping[str, object], RuleClarification] | None:
-    """質問に一致したルールのうち、確認を持つ最初の 1 件(質問で既に答えているものは除く)。"""
-    found = unanswered_rule_clarifications(payload, question, answers=answers)
-    return found[0] if found else None
-
-
-def unanswered_rule_clarifications(
-    payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
-) -> list[tuple[Mapping[str, object], RuleClarification]]:
-    """一致したルールの未回答の確認事項。確認の提示と前提の明示で同じ判定を使う。"""
-    if not get_settings().rag_runtime_rules_confirmation_enabled:
-        return []
-    found: list[tuple[Mapping[str, object], RuleClarification]] = []
-    by_id = {str(rule.get("id", "")): rule for rule in _rules(payload)}
-    for matched in preview_runtime_knowledge(payload, question).rules_for_stage("confirmation"):
-        rule = by_id.get(matched.rule_id)
-        if rule is None:
-            continue
-        clarification = rule_clarification(rule)
-        selections = [answer for answer in answers if answer.rule_id == matched.rule_id]
-        answer = selections[0] if len(selections) == 1 else None
-        if clarification is not None and not _already_answered(clarification, answer):
-            found.append((rule, clarification))
-    return found
-
-
-def rule_matches(payload: Mapping[str, object], question: str, rule_id: str) -> bool:
-    """質問がそのルールに一致するか（MCP の答えを、一致する質問にだけ当てる。#2117）。"""
-    if not get_settings().rag_runtime_rules_confirmation_enabled:
-        return False
-    return any(
-        matched.rule_id == rule_id
-        for matched in preview_runtime_knowledge(payload, question).matched_rules
-    )
-
-
-def rule_answer(
-    payload: Mapping[str, object], rule_id: str, value: str
-) -> ClarificationAnswer | None:
-    """MCP の ``conditions`` の値（選んだ選択肢の表示名と自由入力を「、」で並べた文）を答えにする。
-
-    Agent は確認の答えを表示名で返す（#2117）。表示名と同じ部分を選択肢、残りを自由入力にする。
-    ルール・確認が無い、値が空なら None。
-    """
-    rule = next((item for item in _rules(payload) if str(item.get("id", "")) == rule_id), None)
-    clarification = rule_clarification(rule) if rule is not None else None
-    parts = [part.strip() for part in value.split("、") if part.strip()]
-    if clarification is None or not parts:
-        return None
-    # ponytail: 「、」を含む表示名は自由入力として渡る（前提の文には残る）。
-    by_label = {option.label: option.id for option in clarification.options}
-    picked = list(dict.fromkeys(by_label[part] for part in parts if part in by_label))
-    if not clarification.multiple:
-        picked = picked[:1]
-    other = "、".join(part for part in parts if by_label.get(part) not in picked)
-    return ClarificationAnswer(rule_id=rule_id, option_ids=picked, other_text=other[:500])
-
-
-SectionPages = Mapping[tuple[str, str], tuple[int | None, int | None]]
-
-
-def _answer_clarification(
-    payload: Mapping[str, object], answer: ClarificationAnswer
-) -> RuleClarification | None:
-    rule = next(
-        (item for item in _rules(payload) if str(item.get("id", "")) == answer.rule_id), None
-    )
-    return rule_clarification(rule) if rule is not None else None
-
-
-def clarification_record(
-    payload: Mapping[str, object], rule_id: str, answer: ClarificationAnswer | None
-) -> dict[str, object] | None:
-    """会話に残す「回答前に確認した内容」（#1839）。``answer`` が None なら飛ばした記録。
-
-    確認事項と選んだ選択肢の名前は保存済みのルールから引き直す。ルールが見つからなければ None。
-    """
-    rule = next((item for item in _rules(payload) if str(item.get("id", "")) == rule_id), None)
-    clarification = rule_clarification(rule) if rule is not None else None
-    if clarification is None:
-        return None
-    if answer is None:
-        return {"outcome": "skipped", "entries": [{"prompt": clarification.question}]}
-    labels = [option.label for option in clarification.options if option.id in answer.option_ids]
-    entry: dict[str, object] = {
-        "prompt": clarification.question,
-        "selected": labels,
-        "other_text": answer.other_text.strip(),
-    }
-    if not clarification.options:
-        # 選択肢の無い確認事項の答えに「その他: 」を付けない（#3410）。
-        entry["free_text_only"] = True
-    return {"outcome": "answered", "entries": [entry]}
-
-
-def clarification_document_ids(
-    payload: Mapping[str, object], answer: ClarificationAnswer
-) -> set[str]:
-    """利用者が選んだ選択肢の章節がある文書(今のページを読み直す対象。#721)。"""
-    clarification = _answer_clarification(payload, answer)
-    if clarification is None:
-        return set()
-    return {
-        section.document_id
-        for option in clarification.options
-        if option.id in answer.option_ids
-        for section in option.sections
-    }
-
-
-def resolve_clarification(
-    payload: Mapping[str, object],
-    answer: ClarificationAnswer,
-    current_pages: SectionPages | None = None,
-) -> tuple[AnswerScope, str] | None:
-    """利用者の確認の回答を、回答の前提(AnswerScope)と page_ranges の値にする。
-
-    ルール・選択肢は保存済みの payload から引き直す(画面が送った範囲をそのまま信じない)。
-    章節のページは ``current_pages``((文書 ID, 章節 ID) → 今のページ)を使い、章節が今は無い
-    ときだけ確認を保存したときのページを使う(#721)。ルール・選択肢が見つからなければ None。
-    """
-    clarification = _answer_clarification(payload, answer)
-    if clarification is None:
-        return None
-    options = [option for option in clarification.options if option.id in answer.option_ids]
-    if len(options) != len(set(answer.option_ids)) or (
-        len(options) > 1 and not clarification.multiple
-    ):
-        return None
-    # 「その他（自由入力）」は 3 製品で常に出す（#1839）。`allow_other` は古い保存の値で、読まない。
-    other = answer.other_text.strip()
-    if not options and not other:
-        return None
-    pages = current_pages or {}
-
-    def current(section: ClarificationSection) -> ClarificationSection:
-        found = pages.get((section.document_id, section.section_id))
-        if found is None:
-            return section
-        return section.model_copy(update={"page_start": found[0], "page_end": found[1]})
-
-    sections = [current(section) for option in options for section in option.sections]
-    labels = [
-        f"「{section.document_name or section.document_id}」の「{section.title}」"
-        + (_pages_label(section.page_start, section.page_end))
-        for section in sections
-    ]
-    lines = [f"確認の質問: {clarification.question}"]
-    if options:
-        lines.append("選んだ答え: " + "、".join(option.label for option in options))
-    lines.extend(f"前提: {option.premise}" for option in options if option.premise.strip())
-    if other:
-        lines.append(f"その他（利用者の入力）: {other}")
-    if labels:
-        lines.append("対象範囲: " + "、".join(labels))
-    page_ranges = format_page_ranges(
-        [
-            PageRange(
-                document_id=section.document_id,
-                page_start=section.page_start,
-                page_end=section.page_end,
-            )
-            for section in sections
-        ]
-    )
-    scope = AnswerScope(
-        context="\n".join(lines),
-        search_terms=tuple(term for option in options for term in option.search_terms),
-        label="、".join(labels),
-        confirmed_premises=(
-            (
-                clarification.question,
-                "、".join([*(option.label for option in options), *([other] if other else [])]),
-            ),
-        ),
-    )
-    return scope, page_ranges
-
-
-def _pages_label(start: int | None, end: int | None) -> str:
-    if start is None:
-        return ""
-    return f"（p.{start}）" if end is None or end == start else f"（p.{start}–{end}）"

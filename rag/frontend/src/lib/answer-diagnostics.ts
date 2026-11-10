@@ -1,6 +1,5 @@
 import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from "@production-ready/ui";
 
-import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
 import { ja, t, type I18nKey } from "@/lib/i18n";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
@@ -80,10 +79,6 @@ export type AnswerDiagnostics = {
   externalDataItems: string[];
   /** 問い合わせ型（回答モデルが付けた質問の種類の語。#651）。 */
   questionType: string[];
-  /**
-   * 質問から読み取って検索に足した抽出項目の条件（#652）。読み取っていなければ null。
-   */
-  autoFieldFilter: { conditions: ExtractionFieldCondition[] } | null;
   /**
    * 利用者が選んだ承認済み FAQ だけから回答したときの出典（回答した時点の原文。#737）。
    * answer は変更前に保存した回答では空。FAQ から回答していなければ null。
@@ -225,7 +220,6 @@ export function parseAnswerDiagnostics(
     externalDataRequired: raw.external_data_required === true,
     externalDataItems: list(raw.external_data_items).map(String).filter(Boolean),
     questionType: list(raw.question_type).map(String).filter(Boolean),
-    autoFieldFilter: parseAutoFieldFilter(raw.auto_field_filter),
     approvedFaq:
       raw.answer_source === "approved_faq"
         ? {
@@ -349,27 +343,6 @@ function parseGuide(value: unknown): AnswerGuide | null {
     unresolved,
     applicability,
   };
-}
-
-function parseAutoFieldFilter(value: unknown): AnswerDiagnostics["autoFieldFilter"] {
-  const raw = record(value);
-  const conditions = list(raw.conditions).flatMap((item) => {
-    const entry = record(item);
-    const name = String(entry.name ?? "");
-    const valueType = String(entry.value_type ?? "");
-    const op = String(entry.op ?? "");
-    if (!name || !["string", "number", "date", "bool"].includes(valueType)) return [];
-    if (!["eq", "gte", "lte"].includes(op)) return [];
-    return [
-      {
-        name,
-        value_type: valueType as ExtractionFieldCondition["value_type"],
-        op: op as ExtractionFieldCondition["op"],
-        value: String(entry.value ?? ""),
-      },
-    ];
-  });
-  return conditions.length ? { conditions } : null;
 }
 
 type ModelRef = { modelId: string; label: string };

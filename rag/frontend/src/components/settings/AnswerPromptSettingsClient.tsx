@@ -44,7 +44,6 @@ export function AnswerPromptSettingsClient() {
   return (
     <PageBody wide>
       <AnswerTermSettingsCard />
-      <AnswerTermSettingsCard field="runtime_rules_answer_enabled" />
       <AnswerPromptStages stages={stages} />
     </PageBody>
   );

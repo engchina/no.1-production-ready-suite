@@ -188,7 +188,7 @@ class SupportGuideApi {
     const base = "/api/search-answer-profiles/bv-1/support-guides";
     if (path.endsWith("/runtime-knowledge/edit")) {
       this.requests.push({ method, path, body });
-      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
+      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [] }) });
     }
     if (!path.startsWith(base)) return this.handleOther(route, path);
     this.requests.push({ method, path, body });
@@ -270,9 +270,6 @@ class SupportGuideApi {
                   candidates: [],
                 },
               ],
-              rule_candidates: [
-                { title: "通知の質問は設定画面Aを案内する", triggers: ["通知"], content: "原因は言い切らない。" },
-              ],
             }
           : {
               row: row.row,
@@ -298,7 +295,6 @@ class SupportGuideApi {
                   candidates: [],
                 },
               ],
-              rule_candidates: [],
             },
       );
       return route.fulfill({
@@ -1038,7 +1034,7 @@ test("JSON の取り込みは確認で各ガイドの可否を示し、すべて
 
 /** アプリの外観の設定（localStorage）でテーマを切り替える（`emulateMedia` では切り替わらない）。 */
 test(
-  "回答の過程の Excel から列を選んで AI で下書きを作り、選んだ行とルールの候補だけを下書きにする（#2397）",
+  "回答の過程の Excel から列を選んで AI で下書きを作り、選んだ行だけを下書きにする（#2397）",
   { tag: "@responsive" },
   async ({ page }, testInfo) => {
     const api = await openSupportGuides(page);
@@ -1072,27 +1068,19 @@ test(
     await expect(invalid).toContainText("文書が無い");
     await expect(invalid).toContainText("ナレッジベースの文書にありません");
     await expect(invalid.getByRole("checkbox", { name: /3 行目/ })).toBeDisabled();
-    // ルールの候補は既定で選ばない。選んだものだけを無効のルールとして足す。
-    const rule = result.getByRole("checkbox", { name: "通知の質問は設定画面Aを案内する" });
-    await expect(rule).not.toBeChecked();
-    await rule.check();
+    // ルールの候補は作らない（登録ルールは無い。#4799）。
+    await expect(result.getByText("ルールの候補")).toHaveCount(0);
     await expectNoPageOverflow(page);
     await panel.screenshot({ path: testInfo.outputPath("support-guide-process-preview.png") });
 
     await result.getByRole("button", { name: "選んだものを下書きにする" }).click();
-    await expect(page.getByText("業務ガイド 1 件を下書きにし、ルール 1 件を無効のまま足しました。")).toBeVisible();
+    await expect(page.getByText("業務ガイド 1 件を下書きにしました。")).toBeVisible();
     const preview = api.requests.find((item) => item.path.endsWith("/import/process/preview"));
     expect((preview?.body as { rows: { row: number }[] }).rows.map((row) => row.row)).toEqual([2, 3]);
     expect(api.requests.find((item) => item.path.endsWith("/support-guides/import"))?.body).toMatchObject({
       guides: [{ title: "画面Aの通知を表示する" }],
     });
-    expect(api.requests.find((item) => item.path.endsWith("/runtime-knowledge/edit"))?.body).toMatchObject({
-      kind: "rules",
-      selected: null,
-      title: "通知の質問は設定画面Aを案内する",
-      labels: "通知",
-      enabled: false,
-    });
+    expect(api.requests.find((item) => item.path.endsWith("/runtime-knowledge/edit"))).toBeUndefined();
     await expect(page.getByRole("rowheader", { name: "画面Aの通知を表示する" })).toBeVisible();
     await expect(page.getByTestId("support-guide-import")).toHaveCount(0);
   },

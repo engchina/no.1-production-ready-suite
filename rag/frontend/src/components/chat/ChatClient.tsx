@@ -34,7 +34,6 @@ import {
 } from "@production-ready/ui";
 import {
   RotateCcw,
-  Search,
   Square,
 } from "lucide-react";
 import {
@@ -551,7 +550,6 @@ function MessageTurn({
   columns,
   searchAnswerProfileId,
   onRetry,
-  onAskUnscoped,
   footer,
   liveAttachments,
   readOnly = false,
@@ -569,8 +567,6 @@ function MessageTurn({
   searchAnswerProfileId: string;
   /** 失敗した回答があるときに同じ質問をもう一度送る（最新のターンだけ渡す）。 */
   onRetry?: () => void;
-  /** 確認で範囲を絞った回答のとき、範囲を指定せずに同じ質問を送る（最新のターンだけ渡す。#721）。 */
-  onAskUnscoped?: () => void;
   /** 他の利用者の会話（system_admin が見る）。評価を出さない（#3244）。 */
   readOnly?: boolean;
   columns: {
@@ -595,12 +591,6 @@ function MessageTurn({
   }[];
 }) {
   const compare = columns.length > 1;
-  // 範囲を絞った回答は末尾に「（対象: …）」が付く（#717）。
-  const scoped =
-    onAskUnscoped !== undefined &&
-    columns.some(
-      (column) => !column.streaming && !column.errorMessage && column.answer.includes("（対象:")
-    );
   return (
     // 1 往復の入れ物（質問の吹き出し）は 3 製品共通の ChatTurn（#1161）。
     <ChatTurn
@@ -683,13 +673,6 @@ function MessageTurn({
         </div>
       ) : null}
       {footer}
-      {scoped ? (
-        <div className="flex justify-end">
-          <Button type="button" variant="secondary" size="sm" icon={Search} onClick={onAskUnscoped}>
-            {t("chat.clarify.askUnscoped")}
-          </Button>
-        </div>
-      ) : null}
     </ChatTurn>
   );
 }
@@ -1259,13 +1242,6 @@ export function ChatClient() {
     );
   }
 
-  /** 範囲を指定せずに同じ質問を送る（類似問・確認の質問は出さない。#721）。 */
-  function askUnscoped(content: string) {
-    setSending(true);
-    setErrorText("");
-    void deliver({ content });
-  }
-
   /** 送信できなかった質問を、同じ条件でもう一度送る（類似問・確認は聞き直さない。#907）。 */
   function resend() {
     if (!liveTurn || sending || pendingChoice) return;
@@ -1822,12 +1798,6 @@ export function ChatClient() {
                       !liveTurn &&
                       !answerInProgress
                         ? () => void send(turn.user.content)
-                        : undefined
-                    }
-                    onAskUnscoped={
-                      !readOnly &&
-                      turn.user.message_id === lastTurnId && !liveTurn && !answerInProgress && !pendingChoice
-                        ? () => askUnscoped(turn.user.content)
                         : undefined
                     }
                     testId={turn.user.message_id === savedStreamingUserId ? "chat-saved-streaming-turn" : undefined}

@@ -204,30 +204,27 @@ async def test_prepared_query_reaches_search_while_original_is_saved(
     assert calls == [query]
 
 
-@pytest.mark.parametrize("case", ["rewritten", "rule-selection", "disabled", "answered"])
+@pytest.mark.parametrize("case", ["rewritten", "disabled", "answered"])
 async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     """準備で補った結果と所要時間を送信の側へ渡し、処理の経過に段を残す（#4794）。"""
-    from app.rag.chat_question_token import (
-        read_history_rewrite_elapsed,
-        with_rule_selection_answers,
-    )
+    from app.rag.chat_question_token import read_history_rewrite_elapsed
     from app.schemas.chat import ChatMessageRequest
     from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 
     oracle, settings, calls = context_setup
     if case == "disabled":
         settings.rag_history_rewrite_enabled = False
+    if case == "answered":
+        # 業務ガイドを使うプロファイル（確認への答えを受ける）。設定は準備の前に決める。
+        oracle.view.config.query.support_guide_enabled = True
     query = "その手順は？"
     _question, token = await chat.prepare_chat_question(
         oracle, "conversation-a", "profile-a", query, settings
     )
     assert token is not None
     secret = settings.app_service_token_secret
-    if case == "rule-selection":
-        # 確認の提案が選択を足して署名し直しても、補完の所要時間を落とさない。
-        token = with_rule_selection_answers(secret, token, [], elapsed_seconds=0.1)
     elapsed = read_history_rewrite_elapsed(secret, token)
     assert (elapsed is None) is (case == "disabled")
 
@@ -244,21 +241,13 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     monkeypatch.setattr(oracle, "append_message", append, raising=False)
     turn_request = ChatMessageRequest(content=query, question_context_token=token)
     if case == "answered":
-        from app.rag.answer_engine import AnswerScope
-
-        async def no_pages(*args: Any) -> dict[str, Any]:
-            return {}
-
-        # 準備の後に確認へ新しく答えたら、補った質問を使わない（段も作らない）。
+        # 準備の後に業務ガイドの確認へ新しく答えたら、補った質問を使わない（段も作らない）。
         monkeypatch.setattr(
-            chat, "resolve_clarification", lambda *args: (AnswerScope(context="合成"), None)
+            chat, "resolve_guide_clarification", lambda *args: ({"c1": "値 A"}, "合成")
         )
-        monkeypatch.setattr(chat, "load_runtime_knowledge_payload", no_payload)
-        monkeypatch.setattr(chat, "current_section_pages", no_pages)
-        monkeypatch.setattr(chat, "clarification_document_ids", lambda *args: [])
-        monkeypatch.setattr(chat, "clarification_record", lambda *args: None)
+        monkeypatch.setattr(chat, "guide_clarification_record", lambda *args: None)
         turn_request = turn_request.model_copy(
-            update={"clarification": ClarificationAnswer(rule_id="R01", option_ids=["o1"])}
+            update={"clarification": ClarificationAnswer(rule_id="guide:g1:c1", option_ids=["o1"])}
         )
     turn = await chat._prepare_chat_turn(
         oracle, "conversation-a", "profile-a", turn_request, settings
@@ -306,7 +295,6 @@ async def test_clarification_api_matches_resolved_question(
     oracle, settings, calls = context_setup
     settings.rag_support_guide_enabled = False
     oracle.view.config.query.support_guide_enabled = False
-    matched: list[str] = []
     monkeypatch.setattr(route, "OracleClient", lambda: oracle)
     monkeypatch.setattr(route, "get_settings", lambda: settings)
 
@@ -314,9 +302,6 @@ async def test_clarification_api_matches_resolved_question(
         return {}
 
     monkeypatch.setattr(route, "load_runtime_knowledge_payload", empty)
-    monkeypatch.setattr(
-        route, "suggest_clarification", lambda _payload, query, **kwargs: matched.append(query)
-    )
     result = await route.post_clarification_suggest(
         "profile-a",
         ClarificationSuggestRequest(
@@ -324,14 +309,15 @@ async def test_clarification_api_matches_resolved_question(
             conversation_id="conversation-a",
         ),
     )
-    assert matched == ["対象 A の手順は？ 条件 B との違いは？"]
-    assert result.data is not None and result.data.question_context_token
+    # 業務ガイドを使わないプロファイルは確認を出さず、補った質問の token だけを返す。
+    assert result.data is not None and result.data.suggestion is None
+    assert result.data.question_context_token
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("declined", [False, True])
+@pytest.mark.parametrize("case", ["direct", "declined", "guides-off"])
 async def test_clarification_is_skipped_when_faq_answer_is_returned_directly(
-    context_setup: Any, monkeypatch: pytest.MonkeyPatch, declined: bool
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     """補完した質問が承認済み FAQ に下限以上で一致するなら、確認を出さない（#4788）。"""
     from rag_engine.knowledge.approved_faq import ApprovedFaqRecord, ApprovedFaqSuggestion
@@ -341,15 +327,19 @@ async def test_clarification_is_skipped_when_faq_answer_is_returned_directly(
     from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
 
     oracle, settings, _calls = context_setup
-    settings.rag_support_guide_enabled = False
-    oracle.view.config.query.support_guide_enabled = False
+    guides_enabled = case != "guides-off"
+    settings.rag_support_guide_enabled = guides_enabled
+    oracle.view.config.query.support_guide_enabled = guides_enabled
     matched: list[str] = []
-    clarified: list[str] = []
+    guide_queries: list[str] = []
     monkeypatch.setattr(route, "OracleClient", lambda: oracle)
     monkeypatch.setattr(route, "get_settings", lambda: settings)
 
     async def empty(*args: Any) -> dict[str, Any]:
         return {}
+
+    async def no_guides(*args: Any) -> list[Any]:
+        return []
 
     async def direct(_store: Any, _profile: str, query: str, *args: Any) -> DirectFaqMatch:
         matched.append(query)
@@ -359,24 +349,38 @@ async def test_clarification_is_skipped_when_faq_answer_is_returned_directly(
             best=ApprovedFaqSuggestion(record=record, matched_question=query, score=1.0),
         )
 
+    async def guide_query(*args: Any) -> str:
+        guide_queries.append(args[4])
+        return str(args[4])
+
+    async def no_context(*args: Any) -> None:
+        return None
+
+    async def unchanged(selected: Any, *args: Any) -> Any:
+        return selected
+
     monkeypatch.setattr(route, "load_runtime_knowledge_payload", empty)
+    monkeypatch.setattr(route, "_published_guides", no_guides)
     monkeypatch.setattr(route, "match_direct_approved_faq", direct)
-    monkeypatch.setattr(
-        route, "suggest_clarification", lambda _payload, query, **kwargs: clarified.append(query)
-    )
+    monkeypatch.setattr(route, "build_guide_query", guide_query)
+    monkeypatch.setattr(route, "support_guide_context", no_context)
+    monkeypatch.setattr(route, "select_guide", lambda *args, **kwargs: None)
+    monkeypatch.setattr(route, "resolve_text_conditions", unchanged)
     result = await route.post_clarification_suggest(
         "profile-a",
         ClarificationSuggestRequest(
             query="その手順は？ 条件 B との違いは？",
             conversation_id="conversation-a",
-            approved_faq_declined=declined,
+            approved_faq_declined=case == "declined",
         ),
     )
     resolved = "対象 A の手順は？ 条件 B との違いは？"
     # 照合するのは補完した質問。利用者が類似問を断った質問は照合せず、いつもの確認に進む。
-    assert matched == ([] if declined else [resolved])
-    assert clarified == ([resolved] if declined else [])
-    assert result.data is not None and result.data.question_context_token
+    # 確認を出さないプロファイル（業務ガイドを使わない）では、照合もしない。
+    assert matched == ([resolved] if case == "direct" else [])
+    assert guide_queries == ([resolved] if case == "declined" else [])
+    assert result.data is not None and result.data.suggestion is None
+    assert result.data.question_context_token
 
 
 async def test_blocked_confirmation_also_excludes_assistant_reply(
@@ -470,118 +474,6 @@ async def test_prepared_question_rejects_changed_global_language_pack(context_se
         set_default_pack(old)
 
 
-async def test_signed_rule_facts_reach_execution_without_second_recognition(
-    context_setup: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.rag.chat_question_token import (
-        read_rule_selection_answers,
-        read_rule_selection_elapsed,
-        with_rule_selection_answers,
-    )
-    from app.schemas.chat import ChatMessageRequest
-
-    oracle, settings, _calls = context_setup
-    query = "その設定は？"
-    _, token = await chat.prepare_chat_question(
-        oracle, "conversation-a", "profile-a", query, settings
-    )
-    assert token
-    facts = [{"rule_id": "r1", "option_ids": ["a"], "other_text": ""}]
-    token = with_rule_selection_answers(
-        settings.app_service_token_secret, token, facts, elapsed_seconds=3
-    )
-    assert read_rule_selection_answers(settings.app_service_token_secret, token) == facts
-    assert read_rule_selection_elapsed(settings.app_service_token_secret, token) == 3
-    captured = []
-
-    async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
-        captured.append((request, kwargs))
-        return request, effective, None, None
-
-    async def append(message: StoredMessage) -> StoredMessage:
-        return message
-
-    monkeypatch.setattr(chat, "_resolve_query_context", resolve)
-    monkeypatch.setattr(oracle, "append_message", append, raising=False)
-    await chat._prepare_chat_turn(
-        oracle,
-        "conversation-a",
-        "profile-a",
-        ChatMessageRequest(
-            content=query,
-            question_context_token=token,
-        ),
-        settings,
-    )
-    assert captured[0][1]["confirmed_rule_answers"][0].option_ids == ["a"]
-    assert captured[0][0]._rule_selection_state == {"prepared": True, "elapsed_seconds": 3}
-    with pytest.raises(ValueError):
-        read_rule_selection_answers(settings.app_service_token_secret, token + "changed")
-
-
-@pytest.mark.parametrize("known", [True, False])
-async def test_confirmation_api_keeps_unknown_and_shares_positive_choice(
-    context_setup: Any,
-    monkeypatch: pytest.MonkeyPatch,
-    known: bool,
-) -> None:
-    import json
-    from copy import deepcopy
-
-    from app.api.routes import search_answer_profile_knowledge as route
-    from app.rag import rule_selection
-    from app.rag.chat_question_token import read_rule_selection_answers
-    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
-    from tests.test_rule_selection import PAYLOAD
-
-    oracle, settings, _calls = context_setup
-    settings.rag_runtime_rules_confirmation_enabled = True
-    from app.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
-    settings.rag_support_guide_enabled = False
-    settings.rag_history_rewrite_enabled = False
-    oracle.view.config.query.support_guide_enabled = False
-    payload = deepcopy(PAYLOAD)
-    text = "設定はモードAを選びます" if known else "設定はモードAではない。まだ未定です"
-    captured = []
-
-    async def load(*args: Any) -> dict[str, Any]:
-        return payload
-
-    class Client:
-        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
-            captured.append(json.loads(context))
-            return json.dumps(
-                {
-                    "conditions": [
-                        {
-                            "condition_id": "rule-1",
-                            "status": "known" if known else "unknown",
-                            "option_ids": ["a"] if known else [],
-                            "evidence": [text] if known else [],
-                        }
-                    ]
-                }
-            )
-
-    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
-    monkeypatch.setattr(route, "get_settings", lambda: settings)
-    monkeypatch.setattr(route, "load_runtime_knowledge_payload", load)
-    monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
-    result = await route.post_clarification_suggest(
-        "profile-a", ClarificationSuggestRequest(query=text, conversation_id="conversation-a")
-    )
-    assert result.data is not None
-    assert (result.data.suggestion is None) == known
-    assert len(captured) == 1
-    token = result.data.question_context_token
-    assert token
-    facts = read_rule_selection_answers(settings.app_service_token_secret, token)
-    assert len(facts) == int(known)
-    assert captured[0]["user_statements"].endswith(text)
-
-
 async def test_small_talk_suggestion_skips_clarification_and_keeps_intent(
     context_setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -602,7 +494,7 @@ async def test_small_talk_suggestion_skips_clarification_and_keeps_intent(
     monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", greeting)
     monkeypatch.setattr(route, "OracleClient", lambda: oracle)
     monkeypatch.setattr(route, "get_settings", lambda: settings)
-    monkeypatch.setattr(route, "recognize_rule_selections", forbidden)
+    monkeypatch.setattr(route, "resolve_text_conditions", forbidden)
     result = await route.post_clarification_suggest(
         "profile-a",
         ClarificationSuggestRequest(query="合成の挨拶", conversation_id="conversation-a"),

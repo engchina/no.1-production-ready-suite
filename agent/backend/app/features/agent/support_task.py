@@ -619,7 +619,7 @@ def evidence_clarification_step(output: JsonObject) -> JsonObject | None:
 
 
 def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
-    """根拠の取得がモデルへ渡した検索・回答プロファイルのルール・用語の記録（#2701）。
+    """根拠の取得がモデルへ渡した検索・回答プロファイルの用語の記録（#2701）。
 
     設定の画面の一致の確かめ（preview）と、実行でモデルに渡った内容を分けて追えるように、数と版
     だけを返す（本文・名前は業務の内容なのでログに残さない。全文は Run の step の結果にある）。
@@ -628,15 +628,12 @@ def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
     knowledge = output.get("profile_knowledge")
     if not isinstance(knowledge, dict):
         return None
-    rules = _records(knowledge.get("rules"))
     terms = _records(knowledge.get("terms"))
     return {
         "search_answer_profile_id": knowledge.get("search_answer_profile_id"),
         "revision": knowledge.get("revision"),
         "matched_on": knowledge.get("matched_on"),
-        "rules": len(rules),
         "terms": len(terms),
-        "rules_omitted": knowledge.get("rules_omitted"),
         "terms_omitted": knowledge.get("terms_omitted"),
         "load_failed": knowledge.get("load_failed") is True,
     }
@@ -1328,11 +1325,11 @@ def caller_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
 
 
 # Agent 主体の取得を許さない接続（#2676）の根拠の取得で、モデルに見せず、渡されても呼び先へ送らない
-# 引数。planning と追跡 ID は実行環境だけが決め、queries・skip_clarification は planning=caller の
+# 引数。planning と追跡 ID は実行環境だけが決め、queries は planning=caller の
 # ときだけ効く（送らなければ RAG の既定の rag が検索文を計画する）。schema に無い追加の項目として
 # 引数の誤りにすると、caller の手順を書いたスキルの Run が引数の誤りの上限で止まりうるので、
 # 誤りにせずに外す。
-RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries", "skip_clarification")
+RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries")
 
 
 def rag_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:

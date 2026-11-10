@@ -3714,29 +3714,26 @@ def test_term_usage_settings_are_independent(
         assert getattr(reloaded, "rag_" + key) is value
 
 
-@pytest.mark.parametrize(
-    "confirmation,answer", [(False, False), (True, False), (False, True), (True, True)]
-)
-def test_rule_usage_settings_are_independent(
-    monkeypatch: MonkeyPatch, tmp_path: Path, confirmation: bool, answer: bool
+def test_removed_rule_and_auto_field_settings_are_not_offered(
+    monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    """登録ルールと抽出項目の条件の自動読み取りの設定は無い（#4799）。.env に書かない。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_runtime_rules_confirmation_enabled", False)
-    monkeypatch.setattr(settings, "rag_runtime_rules_answer_enabled", False)
-    monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", True)
+    monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
-    for key, value in (
-        ("runtime_rules_confirmation_enabled", confirmation),
-        ("runtime_rules_answer_enabled", answer),
-    ):
-        assert client.patch("/api/settings/answering", json={key: value}).status_code == 200
-    data = client.get("/api/settings/answering").json()["data"]
-    reloaded = Settings(_env_file=env_file)
-    assert data["runtime_rules_confirmation_enabled"] is confirmation
-    assert data["runtime_rules_answer_enabled"] is answer
-    assert reloaded.rag_runtime_rules_confirmation_enabled is confirmation
-    assert reloaded.rag_runtime_rules_answer_enabled is answer
-    assert data["runtime_terms_search_enabled"] is True
+    response = client.patch("/api/settings/answering", json={"runtime_terms_search_enabled": True})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    removed = (
+        "runtime_rules_confirmation_enabled",
+        "runtime_rules_answer_enabled",
+        "auto_field_filter_enabled",
+    )
+    assert not set(removed) & set(data)
+    written = env_file.read_text()
+    assert "RAG_RUNTIME_TERMS_SEARCH_ENABLED=true" in written
+    for name in removed:
+        assert f"RAG_{name.upper()}" not in written
 
 
 def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
@@ -3893,7 +3890,6 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
     from app.schemas.settings import AnsweringSettingsData
 
     settings = Settings()
-    assert settings.rag_runtime_rules_confirmation_enabled is False
     assert (
         settings.rag_min_similarity,
         settings.rag_retrieval_query_limit,

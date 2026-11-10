@@ -50,8 +50,6 @@ class RagSearchIn(_ContractInput):
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
-    # ルールの回答前の確認を出さない（#2117）。
-    skip_clarification: bool = False
     # 利用者の元の質問（条の選択に使う。#2261）。
     original_question: str | None = None
 

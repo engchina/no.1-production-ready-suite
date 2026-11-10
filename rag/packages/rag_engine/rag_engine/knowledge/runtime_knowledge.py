@@ -1,4 +1,8 @@
-"""実行時 glossary/rules を読み込み、質問と prompt へ反映する。"""
+"""実行時の用語・同義語と業務ガイドのルールを読み込み、質問と prompt へ反映する。
+
+利用者が登録するルールは無い（回答の規則は回答プロンプトの役割の文に書く）。ルールは業務ガイドを選んだ
+呼び出し元が payload に足す pinned のものだけを使う。
+"""
 
 from __future__ import annotations
 
@@ -32,7 +36,6 @@ MAX_TEXT_CHARS = 800
 # 原質問に語を足した出どころの表示名（検索文の出どころ・検索語の元に出す）。設定の「プロファイルの知識」のタブと
 # 処理の経過の段の名前にそろえる（#3451・#3490）。
 TERMS_SOURCE_LABEL = "用語・同義語"
-RULES_SOURCE_LABEL = "確認・回答ルール"
 GUIDE_SOURCE_LABEL = "業務ガイド"
 SCOPE_SOURCE_LABEL = "確認で選んだ条件"
 ORIGINAL_QUESTION_SOURCE_LABEL = "原質問"
@@ -149,7 +152,7 @@ class RuntimeRule:
 
 @dataclass(frozen=True)
 class RuntimeKnowledge:
-    """runtime knowledge JSON から読み込んだ用語・同義語と回答ルールと読込状態を保持します。"""
+    """runtime knowledge JSON から読み込んだ用語・同義語と業務ガイドのルールと読込状態を保持します。"""
 
     path: Path
     terms: tuple[RuntimeTerm, ...] = ()
@@ -171,8 +174,6 @@ class RuntimeKnowledgeContext:
     expanded_question: str
     path: Path
     matched_terms: tuple[RuntimeTerm, ...] = ()
-    rules_confirmation_enabled: bool = False
-    rules_answer_enabled: bool = False
     terms_search_enabled: bool = False
     terms_answer_enabled: bool = False
     matched_rules: tuple[RuntimeRule, ...] = ()
@@ -181,11 +182,9 @@ class RuntimeKnowledgeContext:
     error: str = ""
     assume_unconfirmed: bool = False
     unconfirmed_conditions: tuple[dict[str, Any], ...] = ()
-    # 登録の数（一致の上限を当てる前）。用語・同義語と回答ルールは別の工程で示すので種類ごとに持つ。
+    # 用語・同義語の登録の数（一致の上限を当てる前）。
     registered_term_count: int = 0
     active_term_count: int = 0
-    registered_rule_count: int = 0
-    active_rule_count: int = 0
     expansion_decisions: tuple[dict[str, Any], ...] = ()
     rule_applications: tuple[dict[str, Any], ...] = ()
     # 利用者が確認の質問で選んだ条件と対象範囲(チャットの確認。#717)。
@@ -224,10 +223,6 @@ class RuntimeKnowledgeContext:
         """回答補助に明示的に許可された登録用語。"""
         return self.matched_terms if self.terms_answer_enabled else ()
 
-    def with_rule_usage(self, *, confirmation: bool, answer: bool) -> RuntimeKnowledgeContext:
-        """登録ルールの使用を入口の設定に合わせる。呼出元の明示指定は独立する。"""
-        return replace(self, rules_confirmation_enabled=confirmation, rules_answer_enabled=answer)
-
     def with_term_usage(self, *, search: bool, answer: bool) -> RuntimeKnowledgeContext:
         """入口の設定を適用する。注入済みの文脈でも暗黙の用語追加を持ち越さない。"""
         expanded = _expanded_question(self.original_question, self.matched_terms if search else (), self.rules_for_stage("generation"))
@@ -251,13 +246,13 @@ class RuntimeKnowledgeContext:
 
     @property
     def registered_count(self) -> int:
-        """用語・同義語と回答ルールの登録の合計。"""
-        return self.registered_term_count + self.registered_rule_count
+        """用語・同義語の登録の数。"""
+        return self.registered_term_count
 
     @property
     def active_count(self) -> int:
-        """用語・同義語と回答ルールの有効な登録の合計。"""
-        return self.active_term_count + self.active_rule_count
+        """用語・同義語の有効な登録の数。"""
+        return self.active_term_count
 
     @property
     def has_matches(self) -> bool:
@@ -271,7 +266,7 @@ class RuntimeKnowledgeContext:
 
     @property
     def expansion_sources(self) -> tuple[str, ...]:
-        """原質問に語を足した出どころの表示名（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件）。
+        """原質問に語を足した出どころの表示名（用語・同義語 / 業務ガイド / 確認で選んだ条件）。
 
         実際に語を足したものだけを、足した順に返す。足していなければ空。
         """
@@ -290,9 +285,8 @@ class RuntimeKnowledgeContext:
         return " + ".join((ORIGINAL_QUESTION_SOURCE_LABEL, *self.expansion_sources))
 
     def rules_for_stage(self, stage: str) -> tuple[RuntimeRule, ...]:
-        """段階ごとの採用結果。古い呼出元が組み立てた文脈では用途だけで区分する。"""
-        enabled = self.rules_confirmation_enabled if stage == "confirmation" else self.rules_answer_enabled
-        allowed = tuple(rule for rule in self.matched_rules if enabled or PINNED_RULE_TAG in rule.tags)
+        """段階ごとの採用結果（業務ガイドの pinned のルールだけ）。採用の判断が無い文脈では用途だけで区分する。"""
+        allowed = tuple(rule for rule in self.matched_rules if PINNED_RULE_TAG in rule.tags)
         if not self.rule_applications:
             return tuple(rule for rule in allowed if rule.purpose in (stage, "both"))
         accepted = {item["id"] for item in self.rule_applications if item["stage"] == stage and item["accepted"]}
@@ -347,8 +341,6 @@ class RuntimeKnowledgeContext:
             "query_source": self.query_source,
             "expanded_question": self.expanded_question,
             "matched_terms": [term.to_payload() for term in self.matched_terms],
-            "rules_confirmation_enabled": self.rules_confirmation_enabled,
-            "rules_answer_enabled": self.rules_answer_enabled,
             "terms_search_enabled": self.terms_search_enabled,
             "terms_answer_enabled": self.terms_answer_enabled,
             "matched_rules": [rule.to_payload() for rule in self.matched_rules],
@@ -415,7 +407,7 @@ def load_runtime_knowledge(
 
 
 def _load_failure(path: Path, exc: BaseException) -> RuntimeKnowledge:
-    """読めない用語・同義語と回答ルール。記録には例外の型の名前だけを残し、例外の文はログだけに出す（#3284）。"""
+    """読めない用語・同義語。記録には例外の型の名前だけを残し、例外の文はログだけに出す（#3284）。"""
     logger.warning("runtime knowledge load failed (%s)", type(exc).__name__, exc_info=True)
     return RuntimeKnowledge(path=path, loaded=False, error=type(exc).__name__, failure=exc)
 
@@ -425,15 +417,13 @@ def build_runtime_knowledge_context(
     output_dir: str | Path,
     configured_path: str | Path | None = None,
     *,
-    rules_confirmation_enabled: bool = False,
-    rules_answer_enabled: bool = False,
     match_terms: bool = True,
     terms_search_enabled: bool = False,
     terms_answer_enabled: bool = False,
     term_limit: int = MAX_MATCHED_TERMS,
     rule_limit: int = MAX_MATCHED_RULES,
 ) -> RuntimeKnowledgeContext:
-    """質問に一致した用語・同義語と回答ルールを検索 query と prompt context 用に抽出します。"""
+    """質問に一致した用語・同義語と業務ガイドのルールを検索 query と prompt context 用に抽出します。"""
     original_question = _normalize(question)
     knowledge = load_runtime_knowledge(output_dir, configured_path)
     if knowledge.error:
@@ -442,8 +432,6 @@ def build_runtime_knowledge_context(
             expanded_question=original_question,
             path=knowledge.path,
             loaded=knowledge.loaded,
-            rules_confirmation_enabled=rules_confirmation_enabled,
-            rules_answer_enabled=rules_answer_enabled,
             terms_search_enabled=terms_search_enabled,
             terms_answer_enabled=terms_answer_enabled,
             error=knowledge.error,
@@ -451,9 +439,7 @@ def build_runtime_knowledge_context(
         )
 
     matched_terms = _matched_terms(original_question, knowledge.terms, term_limit) if match_terms else []
-    rule_candidates = tuple(
-        rule for rule in knowledge.rules if rules_confirmation_enabled or rules_answer_enabled or PINNED_RULE_TAG in rule.tags
-    )
+    rule_candidates = tuple(rule for rule in knowledge.rules if PINNED_RULE_TAG in rule.tags)
     rule_matches = rank_rules(question, rule_candidates, MAX_RULES, tokens=_tokens) if rule_candidates else RuleMatches((), ())
     applications = select_rule_applications(rule_matches.selected, rule_limit)
     matched_rules = applications.selected
@@ -500,16 +486,12 @@ def build_runtime_knowledge_context(
         expanded_question=expanded_question,
         path=knowledge.path,
         matched_terms=tuple(matched_terms),
-        rules_confirmation_enabled=rules_confirmation_enabled,
-        rules_answer_enabled=rules_answer_enabled,
         terms_search_enabled=terms_search_enabled,
         terms_answer_enabled=terms_answer_enabled,
         matched_rules=tuple(matched_rules),
         loaded=knowledge.loaded,
         registered_term_count=len(knowledge.terms),
         active_term_count=sum(term.active for term in knowledge.terms),
-        registered_rule_count=len(knowledge.rules),
-        active_rule_count=sum(rule.active for rule in knowledge.rules),
         assume_unconfirmed=knowledge.assume_unconfirmed,
         unconfirmed_conditions=knowledge.unconfirmed_conditions,
         expansion_decisions=(*decisions, *rule_decisions),
@@ -526,19 +508,8 @@ def runtime_terms_status(context: RuntimeKnowledgeContext) -> str:
     return _unmatched_status(context.loaded, context.registered_term_count, context.active_term_count, "用語・同義語")
 
 
-def runtime_rules_status(context: RuntimeKnowledgeContext) -> str:
-    """工程「回答ルールの確認」の結果。未登録・無効・一致なし・読込失敗を区別する。"""
-    if context.error:
-        return f"読込エラー: {context.error}（補助情報なしで続行）"
-    if any(item["reason"] == "unresolved_exclusive_conflict" for item in context.rule_applications):
-        return "設定の競合があるルールを保留し、両立するルールだけを適用します"
-    if context.matched_rules:
-        return "一致: " + " / ".join(rule.title or rule.rule_id for rule in context.matched_rules)
-    return _unmatched_status(context.loaded, context.registered_rule_count, context.active_rule_count, "回答ルール")
-
-
 def _unmatched_status(loaded: bool, registered: int, active: int, tab: str) -> str:
-    # 登録先は検索・回答プロファイルの「プロファイルの知識」のタブ（用語・同義語、回答ルール）。
+    # 登録先は検索・回答プロファイルの「プロファイルの知識」の「用語・同義語」のタブ。
     if not loaded or not registered:
         return f"未登録：検索・回答プロファイルの「プロファイルの知識」の「{tab}」で登録できます"
     if not active:
@@ -725,9 +696,7 @@ def _expansion_additions(
     for rule in matched_rules:
         if PINNED_RULE_TAG in rule.tags:
             # 業務ガイドの trigger は手順の検索の手がかり。検索文に足す（#1238）。
-            source = GUIDE_SOURCE_LABEL if SUPPORT_GUIDE_RULE_TAG in rule.tags else RULES_SOURCE_LABEL
-            additions.extend((trigger, source) for trigger in rule.triggers)
-            continue
+            additions.extend((trigger, GUIDE_SOURCE_LABEL) for trigger in rule.triggers)
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     for word, source in additions:

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ANSWER_SECTION_COLLAPSE_AFTER, AnswerSections, MarkdownInlineText } from "../src";
+import { ANSWER_SECTION_COLLAPSE_AFTER, AnswerSections, AnswerSourceMarks, MarkdownInlineText } from "../src";
 
 // #2328: 回答の本文の節と根拠の行（RAG のチャット・RAG 検索・Agent のチャットで共通）。
 
@@ -141,3 +141,52 @@ describe("AnswerSections", () => {
 });
 
 
+
+describe("回答の表の出典の印と根拠の行の番号（#4812）", () => {
+  it("印を押すと、移り先の根拠の行（押せる行はボタン、押せない行は文字）へフォーカスを移す", () => {
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+      scrolled.push(this.id);
+    };
+    act(() =>
+      root.render(
+        <>
+          <AnswerSourceMarks
+            marks={[
+              { key: "1", label: "[1]", targetId: "src-1", ariaLabel: "[1] の根拠へ移動" },
+              { key: "2", label: "[2]", targetId: "src-2", ariaLabel: "[2] の根拠へ移動" },
+              { key: "3", label: "[3]" },
+            ]}
+          />
+          <AnswerSections
+            blocks={[
+              {
+                kind: "content",
+                key: "t",
+                content: "表",
+                citations: [
+                  { key: "a", label: "根拠：文書 A.pdf p.1", marker: "[1]", anchorId: "src-1", onOpen: () => undefined, ariaLabel: "開く" },
+                  { key: "b", label: "根拠：文書 B.pdf p.2", marker: "[2]", anchorId: "src-2" },
+                ],
+              },
+            ]}
+          />
+        </>
+      )
+    );
+    const marks = host.querySelectorAll<HTMLAnchorElement>('[data-testid="answer-source-mark"]');
+    expect([...marks].map((mark) => [mark.textContent, mark.getAttribute("href"), mark.getAttribute("aria-label")])).toEqual([
+      ["[1]", "#src-1", "[1] の根拠へ移動"],
+      ["[2]", "#src-2", "[2] の根拠へ移動"],
+    ]);
+    // 移り先の無い印はリンクにしない。
+    expect(host.querySelector('[data-testid="answer-source-marks"]')?.textContent).toBe("[1][2][3]");
+    expect([...host.querySelectorAll('[data-testid="answer-citation-marker"]')].map((marker) => marker.textContent)).toEqual(["[1]", "[2]"]);
+    act(() => marks[0].click());
+    expect(document.activeElement?.id).toBe("src-1");
+    expect(document.activeElement?.tagName).toBe("BUTTON");
+    act(() => marks[1].click());
+    expect(document.activeElement?.id).toBe("src-2");
+    expect(scrolled).toEqual(["src-1", "src-2"]);
+  });
+});

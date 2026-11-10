@@ -26,14 +26,13 @@ from rag_engine.knowledge.runtime_knowledge import (
     build_runtime_knowledge_context,
     load_runtime_knowledge,
     runtime_retrieval_queries,
-    runtime_rules_status,
     runtime_terms_status,
 )
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
 
 
 class RuntimeKnowledgeTests(unittest.TestCase):
-    def test_load_runtime_knowledge_matches_terms_rules_and_expands_question(self):
+    def test_load_runtime_knowledge_matches_terms_and_ignores_unpinned_rules(self):
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             _write_runtime_knowledge(output_dir)
@@ -42,8 +41,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             context = build_runtime_knowledge_context(
                 "出荷業務で再発行できない条件は？",
                 output_dir,
-                rules_confirmation_enabled=True,
-                rules_answer_enabled=True,
                 terms_search_enabled=True,
                 terms_answer_enabled=True,
             )
@@ -51,6 +48,9 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertTrue(knowledge.loaded)
         self.assertEqual([term.term for term in knowledge.terms], ["納品書"])
         self.assertEqual([rule.rule_id for rule in knowledge.rules], ["reissue"])
+        # 利用者が登録するルールは無い。payload に残った pinned でないルールは照合も回答にも使わない。
+        self.assertEqual(context.matched_rules, ())
+        self.assertNotIn("再発行は伝票番号", context.prompt_context())
         self.assertIn("納品書", context.expanded_question)
         self.assertIn("出荷業務", context.expanded_question)
         self.assertNotIn("再発行条件", context.expanded_question)
@@ -70,8 +70,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             context = build_runtime_knowledge_context(
                 "概要を教えてください。",
                 output_dir,
-                rules_confirmation_enabled=True,
-                rules_answer_enabled=True,
                 terms_search_enabled=True,
                 terms_answer_enabled=True,
             )
@@ -89,8 +87,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             context = build_runtime_knowledge_context(
                 "再発行",
                 output_dir,
-                rules_confirmation_enabled=True,
-                rules_answer_enabled=True,
                 terms_search_enabled=True,
                 terms_answer_enabled=True,
             )
@@ -117,6 +113,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                         "content": "レビュー期限が近いが現行ルールとして使う",
                         "status": "stale_review_needed",
                         "next_review_at": "2026-10-01T00:00:00Z",
+                        "tags": ["pinned", "support_guide"],
                     },
                     {
                         "id": "draft-rule",
@@ -124,6 +121,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                         "triggers": ["下書き"],
                         "content": "未承認",
                         "status": "draft",
+                        "tags": ["pinned", "support_guide"],
                     },
                 ],
             }
@@ -136,8 +134,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             context = build_runtime_knowledge_context(
                 "承認済みと古い用語、再確認、下書きについて",
                 output_dir,
-                rules_confirmation_enabled=True,
-                rules_answer_enabled=True,
                 terms_search_enabled=True,
                 terms_answer_enabled=True,
             )
@@ -154,8 +150,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             missing = build_runtime_knowledge_context(
                 "概要は？",
                 output_dir,
-                rules_confirmation_enabled=True,
-                rules_answer_enabled=True,
                 terms_search_enabled=True,
                 terms_answer_enabled=True,
             )
@@ -164,7 +158,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "terms": [{"term": "古い用語", "status": "deprecated"}],
-                        "rules": [{"id": "r1", "title": "下書き", "triggers": ["古い用語"], "content": "x", "status": "draft"}],
                     }
                 ),
                 encoding="utf-8",
@@ -172,23 +165,17 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             inactive = build_runtime_knowledge_context(
                 "古い用語は？",
                 output_dir,
-                rules_confirmation_enabled=True,
-                rules_answer_enabled=True,
                 terms_search_enabled=True,
                 terms_answer_enabled=True,
             )
 
-        # 案内の行き先は、今の画面にある検索・回答プロファイルの「プロファイルの知識」の各タブ（#3071 / #3451）。
-        for status_of, tab in ((runtime_terms_status, "用語・同義語"), (runtime_rules_status, "回答ルール")):
-            with self.subTest(tab=tab):
-                self.assertTrue(status_of(missing).startswith("未登録："))
-                self.assertTrue(status_of(inactive).startswith("有効な登録なし："))
-                for status in (status_of(missing), status_of(inactive)):
-                    self.assertIn(f"検索・回答プロファイルの「プロファイルの知識」の「{tab}」", status)
-                    self.assertNotIn("用語・ルール管理", status)
+        # 案内の行き先は、今の画面にある検索・回答プロファイルの「プロファイルの知識」の「用語・同義語」（#3071 / #3451）。
+        self.assertTrue(runtime_terms_status(missing).startswith("未登録："))
+        self.assertTrue(runtime_terms_status(inactive).startswith("有効な登録なし："))
+        for status in (runtime_terms_status(missing), runtime_terms_status(inactive)):
+            self.assertIn("検索・回答プロファイルの「プロファイルの知識」の「用語・同義語」", status)
         self.assertEqual((inactive.registered_term_count, inactive.active_term_count), (1, 0))
-        self.assertEqual((inactive.registered_rule_count, inactive.active_rule_count), (1, 0))
-        self.assertEqual((inactive.registered_count, inactive.active_count), (2, 0))
+        self.assertEqual((inactive.registered_count, inactive.active_count), (1, 0))
 
     def test_settings_reads_runtime_knowledge_path(self):
         with patch.dict(os.environ, {"RUNTIME_KNOWLEDGE_PATH": "~/runtime-rules.json"}, clear=True), patch("rag_engine.config.load_dotenv"):
@@ -208,7 +195,6 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 output_dir=output_dir,
                 runtime_terms_search_enabled=True,
                 runtime_terms_answer_enabled=True,
-                runtime_rules_answer_enabled=True,
                 runtime_knowledge_path=None,
             )
             records = [
@@ -280,7 +266,8 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertIn("再発行条件", prompt)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
         self.assertIn("用語・同義語による検索文の追加", result.question_display)
-        self.assertIn("回答生成での登録ルールの使用", result.question_display)
+        self.assertNotIn("登録ルール", result.question_display)
+        self.assertNotIn("再発行は伝票番号", prompt)
         self.assertIn("[原質問 + 用語・同義語] ", result.question_display)
         self.assertNotIn("[原質問 + 用語・同義語 + 確認・回答ルール]", result.question_display)
         self.assertEqual(payload["runtime_knowledge"]["query_source"], "原質問 + 用語・同義語")
@@ -288,7 +275,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertNotIn("パス:", result.question_display)
         self.assertIn("text_search_queries", payload)
         self.assertEqual(payload["runtime_knowledge"]["matched_terms"][0]["term"], "納品書")
-        self.assertEqual(payload["runtime_knowledge"]["matched_rules"][0]["id"], "reissue")
+        self.assertEqual(payload["runtime_knowledge"]["matched_rules"], [])
 
     def test_extract_original_question_strips_runtime_knowledge_metadata(self):
         displayed = "\n".join(["元の質問", "", RUNTIME_KNOWLEDGE_SEPARATOR, "用語: 納品書"])

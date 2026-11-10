@@ -84,6 +84,10 @@ TABLE_EXTRACTION_INSTRUCTION = (
 )
 
 
+# 説明を書く言語の基準として渡す、対象と同じページの本文の抜粋の metadata の key（#4821）。
+# 抜粋を作る側（picture_descriptions）と、読み方を書く側（出力契約）が同じ名前を使う。
+PAGE_TEXT_SAMPLE_KEY = "page_text_sample"
+
 # 各項目の意味は PictureDescriptionOutput の Field(description=...) に置き、ここには判断の原則だけを書く。
 VISION_EXTRACTION_INSTRUCTION = """### 読み取りの方針
 原文と検索用の言い換えを分離します。各項目の意味と形式は応答の schema に従います。

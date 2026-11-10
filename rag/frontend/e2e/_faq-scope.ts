@@ -102,7 +102,7 @@ export async function mockFaqScopeApi(
       return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", keywords: [] }) });
     }
     if (path.endsWith("/runtime-knowledge")) {
-      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
+      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [] }) });
     }
     if (path.endsWith("/bv-1")) {
       return route.fulfill({ json: envelope(detail) });

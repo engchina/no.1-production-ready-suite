@@ -36,12 +36,11 @@ def test_pinned_rule_is_always_matched_first_and_adds_its_triggers() -> None:
         context = build_runtime_knowledge_context(
             "取消したい",
             output_dir,
-            rules_confirmation_enabled=True,
-            rules_answer_enabled=True,
             terms_search_enabled=True,
             terms_answer_enabled=True,
         )
-    assert [rule.rule_id for rule in context.matched_rules] == ["guide-g1", "r1"]
+    # pinned でない登録ルールは使わない。
+    assert [rule.rule_id for rule in context.matched_rules] == ["guide-g1"]
     assert "権限タブ" in context.expanded_question
     # pinned の題名は質問に無いので検索文に足さない（手がかりだけ）。
     assert "権限の付与" not in context.expanded_question
@@ -54,7 +53,6 @@ def test_support_guide_rule_is_not_cut_at_the_user_rule_limit() -> None:
     ]
     last = "資料で確かめられない手順・値は答えに含めず、確かめられない点として示す。"
     guide_content = "\n".join([*lines, last])
-    long_user_rule = "利用者の登録のルール。" + "あ" * (MAX_TEXT_CHARS + 100)
     assert len(guide_content) > MAX_TEXT_CHARS
     payload = {
         "schema_version": 1,
@@ -67,7 +65,6 @@ def test_support_guide_rule_is_not_cut_at_the_user_rule_limit() -> None:
                 "status": "approved",
                 "tags": [PINNED_RULE_TAG, SUPPORT_GUIDE_RULE_TAG],
             },
-            {"id": "r1", "title": "合成のルール", "triggers": ["合成"], "content": long_user_rule, "status": "approved"},
         ],
     }
     with TemporaryDirectory() as work:
@@ -76,8 +73,6 @@ def test_support_guide_rule_is_not_cut_at_the_user_rule_limit() -> None:
         context = build_runtime_knowledge_context(
             "合成の質問",
             output_dir,
-            rules_confirmation_enabled=True,
-            rules_answer_enabled=True,
             terms_search_enabled=True,
             terms_answer_enabled=True,
         )
@@ -86,5 +81,3 @@ def test_support_guide_rule_is_not_cut_at_the_user_rule_limit() -> None:
     assert rules["guide-g1"].content == unicodedata.normalize("NFKC", " ".join([*lines, last]))
     assert rules["guide-g1"].content.endswith(last)
     assert last in context.prompt_context()
-    # 利用者の登録のルールの上限は変えない。
-    assert len(rules["r1"].content) == MAX_TEXT_CHARS

@@ -26,7 +26,6 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   faq_direct_match: "search.stage.faqDirectMatch",
   // 会話の添付からの根拠の選択（#3475）
   attachment_evidence: "search.stage.attachmentEvidence",
-  field_filter: "search.stage.fieldFilter",
   answer: "search.stage.answer",
   // 回答側の安全チェック（#1146）
   query_guardrail: "search.stage.queryGuardrail",

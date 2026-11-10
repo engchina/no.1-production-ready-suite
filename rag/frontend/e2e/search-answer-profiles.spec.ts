@@ -14,11 +14,10 @@ import {
 /** 検索・回答プロファイルの query が持つ欄（ほかの欄は backend が検証エラーにする。#4784）。 */
 const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled"];
 
-// #3719: 空・単一ページでも表示し、4一覧のページ操作と作業状態を確かめる。
+// #3719: 空・単一ページでも表示し、3一覧のページ操作と作業状態を確かめる。
 for (const [tab, paginationId, kind] of [
   ["登録済みQ&A", "approved-faq-pagination", "faq"],
   ["用語・同義語", "runtime-knowledge-terms-pagination", "terms"],
-  ["確認・回答ルール", "runtime-knowledge-rules-pagination", "rules"],
   ["業務ガイド", "support-guides-pagination", "guides"],
 ]) {
   test(`知識一覧のページング: ${tab}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -41,7 +40,7 @@ for (const [tab, paginationId, kind] of [
     await page.route("**/api/search-answer-profiles/bv-default/approved-faq", (route) =>
       route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true, knowledge_bases: [] })));
     await page.route("**/api/search-answer-profiles/bv-default/runtime-knowledge", (route) =>
-      route.fulfill(response({ terms: kind === "terms" ? rows() : [], rules: kind === "rules" ? rows() : [] })));
+      route.fulfill(response({ terms: kind === "terms" ? rows() : [] })));
     await page.route("**/api/search-answer-profiles/bv-default/support-guides**", (route) =>
       route.fulfill(response(rows())));
     const open = async () => { await page.getByRole("tab", { name: tab, exact: true }).click(); };
@@ -1001,7 +1000,7 @@ async function mockSearchAnswerProfiles(
       return;
     }
     if (pathname.endsWith("/runtime-knowledge")) {
-      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [], rules: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [] }));
       return;
     }
     if (id) {
@@ -1200,7 +1199,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
       return;
     }
     if (pathname.endsWith("/runtime-knowledge")) {
-      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", terms: [], rules: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", terms: [] }));
       return;
     }
     await route.fulfill(envelope(archived));
@@ -1235,7 +1234,7 @@ test("検索・回答プロファイルの知識の読み込みに失敗する�
   );
   await page.route(
     "**/api/search-answer-profiles/bv-1/runtime-knowledge",
-    failOrEmpty({ search_answer_profile_id: "bv-1", terms: [], rules: [] })
+    failOrEmpty({ search_answer_profile_id: "bv-1", terms: [] })
   );
   await page.route(
     "**/api/search-answer-profiles/bv-1/domain-keywords",
@@ -1249,7 +1248,6 @@ test("検索・回答プロファイルの知識の読み込みに失敗する�
   await expect(page.getByTestId("approved-faq-enabled")).toBeDisabled();
   await expect(panel.getByText("登録済みQ&Aはまだありません")).toHaveCount(0);
 
-  // 用語・同義語と回答ルールは同じ取得・同じ部品なので、用語・同義語で確かめる。
   await page.getByRole("tab", { name: "用語・同義語" }).click();
   await expect(panel.getByText("知識を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
   // ドメインキーワードの保存は全置換なので、読めていない空の編集欄を出さない。
@@ -1477,7 +1475,7 @@ test("プロファイルの知識の Tab は段階順で、質問の理解を出
   await mockDefaultSearchAnswerProfile(page, () => {});
   await page.goto("/search-answer-profiles?id=bv-default");
   const tabs = page.getByRole("tablist", { name: "プロファイルの知識", exact: true });
-  await expect(tabs.getByRole("tab")).toHaveText(["登録済みQ&A", "用語・同義語", "確認・回答ルール", "業務ガイド", "ドメインキーワード"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["登録済みQ&A", "用語・同義語", "業務ガイド", "ドメインキーワード"]);
   await expect(page.getByTestId("search-answer-profile-language-pack")).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("knowledge-tabs-without-question-understanding.png"), fullPage: true });

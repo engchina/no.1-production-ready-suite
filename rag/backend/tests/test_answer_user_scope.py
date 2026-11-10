@@ -1,4 +1,4 @@
-"""回答の検索の入口(``AnswerEngine.run``)から、自動の条件を足しても利用者の範囲が残ることを確かめる(#3260)。
+"""回答の検索の入口(``AnswerEngine.run``)から、利用者の範囲が残ることを確かめる(#3260)。
 
 すべての検索(CRAG の補正検索を含む)と実体・関係情報の拡張に、利用者が指定した条件(文書名・分類・
 手の項目の条件・ナレッジベース・旧版の扱い)・基準日・認可の範囲(監査 context の predicate)が残る。
@@ -38,11 +38,8 @@ ACCESS = AuditRequestContext(
     allowed_category_names=frozenset({"分類a"}),
     allowed_knowledge_base_ids=frozenset({"kb-1", "kb-a"}),
 )
-# 利用者が手で指定した項目の条件と、質問から読み取った(自動の)項目の条件。自動の条件の 1 つは
-# 手の条件と同じ項目で別の値(手の条件を優先し、上書きしない)。
+# 利用者が手で指定した項目の条件（絞り込みは利用者が明示した条件だけ）。
 MANUAL_FIELD = ExtractionFieldCondition(name="区分", value_type="string", op="eq", value="甲")
-AUTO_FIELD = ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
-AUTO_SAME_FIELD = ExtractionFieldCondition(name="区分", value_type="string", op="eq", value="乙")
 
 
 def _manual_fields() -> str:
@@ -128,7 +125,6 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
         ),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
-        auto_field_conditions=[AUTO_SAME_FIELD, AUTO_FIELD],
         entity_store=cast(Any, object()),
         graph_store=cast(Any, object()),
     )
@@ -181,12 +177,9 @@ async def test_user_conditions_as_of_and_access_stay_in_every_search(
     # 利用者の条件 + 回答の初めに決めた基準日(指定があればその日)。
     expected = {"as_of": "2026-04-01", **filters}
     assert outcome.citations
-    # 最初の検索は自動の条件を足し、利用者が手で指定した項目の条件は自動の条件で上書きしない。
+    # 項目の条件は利用者が手で指定したものだけ（質問から条件を足さない）。
     first = oracle.filters[0]
-    assert _field_values(first) == [
-        (MANUAL_FIELD.name, MANUAL_FIELD.value),
-        (AUTO_FIELD.name, AUTO_FIELD.value),
-    ]
+    assert _field_values(first) == [(MANUAL_FIELD.name, MANUAL_FIELD.value)]
     # どの検索も同じ条件で検索する。
     assert all(item == first for item in oracle.filters)
     # どの検索にも、利用者の条件・基準日が残る。
