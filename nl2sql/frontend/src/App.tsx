@@ -20,7 +20,7 @@ import { WorkspaceBoundary, WorkspaceDraftWarning, WorkspacePage } from "@/compo
 import { useDatabaseStatus } from "@/lib/queries";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { PageHeader, AppShell, PageBody, PageLoadingState } from "@production-ready/ui";
+import { PageHeader, AppShell, PageBody, PageLoadingState, RenderErrorBoundary } from "@production-ready/ui";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
 import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";
@@ -306,6 +306,7 @@ function AuthenticatedApplication() {
 
 function AuthorizedApplication() {
   const auth = useAuth();
+  const location = useLocation();
 
   return (
     <AppLayout key={JSON.stringify([auth.user?.user_uuid, auth.user?.permissions, auth.user?.data_entitlements, auth.user?.allowed_profile_ids])}>
@@ -318,6 +319,9 @@ function AuthorizedApplication() {
             <WorkspaceDraftWarning />
             <SyntheticRunNotifications />
             <KeepAlivePages />
+            {/* 本文の描画の例外を main の中に閉じ込め、サイドナビと画面の移動を残す（#4800）。
+                pathname を key にして、別の画面へ移ったらエラーの状態を解く。 */}
+            <RenderErrorBoundary key={location.pathname} serviceName="production-ready-nl2sql">
             <Routes>
             <Route path={APP_ROUTES.home} element={<Navigate to={auth.hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.query]) ? APP_ROUTES.query : firstAllowedRoute(auth.hasPermission)} replace />} />
             <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
@@ -373,6 +377,7 @@ function AuthorizedApplication() {
             <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
             <Route path="*" element={<Navigate to={defaultEntryRoute(auth.hasPermission)} replace />} />
             </Routes>
+            </RenderErrorBoundary>
           </Suspense>
           </ScopedWorkspace>
         </SchemaRefreshCoordinator>
@@ -412,7 +417,10 @@ function KeepAlivePages() {
           mounted.has(page.path) && auth.hasPermission(ROUTE_PERMISSIONS[page.path])
       ).map((page) => (
         <WorkspacePage key={page.path} page={page.path} active={page.path === pathname}>
-          <Suspense fallback={<RouteLoadingFallback />}>{page.element}</Suspense>
+          {/* 常時 mount の画面は画面ごとに閉じ込める（pathname の key で作り直すと保持した状態が消える。#4800）。 */}
+          <RenderErrorBoundary serviceName="production-ready-nl2sql">
+            <Suspense fallback={<RouteLoadingFallback />}>{page.element}</Suspense>
+          </RenderErrorBoundary>
         </WorkspacePage>
       ))}
     </>
