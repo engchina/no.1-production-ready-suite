@@ -8,6 +8,7 @@ import pytest
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 
 from app.api.routes import evaluation as route
+from app.clients.oracle import OracleClient
 from app.main import app
 from app.rag.evaluation_jobs import EvaluationJobNotFoundError
 from app.rag.evaluation_results_excel import evaluation_results_xlsx
@@ -168,7 +169,7 @@ def test_export_api_uses_authorized_job_and_rejects_unavailable_results(
             ]
         }
 
-    monkeypatch.setattr(route.OracleClient, "evaluation_citations_by_trace_ids", citations)
+    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", citations)
 
     body: dict[str, Any] = inputs().model_dump()
     body["metrics"] = {"mrr": 1}
@@ -202,7 +203,7 @@ def _empty_saved_citations(monkeypatch: pytest.MonkeyPatch) -> None:
     async def read(self: Any, trace_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         return {}
 
-    monkeypatch.setattr(route.OracleClient, "evaluation_citations_by_trace_ids", read)
+    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", read)
 
 
 def test_generated_export_actual_evidence_is_separate_and_blank_for_old_records() -> None:
@@ -242,7 +243,7 @@ async def test_export_reads_only_final_trace_citations_and_does_not_mix_profiles
             ],
         }
 
-    monkeypatch.setattr(route.OracleClient, "evaluation_citations_by_trace_ids", read)
+    monkeypatch.setattr(OracleClient, "evaluation_citations_by_trace_ids", read)
     result = metrics()
     result.comparison = EvaluationComparison(
         search_answer_profile_id="profile-b", metrics=metrics()
