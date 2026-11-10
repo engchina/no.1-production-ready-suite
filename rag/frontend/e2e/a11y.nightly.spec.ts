@@ -148,6 +148,35 @@ async function mockSettingsAndFeedback(page: Page) {
       }),
     }),
   );
+  // 形式別の既定（#4732）。選択欄に値がある行と、全体の既定を継ぐ行を並べる。
+  const fileTypeRow = (fileType: string, extensions: string[], entry: Record<string, string | null>) => ({
+    file_type: fileType,
+    extensions,
+    preprocess_profile: null,
+    parser_adapter_backend: null,
+    chunking_strategy: null,
+    ...entry,
+    preprocess_options: ["passthrough"],
+    unavailable_preprocess_profiles: [],
+    parser_options: { passthrough: ["docling", "unstructured"] },
+    unavailable_parser_backends: [],
+    inherited_preprocess_profile: "passthrough",
+    builtin: { preprocess_profile: null, parser_adapter_backend: null, chunking_strategy: null },
+    builtin_unavailable_reason: null,
+  });
+  await page.route("**/api/settings/file-type-defaults", (route) =>
+    route.fulfill({
+      json: apiEnvelope({
+        rows: [
+          fileTypeRow("pdf", [".pdf"], { parser_adapter_backend: "docling", chunking_strategy: "small_to_big" }),
+          fileTypeRow("text", [".txt"], {}),
+        ],
+        chunking_options: strategies,
+        global_defaults: { preprocess_profile: "passthrough", parser_adapter_backend: "docling", chunking_strategy: "small_to_big" },
+        config_source: "runtime",
+      }),
+    }),
+  );
   await page.route("**/api/settings/answer-prompts**", (route) =>
     route.fulfill({
       json: apiEnvelope({
@@ -336,6 +365,14 @@ const SCREENS: Screen[] = [
   { path: "/settings/preprocess" },
   { path: "/settings/parser-adapters" },
   { path: "/settings/chunking" },
+  {
+    path: "/settings/file-type-defaults",
+    // mock の行が出た後（読み込みの失敗の表示ではない）の画面を確かめる。
+    act: async (page) => {
+      await expect(page.getByTestId("file-type-row-pdf")).toBeVisible();
+      await expect(page.getByTestId("file-type-row-text")).toBeVisible();
+    },
+  },
   { path: "/settings/vector-index" },
   { path: "/settings/entity-index" },
   { path: "/settings/graph" },
