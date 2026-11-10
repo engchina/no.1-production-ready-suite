@@ -751,6 +751,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261110_4782_generation_prompt_overrides",
         "20261110_4781_retire_evaluation_calibration",
         "20261110_4781_retire_removed_answer_prompts",
+        "20261110_4784_search_answer_profile_retired_fields",
         "20261110_4784_language_pack_retired_unread",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)

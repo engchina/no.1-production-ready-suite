@@ -338,8 +338,8 @@ DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 # 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
 # プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
 # 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定）。値の範囲は
-# Settings の検証で持つ。プロファイルで上書きできない項目は ``PROFILE_GLOBAL_QUERY_FIELDS``
-# （``app/rag/search_answer_profile_config.py``）が正本。
+# Settings の検証で持つ。プロファイルで上書きできる項目は ``KnowledgeBaseQueryConfig``
+# （``app/rag/kb_adapter_config.py``）が正本。
 PROFILE_ONLY_SETTING_FIELDS = frozenset(
     {
         # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
@@ -1627,7 +1627,7 @@ class Settings(
         description=(
             "業務ガイドの照合で、質問と質問の例（intent_examples）の埋め込み（OCI Generative AI）"
             "の近さを点に足す（#2398）。質問ごとに埋め込みの呼び出しが 1 回増える。質問の例の"
-            "埋め込みは公開のときに作って持つ。検索・回答プロファイルで上書きできる。"
+            "埋め込みは公開のときに作って持つ。全体設定だけで決める（#4784）。"
         ),
     )
     rag_support_guide_semantic_threshold: float = Field(
@@ -1642,7 +1642,7 @@ class Settings(
         default=False,
         description=(
             "業務ガイドの照合で上位の 2 つの点が近いとき、どのガイドに沿うかを確認の問い（選択肢は"
-            "ガイドの題名）で確かめる（#2398）。検索・回答プロファイルで上書きできる。"
+            "ガイドの題名）で確かめる（#2398）。全体設定だけで決める（#4784）。"
         ),
     )
     rag_support_guide_close_match_margin: int = Field(

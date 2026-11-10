@@ -65,7 +65,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 
 /**
  * 回答の検索と生成の全体既定（根拠の前後の数・rerank・画面目録。#593）。
- * 検索・回答プロファイルでは上書きしない（`PROFILE_GLOBAL_QUERY_FIELDS`）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
+ * 検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 /** 見出しと枠のある設定の群。枠の中の切り替えの一覧と同じ線と余白にそろえる（#4238）。 */
 function SettingsGroup({ id, title, children }: { id: string; title: string; children: ReactNode }) {

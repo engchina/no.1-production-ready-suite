@@ -722,7 +722,7 @@ def test_recipe_excel_options_reach_the_preprocess_service(monkeypatch: Any) -> 
     )
     config = KnowledgeBaseAdapterConfig(ingestion=recipe)
     base = Settings(_env_file=None, rag_preprocess_enabled=True)
-    settings = base.model_copy(update=config.settings_overrides("ingestion"))
+    settings = base.model_copy(update=config.settings_overrides())
     options = preprocess_options(settings, "excel_to_jsonl")
     assert options is not None
     assert (options["mode"], options["header_row"]) == ("table", 2)

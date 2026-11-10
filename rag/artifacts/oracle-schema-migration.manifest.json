@@ -767,6 +767,13 @@
     },
     {
       "destructive": true,
+      "name": "20261110_4784_search_answer_profile_retired_fields",
+      "sha256": "ab583ced52083040a86523101b3707f5a54150404487b473e671870314590098",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profiles"
+    },
+    {
+      "destructive": true,
       "name": "20261110_4784_language_pack_retired_unread",
       "sha256": "70275c4daffe5741090efcd2e0653563e057bf666a7f4d6f5835f672efb4b517",
       "statement_count": 1,
@@ -775,6 +782,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "a232a482ff1cef4bd5e104b5cbaf0f7228fedfeafc3102d64be686aa8b58d976",
-  "statement_count": 166
+  "sha256": "cadb84d1b4b1ca393c52446ce7361c7cc9d5894f92b38b4357f3f57ba4888ce1",
+  "statement_count": 167
 }
