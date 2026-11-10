@@ -185,7 +185,9 @@ async def test_summary_chunk_is_indexed_once_and_follows_the_document() -> None:
     # 要約の chunk は検索と同じ条件で 1 つだけ当たり、本文の chunk の後ろの番号に入る。
     [hit] = await _summary_hits(oracle, kb.id)
     assert hit.chunk_id == f"{document_id}:{chunk_set_id}:3"
-    assert hit.text == "架空の装置 A の点検の手順書です。\n点検"
+    # 本文は要約の文だけ（話題の語は検索用の文にだけ入る）。
+    assert hit.text == "架空の装置 A の点検の手順書です。"
+    assert hit.metadata["engine_search_text"] == "架空の装置 A の点検の手順書です。\n点検"
     assert hit.metadata["content_kind"] == "document_summary"
     assert await oracle.count_chunk_set_chunks(chunk_set_id) == 4
 
@@ -330,7 +332,7 @@ def test_ingestion_job_creates_the_summary_after_indexing() -> None:
         )
     )
     assert len(rows) == 1
-    assert rows[0].text == f"{summary['text']}\n合成の話題"
+    assert rows[0].text == summary["text"]
 
     # 作り直しは同じ API の POST。要約の chunk は 1 つのまま。
     again = client.post(f"/api/documents/{document_id}/summary")

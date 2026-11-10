@@ -3959,10 +3959,12 @@ def _stored_child(
     if keeps_own_evidence(chunk):
         # 文書全体の要約(#4793)。rag_engine は出典情報で、原文の抜粋ではなく要約であることを示す。
         metadata["content_kind"] = chunk.metadata.get("content_kind")
-        # 要約は文書の中のページを持たない。回答の本文の出典を「p.1」にせず、文書全体にする。
+        # 要約は文書の中のページを持たない。回答の本文の出典を「p.1」にせず、要約と分かる表示にする。
         from rag_parser_core.language import current_pack
 
-        metadata["location_label"] = current_pack().text("labels", "whole_document")
+        metadata["location_label"] = current_pack().text(
+            "answer_labels", "document_summary_location"
+        )
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
         metadata["sheet_location"] = location

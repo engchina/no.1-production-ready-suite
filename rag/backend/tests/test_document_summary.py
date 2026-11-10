@@ -407,13 +407,15 @@ async def test_success_calls_the_model_once_and_indexes_one_summary_chunk() -> N
     [saved] = store.saved
     assert saved["chunk_set_ids"] == ["cs-1", "cs-2"]
     chunk: Chunk = saved["chunk"]
-    assert chunk.text == f"{SUMMARY}\n{' / '.join(TOPICS)}"
+    # 表示・引用に出る本文は要約の文だけ。話題の語は検索用の文にだけ足す。
+    assert chunk.text == SUMMARY
+    assert chunk.metadata["engine_search_text"] == f"{SUMMARY}\n{' / '.join(TOPICS)}"
     assert chunk.metadata["content_kind"] == "document_summary"
     assert chunk.metadata["document_summary"] is True
     assert chunk.metadata["context_header"] == TITLE
     assert saved["input_truncated"] is False
     # 埋め込みは 1 回 1 件で、文書名の文脈ヘッダを前に付ける。
-    assert embedder.inputs == [f"{TITLE}\n{chunk.text}"]
+    assert embedder.inputs == [f"{TITLE}\n{SUMMARY}\n{' / '.join(TOPICS)}"]
     assert (store.generating_marks, store.failures) == (1, [])
 
 
@@ -722,8 +724,8 @@ async def test_summary_hit_reaches_the_answer_as_summary_evidence(
     assert body in outcome.answer
     # モデルへの出典情報に、要約であることの印がある。
     assert any('"evidence_kind": "document_summary"' in prompt for prompt in prompts)
-    # 要約はページを持たないので、回答の出典の場所を「p.1」にせず文書全体にする。
-    assert f"{TITLE} 文書全体" in outcome.answer
+    # 要約はページを持たないので、回答の出典の場所を「p.1」にせず、要約と分かる表示にする。
+    assert f"{TITLE} 文書の要約" in outcome.answer
     assert f"{TITLE} p.1" not in outcome.answer
     # 要約は文書の中の位置を持たないので、前後の文脈の起点にしない。
     assert oracle.sibling_anchor_ids == []

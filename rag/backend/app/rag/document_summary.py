@@ -46,6 +46,7 @@ from app.clients.document_summary_store import (
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.rag.chunking import Chunk
+from app.rag.chunking_small_to_big import ENGINE_SEARCH_TEXT_KEY, engine_search_text
 from app.rag.ingestion_prompts import DOCUMENT_SUMMARY_PROMPT
 from app.schemas.document import DocumentContentSummary
 from app.schemas.extraction import StructuredExtraction
@@ -241,8 +242,11 @@ def summary_chunk(
     context_header_enabled: bool,
     truncated: bool,
 ) -> Chunk:
-    """要約の chunk（本文は要約の文と話題の語。索引の番号は保存のときに決める）。"""
-    text = summary if not topics else f"{summary}\n{' / '.join(topics)}"
+    """要約の chunk（索引の番号は保存のときに決める）。
+
+    本文（表示・引用に出る文）は要約の文だけ。話題の語は検索用の文（全文検索の索引・埋め込み・
+    rerank の入力）にだけ足す。
+    """
     metadata: dict[str, str | int | float | bool | None] = {
         "content_kind": DOCUMENT_SUMMARY_CONTENT_KIND,
         DOCUMENT_SUMMARY_KEY: True,
@@ -250,13 +254,18 @@ def summary_chunk(
         "summary_input_truncated": truncated,
         "context_header_enabled": context_header_enabled,
     }
+    if topics:
+        metadata[ENGINE_SEARCH_TEXT_KEY] = f"{summary}\n{' / '.join(topics)}"
     title = document_title.strip()
     if context_header_enabled and title:
         metadata["context_header"] = title
-    return Chunk(text=text, index=0, start_offset=0, end_offset=len(text), metadata=metadata)
+    return Chunk(text=summary, index=0, start_offset=0, end_offset=len(summary), metadata=metadata)
 
 
 def _embedding_input(chunk: Chunk) -> str:
+    """埋め込みの入力（全文検索の索引の文と同じ: 文脈ヘッダ・要約の文・話題の語）。"""
+    if search_text := engine_search_text(chunk.metadata):
+        return search_text
     header = str(chunk.metadata.get("context_header") or "").strip()
     return f"{header}\n{chunk.text}" if header else chunk.text
 

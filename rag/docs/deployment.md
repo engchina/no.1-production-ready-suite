@@ -236,7 +236,8 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
                        WHERE s.DOCUMENT_ID = d.DOCUMENT_ID AND s.STATUS = 'READY');
    ```
 
-4. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
+4. 言語資源に、要約を根拠にしたときの出典の場所の表示（`answer_labels.document_summary_location`。既定「文書の要約」）を足した。公開済みの言語資源は項目が欠けて契約に合わなくなるので、[言語資源の現在版の契約](./language-pack-current-contract.md)の手順（`language_pack_repair_cli` の dry-run → 許可 → 適用）で、欠けた項目に組み込みの値を足した版を発行する（`ingest_hash` は変わらず、文書の再処理は要らない）。
+5. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
 
 ## 既存環境の更新手順（#4799 抽出項目の条件の自動読み取りと登録ルールの削除）
 

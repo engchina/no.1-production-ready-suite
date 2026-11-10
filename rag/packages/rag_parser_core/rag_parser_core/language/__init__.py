@@ -416,6 +416,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "guide_acquisition_incomplete_template",
         "table_source_column",
         "table_above_note",
+        "document_summary_location",
         ingest=False,
         max_chars=MAX_SENTENCE_CHARS,
     ),

@@ -797,6 +797,8 @@ export const ja = {
   "settings.language.field.table_source_column.help": "表で示す回答の右端に足す列の名前です。行ごとに、表の下の根拠の番号（[1] など）を出します。",
   "settings.language.field.table_above_note": "上の表の案内",
   "settings.language.field.table_above_note.help": "「資料をもとに導いた結論」で、表の題の下に出す案内です。表は回答の冒頭に 1 回だけ出します。",
+  "settings.language.field.document_summary_location": "文書の要約の出典の表示",
+  "settings.language.field.document_summary_location.help": "取込の後に作った文書全体の要約を根拠にしたときに、出典のページの代わりに出す表示です。",
   "settings.language.section.answer_check_cues": "回答の検査の手がかり",
   "settings.language.section.answer_check_cues.help": "回答の草稿を原文で確かめるときの語です（確定の操作・限定・未説明・保証・推測・条件の句・但し書き・版の廃止など）。検索・回答のときだけ使います。",
   "settings.language.field.ignored_quote_chars": "引用の照合で無視する字",
