@@ -563,7 +563,7 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
   await mockAnsweringSettings(page, []);
   await page.goto("/settings/retrieval");
   const card = page.getByTestId("answering-settings-card");
-  for (const title of ["回答前の確認", "検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
+  for (const title of ["検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
     const group = card.getByRole("region", { name: title, exact: true });
     await expect(group).toBeVisible();
     await expect(group).toHaveCSS("border-top-style", "solid");

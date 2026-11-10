@@ -3717,7 +3717,7 @@ def test_term_usage_settings_are_independent(
 def test_removed_rule_and_auto_field_settings_are_not_offered(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """登録ルールと抽出項目の条件の自動読み取りの設定は無い（#4799）。保存しても .env に書かない。"""
+    """登録ルールと抽出項目の条件の自動読み取りの設定は無い（#4799）。.env に書かない。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
