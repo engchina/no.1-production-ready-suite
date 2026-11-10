@@ -580,6 +580,7 @@ export function SearchableMultiSelect({
               ref={listboxRef}
               id={listboxId}
               role="listbox"
+              tabIndex={-1}
               aria-label={label}
               aria-multiselectable
               aria-busy={searching || undefined}
