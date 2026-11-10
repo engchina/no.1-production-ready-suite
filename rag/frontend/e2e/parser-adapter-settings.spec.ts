@@ -1108,7 +1108,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`Dots.OCR の「設定」はエンジンの選択を変えず右のパネルで開く（#4740, ${viewport.name}）`, async ({ page }) => {
+  test(`Dots.OCR の「設定」はエンジンの選択を変えず右のパネルで開く（#4740, ${viewport.name}）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockParserAdaptersForConnectionSheet(page);
     await mockFeaturePrompts(page);
@@ -1162,7 +1162,30 @@ for (const viewport of [
     await expect(apiKey).toHaveAttribute("type", "password");
     await expect(apiKey).toHaveAttribute("placeholder", "設定済み（空欄なら保持）");
     await expect(sheet.getByLabel("保存済み API key を削除")).toBeEnabled();
-    await expect(sheet.getByRole("button", { name: "接続を確認" })).toBeEnabled();
+    const actions = dotsSheetActions(page);
+    const testConnection = actions.getByRole("button", { name: "接続を確認", exact: true });
+    await expect(actions.getByRole("button")).toHaveText(["保存", "接続を確認", "変更を破棄"]);
+    await expect(testConnection).toBeEnabled();
+    const actionBoxes = await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      return { x: box.x, y: box.y, bottom: box.bottom };
+    }));
+    if (viewport.name === "desktop") {
+      expect(Math.abs(actionBoxes[0].y - actionBoxes[1].y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(actionBoxes[1].y - actionBoxes[2].y)).toBeLessThanOrEqual(1);
+      expect(actionBoxes[0].x).toBeLessThan(actionBoxes[1].x);
+      expect(actionBoxes[1].x).toBeLessThan(actionBoxes[2].x);
+    } else {
+      expect(actionBoxes[1].y).toBeGreaterThanOrEqual(actionBoxes[0].bottom);
+      expect(actionBoxes[2].y).toBeGreaterThanOrEqual(actionBoxes[1].bottom);
+    }
+    await sheet.getByLabel("Endpoint").fill("https://edited.example.com/v1");
+    await expect(testConnection).toBeDisabled();
+    await expect(sheet.getByText("接続確認には保存済み設定を使います。先に変更を保存してください。")).toBeVisible();
+    await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
+    await expect(sheet.getByLabel("Endpoint")).toHaveValue("https://dots.example.com/v1");
+    await expect(testConnection).toBeEnabled();
+    await actions.screenshot({ path: test.info().outputPath(`connection-actions-${viewport.name}.png`) });
     await expect(sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" })).toHaveCount(1);
     expect(await findClippedPlaceholders(page, { root: '[data-testid="external-parser-connection-dots_ocr"]' })).toEqual([]);
 
@@ -1170,6 +1193,8 @@ for (const viewport of [
     expect(await sheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-sheet-${viewport.name}.png` });
 
+    // 破棄後に無効になったボタンから、元の閉じる検証と同じパネルへフォーカスを戻す。
+    await sheet.focus();
     // 変更が無ければ Escape 1 回で確認なしに閉じ、開いたボタンへ戻る。
     await page.keyboard.press("Escape");
     await expect(sheet).toHaveAttribute("data-state", "closed");
