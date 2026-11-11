@@ -3205,7 +3205,7 @@ function submit() {
 
 ## ChatProgress — **新規**（#1145）
 
-チャットの回答の場所（アシスタントの吹き出しの中、回答の上）に置く、backend の処理の段階の控えめな表示。3 製品（RAG・NL2SQL・Agent）のチャットで同じ部品・同じ段階の形を使う。SQL 生成の画面の工程の表示（NL2SQL の `WorkflowProgressStrip`）より情報を絞る。
+回答カードの上に独立して置く、backend の処理の段階の表示。3 製品（RAG・NL2SQL・Agent）のチャット、検索・SQL 生成と実行履歴で、共有の `RunProgressCard` の枠・配色・余白を使う（#4884）。`ChatAnswer` の `progress` に渡すと、進度と回答は同じ往復の中で上下に並び、枠が入れ子にならない。見出しに状態・ステップ数・経過時間をまとめ、展開した時間線の末尾へ「軌跡を調べる」と「処理の詳細」を置く。ライト・ダークの配色は `Card` の共有トークンに従う。
 
 ### 段階の形（3 製品共通の契約）
 
@@ -3698,15 +3698,14 @@ function submit() {
 
 ## ChatTurn / ChatAnswer / ChatPendingTurn — **新規**（#1161）
 
-チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。回答の中身（処理の段階 `ChatProgress`・本文・引用・SQL・ツール・承認・評価）は製品が子要素で渡す。
+チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。進度は `ChatAnswer.progress`、回答の中身（本文・引用・SQL・ツール・承認・評価）は子要素で渡す。進度と回答は独立した枠で上下に並ぶ（#4884）。
 
 ```tsx
 import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 // 確定した往復
 <ChatTurn question={turn.question} testId="sql-chat-turn">
-  <ChatAnswer live>                       {/* 回答が後から届く製品は live（polite） */}
-    <ChatProgress … />
+  <ChatAnswer live progress={<ChatProgress … />}> {/* 回答が後から届く製品は live（polite） */}
     <AnswerBody … />
   </ChatAnswer>
 </ChatTurn>
@@ -3725,7 +3724,7 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 |---|---|
 | 1 往復は `<article>`（質問と回答の間 0.5rem）。往復の間は会話の欄（`ChatLayout`）が 1.25rem を空ける | 3 製品で `div` / `article` と間隔が違っていた。往復のまとまりを読み上げでも区切る |
 | 回答の枠は `rounded-md`・`border`・`bg-surface`・`p-3`、中は縦に 0.75rem 間隔（`ChatAnswer`） | NL2SQL は `Card`（影・角丸 lg）、RAG・Agent は枠線の箱で、余白も違っていた。会話の欄の中で影を重ねない |
-| 送信中は回答の枠に処理の段階だけを出し、送れなかったら枠を出さずに原因と「再送信」を出す（`ChatPendingTurn`） | 送れなかった質問を残し、入力欄に戻さない（messaging.md §11.3）。動くスピナーは回答の場所の 1 つだけ |
+| 送信中は独立した進度カードだけを出し、空の回答カードは出さない。送れなかったら原因と「再送信」を出す（`ChatPendingTurn`） | 送れなかった質問を残し、入力欄に戻さない（messaging.md §11.3）。動くスピナーは回答の場所の 1 つだけ |
 | 複数モデルの比較（RAG）は `ChatAnswer` を列にして並べる（`className` で `h-full`） | 比較の列も同じ枠にする |
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。

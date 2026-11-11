@@ -793,6 +793,8 @@ export function SearchClient() {
                   順で、チャットと同じ部品・並び（#2096 / #2097 / #2115）。処理の経過は実行中（工程の一覧が増え、今の工程に
                   Spinner と経過時間）も終わった後も同じ場所に出す。 */}
               {answerMode ? (
+                <>
+                {processView}
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
@@ -810,7 +812,6 @@ export function SearchClient() {
                         {answerModel}
                       </h3>
                     ) : null}
-                    {processView}
                     {conditionChips}
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
@@ -862,17 +863,16 @@ export function SearchClient() {
 
                   </CardContent>
                 </Card>
+                </>
               ) : run ? (
                 // 回答を作らない検索: 処理の経過（実行中は今の工程と経過時間、終わった後は工程の一覧とその後ろの「処理の詳細」。
                 // 同じ場所のまま切り替える。#2115）・検索の条件・検索できなかった理由（検索の準備が無いなど）。
-                <Card>
-                  <CardContent className="space-y-3 pt-5">
+                <>
                     {processView}
                     {conditionChips}
                     {answer ? <Banner severity="warning">{answer}</Banner> : null}
                     {phase === "cancelled" ? <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p> : null}
-                  </CardContent>
-                </Card>
+                </>
               ) : (
                 // 実行の前（類似問の提示の間を含む）: 検索の条件だけ。
                 <div className="space-y-3 empty:hidden">

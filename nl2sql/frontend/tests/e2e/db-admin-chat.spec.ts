@@ -454,6 +454,8 @@ test("SELECT は「実行」を押すと実行し、結果を表で出す。続�
 
   const turn = page.getByTestId("db-admin-chat-turn").first();
   await expect(turn.getByTestId("db-admin-chat-sql")).toHaveText("SELECT BANNER_FULL FROM V$VERSION");
+  await expect(turn.locator("[data-run-progress-card]")).toBeVisible();
+  await expect(turn.locator("[data-chat-answer-card] [data-run-progress-card]")).toHaveCount(0);
   await expect(turn.getByText("読み取り専用", { exact: true })).toBeVisible();
   // 1 文だけのターンには「すべて実行」を出さない。
   await expect(turn.getByTestId("db-admin-chat-run-all")).toHaveCount(0);

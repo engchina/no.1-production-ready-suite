@@ -76,8 +76,10 @@ export function ChatTurn({
 }
 
 export interface ChatAnswerProps {
-  /** 回答の本文（処理の段階 `ChatProgress` → 本文 → 補足・操作の順に並べる）。 */
-  children: ReactNode;
+  /** 回答の本文（本文 → 補足・操作の順に並べる。処理の段階は progress に渡す）。 */
+  children?: ReactNode;
+  /** 処理の経過は回答の枠に入れず、同じ回答グループの直前に置く。 */
+  progress?: ReactNode;
   /** 回答の受信・状態の変化を polite で知らせる（回答が後から届く製品。RAG は本文側で知らせる）。 */
   live?: boolean;
   /** 回答への深いリンク（`#message-{id}`）の先。 */
@@ -90,17 +92,19 @@ export interface ChatAnswerProps {
  * チャットの回答の入れ物（3 製品共通。#1161）。枠線の箱（`rounded-md`・`border`・`bg-surface`・`p-3`）で、
  * 中は縦に 0.75rem 間隔で並べる。複数モデルの比較（RAG）では、この箱を列にして並べる。
  */
-export function ChatAnswer({ children, live = false, id, className, testId }: ChatAnswerProps) {
-  return (
+export function ChatAnswer({ children, progress, live = false, id, className, testId }: ChatAnswerProps) {
+  const answer = (
     <div
-      id={id}
-      className={cn("flex min-w-0 flex-col gap-3 rounded-md border border-border bg-surface p-3", className)}
-      aria-live={live ? "polite" : undefined}
+      id={progress ? undefined : id}
+      className={cn("flex min-w-0 flex-col gap-3 rounded-md border border-border bg-surface p-3 empty:hidden", progress ? "flex-1" : className)}
+      aria-live={!progress && live ? "polite" : undefined}
+      data-chat-answer-card=""
       data-testid={testId}
     >
       {children}
     </div>
   );
+  return progress ? <div id={id} className={cn("flex min-w-0 flex-col gap-3", className)} aria-live={live ? "polite" : undefined}>{progress}{answer}</div> : answer;
 }
 
 export interface ChatPendingTurnProps {
@@ -142,7 +146,7 @@ export function ChatPendingTurn({
       attachmentsLabel={attachmentsLabel}
       testId={testId}
     >
-      {message.status === "failed" ? failure : message.status === "sending" ? <ChatAnswer>{progress}</ChatAnswer> : null}
+      {message.status === "failed" ? failure : message.status === "sending" ? <ChatAnswer progress={progress} /> : null}
     </ChatTurn>
   );
 }

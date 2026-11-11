@@ -1,4 +1,4 @@
-import { callBodyPath, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
+import { RunProgressCard, callBodyPath, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
 import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
@@ -682,11 +682,11 @@ function DbAdminChatTurn({
       }
       testId={`${TEST_ID}-turn`}
     >
-      <ChatAnswer>
+      <ChatAnswer progress={<>
         {progress.legacy ? (
-          <><ProgressLegacyNotice testId={`${TEST_ID}-progress-legacy`} />
+          <RunProgressCard><ProgressLegacyNotice testId={`${TEST_ID}-progress-legacy`} />
             <RunProcessDetails metadata={{ conversationId, messageId: turn.turn_id }}><RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model, valueKind: "identifier" as const }] : []} /></RunProcessDetails>
-          </>
+          </RunProgressCard>
         ) : (
           <ChatProgress
             loadCallBody={body => apiGet<unknown>(callBodyPath(dbAdminChatTurnTracePath(conversationId, turn.turn_id), body), {signal: body.signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail})}
@@ -703,6 +703,7 @@ function DbAdminChatTurn({
             testId={`${TEST_ID}-progress`}
           />
         )}
+      </>}>
         {turn.explanation ? (
           // 説明は Markdown を含みうるので、共通の Markdown の表示で描く（記号を生で出さない）。
           <MarkdownText text={turn.explanation} />

@@ -813,6 +813,7 @@ export {
 export {
   RunSummary,
   RunDetailSection,
+  RunProgressCard,
   RunProcessDetails,
   RunUsedModels,
   RunTimeline,

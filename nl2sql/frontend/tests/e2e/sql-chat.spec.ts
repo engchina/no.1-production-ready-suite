@@ -188,6 +188,8 @@ for (const width of [1280, 375]) {
     await composer.press("Enter");
     await confirmChatRequirement(page);
     await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+    await expect(page.locator("[data-run-progress-card]").first()).toBeVisible();
+    await expect(page.locator("[data-chat-answer-card] [data-run-progress-card]")).toHaveCount(0);
     await composer.fill("多い順にして");
     await page.getByTestId("sql-chat-send").click();
     await confirmChatRequirement(page);

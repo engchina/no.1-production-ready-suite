@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  RunProgressCard,
   AnswerFooter,
   Banner,
   ProcessFailureNotice,
@@ -1076,7 +1077,7 @@ function RunChatTurn({
         // Agent 自身の確認に答えた内容は、同じ往復の利用者の側に残す（回答の枠の上）。
         <ConfirmationRecordBubble key={record.key} record={record} testId={`chat-confirmation-record-${record.key}`} />
       ))}
-      <ChatAnswer live>
+      <ChatAnswer live progress={<>
         {/*
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。共通のイベントの配信で更新し（#1359）、
           完了後は回答の上に「処理の経過（N ステップ・M 秒）」を閉じて出す（実行中は開く。#2096 / #2121 / #2265。共有の ChatProgress。
@@ -1086,12 +1087,12 @@ function RunChatTurn({
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
         {legacyProgress ? (
           // span の無い古い形式の記録は、処理の経過を出せないことを同じ位置に示す（空白にしない。#3226）。
-          <>
+          <RunProgressCard>
             <p className="text-xs text-fg-muted" data-testid="chat-progress-legacy">{traceLabels.legacy}</p>
             <RunProcessDetails traceId={progress.traceId} metadata={{ conversationId: run.thread_id ?? null, messageId: run.id }}>
               <RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model, valueKind: "identifier" as const }] : []} />
             </RunProcessDetails>
-          </>
+          </RunProgressCard>
         ) : (
           <ChatProgress
               loadCallBody={progress.loadCallBody}
@@ -1114,6 +1115,7 @@ function RunChatTurn({
             testId="chat-progress"
           />
         )}
+      </>}>
         {failure ? (
           // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
           // 読めるよう、処理の経過の直下（回答・結果の上）に 1 つだけ出す。

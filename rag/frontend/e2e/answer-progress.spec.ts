@@ -1,3 +1,4 @@
+import { progressCardLayout } from "../../../platform/packages/ui/e2e/progress-card-checks";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
 import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
@@ -398,6 +399,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
     const progress = page.getByTestId("search-run-progress");
+    await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
     const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
     // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
@@ -460,7 +462,7 @@ for (const viewport of [
     await process.screenshot({ path: `test-results/rerank-receipt-${viewport.name}.png` });
     // 開くとタイムラインの後ろ（中の最後の要素）に「処理の詳細」が出る。
     await expect(details).toHaveText("処理の詳細");
-    const timelineBox = await page.getByTestId("search-run-progress-timeline").boundingBox();
+    const timelineBox = await page.getByTestId("search-run-progress-timeline").locator("ol").boundingBox();
     const detailsBox = await details.boundingBox();
     expect(timelineBox && detailsBox && detailsBox.y >= timelineBox.y + timelineBox.height).toBeTruthy();
     await details.click();
@@ -776,6 +778,7 @@ const okChatStream: TimedChunk[] = [
 async function mockChatPage(page: Page, chat: TimedChunk[][] = [timedOutChatStream, okChatStream]) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await page.route("**/api/feedback/current?**", route => route.fulfill({json:{data:[],error_messages:[],warning_messages:[]}}));
   await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
@@ -853,6 +856,8 @@ for (const viewport of [
     const current = page.getByTestId("chat-answer-progress-current");
     const timer = page.getByTestId("chat-answer-progress-timer");
     await expect(current).toContainText("質問を補い、検索が要るかを分ける");
+    await expect(progress).toHaveAttribute("data-run-progress-card", "");
+    await expect(page.locator("[data-chat-answer-card] [data-run-progress-card]")).toHaveCount(0);
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
     await expect(current).toContainText("検索文から根拠の候補を集める", { timeout: 4_000 });
@@ -916,6 +921,7 @@ for (const viewport of [
     expect(answerBox && summaryBox && summaryBox.y < answerBox.y).toBeTruthy();
     await summary.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);
+    await okAnswer.screenshot({path:`test-results/progress-answer-pair-${viewport.name}-dark.png`, animations:"disabled"});
     await expectNoPageOverflow(page);
     const requests = await streamRequests(page, "chat");
     expect(requests).toHaveLength(2);

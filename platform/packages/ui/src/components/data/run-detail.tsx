@@ -5,7 +5,7 @@ import type { CallBodyLoader } from "../../lib/call-body";
 import { traceOrderedSteps } from "../../lib/trace-explorer";
 import { DEFAULT_TRACE_DETAILS_LABELS } from "../../lib/trace-labels";
 import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, RotateCcw, Waypoints, XCircle, type LucideIcon } from "lucide-react";
-import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties, type ComponentProps } from "react";
 
 import { DEFAULT_TRACE_EXPLORER_LABELS, TraceExplorer, type TraceExplorerLabels } from "./trace-explorer";
 import { Button } from "../ui/button";
@@ -397,6 +397,11 @@ export interface RunDetailSectionProps {
   testId?: string;
 }
 
+/** 3製品の処理経過の外枠。回答のカードとは上下に分け、配色と余白を共有する。 */
+export function RunProgressCard({className, ...props}: ComponentProps<typeof Card>) {
+  return <Card className={cn("grid min-w-0 gap-3 p-4", className)} data-run-progress-card="" {...props} />;
+}
+
 /** 詳細の 1 つの節（カード）。見出しの大きさと余白を 3 製品で同じにする。 */
 export function RunDetailSection({
   title,
@@ -730,6 +735,9 @@ export function runTimelineDuration(steps: readonly RunTimelineStep[]): number |
 
 export interface RunTimelineProps {
   loadCallBody?: CallBodyLoader;
+  /** 操作画面の進度では探索と詳細を末尾へ集める。単独の時間線は既存の上側を保つ。 */
+  explorerPlacement?: "top" | "footer";
+  footer?: ReactNode;
   explorerLabels?: Partial<TraceExplorerLabels>;
   steps: readonly RunTimelineStep[];
   /** 処理全体の所要時間（ミリ秒）。要約の行に出す（無ければ段の合計の範囲）。 */
@@ -781,6 +789,8 @@ export interface RunTimelineProps {
  */
 export function RunTimeline({
   loadCallBody,
+  explorerPlacement = "top",
+  footer,
   steps: inputSteps,
   explorerLabels,
   totalDurationMs,
@@ -822,6 +832,8 @@ export function RunTimeline({
       testId={testId ? `${testId}-collapse-toggle` : stepTestIdPrefix ? `${stepTestIdPrefix}-collapse-toggle` : undefined} />
   );
 
+  const exploreAction = steps.length ? <Button id={`${idPrefix}-explore`} variant="secondary" size="sm" icon={Waypoints} onClick={() => setExploring(true)}>{explorerLabels?.open ?? DEFAULT_TRACE_EXPLORER_LABELS.open}</Button> : null;
+
   if (exploring) return <TraceExplorer loadCallBody={loadCallBody} steps={steps} hierarchyOrdered formatDuration={formatDuration} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
 
   return (
@@ -831,7 +843,7 @@ export function RunTimeline({
       data-run-timeline-bars={showBars ? "true" : "false"}
       data-testid={testId}
     >
-      {steps.length ? <div className="flex justify-end"><Button id={`${idPrefix}-explore`} variant="secondary" size="sm" icon={Waypoints} onClick={() => setExploring(true)}>{explorerLabels?.open ?? DEFAULT_TRACE_EXPLORER_LABELS.open}</Button></div> : null}
+      {explorerPlacement === "top" && steps.length ? <div className="flex justify-end">{exploreAction}</div> : null}
       {showBars && steps.some(step => !step.startedAt) ? (
         <p className="text-xs text-fg-muted">{traceLabels.reconstructed}</p>
       ) : null}
@@ -900,6 +912,12 @@ export function RunTimeline({
       </ol>
       </RunTimelineViewport>
       {collapsed.keep === "start" ? toggle : null}
+      {explorerPlacement === "footer" && (exploreAction || footer) ? (
+        <div className="grid min-w-0 gap-2 border-t border-border pt-3" data-run-timeline-footer="">
+          {exploreAction ? <div className="flex flex-wrap items-center gap-2">{exploreAction}</div> : null}
+          {footer}
+        </div>
+      ) : footer}
     </div>
   );
 }
@@ -992,16 +1010,18 @@ export function RunTimelineSection({
   const failed = status ? status === "failed" : !active && steps.some((step) => step.status === "failed");
   const succeeded = status === "succeeded";
   return (
-    <RunDetailSection title={title} testId={testId}>
+    <RunProgressCard data-run-detail-section="" data-testid={testId}>
+      <h3 className={steps.length ? "sr-only" : "text-sm font-semibold"}>{title}</h3>
       {steps.length ? (
         <Disclosure
           variant="plain"
-          size="sm"
+          size="md"
           summary={
-            <span className="tnum">
-              {active
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 tnum">
+              <span className="font-semibold">{title}</span>
+              <span>{active
                 ? labels.timelineRunning(steps.filter((step) => FINISHED_STEP_STATUSES.has(step.status)).length)
-                : labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}
+                : labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}</span>
             </span>
           }
           meta={
@@ -1024,6 +1044,8 @@ export function RunTimelineSection({
         >
           <RunTimeline
             loadCallBody={loadCallBody}
+            explorerPlacement="footer"
+            footer={<>{partialNote}{processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}</>}
             steps={steps}
             totalDurationMs={totalDurationMs}
             showSummary={false}
@@ -1031,8 +1053,6 @@ export function RunTimelineSection({
             showBars={!active}
             labels={labelsInput}
           />
-          {partialNote}
-          {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </Disclosure>
       ) : (
         <>
@@ -1041,7 +1061,7 @@ export function RunTimelineSection({
           {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </>
       )}
-    </RunDetailSection>
+    </RunProgressCard>
   );
 }
 

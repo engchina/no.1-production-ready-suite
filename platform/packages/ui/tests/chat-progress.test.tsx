@@ -56,6 +56,17 @@ describe("formatChatProgressDuration", () => {
 });
 
 describe("ChatProgress", () => {
+  it("独立した進度カードで、軌跡と処理詳細を工程の後ろへ集める", () => {
+    render(<ChatProgress steps={runningSteps} active traceId="synthetic-trace" testId="p" />);
+    const card = q("p")!;
+    expect(card.hasAttribute("data-run-progress-card")).toBe(true);
+    const footer = card.querySelector("[data-run-timeline-footer]")!;
+    expect(footer).not.toBeNull();
+    expect(footer.textContent).toContain("軌跡を調べる");
+    expect(footer.textContent).toContain("処理の詳細");
+    expect(card.querySelector("[data-run-timeline] ol")!.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it.each(["done", "failed", "cancelled"] as const)("確定終端 %s は子の試行失敗より優先する", (terminalStatus) => {
     const steps: ChatProgressStep[] = [
       { id: "first", label: "合成の試行", status: "failed", startedAt: at(0), finishedAt: at(1) },

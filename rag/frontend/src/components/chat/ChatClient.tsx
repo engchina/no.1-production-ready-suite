@@ -395,17 +395,7 @@ function AssistantColumn({
   );
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
-    <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
-      {heading ? (
-        // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
-        <h3
-          className="min-w-0 break-words border-b border-border pb-2 text-sm font-semibold text-fg [overflow-wrap:anywhere]"
-          title={heading}
-          data-testid="chat-answer-model-heading"
-        >
-          {heading}
-        </h3>
-      ) : null}
+    <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)} progress={<>
       {progress && !finished ? (
         // 処理の経過（3 製品共通の ChatProgress。#1145 / #1146 / #2096）。回答の本文は生成と検査が終わってから
         // まとめて届くので、それまでは回答の場所に工程の一覧（行が増える）と今の工程・経過時間を出す。失敗の
@@ -447,6 +437,17 @@ function AssistantColumn({
           diagnostics={answerDiagnostics}
           savedRecord={savedAnswer && traceId ? { traceId, searchAnswerProfileId } : null}
         />
+      ) : null}
+    </>}>
+      {heading ? (
+        // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
+        <h3
+          className="min-w-0 break-words border-b border-border pb-2 text-sm font-semibold text-fg [overflow-wrap:anywhere]"
+          title={heading}
+          data-testid="chat-answer-model-heading"
+        >
+          {heading}
+        </h3>
       ) : null}
       {stoppedMessage ? (
         // 停止した回答（保存済み）。色だけに頼らず、停止のアイコンを添える（送信中の停止と同じ形）。
