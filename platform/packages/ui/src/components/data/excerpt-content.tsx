@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { CodepointHighlight } from "../document-preview/codepoint-highlight";
 
 import { resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
@@ -8,6 +9,8 @@ import { DataTable, type DataTableColumn } from "./data-table";
 export interface ExcerptContentProps {
   /** 抜粋・chunk の本文（HTML の表・`<br>` を含んでよい。HTML として注入しない）。 */
   text: string;
+  /** 元HTMLのcodepoint範囲。対応するセル全体を強調する。 */
+  highlights?: readonly [number, number][];
   /** 外枠の追加 class（文字の大きさ・色は呼び出し側）。 */
   className?: string;
   /** 表の読み上げの名前。 */
@@ -22,8 +25,12 @@ export interface ExcerptContentProps {
  * 3 行に畳む表示は {@link excerptPlainText}（表は「セル | セル」の行）を使う。本文の言語の `lang`（#3335）は本文の段落・
  * 表の題・セルにだけ付け、表の読み上げの名前（`tableLabel`。部品の文言）は画面の言語のまま（#3349）。
  */
-export function ExcerptContent({ text, className, tableLabel = "抜粋の表", lang, testId }: ExcerptContentProps) {
-  const blocks = useMemo(() => parseExcerpt(text), [text]);
+export function ExcerptContent({ text, highlights, className, tableLabel = "抜粋の表", lang, testId }: ExcerptContentProps) {
+  const validHighlights = useMemo(() => {
+    const length = Array.from(text).length;
+    return highlights?.filter(([start,end]) => Number.isInteger(start) && Number.isInteger(end) && 0 <= start && start < end && end <= length);
+  }, [text, highlights]);
+  const blocks = useMemo(() => parseExcerpt(text, {trackSourceRanges: Boolean(validHighlights?.length)}), [text, validHighlights]);
   const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
   return (
     <div className={cn("min-w-0 space-y-2", className)} data-testid={testId}>
@@ -33,11 +40,16 @@ export function ExcerptContent({ text, className, tableLabel = "抜粋の表", l
             {block.text}
           </p>
         ) : (
-          <ExcerptTable key={index} block={block} label={tableLabel} lang={contentLang} />
+          <ExcerptTable key={index} block={block} label={tableLabel} lang={contentLang} highlights={validHighlights} />
         )
       )}
     </div>
   );
+}
+
+function highlightedText(text: string, sourceRanges: readonly [number, number][] | undefined, highlights: readonly [number, number][] | undefined) {
+  const marked = text && sourceRanges?.some(([a,b]) => highlights?.some(([start,end]) => Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && Math.max(a,start) < Math.min(b,end)));
+  return marked ? <CodepointHighlight text={text} ranges={[[0,Array.from(text).length]]}/> : text;
 }
 
 type TableRow = { key: number; cells: ExcerptTableCell[] };
@@ -46,25 +58,28 @@ function ExcerptTable({
   block,
   label,
   lang,
+  highlights,
 }: {
   block: Extract<ExcerptBlock, { kind: "table" }>;
   label: string;
   lang: string | undefined;
+  highlights?: readonly [number, number][];
 }) {
   const [head, ...body] = block.rows;
   // 1 行だけの表は見出しと区別できないので、行の文字にする。
   if (!head || body.length === 0) {
     return (
       <p className="whitespace-pre-wrap break-words" lang={lang}>
-        {[block.caption, head?.map((cell) => cell.text).join(" | ")].filter(Boolean).join("\n")}
+        {block.caption ? <>{highlightedText(block.caption,block.captionSourceRanges,highlights)}{head?.length ? "\n" : null}</> : null}
+        {head?.map((cell,index)=><span key={index}>{index ? " | " : ""}{highlightedText(cell.text,cell.sourceRanges,highlights)}</span>)}
       </p>
     );
   }
   // 見出しの行（`<th>`・`<thead>`）が無い表も、文書の表は先頭の行が項目名のことが多いので先頭の行を見出しにする。
   const columns: DataTableColumn<TableRow>[] = head.map((cell, column) => ({
     key: `c${column}`,
-    header: <span lang={lang}>{cell.text}</span>,
-    render: (row) => <span lang={lang}>{row.cells[column]?.text ?? ""}</span>,
+    header: <span lang={lang}>{highlightedText(cell.text,cell.sourceRanges,highlights)}</span>,
+    render: (row) => <span lang={lang}>{highlightedText(row.cells[column]?.text ?? "",row.cells[column]?.sourceRanges,highlights)}</span>,
     className: "min-w-24 whitespace-pre-wrap break-words align-top",
     headerClassName: "min-w-24 whitespace-pre-wrap break-words align-bottom",
   }));
@@ -73,7 +88,7 @@ function ExcerptTable({
     <figure className="min-w-0 space-y-1" data-testid="excerpt-table">
       {block.caption ? (
         <figcaption className="text-xs text-fg-muted" lang={lang}>
-          {block.caption}
+          {highlightedText(block.caption,block.captionSourceRanges,highlights)}
         </figcaption>
       ) : null}
       <DataTable columns={columns} rows={rows} getRowKey={(row) => row.key} dense ariaLabel={block.caption || label} />

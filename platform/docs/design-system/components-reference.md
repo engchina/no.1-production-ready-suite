@@ -4108,3 +4108,14 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 `EvidenceReader`は`blocks[].record`があるとき、共有の`SourceRecordView`でCSV/Excelの表行列とWord段落/表を表示する。表は`DataTable`、記録の文字の強調は`CodepointHighlight`。保存された記録単位の強調を文字単位の精密な引用と区別し、原生の行列/段落位置を出す。引用に含まれない前後文と、`highlight=false`の未確定の引用は強調しない。
 
 解析画面は`purpose="selection"`で選択位置の文言を使い、Chatは既定の引用の文言を使う。位置と版の検証は製品backend、配色・文字・表・フォーカス・明暗テーマは共有UIが担う。取得失敗/再試行・版失効・有限の前後文・目次の既存動作を維持する。
+
+### 引用readerの通常表の高亮（#4892）
+
+`ExcerptContent.highlights` は元HTML上のcodepoint範囲を受ける。`parseExcerpt` が文字のあるセル片の原文範囲を任意に記録し、対応するセル全体を既存の`CodepointHighlight`で強調する。既定の解析結果・コピー用テキスト・表の意味やレイアウトは変えない。タグ属性・scriptなどの非表示部分・無効な座標はセルへ投影しない。引用readerは未確定の引用と参考文脈を強調せず、表はセル単位である旨を案内する。HTMLの実行や同文の検索で位置を推測する機能ではない。
+
+```bash
+cd platform/packages/ui
+npx vitest run tests/excerpt-highlight.test.tsx tests/excerpt-text.test.tsx tests/evidence-reader.test.tsx tests/source-record-view.test.tsx
+npm run typecheck
+npm run build
+```
