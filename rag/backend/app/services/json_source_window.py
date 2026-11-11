@@ -36,6 +36,7 @@ def _generic_window(
     source_index: int,
     offset: int | None,
     max_chars: int,
+    quote: str,
 ) -> dict[str, Any]:
     empty = {"text": "", "highlights": [], "coordinate_unit": "unicode_codepoint"}
     source = decode_source_text(data)
@@ -55,6 +56,23 @@ def _generic_window(
         return {**empty, "status": resolved.status}
     try:
         spans = mapping["elements"].get(element_id) or []
+        text = elements[element_id]
+        position = text.find(quote) if quote else -1
+        unique = position >= 0 and text.find(quote, position + 1) < 0
+        if (
+            unique
+            and spans
+            and all(
+                type(span.get("start")) is int and type(span.get("end")) is int for span in spans
+            )
+        ):
+            if any(not 0 <= span["start"] < span["end"] <= len(text) for span in spans):
+                raise ValueError
+            spans = [
+                span
+                for span in spans
+                if max(position, span["start"]) < min(position + len(quote), span["end"])
+            ]
         if type(source_index) is not int or not 0 <= source_index < len(spans):
             raise ValueError
         span = spans[source_index]
@@ -107,6 +125,7 @@ def source_map_window(
             source_index=source_index,
             offset=offset,
             max_chars=max_chars,
+            quote=quote,
         )
     if (
         not isinstance(mapping, Mapping)

@@ -103,3 +103,30 @@ async def test_generic_reader_missing_mapping_does_not_load_files() -> None:
     result = await load_source_map_window({}, element_id="e", revision="ex1", load=load)
     assert result["status"] == "unrecorded"
     load.assert_not_awaited()
+
+
+def test_json_reader_selects_saved_unit_intersecting_unique_citation() -> None:
+    source = '{"a":"first", "b":"second"}'
+    raw = source.encode()
+    text = "first\nsecond"
+    first = source.index('"a"')
+    second = source.index('"b"')
+    mapping = source_map_artifact(
+        raw,
+        source,
+        "json_pointer",
+        {
+            "e": [
+                SourceRange(first, second - 2, "/a", 0, 5),
+                SourceRange(second, len(source) - 1, "/b", 6, 12),
+            ]
+        },
+    )
+    payload = {
+        "elements": [{"element_id": "e", "text": text}],
+        "parser_artifacts": {"source_map": mapping},
+    }
+    result = source_map_window(payload, raw, element_id="e", quote="second")
+    assert result["pointer"] == "/b"
+    assert result["text"] == '"b":"second"'
+    assert result["source_count"] == 1
