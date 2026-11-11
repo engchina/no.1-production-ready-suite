@@ -1,3 +1,4 @@
+import { progressCardLayout } from "../../../../platform/packages/ui/e2e/progress-card-checks";
 import { inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
@@ -20631,6 +20632,7 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
+  await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
   await expect(page.getByTestId("nl2sql-job-partial-read-truncated")).toBeVisible();
   await expect(page.getByTestId("nl2sql-job-partial-write-dropped")).toBeVisible();
   await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");
@@ -20645,6 +20647,7 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await details.locator(":scope > summary").click();
   await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${jobProgressTraceId("job-default-001")}`);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await progress.screenshot({ path: testInfo.outputPath("progress-card.png") });
   await page.screenshot({ path: testInfo.outputPath("sql-generate-span-tree.png"), fullPage: true });
 });
 
@@ -20701,7 +20704,7 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
   const liveTypography = await timelineTypography(progress);
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
     expect(live).toHaveLength(6);
     await progress.screenshot({path: testInfo.outputPath("sql-generation-process.png")});
     if (cancelled) {

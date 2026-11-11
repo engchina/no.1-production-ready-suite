@@ -642,11 +642,11 @@ describe("取消の事実（#3348）", () => {
 });
 
 describe("RunTimeline", () => {
-  it("操作画面と履歴の既定は共通の小さい文字とアイコンで描く", () => {
+  it("操作画面と履歴は共有の見出しと小さい工程・アイコンで描く", () => {
     render(<RunTimelineSection title="処理の経過" steps={[{id: "a", label: "合成の工程", status: "done", details: {fields: [{label: "結果", value: "完了"}]}}]} />);
     const label = container.querySelector("[data-run-timeline-label]");
     expect(label?.closest<HTMLElement>("[data-run-step-name]")?.className).toContain("text-xs");
-    expect(container.querySelector('[data-run-progress-summary]')?.className).toContain("text-xs");
+    expect(container.querySelector('[data-run-progress-summary]')?.className).toContain("text-sm");
     expect(container.querySelector('[data-run-timeline-toggle] svg')?.getAttribute("width")).toBe("12");
   });
 
@@ -879,7 +879,7 @@ describe("動くスピナーは 1 つ（#3445）", () => {
     expect(timer?.getAttribute("aria-label")).toMatch(/^経過時間 01:0[5-6]$/);
     // 終わった実行は今までどおり「N ステップ・合計 M 秒」。
     render(<RunTimelineSection title="処理の経過" steps={steps.slice(0, 1)} totalDurationMs={1200} testId="done" />);
-    expect(container.querySelector("[data-testid='done-summary']")?.textContent).toBe("1 ステップ・合計 1.2 秒");
+    expect(container.querySelector("[data-testid='done-summary']")?.textContent).toBe("処理の経過1 ステップ・合計 1.2 秒");
     expect(container.querySelector("[data-testid='done-timer']")).toBeNull();
   });
 });
@@ -912,7 +912,7 @@ describe("RunTimelineSection（#2473）", () => {
     );
     const summary = container.querySelector<HTMLElement>("[data-testid='section-summary']");
     // 段の数は入れ子の段も数える（チャットの処理の経過と同じ）。
-    expect(summary?.textContent).toBe("3 ステップ・合計 2.0 秒");
+    expect(summary?.textContent).toBe("処理の経過3 ステップ・合計 2.0 秒");
     const details = container.querySelector("details");
     expect(details?.open).toBe(false);
     expect(container.textContent).toContain("処理の経過");

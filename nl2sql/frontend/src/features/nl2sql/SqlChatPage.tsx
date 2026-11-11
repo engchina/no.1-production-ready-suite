@@ -10,6 +10,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
+  RunProgressCard,
   ApiErrorBanner,
   ChatReadOnlyNotice,
   Banner,
@@ -1063,13 +1064,13 @@ function SqlChatTurn({
           testId="sql-chat-turn-clarification"
         />
       ) : null}
-      <ChatAnswer>
-          {/* 処理の経過（#1145・#3226）は span の木。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の
+      <ChatAnswer progress={<>
+        {/* 処理の経過（#1145・#3226）は span の木。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の
               1 行（押すと開く。3 製品で同じ。#2265）。span の無い古い形式の記録は案内の文を出す。 */}
           {legacyProgress ? (
-            <><ProgressLegacyNotice testId="sql-chat-progress-legacy" />
+            <RunProgressCard><ProgressLegacyNotice testId="sql-chat-progress-legacy" />
               <RunProcessDetails metadata={{ conversationId: turn.conversation_id ?? null, messageId: turn.job_id }}><RunUsedModels models={[]} /></RunProcessDetails>
-            </>
+            </RunProgressCard>
           ) : (
             <ChatProgress
               loadCallBody={progress.loadCallBody}
@@ -1090,6 +1091,7 @@ function SqlChatTurn({
               testId="sql-chat-progress"
             />
           )}
+      </>}>
           {turn.error_message && turn.error_code === "JOB_CANCELLED" ? (
             <Banner severity="info">{t("chat.cancelled")}</Banner>
           ) : turn.error_message ? (

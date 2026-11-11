@@ -1,7 +1,7 @@
 import { CircleStop, Database } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { RunUsedModels, ChatProgress, Button, Banner, FormStatus } from "@production-ready/ui";
+import { RunProgressCard, RunUsedModels, ChatProgress, Button, Banner, FormStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { CHAT_PROGRESS_LABELS, chatQueueProgressSteps, jobTracePath } from "../chatProgress";
@@ -79,9 +79,9 @@ export function OperationStatusStrip({
   return (
     <div data-testid="nl2sql-job-progress" data-job-status={job.status}>
     {legacy ? (
-      <div className="mx-4 my-3">
+      <RunProgressCard>
         <ProgressLegacyNotice testId="nl2sql-job-progress-legacy" />
-      </div>
+      </RunProgressCard>
     ) : (
       <ChatProgress
               loadCallBody={progress.loadCallBody}

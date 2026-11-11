@@ -8,8 +8,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import type { SpanRetryOutcome } from "../../lib/trace-tree";
-import { cn } from "../../lib/utils";
-import { RunProcessDetails, type RunProcessDetailsProps } from "../data/run-detail";
+import { RunProgressCard, RunProcessDetails, type RunProcessDetailsProps } from "../data/run-detail";
 import { useTraceDetailsLabels } from "../data/trace-labels-provider";
 import {
   RunTimeline,
@@ -300,6 +299,7 @@ function StepList({
   loadCallBody,
   steps,
   bars,
+  footer,
   renderRunningStep,
   labels,
   testId,
@@ -307,6 +307,7 @@ function StepList({
   loadCallBody?: CallBodyLoader;
   steps: ChatProgressStep[];
   bars: boolean;
+  footer?: ReactNode;
   renderRunningStep?: (step: RunTimelineStep) => ReactNode;
   labels: ChatProgressLabels;
   testId?: string;
@@ -314,6 +315,8 @@ function StepList({
   return (
     <RunTimeline
       loadCallBody={loadCallBody}
+      explorerPlacement="footer"
+      footer={footer}
       steps={steps.map(chatProgressTimelineStep)}
       showSummary={false}
       showBars={bars}
@@ -567,11 +570,11 @@ export function ChatProgress({
   const slow = useLatchedSlow(currentTiming.slow, { active: slowEnabled, resetKey: progressKey });
   const announcement = currentLabel && reconnecting ? `${currentLabel} ${labels.reconnecting}` : currentLabel;
 
-  if (steps.length === 0 && !active) return incomplete ? <>{footer}</> : null;
+  if (steps.length === 0 && !active) return incomplete ? <RunProgressCard>{footer}</RunProgressCard> : null;
 
   return (
-    <div
-      className={cn("grid min-w-0 gap-1", className)}
+    <RunProgressCard
+      className={className}
       aria-busy={active}
       data-chat-progress-state={state}
       data-testid={testId}
@@ -583,7 +586,7 @@ export function ChatProgress({
       {active ? (
         <Disclosure
           variant="plain"
-          size="sm"
+          size="md"
           summary={
             <SummaryText icon={ListChecks}>
               {labels.running(finished.length, summaryIsOpen ? null : currentLabel)}
@@ -598,19 +601,18 @@ export function ChatProgress({
         >
           {/* 1 本のタイムライン: 始まった段階を開始順に並べ、今の段階の行をその位置に出す（#2309 / #2840）。 */}
           <div className="grid min-w-0 gap-1.5">
-            <StepList loadCallBody={loadCallBody} steps={started} bars={false} labels={labels} testId={testId}
+            <StepList loadCallBody={loadCallBody} steps={started} bars={false} footer={footer} labels={labels} testId={testId}
               renderRunningStep={(timelineStep) => {
                 const step = started.find((item) => item.id === timelineStep.id)!;
                 return <CurrentStepRow activityIndicator={activityIndicator} primary={step === current} step={step}
                   slow={slow} reconnecting={reconnecting} labels={labels} testId={testId} />;
               }} />
-            {footer}
           </div>
         </Disclosure>
       ) : (
         <Disclosure
           variant="plain"
-          size="sm"
+          size="md"
           summary={
             <SummaryText icon={cancelled ? CircleStop : failed ? XCircle : ListChecks}>
               {cancelled ? traceLabels.stopped : labels.summary(finished.length, total !== null ? labels.formatDuration(total) : "-")}
@@ -621,16 +623,9 @@ export function ChatProgress({
           summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "" }}
           summaryClassName={failed ? "text-danger-fg" : "text-fg-muted"}
         >
-          {footer ? (
-            <div className="grid min-w-0 gap-1.5">
-              <StepList loadCallBody={loadCallBody} steps={steps} bars labels={labels} testId={testId} />
-              {footer}
-            </div>
-          ) : (
-            <StepList loadCallBody={loadCallBody} steps={steps} bars labels={labels} testId={testId} />
-          )}
+          <StepList loadCallBody={loadCallBody} steps={steps} bars footer={footer} labels={labels} testId={testId} />
         </Disclosure>
       )}
-    </div>
+    </RunProgressCard>
   );
 }

@@ -2829,7 +2829,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   const liveTypography = await timelineTypography(progress);
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
   expect(live.map((row) => row.level)).toEqual([0,1,2]);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill({json: {data: {

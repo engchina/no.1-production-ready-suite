@@ -1,4 +1,5 @@
-import { TracePartialNotice, ChatProgress, RunProcessDetails, useTraceDetailsLabels, type CallBodyLoader, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
+import {
+  RunProgressCard, TracePartialNotice, ChatProgress, RunProcessDetails, useTraceDetailsLabels, type CallBodyLoader, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -126,7 +127,7 @@ export function AnswerProcess({
           testId={testId}
         />
       ) : (
-        <>
+        <RunProgressCard>
           {legacy ? (
             <p className="text-sm text-fg-muted" data-testid={testId ? `${testId}-legacy` : undefined}>
               {traceLabels.legacy}
@@ -134,7 +135,7 @@ export function AnswerProcess({
           ) : null}
           <TracePartialNotice partial={partial} readTruncated={readTruncated} droppedSpans={droppedSpans} testId={testId ? `${testId}-partial` : undefined} />
           {detailsDisclosure}
-        </>
+        </RunProgressCard>
       )}
     </section>
   );
