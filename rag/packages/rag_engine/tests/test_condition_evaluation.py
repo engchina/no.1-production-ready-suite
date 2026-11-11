@@ -33,7 +33,7 @@ def test_one_contradiction_cannot_be_overridden_by_a_free_overall_reason():
     assert result["answer_correctness"] == 0
     assert result["claim_comparisons"][1]["answer_text"] == "項目Bは3です。"
     assert result["claim_comparisons"][1]["standard_texts"] == ["項目Bは8です。"]
-    assert result["rubric_version"] == RUBRIC_VERSION == 26
+    assert result["rubric_version"] == RUBRIC_VERSION == 27
 
 
 def test_correct_partial_answer_records_missing_point_without_factual_failure():
@@ -89,3 +89,29 @@ def test_substantive_claims_under_notes_are_not_hidden_from_the_judge(section):
     assert "".join("".join(unit["text"].split()) for unit in inputs["answer_text"]) == "".join(text.split())
     assert result["answer_correctness"] is None
     assert model.call_count == 1
+
+
+@pytest.mark.parametrize("context", ["資料により確認できた事項", "合成資料の説明"])
+def test_presentation_units_are_recorded_separately_without_becoming_unassessed(context):
+    result = evaluate(
+        DATA | {"answer_text": context + "\n\n項目Aは5です。"}, [row("A1", [], "not_applicable"), row("A2", ["S1"], "consistent")]
+    )
+    assert result["answer_correctness"] == 1
+    assert result["claim_comparisons"][0]["relation"] == "not_applicable"
+    assert result["claim_comparisons"][0]["answer_text"] == context
+
+
+def test_presentation_only_is_not_a_correct_answer():
+    result = evaluate(DATA | {"answer_text": "資料により確認できた事項"}, [row("A1", [], "not_applicable")])
+    assert result["answer_correctness"] is None
+
+
+def test_wrong_claim_after_a_note_heading_still_dominates_the_score():
+    text = "資料から確認できなかった事項\n\n項目Bは3です。"
+    result = evaluate(DATA | {"answer_text": text}, [row("A1", [], "not_applicable"), row("A2", ["S2"], "contradicts")])
+    assert result["answer_correctness"] == 0
+
+
+def test_material_claim_without_comparison_is_still_unassessed():
+    result = evaluate(DATA, [row("A1", ["S1"], "consistent"), row("A2", [], "unassessed")])
+    assert result["answer_correctness"] is None
