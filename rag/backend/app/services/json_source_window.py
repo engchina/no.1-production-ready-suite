@@ -7,8 +7,82 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal
 
 from rag_parser_core.json_source_map import raw_string_ranges
+from rag_parser_core.source_map import decode_source_text
+
+from app.services.source_map_resolve import resolve_source_map
 
 MAX_SOURCE_CHARS = 8192
+
+
+def _mapping(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    artifacts = payload.get("parser_artifacts")
+    if not isinstance(artifacts, Mapping):
+        return None
+    mapping = artifacts.get("json_source_map")
+    if isinstance(mapping, Mapping):
+        return mapping
+    generic = artifacts.get("source_map")
+    if isinstance(generic, Mapping) and generic.get("scheme") in {"json_pointer", "html_source"}:
+        return generic
+    return None
+
+
+def _generic_window(
+    payload: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    data: bytes,
+    *,
+    element_id: str,
+    source_index: int,
+    offset: int | None,
+    max_chars: int,
+) -> dict[str, Any]:
+    empty = {"text": "", "highlights": [], "coordinate_unit": "unicode_codepoint"}
+    source = decode_source_text(data)
+    elements = {
+        row["element_id"]: row["text"]
+        for row in payload.get("elements", [])
+        if isinstance(row, Mapping)
+        and isinstance(row.get("element_id"), str)
+        and isinstance(row.get("text"), str)
+    }
+    if element_id not in elements:
+        return {**empty, "status": "unresolved"}
+    resolved = resolve_source_map(
+        mapping, data=data, text_length=len(source), element_texts=elements
+    )
+    if resolved.status != "exact":
+        return {**empty, "status": resolved.status}
+    try:
+        spans = mapping["elements"].get(element_id) or []
+        if type(source_index) is not int or not 0 <= source_index < len(spans):
+            raise ValueError
+        span = spans[source_index]
+        a, b = span["source_start"], span["source_end"]
+        if type(a) is not int or type(b) is not int or not 0 <= a < b <= len(source):
+            raise ValueError
+        start = a if offset is None else offset
+        if type(start) is not int or not a <= start < b:
+            raise ValueError
+        end = min(b, start + min(MAX_SOURCE_CHARS, max(1, max_chars)))
+        return {
+            **empty,
+            "status": "exact",
+            "anchor_status": "element",
+            "pointer": span.get("locator", ""),
+            "source_index": source_index,
+            "source_count": len(spans),
+            "text": source[start:end],
+            "offset": start,
+            "highlights": [[0, end - start]],
+            "previous_offset": max(a, start - min(MAX_SOURCE_CHARS, max(1, max_chars)))
+            if start > a
+            else None,
+            "next_offset": end if end < b else None,
+            "sha256": mapping["sha256"],
+        }
+    except (KeyError, ValueError, TypeError, IndexError):
+        return {**empty, "status": "unresolved"}
 
 
 def source_map_window(
@@ -23,8 +97,17 @@ def source_map_window(
 ) -> dict[str, Any]:
     """古い記録・版違い・壊れた対応は文字検索で補わない。座標は codepoint。"""
     empty = {"text": "", "highlights": [], "coordinate_unit": "unicode_codepoint"}
-    artifacts = payload.get("parser_artifacts")
-    mapping = artifacts.get("json_source_map") if isinstance(artifacts, Mapping) else None
+    mapping = _mapping(payload)
+    if isinstance(mapping, Mapping) and mapping.get("scheme") in {"json_pointer", "html_source"}:
+        return _generic_window(
+            payload,
+            mapping,
+            data,
+            element_id=element_id,
+            source_index=source_index,
+            offset=offset,
+            max_chars=max_chars,
+        )
     if (
         not isinstance(mapping, Mapping)
         or mapping.get("version") != 1
@@ -150,8 +233,7 @@ async def load_source_map_window(
 
     from fastapi import HTTPException
 
-    artifacts = payload.get("parser_artifacts")
-    mapping = artifacts.get("json_source_map") if isinstance(artifacts, Mapping) else None
+    mapping = _mapping(payload)
     base = {"revision": revision, "element_id": element_id}
     if not isinstance(mapping, Mapping) or not mapping.get("sha256"):
         return {**base, **source_map_window(payload, b"", element_id=element_id)}
