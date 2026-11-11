@@ -84,3 +84,20 @@ async def test_workbench_current_recipe_is_preserved(oracle: SimpleNamespace) ->
     _, actual = await documents._recipe_detail_and_artifact("doc-a", "recipe-a")
     assert actual == current
     oracle.recipe_version_exists.assert_not_awaited()
+
+
+async def test_structured_records_are_identified_from_cited_artifact(
+    monkeypatch: pytest.MonkeyPatch, oracle: SimpleNamespace
+) -> None:
+    artifact = DocumentPreprocessArtifact(
+        derivation_id="source-a",
+        profile="excel_to_jsonl",
+        file_name="synthetic.jsonl",
+        content_type="application/vnd.production-ready.structured-records+jsonl",
+        object_storage_path="synthetic/prepared",
+    )
+    monkeypatch.setattr(documents, "chunk_set_prepared_artifact", AsyncMock(return_value=artifact))
+    result = await documents.document_recipe_preview_source("doc-a", "recipe-a", "cs-a")
+    assert result.data is not None
+    assert result.data.is_structured_records
+    assert not result.data.is_pdf

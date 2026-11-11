@@ -931,6 +931,7 @@ export interface DocumentPreviewSource {
   file_name: string;
   content_type: string | null;
   is_pdf: boolean;
+  is_structured_records?: boolean;
 }
 
 export interface DocumentPreviewPages {
@@ -3400,6 +3401,12 @@ export const api = {
     const search = new URLSearchParams({ chunk_id: chunkId });
     for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
     return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/source-map?${search}`, { signal });
+  },
+  documentRecipeReader: (id: string, recipeId: string, revision: string, elementId: string | null, input: EvidenceReadingInput, signal: AbortSignal) => {
+    const search = new URLSearchParams({expected_revision:revision});
+    if(elementId) search.set("element_id",elementId);
+    for(const [key,value] of Object.entries(input)) if(value !== undefined) search.set(key,String(value));
+    return request<EvidenceReadingWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/reader?${search}`,{signal});
   },
   documentRecipeSourceMap: (id: string, recipeId: string, input: OriginalSourceInput, signal: AbortSignal) => {
     const search = new URLSearchParams();

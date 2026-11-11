@@ -400,6 +400,7 @@ class DocumentPreviewSource(BaseModel):
     file_name: str
     content_type: str | None = None
     is_pdf: bool
+    is_structured_records: bool = False
 
 
 class DocumentPreviewPage(BaseModel):

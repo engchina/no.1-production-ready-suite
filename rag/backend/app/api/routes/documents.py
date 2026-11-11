@@ -31,7 +31,11 @@ from fastapi import (
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import ValidationError
-from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
+from rag_parser_core.structured_records import (
+    RecordBoundaryError,
+    is_structured_records_content_type,
+    record_boundary_plain_text,
+)
 from rag_parser_core.text_encoding import detect_text_match
 from rag_pipeline_core.chunking import normalize_fixed_delimiters
 
@@ -1765,6 +1769,65 @@ async def document_recipe_chunk_window(
     )
 
 
+async def _reader_structured_data(document_id: str, payload: Mapping[str, Any]) -> bytes:
+    detail = await OracleClient().get_document(document_id)
+    if detail is None:
+        raise HTTPException(404, "文書が見つかりません。")
+    artifact = _extraction_file_artifact(detail, payload)
+    data, _, _ = await load_document_content(
+        detail, variant="prepared", preprocess_artifact=artifact
+    )
+    return data
+
+
+@router.get("/{document_id}/recipes/{recipe_id}/reader")
+async def document_recipe_source_reader(
+    document_id: str,
+    recipe_id: str,
+    expected_revision: Annotated[str, Query(min_length=1, max_length=256)],
+    element_id: Annotated[str | None, Query(max_length=128)] = None,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    direction: Literal["before", "after"] = "after",
+    scope: Literal["paragraph", "section", "parent"] = "paragraph",
+    section_id: Annotated[str | None, Query(max_length=64)] = None,
+) -> ApiResponse[dict[str, Any]]:
+    from app.services.source_reader import reading_window
+    from app.services.structured_source_reader import (
+        enrich_structured_window,
+        has_structured_source_mapping,
+    )
+
+    await _recipe_detail_and_artifact(document_id, recipe_id)
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None or row.get("active_extraction_recipe_id") != expected_revision:
+        raise SourceVersionStaleError("資料の解析版が変わりました。開き直してください。")
+    saved = await oracle.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=expected_revision
+    )
+    raw_payload = (saved or {}).get("extraction_json")
+    payload: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
+    elements = payload.get("elements") or []
+    anchor = element_id or next(
+        (str(element["element_id"]) for element in elements if element.get("element_id")), ""
+    )
+    result = await asyncio.to_thread(
+        reading_window,
+        payload,
+        revision=expected_revision,
+        anchor_ids=[anchor],
+        quote="",
+        cursor=cursor,
+        direction=direction,
+        scope=scope,
+        section_id=section_id,
+    )
+    if has_structured_source_mapping(payload):
+        data = await _reader_structured_data(document_id, payload)
+        result = await asyncio.to_thread(enrich_structured_window, result, payload, data)
+    return ApiResponse(data=result)
+
+
 @router.get("/{document_id}/reader")
 async def document_source_reader(
     document_id: str,
@@ -1776,6 +1839,9 @@ async def document_source_reader(
 ) -> ApiResponse[dict[str, Any]]:
     from app.services.source_reader import read_source_context
 
+    async def load_structured(payload: Mapping[str, Any]) -> bytes:
+        return await _reader_structured_data(document_id, payload)
+
     return ApiResponse(
         data=await read_source_context(
             OracleClient(),
@@ -1785,6 +1851,7 @@ async def document_source_reader(
             direction=direction,
             scope=scope,
             section_id=section_id,
+            load_structured=load_structured,
         )
     )
 
@@ -2194,7 +2261,10 @@ async def document_recipe_preview_source(
     )
     return ApiResponse(
         data=DocumentPreviewSource(
-            file_name=artifact.file_name, content_type=artifact.content_type, is_pdf=is_pdf
+            file_name=artifact.file_name,
+            content_type=artifact.content_type,
+            is_pdf=is_pdf,
+            is_structured_records=is_structured_records_content_type(artifact.content_type or ""),
         )
     )
 
