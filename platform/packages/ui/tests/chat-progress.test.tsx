@@ -65,6 +65,9 @@ describe("ChatProgress", () => {
     expect(footer.textContent).toContain("軌跡を調べる");
     expect(footer.textContent).toContain("処理の詳細");
     expect(card.querySelector("[data-run-timeline] ol")!.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => Array.from(card.querySelectorAll("button")).find(button => button.textContent?.includes("軌跡を調べる"))!.click());
+    expect(card.querySelector("[data-trace-explorer]")).not.toBeNull();
+    expect(card.querySelector("[data-run-process-details]")).not.toBeNull();
   });
 
   it.each(["done", "failed", "cancelled"] as const)("確定終端 %s は子の試行失敗より優先する", (terminalStatus) => {

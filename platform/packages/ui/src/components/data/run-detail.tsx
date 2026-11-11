@@ -834,7 +834,7 @@ export function RunTimeline({
 
   const exploreAction = steps.length ? <Button id={`${idPrefix}-explore`} variant="secondary" size="sm" icon={Waypoints} onClick={() => setExploring(true)}>{explorerLabels?.open ?? DEFAULT_TRACE_EXPLORER_LABELS.open}</Button> : null;
 
-  if (exploring) return <TraceExplorer loadCallBody={loadCallBody} steps={steps} hierarchyOrdered formatDuration={formatDuration} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
+  if (exploring) return <div className="grid min-w-0 gap-3"><TraceExplorer loadCallBody={loadCallBody} steps={steps} hierarchyOrdered formatDuration={formatDuration} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />{footer}</div>;
 
   return (
     <div
