@@ -335,3 +335,30 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json",
     await page.screenshot({path:testInfo.outputPath(`text-source-chat-${extension}.png`)});
   });
 }
+
+
+test("通常表は保存された範囲に対応する2つ目のセルだけを強調する", {tag:"@responsive"}, async ({page}, testInfo) => {
+  await search(page);
+  const text = '<table><tr><th>項目</th><th>値</th></tr><tr><td>合成A</td><td>同じ値😀 &amp; 前<br>後</td></tr><tr><td>合成B</td><td>同じ値😀 &amp; 前<br>後</td></tr></table>';
+  const start = Array.from(text.slice(0,text.lastIndexOf("同じ値"))).length;
+  await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"table",kind:"table",text,offset:0,cited:true,highlights:[[start,start+3]]}],outline:[],previous_cursor:null,next_cursor:null}}}));
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader = page.getByTestId("evidence-reader-content");
+  await expect(reader.getByRole("table")).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath(`table-initial-${testInfo.project.name}.png`),animations:"disabled"});
+  await expect(reader.locator("mark")).toHaveText("同じ値😀 & 前\n後");
+  await expect(reader.getByRole("cell").filter({hasText:"合成A"})).toBeVisible();
+  await expect(reader.getByRole("row").filter({hasText:"合成A"}).locator("mark")).toHaveCount(0);
+  await expect(reader).toContainText("セル単位で強調");
+  await expectNoPageOverflow(page);
+  await page.screenshot({path:testInfo.outputPath(`table-highlight-${testInfo.project.name}.png`),animations:"disabled"});
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({width:1920,height:1080});
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("table-highlight-wide.png"),animations:"disabled"});
+    await page.setViewportSize({width:1280,height:900});
+    await page.evaluate(()=>document.documentElement.classList.add("dark"));
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("table-highlight-dark.png"),animations:"disabled"});
+  }
+});
