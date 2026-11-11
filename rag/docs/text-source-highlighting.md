@@ -55,3 +55,22 @@ npx playwright test e2e/citation-text-preview.spec.ts -g 'Chatの原文の段落
 ```
 
 desktopと375pxで3形式ずつを確認する。位置記録の実サービス検証、保存済み回答の再生、画面のfixture回帰と、配備後のDB・画面の受入を区別して報告する。
+
+## XMLツリーJSONの原本同期（#4886）
+
+XMLツリーJSONは保存済みの`json_source_map`を使う。構造化要素またはChunkを選ぶと、その要素IDを原本窓の取得へ渡し、JSON Pointerと本文範囲を原本文字列の座標へ投影する。左の原本プレビューでも該当文字列を強調する。同じ本文を持つ別ノードはPointerで区別し、JSONのUnicode escapeや引用符のescapeも原本上の範囲へ写す。原本hash・本文・対応が一致しない場合は精密な強調を出さない。
+
+右側の「原本の対応箇所」とRAG根拠閲覧の既存機能は維持する。表示時の座標投影の修正で、parser出力やartifact版は変えない。対応表が保存されている文書は再解析不要。対応表の無い旧文書は既存の表示用再構築で一致した要素だけを使う。
+
+局所検証（それぞれリポジトリ直下から）:
+
+```bash
+cd rag/backend
+uv run --locked --no-sync pytest tests/test_inspection_scope.py tests/test_json_source_window.py tests/test_json_source_rebuild.py tests/test_json_source_routes.py -q
+```
+
+```bash
+cd rag/frontend
+npx playwright test e2e/document-workspace-file-processing.spec.ts -g '構造化要素から解析版を固定して原本ノード'
+npx playwright test e2e/citation-text-preview.spec.ts -g '原本ノードは展開時だけ'
+```

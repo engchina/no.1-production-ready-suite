@@ -3630,6 +3630,16 @@ test("左の表示範囲が無いときは、構造化要素と Chunk を続き�
 test("構造化要素から解析版を固定して原本ノードを開く", {tag:"@responsive"}, async ({page},testInfo) => {
   await mockDocumentWorkspace(page);
   await page.route("**/recipes/recipe-1/extraction-view?**",route => route.fulfill({json:{data:{payload:{raw_text:"合成の本文",elements:[{element_id:"xt-00000",kind:"text",text:"合成の構造化段落",order:0,source_parser:"xml_tree_json",metadata:{xml_tree_unit_kind:"paragraph"}}]},offset:0,total:1,limit:25}}}));
+  const rawText = '{"nodes":["同じ合成の原本段落","同じ合成の原本段落"]}';
+  const focusedText = "同じ合成の原本段落";
+  const highlightStart = Array.from(rawText.slice(0, rawText.lastIndexOf(focusedText))).length;
+  const focusRequests: string[] = [];
+  await page.route("**/recipes/recipe-1/text-window", route => {
+    const input = route.request().postDataJSON();
+    if (input.element_id) focusRequests.push(input.element_id);
+    return route.fulfill({json:{data:{text:rawText,offset:0,total:Array.from(rawText).length,limit:8192,revision:"synthetic-source",highlights:input.element_id ? [[highlightStart,highlightStart+Array.from(focusedText).length]] : []}}});
+  });
+  await page.route("**/recipes/recipe-1/chunk-window?**",route => route.fulfill({json:{data:{items:[{document_id:"doc-1",chunk_id:"xml-chunk",chunk_index:0,text:"合成のXML Chunk",element_ids:["xt-00000"],metadata:{}}],total:1,offset:0,limit:25,complete:true,scope_status:"exact"}}}));
   const inputs:URLSearchParams[]=[];
   await page.route("**/recipes/recipe-1/source-map?**",route => {
     const query=new URL(route.request().url()).searchParams; inputs.push(query);
@@ -3638,13 +3648,22 @@ test("構造化要素から解析版を固定して原本ノードを開く", {t
   await page.goto("/documents/doc-1");
   await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
   await page.getByRole("button",{name:/合成の構造化段落/}).click();
+  await expect.poll(() => focusRequests).toContain("xt-00000");
+  const originalMark = page.getByTestId("preview-text").locator("mark");
+  await expect(originalMark).toHaveText(focusedText);
+  expect(await originalMark.evaluate(el => el.previousSibling?.textContent)).toBe(rawText.slice(0,rawText.lastIndexOf(focusedText)));
+
   const panel=page.getByTestId("original-source-panel");
   await expect(panel).toBeVisible(); expect(inputs).toHaveLength(0);
   await panel.locator("summary").click();
   await expect(panel.locator("pre")).toHaveText("合成の原本段落");
   expect(inputs[0].get("expected_revision")).toBe("er-recipe-1-r1");
   expect(inputs[0].get("element_id")).toBe("xt-00000");
-  await page.screenshot({path:testInfo.outputPath(`element-original-${testInfo.project.name}.png`),animations:"disabled"});
+  await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`xml-original-highlight-${testInfo.project.name}.png`),animations:"disabled"});
+  await page.getByTestId("document-inspector-pane").getByRole("tab",{name:/Chunk \/ Citation/}).click();
+  await page.getByTestId("document-chunk-list").getByRole("button",{name:/合成のXML Chunk/}).click();
+  await expect(page.getByTestId("preview-text").locator("mark")).toHaveText(focusedText);
+  await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`xml-chunk-highlight-${testInfo.project.name}.png`),animations:"disabled"});
   await expectNoPageOverflow(page);
 });
 
