@@ -31,6 +31,14 @@ EOF
 cat > "${work}/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 echo "apt-get $*" >> "${FAKE_LOG}"
+if [[ " $* " == *" --no-download "* ]]; then
+  if [ "${FAKE_OFFLINE_SUCCESS:-0}" = "1" ]; then
+    printf 'fonts-bar 1.0\n' >> "${FAKE_INSTALLED}"
+    exit 0
+  fi
+  [ "${FAKE_OFFLINE_SUCCESS:-0}" = "2" ] && exit 0
+  exit 100
+fi
 if [ "$1" = "update" ] && [ -n "${FAKE_UPDATE_FAILURES:-}" ]; then
   n="$(cat "${FAKE_UPDATE_FAILURES}")"
   if [ "${n}" -gt 0 ]; then
@@ -62,7 +70,6 @@ reset() {
   mkdir -p "${work}/state/archives" "${work}/state/cache"
   : > "${work}/state/log"
   : > "${work}/state/installed"
-  : > "${work}/state/mirrors"
 }
 
 run() {
@@ -71,7 +78,6 @@ run() {
   local actual=0
   env PATH="${work}/bin:${PATH}" FAKE_LOG="${work}/state/log" FAKE_INSTALLED="${work}/state/installed" \
     FAKE_PW_PACKAGES="libfoo fonts-bar" PW_APT_CACHE_DIR="${work}/state/cache" \
-    PW_APT_MIRRORS="${work}/state/mirrors" \
     PW_APT_ARCHIVES="${work}/state/archives" PW_APT_CONF="${work}/state/apt.conf" PW_INSTALL_BACKOFF=0 \
     "$@" bash "${script}" "${subcommand}" > "${work}/state/out" 2>&1 || actual=$?
   if [ "${actual}" -eq "${expected}" ]; then
@@ -111,7 +117,7 @@ printf 'libfoo 1.0\n' > "${work}/state/installed"
 touch "${work}/state/cache/fonts-bar_1.0_all.deb"
 run 0 "入っていない package だけを入れる"
 assert "update・取得・install の順に、入っていない package だけを渡す" test "$(cat "${work}/state/log")" = "$(
-  printf '%s\n' "apt-get update" \
+  printf '%s\n' "apt-get install -y --no-install-recommends --no-download fonts-bar" "apt-get update" \
     "apt-get install -y --no-install-recommends --download-only fonts-bar" \
     "apt-get install -y --no-install-recommends fonts-bar"
 )"
@@ -119,36 +125,25 @@ assert "apt に retry と timeout を設定する" grep -q 'Acquire::Retries "3"
 assert "cache の .deb を apt の置き場に戻す" test -f "${work}/state/archives/fonts-bar_1.0_all.deb"
 
 reset
-printf '%s\n' '# runner の既存の設定' 'http://mirror.invalid/ubuntu/ priority:1' \
-  'https://archive.invalid/ubuntu/ priority:2' 'https://security.invalid/ubuntu/ priority:3' > "${work}/state/mirrors"
-run 0 "既存 HTTPS mirror を優先して依存を入れる"
-assert "既存の URL とコメントを保ち、HTTPS の優先度を上げる" test "$(cat "${work}/state/mirrors")" = "$(
-  printf '%s\n' '# runner の既存の設定' 'http://mirror.invalid/ubuntu/ priority:2' \
-    'https://archive.invalid/ubuntu/ priority:1' 'https://security.invalid/ubuntu/ priority:1'
-)"
+printf 'libfoo 1.0\n' > "${work}/state/installed"
+touch "${work}/state/cache/fonts-bar_1.0_all.deb"
+run 0 "cache だけで依存が揃えばネットワークを使わない" FAKE_OFFLINE_SUCCESS=1
+assert "offline の apt install だけを呼ぶ" test "$(cat "${work}/state/log")" = \
+  'apt-get install -y --no-install-recommends --no-download fonts-bar'
+assert "導入後に全依存が入っていることを再確認する" grep -q 'cache から OS の依存をすべて導入した' "${work}/state/out"
 
 reset
-printf '%s\n' 'http://mirror.invalid/ubuntu/' > "${work}/state/mirrors"
-run 0 "HTTPS mirror がなければ既存の設定で入れる"
-assert "HTTP だけの設定を書き換えない" test "$(cat "${work}/state/mirrors")" = 'http://mirror.invalid/ubuntu/'
+printf 'libfoo 1.0\n' > "${work}/state/installed"
+touch "${work}/state/cache/fonts-bar_1.0_all.deb"
+run 0 "cache が不完全なら既存の online 経路へ戻る"
+assert "offline の失敗後は update する" grep -q '^apt-get update$' "${work}/state/log"
+assert "online の download を省略しない" grep -q '^apt-get install -y --no-install-recommends --download-only fonts-bar$' "${work}/state/log"
 
 reset
-printf '%s\n' 'http://mirror.invalid/ubuntu/' 'https://archive.invalid/ubuntu/' > "${work}/state/mirrors"
-run 0 "優先度のない行にも HTTPS 優先を設定する"
-assert "HTTPS の取得先を追加せず既存の行に優先度を付ける" test "$(cat "${work}/state/mirrors")" = "$(
-  printf '%s\n' $'http://mirror.invalid/ubuntu/\tpriority:2' $'https://archive.invalid/ubuntu/\tpriority:1'
-)"
-
-reset
-rm "${work}/state/mirrors"
-run 0 "mirror list がなくても依存を入れる"
-assert "存在しない mirror list を作らない" test ! -e "${work}/state/mirrors"
-
-reset
-printf 'libfoo 1.0\nfonts-bar 1.0\n' > "${work}/state/installed"
-printf '%s\n' 'http://mirror.invalid/ubuntu/ priority:1' 'https://archive.invalid/ubuntu/ priority:2' > "${work}/state/mirrors"
-run 0 "依存導入済みなら mirror list にも触れない"
-assert "導入済みの時は mirror の優先度を変更しない" grep -q '^http://mirror.invalid/ubuntu/ priority:1$' "${work}/state/mirrors"
+printf 'libfoo 1.0\n' > "${work}/state/installed"
+touch "${work}/state/cache/fonts-bar_1.0_all.deb"
+run 0 "apt が成功しても不足 package が残れば online で取得する" FAKE_OFFLINE_SUCCESS=2
+assert "不足したまま cache 導入を成功としない" grep -q '^apt-get update$' "${work}/state/log"
 
 reset
 echo 1 > "${work}/state/update-failures"
