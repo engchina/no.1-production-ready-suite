@@ -280,7 +280,7 @@ test("原本ノードは展開時だけ取得し、版と対応範囲を保持�
 });
 
 
-for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx"]) {
+for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json", "html", "htm"]) {
   test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
     await mockDatabaseReady(page); await mockLocalAuth(page);
     const name = `synthetic.${extension}`;
@@ -304,6 +304,14 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx"]) {
       await page.route("**/api/documents/doc-text/recipes/r1/preview-source?**",route=>route.fulfill({json:{data:{file_name:"synthetic.jsonl",content_type:"application/vnd.production-ready.structured-records+jsonl",is_pdf:false,is_structured_records:true}}}));
       await page.route("**/api/documents/doc-text/reader?**",route=>route.fulfill({json:{data:{...structured.window,revision:"cs1"}}}));
     }
+    const genericOriginal = ["json", "html", "htm"].includes(extension);
+    const original = extension === "json" ? '{"a":"同じ値","b":"同じ値"}' : '<p>同じ値</p><p>同じ値</p>';
+    const selectedOffset = original.lastIndexOf("同じ値");
+    const originalInputs: URLSearchParams[] = [];
+    if (genericOriginal) await page.route("**/api/documents/doc-text/source-map?**", route => {
+      originalInputs.push(new URL(route.request().url()).searchParams);
+      return route.fulfill({json:{data:{status:"exact",revision:"ex1",chunk_revision:"v1",anchor_status:"element",element_id:"a",variant:"original",pointer:extension === "json" ? "/b" : "p[2]",source_index:0,source_count:1,text:original,offset:0,highlights:[[selectedOffset,selectedOffset+3]],coordinate_unit:"unicode_codepoint",previous_offset:null,next_offset:null},error_messages:[],warning_messages:[]}});
+    });
     await page.goto(`/chat?conversation_id=c-text&search_answer_profile_id=${PROFILE.id}`);
     await page.getByTestId("chat-answer-body").getByRole("button").filter({hasText:name}).first().click();
     const reader=page.getByTestId("evidence-reader-content");
@@ -313,6 +321,16 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx"]) {
       await expect(reader.getByRole("table").last()).toBeVisible();
     } else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
     await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+    if (genericOriginal) {
+      const panel = page.getByTestId("original-source-panel").first();
+      await panel.locator("summary").focus();
+      await page.keyboard.press("Enter");
+      await expect(panel.locator("mark")).toHaveText("同じ値");
+      expect(originalInputs[0].get("expected_revision")).toBe("v1");
+      const mark = panel.locator("mark");
+      expect(await mark.evaluate(el => el.previousSibling?.textContent)).toBe(original.slice(0,selectedOffset));
+      await expect(panel.getByText("原本 · 1 / 1",{exact:true})).toBeVisible();
+    }
     await expectNoPageOverflow(page);
     await page.screenshot({path:testInfo.outputPath(`text-source-chat-${extension}.png`)});
   });
