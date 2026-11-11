@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from PIL import Image
@@ -21,16 +22,24 @@ class Describer:
     api_mode = "test"
     max_tokens = 1
 
-    def __init__(self, *, fail: bool = False):
+    def __init__(self, *, fail: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail = fail
 
-    def provider(self):
+    def provider(self) -> SimpleNamespace:
         return SimpleNamespace(
             provider_id="fake", model="fake", region="", base_url="", project_id=""
         )
 
-    def describe(self, crop_path, metadata, *, context_image_paths, target_kind, rendered_prompt):
+    def describe(
+        self,
+        crop_path: Path,
+        metadata: Mapping[str, Any],
+        *,
+        context_image_paths: Sequence[Path],
+        target_kind: str,
+        rendered_prompt: str,
+    ) -> dict[str, Any]:
         with Image.open(crop_path) as im:
             self.calls.append(
                 {"size": im.size, "kind": target_kind, "context_count": len(context_image_paths)}
@@ -50,13 +59,20 @@ class Describer:
         }
 
 
-def extraction():
+def extraction() -> StructuredExtraction:
     return StructuredExtraction.model_validate(
         json.loads((FIXTURES / "vision-source-text-only.json").read_text())
     )
 
 
-def read(value, *, backend="docling", source=None, content_type="image/png", describer=None):
+def read(
+    value: StructuredExtraction,
+    *,
+    backend: str = "docling",
+    source: bytes | None = None,
+    content_type: str = "image/png",
+    describer: Describer | None = None,
+) -> tuple[StructuredExtraction, Describer]:
     model = describer or Describer()
     result = read_figures_with_vision(
         value,
@@ -72,7 +88,7 @@ def read(value, *, backend="docling", source=None, content_type="image/png", des
 
 
 @pytest.mark.parametrize("backend", ["docling", "unstructured"])
-def test_text_only_source_image_is_read_once_and_keeps_original_text(backend):
+def test_text_only_source_image_is_read_once_and_keeps_original_text(backend: str) -> None:
     original = extraction()
     if backend != "docling":
         original.parser_artifacts = {}
@@ -92,7 +108,7 @@ def test_text_only_source_image_is_read_once_and_keeps_original_text(backend):
     assert "A ?" in figures[0].text and "…" not in figures[0].text
     assert result.assets[-1].metadata["vision_status"] == "succeeded"
     if backend == "docling":
-        records = result.parser_artifacts["layout_records"]["records"]
+        records = cast(dict[str, Any], result.parser_artifacts["layout_records"])["records"]
         assert (
             len([r for r in records if r["category"] == "Picture" and r["raw_type"] == "picture"])
             == 1
@@ -103,21 +119,21 @@ def test_text_only_source_image_is_read_once_and_keeps_original_text(backend):
     assert second.raw_text == result.raw_text
 
 
-def test_source_image_without_any_ocr_elements_is_still_read_once():
+def test_source_image_without_any_ocr_elements_is_still_read_once() -> None:
     result, model = read(StructuredExtraction(raw_text=""))
     assert len(model.calls) == 1
     assert len(result.elements) == 1 and result.elements[0].kind == "figure"
 
 
-def test_text_only_pdf_does_not_gain_whole_page_vision():
+def test_text_only_pdf_does_not_gain_whole_page_vision() -> None:
     result, model = read(extraction(), source=_pdf(), content_type="application/pdf")
     assert not model.calls
     assert result.raw_text == extraction().raw_text
 
 
-def test_source_image_with_an_existing_region_does_not_gain_an_extra_target():
+def test_source_image_with_an_existing_region_does_not_gain_an_extra_target() -> None:
     value = extraction()
-    records = value.parser_artifacts["layout_records"]["records"]
+    records = cast(dict[str, Any], value.parser_artifacts["layout_records"])["records"]
     records.append(
         {
             **records[0],
@@ -135,7 +151,7 @@ def test_source_image_with_an_existing_region_does_not_gain_an_extra_target():
     assert not any(a.kind == "source_image" for a in result.assets)
 
 
-def test_failed_source_image_preserves_ocr_and_records_failure():
+def test_failed_source_image_preserves_ocr_and_records_failure() -> None:
     result, model = read(extraction(), describer=Describer(fail=True))
     assert len(model.calls) == 1
     assert result.assets[-1].metadata["vision_status"] == "failed"
