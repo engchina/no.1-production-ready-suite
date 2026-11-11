@@ -59,6 +59,7 @@ runs:
         key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-chromium-shell
 
     # Playwright が求める package のうち、入っていないものだけを入れる（入っているものは upgrade しない）。
+    # runner の既存 HTTPS mirror を HTTP より優先し、遅い最優先 HTTP mirror で予算を使い切るのを避ける（#4899）。
     # 全体で 300 秒を超えたら、遅い mirror であることを示して失敗する（job の時間切れまで待たない）。
     - name: Install OS dependencies
       shell: bash
