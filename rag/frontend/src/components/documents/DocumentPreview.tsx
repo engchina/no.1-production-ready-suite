@@ -38,7 +38,7 @@ function kindOf(fileName: string, sourceProfile?: SourceProfile | null): Kind {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   if (["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
-  if (["txt", "csv", "tsv", "md", "json", "xml", "log", "html", "htm", "eml"].includes(ext)) return "text";
+  if (["txt", "csv", "tsv", "md", "markdown", "json", "xml", "log", "html", "htm", "eml"].includes(ext)) return "text";
   if (["doc", "docx", "ppt", "pptx", "xls", "xlsx"].includes(ext)) return "office";
   return "unsupported";
 }
@@ -176,7 +176,7 @@ export function DocumentPreview({
       pages={pages}
       iframeUrl={pdfPreviewUrl(pdfUrl, focusPage)}
       loadTextRange={loadTextRange}
-      textKey={url}
+      textKey={`${url}:${focusElementId ?? ""}:${focusSectionId ?? ""}`}
       focusText={focusText}
       // 表示できない形式（Office の原本・処理後の JSONL など）は、形式によらず共通の案内の 1 文にする（#2679）。
       downloadUrl={showFallbackDownload ? downloadUrl : null}

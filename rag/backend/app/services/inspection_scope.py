@@ -210,7 +210,21 @@ def source_inspection(
         )
     ]
     split_elements = {unit.element_id for unit in units}
+    highlights: list[list[int]] = []
+    if (
+        element_id
+        and status == "exact"
+        and isinstance(source_map, Mapping)
+        and source_map.get("sha256") == revision
+    ):
+        # 対応表の版・原本hash・座標を検証した場合だけ、原本の保存範囲を窓へ投影する。
+        spans = (source_map.get("elements") or {}).get(element_id, [])
+        for span in spans:
+            a, b = max(start, span["source_start"]), min(end, span["source_end"])
+            if a < b:
+                highlights.append([a - start, b - start])
     return {
+        "highlights": highlights,
         "text": text[start:end],
         "offset": start,
         "end": end,

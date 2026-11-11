@@ -21,7 +21,6 @@ from rag_parser_core.source_map import (
     SCHEME_MARKDOWN_SOURCE,
     SCHEME_TEXT_CHAR,
     SCHEME_XML_SOURCE,
-    SOURCE_WINDOW_CODEPOINTS,
     LineIndex,
     SourceRange,
     decode_source_text,
@@ -262,8 +261,6 @@ def unstructured_source_map(
     if kind is None:
         return None
     text = decode_source_text(data)
-    if len(text) <= SOURCE_WINDOW_CODEPOINTS:
-        return None
     try:
         scheme, ranges = _element_ranges(kind, text, items, ids, element_texts)
     except Exception:  # noqa: BLE001 - 位置の記録の失敗で解析を止めない。

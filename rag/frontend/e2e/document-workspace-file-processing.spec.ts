@@ -3824,3 +3824,25 @@ for (const theme of ["light", "dark"] as const) {
     await page.screenshot({ path: testInfo.outputPath(`saved-${theme}.png`), fullPage: true });
   });
 }
+
+for (const extension of ["txt", "md", "markdown"]) {
+  test(`原本の保存座標を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
+    await mockDocumentWorkspace(page, {documentStatus:"REVIEW"});
+    const text = "😀\n# 合成\n同じ文。\n同じ文。";
+    const doc = documentDetail({status:"REVIEW"});
+    await page.route("**/api/documents/doc-1", route => route.fulfill({json:{data:{...doc,file_name:`synthetic.${extension}`,source_profile:{...doc.source_profile,extension:`.${extension}`,preview_kind:"text"}},error_messages:[],warning_messages:[]}}));
+    await page.route("**/recipes/recipe-1/extraction-view?**", route => fulfillDocumentInspection(route, {json:{data:{payload:{raw_text:"合成\n同じ文。\n同じ文。",document_type:"text",confidence:1,elements:[
+      {element_id:"h",kind:"title",text:"合成",order:0},
+      {element_id:"a",kind:"text",text:"同じ文。",order:1},
+      {element_id:"b",kind:"text",text:"同じ文。",order:2},
+    ],pages:[],tables:[]}}}}));
+    await page.route("**/recipes/recipe-1/text-window", route => route.fulfill({json:{data:{text,offset:0,total:Array.from(text).length,limit:8192,revision:"source-v1",highlights:route.request().postDataJSON().element_id === "b" ? [[12,16]] : []},error_messages:[],warning_messages:[]}}));
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+    await page.getByTestId("structured-elements-scroll").getByRole("button").last().click();
+    await expect(page.getByTestId("document-preview-pane").locator("mark")).toHaveText("同じ文。");
+    await page.getByTestId("document-preview-pane").scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath(`text-source-parsing-${extension}.png`)});
+  });
+}

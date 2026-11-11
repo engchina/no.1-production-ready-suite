@@ -142,6 +142,19 @@ describe("DocumentPreview", () => {
     host.remove();
   });
 
+  it("保存されたUnicode原文座標を強調し、未確定の空範囲は文字検索で補わない", async () => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => { root.render(<DocumentPreview kind="text" fileName="a.md" textKey="a"
+      loadTextRange={async () => ({text: "😀\n## 同文\n同文", offset:0,total:10,limit:8192,highlights:[[8,10]]})} />); });
+    expect(host.querySelector("mark")?.textContent).toBe("同文");
+    expect(host.querySelector('[data-testid="preview-text"]')?.textContent).toBe("😀\n## 同文\n同文");
+    await act(async () => { root.render(<DocumentPreview kind="text" fileName="a.md" textKey="b" focusText="同文"
+      loadTextRange={async () => ({text: "同文", offset:0,total:2,limit:8192,highlights:[]})} />); });
+    expect(host.querySelector("mark")).toBeNull();
+    act(() => root.unmount());host.remove();
+  });
+
   it("原本の構造境界と版を通知し、前後へ同じ区切りで移動できる", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);

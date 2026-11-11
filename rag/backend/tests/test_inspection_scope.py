@@ -95,3 +95,25 @@ def test_non_utf8_source_uses_existing_charset_detection() -> None:
     result = source_inspection({}, text.encode("cp932"), offset=0, limit=8192)
     assert result["text"] == text
     assert result["scope_status"] == "unrecorded"
+
+
+def test_saved_source_range_highlights_second_identical_text_and_checks_version() -> None:
+    from rag_parser_core.source_map import SCHEME_TEXT_CHAR, SourceRange, source_map_artifact
+
+    text = "😀\n同文\n同文"
+    data = text.encode()
+    payload = {
+        "elements": [{"element_id": "a", "text": "同文"}],
+        "parser_artifacts": {
+            "source_map": source_map_artifact(
+                data, text, SCHEME_TEXT_CHAR, {"a": [SourceRange(5, 7, "char=5,7")]}
+            )
+        },
+    }
+    result = source_inspection(payload, data, offset=0, limit=8192, element_id="a")
+    assert result["highlights"] == [[5, 7]]
+    assert text[5:7] == "同文"
+    assert (
+        source_inspection(payload, data + b" ", offset=0, limit=8192, element_id="a")["highlights"]
+        == []
+    )

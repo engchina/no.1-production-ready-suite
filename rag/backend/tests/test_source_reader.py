@@ -170,3 +170,36 @@ def test_section_start_does_not_apply_anchor_offset_or_escape_scope() -> None:
     assert current["next_cursor"] is None
     assert len(seen) == len(set(seen))
     assert seen[-1][0] == "e39"
+
+
+def test_quote_across_saved_elements_is_projected_without_context_highlights() -> None:
+    payload = {
+        "elements": [
+            {"element_id": "before", "text": "前の文脈"},
+            {"element_id": "h", "text": "項目A"},
+            {"element_id": "a", "text": "合成😀の値は17です。"},
+            {"element_id": "b", "text": "待機時間は31分です。"},
+            {"element_id": "after", "text": "後の文脈"},
+        ]
+    }
+    result = reading_window(
+        payload,
+        revision="v1",
+        anchor_ids=["h", "a", "b"],
+        quote="項目A\n合成😀の値は17です。 待機時間は31分です。",
+    )
+    blocks = {b["id"]: b for b in result["blocks"]}
+    assert result["anchor_status"] == "exact"
+    assert all(blocks[k]["highlights"] == [[0, len(blocks[k]["text"])]] for k in ("h", "a", "b"))
+    assert not blocks["before"]["highlights"] and not blocks["after"]["highlights"]
+
+
+def test_unmatched_quote_marks_known_source_paragraphs_as_approximate() -> None:
+    result = reading_window(
+        {"elements": [{"element_id": "a", "text": "原文"}]},
+        revision="v1",
+        anchor_ids=["a"],
+        quote="変更された抜粋",
+    )
+    assert result["anchor_status"] == "element"
+    assert result["blocks"][0]["highlights"] == [[0, 2]]

@@ -12,7 +12,7 @@
 
 ## キャッシュと既存の図
 
-Vision checkpoint は応答schemaのhashをキーに含め、旧図構造を新契約として再利用しない。checkpoint版は3、Vision本文形式は5、backendの解析artifact版は12。
+Vision checkpoint は応答schemaのhashをキーに含め、旧図構造を新契約として再利用しない。checkpoint版は3、Vision本文形式は5、backendの解析artifact版は13。
 
 誤った関係をすでに保存した図は、再投影や再分割だけでは正しくならない。配備後、対象の文書レシピで「解析」から再処理する。既存文書の一括再処理をこの修正が自動で実行することはない。
 
