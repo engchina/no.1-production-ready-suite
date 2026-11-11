@@ -229,7 +229,8 @@ def evaluate_answer_payload(payload: dict[str, Any], settings: Any, *, provider_
 
     standard_units = units(standard_answer, "S")
     raw_answer = str(payload.get("answer_text") or "")
-    body = scored_answer_text(raw_answer) or _without_citation_lines(raw_answer)
+    # 正確性では注記の節にも主張が含まれ得るため、節ごとの本文削除をしない。
+    body = _without_citation_lines(raw_answer)
     answer_units = units(body, "A")
     inputs = dict(
         question=str(payload.get("question") or ""),

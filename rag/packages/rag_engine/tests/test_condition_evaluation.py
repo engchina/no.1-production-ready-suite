@@ -76,3 +76,16 @@ def test_fixed_synthetic_inputs_are_preserved_in_the_reference_units(case):
     assert inputs["question"] == case["question"]
     assert result["answer_correctness"] is None
     assert model.call_count == 1
+
+
+@pytest.mark.parametrize("section", ["gaps_section", "unverified_section", "deadline_section"])
+def test_substantive_claims_under_notes_are_not_hidden_from_the_judge(section):
+    from rag_engine.generation.answer_labels import answer_labels
+
+    text = "項目Aは5です。\n\n" + getattr(answer_labels(), section) + "\n\n項目Bは3です。"
+    with patch(PARSE, return_value=AnswerCorrectnessOutput(comparisons=[], uncovered_points=[], reason="未判定")) as model:
+        result = evaluate_answer_payload(DATA | {"answer_text": text}, object())
+    inputs = json.loads(model.call_args.args[1])
+    assert "".join("".join(unit["text"].split()) for unit in inputs["answer_text"]) == "".join(text.split())
+    assert result["answer_correctness"] is None
+    assert model.call_count == 1
