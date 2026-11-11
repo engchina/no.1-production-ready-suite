@@ -1,0 +1,325 @@
+[
+  {
+    "id": "shared-junction",
+    "diagram_nodes": [
+      {
+        "id": "A",
+        "kind": "node",
+        "label": "A"
+      },
+      {
+        "id": "J",
+        "kind": "junction",
+        "label": ""
+      },
+      {
+        "id": "B",
+        "kind": "node",
+        "label": "B"
+      },
+      {
+        "id": "C",
+        "kind": "node",
+        "label": "C"
+      }
+    ],
+    "diagram_edges": [
+      {
+        "source": "A",
+        "target": "J",
+        "label": "mode-1 / mode-2",
+        "direction": "none"
+      },
+      {
+        "source": "J",
+        "target": "B",
+        "label": "",
+        "direction": "forward"
+      },
+      {
+        "source": "J",
+        "target": "C",
+        "label": "",
+        "direction": "forward"
+      }
+    ],
+    "expected": {
+      "paths": [
+        {
+          "nodes": [
+            "A",
+            "J",
+            "B"
+          ],
+          "segment_ids": [
+            "S1",
+            "S2"
+          ],
+          "labels": [
+            "mode-1 / mode-2"
+          ]
+        },
+        {
+          "nodes": [
+            "A",
+            "J",
+            "C"
+          ],
+          "segment_ids": [
+            "S1",
+            "S3"
+          ],
+          "labels": [
+            "mode-1 / mode-2"
+          ]
+        }
+      ],
+      "label_owner": {
+        "mode-1 / mode-2": "S1"
+      },
+      "forbidden_direct_connections": [
+        [
+          "B",
+          "C"
+        ],
+        [
+          "C",
+          "B"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "branch-local-labels",
+    "diagram_nodes": [
+      {
+        "id": "A",
+        "kind": "node",
+        "label": "A"
+      },
+      {
+        "id": "J",
+        "kind": "junction",
+        "label": ""
+      },
+      {
+        "id": "B",
+        "kind": "node",
+        "label": "B"
+      },
+      {
+        "id": "C",
+        "kind": "node",
+        "label": "C"
+      }
+    ],
+    "diagram_edges": [
+      {
+        "source": "A",
+        "target": "J",
+        "label": "shared",
+        "direction": "none"
+      },
+      {
+        "source": "J",
+        "target": "B",
+        "label": "alpha",
+        "direction": "forward"
+      },
+      {
+        "source": "J",
+        "target": "C",
+        "label": "beta",
+        "direction": "forward"
+      }
+    ],
+    "expected": {
+      "label_owner": {
+        "shared": "S1",
+        "alpha": "S2",
+        "beta": "S3"
+      },
+      "paths": [
+        {
+          "nodes": [
+            "A",
+            "J",
+            "B"
+          ],
+          "labels": [
+            "shared",
+            "alpha"
+          ]
+        },
+        {
+          "nodes": [
+            "A",
+            "J",
+            "C"
+          ],
+          "labels": [
+            "shared",
+            "beta"
+          ]
+        }
+      ],
+      "must_not_propagate": {
+        "alpha": "S3",
+        "beta": "S2"
+      }
+    }
+  },
+  {
+    "id": "crossing-without-junction",
+    "diagram_nodes": [
+      {
+        "id": "A",
+        "kind": "node",
+        "label": "A"
+      },
+      {
+        "id": "B",
+        "kind": "node",
+        "label": "B"
+      },
+      {
+        "id": "C",
+        "kind": "node",
+        "label": "C"
+      },
+      {
+        "id": "D",
+        "kind": "node",
+        "label": "D"
+      }
+    ],
+    "diagram_edges": [
+      {
+        "source": "A",
+        "target": "B",
+        "label": "p",
+        "direction": "forward"
+      },
+      {
+        "source": "C",
+        "target": "D",
+        "label": "q",
+        "direction": "forward"
+      }
+    ],
+    "expected": {
+      "direct_connections": [
+        [
+          "A",
+          "B"
+        ],
+        [
+          "C",
+          "D"
+        ]
+      ],
+      "junctions": [],
+      "forbidden_direct_connections": [
+        [
+          "A",
+          "D"
+        ],
+        [
+          "C",
+          "B"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "arrow-direction-and-return",
+    "diagram_nodes": [
+      {
+        "id": "A",
+        "kind": "node",
+        "label": "A"
+      },
+      {
+        "id": "B",
+        "kind": "node",
+        "label": "B"
+      }
+    ],
+    "diagram_edges": [
+      {
+        "source": "A",
+        "target": "B",
+        "label": "forward",
+        "direction": "forward"
+      },
+      {
+        "source": "B",
+        "target": "A",
+        "label": "return",
+        "direction": "forward"
+      }
+    ],
+    "expected": {
+      "direct_connections": [
+        [
+          "A",
+          "B"
+        ],
+        [
+          "B",
+          "A"
+        ]
+      ],
+      "label_owner": {
+        "forward": "S1",
+        "return": "S2"
+      },
+      "forbidden_connections": [
+        [
+          "A",
+          "A"
+        ],
+        [
+          "B",
+          "B"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "clipped-unconfirmed-target",
+    "diagram_nodes": [
+      {
+        "id": "A",
+        "kind": "node",
+        "label": "A"
+      },
+      {
+        "id": "B",
+        "kind": "node",
+        "label": "B"
+      }
+    ],
+    "diagram_edges": [
+      {
+        "source": "A",
+        "target": null,
+        "label": "r",
+        "direction": "uncertain"
+      }
+    ],
+    "expected": {
+      "confirmed_connections": [],
+      "unresolved_segments": [
+        "S1"
+      ],
+      "forbidden_direct_connections": [
+        [
+          "A",
+          "B"
+        ]
+      ],
+      "note": "線の終点と矢印は画像外。近くにある別nodeへ接続先を補わない。"
+    }
+  }
+]

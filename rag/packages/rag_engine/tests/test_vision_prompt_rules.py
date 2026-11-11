@@ -209,7 +209,8 @@ def test_output_fields_are_unchanged_and_each_has_a_description_in_the_response_
     # 入れ子の項目も説明を持つ（kind は読取方針が見た目の判定を持つ）。
     for model, fields in {
         "ConditionResultPairOutput": ("condition", "result", "visible_text"),
-        "DiagramEdgeOutput": ("source", "target", "label"),
+        "DiagramNodeOutput": ("id", "kind", "label"),
+        "DiagramEdgeOutput": ("source", "target", "label", "direction"),
         "ChartSeriesOutput": ("name", "values", "trend"),
         "FormFieldOutput": ("name", "value", "state"),
     }.items():

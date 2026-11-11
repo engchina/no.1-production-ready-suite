@@ -24,6 +24,7 @@ from rag_engine.models.llm import form_field_kind
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, digest_json, file_digest
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
+from rag_engine.parsing.diagram_graph import graph_projection, normalize_graph
 from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_engine.parsing.vision_prompt_rules import (
@@ -298,6 +299,21 @@ def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False
         return ""
 
     labels = content_labels()
+    if (graph := graph_projection(description)) is not None:
+        paths, uncertain = graph
+        # 接続の説明は保存した段から一つだけ作る。自由文の別経路で条件を再配分しない。
+        description = {
+            **description,
+            "diagram_nodes": [node["label"] for node in description["diagram_nodes"] if node.get("kind") != "junction"],
+            "diagram_edges": paths,
+            "diagram_summary": "",
+            "retrieval_text": "",
+            "condition_result_pairs": [],
+            "operation_steps": [],
+        }
+        if uncertain:
+            note = labels.pack.text("answer_labels", "gaps_section") + ": " + " / ".join(uncertain)
+            description["correction_notes"] = "\n".join(filter(None, [description.get("correction_notes"), note]))
     lines: list[str] = []
     for group, fields in VISION_SENTENCE_GROUPS:
         if for_answer and group == "search":
@@ -385,6 +401,7 @@ def _bounded_vision_description(payload: dict[str, Any]) -> dict[str, Any]:
                 omissions.append(f"{field}: {len(value)}件のうち先頭{limit}件を保持")
             description[field] = value[:limit]
 
+    description = normalize_graph(description)
     rows = description.get("table_rows")
     if isinstance(rows, list):
         for index, row in enumerate(rows, 1):

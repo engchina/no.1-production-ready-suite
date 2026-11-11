@@ -51,12 +51,25 @@ class ConditionResultPairOutput(_StrictModel):
     visible_text: str = Field(description="根拠の短い可視テキスト。")
 
 
-class DiagramEdgeOutput(_StrictModel):
-    """図中の接続元、接続先、条件ラベルを保持します。"""
+class DiagramNodeOutput(_StrictModel):
+    """図の要素と、文字を持たない共有線の分岐点を区別する。"""
 
-    source: str = Field(description="接続元。diagram_nodes の名称と一致させる。")
-    target: str = Field(description="接続先。diagram_nodes の名称と一致させる。")
-    label: str = Field(description="条件や Yes/No。無ければ空文字。")
+    id: str = Field(min_length=1, description="図内で一意の参照ID。見えない名称の代わりにはしない。")
+    kind: Literal["node", "junction"] = Field(
+        description="node=文字や形を持つ要素、junction=線が実際につながる分岐点。交差だけなら接続しない。"
+    )
+    label: str = Field(description="要素内の可視文字そのもの。文字のない分岐点は空文字。")
+
+
+class DiagramEdgeOutput(_StrictModel):
+    """隣り合う要素・分岐点をつなぐ一つの接続段と、その段だけの可視ラベル。"""
+
+    source: str | None = Field(description="接続段の始点の diagram_nodes.id。画像外などで不明なら null とし direction=uncertain。")
+    target: str | None = Field(description="接続段の終点の diagram_nodes.id。画像外などで不明なら null とし direction=uncertain。")
+    label: str = Field(description="この接続段に付く可視ラベルの写し。共有段の条件は共有段だけに書き、枝に再配分しない。無ければ空文字。")
+    direction: Literal["forward", "both", "none", "uncertain"] = Field(
+        description="forward=始点から終点へ矢印、both=双方向、none=接続は明確で矢印なし、uncertain=接続先や向きを確認できない。"
+    )
 
 
 class ChartSeriesOutput(_StrictModel):
@@ -109,9 +122,11 @@ class PictureDescriptionOutput(_StrictModel):
         description="flowchart / architecture_diagram / chart / table / form / screenshot / photo / logo / watermark / background / decorative / other から一つ。不明なら other。"
     )
     diagram_title: str = Field(description="図のタイトル。")
-    diagram_nodes: list[str] = Field(description="読めるノード名や処理名を読める順序で。")
+    diagram_nodes: list[DiagramNodeOutput] = Field(
+        description="図の要素と共有線の分岐点。ノード間の接続は隣接する段に分けて diagram_edges へ書く。"
+    )
     diagram_edges: list[DiagramEdgeOutput] = Field(description="図で見える接続。")
-    diagram_summary: str = Field(description="開始点、主要経路、分岐条件、順序、戻り先、完了条件の要約。")
+    diagram_summary: str = Field(description="図の主題の要約。接続・条件の対応は diagram_edges にだけ書く。")
     chart_title: str = Field(description="グラフのタイトル。")
     chart_type: str = Field(description="bar / line / pie / scatter / area / combination / other。")
     chart_axes: list[str] = Field(description="軸名、単位、期間、目盛り。")
