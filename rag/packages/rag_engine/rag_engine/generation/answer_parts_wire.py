@@ -474,7 +474,16 @@ def canonical_answer_parts(
         summary_application_indexes=list(dict.fromkeys(app for index in chosen for app in part_applications[index])),
     )
     draft = GroundedDraft.model_validate(raw)
-    draft._response_kind = response_kind
+    # 同じ応答の明示的な要点型と「回答済み」の重複宣言だけを整合させる。本文の意味や根拠の件数は判定しない。
+    result_kinds = {part["result_kind"] for part in parts}
+    draft._declared_response_kind = response_kind
+    draft._response_kind = (
+        "insufficient_evidence"
+        if response_kind in {"answered", "conditional"} and result_kinds == {"gap"}
+        else "conditional"
+        if response_kind == "answered" and "gap" in result_kinds
+        else response_kind
+    )
     if isinstance(value, GroundedDraft):
         draft._provider_output_text = value._provider_output_text
         draft._collapsed_duplicates = dict(value._collapsed_duplicates)

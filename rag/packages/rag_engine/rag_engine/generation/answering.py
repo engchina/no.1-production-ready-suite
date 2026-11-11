@@ -1866,6 +1866,11 @@ def synthesize_grounded_answer(
             else {}
         ),
         "llm_calls": rounds[0].get("timing", {}).get("generation_calls", 1),
+        "response_kind": {
+            "declared": current.draft._declared_response_kind,
+            "recorded": current.draft._response_kind,
+            "source": "typed_answer_parts" if current.draft._declared_response_kind != current.draft._response_kind else "declared",
+        },
         "final_fact_count": len(published),
         **({"form_field_kinds": form_field_kinds.trace_payload(field_kinds, resolved_conditions, evidence_plans)} if field_kinds else {}),
         "grounded_draft": draft_structure(current.draft, settled),

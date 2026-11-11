@@ -2092,6 +2092,11 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
         answer_model_id="model-a",
     )
     outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+    assert outcome.diagnostics["response_kind"] == {
+        "declared": "answered",
+        "recorded": "answered",
+        "source": "declared",
+    }
     assert outcome.diagnostics["models"] == {
         "llm": {"model_id": "model-a", "label": "Model A"},
         # 表の行の条件の段(#4349)、推導の監査の判定(#4565)・理由(#4564)の段のモデル(既定)。
