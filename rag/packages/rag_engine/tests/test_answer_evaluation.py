@@ -90,6 +90,7 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
                 "standard_unit_ids": ["S1"],
                 "relation": {"correct": "consistent", "incorrect": "contradicts", "unassessed": "unassessed"}[value],
                 "reason": "理由",
+                "input_role": "content",
                 "answer_text": "ログを確認して原因を特定します。",
                 "standard_texts": ["ログを確認して原因を特定する。"],
             }
