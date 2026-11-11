@@ -62,6 +62,7 @@ reset() {
   mkdir -p "${work}/state/archives" "${work}/state/cache"
   : > "${work}/state/log"
   : > "${work}/state/installed"
+  : > "${work}/state/mirrors"
 }
 
 run() {
@@ -70,6 +71,7 @@ run() {
   local actual=0
   env PATH="${work}/bin:${PATH}" FAKE_LOG="${work}/state/log" FAKE_INSTALLED="${work}/state/installed" \
     FAKE_PW_PACKAGES="libfoo fonts-bar" PW_APT_CACHE_DIR="${work}/state/cache" \
+    PW_APT_MIRRORS="${work}/state/mirrors" \
     PW_APT_ARCHIVES="${work}/state/archives" PW_APT_CONF="${work}/state/apt.conf" PW_INSTALL_BACKOFF=0 \
     "$@" bash "${script}" "${subcommand}" > "${work}/state/out" 2>&1 || actual=$?
   if [ "${actual}" -eq "${expected}" ]; then
@@ -115,6 +117,38 @@ assert "update・取得・install の順に、入っていない package だけ�
 )"
 assert "apt に retry と timeout を設定する" grep -q 'Acquire::Retries "3";' "${work}/state/apt.conf"
 assert "cache の .deb を apt の置き場に戻す" test -f "${work}/state/archives/fonts-bar_1.0_all.deb"
+
+reset
+printf '%s\n' '# runner の既存の設定' 'http://mirror.invalid/ubuntu/ priority:1' \
+  'https://archive.invalid/ubuntu/ priority:2' 'https://security.invalid/ubuntu/ priority:3' > "${work}/state/mirrors"
+run 0 "既存 HTTPS mirror を優先して依存を入れる"
+assert "既存の URL とコメントを保ち、HTTPS の優先度を上げる" test "$(cat "${work}/state/mirrors")" = "$(
+  printf '%s\n' '# runner の既存の設定' 'http://mirror.invalid/ubuntu/ priority:2' \
+    'https://archive.invalid/ubuntu/ priority:1' 'https://security.invalid/ubuntu/ priority:1'
+)"
+
+reset
+printf '%s\n' 'http://mirror.invalid/ubuntu/' > "${work}/state/mirrors"
+run 0 "HTTPS mirror がなければ既存の設定で入れる"
+assert "HTTP だけの設定を書き換えない" test "$(cat "${work}/state/mirrors")" = 'http://mirror.invalid/ubuntu/'
+
+reset
+printf '%s\n' 'http://mirror.invalid/ubuntu/' 'https://archive.invalid/ubuntu/' > "${work}/state/mirrors"
+run 0 "優先度のない行にも HTTPS 優先を設定する"
+assert "HTTPS の取得先を追加せず既存の行に優先度を付ける" test "$(cat "${work}/state/mirrors")" = "$(
+  printf '%s\n' $'http://mirror.invalid/ubuntu/\tpriority:2' $'https://archive.invalid/ubuntu/\tpriority:1'
+)"
+
+reset
+rm "${work}/state/mirrors"
+run 0 "mirror list がなくても依存を入れる"
+assert "存在しない mirror list を作らない" test ! -e "${work}/state/mirrors"
+
+reset
+printf 'libfoo 1.0\nfonts-bar 1.0\n' > "${work}/state/installed"
+printf '%s\n' 'http://mirror.invalid/ubuntu/ priority:1' 'https://archive.invalid/ubuntu/ priority:2' > "${work}/state/mirrors"
+run 0 "依存導入済みなら mirror list にも触れない"
+assert "導入済みの時は mirror の優先度を変更しない" grep -q '^http://mirror.invalid/ubuntu/ priority:1$' "${work}/state/mirrors"
 
 reset
 echo 1 > "${work}/state/update-failures"

@@ -18,6 +18,7 @@
 #   PW_INSTALL_BACKOFF          やり直しの前に待つ秒数の単位（n 回目の失敗の後は n 倍。既定 10）
 #   PW_APT_CACHE_DIR            .deb の cache の場所（既定 ~/.cache/playwright-apt）
 #   PW_APT_ARCHIVES             apt の .deb の置き場（既定 /var/cache/apt/archives）
+#   PW_APT_MIRRORS              runner の mirror list（既定 /etc/apt/apt-mirrors.txt）
 #   PW_APT_CONF                 apt の設定を書くファイル（既定 /etc/apt/apt.conf.d/80playwright-ci）
 #   PW_INSTALL_SUDO             root で実行するコマンド（既定 sudo）
 set -euo pipefail
@@ -28,6 +29,7 @@ attempt_timeout="${PW_INSTALL_ATTEMPT_TIMEOUT:-120}"
 backoff="${PW_INSTALL_BACKOFF:-10}"
 cache_dir="${PW_APT_CACHE_DIR:-${HOME}/.cache/playwright-apt}"
 archives="${PW_APT_ARCHIVES:-/var/cache/apt/archives}"
+apt_mirrors="${PW_APT_MIRRORS:-/etc/apt/apt-mirrors.txt}"
 apt_conf="${PW_APT_CONF:-/etc/apt/apt.conf.d/80playwright-ci}"
 read -r -a sudo_cmd <<< "${PW_INSTALL_SUDO:-sudo}"
 
@@ -139,6 +141,23 @@ apt_install() {
   apt_as_root "$1" install -y --no-install-recommends "${missing[@]}"
 }
 
+# runner の HTTP mirror が応答しないと、apt の failover より先に外側の予算を使い切る（#4899）。
+# runner が用意した HTTPS の取得先を優先する。取得先の追加・署名や証明書の検証の緩和はしない。
+prefer_https_mirrors() {
+  local mirrors
+  [ -f "${apt_mirrors}" ] || return 0
+  grep -q '^https://' "${apt_mirrors}" || return 0
+  mirrors="$(awk '
+    /^https?:\/\// {
+      priority = ($0 ~ /^https:/) ? 1 : 2
+      if ($0 ~ /priority:[0-9]+/) sub(/priority:[0-9]+/, "priority:" priority)
+      else $0 = $0 "\tpriority:" priority
+    }
+    { print }
+  ' "${apt_mirrors}")"
+  printf '%s\n' "${mirrors}" | "${sudo_cmd[@]}" tee "${apt_mirrors}" > /dev/null
+}
+
 configure_apt() {
   # Retries: 取得の失敗（接続の切断・5xx）をやり直す。Timeout: データが来ない時間の上限（遅いが途切れない取得は
   # 止めないので、試行ごとの `timeout` で区切る）。Keep-Downloaded-Packages: 取得した .deb を cache に写すために残す。
@@ -174,6 +193,7 @@ cmd_os_deps() {
   fi
   echo "入っていない OS の依存（${#missing[@]}/${#packages[@]} 個）: ${missing[*]}"
   configure_apt
+  prefer_https_mirrors
   seed_cached_debs
   retry "apt-get update" apt_update || fail_slow_network "apt-get update"
   retry "OS の依存の取得（apt-get install --download-only）" apt_download || fail_slow_network "OS の依存の取得"
