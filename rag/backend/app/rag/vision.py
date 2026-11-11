@@ -512,6 +512,8 @@ def read_figures_with_vision(
                     if record.category in {"Picture", "Table"} and 1 <= record.page <= page_count
                 }
             )
+            if not pages_wanted and source_is_image:
+                pages_wanted = [1]
             if not pages_wanted:
                 return extraction
             pdf_path, pages = _render_docling_pages(
@@ -523,6 +525,8 @@ def read_figures_with_vision(
             )
         else:
             pages_wanted = _adapter_candidate_pages(extraction, page_count)
+            if not pages_wanted and source_is_image:
+                pages_wanted = [1]
             if not pages_wanted:
                 return _with_bbox_missing(extraction, engine)
             pdf_path, pages = prepare_source_for_analysis(
@@ -535,6 +539,8 @@ def read_figures_with_vision(
                 pages=pages,
                 source_is_image=suffix != ".pdf",
             )
+        if source_is_image:
+            extraction = _ensure_source_image_region(extraction, layout, pages, engine=engine)
         if not any(record.category in {"Picture", "Table"} for record in layout.records):
             return _apply_skips(extraction, layout, engine=engine, stats=None)
         stats = describe_layout_pictures(
@@ -560,6 +566,57 @@ def read_figures_with_vision(
         if image_purpose is not None
         else updated
     )
+
+
+def _ensure_source_image_region(
+    extraction: StructuredExtraction, layout: _Layout, pages: Sequence[PageImage], *, engine: str
+) -> StructuredExtraction:
+    """画像原本に図表領域が無い場合だけ、原本全体を既存の読取経路へ渡す。"""
+    assets = list(extraction.assets)
+    for page in pages:
+        if any(
+            record.page == page.page and record.category in {"Picture", "Table"}
+            for record in layout.records
+        ):
+            continue
+        record_id = f"{engine}-source-image-p{page.page}"
+        picture = _record(
+            record_id,
+            engine,
+            page,
+            max((r.seq_no for r in layout.records if r.page == page.page), default=0) + 1,
+            [0.0, 0.0, float(page.width), float(page.height)],
+            "Picture",
+            "",
+            raw_type="picture",
+            raw={"source_image_full_frame": True},
+        )
+        # 元の文字の順序と位置を維持し、図の説明は同じページの原文の後に追加する。
+        insert_at = next(
+            (i for i, r in enumerate(layout.records) if r.page > page.page), len(layout.records)
+        )
+        layout.records.insert(insert_at, picture)
+        anchor = max(
+            (i for i, e in enumerate(extraction.elements) if (e.page_number or 1) <= page.page),
+            default=None,
+        )
+        layout.targets.append(
+            _Target(picture, asset_index=len(assets), anchor_element_index=anchor)
+        )
+        assets.append(
+            ExtractionAsset(
+                asset_id=f"asset-{record_id}",
+                kind="source_image",
+                page_number=page.page,
+                bbox=[0.0, 0.0, 1.0, 1.0],
+                metadata={
+                    "element_id": record_id,
+                    "bbox_unit": "ratio",
+                    "bbox_scope": "source_image_full_frame",
+                },
+            )
+        )
+    return extraction.model_copy(update={"assets": assets})
 
 
 @contextlib.contextmanager
