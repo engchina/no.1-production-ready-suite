@@ -129,7 +129,7 @@ def test_json_selection_highlights_raw_escaped_text_in_the_selected_duplicate(
 ) -> None:
     text = '合成😀\\"'
     data = json.dumps({"nodes": [text, text]}, ensure_ascii=ascii_only).encode()
-    payload = {
+    payload: dict[str, Any] = {
         "elements": [{"element_id": "second", "text": text}],
         "parser_artifacts": {
             "json_source_map": {
