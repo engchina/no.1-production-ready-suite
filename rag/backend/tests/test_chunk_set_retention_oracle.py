@@ -136,6 +136,8 @@ async def test_switch_keeps_old_version_readable_but_hidden_from_search() -> Non
     # 根拠を ID で開ける。
     readable = await client.readable_version_chunk(document_id, old_chunk)
     assert readable is not None and readable.metadata["chunk_set_id"] == old_set
+    assert readable.metadata["recipe_id"] == recipe_id
+    assert readable.metadata["recipe_slot_no"] == 1
     assert (await mcp_tools.readable_chunk(client, document_id, old_chunk)).chunk_id == old_chunk
     chunk, revision, _, payload = await resolve_source_context(client, document_id, old_chunk)
     assert chunk.chunk_id == old_chunk and revision == old_set
@@ -150,7 +152,10 @@ async def test_switch_keeps_old_version_readable_but_hidden_from_search() -> Non
 
     # 検索・回答の監査・件数には出ない。
     assert await client.retrievable_chunk(document_id, old_chunk) is None
-    assert await client.retrievable_chunk(document_id, new_chunk) is not None
+    current = await client.retrievable_chunk(document_id, new_chunk)
+    assert current is not None
+    assert current.metadata["recipe_id"] == recipe_id
+    assert current.metadata["recipe_slot_no"] == 1
     corpus = await client.evaluation_corpus_rows([])
     assert {row["chunk_set_id"] for row in corpus if row["document_id"] == document_id} == {new_set}
     recipe = await client.get_document_recipe(document_id, recipe_id)
