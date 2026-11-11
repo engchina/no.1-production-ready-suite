@@ -131,6 +131,7 @@ def source_inspection(
     revision = hashlib.sha256(data).hexdigest()
     text = decode_inspection_text(data)
     starts: dict[str, int] = {}
+    json_highlights: list[tuple[int, int]] = []
     units: tuple[SourceUnit, ...] = ()
     limit = max(1, min(SOURCE_WINDOW_CODEPOINTS, limit))
     if expected_revision is None or expected_revision == revision:
@@ -175,7 +176,10 @@ def source_inspection(
                         a, b = span["source_start"], span["source_end"]
                         if element["text"][span["start"] : span["end"]] != node.value[a:b]:
                             raise ValueError("source map mismatch")
-                        positions.append(node.raw_range(a, b)[0])
+                        raw_start, raw_end = node.raw_range(a, b)
+                        positions.append(raw_start)
+                        if eid == element_id:
+                            json_highlights.append((raw_start, raw_end))
                     if positions:
                         starts[eid] = min(positions)
                 status = "exact" if starts else "unrecorded"
@@ -221,6 +225,12 @@ def source_inspection(
         spans = (source_map.get("elements") or {}).get(element_id, [])
         for span in spans:
             a, b = max(start, span["source_start"]), min(end, span["source_end"])
+            if a < b:
+                highlights.append([a - start, b - start])
+    elif element_id and status == "exact":
+        # JSON の保存座標を escape 前の原本文字列へ写し、表示窓と交差する範囲だけを強調する。
+        for raw_start, raw_end in json_highlights:
+            a, b = max(start, raw_start), min(end, raw_end)
             if a < b:
                 highlights.append([a - start, b - start])
     return {
