@@ -33,7 +33,7 @@ def test_one_contradiction_cannot_be_overridden_by_a_free_overall_reason():
     assert result["answer_correctness"] == 0
     assert result["claim_comparisons"][1]["answer_text"] == "項目Bは3です。"
     assert result["claim_comparisons"][1]["standard_texts"] == ["項目Bは8です。"]
-    assert result["rubric_version"] == RUBRIC_VERSION == 27
+    assert result["rubric_version"] == RUBRIC_VERSION == 28
 
 
 def test_correct_partial_answer_records_missing_point_without_factual_failure():
@@ -115,3 +115,17 @@ def test_wrong_claim_after_a_note_heading_still_dominates_the_score():
 def test_material_claim_without_comparison_is_still_unassessed():
     result = evaluate(DATA, [row("A1", ["S1"], "consistent"), row("A2", [], "unassessed")])
     assert result["answer_correctness"] is None
+
+
+@pytest.mark.parametrize("field", ["rules_section", "applications_section", "gaps_section"])
+def test_known_presentation_heading_cannot_turn_correct_content_unassessed(field):
+    from rag_engine.generation.answer_labels import answer_labels
+
+    heading = getattr(answer_labels(), field)
+    result = evaluate(
+        DATA | {"answer_text": heading + "\n\n項目Aは5です。"}, [row("A1", [], "unassessed"), row("A2", ["S1"], "consistent")]
+    )
+    assert result["answer_correctness"] == 1
+    assert result["claim_comparisons"][0]["input_role"] == "heading"
+    assert result["claim_comparisons"][0]["relation"] == "unassessed"
+    assert result["claim_comparisons"][1]["input_role"] == "content"

@@ -66,7 +66,7 @@ CORRECTNESS_PROMPT = (
     "未回答の点は uncovered_points に分ける。各回答単位の対照と日本語の理由をschemaで返す。\n"
 )
 # 判定の指示・入力・出力の契約の版。
-RUBRIC_VERSION = 27
+RUBRIC_VERSION = 28
 CORRECTNESS_VALUES = dict(correct=1.0, incorrect=0.0)
 
 # UTF-8 bytes は tokenizer に依存しない保守的な入力予算。system prompt と schema も含める。
@@ -160,11 +160,8 @@ _NOTE_LABELS = (
 )
 
 
-def _system_passages(answer_text: str) -> set[str]:
-    """回答の組み立てが付けた節の見出し・注記・注記の節の行の段落の ID。
-
-    節の見出しの行で節が変わる（見出しは言語資源の節の題と当てはめの節の題）。注記は文ごとの段落でも認める。
-    """
+def _section_headers() -> dict[str, bool]:
+    """言語資源と組立が定義する表示見出し。本文の意味による見出し推定はしない。"""
     labels = answer_labels()
     sections: dict[str, bool] = {}
     for field, is_note in _SECTION_KINDS:
@@ -174,6 +171,16 @@ def _system_passages(answer_text: str) -> set[str]:
     sections.update(
         {title: False for title in (labels.applications_section, APPLICATIONS_SECTION_TITLE, *LEGACY_APPLICATIONS_SECTION_TITLES)}
     )
+    return sections
+
+
+def _system_passages(answer_text: str) -> set[str]:
+    """回答の組み立てが付けた節の見出し・注記・注記の節の行の段落の ID。
+
+    節の見出しの行で節が変わる（見出しは言語資源の節の題と当てはめの節の題）。注記は文ごとの段落でも認める。
+    """
+    labels = answer_labels()
+    sections = _section_headers()
     notes = set()
     for field in _NOTE_LABELS:
         note = str(getattr(labels, field, "") or "").strip()
@@ -233,6 +240,8 @@ def evaluate_answer_payload(payload: dict[str, Any], settings: Any, *, provider_
     # 正確性では注記の節にも主張が含まれ得るため、節ごとの本文削除をしない。
     body = _without_citation_lines(raw_answer)
     answer_units = units(body, "A")
+    headers = _section_headers()
+    heading_ids = {identity for identity, text in answer_units.items() if text.strip() in headers}
     inputs = dict(
         question=str(payload.get("question") or ""),
         standard_answer=[{"id": identity, "text": text} for identity, text in standard_units.items()],
@@ -272,14 +281,15 @@ def evaluate_answer_payload(payload: dict[str, Any], settings: Any, *, provider_
             error_type=type(exc).__name__,
             message="評価を完了できませんでした。回答は保存されています。",
         )
-    compared = {row.answer_unit_id for row in correctness.comparisons}
-    relations = {row.relation for row in correctness.comparisons}
+    content_rows = [row for row in correctness.comparisons if row.answer_unit_id not in heading_ids]
+    compared = {row.answer_unit_id for row in content_rows}
+    relations = {row.relation for row in content_rows}
     # 述べた内容の矛盾と、未回答・未評価を分ける。未回答の点だけで正確性を0にしない。
     verdict = (
         "incorrect"
         if "contradicts" in relations
         else "unassessed"
-        if compared != set(answer_units) or "unassessed" in relations or "consistent" not in relations
+        if compared != set(answer_units) - heading_ids or "unassessed" in relations or "consistent" not in relations
         else "correct"
     )
     return dict(
@@ -289,6 +299,7 @@ def evaluate_answer_payload(payload: dict[str, Any], settings: Any, *, provider_
         claim_comparisons=[
             {
                 **row.model_dump(),
+                "input_role": "heading" if row.answer_unit_id in heading_ids else "content",
                 "answer_text": answer_units[row.answer_unit_id],
                 "standard_texts": [standard_units[identity] for identity in row.standard_unit_ids],
             }
