@@ -1,3 +1,4 @@
+import structuredSource from "./fixtures/structured-source-reader.json";
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/test";
@@ -279,11 +280,13 @@ test("原本ノードは展開時だけ取得し、版と対応範囲を保持�
 });
 
 
-for (const extension of ["txt", "md", "markdown"]) {
+for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx"]) {
   test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
     await mockDatabaseReady(page); await mockLocalAuth(page);
     const name = `synthetic.${extension}`;
-    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:"見出し\n合成😀の本文です。",score:1,metadata:{element_ids:["h","a"],context_role:"evidence",answer_citation_lines:[1],answer_citation_provenance:"child"}};
+    const structured = extension === "csv" || extension === "xlsx" || extension === "docx" ? structuredSource[extension] : null;
+
+    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:structured?.window.blocks.find(block=>block.cited)?.text ?? "見出し\n合成😀の本文です。",score:1,metadata:{recipe_id:"r1",chunk_set_id:"cs1",element_ids:structured ? [structured.element_id] : ["h","a"],context_role:"evidence",answer_citation_lines:[1],answer_citation_provenance:"child"}};
     await page.route("**/api/search-answer-profiles**", route => route.fulfill({json:{data:{items:[PROFILE],total:1,limit:50,offset:0,has_next:false},error_messages:[],warning_messages:[]}}));
     await page.route("**/api/chat/conversations**", route => {
       const detail = {id:"c-text",search_answer_profile_id:PROFILE.id,title:"合成の原文確認",status:"ACTIVE",owned:true,message_count:2,created_at:"2026-11-01T00:00:00Z",updated_at:"2026-11-01T00:00:00Z",messages:[
@@ -297,10 +300,18 @@ for (const extension of ["txt", "md", "markdown"]) {
       {id:"a",text:"合成😀の本文です。",offset:0,highlights:[[0,9]],cited:true},
       {id:"other",text:"別の文脈です。",offset:0,highlights:[],cited:false},
     ],outline:[],previous_cursor:null,next_cursor:null,scope:"paragraph"},error_messages:[],warning_messages:[]}}));
+    if(structured) {
+      await page.route("**/api/documents/doc-text/recipes/r1/preview-source?**",route=>route.fulfill({json:{data:{file_name:"synthetic.jsonl",content_type:"application/vnd.production-ready.structured-records+jsonl",is_pdf:false,is_structured_records:true}}}));
+      await page.route("**/api/documents/doc-text/reader?**",route=>route.fulfill({json:{data:{...structured.window,revision:"cs1"}}}));
+    }
     await page.goto(`/chat?conversation_id=c-text&search_answer_profile_id=${PROFILE.id}`);
     await page.getByTestId("chat-answer-body").getByRole("button").filter({hasText:name}).first().click();
     const reader=page.getByTestId("evidence-reader-content");
-    await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
+    if(structured) {
+      await expect(reader.locator("[data-source-record]")).not.toHaveCount(0);
+      await expect(reader.locator("mark").first()).toBeVisible();
+      await expect(reader.getByRole("table").last()).toBeVisible();
+    } else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
     await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
     await expectNoPageOverflow(page);
     await page.screenshot({path:testInfo.outputPath(`text-source-chat-${extension}.png`)});

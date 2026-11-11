@@ -308,12 +308,13 @@ async def read_source_context(
     scope: str = "paragraph",
     section_id: str | None = None,
     expected_revision: str | None = None,
+    load_structured: Callable[[Mapping[str, Any]], Awaitable[bytes]] | None = None,
 ) -> dict[str, Any]:
     chunk, revision, _, payload = await resolve_source_context(
         oracle, document_id, chunk_id, expected_revision=expected_revision
     )
     ids = chunk_element_ids(chunk.metadata)
-    return await asyncio.to_thread(
+    result = await asyncio.to_thread(
         reading_window,
         payload if isinstance(payload, Mapping) else {},
         revision=revision,
@@ -324,6 +325,16 @@ async def read_source_context(
         scope=scope,
         section_id=section_id,
     )
+
+    from app.services.structured_source_reader import (
+        enrich_structured_window,
+        has_structured_source_mapping,
+    )
+
+    if load_structured and has_structured_source_mapping(payload):
+        data = await load_structured(payload)
+        return await asyncio.to_thread(enrich_structured_window, result, payload, data)
+    return result
 
 
 async def resolve_source_context(

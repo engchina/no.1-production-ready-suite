@@ -389,6 +389,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/extraction-view"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/source-map"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/reader"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/chunk-window"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/text-window"): _DOCUMENT_VIEW,
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,

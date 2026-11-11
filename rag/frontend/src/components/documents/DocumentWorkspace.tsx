@@ -1694,6 +1694,7 @@ export function DocumentWorkspace({
                 variant={selectedPreviewVariant}
                 sourceProfile={selectedPreviewSourceProfile}
                 preparedArtifact={preparedArtifact}
+                extractionRevision={selectedRecipe?.active_extraction_recipe_id ?? null}
                 showFallbackDownload={false}
                 focusPage={effectiveFocusPage}
                 onPageChange={reportInspectorPage}

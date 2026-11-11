@@ -4102,3 +4102,9 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 ### テキスト原本の表示範囲通知（#3995）
 
 `DocumentPreview` の `loadTextRange` は `DocumentTextRange` を返す。任意の `revision` と `previous_offset`／`next_offset` を使って、長さ上限を保った構造単位の移動ができる。`onTextRangeChange` は取得に成功して実際に表示した範囲だけを通知する。座標は Unicode codepoint とし、原本と抽出本文の座標の変換・版の検証は製品が担当する。失敗・取消した応答では通知しない。`focusRequestKey` を変えるとテキストの引用／章節位置も再取得する。
+
+## 構造化した原文の共通表示（#4888）
+
+`EvidenceReader`は`blocks[].record`があるとき、共有の`SourceRecordView`でCSV/Excelの表行列とWord段落/表を表示する。表は`DataTable`、記録の文字の強調は`CodepointHighlight`。保存された記録単位の強調を文字単位の精密な引用と区別し、原生の行列/段落位置を出す。引用に含まれない前後文と、`highlight=false`の未確定の引用は強調しない。
+
+解析画面は`purpose="selection"`で選択位置の文言を使い、Chatは既定の引用の文言を使う。位置と版の検証は製品backend、配色・文字・表・フォーカス・明暗テーマは共有UIが担う。取得失敗/再試行・版失効・有限の前後文・目次の既存動作を維持する。
