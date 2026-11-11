@@ -34,6 +34,7 @@ def plan(request_id: str, target: str = "項目A") -> dict[str, Any]:
 
 def draft(coverage: list[dict[str, Any]], snapshot: EvidenceUnitSnapshot) -> dict[str, Any]:
     return {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -143,7 +144,7 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
         text = json.dumps(FIXTURE["outputs"][name], ensure_ascii=False)
         for key, value in mapping.items():
             text = text.replace(key, value)
-        return json.loads(text)
+        return {**json.loads(text), "response_kind": "answered"}
 
     repeated = replay("deployed_42dd5db")
     assert len(repeated["request_coverage"]) > 1

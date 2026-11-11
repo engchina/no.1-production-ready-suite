@@ -1640,9 +1640,8 @@ def synthesize_grounded_answer(
             search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled
         )
     from rag_engine.generation import grounded
-    from rag_engine.generation.batch_output_repair import batch_failure_summary
-    from rag_engine.generation.batched_evidence import prepare_batched_evidence
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
+    from rag_engine.generation.evidence_selection import select_evidence
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.models.llm import GroundedItem
     from rag_engine.retrieval.search_stages import DOCUMENT_INFO_STAGE
@@ -1710,38 +1709,30 @@ def synthesize_grounded_answer(
                 ],
             }
         )
-        preparing_evidence = False
-        failed_batches: list[dict[str, Any]] = []
+        selecting_evidence = False
         try:
             generation_system = grounded.generation_system_prompt(
                 assume_unconfirmed=runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed
             )
-            preparing_evidence = True
+            selecting_evidence = True
 
             def selected_generation_schema(values: Sequence[dict[str, Any]], *, guided: bool = guided) -> Mapping[str, Any]:
                 return grounded.generation_output_model(
                     question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
                 ).model_json_schema()
 
-            spans, prompt, input_diagnostic = prepare_batched_evidence(
+            spans, prompt, input_diagnostic = select_evidence(
                 spans,
                 generation_settings,
-                question=question,
-                read=lambda system, user, schema: grounded.call_with_model_purpose(
-                    "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
-                ),
-                unusable_output=_invalid_structured_output,
-                tag=lambda values: grounded.tag_spans(values),
                 render=render_generation,
                 evidence_text=grounded.evidence_block_text,
+                tag=grounded.tag_spans,
                 system=generation_system,
                 schema_for=selected_generation_schema,
-                schema=grounded.generation_output_model(question, guided=guided).model_json_schema(),
                 provider_id=provider,
-                failed_batches=failed_batches,
                 source_scores=_source_question_scores(context),
             )
-            preparing_evidence = False
+            selecting_evidence = False
             current = grounded.run_round(
                 question,
                 spans,
@@ -1775,7 +1766,7 @@ def synthesize_grounded_answer(
             if not timed_out and not invalid_draft:
                 raise
             generation_failure = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
-            generation_failure_stage = "evidence.batch_read" if preparing_evidence else "answer.generate"
+            generation_failure_stage = "evidence.select" if selecting_evidence else "answer.generate"
             if invalid_draft and not input_limited:
                 structured_output_failed = True
                 if escalation_probe:
@@ -1785,8 +1776,6 @@ def synthesize_grounded_answer(
                 if input_limited
                 else {"category": "deadline"}
                 if timed_out
-                else batch_failure_summary(failed_batches[-1], exc)
-                if preparing_evidence and failed_batches
                 else grounded.generation_failure_detail(exc)
             )
             logger.warning(
@@ -1796,7 +1785,7 @@ def synthesize_grounded_answer(
                 json.dumps(generation_failure_detail, ensure_ascii=False),
             )
             current = grounded.timed_out_round(question)
-            step.result("回答文を生成できなかったため、質問に関係する資料の記載だけを示します")
+            step.fail("回答文を生成できなかったため、質問に関係する資料の記載だけを示します", reason_code="answer_generation_failed")
             step.output({"error_type": type(exc).__name__, "input_budget": input_diagnostic})
         else:
             step.result(f"説明 {current.verified} 件")
@@ -1894,6 +1883,7 @@ def synthesize_grounded_answer(
         reference_materials=_string_list(current.draft.reference_materials),
         document_items=[text for text in settled.document if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
         unsupported_parts=unsupported_parts,
+        response_kind=cast(Any, current.draft._response_kind),
     )
     shown_ids: list[tuple[grounded.CheckedItem, list[str]]] = []
     shown_uses: dict[str, str] = {}
@@ -2007,73 +1997,15 @@ def synthesize_with_model_cascade(
     image_prompt_mode: str,
     **options: Any,
 ) -> GroundedAnswer:
-    """回答の生成の段を、出力が形式の検査を通らなかったときだけ 2 つ目のモデルでやり直す（モデルのカスケード。#4581）。
-
-    2 つ目のモデル（``settings.escalation_llm``）が無ければ、``synthesize_grounded_answer`` と同じ。
-    あれば 1 つ目のモデルで生成し、構造化出力が契約を満たさなければ、検索の結果（``context``）をそのまま使って
-    生成の段を 2 つ目のモデルでやり直す。1 回の質問で昇格は 1 回だけ。2 つ目のモデルも通らなければ、
-    その結果を既存の失敗の扱いで返す。
-    カスケードの記録（``generation_trace["model_cascade"]``）は、昇格しなかった実行にも残す（昇格率を数える）。
-    """
-    primary_provider = answer_llm_provider or settings.default_answer_llm
-    cascade = model_cascade.answer_cascade(settings, primary_provider)
-    synthesize_options = {"image_evidence": image_evidence, "image_prompt_mode": image_prompt_mode, **options}
-    if not cascade.enabled:
-        return synthesize_grounded_answer(question, context, settings, answer_llm_provider=answer_llm_provider, **synthesize_options)
-    shared = model_cascade.SharedSteps()
-    first: GroundedAnswer | None
-    try:
-        first = synthesize_grounded_answer(
-            question,
-            context,
-            settings,
-            answer_llm_provider=answer_llm_provider,
-            escalation_probe=True,
-            shared_steps=shared,
-            **synthesize_options,
-        )
-    except model_cascade.EscalationRequested as exc:
-        first, signals = None, exc.signals
-    else:
-        signals = tuple((first.response.generation_trace or {}).get("escalation_signals") or ())
-    decision = decide_escalation(signals, cascade=cascade, escalated=False)
-    if not decision.escalate:
-        assert first is not None
-        return _with_model_cascade(first, model_cascade_record(cascade, escalated=False))
-    second_settings = model_cascade.escalated_settings(settings)
-    escalation_provider = settings.escalation_llm
-    with _execution_step(
-        "高性能モデルで回答し直す",
-        "最初のモデルの出力が検査を通らなかったため、取得した根拠をそのまま使い、出力の検査を通らなかったときのモデルで回答を作り直します。",
-    ) as step:
-        step.input(
-            {
-                "最初のモデル": cascade.primary_model,
-                "回答し直すモデル": cascade.escalation_model,
-                "理由": list(decision.reasons),
-            }
-        )
-        step.field("回答し直すモデル", cascade.escalation_model)
-        step.field("理由", join_values([_ESCALATION_REASON_LABELS.get(reason, reason) for reason in decision.reasons]))
-        step.result(f"{cascade.escalation_model} で回答を作り直します")
-        step.output({"escalated": True, "reasons": list(decision.reasons), "stage": model_cascade.ESCALATION_STAGE})
-    # 根拠の画像は、2 つ目のモデルが読めるときだけ添付する（#3444。読めなければ文字の説明で答える）。
-    second_mode = (
-        _image_prompt_mode(image_evidence, second_settings, escalation_provider)
-        if image_prompt_mode == "vision_attachments"
-        else image_prompt_mode
-    )
-    second = synthesize_grounded_answer(
+    """同じ回答モデルで一度生成する。技術再試行は adapter の共通枠だけで行う。"""
+    return synthesize_grounded_answer(
         question,
         context,
-        second_settings,
-        answer_llm_provider=escalation_provider,
-        shared_steps=shared,
-        **{**synthesize_options, "image_prompt_mode": second_mode},
-    )
-    return _with_model_cascade(
-        second,
-        model_cascade_record(cascade, escalated=True, reasons=decision.reasons, stage=model_cascade.ESCALATION_STAGE),
+        settings,
+        answer_llm_provider=answer_llm_provider,
+        image_evidence=image_evidence,
+        image_prompt_mode=image_prompt_mode,
+        **options,
     )
 
 

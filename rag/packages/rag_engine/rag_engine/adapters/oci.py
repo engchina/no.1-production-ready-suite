@@ -442,9 +442,9 @@ def _parse_multimodal_with_retry[StructuredOutputT: BaseModel](
     )
 
 
-# 1 回の LLM の呼び出しのやり直しの上限（送信は最大 6 回）。通信系・止まった stream・失敗の event・暴走・
+# 1 回の LLM の呼び出しの既定のやり直し回数（設定で変更できる）。通信系・止まった stream・失敗の event・暴走・
 # 不正な出力・U+FFFD・出力の上限での送り直しのすべてをこの枠で数える。
-LLM_CALL_MAX_RETRIES = 5
+LLM_CALL_MAX_RETRIES = 1
 # 待ちの間に取り消しを確かめる間隔の秒数。
 LLM_RETRY_WAIT_TICK_SECONDS = 0.5
 # 埋め込みの通信系の再試行（LLM の枠とは別）。
@@ -458,10 +458,11 @@ class _LlmRetryBudget:
     """1 回の LLM の呼び出しのやり直しの回数。内側（`_openai_parsed`）と外側（`_parse_with_retry`）で共有する。"""
 
     used: int = 0
+    max_retries: int = LLM_CALL_MAX_RETRIES
 
     @property
     def available(self) -> bool:
-        return self.used < LLM_CALL_MAX_RETRIES
+        return self.used < self.max_retries
 
     def take(self) -> bool:
         if not self.available:
@@ -512,7 +513,7 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
     """
     from rag_engine.resources.call_context import call_context, update_call_context
 
-    retry_budget = _LlmRetryBudget()
+    retry_budget = _LlmRetryBudget(max_retries=settings.llm_max_retries)
     token = _llm_retry_budget.set(retry_budget)
     try:
         with call_context({"pr.call.retry_group": uuid4().hex}):
@@ -896,7 +897,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     streamed = _stall_detection_enabled(settings)
     attempt = 0
     # 外側の `_parse_with_retry` と同じ枠で数える（直接呼ばれたときだけ、この呼び出しの枠を持つ）。
-    retry_budget = _llm_retry_budget.get() or _LlmRetryBudget()
+    retry_budget = _llm_retry_budget.get() or _LlmRetryBudget(max_retries=settings.llm_max_retries)
     retry_messages = input_messages
     retry_input_reserve = 0
     detect_runaway = bool(getattr(settings, "llm_runaway_detection", False))

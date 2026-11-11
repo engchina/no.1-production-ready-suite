@@ -376,7 +376,7 @@ async def test_section_completion_reaches_generation(
 
 @pytest.mark.parametrize("failure", ["empty", "partial", "forbidden", "exception"])
 @pytest.mark.usefixtures("stub_llm")
-async def test_incomplete_or_unreadable_sections_never_count_as_complete(
+async def test_unread_sections_stay_diagnostic_without_overriding_declared_kind(
     failure: str, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = section_map_service.read_section
@@ -397,4 +397,5 @@ async def test_incomplete_or_unreadable_sections_never_count_as_complete(
     trace = outcome.diagnostics["section_expansion"]
     assert trace["minimum_scope_complete"] is False
     assert trace["unread"]
-    assert outcome.diagnostics["outcome"] == "conditional"
+    # 未読の事実を残し、同じ生成が宣言した種別と網羅性の診断を混同しない。
+    assert outcome.diagnostics["outcome"] == "answered"

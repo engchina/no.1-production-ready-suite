@@ -32,6 +32,7 @@ def _answer() -> tuple[Any, list[str]]:
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
         return schema.model_validate(
             {
+                "response_kind": "answered",
                 "request_coverage": [
                     {
                         "request_id": "Q1",

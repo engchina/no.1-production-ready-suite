@@ -1,6 +1,7 @@
 """LLM の 1 回の呼び出しのやり直しの共通の枠（#4736）を、合成の client で確かめる。
 
-送信は最大 6 回（やり直しは 5 回）。止まった判定は無音だけで、やり直しの種類が違っても、内側と外側のループをまたいでも
+このテストでは設定でやり直しを 5 回に増やし、送信最大 6 回を検査する。
+止まった判定は無音だけで、やり直しの種類が違っても、内側と外側のループをまたいでも
 同じ枠で数える。待ちは指数 backoff と full jitter とし、`Retry-After` は下限にする。
 """
 
@@ -8,6 +9,8 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
@@ -80,6 +83,7 @@ class _Base(unittest.TestCase):
         self.stream_settings = replace(
             get_settings(environ={"RAG_ENGINE_LLM_STALL_DETECTION": "1"}, dotenv_path=None),
             answer_max_tokens=1000,
+            llm_max_retries=5,
             llm_request_timeout_seconds=600,
         )
         self.plain_settings = replace(self.stream_settings, llm_stall_detection=False)
@@ -242,9 +246,9 @@ def test_every_stream_retry_is_numbered_and_jittered(monkeypatch, caplog):
     with bind_deadline(Deadline(600)), caplog.at_level(logging.INFO, logger=oci.__name__), pytest.raises(oci.LlmStreamFailed):
         oci._parse_with_retry(lambda: oci._openai_parsed([], settings, TextOutput, PROVIDER), "synthetic", settings)
     calls = [r for r in caplog.records if getattr(r, "llm_status", None)]
-    assert [r.llm_attempt for r in calls] == list(range(6))
-    assert len(client.streams) == 6
-    assert sum(waits) == 15.5  # 0.5 × (1 + 2 + 4 + 8 + 16)
+    assert [r.llm_attempt for r in calls] == [0, 1]
+    assert len(client.streams) == 2
+    assert sum(waits) == 0.5
 
 
 def test_embedding_transport_also_uses_jitter_and_retry_after(monkeypatch):
@@ -280,3 +284,19 @@ def test_permanent_sdk_stream_error_is_not_resent(monkeypatch):
     with bind_deadline(Deadline(600)), pytest.raises(oci.LlmStreamFailed):
         oci._parse_with_retry(lambda: oci._openai_parsed([], settings, TextOutput, PROVIDER), "synthetic", settings)
     assert len(client.streams) == 1
+
+
+def test_retry_count_is_configurable_and_defaults_to_one(monkeypatch):
+    monkeypatch.setattr(oci, "_wait_before_retry", lambda *_args, **_kwargs: None)
+    assert get_settings(environ={}, dotenv_path=None).llm_max_retries == 1
+    for retries in (0, 1, 3):
+        settings = get_settings(environ={"RAG_ENGINE_LLM_MAX_RETRIES": str(retries)}, dotenv_path=None)
+        calls = []
+
+        def failing(calls=calls):
+            calls.append(None)
+            raise TimeoutError("合成の一時障害")
+
+        with pytest.raises(TimeoutError):
+            oci._parse_with_retry(failing, "synthetic", settings)
+        assert len(calls) == retries + 1

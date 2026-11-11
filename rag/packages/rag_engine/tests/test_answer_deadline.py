@@ -132,10 +132,10 @@ class LlmCallDeadlineTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
 
     def test_retries_transport_errors_within_deadline(self):
-        client = _FakeClient(errors=[TimeoutError("slow"), ConnectionError("reset")])
+        client = _FakeClient(errors=[TimeoutError("slow")])
         with bind_deadline(Deadline(60.0)):
             self.assertEqual(_parse(client, _settings()).text, "ok")
-        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(len(client.calls), 2)
 
     def test_does_not_retry_when_wait_exceeds_remaining(self):
         client = _FakeClient(errors=[TimeoutError("slow")])

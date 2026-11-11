@@ -203,6 +203,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             return schema.model_validate(
                 {
                     "request_coverage": [{"request_id": "Q1", "evidence_scope": scopes}],
+                    "response_kind": "answered",
                     "answer_parts": [
                         {"request_id": "Q1", "requirement": "合成の操作", "answer": answer}
                     ],
@@ -1774,15 +1775,18 @@ def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None
     default = build_engine_settings(Settings(), output_dir=tmp_path)
     assert default.llm_stall_detection is True
     assert default.llm_stall_idle_seconds == 120.0
+    assert default.llm_max_retries == 1
     changed = build_engine_settings(
         Settings(
             rag_llm_stall_detection_enabled=False,
             rag_llm_stall_idle_seconds=45,
+            rag_llm_max_retries=0,
         ),
         output_dir=tmp_path,
     )
     assert changed.llm_stall_detection is False
     assert changed.llm_stall_idle_seconds == 45.0
+    assert changed.llm_max_retries == 0
 
 
 def _engine_effort(value: str) -> str:

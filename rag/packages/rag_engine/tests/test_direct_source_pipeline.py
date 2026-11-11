@@ -32,6 +32,7 @@ def run(*, derived: bool, readback: str | None = None):
             )
         return schema.model_validate(
             {
+                "response_kind": "answered",
                 "answer_parts": parts,
                 "summary_part_indexes": list(range(len(parts))),
                 "request_coverage": [
