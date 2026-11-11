@@ -12,7 +12,7 @@
 
 ## キャッシュと既存の図
 
-Vision checkpoint は応答schemaのhashをキーに含め、旧図構造を新契約として再利用しない。checkpoint版は3、Vision本文形式は5、backendの解析artifact版は11。
+Vision checkpoint は応答schemaのhashをキーに含め、旧図構造を新契約として再利用しない。checkpoint版は3、Vision本文形式は5、backendの解析artifact版は12。
 
 誤った関係をすでに保存した図は、再投影や再分割だけでは正しくならない。配備後、対象の文書レシピで「解析」から再処理する。既存文書の一括再処理をこの修正が自動で実行することはない。
 
@@ -37,4 +37,24 @@ cd rag/backend
 
 ```bash
 sudo -n ./platform/deploy/suite-update.sh
+```
+
+## 画像原本から図領域が検出されない場合（#4879）
+
+図・画像の読み取りが有効な文書レシピで、画像原本の解析結果に Picture / Table 領域が一つもない場合は、原本全体を一つの図として同じ Vision 読取へ渡す。文字要素だけの画像と、文字要素もない画像を対象とする。Docling とその他の解析エンジンに共通して適用し、OCR の文字・位置は保持する。成功した説明と領域は解析成果物へ保存し、同じ成果物を再度渡しても読み取りを重複させない。
+
+既存の図表領域がある画像には全体の読取を追加しない。PDF の文字だけのページも対象にしない。レシピで図・画像の読み取りが無効なら実行しない。文字だけの画像も対象になり得るため、従来読み取りを省略していた画像はモデル呼出が一回増える。読み取りの失敗は診断へ記録し、元の OCR は残す。意味の監査や二回目の読取は追加しない。
+
+旧成果物へ説明を反映するには、配備後に対象文書のレシピで「解析」から再処理する。再分割だけでは反映されない。解析artifact版を11から12へ上げて旧抽出結果の再利用を防ぐ。Vision本文の形式とプロンプトは変更しない。
+
+合成画像と固定した解析結果による回帰（リポジトリ直下から）:
+
+```bash
+cd rag/backend
+uv sync --locked --dev
+uv run --locked --no-sync python -m pytest -q tests/test_vision_source_image.py tests/test_vision.py tests/test_vision_text_map.py tests/test_vision_producer_bindings.py
+uv run --locked --no-sync python -m pytest -q tests/test_vision_crop_projection_ingest.py tests/test_vision_failed_picture_ingest.py tests/test_vision_strategy_projection.py tests/test_vision_projection_review.py
+uv run --locked --no-sync ruff check app/rag/vision.py app/rag/ingestion.py tests/test_vision_source_image.py
+uv run --locked --no-sync ruff format --check app/rag/vision.py app/rag/ingestion.py tests/test_vision_source_image.py
+uv run --locked --no-sync mypy app/rag/vision.py app/rag/ingestion.py
 ```
