@@ -74,3 +74,30 @@ cd rag/frontend
 npx playwright test e2e/document-workspace-file-processing.spec.ts -g '構造化要素から解析版を固定して原本ノード'
 npx playwright test e2e/citation-text-preview.spec.ts -g '原本ノードは展開時だけ'
 ```
+
+## 通常JSONとHTMLの原本対応（#4891）
+
+引用の「原本の対応箇所」は、XMLツリーJSONの `json_source_map` に加え、通常JSONの `source_map` / `json_pointer` とHTML/HTMの `source_map` / `html_source` を読む。原本のhash・対応表の版・文字数・保存した範囲を検証し、1回8192文字以内の窓を返す。JSONは記録された値のまとまり、HTMLは記録されたタグ片を示す。抽出正文の引用語と原本の単位は別の精度であり、文字単位の対応がない場合は要素の対応と案内する。
+
+HTMLは原文コードを文字列として表示し、タグ・script・外部resourceを実行しない。原本と処理後のどちらも引用時点の抽出版から取得し、hashが合うものだけを使用する。古い記録・壊れた範囲・未知の要素は推測して埋めない。解析の出力、検索・生成、LLM呼出しは変更しない。
+
+リポジトリ直下からの局所確認:
+
+```bash
+cd rag/backend
+uv run --locked --no-sync pytest tests/test_generic_source_window.py tests/test_json_source_window.py tests/test_json_source_routes.py tests/test_json_source_rebuild.py tests/test_evidence_read_authz.py -q
+uv run --locked --no-sync mypy app/services/json_source_window.py tests/test_generic_source_window.py
+```
+
+```bash
+cd platform/packages/ui
+npm run build
+npx vitest run tests/evidence-reader.test.tsx tests/original-source-panel.test.tsx
+```
+
+```bash
+cd rag/frontend
+npm run lint
+npm run build
+npx playwright test e2e/citation-text-preview.spec.ts
+```

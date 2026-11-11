@@ -99,7 +99,7 @@ export function originalSourceLabels() {
     unrecorded: "原本のノード位置は記録されていません。対応する解析方式で再解析すると保存できます。",
     unresolved: "原本との対応を確認できません。似た本文への移動は行いません。",
     versionMismatch: "保存した解析版と原本が一致しません。新しい版へ自動で移動しません。",
-    original: "原本のJSON", prepared: "処理後ファイルのJSON",
+    original: "原本", prepared: "処理後ファイル",
     citationElement: "原本と抽出要素の対応です。引用の文字範囲は未確定です。",
     note: "強調部分が抽出本文に対応します。整形で追加した見出しや記号は含みません。",
     previousNode: "前の原本ノード", nextNode: "次の原本ノード",
