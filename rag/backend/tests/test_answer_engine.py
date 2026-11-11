@@ -1196,7 +1196,20 @@ def _fake_evaluation_llm(
     from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
 
     assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
-    return AnswerCorrectnessOutput(verdict="correct", reason="標準回答と一致")
+    inputs = json.loads(prompt)
+    return AnswerCorrectnessOutput(
+        comparisons=[
+            {
+                "answer_unit_id": unit["id"],
+                "standard_unit_ids": [inputs["standard_answer"][0]["id"]],
+                "relation": "consistent",
+                "reason": "合成の比較",
+            }
+            for unit in inputs["answer_text"]
+        ],
+        uncovered_points=[],
+        reason="標準回答と一致",
+    )
 
 
 async def test_saved_answer_is_evaluated_with_standard_answer(
