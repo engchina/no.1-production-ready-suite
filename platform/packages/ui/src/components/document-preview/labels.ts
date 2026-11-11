@@ -106,3 +106,11 @@ export function originalSourceLabels() {
     previous: "前の部分を読む", next: "後の部分を読む", body: "原本の対応本文",
   };
 }
+
+/** 保存された表の座標と描画粒度の共通文言。 */
+export function sourceTableHighlightLabels() {
+  return {
+    cells: "表は対応するセル単位で強調しています。",
+    text: "表の行列を確認できないため、原文の文字位置を強調しています。",
+  };
+}

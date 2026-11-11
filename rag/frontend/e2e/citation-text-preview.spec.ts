@@ -362,3 +362,41 @@ test("通常表は保存された範囲に対応する2つ目のセルだけを�
     await page.screenshot({path:testInfo.outputPath("table-highlight-dark.png"),animations:"disabled"});
   }
 });
+
+
+test("実解析の縦線表は同じ保存範囲からセルを強調し、参照文脈には付けない", {tag:"@responsive"}, async ({page}, testInfo) => {
+  await search(page);
+  const text='| 項目 | 値 |\n| 合成A | 同じ値😀 & 前 後 |\n| 合成B | 同じ値😀 & 前 後 |';
+  const start=Array.from(text.slice(0,text.lastIndexOf('同じ値'))).length;
+  await page.route("**/api/documents/doc-a/reader?**",route=>route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"table",kind:"table",text,offset:0,cited:true,highlights:[[start,start+3]]},{id:"context",kind:"table",text,offset:0,cited:false,highlights:[[start,start+3]]}],outline:[],previous_cursor:null,next_cursor:null}}}));
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader=page.getByTestId("evidence-reader-content");
+  const cited=reader.locator('[data-reader-cited="true"]');
+  await expect(cited.getByRole("table")).toHaveCount(1);
+  await expect(cited.locator("mark")).toHaveText("同じ値😀 & 前 後");
+  await expect(cited.getByRole("row").filter({hasText:"合成A"}).locator("mark")).toHaveCount(0);
+  await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+  await expect(reader).toContainText("セル単位で強調");
+  await expectNoPageOverflow(page);
+  await page.screenshot({path:testInfo.outputPath(`pipe-table-${testInfo.project.name}.png`),animations:"disabled"});
+  if(testInfo.project.name==="desktop"){
+    await page.setViewportSize({width:1920,height:1080});await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("pipe-table-wide.png"),animations:"disabled"});
+    await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>document.documentElement.dataset.theme="dark");await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("pipe-table-dark.png"),animations:"disabled"});
+  }
+});
+
+test("表の不完全な断片は文字位置を強調し、範囲を推測して表にしない", {tag:"@responsive"}, async ({page},testInfo)=>{
+  await search(page);
+  const text='途中😀 | 値 |\n| 合成B | 続き |';
+  await page.route("**/api/documents/doc-a/reader?**",route=>route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"fragment",kind:"table",text,offset:30,cited:true,highlights:[[2,3]]}],outline:[],previous_cursor:null,next_cursor:null}}}));
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader=page.getByTestId("evidence-reader-content");
+  await expect(reader.getByRole("table")).toHaveCount(0);
+  await expect(reader.locator("mark")).toHaveText("😀");
+  await expect(reader).toContainText(text);
+  await expect(reader).toContainText("原文の文字位置を強調");
+  await expectNoPageOverflow(page);
+  await page.screenshot({path:testInfo.outputPath(`table-fragment-${testInfo.project.name}.png`),animations:"disabled"});
+});

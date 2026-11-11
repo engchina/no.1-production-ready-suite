@@ -4119,3 +4119,17 @@ npx vitest run tests/excerpt-highlight.test.tsx tests/excerpt-text.test.tsx test
 npm run typecheck
 npm run build
 ```
+
+### 保存済み表の引用範囲（#4897）
+
+`ExcerptContent contentKind="table"` はHTMLに加え、解析器が保存する縦線の表も共有の`DataTable`で表示する。
+セルの元文字列のcodepoint範囲から強調し、列数が不揃い・行途中・1行だけなど行列を確定できない断片は元の文字列と範囲を保って表示する。
+通常の本文では縦線の並びを表と推測しない。別表現のHTMLへ差し替えて座標を再利用しない。
+
+```bash
+cd platform/packages/ui
+npx vitest run tests/excerpt-highlight.test.tsx tests/excerpt-text.test.tsx tests/evidence-reader.test.tsx tests/tabular-data.test.ts
+npm run typecheck
+cd ../../../rag/frontend
+PLAYWRIGHT_PORT=3198 npx playwright test e2e/citation-text-preview.spec.ts
+```

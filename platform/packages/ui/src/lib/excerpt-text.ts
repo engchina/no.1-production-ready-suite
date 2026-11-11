@@ -6,11 +6,13 @@
  * 壊れた HTML（閉じていない・途中で切れた・`<table>` の無い `<tr>`）も例外を出さず、読める範囲で返す。
  */
 
+import { sourcePipeTable } from "./tabular-data";
+
 /** 表のセル。`header` は `<th>` か `<thead>` の中のセル。 */
 export interface ExcerptTableCell {
   text: string;
   header: boolean;
-  /** 元HTMLのcodepoint範囲。位置の追跡を指定した場合だけ付く。 */
+  /** 元文字列のcodepoint範囲。位置の追跡を指定した場合だけ付く。 */
   sourceRanges?: [number, number][];
 }
 
@@ -198,9 +200,13 @@ function looksLikeHtml(text: string): boolean {
 /**
  * 抜粋を、本文（text）と表（table）の並びにする。HTML を含まない文字は 1 つの text のまま返す。
  */
-export function parseExcerpt(raw: string, {trackSourceRanges = false}: {trackSourceRanges?:boolean} = {}): ExcerptBlock[] {
+export function parseExcerpt(raw: string, {trackSourceRanges = false, tableText = false}: {trackSourceRanges?:boolean; tableText?:boolean} = {}): ExcerptBlock[] {
   const source = raw ?? "";
   if (!source.trim()) return [];
+  if (tableText) {
+    const rows=sourcePipeTable(source);
+    if(rows) return [{kind:"table",caption:"",rows:rows.map((row,index)=>row.map(cell=>({text:cell.text,header:index===0,...(trackSourceRanges?{sourceRanges:[cell.range]}:{})})))}];
+  }
   if (!looksLikeHtml(source)) return [{ kind: "text", text: source }];
   const input = source.replace(CUT_TAG_AT_END, "");
   const blocks: ExcerptBlock[] = [];
