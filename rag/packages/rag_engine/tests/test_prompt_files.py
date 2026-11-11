@@ -313,8 +313,8 @@ def test_new_image_default_defers_field_meanings_to_the_response_schema():
     assert "出力する項目・型・各項目の意味は応答の schema に従い" in editable
     contract = json.dumps(picture_response_schema(), ensure_ascii=False)
     for meaning in (
-        "接続元",
-        "接続先",
+        "接続段の始点",
+        "接続段の終点",
         "確実に読める category=value",
         "同じ行のセルの配列",
         "限定語は原文で",
