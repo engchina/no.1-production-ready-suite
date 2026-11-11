@@ -222,7 +222,7 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 7: Unstructured の見出しの判定と階層を直した。#4741。
 # 8: 文末の記号で終わる番号付きの行を見出しにしない。#4742。
 # 9: 図・画像の説明を、同じページの本文の言語で書く。#4821)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 10
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 11
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {

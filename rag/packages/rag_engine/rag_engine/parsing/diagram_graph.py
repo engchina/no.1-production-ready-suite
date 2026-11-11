@@ -71,26 +71,33 @@ def graph_projection(description: Mapping[str, Any]) -> tuple[list[str], list[st
 
     paths: list[str] = []
     remaining = max(1, len(nodes) * len(raw_edges))
-    for identity, node in nodes.items():
-        if node.get("kind") == "junction":
-            continue
-        pending: list[tuple[str, str, frozenset[str], frozenset[int]]] = [(identity, name(identity), frozenset({identity}), frozenset())]
-        while pending and len(paths) < MAX_DIAGRAM_EDGES and remaining > 0:
-            remaining -= 1
-            current, text, visited, used = pending.pop()
-            for target, edge, index in adjacent.get(current, ()):
-                if index in used:
+    # 接続を持つ始点だけを積む。候補が残るときだけ打切りを表示する。
+    pending: list[tuple[str, str, frozenset[str], frozenset[int]]] = [
+        (identity, name(identity), frozenset({identity}), frozenset())
+        for identity, node in reversed(list(nodes.items()))
+        if node.get("kind") != "junction" and adjacent.get(identity)
+    ]
+    while pending:
+        if remaining <= 0:
+            uncertain.append("…")
+            break
+        remaining -= 1
+        current, text, visited, used = pending.pop()
+        truncated = False
+        for target, edge, index in adjacent.get(current, ()):
+            if index in used:
+                continue
+            line = text + step(edge, target, directed=edge.get("direction") in {"forward", "both"})
+            if nodes[target].get("kind") != "junction":
+                if line in paths:
                     continue
-                line = text + step(edge, target, directed=edge.get("direction") in {"forward", "both"})
-                if nodes[target].get("kind") != "junction":
-                    if line not in paths:
-                        paths.append(line)
-                    if len(paths) >= MAX_DIAGRAM_EDGES:
-                        break
-                elif target not in visited:
-                    pending.append((target, line, visited | {target}, used | {index}))
-        if pending or len(paths) >= MAX_DIAGRAM_EDGES or remaining <= 0:
-            # 経路の組合せが増える図は探索を打ち切り、省略を未確認事項として示す。
+                if len(paths) >= MAX_DIAGRAM_EDGES:
+                    truncated = True
+                    break
+                paths.append(line)
+            elif target not in visited:
+                pending.append((target, line, visited | {target}, used | {index}))
+        if truncated:
             uncertain.append("…")
             break
     return paths, uncertain

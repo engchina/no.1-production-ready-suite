@@ -103,3 +103,23 @@ def test_junction_combinations_without_a_receiver_are_bounded_and_marked_incompl
     paths, uncertain = graph_projection({"diagram_nodes": nodes, "diagram_edges": edges})
     assert not paths
     assert "…" in uncertain
+
+
+def test_unknown_link_without_pending_paths_does_not_claim_truncation():
+    nodes = [{"id": key, "kind": "node", "label": key} for key in ["A", "B"]]
+    paths, uncertain = graph_projection(
+        {"diagram_nodes": nodes, "diagram_edges": [{"source": "A", "target": None, "label": "r", "direction": "uncertain"}]}
+    )
+    assert not paths
+    assert len(uncertain) == 1
+    assert "…" not in uncertain
+
+
+@pytest.mark.parametrize("count,truncated", [(2, False), (3, True)])
+def test_exact_path_limit_is_not_a_truncation_unless_another_path_remains(monkeypatch, count, truncated):
+    monkeypatch.setattr("rag_engine.parsing.diagram_graph.MAX_DIAGRAM_EDGES", 2)
+    nodes = [{"id": key, "kind": "node", "label": key} for key in ["A", "B", "C", "D"]]
+    edges = [{"source": "A", "target": key, "label": "", "direction": "forward"} for key in ["B", "C", "D"][:count]]
+    paths, uncertain = graph_projection({"diagram_nodes": nodes, "diagram_edges": edges})
+    assert len(paths) == 2
+    assert ("…" in uncertain) is truncated
