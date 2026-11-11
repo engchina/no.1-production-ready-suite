@@ -89,6 +89,7 @@ class _CapturingClient(OracleClient):
 
 _READS: list[tuple[str, Callable[[OracleClient], Coroutine[Any, Any, Any]]]] = [
     ("retrievable_chunk", lambda client: client.retrievable_chunk("doc-1", "chunk-1")),
+    ("readable_version_chunk", lambda client: client.readable_version_chunk("doc-1", "chunk-1")),
     (
         "retrievable_element_chunk",
         lambda client: client.retrievable_element_chunk("doc-1", "recipe-1", "element-1"),

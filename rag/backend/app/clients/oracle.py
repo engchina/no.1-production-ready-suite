@@ -1708,22 +1708,15 @@ class OracleClient:
             _render_sql(
                 """
             SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_text,
-                c.metadata_json,
-                c.chunk_index,
-                c.chunk_set_id,
-                d.file_name,
-                d.category_name,
-                d.superseded_by_document_id,
+                {columns},
                 0 AS score
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
+            {scope_joins}
             WHERE {where_sql}
               AND c.document_id = :read_document_id
               AND c.chunk_id = :read_chunk_id
             """,
+                columns=_SEARCH_HIT_COLUMNS,
+                scope_joins=_NATIVE_SCOPE_JOINS,
                 where_sql=where_sql,
             ),
             {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
@@ -1745,22 +1738,15 @@ class OracleClient:
             _render_sql(
                 """
             SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_text,
-                c.metadata_json,
-                c.chunk_index,
-                c.chunk_set_id,
-                d.file_name,
-                d.category_name,
-                d.superseded_by_document_id,
+                {columns},
                 0 AS score
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
+            {scope_joins}
             WHERE {where_sql}
               AND c.document_id = :read_document_id
               AND c.chunk_id = :read_chunk_id
             """,
+                columns=_SEARCH_HIT_COLUMNS,
+                scope_joins=_NATIVE_SCOPE_JOINS,
                 where_sql=where_sql,
             ),
             {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
