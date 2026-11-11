@@ -52,6 +52,35 @@ def _cursor(revision: str, index: int, offset: int, section: str | None) -> str:
     )
 
 
+def _quoted_ranges(
+    elements: list[Any], anchor_ids: list[str], quote: str
+) -> tuple[dict[int, tuple[int, int]], bool]:
+    """保存された引用元だけを原順序で照合する。空白差だけを吸収し文字座標を保持する。"""
+    characters: list[str] = []
+    positions: list[tuple[int, int]] = []
+    for index, row in enumerate(elements):
+        if row.get("element_id") not in anchor_ids:
+            continue
+        for offset, char in enumerate(str(row.get("text") or "")):
+            if not char.isspace():
+                characters.append(char)
+                positions.append((index, offset))
+    needle = "".join(char for char in quote if not char.isspace())
+    if not needle:
+        return {}, False
+    text = "".join(characters)
+    start = text.find(needle)
+    if start < 0:
+        return {}, False
+    if text.find(needle, start + 1) >= 0:
+        return {}, True
+    ranges: dict[int, tuple[int, int]] = {}
+    for index, offset in positions[start : start + len(needle)]:
+        first = ranges.get(index, (offset, offset + 1))[0]
+        ranges[index] = (first, offset + 1)
+    return ranges, False
+
+
 def reading_window(
     payload: Mapping[str, Any],
     *,
@@ -108,8 +137,9 @@ def reading_window(
     if section_id or scope in {"section", "parent"}:
         index = sections[selected_path]
     source = str(elements[anchor].get("text") or "")
-    quote_position = source.find(quote) if quote else -1
-    unique_quote = quote_position >= 0 and source.find(quote, quote_position + 1) < 0
+    ranges, ambiguous = _quoted_ranges(elements, anchor_ids, quote)
+    unique_quote = bool(ranges)
+    quote_position = ranges.get(anchor, (-1, -1))[0]
     if (
         not section_id
         and scope == "paragraph"
@@ -197,11 +227,20 @@ def reading_window(
         end = piece.excerpt_range.end if piece.excerpt_range else stop
         highlights = []
         # 表の再掲ヘッダーを含む場合、誤った文字位置を強調しない。
-        if current == anchor and unique_quote and not piece.header_range:
-            a = max(quote_position, start)
-            b = min(quote_position + len(quote), end)
-            if a < b:
-                highlights = [[a - start, b - start]]
+        source_range = ranges.get(current)
+        if not piece.header_range:
+            if source_range:
+                a, b = max(source_range[0], start), min(source_range[1], end)
+                if a < b:
+                    highlights = [[a - start, b - start]]
+            elif (
+                quote
+                and not unique_quote
+                and not ambiguous
+                and elements[current].get("element_id") in anchor_ids
+            ):
+                # 文字の位置とは区別し、確定した引用元の段落全体を近似位置として示す。
+                highlights = [[0, len(piece.text)]]
         blocks.append(
             {
                 "id": str(elements[current].get("element_id") or current),

@@ -277,3 +277,32 @@ test("原本ノードは展開時だけ取得し、版と対応範囲を保持�
   expect(inputs.at(-1)?.get("source_index")).toBe("1");
   await expectNoPageOverflow(page);
 });
+
+
+for (const extension of ["txt", "md", "markdown"]) {
+  test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
+    await mockDatabaseReady(page); await mockLocalAuth(page);
+    const name = `synthetic.${extension}`;
+    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:"見出し\n合成😀の本文です。",score:1,metadata:{element_ids:["h","a"],context_role:"evidence",answer_citation_lines:[1],answer_citation_provenance:"child"}};
+    await page.route("**/api/search-answer-profiles**", route => route.fulfill({json:{data:{items:[PROFILE],total:1,limit:50,offset:0,has_next:false},error_messages:[],warning_messages:[]}}));
+    await page.route("**/api/chat/conversations**", route => {
+      const detail = {id:"c-text",search_answer_profile_id:PROFILE.id,title:"合成の原文確認",status:"ACTIVE",owned:true,message_count:2,created_at:"2026-11-01T00:00:00Z",updated_at:"2026-11-01T00:00:00Z",messages:[
+        {message_id:"u-text",conversation_id:"c-text",role:"USER",content:"合成の値を教えてください。",status:"COMPLETE",created_at:"2026-11-01T00:00:00Z",citations:[],guardrail_warnings:[]},
+        {message_id:"a-text",reply_to_message_id:"u-text",model:"synthetic-model",conversation_id:"c-text",role:"ASSISTANT",content:`資料により確認できた事項\n・合成😀の本文です。\n根拠：${name}`,status:"COMPLETE",created_at:"2026-11-01T00:00:01Z",citations:[cited],guardrail_warnings:[]},
+      ]};
+      return route.fulfill({json:{data:new URL(route.request().url()).pathname.endsWith("/c-text") ? detail : {items:[{...detail,messages:undefined}],total:1,offset:0,limit:25,has_next:false},error_messages:[],warning_messages:[]}});
+    });
+    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],blocks:[
+      {id:"h",text:"見出し",offset:0,highlights:[[0,3]],cited:true},
+      {id:"a",text:"合成😀の本文です。",offset:0,highlights:[[0,9]],cited:true},
+      {id:"other",text:"別の文脈です。",offset:0,highlights:[],cited:false},
+    ],outline:[],previous_cursor:null,next_cursor:null,scope:"paragraph"},error_messages:[],warning_messages:[]}}));
+    await page.goto(`/chat?conversation_id=c-text&search_answer_profile_id=${PROFILE.id}`);
+    await page.getByTestId("chat-answer-body").getByRole("button").filter({hasText:name}).first().click();
+    const reader=page.getByTestId("evidence-reader-content");
+    await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
+    await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath(`text-source-chat-${extension}.png`)});
+  });
+}

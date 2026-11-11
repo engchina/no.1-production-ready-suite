@@ -342,9 +342,20 @@ def test_json_records_pointer_units_with_sorted_output() -> None:
     assert units[-1]["end"] == len(extraction.elements[0].text)
 
 
-def test_short_source_records_nothing() -> None:
-    extraction = _parse("短い本文\n\n二つ目".encode(), "text/plain", ".txt")
-    assert "source_map" not in extraction.parser_artifacts
+@pytest.mark.parametrize(
+    ("extension", "content_type", "source", "scheme"),
+    [
+        (".txt", "text/plain", "合成😀\n\n短い本文", "text_char"),
+        (".md", "text/markdown", "# 合成😀\n\n短い本文", "markdown_source"),
+        (".markdown", "text/markdown", "# 合成😀\n\n短い本文", "markdown_source"),
+    ],
+)
+def test_short_sources_record_positions(
+    extension: str, content_type: str, source: str, scheme: str
+) -> None:
+    data = source.encode()
+    extraction = _parse(data, content_type, extension)
+    _assert_every_element_recorded(extraction, data, scheme)
 
 
 def test_unverified_order_records_nothing_and_keeps_parsing() -> None:

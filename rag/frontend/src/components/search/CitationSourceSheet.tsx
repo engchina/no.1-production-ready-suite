@@ -104,7 +104,7 @@ function CitationSourcePreview({
   const office = /\.(?:docx?|pptx?|xlsx?)$/i.test(previewFileName);
   const source = useDocumentPreviewSource(open && office ? chunk.document_id : null, recipeId, chunkSetId);
   const focus = evidencePreviewFocus(chunk.metadata);
-  if (/\.(?:txt|csv|tsv|md|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
+  if (/\.(?:txt|csv|tsv|md|markdown|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
     return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} loadOriginal={/\.json$/i.test(previewFileName) ? loadOriginal : undefined} enabled={open} highlight={highlight} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
   }
   if (office) {

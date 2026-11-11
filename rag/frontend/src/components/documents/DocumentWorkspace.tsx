@@ -1698,7 +1698,7 @@ export function DocumentWorkspace({
                 focusPage={effectiveFocusPage}
                 onPageChange={reportInspectorPage}
                 onTextRangeChange={reportTextRange}
-                focusElementId={requestedElementId ?? (requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids[0] : null)}
+                focusElementId={previewFocusSource === "element" ? selectedElementId : requestedElementId ?? (requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids[0] : null)}
                 focusSectionId={sectionFocus?.id}
 
                 focusRequestKey={sectionFocus?.key ?? urlFallbackFocus?.key ?? focusRequest?.key ?? null}
