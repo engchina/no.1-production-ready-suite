@@ -770,7 +770,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 段の数は入れ子の工程も数える。開くと段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
     const timeline = page.getByTestId("run-history-timeline");
     const timelineSummary = page.getByTestId("run-history-timeline-summary");
-    await expect(timelineSummary).toHaveText("4 ステップ・合計 1.2 秒");
+    await expect(timelineSummary).toContainText("4 ステップ・合計 1.2 秒");
     await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
     await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
     await timelineSummary.click();

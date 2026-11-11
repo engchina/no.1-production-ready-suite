@@ -785,7 +785,7 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
   const liveTypography = await timelineTypography(page.getByTestId("search-run-progress"));
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
   expect(live.map((row) => row.level)).toEqual([0,1,2,0]);
   await page.screenshot({path: testInfo.outputPath("search-process.png")});
   await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill(envelope({

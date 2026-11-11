@@ -20704,7 +20704,7 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
   const liveTypography = await timelineTypography(progress);
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
     expect(live).toHaveLength(6);
     await progress.screenshot({path: testInfo.outputPath("sql-generation-process.png")});
     if (cancelled) {

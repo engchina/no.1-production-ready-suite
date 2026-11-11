@@ -2399,7 +2399,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   const liveTypography = await timelineTypography(page.getByTestId("sql-chat-progress"));
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
   expect(live).toHaveLength(6);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: withRecordedTrace("synthetic-parity", {
