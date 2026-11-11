@@ -7,6 +7,7 @@
 入力の上限で呼び、使ったモデルを判定の診断と評価の結果に残す。
 """
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -221,7 +222,20 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
             (schema.__name__, provider.model, provider.endpoint, settings.answer_max_input_tokens)
         )
         assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
-        return AnswerCorrectnessOutput(verdict="correct", reason="一致")
+        inputs = json.loads(prompt)
+        return AnswerCorrectnessOutput(
+            comparisons=[
+                {
+                    "answer_unit_id": unit["id"],
+                    "standard_unit_ids": [inputs["standard_answer"][0]["id"]],
+                    "relation": "consistent",
+                    "reason": "合成の比較",
+                }
+                for unit in inputs["answer_text"]
+            ],
+            uncovered_points=[],
+            reason="一致",
+        )
 
     return fake
 

@@ -38,7 +38,18 @@ def payload():
 
 
 def verdict(value="correct"):
-    return AnswerCorrectnessOutput(verdict=value, reason="理由")
+    return AnswerCorrectnessOutput(
+        comparisons=[
+            {
+                "answer_unit_id": "A1",
+                "standard_unit_ids": ["S1"],
+                "relation": {"correct": "consistent", "incorrect": "contradicts", "unassessed": "unassessed"}[value],
+                "reason": "理由",
+            }
+        ],
+        uncovered_points=[],
+        reason="理由",
+    )
 
 
 def broken_output():
@@ -63,8 +74,8 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
     # 渡すのは質問・標準回答・出典の行を除いた回答の本文だけ（取得した根拠は渡さない）。
     assert json.loads(prompt) == {
         "question": "今回の取込失敗の原因は？",
-        "standard_answer": "ログを確認して原因を特定する。",
-        "answer_text": "ログを確認して原因を特定します。",
+        "standard_answer": [{"id": "S1", "text": "ログを確認して原因を特定する。"}],
+        "answer_text": [{"id": "A1", "text": "ログを確認して原因を特定します。"}],
     }
     assert result == {
         "rubric_version": RUBRIC_VERSION,
@@ -73,6 +84,17 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
         "judge_diagnostics": {"judge_calls": 1, "judge_retries": 0, "retry_reasons": []},
         "answer_correctness": score,
         "correctness_reason": "理由",
+        "claim_comparisons": [
+            {
+                "answer_unit_id": "A1",
+                "standard_unit_ids": ["S1"],
+                "relation": {"correct": "consistent", "incorrect": "contradicts", "unassessed": "unassessed"}[value],
+                "reason": "理由",
+                "answer_text": "ログを確認して原因を特定します。",
+                "standard_texts": ["ログを確認して原因を特定する。"],
+            }
+        ],
+        "uncovered_points": [],
         "status": "completed",
         "message": "",
     }
@@ -88,33 +110,19 @@ def test_no_standard_answer_skips_network_and_keeps_external_status():
     assert result["external_data_items"] == ["ログ"]
 
 
-@pytest.mark.parametrize("error", ["schema", "unreadable"])
-def test_invalid_output_is_retried_once_with_feedback(error):
+@pytest.mark.parametrize("error", ["schema", "invalid_json"])
+def test_invalid_output_is_not_retried_by_the_judge_layer(error):
     if error == "schema":
         with pytest.raises(ValidationError) as raised:
-            AnswerCorrectnessOutput(verdict="invalid", reason="理由")
-        first: Exception = raised.value
+            AnswerCorrectnessOutput.model_validate({"comparisons": "invalid", "uncovered_points": [], "reason": "理由"})
+        first = raised.value
     else:
         first = broken_output()
-    with patch(PARSE, side_effect=[first, verdict()]) as parse:
+    with patch(PARSE, side_effect=first) as parse:
         result = evaluate_answer_payload(payload(), object())
-    assert parse.call_count == 2
-    retried = json.loads(parse.call_args_list[1].args[1])
-    assert "validation_feedback" in retried and retried["question"] == payload()["question"]
-    assert result["status"] == "completed" and result["answer_correctness"] == 1.0
-    assert result["judge_diagnostics"] == {
-        "judge_calls": 2,
-        "judge_retries": 1,
-        "retry_reasons": ["correctness:" + type(first).__name__],
-    }
-
-
-def test_repeated_invalid_output_is_error_with_diagnostics():
-    with patch(PARSE, side_effect=[broken_output(), broken_output()]):
-        result = evaluate_answer_payload(payload(), object())
-    assert result["status"] == "error" and result["error_type"] == "InvalidStructuredOutput"
-    assert result["judge_diagnostics"]["judge_retries"] == 1
-    assert "answer_correctness" not in result
+    assert parse.call_count == 1
+    assert result["status"] == "error"
+    assert result["judge_diagnostics"]["judge_retries"] == 0
 
 
 def test_transport_error_is_not_retried_by_the_judge():
