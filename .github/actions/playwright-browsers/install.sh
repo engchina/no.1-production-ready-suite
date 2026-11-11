@@ -36,6 +36,7 @@ retry_attempt=0
 retry_reason=""
 packages=()
 missing=()
+seeded_debs=0
 
 fail() {
   echo "::error title=Playwright のインストール::$*"
@@ -157,6 +158,7 @@ seed_cached_debs() {
   mapfile -t debs < <(find "${cache_dir}" -maxdepth 1 -name '*.deb' -type f)
   [ "${#debs[@]}" -gt 0 ] || return 0
   "${sudo_cmd[@]}" cp "${debs[@]}" "${archives}/"
+  seeded_debs=${#debs[@]}
   echo "cache の .deb を ${#debs[@]} 個 ${archives} に戻した（版が合うものは mirror から取らない）。"
 }
 
@@ -166,6 +168,7 @@ cmd_packages() {
 }
 
 cmd_os_deps() {
+  local remaining limit status
   read_playwright_packages
   find_missing_packages
   if [ "${#missing[@]}" -eq 0 ]; then
@@ -175,6 +178,25 @@ cmd_os_deps() {
   echo "入っていない OS の依存（${#missing[@]}/${#packages[@]} 個）: ${missing[*]}"
   configure_apt
   seed_cached_debs
+  # cache が揃っていても先に update すると、mirror 停止時に導入できない（#4899）。
+  # apt 自身が既存索引に対する版・hash・依存関係を確認する。取得や未検証の dpkg 直入れはしない。
+  if [ "${seeded_debs}" -gt 0 ]; then
+    remaining=$((deadline - SECONDS))
+    limit="${attempt_timeout}"
+    [ "${remaining}" -lt "${limit}" ] && limit="${remaining}"
+    if [ "${limit}" -ge 5 ]; then
+      echo "::group::cache から OS の依存を導入（上限 ${limit} 秒、ネットワーク取得なし）"
+      status=0
+      apt_as_root "${limit}" install -y --no-install-recommends --no-download "${missing[@]}" || status=$?
+      echo "::endgroup::"
+      find_missing_packages
+      if [ "${status}" -eq 0 ] && [ "${#missing[@]}" -eq 0 ]; then
+        echo "cache から OS の依存をすべて導入した。apt-get update は不要。"
+        return 0
+      fi
+      echo "cache だけでは導入できなかった。残りの予算で通常の取得を行う。"
+    fi
+  fi
   retry "apt-get update" apt_update || fail_slow_network "apt-get update"
   retry "OS の依存の取得（apt-get install --download-only）" apt_download || fail_slow_network "OS の依存の取得"
   retry "OS の依存のインストール（apt-get install）" apt_install || fail_slow_network "OS の依存のインストール"
