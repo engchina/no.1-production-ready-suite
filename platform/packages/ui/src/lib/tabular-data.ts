@@ -175,11 +175,48 @@ const FENCE = /^\s*(```|~~~)/;
 const SEPARATOR_CELL = /^\s*:?-+:?\s*$/;
 
 /** Markdown の表の行のセル（先頭・末尾の `|` を除き、`\|` 以外の `|` で分ける）。 */
+function sourceTableRow(line: string): { text: string; range: [number, number] }[] {
+  let first = line.length - line.trimStart().length;
+  let end = line.trimEnd().length;
+  if (line[first] === "|") first++;
+  if (line[end - 1] === "|" && line[end - 2] !== "\\") end--;
+  const points: number[] = [0];
+  let unit = 0, point = 0;
+  for (const character of line) { unit += character.length; points[unit] = ++point; }
+  const cells: { text: string; range: [number, number] }[] = [];
+  const body = line.slice(first,end);
+  const separator = /(?<!\\)\|/g;
+  let start = 0;
+  const append = (stop: number) => {
+    const raw = body.slice(start,stop);
+    const left = raw.length - raw.trimStart().length;
+    const right = Math.max(left,raw.trimEnd().length);
+    cells.push({text:cleanMarkdownCell(raw),range:[points[first+start+left],points[first+start+right]]});
+  };
+  for (let match = separator.exec(body); match; match = separator.exec(body)) {
+    append(match.index); start = match.index + 1;
+  }
+  append(body.length);
+  return cells;
+}
+
 function splitTableRow(line: string): string[] {
-  let body = line.trim();
-  if (body.startsWith("|")) body = body.slice(1);
-  if (body.endsWith("|") && !body.endsWith("\\|")) body = body.slice(0, -1);
-  return body.split(/(?<!\\)\|/).map(cleanMarkdownCell);
+  return sourceTableRow(line).map(cell => cell.text);
+}
+
+/** 解析器が表と宣言した本文だけを読み、元文字列のcodepoint範囲を保持する。曖昧な断片は表にしない。 */
+export function sourcePipeTable(text: string): {text:string; range:[number,number]}[][] | null {
+  let offset=0;
+  const lines=text.split("\n").map(line=>{const item={line,offset};offset+=Array.from(line).length+1;return item;});
+  while(lines.length && !lines[0].line.trim()) lines.shift();
+  while(lines.length && !lines.at(-1)!.line.trim()) lines.pop();
+  if(lines.length<2 || lines.some(item=>FENCE.test(item.line))) return null;
+  const width=splitTableRow(lines[0].line).length;
+  const separated=isSeparatorRow(lines[1].line,width);
+  if(!separated && !lines.every(item=>isHeaderlessRow(item.line))) return null;
+  if(width<1 || lines.some(item=>!isTableRowLine(item.line))) return null;
+  const rows=lines.filter((_,i)=>!separated || i!==1).map(({line,offset})=>sourceTableRow(line).map(cell=>({text:cell.text,range:[cell.range[0]+offset,cell.range[1]+offset] as [number,number]})));
+  return rows.length>=2 && rows.every(row=>row.length===width) ? rows : null;
 }
 
 /** セルの強調・コードの記号を除く（表の値として読む）。 */

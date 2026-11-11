@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { sourceTableHighlightLabels } from "../document-preview/labels";
 import { CodepointHighlight } from "../document-preview/codepoint-highlight";
 
 import { resolveContentLang } from "../../lib/content-lang";
@@ -6,11 +7,15 @@ import { cn } from "../../lib/utils";
 import { parseExcerpt, type ExcerptBlock, type ExcerptTableCell } from "../../lib/excerpt-text";
 import { DataTable, type DataTableColumn } from "./data-table";
 
+const highlightLabels = sourceTableHighlightLabels();
+
 export interface ExcerptContentProps {
   /** 抜粋・chunk の本文（HTML の表・`<br>` を含んでよい。HTML として注入しない）。 */
   text: string;
-  /** 元HTMLのcodepoint範囲。対応するセル全体を強調する。 */
+  /** 元文字列のcodepoint範囲。対応するセル全体を強調する。 */
   highlights?: readonly [number, number][];
+  /** 解析済みの表だけ縦線表現も読み取る。 */
+  contentKind?: "text" | "table";
   /** 外枠の追加 class（文字の大きさ・色は呼び出し側）。 */
   className?: string;
   /** 表の読み上げの名前。 */
@@ -25,19 +30,24 @@ export interface ExcerptContentProps {
  * 3 行に畳む表示は {@link excerptPlainText}（表は「セル | セル」の行）を使う。本文の言語の `lang`（#3335）は本文の段落・
  * 表の題・セルにだけ付け、表の読み上げの名前（`tableLabel`。部品の文言）は画面の言語のまま（#3349）。
  */
-export function ExcerptContent({ text, highlights, className, tableLabel = "抜粋の表", lang, testId }: ExcerptContentProps) {
+export function ExcerptContent({ text, highlights, contentKind, className, tableLabel = "抜粋の表", lang, testId }: ExcerptContentProps) {
   const validHighlights = useMemo(() => {
     const length = Array.from(text).length;
     return highlights?.filter(([start,end]) => Number.isInteger(start) && Number.isInteger(end) && 0 <= start && start < end && end <= length);
   }, [text, highlights]);
-  const blocks = useMemo(() => parseExcerpt(text, {trackSourceRanges: Boolean(validHighlights?.length)}), [text, validHighlights]);
+  const blocks = useMemo(() => {
+    const parsed=parseExcerpt(text, {trackSourceRanges:Boolean(validHighlights?.length),tableText:contentKind==="table"});
+    return contentKind==="table" && !parsed.some(block=>block.kind==="table") ? [{kind:"text" as const,text}] : parsed;
+  }, [text, validHighlights, contentKind]);
+  const table = blocks.some(block=>block.kind==="table");
   const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
   return (
     <div className={cn("min-w-0 space-y-2", className)} data-testid={testId}>
+      {contentKind==="table" && validHighlights?.length ? <p className="text-xs text-fg-muted">{table ? highlightLabels.cells : highlightLabels.text}</p> : null}
       {blocks.map((block, index) =>
         block.kind === "text" ? (
           <p key={index} className="whitespace-pre-wrap break-words" lang={contentLang}>
-            {block.text}
+            {contentKind==="table" && block.text===text ? <CodepointHighlight text={block.text} ranges={validHighlights ?? []}/> : block.text}
           </p>
         ) : (
           <ExcerptTable key={index} block={block} label={tableLabel} lang={contentLang} highlights={validHighlights} />
