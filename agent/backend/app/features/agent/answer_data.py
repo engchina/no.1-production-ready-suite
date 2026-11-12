@@ -10,10 +10,13 @@ from dataclasses import dataclass, field
 from numbers import Number
 from typing import Any
 
+from .answer_data_projection import TableProjectionError, selected_positions
 from .answer_data_tables import BoundCell, ReferenceTableError, render_reference_tables
 
 _REFERENCE = re.compile(
-    r"\[\[(cell|quantity|table):([a-f0-9]{24}|T[1-9]\d*(?::R[1-9]\d*:C[1-9]\d*)?)\]\]"
+    r"\[\[(cell|quantity|table):((?:[a-f0-9]{24}|T[1-9]\d*)"
+    r"(?::R[1-9]\d*:C[1-9]\d*|:rows=[^:\]\r\n]*:cols=[^:\]\r\n]*"
+    r"(?::layout=[^:\]\r\n]*)?)?)\]\]"
 )
 REGISTRY_KEY = "_answer_data_references"
 _JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\Z")
@@ -21,13 +24,15 @@ _NUMBER = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)*(?![\w])")
 
 DATA_INSTRUCTIONS = (
     "## Step 1: 取得した表を参照する\n"
-    "answer_data.table を単独行に置くと全行・全列を表示します。"
-    "行・列を選ぶ表は、各セルを cells または quantities の参照だけで構成してください。"
-    "同じ表示行は同じ結果の同じ行、同じ表示列は同じ元列に対応させます。"
-    "見出しには元列名と単位を表示します。\n"
+    "全行・全列はanswer_data.tableを単独行に置いて表示します。"
+    "一部の行・列は [[table:T1:rows=1-8:cols=1,2,4]] の投影参照で選びます。"
+    "行・列は1始まりで、*は全件、昇順の範囲やカンマ列挙は指定順に表示します。"
+    "列番号はcolumn_refsを使います。"
+    "項目を縦に並べる表は [[table:T1:rows=1:cols=2-4:layout=vertical]] と指定します。"
+    "値・見出し・項目名を手書きせず表の参照を優先してください。\n"
     "## Step 2: 本文の値を参照する\n"
-    "quantities がある値は [[quantity:T1:R2:C3]] 形式で数値と単位を表示します。"
-    "それ以外は cells の [[cell:T1:R2:C3]] 形式を使ってください。"
+    "quantitiesがある値は [[quantity:T1:R2:C3]] で数値と単位を表示します。"
+    "それ以外はcellsの [[cell:T1:R2:C3]] を使ってください。"
 )
 
 
@@ -141,6 +146,7 @@ def model_data_references(
     references: dict[str, Any] = {
         "table": f"[[table:T{number}]]" if number is not None else "[[table:" + key + "]]",
         "columns": columns,
+        "column_refs": {column: index + 1 for index, column in enumerate(columns)},
         "row_count": len(rows),
         "cells": [
             {
@@ -276,6 +282,56 @@ class DataIndex:
         table, row, column = self.positions[key]
         return BoundCell(table, row, column, value, self.units.get(key))
 
+    def _render_table(self, alias: str) -> str:
+        base, projection, selectors = alias.partition(":rows=")
+        key = self.aliases.get(base, base)
+        if key not in self.tables:
+            raise DataReferenceError("この実行に無い表の参照です。")
+        columns, rows = self.tables[key]
+        headers = self.headers.get(key, columns)
+        if not projection:
+            return _table(columns, rows, headers=headers)
+        if selectors.count(":cols=") != 1:
+            raise DataReferenceError("表の投影はrowsとcolsを指定してください。")
+        row_spec, column_spec = selectors.split(":cols=")
+        column_spec, explicit_layout, layout = column_spec.partition(":layout=")
+        if not explicit_layout:
+            layout = "horizontal"
+        layout = layout.strip()
+        if layout not in {"horizontal", "vertical"}:
+            raise DataReferenceError("表のlayoutはhorizontalかverticalを指定してください。")
+        try:
+            selected_rows = selected_positions(row_spec, len(rows))
+            selected_columns = selected_positions(column_spec, len(columns))
+        except TableProjectionError as exc:
+            raise DataReferenceError(str(exc)) from exc
+        if layout == "vertical":
+            if not selected_rows or not selected_columns:
+                return "取得した行はありません。"
+            value_keys = [f"value{index}" for index in range(len(selected_rows))]
+            vertical_rows = [
+                {
+                    "label": headers[column],
+                    **{
+                        value_key: rows[row].get(columns[column])
+                        for value_key, row in zip(value_keys, selected_rows, strict=True)
+                    },
+                }
+                for column in selected_columns
+            ]
+            return _table(
+                ["label", *value_keys],
+                vertical_rows,
+                headers=["項目", "値"]
+                if len(selected_rows) == 1
+                else ["項目", *(f"R{row + 1}" for row in selected_rows)],
+            )
+        return _table(
+            [columns[index] for index in selected_columns],
+            [rows[index] for index in selected_rows],
+            headers=[headers[index] for index in selected_columns],
+        )
+
     def render(self, answer: str) -> str:
         remainder = _REFERENCE.sub("", answer)
         if any(prefix in remainder for prefix in ("[[cell:", "[[quantity:", "[[table:")):
@@ -293,10 +349,8 @@ class DataIndex:
 
         def replace(marker: re.Match[str]) -> str:
             kind, alias = marker.groups()
-            key = self.aliases.get(alias, alias)
-            if kind == "table" and key in self.tables:
-                columns, rows = self.tables[key]
-                return _table(columns, rows, headers=self.headers.get(key))
+            if kind == "table":
+                return self._render_table(alias)
             key, value = self._cell(marker)
             rendered = _markdown(value)
             return (
