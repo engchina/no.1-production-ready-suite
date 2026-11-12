@@ -18,25 +18,35 @@ from app.features.agent.builtin_runtime import _OciResponses
 
 
 @pytest.mark.asyncio
-async def test_stream_span_lives_until_consumption_and_records_known_usage() -> None:
+async def test_stream_span_lives_until_provider_consumption_and_records_known_usage() -> None:
+    provider_states: list[int] = []
+
     class Stream:
         def __init__(self) -> None:
             self.count = 0
+            self.closed = False
 
         async def __anext__(self) -> Any:
+            # SDK への返却前に受信を終える。物理的な受信中は span が開いている。
+            provider_states.append(len(summary.spans))
             if self.count:
                 raise StopAsyncIteration
             self.count += 1
             return SimpleNamespace(
-                response=SimpleNamespace(usage={"input_tokens": 12, "output_tokens": 5})
+                type="response.completed",
+                response=SimpleNamespace(
+                    status="completed", usage={"input_tokens": 12, "output_tokens": 5}
+                ),
             )
 
         async def close(self) -> None:
-            pass
+            self.closed = True
+
+    provider = Stream()
 
     class Client:
         async def create(self, **kwargs: Any) -> Any:
-            return Stream()
+            return provider
 
     configure_tracing(TracingSettings(), service_name="synthetic")
     try:
@@ -44,12 +54,16 @@ async def test_stream_span_lives_until_consumption_and_records_known_usage() -> 
             stream = await _OciResponses(Client()).create(
                 model="model-a", stream=True, input="private-payload"
             )
-            assert not summary.spans
+            assert provider_states == [0, 0]
+            assert provider.closed
+            assert len(summary.spans) == 1
             async for _ in stream:
-                assert not summary.spans
+                # 検証済みのイベントの SDK への再生を、追加のモデル呼び出しに数えない。
+                assert len(summary.spans) == 1
             assert len(summary.spans) == 1
         child = next(span for span in summary.spans if span.operation_name == "gen_ai.chat")
         assert child.parent_span_id == summary.root_span_id
+        assert child.status == "done"
         assert child.attributes["pr.gen_ai.purpose"] == "agent.choose_action"
         assert child.attributes["gen_ai.usage.input_tokens"] == 12
         assert child.attributes["gen_ai.usage.output_tokens"] == 5
@@ -103,7 +117,9 @@ async def test_streamed_model_call_takes_the_turn_kind_from_the_completed_event(
             self.sent = True
             return SimpleNamespace(
                 type="response.completed",
-                response=SimpleNamespace(output=[{"type": "message"}], usage=None),
+                response=SimpleNamespace(
+                    status="completed", output=[{"type": "message"}], usage=None
+                ),
             )
 
         async def close(self) -> None:

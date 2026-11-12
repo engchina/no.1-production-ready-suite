@@ -336,9 +336,7 @@ class OciEnterpriseAiDirectClient:
                     payload,
                     connection=connection,
                     path=request_path,
-                    timeout_seconds=timeout_seconds
-                    if strict
-                    else max(0.001, deadline - time.monotonic()),
+                    timeout_seconds=timeout_seconds,
                     max_retries=max_retries,
                     model_id=model_id,
                     deadline=None if strict else deadline,

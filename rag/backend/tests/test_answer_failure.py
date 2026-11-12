@@ -95,9 +95,11 @@ def test_incomplete_failure_has_the_reason_specific_message_and_details() -> Non
     assert failure.error_type == ANSWER_INCOMPLETE_ERROR_TYPE
     assert failure.reason == "max_output_tokens"
     assert failure.stage == "回答の作成"
-    assert "回答が長くなり" in failure.message
-    assert "出力の上限を広げ、推論の量を下げて送り直しても" in failure.message
-    assert "質問を分けて" in failure.message
+    assert "回答が出力の上限に達し" in failure.message
+    assert "3回の試行で完了できませんでした" in failure.message
+    assert "登録された出力容量" in failure.message
+    assert "推論の量を下げ" not in failure.message
+    assert "質問を分けるか対象を絞って" in failure.message
     # 技術的な値は「詳細」の文だけに入れる（messaging.md §10.3）。
     assert "tokens（うち推論" not in failure.message
     assert failure.detail is not None
@@ -134,7 +136,7 @@ def test_stream_returns_the_reason_and_details_and_logs_the_reason(
     assert event["reason"] == "max_output_tokens"
     assert event["stage"] == "回答の作成"
     assert event["trace_id"]
-    assert "回答が長くなり" in str(event["message"])
+    assert "回答が出力の上限に達し" in str(event["message"])
     assert search_route.STREAM_ERROR_MESSAGE not in str(event["message"])
     assert "出力の上限=2000 tokens" in str(event["detail"])
     # journal に理由が残る（#2023）。
@@ -152,7 +154,7 @@ def test_rest_search_returns_502_with_the_reason_and_mcp_gets_the_code(
 
     assert response.status_code == 502
     [message] = response.json()["error_messages"]
-    assert "回答が長くなり" in message
+    assert "回答が出力の上限に達し" in message
     # MCP の rag_search（同じ `_run_search_with_timeout`）は、共通の error code の
     # ツールのエラーになる。
     converted = mcp_error_from_exception(search_route.AnswerIncompleteHTTPError(message))
@@ -165,7 +167,7 @@ def test_rest_search_returns_502_with_the_reason_and_mcp_gets_the_code(
 
 
 def test_chat_error_message_names_the_reason() -> None:
-    assert "回答が長くなり" in chat_route._chat_error_message(_answer_failure())
+    assert "回答が出力の上限に達し" in chat_route._chat_error_message(_answer_failure())
     assert (
         chat_route._chat_error_message(RuntimeError("secret-host"))
         == search_route.STREAM_ERROR_MESSAGE
@@ -197,7 +199,7 @@ async def test_evaluation_case_error_keeps_the_reason(
     assert result.error_type == expected_type
     if raises_incomplete:
         assert result.error_message is not None
-        assert "回答が長くなり" in result.error_message
+        assert "回答が出力の上限に達し" in result.error_message
         assert result.error_stage == "回答の作成"
     else:
         assert result.error_message == EVALUATION_CASE_ERROR_MESSAGE

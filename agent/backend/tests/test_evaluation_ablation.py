@@ -254,3 +254,30 @@ def test_ablation_jobs_are_not_the_previous_result(agent: None) -> None:
     assert evaluation_store.with_previous(later).previous_job_id is None
     assert evaluation_store.with_previous(_completed()).previous_job_id == later.id
     assert ablated.disabled_aids == ["tool_grounding"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_model_call_comparison_does_not_require_complete_token_usage(
+    agent: None, legacy: bool
+) -> None:
+    from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
+    from app.features.agent.runtime import RunState, RunStatus, RunUsage
+
+    del agent
+    job = _completed()
+    job.results[0].run_id = "run-known-calls"
+    run = RunState(
+        id="run-known-calls",
+        goal="合成の比較",
+        agent_id=AGENT_ID,
+        runtime_id="builtin",
+        status=RunStatus.COMPLETED,
+        metadata={} if legacy else {RUN_BUDGET_METADATA_KEY: {"consumed": {"model_calls": 4}}},
+        usage=RunUsage(requests=2, input_tokens=10, output_tokens=20, total_tokens=30)
+        if legacy
+        else None,
+    )
+    report = ablation_report(job, [], lambda _: run)
+    metrics = report["base"]["metrics"]
+    assert metrics["model_calls"]["total"] == (2 if legacy else 4)
+    assert metrics["tokens"]["total"] == (30 if legacy else None)
