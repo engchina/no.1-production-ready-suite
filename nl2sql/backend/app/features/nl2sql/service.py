@@ -181,6 +181,7 @@ from .incremental_store import (
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
     OracleIncrementalNl2SqlRepository,
+    SchemaRefreshActiveJobConflict,
     SchemaRefreshExecutionLost,
     VersionedTtlCache,
     _profile_matches_query,
@@ -6445,6 +6446,7 @@ class Nl2SqlService:
         mode: SchemaRefreshMode | str = SchemaRefreshMode.FULL,
         source: str = "manual",
         target_objects: Sequence[SchemaRefreshTargetObject] | None = None,
+        allow_coalesce: bool = True,
     ) -> SchemaRefreshJob:
         repository = self._refresh_job_repository
         normalized_mode = SchemaRefreshMode(mode)
@@ -6460,7 +6462,13 @@ class Nl2SqlService:
         )
         try:
             with self._schema_refresh_submit_lock:
-                job = repository.submit_refresh_job(candidate)
+                job = (
+                    repository.submit_refresh_job(candidate)
+                    if allow_coalesce
+                    else repository.submit_refresh_job(candidate, allow_coalesce=False)
+                )
+        except SchemaRefreshActiveJobConflict:
+            raise
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="schema_refresh_submit",
