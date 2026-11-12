@@ -958,3 +958,50 @@ async def test_separate_sql_matches_native_tied_text_ranks_and_fusion() -> None:
     assert [h.score for h in separate_hits] == pytest.approx(
         [h.score for h in native_hits], abs=1e-6
     )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_separate_text_scores_match_direct_contains_across_query_shapes() -> None:
+    """命中 view・結合・件数の制限で Oracle Text の元の分数を変えない(#4932)。"""
+    oracle = OracleClient(
+        get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_separate_sql"})
+    )
+    texts = [
+        "syntheticfirst syntheticsecond itema",
+        "syntheticsecond syntheticthird itemb",
+        "syntheticthird syntheticthird syntheticthird itemc",
+        "syntheticfirst syntheticthird syntheticfourth itemd",
+        "syntheticsecond syntheticfourth iteme",
+        "syntheticfirst syntheticfirst itemf",
+        "syntheticfourth itemg",
+        "syntheticfirst syntheticsecond syntheticthird syntheticfourth itemh",
+    ]
+    document_id = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-score-boundary-{uuid4().hex}.txt",
+        chunks=[
+            Chunk(text=text, index=i, start_offset=0, end_offset=len(text), metadata={})
+            for i, text in enumerate(texts)
+        ],
+    )
+    for expression in (
+        "{syntheticfirst} ACCUM {syntheticsecond} ACCUM "
+        "{syntheticthird} ACCUM {syntheticfourth}*0.5",
+        "{syntheticthird} ACCUM {syntheticsecond} ACCUM {syntheticfirst}*0.5",
+    ):
+        direct = await oracle._fetch_all(
+            """SELECT chunk_id, SCORE(1) / 100 AS score FROM rag_chunks
+               WHERE CONTAINS(search_text, :query, 1) > 0 AND document_id = :document_id
+               ORDER BY score DESC, chunk_index ASC, chunk_id ASC""",
+            {"query": expression, "document_id": document_id},
+        )
+        assert direct
+        for limit in (0, 3):
+            actual = await oracle._keyword_rows(
+                expression, top_k=limit, filters={"document_id": document_id}
+            )
+            expected = direct[: limit or None]
+            assert [row["chunk_id"] for row in actual] == [row["chunk_id"] for row in expected]
+            assert [row["score"] for row in actual] == pytest.approx(
+                [row["score"] for row in expected]
+            )

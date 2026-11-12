@@ -16041,7 +16041,7 @@ def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) ->
         """
         SELECT *
         FROM (
-            SELECT {select_list}
+            SELECT /*+ NO_MERGE(c) NO_PUSH_PRED(c) */ {select_list}
             FROM {hits_view}
             JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
@@ -16064,9 +16064,9 @@ def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) ->
 def _keyword_hits_view_sql(*, query_bind: str, where_sql: str) -> str:
     """Oracle Text の命中(chunk ごとに 1 行と ``SCORE(1)``)の view ``c``(#2137)。
 
-    ``ROWNUM`` で view を区切り(view の併合と条件の押し込みを止める)、Oracle Text の検索を
-    1 回だけ実行する。区切らないと、optimizer が文書の側から nested loop を組んで検索を文書の
-    数だけ繰り返し、毎回 DB 全体の命中を返す(文書 153 件・命中 3 万件で 1 本 20 秒)。
+    呼出し元の NO_MERGE / NO_PUSH_PRED で view の併合と結合条件の押し込みを止め、全文検索を
+    1 回だけ実行する。ROWNUM を投影すると同じ式・索引でも SCORE が変わるため使わない(#4932)。
+    境界が無いと、文書ごとの nested loop の内側で全文検索を繰り返す(#2137)。
     ナレッジベース・文書・chunk_set の条件は、この命中を絞る側(``where_sql``)で使う。
     読む列は条件と並びに要る列だけ(``metadata_json`` は条件が使うときだけ)。
     """
@@ -16075,7 +16075,7 @@ def _keyword_hits_view_sql(*, query_bind: str, where_sql: str) -> str:
         """(
             SELECT hit.chunk_id, hit.document_id, hit.chunk_index,
                    hit.chunk_set_id{metadata_column},
-                   SCORE(1) AS text_score, ROWNUM AS hit_number
+                   SCORE(1) AS text_score
             FROM rag_chunks hit
             WHERE CONTAINS(hit.search_text, :{query_bind}, 1) > 0
         ) c""",

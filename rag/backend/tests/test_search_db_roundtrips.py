@@ -687,7 +687,7 @@ def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -
 
 
 def test_keyword_search_runs_oracle_text_once_before_scope_conditions() -> None:
-    """Oracle Text の命中を ROWNUM で区切った view で 1 回だけ取り、外で範囲の条件を使う(#2137)。
+    """Oracle Text の命中を hint で区切った view で 1 回だけ取り、外で範囲の条件を使う。
 
     区切らないと optimizer が文書ごとの nested loop の内側で Oracle Text を引き、検索を文書の数だけ
     繰り返す。本文・埋め込みは命中の view で読まない。
@@ -700,7 +700,8 @@ def test_keyword_search_runs_oracle_text_once_before_scope_conditions() -> None:
     )
 
     hits_view = statement.split("FROM rag_chunks hit", 1)[0]
-    assert "ROWNUM AS hit_number" in hits_view
+    assert "ROWNUM AS hit_number" not in hits_view
+    assert "NO_MERGE(c) NO_PUSH_PRED(c)" in statement
     assert "SCORE(1) AS text_score" in hits_view
     assert "chunk_text" not in statement and "embedding" not in statement
     assert "metadata_json" not in hits_view
