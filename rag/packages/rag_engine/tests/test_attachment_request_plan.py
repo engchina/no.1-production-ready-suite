@@ -15,8 +15,8 @@ from test_grounded_answer import FakeModel, context, ids, record
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.generation.grounded import _request_plan_errors
+from rag_engine.models.llm import GroundedDraft
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 
 QUESTION = "添付の作業表の作業費は合計いくらですか？"
@@ -77,12 +77,9 @@ def test_attachment_spans_are_marked_and_skip_the_target_matching():
     )
     errors = _request_plan_errors(draft, spans)
     assert errors == [f"Q1: {labels[RULE]} の対象の照合は1件必要です。"]
-    rows_span = next(span for span in spans if span["text"] == ROWS)
-    rows_item = GroundedItem(kind="rule", request_id="Q1", text=ROWS_ITEM, citations=[GroundedCitation(evidence_id=labels[ROWS])])
-    assert not _outside_request_plan(rows_item, rows_span, draft, spans)
 
 
-def test_an_explicitly_unrelated_evidence_is_still_excluded():
+def test_unrelated_prediction_keeps_original_source():
     labels = ids(_ctx(), QUESTION)
     scope = [
         {"evidence_id": labels[ROWS], "target": "作業表", "relation": "direct", "link_quote": ""},
@@ -94,10 +91,10 @@ def test_an_explicitly_unrelated_evidence_is_still_excluded():
     result, _model = _run([unsettled, unsettled])
 
     assert ROWS_ITEM in result.answer_text
-    assert RULE_ITEM not in result.answer_text
+    assert RULE_ITEM in result.answer_text
 
 
-def test_a_settled_plan_still_excludes_evidence_outside_it():
+def test_plan_selection_does_not_exclude_cited_source():
     labels = ids(_ctx(), QUESTION)
     settled = _draft(
         labels,
@@ -111,4 +108,4 @@ def test_a_settled_plan_still_excludes_evidence_outside_it():
 
     assert len([schema for schema, _prompt in model.prompts if schema == "GroundedDraftWire"]) == 1
     assert ROWS_ITEM in result.answer_text
-    assert RULE_ITEM not in result.answer_text
+    assert RULE_ITEM in result.answer_text

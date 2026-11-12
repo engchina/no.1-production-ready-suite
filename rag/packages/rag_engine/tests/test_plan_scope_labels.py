@@ -1,11 +1,6 @@
-"""根拠計画の evidence_scope が照合した根拠を、evidence_ids に無くても計画の根拠にする（#3827）。
+"""モデルの根拠計画は、実在する引用を拒否する権限を持たない。"""
 
-schema の evidence_ids は「direct の根拠と、原文に関係が明記された前提・後続操作の根拠」で、evidence_scope の照合と
-同じ集合を指す。保存した実応答と同じ形（計画だけを立て直した計画の evidence_ids に根拠でない ID だけが入り、
-evidence_scope は引いた根拠を direct と照合した）を匿名の文で作る。unrelated と食い違う判断は今までどおり許可しない。
-"""
-
-from rag_engine.generation.grounded import _outside_request_plan, _unknown_plan_label_errors
+from rag_engine.generation.grounded import _unknown_plan_label_errors, verify
 from rag_engine.models.llm import GroundedDraft, GroundedItem
 
 OPEN = "メニューから設定を選び、設定タブの登録画面を開きます。"
@@ -42,27 +37,28 @@ def plan_draft(evidence_ids, scopes, items):
 def outside(draft, label):
     span = next(span for span in SPANS if span["label"] == label)
     item = GroundedItem.model_validate(cited(span["text"], label))
-    return _outside_request_plan(item, span, draft, SPANS)
+    checked, _ = verify("設定の手順", draft.model_copy(update={"items": [item]}), SPANS)
+    return not checked
 
 
-def test_a_linked_label_needs_the_relation_quote_the_code_cut_from_its_range():
+def test_a_real_citation_is_kept_with_or_without_a_predicted_link_quote():
     found = plan_draft(["E1"], [scope("E1"), scope("E3", "linked", AFTER)], [cited(AFTER, "E3")])
     assert not outside(found, "E3")
     empty = plan_draft(["E1"], [scope("E1"), scope("E3", "linked")], [cited(AFTER, "E3")])
-    assert outside(empty, "E3")
+    assert not outside(empty, "E3")
 
 
-def test_conflicting_scope_decisions_still_do_not_authorize_a_label():
+def test_conflicting_scope_predictions_do_not_reject_real_citations():
     for relations in [("direct", "unrelated"), ("direct", "linked")]:
         scopes = [scope("E1"), *(scope("E2", relation, AFTER if relation == "linked" else "") for relation in relations)]
         for evidence_ids in (["E1"], ["E1", "E2"]):
             draft = plan_draft(evidence_ids, scopes, [cited(STEPS, "E2")])
-            assert outside(draft, "E2"), (relations, evidence_ids)
+            assert not outside(draft, "E2"), (relations, evidence_ids)
 
 
-def test_a_scope_row_that_names_no_sent_evidence_authorizes_nothing():
+def test_unknown_plan_rows_do_not_reject_other_real_citations():
     draft = plan_draft(["E1"], [scope("E1"), scope(GUIDE_IDS[0])], [cited(STEPS, "E2")])
-    assert outside(draft, "E2") and outside(draft, "E3")
+    assert not outside(draft, "E2") and not outside(draft, "E3")
     assert not outside(draft, "E1")
 
 

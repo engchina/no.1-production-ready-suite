@@ -81,11 +81,6 @@ class _FakeEnterpriseAiClient:
         max_retries: int | None = None,
         response_format: object | None = None,
     ) -> str:
-        if (
-            isinstance(response_format, dict)
-            and response_format.get("name") == "ScopeInterpretation"
-        ):
-            return '{"related_scope":null}'
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         self.calls += 1
         if self.fail:
@@ -236,17 +231,6 @@ def test_direct_engine_ignores_profile_select_ai_model_and_region(
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        if body.get("text", {}).get("format", {}).get("name") == "ScopeInterpretation":
-            return httpx.Response(
-                200,
-                json={
-                    "output_text": json.dumps(
-                        {
-                            "related_scope": None,
-                        }
-                    )
-                },
-            )
         seen.append((request.url.host, str(body["model"])))
         return httpx.Response(200, json={"output_text": _DIRECT_SQL})
 

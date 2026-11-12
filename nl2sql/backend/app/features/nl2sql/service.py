@@ -162,12 +162,6 @@ from .enterprise_ai_client import (
     enterprise_ai_configuration_failure_message,
     find_enterprise_ai_error,
 )
-from .identifier_binding import (
-    IdentifierBindingConflict,
-    IdentifierCheck,
-    binding_conflicts,
-    identifier_checks,
-)
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
     SCHEMA_REFRESH_ERRORS,
@@ -470,12 +464,6 @@ from .oracle_adapter import (
     select_ai_object_list_entry,
 )
 from .oracle_dialect import OracleConversion, normalize_generated_grouping
-from .query_scope import (
-    QueryScopeViolation,
-    RelatedRecordScope,
-    interpret_query_scope,
-    related_scope_violations,
-)
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
     QUESTION_TO_SQL_PROMPT,
@@ -844,11 +832,6 @@ def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
     DB 構造の未取得（SCHEMA_CATALOG_EMPTY）は、例外の文がそのまま利用者向けの文と次の操作なので
     1 文目に出す。それ以外は例外の文（ORA-… など）を詳細に分ける。
     """
-    if isinstance(exc, IdentifierBindingConflict):
-        return (
-            "指定値の対象列を確認できません。データが無いと判断せず、識別子の列を確認してください。",
-            _job_failure_detail(exc),
-        )
     if isinstance(exc, SchemaCatalogEmptyError):
         return str(exc), None
     scope_changed = _find_business_scope_changed(exc)
@@ -878,10 +861,6 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     """
     if isinstance(exc, SqlGenerationValidationError):
         return "SQL_GENERATION_VALIDATION_FAILED"
-    if isinstance(exc, IdentifierBindingConflict):
-        return "IDENTIFIER_BINDING_UNCONFIRMED"
-    if isinstance(exc, QueryScopeViolation):
-        return "SQL_SCOPE_MISMATCH"
     if _find_business_scope_changed(exc) is not None:
         # 時間をおいても直らない（業務定義の再検証と公開が要る）ことを MCP の呼び出し側
         # （外部の Agent）が error_code で判断し、再試行を繰り返さないようにする（#1827）。
@@ -24986,32 +24965,6 @@ class Nl2SqlService:
             sql_requirement=sql_requirement,
         )
 
-    def _interpret_query_scope(
-        self,
-        question: str,
-        profile: Nl2SqlProfile,
-        allowed: AllowedObjects,
-        *,
-        catalog: SchemaCatalog | None = None,
-        **kwargs: Any,
-    ) -> list[RelatedRecordScope]:
-        if not self._enterprise_ai_client.is_configured():
-            return []
-        from .sql_requirement import build_requirement_context
-
-        context = build_requirement_context(
-            question=question,
-            profile=profile,
-            catalog_tables=(catalog or self._generation_schema_catalog(profile, allowed)).tables,
-            allowed=allowed,
-            ontology=None,
-            view=None,
-            today=date.today(),
-        )
-        return interpret_query_scope(
-            self._enterprise_ai_client, question=question, context=context, **kwargs
-        )
-
     def _generate_sql(
         self,
         engine: Nl2SqlEngine,
@@ -25036,7 +24989,6 @@ class Nl2SqlService:
         時間帯）の `CURRENT_DATE` / `CURRENT_TIMESTAMP` にそろえる（#3265）。ADB の `SYSDATE` は
         UTC のため、日本時間の 0〜9 時に「今日」が 1 日ずれる。画面・履歴・実行の SQL は同じ。
         """
-        contracts: list[RelatedRecordScope] | None = None
         feedback: dict[str, Any] | None = None
         rejected_sql = ""
         for attempt in range(2):
@@ -25056,7 +25008,6 @@ class Nl2SqlService:
                 engine_timings=engine_timings,
                 sql_requirement=sql_requirement,
                 generation_feedback=feedback,
-                scope_contracts=contracts,
             )
             session_sql = use_session_current_datetime(generated.generated_sql)
             if session_sql != generated.generated_sql:
@@ -25072,18 +25023,7 @@ class Nl2SqlService:
                     }
                     generated.generated_sql = normalized
 
-            if contracts is None:
-                contracts = [
-                    RelatedRecordScope.model_validate(value)
-                    for value in generated.engine_meta.get("related_record_scopes", [])
-                ]
-            findings = (
-                related_scope_violations(
-                    generated.generated_sql, contracts, owner=self._current_schema_owner()
-                )
-                if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
-                else []
-            )
+            findings: list[str] = []
             if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                 semantic = parse_oracle_sql(generated.generated_sql)
                 findings.extend(
@@ -25099,62 +25039,14 @@ class Nl2SqlService:
                             owner=self._current_schema_owner(),
                         )
                     )
-            if (
-                generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
-                and self._use_oracle_runtime()
-                and generated.schema_catalog
-                and not findings
-            ):
-                source_question = (
-                    sql_requirement.original_question if sql_requirement else ""
-                ) or question
-                checks = identifier_checks(
-                    generated.generated_sql,
-                    generated.schema_catalog.tables,
-                    question=source_question,
-                    owner=self._current_schema_owner(),
-                    allowed=allowed,
-                    explicit_columns=[
-                        column
-                        for item in sql_requirement.items
-                        if item.status == "answered"
-                        for column in item.columns
-                    ]
-                    if sql_requirement
-                    else [],
-                )
-
-                def probe(check: IdentifierCheck) -> tuple[bool, bool]:
-                    result = self._oracle_adapter.execute_select(
-                        check.sql, 1, scalar_binds={"lookup_value": check.value}
-                    )
-                    if not result.rows or not {"COLUMN_HIT", "KEY_HIT"} <= result.rows[0].keys():
-                        raise IdentifierBindingConflict("識別子の対象列を検証できません。")
-                    return bool(result.rows[0]["COLUMN_HIT"]), bool(result.rows[0]["KEY_HIT"])
-
-                identifier_findings = binding_conflicts(checks, probe)
-                generated.engine_meta["identifier_bindings_checked"] = len(checks)
-                if identifier_findings:
-                    raise IdentifierBindingConflict(" / ".join(identifier_findings))
             if not findings:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
                     generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
-                if contracts and generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
-                    generated.engine_meta = {
-                        **generated.engine_meta,
-                        "related_scope_checked": True,
-                        "related_record_scopes": [scope.model_dump() for scope in contracts],
-                        "scope_generation_attempts": attempt + 1,
-                    }
-                    if rejected_sql:
-                        generated.engine_meta["scope_rejected_sql"] = rejected_sql
                 return generated
             rejected_sql = generated.generated_sql
             feedback = {"rejected_sql": rejected_sql, "violations": findings}
-        if any(not finding.startswith("RELATED_SCOPE_ANCHOR_RESTRICTION:") for finding in findings):
-            raise SqlGenerationValidationError(" / ".join(findings))
-        raise QueryScopeViolation("SQL_SCOPE_MISMATCH: " + " / ".join(findings))
+        raise SqlGenerationValidationError(" / ".join(findings))
 
     def _generate_sql_with_engine(
         self,
@@ -25174,7 +25066,6 @@ class Nl2SqlService:
         engine_timings: list[dict[str, Any]] | None = None,
         sql_requirement: SqlRequirementSpec | None = None,
         generation_feedback: dict[str, Any] | None = None,
-        scope_contracts: list[RelatedRecordScope] | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
@@ -25333,7 +25224,6 @@ class Nl2SqlService:
                     engine_timings=engine_timings,
                     sql_requirement=sql_requirement,
                     generation_feedback=generation_feedback,
-                    scope_contracts=scope_contracts,
                 )
                 generated.engine_meta = _engine_meta_with_timings(
                     generated.engine_meta,
@@ -25607,7 +25497,6 @@ class Nl2SqlService:
         engine_timings: list[dict[str, Any]] | None = None,
         sql_requirement: SqlRequirementSpec | None = None,
         generation_feedback: dict[str, Any] | None = None,
-        scope_contracts: list[RelatedRecordScope] | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         context = self._enterprise_ai_schema_context(
@@ -25628,20 +25517,6 @@ class Nl2SqlService:
         if sql_requirement is not None:
             # 直接の LLM: 回答前の確認の要件を、必ず守る条件として prompt に入れる（#1439）。
             context = "\n".join([context, sql_requirement.prompt_block()])
-        if scope_contracts is None:
-            scope_contracts = self._interpret_query_scope(
-                question,
-                profile,
-                allowed,
-                catalog=catalog,
-                timeout_seconds=runtime_timeout_seconds,
-                max_retries=runtime_max_retries,
-            )
-        meta["related_record_scopes"] = [scope.model_dump() for scope in scope_contracts]
-        if scope_contracts:
-            context += "\nrelated_record_scopes:\n" + json.dumps(
-                [scope.model_dump() for scope in scope_contracts], ensure_ascii=False
-            )
         if generation_feedback is not None:
             context += "\nsql_validation_feedback:\n" + json.dumps(
                 generation_feedback, ensure_ascii=False

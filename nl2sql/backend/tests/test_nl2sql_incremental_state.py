@@ -246,11 +246,6 @@ class _FakeEnterpriseAiClient:
         max_retries: int | None = None,
         response_format: object | None = None,
     ) -> str:
-        if (
-            isinstance(response_format, dict)
-            and response_format.get("name") == "ScopeInterpretation"
-        ):
-            return '{"related_scope":null}'
         del timeout_seconds, max_output_tokens, max_retries
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         return self.text

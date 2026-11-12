@@ -199,11 +199,6 @@ class _FakeEnterpriseAiClient:
                 "max_retries": max_retries,
             }
         )
-        if (
-            isinstance(response_format, dict)
-            and response_format.get("name") == "ScopeInterpretation"
-        ):
-            return '{"related_scope":null}'
         return self.text
 
 
