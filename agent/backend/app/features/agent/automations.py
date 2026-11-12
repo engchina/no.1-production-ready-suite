@@ -492,7 +492,13 @@ async def run_scheduler() -> None:
             await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
             continue
         try:
-            fired = await asyncio.to_thread(scheduler_tick)
+            tick = asyncio.create_task(asyncio.to_thread(scheduler_tick))
+            try:
+                fired = await asyncio.shield(tick)
+            except asyncio.CancelledError:
+                # to_thread の取消だけでは DB の書き込みは止まらない。所有権の解放より先に待つ。
+                await asyncio.gather(tick, return_exceptions=True)
+                raise
             for item in fired:
                 if item.run_id:
                     _schedule_execution(runtime_repository.get_run(item.run_id))

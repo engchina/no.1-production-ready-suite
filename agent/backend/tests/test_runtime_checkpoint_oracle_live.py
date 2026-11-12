@@ -611,3 +611,42 @@ def test_audit_page_artifacts_are_scoped_and_accept_large_bind_in_oracle(
                         f"DELETE FROM {table} WHERE run_id = :run_id", {"run_id": run.id}
                     )  # nosec B608
             connection.commit()
+
+
+def test_backend_owner_excludes_second_connection_until_close(
+    checkpoint_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.features.agent import storage_owner
+
+    # テストの予約行だけを使い、同じ DB の稼働 backend の所有権へ触れない。
+    owner_key = checkpoint_key[:32]
+    monkeypatch.setattr(storage_owner, "OWNER_KEY", owner_key)
+    first, second = storage_owner.StorageOwner(), storage_owner.StorageOwner()
+    try:
+        first._acquire_oracle()
+        with pytest.raises(storage_owner.StorageAlreadyOwnedError):
+            second._acquire_oracle()
+        # 通常の Run は別接続で書ける（正常な head を lock していない）。
+        repository = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key + "-run")
+        run = repository.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="default"))
+        assert repository.get_run(run.id).status == RunStatus.QUEUED
+        # API が所有権を持ったまま、Run の表の DDL と通常の制御行の更新もできる。
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            cursor.execute("ALTER SESSION SET DDL_LOCK_TIMEOUT = 1")
+            cursor.execute("LOCK TABLE AGENT_RUNTIME_CHECKPOINTS IN EXCLUSIVE MODE NOWAIT")
+            cursor.execute(
+                "UPDATE AGENT_SCHEMA_OPERATIONS SET updated_at = SYSTIMESTAMP "
+                "WHERE operation_key = 'system_schema'"
+            )
+            connection.rollback()
+        first.close()
+        second._acquire_oracle()
+    finally:
+        first.close()
+        second.close()
+        _delete_key(checkpoint_key + "-run")
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM AGENT_SCHEMA_OPERATIONS WHERE operation_key = :key", key=owner_key
+            )
+            connection.commit()
