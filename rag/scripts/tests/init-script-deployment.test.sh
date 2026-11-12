@@ -846,4 +846,21 @@ done
 grep -Fq 'dnf_cmd install --setopt=install_weak_deps=False "${packages[@]}"' "${REPO_DIR}/init_script.sh" \
   || fail "推奨の package を入れずに dnf で入れない"
 
+# 検索方式の値の移行を先に実行し、失敗時は後続の設定読込へ進まない。
+(
+  case_dir="${TEST_TMP_DIR}/hybrid-settings-migration"
+  mkdir -p "${case_dir}"
+  export RAG_INIT_TEST_MODE=true
+  source "${REPO_DIR}/init_script.sh"
+  log() { :; }
+  run_as_service_user_in_dir() { printf '%s\n' "$2" >> "${case_dir}/commands"; }
+  migrate_saved_settings
+  head -n 1 "${case_dir}/commands" | grep -Fq 'hybrid_search_settings_migration --env-file .env --apply' \
+    || fail "検索方式の設定値を最初に移行していない"
+  : > "${case_dir}/commands"
+  run_as_service_user_in_dir() { printf '%s\n' "$2" >> "${case_dir}/commands"; return 1; }
+  if migrate_saved_settings; then fail "移行失敗後も続行した"; fi
+  test "$(wc -l < "${case_dir}/commands")" -eq 1 || fail "移行失敗後に他の設定を読み込んだ"
+)
+
 echo "rag init_script deployment behavior verified."

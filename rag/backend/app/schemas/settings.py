@@ -785,7 +785,9 @@ class AnsweringSettingsData(BaseModel):
     rerank_top_n: int = Field(default=60, ge=0, le=2000, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
-    hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
+    hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
+        "oracle_hybrid_index"
+    )
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     rerank_slot_ratio: tuple[int, int] = (7, 3)
@@ -812,7 +814,7 @@ class AnsweringSettingsUpdate(BaseModel):
     rerank_min_relevance_score: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False
     )
-    hybrid_search_backend: Literal["oracle_native", "sudachi"] | None = None
+    hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
     rrf_source_ratio: tuple[float, float] | None = None
     rerank_slot_ratio: tuple[int, int] | None = None

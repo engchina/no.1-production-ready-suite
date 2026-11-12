@@ -20,7 +20,8 @@ class SwitchingOracle(OracleClient):
     def __init__(self, *, switch_during_read: bool = True, fail_check: bool = False) -> None:
         super().__init__(
             Settings(
-                rag_hybrid_search_backend="oracle_native", rag_native_vector_exact_max_chunks=0
+                rag_hybrid_search_backend="oracle_hybrid_index",
+                rag_native_vector_exact_max_chunks=0,
             )
         )
         self.active_scope = OLD_SCOPE

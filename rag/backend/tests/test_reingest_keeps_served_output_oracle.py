@@ -121,7 +121,9 @@ async def test_recipe_checkpoints_are_cleared_only_for_that_recipe() -> None:
 @pytest.mark.usefixtures("oracle_db")
 async def test_native_search_finds_new_version_when_switch_commits_after_scope_resolve() -> None:
     """範囲を読んだ直後に切替が commit されても、対象の文書の根拠を返す（#4179）。"""
-    settings = get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_native"})
+    settings = get_settings().model_copy(
+        update={"rag_hybrid_search_backend": "oracle_hybrid_index"}
+    )
     client = OracleClient(settings)
     word = f"switchword{uuid4().hex[:10]}"
     kb = await client.create_knowledge_base(name=f"synthetic-switch-{uuid4().hex[:8]}")

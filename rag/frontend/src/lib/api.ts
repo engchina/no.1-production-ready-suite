@@ -2739,7 +2739,7 @@ export interface AnsweringSettingsData {
   rerank_top_n?: number;
   min_similarity?: number;
   rerank_min_relevance_score?: number;
-  hybrid_search_backend?: "oracle_native" | "sudachi";
+  hybrid_search_backend?: "oracle_hybrid_index" | "oracle_separate_sql";
   rrf_method_ratio?: [number, number];
   rrf_source_ratio?: [number, number];
   rerank_slot_ratio?: [number, number];

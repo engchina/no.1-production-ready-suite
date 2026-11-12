@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 
-HybridSearchBackend = Literal["oracle_native", "sudachi"]
+HybridSearchBackend = Literal["oracle_hybrid_index", "oracle_separate_sql"]
 NATIVE_HYBRID_INDEX = "RAG_CHUNKS_HYBRID_IDX"
 NATIVE_HYBRID_PREFERENCE = "RAG_CHUNKS_HYBRID_PREF"
 # SEARCH は filter_by を SQL の条件の文字列へ展開し、約 4,000 バイトを超えると DRG-50857 で失敗する

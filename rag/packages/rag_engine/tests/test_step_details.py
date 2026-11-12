@@ -98,7 +98,9 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         queries = steps["検索文をまとめ、検索語を作る"]
         self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
         self.assertIn("全文検索の入力", _fields(queries))
-        self.assertIn("内部の検索語・検索式はAPIから返されません", _fields(queries)["全文検索の入力"])
+        self.assertIn("共通の検索語処理で全文式を作り", _fields(queries)["全文検索の入力"])
+        self.assertTrue(any("Sudachi、利用できない場合は文字種分割" in line for line in _lines(queries)))
+        self.assertFalse(any("Sudachiは使用していません" in line for line in _lines(queries)))
         self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
 
     def test_classification_filter_is_shown_on_search_step_only_when_set(self):

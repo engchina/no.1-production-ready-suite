@@ -3791,22 +3791,23 @@ def test_rrf_ratios_reject_invalid_without_saving(
 
 def test_native_hybrid_default_and_settings_round_trip() -> None:
     settings = get_settings()
-    assert settings.rag_hybrid_search_backend == "oracle_native"
+    assert settings.rag_hybrid_search_backend == "oracle_hybrid_index"
     assert (
         client.get("/api/settings/answering").json()["data"]["hybrid_search_backend"]
-        == "oracle_native"
+        == "oracle_hybrid_index"
     )
-    for selected in ("sudachi", "oracle_native"):
+    for selected in ("oracle_separate_sql", "oracle_hybrid_index"):
         response = client.patch("/api/settings/answering", json={"hybrid_search_backend": selected})
         assert response.status_code == 200
         assert response.json()["data"]["hybrid_search_backend"] == selected
         assert _saved_env_value(settings, "RAG_HYBRID_SEARCH_BACKEND") == selected
-    assert (
-        client.patch(
-            "/api/settings/answering", json={"hybrid_search_backend": "unknown"}
-        ).status_code
-        == 422
-    )
+    for invalid in ("unknown", "oracle_native", "sudachi"):
+        assert (
+            client.patch(
+                "/api/settings/answering", json={"hybrid_search_backend": invalid}
+            ).status_code
+            == 422
+        )
 
 
 @pytest.mark.parametrize("values", [(0.0, 0.0), (0.3, 0.4), (1.0, 1.0)])

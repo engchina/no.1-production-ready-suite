@@ -46,7 +46,7 @@ def test_search_snapshots_match_actual_rankings_and_failures(monkeypatch, enable
     monkeypatch.setattr(store, "_vector_search", vector)
     monkeypatch.setattr(store, "_text_search", text)
     monkeypatch.setattr(store, "oracle_text_query", lambda query, **kwargs: "{" + query + "}")
-    config = replace(get_settings(environ={}, dotenv_path=None), hybrid_search_backend="sudachi", image_embedding_enabled=False)
+    config = replace(get_settings(environ={}, dotenv_path=None), hybrid_search_backend="oracle_separate_sql", image_embedding_enabled=False)
     recorder = PolicyRecorder(enabled)
     if not enabled:
         monkeypatch.setattr(store, "asdict", lambda *args: pytest.fail("disabled snapshot serialized"))

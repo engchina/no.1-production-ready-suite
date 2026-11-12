@@ -127,7 +127,7 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
-  hybrid_search_backend: "oracle_native",
+  hybrid_search_backend: "oracle_hybrid_index",
   rrf_method_ratio: [1, 1],
   rrf_source_ratio: [7, 3],
   runtime_terms_search_enabled: false,
@@ -410,6 +410,43 @@ for (const width of [1280, 375]) {
 }
 
 for (const theme of ["light", "dark"] as const) {
+  test(`検索実行方式は共通のSudachi処理を説明し新しい設定値を保存する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme, sidebarCollapsed: true }, version: 0 })), theme);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const section = page.locator("section", { has: page.getByRole("heading", { name: "検索の実行", exact: true }) });
+    const method = section.getByRole("combobox", { name: "検索の実行方式", exact: true });
+    const native = "Oracle Hybrid Vector Index（既定）";
+    const individual = "ベクトル検索＋Oracle Text個別実行";
+    await expect(method).toContainText(native);
+    await expect(section).toContainText("どちらもOracle AI Databaseを使用し、日本語の検索語は共通のSudachi処理で作成します。");
+    await expect(section).toContainText("違いは、使用する索引と検索の実行経路です。");
+    await expect(section).toContainText("別方式へ自動変更しません。");
+    await method.scrollIntoViewIfNeeded();
+    await method.click();
+    await expect(page.getByRole("option", { name: native, exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: individual, exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`hybrid-method-options-${theme}.png`) });
+    await page.getByRole("option", { name: individual, exact: true }).click();
+    await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({ hybrid_search_backend: "oracle_separate_sql" });
+    await page.reload();
+    await expect(method).toContainText(individual);
+    await method.click();
+    await page.getByRole("option", { name: native, exact: true }).click();
+    await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+    await expect.poll(() => saved.length).toBe(2);
+    expect(saved[1]).toMatchObject({ hybrid_search_backend: "oracle_hybrid_index" });
+    await page.reload();
+    await expect(method).toContainText(native);
+    await section.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`hybrid-method-description-${theme}.png`) });
+    await expectNoPageOverflow(page);
+  });
+
   test(`RRF の比重を検証して保存・再表示できる (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
     await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {theme, sidebarCollapsed: true},version: 0})), theme);
     await mockRetrievalCards(page);

@@ -44,7 +44,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rerank_top_n: settings.rerank_top_n ?? 60,
     min_similarity: settings.min_similarity ?? 0.2,
     rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.3,
-    hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
+    hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_hybrid_index",
     rrf_method_ratio: settings.rrf_method_ratio ?? [7, 3],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
@@ -165,10 +165,10 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         <SelectField id="answering-hybrid-backend" width="lg" disabled={disabled}
           label={t("settings.answering.hybridBackend")}
           helper={t("settings.answering.hybridBackendHint")}
-          value={form.hybrid_search_backend ?? "oracle_native"}
-          options={[{value:"oracle_native", label:t("settings.answering.hybridBackend.native")},
-            {value:"sudachi", label:t("settings.answering.hybridBackend.sudachi")}]}
-          onValueChange={(value: "oracle_native" | "sudachi") => update({hybrid_search_backend:value})} />
+          value={form.hybrid_search_backend ?? "oracle_hybrid_index"}
+          options={[{value:"oracle_hybrid_index", label:t("settings.answering.hybridBackend.hybridIndex")},
+            {value:"oracle_separate_sql", label:t("settings.answering.hybridBackend.separateSql")}]}
+          onValueChange={(value: "oracle_hybrid_index" | "oracle_separate_sql") => update({hybrid_search_backend:value})} />
         <TextField
           id="answering-min-similarity" type="number" min={0} max={1} step="any" width="sm"
           label={t("settings.answering.minSimilarity")}

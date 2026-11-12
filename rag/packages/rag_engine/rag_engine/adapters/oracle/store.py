@@ -823,7 +823,7 @@ def search_adb_hybrid_chunks(
     vector_only_queries は retrieval_queries のうち vector（image vector を含む）検索だけに使い、
     Oracle Text 検索には使わない検索文（HyDE の仮説文。#911）。融合の重みは検索文の位置で決まり変わらない。
     """
-    if settings.hybrid_search_backend == "oracle_native":
+    if settings.hybrid_search_backend == "oracle_hybrid_index":
         from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable
 
         raise NativeHybridUnavailable(

@@ -32,11 +32,12 @@ from app.config import Settings
 from app.schemas.search import SearchMode
 
 
-def test_default_and_reject_unknown_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("invalid", ["unknown", "oracle_native", "sudachi"])
+def test_default_and_reject_unknown_backend(monkeypatch: pytest.MonkeyPatch, invalid: str) -> None:
     monkeypatch.delenv("RAG_HYBRID_SEARCH_BACKEND", raising=False)
-    assert Settings().rag_hybrid_search_backend == "oracle_native"
+    assert Settings().rag_hybrid_search_backend == "oracle_hybrid_index"
     with pytest.raises(ValidationError):
-        Settings(rag_hybrid_search_backend="unknown")
+        Settings(rag_hybrid_search_backend=invalid)
 
 
 def test_native_request_scopes_before_ranking_and_does_not_infer_queries() -> None:
@@ -61,7 +62,7 @@ class NativeOracle(OracleClient):
         # 専用のテスト)。
         super().__init__(
             Settings(
-                rag_hybrid_search_backend="oracle_native",
+                rag_hybrid_search_backend="oracle_hybrid_index",
                 rag_native_vector_exact_max_chunks=0,
                 rag_native_vector_shortage_oversample_factor=1,
             )
@@ -536,7 +537,7 @@ class ExactScopeOracle(OracleClient):
     ) -> None:
         super().__init__(
             Settings(
-                rag_hybrid_search_backend="oracle_native",
+                rag_hybrid_search_backend="oracle_hybrid_index",
                 rag_native_vector_exact_max_chunks=exact_max_chunks,
                 rag_native_vector_shortage_oversample_factor=oversample_factor,
                 rag_min_similarity=0.3,
@@ -1148,7 +1149,7 @@ class LongScopeOracle(OracleClient):
     def __init__(self, *, exact_max_chunks: int = 0) -> None:
         super().__init__(
             Settings(
-                rag_hybrid_search_backend="oracle_native",
+                rag_hybrid_search_backend="oracle_hybrid_index",
                 rag_native_vector_exact_max_chunks=exact_max_chunks,
                 rag_native_vector_shortage_oversample_factor=1,
                 rag_min_similarity=0.0,

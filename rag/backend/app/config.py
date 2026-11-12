@@ -1272,7 +1272,9 @@ class Settings(
     )
     rag_min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
-    rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
+    rag_hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
+        "oracle_hybrid_index"
+    )
     rag_native_vector_exact_max_chunks: int = Field(
         default=50000,
         ge=0,
