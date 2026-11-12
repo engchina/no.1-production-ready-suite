@@ -65,50 +65,104 @@ def locator_labels(item: JsonObject) -> list[object]:
 _EvidenceRef = tuple[tuple[str, str], object, list[object], list[object]]
 
 
-def evidence_refs(
+_READ_LOCATOR_FIELDS = (
+    "section_path",
+    "page_start",
+    "page_end",
+    "sheet_name",
+    "row_basis",
+    "table_index",
+    "row_start",
+    "row_end",
+    "source_line_start",
+    "source_line_end",
+    "cell_range",
+    "page_label_start",
+    "page_label_end",
+    "bbox",
+    "bbox_unit",
+    "element_locator",
+    "table_row",
+    "table_cells",
+)
+
+
+def evidence_items(
     tool: str, output: JsonObject, *, original_only: bool = False
-) -> list[_EvidenceRef]:
-    """根拠を集める・読むツールの出力の（参照, 本文, 見出し, 文書のファイル名）（出てきた順）。"""
-    items: list[tuple[object, object, list[object], list[object]]]
+) -> list[JsonObject]:
+    """取得結果と原文読み取りを、実在する文書・chunk・本文の同じ契約へ写す。"""
     if tool in EVIDENCE_TOOLS:
         evidence = output.get("evidence")
         items = [
-            (item, item.get("excerpt"), locator_labels(item), [item.get("file_name")])
+            dict(item)
             for item in (evidence if isinstance(evidence, list) else [])
             if isinstance(item, dict)
             and (not original_only or item.get("origin", "source") == "source")
         ]
     elif tool == RAG_READ_SOURCE:
-        items = [(output, output.get("text"), locator_labels(output), [output.get("file_name")])]
+        items = [
+            {**output, "excerpt": output.get("text") if isinstance(output.get("text"), str) else ""}
+        ]
     elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
-        chunks = output.get("chunks")
-        document_id = output.get("document_id")
-        body = output.get("text")
-        body = body if isinstance(body, str) else ""
-        section_labels = locator_labels(output)
-        names = [output.get("file_name")]
+        chunks, document, body = output.get("chunks"), output.get("document_id"), output.get("text")
         items = []
+        if not isinstance(body, str):
+            return []
         for chunk in chunks if isinstance(chunks, list) else []:
-            if not isinstance(chunk, dict):
+            if not isinstance(chunk, dict) or chunk.get("document_id", document) != document:
                 continue
             start, end = chunk.get("start"), chunk.get("end")
-            chunk_text = (
-                body[start:end]
-                if isinstance(start, int) and isinstance(end, int) and start < end
-                else ""
-            )
-            ref = {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
-            items.append((ref, chunk_text, [*locator_labels(chunk), *section_labels], names))
+            if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(body):
+                continue
+            locator = dict(output["locator"]) if isinstance(output.get("locator"), dict) else {}
+            if isinstance(chunk.get("locator"), dict):
+                locator.update(chunk["locator"])
+            locator.update({key: chunk[key] for key in _READ_LOCATOR_FIELDS if key in chunk})
+            item = {
+                "document_id": document,
+                "chunk_id": chunk.get("chunk_id"),
+                "file_name": output.get("file_name"),
+                "excerpt": body[start:end],
+                "locator": locator,
+                # start/end は返却 body 内の位置であり、元 chunk 全体の範囲ではない。
+                "truncated": True,
+            }
+            for key in (
+                "section",
+                "content_kind",
+                "evidence_type",
+                "image_ref",
+                "superseded",
+                "header_range",
+            ):
+                if key in chunk or key in output:
+                    item[key] = chunk.get(key, output.get(key))
+            items.append(item)
     else:
         return []
-    refs: list[_EvidenceRef] = []
-    for item, text, labels, file_names in items:
-        if not isinstance(item, dict):
-            continue
-        document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
-        if isinstance(document_id, str) and isinstance(chunk_id, str) and document_id and chunk_id:
-            refs.append(((document_id, chunk_id), text, labels, file_names))
-    return refs
+    return [
+        item
+        for item in items
+        if isinstance(item.get("document_id"), str)
+        and item["document_id"]
+        and isinstance(item.get("chunk_id"), str)
+        and item["chunk_id"]
+    ]
+
+
+def evidence_refs(
+    tool: str, output: JsonObject, *, original_only: bool = False
+) -> list[_EvidenceRef]:
+    """根拠の番号登録と本文の検証は、成果物と同じ source の集合を使う。"""
+    return [
+        (
+            (item["document_id"], item["chunk_id"]),
+            item.get("excerpt"),
+            locator_labels(item),
+            [item.get("file_name")],
+        )
+        for item in evidence_items(tool, output, original_only=original_only)
+    ]
 
 
 def evidence_source_texts(steps: Sequence[RunStep]) -> list[str]:

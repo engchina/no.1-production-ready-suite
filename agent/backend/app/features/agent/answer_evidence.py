@@ -5,7 +5,7 @@
 回答を確定するときに 1 回作る。
 
 - AI に渡した根拠: その Run でモデルに渡したツールの結果のうち、根拠を返すツール
-  （`rag_search` / `rag_retrieve_evidence`）の `evidence`。同じ chunk
+  （検索の `evidence` と原文読み取りの chunk）。同じ chunk
   （`document_id`・`chunk_id`）は 1 回だけ、出てきた順。
 - 回答で引用した根拠: 利用者に見せる回答が書いた根拠の ID
   （省いて書いた形を含む。`answer_references.cited_chunk_ids`）と、決定的な照合で段落に結び付けた根拠。
@@ -36,19 +36,19 @@ from pr_system_settings.chat_attachments.tools import (
     VIEW_IMAGE_TOOL_NAME,
 )
 
+from app.features.agent.answer_data import DataReferenceError
 from app.features.agent.answer_passages import (
     KIND_CITATION,
     non_claim_passages,
     passage_spans,
 )
-from app.features.agent.answer_references import cited_chunk_ids, locator_labels
+from app.features.agent.answer_references import cited_chunk_ids, evidence_items, locator_labels
 from app.features.agent.evidence_match import (
     EvidenceText,
     answer_features,
     matched_features,
     order_weights,
 )
-from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
 from app.features.agent.tools import mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -58,9 +58,6 @@ JsonObject = dict[str, Any]
 
 ANSWER_EVIDENCE_KIND = "answer_evidence"
 ANSWER_EVIDENCE_NAME = "回答の根拠"
-# 根拠を返すツール（AI に渡した根拠として数える）。本文を読むツールは根拠の一覧を
-# 返さないので数えない。
-EVIDENCE_LIST_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 1 つの Run の根拠の上限（画面の一覧と成果物の大きさ）。
 MAX_ANSWER_EVIDENCE = 200
 # 会話の添付の根拠（#2554）。
@@ -98,7 +95,9 @@ _COPIED_FIELDS = (
 )
 
 
-def passed_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
+def passed_evidence(
+    steps: Sequence[RunStep], *, limit: int | None = MAX_ANSWER_EVIDENCE
+) -> list[JsonObject]:
     """その Run でモデルに渡した根拠（chunk で重複を除き、出てきた順）。
 
     画面の根拠の一覧（`items`）と、画面から根拠の原文・図を開くときの確かめ（`rag_figures`）が
@@ -112,26 +111,39 @@ def passed_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not result.success or step.status != "completed":
             continue
-        if mcp_base_tool_name(call.name) not in EVIDENCE_LIST_TOOLS:
-            continue
         output = result.output
-        evidence = output.get("evidence") if isinstance(output, Mapping) else None
-        for item in evidence if isinstance(evidence, list) else []:
-            if not isinstance(item, Mapping):
-                continue
-            document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
-            if not isinstance(document_id, str) or not isinstance(chunk_id, str):
-                continue
-            if not document_id or not chunk_id:
-                continue
+        if not isinstance(output, dict):
+            continue
+        for item in evidence_items(mcp_base_tool_name(call.name), output):
+            document_id, chunk_id = item["document_id"], item["chunk_id"]
             known = items.get((document_id, chunk_id))
             if known is not None:
                 if known.get("answer_use") not in _ANSWER_USES:
                     known["answer_use"] = item.get("answer_use")
                 continue
-            if len(items) < MAX_ANSWER_EVIDENCE:
+            if limit is None or len(items) < limit:
                 items[(document_id, chunk_id)] = dict(item)
     return list(items.values())
+
+
+def selected_answer_evidence(steps: Sequence[RunStep], answer: str) -> list[JsonObject]:
+    """上限内で明示引用を必ず残し、残りは取得順で選ぶ。引用自体が上限を超えたら確定しない。"""
+    passed = passed_evidence(steps, limit=None)
+    explicit = cited_chunk_ids(answer, [item["chunk_id"] for item in passed])
+    cited = [item for item in passed if item["chunk_id"] in explicit]
+    if len(cited) != len(explicit):
+        raise DataReferenceError("片段IDが複数の文書に対応するため、引用を一意に解決できません。")
+    if len(cited) > MAX_ANSWER_EVIDENCE:
+        raise DataReferenceError(
+            f"回答の根拠が上限 {MAX_ANSWER_EVIDENCE} 件を超えています。"
+            "引用する根拠を絞ってください。"
+        )
+    selected = {(item["document_id"], item["chunk_id"]) for item in cited}
+    for item in passed:
+        if len(selected) >= MAX_ANSWER_EVIDENCE:
+            break
+        selected.add((item["document_id"], item["chunk_id"]))
+    return [item for item in passed if (item["document_id"], item["chunk_id"]) in selected]
 
 
 def _completed_outputs(steps: Sequence[RunStep], names: frozenset[str]) -> list[tuple[str, Any]]:
@@ -584,7 +596,7 @@ def answer_evidence(steps: Sequence[RunStep], answer: str) -> JsonObject:
     - `citation_lines`: 根拠に結び付いた出典の行（画面は「参考情報」の根拠の行で示し、平文の行を
       重ねて出さない）。
     """
-    passed = passed_evidence(steps)
+    passed = selected_answer_evidence(steps, answer)
     chunk_ids = [str(item["chunk_id"]) for item in passed]
     markers = _markers(answer, chunk_ids)
     text_bound = _text_bound(answer, passed)
