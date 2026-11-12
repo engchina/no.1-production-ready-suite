@@ -734,9 +734,28 @@ class SafetyReport(BaseModel):
     safety_check_skip_reason: str = ""
 
 
+class ResultColumnMetadata(BaseModel):
+    """実行結果の列位置に結び付いた、確認済みの単位と物理参照元。"""
+
+    name: str
+    unit: str | None = None
+    unit_status: Literal["known", "unknown"] = "unknown"
+    provenance: list[str] = Field(default_factory=list)
+    source_columns: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def consistent_unit(self) -> ResultColumnMetadata:
+        if self.unit_status == "known" and (not self.unit or not self.unit.strip()):
+            raise ValueError("確認済みの単位には空でない値が必要です。")
+        if self.unit_status == "unknown" and self.unit is not None:
+            raise ValueError("未確認の単位には値を設定できません。")
+        return self
+
+
 class QueryResults(BaseModel):
     """SQL execution results."""
 
+    column_metadata: list[ResultColumnMetadata] = Field(default_factory=list)
     columns: list[str]
     rows: list[dict[str, Any]]
     total: int

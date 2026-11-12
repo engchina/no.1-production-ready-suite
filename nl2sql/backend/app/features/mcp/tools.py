@@ -74,6 +74,7 @@ from app.features.nl2sql.models import (
     JobStatus,
     Nl2SqlProfile,
     ProfileRecommendationRequest,
+    ResultColumnMetadata,
 )
 from app.features.nl2sql.ontology_models import (
     ClarificationMode,
@@ -525,6 +526,7 @@ class Nl2SqlJobResult(VersionedOutput):
             "SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）"
         ),
     )
+    column_metadata: list[ResultColumnMetadata] = Field(default_factory=list)
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     returned_count: int = 0
@@ -702,6 +704,7 @@ def _job_result(job: JobData, *, include_notice: bool = False) -> Nl2SqlJobResul
     output.is_safe = safety.is_safe
     output.safety_issues = [*issues, *safety.warnings]
     output.safety_check = "checked" if safety.safety_checked else "skipped"
+    output.column_metadata = list(result.results.column_metadata)
     output.columns = list(result.results.columns)
     output.rows = list(result.results.rows)
     output.returned_count = result.results.returned_count or len(result.results.rows)

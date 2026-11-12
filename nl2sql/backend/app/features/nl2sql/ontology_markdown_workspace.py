@@ -1265,7 +1265,12 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             status="succeeded",
             finished_at=datetime.now(UTC),
         )
+        from .result_units import confirmed_unit_records
+
         snapshot = dict(
+            unit_review_records=confirmed_unit_records(
+                value["markdown"], DEFINITIONS.validate_python(value["definitions"]), who
+            ),
             id=identity,
             profile_id=profile_id,
             markdown=value["markdown"],

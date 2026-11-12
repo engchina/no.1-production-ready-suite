@@ -34,6 +34,7 @@
     "physical_type": "物理の型（Physical Type）",
     "required": "必須（Required）",
     "unit": "単位（Unit）",
+    "difference_unit": "差分の単位（Difference Unit）",
     "currency": "通貨（Currency）",
     "timezone": "タイムゾーン（Time Zone）",
     "allowed_values": "許可する値（Allowed Values）",
