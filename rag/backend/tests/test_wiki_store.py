@@ -66,3 +66,42 @@ async def test_persistence_rejects_a_page_that_changed_the_authoritative_unit() 
         await WikiStore(cast(Any, object())).checkpoint(
             WikiSnapshot("document-a", "source-a", (unit,)), "lease-a", [page]
         )
+
+
+@pytest.mark.asyncio
+async def test_text_score_is_read_before_hydration_and_keeps_its_order() -> None:
+    pages = [
+        WikiPage(
+            unit=u,
+            navigation=WikiContext(
+                unit_id=u.unit_id,
+                context="案内",
+                possible_questions=[],
+                dependencies=[],
+                unresolved=[],
+            ),
+            input_fingerprint="input-a",
+        )
+        for u in units()[:2]
+    ]
+
+    class Oracle:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def _fetch_all(self, sql: str, binds: Any) -> Any:
+            self.calls += 1
+            assert "kb-a" in binds.values() and "wiki_build_enabled" in sql
+            if self.calls == 1:
+                assert "SCORE(1)" in sql and "CONTAINS(p.search_text" in sql
+                assert "page_json" not in sql and "WITH text_hits" not in sql
+                return [{"unit_id": p.unit.unit_id, "text_score": 10} for p in reversed(pages)]
+            assert "SCORE(" not in sql and "p.unit_id IN" in sql
+            return [{"page_json": p.model_dump()} for p in pages]
+
+    oracle = Oracle()
+    hits = await WikiStore(cast(Any, oracle)).text_pages(
+        "synthetic", {"knowledge_base_id": "kb-a"}, compiler="compiler-a", limit=2
+    )
+    assert oracle.calls == 2
+    assert [p.unit.unit_id for p in hits] == [p.unit.unit_id for p in reversed(pages)]

@@ -36,7 +36,7 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
             unit=u,
             navigation=WikiContext(
                 unit_id=u.unit_id,
-                context="架空の案内。",
+                context="架空の案内 syntheticnavigation。",
                 possible_questions=[],
                 dependencies=[],
                 unresolved=[],
@@ -54,6 +54,9 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
         pages
     )
     assert (await store.status_counts(filters))["READY"] == 1
+    assert len(
+        await store.text_pages("syntheticnavigation", filters, compiler=compiler, limit=10)
+    ) == len(pages)
     assert len(await store.read_sources(pages, filters)) == len(pages)
     await store.set_enabled(first.id, False)
     assert not await store.available_pages(filters)

@@ -576,21 +576,28 @@ class WikiStore:
             where += " AND " + clause
             binds.update(values)
         rows = await self.oracle._fetch_all(
-            f"""WITH text_hits AS (
-            SELECT /*+ MATERIALIZE */ page_id,SCORE(1) AS text_score FROM rag_wiki_pages
-            WHERE CONTAINS(search_text,:wiki_text,1)>0)
-            SELECT p.page_json FROM text_hits hit JOIN rag_wiki_pages p ON p.page_id=hit.page_id
+            f"""SELECT /*+ DOMAIN_INDEX_SORT LEADING(p) USE_HASH(w c d) */
+            p.unit_id,SCORE(1) AS text_score FROM rag_wiki_pages p
             JOIN rag_wiki_documents w ON w.document_id=p.document_id
             JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id AND c.chunk_set_id=p.chunk_set_id
             JOIN rag_documents d ON d.document_id=c.document_id
-            WHERE {where} AND w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
+            WHERE CONTAINS(p.search_text,:wiki_text,1)>0
+              AND {where} AND w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
               AND w.published_fingerprint=w.source_fingerprint
               AND p.source_fingerprint=w.published_fingerprint AND {CURRENT_WIKI_SOURCE_SQL}
-            ORDER BY hit.text_score DESC,p.document_id,p.unit_id
+            ORDER BY text_score DESC,p.document_id,p.unit_id
             FETCH FIRST :wiki_limit ROWS ONLY""",
             {**binds, "wiki_text": expression, "wiki_compiler": compiler, "wiki_limit": limit},
         )
-        return [WikiPage.model_validate(_json_loads(row["page_json"])) for row in rows]
+        if not rows:
+            return []
+        # SCORE を確定してから別の SQL で本文を読む。結合の後段で再評価しない。
+        ids = [str(row["unit_id"]) for row in rows]
+        hydrated = await self.available_pages(
+            filters, unit_ids=ids, compiler_fingerprint=compiler, document_ids=document_ids
+        )
+        pages = {page.unit.unit_id: page for page in hydrated}
+        return [pages[uid] for uid in ids if uid in pages]
 
     async def read_sources(
         self, pages: Sequence[WikiPage], filters: dict[str, str]
