@@ -3902,6 +3902,7 @@ def generation_spec(
         session_id=session.id,
         profile_id=session.profile_id,
         clarified_question=draft.clarified_question_ja,
+        original_question=session.original_question,
         tables=tables,
         joins=joins,
         items=items,

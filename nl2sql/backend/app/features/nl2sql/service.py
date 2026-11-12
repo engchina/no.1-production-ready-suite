@@ -162,6 +162,12 @@ from .enterprise_ai_client import (
     enterprise_ai_configuration_failure_message,
     find_enterprise_ai_error,
 )
+from .identifier_binding import (
+    IdentifierBindingConflict,
+    IdentifierCheck,
+    binding_conflicts,
+    identifier_checks,
+)
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
     SCHEMA_REFRESH_ERRORS,
@@ -480,6 +486,7 @@ from .reverse_prompts import (
 )
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
+from .sql_binding import SqlGenerationValidationError, column_binding_violations
 from .sql_lexing import prepare_oracle_query, use_session_current_datetime
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore
@@ -837,6 +844,11 @@ def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
     DB 構造の未取得（SCHEMA_CATALOG_EMPTY）は、例外の文がそのまま利用者向けの文と次の操作なので
     1 文目に出す。それ以外は例外の文（ORA-… など）を詳細に分ける。
     """
+    if isinstance(exc, IdentifierBindingConflict):
+        return (
+            "指定値の対象列を確認できません。データが無いと判断せず、識別子の列を確認してください。",
+            _job_failure_detail(exc),
+        )
     if isinstance(exc, SchemaCatalogEmptyError):
         return str(exc), None
     scope_changed = _find_business_scope_changed(exc)
@@ -864,6 +876,10 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     例外（原因の連鎖を含む）の Oracle のコード（`ORA-04027` など）の先頭、無ければ `fallback`。
     `null` のまま返さない（MCP の呼び出し側が失敗を分類できるようにする）。
     """
+    if isinstance(exc, SqlGenerationValidationError):
+        return "SQL_GENERATION_VALIDATION_FAILED"
+    if isinstance(exc, IdentifierBindingConflict):
+        return "IDENTIFIER_BINDING_UNCONFIRMED"
     if isinstance(exc, QueryScopeViolation):
         return "SQL_SCOPE_MISMATCH"
     if _find_business_scope_changed(exc) is not None:
@@ -25068,7 +25084,62 @@ class Nl2SqlService:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
                 else []
             )
+            if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
+                semantic = parse_oracle_sql(generated.generated_sql)
+                findings.extend(
+                    finding.code + ": " + finding.message_ja
+                    for finding in semantic.validation.findings
+                    if finding.code == "SQL_WINDOW_PLACEMENT_INVALID"
+                )
+                if semantic.graph is not None:
+                    findings.extend(
+                        column_binding_violations(
+                            generated.generated_sql,
+                            generated.schema_catalog.tables if generated.schema_catalog else [],
+                            owner=self._current_schema_owner(),
+                        )
+                    )
+            if (
+                generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+                and self._use_oracle_runtime()
+                and generated.schema_catalog
+                and not findings
+            ):
+                source_question = (
+                    sql_requirement.original_question if sql_requirement else ""
+                ) or question
+                checks = identifier_checks(
+                    generated.generated_sql,
+                    generated.schema_catalog.tables,
+                    question=source_question,
+                    owner=self._current_schema_owner(),
+                    allowed=allowed,
+                    explicit_columns=[
+                        column
+                        for item in sql_requirement.items
+                        if item.status == "answered"
+                        for column in item.columns
+                    ]
+                    if sql_requirement
+                    else [],
+                )
+
+                def probe(check: IdentifierCheck) -> tuple[bool, bool]:
+                    result = self._oracle_adapter.execute_select(
+                        check.sql, 1, scalar_binds={"lookup_value": check.value}
+                    )
+                    if not result.rows or not {"COLUMN_HIT", "KEY_HIT"} <= result.rows[0].keys():
+                        raise IdentifierBindingConflict("識別子の対象列を検証できません。")
+                    return bool(result.rows[0]["COLUMN_HIT"]), bool(result.rows[0]["KEY_HIT"])
+
+                identifier_findings = binding_conflicts(checks, probe)
+                generated.engine_meta["identifier_bindings_checked"] = len(checks)
+                if identifier_findings:
+                    raise IdentifierBindingConflict(" / ".join(identifier_findings))
             if not findings:
+                if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
+                    generated.engine_meta["sql_validation_attempts"] = attempt + 1
+                    generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
                 if contracts and generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                     generated.engine_meta = {
                         **generated.engine_meta,
@@ -25081,6 +25152,8 @@ class Nl2SqlService:
                 return generated
             rejected_sql = generated.generated_sql
             feedback = {"rejected_sql": rejected_sql, "violations": findings}
+        if any(not finding.startswith("RELATED_SCOPE_ANCHOR_RESTRICTION:") for finding in findings):
+            raise SqlGenerationValidationError(" / ".join(findings))
         raise QueryScopeViolation("SQL_SCOPE_MISMATCH: " + " / ".join(findings))
 
     def _generate_sql_with_engine(

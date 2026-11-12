@@ -1814,12 +1814,14 @@ class OracleNl2SqlAdapter:
         *,
         admin_control_plane: bool = False,
         binds: Mapping[str, str] | None = None,
+        scalar_binds: Mapping[str, str] | None = None,
     ) -> QueryResults:
         """SELECT を実行する。`admin_control_plane=True` は DB 管理チャット（#2264）の SELECT で、
         利用者に関係なくアプリのユーザーの管理の接続（`connection()`。管理 SQL の更新系と同じ、
         pool を使わない単発の接続）で読む。DeepSec の DATA USER・業務の実行の pool は使わない。
-        `binds` はチャットの添付の表（#2517）の行の JSON（CLOB で渡す。SQL は呼ぶ側が WITH 句を
-        付けたもの）。
+        `scalar_binds` は識別子の照合などの通常の文字列値。
+        `binds` はチャットの添付の表（#2517）の行の JSON（CLOB で渡す）。
+        添付の表を使う SQL は、呼ぶ側が WITH 句を付けたもの。
         """
         connection_cm = (
             self.connection() if admin_control_plane else self.user_data_connection(read_only=True)
@@ -1830,10 +1832,14 @@ class OracleNl2SqlAdapter:
                 self._business_session_time_zone(conn, admin_control_plane=admin_control_plane),
                 conn.cursor() as cursor,
             ):
+                if binds and scalar_binds and set(binds) & set(scalar_binds):
+                    raise OracleAdapterError("CLOBと通常値のbind名が重複しています。")
                 if binds:
                     clob = self._load_oracledb().DB_TYPE_CLOB
                     cursor.setinputsizes(**{name: clob for name in binds})
-                    cursor.execute(sql, dict(binds))
+                parameters = {**(binds or {}), **(scalar_binds or {})}
+                if parameters:
+                    cursor.execute(sql, parameters)
                 else:
                     cursor.execute(sql)
                 columns, rows, has_more = self._fetch_query_rows(cursor, max_rows)
