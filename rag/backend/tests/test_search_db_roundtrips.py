@@ -686,34 +686,39 @@ def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -
     assert "ORDER BY VECTOR_DISTANCE(c.embedding, :embedding, COSINE)\n" in statement
 
 
-def test_keyword_search_runs_oracle_text_once_before_scope_conditions() -> None:
-    """Oracle Text の命中を ROWNUM で区切った view で 1 回だけ取り、外で範囲の条件を使う(#2137)。
+def test_keyword_search_materializes_scoped_scores_once() -> None:
+    """Oracle Text の範囲内の元スコアを CTE へ一度だけ保存する。
 
     区切らないと optimizer が文書ごとの nested loop の内側で Oracle Text を引き、検索を文書の数だけ
     繰り返す。本文・埋め込みは命中の view で読まない。
     """
     where_sql, _ = oracle_module._oracle_retrieval_where({"knowledge_base_id": "kb-1"})
     statement = oracle_module._keyword_search_sql(
-        select_list="c.chunk_id, c.text_score / 100 AS score",
+        select_list="c.chunk_id, h.text_score / 100 AS score",
         query_bind="query",
         where_sql=where_sql,
     )
 
-    hits_view = statement.split("FROM rag_chunks hit", 1)[0]
-    assert "ROWNUM AS hit_number" in hits_view
+    hits_view = statement.split("FROM rag_chunks c", 1)[0]
+    assert "ROWNUM AS hit_number" not in hits_view
+    assert "WITH text_hits AS" in hits_view
+    assert "MATERIALIZE DOMAIN_INDEX_SORT LEADING(c)" in hits_view
+    assert statement.count("CONTAINS(") == 1
     assert "SCORE(1) AS text_score" in hits_view
     assert "chunk_text" not in statement and "embedding" not in statement
     assert "metadata_json" not in hits_view
-    # 範囲の条件(ナレッジベース)は命中の view の外。
-    assert statement.index("rag_document_knowledge_bases") > statement.index("FROM rag_chunks hit")
-    assert "c.text_score DESC" in statement
+    # 範囲の条件も元の分数を計算する CTE に含め、候補の件数制限より前に適用する。
+    assert statement.index("rag_document_knowledge_bases") < statement.index("FROM text_hits h")
+    assert "h.text_score DESC" in statement
 
     filtered_where, _ = oracle_module._oracle_retrieval_where({"content_kind": "table"})
     filtered = oracle_module._keyword_search_sql(
         select_list="c.chunk_id", query_bind="query", where_sql=filtered_where
     )
-    # 条件が metadata を使うときだけ、命中の view で metadata を読む。
-    assert "hit.metadata_json" in filtered.split("FROM rag_chunks hit", 1)[0]
+    # metadata は範囲の条件だけに使い、CTE へは ROWID と元スコアだけを投影する。
+    assert "metadata_json" not in filtered.split("FROM rag_chunks c", 1)[0]
+    assert "c.ROWID = h.text_rowid" in filtered
+    assert "c.metadata_json" in filtered
 
 
 class _ArraySizeCursor(_PlainCursor):
