@@ -191,6 +191,12 @@ class RunBudget:
             self.exceeded = {**found, "at": at}
         return self.exceeded
 
+    def remaining_output_tokens(self) -> int | None:
+        """現在の入力予約と既消費を引いた、出力に使える全体予算。"""
+        if self.limits.total_tokens <= 0:
+            return None
+        return max(0, self.limits.total_tokens - self.total_tokens - self._reserved_tokens)
+
     def reserve_model_call(self, estimated_input_tokens: int = 0) -> dict[str, Any] | None:
         """モデルを 1 回呼ぶ前に予約する。超えるなら予約せず、超えた上限を返す。
 

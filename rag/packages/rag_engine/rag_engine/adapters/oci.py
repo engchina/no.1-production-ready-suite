@@ -28,7 +28,7 @@ from pr_backend_core.observability.model_purpose import (
     model_call_purpose,
     model_purpose_attributes,
 )
-from pr_backend_core.output_budget import initial_output_budget, next_output_budget, output_limit_message
+from pr_backend_core.output_budget import online_output_budget, output_limit_message
 from pydantic import BaseModel
 
 from rag_engine.config import (
@@ -465,9 +465,8 @@ class _LlmRetryBudget:
     def available(self) -> bool:
         return self.used < self.max_retries
 
-    def take(self, *, output_limit: bool = False) -> bool:
-        available = (self.used < 2 and self.max_retries > 0) if output_limit else self.available
-        if not available:
+    def take(self) -> bool:
+        if not self.available:
             return False
         self.used += 1
         return True
@@ -578,8 +577,7 @@ class IncompleteResponse(RuntimeError):
     """Responses API が応答を最後まで返さなかった（`status=incomplete`）。
 
     `reason` は `incomplete_details.reason`（`max_output_tokens` / `content_filter` など）。
-    出力上限が理由のときだけ、呼び出し側が予算を広げて 1 回、それでも未完了なら推論の量を 1 段下げて 1 回
-    送り直す (#987・#2023)。
+    オンライン生成では出力上限で停止する。固定予算・取り込みの既存の再試行は呼び出し側で管理する。
 
     送り直しても終わらなかった失敗（`_incomplete_error`）は、画面に出す利用者向けの文（``user_message``。
     何が起きたかと直し方）と、「詳細」に畳む技術的な文（``detail``。理由・出力の上限・使った token・推論の量）を
@@ -665,11 +663,6 @@ INCOMPLETE_OUTPUT_REASON = "max_output_tokens"
 def _model_output_limit(provider: LlmProviderSettings) -> int:
     """呼ぶモデルの出力の上限（tokens。#1719。backend が platform のモデル設定から渡す）。"""
     return max(1, int(getattr(provider, "max_output_tokens", DEFAULT_MODEL_OUTPUT_TOKENS) or DEFAULT_MODEL_OUTPUT_TOKENS))
-
-
-def _retry_output_budget(budget: int, provider: LlmProviderSettings) -> int | None:
-    """オンライン生成の次の出力段階。中間の値や登録容量への切り上げは作らない。"""
-    return next_output_budget(budget, _model_output_limit(provider))
 
 
 # 出力の上限で未完了になった呼び出しを送り直すときに 1 段下げる推論の量（#2023）。platform の
@@ -816,6 +809,8 @@ def deadline_output_budget(budget: int, provider: LlmProviderSettings) -> tuple[
     remaining = remaining_seconds()
     if remaining is None:
         return budget, False
+    if remaining <= 0:
+        raise DeadlineExceeded("回答の期限を過ぎたため、モデルを呼び出しません。")
     with _output_rates_lock:
         rates = list(_output_rates.get(_rate_key(provider), ()))
     if not rates:
@@ -832,8 +827,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
 ) -> StructuredOutputT:
     """Responses API を呼び、構造化 output model を返します。
 
-    オンライン生成は platform の共有方針で16384→32768→65536の3段階を使い、登録容量を超えない。
-    同じ入力・推論量を保ち、max_output_tokensによる未完了だけを拡大する。固定した小予算のbind_output_capと
+    オンライン生成は設定した出力予算を単一の要求に使い、登録容量と入力の残りを超えない。
+    max_output_tokensによる未完了では送り直さない。固定した小予算のbind_output_capと
     画像の取り込み（PictureDescriptionOutput）は従来の予算と再試行を保つ。各試行のusageと理由を記録し、
     終わらないときは利用者向けの文と診断の詳細を分けたIncompleteResponseにする。
 
@@ -854,9 +849,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     stream が失敗の event で終わった呼び出し（`LlmStreamFailed`。理由は `stream_error`）と、完了の event の応答に本文が無い
     呼び出し（`LlmStreamOutputMissing`。#4197）も、同じ要求を送り直す（#2814）。
     streaming の呼び出しで暴走の検出（`settings.llm_runaway_detection`）が ON なら、出力が同じ並びの繰り返し・空白だけで
-    続いた呼び出しを打ち切り（`LlmRunawayOutput`）、推論の量を 1 段下げて（下げられなければそのまま）送り直す
-    （#2966。出力の上限まで待たない）。送り直しはすべて、1 回の呼び出しの共通の枠（`LLM_CALL_MAX_RETRIES`）で数える（#4736）。
-    streaming しない呼び出しも、暴走の検出が ON なら、出力の上限で未完了の応答の出力の文に同じ暴走があるか
+    続いた呼び出しを打ち切る（`LlmRunawayOutput`）。オンラインでは再生成せず未完了を返し、固定課題だけ従来の枠で復旧する。
+    固定課題の streaming しない呼び出しも、暴走の検出が ON なら、出力の上限で未完了の応答の出力の文に同じ暴走があるか
     （`_runaway_response_reason`）を確かめ、上限を広げずに同じ送り直しにする（#3835。上限を広げても空白・繰り返しが
     続くだけなので）。打ち切りの理由は工程の記録の `incomplete_reasons` と失敗の詳細（`cutoff_reason`）に残す。
     """
@@ -867,7 +861,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     if cap is not None:
         budget = min(budget, cap)
     elif online_policy:
-        budget = initial_output_budget(_model_output_limit(provider))
+        budget = online_output_budget(_model_output_limit(provider), configured=settings.online_max_output_tokens)
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。出力の上限で未完了の送り直しで
     # 1 段下げることがある(#2023)。
     effort = str(provider.reasoning_effort or "")
@@ -908,11 +902,31 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 "temperature": LLM_TEMPERATURE,
                 **reasoning,
             }
+            wire_request = _response_wire_request(request)
+            if online_policy:
+                from rag_engine.generation.section_expansion import estimate_tokens
+
+                input_tokens = estimate_tokens(json.dumps(wire_request, ensure_ascii=False))
+                room = settings.answer_max_input_tokens - input_tokens
+                if room <= 0:
+                    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
+
+                    raise GenerationInputBudgetExceeded(
+                        {
+                            "reason": "final_model_input_exceeds_limit",
+                            "model_input_limit_tokens": settings.answer_max_input_tokens,
+                            "estimated_input_tokens": input_tokens,
+                            "available_input_tokens": 0,
+                            "output_reserved_tokens": 0,
+                            "fits": False,
+                        }
+                    )
+                send_budget = online_output_budget(send_budget, configured=settings.online_max_output_tokens, room=room)
+                wire_request["max_output_tokens"] = send_budget
             timing: _StreamTiming | None = None
             started = time.monotonic()
             try:
                 # SDK に本文を検証させない（応答の状態を確かめてからコードで検証する。#4145・#4197）。schema だけを送る。
-                wire_request = _response_wire_request(request)
                 if getattr(observation, "capture_enabled", True):
                     observation.request({**wire_request, **({"stream": True} if streamed else {})}, schema=wire_request["text"]["format"])
                 else:
@@ -940,7 +954,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 observation_attributes(observation, {"pr.call.transport_status": "returned"})
                 usage = _value(response, "usage")
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
-                if detect_runaway and not streamed and (cutoff := _runaway_response_reason(response)):
+                if detect_runaway and not online_policy and not streamed and (cutoff := _runaway_response_reason(response)):
                     # streaming しない呼び出しは途中で打ち切れない。出力の上限まで出た暴走を streaming と同じ送り直しにする（#3835）。
                     raise LlmRunawayOutput(_runaway_message(cutoff), cutoff, None, response=response)
             except Exception as exc:
@@ -951,7 +965,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         if isinstance(exc, LlmRunawayOutput) and exc.response is not None
                         else "failed",
                         **({"pr.call.validation_status": "rejected"} if isinstance(exc, LlmRunawayOutput) else {}),
-                        **_retry_scheduled(retry_budget.available and (isinstance(exc, LlmRunawayOutput) or _is_retryable_error(exc))),
+                        **_retry_scheduled(
+                            retry_budget.available
+                            and ((isinstance(exc, LlmRunawayOutput) and not online_policy) or _is_retryable_error(exc))
+                        ),
                     },
                 )
                 if isinstance(exc, LlmRunawayOutput) and exc.response is not None:
@@ -978,6 +995,12 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         timing=getattr(exc, "timing", None),
                     )
                 if isinstance(exc, LlmRunawayOutput):
+                    if online_policy:
+                        user_message = (
+                            _runaway_message(exc.reason)
+                            + "途中の回答は確定していません。質問を分けるか対象を絞って、もう一度お試しください。"
+                        )
+                        raise IncompleteResponse(user_message, exc.reason, user_message=user_message, detail=f"理由={exc.reason}") from exc
                     if not retry_budget.take():
                         raise
                     # 出力が暴走した（#2966）。推論の量を下げられれば 1 段下げ、送り直しの回数を工程の記録に残して送り直す
@@ -1025,19 +1048,17 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     raise DeadlineExceeded(
                         f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
                     ) from exc
-                # オンラインの出力上限だけを次の段階へ広げる。固定予算・取り込みは既存の契約を保つ。
+                # オンラインの出力上限では停止し、固定予算・取り込みだけ既存の契約を保つ。
                 next_action = "fail"
                 wider = None
                 lower = ""
                 if exc.reason == INCOMPLETE_OUTPUT_REASON:
-                    if online_policy:
-                        wider = _retry_output_budget(send_budget, provider)
-                    elif cap is None and not widened:
+                    if not online_policy and cap is None and not widened:
                         legacy = min(send_budget * INCOMPLETE_OUTPUT_BUDGET_FACTOR, _model_output_limit(provider))
                         wider = legacy if legacy > send_budget else None
                     lower = lower_reasoning_effort(effort) if not online_policy and not lowered and wider is None else ""
                     next_action = "widen" if wider is not None else ("lower_effort" if lower else "fail")
-                    if next_action != "fail" and not retry_budget.take(output_limit=online_policy):
+                    if next_action != "fail" and not retry_budget.take():
                         next_action = "fail"
                 observation_attributes(observation, _retry_scheduled(next_action != "fail"))
                 _log_incomplete(exc, response, provider, max_output_tokens=send_budget, reasoning_effort=effort, next_action=next_action)

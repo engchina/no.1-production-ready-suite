@@ -17,7 +17,7 @@ from rag_engine.config import get_settings
 from rag_engine.generation import execution_record
 from rag_engine.models.llm import TextOutput
 from rag_engine.resources.deadline import Deadline, bind_deadline
-from rag_engine.resources.llm_usage import LlmUsage, llm_usage, usage_line
+from rag_engine.resources.llm_usage import LlmUsage, llm_usage
 from tests.test_llm_stall_resend import _Client, _Clock, _completed
 
 PROVIDER = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="medium", base_url="https://stub")
@@ -84,30 +84,29 @@ class RunawayOutputTest(unittest.TestCase):
         self.step = steps[0]
         return result, steps[0].get("llm_usage", {}), logs.records
 
-    def test_repeating_output_is_cut_early_and_resent_with_lower_effort(self):
-        """同じ並びの繰り返しは、出力の上限まで待たずに打ち切り、推論の量を下げて送り直す。"""
-        runaway = ['{"text": "答え', *(["、同じ説明"] * 20000)]
-        client = _RecordingClient(self.clock, [_text_script(runaway), _text_script(['{"text": "ok"}'])])
-        started = self.clock.now
-        result, usage, records = self.call(client)
+    def test_repeating_and_whitespace_output_stop_without_another_request(self):
+        from rag_engine.generation.answering import _invalid_structured_output
+
+        for chunks in (['{"text": "答え', *(["、合成の説明"] * 20000)], ['{"text": "a', *(["\n   "] * 2000)]):
+            client = _RecordingClient(self.clock, [_text_script(chunks), _text_script(['{"text":"ok"}'])])
+            started = self.clock.now
+            with self.assertRaises(oci.IncompleteResponse) as raised:
+                self.call(client)
+            self.assertFalse(_invalid_structured_output(raised.exception))
+            self.assertIn("途中の回答は確定していません", raised.exception.user_message)
+            self.assertEqual(len(client.streams), 1)
+            self.assertTrue(client.streams[0].closed)
+            self.assertEqual(client.efforts, ["medium"])
+            self.assertLess(self.clock.now - started, 5.0)
+
+    def test_fixed_task_keeps_stream_runaway_recovery(self):
+        client = _RecordingClient(self.clock, [_text_script(["合成。"] * 5000), _text_script(['{"text":"ok"}'])])
+        with oci.bind_output_cap(1000):
+            result, usage, records = self.call(client)
         self.assertEqual(result.text, "ok")
         self.assertEqual(len(client.streams), 2)
-        self.assertTrue(client.streams[0].closed)
         self.assertEqual(client.efforts, ["medium", "low"])
-        # 20,000 回の繰り返し（100 秒分）を最後まで受けず、最初の数千文字で打ち切る。
-        self.assertLess(self.clock.now - started, 5.0)
         self.assertEqual(usage["runaway_resends"], 1)
-        self.assertEqual(usage["incomplete_reasons"], {"runaway_repetition": 1})
-        self.assertEqual(usage["calls"], 2)
-        self.assertIn("出力の繰り返しを打ち切った送り直し 1 回", usage_line(usage))
-        # 工程の記録は、呼び出しの回数（この試験では直接呼ぶので 0）と API への送信の回数を分けて残す。
-        self.assertEqual((self.step["llm_calls"], self.step["llm_sends"]), (0, 2))
-        self.assertEqual([record.llm_status for record in records], ["failed", "completed"])
-
-    def test_whitespace_run_is_cut(self):
-        client = _RecordingClient(self.clock, [_text_script(['{"text": "a', *(["\n   "] * 2000)]), _text_script(["ok"])])
-        _result, usage, _records = self.call(client)
-        self.assertEqual(usage["incomplete_reasons"], {"runaway_whitespace": 1})
 
     def test_long_tables_lists_and_json_arrays_are_not_cut(self):
         """行ごとに値が変わる長い出力は、同じ形の行が続いても打ち切らない。"""
@@ -122,7 +121,7 @@ class RunawayOutputTest(unittest.TestCase):
     def test_resends_are_bounded(self):
         runaway = ["同じ説明。"] * 5000
         client = _RecordingClient(self.clock, [_text_script(runaway) for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)])
-        with self.assertRaises(oci.LlmRunawayOutput):
+        with oci.bind_output_cap(1000), self.assertRaises(oci.LlmRunawayOutput):
             self.call(client)
         self.assertEqual(len(client.streams), 1 + oci.LLM_CALL_MAX_RETRIES)
 
@@ -131,11 +130,11 @@ class RunawayOutputTest(unittest.TestCase):
 
         whitespace = ['{"text": "a"', *(["\n   "] * 2000)]
         client = _RecordingClient(self.clock, [_text_script(whitespace) for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)])
-        with self.assertRaises(oci.LlmRunawayOutput) as raised:
+        with self.assertRaises(oci.IncompleteResponse) as raised:
             self.call(client)
         details = structured_failure_details(raised.exception)
         self.assertEqual((details["category"], details["cutoff_reason"]), ("runaway_output", "runaway_whitespace"))
-        self.assertNotIn("provider_status", details)
+        self.assertEqual(details["provider_status"], "incomplete")
 
     def test_detection_is_off_by_setting(self):
         settings = replace(self.settings, llm_runaway_detection=False)
@@ -195,7 +194,7 @@ def _wire_text() -> tuple[type, str]:
 
 
 class NonStreamingRunawayTest(unittest.TestCase):
-    """streaming しない呼び出し（停滞の検出が OFF）でも、出力の上限まで出た暴走は上限を広げずに送り直す（#3835）。"""
+    """出力上限と暴走の区別、および固定課題の既存の契約を確かめる。"""
 
     def setUp(self) -> None:
         oci._output_rates.clear()
@@ -217,39 +216,30 @@ class NonStreamingRunawayTest(unittest.TestCase):
             llm_usage.reset(usage_token)
         return result
 
-    def test_whitespace_run_in_the_middle_counts(self):
-        """streaming なら途中で打ち切った空白の連続は、その後に出力が続いていても暴走と見なす。"""
-        text = '{"text": "a' + " " * oci.RUNAWAY_WHITESPACE_CHARS + 'b", "more": ' + "x" * 50
-        client = _NonStreamingClient([_runaway_incomplete(text), _completed()])
-        self.assertEqual(self.call(client).text, "ok")
+    def test_online_output_limit_has_priority_over_whitespace_and_repetition(self):
+        for text in (" " * oci.RUNAWAY_WHITESPACE_CHARS, '{"text":"' + "、合成の説明" * 2000):
+            client = _NonStreamingClient([_runaway_incomplete(text), _completed()])
+            with self.assertRaises(oci.IncompleteResponse):
+                self.call(client)
+            self.assertEqual(client.budgets, [32768])
+            self.assertEqual(self.usage["incomplete_reasons"], {"max_output_tokens": 1})
+            self.assertNotIn("runaway_resends", self.usage)
+
+    def test_fixed_task_keeps_existing_runaway_retry(self):
+        client = _NonStreamingClient([_runaway_incomplete(" " * oci.RUNAWAY_WHITESPACE_CHARS), _completed()])
+        with oci.bind_output_cap(1000):
+            self.assertEqual(self.call(client).text, "ok")
+        self.assertEqual(client.budgets, [1000, 1000])
         self.assertEqual(self.usage["incomplete_reasons"], {"runaway_whitespace": 1})
 
-    def test_repeating_tail_is_resent(self):
-        client = _NonStreamingClient([_runaway_incomplete('{"text": "' + "、同じ説明" * 2000), _completed()])
-        self.assertEqual(self.call(client).text, "ok")
-        self.assertEqual(self.usage["incomplete_reasons"], {"runaway_repetition": 1})
-        self.assertEqual(client.budgets, [16384, 16384])
-
-    def test_resends_are_bounded_and_failure_details_keep_the_cutoff_reason(self):
-        from rag_engine.resources.structured_failures import structured_failure_details
-
-        whitespace = '{"text": "a"' + "\n" * 3000
-        client = _NonStreamingClient([_runaway_incomplete(whitespace) for _ in range(1 + oci.LLM_CALL_MAX_RETRIES)])
-        with self.assertRaises(oci.LlmRunawayOutput) as raised:
-            self.call(client)
-        self.assertEqual(len(client.budgets), 1 + oci.LLM_CALL_MAX_RETRIES)
-        details = structured_failure_details(raised.exception)
-        self.assertEqual(details["category"], "runaway_output")
-        self.assertEqual(details["cutoff_reason"], "runaway_whitespace")
-        self.assertEqual((details["provider_status"], details["incomplete_reason"]), ("incomplete", "max_output_tokens"))
-
-    def test_plain_truncation_and_detection_off_keep_widening(self):
-        """暴走の無い未完了と、暴走の検出が OFF のときは、従来どおり上限を広げて送り直す。"""
+    def test_plain_truncation_and_detection_off_stop_without_widening(self):
+        """暴走の無い未完了と、暴走の検出が OFF のときは出力上限で停止する。"""
         long_text = "".join(_table_rows(400))
         for settings, text in ((self.settings, long_text), (replace(self.settings, llm_runaway_detection=False), " " * 3000)):
             client = _NonStreamingClient([_runaway_incomplete(text), _completed()])
-            self.assertEqual(self.call(client, settings=settings).text, "ok")
-            self.assertEqual(client.budgets[1], 2 * client.budgets[0])
+            with self.assertRaises(oci.IncompleteResponse):
+                self.call(client, settings=settings)
+            self.assertEqual(len(client.budgets), 1)
             self.assertNotIn("runaway_resends", self.usage)
 
     def test_other_incomplete_reasons_are_not_runaway(self):

@@ -1,6 +1,6 @@
 """出力の上限で未完了になった応答の送り直しの記録（#1527）を、OpenAI の client を差し替えて確かめる。
 
-オンラインの未完了は登録容量内の3段階で扱い、固定予算と取り込みは旧契約を保つ。
+オンラインの未完了は単一の要求で停止し、固定予算と取り込みは旧契約を保つ。
 試行ごとのusageと未完了の理由を記録する。
 """
 
@@ -75,34 +75,22 @@ class OutputRetryRecordTest(unittest.TestCase):
             execution_record._structured_steps.reset(step_token)
         return steps[0]["llm_usage"], logs.records
 
-    def test_retry_after_the_output_limit_is_recorded(self):
+    def test_output_limit_is_recorded_without_another_request(self):
         client = _Client([_incomplete("max_output_tokens"), _completed()])
         usage, records = self.call(client)
-        self.assertEqual(client.budgets, [16384, 32768])
-        self.assertEqual(usage["calls"], 2)
+        self.assertEqual(client.budgets, [65536])
+        self.assertEqual(usage["calls"], 1)
         self.assertEqual(usage["incomplete_responses"], 1)
-        self.assertEqual(usage["output_retries"], 1)
+        self.assertNotIn("output_retries", usage)
         self.assertEqual(usage["incomplete_reasons"], {"max_output_tokens": 1})
-        self.assertIn("未完了の応答 1 回（max_output_tokens 1 回）・出力の上限を広げた送り直し 1 回", usage_line(usage))
-        self.assertEqual(
-            [
-                (r.llm_status, r.llm_incomplete_reason, r.llm_attempt, r.llm_max_output_tokens)
-                for r in records
-                if getattr(r, "event", "") == "llm_call_usage"
-            ],
-            [("incomplete", "max_output_tokens", 0, 16384), ("completed", "", 1, 32768)],
-        )
-        # 未完了は理由・上限・推論の量・次にすることを WARNING で残す（#2023。INFO が出ない配備でも残る）。
+        self.assertIn("未完了の応答 1 回", usage_line(usage))
         warned = [r for r in records if getattr(r, "event", "") == "llm_incomplete_response"]
-        self.assertEqual(
-            [(r.levelname, r.llm_incomplete_reason, r.llm_max_output_tokens, r.llm_next_action) for r in warned],
-            [("WARNING", "max_output_tokens", 16384, "widen")],
-        )
+        self.assertEqual([(r.llm_max_output_tokens, r.llm_next_action) for r in warned], [(65536, "fail")])
 
     def test_other_incomplete_reasons_are_recorded_without_retry(self):
         client = _Client([_incomplete("content_filter")])
         usage, _records = self.call(client)
-        self.assertEqual(client.budgets, [16384])
+        self.assertEqual(client.budgets, [65536])
         self.assertEqual(usage["incomplete_reasons"], {"content_filter": 1})
         self.assertNotIn("output_retries", usage)
 
@@ -162,9 +150,9 @@ class OutputRetryRecordTest(unittest.TestCase):
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertLogs(oci.__name__, level="INFO"):
             result = oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
-        self.assertEqual((result.text, client.budgets), ("ok", [16384]))
+        self.assertEqual((result.text, client.budgets), ("ok", [65536]))
 
-    def test_unsupported_next_tier_does_not_send_an_intermediate_limit(self):
+    def test_model_capacity_is_used_without_rounding_to_a_tier(self):
         client = _Client([_incomplete("max_output_tokens"), _completed()])
         provider = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="", max_output_tokens=1500)
         settings = get_settings(environ={}, dotenv_path=None)
@@ -172,7 +160,7 @@ class OutputRetryRecordTest(unittest.TestCase):
             oci._openai_parsed([], settings, TextOutput, provider)
         self.assertEqual(client.budgets, [1500])
 
-    def test_first_budget_is_capped_and_not_retried_when_it_cannot_widen(self):
+    def test_first_budget_is_capped_without_output_retry(self):
         """最初の上限はモデルの出力の上限で抑え、それ以上に広げられなければ送り直さない（#1719）。
 
         失敗の文には、理由・送った上限・使った出力（うち推論）の token を出す。
@@ -200,32 +188,14 @@ class OutputRetryRecordTest(unittest.TestCase):
             self.assertIn(expected, message)
         self.assertNotIn("送り直しても", message)
 
-    def test_incomplete_after_retry_reports_the_widened_limit(self):
-        client = _Client([_incomplete("max_output_tokens")] * 3)
-        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
-        with (
-            mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
-            self.assertLogs(oci.__name__, level="INFO"),
-            self.assertRaises(oci.IncompleteResponse) as raised,
-        ):
-            oci._openai_parsed([], settings, TextOutput, PROVIDER)
-        self.assertEqual(client.budgets, [16384, 32768, 65536])
-        self.assertIn("3回の試行", str(raised.exception))
-        self.assertIn("出力の上限=65536 tokens", str(raised.exception))
-
-    def test_reasoning_effort_is_kept_across_three_tiers(self):
-        """出力の上限だけを3段階で増やし、推論量と入力は変えない。"""
-        client = _Client([_incomplete("max_output_tokens"), _incomplete("max_output_tokens"), _completed()])
+    def test_output_limit_keeps_reasoning_and_fails_once(self):
+        client = _Client([_incomplete("max_output_tokens"), _completed()])
         usage, records = self.call(client, provider=MEDIUM_PROVIDER, retries=2)
-        self.assertEqual(client.budgets, [16384, 32768, 65536])
-        self.assertEqual(client.efforts, ["medium", "medium", "medium"])
-        self.assertEqual(usage["output_retries"], 2)
+        self.assertEqual(client.budgets, [65536])
+        self.assertEqual(client.efforts, ["medium"])
+        self.assertNotIn("output_retries", usage)
         self.assertNotIn("effort_retries", usage)
-        warned = [r for r in records if getattr(r, "event", "") == "llm_incomplete_response"]
-        self.assertEqual(
-            [(r.llm_reasoning_effort, r.llm_next_action) for r in warned],
-            [("medium", "widen"), ("medium", "widen")],
-        )
+        self.assertEqual(len(client.responses_left), 1)
 
     def test_reasoning_effort_is_kept_when_capacity_is_insufficient(self):
         """容量不足では推論量を変えた追加要求を送らない。"""
@@ -235,8 +205,8 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertEqual(client.budgets, [1000])
         self.assertEqual(client.efforts, ["high"])
 
-    def test_incomplete_after_both_retries_names_the_fixes(self):
-        """送り直しても未完了なら、利用者向けの文（何が起きたかと直し方）と「詳細」の文を分けて送出する。"""
+    def test_incomplete_message_names_the_fixes_without_retry(self):
+        """未完了の利用者向けの文（何が起きたかと直し方）と「詳細」の文を分けて送出する。"""
         client = _Client([_incomplete("max_output_tokens")] * 3)
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000, llm_max_retries=2)
         with (
@@ -246,10 +216,9 @@ class OutputRetryRecordTest(unittest.TestCase):
         ):
             oci._openai_parsed([], settings, TextOutput, MEDIUM_PROVIDER)
         error = raised.exception
-        self.assertEqual(client.efforts, ["medium", "medium", "medium"])
+        self.assertEqual(client.efforts, ["medium"])
         self.assertIn("出力の上限に達し", error.user_message)
-        self.assertIn("3回の試行", error.user_message)
-        self.assertIn("登録された出力容量", error.user_message)
+        self.assertNotIn("試行", error.user_message)
         self.assertIn("質問を分け", error.user_message)
         # 推論量の変更を勧めず、診断のtoken内訳は詳細へ分ける。
         self.assertNotIn("「推論の量」を下げる", error.user_message)
@@ -268,7 +237,7 @@ class OutputRetryRecordTest(unittest.TestCase):
             self.assertRaises(oci.IncompleteResponse),
         ):
             oci._openai_parsed([], settings, TextOutput, provider)
-        self.assertEqual(client.efforts, ["low", "low"])
+        self.assertEqual(client.efforts, ["low"])
 
     def test_bound_output_cap_limits_the_budget_and_never_widens(self):
         """役目に合わせた上限（`bind_output_cap`）は最初の上限を抑え、上限を広げて送り直さない。"""
@@ -292,7 +261,7 @@ class OutputRetryRecordTest(unittest.TestCase):
             pass
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), oci.bind_output_cap(0):
             oci._openai_parsed([], settings, TextOutput, PROVIDER)
-        self.assertEqual(client.budgets, [16384])
+        self.assertEqual(client.budgets, [65536])
 
     def test_content_filter_is_not_retried_and_says_so(self):
         client = _Client([_incomplete("content_filter")])
@@ -303,7 +272,7 @@ class OutputRetryRecordTest(unittest.TestCase):
             self.assertRaises(oci.IncompleteResponse) as raised,
         ):
             oci._openai_parsed([], settings, TextOutput, MEDIUM_PROVIDER)
-        self.assertEqual(client.budgets, [16384])
+        self.assertEqual(client.budgets, [65536])
         self.assertIn("安全の判定", raised.exception.user_message)
 
     def test_completed_call_keeps_the_usage_shape(self):
@@ -367,16 +336,17 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
         self.assertNotIn("output_retries", usage)
         self.assertTrue(logs.records[0].llm_deadline_capped)
 
-    def test_uncapped_incomplete_response_is_still_retried_once(self):
+    def test_uncapped_incomplete_response_stops_once(self):
         client = _Client([_incomplete("max_output_tokens"), _completed()])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with (
             mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
             self.assertLogs(oci.__name__, level="INFO"),
             bind_deadline(Deadline(600.0)),
+            self.assertRaises(oci.IncompleteResponse),
         ):
             oci._openai_parsed([], settings, TextOutput, PROVIDER)
-        self.assertEqual(client.budgets, [16384, 32768])
+        self.assertEqual(client.budgets, [65536])
 
     def test_failed_call_is_recorded_with_seconds_and_reason(self):
         client = _Client([TimeoutError("read timeout")])
@@ -394,7 +364,7 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
             llm_usage.reset(usage_token)
         self.assertEqual((usage["calls"], usage["output_tokens"], usage["incomplete_reasons"]), (1, 0, {"TimeoutError": 1}))
         logged = logs.records[0]
-        self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens), ("failed", "TimeoutError", 16384))
+        self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens), ("failed", "TimeoutError", 65536))
         self.assertFalse(hasattr(logged, "llm_deadline_capped"))
 
 
@@ -453,17 +423,15 @@ def _real_sdk_client(monkeypatch, responses: list[dict]) -> list[dict]:
     return bodies
 
 
-def test_a_truncated_response_from_the_real_sdk_reaches_the_widening_resend(monkeypatch):
-    """#4145: 上限で切れた応答が検証の失敗にならず、上限を広げる送り直しに届く。"""
-    bodies = _real_sdk_client(
-        monkeypatch,
-        [_http_response("incomplete", '{"text":"途中', "max_output_tokens"), _http_response("completed", '{"text":"完了"}')],
-    )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
-    result = oci._openai_parsed([], settings, TextOutput, SimpleNamespace(**{**vars(PROVIDER), "max_output_tokens": 65536}))
-    assert result.text == "完了"
-    assert [body["max_output_tokens"] for body in bodies] == [16384, 32768]
-    assert all("text" in body and body["text"]["format"]["type"] == "json_schema" for body in bodies)
+def test_a_truncated_response_from_the_real_sdk_stops_without_validation_repair(monkeypatch):
+    """SDK の未完了を本文の検証失敗と区別し、もう一度モデルを呼ばない。"""
+    bodies = _real_sdk_client(monkeypatch, [_http_response("incomplete", '{"text":"途中', "max_output_tokens")])
+    settings = get_settings(environ={}, dotenv_path=None)
+    with pytest.raises(oci.IncompleteResponse) as raised:
+        oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
+    assert raised.value.reason == "max_output_tokens"
+    assert [body["max_output_tokens"] for body in bodies] == [65536]
+    assert bodies[0]["text"]["format"]["type"] == "json_schema"
 
 
 def test_invalid_json_in_a_completed_response_stays_a_validation_error(monkeypatch):
@@ -481,7 +449,7 @@ def test_invalid_json_in_a_completed_response_stays_a_validation_error(monkeypat
     assert oci.is_invalid_structured_output(raised.value)
 
 
-def test_streamed_output_uses_three_tiers_and_keeps_reasoning(monkeypatch):
+def test_streamed_output_stops_once_and_keeps_reasoning(monkeypatch):
     from tests.test_llm_stall_resend import _Client as StreamClient
     from tests.test_llm_stall_resend import _Clock, _script
 
@@ -507,10 +475,9 @@ def test_streamed_output_uses_three_tiers_and_keeps_reasoning(monkeypatch):
     client.responses.create = record
     settings = replace(get_settings(environ={}, dotenv_path=None), llm_stall_detection=True)
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: client)
-    with bind_deadline(Deadline(600)):
-        result = oci._openai_parsed([], settings, TextOutput, MEDIUM_PROVIDER)
-    assert result.text == "ok"
-    assert [r["max_output_tokens"] for r in requests] == [16384, 32768, 65536]
+    with bind_deadline(Deadline(600)), pytest.raises(oci.IncompleteResponse):
+        oci._openai_parsed([], settings, TextOutput, MEDIUM_PROVIDER)
+    assert [r["max_output_tokens"] for r in requests] == [65536]
     assert all(r["reasoning"] == {"effort": "medium"} for r in requests)
     assert all(r["input"] == requests[0]["input"] for r in requests)
 
@@ -525,3 +492,52 @@ def test_picture_ingestion_retains_its_existing_budget_and_retry_owner(monkeypat
     with pytest.raises(oci.IncompleteResponse):
         oci._openai_parsed([], settings, PictureDescriptionOutput, MEDIUM_PROVIDER)
     assert client.budgets == [1000, 2000]
+
+
+@pytest.mark.parametrize("configured, capacity, expected", [(1234, 65536, 1234), (65536, 2345, 2345), (65536, 100000, 65536)])
+def test_configured_online_request_respects_registered_capacity(monkeypatch, configured, capacity, expected):
+    client = _Client([_completed()])
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: client)
+    settings = replace(get_settings(environ={}, dotenv_path=None), online_max_output_tokens=configured)
+    provider = SimpleNamespace(**{**vars(PROVIDER), "max_output_tokens": capacity})
+    assert oci._openai_parsed([], settings, TextOutput, provider).text == "ok"
+    assert client.budgets == [expected]
+
+
+def test_online_output_uses_context_room_and_never_sends_when_exhausted(monkeypatch):
+    import json
+
+    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
+    from rag_engine.generation.section_expansion import estimate_tokens
+
+    messages = [{"role": "user", "content": "合成の本文"}]
+    client = _Client([_completed()])
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: client)
+    settings = get_settings(environ={}, dotenv_path=None)
+    wire = oci._response_wire_request(
+        {
+            "model": PROVIDER.model,
+            "input": messages,
+            "text_format": TextOutput,
+            "max_output_tokens": 65536,
+            "temperature": oci.LLM_TEMPERATURE,
+        }
+    )
+    measured = estimate_tokens(json.dumps(wire, ensure_ascii=False))
+    settings = replace(settings, answer_max_input_tokens=measured + 100)
+    assert oci._openai_parsed(messages, settings, TextOutput, PROVIDER).text == "ok"
+    assert client.budgets == [100]
+    token = llm_usage.set(LlmUsage())
+    try:
+        with pytest.raises(GenerationInputBudgetExceeded):
+            oci._parse_text_with_retry("system", "合成の本文" * 100, replace(settings, answer_max_input_tokens=1), TextOutput, PROVIDER)
+        assert llm_usage.get().snapshot().get("calls", 0) == 0
+    finally:
+        llm_usage.reset(token)
+    assert client.budgets == [100]
+
+
+def test_exhausted_deadline_never_forces_one_token(monkeypatch):
+    monkeypatch.setattr(oci, "remaining_seconds", lambda: 0.0)
+    with pytest.raises(DeadlineExceeded):
+        oci.deadline_output_budget(65536, PROVIDER)

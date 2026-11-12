@@ -89,8 +89,9 @@ from pr_backend_core.observability.tracing import (
     record_span,
 )
 from pr_backend_core.output_budget import (
-    initial_output_budget,
-    next_output_budget,
+    DEFAULT_ONLINE_MAX_OUTPUT_TOKENS,
+    configured_online_output_tokens,
+    online_output_budget,
     output_limit_message,
 )
 from pr_system_settings.enterprise_ai_errors import (
@@ -324,7 +325,6 @@ from app.features.agent.trace_bodies import capture_trace_bodies
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
 from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
-    MODEL_INCOMPLETE_RETRIES_TOTAL,
     TOOL_LOOP_STOPS_TOTAL,
     UNDECLARED_TOOL_CALLS_TOTAL,
 )
@@ -390,6 +390,7 @@ class ModelTarget:
     # openai SDK の再試行の回数（#2004）。None は SDK の既定。上限つきの並行の実行器
     # （pr_backend_core.bounded_calls）を通す呼び出しは 0 にし、再試行を実行器に任せる。
     sdk_max_retries: int | None = None
+    online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
         return f"ModelTarget(model_id={self.model_id!r}, endpoint={self.endpoint!r})"
@@ -435,6 +436,7 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
         max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
         vision_enabled=model_accepts_images(settings, resolved),
+        online_max_output_tokens=configured_online_output_tokens(settings),
     )
 
 
@@ -456,7 +458,7 @@ def model_settings_for(target: ModelTarget) -> ModelSettings:
       endpoint の既定の上限になり、推論のあるモデルは推論だけで上限に達することがある）
     """
     max_tokens = (
-        initial_output_budget(target.max_output_tokens)
+        online_output_budget(target.max_output_tokens, configured=target.online_max_output_tokens)
         if target.sdk_max_retries != 0
         else max(1, int(target.max_output_tokens))
     )
@@ -703,7 +705,7 @@ def _model_input_attributes(request: Mapping[str, Any]) -> dict[str, int | str]:
 
 
 class _StreamingResponseManager:
-    """SDK の with_streaming_response 経路も同じ3段階・終端検証へ接続する。"""
+    """SDK の with_streaming_response 経路も同じ単一予算・終端検証へ接続する。"""
 
     def __init__(self, responses: Any, request: dict[str, Any]) -> None:
         self._responses, self._request = responses, request
@@ -774,19 +776,21 @@ def _output_context_room(request: Mapping[str, Any], capacity: int | None) -> in
 
 
 class _OciResponses:
-    """現在のモデル要求だけを3段階で試す。固定予算の実行器とは重ねない。"""
+    """単一の要求予算と完了状態を保証する。出力上限では再送しない。"""
 
     def __init__(
         self,
         inner: Any,
         *,
-        output_limit_retry: bool = True,
+        online_policy: bool = True,
         max_output_tokens: int | None = None,
         max_input_tokens: int | None = None,
+        online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS,
     ) -> None:
         self._inner = inner
-        self._output_limit_retry = output_limit_retry
+        self._online_policy = online_policy
         self._output_capacity = max_output_tokens
+        self._online_max_output_tokens = online_max_output_tokens
         self._input_capacity = max_input_tokens
 
     async def create(self, **kwargs: Any) -> Any:
@@ -794,22 +798,56 @@ class _OciResponses:
         attempt = 0
         overflow_retried = False
         send_attempt = 0
-        output_attempt = 0
         capacity = self._output_capacity or int(
             request.get("max_output_tokens") or DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
         )
-        room = _output_context_room(request, self._input_capacity)
-        if self._output_limit_retry and room is not None and room <= 0:
-            raise BuiltinRuntimeError(
-                CONTEXT_OVERFLOW_CODE,
-                "質問と取得結果がモデルの入力上限に達しました。対象を絞ってやり直してください。",
+
+        def constrain(request: dict[str, Any]) -> dict[str, Any]:
+            if not self._online_policy:
+                return request
+            budget = _ACTIVE_RUN_BUDGET.get()
+            try:
+                requested = online_output_budget(
+                    capacity,
+                    configured=self._online_max_output_tokens,
+                    room=_output_context_room(request, self._input_capacity),
+                    total_room=budget.remaining_output_tokens() if budget is not None else None,
+                )
+            except ValueError as exc:
+                raise BuiltinRuntimeError(
+                    CONTEXT_OVERFLOW_CODE,
+                    "質問と取得結果、出力のための予算が残っていません。対象を絞ってやり直してください。",
+                ) from exc
+            return {**request, "max_output_tokens": requested}
+
+        def reserve_retry(request: dict[str, Any]) -> None:
+            budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
+            if budget is None:
+                return
+            budget.settle_failed(None)
+            window = _ACTIVE_CONTEXT_WINDOW.get()
+            estimate = (
+                window.last_input.tokens_after
+                if window and window.last_input
+                else estimate_input_tokens(json.dumps(request, ensure_ascii=False, default=str))
             )
-        if self._output_limit_retry and self._output_capacity is not None:
-            request = {**request, "max_output_tokens": initial_output_budget(capacity, room=room)}
+            exceeded = budget.reserve_model_call(estimate)
+            if exceeded is not None:
+                raise _run_budget_stop(window.run_id if window else "", budget, exceeded)
+
         while True:
+            request = constrain(request)
             try:
                 send_attempt += 1
-                response = await self._send(request, send_attempt)
+                try:
+                    response = await self._send(request, send_attempt)
+                except BadRequestError:
+                    raise
+                except BaseException:
+                    budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
+                    if budget is not None:
+                        budget.settle_failed(None)
+                    raise
                 events = None
                 request_id = None
                 if request.get("stream"):
@@ -829,6 +867,11 @@ class _OciResponses:
                             }:
                                 terminal_kind = getattr(event, "type", "")
                                 terminal = getattr(event, "response", None)
+                    except BaseException:
+                        budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
+                        if budget is not None:
+                            budget.settle_failed(_provider_usage(terminal))
+                        raise
                     finally:
                         await stream.close()
                     response = terminal
@@ -836,7 +879,7 @@ class _OciResponses:
                         terminal_kind not in {"response.completed", "response.incomplete"}
                         or response is None
                     ):
-                        budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                        budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
                         if budget is not None:
                             budget.settle_failed(_provider_usage(response))
                         raise BuiltinRuntimeError(
@@ -847,7 +890,7 @@ class _OciResponses:
                     if (terminal_kind == "response.completed" and status != "completed") or (
                         terminal_kind == "response.incomplete" and status != "incomplete"
                     ):
-                        budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                        budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
                         if budget is not None:
                             budget.settle_failed(_provider_usage(response))
                         raise BuiltinRuntimeError(
@@ -855,7 +898,7 @@ class _OciResponses:
                             "モデルの応答の完了状態を確認できませんでした。もう一度お試しください。",
                         )
                 if getattr(response, "status", None) == "failed":
-                    budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                    budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
                     if budget is not None:
                         budget.settle_failed(_provider_usage(response))
                     raise BuiltinRuntimeError(
@@ -874,48 +917,20 @@ class _OciResponses:
                         if events is not None
                         else response
                     )
-                output_attempt += 1
-                budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
                 if budget is not None:
                     budget.settle_failed(_provider_usage(response))
-                room = _output_context_room(request, self._input_capacity)
-                wider = (
-                    next_output_budget(
-                        int(request.get("max_output_tokens") or 0), capacity, room=room
+                if not incomplete.output_limit_reached:
+                    _raise_for_incomplete(incomplete, request, lowered_effort=False)
+                raise BuiltinRuntimeError(
+                    MODEL_OUTPUT_INCOMPLETE_CODE,
+                    output_limit_message(
+                        model=str(request.get("model") or ""),
+                        capacity=capacity,
                     )
-                    if incomplete.output_limit_reached
-                    and self._output_limit_retry
-                    and output_attempt < 3
-                    else None
+                    + " 詳細: "
+                    + incomplete.detail(),
                 )
-                if wider is None:
-                    if not incomplete.output_limit_reached:
-                        _raise_for_incomplete(incomplete, request, lowered_effort=False)
-                    raise BuiltinRuntimeError(
-                        MODEL_OUTPUT_INCOMPLETE_CODE,
-                        output_limit_message(
-                            model=str(request.get("model") or ""),
-                            attempts=output_attempt,
-                            capacity=capacity,
-                        )
-                        + " 詳細: "
-                        + incomplete.detail(),
-                    )
-                if budget is not None:
-                    window = _ACTIVE_CONTEXT_WINDOW.get()
-                    estimate = (
-                        window.last_input.tokens_after
-                        if window and window.last_input
-                        else estimate_input_tokens(
-                            json.dumps(request, ensure_ascii=False, default=str)
-                        )
-                    )
-                    exceeded = budget.reserve_model_call(estimate)
-                    if exceeded is not None:
-                        raise _run_budget_stop(window.run_id if window else "", budget, exceeded)
-                request = {**request, "max_output_tokens": wider}
-                MODEL_INCOMPLETE_RETRIES_TOTAL.labels(model=str(request.get("model") or "")).inc()
-                continue
             except BadRequestError as exc:
                 overflow = provider_overflow(model_error_code(exc), _model_error_message(exc))
                 window = _ACTIVE_CONTEXT_WINDOW.get()
@@ -925,6 +940,7 @@ class _OciResponses:
                     if overflow_retried:
                         window.fail_after_retry(overflow)
                     request = window.retry_request(request, overflow)
+                    reserve_retry(request)
                     overflow_retried = True
                     continue
                 if (
@@ -932,6 +948,7 @@ class _OciResponses:
                     or attempt >= MODEL_OUTPUT_INVALID_RETRIES
                 ):
                     raise
+                reserve_retry(request)
                 attempt += 1
                 logger.warning(
                     "builtin_runtime_model_output_invalid_retry",
@@ -987,22 +1004,25 @@ class _OciCompatClient:
         self,
         inner: AsyncOpenAI,
         *,
-        output_limit_retry: bool = True,
+        online_policy: bool = True,
         max_output_tokens: int | None = None,
         max_input_tokens: int | None = None,
+        online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS,
     ) -> None:
         self._inner = inner
-        self._output_limit_retry = output_limit_retry
+        self._online_policy = online_policy
         self._max_output_tokens = max_output_tokens
         self._max_input_tokens = max_input_tokens
+        self._online_max_output_tokens = online_max_output_tokens
 
     @property
     def responses(self) -> _OciResponses:
         return _OciResponses(
             self._inner.responses,
-            output_limit_retry=self._output_limit_retry,
+            online_policy=self._online_policy,
             max_output_tokens=self._max_output_tokens,
             max_input_tokens=self._max_input_tokens,
+            online_max_output_tokens=self._online_max_output_tokens,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1012,19 +1032,21 @@ class _OciCompatClient:
 class OciResponsesModel(OpenAIResponsesModel):
     """OCI Enterprise AI の Responses API 用（SDK の `_get_client` を包む。SDK は版を固定する）。"""
 
-    # 出力の上限で未完了の応答を、推論の量を下げて送り直すか（#2023）。
-    output_limit_retry: bool = True
+    # 普通のオンライン生成だけに共通の要求予算を適用する。
+    online_policy: bool = True
     output_capacity: int | None = None
     input_capacity: int | None = None
+    online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 
     def _get_client(self) -> AsyncOpenAI:
         return cast(
             AsyncOpenAI,
             _OciCompatClient(
                 super()._get_client(),
-                output_limit_retry=self.output_limit_retry,
+                online_policy=self.online_policy,
                 max_output_tokens=self.output_capacity,
                 max_input_tokens=self.input_capacity,
+                online_max_output_tokens=self.online_max_output_tokens,
             ),
         )
 
@@ -1061,9 +1083,10 @@ def _default_model_factory(target: ModelTarget) -> Model:
     )
     model = OciResponsesModel(model=target.model_id, openai_client=client)
     # 上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は、送り直しを実行器に任せる（#2023）。
-    model.output_limit_retry = target.sdk_max_retries != 0
+    model.online_policy = target.sdk_max_retries != 0
     model.output_capacity = target.max_output_tokens
     model.input_capacity = target.max_input_tokens
+    model.online_max_output_tokens = target.online_max_output_tokens
     return model
 
 
@@ -3039,6 +3062,7 @@ def build_sdk_agent(
             model_id=target.model_id,
             max_input_tokens=target.max_input_tokens,
             max_output_tokens=target.max_output_tokens,
+            online_max_output_tokens=target.online_max_output_tokens,
         ),
     )
     setattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, static_instructions)

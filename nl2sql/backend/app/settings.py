@@ -32,6 +32,7 @@ from pr_backend_core.config import (
     product_settings_config,
 )
 from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
+from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.chat_attachments.limits import (
     CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
@@ -82,6 +83,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
     service_name: str = "production-ready-nl2sql"
     enable_metrics: bool = True
+    online_max_output_tokens: int = Field(default=DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, ge=1)
     oracle_user: str = ""
     oracle_password: str = ""
     oracle_dsn: str = ""

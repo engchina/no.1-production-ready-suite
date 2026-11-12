@@ -42,7 +42,7 @@ def test_different_entries_other_arrays_and_json_strings_are_not_cut():
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_streaming_retries_only_when_existing_guard_is_enabled(enabled):
+def test_online_streaming_guard_stops_without_retry_when_enabled(enabled):
     clock = _Clock()
     chunks = ['{"request_coverage":['] + [json.dumps(row, ensure_ascii=False) + "," for row in entries()]
     final = SimpleNamespace(
@@ -61,14 +61,22 @@ def test_streaming_retries_only_when_existing_guard_is_enabled(enabled):
         patch.object(oci, "_openai_client_for_provider", return_value=client),
         bind_deadline(Deadline(600)),
     ):
-        result = oci._openai_parsed([], settings, GroundedDraft, PROVIDER)
-    assert not result.items
-    assert len(client.streams) == (2 if enabled else 1)
+        if enabled:
+            from rag_engine.generation.answering import _invalid_structured_output
+
+            with pytest.raises(oci.IncompleteResponse) as raised:
+                oci._parse_with_retry(lambda: oci._openai_parsed([], settings, GroundedDraft, PROVIDER), "合成", settings)
+            assert not _invalid_structured_output(raised.value)
+            assert raised.value.reason == "runaway_repetition"
+        else:
+            result = oci._openai_parsed([], settings, GroundedDraft, PROVIDER)
+            assert not result.items
+    assert len(client.streams) == 1
     assert all(stream.closed for stream in client.streams)
 
 
 @pytest.mark.parametrize("recovered", [True, False])
-def test_repetition_resend_receives_feedback_and_preserves_original_question(recovered):
+def test_fixed_task_repetition_resend_receives_feedback_and_preserves_original_question(recovered):
     from copy import deepcopy
 
     from rag_engine.generation.citation_wire import generation_draft_wire_model
@@ -104,6 +112,7 @@ def test_repetition_resend_receives_feedback_and_preserves_original_question(rec
         patch.object(oci.time, "monotonic", clock),
         patch.object(oci, "_openai_client_for_provider", return_value=client),
         bind_deadline(Deadline(600)),
+        oci.bind_output_cap(1000),
     ):
         if recovered:
             result = oci._openai_parsed(messages, settings, schema, PROVIDER)
@@ -132,8 +141,8 @@ def test_feedback_is_confined_to_draft_resends_and_contains_no_rejected_output(r
     assert ("空白だけの出力" if reason.endswith("whitespace") else "同じ内容の反復") in retried[-1]["content"][0]["text"]
 
 
-@pytest.mark.parametrize("small_budget", [True, False])
-def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback(small_budget):
+@pytest.mark.parametrize("output_cap", [1, 1000, None])
+def test_nonstreaming_draft_repetition_respects_online_and_fixed_budget_contracts(output_cap):
     from test_llm_runaway_output import _NO_STREAM_USAGE, _runaway_incomplete
 
     class Client:
@@ -157,8 +166,13 @@ def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback(small_budge
     client = Client()
     messages = [{"role": "user", "content": "合成の質問"}]
     settings = replace(get_settings(environ={}, dotenv_path=None), llm_runaway_detection=True, llm_stall_detection=False)
-    with patch.object(oci, "_openai_client_for_provider", return_value=client), oci.bind_output_cap(1 if small_budget else None):
-        if small_budget:
+    with patch.object(oci, "_openai_client_for_provider", return_value=client), oci.bind_output_cap(output_cap):
+        if output_cap is None:
+            with pytest.raises(oci.IncompleteResponse) as raised:
+                oci._parse_with_retry(lambda: oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER), "合成", settings)
+            assert raised.value.reason == "max_output_tokens"
+            assert len(client.inputs) == 1
+        elif output_cap == 1:
             with pytest.raises(oci.LlmRunawayOutput):
                 oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
             assert client.inputs == [messages] * (1 + oci.LLM_CALL_MAX_RETRIES)

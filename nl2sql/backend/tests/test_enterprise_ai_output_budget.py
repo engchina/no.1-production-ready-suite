@@ -152,10 +152,10 @@ def _request(service: Nl2SqlService, count: int, columns: int = 10) -> MetadataS
     )
 
 
-def test_old_common_limit_is_ignored_and_online_first_tier_is_sent(
+def test_old_common_limit_is_ignored_and_model_capacity_is_respected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """旧い共通上限を読んでも、登録容量を守ってオンラインの初回16384を送る。"""
+    """旧い共通上限を読んでも、登録容量を守ってオンラインの予算を送る。"""
     (tmp_path / "model-settings.json").write_text(
         json.dumps(
             {
@@ -192,15 +192,15 @@ def test_old_common_limit_is_ignored_and_online_first_tier_is_sent(
 
     assert result.source == "oci_enterprise_ai"
     assert result.fallback is False
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [16_384]
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [32_768]
     assert model.payloads[0]["reasoning"] == {"effort": "medium"}
     assert result.sql.count("COMMENT ON TABLE") == 5
 
 
-def test_incomplete_uses_three_tiers_without_changing_reasoning(
+def test_online_uses_single_budget_without_changing_reasoning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """未完了（max_output_tokens）だけを三档で再試行する。"""
+    """オンライン生成はモデル容量とは別の単一予算で呼ぶ。"""
     model = _ReasoningModel(tokens_per_target=8_000)
     _mock_http(monkeypatch, model)
     service = _service(_settings(max_input_tokens=1_000_000, max_output_tokens=131_072))
@@ -209,7 +209,7 @@ def test_incomplete_uses_three_tiers_without_changing_reasoning(
 
     assert result.source == "oci_enterprise_ai"
     assert result.fallback is False
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [16_384, 32_768, 65_536]
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [65_536]
 
 
 def test_many_tables_are_split_into_batches_and_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,7 +307,7 @@ def test_partial_failure_marks_only_the_failed_batch(monkeypatch: pytest.MonkeyP
     assert result.fallback_detail.startswith(failing)
 
 
-def test_client_error_message_after_retry_has_reason_limit_and_usage(
+def test_client_incomplete_stops_after_one_request_with_reason_limit_and_usage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = _ReasoningModel(tokens_per_target=200_000)
@@ -328,14 +328,12 @@ def test_client_error_message_after_retry_has_reason_limit_and_usage(
     assert raised.value.code == "incomplete"
     assert raised.value.incomplete is not None
     message = str(raised.value)
-    assert "3回の試行" in message
+    assert raised.value.attempts == 1
     assert "出力の上限=65536 tokens" in message
     # オンラインの再試行では推論の量を変更しない。
     assert "「推論の量」を下げる" not in message
     assert _API_KEY not in message
     assert [payload["max_output_tokens"] for payload in model.payloads] == [
-        16_384,
-        32_768,
         65_536,
     ]
     assert all(payload["reasoning"] == {"effort": "medium"} for payload in model.payloads)
@@ -355,7 +353,7 @@ def test_capacity_shortage_does_not_retry_the_same_budget(
             response_format=response_format(SqlOutput),
         )
     assert raised.value.code == "incomplete"
-    assert "1回の試行" in str(raised.value)
+    assert raised.value.attempts == 1
     assert [payload["reasoning"] for payload in model.payloads] == [{"effort": "medium"}]
 
 
@@ -387,7 +385,7 @@ def test_budget_is_capped_by_context_room(monkeypatch: pytest.MonkeyPatch) -> No
     assert sent + input_tokens <= 8192
 
 
-def test_unstructured_online_response_checks_incomplete_and_freezes_the_payload(
+def test_unstructured_online_response_rejects_partial_output_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(max_input_tokens=1_000_000, max_output_tokens=65_536)
@@ -419,9 +417,16 @@ def test_unstructured_online_response_checks_incomplete_and_freezes_the_payload(
         return httpx.Response(200, json={"status": "completed", "output_text": "completed"})
 
     _mock_http(monkeypatch, handler)
+
+    def reject_partial_parse(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("未完了の応答を SQL として解析してはいけません。")
+
+    monkeypatch.setattr(module, "_parse_response", reject_partial_parse)
     client = module.OciEnterpriseAiDirectClient(settings)
-    assert client.generate(prompt="synthetic", context="", system_prompt="synthetic") == "completed"
-    assert [p["max_output_tokens"] for p in payloads] == [16384, 32768, 65536]
+    with pytest.raises(EnterpriseAiDirectError) as raised:
+        client.generate(prompt="synthetic", context="", system_prompt="synthetic")
+    assert raised.value.code == "incomplete"
+    assert [p["max_output_tokens"] for p in payloads] == [65536]
     assert all(
         p["input"] == "synthetic" and p["reasoning"] == {"effort": "medium"} for p in payloads
     )
@@ -495,3 +500,19 @@ def test_budget_exhaustion_keeps_its_friendly_reason(code: str) -> None:
     error = EnterpriseAiDirectError("対象を絞ってやり直してください。", code=code)
     assert _job_failure_error_code(error, fallback="fallback") == "ENTERPRISE_AI_" + code.upper()
     assert _job_failure_presentation(error)[0] == str(error)
+
+
+def test_online_budget_uses_configured_request_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """モデル容量を増やしても、設定した要求予算は増えない。"""
+    model = _ReasoningModel()
+    _mock_http(monkeypatch, model)
+    settings = _settings(max_input_tokens=1_000_000, max_output_tokens=131_072)
+    settings.online_max_output_tokens = 24_576
+    client = module.OciEnterpriseAiDirectClient(settings)
+    client.generate(
+        prompt="COMMENT",
+        context="targets: table:APP.T1",
+        system_prompt="SQL",
+        response_format=response_format(SqlOutput),
+    )
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [24_576]

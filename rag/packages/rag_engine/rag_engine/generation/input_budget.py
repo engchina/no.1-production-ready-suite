@@ -6,6 +6,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from pr_backend_core.output_budget import online_output_budget
+
 from rag_engine.config import Settings, get_settings
 from rag_engine.generation.section_expansion import estimate_tokens
 
@@ -23,7 +25,9 @@ def model_input_measurement(
 ) -> dict[str, Any]:
     settings = settings or get_settings(environ={}, dotenv_path=None)
     provider = settings.llm_providers.get(provider_id or settings.default_answer_llm)
-    reserve = provider.max_output_tokens if provider else settings.answer_max_tokens
+    reserve = online_output_budget(
+        provider.max_output_tokens if provider else settings.answer_max_tokens, configured=settings.online_max_output_tokens
+    )
     limit = max(0, settings.answer_max_input_tokens - reserve)
     encoded = json.dumps(
         {

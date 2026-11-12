@@ -41,6 +41,7 @@ from pr_backend_core.config import (
     settings_env_name,
 )
 from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
+from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.chat_attachments.limits import (
@@ -612,6 +613,7 @@ class Settings(
     oci_enterprise_ai_tertiary_project_ocid: str = Field(default="")
     oci_enterprise_ai_tertiary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
+    online_max_output_tokens: int = Field(default=DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, ge=1)
     # 既定のテキストモデルと既定の Vision モデル（#499。画面・API では 2 つとも必須。#566）。
     # 呼び出しに使う ID は enterprise_ai_default_model_id / enterprise_ai_vision_model_id
     # で解決する。

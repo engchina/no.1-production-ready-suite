@@ -47,7 +47,7 @@ _USAGE = SimpleNamespace(
 
 
 def _answer_failure(reason: str = "max_output_tokens") -> AnswerExecutionError:
-    """adapter が送り直しても未完了で送出する失敗を、回答の実行記録の例外で包んだもの。
+    """adapter が未完了で送出する失敗を、回答の実行記録の例外で包んだもの。
 
     本番と同じ例外の連鎖にする。
     """
@@ -60,8 +60,8 @@ def _answer_failure(reason: str = "max_output_tokens") -> AnswerExecutionError:
         response,
         _PROVIDER,  # type: ignore[arg-type]
         2000,
-        retried=True,
-        lowered_effort=True,
+        retried=False,
+        lowered_effort=False,
         reasoning_effort="low",
     )
     final.__cause__ = raw
@@ -96,8 +96,7 @@ def test_incomplete_failure_has_the_reason_specific_message_and_details() -> Non
     assert failure.reason == "max_output_tokens"
     assert failure.stage == "回答の作成"
     assert "回答が出力の上限に達し" in failure.message
-    assert "3回の試行で完了できませんでした" in failure.message
-    assert "登録された出力容量" in failure.message
+    assert "出力の上限に達したため、完了できませんでした" in failure.message
     assert "推論の量を下げ" not in failure.message
     assert "質問を分けるか対象を絞って" in failure.message
     # 技術的な値は「詳細」の文だけに入れる（messaging.md §10.3）。

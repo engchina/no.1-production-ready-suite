@@ -775,7 +775,7 @@ def test_oci_model_omits_empty_tools_for_xai() -> None:
     anyio.run(lambda: wrapped.responses.create(model="m", input="x", tools=[], tool_choice="auto"))
     anyio.run(lambda: wrapped.responses.create(model="m", input="x", tools=[{"type": "function"}]))
 
-    assert client.responses.calls[0] == {"model": "m", "input": "x"}
+    assert client.responses.calls[0] == {"model": "m", "input": "x", "max_output_tokens": 32768}
     assert client.responses.calls[1]["tools"] == [{"type": "function"}]
 
 
