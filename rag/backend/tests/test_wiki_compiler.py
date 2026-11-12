@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pydantic import ValidationError
 from rag_parser_core.oci_enterprise_ai import EnterpriseAiIncompleteResponseError
 
@@ -50,6 +51,7 @@ class Model:
         self.clip, self.invalid = clip, invalid
 
     async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        assert model_purpose_attributes() == {"pr.gen_ai.purpose": "document.extract"}
         data = json.loads(context)
         self.calls.append(data)
         targets = data["target_unit_ids"]

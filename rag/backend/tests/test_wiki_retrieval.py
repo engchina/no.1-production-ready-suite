@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, _SearchState
@@ -90,6 +91,7 @@ class Model:
         self.calls: list[Any] = []
 
     async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        assert model_purpose_attributes() == {"pr.gen_ai.purpose": "document.read"}
         data = json.loads(context)
         self.calls.append(data)
         if "files" in data:

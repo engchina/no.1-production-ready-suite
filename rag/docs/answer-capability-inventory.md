@@ -122,6 +122,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 |---|---|---|
 | `retrieval` | ランキング一覧の取得に失敗。成功した一覧だけを元の重みで使い、全失敗なら検索の失敗を返す | `rag/backend/app/rag/answer_engine.py::_search`・`rag/packages/rag_engine/rag_engine/adapters/oracle/store.py::search_adb_hybrid_chunks` |
 | `query_embedding` | 質問の embedding に失敗し、全文のみの検索で続行（ベクトルのみの検索文は外し、同じ回答では呼び直さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
+| `wiki` | Wiki の独立検索に失敗し、通常検索の採用原文だけで続行。未準備と OFF は失敗と区別して `diagnostics.wiki` に記録する | `rag/backend/app/rag/answer_engine.py::AnswerEngine._wiki_sources` |
 | `evidence_section_paths` | 長い根拠を分ける区切りに使う今の章節の読み出しに失敗し、取込の章節で区切って続行 | `rag/backend/app/rag/answer_engine.py` |
 | `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |

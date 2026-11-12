@@ -148,5 +148,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
         # 最終照合の入力の分け方(#4141)。
     }
+    payload["wiki"] = resolved_settings.model_dump(
+        mode="json", include={key for key in Settings.model_fields if key.startswith("rag_wiki_")}
+    )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

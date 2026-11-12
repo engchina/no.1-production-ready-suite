@@ -205,7 +205,11 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
     assert data["name"] == "経理アシスタント"
     assert data["knowledge_base_count"] == 2
     assert data["config"]["query"]["max_anchors_per_document"] == 3
-    assert set(data["config"]["query"]) == {"max_anchors_per_document", "support_guide_enabled"}
+    assert set(data["config"]["query"]) == {
+        "max_anchors_per_document",
+        "support_guide_enabled",
+        "wiki_search_enabled",
+    }
     assert "system_prompt" not in data["config"]
     assert "default_language" not in data["config"]
     assert [ref["name"] for ref in data["knowledge_bases"]] == ["社内規程", "製品 FAQ"]

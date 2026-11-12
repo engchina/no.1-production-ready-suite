@@ -138,6 +138,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT"),),
     ),
+    PromptStage(
+        "wiki_build",
+        "knowledge",
+        (("instruction", "app.rag.wiki_compiler:WIKI_CONTEXT_PROMPT"),),
+    ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(
         "support_guide_draft",
@@ -160,6 +165,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "history_rewrite",
         "question",
         (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "wiki_files", "retrieval", (("instruction", "app.rag.wiki_retrieval:FILE_PROMPT"),)
+    ),
+    PromptStage(
+        "wiki_units", "retrieval", (("instruction", "app.rag.wiki_retrieval:READ_PROMPT"),)
     ),
     PromptStage(
         "faq_answer",

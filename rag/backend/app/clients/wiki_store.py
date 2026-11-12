@@ -107,9 +107,15 @@ CURRENT_WIKI_SOURCE_SQL = """NOT EXISTS (
 
 def wiki_scope(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     """元の検索条件に、有効な KB からの Wiki 利用という条件だけを加える。"""
-    # Wiki は退役した chunk_set の実験指定では利用せず、現在の版だけを読む。
-    selected = {key: value for key, value in filters.items() if key != "chunk_set_id"}
+    # 明示した版を現在の版に読み替えない。退役版の指定では Wiki は使わない。
+    selected = dict(filters)
     where, binds = _oracle_retrieval_where(selected)
+    if selected.get("chunk_set_id", "").strip():
+        where += """ AND EXISTS (SELECT 1 FROM rag_chunk_sets wiki_current_set
+            JOIN rag_document_recipes wiki_current_recipe
+              ON wiki_current_recipe.recipe_id=wiki_current_set.recipe_id
+            WHERE wiki_current_set.chunk_set_id=c.chunk_set_id
+              AND wiki_current_set.is_active=1 AND wiki_current_set.status='INDEXED')"""
     ids = _filter_id_values(selected.get("knowledge_base_id"))
     requested, extra = (
         _oracle_in_predicate("kb.knowledge_base_id", "wiki_kb", ids) if ids else ("1=1", {})
@@ -228,6 +234,8 @@ class WikiStore:
             f"""SELECT DISTINCT d.document_id,d.file_name
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
             JOIN rag_wiki_documents w ON w.document_id=c.document_id
+            JOIN rag_wiki_pages p ON p.source_chunk_id=c.chunk_id
+              AND p.chunk_set_id=c.chunk_set_id AND p.source_fingerprint=w.published_fingerprint
             WHERE {where} AND w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
             AND w.source_fingerprint=w.published_fingerprint AND {CURRENT_WIKI_SOURCE_SQL}
             ORDER BY d.document_id""",
