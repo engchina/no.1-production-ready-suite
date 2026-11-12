@@ -56,6 +56,11 @@ class _Client(_FakeEnterpriseAiClient):
         self.contexts: list[str] = []
 
     def generate(self, **kwargs: object) -> str:
+        output_format = kwargs.get("response_format")
+        if isinstance(output_format, dict) and output_format.get("name") == "ScopeInterpretation":
+            return (
+                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
+            )
         self.contexts.append(str(kwargs["context"]))
         return self.text
 

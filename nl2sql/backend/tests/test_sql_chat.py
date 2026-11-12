@@ -32,6 +32,11 @@ class RecordingClient(_FakeEnterpriseAiClient):
         self.prompts: list[str] = []
 
     def generate(self, **kwargs: object) -> str:
+        output_format = kwargs.get("response_format")
+        if isinstance(output_format, dict) and output_format.get("name") == "ScopeInterpretation":
+            return (
+                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
+            )
         self.prompts.append(str(kwargs["prompt"]))
         return self.text
 

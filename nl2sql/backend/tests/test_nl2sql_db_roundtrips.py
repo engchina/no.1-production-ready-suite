@@ -603,6 +603,11 @@ class _EnterpriseAiClient:
         return "enterprise-nl2sql-model"
 
     def generate(self, **_kwargs: Any) -> str:
+        output_format = _kwargs.get("response_format", {})
+        if output_format.get("name") == "ScopeInterpretation":
+            return (
+                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
+            )
         return '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
 
 
