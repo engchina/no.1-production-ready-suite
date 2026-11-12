@@ -92,6 +92,7 @@ database migration、サービス再起動、health check も含まれます。
 
 NL2SQL の質問から SQL の生成・実行は MCP（`POST /nl2sql/api/mcp`。開発は `http://localhost:8010/api/mcp`）で公開しています。
 `nl2sql_query` は、選んだ業務プロファイルの設定済み用語集を既定で SQL の生成に使います。使わない場合は `use_glossary: false` を明示します。確認の続きでも、この呼出しの指定を使います。
+新しい質問で「前提を示して生成する」方針または `skip_clarification` を使うときは、原質問と許可されたプロファイル全体から生成します。機械の確認下書きで表示項目や参照範囲を狭めません。明示した確認 session や利用者の回答がある続きは、その確認結果を引き継ぎます。
 画面の左下のアカウントのメニュー →「API キー」で自分のキーを発行し、`Authorization: Bearer <API キー>` を付けて接続します。
 キーは発行した利用者として動き、その利用者のロールの権限・業務プロファイル・Deep Data Security の範囲で答えます。
 
