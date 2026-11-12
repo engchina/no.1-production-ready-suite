@@ -473,6 +473,7 @@ from .reverse_prompts import (
     stage_prompt,
 )
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
+from .schema_constraint_context import schema_constraint_context
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
 from .sql_binding import SqlGenerationValidationError, column_binding_violations
 from .sql_lexing import prepare_oracle_query, use_session_current_datetime
@@ -25637,6 +25638,7 @@ class Nl2SqlService:
             lines.append("additional_instructions:")
             lines.append(additional_instructions)
         lines.append("schema:")
+        visible_tables: list[SchemaTable] = []
         for table in catalog.tables:
             qualified_name = self._catalog_qualified_name(table)
             if allowed_tables and qualified_name not in allowed_tables:
@@ -25645,15 +25647,19 @@ class Nl2SqlService:
                 f"- table {qualified_name} logical={table.logical_name} comment={table.comment}"
             )
             table_allowed_columns = allowed_columns.get(qualified_name, set())
+            visible_columns: list[SchemaColumn] = []
             for column in table.columns:
                 column_token = catalog_match_key(column.column_name)
                 if table_allowed_columns and column_token not in table_allowed_columns:
                     continue
+                visible_columns.append(column)
                 lines.append(
                     "  - column "
                     f"{column_token} logical={column.logical_name} "
                     f"type={column.data_type} comment={column.comment}"
                 )
+            visible_tables.append(table.model_copy(update={"columns": visible_columns}))
+        lines.extend(schema_constraint_context(visible_tables))
         learning_context = self._learning_examples_context(learning_examples or [])
         if learning_context:
             lines.append(learning_context)
