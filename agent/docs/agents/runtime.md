@@ -127,3 +127,16 @@
 | 二重の実行（古い所有者の開始） | 3 | `test_run_claim_fencing.py`（#2606） |
 
 不変条件では扱わず #2586 に残すもの: 停止と復帰の手順（受付の停止・特定の能力の禁止・緊急の停止）とその演練、点検の証拠の集約（pass / blocker / warning / not-applicable）、承認の滞留の責任者、request / run / tool の ID の関連付けの測定、実 OCI / Oracle の隔離環境での確認。
+
+## API backend の単一所有者（#4216）
+
+同じ保存先の API backend は 1 プロセスだけ起動する。起動時の Run の中断復元、評価の復元、
+自動実行の開始より先に所有権を取得し、競合したプロセスは起動に失敗する。Oracle は schema 全体で
+共用する予約済み checkpoint 行 `__api_backend_owner__` を専用接続で `FOR UPDATE NOWAIT` し、
+file は snapshot に隣接する `.owner.lock` の OS lock を使う。正常な checkpoint の head は lock しない。
+CLI と external dispatcher の既存の実行の claim は変えない。API は external モードでも排他にする。
+
+所有権は終了時の書き込みを終えるまで保持する。Oracle の所有権の専用接続が失われた場合は、
+監視が検出するとプロセスを終了する（通常 1 秒間隔、通信の上限 5 秒）。切断の検出には時間があるため、
+外部操作の exactly-once は保証しない。DB 停止中は従来どおり画面の起動を許すが、所有権の取得までは
+保存先の復元も自動実行も始めない。2 つ目の通常 backend に観察専用の役割は提供しない。

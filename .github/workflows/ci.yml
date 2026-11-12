@@ -501,6 +501,7 @@ jobs:
               - "nl2sql/backend/tests/*oracle_live*.py"
               - "nl2sql/backend/app/features/nl2sql/db_admin_chat_columns.py"
             agent_oracle:
+              - "agent/backend/app/main.py"
               - "agent/backend/app/system_schema.py"
               - "agent/backend/app/oracle_connection.py"
               - "agent/backend/app/cli/agent_system_schema.py"

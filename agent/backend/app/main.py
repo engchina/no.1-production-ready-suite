@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse, Response
 from app.api.router import api_router
 from app.features.agent import storage_bootstrap
 from app.features.agent.runtime import AgentRuntimeStorageUnavailableError
+from app.features.agent.storage_owner import OWNER_MESSAGE, StorageAlreadyOwnedError, storage_owner
 from app.features.agent.trace_spans import trace_spans
 from app.observability import (
     metrics_response,
@@ -38,7 +39,29 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    from pr_backend_core.oracle_errors import is_oracle_connection_error
+
+    storage_owner.enabled = True
+    try:
+        try:
+            await asyncio.to_thread(storage_owner.acquire)
+        except StorageAlreadyOwnedError:
+            logger.error("agent_storage_already_owned", extra={"reason": OWNER_MESSAGE})
+            raise
+        except Exception as exc:
+            if not is_oracle_connection_error(exc):
+                raise
+            # DB 停止中は従来どおり起動し、保存先の読み込みの前に再取得する。
+            logger.warning("agent_storage_owner_database_unavailable")
+        async with _application_lifespan(application):
+            yield
+    finally:
+        await asyncio.to_thread(storage_owner.close)
+
+
+@asynccontextmanager
+async def _application_lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Run の repository・定義・履歴は DB を待たずにバックグラウンドで読み込む（DB に接続できない
     # あいだも起動する。RAG / NL2SQL と同じ。#1212）。
     with tracing_lifecycle(

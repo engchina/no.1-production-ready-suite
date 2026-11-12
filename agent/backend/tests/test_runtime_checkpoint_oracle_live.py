@@ -611,3 +611,27 @@ def test_audit_page_artifacts_are_scoped_and_accept_large_bind_in_oracle(
                         f"DELETE FROM {table} WHERE run_id = :run_id", {"run_id": run.id}
                     )  # nosec B608
             connection.commit()
+
+
+def test_backend_owner_excludes_second_connection_until_close(
+    checkpoint_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.features.agent import storage_owner
+
+    # テストの予約行だけを使い、同じ DB の稼働 backend の所有権へ触れない。
+    monkeypatch.setattr(storage_owner, "OWNER_KEY", checkpoint_key)
+    first, second = storage_owner.StorageOwner(), storage_owner.StorageOwner()
+    try:
+        first._acquire_oracle()
+        with pytest.raises(storage_owner.StorageAlreadyOwnedError):
+            second._acquire_oracle()
+        # 通常の Run は別接続で書ける（正常な head を lock していない）。
+        repository = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key + "-run")
+        run = repository.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="default"))
+        assert repository.get_run(run.id).status == RunStatus.QUEUED
+        first.close()
+        second._acquire_oracle()
+    finally:
+        first.close()
+        second.close()
+        _delete_key(checkpoint_key + "-run")

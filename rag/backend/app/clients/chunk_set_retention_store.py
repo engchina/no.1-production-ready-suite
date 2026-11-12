@@ -233,6 +233,11 @@ def _unreferenced_paths(
                     WHERE e.document_id = :document_id AND {_DERIVED_PATH_SQL} = :path
                 )
                OR EXISTS (
+                    SELECT 1 FROM rag_document_extraction_revisions e
+                    JOIN rag_document_recipes r ON r.recipe_id = e.recipe_id
+                    WHERE r.document_id = :document_id AND {_DERIVED_PATH_SQL} = :path
+                )
+               OR EXISTS (
                     SELECT 1 FROM rag_document_recipes r
                     WHERE r.document_id = :document_id
                       AND JSON_VALUE(r.preprocess_artifact, '$.object_storage_path') = :path

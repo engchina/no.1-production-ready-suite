@@ -135,6 +135,9 @@ def ensure_ready() -> None:
 
 def _load_locked() -> None:
     global _control_plane_restored, _interrupted_runs_checked
+    from app.features.agent.storage_owner import storage_owner
+
+    storage_owner.acquire()
     repository = runtime.get_runtime_repository()
     if storage_backend.fell_back_to_memory():
         # checkpoint が読めず memory にした。定義も同じ保存先にそろえる（作った store を捨てる）。
