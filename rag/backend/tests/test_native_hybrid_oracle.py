@@ -33,7 +33,7 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
 
     settings = get_settings().model_copy(
         update={
-            "rag_hybrid_search_backend": "oracle_native",
+            "rag_hybrid_search_backend": "oracle_hybrid_index",
             "rag_vector_index_profile": "balanced",
             "oracle_vector_target_accuracy": 100,
         }
@@ -87,8 +87,8 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
 @pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize(
     "backend",
-    [pytest.param("oracle_native", id=f"native-scope-{i}") for i in range(4)]
-    + [pytest.param("sudachi", id="legacy")],
+    [pytest.param("oracle_hybrid_index", id=f"native-scope-{i}") for i in range(4)]
+    + [pytest.param("oracle_separate_sql", id="legacy")],
 )
 async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     backend: str, monkeypatch: pytest.MonkeyPatch
@@ -139,7 +139,7 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     assert {c.metadata["document_id"] for c in result.child_chunks} == set(ids[:2])
     fusion = state.retrieval_stages[-1]["rrf"]
     assert [row["weight"] for row in fusion["lists"]] == pytest.approx(
-        [0.7, 0.21] if backend == "oracle_native" else [0.49, 0.21, 0.21]
+        [0.7, 0.21] if backend == "oracle_hybrid_index" else [0.49, 0.21, 0.21]
     )
     assert all(row["status"] == "completed" for row in fusion["lists"])
     assert state.filters is not None
@@ -169,7 +169,7 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
             status = getattr(ranking, "status", "completed")
             diagnostics = (
                 await _empty_native_scope_diagnostics(oracle, ids[0], scoped)
-                if status == "empty" and backend == "oracle_native"
+                if status == "empty" and backend == "oracle_hybrid_index"
                 else None
             )
             assert status == "completed", (
@@ -247,7 +247,7 @@ async def test_native_combined_original_and_provenance_channels(
 
     settings = get_settings().model_copy(
         update={
-            "rag_hybrid_search_backend": "oracle_native",
+            "rag_hybrid_search_backend": "oracle_hybrid_index",
             "rag_rrf_method_ratio": ratio,
             # 原生索引の 1 回の UNION の契約を確かめる(範囲の行を距離順に読む経路は下のテスト)。
             "rag_native_vector_exact_max_chunks": 0,
@@ -324,7 +324,7 @@ async def test_large_native_scope_is_compressed_without_losing_page_or_acl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_hybrid_search_backend", "oracle_native")
+    monkeypatch.setattr(settings, "rag_hybrid_search_backend", "oracle_hybrid_index")
     oracle = OracleClient(settings)
     token = uuid4().hex[:10]
     kb = await oracle.create_knowledge_base(name=f"合成大規模KB {token}")
@@ -397,7 +397,9 @@ async def test_native_vector_returns_scope_rows_for_a_far_question_and_after_rep
     from app.clients.oracle import NativeSearchRows
     from app.schemas.extraction import StructuredExtraction
 
-    settings = get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_native"})
+    settings = get_settings().model_copy(
+        update={"rag_hybrid_search_backend": "oracle_hybrid_index"}
+    )
     oracle = OracleClient(settings)
     token = uuid4().hex[:10]
     scoped_kb = await oracle.create_knowledge_base(name=f"合成の範囲KB {token}")
@@ -488,7 +490,7 @@ async def test_native_index_shortage_after_replacement_is_filled_by_one_wider_re
 
     base = get_settings().model_copy(
         update={
-            "rag_hybrid_search_backend": "oracle_native",
+            "rag_hybrid_search_backend": "oracle_hybrid_index",
             "rag_native_vector_exact_max_chunks": 0,
         }
     )
@@ -557,7 +559,9 @@ async def test_native_vector_exact_read_keeps_page_limited_scope() -> None:
     """ページで絞った範囲(chunk set の一部)でも、距離順の結果に範囲の外の行が入らない。"""
     from app.clients.oracle import NativeSearchRows
 
-    settings = get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_native"})
+    settings = get_settings().model_copy(
+        update={"rag_hybrid_search_backend": "oracle_hybrid_index"}
+    )
     oracle = OracleClient(settings)
     token = uuid4().hex[:10]
     vectors = [_axis_vector(0, 10 + index, 0.05 * (index + 1)) for index in range(8)]
@@ -605,7 +609,7 @@ async def test_long_native_scope_searches_every_branch_and_stays_inside_the_scop
     from app.clients.oracle import NativeSearchRows, _NativeScope
 
     settings = get_settings().model_copy(
-        update={"rag_hybrid_search_backend": "oracle_native", "rag_min_similarity": 0.0}
+        update={"rag_hybrid_search_backend": "oracle_hybrid_index", "rag_min_similarity": 0.0}
     )
     token = uuid4().hex[:10]
     word = f"synthetic{token}"
@@ -807,7 +811,7 @@ async def test_native_cosine_threshold_preserves_independent_text_and_actual_rrf
 
     settings = get_settings().model_copy(
         update={
-            "rag_hybrid_search_backend": "oracle_native",
+            "rag_hybrid_search_backend": "oracle_hybrid_index",
             "rag_min_similarity": 0.3,
             "rag_rrf_method_ratio": (10.0, 1.0),
             "rag_rrf_k": 60,
@@ -873,7 +877,7 @@ async def test_native_cosine_threshold_preserves_independent_text_and_actual_rrf
 
 
 @pytest.mark.usefixtures("oracle_db")
-@pytest.mark.parametrize("backend", ["oracle_native", "sudachi"])
+@pytest.mark.parametrize("backend", ["oracle_hybrid_index", "oracle_separate_sql"])
 @pytest.mark.parametrize("mode", [SearchMode.VECTOR, SearchMode.KEYWORD, SearchMode.HYBRID])
 async def test_zero_candidate_limit_keeps_all_scoped_rows(backend: str, mode: SearchMode) -> None:
     token = uuid4().hex[:10]

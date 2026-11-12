@@ -127,7 +127,7 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
-  hybrid_search_backend: "oracle_native",
+  hybrid_search_backend: "oracle_hybrid_index",
   rrf_method_ratio: [1, 1],
   rrf_source_ratio: [7, 3],
   runtime_terms_search_enabled: false,
@@ -410,7 +410,7 @@ for (const width of [1280, 375]) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`検索実行方式は共通のSudachi処理を説明し保存値を維持する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+  test(`検索実行方式は共通のSudachi処理を説明し新しい設定値を保存する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme, sidebarCollapsed: true }, version: 0 })), theme);
     await mockRetrievalCards(page);
     const saved: unknown[] = [];
@@ -432,14 +432,14 @@ for (const theme of ["light", "dark"] as const) {
     await page.getByRole("option", { name: individual, exact: true }).click();
     await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
     await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({ hybrid_search_backend: "sudachi" });
+    expect(saved[0]).toMatchObject({ hybrid_search_backend: "oracle_separate_sql" });
     await page.reload();
     await expect(method).toContainText(individual);
     await method.click();
     await page.getByRole("option", { name: native, exact: true }).click();
     await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
     await expect.poll(() => saved.length).toBe(2);
-    expect(saved[1]).toMatchObject({ hybrid_search_backend: "oracle_native" });
+    expect(saved[1]).toMatchObject({ hybrid_search_backend: "oracle_hybrid_index" });
     await page.reload();
     await expect(method).toContainText(native);
     await section.scrollIntoViewIfNeeded();

@@ -15,6 +15,7 @@ from rag_engine.generation.answering import (
     AnswerContext,
     build_adb_hybrid_answer_context,
     build_question_text_search_info,
+    _text_search_details,
 )
 from rag_engine.knowledge.domain_keywords import save_domain_keywords
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query_with_trace
@@ -22,7 +23,7 @@ from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 class DomainKeywordImpactTests(unittest.TestCase):
     def settings(self, **kwargs):
-        return replace(get_settings(), hybrid_search_backend="sudachi", **kwargs)
+        return replace(get_settings(), hybrid_search_backend="oracle_separate_sql", **kwargs)
 
     def test_registered_keywords_are_never_added_by_partial_match(self):
         # 質問の語と部分的に重なるだけの登録キーワードは検索文に加えない。この機能と設定は廃止した (#557)。
@@ -130,13 +131,15 @@ class DomainKeywordImpactTests(unittest.TestCase):
 
 
 def test_native_text_input_does_not_tokenize_or_read_registered_dictionary():
-    settings = replace(get_settings(), hybrid_search_backend="oracle_native")
+    settings = replace(get_settings(), hybrid_search_backend="oracle_hybrid_index")
     with (
         patch("rag_engine.generation.answering.tokenizer_fingerprint", side_effect=AssertionError("Sudachi呼出し禁止")),
         patch("rag_engine.generation.answering.load_domain_keywords", side_effect=AssertionError("辞書読出し禁止")),
     ):
         info = build_question_text_search_info("合成の原質問", settings, query_variants=["合成の原質問", "合成の追加文"])
-    assert info.tokenizer == "oracle_native"
+    assert info.tokenizer == "oracle_hybrid_index"
+    assert "共通の検索語処理" in info.tokenizer_label
+    assert "共通の検索語処理で全文式を作り" in _text_search_details(info)[0]
     assert not info.tokens and not info.oracle_text_query
     assert [row["native_search_text"] for row in info.tokenization_traces] == ["合成の原質問", "合成の追加文"]
 
@@ -147,9 +150,20 @@ def test_native_mode_never_falls_through_to_independent_legacy_schema():
     from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable
     from rag_engine.adapters.oracle.store import search_adb_hybrid_chunks
 
-    settings = replace(get_settings(), hybrid_search_backend="oracle_native")
+    settings = replace(get_settings(), hybrid_search_backend="oracle_hybrid_index")
     with (
         patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=AssertionError("旧schemaへの接続禁止")),
         pytest.raises(NativeHybridUnavailable),
     ):
         search_adb_hybrid_chunks(retrieval_queries=["合成の原質問"], settings=settings)
+
+
+def test_search_backend_names_describe_execution_path():
+    import pytest
+
+    for backend in ("oracle_hybrid_index", "oracle_separate_sql"):
+        settings = get_settings(environ={"RAG_HYBRID_SEARCH_BACKEND": backend}, dotenv_path=None)
+        assert settings.hybrid_search_backend == backend
+    for old in ("oracle_native", "sudachi"):
+        with pytest.raises(ValueError, match="検索方式"):
+            get_settings(environ={"RAG_HYBRID_SEARCH_BACKEND": old}, dotenv_path=None)

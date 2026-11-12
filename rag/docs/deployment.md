@@ -2244,3 +2244,35 @@ sudo -n ./platform/deploy/suite-update.sh
 ```
 
 独立して rag_engine の `.env` を用意した環境では、そのファイルからも `RAG_ENGINE_SCREEN_LINKING` と `RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK` の行を除く。新しいコードには旧キーを受ける互換動作はない。この手順は配備の承認後に行う。
+
+
+## 検索実行方式の設定値の更新
+
+索引と実行経路が分かる次の値に統一する。
+
+| 旧値 | 現在の値 | 実行方式 |
+|---|---|---|
+| `oracle_native` | `oracle_hybrid_index` | Oracle Hybrid Vector Index |
+| `sudachi` | `oracle_separate_sql` | ベクトル検索とOracle Textの個別SQL |
+
+どちらもOracle AI Databaseを使い、検索語は共通のSudachi処理で作る。実行時の設定とAPIは旧値を受け付けない。
+再配備は`migrate_saved_settings`でSettingsの読込み前に既存の`.env`を移行し、選択していた方式を維持する。
+移行が失敗した場合は配備を止める。DB・索引・文書・embeddingは変更しない。
+
+通常の配備はrepository直下で実行する。
+
+```bash
+sudo -n ./platform/deploy/suite-update.sh
+```
+
+開発環境や手動復旧では、最新コードとbackendの依存関係を用意してから、次の順で実行する。
+既定はdry-runで、変更対象のキーと新値だけを表示し、他の設定値は表示しない。
+
+```bash
+cd rag/backend
+.venv/bin/python -m app.rag.hybrid_search_settings_migration --env-file .env
+.venv/bin/python -m app.rag.hybrid_search_settings_migration --env-file .env --apply
+```
+
+OS・サービス起動環境に`RAG_HYBRID_SEARCH_BACKEND`を直接設定している場合も、同じ表の現在の値へ更新してから起動する。
+更新後は「検索方法」の実行方式を確認する。APIで明示指定するクライアントも現在の値へ更新する。

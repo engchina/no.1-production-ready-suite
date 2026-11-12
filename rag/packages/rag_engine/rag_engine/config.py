@@ -255,7 +255,7 @@ class Settings:
     retrieval_query_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # 検索文ごとに、全文検索の語の上限で優先する語（質問に足した用語・同義語）。ドメインキーワードと同じ段で扱う。
     retrieval_query_keywords: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    hybrid_search_backend: str = "oracle_native"
+    hybrid_search_backend: str = "oracle_hybrid_index"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     # rerank の後の並びの枠（rerank の順の件数・検索の順の件数。#4664）。
@@ -449,7 +449,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     )
     runtime_knowledge_raw = env.get("RUNTIME_KNOWLEDGE_PATH", "").strip()
     settings = Settings(
-        hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_native")),
+        hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_hybrid_index")),
         rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[7,3]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
         rerank_slot_ratio=_slot_ratio(env.get("RAG_RERANK_SLOT_RATIO", "[7,3]")),
@@ -694,6 +694,6 @@ def _slot_ratio(raw: str) -> tuple[int, int]:
 
 
 def _hybrid_backend(value: str) -> str:
-    if value not in {"oracle_native", "sudachi"}:
-        raise ValueError("検索方式はoracle_nativeまたはsudachiを指定してください。")
+    if value not in {"oracle_hybrid_index", "oracle_separate_sql"}:
+        raise ValueError("検索方式はoracle_hybrid_indexまたはoracle_separate_sqlを指定してください。")
     return value

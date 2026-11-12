@@ -56,7 +56,7 @@ def display_offset(display: str, section) -> int:
 class AnswerGenerationTests(unittest.TestCase):
     def setUp(self):
         # このfixtureは従来の分割・SQL契約を検証する。原生方式は専用の回帰で扱う。
-        backend = patch.dict("os.environ", {"RAG_HYBRID_SEARCH_BACKEND": "sudachi"})
+        backend = patch.dict("os.environ", {"RAG_HYBRID_SEARCH_BACKEND": "oracle_separate_sql"})
         backend.start()
         self.addCleanup(backend.stop)
         """主張と引用の生成は専用テストで検証し、検索・実行フローのテストから分離する。"""

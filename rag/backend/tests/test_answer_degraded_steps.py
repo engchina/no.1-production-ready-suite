@@ -450,7 +450,7 @@ async def _degraded_search(
     )
 
 
-@pytest.mark.parametrize("backend", ["oracle_native", "sudachi"])
+@pytest.mark.parametrize("backend", ["oracle_hybrid_index", "oracle_separate_sql"])
 async def test_query_embedding_failure_falls_back_to_keyword_only(backend: str) -> None:
     """全文を使う検索文を全文のみで検索し、全文を使わない検索文は外す。検索を重ねても呼び直さない。"""
     oracle = _SearchLog()

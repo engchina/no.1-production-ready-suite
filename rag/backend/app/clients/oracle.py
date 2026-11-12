@@ -863,7 +863,7 @@ class OracleClient:
         """
         self._validate_embedding_width(embedding, "query embedding")
         await self._ensure_native_hybrid_ready()
-        if self._settings.rag_hybrid_search_backend == "oracle_native":
+        if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             hits = await self._native_search_hits(
                 query, embedding, top_k, filters or {}, SearchMode.VECTOR
             )
@@ -903,7 +903,7 @@ class OracleClient:
         if mode == SearchMode.KEYWORD:
             return await self.keyword_search(query, top_k, filters)
 
-        if self._settings.rag_hybrid_search_backend == "oracle_native":
+        if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             await self._ensure_native_hybrid_ready()
             self._validate_embedding_width(embedding, "query embedding")
             return await self._native_search_hits(query, embedding, top_k, filters or {}, mode)
@@ -992,7 +992,7 @@ class OracleClient:
             return []
         await self._ensure_native_hybrid_ready()
         filters = filters or {}
-        if self._settings.rag_hybrid_search_backend == "oracle_native":
+        if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             for _, embedding, mode in searches:
                 if mode != SearchMode.KEYWORD:
                     self._validate_embedding_width(embedding, "query embedding")
@@ -7902,7 +7902,7 @@ class OracleClient:
                     "query": queries[index],
                     "error": type(errors[index]).__name__ if errors and index in errors else "",
                     "expression": binds.get(f"query_{index}"),
-                    "native": self._settings.rag_hybrid_search_backend == "oracle_native",
+                    "native": self._settings.rag_hybrid_search_backend == "oracle_hybrid_index",
                     "raw_count": len(rows),
                     "results": [
                         {
@@ -7926,7 +7926,7 @@ class OracleClient:
                 if kind == "vector"
                 else "Oracle原生 text_score（大きい順）"
             )
-            if self._settings.rag_hybrid_search_backend == "oracle_native"
+            if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index"
             else "コサイン類似度（1 − COSINE 距離・大きい順）"
             if kind == "vector"
             else "Oracle Text SCORE（大きい順）",
@@ -7962,7 +7962,7 @@ class OracleClient:
 
     async def _ensure_native_hybrid_ready(self) -> None:
         """原生方式を選択した場合は、準備不足を空結果として扱わない。"""
-        if self._settings.rag_hybrid_search_backend != "oracle_native":
+        if self._settings.rag_hybrid_search_backend != "oracle_hybrid_index":
             return
         from rag_engine.adapters.oracle.native_hybrid import (
             NATIVE_HYBRID_INDEX,
@@ -8521,7 +8521,7 @@ class OracleClient:
         self, embedding_bind: object, *, top_k: int, filters: dict[str, str]
     ) -> list[dict[str, object]]:
         """vector の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。近い順)。"""
-        if self._settings.rag_hybrid_search_backend == "oracle_native":
+        if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             return await self._native_rows(
                 "vector", "", embedding_bind, top_k=top_k, filters=filters
             )
@@ -8576,7 +8576,7 @@ class OracleClient:
         self, text_query: str, *, top_k: int, filters: dict[str, str]
     ) -> list[dict[str, object]]:
         """keyword の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。score の高い順)。"""
-        if self._settings.rag_hybrid_search_backend == "oracle_native":
+        if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             return await self._native_rows("keyword", text_query, (), top_k=top_k, filters=filters)
         where_sql, binds = _oracle_retrieval_where(filters)
         binds.update({"query": text_query, "top_k": top_k})
@@ -8616,7 +8616,7 @@ class OracleClient:
         """Oracle Text で keyword chunk を取得する。"""
         text_query = (
             query.strip()
-            if self._settings.rag_hybrid_search_backend == "oracle_native"
+            if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index"
             else _oracle_text_query(query, settings=self._settings)
         )
         result: list[RetrievedChunk] = []

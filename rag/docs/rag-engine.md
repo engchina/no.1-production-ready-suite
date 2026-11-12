@@ -446,7 +446,7 @@ SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile
 
 全体の「検索方法」で `Oracle Hybrid Vector Index（既定）` と `ベクトル検索＋Oracle Text個別実行` を選ぶ。
 どちらもOracle AI Databaseを使い、日本語の検索語は共通のSudachi処理で作成する。選択するのは形態素解析器ではなく、使用する索引と検索の実行経路である。個別実行はベクトルSQLとOracle TextのSQLを別々に呼び出し、取得した順位をアプリ側で融合する。以下では前者を原生方式、後者を個別SQL方式と呼ぶ。
-保存先は `RAG_HYBRID_SEARCH_BACKEND=oracle_native|sudachi`。設定が無い既存環境も原生方式へ変わる。
+保存先は `RAG_HYBRID_SEARCH_BACKEND=oracle_hybrid_index|oracle_separate_sql`。設定が無い既存環境も原生方式へ変わる。
 更新ではシステムテーブルの非破壊migrationが検索用JSONと同期trigger、原生索引を追加する。
 元のchunk、検索本文、既存のCohere埋め込みは保持する。JSONに既存の数値配列を入れるため、
 DB内の外部AI資格情報や全庫のembedding再生成は不要。検索用JSON・原生索引分のDB容量と、

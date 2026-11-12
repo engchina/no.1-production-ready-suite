@@ -686,6 +686,9 @@ install_service_venvs() {
 # system schema の migration が移す。
 migrate_saved_settings() {
   log "Migrating saved RAG settings (idempotent)."
+  # Settingsを読む処理より先に旧い検索方式の値を移す。失敗したら配備を止める。
+  run_as_service_user_in_dir "${BACKEND_DIR}" \
+    ".venv/bin/python -m app.rag.hybrid_search_settings_migration --env-file .env --apply" || return 1
   # 入出力のチェックを分ける前の値を、サービスの起動前に一度だけ移す。
   run_as_service_user_in_dir "${BACKEND_DIR}" \
     ".venv/bin/python -m app.rag.guardrail_settings_migration --env-file .env"

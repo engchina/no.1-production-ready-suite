@@ -1214,7 +1214,7 @@ class AnswerEngine:
             for channel in channels[query]:
                 if (
                     channel == "hybrid"
-                    and self._settings.rag_hybrid_search_backend != "oracle_native"
+                    and self._settings.rag_hybrid_search_backend != "oracle_hybrid_index"
                 ):
                     searches.extend(
                         (query, embeddings[query], mode)

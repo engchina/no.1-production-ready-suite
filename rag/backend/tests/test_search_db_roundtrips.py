@@ -354,7 +354,9 @@ class _DelayedBranches(OracleClient):
 
     def __init__(self, *, vector_delay: float, keyword_delay: float) -> None:
         super().__init__(
-            settings=Settings.model_construct(rag_rrf_k=60, rag_hybrid_search_backend="sudachi")
+            settings=Settings.model_construct(
+                rag_rrf_k=60, rag_hybrid_search_backend="oracle_separate_sql"
+            )
         )
         self._vector_delay = vector_delay
         self._keyword_delay = keyword_delay
@@ -573,7 +575,7 @@ def _search_settings() -> Settings:
         oci_genai_embedding_dim=1,
         rag_min_similarity=0.05,
         rag_rrf_k=60,
-        rag_hybrid_search_backend="sudachi",
+        rag_hybrid_search_backend="oracle_separate_sql",
     )
 
 
