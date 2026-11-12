@@ -3594,6 +3594,12 @@ class AgentRuntimeRepository:
                     "出力の項目を記録せずに回答を作ったため、"
                     "項目の値を記録するようモデルに差し戻しました。"
                 )
+            elif action == "data_reference_retry":
+                record["data_reference_retry"] = True
+                message = (
+                    "取得結果の数値表または行・列参照の形式が不正だったため、"
+                    "取得済みの参照を使うよう回答を差し戻しました。"
+                )
             elif action == "refused":
                 record["refused"] = True
                 if declined:
