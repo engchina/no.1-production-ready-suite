@@ -1019,3 +1019,44 @@ async def test_separate_text_scores_match_direct_contains_across_query_shapes() 
                 ]
                 assert [row["keyword_rank"] for row in actual] == expected_ranks
                 assert all(row["chunk_text"] in texts for row in actual)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_hybrid_backends_keep_full_union_before_final_selection() -> None:
+    """各経路2件の合併が3件になる場合も、両backendの全候補が一致する(#4956)。"""
+    word = f"syntheticunion{uuid4().hex[:10]}"
+    settings = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": "oracle_hybrid_index",
+            "rag_native_vector_exact_max_chunks": 50000,
+            "rag_min_similarity": 0.2,
+            "rag_rrf_method_ratio": (1.0, 1.0),
+            "oracle_vector_target_accuracy": 100,
+        }
+    )
+    native = OracleClient(settings)
+    texts = [word, "syntheticvectorfirst", "syntheticvectorsecond"]
+    document_id = await _indexed_document(
+        native,
+        file_name=f"synthetic-union-{uuid4().hex}.txt",
+        chunks=[
+            Chunk(text=text, index=i, start_offset=0, end_offset=len(text), metadata={})
+            for i, text in enumerate(texts)
+        ],
+        embeddings=[_axis_vector(1, 2, 0), _axis_vector(0, 2, 0), _axis_vector(0, 2, 0.1)],
+    )
+    separate = OracleClient(
+        settings.model_copy(update={"rag_hybrid_search_backend": "oracle_separate_sql"})
+    )
+    vector = _axis_vector(0, 2, 0)
+    filters = {"document_id": document_id}
+    native_hits = await native.hybrid_search(word, vector, 2, filters=filters)
+    separate_hits = await separate.hybrid_search(word, vector, 2, filters=filters)
+    assert len(native_hits) == len(separate_hits) == 3
+    assert [hit.chunk_id for hit in separate_hits] == [hit.chunk_id for hit in native_hits]
+    assert [hit.score for hit in separate_hits] == pytest.approx([hit.score for hit in native_hits])
+    assert [
+        (hit.metadata.get("vector_rank"), hit.metadata.get("keyword_rank")) for hit in separate_hits
+    ] == [
+        (hit.metadata.get("vector_rank"), hit.metadata.get("keyword_rank")) for hit in native_hits
+    ]

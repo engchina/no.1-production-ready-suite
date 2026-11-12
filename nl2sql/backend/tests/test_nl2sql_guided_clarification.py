@@ -2368,7 +2368,7 @@ def test_mcp_query_with_assume_policy_does_not_ask_and_generates_without_check(
     assert jobs.started[0].requirement_session_id is None
 
 
-def test_mcp_query_with_assume_policy_still_applies_a_clear_requirement(
+def test_mcp_query_with_assume_policy_does_not_apply_an_automatic_clear_draft(
     mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
 ) -> None:
     llm = _ScriptedLlm(
@@ -2380,8 +2380,14 @@ def test_mcp_query_with_assume_policy_still_applies_a_clear_requirement(
         "nl2sql_query", {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
     )
     assert is_error is False, content
-    assert content["requirement"]["status"] == "applied"
-    assert jobs.started[0].requirement_session_id == content["requirement"]["session_id"]
+    assert content["requirement"]["status"] == "skipped"
+    assert len(jobs.started) == 1
+    job = jobs.started[0]
+    assert job.requirement_session_id is None and job.sql_requirement is None
+    assert job.question == job.generation_question == "出荷済みの受注金額の合計"
+    assert job.allowed_objects.table_names == []
+    # 未確認の新規質問は、たとえ推定可能でも下書きを作成・反映しない。
+    assert len(llm.calls) == 0
 
 
 def test_mcp_query_with_assume_policy_skips_check_when_select_and_from_are_unclear(

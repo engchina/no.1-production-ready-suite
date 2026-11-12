@@ -904,7 +904,10 @@ class OracleClient:
         mode: SearchMode = SearchMode.HYBRID,
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
-        """ベクトル検索とキーワード検索を Reciprocal Rank Fusion で統合する。"""
+        """各経路の上位 ``top_k`` を RRF で合併し、全候補を後段へ渡す。
+
+        引用ラベルがある場合は、既存の優先・件数制限を適用する。
+        """
         if mode == SearchMode.VECTOR:
             return await self.vector_search(embedding, top_k, filters, query=query)
         if mode == SearchMode.KEYWORD:
@@ -922,7 +925,7 @@ class OracleClient:
             self.citation_label_search(query, filters),
         )
         return _with_citation_hits(
-            citation_hits, self._fuse_hybrid_hits(vector_hits, keyword_hits, top_k), top_k
+            citation_hits, self._fuse_hybrid_hits(vector_hits, keyword_hits), top_k
         )
 
     async def citation_label_search(
@@ -1215,7 +1218,7 @@ class OracleClient:
                 results.append(
                     _with_citation_hits(
                         citations,
-                        self._fuse_hybrid_hits(vector_hits, keyword_hits, top_k),
+                        self._fuse_hybrid_hits(vector_hits, keyword_hits),
                         top_k,
                     )
                 )
@@ -1225,9 +1228,8 @@ class OracleClient:
         self,
         vector_hits: list[RetrievedChunk],
         keyword_hits: list[RetrievedChunk],
-        top_k: int,
     ) -> list[RetrievedChunk]:
-        """vector と keyword の候補を Reciprocal Rank Fusion で統合する(順位だけで決まる)。"""
+        """経路ごとの上位候補をすべて RRF で統合し、後段の選択へ渡す(#4956)。"""
         from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_rankings
 
         weights = RrfWeights(*self._settings.rag_rrf_method_ratio)
@@ -1254,7 +1256,7 @@ class OracleClient:
                 fused[chunk_id],
                 scores[chunk_id],
             ),
-        )[: top_k or None]
+        )
         fused_count = len(ranked_ids)
         branch_metadata: dict[str, MetadataValue] = {
             "retrieval_vector_count": len(vector_hits),
