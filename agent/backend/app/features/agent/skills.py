@@ -289,7 +289,24 @@ class SkillRegistry:
         with self._lock:
             if skill.id in self._builtin_ids:
                 raise ValueError("組み込みのスキルと同じ ID は使えません。")
-            stored = skill.model_copy(deep=True, update={"source": "runtime", "updated_at": _now()})
+            current = self._skills.get(skill.id)
+            candidate = skill.model_copy(deep=True, update={"source": "runtime"})
+            if current is not None:
+                candidate.created_at = current.created_at
+                candidate.updated_at = current.updated_at
+                # modelの比較はdumpで非公開になる参照本文も含む。
+                if candidate == current:
+                    return current.model_copy(deep=True)
+            candidate.updated_at = _now()
+            self._skills[candidate.id] = candidate
+            return candidate.model_copy(deep=True)
+
+    def restore_custom(self, skill: AgentSkillDefinition) -> AgentSkillDefinition:
+        """保存定義を復元する。読み取りで作成・更新日時を変更しない。"""
+        with self._lock:
+            if skill.id in self._builtin_ids:
+                raise ValueError("組み込みのスキルと同じ ID は使えません。")
+            stored = skill.model_copy(deep=True, update={"source": "runtime"})
             self._skills[stored.id] = stored
             return stored.model_copy(deep=True)
 
@@ -306,9 +323,7 @@ class SkillRegistry:
                 if skill.id in self._builtin_ids:
                     skipped.append(skill.id)
                     continue
-                self._skills[skill.id] = skill.model_copy(
-                    deep=True, update={"source": "runtime", "updated_at": _now()}
-                )
+                self._skills[skill.id] = skill.model_copy(deep=True, update={"source": "runtime"})
         return skipped
 
     def remove(self, skill_id: str) -> None:
