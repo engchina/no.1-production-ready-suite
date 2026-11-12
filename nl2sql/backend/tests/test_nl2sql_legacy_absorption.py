@@ -70,6 +70,13 @@ class FakeEnterpriseAiClient:
         max_retries: int | None = None,
         response_format: object | None = None,
     ) -> str:
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("name") == "ScopeInterpretation"
+        ):
+            return (
+                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
+            )
         del timeout_seconds, max_retries
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         if not self.responses:

@@ -81,6 +81,13 @@ class _FakeEnterpriseAiClient:
         max_retries: int | None = None,
         response_format: object | None = None,
     ) -> str:
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("name") == "ScopeInterpretation"
+        ):
+            return (
+                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
+            )
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         self.calls += 1
         if self.fail:
@@ -230,7 +237,22 @@ def test_direct_engine_ignores_profile_select_ai_model_and_region(
     real_client = httpx.Client
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.url.host, str(json.loads(request.content)["model"])))
+        body = json.loads(request.content)
+        if body.get("text", {}).get("format", {}).get("name") == "ScopeInterpretation":
+            return httpx.Response(
+                200,
+                json={
+                    "output_text": json.dumps(
+                        {
+                            "kind": "direct",
+                            "source_quote": "",
+                            "anchor_predicate": "",
+                            "result_key_columns": [],
+                        }
+                    )
+                },
+            )
+        seen.append((request.url.host, str(body["model"])))
         return httpx.Response(200, json={"output_text": _DIRECT_SQL})
 
     transport = httpx.MockTransport(handler)

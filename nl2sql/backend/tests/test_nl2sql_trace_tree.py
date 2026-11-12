@@ -83,6 +83,21 @@ def test_job_generation_retry_and_execution_nest_under_their_stages(
     def handler(request: Any) -> Any:
         import httpx
 
+        body = json.loads(request.content)
+        if body.get("text", {}).get("format", {}).get("name") == "ScopeInterpretation":
+            return httpx.Response(
+                200,
+                json={
+                    "output_text": json.dumps(
+                        {
+                            "kind": "direct",
+                            "source_quote": "",
+                            "anchor_predicate": "",
+                            "result_key_columns": [],
+                        }
+                    )
+                },
+            )
         calls.append(1)
         if len(calls) == 1:
             # 1 回目は一時的な失敗（再試行する）。
@@ -111,6 +126,11 @@ def test_job_generation_retry_and_execution_nest_under_their_stages(
     [generate] = _children(rows, root, "nl2sql.generate_sql")
     # SQL の生成の LLM の呼び出しは、再試行も含めて生成の工程の子（試行ごとの兄弟）。
     chats = [row for row in rows if row["name"] == "gen_ai.chat"]
+    scope_chats = [
+        row for row in chats if _attributes(row).get("pr.gen_ai.purpose") == "query.subjects"
+    ]
+    assert len(scope_chats) == 1
+    chats = [row for row in chats if _attributes(row).get("pr.gen_ai.purpose") != "query.subjects"]
     assert len(chats) == 2 and len(calls) == 2
     assert {_attributes(row)["pr.gen_ai.purpose"] for row in chats} == {"sql.generate"}
     assert {row["parent_span_id"] for row in chats} == {generate["span_id"]}

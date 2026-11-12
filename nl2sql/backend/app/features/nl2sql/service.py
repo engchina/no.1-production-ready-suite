@@ -24971,7 +24971,13 @@ class Nl2SqlService:
         )
 
     def _interpret_query_scope(
-        self, question: str, profile: Nl2SqlProfile, allowed: AllowedObjects, **kwargs: Any
+        self,
+        question: str,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        *,
+        catalog: SchemaCatalog | None = None,
+        **kwargs: Any,
     ) -> list[RelatedRecordScope]:
         if not self._enterprise_ai_client.is_configured():
             return []
@@ -24980,7 +24986,7 @@ class Nl2SqlService:
         context = build_requirement_context(
             question=question,
             profile=profile,
-            catalog_tables=self._generation_schema_catalog(profile, allowed).tables,
+            catalog_tables=(catalog or self._generation_schema_catalog(profile, allowed)).tables,
             allowed=allowed,
             ontology=None,
             view=None,
@@ -25554,6 +25560,7 @@ class Nl2SqlService:
                 question,
                 profile,
                 allowed,
+                catalog=catalog,
                 timeout_seconds=runtime_timeout_seconds,
                 max_retries=runtime_max_retries,
             )

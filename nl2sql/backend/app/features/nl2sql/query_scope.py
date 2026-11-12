@@ -261,7 +261,7 @@ def interpret_query_scope(
         kwargs["timeout_seconds"] = timeout_seconds
     if max_retries is not None:
         kwargs["max_retries"] = max_retries
-    raw = call_with_model_purpose("sql.scope", client.generate, **kwargs)
+    raw = call_with_model_purpose("query.subjects", client.generate, **kwargs)
     try:
         interpretation = ScopeInterpretation.model_validate_json(raw.strip())
     except ValueError as exc:
