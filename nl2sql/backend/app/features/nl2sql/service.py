@@ -181,6 +181,7 @@ from .incremental_store import (
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
     OracleIncrementalNl2SqlRepository,
+    SchemaRefreshActiveJobConflict,
     SchemaRefreshExecutionLost,
     VersionedTtlCache,
     _profile_matches_query,
@@ -6445,6 +6446,7 @@ class Nl2SqlService:
         mode: SchemaRefreshMode | str = SchemaRefreshMode.FULL,
         source: str = "manual",
         target_objects: Sequence[SchemaRefreshTargetObject] | None = None,
+        allow_coalesce: bool = True,
     ) -> SchemaRefreshJob:
         repository = self._refresh_job_repository
         normalized_mode = SchemaRefreshMode(mode)
@@ -6460,7 +6462,13 @@ class Nl2SqlService:
         )
         try:
             with self._schema_refresh_submit_lock:
-                job = repository.submit_refresh_job(candidate)
+                job = (
+                    repository.submit_refresh_job(candidate)
+                    if allow_coalesce
+                    else repository.submit_refresh_job(candidate, allow_coalesce=False)
+                )
+        except SchemaRefreshActiveJobConflict:
+            raise
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="schema_refresh_submit",
@@ -6690,11 +6698,8 @@ class Nl2SqlService:
                 }
                 if missing_present or still_present:
                     raise SchemaRefreshFullRequired("schema_refresh_full_required")
-                changed_keys = {
-                    key
-                    for key, last_ddl_at in incoming_manifest.items()
-                    if key in target_keys and stored_manifest.get(key) != last_ddl_at
-                }
+                # 明示した対象はDDL時刻が同じでも注釈や投影を再取得する。
+                changed_keys = incoming_keys & target_keys
                 deleted_keys = {
                     key
                     for key in target_keys
@@ -6738,6 +6743,12 @@ class Nl2SqlService:
                     changed_catalog = self._oracle_adapter.fetch_catalog_objects(changed_keys)
                 else:
                     changed_catalog = self._build_default_catalog()
+                if job.mode == SchemaRefreshMode.TARGETED:
+                    fetched_keys = {
+                        (table.owner, table.table_name) for table in changed_catalog.tables
+                    }
+                    if not changed_keys <= fetched_keys:
+                        raise SchemaRefreshFullRequired("schema_refresh_full_required")
                 job = self._heartbeat_schema_refresh_job(repository, job)
                 changed_or_deleted_keys = changed_keys | deleted_keys
                 # key は辞書ビュー上の名前。大文字化すると `Mixed_Case` と `MIXED_CASE` が

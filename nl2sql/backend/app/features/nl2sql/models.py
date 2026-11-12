@@ -33,7 +33,7 @@ from pydantic import (
     model_validator,
 )
 
-from .object_identity import qualified_object_name
+from .object_identity import normalize_object_part, qualified_object_name
 from .ontology_models import OntologySqlGenerationContext
 
 _CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
@@ -480,6 +480,40 @@ class SchemaRefreshTargetObject(BaseModel):
     object_name: str
     object_type: Literal["table", "view", "materialized_view", "unknown"] = "unknown"
     expected_state: Literal["present", "absent", "unknown"] = "unknown"
+
+
+class SchemaRefreshRequestTarget(SchemaRefreshTargetObject):
+    """明示的なAPI対象は未知の欄を拒否し、Oracleの識別子規則で正規化する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("owner", "object_name")
+    @classmethod
+    def normalize_identifier(cls, value: str) -> str:
+        return normalize_object_part(value)
+
+
+class SchemaRefreshRequest(BaseModel):
+    """空の要求は従来の全体差分走査、指定対象は明示的な詳細再取得。"""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: SchemaRefreshMode = SchemaRefreshMode.FULL
+    target_objects: list[SchemaRefreshRequestTarget] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> SchemaRefreshRequest:
+        if self.mode == SchemaRefreshMode.TARGETED and not self.target_objects:
+            raise ValueError("指定対象の再取得には対象を指定してください。")
+        if self.mode == SchemaRefreshMode.FULL and self.target_objects:
+            raise ValueError("全体の差分走査には指定対象を含められません。")
+        unique: dict[tuple[str, str], SchemaRefreshRequestTarget] = {}
+        for target in self.target_objects:
+            key = (target.owner, target.object_name)
+            if key in unique and unique[key] != target:
+                raise ValueError("同じ対象に矛盾する指定があります。")
+            unique[key] = target
+        self.target_objects = list(unique.values())
+        return self
 
 
 class SchemaRefreshJob(BaseModel):

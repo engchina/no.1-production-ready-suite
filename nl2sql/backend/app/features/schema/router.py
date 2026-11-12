@@ -7,6 +7,7 @@ from pr_backend_core import ApiResponse
 from pr_backend_core.api import CursorParams, InvalidCursorError, cursor_params
 
 from app.api.problems import invalid_cursor_exception
+from app.features.nl2sql.incremental_store import SchemaRefreshActiveJobConflict
 from app.features.nl2sql.models import (
     SchemaCatalog,
     SchemaCatalogHead,
@@ -15,9 +16,11 @@ from app.features.nl2sql.models import (
     SchemaOwnersData,
     SchemaRefreshActiveJobData,
     SchemaRefreshJob,
+    SchemaRefreshMode,
+    SchemaRefreshRequest,
 )
 from app.features.nl2sql.object_identity import normalize_object_part
-from app.features.nl2sql.service import nl2sql_service
+from app.features.nl2sql.service import SchemaRefreshFullRequired, nl2sql_service
 
 router = APIRouter(prefix="/schema", tags=["schema"])
 
@@ -123,9 +126,34 @@ def object_detail(
     response_model=ApiResponse[SchemaRefreshJob],
     status_code=status.HTTP_202_ACCEPTED,
 )
-def start_refresh_job() -> ApiResponse[SchemaRefreshJob]:
-    """Schema refresh を永続 job として投入し即時に返す。"""
-    return ApiResponse(data=nl2sql_service.start_schema_refresh_job())
+def start_refresh_job(payload: SchemaRefreshRequest | None = None) -> ApiResponse[SchemaRefreshJob]:
+    """既存の権限で永続jobを投入し、明示対象は別jobへの合流を拒否する。"""
+    request = payload or SchemaRefreshRequest()
+    try:
+        job = nl2sql_service.start_schema_refresh_job(
+            mode=request.mode,
+            target_objects=request.target_objects,
+            allow_coalesce=request.mode != SchemaRefreshMode.TARGETED,
+        )
+    except SchemaRefreshActiveJobConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message_ja": (
+                    "DB構造の再取得が進行中です。完了を待ってから指定対象の再取得をお試しください。"
+                ),
+            },
+        ) from exc
+    except SchemaRefreshFullRequired as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.reason_code,
+                "message_ja": "指定対象を解決できませんでした。対象を確認してください。",
+            },
+        ) from exc
+    return ApiResponse(data=job)
 
 
 @router.get(
