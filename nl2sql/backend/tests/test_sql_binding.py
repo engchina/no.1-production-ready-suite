@@ -115,6 +115,7 @@ def test_oracle_pseudocolumns_are_not_treated_as_missing_columns(sql: str) -> No
     [
         "WITH x AS (SELECT ID FROM APP.TABLE_A) SELECT AMOUNT FROM x",
         "SELECT MISSING FROM APP.TABLE_A",
+        "WITH q AS (SELECT ID k,AMOUNT k FROM APP.TABLE_A) SELECT q.k FROM q",
         "SELECT ID FROM APP.TABLE_A WHERE RANK() OVER (ORDER BY AMOUNT)<=2",
     ],
 )
@@ -170,4 +171,64 @@ def test_quoted_table_qualifier_preserves_case() -> None:
             'SELECT "Mixed_Case"."Amount" FROM SALES."Mixed_Case"', [table], owner="SALES"
         )
         == []
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        (
+            "WITH q AS (SELECT a.ID k,b.ID k FROM TABLE_A a JOIN TABLE_A b ON a.ID=b.ID) "
+            "SELECT q.k FROM q"
+        ),
+        "SELECT q.k FROM (SELECT ID k,AMOUNT k FROM TABLE_A) q",
+        "WITH q AS (SELECT ID k,AMOUNT K FROM TABLE_A) SELECT k FROM q",
+        'WITH q AS (SELECT ID k,AMOUNT "K" FROM TABLE_A) SELECT q.k FROM q',
+        "WITH q AS (SELECT a.*,b.* FROM TABLE_A a JOIN TABLE_A b ON a.ID=b.ID) SELECT q.ID FROM q",
+        "WITH q AS (SELECT ID k,AMOUNT k FROM TABLE_A) SELECT q.* FROM q",
+        "WITH q AS (SELECT ID k,AMOUNT k FROM TABLE_A) SELECT * FROM q",
+        (
+            "WITH q AS (SELECT ID k,AMOUNT k FROM TABLE_A UNION ALL SELECT ID,AMOUNT "
+            "FROM TABLE_A) SELECT k FROM q"
+        ),
+        (
+            "WITH q AS (SELECT ID k,AMOUNT k FROM TABLE_A) SELECT 1 FROM q WHERE EXISTS "
+            "(SELECT 1 FROM DUAL WHERE q.k=1)"
+        ),
+    ],
+)
+def test_ambiguous_derived_column_references_are_rejected(sql: str) -> None:
+    violations = column_binding_violations(sql, TABLES, owner="APP")
+    assert violations and "Ambiguous derived column" in violations[0]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT ID k,AMOUNT k FROM TABLE_A",
+        "WITH q(x,y) AS (SELECT ID k,AMOUNT k FROM TABLE_A) SELECT x,y FROM q",
+        'WITH q AS (SELECT ID k,AMOUNT "k" FROM TABLE_A) SELECT k,"k" FROM q',
+        "WITH q AS (SELECT ID k,AMOUNT k,ID v FROM TABLE_A) SELECT v FROM q",
+        (
+            "WITH q AS (SELECT ID k FROM TABLE_A),r AS (SELECT AMOUNT k FROM TABLE_A) "
+            "SELECT q.k,r.k FROM q CROSS JOIN r"
+        ),
+        (
+            "WITH q AS (SELECT ID k FROM TABLE_A UNION ALL SELECT AMOUNT k FROM TABLE_A) "
+            "SELECT k FROM q"
+        ),
+        (
+            "WITH q(x,y) AS (SELECT ID k,AMOUNT k FROM TABLE_A UNION ALL SELECT "
+            "ID,AMOUNT FROM TABLE_A) SELECT x,y FROM q"
+        ),
+        "SELECT ID k FROM TABLE_A UNION ALL SELECT AMOUNT k FROM TABLE_A",
+    ],
+)
+def test_duplicate_names_without_ambiguous_derived_reference_remain_valid(sql: str) -> None:
+    assert not column_binding_violations(sql, TABLES, owner="APP")
+
+
+def test_derived_ambiguity_does_not_require_physical_schema() -> None:
+    assert column_binding_violations(
+        "WITH q AS (SELECT 1 k,2 k FROM DUAL) SELECT q.k FROM q", [], owner="APP"
     )
