@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 WIKI_BUILD_KEY = "wiki_build_enabled"
-WIKI_SCHEMA_VERSION = "1"
+WIKI_SCHEMA_VERSION = "2"
 
 
 def fingerprint(value: object) -> str:
@@ -30,11 +30,24 @@ class WikiUnit(WikiModel):
     document_id: str
     chunk_set_id: str
     source_chunk_ids: list[str] = Field(min_length=1)
+    source_chunk_hashes: dict[str, str] = Field(default_factory=dict)
     section_id: str
     section_path: list[str]
     title: str
     text: str
     source_hash: str
+
+    @model_validator(mode="after")
+    def complete_original_bindings(self) -> Self:
+        ids = set(self.source_chunk_ids)
+        if len(ids) != len(self.source_chunk_ids):
+            raise ValueError("Wiki の原文 ID が重複しています。")
+        if self.source_chunk_hashes:
+            if set(self.source_chunk_hashes) != ids:
+                raise ValueError("Wiki の構成原文すべてのハッシュが必要です。")
+        elif len(ids) > 1:
+            raise ValueError("複数の原文には個別のハッシュが必要です。")
+        return self
 
 
 class WikiDependency(WikiModel):

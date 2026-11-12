@@ -281,34 +281,54 @@ class WikiStore:
             ):
                 continue
             originals.append((row, metadata))
-        parents = {str(row["chunk_id"]) for row, _ in originals}
-        units = []
+        parents = {(str(row["chunk_set_id"]), str(row["chunk_id"])) for row, _ in originals}
+        groups: dict[tuple[str, str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
         for row, metadata in originals:
-            parent = metadata.get("parent_chunk_id")
-            if parent and str(parent) in parents:
-                continue
-            text = str(row.get("chunk_text") or "")
-            if not text.strip():
-                continue
-            path = metadata.get("section_path")
-            heading = (
-                [str(value) for value in path]
-                if isinstance(path, list)
-                else str(path).split(" > ")
-                if path
-                else []
-            )
             chunk_set = str(row["chunk_set_id"])
-            chunk_id = str(row["chunk_id"])
+            parent = metadata.get("parent_chunk_id")
+            if parent and (chunk_set, str(parent)) in parents:
+                continue
+            if not str(row.get("chunk_text") or "").strip():
+                continue
+            key = (
+                chunk_set,
+                "parent" if parent else "chunk",
+                str(parent or row["chunk_id"]),
+            )
+            groups.setdefault(key, []).append((row, metadata))
+        units = []
+        for (chunk_set, _, group_id), members in groups.items():
+            # 仮想親の本文は metadata の写しを信頼せず、保存された構成原文から組み直す。
+            texts = [str(row["chunk_text"]) for row, _ in members]
+            text = "\n\n".join(texts)
+            ids = [str(row["chunk_id"]) for row, _ in members]
+            headings = []
+            for _, metadata in members:
+                path = metadata.get("section_path")
+                headings.append(
+                    [str(value) for value in path]
+                    if isinstance(path, list)
+                    else str(path).split(" > ")
+                    if path
+                    else []
+                )
+            heading = []
+            for level in zip(*headings, strict=False):
+                if len(set(level)) != 1:
+                    break
+                heading.append(level[0])
             units.append(
                 WikiUnit(
-                    unit_id=fingerprint([chunk_set, chunk_id]),
+                    unit_id=fingerprint([chunk_set, group_id]),
                     document_id=document_id,
                     chunk_set_id=chunk_set,
-                    source_chunk_ids=[chunk_id],
+                    source_chunk_ids=ids,
+                    source_chunk_hashes={
+                        sid: fingerprint(body) for sid, body in zip(ids, texts, strict=True)
+                    },
                     section_id=fingerprint([chunk_set, heading]),
                     section_path=heading,
-                    title=heading[-1] if heading else str(row.get("file_name") or ""),
+                    title=heading[-1] if heading else str(members[0][0].get("file_name") or ""),
                     text=text,
                     source_hash=fingerprint(text),
                 )
@@ -616,13 +636,16 @@ class WikiStore:
             {**binds, **values},
         )
         found = {str(row["chunk_id"]): row for row in rows}
-        valid = {
-            sid
-            for page in pages
-            for sid in page.unit.source_chunk_ids
-            if sid in found
-            and str(found[sid]["document_id"]) == page.unit.document_id
-            and str(found[sid]["chunk_set_id"]) == page.unit.chunk_set_id
-            and fingerprint(str(found[sid]["chunk_text"])) == page.unit.source_hash
-        }
+        valid: set[str] = set()
+        for page in pages:
+            unit = page.unit
+            hashes = unit.source_chunk_hashes or {unit.source_chunk_ids[0]: unit.source_hash}
+            if all(
+                sid in found
+                and str(found[sid]["document_id"]) == unit.document_id
+                and str(found[sid]["chunk_set_id"]) == unit.chunk_set_id
+                and fingerprint(str(found[sid]["chunk_text"])) == hashes[sid]
+                for sid in unit.source_chunk_ids
+            ):
+                valid.update(unit.source_chunk_ids)
         return [_retrieved_chunk_from_row(found[sid]) for sid in ids if sid in valid]

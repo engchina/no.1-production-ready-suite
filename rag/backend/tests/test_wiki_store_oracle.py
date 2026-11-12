@@ -5,12 +5,65 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute
 from app.clients.wiki_store import WikiStore
 from app.rag.wiki_models import WikiContext, WikiPage, fingerprint
 from tests.test_document_summary_oracle import _EMBEDDING, _indexed_document
 
 pytestmark = pytest.mark.usefixtures("oracle_db")
+
+
+async def test_virtual_parent_persists_all_original_bindings_and_rejects_changed_member() -> None:
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-group-{token}")
+    did, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=token)
+
+    def group(connection: OracleConnectionProtocol) -> None:
+        _execute(
+            connection,
+            """UPDATE rag_chunks SET metadata_json=JSON_MERGEPATCH(metadata_json,
+                JSON('{"parent_chunk_id":"virtual-parent"}')) WHERE document_id=:id""",
+            {"id": did},
+        )
+
+    await oracle._run_transaction(group)
+    await store.set_enabled(kb.id, True)
+    source = await store.source_units(did)
+    assert source is not None and len(source.units) == 1
+    unit = source.units[0]
+    assert len(unit.source_chunk_ids) == len(unit.source_chunk_hashes) == 3
+    source = replace(source, compiler_fingerprint=fingerprint("compiler-a"))
+    assert await store.enqueue(source)
+    lease = await store.claim(source, lease_seconds=300)
+    assert lease
+    page = WikiPage(
+        unit=unit,
+        navigation=WikiContext(
+            unit_id=unit.unit_id,
+            context="合成の案内。",
+            possible_questions=[],
+            dependencies=[],
+            unresolved=[],
+        ),
+        input_fingerprint="input-a",
+    )
+    await store.checkpoint(source, lease, [page], vectors=[_EMBEDDING])
+    await store.finish(source, lease)
+    restored = await store.saved_pages(source)
+    assert restored[0].unit == unit
+    filters = {"knowledge_base_id": kb.id}
+    assert len(await store.read_sources(restored, filters)) == 3
+
+    def change(connection: OracleConnectionProtocol) -> None:
+        _execute(
+            connection,
+            "UPDATE rag_chunks SET chunk_text=:text WHERE chunk_id=:id",
+            {"text": "変更された合成の原文。", "id": unit.source_chunk_ids[-1]},
+        )
+
+    await oracle._run_transaction(change)
+    assert not await store.read_sources(restored, filters)
 
 
 async def test_shared_document_cache_requires_enabled_current_membership_and_cascades() -> None:
