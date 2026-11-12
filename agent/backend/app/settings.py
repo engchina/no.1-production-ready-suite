@@ -150,9 +150,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
         ge=CHAT_HISTORY_MIN_CHARS,
         le=CHAT_HISTORY_MAX_CHARS_LIMIT,
     )
+    online_max_output_tokens: int = Field(default=DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, ge=1)
     # チャットの「会話の履歴」に出す期間（日。共通の設定。#2340）。0 は期間で絞らない。
     # 解釈は pr_backend_core.chat_history_window（最後の更新が直近 N 日の会話だけを一覧に出す）。
-    online_max_output_tokens: int = Field(default=DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, ge=1)
     chat_history_days: int = Field(
         default=CHAT_HISTORY_DEFAULT_DAYS, ge=0, le=CHAT_HISTORY_DAYS_LIMIT
     )
