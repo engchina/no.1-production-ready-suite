@@ -11,7 +11,7 @@ from numbers import Number
 from typing import Any
 
 from .answer_data_projection import TableProjectionError, selected_positions
-from .answer_data_tables import BoundCell, ReferenceTableError, render_reference_tables
+from .answer_data_tables import BoundCell, ReferenceTableError, render_reference_tables, unit_header
 
 _REFERENCE = re.compile(
     r"\[\[(cell|quantity|table):((?:[a-f0-9]{24}|T[1-9]\d*)"
@@ -397,10 +397,7 @@ def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) 
         columns = _column_order(output, rows)
         table_key = _result_key(step.id, output)
         column_units = _column_units(output, columns)
-        headers[table_key] = [
-            column + " (" + column_units[column] + ")" if column in column_units else column
-            for column in columns
-        ]
+        headers[table_key] = [unit_header(column, column_units.get(column)) for column in columns]
         tables[table_key] = (columns, rows)
         number = next(
             (
