@@ -948,8 +948,8 @@ async def test_separate_sql_matches_native_tied_text_ranks_and_fusion() -> None:
     native_hits = await native.hybrid_search(
         "syntheticrankparity", [0.1] * 1536, 3, filters=filters
     )
-    if native_hits.failure is not None:
-        raise native_hits.failure
+    if failure := getattr(native_hits, "failure", None):
+        raise failure
     separate_hits = await separate.hybrid_search(
         "syntheticrankparity", [0.1] * 1536, 3, filters=filters
     )

@@ -1477,17 +1477,19 @@ async def test_expansion_records_actual_skip_empty_failure_and_reuse(
 
 
 @pytest.mark.parametrize("ratio", [(1.0, 1.0), (9.0, 1.0), (1.0, 9.0), (0.0, 1.0)])
-async def test_separate_sql_keeps_tied_ranks_and_matches_native_fusion(monkeypatch, ratio):
+async def test_separate_sql_keeps_tied_ranks_and_matches_native_fusion(
+    monkeypatch: pytest.MonkeyPatch, ratio: tuple[float, float]
+) -> None:
     """同じ候補なら単独・一括・native の原順位による融合が一致する。"""
     settings = _search_settings().model_copy(update={"rag_rrf_method_ratio": ratio})
     client = OracleClient(settings)
     vector_rows = [{**_db_row(n), "score": score} for n, score in [(2, 0.9), (1, 0.8), (3, 0.7)]]
     text_rows = [{**_db_row(n), "score": score} for n, score in [(1, 0.8), (2, 0.8), (3, 0.5)]]
 
-    async def vectors(*args, **kwargs):
+    async def vectors(*args: Any, **kwargs: Any) -> list[dict[str, object]]:
         return vector_rows
 
-    async def keywords(*args, **kwargs):
+    async def keywords(*args: Any, **kwargs: Any) -> list[dict[str, object]]:
         return text_rows
 
     monkeypatch.setattr(client, "_vector_rows", vectors)
@@ -1512,9 +1514,9 @@ async def test_separate_sql_keeps_tied_ranks_and_matches_native_fusion(monkeypat
     assert [h.score for h in direct] == pytest.approx([r["score"] for r in expected], abs=1e-6)
 
 
-async def test_answer_fusion_keeps_keyword_original_ranks():
+async def test_answer_fusion_keeps_keyword_original_ranks() -> None:
     class TiedOracle(_SearchOracle):
-        async def search_many(self, searches, top_k, filters=None):
+        async def search_many(self, searches: Any, top_k: int, filters: Any = None) -> Any:
             return [
                 [
                     _hit(f"c-{n}", 0.8, mode="keyword").model_copy(
@@ -1530,11 +1532,13 @@ async def test_answer_fusion_keeps_keyword_original_ranks():
     state = _SearchState()
     engine = AnswerEngine(
         Settings(rag_hybrid_search_backend="oracle_separate_sql"),
-        oracle=TiedOracle(),
-        genai=_GenAi(),
+        oracle=TiedOracle(),  # type: ignore[arg-type]
+        genai=_GenAi(),  # type: ignore[arg-type]
     )
     await engine._search(
         SearchRequest(query="合成"), state, retrieval_queries=["合成"], expand_references=False
     )
     assert state.chunks["c-1"].metadata["rrf_score"] == state.chunks["c-2"].metadata["rrf_score"]
-    assert state.chunks["c-3"].metadata["rrf_score"] < state.chunks["c-2"].metadata["rrf_score"]
+    assert float(str(state.chunks["c-3"].metadata["rrf_score"])) < float(
+        str(state.chunks["c-2"].metadata["rrf_score"])
+    )
