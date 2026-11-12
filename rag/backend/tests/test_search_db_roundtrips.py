@@ -604,6 +604,13 @@ async def _fake_search_db(
         return [
             {**_db_row(number), "score": score} for number, score in by_text[str(binds["query"])]
         ]
+    if "keyword_chunk_ids" in binds:
+        import json
+
+        return [
+            _db_row(int(cid.rsplit("-", 1)[1]))
+            for cid in json.loads(str(binds["keyword_chunk_ids"]))
+        ]
     raise AssertionError(f"検索の SQL ではありません: {statement[:80]}")
 
 
@@ -648,8 +655,9 @@ async def test_search_many_matches_hybrid_search_per_query(
     assert [[list(hit.metadata) for hit in hits] for hits in batched] == [
         [list(hit.metadata) for hit in hits] for hits in expected
     ]
-    # 検索文ごとの vector の検索 4 本・keyword の検索 3 本を 1 本ずつ読む（#2800）。
-    assert len(statements) == 7
+    # vector 4 本、全文の原スコア 3 本、全文の本文読取り 3 本。CONTAINS は各分岐で 1 回だけ。
+    assert len(statements) == 10
+    assert sum("CONTAINS(" in statement for statement in statements) == 3
     assert batched[0]
     assert batched[3]
 
@@ -686,39 +694,26 @@ def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -
     assert "ORDER BY VECTOR_DISTANCE(c.embedding, :embedding, COSINE)\n" in statement
 
 
-def test_keyword_search_materializes_scoped_scores_once() -> None:
-    """Oracle Text の範囲内の元スコアを CTE へ一度だけ保存する。
-
-    区切らないと optimizer が文書ごとの nested loop の内側で Oracle Text を引き、検索を文書の数だけ
-    繰り返す。本文・埋め込みは命中の view で読まない。
-    """
+def test_keyword_search_reads_scoped_scores_directly() -> None:
+    """元スコアを直接取得する SQL に範囲を含め、本文と ROWNUM の投影を持ち込まない。"""
     where_sql, _ = oracle_module._oracle_retrieval_where({"knowledge_base_id": "kb-1"})
-    statement = oracle_module._keyword_search_sql(
-        select_list="c.chunk_id, h.text_score / 100 AS score",
-        query_bind="query",
-        where_sql=where_sql,
-    )
-
-    hits_view = statement.split("FROM rag_chunks c", 1)[0]
-    assert "ROWNUM AS hit_number" not in hits_view
-    assert "WITH text_hits AS" in hits_view
-    assert "MATERIALIZE DOMAIN_INDEX_SORT LEADING(c)" in hits_view
+    statement = oracle_module._keyword_search_sql(query_bind="query", where_sql=where_sql, top_k=10)
     assert statement.count("CONTAINS(") == 1
-    assert "SCORE(1) AS text_score" in hits_view
+    assert "SCORE(1) / 100 AS score" in statement
+    assert "ROWNUM" not in statement and "WITH text_hits" not in statement
     assert "chunk_text" not in statement and "embedding" not in statement
-    assert "metadata_json" not in hits_view
-    # 範囲の条件も元の分数を計算する CTE に含め、候補の件数制限より前に適用する。
-    assert statement.index("rag_document_knowledge_bases") < statement.index("FROM text_hits h")
-    assert "h.text_score DESC" in statement
-
-    filtered_where, _ = oracle_module._oracle_retrieval_where({"content_kind": "table"})
-    filtered = oracle_module._keyword_search_sql(
-        select_list="c.chunk_id", query_bind="query", where_sql=filtered_where
+    assert "rag_document_knowledge_bases" in statement
+    assert "DOMAIN_INDEX_SORT LEADING(c)" in statement
+    assert "FETCH FIRST 10 ROWS ONLY" in statement
+    assert "FETCH FIRST" not in oracle_module._keyword_search_sql(
+        query_bind="query", where_sql=where_sql
     )
-    # metadata は範囲の条件だけに使い、CTE へは ROWID と元スコアだけを投影する。
-    assert "metadata_json" not in filtered.split("FROM rag_chunks c", 1)[0]
-    assert "c.ROWID = h.text_rowid" in filtered
-    assert "c.metadata_json" in filtered
+
+
+@pytest.mark.parametrize("limit", [-1, True, "10"])
+def test_keyword_score_query_rejects_invalid_limit(limit: Any) -> None:
+    with pytest.raises(ValueError, match="top_k"):
+        oracle_module._keyword_search_sql(query_bind="query", where_sql="1=1", top_k=limit)
 
 
 class _ArraySizeCursor(_PlainCursor):
@@ -826,6 +821,13 @@ async def test_search_collapses_chunks_with_same_text(monkeypatch: pytest.Monkey
             return [row(number, score) for number, score in vector]
         if "query" in binds:
             return [row(number, score) for number, score in keyword]
+        if "keyword_chunk_ids" in binds:
+            import json
+
+            return [
+                row(int(cid.rsplit("-", 1)[1]), 0)
+                for cid in json.loads(str(binds["keyword_chunk_ids"]))
+            ]
         # まとめた SQL(vector と keyword は別の SQL で、どちらも branch 0)。
         hits = vector if "embedding_0" in binds else keyword
         return [
@@ -1547,3 +1549,45 @@ async def test_answer_fusion_keeps_keyword_original_ranks() -> None:
     assert float(str(state.chunks["c-3"].metadata["rrf_score"])) < float(
         str(state.chunks["c-2"].metadata["rrf_score"])
     )
+
+
+async def test_keyword_hydration_rechecks_scope_and_preserves_raw_rank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本文を読む間に候補が範囲外になっても、残る候補の元スコア・順位を変えない。"""
+    from app.rag.request_context import (
+        AuditRequestContext,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient(_search_settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fetch(sql: str, binds: Mapping[str, object] | None = None) -> list[dict[str, object]]:
+        calls.append((sql, dict(binds or {})))
+        if "CONTAINS(" in sql:
+            return [
+                {"chunk_id": f"c-{n}", "score": score}
+                for n, score in [(1, 0.9), (2, 0.9), (3, 0.5)]
+            ]
+        return [_db_row(3), _db_row(2)]
+
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    context = set_audit_request_context(
+        AuditRequestContext(allowed_document_ids=frozenset({"doc-1"}))
+    )
+    try:
+        hits = await client.keyword_search("合成", 3, {"knowledge_base_id": "kb-1"})
+    finally:
+        reset_audit_request_context(context)
+    assert [h.chunk_id for h in hits] == ["c-2", "c-3"]
+    assert [h.score for h in hits] == [0.9, 0.5]
+    assert [h.metadata["keyword_rank"] for h in hits] == [1, 3]
+    assert len(calls) == 2
+    assert all("rag_document_knowledge_bases" in sql for sql, _ in calls)
+    assert all("d.document_id IN (:access_document_id_0)" in sql for sql, _ in calls)
+    assert all(binds["access_document_id_0"] == "doc-1" for _, binds in calls)
+    assert all("active_cs.is_active = 1" in sql for sql, _ in calls)
+    assert "CONTAINS(" not in calls[1][0]
+    assert "keyword_chunk_ids" in calls[1][1]
