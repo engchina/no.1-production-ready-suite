@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import sqlglot
+from sqlglot import exp
 from sqlglot.optimizer.scope import build_scope
 
 from .models import AllowedObjects, SchemaTable
@@ -27,17 +28,28 @@ class IdentifierCheck:
 
     @property
     def sql(self) -> str:
+        def hit(column: str) -> exp.Case:
+            condition = exp.EQ(
+                this=exp.to_column(column, dialect=OracleConversion),
+                expression=exp.Placeholder(this="lookup_value"),
+            )
+            query = (
+                exp.select("1")
+                .from_(exp.to_table(self.table, dialect=OracleConversion))
+                .where(condition)
+            )
+            return exp.Case(
+                ifs=[exp.If(this=exp.Exists(this=query), true=exp.Literal.number(1))],
+                default=exp.Literal.number(0),
+            )
+
         return (
-            "SELECT CASE WHEN EXISTS (SELECT 1 FROM "
-            + self.table
-            + " WHERE "
-            + self.column
-            + " = :lookup_value) THEN 1 ELSE 0 END AS COLUMN_HIT, "
-            "CASE WHEN EXISTS (SELECT 1 FROM "
-            + self.table
-            + " WHERE "
-            + self.primary_key
-            + " = :lookup_value) THEN 1 ELSE 0 END AS KEY_HIT FROM DUAL"
+            exp.select(
+                exp.alias_(hit(self.column), "COLUMN_HIT"),
+                exp.alias_(hit(self.primary_key), "KEY_HIT"),
+            )
+            .from_("DUAL")
+            .sql(dialect=OracleConversion)
         )
 
 
