@@ -9,7 +9,7 @@ from test_nl2sql_job_runtime import _repository, _request, _worker
 
 from app.features.mcp.tools import _job_result
 from app.features.nl2sql import result_units
-from app.features.nl2sql.models import JobStatus, QueryResults
+from app.features.nl2sql.models import JobData, JobStatus, QueryResults
 from app.features.nl2sql.ontology_definitions import PropertyDefinition
 from app.settings import get_settings
 
@@ -63,6 +63,15 @@ def test_job_result_unit_metadata_survives_storage_and_mcp(
     else:
         results = job.result.results
         assert _job_result(job).column_metadata == results.column_metadata
+        # 新フィールドの無い旧保存JSONも、実DTOで復元すれば未知の単位として正常に公開できる。
+        serialized = job.model_dump(mode="json")
+        serialized["result"]["results"].pop("column_metadata")
+        legacy = JobData.model_validate(serialized)
+        assert legacy.result is not None
+        assert legacy.result.results.column_metadata == []
+        restored = _job_result(legacy)
+        assert restored.column_metadata == []
+        assert restored.columns == results.columns and restored.rows == results.rows
     assert results.column_metadata[0].name == "ID"
     assert calls == (["pinned_release"] if enabled else [])
     assert results.column_metadata[0].unit == ("declared-unit" if enabled else None), (
