@@ -37,7 +37,7 @@ from datetime import date, timedelta
 from typing import Any, Literal
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
 
@@ -71,7 +71,6 @@ from .ontology_models import (
 )
 from .ontology_service import OntologyServiceError
 from .ontology_store import stable_ontology_id
-from .query_scope import RelatedRecordScope, parse_anchor
 from .sql_requirement_failures import (
     requirement_failure_message,
     requirement_invalid_output_details,
@@ -80,8 +79,8 @@ from .structured_outputs import response_format
 
 logger = logging.getLogger(__name__)
 
-REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v3"
-REQUIREMENT_PROMPT_VERSION = "sql_requirement_v8_scope"
+REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v2"
+REQUIREMENT_PROMPT_VERSION = "sql_requirement_v7_steps"
 
 # LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
 # 絞り込みはあいまいさを作らない）。
@@ -461,7 +460,6 @@ class _LlmItem(BaseModel):
 
 class LlmRequirementOutput(BaseModel):
     clarified_question_ja: str
-    related_scopes: list[RelatedRecordScope] = Field(default_factory=list)
     items: list[_LlmItem]
     # 回答できるかは bool で判定する。理由の文の有無で判定すると、LLM が「なし（質問は回答可能）」
     # などで欄を埋めたときに回答できない扱いになる（#2222）。
@@ -515,11 +513,6 @@ SYSTEM_PROMPT = (  # nosec B608
     "7. clarified_question_ja は、項目を反映した自然な日本語の 1 つの質問の文にしてください"
     "（表・列は物理名）。業務プロファイルと添付の表で答えられないときだけ answerable=false と"
     "unanswerable_reason_ja に理由、答えられるなら true と空にしてください。\n"
-    "8. 起点と同じ関連キーを持つ全レコードが対象なら related_scopes に、"
-    "原質問の連続した写し、起点だけを特定する物理キー列と値の等価条件、"
-    "結果レコードの物理キー列を分けて返してください。"
-    "起点だけの依頼や関連先への展開が無い依頼は空配列にしてください。"
-    "起点の条件を結果全体の WHERE 条件に追加しないでください。\n"
     "\n## Step 4: 確認済みの条件と会話を引き継ぐ\n"
     "mode=review のときは、answered_items（利用者が答えた項目。同じ key の項目は出力しない）を"
     "変えずに見直し、SQL を 1 つに決められないものが残っているときだけ missing / ambiguous に"
@@ -1360,49 +1353,12 @@ def build_draft(
         question_original=question,
         clarified_question_ja=llm_text(output.clarified_question_ja),
         items=items,
-        related_scopes=_validated_related_scopes(output.related_scopes, context, question),
         unanswerable_reason_ja=_unanswerable_reason(output),
         warnings_ja=_unique(warnings),
         reference_date=context.today.isoformat(),
         model=model,
     )
     return enforce_requirement_rules(draft, context)
-
-
-def _validated_related_scopes(
-    scopes: list[RelatedRecordScope], context: RequirementContext, question: str
-) -> list[RelatedRecordScope]:
-    result = []
-    for scope in scopes:
-        try:
-            column, value = parse_anchor(scope.anchor_predicate)
-            anchor = context.resolve_column(column.sql(dialect="oracle"))
-            keys = [context.resolve_column(key) for key in scope.result_key_columns]
-            if (
-                not scope.source_quote
-                or scope.source_quote not in question
-                or not anchor
-                or not keys
-                or not all(keys)
-                or str(value.this) not in question
-            ):
-                raise ValueError("原質問の写し、起点の値、実在する物理キー列を指定してください。")
-            info = context.column(anchor)
-            if info is None or info.masked:
-                raise ValueError("起点のキー列を利用できません。")
-            result.append(
-                scope.model_copy(
-                    update={
-                        "anchor_predicate": anchor + " = " + value.sql(dialect="oracle"),
-                        "result_key_columns": keys,
-                    }
-                )
-            )
-        except (ParseError, ValueError, TypeError) as exc:
-            raise RequirementAiUnavailableError(
-                "REQUIREMENT_SCOPE_INVALID", "関連先の対象範囲を確認できません。" + str(exc)
-            ) from exc
-    return result
 
 
 def _unanswerable_reason(output: LlmRequirementOutput) -> str:
@@ -3949,7 +3905,6 @@ def generation_spec(
         tables=tables,
         joins=joins,
         items=items,
-        related_scopes=draft.related_scopes,
         unresolved_ja=unresolved,
         summary_ja=requirement_summary(draft),
         # 確認の LLM の利用量をジョブへ写す（実行履歴の行で合算する。#3552）。

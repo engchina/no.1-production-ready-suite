@@ -5,14 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from test_nl2sql_guided_clarification import _item, _output
-from test_sql_requirement_columns import _context, _table
 
 from app.features.nl2sql.models import (
     AllowedObjects,
     Nl2SqlEngine,
     Nl2SqlProfile,
-    SqlRequirementSpec,
 )
 from app.features.nl2sql.query_scope import (
     QueryScopeViolation,
@@ -20,11 +17,6 @@ from app.features.nl2sql.query_scope import (
     related_scope_violations,
 )
 from app.features.nl2sql.service import GeneratedSql, Nl2SqlService
-from app.features.nl2sql.sql_requirement import (
-    LlmRequirementOutput,
-    RequirementAiUnavailableError,
-    build_draft,
-)
 from app.features.nl2sql.store import MemoryNl2SqlStore
 
 SCOPE = RelatedRecordScope(
@@ -87,16 +79,10 @@ def test_generation_retries_once_and_never_returns_narrowed_scope(
             engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
             generated_sql=BAD if len(calls) == 1 else GOOD,
             explanation="",
-            engine_meta={},
+            engine_meta={"related_record_scopes": [SCOPE.model_dump()]},
         )
 
     monkeypatch.setattr(service, "_generate_sql_with_engine", generated)
-    spec = SqlRequirementSpec(
-        session_id="s",
-        profile_id="p",
-        clarified_question=SCOPE.source_quote,
-        related_scopes=[SCOPE],
-    )
     result = service._generate_sql(
         Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
         SCOPE.source_quote,
@@ -104,7 +90,6 @@ def test_generation_retries_once_and_never_returns_narrowed_scope(
         AllowedObjects(),
         100,
         [],
-        sql_requirement=spec,
     )
     assert result.generated_sql == GOOD
     assert result.engine_meta["scope_generation_attempts"] == 2
@@ -118,7 +103,7 @@ def test_generation_retries_once_and_never_returns_narrowed_scope(
             engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
             generated_sql=BAD,
             explanation="",
-            engine_meta={},
+            engine_meta={"related_record_scopes": [SCOPE.model_dump()]},
         ),
     )
     with pytest.raises(QueryScopeViolation, match="SQL_SCOPE_MISMATCH"):
@@ -129,45 +114,7 @@ def test_generation_retries_once_and_never_returns_narrowed_scope(
             AllowedObjects(),
             100,
             [],
-            sql_requirement=spec,
         )
-
-
-def test_interpretation_is_grounded_in_question_and_physical_columns() -> None:
-    context = _context([_table(columns=("ID", "SHARED_KEY"))])
-    output = _output(
-        _item("from", "from", "confirmed", tables=["APP.TABLE_A"], value="APP.TABLE_A"),
-        _item("select", "select", "confirmed", columns=["APP.TABLE_A.ID"], value="ID"),
-        clarified=SCOPE.source_quote,
-    )
-    output["related_scopes"] = [SCOPE.model_dump()]
-    draft = build_draft(
-        LlmRequirementOutput.model_validate(output), context, question=SCOPE.source_quote
-    )
-    assert draft.related_scopes == [SCOPE]
-    from app.features.nl2sql.ontology_models import QuerySession
-    from app.features.nl2sql.sql_requirement import generation_spec
-
-    session = QuerySession.model_construct(
-        id="session",
-        profile_id="p",
-        profile_view_id="view",
-        ontology_revision_id="revision",
-        original_question=SCOPE.source_quote,
-        requirement=draft,
-    )
-    assert generation_spec(session).related_scopes == [SCOPE]
-    patches: list[dict[str, Any]] = [
-        {"source_quote": "原質問に無い文"},
-        {"result_key_columns": ["APP.TABLE_A.MISSING"]},
-        {"anchor_predicate": "APP.TABLE_A.ID='B'"},
-    ]
-    for patch in patches:
-        output["related_scopes"] = [SCOPE.model_copy(update=patch).model_dump()]
-        with pytest.raises(RequirementAiUnavailableError, match="対象範囲"):
-            build_draft(
-                LlmRequirementOutput.model_validate(output), context, question=SCOPE.source_quote
-            )
 
 
 def test_inner_join_key_equivalence_is_checked() -> None:
@@ -181,9 +128,32 @@ def test_derived_star_keeps_key_lineage() -> None:
     assert related_scope_violations(sql, [SCOPE], owner="APP")
 
 
-def test_scope_only_contract_does_not_create_an_empty_table_restriction() -> None:
-    spec = SqlRequirementSpec(
-        session_id="", profile_id="p", clarified_question=SCOPE.source_quote, related_scopes=[SCOPE]
-    )
-    assert spec.prompt_block() == ""
-    assert spec.question_with_requirements(SCOPE.source_quote) == SCOPE.source_quote
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {},
+        {"source_quote": "unknown"},
+        {"anchor_predicate": "APP.TABLE_A.ID='B'"},
+        {"result_key_columns": ["APP.TABLE_A.MISSING"]},
+    ],
+)
+def test_interpretation_grounding(patch: dict[str, Any]) -> None:
+    import json
+
+    from test_sql_requirement_columns import _context, _table
+
+    from app.features.nl2sql.query_scope import interpret_query_scope
+
+    class Client:
+        def generate(self, **kwargs: Any) -> str:
+            assert kwargs["response_format"]["name"] == "ScopeInterpretation"
+            return json.dumps({"kind": "related", **SCOPE.model_dump(), **patch})
+
+    context = _context([_table(columns=("ID", "SHARED_KEY"))])
+    if patch:
+        with pytest.raises(QueryScopeViolation):
+            interpret_query_scope(Client(), question=SCOPE.source_quote, context=context)
+    else:
+        assert interpret_query_scope(Client(), question=SCOPE.source_quote, context=context) == [
+            SCOPE
+        ]

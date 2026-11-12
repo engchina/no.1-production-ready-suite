@@ -464,7 +464,12 @@ from .oracle_adapter import (
     select_ai_object_list_entry,
 )
 from .oracle_dialect import OracleConversion, normalize_generated_grouping
-from .query_scope import QueryScopeViolation, related_scope_violations
+from .query_scope import (
+    QueryScopeViolation,
+    RelatedRecordScope,
+    interpret_query_scope,
+    related_scope_violations,
+)
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
     QUESTION_TO_SQL_PROMPT,
@@ -24965,6 +24970,26 @@ class Nl2SqlService:
             sql_requirement=sql_requirement,
         )
 
+    def _interpret_query_scope(
+        self, question: str, profile: Nl2SqlProfile, allowed: AllowedObjects, **kwargs: Any
+    ) -> list[RelatedRecordScope]:
+        if not self._enterprise_ai_client.is_configured():
+            return []
+        from .sql_requirement import build_requirement_context
+
+        context = build_requirement_context(
+            question=question,
+            profile=profile,
+            catalog_tables=self._generation_schema_catalog(profile, allowed).tables,
+            allowed=allowed,
+            ontology=None,
+            view=None,
+            today=date.today(),
+        )
+        return interpret_query_scope(
+            self._enterprise_ai_client, question=question, context=context, **kwargs
+        )
+
     def _generate_sql(
         self,
         engine: Nl2SqlEngine,
@@ -24989,6 +25014,7 @@ class Nl2SqlService:
         時間帯）の `CURRENT_DATE` / `CURRENT_TIMESTAMP` にそろえる（#3265）。ADB の `SYSDATE` は
         UTC のため、日本時間の 0〜9 時に「今日」が 1 日ずれる。画面・履歴・実行の SQL は同じ。
         """
+        contracts: list[RelatedRecordScope] | None = None
         feedback: dict[str, Any] | None = None
         rejected_sql = ""
         for attempt in range(2):
@@ -25008,6 +25034,7 @@ class Nl2SqlService:
                 engine_timings=engine_timings,
                 sql_requirement=sql_requirement,
                 generation_feedback=feedback,
+                scope_contracts=contracts,
             )
             session_sql = use_session_current_datetime(generated.generated_sql)
             if session_sql != generated.generated_sql:
@@ -25023,7 +25050,11 @@ class Nl2SqlService:
                     }
                     generated.generated_sql = normalized
 
-            contracts = sql_requirement.related_scopes if sql_requirement is not None else []
+            if contracts is None:
+                contracts = [
+                    RelatedRecordScope.model_validate(value)
+                    for value in generated.engine_meta.get("related_record_scopes", [])
+                ]
             findings = (
                 related_scope_violations(
                     generated.generated_sql, contracts, owner=self._current_schema_owner()
@@ -25036,6 +25067,7 @@ class Nl2SqlService:
                     generated.engine_meta = {
                         **generated.engine_meta,
                         "related_scope_checked": True,
+                        "related_record_scopes": [scope.model_dump() for scope in contracts],
                         "scope_generation_attempts": attempt + 1,
                     }
                     if rejected_sql:
@@ -25063,6 +25095,7 @@ class Nl2SqlService:
         engine_timings: list[dict[str, Any]] | None = None,
         sql_requirement: SqlRequirementSpec | None = None,
         generation_feedback: dict[str, Any] | None = None,
+        scope_contracts: list[RelatedRecordScope] | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
@@ -25221,6 +25254,7 @@ class Nl2SqlService:
                     engine_timings=engine_timings,
                     sql_requirement=sql_requirement,
                     generation_feedback=generation_feedback,
+                    scope_contracts=scope_contracts,
                 )
                 generated.engine_meta = _engine_meta_with_timings(
                     generated.engine_meta,
@@ -25494,6 +25528,7 @@ class Nl2SqlService:
         engine_timings: list[dict[str, Any]] | None = None,
         sql_requirement: SqlRequirementSpec | None = None,
         generation_feedback: dict[str, Any] | None = None,
+        scope_contracts: list[RelatedRecordScope] | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         context = self._enterprise_ai_schema_context(
@@ -25514,9 +25549,18 @@ class Nl2SqlService:
         if sql_requirement is not None:
             # 直接の LLM: 回答前の確認の要件を、必ず守る条件として prompt に入れる（#1439）。
             context = "\n".join([context, sql_requirement.prompt_block()])
-        if sql_requirement is not None and sql_requirement.related_scopes:
+        if scope_contracts is None:
+            scope_contracts = self._interpret_query_scope(
+                question,
+                profile,
+                allowed,
+                timeout_seconds=runtime_timeout_seconds,
+                max_retries=runtime_max_retries,
+            )
+        meta["related_record_scopes"] = [scope.model_dump() for scope in scope_contracts]
+        if scope_contracts:
             context += "\nrelated_record_scopes:\n" + json.dumps(
-                [scope.model_dump() for scope in sql_requirement.related_scopes], ensure_ascii=False
+                [scope.model_dump() for scope in scope_contracts], ensure_ascii=False
             )
         if generation_feedback is not None:
             context += "\nsql_validation_feedback:\n" + json.dumps(

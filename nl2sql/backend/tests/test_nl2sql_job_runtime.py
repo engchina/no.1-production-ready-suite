@@ -69,6 +69,13 @@ class _FakeEnterpriseAiClient:
         response_format: object | None = None,
     ) -> str:
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("name") == "ScopeInterpretation"
+        ):
+            return (
+                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
+            )
         return self.text
 
 
@@ -94,7 +101,12 @@ class _BlockingEnterpriseAiClient(_FakeEnterpriseAiClient):
         self.entered.set()
         del timeout_seconds, max_output_tokens, max_retries
         assert self.release.wait(timeout=10), "テストが release しないまま timeout"
-        return super().generate(prompt=prompt, context=context, system_prompt=system_prompt)
+        return super().generate(
+            prompt=prompt,
+            context=context,
+            system_prompt=system_prompt,
+            response_format=response_format,
+        )
 
 
 def _repository() -> MemoryIncrementalNl2SqlRepository:

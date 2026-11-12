@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any, Literal
+
 import sqlglot
 from pydantic import BaseModel, Field
 from sqlglot import exp
@@ -201,3 +204,86 @@ def related_scope_violations(
                     "起点の特定条件と結果集合の条件を分けてください。"
                 )
     return list(dict.fromkeys(findings))
+
+
+class ScopeInterpretation(BaseModel):
+    kind: Literal["direct", "related"]
+    source_quote: str
+    anchor_predicate: str
+    result_key_columns: list[str]
+
+
+SCOPE_SYSTEM_PROMPT = (
+    "## Step 1: 質問の結果集合を判断してください。起点のレコードから関係をたどった"
+    "他のレコード全体を求める場合は related、それ以外は direct とします。"
+    "起点自身を含む・除くの違いはこの判断を変えません。\n"
+    "## Step 2: related の場合、source_quote にその関係を求める原質問の連続した写し、"
+    "anchor_predicate に起点の物理キー列と値の SQL 等価条件、"
+    "result_key_columns に結果レコードを識別する物理列を入れてください。"
+    "列名はスキーマの完全修飾名を使用してください。"
+    "起点条件は関連先全体の制約ではありません。\n"
+    "## Step 3: direct の場合、source_quote と anchor_predicate は空文字列、"
+    "result_key_columns は空配列にしてください。指定された JSON schema で返してください。"
+)
+
+
+def interpret_query_scope(
+    client: Any,
+    *,
+    question: str,
+    context: Any,
+    timeout_seconds: float | None = None,
+    max_retries: int | None = None,
+) -> list[RelatedRecordScope]:
+    from pr_backend_core.observability.model_purpose import call_with_model_purpose
+
+    from .structured_outputs import response_format
+
+    schema = [
+        {
+            "table": table.key,
+            "columns": [
+                column.key
+                for column in table.columns.values()
+                if not column.masked and column.filterable
+            ],
+        }
+        for table in context.tables.values()
+    ]
+    kwargs: dict[str, Any] = dict(
+        prompt=question,
+        context=json.dumps(schema, ensure_ascii=False),
+        system_prompt=SCOPE_SYSTEM_PROMPT,
+        response_format=response_format(ScopeInterpretation),
+    )
+    if timeout_seconds is not None:
+        kwargs["timeout_seconds"] = timeout_seconds
+    if max_retries is not None:
+        kwargs["max_retries"] = max_retries
+    raw = call_with_model_purpose("sql.scope", client.generate, **kwargs)
+    try:
+        interpretation = ScopeInterpretation.model_validate_json(raw.strip())
+    except ValueError as exc:
+        raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲の応答形式が不正です。") from exc
+    if interpretation.kind == "direct":
+        if interpretation.anchor_predicate or interpretation.result_key_columns:
+            raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 直接の対象範囲に起点条件があります。")
+        return []
+    if not interpretation.source_quote or interpretation.source_quote not in question:
+        raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲の根拠が質問にありません。")
+    column, value = parse_anchor(interpretation.anchor_predicate)
+    names = [column.sql(dialect=OracleConversion), *interpretation.result_key_columns]
+    if not interpretation.result_key_columns or str(value.this) not in question:
+        raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲のキーまたは起点値が不明です。")
+    for name in names:
+        key = context.resolve_column(name)
+        info = context.column(key) if key else None
+        if info is None or info.masked or not info.filterable:
+            raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲に利用できない列があります。")
+    return [
+        RelatedRecordScope(
+            source_quote=interpretation.source_quote,
+            anchor_predicate=interpretation.anchor_predicate,
+            result_key_columns=interpretation.result_key_columns,
+        )
+    ]
