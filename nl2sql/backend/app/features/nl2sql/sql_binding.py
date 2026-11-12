@@ -52,7 +52,7 @@ def column_binding_violations(sql: str, tables: Sequence[SchemaTable], *, owner:
             schema=schema if tables else None,
             validate_qualify_columns=True,
         )
-        return _derived_column_violations(tree)
+        return _set_operation_violations(tree) or _derived_column_violations(tree)
     except OptimizeError as exc:
         return ["SQL_COLUMN_BINDING_INVALID: " + str(exc)] if tables else []
     except SqlglotError:
@@ -97,4 +97,30 @@ def _derived_column_violations(tree: exp.Expr) -> list[str]:
                     return [
                         "SQL_COLUMN_BINDING_INVALID: Ambiguous derived column: " + selection.sql()
                     ]
+    return []
+
+
+def _projection_arity(query: exp.Expr) -> int | None:
+    """列束縛後もstarが残る投影は数えず、入れ子の確定した出力数だけを返す。"""
+    if isinstance(query, (exp.Subquery, exp.Paren)):
+        return _projection_arity(query.this)
+    if isinstance(query, exp.SetOperation):
+        left = _projection_arity(query.this)
+        right = _projection_arity(query.expression)
+        return left if left is not None and left == right else None
+    if isinstance(query, exp.Select):
+        return None if any(column.is_star for column in query.selects) else len(query.selects)
+    return None
+
+
+def _set_operation_violations(tree: exp.Expr) -> list[str]:
+    """UNION等の列数を、別名・CTE列リスト・star解決済みの検証用ASTで照合する。"""
+    for operation in tree.find_all(exp.SetOperation):
+        left = _projection_arity(operation.this)
+        right = _projection_arity(operation.expression)
+        if left is not None and right is not None and left != right:
+            return [
+                f"SQL_COLUMN_BINDING_INVALID: Set operation {operation.key.upper()} "
+                f"has incompatible projection counts: {left} and {right}"
+            ]
     return []
