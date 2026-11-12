@@ -146,8 +146,9 @@ def related_scope_violations(
         return []
     findings = []
     for contract in contracts:
-        _, anchor_value = parse_anchor(contract.anchor_predicate)
+        anchor_column, anchor_value = parse_anchor(contract.anchor_predicate)
         keys = {object_match_key(key) for key in contract.result_key_columns}
+        keys.add(object_match_key(anchor_column.sql(dialect=OracleConversion)))
         for scope in _result_scopes(root, set()):
             expression = scope.expression
             if not isinstance(expression, exp.Query):

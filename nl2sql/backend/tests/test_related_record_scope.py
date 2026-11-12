@@ -157,3 +157,8 @@ def test_interpretation_grounding(patch: dict[str, Any]) -> None:
         assert interpret_query_scope(Client(), question=SCOPE.source_quote, context=context) == [
             SCOPE
         ]
+
+
+def test_anchor_key_is_checked_when_result_is_aggregated() -> None:
+    scope = SCOPE.model_copy(update={"result_key_columns": ["APP.TABLE_B.GROUP_KEY"]})
+    assert related_scope_violations(BAD, [scope], owner="APP")
