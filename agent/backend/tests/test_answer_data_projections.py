@@ -27,7 +27,7 @@ def test_short_projection_preserves_eight_rows_order_and_trusted_headers() -> No
     before = deepcopy(step)
     assert refs["column_refs"] == {"LABEL": 1, "ORDER": 2, "CHANGE": 3}
     rendered = data_index([step], metadata).render("[[table:T1:rows=1-8:cols=2,1,3]]")
-    assert rendered.startswith("| ORDER | LABEL | CHANGE (パーセントポイント) |")
+    assert rendered.startswith("| ORDER | LABEL | CHANGE |")
     assert "| 8 | record-8 | 2.0 |" in rendered
     assert "record-9" not in rendered and "record-10" not in rendered
     assert len(rendered.splitlines()) == 10
@@ -40,12 +40,10 @@ def test_vertical_projection_uses_source_labels_units_and_selected_row_order() -
     step, metadata, _refs = _fixture()
     index = data_index([step], metadata)
     assert index.render("[[table:T1:rows=1:cols=3,1,2:layout=vertical]]") == (
-        "| 項目 | 値 |\n| --- | --- |\n"
-        "| CHANGE (パーセントポイント) | 0.25 |\n| LABEL | record-1 |\n| ORDER | 1 |"
+        "| 項目 | 値 |\n| --- | --- |\n| CHANGE | 0.25 |\n| LABEL | record-1 |\n| ORDER | 1 |"
     )
     assert index.render("[[table:T1:rows=3,1:cols=3,2:layout=vertical]]") == (
-        "| 項目 | R3 | R1 |\n| --- | --- | --- |\n"
-        "| CHANGE (パーセントポイント) | 0.75 | 0.25 |\n| ORDER | 3 | 1 |"
+        "| 項目 | R3 | R1 |\n| --- | --- | --- |\n| CHANGE | 0.75 | 0.25 |\n| ORDER | 3 | 1 |"
     )
     assert index.render("[[table:T1:rows=*:cols=*:layout=horizontal]]") == index.render(
         "[[table:T1]]"
@@ -164,7 +162,7 @@ def test_column_numbers_survive_compaction_and_checkpoint_restore() -> None:
     assert (
         data_index(restored.steps, restored.metadata)
         .render("[[table:T1:rows=10,1:cols=1,3:layout=vertical]]")
-        .endswith("| CHANGE (パーセントポイント) | 2.5 | 0.25 |")
+        .endswith("| CHANGE | 2.5 | 0.25 |")
     )
 
 
@@ -249,7 +247,7 @@ def test_runtime_repairs_to_projection_once_without_replaying_tools(
         assert actual.status.value == "completed", actual.events[-1].model_dump_json()
         answer = run_answer_text(actual)
         assert answer is not None and "record-8" in answer and "record-9" not in answer
-        assert "| CHANGE (パーセントポイント) | 0.25 |" in answer
+        assert "| CHANGE | 0.25 |" in answer
         assert "999" not in answer and "[[table:" not in answer
         assert len(actual.steps) == 1 and len(model.calls) == 3 and not model.calls[-1].tools
         instructions = str(model.calls[0].system_instructions)
@@ -285,7 +283,7 @@ def test_projection_preserves_null_large_decimal_escaping_and_row_independence()
     index = data_index([step, duplicate], metadata)
     actual = index.render("[[table:T2:rows=2,1:cols=2,1,3]]")
     assert actual == (
-        "| VALUE (N) | LABEL | FLAG |\n| --- | --- | --- |\n"
+        "| VALUE | LABEL | FLAG |\n| --- | --- | --- |\n"
         "| 12345678901234567890.125 | other | true |\n| NULL | x\\|y z | false |"
     )
     assert index.render("[[table:T1:rows=2,1:cols=2,1,3]]") == actual
@@ -340,9 +338,7 @@ def test_single_column_literal_table_is_rejected_but_pure_reference_is_rendered(
         data_index([numeric]).render("| VALUE |\n|---|\n| 999 |")
     pure = "| model label |\n|---|\n| " + refs["quantities"][0]["CHANGE"] + " |"
     assert index.render(pure) == index.render("[[table:T1:rows=1:cols=3]]")
-    assert index.render("[[table:T1:rows=1:cols=3:layout=vertical]]").endswith(
-        "| CHANGE (パーセントポイント) | 0.25 |"
-    )
+    assert index.render("[[table:T1:rows=1:cols=3:layout=vertical]]").endswith("| CHANGE | 0.25 |")
 
 
 @pytest.mark.parametrize(
