@@ -388,8 +388,8 @@ async def test_hybrid_search_result_does_not_depend_on_branch_completion_order()
     )
 
     assert [hit.model_dump() for hit in vector_first] == [hit.model_dump() for hit in keyword_first]
-    # 両方に当たった c-1 / c-3 が上位(RRF)。
-    assert [hit.chunk_id for hit in vector_first] == ["c-1", "c-3", "c-2"]
+    # 両方に当たった c-1 / c-3 が上位(RRF)。経路ごとの上位を合併した4件を残す。
+    assert [hit.chunk_id for hit in vector_first] == ["c-1", "c-3", "c-2", "c-4"]
 
 
 class _SearchOracle:
@@ -660,6 +660,27 @@ async def test_search_many_matches_hybrid_search_per_query(
     assert sum("CONTAINS(" in statement for statement in statements) == 3
     assert batched[0]
     assert batched[3]
+
+
+@pytest.mark.parametrize("limit", [0, 2])
+async def test_hybrid_keeps_union_of_channel_candidates(
+    monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
+    """経路ごとの上位を合併し、片経路だけの候補も後段の融合へ残す(#4956)。"""
+    client = OracleClient(settings=_search_settings())
+
+    async def fetch(sql: str, binds: Mapping[str, object] | None = None) -> Any:
+        rows = await _fake_search_db(sql, binds)
+        return rows[: limit or None] if "CONTAINS(" in sql or "VECTOR_DISTANCE(" in sql else rows
+
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    single = await client.hybrid_search("規程", [1.0], limit)
+    (batched,) = await client.search_many([("規程", [1.0], SearchMode.HYBRID)], limit)
+    expected = {"c-1", "c-2", "c-7"} if limit else {"c-1", "c-2", "c-3", "c-5", "c-7"}
+    assert {hit.chunk_id for hit in single} == expected
+    assert [hit.model_dump() for hit in batched] == [hit.model_dump() for hit in single]
+    assert all(hit.metadata["retrieval_fused_count"] == len(expected) for hit in single)
+    assert all(hit.metadata["retrieval_fusion_dropped_count"] == 0 for hit in single)
 
 
 def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -> None:
@@ -1396,8 +1417,8 @@ def test_direct_hybrid_lookup_uses_configured_channel_ratios() -> None:
     second = OracleClient(
         settings=Settings(rag_rrf_method_ratio=(1, 9), rag_rrf_source_ratio=(9, 1))
     )
-    first_hits = first._fuse_hybrid_hits(vector, keyword, 3)
-    second_hits = second._fuse_hybrid_hits(vector, keyword, 3)
+    first_hits = first._fuse_hybrid_hits(vector, keyword)
+    second_hits = second._fuse_hybrid_hits(vector, keyword)
     assert first_hits[0].metadata["rrf_score"] != second_hits[0].metadata["rrf_score"]
     assert first_hits[0].chunk_id == second_hits[0].chunk_id == "c-2"
     assert first_hits[0].score == pytest.approx(0.9 / 62 + 0.1 / 61, abs=1e-6)
