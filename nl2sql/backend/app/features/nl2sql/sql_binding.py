@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import OptimizeError, SqlglotError
 from sqlglot.optimizer.qualify import qualify
+from sqlglot.optimizer.scope import Scope, traverse_scope
 from sqlglot.schema import MappingSchema
 
 from .models import SchemaTable
@@ -50,8 +52,49 @@ def column_binding_violations(sql: str, tables: Sequence[SchemaTable], *, owner:
             schema=schema if tables else None,
             validate_qualify_columns=True,
         )
+        return _derived_column_violations(tree)
     except OptimizeError as exc:
         return ["SQL_COLUMN_BINDING_INVALID: " + str(exc)] if tables else []
     except SqlglotError:
         return []  # 構文の検査は parse_oracle_sql が担当する。
+    return []
+
+
+def _derived_column_violations(tree: exp.Expr) -> list[str]:
+    """正規化・列リスト適用・star展開後の参照先の多重度を検査する。"""
+    for scope in traverse_scope(tree):
+        if not isinstance(scope.expression, exp.Selectable):
+            continue
+        for column in scope.columns:
+            source = scope.sources.get(column.table)
+            # 相関参照の表別名は、最も近い外側のscopeで解決する。
+            parent = scope.parent
+            while source is None and parent is not None:
+                source = parent.sources.get(column.table)
+                parent = parent.parent
+            if not isinstance(source, Scope) or not isinstance(source.expression, exp.Selectable):
+                continue
+            if Counter(source.expression.named_selects)[column.name] > 1:
+                return [f"SQL_COLUMN_BINDING_INVALID: Ambiguous derived column: {column.sql()}"]
+        # 重複した派生出力のstarはSQLGlotが展開せず残すため、別に参照先を検査する。
+        for selection in scope.expression.selects:
+            if not selection.is_star:
+                continue
+            sources = (
+                [scope.sources.get(selection.table)]
+                if isinstance(selection, exp.Column)
+                else scope.selected_sources.values()
+            )
+            for candidate in sources:
+                source = candidate[1] if isinstance(candidate, tuple) else candidate
+                if (
+                    isinstance(source, Scope)
+                    and isinstance(source.expression, exp.Selectable)
+                    and any(
+                        count > 1 for count in Counter(source.expression.named_selects).values()
+                    )
+                ):
+                    return [
+                        "SQL_COLUMN_BINDING_INVALID: Ambiguous derived column: " + selection.sql()
+                    ]
     return []
