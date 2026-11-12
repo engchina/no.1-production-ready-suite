@@ -1275,6 +1275,12 @@ class AnswerEngine:
                     if mode == SearchMode.HYBRID
                     and all("native_rrf_contribution" in h.metadata for h in hits)
                     else (),
+                    ranks=tuple(
+                        int(str(hit.metadata.get(f"{mode.value}_rank", rank)))
+                        for rank, hit in enumerate(hits, 1)
+                    )
+                    if mode != SearchMode.HYBRID
+                    else (),
                     status=getattr(hits, "status", "completed"),
                     error=getattr(hits, "error", ""),
                     sources=tuple(

@@ -70,6 +70,11 @@ class RankedList:
     variant: str = ""
     factor: float = 1.0
     native_scores: tuple[float, ...] = ()
+    ranks: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.ranks and (len(self.ranks) != len(self.chunk_ids) or any(type(rank) is not int or rank < 1 for rank in self.ranks)):
+            raise ValueError("原順位は候補と同じ件数の正の整数で指定してください。")
 
 
 @dataclass(frozen=True)
@@ -182,6 +187,8 @@ def fuse_rankings(rankings: Sequence[RankedList], sources: Mapping[str, float], 
                     raise ValueError("Oracle WRRF の寄与が不正です。")
                 value = weight * native_score
             else:
+                if ranking.ranks:
+                    rank = ranking.ranks[ranking.chunk_ids.index(chunk_id)]
                 value = weight / (k + rank)
             if weight == 0:
                 continue
