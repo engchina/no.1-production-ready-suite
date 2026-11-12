@@ -147,7 +147,7 @@ def test_interpretation_grounding(patch: dict[str, Any]) -> None:
     class Client:
         def generate(self, **kwargs: Any) -> str:
             assert kwargs["response_format"]["name"] == "ScopeInterpretation"
-            return json.dumps({"kind": "related", **SCOPE.model_dump(), **patch})
+            return json.dumps({"related_scope": {**SCOPE.model_dump(), **patch}})
 
     context = _context([_table(columns=("ID", "SHARED_KEY"))])
     if patch:
@@ -162,3 +162,59 @@ def test_interpretation_grounding(patch: dict[str, Any]) -> None:
 def test_anchor_key_is_checked_when_result_is_aggregated() -> None:
     scope = SCOPE.model_copy(update={"result_key_columns": ["APP.TABLE_B.GROUP_KEY"]})
     assert related_scope_violations(BAD, [scope], owner="APP")
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        {"anchor_predicate": "APP.TABLE_A.ID IS NOT NULL"},
+        {"anchor_predicate": "APP.TABLE_A.ID IN ('A','B')"},
+        {"result_key_columns": []},
+    ],
+)
+def test_scope_interpretation_retries_invalid_contract(first: dict[str, Any]) -> None:
+    import json
+
+    from test_sql_requirement_columns import _context, _table
+
+    from app.features.nl2sql.query_scope import interpret_query_scope
+
+    calls = []
+
+    class Client:
+        def generate(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return json.dumps({"related_scope": {**SCOPE.model_dump(), **first}})
+            assert "scope_validation_feedback" in kwargs["context"]
+            return json.dumps({"related_scope": None})
+
+    assert (
+        interpret_query_scope(
+            Client(),
+            question=SCOPE.source_quote,
+            context=_context([_table(columns=("ID", "SHARED_KEY"))]),
+        )
+        == []
+    )
+    assert len(calls) == 2
+
+
+def test_invalid_scope_stops_after_one_reinterpretation() -> None:
+    from test_sql_requirement_columns import _context, _table
+
+    from app.features.nl2sql.query_scope import interpret_query_scope
+
+    calls = []
+
+    class Client:
+        def generate(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            return (
+                '{"related_scope":{"source_quote":"A","anchor_predicate":"1=1",'
+                '"result_key_columns":["APP.TABLE_A.ID"]}}'
+            )
+
+    with pytest.raises(QueryScopeViolation, match="SQL_SCOPE_MISMATCH"):
+        interpret_query_scope(Client(), question="A", context=_context([_table(columns=("ID",))]))
+    assert len(calls) == 2

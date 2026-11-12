@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any
 
 import sqlglot
 from pydantic import BaseModel, Field
@@ -208,23 +208,24 @@ def related_scope_violations(
 
 
 class ScopeInterpretation(BaseModel):
-    kind: Literal["direct", "related"]
-    source_quote: str
-    anchor_predicate: str
-    result_key_columns: list[str]
+    related_scope: RelatedRecordScope | None = Field(
+        description="起点と同じ種類の別レコードへ対象集合を広げる場合の契約。それ以外は null。"
+    )
 
 
 SCOPE_SYSTEM_PROMPT = (
-    "## Step 1: 質問の結果集合を判断してください。起点のレコードから関係をたどった"
-    "他のレコード全体を求める場合は related、それ以外は direct とします。"
-    "起点自身を含む・除くの違いはこの判断を変えません。\n"
-    "## Step 2: related の場合、source_quote にその関係を求める原質問の連続した写し、"
-    "anchor_predicate に起点の物理キー列と値の SQL 等価条件、"
-    "result_key_columns に結果レコードを識別する物理列を入れてください。"
-    "列名はスキーマの完全修飾名を使用してください。"
-    "起点条件は関連先全体の制約ではありません。\n"
-    "## Step 3: direct の場合、source_quote と anchor_predicate は空文字列、"
-    "result_key_columns は空配列にしてください。指定された JSON schema で返してください。"
+    "## Step 1: 質問が結果の対象集合を起点レコードから同じ種類の別レコードへ"
+    "広げることを求めているか判断してください。"
+    "起点自身の属性や測定値を結合して取得するだけの場合、"
+    "質問で対象IDを列挙し、その指定対象だけを取得する場合、単一の起点が無い一覧・比較では"
+    "related_scope を null にしてください。\n"
+    "## Step 2: 別レコードへの対象拡張を求める場合だけ、related_scope に契約を入れてください。"
+    "起点自身を含む・除くの違いはこの判断を変えません。"
+    "source_quote は拡張要求の原質問の連続した写し、anchor_predicate は"
+    "起点の物理キー列とリテラルの等価条件、result_key_columns は"
+    "拡張するレコードを識別する物理キー列です。集約のグループ列とは区別してください。"
+    "列名は許可スキーマの完全修飾名を使ってください。\n"
+    "## Step 3: 指定された JSON schema で返してください。"
 )
 
 
@@ -261,18 +262,38 @@ def interpret_query_scope(
         kwargs["timeout_seconds"] = timeout_seconds
     if max_retries is not None:
         kwargs["max_retries"] = max_retries
-    raw = call_with_model_purpose("query.subjects", client.generate, **kwargs)
+    initial_context = kwargs["context"]
+    for attempt in range(2):
+        raw = call_with_model_purpose("query.subjects", client.generate, **kwargs)
+        try:
+            return _validated_scope(raw, question=question, context=context)
+        except QueryScopeViolation as exc:
+            if attempt:
+                raise
+            kwargs["context"] = (
+                initial_context
+                + "\nscope_validation_feedback:\n"
+                + json.dumps({"rejected_response": raw, "violation": str(exc)}, ensure_ascii=False)
+            )
+    raise AssertionError("範囲解釈の試行が終了しませんでした。")
+
+
+def _validated_scope(raw: str, *, question: str, context: Any) -> list[RelatedRecordScope]:
     try:
-        interpretation = ScopeInterpretation.model_validate_json(raw.strip())
+        output = ScopeInterpretation.model_validate_json(raw.strip())
     except ValueError as exc:
         raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲の応答形式が不正です。") from exc
-    if interpretation.kind == "direct":
-        if interpretation.anchor_predicate or interpretation.result_key_columns:
-            raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 直接の対象範囲に起点条件があります。")
+    if output.related_scope is None:
         return []
+    interpretation = output.related_scope
     if not interpretation.source_quote or interpretation.source_quote not in question:
         raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲の根拠が質問にありません。")
-    column, value = parse_anchor(interpretation.anchor_predicate)
+    try:
+        column, value = parse_anchor(interpretation.anchor_predicate)
+    except (ValueError, sqlglot.errors.SqlglotError) as exc:
+        raise QueryScopeViolation(
+            "SQL_SCOPE_MISMATCH: related の起点条件は物理キー列とリテラルの等価条件が必要です。"
+        ) from exc
     names = [column.sql(dialect=OracleConversion), *interpretation.result_key_columns]
     if not interpretation.result_key_columns or str(value.this) not in question:
         raise QueryScopeViolation("SQL_SCOPE_MISMATCH: 対象範囲のキーまたは起点値が不明です。")

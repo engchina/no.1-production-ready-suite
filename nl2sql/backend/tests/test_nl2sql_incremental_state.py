@@ -250,9 +250,7 @@ class _FakeEnterpriseAiClient:
             isinstance(response_format, dict)
             and response_format.get("name") == "ScopeInterpretation"
         ):
-            return (
-                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
-            )
+            return '{"related_scope":null}'
         del timeout_seconds, max_output_tokens, max_retries
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         return self.text

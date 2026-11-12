@@ -85,9 +85,7 @@ class _FakeEnterpriseAiClient:
             isinstance(response_format, dict)
             and response_format.get("name") == "ScopeInterpretation"
         ):
-            return (
-                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
-            )
+            return '{"related_scope":null}'
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         self.calls += 1
         if self.fail:
@@ -244,10 +242,7 @@ def test_direct_engine_ignores_profile_select_ai_model_and_region(
                 json={
                     "output_text": json.dumps(
                         {
-                            "kind": "direct",
-                            "source_quote": "",
-                            "anchor_predicate": "",
-                            "result_key_columns": [],
+                            "related_scope": None,
                         }
                     )
                 },
