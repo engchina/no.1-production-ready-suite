@@ -924,25 +924,33 @@ function readerWindow(quote: string, continuation: boolean) {
     previous_cursor: "before", next_cursor: continuation ? null : "after", outline: Array.from({length:25}, (_,i) => ({id:`section-${i}`,title:`節 ${i+1}：合成の長い章節見出し`,parent_id:null,has_children:false})) };
 }
 
-test("署名URLから原本ノードを部分取得し、CookieとRefererを送らない", {tag:"@responsive"}, async ({page,mockApi},testInfo) => {
-  seedRun(mockApi);
-  await serveSourcePreviews(page,"合成の引用本文");
-  mockApi.state.sourcePreviews[CHUNK_A]={kind:"text",file_name:"合成文書.json",pages:[],page_url_template:null,highlight_metadata:{}};
-  const requests: {query:URLSearchParams; headers:Record<string,string>}[]=[];
-  await page.route("http://rag.e2e.test/**",route => {
-    const query=new URL(route.request().url()).searchParams;
-    if(query.get("view")!=="source-map") return route.fallback();
-    requests.push({query,headers:route.request().headers()});
-    return route.fulfill({contentType:"application/json",headers:{"Access-Control-Allow-Origin":"*","Cache-Control":"private, no-store"},json:{data:{status:"exact",revision:"ex1",element_id:query.get("element_id"),variant:"original",pointer:"/nodes/1",source_index:0,source_count:1,text:"😀引用した合成本文",highlights:[[1,3]],coordinate_unit:"unicode_codepoint"}}});
+for (const relative of [false, true]) {
+  test(`署名URLから原本ノードを部分取得し、CookieとRefererを送らない (${relative ? "相対URL" : "絶対URL"})`, {tag:"@responsive"}, async ({page,mockApi,baseURL},testInfo) => {
+    seedRun(mockApi);
+    await page.context().addCookies([{ name:"synthetic_session",value:"private",url:baseURL! }]);
+    const contentUrl = `${relative ? "/rag" : "http://rag.e2e.test"}/api/source-previews/synthetic/content?scope=synthetic`;
+    mockApi.state.sourcePreviews[CHUNK_A]={kind:"text",file_name:"合成文書.json",pages:[],page_url_template:null,highlight_metadata:{},content_url:contentUrl};
+    const requests: {query:URLSearchParams; headers:Record<string,string>}[]=[];
+    await page.route(relative ? "**/rag/api/source-previews/synthetic/content**" : "http://rag.e2e.test/**",route => {
+      const query=new URL(route.request().url()).searchParams;
+      requests.push({query,headers:route.request().headers()});
+      return route.fulfill({contentType:"application/json",headers:{"Access-Control-Allow-Origin":"*","Cache-Control":"private, no-store"},json:{data:query.get("view")==="reader" ? readerWindow("合成の引用本文",false) : {status:"exact",revision:"ex1",element_id:query.get("element_id"),variant:"original",pointer:"/nodes/1",source_index:0,source_count:1,text:"😀引用した合成本文",highlights:[[1,3]],coordinate_unit:"unicode_codepoint"}}});
+    });
+    await page.goto("/chat"); await openThread(page);
+    await page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citation-link").first().click();
+    const reader=page.getByTestId("evidence-reader-content");
+    await expect(reader.locator("mark").first()).toHaveText("合成の引用本文");
+    const panel=page.getByTestId("original-source-panel").first();
+    await expect(panel).toBeVisible(); expect(requests.filter(r=>r.query.get("view")==="source-map")).toHaveLength(0);
+    await panel.locator("summary").click();
+    await expect(panel.locator("mark")).toHaveText("引用");
+    await expect(panel.getByTestId("original-source-content")).toBeInViewport();
+    await page.getByRole("button",{name:"引用位置に戻る",exact:true}).click();
+    await expect(reader.locator("mark").first()).toHaveText("合成の引用本文");
+    expect(requests.some(r=>r.query.get("view")==="reader")).toBe(true);
+    expect(requests.some(r=>r.query.get("view")==="source-map")).toBe(true);
+    for(const request of requests){expect(request.query.get("scope")).toBe("synthetic");expect(request.headers.referer).toBeUndefined();expect(request.headers.cookie).toBeUndefined();}
+    await page.screenshot({path:testInfo.outputPath(`agent-original-node-${relative ? "relative" : "absolute"}-${testInfo.project.name}.png`),animations:"disabled"});
+    await expectNoHorizontalOverflow(page);
   });
-  await page.goto("/chat"); await openThread(page);
-  await page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citation-link").first().click();
-  const panel=page.getByTestId("original-source-panel").first();
-  await expect(panel).toBeVisible(); expect(requests).toHaveLength(0);
-  await panel.locator("summary").click();
-  await expect(panel.locator("mark")).toHaveText("引用");
-  expect(requests[0].headers.referer).toBeUndefined(); expect(requests[0].headers.cookie).toBeUndefined();
-  await expect(panel.getByTestId("original-source-content")).toBeInViewport();
-  await page.screenshot({path:testInfo.outputPath(`agent-original-node-${testInfo.project.name}.png`),animations:"disabled"});
-  await expectNoHorizontalOverflow(page);
-});
+}
