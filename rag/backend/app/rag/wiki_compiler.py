@@ -12,7 +12,14 @@ from rag_parser_core.oci_enterprise_ai import (
     sdk_retries_disabled,
 )
 
-from app.rag.wiki_models import WikiContexts, WikiPage, WikiUnit, context_schema, fingerprint
+from app.rag.wiki_models import (
+    WIKI_SCHEMA_VERSION,
+    WikiContexts,
+    WikiPage,
+    WikiUnit,
+    context_schema,
+    fingerprint,
+)
 
 WIKI_CONTEXT_PROMPT = """## Step 1: 文書と対象単位の原文を読む
 文書の版、章節、単位 ID と本文を読み、target_unit_ids の各単位の内容を確認する。
@@ -77,7 +84,9 @@ async def compile_pages(
     if not units or batch_size < 1:
         return []
     source = fingerprint([unit.model_dump() for unit in units])
-    version = fingerprint([source, model_id, WIKI_CONTEXT_PROMPT, max_input_chars])
+    version = fingerprint(
+        [WIKI_SCHEMA_VERSION, source, model_id, WIKI_CONTEXT_PROMPT, max_input_chars]
+    )
     expected = {unit.unit_id: unit for unit in units}
     pages = {
         page.unit.unit_id: page

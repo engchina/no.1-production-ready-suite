@@ -188,6 +188,35 @@ def test_partial_input_never_slices_a_source_unit() -> None:
     assert len(data["outline"]) == len(source)  # type: ignore[arg-type]
 
 
+@pytest.mark.asyncio
+async def test_changed_navigation_schema_does_not_reuse_an_old_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag import wiki_compiler
+
+    model, saved = Model(), []
+
+    async def authorize() -> None:
+        return None
+
+    async def save(pages: Any) -> None:
+        saved.extend(pages)
+
+    options: dict[str, Any] = dict(
+        model=model,
+        model_id="model-a",
+        max_input_chars=2000,
+        batch_size=4,
+        authorize=authorize,
+        checkpoint=save,
+    )
+    first = await compile_pages(units(), **options)
+    monkeypatch.setattr(wiki_compiler, "WIKI_SCHEMA_VERSION", "synthetic-next")
+    second = await compile_pages(units(), saved=first, **options)
+    assert len(model.calls) == 2
+    assert first[0].input_fingerprint != second[0].input_fingerprint
+
+
 def test_dependency_cycles_and_unavailable_sources_are_distinct() -> None:
     source = units()
     pages = {
