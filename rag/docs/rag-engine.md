@@ -383,7 +383,7 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 ## rag_poc との差分
 
 - 解析結果、チャンク、回答はファイル（`.runs/`）ではなく、本リポジトリの Oracle と Object Storage を使う。
-- ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索を使う。「検索の実行方式」は Oracle 原生混合索引が既定で、既存の Sudachi 方式も明示選択できる。どちらも検索方式・検索文の重み付き RRF を一度だけ行う。旧独立 schema の adapter は原生方式を選ぶと明示エラーにし、暗黙に Sudachi へ戻さない。
+- ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索を使う。「検索の実行方式」は Oracle 原生混合索引が既定で、ベクトル検索とOracle Textの個別SQL方式も明示選択できる。どちらも検索方式・検索文の重み付き RRF を一度だけ行う。旧独立 schema の adapter は原生方式を選ぶと明示エラーにし、暗黙に個別SQL方式へ戻さない。
 - chicago / osaka の 2 系統 LLM 設定と、OCI SDK の LLM 経路は廃止した。
 - 移植していないもの：
   - Gradio UI、PPT 資料、`verify/` の問題セット（データは移さない。検証 CLI `app.rag.answer_verify_cli` で rag_poc の `cases.json` / をそのまま使える）
@@ -444,12 +444,13 @@ SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile
 
 ## 検索の実行方式
 
-全体の「検索方法」で `Oracle原生混合索引（既定）` と `Sudachi＋ベクトル・全文検索` を選ぶ。
+全体の「検索方法」で `Oracle Hybrid Vector Index（既定）` と `ベクトル検索＋Oracle Text個別実行` を選ぶ。
+どちらもOracle AI Databaseを使い、日本語の検索語は共通のSudachi処理で作成する。選択するのは形態素解析器ではなく、使用する索引と検索の実行経路である。個別実行はベクトルSQLとOracle TextのSQLを別々に呼び出し、取得した順位をアプリ側で融合する。以下では前者を原生方式、後者を個別SQL方式と呼ぶ。
 保存先は `RAG_HYBRID_SEARCH_BACKEND=oracle_native|sudachi`。設定が無い既存環境も原生方式へ変わる。
 更新ではシステムテーブルの非破壊migrationが検索用JSONと同期trigger、原生索引を追加する。
 元のchunk、検索本文、既存のCohere埋め込みは保持する。JSONに既存の数値配列を入れるため、
 DB内の外部AI資格情報や全庫のembedding再生成は不要。検索用JSON・原生索引分のDB容量と、
-書込み時の同期負荷が増える。従来の索引もSudachi方式で使用するため保持する。
+書込み時の同期負荷が増える。従来の索引も個別SQL方式で使用するため保持する。
 
 原生方式は原質問と「質問＋用語・同義語」を `DBMS_HYBRID_VECTOR.SEARCH` の1回の `UNION / WRRF` 呼出で検索・融合する。
 意味の追加検索文は向量のみを使う。原質問のOracle WRRF得点を
