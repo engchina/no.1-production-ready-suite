@@ -61,7 +61,7 @@ class OracleConversion(Oracle):
         }
 
 
-def has_grouping_suffix(expression: exp.Expression) -> bool:
+def has_grouping_suffix(expression: exp.Expr) -> bool:
     """他方言の GROUP BY 後置句を AST で判定する。"""
     return any(
         group.args.get(key)

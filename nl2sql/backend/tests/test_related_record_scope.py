@@ -148,13 +148,21 @@ def test_interpretation_is_grounded_in_question_and_physical_columns() -> None:
     from app.features.nl2sql.ontology_models import QuerySession
     from app.features.nl2sql.sql_requirement import generation_spec
 
-    session = QuerySession.model_construct(id="session", profile_id="p", requirement=draft)
+    session = QuerySession.model_construct(
+        id="session",
+        profile_id="p",
+        profile_view_id="view",
+        ontology_revision_id="revision",
+        original_question=SCOPE.source_quote,
+        requirement=draft,
+    )
     assert generation_spec(session).related_scopes == [SCOPE]
-    for patch in [
+    patches: list[dict[str, Any]] = [
         {"source_quote": "原質問に無い文"},
         {"result_key_columns": ["APP.TABLE_A.MISSING"]},
         {"anchor_predicate": "APP.TABLE_A.ID='B'"},
-    ]:
+    ]
+    for patch in patches:
         output["related_scopes"] = [SCOPE.model_copy(update=patch).model_dump()]
         with pytest.raises(RequirementAiUnavailableError, match="対象範囲"):
             build_draft(
