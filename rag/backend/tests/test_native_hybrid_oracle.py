@@ -912,3 +912,49 @@ async def test_zero_candidate_limit_keeps_all_scoped_rows(backend: str, mode: Se
         raise AssertionError("検索の実行に失敗しました") from failure
     assert len(hits) == 3
     assert {hit.document_id for hit in hits} == {document_id}
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_separate_sql_matches_native_tied_text_ranks_and_fusion() -> None:
+    """同じ全文同点候補を実 Oracle で読み、既定 native 経路と融合順位を照合する。"""
+    settings = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": "oracle_hybrid_index",
+            "rag_native_vector_exact_max_chunks": 50000,
+            "rag_rrf_method_ratio": (1.0, 1.0),
+        }
+    )
+    native = OracleClient(settings)
+    texts = [f"syntheticrankparity {suffix}" for suffix in ("alpha", "bravo", "delta")]
+    document_id = await _indexed_document(
+        native,
+        file_name=f"synthetic-ranks-{uuid4().hex}.txt",
+        chunks=[
+            Chunk(text=text, index=i, start_offset=0, end_offset=len(text), metadata={})
+            for i, text in enumerate(texts)
+        ],
+    )
+    separate = OracleClient(
+        settings.model_copy(update={"rag_hybrid_search_backend": "oracle_separate_sql"})
+    )
+    filters = {"document_id": document_id}
+    native_text = await native.keyword_search("syntheticrankparity", 3, filters)
+    separate_text = await separate.keyword_search("syntheticrankparity", 3, filters)
+    assert len(native_text) == len(separate_text) == 3
+    assert [h.metadata["keyword_rank"] for h in native_text] == [1, 1, 1]
+    assert {h.chunk_id: h.metadata["keyword_rank"] for h in separate_text} == {
+        h.chunk_id: h.metadata["keyword_rank"] for h in native_text
+    }
+    native_hits = await native.hybrid_search(
+        "syntheticrankparity", [0.1] * 1536, 3, filters=filters
+    )
+    if native_hits.failure is not None:
+        raise native_hits.failure
+    separate_hits = await separate.hybrid_search(
+        "syntheticrankparity", [0.1] * 1536, 3, filters=filters
+    )
+    assert len(native_hits) == len(separate_hits) == 3
+    assert [h.chunk_id for h in separate_hits] == [h.chunk_id for h in native_hits]
+    assert [h.score for h in separate_hits] == pytest.approx(
+        [h.score for h in native_hits], abs=1e-6
+    )

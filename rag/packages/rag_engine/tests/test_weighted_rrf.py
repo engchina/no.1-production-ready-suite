@@ -157,3 +157,23 @@ def test_fusion_execution_is_based_on_real_contributions(rankings, sources, weig
     assert json.loads(details["code"][0]["text"]) == diagnostics
     assert details["rrf"] == diagnostics
     assert result.scores == original_scores
+
+
+def test_explicit_competition_ranks_survive_outer_fusion_and_duplicate_ids():
+    weights = RrfWeights(vector=1, keyword=1)
+    result = fuse_rankings(
+        [
+            RankedList("q", "keyword", ("a", "b", "a", "c"), ranks=(1, 1, 1, 4)),
+        ],
+        {"q": 1.0},
+        weights,
+        k=60,
+    )
+    assert result.scores == pytest.approx({"a": 0.5 / 61, "b": 0.5 / 61, "c": 0.5 / 64})
+    assert [c.rank for c in result.contributions] == [1, 1, 4]
+
+
+@pytest.mark.parametrize("ranks", [(1,), (0, 1), (-1, 1), (1.5, 2), (True, 2)])
+def test_invalid_original_ranks_are_rejected(ranks):
+    with pytest.raises(ValueError, match="原順位"):
+        RankedList("q", "keyword", ("a", "b"), ranks=ranks)

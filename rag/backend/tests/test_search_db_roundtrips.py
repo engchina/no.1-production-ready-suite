@@ -836,8 +836,9 @@ async def test_search_collapses_chunks_with_same_text(monkeypatch: pytest.Monkey
     (batched,) = await client.search_many([("規程", [1.0], SearchMode.HYBRID)], 5)
 
     assert [hit.chunk_id for hit in vector_hits] == ["c-8", "c-1"]
-    assert [hit.metadata["vector_rank"] for hit in vector_hits] == [1, 2]
-    # 両方の候補にある代表 c-8 が先頭。同じ本文の c-9 は出ない(c-1 / c-2 は同じ RRF)。
+    # native と同じく、重複除去の代表行が持つ原順位を保ち、詰め直さない。
+    assert [hit.metadata["vector_rank"] for hit in vector_hits] == [2, 3]
+    # 両方の候補にある代表 c-8 が先頭。同じ本文の c-9 は出ない。
     assert hybrid[0].chunk_id == "c-8"
     assert sorted(hit.chunk_id for hit in hybrid) == ["c-1", "c-2", "c-8"]
     assert hybrid[0].metadata["retrieval_mode"] == "hybrid"
@@ -1379,7 +1380,7 @@ async def test_all_failed_rankings_record_failure_and_are_not_cached() -> None:
     assert recorded[0]["rrf"]["unique_count"] == 0
 
 
-def test_independent_reference_hybrid_lookup_does_not_use_main_rrf_ratios() -> None:
+def test_direct_hybrid_lookup_uses_configured_channel_ratios() -> None:
     vector = [_hit("c-1", 0.9, mode="vector"), _hit("c-2", 0.8, mode="vector")]
     keyword = [_hit("c-2", 9.0, mode="keyword"), _hit("c-3", 8.0, mode="keyword")]
     first = OracleClient(
@@ -1388,9 +1389,12 @@ def test_independent_reference_hybrid_lookup_does_not_use_main_rrf_ratios() -> N
     second = OracleClient(
         settings=Settings(rag_rrf_method_ratio=(1, 9), rag_rrf_source_ratio=(9, 1))
     )
-    assert first._fuse_hybrid_hits(vector, keyword, 3) == second._fuse_hybrid_hits(
-        vector, keyword, 3
-    )
+    first_hits = first._fuse_hybrid_hits(vector, keyword, 3)
+    second_hits = second._fuse_hybrid_hits(vector, keyword, 3)
+    assert first_hits[0].metadata["rrf_score"] != second_hits[0].metadata["rrf_score"]
+    assert first_hits[0].chunk_id == second_hits[0].chunk_id == "c-2"
+    assert first_hits[0].score == pytest.approx(0.9 / 62 + 0.1 / 61, abs=1e-6)
+    assert second_hits[0].score == pytest.approx(0.1 / 62 + 0.9 / 61, abs=1e-6)
 
 
 async def test_keyword_list_without_a_search_expression_is_not_executed(
@@ -1470,3 +1474,67 @@ async def test_expansion_records_actual_skip_empty_failure_and_reuse(
         assert all(record["reason_code"] == "selection_failed" for record in records)
     if mode == "no_match":
         assert all(record["reason_code"] == "no_match" for record in records)
+
+
+@pytest.mark.parametrize("ratio", [(1.0, 1.0), (9.0, 1.0), (1.0, 9.0), (0.0, 1.0)])
+async def test_separate_sql_keeps_tied_ranks_and_matches_native_fusion(monkeypatch, ratio):
+    """同じ候補なら単独・一括・native の原順位による融合が一致する。"""
+    settings = _search_settings().model_copy(update={"rag_rrf_method_ratio": ratio})
+    client = OracleClient(settings)
+    vector_rows = [{**_db_row(n), "score": score} for n, score in [(2, 0.9), (1, 0.8), (3, 0.7)]]
+    text_rows = [{**_db_row(n), "score": score} for n, score in [(1, 0.8), (2, 0.8), (3, 0.5)]]
+
+    async def vectors(*args, **kwargs):
+        return vector_rows
+
+    async def keywords(*args, **kwargs):
+        return text_rows
+
+    monkeypatch.setattr(client, "_vector_rows", vectors)
+    monkeypatch.setattr(client, "_keyword_rows", keywords)
+    direct = await client.hybrid_search("合成", [1.0], 3)
+    keyword = await client.keyword_search("合成", 3)
+    assert [h.metadata["keyword_rank"] for h in keyword] == [1, 1, 3]
+    (batched,) = await client.search_many([("合成", [1.0], SearchMode.HYBRID)], 3)
+    assert batched == direct
+    native = oracle_module._merge_native_exact_rows(
+        [
+            {**row, "native_similarity": row["score"], "native_vector_score": 80}
+            for row in vector_rows
+        ],
+        [
+            {**row, "native_text_rank": rank, "native_text_score": row["score"]}
+            for row, rank in zip(text_rows, [1, 1, 3], strict=True)
+        ],
+    )
+    expected = oracle_module._apply_native_search_threshold(native, "hybrid", settings)
+    assert [h.chunk_id for h in direct] == [r["chunk_id"] for r in expected]
+    assert [h.score for h in direct] == pytest.approx([r["score"] for r in expected], abs=1e-6)
+
+
+async def test_answer_fusion_keeps_keyword_original_ranks():
+    class TiedOracle(_SearchOracle):
+        async def search_many(self, searches, top_k, filters=None):
+            return [
+                [
+                    _hit(f"c-{n}", 0.8, mode="keyword").model_copy(
+                        update={"metadata": {"retrieval_mode": "keyword", "keyword_rank": rank}}
+                    )
+                    for n, rank in [(1, 1), (2, 1), (3, 3)]
+                ]
+                if mode == SearchMode.KEYWORD
+                else []
+                for _, _, mode in searches
+            ]
+
+    state = _SearchState()
+    engine = AnswerEngine(
+        Settings(rag_hybrid_search_backend="oracle_separate_sql"),
+        oracle=TiedOracle(),
+        genai=_GenAi(),
+    )
+    await engine._search(
+        SearchRequest(query="合成"), state, retrieval_queries=["合成"], expand_references=False
+    )
+    assert state.chunks["c-1"].metadata["rrf_score"] == state.chunks["c-2"].metadata["rrf_score"]
+    assert state.chunks["c-3"].metadata["rrf_score"] < state.chunks["c-2"].metadata["rrf_score"]

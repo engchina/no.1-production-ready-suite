@@ -819,7 +819,14 @@ def _apply_native_search_threshold(
         if accepted:
             kept.append(row)
     if channel == "hybrid":
-        kept.sort(key=lambda row: -_float_value(row.get("native_rrf_contribution", 0)))
+        kept.sort(
+            key=lambda row: (
+                -_float_value(row.get("native_rrf_contribution", 0)),
+                str(row.get("document_id", "")),
+                _float_value(row.get("chunk_index", 0)),
+                str(row["chunk_id"]),
+            )
+        )
     return NativeSearchRows(
         kept,
         {
@@ -1164,19 +1171,7 @@ class OracleClient:
         branch_hits: list[list[RetrievedChunk]] = []
         for kind, rows in zip(branch_kinds, branch_rows, strict=True):
             ordered = [row for _rank, row in sorted(rows, key=lambda item: item[0])]
-            branch_hits.append(
-                [
-                    _with_retrieval_metadata(
-                        chunk,
-                        retrieval_mode=kind,
-                        **{
-                            f"{kind}_rank": rank,
-                            f"{kind}_score": round(_float_value(row.get("score", 0.0)), 6),
-                        },
-                    )
-                    for rank, (chunk, row) in enumerate(_distinct_text_hits(ordered), start=1)
-                ]
-            )
+            branch_hits.append(_ranked_search_hits(ordered, kind))
         if (
             branch_kinds
             and len(branch_errors) == len(branch_kinds)
@@ -1233,26 +1228,26 @@ class OracleClient:
         top_k: int,
     ) -> list[RetrievedChunk]:
         """vector と keyword の候補を Reciprocal Rank Fusion で統合する(順位だけで決まる)。"""
-        # 独立した根拠補充も使う融合。全検索文の重み付けは AnswerEngine で一度だけ行う。
+        from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_rankings
+
+        weights = RrfWeights(*self._settings.rag_rrf_method_ratio)
         vector_ids = {hit.chunk_id for hit in vector_hits}
         keyword_ids = {hit.chunk_id for hit in keyword_hits}
         fused: dict[str, RetrievedChunk] = {}
-        scores: dict[str, float] = {}
         retrieval_metadata: dict[str, dict[str, MetadataValue]] = {}
-        for rank, hit in enumerate(vector_hits, start=1):
-            fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
-                rank, self._settings.rag_rrf_k
+        lists = []
+        for channel, hits in (("vector", vector_hits), ("keyword", keyword_hits)):
+            ranks = tuple(
+                int(str(hit.metadata.get(f"{channel}_rank", rank)))
+                for rank, hit in enumerate(hits, 1)
             )
-            retrieval_metadata.setdefault(hit.chunk_id, {})["vector_rank"] = rank
-            retrieval_metadata[hit.chunk_id]["vector_score"] = hit.score
-        for rank, hit in enumerate(keyword_hits, start=1):
-            fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
-                rank, self._settings.rag_rrf_k
-            )
-            retrieval_metadata.setdefault(hit.chunk_id, {})["keyword_rank"] = rank
-            retrieval_metadata[hit.chunk_id]["keyword_score"] = hit.score
+            lists.append(RankedList("query", channel, tuple(h.chunk_id for h in hits), ranks=ranks))
+            for rank, hit in zip(ranks, hits, strict=True):
+                fused[hit.chunk_id] = hit
+                retrieval_metadata.setdefault(hit.chunk_id, {}).update(
+                    {f"{channel}_rank": rank, f"{channel}_score": hit.score}
+                )
+        scores = fuse_rankings(lists, {"query": 1.0}, weights, k=self._settings.rag_rrf_k).scores
         ranked_ids = sorted(
             scores,
             key=lambda chunk_id: _retrieved_chunk_score_sort_key(
@@ -8561,15 +8556,7 @@ class OracleClient:
                         filters,
                     )
                 )
-            result = [
-                _with_retrieval_metadata(
-                    chunk,
-                    retrieval_mode="vector",
-                    vector_rank=rank,
-                    vector_score=round(_float_value(row.get("score", 0.0)), 6),
-                )
-                for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
-            ]
+            result = _ranked_search_hits(rows, "vector")
         return result
 
     async def _keyword_rows(
@@ -8648,15 +8635,7 @@ class OracleClient:
                         filters,
                     )
                 )
-            result = [
-                _with_retrieval_metadata(
-                    chunk,
-                    retrieval_mode="keyword",
-                    keyword_rank=rank,
-                    keyword_score=round(_float_value(row.get("score", 0.0)), 6),
-                )
-                for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
-            ]
+            result = _ranked_search_hits(rows, "keyword")
         return result
 
     async def _context_group_siblings_with_oracle(
@@ -16819,6 +16798,31 @@ def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _ranked_search_hits(rows: Sequence[Mapping[str, object]], kind: str) -> list[RetrievedChunk]:
+    """重複除去前の経路順位を残す。全文同点は Oracle SEARCH と同じ RANK（1,1,3）にする。"""
+    ranked = []
+    previous_score: float | None = None
+    rank = 0
+    for position, row in enumerate(rows, 1):
+        score = _float_value(row.get("score", 0))
+        if kind == "vector" or score != previous_score:
+            rank = position
+        previous_score = score
+        original_rank = row.get("native_text_rank") if kind == "keyword" else None
+        ranked.append({**row, "retrieval_rank": original_rank or rank})
+    return [
+        _with_retrieval_metadata(
+            chunk,
+            retrieval_mode=kind,
+            **{
+                f"{kind}_rank": int(str(row["retrieval_rank"])),
+                f"{kind}_score": round(_float_value(row.get("score", 0)), 6),
+            },
+        )
+        for chunk, row in _distinct_text_hits(ranked)
+    ]
+
+
 def _distinct_text_hits(
     rows: Sequence[Mapping[str, object]],
 ) -> list[tuple[RetrievedChunk, Mapping[str, object]]]:
@@ -19135,10 +19139,6 @@ def bind_text_query_keywords(keywords: Mapping[str, Sequence[str]]) -> Iterator[
 def _text_search_domain_keywords(settings: Settings | None, query: str) -> list[str]:
     configured = list(settings.rag_domain_keywords) if settings is not None else []
     return [*configured, *(_TEXT_QUERY_KEYWORDS.get() or {}).get(query, ())]
-
-
-def _rrf(rank: int, constant: int = 60) -> float:
-    return 1.0 / (constant + rank)
 
 
 def _write_document_graph_index(
