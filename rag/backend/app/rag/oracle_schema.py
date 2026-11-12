@@ -40,6 +40,7 @@ from app.clients.native_maintenance_schema import (
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
+    oracle_chunk_document_index_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
     oracle_document_recipe_schema_sql,
@@ -1129,6 +1130,15 @@ END;
             name="20261110_4793_document_summaries",
             table_name="rag_document_summaries",
             sql=_create_missing_objects_sql(oracle_document_summary_schema_sql(), "文書全体の要約"),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261112_4955_chunk_document_index",
+            table_name="rag_chunks",
+            sql=_create_missing_objects_sql(
+                oracle_chunk_document_index_sql() + ";", "文書の chunk"
+            ),
         )
     )
     return sections

@@ -559,6 +559,18 @@ def test_initialize_is_idempotent_and_repairs_missing_index() -> None:
     assert (MANAGED_INDEXES[-1], "INDEX") in database.objects
 
 
+def test_initialize_repairs_document_index_after_migration_was_applied() -> None:
+    """台帳が最新でも、tenant 条件のない検索用の索引を復旧する（#4955）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.objects.pop(("RAG_CHUNKS_DOCUMENT_IDX", "INDEX"))
+
+    assert manager.initialize()["operation"] == "migrated"
+    assert ("RAG_CHUNKS_DOCUMENT_IDX", "INDEX") in database.objects
+    assert manager.initialize()["operation"] == "no_op"
+
+
 _RESTORE_CLASSIFICATION_MIGRATION = "20261019_001_restore_document_classification"
 
 

@@ -18119,9 +18119,16 @@ CREATE INDEX {table_name}_text_idx
 CREATE INDEX {table_name}_tenant_document_idx
     ON {table_name} (tenant_id_hash, document_id, chunk_index);
 
+{oracle_chunk_document_index_sql(table_name)};
+
 CREATE INDEX {table_name}_chunk_set_idx
     ON {table_name} (chunk_set_id, chunk_index);
 """.strip()
+
+
+def oracle_chunk_document_index_sql(table_name: str = "rag_chunks") -> str:
+    """tenant 条件のない文書スコープも、chunk の全表走査を避けて読む（#4955）。"""
+    return f"CREATE INDEX {table_name}_document_idx\n    ON {table_name} (document_id, chunk_index)"
 
 
 def oracle_text_preferences_sql(
