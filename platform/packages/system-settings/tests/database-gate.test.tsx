@@ -96,7 +96,7 @@ describe("databaseGateView（状態ごとの分岐）", () => {
 
   it("確認中・失敗・4 つの状態をそれぞれの表示へ分ける", () => {
     expect(databaseGateView({ ...base, isPending: true, data: undefined })).toEqual({ kind: "checking" });
-    expect(databaseGateView({ ...base, isError: true, data: snapshot("ok") })).toEqual({
+    expect(databaseGateView({ ...base, isError: true, data: undefined })).toEqual({
       kind: "notice",
       status: "check_failed",
       reasonCode: null,
@@ -117,6 +117,14 @@ describe("databaseGateView（状態ごとの分岐）", () => {
       status: "setup_required",
       reasonCode: "schema_check_failed",
     });
+  });
+
+  it("再取得の通信失敗では確認済みの状態を維持し、明示された停止状態は通さない", () => {
+    expect(databaseGateView({ ...base, isError: true, data: snapshot("ok") })).toEqual({ kind: "children" });
+    expect(databaseGateView({ ...base, isError: true, hasSecondaryGate: true, data: snapshot("ok") })).toEqual({ kind: "secondary" });
+    expect(databaseGateView({ ...base, isError: true, data: snapshot("unreachable") })).toMatchObject({ kind: "notice", status: "unreachable" });
+    expect(databaseGateView({ ...base, isError: true, data: snapshot("not_configured") })).toMatchObject({ kind: "notice", status: "not_configured" });
+    expect(renderGate("/profiles", clientWith(snapshot("ok"), true))).toBe("<p>業務画面</p>");
   });
 
   it("システムテーブルの管理は setup_required でも開け、製品の追加の確認より前に通す", () => {
@@ -186,7 +194,7 @@ describe("DatabaseGate（表示）", () => {
       expect(html.search(new RegExp(`<a[^>]*href="${href}"`))).toBeLessThan(html.search(/<button/));
     }
 
-    const failed = renderGate("/profiles", clientWith(snapshot("ok"), true), <p>業務画面</p>, admin);
+    const failed = renderGate("/profiles", clientWith(undefined, true), <p>業務画面</p>, admin);
     expect(failed).toContain(DATABASE_GATE_MESSAGES["dbGate.checkFailed.title"]);
     expect(failed).not.toContain("<a");
     expect(failed).toMatch(/<button[^>]*type="button"[^>]*>.*再試行/);
@@ -244,7 +252,7 @@ describe("DatabaseGate（表示）", () => {
       expect(html).toContain(DATABASE_GATE_MESSAGES["dbGate.contactAdmin.footer"]);
       expect(html).toMatch(/<button[^>]*type="button"[^>]*>.*再試行/);
     }
-    const failed = renderGate("/profiles", clientWith(snapshot("ok"), true));
+    const failed = renderGate("/profiles", clientWith(undefined, true));
     expect(failed).toContain(DATABASE_GATE_MESSAGES["dbGate.checkFailed.contactAdmin"]);
   });
 
