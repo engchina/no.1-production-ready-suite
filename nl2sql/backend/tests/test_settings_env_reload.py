@@ -158,3 +158,15 @@ def test_platform_env_reload_keeps_model_settings_file_values(
         assert reloaded.oci_enterprise_ai_default_text_model == "json-model"
     finally:
         app_settings.reset_settings_cache()
+
+
+def test_online_output_budget_loads_shared_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """要求予算はモデルの能力とは別の共有設定から読む。"""
+    monkeypatch.setenv("PLATFORM_ONLINE_MAX_OUTPUT_TOKENS", "24576")
+    settings = app_settings.Settings(_env_file=None)
+    assert settings.online_max_output_tokens == 24576
+
+
+def test_online_output_budget_rejects_zero() -> None:
+    with pytest.raises(ValueError):
+        app_settings.Settings(_env_file=None, online_max_output_tokens=0)

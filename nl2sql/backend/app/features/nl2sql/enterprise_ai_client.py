@@ -21,8 +21,8 @@ from pr_backend_core.llm_request_params_httpx import send_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.output_budget import (
-    initial_output_budget,
-    next_output_budget,
+    configured_online_output_tokens,
+    online_output_budget,
     output_limit_message,
 )
 from pr_system_settings.enterprise_ai_errors import (
@@ -244,7 +244,7 @@ class OciEnterpriseAiDirectClient:
         response_format: Mapping[str, Any] | None = None,
         strict_max_output_tokens: bool = False,
     ) -> str:
-        """1 回の生成（Structured Outputs は出力の上限で未完了なら送り直す）。
+        """オンライン生成は設定した出力予算で 1 回だけ行う。
 
         `strict_max_output_tokens` が真なら、`max_output_tokens` をそのまま上限にする（既定
         32768 へ引き上げず、未完了でも上限を広げて送り直さない。推論を下げる送り直しだけ。
@@ -256,7 +256,7 @@ class OciEnterpriseAiDirectClient:
         # LLM Model・Region は Select AI の AI profile 用で、ここでは使わない（#1684）。
         model_id = self.model_id()
         # 出力の上限はモデルの出力の上限と、入力の上限から prompt の見積もりを引いた残りの小さい方
-        # （#1719）。オンラインの初回は共有の3段階方針を使い、明示した固定予算だけ別に保つ。
+        # （#1719）。オンラインは共有の要求予算を使い、明示した固定予算だけ別に保つ。
         prompt_tokens = estimate_input_tokens("\n".join([system_prompt, context, prompt]))
         strict = strict_max_output_tokens and max_output_tokens is not None
         budget = (
@@ -267,10 +267,11 @@ class OciEnterpriseAiDirectClient:
                 ),
             )
             if strict
-            else initial_output_budget(
+            else online_output_budget(
                 enterprise_ai_output_token_budget(
                     self.settings, model_id, prompt_tokens=prompt_tokens
-                )
+                ),
+                configured=configured_online_output_tokens(self.settings),
             )
         )
 
@@ -310,12 +311,13 @@ class OciEnterpriseAiDirectClient:
                     code="context_budget_exceeded",
                     model_id=model_id,
                 )
-            budget = initial_output_budget(
+            budget = online_output_budget(
                 enterprise_ai_output_token_budget(
                     self.settings,
                     model_id,
                     prompt_tokens=prompt_tokens,
-                )
+                ),
+                configured=configured_online_output_tokens(self.settings),
             )
 
         def call(budget: int, effort: str) -> str:
@@ -374,52 +376,23 @@ class OciEnterpriseAiDirectClient:
                     exc.max_output_tokens = raw_max_tokens
                 raise
 
-        retry = self._with_fixed_output_retry if strict else self._with_output_limit_retry
-        return retry(
-            call,
-            model_id=model_id,
-            budget=max(1, budget),
-            prompt_tokens=prompt_tokens,
-            # payload template の構成は `reasoning` を持たないので、推論の量を下げて送り直さない。
-            can_lower_effort=not self.settings.oci_enterprise_ai_llm_payload_template.strip(),
-            can_widen=not strict,
-        )
-
-    def _with_output_limit_retry(
-        self,
-        call: Callable[[int, str], str],
-        *,
-        model_id: str,
-        budget: int,
-        prompt_tokens: int,
-        can_lower_effort: bool = True,
-        can_widen: bool = True,
-    ) -> str:
-        """同じ現在の要求だけを3段階で試す。推論量と完了済みツールは変更しない。"""
-        capacity = enterprise_ai_output_token_budget(
-            self.settings, model_id, prompt_tokens=prompt_tokens
-        )
-        for attempt in range(1, 4):
-            try:
-                return call(budget, "")
-            except EnterpriseAiDirectError as exc:
-                if exc.incomplete is None or not exc.incomplete.output_limit_reached:
-                    raise
-                wider = (
-                    next_output_budget(budget, capacity)
-                    if exc.incomplete.output_limit_reached
-                    else None
-                )
-                if wider is not None and attempt < 3 and can_widen:
-                    budget = wider
-                    continue
-                exc.user_message = output_limit_message(
-                    model=model_id, attempts=attempt, capacity=capacity
-                )
+        if strict:
+            return self._with_fixed_output_retry(
+                call,
+                model_id=model_id,
+                budget=max(1, budget),
+                prompt_tokens=prompt_tokens,
+                can_lower_effort=not self.settings.oci_enterprise_ai_llm_payload_template.strip(),
+                can_widen=False,
+            )
+        try:
+            return call(budget, "")
+        except EnterpriseAiDirectError as exc:
+            if exc.incomplete is not None and exc.incomplete.output_limit_reached:
+                exc.user_message = output_limit_message(model=model_id, attempts=1, capacity=budget)
                 exc.args = (exc.user_message + " 詳細: " + exc.incomplete.detail(),)
-                exc.attempts = attempt
-                raise
-        raise AssertionError("出力予算の試行が終了しませんでした。")
+                exc.attempts = 1
+            raise
 
     def _with_fixed_output_retry(
         self,

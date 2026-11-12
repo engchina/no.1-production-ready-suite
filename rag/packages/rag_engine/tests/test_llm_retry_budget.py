@@ -132,8 +132,8 @@ class SharedBudgetTest(_Base):
         self.assertEqual(self.call(client, self.stream_settings).text, "ok")
         self.assertEqual(len(client.streams), 2)
 
-    def test_output_limit_resends_are_counted(self):
-        """出力の上限での送り直しも同じ枠で数える（無音 → 上限 → 上限で 3 回）。"""
+    def test_output_limit_stops_after_transport_retry(self):
+        """通信の再試行は残し、その後の出力上限では追加要求を送らない。"""
         client = _Client(
             self.clock,
             [
@@ -145,7 +145,7 @@ class SharedBudgetTest(_Base):
         )
         with self.assertRaises(oci.IncompleteResponse):
             self.call(client, self.stream_settings)
-        self.assertEqual(len(client.streams), 3)
+        self.assertEqual(len(client.streams), 2)
 
     def test_transport_errors_are_counted(self):
         client = _ParseClient([TimeoutError("a")] * 6 + [VALID])

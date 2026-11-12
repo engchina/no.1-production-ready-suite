@@ -36,6 +36,7 @@ from typing import Any, Literal, TypeVar, cast
 
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.oci_genai_regions import genai_endpoint
+from pr_backend_core.output_budget import configured_online_output_tokens
 from pr_backend_core.timezones import configured_timezone_name
 from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
@@ -504,9 +505,8 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": str(
             enterprise_ai_max_input_tokens(settings, answer_model)
         ),
-        # 回答のモデルと Vision のモデルの出力の上限(tokens。#1719)。rag_engine は回答の上限
-        # (answer_max_tokens。既定 32768)とこの値の小さい方を送り、未完了の送り直しもこの値で抑える
-        # (値の解釈は platform の enterprise_ai_output_token_budget。prompt は見積もらない)。
+        # 登録容量とオンラインの要求予算を別に渡し、取り込みの固定予算を保つ。
+        "RAG_ENGINE_ONLINE_MAX_OUTPUT_TOKENS": str(configured_online_output_tokens(settings)),
         "OCI_ENTERPRISE_AI_MAX_OUTPUT_TOKENS": str(
             enterprise_ai_output_token_budget(settings, answer_model)
         ),

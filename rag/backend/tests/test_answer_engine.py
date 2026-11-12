@@ -2932,3 +2932,18 @@ def test_diversity_without_capture_does_not_build_trace_details(
         new_document=1,
         present_document=1,
     ) == ["a2"]
+
+
+def test_build_engine_settings_passes_online_budget_without_changing_fixed_budget(
+    tmp_path: Any,
+) -> None:
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    assert default.online_max_output_tokens == 65536
+    configured = build_engine_settings(
+        Settings(online_max_output_tokens=24576), output_dir=tmp_path
+    )
+    assert configured.online_max_output_tokens == 24576
+    assert configured.answer_max_tokens == default.answer_max_tokens == 32768
+    assert configured.llm_providers == default.llm_providers

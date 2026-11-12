@@ -28,6 +28,7 @@ from pr_backend_core.config import (
     product_settings_config,
 )
 from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
+from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.chat_attachments.limits import (
     CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
@@ -151,6 +152,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     )
     # チャットの「会話の履歴」に出す期間（日。共通の設定。#2340）。0 は期間で絞らない。
     # 解釈は pr_backend_core.chat_history_window（最後の更新が直近 N 日の会話だけを一覧に出す）。
+    online_max_output_tokens: int = Field(default=DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, ge=1)
     chat_history_days: int = Field(
         default=CHAT_HISTORY_DEFAULT_DAYS, ge=0, le=CHAT_HISTORY_DAYS_LIMIT
     )

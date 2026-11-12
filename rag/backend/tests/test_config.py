@@ -394,7 +394,9 @@ def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
 
 def test_enterprise_ai_output_token_limits_follow_each_model() -> None:
     """出力の上限は登録モデルごとの値(#1719)。共通の LLM / VLM の出力の上限は持たない。"""
-    assert not [name for name in Settings.model_fields if name.endswith("_max_output_tokens")]
+    assert [name for name in Settings.model_fields if name.endswith("_max_output_tokens")] == [
+        "online_max_output_tokens"
+    ]
     settings = Settings(
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="llm-a", max_output_tokens=16000),
@@ -1129,3 +1131,10 @@ def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.Mo
 def test_platform_timezone_rejects_fixed_offsets() -> None:
     with pytest.raises(ValidationError):
         config_module.Settings(timezone="+09:00")
+
+
+def test_online_output_budget_loads_shared_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PLATFORM_ONLINE_MAX_OUTPUT_TOKENS", "24576")
+    assert Settings().online_max_output_tokens == 24576
+    with pytest.raises(ValidationError):
+        Settings(online_max_output_tokens=0)

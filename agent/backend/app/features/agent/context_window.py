@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
-from pr_backend_core.output_budget import maximum_online_output_budget
+from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, online_output_budget
 from pr_system_settings.model import estimate_input_tokens
 
 from app.features.agent.tool_media import (
@@ -118,6 +118,7 @@ class ContextLimits:
     model_id: str
     max_input_tokens: int
     max_output_tokens: int
+    online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 
 
 @dataclass
@@ -133,7 +134,9 @@ class ContextBudget:
         return max(
             0,
             min(
-                maximum_online_output_budget(self.limits.max_output_tokens),
+                online_output_budget(
+                    self.limits.max_output_tokens, configured=self.limits.online_max_output_tokens
+                ),
                 self.limits.max_input_tokens // 2,
             ),
         )

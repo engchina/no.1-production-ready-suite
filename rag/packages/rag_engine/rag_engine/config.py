@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
+
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
 
@@ -214,6 +216,8 @@ class Settings:
     # 構造化出力の呼び出し 1 回の出力の上限(tokens。既定 32768。#1719)。送る値はこれと呼ぶモデルの出力の上限
     # (`LlmProviderSettings.max_output_tokens`)の小さい方(`llm_output_token_limit`)。
     answer_max_tokens: int
+    # 通常のオンライン生成だけの要求予算。固定課題と文書解析は answer_max_tokens を使う。
+    online_max_output_tokens: int
     default_rerank_enabled: bool
     rerank_model: str
     oci_rerank_endpoint: str
@@ -480,6 +484,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         # 戻らないよう、新しい名前が未設定のときだけ旧名を読む (#912)。
         llm_request_timeout_seconds=_env_int(env, "LLM_REQUEST_TIMEOUT_SECONDS", _env_int(env, "VISION_REQUEST_TIMEOUT_SECONDS", 90)),
         answer_max_tokens=_positive_int(env, "ANSWER_MAX_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
+        online_max_output_tokens=_positive_int(env, "RAG_ENGINE_ONLINE_MAX_OUTPUT_TOKENS", DEFAULT_ONLINE_MAX_OUTPUT_TOKENS),
         default_rerank_enabled=_env_bool(env, "RAG_ENGINE_DEFAULT_RERANK_ENABLED", True),
         approved_faq_semantic_matching_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_MATCHING_ENABLED", True),
         approved_faq_semantic_suggestions_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_SUGGESTIONS_ENABLED", False),

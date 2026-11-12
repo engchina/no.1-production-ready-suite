@@ -55,13 +55,12 @@ def test_budget_notice_is_required_in_saved_language_pack():
 
 
 def test_large_capacity_keeps_input_room_for_online_generation():
-    from pr_backend_core.output_budget import OUTPUT_TOKEN_TIERS
 
     base = get_settings(environ={}, dotenv_path=None)
     providers = {key: replace(value, max_output_tokens=500_000) for key, value in base.llm_providers.items()}
-    config = replace(base, llm_providers=providers, answer_max_input_tokens=500_000)
+    config = replace(base, llm_providers=providers, answer_max_input_tokens=500_000, online_max_output_tokens=16_384)
     diagnostic = model_input_measurement(config, "指示", "合成の本文", {"type": "object"})
-    assert diagnostic["output_reserved_tokens"] == max(OUTPUT_TOKEN_TIERS)
+    assert diagnostic["output_reserved_tokens"] == 16_384
     assert diagnostic["available_input_tokens"] > 0
     assert diagnostic["fits"]
     assert diagnostic["available_input_tokens"] + diagnostic["output_reserved_tokens"] == 500_000
