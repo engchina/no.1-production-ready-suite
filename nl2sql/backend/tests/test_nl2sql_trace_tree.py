@@ -90,10 +90,7 @@ def test_job_generation_retry_and_execution_nest_under_their_stages(
                 json={
                     "output_text": json.dumps(
                         {
-                            "kind": "direct",
-                            "source_quote": "",
-                            "anchor_predicate": "",
-                            "result_key_columns": [],
+                            "related_scope": None,
                         }
                     )
                 },

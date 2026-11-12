@@ -52,9 +52,7 @@ class _FakeEnterpriseAiClient:
             isinstance(response_format, dict)
             and response_format.get("name") == "ScopeInterpretation"
         ):
-            return (
-                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
-            )
+            return '{"related_scope":null}'
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         return '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
 

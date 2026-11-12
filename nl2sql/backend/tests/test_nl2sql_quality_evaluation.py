@@ -203,9 +203,7 @@ class _FakeEnterpriseAiClient:
             isinstance(response_format, dict)
             and response_format.get("name") == "ScopeInterpretation"
         ):
-            return (
-                '{"kind":"direct","source_quote":"","anchor_predicate":"","result_key_columns":[]}'
-            )
+            return '{"related_scope":null}'
         return self.text
 
 
