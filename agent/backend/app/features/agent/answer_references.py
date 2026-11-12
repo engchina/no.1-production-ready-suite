@@ -124,12 +124,17 @@ def evidence_items(
                 "file_name": output.get("file_name"),
                 "excerpt": body[start:end],
                 "locator": locator,
-                "truncated": False,
-                "text_omitted": False,
-                "text_length": end - start,
-                "excerpt_range": {"start": 0, "end": end - start},
+                # start/end は返却 body 内の位置であり、元 chunk 全体の範囲ではない。
+                "truncated": True,
             }
-            for key in ("section", "content_kind", "evidence_type", "image_ref", "superseded"):
+            for key in (
+                "section",
+                "content_kind",
+                "evidence_type",
+                "image_ref",
+                "superseded",
+                "header_range",
+            ):
                 if key in chunk or key in output:
                     item[key] = chunk.get(key, output.get(key))
             items.append(item)

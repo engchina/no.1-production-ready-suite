@@ -1580,6 +1580,20 @@
             "document_id": "doc-c",
             "chunk_id": "c-c1",
             "cited": false
+          },
+          {
+            "title": "doc-c.pdf",
+            "location": "p.5 · 2. 手順",
+            "excerpt": "保存して終える。",
+            "truncated": true,
+            "text_omitted": false,
+            "text_length": null,
+            "excerpt_range": null,
+            "header_range": null,
+            "next_offset": null,
+            "document_id": "doc-c",
+            "chunk_id": "c-c2",
+            "cited": false
           }
         ],
         "sources_text_omitted": 0,

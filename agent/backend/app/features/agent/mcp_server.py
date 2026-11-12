@@ -912,12 +912,12 @@ def _with_source_text(
     ので範囲を返さない。
     """
     rag_length = _int_or_none(item.get("text_length"))
-    text_length = rag_length if rag_length is not None else len(text)
+    rag_truncated = item.get("truncated") is True
+    text_length = rag_length if rag_length is not None else (None if rag_truncated else len(text))
     if item.get("text_omitted") is True or piece.text_omitted:
         return source.model_copy(
             update={"excerpt": "", "text_omitted": True, "text_length": text_length}
         )
-    rag_truncated = item.get("truncated") is True
     if not piece.truncated:
         if rag_truncated:
             update: dict[str, Any] = {

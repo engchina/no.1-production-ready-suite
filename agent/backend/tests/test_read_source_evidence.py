@@ -226,3 +226,41 @@ def test_old_citable_metadata_cannot_replace_missing_actual_source_output() -> N
         _render_source_citations(current, "[[cite:1]]")
     current.steps = [step("rag_read_source", output)]
     assert _render_source_citations(current, "[[cite:1]]") == "【根拠: chunk-a】"
+
+
+@pytest.mark.parametrize("tool", ["rag_read_document", "rag_read_section"])
+def test_cursor_body_offsets_and_repeated_header_do_not_invent_original_chunk_ranges(
+    tool: str,
+) -> None:
+    from app.features.agent import mcp_server
+
+    prefix, header, partial = "別の取得片。\n", "列A | 列B\n", "値A | 値B\n"
+    output = {
+        "document_id": "document-a",
+        "file_name": "source-a.txt",
+        "text": prefix + header + partial,
+        "next_cursor": "opaque-next-cursor",
+        "chunks": [
+            {
+                "chunk_id": "chunk-partial",
+                "start": len(prefix),
+                "end": len(prefix + header + partial),
+                "sheet_name": "sheet-a",
+                "row_start": 20,
+                "row_end": 21,
+                "header_range": {"start": 0, "end": len(header)},
+            }
+        ],
+    }
+    [item] = evidence_items(tool, output)
+    assert item["excerpt"] == header + partial
+    assert item["truncated"] is True
+    assert item["header_range"] == {"start": 0, "end": len(header)}
+    assert item["locator"]["row_start"] == 20
+    assert not {"text_length", "excerpt_range", "text_omitted", "next_offset"} & item.keys()
+    [source], _omitted = mcp_server._fit_sources([item], queries=[], reserved_tokens=0)
+    assert source.excerpt == header + partial and source.truncated
+    assert (
+        source.text_length is None and source.excerpt_range is None and source.next_offset is None
+    )
+    assert source.header_range is not None and source.header_range.end == len(header)
