@@ -386,3 +386,39 @@ for (const canManage of [true, false]) {
     await page.screenshot({ path: testInfo.outputPath("schema-ready.png") });
   });
 }
+
+
+test("バックグラウンド確認の通信失敗で入力を失わず自動復帰する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await routeAuth(page);
+  await page.route("**/api/documents**", (route) => route.fulfill({ json: { data: { items: [], total: 0, offset: 0, limit: 25 }, error_messages: [], warning_messages: [] } }));
+  await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: { data: { items: [], total: 0 }, error_messages: [], warning_messages: [] } }));
+  await page.clock.install();
+  let checks = 0;
+  let unreachable = false;
+  await page.route("**/api/ready/database", async (route) => {
+    checks++;
+    if (checks === 2) return route.abort("failed");
+    await route.fulfill({ json: { data: { status: unreachable ? "unreachable" : "ok", check: "ok" }, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/file-list");
+  const input = page.getByRole("searchbox").first();
+  await expect(input).toBeVisible();
+  await input.fill("入力中の質問");
+  const original = await input.elementHandle();
+  await page.clock.runFor(16000);
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => checks).toBeGreaterThanOrEqual(2);
+  await expect(input).toHaveValue("入力中の質問");
+  await expect(page.locator('section[aria-labelledby="database-unavailable-title"]')).toHaveCount(0);
+  expect(await input.evaluate((node, previous) => node === previous, original)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("background-failure-preserved.png"), fullPage: true });
+  await page.clock.runFor(1500);
+  await expect.poll(() => checks).toBeGreaterThanOrEqual(3);
+  await expect(input).toHaveValue("入力中の質問");
+  expect(await input.evaluate((node, previous) => node === previous, original)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("background-recovered.png"), fullPage: true });
+  unreachable = true;
+  await page.clock.runFor(16000);
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect(page.getByRole("heading", { name: "データベースに接続できません", exact: true })).toBeVisible();
+});

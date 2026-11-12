@@ -73,7 +73,8 @@ export function databaseGateView({
 }): DatabaseGateView {
   if (exempt) return { kind: "children" };
   if (isPending) return { kind: "checking" };
-  if (isError) return { kind: "notice", status: "check_failed", reasonCode: null, adbLifecycleState: null };
+  // 通信の失敗だけでは、最後に確認できた DB の状態を失効させない。
+  if (isError && !data) return { kind: "notice", status: "check_failed", reasonCode: null, adbLifecycleState: null };
   const status = data?.status;
   const allowed = status === "ok" || (onSystemTables && status === "setup_required");
   if (!allowed) {
