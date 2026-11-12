@@ -117,6 +117,12 @@ from app.features.agent import (
     tool_grounding,
     tool_loop_guard,
 )
+from app.features.agent.answer_data import (
+    DATA_INSTRUCTIONS,
+    DataReferenceError,
+    data_index,
+    model_data_references,
+)
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
@@ -1969,6 +1975,10 @@ class _ToolRecorder:
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits
                 )
                 output = self.with_loop_notice(output, step_id)
+            if base in {NL2SQL_QUERY, "nl2sql_get_job"} and isinstance(output, dict):
+                references = model_data_references(step_id, output)
+                if references is not None:
+                    output = {**output, "answer_data": references}
             # 結果の画像は SDK の画像の出力で渡す（#2650。`deliver_images` が決めたもの）。
             return model_tool_output(
                 json.dumps(output, ensure_ascii=False, default=str), tool_result_images(result)
@@ -2854,6 +2864,8 @@ def build_sdk_agent(
         scope_names = instruction_tool_names(skill_ids, exposed, origins)
         composed = f"{composed}\n\n{render_tool_names(scope_text, scope_names)}"
     # ここまでが業務 Agent の版で決まる部分。後ろに Run の状態を足す（#2583 の指紋と見積もり）。
+    if any(mcp_base_tool_name(name) in {NL2SQL_QUERY, "nl2sql_get_job"} for name in exposed):
+        composed += "\n\n" + DATA_INSTRUCTIONS
     static_instructions = composed
     if support_task:
         support_names = instruction_tool_names(skill_ids, exposed, origins)
@@ -3908,6 +3920,9 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     result = await _require_output(
                         run, sdk_agent, result, agent.data_scopes, agent.output_fields
                     )
+                    result = await _require_data_references(
+                        run, sdk_agent, result, agent.data_scopes
+                    )
                 _record_usage(run_id, result, agent.model_id)
                 await _finish(
                     run_id,
@@ -4028,6 +4043,9 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     )
                     result = await _require_output(
                         run, sdk_agent, result, agent.data_scopes, agent.output_fields
+                    )
+                    result = await _require_data_references(
+                        run, sdk_agent, result, agent.data_scopes
                     )
                 _record_usage(run_id, result, agent.model_id)
                 await _finish(
@@ -4637,6 +4655,43 @@ async def _require_output(
     return await _unattended_approvals(run, sdk_agent, result, data_scopes)
 
 
+async def _require_data_references(
+    run: Any, sdk_agent: Agent[Any], result: Any, data_scopes: data_scope.AgentDataScopes | None
+) -> Any:
+    """数値表とデータ参照の形式を検証し、不正な形式だけ一度差し戻す。"""
+    from app.features.agent.runtime import runtime_repository
+
+    if list(getattr(result, "interruptions", []) or []):
+        return result
+    current = runtime_repository.get_run(run.id)
+    record = current.metadata.get(tool_grounding.METADATA_KEY, {})
+    if isinstance(record, dict) and record.get("data_reference_retry"):
+        return result
+    answer = _answer_text(result.final_output)
+    try:
+        data_index(current.steps).render(answer)
+        return result
+    except DataReferenceError as exc:
+        reason = str(exc)
+    runtime_repository.record_tool_grounding(run.id, "data_reference_retry", answer)
+    context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
+    context.usage.add(result.context_wrapper.usage)
+    result = await _run_sdk(
+        run.id,
+        sdk_agent,
+        tool_grounding.retry_input(
+            result.to_input_list(),
+            answer,
+            head="## Step 1: データ参照の形式を直す\n"
+            + reason
+            + "\n## Step 2: 取得済みのanswer_dataから参照を選び回答する\n"
+            "数値の表はtable参照を単独行にし、本文の値は対応するcells参照を使用してください。",
+        ),
+        context=context,
+    )
+    return await _unattended_approvals(run, sdk_agent, result, data_scopes)
+
+
 def _tool_budget_exhausted(budget: SupportTaskBudget | None) -> bool:
     """この実行（支援タスク）のツールの呼び出しが上限に達したか（上限が無ければ False）。"""
     return (
@@ -4823,6 +4878,7 @@ async def _finish(
         )
         return
     answer = _answer_text(result.final_output)
+    answer = data_index(runtime_repository.get_run(run_id).steps).render(answer)
     tool_confirmations = _tool_confirmations(task, state_content)
     if tool_confirmations and is_confirmation_payload(answer):
         # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。
@@ -5085,6 +5141,9 @@ def _record_failure(run_id: str, exc: Exception) -> None:
         return
     if isinstance(exc, BuiltinRuntimeError):
         code, message = exc.code, exc.message
+    elif isinstance(exc, DataReferenceError):
+        code = "runtime.answer_data_invalid"
+        message = "取得結果の行・列参照を検証できないため、回答を確定しませんでした。"
     elif isinstance(exc, MaxTurnsExceeded):
         code = "runtime.max_turns_exceeded"
         message = "ツールの呼び出しが上限の回数に達したため止めました。"
