@@ -24258,6 +24258,18 @@ class Nl2SqlService:
             _log_job_stage_step_finished(
                 job_id, "prepare_context", "ontology_context", started=step_started, attempt=attempt
             )
+            unit_definitions: list[Any] = []
+            if request.use_ontology_context and business_release_id:
+                try:
+                    from .ontology_router import ontology_runtime
+                    from .result_units import published_unit_definitions
+
+                    unit_definitions = published_unit_definitions(
+                        ontology_runtime, profile.id, business_release_id
+                    )
+                except Exception:
+                    # 単位を確認できない場合も数値は保持し、未確認のまま明示する。
+                    logger.info("nl2sql_result_units_unavailable", exc_info=True)
             stage_trace.set_display(
                 details=_job_progress_prepare_details(
                     request.generation_question, rewritten, row_limit
@@ -24587,6 +24599,16 @@ class Nl2SqlService:
                 created_at=job.created_at,
                 started_at=job.started_at,
                 stage_timings=stage_timings,
+            )
+            from .result_units import result_column_metadata
+
+            target_results = chat_execution.results if chat_execution is not None else results
+            target_results.column_metadata = result_column_metadata(
+                executable,
+                target_results.columns,
+                definitions=unit_definitions,
+                allowed=allowed,
+                release_id=business_release_id or "",
             )
             interpretation: Nl2SqlInterpretationArtifact | None = None
             # include_interpretation は処理手順、ontology_grounding_requested は Ontology

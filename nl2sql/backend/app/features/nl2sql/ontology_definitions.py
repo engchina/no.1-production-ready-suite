@@ -163,6 +163,7 @@ class PropertyDefinition(DefinitionBase):
     physical_type: str = ""
     required: bool = False
     unit: str = ""
+    difference_unit: str = ""
     currency: str = ""
     timezone: str = ""
     allowed_values: list[str] = Field(default_factory=list)
@@ -226,6 +227,7 @@ class MetricDefinitionV2(DefinitionBase):
     time_property: str = ""
     time_policy_ja: str = ""
     unit: str = ""
+    difference_unit: str = ""
     currency: str = ""
     additivity: Literal["additive", "semi_additive", "non_additive", "unknown"] = "unknown"
     null_policy_ja: str = ""

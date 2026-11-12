@@ -4857,7 +4857,7 @@ async def _require_data_references(
             head="## Step 1: データ参照の形式を直す\n"
             + reason
             + "\n## Step 2: 取得済みの参照から回答する\n"
-            "数値の表はanswer_dataのtable参照を単独行にし、本文の値は対応するcells参照を使用してください。"
+            "answer_dataの参照で値と表を構成してください。"
             "根拠の出典には取得結果のcitation参照を使用してください。",
         ),
         context=context,

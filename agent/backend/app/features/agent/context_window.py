@@ -352,6 +352,30 @@ def _clip(text: str, chars: int, stats: _Stats) -> str:
     return text[:chars] + "…"
 
 
+def _typed_column_summary(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {key: item[key] for key in ("name", "unit", "unit_status") if key in item}
+        for item in value
+        if isinstance(item, dict)
+    ]
+
+
+def _reference_summary(value: Mapping[str, Any], *, prefix_only: bool) -> dict[str, Any]:
+    kept = {
+        key: value[key]
+        for key in ("table", "columns", "row_count", "quantity_columns")
+        if key in value
+    }
+    quantities = value.get("quantities")
+    if isinstance(quantities, list):
+        # 先頭部分だけを残しても、参照内の元の行番号は変更しない。
+        prefix = _LEVELS[2][1]
+        kept["quantities"] = quantities[:prefix] if prefix_only else quantities
+    return kept
+
+
 def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> Any:
     chars, keep = _LEVELS[level]
     if isinstance(value, str):
@@ -374,12 +398,26 @@ def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> 
     if isinstance(value, dict):
         clipped = stats.clipped
         result = {
-            key: item
+            key: _typed_column_summary(item)
+            if key == "column_metadata"
+            else item
             if is_id_key(key) or _is_state(key, item) or _state_list(key, item) == item
             else _shrink(item, level=level, stats=stats, in_list=in_list)
             for key, item in value.items()
             if key != COMPACTION_KEY
         }
+        original_references = value.get("answer_data")
+        compacted_references = result.get("answer_data")
+        if isinstance(original_references, dict) and isinstance(compacted_references, dict):
+            compacted_references.update(
+                {
+                    key: item
+                    for key, item in _reference_summary(
+                        original_references, prefix_only=False
+                    ).items()
+                    if key != "quantities"
+                }
+            )
         if isinstance(result.get("truncated"), bool) and stats.clipped > clipped:
             result["truncated"] = True
         return result
@@ -392,13 +430,16 @@ def _ids_only(value: Any, stats: _Stats) -> Any:
         for key, item in value.items():
             if key in kept or key == COMPACTION_KEY:
                 continue
+            if key == "column_metadata":
+                kept[key] = _typed_column_summary(item)
+                continue
             if (
                 key == "answer_data"
                 and isinstance(item, dict)
                 and isinstance(item.get("table"), str)
             ):
                 # 省いた行の位置を作り直さず、保存済みの表全体を参照できるようにする。
-                kept[key] = {"table": item["table"]}
+                kept[key] = _reference_summary(item, prefix_only=True)
                 continue
             if isinstance(item, dict | list):
                 nested = _ids_only(item, stats)

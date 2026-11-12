@@ -380,6 +380,55 @@
             ],
             "title": "RequirementQuestionOutput",
             "type": "object"
+          },
+          "ResultColumnMetadata": {
+            "description": "実行結果の列位置に結び付いた、確認済みの単位と物理参照元。",
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "unit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unit"
+              },
+              "unit_status": {
+                "default": "unknown",
+                "enum": [
+                  "known",
+                  "unknown"
+                ],
+                "title": "Unit Status",
+                "type": "string"
+              },
+              "provenance": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Provenance",
+                "type": "array"
+              },
+              "source_columns": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Source Columns",
+                "type": "array"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "ResultColumnMetadata",
+            "type": "object"
           }
         },
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
@@ -488,6 +537,13 @@
             "default": null,
             "description": "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）",
             "title": "Safety Check"
+          },
+          "column_metadata": {
+            "items": {
+              "$ref": "#/$defs/ResultColumnMetadata"
+            },
+            "title": "Column Metadata",
+            "type": "array"
           },
           "columns": {
             "items": {
@@ -1045,6 +1101,55 @@
             ],
             "title": "RequirementQuestionOutput",
             "type": "object"
+          },
+          "ResultColumnMetadata": {
+            "description": "実行結果の列位置に結び付いた、確認済みの単位と物理参照元。",
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "unit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unit"
+              },
+              "unit_status": {
+                "default": "unknown",
+                "enum": [
+                  "known",
+                  "unknown"
+                ],
+                "title": "Unit Status",
+                "type": "string"
+              },
+              "provenance": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Provenance",
+                "type": "array"
+              },
+              "source_columns": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Source Columns",
+                "type": "array"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "ResultColumnMetadata",
+            "type": "object"
           }
         },
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
@@ -1153,6 +1258,13 @@
             "default": null,
             "description": "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）",
             "title": "Safety Check"
+          },
+          "column_metadata": {
+            "items": {
+              "$ref": "#/$defs/ResultColumnMetadata"
+            },
+            "title": "Column Metadata",
+            "type": "array"
           },
           "columns": {
             "items": {

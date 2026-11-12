@@ -868,6 +868,7 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
         "is_safe": True,
         "safety_issues": ["行数を制限しました。"],
         "safety_check": "checked",
+        "column_metadata": [],
         "columns": ["EMPLOYEE_ID"],
         "rows": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
         "returned_count": 2,
