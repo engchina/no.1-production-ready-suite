@@ -11,7 +11,7 @@ from numbers import Number
 from typing import Any
 
 from .answer_data_projection import TableProjectionError, selected_positions
-from .answer_data_tables import BoundCell, ReferenceTableError, render_reference_tables, unit_header
+from .answer_data_tables import BoundCell, ReferenceTableError, render_reference_tables
 
 _REFERENCE = re.compile(
     r"\[\[(cell|quantity|table):((?:[a-f0-9]{24}|T[1-9]\d*)"
@@ -255,7 +255,6 @@ class DataIndex:
 
     units: dict[str, str] = field(default_factory=dict)
     positions: dict[str, tuple[str, int, str]] = field(default_factory=dict)
-    headers: dict[str, list[str]] = field(default_factory=dict)
 
     def _cell(self, marker: re.Match[str]) -> tuple[str, Any]:
         kind, alias = marker.groups()
@@ -288,7 +287,7 @@ class DataIndex:
         if key not in self.tables:
             raise DataReferenceError("この実行に無い表の参照です。")
         columns, rows = self.tables[key]
-        headers = self.headers.get(key, columns)
+        headers = columns
         if not projection:
             return _table(columns, rows, headers=headers)
         if selectors.count(":cols=") != 1:
@@ -379,7 +378,6 @@ def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) 
     aliases: dict[str, str] = {}
     units: dict[str, str] = {}
     positions: dict[str, tuple[str, int, str]] = {}
-    headers: dict[str, list[str]] = {}
     for step in steps:
         result = step.tool_result
         if step.status != "completed" or result is None or not result.success:
@@ -397,7 +395,6 @@ def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) 
         columns = _column_order(output, rows)
         table_key = _result_key(step.id, output)
         column_units = _column_units(output, columns)
-        headers[table_key] = [unit_header(column, column_units.get(column)) for column in columns]
         tables[table_key] = (columns, rows)
         number = next(
             (
@@ -430,5 +427,4 @@ def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) 
         aliases=aliases,
         units=units,
         positions=positions,
-        headers=headers,
     )

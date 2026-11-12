@@ -72,7 +72,7 @@ def test_projection_keeps_selected_eight_rows_instead_of_replacing_with_whole_ta
     step, metadata, refs = _fixture()
     index = data_index([step], metadata)
     selected = index.render("選択した8行\n" + _matrix(refs, list(range(8))))
-    assert selected.startswith("選択した8行\n| ORDER | LABEL | CHANGE (パーセントポイント) |")
+    assert selected.startswith("選択した8行\n| ORDER | LABEL | CHANGE |")
     assert "record-8" in selected and "record-9" not in selected and "record-10" not in selected
     assert selected.count("\n|") == 10
     whole = index.render(refs["table"])
@@ -229,6 +229,7 @@ def test_canonical_headers_do_not_collide_with_original_column_names_or_swallow_
     refs = _references(step.id, _output(step))
     index = data_index([step])
     table = index.render(refs["table"])
+    assert table.startswith("| VALUE | VALUE (%) |\n")
     assert "| 1 | [[table:T9]] |" in table
     matrix = (
         "| 誤った見出し | 任意 |\n|---|---|\n| "

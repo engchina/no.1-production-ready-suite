@@ -9,22 +9,21 @@ import pytest
 from test_answer_evidence import _step
 
 from app.features.agent.answer_data import data_index, model_data_references, register_data_result
-from app.features.agent.answer_data_tables import BoundCell, unit_header
 
 
 @pytest.mark.parametrize(
     ("column", "unit", "label"),
     [
-        ("VALUE", "%", "VALUE (%)"),
+        ("VALUE", "%", "VALUE"),
         ("VALUE (%)", "%", "VALUE (%)"),
         ("VALUE（%）", "%", "VALUE（%）"),
-        ("VALUE (N)", "%", "VALUE (N) (%)"),
-        ("VALUE (%) extra", "%", "VALUE (%) extra (%)"),
+        ("VALUE (N)", "%", "VALUE (N)"),
+        ("VALUE (%) extra", "%", "VALUE (%) extra"),
         ("VALUE (%)", None, "VALUE (%)"),
         ("VALUE (m/min)", "m/min", "VALUE (m/min)"),
     ],
 )
-def test_unit_label_is_shared_by_whole_projection_matrix_and_vertical(
+def test_source_column_label_is_preserved_in_all_table_paths(
     column: str, unit: str | None, label: str
 ) -> None:
     output: dict[str, Any] = {
@@ -43,6 +42,8 @@ def test_unit_label_is_shared_by_whole_projection_matrix_and_vertical(
     assert refs is not None
     cell = refs["quantities" if unit else "cells"][0][column]
     index = data_index([step], metadata)
+    if unit:
+        assert index.render(cell) == f"12 {unit}"
     expected = f"| {label} |\n| --- |\n| 12 |"
     assert index.render(refs["table"]) == expected
     assert index.render("[[table:T1:rows=1:cols=1]]") == expected
@@ -74,8 +75,3 @@ def test_unit_label_keeps_source_reference_text_and_legacy_untyped_values() -> N
     assert data_index([legacy_step]).render(legacy["table"]) == (
         "| SOURCE (%) |\n| --- |\n| [[table:T9]] |"
     )
-
-
-def test_empty_unit_keeps_legacy_bound_cell_label() -> None:
-    cell = BoundCell("source", 0, "VALUE", 12, "")
-    assert unit_header(cell.column, cell.unit) == "VALUE"
