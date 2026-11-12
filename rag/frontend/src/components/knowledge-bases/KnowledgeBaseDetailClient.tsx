@@ -1,5 +1,6 @@
 "use client";
 import { KnowledgeBaseStructureIndex } from "./KnowledgeBaseStructureIndex";
+import { KnowledgeBaseWiki } from "./KnowledgeBaseWiki";
 
 import { FilePlus2, Files, Unlink } from "lucide-react";
 import { useRef, useState } from "react";
@@ -121,6 +122,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
 
       {/* 項目抽出で取り出す項目の定義。無ければ全体の既定を使う。 */}
       <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
+      <KnowledgeBaseWiki key={`wiki-${kb.id}`} id={kb.id} editable={isActive} />
 
       {/* 項目の定義の後に文書の構造を確認する。展開時のみ subgraph を取得。 */}
       <KnowledgeBaseStructureIndex key={kb.id} kb={kb} editable={isActive} />

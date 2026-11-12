@@ -40,6 +40,7 @@ from rag_engine.config import (
 )
 from rag_engine.dependencies import (
     check_adb_hybrid_search_ready,
+    injected_additional_sources,
     injected_context_chunks,
     injected_embedder,
     parse_multimodal_response,
@@ -1758,7 +1759,7 @@ def synthesize_grounded_answer(
         except Exception as exc:
             timed_out = deadline_cut_short()
             input_limited = isinstance(exc, GenerationInputBudgetExceeded)
-            if input_limited:
+            if isinstance(exc, GenerationInputBudgetExceeded):
                 input_diagnostic = exc.diagnostic
             invalid_draft = not timed_out and (
                 isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc) or input_limited
@@ -3131,7 +3132,30 @@ def answer_question_result(
                     retrieval_top_k=chunk_top_k,
                 )
             )
+
+        def append_independent_sources(candidate: AnswerContext, *, allow_planning: bool) -> AnswerContext:
+            from rag_engine.generation.answer_records import _stored_chunk_answer_record
+            from rag_engine.generation.evidence_union import source_identity, union_sources
+
+            additional = [_stored_chunk_answer_record(chunk) for chunk in injected_additional_sources(allow_planning=allow_planning)]
+            if not additional:
+                return candidate
+            native_ids = {source_identity(record) for record in candidate.records}
+            wiki_ids = {source_identity(record) for record in additional}
+            record_retrieval_stage(
+                {
+                    "stage": "wiki_union",
+                    "native_only": len(native_ids - wiki_ids),
+                    "wiki_only": len(wiki_ids - native_ids),
+                    "both": len(native_ids & wiki_ids),
+                    "fusion": "set_union",
+                    "source_count": len(native_ids | wiki_ids),
+                }
+            )
+            return union_sources(candidate, additional)
+
         if not complete_evidence:
+            context = append_independent_sources(context, allow_planning=False)
             # 業務 Agent の根拠の取得: 主の文書の検索の後で止める（根拠の補いは呼び出し元がする）。
             flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
             return evidence_result(context)
@@ -3381,6 +3405,8 @@ def answer_question_result(
                     for step_id, title, sources in runtime_knowledge.guide_steps
                 ),
             )
+        context, section_expansion = complete_sections(context, "request_coverage")
+        context = append_independent_sources(context, allow_planning=True)
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
@@ -3424,7 +3450,6 @@ def answer_question_result(
                 )
             )
 
-        context, section_expansion = complete_sections(context, "request_coverage")
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = {
             "query_overflow": overflow_trace,

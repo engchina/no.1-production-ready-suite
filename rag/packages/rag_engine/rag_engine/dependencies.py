@@ -53,6 +53,8 @@ class AnswerDependencies:
     # 正式生成に選んだ文書だけを、その版と検索範囲で読む。
     document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
     current_section_paths: Callable[[Sequence[str]], Mapping[str, Sequence[str]]] | None = None
+    # 独立した経路の原文。通常検索の候補を渡さず、最終段で集合として追加する。
+    additional_sources: Callable[..., Sequence[Any]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -161,3 +163,10 @@ def injected_document_background(**kwargs: Any) -> list[Mapping[str, Any]] | Non
     if current is None or current.document_background is None:
         return None
     return list(current.document_background(**kwargs))
+
+
+def injected_additional_sources(*, allow_planning: bool) -> list[Any]:
+    current = _active.get()
+    if current is None or current.additional_sources is None:
+        return []
+    return list(current.additional_sources(allow_planning=allow_planning))

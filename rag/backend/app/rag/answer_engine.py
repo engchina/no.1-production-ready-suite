@@ -270,6 +270,9 @@ class _SearchState:
     """
 
     original_retrieval_query: str = ""
+    wiki_result: Any = None
+    wiki_retriever: Any = None
+    wiki_trace: dict[str, Any] = field(default_factory=dict)
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
     context_reads: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
     retrieval_stages: list[dict[str, Any]] = field(default_factory=list)
@@ -818,6 +821,8 @@ class AnswerEngine:
                 step_callback,
             )
         outcome = _outcome_from_result(result, state)
+        if state.wiki_trace:
+            outcome.diagnostics["wiki"] = state.wiki_trace
         from rag_parser_core.language import current_pack
 
         outcome.diagnostics["answer_format"] = {
@@ -1037,6 +1042,24 @@ class AnswerEngine:
         def run_async(factory: Callable[[], Awaitable[T]]) -> T:
             return _run_on_loop(factory, loop)
 
+        def validate_wiki() -> None:
+            if state.wiki_result is not None and state.wiki_result.pages:
+                run_async(
+                    lambda: state.wiki_retriever.assert_current(
+                        request.search_answer_profile_id,
+                        dict(request.filters),
+                        state.wiki_result.pages,
+                    )
+                )
+
+        def guarded_text(*args: Any, **kwargs: Any) -> Any:
+            validate_wiki()
+            return parse_text_response(*args, **kwargs)
+
+        def guarded_images(*args: Any, **kwargs: Any) -> Any:
+            validate_wiki()
+            return parse_multimodal_response(*args, **kwargs)
+
         dependencies = AnswerDependencies(
             search=lambda **kwargs: run_async(
                 lambda: self._search(request, state, defer_context=True, **kwargs)
@@ -1049,8 +1072,15 @@ class AnswerEngine:
             ),
             record_retrieval=lambda stage: state.retrieval_stages.append(dict(stage)),
             check_ready=lambda **kwargs: None,
-            parse_text=parse_text_response,
-            parse_images=parse_multimodal_response,
+            parse_text=guarded_text,
+            parse_images=guarded_images,
+            additional_sources=(
+                lambda *, allow_planning: run_async(
+                    lambda: self._wiki_sources(request, state, allow_planning=allow_planning)
+                )
+            )
+            if self._settings.rag_wiki_search_enabled
+            else None,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
@@ -2042,6 +2072,37 @@ class AnswerEngine:
                 state.retrieval_channels.setdefault(source_id, set()).update(channels)
                 resolved.setdefault(source_id, original)
         return list(resolved.values())
+
+    async def _wiki_sources(
+        self, request: SearchRequest, state: _SearchState, *, allow_planning: bool
+    ) -> list[Any]:
+        from app.rag.wiki_retrieval import WikiRetriever
+
+        try:
+            retriever = WikiRetriever(self._settings, self._oracle, self._genai)
+            result = await retriever.search(
+                request.query,
+                profile_id=request.search_answer_profile_id,
+                filters=dict(request.filters),
+                allow_planning=allow_planning and self._caller_queries is None,
+            )
+            stored = [
+                _stored_child(chunk, rrf_score=0.0, retrieval_channels={"wiki"})
+                for chunk in result.chunks
+            ]
+            state.wiki_result, state.wiki_retriever, state.wiki_trace = (
+                result,
+                retriever,
+                result.trace,
+            )
+            for chunk in result.chunks:
+                state.chunks.setdefault(chunk.chunk_id, chunk)
+                state.retrieval_channels.setdefault(chunk.chunk_id, set()).add("wiki")
+            return stored
+        except Exception as exc:  # noqa: BLE001 - 独立経路の失敗で通常検索を止めない。
+            state.record_degraded("wiki", exc)
+            state.wiki_trace = {"status": "degraded", "failure_code": type(exc).__name__}
+            return []
 
     async def _ensure_search_filters(self, request: SearchRequest, state: _SearchState) -> None:
         """1 回の回答の検索条件(利用者が指定した条件)を、最初の検索の前に決める。
@@ -3823,6 +3884,8 @@ def _stored_child(
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
+    if chunk.metadata.get("wiki_source") is True:
+        metadata["wiki_source"] = True
     if _unprojected_vision_chunk(chunk, metadata):
         raise UnprojectedVisionSourceError((_document_display_name(chunk),))
     if isinstance(document := metadata.get("document"), dict) and "first_page_context" in document:

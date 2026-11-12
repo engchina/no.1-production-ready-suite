@@ -120,6 +120,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "max_anchors_per_document": "rag_max_anchors_per_document",
     # 業務ガイドの使用(#2398)。未指定・None は OFF(resolve_search_answer_profile_settings)。
     "support_guide_enabled": "rag_support_guide_enabled",
+    "wiki_search_enabled": "rag_wiki_search_enabled",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -305,6 +306,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     # 業務ガイドの使用(#2398)。未指定・null は OFF。既存プロファイルを自動的に有効へ変更しない。
     support_guide_enabled: bool | None = None
+    # 未指定は無効。KB の背景構築の指定とは独立している。
+    wiki_search_enabled: bool | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

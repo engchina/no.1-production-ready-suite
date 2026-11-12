@@ -806,10 +806,17 @@
       "sha256": "d281e64b295c86fd13aa4e02819cab0b5d0cbb16eb937a56447de57cc80310dd",
       "statement_count": 1,
       "table_name": "rag_document_summaries"
+    },
+    {
+      "destructive": false,
+      "name": "20261112_4941_document_wiki",
+      "sha256": "d17aa22a679c59e68d68ea738ad735bf651d6d76daf34960215f503f33aaa55b",
+      "statement_count": 2,
+      "table_name": "rag_wiki_documents"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "c3b20d59a9635995d6841d239709f1698377dd92bee5ee3d2d1c93f6c3fff742",
-  "statement_count": 172
+  "sha256": "4af19722c24587294838a45b53c70f5052351356999966d5505b2a7eea0ee877",
+  "statement_count": 174
 }

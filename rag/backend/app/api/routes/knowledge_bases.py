@@ -427,6 +427,9 @@ async def assign_documents_to_knowledge_base(
             knowledge_base_id,
             request.document_ids,
         )
+        from app.rag.wiki_jobs import wiki_jobs
+
+        wiki_jobs.notify(knowledge_base_id)
     except KeyError as exc:
         raise HTTPException(
             status_code=404,

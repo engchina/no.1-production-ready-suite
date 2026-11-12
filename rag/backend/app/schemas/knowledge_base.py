@@ -56,6 +56,7 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
     retrieval_config: dict[str, object] = Field(default_factory=dict)
     structure_index_enabled: bool | None = None
     structure_index_global_enabled: bool = False
+    wiki_build_enabled: bool = False
     adapter_config: KnowledgeBaseAdapterConfig = Field(
         default_factory=KnowledgeBaseAdapterConfig,
         description=(

@@ -1196,6 +1196,8 @@ export interface KnowledgeBaseQueryConfig {
   max_anchors_per_document?: number | null;
   /** 業務ガイドの使用。未指定・null は OFF（全体の ON を継承しない）。 */
   support_guide_enabled?: boolean | null;
+  /** Wiki 検索。明示的に有効にした場合だけ使用する。 */
+  wiki_search_enabled?: boolean | null;
 }
 
 /**
@@ -1224,11 +1226,18 @@ export interface StructureBuildPlan { items: StructureBuildItem[]; total: number
 export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; partial_visibility?: boolean; started_at: string; finished_at: string | null }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
+  wiki_build_enabled?: boolean;
   searchable_chunk_count: number;
   structure_index_enabled?: boolean | null;
   structure_index_global_enabled?: boolean;
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
+}
+
+export interface KnowledgeBaseWikiData {
+  enabled: boolean;
+  counts: Record<string, number>;
+  cache_policy: "retain_on_disable";
 }
 
 export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
@@ -3842,6 +3851,9 @@ export const api = {
       {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})},
     ),
   getStructureBuildPlan: (id: string, offset = 0, limit = 25) => request<StructureBuildPlan>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/plan?offset=${offset}&limit=${limit}`),
+  getKnowledgeBaseWiki: (id: string) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki`),
+  setKnowledgeBaseWiki: (id: string, enabled: boolean) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
+  retryKnowledgeBaseWiki: (id: string) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry`, { method: "POST" }),
   getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
   startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),
   stopStructureBuild: (id: string) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job/stop`, { method: "POST" }),

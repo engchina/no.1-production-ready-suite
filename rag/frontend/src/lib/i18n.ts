@@ -3,6 +3,18 @@ import { TRACE_DETAILS_JA } from "@production-ready/ui";
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  "wiki.title": "Wiki ナビゲーション",
+  "wiki.build": "Wiki を自動構築する",
+  "wiki.buildHelp": "所属文書から検索用の案内をバックグラウンドで増分構築します。無効にしても保存済みの案内は保持します。",
+  "wiki.search": "Wiki 検索を使用する",
+  "wiki.searchHelp": "Wiki を有効にしたナレッジベースの準備済み文書を、通常検索とは別に検索します。回答には案内が参照する原文を使います。未準備・失敗時は通常検索を続けます。",
+  "wiki.loading": "Wiki の構築状態を読み込んでいます",
+  "wiki.error": "Wiki の設定を読み込み・保存できませんでした。",
+  "wiki.enabled": "自動構築は有効です。準備済みの文書から検索できます。",
+  "wiki.disabled": "自動構築と、このナレッジベースでの Wiki 使用は無効です。保存済みの案内は保持しています。",
+  "wiki.progress": "未構築 {pending} 件・待機 {queued} 件・構築中 {running} 件・準備済み {ready} 件・更新待ち {stale} 件・失敗 {failed} 件",
+  "wiki.retry": "失敗した構築を再試行",
+  "wiki.empty": "検索可能な文書を追加すると構築が始まります。",
   "evaluation.testsets.modelLoadError": "回答モデルの候補を読み込めませんでした。",
   "evaluation.testsets.loadError": "テストセットを読み込めませんでした。",
   "evaluation.testsets.modelDefault": "プロファイルの既定モデル",

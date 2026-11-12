@@ -5836,6 +5836,9 @@ async def _run_pinned_ingestion_job(
                 reason="ingestion",
                 recipe_id=job.recipe_id,
             )
+            from app.rag.wiki_jobs import wiki_jobs
+
+            wiki_jobs.notify()
         if next_recipe_phase is not None and job.recipe_id is not None:
             # 現在ジョブは SUCCEEDED になったので、同一レシピの次フェーズ job を投入できる
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は

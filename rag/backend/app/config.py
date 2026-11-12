@@ -1187,8 +1187,24 @@ class Settings(
         le=200,
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
     )
-    # 文書全体の要約（#4793）。取込（分割・埋め込み・索引）の後に、1 文書につき 1 回だけ
-    # OCI Enterprise AI を呼んで文書の説明を作り、要約の chunk を 1 つ索引に入れる。
+    # Wiki の使用は検索・回答プロファイルで明示する。KB の構築は独立した指定。
+    rag_wiki_search_enabled: bool = Field(default=False)
+    rag_wiki_build_input_chars: int = Field(default=120000, ge=2000, le=1000000)
+    rag_wiki_build_batch_units: int = Field(default=24, ge=1, le=64)
+    rag_wiki_build_timeout_seconds: float = Field(default=600, ge=30, le=7200)
+    rag_wiki_build_workers: int = Field(default=2, ge=1, le=16)
+    rag_wiki_lease_seconds: int = Field(default=900, ge=60, le=14400)
+    rag_wiki_poll_seconds: float = Field(default=30, ge=1, le=3600)
+    rag_wiki_candidates: int = Field(default=100, ge=1, le=500)
+    rag_wiki_selected_documents: int = Field(default=8, ge=1, le=30)
+    rag_wiki_selected_units: int = Field(default=32, ge=1, le=200)
+    rag_wiki_selected_sections: int = Field(default=24, ge=1, le=100)
+    rag_wiki_embedding_source_chars: int = Field(default=4096, ge=100, le=12000)
+    rag_wiki_unit_preview_chars: int = Field(default=500, ge=100, le=4000)
+    rag_wiki_section_preview_chars: int = Field(default=240, ge=100, le=2000)
+    rag_wiki_section_catalog_limit: int = Field(default=48, ge=1, le=200)
+    rag_wiki_query_timeout_seconds: float = Field(default=180, ge=10, le=1800)
+    # 文書全体の要約（#4793）。取込の後に 1 文書につき 1 回、文書の説明を作る。
     rag_document_summary_enabled: bool = Field(
         default=True,
         description=(
