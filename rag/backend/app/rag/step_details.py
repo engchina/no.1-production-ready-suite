@@ -63,7 +63,7 @@ def history_rewrite_details(
     ]
     reason = SMALL_TALK_REASONS.get(intent)
     if reason is not None:
-        fields.append(("発話の種類", f"{reason}（検索の要らない発話）"))
+        fields.append(("発話の種類", f"{reason}（モデルによる分類）"))
     return pipeline_step_details(fields=fields)
 
 

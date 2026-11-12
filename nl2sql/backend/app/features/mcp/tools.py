@@ -533,7 +533,7 @@ class Nl2SqlJobResult(VersionedOutput):
         description=(
             "失敗の分類。status が error のときは必ず入る。Oracle のエラーなら ORA-xxxxx / "
             "DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・"
-            "SQL_GENERATION_VALIDATION_FAILED（生成SQLの列・構文を解決できない）、IDENTIFIER_BINDING_UNCONFIRMED（値の対象列が未確認）、SQL_SCOPE_MISMATCH（関連先の範囲が要件と一致しない）・SQL_EXECUTION_FAILED・"
+            "SQL_GENERATION_VALIDATION_FAILED（生成SQLの列・構文を解決できない）・SQL_EXECUTION_FAILED・"
             "SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED・"
             "NL2SQL_PROFILE_REVALIDATION_REQUIRED（公開の後に業務プロファイルか Schema が変わり、"
             "管理者が業務定義を再検証して公開するまで再試行しても直らない）、"

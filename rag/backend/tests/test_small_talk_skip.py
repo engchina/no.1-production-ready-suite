@@ -1,4 +1,4 @@
-"""チャットは毎回 1 回の呼び出しで質問を補い、挨拶・雑談の検索を飛ばす（#4787）。"""
+"""チャットの分類予測だけでは検索を省略しない。"""
 
 import json
 from time import perf_counter
@@ -112,73 +112,29 @@ def _stage(summary: TraceSummary, name: str) -> Any:
     return next((s for s in summary.spans if s.attributes.get("pr.stage") == name), None)
 
 
-@pytest.mark.parametrize("intent", ["greeting", "small_talk"])
-async def test_small_talk_skips_retrieval_and_replies_without_citations(
+@pytest.mark.parametrize("intent", ["greeting", "small_talk", "search"])
+async def test_classification_never_prevents_retrieval(
     monkeypatch: pytest.MonkeyPatch, intent: str
 ) -> None:
     llm = FakeLlm(intent=intent)
     response, summary, engine_queries = await _run(monkeypatch, llm)
-    # 補完 1 回と応答 1 回だけ。検索・条件の読み取り・回答の生成の流れは通らない。
-    assert llm.calls == ["history_rewrite", "small_talk_reply"]
-    assert engine_queries == []
-    assert response.answer == "合成の応答です。"
-    assert response.citations == []
-    assert response.diagnostics.answer["retrieval_skipped"] == {"intent": intent}
-    rewrite = _stage(summary, "history_rewrite")
-    fields = {f.label: f.value for f in rewrite.display.details.fields}
-    assert fields["発話の種類"].endswith("（検索の要らない発話）")
-    step = _stage(summary, "small_talk_reply")
-    assert step.status == "done"
-    assert step.display.kind == "small_talk_reply"
-    details = {f.label: f.value for f in step.display.details.fields}
-    assert details["結果"].endswith("のため検索せずに応じました（引用なし）")
-
-
-@pytest.mark.parametrize(
-    "case", ["search-intent", "reply-failed", "empty-reply", "scope", "approved-faq"]
-)
-async def test_retrieval_runs_when_not_safely_skippable(
-    monkeypatch: pytest.MonkeyPatch, case: str
-) -> None:
-    llm = FakeLlm(
-        intent="search" if case == "search-intent" else "greeting",
-        reply=RuntimeError("synthetic failure")
-        if case == "reply-failed"
-        else ""
-        if case == "empty-reply"
-        else "合成の応答です。",
-    )
-    response, summary, engine_queries = await _run(
-        monkeypatch,
-        llm,
-        scope=AnswerScope(context="合成の確認") if case == "scope" else None,
-        approved_faq=("合成の FAQ", "合成の FAQ の回答") if case == "approved-faq" else None,
-    )
+    assert llm.calls == ["history_rewrite"]
+    assert engine_queries == ["合成の挨拶"]
     assert response.answer == "合成の根拠つき回答"
     assert "retrieval_skipped" not in response.diagnostics.answer
-    step = _stage(summary, "small_talk_reply")
-    if case in {"reply-failed", "empty-reply"}:
-        # 応答を作れなければ、いつもの検索と回答に戻す。
-        assert step.status == "failed"
-        assert engine_queries == ["合成の挨拶"]
-    else:
-        assert step is None
-        assert "small_talk_reply" not in llm.calls
+    assert _stage(summary, "small_talk_reply") is None
 
 
-async def test_prepared_small_talk_skips_without_calling_rewrite_again(
+async def test_prepared_classification_keeps_retrieval_without_rewriting_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = FakeLlm()
     response, summary, engine_queries = await _run(
-        monkeypatch,
-        llm,
-        prepared=PreparedHistoryRewrite(elapsed_seconds=0.5, intent="greeting"),
+        monkeypatch, llm, prepared=PreparedHistoryRewrite(elapsed_seconds=0.5, intent="greeting")
     )
-    assert llm.calls == ["small_talk_reply"]
-    assert engine_queries == []
-    assert response.citations == []
-    assert _stage(summary, "history_rewrite").status == "done"
+    assert llm.calls == []
+    assert engine_queries == ["合成の挨拶"]
+    assert response.answer == "合成の根拠つき回答"
 
 
 def test_rewrite_without_intent_means_search() -> None:
@@ -198,18 +154,18 @@ def test_token_carries_only_known_small_talk_intent() -> None:
 async def test_first_turn_goes_through_the_same_single_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """会話の 1 回目（空の履歴）も、補完と同じ 1 回の呼び出しで挨拶を分けて検索を飛ばす。"""
+    """会話の 1 回目（空の履歴）も、補完の分類によらず通常の検索へ進む。"""
     llm = FakeLlm(intent="greeting")
     response, summary, engine_queries = await _run(monkeypatch, llm, history=[])
-    assert llm.calls == ["history_rewrite", "small_talk_reply"]
+    assert llm.calls == ["history_rewrite"]
     # 履歴が無いときは、空の履歴の形で渡す（指示が履歴を前提にしても読める入力にする）。
     assert llm.rewrite_contexts == [EMPTY_CONVERSATION_HISTORY]
-    assert engine_queries == []
+    assert engine_queries == ["合成の挨拶"]
     assert response.citations == []
     rewrite = _stage(summary, "history_rewrite")
     fields = {f.label: f.value for f in rewrite.display.details.fields}
     assert fields["参照した会話"] == "なし（会話の最初の発話）"
-    assert _stage(summary, "small_talk_reply").status == "done"
+    assert _stage(summary, "small_talk_reply") is None
 
 
 async def test_first_turn_question_is_searched_with_the_original_text(

@@ -119,6 +119,7 @@ from app.features.agent import (
     run_budget,
     run_claim,
     run_config,
+    source_handles,
     tool_grounding,
     tool_loop_guard,
 )
@@ -1686,6 +1687,22 @@ class _ToolRecorder:
         adjusted_limits: dict[str, dict[str, int]] = {}
         if entry is None:
             return _PreparedArguments(arguments, adjusted_limits, [], None)
+        if mcp_base_tool_name(name) in source_handles.SOURCE_TOOLS:
+            from app.features.agent.runtime import runtime_repository
+
+            try:
+                arguments = source_handles.decode_arguments(
+                    runtime_repository.get_run(self.run_id).metadata,
+                    source_handles.namespace(name),
+                    arguments,
+                )
+            except source_handles.SourceHandleError as exc:
+                return _PreparedArguments(
+                    arguments,
+                    adjusted_limits,
+                    [ArgumentError("", "source_handle_invalid", str(exc))],
+                    None,
+                )
         if entry.handler is not None and mcp_base_tool_name(name) in RAG_BUDGET_TOOLS:
             adjusted_limits = adjusted_search_limits(arguments, entry.definition.input_schema)
             if adjusted_limits:
@@ -1712,11 +1729,12 @@ class _ToolRecorder:
         entry = self.entries.get(name)
         if entry is None:
             return True
-        if self.prepare_arguments(name, parsed).errors:
+        prepared = self.prepare_arguments(name, parsed)
+        if prepared.errors:
             return False
         # 結果不明の書き込みと同じ操作は、自動実行のツールでも人の照合を求める（#2601。承認の記録と
         # 同じく、データの範囲を当てた引数で照合する）。
-        scoped = _scoped_call(ToolCall(name=name, arguments=dict(parsed)), self.data_scopes)
+        scoped = _scoped_call(ToolCall(name=name, arguments=prepared.arguments), self.data_scopes)
         if self.unknown_origin(name, entry.definition, scoped.arguments) is not None:
             return True
         return _active_policy().decide(entry.definition) == ToolPolicyDecision.ASK
@@ -1752,7 +1770,17 @@ class _ToolRecorder:
             self.run_id, call.trace_id or "", call.name
         )
         expected = _scoped_call(
-            ToolCall(name=call.name, arguments=dict(model_arguments), trace_id=call.trace_id),
+            ToolCall(
+                name=call.name,
+                arguments=source_handles.decode_arguments(
+                    runtime_repository.get_run(self.run_id).metadata,
+                    source_handles.namespace(call.name),
+                    model_arguments,
+                )
+                if mcp_base_tool_name(call.name) in source_handles.SOURCE_TOOLS
+                else dict(model_arguments),
+                trace_id=call.trace_id,
+            ),
             self.data_scopes,
         ).arguments
         if approval is not None and approval.tool_call.arguments == expected:
@@ -2074,6 +2102,12 @@ class _ToolRecorder:
                 )
                 if references is not None:
                     output = {**output, "answer_data": references}
+            if base in source_handles.SOURCE_TOOLS and isinstance(output, dict):
+                output = source_handles.encode_output(
+                    runtime_repository.get_run(self.run_id).metadata,
+                    source_handles.namespace(name),
+                    output,
+                )
             # 結果の画像は SDK の画像の出力で渡す（#2650。`deliver_images` が決めたもの）。
             return model_tool_output(
                 json.dumps(output, ensure_ascii=False, default=str), tool_result_images(result)
@@ -2961,6 +2995,8 @@ def build_sdk_agent(
     # ここまでが業務 Agent の版で決まる部分。後ろに Run の状態を足す（#2583 の指紋と見積もり）。
     if any(mcp_base_tool_name(name) in {NL2SQL_QUERY, "nl2sql_get_job"} for name in exposed):
         composed += "\n\n" + DATA_INSTRUCTIONS
+    if any(mcp_base_tool_name(name) in source_handles.SOURCE_TOOLS for name in exposed):
+        composed += "\n\n" + source_handles.SOURCE_INSTRUCTIONS
     static_instructions = composed
     if support_task:
         support_names = instruction_tool_names(skill_ids, exposed, origins)
@@ -4445,7 +4481,10 @@ async def _unattended_approvals(
             ]
         if not interruptions:
             return result
-        calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
+        calls = [
+            _scoped_call(_source_call(_interruption_call(item), run.id), data_scopes)
+            for item in interruptions
+        ]
         if evaluation:
             runtime_repository.record_builtin_dry_run_steps(run.id, calls)
         else:
@@ -4764,7 +4803,8 @@ async def _require_data_references(
         return result
     answer = _answer_text(result.final_output)
     try:
-        data_index(current.steps, current.metadata).render(answer)
+        resolved = source_handles.render_citations(current.metadata, answer)
+        data_index(current.steps, current.metadata).render(resolved)
         return result
     except DataReferenceError as exc:
         reason = str(exc)
@@ -4781,8 +4821,9 @@ async def _require_data_references(
             answer,
             head="## Step 1: データ参照の形式を直す\n"
             + reason
-            + "\n## Step 2: 取得済みのanswer_dataから参照を選び回答する\n"
-            "数値の表はtable参照を単独行にし、本文の値は対応するcells参照を使用してください。",
+            + "\n## Step 2: 取得済みの参照から回答する\n"
+            "数値の表はanswer_dataのtable参照を単独行にし、本文の値は対応するcells参照を使用してください。"
+            "根拠の出典には取得結果のcitation参照を使用してください。",
         ),
         context=context,
     )
@@ -4915,6 +4956,20 @@ def _refusal_text(agent: Any, sdk_agent: Agent[Any]) -> str:
     )
 
 
+def _source_call(call: ToolCall, run_id: str) -> ToolCall:
+    """承認・監査の引数も、実行するときと同じ実IDへ還元する。"""
+    if mcp_base_tool_name(call.name) not in source_handles.SOURCE_TOOLS:
+        return call
+    from app.features.agent.runtime import runtime_repository
+
+    arguments = source_handles.decode_arguments(
+        runtime_repository.get_run(run_id).metadata,
+        source_handles.namespace(call.name),
+        call.arguments,
+    )
+    return call.model_copy(update={"arguments": arguments})
+
+
 def _interruption_call(item: Any) -> ToolCall:
     """SDK の中断（承認待ち）の項目を、記録する呼び出しにする。"""
     return ToolCall(
@@ -4949,7 +5004,7 @@ async def _finish(
         calls: list[ToolCall] = []
         confirmations: list[ConfirmationRequest] = []
         for item in interruptions:
-            call = _interruption_call(item)
+            call = _source_call(_interruption_call(item), run_id)
             if call.name == CONFIRMATION_TOOL:
                 confirmations.append(_agent_confirmation(call, task, run_id))
             else:
@@ -4976,6 +5031,7 @@ async def _finish(
         return
     answer = _answer_text(result.final_output)
     data_run = runtime_repository.get_run(run_id)
+    answer = source_handles.render_citations(data_run.metadata, answer)
     answer = data_index(data_run.steps, data_run.metadata).render(answer)
     tool_confirmations = _tool_confirmations(task, state_content)
     if tool_confirmations and is_confirmation_payload(answer):
@@ -5258,6 +5314,9 @@ def _record_failure(run_id: str, exc: Exception) -> None:
         return
     if isinstance(exc, BuiltinRuntimeError):
         code, message = exc.code, exc.message
+    elif isinstance(exc, source_handles.SourceHandleError):
+        code = "runtime.answer_source_invalid"
+        message = "取得済みの根拠への参照を検証できないため、回答を確定しませんでした。"
     elif isinstance(exc, DataReferenceError):
         code = "runtime.answer_data_invalid"
         message = "取得結果の行・列参照を検証できないため、回答を確定しませんでした。"

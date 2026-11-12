@@ -21,7 +21,6 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.approved_faq_scope import ApprovedFaqScopeState
-from app.rag.chat_question_token import read_history_intent
 from app.rag.domain_keyword_import import (
     PREVIEW_ROWS,
     KeywordImportMode,
@@ -56,7 +55,6 @@ from app.rag.search_answer_profile_knowledge import (
     save_domain_keywords,
     suggest_domain_keywords,
 )
-from app.rag.small_talk import skips_retrieval
 from app.rag.support_guide_conditions import resolve_text_conditions
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
@@ -674,12 +672,6 @@ async def post_clarification_suggest(
 
         # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
         if view.config.clarification_policy == "assume":
-            return response(ClarificationSuggestionsData())
-        # 補完が検索の要らない発話（挨拶・雑談）と分けたら、送信の側で検索を飛ばすので確認も
-        # 出さない（#4787。条件の読み取りのモデルも呼ばない）。
-        if context_token and skips_retrieval(
-            read_history_intent(settings.app_service_token_secret, context_token)
-        ):
             return response(ClarificationSuggestionsData())
         # 業務ガイドの不明・矛盾の条件（選択肢付き）を聞く（#1238）。
         # 適用範囲は検索と同じ手がかりで確かめる（#1278）。

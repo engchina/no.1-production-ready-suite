@@ -48,11 +48,6 @@ class _FakeEnterpriseAiClient:
         max_retries: int | None = None,
         response_format: object | None = None,
     ) -> str:
-        if (
-            isinstance(response_format, dict)
-            and response_format.get("name") == "ScopeInterpretation"
-        ):
-            return '{"related_scope":null}'
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         return '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
 

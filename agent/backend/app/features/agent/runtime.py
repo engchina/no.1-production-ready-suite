@@ -51,7 +51,13 @@ from pydantic import (
     model_validator,
 )
 
-from app.features.agent import call_abort, external_writes, run_claim, storage_backend
+from app.features.agent import (
+    call_abort,
+    external_writes,
+    run_claim,
+    source_handles,
+    storage_backend,
+)
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent.answer_data import register_data_result
 from app.features.agent.chat_progress import note_run_span
@@ -3024,6 +3030,15 @@ class AgentRuntimeRepository:
                     "nl2sql_get_job",
                 } and isinstance(result.output, dict):
                     register_data_result(run.metadata, step.id, result.output)
+                if mcp_base_tool_name(call_name) in source_handles.SOURCE_TOOLS and isinstance(
+                    result.output, dict
+                ):
+                    source_handles.register_output(
+                        run.metadata,
+                        source_handles.namespace(call_name),
+                        result.output,
+                        tool=mcp_base_tool_name(call_name),
+                    )
                 self._record_tool_success_artifacts(run, step, result)
                 self._append_event(
                     run,

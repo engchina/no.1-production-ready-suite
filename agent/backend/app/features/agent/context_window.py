@@ -79,6 +79,7 @@ _ID_KEY = re.compile(r"(?:^|_)id$")
 # 結論・条件（名前・値・出典・不明の扱い）・除外や不足の理由・版と置き換え。
 STATE_KEYS = frozenset(
     {
+        "citation",
         "next_cursor",
         "cursor",
         "has_more",
