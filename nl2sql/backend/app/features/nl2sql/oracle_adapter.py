@@ -1819,8 +1819,9 @@ class OracleNl2SqlAdapter:
         """SELECT を実行する。`admin_control_plane=True` は DB 管理チャット（#2264）の SELECT で、
         利用者に関係なくアプリのユーザーの管理の接続（`connection()`。管理 SQL の更新系と同じ、
         pool を使わない単発の接続）で読む。DeepSec の DATA USER・業務の実行の pool は使わない。
-        `scalar_binds` は識別子の照合などの通常の文字列値。`binds` はチャットの添付の表（#2517）の行の JSON（CLOB で渡す。SQL は呼ぶ側が WITH 句を
-        付けたもの）。
+        `scalar_binds` は識別子の照合などの通常の文字列値。
+        `binds` はチャットの添付の表（#2517）の行の JSON（CLOB で渡す）。
+        添付の表を使う SQL は、呼ぶ側が WITH 句を付けたもの。
         """
         connection_cm = (
             self.connection() if admin_control_plane else self.user_data_connection(read_only=True)
