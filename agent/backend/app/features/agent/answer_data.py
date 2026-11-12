@@ -6,19 +6,22 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-_REFERENCE = re.compile(r"\[\[(cell|table):([a-f0-9]{24})\]\]")
+_REFERENCE = re.compile(r"\[\[(cell|table):([a-f0-9]{24}|T[1-9]\d*(?::R[1-9]\d*:C[1-9]\d*)?)\]\]")
+REGISTRY_KEY = "_answer_data_references"
 _NUMBER = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)*(?![\w])")
 _RULE = re.compile(r"\s*:?-+:?\s*")
 
 DATA_INSTRUCTIONS = (
     "## Step 1: 取得した表の値を参照する\n"
-    "SQL結果の answer_data にある table 参照を単独の行に置くと、取得順の全行・全列の表になります。"
+    "SQL結果の answer_data にある [[table:T1]] 形式の参照を単独の行に置くと、"
+    "取得順の全行・全列の表になります。"
     "表の行・列を変える場合は必要な項目と並び順を指定して照会してください。\n"
     "## Step 2: 数値を本文へ入れる\n"
-    "本文の値には cells の対応する行・列の参照を使い、必要な単位を参照の後に付けてください。"
+    "本文の値には cells の対応する [[cell:T1:R2:C3]] 形式の参照を使い、"
+    "必要な単位を参照の後に付けてください。"
     "取得した数値の表を手で書き直さないでください。"
 )
 
@@ -39,19 +42,62 @@ def _rows(output: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
-def model_data_references(step_id: str, output: Mapping[str, Any]) -> dict[str, Any] | None:
-    if (
-        output.get("status") != "done"
-        or output.get("error_code")
-        or not isinstance(output.get("rows"), list)
-    ):
+def _is_result(output: Mapping[str, Any]) -> bool:
+    return (
+        output.get("status") == "done"
+        and not output.get("error_code")
+        and isinstance(output.get("rows"), list)
+    )
+
+
+def register_data_result(metadata: dict[str, Any], step_id: str, output: Mapping[str, Any]) -> None:
+    """実行の保存 lock 内で登録する。圧縮したメッセージから番号を作り直さない。"""
+    if not _is_result(output):
+        return
+    entries = metadata.setdefault(REGISTRY_KEY, [])
+    if not isinstance(entries, list):
+        raise DataReferenceError("保存したデータ参照の対応表が不正です。")
+    if any(entry["step_id"] == step_id for entry in entries):
+        return
+    rows = _rows(output)
+    entries.append(
+        {
+            "step_id": step_id,
+            "key": _key(step_id, [_column_order(output, rows), rows]),
+            "number": max((entry["number"] for entry in entries), default=0) + 1,
+        }
+    )
+
+
+def model_data_references(
+    step_id: str, output: Mapping[str, Any], *, metadata: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
+    if not _is_result(output):
         return None
     rows = _rows(output)
+    columns = _column_order(output, rows)
+    key = _key(step_id, [columns, rows])
+    number = None
+    if metadata is not None:
+        number = next(
+            (
+                entry["number"]
+                for entry in metadata.get(REGISTRY_KEY, [])
+                if entry["step_id"] == step_id and entry["key"] == key
+            ),
+            None,
+        )
+        if number is None:
+            raise DataReferenceError("保存した結果のデータ参照が登録されていません。")
     return {
-        "table": "[[table:" + _key(step_id, [_column_order(output, rows), rows]) + "]]",
+        "table": f"[[table:T{number}]]" if number is not None else "[[table:" + key + "]]",
         "cells": [
             {
-                column: "[[cell:" + _key(step_id, [index, column, value]) + "]]"
+                column: (
+                    f"[[cell:T{number}:R{index + 1}:C{columns.index(column) + 1}]]"
+                    if number is not None
+                    else "[[cell:" + _key(step_id, [index, column, value]) + "]]"
+                )
                 for column, value in row.items()
             }
             for index, row in enumerate(rows)
@@ -112,6 +158,8 @@ class DataIndex:
     cells: dict[str, Any]
     tables: dict[str, tuple[list[str], list[dict[str, Any]]]]
 
+    aliases: dict[str, str] = field(default_factory=dict)
+
     def render(self, answer: str) -> str:
         remainder = _REFERENCE.sub("", answer)
         if "[[cell:" in remainder or "[[table:" in remainder:
@@ -140,6 +188,7 @@ class DataIndex:
 
         def replace(match: re.Match[str]) -> str:
             kind, key = match.groups()
+            key = self.aliases.get(key, key)
             if kind == "table" and key in self.tables:
                 return _table(*self.tables[key])
             if kind == "cell" and key in self.cells:
@@ -149,9 +198,10 @@ class DataIndex:
         return _REFERENCE.sub(replace, answer)
 
 
-def data_index(steps: Sequence[Any]) -> DataIndex:
+def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) -> DataIndex:
     cells: dict[str, Any] = {}
     tables: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}
+    aliases: dict[str, str] = {}
     for step in steps:
         result = step.tool_result
         if step.status != "completed" or result is None or not result.success:
@@ -167,8 +217,22 @@ def data_index(steps: Sequence[Any]) -> DataIndex:
             continue
         rows = _rows(output)
         columns = _column_order(output, rows)
-        tables[_key(step.id, [columns, rows])] = (columns, rows)
+        table_key = _key(step.id, [columns, rows])
+        tables[table_key] = (columns, rows)
+        number = next(
+            (
+                entry["number"]
+                for entry in (metadata or {}).get(REGISTRY_KEY, [])
+                if entry["step_id"] == step.id and entry["key"] == table_key
+            ),
+            None,
+        )
+        if number is not None:
+            aliases[f"T{number}"] = table_key
         for index, row in enumerate(rows):
             for column, value in row.items():
-                cells[_key(step.id, [index, column, value])] = value
-    return DataIndex(cells=cells, tables=tables)
+                cell_key = _key(step.id, [index, column, value])
+                cells[cell_key] = value
+                if number is not None:
+                    aliases[f"T{number}:R{index + 1}:C{columns.index(column) + 1}"] = cell_key
+    return DataIndex(cells=cells, tables=tables, aliases=aliases)

@@ -381,6 +381,14 @@ def _ids_only(value: Any, stats: _Stats) -> Any:
         for key, item in value.items():
             if key in kept or key == COMPACTION_KEY:
                 continue
+            if (
+                key == "answer_data"
+                and isinstance(item, dict)
+                and isinstance(item.get("table"), str)
+            ):
+                # 省いた行の位置を作り直さず、保存済みの表全体を参照できるようにする。
+                kept[key] = {"table": item["table"]}
+                continue
             if isinstance(item, dict | list):
                 nested = _ids_only(item, stats)
                 if nested:

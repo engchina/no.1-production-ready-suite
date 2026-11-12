@@ -53,6 +53,7 @@ from pydantic import (
 
 from app.features.agent import call_abort, external_writes, run_claim, storage_backend
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
+from app.features.agent.answer_data import register_data_result
 from app.features.agent.chat_progress import note_run_span
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
@@ -3018,6 +3019,11 @@ class AgentRuntimeRepository:
                 )
             if result.success:
                 step.status = StepStatus.COMPLETED
+                if mcp_base_tool_name(call_name) in {
+                    "nl2sql_query",
+                    "nl2sql_get_job",
+                } and isinstance(result.output, dict):
+                    register_data_result(run.metadata, step.id, result.output)
                 self._record_tool_success_artifacts(run, step, result)
                 self._append_event(
                     run,
