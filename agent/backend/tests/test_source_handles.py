@@ -100,8 +100,9 @@ def test_a_link_is_readable_but_not_citable_until_its_source_is_returned() -> No
 
 
 @pytest.mark.parametrize("approval", [False, True])
+@pytest.mark.parametrize("invalid_replies", [0, 1, 2])
 def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
-    monkeypatch: pytest.MonkeyPatch, approval: bool
+    monkeypatch: pytest.MonkeyPatch, approval: bool, invalid_replies: int
 ) -> None:
     import anyio
     from agents.testing import assistant_message, function_call
@@ -153,6 +154,10 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
     original_policy = runtime_config_store.get_tool_policy()
     if approval:
         runtime_config_store.patch_tool_policy(allow=[], ask=["rag__rag_read_source"])
+    answers = [[assistant_message("合成の原文です。 [[cite:1]]")]]
+    if invalid_replies:
+        last = "合成の原文です。 [[cite:1]]" if invalid_replies == 1 else "根拠 [[cite:99]]"
+        answers = [[assistant_message("根拠 [[cite:99]]")], [assistant_message(last)]]
     model = _script(
         monkeypatch,
         [function_call("rag__rag_retrieve_evidence", {"query": "合成質問"}, call_id="get")],
@@ -170,7 +175,7 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
                 call_id="read",
             )
         ],
-        [assistant_message("合成の原文です。 [[cite:1]]")],
+        *answers,
     )
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="合成資料を確認して回答", agent_id=agent_id),
@@ -196,8 +201,16 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
             anyio.run(builtin_runtime.resume_run, run.id)
             assert runtime_repository.get_run(run.id).metadata[handles.REGISTRY_KEY] == saved
         actual = runtime_repository.get_run(run.id)
-        assert actual.status.value == "completed", actual.events[-1].model_dump_json()
         assert len(fake.calls_of("rag_read_source")) == 1
+        if invalid_replies:
+            assert not model.calls[-1].tools
+        if invalid_replies == 2:
+            assert actual.status.value == "failed"
+            assert actual.events[-1].payload["error_code"] == "runtime.answer_source_invalid"
+            assert run_answer_text(actual) is None
+            model.assert_complete()
+            return
+        assert actual.status.value == "completed", actual.events[-1].model_dump_json()
         step = next(s for s in actual.steps if s.tool_call and s.tool_call.trace_id == "read")
         assert step.tool_call is not None
         assert step.tool_call.arguments["document_id"] == doc
