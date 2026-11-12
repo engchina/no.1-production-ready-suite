@@ -39,6 +39,10 @@ def column_binding_violations(sql: str, tables: Sequence[SchemaTable], *, owner:
             )
     try:
         tree = sqlglot.parse_one(sql, read=OracleConversion)
+        # 自動の表別名が引用名を大文字に変えないよう、検証用 AST だけに同名の別名を置く。
+        for source in tree.find_all(exp.Table):
+            if not source.args.get("alias") and isinstance(source.this, exp.Identifier):
+                source.set("alias", exp.TableAlias(this=source.this.copy()))
         qualify(
             tree,
             dialect=OracleConversion,

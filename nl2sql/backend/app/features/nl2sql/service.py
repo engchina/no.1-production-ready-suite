@@ -10649,20 +10649,6 @@ class Nl2SqlService:
             current_owner=current_owner,
         ):
             blocked_reason = "許可されていない列を参照しています。"
-        if not skip_safety_check and not blocked_reason:
-            binding_catalog = catalog or self._catalog
-            if catalog is None and self._use_oracle_runtime() and referenced:
-                binding_catalog = self._generation_schema_catalog(
-                    Nl2SqlProfile(id="", name="", allowed_tables=referenced), allowed
-                )
-            binding_errors = column_binding_violations(
-                sql, binding_catalog.tables, owner=current_owner
-            )
-            if binding_errors:
-                blocked_reason = (
-                    "列の参照先を解決できません。CTEの出力と公開スキーマを確認してください。 "
-                    + " / ".join(binding_errors)
-                )
         if _ends_with_limit_clause(sql):
             warnings.append("Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。")
         elif row_limit and "fetch first" not in sql.lower():
@@ -25151,10 +25137,9 @@ class Nl2SqlService:
                 if identifier_findings:
                     raise IdentifierBindingConflict(" / ".join(identifier_findings))
             if not findings:
-                if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
+                if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
-                    if rejected_sql:
-                        generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
+                    generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
                 if contracts and generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                     generated.engine_meta = {
                         **generated.engine_meta,

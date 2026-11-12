@@ -155,3 +155,19 @@ def test_generated_invalid_sql_is_sent_back_before_execution(
     )
     assert result.generated_sql == "SELECT ID FROM APP.TABLE_A"
     assert len(calls) == 2 and calls[1]["generation_feedback"]["rejected_sql"] == bad
+
+
+def test_quoted_table_qualifier_preserves_case() -> None:
+    table = SchemaTable(
+        owner="SALES",
+        table_name="Mixed_Case",
+        logical_name="引用表",
+        table_type="table",
+        columns=[SchemaColumn(column_name="Amount", logical_name="値", data_type="NUMBER")],
+    )
+    assert (
+        column_binding_violations(
+            'SELECT "Mixed_Case"."Amount" FROM SALES."Mixed_Case"', [table], owner="SALES"
+        )
+        == []
+    )
