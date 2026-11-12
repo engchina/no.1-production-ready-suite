@@ -980,7 +980,13 @@ async def test_separate_text_scores_match_direct_contains_across_query_shapes() 
         oracle,
         file_name=f"synthetic-score-boundary-{uuid4().hex}.txt",
         chunks=[
-            Chunk(text=text, index=i, start_offset=0, end_offset=len(text), metadata={})
+            Chunk(
+                text=text,
+                index=i,
+                start_offset=0,
+                end_offset=len(text),
+                metadata={"content_kind": "record"},
+            )
             for i, text in enumerate(texts)
         ],
     )
@@ -996,12 +1002,14 @@ async def test_separate_text_scores_match_direct_contains_across_query_shapes() 
             {"query": expression, "document_id": document_id},
         )
         assert direct
-        for limit in (0, 3):
-            actual = await oracle._keyword_rows(
-                expression, top_k=limit, filters={"document_id": document_id}
-            )
-            expected = direct[: limit or None]
-            assert [row["chunk_id"] for row in actual] == [row["chunk_id"] for row in expected]
-            assert [row["score"] for row in actual] == pytest.approx(
-                [row["score"] for row in expected]
-            )
+        for filters in (
+            {"document_id": document_id},
+            {"document_id": document_id, "content_kind": "record"},
+        ):
+            for limit in (0, 3, 10):
+                actual = await oracle._keyword_rows(expression, top_k=limit, filters=filters)
+                expected = direct[: limit or None]
+                assert [row["chunk_id"] for row in actual] == [row["chunk_id"] for row in expected]
+                assert [row["score"] for row in actual] == pytest.approx(
+                    [row["score"] for row in expected]
+                )

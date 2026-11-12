@@ -8572,6 +8572,7 @@ class OracleClient:
             return await self._fetch_all(
                 _render_sql(
                     """
+                    {hits_cte}
                     SELECT {columns}, kw.score
                     FROM ({ranked}) kw
                     JOIN rag_chunks c ON c.chunk_id = kw.chunk_id
@@ -8580,13 +8581,15 @@ class OracleClient:
                     LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
                     ORDER BY kw.sort_key DESC, c.document_id ASC, c.chunk_index ASC, c.chunk_id ASC
                     """,
+                    hits_cte=_keyword_hits_cte_sql(query_bind="query", where_sql=where_sql),
                     columns=_SEARCH_HIT_COLUMNS,
                     ranked=_keyword_search_sql(
                         select_list=(
-                            "c.chunk_id, c.text_score AS sort_key, c.text_score / 100 AS score"
+                            "c.chunk_id, h.text_score AS sort_key, h.text_score / 100 AS score"
                         ),
                         query_bind="query",
                         where_sql=where_sql,
+                        with_hits=False,
                     ),
                 ),
                 binds,
@@ -16029,26 +16032,30 @@ def _vector_search_sql(
     )
 
 
-def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) -> str:
+def _keyword_search_sql(
+    *, select_list: str, query_bind: str, where_sql: str, with_hits: bool = True
+) -> str:
     """Oracle Text の keyword 検索の SQL(条件・並び・件数。``_vector_search_sql`` と同じく共有)。
 
-    ``c`` は Oracle Text の命中(``_keyword_hits_view_sql``)で、本文・埋め込みを持たない。
-    ``select_list`` は ``c`` の命中の列(``c.text_score`` が ``SCORE(1)``)と ``d``・``cs``・``r`` の
-    列だけを読める。本文が要るときは、決まった上位の行だけを ``rag_chunks`` から読む
+    ``h`` は全文の元の分数、``c`` はその ROWID に対応する chunk の行。
+    ``select_list`` は命中の分数(``h.text_score``)と ``c``・``d``・``cs``・``r`` の列を読める。
+    本文が要るときは、決まった上位の行だけを ``rag_chunks`` から読む
     (``_keyword_search_with_oracle``)。
     """
     return _render_sql(
         """
+        {hits_cte}
         SELECT *
         FROM (
-            SELECT /*+ NO_MERGE(c) NO_PUSH_PRED(c) */ {select_list}
-            FROM {hits_view}
+            SELECT {select_list}
+            FROM text_hits h
+            JOIN rag_chunks c ON c.ROWID = h.text_rowid
             JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
             WHERE {where_sql}
             ORDER BY
-                c.text_score DESC,
+                h.text_score DESC,
                 c.document_id ASC,
                 c.chunk_index ASC,
                 c.chunk_id ASC
@@ -16056,31 +16063,32 @@ def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) ->
         WHERE (:top_k = 0 OR ROWNUM <= :top_k)
         """,
         select_list=select_list,
-        hits_view=_keyword_hits_view_sql(query_bind=query_bind, where_sql=where_sql),
+        hits_cte=_keyword_hits_cte_sql(query_bind=query_bind, where_sql=where_sql)
+        if with_hits
+        else "",
         where_sql=where_sql,
     )
 
 
-def _keyword_hits_view_sql(*, query_bind: str, where_sql: str) -> str:
-    """Oracle Text の命中(chunk ごとに 1 行と ``SCORE(1)``)の view ``c``(#2137)。
+def _keyword_hits_cte_sql(*, query_bind: str, where_sql: str) -> str:
+    """全文の ROWID と元の SCORE だけを物化し、結合・件数制限へ渡す(#4932)。
 
-    呼出し元の NO_MERGE / NO_PUSH_PRED で view の併合と結合条件の押し込みを止め、全文検索を
-    1 回だけ実行する。ROWNUM を投影すると同じ式・索引でも SCORE が変わるため使わない(#4932)。
-    境界が無いと、文書ごとの nested loop の内側で全文検索を繰り返す(#2137)。
-    ナレッジベース・文書・chunk_set の条件は、この命中を絞る側(``where_sql``)で使う。
-    読む列は条件と並びに要る列だけ(``metadata_json`` は条件が使うときだけ)。
+    範囲と権限を同じ query block に掛けてから分数を確定し、ほかの列や ROWNUM を投影しない。
+    物化と c を先頭にした結合で、全文の走査を文書ごとに繰り返さない(#2137)。
     """
-    metadata_column = ", hit.metadata_json" if "c.metadata_json" in where_sql else ""
     return _render_sql(
-        """(
-            SELECT hit.chunk_id, hit.document_id, hit.chunk_index,
-                   hit.chunk_set_id{metadata_column},
-                   SCORE(1) AS text_score
-            FROM rag_chunks hit
-            WHERE CONTAINS(hit.search_text, :{query_bind}, 1) > 0
-        ) c""",
-        metadata_column=metadata_column,
+        """WITH text_hits AS (
+            SELECT /*+ MATERIALIZE DOMAIN_INDEX_SORT LEADING(c) USE_HASH(d cs r) */
+                   c.ROWID AS text_rowid, SCORE(1) AS text_score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+            WHERE CONTAINS(c.search_text, :{query_bind}, 1) > 0 AND {where_sql}
+            ORDER BY text_score DESC
+        )""",
         query_bind=query_bind,
+        where_sql=where_sql,
     )
 
 
