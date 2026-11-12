@@ -131,6 +131,8 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
     assert erp["api_key"].startswith("enc:v1:")
     assert "erp-api-key" not in file_store.read_text(encoding="utf-8")
 
+    saved_skill = skill_registry.get("cp764_skill")
+
     # 再起動の代わりにメモリから消し、RAG の URL も初期値に戻してから復元する。
     skill_registry.remove("cp764_skill")
     runtime_config_store.remove_mcp_server("cp764_erp")
@@ -151,6 +153,7 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
     }
     skill = skill_registry.get("cp764_skill")
     assert skill is not None and skill.instructions == "手順"
+    assert skill == saved_skill  # 復元でcreated_at/updated_atも変わらない。
     erp_config = runtime_config_store.get_mcp("cp764_erp")
     assert erp_config.api_key == "erp-api-key"
     assert erp_config.source == "runtime"
@@ -299,3 +302,24 @@ def test_store_follows_runtime_repository_backend(tmp_path: Path, monkeypatch: M
     monkeypatch.setattr(settings, "agent_runtime_repository_backend", "memory")
     monkeypatch.setattr(settings, "agent_runtime_snapshot_path", None)
     assert control_plane_store.build_control_plane_store().persistent is False
+
+
+def test_noop_skill_patch_preserves_metadata_but_actual_edit_advances_it(
+    file_store: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.features.agent import skills
+
+    created = _request("POST", "/api/skills", {"id": "cp764_skill", "name": "合成スキルA"}).json()[
+        "data"
+    ]
+    monkeypatch.setattr(skills, "_now", lambda: datetime(2030, 1, 1, tzinfo=UTC))
+    unchanged = _request("PATCH", "/api/skills/cp764_skill", {"name": created["name"]})
+    assert unchanged.status_code == 200 and unchanged.json()["data"] == created
+    changed = _request("PATCH", "/api/skills/cp764_skill", {"name": "合成スキルB"}).json()["data"]
+    assert changed["created_at"] == created["created_at"]
+    assert changed["updated_at"] != created["updated_at"]
+    saved = json.loads(file_store.read_text())["skill"]["cp764_skill"]
+    assert saved["created_at"] == changed["created_at"]
+    assert saved["updated_at"] == changed["updated_at"]

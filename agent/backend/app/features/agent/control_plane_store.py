@@ -454,7 +454,7 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
             deny=sorted(item.deny),
         )
     elif kind == "skill":
-        skill_registry.upsert_custom(item)
+        skill_registry.restore_custom(item)
     elif kind == "automation":
         automation_store.restore(item)
     elif kind == "evaluation_set":
