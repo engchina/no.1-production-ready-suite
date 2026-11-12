@@ -8565,35 +8565,48 @@ class OracleClient:
         """keyword の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。score の高い順)。"""
         if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             return await self._native_rows("keyword", text_query, (), top_k=top_k, filters=filters)
-        where_sql, binds = _oracle_retrieval_where(filters)
-        binds.update({"query": text_query, "top_k": top_k})
-        # 上位の行を命中の列だけで決め、本文・metadata はその行だけ読む(#2137)。
+        where_sql, scope_binds = _oracle_retrieval_where(filters)
+        # 元スコアを読み終えてから本文を読む。後段の JOIN で SCORE を再評価しない(#4946)。
         with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
-            return await self._fetch_all(
+            ranked = await self._fetch_all(
+                _keyword_search_sql(query_bind="query", where_sql=where_sql, top_k=top_k),
+                {**scope_binds, "query": text_query},
+            )
+            if not ranked:
+                return []
+            rows = await self._fetch_all(
                 _render_sql(
                     """
-                    {hits_cte}
-                    SELECT {columns}, kw.score
-                    FROM ({ranked}) kw
-                    JOIN rag_chunks c ON c.chunk_id = kw.chunk_id
+                    SELECT {columns}
+                    FROM rag_chunks c
                     JOIN rag_documents d ON d.document_id = c.document_id
                     LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
                     LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-                    ORDER BY kw.sort_key DESC, c.document_id ASC, c.chunk_index ASC, c.chunk_id ASC
+                    WHERE {where_sql} AND c.chunk_id IN (
+                        SELECT chunk_id FROM JSON_TABLE(:keyword_chunk_ids, '$[*]'
+                            COLUMNS (chunk_id VARCHAR2(128) PATH '$'))
+                    )
                     """,
-                    hits_cte=_keyword_hits_cte_sql(query_bind="query", where_sql=where_sql),
                     columns=_SEARCH_HIT_COLUMNS,
-                    ranked=_keyword_search_sql(
-                        select_list=(
-                            "c.chunk_id, h.text_score AS sort_key, h.text_score / 100 AS score"
-                        ),
-                        query_bind="query",
-                        where_sql=where_sql,
-                        with_hits=False,
-                    ),
+                    where_sql=where_sql,
                 ),
-                binds,
+                {
+                    **scope_binds,
+                    "keyword_chunk_ids": json.dumps([str(r["chunk_id"]) for r in ranked]),
+                },
             )
+        hydrated = {str(row["chunk_id"]): row for row in rows}
+        result: list[dict[str, object]] = []
+        previous_score: float | None = None
+        rank = 0
+        for position, hit in enumerate(ranked, 1):
+            score = _float_value(hit["score"])
+            if score != previous_score:
+                rank = position
+            previous_score = score
+            if row := hydrated.get(str(hit["chunk_id"])):
+                result.append({**row, "score": score, "keyword_rank": rank})
+        return result
 
     async def _keyword_search_with_oracle(
         self,
@@ -16032,63 +16045,26 @@ def _vector_search_sql(
     )
 
 
-def _keyword_search_sql(
-    *, select_list: str, query_bind: str, where_sql: str, with_hits: bool = True
-) -> str:
-    """Oracle Text の keyword 検索の SQL(条件・並び・件数。``_vector_search_sql`` と同じく共有)。
-
-    ``h`` は全文の元の分数、``c`` はその ROWID に対応する chunk の行。
-    ``select_list`` は命中の分数(``h.text_score``)と ``c``・``d``・``cs``・``r`` の列を読める。
-    本文が要るときは、決まった上位の行だけを ``rag_chunks`` から読む
-    (``_keyword_search_with_oracle``)。
-    """
+def _keyword_search_sql(*, query_bind: str, where_sql: str, top_k: int = 0) -> str:
+    """範囲内の ID と SCORE を直接取得する。本文は結果を読み終えた後の別 SQL で読む(#4946)。"""
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k は 0 以上の整数で指定してください。")
+    fetch_clause = f"FETCH FIRST {top_k} ROWS ONLY" if top_k else ""
     return _render_sql(
         """
-        {hits_cte}
-        SELECT *
-        FROM (
-            SELECT {select_list}
-            FROM text_hits h
-            JOIN rag_chunks c ON c.ROWID = h.text_rowid
-            JOIN rag_documents d ON d.document_id = c.document_id
-            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-            WHERE {where_sql}
-            ORDER BY
-                h.text_score DESC,
-                c.document_id ASC,
-                c.chunk_index ASC,
-                c.chunk_id ASC
-        )
-        WHERE (:top_k = 0 OR ROWNUM <= :top_k)
+        SELECT /*+ DOMAIN_INDEX_SORT LEADING(c) USE_HASH(d cs r) */
+            c.chunk_id, SCORE(1) / 100 AS score
+        FROM rag_chunks c
+        JOIN rag_documents d ON d.document_id = c.document_id
+        LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+        LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+        WHERE CONTAINS(c.search_text, :{query_bind}, 1) > 0 AND {where_sql}
+        ORDER BY score DESC, c.document_id ASC, c.chunk_index ASC, c.chunk_id ASC
+        {fetch_clause}
         """,
-        select_list=select_list,
-        hits_cte=_keyword_hits_cte_sql(query_bind=query_bind, where_sql=where_sql)
-        if with_hits
-        else "",
-        where_sql=where_sql,
-    )
-
-
-def _keyword_hits_cte_sql(*, query_bind: str, where_sql: str) -> str:
-    """全文の ROWID と元の SCORE だけを物化し、結合・件数制限へ渡す(#4932)。
-
-    範囲と権限を同じ query block に掛けてから分数を確定し、ほかの列や ROWNUM を投影しない。
-    物化と c を先頭にした結合で、全文の走査を文書ごとに繰り返さない(#2137)。
-    """
-    return _render_sql(
-        """WITH text_hits AS (
-            SELECT /*+ MATERIALIZE DOMAIN_INDEX_SORT LEADING(c) USE_HASH(d cs r) */
-                   c.ROWID AS text_rowid, SCORE(1) AS text_score
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-            WHERE CONTAINS(c.search_text, :{query_bind}, 1) > 0 AND {where_sql}
-            ORDER BY text_score DESC
-        )""",
         query_bind=query_bind,
         where_sql=where_sql,
+        fetch_clause=fetch_clause,
     )
 
 
@@ -16816,7 +16792,9 @@ def _ranked_search_hits(rows: Sequence[Mapping[str, object]], kind: str) -> list
         if kind == "vector" or score != previous_score:
             rank = position
         previous_score = score
-        original_rank = row.get("native_text_rank") if kind == "keyword" else None
+        original_rank = (
+            (row.get("keyword_rank") or row.get("native_text_rank")) if kind == "keyword" else None
+        )
         ranked.append({**row, "retrieval_rank": original_rank or rank})
     return [
         _with_retrieval_metadata(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any, cast
 
 from app.features.agent.answer_data import DataReferenceError
@@ -212,7 +212,12 @@ def decode_arguments(
     return result
 
 
-def render_citations(metadata: Mapping[str, Any], answer: str) -> str:
+def render_citations(
+    metadata: Mapping[str, Any],
+    answer: str,
+    *,
+    available_sources: Collection[tuple[str, str]] | None = None,
+) -> str:
     """引用の短い番号だけを取得済みの片段IDへ還元する。本文のIDを一括置換しない。"""
     if "[[cite:" in _CITATION.sub("", answer):
         raise SourceHandleError("根拠参照の形式が不正です。取得結果のcitationを使用してください。")
@@ -229,6 +234,13 @@ def render_citations(metadata: Mapping[str, Any], answer: str) -> str:
         if entry is None or not entry.get("citable"):
             raise SourceHandleError(
                 "取得していない根拠の参照です。取得結果のcitationを使用してください。"
+            )
+        if (
+            available_sources is not None
+            and (entry["document"], entry["value"]) not in available_sources
+        ):
+            raise SourceHandleError(
+                "保存した実行結果に対応する根拠がありません。取得済みの参照を使用してください。"
             )
         # 既存の表示・根拠照合で同じ片段IDを別出典と区別できなければ推測しない。
         same = [

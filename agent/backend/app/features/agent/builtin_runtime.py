@@ -134,6 +134,8 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
+    passed_evidence,
+    selected_answer_evidence,
 )
 from app.features.agent.answer_identifiers import identifier_index
 from app.features.agent.answer_notice import answer_takes_notice, current_answer_notice
@@ -4813,6 +4815,14 @@ async def _require_output(
     return await _unattended_approvals(run, sdk_agent, result, data_scopes)
 
 
+def _render_source_citations(run: Any, answer: str) -> str:
+    """保存した番号と、現在の実行結果から復元できる根拠の両方を照合する。"""
+    available = {
+        (item["document_id"], item["chunk_id"]) for item in passed_evidence(run.steps, limit=None)
+    }
+    return source_handles.render_citations(run.metadata, answer, available_sources=available)
+
+
 async def _require_data_references(
     run: Any, sdk_agent: Agent[Any], result: Any, data_scopes: data_scope.AgentDataScopes | None
 ) -> Any:
@@ -4827,8 +4837,9 @@ async def _require_data_references(
         return result
     answer = _answer_text(result.final_output)
     try:
-        resolved = source_handles.render_citations(current.metadata, answer)
+        resolved = _render_source_citations(current, answer)
         data_index(current.steps, current.metadata).render(resolved)
+        selected_answer_evidence(current.steps, resolved)
         return result
     except DataReferenceError as exc:
         reason = str(exc)
@@ -5055,7 +5066,7 @@ async def _finish(
         return
     answer = _answer_text(result.final_output)
     data_run = runtime_repository.get_run(run_id)
-    answer = source_handles.render_citations(data_run.metadata, answer)
+    answer = _render_source_citations(data_run, answer)
     answer = data_index(data_run.steps, data_run.metadata).render(answer)
     tool_confirmations = _tool_confirmations(task, state_content)
     if tool_confirmations and is_confirmation_payload(answer):

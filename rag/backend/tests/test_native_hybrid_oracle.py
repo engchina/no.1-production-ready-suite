@@ -962,7 +962,7 @@ async def test_separate_sql_matches_native_tied_text_ranks_and_fusion() -> None:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_separate_text_scores_match_direct_contains_across_query_shapes() -> None:
-    """命中 view・結合・件数の制限で Oracle Text の元の分数を変えない(#4932)。"""
+    """本文の別読取り・件数の制限で Oracle Text の元の分数と順位を変えない(#4946)。"""
     oracle = OracleClient(
         get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_separate_sql"})
     )
@@ -1013,3 +1013,9 @@ async def test_separate_text_scores_match_direct_contains_across_query_shapes() 
                 assert [row["score"] for row in actual] == pytest.approx(
                     [row["score"] for row in expected]
                 )
+                expected_ranks = [
+                    next(i for i, hit in enumerate(direct, 1) if hit["score"] == row["score"])
+                    for row in expected
+                ]
+                assert [row["keyword_rank"] for row in actual] == expected_ranks
+                assert all(row["chunk_text"] in texts for row in actual)

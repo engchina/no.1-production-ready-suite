@@ -188,6 +188,24 @@ def test_domain_management_lifecycle_on_oracle(live_settings: Any) -> None:
         # 0) ドメイン無し: 詳細の domain_name は空、inventory も空で dictionary warning は出ない
         details = _details(adapter, owner, [cust, orders])
         assert all(not column.domain_name for detail in details for column in detail.columns)
+        # 増分catalogは実辞書の注釈を保持し、NULLは列名に置き換えない。
+        fetched = adapter.fetch_catalog_objects({(owner, cust), (owner, orders)})
+        catalog_columns = {
+            (table.table_name, column.column_name): column
+            for table in fetched.tables
+            for column in table.columns
+        }
+        with adapter.connection() as conn, conn.cursor() as cursor:
+            for table_name in (cust, orders):
+                cursor.execute(
+                    "SELECT column_name, comments FROM all_col_comments "
+                    "WHERE owner = :owner AND table_name = :table_name",
+                    {"owner": owner, "table_name": table_name},
+                )
+                for column_name, comment in cursor:
+                    assert catalog_columns[(table_name, column_name)].comment == (comment or "")
+        assert catalog_columns[(orders, "AMT")].comment == ""
+        assert catalog_columns[(orders, "AMT")].logical_name == "AMT"
         empty = service.get_domain_inventory(DomainInventoryRequest(targets=targets))
         assert empty.runtime == "oracle"
         assert empty.domains == []

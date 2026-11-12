@@ -76,6 +76,12 @@ class IncrementalStoreNotMigrated(IncrementalStoreError):
     """必要な versioned migration が未適用。"""
 
 
+class SchemaRefreshActiveJobConflict(IncrementalStoreError):
+    """指定対象の再取得は、既存jobへ合流せず完了を待つ。"""
+
+    code = "schema_refresh_active_job"
+
+
 class SchemaRefreshExecutionLost(IncrementalStoreError):
     """DB 構造更新の実行権限が失効している。"""
 
@@ -868,7 +874,9 @@ class IncrementalNl2SqlRepository(Protocol):
 
     def find_active_refresh_job(self) -> SchemaRefreshJob | None: ...
 
-    def submit_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob: ...
+    def submit_refresh_job(
+        self, job: SchemaRefreshJob, *, allow_coalesce: bool = True
+    ) -> SchemaRefreshJob: ...
 
     def claim_refresh_job(
         self,
@@ -1350,7 +1358,9 @@ class MemoryIncrementalNl2SqlRepository:
                 deep=True
             )
 
-    def submit_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob:
+    def submit_refresh_job(
+        self, job: SchemaRefreshJob, *, allow_coalesce: bool = True
+    ) -> SchemaRefreshJob:
         """process 間の submit 契約と同じく、active job の確認と作成を原子的に行う。"""
 
         with self._lock:
@@ -1360,6 +1370,8 @@ class MemoryIncrementalNl2SqlRepository:
                 if item.status in {SchemaRefreshJobStatus.PENDING, SchemaRefreshJobStatus.RUNNING}
             ]
             if active:
+                if not allow_coalesce:
+                    raise SchemaRefreshActiveJobConflict()
                 current = min(active, key=lambda item: (item.created_at, item.job_id))
                 coalesced = _coalesce_pending_refresh_job(current, job)
                 self._refresh_jobs[coalesced.job_id] = coalesced.model_copy(deep=True)
@@ -2532,7 +2544,9 @@ class OracleIncrementalNl2SqlRepository:
         record_repository("schema_refresh_active", rows=1 if row else 0)
         return SchemaRefreshJob.model_validate_json(raw) if raw else None
 
-    def submit_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob:
+    def submit_refresh_job(
+        self, job: SchemaRefreshJob, *, allow_coalesce: bool = True
+    ) -> SchemaRefreshJob:
         """複数 API process の同時 submit も1件へ合流させる。DDL 追加は不要。"""
 
         payload = _canonical_json(job.model_dump(mode="json"))
@@ -2546,6 +2560,8 @@ class OracleIncrementalNl2SqlRepository:
                 )
                 row = cursor.fetchone()
                 if row is not None:
+                    if not allow_coalesce:
+                        raise SchemaRefreshActiveJobConflict()
                     active = SchemaRefreshJob.model_validate_json(_read_lob(row[0]))
                     coalesced = _coalesce_pending_refresh_job(active, job)
                     if coalesced != active:

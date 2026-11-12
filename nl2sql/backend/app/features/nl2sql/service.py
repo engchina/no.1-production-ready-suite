@@ -181,6 +181,7 @@ from .incremental_store import (
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
     OracleIncrementalNl2SqlRepository,
+    SchemaRefreshActiveJobConflict,
     SchemaRefreshExecutionLost,
     VersionedTtlCache,
     _profile_matches_query,
@@ -473,6 +474,7 @@ from .reverse_prompts import (
     stage_prompt,
 )
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
+from .schema_constraint_context import schema_constraint_context
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
 from .sql_binding import SqlGenerationValidationError, column_binding_violations
 from .sql_lexing import prepare_oracle_query, use_session_current_datetime
@@ -6444,6 +6446,7 @@ class Nl2SqlService:
         mode: SchemaRefreshMode | str = SchemaRefreshMode.FULL,
         source: str = "manual",
         target_objects: Sequence[SchemaRefreshTargetObject] | None = None,
+        allow_coalesce: bool = True,
     ) -> SchemaRefreshJob:
         repository = self._refresh_job_repository
         normalized_mode = SchemaRefreshMode(mode)
@@ -6459,7 +6462,13 @@ class Nl2SqlService:
         )
         try:
             with self._schema_refresh_submit_lock:
-                job = repository.submit_refresh_job(candidate)
+                job = (
+                    repository.submit_refresh_job(candidate)
+                    if allow_coalesce
+                    else repository.submit_refresh_job(candidate, allow_coalesce=False)
+                )
+        except SchemaRefreshActiveJobConflict:
+            raise
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="schema_refresh_submit",
@@ -6689,11 +6698,8 @@ class Nl2SqlService:
                 }
                 if missing_present or still_present:
                     raise SchemaRefreshFullRequired("schema_refresh_full_required")
-                changed_keys = {
-                    key
-                    for key, last_ddl_at in incoming_manifest.items()
-                    if key in target_keys and stored_manifest.get(key) != last_ddl_at
-                }
+                # 明示した対象はDDL時刻が同じでも注釈や投影を再取得する。
+                changed_keys = incoming_keys & target_keys
                 deleted_keys = {
                     key
                     for key in target_keys
@@ -6737,6 +6743,12 @@ class Nl2SqlService:
                     changed_catalog = self._oracle_adapter.fetch_catalog_objects(changed_keys)
                 else:
                     changed_catalog = self._build_default_catalog()
+                if job.mode == SchemaRefreshMode.TARGETED:
+                    fetched_keys = {
+                        (table.owner, table.table_name) for table in changed_catalog.tables
+                    }
+                    if not changed_keys <= fetched_keys:
+                        raise SchemaRefreshFullRequired("schema_refresh_full_required")
                 job = self._heartbeat_schema_refresh_job(repository, job)
                 changed_or_deleted_keys = changed_keys | deleted_keys
                 # key は辞書ビュー上の名前。大文字化すると `Mixed_Case` と `MIXED_CASE` が
@@ -25634,6 +25646,7 @@ class Nl2SqlService:
             lines.append("additional_instructions:")
             lines.append(additional_instructions)
         lines.append("schema:")
+        visible_tables: list[SchemaTable] = []
         for table in catalog.tables:
             qualified_name = self._catalog_qualified_name(table)
             if allowed_tables and qualified_name not in allowed_tables:
@@ -25642,15 +25655,19 @@ class Nl2SqlService:
                 f"- table {qualified_name} logical={table.logical_name} comment={table.comment}"
             )
             table_allowed_columns = allowed_columns.get(qualified_name, set())
+            visible_columns: list[SchemaColumn] = []
             for column in table.columns:
                 column_token = catalog_match_key(column.column_name)
                 if table_allowed_columns and column_token not in table_allowed_columns:
                     continue
+                visible_columns.append(column)
                 lines.append(
                     "  - column "
                     f"{column_token} logical={column.logical_name} "
                     f"type={column.data_type} comment={column.comment}"
                 )
+            visible_tables.append(table.model_copy(update={"columns": visible_columns}))
+        lines.extend(schema_constraint_context(visible_tables))
         learning_context = self._learning_examples_context(learning_examples or [])
         if learning_context:
             lines.append(learning_context)
