@@ -157,16 +157,17 @@ class StallResendTest(unittest.TestCase):
             self.call(client, deadline=Deadline(10))
         self.assertEqual(client.read_timeouts, [10])
 
-    def test_incomplete_event_widens_the_budget_as_before(self):
-        """streaming でも、出力の上限で未完了の応答は上限を 2 倍にして 1 回だけ送り直す（#987）。"""
+    def test_online_incomplete_event_stops_without_widening(self):
+        """streaming の出力上限は通信の失敗と区別し、再生成しない。"""
         incomplete = SimpleNamespace(
             type="response.incomplete",
             response=SimpleNamespace(status="incomplete", incomplete_details=SimpleNamespace(reason="max_output_tokens"), usage=USAGE),
         )
         client = _Client(self.clock, [_script(10, 200.0, final=incomplete), _script(10, 200.0)])
-        result, usage, _records = self.call(client)
-        self.assertEqual(result.text, "ok")
-        self.assertEqual(usage["output_retries"], 1)
+        with self.assertRaises(oci.IncompleteResponse) as raised:
+            self.call(client)
+        self.assertEqual(raised.exception.reason, "max_output_tokens")
+        self.assertEqual(len(client.streams), 1)
 
     def test_failed_event_is_a_retryable_connection_error(self):
         failed = SimpleNamespace(type="response.failed", response=SimpleNamespace(error=SimpleNamespace(message="overloaded")))
