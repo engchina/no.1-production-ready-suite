@@ -65,7 +65,7 @@ def locator_labels(item: JsonObject) -> list[object]:
 _EvidenceRef = tuple[tuple[str, str], object, list[object], list[object]]
 
 
-def _evidence_refs(
+def evidence_refs(
     tool: str, output: JsonObject, *, original_only: bool = False
 ) -> list[_EvidenceRef]:
     """根拠を集める・読むツールの出力の（参照, 本文, 見出し, 文書のファイル名）（出てきた順）。"""
@@ -120,7 +120,7 @@ def evidence_source_texts(steps: Sequence[RunStep]) -> list[str]:
             continue
         if not isinstance(result.output, dict):
             continue
-        for _ref, text, _labels, _names in _evidence_refs(
+        for _ref, text, _labels, _names in evidence_refs(
             mcp_base_tool_name(call.name), result.output, original_only=True
         ):
             if isinstance(text, str):

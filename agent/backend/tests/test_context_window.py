@@ -441,9 +441,20 @@ def test_run_compacts_older_evidence_and_keeps_full_evidence_in_steps(
     assert any(
         item.get("content") == "合成の質問" for item in final_input if isinstance(item, dict)
     )
-    # 縮めても根拠の ID はすべて残る。
-    assert _ids(older) == _ids(_evidence("a", 40))
-    assert _ids(latest) == _ids(_evidence("b", 40))
+    # 縮めたモデル向けの短IDも、同じ保存済み根拠の実IDへ戻る。
+    from app.features.agent.source_handles import decode_arguments
+
+    def decoded_ids(output: dict[str, Any]) -> list[tuple[str, str]]:
+        decoded = []
+        for document, chunk in _ids(output):
+            arguments = decode_arguments(
+                run.metadata, "rag", {"document_id": document, "chunk_id": chunk}
+            )
+            decoded.append((str(arguments["document_id"]), str(arguments["chunk_id"])))
+        return decoded
+
+    assert decoded_ids(older) == _ids(_evidence("a", 40))
+    assert decoded_ids(latest) == _ids(_evidence("b", 40))
     # Run の step のツールの結果は全文のまま。
     step_outputs = [
         step.tool_result.output
@@ -451,6 +462,10 @@ def test_run_compacts_older_evidence_and_keeps_full_evidence_in_steps(
         if step.tool_call is not None
         and step.tool_call.name == EVIDENCE_TOOL
         and step.tool_result is not None
+    ]
+    assert [_ids(output or {}) for output in step_outputs] == [
+        _ids(_evidence("a", 40)),
+        _ids(_evidence("b", 40)),
     ]
     assert [(output or {})["evidence"][0]["excerpt"] for output in step_outputs] == [
         _EXCERPT,
