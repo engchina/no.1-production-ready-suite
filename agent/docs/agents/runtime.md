@@ -132,8 +132,9 @@
 
 同じ保存先の API backend は 1 プロセスだけ起動する。起動時の Run の中断復元、評価の復元、
 自動実行の開始より先に所有権を取得し、競合したプロセスは起動に失敗する。Oracle は schema 全体で
-共用する予約済み checkpoint 行 `__api_backend_owner__` を専用接続で `FOR UPDATE NOWAIT` し、
-file は snapshot に隣接する `.owner.lock` の OS lock を使う。正常な checkpoint の head は lock しない。
+共用する制御表 `AGENT_SCHEMA_OPERATIONS` の予約行 `__api_backend_owner__` を専用接続で `FOR UPDATE NOWAIT` し、
+file は snapshot に隣接する `.owner.lock` の OS lock を使う。正常な checkpoint の head は lock しない。制御表はシステム表の再作成でも保持する。
+制御表がまだ無い場合は管理画面の起動を許し、作成後に所有権を取得してから保存先を読む。
 CLI と external dispatcher の既存の実行の claim は変えない。API は external モードでも排他にする。
 
 所有権は終了時の書き込みを終えるまで保持する。Oracle の所有権の専用接続が失われた場合は、

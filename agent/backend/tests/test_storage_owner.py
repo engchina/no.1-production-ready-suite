@@ -216,3 +216,28 @@ async def test_scheduler_shutdown_waits_for_database_tick(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await scheduler
+
+
+@pytest.mark.asyncio
+async def test_uninitialized_schema_keeps_administration_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import asynccontextmanager
+
+    from app import main
+
+    visited: list[bool] = []
+
+    def missing() -> None:
+        raise storage_owner.StorageNotInitializedError("合成の未作成の制御表")
+
+    @asynccontextmanager
+    async def administration(_app: FastAPI) -> AsyncIterator[None]:
+        visited.append(True)
+        yield
+
+    monkeypatch.setattr(storage_owner.storage_owner, "acquire", missing)
+    monkeypatch.setattr(main, "_application_lifespan", administration)
+    async with main.lifespan(main.app):
+        assert visited == [True]
+    assert not storage_owner.storage_owner.enabled

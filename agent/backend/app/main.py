@@ -17,7 +17,12 @@ from starlette.responses import JSONResponse, Response
 from app.api.router import api_router
 from app.features.agent import storage_bootstrap
 from app.features.agent.runtime import AgentRuntimeStorageUnavailableError
-from app.features.agent.storage_owner import OWNER_MESSAGE, StorageAlreadyOwnedError, storage_owner
+from app.features.agent.storage_owner import (
+    OWNER_MESSAGE,
+    StorageAlreadyOwnedError,
+    StorageNotInitializedError,
+    storage_owner,
+)
 from app.features.agent.trace_spans import trace_spans
 from app.observability import (
     metrics_response,
@@ -49,6 +54,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         except StorageAlreadyOwnedError:
             logger.error("agent_storage_already_owned", extra={"reason": OWNER_MESSAGE})
             raise
+        except StorageNotInitializedError:
+            logger.warning("agent_storage_owner_schema_not_initialized")
         except Exception as exc:
             if not is_oracle_connection_error(exc):
                 raise

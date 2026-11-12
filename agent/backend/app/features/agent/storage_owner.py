@@ -25,6 +25,10 @@ class StorageAlreadyOwnedError(RuntimeError):
     """別の backend が保存先を使用している。"""
 
 
+class StorageNotInitializedError(RuntimeError):
+    """排他の制御表がまだ作成されていない。"""
+
+
 class StorageOwner:
     """API の全寿命で保持し、起動時の復元とスケジューラをまとめて排他にする。"""
 
@@ -63,7 +67,6 @@ class StorageOwner:
         import oracledb
         from pr_backend_core.oracle_session import init_oracle_session
 
-        from app.features.agent.runtime_checkpoint_store import header_json
         from app.oracle_connection import platform_oracle_connect_kwargs
 
         # pool へ返すと行の lock が解けるため、API 専用の接続を保持する。
@@ -72,24 +75,22 @@ class StorageOwner:
             init_oracle_session(connection, None)
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT 1 FROM AGENT_RUNTIME_CHECKPOINTS WHERE checkpoint_key = :key",
+                    "SELECT 1 FROM AGENT_SCHEMA_OPERATIONS WHERE operation_key = :key",
                     key=OWNER_KEY,
                 )
                 if cursor.fetchone() is None:
                     try:
                         cursor.execute(
-                            "INSERT INTO AGENT_RUNTIME_CHECKPOINTS "
-                            "(checkpoint_key, snapshot_json, version_no, updated_at) "
-                            "VALUES (:key, :payload, 0, SYSTIMESTAMP)",
+                            "INSERT INTO AGENT_SCHEMA_OPERATIONS "
+                            "(operation_key, status, schema_epoch) VALUES (:key, 'IDLE', 0)",
                             key=OWNER_KEY,
-                            payload=header_json(quarantined=[]),
                         )
                         connection.commit()
                     except oracledb.IntegrityError:
                         connection.rollback()
                 cursor.execute(
-                    "SELECT checkpoint_key FROM AGENT_RUNTIME_CHECKPOINTS "
-                    "WHERE checkpoint_key = :key FOR UPDATE NOWAIT",
+                    "SELECT operation_key FROM AGENT_SCHEMA_OPERATIONS "
+                    "WHERE operation_key = :key FOR UPDATE NOWAIT",
                     key=OWNER_KEY,
                 )
                 if cursor.fetchone() is None:
@@ -101,6 +102,10 @@ class StorageOwner:
             self._monitor.start()
         except Exception as exc:
             connection.close()
+            if "ORA-00942" in str(exc):
+                raise StorageNotInitializedError(
+                    "Agent のシステムテーブルを作成してください。"
+                ) from exc
             if "ORA-00054" in str(exc):
                 raise StorageAlreadyOwnedError(OWNER_MESSAGE) from exc
             raise
