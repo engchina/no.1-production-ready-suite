@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from pr_system_settings.model import ModelSettingsStore
+from pr_system_settings.model import ModelSettingsStore, estimate_input_tokens
 
 from app.features.nl2sql import enterprise_ai_client as module
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
@@ -151,10 +152,10 @@ def _request(service: Nl2SqlService, count: int, columns: int = 10) -> MetadataS
     )
 
 
-def test_old_common_limit_1200_is_dropped_and_model_default_32768_is_sent(
+def test_old_common_limit_is_ignored_and_online_first_tier_is_sent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """OCI の配備の状態（v5 の JSON に共通の上限 1200）を読んでも、モデルの既定 32768 で送る。"""
+    """旧い共通上限を読んでも、登録容量を守ってオンラインの初回16384を送る。"""
     (tmp_path / "model-settings.json").write_text(
         json.dumps(
             {
@@ -191,13 +192,15 @@ def test_old_common_limit_1200_is_dropped_and_model_default_32768_is_sent(
 
     assert result.source == "oci_enterprise_ai"
     assert result.fallback is False
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [32_768]
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [16_384]
     assert model.payloads[0]["reasoning"] == {"effort": "medium"}
     assert result.sql.count("COMMENT ON TABLE") == 5
 
 
-def test_incomplete_is_retried_once_with_the_model_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """未完了（max_output_tokens）は、モデルの出力の上限まで広げて 1 回だけ送り直す。"""
+def test_incomplete_uses_three_tiers_without_changing_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未完了（max_output_tokens）だけを三档で再試行する。"""
     model = _ReasoningModel(tokens_per_target=8_000)
     _mock_http(monkeypatch, model)
     service = _service(_settings(max_input_tokens=1_000_000, max_output_tokens=131_072))
@@ -206,7 +209,7 @@ def test_incomplete_is_retried_once_with_the_model_limit(monkeypatch: pytest.Mon
 
     assert result.source == "oci_enterprise_ai"
     assert result.fallback is False
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [32_768, 131_072]
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [16_384, 32_768, 65_536]
 
 
 def test_many_tables_are_split_into_batches_and_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,18 +277,15 @@ def test_failure_shows_reason_limit_and_usage_without_secret(
     result = service.generate_comment_sql(_request(service, 5))
 
     # モデルの上限（1200）より広げられないので、推論の量を下げて（medium → low）送り直す（#2023）。
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [1_200, 1_200]
-    assert [payload["reasoning"] for payload in model.payloads] == [
-        {"effort": "medium"},
-        {"effort": "low"},
-    ]
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [1_200]
+    assert [payload["reasoning"] for payload in model.payloads] == [{"effort": "medium"}]
     assert result.source == "deterministic"
     assert result.fallback is True
     assert result.fallback_objects == []
     assert "出力の上限" in result.fallback_reason
     assert "理由=max_output_tokens" in result.fallback_detail
     assert "出力の上限=1200 tokens" in result.fallback_detail
-    assert "使った出力=1200 tokens（うち推論 300）" in result.fallback_detail
+    assert "使った出力=1200 tokens（うち推論 1198）" in result.fallback_detail
     # 規則ベースの SQL の理由は warnings に重ねない。secret は出さない。
     assert not any("fallback" in warning for warning in result.warnings)
     assert _API_KEY not in result.model_dump_json()
@@ -331,40 +331,35 @@ def test_client_error_message_after_retry_has_reason_limit_and_usage(
     assert raised.value.code == "incomplete"
     assert raised.value.incomplete is not None
     message = str(raised.value)
-    assert "出力の上限を広げ、推論の量を下げて送り直しても" in message
-    assert "出力の上限=131072 tokens" in message
+    assert "3回の試行" in message
+    assert "出力の上限=65536 tokens" in message
     # 最後に送った low より下げられないので、直し方に推論の量を入れない。
     assert "「推論の量」を下げる" not in message
     assert _API_KEY not in message
     assert [payload["max_output_tokens"] for payload in model.payloads] == [
+        16_384,
         32_768,
-        131_072,
-        131_072,
+        65_536,
     ]
-    assert model.payloads[-1]["reasoning"] == {"effort": "low"}
+    assert all(payload["reasoning"] == {"effort": "medium"} for payload in model.payloads)
 
 
-def test_incomplete_at_the_model_limit_succeeds_with_lower_reasoning_effort(
+def test_capacity_shortage_does_not_retry_the_same_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """上限を広げられないとき、推論の量を下げた送り直しで回答が出る（#2023）。"""
-    # medium: 1198 + 200 > 1200 で未完了、low: 300 + 200 <= 1200 で完了。
     model = _ReasoningModel(tokens_per_target=200)
     _mock_http(monkeypatch, model)
     client = module.OciEnterpriseAiDirectClient(_settings(max_output_tokens=1_200))
-
-    text = client.generate(
-        prompt="COMMENT",
-        context="targets: table:APP.T1",
-        system_prompt="SQL",
-        response_format=response_format(SqlOutput),
-    )
-
-    assert "COMMENT ON TABLE" in text
-    assert [payload["reasoning"] for payload in model.payloads] == [
-        {"effort": "medium"},
-        {"effort": "low"},
-    ]
+    with pytest.raises(EnterpriseAiDirectError) as raised:
+        client.generate(
+            prompt="COMMENT",
+            context="targets: table:APP.T1",
+            system_prompt="SQL",
+            response_format=response_format(SqlOutput),
+        )
+    assert raised.value.code == "incomplete"
+    assert "1回の試行" in str(raised.value)
+    assert [payload["reasoning"] for payload in model.payloads] == [{"effort": "medium"}]
 
 
 def test_budget_is_capped_by_context_room(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -387,4 +382,110 @@ def test_budget_is_capped_by_context_room(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     sent = model.payloads[0]["max_output_tokens"]
-    assert 8_192 - 3_100 < sent < 8_192 - 3_000
+    actual_input = {
+        key: value for key, value in model.payloads[0].items() if key != "max_output_tokens"
+    }
+    input_tokens = estimate_input_tokens(json.dumps(actual_input, ensure_ascii=False))
+    assert sent > 4000
+    assert sent + input_tokens <= 8192
+
+
+def test_unstructured_online_response_checks_incomplete_and_freezes_the_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(max_input_tokens=1_000_000, max_output_tokens=65_536)
+    settings.oci_enterprise_ai_llm_payload_template = json.dumps(
+        {
+            "model": "${model}",
+            "input": "${prompt}",
+            "max_output_tokens": 4096,
+            "reasoning": {"effort": "medium"},
+        }
+    )
+    payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        if len(payloads) < 3:
+            settings.oci_enterprise_ai_llm_payload_template = (
+                '{"input":"changed","max_output_tokens":999999}'
+            )
+            settings.oci_enterprise_ai_models[0].reasoning_effort = "low"
+            return httpx.Response(
+                200,
+                json={
+                    "status": "incomplete",
+                    "output_text": "partial",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            )
+        return httpx.Response(200, json={"status": "completed", "output_text": "completed"})
+
+    _mock_http(monkeypatch, handler)
+    client = module.OciEnterpriseAiDirectClient(settings)
+    assert client.generate(prompt="synthetic", context="", system_prompt="synthetic") == "completed"
+    assert [p["max_output_tokens"] for p in payloads] == [16384, 32768, 65536]
+    assert all(
+        p["input"] == "synthetic" and p["reasoning"] == {"effort": "medium"} for p in payloads
+    )
+    assert all(p["model"] == _MODEL for p in payloads)
+
+
+def test_online_deadline_is_checked_before_every_transport_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    sent: list[httpx.Request] = []
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        assert request.extensions["timeout"]["read"] == 10.0
+        clock[0] = 11.0
+        return httpx.Response(503, json={"error": {"message": "busy"}})
+
+    _mock_http(monkeypatch, handler)
+    client = module.OciEnterpriseAiDirectClient(_settings())
+    with pytest.raises(EnterpriseAiDirectError) as raised:
+        client.generate(
+            prompt="synthetic",
+            context="",
+            system_prompt="synthetic",
+            timeout_seconds=10,
+            max_retries=2,
+        )
+    assert raised.value.code == "deadline_exceeded"
+    assert len(sent) == 1
+
+
+def test_online_context_exhaustion_does_not_send_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[Any] = []
+    _mock_http(monkeypatch, lambda request: sent.append(request))
+    client = module.OciEnterpriseAiDirectClient(
+        _settings(max_input_tokens=4096, max_output_tokens=1024)
+    )
+    with pytest.raises(EnterpriseAiDirectError) as raised:
+        client.generate(prompt="あ" * 4096, context="", system_prompt="synthetic")
+    assert raised.value.code == "context_budget_exceeded"
+    assert not sent
+
+
+def test_output_incomplete_uses_a_shared_error_code_and_friendly_message() -> None:
+    from pr_system_settings.enterprise_ai_errors import EnterpriseAiIncomplete
+
+    from app.features.nl2sql.service import _job_failure_error_code, _job_failure_presentation
+
+    error = EnterpriseAiDirectError(
+        "technical",
+        code="incomplete",
+        model_id=_MODEL,
+        incomplete=EnterpriseAiIncomplete(
+            status="incomplete", reason="max_output_tokens", max_output_tokens=32768
+        ),
+        user_message="回答の上限に達しました。質問を分けてください。",
+    )
+    assert _job_failure_error_code(error, fallback="fallback") == "ENTERPRISE_AI_OUTPUT_INCOMPLETE"
+    assert _job_failure_presentation(error)[0] == error.user_message

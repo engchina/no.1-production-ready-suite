@@ -10,7 +10,6 @@ from typing import Any
 
 import anyio
 import pytest
-from openai.types.shared import Reasoning
 from pr_system_settings.model import EnterpriseAiConfiguredModel
 
 from app.features.agent import builtin_runtime
@@ -31,7 +30,7 @@ def test_model_settings_send_model_output_limit() -> None:
     with_effort = ModelTarget(
         model_id="m", endpoint=ENDPOINT, project_ocid="", api_key="k", reasoning_effort="high"
     )
-    assert builtin_runtime.model_settings_for(with_effort).max_tokens == 32768
+    assert builtin_runtime.model_settings_for(with_effort).max_tokens == 16384
 
 
 def test_resolve_model_target_reads_output_limit_of_agent_model(
@@ -119,55 +118,13 @@ def test_completed_response_is_returned() -> None:
 class _Sequence(_Inner):
     """順に応答を返す（推論の量を下げた送り直しの確認。#2023）。"""
 
-    def __init__(self, *responses: _Response) -> None:
+    def __init__(self, *responses: Any) -> None:
         super().__init__(responses[0])
         self.responses = list(responses)
 
-    async def create(self, **kwargs: Any) -> _Response:
+    async def create(self, **kwargs: Any) -> Any:
         self.requests.append(kwargs)
         return self.responses.pop(0)
-
-
-def test_incomplete_is_resent_once_with_lower_reasoning_effort() -> None:
-    """出力の上限で未完了なら、推論の量を 1 段下げて（medium → low）1 回だけ送り直す。"""
-    completed = _Response({"status": "completed"})
-    inner = _Sequence(_incomplete(), completed)
-    responses = builtin_runtime._OciResponses(inner)
-
-    async def call() -> Any:
-        return await responses.create(
-            model="openai.gpt-oss-120b",
-            input=[],
-            max_output_tokens=1200,
-            reasoning=Reasoning(effort="medium"),
-        )
-
-    assert anyio.run(call) is completed
-    assert [request["reasoning"] for request in inner.requests[1:]] == [{"effort": "low"}]
-    assert inner.requests[1]["max_output_tokens"] == 1200
-
-
-def test_incomplete_after_lowering_fails_with_the_retry_and_advice() -> None:
-    inner = _Sequence(_incomplete(), _incomplete())
-    responses = builtin_runtime._OciResponses(inner)
-
-    async def call() -> None:
-        await responses.create(
-            model="openai.gpt-oss-120b",
-            input=[],
-            max_output_tokens=1200,
-            reasoning={"effort": "high"},
-        )
-
-    with pytest.raises(BuiltinRuntimeError) as raised:
-        anyio.run(call)
-
-    assert len(inner.requests) == 2
-    assert inner.requests[1]["reasoning"] == {"effort": "medium"}
-    message = raised.value.message
-    assert "推論の量を下げて送り直しても" in message
-    # 最後に送った medium はまだ下げられるので、直し方に入れる。
-    assert "「推論の量」を下げる" in message
 
 
 @pytest.mark.parametrize(
@@ -214,11 +171,11 @@ def test_bounded_call_model_leaves_the_resend_to_the_caller() -> None:
     )
     assert isinstance(run_model, builtin_runtime.OciResponsesModel)
     assert isinstance(bounded, builtin_runtime.OciResponsesModel)
-    assert run_model.lower_effort_on_incomplete is True
-    assert bounded.lower_effort_on_incomplete is False
+    assert run_model.output_limit_retry is True
+    assert bounded.output_limit_retry is False
 
     inner = _Inner(_incomplete())
-    responses = builtin_runtime._OciResponses(inner, lower_effort_on_incomplete=False)
+    responses = builtin_runtime._OciResponses(inner, output_limit_retry=False)
 
     async def call() -> None:
         await responses.create(
@@ -252,95 +209,6 @@ def _retries(model: str) -> float:
     return value
 
 
-def test_tiny_incomplete_is_resent_once_with_the_same_request(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """使った出力が上限の割合未満の未完了は、同じ要求（推論の量も同じ）で 1 回だけ送り直す。"""
-    _settings(monkeypatch)
-    completed = _Response({"status": "completed"})
-    inner = _Sequence(_tiny_incomplete(), completed)
-    responses = builtin_runtime._OciResponses(inner)
-    model = "model-tiny-retry-ok"
-    before = _retries(model)
-
-    async def call() -> Any:
-        return await responses.create(
-            model=model, input=[], max_output_tokens=32768, reasoning={"effort": "low"}
-        )
-
-    assert anyio.run(call) is completed
-    assert len(inner.requests) == 2
-    assert inner.requests[1] == inner.requests[0]
-    assert _retries(model) == before + 1
-
-
-def test_tiny_incomplete_twice_keeps_the_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """送り直しも未完了なら、今までどおり失敗にする（推論の量 low は下げられない）。"""
-    _settings(monkeypatch)
-    inner = _Sequence(_tiny_incomplete(), _tiny_incomplete())
-    responses = builtin_runtime._OciResponses(inner)
-
-    async def call() -> None:
-        await responses.create(
-            model="openai.gpt-oss-120b",
-            input=[],
-            max_output_tokens=32768,
-            reasoning={"effort": "low"},
-        )
-
-    with pytest.raises(BuiltinRuntimeError) as raised:
-        anyio.run(call)
-    assert raised.value.code == "runtime.model_output_incomplete"
-    assert "使った出力=61 tokens（うち推論 5）" in raised.value.message
-    assert len(inner.requests) == 2
-
-
-def test_tiny_incomplete_then_lowering_effort_is_still_tried(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """送り直しも未完了なら、下げられる推論の量は今までどおり 1 段下げて送り直す。"""
-    _settings(monkeypatch)
-    completed = _Response({"status": "completed"})
-    inner = _Sequence(_tiny_incomplete(), _tiny_incomplete(), completed)
-    responses = builtin_runtime._OciResponses(inner)
-
-    async def call() -> Any:
-        return await responses.create(
-            model="m", input=[], max_output_tokens=32768, reasoning={"effort": "medium"}
-        )
-
-    assert anyio.run(call) is completed
-    assert [request["reasoning"] for request in inner.requests] == [
-        {"effort": "medium"},
-        {"effort": "medium"},
-        {"effort": "low"},
-    ]
-
-
-@pytest.mark.parametrize(
-    ("ratio", "lower_effort_on_incomplete"),
-    [(0.0, True), (0.1, False)],
-    ids=["disabled-by-setting", "bounded-call"],
-)
-def test_tiny_incomplete_is_not_resent_when_disabled(
-    monkeypatch: pytest.MonkeyPatch, ratio: float, lower_effort_on_incomplete: bool
-) -> None:
-    _settings(monkeypatch, agent_model_incomplete_retry_output_ratio=ratio)
-    inner = _Inner(_tiny_incomplete())
-    responses = builtin_runtime._OciResponses(
-        inner, lower_effort_on_incomplete=lower_effort_on_incomplete
-    )
-
-    async def call() -> None:
-        await responses.create(
-            model="m", input=[], max_output_tokens=32768, reasoning={"effort": "low"}
-        )
-
-    with pytest.raises(BuiltinRuntimeError):
-        anyio.run(call)
-    assert len(inner.requests) == 1
-
-
 def test_sdk_call_snapshot_records_input_and_response() -> None:
     from pr_backend_core.observability.tracing import operation_trace
 
@@ -365,3 +233,225 @@ def enable_trace_content_for_snapshot_tests() -> Any:
 
     with call_content_policy(lambda: True):
         yield
+
+
+def test_online_tiers_keep_reasoning_and_input_unchanged() -> None:
+    completed = _Response({"status": "completed"})
+    inner = _Sequence(_incomplete(), _incomplete(), completed)
+    responses = builtin_runtime._OciResponses(inner, max_output_tokens=65536)
+
+    async def call() -> Any:
+        return await responses.create(
+            model="m",
+            input=[{"role": "user", "content": "synthetic"}],
+            max_output_tokens=65536,
+            reasoning={"effort": "high"},
+        )
+
+    assert anyio.run(call) is completed
+    assert [r["max_output_tokens"] for r in inner.requests] == [16384, 32768, 65536]
+    assert all(r["reasoning"] == {"effort": "high"} for r in inner.requests)
+    assert all(r["input"] == inner.requests[0]["input"] for r in inner.requests)
+
+
+def test_registered_capacity_stops_before_an_unsupported_tier() -> None:
+    inner = _Sequence(_tiny_incomplete(), _tiny_incomplete())
+    responses = builtin_runtime._OciResponses(inner, max_output_tokens=32768)
+
+    async def call() -> None:
+        await responses.create(
+            model="m", input=[], max_output_tokens=32768, reasoning={"effort": "high"}
+        )
+
+    with pytest.raises(BuiltinRuntimeError) as raised:
+        anyio.run(call)
+    assert [r["max_output_tokens"] for r in inner.requests] == [16384, 32768]
+    assert "2回の試行" in raised.value.message
+    assert "推論の量を下げ" not in raised.value.message
+
+
+def test_failed_attempts_use_run_budget_before_the_next_tier() -> None:
+    from app.features.agent.run_budget import RunBudget, RunBudgetLimits
+
+    budget = RunBudget(RunBudgetLimits(model_calls=2))
+    assert budget.reserve_model_call(10) is None
+    inner = _Sequence(_incomplete(), _incomplete(), _Response({"status": "completed"}))
+    responses = builtin_runtime._OciResponses(inner, max_output_tokens=65536)
+
+    async def call() -> None:
+        token = builtin_runtime._ACTIVE_RUN_BUDGET.set(budget)
+        try:
+            await responses.create(model="m", input=[], max_output_tokens=65536)
+        finally:
+            builtin_runtime._ACTIVE_RUN_BUDGET.reset(token)
+
+    with pytest.raises(BuiltinRuntimeError) as raised:
+        anyio.run(call)
+    assert raised.value.code == "runtime.run_budget_exceeded"
+    assert len(inner.requests) == 2
+    assert budget.model_calls == 2
+    assert budget.measured_tokens == 2400
+
+
+def test_stream_retries_do_not_publish_partial_tool_calls() -> None:
+    from types import SimpleNamespace
+
+    class Stream:
+        def __init__(self, events: list[Any]) -> None:
+            self.events = iter(events)
+            self.closed = False
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
+            value = next(self.events, None)
+            if value is None:
+                raise StopAsyncIteration
+            return value
+
+        async def close(self) -> None:
+            self.closed = True
+
+    incomplete = _incomplete()
+    completed = _Response({"status": "completed"})
+    first = Stream(
+        [
+            SimpleNamespace(type="response.output_item.added", item={"call_id": "discarded-tool"}),
+            SimpleNamespace(type="response.function_call_arguments.delta", delta="partial"),
+            SimpleNamespace(type="response.incomplete", response=incomplete),
+        ]
+    )
+    second = Stream(
+        [
+            SimpleNamespace(type="response.output_item.added", item={"call_id": "successful-tool"}),
+            SimpleNamespace(type="response.completed", response=completed),
+        ]
+    )
+    inner = _Sequence(first, second)
+    responses = builtin_runtime._OciResponses(inner, max_output_tokens=65536)
+
+    async def call() -> list[Any]:
+        result = await responses.create(model="m", input=[], max_output_tokens=65536, stream=True)
+        return [event async for event in result]
+
+    events = anyio.run(call)
+    assert len(events) == 2
+    assert events[0].item["call_id"] == "successful-tool"
+    assert all(getattr(event, "delta", None) != "partial" for event in events)
+    assert first.closed and second.closed
+    assert [r["max_output_tokens"] for r in inner.requests] == [16384, 32768]
+
+
+@pytest.mark.parametrize("terminal", [None, "response.failed", "malformed_completed"])
+def test_failed_or_unterminated_stream_never_publishes_partial_tools(terminal: str | None) -> None:
+    from types import SimpleNamespace
+
+    class Stream:
+        def __init__(self) -> None:
+            events = [
+                SimpleNamespace(type="response.output_item.added", item={"call_id": "partial-tool"})
+            ]
+            if terminal:
+                kind = "response.completed" if terminal == "malformed_completed" else terminal
+                events.append(SimpleNamespace(type=kind, response=SimpleNamespace(status="failed")))
+            self.events = iter(events)
+            self.closed = False
+
+        async def __anext__(self) -> Any:
+            event = next(self.events, None)
+            if event is None:
+                raise StopAsyncIteration
+            return event
+
+        async def close(self) -> None:
+            self.closed = True
+
+    stream = Stream()
+    inner = _Sequence(stream)
+    responses = builtin_runtime._OciResponses(inner, max_output_tokens=65536)
+
+    async def call() -> None:
+        await responses.create(model="m", input=[], max_output_tokens=65536, stream=True)
+
+    with pytest.raises(BuiltinRuntimeError) as raised:
+        anyio.run(call)
+    assert raised.value.code == "runtime.model_stream_failed"
+    assert len(inner.requests) == 1 and stream.closed
+
+
+def test_sdk_streaming_response_manager_uses_the_tiers_and_preserves_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    class Stream:
+        def __init__(self, events: list[Any], request_id: str) -> None:
+            self.events = iter(events)
+            self.response = SimpleNamespace(headers={"x-request-id": request_id})
+            self.closed = False
+
+        async def __anext__(self) -> Any:
+            value = next(self.events, None)
+            if value is None:
+                raise StopAsyncIteration
+            return value
+
+        async def close(self) -> None:
+            self.closed = True
+
+    first = Stream(
+        [
+            SimpleNamespace(type="response.output_item.added", item={"call_id": "discarded"}),
+            SimpleNamespace(type="response.incomplete", response=_incomplete()),
+        ],
+        "first-request",
+    )
+    completed = _Response({"status": "completed"})
+    second = Stream(
+        [
+            SimpleNamespace(type="response.output_item.added", item={"call_id": "success"}),
+            SimpleNamespace(type="response.completed", response=completed),
+        ],
+        "successful-request",
+    )
+    inner = _Sequence(first, second)
+    target = ModelTarget(
+        model_id="m", endpoint=ENDPOINT, project_ocid="", api_key="k", max_output_tokens=65536
+    )
+    model = builtin_runtime._default_model_factory(target)
+    assert isinstance(model, builtin_runtime.OciResponsesModel)
+    monkeypatch.setattr(model, "_client", SimpleNamespace(responses=inner))
+
+    async def call() -> list[Any]:
+        stream = await model._fetch_response(
+            system_instructions="synthetic",
+            input="synthetic",
+            model_settings=builtin_runtime.model_settings_for(target),
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            previous_response_id=None,
+            conversation_id=None,
+            stream=True,
+        )
+        return [event async for event in stream]
+
+    events = anyio.run(call)
+    assert events[0].item["call_id"] == "success"
+    assert [r["max_output_tokens"] for r in inner.requests] == [16384, 32768]
+    assert getattr(completed, "_request_id", None) == "successful-request"
+    assert first.closed and second.closed
+
+
+def test_context_without_output_room_fails_before_model_request() -> None:
+    inner = _Inner(_Response({"status": "completed"}))
+    responses = builtin_runtime._OciResponses(inner, max_output_tokens=65536, max_input_tokens=4096)
+
+    async def call() -> None:
+        await responses.create(model="m", input="あ" * 4096, max_output_tokens=65536)
+
+    with pytest.raises(BuiltinRuntimeError) as raised:
+        anyio.run(call)
+    assert raised.value.code == "runtime.context_overflow"
+    assert not inner.requests

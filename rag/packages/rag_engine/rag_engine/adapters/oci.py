@@ -28,6 +28,7 @@ from pr_backend_core.observability.model_purpose import (
     model_call_purpose,
     model_purpose_attributes,
 )
+from pr_backend_core.output_budget import initial_output_budget, next_output_budget, output_limit_message
 from pydantic import BaseModel
 
 from rag_engine.config import (
@@ -464,8 +465,9 @@ class _LlmRetryBudget:
     def available(self) -> bool:
         return self.used < self.max_retries
 
-    def take(self) -> bool:
-        if not self.available:
+    def take(self, *, output_limit: bool = False) -> bool:
+        available = (self.used < 2 and self.max_retries > 0) if output_limit else self.available
+        if not available:
             return False
         self.used += 1
         return True
@@ -671,8 +673,7 @@ def _retry_output_budget(budget: int, provider: LlmProviderSettings) -> int | No
     今の上限の 2 倍をモデルの出力の上限で抑える。今の上限より広げられなければ None（同じ上限で送り直しても
     終わらないので、送り直さない）。
     """
-    widened = min(budget * INCOMPLETE_OUTPUT_BUDGET_FACTOR, _model_output_limit(provider))
-    return widened if widened > budget else None
+    return next_output_budget(budget, _model_output_limit(provider))
 
 
 # 出力の上限で未完了になった呼び出しを送り直すときに 1 段下げる推論の量（#2023）。platform の
@@ -707,11 +708,12 @@ def _incomplete_error(
     retried: bool,
     lowered_effort: bool = False,
     reasoning_effort: str = "",
+    attempts: int | None = None,
 ) -> IncompleteResponse:
     """未完了の応答の失敗を、利用者向けの文と「詳細」の文に分けて作る（#1719・#2023）。
 
-    rag_engine は platform に依存しないため、platform の `enterprise_ai_incomplete_message` と同じ項目をここで
-    組み立てる。応答の本文は含めない。``retried`` は出力の上限を広げて送り直したか、``lowered_effort`` は推論の
+    利用者向けの上限到達の文は platform の共有部品を使い、診断の値には応答の本文を含めない。
+    ``retried`` は出力の上限を広げて送り直したか、``lowered_effort`` は推論の
     量を下げて送り直したか、``reasoning_effort`` は最後に送った推論の量（空は送っていない）。
     """
     usage = response_usage(response)
@@ -721,15 +723,10 @@ def _incomplete_error(
         f"・推論の量={reasoning_effort or '送らない'}"
     )
     if exc.reason == INCOMPLETE_OUTPUT_REASON:
-        retry = _incomplete_retry_phrase(widened=retried, lowered_effort=lowered_effort)
-        # 推論の量は、まだ下げられる（medium 以上）ときだけ直し方に入れる。
-        effort = "「推論の量」を下げるか、" if lower_reasoning_effort(reasoning_effort) else ""
-        user_message = (
-            f"回答が長くなり、モデル「{provider.model}」の出力の上限に達して途中で止まりました"
-            f"{'（' + retry + '終わりませんでした）' if retry else ''}。"
-            "推論のあるモデルは推論の token も出力の上限に数えます。"
-            "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくするか、"
-            f"{effort}質問を分けてやり直してください。"
+        user_message = output_limit_message(
+            model=provider.model,
+            attempts=attempts if attempts is not None else 1 + int(retried) + int(lowered_effort),
+            capacity=_model_output_limit(provider),
         )
     elif exc.reason == INCOMPLETE_CONTENT_FILTER_REASON:
         user_message = (
@@ -850,14 +847,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
 ) -> StructuredOutputT:
     """Responses API を呼び、構造化 output model を返します。
 
-    推論型モデルは推論 token が出力予算を消費するため、同じ入力でも実行ごとに `max_output_tokens` へ
-    届くかどうかが変わる。上限が理由の未完了だけ予算を 2 倍にして 1 回だけ送り直す (#987)。最初の上限は回答の
-    上限とモデルの出力の上限の小さい方（`llm_output_token_limit`）、送り直しの 2 倍もモデルの出力の上限で抑え、
-    広げられなければ広げない（#1719）。広げても（広げられなくても）上限で未完了なら、推論の量を 1 段下げて
-    （high → medium → low。`lower_reasoning_effort`）もう 1 回だけ送り直す（#2023。業界の型: まず予算を広げ、
-    だめなら推論を減らす）。別の理由の未完了（content_filter など）は送り直さない。未完了のたびに理由・上限・
-    推論の量・使った token を WARNING で残し（`llm_incomplete_response`）、送り直しても終わらないときは、利用者
-    向けの文（直し方）と「詳細」の文を分けた `IncompleteResponse` を送出する。
+    オンライン生成は platform の共有方針で16384→32768→65536の3段階を使い、登録容量を超えない。
+    同じ入力・推論量を保ち、max_output_tokensによる未完了だけを拡大する。固定した小予算のbind_output_capと
+    画像の取り込み（PictureDescriptionOutput）は従来の予算と再試行を保つ。各試行のusageと理由を記録し、
+    終わらないときは利用者向けの文と診断の詳細を分けたIncompleteResponseにする。
 
     この送り直しは 1 回の呼び出しの中で完結する。`pr_backend_core.bounded_calls` は出力の打ち切り
     （``ErrorKind.TRUNCATED``）を入力を小さくできる呼び出し（``adaptive``）だけで再試行するので、同じ要求を
@@ -885,8 +878,11 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     budget = llm_output_token_limit(settings, provider)
     # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
     cap = _output_cap.get()
+    online_policy = cap is None and text_format is not PictureDescriptionOutput
     if cap is not None:
         budget = min(budget, cap)
+    elif online_policy:
+        budget = initial_output_budget(_model_output_limit(provider))
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。出力の上限で未完了の送り直しで
     # 1 段下げることがある(#2023)。
     effort = str(provider.reasoning_effort or "")
@@ -1044,22 +1040,32 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     raise DeadlineExceeded(
                         f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
                     ) from exc
-                # 出力の上限で未完了なら、まず上限を広げて 1 回、それでも未完了（広げられないときを含む）なら推論の量を
-                # 1 段下げて 1 回だけ送り直す（#987・#1719・#2023）。ほかの理由（content_filter など）は送り直さない。
+                # オンラインの出力上限だけを次の段階へ広げる。固定予算・取り込みは既存の契約を保つ。
                 next_action = "fail"
                 wider = None
                 lower = ""
                 if exc.reason == INCOMPLETE_OUTPUT_REASON:
-                    wider = None if widened or cap is not None else _retry_output_budget(send_budget, provider)
-                    lower = "" if lowered or wider is not None else lower_reasoning_effort(effort)
+                    if online_policy:
+                        wider = _retry_output_budget(send_budget, provider)
+                    elif cap is None and not widened:
+                        legacy = min(send_budget * INCOMPLETE_OUTPUT_BUDGET_FACTOR, _model_output_limit(provider))
+                        wider = legacy if legacy > send_budget else None
+                    lower = lower_reasoning_effort(effort) if not online_policy and not lowered and wider is None else ""
                     next_action = "widen" if wider is not None else ("lower_effort" if lower else "fail")
-                    if next_action != "fail" and not retry_budget.take():
+                    if next_action != "fail" and not retry_budget.take(output_limit=online_policy):
                         next_action = "fail"
                 observation_attributes(observation, _retry_scheduled(next_action != "fail"))
                 _log_incomplete(exc, response, provider, max_output_tokens=send_budget, reasoning_effort=effort, next_action=next_action)
                 if next_action == "fail":
                     raise _incomplete_error(
-                        exc, response, provider, send_budget, retried=widened, lowered_effort=lowered, reasoning_effort=effort
+                        exc,
+                        response,
+                        provider,
+                        send_budget,
+                        retried=widened,
+                        lowered_effort=lowered,
+                        reasoning_effort=effort,
+                        attempts=retry_budget.used + 1,
                     ) from exc
                 if wider is not None:
                     budget, widened = wider, True

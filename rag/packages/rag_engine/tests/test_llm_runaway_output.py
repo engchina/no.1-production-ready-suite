@@ -228,7 +228,7 @@ class NonStreamingRunawayTest(unittest.TestCase):
         client = _NonStreamingClient([_runaway_incomplete('{"text": "' + "、同じ説明" * 2000), _completed()])
         self.assertEqual(self.call(client).text, "ok")
         self.assertEqual(self.usage["incomplete_reasons"], {"runaway_repetition": 1})
-        self.assertEqual(client.budgets, [8192, 8192])
+        self.assertEqual(client.budgets, [16384, 16384])
 
     def test_resends_are_bounded_and_failure_details_keep_the_cutoff_reason(self):
         from rag_engine.resources.structured_failures import structured_failure_details

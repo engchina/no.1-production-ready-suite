@@ -859,6 +859,8 @@ def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
             f"{scope_changed.message_ja}（{scope_changed.code}）",
         )
     enterprise_error = find_enterprise_ai_error(exc)
+    if enterprise_error is not None and enterprise_error.incomplete is not None:
+        return enterprise_error.user_message or str(enterprise_error), _job_failure_detail(exc)
     if enterprise_error is not None and enterprise_error.configuration_error:
         # OCI Enterprise AI の設定の誤り（401 / 403 / 404 / モデルが無い 400）は、時間をおいても
         # 直らないので「もう一度」と案内せず、どのモデル・接続の呼び出しが失敗したかと確かめる所を
@@ -892,6 +894,8 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     # OCI Enterprise AI の HTTP の失敗は種類の分かるコード
     # （ENTERPRISE_AI_AUTHORIZATION_FAILED など。3 製品で共通の対応表。#1684）。
     enterprise_error = find_enterprise_ai_error(exc)
+    if enterprise_error is not None and enterprise_error.incomplete is not None:
+        return "ENTERPRISE_AI_OUTPUT_INCOMPLETE"
     if enterprise_error is not None and enterprise_error.http_failure is not None:
         return enterprise_error.http_failure.error_code
     return fallback
