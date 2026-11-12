@@ -5,6 +5,11 @@ from __future__ import annotations
 OUTPUT_TOKEN_TIERS = (16_384, 32_768, 65_536)
 
 
+def maximum_online_output_budget(capacity: int) -> int:
+    """オンラインで実際に要求し得る上限だけを入力のために予約する。"""
+    return max(0, min(capacity, max(OUTPUT_TOKEN_TIERS)))
+
+
 def initial_output_budget(capacity: int, *, room: int | None = None) -> int:
     """初回だけ容量・入力余量で小さくできる。登録値を引き上げない。"""
     limit = min(capacity, room if room is not None else capacity)

@@ -1,6 +1,11 @@
 """出力予算の三档と、登録容量・入力余量の硬い境界。"""
 
-from pr_backend_core.output_budget import initial_output_budget, next_output_budget
+from pr_backend_core.output_budget import (
+    OUTPUT_TOKEN_TIERS,
+    initial_output_budget,
+    maximum_online_output_budget,
+    next_output_budget,
+)
 
 
 def test_only_three_tiers_are_sent() -> None:
@@ -24,3 +29,10 @@ def test_no_context_room_does_not_invent_one_output_token() -> None:
     for room in (0, -10):
         with pytest.raises(ValueError):
             initial_output_budget(65536, room=room)
+
+
+def test_reserve_uses_largest_actual_online_budget_within_registered_capacity() -> None:
+    assert maximum_online_output_budget(500_000) == max(OUTPUT_TOKEN_TIERS)
+    assert maximum_online_output_budget(8_192) == 8_192
+    assert maximum_online_output_budget(0) == 0
+    assert maximum_online_output_budget(-1) == 0

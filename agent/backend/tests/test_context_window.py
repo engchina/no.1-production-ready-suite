@@ -699,3 +699,15 @@ def test_only_trusted_read_only_tools_are_offered_for_rerun() -> None:
         note = json.loads(result.items[2]["output"])[COMPACTION_KEY]
         assert "呼び直して" not in note["next_step"], name
     assert executed == []
+
+
+def test_large_registered_output_reserves_only_largest_online_request() -> None:
+    from pr_backend_core.output_budget import OUTPUT_TOKEN_TIERS
+
+    budget = _budget(500_000, 500_000, 0.05)
+    assert budget.output_reserve_tokens == max(OUTPUT_TOKEN_TIERS)
+    assert budget.input_tokens() > 0
+    assert budget.input_tokens() + budget.output_reserve_tokens + budget.margin_tokens == 500_000
+    # 小さい context では従来どおり半分を予約し、登録容量が小さければそちらを使う。
+    assert _budget(8_192, 500_000).output_reserve_tokens == 4_096
+    assert _budget(500_000, 8_192).output_reserve_tokens == 8_192

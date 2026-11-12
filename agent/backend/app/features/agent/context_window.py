@@ -7,7 +7,7 @@ context editing が古いツールの結果から消す、LangChain の `trim_me
 入力を見積もり、予算を超えるときだけ古いツールの結果から順に縮める。
 
 - **予算**: 登録モデルの入力の上限（`max_input_tokens`。prompt と応答の合計）から、出力の上限
-  （`max_output_tokens`。入力の上限の半分までを引く。小さいモデルで予算が 0 にならないように）と
+  （登録容量とオンライン生成の最大要求の小さい方。入力の上限の半分までを引く）と
   安全の余白（入力の上限 × `AGENT_CONTEXT_SAFETY_MARGIN_RATIO`）を引いた token の数。指示と
   ツールの定義は縮めず、残りに会話・ツールの結果を収める。
 - **見積もり**: platform の `estimate_input_tokens`（3 製品で共通の 1 つ）に
@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
+from pr_backend_core.output_budget import maximum_online_output_budget
 from pr_system_settings.model import estimate_input_tokens
 
 from app.features.agent.tool_media import (
@@ -129,7 +130,13 @@ class ContextBudget:
 
     @property
     def output_reserve_tokens(self) -> int:
-        return max(0, min(self.limits.max_output_tokens, self.limits.max_input_tokens // 2))
+        return max(
+            0,
+            min(
+                maximum_online_output_budget(self.limits.max_output_tokens),
+                self.limits.max_input_tokens // 2,
+            ),
+        )
 
     @property
     def margin_tokens(self) -> int:
