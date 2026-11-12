@@ -668,11 +668,7 @@ def _model_output_limit(provider: LlmProviderSettings) -> int:
 
 
 def _retry_output_budget(budget: int, provider: LlmProviderSettings) -> int | None:
-    """出力の上限で未完了になった呼び出しを送り直すときの上限（#987・#1719）。
-
-    今の上限の 2 倍をモデルの出力の上限で抑える。今の上限より広げられなければ None（同じ上限で送り直しても
-    終わらないので、送り直さない）。
-    """
+    """オンライン生成の次の出力段階。中間の値や登録容量への切り上げは作らない。"""
     return next_output_budget(budget, _model_output_limit(provider))
 
 
@@ -686,17 +682,6 @@ INCOMPLETE_CONTENT_FILTER_REASON = "content_filter"
 def lower_reasoning_effort(effort: str) -> str:
     """推論の量を 1 段下げた、送る値（#2023）。下げられない（low・空）ときは ""。"""
     return REASONING_EFFORT_STEP_DOWN.get((effort or "").strip().casefold(), "")
-
-
-def _incomplete_retry_phrase(*, widened: bool, lowered_effort: bool) -> str:
-    """試した送り直しの句（platform の `incomplete_retry_phrase` と同じ文）。"""
-    if widened and lowered_effort:
-        return "出力の上限を広げ、推論の量を下げて送り直しても"
-    if widened:
-        return "上限を広げて送り直しても"
-    if lowered_effort:
-        return "推論の量を下げて送り直しても"
-    return ""
 
 
 def _incomplete_error(

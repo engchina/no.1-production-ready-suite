@@ -1,8 +1,7 @@
 """出力の上限で未完了になった応答の送り直しの記録（#1527）を、OpenAI の client を差し替えて確かめる。
 
-上限（`answer_max_tokens` とモデルの出力の上限の小さい方。#1719）で未完了なら上限を 2 倍にして 1 回だけ送り直す
-（#987）。2 倍はモデルの出力の上限で抑え、広げられなければ送り直さない（#1719）。その回数と未完了の理由を、
-工程の記録（execution_steps の llm_usage）と log（`llm_call_usage`）に残す。
+オンラインの未完了は登録容量内の3段階で扱い、固定予算と取り込みは旧契約を保つ。
+試行ごとのusageと未完了の理由を記録する。
 """
 
 import unittest
@@ -215,7 +214,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertIn("出力の上限=65536 tokens", str(raised.exception))
 
     def test_reasoning_effort_is_kept_across_three_tiers(self):
-        """上限を広げても未完了なら、推論の量を 1 段下げて（medium → low）もう 1 回だけ送り直す（#2023）。"""
+        """出力の上限だけを3段階で増やし、推論量と入力は変えない。"""
         client = _Client([_incomplete("max_output_tokens"), _incomplete("max_output_tokens"), _completed()])
         usage, records = self.call(client, provider=MEDIUM_PROVIDER, retries=2)
         self.assertEqual(client.budgets, [16384, 32768, 65536])
@@ -229,7 +228,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         )
 
     def test_reasoning_effort_is_kept_when_capacity_is_insufficient(self):
-        """モデルの出力の上限より広げられないときは、すぐ推論の量を下げて送り直す。"""
+        """容量不足では推論量を変えた追加要求を送らない。"""
         client = _Client([_incomplete("max_output_tokens"), _completed()])
         provider = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="high", max_output_tokens=1000)
         self.call(client, provider=provider)
@@ -252,7 +251,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertIn("3回の試行", error.user_message)
         self.assertIn("登録された出力容量", error.user_message)
         self.assertIn("質問を分け", error.user_message)
-        # 最後に送った low より下げられないので、直し方に推論の量を入れない。技術的な値は「詳細」の文だけ。
+        # 推論量の変更を勧めず、診断のtoken内訳は詳細へ分ける。
         self.assertNotIn("「推論の量」を下げる", error.user_message)
         self.assertNotIn("tokens（うち推論", error.user_message)
         self.assertIn("出力の上限=65536 tokens", error.detail)

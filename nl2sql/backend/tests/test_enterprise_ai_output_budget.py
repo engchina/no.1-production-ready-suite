@@ -266,17 +266,14 @@ def test_annotation_and_domain_are_split_too(monkeypatch: pytest.MonkeyPatch) ->
 def test_failure_shows_reason_limit_and_usage_without_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """広げられない上限で未完了なら推論の量を下げて 1 回だけ送り直す。
-
-    それでも未完了なら fallback にし、理由・上限・使った token を詳細に出す。
-    """
+    """次の段階を送れない容量なら終了し、理由・上限・usageを失敗の詳細に残す。"""
     model = _ReasoningModel(tokens_per_target=200)
     _mock_http(monkeypatch, model)
     service = _service(_settings(max_output_tokens=1_200))
 
     result = service.generate_comment_sql(_request(service, 5))
 
-    # モデルの上限（1200）より広げられないので、推論の量を下げて（medium → low）送り直す（#2023）。
+    # 同じ上限や推論量の変更での追加要求は送らない。
     assert [payload["max_output_tokens"] for payload in model.payloads] == [1_200]
     assert [payload["reasoning"] for payload in model.payloads] == [{"effort": "medium"}]
     assert result.source == "deterministic"
@@ -333,7 +330,7 @@ def test_client_error_message_after_retry_has_reason_limit_and_usage(
     message = str(raised.value)
     assert "3回の試行" in message
     assert "出力の上限=65536 tokens" in message
-    # 最後に送った low より下げられないので、直し方に推論の量を入れない。
+    # オンラインの再試行では推論の量を変更しない。
     assert "「推論の量」を下げる" not in message
     assert _API_KEY not in message
     assert [payload["max_output_tokens"] for payload in model.payloads] == [
@@ -489,3 +486,12 @@ def test_output_incomplete_uses_a_shared_error_code_and_friendly_message() -> No
     )
     assert _job_failure_error_code(error, fallback="fallback") == "ENTERPRISE_AI_OUTPUT_INCOMPLETE"
     assert _job_failure_presentation(error)[0] == error.user_message
+
+
+@pytest.mark.parametrize("code", ["deadline_exceeded", "context_budget_exceeded"])
+def test_budget_exhaustion_keeps_its_friendly_reason(code: str) -> None:
+    from app.features.nl2sql.service import _job_failure_error_code, _job_failure_presentation
+
+    error = EnterpriseAiDirectError("対象を絞ってやり直してください。", code=code)
+    assert _job_failure_error_code(error, fallback="fallback") == "ENTERPRISE_AI_" + code.upper()
+    assert _job_failure_presentation(error)[0] == str(error)

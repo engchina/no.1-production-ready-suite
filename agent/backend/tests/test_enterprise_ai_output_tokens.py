@@ -116,7 +116,7 @@ def test_completed_response_is_returned() -> None:
 
 
 class _Sequence(_Inner):
-    """順に応答を返す（推論の量を下げた送り直しの確認。#2023）。"""
+    """予算の各段階へ順に応答・streamを返す。"""
 
     def __init__(self, *responses: Any) -> None:
         super().__init__(responses[0])
@@ -134,9 +134,9 @@ class _Sequence(_Inner):
         (None, "max_output_tokens"),
         ({"effort": "high"}, "content_filter"),
     ],
-    ids=["low-is-the-floor", "not-sent", "content-filter"],
+    ids=["small-capacity-low", "small-capacity-default", "content-filter"],
 )
-def test_incomplete_is_not_resent_when_effort_cannot_drop(
+def test_non_output_failures_and_capacity_limits_are_not_retried(
     reasoning: dict[str, str] | None, reason: str
 ) -> None:
     response = _incomplete()
