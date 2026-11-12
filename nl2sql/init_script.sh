@@ -469,6 +469,20 @@ EOF
 }
 
 configure_systemd() {
+  local unit
+  local worker_units=(
+    production-ready-nl2sql-schema-refresh-worker.service
+    production-ready-nl2sql-synthetic-worker.service
+    production-ready-nl2sql-quality-evaluation-worker.service
+    production-ready-nl2sql-ontology-worker.service
+  )
+  local -A new_worker_units=()
+  # 新規配備だけを既定で起動し、既存 unit の enabled / disabled は運用上の意図として保つ。
+  for unit in "${worker_units[@]}"; do
+    if [ ! -e "${SYSTEMD_UNIT_DIR}/${unit}" ] && [ ! -L "${SYSTEMD_UNIT_DIR}/${unit}" ]; then
+      new_worker_units["${unit}"]=true
+    fi
+  done
   log "Writing systemd units."
   write_systemd_unit \
     "${SYSTEMD_UNIT_DIR}/production-ready-nl2sql-backend.service" \
@@ -499,17 +513,20 @@ configure_systemd() {
   systemctl enable production-ready-nl2sql-backend.service
   systemctl restart production-ready-nl2sql-backend.service
   if [ "${DATABASE_INITIALIZATION_READY}" = "true" ]; then
-    systemctl enable --now \
-      production-ready-nl2sql-schema-refresh-worker.service \
-      production-ready-nl2sql-synthetic-worker.service \
-      production-ready-nl2sql-quality-evaluation-worker.service \
-      production-ready-nl2sql-ontology-worker.service
+    for unit in "${worker_units[@]}"; do
+      if [ "${new_worker_units[${unit}]:-false}" = "true" ]; then
+        systemctl enable "${unit}"
+        systemctl restart "${unit}"
+      elif systemctl is-enabled --quiet "${unit}"; then
+        # enable --now は active なプロセスを置き換えないため、更新時には明示的に再起動する。
+        systemctl restart "${unit}"
+      else
+        log "Keeping ${unit} stopped (last operation: stop)."
+        systemctl stop "${unit}" || true
+      fi
+    done
   else
-    systemctl disable --now \
-      production-ready-nl2sql-schema-refresh-worker.service \
-      production-ready-nl2sql-synthetic-worker.service \
-      production-ready-nl2sql-quality-evaluation-worker.service \
-      production-ready-nl2sql-ontology-worker.service || true
+    systemctl disable --now "${worker_units[@]}" || true
   fi
 }
 
