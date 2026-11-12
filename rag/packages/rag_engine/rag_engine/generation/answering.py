@@ -2684,7 +2684,9 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
         if mode == "oracle_hybrid_index":
             step.field(f"検索文 {index} の全文検索入力", trace.get("native_search_text", ""))
             step.field(f"検索文 {index} の分割方法", "共通の検索語処理＋Oracle Hybrid Vector Index")
-            step.add("全文式は共通の検索語処理で作成します（Sudachi、利用できない場合は文字種分割）。Oracle内部の展開結果はAPIから返されません。")
+            step.add(
+                "全文式は共通の検索語処理で作成します（Sudachi、利用できない場合は文字種分割）。Oracle内部の展開結果はAPIから返されません。"
+            )
             continue
         method = "Sudachi＋文字種による補完" if mode == "sudachi+script" else "文字種による分割"
         if reason := trace.get("fallback_reason"):

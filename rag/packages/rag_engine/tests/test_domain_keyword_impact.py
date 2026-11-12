@@ -13,9 +13,9 @@ from rag_engine.evaluation.domain_keyword_eval import run_keyword_comparison, sc
 from rag_engine.evaluation.rag_eval import RagEvalCase
 from rag_engine.generation.answering import (
     AnswerContext,
+    _text_search_details,
     build_adb_hybrid_answer_context,
     build_question_text_search_info,
-    _text_search_details,
 )
 from rag_engine.knowledge.domain_keywords import save_domain_keywords
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query_with_trace
