@@ -28,6 +28,22 @@ class _Embedding:
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_document_scope_index_is_visible_and_document_first() -> None:
+    """tenant の指定なしでも文書を先頭列で検索できる索引を配備する（#4955）。"""
+    oracle = OracleClient()
+    rows = await oracle._fetch_all(
+        "SELECT i.status, i.visibility, c.column_name, c.column_position "
+        "FROM user_indexes i JOIN user_ind_columns c ON c.index_name = i.index_name "
+        "WHERE i.index_name = 'RAG_CHUNKS_DOCUMENT_IDX' ORDER BY c.column_position"
+    )
+    assert [(row["column_name"], row["column_position"]) for row in rows] == [
+        ("DOCUMENT_ID", 1),
+        ("CHUNK_INDEX", 2),
+    ]
+    assert all(row["status"] == "VALID" and row["visibility"] == "VISIBLE" for row in rows)
+
+
+@pytest.mark.usefixtures("oracle_db")
 async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
     from app.rag.vector_index_adapter import resolve_vector_index_adapter
 

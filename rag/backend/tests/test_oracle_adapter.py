@@ -3131,6 +3131,8 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
         "PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)')"
         in ddl
     )
+    assert "CREATE INDEX rag_chunks_document_idx" in ddl
+    assert "ON rag_chunks (document_id, chunk_index)" in ddl
     assert "rag_chunks_tenant_document_idx" in ddl
     assert "ON rag_chunks (tenant_id_hash, document_id, chunk_index)" in ddl
     assert "INDEXTYPE IS CTXSYS.CONTEXT" in ddl

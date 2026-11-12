@@ -698,6 +698,9 @@ CREATE INDEX rag_chunks_text_idx
 CREATE INDEX rag_chunks_tenant_document_idx
     ON rag_chunks (tenant_id_hash, document_id, chunk_index);
 
+CREATE INDEX rag_chunks_document_idx
+    ON rag_chunks (document_id, chunk_index);
+
 CREATE INDEX rag_chunks_chunk_set_idx
     ON rag_chunks (chunk_set_id, chunk_index);
 
