@@ -751,6 +751,12 @@
             "title": "Question",
             "type": "string"
           },
+          "use_glossary": {
+            "default": true,
+            "description": "SQL 生成に、選んだプロファイルの用語集を使います。不要なら false。",
+            "title": "Use Glossary",
+            "type": "boolean"
+          },
           "profile_id": {
             "anyOf": [
               {

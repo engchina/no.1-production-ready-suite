@@ -281,6 +281,10 @@ class RequirementAnswerInput(_Input):
 
 class QueryInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
+    use_glossary: bool = Field(
+        default=True,
+        description=("SQL 生成に、選んだプロファイルの用語集を使います。不要なら false。"),
+    )
 
     _validate_question = field_validator("question")(_require_question)
     profile_id: str | None = Field(
@@ -1136,6 +1140,7 @@ def build_mcp_server(request: Request) -> McpServer:
                         question=arguments.question,
                         profile_id=profile_id,
                         row_limit=arguments.row_limit,
+                        use_glossary=arguments.use_glossary,
                     ),
                     RequirementOutput(
                         session_id="", status="skipped", message=_REQUIREMENT_SKIPPED_MESSAGE
@@ -1162,6 +1167,7 @@ def build_mcp_server(request: Request) -> McpServer:
                             question=arguments.question,
                             profile_id=profile_id,
                             row_limit=arguments.row_limit,
+                            use_glossary=arguments.use_glossary,
                         ),
                         RequirementOutput(
                             session_id="",
@@ -1211,6 +1217,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     question=data.session.original_question,
                     profile_id=profile_id,
                     row_limit=arguments.row_limit,
+                    use_glossary=arguments.use_glossary,
                     requirement_session_id=data.session.id,
                 ),
                 getattr(request.state, "principal", None),
