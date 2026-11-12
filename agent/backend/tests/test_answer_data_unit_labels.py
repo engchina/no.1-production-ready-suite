@@ -9,6 +9,7 @@ import pytest
 from test_answer_evidence import _step
 
 from app.features.agent.answer_data import data_index, model_data_references, register_data_result
+from app.features.agent.answer_data_tables import BoundCell, unit_header
 
 
 @pytest.mark.parametrize(
@@ -73,3 +74,8 @@ def test_unit_label_keeps_source_reference_text_and_legacy_untyped_values() -> N
     assert data_index([legacy_step]).render(legacy["table"]) == (
         "| SOURCE (%) |\n| --- |\n| [[table:T9]] |"
     )
+
+
+def test_empty_unit_keeps_legacy_bound_cell_label() -> None:
+    cell = BoundCell("source", 0, "VALUE", 12, "")
+    assert unit_header(cell.column, cell.unit) == "VALUE"

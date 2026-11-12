@@ -26,7 +26,7 @@ class BoundCell:
 
 def unit_header(column: str, unit: str | None) -> str:
     """同じ単位の括弧接尾辞がある表示名には重ねて付けない。"""
-    if unit is None or column.endswith((f"({unit})", f"（{unit}）")):
+    if not unit or column.endswith((f"({unit})", f"（{unit}）")):
         return column
     return f"{column} ({unit})"
 
