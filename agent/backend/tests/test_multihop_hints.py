@@ -46,6 +46,7 @@ from app.features.agent.skills import (
     SkillMcpRequirement,
     skill_registry,
 )
+from app.features.agent.source_handles import decode_arguments
 from app.features.agent.support_task import (
     ADJUSTED_LIMITS_HINT,
     MAX_RECORD_CODES,
@@ -250,7 +251,12 @@ def test_evidence_with_a_reference_gets_where_to_read_and_the_remaining_budget(
 
     limit = int(get_settings().agent_max_rag_calls_per_run)
     seen = _tool_output(model, 1, "call-1")
-    assert seen["references"] == [
+    assert all(item["document_id"].startswith("doc://") for item in seen["references"])
+    references = [
+        {**item, **decode_arguments(run.metadata, "rag", {"document_id": item["document_id"]})}
+        for item in seen["references"]
+    ]
+    assert references == [
         {
             "document_id": "doc-org",
             "file_name": "組織規程.pdf",
@@ -1248,7 +1254,13 @@ def test_named_old_year_gets_a_superseded_search_hint(
     )
     run = _run(VERSION_GOAL)
 
-    assert _tool_output(model, 1, "call-1")["superseded_versions"] == {
+    superseded = _tool_output(model, 1, "call-1")["superseded_versions"]
+    assert all(item["document_id"].startswith("doc://") for item in superseded["versions"])
+    decoded_versions = [
+        {**item, **decode_arguments(run.metadata, "rag", {"document_id": item["document_id"]})}
+        for item in superseded["versions"]
+    ]
+    assert {**superseded, "versions": decoded_versions} == {
         "versions": [{**_PLAN_2025, "matched": ["2025"]}],
         "next_step": SUPERSEDED_VERSION_HINT,
     }
@@ -1417,7 +1429,19 @@ def test_run_reads_the_section_of_the_evidence_when_the_question_asks_for_steps(
     limit = int(get_settings().agent_max_rag_calls_per_run)
     evidence = _tool_output(model, 1, "call-1")
     assert evidence["section_reads"]["next_step"] == SECTION_READ_HINT
-    assert [item["section_id"] for item in evidence["section_reads"]["sections"]] == ["sec-5"]
+    sections = evidence["section_reads"]["sections"]
+    assert all(item["section_id"].startswith("section://") for item in sections)
+    assert [
+        decode_arguments(
+            run.metadata,
+            "rag",
+            {
+                "document_id": item["document_id"],
+                "section_id": item["section_id"],
+            },
+        )["section_id"]
+        for item in sections
+    ] == ["sec-5"]
     read = _tool_output(model, 2, "call-2")
     assert read["section_reads"]["next_step"] == SECTION_PARENT_HINT
     # 章節の読み取りは RAG の検索の回数に数えない。
