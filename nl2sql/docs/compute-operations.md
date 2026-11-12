@@ -306,6 +306,10 @@ The cloud-init bootstrap:
 10. Leaves Nginx to `platform/deploy/suite-init.sh`, which serves the SPA at
     `/nl2sql/` and proxies `/nl2sql/api/` to the backend (#1316).
 
+再配備では、既存の外部 worker は enabled のものだけを明示的に再起動し、更新後のコードを読み込みます。
+disabled の worker は停止を保ち、新規の worker は DB の初期化が成功した場合にだけ有効化して起動します。
+DB の初期化に失敗した場合は、既存・新規の worker を停止・無効化します。
+
 This Resource Manager deployment is a direct systemd + Nginx installation.
 Docker is not installed or required on the Compute instance.
 
