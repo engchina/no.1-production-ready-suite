@@ -15,6 +15,7 @@ from pr_backend_core.observability.model_usage import RunModelUsage, parse_run_u
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .ontology_definitions import BusinessDefinition, ConceptCoverage, DefinitionPhase
+from .query_scope import RelatedRecordScope
 
 
 def utc_now() -> datetime:
@@ -641,6 +642,7 @@ class SqlRequirementDraft(OntologyContract):
     version: int = Field(default=1, ge=1)
     question_original: str = Field(min_length=1)
     clarified_question_ja: str = ""
+    related_scopes: list[RelatedRecordScope] = Field(default_factory=list)
     items: list[RequirementItem] = Field(default_factory=list)
     unanswerable_reason_ja: str = ""
     warnings_ja: list[str] = Field(default_factory=list)

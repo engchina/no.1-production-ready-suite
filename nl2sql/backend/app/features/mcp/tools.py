@@ -74,6 +74,7 @@ from app.features.nl2sql.models import (
     JobStatus,
     Nl2SqlProfile,
     ProfileRecommendationRequest,
+    SqlRequirementSpec,
 )
 from app.features.nl2sql.ontology_models import (
     ClarificationMode,
@@ -532,7 +533,8 @@ class Nl2SqlJobResult(VersionedOutput):
         default=None,
         description=(
             "失敗の分類。status が error のときは必ず入る。Oracle のエラーなら ORA-xxxxx / "
-            "DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・SQL_EXECUTION_FAILED・"
+            "DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・"
+            "SQL_SCOPE_MISMATCH（関連先の範囲が要件と一致しない）・SQL_EXECUTION_FAILED・"
             "SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED・"
             "NL2SQL_PROFILE_REVALIDATION_REQUIRED（公開の後に業務プロファイルか Schema が変わり、"
             "管理者が業務定義を再検証して公開するまで再試行しても直らない）、"
@@ -1161,6 +1163,16 @@ def build_mcp_server(request: Request) -> McpServer:
                             question=arguments.question,
                             profile_id=profile_id,
                             row_limit=arguments.row_limit,
+                            # 確認を省いても、検証済みの起点・結果集合の区別は捨てない。
+                            sql_requirement=SqlRequirementSpec(
+                                session_id="",
+                                profile_id=profile_id,
+                                clarified_question=arguments.question,
+                                related_scopes=data.session.requirement.related_scopes,
+                            )
+                            if data.session.requirement is not None
+                            and data.session.requirement.related_scopes
+                            else None,
                         ),
                         RequirementOutput(
                             session_id="",

@@ -35,6 +35,7 @@ from pydantic import (
 
 from .object_identity import qualified_object_name
 from .ontology_models import OntologySqlGenerationContext
+from .query_scope import RelatedRecordScope
 
 _CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 _MAX_SQL_ROW_LIMIT = 100000
@@ -1625,6 +1626,7 @@ class SqlRequirementSpec(BaseModel):
     clarified_question: str
     tables: list[str] = Field(default_factory=list)
     joins: list[str] = Field(default_factory=list)
+    related_scopes: list[RelatedRecordScope] = Field(default_factory=list)
     items: list[SqlRequirementSpecItem] = Field(default_factory=list)
     unresolved_ja: list[str] = Field(default_factory=list)
     summary_ja: str = ""
@@ -1644,6 +1646,9 @@ class SqlRequirementSpec(BaseModel):
     def prompt_block(self) -> str:
         """直接の LLM の prompt に入れる「必ず守る条件」（物理名で書く）。"""
 
+        if not self.tables and not self.items and self.related_scopes:
+            # ほかの確認を省略した経路では、範囲の契約だけを生成の文脈へ渡す。
+            return ""
         lines = [
             "## 回答前の確認で利用者と確かめた SQL の要件（必ず守る条件）",
             f"- 使う表（FROM）: {'、'.join(self.tables)}（これ以外の表を使わない）",
@@ -1670,6 +1675,8 @@ class SqlRequirementSpec(BaseModel):
     def question_with_requirements(self, question: str) -> str:
         """Select AI / Select AI Agent に渡す、明確な質問の文（要件を短い条件で添える）。"""
 
+        if not self.tables and not self.items and self.related_scopes:
+            return question.strip()
         conditions = [f"使う表は {'、'.join(self.tables)} だけ"]
         if self.joins:
             conditions.append(f"結合の条件は {' / '.join(self.joins)}")

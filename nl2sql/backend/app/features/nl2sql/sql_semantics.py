@@ -33,7 +33,7 @@ from .ontology_models import (
     SqlWindowExpression,
     ValidationSeverity,
 )
-from .oracle_dialect import OracleConversion
+from .oracle_dialect import OracleConversion, has_grouping_suffix
 from .sql_lexing import prepare_oracle_query
 
 
@@ -424,6 +424,17 @@ def parse_oracle_sql(
 
     root = statements[0]
     assert root is not None  # nosec B101
+    if has_grouping_suffix(root):
+        return _blocker_analysis(
+            sql,
+            code="SQL_GROUPING_DIALECT_UNSUPPORTED",
+            message_ja=(
+                "GROUP BY の後置 ROLLUP/CUBE は Oracle 構文ではありません。"
+                "ROLLUP(...) / CUBE(...) を使用してください。"
+            ),
+            intent_version=intent_version,
+            ontology_revision_id=ontology_revision_id,
+        )
     if isinstance(root, exp.Subquery):
         root = root.this
     query_type = getattr(exp, "Query", None)
