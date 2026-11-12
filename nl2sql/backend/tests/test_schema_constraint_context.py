@@ -1,6 +1,7 @@
 """SQL 生成の制約メタデータは、現在可視の列だけに閉じる。"""
 
 import json
+from typing import Any, Literal
 
 import pytest
 
@@ -17,7 +18,12 @@ from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 
 
-def table(name, columns, constraints=None, owner="APP"):
+def table(
+    name: str,
+    columns: list[str],
+    constraints: list[SchemaConstraintDetail] | None = None,
+    owner: str = "APP",
+) -> SchemaTable:
     return SchemaTable(
         table_name=name,
         logical_name=name,
@@ -27,17 +33,19 @@ def table(name, columns, constraints=None, owner="APP"):
     )
 
 
-def constraint(kind, columns, **kwargs):
+def constraint(
+    kind: Literal["P", "U", "R", "C"], columns: list[str], **kwargs: Any
+) -> SchemaConstraintDetail:
     return SchemaConstraintDetail(
         constraint_name="SYNTHETIC", constraint_type=kind, table_name="B", columns=columns, **kwargs
     )
 
 
-def records(tables):
+def records(tables: list[SchemaTable]) -> list[dict[str, Any]]:
     return [json.loads(line[2:]) for line in schema_constraint_context(tables)[1:]]
 
 
-def fixture():
+def fixture() -> list[SchemaTable]:
     return [
         table("A", ["ID", "PART"], [constraint("P", ["ID", "PART"])]),
         table(
@@ -58,7 +66,7 @@ def fixture():
     ]
 
 
-def test_composite_key_order_and_distinct_same_named_ids():
+def test_composite_key_order_and_distinct_same_named_ids() -> None:
     result = records(fixture())
     fk = next(r for r in result if r["type"] == "foreign_key")
     assert fk["columns"] == ["A_ID", "A_PART"]
@@ -69,7 +77,7 @@ def test_composite_key_order_and_distinct_same_named_ids():
 
 
 @pytest.mark.parametrize("missing", ["target_table", "target_column", "local_column", "arity"])
-def test_foreign_key_is_not_partially_rendered_or_leaked(missing):
+def test_foreign_key_is_not_partially_rendered_or_leaked(missing: str) -> None:
     tables = fixture()
     if missing == "target_table":
         tables = tables[1:]
@@ -82,7 +90,7 @@ def test_foreign_key_is_not_partially_rendered_or_leaked(missing):
     assert not any(r["type"] == "foreign_key" for r in records(tables))
 
 
-def test_serializer_preserves_quoted_identifiers_and_status():
+def test_serializer_preserves_quoted_identifiers_and_status() -> None:
     a = table("Mixed A", ["Mixed Id"], owner="Mixed Owner")
     b = table(
         "Mixed B",
@@ -105,13 +113,13 @@ def test_serializer_preserves_quoted_identifiers_and_status():
     assert fk["status"] == "DISABLED"
 
 
-def test_no_legacy_constraint_text_or_check_expression_leaks():
+def test_no_legacy_constraint_text_or_check_expression_leaks() -> None:
     t = table("A", ["ID"], [constraint("C", ["ID"])])
     t.constraints = ["secret outside target"]
     assert schema_constraint_context([t]) == []
 
 
-def test_direct_context_filters_constraints_with_table_and_column_scope():
+def test_direct_context_filters_constraints_with_table_and_column_scope() -> None:
     service = Nl2SqlService(MemoryNl2SqlStore())
     profile = Nl2SqlProfile(id="synthetic", name="synthetic", allowed_tables=["APP.A", "APP.B"])
     catalog = SchemaCatalog(refreshed_at="2026-01-01T00:00:00Z", tables=fixture())
