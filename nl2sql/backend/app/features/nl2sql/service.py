@@ -6689,11 +6689,8 @@ class Nl2SqlService:
                 }
                 if missing_present or still_present:
                     raise SchemaRefreshFullRequired("schema_refresh_full_required")
-                changed_keys = {
-                    key
-                    for key, last_ddl_at in incoming_manifest.items()
-                    if key in target_keys and stored_manifest.get(key) != last_ddl_at
-                }
+                # 明示した対象はDDL時刻が同じでも注釈や投影を再取得する。
+                changed_keys = incoming_keys & target_keys
                 deleted_keys = {
                     key
                     for key in target_keys
@@ -6737,6 +6734,12 @@ class Nl2SqlService:
                     changed_catalog = self._oracle_adapter.fetch_catalog_objects(changed_keys)
                 else:
                     changed_catalog = self._build_default_catalog()
+                if job.mode == SchemaRefreshMode.TARGETED:
+                    fetched_keys = {
+                        (table.owner, table.table_name) for table in changed_catalog.tables
+                    }
+                    if not changed_keys <= fetched_keys:
+                        raise SchemaRefreshFullRequired("schema_refresh_full_required")
                 job = self._heartbeat_schema_refresh_job(repository, job)
                 changed_or_deleted_keys = changed_keys | deleted_keys
                 # key は辞書ビュー上の名前。大文字化すると `Mixed_Case` と `MIXED_CASE` が
