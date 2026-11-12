@@ -1113,7 +1113,7 @@ class OracleNl2SqlAdapter:
             "    c.table_name,\n"
             "    NVL(tc.comments, c.table_name) AS table_comment,\n"
             "    c.column_name,\n"
-            "    NVL(cc.comments, c.column_name) AS column_comment,\n"
+            "    cc.comments AS column_comment,\n"
             "    c.data_type,\n"
             "    c.nullable,\n"
             "    c.column_id,\n"
@@ -1173,6 +1173,7 @@ class OracleNl2SqlAdapter:
                     SchemaColumn(
                         column_name=column_name,
                         logical_name=column_comment,
+                        comment=_coerce_text(row[4]),
                         data_type=data_type,
                         nullable=nullable,
                     )
