@@ -82,6 +82,23 @@ def _float(value: object) -> float:
     return float(value) if isinstance(value, int | float) and value > 0 else 0.0
 
 
+_USAGE_FIELDS = ("requests", "input_tokens", "output_tokens", "total_tokens")
+
+
+def _usage_record(usage: object, *, failed: bool = False) -> dict[str, int]:
+    """取得した非負の整数だけを残し、欠測をゼロに置き換えない。"""
+    record: dict[str, int] = {"requests": 1} if failed else {}
+    for key in _USAGE_FIELDS:
+        if failed and key == "requests":
+            continue
+        value = usage.get(key) if isinstance(usage, Mapping) else getattr(usage, key, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            record[key] = value
+    if "total_tokens" not in record and {"input_tokens", "output_tokens"} <= record.keys():
+        record["total_tokens"] = record["input_tokens"] + record["output_tokens"]
+    return record
+
+
 @dataclass
 class RunBudget:
     """1 回の実行（開始・再開）のあいだ、Run 全体の予算を数える（前の実行の消費から続ける）。"""
@@ -93,6 +110,9 @@ class RunBudget:
     estimated_tokens: int = 0
     active_seconds_before: float = 0.0
     executions: int = 1
+    # SDK に返らなかった内部失敗の実測。SDK の累計へ混ぜず、表示時だけ合計する。
+    failed_usage_records: list[dict[str, int]] = field(default_factory=list)
+    sdk_usage_record: dict[str, int] | None = None
     # 予算で実行しなかったツールの呼び出し（この Run の通し）。
     refused_tool_calls: int = 0
     exceeded: dict[str, Any] | None = None
@@ -114,8 +134,15 @@ class RunBudget:
         consumed = saved.get("consumed") if isinstance(saved, Mapping) else None
         consumed = consumed if isinstance(consumed, Mapping) else {}
         exceeded = saved.get("exceeded") if isinstance(saved, Mapping) else None
+        failed = saved.get("failed_model_usage") if isinstance(saved, Mapping) else None
+        records = failed.get("records") if isinstance(failed, Mapping) else None
+        sdk_usage = saved.get("sdk_model_usage") if isinstance(saved, Mapping) else None
         return cls(
             limits=limits,
+            failed_usage_records=[_usage_record(item, failed=True) for item in records]
+            if isinstance(records, list)
+            else [],
+            sdk_usage_record=_usage_record(sdk_usage) if isinstance(sdk_usage, Mapping) else None,
             model_calls=_int(consumed.get(SCOPE_MODEL_CALLS)),
             measured_tokens=_int(consumed.get("measured_tokens")),
             unmeasured_calls=_int(consumed.get("unmeasured_calls")),
@@ -181,17 +208,39 @@ class RunBudget:
 
     def settle(self, usage: object) -> None:
         """応答の usage で予約を精算する（usage が無ければ見積もりを消費にし、欠測を数える）。"""
-        total = getattr(usage, "total_tokens", 0) if usage is not None else 0
-        if not isinstance(total, int) or total <= 0:
-            total = _int(getattr(usage, "input_tokens", 0)) + _int(
-                getattr(usage, "output_tokens", 0)
-            )
+        record = _usage_record(usage)
+        total = record.get("total_tokens", 0)
+        if total <= 0:
+            total = record.get("input_tokens", 0) + record.get("output_tokens", 0)
         if total > 0:
             self.measured_tokens += total
         else:
             self.unmeasured_calls += 1
             self.estimated_tokens += self._reserved_tokens
         self._reserved_tokens = 0
+
+    def settle_failed(self, usage: object) -> None:
+        """内部失敗を予算に一度精算し、SDK 外の実測として実行に保持する。"""
+        self.settle(usage)
+        self.failed_usage_records.append(_usage_record(usage, failed=True))
+
+    def reported_usage(
+        self, sdk_usage: object = None, *, require_call_match: bool = True
+    ) -> dict[str, int] | None:
+        """SDK の累計成功と失敗 ledger の合計。欠測があれば精確な RunUsage を作らない。"""
+        if sdk_usage is not None:
+            self.sdk_usage_record = _usage_record(sdk_usage)
+        records = list(self.failed_usage_records)
+        if self.sdk_usage_record is not None:
+            records.append(self.sdk_usage_record)
+        if not records or self.unmeasured_calls:
+            return None
+        if any(any(key not in record for key in _USAGE_FIELDS) for record in records):
+            return None
+        combined = {key: sum(record[key] for record in records) for key in _USAGE_FIELDS}
+        if require_call_match and combined["requests"] != self.model_calls:
+            return None
+        return combined
 
     def reserve_tool_call(self) -> dict[str, Any] | None:
         """外部の操作（ツールの呼び出し）を始める前に確かめる。予算が尽きていれば実行しない。
@@ -239,6 +288,16 @@ class RunBudget:
             },
             # usage を返さなかった呼び出しがあれば、token は見積もりを含む（厳密ではない）。
             "tokens_exact": self.unmeasured_calls == 0,
+            "failed_model_usage": {
+                "records": [dict(record) for record in self.failed_usage_records],
+                "unmeasured_requests": sum(
+                    any(key not in record for key in _USAGE_FIELDS)
+                    for record in self.failed_usage_records
+                ),
+            },
+            "sdk_model_usage": dict(self.sdk_usage_record)
+            if self.sdk_usage_record is not None
+            else None,
         }
 
 

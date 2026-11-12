@@ -243,10 +243,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20
-    # モデルの応答が出力の上限で未完了（max_output_tokens）でも、使った出力が上限のこの割合未満なら
-    # 上限に達したはずがない呼び先の一時的な不具合として、同じ要求を 1 回だけ送り直す（#2355）。
-    # 0 以下は送り直さない。
-    agent_model_incomplete_retry_output_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     # モデルに渡す入力を、モデルの入力の上限に収める（#2383。`context_window`）。予算は登録モデルの
     # 入力の上限（max_input_tokens）から出力の上限と余白（入力の上限 × 割合）を引いた token の数で、
     # 超えるときは古いツールの結果から縮める。token の見積もりは platform の

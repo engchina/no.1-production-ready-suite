@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from app.features.agent.evaluation import (
@@ -33,6 +33,7 @@ from app.features.agent.evaluation import (
     paired_comparison,
 )
 from app.features.agent.evaluation_aids import EVALUATION_AIDS
+from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.runtime import RunEventType, RunState
 from app.features.agent.tools import MCP_TOOL_SEPARATOR
 
@@ -73,9 +74,19 @@ def _run_ids(job: EvaluationJob) -> list[str]:
     return ids
 
 
+def _model_calls(run: RunState) -> int | None:
+    """token の欠測と独立した実測回数。旧記録だけ SDK の利用量へ戻る。"""
+    budget = run.metadata.get(RUN_BUDGET_METADATA_KEY)
+    consumed = budget.get("consumed") if isinstance(budget, Mapping) else None
+    calls = consumed.get("model_calls") if isinstance(consumed, Mapping) else None
+    if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
+        return calls
+    return run.usage.requests if run.usage is not None else None
+
+
 def _metrics(job: EvaluationJob, get_run: Callable[[str], RunState | None]) -> dict[str, Any]:
     runs = [run for run_id in _run_ids(job) if (run := get_run(run_id)) is not None]
-    model_calls = [float(run.usage.requests) for run in runs if run.usage is not None]
+    model_calls = [float(calls) for run in runs if (calls := _model_calls(run)) is not None]
     tokens = [float(run.usage.total_tokens) for run in runs if run.usage is not None]
     tools = [[step.tool_call.name for step in run.steps if step.tool_call] for run in runs]
     activity: Counter[str] = Counter()

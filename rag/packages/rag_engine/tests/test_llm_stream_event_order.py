@@ -232,7 +232,7 @@ def test_truncated_output_is_treated_as_incomplete_not_invalid(send) -> None:
     bodies: list[dict[str, Any]] = []
     result = send([incomplete, [_created(), _completed(_message())]], bodies)
     assert result.text == "合成の本文"
-    assert [body["max_output_tokens"] for body in bodies] == [1000, 2000]
+    assert [body["max_output_tokens"] for body in bodies] == [16_384, 32_768]
 
 
 def test_refusal_in_completed_event_is_not_reported_as_missing_output(send) -> None:

@@ -30,7 +30,6 @@ import functools
 import json
 import logging
 import re
-import sys
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext, suppress
 from contextvars import ContextVar
@@ -89,6 +88,11 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
     record_span,
 )
+from pr_backend_core.output_budget import (
+    initial_output_budget,
+    next_output_budget,
+    output_limit_message,
+)
 from pr_system_settings.enterprise_ai_errors import (
     EnterpriseAiIncomplete,
     enterprise_ai_incomplete_from_response,
@@ -104,7 +108,7 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
-    lower_reasoning_effort,
+    estimate_input_tokens,
     reasoning_effort_to_send,
 )
 
@@ -451,7 +455,11 @@ def model_settings_for(target: ModelTarget) -> ModelSettings:
     - モデルの出力の上限を `max_output_tokens` で送る（#1719。SDK の `max_tokens`。送らないと
       endpoint の既定の上限になり、推論のあるモデルは推論だけで上限に達することがある）
     """
-    max_tokens = max(1, int(target.max_output_tokens))
+    max_tokens = (
+        initial_output_budget(target.max_output_tokens)
+        if target.sdk_max_retries != 0
+        else max(1, int(target.max_output_tokens))
+    )
     effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
         return ModelSettings(store=False, max_tokens=max_tokens)
@@ -564,33 +572,6 @@ def _request_reasoning_effort(request: Mapping[str, Any]) -> str:
     return str(_request_reasoning(request).get("effort") or "")
 
 
-def _with_lower_reasoning_effort(request: dict[str, Any]) -> dict[str, Any] | None:
-    """推論の量を 1 段下げた要求（#2023。high → medium → low）。下げられなければ None。"""
-    lower = lower_reasoning_effort(_request_reasoning_effort(request))
-    if not lower:
-        return None
-    return {**request, "reasoning": {**_request_reasoning(request), "effort": lower}}
-
-
-def _transient_incomplete(incomplete: EnterpriseAiIncomplete) -> bool:
-    """出力の上限で未完了でも、使った出力が上限よりはるかに少ない（上限に達したはずがない）か。
-
-    実環境（2026-10-18）で、上限 32768 tokens に対して 61 tokens の出力で `max_output_tokens` の
-    未完了が返った（#2355）。呼び先の一時的な不具合として、同じ要求で送り直す。割合は
-    `agent_model_incomplete_retry_output_ratio`（0 以下は送り直さない）。
-    """
-    ratio = float(get_settings().agent_model_incomplete_retry_output_ratio)
-    limit, used = incomplete.max_output_tokens, incomplete.output_tokens
-    return (
-        incomplete.output_limit_reached
-        and ratio > 0
-        and isinstance(limit, int)
-        and limit > 0
-        and isinstance(used, int)
-        and used < limit * ratio
-    )
-
-
 def _raise_for_incomplete(
     incomplete: EnterpriseAiIncomplete, request: Mapping[str, Any], *, lowered_effort: bool = False
 ) -> None:
@@ -598,8 +579,7 @@ def _raise_for_incomplete(
 
     SDK は未完了を `ModelBehaviorError`（型名だけが Run の失敗に残る）にするため、その前に
     platform の `enterprise_ai_incomplete_message` の文で失敗させる。送った上限はもうモデルの
-    出力の上限（`max_output_tokens`）なので、広げて送り直さない（推論の量を下げる送り直しは
-    `_OciResponses.create`）。
+    出力の上限の拡大は `_OciResponses.create` が扱い、それ以外の未完了は送り直さない。
     """
     raise BuiltinRuntimeError(
         MODEL_OUTPUT_INCOMPLETE_CODE,
@@ -652,6 +632,9 @@ class _ObservedStream:
                 )
             return event
         except StopAsyncIteration:
+            if not self._exhausted:
+                self._span.set_status("failed")
+                self._span.set_attributes({"error.type": "ProviderStreamIncomplete"})
             self._capture.flush(interrupted=not self._exhausted)
             self._exhausted = True
             self._span.finish()
@@ -719,128 +702,219 @@ def _model_input_attributes(request: Mapping[str, Any]) -> dict[str, int | str]:
         return {}
 
 
-class _ObservedResponseManager:
-    def __init__(self, inner: Any, request: Mapping[str, Any]) -> None:
-        self._inner = inner
-        self._request = request
-        self._scope = observed_span(
-            "gen_ai.chat",
-            kind="client",
-            attributes={
-                "gen_ai.operation.name": "chat",
-                **model_purpose_attributes(default="agent.choose_action"),
-                "gen_ai.provider.name": "oracle",
-                "gen_ai.request.model": str(request.get("model") or ""),
-                **_model_input_attributes(request),
-            },
-        )
+class _StreamingResponseManager:
+    """SDK の with_streaming_response 経路も同じ3段階・終端検証へ接続する。"""
+
+    def __init__(self, responses: Any, request: dict[str, Any]) -> None:
+        self._responses, self._request = responses, request
+        self._stream: Any = None
+        self.request_id: str | None = None
 
     async def __aenter__(self) -> Any:
-        span = self._scope.__enter__()
-        span.set_call_input(self._request)
-        try:
-            return await self._inner.__aenter__()
-        except BaseException:
-            self._scope.__exit__(*sys.exc_info())
-            raise
+        self._stream = await self._responses.create(**self._request)
+        self.request_id = getattr(self._stream, "request_id", None)
+        return self
 
-    async def __aexit__(self, *args: Any) -> Any:
-        try:
-            return await self._inner.__aexit__(*args)
-        finally:
-            self._scope.__exit__(*args)
+    async def parse(self) -> Any:
+        return self._stream
+
+    async def __aexit__(self, *args: Any) -> None:
+        if self._stream is not None:
+            await self._stream.close()
 
 
 class _OciStreamingResponses:
-    def __init__(self, inner: Any) -> None:
-        self._inner = inner
+    def __init__(self, responses: Any) -> None:
+        self._responses = responses
 
     def create(self, **kwargs: Any) -> Any:
-        request = _oci_request(kwargs)
-        return _ObservedResponseManager(self._inner.create(**request), request)
+        return _StreamingResponseManager(self._responses, {**kwargs, "stream": True})
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+
+class _BufferedStream:
+    """成功した一試行のイベントだけを SDK に渡す。ツール要求の部分実行を防ぐ。"""
+
+    def __init__(self, events: list[Any], *, request_id: str | None = None) -> None:
+        self._events = iter(events)
+        self.request_id = request_id
+
+    def __aiter__(self) -> Any:
+        return self
+
+    async def __anext__(self) -> Any:
+        event = next(self._events, None)
+        if event is None:
+            raise StopAsyncIteration
+        return event
+
+    async def close(self) -> None:
+        pass
+
+
+def _provider_usage(response: Any) -> Any:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        data = response.model_dump() if hasattr(response, "model_dump") else response
+        usage = data.get("usage") if isinstance(data, Mapping) else None
+    return usage
+
+
+def _output_context_room(request: Mapping[str, Any], capacity: int | None) -> int | None:
+    if capacity is None:
+        return None
+    window = _ACTIVE_CONTEXT_WINDOW.get()
+    if window is not None and window.provider_limit is not None:
+        capacity = min(capacity, window.provider_limit)
+    prompt_tokens = (
+        window.last_input.tokens_after
+        if window and window.last_input
+        else estimate_input_tokens(json.dumps(request, ensure_ascii=False, default=str))
+    )
+    return capacity - prompt_tokens
 
 
 class _OciResponses:
-    """`responses.create` を OCI 向けに直し、未完了の応答を扱う。
+    """現在のモデル要求だけを3段階で試す。固定予算の実行器とは重ねない。"""
 
-    ``lower_effort_on_incomplete`` が偽なら、出力の上限で未完了でも送り直さない（推論の量を下げる
-    送り直しも、わずかな出力の未完了の送り直し〔#2355〕も。上限つきの並行の実行器
-    `pr_backend_core.bounded_calls` を通す呼び出し。送り直しは実行器の ``adaptive`` の再試行に任せ、
-    再試行の主体を二重にしない。#2023）。
-    """
-
-    def __init__(self, inner: Any, *, lower_effort_on_incomplete: bool = True) -> None:
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        output_limit_retry: bool = True,
+        max_output_tokens: int | None = None,
+        max_input_tokens: int | None = None,
+    ) -> None:
         self._inner = inner
-        self._lower_effort_on_incomplete = lower_effort_on_incomplete
+        self._output_limit_retry = output_limit_retry
+        self._output_capacity = max_output_tokens
+        self._input_capacity = max_input_tokens
 
     async def create(self, **kwargs: Any) -> Any:
         request = _oci_request(kwargs)
         attempt = 0
-        lowered_effort = False
-        transient_retried = False
         overflow_retried = False
         send_attempt = 0
+        output_attempt = 0
+        capacity = self._output_capacity or int(
+            request.get("max_output_tokens") or DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
+        )
+        room = _output_context_room(request, self._input_capacity)
+        if self._output_limit_retry and room is not None and room <= 0:
+            raise BuiltinRuntimeError(
+                CONTEXT_OVERFLOW_CODE,
+                "質問と取得結果がモデルの入力上限に達しました。対象を絞ってやり直してください。",
+            )
+        if self._output_limit_retry and self._output_capacity is not None:
+            request = {**request, "max_output_tokens": initial_output_budget(capacity, room=room)}
         while True:
             try:
                 send_attempt += 1
                 response = await self._send(request, send_attempt)
+                events = None
+                request_id = None
+                if request.get("stream"):
+                    events = []
+                    stream = response
+                    raw_response = getattr(stream, "response", None)
+                    request_id = getattr(raw_response, "headers", {}).get("x-request-id")
+                    terminal = None
+                    terminal_kind = ""
+                    try:
+                        async for event in stream:
+                            events.append(event)
+                            if getattr(event, "type", "") in {
+                                "response.completed",
+                                "response.incomplete",
+                                "response.failed",
+                            }:
+                                terminal_kind = getattr(event, "type", "")
+                                terminal = getattr(event, "response", None)
+                    finally:
+                        await stream.close()
+                    response = terminal
+                    if (
+                        terminal_kind not in {"response.completed", "response.incomplete"}
+                        or response is None
+                    ):
+                        budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                        if budget is not None:
+                            budget.settle_failed(_provider_usage(response))
+                        raise BuiltinRuntimeError(
+                            "runtime.model_stream_failed",
+                            "モデルの応答を最後まで受信できませんでした。時間をおいてもう一度お試しください。",
+                        )
+                    status = getattr(response, "status", None)
+                    if (terminal_kind == "response.completed" and status != "completed") or (
+                        terminal_kind == "response.incomplete" and status != "incomplete"
+                    ):
+                        budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                        if budget is not None:
+                            budget.settle_failed(_provider_usage(response))
+                        raise BuiltinRuntimeError(
+                            "runtime.model_stream_failed",
+                            "モデルの応答の完了状態を確認できませんでした。もう一度お試しください。",
+                        )
+                if getattr(response, "status", None) == "failed":
+                    budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                    if budget is not None:
+                        budget.settle_failed(_provider_usage(response))
+                    raise BuiltinRuntimeError(
+                        "runtime.model_failed",
+                        "モデルの応答が失敗しました。時間をおいてもう一度お試しください。",
+                    )
                 incomplete = (
-                    None if request.get("stream") else _response_incomplete(response, request)
+                    _response_incomplete(response, request) if response is not None else None
                 )
                 if incomplete is None:
                     window = _ACTIVE_CONTEXT_WINDOW.get()
                     if window is not None:
                         window.measure(response)
-                    return response
-                if (
-                    self._lower_effort_on_incomplete
-                    and not transient_retried
-                    and _transient_incomplete(incomplete)
-                ):
-                    # わずかな出力の未完了は呼び先の一時的な不具合として、同じ要求で 1 回だけ
-                    # 送り直す（#2355）。送り直しも未完了なら下の扱い（推論の量を下げる / 失敗）。
-                    transient_retried = True
-                    model_name = str(request.get("model") or "")
-                    MODEL_INCOMPLETE_RETRIES_TOTAL.labels(model=model_name).inc()
-                    logger.warning(
-                        "builtin_runtime_model_output_incomplete_retry",
-                        extra={
-                            "model": model_name,
-                            "incomplete_reason": incomplete.reason,
-                            "max_output_tokens": incomplete.max_output_tokens,
-                            "output_tokens": incomplete.output_tokens,
-                            "reasoning_tokens": incomplete.reasoning_tokens,
-                        },
+                    return (
+                        _BufferedStream(events, request_id=request_id)
+                        if events is not None
+                        else response
                     )
-                    continue
-                # 出力の上限で未完了なら、推論の量を 1 段下げて 1 回だけ送り直す（#2023。上限は
-                # もうモデルの出力の上限なので広げない）。ほかの理由（content_filter など）は
-                # 送り直さない。
-                lowered = (
-                    _with_lower_reasoning_effort(request)
+                output_attempt += 1
+                budget = _ACTIVE_RUN_BUDGET.get() if self._output_limit_retry else None
+                if budget is not None:
+                    budget.settle_failed(_provider_usage(response))
+                room = _output_context_room(request, self._input_capacity)
+                wider = (
+                    next_output_budget(
+                        int(request.get("max_output_tokens") or 0), capacity, room=room
+                    )
                     if incomplete.output_limit_reached
-                    and not lowered_effort
-                    and self._lower_effort_on_incomplete
+                    and self._output_limit_retry
+                    and output_attempt < 3
                     else None
                 )
-                logger.warning(
-                    "builtin_runtime_model_output_incomplete",
-                    extra={
-                        "model": str(request.get("model") or ""),
-                        "incomplete_reason": incomplete.reason,
-                        "max_output_tokens": incomplete.max_output_tokens,
-                        "reasoning_effort": _request_reasoning_effort(request) or "none",
-                        "output_tokens": incomplete.output_tokens,
-                        "reasoning_tokens": incomplete.reasoning_tokens,
-                        "next_action": "lower_effort" if lowered is not None else "fail",
-                    },
-                )
-                if lowered is None:
-                    _raise_for_incomplete(incomplete, request, lowered_effort=lowered_effort)
-                request, lowered_effort = cast(dict[str, Any], lowered), True
+                if wider is None:
+                    if not incomplete.output_limit_reached:
+                        _raise_for_incomplete(incomplete, request, lowered_effort=False)
+                    raise BuiltinRuntimeError(
+                        MODEL_OUTPUT_INCOMPLETE_CODE,
+                        output_limit_message(
+                            model=str(request.get("model") or ""),
+                            attempts=output_attempt,
+                            capacity=capacity,
+                        )
+                        + " 詳細: "
+                        + incomplete.detail(),
+                    )
+                if budget is not None:
+                    window = _ACTIVE_CONTEXT_WINDOW.get()
+                    estimate = (
+                        window.last_input.tokens_after
+                        if window and window.last_input
+                        else estimate_input_tokens(
+                            json.dumps(request, ensure_ascii=False, default=str)
+                        )
+                    )
+                    exceeded = budget.reserve_model_call(estimate)
+                    if exceeded is not None:
+                        raise _run_budget_stop(window.run_id if window else "", budget, exceeded)
+                request = {**request, "max_output_tokens": wider}
+                MODEL_INCOMPLETE_RETRIES_TOTAL.labels(model=str(request.get("model") or "")).inc()
                 continue
             except BadRequestError as exc:
                 overflow = provider_overflow(model_error_code(exc), _model_error_message(exc))
@@ -900,7 +974,7 @@ class _OciResponses:
 
     @property
     def with_streaming_response(self) -> _OciStreamingResponses:
-        return _OciStreamingResponses(self._inner.with_streaming_response)
+        return _OciStreamingResponses(self)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -909,14 +983,26 @@ class _OciResponses:
 class _OciCompatClient:
     """`responses.create` の引数だけを OCI Enterprise AI 向けに直し、他はそのまま渡す。"""
 
-    def __init__(self, inner: AsyncOpenAI, *, lower_effort_on_incomplete: bool = True) -> None:
+    def __init__(
+        self,
+        inner: AsyncOpenAI,
+        *,
+        output_limit_retry: bool = True,
+        max_output_tokens: int | None = None,
+        max_input_tokens: int | None = None,
+    ) -> None:
         self._inner = inner
-        self._lower_effort_on_incomplete = lower_effort_on_incomplete
+        self._output_limit_retry = output_limit_retry
+        self._max_output_tokens = max_output_tokens
+        self._max_input_tokens = max_input_tokens
 
     @property
     def responses(self) -> _OciResponses:
         return _OciResponses(
-            self._inner.responses, lower_effort_on_incomplete=self._lower_effort_on_incomplete
+            self._inner.responses,
+            output_limit_retry=self._output_limit_retry,
+            max_output_tokens=self._max_output_tokens,
+            max_input_tokens=self._max_input_tokens,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -927,14 +1013,18 @@ class OciResponsesModel(OpenAIResponsesModel):
     """OCI Enterprise AI の Responses API 用（SDK の `_get_client` を包む。SDK は版を固定する）。"""
 
     # 出力の上限で未完了の応答を、推論の量を下げて送り直すか（#2023）。
-    lower_effort_on_incomplete: bool = True
+    output_limit_retry: bool = True
+    output_capacity: int | None = None
+    input_capacity: int | None = None
 
     def _get_client(self) -> AsyncOpenAI:
         return cast(
             AsyncOpenAI,
             _OciCompatClient(
                 super()._get_client(),
-                lower_effort_on_incomplete=self.lower_effort_on_incomplete,
+                output_limit_retry=self.output_limit_retry,
+                max_output_tokens=self.output_capacity,
+                max_input_tokens=self.input_capacity,
             ),
         )
 
@@ -971,7 +1061,9 @@ def _default_model_factory(target: ModelTarget) -> Model:
     )
     model = OciResponsesModel(model=target.model_id, openai_client=client)
     # 上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は、送り直しを実行器に任せる（#2023）。
-    model.lower_effort_on_incomplete = target.sdk_max_retries != 0
+    model.output_limit_retry = target.sdk_max_retries != 0
+    model.output_capacity = target.max_output_tokens
+    model.input_capacity = target.max_input_tokens
     return model
 
 
@@ -5147,27 +5239,46 @@ def _answer_outcome(
 
 
 def _record_usage(run_id: str, source: object, model_id: str) -> None:
-    """SDK の累計の利用量を Run に記録する（#772）。
-
-    `source` は `Runner.run` の結果か、失敗の `run_data`（SDK の例外が持つときだけ）。SDK の
-    `Usage` は承認待ちで保存する RunState に入り、再開後も累計で続くため、毎回上書きでよい。
-    """
+    """SDK の累計と内部失敗の実測を、重複せず Run に記録する。"""
     from app.features.agent.runtime import RunUsage, runtime_repository
 
-    # Run 全体の実行予算の消費も、同じ区切り（完了・失敗・承認待ち）で残す（#2599）。
+    sdk_usage = getattr(getattr(source, "context_wrapper", None), "usage", None)
+    budget = _ACTIVE_RUN_BUDGET.get()
+    if budget is None:
+        # 実行文脈の外で記録する場合も、失敗 ledger を表示済みの RunUsage に再加算しない。
+        run = runtime_repository.get_run(run_id)
+        budget = run_budget.RunBudget.for_run(run.metadata, run_budget.RunBudgetLimits())
+        if sdk_usage is None and not budget.failed_usage_records and not budget.unmeasured_calls:
+            return
+        saved = run.metadata.get(run_budget.RUN_BUDGET_METADATA_KEY)
+        consumed = saved.get("consumed") if isinstance(saved, Mapping) else None
+        counted = isinstance(consumed, Mapping) and "model_calls" in consumed
+        combined = budget.reported_usage(sdk_usage, require_call_match=counted)
+    else:
+        if sdk_usage is None and budget.sdk_usage_record is None:
+            previous = runtime_repository.get_run(run_id)
+            saved = previous.metadata.get(run_budget.RUN_BUDGET_METADATA_KEY)
+            if (
+                isinstance(saved, Mapping)
+                and "failed_model_usage" not in saved
+                and previous.usage is not None
+            ):
+                # 旧チェックポイントの RunUsage は SDK 分だけ。新 ledger と合算済みの値は使わない。
+                sdk_usage = previous.usage
+        combined = budget.reported_usage(sdk_usage)
+    # SDK の成功累計も保存し、再開直後に終端失敗した場合に前の成功分を失わない。
     _record_run_budget(run_id)
-    usage = getattr(getattr(source, "context_wrapper", None), "usage", None)
-    if usage is None:
-        return
     runtime_repository.record_builtin_usage(
         run_id,
         RunUsage(
             model=_model_label(model_id),
-            requests=int(getattr(usage, "requests", 0) or 0),
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
-        ),
+            requests=combined["requests"],
+            input_tokens=combined["input_tokens"],
+            output_tokens=combined["output_tokens"],
+            total_tokens=combined["total_tokens"],
+        )
+        if combined is not None
+        else None,
     )
 
 

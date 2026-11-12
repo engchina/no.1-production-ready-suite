@@ -20,6 +20,11 @@ import httpx
 from pr_backend_core.llm_request_params_httpx import send_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
+from pr_backend_core.output_budget import (
+    initial_output_budget,
+    next_output_budget,
+    output_limit_message,
+)
 from pr_system_settings.enterprise_ai_errors import (
     ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
     EnterpriseAiCallFailureKind,
@@ -33,6 +38,7 @@ from pr_system_settings.enterprise_ai_errors import (
     enterprise_ai_provider_message,
 )
 from pr_system_settings.model import (
+    enterprise_ai_max_input_tokens,
     enterprise_ai_output_token_budget,
     enterprise_ai_retry_output_token_budget,
     estimate_input_tokens,
@@ -83,6 +89,7 @@ class EnterpriseAiDirectError(RuntimeError):
         upstream_request_id: str = "",
         attempts: int = 0,
         timeout_seconds: float | None = None,
+        user_message: str = "",
         headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(message)
@@ -97,6 +104,7 @@ class EnterpriseAiDirectError(RuntimeError):
         self.upstream_request_id = upstream_request_id
         self.attempts = attempts
         self.timeout_seconds = timeout_seconds
+        self.user_message = user_message
         self.elapsed_ms: int | None = None
         self.max_output_tokens: int | None = None
         self.incomplete_reason = incomplete.reason if incomplete is not None else ""
@@ -152,12 +160,12 @@ ENTERPRISE_AI_DIRECT_MODEL_NOTE = (
 
 
 def find_enterprise_ai_error(exc: BaseException | None) -> EnterpriseAiDirectError | None:
-    """例外（原因の連鎖を含む）から、HTTP の失敗を持つ Enterprise AI の失敗を探す。"""
+    """例外（原因の連鎖を含む）から、HTTP・未完了を含む Enterprise AI の失敗を探す。"""
     seen: set[int] = set()
     current = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, EnterpriseAiDirectError) and current.http_failure is not None:
+        if isinstance(current, EnterpriseAiDirectError):
             return current
         current = current.__cause__ or current.__context__
     return None
@@ -248,8 +256,7 @@ class OciEnterpriseAiDirectClient:
         # LLM Model・Region は Select AI の AI profile 用で、ここでは使わない（#1684）。
         model_id = self.model_id()
         # 出力の上限はモデルの出力の上限と、入力の上限から prompt の見積もりを引いた残りの小さい方
-        # （#1719）。機能が渡す `max_output_tokens` は要る量で、既定（32768）を下回らない
-        # （`strict_max_output_tokens` のときは渡した値を上限にする）。
+        # （#1719）。オンラインの初回は共有の3段階方針を使い、明示した固定予算だけ別に保つ。
         prompt_tokens = estimate_input_tokens("\n".join([system_prompt, context, prompt]))
         strict = strict_max_output_tokens and max_output_tokens is not None
         budget = (
@@ -260,37 +267,100 @@ class OciEnterpriseAiDirectClient:
                 ),
             )
             if strict
-            else enterprise_ai_output_token_budget(
-                self.settings, model_id, prompt_tokens=prompt_tokens, requested=max_output_tokens
+            else initial_output_budget(
+                enterprise_ai_output_token_budget(
+                    self.settings, model_id, prompt_tokens=prompt_tokens
+                )
             )
         )
 
-        def call(budget: int, effort: str) -> str:
-            payload = _with_reasoning_effort(
-                _build_payload(
-                    settings=self.settings,
+        deadline = time.monotonic() + float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else self.settings.oci_enterprise_ai_timeout_seconds
+        )
+        connection = self.connection(model_id)
+        response_path = self.settings.oci_enterprise_ai_llm_response_path
+        request_path = self.settings.oci_enterprise_ai_llm_path
+        base_payload = _build_payload(
+            settings=self.settings,
+            model_id=model_id,
+            prompt=prompt,
+            context=context,
+            system_prompt=system_prompt,
+            max_output_tokens=budget,
+            response_format=response_format,
+        )
+        if not strict:
+            # 実際に送る schema・template・指示も入力の予約に含める。
+            prompt_tokens = estimate_input_tokens(
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in base_payload.items()
+                        if key != "max_output_tokens"
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+            if prompt_tokens >= enterprise_ai_max_input_tokens(self.settings, model_id):
+                raise EnterpriseAiDirectError(
+                    "質問と取得結果がモデルの入力上限に達しました。対象を絞ってやり直してください。",
+                    code="context_budget_exceeded",
                     model_id=model_id,
-                    prompt=prompt,
-                    context=context,
-                    system_prompt=system_prompt,
-                    max_output_tokens=budget,
-                    response_format=response_format,
-                ),
-                effort,
+                )
+            budget = initial_output_budget(
+                enterprise_ai_output_token_budget(
+                    self.settings,
+                    model_id,
+                    prompt_tokens=prompt_tokens,
+                )
+            )
+
+        def call(budget: int, effort: str) -> str:
+            payload = (
+                _with_reasoning_effort(base_payload, effort)
+                if strict
+                else {**base_payload, "model": model_id, "max_output_tokens": budget}
             )
             started = time.perf_counter()
             try:
+                if not strict and time.monotonic() >= deadline:
+                    raise EnterpriseAiDirectError(
+                        "回答の処理時間の上限に達しました。質問を分けてもう一度お試しください。",
+                        code="deadline_exceeded",
+                        model_id=model_id,
+                    )
                 response = self._post_json(
                     payload,
-                    connection=self.connection(model_id),
-                    path=self.settings.oci_enterprise_ai_llm_path,
+                    connection=connection,
+                    path=request_path,
                     timeout_seconds=timeout_seconds,
                     max_retries=max_retries,
                     model_id=model_id,
+                    deadline=None if strict else deadline,
                 )
+                if not strict:
+                    incomplete = enterprise_ai_incomplete_from_response(
+                        response, max_output_tokens=budget
+                    )
+                    if incomplete is not None:
+                        raise EnterpriseAiDirectError(
+                            enterprise_ai_incomplete_message(incomplete, model_id=model_id),
+                            code="incomplete",
+                            model_id=model_id,
+                            incomplete=incomplete,
+                        )
+                    if response.get("status") == "failed":
+                        raise EnterpriseAiDirectError(
+                            "モデルの応答が失敗しました。時間をおいてもう一度お試しください。",
+                            code="model_failed",
+                            model_id=model_id,
+                        )
                 return _parse_response(
                     response,
-                    response_path=self.settings.oci_enterprise_ai_llm_response_path,
+                    response_path=response_path,
                     response_format=response_format,
                     max_output_tokens=budget,
                     model_id=model_id,
@@ -304,7 +374,8 @@ class OciEnterpriseAiDirectClient:
                     exc.max_output_tokens = raw_max_tokens
                 raise
 
-        return self._with_output_limit_retry(
+        retry = self._with_fixed_output_retry if strict else self._with_output_limit_retry
+        return retry(
             call,
             model_id=model_id,
             budget=max(1, budget),
@@ -315,6 +386,42 @@ class OciEnterpriseAiDirectClient:
         )
 
     def _with_output_limit_retry(
+        self,
+        call: Callable[[int, str], str],
+        *,
+        model_id: str,
+        budget: int,
+        prompt_tokens: int,
+        can_lower_effort: bool = True,
+        can_widen: bool = True,
+    ) -> str:
+        """同じ現在の要求だけを3段階で試す。推論量と完了済みツールは変更しない。"""
+        capacity = enterprise_ai_output_token_budget(
+            self.settings, model_id, prompt_tokens=prompt_tokens
+        )
+        for attempt in range(1, 4):
+            try:
+                return call(budget, "")
+            except EnterpriseAiDirectError as exc:
+                if exc.incomplete is None or not exc.incomplete.output_limit_reached:
+                    raise
+                wider = (
+                    next_output_budget(budget, capacity)
+                    if exc.incomplete.output_limit_reached
+                    else None
+                )
+                if wider is not None and attempt < 3 and can_widen:
+                    budget = wider
+                    continue
+                exc.user_message = output_limit_message(
+                    model=model_id, attempts=attempt, capacity=capacity
+                )
+                exc.args = (exc.user_message + " 詳細: " + exc.incomplete.detail(),)
+                exc.attempts = attempt
+                raise
+        raise AssertionError("出力予算の試行が終了しませんでした。")
+
+    def _with_fixed_output_retry(
         self,
         call: Callable[[int, str], str],
         *,
@@ -450,7 +557,7 @@ class OciEnterpriseAiDirectClient:
             )
 
         # 画像の処理も、Vision のモデルの出力の上限を使う（#1719。共通の VLM の上限は持たない）。
-        return self._with_output_limit_retry(
+        return self._with_fixed_output_retry(
             call,
             model_id=model_id,
             budget=enterprise_ai_output_token_budget(
@@ -469,6 +576,7 @@ class OciEnterpriseAiDirectClient:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
         model_id: str = "",
+        deadline: float | None = None,
     ) -> Mapping[str, Any]:
         # Endpoint URL は入力どおり使い、API path を付ける(#1440。3 製品で platform の関数)。
         url = connection.request_url(path)
@@ -495,6 +603,31 @@ class OciEnterpriseAiDirectClient:
         retryable = ENTERPRISE_AI_RETRYABLE_STATUS_CODES
         last_error = ""
         with httpx.Client(timeout=timeout) as client:
+
+            def send(request: httpx.Request) -> httpx.Response:
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise EnterpriseAiDirectError(
+                            "回答の処理時間の上限に達しました。質問を分けてもう一度お試しください。",
+                            code="deadline_exceeded",
+                            model_id=model_id,
+                        )
+                    request.extensions["timeout"] = httpx.Timeout(remaining).as_dict()
+                return client.send(request)
+
+            def wait_retry(seconds: float) -> None:
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise EnterpriseAiDirectError(
+                            "回答の処理時間の上限に達しました。質問を分けてもう一度お試しください。",
+                            code="deadline_exceeded",
+                            model_id=model_id,
+                        )
+                    seconds = min(seconds, remaining)
+                time.sleep(seconds)
+
             for attempt in range(retry_count + 1):
                 with ExitStack() as attempt_scope:
                     call_span = attempt_scope.enter_context(
@@ -514,7 +647,7 @@ class OciEnterpriseAiDirectClient:
                         # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ
                         # 送り直し、以後このモデルには送らない（#3539。platform の部品）。
                         response = send_dropping_parameters(
-                            client.send,
+                            send,
                             client.build_request("POST", url, headers=headers, json=dict(payload)),
                         )
                     except httpx.TimeoutException as exc:
@@ -524,7 +657,7 @@ class OciEnterpriseAiDirectClient:
                         attempt_scope.close()
                         last_error = f"timeout after {timeout:.1f}s"
                         if attempt < retry_count:
-                            time.sleep(min(0.2 * (attempt + 1), 1.0))
+                            wait_retry(min(0.2 * (attempt + 1), 1.0))
                             continue
                         raise EnterpriseAiDirectError(
                             last_error,
@@ -542,7 +675,7 @@ class OciEnterpriseAiDirectClient:
                         attempt_scope.close()
                         last_error = str(exc)
                         if attempt < retry_count:
-                            time.sleep(min(0.2 * (attempt + 1), 1.0))
+                            wait_retry(min(0.2 * (attempt + 1), 1.0))
                             continue
                         raise EnterpriseAiDirectError(
                             f"OCI Enterprise AI HTTP error: {exc}",
@@ -563,7 +696,7 @@ class OciEnterpriseAiDirectClient:
                     if response.status_code in retryable and attempt < retry_count:
                         attempt_scope.close()
                         last_error = f"HTTP {response.status_code}: {response.text[:300]}"
-                        time.sleep(min(0.2 * (attempt + 1), 1.0))
+                        wait_retry(min(0.2 * (attempt + 1), 1.0))
                         continue
                     if response.status_code >= 400:
                         # 分類は 3 製品で共通の対応表（#1684）。OCI の 404 は認可の失敗で、
