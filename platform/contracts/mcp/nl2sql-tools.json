@@ -816,7 +816,7 @@
           },
           "skip_clarification": {
             "default": false,
-            "description": "利用者が確認せずに SQL を生成するよう選んだとき true。確認事項を聞かず、要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない",
+            "description": "利用者が確認せずに SQL を生成するよう選んだとき true。新しい質問は原質問と業務プロファイルから生成し、確認の続きでは反映できる要件を使います。利用者が選んでいないのに true にしない。answer と一緒には指定しない",
             "title": "Skip Clarification",
             "type": "boolean"
           }

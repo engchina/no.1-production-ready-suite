@@ -327,9 +327,9 @@ class QueryInput(_Input):
         default=False,
         description=(
             # 確認せずに SQL を生成する（#1839）。
-            "利用者が確認せずに SQL を生成するよう選んだとき true。確認事項を聞かず、"
-            "要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は"
-            " skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない"
+            "利用者が確認せずに SQL を生成するよう選んだとき true。新しい質問は原質問と"
+            "業務プロファイルから生成し、確認の続きでは反映できる要件を使います。"
+            "利用者が選んでいないのに true にしない。answer と一緒には指定しない"
         ),
     )
 
@@ -1124,6 +1124,30 @@ def build_mcp_server(request: Request) -> McpServer:
             ジョブは呼び出し元が確認の span の外で作る（確認の工程とジョブの工程を兄弟にする。
             #3477）。
             """
+            fresh = arguments.requirement_session_id is None and arguments.answer is None
+            if fresh and (
+                arguments.skip_clarification or await run_sync_io(_profile_assumes, profile_id)
+            ):
+                # 自動の下書きを利用者の確認済み条件へ昇格させない。
+                # 原質問と Profile の許可範囲で作る。
+                requirement_trace.set_status("skipped")
+                return (
+                    JobCreateRequest(
+                        question=arguments.question,
+                        profile_id=profile_id,
+                        row_limit=arguments.row_limit,
+                        use_glossary=arguments.use_glossary,
+                    ),
+                    RequirementOutput(
+                        session_id="",
+                        status="skipped",
+                        message=(
+                            _REQUIREMENT_USER_SKIPPED_MESSAGE
+                            if arguments.skip_clarification
+                            else _REQUIREMENT_ASSUMED_MESSAGE
+                        ),
+                    ),
+                )
             try:
                 data = await run_sync_io(requirement_step)
             except RequirementAiUnavailableError as exc:
