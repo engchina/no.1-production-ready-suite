@@ -136,3 +136,83 @@ async def test_startup_failure_releases_file_owner(
         next_owner.acquire()
     finally:
         next_owner.close()
+
+
+def test_shutdown_drains_storage_loader_before_releasing_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    path = tmp_path / "runtime.json"
+    monkeypatch.setattr(storage_backend, "resolved_backend", lambda: "file")
+    monkeypatch.setattr(
+        storage_owner,
+        "get_settings",
+        lambda: SimpleNamespace(agent_runtime_snapshot_path=str(path)),
+    )
+    first, second = storage_owner.StorageOwner(), storage_owner.StorageOwner()
+    first.enabled = second.enabled = True
+    first.acquire()
+    storage_bootstrap.reset()
+
+    def load() -> None:
+        entered.set()
+        assert release.wait(10)
+
+    def shutdown() -> None:
+        storage_bootstrap.stop_background_load()
+        first.close()
+        finished.set()
+
+    monkeypatch.setattr(storage_bootstrap, "_load_until_ready", load)
+    storage_bootstrap.start_background_load()
+    assert entered.wait(5)
+    worker = threading.Thread(target=shutdown)
+    worker.start()
+    try:
+        assert not finished.wait(0.05)
+        with pytest.raises(storage_owner.StorageAlreadyOwnedError):
+            second.acquire()
+    finally:
+        release.set()
+        worker.join(timeout=10)
+        first.close()
+    try:
+        assert finished.is_set()
+        second.acquire()
+    finally:
+        second.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tick_fails", [False, True])
+async def test_scheduler_shutdown_waits_for_database_tick(
+    monkeypatch: pytest.MonkeyPatch, tick_fails: bool
+) -> None:
+    import asyncio
+    import threading
+
+    from app.features.agent import automations
+
+    entered, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(storage_bootstrap, "is_ready", lambda: True)
+
+    def tick() -> list[automations.AutomationFired]:
+        entered.set()
+        assert release.wait(10)
+        if tick_fails:
+            raise RuntimeError("合成の保存失敗")
+        return []
+
+    monkeypatch.setattr(automations, "scheduler_tick", tick)
+    scheduler = asyncio.create_task(automations.run_scheduler())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        scheduler.cancel()
+        await asyncio.sleep(0)
+        assert not scheduler.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler

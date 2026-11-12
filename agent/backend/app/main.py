@@ -69,21 +69,23 @@ async def _application_lifespan(_: FastAPI) -> AsyncIterator[None]:
         service_name=get_settings().service_name,
         capture_content=lambda: get_security_service().trace_recording.enabled(),
     ):
-        storage_bootstrap.start_background_load()
-        await start_trace_export_retry_worker()
-        # 処理の経過の span の書き手（共通の span の表。#3226 の案 A。in_process の実行が書く）。
-        await asyncio.to_thread(trace_spans.start)
-        # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
-        from app.features.agent.automations import run_scheduler
-
-        scheduler = asyncio.create_task(run_scheduler())
+        scheduler: asyncio.Task[None] | None = None
         try:
+            storage_bootstrap.start_background_load()
+            await start_trace_export_retry_worker()
+            # in_process の処理の経過を共通の span の表へ書く。
+            await asyncio.to_thread(trace_spans.start)
+            # 自動実行のスケジューラは API の単一所有者だけが動かす。
+            from app.features.agent.automations import run_scheduler
+
+            scheduler = asyncio.create_task(run_scheduler())
             yield
         finally:
-            scheduler.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await scheduler
-            storage_bootstrap.stop_background_load()
+            if scheduler is not None:
+                scheduler.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await scheduler
+            await asyncio.to_thread(storage_bootstrap.stop_background_load)
             await stop_trace_export_retry_worker()
             # 待っている span を書いてから終える（書けなければ書き手がログに残す）。
             await asyncio.to_thread(trace_spans.stop)

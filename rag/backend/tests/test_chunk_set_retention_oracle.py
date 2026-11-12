@@ -422,31 +422,49 @@ async def test_sweep_uses_settings_and_returns_expired_count() -> None:
 
 async def test_retention_preserves_revision_file_and_restores_original_payload(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """古い抽出の行が消えても、履歴の原本を保持して正式な復元で読める（#4219）。"""
     from collections.abc import Mapping
     from typing import cast
 
+    from rag_parser_core.preprocess import SourceDerivation
+
     from app.clients.extraction_revision_store import _insert_revision
+    from app.clients.object_storage import ObjectStorageClient
     from app.clients.oracle import OracleConnectionProtocol, ReviewedExtractionWrite
+    from app.config import get_settings
+    from app.rag.document_crop import load_parsed_source
     from app.schemas.document import FileStatus
 
+    monkeypatch.setattr(get_settings(), "local_storage_dir", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "upload_storage_backend", "local")
     client = OracleClient()
     document_id, recipe_id = await _new_document(client, "revision-file")
     suffix = uuid4().hex[:12]
     old_set, new_set = f"old_{suffix}", f"new_{suffix}"
     old_id, new_id = f"ex_o_{suffix}", f"ex_n_{suffix}"
-    original = tmp_path / PREFIX / document_id / "old" / "canonical.txt"
-    original.parent.mkdir(parents=True)
-    original.write_text("合成の旧原本", encoding="utf-8")
-    old_path = str(original)
+    original = tmp_path / "objects" / PREFIX / document_id / "old" / "canonical.txt"
+    storage = ObjectStorageClient()
+    old_path = await storage.put(
+        f"{PREFIX}/{document_id}/old/canonical.txt", "合成の旧原本".encode(), "text/plain"
+    )
     await _version(client, document_id, recipe_id, old_set, old_id, derived_path=old_path)
     await _switch(client, recipe_id, old_set, None, old_id)
     artifact = await client.get_document_extraction_artifact(
         document_id=document_id, extraction_recipe_id=old_id
     )
     assert artifact is not None
-    payload = cast("Mapping[str, object]", artifact["extraction_json"])
+    payload = dict(cast("Mapping[str, object]", artifact["extraction_json"]))
+    payload["parser_artifacts"] = {
+        "source_derivation": SourceDerivation(
+            derivation_id=uuid4().hex,
+            converted=True,
+            derived_object_path=old_path,
+            source_content_type="text/plain",
+            derived_content_type="text/plain",
+        ).model_dump(mode="json")
+    }
 
     def save_revision(connection: OracleConnectionProtocol) -> None:
         _insert_revision(
@@ -508,5 +526,11 @@ async def test_retention_preserves_revision_file_and_restores_original_payload(
         restored_payload["parser_artifacts"]["source_derivation"]["derived_object_path"] == old_path
     )
     assert original.read_text(encoding="utf-8") == "合成の旧原本"
+    assert (
+        await load_parsed_source(
+            client, document_id, recipe_id, extraction_recipe_id=f"restored_{suffix}"
+        )
+        == "合成の旧原本".encode()
+    )
     revision = await client.get_document_recipe_extraction_revision(recipe_id, 1)
     assert revision is not None and revision["extraction_json"] == payload

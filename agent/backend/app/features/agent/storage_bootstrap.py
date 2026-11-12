@@ -217,7 +217,7 @@ def _prepare_history() -> None:
 def start_background_load() -> None:
     """起動時の読み込みをバックグラウンドで始める（済むまで一定の間隔で再試行する）。
 
-    daemon thread にする（DB の停止中の接続の待ちで、終了・`--reload` の再起動を待たせない）。
+    daemon thread で開始し、通常終了では実行中の読み込みが終わるまで所有権を保持する。
     """
     global _thread
     if _ready or (_thread is not None and _thread.is_alive()):
@@ -228,7 +228,13 @@ def start_background_load() -> None:
 
 
 def stop_background_load() -> None:
+    """所有権を解放する前に、実行中の復元の書き込みまで待つ。"""
+    global _thread
     _stop.set()
+    thread = _thread
+    if thread is not None:
+        thread.join()
+        _thread = None
 
 
 def _load_until_ready() -> None:
