@@ -24,6 +24,13 @@ class BoundCell:
     unit: str | None
 
 
+def unit_header(column: str, unit: str | None) -> str:
+    """同じ単位の括弧接尾辞がある表示名には重ねて付けない。"""
+    if unit is None or column.endswith((f"({unit})", f"（{unit}）")):
+        return column
+    return f"{column} ({unit})"
+
+
 def _parts(line: str) -> list[str]:
     text = line.strip().removeprefix("|").removesuffix("|")
     return [part.strip() for part in re.split(r"(?<!\\)\|", text)]
@@ -88,7 +95,7 @@ def _matrix(
             raise ReferenceTableError("同じ元列を表に重ねて指定しないでください。")
         if columns is None:
             columns = current
-            names = [cell.column + (" (" + cell.unit + ")" if cell.unit else "") for cell in bound]
+            names = [unit_header(cell.column, cell.unit) for cell in bound]
         elif columns != current:
             raise ReferenceTableError("同じ表示列には同じ元列の参照を使用してください。")
         rendered.append([markdown(cell.value) for cell in bound])
