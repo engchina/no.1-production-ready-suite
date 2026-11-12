@@ -195,6 +195,7 @@ async def read_source_preview_content(
                         direction=direction,
                         scope=scope,
                         section_id=section_id,
+                        load_structured=lambda _payload: load("prepared"),
                     )
             except SourceVersionStaleError:
                 raise signed_stale_error(_STALE_MESSAGE) from None
