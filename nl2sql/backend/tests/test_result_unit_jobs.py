@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from test_nl2sql_job_runtime import _repository, _request, _worker
 
@@ -14,7 +16,9 @@ from app.settings import get_settings
 
 @pytest.mark.parametrize("chat", [False, True])
 @pytest.mark.parametrize("enabled", [False, True])
-def test_job_result_unit_metadata_survives_storage_and_mcp(monkeypatch, chat, enabled):
+def test_job_result_unit_metadata_survives_storage_and_mcp(
+    monkeypatch: pytest.MonkeyPatch, chat: bool, enabled: bool
+) -> None:
     monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     repo = _repository()
     service = _worker(repo)
@@ -37,9 +41,9 @@ def test_job_result_unit_metadata_survives_storage_and_mcp(monkeypatch, chat, en
     )
     monkeypatch.setattr(service, "_resolve_job_business_release", lambda *args: "pinned_release")
     monkeypatch.setattr(service, "_job_published_ontology_markdown", lambda **kwargs: None)
-    calls = []
+    calls: list[str] = []
 
-    def load(runtime, profile, release):
+    def load(runtime: Any, profile: str, release: str) -> list[PropertyDefinition]:
         calls.append(release)
         return [definition]
 
@@ -51,6 +55,8 @@ def test_job_result_unit_metadata_survives_storage_and_mcp(monkeypatch, chat, en
     assert service.run_next_nl2sql_job(worker_id="unit-job", job_id=created.job_id)
     observer = _worker(repo)
     job = observer.get_job(created.job_id, actor_user_uuid="user-1")
+    assert job is not None
+    assert job.result is not None
     assert job.status == JobStatus.DONE, job.error_message
     if chat:
         results = observer.take_chat_execution_result(job.job_id, actor_user_uuid="user-1").results

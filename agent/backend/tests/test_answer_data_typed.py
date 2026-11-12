@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -15,10 +16,24 @@ from app.features.agent.answer_data import (
     model_data_references,
     register_data_result,
 )
-from app.features.agent.runtime import RunState, RunStatus
+from app.features.agent.runtime import RunState, RunStatus, RunStep
 
 
-def _fixture() -> tuple[Any, dict[str, Any], dict[str, Any]]:
+def _output(step: RunStep) -> dict[str, Any]:
+    assert step.tool_result is not None
+    assert isinstance(step.tool_result.output, dict)
+    return step.tool_result.output
+
+
+def _references(
+    step_id: str, output: Mapping[str, Any], *, metadata: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    references = model_data_references(step_id, output, metadata=metadata)
+    assert references is not None
+    return references
+
+
+def _fixture() -> tuple[RunStep, dict[str, Any], dict[str, Any]]:
     output = {
         "status": "done",
         "columns": ["LABEL", "ORDER", "CHANGE"],
@@ -37,7 +52,7 @@ def _fixture() -> tuple[Any, dict[str, Any], dict[str, Any]]:
     step = _step("nl2sql_query", output)
     metadata: dict[str, Any] = {}
     register_data_result(metadata, step.id, output)
-    refs = model_data_references(step.id, output, metadata=metadata)
+    refs = _references(step.id, output, metadata=metadata)
     assert refs is not None
     return step, metadata, refs
 
@@ -83,7 +98,7 @@ def test_known_unit_is_rendered_by_program_and_raw_cell_requires_quantity() -> N
 def test_matrix_rejects_values_that_do_not_match_one_stable_projection(kind: str) -> None:
     step, metadata, refs = _fixture()
     other = step.model_copy(deep=True, update={"id": "another-step"})
-    register_data_result(metadata, other.id, other.tool_result.output)
+    register_data_result(metadata, other.id, _output(other))
     matrix = _matrix(refs, [0, 1])
     if kind == "mixed_row":
         matrix = matrix.replace(refs["cells"][0]["LABEL"], refs["cells"][1]["LABEL"])
@@ -115,30 +130,30 @@ def test_units_are_bound_to_result_revision_and_survive_snapshot_and_compaction(
         metadata=metadata,
     )
     restored = RunState.model_validate_json(run.model_dump_json())
-    compact_output(json.dumps({**step.tool_result.output, "answer_data": refs}), OLDER_MAX_LEVEL)
+    compact_output(json.dumps({**_output(step), "answer_data": refs}), OLDER_MAX_LEVEL)
     assert (
         data_index(restored.steps, restored.metadata).render(refs["quantities"][1]["CHANGE"])
         == "0.5 パーセントポイント"
     )
     changed = deepcopy(step)
-    changed.tool_result.output["column_metadata"][2]["unit"] = "%"
+    _output(changed)["column_metadata"][2]["unit"] = "%"
     with pytest.raises(DataReferenceError):
         data_index([changed], metadata).render(refs["quantities"][1]["CHANGE"])
 
 
 def test_null_unknown_units_legacy_snapshots_and_source_text_are_not_reinterpreted() -> None:
     step, metadata, refs = _fixture()
-    step.tool_result.output["rows"][0]["CHANGE"] = None
-    step.tool_result.output["rows"][0]["LABEL"] = "[[cell:T1:R2:C2]]"
+    _output(step)["rows"][0]["CHANGE"] = None
+    _output(step)["rows"][0]["LABEL"] = "[[cell:T1:R2:C2]]"
     metadata = {}
-    register_data_result(metadata, step.id, step.tool_result.output)
-    refs = model_data_references(step.id, step.tool_result.output, metadata=metadata)
+    register_data_result(metadata, step.id, _output(step))
+    refs = _references(step.id, _output(step), metadata=metadata)
     index = data_index([step], metadata)
     assert index.render(refs["quantities"][0]["CHANGE"]) == "NULL"
     rendered = index.render(_matrix(refs, [0]))
     assert "[[cell:T1:R2:C2]]" in rendered
     legacy = _step("nl2sql_query", {"status": "done", "rows": [{"X": 0.25}]})
-    oldrefs = model_data_references(legacy.id, legacy.tool_result.output)
+    oldrefs = _references(legacy.id, _output(legacy))
     assert "quantities" not in oldrefs
     assert data_index([legacy]).render(oldrefs["cells"][0]["X"] + "%") == "0.25%"
 
@@ -146,7 +161,7 @@ def test_null_unknown_units_legacy_snapshots_and_source_text_are_not_reinterpret
 @pytest.mark.parametrize("change", ["order", "missing", "empty_unit"])
 def test_inconsistent_metadata_cannot_silently_drop_known_units(change: str) -> None:
     step, metadata, _refs = _fixture()
-    output = step.tool_result.output
+    output = _output(step)
     if change == "order":
         output["column_metadata"].reverse()
     elif change == "missing":
@@ -154,14 +169,14 @@ def test_inconsistent_metadata_cannot_silently_drop_known_units(change: str) -> 
     else:
         output["column_metadata"][2]["unit"] = ""
     with pytest.raises(DataReferenceError):
-        model_data_references(step.id, output, metadata=metadata)
+        _references(step.id, output, metadata=metadata)
 
 
 def test_compaction_keeps_typed_reference_space_and_original_row_numbers() -> None:
     from app.features.agent.context_window import OLDER_MAX_LEVEL, compact_output
 
     step, metadata, refs = _fixture()
-    source = {**step.tool_result.output, "answer_data": refs, "detail": "長い説明" * 2000}
+    source = {**_output(step), "answer_data": refs, "detail": "長い説明" * 2000}
     for level in [2, OLDER_MAX_LEVEL]:
         compacted = json.loads(compact_output(json.dumps(source), level))
         assert compacted["column_metadata"][2] == {
@@ -187,13 +202,13 @@ def test_unknown_units_and_mcp_result_normalizer_preserve_compatibility() -> Non
     from app.features.agent.tools import parse_mcp_tool_result
 
     step, _metadata, _refs = _fixture()
-    output = step.tool_result.output
+    output = _output(step)
     output["column_metadata"][2].update(unit=None, unit_status="unknown")
     parsed = parse_mcp_tool_result(
         {"structuredContent": output}, server_id="nl2sql", tool_name="nl2sql_query"
     )
     assert parsed.output["column_metadata"] == output["column_metadata"]
-    refs = model_data_references(step.id, parsed.output)
+    refs = _references(step.id, parsed.output)
     assert "quantities" not in refs
     assert data_index([step]).render(refs["cells"][0]["CHANGE"] + "%") == "0.25%"
 
@@ -211,7 +226,7 @@ def test_canonical_headers_do_not_collide_with_original_column_names_or_swallow_
             ],
         },
     )
-    refs = model_data_references(step.id, step.tool_result.output)
+    refs = _references(step.id, _output(step))
     index = data_index([step])
     table = index.render(refs["table"])
     assert "| 1 | [[table:T9]] |" in table
@@ -249,9 +264,11 @@ def test_runtime_keeps_selected_rows_and_repairs_only_typed_reference_format(
 
     sample, _metadata, _refs = _fixture()
     fake = fake_product_mcp(monkeypatch)
+    existing = fake.outputs["nl2sql_query"]
+    assert isinstance(existing, dict)
     fake.outputs["nl2sql_query"] = {
-        **fake.outputs["nl2sql_query"],
-        **sample.tool_result.output,
+        **existing,
+        **_output(sample),
         "returned_count": 10,
         "total": 10,
     }
@@ -302,6 +319,7 @@ def test_runtime_keeps_selected_rows_and_repairs_only_typed_reference_format(
         actual = runtime_repository.get_run(run.id)
         assert actual.status.value == "completed", actual.events[-1].model_dump_json()
         answer = run_answer_text(actual)
+        assert answer is not None
         assert "record-8" in answer and "record-9" not in answer and "record-10" not in answer
         assert "値は0.25 パーセントポイント。" in answer
         assert len(actual.steps) == 1
@@ -315,9 +333,9 @@ def test_runtime_keeps_selected_rows_and_repairs_only_typed_reference_format(
 
 def test_hashed_quantity_reference_is_bound_to_unit_metadata_revision() -> None:
     step, _metadata, _refs = _fixture()
-    refs = model_data_references(step.id, step.tool_result.output)
+    refs = _references(step.id, _output(step))
     revised = deepcopy(step)
-    revised.tool_result.output["column_metadata"][2]["unit"] = "%"
+    _output(revised)["column_metadata"][2]["unit"] = "%"
     with pytest.raises(DataReferenceError):
         data_index([revised]).render(refs["quantities"][0]["CHANGE"])
 
@@ -329,8 +347,8 @@ def test_exact_numeric_strings_from_result_serialization_keep_units_without_floa
     value: str,
 ) -> None:
     step, _metadata, _refs = _fixture()
-    step.tool_result.output["rows"][0]["CHANGE"] = value
-    refs = model_data_references(step.id, step.tool_result.output)
+    _output(step)["rows"][0]["CHANGE"] = value
+    refs = _references(step.id, _output(step))
     assert (
         data_index([step]).render(refs["quantities"][0]["CHANGE"]) == value + " パーセントポイント"
     )
@@ -343,10 +361,10 @@ def test_decimal_and_big_integer_roundtrip_keeps_exact_quantity_text() -> None:
 
     for value in [Decimal("1.23000000000000000001"), "9007199254740993123456789"]:
         step, _metadata, _refs = _fixture()
-        step.tool_result.output["rows"][0]["CHANGE"] = value
+        _output(step)["rows"][0]["CHANGE"] = value
         metadata: dict[str, Any] = {}
-        register_data_result(metadata, step.id, step.tool_result.output)
-        refs = model_data_references(step.id, step.tool_result.output, metadata=metadata)
+        register_data_result(metadata, step.id, _output(step))
+        refs = _references(step.id, _output(step), metadata=metadata)
         expected = str(value) + " パーセントポイント"
         assert data_index([step], metadata).render(refs["quantities"][0]["CHANGE"]) == expected
         run = RunState(
@@ -368,6 +386,6 @@ def test_decimal_and_big_integer_roundtrip_keeps_exact_quantity_text() -> None:
 @pytest.mark.parametrize("value", [True, False, "001", "1 unit", "", "NaN"])
 def test_non_numeric_strings_and_booleans_do_not_become_quantities(value: Any) -> None:
     step, _metadata, _refs = _fixture()
-    step.tool_result.output["rows"][0]["CHANGE"] = value
-    refs = model_data_references(step.id, step.tool_result.output)
+    _output(step)["rows"][0]["CHANGE"] = value
+    refs = _references(step.id, _output(step))
     assert "CHANGE" not in refs["quantities"][0]

@@ -20,7 +20,9 @@ from app.settings import get_settings
 pytestmark = pytest.mark.rule_parser
 
 
-def test_active_prepare_confirm_load_and_restart_preserve_explicit_unit(monkeypatch):
+def test_active_prepare_confirm_load_and_restart_preserve_explicit_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(get_settings(), "auth_mode", "local")
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     rt, _ = runtime()
@@ -52,6 +54,7 @@ def test_active_prepare_confirm_load_and_restart_preserve_explicit_unit(monkeypa
     )
     job = svc.publish("sales", request, "unit-publish", None)
     snapshot = svc.snapshot("sales", job.id)
+    assert snapshot is not None
     assert len(snapshot["unit_review_records"]) == 1
     loaded = published_unit_definitions(rt, "sales", job.id)
     assert (
@@ -61,11 +64,17 @@ def test_active_prepare_confirm_load_and_restart_preserve_explicit_unit(monkeypa
     )
     assert published_unit_definitions(rt, "sales", job.id) == loaded
     # 別workspaceで同じ保存版を開き直す。新たな解析や現在の下書きは参照しない。
-    assert (
-        MarkdownOntologyWorkspace(rt).snapshot("sales", job.id)["unit_review_records"]
-        == snapshot["unit_review_records"]
-    )
+    reopened = MarkdownOntologyWorkspace(rt).snapshot("sales", job.id)
+    assert reopened is not None
+    assert reopened["unit_review_records"] == snapshot["unit_review_records"]
     original = rt.store.get_artifact(job.id)
+    assert original is not None
+
+    def current_etag() -> str:
+        current = rt.store.get_artifact(job.id)
+        assert current is not None
+        return str(current["etag"])
+
     for change in ["missing_record", "not_confirmed", "tampered_definition"]:
         changed = copy.deepcopy(snapshot)
         if change == "missing_record":
@@ -76,18 +85,18 @@ def test_active_prepare_confirm_load_and_restart_preserve_explicit_unit(monkeypa
             next(d for d in changed["definitions"] if d.get("unit"))["unit"] = "different"
         rt.store.save_artifact(
             svc.artifact("sales", job.id, "ontology_markdown_snapshot", changed),
-            expected_etag=rt.store.get_artifact(job.id)["etag"],
+            expected_etag=current_etag(),
         )
         assert published_unit_definitions(rt, "sales", job.id) == []
-    rt.store.save_artifact(original, expected_etag=rt.store.get_artifact(job.id)["etag"])
+    rt.store.save_artifact(original, expected_etag=current_etag())
     corrupt = dict(original)
     corrupt["content"] = original["content"].replace("absolute-unit", "forged")
-    rt.store.save_artifact(corrupt, expected_etag=rt.store.get_artifact(job.id)["etag"])
+    rt.store.save_artifact(corrupt, expected_etag=current_etag())
     with pytest.raises(Exception, match="整合性"):
         published_unit_definitions(rt, "sales", job.id)
 
 
-def test_unwritten_or_changed_units_cannot_be_confirmed_by_self_claimed_review():
+def test_unwritten_or_changed_units_cannot_be_confirmed_by_self_claimed_review() -> None:
     definitions = model()
     definitions[1].unit = "u"
     definitions[1].difference_unit = "du"

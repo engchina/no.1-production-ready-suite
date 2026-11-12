@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
-from app.features.nl2sql.models import AllowedObjects, QueryResults
-from app.features.nl2sql.ontology_definitions import MetricDefinitionV2, PropertyDefinition
+from app.features.nl2sql.models import AllowedObjects, QueryResults, ResultColumnMetadata
+from app.features.nl2sql.ontology_definitions import (
+    BusinessDefinition,
+    MetricDefinitionV2,
+    PropertyDefinition,
+)
 from app.features.nl2sql.result_units import result_column_metadata
 
 
@@ -25,9 +31,9 @@ def prop(
 def metadata(
     sql: str,
     columns: list[str],
-    definitions: list | None = None,
+    definitions: Sequence[BusinessDefinition] | None = None,
     allowed: AllowedObjects | None = None,
-):
+) -> list[ResultColumnMetadata]:
     return result_column_metadata(
         sql,
         columns,
@@ -37,7 +43,7 @@ def metadata(
     )
 
 
-def test_position_alias_and_difference_are_bound_without_name_guessing():
+def test_position_alias_and_difference_are_bound_without_name_guessing() -> None:
     result = metadata(
         "SELECT a.x AS anything, a.x-a.y AS actual_pct, a.y FROM app.a a",
         ["ANYTHING", "ACTUAL_PCT", "Y"],
@@ -49,13 +55,13 @@ def test_position_alias_and_difference_are_bound_without_name_guessing():
 
 
 @pytest.mark.parametrize("function", ["SUM", "AVG", "MIN", "MAX"])
-def test_aggregates_keep_declared_units(function):
+def test_aggregates_keep_declared_units(function: str) -> None:
     assert (
         metadata(f"SELECT {function}(a.x) AS aggregate FROM app.a a", ["AGGREGATE"])[0].unit == "u"
     )
 
 
-def test_cte_column_alias_and_subquery_keep_snapshot_units():
+def test_cte_column_alias_and_subquery_keep_snapshot_units() -> None:
     sql = (
         "WITH c(v,w) AS (SELECT x,y FROM app.a) SELECT q.v-q.w AS d FROM (SELECT c.v,c.w FROM c) q"
     )
@@ -72,17 +78,19 @@ def test_cte_column_alias_and_subquery_keep_snapshot_units():
         [prop("X"), prop("X", unit="conflict"), prop("Y")],
     ],
 )
-def test_unreviewed_missing_and_conflicting_declarations_are_unknown(definitions):
+def test_unreviewed_missing_and_conflicting_declarations_are_unknown(
+    definitions: list[PropertyDefinition],
+) -> None:
     result = metadata("SELECT x-y AS d FROM app.a", ["D"], definitions)[0]
     assert result.unit is None and result.unit_status == "unknown"
 
 
 @pytest.mark.parametrize("expression", ["x/y", "x*2", "x+1", "ABS(x)", "CAST(x AS NUMBER)", "42"])
-def test_arbitrary_expressions_do_not_invent_units(expression):
+def test_arbitrary_expressions_do_not_invent_units(expression: str) -> None:
     assert metadata(f"SELECT {expression} AS PCT FROM app.a", ["PCT"])[0].unit_status == "unknown"
 
 
-def test_hidden_columns_never_escape_in_metadata():
+def test_hidden_columns_never_escape_in_metadata() -> None:
     allowed = AllowedObjects(table_names=["APP.A"], columns={"APP.A": ["X"]})
     result = metadata("SELECT x,y,x-y AS d FROM app.a", ["X", "Y", "D"], allowed=allowed)
     assert result[0].unit == "u"
@@ -90,7 +98,7 @@ def test_hidden_columns_never_escape_in_metadata():
     assert result[2].source_columns == ["APP.A.X"] and result[2].unit is None
 
 
-def test_same_alias_different_table_and_ambiguous_unqualified_column():
+def test_same_alias_different_table_and_ambiguous_unqualified_column() -> None:
     definitions = [prop("X"), prop("X", unit="different", table="B")]
     result = metadata(
         "SELECT a.x AS x,b.x AS x,x AS ambiguous FROM app.a a JOIN app.b b ON a.x=b.x",
@@ -106,7 +114,7 @@ def test_same_alias_different_table_and_ambiguous_unqualified_column():
     assert [r.unit for r in distinct] == ["u", "different"]
 
 
-def test_quoted_names_are_not_folded_to_unquoted_names():
+def test_quoted_names_are_not_folded_to_unquoted_names() -> None:
     definition = PropertyDefinition(
         api_name="quoted",
         name_ja="合成項目",
@@ -119,7 +127,7 @@ def test_quoted_names_are_not_folded_to_unquoted_names():
     assert metadata('SELECT t.V FROM APP."Mixed" t', ["V"], [definition], allowed)[0].unit is None
 
 
-def test_registered_metric_only_exact_expression_and_reviewed():
+def test_registered_metric_only_exact_expression_and_reviewed() -> None:
     metric = MetricDefinitionV2(
         api_name="metric",
         name_ja="合成指標",
@@ -134,7 +142,7 @@ def test_registered_metric_only_exact_expression_and_reviewed():
     assert metadata("SELECT a.x/a.y AS r FROM app.a a", ["R"], [metric])[0].unit is None
 
 
-def test_legacy_results_and_unknown_definition_are_optional():
+def test_legacy_results_and_unknown_definition_are_optional() -> None:
     legacy = QueryResults(columns=["X"], rows=[{"X": 1}], total=1)
     assert legacy.column_metadata == []
     assert metadata("SELECT x FROM app.a", ["X"], [])[0].unit_status == "unknown"
@@ -150,11 +158,11 @@ def test_legacy_results_and_unknown_definition_are_optional():
         'SELECT x FROM "invalid',
     ],
 )
-def test_unsupported_query_shapes_stay_unknown(sql):
+def test_unsupported_query_shapes_stay_unknown(sql: str) -> None:
     assert metadata(sql, ["X"])[0].unit_status == "unknown"
 
 
-def test_quoted_owner_and_cte_duplicate_alias_are_isolated():
+def test_quoted_owner_and_cte_duplicate_alias_are_isolated() -> None:
     definition = PropertyDefinition(
         api_name="quoted_owner",
         name_ja="合成項目",
@@ -185,7 +193,7 @@ def test_quoted_owner_and_cte_duplicate_alias_are_isolated():
     )
 
 
-def test_reviewed_metric_can_declare_subtraction_without_operand_inference():
+def test_reviewed_metric_can_declare_subtraction_without_operand_inference() -> None:
     metric = MetricDefinitionV2(
         api_name="difference",
         name_ja="合成指標",
@@ -196,7 +204,9 @@ def test_reviewed_metric_can_declare_subtraction_without_operand_inference():
     assert metadata("SELECT a.x-a.y AS d FROM app.a a", ["D"], [metric])[0].unit == "explicit"
 
 
-def test_published_review_hash_is_required_and_bound_to_fixed_release(monkeypatch):
+def test_published_review_hash_is_required_and_bound_to_fixed_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from types import SimpleNamespace
 
     from app.features.nl2sql import ontology_definition_workspace as workspace
@@ -220,9 +230,11 @@ def test_published_review_hash_is_required_and_bound_to_fixed_release(monkeypatc
             get_artifact=lambda identity: {"artifact_type": "ontology_release_v2"}
         )
     )
-    calls = []
+    calls: list[tuple[str, str]] = []
 
-    def release(self, profile_id, release_id):
+    def release(
+        self: workspace.ProfileOntologyWorkspaceService, profile_id: str, release_id: str
+    ) -> dict[str, bool]:
         calls.append((profile_id, release_id))
         return {"bundle": True}
 
@@ -245,7 +257,9 @@ def test_published_review_hash_is_required_and_bound_to_fixed_release(monkeypatc
     assert published_unit_definitions(runtime, "p", "ontology_revision_old") == []
 
 
-def test_prior_review_hash_without_new_optional_field_remains_usable(monkeypatch):
+def test_prior_review_hash_without_new_optional_field_remains_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from types import SimpleNamespace
 
     from app.features.nl2sql import ontology_definition_workspace as workspace
@@ -279,7 +293,9 @@ def test_prior_review_hash_without_new_optional_field_remains_usable(monkeypatch
 
 
 @pytest.mark.parametrize("expression", ["APP.A.X - APP.A.Y", "SUM(APP.A.X)"])
-def test_registered_metric_conflicting_with_known_physical_inference_is_unknown(expression):
+def test_registered_metric_conflicting_with_known_physical_inference_is_unknown(
+    expression: str,
+) -> None:
     metric = MetricDefinitionV2(
         api_name="conflict",
         name_ja="合成指標",
@@ -297,14 +313,14 @@ def test_registered_metric_conflicting_with_known_physical_inference_is_unknown(
     )
 
 
-def test_result_position_and_explicit_alias_mismatch_is_unknown():
+def test_result_position_and_explicit_alias_mismatch_is_unknown() -> None:
     result = metadata(
         "SELECT x AS first_value, y AS second_value FROM APP.A", ["SECOND_VALUE", "FIRST_VALUE"]
     )
     assert all(column.unit_status == "unknown" for column in result)
 
 
-def test_metric_with_hidden_mapping_does_not_disclose_provenance():
+def test_metric_with_hidden_mapping_does_not_disclose_provenance() -> None:
     metric = MetricDefinitionV2(
         api_name="hidden",
         name_ja="合成指標",
