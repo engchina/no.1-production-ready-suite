@@ -328,3 +328,32 @@ def test_projection_accepts_format_whitespace_without_guessing_numbers(selection
         "[[table:T1:rows=1:cols=3,1:layout=vertical]]"
     )
     assert index.render("[[table:T1:rows= * :cols= * ]]") == index.render("[[table:T1]]")
+
+
+def test_single_column_literal_table_is_rejected_but_pure_reference_is_rendered() -> None:
+    step, metadata, refs = _fixture()
+    index = data_index([step], metadata)
+    numeric = _step(
+        "nl2sql_query", {"status": "done", "columns": ["VALUE"], "rows": [{"VALUE": 1}]}
+    )
+    with pytest.raises(DataReferenceError):
+        data_index([numeric]).render("| VALUE |\n|---|\n| 999 |")
+    pure = "| model label |\n|---|\n| " + refs["quantities"][0]["CHANGE"] + " |"
+    assert index.render(pure) == index.render("[[table:T1:rows=1:cols=3]]")
+    assert index.render("[[table:T1:rows=1:cols=3:layout=vertical]]").endswith(
+        "| CHANGE (パーセントポイント) | 0.25 |"
+    )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "title\n---\ntext1|2",
+        "title \\| name\n---\ntext1|2",
+        "見出し\n===\ntext1|2",
+        "ordinary text1|2\nnot a rule\n3|4",
+    ],
+)
+def test_setext_and_pipe_prose_are_not_treated_as_single_column_data_tables(answer: str) -> None:
+    step, metadata, _refs = _fixture()
+    assert data_index([step], metadata).render(answer) == answer

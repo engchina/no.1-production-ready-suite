@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 _RULE = re.compile(r"\s*:?-+:?\s*")
+_PIPE = re.compile(r"(?<!\\)(?:\\\\)*\|")
 
 
 class ReferenceTableError(ValueError):
@@ -42,7 +43,10 @@ def render_reference_tables(
     while index < len(lines):
         if index + 1 < len(lines):
             rule = _parts(lines[index + 1])
-            if len(rule) > 1 and all(_RULE.fullmatch(part) for part in rule):
+            table_syntax = len(rule) > 1 or bool(
+                _PIPE.search(lines[index]) or _PIPE.search(lines[index + 1])
+            )
+            if table_syntax and rule and all(_RULE.fullmatch(part) for part in rule):
                 end = index + 2
                 body: list[list[str]] = []
                 while end < len(lines) and "|" in lines[end] and lines[end].strip():
