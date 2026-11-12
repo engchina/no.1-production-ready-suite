@@ -467,6 +467,24 @@ def parse_oracle_sql(
             ontology_revision_id=ontology_revision_id,
         )
 
+    for window in root.find_all(exp.Window):
+        parent = window.parent
+        while parent is not None and not isinstance(parent, exp.Select):
+            if isinstance(
+                parent, (exp.Where, exp.Having, exp.Group, exp.Join, exp.Window, exp.AggFunc)
+            ):
+                return _blocker_analysis(
+                    sql,
+                    code="SQL_WINDOW_PLACEMENT_INVALID",
+                    message_ja=(
+                        "分析関数は SELECT または ORDER BY で使用してください。"
+                        "絞り込みや集約には派生表・CTEの出力列を使用してください。"
+                    ),
+                    intent_version=intent_version,
+                    ontology_revision_id=ontology_revision_id,
+                )
+            parent = parent.parent
+
     sql_hash = sql_sha256(sql)
     query_scopes = _iter_query_scopes(root, exp)
     scope_ids = {id(scope): f"scope_{index + 1}" for index, scope in enumerate(query_scopes)}
