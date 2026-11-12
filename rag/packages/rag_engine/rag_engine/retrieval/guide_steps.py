@@ -163,7 +163,7 @@ class GuidePlan:
 
     @property
     def step_contracts(self) -> tuple[dict[str, Any], ...]:
-        """手順の目的・根拠の要件・完了条件と前提手順を監査へ渡す。"""
+        """手順の目的・根拠の要件・完了条件と前提手順を生成へ渡す。"""
         return tuple(
             {
                 "step_id": step.step_id,

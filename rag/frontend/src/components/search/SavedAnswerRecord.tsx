@@ -1,5 +1,7 @@
 import { AnswerFooter, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
 
+import { answerFaqDirectScore } from "@/lib/answer-diagnostics";
+
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -71,7 +73,7 @@ export function SavedAnswerRecord({
         （3 製品のチャットと同じ共通の並び。#2707）。
       */}
       <AnswerFooter
-        notice={showAnswer ? record.notice : null}
+        notice={showAnswer && answerFaqDirectScore(record.answer_diagnostics, null) === null ? record.notice : null}
         noticeLabel={t("answer.notice.label")}
         evidence={
           showCitations && (record.citations.length > 0 || (record.withheld_evidence_count ?? 0) > 0) ? (

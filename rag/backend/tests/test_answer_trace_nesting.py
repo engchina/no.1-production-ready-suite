@@ -70,8 +70,7 @@ async def test_spans_are_nested_under_the_step_that_did_the_work(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _traced_llm)
     pipeline = RagPipeline(
-        # 質問の言い換えに LLM を使う戦略（元の質問の検索を並行に先読みする。#1499）。
-        settings=Settings(rag_query_strategy="auto_routing", oci_compartment_id="synthetic"),
+        settings=Settings(oci_compartment_id="synthetic"),
         oracle=_TracedOracle(),  # type: ignore[arg-type]
         genai=_TracedGenAi(),  # type: ignore[arg-type]
     )
@@ -99,17 +98,15 @@ async def test_spans_are_nested_under_the_step_that_did_the_work(
     # 並べ替え・文書の絞り込み・起点の上限は、文書の検索の中の別の工程（兄弟）。
     assert parent_of("Rerank") == "文書検索"
     assert parent_of("文書ごとの起点の上限") == "文書検索"
-    # 元の質問の先読み（埋め込み・DB の検索）は、言い換えの LLM と並行に読む「質問の言い換え」の子。
-    # 全体の工程（質問の読み取りから回答の作成まで）の直下に出さない。
     db_parents = parents("synthetic.db_search")
     assert db_parents
-    assert set(db_parents) <= {"質問の言い換え・分解", "文書検索", "前後の文脈の読み込み"}
-    assert "質問の言い換え・分解" in db_parents
-    assert set(parents("gen_ai.embeddings")) <= {"質問の言い換え・分解", "文書検索"}
-    # モデルの呼び出しは、呼び出した工程の子（言い換えの判定・回答の作成と確認の回）。
+    assert set(db_parents) <= {"文書検索", "前後の文脈の読み込み"} or set(db_parents) <= {
+        "文書検索"
+    }
+    assert set(parents("gen_ai.embeddings")) <= {"文書検索"}
+    # モデルの呼び出しは、呼び出した工程の子（回答の作成）。
     chat_parents = parents("gen_ai.chat")
-    assert "質問の言い換え・分解" in chat_parents
-    assert any(parent.startswith("回答文の生成と根拠確認") for parent in chat_parents)
+    assert any(parent.startswith("回答文の生成と引用の確認") for parent in chat_parents)
     assert "rag.answer" not in {*db_parents, *chat_parents}
 
 

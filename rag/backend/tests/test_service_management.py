@@ -96,7 +96,6 @@ def test_catalog_covers_preprocess_and_parser_without_gpu() -> None:
         "parser-oci-genai-vision",
         "parser-marker",
         "parser-unlimited-ocr",
-        "parser-mineru",
         "parser-dots-ocr",
         "parser-glm-ocr",
     ):

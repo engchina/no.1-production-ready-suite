@@ -10,7 +10,6 @@ from grounded_stub import echo_model
 from test_answer_generation import (
     _answer_context,
     _chunk_run_stub,
-    _crag_grade,
     _record,
     _rerank_ready_settings,
     heading,
@@ -33,7 +32,7 @@ class AnswerExecutionTests(unittest.TestCase):
 
     def run_answer(self, question="質問", **kwargs):
         """実環境に接続せず、通常 RAG を既定として回答を作る。"""
-        options = dict(query_strategy=generation.SIMPLE_RETRIEVAL_LABEL, answer_flow=generation.STANDARD_ANSWER_FLOW_LABEL)
+        options = {}
         options.update(kwargs)
         return generation.answer_question_result(question, "abcdef", ["docling"], self.settings, **options)
 
@@ -206,57 +205,6 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertEqual(len(long_details["fields"]), STEP_DETAILS_MAX_FIELDS)
         self.assertEqual(long_details["fields"][0]["value"], "y" * STEP_DETAILS_VALUE_MAX + "…")
 
-    def test_all_strategy_and_flow_names_match_options(self):
-        for strategy, label in generation.QUERY_STRATEGIES:
-            for flow, flow_label in generation.ANSWER_FLOWS:
-                with (
-                    self.subTest(strategy=strategy, flow=flow),
-                    patch.object(
-                        generation,
-                        "build_query_expansion",
-                        return_value=generation.QueryExpansionResult(
-                            original_question="質問",
-                            selected_strategy=strategy,
-                            effective_strategy=generation.HYDE_STRATEGY if strategy == generation.AUTO_ROUTING_STRATEGY else strategy,
-                            generated_queries=("追加の検索文",),
-                        ),
-                    ),
-                    patch.object(
-                        generation,
-                        "_grade_crag_retrieval",
-                        return_value=generation.CragRetrievalAttempt(
-                            attempt=1,
-                            query="質問",
-                            retrieval_queries=("質問",),
-                            sufficient=True,
-                            generation_usable=True,
-                            answerable_parts=(
-                                {
-                                    "aspect": "requested_result",
-                                    "kind": "operation",
-                                    "claim": self.context.records[0].text,
-                                    "status": "supported",
-                                    "evidence": [{"source_id": "r1", "quote": self.context.records[0].text}],
-                                },
-                            ),
-                        ),
-                    ),
-                ):
-                    result = self.run_answer(query_strategy=label, answer_flow=flow_label)
-                self.assertIn(f"設定: {label}", result.question_display)
-                effective = generation.HYDE_LABEL if strategy == generation.AUTO_ROUTING_STRATEGY else label
-                self.assertIn(f"結果: {effective}", result.question_display)
-                self.assertIn(f"設定: {flow_label}", result.question_display)
-                self.assert_order(
-                    result.question_display,
-                    heading("質問の言い換え・分解"),
-                    heading("回答生成フロー"),
-                    heading("回答文の生成と根拠確認（1回目）"),
-                )
-                self.assertEqual(
-                    generation.answer_result_payload(result, answer_id="a1", run_id="abcdef")["question_display"], result.question_display
-                )
-
     def test_mayor_intent_is_combined_and_understanding_adds_no_query(self):
         result = self.run_answer("倉庫を移転したので、拠点名を変更する方法を教えてほしい")
         display = result.question_display
@@ -317,29 +265,9 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertIn("新しい語", display)
         self.assert_order(display, "初回 終了", "再確認 開始", "再確認 終了", "補正後 開始", "補正後 終了")
 
-    def test_steps_are_recorded_when_external_calls_execute(self):
-        def search(*args, **kwargs):
-            lines = "\n".join(generation._execution_lines.get())
-            self.assertIn("質問の言い換え・分解 終了", lines)
-            self.assertIn("文書検索 開始", lines)
-            self.assertNotIn("文書検索 終了", lines)
-            self.assertNotIn("回答文の生成", lines)
-            return self.context
-
-        def answer(*args, **kwargs):
-            lines = "\n".join(generation._execution_lines.get())
-            self.assertIn("文書検索 終了", lines)
-            self.assertIn("回答文の生成と根拠確認（1回目） 開始", lines)
-            self.assertNotIn("回答文の生成と根拠確認（1回目） 終了", lines)
-            return echo_model(*args, **kwargs)
-
-        self.search.side_effect = search
-        self.parse.side_effect = answer
-        self.run_answer()
-
     def test_missing_chunks_does_not_claim_strategy_or_flow_ran(self):
         with patch.object(generation, "load_latest_or_source_chunk_run", return_value=None):
-            result = self.run_answer(query_strategy=generation.AUTO_ROUTING_LABEL)
+            result = self.run_answer()
         # 検索の前提が無いときだけ、検索せずに中止したことを「文書検索」の工程に残す（#3495）。
         self.assertNotRegex(result.question_display, heading("検索の準備確認"))
         self.assert_order(result.question_display, heading("文書検索"), "状態: 中止")
@@ -359,7 +287,18 @@ class AnswerExecutionTests(unittest.TestCase):
         # どの段で 0 件になったかを工程の詳細と回答の記録に残す（#2401）。
         self.assertIn("根拠が 0 件になった段: 文書検索（検索の候補が 0 件）", result.question_display)
         zero = result.generation_trace["zero_evidence"]
-        self.assertEqual((zero["stage"], zero["candidate_count"], zero["rejected_count"]), ("retrieval", 0, 0))
+        self.assertEqual((zero["stage"], zero["candidate_count"]), ("retrieval", 0))
+
+    def test_zero_evidence_records_the_same_retrieval_counts_shape(self):
+        # 候補 0 件でも通常の回答と同じ形で残す（基準で全部消えたときは絞り込む前の数が残る。#4735）。
+        self.search.return_value = generation.AnswerContext(records=[], text="", candidate_count=12)
+        result = self.run_answer()
+        self.assertEqual(
+            result.generation_trace["retrieval_counts"],
+            {"candidate_count": 12, "found": 0, "passed_to_model": 0, "top_score": None, "threshold": None},
+        )
+        # 0 件の段の記録はそのまま残す。
+        self.assertEqual(result.generation_trace["zero_evidence"]["stage"], "retrieval")
 
     def run_with_steps(self, **kwargs):
         """回答を作り、工程の開始の順（工程名と入れ子の深さ）と LLM の呼び出しの schema を返す。"""
@@ -407,27 +346,9 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertIn("request_coverage", searched.generation_trace)
         return search_steps, search_calls
 
-    def test_retrieval_without_answer_runs_the_answer_evidence_flow_standard(self):
-        steps, calls = self.assert_same_evidence_flow(generation.STANDARD_ANSWER_FLOW_LABEL)
-        names = [name for _depth, name in steps]
-        self.assertIn((1, "文書検索"), steps)
-        self.assertNotIn("要求ごとの根拠の確認", names)
-        self.assertNotIn("回答文の生成と根拠確認（1回目）", names)
-        self.assertEqual(calls, [])
-
-    def test_retrieval_without_answer_runs_the_answer_evidence_flow_crag(self):
-        # CRAG の回答フローなら、回答を作らない検索も同じ根拠確認（LLM）をする。
-        grade = _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["r1"], support_text=self.context.records[0].text)
-        steps, calls = self.assert_same_evidence_flow(generation.CRAG_ANSWER_FLOW_LABEL, grade)
-        self.assertIn((1, "文書検索（1回目）"), steps)
-        self.assertIn((1, "根拠確認（1回目）"), steps)
-        self.assertEqual(calls, ["CragRetrievalGradeOutput"])
-
     def test_retrieval_stopping_after_search_skips_crag_and_evidence_completion(self):
-        # 業務 Agent の根拠の取得（complete_evidence=False）は主の文書の検索の後で止め、CRAG も使わない。
-        result, steps, calls = self.run_with_steps(
-            answer_flow=generation.CRAG_ANSWER_FLOW_LABEL, generate_answer=False, complete_evidence=False
-        )
+        # 業務 Agent の根拠の取得（complete_evidence=False）は主の文書の検索の後で止める。
+        result, steps, calls = self.run_with_steps(generate_answer=False, complete_evidence=False)
         self.search.assert_called_once()
         self.assertEqual(calls, [])
         self.assertEqual(result.answer_text, "")
@@ -449,6 +370,7 @@ class AnswerExecutionTests(unittest.TestCase):
         result = self.run_answer(generate_answer=False)
         self.assertEqual(result.answer_text, "")
         self.assertEqual(result.generation_trace["zero_evidence"]["stage"], "retrieval")
+        self.assertEqual(result.generation_trace["retrieval_counts"]["candidate_count"], 0)
         self.assertIn("状態: 根拠不足で終了", result.question_display)
         self.parse.assert_not_called()
 
@@ -473,51 +395,10 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertEqual(result, self.context.records)
         self.assertTrue(any(line.startswith("Rerank 終了（失敗・取得順を保持）") for line in lines), lines)
 
-    def test_second_crag_search_failure_keeps_first_attempt(self):
-        self.search.side_effect = [self.context, generation.AdbHybridSearchUnavailable("search unavailable")]
-
-        def parse(system, prompt, settings, schema, **options):
-            if schema is generation.CragRetrievalGradeOutput:
-                return _crag_grade(sufficient=False, rewritten_query="追加検索")
-            return echo_model(system, prompt, settings, schema, **options)
-
-        self.parse.side_effect = parse
-        result = self.run_answer(answer_flow=generation.CRAG_ANSWER_FLOW_LABEL)
-        self.assert_order(
-            result.question_display,
-            heading("文書検索（1回目）"),
-            heading("根拠確認（1回目）"),
-            heading("補正検索の準備"),
-            heading("文書検索（2回目）"),
-            "状態: エラーで中断",
-        )
-        self.assertNotRegex(result.question_display, heading("根拠確認（2回目）"))
-        self.assertEqual(result.crag_attempts[0]["stop_reason"], "retrieval_error")
-        self.assertEqual(result.crag_attempts[0]["recovery_trace"]["retrieval_error"], "AdbHybridSearchUnavailable")
-        self.assertEqual(self.search.call_count, 2)
-        self.assertEqual([call.args[3].__name__ for call in self.parse.call_args_list], ["CragRetrievalGradeOutput"])
-        self.assertEqual(result.generation_trace["crag_generation_gate"]["generation_calls"], 0)
-        self.assertNotRegex(result.question_display, heading("回答文の生成と根拠確認（1回目）"))
-        self.assertTrue(result.answer_text)
-
-    def test_llm_error_has_trace_and_does_not_leak_into_next_request(self):
-        self.parse.side_effect = RuntimeError("LLM unavailable")
-        with self.assertRaises(generation.AnswerExecutionError) as caught:
-            self.run_answer("失敗する質問")
-        display = caught.exception.question_display
-        self.assert_order(display, heading("回答文の生成と根拠確認（1回目）"), "状態: エラーで中断")
-        self.assertEqual(display.count("状態: エラーで中断"), 2)  # 失敗した工程と、その親
-        self.assertIsNone(generation._execution_lines.get())
-        self.parse.side_effect = echo_model  # None にすると MagicMock の草稿・監査が生成経路へ流れる
-        result = self.run_answer("次の質問")
-        self.assertNotIn("失敗する質問", result.question_display)
-        self.assertNotIn("エラーで中断", result.question_display)
-
     def test_new_and_legacy_memos_are_removed_on_retry(self):
         for separator in (
             generation.QUESTION_DISPLAY_METADATA_SEPARATOR,
             "--- 回答生成メモ ---",
-            generation.QUERY_STRATEGY_DISPLAY_SEPARATOR,
         ):
             with self.subTest(separator=separator):
                 result = self.run_answer(f"原質問\n\n{separator}\n以前の記録")

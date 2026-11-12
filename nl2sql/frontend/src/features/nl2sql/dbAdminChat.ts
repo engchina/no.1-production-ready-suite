@@ -17,6 +17,7 @@ import {
   type ChatProgressTerminalStatus,
   type ChatProgressStepStatus,
   type TraceDetailsLabels,
+  operationTimestampMs,
 } from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
@@ -75,7 +76,7 @@ export function dbAdminChatStatementKind(statement: DbAdminChatStatementPlan): D
 }
 
 function savedTimes(executedAt: string, elapsedMs: number): { startedAtMs: number; finishedAtMs?: number } {
-  const finishedAtMs = Date.parse(executedAt);
+  const finishedAtMs = operationTimestampMs(executedAt) ?? Number.NaN;
   return Number.isFinite(finishedAtMs)
     ? { startedAtMs: finishedAtMs - elapsedMs, finishedAtMs }
     : { startedAtMs: Date.now() };

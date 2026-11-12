@@ -6,7 +6,42 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from rag_engine.generation.citation_content import structure_only_quote
 from rag_engine.models.llm import GroundedDraft
+
+
+def with_summary_fallback(
+    draft: GroundedDraft, items: Mapping[int, Any], applications: Sequence[Any], diagnostic: Mapping[str, Any]
+) -> tuple[GroundedDraft, str | None]:
+    """摘要が空なら、構造の検査を通った同じ結論を使う。表は既存の題と表を出す。"""
+    if draft.summary.strip():
+        return draft, None
+    present = {row["id"] for row in diagnostic.get("parts", ()) if row.get("status") == "present"}
+    candidates: list[tuple[int, str, str, list[int], list[int]]] = []
+    for part in draft.answer_parts:
+        if part.id not in present:
+            continue
+        if part.result_kind == "derived":
+            derived = [applications[index] for index in part.application_indexes if 0 <= index < len(applications)]
+            if not derived or any(not entry.published or entry.application.table is not None for entry in derived):
+                continue
+            text = "\n".join(entry.application.result.strip() for entry in derived)
+            candidates.append((0, part.id, text, [], list(part.application_indexes)))
+        elif part.result_kind == "direct":
+            direct = [items[index] for index in part.item_indexes if index in items]
+            if not direct or any(not entry.confirmed for entry in direct):
+                continue
+            if all(structure_only_quote(entry.item.text, entry.span or {}) for entry in direct):
+                continue
+            text = "\n".join(entry.item.text for entry in direct)
+            candidates.append((1, part.id, text, list(part.item_indexes), []))
+    candidates = [row for row in candidates if row[2].strip()]
+    if not candidates:
+        return draft, None
+    _, part_id, text, item_indexes, application_indexes = min(candidates, key=lambda row: row[0])
+    return draft.model_copy(
+        update={"summary": text, "summary_item_indexes": item_indexes, "summary_application_indexes": application_indexes}
+    ), part_id
 
 
 def check_answer_parts(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   answerAttachedImages,
+  answerFaqDirectScore,
   unreadSectionLinks,
   confidenceVariant,
   outcomeBadge,
@@ -50,12 +51,6 @@ describe("parseAnswerDiagnostics", () => {
       external_data_required: true,
       external_data_items: ["対象の受注の登録状態", ""],
       question_type: ["操作方法"],
-      auto_field_filter: {
-        conditions: [
-          { name: "金額", value_type: "number", op: "gte", value: "100000" },
-          { name: "壊れた条件", value_type: "number", op: "between", value: "1" },
-        ],
-      },
       rewritten_question: "受注入力画面での受注の登録方法は？",
       generated_queries: ["受注 登録"],
       models: {
@@ -94,9 +89,6 @@ describe("parseAnswerDiagnostics", () => {
     expect(parsed?.externalDataRequired).toBe(true);
     expect(parsed?.externalDataItems).toEqual(["対象の受注の登録状態"]);
     expect(parsed?.questionType).toEqual(["操作方法"]);
-    expect(parsed?.autoFieldFilter).toEqual({
-      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-    });
     expect(parsed?.models).toEqual({
       llm: { modelId: "model-a", label: "Model A" },
       attachedImages: 2,
@@ -134,6 +126,29 @@ describe("parseAnswerDiagnostics", () => {
     ).toEqual({ question: "Q", answer: "" });
   });
 
+  // #4788
+  it("FAQ の回答をそのまま返した回答は、一致度を読む", () => {
+    expect(
+      parseAnswerDiagnostics({
+        answer_source: "approved_faq",
+        approved_faq_question: "合成の質問",
+        approved_faq_answer: "合成の回答",
+        approved_faq_direct: { faq_id: "faq-1", score: 0.95, min_score: 0.92 },
+      })?.approvedFaq,
+    ).toEqual({ question: "合成の質問", answer: "合成の回答", direct: { score: 0.95 } });
+  });
+
+  it("そのまま返した回答の一致度は、配信の診断か保存した会話のメッセージから読む", () => {
+    const live = { answer_source: "approved_faq", approved_faq_direct: { score: 0.95 } };
+    expect(answerFaqDirectScore(live, null)).toBe(0.95);
+    expect(answerFaqDirectScore(null, { approved_faq_direct_score: 1 })).toBe(1);
+    // 利用者が選んだ Q&A からの回答・いつもの回答・壊れた値は、そのまま返した回答ではない。
+    expect(answerFaqDirectScore({ answer_source: "approved_faq" }, null)).toBeNull();
+    expect(answerFaqDirectScore(null, { approved_faq_direct_score: null })).toBeNull();
+    expect(answerFaqDirectScore(null, { approved_faq_direct_score: "1" })).toBeNull();
+    expect(answerFaqDirectScore(null, null)).toBeNull();
+  });
+
   // 関係情報で加えた根拠（Issue 2055）。
   it("関係情報で加えた根拠の数と使った見出しを読む", () => {
     expect(
@@ -166,7 +181,6 @@ describe("parseAnswerDiagnostics", () => {
   it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
     expect(parseAnswerDiagnostics(null)).toBeNull();
     // モデルを持たない古い回答の記録でも壊れない。
-    expect(parseAnswerDiagnostics({})?.autoFieldFilter).toBeNull();
     expect(parseAnswerDiagnostics({})?.models).toEqual({ llm: null, attachedImages: 0, embedding: "", rerank: "" });
     expect(parseAnswerDiagnostics({})?.approvedFaq).toBeNull();
     expect(confidenceVariant("high")).toBe("success");
@@ -351,5 +365,23 @@ describe("answerAttachedImages", () => {
     expect(answerAttachedImages(null, { answer_attached_images: -1 })).toBe(0);
     expect(answerAttachedImages(null, null)).toBe(0);
     expect(answerAttachedImages(undefined, { content: "回答" })).toBe(0);
+  });
+});
+
+describe("retrievalCounts（検索の件数）", () => {
+  const counts = { candidate_count: 12, found: 5, passed_to_model: 3 };
+
+  it("絞り込む前・基準を通過・回答に使用の件数を読む", () => {
+    expect(parseAnswerDiagnostics({ retrieval_counts: counts })?.retrievalCounts).toEqual({ candidates: 12, found: 5, used: 3 });
+  });
+
+  it("候補 0 件の記録も行として読む", () => {
+    expect(parseAnswerDiagnostics({ retrieval_counts: { candidate_count: 0, found: 0, passed_to_model: 0 } })?.retrievalCounts).toEqual({ candidates: 0, found: 0, used: 0 });
+  });
+
+  it("項目が無い・数でない記録は null（行を出さない）", () => {
+    expect(parseAnswerDiagnostics({})?.retrievalCounts).toBeNull();
+    expect(parseAnswerDiagnostics({ retrieval_counts: { found: 5, passed_to_model: 3 } })?.retrievalCounts).toBeNull();
+    expect(parseAnswerDiagnostics({ retrieval_counts: { ...counts, found: "5" } })?.retrievalCounts).toBeNull();
   });
 });

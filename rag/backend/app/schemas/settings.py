@@ -1,8 +1,9 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
-from datetime import datetime
 from typing import Literal
 from urllib.parse import urlsplit
+
+from pr_backend_core.timezones import UtcDatetime
 
 # OCI 認証の schema は3製品共通（platform の pr_system_settings。#100）。互換のため re-export する。
 # データベース設定の schema は3製品共通（pr_system_settings。#108）。互換のため re-export する。
@@ -78,7 +79,7 @@ from pydantic import (
     model_validator,
 )
 from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
-from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
+from rag_pipeline_core.chunking import DEFAULT_FIXED_DELIMITERS, FixedDelimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_DEFAULT,
@@ -99,13 +100,13 @@ from app.config import (
     CHUNK_TABLE_CHILD_TARGET_CHARS_DEFAULT,
     CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
     CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
-    AnswerFlow,
     ChunkingStrategy,
     EvaluationSuite,
+    FileType,
+    FileTypeDefaultEntry,
     GraphProfile,
     ParserAdapterBackend,
     PreprocessProfile,
-    QueryStrategy,
     VectorIndexProfile,
     reject_roadmap_parser_adapter_backend,
 )
@@ -117,11 +118,10 @@ ParserAdapterBackendName = Literal[
     "unstructured",
     "structured_records_jsonl",
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
 ]
-ExternalParserBackendName = Literal["mineru", "dots_ocr"]
-ExternalParserProtocol = Literal["mineru_v1", "openai_chat_completions"]
+ExternalParserBackendName = Literal["dots_ocr"]
+ExternalParserProtocol = Literal["openai_chat_completions"]
 ExternalParserConnectionStatus = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
 ]
@@ -129,7 +129,6 @@ ParserAdapterScoreBackendName = Literal[
     "local",
     "docling",
     "unstructured",
-    "mineru",
     "dots_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
@@ -407,13 +406,48 @@ class ParserBackendCapabilityData(BaseModel):
     extensions: list[str] = Field(default_factory=list)
 
 
-class MineruLicenseAcknowledgementData(BaseModel):
-    """MinerU のライセンスの条件の確認の状態（#3359）。確認するまで MinerU を選べない。"""
+class FileTypeDefaultsGlobalData(BaseModel):
+    """種類の行で未設定のときに使う全体の既定（「全体の既定に従う」の中身）。"""
 
-    acknowledged: bool = False
-    # 確認した管理者の表示名と日時（UTC の ISO 8601）。未確認なら None。
-    acknowledged_by: str | None = None
-    acknowledged_at: str | None = None
+    preprocess_profile: PreprocessProfile
+    parser_adapter_backend: ParserAdapterBackend
+    chunking_strategy: ChunkingStrategy
+
+
+class FileTypeDefaultRowData(FileTypeDefaultEntry):
+    """種類の 1 行（保存値と、この種類に対応する選択肢）。"""
+
+    file_type: FileType
+    extensions: list[str]
+    preprocess_options: list[PreprocessProfile]
+    # 対応するがサービスが未設定で今は使えないファイル準備（設定画面へ案内する）。
+    unavailable_preprocess_profiles: list[PreprocessProfile] = Field(default_factory=list)
+    # ファイル準備ごとの、対応する解析エンジン（行のファイル準備が決まると絞られる）。
+    parser_options: dict[str, list[ParserAdapterBackend]]
+    unavailable_parser_backends: list[ParserAdapterBackend] = Field(default_factory=list)
+    # 行のファイル準備が未設定のときに、解析エンジンの選択肢を決めるファイル準備。
+    inherited_preprocess_profile: PreprocessProfile
+    # 組み込みの既定（「既定に戻す」で入る値）。この環境で使えない行はすべて None。
+    builtin: FileTypeDefaultEntry
+    builtin_unavailable_reason: str | None = None
+
+
+class FileTypeDefaultsSettingsData(BaseModel):
+    """「形式別の既定」の画面のデータ。"""
+
+    rows: list[FileTypeDefaultRowData]
+    chunking_options: list[ChunkingStrategy]
+    global_defaults: FileTypeDefaultsGlobalData
+    config_source: Literal["runtime"] = "runtime"
+
+
+class FileTypeDefaultsUpdate(BaseModel):
+    """形式別の既定の保存（全行の置き換え）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 行が無ければ組み込みの既定、全項目が未設定の行は「全体の既定に従う」の選択。
+    entries: dict[FileType, FileTypeDefaultEntry] = Field(default_factory=dict)
 
 
 class ParserAdapterSettingsData(BaseModel):
@@ -435,13 +469,12 @@ class ParserAdapterSettingsData(BaseModel):
     heading_level_inference_enabled: bool = False
     field_extraction_enabled: bool = False
     navigation_summary_enabled: bool = False
-    raptor_enabled: bool = False
     navigation_summary_max_nodes: int
+    # 取込の後に文書全体の要約を作るか（RAG_DOCUMENT_SUMMARY_ENABLED。#4793）。全体の設定だけで、
+    # 文書のレシピでは上書きしない。
+    document_summary_enabled: bool = True
     # 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。#2002）。
     vision_concurrency: int = 4
-    mineru_license: MineruLicenseAcknowledgementData = Field(
-        default_factory=MineruLicenseAcknowledgementData
-    )
     config_source: Literal["runtime"]
 
 
@@ -452,7 +485,7 @@ POST_PARSE_SETTING_FIELDS = (
     "heading_level_inference_enabled",
     "field_extraction_enabled",
     "navigation_summary_enabled",
-    "raptor_enabled",
+    "document_summary_enabled",
     "vision_concurrency",
 )
 
@@ -468,20 +501,16 @@ class ParserAdapterSettingsUpdate(BaseModel):
     adapter_backend: ParserAdapterBackend | None = None
     docling_enabled: bool | None = None
     unstructured_enabled: bool | None = None
-    mineru_enabled: bool | None = None
-    # MinerU のライセンスの条件の確認（#3359）。true で確認した人・日時を記録し、false で
-    # 記録を消す。省略・null は変えない。確認するまで MinerU を有効にも選択にもできない。
-    mineru_license_acknowledged: bool | None = None
     dots_ocr_enabled: bool | None = None
     structured_records_jsonl_enabled: bool | None = None
     xml_tree_json_enabled: bool | None = None
-    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
+    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=1)
     vision_image_purpose: ImagePurpose | None = None
     vision_enabled: bool | None = None
     heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
-    raptor_enabled: bool | None = None
+    document_summary_enabled: bool | None = None
     vision_concurrency: int | None = Field(default=None, ge=1, le=16)
 
     @field_validator("adapter_backend", mode="before")
@@ -630,7 +659,7 @@ class ChunkingSettingsData(BaseModel):
     chunk_size: int
     overlap: int
     min_chars: int
-    delimiter: str
+    delimiter: list[str]
     context_header_enabled: bool
     # 親子階層（small-to-big。`small_to_big`）の分割パラメータ(rag_poc と同じ 5 項目)。
     chunk_child_target_chars: int
@@ -653,7 +682,7 @@ class ChunkingSettingsUpdate(BaseModel):
     )
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
-    delimiter: str = Field(default=JSONL_RECORD_BOUNDARY, min_length=1, max_length=256)
+    delimiter: FixedDelimiters = Field(default_factory=lambda: list(DEFAULT_FIXED_DELIMITERS))
     chunk_child_target_chars: int = Field(
         default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
         ge=CHUNK_CHILD_TARGET_CHARS_MIN,
@@ -680,15 +709,6 @@ class ChunkingSettingsUpdate(BaseModel):
         le=CHUNK_PARENT_MAX_CHILDREN_MAX,
     )
 
-    @field_validator("delimiter")
-    @classmethod
-    def normalize_delimiter(cls, value: str) -> str:
-        """分割符の前後空白を設定値へ混入させない。"""
-        delimiter = value.strip()
-        if not delimiter:
-            raise ValueError("delimiter を入力してください。")
-        return delimiter
-
     @model_validator(mode="after")
     def validate_chunk_bounds(self) -> "ChunkingSettingsUpdate":
         """chunk size と各パラメータの整合性を保存前に検証する。"""
@@ -712,7 +732,7 @@ class AnswerRecordSettingsData(BaseModel):
 
 
 class AnswerPromptView(BaseModel):
-    """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
+    """編集できるプロンプト(生成の役割の文 generation.role / 図の読み取り image_retrieval など)。"""
 
     key: str
     content: str
@@ -720,7 +740,7 @@ class AnswerPromptView(BaseModel):
     customized: bool
     required_placeholders: list[str]
     required_tokens: list[str] = Field(default_factory=list)
-    updated_at: datetime | None = None
+    updated_at: UtcDatetime | None = None
 
 
 class AnswerPromptPart(BaseModel):
@@ -758,30 +778,21 @@ class AnsweringSettingsData(BaseModel):
     """回答の検索と生成の全体既定(回答エンジン。#593)。
 
     全体設定だけで決め、検索・回答プロファイルでは上書きしない
-    (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
+    (プロファイルの ``query`` に欄を持たない)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
     retrieval_query_limit: int = Field(default=60, ge=0, le=2000, strict=True)
     rerank_top_n: int = Field(default=60, ge=0, le=2000, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
-    runtime_rules_confirmation_enabled: bool = False
-    runtime_rules_answer_enabled: bool = False
     hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
-    query_strategy: QueryStrategy
-    answer_flow: AnswerFlow
-    answer_audit_mode: Literal["none", "standard", "detailed"]
-    answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"]
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
-    screen_linking_enabled: bool
-    request_coverage_retrieval_enabled: bool
-    auto_field_filter_enabled: bool
     # 関係情報(章節・表の見出しの entity と chunk の対応)で検索の候補を足す(#2055。既定 OFF)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
@@ -789,13 +800,6 @@ class AnsweringSettingsData(BaseModel):
     section_expansion_max_levels: int
     section_expansion_input_token_percent: int
     graph_expansion_enabled: bool
-    # 段ごとのモデル(空は回答のモデル): 質問の対象の名前の役割の判定(#4351)、表の行の条件の当てはめ
-    # (#4349)、推導の監査の判定(#4565)と理由(#4564)。選べる登録モデルは段で同じ。
-    question_subject_role_model: str = ""
-    row_condition_model: str = ""
-    application_audit_model: str = ""
-    application_reason_model: str = ""
-    step_model_choices: list[AnsweringModelChoice] = Field(default_factory=list)
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -808,8 +812,6 @@ class AnsweringSettingsUpdate(BaseModel):
     rerank_min_relevance_score: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False
     )
-    runtime_rules_confirmation_enabled: bool | None = None
-    runtime_rules_answer_enabled: bool | None = None
     hybrid_search_backend: Literal["oracle_native", "sudachi"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
     rrf_source_ratio: tuple[float, float] | None = None
@@ -835,15 +837,8 @@ class AnsweringSettingsUpdate(BaseModel):
 
     runtime_terms_search_enabled: bool | None = None
     runtime_terms_answer_enabled: bool | None = None
-    query_strategy: QueryStrategy | None = None
-    answer_flow: AnswerFlow | None = None
-    answer_audit_mode: Literal["none", "standard", "detailed"] | None = None
-    answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"] | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
-    screen_linking_enabled: bool | None = None
-    request_coverage_retrieval_enabled: bool | None = None
-    auto_field_filter_enabled: bool | None = None
     graph_expansion_enabled: bool | None = None
 
     entity_expansion_enabled: bool | None = None
@@ -851,11 +846,6 @@ class AnsweringSettingsUpdate(BaseModel):
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
-    # 段ごとのモデル。空は回答のモデル。登録モデルの ID だけを受ける(route で確かめる)。
-    question_subject_role_model: str | None = Field(default=None, max_length=256)
-    row_condition_model: str | None = Field(default=None, max_length=256)
-    application_audit_model: str | None = Field(default=None, max_length=256)
-    application_reason_model: str | None = Field(default=None, max_length=256)
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

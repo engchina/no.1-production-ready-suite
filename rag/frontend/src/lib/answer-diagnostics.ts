@@ -1,9 +1,6 @@
 import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from "@production-ready/ui";
 
-import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
 import { ja, t, type I18nKey } from "@/lib/i18n";
-import { parseCragDiagnostics, type CragDiagnostics } from "@/lib/crag-diagnostics";
-import { parseAnswerValidation } from "@/lib/answer-validation";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
 /** 回答の対応（#1235。backend の diagnostics.answer.outcome）。 */
@@ -66,8 +63,6 @@ export type AnswerGuide = {
 };
 
 export type AnswerDiagnostics = {
-  validation: ReturnType<typeof parseAnswerValidation>;
-  crag: CragDiagnostics | null;
   /** 回答の対応（#1235）。古い記録など、無ければ null。 */
   outcome: AnswerOutcome | null;
   /** 回答に使った業務ガイド（#1238）。使っていなければ null。 */
@@ -85,14 +80,15 @@ export type AnswerDiagnostics = {
   /** 問い合わせ型（回答モデルが付けた質問の種類の語。#651）。 */
   questionType: string[];
   /**
-   * 質問から読み取って検索に足した抽出項目の条件（#652）。読み取っていなければ null。
-   */
-  autoFieldFilter: { conditions: ExtractionFieldCondition[] } | null;
-  /**
    * 利用者が選んだ承認済み FAQ だけから回答したときの出典（回答した時点の原文。#737）。
    * answer は変更前に保存した回答では空。FAQ から回答していなければ null。
    */
-  approvedFaq: { question: string; answer: string } | null;
+  approvedFaq: {
+    question: string;
+    answer: string;
+    /** 一致度が下限以上で、FAQ の回答をそのまま返した回答（LLM を使っていない。#4788）。 */
+    direct?: { score: number | null };
+  } | null;
   /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
   rewrittenQuestion: string;
   generatedQueries: string[];
@@ -101,7 +97,7 @@ export type AnswerDiagnostics = {
    */
   graphExpansion: { addedCount: number; status: string; graphAvailable: boolean | null; plannedCount: number; skippedExistingCount: number; entities: { name: string; addedCount: number }[] } | null;
   /**
-   * 使ったモデル（#649）。LLM（選んだ回答モデル）は質問の理解・拡張・回答の生成・監査のすべてに使う（#3444）。
+   * 使ったモデル（#649）。LLM（選んだ回答モデル）は質問の理解・拡張・回答の生成のすべてに使う（#3444）。
    * attachedImages はそのモデルへ添付した根拠の画像の件数（画像を読めないモデル・画像の無い根拠は 0）、rerank は
    * 無効なら空。
    */
@@ -110,6 +106,8 @@ export type AnswerDiagnostics = {
   modelCascade: ModelCascadeRecord | null;
   /** 失敗して省いた補助の工程の、利用者向けの名前（#4681）。縮退が無ければ空。 */
   degradedSteps: string[];
+  /** 検索の件数（基準で絞り込む前の候補・基準を通過・回答に使用。#4735）。項目の無い記録は null（行を出さない）。 */
+  retrievalCounts: { candidates: number; found: number; used: number } | null;
   steps: {
     name: string;
     status: string;
@@ -147,6 +145,14 @@ function list(value: unknown): unknown[] {
 
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseRetrievalCounts(value: unknown): AnswerDiagnostics["retrievalCounts"] {
+  const raw = record(value);
+  const candidates = num(raw.candidate_count);
+  const found = num(raw.found);
+  const used = num(raw.passed_to_model);
+  return candidates === null || found === null || used === null ? null : { candidates, found, used };
 }
 
 /**
@@ -202,8 +208,6 @@ export function parseAnswerDiagnostics(
     outcome: (ANSWER_OUTCOMES as readonly string[]).includes(outcome)
       ? (outcome as AnswerOutcome)
       : null,
-    crag: parseCragDiagnostics(raw.crag_attempts),
-    validation: parseAnswerValidation(raw.answer_validation),
     guide: parseGuide(raw.guide),
     guideLoadFailed: raw.guide_load_failed === true,
     confidence: String(raw.confidence ?? ""),
@@ -216,12 +220,14 @@ export function parseAnswerDiagnostics(
     externalDataRequired: raw.external_data_required === true,
     externalDataItems: list(raw.external_data_items).map(String).filter(Boolean),
     questionType: list(raw.question_type).map(String).filter(Boolean),
-    autoFieldFilter: parseAutoFieldFilter(raw.auto_field_filter),
     approvedFaq:
       raw.answer_source === "approved_faq"
         ? {
             question: String(raw.approved_faq_question ?? ""),
             answer: String(raw.approved_faq_answer ?? ""),
+            ...(raw.approved_faq_direct && typeof raw.approved_faq_direct === "object"
+              ? { direct: { score: num(record(raw.approved_faq_direct).score) } }
+              : {}),
           }
         : null,
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
@@ -230,6 +236,7 @@ export function parseAnswerDiagnostics(
     models: parseModels(raw.models),
     modelCascade: parseModelCascade(raw.model_cascade),
     degradedSteps: parseDegradedSteps(raw.degraded_steps),
+    retrievalCounts: parseRetrievalCounts(raw.retrieval_counts),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
       const details = parseRunStepDetails(item.details);
@@ -338,27 +345,6 @@ function parseGuide(value: unknown): AnswerGuide | null {
   };
 }
 
-function parseAutoFieldFilter(value: unknown): AnswerDiagnostics["autoFieldFilter"] {
-  const raw = record(value);
-  const conditions = list(raw.conditions).flatMap((item) => {
-    const entry = record(item);
-    const name = String(entry.name ?? "");
-    const valueType = String(entry.value_type ?? "");
-    const op = String(entry.op ?? "");
-    if (!name || !["string", "number", "date", "bool"].includes(valueType)) return [];
-    if (!["eq", "gte", "lte"].includes(op)) return [];
-    return [
-      {
-        name,
-        value_type: valueType as ExtractionFieldCondition["value_type"],
-        op: op as ExtractionFieldCondition["op"],
-        value: String(entry.value ?? ""),
-      },
-    ];
-  });
-  return conditions.length ? { conditions } : null;
-}
-
 type ModelRef = { modelId: string; label: string };
 
 function parseModelRef(value: unknown): ModelRef | null {
@@ -379,6 +365,18 @@ function imageCount(value: unknown): number {
 export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown): number {
   const live = parseAnswerDiagnostics(diagnostics)?.models.attachedImages ?? 0;
   return Math.max(live, imageCount(record(savedMessage).answer_attached_images));
+}
+
+/**
+ * 登録済みQ&A の回答をそのまま返した回答の一致度（0〜1。#4788）。作成した直後の回答は配信の診断の
+ * `approved_faq_direct.score`、保存した回答は会話のメッセージの `approved_faq_direct_score`（回答の記録の診断の
+ * 同じ値）から読む。そのまま返した回答でなければ null。
+ */
+export function answerFaqDirectScore(diagnostics: unknown, savedMessage: unknown): number | null {
+  const live = parseAnswerDiagnostics(diagnostics)?.approvedFaq?.direct?.score;
+  if (typeof live === "number") return live;
+  const saved = record(savedMessage).approved_faq_direct_score;
+  return typeof saved === "number" && Number.isFinite(saved) ? saved : null;
 }
 
 /**

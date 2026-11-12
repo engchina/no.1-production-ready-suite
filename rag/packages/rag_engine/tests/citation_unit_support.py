@@ -28,6 +28,7 @@ def selected_answer_payload(
 ) -> dict[str, Any]:
     """新規の送達ID契約を直接使う、1要点の合成応答。"""
     return {
+        "response_kind": "answered",
         "request_coverage": [
             {
                 "request_id": "Q1",
@@ -100,6 +101,7 @@ def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, A
         if "citations" in item:
             item["citations"] = selected
     if getattr(schema, "_uses_typed_answer_parts", False):
+        result.setdefault("response_kind", "answered")
         parts = []
         original_items = result.pop("items", [])
         for position, item in enumerate(original_items):

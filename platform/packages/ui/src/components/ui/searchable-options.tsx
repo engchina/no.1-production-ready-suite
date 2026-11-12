@@ -85,6 +85,8 @@ export interface SearchableMultiSelectLabels extends SearchableSelectLabels {
   hideHideable?: string;
   /** 隠している件数（任意）。 */
   hiddenCount?: (count: number) => string;
+  /** `creatable` のとき、検索語を候補に無い値として足すボタン。 */
+  create?: (query: string) => string;
 }
 
 export const DEFAULT_SEARCHABLE_SELECT_LABELS: SearchableMultiSelectLabels = {
@@ -103,6 +105,7 @@ export const DEFAULT_SEARCHABLE_SELECT_LABELS: SearchableMultiSelectLabels = {
   selectAllVisible: "表示中をすべて選択",
   clear: "クリア",
   done: "完了",
+  create: (query) => `「${query}」を追加`,
 };
 
 /** 照合用の正規化（全角半角・大文字小文字を区別しない）。 */

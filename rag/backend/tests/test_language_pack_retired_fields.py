@@ -22,7 +22,7 @@ from app.rag.system_schema import SystemSchemaManager
 from tests.test_system_schema_manager import _FakeDatabase
 
 _NAME = "20261109_4666_language_pack_retired_question_cues"
-_KEEP = "hypothesis_cues"
+_KEEP = "comma_chars"
 
 
 def _with_retired(pack: dict[str, Any]) -> dict[str, Any]:
@@ -65,16 +65,15 @@ class _Cursor:
             self.rows = [
                 tuple(copy.deepcopy(row[name]) for name in names)
                 for row in rows
-                if "JSON_EXISTS" not in sql
-                or row["profile_config"].get("language_pack", {}).get("question_cues") is not None
+                if "JSON_EXISTS" not in sql or row["profile_config"].get("language_pack")
             ]
             return
         assert sql.startswith("UPDATE")
         self.db.updates += 1
         assignments = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[0])
-        key, bind = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[1])[0]
+        conditions = re.findall(r"(\w+)=:(\w+)", sql.split(" WHERE ")[1])
         for row in rows:
-            if row[key] == binds[bind]:
+            if all(row[key] == binds[bind] for key, bind in conditions):
                 for column, name in assignments:
                     value = binds[name]
                     row[column] = (
@@ -236,3 +235,323 @@ def test_data_step_runs_once_when_the_migration_is_pending(
 
     manager.initialize()
     assert len(calls) == 1
+
+
+def test_answer_check_fields_and_guide_check_section_are_retired() -> None:
+    """回答の生成後の確認の項目と節を除き、作り直した公開版は今の契約で読める(#4714)。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    old["answer_labels"]["removed_section"] = "合成語"
+    old["guide_check_cues"] = {"approval_terms": ["合成語"]}
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    assert "guide_check_cues" not in stripped
+    assert "removed_section" not in stripped["answer_labels"]
+    assert build_pack(stripped).hash == build_pack(pack).hash
+    assert module.without_retired_fields(pack) is None
+
+
+_UNREAD_NAME = "20261109_4668_language_pack_retired_unread_checks"
+
+
+def test_unread_fields_and_section_are_retired() -> None:
+    """動いていない語の判定だけが読んでいた項目と節を除き、作り直した公開版は今の契約で読める。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    old["operation_audit_cues"] = {"instruction_phrases": ["合成語"]}
+    for section, fields in (
+        ("answer_check_cues", module.RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS),
+        ("search_terms", module.RETIRED_UNREAD_SEARCH_TERM_FIELDS),
+        ("evidence_cues", module.RETIRED_UNREAD_EVIDENCE_CUE_FIELDS),
+    ):
+        old[section].update({key: ["合成語"] for key in fields})
+    old["answer_labels"].update(
+        {key: "合成語" for key in module.RETIRED_UNREAD_ANSWER_LABEL_FIELDS}
+    )
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    assert "operation_audit_cues" not in stripped
+    for section, fields in (
+        ("answer_check_cues", module.RETIRED_UNREAD_ANSWER_CHECK_CUE_FIELDS),
+        ("search_terms", module.RETIRED_UNREAD_SEARCH_TERM_FIELDS),
+        ("evidence_cues", module.RETIRED_UNREAD_EVIDENCE_CUE_FIELDS),
+        ("answer_labels", module.RETIRED_UNREAD_ANSWER_LABEL_FIELDS),
+    ):
+        assert not fields & stripped[section].keys()
+    assert build_pack(stripped).hash == build_pack(pack).hash
+    assert not module.RETIRED_UNREAD_FIELDS & {
+        key for fields in pack.values() if isinstance(fields, dict) for key in fields
+    }
+    assert "operation_audit_cues" not in pack
+
+
+def test_unread_fields_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _UNREAD_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in (*module.RETIRED_UNREAD_FIELDS, *module.RETIRED_UNREAD_SECTIONS):
+        assert field in section.sql
+
+
+def test_unread_fields_are_removed_from_synthetic_rows_and_hash_is_recomputed() -> None:
+    """公開版・下書き・プロファイルの合成の行から、#4668 で廃止した項目と節を除く。"""
+    current = builtin_pack().to_dict()
+    old = copy.deepcopy(current)
+    old["operation_audit_cues"] = {"instruction_phrases": ["合成語"]}
+    old["answer_check_cues"]["unexplained_words"] = ["合成語"]
+    old["answer_labels"]["predicate_endings"] = ["合成語"]
+    old["search_terms"]["feedback_split_words"] = ["合成語"]
+    old["evidence_cues"]["link_verbs"] = ["合成語"]
+    profile = {
+        "language_pack": {
+            "operation_audit_cues": {"instruction_phrases": ["合成語"]},
+            "evidence_cues": {"link_verbs": ["合成語"]},
+            "answer_check_cues": {"unexplained_words": ["合成語"]},
+        }
+    }
+    db = _db(_release(old), draft=old, profile=profile)
+
+    remove_retired_language_pack_fields(db)
+
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert release["content_hash"] == build_pack(release["effective_json"]).hash
+    assert release["ingest_hash"] == "ingest"
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    config = db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]
+    assert config == {"language_pack": {}}
+
+
+_EVIDENCE_TAG_NAME = "20261110_4668_language_pack_retired_evidence_tags"
+_EVIDENCE_TAG_SECTIONS = (
+    ("question_cues", module.RETIRED_EVIDENCE_TAG_QUESTION_CUE_FIELDS),
+    ("evidence_cues", module.RETIRED_EVIDENCE_TAG_EVIDENCE_CUE_FIELDS),
+    ("answer_check_cues", module.RETIRED_EVIDENCE_TAG_ANSWER_CHECK_CUE_FIELDS),
+    ("grounding_cues", module.RETIRED_EVIDENCE_TAG_GROUNDING_CUE_FIELDS),
+)
+
+
+def test_evidence_tag_fields_are_retired() -> None:
+    """根拠の語の印と本文の語の書き換えだけが読んでいた項目を除き、作り直した公開版は今の契約で読める。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    for section, fields in _EVIDENCE_TAG_SECTIONS:
+        old[section].update({key: ["合成語"] for key in fields})
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    for section, fields in _EVIDENCE_TAG_SECTIONS:
+        assert not fields & stripped[section].keys()
+    assert build_pack(stripped).hash == build_pack(pack).hash
+    assert not module.RETIRED_EVIDENCE_TAG_FIELDS & {
+        key for fields in pack.values() if isinstance(fields, dict) for key in fields
+    }
+
+
+def test_evidence_tag_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _EVIDENCE_TAG_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in module.RETIRED_EVIDENCE_TAG_FIELDS:
+        assert field in section.sql
+
+
+def test_evidence_tag_fields_are_removed_from_synthetic_rows_and_hash_is_recomputed() -> None:
+    """公開版・下書き・プロファイルの合成の行から、#4668 で廃止した項目を除く。"""
+    current = builtin_pack().to_dict()
+    old = copy.deepcopy(current)
+    for section, fields in _EVIDENCE_TAG_SECTIONS:
+        old[section].update({key: ["合成語"] for key in fields})
+    profile = {"language_pack": {"answer_check_cues": {"constraint_words": ["合成語"]}}}
+    db = _db(_release(old), draft=old, profile=profile)
+    remove_retired_language_pack_fields(db)
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert release["content_hash"] == build_pack(release["effective_json"]).hash
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    assert db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"]["language_pack"] == {}
+
+
+_QUESTION_WORD_NAME = "20261110_4668_language_pack_retired_question_word_checks"
+_QUESTION_WORD_SECTIONS = (
+    ("question_cues", module.RETIRED_QUESTION_WORD_QUESTION_CUE_FIELDS),
+    ("evidence_cues", module.RETIRED_QUESTION_WORD_EVIDENCE_CUE_FIELDS),
+    ("grounding_cues", module.RETIRED_QUESTION_WORD_GROUNDING_CUE_FIELDS),
+    ("answer_labels", module.RETIRED_QUESTION_WORD_ANSWER_LABEL_FIELDS),
+)
+
+
+def test_question_word_fields_and_sections_are_retired() -> None:
+    """質問の種類の語の判定だけが読んでいた項目と節を除き、作り直した公開版は今の契約で読める。"""
+    pack = builtin_pack().to_dict()
+    old = copy.deepcopy(pack)
+    for section, fields in _QUESTION_WORD_SECTIONS:
+        old[section].update({key: ["合成語"] for key in fields})
+    for section in module.RETIRED_QUESTION_WORD_SECTIONS:
+        old[section] = {"合成の項目": ["合成語"]}
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    for section, fields in _QUESTION_WORD_SECTIONS:
+        assert not fields & stripped[section].keys()
+    assert not module.RETIRED_QUESTION_WORD_SECTIONS & stripped.keys()
+    assert build_pack(stripped).hash == build_pack(pack).hash
+
+
+def test_question_word_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _QUESTION_WORD_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in module.RETIRED_QUESTION_WORD_FIELDS:
+        assert field in section.sql
+
+
+def test_crag_labels_are_retired_by_a_destructive_data_step() -> None:
+    """CRAG の工程と一緒に、表示の文の保存値も消す（#4749）。"""
+    old = builtin_pack().to_dict()
+    old["answer_labels"].update({key: "合成語" for key in module.RETIRED_CRAG_ANSWER_LABEL_FIELDS})
+    stripped = module.without_retired_fields(old)
+    assert stripped is not None
+    assert not module.RETIRED_CRAG_ANSWER_LABEL_FIELDS & stripped["answer_labels"].keys()
+    section = next(
+        s
+        for s in oracle_schema_migration_sections()
+        if s.name == "20261110_4749_language_pack_retired_crag_labels"
+    )
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+
+
+_UNREAD_4784_NAME = "20261110_4784_language_pack_retired_unread"
+
+
+def _with_4784_retired(pack: dict[str, Any]) -> dict[str, Any]:
+    old = copy.deepcopy(pack)
+    old["numbers"].update({key: ["合成語"] for key in module.RETIRED_4784_NUMBER_FIELDS})
+    old["symbols"]["normalization"] = "NFKC"
+    old["grounding_cues"].update(
+        {key: ["合成語"] for key in module.RETIRED_4784_GROUNDING_CUE_FIELDS}
+    )
+    old["answer_labels"]["aspect_labels"] = ["合成語=procedure"]
+    old["evidence_cues"].update(
+        {key: ["合成語"] for key in module.RETIRED_4784_EVIDENCE_CUE_FIELDS}
+    )
+    old["inquiry_cues"] = {"condition_terms": ["合成語"]}
+    return old
+
+
+def test_4784_fields_are_retired_and_ingest_hash_is_repointed() -> None:
+    """取込の項目を消した版は取込 hash も計算し直し、その版の索引の記録もそろえる(#4784)。"""
+    current = builtin_pack().to_dict()
+    old = _with_4784_retired(current)
+    profile = {
+        "language_pack": {
+            "inquiry_cues": {"column_words": ["合成語"]},
+            "grounding_cues": {"hedge_words": ["合成語"], "citation_unit_words": ["合成語"]},
+        }
+    }
+    db = _Db(
+        rag_language_pack_releases=[_release(old) | {"ingest_hash": "old-ingest"}],
+        rag_language_pack_state=[
+            {"singleton_id": 1, "draft_revision": 7, "draft_effective_json": old}
+        ],
+        rag_search_answer_profiles=[{"search_answer_profile_id": "p", "profile_config": profile}],
+        rag_chunk_sets=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"},
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "other"},
+            {"language_pack_release_id": "r2", "language_pack_ingest_hash": "old-ingest"},
+        ],
+        rag_recipe_version_log=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"}
+        ],
+    )
+
+    remove_retired_language_pack_fields(db)
+
+    pack = builtin_pack()
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert (release["content_hash"], release["ingest_hash"]) == (pack.hash, pack.ingest_hash)
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    assert db.tables["RAG_SEARCH_ANSWER_PROFILES"][0]["profile_config"] == {
+        "language_pack": {"grounding_cues": {"citation_unit_words": ["合成語"]}}
+    }
+    assert [row["language_pack_ingest_hash"] for row in db.tables["RAG_CHUNK_SETS"]] == [
+        pack.ingest_hash,
+        "other",
+        "old-ingest",
+    ]
+    assert db.tables["RAG_RECIPE_VERSION_LOG"][0]["language_pack_ingest_hash"] == pack.ingest_hash
+
+    snapshot = copy.deepcopy(db.tables)
+    remove_retired_language_pack_fields(db)
+    assert db.tables == snapshot
+
+
+def test_4784_extraction_artifacts_are_repointed_by_release_and_old_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statements: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(module, "_table_exists", lambda _connection, _table: True)
+    monkeypatch.setattr(
+        "app.clients.oracle._execute",
+        lambda _connection, sql, binds, **_: statements.append((sql, binds)),
+    )
+    module._repoint_ingest_hash(object(), "r1", "old", "new")
+    tables = [sql.split()[1] for sql, _ in statements]
+    assert tables == [
+        "rag_chunk_sets",
+        "rag_recipe_version_log",
+        "rag_document_extractions",
+        "rag_document_extraction_revisions",
+    ]
+    for sql, binds in statements:
+        assert binds == {"id": "r1", "old": "old", "new": "new"}
+        assert ":id" in sql and ":old" in sql
+    assert "JSON_TRANSFORM" in statements[2][0]
+
+
+def test_unchanged_ingest_hash_is_not_repointed() -> None:
+    """検索・回答の項目だけを消した版は取込 hash が変わらず、索引の記録に触らない。"""
+    pack = builtin_pack()
+    old = copy.deepcopy(pack.to_dict())
+    old["grounding_cues"]["hedge_words"] = ["合成語"]
+    db = _Db(
+        rag_language_pack_releases=[_release(old)],
+        rag_chunk_sets=[{"language_pack_release_id": "r1", "language_pack_ingest_hash": "ingest"}],
+    )
+    remove_retired_language_pack_fields(db)
+    assert db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]["ingest_hash"] == "ingest"
+    assert db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]["content_hash"] == pack.hash
+    assert db.updates == 1
+
+
+def test_4784_migration_is_a_destructive_data_step() -> None:
+    section = next(s for s in oracle_schema_migration_sections() if s.name == _UNREAD_4784_NAME)
+    assert section.data_step is remove_retired_language_pack_fields
+    assert "INGEST_HASH" in section.destructive_note
+    assert len(split_sql_statements(section.sql)) == 1
+    for field in module.RETIRED_4784_FIELDS:
+        assert field in section.sql
+        assert not any(
+            field in fields
+            for fields in builtin_pack().to_dict().values()
+            if isinstance(fields, dict)
+        )
+
+
+def test_release_with_non_nfkc_normalization_keeps_documents_reprocess_recommended() -> None:
+    """NFKC 以外の正規化を公開していた版の索引は、結果が違うので取込 hash を付け替えない(#4784)。"""
+    old = _with_4784_retired(builtin_pack().to_dict())
+    old["symbols"]["normalization"] = "NFC"
+    db = _Db(
+        rag_language_pack_releases=[_release(old) | {"ingest_hash": "old-ingest"}],
+        rag_chunk_sets=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"}
+        ],
+    )
+    remove_retired_language_pack_fields(db)
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["ingest_hash"] == builtin_pack().ingest_hash
+    assert db.tables["RAG_CHUNK_SETS"][0]["language_pack_ingest_hash"] == "old-ingest"

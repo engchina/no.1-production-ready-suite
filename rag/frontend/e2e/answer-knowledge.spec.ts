@@ -8,7 +8,7 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-// rag_poc からの移植: プロファイルの知識(登録済みQ&A / 用語・同義語 / ドメインキーワード / 確認・回答ルール)、
+// rag_poc からの移植: プロファイルの知識(登録済みQ&A / 用語・同義語 / ドメインキーワード)、
 // 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -52,6 +52,7 @@ const faqRecord = {
   question: faqSuggestion.question,
   answer: faqSuggestion.answer,
   alternate_questions: [],
+  negative_questions: [],
   status: "approved",
   target_knowledge_base_ids: ["kb-1"],
   source_document_ids: [],
@@ -62,6 +63,7 @@ const faqRecord = {
 };
 
 async function mockCommon(page: Page) {
+  await page.route("**/api/feedback/current?**", (route) => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>
@@ -99,7 +101,6 @@ async function mockSearchAnswerProfileApi(
         json: envelope({
           search_answer_profile_id: "bv-1",
           terms: [{ term: "受注", aliases: ["オーダー"], description: "注文", status: "approved" }],
-          rules: [],
         }),
       });
     }
@@ -116,7 +117,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`プロファイルの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, { tag: "@responsive" }, async ({
+  test(`プロファイルの知識パネルでキーワード・FAQ・用語を管理できる (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -133,9 +134,7 @@ for (const viewport of [
     const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
       "登録済みQ&A",
-      "質問の理解",
       "用語・同義語",
-      "確認・回答ルール",
       "業務ガイド",
       "ドメインキーワード",
     ]);
@@ -238,7 +237,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   const citations = page.getByTestId("answer-citations");
   const citationSummary = citations
     .locator("summary")
-    .filter({ hasText: "AI に渡した 1 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" })
+    .filter({ hasText: "AI に渡した 1 件 ／ 回答で引用 1 件" })
     .first();
   await expect(citationSummary).toBeVisible();
   await expect(citations.getByTestId("citation-text")).toBeHidden();
@@ -350,9 +349,9 @@ async function mockAnswerStream(page: Page, graphExpansion?: Record<string, unkn
   );
 }
 
-// #540 / #541: FAQ の追加と確認・回答ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
-// ルールは backend と同じく「ルール名」「照合キーワード」「ルール内容」が必須。
-test("FAQ の追加と確認・回答ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
+// #540 / #541: FAQ の追加と用語・同義語の保存は、押せる状態のまま未入力を欄の直下に出す。
+// 用語は backend と同じく「用語」が必須。
+test("FAQ の追加と用語・同義語の保存は、未入力を欄の下に出す", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
   const writes: string[] = [];
@@ -371,20 +370,19 @@ test("FAQ の追加と確認・回答ルールの保存は、未入力を欄の�
   await expect(page.locator("#approved-faq-answer")).toHaveAccessibleDescription(/回答を入力してください。/);
   await expect(page.locator("#approved-faq-question")).toBeFocused();
 
-  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
-  await expect(page.getByRole("heading", { name: "確認・回答ルールを追加" })).toBeVisible();
-  await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
-  await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
-  // ヘッダーの「保存」（検索・回答プロファイルの設定。#618）と区別し、確認・回答ルールのタブの中の保存を押す。
+  await page.getByRole("tab", { name: "用語・同義語" }).click();
+  await expect(page.getByRole("heading", { name: "用語・同義語を追加" })).toBeVisible();
+  await expect(page.locator('label[for="runtime-knowledge-name"]')).toContainText("必須");
+  // ヘッダーの「保存」（検索・回答プロファイルの設定。#618）と区別し、用語・同義語のタブの中の保存を押す。
   await page
-    .getByRole("tabpanel", { name: "確認・回答ルール" })
+    .getByRole("tabpanel", { name: "用語・同義語" })
     .getByRole("button", { name: "保存", exact: true })
     .click();
-  await expect(page.locator("#runtime-knowledge-name")).toHaveCount(0);
-  await expect(page.locator("#runtime-knowledge-labels")).toHaveAccessibleDescription(/照合キーワードを入力してください。/);
-  await expect(page.locator("#runtime-knowledge-title")).toHaveAccessibleDescription(/ルール名を入力してください。/);
-  await expect(page.locator("#runtime-knowledge-content")).toHaveAccessibleDescription(/ルール内容を入力してください。/);
-  await expect(page.locator("#runtime-knowledge-title")).toBeFocused();
+  await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/用語を入力してください。/);
+  await expect(page.locator("#runtime-knowledge-name")).toBeFocused();
+  // 登録ルールのタブと欄は無い（#4799）。
+  await expect(page.getByRole("tab", { name: "確認・回答ルール" })).toHaveCount(0);
+  await expect(page.locator("#runtime-knowledge-title")).toHaveCount(0);
   expect(writes).toHaveLength(0);
   await expectNoPageOverflow(page);
 });
@@ -413,127 +411,6 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   expect(saved).toEqual([{ enabled: false }]);
   await expectNoPageOverflow(page);
-});
-
-
-// #717: 確認・回答ルールに確認の質問と、選択肢が指す章節を設定する。
-test("確認・回答ルールに回答前の確認と章節を設定して保存できる", { tag: "@responsive" }, async ({ page }) => {
-  await mockCommon(page);
-  await mockSearchAnswerProfileApi(page);
-  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge", (route) =>
-    route.fulfill({
-      json: envelope({
-        search_answer_profile_id: "bv-1",
-        terms: [],
-        rules: [
-          { id: "R01", title: "期限の確認", triggers: ["期限"], content: "規程ごとに違う", status: "approved" },
-        ],
-      }),
-    })
-  );
-  const puts: unknown[] = [];
-  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/rules/R01/clarification", async (route) => {
-    puts.push(route.request().postDataJSON());
-    await route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
-  });
-  const documentQueries: URL[] = [];
-  await page.route("**/api/documents?**", (route) => {
-    const url = new URL(route.request().url());
-    documentQueries.push(url);
-    const offset = Number(url.searchParams.get("offset") ?? 0);
-    const items = offset === 0
-      ? Array.from({ length: 100 }, (_, index) => ({ id: `synthetic-${index + 1}`, file_name: `文書 ${index + 1}.pdf` }))
-      : [{ id: "doc-travel", file_name: "文書 101.pdf" }];
-    return route.fulfill({ json: envelope({ items, total: 101, limit: 100, offset, has_next: offset === 0 }) });
-  });
-  await page.route("**/api/documents/doc-travel/sections**", (route) =>
-    route.fulfill({
-      json: envelope({
-        document_id: "doc-travel",
-        source: "extraction",
-        rules_mode: "parser",
-        sections: [
-          { id: "sec-1", title: "第1章 総則", level: 1, page_start: 1, page_end: 1, origin: "extraction", source_section_id: "sec-1", edited: false },
-          { id: "sec-6", title: "第6条 申請と精算", level: 2, page_start: 2, page_end: 3, origin: "extraction", source_section_id: "sec-6", edited: false },
-        ],
-        extraction_section_count: 2,
-        page_count: 3,
-        revision: null,
-        updated_at: null,
-      }),
-    })
-  );
-
-  await page.goto("/search-answer-profiles?id=bv-1");
-  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
-  await page.getByRole("button", { name: /期限の確認/ }).first().click();
-  await expect(page.locator("#runtime-knowledge-name")).toHaveCount(0);
-  await expect(page.getByRole("switch", { name: "ルールを有効にする", exact: true })).toBeVisible();
-  await expect(page.locator("#runtime-knowledge-enabled-help")).toContainText("無効にして保存すると両方を使いません");
-  const editor = page.getByTestId("rule-clarification-editor");
-  await editor.getByRole("button", { name: "回答前の確認を設定する" }).click();
-
-  // 未入力は保存の前に欄の下で知らせる。
-  await editor.getByRole("button", { name: "回答前の確認を保存" }).click();
-  await expect(editor.getByText("確認事項を入力してください。")).toBeVisible();
-  expect(puts).toHaveLength(0);
-
-  await editor.getByRole("textbox", { name: /確認事項/ }).fill("どの規程についてのご質問ですか？");
-  await editor.getByRole("textbox", { name: /表示名/ }).nth(0).fill("出張旅費");
-  await editor.getByRole("textbox", { name: /表示名/ }).nth(1).fill("経費精算");
-  await editor.getByRole("textbox", { name: "検索に足す語" }).nth(0).fill("出張、日当");
-  await editor.getByRole("button", { name: /^章節を選ぶ文書/ }).first().click();
-  const listbox = page.getByRole("listbox", { name: "章節を選ぶ文書" });
-  await expect(listbox.getByRole("option")).toHaveCount(100);
-  expect(documentQueries).toHaveLength(1);
-  expect(documentQueries[0].searchParams.get("limit")).toBe("100");
-  await expect(listbox.getByRole("option").nth(1)).toHaveText("文書 2.pdf");
-  await expect(listbox.getByRole("option").nth(9)).toHaveText("文書 10.pdf");
-  await listbox.evaluate((node) => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event("scroll")); });
-  await expect(page.getByRole("option", { name: "文書 101.pdf", exact: true })).toBeVisible();
-  expect(documentQueries.some((url) => url.searchParams.get("offset") === "100")).toBe(true);
-  await page.screenshot({ path: test.info().outputPath("document-candidates-loaded.png") });
-  await page.getByRole("option", { name: "文書 101.pdf", exact: true }).click();
-  const documentPicker = editor.getByRole("button", { name: /^章節を選ぶ文書/ }).first();
-  await documentPicker.click();
-  const search = page.getByRole("combobox", { name: /章節を選ぶ文書/ });
-  await search.fill("文書");
-  await expect.poll(() => documentQueries.some((url) => url.searchParams.get("q") === "文書" && url.searchParams.get("offset") === "0")).toBe(true);
-  await expect(listbox.getByRole("option")).toHaveCount(100);
-  await search.press("Escape");
-  await expect(documentPicker).toContainText("文書 101.pdf");
-  await editor.getByRole("checkbox", { name: /第6条 申請と精算/ }).check();
-  await expect(editor.getByRole("list", { name: "選んだ章節" })).toContainText("第6条 申請と精算 p.2–3");
-
-  await editor.getByRole("button", { name: "回答前の確認を保存" }).click();
-  await expect(page.getByText("回答前の確認を保存しました。").first()).toBeVisible();
-  expect(puts).toHaveLength(1);
-  expect(puts[0]).toMatchObject({
-    clarification: {
-      question: "どの規程についてのご質問ですか？",
-      multiple: true,
-      allow_other: true,
-      options: [
-        {
-          label: "出張旅費",
-          search_terms: ["出張", "日当"],
-          sections: [
-            {
-              document_id: "doc-travel",
-              document_name: "文書 101.pdf",
-              section_id: "sec-6",
-              title: "第6条 申請と精算",
-              page_start: 2,
-              page_end: 3,
-            },
-          ],
-        },
-        { label: "経費精算", sections: [] },
-      ],
-    },
-  });
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: test.info().outputPath("rule-clarification-form.png") });
 });
 
 
@@ -627,44 +504,6 @@ test("キーワード Excel の遅い旧プレビューとファイル検証エ�
   releaseFirst();
   await expect(page.getByRole("button", { name: "取込", exact: true })).toBeDisabled();
   await expect(page.getByText("旧語", { exact: true })).toHaveCount(0);
-});
-
-// #3664: 用途と段階別の適用は管理設定として明示し、確認だけにダミー指示を求めない。
-test("確認だけのルールを空の内容で保存し、適用設定を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockCommon(page);
-  await mockSearchAnswerProfileApi(page);
-  const saved: Record<string, unknown>[] = [];
-  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/edit", async (route) => {
-    saved.push(route.request().postDataJSON());
-    await route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
-  });
-  await page.goto("/search-answer-profiles?id=bv-1");
-  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
-  await page.locator("#runtime-knowledge-title").fill("合成の確認");
-  await page.locator("#runtime-knowledge-labels").fill("設定");
-  await page.locator("#runtime-knowledge-purpose").click();
-  await page.getByRole("option", { name: "回答前の確認だけ", exact: true }).click();
-  await expect(page.locator('label[for="runtime-knowledge-content"]')).not.toContainText("必須");
-  await expect(page.locator("#runtime-knowledge-instruction-kind")).toBeDisabled();
-  await page.locator("#runtime-knowledge-exclusive-group").fill("group-a");
-  await page.locator("#runtime-knowledge-priority").fill("3");
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("rule-application-purpose.png"), fullPage: true });
-  await page.getByRole("tabpanel", { name: "確認・回答ルール" }).getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => saved.length).toBe(1);
-  expect(saved[0]).toMatchObject({ purpose: "confirmation", content: "", exclusive_group: "group-a", priority: 3 });
-});
-
-test("照合テストで保留した排他設定を管理者へ示す", { tag: "@responsive" }, async ({ page }) => {
-  await mockCommon(page);
-  await mockSearchAnswerProfileApi(page);
-  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/preview", (route) => route.fulfill({ json: envelope({ expanded_question: "設定", matched_terms: [], matched_rules: [], conflicting_rules: ["合成ルール A", "合成ルール B"] }) }));
-  await page.goto("/search-answer-profiles?id=bv-1");
-  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
-  await page.locator("#runtime-knowledge-question").fill("設定");
-  await page.getByRole("button", { name: "照合する", exact: true }).click();
-  await expect(page.getByText(/排他設定の競合により保留しました: 合成ルール A、合成ルール B/)).toBeVisible();
-  await expectNoPageOverflow(page);
 });
 
 test("検索の回答は同頁の説明と全確定根拠の対応を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {

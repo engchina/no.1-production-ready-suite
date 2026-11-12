@@ -11,7 +11,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.diagnostics import build_search_diagnostics
@@ -110,10 +110,7 @@ def test_search_answer_profile_expands_kbs_and_applies_query_config(
     """参照 KB 群が検索対象へ展開され、query 設定が pipeline と diagnostics に効く。"""
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(
-            query_strategy="rag_fusion",
-            answer_flow="standard_rag",
-        ),
+        query=KnowledgeBaseQueryConfig(),
     )
     _install(monkeypatch, {"bv-1": config})
 
@@ -125,10 +122,6 @@ def test_search_answer_profile_expands_kbs_and_applies_query_config(
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert RecordingPipeline.captured_settings is not None
-    assert (
-        RecordingPipeline.captured_settings.rag_query_strategy == get_settings().rag_query_strategy
-    )
-    assert RecordingPipeline.captured_settings.rag_answer_flow == get_settings().rag_answer_flow
     assert diagnostics["search_answer_profile_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
@@ -159,12 +152,6 @@ def test_saved_standard_options_of_search_answer_profile_are_ignored(
             "knowledge_base_ids": ["kb-1"],
             "system_prompt": "あなたは経理規程アシスタントです。",
             "default_language": "en",
-            "query": {
-                "retrieval_strategy": "keyword",
-                "generation_profile": "structured_json",
-                "post_retrieval_pipeline": "lean",
-                "rerank_enabled": False,
-            },
         }
     )
     _install(monkeypatch, {"bv-1": config})
@@ -177,29 +164,8 @@ def test_saved_standard_options_of_search_answer_profile_are_ignored(
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_rerank_enabled == get_settings().rag_rerank_enabled
     for removed in ("rag_generation_profile", "rag_generation_system_prompt_override"):
         assert not hasattr(settings, removed)
-
-
-def test_search_answer_profile_guardrail_policy_reaches_pipeline_settings(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """検索・回答プロファイルの regulated 設定が実 pipeline 構築に使う Settings へ届く。"""
-    config = SearchAnswerProfileConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"),
-    )
-    _install(monkeypatch, {"bv-1": config})
-
-    response = client.post(
-        "/api/search",
-        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
-    )
-
-    assert response.status_code == 200
-    assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_guardrails_input_enabled is False
 
 
 def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> None:
@@ -352,7 +318,7 @@ def test_search_answer_profile_ignores_single_kb_legacy_query(monkeypatch: Monke
     )
     profile_config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(answer_flow="standard_rag"),
+        query=KnowledgeBaseQueryConfig(),
     )
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
@@ -372,8 +338,6 @@ def test_search_answer_profile_ignores_single_kb_legacy_query(monkeypatch: Monke
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    # Search Answer Profile が設定した回答の設定は Search Answer Profile 値が効く。
-    assert settings.rag_answer_flow == "standard_rag"
     # Search Answer Profile が触れていない項目は KB legacy 値ではなく global 既定。
     assert settings.rag_neighbor_child_count == 3
     assert settings.rag_vector_index_profile == "accurate"

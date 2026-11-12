@@ -16,8 +16,8 @@ from typing import Any
 
 from app.clients.document_category_store import oracle_document_category_schema_sql
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
+from app.clients.document_summary_store import oracle_document_summary_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
-from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
 from app.clients.evaluation_testset_store import oracle_evaluation_testset_schema_sql
 from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
 from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
@@ -76,11 +76,27 @@ from app.clients.support_guide_store import (
 )
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
+    RETIRED_4784_FIELDS,
+    RETIRED_ANSWER_CHECK_CUE_FIELDS,
+    RETIRED_ANSWER_LABEL_FIELDS,
+    RETIRED_CRAG_ANSWER_LABEL_FIELDS,
+    RETIRED_EVIDENCE_TAG_FIELDS,
     RETIRED_QUESTION_CUE_FIELDS,
+    RETIRED_QUESTION_WORD_FIELDS,
+    RETIRED_SECTIONS,
+    RETIRED_UNREAD_FIELDS,
+    RETIRED_UNREAD_SECTIONS,
     remove_retired_language_pack_fields,
 )
+from app.rag.prompt_overrides_4782_generation_migration import removed_prompt_overrides_sql
 from app.rag.request_context import with_system_access
+from app.rag.runtime_rules_4799_migration import removed_runtime_rules_sql
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
+from app.rag.search_answer_profile_retired_fields import (
+    KEPT_LANGUAGE_PACK_SECTIONS,
+    KEPT_QUERY_FIELDS,
+    remove_retired_search_answer_profile_fields,
+)
 from app.rag.vector_index_adapter import default_vector_index_build
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
@@ -386,6 +402,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_recipe_version_log",
             sql=recipe_version_log_schema_sql(),
         ),
+        # 文書全体の要約（#4793）。文書を参照する。
+        OracleSchemaSection(
+            name="document_summaries",
+            table_name="rag_document_summaries",
+            sql=oracle_document_summary_schema_sql(),
+        ),
         OracleSchemaSection(
             name="citation_feedback",
             table_name="rag_citation_feedback",
@@ -418,12 +440,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="evaluation_job_case_results",
             table_name="rag_evaluation_job_case_results",
             sql=oracle_evaluation_job_case_result_schema_sql(),
-        ),
-        # 品質評価の判定の校正（記入の集合・項目・判定・校正の結果。#3578）。
-        OracleSchemaSection(
-            name="evaluation_calibration",
-            table_name="rag_evaluation_label_sets",
-            sql=oracle_evaluation_calibration_schema_sql(),
         ),
         OracleSchemaSection(
             name="evaluation_testsets",
@@ -644,20 +660,6 @@ END;
     )
     sections.append(
         OracleSchemaSection(
-            name="20261026_001_evaluation_calibration",
-            table_name="rag_evaluation_label_sets",
-            sql=evaluation_calibration_migration_sql(),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
-            name="20261026_002_evaluation_job_calibration_kind",
-            table_name="rag_evaluation_jobs",
-            sql=evaluation_job_calibration_kind_migration_sql(),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
             name="20261027_001_raptor_prompt_consolidation",
             table_name="rag_answer_prompts",
             sql=raptor_prompt_consolidation_sql(),
@@ -865,6 +867,270 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261109_4712_answer_prompt_reading_rules",
+            table_name="rag_answer_prompts",
+            sql=answer_prompt_reading_rules_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261109_4714_language_pack_retired_answer_checks",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- "
+                + ",".join(
+                    sorted(
+                        RETIRED_ANSWER_LABEL_FIELDS
+                        | RETIRED_ANSWER_CHECK_CUE_FIELDS
+                        | RETIRED_SECTIONS
+                    )
+                )
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、回答の生成後の"
+                "確認をやめて読まれなくなった項目（answer_labels の一部・answer_check_cues の一部・"
+                "guide_check_cues の節）の値を削除し、公開版の CONTENT_HASH を計算し直します。"
+                "ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261109_4668_language_pack_retired_unread_checks",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- "
+                + ",".join(sorted(RETIRED_UNREAD_FIELDS | RETIRED_UNREAD_SECTIONS))
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、動いていない"
+                "語の判定を消して読まれなくなった項目（search_terms・evidence_cues・answer_labels・"
+                "answer_check_cues の一部と operation_audit_cues の節）の値を削除し、公開版の "
+                "CONTENT_HASH を計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は"
+                "変えません。項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4668_language_pack_retired_evidence_tags",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_EVIDENCE_TAG_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、根拠の語の印と"
+                "本文の語の書き換えをやめて読まれなくなった項目（question_cues・evidence_cues・"
+                "answer_check_cues・grounding_cues の一部）の値を削除し、公開版の CONTENT_HASH を"
+                "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4668_language_pack_retired_question_word_checks",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_QUESTION_WORD_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、質問の種類の"
+                "語の判定と根拠の順位づけの語をやめて読まれなくなった項目（question_cues・"
+                "evidence_cues・grounding_cues・answer_labels の一部）と節（enumeration_cues・"
+                "definition_cues）の値を削除し、公開版の CONTENT_HASH を計算し直します。"
+                "ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。項目に保存した語を"
+                "残す必要があれば適用前に同列を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4749_language_pack_retired_crag_labels",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- "
+                + ",".join(sorted(RETIRED_CRAG_ANSWER_LABEL_FIELDS))
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、CRAG の工程を"
+                "消して読まれなくなった answer_labels の項目の値を削除し、公開版の CONTENT_HASH を"
+                "計算し直します。ほかの項目・版の番号・公開の履歴・INGEST_HASH は変えません。"
+                "項目に保存した語を残す必要があれば適用前に同列を export してください。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_generation_prompt_overrides",
+            table_name="rag_answer_prompts",
+            sql=removed_prompt_overrides_sql(),
+            destructive_note=(
+                "RAG_ANSWER_PROMPTS から、編集欄を外した指示の保存値（PROMPT_KEY が vlm_answer・"
+                "generation.system・generation.batchReading・generation.assumptionSystem・"
+                "generation.evidenceReading・generation.guideRules・support_guide_draft.*・"
+                "support_guide_conditions.*・rule_selection.*・history_rewrite.system・"
+                "field_filter.system・screen_linking.system・article_catalog.*・"
+                "section_extraction.system の行）を削除します。ほかの行（generation.role・"
+                "faq_answer.system・evaluation.*・picture_description.*・image_retrieval・"
+                "取込の指示）は変えません。編集した文を残す必要があれば、適用前に該当の行の "
+                "CONTENT を export してください。削除後は復元できず、新しい編集欄へは写しません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4781_retire_evaluation_calibration",
+            table_name="rag_evaluation_jobs",
+            sql=retire_evaluation_calibration_sql(),
+            destructive_note=(
+                "品質評価の判定の校正をやめたため、校正の表（RAG_EVALUATION_CALIBRATIONS・"
+                "RAG_EVALUATION_LABELS・RAG_EVALUATION_LABEL_ITEMS・RAG_EVALUATION_LABEL_SETS）を"
+                "行ごと削除し、校正の job の行（RAG_EVALUATION_JOBS の kind が calibration）と、"
+                "ロールの権限（RAG_ROLE_PERMISSIONS）の「判定の校正の管理」の行を削除します。"
+                "品質評価の job・ケースごとの結果・回答の記録は変えません。人手の判定を残す必要が"
+                "あれば適用前に同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4781_retire_removed_answer_prompts",
+            table_name="rag_answer_prompts",
+            sql=retire_removed_answer_prompts_sql(),
+            destructive_note=(
+                "保存した指示（RAG_ANSWER_PROMPTS）から、工程を消して読まれなくなったキーの行を"
+                "削除します: " + "・".join(RETIRED_ANSWER_PROMPT_KEYS) + "。ほかのキーの行と、"
+                "品質評価の結果・回答の記録は変えません。保存した文を残す必要があれば適用前に"
+                "同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4784_search_answer_profile_retired_fields",
+            table_name="rag_search_answer_profiles",
+            # 処理は data_step。残す欄と節の一覧を書くので、一覧を変えると checksum も変わる。
+            sql=(
+                "BEGIN\n  NULL; -- query: "
+                + ",".join(sorted(KEPT_QUERY_FIELDS))
+                + " / language_pack: "
+                + ",".join(sorted(KEPT_LANGUAGE_PACK_SECTIONS))
+                + "\nEND;\n/"
+            ),
+            data_step=remove_retired_search_answer_profile_fields,
+            destructive_note=(
+                "検索・回答プロファイル（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG）の query から、"
+                "max_anchors_per_document と support_guide_enabled 以外の欄（適用していなかった"
+                "検索方法の欄・業務ガイドの意味の照合と近い候補の確認の欄・旧データの欄）の値を"
+                "削除し、language_pack から、検索と回答で読まない節（search_terms・question_cues・"
+                "evidence_cues・answer_labels・answer_check_cues・grounding_cues 以外。業務ガイドの"
+                "取込の見出しの語 guide_import_cues など）の上書きを削除します。ナレッジベース"
+                "（RAG_KNOWLEDGE_BASES.RETRIEVAL_CONFIG）からは、読まれていない query を削除"
+                "します。"
+                "ほかの欄・節の値は変えません。業務ガイドの意味の照合・近い候補の確認・取込の"
+                "見出しの語をプロファイルごとに変えていた環境は、適用前に同列を export し、"
+                "全体の設定・全体の言語資源へ写してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4784_language_pack_retired_unread",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_4784_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、どの処理も"
+                "読まない項目（numbers・grounding_cues・answer_labels の一部）と、語の一覧をやめた"
+                "根拠の手がかり（evidence_cues の 2 項目）と、NFKC に固定した"
+                "文字の正規化（symbols.normalization）と、読み飛ばしていた古い節（inquiry_cues）の"
+                "値を削除し、公開版の CONTENT_HASH と INGEST_HASH を計算し直します。取込の項目を"
+                "消した版は、その版で作った索引の集合（RAG_CHUNK_SETS）・版の切り替えの記録"
+                "（RAG_RECIPE_VERSION_LOG）・抽出の成果物（RAG_DOCUMENT_EXTRACTIONS・"
+                "RAG_DOCUMENT_EXTRACTION_REVISIONS の parser_artifacts）に残した取込 hash も新しい"
+                "値に書き換えます（内容は変わらないので、取込済みの文書の再処理は要りません。"
+                "NFKC 以外の正規化を公開していた版の索引は書き換えず「再処理を推奨」になります）。"
+                "ほかの項目・版の番号・公開の履歴は変えません。項目に保存した語を残す必要があれば"
+                "適用前に同列を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4782_remove_raptor",
+            table_name="rag_chunks",
+            sql=remove_raptor_sql(),
+            destructive_note=(
+                "取込の RAPTOR の階層の要約を消したので、保存済みの RAPTOR の要約の chunk"
+                "（RAG_CHUNKS の METADATA_JSON に raptor_summary の印がある行）と、RAPTOR の要約の"
+                "プロンプトの保存値（RAG_ANSWER_PROMPTS の raptor_summary_system・"
+                "raptor_summary_archived）を削除します。原文の chunk・章節の要約・項目抽出の値・"
+                "ほかのプロンプトは変えません。保存したプロンプトを残す必要があれば適用前に同表を "
+                "export してください。削除後は復元できません（要約の chunk は再取込でも"
+                "作りません）。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4799_search_answer_profile_runtime_rules",
+            table_name="rag_search_answer_profile_knowledge",
+            sql=removed_runtime_rules_sql(),
+            destructive_note=(
+                "検索・回答プロファイルの知識（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が "
+                "runtime_knowledge の行の PAYLOAD_JSON）から、登録ルール（$.rules。確認の質問と"
+                "選択肢を含む）を削除します。用語・同義語（$.terms）と、ドメインキーワード・"
+                "承認済み FAQ の行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
+                "回答プロンプトの役割の文に書きます。ルールの文を残す必要があれば、適用前に同列を "
+                "export し、役割の文へ手で写してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4811_evaluation_job_visibility",
+            table_name="rag_evaluation_jobs",
+            sql=evaluation_job_visibility_migration_sql(),
+        )
+    )
+    # 文書全体の要約の表（#4793）。無い表だけを作り、既存のデータは変えない。
+    sections.append(
+        OracleSchemaSection(
+            name="20261110_4793_document_summaries",
+            table_name="rag_document_summaries",
+            sql=_create_missing_objects_sql(oracle_document_summary_schema_sql(), "文書全体の要約"),
+        )
+    )
     return sections
 
 
@@ -970,6 +1236,21 @@ END;
 """.strip()
 
 
+def remove_raptor_sql() -> str:
+    """消した RAPTOR の階層の要約の、保存済みの chunk とプロンプトを消す（#4782）。
+
+    残すと、要約の chunk が原文の chunk として検索・引用に出る（派生の chunk の印を読まなくなる）。
+    何度当てても同じ結果になる。
+    """
+    return """
+DELETE FROM rag_chunks
+WHERE JSON_VALUE(metadata_json, '$.raptor_summary') = 'true';
+
+DELETE FROM rag_answer_prompts
+WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary_archived');
+""".strip()
+
+
 def raptor_prompt_consolidation_sql() -> str:
     """保存した両方の指示を結合し、旧指示を監査用に残す。適用は migration ledger で一度だけ。"""
     return """
@@ -999,15 +1280,6 @@ UPDATE rag_answer_prompts
 SET prompt_key = 'raptor_summary_archived'
 WHERE prompt_key = 'raptor_summary';
 """.strip()
-
-
-def evaluation_calibration_migration_sql() -> str:
-    """判定の校正の表（記入の集合・項目・判定・校正の結果）と索引を無ければ作る（#3578）。
-
-    表と索引を足すだけでデータは変えない。DDL は正本
-    （``oracle_evaluation_calibration_schema_sql``）から作る。
-    """
-    return _create_missing_objects_sql(oracle_evaluation_calibration_schema_sql(), "判定の校正")
 
 
 def evaluation_job_case_results_migration_sql() -> str:
@@ -1060,16 +1332,119 @@ END;
     return f"{objects}\n\n{column}"
 
 
-def evaluation_job_calibration_kind_migration_sql() -> str:
-    """品質評価の job の kind に判定の校正（``calibration``）を足す（#3578）。
+def evaluation_job_visibility_migration_sql() -> str:
+    """品質評価の job に、使った検索・回答プロファイルと実行した利用者の UUID の列を足す（#4811）。
 
-    CHECK 制約を作り直すだけで行は変えない。表が無ければ何もしない（冪等）。
+    列を足すだけで行は消さない。既存の行のプロファイルは、保存した結果の実行条件
+    （``result_json`` の ``run_manifest.request``）と、ケースごとの結果
+    （``rag_evaluation_job_case_results`` の pass ごとの ``search_answer_profile_id``）から埋める。
+    どちらにも無い行（プロファイルを使わない評価・結果の無い行）は NULL のままで、実行した本人と
+    system_admin だけが見られる。利用者の UUID は既存の行には無い（hash からは戻せない）ので
+    埋めない。
     """
     return """DECLARE
     v_count NUMBER;
 BEGIN
     SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        RETURN;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SEARCH_ANSWER_PROFILE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD (search_answer_profile_id VARCHAR2(128))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND column_name = 'COMPARE_SEARCH_ANSWER_PROFILE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD (compare_search_answer_profile_id VARCHAR2(128))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'USER_UUID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (user_uuid VARCHAR2(64))';
+    END IF;
+    EXECUTE IMMEDIATE q'[
+        UPDATE rag_evaluation_jobs j
+        SET search_answer_profile_id = COALESCE(
+                JSON_VALUE(j.result_json, '$.run_manifest.request.search_answer_profile_id'),
+                (SELECT MAX(r.search_answer_profile_id)
+                 FROM rag_evaluation_job_case_results r
+                 WHERE r.job_id = j.job_id AND r.pass_index = 0)
+            ),
+            compare_search_answer_profile_id = COALESCE(
+                JSON_VALUE(
+                    j.result_json, '$.run_manifest.request.compare_search_answer_profile_id'
+                ),
+                JSON_VALUE(j.result_json, '$.comparison.search_answer_profile_id'),
+                (SELECT MAX(r.search_answer_profile_id)
+                 FROM rag_evaluation_job_case_results r
+                 WHERE r.job_id = j.job_id AND r.pass_index = 1)
+            )
+        WHERE j.search_answer_profile_id IS NULL
+          AND j.compare_search_answer_profile_id IS NULL
+    ]';
+END;
+/"""
+
+
+# 工程を消して読まれなくなった指示の保存キー（#4749 の検索の振り分け・質問の広げ直し・旧い生成の
+# 指示と、#4781 の評価の判定 5 本）。一覧を変えると migration の checksum も変わる。
+RETIRED_ANSWER_PROMPT_KEYS: tuple[str, ...] = (
+    "evaluation.scope",
+    "evaluation.coverage",
+    "evaluation.claim",
+    "evaluation.evidenceCoverage",
+    "evaluation.absenceScope",
+    "crag.system",
+    "crag.template",
+    "routing.system",
+    "routing.template",
+    "expansion.system",
+    "expansion.template",
+    "generation.instruction",
+    "generation.plannedSystem",
+)
+
+
+def retire_removed_answer_prompts_sql() -> str:
+    """読まれなくなった指示の保存値だけを消す。ほかのキーの行は変えない（#4781）。"""
+    keys = ", ".join(f"'{key}'" for key in RETIRED_ANSWER_PROMPT_KEYS)
+    return f"DELETE FROM rag_answer_prompts WHERE prompt_key IN ({keys});"
+
+
+def retire_evaluation_calibration_sql() -> str:
+    """判定の校正の表・job・権限の行を消し、job の kind を run だけに戻す（#4781）。
+
+    表・制約が無い環境でも適用できる（冪等）。品質評価の job と結果の行は変えない。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables
+        WHERE table_name IN (
+            'RAG_EVALUATION_CALIBRATIONS', 'RAG_EVALUATION_LABELS',
+            'RAG_EVALUATION_LABEL_ITEMS', 'RAG_EVALUATION_LABEL_SETS'
+        )
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
     IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'DELETE FROM rag_role_permissions WHERE permission_code = :1'
+            USING 'rag.evaluation_calibration.manage';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DELETE FROM rag_evaluation_jobs WHERE kind = :1' USING 'calibration';
         SELECT COUNT(*) INTO v_count
         FROM user_constraints
         WHERE table_name = 'RAG_EVALUATION_JOBS'
@@ -1080,7 +1455,7 @@ BEGIN
         END IF;
         EXECUTE IMMEDIATE
             'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
-            || 'CHECK (kind IN (''run'', ''calibration''))';
+            || 'CHECK (kind IN (''run''))';
     END IF;
 END;
 /"""
@@ -1932,6 +2307,16 @@ SET CONTENT = REPLACE(REPLACE(CONTENT,
     '{{images}}', '{{answer_context}}'),
     '{{image_metadata}}', '{{evidence_metadata}}')
 WHERE PROMPT_KEY = 'vlm_answer'
+""".strip()
+
+
+def answer_prompt_reading_rules_migration_sql() -> str:
+    """保存済みの回答テンプレートの本文を保ち、読み方の placeholder を根拠の前に足す。"""
+    return """
+UPDATE RAG_ANSWER_PROMPTS
+SET CONTENT = REPLACE(CONTENT,
+    '{{answer_context}}', '{{reading_rules}}' || CHR(10) || CHR(10) || '{{answer_context}}')
+WHERE PROMPT_KEY = 'vlm_answer' AND INSTR(CONTENT, '{{reading_rules}}') = 0
 """.strip()
 
 

@@ -29,7 +29,8 @@ from typing import Protocol
 
 from fastapi import HTTPException
 
-from app.config import Settings
+from app.config import FileType, Settings
+from app.rag.file_type_defaults import classify_file_type
 from app.rag.parser_source_guard import (
     check_parser_source,
     parser_source_block,
@@ -177,7 +178,7 @@ class BulkIngestionStore(Protocol):
         ...
 
 
-SettingsResolver = Callable[[DocumentProcessingConfig], Settings]
+SettingsResolver = Callable[[DocumentProcessingConfig, FileType | None], Settings]
 SingleEnqueue = Callable[[str], Awaitable[IngestionJob]]
 ParserBlockMessage = Callable[[Settings, SourceProfile], Awaitable[str | None]]
 
@@ -234,15 +235,20 @@ class _SettingsCache:
         self._resolve = resolve
         self._cache: dict[str, Settings] = {}
 
-    def get(self, raw_config: Mapping[str, object]) -> Settings:
-        key = json.dumps(raw_config, sort_keys=True, ensure_ascii=False, default=str)
+    def get(self, raw_config: Mapping[str, object], file_type: FileType | None) -> Settings:
+        key = json.dumps(
+            {"config": raw_config, "file_type": file_type},
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
         cached = self._cache.get(key)
         if cached is None:
             try:
                 config = DocumentProcessingConfig.model_validate(dict(raw_config))
             except Exception:  # noqa: BLE001 - 壊れた永続値は 1 件の投入と同じく global 継承へ縮退する
                 config = DocumentProcessingConfig()
-            cached = self._resolve(config)
+            cached = self._resolve(config, file_type)
             self._cache[key] = cached
         return cached
 
@@ -335,7 +341,9 @@ async def accept_bulk_ingestion(
             )
             continue
         source_profile = _source_profile(state)
-        settings = settings_cache.get(state.processing_config)
+        settings = settings_cache.get(
+            state.processing_config, classify_file_type(state.file_name, state.content_type)
+        )
         if source_profile.unsupported_reason and not settings_convert_source(
             settings, source_profile
         ):

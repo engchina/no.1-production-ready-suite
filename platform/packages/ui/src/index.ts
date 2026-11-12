@@ -42,6 +42,7 @@ export {
   formatDisplayCalendarDate,
   formatDisplayDateTime,
   isSupportedTimeZone,
+  parseApiDateTime,
   setDisplayTimeZone,
   type DisplayDateTimeFormat,
   type DisplayDateTimeParts,
@@ -55,9 +56,11 @@ export {
   type OptimisticChatStatus,
 } from "./lib/chat-optimistic";
 export {
+  hasMarkdownTable,
   splitMarkdownTables,
   toTabularData,
   type MarkdownTableSegment,
+  type SplitMarkdownTablesOptions,
   type TabularCellValue,
   type TabularColumn,
   type TabularData,
@@ -238,6 +241,12 @@ export {
   type ProcessFailureNoticeProps,
 } from "./components/feedback/process-failure";
 export {
+  DEFAULT_RENDER_ERROR_BOUNDARY_LABELS,
+  RenderErrorBoundary,
+  type RenderErrorBoundaryLabels,
+  type RenderErrorBoundaryProps,
+} from "./components/feedback/render-error-boundary";
+export {
   ApiTransportError,
   DEFAULT_API_ERROR_DETAIL_LABELS,
   DEFAULT_API_TRANSPORT_MESSAGES,
@@ -374,14 +383,24 @@ export {
   AnswerCitationLinks,
   AnswerPlainText,
   AnswerSections,
+  AnswerSourceMarks,
   DEFAULT_ANSWER_SECTIONS_LABELS,
   type AnswerCitationRef,
+  type AnswerSourceMark,
   type AnswerPlainTextProps,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
   type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
+// 回答の本文（表を共通の結果の表で出す。3 製品共通。#4734）
+export {
+  AnswerBody,
+  DEFAULT_ANSWER_BODY_LABELS,
+  type AnswerBodyLabels,
+  type AnswerBodyProps,
+  type AnswerBodyTableCell,
+} from "./components/chat/answer-body";
 // 回答の見出しと、チャットの回答の本文の見出し「回答」（3 製品共通。#3433）
 export {
   AnswerHeading,
@@ -392,31 +411,6 @@ export {
   type ChatAnswerBodyProps,
 } from "./components/chat/answer-heading";
 // 回答の段落の印・外した段落・回答全体の注意（RAG・Agent 共通。#2738）
-export {
-  ANSWER_PASSAGE_STATE_ICON,
-  AnswerPassageMarked,
-  AnswerPassageWarnings,
-  DEFAULT_ANSWER_PASSAGE_LABELS,
-  answerPassageQuote,
-  answerPassageReasonText,
-  focusAnswerPassage,
-  type AnswerPassageLabels,
-} from "./components/chat/answer-passage-marks";
-export {
-  answerPassageCounts,
-  answerPassageKey,
-  hasAnswerPassageRecords,
-  matchAnswerPassageMarks,
-  parseAnswerPassageRecords,
-  type AnswerPassageCounts,
-  type AnswerPassageMark,
-  type AnswerPassageMarkGroup,
-  type AnswerPassageMarkState,
-  type AnswerPassageReason,
-  type AnswerPassageRecords,
-  type AnswerRemovedPassage,
-  type AnswerWarning,
-} from "./components/chat/answer-passage-records";
 export {
   AnswerEvidence,
   DEFAULT_EVIDENCE_LABELS,
@@ -819,6 +813,7 @@ export {
 export {
   RunSummary,
   RunDetailSection,
+  RunProgressCard,
   RunProcessDetails,
   RunUsedModels,
   RunTimeline,

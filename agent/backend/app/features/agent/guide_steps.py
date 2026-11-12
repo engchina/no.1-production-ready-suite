@@ -266,9 +266,7 @@ def guide_step_states(steps: Sequence[RunStep]) -> list[JsonObject]:
             "title": step["title"],
             # 根拠で確かめられない（題名だけの）手順は None。
             "evidence": bool(linked.get(step["id"])) if _checkable(step) else None,
-            # 根拠がほかの手順と共有の chunk だけか（#2708）。共有の chunk のどの文がこの手順の
-            # 説明かは根拠の有無では分からないので、説明を確かめたかは最終の検証の手順ごとの
-            # 充足（`rag_validate_answer` の `guide_steps`）で決める。
+            # 根拠がほかの手順と共有の chunk だけか（#2708）。
             "shared": bool(linked.get(step["id"]))
             and all(owners[chunk_id] > 1 for chunk_id in linked[step["id"]]),
             "chunk_ids": linked.get(step["id"], [])[:10],

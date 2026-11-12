@@ -42,25 +42,12 @@ PROMPT_NAME = re.compile(
 # 一覧に載せないプロンプトの定数と、その理由。
 EDITABLE_DEFAULT = "編集できるプロンプトの既定値(画面は編集欄で示す)"
 PROBE_ONLY = "Enterprise AI の契約の確認の CLI だけ"
-UNUSED_SCREEN_JUDGE = "現行の六指標の品質評価から呼ばれない画面専用の補助判定"
 NOT_LISTED = {
-    "app.rag.evaluation_screens:SCREEN_JUDGE_SYSTEM_PROMPT": UNUSED_SCREEN_JUDGE,
-    "app.rag.evaluation_screens:SCREEN_JUDGE_PROMPT": UNUSED_SCREEN_JUDGE,
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
-    "rag_engine.knowledge.prompt_files:DEFAULT_VLM_ANSWER_PROMPT": EDITABLE_DEFAULT,
-    # 一覧に載せた定数へ組み込み済みの部品。
-    "rag_engine.generation.query_prompts:_EXPANSION_INSTRUCTIONS": (
-        "QUERY_ROUTING_PROMPT_TEMPLATE と QUERY_EXPANSION_PROMPT_TEMPLATE に組み込み済み"
-    ),
     # 検証・確認の CLI だけが使う(回答・取込・品質評価の経路では使わない)。
-    "rag_engine.evaluation.crag_eval:CRAG_JUDGE_SYSTEM_PROMPT": "検証 CLI(answer_verify_cli)だけ",
     "app.rag.enterprise_ai_probe:DEFAULT_LLM_PROMPT": PROBE_ONLY,
+    "app.rag.enterprise_ai_probe:PROBE_SYSTEM_PROMPT": PROBE_ONLY,
     "app.rag.enterprise_ai_probe:DEFAULT_VLM_PROMPT": PROBE_ONLY,
-    "app.rag.file_processing_staging:FILE_PROCESSING_STAGING_PROMPT": "staging の確認だけ",
-    # 解析の指示(ExtractionStrategy.prompt)は組み立てるが、OCI Generative AI (Vision) の解析を
-    # 削除した後(#2042)はどのモデルにも渡していない。
-    "app.rag.ingestion_strategy:BASE_EXTRACTION_REQUIREMENTS": "モデルに渡していない",
-    "app.rag.ingestion_strategy:PROFILE_INSTRUCTIONS": "モデルに渡していない",
 }
 
 
@@ -199,127 +186,6 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
             assert re.search(r"^#{2,3} \S", str(part["content"]), re.M), (stage["id"], part["id"])
 
 
-def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
-    stages = {stage.id: stage for stage in PROMPT_STAGES if stage.phase == "evaluation"}
-    assert set(stages) == {"evaluation"}
-    assert (
-        next(stage for stage in PROMPT_STAGES if stage.id == "answer_validation").phase == "audit"
-    )
-    assert {part for part, _ in stages["evaluation"].parts} == {
-        "scope",
-        "coverage",
-        "claim",
-        "correctness",
-        "evidenceCoverage",
-        "absenceScope",
-    }
-
-
-def test_catalog_separates_independent_preparation_and_orders_evaluation_calls() -> None:
-    stages = {stage.id: stage for stage in PROMPT_STAGES}
-    assert stages["raptor_summary"].phase == "indexing"
-    assert stages["support_guide_draft"].phase == "knowledge"
-    assert [part for part, _ in stages["evaluation"].parts] == [
-        "scope",
-        "coverage",
-        "claim",
-        "correctness",
-        "evidenceCoverage",
-        "absenceScope",
-    ]
-    assert [part for part, _ in stages["audit"].parts] == [
-        "detailedSystem",
-        "factSystem",
-        "compactRule",
-    ]
-    # 取込内の順は設定の概要が参照するレシピの実行順と同じ。
-    assert [stage.id for stage in PROMPT_STAGES if stage.phase == "ingestion"] == [
-        "external_ocr",
-        "picture_description",
-        "heading_levels",
-        "field_extraction",
-        "navigation_summary",
-    ]
-
-
-def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
-    from rag_engine.generation.answering import CRAG_GRADER_SYSTEM_PROMPT
-    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
-
-    displayed: list[str] = []
-    for stage in readonly_prompt_stages():
-        parts = stage["prompts"]
-        assert isinstance(parts, list)
-        displayed.extend(part["content"] for part in parts)
-    # 画面用の別文ではなく、実行で参照する定数の本文をそのまま登録する。
-    assert CRAG_GRADER_SYSTEM_PROMPT in displayed
-    assert CRAG_GRADE_PROMPT_TEMPLATE in displayed
-
-
-def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts() -> None:
-    from rag_engine.evaluation.answer_eval import (
-        CLAIM_PROMPT,
-        CORRECTNESS_PROMPT,
-        COVERAGE_PROMPT,
-        SCOPE_PROMPT,
-    )
-    from rag_engine.evaluation.answer_validation import (
-        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
-        VALIDATION_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.grounded import (
-        AUDIT_SYSTEM_PROMPT,
-        GENERATE_SYSTEM_PROMPT,
-        PLANNED_GENERATE_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT
-
-    displayed: list[str] = []
-    for stage in readonly_prompt_stages():
-        parts = stage["prompts"]
-        assert isinstance(parts, list)
-        displayed.extend(part["content"] for part in parts)
-    for executed in (
-        GENERATE_SYSTEM_PROMPT,
-        PLANNED_GENERATE_SYSTEM_PROMPT,
-        AUDIT_SYSTEM_PROMPT,
-        VALIDATION_SYSTEM_PROMPT,
-        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
-        REVISION_SYSTEM_PROMPT,
-        SCOPE_PROMPT,
-        COVERAGE_PROMPT,
-        CLAIM_PROMPT,
-        CORRECTNESS_PROMPT,
-    ):
-        assert executed in displayed
-        assert executed.startswith("## Step 1:")
-
-
-def test_query_strategy_display_uses_actual_step_prompts() -> None:
-    from rag_engine.generation.answering import (
-        QUERY_EXPANSION_SYSTEM_PROMPT,
-        QUERY_ROUTING_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.query_prompts import (
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
-        QUERY_ROUTING_PROMPT_TEMPLATE,
-    )
-
-    displayed: list[object] = []
-    for stage in readonly_prompt_stages():
-        parts = stage["prompts"]
-        assert isinstance(parts, list)
-        displayed.extend(part["content"] for part in parts)
-    for prompt in (
-        QUERY_ROUTING_SYSTEM_PROMPT,
-        QUERY_EXPANSION_SYSTEM_PROMPT,
-        QUERY_ROUTING_PROMPT_TEMPLATE,
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
-    ):
-        assert prompt in displayed
-        assert prompt.startswith("## Step 1:")
-
-
 def test_every_editable_stage_has_a_runtime_override_lookup() -> None:
     used = {
         node.args[0].value
@@ -341,10 +207,12 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         ("picture_description", "picture"): 6,
         ("picture_description", "table"): 6,
         ("picture_description", "contract"): 7,
-        ("generation", "assumptionSystem"): 6,
-        # 回答生成の user の入力（既定は Step 5 まで）の後ろに足す作り直しの部品（#4586）。
-        ("generation", "sourceOnlyDerivation"): 6,
-        ("generation", "headerOnlySource"): 6,
+        # 生成の system は役割の文（Step 4 まで）に固定の部分と未確定の前提を続けて足す（#4782）。
+        ("generation", "fixed"): 5,
+        ("generation", "assumptionSystem"): 9,
+        # 回答生成の user の入力（既定は Step 6 まで）の後ろに足す作り直しの部品（#4586）。
+        ("generation", "sourceOnlyDerivation"): 7,
+        ("generation", "headerOnlySource"): 7,
     }
     for stage in readonly_prompt_stages():
         parts = stage["prompts"]
@@ -404,12 +272,16 @@ def test_default_prompt_steps_have_one_blank_line_between_sections() -> None:
                     assert lines[index - 2].strip(), identity
 
 
-def test_batch_reading_uses_saved_stage_instruction() -> None:
+def test_batch_reading_uses_the_fixed_instruction_not_a_saved_one() -> None:
     import json
     from dataclasses import replace
 
     from rag_engine.config import get_settings
-    from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
+    from rag_engine.generation.batched_evidence import (
+        BATCH_READING_PROMPT,
+        BatchReading,
+        prepare_batched_evidence,
+    )
 
     from app.rag.answer_prompts import prompt_overrides
 
@@ -427,7 +299,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
     calls = []
 
     def read(system: str, prompt: str, schema: type[BatchReading]) -> BatchReading:
-        assert system == custom
+        assert system == BATCH_READING_PROMPT
         values = json.loads(prompt)["evidence"]
         calls.extend(values)
         return schema(findings=[])

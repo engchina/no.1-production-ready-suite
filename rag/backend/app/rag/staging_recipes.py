@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool
 
 from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
+from app.rag.file_type_defaults import classify_file_type
 from app.rag.ingestion_segment_receipts import read_segment_receipt
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
@@ -137,19 +138,33 @@ class RecipeStagingIngestion:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
     ) -> DocumentDetail:
         # 原本はcreate_documentで保存済み。正式jobはそのURIから読む。
-        _ = image_bytes, prompt, content_type, source_profile
-        from app.api.routes.documents import _enqueue_ingestion_job_for_recipe, _run_ingestion_job
+        _ = image_bytes, content_type, source_profile
+        from app.api.routes.documents import (
+            _enqueue_ingestion_job_for_recipe,
+            _merge_document_processing_config,
+            _run_ingestion_job,
+        )
 
         row = await self._oracle.ensure_default_document_recipe(document_id)
         recipe_id = str(row["recipe_id"])
         previous_chunk_set_id = row.get("active_chunk_set_id")
-        base = get_settings()
+        # 実行は形式別の既定（#4732）を含めて解決するので、比べる基準もそろえる。要求が種類の既定と
+        # 違う項目はレシピに明示され、種類の層に上書きされない。
+        detail = await self._oracle.get_document(document_id)
+        base, _effective = _merge_document_processing_config(
+            DocumentProcessingConfig(),
+            get_settings(),
+            file_type=(
+                classify_file_type(detail.file_name, detail.content_type)
+                if detail is not None
+                else None
+            ),
+        )
         requested = resolve_effective_adapter_config(
             self._settings, KnowledgeBaseAdapterConfig()
         ).ingestion.model_dump()
@@ -174,7 +189,6 @@ class RecipeStagingIngestion:
                     "正式jobへ引き継げない明示設定があります: " + ", ".join(unsupported)
                 )
             if changes:
-                detail = await self._oracle.get_document(document_id)
                 if (
                     detail is None
                     or detail.status != FileStatus.UPLOADED

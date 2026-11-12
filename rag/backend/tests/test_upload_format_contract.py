@@ -22,10 +22,12 @@ from rag_parser_core.source import SourceModality
 
 from app.config import Settings
 from app.rag.source_profile import (
+    ACCEPTED_UPLOAD_EXTENSIONS,
     AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
     EPUB_UPLOAD_REJECTED_MESSAGE,
     HEIC_UPLOAD_REJECTED_MESSAGE,
     REJECTED_UPLOAD_EXTENSIONS,
+    UNSUPPORTED_UPLOAD_FORMAT_MESSAGE,
     build_source_profile,
     rejected_upload_format_message,
 )
@@ -55,6 +57,11 @@ def test_frontend_mime_types_match_backend_allowed_upload_content_types() -> Non
     backend = {item.casefold() for item in Settings().allowed_upload_content_types}
     # application/octet-stream は backend が拡張子で判定して受ける(画面の accept には出さない)。
     assert frontend == backend - {"application/octet-stream"}
+
+
+def test_frontend_extensions_match_backend_accepted_extensions() -> None:
+    frontend = {item for item in _accepted_upload_types() if item.startswith(".")}
+    assert frontend == set(ACCEPTED_UPLOAD_EXTENSIONS)
 
 
 def test_frontend_extensions_are_recognized_by_backend() -> None:
@@ -88,6 +95,7 @@ def test_rejected_formats_match_between_frontend_and_backend() -> None:
     assert HEIC_UPLOAD_REJECTED_MESSAGE in i18n
     assert EPUB_UPLOAD_REJECTED_MESSAGE in i18n
     assert AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE in i18n
+    assert UNSUPPORTED_UPLOAD_FORMAT_MESSAGE in i18n
     assert "JPEG / PNG" in HEIC_UPLOAD_REJECTED_MESSAGE
     assert "互換性優先" in HEIC_UPLOAD_REJECTED_MESSAGE
 

@@ -1,11 +1,11 @@
 """RAG 評価スキーマ。"""
 
-from datetime import datetime
 from typing import Any, Literal, Self
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
+from app.config import EvaluationSuite, ReasoningEffortOverride
 from app.schemas.search import (
     SEARCH_TOP_K_MAX,
     SearchDiagnostics,
@@ -108,9 +108,6 @@ EvaluationFailureReason = Literal[
     "unexpected_refusal",
     "answer_keyword_miss",
     "low_groundedness",
-    "unsupported_claim",
-    "claim_unassessed",
-    "missing_content",
     "answer_failed",
     "answer_evaluation_error",
     "guardrail_warning",
@@ -126,33 +123,39 @@ EvaluationFailureReason = Literal[
     "screen_missing",
     # 案内すべき画面のほかの画面を回答が案内した（#2402）。
     "wrong_screen",
-    # 回答の監査が、回答は質問の目的に答えていない（goal_alignment=off_target）と判定した（#2402）。
-    "off_target",
     # 回答文の生成の出力が検査を通らず、参考情報へ退避した（#4104）。case_error とは別に数える。
     "answer_generation_fallback",
     "case_error",
 ]
 
-# 評価の指標(#591)。検索・根拠・回答の 3 つの観点に整理した 9 つと、業務支援の対応の 4 つ（#1231）。
-EVALUATION_METRICS_VERSION = "six_metrics_v1"
+# 評価の指標(#591)。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。
+EVALUATION_METRICS_VERSION = "four_metrics_v1"
 EvaluationMetricName = Literal[
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
-    "requirement_coverage",
-    "claim_support_rate",
     "response_decision_accuracy",
 ]
 EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
-    "requirement_coverage",
-    "claim_support_rate",
     "response_decision_accuracy",
 )
 # 合否と閾値には使わない参考の指標（#4341）。
-EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ("evidence_coverage",)
+# 順位の指標は引用の文書列で、語の重なりは標準回答との比較で計算する（#4714）。
+EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
+    "precision_at_10",
+    "ndcg_at_3",
+    "ndcg_at_10",
+    "map",
+    "bleu_1",
+    "bleu_2",
+    "bleu_4",
+    "rouge_1",
+    "rouge_2",
+    "rouge_l",
+)
 
 
 # 期待する手順の別解の上限（列の数）。
@@ -349,7 +352,7 @@ class EvaluationScreen(BaseModel):
 
 
 class EvaluationCase(EvaluationHandlingExpectation):
-    """六指標の評価入力。本文・位置の根拠、正解文書、標準回答・必須要点、応答の期待を持つ。
+    """四指標の評価入力。本文・位置の根拠、正解文書、標準回答・必須要点、応答の期待を持つ。
 
     複数往復では各往復の明示的な応答判断を評価し、検索と回答の意味上の評価は最後の回答を使う。
     評価情報がない指標は未評価とし、標準回答の有無から応答の期待を推定しない。
@@ -480,52 +483,30 @@ class EvaluationCase(EvaluationHandlingExpectation):
 class EvaluationJudgeDiagnostics(BaseModel):
     """標準回答による評価の判定の診断（rag_engine の ``judge_diagnostics``）。
 
-    ``standard_scope_reused`` は比較範囲（標準回答の比較項目）を同じ評価の job の記録から
-    使い回したか、``standard_scope_retries`` / ``judge_retries`` は比較範囲の固定 / 照合・
-    監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
-    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、指した
-    標準回答の単位の ID がどれも標準回答に無いので比較範囲から外した項目の数。
-    ``judge_calls`` は網羅・正確性・主張の判定の LLM の呼び出しの数（再試行を含む。比較範囲の
-    固定を除く）、``claim_calls`` はそのうち段落ごとの主張の判定の数、``claim_failures`` は判定を
-    完了できず unassessed にした段落の数、``uncited_claims`` は出典が無くモデルを呼ばずに
-    unsupported にした段落の数（#3576）。
+    ``judge_calls`` は正確性の判定の LLM の呼び出しの数（再試行を含む）、``judge_retries`` は出力の
+    誤りを指摘して出し直させた回数、``retry_reasons`` はその原因の例外の型
+    （「correctness:InvalidStructuredOutput」）。
     """
 
-    standard_scope_reused: bool = False
-    standard_scope_retries: int = Field(default=0, ge=0)
-    standard_scope_dropped: int = Field(default=0, ge=0)
     judge_retries: int = Field(default=0, ge=0)
     retry_reasons: list[str] = Field(default_factory=list)
     # 判定に使ったモデルの ID（#3574。共通のモデル設定の既定の判定モデルで解決した ID）。
     judge_model_id: str | None = None
     judge_calls: int = Field(default=0, ge=0)
-    claim_calls: int = Field(default=0, ge=0)
-    claim_failures: int = Field(default=0, ge=0)
-    uncited_claims: int = Field(default=0, ge=0)
 
 
 class EvaluationAnswerJudgement(BaseModel):
-    """標準回答による評価(評価の基準の指標と閾値による合否・主張の監査・必要な項目の網羅)の要約。
+    """標準回答による評価(正確性の判定と、評価の基準の閾値による合否)の要約。
 
-    詳細(指標ごとの値・主張ごとの判定)は trace_id の回答の記録に保存する(#680)。`status` は
+    詳細(指標の値・判定の理由)は trace_id の回答の記録に保存する(#680)。`status` は
     completed / error / input_too_large / timeout / unavailable(評価の記録が無いなど)。
     """
 
     status: str
     passed: bool | None = None
-    claims_supported: bool | None = None
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
-    claim_support_rate: float | None = Field(default=None, ge=0, le=1)
-    requirement_coverage: float | None = None
-    # 標準回答の要点が取得した根拠にある割合（参考値。合否に使わない。#4341）。
-    evidence_coverage: float | None = None
-    # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
-    missing_content: bool | None = None
-    # 追加相談の項目（follow_up）のうち、説明の無い項目があったか。
-    # 参考の情報で、指標・合否・失敗理由（failure_reasons）には入れない（#4062）。
-    missing_follow_up_content: bool | None = None
     message: str | None = None
-    # 判定の診断（比較範囲を job の記録から使い回したか・出力の誤りで再試行した回数）。
+    # 判定の診断（呼び出しの数・出力の誤りで再試行した回数）。
     # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
     judge_diagnostics: EvaluationJudgeDiagnostics | None = None
     # 判定のモデルの ID（#3574）。判定を完了できなかった（時間切れ・失敗）ケースにも残す。
@@ -545,7 +526,7 @@ class EvaluationTurnResult(BaseModel):
 
 
 class EvaluationCaseResult(BaseModel):
-    """成功したケースの六指標。資料不足は None。"""
+    """成功したケースの四指標。資料不足は None。"""
 
     case_id: str
     trace_id: str
@@ -560,10 +541,17 @@ class EvaluationCaseResult(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
-    requirement_coverage: float | None = None
-    claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
-    evidence_coverage: float | None = None
+    precision_at_10: float | None = None
+    ndcg_at_3: float | None = None
+    ndcg_at_10: float | None = None
+    map: float | None = None
+    bleu_1: float | None = None
+    bleu_2: float | None = None
+    bleu_4: float | None = None
+    rouge_1: float | None = None
+    rouge_2: float | None = None
+    rouge_l: float | None = None
     expected_decisions: list[str] = Field(default_factory=list)
     observed_outcome: EvaluationOutcome | None = None
     outcome_source: str | None = None
@@ -588,7 +576,7 @@ class EvaluationThresholdFailure(BaseModel):
 
 
 class EvaluationCategorySummary(BaseModel):
-    """ケースの分類ごとの六指標と対象数。"""
+    """ケースの分類ごとの四指標と対象数。"""
 
     case_count: int
     error_count: int = 0
@@ -631,7 +619,7 @@ class EvaluationSplitSummary(BaseModel):
 
 
 class EvaluationMetrics(BaseModel):
-    """検索二・回答三・応答判断一の六指標。対象外は None。"""
+    """検索二・回答一・応答判断一の四指標。対象外は None。"""
 
     metrics_version: str = EVALUATION_METRICS_VERSION
     case_count: int
@@ -640,10 +628,17 @@ class EvaluationMetrics(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
-    requirement_coverage: float | None = None
-    claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
-    evidence_coverage: float | None = None
+    precision_at_10: float | None = None
+    ndcg_at_3: float | None = None
+    ndcg_at_10: float | None = None
+    map: float | None = None
+    bleu_1: float | None = None
+    bleu_2: float | None = None
+    bleu_4: float | None = None
+    rouge_1: float | None = None
+    rouge_2: float | None = None
+    rouge_l: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool | None = None
     applied_thresholds: dict[str, float] = Field(default_factory=dict)
@@ -741,21 +736,19 @@ EvaluationMetrics.model_rebuild()
 
 
 class EvaluationThresholds(BaseModel):
-    """現行の六指標にだけ適用する最低値。"""
+    """現行の四指標にだけ適用する最低値。"""
 
     model_config = ConfigDict(extra="forbid")
     required_evidence_recall: float | None = Field(default=None, ge=0, le=1)
     mrr: float | None = Field(default=None, ge=0, le=1)
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
-    requirement_coverage: float | None = Field(default=None, ge=0, le=1)
-    claim_support_rate: float | None = Field(default=None, ge=0, le=1)
     response_decision_accuracy: float | None = Field(default=None, ge=0, le=1)
 
 
 class EvaluationRagOverrides(BaseModel):
     """評価の実行に一時適用する非 secret の回答設定(#591)。
 
-    回答エンジンの全体の既定(質問拡張戦略・回答生成フロー・近傍 child 数・rerank)と、検索の
+    回答エンジンの全体の既定(近傍 child 数・rerank)と、検索の
     RRF 定数・同じ group から足す child の上限・交差参照で足す chunk(#1280)・ベクトル検索の
     target accuracy を上書きする。
     削除したキー(query_expansion_* / context_window_chars など)は受け付けない。
@@ -763,8 +756,6 @@ class EvaluationRagOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query_strategy: QueryStrategy | None = None
-    answer_flow: AnswerFlow | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
@@ -784,25 +775,8 @@ class EvaluationRagOverrides(BaseModel):
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
-    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成・監査の推論の量、
-    # CRAG の評価の省略、質問拡張の検索文の上限を比べる。
-    strategy_reasoning_effort: ReasoningEffortOverride | None = None
-    judge_reasoning_effort: ReasoningEffortOverride | None = None
+    # 回答文の生成の推論の量(#1499)。
     generation_reasoning_effort: ReasoningEffortOverride | None = None
-    # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
-    audit_reasoning_effort: ReasoningEffortOverride | None = None
-    crag_compact_input: bool | None = None
-    # CRAG の評価の候補の短い ID(#1864)。
-    crag_short_candidate_ids: bool | None = None
-    # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
-    answer_audit_compact_reasons: bool | None = None
-    answer_max_correction_rounds: int | None = Field(default=None, ge=0, le=2)
-    # 回答の監査の型(#2795)。
-    answer_audit_mode: Literal["none", "standard", "detailed"] | None = None
-    section_skip_regrade_at_scope: bool | None = None
-    crag_skip_on_strong_signals: bool | None = None
-    crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 
 def _reject_duplicate_case_ids(cases: list[EvaluationCase]) -> None:
@@ -821,7 +795,22 @@ class EvaluationRunRequest(BaseModel):
     指定は無視する)。
     """
 
-    cases: list[EvaluationCase] = Field(..., min_length=1)
+    cases: list[EvaluationCase] = Field(default_factory=list)
+    testset_id: str | None = Field(default=None, min_length=1, max_length=64)
+    testset_revision: int | None = Field(default=None, ge=1)
+    answer_model_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def input_source(self) -> Self:
+        if self.testset_id:
+            if self.testset_revision is None or self.cases or self.source_workbook_id:
+                raise ValueError(
+                    "テストセットの版だけを指定してください。ケースの差し込みはできません。"
+                )
+        elif not self.cases or self.testset_revision is not None:
+            raise ValueError("評価するケースを指定してください。")
+        return self
+
     # 省略時はチャット・RAG 検索と同じ既定(#3512)。
     top_k: int = Field(
         default_factory=search_top_k_default,
@@ -902,9 +891,8 @@ def _sync_knowledge_base_filter(
     )
 
 
-# run: 品質評価（#390）。calibration: 判定の校正（人手の判定と評価器の一致。#3578。
-# 結果は `rag_evaluation_calibrations` に書き、`run_result` は持たない）。
-EvaluationJobKind = Literal["run", "calibration"]
+# run: 品質評価（#390）。
+EvaluationJobKind = Literal["run"]
 EvaluationJobStatus = Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 
@@ -925,18 +913,54 @@ class EvaluationJob(BaseModel):
     total_cases: int
     completed_cases: int
     current_case_id: str | None = None
-    current_case_started_at: datetime | None = None
+    current_case_started_at: UtcDatetime | None = None
     # job 全体の時間の上限（秒）。上限に達したら、残りのケースは実行せずに失敗として記録する。
     time_limit_seconds: int
     error_message: str | None = None
-    created_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    heartbeat_at: datetime | None = None
+    created_at: UtcDatetime
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
+    heartbeat_at: UtcDatetime | None = None
     run_result: EvaluationMetrics | None = None
     partial_result: EvaluationMetrics | None = None
     # アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。
     source_workbook_id: str | None = None
+    # 使った検索・回答プロファイル（主・比べる）と名前（#4811。記録の無い古い job は None）。
+    search_answer_profile_id: str | None = None
+    compare_search_answer_profile_id: str | None = None
+    search_answer_profile_name: str | None = None
+    compare_search_answer_profile_name: str | None = None
+    # 実行した利用者の表示名（分からない古い job・引けない利用者は None）。UUID は表示名を引く
+    # ためだけに使い、応答には出さない。
+    actor_user_uuid: str | None = Field(default=None, exclude=True)
+    actor_display_name: str | None = None
+    # 見ている利用者が実行した job か、取り消せるか（本人と system_admin。#4811）。
+    owned: bool = True
+    can_cancel: bool = True
+
+
+class EvaluationJobSummary(BaseModel):
+    """過去の品質評価の一覧の行（#4811）。結果の本体は持たず、全体の判定だけを持つ。"""
+
+    job_id: str
+    status: EvaluationJobStatus
+    # 評価したケースの数（比べるプロファイルの 2 回目は数えない）。
+    case_count: int
+    total_cases: int
+    completed_cases: int
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
+    # 全体の判定（成功した job だけ。閾値の判定が無い・終わっていない job は None）。
+    passed: bool | None = None
+    search_answer_profile_id: str | None = None
+    compare_search_answer_profile_id: str | None = None
+    search_answer_profile_name: str | None = None
+    compare_search_answer_profile_name: str | None = None
+    # 実行した利用者の UUID は表示名を引くためだけに使い、応答には出さない。
+    actor_user_uuid: str | None = Field(default=None, exclude=True)
+    actor_display_name: str | None = None
+    owned: bool = False
+    can_cancel: bool = False
 
 
 class EvaluationImportIssue(BaseModel):

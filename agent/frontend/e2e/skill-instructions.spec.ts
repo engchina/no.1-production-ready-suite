@@ -1,16 +1,9 @@
-import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1795: 組み込みのスキルの指示は手順で進める Markdown。詳細画面で共有の MarkdownText（#1808）が見出し・箇条書き・`code` として表示し、
 // Markdown の記号（## や - ）を文字のまま出さない。375px でも横にあふれない。
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 test.describe("スキルの指示の表示", { tag: "@responsive" }, () => {
   test("組み込みのスキルの指示を見出し・入れ子の箇条書き・code で表示する", async ({ page }) => {
@@ -48,6 +41,29 @@ test.describe("スキルの指示の表示", { tag: "@responsive" }, () => {
     const codeBox = await view.locator("code", { hasText: "rag_list_search_answer_profiles" }).first().boundingBox();
     expect(viewBox && codeBox).toBeTruthy();
     if (viewBox && codeBox) expect(codeBox.x + codeBox.width).toBeLessThanOrEqual(viewBox.x + viewBox.width + 1);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
+});
+
+
+test("スキルの編集指示は所属カードの全幅を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.goto("/skills?id=new");
+  const field = page.locator("#skill-instructions");
+  await expect(field).toBeEditable();
+  await field.fill("## Step 1: 合成の指示");
+  const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("dark", theme === "dark"), theme);
+      const delta = await field.evaluate(node => {
+        const parent = node.closest("[data-form-grid]")!.parentElement!;
+        const style = getComputedStyle(parent);
+        return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+      });
+      expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+      await expectNoPageHorizontalOverflow(page);
+      await field.screenshot({ path: testInfo.outputPath(`skill-instructions-${width}-${theme}.png`) });
+    }
+  }
 });

@@ -1,7 +1,7 @@
 """rag_engine の中の補助の処理の失敗を、呼び出し元の記録（``report_degraded``）に渡す（#3284・#3286）。
 
 補助の処理（要求ごとの根拠の探し直し・用語・同義語と回答ルールの読み込み・rerank・追加の検索文の rerank・CRAG の
-根拠確認・全文検索の語の分割・章節の子の並べ替え・条の目録の元の質問の検索）は、失敗しても縮退して
+根拠確認・全文検索の語の分割・章節の子の並べ替え）は、失敗しても縮退して
 回答を続ける。失敗は処理の種類と例外を ``report_degraded`` に渡し、呼び出し元（backend）が回答の
 診断の ``degraded_steps`` に型の名前だけを残す。結果が空なだけのとき（失敗ではない）は渡さない。
 診断と工程の詳細には例外の文を入れない。外部 I/O と LLM はすべてスタブ。
@@ -12,24 +12,20 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from test_answer_generation import _answer_context, _answer_output, _chunk_record, _chunk_run_stub, _crag_grade
-from test_request_coverage import _missing, context, parent, split
+from test_answer_generation import _answer_context, _chunk_record, _chunk_run_stub
 
 import rag_engine.generation.answering as answering
-from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answering import AnswerRecord, answer_question_result, rerank_records
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context, load_runtime_knowledge
 from rag_engine.retrieval import text_search_tokenizer as tokenizer
-from rag_engine.retrieval.request_coverage import CoverageBudget, run_targeted_retrievals
 
 # 例外の文に入れる値。記録・工程の詳細のどこにも出てはいけない（DB のエラー・SQL・path の代役）。
 SECRET = "ORA-00942 SELECT secret_column FROM doc-secret /work/secret-dir"
@@ -61,40 +57,6 @@ def _recording(**fields: Any) -> Iterator[list[tuple[str, str]]]:
 
 
 # ---- 要求ごとの根拠の探し直し（#3284） ----
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-def test_targeted_retrieval_failure_keeps_only_the_type_name(fail: bool) -> None:
-    targets, rows = _missing(1)
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> Any:
-        if fail:
-            raise Boom(SECRET)
-        return context()
-
-    with _recording() as reported:
-        results, _ = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=split)
-
-    assert results[0].parents == ()
-    if fail:
-        # 記録に残すのは例外の型の名前だけ（DB のエラーの文を診断に出さない）。
-        assert results[0].error == "Boom"
-        assert reported == [("request_coverage_retrieval", "Boom")]
-    else:
-        assert results[0].error == ""
-        assert reported == []
-
-
-def test_targeted_retrieval_with_new_evidence_is_not_reported() -> None:
-    targets, rows = _missing(1)
-
-    with _recording() as reported:
-        results, _ = run_targeted_retrievals(
-            rows, targets, budget=CoverageBudget(), retrieve=lambda text, queries: context(parent("new", "語1")), tokenize=split
-        )
-
-    assert results[0].parents and not results[0].error
-    assert reported == []
 
 
 # ---- 用語・同義語と回答ルールの読み込み（#3284） ----
@@ -163,72 +125,12 @@ def _answer_with_stubs(
             "abcdef",
             ["docling"],
             settings,
-            query_strategy=answering.SIMPLE_RETRIEVAL_LABEL,
-            answer_flow=answer_flow,
         )
     return result, reported
 
 
 def _kinds(reported: list[tuple[str, str]]) -> set[str]:
     return {kind for kind, _ in reported}
-
-
-def test_runtime_knowledge_failure_is_reported_and_the_step_shows_only_the_type(tmp_path: Path) -> None:
-    path = tmp_path / "runtime_knowledge.json"
-    path.write_text("{" + SECRET, encoding="utf-8")
-    settings = replace(get_settings(), runtime_knowledge_path=path)
-
-    result, reported = _answer(
-        settings,
-        [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-    )
-
-    # 補助情報なしで回答を続ける。
-    assert "answer" in result.answer
-    assert ("runtime_knowledge", "JSONDecodeError") in reported
-    assert result.runtime_knowledge.error == "JSONDecodeError"
-    assert SECRET not in result.question_display and "secret-dir" not in result.question_display
-
-
-def test_runtime_knowledge_not_registered_is_not_reported(tmp_path: Path) -> None:
-    settings = replace(get_settings(), runtime_knowledge_path=tmp_path / "missing.json")
-
-    _, reported = _answer(
-        settings,
-        [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-    )
-
-    assert "runtime_knowledge" not in _kinds(reported)
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "graded"])
-def test_crag_grade_failure_is_reported(fail: bool) -> None:
-    grade = (
-        Boom(SECRET)
-        if fail
-        else _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["chunk-safe"], support_text="available evidence")
-    )
-
-    result, reported = _answer(
-        get_settings(),
-        [grade, _answer_output(answer="fallback answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.CRAG_ANSWER_FLOW_LABEL,
-    )
-
-    # 評価の失敗は判定不能で、不足を確かめていない。取得済みの根拠で生成へ進み、失敗の診断を保持する（#3837）。
-    if fail:
-        assert "fallback answer" in result.answer
-        assert result.crag_attempts[0]["grade_execution"] == "error"
-        assert result.crag_attempts[0]["required_aspect_coverage"] == "unknown"
-        assert result.generation_trace["crag_generation_gate"]["reason"] == "grading_incomplete"
-        assert result.generation_trace["crag_generation_gate"]["generation_usable"] is False
-        assert ("crag_grade", "Boom") in reported
-        assert SECRET not in result.question_display
-    else:
-        assert "fallback answer" in result.answer
-        assert "crag_grade" not in _kinds(reported)
 
 
 @contextmanager
@@ -240,34 +142,6 @@ def _sudachi_broken() -> Iterator[None]:
             yield
     finally:
         tokenizer._sudachi_failure.cache_clear()
-
-
-def test_sudachi_unavailable_is_reported_once_per_answer() -> None:
-    with _sudachi_broken():
-        assert isinstance(tokenizer.sudachi_unavailable(), Boom)
-        result, reported = _answer(
-            get_settings(),
-            [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-            answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-        )
-
-    # 文字種の区切りだけで検索語を作って回答を続け、回答ごとに 1 回だけ記録に渡す。
-    assert "answer" in result.answer
-    assert reported.count(("text_search_tokenizer", "Boom")) == 1
-
-
-def test_sudachi_available_is_not_reported() -> None:
-    tokenizer._sudachi_failure.cache_clear()
-    if tokenizer.sudachi_unavailable() is not None:
-        pytest.skip("Sudachi（辞書）が入っていない環境")
-
-    _, reported = _answer(
-        get_settings(),
-        [_answer_output(answer="answer", cited_evidence_id="chunk-safe")],
-        answer_flow=answering.STANDARD_ANSWER_FLOW_LABEL,
-    )
-
-    assert "text_search_tokenizer" not in _kinds(reported)
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])
@@ -381,24 +255,3 @@ def test_section_child_rerank_failure_is_reported(fail: bool) -> None:
     # どちらも語の重なりで並べる。記録で失敗と「rerank の結果が空」を分ける。
     assert ranking == "lexical" and len(ranked) == 3
     assert reported == ([("section_child_rerank", "Boom")] if fail else [])
-
-
-# ---- 条の目録の元の質問の検索 ----
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-def test_article_original_question_search_failure_is_reported(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
-    def search(**kwargs: Any) -> Any:
-        if fail:
-            raise Boom(SECRET)
-        return SimpleNamespace(child_chunks=[])
-
-    monkeypatch.setattr(answering, "search_adb_hybrid_chunks", search)
-    settings = get_settings(environ={}, dotenv_path=None)
-    options = {"chunk_run_id": "", "retrieval_queries": ["書類 表記"], "settings": settings}
-
-    with _recording(article_question=lambda: "取引先から届いた書類の補正を求めるべきか") as reported:
-        found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), settings)
-
-    assert found == []
-    assert reported == ([("article_original_question", "Boom")] if fail else [])

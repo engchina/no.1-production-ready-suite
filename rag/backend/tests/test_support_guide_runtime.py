@@ -204,7 +204,8 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     assert "必要な根拠:" not in rule["content"]
     assert "実施の前に承認が要る" in rule["content"]
     payload = with_guide_rule({"terms": [{"term": "x"}], "rules": [{"id": "r1"}]}, match)
-    assert [item["id"] for item in payload["rules"]] == ["guide-g-grant", "r1"]
+    # 登録ルールは無い（#4799）。payload に残った rules は引き継がず、業務ガイドのルールだけにする。
+    assert [item["id"] for item in payload["rules"]] == ["guide-g-grant"]
     assert payload["terms"] == [{"term": "x"}]
 
 
@@ -326,16 +327,16 @@ def test_chat_clarification_round_trip() -> None:
     assert match is not None
     found = guide_clarification(match)
     assert found is not None
-    rule_id, title, clarification = found
-    assert (rule_id, title) == ("guide:g-grant:target", "アクセス権限を付与する")
+    guide_condition_id, title, clarification = found
+    assert (guide_condition_id, title) == ("guide:g-grant:target", "アクセス権限を付与する")
     assert [option.label for option in clarification.options] == ["個別", "グループ"]
     assert clarification.multiple is False
-    resolved = resolve_guide_clarification(GUIDES, rule_id, ["o2"])
+    resolved = resolve_guide_clarification(GUIDES, guide_condition_id, ["o2"])
     assert resolved is not None
     conditions, context = resolved
     assert conditions == {"target": "グループ"}
     assert "選んだ答え: グループ" in context
-    assert resolve_guide_clarification(GUIDES, rule_id, ["o9"]) is None
+    assert resolve_guide_clarification(GUIDES, guide_condition_id, ["o9"]) is None
     assert resolve_guide_clarification(GUIDES, "guide:missing:target", ["o1"]) is None
     assert resolve_guide_clarification(GUIDES, "R1", ["o1"]) is None
 
@@ -346,19 +347,19 @@ def test_guide_clarification_accepts_other_text_without_setting_the_value() -> N
     assert match is not None
     found = guide_clarification(match)
     assert found is not None
-    rule_id, _title, clarification = found
+    guide_condition_id, _title, clarification = found
     assert clarification.allow_other is True
-    resolved = resolve_guide_clarification(GUIDES, rule_id, [], "部署の共有フォルダ")
+    resolved = resolve_guide_clarification(GUIDES, guide_condition_id, [], "部署の共有フォルダ")
     assert resolved is not None
     conditions, context = resolved
     assert conditions == {}
     assert "その他（利用者の入力）: 部署の共有フォルダ" in context
     assert "当てはまる値を確かめる" in context
-    both = resolve_guide_clarification(GUIDES, rule_id, ["o1"], "急ぎ")
+    both = resolve_guide_clarification(GUIDES, guide_condition_id, ["o1"], "急ぎ")
     assert both is not None
     assert both[0] == {"target": "個別"}
     assert "その他（利用者の入力）: 急ぎ" in both[1]
-    assert resolve_guide_clarification(GUIDES, rule_id, [], "  ") is None
+    assert resolve_guide_clarification(GUIDES, guide_condition_id, [], "  ") is None
 
 
 def test_guide_clarification_record_for_the_conversation() -> None:
@@ -367,15 +368,15 @@ def test_guide_clarification_record_for_the_conversation() -> None:
     assert match is not None
     found = guide_clarification(match)
     assert found is not None
-    rule_id, _title, clarification = found
-    record = guide_clarification_record(GUIDES, rule_id, ["o2"], "急ぎ")
+    guide_condition_id, _title, clarification = found
+    record = guide_clarification_record(GUIDES, guide_condition_id, ["o2"], "急ぎ")
     assert record == {
         "outcome": "answered",
         "entries": [
             {"prompt": clarification.question, "selected": ["グループ"], "other_text": "急ぎ"}
         ],
     }
-    assert guide_clarification_record(GUIDES, rule_id, None) == {
+    assert guide_clarification_record(GUIDES, guide_condition_id, None) == {
         "outcome": "skipped",
         "entries": [{"prompt": clarification.question}],
     }
@@ -538,9 +539,9 @@ def test_conflicting_values_are_clarified_with_the_named_values() -> None:
     # チャットの確認は質問に出た値だけを出し、選択肢の id は全選択肢の中の位置（答えを引き直せる）。
     found = guide_clarification(match)
     assert found is not None
-    rule_id, _, clarification = found
+    guide_condition_id, _, clarification = found
     assert [(o.id, o.label) for o in clarification.options] == [("o1", "個別"), ("o2", "グループ")]
-    resolved = resolve_guide_clarification(guides, rule_id, ["o2"])
+    resolved = resolve_guide_clarification(guides, guide_condition_id, ["o2"])
     assert resolved is not None and resolved[0] == {"target": "グループ"}
     # 利用者が値を渡せば矛盾は解ける。チャット（送信の前に確かめる）では分岐で答える。
     given = match_guide(guides, "個別とグループのどちらにアクセス権限を付与？", {"target": "全員"})
@@ -811,7 +812,7 @@ def test_clarification_suggest_falls_back_to_guide_conditions(monkeypatch: Monke
         "/api/search-answer-profiles/bv-1/clarifications/suggest",
         json={"query": "アクセス権限を付与したい"},
     ).json()["data"]["suggestion"]
-    assert body["rule_id"] == "guide:g-grant:target"
+    assert body["guide_condition_id"] == "guide:g-grant:target"
     assert body["clarification"]["question"].startswith("権限は個別の利用者と")
     none = client.post(
         "/api/search-answer-profiles/bv-1/clarifications/suggest",

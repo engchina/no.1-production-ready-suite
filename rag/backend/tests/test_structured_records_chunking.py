@@ -607,12 +607,12 @@ def _word_table_extraction() -> StructuredExtraction:
 
 @pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big", "fixed_delimiter"])
 def test_word_table_parts_cite_the_original_table_rows(strategy: str) -> None:
-    """Word の表の根拠は、本文の表の番号と元の表の行の範囲を持ち、表として検査できる。
+    """Word の表の根拠は、本文の表の番号と元の表の行の範囲を持つ。
 
     多段の表頭・単位の段・注記を含む表と、表頭を繰り返した続きの部分（合成）。続きの部分も元の
-    表の行の番号を持ち（行の番号を振り直さない）、本文は検査（表の行・列の対応）が読める表。
+    表の行の番号を持つ（行の番号を振り直さない）。
     """
-    from app.mcp.tools import _locator, _table_binding
+    from app.mcp.tools import _locator
 
     chunks = _chunks_of(_word_table_extraction(), strategy)
     tables = [chunk for chunk in chunks if chunk.metadata.get("row_basis") == "word_table"]
@@ -628,8 +628,7 @@ def test_word_table_parts_cite_the_original_table_rows(strategy: str) -> None:
     for chunk, locator in zip(tables, (first, second), strict=True):
         # 複数行のまとまりはセルの座標を持たない（行の範囲だけ）。
         assert (locator["table_row"], locator["table_cells"]) == (None, [])
-        # 表頭の段（単位の段を含む）は列ごとに 1 つの見出しの行になり、本文は検査が読める表。
+        # 表頭の段（単位の段を含む）は列ごとに 1 つの見出しの行になる。
         assert "| 区分 | 期間 / 開始 / （日） | 期間 / 終了 / （日） |" in chunk.text
-        assert _table_binding(chunk.text, dict(chunk.metadata)) == "checkable"
     # 注記は表の後ろに同じまとまりで残る。
     assert tables[0].text.endswith("注: 合成の注記。")

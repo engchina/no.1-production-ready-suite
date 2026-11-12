@@ -6,7 +6,7 @@
 支持）を決定的に再現する。
 """
 
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, observed_supports, record, run
+from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedItem
@@ -63,93 +63,6 @@ def test_conclusion_chained_from_split_hops_is_written_and_the_ledger_row_is_not
     assert "人事給与システムの担当部署は略号「労」です。" in text
 
 
-def test_merged_hop_observation_does_not_trigger_correction():
-    """段を混ぜた本文への不支持を診断に残し、本文・要約の自動変更や再生成には使わない。"""
-    ctx = _context()
-    by_text = ids(ctx, QUESTION)
-    merged = item(by_text[APPROVERS], MERGED, "労務部の承認者は労務部長です。", kind="rule", request_id="Q1")
-    deadline = _hops(by_text)[3]
-    first = audit(
-        (0, "unsupported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=False
-    )
-    model = FakeModel([draft(merged, deadline, summary=CONCLUSION), draft(*_hops(by_text), summary=CONCLUSION)], [first, _supported(4)])
-
-    result = run(model, ctx, QUESTION).response
-
-    assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True]
-    assert result.answer_text.startswith(CONCLUSION)
-    assert MERGED in result.answer_text
-    assert observed_supports(result) == ["unsupported", "supported"]
-    assert not observed_audit(result)["summary_supported"]
-    assert grounded.answer_labels().quote_only_section not in result.answer_text
-
-
-def test_summary_rejection_is_observed_without_rewriting_or_extra_hops():
-    """要約の不支持と要求の部分回答は観測に残し、未校正の判定だけで本文や要約を変更しない。"""
-    ctx = _context()
-    by_text = ids(ctx, QUESTION)
-    hops = _hops(by_text)
-    guarantee = "人事給与システムの変更は労務部長が承認し、申請はすぐに承認されます。"
-    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")], summary_supported=False)
-    model = FakeModel([draft(*hops[:2], summary=guarantee), draft(*hops, summary=guarantee)], [first, _supported(4)])
-
-    result = run(model, ctx, QUESTION).response
-
-    assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True]
-    assert result.answer_text.startswith(guarantee)
-    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
-    assert not observed_audit(result)["summary_supported"]
-    assert observed_audit(result)["request_reviews"][0]["status"] == "partial"
-    for hop in hops[:2]:
-        assert hop["text"] in result.answer_text
-    assert not result.envelope["removed_passages"]
-
-
-def test_summary_rejection_does_not_select_an_unrequested_second_generation():
-    """用意された二回目の結論へ未校正の判定だけで差し替えない。低層の反復検出は別途維持する。"""
-    ctx = _context()
-    by_text = ids(ctx, QUESTION)
-    hops = _hops(by_text)
-    wrong = "人事給与システムの変更は管理本部長が承認し、受付から 5 営業日以内に承認します。"
-    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")], summary_supported=False)
-    model = FakeModel([draft(*hops[:2], summary=wrong), draft(*hops, summary=CONCLUSION)], [first, _supported(4)])
-
-    result = run(model, ctx, QUESTION).response
-
-    assert result.answer_text.startswith(wrong)
-    assert len(result.generation_trace["rounds"]) == 1
-    assert not observed_audit(result)["summary_supported"]
-    assert grounded.repeats_summary("一覧を出力します。" + wrong, wrong)
-    assert grounded.repeats_summary(wrong.replace("、", ""), wrong)  # 読点の揺れは同じ文
-    assert not grounded.repeats_summary(CONCLUSION, wrong)
-
-
-def test_missing_hop_observation_keeps_generated_gap_and_summary():
-    """生成が明示した不足と本文は保持し、未校正の要約判定も独立して残す。"""
-    ctx = context(
-        record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
-        record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"),
-    )
-    by_text = ids(ctx, QUESTION)
-    hops = _hops({**by_text, LEDGER: "E-none", CODES: "E-none"})[2:]
-    gap = {"kind": "gap", "text": "人事給与システムの担当部署は取得した資料に記載がありません。", "request_id": "Q1"}
-    rejected = audit(
-        (0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "partial")], summary_supported=False
-    )
-    model = FakeModel([draft(*hops, gap, summary=CONCLUSION)], [rejected])
-
-    result = run(model, ctx, QUESTION).response
-    text = result.answer_text
-
-    assert text.startswith(CONCLUSION)
-    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
-    assert not observed_audit(result)["summary_supported"]
-    assert observed_audit(result)["request_reviews"][0]["status"] == "partial"
-    for hop in hops:
-        assert hop["text"] in text
-    assert "人事給与システムの担当部署は取得した資料に記載がありません。" in text
-
-
 def test_invalid_table_citation_does_not_get_a_guessed_replacement_in_feedback():
     """不正範囲は未確認のまま残し、別の行を写し直す候補を作らない。"""
     ctx = _context()
@@ -173,46 +86,12 @@ def test_invalid_table_citation_does_not_get_a_guessed_replacement_in_feedback()
     assert dropped[0]["citation_resolution"]["requested_quote"] == miscopied["citations"][0]["quote"]
 
 
-def test_miscopied_trailing_sentence_keeps_the_claim_unconfirmed():
-    """原文候補があっても、支持原文なしの監査だけで引用不一致を解消しない。"""
-    ctx = _context()
-    by_text = ids(ctx, QUESTION)
-    hops = list(_hops(by_text))
-    hops[1] = item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。研究本部に属します。", kind="rule", request_id="Q1")
-    model = FakeModel([draft(*hops, summary=CONCLUSION)], [_supported(4)])
-    result = run(model, ctx, QUESTION).response
-    assert result.answer_text.startswith(CONCLUSION)
-    assert result.generation_trace["finalization"]["summary"]["status"] == "unverified"
-    assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "unresolved"
-    assert observed_supports(result) == ["supported"] * 4
-    for hop in hops:
-        assert hop["text"] in result.answer_text
-    mark = next(mark for mark in result.envelope["passage_marks"] if mark["text"] != CONCLUSION)
-    assert mark["state"] == "unverified"
-    assert [reason["code"] for reason in mark["reasons"]] == ["citation_range_out_of_bounds"]
-    assert not result.envelope["removed_passages"]
-
-
-def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
-    generate, audit_prompt = grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT
-    assert "複数の根拠をつないで答える質問" in generate
-    assert "各段を述べる原文の単位を basis に選び" in generate
-    assert "方法を reasoning に、最終の答えを result" in generate
-    assert "足りない段を推測で埋めない" in generate
-    assert "その item だけで最終の答えにならないこと" in audit_prompt
-    assert "「この item だけでは質問に直接答えていない」は not_applicable の理由にならない" in audit_prompt
-    assert "尋ねている項目を quote が述べていないことは not_applicable の理由にならない" in audit_prompt
-    assert "つなぐ段のどれかが supported な item に無ければ false" in audit_prompt
-    # 監査の prompt は 1 行 1 規則（節見出しと空行を除く）。
-    assert all(line.startswith(("- ", "## ", "### ")) or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
-
-
 def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     """同じ内容を述べた規則の原文と手順書の両方を出典にし、出典を 1 つに絞る言い方を残さない（#3526）。"""
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
-    generate = grounded.GENERATE_SYSTEM_PROMPT
-    section = generate.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
+    generate = grounded.generation_system_prompt()
+    section = generate.split("引用する原文を選ぶ", 1)[1].split("## Step ", 1)[0]
     assert "文書ごとにその文書の原文を basis に選ぶ" in section
     # 別の対象の根拠を basis に選ばない判断は basis の選び方に置く（生成の出力に計画の行は無い。#4611）。
     assert "別の対象・独立した操作の原文は選ばない" in section

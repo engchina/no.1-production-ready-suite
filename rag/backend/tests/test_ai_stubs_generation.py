@@ -39,10 +39,7 @@ def _spans() -> list[dict[str, Any]]:
 
 
 @pytest.mark.parametrize("model_view", [False, True])
-@pytest.mark.parametrize("audit_mode", [grounded.AUDIT_MODE_NONE, grounded.AUDIT_MODE_DETAILED])
-def test_stub_completes_a_generation_round_with_a_verified_citation(
-    audit_mode: str, model_view: bool
-) -> None:
+def test_stub_completes_a_generation_round_with_a_verified_citation(model_view: bool) -> None:
     spans = _spans()
     spans[0]["answer_context"] = "合成の補助情報。引用の対象外。"
     schemas: list[str] = []
@@ -64,7 +61,6 @@ def test_stub_completes_a_generation_round_with_a_verified_citation(
         provider_id=None,
         parse_text=stub,
         parse_images=lambda *args, **kwargs: pytest.fail("画像は不要"),
-        audit_mode=audit_mode,
     )
 
     assert schemas[0] == "GroundedDraftWire"
@@ -77,7 +73,3 @@ def test_stub_completes_a_generation_round_with_a_verified_citation(
     citation = result.checked[0].item.citations[0]
     assert citation.evidence_id == spans[0]["evidence_id"]
     assert citation.quote and citation.quote in TEXT
-    if audit_mode == grounded.AUDIT_MODE_DETAILED:
-        # 監査の wire をスタブが返せず、監査の失敗として草稿だけが残る形で通らないこと。
-        assert result.audit_calls == 1
-        assert result.checked[0].review_assessment["observed_support"] == "supported"

@@ -194,7 +194,7 @@ export function EvaluationSettingsClient() {
             </div>
           </div>
           <SuiteMetrics suite={selectedSuite ?? null} />
-          {/* 変更が実行済みの評価に効かないことと、実行ごとの指定が優先することを案内する（#1029）。 */}
+          {/* 保存した基準を次の品質評価から使い、実行済みの評価に効かないことを案内する（#1029・#3738）。 */}
           <FormStatus tone="info" message={t("settings.evaluation.applyHint")} />
           <FormActionBar
             ariaLabel={t("settings.evaluation.actions.label")}

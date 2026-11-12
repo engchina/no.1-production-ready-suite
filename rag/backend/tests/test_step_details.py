@@ -11,7 +11,6 @@ from app.config import Settings
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.step_details import (
     answer_guardrail_details,
-    field_filter_details,
     history_rewrite_details,
     step_details_payload,
 )
@@ -58,20 +57,6 @@ def test_history_rewrite_details() -> None:
             {"label": "参照した会話", "value": "2 件の発言"},
             {"label": "結果", "value": "書き換えなし（元の質問のまま）"},
         ]
-    }
-
-
-def test_field_filter_details() -> None:
-    conditions = [
-        SimpleNamespace(name="項目 A", op="eq", value="値 1"),
-        SimpleNamespace(name="項目 B", op="gte", value="10"),
-    ]
-    assert field_filter_details(conditions) == {
-        "fields": [{"label": "読み取った条件", "value": "2 件"}],
-        "lines": ["項目 A = 値 1", "項目 B ≥ 10"],
-    }
-    assert field_filter_details([]) == {
-        "fields": [{"label": "読み取った条件", "value": "なし（条件で絞らずに検索します）"}]
     }
 
 

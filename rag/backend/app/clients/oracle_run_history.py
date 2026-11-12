@@ -2,7 +2,7 @@
 
 1 回の実行（trace_id）を `rag_run_history` に 1 行で残す。回答を作った実行の回答・引用・診断は
 回答の記録（`rag_answer_records`）を正本にし、ここには一覧と絞り込みに使う要約（状態・回答の対応・
-回答の検証・所要時間）と、処理の段（`stages_json`）、回答を作らない RAG 検索の根拠
+回答の確からしさ・所要時間）と、処理の段（`stages_json`）、回答を作らない RAG 検索の根拠
 （`citations_json`）だけを持つ。
 
 見え方（#1889・#1954）: system_admin（`all_users_visible`）は全員の実行。それ以外は、自分が実行した
@@ -206,12 +206,10 @@ _LIST_COLUMNS = f"""
     r.run_id, r.surface, r.search_answer_profile_id, p.name AS search_answer_profile_name,
     r.user_id_hash, r.user_uuid,
     DBMS_LOB.SUBSTR(r.question, {QUESTION_PREVIEW_CHARS}, 1) AS question,
-    r.answer_generated, r.status, r.answer_outcome, r.verification, r.confidence,
+    r.answer_generated, r.status, r.answer_outcome, r.confidence,
     r.needs_human_review, r.citation_count, r.elapsed_ms, r.error_stage, r.model_id,
     r.conversation_id, r.message_id, r.created_at,
     rc.user_id_hash AS conversation_owner_hash,
-    JSON_VALUE(r.stages_json, '$.validation_execution' RETURNING VARCHAR2(16) NULL ON ERROR)
-        AS validation_execution,
     JSON_VALUE(r.stages_json, '$.usage.total_tokens' RETURNING NUMBER(19) NULL ON ERROR)
         AS usage_total_tokens,
     JSON_VALUE(r.stages_json, '$.usage.measurement' RETURNING VARCHAR2(16) NULL ON ERROR)
@@ -264,7 +262,6 @@ class RunHistoryStore:
             "answer_generated": 1 if record.get("answer_generated") else 0,
             "status": record["status"],
             "answer_outcome": record.get("answer_outcome"),
-            "verification": record.get("verification"),
             "confidence": record.get("confidence") or None,
             "needs_human_review": (
                 None
@@ -292,7 +289,6 @@ class RunHistoryStore:
                 WHEN MATCHED THEN UPDATE SET
                     target.status = :status,
                     target.answer_outcome = :answer_outcome,
-                    target.verification = :verification,
                     target.confidence = :confidence,
                     target.needs_human_review = :needs_human_review,
                     target.citation_count = :citation_count,
@@ -303,14 +299,14 @@ class RunHistoryStore:
                     target.citations_json = :citations_json
                 WHEN NOT MATCHED THEN INSERT (
                     run_id, surface, search_answer_profile_id, tenant_id_hash, user_id_hash,
-                    user_uuid, question, answer_generated, status, answer_outcome, verification,
+                    user_uuid, question, answer_generated, status, answer_outcome,
                     confidence, needs_human_review, citation_count, elapsed_ms, error_stage,
                     error_type, model_id, conversation_id, message_id, stages_json,
                     citations_json
                 ) VALUES (
                     :run_id, :surface, :search_answer_profile_id, :tenant_id_hash, :user_id_hash,
                     :user_uuid, :question, :answer_generated, :status, :answer_outcome,
-                    :verification, :confidence, :needs_human_review, :citation_count,
+                    :confidence, :needs_human_review, :citation_count,
                     :elapsed_ms, :error_stage, :error_type, :model_id, :conversation_id,
                     :message_id, :stages_json, :citations_json
                 )

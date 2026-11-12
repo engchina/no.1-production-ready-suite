@@ -1,6 +1,6 @@
 """回答の検索の補助の処理の失敗を、診断で「当たらなかった」と分ける(#3259)。
 
-補助の処理(業務の名前・実体・関係情報・参照先・画面目録・章節・条の目録・編集したプロンプト)は、
+補助の処理(業務の名前・実体・関係情報・参照先・章節・編集したプロンプト)は、
 失敗しても空のまま回答を続ける。失敗は ``_SearchState.degraded`` に処理の種類・回数・例外の型の
 名前だけを残し、回答の診断(``degraded_steps``)と根拠 0 件の診断(``zero_evidence``)に出す。
 例外の文・SQL・本文・識別子は出さない。外部 I/O はすべてスタブ。
@@ -14,7 +14,6 @@ from typing import Any, cast
 
 import pytest
 from rag_engine.knowledge.runtime_knowledge import TERMS_SOURCE_LABEL
-from rag_engine.retrieval.article_catalog import SelectedArticle
 
 from app.clients.oracle import SearchHits
 from app.config import Settings
@@ -26,7 +25,6 @@ from tests.test_answer_engine import (
     EmptyWithKeysOracle,
     FakeGenAi,
     FakeOracle,
-    ScreenOracle,
     _chunk,
     _fake_llm,
 )
@@ -66,171 +64,6 @@ def _assert_degraded(state: _SearchState, kind: str) -> None:
 
 
 # ---- 処理ごとに、失敗(記録が残る)と空(記録が残らない)を分ける ----
-
-
-class _ScopeOracle(FakeOracle):
-    """画面目録・条の文書の一覧が読む範囲の状態と一覧を返す(``fail`` なら失敗する)。"""
-
-    def __init__(self, *, fail: bool) -> None:
-        super().__init__()
-        self.fail = fail
-
-    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
-        if self.fail:
-            raise Boom(SECRET)
-        return []
-
-    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
-        if self.fail:
-            raise Boom(SECRET)
-        return "1:1"
-
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
-        return []
-
-    async def retrieval_screen_chunks(
-        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
-    ) -> list[RetrievedChunk]:
-        if self.fail:
-            raise Boom(SECRET)
-        return []
-
-    async def retrieval_article_documents(self, filters: dict[str, str]) -> list[tuple[str, str]]:
-        return []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_screen_catalog_failure_is_recorded(
-    monkeypatch: pytest.MonkeyPatch, fail: bool
-) -> None:
-    monkeypatch.setattr(answer_engine_module, "_SCREEN_CATALOG_CACHE", {})
-    state = _SearchState()
-
-    catalog = await _engine(_ScopeOracle(fail=fail))._load_screen_catalog(
-        SearchRequest(query="q"), state
-    )
-
-    assert catalog == {}
-    if fail:
-        _assert_degraded(state, "screen_catalog")
-    else:
-        assert state.degraded_steps() == []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_screen_chunks_failure_is_recorded(fail: bool) -> None:
-    state = _SearchState()
-
-    stored = await _engine(_ScopeOracle(fail=fail))._screen_chunks(
-        SearchRequest(query="q"), state, [("画面A.pdf", "画面 A")], set()
-    )
-
-    assert stored == []
-    if fail:
-        _assert_degraded(state, "screen_chunks")
-    else:
-        assert state.degraded_steps() == []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_article_documents_failure_is_recorded(
-    monkeypatch: pytest.MonkeyPatch, fail: bool
-) -> None:
-    monkeypatch.setattr(answer_engine_module, "_ARTICLE_DOCUMENTS_CACHE", {})
-    state = _SearchState()
-
-    documents = await _engine(_ScopeOracle(fail=fail))._article_documents(
-        SearchRequest(query="q"), state
-    )
-
-    assert documents == []
-    if fail:
-        _assert_degraded(state, "article_documents")
-    else:
-        assert state.degraded_steps() == []
-
-
-def _section_store(monkeypatch: pytest.MonkeyPatch, *, fail: bool) -> None:
-    from app.clients import section_map_store
-
-    class Store:
-        def __init__(self, oracle: Any) -> None:
-            pass
-
-        async def section_first_chunks(
-            self,
-            document_id: str,
-            *,
-            chunk_set_id: str,
-            section_ids: list[str],
-            filters: Any = None,
-        ) -> dict[str, RetrievedChunk]:
-            if fail:
-                raise Boom(SECRET)
-            return {}
-
-    monkeypatch.setattr(section_map_store, "SectionMapStore", Store)
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_article_lead_failure_is_recorded(
-    monkeypatch: pytest.MonkeyPatch, fail: bool
-) -> None:
-    _section_store(monkeypatch, fail=fail)
-    state = _SearchState()
-
-    leads = await _engine(FakeOracle())._article_leads(
-        "doc-a", "cs-a", {"s1": "第一条"}, state=state
-    )
-
-    assert leads == {}
-    if fail:
-        _assert_degraded(state, "article_lead")
-    else:
-        assert state.degraded_steps() == []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_article_chunks_failure_is_recorded(
-    monkeypatch: pytest.MonkeyPatch, fail: bool
-) -> None:
-    _section_store(monkeypatch, fail=fail)
-    state = _SearchState()
-    articles = [SelectedArticle("doc-a", "文書A.json", "cs-a", "s1", "第一条", 0)]
-
-    stored = await _engine(FakeOracle())._article_chunks(SearchRequest(query="q"), state, articles)
-
-    assert stored == []
-    if fail:
-        _assert_degraded(state, "article_chunks")
-    else:
-        assert state.degraded_steps() == []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_article_catalog_failure_is_recorded(
-    monkeypatch: pytest.MonkeyPatch, fail: bool
-) -> None:
-    from app.rag import section_map_service
-
-    async def outline(document_id: str, **kwargs: Any) -> Any:
-        if fail:
-            raise Boom(SECRET)
-        return None
-
-    monkeypatch.setattr(section_map_service, "section_outline", outline)
-    state = _SearchState()
-    state.article_documents = [("doc-a", "文書A.json")]
-
-    catalogs = await _engine(FakeOracle())._article_catalogs(state, ["doc-a"], 3)
-
-    assert catalogs == []
-    if fail:
-        _assert_degraded(state, "article_catalog")
-    else:
-        assert state.degraded_steps() == []
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
@@ -430,14 +263,14 @@ async def test_reference_rerank_failure_is_recorded(fail: bool) -> None:
 def test_degraded_record_counts_per_kind_and_type_without_messages() -> None:
     state = _SearchState()
 
-    state.record_degraded("screen_chunks", Boom(SECRET))
-    state.record_degraded("screen_chunks", Boom("別の文"))
-    state.record_degraded("screen_chunks", TimeoutError(SECRET))
+    state.record_degraded("reference_expansion", Boom(SECRET))
+    state.record_degraded("reference_expansion", Boom("別の文"))
+    state.record_degraded("reference_expansion", TimeoutError(SECRET))
     state.record_degraded("section_outline", Boom(SECRET))
 
     assert state.degraded_steps() == [
-        {"kind": "screen_chunks", "count": 2, "exc_type": "Boom"},
-        {"kind": "screen_chunks", "count": 1, "exc_type": "TimeoutError"},
+        {"kind": "reference_expansion", "count": 2, "exc_type": "Boom"},
+        {"kind": "reference_expansion", "count": 1, "exc_type": "TimeoutError"},
         {"kind": "section_outline", "count": 1, "exc_type": "Boom"},
     ]
     assert SECRET not in json.dumps(state.degraded_steps(), ensure_ascii=False)
@@ -526,42 +359,6 @@ async def test_prompt_read_failure_is_not_an_auxiliary_degradation(
     oracle = _OverridesOracle(fail_overrides=True)
     with pytest.raises(Boom):
         await _run(monkeypatch, oracle)
-
-
-async def test_screen_link_failure_in_rag_engine_is_recorded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """rag_engine の中の画面の選択(LLM)の失敗も、同じ記録に残す(「該当なし」と分ける)。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation import answering
-    from rag_engine.retrieval.screen_catalog import ScreenLinks
-
-    def failing_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is ScreenLinks:
-            raise Boom(SECRET)
-        return _fake_llm(system, prompt, settings, schema, **options)
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", failing_llm)
-    monkeypatch.setattr(answer_engine_module, "_SCREEN_CATALOG_CACHE", {})
-    monkeypatch.setattr(answering, "_SCREEN_LINK_CACHE", {})
-    oracle = ScreenOracle()
-    engine = _engine(
-        oracle,
-        rag_query_strategy="simple_retrieval",
-        rag_answer_flow="standard_rag",
-        rag_rerank_enabled=False,
-        rag_screen_linking_enabled=True,
-    )
-
-    outcome = await engine.run(
-        SearchRequest(query="帳票が印字されない", top_k=10, filters={"knowledge_base_id": "kb-1"})
-    )
-
-    assert outcome.citations
-    assert oracle.section_calls and oracle.screen_calls == []
-    steps = cast(list[dict[str, Any]], outcome.diagnostics["degraded_steps"])
-    assert {"kind": "screen_link", "count": 1, "exc_type": "Boom"} in steps
-    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
 
 
 async def test_main_search_failure_is_an_error_not_zero_evidence(
@@ -739,29 +536,6 @@ async def test_query_embedding_failure_keeps_oracle_failure_as_error() -> None:
     assert {step["kind"] for step in state.degraded_steps()} == {"query_embedding", "retrieval"}
 
 
-async def test_query_embedding_failure_in_prefetch_is_remembered() -> None:
-    """先読みの失敗を覚え、続く検索は embedding を呼ばず、先読みの全文の結果を使う。"""
-    oracle = _SearchLog()
-    genai = _EmbedFails()
-    state = _SearchState()
-    engine = AnswerEngine(
-        Settings(),
-        oracle=oracle,  # type: ignore[arg-type]
-        genai=genai,  # type: ignore[arg-type]
-    )
-    request = SearchRequest(query="原質問")
-
-    await engine._prefetch_query_hits(request, state, query="原質問")
-    result = await engine._search(
-        request, state, retrieval_queries=["原質問"], expand_references=False
-    )
-
-    assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:c1"]
-    assert oracle.searches == [("原質問", "keyword", 0)]
-    assert genai.calls == 1
-    _assert_degraded(state, "query_embedding")
-
-
 async def _run_with_failing_embedding(
     monkeypatch: pytest.MonkeyPatch, oracle: _SearchLog
 ) -> tuple[Any, _EmbedFails]:
@@ -857,59 +631,6 @@ async def test_history_rewrite_failure_reaches_answer_diagnostics(
     expected = {"kind": "history_rewrite", "count": 1, "exc_type": "Boom"}
     assert (expected in steps) is fail
     assert SECRET not in json.dumps(answer, ensure_ascii=False, default=str)
-
-
-@pytest.mark.parametrize("reply", [Boom(SECRET), "[]"], ids=["error", "no-condition"])
-async def test_field_filter_read_failure_is_recorded(reply: Any) -> None:
-    from app.rag.degraded_steps import DegradedSteps
-    from app.rag.extraction_field_adapter import FieldDefinition
-    from app.rag.field_filter_reader import read_field_conditions
-    from tests.test_answer_engine import RewriteLlm
-
-    degraded = DegradedSteps()
-
-    conditions = await read_field_conditions(
-        "10万円以上の受注は？",
-        [FieldDefinition(name="金額", value_type="number")],
-        RewriteLlm(reply),  # type: ignore[arg-type]
-        report_degraded=degraded.record_degraded,
-    )
-
-    assert conditions == []
-    expected = [{"kind": "field_filter", "count": 1, "exc_type": "Boom"}]
-    assert degraded.steps() == (expected if isinstance(reply, Exception) else [])
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "no-definition"])
-async def test_field_definitions_load_failure_is_recorded(fail: bool) -> None:
-    """定義を読めなかったときは記録し、定義が無いときは記録しない(どちらも LLM を呼ばない)。"""
-    from app.rag.degraded_steps import DegradedSteps
-    from app.rag.pipeline import RagPipeline
-    from tests.test_answer_engine import RewriteLlm
-
-    class DefinitionOracle(FakeOracle):
-        async def get_search_answer_profile(self, search_answer_profile_id: str) -> Any:
-            if fail:
-                raise Boom(SECRET)
-            return None
-
-    llm = RewriteLlm("[]")
-    pipeline = RagPipeline(
-        settings=Settings(rag_auto_field_filter_enabled=True),
-        oracle=DefinitionOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-        llm=llm,  # type: ignore[arg-type]
-    )
-    degraded = DegradedSteps()
-
-    conditions = await pipeline._read_field_conditions(
-        SearchRequest(query="q", search_answer_profile_id="bv-1"),
-        report_degraded=degraded.record_degraded,
-    )
-
-    assert conditions == [] and llm.calls == []
-    expected = [{"kind": "field_filter", "count": 1, "exc_type": "Boom"}]
-    assert degraded.steps() == (expected if fail else [])
 
 
 @pytest.fixture
@@ -1089,8 +810,6 @@ async def test_rerank_failure_does_not_show_the_rerank_model(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     settings = Settings(
         oci_compartment_id="ocid1.compartment.oc1..example",
-        rag_query_strategy="simple_retrieval",
-        rag_answer_flow="standard_rag",
         rag_rerank_enabled=True,
     )
     engine = AnswerEngine(

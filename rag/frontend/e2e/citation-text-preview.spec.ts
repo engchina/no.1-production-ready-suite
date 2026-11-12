@@ -1,3 +1,4 @@
+import structuredSource from "./fixtures/structured-source-reader.json";
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/test";
@@ -276,4 +277,126 @@ test("原本ノードは展開時だけ取得し、版と対応範囲を保持�
   await expect(content).toContainText("/nodes/1");
   expect(inputs.at(-1)?.get("source_index")).toBe("1");
   await expectNoPageOverflow(page);
+});
+
+
+for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json", "html", "htm"]) {
+  test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
+    await mockDatabaseReady(page); await mockLocalAuth(page);
+    const name = `synthetic.${extension}`;
+    const structured = extension === "csv" || extension === "xlsx" || extension === "docx" ? structuredSource[extension] : null;
+
+    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:structured?.window.blocks.find(block=>block.cited)?.text ?? "見出し\n合成😀の本文です。",score:1,metadata:{recipe_id:"r1",chunk_set_id:"cs1",element_ids:structured ? [structured.element_id] : ["h","a"],context_role:"evidence",answer_citation_lines:[1],answer_citation_provenance:"child"}};
+    await page.route("**/api/search-answer-profiles**", route => route.fulfill({json:{data:{items:[PROFILE],total:1,limit:50,offset:0,has_next:false},error_messages:[],warning_messages:[]}}));
+    await page.route("**/api/chat/conversations**", route => {
+      const detail = {id:"c-text",search_answer_profile_id:PROFILE.id,title:"合成の原文確認",status:"ACTIVE",owned:true,message_count:2,created_at:"2026-11-01T00:00:00Z",updated_at:"2026-11-01T00:00:00Z",messages:[
+        {message_id:"u-text",conversation_id:"c-text",role:"USER",content:"合成の値を教えてください。",status:"COMPLETE",created_at:"2026-11-01T00:00:00Z",citations:[],guardrail_warnings:[]},
+        {message_id:"a-text",reply_to_message_id:"u-text",model:"synthetic-model",conversation_id:"c-text",role:"ASSISTANT",content:`資料により確認できた事項\n・合成😀の本文です。\n根拠：${name}`,status:"COMPLETE",created_at:"2026-11-01T00:00:01Z",citations:[cited],guardrail_warnings:[]},
+      ]};
+      return route.fulfill({json:{data:new URL(route.request().url()).pathname.endsWith("/c-text") ? detail : {items:[{...detail,messages:undefined}],total:1,offset:0,limit:25,has_next:false},error_messages:[],warning_messages:[]}});
+    });
+    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],blocks:[
+      {id:"h",text:"見出し",offset:0,highlights:[[0,3]],cited:true},
+      {id:"a",text:"合成😀の本文です。",offset:0,highlights:[[0,9]],cited:true},
+      {id:"other",text:"別の文脈です。",offset:0,highlights:[],cited:false},
+    ],outline:[],previous_cursor:null,next_cursor:null,scope:"paragraph"},error_messages:[],warning_messages:[]}}));
+    if(structured) {
+      await page.route("**/api/documents/doc-text/recipes/r1/preview-source?**",route=>route.fulfill({json:{data:{file_name:"synthetic.jsonl",content_type:"application/vnd.production-ready.structured-records+jsonl",is_pdf:false,is_structured_records:true}}}));
+      await page.route("**/api/documents/doc-text/reader?**",route=>route.fulfill({json:{data:{...structured.window,revision:"cs1"}}}));
+    }
+    const genericOriginal = ["json", "html", "htm"].includes(extension);
+    const original = extension === "json" ? '{"a":"同じ値","b":"同じ値"}' : '<p>同じ値</p><p>同じ値</p>';
+    const selectedOffset = original.lastIndexOf("同じ値");
+    const originalInputs: URLSearchParams[] = [];
+    if (genericOriginal) await page.route("**/api/documents/doc-text/source-map?**", route => {
+      originalInputs.push(new URL(route.request().url()).searchParams);
+      return route.fulfill({json:{data:{status:"exact",revision:"ex1",chunk_revision:"v1",anchor_status:"element",element_id:"a",variant:"original",pointer:extension === "json" ? "/b" : "p[2]",source_index:0,source_count:1,text:original,offset:0,highlights:[[selectedOffset,selectedOffset+3]],coordinate_unit:"unicode_codepoint",previous_offset:null,next_offset:null},error_messages:[],warning_messages:[]}});
+    });
+    await page.goto(`/chat?conversation_id=c-text&search_answer_profile_id=${PROFILE.id}`);
+    await page.getByTestId("chat-answer-body").getByRole("button").filter({hasText:name}).first().click();
+    const reader=page.getByTestId("evidence-reader-content");
+    if(structured) {
+      await expect(reader.locator("[data-source-record]")).not.toHaveCount(0);
+      await expect(reader.locator("mark").first()).toBeVisible();
+      await expect(reader.getByRole("table").last()).toBeVisible();
+    } else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
+    await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+    if (genericOriginal) {
+      const panel = page.getByTestId("original-source-panel").first();
+      await panel.locator("summary").focus();
+      await page.keyboard.press("Enter");
+      await expect(panel.locator("mark")).toHaveText("同じ値");
+      expect(originalInputs[0].get("expected_revision")).toBe("v1");
+      const mark = panel.locator("mark");
+      expect(await mark.evaluate(el => el.previousSibling?.textContent)).toBe(original.slice(0,selectedOffset));
+      await expect(panel.getByText("原本 · 1 / 1",{exact:true})).toBeVisible();
+    }
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath(`text-source-chat-${extension}.png`)});
+  });
+}
+
+
+test("通常表は保存された範囲に対応する2つ目のセルだけを強調する", {tag:"@responsive"}, async ({page}, testInfo) => {
+  await search(page);
+  const text = '<table><tr><th>項目</th><th>値</th></tr><tr><td>合成A</td><td>同じ値😀 &amp; 前<br>後</td></tr><tr><td>合成B</td><td>同じ値😀 &amp; 前<br>後</td></tr></table>';
+  const start = Array.from(text.slice(0,text.lastIndexOf("同じ値"))).length;
+  await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"table",kind:"table",text,offset:0,cited:true,highlights:[[start,start+3]]}],outline:[],previous_cursor:null,next_cursor:null}}}));
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader = page.getByTestId("evidence-reader-content");
+  await expect(reader.getByRole("table")).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath(`table-initial-${testInfo.project.name}.png`),animations:"disabled"});
+  await expect(reader.locator("mark")).toHaveText("同じ値😀 & 前\n後");
+  await expect(reader.getByRole("cell").filter({hasText:"合成A"})).toBeVisible();
+  await expect(reader.getByRole("row").filter({hasText:"合成A"}).locator("mark")).toHaveCount(0);
+  await expect(reader).toContainText("セル単位で強調");
+  await expectNoPageOverflow(page);
+  await page.screenshot({path:testInfo.outputPath(`table-highlight-${testInfo.project.name}.png`),animations:"disabled"});
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({width:1920,height:1080});
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("table-highlight-wide.png"),animations:"disabled"});
+    await page.setViewportSize({width:1280,height:900});
+    await page.evaluate(()=>document.documentElement.classList.add("dark"));
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("table-highlight-dark.png"),animations:"disabled"});
+  }
+});
+
+
+test("実解析の縦線表は同じ保存範囲からセルを強調し、参照文脈には付けない", {tag:"@responsive"}, async ({page}, testInfo) => {
+  await search(page);
+  const text='| 項目 | 値 |\n| 合成A | 同じ値😀 & 前 後 |\n| 合成B | 同じ値😀 & 前 後 |';
+  const start=Array.from(text.slice(0,text.lastIndexOf('同じ値'))).length;
+  await page.route("**/api/documents/doc-a/reader?**",route=>route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"table",kind:"table",text,offset:0,cited:true,highlights:[[start,start+3]]},{id:"context",kind:"table",text,offset:0,cited:false,highlights:[[start,start+3]]}],outline:[],previous_cursor:null,next_cursor:null}}}));
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader=page.getByTestId("evidence-reader-content");
+  const cited=reader.locator('[data-reader-cited="true"]');
+  await expect(cited.getByRole("table")).toHaveCount(1);
+  await expect(cited.locator("mark")).toHaveText("同じ値😀 & 前 後");
+  await expect(cited.getByRole("row").filter({hasText:"合成A"}).locator("mark")).toHaveCount(0);
+  await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+  await expect(reader).toContainText("セル単位で強調");
+  await expectNoPageOverflow(page);
+  await page.screenshot({path:testInfo.outputPath(`pipe-table-${testInfo.project.name}.png`),animations:"disabled"});
+  if(testInfo.project.name==="desktop"){
+    await page.setViewportSize({width:1920,height:1080});await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("pipe-table-wide.png"),animations:"disabled"});
+    await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>document.documentElement.dataset.theme="dark");await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath("pipe-table-dark.png"),animations:"disabled"});
+  }
+});
+
+test("表の不完全な断片は文字位置を強調し、範囲を推測して表にしない", {tag:"@responsive"}, async ({page},testInfo)=>{
+  await search(page);
+  const text='途中😀 | 値 |\n| 合成B | 続き |';
+  await page.route("**/api/documents/doc-a/reader?**",route=>route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"fragment",kind:"table",text,offset:30,cited:true,highlights:[[2,3]]}],outline:[],previous_cursor:null,next_cursor:null}}}));
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader=page.getByTestId("evidence-reader-content");
+  await expect(reader.getByRole("table")).toHaveCount(0);
+  await expect(reader.locator("mark")).toHaveText("😀");
+  await expect(reader).toContainText(text);
+  await expect(reader).toContainText("原文の文字位置を強調");
+  await expectNoPageOverflow(page);
+  await page.screenshot({path:testInfo.outputPath(`table-fragment-${testInfo.project.name}.png`),animations:"disabled"});
 });

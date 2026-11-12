@@ -10,7 +10,7 @@ byte 単位の chunk 比較ではなく、artifact 層を「効く軸だけ」�
         -> chunk_set (+ chunking) <- embedding は chunk text 従属で自動共有
         -> metadata 層 (+ field_extraction)
         -> graph 層    (+ graph_profile)
-        -> nav 層      (+ navigation_summary / raptor)
+        -> nav 層      (+ navigation_summary)
 
 すべて決定論(canonical JSON + SHA1)で、CI で実 Oracle なしに検証できる。実際の
 materialize / 永続化 / refcount / GC は別モジュール(要 DDL・実 Oracle 検証)で行う。
@@ -22,11 +22,13 @@ import hashlib
 import json
 
 from rag_engine.parsing.content_labels import VISION_TEXT_FORMAT_VERSION
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_parser_core.language import current_pack
 from rag_parser_core.result import UNSTRUCTURED_TEXT_CONTRACT
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 
 from app.config import (
+    CHUNK_SEPARATOR_STRATEGIES,
     FIXED_DELIMITER_STRATEGY,
     PREVIOUS_DEFAULT_CHUNK_DELIMITER,
     SMALL_TO_BIG_SETTING_FIELDS,
@@ -56,10 +58,6 @@ _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
     "unstructured": ("rag_parser_unstructured_enabled",),
     "structured_records_jsonl": ("rag_parser_structured_records_jsonl_enabled",),
     "xml_tree_json": ("rag_parser_xml_tree_json_enabled",),
-    "mineru": (
-        "rag_parser_mineru_enabled",
-        "rag_parser_mineru_tier",
-    ),
     "dots_ocr": (
         "rag_parser_dots_ocr_enabled",
         "rag_parser_dots_ocr_model",
@@ -102,7 +100,7 @@ _CHUNK_SET_HASH_STRATEGY_VALUES: dict[str, str] = {_SMALL_TO_BIG_STRATEGY: "docr
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。
 _METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled",)
 _GRAPH_FIELDS: tuple[str, ...] = ("rag_graph_profile",)
-_NAV_FIELDS: tuple[str, ...] = ("rag_navigation_summary_enabled", "rag_raptor_enabled")
+_NAV_FIELDS: tuple[str, ...] = ("rag_navigation_summary_enabled",)
 
 _HASH_HEX_LEN = 16
 
@@ -132,6 +130,9 @@ def chunk_set_subset(settings: Settings) -> dict[str, object]:
         **_fields(settings, _CHUNK_SET_FIELDS),
         "rag_chunk_child_size": _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE,
     }
+    # 本文の区切りは使う方式の ID にだけ入れる(ほかの方式の既存の ID を保つ。#4733)。
+    if getattr(settings, "rag_chunking_strategy", None) in CHUNK_SEPARATOR_STRATEGIES:
+        subset["rag_chunk_separators"] = list(settings.rag_chunk_separators)
     if getattr(settings, "rag_chunking_strategy", None) == _SMALL_TO_BIG_STRATEGY:
         for name in SMALL_TO_BIG_SETTING_FIELDS:
             value = getattr(settings, name, None)
@@ -235,11 +236,17 @@ def _chunk_set_hash_input(subset: dict[str, object]) -> dict[str, object]:
     """chunk_set_id の hash の入力を、#599 の改名の前の名前にそろえる(既存の ID を保つ)。"""
     hashed = {_CHUNK_SET_HASH_NAMES.get(name, name): value for name, value in subset.items()}
     strategy = hashed.get("rag_chunking_strategy")
-    if (
-        strategy != FIXED_DELIMITER_STRATEGY
-        and hashed.get("rag_chunk_delimiter") == JSONL_RECORD_BOUNDARY
-    ):
+    delimiters = hashed.get("rag_chunk_delimiter")
+    if strategy != FIXED_DELIMITER_STRATEGY and delimiters == [JSONL_RECORD_BOUNDARY]:
         hashed["rag_chunk_delimiter"] = PREVIOUS_DEFAULT_CHUNK_DELIMITER
+    elif (
+        isinstance(delimiters, list)
+        and len(delimiters) == 1
+        and delimiters[0] not in DEFAULT_CHUNK_SEPARATORS[2:]
+    ):
+        # 1 個の分割符は分割の結果が以前と同じなので、以前の文字列の形で hash する(ID を保つ)。
+        # 文末の記号は chunk に残すようになり結果が変わるので、一覧のまま hash する。
+        hashed["rag_chunk_delimiter"] = delimiters[0]
     if isinstance(strategy, str):
         hashed["rag_chunking_strategy"] = _CHUNK_SET_HASH_STRATEGY_VALUES.get(strategy, strategy)
     return hashed
@@ -258,7 +265,7 @@ def compute_graph_layer_id(chunk_set_id: str, settings: Settings) -> str:
 
 
 def compute_nav_layer_id(chunk_set_id: str, settings: Settings) -> str:
-    """ナビゲーション/RAPTOR 層の ID(chunk_set に nav 軸を重ねる)。"""
+    """ナビゲーション層の ID(chunk_set に nav 軸を重ねる)。"""
     return _digest("nv", {"v": KEY_VERSION, "cs": chunk_set_id, **_fields(settings, _NAV_FIELDS)})
 
 

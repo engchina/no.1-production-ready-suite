@@ -5,23 +5,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import pytest
 
 from app.api.routes import evaluation as evaluation_routes
-from app.clients.evaluation_calibration_store import (
-    LabelItemRecord,
-    LabelRecord,
-    LabelSetRecord,
-    MemoryEvaluationCalibrationStore,
-)
 from app.clients.evaluation_testset_store import MemoryTestSetStore
 from app.clients.oracle import OracleClient
 from app.main import app
-from app.rag import evaluation_calibration, evaluation_testsets
+from app.rag import evaluation_testsets
 from app.rag.evaluation import EvaluationRunner
 from app.rag.evaluation_excel import (
     EvaluationDocumentRef,
@@ -175,7 +169,6 @@ class SyntheticJudge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:
@@ -184,10 +177,6 @@ class SyntheticJudge:
             "status": "completed",
             "passed": True,
             "answer_correctness": 1.0,
-            "claim_support_rate": 1.0,
-            "requirement_coverage": 1.0,
-            "claim_checks": [{"status": "supported"}],
-            "coverage_checks": [{"status": "addressed"}],
         }
 
 
@@ -399,78 +388,189 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     result = job["run_result"]
     assert result["case_count"] == 1 and result["error_count"] == 0
     assert result["required_evidence_recall"] == result["mrr"] == 1.0
-    assert result["answer_correctness"] == result["requirement_coverage"] == 1.0
+    assert result["answer_correctness"] == 1.0
     assert result["response_decision_accuracy"] == 1.0
     assert result["case_results"][0]["status"] == "success"
     assert len(flow.artifacts) == 1
     assert flow.artifacts[0]["result_summary"]["case_count"] == 1
 
 
-async def test_previous_archive_retains_unresolved_annotations_and_all_gets_are_read_only(
+async def test_manual_and_excel_create_pending_and_reject_foreign_revision(flow: Flow) -> None:
+    response = await flow.client.post(
+        BASE,
+        json={
+            "name": "合成の手入力セット",
+            "source_kind": "manual",
+            "items": [{"question": QUESTION, "standard_answer": STANDARD}],
+        },
+    )
+    assert response.status_code == 201, response.text
+    draft = response.json()["data"]
+    assert not draft["items"][0]["confirmed"]
+    assert draft["items"][0]["source_kind"] == "manual"
+    preview = await flow.client.post(
+        BASE + "/import",
+        files={
+            "file": (
+                "synthetic.xlsx",
+                workbook(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert not preview.json()["data"][0]["confirmed"]
+    assert preview.json()["data"][0]["evidence"] == EVIDENCE
+    response = await flow.client.post(
+        BASE + "/" + draft["draft_id"] + "/prepare",
+        json={"revision": 99, "search_answer_profile_id": "synthetic-profile"},
+    )
+    assert response.status_code == 409
+    response = await flow.client.post(
+        BASE + "/" + "missing" + "/prepare",
+        json={"revision": 1, "search_answer_profile_id": "synthetic-profile"},
+    )
+    assert response.status_code == 404
+
+
+async def test_saved_set_run_uses_confirmed_revision_and_persists_immutable_input(
     flow: Flow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    legacy = MemoryEvaluationCalibrationStore()
-    monkeypatch.setattr(evaluation_calibration, "_STORE", legacy)
-    record = LabelSetRecord(
-        label_set_id="legacy-a",
-        name="以前の合成データ",
-        origin="jobs",
-        rubric_id="answer_quality",
-        items_sha256="0" * 64,
-        item_count=2,
-        sources={"counts": {"human": 2, "rows": 2}},
+    from app.rag.evaluation_source_workbooks import get_evaluation_source_workbook_service
+
+    async def profile_knowledge_bases(profile_id: str) -> list[str]:
+        assert profile_id == "synthetic-profile"
+        return ["kb-a"]
+
+    monkeypatch.setattr(
+        evaluation_routes, "_evaluation_profile_knowledge_bases", profile_knowledge_bases
     )
-    items = [
-        LabelItemRecord(
-            item_id=f"i{index}",
-            item_order=index,
-            split="holdout",
-            origin="human",
-            payload={
-                "question": QUESTION,
-                "answer": "合成の生成回答",
-                "standard_answer": STANDARD,
-                "evidence": [{"id": "e1", "text": "合成の原文"}],
-                "aspects": ["claim_support"],
-            },
-        )
-        for index in range(2)
+
+    async def resolve_profile(
+        request: SearchRequest, settings: Any, history: Any
+    ) -> tuple[SearchRequest, Any]:
+        return request, settings
+
+    runner = EvaluationRunner(
+        pipeline=flow.pipeline, answer_judge=flow.judge, profile_resolver=resolve_profile
+    )
+    monkeypatch.setattr(evaluation_routes, "EvaluationRunner", lambda: runner)
+    draft = await confirm_first(flow, await create_snapshot(flow, two_jobs=True))
+    prepared = await flow.client.post(
+        BASE + "/" + draft["draft_id"] + "/prepare",
+        json={"revision": draft["revision"], "search_answer_profile_id": "synthetic-profile"},
+    )
+    assert prepared.status_code == 200, prepared.text
+    assert len(prepared.json()["data"]["cases"]) == 1
+    # 任意のケースを混ぜた実行は、保存済み入力より優先せず拒否する。
+    invalid = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+            "cases": prepared.json()["data"]["cases"],
+        },
+    )
+    assert invalid.status_code == 422
+    response = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+        },
+    )
+    assert response.status_code == 202, response.text
+    job = response.json()["data"]
+    assert job["total_cases"] == 1 and job["source_workbook_id"]
+    edits = [
+        {key: value for key, value in row.items() if key in DraftEdit.model_fields}
+        for row in draft["items"]
     ]
-    labels = [
-        LabelRecord(
-            item_id="i0",
-            aspect="claim_support",
-            role="annotation",
-            annotator_code="a1",
-            annotator_hash="a" * 64,
-            label="fail",
-            note="合成の未裁定メモ",
-        )
-    ]
+    edits[0]["standard_answer"] = "後から変更した合成回答"
+    saved = await flow.client.put(
+        BASE + "/" + draft["draft_id"],
+        json={"name": draft["name"], "revision": draft["revision"], "items": edits},
+    )
+    assert saved.status_code == 200 and not saved.json()["data"]["items"][0]["confirmed"]
     with audit_context():
-        await legacy.create_label_set(record, items, labels)
-        before_items = [asdict(row) for row in await legacy.list_items("legacy-a")]
-        before_labels = [asdict(row) for row in await legacy.list_labels("legacy-a")]
-    base = "/api/evaluation/calibration/label-sets/legacy-a"
-    assert (await flow.client.get(base)).status_code == 200
-    assert (await flow.client.get(base + "/rows")).status_code == 200
-    assert (await flow.client.get(base + "/agreement")).status_code == 200
-    # 最終判定用の従来形式は未裁定のため409。保管用出力は未記入も落とさない。
-    assert (await flow.client.get(base + "/export")).status_code == 409
-    response = await flow.client.get(base + "/archive")
-    assert response.status_code == 200, response.text
-    archive = response.json()
-    assert archive["形式"] == "以前の校正データ" and len(archive["項目"]) == 2
-    assert archive["項目"][0]["質問"] == QUESTION
-    assert archive["管理用情報"]["記入"][0]["note"] == "合成の未裁定メモ"
-    assert archive["管理用情報"]["記入"][0]["role"] == "annotation"
-    assert archive["管理用情報"]["記入"][0]["label"] == "fail"
-    assert flow.drafts.rows == {}
-    assert (await flow.client.get(BASE)).json()["data"] == []
-    for method, suffix in [("PUT", "/labels"), ("PUT", "/adjudications"), ("DELETE", "")]:
-        response = await flow.client.request(method, base + suffix, json={})
-        assert response.status_code == 410, response.text
-    with audit_context():
-        assert [asdict(row) for row in await legacy.list_items("legacy-a")] == before_items
-        assert [asdict(row) for row in await legacy.list_labels("legacy-a")] == before_labels
-    assert flow.drafts.rows == {}
+        original = await get_evaluation_source_workbook_service().load(job["source_workbook_id"])
+    assert parse_evaluation_workbook(original.content).rows[0].standard_answer == STANDARD
+    stale = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+        },
+    )
+    assert stale.status_code == 409
+    await flow.jobs.wait_for(job["job_id"])
+    completed = await flow.client.get("/api/evaluation/jobs/" + job["job_id"])
+    assert completed.json()["data"]["status"] == "SUCCEEDED", completed.text
+    assert len(flow.pipeline.requests) == 1
+
+
+async def test_snapshot_save_failure_prevents_evaluation(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.rag.evaluation_source_workbooks import get_evaluation_source_workbook_service
+
+    draft = await confirm_first(flow, await create_snapshot(flow))
+
+    async def profile_knowledge_bases(profile_id: str) -> list[str]:
+        return ["kb-a"]
+
+    async def cannot_save(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        evaluation_routes, "_evaluation_profile_knowledge_bases", profile_knowledge_bases
+    )
+    monkeypatch.setattr(get_evaluation_source_workbook_service(), "save", cannot_save)
+    response = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "testset_id": draft["draft_id"],
+            "testset_revision": draft["revision"],
+            "search_answer_profile_id": "synthetic-profile",
+        },
+    )
+    assert response.status_code == 503, response.text
+    assert flow.pipeline.requests == []
+
+
+async def test_explicit_answer_model_is_registered_and_reaches_the_runner(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import search as search_route
+
+    monkeypatch.setattr(
+        search_route,
+        "registered_answer_model_choices",
+        lambda _settings: [
+            {"model_id": "synthetic-model", "display_name": "合成モデル", "kind": "text"}
+        ],
+    )
+    models = await flow.client.get("/api/evaluation/models")
+    assert models.status_code == 200 and models.json()["data"]
+    model_id = models.json()["data"][0]["model_id"]
+    imported = await import_bytes(flow.client, workbook())
+    response = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={
+            "cases": imported["cases"],
+            "knowledge_base_ids": ["kb-a"],
+            "answer_model_id": model_id,
+        },
+    )
+    assert response.status_code == 202, response.text
+    await flow.jobs.wait_for(response.json()["data"]["job_id"])
+    assert flow.pipeline.requests[0].model_id == model_id
+    invalid = await flow.client.post(
+        "/api/evaluation/jobs/run",
+        json={"cases": imported["cases"], "answer_model_id": "synthetic-unregistered-model"},
+    )
+    assert invalid.status_code == 422, invalid.text
+    assert len(flow.pipeline.requests) == 1

@@ -1,6 +1,6 @@
 # 実行補助の寄与の比較（除去実験。#2587）
 
-Agent の実行補助（回答の最終の検証・根拠のツールを呼ばない回答の差し戻し・文脈の縮小）が、同じタスクの完了品質にどれだけ寄与し、どれだけ遅延・token・呼び出しを増やすかを、**補助を 1 つずつ外した品質評価**で測る。最終の合格率だけでは、品質への寄与が小さいのに手間だけを増やす補助を見分けられない。
+Agent の実行補助（根拠のツールを呼ばない回答の差し戻し・文脈の縮小）が、同じタスクの完了品質にどれだけ寄与し、どれだけ遅延・token・呼び出しを増やすかを、**補助を 1 つずつ外した品質評価**で測る。最終の合格率だけでは、品質への寄与が小さいのに手間だけを増やす補助を見分けられない。
 
 RAG の検索の工程（rerank・近傍・参照・実体・関係・章節の拡張）の寄与と MRR / Recall は、RAG の除去実験（`rag/backend/app/rag/evaluation_ablation.py`。`evaluation_run_cli ablate`）が別に出す。検索の指標が良くなったことと、Agent の最終の判断が良くなったことは別に報告する。
 
@@ -8,7 +8,6 @@ RAG の検索の工程（rerank・近傍・参照・実体・関係・章節の�
 
 | `disabled_aids` の値 | 外したときの動き | 全体の既定の設定 | 動いたことの記録 |
 |---|---|---|---|
-| `final_validation` | 回答の保存の前の RAG の `rag_validate_answer` の検証をしない | `AGENT_FINAL_VALIDATION_ENABLED` | 成果物 `answer_validation`（`status=completed`） |
 | `tool_grounding` | 根拠のツールを呼ばずに作った回答の差し戻し・拒答をしない（回答前の確認の前に調べさせることもしない） | `AGENT_TOOL_GROUNDING_REQUIRED` | Run のイベント `tool_grounding` |
 | `context_compaction` | モデルの入力の上限に収めるための古いツールの結果の縮小をしない | `AGENT_CONTEXT_COMPACTION_ENABLED` | Run のイベント `context_compaction` |
 
@@ -25,7 +24,7 @@ B=http://localhost:8120/api   # 画面と同じ認証（Cookie / CSRF）で呼�
 # 1. 全構成（基準）
 curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3}'
 # 2. 補助を 1 つずつ外す
-curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["final_validation"]}'
+curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["tool_grounding"]}'
 curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["tool_grounding"]}'
 curl -X POST $B/evaluations -d '{"set_id":"<評価セット>","agent_version":"draft","trials":3,"disabled_aids":["context_compaction"]}'
 # 3. 全構成をもう一度（順序・cache の温まりの目安）

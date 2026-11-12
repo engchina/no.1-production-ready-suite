@@ -6,8 +6,11 @@ from unittest.mock import AsyncMock
 import pytest
 import rag_engine.generation.answering as answering
 import rag_engine.generation.faq_answer as faq
-from rag_engine.knowledge.prompt_files import VLM_ANSWER_PROMPT_KEY, read_prompt
-from rag_engine.resources.runtime import bind_prompt_overrides, saved_prompt_overrides
+from rag_engine.resources.runtime import (
+    bind_prompt_overrides,
+    resolve_prompt,
+    saved_prompt_overrides,
+)
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -16,6 +19,8 @@ from app.rag.answer_engine import AnswerEngine
 from app.rag.answer_prompts import default_prompt
 from app.schemas.search import SearchRequest
 from tests.test_answer_engine import FakeGenAi, FakeOracle
+
+ROLE_KEY = "generation.role"
 
 
 def _engine(oracle: Any, *, approved_faq: tuple[str, str] | None = None) -> AnswerEngine:
@@ -32,7 +37,7 @@ def generation(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     seen: list[str] = []
 
     def stop_before_provider(*args: Any, **kwargs: Any) -> Any:
-        seen.append(read_prompt(VLM_ANSWER_PROMPT_KEY))
+        seen.append(resolve_prompt(ROLE_KEY, default_prompt(ROLE_KEY)))
         raise RuntimeError("synthetic generation boundary")
 
     monkeypatch.setattr(answering, "answer_question_result", stop_before_provider)
@@ -69,7 +74,7 @@ async def test_missing_adapter_loader_is_not_empty_configuration(generation: lis
     assert generation == []
 
 
-@pytest.mark.parametrize("overrides", [{}, {VLM_ANSWER_PROMPT_KEY: "保存した合成指示"}])
+@pytest.mark.parametrize("overrides", [{}, {ROLE_KEY: "保存した合成指示"}])
 async def test_successful_load_is_used(
     overrides: dict[str, str], generation: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -78,14 +83,12 @@ async def test_successful_load_is_used(
     monkeypatch.setattr(oracle, "answer_prompt_overrides", reader)
     with pytest.raises(RuntimeError, match="synthetic generation boundary"):
         await _engine(oracle).run(SearchRequest(query="操作 A の手順を教えてください。"))
-    assert generation == [
-        overrides.get(VLM_ANSWER_PROMPT_KEY, default_prompt(VLM_ANSWER_PROMPT_KEY))
-    ]
+    assert generation == [overrides.get(ROLE_KEY, default_prompt(ROLE_KEY))]
     reader.assert_awaited_once()
     assert saved_prompt_overrides() is None
 
 
-@pytest.mark.parametrize("overrides", [{}, {VLM_ANSWER_PROMPT_KEY: "要求に固定した合成指示"}])
+@pytest.mark.parametrize("overrides", [{}, {ROLE_KEY: "要求に固定した合成指示"}])
 async def test_bound_snapshot_is_not_read_again(
     overrides: dict[str, str], generation: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -98,9 +101,7 @@ async def test_bound_snapshot_is_not_read_again(
     ):
         await _engine(oracle).run(SearchRequest(query="操作 A の手順を教えてください。"))
     reader.assert_not_awaited()
-    assert generation == [
-        overrides.get(VLM_ANSWER_PROMPT_KEY, default_prompt(VLM_ANSWER_PROMPT_KEY))
-    ]
+    assert generation == [overrides.get(ROLE_KEY, default_prompt(ROLE_KEY))]
     assert saved_prompt_overrides() is None
 
 
@@ -112,5 +113,5 @@ async def test_approved_faq_early_path_is_unchanged(monkeypatch: pytest.MonkeyPa
     result = await _engine(oracle, approved_faq=("設定 A は？", "設定 A を有効にします。")).run(
         SearchRequest(query="設定 A の操作を教えてください。")
     )
-    assert result.answer == "設定 A を有効にします。\n\n（出典: 承認済み FAQ「設定 A は？」）"
+    assert result.answer == "設定 A を有効にします。\n\n（出典: 登録済みQ&A「設定 A は？」）"
     reader.assert_not_awaited()

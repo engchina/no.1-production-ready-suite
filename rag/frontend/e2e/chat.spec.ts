@@ -472,7 +472,7 @@ for (const viewport of [
       // 件数は括弧を使わず区切りで並べ、0 件の項目は出さない。
       const summary = page
         .locator("summary")
-        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 参考 1 件" })
+        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ 参考 1 件" })
         .first();
       await expect(summary).toBeVisible();
       await summary.click();
@@ -1112,102 +1112,6 @@ for (const viewport of [
   });
 }
 
-// #2738: 根拠と矛盾した段落だけを本文から外し、確かめられない段落（未確認）と規則の検査の段落（要注意）は本文に
-// 残して印を付ける（Agent と同じ共有の部品）。印を押すと理由、「確認が必要な点」から本文の段落へ移る。回答全体の注意は
-// 本文の上、印の数のバッジは本文の下。内容は合成のデータ。
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 800 },
-  { name: "mobile", width: 375, height: 812 },
-]) {
-  test(`矛盾した段落だけを外し、確かめられない段落に印・理由・確認が必要な点・バッジを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    const unverified = "合成の手続きは翌日に自動で通知されます。";
-    const text = [
-      "合成の手続きは 2 段階です。",
-      "",
-      "資料により確認できた事項",
-      "",
-      "・対象の行の終了日を入力します。",
-      "根拠：合成の文書 A.pdf p.2",
-      "・新しい開始日の行を追加します。",
-      "根拠：合成の文書 A.pdf p.3",
-      "",
-      unverified,
-    ].join("\n");
-    const answerDiagnostics = {
-      execution_steps: [],
-      evidence_tree: [],
-      passage_marks: [
-        {
-          text: "・新しい開始日の行を追加します。",
-          state: "warning",
-          reasons: [{ code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 A。" }, { code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 C。" }],
-        },
-        {
-          text: unverified,
-          state: "unverified",
-          reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "" }],
-        },
-      ],
-      removed_passages: [
-        { text: "合成の変更は翌月から反映されます。", reasons: [{ code: "contradicted", label: "根拠と矛盾", detail: "合成の理由 B。" }] },
-      ],
-      answer_warnings: [{ code: "off_goal", label: "質問からずれている可能性", detail: "" }],
-    };
-    const streamBody = [
-      sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
-      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
-      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
-    ].join("");
-    await mockChat(page, "ready", [], { streamBody });
-
-    await page.goto("/chat");
-    await selectSearchAnswerProfile(page, "経理アシスタント");
-    await page.getByRole("button", { name: "新しい会話" }).click();
-    await page.getByRole("textbox").fill("合成の質問です。");
-    await page.getByRole("button", { name: "送信" }).click();
-
-    await expect(page.getByText("複数のモデルの回答を並べて比べることもできる")).toHaveCount(0);
-    const answer = page.getByTestId("answer-text");
-    // 回答全体の注意は本文の上の warning の Banner。
-    await expect(answer.getByTestId("answer-passage-warnings")).toHaveText("質問からずれている可能性");
-    const marked = answer.getByTestId("answer-passage-mark");
-    await expect(marked).toHaveCount(2);
-    await expect(marked.nth(0)).toHaveAttribute("data-passage-state", "warning");
-    await expect(marked.nth(0)).toContainText("新しい開始日の行を追加します。");
-    // 印の付いた項目の根拠の行は残る。
-    await expect(marked.nth(0)).toContainText("根拠：合成の文書 A.pdf p.3");
-    await expect(marked.nth(1)).toHaveAttribute("data-passage-state", "unverified");
-    await expect(marked.nth(1)).toContainText(unverified);
-    const toggle = marked.nth(0).getByTestId("answer-passage-mark-toggle");
-    await expect(toggle).toHaveText("要注意の理由");
-    await toggle.focus();
-    await page.keyboard.press("Enter");
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(marked.nth(0).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠の表の対応と違う可能性合成の理由 A。根拠の表の対応と違う可能性合成の理由 C。");
-    // 詳しい理由（detail）の無い印は短い理由だけを出す。
-    await marked.nth(1).getByTestId("answer-passage-mark-toggle").click();
-    await expect(marked.nth(1).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠で確かめられない");
-
-    await expect(answer.getByTestId("answer-removed-passages").getByTestId("answer-removed-passage")).toHaveText(
-      "「合成の変更は翌月から反映されます。」根拠と矛盾：合成の理由 B。"
-    );
-    const points = answer.getByTestId("answer-marked-passages");
-    await expect(points.locator("h4")).toHaveText("確認が必要な点");
-    await expect(points.getByTestId("answer-marked-passage")).toHaveText([
-      "「新しい開始日の行を追加します。」要注意：根拠の表の対応と違う可能性",
-      `「${unverified}」未確認：根拠で確かめられない`,
-    ]);
-    await points.getByTestId("answer-marked-passage-link").nth(1).click();
-    await expect(marked.nth(1)).toBeFocused();
-
-    await expect(page.getByTestId("answer-passage-badges")).toHaveCount(0);
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`answer-marks-rag-chat-${viewport.name}.png`), fullPage: true });
-  });
-}
-
 // #2096 / #3226: 回答の処理の経過は、回答の trace の span の木（工程の span は種類 answer_step と工程名・LLM の回数）を
 // 1 か所に出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {
@@ -1245,7 +1149,7 @@ for (const theme of ["light", "dark"] as const) {
     });
     const progress = [
       { ...step("s0", "s0", 0, 9), name: "rag.answer", parent_id: undefined, root: true },
-      // 前の会話を踏まえて質問を補うの詳細（#2341。パイプラインの工程の詳細）。
+      // 質問を補い、検索が要るかを分けるの詳細（#2341。パイプラインの工程の詳細）。
       step("s1", "history_rewrite", 0, 0.4, undefined, {
         fields: [
           { label: "参照した会話", value: "2 件の発言" },
@@ -1264,7 +1168,7 @@ for (const theme of ["light", "dark"] as const) {
         { fields: [{ label: "検索の候補", value: "0 件" }, { label: "結果", value: "回答に渡す根拠 0 件" }], lines: ["検索文: 2 本"] },
         "s3"
       ),
-      step("s5", "answer_step", 2, 9, { name: "回答文の生成と根拠確認（1回目）", llm_calls: 2 }, undefined, "s3"),
+      step("s5", "answer_step", 2, 9, { name: "回答文の生成と引用の確認（1回目）", llm_calls: 2 }, undefined, "s3"),
       { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(9), type: "terminal", status: "done" },
     ];
     await page.emulateMedia({ colorScheme: theme });
@@ -1312,7 +1216,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(nestedDetails).toContainText("検索文: 2 本");
     await nestedToggle.click();
     await expect(nestedDetails).toBeHidden();
-    // パイプラインの工程（前の会話を踏まえて質問を補う）の詳細も同じ形で開ける（#2341）。
+    // パイプラインの工程（質問を補い、検索が要るかを分ける）の詳細も同じ形で開ける（#2341）。
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
     await expect(page.getByTestId("chat-answer-progress-step-s1-details")).toContainText("合成の書き換えた質問");
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
@@ -1321,7 +1225,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(bars).toHaveCount(5);
     if ((page.viewportSize()?.width ?? 1280) >= 1280) await expect(bars.first()).toBeVisible();
     else await expect(bars.first()).toBeHidden();
-    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("前の会話を踏まえて質問を補う");
+    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("質問を補い、検索が要るかを分ける");
     // 状態は英語の生の値ではなくアイコンと読み上げの文言で示す。「実行記録」の表示は無い。
     await expect(process.getByText(/complete/)).toHaveCount(0);
     await expect(page.getByText(/実行記録/)).toHaveCount(0);
@@ -1344,6 +1248,75 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+// #4787: 挨拶・雑談と分けた発話は検索を飛ばす。処理の経過に「検索せずに短く応じる」と理由を出し、根拠の一覧は出さない。
+test("挨拶への応答は処理の経過に「検索せずに短く応じる」を出し、根拠を出さない（#4787）", { tag: "@responsive" }, async ({ page }) => {
+  const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
+  let seq = 0;
+  const step = (stepId: string, kind: string, start: number, end: number, details?: Record<string, unknown>) => ({
+    schema_version: 1,
+    seq: ++seq,
+    target_id: "a1",
+    attempt: 0,
+    emitted_at: at(end),
+    type: "step",
+    step_id: stepId,
+    kind,
+    status: "done",
+    started_at: at(start),
+    finished_at: at(end),
+    ...(details ? { details } : {}),
+    name: `rag.${kind}`,
+    parent_id: "s0",
+    trace_id: SPAN_TRACE_ID,
+  });
+  const progress = [
+    { ...step("s0", "s0", 0, 3), name: "rag.answer", parent_id: undefined, root: true },
+    step("s1", "history_rewrite", 0, 1.2, {
+      fields: [
+        { label: "参照した会話", value: "なし（会話の最初の発話）" },
+        { label: "結果", value: "書き換えなし（元の質問のまま）" },
+        { label: "発話の種類", value: "挨拶・お礼（検索の要らない発話）" },
+      ],
+    }),
+    step("s2", "small_talk_reply", 1.2, 3, {
+      fields: [{ label: "結果", value: "挨拶・お礼のため検索せずに応じました（引用なし）" }],
+    }),
+    { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(3), type: "terminal", status: "done" },
+  ];
+  const reply = "合成の挨拶への短い応答です。";
+  await mockChat(page, "ready", [
+    { ...userMessage, content: "合成の挨拶" },
+    { ...assistantMessage, content: reply, citations: [], progress },
+  ]);
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  if (await history.isVisible().catch(() => false)) {
+    await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
+  }
+
+  await expect(page.getByText(reply).first()).toBeVisible();
+  const summary = page.getByTestId("chat-answer-progress-summary");
+  await expect(summary).toHaveText("処理の経過（2 ステップ・3.0 秒）");
+  await summary.click();
+  const process = page.getByRole("region", { name: "処理の経過" });
+  await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("質問を補い、検索が要るかを分ける");
+  const skipped = page.getByTestId("chat-answer-progress-step-s2");
+  await expect(skipped).toContainText("検索せずに短く応じる");
+  // 検索しなかった理由は、畳んだ行の結果にも出る。
+  await expect(process.locator("[data-run-result-summary]")).toHaveText([
+    "書き換えなし（元の質問のまま）",
+    "挨拶・お礼のため検索せずに応じました（引用なし）",
+  ]);
+  await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
+  await expect(page.getByTestId("chat-answer-progress-step-s1-details")).toContainText("挨拶・お礼（検索の要らない発話）");
+  // 検索していないので、根拠の一覧（AI に渡した件数）は出ない。
+  await expect(page.locator("summary").filter({ hasText: /AI に渡した/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブなし）で、カードの「根拠を表示」でパネルを開く（#2388）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // chunk の ID は「文書 ID:chunk set の hash:番号」の長い文字列。既定では画面に出さない。
   const longId = (n: number) => `doc-1:${"a1b2c3d4".repeat(8)}:${n}`;
@@ -1415,7 +1388,7 @@ test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブ�
   // 見出しは Agent と同じ書き方（まとまりの数を出さない。#2388）。
   const summary = page
     .locator("summary")
-    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件" });
   await expect(summary).toBeVisible();
   await expect(page.getByText(/のまとまり/)).toHaveCount(0);
   await summary.click();
@@ -1472,9 +1445,6 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     outcome: "needs_environment_data",
     guide: { guide_id: "g1", title: "経費の上限を確かめる", revision: 3 },
     question_type: ["規則"],
-    auto_field_filter: {
-      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
-    },
     original_question: "それの上限は？",
     rewritten_question: "経費精算の上限額は？",
     generated_queries: [],
@@ -1856,6 +1826,7 @@ for (const viewport of [
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
     await expect(choice).toHaveCount(0);
     expect(streamBodies[0]).toMatchObject({ content: "経費の上限は？", approved_faq_id: "faq-2" });
+    expect(streamBodies[0]).not.toHaveProperty("approved_faq_declined");
 
     // 「どれでもない」は類似問を使わずに送る。
     await composer.fill("交通費は？");
@@ -1864,10 +1835,138 @@ for (const viewport of [
       .getByRole("button", { name: "どれでもない（資料を検索する）" })
       .click();
     await expect.poll(() => streamBodies.length).toBe(2);
-    expect(streamBodies[1]).toMatchObject({ content: "交通費は？" });
+    // 候補を断った質問には、Q&A の回答をそのまま返さないよう伝える（#4788）。
+    expect(streamBodies[1]).toMatchObject({ content: "交通費は？", approved_faq_declined: true });
     expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
   });
 }
+
+// #4788: 一致度が下限以上の質問は候補を選ばせずに送り、登録済みQ&Aの回答をそのまま返した回答に案内と照合の段を出す。
+test("登録済みQ&Aの回答をそのまま返した回答は、案内と照合の段を出し、候補を選ばせない（#4788）", { tag: "@responsive" }, async ({ page }) => {
+  const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
+  let seq = 0;
+  const step = (stepId: string, kind: string, start: number, end: number, details?: Record<string, unknown>) => ({
+    schema_version: 1,
+    seq: ++seq,
+    target_id: "a1",
+    attempt: 0,
+    emitted_at: at(end),
+    type: "step",
+    step_id: stepId,
+    kind,
+    status: "done",
+    started_at: at(start),
+    finished_at: at(end),
+    ...(details ? { details } : {}),
+    name: `rag.${kind}`,
+    parent_id: "s0",
+    trace_id: SPAN_TRACE_ID,
+  });
+  const faqQuestion = "合成の設定 A はどこで変えますか？";
+  const progress = [
+    { ...step("s0", "s0", 0, 1.5), name: "rag.answer", parent_id: undefined, root: true },
+    step("s1", "history_rewrite", 0, 1.2, {
+      fields: [
+        { label: "参照した会話", value: "なし（会話の最初の発話）" },
+        { label: "結果", value: "書き換えなし（元の質問のまま）" },
+      ],
+    }),
+    step("s2", "faq_direct_match", 1.2, 1.5, {
+      fields: [
+        { label: "結果", value: "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）" },
+        { label: "一致した Q&A", value: faqQuestion },
+        { label: "一致度", value: "1.00（下限 0.92）" },
+      ],
+    }),
+    { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(1.5), type: "terminal", status: "done" },
+  ];
+  const faqAnswer = "合成の画面 A の設定タブで変えます。";
+  const answerDiagnostics = {
+    answer_source: "approved_faq",
+    outcome: "answered",
+    approved_faq_question: faqQuestion,
+    approved_faq_answer: faqAnswer,
+    approved_faq_direct: { faq_id: "faq-1", matched_question: faqQuestion, score: 1, min_score: 0.92, match_method: "text" },
+    models: { embedding: "", rerank: "" },
+  };
+  const answerText = `${faqAnswer}\n\n（出典: 登録済みQ&A「${faqQuestion}」）`;
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: answerText })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics, notice: NOTICE })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(
+    page,
+    "ready",
+    [
+      { ...userMessage, content: faqQuestion },
+      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_direct_score: 1, notice: NOTICE },
+    ],
+    { streamBody },
+  );
+  const suggestQueries: Record<string, unknown>[] = [];
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
+    suggestQueries.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      json: { data: { suggestions: [], direct_answer: true }, error_messages: [], warning_messages: [] },
+    });
+  });
+  const streamBodies: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/messages/stream")) {
+      streamBodies.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  if (await history.isVisible().catch(() => false)) {
+    await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
+  }
+
+  // 保存済みの回答: 本文は登録された回答そのままで、末尾に出典の行。見出しはモデル名ではなく Q&A の回答と示し、
+  // 直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。処理の経過に照合の段と結果を出す。
+  await expect(page.getByText(faqAnswer).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 登録済みQ&A「${faqQuestion}」`);
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
+  const notice = page.getByTestId("answer-faq-direct");
+  await expect(notice).toContainText("登録済みQ&Aの回答をそのまま表示しています");
+  await expect(notice).toContainText(
+    "質問が登録済みQ&Aと一致したため（一致度 100%）、資料の検索と回答の生成はしていません。引用はありません。",
+  );
+  const summary = page.getByTestId("chat-answer-progress-summary");
+  await expect(summary).toHaveText("処理の経過（2 ステップ・1.5 秒）");
+  await summary.click();
+  await expect(page.getByTestId("chat-answer-progress-step-s2")).toContainText("登録済みQ&Aと照合する");
+  await expect(page.getByRole("region", { name: "処理の経過" }).locator("[data-run-result-summary]")).toHaveText([
+    "書き換えなし（元の質問のまま）",
+    "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）",
+  ]);
+  // 検索していないので、根拠の一覧（AI に渡した件数）は出ない。
+  await expect(page.locator("summary").filter({ hasText: /AI に渡した/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+
+  // 送信の前の照会が「そのまま返す見込み」を返したら、候補を選ばせずに送る。
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("合成の設定 A はどこ？");
+  await page.getByRole("button", { name: "送信" }).click();
+  await expect.poll(() => streamBodies.length).toBe(1);
+  await expect(page.getByTestId("chat-approved-faq-choice")).toHaveCount(0);
+  expect(suggestQueries).toEqual([{ query: "合成の設定 A はどこ？", purpose: "chat" }]);
+  // 届いた回答にも、同じ見出しと案内を出す（配信の診断から読む）。
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true }).last()).toBeVisible();
+  await expect(page.getByTestId("answer-faq-direct").last()).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
+  await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  expect(streamBodies[0]).toMatchObject({ content: "合成の設定 A はどこ？" });
+  expect(streamBodies[0]).not.toHaveProperty("approved_faq_id");
+  expect(streamBodies[0]).not.toHaveProperty("approved_faq_declined");
+});
 
 
 // #737: 登録済みQ&Aから回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
@@ -1910,10 +2009,10 @@ for (const viewport of [
   });
 }
 
-// #717: 類似問の後に、検索・回答プロファイルのルールの確認の質問を出し、選んだ答えを送る。
+// #1238: 類似問の後に、業務ガイドの条件の確認の質問を出し、選んだ答えを送る（登録ルールの確認は無い。#4799）。
 const clarificationSuggestion = {
-  rule_id: "R01",
-  rule_title: "期限の確認",
+  guide_condition_id: "guide:g1:c1",
+  guide_title: "期限の確認",
   clarification: {
     question: "どの規程についてのご質問ですか？",
     multiple: true,
@@ -1925,18 +2024,8 @@ const clarificationSuggestion = {
         description: "出張旅費規程",
         search_terms: ["出張"],
         premise: "",
-        sections: [
-          {
-            document_id: "doc-travel",
-            document_name: "出張旅費規程.pdf",
-            section_id: "sec-6",
-            title: "第6条 申請と精算",
-            page_start: 2,
-            page_end: 3,
-          },
-        ],
       },
-      { id: "expense", label: "経費精算", description: "", search_terms: [], premise: "", sections: [] },
+      { id: "expense", label: "経費精算", description: "", search_terms: [], premise: "" },
     ],
   },
 };
@@ -1986,7 +2075,7 @@ for (const viewport of [
     // 送信の直後に出るので、確認事項の文へフォーカスを移す。
     await expect(prompt).toBeFocused();
     await expect(prompt).toHaveCSS("outline-style", "none");
-    await expect(choice).toContainText("対象: 「出張旅費規程.pdf」第6条 申請と精算 p.2–3");
+    await expect(choice).not.toContainText("対象: ");
     const confirm = choice.getByRole("button", { name: "この内容で回答" });
     await expect(confirm).toBeDisabled();
     await expect(confirm).toHaveAccessibleDescription(
@@ -2021,7 +2110,7 @@ for (const viewport of [
     expect(streamBodies[0]).toMatchObject({
       content: "申請の期限は？",
       question_context_token: "synthetic-context-token",
-      clarification: { rule_id: "R01", option_ids: ["travel"], other_text: "海外出張" },
+      clarification: { guide_condition_id: "guide:g1:c1", option_ids: ["travel"], other_text: "海外出張" },
     });
     await expect(choice).toHaveCount(0);
 
@@ -2034,7 +2123,7 @@ for (const viewport of [
     await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
     // 質問はそのまま送り（入力欄には戻さない）、取り消さない。
-    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01", question_context_token: "synthetic-context-token" });
+    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", skipped_guide_condition_id: "guide:g1:c1", question_context_token: "synthetic-context-token" });
     expect(clarifyQueries[1]).toMatchObject({ conversation_id: "conv-1" });
     expect(streamBodies[1]).not.toHaveProperty("clarification");
     await expect(choice).toHaveCount(0);
@@ -2086,50 +2175,6 @@ for (const viewport of [
     }
   });
 }
-
-test("範囲を絞った回答の下から、範囲を指定せずに同じ質問を送り直せる（#721）", async ({ page }) => {
-  await mockChat(page);
-  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
-    route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
-  );
-  const clarifyQueries: unknown[] = [];
-  await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
-    clarifyQueries.push(route.request().postDataJSON());
-    await route.fulfill({ json: { data: { suggestion: null }, error_messages: [], warning_messages: [] } });
-  });
-  // 保存された回答は、確認で絞った範囲を末尾に持つ。
-  const scoped = { ...assistantMessage, content: "期限は 1 か月です。（対象: 「出張旅費規程.pdf」の「第6条 申請と精算」）" };
-  await page.route(
-    (url) => url.pathname === "/api/chat/conversations/conv-1",
-    (route) =>
-      route.fulfill({
-        json: { data: conversationDetail([userMessage, scoped]), error_messages: [], warning_messages: [] },
-      })
-  );
-  const streamBodies: Record<string, unknown>[] = [];
-  page.on("request", (request) => {
-    if (request.url().endsWith("/messages/stream")) {
-      streamBodies.push(request.postDataJSON() as Record<string, unknown>);
-    }
-  });
-
-  await page.goto("/chat");
-  await selectSearchAnswerProfile(page, "経理アシスタント");
-  await page.getByRole("textbox", { name: "質問", exact: true }).fill("経費の上限は？");
-  await page.getByRole("button", { name: "送信" }).click();
-  await expect.poll(() => streamBodies.length).toBe(1);
-
-  const askAgain = page.getByRole("button", { name: "範囲を指定せずに質問し直す" });
-  await expect(askAgain).toBeVisible();
-  const suggestCalls = clarifyQueries.length;
-  await askAgain.click();
-  await expect.poll(() => streamBodies.length).toBe(2);
-  // 類似問・確認の質問を出さずに、同じ質問をそのまま送る。
-  expect(streamBodies[1]).toMatchObject({ content: "経費の上限は？" });
-  expect(streamBodies[1]).not.toHaveProperty("clarification");
-  expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
-  expect(clarifyQueries).toHaveLength(suggestCalls);
-});
 
 // #907: 送った質問は、会話の作成・回答（start）を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
 // 失敗・停止のときも質問を残し、失敗は「送信できませんでした」と「再送信」を出す。
@@ -2530,8 +2575,8 @@ test("業務ガイドの自由入力条件だけを確認して回答へ進め�
       json: {
         data: {
           suggestion: {
-            rule_id: "guide:g-text:target",
-            rule_title: "資料の項目を確認する",
+            guide_condition_id: "guide:g-text:target",
+            guide_title: "資料の項目を確認する",
             clarification: {
               question: "対象の資料と項目を教えてください。",
               multiple: false,
@@ -2575,7 +2620,7 @@ test("業務ガイドの自由入力条件だけを確認して回答へ進め�
   await confirm.click();
   await expect.poll(() => bodies.length).toBe(1);
   expect(bodies[0]).toMatchObject({
-    clarification: { rule_id: "guide:g-text:target", option_ids: [], other_text: "資料 A の項目 B" },
+    clarification: { guide_condition_id: "guide:g-text:target", option_ids: [], other_text: "資料 A の項目 B" },
   });
   await expect(card).toHaveCount(0);
 });
@@ -2640,7 +2685,7 @@ for (const compare of [false, true]) {
       await expect(answer.getByTestId("chat-answer-progress-summary")).toContainText("16 ステップ");
     }
     const last = page.locator(`[id="message-${replies.at(-1)!.message_id}"]`);
-    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件" });
     const feedback = last.getByRole("group", { name: "この回答は役に立ちましたか？" });
     // scrollTop の代入だけで済ませず、会話の欄の上でホイールを動かして末尾へ進む。
     await log.hover();
@@ -2784,7 +2829,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   const liveTypography = await timelineTypography(progress);
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
   expect(live.map((row) => row.level)).toEqual([0,1,2]);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill({json: {data: {
@@ -2971,46 +3016,6 @@ test("初回の会話作成に失敗しても質問を残し、再送信で会�
 });
 
 for (const legacy of [false, true]) {
-  test(`摘要の引用対応と旧記録の警告を区別する (${legacy ? "legacy" : "linked"})`, async ({ page }, testInfo) => {
-    const summary = "項目 A は記録を識別します。";
-    const text = `${summary}\n\n資料により確認できた事項\n\n・項目 A は記録の識別子です。\n根拠：synthetic-a.txt p.1`;
-    const answerDiagnostics = {
-      execution_steps: [],
-      evidence_tree: [],
-      passage_marks: legacy ? [{
-        text: summary,
-        state: "warning",
-        reasons: [{ code: "summary_unaudited", label: "要約を根拠で確かめていない", detail: "旧記録には摘要の引用対応がありません。" }],
-      }] : [],
-      ...(legacy ? {} : { summary_evidence: {
-        citations: { status: "linked", links: [{ item_index: 0, text: "項目 A は記録の識別子です。", citations: [{ evidence_id: "E1", quote: "項目 A は記録の識別子です。" }] }] },
-        semantic_validation: { execution: "not_run", adopted: false },
-      } }),
-    };
-    const streamBody = [
-      sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
-      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
-      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
-    ].join("");
-    await mockChat(page, "ready", [], { streamBody });
-    await page.goto("/chat");
-    await selectSearchAnswerProfile(page, searchAnswerProfile.name);
-    await page.getByRole("button", { name: "新しい会話" }).click();
-    await page.getByRole("textbox").fill("項目 A の意味を教えてください。");
-    await page.getByRole("button", { name: "送信" }).click();
-    const answer = page.getByTestId("answer-text");
-    await expect(answer).toContainText(summary);
-    await expect(page.getByRole("button", { name: "送信", exact: true })).toBeVisible();
-    await expect(answer.getByTestId("answer-passage-mark")).toHaveCount(legacy ? 1 : 0);
-    if (legacy) {
-      await expect(answer.getByTestId("answer-marked-passages")).toContainText("要約を根拠で確かめていない");
-    } else {
-      await expect(answer.getByTestId("answer-marked-passages")).toHaveCount(0);
-    }
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`summary-evidence-${legacy ? "legacy" : "linked"}.png`), fullPage: true });
-  });
 }
 
 // #3949: 会話の作成中は草稿を保ち、送信と作成完了の後始末を競合させない。
@@ -3129,126 +3134,18 @@ for (const outcome of ["success", "failure"] as const) {
 
 
 for (const savedFormat of [false, true]) {
-  test(`保存したチャットの未確認の節を独立表示し理由を保つ (format-${savedFormat})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    const format = savedFormat ? { rules_section: "確認済みの節 A", unsourced_section: "未確認の節 B" } : undefined;
-    const titles = format ?? { rules_section: "資料により確認できた事項", unsourced_section: "資料の出典を確かめられない説明" };
-    const confirmed = "項目 A は識別子です。";
-    const unverified = "項目 B の値は未確認です。";
-    const reason = "指定された単位は送信時の根拠にありません。";
-    const response = {
-      ...assistantMessage, citations: [], answer_format: format,
-      content: [titles.rules_section, "・" + confirmed, titles.unsourced_section, "原文と照合できない説明です。", "・" + unverified].join("\n"),
-      passage_marks: [{ text: unverified, state: "unverified", reasons: [{ code: "citation_range_out_of_bounds", label: "引用行が根拠の範囲外", detail: reason }] }],
-      removed_passages: [], answer_warnings: [],
-    };
-    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問です。" }, response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    for (const reload of [false, true]) {
-      if (reload) await page.reload();
-      const answer = page.getByTestId("answer-text");
-      const confirmedSection = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: titles.rules_section, exact: true }) });
-      const unverifiedSection = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: titles.unsourced_section, exact: true }) });
-      await expect(confirmedSection).toContainText(confirmed);
-      await expect(confirmedSection).not.toContainText(unverified);
-      await expect(unverifiedSection).toContainText(unverified);
-      await expect(unverifiedSection).toContainText("原文と照合できない説明です。");
-      const marker = unverifiedSection.getByTestId("answer-passage-mark");
-      await expect(marker).toHaveAttribute("data-passage-state", "unverified");
-      await marker.getByTestId("answer-passage-mark-toggle").click();
-      await expect(marker.getByTestId("answer-passage-mark-reasons")).toContainText(reason);
-      await expectNoPageOverflow(page);
-    }
-    await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath("saved-answer-sections.png") });
-  });
 }
 
 
 for (const withWarning of [false, true]) {
-  test(`保存した導出結論と本文だけの注意を保持する (warning-${withWarning})`, { tag: "@responsive" }, async ({page}, testInfo) => {
-    const text = ["合成の回答。", "資料により確認できた事項", "・合成の単価は 3。", "根拠：合成 A.pdf p.1", "", "資料をもとに導いた結論", "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1", "", "確認が必要な点", "", "・合成の未確認事項", ...(withWarning ? ["・合成警告: 合成詳細"] : [])].join("\n");
-    const diagnostics = {passage_marks:[], removed_passages:[], answer_warnings:withWarning ? [{code:"off_goal",label:"合成警告",detail:"合成詳細"}] : []};
-    const response = {...assistantMessage, content:text, citations:[{...citationChunk,file_name:"合成 A.pdf",metadata:{page:1}}], ...diagnostics};
-    await mockChat(page,"ready",[{...userMessage,content:"合成の質問。"},response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    for (const reload of [false,true]) {
-      if (reload) await page.reload();
-      const answer = page.getByTestId("answer-text");
-      const derived = answer.getByTestId("answer-section").filter({has:page.getByRole("heading",{name:"資料をもとに導いた結論",exact:true})});
-      await expect(derived.locator("h4")).toHaveText("資料をもとに導いた結論");
-      await expect(derived.getByRole("listitem")).toHaveCount(1);
-      await expect(derived).toContainText("前提：2 回使用");
-      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(1);
-      const notes = answer.getByTestId("answer-marked-passages");
-      await expect(notes).toHaveCount(1);
-      await expect(notes.getByText("合成の未確認事項",{exact:true})).toHaveCount(1);
-      if (withWarning) await expect(answer.getByTestId("answer-passage-warnings")).toContainText("合成警告");
-      await expectNoPageOverflow(page);
-    }
-    await page.getByTestId("answer-text").screenshot({path:testInfo.outputPath("derived-notes-chat.png")});
-  });
 }
 
 for (const generated of generatedAnswers) {
-  test(`生成契約の原文と導出結果をチャットで分けて表示する (${generated.id})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    const citations = generated.sources.map((file_name, index) => ({ ...citationChunk, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: 1 } }));
-    const response = { ...assistantMessage, content: generated.answer, citations, passage_marks: [], removed_passages: [], answer_warnings: [] };
-    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問。" }, response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    for (const reload of [false, true]) {
-      if (reload) await page.reload();
-      const answer = page.getByTestId("answer-text");
-      const facts = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料により確認できた事項", exact: true }) });
-      const derived = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料をもとに導いた結論", exact: true }) });
-      await expect(facts).toContainText(generated.fact);
-      await expect(derived).toContainText(generated.result);
-      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(2);
-      await expect(answer.getByRole("heading", { name: "資料から確認できなかった事項", exact: true })).toHaveCount(0);
-      await expectNoPageOverflow(page);
-    }
-    await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath(`generated-${generated.id}-chat.png`) });
-  });
 }
 
 // 結論の説明（#4393）は Markdown（段落・箇条書き・コードの囲み）を含む。説明の中の行を回答の項目・根拠の行として
 // 読まず、共通の Markdown の部品で描き、コードは枠の中だけで横にスクロールする。
 for (const theme of ["light", "dark"] as const) {
-  test(`結論の説明の Markdown を共通の部品で描く (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.addInitScript((value) => {
-      window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
-    }, theme);
-    const sql = "SELECT COUNT(*) FROM SYNTHETIC_ITEMS WHERE SYNTHETIC_STATUS = 'ACTIVE' AND SYNTHETIC_REGION IN ('A', 'B', 'C');";
-    const text = [
-      "合成の回答。", "資料により確認できた事項", "・合成の確認には次の SQL を実行します。", "根拠：合成 A.pdf p.1", "",
-      "資料をもとに導いた結論",
-      "・合成の確認には次の SQL を実行します。",
-      "当てはめ：合成の確認には、資料に記載された次の SQL を実行します。", "```", sql, "```",
-      "根拠：合成 A.pdf p.1",
-      "・合成の合計は 3400 です。",
-      "当てはめ：項目ごとに数量と単価を掛けて足します。", "", "1. 項目A: 3 × 800 = 2400", "2. 項目B: 2 × 500 = 1000", "", "合計は 2400 + 1000 = 3400 です。",
-      "根拠：合成 B.pdf p.2",
-    ].join("\n");
-    const citations = ["合成 A.pdf", "合成 B.pdf"].map((file_name, index) => ({
-      ...citationChunk, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: index + 1 },
-    }));
-    const response = { ...assistantMessage, content: text, citations, passage_marks: [], removed_passages: [], answer_warnings: [] };
-    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問。" }, response]);
-    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-    await expect(page.locator("html")).toHaveClass(theme === "dark" ? /\bdark\b/ : /^(?!.*\bdark\b)/);
-    const answer = page.getByTestId("answer-text");
-    const derived = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料をもとに導いた結論", exact: true }) });
-    const reasoning = derived.getByTestId("answer-application-reasoning");
-    await expect(reasoning).toHaveCount(2);
-    // 説明の中の番号付きの行は回答の項目にならず、根拠の行は項目ごとに 1 つのまま。
-    await expect(derived.getByTestId("answer-citation-link")).toHaveCount(2);
-    await expect(reasoning.nth(0).locator("pre code")).toHaveText(sql);
-    await expect(reasoning.nth(0)).not.toContainText("```");
-    await expect(reasoning.nth(1).locator("ol > li")).toHaveCount(2);
-    await expect(reasoning.nth(1)).toContainText("合計は 2400 + 1000 = 3400 です。");
-    await expectNoPageOverflow(page);
-    await answer.screenshot({ path: testInfo.outputPath(`application-explanation-markdown-${theme}.png`) });
-    await reasoning.nth(0).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`application-explanation-viewport-${theme}.png`) });
-  });
 }
 
 test("保存済みチャットの0spanでも書込欠落を隠さない", {tag:"@responsive"}, async ({page}, testInfo) => {
@@ -3277,4 +3174,25 @@ test("保存済みチャットの0spanでも書込欠落を隠さない", {tag:"
     await expectNoPageOverflow(page);
     await page.screenshot({path:testInfo.outputPath(`zero-span-chat-${theme}.png`)});
   }
+});
+
+
+test("評価の読み取り失敗を未評価と見せず、再試行で回復する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockChat(page, "ready", [userMessage, { ...assistantMessage, content: "合成の回答 A" }]);
+  let failing = true;
+  await page.route("**/api/feedback/current**", (route) => route.fulfill(failing ? { status: 500, json: { data: null, error_messages: ["合成の読み取り失敗"], warning_messages: [], error_code: "database_read_failed" } } : { json: { data: [], error_messages: [], warning_messages: [] } }));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+  const failure = page.locator('[data-testid="feedback-current-load-failed"]:visible').first();
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "この回答は役に立った", exact: true })).toHaveCount(0);
+  await failure.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("feedback-read-failure.png") });
+  failing = false;
+  await failure.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "この回答は役に立った", exact: true })).toBeEnabled();
+  await expectNoPageOverflow(page);
 });

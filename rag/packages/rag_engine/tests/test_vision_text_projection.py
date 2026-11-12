@@ -499,3 +499,44 @@ def test_failed_table_supplement_keeps_verified_contained_pictures():
         },
     )
     assert _vision_projection_status(table) == "verified"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param("一段落目。\n\n二段落目。", id="blank-line"),
+        pytest.param("一段落目。  \n二段落目。", id="trailing-space"),
+        pytest.param("\n一段落目。\n\n\n二段落目。\n", id="surrounding-newlines"),
+    ],
+)
+def test_contained_picture_projection_matches_normalized_table_text(answer):
+    """表内画像の説明に空行や行末の空白があっても、整形の違いだけでは不正にしない（#4710）。"""
+    from rag_parser_core.vision_text import VisionTextProjection
+
+    from rag_engine.chunking.records import _record_text_for_chunk, _vision_projection_status
+    from rag_engine.chunking.tables import _table_record_with_metadata
+
+    project = VisionTextProjection(answer, "検索専用の本文")
+    table = record("Table", "<table><tr><td>合成のセル</td></tr></table>", bbox=[0, 0, 90, 90])
+    picture = record("Picture", answer, raw={"vision_description": description(), "vision_text_projection": project.dumps()}, seq=2)
+    table = _table_record_with_metadata(table, [table, picture])
+    assert table["raw"]["table_visual_text_projections"]["source-2"] == project.dumps()
+    assert _vision_projection_status(table) == "verified"
+    body = _record_text_for_chunk(table)
+    assert "一段落目。" in body and "二段落目。" in body
+
+
+def test_contained_picture_projection_with_other_content_stays_invalid():
+    """整形の違いを超えて内容が違う投影は、これまでどおり不正として止める（#4710）。"""
+    from rag_parser_core.vision_text import VisionTextProjection
+
+    from rag_engine.chunking.records import _vision_projection_status
+
+    project = VisionTextProjection("一段落目。\n\n二段落目。", "検索専用の本文")
+    table = record(
+        "Table",
+        "<table><tr><td>合成のセル</td></tr></table>",
+        raw={"table_visual_texts": {"image-1": "別の本文。"}, "table_visual_text_projections": {"image-1": project.dumps()}},
+    )
+    with pytest.raises(ValueError, match="投影が不正"):
+        _vision_projection_status(table)

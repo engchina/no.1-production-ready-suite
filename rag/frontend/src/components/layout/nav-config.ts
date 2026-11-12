@@ -2,6 +2,7 @@ import {
   BriefcaseBusiness,
   ClipboardCheck,
   FileCog,
+  FileSliders,
   FileSearch,
   FileStack,
   FlaskConical,
@@ -171,6 +172,13 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsChunking.sidebar",
         icon: Scissors,
         permission: MENU_PERMISSIONS.settingsChunking,
+      },
+      // 文書の種類ごとの既定（ファイル準備・解析エンジン・分割方式。#4732）。文書分割の直後。
+      {
+        href: APP_ROUTES.settingsFileTypeDefaults,
+        labelKey: "nav.settingsFileTypeDefaults",
+        icon: FileSliders,
+        permission: MENU_PERMISSIONS.settingsFileTypeDefaults,
       },
       {
         href: APP_ROUTES.settingsVectorIndex,

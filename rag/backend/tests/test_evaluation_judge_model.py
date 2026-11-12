@@ -96,7 +96,6 @@ class _Judge:
         trace_id: str,
         evaluation_input: Mapping[str, object],
         standard_answer: str,
-        citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
         judge_model_id: str,
     ) -> Mapping[str, object]:
@@ -106,9 +105,7 @@ class _Judge:
         return {
             "status": "completed",
             "passed": True,
-            "claim_checks": [],
-            "coverage_checks": [],
-            "requirement_coverage": 1.0,
+            "answer_correctness": 1.0,
             "judge_diagnostics": {"judge_model_id": judge_model_id},
         }
 
@@ -215,12 +212,7 @@ async def test_judge_model_is_kept_when_judge_fails() -> None:
 def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
     """判定の LLM の決定論スタブ。呼ばれた (schema, model, endpoint, 入力の上限) を記録する。"""
     from rag_engine.config import get_llm_provider
-    from rag_engine.evaluation.answer_eval import (
-        AnswerCorrectnessOutput,
-        ClaimJudgement,
-        CoverageOutput,
-        StandardAnswerScope,
-    )
+    from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
 
     def fake(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         provider = get_llm_provider(
@@ -229,34 +221,21 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
         calls.append(
             (schema.__name__, provider.model, provider.endpoint, settings.answer_max_input_tokens)
         )
-        if schema is AnswerCorrectnessOutput:
-            return AnswerCorrectnessOutput(verdict="correct", reason="一致")
-        if schema is StandardAnswerScope:
-            return StandardAnswerScope.model_validate(
+        assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
+        inputs = json.loads(prompt)
+        return AnswerCorrectnessOutput(
+            comparisons=[
                 {
-                    "requirements": [{"standard_answer_unit_ids": ["S1"], "requirement": "手順"}],
-                    "excluded_case_data": [],
+                    "answer_unit_id": unit["id"],
+                    "standard_unit_ids": [inputs["standard_answer"][0]["id"]],
+                    "relation": "consistent",
+                    "reason": "合成の比較",
                 }
-            )
-        if schema is CoverageOutput:
-            passage = json.loads(prompt)["answer_passages"][0]["id"]
-            return CoverageOutput.model_validate(
-                {
-                    "coverage_checks": [
-                        {
-                            "requirement_index": 1,
-                            "reason": "手順の説明",
-                            "status": "addressed",
-                            "answer_passage_id": passage,
-                        }
-                    ]
-                }
-            )
-        if schema is ClaimJudgement:
-            return ClaimJudgement(
-                reason="手順の確認の案内", claim_kind="ordinary", status="data_confirmation"
-            )
-        raise AssertionError(f"unexpected schema: {schema.__name__}")
+                for unit in inputs["answer_text"]
+            ],
+            uncovered_points=[],
+            reason="一致",
+        )
 
     return fake
 
@@ -271,10 +250,9 @@ def _stub_llm(monkeypatch: MonkeyPatch) -> list[LlmCall]:
 
 def _evaluate(settings: Settings, judge_model_id: str | None) -> dict[str, Any]:
     return evaluate_answer_record(
-        {"question": "手順", "answer_text": BODY, "evidence_items": []},
+        {"question": "手順", "answer_text": BODY},
         BODY,
         settings,
-        citations=[],
         judge_model_id=judge_model_id,
     )
 
@@ -303,21 +281,3 @@ def test_judge_without_explicit_model_uses_setting(monkeypatch: MonkeyPatch) -> 
     fixed = _evaluate(_settings(FIXED_MODEL), None)
     assert fixed["judge_diagnostics"]["judge_model_id"] == FIXED_MODEL
     assert {model for _, model, _, _ in calls} == {DEFAULT_MODEL, FIXED_MODEL}
-
-
-def test_standard_scope_is_fixed_once_per_judge_model(monkeypatch: MonkeyPatch) -> None:
-    """評価の job の比較範囲の記録（#3570）は判定のモデルごとに分かれ、同じモデルでは使い回す。"""
-    from rag_engine.evaluation.answer_eval import standard_scope_cache
-
-    calls = _stub_llm(monkeypatch)
-
-    with standard_scope_cache():
-        first = _evaluate(_settings(), DEFAULT_MODEL)
-        again = _evaluate(_settings(), DEFAULT_MODEL)
-        other = _evaluate(_settings(), PROFILE_MODEL)
-
-    scope_calls = [model for schema, model, _, _ in calls if schema == "StandardAnswerScope"]
-    assert scope_calls == [DEFAULT_MODEL, PROFILE_MODEL]
-    assert first["judge_diagnostics"]["standard_scope_reused"] is False
-    assert again["judge_diagnostics"]["standard_scope_reused"] is True
-    assert other["judge_diagnostics"]["standard_scope_reused"] is False

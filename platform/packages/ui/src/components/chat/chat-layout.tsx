@@ -239,8 +239,11 @@ export function ChatLayout({
             role="log"
             aria-label={logLabel}
             data-testid={ids.log}
+            // スクロールする会話の欄にキーボードで入り、矢印キーで読めるようにする（axe scrollable-region-focusable。#4802）。
+            tabIndex={0}
             // relative: 会話の中の absolute の要素（sr-only のラベル）を会話の欄の中に閉じ込める（#2064）。
-            className="relative min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
+            // フォーカスの枠は欄の内側に描く（外側は親の境界で切れる）。
+            className="relative min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable] focus-visible:-outline-offset-2"
           >
             {children}
           </div>

@@ -208,3 +208,15 @@ describe("版の失効（#4092）", () => {
     await act(async () => root.unmount()); host.remove();
   });
 });
+
+
+it.each([true,false])("表の保存位置をセルへ渡し、強調の抑止も維持する (%s)", async (highlight) => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const text = '<table><tr><th>項目</th></tr><tr><td>同じ値😀</td></tr><tr><td>同じ値😀</td></tr></table>';
+  const start = Array.from(text.slice(0,text.lastIndexOf("同じ値"))).length;
+  const load = vi.fn().mockResolvedValue({...windowData,next_cursor:null,blocks:[{id:"table",kind:"table",text,offset:0,cited:true,highlights:[[start,start+3]]}]});
+  await act(async () => {root.render(<EvidenceReader readingKey="table:c1" loadWindow={load} highlight={highlight}/>);await settle();});
+  expect([...host.querySelectorAll("mark")].map(el=>el.textContent)).toEqual(highlight ? ["同じ値😀"] : []);
+  if(highlight) expect(host.textContent).toContain("セル単位で強調");
+  await act(async () => root.unmount());host.remove();
+});

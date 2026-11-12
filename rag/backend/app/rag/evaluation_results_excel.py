@@ -31,10 +31,17 @@ METRICS = (
     ("required_evidence_recall", "required_evidence_recall", "必要な根拠の取得率"),
     ("mrr", "mrr", "正解文書の順位（MRR）"),
     ("answer_correctness", "answer_correctness", "回答の正確性"),
-    ("requirement_coverage", "requirement_coverage", "回答の網羅性"),
-    ("claim_support_rate", "claim_support_rate", "根拠への忠実性"),
     ("response_decision_accuracy", "response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
-    ("evidence_coverage", "evidence_coverage", "根拠の網羅率（参考）"),
+    ("precision_at_10", "precision_at_10", "Precision@10（参考）"),
+    ("ndcg_at_3", "ndcg_at_3", "NDCG@3（参考）"),
+    ("ndcg_at_10", "ndcg_at_10", "NDCG@10（参考）"),
+    ("map", "map", "MAP（参考）"),
+    ("bleu_1", "bleu_1", "BLEU-1（参考）"),
+    ("bleu_2", "bleu_2", "BLEU-2（参考）"),
+    ("bleu_4", "bleu_4", "BLEU-4（参考）"),
+    ("rouge_1", "rouge_1", "ROUGE-1（参考）"),
+    ("rouge_2", "rouge_2", "ROUGE-2（参考）"),
+    ("rouge_l", "rouge_l", "ROUGE-L（参考）"),
 )
 DECISIONS = {"answer": "回答", "clarify": "確認", "hold": "保留"}
 # 画面（`evaluation.outcome.*`・`evaluation.failureReason.*`）と同じ文言。無い値は値のまま出す。
@@ -53,6 +60,7 @@ FAILURE_REASONS = {
     "unexpected_refusal": "答えるべき質問に答えなかった",
     "answer_keyword_miss": "期待する語が無い",
     "low_groundedness": "根拠に無い語が多い",
+    # 次の 3 つは新しい評価では出ない。保存済みの結果に残る理由の表示のために残す（#4781）。
     "claim_unassessed": "主張の支持を確認できていない",
     "unsupported_claim": "根拠のない主張がある",
     "missing_content": "標準回答の必要な項目が抜けている",
@@ -69,7 +77,6 @@ FAILURE_REASONS = {
     "known_condition_reasked": "分かっている条件を聞き直した",
     "screen_missing": "案内すべき画面を案内していない",
     "wrong_screen": "別の画面を案内した",
-    "off_target": "目的外の回答",
 }
 CASE_STATUSES = {"success": "成功", "error": "失敗"}
 NOT_RUN_LABEL = "未実行"
@@ -110,6 +117,7 @@ def evaluation_results_xlsx(
     inputs: EvaluationResultExportRequest,
     *,
     partial_of_total: int | None = None,
+    evidence: Mapping[str, str] | None = None,
 ) -> bytes:
     """全ページ分の結果を出す。文字列は式として評価させない。
 
@@ -165,6 +173,7 @@ def evaluation_results_xlsx(
                 "失敗理由",
                 "Trace",
                 "エラー",
+                "回答に使用した根拠",
             ],
         )
         for item in result.case_results:
@@ -207,11 +216,12 @@ def evaluation_results_xlsx(
                     ),
                     item.trace_id,
                     item.error_message or "",
+                    (evidence or {}).get(item.trace_id, ""),
                 ],
             )
             for cell in sheet[sheet.max_row][7:13]:
                 cell.number_format = "0.0%"
-        _format(sheet, [24, 48, 40, 60, 40, 20, 60, *([20] * 6), 16, 36, 36, 48])
+        _format(sheet, [24, 48, 40, 60, 40, 20, 60, *([20] * len(METRICS)), 12, 36, 36, 48, 60])
     _format(overview, [36, *([36] * len(groups))])
     for row in overview.iter_rows(min_row=3, min_col=2):
         for cell in row:
@@ -233,16 +243,17 @@ def _result_columns(prefix: str) -> list[AppendedColumn]:
         AppendedColumn(f"{prefix}: 失敗理由", width=_RESULT_COLUMN_WIDTHS["failure"]),
         AppendedColumn(f"{prefix}: Trace", width=_RESULT_COLUMN_WIDTHS["trace"]),
         AppendedColumn(f"{prefix}: エラー", width=_ERROR_COLUMN_WIDTH),
+        AppendedColumn(f"{prefix}: 回答に使用した根拠", width=60),
     ]
 
 
 def _result_values(
-    item: EvaluationCaseResult | None, answers: Mapping[str, str]
+    item: EvaluationCaseResult | None, answers: Mapping[str, str], evidence: Mapping[str, str]
 ) -> list[CellValue]:
     if item is None:
         # 途中までの結果（#4208）で実行していない行。
         blank: list[CellValue] = [None] * (2 + len(METRICS))
-        return [*blank, NOT_RUN_LABEL, None, None, None]
+        return [*blank, NOT_RUN_LABEL, None, None, None, None]
     answer: str | None = answers.get(item.trace_id)
     if answer is None and item.status == "success":
         answer = ANSWER_RECORD_MISSING_LABEL
@@ -258,11 +269,16 @@ def _result_values(
         "\n".join(FAILURE_REASONS.get(reason, reason) for reason in item.failure_reasons) or None,
         item.trace_id,
         item.error_message,
+        evidence.get(item.trace_id) or None,
     ]
 
 
 def evaluation_workbook_with_results(
-    data: bytes, metrics: EvaluationMetrics, answers: Mapping[str, str]
+    data: bytes,
+    metrics: EvaluationMetrics,
+    answers: Mapping[str, str],
+    *,
+    evidence: Mapping[str, str] | None = None,
 ) -> bytes:
     """アップロードした Excel のケースの行の右に、結果の列を足したファイルを返す。
 
@@ -285,6 +301,8 @@ def evaluation_workbook_with_results(
     for row in parsed.rows:
         case_id = evaluation_case_id(row.row)
         rows[row.row] = [
-            value for results in by_case for value in _result_values(results.get(case_id), answers)
+            value
+            for results in by_case
+            for value in _result_values(results.get(case_id), answers, evidence or {})
         ]
     return append_columns(data, sheet_title=parsed.sheet_title, columns=columns, rows=rows)

@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 from rag_engine.adapters.oci import _render_prompt
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.generation.grounded import audit_system_prompt
 from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
@@ -23,7 +22,7 @@ from rag_engine.resources.runtime import bind_prompt_overrides
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
-from app.rag.answer_prompts import default_prompt, prompt_overrides, validate_prompt
+from app.rag.answer_prompts import default_prompt, validate_prompt
 from app.schemas.search import SearchRequest
 from tests.test_answer_assumptions import QUESTION, prepared
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
@@ -70,13 +69,8 @@ def _seven_steps(name: str) -> str:
     )
 
 
-GENERATION_SYSTEM_3 = _three_steps("回答")
-GENERATION_SYSTEM_7 = _seven_steps("回答")
-ASSUMPTION_SAVED = (
-    "\n## Step 6: 合成の前提を明記する\n"
-    "- 未確定の条件は前提として示す。\n"
-    "- 選択肢を事実として選ばない。\n"
-)
+GENERATION_ROLE_3 = _three_steps("回答")
+GENERATION_ROLE_7 = _seven_steps("回答")
 
 
 def _validated(saved: dict[str, str]) -> dict[str, str]:
@@ -90,18 +84,17 @@ def _validated(saved: dict[str, str]) -> dict[str, str]:
     "saved",
     [
         {},
-        {"generation.assumptionSystem": ASSUMPTION_SAVED},
-        {"generation.system": GENERATION_SYSTEM_3},
-        {"generation.system": GENERATION_SYSTEM_7},
-        {"generation.system": GENERATION_SYSTEM_3, "generation.assumptionSystem": ASSUMPTION_SAVED},
+        {"generation.role": GENERATION_ROLE_3},
+        {"generation.role": GENERATION_ROLE_7},
     ],
-    ids=["defaults", "assumption", "system-3-steps", "system-7-steps", "both"],
+    ids=["defaults", "role-3-steps", "role-7-steps"],
 )
 async def test_generation_system_with_assumptions_keeps_continuous_steps(
     monkeypatch: pytest.MonkeyPatch, saved: dict[str, str]
 ) -> None:
-    """生成の system と未確定の前提の追加部品を、回答の経路で組み立てた後に確かめる。"""
+    """役割の文に固定の部分と未確定の前提を足した生成の system を、回答の経路で確かめる。"""
     import rag_engine.adapters.oci as engine_oci
+    from rag_engine.generation.grounded import ASSUMPTION_SYSTEM_PROMPT, GENERATION_FIXED_PROMPT
 
     systems: list[str] = []
 
@@ -114,7 +107,7 @@ async def test_generation_system_with_assumptions_keeps_continuous_steps(
     oracle = FakeOracle()
     oracle.prompt_overrides = _validated(saved)
     await AnswerEngine(
-        Settings(rag_answer_flow="standard_rag"),
+        Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         runtime_knowledge_payload=prepared("assume"),
@@ -123,42 +116,18 @@ async def test_generation_system_with_assumptions_keeps_continuous_steps(
     for system in systems:
         assert_continuous_steps(system)
         assert_saved_text_is_sent(saved, system)
+        # 固定の部分は、役割の文を保存していても必ず続きの番号で入る（#4782）。
+        # `{{language}}` は言語の名前に替わるので、その前後に分けて見る。
+        for piece in _without_step_numbers(GENERATION_FIXED_PROMPT.strip()).split("{{language}}"):
+            assert piece in _without_step_numbers(system)
+    assert any(
+        _without_step_numbers(ASSUMPTION_SYSTEM_PROMPT.strip()) in _without_step_numbers(system)
+        for system in systems
+    )
 
 
 AUDIT_SAVED_3 = _three_steps("監査")
 COMPACT_RULE_SAVED = "\n### 合成の理由の書き方\n\n- 通らなかった判定だけ理由を書く。\n"
-
-
-@pytest.mark.parametrize("detailed", [True, False], ids=["detailed", "fact"])
-@pytest.mark.parametrize("compact", [True, False], ids=["compact", "full"])
-@pytest.mark.parametrize(
-    "saved",
-    [
-        {},
-        {"audit.detailedSystem": AUDIT_SAVED_3, "audit.factSystem": AUDIT_SAVED_3},
-        {"audit.compactRule": COMPACT_RULE_SAVED},
-        {
-            "audit.detailedSystem": AUDIT_SAVED_3,
-            "audit.factSystem": AUDIT_SAVED_3,
-            "audit.compactRule": COMPACT_RULE_SAVED,
-        },
-    ],
-    ids=["defaults", "system-3-steps", "compact-rule", "both"],
-)
-def test_audit_system_keeps_continuous_steps(
-    saved: dict[str, str], compact: bool, detailed: bool
-) -> None:
-    """監査の本体と理由の規則の追加部品を、回答の経路と同じ上書きのスコープで組み立てる。"""
-    with prompt_overrides(_validated(saved)):
-        system = audit_system_prompt(compact_reasons=compact, detailed=detailed)
-    assert_continuous_steps(system)
-    used = {
-        key: content
-        for key, content in saved.items()
-        if key == ("audit.detailedSystem" if detailed else "audit.factSystem")
-        or (key == "audit.compactRule" and compact)
-    }
-    assert_saved_text_is_sent(used, system)
 
 
 IMAGE_TEMPLATE_3 = (
@@ -196,7 +165,7 @@ async def test_ingestion_picture_prompt_keeps_continuous_steps(saved: dict[str, 
     pipeline = _pipeline(enabled=True, reader=reader)
     pipeline._oracle = PromptOracle(_validated(dict(saved)))
 
-    await _attach(pipeline, _figure_extraction([0.168, 0.119, 0.504, 0.297]), "mineru")
+    await _attach(pipeline, _figure_extraction([0.168, 0.119, 0.504, 0.297]), "dots_ocr")
 
     assert len(reader.calls) == 1
     prompt = str(reader.calls[0]["prompt"])

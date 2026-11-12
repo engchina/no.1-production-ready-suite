@@ -23,6 +23,7 @@ import {
   formatDisplayDateTime,
   ListScrollRegion,
   ListToolbar,
+  operationTimestampMs,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -153,9 +154,7 @@ const SUPPRESSED_BUILD_EVENT_PREFIXES = [
 ];
 
 function parseTimeMs(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  const parsed = new Date(iso).getTime();
-  return Number.isNaN(parsed) ? null : parsed;
+  return operationTimestampMs(iso);
 }
 
 function eventBelongsToStep(eventMs: number | null, step: OntologyBuildStep): boolean {

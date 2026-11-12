@@ -10,13 +10,11 @@ import json
 import pytest
 from citation_unit_support import generated_fixture
 from pydantic import ValidationError
-from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
-from rag_engine.adapters.oci import InvalidStructuredOutput, LlmRunawayOutput, LlmStreamOutputMissing
 from rag_engine.generation import grounded
-from rag_engine.generation.answering import _grounded_spans
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import GroundedDraft, RequestScopePlan
+from rag_engine.models.llm import GroundedDraft
 
 GOOD = "一覧表を選択し、処理を選択します。"
 PLAN_LIMIT = 64
@@ -114,131 +112,11 @@ def test_duplicated_plan_answer_keeps_one_plan_and_records_the_collapse():
     assert len(output["canonical_output"]["request_coverage"]) == 1
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        _oversized_items_error,
-        lambda: LlmRunawayOutput("合成の反復", "runaway_repetition", None),
-        lambda: InvalidStructuredOutput("生成文に入力にはない Unicode の置換文字が含まれています（欄: items[0].text）。"),
-        lambda: LlmStreamOutputMissing("合成の本文の無い応答", None, {"events": []}),
-    ],
-    ids=["oversized_items", "runaway_repetition", "replacement_character", "stream_output_missing"],
-)
-def test_invalid_first_generation_shows_related_quotes_instead_of_failing(failure):
-    ctx, _eid = _context()
-    error = failure()
-
-    def broken(prompt):
-        raise error
-
-    model = FakeModel([broken], [audit()])
-    result = run(model, ctx).response
-
-    # 回答全体を失敗にせず、関係する資料の記載を原文のみ提示（適用は未確認）で示す条件つきの回答にする。
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert not result.answer_text.startswith(grounded.answer_labels().deadline_summary)
-    assert result.envelope["outcome"] == "conditional"
-    assert [entry["applies"] for entry in result.envelope["items"]] == ["quote_only"]
-    assert GOOD in result.answer_text
-    assert result.confidence == "low"
-    assert result.needs_human_review
-    trace = result.generation_trace
-    assert trace["generation_failure"]["error"] == type(error).__name__
-    assert trace["generation_failure"]["stage"] == "answer.generate"
-    assert trace["rounds"][0]["error"] == type(error).__name__
-    assert "stop" not in trace["round_budget"]
-    # 監査は呼ばない（草稿が無い）。
-    assert [name for name, _ in model.prompts] == ["GroundedDraftWire"]
-
-
-def test_invalid_correction_round_keeps_the_adopted_answer_and_names_the_original_error():
-    ctx, eid = _context()
-    first = draft(item(eid, GOOD, GOOD), item(eid, "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
-    error = _oversized_items_error()
-
-    def broken(prompt):
-        raise error
-
-    model = FakeModel([first, broken], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))])
-    result = run(model, ctx).response
-
-    assert GOOD in result.answer_text
-    assert "generation_failure" not in result.generation_trace
-    assert result.generation_trace["rounds"][-1]["error"] == "ValidationError"
-    warnings = [row for row in result.envelope["answer_warnings"] if row["code"] == "correction_failed"]
-    assert [row["detail"] for row in warnings] == ["ValidationError"]
-
-
-def test_invalid_plan_repair_keeps_the_draft_before_the_repair():
-    ctx, eid = _context()
-    # 同じ根拠への判断が食い違う計画（作り直しの対象の不整合）。
-    conflicting = {"evidence_id": eid, "target": "集計表出力", "relation": "linked"}
-    plan = _plan(eid)
-    unscoped = {
-        **draft(item(eid, GOOD, GOOD, request_id="Q1")),
-        "request_coverage": [{**plan, "evidence_ids": [eid], "evidence_scope": [*plan["evidence_scope"], conflicting]}],
-    }
-    error = _oversized_items_error()
-
-    def broken(prompt):
-        raise error
-
-    model = FakeModel([unscoped, broken], [audit((0, "supported", "matched", ""))])
-    current = grounded.run_round(
-        QUESTION,
-        _grounded_spans(QUESTION, ctx, (), None),
-        None,
-        prompt="p",
-        image_paths=[],
-        provider_id=None,
-        parse_text=model,
-        parse_images=model,
-        invalid_output=lambda exc: isinstance(exc, ValidationError | InvalidStructuredOutput),
-    )
-
-    # 作り直す前の説明を捨てず、残った不整合は記録して印の判定に回す。
-    assert [entry.item.text for entry in current.checked if entry.item.text == GOOD]
-    assert current.timing["request_plan_repair"] == {"calls": 1, "scope": "request_plan_and_draft", "error": "ValidationError"}
-    assert current.timing["request_plan_unsettled"]
-    assert [name for name, _ in model.prompts][:2] == ["GroundedDraftWire", "GroundedDraftWire"]
-
-
 def _round_error() -> ValidationError:
     """最終生成の出力の検証と同じ、型に合わない出力の例外。"""
     with pytest.raises(ValidationError) as raised:
         generation_draft_wire_model().model_validate_json("{}")
     return raised.value
-
-
-@pytest.mark.parametrize(
-    ("failure", "error_name", "category"),
-    [
-        (_round_error, "ValidationError", "schema_field"),
-        (lambda: grounded.DraftGenerationInvalid("ValidationError"), "ValidationError", "ValidationError"),
-        (lambda: grounded.DraftGenerationInvalid("request_scope_invalid"), "request_scope_invalid", "request_scope_invalid"),
-    ],
-    ids=["round_raises_validation_error", "classified_output_failure", "classified_plan_failure"],
-)
-def test_structured_output_failure_from_the_round_reaches_the_quote_fallback(monkeypatch, failure, error_name, category):
-    """#4091: 生成の round の検証の失敗は、分類の有無を問わず同じ安全な退避へ進み、HTTP 500 にしない。"""
-    ctx, _eid = _context()
-    error = failure()
-
-    def broken_round(*args, **kwargs):
-        raise error
-
-    monkeypatch.setattr(grounded, "run_round", broken_round)
-    result = run(FakeModel([draft()], [audit()]), ctx).response
-
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert result.envelope["outcome"] == "conditional"
-    assert [entry["applies"] for entry in result.envelope["items"]] == ["quote_only"]
-    assert result.confidence == "low"
-    assert result.needs_human_review
-    trace = result.generation_trace
-    assert trace["generation_failure"]["error"] == error_name
-    assert trace["generation_failure"]["stage"] == "answer.generate"
-    assert trace["generation_failure"]["category"] == category
 
 
 @pytest.mark.parametrize(
@@ -281,9 +159,6 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
 
     def model(system, prompt, settings, schema, **options):
         calls.append(schema)
-        if issubclass(schema, RequestScopePlan):
-            assert "evidence" in json.loads(prompt)
-            return schema.model_validate({"request_coverage": [_plan(label)]})
         return generated_fixture(
             schema,
             prompt,
@@ -304,25 +179,5 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
     result = run(model, ctx, question=COMPOUND_QUESTION).response
 
     assert "generation_failure" not in result.generation_trace
-    assert issubclass(calls[0], RequestScopePlan)
-    assert len(calls) >= 2
+    assert len(calls) == 1
     assert answer in result.answer_text
-
-
-def test_invalid_plan_output_at_the_first_round_reaches_the_quote_fallback():
-    """#4091: 生成の前の計画の呼び出しの出力不合格も、HTTP 500 にせず参考情報へ退避する。"""
-    ctx = context(record(0, LONG_RECORD, "合成の項目"))
-
-    def model(system, prompt, settings, schema, **options):
-        assert issubclass(schema, RequestScopePlan)
-        schema.model_validate({})
-
-    result = run(model, ctx, question=COMPOUND_QUESTION).response
-
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert result.envelope["outcome"] == "conditional"
-    failure = result.generation_trace["generation_failure"]
-    assert failure["error"] == "ValidationError"
-    assert failure["stage"] == "answer.generate"
-    assert failure["model"] == "RequestScopePlan"
-    assert LONG_RECORD not in json.dumps(failure, ensure_ascii=False)

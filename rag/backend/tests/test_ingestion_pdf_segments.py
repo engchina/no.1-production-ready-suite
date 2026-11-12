@@ -230,7 +230,6 @@ async def _ingest(pipeline: IngestionPipeline, pdf: bytes) -> object:
     return await pipeline.ingest(
         DOCUMENT_ID,
         pdf,
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=len(pdf)),
         prepared_artifact=_prepared_pdf_artifact(pdf),

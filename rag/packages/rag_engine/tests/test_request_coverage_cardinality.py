@@ -5,21 +5,18 @@
 """
 
 import json
-from dataclasses import replace
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_parts_wire import answer_parts_model
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_scope_model
+from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.generation.grounded import generation_output_model, generation_request_ids
-from rag_engine.models.llm import RequestScopePlan
 
 TEXT = "項目Aは12です。"
 QUESTION = "項目Aの値を教えてください。"
@@ -37,6 +34,7 @@ def plan(request_id: str, target: str = "項目A") -> dict[str, Any]:
 
 def draft(coverage: list[dict[str, Any]], snapshot: EvidenceUnitSnapshot) -> dict[str, Any]:
     return {
+        "response_kind": "answered",
         "answer_parts": [
             {
                 "request_id": "Q1",
@@ -85,16 +83,6 @@ def test_several_requests_take_one_plan_each_even_without_basis():
     assert [(entry.request_id, entry.evidence_ids) for entry in canonical.request_coverage] == [("Q1", ["E1"]), ("Q2", [])]
 
 
-def test_scope_plan_schema_takes_one_plan_per_request():
-    units, _ = catalog()
-    model = unit_scope_model(RequestScopePlan, units, request_ids=("Q1",))
-    schema = coverage_schema(model)
-    assert schema["field"]["minItems"] == schema["field"]["maxItems"] == 1
-    model.model_validate({"request_coverage": [plan("Q1")]})
-    with pytest.raises(ValidationError):
-        model.model_validate({"request_coverage": [plan("Q1"), plan("Q1", "別の言い方")]})
-
-
 def test_generation_call_sends_no_plan_schema():
     """実際の生成の呼び出しに渡す schema にも計画は無い。"""
     captured: list[Any] = []
@@ -120,7 +108,7 @@ def test_generation_call_sends_no_plan_schema():
         source_run_id="synthetic",
         metadata={},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = get_settings(environ={}, dotenv_path=None)
     with (
         bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)),
         pytest.raises(RuntimeError, match="schema を確かめたら止める"),
@@ -156,7 +144,7 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
         text = json.dumps(FIXTURE["outputs"][name], ensure_ascii=False)
         for key, value in mapping.items():
             text = text.replace(key, value)
-        return json.loads(text)
+        return {**json.loads(text), "response_kind": "answered"}
 
     repeated = replay("deployed_42dd5db")
     assert len(repeated["request_coverage"]) > 1
@@ -165,12 +153,3 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
         canonical = canonical_generation_draft(model.model_validate(replay(name)), unit_catalog=units)
         assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
         assert {scope.relation for scope in canonical.request_coverage[0].evidence_scope} <= {"direct"}
-
-
-def test_scope_plan_row_keeps_target():
-    """計画だけを別に立てる経路は対象の照合が目的なので、行の target を残す（#4594）。"""
-    units, _ = catalog()
-    schema = unit_scope_model(RequestScopePlan, units, request_ids=("Q1",)).model_json_schema()
-    coverage = schema["$defs"][schema["properties"]["request_coverage"]["items"]["$ref"].rsplit("/", 1)[1]]
-    row = schema["$defs"][coverage["properties"]["evidence_scope"]["items"]["$ref"].rsplit("/", 1)[1]]
-    assert "target" in row["properties"]

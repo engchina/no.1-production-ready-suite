@@ -1,9 +1,10 @@
 """ドキュメント関連スキーマ。"""
 
-from datetime import date, datetime
+from datetime import date
 from enum import StrEnum
 from typing import Literal
 
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -14,6 +15,7 @@ from pydantic import (
 )
 from rag_parser_core.extraction import strip_formatting_marks
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
+from rag_pipeline_core.chunking import ChunkSeparators, FixedDelimiters
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_MAX,
@@ -189,7 +191,7 @@ class IngestionVisionProgress(BaseModel):
 class IngestionCallProgress(BaseModel):
     """取込の段の AI の呼び出しの状態（#2002・#2067）。
 
-    段は Vision・項目抽出・ナビゲーション要約・RAPTOR 要約・Embedding・リランク。
+    段は Vision・項目抽出・ナビゲーション要約・Embedding・リランク。
 
     上限つきの並行の実行器（``pr_backend_core.bounded_calls``）の状態を写す。``waiting_reason`` は
     待っている理由（``rate_limited`` = API の流量の制限、``breaker_open`` = 失敗が続いたための
@@ -204,7 +206,6 @@ class IngestionCallProgress(BaseModel):
         "heading_levels",
         "field_extraction",
         "navigation_summary",
-        "raptor_summary",
         "embedding",
         "rerank",
     ]
@@ -232,7 +233,7 @@ class IngestionJobProgress(BaseModel):
     vision: IngestionVisionProgress | None = None
     # 今の（最後の）段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。
     calls: IngestionCallProgress | None = None
-    updated_at: datetime
+    updated_at: UtcDatetime
 
 
 class IngestionJob(BaseModel):
@@ -256,9 +257,9 @@ class IngestionJob(BaseModel):
     error_message: str | None = None
     attempt_count: int = Field(default=0, ge=0)
     max_attempts: int = Field(default=3, ge=1)
-    queued_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    queued_at: UtcDatetime
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
     # 実行中の抽出の段の進捗（#1999）。一覧・取得の応答だけが持つ。読めない値は None。
     progress: IngestionJobProgress | None = None
 
@@ -317,7 +318,7 @@ class IngestionQueueWait(BaseModel):
     phase: IngestionJobPhase
     # 待っている job。抽出の完了から自動進行の job の投入までの猶予の間(#733)は None。
     job_id: str | None = None
-    queued_at: datetime | None = None
+    queued_at: UtcDatetime | None = None
     # worker が claim する順(``ingestion_dispatch_order_sql``。#2027)で前にある、同じ枠の段の
     # claim できる QUEUED の job の数。猶予の間は None。
     jobs_ahead: int | None = Field(default=None, ge=0)
@@ -338,8 +339,8 @@ class DocumentSummary(BaseModel):
     file_size_bytes: int | None = None
     content_sha256: str | None = None
     duplicate_of_document_id: str | None = None
-    uploaded_at: datetime
-    indexed_at: datetime | None = None
+    uploaded_at: UtcDatetime
+    indexed_at: UtcDatetime | None = None
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
     source_profile: SourceProfile | None = None
     # 検索対象(active)のレシピの派生情報レイヤーに、作り直しが必要なものがあるか(#550)。
@@ -356,7 +357,7 @@ class DocumentSummary(BaseModel):
     superseded_by_document_id: str | None = None
     # 新しい版の文書名(利用者が見られる文書のときだけ埋める)。
     superseded_by_file_name: str | None = None
-    superseded_at: datetime | None = None
+    superseded_at: UtcDatetime | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -371,8 +372,8 @@ class DuplicateDocumentRef(BaseModel):
     id: str
     file_name: str
     status: FileStatus
-    uploaded_at: datetime
-    indexed_at: datetime | None = None
+    uploaded_at: UtcDatetime
+    indexed_at: UtcDatetime | None = None
 
 
 class DocumentPreprocessArtifact(BaseModel):
@@ -399,6 +400,7 @@ class DocumentPreviewSource(BaseModel):
     file_name: str
     content_type: str | None = None
     is_pdf: bool
+    is_structured_records: bool = False
 
 
 class DocumentPreviewPage(BaseModel):
@@ -427,6 +429,33 @@ class DocumentSupersededByRequest(BaseModel):
     @classmethod
     def _blank_to_none(cls, value: str | None) -> str | None:
         return value or None
+
+
+class DocumentContentSummary(BaseModel):
+    """文書全体の要約（#4793）。取込の後に 1 文書 1 回の LLM で作る文書の説明。
+
+    ``status`` は保存済みの結果（``pending`` はまだ結果が無い）、``generating`` は今作っている
+    途中か。作り直しの途中・失敗の後も、同じ版の要約があれば ``ready`` のまま前の文を返す
+    （``failure_code`` に最後の失敗の理由が入る）。
+    """
+
+    status: Literal["pending", "ready", "failed"]
+    generating: bool = False
+    text: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    # 入力の予算を超えたため、文書の先頭の本文と見出しの一覧から作った要約か。
+    input_truncated: bool = False
+    failure_code: str | None = None
+    generated_at: UtcDatetime | None = None
+
+
+class DocumentContentSummaryState(BaseModel):
+    """文書の詳細に出す文書全体の要約の状態（#4793）。"""
+
+    # 取込の後に要約を作る設定（RAG_DOCUMENT_SUMMARY_ENABLED）が有効か。無効なら作り直せない。
+    enabled: bool
+    # まだ作っていない文書は None。
+    summary: DocumentContentSummary | None = None
 
 
 class DocumentDetail(DocumentSummary):
@@ -545,7 +574,7 @@ class DocumentChunkSet(BaseModel):
     chunk_count: int = 0
     vector_count: int = 0
     is_serving: bool = True
-    created_at: datetime | None = None
+    created_at: UtcDatetime | None = None
     extraction_id: str | None = None
     parser: str | None = None
     preprocess: str | None = None
@@ -567,7 +596,7 @@ class DocumentChunkPreviewRequest(BaseModel):
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
-    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+    chunk_delimiter: FixedDelimiters | None = None
     chunk_child_target_chars: int | None = Field(
         default=None, ge=CHUNK_CHILD_TARGET_CHARS_MIN, le=CHUNK_CHILD_TARGET_CHARS_MAX
     )
@@ -635,6 +664,9 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 本文の区切りの実効値(再処理の判定用)。全体の設定だけが持ち、レシピでは上書きしない。
+    chunk_separators: ChunkSeparators | None = None
+
     @model_validator(mode="before")
     @classmethod
     def discard_global_only_settings(cls, value: object) -> object:
@@ -678,8 +710,8 @@ class DocumentRecipeStep(BaseModel):
 
     phase: IngestionJobPhase
     status: DocumentRecipeStepStatus
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
     error_message: str | None = None
     # status が QUEUED の工程の順番待ちの情報(#2026)。
     queue_wait: IngestionQueueWait | None = None
@@ -710,10 +742,10 @@ class DocumentRecipeView(BaseModel):
     needs_reprocessing: bool = False
     error_message: str | None = None
     steps: list[DocumentRecipeStep] = Field(default_factory=list)
-    created_at: datetime
-    updated_at: datetime
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+    started_at: UtcDatetime | None = None
+    finished_at: UtcDatetime | None = None
 
 
 class DocumentRecipeCreateRequest(BaseModel):
@@ -824,7 +856,7 @@ class ExtractionRevisionSummary(BaseModel):
     restored_from_revision_no: int | None = None
     kind: Literal["parsed", "edited", "restored"]
     changed_element_count: int = Field(default=0, ge=0)
-    created_at: datetime
+    created_at: UtcDatetime
     is_current: bool = False
     # 検索に出している chunk_set がこの版の抽出から作られている。
     is_serving: bool = False
@@ -1017,7 +1049,7 @@ class DocumentSectionsData(BaseModel):
     page_count: int | None = None
     # 人の修正の版(未保存は None)。保存のときに base_revision として返す。
     revision: int | None = None
-    updated_at: datetime | None = None
+    updated_at: UtcDatetime | None = None
     # 人の修正の基にした抽出と今の抽出が違う(#4171)。文の修正・再解析で変わる。
     base_changed: bool = False
     # そのうち、抽出の章節まで変わった(修正の前提が変わった)。
@@ -1046,7 +1078,7 @@ class DocumentSectionRevisionSummary(BaseModel):
     # 基にした抽出(履歴の前の修正は不明で null)。
     base_extraction_recipe_id: str | None = None
     changed_section_count: int = Field(default=0, ge=0)
-    created_at: datetime
+    created_at: UtcDatetime
     is_current: bool = False
     # 基にした抽出が今の抽出と違う。
     base_changed: bool = False

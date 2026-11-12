@@ -1,0 +1,7 @@
+[
+ {"id":"contradictory_restriction","question":"通常時と例外時の受信先を教えてください。","standard_answer":"通常時は窓口Bと窓口Cが受信する。例外時は窓口Bが受信する。","answer_text":"通常時は窓口Bのみが受信します。例外時は窓口Bが受信します。","expected_verdict":"incorrect"},
+ {"id":"correct_conditional_branch","question":"通常時と例外時の受信先を教えてください。","standard_answer":"通常時は窓口Bと窓口Cが受信する。例外時は窓口Bが受信する。","answer_text":"通常時は窓口Bと窓口Cが受信します。例外時は窓口Bが受信します。","expected_verdict":"correct"},
+ {"id":"correct_partial_answer","question":"項目Aと項目Bの値を教えてください。","standard_answer":"項目Aの値は5で、項目Bの値は8である。","answer_text":"項目Aの値は5です。","expected_verdict":"correct"},
+ {"id":"omission_is_not_factual_error","question":"処理の手順を教えてください。","standard_answer":"手順A、手順B、手順Cの順に行う。手順Bでは入力内容を確認する。手順Cでは記録を保存する。","answer_text":"手順A、手順B、手順Cの順に行います。","expected_verdict":"correct"},
+ {"id":"appropriate_insufficient_evidence","question":"項目Aの値を教えてください。","standard_answer":"取得した資料に項目Aの値がないため、値を確定できない。","answer_text":"取得した資料から項目Aの値は確定できません。","expected_verdict":"correct"}
+]

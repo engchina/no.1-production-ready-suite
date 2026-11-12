@@ -270,12 +270,13 @@ test("アカウントの欄からアカウントの画面を開き、タブを�
   // アカウント欄の 1 行目はログイン ID。表示名はほかの画面で使い、アカウント欄には出さない（#1696）。
   await expect(sidebar.getByText("admin.user", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("管理 太郎")).toHaveCount(0);
-  // 個人の操作（API キー・パスワード変更）はサイドナビの行に出さず、欄からアカウントの画面へ移る。
+  // 個人の操作（API キー・パスワード変更）はサイドナビの行に出さず、欄のメニューからアカウントの画面へ移る（#4724）。
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
-  const accountLink = sidebar.getByRole("link", { name: "アカウント設定を開く（admin.user）" });
-  expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-  await accountLink.click();
+  const accountMenuButton = sidebar.getByRole("button", { name: /^アカウントのメニュー admin\.user/ });
+  expect((await accountMenuButton.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await accountMenuButton.click();
+  await page.getByRole("menuitem", { name: "アカウント" }).click();
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
   await expect(page.getByText("admin.user（ロール: ")).toBeVisible();
@@ -316,9 +317,46 @@ test("アカウント欄のログアウト", async ({ page }) => {
 
   await page.goto("/settings/appearance");
   const sidebar = await openSidebarNav(page);
-  await sidebar.getByRole("button", { name: "ログアウト" }).click();
+  // ログアウトの行は常時は出さず、欄のメニューの中にある（#4724）。
+  await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
+  await sidebar.getByTestId("sidebar-account").click();
+  await page.getByRole("menuitem", { name: "ログアウト" }).click();
   await expect(page).toHaveURL(/\/login$/);
   expect(auth.logoutCalls).toBe(1);
+});
+
+test("利用者のメニューは欄の上に開き、外のクリックと Esc で閉じ、キーボードで操作できる（#4724）", { tag: "@responsive" }, async ({ page }) => {
+  await mockAuthApi(page, loginTarget("admin.user"));
+
+  await page.goto("/settings/appearance");
+  const sidebar = await openSidebarNav(page);
+  const trigger = sidebar.getByTestId("sidebar-account");
+  const menu = page.getByRole("menu", { name: "アカウントのメニュー admin.user" });
+  await expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(menu).toHaveAttribute("data-floating-menu-placement", "top");
+  await expect(menu.getByRole("menuitem")).toHaveText(["アカウント", "ログアウト"]);
+  const [menuBox, triggerBox] = await Promise.all([menu.boundingBox(), trigger.boundingBox()]);
+  expect((menuBox?.y ?? 0) + (menuBox?.height ?? 0)).toBeLessThanOrEqual((triggerBox?.y ?? 0) + 0.5);
+  await expect(menu.getByRole("menuitem", { name: "アカウント" })).toBeFocused();
+  await expectNoPageOverflow(page);
+
+  // ↓ で次へ、Esc で閉じてボタンへ戻す（375px のドロワーは開いたまま）。
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "ログアウト" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  // Enter で開き直す。外を押すと閉じる。
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeVisible();
+  await sidebar.getByRole("navigation").first().click({ position: { x: 4, y: 4 } });
+  await expect(menu).toHaveCount(0);
 });
 
 test("ログイン画面の「パスワードを忘れた場合」は管理者への依頼を案内する（#1873。メールの送信は無い）", { tag: "@responsive" }, async ({ page }) => {
@@ -440,12 +478,17 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
 
     if (!(await page.getByTestId("nav-drawer-trigger").isVisible())) {
-      // 折りたたみ（アイコンだけ）のサイドナビは名前を出さず（アイコンの行のリンクだけ。#1873）、操作はアイコンの列に収まる。
+      // 折りたたみ（アイコンだけ）のサイドナビは名前を出さず（アイコンのボタンだけ。#4724）、操作はアイコンの列に収まる。
       await reloaded.getByRole("button", { name: "サイドバーを折りたたむ" }).click();
       await expect(reloaded).toHaveAttribute("data-state", "collapsed");
-      await expect(reloaded.getByTestId("sidebar-account")).toHaveAttribute("aria-label", `アカウント設定を開く（${longName}）`);
+      await expect(reloaded.getByTestId("sidebar-account")).toHaveAttribute("aria-label", `アカウントのメニュー ${longName}`);
       await expect(reloaded.getByText(longRoleNames)).toHaveCount(0);
       await expectAccountFooterInsideSidebar(page);
+      // 折りたたみ時もアイコンを押すと同じメニューが開き、ログアウトのアイコンの行は無い。
+      await expect(reloaded.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
+      await reloaded.getByTestId("sidebar-account").click();
+      await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["アカウント", "ログアウト"]);
+      await page.keyboard.press("Escape");
     }
   });
 }
@@ -480,6 +523,11 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
   await expect(sidebar.getByRole("status", { name: "ログイン省略" })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  // メニューは「アカウント」だけ（#4724）。
+  await sidebar.getByTestId("sidebar-account").click();
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["アカウント"]);
+  await expect(page.getByRole("menu")).toHaveAttribute("data-floating-menu-placement", "top");
+  await page.keyboard.press("Escape");
   // アカウントの画面のパスワード変更のタブは、ローカルの認証ではパスワードを使わない説明だけ（#1873）。
   await page.goto("/account?tab=password");
   await expect(page.getByText("ローカルの認証（ログインの省略）ではパスワードを使いません。")).toBeVisible();

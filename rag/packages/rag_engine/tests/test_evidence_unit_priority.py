@@ -63,27 +63,6 @@ def _native(index, path, text, source="経理手順.pdf"):
     return record
 
 
-def test_top_unit_is_the_first_candidate_whose_native_text_mentions_the_target():
-    """生成説明の画面例の値だけが質問の語に一致する候補は起点にしない (#730)。"""
-    heading = "Ａシステム管理-(6)パラメータ設定\n"
-    described = _parent(
-        1,
-        ["Ａシステム管理-(6)パラメータ設定"],
-        source="システム管理.pdf",
-        text=heading + "回答用本文: 更新確認ダイアログ。画面例では締め対象年月=令和6年12月、出荷予定年月=令和6年9月。",
-    )
-    described.metadata.setdefault("layout", {})["native_text_ranges"] = [
-        {"record_id": "r1", "page": 1, "start": 0, "end": len(heading)}
-    ]  # 生成説明は原文ではない
-    native = _native(2, ["Ⅴ．締め処理"], "出荷予定年月は予定月変更ボタンで変更します。")
-    sibling = _native(3, ["Ⅴ．締め処理"], "①処理年月を確認します。")
-    ordered = [(r.id, r) for r in (described, native, sibling)]
-
-    assert [k for k, _ in _same_unit_first(ordered, "出荷予定年月を変更するには、どうしたらよいか。")] == ["p2", "p3", "p1"]
-    # 対象が解析本文のどこにもなければ従来どおり先頭が起点
-    assert [k for k, _ in _same_unit_first(ordered, "処理年月の確認方法")] == ["p1", "p2", "p3"]
-
-
 def test_native_ranges_of_later_candidates_are_reserved_in_the_budget():
     """先頭の候補の生成説明に予算を使い切らせず、後続の親の短い原文範囲を残す (#730)。"""
     first = _parent(1, ["（１）パラメータ設定"], source="システム管理.pdf", text="回答用本文: 画面の説明。" * 300)
@@ -91,29 +70,6 @@ def test_native_ranges_of_later_candidates_are_reserved_in_the_budget():
     spans = evidence_spans("出荷予定年月を変更するには", [first, later], budget=2000)
 
     assert any("予定月変更ボタン" in s["text"] for s in spans)
-
-
-def test_reserve_follows_the_order_after_definition_sort():
-    """定義質問で候補が並べ替わっても、取り置きは並べ替え後の後続候補の原文範囲で数える (#744)。"""
-    step = "①伝票を選びます。②内容を確認します。③保存ボタンを押します。④一覧に戻ります。⑤終了します。"
-
-    def native_pair(index, marker):
-        text = (step * 10)[:500] + "\n" + ((step * 10)[:480] + marker)
-        record = _parent(index, ["概要"], source=f"手順{index}.pdf", text=text)
-        record.metadata.setdefault("layout", {})["native_text_ranges"] = [
-            {"record_id": f"r{index}a", "page": index, "start": 0, "end": 500},
-            {"record_id": f"r{index}b", "page": index, "start": 501, "end": len(text)},
-        ]
-        return record
-
-    first = native_pair(1, "⑥締め処理を行います。")
-    defined = _parent(
-        2, ["用語"], source="用語集.pdf", text="「予定月」とは、出荷を予定している年月です。" + "回答用本文: 画面の説明。" * 200
-    )
-    last = native_pair(3, "⑥予定月変更ボタンを押します。")
-    spans = evidence_spans("「予定月」とは何ですか", [first, defined, last], budget=2700)
-
-    assert any("⑥予定月変更ボタン" in s["text"] for s in spans)
 
 
 def test_spans_keep_heading_sources_without_unused_business_classification():

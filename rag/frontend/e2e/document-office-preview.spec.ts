@@ -1,6 +1,7 @@
+import structuredSource from "./fixtures/structured-source-reader.json";
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
-import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth, expectNoPageOverflow } from "./_helpers";
 
 function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
@@ -194,25 +195,46 @@ test("Office の非 PDF artifact を PDF iframe で開かない", async ({ page 
   await expect(page.getByText(OFFICE_REPROCESS_NOTICE)).toHaveCount(0);
 });
 
-test("Excel→JSONL の処理後のタブは共通の案内を表示する", async ({ page }) => {
-  // 合成の構造化レコードの JSONL（処理後のプレビューの記録ごとの表示は未対応。#2679）。
-  await mockWorkspace(page, {
-    object_storage_path: "prepared/doc-1.jsonl",
-    content_type: "application/vnd.production-ready.structured-records+jsonl",
-    file_name: "report.jsonl",
-    profile: "excel_to_jsonl",
-    converted: true,
+for(const source of ["csv","xlsx","docx"] as const) {
+  test(`JSONLの構造化原文で選択した記録を強調する (${source})`,{tag:"@responsive"},async({page},testInfo)=>{
+    await mockWorkspace(page,{object_storage_path:"prepared/synthetic.jsonl",content_type:"application/vnd.production-ready.structured-records+jsonl",file_name:"synthetic.jsonl",profile:source === "xlsx" ? "excel_to_jsonl" : source === "docx" ? "word_to_jsonl" : "csv_to_jsonl",converted:true});
+    const blocks=structuredSource[source].window.blocks;
+    const anchor=structuredSource[source].element_id;
+    const selected=blocks.find(block=>block.id===anchor)!;
+    await page.route("**/recipes/recipe-1/extraction-view?**",route=>route.fulfill({json:ok({payload:{raw_text:blocks.map(b=>b.text).join("\n"),elements:blocks.map((block,order)=>({element_id:block.id,kind:block.kind,text:block.text,order,source_parser:"structured_records_jsonl",metadata:{}}))},offset:0,total:blocks.length,limit:25,complete:true})}));
+    await page.route("**/recipes/recipe-1/chunk-window?**",route=>route.fulfill({json:ok({items:[{document_id:"doc-1",chunk_id:"structured-chunk",chunk_index:0,text:selected.text,element_ids:[anchor],metadata:{}}],offset:0,total:1,limit:25,complete:true})}));
+    await page.route("**/api/documents/doc-1",route=>route.fulfill({json:ok({...documentDetail,file_name:`synthetic.${source}`})}));
+    const requests:URLSearchParams[]=[];
+    await page.route("**/recipes/recipe-1/reader?**",route=>{requests.push(new URL(route.request().url()).searchParams);return route.fulfill({json:ok({...structuredSource[source].window,revision:"er-recipe-1-r1"})});});
+    await page.goto("/documents/doc-1");
+    const reader=page.getByTestId("document-preview-pane").getByTestId("evidence-reader");
+    await page.getByTestId("document-preview-pane").scrollIntoViewIfNeeded();
+    await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`structured-source-initial-${source}.png`),animations:"disabled"});
+
+    await expect(reader.locator("mark").first()).toBeVisible();
+    expect(requests[0].get("expected_revision")).toBe("er-recipe-1-r1");
+    await expect(reader.getByRole("table").last()).toBeVisible();
+    const inspector=page.getByTestId("document-inspector-pane");
+    await inspector.getByRole("tab",{name:"構造化要素",exact:true}).click();
+    const element=inspector.getByRole("button").filter({hasText:selected.text.split("\n")[0]}).last();
+    await element.focus();await page.keyboard.press("Enter");
+    await expect.poll(()=>requests.some(query=>query.get("element_id")===anchor)).toBe(true);
+    await inspector.getByRole("tab",{name:/Chunk \/ Citation/}).click();
+    await page.getByTestId("document-chunk-list").getByRole("button").filter({hasText:selected.text.split("\n")[0]}).click();
+    await expect(reader.locator("mark").first()).toBeVisible();
+
+    await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`structured-source-${source}.png`),animations:"disabled"});
+    await page.getByTestId("document-preview-pane").getByRole("tab",{name:"処理後",exact:true}).click();
+    await expect(reader).toBeVisible();
+    await expect(page.getByText(UNSUPPORTED_NOTICE,{exact:true})).toHaveCount(0);
+    await expectNoPageOverflow(page);
+    if (testInfo.project.name === "desktop") {
+      for (const [theme, width] of [["light", 1920], ["dark", 1280]] as const) {
+        await page.setViewportSize({width, height:1080});
+        await page.evaluate(dark => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+        await expectNoPageOverflow(page);
+        await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`structured-source-${source}-${theme}.png`),animations:"disabled"});
+      }
+    }
   });
-
-  await page.goto("/documents/doc-1");
-
-  const previewPanel = page
-    .getByRole("heading", { name: "原本プレビュー" })
-    .locator("xpath=ancestor::section[1]");
-  // 処理前（Office の原本）も処理後（JSONL）も、同じ 1 文の案内になる。
-  await expect(previewPanel.getByText(UNSUPPORTED_NOTICE, { exact: true })).toBeVisible();
-  await previewPanel.getByRole("tab", { name: "処理後" }).click();
-  await expect(previewPanel.getByRole("tab", { name: "処理後" })).toHaveAttribute("aria-selected", "true");
-  await expect(previewPanel.getByText(UNSUPPORTED_NOTICE, { exact: true })).toBeVisible();
-  await expect(previewPanel.getByText(OFFICE_REPROCESS_NOTICE)).toHaveCount(0);
-});
+}

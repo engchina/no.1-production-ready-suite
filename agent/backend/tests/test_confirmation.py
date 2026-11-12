@@ -62,7 +62,6 @@ from app.features.agent.confirmation import (
     response_instructions,
     response_record,
     validate_answers,
-    validation_premises,
 )
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_KEY,
@@ -83,7 +82,7 @@ from app.features.agent.support_task import (
     nl2sql_settles,
     nl2sql_skip_step,
 )
-from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
+from app.features.agent.tools import ToolPolicy, ToolResult
 from app.main import app
 from app.settings import get_settings
 
@@ -132,7 +131,6 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(
         monkeypatch, outputs={"nl2sql_query": _nl2sql_query, "rag_search": _rag_search}
     )
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     # 台本のモデルはツールを呼ばずに答えるので、ツールで確かめていない回答の拒答（#1835）は外す
     # （ここで確かめるのは確認の往復。拒答のガードは test_tool_grounding.py）。
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
@@ -738,118 +736,6 @@ def test_rag_clarification_becomes_a_card_and_the_answer_is_passed_as_conditions
     assert second.confirmations == []
 
 
-def test_validation_premises_are_the_answered_items() -> None:
-    """最終の検証に渡す前提は、答えた確認事項の文と答え（選択肢の名前・自由入力）（#1898）。
-
-    この Run の Agent 自身の確認（答えたものだけ）と、前の Run の確認に答えて作った Run の
-    `clarification_response`。「確認せずに回答」・答えを待つ確認は前提にしない。
-    """
-    item = item_from_arguments(ASK_ARGUMENTS)
-    answered = ConfirmationRequest(
-        source="agent",
-        items=[item],
-        status="answered",
-        answers=[ConfirmationAnswer(item_id="item_1", option_ids=["option_2"])],
-    )
-    other = ConfirmationRequest(
-        source="agent",
-        items=[item],
-        status="answered",
-        answers=[ConfirmationAnswer(item_id="item_1", other_text="  先月 と 今月  ")],
-    )
-    pending = ConfirmationRequest(source="agent", items=[item])
-    response = {
-        "source": "rag",
-        "action": "answer",
-        "entries": [
-            {"item_id": "screen", "prompt": "どの画面の操作ですか？", "selected": ["受注入力"]},
-            {"item_id": "empty", "prompt": "空", "selected": [], "other_text": ""},
-        ],
-    }
-
-    premises = validation_premises(
-        {RESPONSE_METADATA_KEY: response}, [answered, other, pending, answered]
-    )
-
-    assert premises == [
-        {"question": "どの画面の操作ですか？", "answer": "受注入力"},
-        {"question": "どの期間の売上を見ますか？", "answer": "今年度"},
-        {"question": "どの期間の売上を見ますか？", "answer": "先月 と 今月"},
-    ]
-    skipped = {**response, "action": "skip"}
-    assert validation_premises({RESPONSE_METADATA_KEY: skipped}, [pending]) == []
-    assert validation_premises({}, []) == []
-
-
-def test_final_validation_receives_the_agent_confirmation_answer(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    """Agent 自身の確認の答えを、最終の検証（rag_validate_answer）に前提として渡す（#1898）。"""
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
-    _script(
-        monkeypatch,
-        _ask("call-ask"),
-        [function_call("rag__rag_search", {"query": "売上 今年度"}, call_id="call-1")],
-        [assistant_message("今年度の売上は 1,200 です。")],
-    )
-    run = _run()
-    runtime_repository.decide_confirmation(
-        run.id,
-        run.confirmations[0].id,
-        action="answer",
-        answers=[ConfirmationAnswer(item_id="item_1", option_ids=["option_2"])],
-    )
-    resumed = _resume(run.id)
-
-    assert resumed.status == RunStatus.COMPLETED
-    [call] = mcp.calls_of("rag_validate_answer")
-    assert call["arguments"]["premises"] == [
-        {"question": "どの期間の売上を見ますか？", "answer": "今年度"}
-    ]
-
-
-def test_final_validation_receives_the_tool_confirmation_answer(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    """前の Run の RAG の確認への答え（`clarification_response`）も前提として渡す（#1898）。
-
-    答えの無い Run（確認を出した Run）の検証には前提を付けない。
-    """
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
-    _script(
-        monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
-        [assistant_message("どの画面の操作ですか？（受注入力 / 請求）")],
-    )
-    first = _run("受注を取り消す手順は？")
-    outcome = runtime_repository.decide_confirmation(
-        first.id,
-        first.confirmations[0].id,
-        action="answer",
-        answers=[ConfirmationAnswer(item_id="screen", option_ids=["option_1"])],
-    )
-    assert outcome.next_run is not None
-    _script(
-        monkeypatch,
-        [
-            function_call(
-                "rag__rag_search",
-                {"query": "取り消し 手順", "conditions": {"screen": "受注入力"}},
-                call_id="call-2",
-            )
-        ],
-        [assistant_message("受注入力の画面で取り消します。")],
-    )
-    second = _execute(outcome.next_run.id)
-
-    assert second.status == RunStatus.COMPLETED
-    calls = mcp.calls_of("rag_validate_answer")
-    assert all("premises" not in call["arguments"] for call in calls[:-1])
-    assert calls[-1]["arguments"]["premises"] == [
-        {"question": "どの画面の操作ですか？", "answer": "受注入力"}
-    ]
-
-
 def test_rag_skip_answers_with_assumptions_without_asking_again(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
@@ -907,10 +793,10 @@ def test_tool_clarification_is_skipped_only_when_not_asking() -> None:
     ).skips_tool_clarification
 
 
-def test_rag_search_gets_skip_clarification_when_the_agent_does_not_ask(
+def test_rag_search_never_gets_skip_clarification(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """確認しない Run は Control Plane が rag_search に skip_clarification を付ける（#2117）。"""
+    """RAG の検索に確認を飛ばす引数は無い（RAG #4799）ので、確認しない Run でも付けない。"""
     _script(
         monkeypatch,
         [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
@@ -926,7 +812,7 @@ def test_rag_search_gets_skip_clarification_when_the_agent_does_not_ask(
         [assistant_message("画面ごとに示します。")],
     )
     _run("受注を取り消す手順は？")
-    assert mcp.calls_of("rag_search")[-1]["arguments"]["skip_clarification"] is True
+    assert "skip_clarification" not in mcp.calls_of("rag_search")[-1]["arguments"]
 
 
 def test_multiple_rag_clarification_is_a_multiple_selection_card() -> None:
@@ -1259,45 +1145,6 @@ def test_option_grounding_ignores_spacing_width_and_trailing_notes() -> None:
     ]
 
 
-def test_final_validation_receives_the_data_query_results(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    """最終の検証に、この Run の業務データ（NL2SQL）の照会の結果を data_results で渡す（#1950）。
-
-    資料とデータを組み合わせた回答の件数・金額の段落を、資料の根拠だけで外さないようにする。
-    SQL を作らずに確認事項を返した照会（needs_clarification）は渡さない。
-    """
-    from app.features.agent.answer_validation import validation_data_results
-
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
-    _script(
-        monkeypatch,
-        [
-            function_call("rag__rag_search", {"query": "部門 売上 規程"}, call_id="call-1"),
-            function_call(
-                "nl2sql__nl2sql_query",
-                {"question": GOAL, "profile_id": PROFILE},
-                call_id="call-2",
-            ),
-            function_call(
-                "nl2sql__nl2sql_query",
-                {**_ANSWERED_QUERY, "question": "部門別の売上"},
-                call_id="call-3",
-            ),
-        ],
-        [assistant_message("契約条項のとおり、営業の売上は 1,200 です。")],
-    )
-    run = _run()
-    assert run.status == RunStatus.COMPLETED
-    [call] = mcp.calls_of("rag_validate_answer")
-    [data] = call["arguments"]["data_results"]
-    assert data["question"] == "部門別の売上"
-    assert data["sql"].startswith("select department, sum(amount)")
-    assert '"DEPARTMENT": "営業"' in data["result"]
-    assert data["source"] == "データ問い合わせ（NL2SQL）"
-    assert validation_data_results([]) == []
-
-
 # ---- NL2SQL の確認事項の扱い（#2223） ----------------------------------------------------------
 
 _UNRELATED_QUERY = {"question": "表の列の一覧を教えてください。", "profile_id": PROFILE}
@@ -1464,39 +1311,6 @@ def test_schema_question_after_nl2sql_is_asked(
     assert run.status == RunStatus.WAITING_CONFIRMATION
     [confirmation] = run.confirmations
     assert (confirmation.source, confirmation.call_id) == ("agent", "call-col")
-
-
-def test_unanswerable_data_query_is_passed_to_the_final_validation() -> None:
-    """SQL を作れないと返した照会（unanswerable）も理由つきで data_results に入れる（#2232）。
-
-    「要る列が無いので集計できない」の結論を、資料の根拠だけで外さない。実行の失敗（error）と、
-    まだ SQL を作っていない確認（needs_clarification）は入れない。
-    """
-    from app.features.agent.answer_validation import validation_data_results
-    from app.features.agent.runtime import RunStep
-
-    def step(question: str, output: dict[str, Any]) -> RunStep:
-        return RunStep(
-            run_id="run-x",
-            status="completed",
-            tool_call=ToolCall(
-                name="nl2sql__nl2sql_query",
-                arguments={"question": question, "profile_id": PROFILE},
-            ),
-            tool_result=ToolResult(name="nl2sql__nl2sql_query", success=True, output=output),
-        )
-
-    message = "期間を絞る日付の列が schema にありません。"
-    steps = [
-        step("期間ごとの件数", {"status": "unanswerable", "error_message": message}),
-        step("失敗した照会", {"status": "error", "error_message": "接続できません。"}),
-        step("確認の照会", nl2sql_needs_clarification()),
-        step("理由の無い照会", {"status": "unanswerable", "error_message": ""}),
-    ]
-    [data] = validation_data_results(steps)
-    assert data["question"] == "期間ごとの件数"
-    assert data["sql"] == ""
-    assert json.loads(data["result"]) == {"status": "unanswerable", "message": message}
 
 
 # ---- ツールのエラーの後の確認（#2234） ----------------------------------------------------------

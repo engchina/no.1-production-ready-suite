@@ -1,3 +1,4 @@
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation, useWorkspaceActive, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
@@ -5,7 +6,6 @@ import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-
 import {
   Button,
   EmptyState,
-  StatusBadge,
   PageHeader,
   FormStatus,
   Skeleton,
@@ -23,7 +23,6 @@ import {
   LoadMoreFooter,
 } from "@production-ready/ui";
 
-import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
@@ -115,6 +114,7 @@ export function SqlToQuestionPage() {
   const [reverseLoading, setReverseLoading] = useState(false);
   const reverseInFlight = useRef(false);
   const [loadError, setLoadError] = useState("");
+  const [loadUpdatedAt, setLoadUpdatedAt] = useState(0);
   const [actionError, setActionError] = useState("");
   const [sqlError, setSqlError] = useState("");
   const [structureError, setStructureError] = useState("");
@@ -139,6 +139,10 @@ export function SqlToQuestionPage() {
         );
         if (signal.aborted || sequence !== loadSequence.current) return;
         setProfiles(profilePage.items);
+        if (!profilePage.items.length) {
+          setLoadError("");
+          setLoadUpdatedAt(Date.now());
+        }
         // 保存した業務プロファイルが一覧（この画面の選択肢）に無い（削除・アーカイブ・利用権限の解除）ときは、
         // 先頭のプロファイルへ切り替える。残すと usage-context が 404 / 403 になり、再読込でも抜けられない（#913）。
         setSelectedProfileId((current) =>
@@ -162,7 +166,6 @@ export function SqlToQuestionPage() {
   const loadReferenceData = useCallback((origin: "header" | "notice" | null) => {
     setLoading(true);
     setRefreshOrigin(origin);
-    setLoadError("");
     return requestReferenceData();
   }, [requestReferenceData]);
 
@@ -180,7 +183,6 @@ export function SqlToQuestionPage() {
     detailSequence.current = sequence;
     void runScopedRequest(async (signal) => {
       setLoading(true);
-      setLoadError("");
       try {
         const params = new URLSearchParams({ limit: "100", profile_id: selectedProfileId });
         const [profile, page] = await Promise.all([
@@ -216,6 +218,8 @@ export function SqlToQuestionPage() {
         );
         setSchemaPaging({ cursor: page.next_cursor, total: page.total });
         setSchemaLoadMoreError("");
+        setLoadUpdatedAt(Date.now());
+        setLoadError("");
       } catch (error) {
         if (!isAbortError(error) && sequence === detailSequence.current) {
           setLoadError(actionableError(error, t("sqlToQuestion.error.load")));
@@ -415,20 +419,24 @@ export function SqlToQuestionPage() {
         ]}
       />
       <PageBody wide className="grid gap-4">
-        <PageNotice
-          notice={loadError ? { tone: "danger", message: loadError } : null}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={loading && refreshOrigin === "notice"}
-              disabled={loading && refreshOrigin !== "notice"}
-              onClick={() => void loadReferenceData("notice")} icon={RefreshCw}>
-              <span>{t("sqlToQuestion.action.reload")}</span>
-            </Button>
-          }
-        />
+        {loadError ? (
+          loadUpdatedAt > 0 ? (
+            <DataLoadStaleNotice
+              error={loadError}
+              dataUpdatedAt={loadUpdatedAt}
+              onRetry={() => void loadReferenceData("notice")}
+              retrying={loading}
+            />
+          ) : (
+            <DataLoadFailure
+              error={loadError}
+              fallback={t("sqlToQuestion.error.load")}
+              onRetry={() => void loadReferenceData("notice")}
+              retrying={loading}
+              testId="page-data-load-failed"
+            />
+          )
+        ) : null}
 
         <DbObjectManagementTabs
           activeView={activePanel}
@@ -715,10 +723,11 @@ function SchemaPreview({
   }
 
   return (
-    <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
-      <div className="flex flex-wrap gap-2">
-        <StatusBadge icon={false} variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
-      </div>
+    <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
+      {/* 業務プロファイルの名前は状態ではないので、バッジにせず通常の文字で出す（#4801）。 */}
+      <p className="min-w-0 text-xs font-medium text-fg-muted [overflow-wrap:anywhere]" data-testid="sql-to-question-schema-profile">
+        {profile ? profileDisplayLabel(profile) : "-"}
+      </p>
       <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Database size={16} aria-hidden="true" />
         {t("sqlToQuestion.schema.title")}

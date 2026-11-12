@@ -5,9 +5,10 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import Literal, Self
 
 from pr_backend_core.api.validation import validation_error_messages
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -105,9 +106,10 @@ SUPPORTED_CONTENT_KIND_FILTERS = {
     "email",
     "slide",
     "sheet",
-    # 取込機能が生む合成 chunk(項目抽出 / 章節ナビゲーション要約)
+    # 取込機能が生む合成 chunk(項目抽出 / 章節ナビゲーション要約 / 文書全体の要約)
     "field",
     "section_summary",
+    "document_summary",
 }
 
 
@@ -225,13 +227,9 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    # サーバーで原文照合した選択の前提。外部入力・API出力には含めない。
-    _rule_selection_scope: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _rule_selection_state: dict[str, Any] = PrivateAttr(default_factory=dict)
-
     query: str = Field(..., min_length=1)
     # 利用者の元の質問(#2261)。呼び出し元(業務 Agent)が検索文 query を短く言い換えたときに渡す。
-    # 条の目録から文書・条を選ぶ段だけが query と合わせて使う(検索そのものは query で行う)。
+    # 回答の要求の単位とプロファイルの知識の照合に使う(検索そのものは query で行う)。
     original_question: str | None = Field(default=None, max_length=8000)
     top_k: int = Field(
         default_factory=search_top_k_default,
@@ -253,16 +251,8 @@ class SearchRequest(BaseModel):
     retrieval_only: bool = Field(
         default=False,
         description=(
-            "回答フローを通らずに検索だけを行う(質問拡張・条の選択・回答の生成の LLM を呼ばない)。"
+            "回答フローを通らずに検索だけを行う(回答の生成の LLM を呼ばない)。"
             "KB の検索テストとレシピの検索比較が使う(#593)。"
-        ),
-    )
-    auto_field_filter_excluded: list[str] = Field(
-        default_factory=list,
-        max_length=MAX_EXTRACTION_FIELD_CONDITIONS,
-        description=(
-            "質問から読み取った抽出項目の条件のうち、使わない項目の名前(画面で利用者が外した条件。"
-            "#652)。"
         ),
     )
     conditions: dict[str, str] = Field(
@@ -278,7 +268,7 @@ class SearchRequest(BaseModel):
         description=(
             "False なら回答を生成しない(RAG 検索の画面。#649)。根拠を集め終えるまで(質問の理解・"
             "拡張・文書の検索・回答フロー・章節の拡張・要求ごとの根拠の確認)はチャットと同じ工程で、"
-            "同じ LLM(質問拡張・条の選択・CRAG の根拠確認など)を呼ぶ。回答の生成と検査はしない"
+            "同じ LLM(画面の選択など)を呼ぶ。回答の生成と検査はしない"
             "(#3506)。"
         ),
     )
@@ -434,7 +424,7 @@ class SearchResponse(BaseModel):
     # 作った回答を保存できなかった記録（回答は返し、画面が「保存できなかった」ことを出す。#2342）。
     storage_failures: list[StorageFailure] = Field(default_factory=list)
     # 回答の注意書き（システム設定の文。#2405）。backend が回答の確定の後に付け、
-    # 回答の本文・会話の履歴・回答の検証には入れない。確認の質問・無効のときは None。
+    # 回答の本文・会話の履歴には入れない。確認の質問・無効のときは None。
     notice: str | None = None
     # 標準回答による評価の入力(回答の記録に保存するものと同じ。#591)。応答には出さず、
     # 品質評価が同じプロセスの中で回答の根拠・引用・実行記録を受け取るためだけに使う。
@@ -703,7 +693,7 @@ class AnswerRecordSummary(BaseModel):
     question: str
     rewritten_question: str | None = None
     confidence: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class AnswerRecordDetail(AnswerRecordSummary):

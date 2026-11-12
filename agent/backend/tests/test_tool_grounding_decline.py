@@ -78,7 +78,6 @@ _NO_EVIDENCE = {
 def mcp(monkeypatch: MonkeyPatch, tmp_path: Path) -> Iterator[FakeProductMcp]:
     """資料の検索（RAG）だけを持つ業務 Agent。"""
     fake = fake_product_mcp(monkeypatch)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
     # ツール権限は保存先の状態（ほかのテストの変更）に依らず、すべて許可にする（並列・直列のどちら
     # でも同じ結果にする）。
@@ -266,12 +265,6 @@ def test_decline_without_search_after_the_retry_is_refused_as_declined(
         "rag_outcome": None,
         "signals": [],
     }
-    # 最終の検証の成果物は、ツールで確かめずに答えた回答の拒答と同じ（画面の説明は変えない）。
-    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
-    assert (validation.content["status"], validation.content["reason"]) == (
-        "skipped",
-        tool_grounding.REASON_NO_TOOL_GROUNDING,
-    )
     assert _grounding_events(run) == [
         {"action": "retry", "original_answer": DECLINED, "declined": True},
         {"action": "refused", "original_answer": DECLINED, "declined": True},

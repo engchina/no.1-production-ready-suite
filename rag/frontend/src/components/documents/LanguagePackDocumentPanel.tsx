@@ -5,6 +5,7 @@ import { Banner, Button, Disclosure, FormStatus, SelectField, Skeleton, StatusBa
 
 import { api, type DocumentRecipeView, type IngestionJobPhase, type LanguagePackDocumentUse } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackComparison } from "@/components/settings/LanguagePackHistoryCard";
 import { formatDateTime } from "@/lib/format";
@@ -87,7 +88,7 @@ function ReleaseSnapshot({ id, releaseId, label }: { id: string; releaseId: stri
   return <Disclosure variant="card" surface="sunken" size="sm" summary={label} open={open} onOpenChange={setOpen} summaryProps={{ "data-testid": `${id}-toggle` }} data-testid={id}>
     {/* 閉じている間は query が無効でも isPending のままなので、読み込み中は開いて取得しているときだけ描く（計時は開いたときから。#4597）。 */}
     {snapshot.isPending ? open ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey={`document-language-release:${releaseId}`}><Skeleton className="h-40 w-full" /></TimedLoadingState> : null
-      : snapshot.isError ? isUnreadableReleaseError(snapshot.error) ? <Banner severity="warning">{t("settings.language.release.unreadableSnapshot")}</Banner> : <ApiErrorState error={snapshot.error} fallback={t("settings.language.history.loadError")} onRetry={() => void snapshot.refetch()} />
+      : snapshot.isError ? isUnreadableReleaseError(snapshot.error) ? <Banner severity="warning">{t("settings.language.release.unreadableSnapshot")}</Banner> : <DataLoadFailure error={snapshot.error} fallback={t("settings.language.release.snapshotLoadError")} onRetry={() => void snapshot.refetch()} layout="field" testId={`${id}-load-failed`} />
       : <TextareaField id={`${id}-value`} label={label} labelHidden rows={8} width="full" readOnly value={JSON.stringify(snapshot.data.effective, null, 2)} />}
   </Disclosure>;
 }

@@ -7,7 +7,7 @@ from typing import Any
 
 from rag_engine.parsing.content_labels import content_labels
 
-# 図の中の文字の record（Docling・MinerU・Vision の解析が図と同じ bbox で作る）。図そのものではなく、
+# 図の中の文字の record（Docling・Vision の解析が図と同じ bbox で作る）。図そのものではなく、
 # 持ち主の図の文字として扱う（#3455）。
 PICTURE_OCR_TEXT_RAW_TYPE = "picture_ocr_text"
 

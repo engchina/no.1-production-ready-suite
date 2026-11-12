@@ -8,7 +8,6 @@ from typing import Literal
 from rag_pipeline_core.vector_index import resolve_vector_index
 
 from app.config import Settings, get_settings
-from app.rag.step_models import STEP_MODEL_SETTINGS
 from app.schemas.common import JsonValue
 from app.schemas.search import SearchDiagnostics, SearchRequest
 
@@ -66,19 +65,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "rrf_k": resolved_settings.rag_rrf_k,
         "vector_index_profile": resolved_settings.rag_vector_index_profile,
         "oracle_vector_target_accuracy": _effective_vector_target_accuracy(resolved_settings),
-        "query_strategy": resolved_settings.rag_query_strategy,
-        "answer_flow": resolved_settings.rag_answer_flow,
         "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
         "rerank_enabled": resolved_settings.rag_rerank_enabled,
-        "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
-        # 条の目録から根拠の条を選ぶ段(#2254)。
-        "article_catalog_enabled": resolved_settings.rag_article_catalog_enabled,
-        "article_catalog_max_documents": resolved_settings.rag_article_catalog_max_documents,
-        "article_catalog_context_records": resolved_settings.rag_article_catalog_context_records,
-        "article_catalog_scope_documents": resolved_settings.rag_article_catalog_scope_documents,
-        "request_coverage_retrieval_enabled": (
-            resolved_settings.rag_request_coverage_retrieval_enabled
-        ),
         # 業務ガイドの手順ごとの検索と追加の検索の枠(#2395)。
         "guide_step_retrieval_enabled": resolved_settings.rag_guide_step_retrieval_enabled,
         "guide_step_max_queries": resolved_settings.rag_guide_step_max_queries,
@@ -102,36 +90,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
-        "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
         # 回答の LLM の時間の短縮(#1499)。
-        "strategy_reasoning_effort": resolved_settings.rag_strategy_reasoning_effort,
-        "judge_reasoning_effort": resolved_settings.rag_judge_reasoning_effort,
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
-        # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
-        "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
-        # 段ごとのモデルと段の推論の量(質問の対象の役割の判定 #4351・表の行の条件 #4349・
-        # 推導の監査の判定 #4565 と理由 #4564)。
-        **{
-            f"{step.key}_model": getattr(resolved_settings, step.field)
-            for step in STEP_MODEL_SETTINGS
-        },
-        **{
-            f"{step.key}_reasoning_effort": getattr(resolved_settings, step.effort_field)
-            for step in STEP_MODEL_SETTINGS
-            if step.effort_field
-        },
-        "crag_compact_input": resolved_settings.rag_crag_compact_input,
-        # CRAG の評価の候補の短い ID(#1864)。
-        "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,
-        # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
-        "answer_audit_compact_reasons": resolved_settings.rag_answer_audit_compact_reasons,
-        "answer_max_correction_rounds": resolved_settings.rag_answer_max_correction_rounds,
-        "answer_audit_mode": resolved_settings.rag_answer_audit_mode,
-        "answer_evidence_refinement_mode": resolved_settings.rag_answer_evidence_refinement_mode,
-        "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
-        "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
-        "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,
-        "query_expansion_max_queries": resolved_settings.rag_query_expansion_max_queries,
         "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
         "search_top_k_default": resolved_settings.rag_search_top_k_default,
         "guardrails_input_enabled": resolved_settings.rag_guardrails_input_enabled,
@@ -174,21 +134,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "guide_step_chunks_per_step": resolved_settings.rag_guide_step_chunks_per_step,
         "guide_step_deadline_seconds": resolved_settings.rag_guide_step_deadline_seconds,
         "guide_reference_max_chunks": resolved_settings.rag_guide_reference_max_chunks,
-        "article_catalog_max_articles": resolved_settings.rag_article_catalog_max_articles,
-        "article_catalog_original_question_search": (
-            resolved_settings.rag_article_catalog_original_question_search
-        ),
-        "article_catalog_refine_articles": resolved_settings.rag_article_catalog_refine_articles,
-        "article_catalog_refine_candidates": (
-            resolved_settings.rag_article_catalog_refine_candidates
-        ),
-        "article_catalog_output_token_cap": resolved_settings.rag_article_catalog_output_token_cap,
-        "article_catalog_review_enabled": resolved_settings.rag_article_catalog_review_enabled,
-        # 用語・回答ルール・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
-        "runtime_rules_confirmation_enabled": (
-            resolved_settings.rag_runtime_rules_confirmation_enabled
-        ),
-        "runtime_rules_answer_enabled": resolved_settings.rag_runtime_rules_answer_enabled,
+        # 用語・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
         "runtime_terms_search_enabled": resolved_settings.rag_runtime_terms_search_enabled,
         "runtime_terms_answer_enabled": resolved_settings.rag_runtime_terms_answer_enabled,
         "support_guide_enabled": resolved_settings.rag_support_guide_enabled,
@@ -201,10 +147,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
         # 最終照合の入力の分け方(#4141)。
-        "answer_validation_batch_passages": resolved_settings.rag_answer_validation_batch_passages,
-        "answer_validation_max_input_bytes": (
-            resolved_settings.rag_answer_validation_max_input_bytes
-        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

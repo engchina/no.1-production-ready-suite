@@ -297,7 +297,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
           surface: "chat",
           answer: "経費の上限は 10 万円です。",
           citations: [citationChunk],
-          answer_diagnostics: {},
+          answer_diagnostics: { retrieval_counts: { candidate_count: 12, found: 5, passed_to_model: 5, top_score: 0.91, threshold: 0.4 } },
         })
       );
       return;
@@ -327,6 +327,9 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   const details = page.getByTestId("chat-answer-progress-details");
   await expect(page.getByText(/実行記録/)).toHaveCount(0);
   expect(requested).toContainEqual(["trace-chat"]);
+  // 検索の件数は処理の詳細に 1 行だけ。内訳と点数は出さない（#4735）。
+  const retrievalCounts = page.getByTestId("answer-retrieval-counts");
+  await expect(retrievalCounts).toHaveText("候補 12 件 → 基準を通過 5 件 → 回答に使用 5 件");
 
   // 保存された回答の記録には引用の一覧を出さず、引用は回答の枠の「根拠 N 件」の 1 か所だけに出す（#1202）。
   const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });

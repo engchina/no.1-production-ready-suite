@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { toast } from "@/lib/toast";
 import {
   FEEDBACK_ANSWER_REASONS,
@@ -58,11 +59,17 @@ export function FeedbackControls({
 
   if (!traceId || !searchAnswerProfileId) return null;
 
+  if (currentQuery.isError && currentQuery.data === undefined) {
+    return <DataLoadFailure error={currentQuery.error} fallback={t("feedback.controls.loadError")} onRetry={() => void currentQuery.refetch()} retrying={currentQuery.isFetching} testId="feedback-current-load-failed" />;
+  }
+
   return (
+    <>
+      {currentQuery.isError ? <DataLoadStaleNotice error={currentQuery.error} dataUpdatedAt={currentQuery.dataUpdatedAt} onRetry={() => void currentQuery.refetch()} retrying={currentQuery.isFetching} /> : null}
     <SharedFeedbackControls<CitationFeedbackReason>
       className={compact ? undefined : "mt-4"}
       compact={compact}
-      disabled={currentQuery.isLoading}
+      disabled={currentQuery.isLoading || currentQuery.isError}
       value={
         current
           ? {
@@ -118,6 +125,7 @@ export function FeedbackControls({
         toast.success(t("feedback.controls.savedToast"));
       }}
     />
+    </>
   );
 }
 

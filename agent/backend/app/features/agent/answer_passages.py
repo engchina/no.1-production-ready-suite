@@ -1,9 +1,7 @@
 """回答の段落の分け方と、主張ではない段落の決定的な判定（#1277・#1306）。
 
-最終の検証（`answer_validation`）は、RAG の `rag_validate_answer` が段落（`answer_quote`）ごとに
-返す判定で、根拠で確かめられない段落を回答から外す。ところが主張ではない段落（見出し・出典の行・
-利用者への質問・「資料に記載がありません」という不足の文・「資料で確認できず除いた内容」の節）まで
-「確かめられない」として外すと、回答が読みにくくなり、拒答が拒答に見えなくなる（#1289 の評価）。
+回答の根拠の結び付け・確認の質問だけの回答の判定は、主張ではない段落（見出し・出典の行・利用者への質問・
+「資料に記載がありません」という不足の文）を見分ける必要がある。
 
 ここでは、そうした段落をモデルを使わずに判定する。判定は保守的にし、迷うものは主張として扱う
 （確かめられない操作の手順・事実の主張は今までどおり外す）。
@@ -12,24 +10,22 @@
   操作の指示を含むものは見出しにしない。句点で終わらない短い名詞句（「1. 人事評価システムの
   重要度」「補足（資料の記載）」「根拠」。項目・区分・資料の名前か「…とき」「…か」で終わり、
   述語・操作・数量・言い切りの「は」を含まないもの）と、以降の箇条書きを導くだけの導入の文
-  （「根拠は次のとおりです。」）・礼の定型の文も見出しとして扱う（#1469）。規則は RAG の
-  `operation_audit.is_heading` とそろえ、両方のテストが
-  platform/contracts/answer-passages/headings.json の同じ事例で確かめる。
+  （「根拠は次のとおりです。」）・礼の定型の文も見出しとして扱う（#1469）。規則は
+  platform/contracts/answer-passages/headings.json の事例で確かめる。
 - 出典: 「出典：…」「根拠：…」「セクション：…」「ページ：…」「*Locator*: …」などの
   ラベルの行（ラベルの太字・斜体は許す）、文書名・頁・節を示す括弧だけの行、文書名だけの行、
   リンクだけの行、根拠の ID（【証拠 ID: …】・〔証拠 ID: …〕）と文の無い「…」の題・頁の括弧
   だけの行（表の区切りの `|` は許す）、文書名と場所の括弧だけの行（「**システム変更手順書**
   （第 2章 申請）」。#1370）、出典の節（見出しが「出典」「参考資料」など）の行（#1317）。
-  規則は RAG の `operation_audit.is_citation_line` とそろえ、両方のテストが
-  platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる。
+  規則は platform/contracts/answer-passages/citation-lines.json の事例で確かめる。
 - 表の形: Markdown の表の区切りの行（`|---|---|`）・区切り線（`---`）と、区切りの行の直前の
   見出しの行（短い語だけのセル）。表の本文の行は主張のまま（#1317）。
 - 質問: 「？」で終わる文（後ろの「（はい／いいえ）」などの選択肢の括弧は許す）と、情報を
   求める依頼の文（「教えてください」など）、質問の直後の短い選択肢の箇条書き。主張や操作を抱き合わせた文は除く。
 - 不足: 資料に記載が無い・資料からは確かめられないことだけを述べる文と、答えられないと言い切る
   拒答の文（「…示すことはできません」「回答はできません」。#1317）。数量・逆接・操作を含む文は除く。
-- 確かめきれない点・除いた内容の節（最終の検証が足す「根拠と矛盾し除いた内容」「確認が必要な点」
-  など）: その見出しと、その節の行（操作の指示を除く）。
+- 確かめきれない点・除いた内容の節（RAG・モデルが付ける「確認が必要な点」など）: その見出しと、
+  その節の行（操作の指示を除く）。
 - 作業の経過: 業務ガイドが見つからなかったことだけを述べる文（#1452。前置きに主張・数字を含む文と
   操作の指示を含む文は除く）。不足の印にはしない（業務ガイドが無いことは回答の不足ではない）。
 
@@ -44,8 +40,6 @@
 段落の分け方は Agent が自分の回答を組み立て直す（外す・印を付ける・番号を詰める）ための規則で、
 括弧の中の「。」では分けない（#1455）。規則の事例は RAG と共有の契約
 platform/contracts/answer-passages/sentence-splits.json（段落の見え方を 2 つの製品でそろえる）。
-RAG の `rag_validate_answer` の段落の判定は、分け方の一致を前提にせず、判定の `answer_range`
-（渡した回答の中の位置）で Agent の段落に結び付ける（`answer_validation.align_claims`。#3240）。
 """
 
 from __future__ import annotations
@@ -130,24 +124,11 @@ def passage_spans(line: str) -> list[tuple[int, int, str]]:
     return spans
 
 
-def answer_passage_positions(answer: str) -> list[tuple[int, int, str]]:
-    """回答の段落の、回答の中の位置（開始・終了）と原文（行ごとの `passage_spans` の位置を回答の
-    位置にしたもの）。"""
-    positions: list[tuple[int, int, str]] = []
-    offset = 0
-    for line in answer.split("\n"):
-        positions.extend(
-            (offset + start, offset + end, text) for start, end, text in passage_spans(line)
-        )
-        offset += len(line) + 1
-    return positions
-
-
 # ---- 主張ではない段落の判定 --------------------------------------------------------
 
 # 箇条書き・番号の印。
 _BULLET = re.compile(r"^(?:[-*+・•]\s*|[0-9０-９]{1,3}[.)．）]\s*|[（(][0-9０-９]{1,3}[）)]\s*)")
-# 操作の指示（RAG の `is_operation_instruction` と同じ考え方。これを含む段落は主張として確かめる）。
+# 操作の指示（これを含む段落は主張として確かめる）。
 _OPERATION = re.compile(
     r"(?:開き|押し|選び|選択し|入力し|変更し|修正し|登録し|保存し|実行し|実施し|クリックし|削除し"
     r"|申請し|設定し|付与し|解除し|無効にし|有効にし)(?:ます|てください|て頂|ていただ|、|て)"
@@ -225,9 +206,8 @@ _LINK_LINE = re.compile(r"(?:\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)[\s、,，]*)+|h
 _CITATION_SECTION = re.compile(
     r"出典|参照|参考資料|参考|根拠資料|引用元|sources?|references?", re.IGNORECASE
 )
-# 確かめきれない点・除いた内容の節の見出し（Agent の最終の検証が足す「根拠と矛盾し除いた内容」
-# 「確認が必要な点」〔#2738。answer_validation.SECTION_HEADINGS。後者は語の一部に当たらないよう
-# 見出しの全体で比べる〕と、RAG・モデルが付ける同じ意味の見出し）。RAG の回答（`rag_search` の
+# 確かめきれない点・除いた内容の節の見出し（「確認が必要な点」などを見出しの全体で比べ、
+# RAG・モデルが付ける同じ意味の見出しも含む）。RAG の回答（`rag_search` の
 # answer）の末尾の節の見出しは、共有の語彙の `unverified_section_titles`（RAG の言語資源を写さない。
 # #2040・#3240）。
 _UNVERIFIED_SECTION = re.compile(
@@ -292,8 +272,7 @@ _ABSENCE_CLAIM = re.compile(
 # 業務ガイドは見つかりませんでした（`rag_lookup_guides` の結果は0件）。」）。業務ガイドの検索の
 # 結果は検証の根拠に無いので、主張として確かめると必ず外れる。前置きは、業務ガイドを修飾する
 # だけの語（は・が・を・数字・引用を含まない）に限る（「部門長の承認が要る業務ガイドはありません」は
-# 主張）。RAG の `operation_audit.is_guide_not_found` と同じ規則で、両方のテストが
-# platform/contracts/answer-passages/process-notes.json の同じ事例で確かめる。
+# 主張）。規則は platform/contracts/answer-passages/process-notes.json の事例で確かめる。
 _GUIDE_NOT_FOUND = re.compile(
     rf"(?:[^。:：\n]{{1,8}}[:：]\s*)?(?:なお|また|ただし)?[、,]?\s*(?P<lead>[^。\n]{{0,30}}?){_v('guide_words')}"
     rf"(?:は|が|も)[、,]?(?:まだ)?{_v('guide_not_found_endings')}(?:でした)?[。．]?"
@@ -355,8 +334,7 @@ def _heading_title(text: str) -> str | None:
         match = pattern.fullmatch(value)
         if match:
             title = match.group("title").strip().strip("*").strip()
-            # 語に数量（「最長 90 日」）を含む行は、見出しの記法でも主張（#2625。RAG の
-            # `operation_audit.is_value_heading` と同じ規則）。
+            # 語に数量（「最長 90 日」）を含む行は、見出しの記法でも主張（#2625）。
             if (
                 title
                 and not _is_sentence(title)
@@ -388,9 +366,8 @@ def _heading_title(text: str) -> str | None:
     return value if is_lead_in(value) else None
 
 
-# ---- 見出しの名詞句と導入の文（#1469）。RAG の `operation_audit.heading_phrase` /
-# `is_lead_in` と同じ規則で、両方のテストが platform/contracts/answer-passages/headings.json の
-# 同じ事例で確かめる。
+# ---- 見出しの名詞句と導入の文（#1469）。規則は platform/contracts/answer-passages/headings.json の
+# 事例で確かめる。
 # 見出しの後ろの注記の括弧（「補足（資料の記載）」
 # 「2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）」）。
 _HEADING_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)]\s*$")
@@ -443,7 +420,7 @@ _LEAD_IN = re.compile(
 _COURTESY = re.compile(rf"{_v('courtesy_objects')}(?:いただき)?、?ありがとうございます[。．!！]?")
 # 回答の締めくくりの定型の文（#1833。「以上、資料に基づく回答です。」「以上です。」）。
 # 語の組み合わせを固定し、事実の語（値・名前・条件）が入る余地を置かない（検証の抜け道に
-# しない）。RAG の `operation_audit._CLOSING` と同じ規則。
+# しない）。
 _CLOSING = re.compile(
     rf"以上{_v('copulas')}[。．]?"
     rf"|(?:以上[、，,]?\s*(?:が)?\s*)?(?:{_v('closing_source_verbs')}{_v('closing_source_verb_forms')}\s*)?"
@@ -453,7 +430,7 @@ _CLOSING = re.compile(
 # 前の内容をまとめて指すだけの結びの文（#1879。「以上が、締め日を過ぎた場合の取扱いです。」）と
 # 結びのあいさつ（「ご参考になれば幸いです。」）。指す対象（topic）は質問の対象を名詞で言い直す
 # 語に限り、言い切りの「は」・数量・操作・引用を含むもの（「以上が、締め日は 25 日という取扱い
-# です。」）は主張のまま。RAG の `operation_audit` と同じ規則。
+# です。」）は主張のまま。
 _CLOSING_SUMMARY = re.compile(
     r"以上(?:が|で)[、，,]?\s*(?P<topic>[^。！？!?\n「」『』]{0,40}?)"
     rf"{_v('closing_summary_nouns')}{_v('copulas')}[。．]?"
@@ -531,8 +508,7 @@ def list_heading_lines(text: str) -> set[str]:
     番号・箇条書きの行が続く一覧（「申請書に書く 4 項目」の「1. 変更の内容と理由」〜
     「4. 作業の日時」、「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」）の項目と、
     下に内容の無い行は、終わりの語が一覧にあっても主張のまま（段落だけで決めると、一覧の項目を
-    見出しとして監査から外す。#1482 / #1486）。RAG の `operation_audit.list_heading_lines` と
-    同じ規則。
+    見出しとして監査から外す。#1482 / #1486）。
     """
     lines = [line for line in text.split("\n") if line.strip()]
     found = set()
@@ -674,29 +650,6 @@ def _covered_end(run: str, text: str, pieces: list[str]) -> int | None:
     return text.rfind(last) + len(last) if last else None
 
 
-def label_operation_end(label: str, text: str) -> int | None:
-    """名前 `label`（`list_item_label`）が段落 `text` と同じ操作を名前だけで指すとき、名前の
-    最後の語が段落の中で終わる位置（指さなければ None。#2692）。
-
-    名前の語（漢字・片仮名・英数字の並び）がすべて段落の語の部分で書け（「属性訂正」は「属性を
-    先に訂正する」の「属性」と「訂正」）、名前が段落の語の一定の割合を占めるとき対応させる。業務の
-    語は見ない。位置は、1 つの段落が複数の名前を含むとき、文末の述語に近い名前（主の操作）を
-    選ぶのに使う。
-    """
-    runs = _name_runs(label)
-    size = sum(len(run) for run in runs)
-    flat = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
-    pieces = _NAME_RUN.findall(flat)
-    if size < _LABEL_MIN_CHARS or size < _LABEL_MIN_SHARE * sum(len(piece) for piece in pieces):
-        return None
-    end: int | None = None
-    for run in runs:
-        end = _covered_end(run, flat, pieces)
-        if end is None:
-            return None
-    return end
-
-
 def is_heading(text: str) -> bool:
     """見出しだけの段落か。"""
     return _heading_title(text) is not None
@@ -812,8 +765,7 @@ def _is_document_location(value: str) -> bool:
 
     行末の場所の括弧（章・節・頁・シートなどの印を含むもの）を外した残りが、文書を示す語（手順書・規程・
     ファイル名など）を含む短い名前で、述語・操作・言い切りの助詞（は・が・を）を含まないときだけ出典にする。
-    場所の後に本文が続く行（「…（第 2章）では、…」）は主張のまま。RAG の
-    `operation_audit._is_document_location` と同じ規則。
+    場所の後に本文が続く行（「…（第 2章）では、…」）は主張のまま。
     """
     rest = value.strip().rstrip("。．").strip()
     found = False
@@ -847,8 +799,7 @@ def _is_document_section(value: str) -> bool:
     「サンプル法 第12条第5項（届出）」「第 8 章 第105条第1項（届出等）」。行末の括弧（条の見出し）を
     外した残りが章・節・条・項の番号で終わり、その前の名前が短く、数字・句読点・言い切りの助詞
     （は・が・を）・述語・操作を含まないときだけ出典にする。見出しの括弧に文・数量があるもの
-    （「第12条（14 日以内）」）、番号の後に本文が続くもの（「第12条により…」）は主張のまま。RAG の
-    `operation_audit._is_document_section` と同じ規則。
+    （「第12条（14 日以内）」）、番号の後に本文が続くもの（「第12条により…」）は主張のまま。
     """
     rest = value.strip().rstrip("。．").strip()
     if match := _LOCATION_TAIL.search(rest):
@@ -874,8 +825,7 @@ def _is_location_value(value: str) -> bool:
 
     章・節・頁・シート・ファイル名の印を含み、節の題（文でない「…」）・場所の括弧・ファイル名・頁を
     外した残りが、空か、節の参照か、文書の名前（手順書・マニュアル・規程など）だけのもの。数量・言い切りの
-    助詞（は・が・を）・述語・操作を含む値（「本社 3 階の会議室（第 2 章）」）は主張のまま。RAG の
-    `operation_audit._is_location_value` と同じ規則。
+    助詞（は・が・を）・述語・操作を含む値（「本社 3 階の会議室（第 2 章）」）は主張のまま。
     """
     if not _DOCUMENT_MARK.search(value) or _is_sentence(value) or _OPERATION.search(value):
         return False
@@ -907,8 +857,7 @@ def is_citation(text: str) -> bool:
     """出典の行か。
 
     出典・定位子・場所のラベル・文書名・頁・節の括弧・リンク・根拠の ID・文書名と場所だけの段落。
-    RAG の `operation_audit.is_citation_line` と同じ規則で、両方のテストが
-    platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる（#1370・#1833）。
+    規則は platform/contracts/answer-passages/citation-lines.json の事例で確かめる（#1370・#1833）。
     """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
     if not value or "。" in value.rstrip("。"):

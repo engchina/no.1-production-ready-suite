@@ -1,5 +1,5 @@
 import { Download, ExternalLink, Maximize2 } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
@@ -11,6 +11,7 @@ import { SideSheet } from "../ui/side-sheet";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { PagedDataTable } from "./paged-data-table";
 import { DEFAULT_PAGE_SIZE, DEFAULT_PAGINATION_LABELS, type PaginationRange } from "./pagination";
+import { isClampedOverflow } from "./row-title-button";
 
 /**
  * ResultTable（#1154 / #1178）— データの結果（読み取りだけの行と列）を出す部品。チャットの回答の吹き出しの中の
@@ -22,6 +23,7 @@ import { DEFAULT_PAGE_SIZE, DEFAULT_PAGINATION_LABELS, type PaginationRange } fr
  * 明示する。製品は列・行（取得済みの行）・打ち切りの有無を渡すだけにする。行の操作・選択・編集のある一覧は
  * この部品ではなく従来の一覧の型（`DataTable` / `PagedDataTable`）にする（UX 契約 `page-archetypes.md`）。
  * 以前の名前 `ChatResultTable` は別名として残す（ファイルの末尾）。
+ * 回答の本文の表（`AnswerBody`）も同じ表示にする（3 製品で表の出し方を 1 つにする。#4822）。
  */
 
 /** 結果の列。`type` が `number` の列（または NULL を除く値がすべて数値の列）は右寄せにする。 */
@@ -55,6 +57,8 @@ export interface ResultTableLabels {
   cellsTruncated: (chars: string | null) => string;
   /** NULL の表示（空文字と区別する）。 */
   nullValue: string;
+  expandCell?: string;
+  collapseCell?: string;
   viewAll: string;
   /** すべての行のシートの見出し（例「実行結果（60 行）」）。 */
   sheetTitle: (count: string) => string;
@@ -74,7 +78,7 @@ export interface ResultTableLabels {
 
 const countFormatter = new Intl.NumberFormat("ja-JP");
 
-export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
+export const DEFAULT_RESULT_TABLE_LABELS = {
   rows: (count) => `${count} 行`,
   truncatedRows: (count) => `先頭の ${count} 行を取得しました（さらに行があります）`,
   truncatedRowsOfTotal: (count, total) => `先頭の ${count} 行を取得しました（全 ${total} 行）`,
@@ -94,6 +98,8 @@ export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
       ? `${chars} 文字を超える値は、先頭の ${chars} 文字だけを取得しています。`
       : "長い値は先頭だけを取得しています。",
   nullValue: "NULL",
+  expandCell: "全文を表示",
+  collapseCell: "折りたたむ",
   viewAll: "すべての行を見る",
   sheetTitle: (count) => `実行結果（${count} 行）`,
   close: "実行結果を閉じる",
@@ -107,7 +113,7 @@ export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
   pageIndicator: DEFAULT_PAGINATION_LABELS.pageIndicator!,
   prev: DEFAULT_PAGINATION_LABELS.prev,
   next: DEFAULT_PAGINATION_LABELS.next,
-};
+} satisfies ResultTableLabels;
 
 /** 吹き出しの中のプレビューに描く行の上限（それより多い行は「すべての行を見る」で見る）。 */
 export const RESULT_PREVIEW_ROWS = 50;
@@ -128,6 +134,11 @@ export interface ResultFullResultLink {
 }
 
 export interface ResultTableProps {
+  /**
+   * セルの描き方を製品が変えるとき（回答の表の出典の列の印など）。`undefined` を返したセルは部品の既定で描く。
+   * CSV は描き方に関わらずセルの値のまま。
+   */
+  renderCell?: (value: unknown, rowIndex: number, columnIndex: number) => ReactNode | undefined;
   columns: readonly ResultTableColumn[];
   /** 取得した行（列の順の値の配列）。NULL は `null`。 */
   rows: readonly (readonly unknown[])[];
@@ -221,35 +232,71 @@ export function resultRowsToCsv(
 
 /** これより長い値は、全行の表でも最小幅と行数の上限を持たせる。 */
 const LONG_VALUE_CHARS = 40;
+/** 全行の表で、これより長い値には最小幅を持たせ、これ以下の値は折り返さない（狭い画面で列が 1〜2 字ずつに潰れない。#4822）。 */
+const SHORT_VALUE_CHARS = 8;
 
 /** セルの表示。NULL は斜体・淡色の「NULL」（色だけに頼らない）、`preview` は 1 行で省略して title に全文。 */
 export function ResultCell({
   value,
   variant = "full",
   nullLabel = DEFAULT_RESULT_TABLE_LABELS.nullValue,
+  expandLabel = DEFAULT_RESULT_TABLE_LABELS.expandCell,
+  collapseLabel = DEFAULT_RESULT_TABLE_LABELS.collapseCell,
 }: {
   value: unknown;
   variant?: "preview" | "full";
   nullLabel?: string;
+  expandLabel?: string;
+  collapseLabel?: string;
 }) {
   if (isNullResultValue(value)) return <span className="italic text-fg-muted">{nullLabel}</span>;
   const text = resultValueText(value);
   if (variant === "preview")
     return (
-      <span className="block max-w-[20rem] truncate" title={text}>
+      // 省略する幅は sm 以上で 32rem（全角で約 37 字。シートの最大幅と同じ）。狭い画面は表の中の横スクロールを短くするため 20rem のまま（#4822）。
+      <span className="block max-w-[20rem] truncate sm:max-w-[32rem]" title={text}>
         {text}
       </span>
     );
-  // 長い値は列が潰れて行が極端に高くならないよう最小幅を持たせ、6 行で省略して title に全文を出す
-  // （値は DOM に残るので読み上げ・コピー・CSV では全文）。
+  return <FullResultCell key={text} text={text} expandLabel={expandLabel} collapseLabel={collapseLabel} />;
+}
+
+/** 実際に 6 行を超えたセルだけ、その場で全文を開く。値が変わったら閉じた状態で測り直す。 */
+function FullResultCell({ text, expandLabel, collapseLabel }: { text: string; expandLabel: string; collapseLabel: string }) {
+  const id = useId();
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [clipped, setClipped] = useState(false);
   const long = text.length > LONG_VALUE_CHARS;
+  useLayoutEffect(() => {
+    const element = textRef.current;
+    if (!element || !long || expanded) return;
+    const measure = () => setClipped(isClampedOverflow(element));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [long, expanded]);
   return (
-    <span
-      className={cn("block max-w-[32rem] whitespace-pre-wrap", long && "line-clamp-6 min-w-[16rem]")}
-      title={long ? text : undefined}
-    >
-      {text}
-    </span>
+    <div>
+      <span
+        id={id}
+        ref={textRef}
+        className={cn(
+          "block max-w-[32rem] [overflow-wrap:anywhere]",
+          text.length > SHORT_VALUE_CHARS ? "whitespace-pre-wrap" : "whitespace-pre",
+          long ? "min-w-[16rem]" : text.length > SHORT_VALUE_CHARS && "min-w-[8rem]",
+          long && !expanded && "line-clamp-6"
+        )}
+      >
+        {text}
+      </span>
+      {clipped && (
+        <Button variant="ghost" size="sm" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>
+          {expanded ? collapseLabel : expandLabel}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -259,7 +306,10 @@ function resultColumns(
   columns: readonly ResultTableColumn[],
   rows: readonly (readonly unknown[])[],
   variant: "preview" | "full",
-  nullLabel: string
+  nullLabel: string,
+  renderCell?: ResultTableProps["renderCell"],
+  expandLabel?: string,
+  collapseLabel?: string
 ): DataTableColumn<IndexedRow>[] {
   return columns.map((column, index) => {
     const numeric = isNumericResultColumn(rows, index, column.type);
@@ -268,7 +318,10 @@ function resultColumns(
       header: column.name,
       align: numeric ? "right" : "left",
       className: numeric ? "tabular-nums" : undefined,
-      render: (row) => <ResultCell value={row.values[index]} variant={variant} nullLabel={nullLabel} />,
+      render: (row) =>
+        renderCell?.(row.values[index], row.index, index) ?? (
+          <ResultCell value={row.values[index]} variant={variant} nullLabel={nullLabel} expandLabel={expandLabel} collapseLabel={collapseLabel} />
+        ),
     };
   });
 }
@@ -319,6 +372,7 @@ export function resultSummaryText({
 }
 
 export function ResultTable({
+  renderCell,
   columns,
   rows,
   truncated = false,
@@ -345,12 +399,12 @@ export function ResultTable({
   const viewAllRef = useRef<HTMLButtonElement>(null);
   const indexedRows = useMemo<IndexedRow[]>(() => rows.map((values, index) => ({ index, values })), [rows]);
   const previewColumns = useMemo(
-    () => resultColumns(columns, rows, "preview", labels.nullValue),
-    [columns, rows, labels.nullValue]
+    () => resultColumns(columns, rows, "preview", labels.nullValue, renderCell),
+    [columns, rows, labels.nullValue, renderCell]
   );
   const fullColumns = useMemo(
-    () => resultColumns(columns, rows, "full", labels.nullValue),
-    [columns, rows, labels.nullValue]
+    () => resultColumns(columns, rows, "full", labels.nullValue, renderCell, labels.expandCell, labels.collapseCell),
+    [columns, rows, labels.nullValue, renderCell, labels.expandCell, labels.collapseCell]
   );
   const rowCount = rows.length;
   const summary = resultSummaryText({

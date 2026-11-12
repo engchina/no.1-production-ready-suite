@@ -1,3 +1,4 @@
+import { progressCardLayout } from "../../../platform/packages/ui/e2e/progress-card-checks";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
 import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
@@ -155,7 +156,7 @@ const slowSearchStream: TimedChunk[] = [
 
 const knowledgeSearch = searchProgressStream("trace-1");
 
-/** 一致する用語の別名を検索文に加える → 回答ルールの確認 を別の工程（別の span）で進む検索の SSE（#3451）。 */
+/** 一致する用語の別名を検索文に加える工程（span）で進む検索の SSE（#3451）。登録ルールの工程は無い（#4799）。 */
 const knowledgeStepsSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
@@ -175,23 +176,13 @@ const knowledgeStepsSearchStream: TimedChunk[] = [
           ],
         },
       }),
-      knowledgeSearch.start("rules", ragSpan.step("回答ルールの確認")),
+      knowledgeSearch.start("guide", ragSpan.step("文書検索")),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      knowledgeSearch.finish("rules", "done", {
-        details: {
-          fields: [
-            { label: "目的", value: "登録済みの回答ルールを質問に当て、回答の参考にします。" },
-            { label: "結果", value: "一致: 回答ルール A" },
-            { label: "有効な登録", value: "1 件（登録 2 件）" },
-            { label: "一致した回答ルール", value: "回答ルール A" },
-            { label: "影響", value: "一致した回答ルールを回答時の参考情報として渡します。" },
-          ],
-        },
-      }),
+      knowledgeSearch.finish("guide"),
       knowledgeSearch.finish("answer"),
       knowledgeSearch.finish("root"),
       knowledgeSearch.terminal("done"),
@@ -233,8 +224,6 @@ const retrievalOnlySearchStream: TimedChunk[] = [
       retrievalSearch.start("rerank", ragSpan.step("Rerank", "search")),
       retrievalSearch.finish("rerank"),
       retrievalSearch.finish("search"),
-      retrievalSearch.start("coverage", ragSpan.step("要求ごとの根拠の確認", "flow")),
-      retrievalSearch.finish("coverage"),
       retrievalSearch.finish("flow"),
       retrievalSearch.finish("evidence"),
       retrievalSearch.finish("root"),
@@ -410,6 +399,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
     const progress = page.getByTestId("search-run-progress");
+    await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
     const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
     // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
@@ -472,7 +462,7 @@ for (const viewport of [
     await process.screenshot({ path: `test-results/rerank-receipt-${viewport.name}.png` });
     // 開くとタイムラインの後ろ（中の最後の要素）に「処理の詳細」が出る。
     await expect(details).toHaveText("処理の詳細");
-    const timelineBox = await page.getByTestId("search-run-progress-timeline").boundingBox();
+    const timelineBox = await page.getByTestId("search-run-progress-timeline").locator("ol").boundingBox();
     const detailsBox = await details.boundingBox();
     expect(timelineBox && detailsBox && detailsBox.y >= timelineBox.y + timelineBox.height).toBeTruthy();
     await details.click();
@@ -497,7 +487,7 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 
-  test(`一致する用語の別名を検索文に加えると回答ルールの確認を別の工程で順に出す (${viewport.name})`, async ({ page }) => {
+  test(`一致する用語の別名を検索文に加える工程と詳細を出す (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockSearchPage(page, [knowledgeStepsSearchStream]);
 
@@ -505,10 +495,9 @@ for (const viewport of [
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
-    // 実行中: 一致する用語の別名を検索文に加えるが終わり、回答ルールの確認が今の工程（#3451）。
+    // 実行中: 一致する用語の別名を検索文に加えるが終わり、次の工程が今の工程（#3451）。
     const current = page.getByTestId("search-run-progress-current");
-    await expect(current).toContainText("確認と回答に使うルールを選ぶ");
-    await expect(current).toHaveAttribute("data-step-id", spanStepId("rules"));
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("guide"));
     const terms = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}`);
     await expect(terms).toContainText("一致する用語の別名を検索文に加える");
     await page.getByTestId(`search-run-progress-step-${spanStepId("terms")}-toggle`).click();
@@ -516,20 +505,16 @@ for (const viewport of [
     await expect(termsDetails).toContainText("用語 A（別名: 別名 A）");
     await expect(termsDetails).toContainText("一致した用語の別名を補助の検索文に加えます。");
 
-    // 完了後: 2 つの工程はこの順に別の行で、回答ルールの詳細は回答ルールの工程だけに出す。
+    // 完了後: 用語の工程の後に次の工程が別の行で並び、登録ルールの工程は無い。
     const summary = page.getByTestId("search-run-progress-summary");
     await expect(summary).toContainText("処理の経過（3 ステップ", { timeout: 4_000 });
     await summary.click();
     const process = page.getByRole("region", { name: "処理の経過" });
     const termsBox = await terms.boundingBox();
-    const rulesBox = await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}`).boundingBox();
-    expect(termsBox && rulesBox && termsBox.y < rulesBox.y).toBeTruthy();
+    const nextBox = await page.getByTestId(`search-run-progress-step-${spanStepId("guide")}`).boundingBox();
+    expect(termsBox && nextBox && termsBox.y < nextBox.y).toBeTruthy();
     await expect(process.getByText("用語・ルールの確認")).toHaveCount(0);
-    await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-toggle`).click();
-    const rulesDetails = page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-details`);
-    await expect(rulesDetails).toContainText("一致した回答ルール");
-    await expect(rulesDetails).toContainText("一致した回答ルールを回答時の参考情報として渡します。");
-    await expect(rulesDetails).not.toContainText("一致した用語");
+    await expect(process.getByText("確認と回答に使うルールを選ぶ")).toHaveCount(0);
     await process.screenshot({ path: `test-results/answer-progress-terms-rules-${viewport.name}.png` });
     await expectNoPageOverflow(page);
   });
@@ -555,7 +540,6 @@ for (const viewport of [
       ["flow", "回答に使う根拠を検索する", "1"],
       ["search", "検索文から根拠の候補を集める", "2"],
       ["rerank", "質問との関連度で候補を並べ替える", "3"],
-      ["coverage", "要求ごとに根拠の対応を確認する", "2"],
     ] as const) {
       const row = page.getByTestId(`search-run-progress-step-${spanStepId(key)}`);
       await expect(row).toBeVisible();
@@ -794,6 +778,7 @@ const okChatStream: TimedChunk[] = [
 async function mockChatPage(page: Page, chat: TimedChunk[][] = [timedOutChatStream, okChatStream]) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await page.route("**/api/feedback/current?**", route => route.fulfill({json:{data:[],error_messages:[],warning_messages:[]}}));
   await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
@@ -870,7 +855,9 @@ for (const viewport of [
     const progress = page.getByTestId("chat-answer-progress");
     const current = page.getByTestId("chat-answer-progress-current");
     const timer = page.getByTestId("chat-answer-progress-timer");
-    await expect(current).toContainText("前の会話を踏まえて質問を補う");
+    await expect(current).toContainText("質問を補い、検索が要るかを分ける");
+    await expect(progress).toHaveAttribute("data-run-progress-card", "");
+    await expect(page.locator("[data-chat-answer-card] [data-run-progress-card]")).toHaveCount(0);
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
     await expect(current).toContainText("検索文から根拠の候補を集める", { timeout: 4_000 });
@@ -934,6 +921,7 @@ for (const viewport of [
     expect(answerBox && summaryBox && summaryBox.y < answerBox.y).toBeTruthy();
     await summary.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);
+    await okAnswer.screenshot({path:`test-results/progress-answer-pair-${viewport.name}-dark.png`, animations:"disabled"});
     await expectNoPageOverflow(page);
     const requests = await streamRequests(page, "chat");
     expect(requests).toHaveLength(2);
@@ -1053,8 +1041,8 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     ...recorder.finish("rank-cache", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "hit", sdk_attempt_count: 0 }, null, 2) }] } }),
     ...recorder.finish("rank-parent"),
     // 旧記録の note と新記録の省略形を、同じ表示経路で再現する。
-    ...recorder.start("legacy-skip", ragSpan.step("登録ルールによる確認の使用")),
-    ...recorder.finish("legacy-skip", "skipped", { params: { note: "skipped" }, details: { fields: [{ label: "結果", value: "設定がオフのため、登録ルールによる確認の使用をスキップしました。" }] } }),
+    ...recorder.start("legacy-skip", ragSpan.step("回答生成での用語・同義語の使用")),
+    ...recorder.finish("legacy-skip", "skipped", { params: { note: "skipped" }, details: { fields: [{ label: "結果", value: "設定がオフのため、回答生成での用語・同義語の使用をスキップしました。" }] } }),
     ...recorder.start("new-skip", ragSpan.step("用語・同義語による検索文の追加")),
     ...recorder.finish("new-skip", "skipped", { details: { fields: [{ label: "結果", value: "設定がオフのため、検索文の追加をスキップしました。" }] } }),
     ...recorder.start("candidate-result", ragSpan.step("根拠から回答を作る")),
@@ -1079,10 +1067,20 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     const candidate = page.getByTestId(`${prefix}-step-${spanStepId("candidate-result")}`);
     await expect(candidate).toHaveAttribute("data-status", "done");
     await expect(candidate.locator("[data-run-result-summary]")).toHaveText("不採用");
-    const reason = "設定がオフのため、登録ルールによる確認の使用をスキップしました。";
+    const reason = "設定がオフのため、回答生成での用語・同義語の使用をスキップしました。";
     const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
     await expect(skipped).toHaveAttribute("data-status", "skipped");
     await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");
+    // バーを出す幅では右端の列が固定の幅になる。いちばん長い表示が収まること（#4778）。
+    if (await skipped.locator("[data-run-timeline-bar]").isVisible()) {
+      expect(await skipped.locator("[data-run-step-status-duration]").evaluate(node => {
+        const context = document.createElement("canvas").getContext("2d")!;
+        const style = getComputedStyle(node);
+        // 数字の字形の指定（tnum）があると font の一括指定は空になるので、個別の値から組み立てる。
+        context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        return context.measureText("スキップ · 0.1 秒未満").width <= node.clientWidth;
+      })).toBe(true);
+    }
     await expect(skipped.locator("[data-run-result-summary]")).toHaveText(reason);
     await expect(page.getByTestId(prefix)).not.toContainText("skipped");
     await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveText("設定がオフのため、検索文の追加をスキップしました。");
@@ -1135,6 +1133,64 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
   await screenshotBothThemes(page, (theme) => testInfo.outputPath(`rerank-saved-${theme}.png`));
 });
 
+
+test("同じ呼び出しのやり直しで回復した試行は赤の失敗にせず「再試行して成功」と出す（#4736）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const recorder = spanProgressRecorder("trace-retry");
+  const attempt = (group: string, sent: number, scheduled: boolean) => ({
+    "gen_ai.request.model": "synthetic-model",
+    "pr.gen_ai.purpose": "evidence.grade",
+    "pr.call.retry_group": group,
+    "pr.attempt": sent,
+    ...(scheduled ? { "pr.retry.scheduled": true } : {}),
+  });
+  const first = [
+    ...recorder.start("root", ragSpan.root()),
+    ...recorder.start("answer", ragSpan.stage("answer")),
+    ...recorder.start("grade", ragSpan.step("根拠の評価")),
+    ...recorder.start("try-1", ragSpan.technical("gen_ai.chat", "grade", attempt("a".repeat(32), 1, true))),
+    ...recorder.finish("try-1", "failed"),
+  ];
+  const rest = [
+    ...recorder.start("try-2", ragSpan.technical("gen_ai.chat", "grade", attempt("a".repeat(32), 2, false))),
+    ...recorder.finish("try-2"),
+    ...recorder.finish("grade"),
+    ...recorder.start("draft", ragSpan.step("回答の生成")),
+    ...recorder.start("try-3", ragSpan.technical("gen_ai.chat", "draft", attempt("b".repeat(32), 1, true))),
+    ...recorder.finish("try-3", "failed"),
+    ...recorder.start("try-4", ragSpan.technical("gen_ai.chat", "draft", attempt("b".repeat(32), 2, false))),
+    ...recorder.finish("try-4", "failed"),
+    ...recorder.finish("draft"),
+    ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
+  ];
+  const content = "合成の回答です。";
+  await mockSearchPage(page, [[
+    { afterMs: 0, text: sse("run", { trace_id: "trace-retry" }) + traceSse(first) },
+    { afterMs: 1500, text: traceSse(rest) + sse("metadata", { trace_id: "trace-retry", elapsed_ms: 1500, guardrail_warnings: [], diagnostics: {} }) + sse("delta", { text: content }) + sse("done", { answer: content, citations: [] }) },
+  ]]);
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  const prefix = "search-run-progress";
+  const row = (key: string) => page.getByTestId(`${prefix}-step-${spanStepId(key)}`);
+  // 次の試行を待つ間も赤にしない。
+  await expect(row("try-1")).toHaveAttribute("data-retry", "retrying");
+  await expect(row("try-1")).toContainText("再試行中");
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await page.getByTestId(`${prefix}-summary`).click();
+  await expect(row("try-1")).toHaveAttribute("data-retry", "recovered");
+  await expect(row("try-1")).toHaveAttribute("data-status", "done");
+  await expect(row("try-1").locator("[data-run-step-status-duration]")).toContainText("再試行して成功");
+  await expect(row("try-1").locator(".text-danger-fg")).toHaveCount(0);
+  // 最後まで失敗した呼び出しは今までどおり赤。
+  await expect(row("try-3")).toHaveAttribute("data-status", "failed");
+  await expect(row("try-4")).toHaveAttribute("data-status", "failed");
+  await expect(row("try-4").locator("[data-run-step-status-duration]")).toContainText("失敗");
+  await expect(row("try-4").locator(".text-danger-fg")).not.toHaveCount(0);
+  await expect(page.getByTestId(`${prefix}-summary`)).not.toHaveClass(/text-danger-fg/);
+  await row("try-1").scrollIntoViewIfNeeded();
+  await screenshotBothThemes(page, theme => testInfo.outputPath(`retry-recovered-${theme}.png`));
+  await expectNoPageOverflow(page);
+});
 
 test("多様性補充の実績と未実行理由を検索の経過と軌跡で保つ", {tag: "@responsive"}, async ({page}, testInfo) => {
   const recorder = spanProgressRecorder("trace-diversity");

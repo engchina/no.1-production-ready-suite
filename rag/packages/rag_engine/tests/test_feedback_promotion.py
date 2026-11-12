@@ -43,7 +43,6 @@ class FeedbackPromotionTests(unittest.TestCase):
         self.assertIn("incorrect_answer", case["tags"])
         self.assertEqual(case["source_feedback"]["feedback_id"], "fb-1")
         self.assertEqual(case["source_feedback"]["answer_id"], "answer-1")
-        self.assertIn("倉庫マスタ登録", case["expected_terms"])
 
     def test_reviewed_feedback_records_and_append_eval_cases_dedupe(self):
         records = [

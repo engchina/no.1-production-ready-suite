@@ -6,7 +6,7 @@ import { History, Send } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import { api, type LanguagePackData, type LanguagePackRelease, type LanguagePackReleaseState, type LanguagePackReleaseComparison, type IngestionJobPhase } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -25,7 +25,8 @@ export function LanguagePackComparison({ comparison }: { comparison: LanguagePac
     <Banner severity={comparison.ingest_changed ? "warning" : "info"} title={t(comparison.ingest_changed ? "settings.language.release.ingestChanged" : "settings.language.release.ingestSame")}>
       {comparison.impact_requires_review ? t("settings.language.release.impactUnknown") : comparison.affected_stages.map((stage) => t(phaseLabelKey(stage as IngestionJobPhase))).join(" / ") || t("settings.language.release.noIngestImpact")}
     </Banner>
-    <DataTable ariaLabel={t("settings.language.release.diff")} rows={comparison.differences} getRowKey={(row) => `${row.section}.${row.key}`} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} columns={[
+    {/* 差分が 0 件のときは空の行ではなく、比べた結果として差分が無いことを出す（#3718）。 */}
+    <DataTable ariaLabel={t("settings.language.release.diff")} rows={comparison.differences} getRowKey={(row) => `${row.section}.${row.key}`} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} empty={<EmptyState title={t("settings.language.release.noDifferences")} hint={t("settings.language.release.noDifferencesHint")} />} columns={[
       { key: "field", header: t("settings.language.release.field"), render: (row) => t(`settings.language.field.${row.key}` as I18nKey) },
       { key: "before", header: t("settings.language.release.before"), render: (row) => <span className="whitespace-pre-wrap break-words">{valueText(row.before)}</span> },
       { key: "after", header: t("settings.language.release.after"), render: (row) => <span className="whitespace-pre-wrap break-words">{valueText(row.after)}</span> },

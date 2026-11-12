@@ -14,7 +14,6 @@ from app.api.routes import (
     document_categories,
     documents,
     evaluation,
-    evaluation_calibration,
     evaluation_testsets,
     feedback,
     figures,
@@ -24,7 +23,6 @@ from app.api.routes import (
     language_pack,
     language_pack_reprocessing,
     mcp,
-    question_understanding,
     search,
     search_answer_profile_knowledge,
     search_answer_profiles,
@@ -84,12 +82,6 @@ api_router.include_router(
     tags=["search-answer-profiles"],
 )
 api_router.include_router(
-    question_understanding.router,
-    dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
-    prefix="/search-answer-profiles",
-    tags=["search-answer-profiles"],
-)
-api_router.include_router(
     chat.router,
     dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
     prefix="/chat",
@@ -118,13 +110,6 @@ api_router.include_router(
 api_router.include_router(
     evaluation_testsets.router,
     prefix="/evaluation/testsets",
-    tags=["evaluation"],
-)
-# 判定の校正（#3578）。品質評価の画面のタブ。
-api_router.include_router(
-    evaluation_calibration.router,
-    dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
-    prefix="/evaluation/calibration",
     tags=["evaluation"],
 )
 api_router.include_router(

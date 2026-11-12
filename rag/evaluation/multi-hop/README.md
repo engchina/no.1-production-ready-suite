@@ -105,14 +105,12 @@
 - 区分は、dev・holdout のどちらにもすべての種類が入るように分け、同じ質問の言い換えを両方に入れていません
   （holdout は dev と同じ型の質問を、別の実体・別の資料の組み合わせで聞きます）。holdout の結果を見て評価セットを
   直したら、そのケースは dev に移します。
-- 結論に要る規則は資料に書きます。重要度の高低を比べる問（`cmp-pms-severity`）は、台帳の前書きの重要度の順位
-  （`ledger-severity-order`）も必要な根拠です。最終の検証は資料に無い推論（記号 A > B の一般的な順位）を通さない
-  ため、#1406 の前は順位の記載が無く、結論が `unsupported` になっていました。
+- 結論に要る規則は資料に書きます。重要度の高低を比べる問（`cmp-pms-severity`）は、台帳の前書きの重要度の順位（`ledger-severity-order`）も必要な根拠です。
 - 必要な根拠の語句は、指した資料の原稿に実際に書いてある文です（テストが原稿と同梱の PDF / xlsx で照合します）。
   台帳（xlsx）の根拠は、行を指すシステム ID のセル（`SYS-101` など）にしています。前処理 `excel_to_jsonl` は 1 行を
   1 記録にするため、その行を引用で取れたかを測れます。
 - 対応（`expected_outcomes`）は、すべて答えられる質問なので `answered` / `conditional` を受け入れます（拒答は失敗）。
-  確認済みの必須要点（`required_answer_points`）は、正確性・網羅性の意味上の比較に使います。
+  確認済みの必須要点（`required_answer_points`）は、正確性の意味上の比較に使います。
 
 ## 章節の読み切り（#1438）
 
@@ -132,17 +130,17 @@
 - 必要な根拠（`required_evidence`）は同じ章の別々のページの文で、テストが原稿の改ページ（`multi_hop_corpus.py` の
   `Document.pages`）と同梱の PDF のページで照合します（`test_section_read_cases_need_every_page_of_one_section`）。
 - 見る値: `reasoning_type=section_read` の `required_evidence_recall`（必要な箇所の取得率）と
-  `requirement_coverage`。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
+  `requirement_coverage`（suite の採点の指標）。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
   `section`（属する章節の頁の範囲・文字数）を見て `rag_read_section` で章節を読み切ると取れます（読んだ chunk は D の引用
   に入る）。章節の読み切りが効いたかは、D の Run の `rag_read_section` の呼び出しと、`sr-inspection-equipment-values` で
   `up` を使ったか（節から親の章へ上がったか）で確かめます。
 - 子 chunk の見積もり（`estimate_chunks`）は 27（章・節の見出し・改ページの後のページ・表を 1 つずつ）で、資料全体の
   見積もりは 268（実測の 241 + この資料の見積もり。この資料の実測は未確認）です。
-- 回答のときに章節を自動で広げる（#1436）・長い章節を抽出してから統合する（#1437）の効果も、この 5 問で比べます。
+- 回答のときに章節を自動で広げる（#1436）効果も、この 5 問で比べます。
 
 ### 件数・章の範囲を示した網羅の問（#1503）
 
-「すべて挙げて」の問で、CRAG の評価器が見えている数件の根拠で「足りる」と判定し、章節の拡張が起動しなかった
+「すべて挙げて」の問で、見えている数件の根拠で章節の拡張が足りなくなった
 （#1503）。件数・章の範囲を示した網羅の問を 3 問足しています（資料は同じ `server-room-inspection.pdf`）。
 
 | ID | 区分 | 種類 | 必要な根拠 |
@@ -161,9 +159,9 @@
 
 ## 指標
 
-[../README.md](../README.md#評価の六指標)と同じ六指標だけを使います。
-必要な根拠は `required_evidence_recall`、回答の要点は意味上の正確性・網羅性で測ります。
-`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ六指標と対象件数です。
+[../README.md](../README.md#評価の四指標)と同じ四指標だけを使います。
+必要な根拠は `required_evidence_recall`、回答の要点は意味上の正確性で測ります。
+`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ四指標と対象件数です。
 
 ## 資料を作り直す
 
@@ -234,7 +232,7 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 ```
 
 `evaluation_cli` は、終わったときに標準エラーへ全体の指標と、`required_evidence`・`reasoning_type=<種類>`・
-`hops=<段の数>` の行（六指標と対象件数）を
+`hops=<段の数>` の行（四指標と対象件数）を
 出します。閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。質問ごとに回答（モデルの呼び出し
 3〜5 回）を作るため、dev の 40 問で 40 分前後かかります（#1335 の 33 問の実測から見積もり）。
 

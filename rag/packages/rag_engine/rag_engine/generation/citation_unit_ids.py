@@ -197,11 +197,6 @@ def request_coverage_field(base: type[BaseModel], catalog: SentUnitCatalog, requ
     return Annotated[GenericAlias(list, coverage), AfterValidator(_one_plan_per_request)], info
 
 
-def unit_scope_model(base: type[BaseModel], catalog: SentUnitCatalog, *, request_ids: Sequence[str] = ()) -> type[BaseModel]:
-    fields: dict[str, Any] = {"request_coverage": request_coverage_field(base, catalog, request_ids)}
-    return create_model(base.__name__, __base__=base, **fields)
-
-
 def unit_generation_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[BaseModel]:
     """この送信の生成型だけ、引用の選択を実提示単位の ID にする。"""
     from copy import deepcopy

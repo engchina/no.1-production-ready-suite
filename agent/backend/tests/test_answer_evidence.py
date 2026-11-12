@@ -2,7 +2,7 @@
 
 - AI に渡した根拠 = その Run の `rag_search` / `rag_retrieve_evidence` の `evidence`
   （chunk で重複なし）。
-- 回答で引用 = 回答が書いた根拠の ID（省いた形を含む）と、最終の検証が段落を裏付けた根拠。
+- 回答で引用 = 回答が書いた根拠の ID（省いた形を含む）。
 - 調べるのに使ったプロファイル・ツール・内部の ID だけを述べる行は、検証の前に回答から外し、
   「資料で確認できず除いた内容」に書かない。
 内容はすべて合成のデータ。
@@ -15,9 +15,9 @@ from typing import Any
 import anyio
 import pytest
 from agents.testing import assistant_message, function_call
+from answer_run_fixtures import AGENT_ID, ANSWER, USER_UUID, _script, mcp  # noqa: F401 - fixture
 from mcp_support import FakeProductMcp
 from pytest import MonkeyPatch
-from test_answer_validation import AGENT_ID, ANSWER, USER_UUID, _script, mcp  # noqa: F401 - fixture
 
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_evidence import (
@@ -26,13 +26,7 @@ from app.features.agent.answer_evidence import (
     passed_evidence,
 )
 from app.features.agent.answer_passages import is_lookup_note
-from app.features.agent.answer_validation import (
-    REVIEW_HEADING,
-    combine_validations,
-    publish_answer,
-    validation_content,
-    without_lookup_notes,
-)
+from app.features.agent.answer_references import without_lookup_notes
 from app.features.agent.runtime import (
     RunCreateRequest,
     RunStep,
@@ -73,46 +67,6 @@ def _step(tool: str, output: dict[str, Any], *, success: bool = True) -> RunStep
         tool_call=ToolCall(name=f"rag__{tool}", arguments={}),
         tool_result=ToolResult(name=f"rag__{tool}", success=success, output=output),
     )
-
-
-def test_passed_evidence_is_deduplicated_and_cited_by_ids_and_the_validation() -> None:
-    steps = [
-        _step("rag_retrieve_evidence", {"evidence": [_evidence(CHUNK_A), _evidence(CHUNK_B)]}),
-        # 同じ chunk を別の呼び出しでも返す（1 回だけ数える）。RAG の使われ方は
-        # 引用したときだけ残す。
-        _step(
-            "rag_search",
-            {
-                "evidence": [
-                    _evidence(CHUNK_B, used_in_answer=True, answer_use="reference"),
-                    _evidence(CHUNK_C, used_in_answer=True, answer_use="confirmed"),
-                ]
-            },
-        ),
-        # 失敗したツール・根拠を返さないツールは数えない。
-        _step("rag_search", {"evidence": [_evidence("doc-x:cs:1")]}, success=False),
-        _step("rag_read_source", {"document_id": "doc-y", "chunk_id": "doc-y:cs:1"}),
-    ]
-    validation = validation_content(
-        "completed",
-        result={"claims": [{"status": "supported", "chunk_id": CHUNK_B, "answer_quote": "x"}]},
-    )
-    # 回答は CHUNK_A を途中を省いた形で書く（最終の検証と同じ照合で 1 つに決まる）。
-    content = answer_evidence(steps, "期限は 30 日です【証拠 ID: 0f3a9c2…:7】。", validation)
-
-    items = content["items"]
-    assert [item["chunk_id"] for item in items] == [CHUNK_A, CHUNK_B, CHUNK_C]
-    assert [item["cited"] for item in items] == [True, True, False]
-    assert [item["answer_use"] for item in items] == [None, "reference", None]
-    assert (content["passed"], content["cited"]) == (3, 2)
-    assert items[0]["section_title"] == "第 1 節"
-    assert items[0]["locator"]["page_start"] == 3
-    assert "section" not in items[0]
-    # 根拠の ID の印は引き当てた根拠と一緒に返す（画面は印を文字で出さず「根拠：…」の行にする）。
-    assert content["markers"] == [{"text": "【証拠 ID: 0f3a9c2…:7】", "chunk_ids": [CHUNK_A]}]
-    assert content["passages"] == [
-        {"text": "期限は 30 日です【証拠 ID: 0f3a9c2…:7】。", "chunk_ids": [CHUNK_A]}
-    ]
 
 
 ATTACHMENT = "5d1c7a2e-0000-4000-8000-00000000000a"
@@ -203,7 +157,7 @@ def test_attachment_reads_become_evidence_that_is_not_opened_as_a_rag_source() -
         ),
     ]
     # モデルはファイル名の「-」を別のダッシュに書き換えることがある。
-    content = answer_evidence(steps, "費用は 100 です（出典：manual‑a.pdf p.3）。", None)
+    content = answer_evidence(steps, "費用は 100 です（出典：manual‑a.pdf p.3）。")
 
     items = content["items"]
     assert [item["chunk_id"] for item in items] == [
@@ -259,45 +213,11 @@ def test_attachment_evidence_alone_is_listed_without_a_validation() -> None:
             },
         )
     ]
-    content = answer_evidence(steps, "金額は 400 です。", None)
+    content = answer_evidence(steps, "金額は 400 です。")
     assert [item["chunk_id"] for item in content["items"]] == [
         f"attachment:{SHEET_ATTACHMENT}:table-b:4-4"
     ]
     assert (content["passed"], content["cited"]) == (1, 0)
-
-
-def test_passages_join_the_validated_chunks_and_skip_unknown_ones() -> None:
-    steps = [_step("rag_search", {"evidence": [_evidence(CHUNK_A), _evidence(CHUNK_B)]})]
-    answer = (
-        "期限は 30 日です。\n- 延長は 1 回だけです。\n- 詳しくは [手順](https://example.com) です。"
-    )
-    validation = validation_content(
-        "completed",
-        result={
-            "claims": [
-                {"status": "supported", "chunk_id": CHUNK_B, "answer_quote": "期限は 30 日です。"},
-                {"status": "supported", "chunk_id": CHUNK_A, "answer_quote": "期限は 30 日です。"},
-                # 前のターンの根拠（この Run で渡していない chunk）は段落の根拠にしない。
-                {
-                    "status": "supported",
-                    "chunk_id": "doc-z:cs:1",
-                    "answer_quote": "- 延長は 1 回だけです。",
-                },
-                {"status": "unsupported", "chunk_id": CHUNK_A, "answer_quote": "x"},
-            ]
-        },
-    )
-    content = answer_evidence(steps, answer, validation)
-    assert content["markers"] == []
-    assert content["passages"] == [{"text": "期限は 30 日です。", "chunk_ids": [CHUNK_A, CHUNK_B]}]
-
-
-def test_nothing_is_cited_when_the_answer_shares_nothing_with_the_evidence() -> None:
-    steps = [_step("rag_search", {"evidence": [_evidence(CHUNK_A, used_in_answer=True)]})]
-    unvalidated = validation_content("unvalidated", reason="validation_error")
-    content = answer_evidence(steps, "期限は 30 日です。", unvalidated)
-    assert (content["passed"], content["cited"]) == (1, 0)
-    assert (content["binding"], content["passages"], content["references"]) == ("text", [], [])
 
 
 # ---- 照合が成功 / 失敗 / 時間切れの結び付け（#2707） -----------------------------------
@@ -345,191 +265,11 @@ def _free_steps() -> list[RunStep]:
     ]
 
 
-@pytest.mark.parametrize(
-    "validation",
-    [
-        validation_content("unvalidated", reason="mcp.timeout", message="時間切れ"),
-        # RAG が時間の上限までにどの段落も確かめ終わらなかった（status=timed_out。#2700）。
-        validation_content("unvalidated", reason="validation_timed_out"),
-        validation_content("unvalidated", reason="validation_error"),
-        None,
-    ],
-    ids=["timeout", "timed_out", "failure", "disabled"],
-)
-def test_without_a_validation_verdict_the_answer_is_bound_by_text_as_reference(
-    validation: dict[str, Any] | None,
-) -> None:
-    """照合が時間切れ・失敗・無効のときは、決定的な照合で結び付け、参考（該当は未確認）にする。"""
-    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
-
-    assert content["binding"] == "text"
-    items = {item["chunk_id"]: item for item in content["items"]}
-    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [True, True, True]
-    # 照合で確かめていないので、RAG が付けた「該当確認済み」も残さない。
-    assert {item["answer_use"] for item in items.values()} == {"reference"}
-    passages = {passage["text"]: passage["chunk_ids"] for passage in content["passages"]}
-    # 主張の段落は特徴（同じ文字の並び・コード）で、出典の行は文書名と頁で結び付ける。
-    assert passages["- 申請書は利用開始日の 30 日前までに提出してください。"] == [CHUNK_A]
-    assert passages["- 区分 Q-77 の手当があります。"] == [CHUNK_C]
-    assert passages["- 文書 0f3a.pdf p.3"] == [CHUNK_A]
-    assert passages["- 文書 0f3a.pdf p.5"] == [CHUNK_B]
-    # 見出し・特徴の当たらない段落には結び付けない。
-    assert "**根拠**" not in passages
-    assert "- 不明な点は窓口へ確認してください。" not in passages
-    assert content["citation_lines"] == ["- 文書 0f3a.pdf p.3", "- 文書 0f3a.pdf p.5"]
-    # 参考情報: 根拠ごとの原文（段落と最も当たる文。表の HTML の印は除く）。
-    references = {ref["chunk_ids"][0]: ref["quote"] for ref in content["references"]}
-    assert references[CHUNK_A] == "合成の規程では、申請書は利用開始日の 30 日前までに提出する。"
-    assert references[CHUNK_B] == "承認は担当部署の課長が行う。"
-    assert references[CHUNK_C] == "区分 Q-77 手当は月額 5000 円"
-    # 並びは回答の段落に結び付いた順（B は短い言い換えで特徴が当たらず、出典の行で結び付く）。
-    assert "- 承認は担当部署の課長が行います。" not in passages
-    assert list(references) == [CHUNK_A, CHUNK_C, CHUNK_B]
-
-
-def test_with_a_validation_verdict_only_the_supported_paragraphs_are_cited() -> None:
-    """照合が判定を出したときは、今の判定（supported / 外した段落）をそのまま使う。"""
-    validation = validation_content(
-        "completed",
-        result={
-            "claims": [
-                {
-                    "status": "supported",
-                    "chunk_id": CHUNK_B,
-                    "answer_quote": "- 承認は担当部署の課長が行います。",
-                },
-                {
-                    "status": "unsupported",
-                    "chunk_id": CHUNK_A,
-                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
-                },
-            ]
-        },
-    )
-    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
-
-    assert content["binding"] == "validation"
-    items = {item["chunk_id"]: item for item in content["items"]}
-    # 文字が当たっても、照合が裏付けていない根拠は引用にしない。
-    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [False, True, False]
-    assert content["passages"] == [
-        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
-    ]
-    assert (content["references"], content["citation_lines"]) == ([], [])
-
-
-def _marked(validation: dict[str, Any], answer: str = FREE_ANSWER) -> dict[str, Any]:
-    """最終の検証が付ける段落の印（#2738）を足した成果物の内容。"""
-    return {**validation, **publish_answer(answer, validation["result"]).record()}
-
-
-def test_a_partial_verdict_keeps_verified_paragraphs_and_binds_the_timed_out_ones_by_text() -> None:
-    """照合が一部の段落だけを確かめた（status=partial。#2700）ときは、確かめ終わった段落は判定の
-    まま引用し、確かめ終わらなかった段落（unassessed。未確認の印。#2738）は「参考情報」の根拠に
-    する。"""
-    validation = validation_content(
-        "completed",
-        result={
-            "status": "partial",
-            "valid": False,
-            "timed_out_passage_ids": ["p2", "p3"],
-            "claims": [
-                {
-                    "status": "supported",
-                    "chunk_id": CHUNK_B,
-                    "answer_quote": "- 承認は担当部署の課長が行います。",
-                },
-                {
-                    "status": "unassessed",
-                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
-                },
-                {"status": "unassessed", "answer_quote": "- 区分 Q-77 の手当があります。"},
-            ],
-        },
-    )
-    content = answer_evidence(_free_steps(), FREE_ANSWER, _marked(validation))
-
-    assert content["binding"] == "partial"
-    items = {item["chunk_id"]: item for item in content["items"]}
-    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [True, True, True]
-    # 確かめ終わった段落の根拠は RAG の使われ方を残し、時間切れの段落の根拠は参考にする。
-    assert [items[chunk]["answer_use"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [
-        "reference",
-        None,
-        "reference",
-    ]
-    # 本文の根拠の行は確かめ終わった段落だけ。
-    assert content["passages"] == [
-        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
-    ]
-    references = {ref["chunk_ids"][0]: ref["quote"] for ref in content["references"]}
-    assert list(references) == [CHUNK_A, CHUNK_C]
-    assert references[CHUNK_A] == "合成の規程では、申請書は利用開始日の 30 日前までに提出する。"
-    assert content["citation_lines"] == []
-
-
-def test_a_partial_verdict_does_not_repeat_a_verified_chunk_as_a_reference() -> None:
-    validation = validation_content(
-        "completed",
-        result={
-            "status": "partial",
-            "claims": [
-                {
-                    "status": "supported",
-                    "chunk_id": CHUNK_A,
-                    "answer_quote": "- 承認は担当部署の課長が行います。",
-                },
-                {
-                    "status": "unassessed",
-                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
-                },
-            ],
-        },
-    )
-    content = answer_evidence(_free_steps(), FREE_ANSWER, _marked(validation))
-    assert content["binding"] == "partial"
-    assert content["references"] == []
-
-
-def test_marked_paragraphs_of_a_completed_verdict_are_bound_as_references() -> None:
-    """判定が出た検証でも、本文に残して印を付けた段落（根拠で確かめられない・規則の検査の警告）の
-    根拠は該当を確かめた記載にせず「参考情報」にする（#2738）。"""
-    validation = validation_content(
-        "completed",
-        result={
-            "status": "completed",
-            "valid": False,
-            "claims": [
-                {
-                    "status": "supported",
-                    "chunk_id": CHUNK_B,
-                    "answer_quote": "- 承認は担当部署の課長が行います。",
-                },
-                {
-                    "status": "unsupported",
-                    "support_check": "target_mismatch",
-                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
-                },
-            ],
-        },
-    )
-    marked = _marked(validation)
-    assert [item["state"] for item in marked["passage_marks"]] == ["warning"]
-    content = answer_evidence(_free_steps(), FREE_ANSWER, marked)
-    assert content["binding"] == "partial"
-    items = {item["chunk_id"]: item for item in content["items"]}
-    assert (items[CHUNK_A]["cited"], items[CHUNK_A]["answer_use"]) == (True, "reference")
-    assert content["passages"] == [
-        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
-    ]
-    assert [ref["chunk_ids"] for ref in content["references"]] == [[CHUNK_A]]
-
-
 def test_a_citation_line_without_a_page_points_at_the_first_evidence_of_the_document() -> None:
-    content = answer_evidence(_free_steps(), "期限があります。\n\n出典：文書 C.pdf", None)
+    content = answer_evidence(_free_steps(), "期限があります。\n\n出典：文書 C.pdf")
     assert content["passages"] == [{"text": "出典：文書 C.pdf", "chunk_ids": [CHUNK_C]}]
     # 主張の段落の頁の無い文書名は、文書名だけでは結び付けない。
-    claim = answer_evidence(_free_steps(), "文書 C.pdf に記載があります。", None)
+    claim = answer_evidence(_free_steps(), "文書 C.pdf に記載があります。")
     assert claim["passages"] == []
 
 
@@ -563,45 +303,7 @@ def test_lookup_notes_are_removed_without_emptying_the_answer() -> None:
     assert without_lookup_notes("期限は 30 日です。") == "期限は 30 日です。"
 
 
-def test_the_notice_section_lists_every_item_and_records_the_count() -> None:
-    quotes = [f"段落 {index} は 30 日です。" for index in range(7)]
-    answer = "\n".join(quotes)
-    result = {
-        "valid": False,
-        "status": "completed",
-        "claims": [
-            {"answer_quote": quote, "status": "unsupported", "reason": "x"} for quote in quotes
-        ],
-        "findings": [],
-        "missing_evidence": [],
-        "stale_evidence": [],
-    }
-    content, published = combine_validations(
-        answer, [validation_content("completed", connection="rag", result=result)]
-    )
-    # 本文は残し（#2738）、節には 7 件すべてを同じ書式で書き、「ほか N 件」で切らない（#2361）。
-    body, section = published.split(f"\n\n**{REVIEW_HEADING}**", 1)
-    assert body == answer
-    items = [line for line in section.splitlines() if line.startswith("- ")]
-    assert items == [f"- 根拠で確かめられない: 「{quote}」" for quote in quotes]
-    assert "ほか" not in section
-    # 節の項目の数と見出しを記録する（印の件数は passage_marks）。
-    assert content["notice"] == {
-        "items": 7,
-        "heading": REVIEW_HEADING,
-        "headings": [REVIEW_HEADING],
-    }
-    assert content["withheld"] == {
-        "removed": 0,
-        "unverified": 7,
-        "warnings": 0,
-        "all": False,
-        "listed": 7,
-    }
-    assert len(content["passage_marks"]) == 7
-
-
-def test_the_run_saves_the_answer_evidence_and_drops_lookup_notes_before_validation(
+def test_the_run_saves_the_answer_evidence_and_drops_lookup_notes(
     monkeypatch: MonkeyPatch,
     mcp: FakeProductMcp,  # noqa: F811 - fixture
 ) -> None:
@@ -619,14 +321,12 @@ def test_the_run_saves_the_answer_evidence_and_drops_lookup_notes_before_validat
     anyio.run(builtin_runtime.execute_run, run.id)
     run = runtime_repository.get_run(run.id)
 
-    # 調べ方の行は検証に渡さず、回答にも「資料で確認できず除いた内容」にも出さない。
-    [call] = mcp.calls_of("rag_validate_answer")
-    assert call["arguments"]["answer"] == ANSWER
+    # 調べ方の行は回答に残さない。
     published = run_answer_text(run)
     assert published == ANSWER
     assert "0f3a9c2e7b1d4e5f" not in (published or "")
-    # 回答の根拠: AI に渡した 1 件、最終の検証が裏付けた 1 件を回答で引用。
+    # 回答の根拠: AI に渡した 1 件（ID も原文の写しも書いていない回答なので引用は 0 件）。
     [artifact] = [item for item in run.artifacts if item.kind == ANSWER_EVIDENCE_KIND]
     assert artifact.name == "回答の根拠"
-    assert (artifact.content["passed"], artifact.content["cited"]) == (1, 1)
+    assert (artifact.content["passed"], artifact.content["cited"]) == (1, 0)
     assert artifact.content["items"][0]["chunk_id"] == "chunk-1"

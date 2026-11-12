@@ -48,7 +48,7 @@
 正本は README §4「操作部品の高さと幅」と `page-archetypes.md`「入力欄・選択欄・ボタンの高さと幅」。
 
 - 高さは `size`（`sm` 32 / **`md` 36（既定）** / `lg` 40px。タッチ端末は 44px）。**1 つの行の中の入力欄・選択欄・ボタンには同じ `size` を渡す。**
-- 幅は入る値の種類で `width`（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択 / `md` 名前・ID・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・文章・SQL・`TextareaField`）。**grid のセルの欄にも、grid の外の単独の欄にも渡す**（段の幅が上限。#1891）。フォームの本文は `FormGrid`（最大 60rem）に置く。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力と端をそろえて `full`（#635）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
+- 幅は入る値の種類で `width`（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択 / `md` 名前・ID・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・文章・SQL・`TextareaField`）。**grid のセルの欄にも、grid の外の単独の欄にも渡す**（段の幅が上限。#1891）。通常フォームの本文は `FormGrid`（最大 60rem）に置く。prompt・Agent / Skill の指示は別区画の `FormGrid columns={1} width="full"` で所属容器の全幅を使う。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力と端をそろえて `full`（#635）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
 - **placeholder は欄の幅に収める**（収まらなければ短い例にし、説明は `helper` へ）。e2e は共通の `findClippedPlaceholders`（`platform/packages/ui/e2e/layout-checks.ts`）で確かめる。
 - **製品で書かない**: `touchTarget`、操作部品への `h-*` / `min-h-*`、欄への `w-*` / `max-w-*`（lint が検出する）。
 - **フォームの入力は共有の部品**（`SelectField` / `SearchableSelectField` / `TextField` / `SecretField` / `SearchField` / `TextareaField`）。ネイティブで残すのは checkbox / radio / file / range / hidden / color と部品で表せない所だけで、理由を添えて lint を局所的に除外し `fieldControlClassName({ size, width })` を使う。e2e は combobox を押して選び（`chooseSelectFieldOption`）、高さは入力方式で期待する（`expectedControlHeight`）。
@@ -73,6 +73,8 @@
 ## 操作の結果・状態のメッセージ
 
 正本は [`messaging.md` §10](../../platform/docs/ux-contracts/messaging.md#10-操作の結果状態の出し方位置幅形出す情報705)。新しい画面は最初から、既存の画面は触るときに従う。結果は起点の操作の**直下**に**全幅**で出し、テスト・接続確認は結果パネル、保存は Toast / `FormStatus`、処理の失敗は danger の `Banner`、対象の状態は見出しの `StatusBadge`。技術的な詳細は「詳細」に畳み、自動で消さない。
+
+- **欄の候補・欄の値の読み取りの失敗は、共有の `DataLoadFailureState` の `layout="field"`（製品の `components/DataLoadStates.tsx` の `DataLoadFailure`）で欄の直下に出す**（#4817。正本は `messaging.md` §3.6.1）。`fallback` には欄ごとの文（「〈欄の名前〉の候補を読み込めませんでした。」。i18n）を渡し、製品で `Banner`・警告の文・`helper` / `error` の文・手書きの枠を作らない。候補が無いままの失敗を「候補なし」「すべて」だけと見せない・欄ごと消さない。e2e は `findFieldLoadFailureViolations` で確かめる。
 
 ## lint
 

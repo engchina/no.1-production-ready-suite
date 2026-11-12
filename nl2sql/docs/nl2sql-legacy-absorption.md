@@ -13,7 +13,6 @@
 - `GET /select-ai/db-profiles`: Oracle DBMS_CLOUD_AI profile 一覧を表示する。
 - `POST /select-ai/db-profiles/{profile_name}/drop`: profile 名と確認語を指定して drop を実行する。
 - `POST /select-ai-agent/run-team`: Select AI Agent team を実行する。
-- `GET /select-ai-agent/conversations`: Agent conversation 履歴を取得する。
 - `POST /comments/suggest`, `POST /comments/apply`: COMMENT ON 候補生成と確認後の実行。
 - `POST /annotations/generate`, `POST /annotations/apply`: Oracle annotations 候補生成と確認後の実行。
 - `POST /synthetic-data/generate`, `GET /synthetic-data/operations/{operation_id}`: DBMS_CLOUD_AI synthetic data 生成と operation 状態確認。

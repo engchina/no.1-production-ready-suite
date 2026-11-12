@@ -62,7 +62,6 @@ def _running_job(job_id: str = "job-1") -> dict[str, Any]:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch, outputs={"nl2sql_query": _running_job()})
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     # ジョブの完了を待たずに返す（実行中のジョブを Run の step に残す）。
     monkeypatch.setattr(get_settings(), "agent_nl2sql_job_wait_seconds", 0.0)
     monkeypatch.setattr(

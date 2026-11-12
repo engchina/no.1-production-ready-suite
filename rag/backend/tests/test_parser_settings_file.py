@@ -108,7 +108,6 @@ def test_v4_shared_file_from_other_product_loads_and_backend_serves() -> None:
     assert response.json()["data"]["adapter_backend"] == before
 
 
-@pytest.mark.usefixtures("mineru_selectable")
 def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     """RAG が文書解析を保存 → NL2SQL がモデル設定を保存 → RAG は両方を読む。"""
     settings = get_settings()
@@ -116,9 +115,8 @@ def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     saved = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "mineru",
-            "mineru_enabled": True,
-            "mineru_license_acknowledged": True,
+            "adapter_backend": "dots_ocr",
+            "dots_ocr_enabled": True,
         },
     )
     assert saved.status_code == 200
@@ -132,8 +130,8 @@ def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     shared = json.loads(model_file.read_text(encoding="utf-8"))
     assert set(shared) == {"version", "enterprise_ai", "generative_ai"}
     assert reloaded.oci_enterprise_ai_endpoint == "https://nl2sql-saved.example.com"
-    assert reloaded.rag_parser_adapter_backend == "mineru"
-    assert reloaded.rag_parser_mineru_enabled is True
+    assert reloaded.rag_parser_adapter_backend == "dots_ocr"
+    assert reloaded.rag_parser_dots_ocr_enabled is True
 
 
 def test_parser_section_in_shared_file_is_not_read() -> None:
@@ -142,7 +140,7 @@ def test_parser_section_in_shared_file_is_not_read() -> None:
     before = settings.rag_parser_adapter_backend
     _write(
         Path(settings.model_settings_file),
-        {**V4_SHARED_DOCUMENT, "parser_adapters": {"adapter_backend": "mineru"}},
+        {**V4_SHARED_DOCUMENT, "parser_adapters": {"adapter_backend": "dots_ocr"}},
     )
 
     assert get_settings().rag_parser_adapter_backend == before
@@ -165,6 +163,7 @@ def test_schema_cli_status_initialize_check_with_v4_shared_file(
     _write(Path(settings.model_settings_file), V4_SHARED_DOCUMENT)
     monkeypatch.setattr(OracleClient, "acquire_connection", lambda self: _FakeConnection())
     monkeypatch.setattr(system_schema_manager, "_status_on", _ready_status)
+    monkeypatch.setattr(system_schema_cli, "_language_pack_contract_problem", lambda: None)
 
     def initialize(**_kwargs: Any) -> dict[str, Any]:
         # 実際の初期化と同じく、接続（設定の読み込みを含む）を開いてから操作する。

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 import pytest
 from rag_parser_core.language import bind_pack, builtin_pack, resolve
@@ -13,58 +12,35 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import (
-    CoverageBudget,
     TargetedRetrieval,
-    coverage_targets,
-    plan_targeted_retrievals,
-    request_rows,
-    run_targeted_retrievals,
     select_new_parents,
-    targeted_queries,
 )
-from rag_engine.retrieval.task_contract import (
-    _sentence_units,
-    _with_request_kind,
-    definition_targets,
-    request_units,
-    subquestion_markers,
-)
+from rag_engine.retrieval.task_contract import request_units, subquestion_markers
 
 PREAMBLE = "システムAの画面Bについて教えてください。"
 LINE_QUESTION = PREAMBLE + "\n①受注の登録方法は？\n②請求書の再発行方法は？\n③承認の担当は誰ですか？"
-
-
-def _base(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """子要求（「Q1.F1」など）を除いた原文の単位。"""
-    return [unit for unit in units if "." not in unit["id"]]
 
 
 # ---- 小問の分割 ----------------------------------------------------------------------------------
 
 
 def test_line_start_subquestions_become_request_units_with_preamble() -> None:
-    units = _base(request_units(LINE_QUESTION))
+    units = request_units(LINE_QUESTION)
 
-    assert [(u["id"], u["kind"], u["text"]) for u in units] == [
-        ("Q1", "context", PREAMBLE),
-        ("Q2", "request", "①受注の登録方法は？"),
-        ("Q3", "request", "②請求書の再発行方法は？"),
-        ("Q4", "request", "③承認の担当は誰ですか？"),
+    assert [(u["id"], u["subquestion"], u["text"]) for u in units] == [
+        ("Q1", "①", "①受注の登録方法は？"),
+        ("Q2", "②", "②請求書の再発行方法は？"),
+        ("Q3", "③", "③承認の担当は誰ですか？"),
     ]
-    # 小問の前の共通の前置きは各小問に付き、前置きの文は背景（答える対象ではない）。
-    assert [u.get("subquestion") for u in units[1:]] == ["①", "②", "③"]
-    assert all(u["preamble"] == PREAMBLE for u in units[1:])
+    # 小問の前の共通の前置きは各小問に付く。
+    assert all(u["preamble"] == PREAMBLE for u in units)
 
 
 def test_subquestions_written_in_one_sentence_are_split() -> None:
-    units = _base(request_units("画面Bの件で①受注の登録方法②請求書の再発行方法を教えてください"))
+    units = request_units("画面Bの件で①受注の登録方法②請求書の再発行方法を教えてください")
 
-    assert [(u["kind"], u["text"]) for u in units] == [
-        ("context", "画面Bの件で"),
-        ("request", "①受注の登録方法"),
-        ("request", "②請求書の再発行方法を教えてください"),
-    ]
-    assert units[1]["preamble"] == "画面Bの件で"
+    assert [u["text"] for u in units] == ["①受注の登録方法", "②請求書の再発行方法を教えてください"]
+    assert all(u["preamble"] == "画面Bの件で" for u in units)
 
 
 @pytest.mark.parametrize(
@@ -115,17 +91,8 @@ def test_step_number_references_are_not_subquestions(question: str) -> None:
 def test_questions_without_subquestion_markers_keep_the_same_units(question: str) -> None:
     units = request_units(question)
 
-    # 小問の印の無い質問は、文ごとの単位（句点・疑問符・改行）と種類がそのまま。
-    assert _base(units) == _with_request_kind(_sentence_units(question))
-    assert not any("subquestion" in u or "preamble" in u for u in units)
-
-
-def test_definition_targets_follow_subquestion_ids() -> None:
-    question = PREAMBLE + "\n①受注の登録方法は？\n②「区分」の意味は？"
-    targets = definition_targets(question)
-    ids = {u["id"] for u in request_units(question) if u.get("subquestion")}
-
-    assert targets and all(t["request_id"] in ids for t in targets)
+    # 小問の印の無い質問は、原文全体を 1 つの単位にする。
+    assert units == [{"id": "Q1", "text": question}]
 
 
 def test_subquestion_markers_come_from_the_language_pack_not_step_markers() -> None:
@@ -176,55 +143,6 @@ def context(*parents: ContextParentEvidence) -> AnswerContext:
     return AnswerContext(records=[p.record for p in parents], text="x", evidence_tree=tuple(parents))
 
 
-def test_subquestion_targets_judge_body_and_search_with_preamble() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-
-    assert [t.id for t in targets] == ["Q1"]
-    assert targets[0].text == LINE_QUESTION
-    assert not targets[0].subquestion
-    assert targeted_queries(targets[0], ()) == (LINE_QUESTION,)
-
-
-def test_subquestions_require_explicit_gap_before_search() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-    rows = request_rows(targets)
-    assert all(row["status"] == "unassessed" for row in rows)
-    assert plan_targeted_retrievals(rows, targets, CoverageBudget())[0] == []
-    rows[0]["answer_status"] = "missing"
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget())
-    assert [item.target.id for item in plan] == ["Q1"] and not stop
-
-
-def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-    rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
-
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_subquestions=2))
-    assert [p.target.id for p in plan] == ["Q1"]
-    assert not stop
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_queries=0))
-    assert plan == [] and stop == "max_queries"
-
-
-def test_each_subquestion_keeps_its_own_top_evidence() -> None:
-    targets = coverage_targets(LINE_QUESTION, split)
-    rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
-    calls: list[str] = []
-
-    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        calls.append(text)
-        key = "q" + str(len(calls))
-        return context(*(parent(f"{key}-{n}", text) for n in range(4)))
-
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=split)
-
-    assert calls == [LINE_QUESTION]
-    assert not stop
-    selected = select_new_parents(results, set(), max_chunks=2)
-    assert len(selected) == 2
-    assert all(request_id == "Q1" for request_id, _ in selected)
-
-
 def test_select_new_parents_keeps_shared_cap_for_missing_requests() -> None:
     sub = TargetedRetrieval("Q2", ("a",), tuple(parent(f"a{n}", "x") for n in range(3)), chunk_cap=1)
     missing = TargetedRetrieval("Q5", ("b",), tuple(parent(f"b{n}", "x") for n in range(3)))
@@ -245,58 +163,3 @@ def _entry(request_id: str, text: str, page: int) -> grounded.CheckedItem:
         ),
         span=span,
     )
-
-
-def test_answer_is_split_by_subquestion_heading_and_only_unsupported_is_gap() -> None:
-    units = request_units(LINE_QUESTION)
-    subquestions = [u for u in units if u.get("subquestion")]
-    checked = [_entry("Q2", "受注は受注入力画面で登録します。", 3), _entry("Q3", "請求書は請求一覧で再発行します。", 5)]
-
-    body, refs = grounded.render_with_citations("要約。", checked, subquestions=subquestions)
-
-    labels = grounded.answer_labels()
-    first = labels.subquestion_heading("①", "受注の登録方法は？")
-    second = labels.subquestion_heading("②", "請求書の再発行方法は？")
-    third = labels.subquestion_heading("③", "承認の担当は誰ですか？")
-    assert body.index(first) < body.index("受注入力画面") < body.index(second) < body.index("請求一覧") < body.index(third)
-    # 根拠の無い小問だけを「確認できない」にする。
-    missing = grounded.missing_request_line({"request_id": "Q4"}, units)
-    assert body.count("根拠付きの説明を十分に示せていません") == 1
-    assert "取得した資料で確認できませんでした" not in body
-    assert body.index(third) < body.index(missing)
-    assert len(refs) == 2
-    # 見出しは回答の主張ではない（忠実さの照合・評価から外す）。
-    assert grounded.is_structural_line(first)
-
-
-def test_answer_without_subquestion_items_keeps_the_existing_sections() -> None:
-    units = request_units(LINE_QUESTION)
-    subquestions = [u for u in units if u.get("subquestion")]
-    checked = [_entry("", "受注は受注入力画面で登録します。", 3)]
-
-    assert grounded.render_with_citations("要約。", checked, subquestions=subquestions) == grounded.render_with_citations("要約。", checked)
-
-
-def test_missing_request_uses_bound_language_and_keeps_missing_status() -> None:
-    question = "値と条件を答えてください。"
-    units = request_units(question)
-    audit = grounded.deterministic_audit(question, [])
-    assert audit.request_reviews[0].status == "missing"
-    with bind_pack(resolve(builtin_pack(), {"answer_labels": {"missing_request_template": "説明不足: {text}（{補足}）"}})):
-        line = grounded.missing_request_line({"request_id": units[0]["id"]}, units)
-    assert line == "説明不足: 値と条件を答えてください（{補足}）"
-    assert audit.request_reviews[0].status == "missing"
-
-
-def test_audit_missing_subquestion_line_moves_under_its_heading() -> None:
-    units = request_units(LINE_QUESTION)
-    subquestions = [u for u in units if u.get("subquestion")]
-    missing = grounded.missing_request_line({"request_id": "Q3"}, units)
-    checked = [_entry("Q2", "受注は受注入力画面で登録します。", 3), _entry("Q3.R1", "請求一覧の参考の記載。", 5)]
-
-    body, _ = grounded.render_with_citations("要約。", checked, [missing], subquestions=subquestions)
-
-    second = grounded.answer_labels().subquestion_heading("②", "請求書の再発行方法は？")
-    third = grounded.answer_labels().subquestion_heading("③", "承認の担当は誰ですか？")
-    assert body.count(missing) == 1
-    assert body.index(second) < body.index(missing) < body.index(third)

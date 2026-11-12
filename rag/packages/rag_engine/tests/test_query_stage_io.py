@@ -2,7 +2,6 @@
 
 from collections import defaultdict
 from contextlib import contextmanager
-from dataclasses import replace
 
 import pytest
 from test_runtime_knowledge_steps import _RULE, _TERM, _run, _write
@@ -51,14 +50,8 @@ def test_stage_io_matches_actual_enabled_inputs_and_queries(tmp_path, search, an
         assert call["input"]["回答への使用"] is answer
         assert [term["term"] for term in call["output"]["一致した用語"]] == ([_TERM["term"]] if enabled else [])
         assert call["output"]["状態"] == ("照合完了" if enabled else "設定オフ")
-    rules = recorder.stage(answering.RULE_ANSWER_STEP)
-    assert [rule["rule_id"] for rule in rules["output"]["選択した登録ルール"]] == [_RULE["id"]]
-    assert rules["output"]["状態"] == "選択完了"
-    confirmation = recorder.stage(answering.RULE_CONFIRMATION_STEP)
-    assert confirmation["input"]["有効"] is False
-    assert confirmation["output"]["選択した登録ルール"] == []
-    rewrite = recorder.stage("質問の言い換え・分解")
-    assert rewrite["output"]["実行状態"] == "skipped"
+    # payload に残った登録ルールは使わず、その工程も無い。
+    assert not result.runtime_knowledge.matched_rules
     merged = recorder.stage("検索文をまとめ、検索語を作る")
     actual = [item["本文"] for item in merged["output"]["採用した検索文"]]
     assert actual == result.retrieval_query_plan["text_query_variants"]
@@ -89,20 +82,12 @@ def test_term_load_failure_is_recorded_without_inventing_a_match(tmp_path, monke
     assert call["output"]["一致した用語"] == []
 
 
-def test_rewrite_output_and_rejections_are_the_actual_values(tmp_path, monkeypatch):
-    def expand(question, strategy, settings, **kwargs):
-        return replace(
-            answering._base_query_expansion(question, strategy),
-            generated_queries=("合成用語Aの期限",),
-            rejected_queries=({"query": "合成の無関係な検索文", "reason": "synthetic_reason"},),
-        )
+def test_payload_factory_is_not_called_without_an_observer():
+    from rag_engine.generation.execution_record import _execution_step
 
-    monkeypatch.setattr(answering, "build_query_expansion", expand)
-    recorder = Recorder()
-    result = _run(_write(tmp_path / "knowledge.json"), observer=recorder, strategy="query_decomposition")
-    call = recorder.stage("質問の言い換え・分解")
-    output = call["output"]["実際の質問拡張"]
-    assert call["input"]["設定"] == "query_decomposition"
-    assert output["generated_queries"] == result.generated_queries
-    assert output["rejected_queries"] == ({"query": "合成の無関係な検索文", "reason": "synthetic_reason"},)
-    assert call["output"]["実行状態"] == "完了"
+    def unexpected():
+        raise AssertionError("unexpected payload evaluation")
+
+    with _execution_step("合成の工程") as step:
+        step.input(unexpected)
+        step.output(unexpected)

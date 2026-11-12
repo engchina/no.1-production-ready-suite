@@ -90,10 +90,16 @@ async def build_run_manifest(
     knowledge_base_ids = set(request.knowledge_base_ids)
     for profile in profiles.values():
         knowledge_base_ids.update(profile.get("knowledge_base_ids") or [])
-    answer_models = _answer_models(settings, profiles.get(request.search_answer_profile_id or ""))
+    answer_models = _answer_models(
+        settings, profiles.get(request.search_answer_profile_id or ""), request.answer_model_id
+    )
     compare_profile_id = request.compare_search_answer_profile_id
     compare_models = (
-        {"compare": _answer_models(settings, profiles.get(compare_profile_id))}
+        {
+            "compare": _answer_models(
+                settings, profiles.get(compare_profile_id), request.answer_model_id
+            )
+        }
         if compare_profile_id
         else {}
     )
@@ -112,6 +118,7 @@ async def build_run_manifest(
             "knowledge_base_ids": sorted(request.knowledge_base_ids),
             "search_answer_profile_id": request.search_answer_profile_id,
             "compare_search_answer_profile_id": request.compare_search_answer_profile_id,
+            "answer_model_id": request.answer_model_id,
             "rag_overrides": (
                 request.rag_overrides.model_dump(mode="json", exclude_none=True)
                 if request.rag_overrides is not None
@@ -141,13 +148,17 @@ async def build_run_manifest(
     }
 
 
-def _answer_models(settings: Settings, profile: Mapping[str, Any] | None) -> dict[str, str]:
+def _answer_models(
+    settings: Settings, profile: Mapping[str, Any] | None, model_id: str | None = None
+) -> dict[str, str]:
     """1 つの pass の回答のモデルとその出所、判定のモデル（評価のケースの解決と同じ規則）。
 
     プロファイルの指定はプロファイルの回答のモデルを優先し、未指定は全体の既定を継承する。プロファイルが
     読めなければ実際のモデルが分からないので、全体の既定を書かず ``unverified`` にする。
     """
-    if profile is None or "answer_model_id" in profile:
+    if model_id:
+        answer_model, source = model_id, "request"
+    elif profile is None or "answer_model_id" in profile:
         profile_model = str((profile or {}).get("answer_model_id") or "")
         answer_model = profile_model or enterprise_ai_default_model_id(settings) or UNVERIFIED
         source = ANSWER_MODEL_FROM_PROFILE if profile_model else ANSWER_MODEL_FROM_GLOBAL_DEFAULT
@@ -204,7 +215,7 @@ def code_version() -> str:
 
 
 async def _profile(oracle: ManifestOracle, profile_id: str) -> dict[str, Any]:
-    """検索・回答プロファイルの版（設定・用語と回答ルール・ドメインキーワードの内容の hash）。"""
+    """検索・回答プロファイルの版（設定・用語・ドメインキーワードの内容の hash）。"""
     try:
         view = await oracle.get_search_answer_profile(profile_id)
         if view is None:

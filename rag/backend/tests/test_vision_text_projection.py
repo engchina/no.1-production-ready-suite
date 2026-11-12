@@ -107,7 +107,7 @@ def test_sql_bind_read_answer_units_and_render_keep_search_metadata_outside_quot
         catalog = SentUnitCatalog([snapshot])
         bindings = catalog.bind(snapshot.unit_ids)
         assert bindings and all("索引専用甲" not in b.text for b in bindings)
-        item = grounded._quote_item(span, 0, len(record.text), "合成の範囲選択")
+        item = grounded._quote_item(span, 0, len(record.text))
         rendered, refs = grounded.render_with_citations("", [item])
         assert "検索語" in rendered and "保存" in rendered
         assert all(word not in rendered for word in ["索引専用甲", "索引専用乙", "索引専用丙"])

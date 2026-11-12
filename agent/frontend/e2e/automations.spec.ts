@@ -1,8 +1,10 @@
+import { failDatabaseReads } from "./fixtures/read-failure";
 import type { Page } from "@playwright/test";
 
 import { LOCAL_CURRENT_USER, dbUser } from "./fixtures/auth";
 import { MOCK_NOW, RUNTIME_STORAGE_MEMORY, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #784: 業務 Agent の自動実行（スケジュール。トリガーはスケジュールだけ。#1799）。
 
@@ -10,13 +12,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
@@ -91,7 +86,7 @@ for (const viewport of VIEWPORTS) {
       const row = page.getByRole("table", { name: "自動実行の一覧" }).getByRole("row", { name: /週次の品質の点検/ });
       await expect(row).toContainText("毎週 月・水 08:30");
       await expect(row).toContainText("有効");
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`automations-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }
@@ -183,7 +178,7 @@ for (const viewport of VIEWPORTS) {
     const toolbarBox = await toolbar.boundingBox();
     const tableBox = await history.boundingBox();
     expect(toolbarBox && tableBox && toolbarBox.y + toolbarBox.height <= tableBox.y).toBe(true);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.getByRole("heading", { name: "実行履歴" }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`automation-history-${viewport.name}.png`) });
   });
@@ -247,7 +242,7 @@ for (const viewport of VIEWPORTS) {
       // 状態は色だけでなく語で出す（実行履歴と同じ語）。
       await expect(page.getByTestId(`automation-last-${item.id}`)).toContainText(item.label);
     }
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
 
     await page.goto("/automations?id=auto-failed");
     const last = page.getByTestId("automation-last");
@@ -256,7 +251,7 @@ for (const viewport of VIEWPORTS) {
     await expect(last).not.toContainText("実行を作りました。");
     const link = page.getByTestId("automation-last-run-link");
     await expect(link).toHaveAttribute("href", /\/runs\?id=run-1812-failed$/);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`automation-last-${viewport.name}.png`), fullPage: true });
     await link.click();
     await expect(page).toHaveURL(/\/runs\?id=run-1812-failed$/);
@@ -286,7 +281,7 @@ for (const viewport of VIEWPORTS) {
     await expect(notice).toContainText("確かめられなかった点として回答します");
     const open = page.getByTestId("automation-open-tool-policy");
     await expect(open).toHaveAttribute("href", /\/settings\/tool-policy$/);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`automation-approval-tools-${viewport.name}.png`), fullPage: true });
     await open.click();
     await expect(page).toHaveURL(/\/settings\/tool-policy$/);
@@ -360,3 +355,19 @@ for (const viewport of VIEWPORTS) {
     });
   }
 }
+
+
+test("詳細の読み取り失敗を対象なしと見せず、再試行で回復する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  mockApi.state.automations.push({ id: "synthetic-detail", agent_id: "default", name: "合成の自動実行 A", goal: "合成の確認", enabled: false, schedule: { frequency: "daily", time: "09:00", weekdays: [], minute: 0, timezone: "Asia/Tokyo" }, run_as_user_uuid: "local", created_by_user_uuid: "local", created_at: MOCK_NOW, updated_at: MOCK_NOW });
+  const failure = await failDatabaseReads(page, "/api/automations/synthetic-detail");
+  await page.goto("/automations?id=synthetic-detail");
+  const panel = page.getByTestId("automationspage-detail-load-failed");
+  await expect(panel).toBeVisible();
+  await expect(page.getByText("見つかりません", { exact: false })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("detail-read-failure.png") });
+  failure.recover();
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "合成の自動実行 A", level: 1 })).toBeVisible();
+  await expectNoPageHorizontalOverflow(page);
+});

@@ -6,7 +6,7 @@
 LLM・embedding・reranker・DB・外部 API を呼びません。呼出側が先に権限と対象範囲を確かめた候補だけを渡します。
 一致は語の検出であり、規則の適用、条件の確定、同意、承認、事実の裏付けではありません。
 
-初期利用者は回答ルールです。検索・回答プロファイルの知識の層に属し、KB の membership と文書レシピには影響しません。
+利用者は業務ガイドのルール（`pinned`）の照合です。検索・回答プロファイルの知識の層に属し、KB の membership と文書レシピには影響しません（利用者が登録するルールは #4799 で削除）。
 Agent / NL2SQL に同じ入力・出力・最終判断の契約が必要とは確認できなかったため、platform へ抽出しません。
 動的なルールの適用・競合の解決は #3664、確認への自由文の否定・曖昧性の判断は #3657 の責務です。
 
@@ -39,9 +39,9 @@ Agent / NL2SQL に同じ入力・出力・最終判断の契約が必要とは�
 - コードや ID は `normalization=literal, casefold=False, whitespace=preserve` と exact を呼出側が指定できます。Oracle の引用付き識別子などへ NFKC を一律に適用しません。
 - 一つの条件が返す範囲は既定 8 件までです。原文自体を説明 payload や一般ログへ複製しません。保存と表示は既存の権限・保存期間に従います。
 
-## 回答ルールの移行契約
+## ルールの照合の契約
 
-`knowledge.rule_matching.rank_rules` が用途別方針を持ちます。初期移行では既存の保存形式と意味を変更しません。
+`knowledge.rule_matching.rank_rules` が用途別方針を持ちます。本番の回答で照合に入るのは業務ガイドの `pinned` のルールだけです。以下はラベルで照合するルールの契約です。
 
 - 有効状態、title と triggers の対象、各ラベル 3 点、既にラベルが命中した場合だけ本文の共通語に 1 点を保ちます。本文の語だけでは候補にしません。
 - 英数字・アンダースコアだけのラベルは既存の ASCII 語境界、それ以外は既存の部分一致を明示して使います。新しい基礎機能の term / phrase を既存の日本語ルールへ暗黙に適用しません。
@@ -58,12 +58,11 @@ UI の検索欄や認可の filter、SQL の文法解析を同じ照合器で置
 
 | 製品・経路 | 入出力・言語・規模 / 上限 | 既存の正規化と最終責務 | 状態・理由 / 主な回帰 |
 | --- | --- | --- | --- |
-| RAG `runtime_knowledge._matched_rules` | 質問と最大 1000 ルール、各 32 trigger、通常 6 候補。日中英の設定語 | NFKC・casefold・空白、ASCII 語境界と部分一致。適用・権限は呼出側 | **接続済み**。`test_rule_matching` / `test_runtime_knowledge*` |
+| RAG `runtime_knowledge._matched_rules` | 質問と業務ガイドのルール（`pinned`）。各 32 trigger、通常 6 候補 | NFKC・casefold・空白、ASCII 語境界と部分一致。適用・権限は呼出側 | **接続済み**。`test_rule_matching` / `test_runtime_knowledge*` |
 | RAG `_matched_terms` | 最大 1000 用語、各 32 別名、通常 8 候補 | 正式名と別名で重みが異なる。検索語の展開が目的 | **正規化キーだけ共通化**。順位の移行は別評価が必要。`test_runtime_knowledge*` |
 | RAG `domain_keywords._keyword_matches` | 管理語最大 1000、抽出上限 16 | 語境界・長い語優先、包含語の抑制 | **保留**。抽出契約をルールの候補順位へ変えない。`test_domain_keywords` |
 | RAG `approved_faq._best_question_match` / `_similarity_score` | 質問と FAQ 質問群、候補数と閾値は既存設定 | lower・空白除去・末尾句読点・包含比・n-gram。任意の embedding と scope の寄与は別層 | **保留**。直接回答の閾値と意味照合を維持。`test_approved_faq*` |
 | RAG `support_guide_runtime.score_guide` / `support_guide_query` | 許可された公開ガイドの語・別名・質問例と質問。例の類似度・任意の embedding | 空白除去の NFKC・casefold。公開版・条件・分岐・既知条件で最終決定 | **保留**。空白除去と例の類似度を同じ語照合に置換しない。`test_support_guide_matching` |
-| RAG `search_answer_profile_knowledge._already_answered` / `rule_selection` | 現在の選択肢 ID と構造化した回答、必要時は自由文 | 候補の語照合と分離。構造化回答・単独の表示名、または一括認識後に原文照合した選択だけを確定 | **専用の final decision**。否定・未定・比較を語の包含だけで肯定しない。`test_rule_selection` / `test_search_answer_profile_clarification` |
 | RAG `text_search_tokenizer` / `OracleClient` | 検索文・言語資源から Oracle Text の問い合わせと順位付き chunk | 既存 Sudachi / stemming / 検索文 escaping、ACL・KB・active chunk_set の絞り込み | **変更なし**。DB 索引と検索文は既存基盤。`test_text_search_tokenizer` / Oracle の統合テスト |
 | Agent `evidence_match.matched_features` / `order_weights` | 回答の ID・コード・引用・章節と、今回許可された根拠 | NFKC・空白除去、型別に特徴を集めて出典の順を決める | **対象外**。ルール候補と異なる証拠契約。`test_answer_evidence` / `test_validation_evidence_order` |
 | Agent `guide_steps` / `support_task` | RAG MCP のガイド・手順・確認結果と現在の Run | 条件・版・構造化した選択肢の対応。自由文の取消も専用処理 | **対象外**。MCP の境界・既知条件・承認を維持。`test_guide_steps` / `test_clarification_cancel` |

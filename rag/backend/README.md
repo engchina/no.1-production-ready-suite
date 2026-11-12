@@ -17,7 +17,7 @@ Gunicorn + `uvicorn.workers.UvicornWorker`（`127.0.0.1:8000`、workers 2、time
 取込キューは別の unit（`production-ready-rag-ingestion-worker.service`）が消費します。Docker は使いません（#286 / #356）。
 local 開発だけ `uvicorn --reload` を使います。前処理 / parser の開発環境は `../scripts/rag-services.sh`（[docs/deployment.md](../docs/deployment.md)）。
 
-外部 parser(Docling / Unstructured / MinerU / Dots.OCR)は **backend には載せず**、
+外部 parser(Docling / Unstructured / Dots.OCR)は **backend には載せず**、
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
 `app.clients.parser_service` で HTTP 委譲します。未達・空振り時は別経路へ縮退せず取込を止めます。
 既定の解析エンジンは Docling(`RAG_PARSER_ADAPTER_BACKEND=docling`、#286)です。Unstructured などは
@@ -56,7 +56,7 @@ uv run bandit -r app          # セキュリティ
 | `POST /api/documents/ingestion-jobs/drain` | 永続化済み QUEUED job を再実行 |
 | `POST /api/documents/ingestion-jobs/{job_id}/retry` | 失敗・完了・キャンセル済み job の対象文書を新規 job として再投入 |
 | `POST /api/documents/ingestion-jobs/{job_id}/cancel` | QUEUED/RUNNING job を CANCELLED にし、worker 終了時の上書きを防ぐ |
-| `POST /api/search` | 回答フロー（質問の理解・質問拡張・hybrid 検索（RRF）・rerank・CRAG・small-to-big）による citation-grounded 回答生成 |
+| `POST /api/search` | 回答フロー（質問の理解・hybrid 検索（RRF）・rerank・small-to-big）による citation-grounded 回答生成 |
 | `POST /api/search/stream` | SSE 形式で回答・引用をストリーミング |
 | `POST /api/evaluation/jobs/run` | golden set 評価を job として投入（#390） |
 | `GET /api/evaluation/jobs/{job_id}` | 評価の job の進捗と結果（`POST .../cancel` で取り消し） |
@@ -75,7 +75,7 @@ Backend は常に以下の OCI / Oracle 実装を使います。local / oci の�
 
 設定は、3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース。`PLATFORM_*`）を共通 `.env`（リポジトリの `platform/.env`、場所は `PLATFORM_ENV_FILE` で上書き可）、RAG 固有の設定（`RAG_*`）を `backend/.env` に置きます。環境変数 → 共通 `.env` → `backend/.env` の順に読み、旧名（接頭辞のない名前や `HF_TOKEN` / `HF_ENDPOINT`）は読みません（#211。既存環境の移行は [docs/deployment.md](../docs/deployment.md) の「既存環境の更新手順（#211）」）。システム設定画面（OCI 認証・アップロード保存先・データベース）は共通 `.env` に、RAG 固有の設定画面は `backend/.env` に保存します。
 
-モデル設定画面で保存した Enterprise AI / Generative AI 設定は `PLATFORM_MODEL_SETTINGS_FILE` の JSON を正本として永続化します。既定は `model-settings.json` で、相対パスは共通 `.env` と同じディレクトリ（`platform/`）を基準に解決され、3製品で共有します（知らない key は保存時に残します）。`.env` は初期値・bootstrap 用で、保存済み JSON が存在する場合は JSON が優先されます。Enterprise AI API key は JSON には書かず、共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` に保存します（3製品共通の `pr_system_settings.model`。#103）。文書解析の画面で保存した解析エンジンと外部接続は、共有の JSON ではなく RAG 専用の `RAG_PARSER_SETTINGS_FILE`（既定 `parser-settings.json`。相対パスは `backend/` 基準）に保存します（#1701）。文書解析の外部 parser の API key（`RAG_PARSER_MINERU_API_KEY` / `RAG_PARSER_DOTS_OCR_API_KEY`）は RAG 固有のため `backend/.env` に保存します（#106 / #211）。旧形式のモデル設定の JSON に残っている key は、次にモデル設定を保存したときに `.env` へ移します。画面で保存した key は、プロセスの環境変数より優先されます（画面で削除すると環境変数の値に戻ります）。環境変数から来ただけの key は `.env` に書きません。backend は親ディレクトリを `0700`、ファイルを `0600` に補正して保存します。
+モデル設定画面で保存した Enterprise AI / Generative AI 設定は `PLATFORM_MODEL_SETTINGS_FILE` の JSON を正本として永続化します。既定は `model-settings.json` で、相対パスは共通 `.env` と同じディレクトリ（`platform/`）を基準に解決され、3製品で共有します（知らない key は保存時に残します）。`.env` は初期値・bootstrap 用で、保存済み JSON が存在する場合は JSON が優先されます。Enterprise AI API key は JSON には書かず、共通 `.env` の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` に保存します（3製品共通の `pr_system_settings.model`。#103）。文書解析の画面で保存した解析エンジンと外部接続は、共有の JSON ではなく RAG 専用の `RAG_PARSER_SETTINGS_FILE`（既定 `parser-settings.json`。相対パスは `backend/` 基準）に保存します（#1701）。文書解析の外部 parser の API key（`RAG_PARSER_DOTS_OCR_API_KEY`）は RAG 固有のため `backend/.env` に保存します（#106 / #211）。旧形式のモデル設定の JSON に残っている key は、次にモデル設定を保存したときに `.env` へ移します。画面で保存した key は、プロセスの環境変数より優先されます（画面で削除すると環境変数の値に戻ります）。環境変数から来ただけの key は `.env` に書きません。backend は親ディレクトリを `0700`、ファイルを `0600` に補正して保存します。
 
 `OciEnterpriseAiClient` は Enterprise AI の実 endpoint / model deployment / gateway が返す JSON envelope の揺れを吸収します。VLM は `structured_extraction`、`extraction`、`prediction(s)`、`output(s)`、JSON 文字列などから `StructuredExtraction` を取り出して Pydantic で検証します。`StructuredExtraction` は `raw_text` と `elements` を持ち、ページ、読み順、見出し、本文、リスト、表、図、header/footer などを同じ JSON で表せます。LLM は `answer`、`text`、`output_text`、`generated_text`、`choices[].message.content`、`inference_response` などから回答 text を取り出します。独自 gateway がさらに深い envelope を返す場合は `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` に JSON Pointer 形式(`/payload/results/0/text` など)を設定して候補 node を明示できます。いずれも OCI Generative AI chat API には接続しません。
 
@@ -182,7 +182,7 @@ uv run python -m app.rag.oracle_schema --migration \
 ## アップロード制限
 
 `RAG_MAX_UPLOAD_BYTES` で最大ファイルサイズを制御します。既定は 200 MiB です。
-`RAG_ALLOWED_UPLOAD_CONTENT_TYPES` で MIME type を制限します（既定は `app/config.py` の `allowed_upload_content_types`。画面のファイル選択の `rag/frontend/src/lib/upload-selection.ts` と同じ一覧で、テストで照合します）。HEIC / HEIF の画像と EPUB は、MIME type に関係なく変換の方法を添えた 415 で止めます（解析の依存の pi-heif・pandoc を入れないため。#3351）。
+`RAG_ALLOWED_UPLOAD_CONTENT_TYPES` で MIME type を制限します（既定は `app/config.py` の `allowed_upload_content_types`。画面のファイル選択の `rag/frontend/src/lib/upload-selection.ts` と同じ一覧で、テストで照合します）。受け付ける拡張子は `app/rag/source_profile.py` の `ACCEPTED_UPLOAD_EXTENSIONS`（PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・JSON・HTML・JPEG / PNG の 17 個。#4730）で、MIME type が許可されていても、この拡張子でなければ 415 で止めます。HEIC / HEIF の画像と EPUB は、MIME type に関係なく変換の方法を添えた 415 で止めます（解析の依存の pi-heif・pandoc を入れないため。#3351）。
 Object Storage client の key は保存時に安全な文字へ正規化します。local 取得時は `local://`、OCI 取得時は `oci://namespace/bucket/key` または plain key だけを受け付けます。相対パス要素、16 階層超、1 要素 255 文字超、全体 1024 文字超の key は拒否し、異常な object path を取込処理へ渡しません。
 
 アップロード時は原本 bytes の `content_sha256` と `file_size_bytes` を保存します。同じ content hash の既存ドキュメントがある場合、レスポンスと詳細 API に `duplicate_of_document_id` を返します。重複アップロードでも原本は保存しますが、後続処理や UI で確認・スキップ判断できるよう参照元を明示します。
@@ -215,13 +215,13 @@ keyword retrieval の local score は重複を除いた query token の coverage
 chunk metadata には章節・ページ・要素 ID に加えて `chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count` を保存します。長い表・リスト・本文が複数 chunk に分かれても、同じ親要素/章節から来た引用を後で集約できます。
 Hybrid retrieval は Reciprocal Rank Fusion を使います。`RAG_RRF_K` で RRF 定数を調整できます。検索結果の citation metadata には `retrieval_mode`、`vector_rank`、`keyword_rank`、`vector_score`、`keyword_score`、`rrf_k`、`rrf_score` を可能な範囲で含めます。query 本文は入れず、hybrid 検索で vector/keyword のどちらが候補を拾ったかを trace id と合わせて調査できます。
 
-回答は回答フロー（`app/rag/answer_engine.py`・`packages/rag_engine`。#594）だけが行います。質問の理解と質問拡張戦略（`RAG_QUERY_STRATEGY`）で作った検索文ごとに hybrid 検索し、原質問を主軸にした重み付き RRF で融合して、Cohere Rerank（`RAG_RERANK_ENABLED`）で並べ替えます。根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文で親子を復元し（small-to-big）、根拠の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`）を文脈に足します。CRAG（`RAG_ANSWER_FLOW=crag`）は根拠を評価し、足りなければ質問を補正して再検索します。回答文の生成後に根拠との整合を確かめ（監査）、根拠が足りないときは理由と人手確認の要否を付けます。設定と仕組みは `docs/rag-engine.md` を参照してください。
+回答は回答フロー（`app/rag/answer_engine.py`・`packages/rag_engine`。#594）だけが行います。質問の理解で作った検索文ごとに hybrid 検索し、原質問を主軸にした重み付き RRF で融合して、Cohere Rerank（`RAG_RERANK_ENABLED`）で並べ替えます。根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文で親子を復元し（small-to-big）、根拠の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`）を文脈に足します。CRAG（`RAG_ANSWER_FLOW=crag`）は根拠を評価し、足りなければ質問を補正して再検索します。回答文の生成後に根拠との整合を確かめ（監査）、根拠が足りないときは理由と人手確認の要否を付けます。設定と仕組みは `docs/rag-engine.md` を参照してください。
 
 旧 standard の回答エンジンの検索前後の処理（業務同義語の query expansion・本文 hash の重複除去・MMR の多様化・同じ group / 前後の chunk の追加・圧縮・context window と、`RAG_QUERY_EXPANSION_*`・`RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_COMPRESSION_*` などの設定）は #595 で削除しました。`backend/.env` に残っていても読みません（`docs/deployment.md` の「既存環境の更新手順（#595）」）。
 
 検索レスポンスの `diagnostics` は、`retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps` など）、安全チェックの `guardrails_input_enabled` / `guardrail_degraded`、filter key、ナレッジベースの件数、適用した KB / 検索・回答プロファイルの設定、非機密の RAG 設定 fingerprint を返します。query 本文や secret は含めず、評価回帰の原因調査に使います（検索の内訳・候補・context の件数などの旧 standard の診断は #595 で削除しました）。
 
-`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒で上限と同じ。#1425）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。回答フローが質問の理解・根拠の評価（CRAG）・回答の生成・監査で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を job の上限（回答の回数 × `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`〔最小値。既定 3600 秒〕の大きいほうで、86400 秒まで。#1430。同期の API は 600 秒）で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 回答フローの「文書検索（1回目）」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
+`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒で上限と同じ。#1425）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。回答フローが質問の理解・回答の生成・監査で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を job の上限（回答の回数 × `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`〔最小値。既定 3600 秒〕の大きいほうで、86400 秒まで。#1430。同期の API は 600 秒）で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 回答フローの「文書検索（1回目）」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
 
 安全チェックは `RAG_GUARDRAILS_INPUT_ENABLED`（質問）と `RAG_GUARDRAILS_OUTPUT_ENABLED`（回答）を独立に選びます。既定は両方 false で、有効な側だけ OCI Guardrails を呼びます。PII の検出位置はアプリでマスクし、攻撃・不適切な内容・検査失敗は処理を止めます。Local 検査と根拠の一致率による方針は使いません。詳しくは `docs/evaluation-observability-guardrails.md` を参照してください。
 
@@ -272,7 +272,7 @@ HTTP エラー、リクエスト検証エラー、未処理の 500 エラーは 
 ```json
 {
   "data": null,
-  "error_messages": ["対応していないファイル形式です。"],
+  "error_messages": ["この形式は対応していません。PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・HTML・JPEG / PNG のいずれかに変換してからアップロードしてください。"],
   "warning_messages": []
 }
 ```

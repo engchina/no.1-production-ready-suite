@@ -57,7 +57,7 @@ describe("ChatTurn / ChatAnswer", () => {
 describe("ChatPendingTurn", () => {
   const sending = createOptimisticChatMessage("在庫は？", 1000);
 
-  it("送信中は質問と、回答の入れ物の中の処理の段階を出す", () => {
+  it("送信中は質問と独立した処理の段階を出す", () => {
     act(() =>
       root.render(
         <ChatPendingTurn
@@ -70,7 +70,7 @@ describe("ChatPendingTurn", () => {
       )
     );
     expect(host.querySelector('[data-status="sending"]')!.textContent).toBe("在庫は？");
-    expect(host.querySelector('[data-testid="progress"]')!.closest("div.border-border")).not.toBeNull();
+    expect(host.querySelector('[data-testid="progress"]')!.closest("[data-chat-answer-card]")).toBeNull();
     expect(host.querySelector('[data-testid="failure"]')).toBeNull();
   });
 
@@ -111,4 +111,14 @@ describe("ChatTurn の送った人（#1928）", () => {
     }
     expect(host.querySelector('[data-testid="owner"] [data-chat-sender]')).toBeNull();
   });
+});
+
+
+it("進度は回答カードと同じ往復で上下に並び、回答の枠に入れない", () => {
+  act(() => root.render(<ChatAnswer progress={<section data-testid="progress">合成の処理</section>} testId="answer">合成の回答</ChatAnswer>));
+  const answer = host.querySelector('[data-testid="answer"]')!;
+  const progress = host.querySelector('[data-testid="progress"]')!;
+  expect(answer.contains(progress)).toBe(false);
+  expect(progress.parentElement).toBe(answer.parentElement);
+  expect(progress.nextElementSibling).toBe(answer);
 });

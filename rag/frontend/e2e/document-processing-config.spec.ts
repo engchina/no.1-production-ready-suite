@@ -42,7 +42,6 @@ function config(): DocumentProcessingConfig {
     parser_adapter_backend: null,
     parser_docling_enabled: null,
     parser_unstructured_enabled: null,
-    parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
     chunking_strategy: null,
     chunk_size: 800,
@@ -110,8 +109,6 @@ async function mockWorkspace(
     storedChunkMetadata?: Record<string, string>;
     /** 設定を保存するまで、レシピの処理の投入を 409 にする文(#2639)。 */
     enqueueConflictUntilSaved?: string;
-    /** 管理者が MinerU のライセンスの条件を確認済みか（#3359。既定は確認済み）。 */
-    mineruLicenseAcknowledged?: boolean;
   } = {}
 ) {
   const status = options.documentStatus ?? "INDEXED";
@@ -153,19 +150,11 @@ async function mockWorkspace(
     };
   };
 
-  // 処理設定パネルは文書解析の設定から対応形式と MinerU のライセンスの確認を読む（#3359）。
-  const mineruLicenseAcknowledged = options.mineruLicenseAcknowledged ?? true;
+  // 処理設定パネルは文書解析の設定から対応形式を読む。
   await page.route("**/api/settings/parser-adapters", (route) =>
     fulfillDocumentInspection(route, {
       json: ok({
         capabilities: [],
-        mineru_license: mineruLicenseAcknowledged
-          ? {
-              acknowledged: true,
-              acknowledged_by: "管理者 A",
-              acknowledged_at: "2026-10-26T00:00:00+00:00",
-            }
-          : { acknowledged: false, acknowledged_by: null, acknowledged_at: null },
       }),
     })
   );
@@ -381,15 +370,14 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（PARSER_BACKEND_ORDER。#3359）。
   // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。続いて Dots.OCR →
-  // MinerU → OCI Document Understanding（利用者の判断）。MinerU（#3359）と OCI Document
-  // Understanding（#3374）は準備中（ロードマップ）の印と理由つきで、選べない選択肢として並ぶ。
+  // OCI Document Understanding（利用者の判断）。OCI Document Understanding（#3374）は
+  // 準備中（ロードマップ）の印と理由つきで、選べない選択肢として並ぶ。
   await expect(page.getByRole("option")).toHaveText([
     "Docling",
     "Unstructured",
     "構造化レコード JSONL",
     "XML ツリー JSON",
     "Dots.OCR",
-    /^MinerU準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
     /^OCI Document Understanding準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
   ]);
   await page.getByRole("option", { name: "Dots.OCR" }).click();
@@ -435,9 +423,9 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await expect(panel.getByRole("combobox", { name: "文書分割", exact: true })).toContainText(
     "固定分割符"
   );
-  await expect(panel.getByRole("textbox", { name: "固定分割符文字列" })).toHaveValue(
-    "<<<JSONL_RECORD_BOUNDARY>>>"
-  );
+  await expect(
+    panel.locator('[data-config-field="chunk_delimiter"] [data-searchable-chips]').getByRole("listitem")
+  ).toHaveText(["記録の境界 (<<<JSONL_RECORD_BOUNDARY>>>)"]);
   const excel = panel.getByTestId("document-excel-options");
   await expect(excel).toBeVisible();
   await expect(excel.getByTestId("document-excel-options-inherited")).toContainText("自動");
@@ -496,7 +484,7 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
     preprocess_profile: "excel_to_jsonl",
     parser_adapter_backend: "structured_records_jsonl",
     chunking_strategy: "fixed_delimiter",
-    chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
+    chunk_delimiter: ["<<<JSONL_RECORD_BOUNDARY>>>"],
     excel_options: {
       mode: "table",
       header_row: 2,
@@ -831,10 +819,7 @@ for (const viewport of [
       await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
       const combobox = panel.getByRole("combobox", { name: "文書解析" });
       await combobox.click();
-      // MinerU（#3359）も OCI Document Understanding（#3374）と同じく準備中の印と理由つきで選べない。
-      const mineru = page.getByRole("option", { name: /^MinerU/ });
-      await expect(mineru).toHaveAttribute("aria-disabled", "true");
-      await expect(mineru).toContainText("準備中（ロードマップ）のため、まだ選べません。");
+      // OCI Document Understanding（#3374）は準備中の印と理由つきで選べない。
       const roadmap = page.getByRole("option", { name: /OCI Document Understanding/ });
       await expect(roadmap).toHaveAttribute("aria-disabled", "true");
       await expect(roadmap).toContainText("準備中（ロードマップ）のため、まだ選べません。");

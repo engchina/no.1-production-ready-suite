@@ -43,8 +43,8 @@ export function groupStagesByPhase<T extends { phase: string }>(stages: readonly
   return groups;
 }
 
-/** 検索方法に配置する、質問の解釈から根拠の判定までの区分。 */
+/** 検索方法に配置する、質問の解釈と検索の区分。 */
 export function isRetrievalPromptStage(stage: { id?: string; phase: string }): boolean {
   // 条件認識だけは回答前の確認の指示として「回答プロンプト」に置く。
-  return stage.id !== "support_guide_conditions" && ["question", "retrieval", "grounding"].includes(stage.phase);
+  return stage.id !== "support_guide_conditions" && ["question", "retrieval"].includes(stage.phase);
 }

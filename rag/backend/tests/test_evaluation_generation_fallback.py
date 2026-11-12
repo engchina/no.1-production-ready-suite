@@ -73,8 +73,6 @@ def _engine_failure(error: Exception, monkeypatch: MonkeyPatch) -> dict[str, Any
         answer=result.answer_text,
         question_display=QUESTION,
         original_question=QUESTION,
-        selected_strategy="simple",
-        effective_strategy="simple",
         generation_trace=result.generation_trace,
     )
     return dict(_outcome_from_result(converted, _SearchState()).diagnostics)

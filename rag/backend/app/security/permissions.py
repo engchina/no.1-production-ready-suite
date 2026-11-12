@@ -69,6 +69,7 @@ MENU_SETTINGS_PIPELINE = "menu.settings_pipeline"
 MENU_SETTINGS_PREPROCESS = "menu.settings_preprocess"
 MENU_SETTINGS_PARSER_ADAPTERS = "menu.settings_parser_adapters"
 MENU_SETTINGS_CHUNKING = "menu.settings_chunking"
+MENU_SETTINGS_FILE_TYPE_DEFAULTS = "menu.settings_file_type_defaults"
 # 言語資源(文書と質問を読むときの言語の書き方。#2181)。
 MENU_SETTINGS_LANGUAGE_PACK = "menu.settings_language_pack"
 MENU_SETTINGS_VECTOR_INDEX = "menu.settings_vector_index"
@@ -103,8 +104,6 @@ SEARCH_ANSWER_PROFILES_MANAGE = "rag.search_answer_profiles.manage"
 KNOWLEDGE_BASES_MANAGE = "rag.knowledge_bases.manage"
 FEEDBACK_MANAGE = "rag.feedback.manage"
 SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
-# 品質評価の判定の校正の管理（全員の判定・一致・裁定・校正・LabelSet の入出力。#3578）。
-EVALUATION_CALIBRATION_MANAGE = "rag.evaluation_calibration.manage"
 
 # グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
@@ -128,7 +127,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_USE,
         "実行履歴",
         "「実行履歴」の画面を表示し、チャットと RAG 検索の実行の一覧と詳細"
-        "（回答・根拠・回答の検証・処理の経過）を見られます（自分の実行だけ。"
+        "（回答・根拠・処理の経過）を見られます（自分の実行だけ。"
         "すべての利用者の実行を見られるのは SYSTEM_ADMIN だけ）。",
     ),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
@@ -141,6 +140,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
     _menu_permission(MENU_SETTINGS_CHUNKING, _GROUP_PIPELINE, "文書分割"),
+    _menu_permission(MENU_SETTINGS_FILE_TYPE_DEFAULTS, _GROUP_PIPELINE, "形式別の既定"),
     _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
     _menu_permission(MENU_SETTINGS_ENTITY_INDEX, _GROUP_PIPELINE, "実体・別名索引"),
     _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "文書構造索引"),
@@ -208,15 +208,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "扱えるのは SYSTEM_ADMIN だけ）。フィードバックの表示と、他の利用者の"
         "保存済みの回答の表示・評価・削除も含みます。",
         implies=(MENU_FEEDBACK,),
-    ),
-    _permission(
-        EVALUATION_CALIBRATION_MANAGE,
-        _GROUP_MANAGE,
-        "判定の校正の管理",
-        "「品質評価」の「判定の校正」で、記入の集合の作成・削除、すべての記入者の判定と記入者の間の"
-        "一致の表示、裁定、校正の実行、人手の判定（LabelSet の JSON）の書き出し・取り込みができます"
-        "（記入は「品質評価」の権限だけでできます。記入者は自分の判定だけを見ます）。",
-        implies=(MENU_EVALUATION,),
     ),
     _permission(
         SYSTEM_TABLES_MANAGE,
@@ -398,6 +389,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/extraction-view"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/source-map"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/reader"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/chunk-window"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/text-window"): _DOCUMENT_VIEW,
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
@@ -419,6 +411,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
+    # 文書全体の要約（#4793）。読むのは文書の詳細と同じ権限、作り直しは文書の作業の権限。
+    ("GET", f"{_D}/summary"): _DOCUMENT_VIEW,
+    ("POST", f"{_D}/summary"): _DOCUMENT_WORKSPACE,
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
@@ -466,9 +461,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", _BV): _SEARCH_ANSWER_PROFILE_READ,
     ("PATCH", _BV): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/archive"): _any(SEARCH_ANSWER_PROFILES_MANAGE),
-    ("GET", f"{_BV}/question-understanding"): _any(MENU_SEARCH_ANSWER_PROFILES),
-    ("PUT", f"{_BV}/question-understanding"): _any(MENU_SEARCH_ANSWER_PROFILES),
-    ("POST", f"{_BV}/question-understanding/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/domain-keywords"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("PUT", f"{_BV}/domain-keywords"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/suggest"): _any(MENU_SEARCH_ANSWER_PROFILES),
@@ -477,6 +469,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # FAQ の対象の KB と根拠の確かめ直し（#4621）。
     ("POST", f"{_BV}/approved-faq/{{faq_id}}/confirm"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    # FAQ の否定の質問（その FAQ を当てたくない質問の例）の置き換え（#4788）。
+    ("PUT", f"{_BV}/approved-faq/{{faq_id}}/negative-questions"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/domain-keywords/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
@@ -485,15 +479,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/approved-faq/suggest"): _any(
         MENU_SEARCH, MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES
     ),
-    # 類似問の提示のオン / オフ（#684）。
+    # 類似問の提示のオン / オフ（#684）と、回答をそのまま返すかのオン / オフ（#4788）。
     ("PUT", f"{_BV}/approved-faq/settings"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
-    # ルールの確認の質問(#717)。確認の判定はチャットが送信のたびに使う。
-    ("PUT", f"{_BV}/runtime-knowledge/rules/{{rule_id}}/clarification"): _any(
-        MENU_SEARCH_ANSWER_PROFILES
-    ),
+    # 業務ガイドの条件の確認。確認の判定はチャットが送信のたびに使う。
     ("POST", f"{_BV}/clarifications/suggest"): _any(MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES),
     # 業務ガイド（#1237）。他の知識と同じく、プロファイルの管理の画面の権限で扱う。
     ("GET", f"{_BV}/support-guides"): _any(MENU_SEARCH_ANSWER_PROFILES),
@@ -567,12 +558,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/evaluation/cases/process-drafts"): _any(MENU_EVALUATION),
     # 品質評価の job（#390）。状態の取得・取り消しは、投入した利用者の job だけ（backend が判定）。
     ("POST", "/evaluation/jobs/run"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/jobs"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/jobs/{job_id}/results.xlsx"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/jobs/{job_id}"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/jobs/{job_id}/cancel"): _any(MENU_EVALUATION),
-    # 判定の校正（#3578）。記入（自分の判定だけ）は品質評価の権限、全員の判定・一致・裁定・校正・
-    # 書き出し・取り込みは判定の校正の管理。校正の進捗・取り消しは上の job の API。
-    ("GET", "/evaluation/calibration/status"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/models"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/testsets/import"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/testsets/{draft_id}/prepare"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/testsets"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/testsets"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/testsets/sources"): _any(MENU_EVALUATION),
@@ -580,40 +572,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/evaluation/testsets/{draft_id}"): _any(MENU_EVALUATION),
     ("PUT", "/evaluation/testsets/{draft_id}"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/testsets/{draft_id}/export.xlsx"): _any(MENU_EVALUATION),
-    ("GET", "/evaluation/calibration/label-sets"): _any(MENU_EVALUATION),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}"): _any(MENU_EVALUATION),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/rows"): _any(MENU_EVALUATION),
-    ("PUT", "/evaluation/calibration/label-sets/{label_set_id}/labels"): _any(MENU_EVALUATION),
-    ("GET", "/evaluation/calibration/sources"): _any(EVALUATION_CALIBRATION_MANAGE),
-    ("POST", "/evaluation/calibration/label-sets"): _any(EVALUATION_CALIBRATION_MANAGE),
-    ("POST", "/evaluation/calibration/label-sets/import"): _any(EVALUATION_CALIBRATION_MANAGE),
-    ("DELETE", "/evaluation/calibration/label-sets/{label_set_id}"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/agreement"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("PUT", "/evaluation/calibration/label-sets/{label_set_id}/adjudications"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/synthetic"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("PUT", "/evaluation/calibration/label-sets/{label_set_id}/synthetic/{item_id}"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/calibrations"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("POST", "/evaluation/calibration/label-sets/{label_set_id}/calibrations"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/archive"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
-    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/export"): _any(
-        EVALUATION_CALIBRATION_MANAGE
-    ),
     # ---- 検索・回答プロファイル: フィードバック ----
     ("POST", "/feedback"): _ANSWER_USE,
     ("GET", "/feedback/current"): _ANSWER_USE,
@@ -697,6 +655,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
     ("GET", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
     ("PATCH", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
+    ("GET", "/settings/file-type-defaults"): _any(MENU_SETTINGS_FILE_TYPE_DEFAULTS),
+    ("PATCH", "/settings/file-type-defaults"): _any(MENU_SETTINGS_FILE_TYPE_DEFAULTS),
     # 検索・回答プロファイルの言語資源の上書きの欄も、全体の値を読む（#2181）。
     ("GET", "/settings/language-pack"): _any(
         MENU_SETTINGS_LANGUAGE_PACK, SEARCH_ANSWER_PROFILES_MANAGE
@@ -730,18 +690,17 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SETTINGS_RETRIEVAL,
         MENU_SETTINGS_EVALUATION,
     ),
+    # 検索方法の画面に編集欄は無い（内部の段の文は読むだけ。#4782）。
     ("PUT", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS,
         MENU_SETTINGS_PARSER_ADAPTERS,
         MENU_SETTINGS_CHUNKING,
-        MENU_SETTINGS_RETRIEVAL,
         MENU_SETTINGS_EVALUATION,
     ),
     ("DELETE", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS,
         MENU_SETTINGS_PARSER_ADAPTERS,
         MENU_SETTINGS_CHUNKING,
-        MENU_SETTINGS_RETRIEVAL,
         MENU_SETTINGS_EVALUATION,
     ),
     # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。
@@ -800,13 +759,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
 # 編集できるプロンプトの key → 変更に要る権限（#1010）。画面はそれぞれ 1 つのプロンプトだけを
 # 編集するので、片方の画面の権限でもう片方のプロンプトを変えられないようにする。
 ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
-    "vlm_answer": MENU_SETTINGS_PROMPTS,
     "image_retrieval": MENU_SETTINGS_PARSER_ADAPTERS,
     "external_ocr": MENU_SETTINGS_PARSER_ADAPTERS,
     "heading_levels": MENU_SETTINGS_PARSER_ADAPTERS,
     "field_extraction": MENU_SETTINGS_PARSER_ADAPTERS,
     "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
-    "raptor_summary_system": MENU_SETTINGS_PARSER_ADAPTERS,
+    "document_summary": MENU_SETTINGS_PARSER_ADAPTERS,
 }
 
 

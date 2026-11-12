@@ -21,7 +21,7 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 
 ## API キー
 
-- **各利用者が自分で発行する**: 画面の左下のアカウントの欄（名前・ロール）から開くアカウントの画面の「API キー」のタブ（`/account?tab=api-keys`。#1873）。名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選ぶ。メニュー権限は要らない。1 人 10 件まで。
+- **各利用者が自分で発行する**: 画面の左下のアカウントの欄（名前・ロール）を押して開くメニューの「アカウント」から移る、アカウントの画面の「API キー」のタブ（`/account?tab=api-keys`。#1873）。名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選ぶ。メニュー権限は要らない。1 人 10 件まで。
 - 秘密（`prak_<id>_<秘密>`）は **発行の直後に 1 回だけ** 表示する。DB には SHA-256 だけを保存する（表 `PLATFORM_API_KEYS`）。
 - キーは **発行した利用者として動く**。呼び先は認証のたびに利用者の現在のロールから権限とデータの範囲（検索・回答プロファイル・ナレッジベース・業務プロファイル・Deep Data Security）を組み立てる。ツールの一覧（`tools/list`）も利用者の権限で決まる。
 - 利用者が無効化・削除されたら、そのキーは使えない（削除ではキーも消える）。初回のパスワード変更が済んでいない利用者のキーも使えない。
@@ -54,32 +54,37 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 | `agent_get_run` | Run の状態・回答の対応（`outcome`。RAG の `rag_search` と同じ語彙。完了した Run だけ）・回答・根拠（`sources`。RAG の `document_id` / `chunk_id` と引用の印 `cited`。今の権限で見られない根拠は除いて数を `withheld_evidence_count` に。#3240。本文は既定で全文で、応答の予算に入らない根拠は `text_omitted`、1 件の上限を超える根拠は境界で切って `truncated`・`next_offset`。#3321）・段落の印（`passage_marks`・`removed_passages`・`answer_warnings`。#2738）・回答前の確認（`confirmation`）・使ったツール。まだ終わっていなければ `wait_seconds`（既定 30 秒）まで待つ。出力は `agent_chat` / `agent_answer_confirmation` と同じ形（`schema_version` 4） |
 | `agent_answer_confirmation` | 回答前の確認に答える（`action=answer` で確認事項ごとに選択肢の ID か自由入力）か、確認せずに回答させる（`action=skip`） |
 | `agent_cancel_run` | 実行（`run_id`）を止める（承認・回答前の確認の待ちも閉じる）。冪等で、終わった Run はエラーにせず `result`（`cancelled` / `already_cancelled` / `already_finished`）と取消の後の `status` を返す。止められるのは画面の取消と同じ人（実行した利用者・会話の持ち主・system_admin）。Run を作らないので直近 24 時間の Run の数に数えない（#3240） |
-| `agent_get_run_observation` | 評価・監査の機械が読む実行（`run_id`）の観測（#3240）。Run の情報（業務 Agent の公開の版 `agent_version`・`trace_id`・最終の検証の状態 `validation_status`・`created_at` / `finished_at`）、モデルの利用量（`usage`。OpenTelemetry の `gen_ai.usage.*` の名前）、ツールの呼び出しの経過（`tool_calls`。状態・失敗の分類 `error_code`・根拠の数・旧版も検索したか `include_superseded`・NL2SQL の状態と行の数だけ。引数・SQL・行・エラーの文は出さない）、調べた根拠の全件（`evidence`。読み取りのツールで読んだ chunk を含み、初めて現れた順 `rank`・RAG の検索の順位 `retrieval_rank`・引用 `cited` / `answer_use`・RAG と同じ名前の場所 `locator`）。根拠の本文は生成に渡した本文そのもの（切らない）で、件数（`limit`。既定 20・最大 100）と 1 ページの合計の予算でページに分け（続きは `next_cursor` を `cursor` に渡す）、1 件で予算を超える根拠は本文を省いて `text_omitted`（`rag_read_source` で読む）。根拠は呼ぶたびに今の権限で確かめ直し、見られない根拠は除いて数を `withheld_evidence_count` に返す。読めるのは `agent_get_run` と同じ人 |
+| `agent_get_run_observation` | 評価・監査の機械が読む実行（`run_id`）の観測（#3240）。Run の情報（業務 Agent の公開の版 `agent_version`・`trace_id`・`created_at` / `finished_at`）、モデルの利用量（`usage`。OpenTelemetry の `gen_ai.usage.*` の名前）、ツールの呼び出しの経過（`tool_calls`。状態・失敗の分類 `error_code`・根拠の数・旧版も検索したか `include_superseded`・NL2SQL の状態と行の数だけ。引数・SQL・行・エラーの文は出さない）、調べた根拠の全件（`evidence`。読み取りのツールで読んだ chunk を含み、初めて現れた順 `rank`・RAG の検索の順位 `retrieval_rank`・引用 `cited` / `answer_use`・RAG と同じ名前の場所 `locator`）。根拠の本文は生成に渡した本文そのもの（切らない）で、件数（`limit`。既定 20・最大 100）と 1 ページの合計の予算でページに分け（続きは `next_cursor` を `cursor` に渡す）、1 件で予算を超える根拠は本文を省いて `text_omitted`（`rag_read_source` で読む）。根拠は呼ぶたびに今の権限で確かめ直し、見られない根拠は除いて数を `withheld_evidence_count` に返す。読めるのは `agent_get_run` と同じ人 |
 | `agent_skill_export` | 使える業務 Agent が使うスキルを Agent Skills の形（`SKILL.md` と `references/` のファイル）で返す。`name` のフォルダに置くと外部の Agent でも使える |
 
 - 業務 Agent は画面のチャットと同じく、公開中の版で RAG / NL2SQL などを調べて答える。会話（`thread_id`）は画面のチャットの会話と同じで、作った利用者だけが続けられる。
 - MCP から作った Run は、**承認の要るツールを呼ばない**（自動実行と同じ。承認する人が画面にいるとは限らないため）。業務 Agent は使えなかったツールを「確かめられなかった点」として答え、`skipped_approval_tools` に出す。
-- 既定の待ち時間（50 秒）は Claude Code のツールの待ち時間の既定（60 秒）より短い。長くかかる質問は `agent_get_run` で続きを読むか、`MCP_TOOL_TIMEOUT` を延ばして `wait_seconds` を大きくする。
+- `agent_chat` の既定の待ち時間（50 秒）は、Claude Code の HTTP の 1 要求の最初の応答までのタイマー（60 秒）より短い。長くかかる質問は `agent_get_run` で続きを読むか、`MCP_TOOL_TIMEOUT` を延ばして（60000 より大きくすると、このタイマーも延びる）`wait_seconds` を大きくする。
 
 ## 例
 
 ### Claude Code
 
 ```bash
-export PR_API_KEY='prak_...'   # 発行したキー（repo や共有の設定に書かない）
+export PR_API_KEY='prak_...'
 claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \
   --header 'Authorization: Bearer ${PR_API_KEY}'
 claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp \
   --header 'Authorization: Bearer ${PR_API_KEY}'
 claude mcp add --scope user --transport http agent https://<host>/agent/api/mcp \
   --header 'Authorization: Bearer ${PR_API_KEY}'
-claude mcp list                 # rag・nl2sql・agent が ✔ Connected
-export MCP_TOOL_TIMEOUT=660000   # rag_search は 20 秒〜2 分かかる（上限 600 秒。既定の 60 秒では切れる）
-export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt   # 自作の CA の HTTPS のとき（https://<host>/platform/ca.crt を保存したファイル）
+export MCP_TOOL_TIMEOUT=660000
+curl -sk https://<host>/platform/ca.crt -o ~/production-ready-ca.crt
+export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt
 claude
 ```
 
-- MCP サーバーの名前は `rag` / `nl2sql` / `agent` にする（組み込みのスキルがこの名前でツールを使う）。
+- `PR_API_KEY` に発行したキーを入れる（repo や共有の設定に書かない）。`claude mcp list` で `rag`・`nl2sql`・`agent` が Connected になることを確かめられる。
+- コピーするコードの行末に `#` のコメントを書かない（zsh に貼るとエラーになる）。
+- `curl` と `NODE_EXTRA_CA_CERTS` の 2 行は https の URL のとき（自作の CA の証明書を保存して信頼させる。`-k` は信頼する前の自作の CA を取得するため。正規の証明書に替えた環境では要らない）。
+- `export` はそのシェルだけで有効。次回も使うなら、シェルの起動ファイルか `~/.claude/settings.json` の `env`（パスは絶対パス）に置く。
+- MCP サーバーの名前は `rag` / `nl2sql` / `agent` にする（組み込みのスキルは `rag` / `nl2sql` を使う。`agent` は業務 Agent を呼ぶためのもの）。
+- `MCP_TOOL_TIMEOUT` の全体の既定は `100000000` ミリ秒（約 28 時間）。60 秒なのは HTTP の 1 要求の最初の応答までのタイマーで、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びる。SSE の進み具合があれば、既定でも 60 秒では切れない。`MCP_TOOL_TIMEOUT` は進み具合では延びない固定の上限。
 - 長くかかるツール（`rag_search`。サーバーの上限 600 秒）の待ち時間は 660 秒を推奨する。client が `_meta.progressToken` と `Accept: text/event-stream` を付けると、3 製品の MCP（共通の `pr_backend_core.mcp`）は 10 秒ごとに進み具合（`notifications/progress`）を送る（#1864。詳細は [skills/README.md](../../skills/README.md)「長くかかるツール」）。
 - `--header` は単引用符で渡す。設定（`~/.claude.json`）にはキーの値ではなく `${PR_API_KEY}` が保存され、Claude Code が起動のたびに環境変数から展開する。
 - スキルの入れ方・`claude -p` の許可（`--allowedTools "Skill,mcp__rag,mcp__nl2sql"`）・設定の JSON・つまずく所は [skills/README.md](../../skills/README.md)。
@@ -111,7 +116,7 @@ NL2SQL の読み取りのツールの例は `nl2sql_list_profiles`、Agent は `
 ## 実装（開発者向け）
 
 - 共通: `pr_system_settings.auth.api_keys`（形式・保存・入出力・製品ごとの範囲 `resource_scopes`・1 分あたりの回数 `ApiKeyRateLimiter`）、`AuthService.create_api_key` / `list_api_keys` / `revoke_api_key` / `authenticate_api_key`、`authorize_request(..., api_key_paths={"/mcp"})`、`build_auth_router(..., api_keys=True)`（`/account/api-keys*` と `/security/api-keys*`）。DDL は共通認証の `PLATFORM_AUTH_DDL`。
-- 画面: `@production-ready/system-settings` の `AccountPage`（`ACCOUNT_PATH`。「API キー」のタブの中身は `MyApiKeysPanel`）・`ApiKeysAdminPage`（`API_KEY_ADMIN_NAV_ITEM`）・`mcpEndpoints`。アカウントの画面へは `SidebarAccountSection` のアカウントの欄（`routes.account`）から移る（#1873）。
+- 画面: `@production-ready/system-settings` の `AccountPage`（`ACCOUNT_PATH`。「API キー」のタブの中身は `MyApiKeysPanel`）・`ApiKeysAdminPage`（`API_KEY_ADMIN_NAV_ITEM`）・`mcpEndpoints`。アカウントの画面へは `SidebarAccountSection` のアカウントの欄のメニュー（`routes.account`）から移る（#1873・#4724）。
 - 製品の manifest: `/account/api-keys*` はログインだけ（`OPEN_API_OPERATIONS`）、`/security/api-keys*` は RAG / NL2SQL が `menu.security_api_keys`、Agent は Agent 管理（`agent.admin`。画面は RAG / NL2SQL）。
 - Agent: `features/agent/mcp_server.py`（ツールとキーの範囲・Run の数の上限）、`runtime.is_mcp_run`（承認の要るツールを呼ばない）。画面で業務 Agent を絞るのは `AccountPage` の `apiKeys.agentScopeOptions`（Agent の画面が、業務 Agent を読める利用者に渡す。#1873）。
 - Agent → RAG / NL2SQL の連携は今までどおりサービストークン（`backend-standard.md`「製品間の連携」）。

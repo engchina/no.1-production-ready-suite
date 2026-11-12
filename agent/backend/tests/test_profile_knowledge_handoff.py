@@ -1,8 +1,8 @@
-"""根拠の取得が返す検索・回答プロファイルのルール・用語を、回答を作るモデルへ引き継ぐ（#2701）。
+"""根拠の取得が返す検索・回答プロファイルの用語を、回答を作るモデルへ引き継ぐ（#2701）。
 
-RAG は Agent 主体の取得（planning=caller）で回答を作らないので、承認済みのルールの本文と用語の
-説明は根拠の取得の結果（`profile_knowledge`）で Agent に届く。組み込み Runtime はそれを根拠
-（`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）・最終の検証の根拠には
+RAG は Agent 主体の取得（planning=caller）で回答を作らないので、承認済みの用語の説明は
+根拠の取得の結果（`profile_knowledge`）で Agent に届く。組み込み Runtime はそれを根拠
+（`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）の根拠には
 入れない。渡したことは Run の step とログに残る。合成の設定・根拠で、モデルは台本（ScriptedModel）。
 """
 
@@ -27,42 +27,30 @@ from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.runtime import AgentProfile, RunCreateRequest, RunStatus, runtime_repository
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import profile_knowledge_summary
-from app.settings import get_settings
 
 SKILL_ID = "test2701-skill"
 AGENT_ID = "test2701-agent"
 USER_UUID = "27012701-2222-3333-4444-555555555555"
 GOAL = "機器 A の合成手続きアルファはいつまでに行うか"
-# 原文（根拠の本文）に無い、検索・回答プロファイルで承認した判断の方針。
-APPROVED_POLICY = "合成手続きアルファの期限は、受付の翌営業日から数える。"
+# 原文（根拠の本文）に無い、検索・回答プロファイルで承認した用語の説明。
+APPROVED_POLICY = "合成手続きアルファの期限は、受付の翌営業日から数える手続き。"
 ANSWER = "機器 A の合成手続きアルファは受付から 5 営業日以内に行います。"
 
 KNOWLEDGE = {
     "search_answer_profile_id": "bv-1",
     "revision": "0123456789abcdef",
     "matched_on": "original_question",
-    "rules": [
-        {
-            "id": "r-approved",
-            "title": "ルール r-approved",
-            "content": APPROVED_POLICY,
-            "source": "運用の取り決め",
-            "status": "approved",
-            "updated_at": "2026-10-01T00:00:00+00:00",
-        }
-    ],
     "terms": [
         {
             "term": "合成手続きアルファ",
             "aliases": ["手続き α"],
-            "description": "合成の手続きの正式名。",
+            "description": APPROVED_POLICY,
             "source": "",
             "status": "approved",
             "updated_at": "",
         }
     ],
-    "rules_omitted": 1,
-    "terms_omitted": 0,
+    "terms_omitted": 1,
     "load_failed": False,
 }
 
@@ -115,7 +103,6 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     return model
 
 
@@ -155,21 +142,18 @@ def test_profile_knowledge_reaches_the_model_apart_from_the_evidence(
     assert call["arguments"]["original_question"] == GOAL
     assert mcp.calls_of("rag_search") == []
 
-    # モデルへの入力: ルール・用語は根拠と別の項目のまま届き、根拠の一覧には入らない。
+    # モデルへの入力: 用語は根拠と別の項目のまま届き、根拠の一覧には入らない。
     output = _tool_output(model, "c1")
-    assert output["profile_knowledge"]["rules"][0]["content"] == APPROVED_POLICY
-    assert output["profile_knowledge"]["terms"][0]["description"] == "合成の手続きの正式名。"
-    assert output["profile_knowledge"]["rules_omitted"] == 1
+    assert output["profile_knowledge"]["terms"][0]["description"] == APPROVED_POLICY
+    assert output["profile_knowledge"]["terms_omitted"] == 1
     assert APPROVED_POLICY not in json.dumps(output["evidence"], ensure_ascii=False)
 
-    # 回答の根拠（AI に渡した根拠・引用）と最終の検証の根拠は資料の根拠だけ。
+    # 回答の根拠（AI に渡した根拠・引用）は資料の根拠だけ。
     [artifact] = [item for item in finished.artifacts if item.kind == ANSWER_EVIDENCE_KIND]
     assert APPROVED_POLICY not in json.dumps(artifact.content, ensure_ascii=False)
     assert {item["chunk_id"] for item in artifact.content["items"]} == {
         item["chunk_id"] for item in retrieved["evidence"]
     }
-    [validation] = mcp.calls_of("rag_validate_answer")
-    assert "r-approved" not in {item["chunk_id"] for item in validation["arguments"]["evidence"]}
 
     # 渡した内容は Run の step（全文）とログ（数と版だけ）で追える。
     [step] = [
@@ -182,7 +166,7 @@ def test_profile_knowledge_reaches_the_model_apart_from_the_evidence(
     [record] = [
         r for r in caplog.records if r.message == "builtin_runtime_profile_knowledge_passed"
     ]
-    assert (record.__dict__["rules"], record.__dict__["revision"]) == (1, "0123456789abcdef")
+    assert (record.__dict__["terms"], record.__dict__["revision"]) == (1, "0123456789abcdef")
     assert APPROVED_POLICY not in str(record.__dict__)
 
 
@@ -194,9 +178,7 @@ def test_profile_knowledge_summary_counts_without_the_text() -> None:
         "search_answer_profile_id": "bv-1",
         "revision": "0123456789abcdef",
         "matched_on": "original_question",
-        "rules": 1,
         "terms": 1,
-        "rules_omitted": 1,
-        "terms_omitted": 0,
+        "terms_omitted": 1,
         "load_failed": False,
     }

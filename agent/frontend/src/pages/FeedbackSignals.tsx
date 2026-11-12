@@ -42,16 +42,13 @@ import { APP_ROUTES } from "@/lib/routes";
 import { runStatusView } from "@/lib/status-labels";
 import { countDelta, formatRate, Metric, rateDelta } from "@/pages/feedbackMetrics";
 
-// 確かめるべき実行（暗黙のシグナル。#1822）。評価の付いていない実行も、回答の検証・回答の対応・ツール・承認・
+// 確かめるべき実行（暗黙のシグナル。#1822）。評価の付いていない実行も、回答の対応・ツール・承認・
 // 実行の状態から集め、評価ケースに足して直す流れ（feedback → triage → eval → fix）の入口にする。
 // シグナルの定義は backend の `run_signals.py`。状態は色だけで表さない（バッジはアイコンと文言を持つ）。
 
 /** シグナル → バッジの色（ドメインの値 → variant の対応表は製品が持つ。ARCHITECTURE §4）。 */
 const SIGNAL_VARIANT: Record<SignalKind, StatusVariant> = {
   not_helpful: "danger",
-  validation_failed: "warning",
-  unvalidated: "neutral",
-  ungrounded_no_tools: "warning",
   unanswered: "warning",
   approval_rejected: "neutral",
   tool_failed: "danger",

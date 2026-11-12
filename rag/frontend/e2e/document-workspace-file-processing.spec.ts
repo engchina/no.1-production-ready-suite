@@ -258,7 +258,7 @@ test("desktop の閲覧領域は共通上限で止まり、境界で主ページ
 test("取込解析エンジンは抽出工程行に segment parser だけを表示する", async ({
   page,
 }) => {
-  await mockDocumentWorkspace(page, { pdfPreview: true, mineruSegment: true });
+  await mockDocumentWorkspace(page, { pdfPreview: true, dotsOcrSegment: true });
 
   await page.goto("/documents/doc-1");
 
@@ -274,8 +274,8 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   const jobsPanel = page
     .getByRole("heading", { name: "工程ごとの実行状況" })
     .locator("xpath=ancestor::section[1]");
-  await expect(jobsPanel.getByText("MinerU v1")).toBeVisible();
-  await expect(jobsPanel.getByText("mineru_adapter")).toHaveCount(0);
+  await expect(jobsPanel.getByText("Dots.OCR v1")).toBeVisible();
+  await expect(jobsPanel.getByText("dots_ocr_adapter")).toHaveCount(0);
   await expect(
     page.getByText("アップロード時の初期判定: OCI Enterprise AI / v1")
   ).toHaveCount(0);
@@ -2404,7 +2404,7 @@ async function mockDocumentWorkspace(
     segmentCount?: number;
     /** 既定の 2 件の後ろに足す chunk の数（一覧の内部スクロールの検証用。#403）。 */
     extraChunkCount?: number;
-    mineruSegment?: boolean;
+    dotsOcrSegment?: boolean;
     latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
     latestJobSkipReason?: string;
     latestJobPhase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
@@ -2974,7 +2974,7 @@ async function mockDocumentWorkspace(
         data: options.segmentError
           ? [failedSegment, notStartedSegment]
           : ingestionSegments(options.segmentCount ?? 1, {
-              mineru: options.mineruSegment,
+              dotsOcr: options.dotsOcrSegment,
               progressScenario: options.progressScenario,
             }),
         error_messages: [],
@@ -3049,7 +3049,7 @@ function recipeSteps(
 function ingestionSegments(
   count: number,
   options: {
-    mineru?: boolean;
+    dotsOcr?: boolean;
     progressScenario?: "pdf17" | "source" | "doclingInline" | "segmentedStale";
   } = {}
 ) {
@@ -3151,15 +3151,15 @@ function ingestionSegments(
     const start = index * 10 + 1;
     const end = start + 9;
     const status = index < 4 ? "SUCCEEDED" : index === 4 ? "RUNNING" : "QUEUED";
-    const mineru = Boolean(options.mineru);
+    const dotsOcr = Boolean(options.dotsOcr);
     return {
       segment_id: `doc-1:p${start}-${end}`,
       document_id: "doc-1",
       recipe_id: "recipe-1",
       status,
-      parser_backend: mineru ? "mineru" : index === 0 ? "local_partition" : "enterprise_ai",
-      parser_profile: mineru
-        ? "mineru_adapter"
+      parser_backend: dotsOcr ? "dots_ocr" : index === 0 ? "local_partition" : "enterprise_ai",
+      parser_profile: dotsOcr
+        ? "dots_ocr_adapter"
         : index === 0
           ? "local_text_structure"
           : "enterprise_ai_pdf_layout",
@@ -3630,6 +3630,16 @@ test("左の表示範囲が無いときは、構造化要素と Chunk を続き�
 test("構造化要素から解析版を固定して原本ノードを開く", {tag:"@responsive"}, async ({page},testInfo) => {
   await mockDocumentWorkspace(page);
   await page.route("**/recipes/recipe-1/extraction-view?**",route => route.fulfill({json:{data:{payload:{raw_text:"合成の本文",elements:[{element_id:"xt-00000",kind:"text",text:"合成の構造化段落",order:0,source_parser:"xml_tree_json",metadata:{xml_tree_unit_kind:"paragraph"}}]},offset:0,total:1,limit:25}}}));
+  const rawText = '{"nodes":["同じ合成の原本段落","同じ合成の原本段落"]}';
+  const focusedText = "同じ合成の原本段落";
+  const highlightStart = Array.from(rawText.slice(0, rawText.lastIndexOf(focusedText))).length;
+  const focusRequests: string[] = [];
+  await page.route("**/recipes/recipe-1/text-window", route => {
+    const input = route.request().postDataJSON();
+    if (input.element_id) focusRequests.push(input.element_id);
+    return route.fulfill({json:{data:{text:rawText,offset:0,total:Array.from(rawText).length,limit:8192,revision:"synthetic-source",highlights:input.element_id ? [[highlightStart,highlightStart+Array.from(focusedText).length]] : []}}});
+  });
+  await page.route("**/recipes/recipe-1/chunk-window?**",route => route.fulfill({json:{data:{items:[{document_id:"doc-1",chunk_id:"xml-chunk",chunk_index:0,text:"合成のXML Chunk",element_ids:["xt-00000"],metadata:{}}],total:1,offset:0,limit:25,complete:true,scope_status:"exact"}}}));
   const inputs:URLSearchParams[]=[];
   await page.route("**/recipes/recipe-1/source-map?**",route => {
     const query=new URL(route.request().url()).searchParams; inputs.push(query);
@@ -3638,13 +3648,22 @@ test("構造化要素から解析版を固定して原本ノードを開く", {t
   await page.goto("/documents/doc-1");
   await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
   await page.getByRole("button",{name:/合成の構造化段落/}).click();
+  await expect.poll(() => focusRequests).toContain("xt-00000");
+  const originalMark = page.getByTestId("preview-text").locator("mark");
+  await expect(originalMark).toHaveText(focusedText);
+  expect(await originalMark.evaluate(el => el.previousSibling?.textContent)).toBe(rawText.slice(0,rawText.lastIndexOf(focusedText)));
+
   const panel=page.getByTestId("original-source-panel");
   await expect(panel).toBeVisible(); expect(inputs).toHaveLength(0);
   await panel.locator("summary").click();
   await expect(panel.locator("pre")).toHaveText("合成の原本段落");
   expect(inputs[0].get("expected_revision")).toBe("er-recipe-1-r1");
   expect(inputs[0].get("element_id")).toBe("xt-00000");
-  await page.screenshot({path:testInfo.outputPath(`element-original-${testInfo.project.name}.png`),animations:"disabled"});
+  await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`xml-original-highlight-${testInfo.project.name}.png`),animations:"disabled"});
+  await page.getByTestId("document-inspector-pane").getByRole("tab",{name:/Chunk \/ Citation/}).click();
+  await page.getByTestId("document-chunk-list").getByRole("button",{name:/合成のXML Chunk/}).click();
+  await expect(page.getByTestId("preview-text").locator("mark")).toHaveText(focusedText);
+  await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`xml-chunk-highlight-${testInfo.project.name}.png`),animations:"disabled"});
   await expectNoPageOverflow(page);
 });
 
@@ -3822,5 +3841,27 @@ for (const theme of ["light", "dark"] as const) {
     await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
     await expectNoPageOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`saved-${theme}.png`), fullPage: true });
+  });
+}
+
+for (const extension of ["txt", "md", "markdown"]) {
+  test(`原本の保存座標を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
+    await mockDocumentWorkspace(page, {documentStatus:"REVIEW"});
+    const text = "😀\n# 合成\n同じ文。\n同じ文。";
+    const doc = documentDetail({status:"REVIEW"});
+    await page.route("**/api/documents/doc-1", route => route.fulfill({json:{data:{...doc,file_name:`synthetic.${extension}`,source_profile:{...doc.source_profile,extension:`.${extension}`,preview_kind:"text"}},error_messages:[],warning_messages:[]}}));
+    await page.route("**/recipes/recipe-1/extraction-view?**", route => fulfillDocumentInspection(route, {json:{data:{payload:{raw_text:"合成\n同じ文。\n同じ文。",document_type:"text",confidence:1,elements:[
+      {element_id:"h",kind:"title",text:"合成",order:0},
+      {element_id:"a",kind:"text",text:"同じ文。",order:1},
+      {element_id:"b",kind:"text",text:"同じ文。",order:2},
+    ],pages:[],tables:[]}}}}));
+    await page.route("**/recipes/recipe-1/text-window", route => route.fulfill({json:{data:{text,offset:0,total:Array.from(text).length,limit:8192,revision:"source-v1",highlights:route.request().postDataJSON().element_id === "b" ? [[12,16]] : []},error_messages:[],warning_messages:[]}}));
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+    await page.getByTestId("structured-elements-scroll").getByRole("button").last().click();
+    await expect(page.getByTestId("document-preview-pane").locator("mark")).toHaveText("同じ文。");
+    await page.getByTestId("document-preview-pane").scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath(`text-source-parsing-${extension}.png`)});
   });
 }

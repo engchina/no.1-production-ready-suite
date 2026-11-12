@@ -19,7 +19,6 @@ export function ContactInheritanceHelper({
   helper,
   effective,
   sameAs,
-  loadError,
   testId,
 }: {
   helper: ReactNode;
@@ -27,7 +26,6 @@ export function ContactInheritanceHelper({
   effective: string | null;
   /** 継承する窓口と同じ値のときの案内（無ければ null）。 */
   sameAs: string | null;
-  loadError: boolean;
   testId: string;
 }) {
   return (
@@ -41,11 +39,6 @@ export function ContactInheritanceHelper({
       {sameAs ? (
         <span className="mt-1 block" data-testid={`${testId}-same`}>
           {sameAs}
-        </span>
-      ) : null}
-      {loadError ? (
-        <span className="mt-1 block" data-testid={`${testId}-load-error`}>
-          {t("contactInheritance.loadError")}
         </span>
       ) : null}
     </>

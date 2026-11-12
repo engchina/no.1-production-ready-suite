@@ -1,15 +1,8 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #927: 自動実行の業務 Agent が使えなくなったとき・業務 Agent の未選択・タイムゾーンの誤り。
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 function seedAgent(mockApi: MockApi, overrides: Record<string, unknown>) {
   mockApi.state.agents.push({
@@ -75,7 +68,7 @@ test("業務 Agent が実行できなくなった自動実行は、業務 Agent 
   await expect(page.getByText("自動実行を保存しました")).toBeVisible();
   const body = mockApi.lastRequest("PUT", "/api/automations/auto-927")?.body as Record<string, unknown>;
   expect(body).toMatchObject({ agent_id: "agent-927", enabled: false });
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("消えた業務 Agent の自動実行は ID と「見つかりません」を出す", async ({ page, mockApi }) => {
@@ -108,5 +101,5 @@ test("使える業務 Agent が無いときと、タイムゾーンの誤りを�
   await expect(page.locator("#automation-agent")).toBeFocused();
   await expect(page.getByText("タイムゾーンが正しくありません。", { exact: false })).toBeVisible();
   expect(mockApi.lastRequest("POST", "/api/automations")).toBeUndefined();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });

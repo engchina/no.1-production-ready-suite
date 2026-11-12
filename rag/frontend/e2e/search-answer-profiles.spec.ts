@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
 import { findClippedPlaceholders, findFloatingFormActionBars, jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
@@ -11,17 +12,13 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-const GLOBAL_QUERY_FIELDS = [
-  "query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
-  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled", "request_coverage_retrieval_enabled",
-  "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
-];
+/** 検索・回答プロファイルの query が持つ欄（ほかの欄は backend が検証エラーにする。#4784）。 */
+const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled"];
 
-// #3719: 空・単一ページでも表示し、4一覧のページ操作と作業状態を確かめる。
+// #3719: 空・単一ページでも表示し、3一覧のページ操作と作業状態を確かめる。
 for (const [tab, paginationId, kind] of [
   ["登録済みQ&A", "approved-faq-pagination", "faq"],
   ["用語・同義語", "runtime-knowledge-terms-pagination", "terms"],
-  ["確認・回答ルール", "runtime-knowledge-rules-pagination", "rules"],
   ["業務ガイド", "support-guides-pagination", "guides"],
 ]) {
   test(`知識一覧のページング: ${tab}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -30,7 +27,7 @@ for (const [tab, paginationId, kind] of [
     const rows = () => Array.from({ length: count }, (_, index) => {
       const name = `項目 ${String(index + 1).padStart(3, "0")}`;
       return {
-        id: `item-${index}`, question: name, answer: "合成の回答", alternate_questions: [],
+        id: `item-${index}`, question: name, answer: "合成の回答", alternate_questions: [], negative_questions: [],
         term: name, aliases: [], description: "合成の説明", title: name, content: "合成の指示",
         triggers: [], status: kind === "guides" ? "active" : "approved",
         guide_id: `guide-${index}`, published_revision: null, draft_revision: 1,
@@ -44,7 +41,7 @@ for (const [tab, paginationId, kind] of [
     await page.route("**/api/search-answer-profiles/bv-default/approved-faq", (route) =>
       route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true, knowledge_bases: [] })));
     await page.route("**/api/search-answer-profiles/bv-default/runtime-knowledge", (route) =>
-      route.fulfill(response({ terms: kind === "terms" ? rows() : [], rules: kind === "rules" ? rows() : [] })));
+      route.fulfill(response({ terms: kind === "terms" ? rows() : [] })));
     await page.route("**/api/search-answer-profiles/bv-default/support-guides**", (route) =>
       route.fulfill(response(rows())));
     const open = async () => { await page.getByRole("tab", { name: tab, exact: true }).click(); };
@@ -108,9 +105,16 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   });
   const fields = [
     { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
-    { section: "answer_check_cues", key: "guarantee_verbs", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "question_cues", key: "subquestion_reference_followers", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "guide_import_cues", key: "process_headings", kind: "enum_map", choices: ["steps", "notes"], ingest: false, max_chars: 40 },
   ];
-  const effective = { numbers: { article_units: ["条"] }, answer_check_cues: { guarantee_verbs: ["なぜ", "原因"] } };
+  const effective = {
+    numbers: { article_units: ["条"] },
+    question_cues: { subquestion_reference_followers: ["の欄"] },
+    answer_check_cues: { related_stopwords: ["なぜ", "原因"] },
+    guide_import_cues: { process_headings: { 手順: "steps" } },
+  };
   await page.route("**/api/settings/language-pack", (route) =>
     route.fulfill({
       json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "a" }, error_messages: [], warning_messages: [] },
@@ -123,7 +127,17 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await expect(section).toHaveAttribute("open", "");
   // 取込の項目（条の単位）は出さない。
   await expect(section.getByLabel("条の単位", { exact: true })).toHaveCount(0);
-  const cause = section.getByLabel("保証の動詞", { exact: true });
+  // 検索と回答で読む節だけを出す（質問の節は出し、業務ガイドの取込の節は出さない。#4784）。
+  await expect(section.getByRole("tablist", { name: "言語資源の使い道", exact: true }).getByRole("tab")).toHaveText([
+    "質問を読む",
+    "回答を確かめて表す",
+  ]);
+  await expect(section.getByLabel("小問の印の後の言及の語", { exact: true })).toHaveValue("の欄");
+  await expect(section.getByText("回答の過程の見出し")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("language-pack-profile-sections.png"), fullPage: true });
+  await section.getByRole("tab", { name: "回答を確かめて表す", exact: true }).click();
+  const cause = section.getByLabel("関連の原文で使わない語", { exact: true });
   await expect(cause).toHaveValue("なぜ\n原因");
   await cause.fill("なぜ\n原因\n理屈");
   await expect(section.getByText("上書き 1 項目")).toBeVisible();
@@ -132,7 +146,7 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect
     .poll(() => (updateBody?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ answer_check_cues: { guarantee_verbs: ["なぜ", "原因", "理屈"] } });
+    .toEqual({ answer_check_cues: { related_stopwords: ["なぜ", "原因", "理屈"] } });
   await section.locator("summary").click();
   await expect(cause).not.toBeVisible();
   await page.screenshot({ path: test.info().outputPath("language-overrides-collapsed.png"), fullPage: true });
@@ -169,8 +183,8 @@ for (const viewport of [
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "1 つの文書から採る根拠の上限",
       "回答モデル",
-      // 確認を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
-      "確認を通らなかったときのモデル",
+      // 出力の検査を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
+      "出力の検査を通らなかったときのモデル",
       "業務ガイドを使用する",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -228,10 +242,6 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   for (const removed of ["retrieval_strategy", "post_retrieval_pipeline", "generation_profile"]) {
     expect(removed in ((config.query as Record<string, unknown>) ?? {})).toBe(false);
   }
-  expect(
-    "vector_index_profile" in
-      ((createBody?.config as { query?: Record<string, unknown> })?.query ?? {})
-  ).toBe(false);
   // 配信モード（serving_mode）は持たない（文書の全 active レシピを常に融合する。#1331）。
   expect("serving_mode" in config).toBe(false);
 
@@ -270,10 +280,10 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   expect(config.answer_model_id).toBe("model-b");
   expect(config.query?.max_anchors_per_document).toBe(0);
   expect(config.query?.support_guide_enabled).toBe(true);
-  for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in (config.query ?? {})).toBe(false);
+  expect(Object.keys(config.query ?? {}).filter((key) => !PROFILE_QUERY_FIELDS.includes(key))).toEqual([]);
 });
 
-test("確認を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("出力の検査を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=new");
@@ -287,12 +297,12 @@ test("確認を通らなかったときのモデルは既定で使わず、回�
   await model.getByRole("combobox").click();
   await page.getByRole("option", { name: "モデル A", exact: true }).click();
   // 「回答モデル」の直下に置き、既定は「使わない」（全体の既定は持たない）。
-  const escalation = page.getByRole("heading", { name: "確認を通らなかったときのモデル", level: 3 }).locator("..");
+  const escalation = page.getByRole("heading", { name: "出力の検査を通らなかったときのモデル", level: 3 }).locator("..");
   const headings = await page.getByRole("heading", { level: 3 }).allTextContents();
-  expect(headings.indexOf("確認を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
+  expect(headings.indexOf("出力の検査を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
   await expect(escalation.getByRole("button", { name: "使わない" })).toHaveAttribute("aria-pressed", "true");
   await expect(escalation.getByRole("combobox")).toHaveCount(0);
-  await expect(escalation.getByText(/確認を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
+  await expect(escalation.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
   await escalation.getByRole("button", { name: "モデルを選ぶ" }).click();
   await escalation.getByRole("combobox").click();
   // 回答モデルと同じモデルは候補に出さない。
@@ -305,6 +315,68 @@ test("確認を通らなかったときのモデルは既定で使わず、回�
   const config = body?.config as { answer_model_id?: string; escalation_model_id?: string | null };
   expect(config.answer_model_id).toBe("model-a");
   expect(config.escalation_model_id).toBe("model-b");
+});
+
+test("モデル・継承する窓口・言語資源の読み取りの失敗は、それぞれの欄の直下に欄ごとの文と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockSearchAnswerProfiles(page, []);
+  let fail = true;
+  const failure = (message: string) => ({
+    status: 500,
+    json: { data: null, error_messages: [message], warning_messages: [], error_code: "database_read_failed" },
+  });
+  // 後から登録した route が先に呼ばれる（mockSearchAnswerProfiles の成功の応答を上書きする）。
+  await page.route("**/api/search-answer-profiles/answer-models", (route) =>
+    fail ? route.fulfill(failure("登録モデルを読み取れませんでした。")) : route.fallback()
+  );
+  const ok = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
+  await page.route("**/api/search-answer-profiles/inherited-contact", (route) =>
+    route.fulfill(fail ? failure("窓口の設定を読み取れませんでした。") : ok({ enabled: true, contact: "窓口 A" }))
+  );
+  await page.route("**/api/settings/language-pack", (route) =>
+    route.fulfill(
+      fail
+        ? failure("言語資源を読み取れませんでした。")
+        : ok({ fields: [], builtin: {}, overrides: {}, effective: {}, hash: "a" })
+    )
+  );
+  await page.goto("/search-answer-profiles?id=new");
+
+  // モデルの 2 つの欄は同じ読み取りに支えられるが、見出しは欄ごとの文（同じ文を 2 つ出さない）。
+  const answerModel = page.getByTestId("search-answer-profile-answer-model-load-failed");
+  await expect(answerModel.getByRole("alert")).toHaveText("回答モデルの候補を読み込めませんでした。", { timeout: 15_000 });
+  const escalationModel = page.getByTestId("search-answer-profile-escalation-model-load-failed");
+  await expect(escalationModel.getByRole("alert")).toHaveText(
+    "出力の検査を通らなかったときのモデルの候補を読み込めませんでした。"
+  );
+  // 欄の説明はそのまま出す（読み取りの失敗を説明の文に差し替えない）。
+  await expect(page.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
+  const contact = page.getByTestId("search-answer-profile-contact-load-failed");
+  await expect(contact.getByRole("alert")).toHaveText("継承するシステム設定の窓口を読み込めませんでした。");
+  await expect(page.locator("#search-answer-profile-contact-override")).toBeEditable();
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 3 })).toEqual([]);
+  await answerModel.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`profile-models-load-failed-${testInfo.project.name}.png`) });
+  await contact.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`profile-contact-load-failed-${testInfo.project.name}.png`) });
+
+  // 言語資源の上書きは開いたときに欄の位置へ出す。
+  await page.getByTestId("search-answer-profile-language-pack").locator("summary").click();
+  const languagePack = page.getByTestId("search-answer-profile-language-pack-load-failed");
+  await expect(languagePack.getByRole("alert")).toHaveText("言語資源の上書きの欄を読み込めませんでした。");
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 4 })).toEqual([]);
+  await expectNoPageOverflow(page);
+  await languagePack.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath(`profile-language-pack-load-failed-${testInfo.project.name}.png`) });
+
+  // 再試行で読み取れたら、失敗の表示を消す（モデルは 1 つの読み取りなので 2 つとも消える）。
+  fail = false;
+  await answerModel.getByRole("button", { name: "再試行" }).click();
+  await expect(answerModel).toHaveCount(0);
+  await expect(escalationModel).toHaveCount(0);
+  await contact.getByRole("button", { name: "再試行" }).click();
+  await expect(contact).toHaveCount(0);
+  await languagePack.getByRole("button", { name: "再試行" }).click();
+  await expect(languagePack).toHaveCount(0);
 });
 
 test("業務ガイドは既定 OFF の単一スイッチで保存・再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -330,22 +402,19 @@ test("業務ガイドは既定 OFF の単一スイッチで保存・再表示す
   }
 });
 
-// #3053・#3523: 実体・章節・関係情報の拡張と業務ガイドの手順ごとの検索（上限・期限を含む）は全体設定だけで決め、
-// 検索・回答プロファイルは表示も保存もしない。
-test("検索方法の全体設定の項目は表示せず、古い個別設定を保存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// #3053・#3523・#4784: 実体・章節・関係情報の拡張と業務ガイドの手順ごとの検索（上限・期限を含む）は全体設定だけで決め、
+// 検索・回答プロファイルは表示しない。プロファイルの query は適用する欄だけを持ち、保存もその欄だけ。
+test("検索方法の全体設定の項目は表示せず、適用する欄だけを保存する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
-    query_strategy: "hyde", answer_flow: "crag", neighbor_child_count: 0,
-    rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true, graph_expansion_max_chunks: 3,
-    screen_linking_enabled: true, request_coverage_retrieval_enabled: false,
-    entity_expansion_enabled: false, entity_expansion_max_chunks: 2, section_expansion_enabled: false, section_expansion_max_levels: 2, section_expansion_input_token_percent: 30,
-    guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
+    max_anchors_per_document: 2,
+    support_guide_enabled: true,
   });
   await page.goto("/search-answer-profiles?id=bv-default");
-  for (const name of ["質問の言い換え・分解", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
+  for (const name of ["根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
     await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
   }
-  for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "文書構造による検索拡張", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
+  for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "文書構造による検索拡張", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
     await expect(page.getByRole("group", { name, exact: true })).toHaveCount(0);
   }
   for (const name of ["実体・別名による検索拡張", "章節で広げる根拠"]) {
@@ -355,7 +424,7 @@ test("検索方法の全体設定の項目は表示せず、古い個別設定�
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => body).not.toBeNull();
   const query = (body?.config as { query?: Record<string, unknown> })?.query ?? {};
-  for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in query).toBe(false);
+  expect(query).toEqual({ max_anchors_per_document: 2, support_guide_enabled: true });
   await page.reload();
   await page.getByTestId("search-answer-profile-guide-matching").scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("global-search-options.png") });
@@ -390,7 +459,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`DEFAULT は参照 KB と名前を固定し設定だけ保存できる (${viewport.name})`, async ({
+  test(`DEFAULT は参照 KB と名前を固定し設定だけ保存できる (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -424,6 +493,21 @@ for (const viewport of [
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();
     await expect(page.getByRole("combobox", { name: "参照するナレッジベース" })).toBeDisabled();
     await expect(page.getByText(/DEFAULT ナレッジベースだけを参照します/)).toBeVisible();
+    const field = page.locator("[data-searchable-multi-select]").filter({ has: page.getByRole("combobox", { name: "参照するナレッジベース" }) });
+    for (const width of viewport.name === "desktop" ? [1280, 1920] : [375]) {
+      await page.setViewportSize({ width, height: viewport.height });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await expect.poll(() => field.evaluate(element => {
+        const input = element.querySelector("input")!;
+        const button = element.querySelector("[data-text-field-slot='trailing'] button")!;
+        const inputStyle = getComputedStyle(input), buttonStyle = getComputedStyle(button);
+        return buttonStyle.borderLeftColor === "rgba(0, 0, 0, 0)" && inputStyle.backgroundColor === buttonStyle.backgroundColor && inputStyle.borderLeftColor !== "rgba(0, 0, 0, 0)";
+      })).toBe(true);
+      await field.screenshot({ path: test.info().outputPath(`disabled-kb-${width}-${theme}.png`) });
+    }
+
+    }
 
     // 説明は必須（#521）。説明が空の既存の検索・回答プロファイルは、保存するときに入力を求めて送らない。
     const description = page.getByRole("textbox", { name: "説明", exact: true });
@@ -994,7 +1078,7 @@ async function mockSearchAnswerProfiles(
       return;
     }
     if (pathname.endsWith("/runtime-knowledge")) {
-      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [], rules: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [] }));
       return;
     }
     if (id) {
@@ -1177,7 +1261,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
     config: {
       version: 1,
       knowledge_base_ids: ["kb-1"],
-      query: { query_strategy: "hyde" },
+      query: { max_anchors_per_document: 2 },
     },
     knowledge_bases: [{ id: "kb-1", name: "社内規程", status: "ACTIVE" }],
   };
@@ -1193,28 +1277,15 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
       return;
     }
     if (pathname.endsWith("/runtime-knowledge")) {
-      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", terms: [], rules: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", terms: [] }));
       return;
     }
     await route.fulfill(envelope(archived));
   });
 
-  await page.route("**/api/search-answer-profiles/bv-old/question-understanding", (route) => route.fulfill({ json: {
-    data: {
-      fields: [{ section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }],
-      builtin: { question_cues: { cause_cues: ["なぜ"] } }, overrides: {},
-      effective: { question_cues: { cause_cues: ["なぜ"] } }, hash: "synthetic",
-    }, error_messages: [], warning_messages: [],
-  } }));
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "質問の言い換え・分解" })).toHaveCount(0);
-  await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
-  const understanding = page.getByTestId("question-understanding-panel");
-  await expect(understanding.getByRole("textbox", { name: "原因を尋ねる語", exact: true })).toBeDisabled();
-  await expect(understanding.getByRole("button", { name: "質問の理解を保存", exact: true })).toBeDisabled();
-  await expect(understanding.getByRole("textbox", { name: "テストする質問", exact: true })).toBeEnabled();
   await expectNoPageOverflow(page);
 });
 
@@ -1241,7 +1312,7 @@ test("検索・回答プロファイルの知識の読み込みに失敗する�
   );
   await page.route(
     "**/api/search-answer-profiles/bv-1/runtime-knowledge",
-    failOrEmpty({ search_answer_profile_id: "bv-1", terms: [], rules: [] })
+    failOrEmpty({ search_answer_profile_id: "bv-1", terms: [] })
   );
   await page.route(
     "**/api/search-answer-profiles/bv-1/domain-keywords",
@@ -1255,7 +1326,6 @@ test("検索・回答プロファイルの知識の読み込みに失敗する�
   await expect(page.getByTestId("approved-faq-enabled")).toBeDisabled();
   await expect(panel.getByText("登録済みQ&Aはまだありません")).toHaveCount(0);
 
-  // 用語・同義語と回答ルールは同じ取得・同じ部品なので、用語・同義語で確かめる。
   await page.getByRole("tab", { name: "用語・同義語" }).click();
   await expect(panel.getByText("知識を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
   // ドメインキーワードの保存は全置換なので、読めていない空の編集欄を出さない。
@@ -1411,7 +1481,7 @@ for (const viewport of [
 test("言語資源の全体再取得は継承欄だけを更新し、編集中と保存済みの上書きを保持する", { tag: "@responsive" }, async ({ page }) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
-  const fields = ["guarantee_verbs", "guarantee_endings", "guarantee_exceptions"].map((key) => ({
+  const fields = ["related_stopwords", "sentence_line_endings", "quote_sentence_end_chars"].map((key) => ({
     section: "answer_check_cues", key, kind: "words", choices: [], ingest: false, max_chars: 40,
   }));
   let causeValue = "なぜ";
@@ -1419,7 +1489,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   let calls = 0;
   await page.route("**/api/settings/language-pack", (route) => {
     calls++;
-    const effective = { answer_check_cues: { guarantee_verbs: [causeValue], guarantee_endings: [pastValue], guarantee_exceptions: ["以後"] } };
+    const effective = { answer_check_cues: { related_stopwords: [causeValue], sentence_line_endings: [pastValue], quote_sentence_end_chars: ["以後"] } };
     return route.fulfill({ json: { data: { fields, effective, builtin: effective, overrides: {}, hash: causeValue }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/search-answer-profiles?id=bv-default");
@@ -1447,7 +1517,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の説明");
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ answer_check_cues: { guarantee_endings: ["過去"], guarantee_exceptions: ["今後"] } });
+    .toEqual({ answer_check_cues: { sentence_line_endings: ["過去"], quote_sentence_end_chars: ["今後"] } });
   causeValue = "理由";
   pastValue = "過去";
   const savedCalls = calls;
@@ -1468,7 +1538,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   await future.fill("将来");
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ answer_check_cues: { guarantee_endings: ["過去"], guarantee_exceptions: ["将来"] } });
+    .toEqual({ answer_check_cues: { sentence_line_endings: ["過去"], quote_sentence_end_chars: ["将来"] } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("inherited-language-refresh.png"), fullPage: true });
 });
@@ -1479,80 +1549,12 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
   await expectGrowingList(page, testInfo, "search-answer-profiles");
 });
 
-test("質問の理解は段階順の独立 Tab で差分を保存し、認識結果と継承を確認できる", { tag: "@responsive" }, async ({ page }) => {
+test("プロファイルの知識の Tab は段階順で、質問の理解を出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockDefaultSearchAnswerProfile(page, () => {});
-  const fields = [
-    { section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 },
-  ];
-  const builtin = { question_cues: { cause_cues: ["なぜ", "原因"] } };
-  let overrides: Record<string, Record<string, string[]>> = {};
-  let savedBody: unknown;
-  let previewBody: unknown;
-  let saves = 0;
-  const metadata = () => ({ fields, builtin, overrides, effective: { question_cues: { ...builtin.question_cues, ...overrides.question_cues } }, hash: `synthetic-${saves}` });
-  await page.route("**/api/search-answer-profiles/bv-default/question-understanding", async (route) => {
-    if (route.request().method() === "PUT") {
-      expect(route.request().headers()["content-type"]).toBe("application/json");
-      savedBody = route.request().postDataJSON();
-      overrides = (savedBody as { overrides: typeof overrides }).overrides;
-      saves++;
-    }
-    await route.fulfill({ json: { data: metadata(), error_messages: [], warning_messages: [] } });
-  });
-  await page.route("**/api/search-answer-profiles/bv-default/question-understanding/preview", async (route) => {
-    expect(route.request().headers()["content-type"]).toBe("application/json");
-    previewBody = route.request().postDataJSON();
-    const result = { task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
-    await route.fulfill({ json: { data: { original_text: (previewBody as { text: string }).text, saved: result, draft: result }, error_messages: [], warning_messages: [] } });
-  });
   await page.goto("/search-answer-profiles?id=bv-default");
   const tabs = page.getByRole("tablist", { name: "プロファイルの知識", exact: true });
-  await expect(tabs.getByRole("tab")).toHaveText(["登録済みQ&A", "質問の理解", "用語・同義語", "確認・回答ルール", "業務ガイド", "ドメインキーワード"]);
-  await tabs.getByRole("tab", { name: "質問の理解", exact: true }).click();
-  const panel = page.getByTestId("question-understanding-panel");
-  const cause = panel.getByRole("textbox", { name: "原因を尋ねる語", exact: true });
-  await expect(cause).toHaveValue("なぜ\n原因");
-  await cause.fill("あ".repeat(41));
-  await expect(panel.getByRole("button", { name: "質問の理解を保存", exact: true })).toBeDisabled();
-  await cause.fill("なぜ\n原因\nどうして");
-  await tabs.getByRole("tab", { name: "用語・同義語", exact: true }).click();
-  const leave = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
-  await expect(leave).toBeVisible();
-  await leave.getByRole("button", { name: "キャンセル", exact: true }).click();
-  await expect(cause).toHaveValue("なぜ\n原因\nどうして");
-  await panel.getByRole("textbox", { name: "テストする質問" }).fill("対象 A が失敗した原因は何ですか。対処方法も教えてください。");
-  await panel.getByRole("button", { name: "試す", exact: true }).click();
-  await expect(panel.getByTestId("question-understanding-result")).toBeVisible();
-  for (const kind of ["saved", "draft"]) {
-    await expect(panel.locator(`#question-understanding-${kind}-result`)).not.toHaveValue(/"inquiry"/);
-  }
-  expect(previewBody).toEqual({ text: "対象 A が失敗した原因は何ですか。対処方法も教えてください。", overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
-  expect(saves).toBe(0);
-  await page.screenshot({ path: test.info().outputPath("question-understanding-preview.png"), fullPage: true });
-  await panel.getByRole("button", { name: "質問の理解を保存", exact: true }).click();
-  await expect.poll(() => saves).toBe(1);
-  expect(savedBody).toEqual({ overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
-  await expect(cause).toHaveValue("なぜ\n原因\nどうして");
-  await panel.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
-  await expect(cause).toHaveValue("なぜ\n原因");
-  await panel.getByRole("button", { name: "質問の理解を保存", exact: true }).click();
-  await expect.poll(() => saves).toBe(2);
-  expect(savedBody).toEqual({ overrides: {} });
-  // 空欄は継承へのリセットとは異なり、明示的な空の一覧として保存する。
-  await cause.fill("");
-  await panel.getByRole("button", { name: "質問の理解を保存", exact: true }).click();
-  await expect.poll(() => saves).toBe(3);
-  expect(savedBody).toEqual({ overrides: { question_cues: { cause_cues: [] } } });
+  await expect(tabs.getByRole("tab")).toHaveText(["登録済みQ&A", "用語・同義語", "業務ガイド", "ドメインキーワード"]);
+  await expect(page.getByTestId("search-answer-profile-language-pack")).toBeVisible();
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: test.info().outputPath("question-understanding.png"), fullPage: true });
-});
-
-test("質問の理解の読込失敗は空の保存欄を出さず、再実行できる", { tag: "@responsive" }, async ({ page }) => {
-  await mockDefaultSearchAnswerProfile(page, () => {});
-  await page.route("**/api/search-answer-profiles/bv-default/question-understanding", (route) => route.fulfill({ status: 503, json: { detail: "合成の一時障害" } }));
-  await page.goto("/search-answer-profiles?id=bv-default");
-  await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
-  await expect(page.getByRole("button", { name: "再試行", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "質問の理解を保存" })).toHaveCount(0);
-  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("knowledge-tabs-without-question-understanding.png"), fullPage: true });
 });

@@ -8,7 +8,6 @@ import { t } from "../src/lib/i18n";
 const FIELDS = [
   { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
   { section: "numbers", key: "kanji_multipliers", min_value: 1, kind: "char_values", choices: [], ingest: true, max_chars: 40 },
-  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true, max_chars: 40 },
   { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true, max_chars: 40 },
   { section: "references", key: "cue_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
   { section: "titles", key: "edition_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
@@ -23,7 +22,7 @@ const FIELDS = [
 ];
 const BUILTIN = {
   numbers: { article_units: ["条"], kanji_multipliers: ["十=10", "百=100"] },
-  symbols: { normalization: "NFKC", bracket_pairs: ["()", "【】"] },
+  symbols: { bracket_pairs: ["()", "【】"] },
   references: { cue_words: ["を参照", "による"] },
   titles: { edition_words: ["改訂版"] },
   english: { en_section_words: ["section=section"] },
@@ -155,14 +154,12 @@ for (const viewport of [
     await expect(pairs).toBeFocused();
     expect(saved.overrides).toBeNull();
 
-    await pairs.fill("()\n【】");
-    await page.getByRole("combobox", { name: "文字の正規化" }).click();
-    await page.getByRole("option", { name: "NFC（全角と半角をそろえない）" }).click();
+    await pairs.fill("()\n【】\n〔〕");
     await page.getByRole("button", { name: "草稿を保存" }).click();
     await expect(page.getByText("草稿を保存しました。")).toBeVisible();
     expect(saved.overrides).toEqual({
       numbers: { article_units: ["条", "款"] },
-      symbols: { normalization: "NFC" },
+      symbols: { bracket_pairs: ["()", "【】", "〔〕"] },
     });
     await expect(page.getByRole("button", { name: "草稿を保存" })).toBeDisabled();
     await expectNoPageOverflow(page);
@@ -231,17 +228,31 @@ test("草稿保存は公開版を変えず、差分確認後の公開だけが�
   await page.screenshot({ path: test.info().outputPath("language-release-published.png"), fullPage: true });
 });
 
+test("比較で差分が 0 件のときは、空の表ではなく差分が無いことを出す（#3718）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  // 草稿と現在の公開版が同じ（差分 0 件）。
+  await mockLanguagePack(page);
+  await page.goto("/settings/language-pack");
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  const diff = page.getByRole("table", { name: "設定の差分" });
+  await expect(diff).toBeVisible();
+  await diff.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`language-comparison-empty-${testInfo.project.name}.png`) });
+  await expect(diff).toContainText("設定の差分はありません。");
+  // 取込への影響の案内はそのまま出し、差分が無いので公開はできない。
+  await expect(page.getByText("取込設定は同じです")).toBeVisible();
+  await expect(page.getByRole("button", { name: "公開する", exact: true })).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
 test("言語資源は使い道の組と節の 2 段のタブで開き、項目を名前で探せる（#2181）", { tag: "@responsive" }, async ({ page }) => {
   const fields = [
     ...FIELDS,
     { section: "search_terms", key: "stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
     { section: "answer_labels", key: "citation_prefix", kind: "text", choices: [], ingest: false, max_chars: 200 },
-    { section: "answer_labels", key: "missing_request_template", kind: "text", choices: [], ingest: false, max_chars: 200 },
     { section: "answer_labels", key: "guide_acquisition_incomplete_template", kind: "text", choices: [], ingest: false, max_chars: 200 },
   ];
-  const missingRequest = "『{text}』については、根拠付きの説明を十分に示せていません。";
   const acquisitionNotice = "必須の参照を確認できていません（手順: {steps}）。";
-  const builtin = { ...BUILTIN, search_terms: { stopwords: ["こと"] }, answer_labels: { citation_prefix: "根拠：", missing_request_template: missingRequest, guide_acquisition_incomplete_template: acquisitionNotice } };
+  const builtin = { ...BUILTIN, search_terms: { stopwords: ["こと"] }, answer_labels: { citation_prefix: "根拠：", guide_acquisition_incomplete_template: acquisitionNotice } };
   await mockLanguagePack(page, builtin);
   await page.route("**/api/settings/language-pack", (route) =>
     route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }),
@@ -261,7 +272,6 @@ test("言語資源は使い道の組と節の 2 段のタブで開き、項目�
   await expect(page.getByLabel("出典の前置き", { exact: true })).toHaveValue("根拠：");
   await expect(page.getByRole("tablist", { name: "言語資源の使い道" })).toHaveCount(0);
   await page.getByRole("searchbox", { name: "項目を探す" }).fill("要求の説明が不足");
-  await expect(page.getByLabel("要求の説明が不足したときの案内", { exact: true })).toHaveValue(missingRequest);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("missing-request-template.png"), fullPage: true });
   const acquisitionLabel = t("settings.language.field.guide_acquisition_incomplete_template");
@@ -324,22 +334,6 @@ test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを�
   await expect.poll(() => saved.overrides).toEqual({ numbers: { kanji_multipliers: ["十=10", "百=100", "千=1000"] } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("numeric-mapping.png"), fullPage: true });
-});
-
-
-test("数量の混在表記の語は質問用の言語資源で確認できる", async ({ page }) => {
-  const fields = [...FIELDS, { section: "question_cues", key: "mixed_number_notation_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }];
-  const builtin = { ...BUILTIN, question_cues: { mixed_number_notation_cues: ["混在", "組み合"] } };
-  await mockLanguagePack(page, builtin);
-  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }));
-  await page.goto("/settings/language-pack");
-  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "質問を読む" }).click();
-  for (const width of [1280, 375]) {
-    await page.setViewportSize({ width, height: 900 });
-    await expect(page.getByLabel("数字と位取りを混ぜる指定の語", { exact: true })).toHaveValue("混在\n組み合");
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: test.info().outputPath(`mixed-number-${width}.png`) });
-  }
 });
 
 
@@ -483,7 +477,7 @@ test("導出結論の見出しと根拠不足の定型文はラベルと説明�
 
 
 test("旧草稿の追加表示文言は補完して試せるが公開版を書き換えない（#3932）", { tag: "@responsive" }, async ({ page }) => {
-  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "crag_refusal_summary", "crag_missing_aspect_template", "crag_unknown_aspect_template", "crag_quote_only_note", "crag_definition_aspect_template", "guide_acquisition_incomplete_template"];
+  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "guide_acquisition_incomplete_template"];
   const labels = Object.fromEntries(keys.map(key => [key, "合成の表示文言"]));
   const builtin = { ...BUILTIN, answer_labels: { ...labels, cause_gap: "合成の保存済み文言" } };
   const published = { ...BUILTIN, answer_labels: { cause_gap: "合成の保存済み文言" } };

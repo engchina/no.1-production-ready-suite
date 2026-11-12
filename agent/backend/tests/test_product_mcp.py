@@ -76,7 +76,6 @@ READ_ONLY = {
     "rag_outline": True,
     "rag_read_document": True,
     "rag_read_section": True,
-    "rag_validate_answer": True,
     "nl2sql_query": False,
     "nl2sql_get_job": True,
 }

@@ -1,4 +1,4 @@
-"""CRAG の評価済み起点から、既取得 pool の文脈を限定的に回復する。"""
+"""既取得 pool の文脈を、指定した起点から限定的に回復する。"""
 
 from __future__ import annotations
 
@@ -50,43 +50,6 @@ def _compatible(anchor: Any, candidate: Any) -> bool:
         and len(labels) == 1
         and labels == operation_labels(candidate)
     )
-
-
-def recover_definition_records(
-    question: str, visible: Sequence[Any], pool: Sequence[Any], *, max_records: int = 6, max_chars: int = 24000
-) -> ContextRecovery:
-    """既取得poolの同一機能から明示項目の定義原文を回復する。
-
-    物理的な一つ隣だけでは図表分割により定義へ届かないため、同じ文書・版・
-    機能内を照合する。質問ID・ページ・業務名による特例は使わず、既に見えている
-    本文と重複する定義は追加しない。外部I/Oは行わない。
-    """
-    from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
-
-    labels = definition_labels(question)
-    if not labels:
-        return ContextRecovery(reason="not_a_definition_request")
-    selected, anchors, used = [], set(), 0
-    for candidate in sorted(pool, key=lambda r: (r.chunk_level != "child", len(r.text), _uid(r))):
-        definitions = definition_ranges(candidate.text, labels)
-        if not definitions:
-            continue
-        compatible = [r for r in visible if _compatible(r, candidate)]
-        body = candidate.text.strip()
-        if (
-            not compatible
-            or not body
-            or any(_scope(candidate) == _scope(r) and body in r.text for r in (*visible, *selected))
-            or len(selected) >= max_records
-            or used + len(body) > max_chars
-        ):
-            continue
-        if all(any(_scope(candidate) == _scope(r) and d["text"] in r.text for r in (*visible, *selected)) for d in definitions):
-            continue
-        selected.append(candidate)
-        anchors.add(_uid(compatible[0]))
-        used += len(body)
-    return ContextRecovery(tuple(selected), tuple(sorted(anchors)), "definition_recovered" if selected else "no_new_compatible_definition")
 
 
 def recover_context_records(

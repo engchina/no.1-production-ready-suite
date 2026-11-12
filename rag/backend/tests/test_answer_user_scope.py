@@ -1,4 +1,4 @@
-"""回答の検索の入口(``AnswerEngine.run``)から、自動の条件を足しても利用者の範囲が残ることを確かめる(#3260)。
+"""回答の検索の入口(``AnswerEngine.run``)から、利用者の範囲が残ることを確かめる(#3260)。
 
 すべての検索(CRAG の補正検索を含む)と実体・関係情報の拡張に、利用者が指定した条件(文書名・分類・
 手の項目の条件・ナレッジベース・旧版の扱い)・基準日・認可の範囲(監査 context の predicate)が残る。
@@ -14,8 +14,6 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
-from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.llm import CragRetrievalGradeOutput
 
 import app.rag.answer_engine as answer_engine
 from app.clients.oracle import _oracle_retrieval_where
@@ -40,11 +38,8 @@ ACCESS = AuditRequestContext(
     allowed_category_names=frozenset({"分類a"}),
     allowed_knowledge_base_ids=frozenset({"kb-1", "kb-a"}),
 )
-# 利用者が手で指定した項目の条件と、質問から読み取った(自動の)項目の条件。自動の条件の 1 つは
-# 手の条件と同じ項目で別の値(手の条件を優先し、上書きしない)。
+# 利用者が手で指定した項目の条件（絞り込みは利用者が明示した条件だけ）。
 MANUAL_FIELD = ExtractionFieldCondition(name="区分", value_type="string", op="eq", value="甲")
-AUTO_FIELD = ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
-AUTO_SAME_FIELD = ExtractionFieldCondition(name="区分", value_type="string", op="eq", value="乙")
 
 
 def _manual_fields() -> str:
@@ -120,32 +115,9 @@ def plans(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[PlanRecorder, PlanR
     yield entity, graph
 
 
-def _crag_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    """CRAG の評価で「不足」とし、補正検索を 1 回させる。"""
-    if schema is CragRetrievalGradeOutput:
-        return CragRetrievalGradeOutput(
-            reason="後続の手順が不足",
-            sufficient=False,
-            confidence=0.2,
-            rewritten_query="登録の手順",
-            # 補正検索に渡す認可の範囲を試すため、意味評価の代役が明確な不足を返す。
-            # 空の観点は未検証であり、補正検索を要求する入力には使わない。
-            aspect_checks=[
-                {
-                    "aspect": "procedure",
-                    "status": "missing",
-                    "source_ids": [],
-                    "reason": "登録後の確認手順の説明が取得できていない。",
-                }
-            ],
-        )
-    return _fake_llm(system, prompt, settings, schema, **options)
-
-
 def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
     return AnswerEngine(
         Settings(
-            rag_answer_flow="crag",
             rag_reference_expansion_enabled=True,
             rag_entity_expansion_enabled=True,
             rag_graph_expansion_enabled=True,
@@ -153,7 +125,6 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
         ),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
-        auto_field_conditions=[AUTO_SAME_FIELD, AUTO_FIELD],
         entity_store=cast(Any, object()),
         graph_store=cast(Any, object()),
     )
@@ -195,7 +166,7 @@ async def test_user_conditions_as_of_and_access_stay_in_every_search(
     """すべての検索と、実体・関係情報の拡張に、利用者の条件・基準日・認可の範囲が残る。"""
     import rag_engine.adapters.oci as engine_oci
 
-    monkeypatch.setattr(engine_oci, "parse_text_response", _crag_llm)
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     monkeypatch.setattr(answer_engine, "_today", lambda: date(2026, 4, 1))
     oracle = ScopeRecordingOracle()
     filters = {**user_filters, "extraction_fields": _manual_fields()}
@@ -206,15 +177,11 @@ async def test_user_conditions_as_of_and_access_stay_in_every_search(
     # 利用者の条件 + 回答の初めに決めた基準日(指定があればその日)。
     expected = {"as_of": "2026-04-01", **filters}
     assert outcome.citations
-    # 最初の検索は自動の条件を足し、利用者が手で指定した項目の条件は自動の条件で上書きしない。
+    # 項目の条件は利用者が手で指定したものだけ（質問から条件を足さない）。
     first = oracle.filters[0]
-    assert _field_values(first) == [
-        (MANUAL_FIELD.name, MANUAL_FIELD.value),
-        (AUTO_FIELD.name, AUTO_FIELD.value),
-    ]
-    # どの検索も同じ条件で検索する(CRAG の補正検索を含む)。
+    assert _field_values(first) == [(MANUAL_FIELD.name, MANUAL_FIELD.value)]
+    # どの検索も同じ条件で検索する。
     assert all(item == first for item in oracle.filters)
-    assert "登録の手順" in oracle.queries
     # どの検索にも、利用者の条件・基準日が残る。
     for item in oracle.filters:
         assert {key: item.get(key) for key in expected if key != "extraction_fields"} == {
@@ -359,82 +326,3 @@ class ScopeRecordingCoverageOracle(CoverageOracle):
         scoped = dict(filters or {})
         self.searches.append((query, scoped, current_audit_request_context()))
         return await super().hybrid_search(query, embedding, top_k, mode, scoped)
-
-
-async def test_request_coverage_re_search_keeps_user_conditions(
-    monkeypatch: pytest.MonkeyPatch, access: AuditRequestContext
-) -> None:
-    """根拠の無い要求だけの再検索も、利用者の条件・基準日・認可の範囲で検索する。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.models.llm import GroundedDraft, QueryExpansionOutput, QueryRoutingOutput
-
-    def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        if issubclass(schema, QueryRoutingOutput):
-            expansion = explicit_gap(system, prompt, config, QueryExpansionOutput, **options)
-            return schema(strategy="hyde", reason="合成の検索文を選択", queries=expansion.queries)
-        if schema is QueryExpansionOutput:
-            return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
-        result = _fake_llm(system, prompt, config, schema, **options)
-        if (
-            issubclass(schema, (GroundedDraft, generation_draft_wire_model()))
-            and "請求書の再発行は、請求一覧" not in prompt
-        ):
-            data = result.model_dump(exclude_unset=True)
-            if getattr(schema, "_uses_typed_answer_parts", False):
-                data["answer_parts"].append(
-                    {
-                        "request_id": "Q1",
-                        "requirement": "追加の合成要求",
-                        "answer": {"kind": "gap", "text": "請求書の再発行方法は？"},
-                    }
-                )
-                return schema.model_validate(data)
-            data["items"].append(
-                {
-                    "kind": "gap",
-                    "text": "請求書の再発行方法は？",
-                    "request_id": "Q1",
-                    "citations": [],
-                }
-            )
-            return schema.model_validate(data)
-        return result
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
-    oracle = ScopeRecordingCoverageOracle()
-    filters = {
-        "knowledge_base_id": "kb-1",
-        "large_category": "分類A",
-        "as_of": "2020-06-30",
-        "extraction_fields": _manual_fields(),
-    }
-    engine = AnswerEngine(
-        Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
-            rag_rerank_enabled=False,
-            rag_request_coverage_retrieval_enabled=True,
-        ),
-        oracle=cast(Any, oracle),
-        genai=cast(Any, FakeGenAi()),
-        auto_field_conditions=[AUTO_FIELD],
-    )
-
-    outcome = await engine.run(
-        SearchRequest(query="受注の登録方法は？請求書の再発行方法は？", filters=filters)
-    )
-
-    assert (
-        outcome.diagnostics["request_coverage"]["after_generation"][0]["re_retrieval"]["applied"]
-        is True
-    )
-    re_searches = [item for item in oracle.searches if item[0] == "請求書の再発行方法は？"]
-    assert re_searches
-    scalar = {key: value for key, value in filters.items() if key != "extraction_fields"}
-    for _query, scoped, _context in re_searches:
-        assert {key: scoped.get(key) for key in scalar} == scalar
-        assert _field_values(scoped) == [
-            (MANUAL_FIELD.name, MANUAL_FIELD.value),
-            (AUTO_FIELD.name, AUTO_FIELD.value),
-        ]
-    assert {context for _query, _scoped, context in oracle.searches} == {access}

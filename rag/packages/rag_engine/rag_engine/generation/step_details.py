@@ -139,29 +139,3 @@ def join_values(values: Iterable[Any], *, limit: int = 8, separator: str = "、"
     items = [str(value).strip() for value in values if str(value).strip()]
     head = separator.join(items[:limit])
     return head + (f" ほか {len(items) - limit} 件" if len(items) > limit else "")
-
-
-# 根拠の確認（CRAG の評価）の観点と、次の対処の表示名。知らない値はそのまま出す。
-_ASPECT_LABELS = {
-    "business_object": "対象の業務・機能",
-    "requested_result": "求める結果",
-    "applicability": "適用の条件",
-    "procedure": "操作の手順",
-    "member_details": "対象の明細",
-    "population_membership": "対象への該当",
-    "enumeration_coverage": "列挙の網羅",
-}
-_RECOVERY_LABELS = {
-    "rewrite": "検索文を書き換えて探し直す",
-    "neighbor_children": "前後の段落を加える",
-    "parent": "上位のまとまりを加える",
-    "neighbor_parents": "隣接するまとまりを加える",
-}
-
-
-def aspect_labels(aspects: Iterable[str]) -> str:
-    return join_values(_ASPECT_LABELS.get(str(aspect), str(aspect)) for aspect in aspects)
-
-
-def recovery_label(action: str) -> str:
-    return _RECOVERY_LABELS.get(action, action)

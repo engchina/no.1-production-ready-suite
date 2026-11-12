@@ -1,5 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { LOCAL_CURRENT_USER } from "./fixtures/auth";
 import { expect, test } from "./fixtures/mock-api";
 
@@ -212,6 +213,64 @@ test.describe("AI Agent Control Plane", () => {
     await expect(model).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
+
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 900 },
+    { name: "mobile-375", width: 375, height: 812 },
+  ]) {
+    test(`モデルとスキルの候補を読み取れないときは、候補なしと見せず欄ごとの文の 1 行の失敗と再試行を出す (#4222・#4817, ${viewport.name})`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await installControlPlaneApi(page);
+      let candidatesFail = true;
+      const failure = (message: string) => ({
+        status: 500,
+        json: { data: null, error_messages: [message], warning_messages: [], error_code: "database_read_failed" },
+      });
+      // 後から登録した route が先に呼ばれる（installControlPlaneApi の成功の応答を上書きする）。
+      await page.route("**/api/runtime/status", (route) =>
+        candidatesFail ? route.fulfill(failure("モデルの一覧を読み取れませんでした。")) : route.fallback()
+      );
+      await page.route("**/api/skills", (route) =>
+        candidatesFail ? route.fulfill(failure("スキルの一覧を読み取れませんでした。")) : route.fallback()
+      );
+      await page.goto("/agents?id=default");
+
+      const modelFailure = page.getByTestId("agent-model-load-failed");
+      await expect(modelFailure).toBeVisible({ timeout: 15_000 });
+      // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+      await expect(modelFailure.getByRole("alert")).toHaveText("モデルの候補を読み込めませんでした。");
+      await expect(modelFailure.getByText("モデルの一覧を読み取れませんでした。")).toBeHidden();
+      const skillsFailure = page.getByTestId("agent-skills-load-failed");
+      await expect(skillsFailure.getByRole("alert")).toHaveText("スキルの候補を読み込めませんでした。");
+      expect(await findFieldLoadFailureViolations(page, { expectCount: 2 })).toEqual([]);
+      // モデルの失敗とスキルの失敗が両方見える位置で撮る（375px は 2 枚に分ける）。
+      await (viewport.name === "desktop" ? skillsFailure : modelFailure).evaluate((element) =>
+        element.scrollIntoView({ block: "center" })
+      );
+      await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-${viewport.name}.png`) });
+      if (viewport.name !== "desktop") {
+        await skillsFailure.evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.screenshot({ path: testInfo.outputPath(`agent-skills-load-failed-${viewport.name}.png`) });
+      }
+      await modelFailure.getByRole("button", { name: "詳細" }).click();
+      await expect(modelFailure.getByText("モデルの一覧を読み取れませんでした。")).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`agent-model-load-failed-details-${viewport.name}.png`) });
+      await modelFailure.getByRole("button", { name: "詳細" }).click();
+
+      // 再試行はキーボードで押せる。
+      candidatesFail = false;
+      await modelFailure.getByRole("button", { name: "再試行" }).focus();
+      await page.keyboard.press("Enter");
+      await expect(modelFailure).toHaveCount(0);
+      await skillsFailure.getByRole("button", { name: "再試行" }).click();
+      await expect(skillsFailure).toHaveCount(0);
+      await page.getByRole("combobox", { name: "モデル" }).click();
+      await expect(page.getByRole("option", { name: "gpt-oss-120b" })).toBeVisible();
+    });
+  }
 
   test("Run は Agent とゴールだけで作成し、組み込み Runtime が実行する", async ({ page }) => {
     await installControlPlaneApi(page);

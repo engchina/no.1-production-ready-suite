@@ -48,7 +48,7 @@ def test_answer_timeout_env_example_documents_setting() -> None:
 def test_answer_timeout_message_names_stage_and_retry() -> None:
     message = answer_timeout_message("history_rewrite", 300)
     assert "5 分" in message
-    assert "前の会話を踏まえて質問を補う" in message
+    assert "質問を補い、検索が要るかを分ける" in message
     assert "もう一度送信してください" in message
     assert "90 秒" in answer_timeout_message("answer", 90)
     assert "質問の条件を整理して回答を作る" in answer_timeout_message("answer", 90)
@@ -61,9 +61,6 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
         "（時間切れになった工程: 検索文から根拠の候補を集める（1 回目））"
         in answer_timeout_message("answer_step:文書検索（1回目）", 30)
     )
-    assert "（時間切れになった工程: 質問の言い換え・分解）" in answer_timeout_message(
-        "answer_step:質問拡張戦略", 30
-    )
     # 知らない工程名はそのまま出す。
     assert "（時間切れになった工程: 新しい工程（2回目））" in answer_timeout_message(
         "answer_step:新しい工程（2回目）", 30
@@ -73,15 +70,16 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 def test_stage_labels_cover_answer_stages() -> None:
     """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)・会話の添付からの根拠の
-    選択(#3475)と検索だけの工程。
+    選択(#3475)・検索の要らない発話への応答(#4787)・承認済み FAQ との照合(#4788)と検索だけの工程。
 
     旧 standard の工程は #595 で削除した。
     """
     assert set(ANSWER_STAGE_LABELS) == {
         "retrieval",
         "history_rewrite",
+        "small_talk_reply",
+        "faq_direct_match",
         "attachment_evidence",
-        "field_filter",
         "answer",
         # 回答を作らない RAG 検索の全体（#3506）。
         "evidence",
@@ -126,7 +124,7 @@ async def test_run_answer_with_timeout_reports_last_stage() -> None:
 
     assert caught.value.stage == "history_rewrite"
     assert caught.value.timeout_seconds == 0.05
-    assert "前の会話を踏まえて質問を補う" in caught.value.user_message
+    assert "質問を補い、検索が要るかを分ける" in caught.value.user_message
     assert isinstance(caught.value, TimeoutError)
     assert isinstance(caught.value.original_error, TimeoutError)
 
@@ -166,12 +164,12 @@ async def test_search_reports_started_stages_as_mcp_progress(
     reported: list[str] = []
     monkeypatch.setattr(search_route, "report_tool_progress", reported.append)
     await search_route._report_tool_progress(_progress("answer", "started"))
-    await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "started"))
-    await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "success"))
+    await search_route._report_tool_progress(_progress("answer_step:章節の拡張", "started"))
+    await search_route._report_tool_progress(_progress("answer_step:章節の拡張", "success"))
     await search_route._report_tool_progress(_progress("answer_guardrail", "started"))
     # 終わった工程は知らせない。名前は時間切れの文言と同じ（answer_stage_label）。
     assert reported == [
         "質問の条件を整理して回答を作る",
-        "要求に答える根拠があるか判定する（1 回目）",
+        "関係する章節の原文を根拠に加える",
         "回答に安全上の問題がないか検査する",
     ]

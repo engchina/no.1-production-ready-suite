@@ -14,8 +14,9 @@ import unittest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, record, run
 
 from rag_engine.generation import grounded
-from rag_engine.generation.answer_envelope import build_envelope, requires_environment_data
+from rag_engine.generation.answer_envelope import requires_environment_data
 from rag_engine.models.llm import GroundedDraft
+from rag_engine.retrieval.task_contract import task_contract
 
 MANUAL = "portal-operations-manual.pdf"
 PREMISE = "本書の操作ができるのは「ポータル管理者」ロールを持つ利用者だけです。"
@@ -55,7 +56,7 @@ def answer(question, texts, external_data_items, *, external_data_required=True)
         "external_data_items": external_data_items,
     }
     reviews = [(index, "supported", "matched", "") for index in range(len(texts))]
-    requests = [(unit["id"], "addressed") for unit in grounded.task_contract(question)["request_units"]]
+    requests = [(unit["id"], "addressed") for unit in task_contract(question)["request_units"]]
     return run(FakeModel([steps], [audit(*reviews, requests=requests)]), ctx, question).response
 
 
@@ -86,7 +87,7 @@ class UserConditionOutcomeTest(unittest.TestCase):
             [],
             external_data_required=False,
         )
-        self.assertEqual(plain.envelope["outcome"], "conditional")
+        self.assertEqual(plain.envelope["outcome"], "answered")
 
     def test_delete_account_with_approval_condition_is_conditional(self):
         # cr-delete-account: 部門長の承認を得たかは利用者に確かめる条件。
@@ -160,17 +161,6 @@ class ExternalDataItemTest(unittest.TestCase):
         self.assertEqual(item["properties"]["decides"]["type"], "boolean")
         # 偏った既定値（「迷うときは〜」）を置かない。
         self.assertNotIn("迷うとき", json.dumps(item, ensure_ascii=False))
-
-
-class BuildEnvelopeUserConditionsTest(unittest.TestCase):
-    def test_user_conditions_make_an_answered_envelope_conditional(self):
-        matched = {"kind": "operation", "text": "手順", "applies": "matched", "condition": ""}
-        common = {"requests": (), "reviews": [], "items": [matched], "gaps": (), "confirmations": (), "external_data_required": False}
-        self.assertEqual(build_envelope(**common)["outcome"], "answered")
-        envelope = build_envelope(user_conditions=[ROLE], **common)
-        self.assertEqual(envelope["outcome"], "conditional")
-        self.assertEqual(envelope["conditions"], [ROLE])
-        self.assertEqual(envelope["confirmations"], [])
 
 
 if __name__ == "__main__":

@@ -128,8 +128,7 @@ def test_run_observation_uses_the_names_of_the_rag_contract() -> None:
     }
     assert shared <= set(evidence) and shared <= set(rag_evidence)
     assert _enum(evidence["answer_use"]) == _enum(rag_evidence["answer_use"])
-    # 表の行・列の対応の検査が読めるか・縮退・根拠 0 件の段（#3546）: RAG と同じ名前・語彙。
-    assert _enum(evidence["table_binding"]) == _enum(rag_evidence["table_binding"])
+    # 縮退・根拠 0 件の段（#3546）: RAG と同じ名前・語彙。
     call = observation["$defs"]["ObservedToolCall"]["properties"]
     assert set(observation["$defs"]["ObservedDegradedStep"]["properties"]) == set(
         rag["$defs"]["DegradedStep"]["properties"]

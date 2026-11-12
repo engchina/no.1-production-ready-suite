@@ -34,8 +34,6 @@
     "status": "INDEXED"
   },
   "rag_overrides": {
-    "query_strategy": "auto_routing",
-    "answer_flow": "crag",
     "rrf_k": 60,
     "oracle_vector_target_accuracy": 95
   },
@@ -43,8 +41,6 @@
     "required_evidence_recall": 0.9,
     "mrr": 0.6,
     "answer_correctness": 0.9,
-    "requirement_coverage": 0.9,
-    "claim_support_rate": 0.95,
     "response_decision_accuracy": 0.9
   }
 }

@@ -191,9 +191,6 @@ export type EvaluationFailureReason =
   | "unexpected_refusal"
   | "answer_keyword_miss"
   | "low_groundedness"
-  | "unsupported_claim"
-  | "claim_unassessed"
-  | "missing_content"
   | "answer_failed"
   | "answer_evaluation_error"
   | "answer_generation_fallback"
@@ -206,10 +203,9 @@ export type EvaluationFailureReason =
   | "known_condition_reasked"
   | "screen_missing"
   | "wrong_screen"
-  | "off_target"
   | "case_error";
-/** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
-export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "requirement_coverage" | "claim_support_rate" | "response_decision_accuracy";
+/** 評価の指標（#591）。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。 */
+export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "response_decision_accuracy";
 
 /** 回答の対応（#1231）。評価のケースは受け入れる対応を複数持てる。 */
 export type EvaluationOutcome =
@@ -226,7 +222,6 @@ export type ParserAdapterBackend =
   | "unstructured"
   | "structured_records_jsonl"
   | "xml_tree_json"
-  | "mineru"
   | "dots_ocr"
   | "oci_document_understanding";
 export type ParserServiceBackendName = "oci_document_understanding";
@@ -235,11 +230,10 @@ export type ParserAdapterBackendName =
   | "unstructured"
   | "structured_records_jsonl"
   | "xml_tree_json"
-  | "mineru"
   | "dots_ocr";
-export type ExternalParserBackendName = "mineru" | "dots_ocr";
+export type ExternalParserBackendName = "dots_ocr";
 export type ExternalParserProtocol =
-  "mineru_v1" | "openai_chat_completions";
+  "openai_chat_completions";
 export type ExternalParserConnectionStatus =
   | "available"
   | "unconfigured"
@@ -544,7 +538,6 @@ export interface IngestionCallProgress {
     | "heading_levels"
     | "field_extraction"
     | "navigation_summary"
-    | "raptor_summary"
     | "embedding"
     | "rerank";
   succeeded: number;
@@ -779,6 +772,29 @@ export interface StructuredExtraction {
   parser_artifacts: Record<string, string | number | boolean | null>;
 }
 
+/** 文書全体の要約（#4793）。取込の後に 1 文書 1 回の LLM で作る文書の説明。 */
+export interface DocumentContentSummary {
+  /** 保存済みの結果。pending はまだ結果が無い。 */
+  status: "pending" | "ready" | "failed";
+  /** 今作っている途中か（作り直しの途中は、前の要約を出したまま true）。 */
+  generating: boolean;
+  text: string | null;
+  topics: string[];
+  /** 入力の予算を超えたため、文書の先頭の本文と見出しの一覧から作った要約か。 */
+  input_truncated: boolean;
+  /** 最後の失敗の理由（成功すると null）。 */
+  failure_code: string | null;
+  generated_at: string | null;
+}
+
+/** 文書の詳細に出す文書全体の要約の状態（#4793）。 */
+export interface DocumentContentSummaryState {
+  /** 取込の後に要約を作る設定が有効か。無効なら作り直せない。 */
+  enabled: boolean;
+  /** まだ作っていない文書は null。 */
+  summary: DocumentContentSummary | null;
+}
+
 export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
   error_message: string | null;
@@ -915,6 +931,7 @@ export interface DocumentPreviewSource {
   file_name: string;
   content_type: string | null;
   is_pdf: boolean;
+  is_structured_records?: boolean;
 }
 
 export interface DocumentPreviewPages {
@@ -1003,7 +1020,7 @@ export interface DocumentChunkPreviewRequest {
   chunk_size?: number;
   chunk_overlap?: number;
   chunk_min_chars?: number;
-  chunk_delimiter?: string;
+  chunk_delimiter?: string[];
   chunk_child_target_chars?: number;
   chunk_table_child_target_chars?: number;
   chunk_parent_target_chars?: number;
@@ -1136,7 +1153,6 @@ export interface KnowledgeBaseIngestionConfig {
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
-  parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
   parser_structured_records_jsonl_enabled?: boolean | null;
   parser_xml_tree_json_enabled?: boolean | null;
@@ -1148,8 +1164,8 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_size: number | null;
   chunk_overlap: number | null;
   chunk_min_chars: number | null;
-  /** 固定分割の分割符（escape 表現。#2457）。null は全体の既定に従う。 */
-  chunk_delimiter?: string | null;
+  /** 固定分割の分割符（優先度順。escape 表現。#2457）。null は全体の既定に従う。 */
+  chunk_delimiter?: string[] | null;
   /** 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。 */
   chunk_child_target_chars?: number | null;
   chunk_table_child_target_chars?: number | null;
@@ -1171,61 +1187,15 @@ export interface KnowledgeBaseIngestionConfig {
   auto_index_after_chunk_enabled: boolean | null;
 }
 
-/** 検索・回答設定。Search Answer Profile の query 設定として使う。 */
+/** 検索・回答プロファイルの query（適用する欄だけ。ほかの検索方法は全体設定だけで決める。#4784）。 */
 export interface KnowledgeBaseQueryConfig {
-  // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
-  // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は回答フローだけ)。
-  /** 回答フローの設定。null / 未指定はグローバル継承。 */
-  query_strategy?: QueryStrategyName | null;
-  answer_flow?: AnswerFlowName | null;
-  neighbor_child_count?: number | null;
-  rerank_enabled?: boolean | null;
-  // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
-  screen_linking_enabled?: boolean | null;
-  // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
-  request_coverage_retrieval_enabled?: boolean | null;
-  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。ON / OFF と回数・期限の上限は
-  // 全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。
-  guide_step_retrieval_enabled?: boolean | null;
-  guide_step_max_queries?: number | null;
-  guide_step_deadline_seconds?: number | null;
-  // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
-  auto_field_filter_enabled?: boolean | null;
-  /**
-   * 実体・別名による検索拡張(LLM は呼ばない)。検索方法の全体設定だけで決め、プロファイルでは保存しない。
-   * 文書レシピで実体・別名索引を有効にした文書にだけ効く。
-   */
-  entity_expansion_enabled?: boolean | null;
-  /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
-  entity_expansion_max_chunks?: number | null;
-  /**
-   * 文書構造索引で根拠の候補を広げる(AI は呼ばない)。検索方法の全体設定だけで決める。
-   * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
-   */
-  graph_expansion_enabled?: boolean | null;
-  /** 1 回の検索で加える根拠の上限(1〜20)。全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。 */
-  graph_expansion_max_chunks?: number | null;
-  /**
-   * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
-   * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50%)。
-   */
-  section_expansion_enabled?: boolean | null;
-  section_expansion_max_levels?: number | null;
-  section_expansion_input_token_percent?: number | null;
   /**
    * rerank の後、根拠の起点に採る同じ文書の chunk の上限(0〜20。0 は上限なし。#2167)。超えた chunk は後ろへ回す。
    * null は既定(5)。
    */
   max_anchors_per_document?: number | null;
-  /**
-   * 業務ガイドの照合で、質問と質問の例の埋め込みの近さを点に足す(#2398。質問ごとに埋め込みの呼び出しが 1 回増える)。
-   * null / 未指定は全体の既定(使わない)。
-   */
   /** 業務ガイドの使用。未指定・null は OFF（全体の ON を継承しない）。 */
   support_guide_enabled?: boolean | null;
-  support_guide_semantic_match_enabled?: boolean | null;
-  /** 上位の 2 つの業務ガイドの点が近いとき、どれに沿うかを確かめる(#2398)。null / 未指定は全体の既定(確かめない)。 */
-  support_guide_close_match_clarification_enabled?: boolean | null;
 }
 
 /**
@@ -1242,22 +1212,10 @@ export interface EntityIndexCoverageData {
   document_count: number;
 }
 
-export type QueryStrategyName =
-  | "auto_routing"
-  | "simple_retrieval"
-  | "rag_fusion"
-  | "query_decomposition"
-  | "step_back_prompting"
-  | "hyde";
-
-export type AnswerFlowName = "crag" | "standard_rag";
-
-
-/** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
+/** KB 単位の構築設定。 */
 export interface KnowledgeBaseAdapterConfig {
   version: number;
   ingestion: KnowledgeBaseIngestionConfig;
-  query: KnowledgeBaseQueryConfig;
 }
 
 export type StructureBuildMode = "missing" | "rebuild" | "retry" | "continue";
@@ -1271,8 +1229,6 @@ export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   structure_index_global_enabled?: boolean;
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
-  /** 既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。 */
-  legacy_query_config_ignored?: boolean;
 }
 
 export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
@@ -1556,10 +1512,8 @@ export interface SearchRequestBody {
   search_answer_profile_id?: string | null;
   /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
-  /** false なら回答を生成しない（RAG 検索の画面。CRAG と回答の LLM を使わない。#649）。 */
+  /** false なら回答を生成しない（RAG 検索の画面。回答の LLM を使わない。#649）。 */
   generate_answer?: boolean;
-  /** 質問から読み取った条件のうち、利用者が外した項目の名前（#652）。 */
-  auto_field_filter_excluded?: string[];
   /** 回答のモデル（既定のテキストモデルか既定の Vision モデル。未指定はテキスト。#675）。 */
   model_id?: string;
 }
@@ -1608,13 +1562,6 @@ export interface ChatMessage {
   sender_display_name?: string;
   /** 質問に添付したファイル（#2517）。 */
   attachments?: ChatAttachmentApiReference[];
-  /**
-   * 回答の段落の印・根拠と矛盾して外した段落・回答全体の注意（ASSISTANT の完了した回答。#2738。契約は
-   * platform/contracts/answer-passages/passage-marks.json）。この記録より前の回答は未指定（今までの表示のまま）。
-   */
-  passage_marks?: AnswerPassageMarkData[];
-  removed_passages?: AnswerRemovedPassageData[];
-  answer_warnings?: AnswerPassageReasonData[];
   /** 生成時の表示形式。未完了・古い回答は null / 未指定。 */
   answer_format?: Record<string, string> | null;
   /**
@@ -1622,25 +1569,8 @@ export interface ChatMessage {
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
   answer_attached_images?: number;
-}
-
-/** 段落の印・外した段落・回答全体の注意の理由（#2738）。label は利用者に見せる短い文（backend の文をそのまま出す）。 */
-export interface AnswerPassageReasonData {
-  code: string;
-  label: string;
-  detail?: string;
-}
-
-export interface AnswerPassageMarkData {
-  /** 回答の本文の段落の原文（段落の照合に使う）。 */
-  text: string;
-  state: "unverified" | "warning";
-  reasons: AnswerPassageReasonData[];
-}
-
-export interface AnswerRemovedPassageData {
-  text: string;
-  reasons: AnswerPassageReasonData[];
+  /** 登録済みQ&A の回答をそのまま返した回答の一致度（それ以外の回答は null / 未指定。#4788）。 */
+  approved_faq_direct_score?: number | null;
 }
 
 export interface ConversationSummary {
@@ -1677,10 +1607,12 @@ export interface ChatMessageRequestBody {
   top_k?: number;
   /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
   approved_faq_id?: string;
+  /** 利用者が類似問の候補を「どれでもない」と断った質問（FAQ の回答をそのまま返さない。#4788）。 */
+  approved_faq_declined?: boolean;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
-  clarification?: ClarificationAnswer;
+  clarification?: GuideConditionAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
-  clarification_skipped_rule_id?: string;
+  skipped_guide_condition_id?: string;
   /** 画面が決めた質問の id（32 桁の 16 進。#1175）。送信の直後（`start` の前）の停止もこの id で取り消せる。 */
   client_message_id?: string;
   /** 質問に添付するファイル（`uploadChatAttachment` の `attachment_id`。#2517）。 */
@@ -1693,26 +1625,16 @@ export interface ChatAttachmentListData {
   limits: ChatAttachmentApiLimits;
 }
 
-/** ルールの確認の質問（チャットの確認。#717）。 */
-export interface ClarificationSection {
-  document_id: string;
-  document_name: string;
-  section_id: string;
-  title: string;
-  page_start: number | null;
-  page_end: number | null;
-}
-
+/** 回答前の確認の質問（業務ガイドの条件の確認。#1238）。 */
 export interface ClarificationOption {
   id: string;
   label: string;
   description: string;
   search_terms: string[];
   premise: string;
-  sections: ClarificationSection[];
 }
 
-export interface RuleClarification {
+export interface GuideConditionClarification {
   question: string;
   multiple: boolean;
   allow_other: boolean;
@@ -1720,13 +1642,13 @@ export interface RuleClarification {
 }
 
 export interface ClarificationSuggestionData {
-  rule_id: string;
-  rule_title: string;
-  clarification: RuleClarification;
+  guide_condition_id: string;
+  guide_title: string;
+  clarification: GuideConditionClarification;
 }
 
-export interface ClarificationAnswer {
-  rule_id: string;
+export interface GuideConditionAnswer {
+  guide_condition_id: string;
   option_ids: string[];
   other_text: string;
 }
@@ -1871,7 +1793,7 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-export type AnswerPromptKey = `${string}.${string}` | "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
+export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "document_summary";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -1893,13 +1815,10 @@ export interface AnswerPromptsData {
 /** 処理の順の段の区分（backend の answer_prompts.PROMPT_PHASES）。 */
 export type AnswerPromptPhase =
   | "ingestion"
-  | "indexing"
   | "knowledge"
   | "question"
   | "retrieval"
-  | "grounding"
   | "generation"
-  | "audit"
   | "evaluation";
 
 export interface AnswerPromptStage {
@@ -2098,6 +2017,9 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
  * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
 export interface EvaluationRunRequestBody {
+  testset_id?: string;
+  testset_revision?: number;
+  answer_model_id?: string;
   cases: EvaluationCase[];
   search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
@@ -2110,11 +2032,9 @@ export interface EvaluationRunRequestBody {
 export interface EvaluationAnswerJudgement {
   /** completed / error / input_too_large / timeout / unavailable */
   status: string;
-  /** 評価の基準の指標がすべて閾値以上か（#680）。 */
+  /** 正確性が評価の基準の閾値以上か（#680）。保存済みの古い結果は保存した合否のまま。 */
   passed: boolean | null;
-  claims_supported: boolean | null;
-  requirement_coverage: number | null;
-  missing_content: boolean | null;
+  answer_correctness?: number | null;
   message: string | null;
 }
 
@@ -2178,9 +2098,10 @@ export interface EvaluationThresholdFailure {
 }
 
 /** 評価結果。各指標は測れたケースだけの平均で、測れなかった指標は null。 */
-export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | null>> & {
+export type EvaluationReferenceMetricName = "precision_at_10" | "ndcg_at_3" | "ndcg_at_10" | "map" | "bleu_1" | "bleu_2" | "bleu_4" | "rouge_1" | "rouge_2" | "rouge_l";
+export type EvaluationMetrics = Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName, number | null>> & {
  metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
- metric_case_counts?:Partial<Record<EvaluationMetricName,number>>; passed:boolean|null;
+ metric_case_counts?:Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName,number>>; passed:boolean|null;
  applied_thresholds?:Partial<Record<EvaluationMetricName,number>>;
  threshold_failures:EvaluationThresholdFailure[]; failure_reason_counts:Partial<Record<string,number>>;
  category_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
@@ -2195,8 +2116,8 @@ export interface EvaluationComparison {
   metrics: EvaluationMetrics;
 }
 
-// run: 品質評価。calibration: 判定の校正（#3578。結果は判定の校正の API で読む）。
-export type EvaluationJobKind = "run" | "calibration";
+// run: 品質評価。
+export type EvaluationJobKind = "run";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 /**
@@ -2221,232 +2142,37 @@ export interface EvaluationJob {
   partial_result: EvaluationMetrics | null;
   /** アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。 */
   source_workbook_id: string | null;
+  /** 使った検索・回答プロファイル（主・比べる）と名前（#4811。記録の無い古い job は null）。 */
+  search_answer_profile_id: string | null;
+  compare_search_answer_profile_id: string | null;
+  search_answer_profile_name: string | null;
+  compare_search_answer_profile_name: string | null;
+  /** 実行した利用者の表示名（分からない古い job は null）。 */
+  actor_display_name: string | null;
+  /** 見ている利用者が実行した job か、取り消せるか（本人と system_admin。#4811）。 */
+  owned: boolean;
+  can_cancel: boolean;
 }
 
-// --- 品質評価: 判定の校正（#3578） ---
-
-export type CalibrationAspect = "requirement_coverage" | "answer_correctness" | "claim_support";
-export type CalibrationLabel = "pass" | "fail" | "cannot_judge";
-export type CalibrationRowStatus = "pending" | "agreed" | "disagreed" | "adjudicated";
-export type CalibrationSplit = "dev" | "holdout" | "synthetic";
-
-export interface CalibrationSourceJob {
+/** 過去の品質評価の一覧の行（#4811）。結果の本体は持たず、全体の判定（成功した job だけ）を持つ。 */
+export interface EvaluationJobSummary {
   job_id: string;
-  created_at: string;
-  finished_at: string | null;
-  case_count: number;
-  compared: boolean;
-}
-
-export interface CalibrationAspectCriterion {
-  aspect: CalibrationAspect;
-  metric: string;
-  criteria: string;
-  requires_standard_answer: boolean;
-}
-
-export interface CalibrationErrorType {
-  id: string;
-  group: string;
-  title: string;
-  aspects: string;
-  holdout_target: number;
-}
-
-export interface CalibrationAspectProgress {
-  aspect: CalibrationAspect;
-  rows: number;
-  labeled: number;
-  cannot_judge: number;
-  holdout_rows: number;
-  holdout_pass: number;
-  holdout_fail: number;
-}
-
-export interface CalibrationProgress {
-  aspects: CalibrationAspectProgress[];
-  error_types: { id: string; holdout_count: number }[];
-  holdout_target: number;
-  label_target: number;
-}
-
-export interface CalibrationSplitResult {
-  split: CalibrationSplit;
-  total: number;
-  judged: number;
-  coverage: number | null;
-  accuracy: number | null;
-  kappa: number | null;
-  false_pass_rate: number | null;
-  false_fail_rate: number | null;
-}
-
-export interface CalibrationAspectResult {
-  aspect: CalibrationAspect;
-  passed: boolean;
-  failures: string[];
-  splits: CalibrationSplitResult[];
-  variance: { runs: number; items: number; unstable: number; unstable_rate: number | null } | null;
-}
-
-export interface CalibrationSummary {
-  calibration_id: string;
-  label_set_id: string;
   status: EvaluationJobStatus;
+  /** 評価したケースの数（比べるプロファイルの 2 回目は数えない）。 */
+  case_count: number;
+  total_cases: number;
+  completed_cases: number;
   created_at: string;
   finished_at: string | null;
-  repeats: number;
-  judge_model_id: string | null;
-  judge_rubric_version: string | null;
-  prompt_sha256: string | null;
-  labels_sha256: string | null;
   passed: boolean | null;
-  error_message: string | null;
-  aspects: CalibrationAspectResult[];
-  current: boolean;
+  search_answer_profile_id: string | null;
+  compare_search_answer_profile_id: string | null;
+  search_answer_profile_name: string | null;
+  compare_search_answer_profile_name: string | null;
+  actor_display_name: string | null;
+  owned: boolean;
+  can_cancel: boolean;
 }
-
-export interface LabelSetSummary {
-  label_set_id: string;
-  name: string;
-  origin: "jobs" | "import";
-  created_at: string;
-  human_item_count: number;
-  synthetic_item_count: number;
-  row_count: number;
-  annotator_count: number;
-  my_labeled: number;
-  resolved_rows: number;
-  created_by_me: boolean;
-  latest_calibration: CalibrationSummary | null;
-}
-
-export interface LabelSetListData {
-  items: LabelSetSummary[];
-  can_manage: boolean;
-}
-
-export interface LabelSetDetail {
-  summary: LabelSetSummary;
-  rubric_id: string;
-  rubric_version: string | null;
-  aspects: CalibrationAspectCriterion[];
-  error_types: CalibrationErrorType[];
-  my_code: string | null;
-  my_progress: CalibrationProgress;
-  final_progress: CalibrationProgress | null;
-  can_manage: boolean;
-  skipped: Record<string, number>;
-  holdout_ratio: number | null;
-}
-
-export interface CalibrationEvidence {
-  id: string;
-  text: string;
-}
-
-export interface AnnotationRow {
-  item_id: string;
-  aspect: CalibrationAspect;
-  split: "dev" | "holdout";
-  question: string;
-  answer: string;
-  standard_answer: string | null;
-  evidence: CalibrationEvidence[];
-  label: CalibrationLabel | null;
-  error_type: string | null;
-  note: string | null;
-}
-
-export interface AnnotationRowsData {
-  items: AnnotationRow[];
-  total: number;
-  offset: number;
-  limit: number;
-  unlabeled: number;
-}
-
-export interface CalibrationLabelInput {
-  item_id: string;
-  aspect: CalibrationAspect;
-  label: CalibrationLabel | null;
-  error_type?: string | null;
-  note?: string | null;
-}
-
-export interface AnnotatorLabel {
-  code: string;
-  label: CalibrationLabel;
-  error_type: string | null;
-  note: string | null;
-}
-
-export interface AspectAgreement {
-  aspect: CalibrationAspect;
-  rows: number;
-  agreed: number;
-  disagreed: number;
-  adjudicated: number;
-  pending: number;
-  pairs: { annotators: string[]; compared: number; agreement: number | null; kappa: number | null }[];
-}
-
-export interface AgreementRow {
-  item_id: string;
-  aspect: CalibrationAspect;
-  split: "dev" | "holdout";
-  status: CalibrationRowStatus;
-  question: string;
-  answer: string;
-  standard_answer: string | null;
-  evidence: CalibrationEvidence[];
-  annotations: AnnotatorLabel[];
-  final_label: CalibrationLabel | null;
-  adjudication: AnnotatorLabel | null;
-}
-
-export interface AgreementData {
-  annotators: string[];
-  aspects: AspectAgreement[];
-  rows: AgreementRow[];
-  total: number;
-  offset: number;
-  limit: number;
-}
-
-export interface SyntheticItem {
-  item_id: string;
-  base_item_id: string;
-  kind: string;
-  description: string;
-  fail_aspects: string[];
-  answer: string;
-  excluded: boolean;
-}
-
-export interface JudgeCalibrationAspectStatus {
-  aspect: CalibrationAspect;
-  metric: string;
-  calibrated: boolean;
-  kappa: number | null;
-  calibration_id: string | null;
-  calibrated_at: string | null;
-  judge_rubric_version: string | null;
-}
-
-export interface JudgeCalibrationStatus {
-  judge_model_id: string | null;
-  prompt_sha256: string;
-  aspects: JudgeCalibrationAspectStatus[];
-}
-
-export interface LabelSetCreateBody {
-  name: string;
-  job_ids: string[];
-  include_synthetic: boolean;
-}
-
-export type AgreementFilter = "all" | "disagreed" | "pending" | "agreed" | "adjudicated";
 
 // --- 設定: モデル ---
 // --- 設定: データベース ---
@@ -2554,7 +2280,7 @@ export interface HuggingFaceSettingsUpdate {
 // --- 設定: Parser adapter ---
 export interface ParserAdapterStatusData {
   backend: ParserAdapterBackendName;
-  /** roadmap = 準備中（ロードマップ）で、まだ選べない（MinerU。#3359）。省略は available。 */
+  /** roadmap = 準備中（ロードマップ）で、まだ選べない。省略は available。 */
   availability?: ServiceAvailability;
   package_name: string;
   import_name: string;
@@ -2670,19 +2396,11 @@ export interface ParserAdapterSettingsData {
   navigation_summary_enabled: boolean;
   /** 1 文書の取込で要約する章節数の実効上限。読み取り専用。 */
   navigation_summary_max_nodes?: number;
-  raptor_enabled?: boolean;
+  /** 取込の後に文書全体の要約を作るか（RAG_DOCUMENT_SUMMARY_ENABLED。全体の設定だけ。#4793）。 */
+  document_summary_enabled?: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
-  /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
-  mineru_license?: MineruLicenseAcknowledgement;
   config_source: "runtime";
-}
-
-/** MinerU のライセンスの条件を管理者が確認した記録（#3359）。 */
-export interface MineruLicenseAcknowledgement {
-  acknowledged: boolean;
-  acknowledged_by: string | null;
-  acknowledged_at: string | null;
 }
 
 /** `adapter_backend` を省略すると解析エンジンの設定は変えない（「解析後の処理」だけの保存。#528）。 */
@@ -2690,9 +2408,7 @@ export interface ParserAdapterSettingsUpdate {
   adapter_backend?: ParserAdapterBackend;
   docling_enabled?: boolean;
   unstructured_enabled?: boolean;
-  mineru_enabled?: boolean;
   /** true で確認した人・日時を記録し、false で記録を消す（#3359）。 */
-  mineru_license_acknowledged?: boolean;
   dots_ocr_enabled?: boolean;
   structured_records_jsonl_enabled?: boolean;
   xml_tree_json_enabled?: boolean;
@@ -2702,7 +2418,7 @@ export interface ParserAdapterSettingsUpdate {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
-  raptor_enabled?: boolean;
+  document_summary_enabled?: boolean;
   vision_concurrency?: number;
 }
 
@@ -2764,6 +2480,56 @@ export interface PreprocessSettingsData {
 
 export interface PreprocessSettingsUpdate {
   profile: PreprocessProfileName;
+}
+
+// --- 設定: 形式別の既定（#4732）---
+export type FileTypeName =
+  | "pdf"
+  | "word"
+  | "powerpoint"
+  | "excel"
+  | "csv"
+  | "text"
+  | "markdown"
+  | "json"
+  | "html"
+  | "image";
+
+/** 種類の行の保存値。null は全体の既定に従う。 */
+export interface FileTypeDefaultEntry {
+  preprocess_profile: PreprocessProfileName | null;
+  parser_adapter_backend: ParserAdapterBackend | null;
+  chunking_strategy: ChunkingStrategyName | null;
+}
+
+export interface FileTypeDefaultRow extends FileTypeDefaultEntry {
+  file_type: FileTypeName;
+  extensions: string[];
+  preprocess_options: PreprocessProfileName[];
+  unavailable_preprocess_profiles: PreprocessProfileName[];
+  /** ファイル準備ごとの、この種類に対応する解析エンジン。 */
+  parser_options: Record<string, ParserAdapterBackend[]>;
+  unavailable_parser_backends: ParserAdapterBackend[];
+  /** 行のファイル準備が未設定のときに、解析エンジンの選択肢を決めるファイル準備。 */
+  inherited_preprocess_profile: PreprocessProfileName;
+  /** 組み込みの既定（「既定に戻す」で入る値）。この環境で使えない行はすべて null。 */
+  builtin: FileTypeDefaultEntry;
+  builtin_unavailable_reason: string | null;
+}
+
+export interface FileTypeDefaultsSettingsData {
+  rows: FileTypeDefaultRow[];
+  chunking_options: ChunkingStrategyName[];
+  global_defaults: {
+    preprocess_profile: PreprocessProfileName;
+    parser_adapter_backend: ParserAdapterBackend;
+    chunking_strategy: ChunkingStrategyName;
+  };
+  config_source: "runtime";
+}
+
+export interface FileTypeDefaultsUpdate {
+  entries: Partial<Record<FileTypeName, FileTypeDefaultEntry>>;
 }
 
 // --- サービス管理（各工程のサービスの稼働可視化・起動/停止）---
@@ -2842,7 +2608,7 @@ export interface ChunkingStrategyStatusData {
   selected: boolean;
 }
 
-/** 言語資源（#2181）。項目は「節 → 項目 → 値」（値は語の一覧か選択の文字列）。 */
+/** 言語資源（#2181）。項目は「節 → 項目 → 値」（値は語の一覧か 1 つの語）。 */
 export type LanguagePackFieldKind =
   | "words"
   | "pairs"
@@ -2852,14 +2618,13 @@ export type LanguagePackFieldKind =
   | "word_map"
   | "enum_map"
   | "char_ranges"
-  | "choice"
   | "text";
 
 export interface LanguagePackField {
   section: string;
   key: string;
   kind: LanguagePackFieldKind;
-  /** enum_map の値・choice の選択肢。 */
+  /** enum_map の値。 */
   choices: string[];
   /** 取込のときに使う書き方か（変えたら文書の再分割が要る）。 */
   ingest: boolean;
@@ -2882,12 +2647,6 @@ export interface LanguagePackData {
   outdated_documents?: number | null;
   unrecorded_documents?: number | null;
   current_release?: LanguagePackRelease;
-}
-
-export interface QuestionUnderstandingPreviewData {
-  original_text: string;
-  saved: { task_contract: Record<string, unknown>; hash: string };
-  draft: { task_contract: Record<string, unknown>; hash: string };
 }
 
 export interface LanguagePackPreviewResult {
@@ -2948,7 +2707,7 @@ export interface ChunkingSettingsData {
   chunk_size: number;
   overlap: number;
   min_chars: number;
-  delimiter: string;
+  delimiter: string[];
   context_header_enabled: boolean;
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   chunk_child_target_chars: number;
@@ -2965,7 +2724,7 @@ export interface ChunkingSettingsUpdate {
   chunk_size: number;
   overlap: number;
   min_chars: number;
-  delimiter: string;
+  delimiter: string[];
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   chunk_child_target_chars: number;
   chunk_table_child_target_chars: number;
@@ -2984,19 +2743,10 @@ export interface AnsweringSettingsData {
   rrf_method_ratio?: [number, number];
   rrf_source_ratio?: [number, number];
   rerank_slot_ratio?: [number, number];
-  runtime_rules_confirmation_enabled?: boolean;
-  runtime_rules_answer_enabled?: boolean;
   runtime_terms_search_enabled?: boolean;
   runtime_terms_answer_enabled?: boolean;
-  answer_audit_mode: "none" | "standard" | "detailed";
-  answer_evidence_refinement_mode: "legacy" | "cited_only" | "cited_required";
-  query_strategy: QueryStrategyName;
-  answer_flow: AnswerFlowName;
   neighbor_child_count: number;
   rerank_enabled: boolean;
-  screen_linking_enabled: boolean;
-  request_coverage_retrieval_enabled: boolean;
-  auto_field_filter_enabled: boolean;
   /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
   graph_expansion_enabled: boolean;
   entity_expansion_enabled: boolean;
@@ -3005,19 +2755,11 @@ export interface AnsweringSettingsData {
   section_expansion_max_levels: number;
   section_expansion_input_token_percent: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
-  question_subject_role_model: string;
-  /** 表の各行の条件を質問に当てはめる段のモデル（#4349。空は回答のモデル）。 */
-  row_condition_model: string;
-  /** 導いた結論（推導）の監査の判定の段のモデル（#4565。空は回答のモデル）。 */
-  application_audit_model: string;
-  /** 推導の判定の理由の段のモデル（#4564。空は回答のモデル）。 */
-  application_reason_model: string;
-  /** 段ごとのモデルで選べる登録モデル（3 つの段で同じ。接続情報を含まない）。 */
-  step_model_choices: { model_id: string; display_name: string }[];
+  /** 段ごとのモデルで選べる登録モデル（接続情報を含まない）。 */
   config_source: "runtime";
 }
 
-export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source" | "step_model_choices">>;
+export type AnsweringSettingsUpdate = Partial<Omit<AnsweringSettingsData, "config_source">>;
 
 /** 回答の記録の保持日数(0 は無期限)。 */
 export interface AnswerRecordSettingsData {
@@ -3555,14 +3297,6 @@ function jsonBody(body: unknown): RequestInit {
   };
 }
 
-function jsonPutBody(body: unknown): RequestInit {
-  return { ...jsonBody(body), method: "PUT" };
-}
-
-function labelSetPath(labelSetId: string): string {
-  return `/api/evaluation/calibration/label-sets/${encodeURIComponent(labelSetId)}`;
-}
-
 function supportGuidesPath(searchAnswerProfileId: string): string {
   return `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/support-guides`;
 }
@@ -3625,6 +3359,13 @@ export const api = {
     request<RetrievedChunk>(`/api/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunkId)}`),
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  getDocumentContentSummary: (id: string) =>
+    request<DocumentContentSummaryState>(`/api/documents/${encodeURIComponent(id)}/summary`),
+  /** 文書全体の要約を作り直す（LLM を 1 回呼ぶ。失敗の理由は応答の `summary.failure_code`）。 */
+  regenerateDocumentContentSummary: (id: string) =>
+    request<DocumentContentSummaryState>(`/api/documents/${encodeURIComponent(id)}/summary`, {
+      method: "POST",
+    }),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(
       `/api/documents/${encodeURIComponent(id)}/chunk-sets`,
@@ -3661,13 +3402,19 @@ export const api = {
     for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
     return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/source-map?${search}`, { signal });
   },
+  documentRecipeReader: (id: string, recipeId: string, revision: string, elementId: string | null, input: EvidenceReadingInput, signal: AbortSignal) => {
+    const search = new URLSearchParams({expected_revision:revision});
+    if(elementId) search.set("element_id",elementId);
+    for(const [key,value] of Object.entries(input)) if(value !== undefined) search.set(key,String(value));
+    return request<EvidenceReadingWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/reader?${search}`,{signal});
+  },
   documentRecipeSourceMap: (id: string, recipeId: string, input: OriginalSourceInput, signal: AbortSignal) => {
     const search = new URLSearchParams();
     for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
     return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/source-map?${search}`, { signal });
   },
   documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null; element_id?: string | null; section_id?: string | null }, signal: AbortSignal) =>
-    request<{ text: string; offset: number; total: number; limit: number; revision?: string; previous_offset?: number | null; next_offset?: number | null }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),
+    request<{ text: string; offset: number; total: number; limit: number; highlights?: [number, number][]; revision?: string; previous_offset?: number | null; next_offset?: number | null }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),
   documentExtractionView: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
     request<DocumentExtractionExport & { offset: number; total: number; limit: number; text_offset?: number; text_total?: number; cell_offset?: number; cell_total?: number; scope_status?: string; complete?: boolean }>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/extraction-view?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
   documentChunkWindow: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
@@ -4219,16 +3966,6 @@ export const api = {
         method: "POST",
       },
     ),
-  getQuestionUnderstanding: (id: string) =>
-    request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`),
-  saveQuestionUnderstanding: (id: string, overrides: LanguagePackSections) =>
-    request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ overrides }),
-    }),
-  previewQuestionUnderstanding: (id: string, text: string, overrides: LanguagePackSections) =>
-    request<QuestionUnderstandingPreviewData>(`/api/search-answer-profiles/${id}/question-understanding/preview`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, overrides }),
-    }),
   getDomainKeywords: (id: string) =>
     request<DomainKeywordsData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords`,
@@ -4265,7 +4002,12 @@ export const api = {
     ),
   addApprovedFaq: (
     id: string,
-    body: { question: string; answer: string; target_knowledge_base_ids: string[] },
+    body: {
+      question: string;
+      answer: string;
+      target_knowledge_base_ids: string[];
+      negative_questions?: string[];
+    },
   ) =>
     request<ApprovedFaqMutationData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
@@ -4276,6 +4018,12 @@ export const api = {
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/confirm`,
       jsonBody({ target_knowledge_base_ids: targetKnowledgeBaseIds }),
+    ),
+  /** FAQ の否定の質問（この FAQ を当てたくない質問の例）を置き換える（#4788）。 */
+  setApprovedFaqNegativeQuestions: (id: string, faqId: string, negativeQuestions: string[]) =>
+    request<ApprovedFaqListData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/negative-questions`,
+      { ...jsonBody({ negative_questions: negativeQuestions }), method: "PUT" },
     ),
   deleteApprovedFaq: (id: string, ids: string[]) =>
     request<ApprovedFaqMutationData>(
@@ -4321,20 +4069,26 @@ export const api = {
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
       { ...jsonBody({ query, purpose }), signal },
     ),
-  suggestClarification: (id: string, query: string, conversationId?: string | null) =>
+  /** `approvedFaqDeclined` は、利用者が類似問の候補を「どれでもない」と断った質問（#4788）。 */
+  suggestClarification: (
+    id: string,
+    query: string,
+    conversationId?: string | null,
+    approvedFaqDeclined = false,
+  ) =>
     request<{ suggestion: ClarificationSuggestionData | null; question_context_token?: string | null }>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
-      jsonBody({ query, ...(conversationId ? { conversation_id: conversationId } : {}) }),
+      jsonBody({
+        query,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(approvedFaqDeclined ? { approved_faq_declined: true } : {}),
+      }),
     ),
-  saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
-    request<RuntimeKnowledgeData>(
-      `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/rules/${encodeURIComponent(ruleId)}/clarification`,
-      { ...jsonBody({ clarification }), method: "PUT" },
-    ),
-  setApprovedFaqEnabled: (id: string, enabled: boolean) =>
+  /** プロファイルごとの FAQ の設定を保存する（送った項目だけを変える。#684・#4788）。 */
+  setApprovedFaqSettings: (id: string, settings: ApprovedFaqSettingsUpdate) =>
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/settings`,
-      { ...jsonBody({ enabled }), method: "PUT" },
+      { ...jsonBody(settings), method: "PUT" },
     ),
   listAnswerRecords: (params: {
     searchAnswerProfileId: string;
@@ -4537,6 +4291,7 @@ export const api = {
   getSearchRunTrace: (runId: string, signal?: AbortSignal) =>
     request<TraceSnapshotData>(`/api/search/runs/${encodeURIComponent(runId)}/trace`, { signal }),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
+  listEvaluationModels: () => request<CompareModel[]>("/api/evaluation/models"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
   listProfileAnswerModels: () => request<CompareModel[]>("/api/search-answer-profiles/answer-models"),
 
@@ -4618,73 +4373,17 @@ export const api = {
     rows: EvaluationImportRow[]; cases: EvaluationCase[];
     profile_name: string | null; compare_profile_name: string | null;
   }) => requestFile(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/results.xlsx`, "evaluation_results.xlsx", jsonBody(body)),
+  /** 見られる過去の品質評価（新しい順。offset 型。#4811）。 */
+  listEvaluationJobs: (offset: number, limit: number) =>
+    request<Page<EvaluationJobSummary>>(
+      `/api/evaluation/jobs?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`
+    ),
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST",
     }),
-  // 品質評価: 判定の校正（#3578）。記入は自分の判定だけ、全員の判定・裁定・校正は管理の権限。
-  getJudgeCalibrationStatus: () =>
-    request<JudgeCalibrationStatus>("/api/evaluation/calibration/status"),
-  listCalibrationSources: () =>
-    request<{ jobs: CalibrationSourceJob[] }>("/api/evaluation/calibration/sources"),
-  listLabelSets: () => request<LabelSetListData>("/api/evaluation/calibration/label-sets"),
-  createLabelSet: (body: LabelSetCreateBody) =>
-    request<LabelSetSummary>("/api/evaluation/calibration/label-sets", jsonBody(body)),
-  importLabelSet: (file: File) => {
-    const body = new FormData();
-    body.append("file", file);
-    return request<{ label_set: LabelSetSummary; imported_items: number; imported_labels: number }>(
-      "/api/evaluation/calibration/label-sets/import",
-      { method: "POST", body }
-    );
-  },
-  deleteLabelSet: (labelSetId: string) =>
-    request<{ deleted: boolean }>(labelSetPath(labelSetId), { method: "DELETE" }),
-  getLabelSet: (labelSetId: string) => request<LabelSetDetail>(labelSetPath(labelSetId)),
-  listAnnotationRows: (
-    labelSetId: string,
-    params: { aspect?: string; status?: "all" | "unlabeled" | "labeled"; offset: number; limit: number }
-  ) => {
-    const query = new URLSearchParams();
-    if (params.aspect) query.set("aspect", params.aspect);
-    if (params.status) query.set("status", params.status);
-    query.set("offset", String(params.offset));
-    query.set("limit", String(params.limit));
-    return request<AnnotationRowsData>(`${labelSetPath(labelSetId)}/rows?${query.toString()}`);
-  },
-  saveCalibrationLabel: (labelSetId: string, body: CalibrationLabelInput) =>
-    request<CalibrationProgress>(`${labelSetPath(labelSetId)}/labels`, jsonPutBody(body)),
-  getCalibrationAgreement: (
-    labelSetId: string,
-    params: { aspect?: string; status: AgreementFilter; offset: number; limit: number }
-  ) => {
-    const query = new URLSearchParams();
-    if (params.aspect) query.set("aspect", params.aspect);
-    query.set("status", params.status);
-    query.set("offset", String(params.offset));
-    query.set("limit", String(params.limit));
-    return request<AgreementData>(`${labelSetPath(labelSetId)}/agreement?${query.toString()}`);
-  },
-  saveCalibrationAdjudication: (labelSetId: string, body: CalibrationLabelInput) =>
-    request<AgreementData>(`${labelSetPath(labelSetId)}/adjudications`, jsonPutBody(body)),
-  listSyntheticItems: (labelSetId: string) =>
-    request<{ items: SyntheticItem[] }>(`${labelSetPath(labelSetId)}/synthetic`),
-  setSyntheticExcluded: (labelSetId: string, itemId: string, excluded: boolean) =>
-    request<SyntheticItem>(
-      `${labelSetPath(labelSetId)}/synthetic/${encodeURIComponent(itemId)}`,
-      jsonPutBody({ excluded })
-    ),
-  listCalibrations: (labelSetId: string) =>
-    request<{ items: CalibrationSummary[] }>(`${labelSetPath(labelSetId)}/calibrations`),
-  startCalibration: (labelSetId: string, repeats: number) =>
-    request<{ job: EvaluationJob; calibration: CalibrationSummary }>(
-      `${labelSetPath(labelSetId)}/calibrations`,
-      jsonBody({ repeats })
-    ),
-  downloadLabelSet: (labelSetId: string) =>
-    requestFile(`${labelSetPath(labelSetId)}/export?language=ja`, `labels-${labelSetId.slice(0, 8)}.json`),
 
   // 設定: モデル
   getModelSettings: (options: SettingsRequestOptions = {}) =>
@@ -4853,6 +4552,14 @@ export const api = {
     ),
 
   // 設定: Chunking アダプター
+  getFileTypeDefaultsSettings: () =>
+    request<FileTypeDefaultsSettingsData>("/api/settings/file-type-defaults"),
+  updateFileTypeDefaultsSettings: (body: FileTypeDefaultsUpdate) =>
+    request<FileTypeDefaultsSettingsData>("/api/settings/file-type-defaults", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getPreprocessSettings: () =>
     request<PreprocessSettingsData>("/api/settings/preprocess"),
   updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
@@ -5039,6 +4746,8 @@ export interface ApprovedFaqRecordData {
   question: string;
   answer: string;
   alternate_questions: string[];
+  /** 否定の質問（この FAQ を当てたくない質問の例。当たったら候補から外す。#4788）。 */
+  negative_questions: string[];
   status: string;
   /** FAQ を使える範囲（この KB をすべて使える利用者だけに提示・回答で使う。#4621）。 */
   target_knowledge_base_ids: string[];
@@ -5065,7 +4774,17 @@ export interface ApprovedFaqListData {
   records: ApprovedFaqRecordData[];
   /** 回答の前に類似問を提示するか（検索・回答プロファイルごと。未設定はオン。#684）。 */
   enabled: boolean;
+  /** 一致度が下限以上のとき、チャットで FAQ の回答をそのまま返すか（未設定はオフ。#4788）。 */
+  direct_answer_enabled: boolean;
+  /** そのまま返す一致度の下限（全体設定の値。説明に出す）。 */
+  direct_answer_min_score: number;
   knowledge_bases: ApprovedFaqKnowledgeBaseData[];
+}
+
+/** FAQ の設定の変更（送った項目だけを変える）。 */
+export interface ApprovedFaqSettingsUpdate {
+  enabled?: boolean;
+  direct_answer_enabled?: boolean;
 }
 
 export interface ApprovedFaqMutationData extends ApprovedFaqListData {
@@ -5075,7 +4794,7 @@ export interface ApprovedFaqMutationData extends ApprovedFaqListData {
 
 export interface ApprovedFaqImportPreviewData {
   total: number;
-  rows: { question: string; answer: string; row: number }[];
+  rows: { question: string; answer: string; row: number; negative_questions?: string[] }[];
 }
 
 /** 文書の章節（章節ナビゲーション。#713）。並び順 + 階層（1〜6）で木を表す。 */
@@ -5176,29 +4895,22 @@ export interface ApprovedFaqSuggestionData {
 
 export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
+  /** チャットで、送信の後に FAQ の回答をそのまま返す見込み（候補を出さずに送る。#4788）。 */
+  direct_answer?: boolean;
 }
 
-// --- 検索・回答プロファイルの知識: 用語・同義語と回答ルール(runtime knowledge) ---
-export type RuntimeKnowledgeKind = "terms" | "rules";
-
+// --- 検索・回答プロファイルの知識: 用語・同義語(runtime knowledge) ---
 export interface RuntimeKnowledgeData {
   search_answer_profile_id: string;
   terms: Record<string, JsonValue>[];
-  rules: Record<string, JsonValue>[];
 }
 
 export interface RuntimeKnowledgeEditRequest {
-  kind: RuntimeKnowledgeKind;
   selected?: string | null;
   name?: string;
-  title?: string;
   labels?: string;
   content?: string;
   source?: string;
-  purpose?: "confirmation" | "generation" | "both";
-  instruction_kind?: "presentation" | "requirement" | "verification";
-  exclusive_group?: string;
-  priority?: number;
   enabled?: boolean;
   delete?: boolean;
 }
@@ -5206,8 +4918,6 @@ export interface RuntimeKnowledgeEditRequest {
 export interface RuntimeKnowledgePreviewData {
   expanded_question: string;
   matched_terms: string[];
-  matched_rules: string[];
-  conflicting_rules?: string[];
 }
 
 // --- 業務ガイド（SupportGuide。#1237）。型は backend の app/schemas/support_guide.py と同じ ---
@@ -5524,12 +5234,6 @@ export interface SupportGuideProcessReference {
   candidates: string[];
 }
 
-export interface SupportGuideRuleCandidate {
-  title: string;
-  triggers: string[];
-  content: string;
-}
-
 export interface SupportGuideProcessItem {
   row: number;
   question: string;
@@ -5537,7 +5241,6 @@ export interface SupportGuideProcessItem {
   content: SupportGuideContent | null;
   issues: SupportGuideIssue[];
   references: SupportGuideProcessReference[];
-  rule_candidates: SupportGuideRuleCandidate[];
 }
 
 export interface SupportGuideProcessPreviewData {
@@ -5548,8 +5251,6 @@ export interface SupportGuideProcessPreviewData {
 // --- 実行履歴（チャット・RAG 検索の実行。#1890） ---
 export type RunSurface = "search" | "chat";
 export type RunStatus = "success" | "blocked" | "error";
-/** 資料との照合（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
-export type RunVerification = "verified" | "partial" | "unverified";
 
 /** 実行履歴の「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。 */
 export type RunExecutorFilter = "all" | "mine" | "others";
@@ -5575,8 +5276,6 @@ export interface RunSummary {
   answer_generated: boolean;
   status: RunStatus;
   answer_outcome: string | null;
-  verification: RunVerification | null;
-  validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
   citation_count: number;

@@ -2,7 +2,6 @@
 
 import unittest
 from dataclasses import replace
-from unittest.mock import patch
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
@@ -208,39 +207,6 @@ class DeferredRestoreTests(unittest.TestCase):
             document_selection={"enabled": True, "selected": [{"source": "a.pdf"}], "deferred": [{"source": "c.pdf"}], "restored": False},
         )
 
-    def test_crag_restores_deferred_documents_before_rewriting_and_records_it(self):
-        def attempt(number, sufficient, **kw):
-            return a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
-
-        grades = [attempt(1, False, rewritten_query="登録 別の検索文"), attempt(2, True)]
-        with (
-            patch.object(a, "build_adb_hybrid_answer_context", return_value=self.selected),
-            patch.object(a, "_grade_crag_retrieval", side_effect=grades),
-        ):
-            result, rewrites, attempts = a.build_crag_answer_context("登録条件は", "source", ["docling"], settings())
-        self.assertEqual(rewrites, ())  # 改写検索の前に後回しの文書を戻す
-        self.assertEqual(attempts[0].stop_reason, "deferred_documents_restored")
-        self.assertTrue(attempts[1].document_selection["restored"])
-        self.assertIn("pc", [r.id for r in result.records])  # 戻した文書 C の親が根拠に入る
-        self.assertEqual(result.deferred_records, ())
-
-    def test_crag_does_not_spend_an_attempt_when_restoring_adds_no_evidence(self):
-        # 後回しの文書は起点（rerank の上位 top_k）の外だけなので、戻しても根拠が同じことがある（#3504）。
-        # そのときは評価の回を使わず、改写検索へ進む。
-        def attempt(number, sufficient, **kw):
-            return a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
-
-        grades = [attempt(1, False, rewritten_query="登録 別の検索文"), attempt(2, True)]
-        same = replace(self.selected, deferred_records=())
-        with (
-            patch.object(a, "build_adb_hybrid_answer_context", return_value=self.selected),
-            patch.object(a, "_restore_deferred_context", return_value=same),
-            patch.object(a, "_grade_crag_retrieval", side_effect=grades),
-        ):
-            _result, rewrites, attempts = a.build_crag_answer_context("登録条件は", "source", ["docling"], settings())
-        self.assertEqual(rewrites, ("登録 別の検索文",))
-        self.assertNotEqual(attempts[0].stop_reason, "deferred_documents_restored")
-
     def test_generation_side_remedy_adds_the_deferred_document_parents_first(self):
         expanded, trace = a._expand_context_from_pool("登録条件は", self.selected)
         self.assertEqual(trace["mode"], "deferred_documents")
@@ -271,12 +237,6 @@ class DeferredRestoreTests(unittest.TestCase):
         self.assertFalse(trace["applied"], trace)
         self.assertEqual([r.id for r in filled.deferred_records], ["c1"])
 
-    def test_refine_keeps_the_selection_state(self):
-        refined = a._refine_crag_context(self.selected, ("run:a1",), max_chars=10000)
-        self.assertEqual([r.id for r in refined.deferred_records], ["c1"])
-        self.assertEqual(len(refined.ranked_candidates), 2)
-        self.assertTrue(refined.document_selection["enabled"])
-
 
 if __name__ == "__main__":
     unittest.main()
@@ -300,9 +260,46 @@ def test_explicit_attachment_survives_document_selection_and_anchor_cap():
     ]
 
 
+def _context_record(name, level):
+    from rag_engine.generation.answering import AnswerRecord
+
+    return AnswerRecord(
+        id=name if level == "child" else f"{name}-p",
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=name,
+        source="架空手引き.pdf",
+        chunk_level=level,
+        chunk_id=name if level == "child" else f"{name}-p",
+        chunk_uid=f"uid:{name}" if level == "child" else f"uid:{name}-p",
+        parent_chunk_uid=f"uid:{name}-p" if level == "child" else "",
+        source_run_id="run",
+        metadata={"section_path": ["第 1 章"]},
+    )
+
+
+def _bundle(children, *, top_k, max_records):
+    from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
+
+    parents = [_context_record(r.id, "parent") for r in children]
+    return build_chunk_context_bundle(
+        ContextBuildRequest(
+            question="質問",
+            ranked_children=children,
+            active_records=[*children, *parents],
+            top_k=top_k,
+            neighbor_child_count=0,
+            max_records=max_records,
+            max_chars=5000,
+        )
+    )
+
+
 def _attachment_context_record(name):
     from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
-    from tests.test_article_catalog import _context_record
 
     record = _context_record(name, "child")
     record.metadata[ATTACHMENT_EVIDENCE_KEY] = True
@@ -311,12 +308,10 @@ def _attachment_context_record(name):
 
 def test_attachment_below_the_anchor_limit_is_added_outside_it():
     """rerank で top_k より下の会話の添付も、起点・親の数の外に足して根拠に入れる（#3212）。"""
-    from tests.test_article_catalog import _bundle, _context_record
-
     children = [_context_record(f"m{index}", "child") for index in range(5)]
     attached = _attachment_context_record("att1")
 
-    bundle = _bundle([*children, attached], top_k=3, max_records=3, catalog_records=0)
+    bundle = _bundle([*children, attached], top_k=3, max_records=3)
 
     # ナレッジベースの起点・親は添付が無いときと同じ 3 つで、添付の親を後ろに足す。
     assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "att1-p"]
@@ -326,13 +321,11 @@ def test_attachment_below_the_anchor_limit_is_added_outside_it():
 
 def test_attachment_inside_the_anchor_limit_does_not_take_a_knowledge_base_anchor():
     """top_k の内に並んだ添付も起点に数えず、ナレッジベースの起点を減らさない（#3212）。"""
-    from tests.test_article_catalog import _bundle, _context_record
-
     children = [_context_record(f"m{index}", "child") for index in range(5)]
     attached = _attachment_context_record("att1")
 
-    bundle = _bundle([attached, *children], top_k=3, max_records=3, catalog_records=0)
-    plain = _bundle(children, top_k=3, max_records=3, catalog_records=0)
+    bundle = _bundle([attached, *children], top_k=3, max_records=3)
+    plain = _bundle(children, top_k=3, max_records=3)
 
     assert [r.id for r in plain.records] == ["m0-p", "m1-p", "m2-p"]
     assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "att1-p"]

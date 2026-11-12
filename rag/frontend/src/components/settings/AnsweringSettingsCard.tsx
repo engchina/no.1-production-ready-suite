@@ -21,36 +21,12 @@ import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type AnsweringSettingsData,
-  type AnswerFlowName,
-  type QueryStrategyName,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 選択肢の名前は `searchAnswerProfiles.queryStrategy.*` の文言を使う（backend の QueryStrategy と同じ順）。
-const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
-  [
-    "auto_routing",
-    "simple_retrieval",
-    "rag_fusion",
-    "query_decomposition",
-    "step_back_prompting",
-    "hyde",
-  ] as const
-).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
-// 既定（標準 RAG）を先頭に置く。CRAG は AI の呼び出しが増えるので、明示して選んだときだけ使う（#3509）。
-const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
-  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
-];
-const ANSWER_AUDIT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_audit_mode"]>[] = (
-  ["none", "standard", "detailed"] as const
-).map((value) => ({ value, label: t(`settings.answering.auditMode.${value}`) }));
-const EVIDENCE_REFINEMENT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_evidence_refinement_mode"]>[] = (
-  ["legacy", "cited_only", "cited_required"] as const
-).map((value) => ({ value, label: t(`settings.answering.evidenceRefinement.${value}`) }));
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
@@ -59,7 +35,7 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
 
 type AnsweringDraft = Omit<
   AnsweringSettingsData,
-  "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled" | "step_model_choices"
+  "config_source" | "runtime_terms_answer_enabled"
 >;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
@@ -73,52 +49,20 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
-    runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
-    query_strategy: settings.query_strategy,
-    answer_flow: settings.answer_flow,
-    answer_audit_mode: settings.answer_audit_mode,
-    answer_evidence_refinement_mode: settings.answer_evidence_refinement_mode,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
-    screen_linking_enabled: settings.screen_linking_enabled,
-    request_coverage_retrieval_enabled: settings.request_coverage_retrieval_enabled,
-    auto_field_filter_enabled: settings.auto_field_filter_enabled,
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
-    question_subject_role_model: settings.question_subject_role_model ?? "",
-    row_condition_model: settings.row_condition_model ?? "",
-    application_audit_model: settings.application_audit_model ?? "",
-    application_reason_model: settings.application_reason_model ?? "",
   };
 }
 
-/** 段ごとのモデル（#4351・#4349・#4564・#4565）の項目。並びは画面の表示の順（回答の工程の順）。 */
-const STEP_MODEL_FIELDS = [
-  { key: "question_subject_role_model", id: "answering-question-subject-role-model", label: "settings.answering.questionSubjectRoleModel" },
-  { key: "row_condition_model", id: "answering-row-condition-model", label: "settings.answering.rowConditionModel" },
-  { key: "application_audit_model", id: "answering-application-audit-model", label: "settings.answering.applicationAuditModel" },
-  { key: "application_reason_model", id: "answering-application-reason-model", label: "settings.answering.applicationReasonModel" },
-] as const;
-
-/** 段のモデルの選択肢: 回答のモデルと同じ（空）・登録モデル・登録が外れた保存値（#4351・#4349・#4564・#4565）。 */
-function stepModelOptions(settings: AnsweringSettingsData, current: string): SelectFieldOption<string>[] {
-  const choices = settings.step_model_choices ?? [];
-  return [
-    { value: "", label: t("settings.answering.stepModel.sameAsAnswer") },
-    ...choices.map((choice) => ({ value: choice.model_id, label: choice.display_name || choice.model_id })),
-    ...(current && !choices.some((choice) => choice.model_id === current)
-      ? [{ value: current, label: t("settings.answering.stepModel.unavailable", { model: current }) }]
-      : []),
-  ];
-}
-
 /**
- * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
- * 検索・回答プロファイルでは上書きしない（`PROFILE_GLOBAL_QUERY_FIELDS`）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
+ * 回答の検索と生成の全体既定（根拠の前後の数・rerank。#593）。
+ * 検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 /** 見出しと枠のある設定の群。枠の中の切り替えの一覧と同じ線と余白にそろえる（#4238）。 */
 function SettingsGroup({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -203,30 +147,9 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   return (
     <div className="space-y-4">
       {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
-          選択肢の名前が長い（20 字ほど）質問の拡張・回答の生成方式は lg、数は xs（#1891）。 */}
-      <SettingsGroup id="answer-confirmation-title" title={t("settings.answering.confirmationTitle")}>
-        <SwitchRow
-          id="answering-runtime-rules-confirmation"
-          label={t("settings.answering.runtimeRulesConfirmation")}
-          description={t("settings.answering.runtimeRulesConfirmationHint")}
-          checked={form.runtime_rules_confirmation_enabled ?? false}
-          disabled={disabled}
-          onChange={(checked) => update({ runtime_rules_confirmation_enabled: checked })}
-        />
-      </SettingsGroup>
+          数は xs（#1891）。 */}
       <SettingsGroup id="search-expression-title" title={t("settings.answering.searchExpressionTitle")}>
       <FormGrid>
-        <SelectField
-          id="answering-query-strategy"
-          className="min-w-0"
-          disabled={disabled}
-          label={t("settings.answering.queryStrategy")}
-          helper={t("settings.answering.queryStrategyHint")}
-          value={form.query_strategy}
-          options={QUERY_STRATEGY_OPTIONS}
-          width="lg"
-          onValueChange={(value) => update({ query_strategy: value })}
-        />
         <SwitchRow
           id="answering-runtime-terms-search"
           label={t("settings.answering.runtimeTermsSearch")}
@@ -305,17 +228,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
       <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
       <FormGrid>
         <SelectField
-          id="answering-answer-flow"
-          className="min-w-0"
-          disabled={disabled}
-          label={t("settings.answering.answerFlow")}
-          helper={t("settings.answering.answerFlowHint")}
-          value={form.answer_flow}
-          options={ANSWER_FLOW_OPTIONS}
-          width="lg"
-          onValueChange={(value) => update({ answer_flow: value })}
-        />
-        <SelectField
           id="answering-neighbor-child-count"
           className="min-w-0"
           disabled={disabled}
@@ -333,14 +245,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         aria-label={t("settings.answering.options")}
         className="divide-y divide-border rounded-md border border-border"
       >
-        <SwitchRow
-          id="answering-auto-field-filter"
-          label={t("settings.answering.autoFieldFilter")}
-          description={t("settings.answering.autoFieldFilterHint")}
-          checked={form.auto_field_filter_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ auto_field_filter_enabled: checked })}
-        />
         <div>
           <SwitchRow id="answering-entity-expansion" label={t("settings.answering.entityExpansion")}
             description={t("settings.answering.entityExpansionHint")} checked={form.entity_expansion_enabled}
@@ -358,14 +262,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           checked={form.graph_expansion_enabled}
           disabled={disabled}
           onChange={(checked) => update({ graph_expansion_enabled: checked })}
-        />
-        <SwitchRow
-          id="answering-screen-linking"
-          label={t("settings.answering.screenLinking")}
-          description={t("settings.answering.screenLinkingHint")}
-          checked={form.screen_linking_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ screen_linking_enabled: checked })}
         />
         <div data-testid="answering-rerank-block">
         <SwitchRow
@@ -410,56 +306,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
           </FormGrid> : null}
         </div>
-        <div className="space-y-3 px-3 py-3" data-testid="answering-audit-mode">
-          <h3 className="text-sm font-medium text-fg">{t("settings.answering.auditMode")}</h3>
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditModeHint")}</p>
-          <SelectField
-            id="answering-answer-audit-mode"
-            label={t("settings.answering.auditModeField")}
-            helper={t(`settings.answering.auditModeHint.${form.answer_audit_mode}`)}
-            value={form.answer_audit_mode}
-            options={ANSWER_AUDIT_OPTIONS}
-            width="lg"
-            disabled={disabled}
-            onValueChange={(value) => update({ answer_audit_mode: value })}
-          />
-          {STEP_MODEL_FIELDS.map((field) => (
-            <SelectField
-              key={field.key}
-              id={field.id}
-              label={t(field.label)}
-              helper={t(`${field.label}Hint`)}
-              value={form[field.key]}
-              options={stepModelOptions(saved, saved[field.key] ?? "")}
-              width="md"
-              disabled={disabled}
-              onValueChange={(value) => update({ [field.key]: value })}
-            />
-          ))}
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>
-        </div>
-        <div className="space-y-3 px-3 py-3" data-testid="answering-evidence-refinement">
-          <SelectField
-            id="answering-evidence-refinement-mode"
-            label={t("settings.answering.evidenceRefinement")}
-            helper={t(`settings.answering.evidenceRefinementHint.${form.answer_evidence_refinement_mode}`)}
-            value={form.answer_evidence_refinement_mode}
-            options={EVIDENCE_REFINEMENT_OPTIONS}
-            width="lg"
-            disabled={disabled}
-            onValueChange={(value) => update({ answer_evidence_refinement_mode: value })}
-          />
-          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.evidenceRefinementBudgetHint")}</p>
-        </div>
-        <SwitchRow
-          id="answering-request-coverage"
-          label={t("settings.answering.requestCoverage")}
-          description={t("settings.answering.requestCoverageHint")}
-          checked={form.request_coverage_retrieval_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ request_coverage_retrieval_enabled: checked })}
-        />
       </div>
       <FormActionBar
         ariaLabel={t("settings.answering.actions.label")}

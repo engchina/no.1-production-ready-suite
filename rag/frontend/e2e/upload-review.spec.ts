@@ -361,7 +361,10 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   await page.goto("/upload");
   const picker = page.getByTestId("upload-knowledge-base-picker");
   // TanStack Query の既定の再試行（3 回）を終えてから失敗を表示する。
-  await expect(picker.getByText("ナレッジベース一覧を取得できませんでした。")).toBeVisible({ timeout: 15_000 });
+  // 欄の位置に、欄ごとの文の失敗と再試行を出す（共有の部品。#4817）。
+  const failure = picker.getByTestId("upload-knowledge-base-load-failed");
+  await expect(failure.getByRole("alert")).toHaveText("登録先のナレッジベースの候補を読み込めませんでした。", { timeout: 15_000 });
+  await expect(picker).toContainText("登録先のナレッジベースを選択できないため、アップロードできません。");
   // 必須の利用者がファイルを選んでも黙って何も起きないのではなく、案内を出す。
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
@@ -593,7 +596,7 @@ test("Docling で解析できない形式は、アップロードの結果で案
 
 // 旧形式・マクロ付きの Office は原本のままでは解析しない。アップロードはでき、結果で「ファイル準備で
 // 変換を選ぶ」ように案内する（#2470）。desktop / mobile（375px）は project で両方実行する。
-test("マクロ付きの Office はアップロードでき、ファイル準備の変換を案内する", async ({ page }, testInfo) => {
+test("旧形式の Office はアップロードでき、ファイル準備の変換を案内する", async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   await mockUploadPage(page);
   await page.route("**/api/documents/batch-upload", async (route) => {
@@ -601,11 +604,11 @@ test("マクロ付きの Office はアップロードでき、ファイル準備
       json: apiEnvelope({
         items: [
           {
-            ...uploadResult("macro.docm"),
+            ...uploadResult("legacy.doc"),
             parser_notice: {
               code: "office_conversion_required",
               backend: "docling",
-              file_format: ".docm",
+              file_format: ".doc",
               suggested_backend: null,
               message: "変換を選んでから取り込んでください。",
             },
@@ -623,7 +626,7 @@ test("マクロ付きの Office はアップロードでき、ファイル準備
   });
 
   await page.goto("/upload");
-  await page.locator('input[type="file"]').setInputFiles([textFile("macro.docm", 6), textFile("policy.txt", 6)]);
+  await page.locator('input[type="file"]').setInputFiles([textFile("legacy.doc", 6), textFile("policy.txt", 6)]);
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
@@ -635,10 +638,10 @@ test("マクロ付きの Office はアップロードでき、ファイル準備
   await expectNoPageOverflow(page);
 });
 
-// #4054: テンプレートは送れ、変換の案内を 1 か所に出す。原本の確認で止めたファイルは理由と対処をそのまま示す。
-test("Office テンプレートはアップロードでき、確認で止めたファイルは理由を示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// #4054: 変換の案内を 1 か所に出す。原本の確認で止めたファイルは理由と対処をそのまま示す。
+test("確認で止めたファイルは理由を示し、送れたファイルには変換を案内する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const invalidMessage =
-    "内容が .xltx の Office テンプレートではないか、ファイルが壊れているため、受け付けませんでした。Office で開けることと拡張子を確かめてからアップロードし直してください。";
+    "内容が .xls の Office ファイルではないか、ファイルが壊れているため、受け付けませんでした。Office で開けることと拡張子を確かめてからアップロードし直してください。";
   await mockLocalAuth(page);
   await mockUploadPage(page);
   await page.route("**/api/documents/batch-upload", async (route) => {
@@ -646,17 +649,17 @@ test("Office テンプレートはアップロードでき、確認で止めた�
       json: apiEnvelope({
         items: [
           {
-            ...uploadResult("form.dotm"),
+            ...uploadResult("old.ppt"),
             parser_notice: {
               code: "office_conversion_required",
               backend: "docling",
-              file_format: ".dotm",
+              file_format: ".ppt",
               suggested_backend: null,
               message: "変換を選んでから取り込んでください。",
             },
           },
         ],
-        failed_items: [{ file_name: "broken.xltx", status_code: 415, message: invalidMessage, source_profile: null }],
+        failed_items: [{ file_name: "broken.xls", status_code: 415, message: invalidMessage, source_profile: null }],
         total_count: 2,
         uploaded_count: 1,
         failed_count: 1,
@@ -667,9 +670,7 @@ test("Office テンプレートはアップロードでき、確認で止めた�
   });
 
   await page.goto("/upload");
-  await expect(page.locator('input[type="file"]')).toHaveAttribute("accept", /\.dotx,\.dotm,\.potx,\.potm,\.xltx,\.xltm/);
-  await expect(page.getByText(/DOTX, DOTM, POTX, POTM, XLTX, XLTM/)).toBeVisible();
-  await page.locator('input[type="file"]').setInputFiles([textFile("form.dotm", 6), textFile("broken.xltx", 6)]);
+  await page.locator('input[type="file"]').setInputFiles([textFile("old.ppt", 6), textFile("broken.xls", 6)]);
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
@@ -682,7 +683,7 @@ test("Office テンプレートはアップロードでき、確認で止めた�
 });
 
 test(
-  "HEIC / HEIF・EPUB・音声・動画は送る前に変換の方法を示して送らず、対応形式の案内にも未対応と出す（#3351・#3369）",
+  "主要な形式の外は送る前に変換の方法を示して送らず、対応形式の案内にも出さない（#3351・#3369・#4730）",
   { tag: "@responsive" },
   async ({ page }, testInfo) => {
     await mockLocalAuth(page);
@@ -692,14 +693,16 @@ test(
     await page.route("**/api/documents/upload", async (route) => {
       const body = route.request().postData() ?? "";
       requests.push(...[...body.matchAll(/filename="([^"]+)"/g)].map((match) => match[1]));
-      await route.fulfill({ json: apiEnvelope(uploadResult("memo.odt")) });
+      await route.fulfill({ json: apiEnvelope(uploadResult("memo.docx")) });
     });
 
     await page.goto("/upload");
-    // 対応形式の一覧に ODT・RST を出し、HEIC / HEIF・EPUB・音声・動画は未対応と変換の方法を出す。
+    await expect(page.getByText("PDF・Office・テキスト・HTML・画像をここにドラッグ＆ドロップ")).toBeVisible();
+    // 対応形式の一覧は主要な形式だけで、HEIC / HEIF・EPUB・音声・動画は未対応と変換の方法を出す。
     const formats = page.getByText(/^対応形式: /);
-    await expect(formats).toContainText("ODT");
-    await expect(formats).toContainText("RST");
+    await expect(formats).toHaveText(
+      "対応形式: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, CSV, TXT, MD, MARKDOWN, JSON, HTML, HTM, JPG, JPEG, PNG"
+    );
     for (const label of ["HEIC", "EPUB", "MP3", "WAV", "OGG", "MP4"]) {
       await expect(formats).not.toContainText(label);
     }
@@ -712,7 +715,8 @@ test(
       { name: "book.epub", mimeType: "application/epub+zip", buffer: Buffer.alloc(6, 1) },
       { name: "voice.mp3", mimeType: "audio/mpeg", buffer: Buffer.alloc(6, 1) },
       { name: "clip.mp4", mimeType: "video/mp4", buffer: Buffer.alloc(6, 1) },
-      { name: "memo.odt", mimeType: "application/vnd.oasis.opendocument.text", buffer: Buffer.alloc(6, 1) },
+      { name: "macro.docm", mimeType: "application/vnd.ms-word.document.macroEnabled.12", buffer: Buffer.alloc(6, 1) },
+      { name: "memo.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.alloc(6, 1) },
     ]);
     const selection = page.getByTestId("upload-selection");
     const heic = selection.getByRole("listitem").filter({ hasText: "photo.HEIC" });
@@ -729,11 +733,17 @@ test(
         "音声・動画のファイル（MP3・WAV・OGG・MP4 など）は対応していません"
       );
     }
-    await expect(selection).toContainText("送れない 4 件は送りません。");
+    const macro = selection.getByRole("listitem").filter({ hasText: "macro.docm" });
+    await expect(macro).toContainText("対応していない形式");
+    await expect(macro.getByTestId("upload-selection-guide")).toContainText(
+      "PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・HTML・JPEG / PNG のいずれかに変換して"
+    );
+    await expect(selection).toContainText("送れない 5 件は送りません。");
+    await macro.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("upload-rejected-formats.png"), fullPage: true });
     await expectNoPageOverflow(page);
 
     await page.getByRole("button", { name: "アップロードを開始（1 件）" }).click();
-    await expect.poll(() => requests).toEqual(["memo.odt"]);
+    await expect.poll(() => requests).toEqual(["memo.docx"]);
   }
 );

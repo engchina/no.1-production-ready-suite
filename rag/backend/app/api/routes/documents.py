@@ -31,8 +31,13 @@ from fastapi import (
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import ValidationError
-from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
+from rag_parser_core.structured_records import (
+    RecordBoundaryError,
+    is_structured_records_content_type,
+    record_boundary_plain_text,
+)
 from rag_parser_core.text_encoding import detect_text_match
+from rag_pipeline_core.chunking import normalize_fixed_delimiters
 
 from app.api.errors import (
     DocumentFileMissingError,
@@ -40,6 +45,7 @@ from app.api.errors import (
     SourceVersionStaleError,
 )
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
+from app.clients.document_summary_store import DocumentSummaryStore
 from app.clients.extraction_revision_store import max_extraction_revisions
 from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
@@ -59,10 +65,12 @@ from app.clients.oracle import (
 from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
 from app.clients.section_revision_store import max_section_revisions
 from app.config import (
+    CHUNK_SEPARATOR_STRATEGIES,
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
     FIXED_DELIMITER_STRATEGY,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
     PREVIOUS_DEFAULT_CHUNK_DELIMITER,
+    FileType,
     IngestionQueueConcurrency,
     Settings,
     get_settings,
@@ -94,8 +102,10 @@ from app.rag.document_sections_service import (
     section_extraction_base,
     sections_source,
 )
+from app.rag.document_summary import content_summary_view, refresh_document_summary
 from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
 from app.rag.extraction_revisions import ExtractionElementChange, extraction_element_changes
+from app.rag.file_type_defaults import classify_file_type, file_type_default_overrides
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
@@ -123,11 +133,6 @@ from app.rag.layer_fingerprint import (
     current_layer_inputs,
     recorded_layer_fingerprint,
 )
-from app.rag.mineru_license import (
-    MINERU_BACKEND,
-    MINERU_LICENSE_REQUIRED_MESSAGE,
-    mineru_license_acknowledged,
-)
 from app.rag.navigation import build_navigation_tree
 from app.rag.office_template import office_template_format, office_template_upload_problem
 from app.rag.parser_source_guard import check_parser_source, settings_convert_source
@@ -146,7 +151,12 @@ from app.rag.section_rules import (
     extraction_sections,
     load_section_rules,
 )
-from app.rag.source_profile import build_source_profile, rejected_upload_format_message
+from app.rag.source_profile import (
+    ACCEPTED_UPLOAD_EXTENSIONS,
+    UNSUPPORTED_UPLOAD_FORMAT_MESSAGE,
+    build_source_profile,
+    rejected_upload_format_message,
+)
 from app.rag.staging_recipes import StagingRuntimeOptions, apply_staging_runtime
 from app.rag.variant_keys import (
     compute_chunk_set_id,
@@ -173,6 +183,7 @@ from app.schemas.document import (
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
     DocumentClassification,
+    DocumentContentSummaryState,
     DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
@@ -292,6 +303,8 @@ SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS: tuple[str, ...] = (
     "chunk_parent_max_pages",
     "chunk_parent_max_children",
 )
+# 形式別の既定（#4732）が決める項目（実効値の drift で比べる）。
+_FILE_TYPE_LAYER_FIELDS = ("preprocess_profile", "parser_adapter_backend", "chunking_strategy")
 DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     # 前処理 excel_to_jsonl の選択肢(#1221)も前処理の出力を変える。
     "preprocess_profile": ("preprocess_profile", "excel_options"),
@@ -299,7 +312,6 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_adapter_backend",
         "parser_docling_enabled",
         "parser_unstructured_enabled",
-        "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
         "parser_structured_records_jsonl_enabled",
         "parser_xml_tree_json_enabled",
@@ -315,6 +327,7 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunk_overlap",
         "chunk_min_chars",
         "chunk_delimiter",
+        "chunk_separators",
         *SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS,
     ),
     "graph_profile": ("graph_profile",),
@@ -448,21 +461,15 @@ def _is_allowed_upload_content_type(
     sanitized_file_name: str,
     allowed_content_types: list[str],
 ) -> bool:
-    """MIME whitelist と拡張子 profile を組み合わせて upload 可否を判定する。"""
+    """MIME whitelist と拡張子 whitelist の両方を満たすアップロードだけを受ける。
+
+    application/octet-stream はどの拡張子でも送られるので、MIME type だけでは絞れない(#4730)。
+    """
     normalized_allowed = {_normalized_content_type(allowed) for allowed in allowed_content_types}
-    if content_type not in normalized_allowed:
-        return False
-    if content_type != "application/octet-stream":
-        return True
-    profile = build_source_profile(
-        original_file_name=sanitized_file_name,
-        sanitized_file_name=sanitized_file_name,
-        content_type=content_type,
-        file_size_bytes=0,
-        content_sha256="",
-        data=None,
+    return (
+        content_type in normalized_allowed
+        and PurePath(sanitized_file_name).suffix.lower() in ACCEPTED_UPLOAD_EXTENSIONS
     )
-    return profile.unsupported_reason != "unknown_file_type"
 
 
 async def _store_uploaded_document(
@@ -495,7 +502,7 @@ async def _store_uploaded_document(
         sanitized_file_name=file_name,
         allowed_content_types=settings.allowed_upload_content_types,
     ):
-        raise HTTPException(status_code=415, detail="対応していないファイル形式です。")
+        raise HTTPException(status_code=415, detail=UNSUPPORTED_UPLOAD_FORMAT_MESSAGE)
 
     data = await _read_upload_file(file, settings.max_upload_bytes)
     if not data:
@@ -569,7 +576,13 @@ async def _store_uploaded_document(
         duplicate_of_document_id=detail.duplicate_of_document_id,
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
-        parser_notice=await _parser_notice(settings, source_profile),
+        parser_notice=await _parser_notice(
+            _merge_document_processing_config(
+                DocumentProcessingConfig(),
+                file_type=classify_file_type(file_name, content_type),
+            )[0],
+            source_profile,
+        ),
     )
 
 
@@ -846,6 +859,7 @@ async def _mark_layers_rebuild_required(
                         row.get("recipe_processing_config") or {}
                     ),
                     global_settings,
+                    file_type=_document_file_type(documents_by_id.get(document_id)),
                 )
             except (ValueError, KbAdapterConfigError):
                 continue
@@ -1083,7 +1097,9 @@ async def enqueue_bulk_ingestion_jobs(
     result = await accept_bulk_ingestion(
         request.document_ids,
         store=_bulk_ingestion_store(),
-        resolve_settings=lambda config: _merge_document_processing_config(config)[0],
+        resolve_settings=lambda config, file_type: _merge_document_processing_config(
+            config, file_type=file_type
+        )[0],
         enqueue_single=lambda document_id: _enqueue_ingestion_job_for_document(
             document_id, force=False
         ),
@@ -1346,7 +1362,9 @@ async def _document_recipe_view(
             )
         )
         raise DocumentRecipeConfigInvalidError(fields) from exc
-    recipe_settings, effective = _merge_document_processing_config(config)
+    recipe_settings, effective = _merge_document_processing_config(
+        config, file_type=_recipe_row_file_type(row)
+    )
     recipe_id = str(row["recipe_id"])
     all_jobs = (
         document_jobs
@@ -1400,7 +1418,8 @@ async def _document_recipe_view(
         ),
         needs_reprocessing=(
             materialized_revision is not None and config_revision != materialized_revision
-        ),
+        )
+        or bool(_recipe_processing_defaults_drift(row, effective)),
         error_message=(str(row["error_message"]) if row.get("error_message") else None),
         steps=_recipe_steps(
             row,
@@ -1451,6 +1470,8 @@ async def create_document_recipe(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # 作成直後の行は文書の列を持たない。実効設定（形式別の既定）の解決のため読み直す。
+    row = await oracle.get_document_recipe(document_id, str(row["recipe_id"])) or row
     return ApiResponse(data=await _document_recipe_view(oracle, row))
 
 
@@ -1463,7 +1484,6 @@ async def update_document_recipe(
         _merge_document_processing_config(request)
     except KbAdapterConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _raise_if_recipe_selects_mineru_without_license(request)
     oracle = OracleClient()
     try:
         await oracle.update_document_recipe_config(document_id, recipe_id, request)
@@ -1555,7 +1575,9 @@ async def _enqueue_ingestion_job_for_recipe(
     ):
         raise ValueError("レシピの改訂が変わりました。対象を確認し直してください。")
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    effective_settings, _ = _merge_document_processing_config(config)
+    effective_settings, _ = _merge_document_processing_config(
+        config, file_type=_document_file_type(detail)
+    )
     if staging_runtime is not None:
         effective_settings = apply_staging_runtime(
             effective_settings, {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
@@ -1747,6 +1769,65 @@ async def document_recipe_chunk_window(
     )
 
 
+async def _reader_structured_data(document_id: str, payload: Mapping[str, Any]) -> bytes:
+    detail = await OracleClient().get_document(document_id)
+    if detail is None:
+        raise HTTPException(404, "文書が見つかりません。")
+    artifact = _extraction_file_artifact(detail, payload)
+    data, _, _ = await load_document_content(
+        detail, variant="prepared", preprocess_artifact=artifact
+    )
+    return data
+
+
+@router.get("/{document_id}/recipes/{recipe_id}/reader")
+async def document_recipe_source_reader(
+    document_id: str,
+    recipe_id: str,
+    expected_revision: Annotated[str, Query(min_length=1, max_length=256)],
+    element_id: Annotated[str | None, Query(max_length=128)] = None,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    direction: Literal["before", "after"] = "after",
+    scope: Literal["paragraph", "section", "parent"] = "paragraph",
+    section_id: Annotated[str | None, Query(max_length=64)] = None,
+) -> ApiResponse[dict[str, Any]]:
+    from app.services.source_reader import reading_window
+    from app.services.structured_source_reader import (
+        enrich_structured_window,
+        has_structured_source_mapping,
+    )
+
+    await _recipe_detail_and_artifact(document_id, recipe_id)
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None or row.get("active_extraction_recipe_id") != expected_revision:
+        raise SourceVersionStaleError("資料の解析版が変わりました。開き直してください。")
+    saved = await oracle.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=expected_revision
+    )
+    raw_payload = (saved or {}).get("extraction_json")
+    payload: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
+    elements = payload.get("elements") or []
+    anchor = element_id or next(
+        (str(element["element_id"]) for element in elements if element.get("element_id")), ""
+    )
+    result = await asyncio.to_thread(
+        reading_window,
+        payload,
+        revision=expected_revision,
+        anchor_ids=[anchor],
+        quote="",
+        cursor=cursor,
+        direction=direction,
+        scope=scope,
+        section_id=section_id,
+    )
+    if has_structured_source_mapping(payload):
+        data = await _reader_structured_data(document_id, payload)
+        result = await asyncio.to_thread(enrich_structured_window, result, payload, data)
+    return ApiResponse(data=result)
+
+
 @router.get("/{document_id}/reader")
 async def document_source_reader(
     document_id: str,
@@ -1758,6 +1839,9 @@ async def document_source_reader(
 ) -> ApiResponse[dict[str, Any]]:
     from app.services.source_reader import read_source_context
 
+    async def load_structured(payload: Mapping[str, Any]) -> bytes:
+        return await _reader_structured_data(document_id, payload)
+
     return ApiResponse(
         data=await read_source_context(
             OracleClient(),
@@ -1767,6 +1851,7 @@ async def document_source_reader(
             direction=direction,
             scope=scope,
             section_id=section_id,
+            load_structured=load_structured,
         )
     )
 
@@ -1966,7 +2051,7 @@ async def preview_document_recipe_chunks(
         raise HTTPException(status_code=409, detail="再利用できる抽出結果がありません。")
 
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    settings, _ = _merge_document_processing_config(config)
+    settings, _ = _merge_document_processing_config(config, file_type=_document_file_type(detail))
     candidate = _candidate_chunking_settings(
         settings,
         (request or DocumentChunkPreviewRequest()).settings_overrides(),
@@ -1988,6 +2073,7 @@ async def preview_document_recipe_chunks(
                 overlap=candidate.rag_chunk_overlap,
                 min_chars=candidate.rag_chunk_min_chars,
                 delimiter=candidate.rag_chunk_delimiter,
+                separators=candidate.rag_chunk_separators,
             )
     except RecordBoundaryError as exc:
         raise HTTPException(status_code=422, detail=record_boundary_failure_message(exc)) from exc
@@ -2175,7 +2261,10 @@ async def document_recipe_preview_source(
     )
     return ApiResponse(
         data=DocumentPreviewSource(
-            file_name=artifact.file_name, content_type=artifact.content_type, is_pdf=is_pdf
+            file_name=artifact.file_name,
+            content_type=artifact.content_type,
+            is_pdf=is_pdf,
+            is_structured_records=is_structured_records_content_type(artifact.content_type or ""),
         )
     )
 
@@ -2622,6 +2711,7 @@ async def list_document_recipe_extraction_revisions(
             await oracle.document_extraction_recipe_subset(
                 document_id=document_id, extraction_recipe_id=str(current_id)
             ),
+            file_type=_document_file_type(detail),
         )
         if revisions and current_id and detail.content_sha256
         else None
@@ -2752,6 +2842,7 @@ async def restore_document_recipe_extraction_revision(
             recipe,
             artifact,
             cast("Mapping[str, object]", revision["extraction_json"]),
+            file_type=_document_file_type(detail),
         )
         if revision["parse_extraction_recipe_id"] != write.parse_extraction_recipe_id:
             raise DocumentReviewEditConflictError(
@@ -2943,7 +3034,7 @@ async def _materialize_experiment_candidate(
                 raise
             raise IngestionUserError(str(exc.detail)) from exc
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
-        candidate_config
+        candidate_config, file_type=_document_file_type(detail)
     )
     candidate_settings = apply_staging_runtime(candidate_settings, job.settings_overrides or {})
     base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
@@ -3126,7 +3217,6 @@ async def _materialize_experiment_candidate(
         await pipeline.ingest(
             document_id=job.document_id,
             image_bytes=data,
-            prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
             content_type=(
                 prepared_artifact.content_type
                 if prepared_artifact is not None and prepared_artifact.content_type
@@ -3420,7 +3510,9 @@ async def _recipe_settings_by_id(oracle: OracleClient, document_id: str) -> dict
     result: dict[str, Settings] = {}
     for row in await oracle.list_document_recipes(document_id):
         config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-        result[str(row["recipe_id"])], _effective = _merge_document_processing_config(config)
+        result[str(row["recipe_id"])], _effective = _merge_document_processing_config(
+            config, file_type=_recipe_row_file_type(row)
+        )
     return result
 
 
@@ -3514,29 +3606,57 @@ def _layer_requested(layer: str, settings: Settings) -> bool:
     if layer == "graph":
         return settings.rag_graph_profile != "off"
     if layer == "navigation":
-        return bool(settings.rag_navigation_summary_enabled or settings.rag_raptor_enabled)
+        return bool(settings.rag_navigation_summary_enabled)
     return False
 
 
-def _raise_if_recipe_selects_mineru_without_license(config: DocumentProcessingConfig) -> None:
-    """MinerU のライセンスの条件の確認が無いまま、レシピで MinerU を選ぶ保存を拒否する（#3359）。
+def _document_file_type(document: DocumentDetail | DocumentSummary | None) -> FileType | None:
+    """形式別の既定（#4732）を引く種類。"""
+    if document is None:
+        return None
+    return classify_file_type(document.file_name, document.content_type)
 
-    レシピが明示した値だけを見る（全体の既定から継いだ MinerU は文書解析の設定の確認で決まる）。
-    """
-    selects_mineru = (
-        config.parser_adapter_backend == MINERU_BACKEND or config.parser_mineru_enabled is True
+
+def _recipe_row_file_type(row: Mapping[str, object]) -> FileType | None:
+    """レシピの行（文書のファイル名と content type を持つ）の種類（#4732）。"""
+    file_name, content_type = row.get("document_file_name"), row.get("document_content_type")
+    return classify_file_type(
+        str(file_name) if file_name is not None else None,
+        str(content_type) if content_type is not None else None,
     )
-    if selects_mineru and not mineru_license_acknowledged(get_settings()):
-        raise HTTPException(status_code=422, detail=MINERU_LICENSE_REQUIRED_MESSAGE)
+
+
+def _with_file_type_defaults(
+    config: DocumentProcessingConfig,
+    base: Settings,
+    file_type: FileType | None,
+) -> DocumentProcessingConfig:
+    """レシピが決めていない項目へ、形式別の既定を重ねた設定を返す（レシピの明示値は変えない）。"""
+    if file_type is None:
+        return config
+    overrides = {
+        field: value
+        for field, value in file_type_default_overrides(base, file_type).items()
+        if getattr(config, field) is None
+    }
+    return config.model_copy(update=overrides) if overrides else config
 
 
 def _merge_document_processing_config(
     config: DocumentProcessingConfig,
     global_settings: Settings | None = None,
+    *,
+    file_type: FileType | None = None,
 ) -> tuple[Settings, DocumentProcessingConfig]:
-    """global 既定へ文書の明示上書きだけを重ねる。KB 設定は参照しない。"""
+    """全体の既定へ、形式別の既定（#4732）→ 文書の明示上書きの順に重ねる。KB 設定は参照しない。
+
+    解決の順は文書のレシピ > 形式別の既定 > 全体の既定。``file_type`` は文書の種類で、None は
+    種類の層を使わない（全体の既定だけを見る）。
+    """
     base = global_settings or get_settings()
-    adapter = KnowledgeBaseAdapterConfig(ingestion=config)
+    adapter = KnowledgeBaseAdapterConfig(
+        ingestion=_with_file_type_defaults(config, base, file_type)
+    )
     effective_settings = resolve_effective_settings(base, adapter, scope="ingestion")
     # 外部 parser 選択時に自動注入される feature flag も含め、実際の Settings を
     # スナップショットへ投影する。これにより runtime と drift 判定が同じ値を見る。
@@ -3546,6 +3666,8 @@ def _merge_document_processing_config(
     return effective_settings, DocumentProcessingConfig.model_validate(
         {
             **effective.model_dump(),
+            # 本文の区切りは全体の設定だけが持つ。再処理の判定のために実効値へ写す(#4733)。
+            "chunk_separators": effective_settings.rag_chunk_separators,
             # 章節の抽出規則の方式は Settings ではなく全体の既定のファイルが持つ(#715)。
             "section_rules_mode": config.section_rules_mode or load_section_rules().mode,
         }
@@ -3584,14 +3706,17 @@ def _processing_config_drift_groups(
     """
     small_to_big_in_use = effective.get("chunking_strategy") == SMALL_TO_BIG_STRATEGY
     fixed_delimiter_in_use = effective.get("chunking_strategy") == FIXED_DELIMITER_STRATEGY
+    separators_in_use = effective.get("chunking_strategy") in CHUNK_SEPARATOR_STRATEGIES
 
     def _observed_value(field: str) -> object:
         value = observed.get(field)
         if value is None and field in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS:
             return Settings.model_fields[f"rag_{field}"].default
-        if value is None and field == "chunk_delimiter":
+        if field == "chunk_delimiter":
             # 分割符をレシピに持つ前(#2457)の snapshot は、旧い既定の分割符で分割したものとする。
-            return PREVIOUS_DEFAULT_CHUNK_DELIMITER
+            return normalize_fixed_delimiters(
+                PREVIOUS_DEFAULT_CHUNK_DELIMITER if value is None else value
+            )
         return value
 
     def _compared_fields(fields: tuple[str, ...]) -> tuple[str, ...]:
@@ -3600,6 +3725,7 @@ def _processing_config_drift_groups(
             for field in fields
             if (small_to_big_in_use or field not in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS)
             and (fixed_delimiter_in_use or field != "chunk_delimiter")
+            and (separators_in_use or field != "chunk_separators")
         )
 
     return [
@@ -3607,6 +3733,31 @@ def _processing_config_drift_groups(
         for group, fields in DOCUMENT_PROCESSING_OUTPUT_GROUPS.items()
         if any(_observed_value(field) != effective.get(field) for field in _compared_fields(fields))
     ]
+
+
+def _recipe_processing_defaults_drift(
+    row: Mapping[str, object],
+    effective: DocumentProcessingConfig,
+) -> list[str]:
+    """配信中の chunk_set と今の実効設定で、種類の層（#4732）が決める項目が違う設定群を返す。
+
+    レシピの明示の変更は版の差（needs_reprocessing の revision の比較）で分かる。ここは全体の
+    設定の変更で実効値がずれたことを見せる。比べるのは 3 項目（ファイル準備・解析エンジン・
+    分割方式）だけで、実効値を持たない旧い snapshot は比べない。
+    """
+    if row.get("active_chunk_set_id") is None:
+        return []
+    subset = row.get("active_recipe_subset")
+    observed = subset.get("effective_processing_config") if isinstance(subset, Mapping) else None
+    if not isinstance(observed, Mapping):
+        return []
+    current = effective.model_dump(mode="json")
+    recorded = {
+        field: observed[field]
+        for field in _FILE_TYPE_LAYER_FIELDS
+        if observed.get(field) is not None
+    }
+    return _processing_config_drift_groups({**current, **recorded}, current)
 
 
 def _snapshot_used_removed_chunking_strategy(row: Mapping[str, object] | None) -> bool:
@@ -3682,6 +3833,63 @@ async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     detail = await _attach_duplicate_source(detail, oracle)
     return ApiResponse(data=detail)
+
+
+async def _content_summary_state(
+    document_id: str, oracle: OracleClient
+) -> DocumentContentSummaryState:
+    settings = get_settings()
+    row = await DocumentSummaryStore(oracle).get(document_id)
+    return DocumentContentSummaryState(
+        enabled=bool(settings.rag_document_summary_enabled),
+        summary=content_summary_view(row, settings),
+    )
+
+
+@router.get("/{document_id}/summary", response_model=ApiResponse[DocumentContentSummaryState])
+async def get_document_summary(document_id: str) -> ApiResponse[DocumentContentSummaryState]:
+    """文書全体の要約（#4793）。まだ作っていない文書は ``summary`` が null。"""
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return ApiResponse(data=await _content_summary_state(document_id, oracle))
+
+
+@router.post("/{document_id}/summary", response_model=ApiResponse[DocumentContentSummaryState])
+async def regenerate_document_summary(
+    document_id: str,
+) -> ApiResponse[DocumentContentSummaryState]:
+    """文書全体の要約を作り直す（#4793）。
+
+    取り込み済みの文書に後から要約を作る・失敗した要約を作り直す操作。LLM を 1 回呼び、要約の
+    chunk を入れ替える（原文の chunk・埋め込みは変えない）。失敗の理由は応答の
+    ``summary.failure_code`` に入る（今の版の要約があれば残す）。
+    """
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    settings = get_settings()
+    if not settings.rag_document_summary_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "文書の要約は無効です。文書解析の設定の「解析後の処理」で有効にしてから"
+                "実行してください。"
+            ),
+        )
+    store = DocumentSummaryStore(oracle)
+    current = content_summary_view(await store.get(document_id), settings)
+    if current is not None and current.generating:
+        raise HTTPException(status_code=409, detail="文書の要約を作成中です。")
+    if not await store.targets(document_id):
+        raise HTTPException(
+            status_code=409,
+            detail="検索に出している索引がありません。取込が終わってから実行してください。",
+        )
+    await refresh_document_summary(
+        document_id, oracle=oracle, settings=settings, reason="manual", force=True
+    )
+    return ApiResponse(data=await _content_summary_state(document_id, oracle))
 
 
 async def _attach_duplicate_source(
@@ -3881,10 +4089,12 @@ def _recipe_parse_extraction_id(
     content_sha256: str,
     recipe: Mapping[str, object],
     recipe_subset: Mapping[str, object] | None,
+    *,
+    file_type: FileType | None,
 ) -> str:
     """原本と解析の設定で決まる ID(同じ原本・設定の解析の結果なら同じ)。"""
     config = DocumentProcessingConfig.model_validate(recipe.get("processing_config") or {})
-    recipe_settings, _ = _merge_document_processing_config(config)
+    recipe_settings, _ = _merge_document_processing_config(config, file_type=file_type)
     if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
         recipe_settings = recipe_settings.model_copy(
             update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
@@ -3897,13 +4107,17 @@ def _reviewed_extraction_write(
     recipe: Mapping[str, object],
     artifact: Mapping[str, object],
     extraction: Mapping[str, object],
+    *,
+    file_type: FileType | None,
 ) -> ReviewedExtractionWrite:
     """修正・復元の内容を、保存ごとに新しい ID の抽出として書く内容にする(#2644)。
 
     ID を使い回さないので、検索に出している版や過去の版の抽出を上書きしない。
     """
     recipe_subset = _recipe_subset_of(artifact)
-    parse_extraction_recipe_id = _recipe_parse_extraction_id(content_sha256, recipe, recipe_subset)
+    parse_extraction_recipe_id = _recipe_parse_extraction_id(
+        content_sha256, recipe, recipe_subset, file_type=file_type
+    )
     return ReviewedExtractionWrite(
         extraction_recipe_id=compute_isolated_extraction_id(
             parse_extraction_recipe_id, uuid4().hex
@@ -3944,7 +4158,11 @@ async def _apply_recipe_review_text_edits(
             edits,
         )
         return _reviewed_extraction_write(
-            content_sha256, recipe, artifact, extraction.to_document_payload()
+            content_sha256,
+            recipe,
+            artifact,
+            extraction.to_document_payload(),
+            file_type=_document_file_type(detail),
         )
 
     try:
@@ -4539,7 +4757,7 @@ async def _resolve_ingestion_settings(
     document_id: str,
     recipe_id: str | None = None,
 ) -> tuple[Settings, DocumentProcessingConfig]:
-    """レシピ > global 既定で有効な処理設定を解決する。KB は参照しない。
+    """レシピ > 形式別の既定 > 全体の既定で有効な処理設定を解決する。KB は参照しない。
 
     レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
     旧文書列の設定で補わず停止する。
@@ -4553,7 +4771,9 @@ async def _resolve_ingestion_settings(
             detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
         )
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    effective, _resolved = _merge_document_processing_config(config)
+    effective, _resolved = _merge_document_processing_config(
+        config, file_type=_recipe_row_file_type(row)
+    )
     return effective, config
 
 
@@ -5606,6 +5826,16 @@ async def _run_pinned_ingestion_job(
         await refresh_document_section_map(job.document_id, oracle=oracle, reason="ingestion")
         if recipe_success_outcome is not None:
             _record_recipe_success_outcome(job, recipe_success_outcome)
+            # 索引まで終えて検索に出した job の後段: 文書全体の要約を 1 回の LLM で作り、要約の
+            # chunk を索引に入れる（#4793。失敗・時間切れでも job は成功のまま。理由は文書の要約の
+            # 行に残り、文書の詳細から作り直せる）。
+            await refresh_document_summary(
+                job.document_id,
+                oracle=oracle,
+                settings=get_settings(),
+                reason="ingestion",
+                recipe_id=job.recipe_id,
+            )
         if next_recipe_phase is not None and job.recipe_id is not None:
             # 現在ジョブは SUCCEEDED になったので、同一レシピの次フェーズ job を投入できる
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は

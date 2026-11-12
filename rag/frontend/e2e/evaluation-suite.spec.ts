@@ -6,6 +6,7 @@ import {
   mockEvaluationProfiles,
   evaluationImportResult,
   mockEvaluationImport,
+  mockEvaluationJobList,
   mockEvaluationJobs,
   prepareEvaluationRun,
   uploadEvaluationExcel,
@@ -18,6 +19,7 @@ test.beforeEach(async ({ page }) => {
   await mockKnowledgeBases(page);
   await mockEvaluationProfiles(page);
   await mockEvaluationSuiteSettings(page, "standard");
+  await mockEvaluationJobList(page);
 });
 
 for (const viewport of [
@@ -33,9 +35,9 @@ for (const viewport of [
       await page.goto("/evaluation");
 
       await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
-      // 評価の実行と判定の校正（#3578）のタブ。既定は評価の実行。
+      // 評価の実行とテストセットの作成のタブ。既定は評価の実行。
       await expect(page.getByRole("tab", { name: "評価の実行" })).toHaveAttribute("aria-selected", "true");
-      await expect(page.getByRole("tab", { name: "テストセットの作成" })).toHaveAttribute("aria-selected", "false");
+      await expect(page.getByRole("tab", { name: "テストセット", exact: true })).toHaveAttribute("aria-selected", "false");
       // 評価の基準は表示だけ（#2065）。選択欄・ラベルは無く、設定の既定と閾値と設定へのリンクを出す。
       const suite = page.getByTestId("evaluation-suite");
       await expect(suite.getByRole("combobox")).toHaveCount(0);
@@ -53,11 +55,17 @@ for (const viewport of [
       await expect(conditions.getByText("必須", { exact: true })).toHaveCount(2);
       await expect(page.getByRole("button", { name: "テンプレートをダウンロード" })).toBeVisible();
       await expect(conditions).toContainText("評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。");
-      await expect(conditions).toContainText("同じ六指標・閾値で比較します。");
+      await expect(conditions).toContainText("同じ指標・閾値で比較します。");
       await expect(conditions).toContainText("所要時間は設定や処理状況によって変わります。");
       await expect(conditions).not.toContainText("約 2 倍");
       await expect(conditions.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" })).toBeVisible();
       await conditions.screenshot({ path: testInfo.outputPath("evaluation-guidance.png") });
+      // 結果の空の案内は、条件の欄と同じ入力（検索・回答プロファイル）を選ぶように案内する（#3597）。
+      await expect(page.getByText("まだ評価結果がありません。")).toBeVisible();
+      await expect(
+        page.getByText("検索・回答プロファイルと評価するデータを選び、評価を実行してください。")
+      ).toBeVisible();
+      await expect(page.getByRole("main")).not.toContainText("ナレッジベースを選び");
       // JSON の入力・設定比較・サンプルは無い。
       await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "比較実行" })).toHaveCount(0);
@@ -204,7 +212,7 @@ for (const viewport of [
       .getByTestId("evaluation-suite-thresholds")
       .locator("li")
       .evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
-    expect(chipTops).toHaveLength(6);
+    expect(chipTops).toHaveLength(4);
     if (viewport.maxChipRows !== null) {
       expect(new Set(chipTops).size).toBeLessThanOrEqual(viewport.maxChipRows);
     }
@@ -212,6 +220,39 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+test("評価するプロファイルの候補を読み取れないときは、候補なしと見せず欄の位置に失敗と再試行を出す (#4222)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let profilesFail = true;
+  // 後の route が優先する（beforeEach の成功の応答を上書きする）。
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    if (!profilesFail) return route.fallback();
+    await route.fulfill({
+      status: 500,
+      json: {
+        data: null,
+        error_messages: ["検索・回答プロファイルを読み取れませんでした。"],
+        warning_messages: [],
+        error_code: "database_read_failed",
+      },
+    });
+  });
+  await page.goto("/evaluation");
+
+  const failure = page.getByTestId("evaluation-profiles-load-failed");
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+  await expect(failure.getByRole("alert")).toHaveText("検索・回答プロファイルを読み込めませんでした。");
+  await expect(failure.getByText("検索・回答プロファイルを読み取れませんでした。")).toBeHidden();
+  await expect(page.locator("#evaluation-profile")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.getByTestId("evaluation-conditions").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`evaluation-profiles-load-failed-${testInfo.project.name}.png`) });
+
+  profilesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.locator("#evaluation-profile")).toBeVisible();
+});
 
 test("テンプレートをダウンロードでき、選んだナレッジベースの文書の一覧を求める", async ({ page }) => {
   const urls: string[] = [];
@@ -634,7 +675,7 @@ async function mockEvaluationSuiteSettings(page: Page, suite: string) {
 }
 
 function evaluationSuiteEnvelope(suite: string) {
-  const thresholds=(strict:boolean)=>({required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9,requirement_coverage:strict?1:0.9,claim_support_rate:strict?1:0.95,response_decision_accuracy:strict?1:0.9});
+  const thresholds=(strict:boolean)=>({required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9,response_decision_accuracy:strict?1:0.9});
   const specs = [
     { name: "standard", thresholds: thresholds(false) },
     { name: "strict", thresholds: thresholds(true) },
@@ -660,11 +701,11 @@ function evaluationSuiteEnvelope(suite: string) {
 function evaluationMetrics(suite:string) {
  return {
  case_count:2,error_count:0,evaluation_suite:suite,passed:null,
- required_evidence_recall:1,mrr:0.5,answer_correctness:null,requirement_coverage:null,claim_support_rate:0.9,response_decision_accuracy:1,
- metric_case_counts:{required_evidence_recall:1,mrr:1,answer_correctness:0,requirement_coverage:0,claim_support_rate:1,response_decision_accuracy:2},
+ required_evidence_recall:1,mrr:0.5,answer_correctness:null,response_decision_accuracy:1,
+ metric_case_counts:{required_evidence_recall:1,mrr:1,answer_correctness:0,response_decision_accuracy:2},
  threshold_failures:[],failure_reason_counts:{},category_breakdown:{},
  decision_breakdown:{clarify:{case_count:1,error_count:0,metrics:{response_decision_accuracy:1},metric_case_counts:{response_decision_accuracy:1}}},
- case_results:[{case_id:"row-2",trace_id:"trace-1",status:"success",retrieved_document_ids:["doc-1"],relevant_document_ids:["doc-1"],hit_document_ids:["doc-1"],required_evidence_recall:1,mrr:1,answer_correctness:null,requirement_coverage:null,claim_support_rate:0.9,response_decision_accuracy:1,guardrail_warnings:[],missing_evidence:["evidence-2"],failure_reasons:[],diagnostics:{},elapsed_ms:1,error_type:null,error_message:null}],
+ case_results:[{case_id:"row-2",trace_id:"trace-1",status:"success",retrieved_document_ids:["doc-1"],relevant_document_ids:["doc-1"],hit_document_ids:["doc-1"],required_evidence_recall:1,mrr:1,answer_correctness:null,response_decision_accuracy:1,guardrail_warnings:[],missing_evidence:["evidence-2"],failure_reasons:[],diagnostics:{},elapsed_ms:1,error_type:null,error_message:null}],
  };
 }
 
@@ -706,12 +747,12 @@ function evaluationMetricsWithTimedOutCase() {
 }
 
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
- test(`六指標は検索二・回答三・応答判断一で結果とケースに表示する (${viewport.name})`, async ({page}, testInfo)=>{
+ test(`四指標は検索二・回答一・応答判断一で結果とケースに表示する (${viewport.name})`, async ({page}, testInfo)=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   await mockEvaluationJobs(page,{runResult:()=>evaluationMetrics("standard"),autoComplete:true});
   await page.goto("/evaluation");await prepareEvaluationRun(page);
   await page.getByRole("button",{name:"評価実行"}).click();
-  for (const [id,label,count] of [["retrieval","検索",2],["answer","回答",3],["decision","応答の判断",1]] as const) {
+  for (const [id,label,count] of [["retrieval","検索",2],["answer","回答",1],["decision","応答の判断",1]] as const) {
    const group=page.getByTestId(`evaluation-perspective-${id}`);
    await expect(group.getByRole("heading",{name:label,exact:true})).toBeVisible();
    await expect(group.locator("[data-testid^='evaluation-metric-']")).toHaveCount(count);
@@ -720,7 +761,7 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   }
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("未評価");
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("対象 0 件");
-  await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toContainText("90%");
+  await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-grounding")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-decision-breakdown")).toContainText("確認");
@@ -730,10 +771,30 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
 }
 
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
- test(`六指標の閾値未達・対象件数・分類別内訳を表示する (${viewport.name})`,async({page})=>{
+ test(`参考の指標は合否と閾値から分けて表示する (${viewport.name})`, async ({page}, testInfo)=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   const base=evaluationMetrics("standard");
-  const values={required_evidence_recall:0.5,mrr:0.5,answer_correctness:0,requirement_coverage:0.5,claim_support_rate:1,response_decision_accuracy:0};
+  await mockEvaluationJobs(page,{runResult:()=>({...base,precision_at_10:0.5,bleu_1:0.25,metric_case_counts:{...base.metric_case_counts,precision_at_10:1,bleu_1:1}}),autoComplete:true});
+  await page.goto("/evaluation");await prepareEvaluationRun(page);
+  await page.getByRole("button",{name:"評価実行"}).click();
+  const group=page.getByTestId("evaluation-perspective-reference");
+  await expect(group.getByRole("heading",{name:"参考の指標",exact:true})).toBeVisible();
+  await expect(group.locator("[data-testid^='evaluation-reference-']")).toHaveCount(10);
+  await expect(page.getByTestId("evaluation-reference-precision_at_10")).toContainText("50%");
+  await expect(page.getByTestId("evaluation-reference-bleu_1")).toContainText("25%");
+  await expect(page.getByTestId("evaluation-reference-rouge_l")).toContainText("未評価");
+  await expect(group.locator("[data-testid^='evaluation-threshold-']")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await group.scrollIntoViewIfNeeded();
+  await group.screenshot({path:testInfo.outputPath(`reference-${viewport.name}.png`)});
+ });
+}
+
+for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
+ test(`四指標の閾値未達・対象件数・分類別内訳を表示する (${viewport.name})`,async({page})=>{
+  await page.setViewportSize({width:viewport.width,height:viewport.height});
+  const base=evaluationMetrics("standard");
+  const values={required_evidence_recall:0.5,mrr:0.5,answer_correctness:0,response_decision_accuracy:0};
   const counts=Object.fromEntries(Object.keys(values).map(key=>[key,1]));
   await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,...values,passed:false,metric_case_counts:counts,threshold_failures:[{metric:"mrr",actual:0.5,threshold:0.6}],failure_reason_counts:{unexpected_handling:1},category_breakdown:{clarification_required:{case_count:1,error_count:0,metrics:values,metric_case_counts:counts}}})});
   await page.goto("/evaluation");await prepareEvaluationRun(page);await page.getByRole("button",{name:"評価実行"}).click();

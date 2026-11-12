@@ -55,7 +55,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, handler: Any) -> Any:
         "_RecordingHttpClient",
         lambda **kwargs: CLIENT_CLASS(transport=httpx.MockTransport(handler), **kwargs),
     )
-    return oci._openai_client.__wrapped__("provider-a", ENDPOINT, "sk-test-secret", "", 30, 0)
+    return oci._openai_client.__wrapped__("provider-a", ENDPOINT, "sk-test-secret", "", 30)
 
 
 def _live_handler(request: httpx.Request) -> httpx.Response:

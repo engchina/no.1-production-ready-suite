@@ -32,6 +32,7 @@ import {
   TextField,
   apiErrorMessage,
   compareNames,
+  dataLoadView,
 } from "@production-ready/ui";
 import { agentApi, type AgentSkill } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -201,7 +202,15 @@ export function SkillsPage() {
                     loading: reloadMutation.isPending,
                     onClick: () => reloadMutation.mutate(),
                   },
-                  { id: "create", kind: "primary", label: t("skills.add"), icon: Plus, onClick: editor.openNew },
+                  {
+                    id: "create",
+                    kind: "primary",
+                    label: t("skills.add"),
+                    icon: Plus,
+                    // 一覧を読み取れていない間は作らない（messaging.md §3.6.1。#4222）。
+                    disabled: dataLoadView(skills, { isEmpty: skills.data?.skills.length === 0 }).blockCreate,
+                    onClick: editor.openNew,
+                  },
                 ]
               : []
           }
@@ -419,8 +428,8 @@ function SkillEditor({
           <div className="min-w-0 space-y-6">
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
-                {/* ID / 名前を同じ行に、説明・タグ・指示は全幅。欄の並びは FormGrid（最大 60rem。#1891）。 */}
-                <CardContent className="pt-5">
+                {/* 通常の欄は FormGrid の既定幅、指示だけ所属カードの全幅にする。 */}
+                <CardContent className="space-y-4 pt-5">
                   <FormGrid>
                     {/* ID は作成時だけ入力でき、必須（backend の create_agent_skill と送信ガード）。 */}
                     <TextField
@@ -466,6 +475,8 @@ function SkillEditor({
                       value={form.tags}
                       onValueChange={(value) => setForm({ ...form, tags: value })}
                     />
+                  </FormGrid>
+                  <FormGrid columns={1} width="full">
                     <TextareaField
                       id="skill-instructions"
                       width="full"
@@ -475,6 +486,8 @@ function SkillEditor({
                       value={form.instructions}
                       onValueChange={(value) => setForm({ ...form, instructions: value })}
                     />
+                  </FormGrid>
+                  <FormGrid>
                     <label className="col-span-full flex items-center gap-2 text-sm text-fg">
                       <Switch
                         checked={form.enabled}

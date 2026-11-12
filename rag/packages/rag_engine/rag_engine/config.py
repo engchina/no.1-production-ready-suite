@@ -18,58 +18,15 @@ from rag_engine.retrieval.text_search_tokenizer import (
 )
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
-# 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
+# 回答系(生成)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
-# 段ごとのモデルの provider。backend が段のモデルの設定(RAG_<段>_MODEL)の接続を RAG_ENGINE_<段>_* で
-# 渡したときだけ作る(`STEP_LLM_PROVIDERS`)。
-# 質問の対象の役割の判定の段(#4351)。
-QUESTION_SUBJECT_ROLE_LLM_PROVIDER = "enterprise-ai-question-subject-role"
-# 表の各行の条件を質問に当てはめる段(#4349)。
-ROW_CONDITION_LLM_PROVIDER = "enterprise-ai-row-condition"
-# 推導の監査の判定の段(#4565)と、判定が確定した推導の理由の段(#4564)。
-APPLICATION_AUDIT_LLM_PROVIDER = "enterprise-ai-application-audit"
-APPLICATION_REASON_LLM_PROVIDER = "enterprise-ai-application-reason"
 # 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
 # RAG_ENGINE_ESCALATION_* で渡したときだけ作る(利用者がモデルを明示した実行には渡さない)。
 ESCALATION_LLM_PROVIDER = "enterprise-ai-escalation"
 ESCALATION_ENV_PREFIX = "RAG_ENGINE_ESCALATION"
 
 
-@dataclass(frozen=True)
-class StepLlm:
-    """段のモデルの provider 1 つ(backend の段のモデルの表 `STEP_MODEL_SETTINGS` と同じ段)。"""
-
-    # env の接頭辞(`<prefix>_MODEL`・`_ENDPOINT`・`_API_KEY`・`_PROJECT_OCID`・`_REASONING_EFFORT`・`_MAX_OUTPUT_TOKENS`)。
-    prefix: str
-    provider_id: str
-    label: str
-    # その provider ID を持つ `Settings` のフィールド。
-    field: str
-    # 段の推論の量の上書き(`<prefix>_REASONING_EFFORT_OVERRIDE`)を持つ `Settings` のフィールド。無い段は空。
-    effort_field: str = ""
-    # 段のモデルの入力の上限(`<prefix>_MAX_INPUT_TOKENS`)を持つ `Settings` のフィールド。無い段は空。
-    max_input_field: str = ""
-
-
-STEP_LLM_PROVIDERS: tuple[StepLlm, ...] = (
-    StepLlm(
-        "RAG_ENGINE_QUESTION_SUBJECT_ROLE",
-        QUESTION_SUBJECT_ROLE_LLM_PROVIDER,
-        "Enterprise AI 質問の対象の役割",
-        "question_subject_role_llm",
-    ),
-    StepLlm(
-        "RAG_ENGINE_ROW_CONDITION",
-        ROW_CONDITION_LLM_PROVIDER,
-        "Enterprise AI 表の行の条件",
-        "row_condition_llm",
-        effort_field="row_condition_reasoning_effort",
-        max_input_field="row_condition_max_input_tokens",
-    ),
-    StepLlm("RAG_ENGINE_APPLICATION_AUDIT", APPLICATION_AUDIT_LLM_PROVIDER, "Enterprise AI 推導の判定", "application_audit_llm"),
-    StepLlm("RAG_ENGINE_APPLICATION_REASON", APPLICATION_REASON_LLM_PROVIDER, "Enterprise AI 推導の理由", "application_reason_llm"),
-)
 DEFAULT_LLM_PROVIDER = ENTERPRISE_AI_LLM_PROVIDER
 DEFAULT_CHICAGO_REGION = "us-chicago-1"
 DEFAULT_OSAKA_REGION = "ap-osaka-1"
@@ -254,9 +211,6 @@ class Settings:
     oci_compartment_id: str
     oci_vision_endpoint: str
     llm_request_timeout_seconds: int
-    llm_retries: int
-    llm_retry_initial_wait_seconds: float
-    llm_retry_max_wait_seconds: float
     # 構造化出力の呼び出し 1 回の出力の上限(tokens。既定 32768。#1719)。送る値はこれと呼ぶモデルの出力の上限
     # (`LlmProviderSettings.max_output_tokens`)の小さい方(`llm_output_token_limit`)。
     answer_max_tokens: int
@@ -272,12 +226,6 @@ class Settings:
     # 命中の件数は判定に使わない（#3504）。
     document_selection_enabled: bool
     document_selection_score_ratio: float
-    # 質問から操作すべき画面を画面目録で選び、その画面の根拠を検索候補に加える (#1108)。1 質問につき LLM 呼出が
-    # 1 回増える。効果を 83 問で確かめるまで既定 off。
-    screen_linking_enabled: bool
-    # 1 以上なら、選んだ画面ごとの最上位の child を rerank 後の順位 N 位（2 つ目は N+1 位…）より下に置かない。
-    # 0（既定）は候補に加えるだけで順位は rerank に任せる。比較実験用 (#1108)。
-    screen_linking_reserve_rank: int
     embedding_region: str
     embedding_endpoint: str
     embedding_model: str
@@ -312,8 +260,6 @@ class Settings:
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     # rerank の後の並びの枠（rerank の順の件数・検索の順の件数。#4664）。
     rerank_slot_ratio: tuple[int, int] = (7, 3)
-    runtime_rules_confirmation_enabled: bool = False
-    runtime_rules_answer_enabled: bool = False
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
     original_query_only: bool = False
@@ -339,9 +285,6 @@ class Settings:
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
-    # 明示された材料不足の要求だけを再検索する。未実行の検索文を作れなければ、原質問のみを除く
-    # 自動選択で検索文を作る。回数・足す根拠の数・期限で抑える。
-    request_coverage_retrieval_enabled: bool = False
     request_coverage_max_queries: int = 2
     request_coverage_max_chunks: int = 4
     request_coverage_deadline_seconds: float = 10.0
@@ -351,9 +294,6 @@ class Settings:
     # 主の検索の後に足す検索（業務ガイドの手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の
     # 合計の枠 (#2395)。種類ごとの上限はこの枠の中で数える（`retrieval.extra_retrieval`）。
     extra_retrieval_max_queries: int = 8
-    # 章節の拡張で入力の上限に入らない章節を LLM で抜き出す(#1437)。False なら rerank の順で上限まで入れ、残りは
-    # 「回答に未反映の関連章節」に示す(#2800。backend の既定は False)。
-    section_extraction_enabled: bool = True
     # 業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に入れる (#2395)。LLM は呼ばない。
     # 必須対象は追加検索の合計枠を先に確保する。回数はその後の補助検索、参照数は最低1件以外の追加候補を制限する。
     guide_step_retrieval_enabled: bool = True
@@ -371,124 +311,30 @@ class Settings:
     section_expansion_followup_reserve_percent: int = 20
     # 回答のモデルの入力の上限（tokens。#1437）。backend が共通のモデル設定の登録モデルの値を
     # `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で渡す（platform の enterprise_ai_max_input_tokens。既定 128000）。
-    # 章節の拡張の根拠の入力の上限と、抽出してから統合の 1 回分の大きさをこの割合で決める。
+    # 章節の拡張の根拠の入力の上限をこの割合で決める。
     answer_max_input_tokens: int = 128_000
-    # 同時に呼ぶ数（既定 4）。
-    section_extraction_concurrency: int = 4
-    # 条の目録から条を選ぶ段（#2254）。融合の候補の上位の条で構成された文書（article_catalog_max_documents 件まで）の
-    # 章節の目録を LLM に文書ごとに 1 回渡して条を選ばせ（文書ごとに article_catalog_max_articles 件まで）、その条の
-    # 根拠を候補に加える。選んだ条は rerank の順に article_catalog_context_records 件まで、context の起点・親の枠の外に
-    # 足す（検索の根拠を減らさない）。目録と chunk を注入した呼び出し元（`AnswerDependencies.article_catalogs` /
-    # `article_chunks`）でだけ動き、条で構成された文書が候補に無ければ LLM を呼ばない。
-    article_catalog_enabled: bool = True
-    # 既定は評価の実測（必要な文書の順位は最大 8・条の 1 段目の位置は最大 6）に余裕を持たせた 2 のべき（#3518）。
-    article_catalog_max_documents: int = 16
-    article_catalog_max_articles: int = 8
-    article_catalog_context_records: int = 6
-    # 検索の範囲の条で構成された文書の一覧から LLM が選ぶ文書の数（候補の文書の外。手続の一般的な規則の文書など）。
-    # 0 は候補の文書だけを読む。一覧を注入した呼び出し元（`AnswerDependencies.article_documents`）でだけ動く。
-    article_catalog_scope_documents: int = 2
-    # 元の質問（注入されたとき）でも 1 回ベクトル検索し、その候補を目録を読む文書の順位に足す（候補・context には足さない）。
-    # 業務 Agent の短い検索文では、事例の論点の文書（政令・手続の規則など）が候補の上位に出ないため。
-    article_catalog_original_question_search: bool = True
-    # 条の選択の LLM の呼び出し 1 回の出力の上限（token）と時間の上限（秒）。選ぶ出力は目録の番号の列で、通常は数百
-    # token・数秒で終わる。まれにモデルが同じ出力を繰り返して回答の上限まで書き続け、1 回で数分かかって段全体を
-    # 待たせるため、役目に合わせて抑え、超えた文書は選ばずに続ける（工程に残す）。0 は抑えない。
-    # 条の選択の 2 段目: 1 段目で選んだ条と同じ章の条と、選んだ条の番号を書き出しで名指しする別の章の条（附則の特例・
-    # 読替えなど。#3517）を合わせて article_catalog_refine_candidates 件まで（名指しの条はその 3 分の 1 まで。#3531）
-    # 本文の書き出しつきで見せ、足りない論点の条を文書ごとに article_catalog_refine_articles 件まで足させる。条の名前が
-    # 質問の語から遠い条（重なったときの扱い・特例など）を拾う。書き出しを注入した呼び出し元
-    # （`AnswerDependencies.article_leads`）でだけ動く。0 は 2 段目を行わない。
-    article_catalog_refine_articles: int = 6
-    article_catalog_refine_candidates: int = 60
-    article_catalog_output_token_cap: int = 8192
-    article_catalog_call_timeout_seconds: float = 180.0
-    # 目録で選んだ条を生成が引かなかったとき、条ごとに原文が支える説明を別の呼び出しで検討させ、その説明の出典に足す
-    # （#3526。`grounded.CATALOG_REVIEW_SYSTEM_PROMPT`）。評価で確かめた説明に根拠の無い条の出典が付いたので既定は無効。
-    # 無効なら検討の呼び出しをしない。
-    article_catalog_review: bool = False
-    # 条の選択と範囲の文書の選択の結果を、process をまたいで時間を区切って使う記録の置き場所・有効期間（秒）・件数の
-    # 上限（#3507）。key は索引の版（chunk_set）・目録の内容・質問・モデル・選択の設定。ディレクトリが無い・有効期間か
-    # 件数が 0 なら process の中の記録だけを使う。選び方は変えない（同じ入力の LLM の結果を使い回すだけ）。
-    article_catalog_cache_dir: Path | None = None
-    article_catalog_cache_ttl_seconds: float = 86400.0
-    article_catalog_cache_max_entries: int = 4096
-    # 回答の最終の検証（rag_validate_answer）でモデルに渡す入力の上限（UTF-8 の bytes。指示・質問・回答・根拠を含む）。
-    # 根拠は渡された順に収まるだけ渡し、収まらない根拠は検証に使わない（結果の evidence_truncated）。品質評価の
-    # 主張の監査の予算（`MAX_EVALUATION_INPUT_BYTES`）とは別。
-    answer_validation_max_input_bytes: int = 96_000
-    # 用途ごとの推論(思考)の量の上書き(#1499)。空はモデルの登録値(`LlmProviderSettings.reasoning_effort`)の
-    # まま、none は送らない、low / medium / high はその値を送る。質問拡張戦略の判定と検索文の生成、根拠の評価
-    # (CRAG の評価と章節の拡張の十分性の判定)、回答文の生成、生成後の監査(#1528)で分ける。モデルの登録値が
-    # none(送らない)のモデルには、上書きしても送らない(推論を受け付けないモデルがある。platform の
-    # `pr_system_settings.model` の実測)。
-    strategy_reasoning_effort: str = ""
-    judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
-    audit_reasoning_effort: str = ""
     # 工程ごとの推論の量(1 回の呼び出しの要求の値)。用途の上書きより後に、その工程の呼び出しにだけ当てる。
     # 値の意味は用途の上書きと同じ(空はモデルの登録値のまま。登録値が none のモデルには送らない)。
     # 質問の対象(#4351): 抽出の段(原文の写しと同じ写しの出現の順番を返す)と、役割の判定の段(文の中での
     # 問い・前提・例)。それぞれの段の呼び出しにだけ当てる。
-    question_subject_extraction_reasoning_effort: str = "medium"
-    question_subject_role_reasoning_effort: str = ""
     # 工程ごとのモデル(1 回の呼び出しの provider ID。`llm_providers` のキー)。空は呼び出し側が渡した provider
     # (回答のモデル)のまま。`get_settings` は RAG_ENGINE_<段>_MODEL があれば段の provider を作ってこれにする
-    # (`STEP_LLM_PROVIDERS`)。質問の対象の役割の判定の段(#4351)、推導の監査の判定の段(#4565)と理由の段(#4564)。
-    question_subject_role_llm: str = ""
-    application_audit_llm: str = ""
-    application_reason_llm: str = ""
-    row_condition_llm: str = ""
-    # 表の行の条件の当てはめの段(#4349。row_conditions)の推論の量の上書き(用途 row_condition)と、入力の上限
-    # (この段のモデルの値)。段のモデルが使えなければ段は実行しない(回答のモデルへ暗黙に切り替えない)。
-    row_condition_reasoning_effort: str = ""
-    row_condition_max_input_tokens: int = 128_000
     # 確認を通らなかったときのモデルの provider ID(モデルのカスケード。#4581)。空はカスケードしない。
     # 回答のモデルの出力が機械で判定できる確認を通らなかったときだけ、失敗した段をこのモデルでやり直す。
     escalation_llm: str = ""
     # そのモデルの入力の上限(tokens。回答のモデルの `answer_max_input_tokens` の代わりに使う)。
     escalation_max_input_tokens: int = 128_000
-    # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
-    # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
-    # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
-    # 生成後の監査は飛ばさない。
-    crag_skip_on_strong_signals: bool = False
-    crag_skip_min_rerank_score: float = 0.8
-    # CRAG の評価の入力を詰める(#1528): 候補を生成と同じ親の数(max_context_records)にし、JSON を詰めて書き、
-    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects・列挙の項目の働きは変えない。
-    crag_compact_input: bool = False
-    # 詰めた入力の候補の chunk_uid を短い ID（C1・C1-1）にする(#1864)。評価器が判定ごとに書き写す ID が短くなり、
-    # 出力の token と時間が減る。返った ID は chunk_uid に戻すので、判定の働きは変わらない。
-    crag_short_candidate_ids: bool = False
-    # 生成後の監査の reason を、判定が通った item（supported かつ matched）と答えている要求（addressed）では空文字に
-    # させる(#1912)。見える出力は減るが、同じ入力の対の比較で監査が甘くなったため既定 OFF（品質評価の比較用）。
-    answer_audit_compact_reasons: bool = False
-    # 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限(#1912。0〜2)。既定 2 は従来の MAX_ROUNDS と同じ。
-    answer_max_correction_rounds: int = 2
-    # 回答の監査の型(#2795・#2800)。none は生成の後の LLM の監査と作り直しをしない(決定的な検査だけ)。
-    # standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで(完全性の不足は本文に
-    # 示す)。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す(従来)。engine の既定は従来どおり detailed、
-    # backend の既定は none。
-    answer_evidence_refinement_mode: str = "legacy"
-    answer_audit_mode: str = "detailed"
-    # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
-    # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
-    # 判定の速さと間隔は同じ接続・モデルの直近の完了した呼び出しから学ぶ（実測が 3 回たまるまでは検出しない）。
+    # 回答の期限のある LLM の呼び出しを streaming で受け、応答の event が来なくなったら打ち切って送り直す
+    # (#1926・#4736。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。止まった判定は無音だけ。
     llm_stall_detection: bool = False
-    # event が来ない秒の下限（直近の呼び出しの最大の間隔の 3 倍がこれより長ければそちら）。
-    llm_stall_idle_seconds: float = 20.0
-    # 直近 10 秒の出力の速さ（delta の event/秒）が、直近の完了した呼び出しの速さの中央値のこの割合を下回ったら停滞。
-    llm_stall_min_rate_ratio: float = 0.25
-    # 停滞で打ち切って送り直す回数の上限（1 回の呼び出しあたり。最後の送信は検出せずに待つ）。
-    llm_stall_resends: int = 1
+    llm_max_retries: int = 1
+    # 止まったとする無音の秒数（最初の event を含む）。送り直しはやり直しの共通の枠で数える。
+    llm_stall_idle_seconds: float = 120.0
     # streaming で受ける呼び出しで、出力が同じ並びの繰り返し・空白だけで続いたら打ち切って送り直す(#2966。既定 off。
     # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
     # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
     llm_runaway_detection: bool = False
-    # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
-    section_skip_regrade_at_scope: bool = False
-    # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
-    query_expansion_max_queries: int = 5
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
@@ -579,32 +425,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             max_output_tokens=vision_output_tokens,
         ),
     }
-    # 段ごとのモデル(#4351・#4564・#4565)。接続が不足(登録していないモデル)でも provider は作り、呼び出しの時点で
-    # 設定の不足として失敗させる(段は失敗を返し、回答はその段の結果なしで続ける。回答のモデルへ暗黙に切り替えない)。
-    step_llms: dict[str, str] = {}
-    step_options: dict[str, Any] = {}
-    for step in STEP_LLM_PROVIDERS:
-        prefix = step.prefix
-        if step.effort_field:
-            step_options[step.effort_field] = normalize_reasoning_effort_override(env.get(f"{prefix}_REASONING_EFFORT_OVERRIDE"))
-        if step.max_input_field:
-            step_options[step.max_input_field] = max(1, _env_int(env, f"{prefix}_MAX_INPUT_TOKENS", 128_000))
-        step_model = env.get(f"{prefix}_MODEL", "").strip()
-        if not step_model:
-            step_llms[step.field] = ""
-            continue
-        llm_providers[step.provider_id] = LlmProviderSettings(
-            provider_id=step.provider_id,
-            label=llm_provider_label(step.label, step_model),
-            region="",
-            project_id=env.get(f"{prefix}_PROJECT_OCID", "").strip(),
-            api_key=env.get(f"{prefix}_API_KEY", "").strip(),
-            model=step_model,
-            endpoint=env.get(f"{prefix}_ENDPOINT", "").strip(),
-            reasoning_effort=env.get(f"{prefix}_REASONING_EFFORT", "").strip(),
-            max_output_tokens=_positive_int(env, f"{prefix}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
-        )
-        step_llms[step.field] = step.provider_id
     escalation_model = env.get(f"{ESCALATION_ENV_PREFIX}_MODEL", "").strip()
     if escalation_model:
         llm_providers[ESCALATION_LLM_PROVIDER] = LlmProviderSettings(
@@ -628,14 +448,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ENTERPRISE_AI_LLM_PROVIDER,
     )
     runtime_knowledge_raw = env.get("RUNTIME_KNOWLEDGE_PATH", "").strip()
-    cache_dir_raw = env.get("RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR", "").strip()
     settings = Settings(
         hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_native")),
         rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[7,3]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
         rerank_slot_ratio=_slot_ratio(env.get("RAG_RERANK_SLOT_RATIO", "[7,3]")),
-        runtime_rules_confirmation_enabled=_env_bool(env, "RUNTIME_RULES_CONFIRMATION_ENABLED", False),
-        runtime_rules_answer_enabled=_env_bool(env, "RUNTIME_RULES_ANSWER_ENABLED", False),
         runtime_terms_search_enabled=_env_bool(env, "RUNTIME_TERMS_SEARCH_ENABLED", False),
         runtime_terms_answer_enabled=_env_bool(env, "RUNTIME_TERMS_ANSWER_ENABLED", False),
         original_query_only=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_ONLY", False),
@@ -662,11 +479,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         # 旧名 VISION_* は Vision 限定に見えるため改名した。リポジトリ外の既存 .env が黙って既定値へ
         # 戻らないよう、新しい名前が未設定のときだけ旧名を読む (#912)。
         llm_request_timeout_seconds=_env_int(env, "LLM_REQUEST_TIMEOUT_SECONDS", _env_int(env, "VISION_REQUEST_TIMEOUT_SECONDS", 90)),
-        llm_retries=_env_int(env, "LLM_RETRIES", _env_int(env, "VISION_RETRIES", 3)),
-        llm_retry_initial_wait_seconds=_env_float(
-            env, "LLM_RETRY_INITIAL_WAIT_SECONDS", _env_float(env, "VISION_RETRY_INITIAL_WAIT_SECONDS", 2.0)
-        ),
-        llm_retry_max_wait_seconds=_env_float(env, "LLM_RETRY_MAX_WAIT_SECONDS", _env_float(env, "VISION_RETRY_MAX_WAIT_SECONDS", 30.0)),
         answer_max_tokens=_positive_int(env, "ANSWER_MAX_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
         default_rerank_enabled=_env_bool(env, "RAG_ENGINE_DEFAULT_RERANK_ENABLED", True),
         approved_faq_semantic_matching_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_MATCHING_ENABLED", True),
@@ -674,17 +486,15 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         rerank_model=env.get("RERANK_MODEL", "cohere.rerank-v4.0-fast").strip(),
         oci_rerank_endpoint=env.get("OCI_RERANK_ENDPOINT", "").strip(),
         rerank_request_timeout_seconds=_env_int(env, "RERANK_REQUEST_TIMEOUT_SECONDS", 90),
-        rerank_retries=_env_int(env, "RERANK_RETRIES", 3),
-        rerank_retry_initial_wait_seconds=_env_float(env, "RERANK_RETRY_INITIAL_WAIT_SECONDS", 2.0),
-        rerank_retry_max_wait_seconds=_env_float(env, "RERANK_RETRY_MAX_WAIT_SECONDS", 30.0),
+        rerank_retries=_env_int(env, "RERANK_RETRIES", 5),
+        rerank_retry_initial_wait_seconds=_env_float(env, "RERANK_RETRY_INITIAL_WAIT_SECONDS", 1.0),
+        rerank_retry_max_wait_seconds=_env_float(env, "RERANK_RETRY_MAX_WAIT_SECONDS", 16.0),
         rerank_min_relevance_score=max(
             0.0,
             _env_float(env, "RERANK_MIN_RELEVANCE_SCORE", DEFAULT_RERANK_MIN_RELEVANCE_SCORE),
         ),
         document_selection_enabled=_env_bool(env, "RAG_ENGINE_DOCUMENT_SELECTION", True),
         document_selection_score_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO", 0.5))),
-        screen_linking_enabled=_env_bool(env, "RAG_ENGINE_SCREEN_LINKING", False),
-        screen_linking_reserve_rank=max(0, _env_int(env, "RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK", 0)),
         embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,
         embedding_endpoint=env.get("EMBEDDING_ENDPOINT", "").strip(),
         embedding_model=env.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip() or DEFAULT_EMBEDDING_MODEL,
@@ -714,14 +524,12 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         },
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
-        request_coverage_retrieval_enabled=_env_bool(env, "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL", False),
         request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
         request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),
         request_coverage_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS", 10.0)),
         request_coverage_max_subquestions=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_SUBQUESTIONS", 5)),
         request_coverage_chunks_per_subquestion=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION", 2)),
         extra_retrieval_max_queries=max(0, _env_int(env, "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES", 8)),
-        section_extraction_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXTRACTION_ENABLED", True),
         guide_step_retrieval_enabled=_env_bool(env, "RAG_ENGINE_GUIDE_STEP_RETRIEVAL", True),
         guide_step_max_queries=max(0, _env_int(env, "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES", 4)),
         guide_step_chunks_per_step=max(1, _env_int(env, "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP", 2)),
@@ -734,47 +542,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             0, min(50, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT", 20))
         ),
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
-        section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
-        article_catalog_enabled=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG", True),
-        article_catalog_max_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS", 16)),
-        article_catalog_max_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES", 8)),
-        article_catalog_context_records=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS", 6)),
-        article_catalog_scope_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_SCOPE_DOCUMENTS", 2)),
-        article_catalog_original_question_search=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH", True),
-        article_catalog_refine_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES", 6)),
-        article_catalog_refine_candidates=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES", 60)),
-        article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 8192)),
-        article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 180.0)),
-        article_catalog_review=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_REVIEW", False),
-        article_catalog_cache_dir=Path(cache_dir_raw).expanduser() if cache_dir_raw else None,
-        article_catalog_cache_ttl_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS", 86400.0)),
-        article_catalog_cache_max_entries=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES", 4096)),
-        answer_validation_max_input_bytes=max(16_000, _env_int(env, "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES", 96_000)),
-        strategy_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
-        judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
-        audit_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_AUDIT_REASONING_EFFORT")),
-        row_condition_reasoning_effort=step_options["row_condition_reasoning_effort"],
-        row_condition_max_input_tokens=step_options["row_condition_max_input_tokens"],
-        crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
-        crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
-        answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
-        answer_max_correction_rounds=max(0, min(2, _env_int(env, "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS", 2))),
-        answer_evidence_refinement_mode=(
-            refinement
-            if (refinement := env.get("RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE", "legacy")) in {"legacy", "cited_only", "cited_required"}
-            else "legacy"
-        ),
-        answer_audit_mode=(mode if (mode := env.get("RAG_ENGINE_ANSWER_AUDIT_MODE", "")) in {"none", "standard"} else "detailed"),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
-        llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
-        llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
-        llm_stall_resends=max(0, min(2, _env_int(env, "RAG_ENGINE_LLM_STALL_RESENDS", 1))),
+        llm_max_retries=max(0, _env_int(env, "RAG_ENGINE_LLM_MAX_RETRIES", 1)),
+        llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
         llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
-        section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
-        crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
-        crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),
-        query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
@@ -793,10 +565,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
-        question_subject_role_llm=step_llms["question_subject_role_llm"],
-        application_audit_llm=step_llms["application_audit_llm"],
-        application_reason_llm=step_llms["application_reason_llm"],
-        row_condition_llm=step_llms["row_condition_llm"],
         escalation_llm=ESCALATION_LLM_PROVIDER if escalation_model else "",
         escalation_max_input_tokens=max(1, _env_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_INPUT_TOKENS", 128_000)),
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
@@ -810,27 +578,13 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
 
 
 # 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
-# 質問拡張戦略の判定と検索文の生成(strategy)・根拠の評価(judge。CRAG の評価と章節の拡張の十分性の判定)・
-# 回答文の生成(generation)・生成後の監査(audit。#1528)。
-LLM_PURPOSE_STRATEGY = "strategy"
-LLM_PURPOSE_JUDGE = "judge"
+# 回答文の生成(generation)。
 LLM_PURPOSE_GENERATION = "generation"
-LLM_PURPOSE_AUDIT = "audit"
-# 表の行の条件の当てはめ(#4349。row_conditions の 2 つの呼び出し)。
-LLM_PURPOSE_ROW_CONDITION = "row_condition"
 _PURPOSE_EFFORT_FIELDS = {
-    LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
-    LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
-    LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
-    LLM_PURPOSE_ROW_CONDITION: "row_condition_reasoning_effort",
 }
 _PURPOSE_LABELS = {
-    LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
-    LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
-    LLM_PURPOSE_AUDIT: "回答の監査",
-    LLM_PURPOSE_ROW_CONDITION: "表の行の条件の当てはめ",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
 REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")
@@ -858,7 +612,7 @@ def settings_with_reasoning_effort(settings: Settings, value: str | None) -> Set
 
     LLM の呼び出しに渡す設定だけを差し替える(provider の `reasoning_effort` は送る値)。モデルの登録値が
     送らない(空)の provider は、上書きしても送らない。用途の上書き(`settings_for_llm_purpose`)と、工程の
-    呼び出しの上書き(`Settings.question_subject_extraction_reasoning_effort` など)が共有する。
+    呼び出しの上書きが共有する。
     """
     override = normalize_reasoning_effort_override(value)
     if not override:

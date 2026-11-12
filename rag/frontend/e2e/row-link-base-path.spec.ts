@@ -21,7 +21,6 @@ const RUN = {
   answer_generated: false,
   status: "success",
   answer_outcome: null,
-  verification: null,
   confidence: null,
   needs_human_review: null,
   citation_count: 0,

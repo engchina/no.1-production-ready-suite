@@ -1,3 +1,4 @@
+import { ApiError } from "@/lib/api";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
@@ -41,8 +42,10 @@ import {
   ApiErrorState,
   apiErrorMessage,
   adjacentListItems,
+  dataLoadView,
 } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { AnswerBody } from "@/components/chat/ResultTables";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listTotal } from "@/components/ListFilters";
@@ -169,10 +172,22 @@ export function EvaluationPage() {
     retry: false,
   });
 
+  // 業務 Agent の候補を読み取れないまま、エディタの欄を候補なしと見せない（#4817）。
+  const agentsFailure =
+    agents.isError && agents.data === undefined ? (
+      <DataLoadFailure
+        error={agents.error}
+        fallback={t("evaluation.set.agentLoadError")}
+        onRetry={() => void agents.refetch()}
+        layout="field"
+        testId="evaluation-set-agent-load-failed"
+      />
+    ) : undefined;
   if (editorTarget.kind === "new") {
     return (
       <EvaluationSetEditor
         agents={usableAgents}
+        agentsFailure={agentsFailure}
         defaultAgentId={selectedAgentId}
         onBack={() => editor.backToList()}
         onSaved={(saved) => {
@@ -197,6 +212,19 @@ export function EvaluationPage() {
         </PageBody>
       );
     }
+    if (editingSet.isError && editingSet.data === undefined && !(editingSet.error instanceof ApiError && editingSet.error.status === 404)) {
+      return (
+        <PageBody wide>
+          <DataLoadFailure
+            error={editingSet.error}
+            fallback={t("common.error.load")}
+            onRetry={() => void editingSet.refetch()}
+            retrying={editingSet.isFetching}
+            testId="evaluationpage-detail-load-failed"
+          />
+        </PageBody>
+      );
+    }
     if (!editingSet.data) {
       return <MissingEditorTarget id={editorTarget.id} onBack={() => editor.backToList({ replace: true })} />;
     }
@@ -205,6 +233,7 @@ export function EvaluationPage() {
         key={editingSet.data.id}
         evaluationSet={editingSet.data}
         agents={usableAgents}
+        agentsFailure={agentsFailure}
         defaultAgentId={selectedAgentId}
         onBack={() => editor.backToList()}
         onSaved={(saved) => queryClient.setQueryData(["evaluation-set", saved.id], saved)}
@@ -431,7 +460,8 @@ function EvaluationOverview({
             kind: "primary",
             label: t("evaluation.set.create"),
             icon: Plus,
-            disabled: !agentId,
+            // 評価セットの一覧を読み取れていない間も作らない（messaging.md §3.6.1。#4222）。
+            disabled: !agentId || dataLoadView(sets, { isEmpty: (sets.data?.sets ?? []).length === 0 }).blockCreate,
             onClick: onCreate,
           },
         ]}

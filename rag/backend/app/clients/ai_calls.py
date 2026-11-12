@@ -33,7 +33,7 @@ AiCallStage = Literal[
     "heading_levels",
     "field_extraction",
     "navigation_summary",
-    "raptor_summary",
+    "document_summary",
     "embedding",
     "rerank",
     "evaluation",
@@ -45,7 +45,7 @@ STAGE_LABELS: dict[str, str] = {
     "heading_levels": "見出しの階層の推定",
     "field_extraction": "メタデータ／項目抽出",
     "navigation_summary": "章節の要約",
-    "raptor_summary": "RAPTOR の階層の要約",
+    "document_summary": "文書の要約",
     "embedding": "埋め込み（Embedding）",
     "rerank": "リランク",
     "evaluation": "品質評価",
@@ -109,7 +109,6 @@ def _concurrency(settings: object, stage: str) -> int:
     name = {
         "vision": "rag_vision_concurrency",
         "navigation_summary": "rag_navigation_summary_concurrency",
-        "raptor_summary": "rag_raptor_concurrency",
         "embedding": "rag_embedding_concurrency",
         "evaluation": "rag_evaluation_concurrency",
         "guide_import": "rag_support_guide_import_concurrency",
@@ -125,7 +124,7 @@ def _concurrency(settings: object, stage: str) -> int:
 # モデルの設定の誤り・割り当ての使い切りは評価の全体を止める（同じ失敗をくり返さない）。
 _EVALUATION_RULES: dict[ErrorKind, KindRule] = {
     **{kind: KindRule() for kind in ErrorKind},
-    ErrorKind.RATE_LIMITED: KindRule(retries=3, throttle=True),
+    ErrorKind.RATE_LIMITED: KindRule(retries=5, throttle=True),
     **{
         kind: KindRule(disposition=Disposition.JOB)
         for kind in (

@@ -104,7 +104,7 @@ describe("citationCountLabel", () => {
     expect(citationCountLabel([chunk({ evidence_model_used: false })])).toBe("AI に渡した 1 件");
   });
 
-  it("回答での使われ方が分かるときは、該当を確認した件数と参考の件数を添える", () => {
+  it("回答での使われ方は参考の件数だけを添える（該当確認済みは数えない）", () => {
     const chunks = [
       chunk({ evidence_model_used: true, evidence_answer_use: "confirmed" }),
       chunk({ evidence_model_used: true, evidence_answer_use: "confirmed" }),
@@ -113,9 +113,9 @@ describe("citationCountLabel", () => {
       chunk({ evidence_model_used: false, evidence_answer_use: "confirmed" }),
     ];
     expect(citationCountLabel(chunks)).toBe(
-      "AI に渡した 4 件 ／ 回答で引用 3 件 ／ うち該当確認済み 2 件 ／ 参考 1 件"
+      "AI に渡した 4 件 ／ 回答で引用 3 件 ／ 参考 1 件"
     );
-    expect(chunks.map(citationAnswerUse)).toEqual(["confirmed", "confirmed", "reference", null]);
+    expect(chunks.map(citationAnswerUse)).toEqual([null, null, "reference", null]);
     expect(
       citationCountLabel([chunk({ evidence_model_used: true, evidence_answer_use: "reference" })])
     ).toBe("AI に渡した 1 件 ／ 回答で引用 1 件 ／ 参考 1 件");
@@ -147,17 +147,3 @@ describe("citationSourceUrl", () => {
  });
 
 
-describe("citation support display", () => {
-  it.each(["not_run", "partial", "error", "completed"])("%s の unknown を確認済みと数えず、回答使用数は保つ", (execution) => {
-    const chunk = { metadata: { evidence_model_used: true, evidence_answer_use: "confirmed", evidence_claim_support: { execution, status: "unknown" } } };
-    expect(citationAnswerUse(chunk)).toBeNull();
-    expect(citationCountLabel([chunk])).toContain("回答で引用 1 件");
-    expect(citationCountLabel([chunk])).not.toContain("該当確認済み");
-    expect(citationCountLabel([chunk])).not.toContain("参考");
-  });
-  it("記録された支持と旧記録を区別する", () => {
-    const metadata = { evidence_model_used: true, evidence_answer_use: "confirmed" };
-    expect(citationAnswerUse({ metadata })).toBe("confirmed");
-    expect(citationAnswerUse({ metadata: { ...metadata, evidence_claim_support: { execution: "completed", status: "supported" } } })).toBe("confirmed");
-  });
-});

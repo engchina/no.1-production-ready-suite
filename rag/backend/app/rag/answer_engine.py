@@ -1,6 +1,6 @@
 """rag_poc の根拠付き回答フローを backend の検索・rerank・LLM で実行する。
 
-rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子文脈 / 生成 + 監査ラウンド)を
+rag_poc の ``answer_question_result``(親子文脈 / 生成)を
 そのまま使い、``AnswerDependencies`` の I/O だけを差し替える。
 
 - 検索: backend の Oracle hybrid 検索(
@@ -10,9 +10,6 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   親本文(``parent_text``)で親子を復元する。
   質問の語から検索条件・候補の除外・加点は推定しない。利用者の明示した範囲と認可を保つ。
   1 ページ目の本文と先頭Chunkは、正式生成の根拠の選択後に同じ版と範囲で読む。
-- 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
-  ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
-  読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
 - rerank: backend の Cohere rerank。
 - LLM: openai SDK(OCI_ENTERPRISE_AI_*)。rag_engine 内部の Responses API 経路を使う。
 回答フローは同期関数のため回答の専用の worker thread で動かし、非同期 I/O はイベントループへ戻して
@@ -32,14 +29,11 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
-import httpx
-from fastapi import HTTPException
-from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.timezones import configured_timezone_name
@@ -47,11 +41,11 @@ from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.context_expansion_trace import context_read_receipt
-from rag_engine.resources.deadline import DeadlineExceeded, check_deadline, current_deadline
+from rag_engine.resources.deadline import check_deadline, current_deadline
 from rag_engine.resources.runtime import saved_prompt_overrides
 from rag_engine.resources.tracing import CallObservation, observe_call
-from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
+from rag_engine.retrieval.evidence_selection import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.search_stages import (
     CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
@@ -90,7 +84,6 @@ from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
-from app.rag.citation_status import citation_support_display
 from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -116,6 +109,7 @@ from app.rag.derived_evidence import (
     derived_kind,
     derived_source_chunks,
     is_derived_chunk,
+    keeps_own_evidence,
     original_chunks,
 )
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
@@ -128,7 +122,6 @@ from app.rag.entity_expansion import (
     expansion_metadata,
     plan_entity_expansion,
 )
-from app.rag.field_filter_reader import merge_field_conditions
 from app.rag.graph_expansion import (
     GRAPH_EXPANSION_KEY,
     GRAPH_SEED_ANCHORS,
@@ -136,16 +129,13 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
-from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
-from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
+from app.rag.span_display import ANSWER_STEP_KIND, answer_step_params
 from app.rag.step_details import step_details_payload
-from app.rag.step_models import STEP_MODEL_SETTINGS, step_model_environ, step_model_id
-from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
+from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.search import (
     MAX_PAGE_RANGES,
     PAGE_RANGES_FILTER_KEY,
-    ExtractionFieldCondition,
     PageRange,
     RetrievedChunk,
     SearchMode,
@@ -160,15 +150,8 @@ logger = logging.getLogger(__name__)
 
 ANSWER_ENGINE = "grounded"
 ENGINE_SOURCE_RUN_ID = "0" * 16
-# 呼び出し元が検索文を作った検索（#2651）の質問拡張の戦略（LLM を呼ばない単純検索）。
-CALLER_QUERY_STRATEGY = "simple_retrieval"
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
-# 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
-_SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
-_SCREEN_CATALOG_CACHE_SIZE = 32
-# section_path の見出しの区切り(chunking_small_to_big が「 > 」でつないで保存する)。
-_SECTION_PATH_SEPARATOR = " > "
 # 回答の thread が event loop の I/O を待つ間に、回答の期限・取り消しを確かめる間隔(秒。#1422)。
 _IO_DEADLINE_POLL_SECONDS = 0.5
 # 回答フローの工程の通知(進捗)1 件を待つ上限(秒)。通知は補助なので、超えたら待たずに続ける。
@@ -195,7 +178,7 @@ _REFERENCE_DOCUMENT_CANDIDATES = 20
 _DOCUMENT_REFERENCE_CANDIDATES = 8
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
-# 診断に出す交差参照の起点の記録の、検索の回数の上限(CRAG の各回・要求ごとの再検索)。
+# 診断に出す交差参照の起点の記録の、検索の回数の上限(要求ごとの再検索)。
 _REFERENCE_DIAGNOSTICS_SEARCHES = 4
 # 実体の 1 段の拡張(#1362)で足した chunk を置く候補の位置(先頭からこの件数の後ろ)。rag_engine は
 # この chunk を rerank で並べ替えず(位置を保つ)、文書の選択で後回しにしない。
@@ -207,17 +190,6 @@ _ENTITY_SCORE_DECAY = 0.5
 _GRAPH_INSERT_AFTER = 5
 # 関係情報で足した chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
 _GRAPH_SCORE_DECAY = 0.5
-# 条の目録(#2254)の文字数の上限と、見出しの語の無い条に添える本文の書き出しの文字数
-# (MCP の rag_outline の compact の既定と同じ)。
-_ARTICLE_CATALOG_MAX_CHARS = 40000
-# 条の目録で選んだ条の context の理由(rag_engine の context_builder)と、根拠の役割(#2261)。
-CATALOG_ARTICLE_REASON = "catalog_article"
-CATALOG_ARTICLE_ROLE = "catalog_article"
-# 検索の範囲の条で構成された文書の一覧の cache((条件, 索引の状態) → 一覧。#2254)。
-_ARTICLE_DOCUMENTS_CACHE: dict[tuple[str, str], list[tuple[str, str]]] = {}
-_ARTICLE_CATALOG_LEAD_CHARS = 60
-# 条の選択の 2 段目で見せる本文の書き出しの文字数(条の名前が質問の語から遠い条を本文で判断させる)。
-_ARTICLE_REFINE_LEAD_CHARS = 120
 # 診断に出す、関係情報で使った entity の数の上限。
 _GRAPH_DIAGNOSTICS_ENTITIES = 10
 
@@ -246,13 +218,8 @@ def answer_step_stage(name: str) -> str:
     return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
 
 
-# 回答の本文を根拠と照合する工程の名前（回答フローの最後の検証と MCP の
-# rag_validate_answer。#3470）。
-ANSWER_VALIDATION_STEP = "資料との照合"
-
-
 def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
-    """回答フローの外で行う回答の工程（資料との照合・承認済み FAQ からの回答）の span（#3226）。
+    """回答フローの外で行う回答の工程（承認済み FAQ からの回答）の span（#3226）。
 
     `rag_engine` の工程（`rag.engine.stage`）と同じ名前・種類にし、処理の経過の行にする。
     """
@@ -261,50 +228,6 @@ def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
         attributes={"pr.stage": name},
         display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": name}),
     )
-
-
-def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
-    """資料との照合の工程の詳細（照合の結果・判定した段落の数）。"""
-    return {
-        "fields": [
-            {"label": "照合の結果", "value": "確認済み" if validation.get("valid") else "未確認"},
-            {
-                "label": "照合の実行",
-                "value": {
-                    "completed": "完了",
-                    "partial": "一部未確認",
-                    "timed_out": "時間上限",
-                    "error": "実行失敗",
-                    "not_run": "未実行",
-                    "no_evidence": "根拠なし",
-                    "body_changed": "本文の変更後は未確認",
-                    "input_too_large": "照合の入力上限超過",
-                }.get(str(validation.get("status")), "未確認"),
-            },
-            {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
-            *(
-                [
-                    {
-                        "label": "未照合の確認条件",
-                        "value": str(validation["unassessed_premises_count"]),
-                    }
-                ]
-                if validation.get("unassessed_premises_count")
-                else []
-            ),
-        ],
-    }
-
-
-def _diagnostic_validation(validation: dict[str, Any]) -> dict[str, Any]:
-    """実行結果を残し、意味の正否を未検証として区別する。"""
-    return {
-        **validation,
-        "raw_valid": validation.get("valid"),
-        "valid": None,
-        "semantic_status": "unknown",
-        "automatic_actions": False,
-    }
 
 
 @dataclass(frozen=True)
@@ -317,6 +240,11 @@ class AnswerOutcome:
     context_text: str
     # 標準回答による LLM 評価(evaluate_answer_payload)の入力。回答記録に保存する。
     evaluation_input: dict[str, Any] | None = None
+
+
+def approved_faq_answer_text(answer: str, faq_question: str) -> str:
+    """承認済み FAQ からの回答の本文（末尾に出典の行。選んだ FAQ・そのまま返す FAQ で同じ形）。"""
+    return f"{answer}\n\n（出典: 登録済みQ&A「{faq_question}」）"
 
 
 # evaluate_answer_payload が読む回答 payload のキー(answer_result_payload の部分集合)。
@@ -354,20 +282,16 @@ class _SearchState:
     # 同じ回答の検索で同じ chunk が何度も当たるので、切り出しと metadata の書き換えは chunk ごとに
     # 1 回にする(#2805)。
     materialized_images: dict[str, str | None] = field(default_factory=dict)
-    # 質問の文書名・ページを足した検索条件(#546)。CRAG の各回で同じなので、最初の検索で
+    # 質問の文書名・ページを足した検索条件(#546)。同じ回答の中で同じなので、最初の検索で
     # 1 回だけ決める。
     filters: dict[str, str] | None = None
-    # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
-    screen_catalog: dict[str, list[str]] | None = None
-    # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)。
-    auto_field_conditions: list[ExtractionFieldCondition] = field(default_factory=list)
-    # 検索ごとの検索文の数・候補の件数・効いていた自動の条件(#2401。根拠 0 件の診断)。
+    # 検索ごとの検索文の数・候補の件数(#2401。根拠 0 件の診断)。
     search_log: list[dict[str, object]] = field(default_factory=list)
     # 正式生成へ追加する文書背景の既読。版と検索範囲が同じ場合だけ再利用する。
     document_backgrounds: dict[tuple[str, str, tuple[tuple[str, str], ...]], dict[str, Any]] = (
         field(default_factory=dict)
     )
-    # 交差参照(#1280)の参照先の chunk(参照先ごと。CRAG の各回で同じ参照先を読み直さない)と、
+    # 交差参照(#1280)の参照先の chunk(参照先ごと。同じ参照先を読み直さない)と、
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
     reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -381,12 +305,12 @@ class _SearchState:
     # #1549)。根拠の木に出す。
     fused_ranks: dict[str, tuple[int, float]] = field(default_factory=dict)
     # 実体の 1 段の拡張(#1362)で足した chunk の記録(診断に出す。chunk_id → 実体・段・起点)と、
-    # 同じ起点での計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
+    # 同じ起点での計画(同じ起点なら SQL を読み直さない)。
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     entity_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     entity_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
     # 関係情報(#2055)で足した chunk の記録(診断に出す。chunk_id → entity・理由)と、同じ起点での
-    # 計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
+    # 計画(同じ起点なら SQL を読み直さない)。
     graph_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     graph_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     graph_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
@@ -401,26 +325,19 @@ class _SearchState:
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
     )
-    # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。CRAG の 2 回目・要求ごとの
+    # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。要求ごとの
     # 再検索で同じ検索文を読み直さない(1 回の回答の中だけ)。
     search_hits: dict[tuple[str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]] = (
         field(default_factory=dict)
     )
     # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
-    # 条の目録(#2254。document_id ごと。条で構成された文書でなければ None)。1 回の回答で 1 回だけ
-    # 作る。
-    article_catalogs: dict[tuple[str, str], Any] = field(default_factory=dict)
-    # 検索の範囲の条で構成された文書の一覧(#2254。1 回の回答で 1 回だけ読む)。
-    article_documents: list[tuple[str, str]] | None = None
-    # 目録で選んだ条(#2254。chunk_id か section_id ごと。診断の article_catalog に残す)。
-    article_selections: dict[str, dict[str, object]] = field(default_factory=dict)
     # 利用者が明示した基準日(as_of。無ければ空)。検索の条件は 1 回の回答の初めに決めた基準日を
     # 使い(``_with_effective_as_of``。#2602)、回答のプロンプトと記録の分類の条件には明示した値
     # だけを渡す。
     requested_as_of: str = ""
-    # 検索で当たった派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)と、置き換えた原文の
-    # chunk(#2641。chunk_id → 種類・原文の chunk_id。CRAG の各回で読み直さない。診断に出す)。
+    # 検索で当たった派生の chunk(章節の要約・項目抽出の値)と、置き換えた原文の
+    # chunk(#2641。chunk_id → 種類・原文の chunk_id。読み直さない。診断に出す)。
     derived_hits: dict[str, dict[str, Any]] = field(default_factory=dict)
     derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
         default_factory=dict
@@ -438,11 +355,6 @@ class _SearchState:
     def degraded_steps(self) -> list[dict[str, object]]:
         """失敗した補助の処理の記録(最初に失敗した順)。"""
         return self.degraded.steps()
-
-    @property
-    def automatic_filters(self) -> list[str]:
-        """今の検索条件に効いている自動の条件の種類(検索の条件の値は含めない)。"""
-        return ["auto_field"] if self.auto_field_conditions else []
 
 
 _ZERO_EVIDENCE_SEARCH_LOG_LIMIT = 12
@@ -474,8 +386,7 @@ def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
     ``filters`` は利用者が指定した条件(画面・検索・回答プロファイル・呼び出し元の
     ``request.filters``)で、ナレッジベース・旧版の扱い・基準日に加えて文書名・ページ・分類・項目の
     条件を含む。拡張は主の検索と同じ範囲の中で広げ、利用者が指定した範囲の外から黙って根拠を足さ
-    ない。質問から推測して自動で足した条件(``_question_filters``・``merge_field_conditions``)は
-    含まない。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
+    ない。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
     明記した参照を辿る交差参照も同じ明示範囲を維持する。
     """
     return {key: value for key, value in filters.items() if value.strip()}
@@ -502,28 +413,6 @@ def _attached_image_count(result: object) -> int:
         for item in getattr(result, "image_evidence", ()) or ()
         if isinstance(item, Mapping) and item.get("prompt_path")
     )
-
-
-# 条の選択の記録(#3507)の既定の置き場所(PLATFORM_LOCAL_STORAGE_DIR の下)。
-# 3 製品で同じ保存先を設定しても、RAG の名前の下に分ける。
-_ARTICLE_CATALOG_CACHE_SUBDIR = Path("cache") / "rag-article-catalog"
-
-
-def resolve_article_catalog_cache_dir(settings: Settings) -> Path | None:
-    """条の選択の記録の置き場所(#3507)。明示の設定、無ければローカルの保存先の下。
-
-    どちらも無ければ None(process をまたぐ記録を使わない)。
-    """
-    explicit = str(getattr(settings, "rag_article_catalog_cache_dir", "") or "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
-    root = str(getattr(settings, "local_storage_dir", "") or "").strip()
-    return Path(root).expanduser() / _ARTICLE_CATALOG_CACHE_SUBDIR if root else None
-
-
-def article_catalog_cache_dir(settings: Settings) -> Path | None:
-    """rag_engine に渡す条の選択の記録の置き場所(テストは保存先を分けるため差し替える)。"""
-    return resolve_article_catalog_cache_dir(settings)
 
 
 def _reasoning_effort_override(value: str) -> str:
@@ -634,10 +523,6 @@ def build_engine_settings(
         "EMBEDDING_ENDPOINT": genai_endpoint(settings.oci_genai_embedding_region),
         "OCI_RERANK_ENDPOINT": genai_endpoint(settings.oci_genai_rerank_region),
         "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
-        "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
-        if settings.rag_runtime_rules_confirmation_enabled
-        else "0",
-        "RUNTIME_RULES_ANSWER_ENABLED": "1" if settings.rag_runtime_rules_answer_enabled else "0",
         "RAG_HYBRID_SEARCH_BACKEND": settings.rag_hybrid_search_backend,
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
         "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
@@ -668,53 +553,7 @@ def build_engine_settings(
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
-        "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
-        # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
-        "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
-        # 条の目録から根拠の条を選ぶ段(#2254)。
-        "RAG_ENGINE_ARTICLE_CATALOG": "1" if settings.rag_article_catalog_enabled else "0",
-        "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS": str(settings.rag_article_catalog_max_documents),
-        "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES": str(settings.rag_article_catalog_max_articles),
-        "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS": str(
-            settings.rag_article_catalog_context_records
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_SCOPE_DOCUMENTS": str(
-            settings.rag_article_catalog_scope_documents
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH": (
-            "1" if settings.rag_article_catalog_original_question_search else "0"
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES": str(
-            settings.rag_article_catalog_refine_articles
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES": str(
-            settings.rag_article_catalog_refine_candidates
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP": str(
-            settings.rag_article_catalog_output_token_cap
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": str(
-            settings.rag_article_catalog_call_timeout_seconds
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_REVIEW": (
-            "1" if settings.rag_article_catalog_review_enabled else "0"
-        ),
-        # 条の選択の結果を process をまたいで使う記録(#3507)。置き場所が無ければ process の中だけ。
-        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR": str(article_catalog_cache_dir(settings) or ""),
-        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS": str(
-            settings.rag_article_catalog_cache_ttl_seconds
-        ),
-        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES": str(
-            settings.rag_article_catalog_cache_max_entries
-        ),
-        # 回答の最終の検証の入力の上限。
-        "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
-            settings.rag_answer_validation_max_input_bytes
-        ),
-        # 根拠の無い要求だけの再検索と予算(#1279)。
-        "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
-            "1" if settings.rag_request_coverage_retrieval_enabled else "0"
-        ),
+        # 根拠の無い要求の再検索と追加の検索の予算。
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
         "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
@@ -729,10 +568,6 @@ def build_engine_settings(
         ),
         # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
         "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES": str(settings.rag_extra_retrieval_max_queries),
-        # 章節の抜き出しの LLM(#2800)。
-        "RAG_ENGINE_SECTION_EXTRACTION_ENABLED": "1"
-        if settings.rag_section_extraction_enabled
-        else "0",
         "RAG_ENGINE_GUIDE_STEP_RETRIEVAL": "1"
         if settings.rag_support_guide_enabled and settings.rag_guide_step_retrieval_enabled
         else "0",
@@ -750,42 +585,14 @@ def build_engine_settings(
         "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
-        # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・
-        # 検索文の上限。
-        "RAG_ENGINE_STRATEGY_REASONING_EFFORT": _reasoning_effort_override(
-            settings.rag_strategy_reasoning_effort
-        ),
-        "RAG_ENGINE_JUDGE_REASONING_EFFORT": _reasoning_effort_override(
-            settings.rag_judge_reasoning_effort
-        ),
+        # 回答文の生成の推論の量(#1499。model は空 = モデルの登録値のまま)。
         "RAG_ENGINE_GENERATION_REASONING_EFFORT": _reasoning_effort_override(
             settings.rag_generation_reasoning_effort
         ),
-        "RAG_ENGINE_AUDIT_REASONING_EFFORT": _reasoning_effort_override(
-            settings.rag_audit_reasoning_effort
-        ),
-        "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": (
-            "1" if settings.rag_crag_skip_on_strong_signals else "0"
-        ),
-        # CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
-        "RAG_ENGINE_CRAG_COMPACT_INPUT": "1" if settings.rag_crag_compact_input else "0",
-        # 詰めた入力の候補の ID を短くする(#1864)。
-        "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
-            "1" if settings.rag_crag_short_candidate_ids else "0"
-        ),
-        # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
-        "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS": (
-            "1" if settings.rag_answer_audit_compact_reasons else "0"
-        ),
-        "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
-        # 回答の監査の型(#2795)。
-        "RAG_ENGINE_ANSWER_AUDIT_MODE": settings.rag_answer_audit_mode,
-        "RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE": settings.rag_answer_evidence_refinement_mode,
-        # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
+        # 無音で止まった LLM の呼び出しの打ち切り(#1926・#4736)。送り直しは共通の枠で数える。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
+        "RAG_ENGINE_LLM_MAX_RETRIES": str(settings.rag_llm_max_retries),
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
-        "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO": str(settings.rag_llm_stall_min_rate_ratio),
-        "RAG_ENGINE_LLM_STALL_RESENDS": str(settings.rag_llm_stall_resends),
         "RAG_ENGINE_LLM_RUNAWAY_DETECTION": "1"
         if settings.rag_llm_runaway_detection_enabled
         else "0",
@@ -793,14 +600,8 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
             settings.rag_section_expansion_followup_reserve_percent
         ),
-        "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
-            "1" if settings.rag_section_skip_regrade_at_scope else "0"
-        ),
-        "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": str(settings.rag_crag_skip_min_rerank_score),
-        "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
-    # 段ごとのモデル(質問の対象の役割の判定 #4351・推導の監査の判定 #4565 と理由 #4564)。
-    environ.update(step_model_environ(settings))
+    # 生成の出力が形式の確認を通らなかったときのモデル(モデルのカスケード。#4581)。
     environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -847,14 +648,12 @@ def guide_known_conditions(guide: Mapping[str, object] | None) -> tuple[tuple[st
 
 @dataclass(frozen=True)
 class AnswerScope:
-    """利用者が確認の質問で選んだ条件と対象範囲(#717)。"""
+    """利用者が確認の質問で選んだ条件(業務ガイドの条件の確認と、履歴で確認した回答)。"""
 
     # 回答のプロンプトの前置きに入れる説明(質問・選んだ選択肢・前提・その他・対象範囲)。
     context: str
     # 補助の検索文に足す語。
     search_terms: tuple[str, ...] = ()
-    # 回答の末尾に出す対象の範囲(例: 「出張旅費規程」の「第6条」(p.2))。
-    label: str = ""
     # 実際に選んだ答え・自由入力だけ。設定された指示や仮定を利用者の事実にしない。
     confirmed_premises: tuple[tuple[str, str], ...] = ()
     confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
@@ -916,7 +715,6 @@ class AnswerEngine:
         genai: OciGenAiClient,
         runtime_knowledge_payload: Mapping[str, object] | None = None,
         answer_model_id: str | None = None,
-        auto_field_conditions: Sequence[ExtractionFieldCondition] = (),
         approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
@@ -926,24 +724,16 @@ class AnswerEngine:
         degraded: DegradedSteps | None = None,
         complete_evidence: bool = True,
     ) -> None:
-        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し・CRAG）までするか
+        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し）までするか
         # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が
         # MCP でする）。
         # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
         self._complete_evidence = complete_evidence
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
-        # 質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）と根拠の
+        # 根拠の
         # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
         # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
-        if self._caller_queries is not None:
-            settings = settings.model_copy(
-                update={
-                    "rag_query_strategy": CALLER_QUERY_STRATEGY,
-                    "rag_article_catalog_enabled": False,
-                    "rag_screen_linking_enabled": False,
-                }
-            )
         if not settings.rag_support_guide_enabled:
             settings = settings.model_copy(update={"rag_support_guide": {}})
         self._settings = settings
@@ -965,7 +755,6 @@ class AnswerEngine:
             settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
         )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
-        self._auto_field_conditions = list(auto_field_conditions)
         # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
         # だけから回答する(#684 / #702)。
         self._approved_faq = approved_faq
@@ -1038,15 +827,9 @@ class AnswerEngine:
         }
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
-                "label": self._scope.label,
                 "context": self._scope.context,
                 "page_ranges": request.filters.get("page_ranges", ""),
             }
-            if self._scope.label and outcome.answer.strip():
-                outcome = replace(
-                    outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
-                )
-        await self._validate_outcome(request, outcome, step_callback=step_callback)
         outcome.diagnostics["models"] = self._models_used(
             attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),
@@ -1060,17 +843,6 @@ class AnswerEngine:
                 "added_count": len(state.entity_expansions),
                 "max_chunks": self._settings.rag_entity_expansion_max_chunks,
                 "chunks": list(state.entity_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
-            }
-        if state.article_selections:
-            outcome.diagnostics["article_catalog"] = {
-                "documents": [
-                    catalog.file_name
-                    for catalog in state.article_catalogs.values()
-                    if catalog is not None
-                ],
-                "max_documents": self._settings.rag_article_catalog_max_documents,
-                "context_records": self._settings.rag_article_catalog_context_records,
-                "articles": list(state.article_selections.values()),
             }
         if self._settings.rag_graph_expansion_enabled:
             outcome.diagnostics["graph_expansion"] = _graph_expansion_diagnostics(
@@ -1097,10 +869,6 @@ class AnswerEngine:
                 "unresolved_count": sum(1 for hit in hits if not hit["source_chunk_ids"]),
                 "chunks": hits[:_REFERENCE_DIAGNOSTICS_LIMIT],
             }
-        if state.auto_field_conditions:
-            outcome.diagnostics["auto_field_filter"] = {
-                "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
-            }
         if degraded := state.degraded_steps():
             # 失敗して空のまま続けた補助の処理(#3259)。根拠 0 件の診断にも入れる。
             outcome.diagnostics["degraded_steps"] = degraded
@@ -1109,170 +877,6 @@ class AnswerEngine:
         ):
             outcome.diagnostics["zero_evidence"] = zero_evidence
         return outcome
-
-    async def _validate_outcome(
-        self,
-        request: SearchRequest,
-        outcome: AnswerOutcome,
-        *,
-        step_callback: StepCallback | None = None,
-    ) -> None:
-        """LLM 監査が有効な回答の最終の本文を、MCP と共通の検証で確かめる。"""
-        if self._settings.rag_answer_audit_mode == "none" or not outcome.answer.strip():
-            outcome.diagnostics["answer_validation"] = {
-                "status": "not_run",
-                "valid": False,
-                "reason": "audit_disabled"
-                if self._settings.rag_answer_audit_mode == "none"
-                else "empty_answer",
-            }
-            if semantic_audit_is_diagnostic_only(outcome.diagnostics):
-                outcome.diagnostics["answer_validation"] = _diagnostic_validation(
-                    outcome.diagnostics["answer_validation"]
-                )
-            return
-        # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
-        from app.rag.answer_validation import (
-            MAX_PREMISES,
-            AnswerValidation,
-            EvidenceRef,
-            validate_answer,
-        )
-
-        name = ANSWER_VALIDATION_STEP
-        started = time.monotonic()
-        if step_callback is not None:
-            await step_callback(name, "started", 0.0, {})
-        state = "success"
-        llm_usage: dict[str, Any] = {}
-        diagnostic_only = semantic_audit_is_diagnostic_only(outcome.diagnostics)
-        # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
-        with _answer_step_span(name) as span:
-            references = [
-                EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations
-            ]
-            span.set_call_input(
-                lambda: {
-                    "質問": request.original_question or request.query,
-                    "回答": outcome.answer,
-                    "根拠 ID": [asdict(item) for item in references],
-                    "監査モード": self._settings.rag_answer_audit_mode,
-                },
-                restricted=True,
-            )
-            recorded_result: AnswerValidation | None = None
-            recorded_error: str | None = None
-            validator_called = False
-            try:
-                premises = _confirmed_validation_premises(self._settings, self._scope)
-                span.set_call_input(
-                    lambda: {
-                        "質問": request.original_question or request.query,
-                        "回答": outcome.answer,
-                        "根拠 ID": [asdict(item) for item in references],
-                        "監査モード": self._settings.rag_answer_audit_mode,
-                        "確認前提": premises,
-                        "確認前提の上限": MAX_PREMISES,
-                    },
-                    restricted=True,
-                )
-                if len(premises) > MAX_PREMISES:
-                    # 一部の確定条件を黙って省いて「確認済み」にしない。
-                    result = AnswerValidation(status="input_too_large", valid=False)
-                else:
-                    validator_called = True
-                    result = await validate_answer(
-                        request.original_question or request.query,
-                        outcome.answer,
-                        references,
-                        self._settings,
-                        oracle=self._oracle,
-                        premises=premises,
-                    )
-                recorded_result = result
-                llm_usage = dict(result.llm_usage)
-                validation: dict[str, Any] = {
-                    "status": result.status,
-                    "valid": result.valid,
-                    "reuse_context": result.reuse_context,
-                    "counts": dict(result.counts),
-                    "claim_checks": list(result.claim_checks),
-                    # 原質問・確認の答えとの両立の比較の、段落ごとの採否（#3800。ID と code だけ）。
-                    "premise_consistency_checks": list(result.premise_consistency_checks),
-                    "missing_evidence_count": len(result.missing_evidence),
-                    "stale_evidence_count": len(result.stale_evidence),
-                    "confirmed_premises_count": len(premises),
-                    "unassessed_premises_count": len(premises)
-                    if len(premises) > MAX_PREMISES
-                    else 0,
-                }
-            except Exception as exc:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
-                if isinstance(exc, (DeadlineExceeded, PermissionError)) or (
-                    isinstance(exc, HTTPException) and exc.status_code in {401, 403}
-                ):
-                    raise
-                logger.warning("answer final validation failed", exc_info=True)
-                recorded_error = type(exc).__name__
-                validation = {
-                    "status": "timed_out"
-                    if isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
-                    else "error",
-                    "valid": False,
-                }
-                state = "error"
-                span.set_status("failed")
-            if diagnostic_only:
-                validation = _diagnostic_validation(validation)
-            span.set_call_output(
-                lambda: {
-                    "照合関数を呼び出した": validator_called,
-                    "返却された検証結果": asdict(recorded_result)
-                    if recorded_result is not None
-                    else None,
-                    "適用した検証結果": validation,
-                    "例外の型": recorded_error,
-                }
-            )
-            span.set_display(
-                params=answer_step_params({"llm_calls": int(llm_usage.get("calls") or 0)}),
-                details=answer_step_details(_validation_details(validation)),
-            )
-        if diagnostic_only:
-            outcome.diagnostics["needs_human_review"] = True
-        outcome.diagnostics["answer_validation"] = validation
-        deterministic_failure = bool(
-            validation.get("missing_evidence_count") or validation.get("stale_evidence_count")
-        )
-        if deterministic_failure or (not diagnostic_only and not validation["valid"]):
-            outcome.diagnostics["needs_human_review"] = True
-            outcome.diagnostics["confidence"] = "low"
-            envelope = outcome.diagnostics.get("envelope")
-            if isinstance(envelope, dict) and envelope.get("outcome") == "answered":
-                envelope["outcome"] = "conditional"
-            if outcome.diagnostics.get("outcome") == "answered":
-                outcome.diagnostics["outcome"] = "conditional"
-            reason = (
-                "資料との照合で回答の裏付けを確認できていません。内容と根拠を確認してください。"
-            )
-            previous = str(outcome.diagnostics.get("insufficient_reason") or "")
-            outcome.diagnostics["insufficient_reason"] = "\n".join(filter(None, (previous, reason)))
-        elapsed = round(time.monotonic() - started, 3)
-        details = _validation_details(validation)
-        metrics = {
-            "llm_calls": int(llm_usage.get("calls") or 0),
-            "llm_usage": llm_usage,
-            "details": details,
-        }
-        outcome.diagnostics.setdefault("execution_steps", []).append(
-            {
-                "name": name,
-                "status": "complete" if state == "success" else "error",
-                "elapsed_seconds": elapsed,
-                **metrics,
-            }
-        )
-        if step_callback is not None:
-            await step_callback(name, state, elapsed, metrics)
 
     async def _answer_from_approved_faq(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -1331,7 +935,7 @@ class AnswerEngine:
         # 回答エンジンの前の段(会話の履歴での書き換え・抽出項目の条件)の縮退(#3286)。
         degraded = self._degraded.steps() if self._degraded is not None else []
         return AnswerOutcome(
-            answer=f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）",
+            answer=approved_faq_answer_text(answer, faq_question),
             citations=[],
             diagnostics={
                 "answer_source": "approved_faq",
@@ -1356,8 +960,8 @@ class AnswerEngine:
     ) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
 
-        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成・
-        監査のすべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
+        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成の
+        すべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
         (画像を読めないモデル・画像の無い根拠は 0)。
         rerank は実際に並べたときだけモデル名を出す: 無効・未設定(モデルか compartment が無い。
         rag_engine はこのとき rerank を実行しない)なら空。rerank が失敗して取得の順で続けたとき
@@ -1376,11 +980,6 @@ class AnswerEngine:
         answer_model = self._answer_model_id or enterprise_ai_default_model_id(settings)
         return {
             "llm": model(answer_model),
-            # 段ごとのモデル(#4351・#4564・#4565。空の設定は回答のモデル)。
-            **{
-                step.key: model(step_model_id(settings, step) or answer_model)
-                for step in STEP_MODEL_SETTINGS
-            },
             "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
@@ -1395,7 +994,7 @@ class AnswerEngine:
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
         """回答を作らずに検索だけを行い、候補の chunk を順位順に返す(#593)。
 
-        回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・質問の拡張・rerank・CRAG・回答の
+        回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・rerank・回答の
         生成は行わず、LLM を呼ばない(embedding と Oracle の検索だけ)。KB の検索テストとレシピの
         検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
         """
@@ -1432,7 +1031,6 @@ class AnswerEngine:
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
-        from rag_engine.generation.question_subjects import extract_question_subjects
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -1453,15 +1051,8 @@ class AnswerEngine:
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
-            # 説明・要約に書いた質問の対象の名前を原文に照らす検査の、対象と役割の抽出(#4351)。
-            question_subjects=extract_question_subjects,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
-            ),
-            # 画面目録の連携(#554)。rag_engine は設定が有効なときだけ呼ぶ。
-            screen_catalog=lambda **kwargs: run_async(lambda: self._screen_catalog(request, state)),
-            screen_chunks=lambda *, links, existing, **kwargs: run_async(
-                lambda: self._screen_chunks(request, state, links, existing)
             ),
             # 章節の拡張(#1436)。章節と chunk の対応(#1438)を読む。無効なら章節で広げない。
             section_outline=(
@@ -1488,36 +1079,6 @@ class AnswerEngine:
             current_section_paths=lambda chunk_ids: run_async(
                 lambda: self._current_section_paths(state, chunk_ids)
             ),
-            # 質問拡張の LLM と並行に、元の質問の検索を先に読む(#1499。結果は変えない)。
-            prefetch_search=lambda **kwargs: run_async(
-                lambda: self._prefetch_query_hits(request, state, **kwargs)
-            ),
-            # 条の目録から根拠の条を選ぶ段(#2254)。章節と chunk の対応(#1438)を読む。
-            article_catalogs=lambda *, document_ids, limit, **kwargs: run_async(
-                lambda: self._article_catalogs(
-                    state, document_ids, limit, filters=_screen_filters(request, state)
-                )
-            ),
-            article_chunks=lambda *, articles, **kwargs: run_async(
-                lambda: self._article_chunks(request, state, articles)
-            ),
-            article_documents=lambda **kwargs: run_async(
-                lambda: self._article_documents(request, state)
-            ),
-            # 条の選択の 2 段目で見せる、同じ章の条と別の章の条（選んだ条の名指しを探す）の
-            # 本文の書き出し。
-            article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
-                lambda: self._article_leads(
-                    document_id,
-                    chunk_set_id,
-                    sections,
-                    state=state,
-                    filters=_screen_filters(request, state),
-                )
-            ),
-            # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択に使う(回答の要求の
-            # 単位には answer_question_result の request_question で使う。#2665)。
-            article_question=lambda: request.original_question,
             # 業務ガイドの手順の充足を意味の近さで決める embedding(#2649)。検索と同じ Cohere Embed。
             embedder=_LoopEmbedder(self._genai, loop),
             # rag_engine の中の補助の処理(画面の選択など)の失敗を、同じ記録に残す(#3259)。
@@ -1546,8 +1107,6 @@ class AnswerEngine:
                 engine_settings,
                 chunk_top_k=max(1, int(request.top_k)),
                 chunk_neighbor_count=self._settings.rag_neighbor_child_count,
-                query_strategy=self._settings.rag_query_strategy,
-                answer_flow=self._settings.rag_answer_flow,
                 rerank_enabled=self._settings.rag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
                 # RAG 検索の画面は回答を作らない(#649)。根拠はチャットと同じ流れで集め、回答の生成の
@@ -1768,7 +1327,6 @@ class AnswerEngine:
                 {
                     "queries": len(queries),
                     "candidates": len(fused),
-                    "automatic_filters": state.automatic_filters,
                 }
             )
         citation_ids: list[str] = []
@@ -1879,8 +1437,12 @@ class AnswerEngine:
                         [
                             anchor
                             for anchor in anchors
-                            if anchor.metadata.get("chunk_strategy") == "small_to_big"
-                            or self._settings.rag_neighbor_child_count > 0
+                            # 文書全体の要約は文書の中の位置を持たないので、前後を読まない(#4793)。
+                            if not is_derived_chunk(anchor)
+                            and (
+                                anchor.metadata.get("chunk_strategy") == "small_to_big"
+                                or self._settings.rag_neighbor_child_count > 0
+                            )
                         ],
                         max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
                         neighbor_child_count=self._settings.rag_neighbor_child_count,
@@ -2259,8 +1821,12 @@ class AnswerEngine:
                     read_anchors = [
                         item
                         for item in pending
-                        if item.metadata.get("chunk_strategy") == "small_to_big"
-                        or self._settings.rag_neighbor_child_count > 0
+                        # 文書全体の要約は文書の中の位置を持たないので、前後を読まない(#4793)。
+                        if not is_derived_chunk(item)
+                        and (
+                            item.metadata.get("chunk_strategy") == "small_to_big"
+                            or self._settings.rag_neighbor_child_count > 0
+                        )
                     ]
                     if observation is not None:
                         observation.request(
@@ -2399,7 +1965,7 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """検索の候補の派生の chunk を、その chunk が指す原文の chunk に置き換える(#2641)。
 
-        派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)は検索の手がかりで、引用できる原文
+        派生の chunk(章節の要約・項目抽出の値)は検索の手がかりで、引用できる原文
         ではない。原文の chunk を派生の chunk の位置(統合の点)に置き、派生の chunk は根拠に
         渡さない。原文が読めなければ何も置かない(根拠不足として扱い、要約の文を確かめた記載に
         しない)。候補にすでにある原文は、上の位置を保つ。
@@ -2442,7 +2008,8 @@ class AnswerEngine:
         """``_original_anchors`` の本体(派生の chunk を原文の chunk に置き換える)。"""
         resolved: dict[str, RetrievedChunk] = {}
         for chunk in anchors:
-            if not is_derived_chunk(chunk):
+            # 文書全体の要約は、置き換える原文を決められないので、要約のまま根拠に渡す(#4793)。
+            if not is_derived_chunk(chunk) or keeps_own_evidence(chunk):
                 resolved.setdefault(chunk.chunk_id, chunk)
                 continue
             key = (chunk.chunk_id, tuple(sorted(filters.items())))
@@ -2471,56 +2038,13 @@ class AnswerEngine:
         return list(resolved.values())
 
     async def _ensure_search_filters(self, request: SearchRequest, state: _SearchState) -> None:
-        """1 回の回答の検索条件(質問の文書名・ページと自動の条件)を、最初の検索の前に決める。
+        """1 回の回答の検索条件(利用者が指定した条件)を、最初の検索の前に決める。
 
         決めた条件は ``state.filters`` に入れる(先読みと ``_search`` で同じ条件を使う。#1499)。
         """
         if state.filters is not None:
             return
-        filters = dict(request.filters)
-        state.filters, state.auto_field_conditions = merge_field_conditions(
-            filters, self._auto_field_conditions
-        )
-
-    async def _prefetch_query_hits(
-        self,
-        request: SearchRequest,
-        state: _SearchState,
-        *,
-        query: str,
-        candidate_limit: int = 24,
-        **_: object,
-    ) -> None:
-        """元の質問の検索を、質問拡張の LLM と並行に先に読む(#1499)。
-
-        検索文ごとの検索の結果(``state.search_hits``)に入れるだけで、融合・参照先・実体の拡張・条件の
-        緩和はしない。続く ``_search`` が同じ検索文・方式・条件・件数の結果を読むので、回答の検索の
-        結果は先読みしないときと同じ(条件の緩和は ``_search`` が全検索文の結果で決める)。
-        """
-        text = query.strip()
-        if not text:
-            return
-        await self._ensure_search_filters(request, state)
-        assert state.filters is not None
-        embeddings = await self._query_embeddings(state, [text])
-        if embeddings == []:
-            return
-        searches: list[tuple[str, list[float], SearchMode]]
-        if embeddings is None:
-            searches = [(text, [], SearchMode.KEYWORD)]
-        elif self._settings.rag_hybrid_search_backend == "oracle_native":
-            searches = [(text, embeddings[0], SearchMode.HYBRID)]
-        else:
-            searches = [
-                (text, embeddings[0], SearchMode.VECTOR),
-                (text, embeddings[0], SearchMode.KEYWORD),
-            ]
-        await self._query_hits(
-            state,
-            searches,
-            candidate_limit=self._read_depth(candidate_limit),
-            filters=dict(state.filters),
-        )
+        state.filters = dict(request.filters)
 
     async def _query_embeddings(
         self, state: _SearchState, texts: list[str]
@@ -2552,7 +2076,7 @@ class AnswerEngine:
 
         まだ読んでいない検索文は 1 回の SQL でまとめて読む(``OracleClient.search_many``。結果は
         検索文ごとの ``hybrid_search`` と同じ。#1498)。同じ回答の中で同じ検索文・方式・条件・件数を
-        読んだことがあれば、その結果を使う(CRAG の 2 回目と要求ごとの再検索)。
+        読んだことがあれば、その結果を使う(要求ごとの再検索)。
         """
         filter_key = tuple(sorted(filters.items()))
         keys = [(query, mode.value, filter_key, candidate_limit) for query, _, mode in searches]
@@ -3056,7 +2580,7 @@ class AnswerEngine:
         取込は参照の表記のある chunk に ``reference_targets_json`` を残す(参照が自分の節だけでも
         空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
         あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
-        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。RAPTOR の要約 chunk は辿らない。
+        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。
         印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata
@@ -3089,7 +2613,7 @@ class AnswerEngine:
                 filters = {**scope, "document_id": anchor.document_id}
                 if chunk_set_id:
                     filters["chunk_set_id"] = chunk_set_id
-                sections = await self._oracle.retrieval_screen_sections(filters)
+                sections = await self._oracle.retrieval_section_paths(filters)
                 state.reference_section_indexes[key] = SectionIndex(
                     path for _name, path, _count in sections
                 )
@@ -3171,9 +2695,7 @@ class AnswerEngine:
         document_id = await self._referenced_document_id(scope, state, anchor, target)
         if document_id is None:
             return []
-        sections = await self._oracle.retrieval_screen_sections(
-            {**scope, "document_id": document_id}
-        )
+        sections = await self._oracle.retrieval_section_paths({**scope, "document_id": document_id})
         section_path = SectionIndex(path for _name, path, _count in sections).resolve(target.spec)
         if section_path is None:
             return []
@@ -3328,96 +2850,6 @@ class AnswerEngine:
         order.extend(index for index in range(len(rows)) if index not in order)
         return [rows[index] for index in order]
 
-    async def _screen_catalog(
-        self, request: SearchRequest, state: _SearchState
-    ) -> dict[str, list[str]]:
-        """検索範囲の全文書の見出しから画面目録を作る(範囲と索引の状態ごとに cache。#554)。
-
-        1 回の回答では最初の 1 回だけ作る。読めないときは空(rag_engine は LLM を呼ばず
-        画面を足さない)。
-        """
-        if state.screen_catalog is None:
-            state.screen_catalog = await self._load_screen_catalog(request, state)
-        return state.screen_catalog
-
-    async def _load_screen_catalog(
-        self, request: SearchRequest, state: _SearchState
-    ) -> dict[str, list[str]]:
-        from rag_engine.retrieval.screen_catalog import catalog_from_section_paths
-
-        filters = _screen_filters(request, state)
-        try:
-            index_state = await self._oracle.retrieval_scope_state(filters)
-            key = (json.dumps(filters, ensure_ascii=False, sort_keys=True), index_state)
-            cached = _SCREEN_CATALOG_CACHE.get(key)
-            if cached is not None:
-                return cached
-            sections = await self._oracle.retrieval_screen_sections(filters)
-        except Exception as exc:  # noqa: BLE001 - 画面目録は補助。画面を足さずに回答を続ける。
-            logger.warning("screen catalog load failed", exc_info=True)
-            state.record_degraded("screen_catalog", exc)
-            return {}
-        catalog = catalog_from_section_paths(
-            (file_name, _section_headings(section_path), count)
-            for file_name, section_path, count in sections
-        )
-        if len(_SCREEN_CATALOG_CACHE) >= _SCREEN_CATALOG_CACHE_SIZE:
-            _SCREEN_CATALOG_CACHE.clear()
-        _SCREEN_CATALOG_CACHE[key] = catalog
-        return catalog
-
-    async def _screen_chunks(
-        self,
-        request: SearchRequest,
-        state: _SearchState,
-        links: Sequence[tuple[str, str]],
-        existing: set[str],
-    ) -> list[Any]:
-        """選ばれた画面の child(画面ごとに上限まで)と、その親を検索範囲から読む(#554)。
-
-        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。1 ページ目の
-        本文(#557)・根拠画像は検索の候補と同じく付ける。読めない画面は足さない(回答は続ける)。
-        """
-        from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
-
-        filters = _screen_filters(request, state)
-        added: dict[str, RetrievedChunk] = {}
-        for file_name, heading in links:
-            try:
-                rows = await self._oracle.retrieval_screen_chunks(
-                    filters,
-                    file_name=file_name,
-                    heading=heading,
-                    limit=MAX_CHILDREN_PER_SCREEN * 4 + len(existing),
-                )
-            except Exception as exc:  # noqa: BLE001 - 画面の根拠は補助。この画面を足さずに続ける。
-                logger.warning("screen chunks load failed", exc_info=True)
-                state.record_degraded("screen_chunks", exc)
-                continue
-            matched = [
-                chunk
-                for chunk in original_chunks(rows)
-                if chunk.chunk_id not in existing
-                and chunk.chunk_id not in added
-                and heading in _chunk_headings(chunk)
-            ]
-            for chunk in matched[:MAX_CHILDREN_PER_SCREEN]:
-                added[chunk.chunk_id] = state.chunks.setdefault(chunk.chunk_id, chunk)
-        if not added:
-            return []
-        chunks = list(added.values())
-        if self._attach_images:
-            await self._materialize_images(chunks, state)
-            chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
-        children = [
-            _stored_child(
-                chunk,
-                rrf_score=0.0,
-            )
-            for chunk in chunks
-        ]
-        return [*children, *_stored_parents(children, state)]
-
     async def _section_outline(self, state: _SearchState, chunk_id: str) -> Any:
         """当たった chunk の文書の章節の一覧と所有の章節(#1436)。対応が無い・読めなければ None。
 
@@ -3551,232 +2983,13 @@ class AnswerEngine:
             complete=text.complete and len(text.chunks) >= text.section.chunk_count,
         )
 
-    async def _article_catalogs(
-        self,
-        state: _SearchState,
-        document_ids: Sequence[str],
-        limit: int,
-        *,
-        filters: Mapping[str, str] | None = None,
-    ) -> list[Any]:
-        """候補の文書のうち、条で構成された文書の章節の目録を順位の順に limit 件まで返す(#2254)。
-
-        条で構成された文書は、候補の chunk が XML ツリー JSON の引用ラベルを持つ文書。目録は
-        ``rag_outline`` の compact と同じ行(``compact_section_lines``)。読めない文書は飛ばす
-        (回答は続ける)。
-        """
-        from rag_engine.retrieval.article_catalog import ArticleCatalog
-
-        from app.clients.section_map_store import SectionMapStore
-        from app.rag.section_catalog import compact_section_lines
-        from app.rag.section_chunk_map import ROOT_SECTION_ID
-        from app.rag.section_map_service import section_outline
-
-        article_documents = {
-            chunk.document_id
-            for chunk in state.chunks.values()
-            if _xml_tree_location_labels(chunk.metadata) is not None
-        } | {document_id for document_id, _ in state.article_documents or ()}
-        catalogs: list[Any] = []
-        for document_id in document_ids:
-            if len(catalogs) >= limit:
-                break
-            if document_id not in article_documents:
-                continue
-            cache_key = (document_id, json.dumps(filters, sort_keys=True, ensure_ascii=False))
-            if cache_key not in state.article_catalogs:
-                catalog = None
-                try:
-                    outline = await section_outline(document_id, oracle=self._oracle)
-                    if outline is not None:
-                        nodes = [
-                            node for node in outline.sections if node.section_id != ROOT_SECTION_ID
-                        ]
-                        firsts = None
-                        if filters is not None:
-                            firsts = await SectionMapStore(self._oracle).section_first_chunks(
-                                document_id,
-                                chunk_set_id=outline.chunk_set.chunk_set_id,
-                                section_ids=[node.section_id for node in nodes],
-                                filters=filters,
-                            )
-                            nodes = [
-                                node
-                                for node in nodes
-                                if node.section_id in firsts
-                                and not is_derived_chunk(firsts[node.section_id])
-                            ]
-                        lines, _omitted = await compact_section_lines(
-                            self._oracle,
-                            outline,
-                            nodes,
-                            _ARTICLE_CATALOG_LEAD_CHARS,
-                            max_chars=_ARTICLE_CATALOG_MAX_CHARS,
-                            **({"first_chunks": firsts} if firsts is not None else {}),
-                        )
-                        if lines:
-                            catalog = ArticleCatalog(
-                                document_id=document_id,
-                                file_name=outline.chunk_set.file_name or "",
-                                chunk_set_id=outline.chunk_set.chunk_set_id,
-                                lines=tuple(lines),
-                                section_ids=tuple(node.section_id for node in nodes[: len(lines)]),
-                            )
-                except Exception as exc:  # noqa: BLE001 - 条の選択は補助。この文書を飛ばして続ける。
-                    logger.warning("article catalog load failed", exc_info=True)
-                    state.record_degraded("article_catalog", exc)
-                state.article_catalogs[cache_key] = catalog
-            if state.article_catalogs[cache_key] is not None:
-                catalogs.append(state.article_catalogs[cache_key])
-        return catalogs
-
-    async def _article_leads(
-        self,
-        document_id: str,
-        chunk_set_id: str,
-        sections: Mapping[str, str],
-        *,
-        state: _SearchState | None = None,
-        filters: Mapping[str, str] | None = None,
-    ) -> dict[str, str]:
-        """章節の本文の書き出し(条の選択の 2 段目)。
-
-        章節の最初の chunk から、名前と見出しの括弧を除く。
-        読めないときは空(条の名前だけで選ばせる)。
-        """
-        from app.clients.section_map_store import SectionMapStore
-        from app.rag.section_catalog import section_lead
-
-        if not sections:
-            return {}
-        try:
-            chunks = await SectionMapStore(self._oracle).section_first_chunks(
-                document_id,
-                chunk_set_id=chunk_set_id,
-                section_ids=list(sections),
-                **({"filters": filters} if filters is not None else {}),
-            )
-        except Exception as exc:  # noqa: BLE001 - 2 段目は補助。書き出し無しで続ける。
-            logger.warning("article lead load failed", exc_info=True)
-            if state is not None:
-                state.record_degraded("article_lead", exc)
-            return {}
-        leads: dict[str, str] = {}
-        for section_id, chunk in chunks.items():
-            text = section_lead(
-                sections.get(section_id, ""), chunk.text, _ARTICLE_REFINE_LEAD_CHARS
-            )
-            if text:
-                leads[section_id] = text
-        return leads
-
-    async def _article_documents(
-        self, request: SearchRequest, state: _SearchState
-    ) -> list[tuple[str, str]]:
-        """検索の範囲の条で構成された文書の (document_id, 文書名)(#2254)。
-
-        範囲と索引の状態ごとに process の中で cache する(画面目録と同じ)。読めないときは空
-        (候補の文書だけを読む)。
-        """
-        if state.article_documents is not None:
-            return state.article_documents
-        filters = _screen_filters(request, state)
-        try:
-            index_state = await self._oracle.retrieval_scope_state(filters)
-            key = (json.dumps(filters, ensure_ascii=False, sort_keys=True), index_state)
-            documents = _ARTICLE_DOCUMENTS_CACHE.get(key)
-            if documents is None:
-                documents = await self._oracle.retrieval_article_documents(filters)
-                if len(_ARTICLE_DOCUMENTS_CACHE) >= _SCREEN_CATALOG_CACHE_SIZE:
-                    _ARTICLE_DOCUMENTS_CACHE.clear()
-                _ARTICLE_DOCUMENTS_CACHE[key] = documents
-        except Exception as exc:  # noqa: BLE001 - 一覧は補助。候補の文書だけで続ける。
-            logger.warning("article documents load failed", exc_info=True)
-            state.record_degraded("article_documents", exc)
-            documents = []
-        state.article_documents = list(documents)
-        return state.article_documents
-
-    async def _article_chunks(
-        self, request: SearchRequest, state: _SearchState, articles: Sequence[Any]
-    ) -> list[Any]:
-        """目録で選んだ条の章節の最初の child(印を付ける)と、その親を読む(#2254)。
-
-        読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、1 ページ目の本文・根拠画像は
-        検索の候補と同じく付ける。読めない条は足さない(回答は続ける)。
-        """
-        from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
-
-        from app.clients.section_map_store import SectionMapStore
-
-        filters = _screen_filters(request, state)
-        bounded_pages = bool(
-            filters.get(PAGE_RANGES_FILTER_KEY)
-            or filters.get("page_number_min")
-            or filters.get("page_number_max")
-        )
-        groups: dict[tuple[str, str], list[Any]] = {}
-        for article in articles:
-            groups.setdefault((article.document_id, article.chunk_set_id), []).append(article)
-        found: list[tuple[RetrievedChunk, Any]] = []
-        for (document_id, chunk_set_id), items in groups.items():
-            try:
-                firsts = await SectionMapStore(self._oracle).section_first_chunks(
-                    document_id,
-                    chunk_set_id=chunk_set_id,
-                    section_ids=[item.section_id for item in items],
-                    filters=filters,
-                )
-            except Exception as exc:  # noqa: BLE001 - 条の根拠は補助。この文書の条を足さずに続ける。
-                logger.warning("article chunks load failed", exc_info=True)
-                state.record_degraded("article_chunks", exc)
-                continue
-            found.extend(
-                (firsts[item.section_id], item)
-                for item in items
-                if item.section_id in firsts and not is_derived_chunk(firsts[item.section_id])
-            )
-            for item in items:
-                chunk = firsts.get(item.section_id)
-                key = chunk.chunk_id if chunk is not None else f"{document_id}:{item.section_id}"
-                state.article_selections.setdefault(
-                    key,
-                    {
-                        "order": item.order,
-                        "document_id": document_id,
-                        "document": item.file_name,
-                        "title": item.title,
-                        "chunk_id": chunk.chunk_id if chunk is not None else None,
-                    },
-                )
-        if not found:
-            return []
-        chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
-        if self._attach_images:
-            await self._materialize_images(chunks, state)
-            chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
-        children = []
-        for chunk, (_, article) in zip(chunks, found, strict=True):
-            child = _stored_child(
-                chunk,
-                rrf_score=0.0,
-            )
-            child.metadata[ARTICLE_CATALOG_KEY] = {
-                "order": article.order,
-                "document": article.file_name,
-                "title": article.title,
-            }
-            children.append(child)
-        # 頁指定のある追加根拠から、範囲を確かめられない親本文や先頭頁を復元しない。
-        return children if bounded_pages else [*children, *_stored_parents(children, state)]
-
     async def _selected_document_backgrounds(
         self, request: SearchRequest, state: _SearchState, spans: Sequence[Mapping[str, Any]]
     ) -> list[Mapping[str, Any]]:
         from app.rag.document_background import selected_document_backgrounds
 
         rows = await selected_document_backgrounds(
-            self._oracle, state, _screen_filters(request, state), spans
+            self._oracle, state, _effective_search_filters(request, state), spans
         )
         return [
             {
@@ -4326,7 +3539,7 @@ def _with_effective_as_of(request: SearchRequest) -> SearchRequest:
     """検索の基準日(as_of)を決めた要求(#2602)。
 
     基準日の無い要求は今日にする(``OracleClient`` の有効期間の判定の既定と同じ日)。主検索・先読み・
-    交差参照・実体・関係情報の拡張・画面目録・章節の読み取りはこの要求の条件を使うので、回答の途中で
+    交差参照・実体・関係情報の拡張・章節の読み取りはこの要求の条件を使うので、回答の途中で
     日付が変わっても、すべての検索が同じ日で有効期間を判定する。明示した基準日は変えない。
     """
     if (request.filters.get(AS_OF_FILTER_KEY) or "").strip():
@@ -4336,28 +3549,13 @@ def _with_effective_as_of(request: SearchRequest) -> SearchRequest:
     )
 
 
-def _screen_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:
-    """画面目録と画面の chunk を読む条件。検索と同じ実際の条件(#2056)。
+def _effective_search_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:
+    """章節と文書背景を読む条件。検索と同じ実際の条件。
 
     質問から読み取った項目の条件(#652)と質問の文書名・ページ(#546)を足した ``state.filters``
     (条件で 0 件だったときは外した条件)。最初の検索の前で決まっていなければ要求の ``filters``。
     """
     return dict(state.filters if state.filters is not None else request.filters)
-
-
-def _section_headings(section_path: str) -> list[str]:
-    return [part.strip() for part in section_path.split(_SECTION_PATH_SEPARATOR) if part.strip()]
-
-
-def _chunk_headings(chunk: RetrievedChunk) -> list[str]:
-    """chunk の見出しの列。
-
-    rag_engine の metadata の section_path。無ければ保存した文字列を分ける。
-    """
-    path = _engine_metadata(chunk).get("section_path")
-    if isinstance(path, list):
-        return [str(part).strip() for part in path]
-    return _section_headings(str(chunk.metadata.get("section_path") or ""))
 
 
 def _finite_float(value: object) -> float | None:
@@ -4632,6 +3830,15 @@ def _stored_child(
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
     for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
         metadata[key] = chunk.metadata.get(key, "")
+    if keeps_own_evidence(chunk):
+        # 文書全体の要約(#4793)。rag_engine は出典情報で、原文の抜粋ではなく要約であることを示す。
+        metadata["content_kind"] = chunk.metadata.get("content_kind")
+        # 要約はページを持たない。回答の本文の出典を「p.1」にせず、要約と分かる表示にする。
+        from rag_parser_core.language import current_pack
+
+        metadata["location_label"] = current_pack().text(
+            "answer_labels", "document_summary_location"
+        )
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
         metadata["sheet_location"] = location
@@ -4639,7 +3846,7 @@ def _stored_child(
         # XML ツリー JSON の段落の根拠(#2024)。回答の本文の出典を引用ラベルにする(ページの
         # 無い原本なので「p.1」にしない)。親(単位)の場所は単位のラベル。
         metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
-        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にして説明する。
         metadata[ARTICLE_UNIT_KEY] = True
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
@@ -5081,7 +4288,6 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
 
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
-    support_display = citation_support_display(result.generation_trace)
     tree: list[dict[str, Any]] = []
     # (並びの順位, chunk_id, 根拠の子, 検索で当たった子の関連度の順位（無ければ 0）)。
     ordered: list[tuple[int, str, dict[str, Any], int]] = []
@@ -5104,9 +4310,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                     "chunk_id": chunk_id,
                     "role": str(child.get("retrieval_role") or ""),
                     "reason": str(child.get("context_reason") or ""),
-                    # 条の目録で選んだ条と、そのために足した親の chunk(#2261)。
-                    "catalog": CATALOG_ARTICLE_REASON
-                    in {child.get("context_reason"), parent.get("context_reason")},
                     "is_model_used": used,
                     # 子そのものは引用していないが、回答が親（まとまり）を参照した（#2710）。
                     "parent_used": not used and child.get("parent_model_used") is True,
@@ -5148,11 +4351,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             **chunk.metadata,
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
-            **(
-                {"evidence_claim_support": dict(support_display)}
-                if support_display is not None
-                else {}
-            ),
         }
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
@@ -5160,10 +4358,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if evidence.get("parent_used"):
             # 回答が親（まとまり）だけを参照した子（#2710）。「回答で引用」とは分けて数える。
             metadata[EVIDENCE_PARENT_USED_KEY] = True
-        if evidence.get("catalog"):
-            # 条の目録で選んだ条(#2261)。MCP は検索の根拠の上限に数えず、後ろに足す。
-            metadata["evidence_role"] = CATALOG_ARTICLE_ROLE
-        elif ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {
+        if ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {
             "retrieved_anchor",
             "",
         }:
@@ -5244,19 +4439,22 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         for step in result.execution_steps or ()
         if isinstance(step, Mapping)
     ]
+    trace = result.generation_trace or {}
+    # 除く一覧に無いキーはそのまま写す（写し漏れで診断が黙って欠けない。#4735）。
     diagnostics = {
+        **{
+            key: value
+            for key, value in trace.items()
+            if key not in _TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS
+        },
         "retrieval_stages": list(state.retrieval_stages),
         "answer_flow": result.answer_flow,
-        "strategy": result.effective_strategy,
         "confidence": result.confidence,
         "needs_human_review": result.needs_human_review,
         "insufficient_reason": result.insufficient_reason,
         # 回答の構造（AnswerEnvelope。#1235）。outcome は回答の対応（answered / conditional / …）。
         "outcome": (result.envelope or {}).get("outcome"),
         "envelope": dict(result.envelope or {}),
-        # 段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738。形は
-        # platform/contracts/answer-passages/passage-marks.json）。画面・MCP・評価が読む。
-        **passage_mark_record(result.envelope),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,
@@ -5264,72 +4462,22 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "question_type": list(result.question_type or ()),
         "generated_queries": list(result.generated_queries),
         "text_search_tokens": list(result.text_search_tokens),
-        "crag_attempt_count": len(result.crag_attempts or ()),
-        "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
-        # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
-        "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
-        "request_recovery": [
-            dict(row["request_recovery"])
-            for row in (result.generation_trace or {}).get("rounds", ())
-            if isinstance(row, Mapping) and isinstance(row.get("request_recovery"), Mapping)
-        ],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
-            {"guide_step_retrieval": dict(trace)}
-            if isinstance(trace := (result.generation_trace or {}).get("guide_steps"), Mapping)
+            {"guide_step_retrieval": dict(guide_steps)}
+            if isinstance(guide_steps := trace.get("guide_steps"), Mapping)
             else {}
         ),
-        # 業務ガイドの手順ごとの充足(#2491)と、手順の対応付けの embedding の呼び出し(#2649)。
-        # 業務ガイドの記録(diagnostics.guide)に移す(#2686)。
-        **_guide_step_diagnostics(result.generation_trace),
         # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
-        # 読めなかった章節)。
-        "section_expansion": _section_expansion_diagnostics(result.generation_trace),
-        # 採用した草稿の構造(#1492。確認の項目の事実と規則の分け方・説明の種類と適用)。
-        # LLM を呼ばずに対応の決定を replay する材料。
-        "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
-        "generation_failure": dict((result.generation_trace or {}).get("generation_failure") or {}),
-        # モデルのカスケード(#4581。確認を通らなかったときのモデルで回答し直したか・理由)。
-        "model_cascade": dict((result.generation_trace or {}).get("model_cascade") or {}),
-        # 摘要の引用対応と意味検査の実施は分けて保存する。旧記録は空のまま扱う。
-        "summary_evidence": dict(
-            ((result.generation_trace or {}).get("finalization") or {}).get("summary") or {}
-        ),
+        # 読めなかった章節)。評価器の判定の全文(grades)は除く。
+        "section_expansion": _section_expansion_diagnostics(trace),
         # 原文と生応答は回答の保存・権限確認に従う。計測やモデル入力へ再注入しない。
         "generation_citation_traces": [
             dict(row["generation_citation_trace"])
-            for row in (result.generation_trace or {}).get("rounds", ())
+            for row in trace.get("rounds", ())
             if isinstance(row, Mapping)
             and isinstance(row.get("generation_citation_trace"), Mapping)
         ],
-        # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
-        "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
-        # 根拠の文字予算の設定値・実際に使った値・送った根拠ブロックの文字数(#3776。数値だけ)。
-        "evidence_budget": dict((result.generation_trace or {}).get("evidence_budget") or {}),
-        "generation_input_budget": dict(
-            (result.generation_trace or {}).get("generation_input_budget") or {}
-        ),
-        "evidence_refinement": dict(
-            (result.generation_trace or {}).get("evidence_refinement") or {}
-        ),
-        # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
-        "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
-        # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
-        # 目的外の割合を集計する。
-        "goal_alignment": adopted_goal_alignment(result.generation_trace),
-        "generation_review": adopted_review_contract(result.generation_trace),
-        **(
-            {"semantic_audit_policy": dict(policy)}
-            if isinstance(
-                policy := (result.generation_trace or {}).get("semantic_audit_policy"), Mapping
-            )
-            else {}
-        ),
-        "crag_assessment": dict((result.generation_trace or {}).get("crag_assessment") or {}),
-        "crag_generation_gate": dict(
-            (result.generation_trace or {}).get("crag_generation_gate") or {}
-        ),
-        "procedure_quotes": dict((result.generation_trace or {}).get("procedure_quotes") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }
@@ -5346,93 +4494,6 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
 
 _GUIDE_STEP_COVERAGE_FIELDS = ("step_id", "status", "required")
 _GUIDE_STEP_EMBEDDING_FIELDS = ("calls", "texts", "elapsed_ms", "failed")
-
-
-def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
-    """回答の記録に残す業務ガイドの手順の充足と embedding の呼び出し(#2686)。
-
-    手順は id・状態・必須かと、対応の方法・item の index・各段の根拠 ID を残す。手順の題名・
-    根拠の本文・引用は記録に増やさない。業務ガイドに沿わない回答・呼ばなかった回答では空。
-    """
-    trace = generation_trace if isinstance(generation_trace, Mapping) else {}
-    diagnostics: dict[str, Any] = {}
-    coverage = trace.get("guide_step_coverage")
-    if isinstance(coverage, list) and coverage:
-        diagnostics["guide_step_coverage"] = [
-            {
-                **{key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS},
-                **{
-                    key: step[key]
-                    for key in ("assignment", "evidence_flow")
-                    if isinstance(step.get(key), Mapping)
-                },
-            }
-            for step in coverage
-            if isinstance(step, Mapping)
-        ]
-    embedding = trace.get("guide_step_embedding")
-    if isinstance(embedding, Mapping):
-        diagnostics["guide_step_embedding"] = {
-            key: embedding.get(key) for key in _GUIDE_STEP_EMBEDDING_FIELDS
-        }
-    return diagnostics
-
-
-def adopted_review_contract(generation_trace: object) -> dict[str, Any]:
-    """採用した草稿の引用照合と意味の監査を別々に記録する。"""
-    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
-    adopted = (
-        next(
-            (row for row in reversed(rounds) if isinstance(row, Mapping) and row.get("accepted")),
-            None,
-        )
-        if isinstance(rounds, list)
-        else None
-    )
-    if adopted is None:
-        return {"execution": "not_run", "items": []}
-    return {
-        "execution": adopted.get("review_execution", "not_run"),
-        **(
-            {"dimensions": dict(adopted["validation_dimensions"])}
-            if isinstance(adopted.get("validation_dimensions"), Mapping)
-            else {}
-        ),
-        "items": [
-            {
-                key: row.get(key)
-                for key in (
-                    "evidence_id",
-                    "quote_match",
-                    "citation_resolution",
-                    "review_assessment",
-                    "removed",
-                    "withdrawn",
-                )
-            }
-            for row in adopted.get("items", [])
-            if isinstance(row, Mapping)
-        ],
-    }
-
-
-def adopted_goal_alignment(generation_trace: object) -> str | None:
-    """採用した草稿（最後に採用した round）の監査の目的との合い方（#2402）。
-
-    監査の無い round（時間の上限で監査を切った round など）・記録の無い回答は None。
-    """
-    if isinstance(generation_trace, Mapping) and semantic_audit_is_diagnostic_only(
-        generation_trace
-    ):
-        return None
-    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
-    adopted: Mapping[str, Any] | None = None
-    for item in rounds if isinstance(rounds, list) else ():
-        if isinstance(item, Mapping) and item.get("accepted"):
-            adopted = item
-    audit = adopted.get("audit") if adopted is not None else None
-    value = audit.get("goal_alignment") if isinstance(audit, Mapping) else None
-    return value if isinstance(value, str) and value else None
 
 
 def guide_step_plan(guide: Mapping[str, Any] | None) -> Any:
@@ -5514,9 +4575,8 @@ def _zero_evidence_diagnostics(
 ) -> dict[str, Any]:
     """根拠 0 件で回答を作らずに終えたときの、0 件になった段と検索の記録(#2401)。
 
-    段は rag_engine が決め(検索の候補が無い・根拠確認で全部外した・根拠の組み立て)、検索の候補が
-    無く、自動で足した検索条件が効いたままだったときは ``filter``
-    にする。検索の条件は値を出さず、項目の名前だけを残す(値は質問・文書の内容を含みうる)。
+    段は rag_engine が決める(検索の候補が無い・根拠の組み立て)。検索の条件は値を出さず、項目の
+    名前だけを残す(値は質問・文書の内容を含みうる)。
     """
     from rag_engine.generation.zero_evidence import ZERO_EVIDENCE_STAGE_LABELS
 
@@ -5524,10 +4584,7 @@ def _zero_evidence_diagnostics(
     engine = trace.get("zero_evidence") if isinstance(trace, Mapping) else None
     if not isinstance(engine, Mapping):
         return {}
-    active = state.automatic_filters
     stage = str(engine.get("stage") or "")
-    if stage == "retrieval" and active:
-        stage = "filter"
     return {
         **dict(engine),
         "stage": stage,
@@ -5536,8 +4593,6 @@ def _zero_evidence_diagnostics(
         "request_filter_keys": sorted(
             key for key, value in request.filters.items() if value.strip()
         ),
-        # 効いていた自動の条件。
-        "automatic_filters": active,
         "searches": list(state.search_log),
         # 失敗して空のまま続けた補助の処理(#3259)。0 件が「当たらなかった」のか
         # 「読めなかった」のかを分ける(処理の種類・回数・例外の型の名前だけ)。
@@ -5596,12 +4651,41 @@ def _graph_expansion_diagnostics(
     }
 
 
+# 回答の生成の記録（generation_trace）のうち、応答・Chat・実行の記録へ写さない項目（#4735）。
+# ここに書いた項目だけを除き、ほかのキーは足されたらそのまま diagnostics_json に残る。
+# 本文・プロンプトの写しや大きいデータ、内部の検索式はここに足す。
+_TRACE_KEYS_EXCLUDED_FROM_DIAGNOSTICS = frozenset(
+    {
+        # 生成の回の全記録（草稿・生の応答）。引用の記録だけ generation_citation_traces に写す。
+        "rounds",
+        # 生成に渡した根拠の本文（span の本文・prompt の入力ブロック）。
+        "selected_evidence",
+        "provided_evidence_scope",
+        # 本文の出典行の写し（引用の chunk の metadata に番号として写す）。
+        "citation_lines",
+        # 当てはめの文（回答の本文の写し）と内部の番号を含む不採用の理由。
+        "applications",
+        # 質問の全文と解析の内部の値（プロンプトの入力）。
+        "task_contract",
+        # 全文検索の内部の検索式（oracle_text_query）。
+        "query_overflow",
+        # 文書ごとの読み取りの内部の状況（文書の数だけ増える）。
+        "document_background",
+        # 読めなかった章節の一覧（section_expansion の unread と重なり、章節の数だけ増える）。
+        "unread_sections",
+        # 別の名前で写す項目（guide_step_retrieval・zero_evidence の呼び出し側の組み立て）。
+        "guide_steps",
+        "zero_evidence",
+    }
+)
+
+
 def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:
-    """章節の拡張の記録(#1436)。評価器の判定の全文(grades)は除き、段ごとの判定だけを残す。"""
+    """章節の拡張の記録(#1436)。"""
     raw = (trace or {}).get("section_expansion") if isinstance(trace, Mapping) else None
     if not isinstance(raw, Mapping):
         return {}
-    return {key: value for key, value in raw.items() if key != "grades"}
+    return dict(raw)
 
 
 # 本文の出典行（「根拠：」）の順番（1 始まり）を、出典行が指す根拠の chunk の metadata に
@@ -5762,14 +4846,12 @@ def evaluate_answer_record(
     standard_answer: str,
     settings: Settings,
     *,
-    citations: Sequence[RetrievedChunk],
     judge_model_id: str | None = None,
 ) -> dict[str, Any]:
     """保存した回答を標準回答で評価する。
 
-    LLM(rag_engine の evaluate_answer_payload)が標準回答の項目の照合と主張の監査を行い、
-    評価の基準の指標と閾値で合否を付ける(#680)。``citations`` は回答の引用(決定的な指標に使う)。
-    同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+    LLM(rag_engine の evaluate_answer_payload)が標準回答に照らした正確性を 1 回で判定し、
+    評価の基準の閾値で合否を付ける(#680)。同期関数で、呼び出し側は worker thread で動かす。
 
     ``judge_model_id`` は判定のモデル(#3574。呼び出し側が回答を作ったモデルから
     `enterprise_ai_judge_model_id` で解決した ID)。省略時は回答のモデルが分からないものとして
@@ -5785,13 +4867,7 @@ def evaluate_answer_record(
             settings, output_dir=Path(work), answer_model_id=judge_model
         )
         evaluation = evaluate_answer_payload(
-            {
-                **evaluation_input,
-                "standard_answer": standard_answer,
-                "allow_without_standard": True,
-                "six_metrics": True,
-            },
-            engine_settings,
+            {**evaluation_input, "standard_answer": standard_answer}, engine_settings
         )
     diagnostics = evaluation.get("judge_diagnostics")
     evaluation = {
@@ -5801,10 +4877,4 @@ def evaluate_answer_record(
             "judge_model_id": judge_model,
         },
     }
-    return score_answer_evaluation(
-        evaluation,
-        answer=str(evaluation_input.get("answer_text") or ""),
-        citations=citations,
-        insufficient_reason=str(evaluation_input.get("insufficient_reason") or ""),
-        settings=settings,
-    )
+    return score_answer_evaluation(evaluation, settings=settings)

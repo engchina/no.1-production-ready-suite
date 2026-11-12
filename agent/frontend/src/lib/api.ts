@@ -1005,25 +1005,6 @@ export interface RunSourcePreview {
   expires_in_seconds: number;
 }
 
-/** 段落の印・外した段落・回答全体の注意の理由（#2738。契約は platform/contracts/answer-passages/passage-marks.json）。 */
-export interface AnswerPassageReasonData {
-  code: string;
-  label: string;
-  detail?: string;
-}
-
-/**
- * 成果物「資料との照合」（kind=`answer_validation`）の内容のうち、段落の印の記録（#2738）。根拠と矛盾した段落だけを
- * 本文から外し（`removed_passages`）、確かめられない段落・規則の検査で注意の要る段落は本文に残して印（`passage_marks`）を
- * 付け、回答全体の注意（`answer_warnings`）を持つ。`withheld` は件数（`claims` は持たない）。この形より前の Run には無い。
- */
-export interface AnswerValidationPassageContent {
-  passage_marks?: { text: string; state: "unverified" | "warning"; reasons: AnswerPassageReasonData[] }[];
-  removed_passages?: { text: string; reasons: AnswerPassageReasonData[] }[];
-  answer_warnings?: AnswerPassageReasonData[];
-  withheld?: { removed: number; unverified: number; warnings: number; all: boolean; listed: number };
-}
-
 export interface Artifact {
   id: string;
   name: string;
@@ -1461,17 +1442,11 @@ export interface FeedbackFilters {
 /**
  * 確かめるべき実行のシグナルの種類（表示の順。#1822）。定義は backend の `run_signals.py`。
  * - not_helpful: 本人か管理者の評価が「役に立たなかった」
- * - validation_failed: 最終の検証が根拠で確かめられない段落などのために回答を変えた
- * - unvalidated: 最終の検証そのものが失敗した
- * - ungrounded_no_tools: 資料の根拠も業務データの道具（NL2SQL など）も使わずに答えた（#1834）
  * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
  * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し
  */
 export const SIGNAL_KINDS = [
   "not_helpful",
-  "validation_failed",
-  "unvalidated",
-  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -1502,7 +1477,6 @@ export interface SignalItem {
   status: RunState["status"];
   signals: SignalKind[];
   answer_outcome: string | null;
-  validation_result: string | null;
   tool_failures: number;
   approvals_rejected: number;
   /** 業務データの道具の成功した呼び出しの数（記録の無い古い実行は null。#1834）。 */

@@ -1,6 +1,6 @@
 """既存の高度な回答フローへ I/O 関数を注入する境界。
 
-公開 SDK の Protocol と併用し、CRAG や multi-query の既存挙動も保護する。
+公開 SDK の Protocol と併用し、既存の回答の挙動を保護する。
 互換呼び出しの既定実装は composition root で遅延構築する。
 """
 
@@ -23,40 +23,16 @@ class AnswerDependencies:
     search/check_ready は chunk_run_id・settings・検索条件を keyword で受け取る。
     parse_text/parse_images は既存 schema 型を受け取り、その型の結果を返す。
     rerank は質問・候補・settings と top_n を受け取り RerankTextRank を返す。
-    screen_catalog / screen_chunks は画面目録の連携（#1108）の入力。検索結果が検索範囲の全 chunk を含まない
-    呼び出し元が、目録と選んだ画面の chunk を検索範囲から読むときに渡す。省略時は検索結果の chunk から作る。
-    screen_catalog は settings を受け取り {文書名: 番号付きの見出し} を返す。screen_chunks は links（選んだ
-    （文書名、見出し）の列）・existing（候補にある chunk_uid）・settings を受け取り、その画面の child と親の
-    StoredChunk を返す。
     section_outline / section_chunks は章節の拡張（#1436）の入力。章節と chunk の対応を持つ呼び出し元が渡す。
     section_outline は chunk_uid を受け取り、その chunk の文書の章節の一覧（`section_expansion.SectionOutline`。
     対応が無い chunk は None）を返す。section_chunks は document_id・chunk_set_id・section_id を受け取り、
     章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。部分取得や失敗は
     `SectionRead(complete=False)` で区別する。省略時は章節で広げない。
-    prefetch_search は、質問拡張の LLM と並行に元の質問の検索を先に読む入力（#1499）。query・candidate_limit・
-    metadata_filter・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
-    cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。
-    省略時は先に読まない。
-    article_catalogs / article_chunks は条の目録から条を選ぶ段（#2254）の入力。章節と chunk の対応を持つ呼び出し元が
-    渡す。article_catalogs は document_ids（候補の文書の id。順位の順）・limit・settings を受け取り、そのうち条で
-    構成された文書の章節の目録（`article_catalog.ArticleCatalog`）を順位の順に limit 件まで返す。article_chunks は
-    articles（選んだ条の `article_catalog.SelectedArticle` の列）・settings を受け取り、選んだ条の章節の最初の child と
-    その親の StoredChunk を返す。省略時は条を選ばない。article_documents は settings を受け取り、検索の範囲の
-    条で構成された文書の (document_id, 文書名) の列を返す（候補に出ない文書も目録で読むため）。省略時は候補の
-    文書だけを読む。article_question は利用者の元の質問（呼び出し元が検索文を短く言い換えたとき。無ければ None）を
-    返す。条の目録から文書・条を選ぶ段だけが検索文と合わせて使う（#2261）。article_leads は document_id・chunk_set_id・
-    sections（{section_id: 章節の名前}）・settings を受け取り、その章節の本文の書き出し（名前を除く。
-    {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条と、選んだ条を名指しする別の章の条を書き出し
-    つきで見せて足させる）が使う。
-    省略時は 2 段目を行わない。
     embedder は業務ガイドの手順の充足で、根拠を共有する手順のどれを item が説明したかを語で決められないときに、
     意味の近さで決める embedding（`ports.Embedder`。索引と同じ OCI Generative AI の Cohere Embed。#2649）。省略時は
     語の判定だけで決める。
-    report_degraded は補助の処理（画面の選択など）が失敗して空のまま続けたことを、処理の種類と例外を受け取って
+    report_degraded は補助の処理が失敗して空のまま続けたことを、処理の種類と例外を受け取って
     呼び出し元の診断に残す（#3259。例外の文は呼び出し元が残さない）。省略時は残さない。
-    question_subjects は説明・要約に書いた質問の対象の名前を引いた原文に照らす検査（#4351）の、質問の対象と役割の
-    抽出（`question_subjects.extract_question_subjects` と同じ引数）。question・settings を位置で、provider_id を
-    keyword で受け取り `question_subjects.QuestionSubjects` を返す。回答の中で 1 回だけ呼ぶ。省略時は対象の名前を確かめない。
     current_section_paths は長い根拠を分ける区切りに使う、子の chunk の今の章節（章節ナビゲーションが正本。#4682）。
     chunk の ID の列を受け取り {chunk の ID: 章節の名前の列} を返す（どの章節にも入らない chunk は空の列、対応の無い chunk は
     含めない）。省略時や読めないときは取込の章節で区切る。
@@ -67,16 +43,8 @@ class AnswerDependencies:
     parse_text: Callable[..., Any]
     parse_images: Callable[..., Any]
     rerank: Callable[..., Any]
-    screen_catalog: Callable[..., dict[str, list[str]]] | None = None
-    screen_chunks: Callable[..., Sequence[Any]] | None = None
     section_outline: Callable[..., Any] | None = None
     section_chunks: Callable[..., Sequence[Any]] | None = None
-    prefetch_search: Callable[..., Any] | None = None
-    article_catalogs: Callable[..., Sequence[Any]] | None = None
-    article_chunks: Callable[..., Sequence[Any]] | None = None
-    article_documents: Callable[..., Sequence[tuple[str, str]]] | None = None
-    article_question: Callable[[], str | None] | None = None
-    article_leads: Callable[..., Mapping[str, str]] | None = None
     embedder: "Embedder | None" = None
     report_degraded: Callable[[str, BaseException], None] | None = None
     # 精排・起点選択の後に親/近傍を読む。未指定の SDK は取得済みの原文だけで構築する。
@@ -84,7 +52,6 @@ class AnswerDependencies:
     record_retrieval: Callable[[Mapping[str, Any]], None] | None = None
     # 正式生成に選んだ文書だけを、その版と検索範囲で読む。
     document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
-    question_subjects: Callable[..., Any] | None = None
     current_section_paths: Callable[[Sequence[str]], Mapping[str, Sequence[str]]] | None = None
 
 
@@ -118,22 +85,6 @@ def _get() -> AnswerDependencies:
     return oracle_answer_dependencies()
 
 
-def injected_screen_catalog(**kwargs) -> dict[str, list[str]] | None:
-    """注入された画面目録を返す。注入が無ければ None（検索結果の chunk から作る）。"""
-    current = _active.get()
-    if current is None or current.screen_catalog is None:
-        return None
-    return current.screen_catalog(**kwargs)
-
-
-def injected_screen_chunks(**kwargs) -> list[Any] | None:
-    """注入された読み込みで、選んだ画面の chunk を返す。注入が無ければ None（検索結果の chunk から選ぶ）。"""
-    current = _active.get()
-    if current is None or current.screen_chunks is None:
-        return None
-    return list(current.screen_chunks(**kwargs))
-
-
 def section_dependencies() -> tuple[Callable[..., Any], Callable[..., Sequence[Any]]] | None:
     """注入された章節の読み込み（章節の一覧, 章節の chunk）。注入が無ければ None（章節で広げない。#1436）。"""
     current = _active.get()
@@ -142,45 +93,10 @@ def section_dependencies() -> tuple[Callable[..., Any], Callable[..., Sequence[A
     return current.section_outline, current.section_chunks
 
 
-def article_catalog_dependencies() -> tuple[Callable[..., Sequence[Any]], Callable[..., Sequence[Any]]] | None:
-    """注入された条の目録の読み込み（目録, 選んだ条の chunk）。注入が無ければ None（条を選ばない。#2254）。"""
-    current = _active.get()
-    if current is None or current.article_catalogs is None or current.article_chunks is None:
-        return None
-    return current.article_catalogs, current.article_chunks
-
-
-def injected_article_documents() -> Callable[..., Sequence[tuple[str, str]]] | None:
-    """注入された検索の範囲の条で構成された文書の一覧（#2254）。注入が無ければ None（候補の文書だけを読む）。"""
-    current = _active.get()
-    return None if current is None else current.article_documents
-
-
-def injected_article_leads() -> Callable[..., Mapping[str, str]] | None:
-    """注入された章節の本文の書き出しの読み込み。注入が無ければ None（条の選択の 2 段目を行わない）。"""
-    current = _active.get()
-    return None if current is None else current.article_leads
-
-
-def injected_article_question() -> str | None:
-    """注入された利用者の元の質問（#2261）。注入が無い・空なら None。"""
-    current = _active.get()
-    if current is None or current.article_question is None:
-        return None
-    value = current.article_question()
-    return value.strip() or None if isinstance(value, str) else None
-
-
 def injected_embedder() -> "Embedder | None":
     """注入された embedding（#2649）。注入が無ければ None（業務ガイドの手順の充足を語の判定だけで決める）。"""
     current = _active.get()
     return None if current is None else current.embedder
-
-
-def injected_question_subjects() -> Callable[..., Any] | None:
-    """注入された質問の対象の抽出（#4351）。注入が無ければ None（対象の名前を確かめない）。"""
-    current = _active.get()
-    return None if current is None else current.question_subjects
 
 
 def injected_current_section_paths(chunk_ids: Sequence[str]) -> Mapping[str, Sequence[str]]:
@@ -194,12 +110,6 @@ def report_degraded(kind: str, exc: BaseException) -> None:
     current = _active.get()
     if current is not None and current.report_degraded is not None:
         current.report_degraded(kind, exc)
-
-
-def injected_prefetch_search() -> Callable[..., Any] | None:
-    """注入された元の質問の先読み（#1499）。注入が無ければ None（先に読まない）。"""
-    current = _active.get()
-    return None if current is None else current.prefetch_search
 
 
 def search_adb_hybrid_chunks(**kwargs):

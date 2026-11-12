@@ -20,7 +20,7 @@ from app.rag.support_guide_runtime import (
     resolve_guide_clarification,
 )
 from app.schemas.search import SearchRequest
-from app.schemas.search_answer_profile_knowledge import RuleClarification
+from app.schemas.search_answer_profile_knowledge import GuideConditionClarification
 from app.schemas.support_guide import SupportGuideContent
 from tests.support import AsgiTestClient
 from tests.test_support_guide_matching import _ProfileOracle, _published_store
@@ -50,7 +50,7 @@ def stub(monkeypatch: pytest.MonkeyPatch, output: Any = None, *, error: bool = F
     class Client:
         async def generate(self, _prompt: str, context: str, **kwargs: Any) -> str:
             assert kwargs["system_prompt"] == recognition.CONDITION_SYSTEM_PROMPT
-            assert all(f"## Step {step}:" in kwargs["system_prompt"] for step in range(1, 5))
+            assert all(f"## Step {step}:" in kwargs["system_prompt"] for step in range(1, 4))
             calls.append((json.loads(context), kwargs))
             if error:
                 raise RuntimeError("synthetic failure")
@@ -103,7 +103,7 @@ async def test_exact_question_span_makes_text_condition_known(
     assert calls[0][0]["question"] == QUESTION
     assert "response_schema" in calls[0][1]
     assert calls[0][1]["system_prompt"] == recognition.CONDITION_SYSTEM_PROMPT
-    assert all(f"## Step {step}:" in calls[0][1]["system_prompt"] for step in range(1, 5))
+    assert all(f"## Step {step}:" in calls[0][1]["system_prompt"] for step in range(1, 4))
     from app.rag.answer_prompts import readonly_prompt_stages
 
     stage = next(
@@ -186,9 +186,11 @@ async def test_model_failure_keeps_confirmation_without_logging_input(
 def test_text_confirmation_accepts_answer_and_retains_the_condition() -> None:
     suggestion = guide_clarification(matched())
     assert suggestion is not None
-    rule_id, _, question = suggestion
+    guide_condition_id, _, question = suggestion
     assert question.options == [] and question.allow_other
-    conditions, context = resolve_guide_clarification(GUIDES, rule_id, [], "資料 C の項目 D") or (
+    conditions, context = resolve_guide_clarification(
+        GUIDES, guide_condition_id, [], "資料 C の項目 D"
+    ) or (
         {},
         "",
     )
@@ -200,16 +202,18 @@ def test_text_confirmation_accepts_answer_and_retains_the_condition() -> None:
         content = GUIDE.model_copy(
             update={"conditions": [GUIDE.conditions[0].model_copy(update={"source": source})]}
         )
-        answer = resolve_guide_clarification([("g-text", 1, content)], rule_id, [], "資料 C")
+        answer = resolve_guide_clarification(
+            [("g-text", 1, content)], guide_condition_id, [], "資料 C"
+        )
         assert answer is None or not answer[0]
 
 
 def test_empty_choices_require_free_text_and_one_choice_is_invalid() -> None:
-    RuleClarification(question="対象は？", options=[])
+    GuideConditionClarification(question="対象は？", options=[])
     with pytest.raises(ValidationError):
-        RuleClarification(question="対象は？", options=[], allow_other=False)
+        GuideConditionClarification(question="対象は？", options=[], allow_other=False)
     with pytest.raises(ValidationError):
-        RuleClarification(question="対象は？", options=[{"id": "a", "label": "A"}])
+        GuideConditionClarification(question="対象は？", options=[{"id": "a", "label": "A"}])
 
 
 @pytest.mark.usefixtures("system_access")

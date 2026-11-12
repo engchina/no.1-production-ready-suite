@@ -46,6 +46,7 @@ from rag_engine.retrieval.search_stages import (
     TEXT_SEARCH_STAGE,
     VECTOR_SEARCH_STAGE,
 )
+from rag_parser_core.extraction import DOCUMENT_SUMMARY_CONTENT_KIND
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
@@ -60,6 +61,7 @@ from app.clients.recipe_version_log import (
     RecipeVersionOperation,
 )
 from app.config import Settings, get_settings, settings_today
+from app.rag.answer_prompts import EDITABLE_PROMPT_KEYS
 from app.rag.approved_faq_scope import FaqSourceDocumentState, document_version
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
@@ -78,7 +80,6 @@ from app.rag.graph_index import (
 from app.rag.ingestion_language import ingestion_release_job_id
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
-    KnowledgeBaseQueryConfig,
     parse_adapter_config,
 )
 from app.rag.language_pack_releases import active_release
@@ -260,6 +261,22 @@ class OraclePoolProtocol(Protocol):
         """pool を閉じる。"""
 
 
+class EvaluationJobVisibility(Protocol):
+    """品質評価の job を見る利用者（`app.rag.evaluation_jobs.EvaluationJobViewer`）。"""
+
+    @property
+    def tenant_id_hash(self) -> str | None: ...
+
+    @property
+    def user_id_hash(self) -> str | None: ...
+
+    @property
+    def all_users_visible(self) -> bool: ...
+
+    @property
+    def allowed_search_answer_profile_ids(self) -> frozenset[str] | None: ...
+
+
 @dataclass
 class StoredDocument:
     """テスト補助で使うドキュメント行。"""
@@ -385,16 +402,14 @@ class StoredMessage:
     # 質問に添付したファイル（USER のメッセージだけ。名前・種類・大きさ。#2517）。添付が期限で
     # 消えても発話の表示に残す。添付の無い質問は None。
     attachments: list[dict[str, Any]] | None = None
-    # 回答の段落の印・根拠と矛盾して外した段落・回答全体の警告（ASSISTANT の回答だけ。#2738。
-    # ``passage_marks`` / ``removed_passages`` / ``answer_warnings`` の dict）。メッセージの列には
-    # 保存せず、回答の記録（rag_answer_records の diagnostics_json）から trace_id で読む。
-    # 記録の無い回答（保存の失敗・保存期間の経過・この機能より前の回答）は None。
-    passage_record: dict[str, Any] | None = None
     # 生成時の節・引用の表示形式。回答の記録から読む（メッセージの列は増やさない）。
     answer_format: dict[str, str] | None = None
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
     # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
+    # 承認済み FAQ の回答をそのまま返した回答の一致度（ASSISTANT の回答だけ。回答の記録の診断の
+    # ``approved_faq_direct.score``。#4788）。それ以外の回答・記録の無い回答は None。
+    approved_faq_direct_score: float | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -1312,29 +1327,6 @@ class OracleClient:
         )
         return [str(row["large_category"]) for row in rows if row.get("large_category")]
 
-    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
-        """検索と同じ条件の chunk 集合の状態を表す短い値(画面目録の cache の key。#554)。
-
-        文書の追加・削除・再索引(chunk_id が変わる)・文書名の変更で変わる。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        row = await self._fetch_one(
-            _render_sql(
-                """
-            SELECT COUNT(*) AS chunk_count,
-                   NVL(SUM(ORA_HASH(c.chunk_id || '/' || d.file_name)), 0) AS chunk_hash
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-            """,
-                where_sql=where_sql,
-            ),
-            binds,
-        )
-        if row is None:
-            return "0:0"
-        return f"{row.get('chunk_count') or 0}:{row.get('chunk_hash') or 0}"
-
     async def count_documents_outside_language_pack(self, pack_hash: str) -> int:
         """今の言語資源(hash)で分割していない、有効な文書の数(#2181。分割し直しが要る文書)。
 
@@ -1353,65 +1345,7 @@ class OracleClient:
         )
         return _int_value((row or {}).get("document_count"))
 
-    async def retrieval_article_documents(self, filters: dict[str, str]) -> list[tuple[str, str]]:
-        """検索と同じ条件の、条で構成された文書(chunk が XML ツリー JSON の引用ラベルを持つ)の
-        (document_id, 文書名) を文書名の順に返す(#2254)。
-
-        文書名は XML ツリー JSON の文書の題名(``xml_tree_document_title``)、無ければファイル名。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT d.document_id, d.file_name,
-                   MAX(JSON_VALUE(c.metadata_json, '$.xml_tree_document_title')) AS title,
-                   MAX(CASE WHEN {long_title_sql} THEN 1 ELSE 0 END) AS title_overflow
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-              AND JSON_EXISTS(c.metadata_json, '$.xml_tree_label_arabic')
-            GROUP BY d.document_id, d.file_name
-            ORDER BY d.file_name
-            """,
-                where_sql=where_sql,
-                long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
-            ),
-            binds,
-        )
-        long_titles: dict[str, str] = {}
-        if any(row.get("title_overflow") for row in rows):
-            # MAX は CLOB に使えないので、超えた題名の行だけを読み直す(#4157)。
-            for row in await self._fetch_all(
-                _render_sql(
-                    """
-                SELECT c.document_id, {title_sql} AS title
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE {where_sql}
-                  AND JSON_EXISTS(c.metadata_json, '$.xml_tree_label_arabic')
-                  AND {long_title_sql}
-                """,
-                    where_sql=where_sql,
-                    title_sql=_metadata_text_clob_sql("xml_tree_document_title"),
-                    long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
-                ),
-                binds,
-            ):
-                long_titles.setdefault(str(row["document_id"]), str(row["title"]))
-        return [
-            (
-                str(row["document_id"]),
-                str(
-                    row.get("title") or long_titles.get(str(row["document_id"])) or row["file_name"]
-                ),
-            )
-            for row in rows
-            if row.get("document_id") and row.get("file_name")
-        ]
-
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
+    async def retrieval_section_paths(self, filters: dict[str, str]) -> list[tuple[str, str, int]]:
         """検索と同じ条件の chunk の(文書名、見出しの列、chunk 数)を DISTINCT で返す(#554)。
 
         見出しの列は chunk の ``section_path``(「 > 」でつないだ文字列)。文書ごとに読み順で返す。
@@ -1465,53 +1399,6 @@ class OracleClient:
             for row in rows
             if row.get("file_name") and row.get("section_path")
         ]
-
-    async def retrieval_screen_chunks(
-        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
-    ) -> list[RetrievedChunk]:
-        """検索と同じ条件で、文書名が一致し見出しの列に ``heading`` を含む chunk を返す(#554)。
-
-        SQL は見出しの部分一致で候補を絞り、見出しの列の要素としての一致は呼び出し側で確かめる。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT * FROM (
-                SELECT
-                    c.document_id,
-                    c.chunk_id,
-                    c.chunk_text,
-                    c.metadata_json,
-                    c.chunk_index,
-                    c.chunk_set_id,
-                    d.file_name,
-                    d.category_name,
-                    d.superseded_by_document_id,
-                    0 AS score
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE {where_sql}
-                  AND d.file_name = :screen_file_name
-                  AND (
-                      INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
-                      OR ({overflow_sql} AND INSTR({path_sql}, :screen_heading) > 0)
-                  )
-                ORDER BY c.document_id, c.chunk_index, c.chunk_id
-            ) WHERE ROWNUM <= :screen_limit
-            """,
-                where_sql=where_sql,
-                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
-                path_sql=_SECTION_PATH_CLOB_SQL,
-            ),
-            {
-                **binds,
-                "screen_file_name": file_name,
-                "screen_heading": heading,
-                "screen_limit": max(1, int(limit)),
-            },
-        )
-        return [_retrieved_chunk_from_row(row) for row in rows]
 
     async def retrieval_reference_chunks(
         self,
@@ -1576,44 +1463,26 @@ class OracleClient:
         *,
         document_id: str,
         chunk_set_id: str,
-        chunk_indices: Sequence[int] = (),
-        element_id: str = "",
+        element_id: str,
         limit: int,
     ) -> list[RetrievedChunk]:
         """文書の 1 つの版(chunk_set)の chunk を、検索と同じ条件で読み順に返す(#2641)。
 
-        検索で当たった派生の chunk が指す原文を読む。``chunk_indices`` は chunk の番号(RAPTOR の
-        要約の子)、``element_id`` は解析の要素の ID(項目抽出の値の元の要素。部分一致で絞るので、
-        完全一致は呼び出し側で確かめる)で絞る。どちらも無ければ空。見え方は検索と同じ条件
-        (tenant・利用できるナレッジベース・有効な chunk_set)で、版は ``filters`` の
-        ``chunk_set_id``(有効でない版も読む実験の条件)ではなく、有効な版の中で絞る。
+        検索で当たった派生の chunk が指す原文を読む。``element_id`` は解析の要素の ID(章節の要約・
+        項目抽出の値の元の要素。部分一致で絞るので、完全一致は呼び出し側で確かめる)。無ければ空。
+        見え方は検索と同じ条件(tenant・利用できるナレッジベース・有効な chunk_set)で、版は
+        ``filters`` の ``chunk_set_id``(有効でない版も読む実験の条件)ではなく、有効な版の中で絞る。
         """
-        indices = sorted({int(index) for index in chunk_indices if int(index) >= 0})
         element = element_id.strip()
-        if not document_id or not chunk_set_id or (not indices and not element):
+        if not document_id or not chunk_set_id or not element:
             return []
         scoped = {key: value for key, value in filters.items() if key != "chunk_set_id"}
         where_sql, binds = _oracle_retrieval_where({**scoped, "document_id": document_id})
-        predicates: list[str] = []
         source_binds: dict[str, object] = {
             "source_chunk_set_id": chunk_set_id,
             "source_limit": max(1, int(limit)),
+            "source_element_id": element,
         }
-        if indices:
-            index_binds = {
-                f"source_chunk_index_{position}": index
-                for position, index in enumerate(indices[:_MAX_SOURCE_CHUNK_INDICES])
-            }
-            placeholders = ", ".join(f":{key}" for key in index_binds)
-            predicates.append(f"c.chunk_index IN ({placeholders})")
-            source_binds.update(index_binds)
-        if element:
-            predicates.append(
-                "DBMS_LOB.INSTR("
-                "JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :source_element_id"
-                ") > 0"
-            )
-            source_binds["source_element_id"] = element
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -1632,12 +1501,13 @@ class OracleClient:
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
               AND c.chunk_set_id = :source_chunk_set_id
-              AND ({source_sql})
+              AND DBMS_LOB.INSTR(
+                    JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :source_element_id
+                  ) > 0
             ORDER BY c.chunk_index, c.chunk_id
             FETCH FIRST :source_limit ROWS ONLY
             """,
                 where_sql=where_sql,
-                source_sql=" AND ".join(predicates),
             ),
             {**binds, **source_binds},
         )
@@ -1832,29 +1702,21 @@ class OracleClient:
         """引用した根拠を ID で読む。``retrievable_chunk`` と同じ条件に、退役した版を加える(#4168)。
 
         切替の前に検索された根拠を保持の間は開ける。権限・テナント・文書の状態の条件は同じ。
-        回答の監査は ``retrievable_chunk`` のまま(旧版の根拠を今の根拠として確かめない)。
         """
         where_sql, binds = _version_read_where()
         row = await self._fetch_one(
             _render_sql(
                 """
             SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_text,
-                c.metadata_json,
-                c.chunk_index,
-                c.chunk_set_id,
-                d.file_name,
-                d.category_name,
-                d.superseded_by_document_id,
+                {columns},
                 0 AS score
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
+            {scope_joins}
             WHERE {where_sql}
               AND c.document_id = :read_document_id
               AND c.chunk_id = :read_chunk_id
             """,
+                columns=_SEARCH_HIT_COLUMNS,
+                scope_joins=_NATIVE_SCOPE_JOINS,
                 where_sql=where_sql,
             ),
             {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
@@ -1876,22 +1738,15 @@ class OracleClient:
             _render_sql(
                 """
             SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_text,
-                c.metadata_json,
-                c.chunk_index,
-                c.chunk_set_id,
-                d.file_name,
-                d.category_name,
-                d.superseded_by_document_id,
+                {columns},
                 0 AS score
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
+            {scope_joins}
             WHERE {where_sql}
               AND c.document_id = :read_document_id
               AND c.chunk_id = :read_chunk_id
             """,
+                columns=_SEARCH_HIT_COLUMNS,
+                scope_joins=_NATIVE_SCOPE_JOINS,
                 where_sql=where_sql,
             ),
             {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
@@ -2865,6 +2720,9 @@ class OracleClient:
                 NVL(cs.chunk_count, 0) AS chunk_count,
                 NVL(cs.vector_count, 0) AS vector_count,
                 cs.status AS chunk_set_status,
+                cs.recipe_subset AS active_recipe_subset,
+                d.file_name AS document_file_name,
+                d.content_type AS document_content_type,
                 (
                     SELECT p.chunk_set_id FROM rag_chunk_sets p
                     WHERE p.recipe_id = r.recipe_id AND p.status = 'CHUNKED' AND p.is_active = 0
@@ -2902,6 +2760,9 @@ class OracleClient:
                 NVL(cs.chunk_count, 0) AS chunk_count,
                 NVL(cs.vector_count, 0) AS vector_count,
                 cs.status AS chunk_set_status,
+                cs.recipe_subset AS active_recipe_subset,
+                d.file_name AS document_file_name,
+                d.content_type AS document_content_type,
                 (
                     SELECT p.chunk_set_id FROM rag_chunk_sets p
                     WHERE p.recipe_id = r.recipe_id AND p.status = 'CHUNKED' AND p.is_active = 0
@@ -4206,8 +4067,11 @@ class OracleClient:
                 WHERE src.chunk_set_id = :source AND src.recipe_id = :recipe_id
                     AND src.is_active = 1 AND src.status = 'INDEXED'
                     AND {access_predicate}
+                    AND {not_document_summary}
             """,
                     access_predicate=_oracle_access_predicate_sql(alias="d"),
+                    # 文書全体の要約の chunk は複製しない（切替の後の後段が入れ直す。#4793）。
+                    not_document_summary=_NOT_DOCUMENT_SUMMARY_CHUNK_SQL,
                 ),
                 binds,
             )
@@ -4665,6 +4529,41 @@ class OracleClient:
             answers.update({str(row["trace_id"]): str(row.get("answer") or "") for row in rows})
         return answers
 
+    async def evaluation_citations_by_trace_ids(
+        self, trace_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """品質評価の最終 trace ごとの引用を、回答記録と同じ可視範囲で返す。"""
+        unique = list(dict.fromkeys(trace_id for trace_id in trace_ids if trace_id))
+        citations: dict[str, list[dict[str, Any]]] = {}
+        for start in range(0, len(unique), _EVALUATION_ANSWER_BATCH):
+            batch = unique[start : start + _EVALUATION_ANSWER_BATCH]
+            names = [f"trace_id_{index}" for index in range(len(batch))]
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT trace_id, citations_json
+                FROM rag_answer_records
+                WHERE trace_id IN ({placeholders})
+                  AND {scope_sql}
+                """,
+                    placeholders=", ".join(f":{name}" for name in names),
+                    scope_sql=_answer_record_scope_sql(),
+                ),
+                _with_answer_record_scope_bind(dict(zip(names, batch, strict=True))),
+            )
+            for row in rows:
+                raw = row.get("citations_json")
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                if isinstance(raw, list):
+                    citations[str(row["trace_id"])] = [
+                        item for item in raw if isinstance(item, dict)
+                    ]
+        return citations
+
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
         """保存済み回答を 1 件返す（利用できる検索・回答プロファイルの回答だけ。#214）。"""
         row = await self._fetch_one(
@@ -4741,9 +4640,11 @@ class OracleClient:
         return await self._run_transaction(operation) > 0
 
     async def answer_prompt_overrides(self) -> dict[str, str]:
-        """回答・解析へ渡す回答生成のプロンプトの上書き({key: content})。"""
+        """回答・解析へ渡すプロンプトの上書き({key: content})。編集できる key だけを渡す。"""
         return {
-            key: str(value["content"]) for key, value in (await self.list_answer_prompts()).items()
+            key: str(value["content"])
+            for key, value in (await self.list_answer_prompts()).items()
+            if key in EDITABLE_PROMPT_KEYS
         }
 
     async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
@@ -5023,19 +4924,6 @@ class OracleClient:
             description=description,
             config=config,
             update_fields=update_fields,
-        )
-
-    async def update_question_understanding(
-        self, search_answer_profile_id: str, overrides: dict[str, dict[str, object]]
-    ) -> SearchAnswerProfileDetail:
-        """行をロックして質問理解の項目だけを置換し、他の設定を保持する。"""
-        return await self._update_search_answer_profile_with_oracle(
-            search_answer_profile_id=search_answer_profile_id,
-            name=None,
-            description=None,
-            config=None,
-            update_fields={"config"},
-            language_pack_patch=overrides,
         )
 
     async def archive_search_answer_profile(
@@ -5411,14 +5299,10 @@ class OracleClient:
                 m.created_at,
                 JSON_QUERY(r.diagnostics_json, '$.answer_format' RETURNING CLOB)
                     AS answer_format_json,
-                JSON_QUERY(r.diagnostics_json, '$.passage_marks' RETURNING CLOB)
-                    AS passage_marks_json,
-                JSON_QUERY(r.diagnostics_json, '$.removed_passages' RETURNING CLOB)
-                    AS removed_passages_json,
-                JSON_QUERY(r.diagnostics_json, '$.answer_warnings' RETURNING CLOB)
-                    AS answer_warnings_json,
                 JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
-                    AS answer_attached_images
+                    AS answer_attached_images,
+                JSON_VALUE(r.diagnostics_json, '$.approved_faq_direct.score' RETURNING NUMBER)
+                    AS approved_faq_direct_score
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -7595,6 +7479,9 @@ class OracleClient:
                     heartbeat_at,
                     time_limit_seconds,
                     source_workbook_id,
+                    search_answer_profile_id,
+                    compare_search_answer_profile_id,
+                    user_uuid,
                     created_at,
                     started_at,
                     updated_at
@@ -7610,6 +7497,9 @@ class OracleClient:
                     SYSTIMESTAMP,
                     :time_limit_seconds,
                     :source_workbook_id,
+                    :search_answer_profile_id,
+                    :compare_search_answer_profile_id,
+                    :user_uuid,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP
@@ -7624,43 +7514,56 @@ class OracleClient:
                     "lease_owner": job["lease_owner"],
                     "time_limit_seconds": job["time_limit_seconds"],
                     "source_workbook_id": job.get("source_workbook_id"),
+                    "search_answer_profile_id": job.get("search_answer_profile_id"),
+                    "compare_search_answer_profile_id": job.get("compare_search_answer_profile_id"),
+                    "user_uuid": job.get("user_uuid"),
                 },
             )
         )
 
     async def get_evaluation_job(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
+        self, job_id: str, *, viewer: EvaluationJobVisibility
     ) -> dict[str, object] | None:
-        """投入した利用者（tenant と user の hash）の品質評価の job を 1 件返す。"""
+        """見る利用者が見られる品質評価の job を 1 件返す（#4811）。"""
+        visible, binds = evaluation_job_visibility_sql(viewer)
         return await self._fetch_one(
             f"""
             SELECT
-                job_id,
-                kind,
-                status,
-                total_cases,
-                completed_cases,
+                {_EVALUATION_JOB_COLUMNS},
                 current_case_id,
                 current_case_started_at,
-                time_limit_seconds,
-                error_message,
-                result_json,
-                evaluation_run_id,
-                source_workbook_id,
-                created_at,
-                started_at,
-                finished_at,
-                heartbeat_at
+                result_json
             FROM rag_evaluation_jobs
             WHERE job_id = :job_id
-              AND {_EVALUATION_JOB_OWNER_SQL}
+              AND {visible}
             """,
-            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+            {**binds, "job_id": job_id},
         )
+
+    async def list_evaluation_jobs(
+        self, *, viewer: EvaluationJobVisibility, offset: int, limit: int
+    ) -> tuple[list[dict[str, object]], int]:
+        """見る利用者が見られる品質評価の job を新しい順に返す（#4811）。
+
+        結果の本体（`result_json`）は読まず、全体の判定（`$.passed`）だけを読む。件数も返す。
+        """
+        visible, binds = evaluation_job_visibility_sql(viewer)
+        rows = await self._fetch_all(
+            f"""
+            SELECT
+                {_EVALUATION_JOB_COLUMNS},
+                JSON_VALUE(result_json, '$.passed') AS passed
+            FROM rag_evaluation_jobs
+            WHERE {visible}
+            ORDER BY created_at DESC, job_id DESC
+            {offset_fetch_clause()}
+            """,
+            {**binds, **offset_fetch_binds(offset=offset, limit=limit)},
+        )
+        count = await self._fetch_one(
+            f"SELECT COUNT(*) AS total FROM rag_evaluation_jobs WHERE {visible}", binds
+        )
+        return rows, int(cast(int, count.get("total") or 0)) if count else 0
 
     async def update_evaluation_job_progress(
         self,
@@ -7823,42 +7726,31 @@ class OracleClient:
 
         return await self._run_transaction(operation) > 0
 
-    async def list_evaluation_job_case_results(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-    ) -> list[dict[str, object]]:
-        """投入した利用者の job の、保存したケースの結果をケースの順に返す（#4208）。"""
+    async def list_evaluation_job_case_results(self, job_id: str) -> list[dict[str, object]]:
+        """job の保存したケースの結果をケースの順に返す（#4208）。
+
+        呼び出し元が job を見られることを確かめてから呼ぶ（#4811）。
+        """
         rows = await self._fetch_all(
-            f"""
+            """
             SELECT
-                r.pass_index,
-                r.case_index,
-                r.case_id,
-                r.search_answer_profile_id,
-                r.result_json
-            FROM rag_evaluation_job_case_results r
-            JOIN rag_evaluation_jobs j ON j.job_id = r.job_id
-            WHERE r.job_id = :job_id
-              AND {_EVALUATION_JOB_OWNER_SQL}
-            ORDER BY r.pass_index, r.case_index
+                pass_index,
+                case_index,
+                case_id,
+                search_answer_profile_id,
+                result_json
+            FROM rag_evaluation_job_case_results
+            WHERE job_id = :job_id
+            ORDER BY pass_index, case_index
             """,
-            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+            {"job_id": job_id},
         )
         return [{**row, "result_json": _json_loads(row.get("result_json"))} for row in rows]
 
-    async def cancel_evaluation_job(
-        self,
-        job_id: str,
-        *,
-        tenant_id_hash: str | None,
-        user_id_hash: str | None,
-        error_message: str,
-    ) -> bool:
-        """投入した利用者の RUNNING job を取り消す。取り消せなければ False。
+    async def cancel_evaluation_job(self, job_id: str, *, error_message: str) -> bool:
+        """RUNNING の job を取り消す。取り消せなければ False。
 
+        呼び出し元が取り消せる利用者（実行した本人・system_admin）かを確かめてから呼ぶ（#4811）。
         実行中のプロセスは、次の heartbeat か進捗の更新で RUNNING でなくなったことを知り、
         評価を止める（別のプロセスが実行している場合も止まる）。
         """
@@ -7866,7 +7758,7 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
                 connection,
-                f"""
+                """
                 UPDATE rag_evaluation_jobs
                 SET status = 'CANCELLED',
                     error_message = :error_message,
@@ -7877,14 +7769,8 @@ class OracleClient:
                     updated_at = SYSTIMESTAMP
                 WHERE job_id = :job_id
                   AND status = 'RUNNING'
-                  AND {_EVALUATION_JOB_OWNER_SQL}
                 """,
-                {
-                    "job_id": job_id,
-                    "tenant_id_hash": tenant_id_hash,
-                    "user_id_hash": user_id_hash,
-                    "error_message": _truncate_text(error_message, 2000),
-                },
+                {"job_id": job_id, "error_message": _truncate_text(error_message, 2000)},
             )
 
         return await self._run_transaction(operation) > 0
@@ -9493,7 +9379,6 @@ class OracleClient:
         description: str | None,
         config: SearchAnswerProfileConfig | None,
         update_fields: set[str] | None,
-        language_pack_patch: dict[str, dict[str, object]] | None = None,
     ) -> SearchAnswerProfileDetail:
         """Oracle search answer profile table を更新する。"""
         fields = update_fields or {
@@ -9525,28 +9410,6 @@ class OracleClient:
             if existing is None:
                 raise KeyError(
                     f"search_answer_profile_id={search_answer_profile_id} は存在しません。"
-                )
-            if language_pack_patch is None and config is not None:
-                from app.rag.question_understanding import question_understanding_overrides
-
-                current_config = _to_search_answer_profile_detail(existing).config
-                if question_understanding_overrides(
-                    config.language_pack
-                ) != question_understanding_overrides(current_config.language_pack):
-                    raise ValueError(
-                        "質問の理解の設定が変わりました。最新情報を取得して、専用のタブから保存してください。"
-                    )
-            if language_pack_patch is not None:
-                from app.rag.question_understanding import replace_question_understanding
-
-                current_config = _to_search_answer_profile_detail(existing).config
-                requested_config = SearchAnswerProfileConfig.model_validate(
-                    {
-                        **current_config.model_dump(),
-                        "language_pack": replace_question_understanding(
-                            current_config.language_pack, language_pack_patch
-                        ),
-                    }
                 )
             if existing.status != SearchAnswerProfileStatus.ACTIVE:
                 # アーカイブ済みは編集・保存しない（画面の読み取り専用と同じ。#961）。
@@ -12883,14 +12746,69 @@ def _record_db_execute(started: float, *, rows: int = 0) -> None:
         stats.record_execute(rows=rows, seconds=perf_counter() - started)
 
 
-# 品質評価の job を、投入した利用者（tenant と user の hash）だけが見られるようにする条件（#390）。
-# hash が無い（認証なしの開発環境など）場合は、hash の無い job だけを対象にする。
 # 回答の本文を 1 回に読む trace の数（`IN` の上限は 1000。評価は 1 job で最大 400 ケース）。
 _EVALUATION_ANSWER_BATCH = 500
-_EVALUATION_JOB_OWNER_SQL = (
-    "(tenant_id_hash = :tenant_id_hash OR (tenant_id_hash IS NULL AND :tenant_id_hash IS NULL)) "
-    "AND (user_id_hash = :user_id_hash OR (user_id_hash IS NULL AND :user_id_hash IS NULL))"
-)
+# 品質評価の job の一覧・詳細で読む列（結果の本体・今のケースは詳細だけ。#4811）。
+_EVALUATION_JOB_COLUMNS = """job_id,
+                kind,
+                status,
+                tenant_id_hash,
+                user_id_hash,
+                total_cases,
+                completed_cases,
+                time_limit_seconds,
+                error_message,
+                evaluation_run_id,
+                source_workbook_id,
+                search_answer_profile_id,
+                compare_search_answer_profile_id,
+                user_uuid,
+                created_at,
+                started_at,
+                finished_at,
+                heartbeat_at"""
+
+
+def evaluation_job_visibility_sql(viewer: EvaluationJobVisibility) -> tuple[str, dict[str, object]]:
+    """品質評価の job を見られる条件と bind（#4811。`EvaluationJobViewer.can_view` と同じ規則）。
+
+    - 同じ tenant の job だけ（hash が無い開発環境は、hash の無い job だけ）。
+    - 使った検索・回答プロファイルの分かる job は、そのプロファイル（主と、あれば比べる方）を
+      すべて今使える利用者が見られる（対象範囲の制限の無い system_admin は全部）。
+    - プロファイルの分からない job は、実行した本人（user の hash の一致）と system_admin だけ。
+    """
+    binds: dict[str, object] = {"viewer_tenant_id_hash": viewer.tenant_id_hash}
+    tenant = (
+        "(tenant_id_hash = :viewer_tenant_id_hash "
+        "OR (tenant_id_hash IS NULL AND :viewer_tenant_id_hash IS NULL))"
+    )
+    if viewer.all_users_visible:
+        unknown = "1 = 1"
+    else:
+        unknown = (
+            "(user_id_hash = :viewer_user_id_hash "
+            "OR (user_id_hash IS NULL AND :viewer_user_id_hash IS NULL))"
+        )
+        binds["viewer_user_id_hash"] = viewer.user_id_hash
+    allowed = viewer.allowed_search_answer_profile_ids
+    if allowed is None:
+        known = "1 = 1"
+    elif not allowed:
+        known = "1 = 0"
+    else:
+        names = [f"viewer_profile_id_{index}" for index in range(len(allowed))]
+        binds.update(zip(names, sorted(allowed), strict=True))
+        placeholders = ", ".join(f":{name}" for name in names)
+        known = (
+            f"search_answer_profile_id IN ({placeholders}) "
+            "AND (compare_search_answer_profile_id IS NULL "
+            f"OR compare_search_answer_profile_id IN ({placeholders}))"
+        )
+    return (
+        f"{tenant} AND ((search_answer_profile_id IS NOT NULL AND {known}) "
+        f"OR (search_answer_profile_id IS NULL AND {unknown}))",
+        binds,
+    )
 
 
 def _truncate_text(value: str | None, limit: int) -> str | None:
@@ -15638,8 +15556,10 @@ def _full_width_ascii(value: str) -> str:
 
 # 新しい版に置き換えた文書(旧版)を除く述語(#1248)。
 _NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"
-# 派生の chunk の原文を chunk の番号で読むときの、1 回の番号の数の上限(bind の数を抑える。#2641)。
-_MAX_SOURCE_CHUNK_INDICES = 200
+# 文書全体の要約の chunk を除く述語(``c`` = rag_chunks。content_kind の無い chunk は残す。#4793)。
+_NOT_DOCUMENT_SUMMARY_CHUNK_SQL = (
+    f"NVL(JSON_VALUE(c.metadata_json, '$.content_kind'), '-') <> '{DOCUMENT_SUMMARY_CONTENT_KIND}'"
+)
 
 
 def _includes_superseded_documents(filters: Mapping[str, str]) -> bool:
@@ -16811,32 +16731,10 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             if row.get("heartbeat_at") is not None
             else None
         ),
-        passage_record=_message_passage_record(row),
         answer_format=answer_format_record(_json_loads(row.get("answer_format_json"))),
         answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
+        approved_faq_direct_score=_optional_float(row.get("approved_faq_direct_score")),
     )
-
-
-_MESSAGE_PASSAGE_COLUMNS = (
-    ("passage_marks", "passage_marks_json"),
-    ("removed_passages", "removed_passages_json"),
-    ("answer_warnings", "answer_warnings_json"),
-)
-
-
-def _message_passage_record(row: Mapping[str, object]) -> dict[str, Any] | None:
-    """回答の記録から読んだ段落の印の 3 つ（#2738）。どれも無ければ None。"""
-    values: dict[str, Any] = {}
-    for key, column in _MESSAGE_PASSAGE_COLUMNS:
-        raw = row.get(column)
-        if isinstance(raw, str | bytes):
-            try:
-                raw = json.loads(raw)
-            except ValueError:
-                raw = None
-        if isinstance(raw, list):
-            values[key] = raw
-    return values or None
 
 
 def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
@@ -16907,6 +16805,9 @@ def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
         "chunk_count": _int_value(normalized.get("chunk_count")),
         "vector_count": _int_value(normalized.get("vector_count")),
         "chunk_set_status": _optional_str(normalized.get("chunk_set_status")),
+        "active_recipe_subset": _json_loads(normalized.get("active_recipe_subset")) or None,
+        "document_file_name": _optional_str(normalized.get("document_file_name")),
+        "document_content_type": _optional_str(normalized.get("document_content_type")),
         "pending_chunk_set_id": _optional_str(normalized.get("pending_chunk_set_id")),
         "config_revision": max(1, _int_value(normalized.get("config_revision")) or 1),
         "materialized_revision": _optional_int(normalized.get("materialized_revision")),
@@ -17680,8 +17581,7 @@ def _pem_file_is_encrypted(path: Path) -> bool:
 def oracle_search_answer_profile_knowledge_schema_sql(
     table_name: str = "rag_search_answer_profile_knowledge",
 ) -> str:
-    """検索・回答プロファイル単位の知識(ドメインキーワード / Approved FAQ / 用語・同義語 /
-    回答ルール)の DDL。
+    """検索・回答プロファイル単位の知識(ドメインキーワード / Approved FAQ / 用語・同義語)の DDL。
 
     rag_poc の JSON payload 形式をそのまま 1 行 1 種別で保持する。
     """
@@ -18790,7 +18690,8 @@ def oracle_evaluation_job_schema_sql(
 
     質問・回答・根拠の本文は保存しない（結果の回答の診断は外す。#4107）。job は投入を受けた
     backend のプロセスで動き、そのプロセスが止まったら heartbeat が途絶えて失敗になる（別の
-    プロセスは引き継がない）。終わったケースの結果は別の表に残す（#4208）。
+    プロセスは引き継がない）。終わったケースの結果は別の表に残す（#4208）。使った検索・回答
+    プロファイルと実行した利用者の UUID は見え方の判定と一覧の表示に使う（#4811）。
     """
     return f"""
 CREATE TABLE {table_name} (
@@ -18810,13 +18711,16 @@ CREATE TABLE {table_name} (
     result_json             JSON,
     evaluation_run_id       VARCHAR2(64),
     source_workbook_id      VARCHAR2(64),
+    search_answer_profile_id VARCHAR2(128),
+    compare_search_answer_profile_id VARCHAR2(128),
+    user_uuid               VARCHAR2(64),
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_source_workbook_fk FOREIGN KEY (source_workbook_id)
         REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL,
-    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'calibration')),
+    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
 );
@@ -19140,7 +19044,6 @@ def _to_knowledge_base_detail(
         if isinstance(structure_override, bool)
         else None,
         structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
-        legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
     )
 
 

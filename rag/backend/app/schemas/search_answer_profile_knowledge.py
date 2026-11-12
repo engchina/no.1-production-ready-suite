@@ -1,6 +1,6 @@
 """検索・回答プロファイル単位の知識(ドメインキーワード等)の API schema。"""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
@@ -61,6 +61,8 @@ class ApprovedFaqRecordData(BaseModel):
     question: str
     answer: str
     alternate_questions: list[str] = Field(default_factory=list)
+    # 否定の質問(この FAQ を当てたくない質問の例。当たったら候補から外す。#4788)。
+    negative_questions: list[str] = Field(default_factory=list)
     status: str = ""
     # FAQ を使える範囲(この KB をすべて使える利用者だけに提示・回答で使う)。
     target_knowledge_base_ids: list[str] = Field(default_factory=list)
@@ -88,11 +90,26 @@ class ApprovedFaqListData(BaseModel):
     records: list[ApprovedFaqRecordData] = Field(default_factory=list)
     # 回答の前に類似問を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。
     enabled: bool = True
+    # 一致度が下限以上のとき、チャットで FAQ の回答をそのまま返すか(未設定はオフ。#4788)。
+    direct_answer_enabled: bool = False
+    # そのまま返す一致度の下限(全体設定の値。画面の説明に出す)。
+    direct_answer_min_score: float = 0.0
     knowledge_bases: list[ApprovedFaqKnowledgeBaseData] = Field(default_factory=list)
 
 
 class ApprovedFaqSettingsRequest(BaseModel):
-    enabled: bool
+    """プロファイルごとの FAQ の設定。送った項目だけを変える。"""
+
+    enabled: bool | None = None
+    direct_answer_enabled: bool | None = None
+
+
+class ApprovedFaqNegativeQuestionsRequest(BaseModel):
+    """FAQ の否定の質問の全置換(空は全部消す)。空白だけの行と重複は保存時に除く。"""
+
+    negative_questions: list[Annotated[str, Field(max_length=1000)]] = Field(
+        default_factory=list, max_length=20
+    )
 
 
 class ApprovedFaqConfirmRequest(BaseModel):
@@ -107,6 +124,10 @@ class ApprovedFaqAddRequest(BaseModel):
     answer: str = Field(max_length=20000)
     # 対象のナレッジベース(未指定はプロファイルの全 KB。#4621)。
     target_knowledge_base_ids: list[str] | None = Field(default=None, max_length=200)
+    # 否定の質問(この FAQ を当てたくない質問の例。#4788)。
+    negative_questions: list[Annotated[str, Field(max_length=1000)]] = Field(
+        default_factory=list, max_length=20
+    )
 
     @field_validator("question", "answer")
     @classmethod
@@ -128,6 +149,7 @@ class ApprovedFaqMutationData(ApprovedFaqListData):
 
 
 class ApprovedFaqImportRowData(BaseModel):
+    negative_questions: list[str] = Field(default_factory=list)
     question: str
     answer: str
     row: int = 0
@@ -148,7 +170,7 @@ class ApprovedFaqSuggestRequest(BaseModel):
 
 
 class ApprovedFaqSuggestionData(BaseModel):
-    """類似問候補。direct=true は FAQ 回答をそのまま使える一致度(0.92 以上)。"""
+    """類似問候補。direct=true は FAQ 回答をそのまま使える一致度(そのまま返す一致度の下限以上)。"""
 
     id: str
     question: str
@@ -160,36 +182,25 @@ class ApprovedFaqSuggestionData(BaseModel):
 
 class ApprovedFaqSuggestionsData(BaseModel):
     suggestions: list[ApprovedFaqSuggestionData] = Field(default_factory=list)
+    # チャットで、送信の後に FAQ の回答をそのまま返す見込み(候補を出さずに送る。#4788)。
+    direct_answer: bool = False
 
 
 class RuntimeKnowledgeData(BaseModel):
-    """検索・回答プロファイルの用語・同義語と回答ルール(rag_poc runtime knowledge の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語(rag_poc runtime knowledge の標準形式)。"""
 
     search_answer_profile_id: str
     terms: list[dict[str, JsonValue]] = Field(default_factory=list)
-    rules: list[dict[str, JsonValue]] = Field(default_factory=list)
 
 
 class RuntimeKnowledgeEditRequest(BaseModel):
-    """1 行の追加・更新・削除。selected 未指定は追加。"""
+    """用語 1 行の追加・更新・削除。selected 未指定は追加。"""
 
-    kind: Literal["terms", "rules"]
     selected: str | None = Field(default=None, max_length=160)
-    name: str = Field(
-        default="",
-        max_length=160,
-        description="用語、またはルール ID（ルール追加時に省略すると自動採番）",
-    )
-    title: str = Field(default="", max_length=160, description="ルール名(rules のみ)")
-    labels: str = Field(
-        default="", max_length=8000, description="別名 / 照合キーワード(改行・読点区切り)"
-    )
-    content: str = Field(default="", max_length=8000, description="説明 / ルール内容")
+    name: str = Field(default="", max_length=160, description="用語")
+    labels: str = Field(default="", max_length=8000, description="別名(改行・読点区切り)")
+    content: str = Field(default="", max_length=8000, description="説明")
     source: str = Field(default="", max_length=800)
-    purpose: Literal["confirmation", "generation", "both"] | None = None
-    instruction_kind: Literal["presentation", "requirement", "verification"] | None = None
-    exclusive_group: str | None = Field(default=None, max_length=160)
-    priority: int | None = Field(default=None, ge=0, le=100, strict=True)
     enabled: bool = True
     delete: bool = False
 
@@ -199,25 +210,10 @@ class RuntimeKnowledgePreviewRequest(BaseModel):
 
 
 class RuntimeKnowledgePreviewData(BaseModel):
-    """照合テスト: 一致した用語・同義語と回答ルールと拡張後の検索文。"""
+    """照合テスト: 一致した用語・同義語と拡張後の検索文。"""
 
     expanded_question: str
     matched_terms: list[str] = Field(default_factory=list)
-    matched_rules: list[str] = Field(default_factory=list)
-    conflicting_rules: list[str] = Field(default_factory=list)
-
-
-class ClarificationSection(BaseModel):
-    """確認の選択肢が指す文書の章節。ページは保存したときの章節のページ範囲。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    document_id: str = Field(min_length=1, max_length=64)
-    document_name: str = Field(default="", max_length=512)
-    section_id: str = Field(min_length=1, max_length=64)
-    title: str = Field(min_length=1, max_length=200)
-    page_start: int | None = Field(default=None, ge=1)
-    page_end: int | None = Field(default=None, ge=1)
 
 
 class ClarificationOption(BaseModel):
@@ -230,10 +226,8 @@ class ClarificationOption(BaseModel):
     description: str = Field(default="", max_length=200)
     # 選んだとき補助の検索文に足す語。
     search_terms: list[str] = Field(default_factory=list, max_length=10)
-    # 選んだとき回答に渡す前提(例: 「利用者は経費精算画面について質問している」)。
+    # 選んだとき回答に渡す前提(例: 「条件 A は値 B」)。
     premise: str = Field(default="", max_length=300)
-    # 選んだとき検索を絞る章節(複数可)。
-    sections: list[ClarificationSection] = Field(default_factory=list, max_length=20)
 
     @field_validator("label")
     @classmethod
@@ -249,8 +243,8 @@ class ClarificationOption(BaseModel):
         return [value.strip()[:50] for value in values if value.strip()]
 
 
-class RuleClarification(BaseModel):
-    """確認の質問。自由入力のみ、または選択肢2〜8件。"""
+class GuideConditionClarification(BaseModel):
+    """確認の質問(業務ガイドの条件の確認)。自由入力のみ、または選択肢2〜8件。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -268,7 +262,7 @@ class RuleClarification(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def _unique_options(self) -> "RuleClarification":
+    def _unique_options(self) -> "GuideConditionClarification":
         if len(self.options) == 1 or (not self.options and not self.allow_other):
             raise ValueError("選択肢は2つ以上、または自由入力だけの確認にしてください。")
         ids = [option.id for option in self.options]
@@ -277,21 +271,17 @@ class RuleClarification(BaseModel):
         return self
 
 
-class RuleClarificationRequest(BaseModel):
-    """ルールの確認の保存。None は確認を外す。"""
-
-    clarification: RuleClarification | None = None
-
-
 class ClarificationSuggestRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # 利用者が類似問の候補を「どれでもない」と断った質問(FAQ の回答をそのまま返さない。#4788)。
+    approved_faq_declined: bool = False
 
 
 class ClarificationSuggestionData(BaseModel):
-    rule_id: str
-    rule_title: str
-    clarification: RuleClarification
+    guide_condition_id: str
+    guide_title: str
+    clarification: GuideConditionClarification
 
 
 class ClarificationSuggestionsData(BaseModel):
@@ -301,17 +291,17 @@ class ClarificationSuggestionsData(BaseModel):
     question_context_token: str | None = None
 
 
-class ClarificationAnswer(BaseModel):
+class GuideConditionAnswer(BaseModel):
     """チャットで利用者が確認に答えた内容。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    rule_id: str = Field(min_length=1, max_length=128)
+    guide_condition_id: str = Field(min_length=1, max_length=128)
     option_ids: list[str] = Field(default_factory=list, max_length=8)
     other_text: str = Field(default="", max_length=500)
 
     @model_validator(mode="after")
-    def _require_choice(self) -> "ClarificationAnswer":
+    def _require_choice(self) -> "GuideConditionAnswer":
         if not self.option_ids and not self.other_text.strip():
             raise ValueError("選択肢を選ぶか、その他を入力してください。")
         return self

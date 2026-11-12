@@ -4,7 +4,13 @@ import json
 from copy import deepcopy
 from unittest.mock import patch
 
-from rag_engine.adapters.oci import PictureDescriptionOutput, _compact_schema, _picture_output_contract, _render_prompt
+from rag_engine.adapters.oci import (
+    PictureDescriptionOutput,
+    _compact_schema,
+    _picture_output_contract,
+    _render_prompt,
+    picture_response_schema,
+)
 from rag_engine.knowledge.prompt_files import DEFAULT_IMAGE_RETRIEVAL_PROMPT
 from rag_engine.models.llm import _StrictModel
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description, vision_description_text
@@ -33,10 +39,11 @@ def test_custom_policy_survives_refinement_and_runtime_rules_are_not_duplicated(
             prompt = _render_prompt({"paired_ocr_text": "[OK]", "owning_section": {"text_preview": "確認操作"}})
         assert prompt.count(RULES_START) == 1
         assert "table_rows の原文を検索向けに書き換えない" in prompt
-        assert "flowchart / architecture_diagram" in prompt
         assert "業務タイトル・画面名・操作情報" in prompt
         assert "next_record の見出しは次節の境界" in prompt
-        assert "同じ行のセルの配列" in prompt
+        # 項目の意味は応答の schema だけで渡し、文に重ねない(#4782)。
+        assert "flowchart / architecture_diagram" not in prompt
+        assert "同じ行のセルの配列" not in prompt
         assert f"各行は最大 {MAX_TABLE_COLUMNS} セル" in prompt
         assert "長表は出力契約の上限まで原本の先頭の行を保持する" in prompt
         assert f"table_rows={MAX_TABLE_ROWS}" in prompt
@@ -183,7 +190,7 @@ def test_required_rules_stay_in_every_default_prompt():
             assert rule in prompt, rule
 
 
-def test_output_fields_are_unchanged_and_each_has_a_description_in_the_contract():
+def test_output_fields_are_unchanged_and_each_has_a_description_in_the_response_schema():
     expected = {
         "surrounding_context", "correction_notes", "main_topic", "visual_kind",
         "diagram_title", "diagram_nodes", "diagram_edges", "diagram_summary",
@@ -194,13 +201,16 @@ def test_output_fields_are_unchanged_and_each_has_a_description_in_the_contract(
         "answerable_questions", "query_rewrites", "search_keywords", "retrieval_text",
     }  # fmt: skip
     assert set(PictureDescriptionOutput.model_fields) == expected
-    contract = json.loads(_picture_output_contract().rsplit("\n", 1)[1])
+    contract = picture_response_schema()
+    # 出力の形は応答の schema だけで渡し、文の契約には載せない(#4782)。
+    assert "{" not in _picture_output_contract()
     for name in expected:
         assert contract["properties"][name].get("description"), name
     # 入れ子の項目も説明を持つ（kind は読取方針が見た目の判定を持つ）。
     for model, fields in {
         "ConditionResultPairOutput": ("condition", "result", "visible_text"),
-        "DiagramEdgeOutput": ("source", "target", "label"),
+        "DiagramNodeOutput": ("id", "kind", "label"),
+        "DiagramEdgeOutput": ("source", "target", "label", "direction"),
         "ChartSeriesOutput": ("name", "values", "trend"),
         "FormFieldOutput": ("name", "value", "state"),
     }.items():
@@ -326,16 +336,6 @@ def test_rules_require_all_visible_buttons_with_their_key_labels():
     assert "画面へ重ねた注記（丸数字・番号・矢印・吹き出し・囲み線）は操作部品ではないので含めず" in rules
 
 
-def test_enumeration_lines_cover_group_headings_and_word_lists():
-    """語の列挙とグループ見出しだけを本文から外し、説明の行は残す (#773)。"""
-    from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
-
-    excluded = ["■ 可視情報", "主題: 掛率登録", "ボタン: 戻る / 削除", "値: 画面例: コード=E2", "検索語: 掛率登録"]
-    kept = ["回答用本文: 画面の説明。", "条件と結果: 未使用コード → 初期表示", "表の行:", "- 1行目: A1 | ○"]
-    assert all(is_vision_enumeration_line(line) for line in excluded)
-    assert not any(is_vision_enumeration_line(line) for line in kept)
-
-
 def test_edited_legacy_block_is_sent_without_a_replacement_warning():
     refined = refine_image_retrieval_prompt("独自方針")
     assert managed_block_warning(refined) == ""
@@ -344,20 +344,6 @@ def test_edited_legacy_block_is_sent_without_a_replacement_warning():
     assert managed_block_warning(edited) == ""
     assert "1. 原文保持（編集）" in refine_image_retrieval_prompt(edited)
     assert managed_block_warning("管理ブロックのない旧テンプレート") == ""
-
-
-def test_rules_use_caller_purpose_without_widening_values_or_discarding_operations():
-    # 解析用途と後段回答policyの切替は別の小項目。ここでは既存後段policyを変えない。
-    from rag_engine.generation.answer_policy import DOCUMENT_VALUE_POLICY
-    from rag_engine.parsing.vision_prompt_rules import vision_extraction_rules
-
-    rules = vision_extraction_rules()
-    assert "metadata.vision_image_purpose" in rules
-    assert "record の可視値" in rules and "対象と記録時点に限る" in rules
-    assert "example の可視値" in rules and "操作条件" in rules
-    assert "用途が未記録なら" in rules and "現在の状態、未記載の条件" in rules
-    assert "原則として文書の例示" not in rules
-    assert "「画面例では〇〇」と書き" in DOCUMENT_VALUE_POLICY
 
 
 def test_default_vision_request_has_one_ordered_step_sequence_for_each_target():
@@ -373,4 +359,111 @@ def test_default_vision_request_has_one_ordered_step_sequence_for_each_target():
         assert "{{image}}" not in prompt
         # 出力契約を Step 形式にしても、文字列値の創作を許さない。
         assert "必須キーを埋めるために情報を創作しない" in prompt
-        assert '"required"' in prompt
+        assert '"required"' not in prompt
+
+
+def _layout_record(record_id, category, text="", *, page=1, seq_no=1, raw_type=""):
+    from rag_engine.models.layout import LayoutRecord
+
+    return LayoutRecord(
+        id=record_id,
+        engine="docling",
+        page=page,
+        seq_no=seq_no,
+        bbox=[1.0, float(seq_no), 9.0, float(seq_no) + 1.0],
+        coord_system="image_top_left",
+        page_width=10.0,
+        page_height=100.0,
+        category=category,
+        text=text,
+        raw_type=raw_type,
+    )
+
+
+def _page_text_sample_of(picture, records):
+    from types import SimpleNamespace
+
+    from rag_engine.parsing.picture_descriptions import _vision_metadata
+    from rag_engine.parsing.vision_prompt_rules import PAGE_TEXT_SAMPLE_KEY
+
+    crop = SimpleNamespace(bbox=[0.0, 0.0, 9.0, 9.0], source_record_refs=())
+    metadata = _vision_metadata(
+        pdf_name="a.pdf", record=picture, target_crop_path="t.png", context_crop_path="c.png", context_crop=crop, records=records
+    )
+    return metadata[PAGE_TEXT_SAMPLE_KEY]
+
+
+def test_page_text_sample_is_the_longest_body_text_of_the_same_page():
+    """説明を書く言語の基準は、対象と同じページの最も長い本文（合成の日本語・英語の文書と、画像だけ）。"""
+    from rag_engine.parsing.picture_descriptions import PAGE_TEXT_SAMPLE_CHARS
+
+    picture = _layout_record("p1", "Picture", seq_no=30, raw_type="picture")
+    japanese_body = "合成の文書 A の本文です。月ごとの件数の推移を次の図に示します。"
+    japanese = [
+        _layout_record("h1", "Section-header", "1. 概要", seq_no=10),
+        _layout_record("t1", "Text", japanese_body, seq_no=20),
+        picture,
+        _layout_record("c1", "Caption", "図 1", seq_no=40),
+    ]
+    assert _page_text_sample_of(picture, japanese) == japanese_body
+
+    english_body = "This is the body of synthetic document B. The next figure shows the monthly counts."
+    english = [_layout_record("t1", "Text", english_body, seq_no=20), picture, _layout_record("c1", "Caption", "Figure 1", seq_no=40)]
+    assert _page_text_sample_of(picture, english) == english_body
+
+    # 画像だけのファイル: 本文が無いので空（画像の中の文字の OCR は本文に数えない）。
+    ocr = _layout_record("o1", "Picture", "[OCR] 合成のグラフ", seq_no=30, raw_type="picture_ocr_text")
+    assert _page_text_sample_of(picture, [picture]) == ""
+    assert _page_text_sample_of(picture, [picture, ocr]) == ""
+
+    # 図・表・柱の文は本文に数えない（図と表の本文は、読み取りが書いた説明のことがある）。
+    not_body = [
+        picture,
+        _layout_record("p2", "Picture", "Synthetic description written by a model. " * 5, seq_no=50, raw_type="picture"),
+        _layout_record("b1", "Table", "<table><tr><td>Synthetic cell text of a long table</td></tr></table>", seq_no=60),
+        _layout_record("f1", "Page-footer", "Synthetic confidential footer of the page", seq_no=70),
+    ]
+    assert _page_text_sample_of(picture, not_body) == ""
+    assert _page_text_sample_of(picture, [*not_body, _layout_record("t2", "Text", "合成の本文", seq_no=80)]) == "合成の本文"
+
+    # 長い本文は上限で切る。同じ長さなら読み順の先を選ぶ。
+    long_text = "あ" * (PAGE_TEXT_SAMPLE_CHARS + 50)
+    cut = _page_text_sample_of(picture, [picture, _layout_record("t3", "Text", long_text, seq_no=80)])
+    assert len(cut) == PAGE_TEXT_SAMPLE_CHARS and cut.endswith("…")
+    tied = [picture, _layout_record("t5", "Text", "合成の本文 B", seq_no=90), _layout_record("t4", "Text", "合成の本文 A", seq_no=80)]
+    assert _page_text_sample_of(picture, tied) == "合成の本文 A"
+
+
+def test_page_text_sample_does_not_depend_on_other_pages():
+    """段ごとの先読みと全体の読み取りで prompt（checkpoint の鍵）が同じになるよう、ほかのページを見ない。"""
+    picture = _layout_record("p1", "Picture", page=2, seq_no=30, raw_type="picture")
+    same_page = [_layout_record("t1", "Text", "合成の文書 A の 2 ページ目の本文です。", page=2, seq_no=20), picture]
+    other_pages = [
+        _layout_record("t0", "Text", "This long synthetic paragraph is on the first page of the document. " * 3, page=1, seq_no=10),
+        _layout_record("t9", "Text", "This long synthetic paragraph is on the third page of the document. " * 3, page=3, seq_no=10),
+    ]
+    assert _page_text_sample_of(picture, same_page) == _page_text_sample_of(picture, [*other_pages, *same_page])
+    # 同じページに本文が無ければ、ほかのページに本文があっても空（画像の中の文字の言語で書く）。
+    assert _page_text_sample_of(picture, [*other_pages, picture]) == ""
+
+
+def test_description_language_rule_is_written_once_in_the_output_contract():
+    """説明を書く言語の決まりは出力契約の 1 か所だけにあり、基準の本文は metadata の key で渡る。"""
+    from rag_engine.generation.response_language import default_response_language
+    from rag_engine.parsing.vision_prompt_rules import PAGE_TEXT_SAMPLE_KEY
+
+    contract = _picture_output_contract()
+    assert "### 説明の言語" in contract
+    assert f"metadata.{PAGE_TEXT_SAMPLE_KEY}" in contract
+    # 画像にも文字が無いときの既定は、回答の既定の言語と同じ正本から差し込む。
+    assert f"画像に文字も無ければ{default_response_language()}で書いてください。" in contract
+    # 項目の説明と、編集できる読み取りの方針・対象の指示には、言語の決まりを重ねない。
+    assert "言語" not in json.dumps(picture_response_schema(), ensure_ascii=False)
+    for target_kind in ("picture", "table"):
+        sample = "合成の文書 A の本文です。"
+        prompt = _render_prompt({PAGE_TEXT_SAMPLE_KEY: sample}, target_kind=target_kind, template=DEFAULT_IMAGE_RETRIEVAL_PROMPT)
+        assert prompt.count("言語") == contract.count("言語")
+        assert prompt.index("## Step 7:") < prompt.index("### 説明の言語")
+        # 基準の本文は根拠データ（metadata）として渡り、指示の文には入らない。
+        assert prompt.count(sample) == 1
+        assert prompt.index(sample) < prompt.index("## Step 5:")

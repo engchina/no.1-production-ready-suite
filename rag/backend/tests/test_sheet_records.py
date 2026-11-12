@@ -111,7 +111,7 @@ def test_only_structured_records_jsonl_reads_sheet_records() -> None:
     """行の記録は構造化レコード JSONL だけが要素にする（Docling・Unstructured は診断で止める）。"""
     profile = _xlsx_profile()
     assert adapter_supports_source("docling", source_profile=profile, content_type="") is False
-    for backend in ("docling", "unstructured", "mineru"):
+    for backend in ("docling", "unstructured"):
         assert not adapter_supports_source(
             backend, source_profile=profile, content_type=f"{STRUCTURED_RECORDS_CONTENT_TYPE}; x=1"
         )
@@ -722,7 +722,7 @@ def test_recipe_excel_options_reach_the_preprocess_service(monkeypatch: Any) -> 
     )
     config = KnowledgeBaseAdapterConfig(ingestion=recipe)
     base = Settings(_env_file=None, rag_preprocess_enabled=True)
-    settings = base.model_copy(update=config.settings_overrides("ingestion"))
+    settings = base.model_copy(update=config.settings_overrides())
     options = preprocess_options(settings, "excel_to_jsonl")
     assert options is not None
     assert (options["mode"], options["header_row"]) == ("table", 2)

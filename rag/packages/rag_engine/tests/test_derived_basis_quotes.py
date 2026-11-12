@@ -1,11 +1,7 @@
 """導出の要点は、依存する basis の原文を引用として必ず隣に持つ（結論の言い換えで条件が消えても原文が残る）。"""
 
 import re
-from dataclasses import replace
 from types import SimpleNamespace
-
-import pytest
-from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -39,7 +35,7 @@ def part(kind, unit_ids, requirement="期限", result=DROPPED):
 
 def draft_of(parts, summary=(0,)):
     model, catalog, _ = catalog_case()
-    raw = {"answer_parts": parts, "summary_part_indexes": list(summary), "confidence": "medium"}
+    raw = {"response_kind": "answered", "answer_parts": parts, "summary_part_indexes": list(summary), "confidence": "medium"}
     return canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
 
 
@@ -99,18 +95,17 @@ def test_derived_part_with_quotes_is_linked_only_when_its_conclusion_is_publishe
     assert check_answer_parts(draft, {}, [application(True)], {"Q1"})["status"] == "incomplete"
 
 
-def run(valid: bool):
+def run():
     calls = []
 
     def parse(system, prompt, config, schema, **options):
         calls.append(schema.__name__)
-        if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": valid}], prompt=prompt, summary_supported=valid)
         if schema.__name__ != "GroundedDraftWire":
             raise RuntimeError(f"合成では呼ばない段: {schema.__name__}")
         ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
         return schema.model_validate(
             {
+                "response_kind": "answered",
                 "answer_parts": [part("answer", ids)],
                 "summary_part_indexes": [0],
                 "request_coverage": [
@@ -137,22 +132,9 @@ def run(valid: bool):
         source_run_id="synthetic",
         metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(TEXT)}]}},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = get_settings(environ={}, dotenv_path=None)
     with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
         response = synthesize_grounded_answer(
             "申請の期限はいつですか。", AnswerContext(records=[record], text=TEXT), settings, image_prompt_mode="text_only"
         ).response
     return response, calls
-
-
-@pytest.mark.parametrize("valid", [True, False], ids=["published", "withheld"])
-def test_formal_flow_shows_basis_originals_and_publishes_the_conclusion_only_after_the_gate(valid):
-    response, calls = run(valid)
-    assert calls[:2] == ["GroundedDraftWire", "ApplicationVerdictAudit"]
-    assert RULE in response.answer_text and EXCEPTION in response.answer_text
-    assert (DROPPED in response.answer_text) is valid
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["answer_parts"][0]["result_kind"] == "derived"
-    assert draft["answer_parts"][0]["item_indexes"] == [0]
-    assert draft["items"][0]["text"] == TEXT
-    assert response.generation_trace["applications"][0]["published"] is valid

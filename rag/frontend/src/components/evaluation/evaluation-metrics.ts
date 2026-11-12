@@ -2,20 +2,26 @@ import type {
   EvaluationMetricName,
   EvaluationMetrics,
   EvaluationOutcome,
+  EvaluationReferenceMetricName,
   EvaluationSuiteName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
-/** 六指標の分類・順序は評価の基準と品質評価で共有する。 */
+/** 四指標の分類・順序は評価の基準と品質評価で共有する。 */
 export type EvaluationPerspective = "retrieval" | "answer" | "decision";
 export const EVALUATION_PERSPECTIVES: ReadonlyArray<{id: EvaluationPerspective; metrics: readonly EvaluationMetricName[]}> = [
   {id:"retrieval", metrics:["required_evidence_recall", "mrr"]},
-  {id:"answer", metrics:["answer_correctness", "requirement_coverage", "claim_support_rate"]},
+  {id:"answer", metrics:["answer_correctness"]},
   {id:"decision", metrics:["response_decision_accuracy"]},
 ];
 export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] = EVALUATION_PERSPECTIVES.flatMap(item => item.metrics);
+/** 合否と閾値に使わない参考の指標。 */
+export const EVALUATION_REFERENCE_METRICS: readonly EvaluationReferenceMetricName[] = [
+  "precision_at_10", "ndcg_at_3", "ndcg_at_10", "map",
+  "bleu_1", "bleu_2", "bleu_4", "rouge_1", "rouge_2", "rouge_l",
+];
 export const LOWER_IS_BETTER_METRICS: ReadonlySet<string> = new Set();
-export const STANDARD_ANSWER_METRICS: ReadonlySet<EvaluationMetricName> = new Set(["answer_correctness", "requirement_coverage"]);
+export const STANDARD_ANSWER_METRICS: ReadonlySet<EvaluationMetricName> = new Set(["answer_correctness"]);
 export const EVALUATION_SUITE_NAMES: readonly EvaluationSuiteName[] = ["standard", "strict"];
 const METRIC_KEYS = Object.fromEntries(EVALUATION_METRIC_NAMES.map(name => [name, {
  label: `evaluation.metric.${name}` as I18nKey, description: `evaluation.metric.${name}.description` as I18nKey,
@@ -31,6 +37,7 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   unexpected_refusal: "evaluation.failureReason.unexpected_refusal",
   answer_keyword_miss: "evaluation.failureReason.answer_keyword_miss",
   low_groundedness: "evaluation.failureReason.low_groundedness",
+  // 次の 3 つは新しい評価では出ない。保存済みの結果の理由の表示のために残す（#4781）。
   claim_unassessed: "evaluation.failureReason.claim_unassessed",
   unsupported_claim: "evaluation.failureReason.unsupported_claim",
   missing_content: "evaluation.failureReason.missing_content",
@@ -46,7 +53,6 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   known_condition_reasked: "evaluation.failureReason.known_condition_reasked",
   screen_missing: "evaluation.failureReason.screen_missing",
   wrong_screen: "evaluation.failureReason.wrong_screen",
-  off_target: "evaluation.failureReason.off_target",
   case_error: "evaluation.failureReason.case_error",
 };
 
@@ -74,6 +80,10 @@ export function metricLabel(name: string): string {
 }
 export function metricDescription(name: EvaluationMetricName): string {
   return t(METRIC_KEYS[name].description);
+}
+
+export function referenceMetricLabel(name: EvaluationReferenceMetricName): string {
+  return t(`evaluation.reference.${name}` as I18nKey);
 }
 
 export function perspectiveLabel(perspective: EvaluationPerspective): string {
@@ -108,7 +118,7 @@ export function formatMetricValue(value: number | null | undefined): string {
 /** 集計結果の指標の値（保存済みの古い結果で欄が無いときは null）。 */
 export function metricValue(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName
+  name: EvaluationMetricName | EvaluationReferenceMetricName
 ): number | null {
   const value = metrics[name];
   return typeof value === "number" ? value : null;
@@ -117,13 +127,13 @@ export function metricValue(
 /** 指標の対象のケース数。古い結果で件数が無いときは null（件数を表示しない）。 */
 export function metricCaseCount(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName
+  name: EvaluationMetricName | EvaluationReferenceMetricName
 ): number | null {
   const count = metrics.metric_case_counts?.[name];
   return typeof count === "number" ? count : null;
 }
 
-/** 閾値の dict を、指標の並び順（観点の順）で返す。六指標以外は含めない。 */
+/** 閾値の dict を、指標の並び順（観点の順）で返す。四指標以外は含めない。 */
 export function orderedThresholdEntries(
   thresholds: Partial<Record<string, number | null>> | null | undefined
 ): Array<[string, number]> {
@@ -171,7 +181,7 @@ export interface EvaluationComparisonRow {
 
 /**
  * ナレッジベースの範囲と検索・回答プロファイルの範囲の結果を、指標ごとに並べる（#2402）。
- * 両側とも未評価でも六指標を表示し、差を未評価として扱う。
+ * 両側とも未評価でも四指標を表示し、差を未評価として扱う。
  */
 export function comparisonRows(
   base: EvaluationMetrics,

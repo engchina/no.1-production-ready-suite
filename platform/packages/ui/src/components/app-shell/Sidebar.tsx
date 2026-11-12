@@ -1,12 +1,15 @@
-import { useEffect, useLayoutEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound, X } from "lucide-react";
 
 import { cn } from "../../lib/utils";
 import type { NavLinkComponent, NavSection, SidebarLabels } from "../../navigation/types";
-import { Tooltip } from "../ui/tooltip";
+import { BUTTON_ICON_SIZE, Button, buttonVariants } from "../ui/button";
 import { DisclosureChevron } from "../ui/disclosure-chevron";
+import { FloatingActionMenu } from "../ui/floating-menu";
+import { Tooltip } from "../ui/tooltip";
 import { useNavDrawer, useSidebarCollapsed } from "./nav-drawer";
+import { nextMenuIndex } from "./PageHeader";
 
 export interface SidebarProps {
   /** ナビ構成（解決済みラベル）。 */
@@ -287,21 +290,22 @@ export interface SidebarFooterAction {
 }
 
 /**
- * アカウントの欄（名前・ロール）から開く画面（#1873）。欄の行全体をリンクにする。
+ * 利用者のメニューの「アカウント」の項目（#1873・#4724）。
  * `href` は製品の base を含む URL（`useHref`）、`onNavigate` はクライアント側の移動（修飾キーなしの左クリック）。
  */
 export interface SidebarAccountLink {
   href: string;
-  /** 読み上げ名（翻訳済み。例「アカウント設定を開く（山田）」）。折りたたみ時はツールチップにもなる。 */
+  /** メニューの項目の文言（翻訳済み。例「アカウント」）。 */
   label: string;
-  /** 今開いている画面か（`aria-current="page"` と強調）。 */
+  /** 今開いている画面か（欄とメニューの項目の `aria-current="page"` と、欄の強調）。 */
   active?: boolean;
   onNavigate?: () => void;
 }
 
 /**
- * サイドバー下部のアカウント領域。上から「ユーザー（name があるとき）→ notice → actions → ログアウト / テーマ切替」。
- * `account` を渡すと、ユーザーの欄（名前・ロール）の行全体がアカウントの画面へのリンクになる（#1873）。
+ * サイドバー下部のアカウント領域。上から「ユーザー（name があるとき）→ notice → actions → テーマ切替」。
+ * ユーザーの欄（アイコン・名前・ロール）を押すと、上に「アカウント」「ログアウト」のメニューを開く（#4724）。
+ * ログアウトの操作はメニューの中だけに置くので、`onLogout` は `name` と一緒に渡す。
  * Sidebar の `footer` スロットに渡す。ラベルは翻訳済み文字列で上書きする。
  * - 認証の無いアプリ（Agent 等）は `name` を省き、テーマ切替だけを置ける。
  * - `notice` はモード表示（ローカル DEBUG など）。ログアウトを出さない場合は `onLogout` を省く。
@@ -333,7 +337,8 @@ export function SidebarAccountFooter({
   actions?: SidebarFooterAction[];
   notice?: ReactNode;
   account?: SidebarAccountLink;
-  labels?: { logout: string; switchToLight: string; switchToDark: string };
+  /** `accountMenu` は利用者のメニューの読み上げ名の先頭（翻訳済み。例「アカウントのメニュー」）。 */
+  labels?: { logout: string; switchToLight: string; switchToDark: string; accountMenu?: string };
 }) {
   // ドロワーの中（md 未満）では常に展開して描く。
   const collapsed = useSidebarCollapsed(collapsedPreference);
@@ -342,41 +347,19 @@ export function SidebarAccountFooter({
     // grid の列は minmax(0, 1fr)（grid-cols-1）。暗黙の auto の列は項目の最小幅（nowrap の名前の全幅）まで広がり、
     // 名前の行がサイドバーの右端からはみ出して省略記号の出ないまま切り取られていた（#1644）。
     <div className="grid grid-cols-1 gap-1">
-      {name && account && collapsed ? (
-        // 折りたたみ時はアイコンだけの行（ツールチップと読み上げ名は label）。
-        <SidebarTooltip label={account.label} enabled>
-          <a
-            href={account.href}
-            onClick={(event) => followAccountLink(event, account)}
-            aria-current={account.active ? "page" : undefined}
-            aria-label={account.label}
-            className={navRowClass(true, Boolean(account.active))}
-            data-testid="sidebar-account"
-          >
-            <NavRowContent icon={UserRound} label={name} collapsed active={Boolean(account.active)} />
-          </a>
-        </SidebarTooltip>
+      {name && (account || onLogout) ? (
+        <SidebarAccountMenu
+          name={name}
+          roles={roles}
+          rolesLabel={rolesLabel}
+          collapsed={collapsed}
+          account={account}
+          onLogout={onLogout}
+          logoutLabel={labels.logout}
+          menuLabel={labels.accountMenu}
+        />
       ) : null}
-      {name && !collapsed && account ? (
-        // 欄の行全体がアカウントの画面へのリンク（#1873。上下の余白で 2 行の欄を 44px 以上にする。現在地は塗り + 左バー）。
-        <a
-          href={account.href}
-          onClick={(event) => followAccountLink(event, account)}
-          aria-current={account.active ? "page" : undefined}
-          aria-label={`${account.label} ${name}${roles ? ` ${roles}` : ""}`}
-          className={cn(
-            "relative flex min-h-11 min-w-0 items-center gap-2.5 rounded-md px-3 py-1 transition-colors",
-            account.active
-              ? "bg-accent-emphasis text-fg-on-accent forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:forced-color-adjust-none"
-              : "cursor-pointer hover:bg-surface-hover forced-colors:hover:bg-[Highlight] forced-colors:hover:text-[HighlightText]"
-          )}
-          data-testid="sidebar-account"
-        >
-          {account.active ? <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-fg" aria-hidden /> : null}
-          <SidebarAccountIdentity name={name} roles={roles} rolesLabel={rolesLabel} active={Boolean(account.active)} />
-        </a>
-      ) : null}
-      {name && !collapsed && !account ? (
+      {name && !collapsed && !account && !onLogout ? (
         <div className="flex min-h-11 min-w-0 items-center gap-2.5 px-3 py-0.5" data-testid="sidebar-account">
           <SidebarAccountIdentity name={name} roles={roles} rolesLabel={rolesLabel} active={false} />
         </div>
@@ -395,48 +378,168 @@ export function SidebarAccountFooter({
           </button>
         </SidebarTooltip>
       ))}
-      {onLogout || onToggleTheme ? (
-        <div className={cn("flex gap-1", collapsed && "flex-col")}>
+      {onToggleTheme ? (
+        <SidebarTooltip label={themeLabel} enabled={collapsed}>
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            aria-label={collapsed ? themeLabel : undefined}
+            className={navRowClass(collapsed, false)}
+          >
+            <NavRowContent icon={theme === "dark" ? Sun : Moon} label={themeLabel} collapsed={collapsed} active={false} />
+          </button>
+        </SidebarTooltip>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 利用者の欄とメニュー（#4724。WAI-ARIA Menu Button）。開くと先頭の項目へフォーカスし、↓ ↑ Home End で移動する。
+ * Escape・外側のクリック・Tab で閉じ、ボタンへ戻す。メニューは body へ Portal で描くが、React のイベントは
+ * ドロワー（AppShell）へ伝わる。Escape はメニューだけを閉じるよう伝播を止め、Tab はドロワーのフォーカスの閉じ込めに任せ、
+ * 「アカウント」のリンクの click はドロワーを閉じる。
+ */
+function SidebarAccountMenu({
+  name,
+  roles,
+  rolesLabel,
+  collapsed,
+  account,
+  onLogout,
+  logoutLabel,
+  menuLabel,
+}: {
+  name: string;
+  roles?: string;
+  rolesLabel?: string;
+  collapsed: boolean;
+  account?: SidebarAccountLink;
+  onLogout?: () => void;
+  logoutLabel: string;
+  menuLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const active = Boolean(account?.active);
+  const accessibleName = [menuLabel, name].filter(Boolean).join(" ");
+  const items = () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+
+  useEffect(() => {
+    if (!open) return;
+    items()[0]?.focus({ preventScroll: true });
+    const closeOnOutside = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node;
+      // メニューは body へ Portal で描くため、トリガー側（rootRef）とメニューの両方を内側として扱う。
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutside);
+    return () => document.removeEventListener("mousedown", closeOnOutside);
+  }, [open]);
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    triggerRef.current?.focus({ preventScroll: true });
+  };
+
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeAndRestoreFocus();
+      return;
+    }
+    if (event.key === "Tab") {
+      // メニューは body の末尾にあるため、ボタンへ戻してから既定の Tab を進める。Shift+Tab はボタンで止める。
+      if (event.shiftKey) event.preventDefault();
+      closeAndRestoreFocus();
+      return;
+    }
+    // ネイティブのリンクは Space で押されないが、menuitem は Enter と Space の両方で押せる。
+    if (event.key === " " && document.activeElement instanceof HTMLAnchorElement) {
+      event.preventDefault();
+      document.activeElement.click();
+      return;
+    }
+    const list = items();
+    const next = nextMenuIndex(event.key, list.indexOf(document.activeElement as HTMLElement), list.length);
+    if (next === null) return;
+    event.preventDefault();
+    list[next]?.focus({ preventScroll: true });
+  };
+
+  return (
+    <div ref={rootRef} className="min-w-0">
+      <SidebarTooltip label={accessibleName} enabled={collapsed}>
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          aria-current={active ? "page" : undefined}
+          aria-label={collapsed ? accessibleName : [accessibleName, roles].filter(Boolean).join(" ")}
+          // 展開時は上下の余白で 2 行の欄を 44px 以上にする。現在地は塗り + 左バー。
+          className={cn(navRowClass(collapsed, active), !collapsed && "h-auto py-1", !active && "aria-expanded:bg-surface-hover")}
+          // 開いている間の灰色の面の上でも、ロールの行のコントラストを保つ（README §6）。
+          data-surface-tint={open && !active ? "neutral" : undefined}
+          data-testid="sidebar-account"
+          onClick={() => setOpen((current) => !current)}
+        >
+          {collapsed ? (
+            <NavRowContent icon={UserRound} label={name} collapsed active={active} />
+          ) : (
+            <>
+              {active ? <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-fg" aria-hidden /> : null}
+              <SidebarAccountIdentity name={name} roles={roles} rolesLabel={rolesLabel} active={active} />
+            </>
+          )}
+        </button>
+      </SidebarTooltip>
+      {open ? (
+        <FloatingActionMenu
+          id={menuId}
+          open={open}
+          align="start"
+          ariaLabel={accessibleName}
+          triggerRef={triggerRef}
+          menuRef={menuRef}
+          onKeyDown={onMenuKeyDown}
+          className="min-w-56 gap-0.5"
+        >
+          {account ? (
+            <a
+              href={account.href}
+              role="menuitem"
+              aria-current={active ? "page" : undefined}
+              className={cn(buttonVariants({ variant: "ghost" }), "w-full justify-start no-underline")}
+              onClick={(event) => {
+                closeAndRestoreFocus();
+                followAccountLink(event, account);
+              }}
+            >
+              <UserRound size={BUTTON_ICON_SIZE} aria-hidden />
+              <span>{account.label}</span>
+            </a>
+          ) : null}
           {onLogout ? (
-            <SidebarTooltip label={labels.logout} enabled={collapsed}>
-              <button
-                type="button"
-                onClick={onLogout}
-                aria-label={collapsed ? labels.logout : undefined}
-                className={cn(navRowClass(collapsed, false), "flex-1")}
-              >
-                <NavRowContent icon={LogOut} label={labels.logout} collapsed={collapsed} active={false} />
-              </button>
-            </SidebarTooltip>
+            <Button
+              variant="ghost"
+              role="menuitem"
+              icon={LogOut}
+              className="w-full justify-start"
+              onClick={() => {
+                closeAndRestoreFocus();
+                onLogout();
+              }}
+            >
+              <span>{logoutLabel}</span>
+            </Button>
           ) : null}
-          {onToggleTheme ? (
-            <SidebarTooltip label={themeLabel} enabled={collapsed}>
-              {onLogout && !collapsed ? (
-                // 見える名前は共有の Tooltip（#372。HTML の title は使わない）。
-                <Tooltip content={themeLabel}>
-                  <button
-                    type="button"
-                    onClick={onToggleTheme}
-                    aria-label={themeLabel}
-                    className="flex h-11 min-h-11 w-11 cursor-pointer items-center justify-center rounded-md border border-border transition-colors hover:bg-surface-hover hover:text-fg forced-colors:hover:bg-[Highlight] forced-colors:hover:text-[HighlightText]"
-                  >
-                    {theme === "dark" ? <Sun size={20} aria-hidden /> : <Moon size={20} aria-hidden />}
-                  </button>
-                </Tooltip>
-              ) : (
-                // ログアウトと並ばない（テーマ切替だけ・折りたたみ時）ときはナビ行と同じ形にし、展開時はラベルも出す
-                <button
-                  type="button"
-                  onClick={onToggleTheme}
-                  aria-label={collapsed ? themeLabel : undefined}
-                  className={navRowClass(collapsed, false)}
-                >
-                  <NavRowContent icon={theme === "dark" ? Sun : Moon} label={themeLabel} collapsed={collapsed} active={false} />
-                </button>
-              )}
-            </SidebarTooltip>
-          ) : null}
-        </div>
+        </FloatingActionMenu>
       ) : null}
     </div>
   );

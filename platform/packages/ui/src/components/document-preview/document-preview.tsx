@@ -21,6 +21,7 @@ import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
 import { Button, buttonVariants } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
+import { CodepointHighlight } from "./codepoint-highlight";
 import { DEFAULT_DOCUMENT_PREVIEW_LABELS, type DocumentPreviewLabels } from "./labels";
 import { bboxOverlayStyle, PreviewViewer, type PreviewSizing, type PreviewViewerPage } from "./preview-viewer";
 
@@ -53,6 +54,8 @@ export interface DocumentPreviewFocus {
 }
 
 export interface DocumentTextRange {
+  /** 原本の保存座標に基づくUnicode codepoint範囲。空配列は未確定（文字検索で補わない）。 */
+  highlights?: [number, number][];
   text: string;
   offset: number;
   total: number;
@@ -404,13 +407,14 @@ function TextPreview({ sizing, loadText, loadTextRange, onTextRangeChange, fileN
       <span className="text-xs text-fg-muted">{labels.textRange(current.offset + 1, Math.min(current.total, current.offset + [...current.text].length), current.total)}</span>
       <Button size="sm" variant="secondary" icon={ArrowRight} disabled={current.next_offset === null || (current.next_offset === undefined && current.offset + current.limit >= current.total)} onClick={() => setOffset(current.next_offset ?? current.offset + current.limit)}>{labels.nextPage}</Button>
     </div> : null}
-    <div className={cn("min-h-0", sizing !== "bounded" && "flex-1")}><TextPreviewBody sizing={sizing} text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} /></div>
+    <div className={cn("min-h-0", sizing !== "bounded" && "flex-1")}><TextPreviewBody sizing={sizing} text={current.text} sourceRanges={current.highlights} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} /></div>
   </div>;
 }
 
 function TextPreviewBody({
   sizing,
   text,
+  sourceRanges,
   fileName,
   focusText,
   textLang,
@@ -418,6 +422,7 @@ function TextPreviewBody({
 }: {
   sizing: PreviewSizing;
   text: string;
+  sourceRanges?: [number, number][];
   fileName: string;
   focusText: string | null;
   textLang: string | null | undefined;
@@ -425,23 +430,25 @@ function TextPreviewBody({
 }) {
   const contentLang = useMemo(() => resolveContentLang(textLang, text), [textLang, text]);
   // 抜粋に入る文書の表（HTML の `<table>`）は、画面の抜粋と同じく文字にしてから照合する。
-  const range = useMemo(() => (focusText ? findTextQuote(text, excerptPlainText(focusText)) : null), [text, focusText]);
+  const range = useMemo(() => (sourceRanges === undefined && focusText ? findTextQuote(text, excerptPlainText(focusText)) : null), [text, focusText, sourceRanges]);
+  const savedRanges = useMemo(() => sourceRanges?.filter(([a,b]) => Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b > a && b <= Array.from(text).length) ?? [], [sourceRanges, text]);
+  const hasHighlight = Boolean(range || savedRanges.length);
   const scrollRef = useRef<HTMLPreElement>(null);
   const markRef = useRef<HTMLElement>(null);
   const scrollToQuote = useCallback(() => {
     const region = scrollRef.current;
-    const mark = markRef.current;
+    const mark = markRef.current ?? region?.querySelector<HTMLElement>("mark");
     if (!region || !mark) return;
     // scrollIntoView はパネル全体も動かすので、本文の領域の中だけを動かす（強調の上に少し前の行を残す）。
     region.scrollTop = Math.max(0, mark.offsetTop - region.clientHeight / 6);
   }, []);
   useLayoutEffect(() => {
-    if (range) scrollToQuote();
-  }, [range, scrollToQuote]);
+    if (hasHighlight) scrollToQuote();
+  }, [range, savedRanges, hasHighlight, scrollToQuote]);
 
   return (
     <div className={cn("flex min-h-0 flex-col gap-2", sizing !== "bounded" && "h-full")}>
-      {range ? (
+      {hasHighlight ? (
         <div className="flex shrink-0 items-center justify-between gap-2" data-testid="preview-text-highlight">
           <p role="status" className="min-w-0 text-xs text-fg-muted">
             {labels.textHighlightStatus}
@@ -466,7 +473,7 @@ function TextPreviewBody({
       >
         {/* 本文だけを言語で包む（領域の読み上げの名前は画面の言語。#3349）。 */}
         <span lang={contentLang} data-testid="preview-text-body">
-          {range ? (
+          {sourceRanges !== undefined ? <CodepointHighlight text={text} ranges={savedRanges} /> : range ? (
             <>
               {text.slice(0, range.start)}
               <mark

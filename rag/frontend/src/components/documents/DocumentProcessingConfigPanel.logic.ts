@@ -254,7 +254,7 @@ export function preprocessSelectionPatch(
   if (current.chunking_strategy == null) patch.chunking_strategy = "fixed_delimiter";
   const strategy = patch.chunking_strategy ?? current.chunking_strategy;
   if (strategy === "fixed_delimiter" && current.chunk_delimiter == null) {
-    patch.chunk_delimiter = JSONL_RECORD_BOUNDARY;
+    patch.chunk_delimiter = [JSONL_RECORD_BOUNDARY];
   }
   return patch;
 }

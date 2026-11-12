@@ -148,7 +148,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     from app import config as app_config
     from app.api.routes import settings as settings_routes
     from app.config import get_settings
-    from app.rag.guardrail_adapter import reset_guardrail_static_cache
     from app.rag.rate_limit import reset_rate_limiter
     from app.rag.vector_index_adapter import reset_vector_index_static_cache
     from app.security.service import set_security_service
@@ -156,10 +155,11 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
     monkeypatch.setenv("RAG_PARSER_SETTINGS_FILE", str(tmp_path / "parser-settings.json"))
-    # 言語資源の全体の上書き(#2181)は、テストごとに組み込みのパックへ戻す。
-    from app.rag.language_pack_store import LANGUAGE_PACK_STORE
+    monkeypatch.setenv("RAG_FILE_TYPE_DEFAULTS_FILE", str(tmp_path / "file-type-defaults.json"))
+    # 言語資源の全体の既定(#2181)は、テストごとに組み込みのパックへ戻す。
+    from rag_parser_core.language import set_default_pack
 
-    LANGUAGE_PACK_STORE.reset()
+    set_default_pack(None)
     # 共通 .env（モデルの API key・OCI / DB / 保存先の画面保存先）と RAG の backend/.env
     # （parser の API key・RAG 固有の画面保存先）は tmp へ分離する（#211）。
     monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path / "platform.env")
@@ -169,7 +169,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY", raising=False)
     set_security_service(None)
     reset_rate_limiter()
-    reset_guardrail_static_cache()
     reset_vector_index_static_cache()
     _reset_runtime_settings(get_settings(), tmp_path)
     # サービス管理の systemctl / journalctl / sudo は実行しない(手元の systemd を触らない。#286)。
@@ -178,16 +177,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         get_settings(), "rag_service_runtime_env_file", str(tmp_path / "service-runtime.env")
     )
-    # MinerU の parse job のポーリングの待ちはテストでは待たない（#1329）。
-    from app.clients import external_parser
-
-    monkeypatch.setattr(external_parser, "_poll_sleep", lambda _seconds: None)
-    # 条の選択の process をまたぐ記録（#3507）は、テストの間で共有しない
-    # （手元の保存先にも書かない）。
-    # 記録を確かめるテストは置き場所を tmp に差し替え直す。
-    from app.rag import answer_engine
-
-    monkeypatch.setattr(answer_engine, "article_catalog_cache_dir", lambda _settings: None)
 
 
 async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
@@ -312,8 +301,6 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     """mutable runtime settings をテスト既定値へ戻す。"""
-    from app.rag.mineru_license import set_mineru_license_acknowledgement
-
     settings.upload_storage_backend = "local"
     settings.object_storage_namespace = ""
     settings.object_storage_bucket = ""
@@ -330,6 +317,11 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.app_auth_cookie_secure = False
     settings.model_settings_file = str(tmp_path / "model-settings.json")
     settings.rag_parser_settings_file = str(tmp_path / "parser-settings.json")
+    settings.rag_file_type_defaults_file = str(tmp_path / "file-type-defaults.json")
+    # 形式別の組み込みの既定（#4732）は専用のテストで確かめる。ほかのテストは全体の既定で動かす。
+    from app.config import FILE_TYPES, FileTypeDefaultEntry
+
+    settings._file_type_defaults = {file_type: FileTypeDefaultEntry() for file_type in FILE_TYPES}
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""
     settings.oci_enterprise_ai_secondary_endpoint = ""
@@ -353,9 +345,6 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_unstructured_enabled = True
-    settings.rag_parser_mineru_enabled = False
-    # MinerU のライセンスの条件の確認（#3359）は未確認から始める（private の値）。
-    set_mineru_license_acknowledgement(settings, by="", at="")
     settings.rag_parser_dots_ocr_enabled = False
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
@@ -367,6 +356,10 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     # 本番既定は False(PREPROCESSED で停止)。既存テストは preprocess を越えて
     # REVIEW まで進む前提なのでテスト既定は自動進行とし、停止挙動は専用テストで検証する。
     settings.rag_auto_parse_after_preprocess_enabled = True
+    # 文書全体の要約（#4793）は本番既定で有効。取込のたびに LLM と埋め込みを呼び、索引に要約の
+    # chunk を 1 つ足す。既存テストは要約の chunk の無い索引を前提にするのでテスト既定は無効とし、
+    # 要約は専用テスト（test_document_summary*.py）で確かめる。
+    settings.rag_document_summary_enabled = False
 
 
 @pytest.fixture(autouse=True)
@@ -428,17 +421,6 @@ def _stub_upload_storage_object_storage(monkeypatch: pytest.MonkeyPatch) -> None
         "default_object_storage_client",
         lambda _settings: _ObjectStorageStub(),
     )
-
-
-@pytest.fixture
-def mineru_selectable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MinerU の準備中(ロードマップ)の判定を外す(#3359)。
-
-    MinerU は準備中だが、client・ライセンスの確認の関門の実装は残す。その経路のテストで使う。
-    """
-    from app import config as app_config
-
-    monkeypatch.delitem(app_config.ROADMAP_PARSER_ADAPTER_BACKENDS, "mineru")
 
 
 @pytest.fixture(autouse=True)

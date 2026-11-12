@@ -23,7 +23,6 @@ from pr_backend_core.bounded_calls import (
     Attempt,
     BoundedCallAborted,
     BoundedCaller,
-    BoundedCallError,
     BoundedCallFailed,
 )
 from pr_backend_core.logging import safe_exception_fields
@@ -31,7 +30,7 @@ from pr_backend_core.observability.model_purpose import async_call_with_model_pu
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
-from rag_parser_core.oci_enterprise_ai import LLM_SYSTEM_PROMPT, sdk_retries_disabled
+from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES,
@@ -48,7 +47,6 @@ from rag_parser_core.structured_records import (
     is_structured_records_content_type,
     record_boundary_plain_text,
 )
-from rag_pipeline_core.raptor import build_raptor_summaries
 
 from app.clients.ai_calls import attach_ingestion_progress, ingestion_ai_calls, make_ai_caller
 from app.clients.object_storage import ObjectStorageClient
@@ -137,20 +135,15 @@ from app.rag.ingestion_prompts import (
     FIELD_EXTRACTION_PROMPT,
     HEADING_LEVEL_PROMPT,
     NAVIGATION_SUMMARY_PROMPT,
-    RAPTOR_SUMMARY_SYSTEM_PROMPT,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
 from app.rag.ingestion_segment_receipts import SEGMENT_RECEIPT_KEY, accepted_segment_receipt
 from app.rag.ingestion_slots import release_heavy_ingestion_slot
-from app.rag.ingestion_strategy import extraction_strategy_for_source
+from app.rag.ingestion_strategy import parser_profile_for_source
 from app.rag.layer_fingerprint import (
     FIELD_SCHEMA_HASH_ARTIFACT_KEY,
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     field_schema_hash,
-)
-from app.rag.mineru_license import (
-    MINERU_LICENSE_REQUIRED_MESSAGE,
-    MINERU_LICENSE_UNACKNOWLEDGED_WARNING,
 )
 from app.rag.navigation import (
     build_navigation_tree,
@@ -225,8 +218,11 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 使い直され、解析からの再処理でも直らない
 # (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140。3: #4154。4: #4224。
 # 5: VLM の前の crop の保存が空の画像本文の投影を書かない。#4569。
-# 6: 図・画像の読み取りの指示を項目の説明と条件ごとの案内に分けた。#4671)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 6
+# 6: 図・画像の読み取りの指示を項目の説明と条件ごとの案内に分けた。#4671。
+# 7: Unstructured の見出しの判定と階層を直した。#4741。
+# 8: 文末の記号で終わる番号付きの行を見出しにしない。#4742。
+# 9: 図・画像の説明を、同じページの本文の言語で書く。#4821)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 13
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -1381,7 +1377,6 @@ class IngestionPipeline:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
@@ -1402,7 +1397,6 @@ class IngestionPipeline:
             return await self._ingest(
                 document_id,
                 image_bytes,
-                prompt,
                 content_type=content_type,
                 source_profile=source_profile,
                 chunk_set_id=chunk_set_id,
@@ -1419,7 +1413,6 @@ class IngestionPipeline:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
@@ -1444,10 +1437,7 @@ class IngestionPipeline:
         self.deferred_success_outcome = None
         started_at = now()
         trace_id = new_trace_id()
-        strategy = extraction_strategy_for_source(
-            source_profile=source_profile,
-            base_prompt=prompt,
-        )
+        parser_profile = parser_profile_for_source(source_profile)
         checkpoint_segments: list[IngestionSegment] = []
         try:
             # status は cancel を確かめてから書く。取り消し後に中間の status を書き戻さない(#305)。
@@ -1526,7 +1516,7 @@ class IngestionPipeline:
                 "source_modality": (
                     source_profile.modality.value if source_profile is not None else "unknown"
                 ),
-                "parser_profile": strategy.parser_profile,
+                "parser_profile": parser_profile,
                 "preprocess_profile": source_derivation.preprocess_profile,
                 "preprocess_converted": source_derivation.converted,
             }
@@ -1597,7 +1587,7 @@ class IngestionPipeline:
             self._raise_if_selected_parser_was_not_used(parser_result)
             effective_parser_profile = _checkpoint_parser_profile(
                 parser_result,
-                fallback=strategy.parser_profile,
+                fallback=parser_profile,
             )
             if not segmented_parse:
                 checkpoint_segments = await self._prepare_segment_checkpoints(
@@ -1622,7 +1612,7 @@ class IngestionPipeline:
                         document_id=document_id,
                         source_bytes=parse_bytes,
                         content_type=parse_content_type,
-                        parser_profile=strategy.parser_profile,
+                        parser_profile=parser_profile,
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
                     )
@@ -1802,7 +1792,7 @@ class IngestionPipeline:
                 document_id=document_id,
                 extraction=extraction,
                 quality_report=quality_report,
-                parser_profile=strategy.parser_profile,
+                parser_profile=parser_profile,
                 checkpoint_segments=checkpoint_segments,
                 source_bytes=image_bytes,
                 started_at=started_at,
@@ -2257,7 +2247,7 @@ class IngestionPipeline:
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
         # 親子階層（small-to-big）は、どの解析の結果でも親子に分割する(#3377)。親子を作った入力
-        # (Docling・MinerU のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
+        # (Docling のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
         is_small_to_big = chunking_params.strategy == SMALL_TO_BIG_STRATEGY
 
         def _run_chunking() -> list[Chunk]:
@@ -2278,6 +2268,7 @@ class IngestionPipeline:
                         overlap=chunking_params.overlap,
                         min_chars=chunking_params.min_chars,
                         delimiter=chunking_params.delimiter,
+                        separators=chunking_params.separators,
                     )
             except RecordBoundaryError as exc:
                 raise IngestionUserError(record_boundary_failure_message(exc)) from exc
@@ -2339,8 +2330,6 @@ class IngestionPipeline:
             },
             result_attributes=lambda result: {"chunk_count": len(result)},
         )
-        # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
-        chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
         apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))
         # 本文の交差参照(「第3章を参照」など)を同じ文書の節に解決して metadata に残す(#1280)。
         annotate_cross_references(chunks, document_title=source_name)
@@ -2782,8 +2771,9 @@ class IngestionPipeline:
                 return await async_call_with_model_purpose(
                     "document.infer_headings",
                     self._vlm.generate,
-                    prompt,
+                    "",
                     plan.payload,
+                    system_prompt=prompt,
                     response_schema=HEADING_LEVELS_RESPONSE_SCHEMA,
                     response_schema_name="heading_levels",
                 )
@@ -2837,7 +2827,7 @@ class IngestionPipeline:
         text_budget = field_extraction_text_budget(
             max_input_tokens=enterprise_ai_max_input_tokens(self._settings, model_id),
             percent=int(getattr(self._settings, "rag_field_extraction_input_token_percent", 40)),
-            fixed_texts=(LLM_SYSTEM_PROMPT, prompt, schema_json),
+            fixed_texts=(prompt, schema_json),
         )
         if text_budget < MIN_UNIT_TEXT_TOKENS:
             logger.warning(
@@ -2868,8 +2858,9 @@ class IngestionPipeline:
                     raw = await async_call_with_model_purpose(
                         "document.extract",
                         self._vlm.generate,
-                        prompt,
+                        "",
                         unit.text,
+                        system_prompt=prompt,
                         response_schema=FIELD_EXTRACTION_RESPONSE_SCHEMA,
                         response_schema_name="field_extraction",
                     )
@@ -3365,7 +3356,7 @@ class IngestionPipeline:
                 )
                 with sdk_retries_disabled():
                     return await async_call_with_model_purpose(
-                        "document.summarize", self._vlm.generate, prompt, source
+                        "document.summarize", self._vlm.generate, "", source, system_prompt=prompt
                     )
 
             try:
@@ -3770,74 +3761,6 @@ class IngestionPipeline:
             return service_result.extraction
         raise IngestionUserError(_selected_parser_failure_message(service_backend, service_result))
 
-    async def _augment_with_raptor(
-        self,
-        trace_id: str,
-        chunks: list[Chunk],
-        cancel_checker: Callable[[], Awaitable[bool]] | None,
-    ) -> list[Chunk]:
-        """RAPTOR 再帰要約索引(opt-in)。leaf に summary node を加えて返す。
-
-        要約は OCI Enterprise AI で行う。OFF(既定)のときは leaf chunk をそのまま返す。
-        1 つの階層の cluster は取込のほかの段と同じ上限つきの並行の実行器で呼ぶ(#2067。
-        ``rag_raptor_concurrency``)。429 は段の全体で待ち、再試行のあとも要約できない cluster は
-        飛ばす(leaf は残る)。権限・モデルの設定の誤り・割り当ての使い切りは取込を止める。
-        """
-        if not getattr(self._settings, "rag_raptor_enabled", False):
-            return chunks
-        await _raise_if_cancelled(cancel_checker)
-
-        system_prompt = await self._stage_prompt(
-            "raptor_summary_system", RAPTOR_SUMMARY_SYSTEM_PROMPT
-        )
-
-        async def _summarize_one(text: str, attempt: Attempt) -> str:
-            # 大きすぎる(context の長さの超過)ときは入力を短くしてやり直す。
-            source = (
-                text
-                if attempt.adaptation == 0
-                else text[: max(200, len(text) >> attempt.adaptation)]
-            )
-            with sdk_retries_disabled():
-                return await async_call_with_model_purpose(
-                    "document.summarize",
-                    self._vlm.generate,
-                    "",
-                    source,
-                    system_prompt=system_prompt,
-                )
-
-        try:
-            with ingestion_ai_calls(self._settings, "raptor_summary") as caller:
-
-                async def _summarize_many(texts: list[str]) -> list[str | None]:
-                    # 階層の間で取消を確かめる(階層は前の階層の要約を入力にするため順に作る)。
-                    await _raise_if_cancelled(cancel_checker)
-                    outcomes = await caller.map(texts, _summarize_one, adaptive=True)
-                    return [outcome.value if outcome.ok else None for outcome in outcomes]
-
-                return await build_raptor_summaries(
-                    chunks,
-                    summarize_many=_summarize_many,
-                    cluster_size=int(getattr(self._settings, "rag_raptor_cluster_size", 5)),
-                    max_levels=int(getattr(self._settings, "rag_raptor_max_levels", 2)),
-                )
-        except IngestionCancelledError:
-            raise
-        except BoundedCallError as exc:
-            # 権限・設定の誤り(BoundedCallAborted)と、件の失敗で job を失敗にする設定
-            # (rag_ai_call_fail_job_on_item_error)の件の失敗。
-            logger.warning("raptor_summary_aborted", extra={"trace_id": trace_id})
-            raise IngestionUserError(
-                f"RAPTOR の階層の要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
-            ) from exc
-        except Exception as exc:
-            logger.warning("raptor_summary_failed", extra={"trace_id": trace_id})
-            raise IngestionUserError(
-                "RAPTOR の階層の要約に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
-            ) from exc
-
     async def _save_index(
         self,
         trace_id: str,
@@ -4212,8 +4135,6 @@ def _selected_parser_failure_message(
         )
     if warning == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING:
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix
-    if warning == MINERU_LICENSE_UNACKNOWLEDGED_WARNING:
-        return MINERU_LICENSE_REQUIRED_MESSAGE + warning_suffix
     if warning and warning.startswith("structured_records_invalid:"):
         return (
             f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」「Word→JSONL」が"
@@ -4299,7 +4220,6 @@ def _parser_backend_label(backend: str) -> str:
         "unstructured": "Unstructured",
         "structured_records_jsonl": "構造化レコード JSONL",
         "xml_tree_json": "XML ツリー JSON",
-        "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
         "oci_document_understanding": "OCI Document Understanding",
     }
@@ -4371,7 +4291,6 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
         "unstructured",
         "structured_records_jsonl",
         "xml_tree_json",
-        "mineru",
         "dots_ocr",
     }
 

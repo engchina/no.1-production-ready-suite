@@ -7,9 +7,8 @@
 設計:
 
 * 参照 KB は多対多。1 つの KB を複数の検索・回答プロファイルから共有できる。逆も可。
-* query 上書き(回答の検索と生成・安全チェック)は KB の :class:`KnowledgeBaseQueryConfig` を
-  再利用する。複数 KB の query 設定は競合するため、検索時はこの**検索・回答プロファイル 1 枚から**
-  解決する。KB 個別の query legacy 値は使わない。
+* query 上書きは :class:`KnowledgeBaseQueryConfig`(適用する欄だけ。#4784)。検索時はこの
+  **検索・回答プロファイル 1 枚から**解決する。KB は query の値を持たない。
 * persona(system prompt / 既定言語)は旧 standard の回答エンジンだけが使っていたため #595 で
   削除した。保存済みの値は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
 * 取込系(Preprocess / Parser / Chunking / Vector Index build)は KB の物理索引方法なので
@@ -28,7 +27,7 @@ from pr_system_settings.answer_notice import (
     ANSWER_NOTICE_CONTACT_MAX_CHARS,
     normalize_notice_contact,
 )
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
 from app.config import Settings, enterprise_ai_model_catalog
@@ -45,26 +44,16 @@ MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES = 200
 CONTACT_OVERRIDE_MAX_CHARS = ANSWER_NOTICE_CONTACT_MAX_CHARS
 
 
-# 検索方法の全体設定だけで決め、プロファイルへは保存・適用しない。
-PROFILE_GLOBAL_QUERY_FIELDS = frozenset(
+# プロファイルで上書きできる言語資源の節(#4784)。検索と回答の要求(検索・チャット・MCP)の間に
+# 読まれる節だけ。取込・業務ガイドの取込の節は全体の言語資源だけで決める。
+PROFILE_LANGUAGE_PACK_SECTIONS = frozenset(
     (
-        "query_strategy",
-        "answer_flow",
-        "neighbor_child_count",
-        "rerank_enabled",
-        "auto_field_filter_enabled",
-        "graph_expansion_enabled",
-        "graph_expansion_max_chunks",
-        "screen_linking_enabled",
-        "request_coverage_retrieval_enabled",
-        "guide_step_retrieval_enabled",
-        "guide_step_max_queries",
-        "guide_step_deadline_seconds",
-        "entity_expansion_enabled",
-        "entity_expansion_max_chunks",
-        "section_expansion_enabled",
-        "section_expansion_max_levels",
-        "section_expansion_input_token_percent",
+        "search_terms",
+        "question_cues",
+        "evidence_cues",
+        "answer_labels",
+        "answer_check_cues",
+        "grounding_cues",
     )
 )
 
@@ -91,7 +80,9 @@ class SearchAnswerProfileConfig(BaseModel):
     escalation_model_id: str | None = Field(
         default=None,
         max_length=256,
-        description="確認を通らなかったときに回答し直す登録済みモデル。null はカスケードしない。",
+        description=(
+            "出力の検査を通らなかったときに回答し直す登録済みモデル。null はカスケードしない。"
+        ),
     )
 
     @field_validator("answer_model_id", "escalation_model_id")
@@ -106,17 +97,13 @@ class SearchAnswerProfileConfig(BaseModel):
     )
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
 
-    @field_serializer("query")
-    def _serialize_query(self, value: KnowledgeBaseQueryConfig) -> dict[str, object]:
-        return value.model_dump(mode="json", exclude=set(PROFILE_GLOBAL_QUERY_FIELDS))
-
     # 回答前の確認（#1839）の方針。confirm = 曖昧な質問を確認してから回答する（ルールごとの確認・
     # 業務ガイドの条件の確認を出す）/ assume = 確認せずに前提を示して回答する
     # （チャットに確認を出さない）。
     # 1 つの質問で聞き返すのは 1 回だけ（#717）なので、確認の上限（往復）は持たない。
     clarification_policy: Literal["confirm", "assume"] = "confirm"
-    # 言語資源の上書き（#2181。全体の言語資源に重ねる「節 → 項目 → 値」）。検索・回答で使う項目
-    # （ingest=False）だけを持てる。取込の項目は文書の分割と食い違うので持たない。
+    # 言語資源の上書き（#2181。全体の言語資源に重ねる「節 → 項目 → 値」）。検索と回答で読む節
+    # （PROFILE_LANGUAGE_PACK_SECTIONS）の、検索・回答の項目（ingest=False）だけを持てる。
     language_pack: dict[str, dict[str, object]] = Field(default_factory=dict)
     # 回答の注意書きの窓口の上書き（#2400。業務ごとに窓口が違うとき。窓口の名前・連絡の方法の
     # 1 行）。空ならシステム設定の窓口。業務ガイドの人への引き継ぎの窓口（handoff.contact）が優先。
@@ -145,6 +132,11 @@ class SearchAnswerProfileConfig(BaseModel):
                 if spec.ingest:
                     raise ValueError(
                         f"{section}.{key}: 取込の項目はプロファイルで上書きできません。"
+                    )
+                if section not in PROFILE_LANGUAGE_PACK_SECTIONS:
+                    raise ValueError(
+                        f"{section}.{key}: 検索と回答で使わない項目はプロファイルで上書き"
+                        "できません。"
                     )
                 cleaned.setdefault(section, {})[key] = item
         if cleaned:
@@ -190,7 +182,7 @@ def validate_profile_answer_model(settings: Settings, config: SearchAnswerProfil
     # 失敗にする。
     if config.escalation_model_id and config.escalation_model_id not in registered:
         raise ProfileAnswerModelUnavailableError(
-            "確認を通らなかったときのモデルが登録されていません。検索・回答プロファイルで選び直すか、使わない設定にしてください。"
+            "出力の検査を通らなかったときのモデルが登録されていません。検索・回答プロファイルで選び直すか、使わない設定にしてください。"
         )
 
 
@@ -202,13 +194,11 @@ def resolve_search_answer_profile_settings(
 ) -> tuple[Settings, bool]:
     """グローバルへ検索・回答プロファイルの query 上書きを重ねた Settings。
 
-    KB はナレッジ構築設定だけを持つため、KB に残る query legacy 値はここでは扱わない。
     戻り値 2 番目は上書きが実際に効いたかどうか。
     """
     if apply_answer_model:
         validate_profile_answer_model(global_settings, config)
-    overlays = [config.query.model_copy(update={key: None for key in PROFILE_GLOBAL_QUERY_FIELDS})]
-    settings, applied = compose_query_settings(global_settings, overlays)
+    settings, applied = compose_query_settings(global_settings, [config.query])
     # 使用の意思を持たない既存プロファイルは、全体の値にかかわらず OFF。
     guide_enabled = config.query.support_guide_enabled is True
     if settings.rag_support_guide_enabled != guide_enabled:

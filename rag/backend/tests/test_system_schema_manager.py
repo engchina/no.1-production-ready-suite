@@ -710,10 +710,11 @@ def test_update_retires_graph_claims_community_tables_with_approval() -> None:
         assert (name, "TABLE") in database.objects
 
 
-# データを消す SQL（テーブルの DROP・列の DROP・行の DELETE・TRUNCATE）。`ON DELETE CASCADE` は
-# 含めない。
+# データを消す SQL（テーブルの DROP・列の DROP・行の DELETE・TRUNCATE・JSON の項目の REMOVE）。
+# `ON DELETE CASCADE` は含めない。
 _DATA_LOSS_SQL = re.compile(
-    r"\b(DROP\s+TABLE|DROP\s+COLUMN|DELETE\s+FROM|TRUNCATE\s+TABLE)\b", re.IGNORECASE
+    r"\b(DROP\s+TABLE|DROP\s+COLUMN|DELETE\s+FROM|TRUNCATE\s+TABLE)\b|\bREMOVE\s+'\$",
+    re.IGNORECASE,
 )
 
 
@@ -743,6 +744,18 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261107_4185_drop_document_preprocess_artifact",
         "20261108_4617_drop_document_extraction_processing_config",
         "20261109_4666_language_pack_retired_question_cues",
+        "20261109_4714_language_pack_retired_answer_checks",
+        "20261109_4668_language_pack_retired_unread_checks",
+        "20261110_4668_language_pack_retired_evidence_tags",
+        "20261110_4668_language_pack_retired_question_word_checks",
+        "20261110_4749_language_pack_retired_crag_labels",
+        "20261110_4782_generation_prompt_overrides",
+        "20261110_4781_retire_evaluation_calibration",
+        "20261110_4781_retire_removed_answer_prompts",
+        "20261110_4784_search_answer_profile_retired_fields",
+        "20261110_4784_language_pack_retired_unread",
+        "20261110_4782_remove_raptor",
+        "20261110_4799_search_answer_profile_runtime_rules",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

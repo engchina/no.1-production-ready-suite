@@ -536,20 +536,6 @@
     },
     {
       "destructive": false,
-      "name": "20261026_001_evaluation_calibration",
-      "sha256": "d7e64a9fa6dff654e76a85c2205a9dab1b2aecb16eebfae12c986de7be7b389d",
-      "statement_count": 1,
-      "table_name": "rag_evaluation_label_sets"
-    },
-    {
-      "destructive": false,
-      "name": "20261026_002_evaluation_job_calibration_kind",
-      "sha256": "84f9d16a11369d45caf734c59d24a1a7af4652ca4e759de4acc1713ce70057a3",
-      "statement_count": 1,
-      "table_name": "rag_evaluation_jobs"
-    },
-    {
-      "destructive": false,
       "name": "20261027_001_raptor_prompt_consolidation",
       "sha256": "5f48c5f8ba061ec3d3364356d3613f978618f826b5fabd28de51e17a05fd23ca",
       "statement_count": 2,
@@ -715,10 +701,115 @@
       "sha256": "ca63431accb961689c162971908a354d1c40f036b4a3562888777e68724785de",
       "statement_count": 1,
       "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": false,
+      "name": "20261109_4712_answer_prompt_reading_rules",
+      "sha256": "4342edbc4ec85103563d340aab2d80d4871f65e571936a2ae4709d4171b5e003",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
+    },
+    {
+      "destructive": true,
+      "name": "20261109_4714_language_pack_retired_answer_checks",
+      "sha256": "25da94e7e1b3480e02cfc828b38fc356fb0cf4af6bd093ced0f16affca133598",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261109_4668_language_pack_retired_unread_checks",
+      "sha256": "d00c62c84e0443fe9f3ea37eec1c72197079df40399764e63dcd6baec825ff2d",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4668_language_pack_retired_evidence_tags",
+      "sha256": "70a51de9751b2ebbce12e6d29891c7c9d0b14b7ce907fd3fe9bf07bab8a106aa",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4668_language_pack_retired_question_word_checks",
+      "sha256": "4e61756d52bd979ba0097184d4fce755891435ce33d6e2c457dcc1f9fb2374a2",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4749_language_pack_retired_crag_labels",
+      "sha256": "1de172362d3b88e33ed6d0b0e487a34d8b8f11e97290de9512d2489087ec1432",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4782_generation_prompt_overrides",
+      "sha256": "37bf249887fde1c7abe24415aceeef15ae0bfd03630796fc68fc96aed17dc688",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4781_retire_evaluation_calibration",
+      "sha256": "7805830c24ad2792de9503141797796f58eb8c9d226e9c6c4841fd2809474491",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4781_retire_removed_answer_prompts",
+      "sha256": "d88550ebbbcf47c68de90d497a63f890c7315bfe7e9a6683aa25a312c48fc206",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4784_search_answer_profile_retired_fields",
+      "sha256": "ab583ced52083040a86523101b3707f5a54150404487b473e671870314590098",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profiles"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4784_language_pack_retired_unread",
+      "sha256": "70275c4daffe5741090efcd2e0653563e057bf666a7f4d6f5835f672efb4b517",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4782_remove_raptor",
+      "sha256": "50ee4198c821998c9b9802217639dd00363a9e7b1521b5f8159c1cb64586899a",
+      "statement_count": 2,
+      "table_name": "rag_chunks"
+    },
+    {
+      "destructive": true,
+      "name": "20261110_4799_search_answer_profile_runtime_rules",
+      "sha256": "e413dd2fa14f1c8ba158a4cd5fc28bc41ed8d169455469b5c0cf52ae2d5b6c03",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profile_knowledge"
+    },
+    {
+      "destructive": false,
+      "name": "20261110_4811_evaluation_job_visibility",
+      "sha256": "4a9d7f29f41cf5d0423810d05ecb519c79087ad371f3fd385ad35686131a10b1",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "destructive": false,
+      "name": "20261110_4793_document_summaries",
+      "sha256": "d281e64b295c86fd13aa4e02819cab0b5d0cbb16eb937a56447de57cc80310dd",
+      "statement_count": 1,
+      "table_name": "rag_document_summaries"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "75d08741205193f5f85a397d1e7719b52ac671ec8e0c71d6d1ad7d2d9cb88148",
-  "statement_count": 158
+  "sha256": "c3b20d59a9635995d6841d239709f1698377dd92bee5ee3d2d1c93f6c3fff742",
+  "statement_count": 172
 }

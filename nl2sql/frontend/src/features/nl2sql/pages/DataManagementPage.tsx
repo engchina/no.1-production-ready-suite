@@ -43,6 +43,7 @@ import { SelectAiCredentialPrecondition } from "../components/SelectAiCredential
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 import { SyntheticReview } from "../SyntheticReview";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
@@ -1730,7 +1731,14 @@ function CsvUploadWorkspace({
             rows={5}
           />
         ) : tablesError ? (
-          <ErrorState message={tablesError} onRetry={onTablesRetry} />
+          // 対象の表の候補を読み取れなかった。候補の位置に、欄ごとの文と再試行を出す（#4817）。
+          <DataLoadFailure
+            error={tablesError}
+            fallback={t("dataMgmt.csv.tablesLoadError")}
+            onRetry={onTablesRetry}
+            layout="field"
+            testId="data-csv-table-load-failed"
+          />
         ) : (
           <>
             <DbSingleObjectPickerList
@@ -2065,7 +2073,7 @@ function SyntheticWorkspace({
   const visibleWarnings = selectAiDbProfiles?.warnings ?? [];
 
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DbObjectPanelHeader
         icon={Database}
         title={t("dataTools.synthetic.title")}
@@ -2082,7 +2090,7 @@ function SyntheticWorkspace({
         dataTestId="data-synthetic-steps"
       />
 
-      <fieldset disabled={loading === "generate"} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3" aria-labelledby="synthetic-target-heading">
+      <fieldset disabled={loading === "generate"} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-md border border-border bg-surface-sunken p-3" aria-labelledby="synthetic-target-heading">
         <DbObjectPanelHeader
           headingId="synthetic-target-heading"
           icon={Database}
@@ -2218,8 +2226,8 @@ function SyntheticWorkspace({
           testId="data-synthetic-table"
         />
 
-        {/* 指示（文章）は full で 2 列にまたがせ、オプションはその下（#1891）。placeholder は短い例、説明は helper。 */}
-        <FormGrid>
+        {/* 指示は所属区画の全幅、通常オプションは既定のフォーム幅にする。placeholder は短い例、説明は helper。 */}
+        <FormGrid columns={1} width="full">
           <TextareaField
             id="data-synthetic-prompt"
             label={t("dataTools.syntheticData.prompt")}
@@ -2231,6 +2239,8 @@ function SyntheticWorkspace({
             placeholder={t("dataTools.syntheticData.promptPlaceholder")}
             helper={t("dataTools.syntheticData.promptHelper")}
           />
+        </FormGrid>
+        <FormGrid>
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
             <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
             <TextField

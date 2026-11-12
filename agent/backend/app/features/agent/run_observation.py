@@ -13,8 +13,6 @@ Run が保存した記録（step のツールの呼び出しと結果・成果�
   根拠の数・旧版を含めた検索か・NL2SQL の状態と行の数・RAG の根拠のツールの縮退（縮退した任意の
   補助の処理の種類と回数・安全チェックの未完了・根拠 0 件の段。#3546）だけ。引数の本体・エラーの
   文・SQL・行・列の名前・`profile_id` は持たない（OWASP API3。設計の Q5）。
-- 根拠の `table_binding`（表の行・列の対応の検査が本文を読めるか。#3546）は、根拠のツールが返した
-  値を写す（読み取りのツールの chunk は null）。
 """
 
 from __future__ import annotations
@@ -26,17 +24,11 @@ from datetime import datetime
 from typing import Any, Literal
 
 from app.features.agent.answer_evidence import ATTACHMENT_DOCUMENT_PREFIX
-from app.features.agent.answer_validation import (
-    STATUS_COMPLETED,
-    STATUS_SKIPPED,
-    STATUS_UNVALIDATED,
-)
 from app.features.agent.data_scope import NL2SQL_CONNECTION_ID
 from app.features.agent.rag_figures import RAG_CONNECTION_ID
 from app.features.agent.rag_retrieval_state import (
     degraded_steps,
     guardrail_degraded,
-    table_binding,
     zero_evidence_stage,
 )
 from app.features.agent.runtime import (
@@ -105,7 +97,6 @@ ObservedToolStatus = Literal[
     "approval_skipped",
 ]
 EvidenceSource = Literal["search", "read"]
-ValidationStatus = Literal["completed", "skipped", "unvalidated"]
 
 
 @dataclass(slots=True)
@@ -147,7 +138,6 @@ class ObservedEvidenceItem:
     superseded: bool = False
     retrieval_rank: int | None = None
     locator: dict[str, Any] = field(default_factory=dict)
-    table_binding: str | None = None
 
 
 @dataclass(slots=True)
@@ -243,7 +233,6 @@ class _Piece:
     superseded: bool = False
     retrieval_rank: int | None = None
     locator: dict[str, Any] = field(default_factory=dict)
-    table_binding: str | None = None
 
 
 def _search_pieces(output: Mapping[str, Any]) -> list[_Piece]:
@@ -268,7 +257,6 @@ def _search_pieces(output: Mapping[str, Any]) -> list[_Piece]:
                 superseded=item.get("superseded") is True,
                 retrieval_rank=_int(item.get("retrieval_rank")),
                 locator=_locator(locator) if isinstance(locator, Mapping) else {},
-                table_binding=table_binding(item),
             )
         )
     return pieces
@@ -420,8 +408,6 @@ def observe_run(run: RunState) -> RunObservationData:
                 if piece.text and piece.text not in known.text:
                     known.text = f"{known.text}\n{piece.text}" if known.text else piece.text
                 known.truncated = known.truncated and not piece.complete
-                if known.table_binding is None:
-                    known.table_binding = piece.table_binding
                 continue
             seen[key] = len(evidence)
             evidence.append(
@@ -440,7 +426,6 @@ def observe_run(run: RunState) -> RunObservationData:
                     superseded=piece.superseded,
                     retrieval_rank=piece.retrieval_rank,
                     locator=piece.locator,
-                    table_binding=piece.table_binding,
                 )
             )
     return RunObservationData(tool_calls=calls, tool_call_total=len(tool_steps), evidence=evidence)
@@ -465,15 +450,3 @@ def answer_citations(
 def run_agent_version(run: RunState) -> int | None:
     """Run に使った業務 Agent の公開の版（下書きの実行・記録の無い Run は None）。"""
     return _int(run.metadata.get("agent_version"))
-
-
-def validation_status(content: Mapping[str, Any]) -> ValidationStatus | None:
-    """最終の検証の状態（成果物「資料との照合」の `status`。無い・知らない値は None）。"""
-    status = content.get("status")
-    if status == STATUS_COMPLETED:
-        return "completed"
-    if status == STATUS_SKIPPED:
-        return "skipped"
-    if status == STATUS_UNVALIDATED:
-        return "unvalidated"
-    return None

@@ -22,6 +22,7 @@ export const MENU_PERMISSIONS = {
   settingsPreprocess: "menu.settings_preprocess",
   settingsParserAdapters: "menu.settings_parser_adapters",
   settingsChunking: "menu.settings_chunking",
+  settingsFileTypeDefaults: "menu.settings_file_type_defaults",
   settingsLanguagePack: "menu.settings_language_pack",
   settingsVectorIndex: "menu.settings_vector_index",
   settingsRetrieval: "menu.settings_retrieval",
@@ -57,8 +58,6 @@ export const CAPABILITY_PERMISSIONS = {
   feedbackManage: "rag.feedback.manage",
   /** RAG のシステムテーブルの初期化・全再作成。 */
   systemTablesManage: "rag.system_tables.manage",
-  /** 品質評価の判定の校正の管理（全員の判定・一致・裁定・校正・LabelSet の入出力。#3578）。 */
-  evaluationCalibrationManage: "rag.evaluation_calibration.manage",
 } as const;
 
 export type MenuPermission = (typeof MENU_PERMISSIONS)[keyof typeof MENU_PERMISSIONS];

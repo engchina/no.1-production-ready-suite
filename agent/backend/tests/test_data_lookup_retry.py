@@ -31,7 +31,6 @@ from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement,
 from app.features.agent.support_task import DATA_LOOKUP_HINT, missing_data_lookup
 from app.features.agent.tool_grounding import METADATA_KEY
 from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
-from app.settings import get_settings
 
 SKILL_ID = "test1979-skill"
 AGENT_ID = "test1979-agent"
@@ -46,7 +45,6 @@ TOOLS = [EVIDENCE, QUERY, "rag__rag_search"]
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     # ツール権限は保存先の状態に依らず、承認なしにする（並列・直列のどちらでも同じ結果にする）。
     monkeypatch.setattr(builtin_runtime, "_active_policy", lambda: ToolPolicy())
     skill_registry.upsert_custom(

@@ -21,21 +21,24 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.approved_faq_scope import ApprovedFaqScopeState
-from app.rag.chat_question_token import with_rule_selection_answers
+from app.rag.chat_question_token import read_history_intent
 from app.rag.domain_keyword_import import (
     PREVIEW_ROWS,
     KeywordImportMode,
     import_keywords,
     read_keyword_excel,
 )
-from app.rag.question_understanding import profile_language_scope
-from app.rag.rule_selection import recognize_rule_selections
+from app.rag.profile_language import profile_language_scope
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
+    FAQ_DIRECT_ANSWER_ENABLED_KEY,
+    FAQ_ENABLED_KEY,
     ApprovedFaqMutation,
     add_approved_faq,
+    approved_faq_direct_answer_enabled,
     approved_faq_enabled,
+    approved_faq_match_options,
     confirm_approved_faq,
     delete_approved_faq,
     edit_runtime_knowledge,
@@ -44,15 +47,16 @@ from app.rag.search_answer_profile_knowledge import (
     load_approved_faq_snapshot,
     load_domain_keywords,
     load_runtime_knowledge_payload,
+    match_direct_approved_faq,
     preview_runtime_knowledge,
+    rank_approved_faq,
     read_approved_faq_excel,
-    save_approved_faq_enabled,
+    save_approved_faq_negative_questions,
+    save_approved_faq_settings,
     save_domain_keywords,
-    save_rule_clarification,
-    suggest_approved_faq,
-    suggest_clarification,
     suggest_domain_keywords,
 )
+from app.rag.small_talk import skips_retrieval
 from app.rag.support_guide_conditions import resolve_text_conditions
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
@@ -72,13 +76,13 @@ from app.schemas.search_answer_profile_knowledge import (
     ApprovedFaqKnowledgeBaseData,
     ApprovedFaqListData,
     ApprovedFaqMutationData,
+    ApprovedFaqNegativeQuestionsRequest,
     ApprovedFaqRecordData,
     ApprovedFaqReviewReason,
     ApprovedFaqSettingsRequest,
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
     ApprovedFaqSuggestRequest,
-    ClarificationAnswer,
     ClarificationSuggestionData,
     ClarificationSuggestionsData,
     ClarificationSuggestRequest,
@@ -89,7 +93,6 @@ from app.schemas.search_answer_profile_knowledge import (
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
-    RuleClarificationRequest,
     RuntimeKnowledgeData,
     RuntimeKnowledgeEditRequest,
     RuntimeKnowledgePreviewData,
@@ -255,6 +258,7 @@ def _faq_record_data(
         question=record.question,
         answer=record.approved_answer,
         alternate_questions=list(record.alternate_questions),
+        negative_questions=list(record.negative_questions),
         status=record.status,
         target_knowledge_base_ids=list(record.target_knowledge_base_ids or ()),
         source_document_ids=[source.document_id for source in record.source_documents],
@@ -297,6 +301,9 @@ async def _faq_list_data(
         search_answer_profile_id=search_answer_profile_id,
         records=[_faq_record_data(state, approver_names) for state in snapshot.states],
         enabled=approved_faq_enabled(snapshot.payload),
+        # スイッチの保存値をそのまま返す(類似問の提示がオフの間は使わないが、設定は残す)。
+        direct_answer_enabled=(snapshot.payload or {}).get(FAQ_DIRECT_ANSWER_ENABLED_KEY) is True,
+        direct_answer_min_score=get_settings().rag_approved_faq_direct_answer_min_score,
         knowledge_bases=[
             ApprovedFaqKnowledgeBaseData(
                 id=kb_id, name=names.get(kb_id, kb_id), in_profile=kb_id in profile_kbs
@@ -359,11 +366,41 @@ async def confirm_search_answer_profile_approved_faq(
 async def put_approved_faq_settings(
     search_answer_profile_id: str, request: ApprovedFaqSettingsRequest
 ) -> ApiResponse[ApprovedFaqListData]:
-    """回答の前に類似問を提示するかを保存する(検索・回答プロファイルごと。#684)。"""
+    """プロファイルごとの FAQ の設定を保存する(送った項目だけ。#684・#4788)。
+
+    類似問を提示するか・一致度が下限以上のとき FAQ の回答をそのまま返すか。
+    """
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
-    await save_approved_faq_enabled(oracle, search_answer_profile_id, request.enabled)
+    changes: dict[str, bool] = {}
+    if request.enabled is not None:
+        changes[FAQ_ENABLED_KEY] = request.enabled
+    if request.direct_answer_enabled is not None:
+        changes[FAQ_DIRECT_ANSWER_ENABLED_KEY] = request.direct_answer_enabled
+    if changes:
+        await save_approved_faq_settings(oracle, search_answer_profile_id, changes)
     return await get_approved_faq(search_answer_profile_id)
+
+
+@router.put(
+    "/{search_answer_profile_id}/approved-faq/{faq_id}/negative-questions",
+    response_model=ApiResponse[ApprovedFaqListData],
+)
+async def put_approved_faq_negative_questions(
+    search_answer_profile_id: str, faq_id: str, request: ApprovedFaqNegativeQuestionsRequest
+) -> ApiResponse[ApprovedFaqListData]:
+    """FAQ の否定の質問(この FAQ を当てたくない質問の例)を置き換える(#4788)。"""
+    oracle = OracleClient()
+    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    try:
+        await save_approved_faq_negative_questions(
+            oracle, search_answer_profile_id, faq_id, request.negative_questions
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="FAQ が見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
 
 
 @router.post(
@@ -383,6 +420,7 @@ async def post_approved_faq(
             question=request.question,
             answer=request.answer,
             target_knowledge_base_ids=request.target_knowledge_base_ids,
+            negative_questions=request.negative_questions,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -431,7 +469,10 @@ async def preview_approved_faq_import(
             total=len(rows),
             rows=[
                 ApprovedFaqImportRowData(
-                    question=row.question, answer=row.approved_answer, row=row.row
+                    question=row.question,
+                    answer=row.approved_answer,
+                    row=row.row,
+                    negative_questions=list(row.negative_questions),
                 )
                 for row in rows[:APPROVED_FAQ_PREVIEW_ROWS]
             ],
@@ -484,10 +525,8 @@ async def suggest_search_answer_profile_approved_faq(
         view.config.normalized_knowledge_base_ids()
     )
     settings = get_settings()
-    genai = (
-        OciGenAiClient(settings=settings) if settings.rag_approved_faq_semantic_enabled else None
-    )
-    suggestions = await suggest_approved_faq(
+    snapshot = await load_approved_faq_snapshot(oracle, search_answer_profile_id)
+    ranking = await rank_approved_faq(
         oracle,
         search_answer_profile_id,
         request.query,
@@ -496,14 +535,19 @@ async def suggest_search_answer_profile_approved_faq(
         if request.purpose == "chat"
         else request.limit,
         min_score=settings.rag_approved_faq_suggestion_min_score,
-        embed=(
-            (lambda texts, input_type: genai.embed(texts, input_type=input_type))
-            if genai is not None
-            else None
-        ),
-        embedding_model=settings.oci_genai_embedding_model,
-        embedding_dimensions=settings.oci_genai_embedding_dim,
+        snapshot=snapshot,
+        **approved_faq_match_options(settings, lambda: OciGenAiClient(settings=settings)),
     )
+    suggestions = list(ranking.suggestions)
+    direct_min_score = settings.rag_approved_faq_direct_answer_min_score
+    if (
+        suggestions
+        and approved_faq_direct_answer_enabled(snapshot.payload)
+        and is_direct_faq_match(suggestions[0], direct_min_score)
+    ):
+        # 一致度が下限以上のチャットの質問は、候補を選ばせずに送る。送信の後、補完した質問で
+        # 照合し直して FAQ の回答をそのまま返す(#4788)。
+        return ApiResponse(data=ApprovedFaqSuggestionsData(direct_answer=True))
     if suggestions:
         # 1 位とほぼ同じくらい近い候補だけを出す(#709)。
         top = max(item.score for item in suggestions)
@@ -521,7 +565,7 @@ async def suggest_search_answer_profile_approved_faq(
                     matched_question=item.matched_question,
                     answer=item.record.approved_answer,
                     score=round(item.score, 4),
-                    direct=is_direct_faq_match(item),
+                    direct=is_direct_faq_match(item, direct_min_score),
                 )
                 for item in suggestions
             ]
@@ -529,18 +573,14 @@ async def suggest_search_answer_profile_approved_faq(
     )
 
 
-# --- 用語・同義語と回答ルール(runtime knowledge)-------------------------------------------
+# --- 用語・同義語(runtime knowledge)-------------------------------------------
 
 
 def _runtime_knowledge_data(
     search_answer_profile_id: str, payload: dict[str, object]
 ) -> RuntimeKnowledgeData:
     return RuntimeKnowledgeData.model_validate(
-        {
-            "search_answer_profile_id": search_answer_profile_id,
-            "terms": payload.get("terms") or [],
-            "rules": payload.get("rules") or [],
-        }
+        {"search_answer_profile_id": search_answer_profile_id, "terms": payload.get("terms") or []}
     )
 
 
@@ -549,7 +589,7 @@ def _runtime_knowledge_data(
     response_model=ApiResponse[RuntimeKnowledgeData],
 )
 async def get_runtime_knowledge(search_answer_profile_id: str) -> ApiResponse[RuntimeKnowledgeData]:
-    """検索・回答プロファイルの用語・同義語と回答ルールを返す。"""
+    """検索・回答プロファイルの用語・同義語を返す。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
@@ -563,24 +603,18 @@ async def get_runtime_knowledge(search_answer_profile_id: str) -> ApiResponse[Ru
 async def post_runtime_knowledge_edit(
     search_answer_profile_id: str, request: RuntimeKnowledgeEditRequest
 ) -> ApiResponse[RuntimeKnowledgeData]:
-    """用語またはルールを 1 行追加・更新・削除する。"""
+    """用語を 1 行追加・更新・削除する。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     try:
         payload = await edit_runtime_knowledge(
             oracle,
             search_answer_profile_id,
-            kind=request.kind,
             selected=request.selected,
             name=request.name,
-            title=request.title,
             labels=request.labels,
             content=request.content,
             source=request.source,
-            purpose=request.purpose,
-            instruction_kind=request.instruction_kind,
-            exclusive_group=request.exclusive_group,
-            priority=request.priority,
             enabled=request.enabled,
             delete=request.delete,
         )
@@ -596,7 +630,7 @@ async def post_runtime_knowledge_edit(
 async def post_runtime_knowledge_preview(
     search_answer_profile_id: str, request: RuntimeKnowledgePreviewRequest
 ) -> ApiResponse[RuntimeKnowledgePreviewData]:
-    """照合テスト: 質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
+    """照合テスト: 質問に一致する用語・同義語と拡張後の検索文を返す(保存しない)。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
@@ -605,35 +639,8 @@ async def post_runtime_knowledge_preview(
         data=RuntimeKnowledgePreviewData(
             expanded_question=context.expanded_question,
             matched_terms=[term.term for term in context.matched_terms],
-            matched_rules=[rule.title or rule.rule_id for rule in context.matched_rules],
-            conflicting_rules=sorted(
-                {
-                    str(item["title"])
-                    for item in context.rule_applications
-                    if item["reason"] == "unresolved_exclusive_conflict"
-                }
-            ),
         )
     )
-
-
-@router.put(
-    "/{search_answer_profile_id}/runtime-knowledge/rules/{rule_id}/clarification",
-    response_model=ApiResponse[RuntimeKnowledgeData],
-)
-async def put_rule_clarification(
-    search_answer_profile_id: str, rule_id: str, request: RuleClarificationRequest
-) -> ApiResponse[RuntimeKnowledgeData]:
-    """ルールの確認の質問と選択肢を保存する(None は外す。#717)。"""
-    oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
-    try:
-        payload = await save_rule_clarification(
-            oracle, search_answer_profile_id, rule_id, request.clarification
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="ルールが見つかりません。") from exc
-    return ApiResponse(data=_runtime_knowledge_data(search_answer_profile_id, payload))
 
 
 @router.post(
@@ -643,7 +650,7 @@ async def put_rule_clarification(
 async def post_clarification_suggest(
     search_answer_profile_id: str, request: ClarificationSuggestRequest
 ) -> ApiResponse[ClarificationSuggestionsData]:
-    """質問に出す確認(一致したルールのうち確認を持つ最初の 1 件。#717)。"""
+    """質問に出す確認(業務ガイドの不明・矛盾の条件のうち、選択肢で答えられる最初の 1 件。#1238)。"""
     oracle = OracleClient()
     view = await _require_search_answer_profile(oracle, search_answer_profile_id)
     from app.api.routes.chat import _guide_user_context, prepare_chat_question
@@ -659,101 +666,77 @@ async def post_clarification_suggest(
             force_token=True,
         )
 
-        recognized_answers: tuple[ClarificationAnswer, ...] = ()
-        recognition_usage: dict[str, float] = {}
-
         def response(
             data: ClarificationSuggestionsData,
         ) -> ApiResponse[ClarificationSuggestionsData]:
-            token = context_token
-            if token and (recognized_answers or recognition_usage):
-                token = with_rule_selection_answers(
-                    settings.app_service_token_secret,
-                    token,
-                    [answer.model_dump() for answer in recognized_answers],
-                    elapsed_seconds=recognition_usage.get("elapsed_seconds", 0.0),
-                )
-            data.question_context_token = token
+            data.question_context_token = context_token
             return ApiResponse(data=data)
 
         # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
         if view.config.clarification_policy == "assume":
             return response(ClarificationSuggestionsData())
+        # 補完が検索の要らない発話（挨拶・雑談）と分けたら、送信の側で検索を飛ばすので確認も
+        # 出さない（#4787。条件の読み取りのモデルも呼ばない）。
+        if context_token and skips_retrieval(
+            read_history_intent(settings.app_service_token_secret, context_token)
+        ):
+            return response(ClarificationSuggestionsData())
+        # 業務ガイドの不明・矛盾の条件（選択肢付き）を聞く（#1238）。
+        # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
+        if not settings.rag_support_guide_enabled:
+            return response(ClarificationSuggestionsData())
+        # 補完した質問が承認済み FAQ に下限以上で一致するなら、送信の側が FAQ の回答をそのまま返す
+        # ので確認も出さない(#4788。利用者が類似問を「どれでもない」と断った質問は照合しない)。
+        if not request.approved_faq_declined:
+            direct = await match_direct_approved_faq(
+                oracle,
+                search_answer_profile_id,
+                query,
+                settings,
+                lambda: OciGenAiClient(settings=settings),
+            )
+            if direct is not None and direct.answer is not None:
+                return response(ClarificationSuggestionsData())
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
-        source_text = "\n".join(
-            [
-                *(
-                    _guide_user_context(await oracle.list_messages(request.conversation_id))
-                    if request.conversation_id
-                    else ()
-                ),
-                request.query,
-            ]
-        )
-        recognized_answers = await recognize_rule_selections(
-            payload, query, settings, source_text=source_text, usage=recognition_usage
-        )
-        found = await asyncio.to_thread(
-            suggest_clarification,
-            payload,
-            query,
-            answers=recognized_answers if context_token else (),
-        )
-        if found is None:
-            # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
-            # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
-            settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
-            if not settings.rag_support_guide_enabled:
-                return response(ClarificationSuggestionsData())
-            guides = await _published_guides(oracle, search_answer_profile_id)
-            # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
-            if request.conversation_id and not settings.rag_history_rewrite_enabled:
-                query = "\n".join(
-                    [
-                        *_guide_user_context(await oracle.list_messages(request.conversation_id)),
-                        query,
-                    ]
-                )
-            # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-            guide_query = await build_guide_query(
-                oracle, settings, search_answer_profile_id, guides, query, payload
+        guides = await _published_guides(oracle, search_answer_profile_id)
+        # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
+        if request.conversation_id and not settings.rag_history_rewrite_enabled:
+            query = "\n".join(
+                [
+                    *_guide_user_context(await oracle.list_messages(request.conversation_id)),
+                    query,
+                ]
             )
-            selected = select_guide(
-                guides,
-                guide_query,
-                {},
-                context=await support_guide_context(
-                    oracle, guides, query, profile_scope_filters(view)
-                ),
-                close_margin=(
-                    settings.rag_support_guide_close_match_margin
-                    if settings.rag_support_guide_close_match_clarification_enabled
-                    else None
-                ),
-            )
-            selected = await resolve_text_conditions(selected, query, settings)
-            guide: tuple[str, str, Any] | None = None
-            if isinstance(selected, GuideChoice):
-                guide = guide_choice_clarification(selected)
-            elif selected is not None:
-                guide = guide_clarification(selected)
-            if guide is None:
-                return response(ClarificationSuggestionsData())
-            rule_id, title, guide_question = guide
-            return response(
-                ClarificationSuggestionsData(
-                    suggestion=ClarificationSuggestionData(
-                        rule_id=rule_id, rule_title=title, clarification=guide_question
-                    )
-                )
-            )
-        rule, clarification = found
+        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+        guide_query = await build_guide_query(
+            oracle, settings, search_answer_profile_id, guides, query, payload
+        )
+        selected = select_guide(
+            guides,
+            guide_query,
+            {},
+            context=await support_guide_context(oracle, guides, query, profile_scope_filters(view)),
+            close_margin=(
+                settings.rag_support_guide_close_match_margin
+                if settings.rag_support_guide_close_match_clarification_enabled
+                else None
+            ),
+        )
+        selected = await resolve_text_conditions(selected, query, settings)
+        guide: tuple[str, str, Any] | None = None
+        if isinstance(selected, GuideChoice):
+            guide = guide_choice_clarification(selected)
+        elif selected is not None:
+            guide = guide_clarification(selected)
+        if guide is None:
+            return response(ClarificationSuggestionsData())
+        guide_condition_id, title, guide_question = guide
         return response(
             ClarificationSuggestionsData(
                 suggestion=ClarificationSuggestionData(
-                    rule_id=str(rule.get("id", "")),
-                    rule_title=str(rule.get("title", "") or rule.get("id", "")),
-                    clarification=clarification,
+                    guide_condition_id=guide_condition_id,
+                    guide_title=title,
+                    clarification=guide_question,
                 )
             )
         )

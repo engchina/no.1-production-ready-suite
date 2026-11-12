@@ -82,7 +82,7 @@ async function mockChunking(page: Page) {
         chunk_size: 800,
         overlap: 120,
         min_chars: 120,
-        delimiter: "\\n\\n",
+        delimiter: ["\\n\\n"],
         context_header_enabled: true,
         chunk_child_target_chars: 1000,
         chunk_table_child_target_chars: 3000,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,8 +11,7 @@ import pytest
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.generation.grounded import build_context_block, guide_step_evidence_lines
-from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.generation.grounded import guide_step_evidence_lines
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import (
@@ -169,9 +167,8 @@ def _patch_search(monkeypatch: pytest.MonkeyPatch, results: dict[str, AnswerCont
     calls: list[tuple[str, list[dict[str, Any]]]] = []
 
     def fake_build(question: str, run_id: Any, engines: Any, settings: Any, **kwargs: Any) -> AnswerContext:
-        # 文書の選択・画面目録・条の目録（LLM）は使わない。
-        assert settings.document_selection_enabled is False and settings.screen_linking_enabled is False
-        assert settings.article_catalog_enabled is False
+        # 文書の選択は使わない。
+        assert settings.document_selection_enabled is False
         page_ranges = list(kwargs.get("page_ranges") or [])
         calls.append((question, page_ranges))
         key = "reference" if page_ranges else question
@@ -296,23 +293,12 @@ def test_guide_steps_and_request_coverage_share_one_budget(monkeypatch: pytest.M
 
 def test_build_context_block_lists_step_evidence_labels() -> None:
     spans = [
-        {"label": "E1", "source_id": "run:a1", "pinned": False, "function": ("doc", "F"), "text": "a"},
-        {"label": "E2", "source_id": "run:b1", "pinned": False, "function": ("doc", "F"), "text": "b"},
+        {"label": "E1", "source_id": "run:a1", "function": ("doc", "F"), "text": "a"},
+        {"label": "E2", "source_id": "run:b1", "function": ("doc", "F"), "text": "b"},
     ]
     steps = (("s1", "画面 A", ("run:a1",)), ("s2", "画面 B", ("run:b1", "run:zz")), ("s3", "画面 C", ()))
 
     assert guide_step_evidence_lines(steps, spans) == ["- s1「画面 A」: E1", "- s2「画面 B」: E2", "- s3「画面 C」: 根拠なし"]
-
-
-def test_build_context_block_shows_step_evidence_only_with_guide_steps() -> None:
-    spans = [{"label": "E1", "source_id": "run:a1", "pinned": False, "function": ("doc", "F"), "text": "a", "tags": []}]
-
-    with_steps = build_context_block(QUESTION, spans, preface="", feedback=None, guide_steps=(("s1", "画面 A", ("run:a1",)),))
-    without = build_context_block(QUESTION, spans, preface="", feedback=None)
-
-    assert "業務ガイドの手順ごとの根拠" in with_steps and "- s1「画面 A」: E1" in with_steps
-    assert "業務ガイドの手順ごとの根拠" not in without
-    assert RuntimeKnowledgeContext(original_question="q", expanded_question="q", path=Path("x")).guide_steps == ()
 
 
 def test_engine_settings_default_and_env_for_guide_steps() -> None:
@@ -333,17 +319,3 @@ def test_engine_settings_default_and_env_for_guide_steps() -> None:
     assert default.guide_step_deadline_seconds == 60.0  # 期限の既定は上限の 60 秒（#2826）
     assert (custom.guide_step_retrieval_enabled, custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (False, 2, 3)
     assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds, custom.extra_retrieval_max_queries) == (1, 2.5, 5)
-
-
-def test_guide_step_instructions_keep_steps_the_user_cannot_perform() -> None:
-    """残った業務ガイドの手順は、分かっている条件で利用者が自分で行えなくても説明させる（#2813）。
-
-    条件で外れる手順は分岐（visible_plan）がコードで外すので、生成の指示は手順を省く理由に条件を挙げない。
-    """
-    from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GUIDE_RULES_PROMPT
-
-    guide_line = next(line for line in GUIDE_RULES_PROMPT.splitlines() if line.startswith("- guide_task_scope: "))
-    assert "利用者が自分で行えない必須手順も省かず" in guide_line
-    assert "required=true" in guide_line and "required=false" in guide_line
-    assert "外れる操作は混ぜない" not in guide_line
-    assert "条件" not in _GUIDE_STEP_HINT

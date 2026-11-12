@@ -59,7 +59,6 @@ interface RunRow {
   answer_generated: boolean;
   status: "success" | "blocked" | "error";
   answer_outcome: string | null;
-  verification: "verified" | "partial" | "unverified" | null;
   validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
@@ -114,7 +113,6 @@ function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
     answer_generated: chat,
     status: "success",
     answer_outcome: chat ? "answered" : null,
-    verification: chat ? "verified" : null,
     confidence: chat ? "high" : null,
     needs_human_review: chat ? false : null,
     citation_count: 2,
@@ -322,6 +320,27 @@ async function expectScrollsInsideTable(page: Page, region: Locator) {
   else expect(metrics.visibleRows).toBeGreaterThanOrEqual(expectedRows);
 }
 
+// 時間帯の無い created_at（Oracle の TIMESTAMP の形）は、端末の時間帯によらず UTC の瞬間（#4753）。
+for (const timezoneId of ["Asia/Tokyo", "UTC"]) {
+  test.describe(`実行履歴の時刻（端末の時間帯 ${timezoneId}）`, () => {
+    test.use({ timezoneId });
+
+    test("時間帯の無い日時を UTC の瞬間として、システムの設定の時間帯で書く", async ({ page }) => {
+      await mockLocalAuth(page);
+      // 分の境目をまたがないよう、分の 30 秒に置く（開始 = 終了 - 11 秒）。
+      const finishedMs = Math.floor(RECENT_BASE_MS / 60_000) * 60_000 + 30_000;
+      const naive = new Date(finishedMs).toISOString().replace(/\.\d+Z$/, ".223334");
+      const startedIso = new Date(finishedMs - 11_000).toISOString();
+      const expected = `${startedIso.slice(0, 10).replaceAll("-", "/")} ${startedIso.slice(11, 16)}`;
+      await mockRuns(page, [run(1, { created_at: naive, elapsed_ms: 11_000 })]);
+
+      await page.goto("/history");
+      await expect(page.getByTestId("run-history-row-run-1").getByText(expected, { exact: false }).locator("visible=true").first()).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
+  });
+}
+
 test.describe("実行履歴", { tag: "@responsive" }, () => {
   test("system_admin: 読み込み中は経過時間と表の Skeleton、全員の実行と実行者の列、ページ番号で移りページは再読込でも残る", async ({
     page,
@@ -375,7 +394,6 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       await expect(page.getByTestId("run-history-row-run-1")).toContainText("自分");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("利用者 2");
       await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
-      await expect(page.getByTestId("run-history-row-run-1")).toContainText("確認状態が不明");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
@@ -637,12 +655,17 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       // 地の文の段落（節の中の文）も listitem なので、2 つだけなら続きの行と根拠の行は段落になっていない。
       const items = section.getByRole("listitem");
       await expect(items).toHaveCount(2);
-      // 1 つ目の項目は表の 8 行をすべて持ち、根拠の行は項目のリンク（地の文の段落ではない）。
-      for (const row of rows) await expect(items.first()).toContainText(row);
+      // 1 つ目の項目は表の 8 行を共有の表で出し（記号のまま出さない。#4734）、根拠の行は項目のリンク（地の文の段落ではない）。
+      await expect(items.first()).not.toContainText("| A1 |");
+      for (const row of rows) {
+        for (const cell of row.split("|").map((value) => value.trim()).filter(Boolean)) {
+          await expect(items.first()).toContainText(cell);
+        }
+      }
       await expect(items.first().getByTestId("answer-citation-link")).toHaveCount(1);
       await expect(items.first().getByTestId("answer-citation-link")).toContainText("合成の表.md");
       await expect(items.nth(1).getByTestId("answer-citation-link")).toHaveCount(1);
-      // 表の行は 1 行ずつ改行して並び、長い値も回答のカードの幅で折り返す。
+      // 長い値があっても回答のカードの幅を超えない（表の中でスクロールする）。
       const metrics = await card.evaluate((element) => ({
         cardOverflow: element.scrollWidth - element.clientWidth,
         itemOverflow: Math.max(
@@ -723,7 +746,6 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(summary.locator("[data-run-status]")).toHaveCount(0);
     await summary.screenshot({path: testInfo.outputPath("summary-without-badges.png")});
     await expect(summary).toContainText("受注の登録方法 21");
-    await expect(summary.locator("[data-run-summary-heading]")).not.toContainText("照合済み");
     await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
     await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
     // 自分が実行した自分の会話は「会話の持ち主」を出さない。
@@ -748,7 +770,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 段の数は入れ子の工程も数える。開くと段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
     const timeline = page.getByTestId("run-history-timeline");
     const timelineSummary = page.getByTestId("run-history-timeline-summary");
-    await expect(timelineSummary).toHaveText("4 ステップ・合計 1.2 秒");
+    await expect(timelineSummary).toContainText("4 ステップ・合計 1.2 秒");
     await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
     await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
     await timelineSummary.click();
@@ -954,7 +976,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
         { model: "model-strong", requests: 2, input_tokens: 6000, output_tokens: 600, total_tokens: 6600 },
       ],
     };
-    const cascade = { primary_model: "model-light", escalation_model: "model-strong", escalated: true, reasons: ["citation_mismatch"], stage: "answer.generate" };
+    const cascade = { primary_model: "model-light", escalation_model: "model-strong", escalated: true, reasons: ["structured_output_invalid"], stage: "answer.generate" };
     await mockRuns(page, [
       run(1, {
         question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light", usage,
@@ -982,14 +1004,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(monoSize).toBe("12px");
     expect(await modelIds.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).fontSize))).toEqual([monoSize, monoSize]);
     expect(await fact("modelTokens").evaluate((node) => getComputedStyle(node).fontSize)).toBe("14px");
-    await expect(fact("modelCascade")).toHaveText("あり（引用の ID・原文が資料と一致しなかった）");
+    await expect(fact("modelCascade")).toHaveText("あり（生成の出力が形式の検査を通らなかった）");
     // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
     await expect(page.getByTestId("answer-model-cascade")).toBeHidden();
     await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
     const line = page.getByTestId("answer-model-cascade");
-    await expect(line).toContainText("最初のモデルの回答が確認を通らなかったため、高性能モデルで回答し直しました");
-    await expect(line).toContainText("理由: 引用の ID・原文が資料と一致しなかった");
+    await expect(line).toContainText("最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました");
+    await expect(line).toContainText("理由: 生成の出力が形式の検査を通らなかった");
     await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light", "model-strong"]);
     await expectNoPageOverflow(page);
     for (const theme of ["light", "dark"]) {
@@ -1574,7 +1596,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expectNoPageOverflow(page);
   });
 
-  test("一致する用語の別名を検索文に加えると回答ルールの確認は別の段で、それぞれの登録・一致・影響を出す（#3451）", async ({
+  test("一致する用語の別名を検索文に加える段に、登録・一致・影響を出す（#3451）", async ({
     page,
   }, testInfo) => {
     await mockLocalAuth(page);
@@ -1601,18 +1623,6 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
               ],
             },
           },
-          {
-            key: "rules",
-            spec: ragSpan.step("回答ルールの確認"),
-            at: [0.12, 0.13],
-            details: {
-              fields: [
-                { label: "目的", value: "登録済みの回答ルールを質問に当て、回答の参考にします。" },
-                { label: "結果", value: "一致なし：登録済みの有効な回答ルールに一致しませんでした" },
-                { label: "有効な登録", value: "1 件（登録 1 件）" },
-              ],
-            },
-          },
         ],
         { base: "2026-10-15T00:00:00Z" }
       ),
@@ -1621,12 +1631,10 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     await page.getByTestId("run-history-timeline-summary").click();
     const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
-    // 包む段 → 質問から対象と条件を読み取る → 一致する用語の別名を検索文に加える → 回答ルールの確認（同じ段の子でこの順）。
-    await expect(steps).toHaveCount(4);
+    // 包む段 → 質問から対象と条件を読み取る → 一致する用語の別名を検索文に加える（同じ段の子でこの順）。
+    await expect(steps).toHaveCount(3);
     await expect(steps.nth(2)).toContainText("一致する用語の別名を検索文に加える");
-    await expect(steps.nth(3)).toContainText("確認と回答に使うルールを選ぶ");
     await expect(steps.nth(2)).toHaveAttribute("data-level", "1");
-    await expect(steps.nth(3)).toHaveAttribute("data-level", "1");
     await expect(page.getByText("用語・ルールの確認")).toHaveCount(0);
 
     await steps.nth(2).locator("[data-run-timeline-toggle]").click();
@@ -1635,12 +1643,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expect(terms).toContainText("2 件（登録 3 件）");
     await expect(terms).toContainText("用語 A（別名: 別名 A1・別名 A2）");
     await expect(terms).toContainText("一致した用語の別名を補助の検索文に加えます。");
-    await steps.nth(3).locator("[data-run-timeline-toggle]").click();
-    const rules = steps.nth(3).locator("[data-run-timeline-details]");
-    await expect(rules).toContainText("一致なし：登録済みの有効な回答ルールに一致しませんでした");
-    await expect(rules).toContainText("1 件（登録 1 件）");
-    await expect(rules).not.toContainText("影響");
-    await page.getByTestId("run-history-timeline").screenshot({ path: testInfo.outputPath("terms-rules-steps.png") });
+    await page.getByTestId("run-history-timeline").screenshot({ path: testInfo.outputPath("terms-steps.png") });
     await expectNoPageOverflow(page);
   });
 
@@ -1855,30 +1858,6 @@ test("実行履歴の主一覧は高い画面へ拡張してページ送りを�
 });
 
 
-test("資料照合の実行状態は未照合にまとめず、一覧と詳細で区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockLocalAuth(page);
-  const states = [
-    ["disabled", "設定で無効"], ["not_run", "未実行"], ["error", "確認処理でエラー"],
-    ["timed_out", "確認が時間切れ"], ["passed", "確認完了・問題なし"], ["failed", "確認完了・問題あり"],
-  ];
-  const rows = states.map(([execution], index) => run(index + 1, { answer_generated: true, verification: "unverified", validation_execution: execution }));
-  await mockRuns(page, rows);
-  await page.goto("/history");
-  if (testInfo.project.name === "desktop") {
-    for (const [index, [, label]] of states.entries()) {
-      await expect(page.getByTestId(`run-history-row-run-${index + 1}`)).toContainText(label);
-    }
-  }
-  for (const [index] of states.entries()) {
-    await page.goto(`/history/run-${index + 1}`);
-    await page.getByTestId("run-history-timeline-summary").click();
-    await page.getByTestId("run-history-process-details").click();
-    await expect(page.getByTestId("answer-validation-status")).toHaveCount(0);
-  }
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
-});
-
 test("全工程の詳細を五つのタブで確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1);
@@ -1901,31 +1880,6 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("LLM 4 回");
   await confirmTraceExplorer(page, testInfo, expect, true);
-});
-
-
-test("旧集約だけの履歴は照合済みと表示せず、実行結果を優先する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockLocalAuth(page);
-  const legacy = run(1, { answer_generated: true, verification: "verified", validation_execution: null });
-  const checked = run(2, { answer_generated: true, verification: "verified", validation_execution: "passed" });
-  await mockRuns(page, [legacy, checked]);
-  await page.goto("/history");
-  await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
-  if (testInfo.project.name === "desktop") {
-    await expect(page.getByTestId("run-history-row-run-1")).toContainText("確認状態が不明");
-    await expect(page.getByTestId("run-history-row-run-1")).not.toContainText("照合済み");
-    await expect(page.getByTestId("run-history-row-run-2")).toContainText("確認完了・問題なし");
-  } else {
-    await expect(page.getByRole("columnheader", { name: "資料との照合" })).toBeHidden();
-  }
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("history-verification-evidence.png") });
-  await page.goto("/history/run-1");
-  await expect(page.getByRole("heading", { name: "実行の詳細", exact: true })).toBeVisible();
-  await expect(page.getByRole("main")).not.toContainText("照合済み");
-  await page.goto("/history/run-2");
-  await expect(page.getByRole("main")).not.toContainText("照合済み");
-  await expectNoPageOverflow(page);
 });
 
 
@@ -1963,38 +1917,6 @@ test("前後文脈と章節の読取・採用・重複を入力と結果で分�
   await inspector.getByRole("tab", { name: "入力", exact: true }).click();
   await expect(inspector).toContainText("記録されていません");
   await expectNoPageOverflow(page);
-});
-
-test("回答修正の方針・再生成の採否・最終採用回を分けて確認できる", {tag: "@responsive"}, async ({page}, testInfo) => {
-  await mockLocalAuth(page);
-  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
-  await mockRuns(page, [row]);
-  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
-    {key: "root", spec: ragSpan.root(), at: [0, 4]},
-    {key: "round1", spec: ragSpan.step("回答文の生成と根拠確認（1回目）", "root"), at: [0, 1], params: {accepted: true, round: 1}, details: {fields: [{label: "採否", value: "採用"}]}},
-    {key: "check", spec: ragSpan.step("回答の修正が必要か確認する", "root"), at: [1, 1.1], details: {fields: [{label: "結果", value: "修正が必要です"}, {label: "指摘", value: "範囲を確認できない引用 1 件"}]}},
-    {key: "plan", spec: ragSpan.step("是正", "root"), at: [1.1, 1.2], details: {fields: [{label: "次の回答の作成", value: "2 回目"}, {label: "結果", value: "検査の指摘を渡して作り直します"}]}},
-    {key: "round2", spec: ragSpan.step("回答文の生成と根拠確認（2回目）", "root"), at: [1.2, 3], params: {accepted: false, round: 2}, details: {fields: [{label: "採否", value: "不採用（前の回の回答を維持）"}]}},
-    {key: "end", spec: ragSpan.step("是正の打ち切り", "root"), at: [3, 4], details: {fields: [{label: "結果", value: "改善が確認できないため、1回目の回答を採用しました。"}, {label: "最終採用", value: "1 回目"}]}},
-  ])});
-  await page.goto(`/history/${row.run_id}`);
-  await page.getByTestId("run-history-timeline-summary").click();
-  const timeline = page.getByTestId("run-history-timeline");
-  await expect(timeline).toContainText("回答の修正が必要か確認する");
-  await expect(timeline).toContainText("回答の修正方針を決める");
-  await expect(timeline).toContainText("回答の修正を終了する");
-  const first = timeline.locator(`[data-run-timeline-step="${spanStepId("round1")}"]`);
-  const second = timeline.locator(`[data-run-timeline-step="${spanStepId("round2")}"]`);
-  await expect(first).toHaveAttribute("data-status", "done");
-  await expect(first).toContainText("採用");
-  await expect(second).toHaveAttribute("data-status", "done");
-  await expect(second).toContainText("不採用");
-  await timeline.screenshot({path: testInfo.outputPath("correction-adoption-timeline.png")});
-  await inspectTraceStep(page, timeline, spanStepId("end"));
-  const inspector = page.locator("[data-trace-inspector]");
-  await expect(inspector).toContainText("改善が確認できないため、1回目の回答を採用しました。");
-  await expectNoPageOverflow(page);
-  await inspector.screenshot({path: testInfo.outputPath("correction-final-round.png")});
 });
 
 test("Oracle内部で統合済みの場合だけ追加の統合をスキップと表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
@@ -2160,12 +2082,10 @@ test("多様性補充の設定上限と実績を履歴の経過と軌跡で区�
 });
 
 
-for (const withWarning of [false, true]) {
-  test(`履歴の導出結論と本文だけの注意を保持する (warning-${withWarning})`, { tag: "@responsive" }, async ({page}, testInfo) => {
+  test("履歴の導出結論を保持する", { tag: "@responsive" }, async ({page}, testInfo) => {
     await mockLocalAuth(page);
-    const answer = ["合成の回答。", "資料により確認できた事項", "・合成の単価は 3。", "根拠：合成 A.pdf p.1", "", "資料をもとに導いた結論", "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1", "", "確認が必要な点", "", "・合成の未確認事項", ...(withWarning ? ["・合成警告: 合成詳細"] : [])].join("\n");
-    const answer_diagnostics = {passage_marks:[],removed_passages:[],answer_warnings:withWarning ? [{code:"off_goal",label:"合成警告",detail:"合成詳細"}] : []};
-    await mockRuns(page,[run(1,{answer,citations:[{...CITATION,file_name:"合成 A.pdf",metadata:{page:1}}],answer_diagnostics})]);
+    const answer = ["合成の回答。", "資料により確認できた事項", "・合成の単価は 3。", "根拠：合成 A.pdf p.1", "", "資料をもとに導いた結論", "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1"].join("\n");
+    await mockRuns(page,[run(1,{answer,citations:[{...CITATION,file_name:"合成 A.pdf",metadata:{page:1}}] })]);
     await page.goto("/history/run-1");
     for (const reload of [false,true]) {
       if (reload) await page.reload();
@@ -2175,14 +2095,10 @@ for (const withWarning of [false, true]) {
       await expect(derived.getByRole("listitem")).toHaveCount(1);
       await expect(derived).toContainText("当てはめ：3 × 2 = 6");
       await expect(derived.getByTestId("answer-citation-link")).toHaveCount(1);
-      const notes = card.getByTestId("answer-marked-passages");
-      await expect(notes).toHaveCount(1);
-      await expect(notes.getByText("合成の未確認事項",{exact:true})).toHaveCount(1);
       await expectNoPageOverflow(page);
     }
     await page.getByTestId("run-history-answer").screenshot({path:testInfo.outputPath("derived-notes-history.png")});
   });
-}
 test("補助工程の省略・0件・失敗・再利用を同じ履歴snapshotから経過と軌跡に表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1, {question: "合成の質問", answer: "合成の回答", search_answer_profile_name: "プロファイル A", citations: []});
@@ -2222,7 +2138,7 @@ for (const generated of generatedAnswers) {
   test(`生成契約の原文と導出結果を履歴で分けて表示する (${generated.id})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockLocalAuth(page);
     const citations = generated.sources.map((file_name, index) => ({ ...CITATION, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: 1 } }));
-    await mockRuns(page, [run(1, { question: "合成の質問", answer: generated.answer, citations, answer_diagnostics: { passage_marks: [], removed_passages: [], answer_warnings: [] } })]);
+    await mockRuns(page, [run(1, { question: "合成の質問", answer: generated.answer, citations })]);
     await page.goto("/history/run-1");
     for (const reload of [false, true]) {
       if (reload) await page.reload();

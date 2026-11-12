@@ -1,5 +1,6 @@
 import { TextField } from "@production-ready/ui";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { guideContactInheritance, type ContactInheritance } from "@/lib/contact-inheritance";
 import { t } from "@/lib/i18n";
 import { useInheritedAnswerContact, useSearchAnswerProfile } from "@/lib/queries";
@@ -60,10 +61,12 @@ export function SupportGuideHandoffContactField({
     profile.data?.config.contact_override,
     profile.data ? system.data : undefined
   );
+  const systemFailed = system.isError && system.data === undefined;
+  const profileFailed = profile.isError && profile.data === undefined;
   return (
+    <div className="col-span-full min-w-0 space-y-2">
     <TextField
       id={id}
-      className="col-span-full"
       width="full"
       label={t("supportGuides.field.handoffContact")}
       value={value}
@@ -74,11 +77,24 @@ export function SupportGuideHandoffContactField({
           helper={t("supportGuides.field.handoffContactHelp")}
           effective={guideEffectiveContactText(inheritance)}
           sameAs={sameAsText(inheritance)}
-          loadError={system.isError || profile.isError}
           testId="support-guide-handoff-contact"
         />
       }
       onChange={(event) => onChange(event.target.value)}
     />
+    {systemFailed || profileFailed ? (
+      // 継承する窓口を読み取れなかった。欄は入力できるまま、直下に失敗と再試行を出す（#4817）。
+      <DataLoadFailure
+        error={profile.error ?? system.error}
+        fallback={t("contactInheritance.loadError")}
+        onRetry={() => {
+          if (profileFailed) void profile.refetch();
+          if (systemFailed) void system.refetch();
+        }}
+        layout="field"
+        testId="support-guide-handoff-contact-load-failed"
+      />
+    ) : null}
+    </div>
   );
 }

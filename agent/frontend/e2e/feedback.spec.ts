@@ -1,8 +1,11 @@
 import type { Page } from "@playwright/test";
 
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { dbUser } from "./fixtures/auth";
 import { withListFilters } from "./fixtures/select-field";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
+import { DATABASE_READ_FAILED_MESSAGE, failDatabaseReads } from "./fixtures/read-failure";
 
 // #774: チャットの回答への評価と、フィードバックの集計の画面。
 
@@ -10,13 +13,6 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
@@ -123,7 +119,7 @@ for (const viewport of VIEWPORTS) {
       comment: "先月との比較も欲しい",
     });
     await expect(save).toHaveCount(0);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 
   for (const theme of ["light", "dark"] as const) {
@@ -152,7 +148,7 @@ for (const viewport of VIEWPORTS) {
       await expect(bad).toContainText("役に立たなかった");
       await expect(bad).not.toContainText("山田 太郎");
 
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-${viewport.name}-${theme}.png`), fullPage: true });
 
       // 行から詳細（質問・回答・理由・コメント）を一覧 + 詳細の詳細の列で開く（モーダルにしない）。
@@ -166,7 +162,7 @@ for (const viewport of VIEWPORTS) {
       await expect(detail).toContainText("情報が足りない");
       await expect(detail).toContainText("山田 太郎");
       await expect(detail.getByRole("heading", { name: "フィードバックの詳細" })).toBeInViewport();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-detail-${viewport.name}-${theme}.png`) });
     });
   }
@@ -207,7 +203,7 @@ for (const viewport of VIEWPORTS) {
     request = mockApi.lastRequest("GET", "/api/feedback");
     expect(request?.searchParams.get("days")).toBe("365");
     expect(request?.searchParams.get("offset")).toBeNull();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
   });
 }
 
@@ -256,7 +252,7 @@ test("xl 以上は「狭い一覧 | 広い詳細」で、先頭を自動で選�
   await second.focus();
   await page.keyboard.press("ArrowUp");
   await expect(first).toBeFocused();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」とブラウザの「戻る」で一覧に戻り、選んだ行へフォーカスを戻す", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
@@ -278,7 +274,7 @@ test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」と
   await expect(detail).toBeVisible();
   await expect(detail).toBeFocused();
   await expect(detail).toContainText("先月との比較が無い。");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`feedback-single-detail-${testInfo.project.name}.png`), fullPage: true });
 
   await page.getByTestId("feedback-detail-back").click();
@@ -300,7 +296,7 @@ test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」と
   await expect(detail).toBeVisible();
   await page.getByTestId("feedback-detail-back").click();
   await expect(page.getByRole("button", { name: "run-b の質問：今月の契約件数は？ の詳細を表示" })).toBeFocused();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("評価・理由で絞り込み、合う評価が無ければ絞り込みをクリアできる", async ({ page, mockApi }) => {
@@ -333,8 +329,73 @@ test("評価が無い期間は空の状態を出し、読み込み中は経過�
   await openRatings(page);
   await expect(page.getByTestId("feedback-loading")).toContainText("フィードバックを読み込んでいます");
   await expect(page.getByText("この期間のフィードバックはありません")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
+
+for (const viewport of VIEWPORTS) {
+  test(`業務 Agent の絞り込みの候補を読み取れないときは「すべて」だけを候補なしと見せず、ツールバーの直下に失敗と再試行を出す (#4222, ${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedReport(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let agentsFail = true;
+    // 後から登録した route が先に呼ばれる（fixture の成功の応答を上書きする）。
+    await page.route("**/api/agents", (route) =>
+      agentsFail
+        ? route.fulfill({
+            status: 500,
+            json: {
+              data: null,
+              error_messages: ["業務 Agent の一覧を読み取れませんでした。"],
+              warning_messages: [],
+              error_code: "database_read_failed",
+            },
+          })
+        : route.fallback()
+    );
+    await openRatings(page);
+
+    const failure = page.getByTestId("feedback-agent-filter-load-failed");
+    await expect(failure).toBeVisible({ timeout: 15_000 });
+    // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる（#4817）。
+    await expect(failure.getByRole("alert")).toHaveText("絞り込みに使う業務 Agent を読み込めませんでした。");
+    await expect(failure.getByText("業務 Agent の一覧を読み取れませんでした。")).toBeHidden();
+    expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+    // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
+    const toolbarBox = await page.getByTestId("feedback-filters").boundingBox();
+    const failureBox = await failure.boundingBox();
+    expect(toolbarBox !== null && failureBox !== null && failureBox.y >= toolbarBox.y + toolbarBox.height).toBe(true);
+    await expectNoPageHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`feedback-agent-filter-load-failed-${viewport.name}.png`) });
+
+    agentsFail = false;
+    await failure.getByRole("button", { name: "再試行" }).click();
+    await expect(failure).toHaveCount(0);
+  });
+}
+
+// #4222: backend は保存した実行の履歴を読めないとき、手元の実行だけの集計を 200 で返さず、失敗として返す。
+for (const viewport of VIEWPORTS) {
+  test(`評価の集計を読み取れないときは 0 件の集計を出さず、失敗を出して再試行で回復する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedReport(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const reads = await failDatabaseReads(page, "/api/feedback");
+    await openRatings(page);
+
+    // 自動の再試行（1・2 秒）の後に失敗を出す。
+    const failure = page.locator('[data-failure-kind="other"]');
+    await expect(failure.getByRole("alert")).toContainText(DATABASE_READ_FAILED_MESSAGE, { timeout: 15_000 });
+    await expect(page.getByTestId("feedback-summary")).toHaveCount(0);
+    await expect(page.getByText("この期間のフィードバックはありません")).toHaveCount(0);
+    // 絞り込みは読めているのでそのまま出す。
+    await expect(page.getByTestId("feedback-filters")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`feedback-read-failed-${viewport.name}.png`) });
+
+    reads.recover();
+    await failure.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(failure).toHaveCount(0);
+    await expect(page.getByTestId("feedback-summary")).toBeVisible();
+  });
+}
 
 function seedRatedRun(mockApi: MockApi) {
   mockApi.state.runs.push({
@@ -497,7 +558,7 @@ for (const viewport of VIEWPORTS) {
       await expect(set).toHaveAttribute("aria-invalid", "false");
       await expect(form.getByText("同じ質問のケースが既にあります")).toHaveCount(0);
       await expect(form.getByRole("button", { name: "評価ケースに追加" })).toBeInViewport();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-add-case-${viewport.name}-${theme}.png`) });
       await form.getByRole("button", { name: "評価ケースに追加" }).click();
 
@@ -569,7 +630,7 @@ test("評価ケースの下書きの読み込み中と失敗を出し、再試�
   await expect(detail.getByText("一時的に下書きを作れませんでした。")).toBeVisible();
   await detail.getByRole("button", { name: "再試行" }).click();
   await expect(detail.getByTestId("feedback-add-case-form").getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("品質評価の権限が無い利用者と、役に立った回答には評価ケースへの追加を出さない", async ({ page, mockApi }) => {

@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  RunProgressCard,
   AnswerFooter,
   Banner,
   ProcessFailureNotice,
@@ -68,14 +69,12 @@ import {
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
 import {
-  ANSWER_VALIDATION_KIND,
   answerReview,
   cancelledClarificationKinds,
   pendingClarificationKinds,
-  runAnswerPassages,
 } from "@/lib/answer-review";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
-import { answerStructureTitles, noticeHeading, structureAnswer, withoutFrameHeading } from "@/lib/answer-structure";
+import { answerStructureTitles, structureAnswer, withoutFrameHeading } from "@/lib/answer-structure";
 import { chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
@@ -1013,24 +1012,14 @@ function RunChatTurn({
   // 業務 Agent が記録した出力の項目（#2549）。
   const outputTable = useMemo(() => runOutputTable(run), [run]);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
-  // 資料との照合（照合の結果のバッジと、確かめた条件・確認待ちの質問・業務ガイド。#1286・#2361）。作成中は出さない。
+  // 回答の確認事項（回答の対応のバッジと、確かめた条件・確認待ちの質問・業務ガイド。#1286・#2361）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 回答の本文の節（要約 →「資料により確認できた事項」と根拠の行 →「資料から確認できなかった事項」。RAG のチャットと
   // 同じ形。#2328）。段落に根拠を結び付けられないときは今までの Markdown の描き方にする。
-  // 段落の印・外した段落・回答全体の注意（#2738）。記録の無い過去の Run は null（今までの表示のまま）。
-  const passages = useMemo(() => runAnswerPassages(run.artifacts), [run.artifacts]);
   const answerBlocks = useMemo(
     () =>
-      answer && (evidence || passages)
-        ? structureAnswer(
-            answer,
-            evidence,
-            noticeHeading(latestContent(run.artifacts, ANSWER_VALIDATION_KIND)),
-            answerStructureTitles(),
-            passages
-          )
-        : null,
-    [answer, evidence, passages, run.artifacts]
+      answer && evidence ? structureAnswer(answer, evidence, answerStructureTitles()) : null,
+    [answer, evidence]
   );
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
   const cancelledKinds = cancelledClarificationKinds(run);
@@ -1088,7 +1077,7 @@ function RunChatTurn({
         // Agent 自身の確認に答えた内容は、同じ往復の利用者の側に残す（回答の枠の上）。
         <ConfirmationRecordBubble key={record.key} record={record} testId={`chat-confirmation-record-${record.key}`} />
       ))}
-      <ChatAnswer live>
+      <ChatAnswer live progress={<>
         {/*
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。共通のイベントの配信で更新し（#1359）、
           完了後は回答の上に「処理の経過（N ステップ・M 秒）」を閉じて出す（実行中は開く。#2096 / #2121 / #2265。共有の ChatProgress。
@@ -1098,12 +1087,12 @@ function RunChatTurn({
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
         {legacyProgress ? (
           // span の無い古い形式の記録は、処理の経過を出せないことを同じ位置に示す（空白にしない。#3226）。
-          <>
+          <RunProgressCard>
             <p className="text-xs text-fg-muted" data-testid="chat-progress-legacy">{traceLabels.legacy}</p>
             <RunProcessDetails traceId={progress.traceId} metadata={{ conversationId: run.thread_id ?? null, messageId: run.id }}>
               <RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model, valueKind: "identifier" as const }] : []} />
             </RunProcessDetails>
-          </>
+          </RunProgressCard>
         ) : (
           <ChatProgress
               loadCallBody={progress.loadCallBody}
@@ -1126,6 +1115,7 @@ function RunChatTurn({
             testId="chat-progress"
           />
         )}
+      </>}>
         {failure ? (
           // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
           // 読めるよう、処理の経過の直下（回答・結果の上）に 1 つだけ出す。
@@ -1150,7 +1140,6 @@ function RunChatTurn({
                 runId={run.id}
                 blocks={answerBlocks}
                 evidence={evidence}
-                passages={passages}
                 markdownHeadingLevel={4}
                 testId={`chat-answer-${run.id}`}
               />
@@ -1284,7 +1273,7 @@ function RunChatTurn({
           />
         ) : null}
 
-        {/* 資料との照合は回答の本文の下・出典の上（#1286。#2123 で元の位置に戻した。#2361 で「回答の確かめ」から改名）。 */}
+        {/* 回答の確認事項は回答の本文の下・出典の上（#1286。#2123 で元の位置に戻した。#2361 で「回答の確かめ」から改名）。 */}
         {review ? (
           <AnswerReviewPanel
             // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。
@@ -1387,14 +1376,6 @@ function answerText(artifacts: Artifact[]): string | null {
       // 本文の先頭の「## 回答」は枠の見出し（ChatAnswerBody）と重なるので除く（#4061）。
       return withoutFrameHeading(artifact.content.text, DEFAULT_CHAT_ANSWER_BODY_LABELS.heading);
     }
-  }
-  return null;
-}
-
-/** 最も新しい成果物の内容（無ければ null）。 */
-function latestContent(artifacts: Artifact[], kind: string): Record<string, unknown> | null {
-  for (const artifact of [...artifacts].reverse()) {
-    if (artifact.kind === kind) return artifact.content;
   }
   return null;
 }

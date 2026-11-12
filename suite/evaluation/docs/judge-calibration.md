@@ -1,6 +1,6 @@
 # 人手の判定による校正の手順（#3418・#2577）
 
-LLM による回答の判定（`suite-evaluation judge`）と RAG の回答の評価器（`app.rag.answer_judge_calibration`）を、人手の判定（ラベル）との一致で校正する手順。校正に通った観点だけ、判定を合否に使う（通らない観点は参考値）。
+LLM による回答の判定（`suite-evaluation judge`）を、人手の判定（ラベル）との一致で校正する手順。校正に通った観点だけ、判定を合否に使う（通らない観点は参考値）。
 
 **人の判定はコードで作らない。** ラベルは記入者（2 人以上）が付け、食い違いは裁定者が決める。コードが作るのは記入用のブック・合成の対照（故意に壊した回答。`origin=synthetic` として人手の判定と分け、合否に入れない）・一致の集計だけ。
 
@@ -14,9 +14,9 @@ LLM による回答の判定（`suite-evaluation judge`）と RAG の回答の�
 | 4 | 運用者 | 記入者の間の一致を測り、裁定用のブックを作る | `suite-evaluation label-import --adjudication-output` |
 | 5 | 裁定者 | 食い違いの行を決める | （Excel） |
 | 6 | 運用者 | 人手の判定（LabelSet の JSON）を書く | `suite-evaluation label-import --adjudicated --output` |
-| 7 | 運用者 | 判定のモデルで校正し、結果を記録する | `suite-evaluation calibrate`・`app.rag.answer_judge_calibration` |
+| 7 | 運用者 | 判定のモデルで校正し、結果を記録する | `suite-evaluation calibrate` |
 
-**RAG の画面はテストセット作成と旧データの閲覧に分かれる（#4396）。** 「品質評価 › テストセットの作成」は本人の評価から標準回答を整理し、既存テンプレート互換の Excel を出力する。[手順](../../../rag/docs/evaluation-testsets.md)。過去の校正データは「以前の校正データ」から閲覧・保管用に書き出せるが、新たな記入・裁定・校正は行わない。保管用 JSON は CLI の最終ラベル入力ではない。最終判定済みの既存 `export` API は維持し、`export?language=ja` は形式「判定の記入データ」第1版、既定の `export` は英語形式を返す。CLI はこの日本語形式と既存の英語キーの LabelSet を読める。日本語形式に英語の固定キーを混在させたファイル、重複キー、未対応の版は受け付けない。本 CLI の記入・校正手順と統計基準は変更しない。
+**RAG の画面に判定の校正は無い（#4781）。** 「品質評価 › テストセットの作成」は本人の評価から標準回答を整理し、既存テンプレート互換の Excel を出力する。[手順](../../../rag/docs/evaluation-testsets.md)。以前の校正データの閲覧・書き出し（`export` API）も #4781 で削除した。本 CLI の記入・校正手順と統計基準は変更しない。
 
 作るファイル（回答・根拠の本文を含む）は repo に commit せず、repo の直下の `./tmp/<作業の名前>/` に置く。ブックの内容（質問・回答・根拠）を Issue・チャット・repo に書き写さない。
 
@@ -142,14 +142,7 @@ uv run suite-evaluation calibrate $W/labels.json --repeats 3 --output $W/calibra
 
 ### RAG の回答の評価器
 
-```bash
-cd rag/backend
-uv run python -m app.rag.answer_judge_calibration ../../tmp/judge-calibration/labels.json \
-    --output ../../tmp/judge-calibration/rag-calibration.json
-```
-
-- 項目ごとに RAG の評価器（画面の品質評価と同じ `evaluate_answer_payload` と指標の計算。接続とモデルは RAG の設定）を動かし、指標の値が `--pass-at`（既定 1.0）以上を pass として、同じ一致の集計・同じ閾値（platform の `pr_evaluation_scoring`）で合否を出す。`--evaluations <前の結果>` でモデルを呼ばずに集計だけやり直す。
-- 誤りの型ごとの内訳・項目ごとの判定と理由・`--baseline <前の結果>` の比較・同梱の合成の校正セットと実モデルでの測定は [rag/docs/answer-judge-calibration.md](../../../rag/docs/answer-judge-calibration.md)（#2577）。
+RAG の回答の評価器の校正（`app.rag.answer_judge_calibration`）は #4781 で削除した。RAG の品質評価の LLM の判定は正確性の 1 本だけで、人手の判定との一致を測る仕組みは RAG に無い。
 
 ### Agent の品質評価の評価者
 
@@ -157,12 +150,11 @@ Agent の回答の要点の判定・出力の項目の意味の判定は、Label
 
 ### 記録する
 
-結果のファイルは `./tmp/` に置いたまま、#3418（RAG の評価器は #2577）にコメントで次を残す（回答・根拠・質問の本文、業務の内容、endpoint・OCID などの実環境の情報は書かない）:
+結果のファイルは `./tmp/` に置いたまま、#3418 にコメントで次を残す（回答・根拠・質問の本文、業務の内容、endpoint・OCID などの実環境の情報は書かない）:
 
 - 判定のモデルの ID、rubric の id・版・sha256、`prompt_sha256`、判定の設定（`max_attempts`・`max_evidence_chars`）
 - LabelSet の sha256、人手 / 合成の項目の数、観点ごとの holdout の行と pass / fail の数、記入者の数と記入者の間の κ（観点ごと）、裁定した行の数
 - 観点ごと: holdout の κ・判定率・誤合格の率・誤不合格の率・合否と理由、synthetic の誤合格の率、`--repeats` の回数と揺れの率
-- RAG の評価器の同じ値（`--pass-at` の値を添える）
 
 校正に通った観点だけ、`suite-evaluation judge --calibration $W/calibration.json` が合否を出す（同じ rubric・同じモデルのときだけ。違えば `calibration_status=mismatch`）。
 

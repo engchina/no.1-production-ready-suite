@@ -100,7 +100,6 @@
         "agent": {
           "run_id": "run-answered-agent-outcome-0",
           "status": "completed",
-          "validation_status": "completed",
           "outcome_source": "agent_answer",
           "tool_calls": {
             "rag_retrieve_evidence": 1,
@@ -120,7 +119,6 @@
           "elapsed_ms": 1500.0,
           "outcome": "answered",
           "outcome_source": "agent_answer",
-          "validation_status": "completed",
           "model_requests": 2,
           "tool_calls": {
             "rag_retrieve_evidence": 1,

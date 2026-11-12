@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, get_args
 
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_DEFAULT_MAX_CHARS,
@@ -82,16 +82,17 @@ from pr_system_settings.model import (
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
 from rag_parser_core.sheet_records import ExcelOptions
-from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
 )
@@ -101,10 +102,18 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.chunking import (
     CHUNK_SIZE_MIN_CHARS as CHUNK_SIZE_MIN_CHARS,
 )
+from rag_pipeline_core.chunking import (
+    DEFAULT_FIXED_DELIMITERS as DEFAULT_FIXED_DELIMITERS,
+)
+from rag_pipeline_core.chunking import (
+    ChunkSeparators as ChunkSeparators,
+)
+from rag_pipeline_core.chunking import (
+    FixedDelimiters as FixedDelimiters,
+)
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
-from app.rag.language_pack_store import LANGUAGE_PACK_STORE
 from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX
 
 UploadStorageBackend = Literal["local", "oci"]
@@ -123,7 +132,6 @@ ParserAdapterBackend = Literal[
     # XML ツリー JSON(tag / attr / children の木の JSON)を要素の階層のまま解析する(#2024)。
     # Docling・Unstructured と同じく、使用エンジンで選んだときだけ使う(#2042)。
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
     # service 系 backend。oci_document_understanding は OCI Document Understanding の
     # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
@@ -147,9 +155,6 @@ DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 #   global の継承へ寄せる(画面・取込を壊さない)。取込の経路は選ばれていても呼ばずに止める
 #   (ingestion._partition_source)。
 ROADMAP_PARSER_ADAPTER_BACKENDS: dict[str, str] = {
-    # MinerU は外部の HTTP API の client とライセンスの確認(app.rag.mineru_license)を戻したうえで、
-    # 準備中にする(#3359。利用者の判断)。有効にするときはこの行を消す。
-    "mineru": "MinerU",
     "oci_document_understanding": "OCI Document Understanding",
 }
 
@@ -193,6 +198,10 @@ def normalize_parser_adapter_backend_value(value: object) -> object:
 # 固定分割の方式と、#2457 の前の固定分割符の既定(escape 表現)。既定は記録の境界のマーカーに変えた。
 # 既存の chunk_set_id と分割の結果を保つ比較・移行だけに使う。
 FIXED_DELIMITER_STRATEGY: Literal["fixed_delimiter"] = "fixed_delimiter"
+# 本文の区切り(RAG_CHUNK_SEPARATORS)を使う分割方式(#4733)。
+CHUNK_SEPARATOR_STRATEGIES: frozenset[str] = frozenset(
+    {"structure_aware", "recursive_character", "small_to_big"}
+)
 PREVIOUS_DEFAULT_CHUNK_DELIMITER = "\\n\\n"
 
 
@@ -266,7 +275,7 @@ INGESTION_JOB_SUBPROCESS_TIMEOUT_MAX_SECONDS = 604800.0
 # 取込 job の停滞の時間の既定（秒。#2003）。進捗を出さない 1 回の呼び出し（再試行を含む）の最長
 # より長くする: 解析サービスは配備の unit の 1230 秒 × 5 回 + 待ち = 約 6170 秒（timeout も
 # 再試行する）、Vision の LLM は共通の設定（PLATFORM_OCI_ENTERPRISE_AI_*）で選べる最長が
-# 600 秒 × 6 回 = 3600 秒、MinerU の job は既定 1800 秒。これらより長い 2 時間にする。
+# 600 秒 × 6 回 = 3600 秒。これらより長い 2 時間にする。
 INGESTION_JOB_STALL_TIMEOUT_DEFAULT_SECONDS = 7200.0
 CHUNK_CHILD_TARGET_CHARS_DEFAULT = 1000
 CHUNK_CHILD_TARGET_CHARS_MIN = 300
@@ -292,20 +301,9 @@ SMALL_TO_BIG_SETTING_FIELDS: tuple[str, ...] = (
     "rag_chunk_parent_max_pages",
     "rag_chunk_parent_max_children",
 )
-# 回答フローの選択肢(rag_engine.generation.answer_models の ID と一致させる)。
-QueryStrategy = Literal[
-    "auto_routing",
-    "simple_retrieval",
-    "rag_fusion",
-    "query_decomposition",
-    "step_back_prompting",
-    "hyde",
-]
-AnswerFlow = Literal["crag", "standard_rag"]
 # 回答の LLM の用途ごとの推論(思考)の量(#1499)。model はモデルの登録値(共通のモデル設定)のまま、
 # none は送らない、low / medium / high はその値を送る(platform の推論の量の選択肢と同じ)。
 ReasoningEffortOverride = Literal["model", "none", "low", "medium", "high"]
-MineruTier = Literal["flash", "basic", "standard", "advanced"]
 VectorIndexProfile = Literal[
     "balanced",
     "accurate",
@@ -332,16 +330,16 @@ PLATFORM_ENV_FILE = platform_env_file(BACKEND_ROOT)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 # 文書解析の設定（RAG 専用。#1701）。相対 path は backend/ 基準。
 DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
+DEFAULT_FILE_TYPE_DEFAULTS_FILE = "file-type-defaults.json"
 # 言語資源の全体の上書き(#2181)。
-DEFAULT_LANGUAGE_PACK_FILE = "language-pack.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
 # 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
 # プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
 # 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定）。値の範囲は
-# Settings の検証で持つ。プロファイルで上書きできない項目は ``PROFILE_GLOBAL_QUERY_FIELDS``
-# （``app/rag/search_answer_profile_config.py``）が正本。
+# Settings の検証で持つ。プロファイルで上書きできる項目は ``KnowledgeBaseQueryConfig``
+# （``app/rag/kb_adapter_config.py``）が正本。
 PROFILE_ONLY_SETTING_FIELDS = frozenset(
     {
         # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
@@ -368,6 +366,36 @@ def _without_profile_only_fields(
     return read
 
 
+# 形式別の既定（#4732）の種類。受け付ける形式（#4730）に合わせる。分類は
+# app.rag.file_type_defaults の 1 か所。
+FileType = Literal[
+    "pdf",
+    "word",
+    "powerpoint",
+    "excel",
+    "csv",
+    "text",
+    "markdown",
+    "json",
+    "html",
+    "image",
+]
+FILE_TYPES: tuple[FileType, ...] = get_args(FileType)
+
+
+class FileTypeDefaultEntry(BaseModel):
+    """文書の種類ごとの既定（全体の設定の層。#4732）。None は全体の既定に従う。
+
+    解決の順は文書のレシピ > 形式別の既定 > 全体の既定。分割のサイズなどのパラメータは持たない。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    preprocess_profile: PreprocessProfile | None = None
+    parser_adapter_backend: ParserAdapterBackend | None = None
+    chunking_strategy: ChunkingStrategy | None = None
+
+
 class _PersistedParserAdapterSettings(BaseModel):
     """UI から保存された文書解析 backend と外部接続設定（`parser-settings.json`。#1701）。
 
@@ -378,15 +406,9 @@ class _PersistedParserAdapterSettings(BaseModel):
     adapter_backend: ParserAdapterBackend = DEFAULT_PARSER_ADAPTER_BACKEND
     docling_enabled: bool = True
     unstructured_enabled: bool = False
-    mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
     structured_records_jsonl_enabled: bool = False
     xml_tree_json_enabled: bool = False
-    mineru_api_host: str = Field(default="", max_length=2048)
-    # MinerU のライセンスの条件を管理者が確認した記録（#3359）。確認するまで MinerU を有効にも
-    # 選択にもできない（app.rag.mineru_license）。確認した人の表示名と日時（UTC の ISO 8601）。
-    mineru_license_acknowledged_by: str = Field(default="", max_length=256)
-    mineru_license_acknowledged_at: str = Field(default="", max_length=64)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
 
@@ -485,11 +507,8 @@ class Settings(
     # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
     model_config = product_settings_config(prefix="RAG_", backend_dir=BACKEND_ROOT)
 
-    # MinerU のライセンスの条件の確認（確認した人の表示名, UTC の ISO 8601 の日時。#3359）。
-    # 環境変数・`.env` では書けないよう、Settings の項目にせず private にする。書けるのは
-    # 「文書解析」画面（system_admin）の保存だけで、parser-settings.json から読む
-    # （app.rag.mineru_license）。model_copy は private の値も写す。
-    _mineru_license_acknowledgement: tuple[str, str] = PrivateAttr(default=("", ""))
+    # 「形式別の既定」の画面で保存した値（file-type-defaults.json。#4732）。
+    _file_type_defaults: dict[str, FileTypeDefaultEntry] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def settings_customise_sources(
@@ -555,12 +574,10 @@ class Settings(
             "存在する場合は .env より優先する。相対 path は backend/ 基準。"
         ),
     )
-
-    rag_language_pack_file: str = Field(
-        default=DEFAULT_LANGUAGE_PACK_FILE,
+    rag_file_type_defaults_file: str = Field(
+        default=DEFAULT_FILE_TYPE_DEFAULTS_FILE,
         description=(
-            "「言語資源」画面から保存した、組み込みの言語資源との差の JSON(#2181)。"
-            "相対 path は backend/ 基準。"
+            "「形式別の既定」画面から保存した JSON（RAG 専用。#4732）。相対 path は backend/ 基準。"
         ),
     )
 
@@ -784,59 +801,21 @@ class Settings(
     allowed_upload_content_types: list[str] = Field(
         default=[
             "application/pdf",
-            "image/gif",
-            "image/jpeg",
-            "image/jpg",
-            "image/png",
-            "image/tif",
-            "image/webp",
-            "image/tiff",
-            "text/plain",
-            "text/markdown",
-            "text/csv",
-            "text/tab-separated-values",
-            # reStructuredText・Org(プレーンテキストとして読む。#3351)。
-            "text/x-rst",
-            "text/prs.fallenstein.rst",
-            "text/org",
-            "text/x-org",
-            "text/html",
-            "application/xhtml+xml",
-            "application/json",
-            "application/jsonl",
-            "application/jsonlines",
-            "application/ndjson",
-            "application/xml",
-            # .xml は text/xml でも送られる(#3360)。
-            "text/xml",
-            "application/csv",
-            "application/x-ndjson",
-            "message/rfc822",
-            "application/eml",
-            "application/vnd.ms-outlook",
-            "application/x-msg",
             "application/msword",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.ms-powerpoint",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            # マクロ付きの Office(ファイル準備で変換してから読む。マクロは実行しない。#2470)。
-            "application/vnd.ms-word.document.macroEnabled.12",
-            "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
-            "application/vnd.ms-excel.sheet.macroEnabled.12",
-            # Office のテンプレート(ファイル準備で変換してから読む。マクロは実行しない。#4054)。
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
-            "application/vnd.ms-word.template.macroEnabled.12",
-            "application/vnd.openxmlformats-officedocument.presentationml.template",
-            "application/vnd.ms-powerpoint.template.macroEnabled.12",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
-            "application/vnd.ms-excel.template.macroEnabled.12",
-            # ODT・RTF(ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
-            "application/vnd.oasis.opendocument.text",
-            "application/rtf",
-            "application/x-rtf",
-            "text/rtf",
+            "text/csv",
+            "application/csv",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+            "text/html",
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
             "application/octet-stream",
         ]
     )
@@ -974,7 +953,7 @@ class Settings(
         description=(
             "process isolation 時、進捗を出す段(解析のページ・図・表の説明)の途中で job の"
             "進捗(rag_ingestion_jobs.progress_json)がこの秒数変わらなければ止める(#2003)。"
-            "進捗を出さない 1 回の呼び出し(解析サービス・MinerU・Document Understanding・"
+            "進捗を出さない 1 回の呼び出し(解析サービス・Document Understanding・"
             "Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
         ),
     )
@@ -998,12 +977,20 @@ class Settings(
             "fixed_delimiter は指定文字列での固定分割。"
         ),
     )
-    rag_chunk_delimiter: str = Field(
-        # 既定は構造化レコード JSONL の記録の境界のマーカー(#2457)。
-        default=JSONL_RECORD_BOUNDARY,
-        min_length=1,
-        max_length=256,
-        description="fixed_delimiter 戦略で使う分割符。\\n / \\t / \\\\ の escape 表現を許可する。",
+    # ponytail: 保存済みのレシピと .env の名前を保つため単数形のまま。値は優先度順の一覧。
+    rag_chunk_delimiter: Annotated[FixedDelimiters, NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_FIXED_DELIMITERS),
+        description=(
+            "fixed_delimiter 戦略だけが優先度順に試す分割符(JSON の配列。1 つの文字列も可)。"
+            "\\n / \\t / \\\\ の escape 表現を許可する。"
+        ),
+    )
+    rag_chunk_separators: Annotated[ChunkSeparators, NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_CHUNK_SEPARATORS),
+        description=(
+            "structure_aware / recursive_character / small_to_big が本文を切るときに"
+            "優先度順に試す区切り(JSON の配列)。"
+        ),
     )
     # 親子階層（small-to-big。`small_to_big`）の分割パラメータ。
     # rag_poc の「チャンキング」tab と同じ 5 項目。
@@ -1153,10 +1140,9 @@ class Settings(
         default=True,
         description=(
             "回答で、当たった chunk の章節（章節ナビゲーション）から親の章節へ段階的に広げて"
-            "文脈に入れる（#1436。既定 ON）。根拠が十分でも最低 1 段（所有の章節）を読み、"
-            "新たな根拠を加えた後に CRAG の十分性を確かめ、足りれば止める"
-            "（判定ごとに LLM の呼び出しが 1 回増える）。標準 RAG では必要な範囲の原文を補完し、"
-            "十分性の評価器は呼ばない。一部取得は読了にしない。"
+            "文脈に入れる（#1436。既定 ON）。最低 1 段（所有の章節）を読み、"
+            "必要な範囲の原文を補完する。"
+            "一部取得は読了にしない。"
             "検索方法の全体設定で選ぶ。"
         ),
     )
@@ -1174,15 +1160,6 @@ class Settings(
             "章節の拡張で、1 回の回答の根拠の入力 token の上限にする、回答のモデルの入力の上限"
             "（システム設定 › モデル の登録モデルの「入力の上限（tokens）」。#1437）に対する"
             "割合（%。#1436。既定 50）。"
-        ),
-    )
-    rag_section_extraction_enabled: bool = Field(
-        default=False,
-        description=(
-            "(#2800)章節の拡張で、根拠の入力の上限に入らない章節から質問に関係する原文を LLM で"
-            "抜き出す(#1437)。既定 OFF は、入らない章節を rerank の順で上限まで入れ、"
-            "読めなかった範囲を「回答に未反映の関連章節」に示す(生成の前の LLM の呼び出しを"
-            "増やさない)。"
         ),
     )
     rag_max_anchors_per_document: int = Field(
@@ -1207,6 +1184,34 @@ class Settings(
         ge=1,
         le=200,
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
+    )
+    # 文書全体の要約（#4793）。取込（分割・埋め込み・索引）の後に、1 文書につき 1 回だけ
+    # OCI Enterprise AI を呼んで文書の説明を作り、要約の chunk を 1 つ索引に入れる。
+    rag_document_summary_enabled: bool = Field(
+        default=True,
+        description=(
+            "取込の後に文書全体の要約を 1 文書につき 1 回の LLM で作り、文書の説明として保存して"
+            "要約の chunk を 1 つ索引に入れる（#4793。既定 ON）。失敗・時間切れでも取込は"
+            "失敗にせず、文書の詳細から作り直せる。"
+        ),
+    )
+    rag_document_summary_max_input_chars: int = Field(
+        default=16000,
+        ge=2000,
+        le=200000,
+        description=(
+            "文書全体の要約の入力の予算（文字数）。本文は文書の先頭からこの予算まで渡し、"
+            "超える文書は予算の 1/4 までの見出しの一覧を足して、本文を省いたことを入力に書く。"
+        ),
+    )
+    rag_document_summary_timeout_seconds: float = Field(
+        default=120.0,
+        ge=10.0,
+        le=1800.0,
+        description=(
+            "文書全体の要約の 1 文書あたりの時間の上限（再試行・埋め込み・保存を含む秒数）。"
+            "超えたら要約なしとして記録し、取込は成功のままにする。"
+        ),
     )
     # 見出しの階層の推定（#2277）。しおりの深さを当てられず、番号の体系でも多くの見出しの深さを
     # 決められない文書（Docling の結果）だけ、見出しの文字列を OCI Enterprise AI に渡して階層を
@@ -1341,7 +1346,7 @@ class Settings(
         default=60,
         ge=0,
         le=2000,
-        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付・条目録と参照先は別枠で保持する。",
+        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付と参照先は別枠で保持する。",
     )
     rag_rerank_candidate_limit: int = Field(
         default=200,
@@ -1349,7 +1354,7 @@ class Settings(
         le=2000,
         description=(
             "明示参照・多様化・各種拡張を含む rerank の入力の合計上限。"
-            "候補は段ごとの枠の中で先着で入り、融合 → 多様化 → 画面 → 条の目録の順に"
+            "候補は段ごとの枠の中で先着で入り、融合 → 多様化 → 画面の順に"
             "合計まで採る。0 は有効な各段の上限の合計を使う。"
         ),
     )
@@ -1421,13 +1426,34 @@ class Settings(
             "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
         ),
     )
-    # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
+    rag_approved_faq_negative_min_score: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "承認済み FAQ の否定の質問(その FAQ を当てたくない質問の例)に当たったとみなす"
+            "一致度の下限(0〜1。#4788)。質問と否定の質問の一致度がこの値以上で、FAQ の質問との"
+            "一致度以上のとき、その FAQ を候補から外す。"
+        ),
+    )
+    rag_approved_faq_direct_answer_min_score: float = Field(
+        default=0.92,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "承認済み FAQ の回答をそのまま返す一致度の下限(0〜1。全体設定だけの値。#4788)。"
+            "そのまま返すかどうかは、検索・回答プロファイルの FAQ の設定(既定はオフ)が持つ。"
+            "類似問の候補の「そのまま使える一致度」の印にも同じ値を使う。"
+        ),
+    )
+    # 回答は rag_poc の根拠付き回答だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
     rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
-            "チャットで回答するとき、会話履歴から最新の質問を"
-            "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
+            "チャットで回答するとき、毎回の発話で LLM を 1 回呼び、会話履歴から最新の質問を"
+            "単独の質問へ書き換え、検索の要らない発話(挨拶・雑談)かを分ける(#4787)。"
+            "1 回目(履歴なし)の発話でも呼ぶ。挨拶・雑談は検索を飛ばして根拠なしの短い応答にする。"
         ),
     )
     rag_search_top_k_default: int = Field(
@@ -1436,31 +1462,12 @@ class Settings(
         le=SEARCH_TOP_K_MAX,
         description="検索・チャット・MCP で top_k を省略したときの基準件数。",
     )
-    rag_runtime_rules_confirmation_enabled: bool = Field(
-        default=False, description="登録ルールによる確認の使用。必要な確認・安全・権限とは独立。"
-    )
-    rag_runtime_rules_answer_enabled: bool = Field(
-        default=False, description="回答生成での登録ルールの使用。独立した回答処理とは別。"
-    )
     rag_runtime_terms_search_enabled: bool = Field(
         default=False, description="登録した用語・同義語による検索文の追加。全体設定だけで決める。"
     )
     rag_runtime_terms_answer_enabled: bool = Field(
         default=False,
         description="登録した用語・同義語と説明を回答生成の補助情報に使用する。全体設定だけで決める。",
-    )
-    rag_query_strategy: QueryStrategy = Field(
-        default="simple_retrieval",
-        description="質問の拡張(query rewriting / expa"
-        "nsion)の方式。全体設定だけで決め、検索・回答プロファイルでは上書きしない。",
-    )
-    rag_answer_flow: AnswerFlow = Field(
-        default="standard_rag",
-        description=(
-            "回答の生成方式。standard_rag(標準 RAG。既定)は補正しない。"
-            "crag(CRAG)は検索結果を評価して必要なら補正検索する"
-            "(AI の呼び出しと時間が増えるので明示して選ぶ。#3509)。"
-        ),
     )
     rag_neighbor_child_count: int = Field(
         default=3,
@@ -1475,211 +1482,6 @@ class Settings(
         default=True,
         description=(
             "回答で、検索候補を OCI Generative AI の rerank で並べ替える。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
-    rag_screen_linking_enabled: bool = Field(
-        default=False,
-        description=(
-            "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
-            "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
-            "(LLM の呼び出しが 1 回増える。#554)。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
-    rag_article_catalog_enabled: bool = Field(
-        default=True,
-        description=(
-            "回答で、検索の候補に出た条で構成された文書(XML ツリー JSON で取り込んだ文書など)の"
-            "条の目録から、質問の根拠になる条を LLM で選び、その条の根拠を候補に加えて context の"
-            "枠を確保する(#2254)。条で構成された文書が候補に無ければ LLM を呼ばない"
-            "(候補にあれば文書ごとに 1 回、並行に呼ぶ)。"
-        ),
-    )
-    rag_article_catalog_max_documents: int = Field(
-        default=16,
-        ge=0,
-        le=32,
-        description=(
-            "条の目録を読む文書の上限(検索の候補の文書の、候補の順位の逆数の合計の大きい順。"
-            "#2254・#2261)。0 は選ばない。既定は評価で必要だった文書の順位(最大 8)に"
-            "余裕を持たせた値(#3518)。文書ごとに LLM を 2 回呼ぶ。"
-        ),
-    )
-    rag_article_catalog_max_articles: int = Field(
-        default=8,
-        ge=0,
-        le=20,
-        description=(
-            "条の目録から 1 つの文書で選ぶ条の上限(#2254)。既定は評価で根拠の条が選ばれた"
-            "位置(最大 6)に余裕を持たせた値(#3518)。"
-        ),
-    )
-    rag_article_catalog_context_records: int = Field(
-        default=6,
-        ge=0,
-        le=10,
-        description=(
-            "条の目録で選んだ条のうち、context に足す数(rerank の順。#2254)。検索の根拠の"
-            "起点・親の枠の外に足し、検索の根拠を減らさない。0 は足さない(候補に加えるだけ)。"
-        ),
-    )
-    rag_article_catalog_scope_documents: int = Field(
-        default=2,
-        ge=0,
-        le=5,
-        description=(
-            "検索の範囲の条で構成された文書の一覧から、LLM が選んで目録を読む文書の数"
-            "(検索の候補に出ない文書。手続の一般的な規則の文書など。#2254)。0 は候補の文書だけ。"
-        ),
-    )
-    rag_article_catalog_original_question_search: bool = Field(
-        default=True,
-        description=(
-            "元の質問(業務 Agent が注入する original_question)でも 1 回ベクトル検索し、"
-            "その候補を条の目録を読む文書の順位に足す(候補・context には足さない)。"
-            "短い検索文で事例の論点の文書が候補に出ないことへの対策。"
-        ),
-    )
-    rag_mcp_catalog_article_evidence_limit: int = Field(
-        default=120,
-        ge=0,
-        le=200,
-        description=(
-            "MCP の rag_retrieve_evidence が evidence_limit の外で末尾に足す、"
-            "条の目録で選んだ条の根拠の数の上限(選んだ順。各文書の条を順に回した順)。"
-            "業務 Agent のモデルの入力を抑える。0 は足さない。"
-        ),
-    )
-    rag_article_catalog_refine_articles: int = Field(
-        default=6,
-        ge=0,
-        le=20,
-        description=(
-            "条の選択の 2 段目で、1 段目で選んだ条と同じ章の条と、選んだ条を書き出しで"
-            "名指しする別の章の条を本文の書き出しつきで見せ、文書ごとに足させる条の数の上限。"
-            "0 は 2 段目を行わない。"
-        ),
-    )
-    rag_article_catalog_review_enabled: bool = Field(
-        default=False,
-        description=(
-            "条の目録で選んだ条を回答の生成が引かなかったとき、条ごとに原文が支える説明を"
-            "別の LLM の呼び出しで検討し、その説明の出典に足す(#3526)。"
-            "足した出典も原文照合と条の出典の監査に掛ける。評価で確かめた説明に根拠の無い条の"
-            "出典が付いたので既定は無効。無効なら検討の呼び出しをしない。"
-        ),
-    )
-    rag_article_catalog_refine_candidates: int = Field(
-        default=60,
-        ge=0,
-        le=200,
-        description=(
-            "条の選択の 2 段目で見せる条の数の上限(書き出しつき。同じ章の条と、選んだ条を名指しする"
-            "別の章の条の合計。同じ章の条に 3 分の 2、名指しの条に 3 分の 1 を割り当てる。"
-            "名指しの条は 3 分の 1 を超えず、名指しの条の余りは同じ章の条が使う)。"
-            "0 は 2 段目を行わない。"
-        ),
-    )
-    rag_article_catalog_output_token_cap: int = Field(
-        default=8192,
-        ge=0,
-        le=32768,
-        description=(
-            "条の選択の LLM の呼び出し 1 回の出力の上限(token)。"
-            "選ぶ出力は目録の番号の列で通常は数百 token。"
-            "同じ出力を繰り返して書き続ける呼び出しを抑え、"
-            "超えた文書は選ばずに続ける。0 は抑えない。"
-        ),
-    )
-    rag_article_catalog_call_timeout_seconds: float = Field(
-        default=180.0,
-        ge=0.0,
-        le=600.0,
-        description=(
-            "条の選択の LLM の呼び出し 1 回の時間の上限(秒)。並行の呼び出しをすべて待つので、"
-            "1 つの遅い呼び出しで段全体が止まらないようにする。"
-            "超えた文書は選ばずに続ける。0 は抑えない。"
-        ),
-    )
-    rag_article_catalog_cache_dir: str = Field(
-        default="",
-        max_length=1024,
-        description=(
-            "条の選択と範囲の文書の選択の結果を、process をまたいで使う記録の置き場所(#3507)。"
-            "空は PLATFORM_LOCAL_STORAGE_DIR の下の cache/rag-article-catalog。"
-            "同じ Compute の backend の worker が同じ場所を読み書きする。"
-        ),
-    )
-    rag_article_catalog_cache_ttl_seconds: int = Field(
-        default=86400,
-        ge=0,
-        le=30 * 86400,
-        description=(
-            "条の選択の記録の有効期間(秒)。key は索引の版(chunk_set)・目録の内容・質問・"
-            "モデル・選択の設定で、同じ入力の LLM の結果だけを使い回す。"
-            "0 は process をまたぐ記録を使わない(process の中の記録だけ)。"
-        ),
-    )
-    rag_article_catalog_cache_max_entries: int = Field(
-        default=4096,
-        ge=0,
-        le=100_000,
-        description=(
-            "条の選択の記録の件数の上限(1 件は文書 1 つの選択か範囲の文書の選択 1 回)。"
-            "超えたら古い記録から消す。0 は process をまたぐ記録を使わない。"
-        ),
-    )
-    rag_answer_validation_max_input_bytes: int = Field(
-        default=96_000,
-        ge=16_000,
-        le=1_000_000,
-        description=(
-            "回答の最終の検証(rag_validate_answer)でモデルに渡す入力の上限"
-            "(UTF-8 の bytes。指示・質問・回答・根拠を含む)。根拠は渡された順に収まるだけ使い、"
-            "収まらない根拠は検証に使わない(evidence_truncated)。"
-            "検証のモデルの入力の上限より小さくする。"
-        ),
-    )
-    rag_answer_validation_timeout_seconds: float = Field(
-        default=540.0,
-        gt=0.0,
-        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
-        description=(
-            "回答の最終の検証(rag_validate_answer)の通しの上限(秒。#2700)。"
-            "根拠の読み直しから監査の LLM の呼び出しまでを含み、LLM 1 回の timeout と"
-            "再試行をこの残り時間に縮める。上限までに監査が返らなかった段落は、"
-            "確かめ終わらなかった段落(unassessed)として返す(status=partial、"
-            "どの段落も返らなければ timed_out)。呼び出し側(Agent の接続 rag の待ち時間 "
-            "AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS、既定 630 秒)より短くする。"
-        ),
-    )
-    rag_answer_validation_batch_passages: int = Field(
-        default=5,
-        ge=1,
-        le=128,
-        description=(
-            "回答の最終の検証で、監査の LLM の 1 回の呼び出しに渡す回答の段落の数"
-            "(#2700)。段落がこれより多い回答は組に分けて監査する(指示・質問・回答の"
-            "全文・根拠はどの組も同じ)。1 回の出力が減り、組ごとに並行に呼べる。"
-        ),
-    )
-    rag_answer_validation_concurrency: int = Field(
-        default=4,
-        ge=1,
-        le=16,
-        description=(
-            "回答の最終の検証の 1 回で、同時に監査する段落の組の数(#2700)。"
-            "組がこれより多ければ、空いた分から順に監査する。"
-        ),
-    )
-    rag_request_coverage_retrieval_enabled: bool = Field(
-        default=False,
-        description=(
-            "生成が根拠の無い要求を明示したとき(または実行済みの監査が材料の不足と判定したとき)だけ、"
-            "その要求を探し直す(#1279・#4114)。違う検索文を作れない要求は、原質問のみを除く"
-            "自動ルーティングで検索文を作る(LLM を呼ぶ。生成文は検索と rerank の比較にだけ使う)。"
-            "不足の無い回答では呼ばない。"
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
@@ -1772,188 +1574,36 @@ class Settings(
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
-    rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
-        default="model",
-        description=(
-            "質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論の量(#1499。既定 model = "
-            "モデルの登録値。low では戦略の選択がぶれ、検索文 0 本の単純検索に倒れることがあった)。"
-        ),
-    )
-    rag_judge_reasoning_effort: ReasoningEffortOverride = Field(
-        default="medium",
-        description=(
-            "根拠の評価(CRAG の評価と章節の拡張の十分性の判定)の LLM の呼び出しの推論の量"
-            "(#1499。既定 medium。#1550)。model はモデルの登録値のまま。モデルの登録値が none の"
-            "モデルには送らない。"
-        ),
-    )
     rag_generation_reasoning_effort: ReasoningEffortOverride = Field(
         default="model",
         description=(
             "回答文の生成の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
-            "監査は RAG_AUDIT_REASONING_EFFORT(#1528)。"
         ),
     )
-    rag_audit_reasoning_effort: ReasoningEffortOverride = Field(
-        default="model",
-        description=(
-            "生成後の監査(主張と引用の適用性の確認)の LLM の呼び出しの推論の量(#1528。"
-            "既定 model = モデルの登録値)。"
-        ),
-    )
-    rag_question_subject_role_model: str = Field(
-        default="xai.grok-4.7",
-        description=(
-            "質問の対象の名前の役割(問い・前提・例)の判定の段の LLM のモデル ID"
-            "(#4351。モデル設定の登録モデル)。空は回答のモデルのまま。"
-            "登録していないモデルでは段が失敗し、回答は対象の名前の照合を飛ばして続ける。"
-            "推論の量と出力の上限はそのモデルの登録値。"
-        ),
-    )
-    rag_application_audit_model: str = Field(
-        default="xai.grok-4.7",
-        description=(
-            "回答で資料をもとに導いた結論(推導)を確認する監査の判定の段の LLM のモデル ID"
-            "(#4565。モデル設定の登録モデル)。空は回答のモデルのまま。"
-            "登録していないモデルでは段が失敗し、推導は未確認のまま回答を続ける。"
-            "推論の量と出力の上限はそのモデルの登録値"
-            "(監査の推論の量の設定が model 以外ならその値)。"
-        ),
-    )
-    rag_application_reason_model: str = Field(
-        default="xai.grok-4.7",
-        description=(
-            "推導の監査の判定が確定した推導ごとに、利用者に示す理由の文を作る段の LLM のモデル ID"
-            "(#4564。モデル設定の登録モデル)。空は回答のモデルのまま。"
-            "登録していないモデルでは段が失敗し、理由は定型の文になる(判定は変えない)。"
-            "推論の量と出力の上限はそのモデルの登録値"
-            "(監査の推論の量の設定が model 以外ならその値)。"
-        ),
-    )
-    rag_row_condition_model: str = Field(
-        default="xai.grok-4.7",
-        max_length=256,
-        description=(
-            "表の各行の条件を質問に当てはめる段(#4349)の LLM のモデル ID(モデル設定の登録モデル)。"
-            "空は回答のモデルのまま。登録していないモデルではこの段を実行せず、理由を実行の記録に"
-            "残す(別のモデルへ暗黙に切り替えない)。推論の量は RAG_ROW_CONDITION_REASONING_EFFORT、"
-            "入出力の上限はそのモデルの登録値。"
-        ),
-    )
-    rag_row_condition_reasoning_effort: ReasoningEffortOverride = Field(
-        default="low",
-        description=(
-            "表の各行の条件を質問に当てはめる段(#4349)の推論の量(既定 low)。model はモデルの"
-            "登録値のまま。モデルの登録値が none のモデルには送らない。"
-        ),
-    )
-    rag_crag_skip_on_strong_signals: bool = Field(
-        default=False,
-        description=(
-            "規則の信号が強いとき CRAG の根拠の評価(1 回目の LLM の呼び出し)を飛ばし、"
-            "曖昧な帯だけで呼ぶ(#1499・#1528。既定 OFF)。rerank の最上位の score が閾値以上で、"
-            "質問の要求に語の一致で根拠の無いもの(missing)が無く、定義を問う語の定義本文が"
-            "あるときだけ飛ばす。"
-            "エラー文・列挙・網羅・件数を問う質問(#1503)と、候補の除外が要る根拠(旧版の文書・"
-            "別の文書と同じ本文)があるときは必ず呼ぶ。生成後の監査は飛ばさない。"
-        ),
-    )
-    rag_crag_compact_input: bool = Field(
-        default=True,
-        description=(
-            "CRAG の根拠の評価の入力を詰める(#1528。既定 ON。A/B で入力 tokens が"
-            " 1/4〜1/9)。候補を生成に渡す親の数にそろえ、JSON を"
-            "空白なしで書き、候補の ID を chunk_uid だけにする。章節の拡張の判定は候補の数を"
-            "そろえない(広げた章節を見せる)。"
-        ),
-    )
-    rag_crag_short_candidate_ids: bool = Field(
-        default=True,
-        description=(
-            "(既定 ON。#1864)CRAG の根拠の評価の詰めた入力(rag_crag_compact_input)で、候補の"
-            " chunk_uid を短い ID(C1・C1-1)にする。評価器は候補ごとの判定・観点の根拠・回復の起点に"
-            "ID を書き写すので、長い chunk_uid(文書 ID の 32 桁と chunk の名前)が出力の token と"
-            "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
-        ),
-    )
-    rag_answer_audit_compact_reasons: bool = Field(
-        default=False,
-        description=(
-            "(既定 OFF。#1912)生成後の監査の reason を、判定が通った説明"
-            "(supported かつ matched)と答えている要求(addressed)では空文字にさせる。"
-            "監査の見える出力は約 5 割減るが、同じ入力の対の比較で監査が甘くなった"
-            "(通らなかった判定が 5 件 → 1 件)ため既定では使わない。品質評価の比較用。"
-        ),
-    )
-    rag_answer_max_correction_rounds: int = Field(
-        default=2,
+    rag_llm_max_retries: int = Field(
+        default=1,
         ge=0,
-        le=2,
-        description=(
-            "回答文の生成と根拠確認の是正の組(作り直し)の回数の上限(#1912。0〜2。"
-            "既定 2 は従来と同じ)。是正 1 組は生成と監査の LLM の呼び出しを 1 回ずつ足す"
-            "(#1864 の記録で 1 組 5〜63 秒)。"
-            "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
-        ),
-    )
-    rag_answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"] = Field(
-        default="legacy",
-        description=(
-            "生成後の根拠の選別。legacy は既存方式を維持し、cited_only は引用済みの原文だけ、"
-            "cited_required は引用済みの原文と必須の補完根拠へ絞る。明示的に選んだ場合だけ、"
-            "既存の是正回数・時間予算内で最大 1 回再生成する。監査・補検索は自動で有効にしない。"
-        ),
-    )
-    rag_answer_audit_mode: Literal["none", "standard", "detailed"] = Field(
-        default="none",
-        description=(
-            "(#2795・#2800)回答の監査の型。none(既定)は生成の後の LLM の監査と作り直しをせず、"
-            "原文との照合と規則の検査(決定的)だけで印を付ける(WeKnora と同じく生成の後に確認の"
-            " LLM を呼ばない)。要求の充足は説明の有無、業務ガイドの手順の充足は決定的な対応付けで"
-            "決める。standard は 1 回の監査(主張・要求・要件)と事実の問題の作り直し 1 組まで。"
-            "detailed は未使用の根拠も列挙させ、完全性の不足でも最大 3 組まで作り直す"
-            "(業務ガイドの下書きの試答は常に detailed)。"
-        ),
+        description="一時的な通信障害・出力形式不正の同一モデルでの再試行回数。回答全体の期限内で実行する。",
     )
     rag_llm_stall_detection_enabled: bool = Field(
         default=True,
         description=(
             "(#1926)回答(検索の回答・チャット)の LLM の呼び出しを streaming で受け、"
-            "停滞した呼び出しを打ち切って同じ要求を送り直す。OCI Enterprise AI の呼び出しは"
-            "まれ(記録の約 1%)に通常の 1/10 以下の速さ(13〜23 token/秒。中央値 224)に落ち、"
-            "同じ token 数で 36 秒 → 183 秒かかった。"
-            "判定の基準は同じ接続・モデルの直近の完了した呼び出し(3 回以上)から学ぶ。"
+            "応答の event が来なくなった呼び出しを打ち切って送り直す(#4736。"
+            "止まった判定は無音だけで、出力の速さでは打ち切らない。"
+            "送り直しはやり直しの共通の枠で数える)。"
             "回答の期限の無い呼び出し(取込など)は従来どおり streaming しない。"
         ),
     )
     rag_llm_stall_idle_seconds: float = Field(
-        default=20.0,
+        default=120.0,
         ge=5.0,
-        le=120.0,
+        le=600.0,
         description=(
-            "(#1926)応答の event(最初の event を含む)がこの秒だけ来なければ停滞として打ち切る。"
-            "直近の呼び出しの最大の間隔の 3 倍が長ければそちら(推論を stream しないモデル)。"
-            "記録では最初の event まで 0.1〜0.2 秒、event の間隔は 1 秒未満。"
-        ),
-    )
-    rag_llm_stall_min_rate_ratio: float = Field(
-        default=0.25,
-        gt=0.0,
-        le=0.9,
-        description=(
-            "(#1926)直近 10 秒の出力の速さ(delta の event/秒)が、直近の完了した呼び出しの"
-            "速さの中央値のこの割合を下回れば停滞として打ち切る。"
-            "記録の 10 パーセンタイルは中央値の約 0.65、遅い呼び出しは約 0.06〜0.1。"
-        ),
-    )
-    rag_llm_stall_resends: int = Field(
-        default=1,
-        ge=0,
-        le=2,
-        description=(
-            "(#1926)停滞で打ち切って送り直す回数の上限(LLM の呼び出し 1 回あたり)。"
-            "最後の送信は停滞を検出せずに回答の期限まで待つ。"
-            "0 は打ち切らない(streaming の時刻の記録だけ)。"
+            "(#1926・#4736)応答の event(最初の event を含む)がこの秒だけ来なければ"
+            "止まったとして打ち切る。推論を stream しないモデルは最初の出力まで"
+            "event が来ないので、短くしすぎない。"
+            "全体の上限は rag_answer_timeout_seconds。"
         ),
     )
     rag_llm_runaway_detection_enabled: bool = Field(
@@ -1976,41 +1626,6 @@ class Settings(
             "業務ガイドの手順ごとの検索が後に来る回答で、最初の章節の拡張が使わずに残す入力の割合"
             "(#2816。章節の拡張の根拠の入力の上限に対する %。既定 20、0 は残さない)。"
             "手順の根拠から広げる章節の分を残す。"
-        ),
-    )
-    rag_section_skip_regrade_at_scope: bool = Field(
-        default=True,
-        description=(
-            "(既定 ON。#1528 の A/B で列挙の問が 484 → 293 秒、品質は同じ)"
-            "読む範囲が文書全体の列挙の問(#1503)で、章節の拡張が文書全体まで読んだら、"
-            "CRAG の評価し直しを省いて生成へ進む(#1528)。"
-        ),
-    )
-    rag_crag_skip_min_rerank_score: float = Field(
-        default=0.8,
-        ge=0.0,
-        le=1.0,
-        description="CRAG の評価を飛ばす rerank の最上位の score の閾値(#1499。0〜1)。",
-    )
-    rag_query_expansion_max_queries: int = Field(
-        default=5,
-        ge=1,
-        le=5,
-        description=(
-            "質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来と同じ 5)。"
-            "原質問・用語の別名・"
-            "語彙の補助の検索文は数えない。"
-        ),
-    )
-    rag_auto_field_filter_enabled: bool = Field(
-        default=False,
-        description=(
-            "質問に書かれた条件(「2025 年以降」「10 万円以"
-            "上」など)を、検索・回答プロファイルの KB で定義した"
-            "抽出項目の条件として LLM で読み取り、検索を絞り込む"
-            "(Metadata Filter Extraction。LLM の呼び出しが 1 回増える。"
-            "#652)。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_answer_record_retention_days: int = Field(
@@ -2040,7 +1655,7 @@ class Settings(
         description=(
             "業務ガイドの照合で、質問と質問の例（intent_examples）の埋め込み（OCI Generative AI）"
             "の近さを点に足す（#2398）。質問ごとに埋め込みの呼び出しが 1 回増える。質問の例の"
-            "埋め込みは公開のときに作って持つ。検索・回答プロファイルで上書きできる。"
+            "埋め込みは公開のときに作って持つ。全体設定だけで決める（#4784）。"
         ),
     )
     rag_support_guide_semantic_threshold: float = Field(
@@ -2055,7 +1670,7 @@ class Settings(
         default=False,
         description=(
             "業務ガイドの照合で上位の 2 つの点が近いとき、どのガイドに沿うかを確認の問い（選択肢は"
-            "ガイドの題名）で確かめる（#2398）。検索・回答プロファイルで上書きできる。"
+            "ガイドの題名）で確かめる（#2398）。全体設定だけで決める（#4784）。"
         ),
     )
     rag_support_guide_close_match_margin: int = Field(
@@ -2068,7 +1683,7 @@ class Settings(
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と回答ルール"
+            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と業務ガイドのルール"
             "(rag_poc runtime knowledge payload)。"
             "回答フローだけが使う。"
         ),
@@ -2242,10 +1857,7 @@ class Settings(
         default=1.0,
         ge=0.0,
         le=10.0,
-        description=(
-            "2 つの段落の幅の差が狭いほうの幅のこの倍数未満なら、幅が近いとみなす"
-            "（既定 1.0 は MinerU の段落の続きの規則と同じ）。"
-        ),
+        description=("2 つの段落の幅の差が狭いほうの幅のこの倍数未満なら、幅が近いとみなす。"),
     )
     # 取込の AI の呼び出しの並行と再試行（#2002。共通の部品 pr_backend_core.bounded_calls）。
     rag_vision_concurrency: int = Field(
@@ -2481,10 +2093,6 @@ class Settings(
             "(画面で Unstructured を選ぶと有効になる)。選択時は parser-unstructured の起動が前提。"
         ),
     )
-    rag_parser_mineru_enabled: bool = Field(
-        default=False,
-        description="外部 MinerU native API adapter を feature flag で有効化する。",
-    )
     rag_parser_dots_ocr_enabled: bool = Field(
         default=False,
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
@@ -2531,28 +2139,6 @@ class Settings(
     )
     # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
     # は読まず、誤った protocol への自動移行を避ける。
-    rag_parser_mineru_api_host: str = Field(
-        default="", description="MinerU 4.x の V1 API（/v1/parse/jobs）の base URL。"
-    )
-    rag_parser_mineru_api_key: str = Field(default="", repr=False)
-    # MinerU 4.0 は解析の方式（pipeline / vlm / hybrid）を品質の tier にまとめた（#1329）。
-    # OCR の言語は MinerU の API サーバーの起動時の設定で、V1 の request には無い。
-    rag_parser_mineru_tier: MineruTier = Field(
-        default="basic",
-        description=(
-            "MinerU の解析の品質（flash / basic / standard / advanced）。basic は小さな"
-            "モデルで CPU でも動く（3.x の pipeline 相当）。"
-            "PDF・画像以外は MinerU が flash だけを持つ。"
-        ),
-    )
-    rag_parser_mineru_job_timeout_seconds: float = Field(
-        default=1800.0,
-        gt=0,
-        le=86400,
-        description=(
-            "MinerU の parse job を終了まで待つ上限（秒）。超えたら job を取り消して縮退する。"
-        ),
-    )
     rag_parser_dots_ocr_api_host: str = Field(
         default="", description="Dots.OCR OpenAI 互換 API の base URL。"
     )
@@ -2594,36 +2180,6 @@ class Settings(
         ge=0.0,
         le=300.0,
         description="HTTP マイクロサービス retry の最大待機秒数。",
-    )
-    rag_raptor_enabled: bool = Field(
-        default=False,
-        description=(
-            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI で"
-            "要約し、多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ。"
-            "追加 LLM 呼び出しを伴う opt-in。再試行のあとも要約できない cluster は飛ばす(leaf は"
-            "残る)。権限・モデルの設定の誤り・割り当ての使い切りは取込を止める(#2067)。"
-        ),
-    )
-    rag_raptor_cluster_size: int = Field(
-        default=5,
-        ge=2,
-        le=50,
-        description="RAPTOR の 1 cluster あたり chunk 数(要約単位)。",
-    )
-    rag_raptor_max_levels: int = Field(
-        default=2,
-        ge=1,
-        le=5,
-        description="RAPTOR の階層の要約 tree の最大階層数。",
-    )
-    rag_raptor_concurrency: int = Field(
-        default=4,
-        ge=1,
-        le=16,
-        description=(
-            "RAPTOR の階層の要約の LLM を同時に呼ぶ数の上限（#2067。1 つの階層の cluster を並べ、"
-            "階層は順に作る）。429 を受けると自動で減らし（最小 1）、成功が続くとこの上限まで戻す。"
-        ),
     )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,
@@ -3002,7 +2558,6 @@ class Settings(
                 + self.rag_http_service_retry_max_delay_seconds
                 * max(self.rag_http_service_retry_attempts - 1, 0)
             ),
-            "rag_parser_mineru_job_timeout_seconds": self.rag_parser_mineru_job_timeout_seconds,
             "oci_document_understanding_timeout_seconds": (
                 self.oci_document_understanding_timeout_seconds
             ),
@@ -3029,9 +2584,6 @@ class Settings(
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:
         """chunk size と各 chunking 戦略パラメータの整合性を起動時に検証する。"""
-        self.rag_chunk_delimiter = self.rag_chunk_delimiter.strip()
-        if not self.rag_chunk_delimiter:
-            raise ValueError("RAG_CHUNK_DELIMITER を入力してください。")
         if self.rag_chunking_strategy == "fixed_delimiter":
             return self
         if self.rag_chunk_overlap >= self.rag_chunk_size:
@@ -3084,6 +2636,7 @@ def _settings_singleton() -> Settings:
     settings = Settings(_env_file=(PLATFORM_ENV_FILE, BACKEND_ENV_FILE))
     load_persisted_model_settings(settings)
     load_persisted_parser_settings(settings)
+    load_persisted_file_type_defaults(settings)
     # 以後の .env の変更を差分で取り込むため、今の .env の内容を基準として覚える。
     reload_env_settings_if_changed(settings)
     return settings
@@ -3095,6 +2648,7 @@ def get_settings() -> Settings:
     reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
+    FILE_TYPE_DEFAULTS_STORE.reload_if_changed(settings)
     return settings
 
 
@@ -3129,7 +2683,7 @@ def reset_settings_cache() -> None:
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
     PARSER_SETTINGS_STORE.reset()
-    LANGUAGE_PACK_STORE.reset()
+    FILE_TYPE_DEFAULTS_STORE.reset()
     _ENV_RELOAD_STATE.key = None
     _ENV_RELOAD_STATE.snapshot = None
 
@@ -3211,21 +2765,9 @@ def resolve_model_settings_file(path_value: str) -> Path:
     return (PLATFORM_ENV_FILE.parent / path).resolve()
 
 
-# MinerU のライセンスの確認（#3359）は Settings の項目ではなく private の値に読み書きする。
-_MINERU_LICENSE_FIELDS = ("mineru_license_acknowledged_by", "mineru_license_acknowledged_at")
-_PARSER_ADAPTER_FIELDS = tuple(
-    name
-    for name in _PersistedParserAdapterSettings.model_fields
-    if name not in _MINERU_LICENSE_FIELDS
-)
+_PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
-PARSER_SECRET_ATTRS = ("rag_parser_mineru_api_key", "rag_parser_dots_ocr_api_key")
-
-
-def resolve_language_pack_file(settings: Settings) -> Path:
-    """RAG_LANGUAGE_PACK_FILE を RAG の backend/.env と同じディレクトリ基準で解決する(#2181)。"""
-    path = Path(settings.rag_language_pack_file.strip() or DEFAULT_LANGUAGE_PACK_FILE).expanduser()
-    return path if path.is_absolute() else (BACKEND_ENV_FILE.parent / path).resolve()
+PARSER_SECRET_ATTRS = ("rag_parser_dots_ocr_api_key",)
 
 
 def resolve_parser_settings_file(path_value: str) -> Path:
@@ -3236,25 +2778,23 @@ def resolve_parser_settings_file(path_value: str) -> Path:
     return (BACKEND_ENV_FILE.parent / path).resolve()
 
 
+def resolve_file_type_defaults_file(path_value: str) -> Path:
+    """RAG_FILE_TYPE_DEFAULTS_FILE を RAG の backend/.env と同じディレクトリ基準で解決する。"""
+    path = Path(path_value.strip() or DEFAULT_FILE_TYPE_DEFAULTS_FILE).expanduser()
+    if path.is_absolute():
+        return path
+    return (BACKEND_ENV_FILE.parent / path).resolve()
+
+
 def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any]) -> None:
     """parser-settings.json の内容を Settings へ反映する（無い項目は既定値）。"""
     parser = _PersistedParserAdapterSettings.model_validate(raw)
     for name in _PARSER_ADAPTER_FIELDS:
         setattr(settings, f"rag_parser_{name}", getattr(parser, name))
-    settings._mineru_license_acknowledgement = (
-        parser.mineru_license_acknowledged_by,
-        parser.mineru_license_acknowledged_at,
-    )
 
 
 def _dump_parser_adapters(settings: Settings) -> dict[str, Any]:
-    document: dict[str, Any] = {
-        name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS
-    }
-    by, at = settings._mineru_license_acknowledgement
-    document["mineru_license_acknowledged_by"] = by
-    document["mineru_license_acknowledged_at"] = at
-    return document
+    return {name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS}
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
@@ -3272,6 +2812,57 @@ PARSER_SETTINGS_STORE = ParserSettingsStore(
     dump=_dump_parser_adapters,
     secrets=tuple((attr, settings_env_name("RAG_", attr)) for attr in PARSER_SECRET_ATTRS),
 )
+
+
+def _load_file_type_defaults(settings: Settings, raw: Mapping[str, Any]) -> None:
+    """file-type-defaults.json を Settings へ反映する。読めない行は捨て、全体の既定に従わせる。"""
+    entries = raw.get("entries") or {}
+    if not isinstance(entries, Mapping):
+        raise ValueError("entries が JSON object ではありません。")
+    loaded: dict[str, FileTypeDefaultEntry] = {}
+    logger = logging.getLogger(__name__)
+    for file_type, value in entries.items():
+        if file_type not in FILE_TYPES:
+            logger.warning("rag_file_type_defaults_unknown_type", extra={"file_type": file_type})
+            continue
+        try:
+            entry = FileTypeDefaultEntry.model_validate(value)
+        except ValidationError:
+            logger.warning("rag_file_type_defaults_invalid_row", extra={"file_type": file_type})
+            continue
+        if is_roadmap_parser_adapter_backend(entry.parser_adapter_backend):
+            logger.warning("rag_file_type_defaults_roadmap_row", extra={"file_type": file_type})
+            continue
+        loaded[str(file_type)] = entry
+    settings._file_type_defaults = loaded
+
+
+def _dump_file_type_defaults(settings: Settings) -> dict[str, Any]:
+    return {
+        "entries": {
+            file_type: entry.model_dump(mode="json", exclude_none=True)
+            for file_type, entry in settings._file_type_defaults.items()
+        }
+    }
+
+
+# 形式別の既定（#4732）も parser-settings.json と同じ方式で保存する（atomic 書き込み・
+# flock・mtime の再読込）。secret を持たないので `.env` には書かない。
+FILE_TYPE_DEFAULTS_STORE = ParserSettingsStore(
+    resolve_path=lambda settings: resolve_file_type_defaults_file(
+        settings.rag_file_type_defaults_file
+    ),
+    env_file=lambda _settings: BACKEND_ENV_FILE,
+    load=_load_file_type_defaults,
+    dump=_dump_file_type_defaults,
+    secrets=(),
+    label="形式別の既定の設定",
+)
+
+
+def load_persisted_file_type_defaults(settings: Settings) -> None:
+    """「形式別の既定」画面で保存した JSON があれば Settings へ反映する。"""
+    FILE_TYPE_DEFAULTS_STORE.load(settings)
 
 
 def load_persisted_parser_settings(settings: Settings) -> None:

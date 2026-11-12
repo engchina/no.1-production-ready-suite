@@ -146,7 +146,7 @@ export function TraceExplorer({ steps: inputSteps, hierarchyOrdered = false, for
                           const next = buttons?.[list.indexOf(step) + offset];
                           if (next) { event.preventDefault(); next.focus(); }
                         }}>
-                        <RunStepSummary step={order === "time" ? {...step, level: 0} : step} size={size} statusLabel={runLabels.stepStatus[step.status]}
+                        <RunStepSummary step={order === "time" ? {...step, level: 0} : step} size={size} statusLabel={runLabels.stepStatus[step.retry ?? step.status]}
                           bar={bar} spin={isLeaf(step)} surface="trace" formatDuration={formatDuration} />
                       </button>
                     </li>;
@@ -163,7 +163,7 @@ export function TraceExplorer({ steps: inputSteps, hierarchyOrdered = false, for
             </div>
             <h4 id={`${id}-selected`} ref={titleRef} tabIndex={-1} className={cn("break-words font-normal leading-5 text-fg [overflow-wrap:anywhere]", runTimelineNameClass(size))}>{selected?.label ?? labels.choose}</h4>
             {selected ? <>
-              <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · <span data-trace-duration="" className={stepDurationMs(selected) != null ? "tnum" : undefined}>{formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</span></p>
+              <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} retry={selected.retry} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.retry ?? selected.status]} · <span data-trace-duration="" className={stepDurationMs(selected) != null ? "tnum" : undefined}>{formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</span></p>
               <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
                 <div data-trace-processing-content="" className="grid min-w-0 gap-2">
                   <RunStepDetailsView spanId={selected.id} loadCallBody={loadCallBody} forceTabs activeTab={detailTab} onTabChange={setDetailTab}

@@ -12,6 +12,8 @@ import {
 import { t } from "@/lib/i18n";
 import { useDocumentPreviewPages } from "@/lib/queries";
 import {
+  EvidenceReader,
+  type EvidenceReadingInput,
   DocumentPreview as SharedDocumentPreview,
   SourceVersionStaleNotice,
   isSourceVersionStale,
@@ -38,7 +40,7 @@ function kindOf(fileName: string, sourceProfile?: SourceProfile | null): Kind {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   if (["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
-  if (["txt", "csv", "tsv", "md", "json", "xml", "log", "html", "htm", "eml"].includes(ext)) return "text";
+  if (["txt", "csv", "tsv", "md", "markdown", "json", "xml", "log", "html", "htm", "eml"].includes(ext)) return "text";
   if (["doc", "docx", "ppt", "pptx", "xls", "xlsx"].includes(ext)) return "office";
   return "unsupported";
 }
@@ -80,6 +82,7 @@ export function DocumentPreview({
   fileName,
   variant = "original",
   sourceProfile = null,
+  extractionRevision = null,
   preparedArtifact = null,
   preparedPdf,
   showFallbackDownload = true,
@@ -105,6 +108,7 @@ export function DocumentPreview({
   fileName: string;
   variant?: DocumentContentVariant;
   sourceProfile?: SourceProfile | null;
+  extractionRevision?: string | null;
   preparedArtifact?: DocumentPreprocessArtifact | null;
   /** 引用CSの原本metadataから確認したPDF種別。現在のレシピは代用しない。 */
   preparedPdf?: boolean;
@@ -163,6 +167,11 @@ export function DocumentPreview({
       focus: offset === 0 ? focusText : null,
       element_id: offset === 0 ? focusElementId : null, section_id: offset === 0 ? focusSectionId : null }, signal), [documentId, recipeId, variant, focusText, focusElementId, focusSectionId]);
 
+  const loadRecordWindow = useCallback((input:EvidenceReadingInput,signal:AbortSignal) =>
+    api.documentRecipeReader(documentId,recipeId!,extractionRevision!,focusElementId ?? null,input,signal),[documentId,recipeId,extractionRevision,focusElementId]);
+  const structured = preparedArtifact?.content_type?.split(";",1)[0]?.trim().toLowerCase() === "application/vnd.production-ready.structured-records+jsonl";
+  if(structured && recipeId && extractionRevision) return <EvidenceReader readingKey={`${documentId}:${recipeId}:${extractionRevision}:${focusElementId ?? ""}`} loadWindow={loadRecordWindow} purpose="selection"/>;
+
   // やり直しても開けないので、再試行の案内や iframe の表示に戻さない。
   if (versionStale) return <SourceVersionStaleNotice />;
 
@@ -176,7 +185,7 @@ export function DocumentPreview({
       pages={pages}
       iframeUrl={pdfPreviewUrl(pdfUrl, focusPage)}
       loadTextRange={loadTextRange}
-      textKey={url}
+      textKey={`${url}:${focusElementId ?? ""}:${focusSectionId ?? ""}`}
       focusText={focusText}
       // 表示できない形式（Office の原本・処理後の JSONL など）は、形式によらず共通の案内の 1 文にする（#2679）。
       downloadUrl={showFallbackDownload ? downloadUrl : null}

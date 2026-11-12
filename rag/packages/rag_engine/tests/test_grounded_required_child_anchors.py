@@ -139,27 +139,6 @@ def test_missing_required_body_is_recorded_even_without_selected_spans(monkeypat
     ]
 
 
-def test_definition_reselection_records_only_final_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
-    ctx, child = fixture()
-    stages: list[dict[str, Any]] = []
-    calls: list[bool] = []
-    monkeypatch.setattr(answering, "definition_labels", lambda question: ["対象"])
-    monkeypatch.setattr(answering, "definition_ranges", lambda text, labels: [{"label": "対象"}] if text == ctx.records[0].text else [])
-
-    def capture(question: str, records: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        final = bool(kwargs.get("definitions_only"))
-        calls.append(final)
-        kwargs["diagnostics"].append({"requested_source_ids": [child.chunk_uid], "body_status": "unlocated" if final else "missing"})
-        return []
-
-    monkeypatch.setattr(answering, "evidence_spans", capture)
-    monkeypatch.setattr(answering, "record_retrieval_stage", stages.append)
-    assert _grounded_spans(QUESTION, ctx, (), knowledge(child.chunk_uid), budget=20) == []
-    assert calls == [False, True]
-    assert len(stages) == 1
-    assert stages[0]["groups"] == [{"requested_source_ids": [child.chunk_uid], "body_status": "unlocated"}]
-
-
 @pytest.mark.parametrize("source_attr", ["chunk_uid", "chunk_id", "id"])
 def test_guide_parent_protects_retrieved_child_without_pinning_neighbor(monkeypatch: pytest.MonkeyPatch, source_attr: str) -> None:
     ctx, child = fixture()

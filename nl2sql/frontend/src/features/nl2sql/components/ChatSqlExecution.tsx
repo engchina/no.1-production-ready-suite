@@ -12,6 +12,7 @@ import {
   type ButtonLinkComponent,
   type ChatResultTableLabels,
   displayDateTimeFormat,
+  operationTimestampMs,
 } from "@production-ready/ui";
 
 import { useWorkspaceIdentity } from "@/components/WorkspaceState";
@@ -115,7 +116,7 @@ export function useChatSqlExecution(
   useEffect(() => {
     if (!resultExpiresAt || hasData || receivedResults.has(receiveId)) return;
     // 期限を過ぎた行は backend が受け取らせない（要約と「もう一度実行」を出す）。
-    if (!(Date.parse(resultExpiresAt) > Date.now())) return;
+    if (!((operationTimestampMs(resultExpiresAt) ?? 0) > Date.now())) return;
     receivedResults.add(receiveId);
     startReceive();
   }, [resultExpiresAt, hasData, receiveId, startReceive]);
@@ -178,7 +179,7 @@ export function ChatQueryResult({
  */
 /** 前回の実行の日時の表示（チャットの前回の実行の要約と同じ書き方）。 */
 export function formatLastExecutedAt(executedAt: string): string {
-  return executedAtFormatter.format(new Date(executedAt));
+  return executedAtFormatter.format(executedAt);
 }
 
 export function ChatLastExecutionText({
@@ -193,7 +194,7 @@ export function ChatLastExecutionText({
 }) {
   return (
     <p className="text-sm text-fg-muted" data-testid={testId}>
-      {lastExecutionText(summary, executedAtFormatter.format(new Date(summary.executed_at)), { readOnly })}
+      {lastExecutionText(summary, executedAtFormatter.format(summary.executed_at), { readOnly })}
     </p>
   );
 }

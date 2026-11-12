@@ -18,6 +18,7 @@ import {
   TimedLoadingState,
   useConfirm,
   ListToolbar,
+  SelectField,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -34,10 +35,12 @@ import {
   XCircle,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { EmptyState } from "@/components/StateViews";
 import {
   SearchAnswerProfileSelect,
@@ -59,6 +62,7 @@ import { saveDownloadedFile } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
+  evaluationJobListQueryKey,
   useCancelEvaluationJob,
   useEvaluationJob,
   useEvaluationSettings,
@@ -71,6 +75,7 @@ import { toast } from "@/lib/toast";
 
 import {
   evaluationCaseErrorSummary,
+  evaluationHistoryProfileLabel,
   evaluationJobShownResult,
   isEvaluationJobActive,
   isEvaluationJobId,
@@ -98,6 +103,8 @@ import {
   metricCaseCount,
   metricDescription,
   metricLabel,
+  referenceMetricLabel,
+  EVALUATION_REFERENCE_METRICS,
   metricValue,
   orderedThresholdEntries,
   perspectiveDescription,
@@ -110,8 +117,9 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
-import { JudgeCalibrationBadge } from "./calibration/JudgeCalibrationBadge";
+import { testsetApi } from "@/lib/testset-api";
 import { TestSetTab } from "./testsets/TestSetTab";
+import { EvaluationHistory } from "./EvaluationHistory";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
@@ -133,7 +141,7 @@ const COMPARE_PROFILE_ID = "evaluation-compare-profile";
 const EVALUATION_EXCEL_MAX_ROWS = 200;
 const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
 const PAGE_TABS_PREFIX = "evaluation-page";
-type PageTab = "run" | "calibration";
+type PageTab = "run" | "testsets";
 
 /**
  * 品質評価（改善・運用 › 品質評価。#2065）。評価する検索・回答プロファイル（必須）と評価リクエストの Excel
@@ -143,19 +151,26 @@ type PageTab = "run" | "calibration";
 export function EvaluationClient() {
   // 既存 URL は保ち、テストセットの作成を直接開ける（#4396）。
   const [searchParams, setSearchParams] = useSearchParams();
-  const pageTab: PageTab = searchParams.get("tab") === "calibration" ? "calibration" : "run";
+  const pageTab: PageTab = searchParams.get("tab") === "testsets" ? "testsets" : "run";
   const changePageTab = (value: string) => {
     const next = new URLSearchParams(searchParams);
-    if (value === "calibration") next.set("tab", "calibration");
+    if (value === "testsets") next.set("tab", "testsets");
     else next.delete("tab");
     setSearchParams(next, { replace: true });
   };
   const runMutation = useSubmitRunEvaluationJob();
   const importMutation = useImportEvaluationCases();
   const settingsQuery = useEvaluationSettings();
-  // 評価は job で動く（#390）。job id だけを作業状態に残し、画面に戻ったらサーバーの状態
-  // （進捗・結果）を確かめる（workspace-state.md）。戻っただけで評価を送り直さない。
-  const runJob = useEvaluationJobState();
+  // 表示する評価（#4811）。正本は URL の `job`（別のブラウザー・共有のリンクから開ける）。URL に無ければ、
+  // 同じタブで続ける便利さとして作業状態の job id（#390）を使う。開くだけで評価を送り直さない。
+  const urlJobId = searchParams.get("job");
+  const openJob = (jobId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("job", jobId);
+    next.delete("tab");
+    setSearchParams(next);
+  };
+  const runJob = useEvaluationJobState(urlJobId, openJob);
   // 評価の条件（プロファイル・検証した Excel）は、ページを行き来しても再読込しても残す
   // （workspace-state.md）。選んだファイルそのものはメモリだけに持つ（プロファイルを変えたら検証し直す）。
   const [profileId, setProfileId] = useWorkspaceState<string | null>(
@@ -176,6 +191,13 @@ export function EvaluationClient() {
     "evaluation.runCaseLabels",
     {},
     isCaseLabels
+  );
+  // 見出し・実行時の入力・名前をどの評価のものとして残したか（#4811）。一覧・URL で別の評価を開いたら
+  // 使わない（質問の本文は job に保存しないので、別の評価のケースは「N 行目」で出す。#4107）。
+  const [runLabelsJobId, setRunLabelsJobId] = useWorkspaceState<string>(
+    "evaluation.runLabelsJobId",
+    "",
+    isEvaluationJobId
   );
   // 検索・回答プロファイルでも評価して比較するか（#2402）。条件と同じく作業状態に残す。
   const [compareEnabled, setCompareEnabled] = useWorkspaceState<boolean>(
@@ -224,9 +246,15 @@ export function EvaluationClient() {
   const runActive = runMutation.isPending || isEvaluationJobActive(runJob.job);
   const validating = importMutation.isPending;
   // プロファイルを変えた後の検証の結果は、期待する根拠のファイル名の照合が変わるため使えない。
+  const savedTestsetId = searchParams.get("testset");
+  const testsets = useQuery({ queryKey: ["testsets"], queryFn: testsetApi.list, enabled: pageTab === "run" && Boolean(savedTestsetId) });
+  const selectedSet = useQuery({ queryKey: ["testset", savedTestsetId], queryFn: () => testsetApi.get(savedTestsetId!), enabled: Boolean(savedTestsetId && savedTestsetId !== "choose") });
+  const preparedSet = useQuery({ queryKey: ["testset-prepared", savedTestsetId, selectedSet.data?.revision, profileId], queryFn: () => testsetApi.prepare(savedTestsetId!, selectedSet.data!.revision, profileId!), enabled: Boolean(savedTestsetId && selectedSet.data && profileId) });
+  const [answerModelId, setAnswerModelId] = useWorkspaceState<string>("evaluation.answerModelId", "", (value): value is string => typeof value === "string");
+  const models = useQuery({ queryKey: ["evaluation-models"], queryFn: api.listEvaluationModels, enabled: pageTab === "run" });
   const importStale =
     importResult !== null && importResult.search_answer_profile_id !== profileId;
-  const shownResult = importStale ? null : importResult;
+  const shownResult = savedTestsetId ? preparedSet.data ?? null : importStale ? null : importResult;
   const processRows = shownResult ? evaluationProcessRows(shownResult) : [];
   const uploadNotice = validating
     ? null
@@ -309,7 +337,7 @@ export function EvaluationClient() {
     const nextProfileError = profileId
       ? null
       : t("evaluation.knowledgeBaseScope.required");
-    const nextUploadError = !fileName
+    const nextUploadError = savedTestsetId ? (!preparedSet.data ? t("evaluation.testsets.choose") : null) : !fileName
       ? t("evaluation.import.required")
       : !shownResult
         ? importStale && !file
@@ -342,17 +370,20 @@ export function EvaluationClient() {
     if (!profileId) return;
     const compareId = compareEnabled ? compareProfileId : null;
     // 確かめた期待の下書きを足したケース（#2402。オンにしたときだけ）。
-    const runInput = useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
+    const runInput = !savedTestsetId && useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
     setRunError("");
     runMutation.reset();
     try {
       const job = await runMutation.mutateAsync({
-        cases: runInput.cases,
+        cases: savedTestsetId ? [] : runInput.cases,
+        ...(savedTestsetId && selectedSet.data ? { testset_id: savedTestsetId, testset_revision: selectedSet.data.revision } : {}),
+        ...(answerModelId ? { answer_model_id: answerModelId } : {}),
         search_answer_profile_id: profileId,
-        ...(runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
+        ...(!savedTestsetId && runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
+      setRunLabelsJobId(job.job_id);
       setRunInputSnapshot(runInput);
       setRunProfileName(profiles.find((profile) => profile.id === profileId)?.name ?? profileId);
       setRunCompareName(
@@ -364,6 +395,8 @@ export function EvaluationClient() {
       setRunError(error instanceof ApiError ? error.message : t("evaluation.error.run"));
     }
   };
+
+  if (pageTab === "testsets") return <TestSetTab />;
 
   return (
     <div>
@@ -379,15 +412,12 @@ export function EvaluationClient() {
             onChange={changePageTab}
             items={[
               { id: "run", label: t("evaluation.tabs.run") },
-              { id: "calibration", label: t("evaluation.tabs.calibration") },
+              { id: "testsets", label: t("evaluation.tabs.testsets") },
             ]}
           />
         }
       />
       <PageBody wide>
-        <TabPanel id="calibration" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
-          <TestSetTab />
-        </TabPanel>
         <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
         {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}
         <SuiteSummary query={settingsQuery} />
@@ -415,7 +445,14 @@ export function EvaluationClient() {
                     <SearchAnswerProfileSelectSkeleton />
                   </TimedLoadingState>
                 ) : profilesQuery.isError ? (
-                  <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
+                  // 候補を読み取れなかったことを、候補なしと分けて再試行と一緒に出す（#4222）。
+                  <DataLoadFailure
+                    error={profilesQuery.error}
+                    fallback={t("evaluation.compare.profilesLoadError")}
+                    onRetry={() => void profilesQuery.refetch()}
+                    layout="field"
+                    testId="evaluation-profiles-load-failed"
+                  />
                 ) : (
                   <SearchAnswerProfileSelect
                     id="evaluation-profile"
@@ -429,7 +466,13 @@ export function EvaluationClient() {
                 <p className="mt-1 text-xs text-fg-muted">{t("evaluation.knowledgeBaseScope.helper")}</p>
               </div>
 
-              <EvaluationRequestUpload
+              <SelectField width="lg" id="evaluation-input-source" label={t("evaluation.testsets.runData")} value={savedTestsetId ? "saved" : "excel"} disabled={runActive} options={[{ value: "excel", label: t("evaluation.testsets.inputExcel") }, { value: "saved", label: t("evaluation.testsets.inputSaved") }]} onValueChange={value => { const next = new URLSearchParams(searchParams); if (value === "excel") next.delete("testset"); else next.set("testset", "choose"); setSearchParams(next); }} />
+              {savedTestsetId ? <>
+                {testsets.isError ? <DataLoadFailure layout="field" error={testsets.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => void testsets.refetch()} /> : <SelectField width="lg" id="evaluation-testset" label={t("evaluation.testsets.choose")} value={savedTestsetId === "choose" ? "" : savedTestsetId} disabled={runActive || testsets.isPending} options={[{ value: "", label: t("evaluation.testsets.choose") }, ...(testsets.data ?? []).map(value => ({ value: value.draft_id, label: value.name }))]} onValueChange={value => { const next = new URLSearchParams(searchParams); next.set("testset", value); setSearchParams(next); }} />}
+                {selectedSet.data ? <Banner severity="info">{t("evaluation.testsets.runHelp", { confirmed: selectedSet.data.items.filter(value => value.confirmed).length, pending: selectedSet.data.items.filter(value => !value.confirmed).length })}</Banner> : null}
+                {selectedSet.isError || preparedSet.isError ? <DataLoadFailure error={selectedSet.error ?? preparedSet.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => { void selectedSet.refetch(); void preparedSet.refetch(); }} /> : null}
+                {preparedSet.isFetching ? <TimedLoadingState label={t("evaluation.testsets.loading")}><Skeleton className="h-20 w-full" /></TimedLoadingState> : null}
+              </> : <EvaluationRequestUpload
                 fileName={fileName}
                 result={shownResult}
                 validating={validating}
@@ -442,9 +485,10 @@ export function EvaluationClient() {
                 templateError={templateError}
                 onFiles={selectFiles}
                 onDownloadTemplate={() => void downloadTemplate()}
-              />
+              />}
+              {models.isError ? <DataLoadFailure layout="field" error={models.error} fallback={t("evaluation.testsets.modelLoadError")} onRetry={() => void models.refetch()} /> : <SelectField width="lg" id="evaluation-answer-model" label={t("evaluation.testsets.model")} value={answerModelId} disabled={runActive || models.isPending} options={[{ value: "", label: t("evaluation.testsets.modelDefault") }, ...(models.data ?? []).map(value => ({ value: value.model_id, label: value.display_name }))]} onValueChange={setAnswerModelId} />}
 
-              {shownResult && shownResult.error_count === 0 && processRows.length ? (
+              {!savedTestsetId && shownResult && shownResult.error_count === 0 && processRows.length ? (
                 <EvaluationProcessDrafts
                   rows={processRows}
                   knowledgeBaseIds={shownResult.knowledge_base_ids}
@@ -501,24 +545,43 @@ export function EvaluationClient() {
           </CardContent>
         </Card>
 
-        {runJob.jobId ? (
+        <EvaluationHistory selectedJobId={runJob.jobId || null} onSelect={openJob} />
+
+        {runJob.invalid ? (
+          <EvaluationJobError notFound message={null} onRetry={() => undefined} />
+        ) : runJob.jobId ? (
           <EvaluationJobSection
             state={runJob}
-            renderResult={(job, metrics) => (
-              <ResultExportContext.Provider value={{jobId:job.job_id,hasSourceWorkbook:Boolean(job.source_workbook_id),input:runInputSnapshot,
-                profileName:runProfileName,compareProfileName:runCompareName}}>
-              {metrics.comparison ? (
-                <EvaluationComparisonResult
-                  metrics={metrics}
-                  baseName={runProfileName}
-                  comparedName={runCompareName}
-                  caseLabels={runCaseLabels}
-                />
-              ) : (
-                <EvaluationResult metrics={metrics} caseLabels={runCaseLabels} />
-              )}
-              </ResultExportContext.Provider>
-            )}
+            renderResult={(job, metrics) => {
+              // この画面で実行した評価だけ、残した見出し・入力を使う。別の評価は保存済みの結果だけで出す。
+              const local = job.job_id === runLabelsJobId;
+              const baseName = job.search_answer_profile_name ?? (local ? runProfileName : null);
+              const comparedName =
+                job.compare_search_answer_profile_name ?? (local ? runCompareName : null);
+              const caseLabels = local ? runCaseLabels : {};
+              return (
+                <ResultExportContext.Provider
+                  value={{
+                    jobId: job.job_id,
+                    hasSourceWorkbook: Boolean(job.source_workbook_id),
+                    input: local ? runInputSnapshot : null,
+                    profileName: baseName,
+                    compareProfileName: comparedName,
+                  }}
+                >
+                  {metrics.comparison ? (
+                    <EvaluationComparisonResult
+                      metrics={metrics}
+                      baseName={baseName}
+                      comparedName={comparedName}
+                      caseLabels={caseLabels}
+                    />
+                  ) : (
+                    <EvaluationResult metrics={metrics} caseLabels={caseLabels} />
+                  )}
+                </ResultExportContext.Provider>
+              );
+            }}
           />
         ) : runMutation.isPending ? (
           <EvaluationResultSkeleton />
@@ -591,6 +654,8 @@ function isCaseLabels(value: unknown): value is EvaluationCaseLabels {
 
 interface EvaluationJobState {
   jobId: string;
+  /** URL の `job` が ID の形でない（中身を問い合わせず「見つからない」を出す）。 */
+  invalid: boolean;
   job: EvaluationJob | null;
   query: ReturnType<typeof useEvaluationJob>;
   start: (job: EvaluationJob) => void;
@@ -599,13 +664,27 @@ interface EvaluationJobState {
 }
 
 /**
- * 評価の job の状態。job id を作業状態に残し、実行中は状態を取得し続ける。
- * 実行中から終わりへ移ったときだけ、完了・失敗を 1 回通知する（messaging.md §4.2）。
+ * 評価の job の状態。表示する job は URL の `job`（#4811）、無ければ作業状態の job id。実行中は状態を
+ * 取得し続け、実行中から終わりへ移ったときだけ、完了・失敗を 1 回通知する（messaging.md §4.2）。
  */
-function useEvaluationJobState(): EvaluationJobState {
-  const [jobId, setJobId] = useWorkspaceState<string>("evaluation.runJobId", "", isEvaluationJobId);
+function useEvaluationJobState(
+  urlJobId: string | null,
+  openJob: (jobId: string) => void
+): EvaluationJobState {
+  const [storedJobId, setStoredJobId] = useWorkspaceState<string>(
+    "evaluation.runJobId",
+    "",
+    isEvaluationJobId
+  );
+  const invalid = urlJobId !== null && (urlJobId === "" || !isEvaluationJobId(urlJobId));
+  const jobId = invalid ? "" : (urlJobId ?? storedJobId);
+  // URL で開いた評価も、同じタブで戻ったときの続きにする（正本は URL とサーバー）。
+  useEffect(() => {
+    if (!invalid && urlJobId && urlJobId !== storedJobId) setStoredJobId(urlJobId);
+  }, [invalid, urlJobId, storedJobId, setStoredJobId]);
   const query = useEvaluationJob(jobId || null);
   const cancelMutation = useCancelEvaluationJob();
+  const queryClient = useQueryClient();
   const confirm = useConfirm();
   const job = query.data ?? null;
   const observed = useRef<{ jobId: string; status: EvaluationJobStatus } | null>(null);
@@ -615,12 +694,14 @@ function useEvaluationJobState(): EvaluationJobState {
     const previous = observed.current;
     observed.current = { jobId: job.job_id, status: job.status };
     if (previous?.jobId !== job.job_id || previous.status !== "RUNNING") return;
+    // 終わった評価の状態・判定を一覧にも反映する。
+    void queryClient.invalidateQueries({ queryKey: evaluationJobListQueryKey });
     if (job.status === "SUCCEEDED") {
       toast.success(t("evaluation.toast.succeeded"));
     } else if (job.status === "FAILED") {
       toast.error(t("evaluation.toast.failed"));
     }
-  }, [job]);
+  }, [job, queryClient]);
 
   const cancel = async (target: EvaluationJob) => {
     const confirmed = await confirm({
@@ -639,11 +720,14 @@ function useEvaluationJobState(): EvaluationJobState {
 
   return {
     jobId,
+    invalid,
     job,
     query,
     start: (started) => {
       observed.current = { jobId: started.job_id, status: started.status };
-      setJobId(started.job_id);
+      // URL だけを変える（作業状態は URL から写す）。URL より先に作業状態の id で表示すると、URL の
+      // 遷移が後から確定して、その間に開いた確認のダイアログが閉じる。
+      openJob(started.job_id);
     },
     cancel,
     cancelling: cancelMutation.isPending,
@@ -680,8 +764,13 @@ function EvaluationJobSection({
     <>
       <EvaluationJobPanel
         job={job}
-        onCancel={(target) => void state.cancel(target)}
+        // 取り消しは実行した本人と system_admin だけ（#4811。他の利用者の評価は閲覧とダウンロードだけ）。
+        onCancel={job.can_cancel ? (target) => void state.cancel(target) : undefined}
         cancelling={state.cancelling}
+        meta={[
+          t("evaluation.job.profile", { profile: evaluationHistoryProfileLabel(job) }),
+          t("evaluation.job.actor", { actor: job.actor_display_name ?? "—" }),
+        ]}
       />
       {pollError ? (
         <Banner severity="warning">
@@ -826,7 +915,13 @@ function CompareOption({
             <SearchAnswerProfileSelectSkeleton />
           </TimedLoadingState>
         ) : query.isError ? (
-          <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
+          <DataLoadFailure
+            error={query.error}
+            fallback={t("evaluation.compare.profilesLoadError")}
+            onRetry={() => void query.refetch()}
+            layout="field"
+            testId="evaluation-compare-profiles-load-failed"
+          />
         ) : (
           <SearchAnswerProfileSelect
             id={COMPARE_PROFILE_ID}
@@ -1017,6 +1112,7 @@ function EvaluationResult({
         />
       ))}
 
+      <ReferenceMetrics metrics={metrics} />
       <CategoryBreakdown metrics={metrics} />
       <DecisionBreakdown metrics={metrics} />
 
@@ -1102,9 +1198,38 @@ function MetricGroup({
                   {failedMetrics.has(metric) ? (
                     <StatusBadge variant="warning" label={t("evaluation.metric.belowThreshold")} />
                   ) : null}
-                  {/* 観点の判定が今の評価器で校正済みか（#3578。指標の値は変えない）。 */}
-                  <JudgeCalibrationBadge metric={metric} />
                 </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** 合否と閾値に使わない参考の指標。閾値・未達の印は持たない。 */
+function ReferenceMetrics({ metrics }: { metrics: EvaluationMetrics }) {
+  const titleId = "evaluation-perspective-reference";
+  return (
+    <section aria-labelledby={titleId} className="space-y-2" data-testid={titleId}>
+      <div>
+        <h3 id={titleId} className="text-sm font-semibold text-fg">
+          {t("evaluation.reference.title")}
+        </h3>
+        <p className="text-xs text-fg-muted">{t("evaluation.reference.description")}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {EVALUATION_REFERENCE_METRICS.map((metric) => {
+          const count = metricCaseCount(metrics, metric);
+          return (
+            <Card key={metric} data-testid={`evaluation-reference-${metric}`}>
+              <CardContent className="space-y-1.5 pt-5">
+                <p className="text-xs font-medium text-fg-muted">{referenceMetricLabel(metric)}</p>
+                <p className="tnum text-lg font-semibold text-fg">{formatMetricValue(metricValue(metrics, metric))}</p>
+                {count !== null ? (
+                  <p className="tnum text-xs text-fg-muted">{t("evaluation.metric.caseCount", { count })}</p>
+                ) : null}
               </CardContent>
             </Card>
           );
@@ -1251,7 +1376,7 @@ function CaseTable({
 
 /**
  * ケースの質問（Excel の行と質問）と、失敗したケース（status=error）の理由・時間切れになった工程（#383）。
- * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い古い結果は id。
+ * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い結果は Excel の行（#4811）。
  */
 function CaseQuestionCell({
   result,
@@ -1271,7 +1396,9 @@ function CaseQuestionCell({
           <span>{label.question}</span>
         </>
       ) : (
-        <span>{result.case_id}</span>
+        // 見出しの無い結果（一覧・URL で開いた評価。質問の本文は job に保存しない。#4107・#4811）は
+        // Excel の行（「5 行目」）で出す。Excel から作ったケースでなければ id のまま。
+        <span>{evaluationCaseRowLabel(result.case_id)}</span>
       )}
       {error ? (
         <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">

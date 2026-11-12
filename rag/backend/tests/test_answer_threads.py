@@ -94,9 +94,6 @@ def _engine_settings() -> Any:
     return replace(
         engine_get_settings(environ={}, dotenv_path=None),
         llm_request_timeout_seconds=600,
-        llm_retries=3,
-        llm_retry_initial_wait_seconds=0.0,
-        llm_retry_max_wait_seconds=0.0,
     )
 
 
@@ -114,7 +111,6 @@ def _answer_flow(llm: _SlowLlm, finished: threading.Event, steps: int = 4) -> st
                         lambda: oci._openai_parsed([], settings, TextOutput, _PROVIDER),
                         "Responses text",
                         settings,
-                        retries=oci._llm_transport_retries(settings),
                     )
         return "answer"
     finally:

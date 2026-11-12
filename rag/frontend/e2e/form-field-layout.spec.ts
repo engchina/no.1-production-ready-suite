@@ -57,13 +57,8 @@ async function mockRetrieval(page: Page) {
     [
       "**/api/settings/answering",
       {
-        query_strategy: "rag_fusion",
-        answer_flow: "standard_rag",
         neighbor_child_count: 3,
         rerank_enabled: true,
-        screen_linking_enabled: false,
-        request_coverage_retrieval_enabled: false,
-        auto_field_filter_enabled: false,
         graph_expansion_enabled: false,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 6,
         section_expansion_enabled: true, section_expansion_max_levels: 4,
@@ -94,7 +89,7 @@ function chunkingSettings(strategy: string) {
     chunk_size: 800,
     overlap: 120,
     min_chars: 120,
-    delimiter: "\\n\\n",
+    delimiter: ["\\n\\n"],
     context_header_enabled: true,
     chunk_child_target_chars: 1000,
     chunk_table_child_target_chars: 3000,
@@ -122,7 +117,7 @@ function mockChunking(strategy: string) {
 // ---- 文書解析（外部の解析の接続・章節の抽出規則・抽出する項目） ----
 
 function parserAdapter(backend: string, selected: boolean) {
-  const external = backend === "mineru" || backend === "dots_ocr";
+  const external = backend === "dots_ocr";
   return {
     backend,
     package_name: external ? "external_api" : backend,
@@ -151,19 +146,10 @@ async function mockParserAdapters(page: Page) {
         adapters: [
           parserAdapter("docling", true),
           parserAdapter("unstructured", false),
-          parserAdapter("mineru", false),
           parserAdapter("dots_ocr", false),
         ],
         source_routes: [],
         connections: [
-          {
-            backend: "mineru",
-            protocol: "mineru_v1",
-            endpoint: "",
-            model: null,
-            api_key_configured: false,
-            configured: false,
-          },
           {
             backend: "dots_ocr",
             protocol: "openai_chat_completions",
@@ -222,7 +208,11 @@ async function mockParserAdapters(page: Page) {
 }
 
 async function openParserAdapters(page: Page) {
+  // Dots.OCR の接続の欄はカードの「設定」のパネルの中（#4740）。開いて確かめてから閉じ、下の項目を開く。
+  await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Endpoint" }).first()).toBeVisible();
+  await page.getByTestId("external-parser-connection-dots_ocr").getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(page.getByTestId("external-parser-connection-dots_ocr")).toHaveAttribute("data-state", "closed");
   await page.locator("summary", { hasText: "抽出する項目の定義" }).click();
   await expect(page.getByRole("textbox", { name: /項目名/ }).first()).toBeVisible();
   await page.locator("#post-parse-section-rules").scrollIntoViewIfNeeded();
@@ -246,15 +236,17 @@ async function mockAnswerPrompts(page: Page) {
       json: apiEnvelope({
         prompts: [
           {
-            key: "vlm_answer",
-            content: "次の質問に答えてください。\n{{question}}\n{{answer_context}}",
-            default_content: "既定のテンプレート {{question}} {{answer_context}}",
+            key: "generation.role",
+            content: "## Step 1: 合成の保存した役割の文",
+            default_content: "## Step 1: 合成の役割の文",
             customized: true,
-            required_placeholders: ["question", "answer_context"],
+            required_placeholders: [],
             updated_at: "2026-09-26T01:00:00Z",
           },
         ],
-        stages: [{ id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] }],
+        stages: [
+          { id: "generation", phase: "generation", prompts: [{ id: "role", content: "## Step 1: 合成の保存した役割の文", prompt_key: "generation.role" }, { id: "fixed", content: "## Step 2: 合成の固定の指示" }] },
+        ],
       }),
     })
   );
@@ -317,6 +309,8 @@ async function openSearchConditions(page: Page) {
   await expand(page, /詳細条件/);
   await expand(page, "文書の分類で絞り込む");
   await expand(page, "抽出項目の値で絞り込む");
+  // 候補の読込中は保存済みの条件欄も描画されない。読込後に既存行を確かめ、テーマ変更で重ねて追加しない。
+  await expect(page.getByTestId("search-extraction-field-filters")).toBeVisible();
   if ((await page.getByRole("combobox", { name: "項目" }).count()) > 0) return;
   for (const field of [/契約番号/, /金額/, /契約日/]) {
     await page.getByRole("button", { name: "条件を追加" }).click();
@@ -372,7 +366,6 @@ const PROCESSING_NULLS = {
   parser_adapter_backend: null,
   parser_docling_enabled: null,
   parser_unstructured_enabled: null,
-  parser_mineru_enabled: null,
   parser_dots_ocr_enabled: null,
   chunking_strategy: null,
   chunk_size: null,
@@ -673,7 +666,6 @@ const SCREENS: FormScreen[] = [
     path: "/settings/retrieval",
     mock: mockRetrieval,
     open: async (page) => {
-      await expect(page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "広げる段の上限", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true })).toBeVisible();
@@ -702,7 +694,7 @@ const SCREENS: FormScreen[] = [
     path: "/settings/chunking",
     mock: mockChunking("fixed_delimiter"),
     open: async (page) => {
-      await expect(page.getByRole("textbox", { name: /固定分割符文字列/ })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "分割符" })).toBeVisible();
     },
   },
   {
@@ -725,7 +717,8 @@ const SCREENS: FormScreen[] = [
     path: "/settings/prompts",
     mock: mockAnswerPrompts,
     open: async (page) => {
-      await expect(page.locator("#answer-prompt-vlm_answer")).toBeVisible();
+      await page.getByTestId("answer-prompt-stage-generation").locator("summary").click();
+      await expect(page.locator("#answer-prompt-generation\\.role")).toBeVisible();
     },
   },
   {

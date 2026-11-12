@@ -232,6 +232,7 @@ from app.features.agent.rag_figures import (
     issue_run_figure_url,
     issue_run_source_preview,
 )
+from app.features.agent.read_failures import database_read_failure
 from app.features.agent.run_facts import RUN_SOURCE_MCP, fact_from_run, run_source
 from app.features.agent.run_signals import (
     SIGNAL_PAGE_SIZE,
@@ -2368,8 +2369,8 @@ async def get_feedback_report(
             )
         except run_facts_store.RunFactsUnavailableError:
             logger.warning("agent_run_facts_table_missing", extra={"report": "feedback"})
-        except Exception:  # noqa: BLE001 - DB の障害でも画面を出す（メモリの Run を集計する）
-            logger.exception("agent_run_facts_report_failed", extra={"report": "feedback"})
+        except Exception as exc:
+            raise _run_facts_read_failure("feedback", exc) from exc
     runs = _filter_runs_for_actor(request, await run_in_threadpool(runtime_repository.list_runs))
     report = await run_in_threadpool(
         build_feedback_report,
@@ -2400,7 +2401,7 @@ async def get_feedback_signals(
 ) -> ApiResponse[SignalReport]:
     """確かめるべき実行（暗黙のシグナル。#1822）。権限はフィードバックと同じ（`menu.feedback`）。
 
-    評価の付いていない Run も、回答の検証の不合格・答えられなかった回答・承認の却下・ツールの
+    評価の付いていない Run も、答えられなかった回答・承認の却下・ツールの
     失敗・実行の失敗から集める。対象は利用できる業務 Agent の Run だけ。Oracle の構成は保存した
     Run の事実（`AGENT_RUN_FACTS`）を SQL で集計し、一覧はサーバー側でページングする。
     """
@@ -2429,8 +2430,8 @@ async def get_feedback_signals(
             )
         except run_facts_store.RunFactsUnavailableError:
             logger.warning("agent_run_facts_table_missing", extra={"report": "signals"})
-        except Exception:  # noqa: BLE001 - DB の障害・未更新の列でも画面を出す（メモリの Run を集計）
-            logger.exception("agent_run_facts_report_failed", extra={"report": "signals"})
+        except Exception as exc:
+            raise _run_facts_read_failure("signals", exc) from exc
     runs = _filter_runs_for_actor(request, await run_in_threadpool(runtime_repository.list_runs))
     report = await run_in_threadpool(
         build_signal_report,
@@ -2458,6 +2459,17 @@ def _report_agent_scope(request: Request) -> frozenset[str] | None:
     """集計の対象の業務 Agent（None は制限なし。Run の一覧と同じ判定）。"""
     allowed = _request_agent_ids(request)
     return None if allowed is None else frozenset(allowed)
+
+
+def _run_facts_read_failure(report: str, exc: Exception) -> Exception:
+    """保存した Run の事実を読めなかったときの API の失敗（#4222）。
+
+    メモリの Run の集計には戻さない（別のプロセスが書いた Run はメモリに無く、全件と同じとは
+    限らない）。メモリの Run を集計するのは、保存した事実が無いとき（memory / file の構成・
+    システムテーブルの作成と更新の前）だけ。
+    """
+    logger.error("agent_run_facts_report_failed", extra={"report": report}, exc_info=exc)
+    return database_read_failure(exc)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunView])
@@ -3095,8 +3107,8 @@ async def get_usage_report(
             )
         except run_facts_store.RunFactsUnavailableError:
             logger.warning("agent_run_facts_table_missing", extra={"report": "usage"})
-        except Exception:  # noqa: BLE001 - DB の障害でも画面を出す（メモリの Run を集計する）
-            logger.exception("agent_run_facts_report_failed", extra={"report": "usage"})
+        except Exception as exc:
+            raise _run_facts_read_failure("usage", exc) from exc
     runs = _filter_runs_for_actor(request, await run_in_threadpool(runtime_repository.list_runs))
     report = await run_in_threadpool(
         build_usage_report,
@@ -5131,26 +5143,29 @@ def _tool_call_audit_data(
                 offset=paging.offset,
                 limit=paging.limit,
             )
-            if isinstance(projection, RuntimeToolCallAuditData):
-                return ToolCallAuditData(
-                    **dict(
-                        paginate(
-                            [
-                                _with_run_origin(
-                                    ToolCallAuditRecord.model_validate(record.model_dump())
-                                )
-                                for record in projection.items
-                            ],
-                            total=projection.total,
-                            limit=projection.limit,
-                            offset=projection.offset,
-                        )
-                    ),
-                    filters=filters,
-                    tool_names=projection.tool_names,
-                )
-        except RuntimeError:
-            pass
+        except Exception as exc:
+            # 監査の記録を読めなかったら、メモリの Run の記録には戻さない（別のプロセスが書いた Run
+            # はメモリに無く、保持期間を過ぎた記録はメモリに残る。全件と同じとは限らない。#4222）。
+            logger.exception("agent_tool_call_audit_read_failed")
+            raise database_read_failure(exc) from exc
+        if isinstance(projection, RuntimeToolCallAuditData):
+            return ToolCallAuditData(
+                **dict(
+                    paginate(
+                        [
+                            _with_run_origin(
+                                ToolCallAuditRecord.model_validate(record.model_dump())
+                            )
+                            for record in projection.items
+                        ],
+                        total=projection.total,
+                        limit=projection.limit,
+                        offset=projection.offset,
+                    )
+                ),
+                filters=filters,
+                tool_names=projection.tool_names,
+            )
 
     records: list[ToolCallAuditRecord] = []
     tool_names: set[str] = set()

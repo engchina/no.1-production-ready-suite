@@ -539,7 +539,7 @@ def _prune_revisions(
 ) -> None:
     """上限を超えた古い版を消す（公開中の版は残す。公開と同じ transaction。#2356）。
 
-    版を参照する記録（回答の検証の ``guide_revision``・ロールバックの ``rollback_from``）は
+    版を参照する記録（ロールバックの ``rollback_from``）は
     番号だけを持ち、版の行への FK は無いので、版を消しても残る。
     """
     rows = _fetch_all(

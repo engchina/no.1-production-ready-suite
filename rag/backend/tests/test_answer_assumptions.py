@@ -11,49 +11,28 @@ from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_conte
 from rag_engine.models.llm import GroundedDraft
 
 from app.api.routes import search as search_route
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerEngine
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.search import SearchRequest
-from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.schemas.support_guide import SupportGuideContent
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
-
-@pytest.fixture(autouse=True)
-def registered_confirmations_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
-
-
 QUESTION = "設定の変更方法を教えてください"
+# 業務ガイドの未確定の条件（`clarification_questions` と同じ形）。
 PENDING = {
-    "condition_id": "rule:r1",
+    "condition_id": "target",
+    "label": "対象",
     "question": "設定の対象はどちらですか？",
     "options": ["対象 A", "対象 B"],
 }
-PAYLOAD: dict[str, Any] = {
-    "terms": [],
-    "rules": [
-        {
-            "id": "r1",
-            "title": "設定の確認",
-            "triggers": ["設定"],
-            "content": "対象によって手順が異なる。",
-            "clarification": {
-                "question": PENDING["question"],
-                "options": [{"id": "a", "label": "対象 A"}, {"id": "b", "label": "対象 B"}],
-            },
-        }
-    ],
-}
+PAYLOAD: dict[str, Any] = {"schema_version": 1, "terms": []}
 
 
-def prepared(policy: str = "assume", **kwargs: Any) -> dict[str, Any]:
-    return with_answer_assumptions(
-        PAYLOAD, policy=policy, question=QUESTION, conditions={}, guide={}, **kwargs
-    )
+def prepared(policy: str = "assume") -> dict[str, Any]:
+    return with_answer_assumptions(PAYLOAD, policy=policy, guide={"clarifications": [PENDING]})
 
 
 def test_assumptions_are_scoped_and_do_not_choose_unknown_options(tmp_path: Path) -> None:
@@ -65,7 +44,11 @@ def test_assumptions_are_scoped_and_do_not_choose_unknown_options(tmp_path: Path
     context = build_runtime_knowledge_context(QUESTION, tmp_path, path)
     assert context.has_matches
     assert context.to_payload()["unconfirmed_conditions"] == [
-        {**PENDING, "question": str(PENDING["question"]).replace("？", "?")}
+        {
+            "condition_id": PENDING["condition_id"],
+            "question": str(PENDING["question"]).replace("？", "?"),
+            "options": PENDING["options"],
+        }
     ]
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(json.dumps(PAYLOAD), encoding="utf-8")
@@ -80,38 +63,19 @@ def test_assumptions_are_scoped_and_do_not_choose_unknown_options(tmp_path: Path
         and "対象 A" in prompt
         and "対象 B" in prompt
     )
-    assert prepared(answered_rule_ids=("r1",))["unconfirmed_conditions"] == []
     assert (
-        with_answer_assumptions(
-            result, policy="confirm", question=QUESTION, conditions={}, guide={}
-        ).get("assume_unconfirmed")
+        with_answer_assumptions(PAYLOAD, policy="assume", guide={})["unconfirmed_conditions"] == []
+    )
+    assert (
+        with_answer_assumptions(result, policy="confirm", guide={}).get("assume_unconfirmed")
         is None
     )
-
-
-@pytest.mark.parametrize(
-    "question,conditions", [(QUESTION + "。対象 A です", {}), (QUESTION, {"rule:r1": "対象 A"})]
-)
-def test_answered_conditions_are_not_marked_unknown(
-    question: str, conditions: dict[str, str]
-) -> None:
-    result = with_answer_assumptions(
-        PAYLOAD,
-        policy="assume",
-        question=question,
-        conditions=conditions,
-        guide={},
-        confirmed_answers=(ClarificationAnswer(rule_id="r1", option_ids=["a"]),)
-        if not conditions
-        else (),
-    )
-    assert result["unconfirmed_conditions"] == []
 
 
 @pytest.mark.usefixtures("system_access")
 @pytest.mark.parametrize("policy", ["confirm", "assume"])
 @pytest.mark.parametrize("with_guide", [False, True])
-async def test_search_chat_mcp_shared_context_forwards_rule_and_guide_questions(
+async def test_search_chat_mcp_shared_context_forwards_guide_questions(
     monkeypatch: pytest.MonkeyPatch, policy: str, with_guide: bool
 ) -> None:
     class Oracle(FakeKnowledgeOracle):
@@ -157,20 +121,19 @@ async def test_search_chat_mcp_shared_context_forwards_rule_and_guide_questions(
     monkeypatch.setattr(search_route, "support_guide_context", context)
     _, settings, _, profile = await search_route._resolve_query_context(
         SearchRequest(query=QUESTION, search_answer_profile_id="bv-1"),
-        Settings(
-            rag_support_guide_semantic_match_enabled=False,
-            rag_runtime_rules_confirmation_enabled=True,
-        ),
+        Settings(rag_support_guide_semantic_match_enabled=False),
         interactive=True,
     )
     assert profile == "bv-1"
     result = settings.rag_runtime_knowledge
     assert result.get("assume_unconfirmed", False) is (policy == "assume")
+    assert "rules" not in PAYLOAD
     if policy == "assume":
         pending = result["unconfirmed_conditions"]
         assert isinstance(pending, list)
-        assert pending[0] == PENDING
-        assert len(pending) == (2 if with_guide else 1)
+        assert [item["question"] for item in pending] == (
+            ["対象を教えてください"] if with_guide else []
+        )
         assert not settings.rag_support_guide.get("short_answer")
 
 
@@ -198,7 +161,7 @@ async def test_final_answer_generation_receives_assumptions(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", llm)
     outcome = await AnswerEngine(
-        Settings(rag_answer_flow="standard_rag", rag_runtime_rules_confirmation_enabled=True),
+        Settings(),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         runtime_knowledge_payload=prepared(policy),
@@ -208,42 +171,3 @@ async def test_final_answer_generation_receives_assumptions(
     assert all(
         prompt.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume") for prompt in prompts
     )
-
-
-@pytest.mark.parametrize("answered", [False, True])
-async def test_mcp_assume_skips_questions_but_applies_explicit_answers(
-    monkeypatch: pytest.MonkeyPatch, answered: bool
-) -> None:
-    from app.mcp import tools
-
-    class Oracle(FakeKnowledgeOracle):
-        async def get_search_answer_profile(self, profile_id: str) -> Any:
-            view = await super().get_search_answer_profile(profile_id)
-            assert view is not None
-            return view.model_copy(
-                update={
-                    "config": SearchAnswerProfileConfig(
-                        knowledge_base_ids=["kb-1"],
-                        clarification_policy="assume",
-                    )
-                }
-            )
-
-    oracle = Oracle()
-    oracle.payloads[("bv-1", "runtime_knowledge")] = PAYLOAD
-    monkeypatch.setattr(tools, "OracleClient", lambda: oracle)
-    arguments = tools.SearchInput(
-        query=QUESTION,
-        search_answer_profile_id="bv-1",
-        conditions={"rule:r1": "対象 A"} if answered else {},
-    )
-    request = SearchRequest(
-        query=QUESTION, search_answer_profile_id="bv-1", conditions=arguments.conditions
-    )
-    result = await tools.rule_clarification_step(arguments, request)
-    assert isinstance(result, tuple)
-    _, scope = result
-    if answered:
-        assert scope is not None and "対象 A" in scope.context
-    else:
-        assert scope is None

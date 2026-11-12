@@ -11,10 +11,9 @@
 - 装飾画像(ロゴ・帯・小さなアイコン)は読み取らない。
 - prompt に bbox・周辺の record・表の既存 HTML などの metadata を入れる。
 
-``parser_artifacts["layout_records"]`` の record がある解析エンジン(Docling と MinerU。#1334)は、
+``parser_artifacts["layout_records"]`` の record がある解析エンジン(Docling)は、
 その record をそのまま入力にし、結果を record にも書き戻す(親子階層（small-to-big）の分割と画面の
-「Vision の読み取り内容」がその record を読む)。MinerU の要素・asset は共通の抽出の変換で作るので、
-record に加えて、ほかの解析エンジンと同じ形(図の本文を説明に置き換える)でも書き戻す。
+「Vision の読み取り内容」がその record を読む)。
 ほかの解析エンジンは、要素と図の asset の bbox をページ画像の px へそろえた LayoutRecord を作る。
 bbox の単位は解析エンジンごとに違い、確かでないものは切り出さずに warning を残す
 (``_bbox_scale`` の表)。画像の件数の上限は設けない。
@@ -33,7 +32,7 @@ import logging
 import mimetypes
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -93,8 +92,6 @@ logger = logging.getLogger(__name__)
 
 LAYOUT_ARTIFACT = "layout_records"
 DOCLING_ENGINE = "docling"
-# layout_records を作るが、要素・asset は共通の抽出の変換で作る解析エンジン(#1334)。
-LAYOUT_ADAPTER_ENGINES = frozenset({"mineru"})
 # Docling 以外のページ画像の解像度。Docling サービスの既定(RAG_ENGINE_RENDER_DPI=300)にそろえる。
 VISION_RENDER_DPI = 300
 # 図として読み取る asset の種類(source_image は画像ファイル全体を 1 枚の図として扱う)。
@@ -376,16 +373,15 @@ async def _generate(
     *,
     system_prompt: str,
 ) -> str:
-    from rag_engine.adapters.oci import _compact_schema
+    from rag_engine.adapters.oci import picture_response_schema
 
-    # 項目の説明はプロンプトの出力契約に載せているので、応答 schema には重ねない。
     return await async_call_with_model_purpose(
         "document.read",
         reader.generate_from_images,
         images,
         prompt,
         system_prompt=system_prompt,
-        response_schema=_compact_schema(PictureDescriptionOutput.model_json_schema()),
+        response_schema=picture_response_schema(),
         response_schema_name="picture_description",
     )
 
@@ -493,10 +489,8 @@ def read_figures_with_vision(
     source_is_image = suffix is not None and suffix != ".pdf"
     if image_purpose is not None:
         extraction = stamp_image_purpose(extraction, image_purpose, source_is_image=source_is_image)
-    layout_engine = _layout_engine(extraction)
-    has_layout = layout_engine is not None
-    engine = layout_engine or (parser_backend.strip().casefold() or "parser")
-    pending_ids: set[str] = set()
+    has_layout = _docling_layout(extraction) is not None
+    engine = DOCLING_ENGINE if has_layout else (parser_backend.strip().casefold() or "parser")
     if suffix is None:
         if not _has_vision_candidates(extraction):
             return extraction
@@ -518,11 +512,10 @@ def read_figures_with_vision(
                     if record.category in {"Picture", "Table"} and 1 <= record.page <= page_count
                 }
             )
+            if not pages_wanted and source_is_image:
+                pages_wanted = [1]
             if not pages_wanted:
-                if engine == DOCLING_ENGINE:
-                    return extraction
-                return _with_bbox_missing(extraction, engine)
-            pending_ids = _pending_layout_target_ids(layout.records)
+                return extraction
             pdf_path, pages = _render_docling_pages(
                 source_path,
                 pages_wanted,
@@ -532,6 +525,8 @@ def read_figures_with_vision(
             )
         else:
             pages_wanted = _adapter_candidate_pages(extraction, page_count)
+            if not pages_wanted and source_is_image:
+                pages_wanted = [1]
             if not pages_wanted:
                 return _with_bbox_missing(extraction, engine)
             pdf_path, pages = prepare_source_for_analysis(
@@ -544,6 +539,8 @@ def read_figures_with_vision(
                 pages=pages,
                 source_is_image=suffix != ".pdf",
             )
+        if source_is_image:
+            extraction = _ensure_source_image_region(extraction, layout, pages, engine=engine)
         if not any(record.category in {"Picture", "Table"} for record in layout.records):
             return _apply_skips(extraction, layout, engine=engine, stats=None)
         stats = describe_layout_pictures(
@@ -559,10 +556,8 @@ def read_figures_with_vision(
             cancel_check=cancel_check,
             progress_callback=progress_callback,
         )
-    if has_layout and engine == DOCLING_ENGINE:
+    if has_layout:
         updated = _write_back_docling(extraction, layout)
-    elif has_layout:
-        updated = _write_back_layout_adapter(extraction, layout, pending_ids)
     else:
         updated = _write_back_adapter(extraction, layout)
     updated = _apply_skips(updated, layout, engine=engine, stats=stats)
@@ -571,6 +566,57 @@ def read_figures_with_vision(
         if image_purpose is not None
         else updated
     )
+
+
+def _ensure_source_image_region(
+    extraction: StructuredExtraction, layout: _Layout, pages: Sequence[PageImage], *, engine: str
+) -> StructuredExtraction:
+    """画像原本に図表領域が無い場合だけ、原本全体を既存の読取経路へ渡す。"""
+    assets = list(extraction.assets)
+    for page in pages:
+        if any(
+            record.page == page.page and record.category in {"Picture", "Table"}
+            for record in layout.records
+        ):
+            continue
+        record_id = f"{engine}-source-image-p{page.page}"
+        picture = _record(
+            record_id,
+            engine,
+            page,
+            max((r.seq_no for r in layout.records if r.page == page.page), default=0) + 1,
+            [0.0, 0.0, float(page.width), float(page.height)],
+            "Picture",
+            "",
+            raw_type="picture",
+            raw={"source_image_full_frame": True},
+        )
+        # 元の文字の順序と位置を維持し、図の説明は同じページの原文の後に追加する。
+        insert_at = next(
+            (i for i, r in enumerate(layout.records) if r.page > page.page), len(layout.records)
+        )
+        layout.records.insert(insert_at, picture)
+        anchor = max(
+            (i for i, e in enumerate(extraction.elements) if (e.page_number or 1) <= page.page),
+            default=None,
+        )
+        layout.targets.append(
+            _Target(picture, asset_index=len(assets), anchor_element_index=anchor)
+        )
+        assets.append(
+            ExtractionAsset(
+                asset_id=f"asset-{record_id}",
+                kind="source_image",
+                page_number=page.page,
+                bbox=[0.0, 0.0, 1.0, 1.0],
+                metadata={
+                    "element_id": record_id,
+                    "bbox_unit": "ratio",
+                    "bbox_scope": "source_image_full_frame",
+                },
+            )
+        )
+    return extraction.model_copy(update={"assets": assets})
 
 
 @contextlib.contextmanager
@@ -619,27 +665,11 @@ def _has_vision_candidates(extraction: StructuredExtraction) -> bool:
 
 
 def _docling_layout(extraction: StructuredExtraction) -> Mapping[str, Any] | None:
-    """``layout_records``(Docling・MinerU の LayoutRecord)。record が無ければ None。"""
+    """``layout_records``(Docling の LayoutRecord)。record が無ければ None。"""
     layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
     if isinstance(layout, Mapping) and layout.get("records"):
         return layout
     return None
-
-
-def _layout_engine(extraction: StructuredExtraction) -> str | None:
-    """layout_records の record の engine(``describe_layout_pictures`` が対象を選ぶ engine)。
-
-    record の engine は 1 つの解析エンジンの名前。``LAYOUT_ADAPTER_ENGINES`` に無ければ Docling
-    (Docling サービスの record)とみなし、Docling の読み取り・書き戻しを変えない。
-    """
-    layout = _docling_layout(extraction)
-    if layout is None:
-        return None
-    for record in layout.get("records") or []:
-        if isinstance(record, Mapping):
-            engine = str(record.get("engine") or "").strip().casefold()
-            return engine if engine in LAYOUT_ADAPTER_ENGINES else DOCLING_ENGINE
-    return DOCLING_ENGINE
 
 
 _LAYOUT_RECORD_FIELDS = frozenset(item.name for item in fields(LayoutRecord))
@@ -870,76 +900,6 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
         ),
         raw_writer,
     )
-
-
-# --- Docling 以外の layout_records(MinerU。#1334)---------------------------------------------
-
-
-def _pending_layout_target_ids(records: Sequence[LayoutRecord]) -> set[str]:
-    """読み取る前に、まだ読み取っていない図と、表内画像の説明が無い表の record の id。
-
-    書き戻しをこの record だけにし、読み取り済みの図の本文(Vision の説明)を元の本文として
-    残したり、表の説明を二重に足したりしない。
-    """
-    return {
-        record.id
-        for record in records
-        if (
-            record.category == "Picture"
-            and record.raw_type == "picture"
-            and not record.text.strip()
-        )
-        or (record.category == "Table" and not str(record.raw.get("table_vision_text") or ""))
-    }
-
-
-def _write_back_layout_adapter(
-    extraction: StructuredExtraction, layout: _Layout, pending_ids: set[str]
-) -> StructuredExtraction:
-    """Vision の結果を layout_records の record と、要素・asset へ書き戻す(Docling 以外)。
-
-    record は Docling と同じく丸ごと書き戻す(親子階層の分割が読む)。要素・asset は共通の抽出の
-    変換で作ったもので、record と ``element_id`` で対応する。ほかの解析エンジンと同じ形で書き戻し、
-    構造認識など record を読まない分割方式でも Vision の説明を使えるようにする。
-    """
-    element_index_by_id = {
-        element.element_id: index
-        for index, element in enumerate(extraction.elements)
-        if element.element_id
-    }
-    asset_index_by_id: dict[str, int] = {}
-    for index, asset in enumerate(extraction.assets):
-        element_id = str(asset.metadata.get("element_id") or "")
-        if element_id and asset.kind.casefold() in VISION_ASSET_KINDS:
-            asset_index_by_id.setdefault(element_id, index)
-    targets: list[_Target] = []
-    last_element_index: int | None = None
-    for record in sorted(layout.records, key=lambda item: (item.page, item.seq_no)):
-        element_index = element_index_by_id.get(record.id)
-        if record.id in pending_ids:
-            if record.category == "Picture":
-                asset_index = asset_index_by_id.get(record.id)
-                if element_index is not None or asset_index is not None:
-                    targets.append(
-                        _Target(
-                            record,
-                            element_index=element_index,
-                            asset_index=asset_index,
-                            anchor_element_index=(
-                                last_element_index if element_index is None else None
-                            ),
-                        )
-                    )
-            elif element_index is not None:
-                targets.append(_Target(record, element_index=element_index))
-        if element_index is not None:
-            last_element_index = element_index
-    updated = _write_back_adapter(extraction, replace(layout, targets=targets))
-    artifacts = dict(updated.parser_artifacts)
-    layout_artifact = dict(_docling_layout(extraction) or {})
-    layout_artifact["records"] = [_json_value(record.to_dict()) for record in layout.records]
-    artifacts[LAYOUT_ARTIFACT] = layout_artifact
-    return updated.model_copy(update={"parser_artifacts": artifacts})
 
 
 # --- Docling 以外(要素と asset から LayoutRecord を作る)------------------------------------
@@ -1205,11 +1165,6 @@ def _bbox_scale(
     - Dots.OCR: 描いたページ画像の px。寸法は ``pages``(PDF)。画像ファイルは元画像の px。
       モデルの出力は入力画像を smart_resize した寸法の px なので、``external_parser`` が
       受け取ったときに送った画像の px へ戻している(#502)。
-    - MinerU: ページに対して 0-1000 に正規化した左上原点の座標(content_list)。MinerU 2.5.4
-      の ``make_blocks_to_content_list``(``x * 1000 / page_width``)と、4.0.10 の
-      ``normalize_bbox``(MiddleJson の 0-1 を ``int(v * 1000)``)で確認(#502)。lab の
-      ``adapters/mineru.py`` も content_list を 1000x1000 で割り、y を反転しない。1000 を
-      超えれば不明。
     - それ以外(OCI Document Understanding など): 不明。
     """
     values = [abs(float(value)) for value in bbox[:4]]
@@ -1227,8 +1182,6 @@ def _bbox_scale(
             return size
         # 画像ファイルは元の画像をそのまま渡すので、bbox は元画像の px(= ページ画像の px)。
         return (float(page.width), float(page.height)) if source_is_image else None
-    if backend == "mineru":
-        return (1000.0, 1000.0) if largest <= 1000.0 else None
     return None
 
 

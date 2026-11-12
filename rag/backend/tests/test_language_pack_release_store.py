@@ -99,14 +99,7 @@ async def test_invalid_paging_does_not_connect(limit: int, offset: int) -> None:
     assert pool.acquire_calls == 0
 
 
-_COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
-    "crag_definition_aspect_template",
-    "guide_acquisition_incomplete_template",
-)
+_COMPAT_KEYS = ("guide_acquisition_incomplete_template",)
 
 
 def _stored_hash(effective: dict[str, object]) -> str:
@@ -122,12 +115,12 @@ def _stored_hash(effective: dict[str, object]) -> str:
     return hashlib.sha256(f"{effective['locale']}\n{canonical}".encode()).hexdigest()[:16]
 
 
-def legacy_release_row(mask: int = 63) -> dict[str, object]:
+def legacy_release_row(mask: int = (1 << len(_COMPAT_KEYS)) - 1) -> dict[str, object]:
     """旧形式の項目集合から独立に元の保存 hash を計算する。"""
     row = release_row()
     effective = builtin_pack().to_dict()
-    effective["answer_labels"]["cause_gap"] = "合成の保存済み文言"
-    effective["answer_labels"]["crag_quote_only_note"] = "合成の保存済み注記"
+    effective["answer_labels"]["gaps_section"] = "合成の保存済み文言"
+    effective["answer_labels"]["insufficient_evidence_summary"] = "合成の保存済み注記"
     for index, key in enumerate(_COMPAT_KEYS):
         if mask & (1 << index):
             del effective["answer_labels"][key]
@@ -148,7 +141,7 @@ def test_incomplete_release_is_rejected_without_defaulting() -> None:
     assert row == untouched
 
 
-@pytest.mark.parametrize("mask", range(64))
+@pytest.mark.parametrize("mask", range(1 << len(_COMPAT_KEYS)))
 def test_release_requires_current_fields_without_changing_custom_values(mask: int) -> None:
     from app.rag.language_pack_releases import pack_from_release
 
@@ -159,7 +152,9 @@ def test_release_requires_current_fields_without_changing_custom_values(mask: in
             _release(row)
     else:
         release = _release(row)
-        assert pack_from_release(release).text("answer_labels", "cause_gap") == "合成の保存済み文言"
+        assert (
+            pack_from_release(release).text("answer_labels", "gaps_section") == "合成の保存済み文言"
+        )
     assert row == untouched
 
 
@@ -178,13 +173,13 @@ def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
     elif mutation == "ingest":
         row["ingest_hash"] = "incorrect"
     elif mutation == "mandatory":
-        del effective["answer_labels"]["cause_gap"]
+        del effective["answer_labels"]["gaps_section"]
     elif mutation == "extra":
         effective["answer_labels"]["unknown_key"] = "合成の余剰項目"
     elif mutation == "coerced":
-        effective["answer_labels"]["crag_refusal_summary"] = 3
+        effective["answer_labels"]["insufficient_evidence_summary"] = 3
     else:
-        effective["answer_labels"]["cause_gap"] += " "
+        effective["answer_labels"]["gaps_section"] += " "
     with pytest.raises(ValueError):
         _release(row)
     broken = original.model_copy(
@@ -204,7 +199,7 @@ def test_incomplete_draft_read_is_rejected_without_writes(missing_extra: bool) -
 
     row = release_row()
     draft = builtin_pack().to_dict()
-    del draft["answer_labels"]["crag_refusal_summary"]
+    del draft["answer_labels"]["insufficient_evidence_summary"]
     if missing_extra:
         del draft["grounding_cues"]["citation_unit_words"]
     original_draft = deepcopy(draft)
@@ -237,7 +232,7 @@ async def test_explicit_publish_preserves_complete_custom_draft_without_rewritin
     unchanged = deepcopy(row)
     old = _release(row)
     draft = deepcopy(old.effective)
-    draft["answer_labels"]["cause_gap"] = "合成の保存済み文言"
+    draft["answer_labels"]["gaps_section"] = "合成の保存済み文言"
     state = LanguagePackReleaseState(draft_revision=1, draft_effective=draft, current=old)
     inserted: list[LanguagePackRelease] = []
     monkeypatch.setattr(store_module, "_state", lambda *_args, **_kwargs: state)
@@ -256,7 +251,7 @@ async def test_explicit_publish_preserves_complete_custom_draft_without_rewritin
     assert new.ingest_hash == old.ingest_hash
     assert _validated(new.effective).hash == new.hash
     assert pack_from_release(new).hash == new.hash
-    assert new.effective["answer_labels"]["cause_gap"] == "合成の保存済み文言"
+    assert new.effective["answer_labels"]["gaps_section"] == "合成の保存済み文言"
     assert row == unchanged
     assert old.effective == row["effective_json"]
     assert old.hash == row["content_hash"]
@@ -348,7 +343,7 @@ async def test_history_metadata_lists_unsupported_snapshot_without_executing_it(
     old = release_row()
     effective = deepcopy(old["effective_json"])
     assert isinstance(effective, dict)
-    del effective["answer_labels"]["crag_refusal_summary"]
+    del effective["answer_labels"]["insufficient_evidence_summary"]
     old["effective_json"] = effective
     untouched = deepcopy(old)
     pool = FakeOraclePool(execute_results=[[{"total": 1}], [old]])
@@ -366,3 +361,40 @@ async def test_history_metadata_lists_unsupported_snapshot_without_executing_it(
     with pytest.raises(LanguagePackSnapshotError):
         await LanguagePackReleaseStore(oracle).get(str(old["release_id"]))
     assert all(call.statement.startswith("SELECT") for call in pool.connection.calls)
+
+
+def _nonconforming_state() -> tuple[dict[str, object], dict[str, object]]:
+    """契約の切替より前に公開された、現行の項目が欠けた現在版と同じ内容の下書き(#4697)。"""
+    row = release_row()
+    effective = deepcopy(row["effective_json"])
+    assert isinstance(effective, dict)
+    del effective["answer_labels"]["applications_section"]
+    del effective["grounding_cues"]["citation_unit_words"]
+    row["effective_json"] = effective
+    state = {
+        "draft_revision": 1,
+        "draft_effective_json": deepcopy(effective),
+        "current_release_id": row["release_id"],
+    }
+    return state, row
+
+
+@pytest.mark.parametrize("operation", ["save_draft", "publish", "restore"])
+async def test_nonconforming_current_keeps_save_and_publish_blocked(operation: str) -> None:
+    """通常の保存・公開・復元は不適合の現在版を拒否し続ける(復旧は別の明示の経路。#4697)。"""
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    state, row = _nonconforming_state()
+    pool = FakeOraclePool(execute_results=[[state], [row]])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    store = LanguagePackReleaseStore(oracle)
+    with pytest.raises(LanguagePackSnapshotError):
+        if operation == "save_draft":
+            await store.save_draft(builtin_pack().to_dict(), expected_revision=1)
+        elif operation == "publish":
+            await store.publish(expected_revision=1, expected_current_id="release-a")
+        else:
+            await store.restore("release-a", expected_revision=1, expected_current_id="release-a")
+    statements = [call.statement.upper() for call in pool.connection.calls]
+    assert all("INSERT" not in sql and "UPDATE RAG_" not in sql for sql in statements)
+    assert pool.connection.commits == 0

@@ -78,16 +78,6 @@ def stage_limits(settings: Any, records: Sequence[Any]) -> dict[str, int]:
     """既存各段の上限の和。付加された件数を最適な予算と見なさない。"""
     limits = dict(getattr(settings, "retrieval_stage_limits", {}) or {})
     limits.setdefault("fusion", max(1, int(getattr(settings, "retrieval_candidate_limit", DEFAULT_FUSION_LIMIT))))
-    if getattr(settings, "screen_linking_enabled", False):
-        from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN, MAX_LINKED_SCREENS
-
-        limits["screen"] = MAX_CHILDREN_PER_SCREEN * MAX_LINKED_SCREENS
-    if getattr(settings, "article_catalog_enabled", False):
-        documents = int(getattr(settings, "article_catalog_max_documents", 16)) + int(
-            getattr(settings, "article_catalog_scope_documents", 2)
-        )
-        articles = int(getattr(settings, "article_catalog_max_articles", 8)) + int(getattr(settings, "article_catalog_refine_articles", 6))
-        limits["article"] = max(0, documents * articles)
     # 添付の読取件数は呼出元の既存制約で確定している。今回渡された明示入力だけに枠を割り当てる。
     limits["attachment"] = sum(record.metadata.get("retrieval_admission_stage") == "attachment" for record in records)
     return limits

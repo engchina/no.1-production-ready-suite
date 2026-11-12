@@ -1,7 +1,7 @@
 /**
  * 言語資源の画面の値の変換と検証（#2181）。
  *
- * 画面は項目ごとに 1 行 1 つの文字列（選択は値そのもの）で持ち、保存は組み込みと違う項目だけを送る。
+ * 画面は項目ごとに 1 行 1 つの文字列で持ち、保存は組み込みと違う項目だけを送る。
  * 検証の規則は backend（`rag_parser_core.language`）と同じ。
  */
 import type { LanguagePackField, LanguagePackSections, LanguagePackValue } from "./api";
@@ -22,7 +22,7 @@ function toText(value: LanguagePackValue | undefined): string {
 }
 
 function toValue(field: LanguagePackField, text: string): LanguagePackValue {
-  if (field.kind === "choice" || field.kind === "text") return text.trim();
+  if (field.kind === "text") return text.trim();
   return [...new Set(text.split("\n").map((item) => item.trim()).filter(Boolean))];
 }
 
@@ -97,10 +97,6 @@ export function languagePackErrors(fields: LanguagePackField[], texts: LanguageP
   for (const field of fields) {
     const key = textKey(field);
     const value = toValue(field, texts[key] ?? "");
-    if (field.kind === "choice") {
-      if (!field.choices.includes(value as string)) errors[key] = t("settings.language.error.choice");
-      continue;
-    }
     if (field.kind === "text") {
       const text = value as string;
       if (!text) errors[key] = t("settings.language.error.textRequired");
@@ -145,11 +141,11 @@ export const LANGUAGE_PACK_GROUPS: readonly { id: string; sections: readonly str
   { id: "index", sections: ["entity_cues", "field_value_cues"] },
   {
     id: "question",
-    sections: ["search_terms", "question_cues", "enumeration_cues", "definition_cues", "evidence_cues"],
+    sections: ["search_terms", "question_cues", "evidence_cues"],
   },
   {
     id: "answer",
-    sections: ["answer_labels", "answer_check_cues", "operation_audit_cues", "grounding_cues", "guide_check_cues"],
+    sections: ["answer_labels", "answer_check_cues", "grounding_cues"],
   },
 ];
 

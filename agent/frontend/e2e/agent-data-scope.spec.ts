@@ -3,6 +3,8 @@ import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
 import { measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #1378: 業務 Agent のデータの範囲。NL2SQL の業務プロファイル・RAG の検索・回答プロファイルを複数選び、
 // 既定を決めて保存する。候補の読み込み中・失敗・空と、実行の step の範囲の記録を確かめる。
@@ -28,13 +30,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     updated_at: MOCK_NOW,
     ...overrides,
   });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 async function openAgent(page: Page) {
@@ -64,7 +59,7 @@ test("業務プロファイルを複数選んで既定を決め、検索・回�
   // 何も選ばないうちは「範囲なし」（今までどおり利用者が使えるすべてから選ぶ）。
   await expect(nl2sql).toContainText("範囲なし");
   await expect(nl2sql).toContainText("選ばないと、実行する利用者が使えるすべてのプロファイルから");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await pickProfiles(page, `${AGENT_ID}-data-scope-nl2sql`, ["売上", "原価"]);
   await expect(nl2sql).toContainText("2 件から選ぶ");
@@ -77,7 +72,7 @@ test("業務プロファイルを複数選んで既定を決め、検索・回�
   await expect(rag).toContainText("このプロファイルだけを使います");
   // 1 つだけなら既定の選択欄は出さない（それが既定）。
   await expect(page.getByTestId(`${AGENT_ID}-data-scope-rag-default`)).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("Agent を保存しました")).toBeVisible();
@@ -97,7 +92,7 @@ test("業務プロファイルを複数選んで既定を決め、検索・回�
 test("データの範囲の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({
   page,
   mockApi,
-}) => {
+}, testInfo) => {
   seedAgent(mockApi);
   await openAgent(page);
   const wide = (page.viewportSize()?.width ?? 0) >= 640;
@@ -116,7 +111,15 @@ test("データの範囲の開いた一覧の下部が 1 行に並び、画面�
     expect(panel.panelWidth).toBeGreaterThanOrEqual(panel.fieldWidth);
     expect(panel.left).toBeGreaterThanOrEqual(0);
     expect(panel.right).toBeLessThanOrEqual(panel.viewport);
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
+    for (const width of wide ? [1280, 1920] : [375]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await expectNoPageHorizontalOverflow(page);
+        await footer.locator("..").screenshot({ path: testInfo.outputPath(`data-scope-${connection}-${width}-${theme}.png`) });
+      }
+    }
     await footer.getByRole("button", { name: "完了" }).click();
     await expect(footer).toHaveCount(0);
   }
@@ -138,7 +141,7 @@ test("候補の読み込み中は経過時間つきの表示を出し、読み�
   await expect(loading).toContainText("業務プロファイルを読み込んでいます");
   // 読み込みの遅い接続があっても、ほかの接続は選べる。
   await expect(page.locator(`#${AGENT_ID}-data-scope-rag`)).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   release();
   await expect(loading).toHaveCount(0);
@@ -155,9 +158,15 @@ test("候補を読み込めないときは理由と再試行を出し、範囲�
   };
   await openAgent(page);
 
+  // 欄の直下に、欄ごとの文の失敗と再試行を出す。理由（backend の文）は畳んだ「詳細」に入れる（#4817）。
   const error = page.getByTestId("agent-data-scope-nl2sql-error");
-  await expect(error).toContainText("URL が設定されていないため、プロファイルを選べません");
-  await expectNoHorizontalOverflow(page);
+  await expect(error.getByRole("alert")).toHaveText("使える業務プロファイルの候補を読み込めませんでした。");
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  const field = page.locator(`#${AGENT_ID}-data-scope-nl2sql`);
+  expect((await error.boundingBox())!.y).toBeGreaterThan((await field.boundingBox())!.y);
+  await error.getByRole("button", { name: "詳細" }).click();
+  await expect(error.getByText(/URL が設定されていないため、プロファイルを選べません/)).toBeVisible();
+  await expectNoPageHorizontalOverflow(page);
   // 選んである ID は chip で出し、外せる。
   const nl2sql = page.getByTestId("agent-data-scope-nl2sql");
   await expect(nl2sql.getByRole("list", { name: /選択中/ })).toContainText("profile-sales");
@@ -182,7 +191,7 @@ test("使えるプロファイルが無いときは空の候補を出し、使�
   await page.locator(`#${AGENT_ID}-data-scope-rag`).click();
   await expect(page.getByText("あなたが使えるプロファイルがありません")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   // 使えない ID を外して保存すると、範囲なしに戻る。
   await rag.getByRole("button", { name: /bv-gone/ }).click();
@@ -213,7 +222,7 @@ test(
     await page.locator(`#${AGENT_ID}-data-scope-rag`).click();
     const panel = rag.locator("[data-searchable-panel]");
     await expect(panel.getByRole("option", { name: /多段の質問/ })).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     const cardBox = await rag.boundingBox();
     const panelBox = await panel.boundingBox();
     expect(cardBox && panelBox).toBeTruthy();
@@ -295,7 +304,7 @@ test("処理の経過のツールの段に、使ったプロファイルと範�
   await expect(timeline.getByText("profile-hr は範囲外のため実行していません", {exact: true})).toBeVisible();
   await expect(timeline.getByText("profile-cost を範囲から補完", {exact: true})).toBeVisible();
   await timeline.screenshot({path: testInfo.outputPath("tool-data-scope.png")});
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 
@@ -306,6 +315,6 @@ test("権限のない候補は障害や再試行として表示しない", { tag
   const card = page.getByTestId("agent-data-scope-nl2sql");
   await expect(card.getByTestId("agent-data-scope-nl2sql-forbidden")).toBeVisible();
   await expect(card.getByRole("button", { name: "再試行" })).toHaveCount(0);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("candidate-forbidden.png"), fullPage: true });
 });

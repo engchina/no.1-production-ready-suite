@@ -17,6 +17,7 @@ from app.main import app
 from app.rag.evaluation import EvaluationCaseResultCallback, EvaluationRunner, SearchPipeline
 from app.rag.evaluation_jobs import (
     EVALUATION_JOB_STALE_MESSAGE,
+    EvaluationJobNotFoundError,
     EvaluationJobOutcome,
     EvaluationJobService,
     MemoryEvaluationJobStore,
@@ -223,9 +224,7 @@ async def test_saved_case_result_omits_answer_diagnostics(owner: AuditRequestCon
         result=with_diagnostics,
     )
 
-    rows = await store.list_case_results(
-        job_id, tenant_id_hash=owner.tenant_id_hash, user_id_hash=owner.user_id_hash
-    )
+    rows = await store.list_case_results(job_id)
     assert len(rows) == 1
     assert rows[0].result["diagnostics"]["answer"] is None
     assert "合成の質問" not in str(rows[0].result)
@@ -269,40 +268,30 @@ async def test_case_result_is_not_written_after_the_job_is_closed(
     await service.cancel(job_id)
     await _save_cases(service, job_id, 1)
 
-    assert (
-        await store.list_case_results(
-            job_id, tenant_id_hash=owner.tenant_id_hash, user_id_hash=owner.user_id_hash
-        )
-        == []
-    )
+    assert await store.list_case_results(job_id) == []
     await service.wait_for(job_id)
 
 
-async def test_case_results_are_scoped_to_the_job_owner(owner: AuditRequestContext) -> None:
+async def test_partial_result_is_hidden_from_other_users(owner: AuditRequestContext) -> None:
+    """途中までの結果は job を見られる利用者だけ（プロファイルの無い job は本人だけ。#4811）。"""
     store = MemoryEvaluationJobStore()
     service = _service(store)
-    release = asyncio.Event()
 
     async def executor(_progress: Any) -> EvaluationJobOutcome:
         await _save_cases(service, "job-a", 1)
-        release.set()
-        await asyncio.sleep(30)
-        raise AssertionError("止まるはず")
+        raise RuntimeError("合成の失敗")
 
     job_id = await _submit(service, executor)
-    await release.wait()
-    assert (
-        await store.list_case_results(job_id, tenant_id_hash="t" * 64, user_id_hash="x" * 64) == []
+    await service.wait_for(job_id)
+    assert (await service.get(job_id)).partial_result is not None
+    token = set_audit_request_context(
+        AuditRequestContext(tenant_id_hash="t" * 64, user_id_hash="x" * 64)
     )
-    assert (
-        len(
-            await store.list_case_results(
-                job_id, tenant_id_hash=owner.tenant_id_hash, user_id_hash=owner.user_id_hash
-            )
-        )
-        == 1
-    )
-    await service.shutdown()
+    try:
+        with pytest.raises(EvaluationJobNotFoundError):
+            await service.get(job_id)
+    finally:
+        reset_audit_request_context(token)
 
 
 async def test_partial_result_includes_the_compared_profile(owner: AuditRequestContext) -> None:
@@ -371,7 +360,7 @@ async def test_failed_listing_does_not_break_the_job_status(owner: AuditRequestC
 
 
 async def test_oracle_store_writes_case_result_only_under_own_lease() -> None:
-    """ケースの結果は自分の lease の RUNNING の job にだけ書き、読むときは持ち主で絞る。"""
+    """ケースの結果は自分の lease の RUNNING の job にだけ書く（読む前に service が確かめる）。"""
 
     class Client:
         statements: list[tuple[str, dict[str, Any]]] = []
@@ -383,7 +372,7 @@ async def test_oracle_store_writes_case_result_only_under_own_lease() -> None:
         async def list_evaluation_job_case_results(
             self, job_id: str, **kwargs: Any
         ) -> list[dict[str, object]]:
-            assert kwargs == {"tenant_id_hash": "t", "user_id_hash": "u"}
+            assert kwargs == {}
             return [
                 {
                     "pass_index": 1,
@@ -405,7 +394,7 @@ async def test_oracle_store_writes_case_result_only_under_own_lease() -> None:
         result={"case_id": "row-6"},
     )
     assert Client.statements[0][1]["lease_owner"] == "worker-a"
-    rows = await store.list_case_results("job-a", tenant_id_hash="t", user_id_hash="u")
+    rows = await store.list_case_results("job-a")
     assert rows[0].pass_index == 1
     assert rows[0].case_index == 4
     assert rows[0].result == {"case_id": "row-6"}
@@ -540,7 +529,7 @@ async def test_run_api_saves_cases_and_exports_partial_excel_after_failure(
     assert book["主条件の結果"]["A2"].value == "row-2"
     assert book["主条件の結果"]["A3"].value == "row-3"
     assert [row[0].value for row in book["概要"].iter_rows()][-1] == "途中までの結果"
-    assert book["概要"]["B10"].value == "全 2 ケースのうち 2 ケース"
+    assert book["概要"]["B17"].value == "全 2 ケースのうち 2 ケース"
 
 
 async def test_compared_pass_is_saved_with_its_own_index_and_profile(

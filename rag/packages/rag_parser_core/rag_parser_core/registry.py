@@ -35,6 +35,7 @@ from xml.etree import ElementTree
 
 from rag_parser_core.capabilities import adapter_supports_source
 from rag_parser_core.extraction import (
+    MAX_HEADING_LINE_CHARS,
     DocumentElement,
     ExtractionAsset,
     ExtractionMetadataValue,
@@ -42,7 +43,10 @@ from rag_parser_core.extraction import (
     ExtractionTable,
     ExtractionTableCell,
     StructuredExtraction,
+    heading_level_from_prefix,
+    numbered_heading,
 )
+from rag_parser_core.language.text import text_patterns
 from rag_parser_core.parsed_table import (
     HEADER_CELL_KEY,
     PARSED_TABLE_GRID_KEY,
@@ -95,6 +99,8 @@ from rag_parser_core.unstructured_source_map import source_format
 # 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
 # registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
+# 見出しをタグで書く形式(Unstructured の metadata.filetype)。
+_UNSTRUCTURED_MARKUP_FILETYPES = frozenset({"text/html", "application/xhtml+xml", "text/markdown"})
 # Unstructured の partition_csv が判定する区切り（,;|）と、pandas が推定する区切りのタブ。
 _CSV_DELIMITER_CANDIDATES = (",", ";", "|", "\t")
 
@@ -650,7 +656,6 @@ def parse_with_registry(
     adapter_backend: str = "local",
     docling_enabled: bool = False,
     unstructured_enabled: bool = False,
-    mineru_enabled: bool = False,
     dots_ocr_enabled: bool = False,
     external_adapter_runner: ExternalAdapterRunner | None = None,
 ) -> ParserRegistryResult:
@@ -714,7 +719,6 @@ def parse_with_registry(
         content_type=content_type,
         docling_enabled=docling_enabled,
         unstructured_enabled=unstructured_enabled,
-        mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
     )
     adapter_fallback_used = bool(adapter_warnings)
@@ -724,7 +728,6 @@ def parse_with_registry(
         content_type=content_type,
         docling_enabled=docling_enabled,
         unstructured_enabled=unstructured_enabled,
-        mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
     ):
         runner = external_adapter_runner or _default_external_adapter_runner
@@ -800,7 +803,6 @@ def _requested_external_adapters(
     content_type: str,
     docling_enabled: bool,
     unstructured_enabled: bool,
-    mineru_enabled: bool,
     dots_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
@@ -809,7 +811,6 @@ def _requested_external_adapters(
             normalized,
             docling_enabled=docling_enabled,
             unstructured_enabled=unstructured_enabled,
-            mineru_enabled=mineru_enabled,
             dots_ocr_enabled=dots_ocr_enabled,
         ) and _external_adapter_supports_source(
             normalized,
@@ -828,7 +829,6 @@ def _external_adapter_disabled_warnings(
     content_type: str,
     docling_enabled: bool,
     unstructured_enabled: bool,
-    mineru_enabled: bool,
     dots_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
@@ -838,7 +838,6 @@ def _external_adapter_disabled_warnings(
         normalized,
         docling_enabled=docling_enabled,
         unstructured_enabled=unstructured_enabled,
-        mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
     ):
         if _external_adapter_supports_source(
@@ -898,13 +897,11 @@ def _external_adapter_flag_enabled(
     *,
     docling_enabled: bool,
     unstructured_enabled: bool,
-    mineru_enabled: bool,
     dots_ocr_enabled: bool,
 ) -> bool:
     return {
         "docling": docling_enabled,
         "unstructured": unstructured_enabled,
-        "mineru": mineru_enabled,
         "dots_ocr": dots_ocr_enabled,
     }.get(backend, False)
 
@@ -1321,6 +1318,7 @@ def _unstructured_adapter_result(
         template=template_for_source_profile(source_profile),
         parser_backend="unstructured",
         parser_version=version,
+        refine_heading=_unstructured_refined_heading,
         extra_artifacts={
             "unstructured_text_contract": UNSTRUCTURED_TEXT_CONTRACT,
             **({"html_main_scope": "full_document"} if main_expanded else {}),
@@ -1356,6 +1354,43 @@ def _unstructured_adapter_result(
         parser_version=version,
         template=template_for_source_profile(source_profile),
     )
+
+
+def _unstructured_refined_heading(item: object, kind: str, text: str) -> tuple[str, int | None]:
+    """Unstructured の見出しの分類を、文書の構造と文字の形で直し、見出しの階層を返す(#4741)。
+
+    Markdown / HTML の見出しのタグは書き手が付けた構造なので、深さ(``category_depth``)をそのまま
+    使う。それ以外の Title は Unstructured の英語向けの推定で、日本語の段落も Title になり、見出しが
+    NarrativeText になることもある。文として終わる行・長い行は本文に戻し、プレーンテキスト
+    (構造の情報が無い)に限り「第 N 章」「1.2」の形の行を見出しにする。語の意味では判定しない。
+    """
+    if kind not in {"title", "text"}:
+        return kind, None
+    metadata = _object_member(item, "metadata")
+    depth = _int_value(_metadata_get(metadata, "category_depth"))
+    filetype = str(_metadata_get(metadata, "filetype") or "")
+    body_form = len(text) > MAX_HEADING_LINE_CHARS or bool(
+        re.search(rf"{text_patterns().heading_terminal}$", text)
+    )
+    if kind == "title":
+        if depth is not None and filetype in _UNSTRUCTURED_MARKUP_FILETYPES:
+            return kind, depth + 1
+        if body_form:
+            return "text", None
+        return kind, depth + 1 if depth is not None else _numbered_section_level(text)
+    if depth is None and filetype == "text/plain" and not body_form:
+        level = _numbered_section_level(text)
+        if level is not None:
+            return "title", level
+    return kind, None
+
+
+def _numbered_section_level(text: str) -> int | None:
+    """「第 N 章」「1.2」の形の行の階層。番号だけの前置き(「10 値」)は見出しの形にしない。"""
+    match = numbered_heading().match(text)
+    if match is None or match.group("prefix").strip("（()）").isdigit():
+        return None
+    return heading_level_from_prefix(match.group("prefix"))
 
 
 def _with_source_json_text(
@@ -3562,6 +3597,7 @@ def _structured_from_adapter_elements(
     parser_version: str,
     pages: Sequence[ExtractionPage] | None = None,
     extra_artifacts: Mapping[str, ExtractionMetadataValue] | None = None,
+    refine_heading: Callable[[object, str, str], tuple[str, int | None]] | None = None,
 ) -> StructuredExtraction:
     mapped_elements: list[DocumentElement] = []
     mapped_tables: list[ExtractionTable] = []
@@ -3595,6 +3631,9 @@ def _structured_from_adapter_elements(
             text = _table_markdown_from_cells(adapter_cells)
         if adapter_rows:
             text = "\n".join(_xlsx_markdown_row(row) for row in adapter_rows)
+        refined_level: int | None = None
+        if refine_heading is not None and text:
+            kind, refined_level = refine_heading(item, kind, text)
         element_id = _adapter_element_id(item, order)
         page_number = _adapter_element_page_number(item)
         if page_number is None:
@@ -3629,7 +3668,7 @@ def _structured_from_adapter_elements(
             metadata.setdefault(key, value)
         explicit_section_path = _adapter_element_section_path(item)
         if kind == "title" and not explicit_section_path:
-            level = _adapter_element_section_level(item) or 1
+            level = refined_level or _adapter_element_section_level(item) or 1
             section_stack = section_stack[: level - 1]
             section_stack.append(text)
             section_path = list(section_stack)

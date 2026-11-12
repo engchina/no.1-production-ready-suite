@@ -33,7 +33,6 @@ def test_builtin_pack_has_every_field_and_nothing_else() -> None:
         for key in fields
     }
     assert keys == {(spec.section, spec.key) for spec in FIELD_SPECS}
-    assert builtin_pack().value("symbols", "normalization") == "NFKC"
 
 
 def test_resolve_replaces_fields_and_keeps_others() -> None:
@@ -52,7 +51,9 @@ def test_resolve_replaces_fields_and_keeps_others() -> None:
         ("symbols", "bracket_pairs", ["("]),
         ("numbers", "kanji_digits", ["一=いち"]),
         ("english", "en_section_words", ["part=volume"]),
-        ("symbols", "normalization", "NFKD"),
+        # 消した項目（文字の正規化は NFKC に固定）と、消した節の上書きは知らない項目として拒む。
+        ("symbols", "normalization", "NFKC"),
+        ("inquiry_cues", "condition_terms", ["合成の語"]),
         ("symbols", "name_chars", ["あいう"]),
         ("references", "separate_part_patterns", ["改正"]),
         ("references", "appendix_words", ["別添"]),
@@ -62,7 +63,8 @@ def test_resolve_replaces_fields_and_keeps_others() -> None:
         "pair",
         "char-value",
         "enum-map",
-        "choice",
+        "removed-field",
+        "removed-section",
         "char-range",
         "number-pattern",
         "word-map",
@@ -328,43 +330,18 @@ def test_numeric_layout_gaps_and_mixed_notation():
         assert "48000" not in arabic_numbers(text)
 
 
-_CRAG_COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
-    "crag_definition_aspect_template",
-)
-
-
-@pytest.mark.parametrize("mask", range(32))
-def test_build_pack_rejects_missing_crag_labels(mask: int) -> None:
-    raw = builtin_pack().to_dict()
-    raw["answer_labels"]["cause_gap"] = "合成の独自文言"
-    for index, key in enumerate(_CRAG_COMPAT_KEYS):
-        if mask & (1 << index):
-            del raw["answer_labels"][key]
-    saved = json.dumps(raw, ensure_ascii=False)
-    if mask:
-        with pytest.raises(LanguagePackError):
-            build_pack(raw)
-    else:
-        assert build_pack(raw).text("answer_labels", "cause_gap") == "合成の独自文言"
-    assert json.dumps(raw, ensure_ascii=False) == saved
-
-
 @pytest.mark.parametrize("value", [None, ""])
-def test_new_crag_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
+def test_explicit_invalid_label_value_is_not_defaulted(value: object) -> None:
     raw = builtin_pack().to_dict()
-    raw["answer_labels"]["crag_refusal_summary"] = value
+    raw["answer_labels"]["insufficient_evidence_summary"] = value
     with pytest.raises(LanguagePackError):
         build_pack(raw)
 
 
 def test_other_missing_language_fields_still_fail() -> None:
     raw = builtin_pack().to_dict()
-    del raw["answer_labels"]["cause_gap"]
-    with pytest.raises(LanguagePackError, match="cause_gap"):
+    del raw["answer_labels"]["gaps_section"]
+    with pytest.raises(LanguagePackError, match="gaps_section"):
         build_pack(raw)
 
 
@@ -450,13 +427,6 @@ def test_field_changes_match_the_current_storage_contract() -> None:
     path = Path(__file__).parent / "fixtures" / "language_pack_published_fields.json"
     snapshot = {tuple(item.split(".", 1)) for item in json.loads(path.read_text("utf-8"))}
     assert snapshot == {(spec.section, spec.key) for spec in FIELD_SPECS}
-
-
-def test_published_release_without_the_unconfirmed_gap_label_is_rejected() -> None:
-    raw = builtin_pack().to_dict()
-    del raw["answer_labels"]["subject_unconfirmed_gap"]
-    with pytest.raises(LanguagePackError):
-        build_pack(raw)
 
 
 def test_published_release_without_applications_section_is_rejected() -> None:

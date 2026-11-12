@@ -6,7 +6,6 @@ import pytest
 from citation_unit_support import without_unit_annotations
 
 from rag_engine.generation import grounded
-from rag_engine.generation.citation_range_repair import CitationRangeRepair, apply_range_repair
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft, GroundedItem
 
@@ -53,7 +52,7 @@ def test_short_multiline_block_numbers_each_physical_line_and_quotes_the_origina
     view = grounded._citation_view(evidence[0])
     assert len(view.units) == 2
     assert view.numbered is True
-    assert view.contract_version == "explicit_units_v5"
+    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT
     assert "1| 開く\n2| 保存" in without_unit_annotations(prompt)
     assert "3|" not in without_unit_annotations(prompt)
     cited, error = extract(draft(1, 2), evidence)
@@ -122,25 +121,6 @@ def test_bad_saved_ranges_stay_bad_without_expansion(start: int | None, end: int
     assert original.model_dump() == before
 
 
-def test_repair_uses_the_same_numbered_short_view_and_changes_only_the_range() -> None:
-    evidence = [span(1, "開く\n保存")]
-    grounded.format_functions(evidence)
-    original = draft(0, 0)
-    checked, dropped = grounded.verify("対象の操作は？", original, evidence)
-    targets = grounded.citation_range_targets(original, evidence, checked, dropped)
-    assert len(targets) == 1
-    assert targets[0]["unit_count"] == 2 and targets[0]["numbered"] is True
-    response = CitationRangeRepair.model_validate(
-        {"ranges": [{"item_index": 0, "citation_index": 0, "evidence_id": "E1", "line_start": 1, "line_end": 2}]}
-    )
-    repaired, diagnostic = apply_range_repair(original, response, targets)
-    assert diagnostic["status"] == "completed"
-    assert repaired.items[0].text == original.items[0].text
-    assert repaired.summary == original.summary
-    cited, error = extract(repaired, evidence)
-    assert not error and cited.quote == evidence[0]["text"]
-
-
 def test_reordered_siblings_resolve_current_labels_and_never_old_view_content() -> None:
     first, second = span(1, "開く"), span(2, "保存")
     grounded.format_functions([first, second])
@@ -153,16 +133,3 @@ def test_reordered_siblings_resolve_current_labels_and_never_old_view_content() 
     assert current.citations[0]._extraction["source_id"] == "parent-2"
     assert previous.quote == "開く"
     assert current.citations[0]._extraction["view_sha256"] != previous.citations[0]._extraction["view_sha256"]
-
-
-def test_bad_primary_does_not_remove_valid_secondary_or_turn_it_into_claim_support() -> None:
-    evidence = [span(1, "開く"), span(2, "保存")]
-    grounded.format_functions(evidence)
-    proposal = draft(5, 5)
-    proposal.items[0].citations.append(draft(1, 1, "E2").items[0].citations[0])
-    checked, _ = grounded.verify("対象の操作は？", proposal, evidence)
-    assert len(checked) == 1
-    citations = list(grounded.item_citations(checked[0]))
-    assert any(own.item.quote == "保存" and own.citation_resolution["authenticity"] == "verified" for own in citations)
-    assert checked[0].item.text == proposal.items[0].text
-    assert checked[0].review_assessment == {}

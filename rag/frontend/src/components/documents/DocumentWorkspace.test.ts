@@ -1,3 +1,4 @@
+import { DEFAULT_CHUNK_DELIMITERS } from "@/lib/chunking";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -151,7 +152,7 @@ describe("分割プレビュー設定", () => {
       chunk_overlap: 120,
       chunk_min_chars: 120,
       // 固定分割符の既定は構造化レコード JSONL の記録の境界（#2457）。
-      chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
+      chunk_delimiter: [...DEFAULT_CHUNK_DELIMITERS],
       chunk_child_target_chars: 1000,
       chunk_table_child_target_chars: 3000,
       chunk_parent_target_chars: 6000,
@@ -184,9 +185,9 @@ describe("分割プレビュー設定", () => {
       chunkPreviewValidationError({
         ...base,
         chunking_strategy: "fixed_delimiter",
-        chunk_delimiter: " ",
+        chunk_delimiter: [],
       })
-    ).toBe("固定分割符文字列");
+    ).toBe("分割符");
     expect(chunkPreviewValidationError(base)).toBeNull();
   });
 
@@ -441,8 +442,8 @@ describe("resolveIngestionParserDisplay", () => {
       segments: [
         {
           status: "RUNNING",
-          parser_backend: "mineru",
-          parser_profile: "mineru",
+          parser_backend: "dots_ocr",
+          parser_profile: "dots_ocr",
         },
       ],
       extractionBackend: null,
@@ -451,8 +452,8 @@ describe("resolveIngestionParserDisplay", () => {
     });
 
     expect(display).toEqual({
-      backend: "mineru",
-      profile: "mineru",
+      backend: "dots_ocr",
+      profile: "dots_ocr",
       source: "segment",
     });
   });

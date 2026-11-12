@@ -14,8 +14,9 @@ from rag_pipeline_core.chunking import CHUNKING_STRATEGIES, Chunk
 
 from app.clients import oracle as oracle_module
 from app.clients.oracle import OracleClient, StoredDocument
+from app.rag.chunk_source_projection import _validate_chunk_source_projection
 from app.rag.chunking import chunk_extraction_with_strategy
-from app.rag.vision import _Layout, _Target, _write_back_adapter
+from app.rag.vision import _Layout, _Target, _write_back_adapter, _write_back_docling
 from app.schemas.document import FileStatus
 from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
 
@@ -76,6 +77,52 @@ def changed_chunks(chunks: list[Chunk], field: str) -> list[Chunk]:
                 source[field] = "foreign-identity"
         chunk.metadata[VISION_CHUNK_MAP_KEY] = json.dumps(value, ensure_ascii=False)
     return result
+
+
+def docling_table_extraction() -> StructuredExtraction:
+    """表の本文は変えず、Vision の補足を分割のときに足す Docling の抽出。"""
+    body = "表の中の図の説明です。"
+    record = LayoutRecord(
+        "table-record",
+        "docling",
+        1,
+        1,
+        [0, 0, 100, 100],
+        "image_top_left",
+        100,
+        100,
+        "Table",
+        text=body,
+        raw={
+            "vision_status": "succeeded",
+            "vision_text_projection": VisionTextProjection(body, body + "\n索引専用語").dumps(),
+            "table_vision_text": body,
+        },
+    )
+    element = DocumentElement(
+        kind="table",
+        text="<table><tr><td>原生値</td></tr></table>",
+        element_id="table-record",
+        source_parser="docling_layout",
+        page_number=1,
+    )
+    return _write_back_docling(
+        StructuredExtraction(raw_text="", elements=[element]), _Layout(records=[record])
+    )
+
+
+def test_table_supplement_added_at_chunking_is_certified() -> None:
+    extraction = docling_table_extraction()
+    chunks = formal_chunks(extraction, "page_level")
+    assert any(VISION_CHUNK_MAP_KEY in chunk.metadata for chunk in chunks)
+    _validate_chunk_source_projection(extraction, chunks)
+
+
+def test_table_supplement_from_another_record_is_rejected() -> None:
+    extraction = docling_table_extraction()
+    chunks = changed_chunks(formal_chunks(extraction, "page_level"), "record_id")
+    with pytest.raises(ValueError, match="出所が一致しません"):
+        _validate_chunk_source_projection(extraction, chunks)
 
 
 def writer(

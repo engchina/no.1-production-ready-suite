@@ -3,7 +3,8 @@
 - `text`: 語の照合の正規化（NFKC・大小文字・空白を無視）。
 - `outcomes`: 回答の対応の語彙と、回答・確認・保留の判断。
 - `evidence`: 必要な根拠と引用の chunk の照合（文書・ページ・シート・行・章節・本文・表の行）。
-- `retrieval`: 正解の文書の順位（MRR）と取れた文書。
+- `retrieval`: 正解の文書の順位（MRR・Precision@k・NDCG@k・MAP）と取れた文書。
+- `overlap`: 回答と標準回答の語の重なり（BLEU・ROUGE。分割は使う側が行う）。
 - `aggregate`: 測れたケースだけの平均と分母、閾値の判定、合否。
 - `agreement`: 人手の判定と評価器の判定の一致（一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）と、
   評価器の校正の合否（holdout の件数・判定率・κ・誤合格の率）。
@@ -71,8 +72,16 @@ from pr_evaluation_scoring.outcomes import (
     response_decision,
     skips_retrieval,
 )
+from pr_evaluation_scoring.overlap import bleu, rouge_l, rouge_n
 from pr_evaluation_scoring.paired import exact_sign_test, paired_bootstrap_interval
-from pr_evaluation_scoring.retrieval import document_hits, reciprocal_rank, unique_in_order
+from pr_evaluation_scoring.retrieval import (
+    average_precision,
+    document_hits,
+    ndcg_at_k,
+    precision_at_k,
+    reciprocal_rank,
+    unique_in_order,
+)
 from pr_evaluation_scoring.rubric import (
     applicable_aspects,
     aspect_criteria,
@@ -91,6 +100,12 @@ from pr_evaluation_scoring.trials import (
 )
 
 __all__ = [
+    "average_precision",
+    "bleu",
+    "ndcg_at_k",
+    "precision_at_k",
+    "rouge_l",
+    "rouge_n",
     "ASPECT_HOLDOUT_TARGET",
     "ASPECT_LABEL_TARGET",
     "CANNOT_JUDGE",

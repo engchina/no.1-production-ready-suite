@@ -162,15 +162,61 @@ export type MarkdownTableSegment =
   | { kind: "text"; text: string }
   | { kind: "table"; data: TabularData };
 
+export interface SplitMarkdownTablesOptions {
+  /**
+   * 区切りの行の無い `| A | B |` の行の並び（両端が `|` の 2 行以上で、セルが 2 つ以上の行を含む）も表にする
+   * （#4734。文書の表から行を切り出した本文）。どの行が表頭か分からないのですべて本文の行にし、列の名前は番号に
+   * する（Markdown の表の空の表頭と同じ）。判定は行の形だけで、語を見ない。
+   */
+  headerlessRows?: boolean;
+}
+
 const FENCE = /^\s*(```|~~~)/;
 const SEPARATOR_CELL = /^\s*:?-+:?\s*$/;
 
 /** Markdown の表の行のセル（先頭・末尾の `|` を除き、`\|` 以外の `|` で分ける）。 */
+function sourceTableRow(line: string): { text: string; range: [number, number] }[] {
+  let first = line.length - line.trimStart().length;
+  let end = line.trimEnd().length;
+  if (line[first] === "|") first++;
+  if (line[end - 1] === "|" && line[end - 2] !== "\\") end--;
+  const points: number[] = [0];
+  let unit = 0, point = 0;
+  for (const character of line) { unit += character.length; points[unit] = ++point; }
+  const cells: { text: string; range: [number, number] }[] = [];
+  const body = line.slice(first,end);
+  const separator = /(?<!\\)\|/g;
+  let start = 0;
+  const append = (stop: number) => {
+    const raw = body.slice(start,stop);
+    const left = raw.length - raw.trimStart().length;
+    const right = Math.max(left,raw.trimEnd().length);
+    cells.push({text:cleanMarkdownCell(raw),range:[points[first+start+left],points[first+start+right]]});
+  };
+  for (let match = separator.exec(body); match; match = separator.exec(body)) {
+    append(match.index); start = match.index + 1;
+  }
+  append(body.length);
+  return cells;
+}
+
 function splitTableRow(line: string): string[] {
-  let body = line.trim();
-  if (body.startsWith("|")) body = body.slice(1);
-  if (body.endsWith("|") && !body.endsWith("\\|")) body = body.slice(0, -1);
-  return body.split(/(?<!\\)\|/).map(cleanMarkdownCell);
+  return sourceTableRow(line).map(cell => cell.text);
+}
+
+/** 解析器が表と宣言した本文だけを読み、元文字列のcodepoint範囲を保持する。曖昧な断片は表にしない。 */
+export function sourcePipeTable(text: string): {text:string; range:[number,number]}[][] | null {
+  let offset=0;
+  const lines=text.split("\n").map(line=>{const item={line,offset};offset+=Array.from(line).length+1;return item;});
+  while(lines.length && !lines[0].line.trim()) lines.shift();
+  while(lines.length && !lines.at(-1)!.line.trim()) lines.pop();
+  if(lines.length<2 || lines.some(item=>FENCE.test(item.line))) return null;
+  const width=splitTableRow(lines[0].line).length;
+  const separated=isSeparatorRow(lines[1].line,width);
+  if(!separated && !lines.every(item=>isHeaderlessRow(item.line))) return null;
+  if(width<1 || lines.some(item=>!isTableRowLine(item.line))) return null;
+  const rows=lines.filter((_,i)=>!separated || i!==1).map(({line,offset})=>sourceTableRow(line).map(cell=>({text:cell.text,range:[cell.range[0]+offset,cell.range[1]+offset] as [number,number]})));
+  return rows.length>=2 && rows.every(row=>row.length===width) ? rows : null;
 }
 
 /** セルの強調・コードの記号を除く（表の値として読む）。 */
@@ -206,12 +252,56 @@ function isTableRowLine(line: string): boolean {
   return line.trim() !== "" && line.includes("|") && !FENCE.test(line);
 }
 
+function isSeparatorLike(cells: string[]): boolean {
+  return cells.every((cell) => SEPARATOR_CELL.test(cell));
+}
+
+/** 区切りの行の無い表の行（両端が `|` の行）。区切りの形の行は表の行にしない。 */
+function isHeaderlessRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length < 2 || !trimmed.startsWith("|") || !trimmed.endsWith("|") || trimmed.endsWith("\\|")) return false;
+  return !isSeparatorLike(splitTableRow(trimmed));
+}
+
+/** `start` の行から続く区切りの行の無い表の行（表にならなければ null）。次の行が区切りの行なら、そこは Markdown の表の表頭なので含めない。 */
+function headerlessRowsAt(lines: string[], start: number): { rows: string[][]; width: number; end: number } | null {
+  const rows: string[][] = [];
+  let cursor = start;
+  while (cursor < lines.length && isHeaderlessRow(lines[cursor])) {
+    const cells = splitTableRow(lines[cursor]);
+    const next = lines[cursor + 1];
+    if (next !== undefined && isSeparatorRow(next, cells.length)) break;
+    rows.push(cells);
+    cursor += 1;
+  }
+  const width = Math.max(0, ...rows.map((row) => row.length));
+  return rows.length >= 2 && width >= 2 ? { rows, width, end: cursor } : null;
+}
+
+function tableSegment(header: string[], rows: TabularCellValue[][]): MarkdownTableSegment {
+  return {
+    kind: "table",
+    data: {
+      columns: header.map((name, cellIndex) => {
+        const column: TabularColumn = { name: name || String(cellIndex + 1) };
+        // Markdown のセルは文字列。値がすべて数（桁区切り・小数・% を含む）の列は数値の列として右寄せにする。
+        if (isNumericTextColumn(rows, cellIndex)) column.type = "number";
+        return column;
+      }),
+      rows,
+      truncated: false,
+      totalRowCount: null,
+      elapsedMs: null,
+    },
+  };
+}
+
 /**
  * 本文を Markdown の表（GFM: 表頭の行・区切りの行・本文の行）とそれ以外の文に分ける。
  * コードブロック（``` / ~~~）の中の表は表にしない。表が無ければ本文 1 つの配列を返す。
  * 表の本文の行でセルが足りない列は空の文字列（Markdown の表に NULL は無い）、多いセルは捨てる。
  */
-export function splitMarkdownTables(text: string): MarkdownTableSegment[] {
+export function splitMarkdownTables(text: string, options: SplitMarkdownTablesOptions = {}): MarkdownTableSegment[] {
   const lines = text.split("\n");
   const segments: MarkdownTableSegment[] = [];
   let buffer: string[] = [];
@@ -242,22 +332,18 @@ export function splitMarkdownTables(text: string): MarkdownTableSegment[] {
           cursor += 1;
         }
         flushText();
-        segments.push({
-          kind: "table",
-          data: {
-            columns: header.map((name, cellIndex) => {
-              const column: TabularColumn = { name: name || String(cellIndex + 1) };
-              // Markdown のセルは文字列。値がすべて数（桁区切り・小数・% を含む）の列は数値の列として右寄せにする。
-              if (isNumericTextColumn(rows, cellIndex)) column.type = "number";
-              return column;
-            }),
-            rows,
-            truncated: false,
-            totalRowCount: null,
-            elapsedMs: null,
-          },
-        });
+        segments.push(tableSegment(header, rows));
         index = cursor;
+        continue;
+      }
+    }
+    if (!inFence && options.headerlessRows) {
+      const found = headerlessRowsAt(lines, index);
+      if (found) {
+        const rows = found.rows.map((cells) => Array.from({ length: found.width }, (_, cell) => cells[cell] ?? ""));
+        flushText();
+        segments.push(tableSegment(Array.from({ length: found.width }, () => ""), rows));
+        index = found.end;
         continue;
       }
     }
@@ -266,4 +352,9 @@ export function splitMarkdownTables(text: string): MarkdownTableSegment[] {
   }
   flushText();
   return segments;
+}
+
+/** 本文に表（`splitMarkdownTables` の表）があるか。 */
+export function hasMarkdownTable(text: string, options?: SplitMarkdownTablesOptions): boolean {
+  return text.includes("|") && splitMarkdownTables(text, options).some((segment) => segment.kind === "table");
 }

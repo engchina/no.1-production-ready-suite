@@ -1,5 +1,7 @@
 "use client";
 
+import { answerFaqDirectScore } from "@/lib/answer-diagnostics";
+
 import {
   AnswerFooter,
   DisclosureChevron,
@@ -106,21 +108,19 @@ interface SearchRun {
 }
 
 /**
- * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行・類似問を使用しない・
- * 「自動」の条件を外す）はこの条件で送り直す（入力欄を書き換えていても前の質問を送る。#914）。
+ * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行・類似問を使用しない）は
+ * この条件で送り直す（入力欄を書き換えていても前の質問を送る。#914）。
  */
 interface SearchRequestSnapshot {
   query: string;
   searchAnswerProfileId: string;
   generateAnswer: boolean;
   filters: Record<string, string>;
-  /** 質問から読み取った条件のうち、利用者が外した項目（#652）。 */
-  excludedAutoFields: string[];
 }
 
 /**
  * RAG 検索画面。チャットと同じ工程（質問の理解・拡張・検索・rerank）で検索し、既定は検索結果までを表示する。
- * 「LLM で回答を生成する」をオンにしたときだけ、チャットと同じく回答（CRAG を含む）まで行う（#649）。
+ * 「LLM で回答を生成する」をオンにしたときだけ、チャットと同じく回答まで行う（#649）。
  */
 export function SearchClient() {
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
@@ -277,7 +277,6 @@ export function SearchClient() {
           classification,
           extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
         }),
-        excludedAutoFields: [],
       },
       false
     );
@@ -346,9 +345,6 @@ export function SearchClient() {
           query: request.query,
           search_answer_profile_id: request.searchAnswerProfileId,
           generate_answer: request.generateAnswer,
-          ...(request.excludedAutoFields.length
-            ? { auto_field_filter_excluded: request.excludedAutoFields }
-            : {}),
           ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
         },
         {
@@ -409,15 +405,12 @@ export function SearchClient() {
   const submit = () => guardSubmit(runSubmit);
   /**
    * 表示中の結果（エラー・類似 FAQ の提示）を出した検索を、同じ条件で送り直す。入力欄・選択を書き換えて
-   * いても使わない（#914）。`excludedAutoFields` を渡すと、外した「自動」の条件を差し替える。
+   * いても使わない（#914）。
    */
-  const resubmit = (skipFaq: boolean, excludedAutoFields?: string[]) =>
+  const resubmit = (skipFaq: boolean) =>
     guardSubmit(async () => {
       if (!lastRequest) return;
-      await runRequest(
-        excludedAutoFields ? { ...lastRequest, excludedAutoFields } : lastRequest,
-        skipFaq
-      );
+      await runRequest(lastRequest, skipFaq);
     });
 
   const cancel = () => {
@@ -493,15 +486,7 @@ export function SearchClient() {
       testId="search-run-progress"
     />
   ) : null;
-  const conditionChips = (
-    <SearchConditionChips
-      appliedFilters={appliedFilters}
-      meta={meta}
-      phase={phase}
-      disabled={isStreaming}
-      onRemoveAuto={(name) => void resubmit(true, [...(lastRequest?.excludedAutoFields ?? []), name])}
-    />
-  );
+  const conditionChips = <ActiveFilterChips filters={appliedFilters} />;
 
   return (
     <div>
@@ -808,6 +793,8 @@ export function SearchClient() {
                   順で、チャットと同じ部品・並び（#2096 / #2097 / #2115）。処理の経過は実行中（工程の一覧が増え、今の工程に
                   Spinner と経過時間）も終わった後も同じ場所に出す。 */}
               {answerMode ? (
+                <>
+                {processView}
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
@@ -825,7 +812,6 @@ export function SearchClient() {
                         {answerModel}
                       </h3>
                     ) : null}
-                    {processView}
                     {conditionChips}
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
@@ -847,7 +833,7 @@ export function SearchClient() {
                       page-archetypes.md §6.1）。
                     */}
                     <AnswerFooter
-                      notice={meta && phase === "done" ? meta.notice : null}
+                      notice={meta && phase === "done" && answerFaqDirectScore(meta.diagnostics?.answer, null) === null ? meta.notice : null}
                       noticeLabel={t("answer.notice.label")}
                       evidence={
                         <AnswerCitations
@@ -877,17 +863,16 @@ export function SearchClient() {
 
                   </CardContent>
                 </Card>
+                </>
               ) : run ? (
                 // 回答を作らない検索: 処理の経過（実行中は今の工程と経過時間、終わった後は工程の一覧とその後ろの「処理の詳細」。
                 // 同じ場所のまま切り替える。#2115）・検索の条件・検索できなかった理由（検索の準備が無いなど）。
-                <Card>
-                  <CardContent className="space-y-3 pt-5">
+                <>
                     {processView}
                     {conditionChips}
                     {answer ? <Banner severity="warning">{answer}</Banner> : null}
                     {phase === "cancelled" ? <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p> : null}
-                  </CardContent>
-                </Card>
+                </>
               ) : (
                 // 実行の前（類似問の提示の間を含む）: 検索の条件だけ。
                 <div className="space-y-3 empty:hidden">
@@ -900,7 +885,7 @@ export function SearchClient() {
               {/* 引用 / no-results */}
               {phase === "done" && awaitingClarification ? (
                 <Banner severity="info">{t("search.clarificationHint")}</Banner>
-              ) : noResults ? (
+              ) : noResults && answerFaqDirectScore(meta?.diagnostics?.answer, null) === null ? (
                 <Card>
                   <CardContent className="pt-5">
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />
@@ -951,79 +936,6 @@ function searchProcessSteps(steps: ChatProgressStep[], phase: string): ChatProgr
 
 function runStartedAtMs(): number {
   return Date.now();
-}
-
-/**
- * 質問から読み取って検索に足した条件（#652）。「自動」のチップで出し、外して検索し直せる。
- */
-function AutoFieldFilterChips({
-  diagnostics,
-  disabled,
-  onRemove,
-}: {
-  diagnostics: unknown;
-  disabled: boolean;
-  onRemove: (name: string) => void;
-}) {
-  const auto = parseAnswerDiagnostics(diagnostics)?.autoFieldFilter;
-  if (!auto) return null;
-  const names = [...new Set(auto.conditions.map((condition) => condition.name))];
-  return (
-    <div aria-label={t("search.answerDetails.autoFieldFilter")} className="mb-3 space-y-1.5" data-testid="auto-field-filter-chips">
-      <p className="text-xs font-medium text-fg-muted">{t("search.answerDetails.autoFieldFilter")}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {names.map((name) => {
-          const label = auto.conditions
-            .filter((condition) => condition.name === name)
-            .map(extractionFieldConditionLabel)
-            .join(" / ");
-          return (
-            <span
-              key={name}
-              data-surface-tint="info"
-              className="inline-flex max-w-full items-center gap-0.5 rounded-full border border-border bg-info-subtle py-0.5 pl-2 text-xs font-medium leading-snug text-fg"
-            >
-              <span className="break-all">{t("search.autoFieldFilter.chip", { label })}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                iconOnly
-                icon={X}
-                disabled={disabled}
-                aria-label={t("search.autoFieldFilter.remove", { label })}
-                onClick={() => onRemove(name)}
-              />
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** 検索に使った条件（指定した条件と、質問から読み取った「自動」の条件）。 */
-function SearchConditionChips({
-  appliedFilters,
-  meta,
-  phase,
-  disabled,
-  onRemoveAuto,
-}: {
-  appliedFilters: Record<string, string>;
-  meta: Meta | null;
-  phase: Phase;
-  disabled: boolean;
-  onRemoveAuto: (name: string) => void;
-}) {
-  return (
-    <>
-      <ActiveFilterChips filters={appliedFilters} />
-      {meta && phase === "done" ? (
-        <AutoFieldFilterChips diagnostics={meta.diagnostics?.answer} disabled={disabled} onRemove={onRemoveAuto} />
-      ) : null}
-    </>
-  );
 }
 
 function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {

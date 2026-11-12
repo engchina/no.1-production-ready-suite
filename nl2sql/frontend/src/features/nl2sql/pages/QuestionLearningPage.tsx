@@ -1,3 +1,4 @@
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -155,6 +156,7 @@ export function QuestionClassifierModelsPage() {
   const [candidateError, setCandidateError] = useState("");
   // まとめての読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadUpdatedAt, setLoadUpdatedAt] = useState(0);
   const [candidateActionError, setCandidateActionError] = useState("");
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
@@ -320,6 +322,7 @@ export function QuestionClassifierModelsPage() {
 
       // 失敗の案内の「再試行」は、取り直せるまで案内を残す（押すと消えて結果が分からなくなるのを防ぐ。#2034）。
       setLoadFailed(false);
+        setLoadUpdatedAt(Date.now());
       setMessage("");
       if (announce) toast.success(t("common.action.refreshed"));
     })
@@ -613,8 +616,26 @@ export function QuestionClassifierModelsPage() {
           disabled={Boolean(loading) && !(loading === "candidates-load" && activeView === "candidates")}
           className="m-0 grid min-w-0 gap-4 border-0 p-0"
         >
+        {loadFailed && message ? (
+          loadUpdatedAt > 0 ? (
+            <DataLoadStaleNotice
+              error={message}
+              dataUpdatedAt={loadUpdatedAt}
+              onRetry={() => void load(true, "notice")}
+              retrying={loading === "load"}
+            />
+          ) : (
+            <DataLoadFailure
+              error={message}
+              fallback={t("qcm.error.load")}
+              onRetry={() => void load(true, "notice")}
+              retrying={loading === "load"}
+              testId="page-data-load-failed"
+            />
+          )
+        ) : null}
         <PageNotice
-          notice={message ? { tone: "danger", message } : null}
+          notice={message && !loadFailed ? { tone: "danger", message } : null}
           action={
             message ? (
               <Button
@@ -859,7 +880,7 @@ function TrainingDataPanel({
   onDelete: (example: ClassifierTrainingExample) => void;
 }) {
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DbObjectPanelHeader
         icon={FileSpreadsheet}
         title={t("qcm.training.title")}
@@ -1190,7 +1211,7 @@ function ModelTrainPanel({
 }) {
   const canTrain = (trainingData?.total_examples ?? status?.example_count ?? 0) > 0;
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DbObjectPanelHeader
         icon={Play}
         title={t("qcm.train.title")}
@@ -1235,7 +1256,7 @@ function ModelTrainPanel({
         disabled
         width="lg"
       />
-      <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
+      <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <div className="flex flex-wrap gap-2">
           <StatusBadge variant={status?.ready ? "success" : "warning"} label={status?.ready ? t("learning.classifier.ready") : t("learning.classifier.notReady")} />
           {status?.stale && <StatusBadge variant="warning" label={t("learning.classifier.stale")} />}
@@ -1248,7 +1269,7 @@ function ModelTrainPanel({
           warnings={error && error === (status?.warnings ?? []).join(" ") ? [] : status?.warnings}
         />
         {status?.metrics && Object.keys(status.metrics).length > 0 && (
-          <dl className="grid gap-2 md:grid-cols-3">
+          <dl className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 md:grid-cols-3">
             {Object.entries(status.metrics).map(([key, value]) => (
               <CompactFact key={key} label={key} value={String(value)} />
             ))}
@@ -1617,7 +1638,7 @@ function TrainingCandidatesPanel({
                   data-testid="qcm-training-candidate"
                   // 淡青面（bg-accent-subtle）の上の副次テキストを 1 段深くする（DataTable の選択行と同じ。#1595・WCAG 1.4.3）。
                   data-surface-tint={selectedItem ? "accent" : undefined}
-                  className={`grid min-w-0 gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
+                  className={`grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
                     selectedItem
                       ? "border-l-accent-fg bg-accent-subtle"
                       : "border-l-transparent hover:bg-surface-hover"
@@ -1743,8 +1764,8 @@ function TrainingCandidatesPanel({
 function CompactFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-md border border-border bg-surface p-3">
-      <p className="text-xs font-medium text-fg-muted">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-fg">{value}</p>
+      <p className="text-xs font-medium text-fg-muted [overflow-wrap:anywhere]">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-fg [overflow-wrap:anywhere]">{value}</p>
     </div>
   );
 }

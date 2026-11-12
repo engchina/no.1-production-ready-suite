@@ -14,7 +14,9 @@
 - 日時は UTC の `TIMESTAMP`（タイムゾーンなし）で保存する。session のタイムゾーンに左右されず、
   日の区切りは `FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone)`（利用者のタイムゾーン）。
 - memory / file の構成は保存しない（`reporting_store()` が None。メモリの Run を集計する）。
-- テーブルはシステムテーブル（`app.system_schema`）が作る。無い間は集計をメモリの Run に戻す。
+- テーブルはシステムテーブル（`app.system_schema`）が作る。テーブル・列が無い間（作成・更新の前）は
+  集計をメモリの Run に戻す。それ以外の読み取りの失敗は、API が失敗として返す（#4222。同じ保存先に
+  書く別のプロセスの Run はメモリに無いことがあり、メモリの集計は保存先の全件と同じとは限らない）。
 """
 
 from __future__ import annotations
@@ -76,14 +78,16 @@ _AGENT_NAME_MAX = 400
 _MODEL_MAX = 256
 _COMMENT_MAX = 1000
 _OUTCOME_MAX = 32
-_VALIDATION_MAX = 16
 _ORACLE_BACKENDS = {"oracle", "oracle_checkpoint", "oracle_normalized"}
 
 UserNames = Callable[[list[str]], Mapping[str, str]]
 
 
 class RunFactsUnavailableError(RuntimeError):
-    """事実のテーブルが無い（システムテーブルが未作成）。集計はメモリの Run に戻す。"""
+    """事実のテーブル・列が無い（システムテーブルの作成・更新の前）。集計はメモリの Run に戻す。
+
+    それ以外の読み取りの失敗は、メモリの Run に戻さず失敗として返す（#4222）。
+    """
 
 
 class RunFactsStore(Protocol):
@@ -264,7 +268,6 @@ _MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
 # 確かめるべき実行のシグナルの列（#1822。migration 012 で足した）。
 _SIGNAL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("answer_outcome", "ANSWER_OUTCOME"),
-    ("validation_result", "VALIDATION_RESULT"),
     ("tool_failures", "TOOL_FAILURES"),
     ("approvals_rejected", "APPROVALS_REJECTED"),
 )
@@ -385,7 +388,6 @@ def fact_binds(fact: RunFact) -> dict[str, Any]:
         "created_at": to_utc_naive(fact.created_at),
         "finished_at": to_utc_naive(fact.finished_at),
         "answer_outcome": _clip(fact.answer_outcome, _OUTCOME_MAX),
-        "validation_result": _clip(fact.validation_result, _VALIDATION_MAX),
         "tool_failures": fact.tool_failures,
         "approvals_rejected": fact.approvals_rejected,
         "data_tool_calls": fact.data_tool_calls,
@@ -528,14 +530,14 @@ def feedback_page_sql(where: str) -> str:
 
 # 確かめるべき実行（#1822）。対象は期間に作った、終わった Run（品質評価の Run を除く）。
 _SIGNAL_SOURCE_COLUMNS = (
-    "STATUS, FEEDBACK_RATING, ADMIN_RATING, VALIDATION_RESULT, ANSWER_OUTCOME, "
+    "STATUS, FEEDBACK_RATING, ADMIN_RATING, ANSWER_OUTCOME, "
     "TOOL_FAILURES, APPROVALS_REJECTED, DATA_TOOL_CALLS"
 )
 _SIGNAL_ITEM_COLUMNS = (
     "RUN_ID, THREAD_ID, AGENT_ID, AGENT_NAME, CREATED_BY_USER_UUID, QUESTION, ANSWER, "
     "FEEDBACK_RATING, FEEDBACK_REASON, FEEDBACK_COMMENT, FEEDBACK_USER_UUID, FEEDBACK_AT, "
     "ADMIN_RATING, ADMIN_REASON, ADMIN_COMMENT, ADMIN_USER_UUID, ADMIN_AT, "
-    "STATUS, CREATED_AT, ANSWER_OUTCOME, VALIDATION_RESULT, TOOL_FAILURES, APPROVALS_REJECTED, "
+    "STATUS, CREATED_AT, ANSWER_OUTCOME, TOOL_FAILURES, APPROVALS_REJECTED, "
     "RUN_SOURCE, DATA_TOOL_CALLS"
 )
 
@@ -589,11 +591,10 @@ def fact_from_signal_row(row: Sequence[Any]) -> RunFact:
     return fact.model_copy(
         update={
             "answer_outcome": str(row[19]) if row[19] else None,
-            "validation_result": str(row[20]) if row[20] else None,
-            "tool_failures": _int(row[21]),
-            "approvals_rejected": _int(row[22]),
-            "source": str(row[23] or fact.source),
-            "data_tool_calls": None if row[24] is None else _int(row[24]),
+            "tool_failures": _int(row[20]),
+            "approvals_rejected": _int(row[21]),
+            "source": str(row[22] or fact.source),
+            "data_tool_calls": None if row[23] is None else _int(row[23]),
         }
     )
 
@@ -734,7 +735,9 @@ class OracleRunFactsStore:
                         [tuple(_lob_text(v) if hasattr(v, "read") else v for v in r) for r in rows]
                     )
         except Exception as exc:
-            if _is_table_missing(exc):
+            # システムテーブルの作成・更新（migration 012 / 014）の前は、保存した事実では集計
+            # できない。
+            if _is_table_missing(exc) or _is_column_missing(exc):
                 raise RunFactsUnavailableError(RUN_FACTS_TABLE) from exc
             raise
         return results

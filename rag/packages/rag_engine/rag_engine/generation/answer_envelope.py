@@ -1,29 +1,7 @@
-"""回答の構造（AnswerEnvelope。#1235、handoff §12）。
+"""回答の説明・確認事項と既存の回答種別を保存する envelope。
 
-根拠付き回答（grounded）の確定の段で、すでにある草稿・監査・公開した説明から、回答の対応・要求ごとの
-充足・適用の条件・不足・実データの確認を決定的に組み立てる。モデルは呼ばない。本文（`grounded.render`）と
-同じ材料から作るので、本文と食い違わない。
-
-対応（outcome）:
-
-- answered: 公開した説明があり、未回答の要求・不足・条件付きの説明が無い。段落の警告（warning）だけがある回答も
-  ここ（handoff_reasons に rule_warnings。#2738）。
-- conditional: 公開した説明はあるが、未回答の要求・不足・適用の条件（未確認を含む）がある。または原文の
-  提示だけ（適用は未確認）で答えた。利用者が答えられる確認の項目（`who_can_answer=user`）・別の資料で
-  分かる項目（`who_can_answer=document`）だけを確かめる回答もここ（#1453、#1492）。根拠と矛盾して外した段落
-  （contradicted_removed）か、根拠で確かめられない段落（unverified_passages）がある回答もここ（#2738）。
-- needs_environment_data: 回答の確定に、システムだけが持つ値（設定値・記録・ログ。確認の項目の
-  `who_can_answer=system`）の確認が要る。別の資料の確認（`confirmation_lines` の「資料:」の行）は実データに
-  数えない（#1491）。
-
-確認の項目（草稿の external_data_items）の分け方は `settle_confirmation_items`（#1492）。モデルには観察できる
-事実（誰が答えられるか・すでに分かっているか・結論がその値で分かれるか）だけを答えさせ、どの対応にするかは
-ここの規則で決める（selective prediction / clarifying question の判定と同じく、自己申告の分類に頼らない）。
-- insufficient_evidence: 公開できる説明も原文も無く、資料から答えられない。実行できる説明が無く、要求が
-  すべて答えられていない（missing）ときも、実データ・別の資料の確認より先にここにする（#1491）。本文の説明が
-  すべて根拠で確かめられない（unverified）ときもここ（本文は出す。#2738）。
-- needs_clarification / needs_human: 利用者への確認・人への引き継ぎ（業務ガイドと会話の段で決める。
-  ここでは作らない）。
+新しい生成は同じ呼び出しで回答種別を宣言する。ここでは宣言を記録し、正確さや網羅性は判定しない。
+種別は本文の公開・再検索・再生成の条件ではない。宣言のない過去の記録・固定応答だけを従来の構造で分類する。
 """
 
 from __future__ import annotations
@@ -36,7 +14,7 @@ from typing import Any, Literal
 
 # 2: 段落の印（passage_marks）・外した段落（removed_passages）・回答全体の警告（answer_warnings）と、
 #    items の印（mark）を足した（#2738）。
-ENVELOPE_SCHEMA_VERSION = 2
+ENVELOPE_SCHEMA_VERSION = 3
 AnswerOutcome = Literal[
     "answered",
     "conditional",
@@ -45,21 +23,6 @@ AnswerOutcome = Literal[
     "needs_human",
     "insufficient_evidence",
 ]
-# 要求の状態。unknown は監査が無く充足を確かめていない要求。
-RequestStatus = Literal["addressed", "partial", "missing", "unknown"]
-# 業務ガイドの手順の充足を載せる要求の ID の接頭辞（#2491。`guide:<手順 id>`）と、手順の状態から要求の状態への写し。
-GUIDE_STEP_REQUEST_PREFIX = "guide:"
-GUIDE_STEP_REQUEST_ID_CHARS = 64
-_GUIDE_STEP_STATUS: dict[str, RequestStatus] = {
-    "explained": "addressed",
-    "unknown": "unknown",
-    "partial": "partial",
-    "reference_only": "partial",
-    "unused": "missing",
-    "no_evidence": "missing",
-    # 手順ごとの検索を打ち切って検索しなかった手順（#2706）。確かめていないので答えたことにしない。
-    "not_searched": "missing",
-}
 # 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
 # ではないので、needs_environment_data の判定に数えない（#1491）。
 REFERENCE_CONFIRMATION_PREFIX = "資料: "
@@ -74,13 +37,6 @@ LEGACY_KIND_WHO: dict[str, WhoCanAnswer] = {"environment": "system", "user_condi
 EXCLUDED_ALREADY_KNOWN = "already_known"
 EXCLUDED_NOT_DECISIVE = "not_decisive"
 EXCLUDED_KNOWN_CONDITION = "known_condition"
-EXCLUDED_VERSION_SETTLED = "version_settled"
-# 版を確かめる項目（「適用されている版」「どの版か」「第1版と第2版のどちらか」）。根拠が旧版・廃止の版を
-# 決めているときは確認の項目にしない（#1492）。
-_VERSION_ITEM = re.compile(
-    r"第\s*[0-9０-９一二三四五六七八九十]+\s*版|(?:どの|適用(?:され(?:てい)?る|する)|有効な|使う|最新の?|新しい|今の)版"
-    r"|版(?:の(?:確認|違い|別)|が(?:異な|違))|旧版|新版|改訂版|バージョン"
-)
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -156,13 +112,11 @@ def settle_confirmation_items(
     items: Sequence[Mapping[str, Any] | str],
     *,
     known_conditions: Sequence[tuple[str, str]] = (),
-    version_settled: bool = False,
 ) -> SettledConfirmations:
     """確認の項目を、観察できる事実から規則で分ける（#1492）。
 
     - 対応の決定に数えない: すでに分かっている（already_known）、結論がその値で分かれない（decides=false）、
-      分かっている条件（known_conditions。業務ガイドの条件の名前と値。MCP の conditions など）を確かめる項目、
-      根拠が旧版・廃止の版を決めているとき（version_settled）の版を確かめる項目。
+      分かっている条件（known_conditions。業務ガイドの条件の名前と値。MCP の conditions など）を確かめる項目。
     - 残りを誰が答えられるかで分ける: user → 利用者に確かめる条件、system → システムだけが持つ値、
       document → 別の資料で分かる点。
 
@@ -182,8 +136,6 @@ def settle_confirmation_items(
             reason = EXCLUDED_NOT_DECISIVE
         elif _known_condition(text, known_conditions):
             reason = EXCLUDED_KNOWN_CONDITION
-        elif version_settled and _VERSION_ITEM.search(unicodedata.normalize("NFKC", text)):
-            reason = EXCLUDED_VERSION_SETTLED
         if reason:
             excluded.append({"text": text, "who_can_answer": facts["who_can_answer"], "reason": reason})
             continue
@@ -209,42 +161,12 @@ def requires_environment_data(
     return external_data_required and not any(confirmation_item_facts(item)["text"] for item in items)
 
 
-def envelope_requests(requests: Sequence[Mapping[str, Any]], reviews: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
-    """要求単位ごとの充足。背景（kind=context）の要求は含めない。"""
-    by_id = {str(review.get("request_id")): review for review in reviews or ()}
-    result: list[dict[str, str]] = []
-    for unit in requests:
-        if unit.get("kind") == "context":
-            continue
-        request_id = str(unit.get("id") or "")
-        review = by_id.get(request_id)
-        if reviews is None:
-            status = "unknown"
-        elif review is None:
-            # 対応する結果がない要求は、充足も材料不足も確定していない。
-            status = "unknown"
-        else:
-            status = str(review.get("status") or "unknown")
-            if status == "context":
-                continue
-        result.append({"id": request_id, "text": _request_text(unit), "status": status})
-    return result
-
-
-def guide_step_requests(guide_steps: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
-    """業務ガイドの必須の手順の充足を、要求と同じ形にする（#2491）。
-
-    手順の根拠を引いた説明を公開した手順は addressed、原文を参考情報として示しただけの手順は partial、
-    説明に使わなかった・根拠の無い手順は missing。必須に数えない手順（条件が決まらない分岐の手順）は載せない。
-    """
+def envelope_requests(requests: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """質問の要求単位。背景（kind=context）の要求は含めない。"""
     return [
-        {
-            "id": f"{GUIDE_STEP_REQUEST_PREFIX}{step.get('step_id')}"[:GUIDE_STEP_REQUEST_ID_CHARS],
-            "text": f"業務ガイドの手順: {step.get('title') or step.get('step_id')}",
-            "status": _GUIDE_STEP_STATUS.get(str(step.get("status")), "unknown"),
-        }
-        for step in guide_steps
-        if step.get("required", True)
+        {"id": str(unit.get("id") or ""), "text": _request_text(unit), "status": "unknown"}
+        for unit in requests
+        if unit.get("kind") != "context"
     ]
 
 
@@ -261,57 +183,38 @@ def envelope_item(entry: Any) -> dict[str, Any]:
         "location": str(span.get("location") or (f"p.{span['page']}" if span.get("page") else "")),
         "applies": applies,
         "condition": str(item.condition or ""),
-        "mark": str(getattr(entry, "state", "") or ""),
     }
 
 
 def build_envelope(
     *,
     requests: Sequence[Mapping[str, Any]],
-    reviews: Sequence[Mapping[str, Any]] | None,
     items: Sequence[Mapping[str, Any]],
     gaps: Sequence[str],
     confirmations: Sequence[str],
     external_data_required: bool,
     reference_materials: Sequence[str] = (),
-    off_goal: bool = False,
     user_conditions: Sequence[str] = (),
     document_items: Sequence[str] = (),
-    guide_steps: Sequence[Mapping[str, Any]] = (),
-    passage_marks: Sequence[Mapping[str, Any]] = (),
-    removed_passages: Sequence[Mapping[str, Any]] = (),
-    answer_warnings: Sequence[Mapping[str, Any]] = (),
+    unsupported_parts: int = 0,
+    response_kind: AnswerOutcome | None = None,
 ) -> dict[str, Any]:
-    """回答の構造を組み立てる。
+    """回答の構造を組み立てる。状態の材料は、モデルが返した不足と有効な引用の有無だけ（#4714）。
 
-    confirmations は現場の実データ・別の資料の確認、user_conditions は利用者に確かめる条件（#1453）。
-    利用者に確かめる条件は適用の条件（conditions）に載せ、現場の実データの確認には数えない。別の資料の
-    確認（「資料:」の行）も現場の実データではないので、needs_environment_data の判定に数えない（#1491）。
-    document_items は結論を分けるのに別の資料で確かめる点（確認の項目の who_can_answer=document。#1492）で、
-    資料の不足として回答を条件付きにし、reference_materials に載せる。
-    guide_steps は業務ガイドの手順ごとの充足（#2491。grounded の `guide_step_coverage`）で、必須の手順を要求に足す。
-    説明できていない手順は未回答の要求として回答を条件付きにする。
-    passage_marks・removed_passages・answer_warnings は段落の印・外した段落・回答全体の警告（#2738。形は
-    ``platform/contracts/answer-passages/passage-marks.json``）。矛盾で外した段落か未確認の段落があれば条件付き、
-    警告だけなら answered のまま handoff_reasons に rule_warnings を付ける。本文の説明（items の mark）がすべて
-    未確認なら insufficient_evidence（本文は出す）。
+    confirmations は現場の実データ・別の資料の確認、user_conditions は利用者に確かめる条件。
+    document_items は結論を分けるのに別の資料で確かめる点で、資料の不足として回答を条件付きにする。
+    unsupported_parts は引用がすべて消えた要点の数で、モデルの不足と同じく回答を条件付きにする。
     """
-    request_entries = [*envelope_requests(requests, reviews), *guide_step_requests(guide_steps)]
+    request_entries = envelope_requests(requests)
     actionable = [item for item in items if item.get("applies") != "quote_only"]
     unsettled = [item for item in actionable if item.get("applies") in {"conditional", "unverified"}]
-    unanswered = [entry for entry in request_entries if entry["status"] in {"partial", "missing"}]
-    unverified_requests = reviews is not None and any(entry["status"] == "unknown" for entry in request_entries)
     environment = [line for line in confirmations if not line.startswith(REFERENCE_CONFIRMATION_PREFIX)]
-    # 実行できる説明が無く、監査した要求がすべて答えられていない: 資料から答えられない（#1491）。
-    no_answer = not actionable and bool(request_entries) and all(entry["status"] == "missing" for entry in request_entries)
     conditions = _unique([*(str(item.get("condition") or "") for item in unsettled), *user_conditions])
     handoff: list[str] = []
-    if unanswered:
-        handoff.append("unanswered_requests")
-    if unverified_requests:
-        handoff.append("unverified_requests")
     if gaps:
         handoff.append("gaps")
+    if unsupported_parts:
+        handoff.append("unsupported_parts")
     if external_data_required or environment:
         handoff.append("environment_data")
     if any(item.get("applies") == "unverified" for item in unsettled):
@@ -320,37 +223,14 @@ def build_envelope(
         handoff.append("user_conditions")
     if reference_materials or document_items:
         handoff.append("reference_materials")
-    if off_goal:
-        handoff.append("off_goal")
-    unverified_marks = [mark for mark in passage_marks if mark.get("state") == "unverified"]
-    if removed_passages:
-        handoff.append("contradicted_removed")
-    if unverified_marks:
-        handoff.append("unverified_passages")
-    if any(mark.get("state") == "warning" for mark in passage_marks):
-        handoff.append("rule_warnings")
-    # 本文の説明がすべて根拠で確かめられない（確かめた段落が 1 つも無い）。
-    all_unverified = bool(actionable) and all(item.get("mark") == "unverified" for item in actionable)
-
     outcome: AnswerOutcome
-    if no_answer:
-        outcome = "insufficient_evidence"
+    if response_kind is not None:
+        outcome = response_kind
     elif external_data_required or (environment and not actionable):
         outcome = "needs_environment_data"
-    elif not items or all_unverified:
+    elif not items:
         outcome = "insufficient_evidence"
-    elif (
-        not actionable
-        or unanswered
-        or unverified_requests
-        or gaps
-        or unsettled
-        or off_goal
-        or user_conditions
-        or document_items
-        or removed_passages
-        or unverified_marks
-    ):
+    elif not actionable or gaps or unsupported_parts or unsettled or user_conditions or document_items:
         outcome = "conditional"
     else:
         outcome = "answered"
@@ -364,9 +244,6 @@ def build_envelope(
         "confirmations": _unique(confirmations),
         "reference_materials": _unique([*reference_materials, *document_items]),
         "handoff_reasons": handoff,
-        "passage_marks": [dict(mark) for mark in passage_marks],
-        "removed_passages": [dict(item) for item in removed_passages],
-        "answer_warnings": [dict(item) for item in answer_warnings],
     }
 
 
@@ -384,7 +261,6 @@ def fallback_envelope(
     """
     envelope = build_envelope(
         requests=(),
-        reviews=None,
         items=(),
         gaps=[insufficient_reason] if insufficient_reason else [],
         confirmations=list(external_data_items),
@@ -400,8 +276,6 @@ __all__ = [
     "EXCLUDED_ALREADY_KNOWN",
     "EXCLUDED_KNOWN_CONDITION",
     "EXCLUDED_NOT_DECISIVE",
-    "EXCLUDED_VERSION_SETTLED",
-    "GUIDE_STEP_REQUEST_PREFIX",
     "LEGACY_KIND_WHO",
     "REFERENCE_CONFIRMATION_PREFIX",
     "WHO_CAN_ANSWER",
@@ -413,7 +287,6 @@ __all__ = [
     "envelope_item",
     "envelope_requests",
     "fallback_envelope",
-    "guide_step_requests",
     "requires_environment_data",
     "settle_confirmation_items",
 ]

@@ -6,25 +6,6 @@ from test_rag_evidence_recovery import rec
 
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
-from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, task_contract
-
-
-@pytest.mark.parametrize(
-    "question,steps",
-    [
-        ("文言で「，」を「、」に変更したい。", True),
-        ("タイトルを修正したい", True),
-        ("文言を変えたい", True),
-        ("変更履歴を知りたい", False),
-        ("変更内容を知りたい", False),
-        ("摘要欄に注記を表示させたい", True),
-    ],
-)
-def test_change_intent(question, steps):
-    # 「変更履歴」のような説明の要求は、値を変える操作の要求（手順の要求）にしない。
-    assert (STEPS_REQUEST in explicit_requests(question)) is steps
-    assert ("procedure" in task_contract(question)["required_aspects"]) is steps
-    assert "goal" not in task_contract(question)
 
 
 def test_numbered_functions_do_not_match_shared_subheadings():
@@ -33,8 +14,9 @@ def test_numbered_functions_do_not_match_shared_subheadings():
     assert not operation_labels(a) & operation_labels(b)
     queries = alternative_operation_queries("文言を変更したい", [a, b])
     assert len(queries) == 2
-    assert all(q.startswith("文言を変更したい") for q in queries)
-    assert "(1)帳票設定" in queries[0] and "(2)伝票印刷設定" in queries[1]
+    # 検索文は原質問と機能の見出しだけで、固定の語を足さない（#4784）。
+    assert queries[0] == "文言を変更したい B管理-(1)帳票設定"
+    assert queries[1] == "文言を変更したい B管理-(2)伝票印刷設定"
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -117,25 +99,6 @@ def test_field_heading_does_not_implicitly_add_another_parent():
         )
     )
     assert [r.id for r in result.records] == ["p"]
-
-
-def test_manual_heading_and_steps_survive_repeated_search_labels():
-    from rag_engine.retrieval.evidence_selection import evidence_excerpt
-
-    text = (
-        "検索語: 文言変更 通知書 修正 設定 方法\n" * 40
-        + "\n●文言と注記の設定\n・行数を入力し、編集ボタンを押して直接入力します。\n※コピーしないでください。\n\n"
-    )
-    excerpt = evidence_excerpt("通知書の文言を変更したい", text, 240)
-    assert "●文言と注記の設定\n・行数を入力し、編集ボタンを押して直接入力します。" in excerpt
-
-
-def test_upper_section_heading_survives_with_editing_instructions():
-    from rag_engine.retrieval.evidence_selection import evidence_excerpt
-
-    text = "検索語: 通知書 文言\n" * 60 + "\n設定値２\n※対象帳票のみ有効。\n●文言と注記の設定\n・編集ボタンを押して入力します。\n\n"
-    excerpt = evidence_excerpt("通知書の文言を変更したい", text, 240)
-    assert "設定値２" in excerpt and "編集ボタンを押して入力します" in excerpt
 
 
 def test_public_reference_list_excludes_removed_operations_but_keeps_retrieval_records():

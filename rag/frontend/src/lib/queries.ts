@@ -68,6 +68,8 @@ import {
   type ChunkingSettingsUpdate,
   type LanguagePackData,
   type LanguagePackSections,
+  type FileTypeDefaultsSettingsData,
+  type FileTypeDefaultsUpdate,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
   type ServiceAction,
@@ -124,6 +126,7 @@ export const queryKeys = {
   document: (id: string) => ["documents", id] as const,
   documentCategories: ["document-categories"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
+  documentContentSummary: (id: string) => ["documents", id, "content-summary"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewSource: (id: string | null, recipeId: string | null, chunkSetId: string | null) =>
     ["documents", id, "preview-source", recipeId, chunkSetId] as const,
@@ -208,6 +211,7 @@ export const queryKeys = {
   externalParserStatus: (backend: ExternalParserBackendName) =>
     ["settings", "parser-adapters", "status", backend] as const,
   preprocessSettings: ["settings", "preprocess"] as const,
+  fileTypeDefaultsSettings: ["settings", "file-type-defaults"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
   languagePack: ["settings", "language-pack"] as const,
   languagePackHistory: ["settings", "language-pack", "history"] as const,
@@ -422,6 +426,37 @@ export function useDocument(
     // 数秒 Skeleton のままにせず、すぐに見つからない旨を出す(#281)。
     retry: retryUnlessNotFound,
     refetchInterval: options.refetchInterval,
+  });
+}
+
+/** 作成中の文書の要約を読み直す間隔（ms）。 */
+const DOCUMENT_CONTENT_SUMMARY_POLL_MS = 3000;
+
+/**
+ * 文書全体の要約（#4793）。作成中の間だけ定期的に読み直す。`awaiting` は、取込が終わった直後で
+ * 後段がまだ要約の行を作っていない間も読み直すための印（呼び出し側が、取込の完了からの短い間だけ渡す）。
+ */
+export function useDocumentContentSummary(id: string | null, options: { awaiting?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.documentContentSummary(id ?? ""),
+    queryFn: () => api.getDocumentContentSummary(id as string),
+    enabled: id != null,
+    retry: retryUnlessNotFound,
+    refetchInterval: (query) =>
+      query.state.data?.summary?.generating || (options.awaiting && !query.state.data?.summary)
+        ? DOCUMENT_CONTENT_SUMMARY_POLL_MS
+        : false,
+  });
+}
+
+/** 文書全体の要約を作り直す（#4793）。 */
+export function useRegenerateDocumentContentSummary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.regenerateDocumentContentSummary(id),
+    onSuccess: (state, id) => {
+      qc.setQueryData(queryKeys.documentContentSummary(id), state);
+    },
   });
 }
 
@@ -1313,6 +1348,9 @@ export function useKnowledgeBaseChoices(params: { status?: KnowledgeBaseStatus; 
     matchedTotal: remote ? (search.data?.pages[0]?.total ?? 0) : items.length,
     isPending: head.isPending || (remote && search.isPending),
     isError: head.isError || (remote && search.isError),
+    /** 候補を 1 件も読み取れないまま失敗した（候補なしと分けて、欄の直下に失敗と再試行を出す。#4817）。 */
+    loadFailed:
+      (head.isError && head.data === undefined) || (remote && search.isError && search.data === undefined),
     error: head.error ?? search.error,
     isFetching: head.isFetching || search.isFetching,
     /** 検索語を変えて取り直している（前の結果を出したまま）。 */
@@ -1414,32 +1452,6 @@ export function useInheritedAnswerContact() {
     queryKey: queryKeys.inheritedAnswerContact(),
     queryFn: () => api.getInheritedAnswerContact(),
     staleTime: 30_000,
-  });
-}
-
-export function useQuestionUnderstanding(id: string) {
-  return useQuery({
-    queryKey: [...queryKeys.searchAnswerProfile(id), "question-understanding"],
-    queryFn: () => api.getQuestionUnderstanding(id),
-    retry: false,
-  });
-}
-
-export function useSaveQuestionUnderstanding(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (overrides: LanguagePackSections) => api.saveQuestionUnderstanding(id, overrides),
-    onSuccess: (data) => {
-      qc.setQueryData([...queryKeys.searchAnswerProfile(id), "question-understanding"], data);
-      void qc.invalidateQueries({ queryKey: queryKeys.searchAnswerProfile(id), exact: true });
-    },
-  });
-}
-
-export function usePreviewQuestionUnderstanding(id: string) {
-  return useMutation({
-    mutationFn: ({ text, overrides }: { text: string; overrides: LanguagePackSections }) =>
-      api.previewQuestionUnderstanding(id, text, overrides),
   });
 }
 
@@ -1685,7 +1697,7 @@ export function useRunHistory({
   });
 }
 
-/** 実行履歴の詳細（回答・根拠・資料との照合・処理の経過・フィードバック）。 */
+/** 実行履歴の詳細（回答・根拠・処理の経過・フィードバック）。 */
 export function useRunHistoryDetail(runId: string | null) {
   return useQuery({
     queryKey: ["run-history", "detail", runId],
@@ -2081,13 +2093,18 @@ export function useEnqueueDocumentIngestionJob() {
 
 /** 品質評価の job の query key（#390）。 */
 export const evaluationJobQueryKey = (jobId: string) => ["evaluation", "jobs", jobId] as const;
+/** 過去の品質評価の一覧の query key（#4811。job の key と前方一致させない）。 */
+export const evaluationJobListQueryKey = ["evaluation", "job-list"] as const;
 
 /** RAG golden set 評価を job として投入する（#390）。 */
 export function useSubmitRunEvaluationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: EvaluationRunRequestBody) => api.submitRunEvaluationJob(payload),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    onSuccess: (job) => {
+      qc.setQueryData(evaluationJobQueryKey(job.job_id), job);
+      void qc.invalidateQueries({ queryKey: evaluationJobListQueryKey });
+    },
   });
 }
 
@@ -2141,7 +2158,26 @@ export function useCancelEvaluationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (jobId: string) => api.cancelEvaluationJob(jobId),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    onSuccess: (job) => {
+      qc.setQueryData(evaluationJobQueryKey(job.job_id), job);
+      void qc.invalidateQueries({ queryKey: evaluationJobListQueryKey });
+    },
+  });
+}
+
+/**
+ * 見られる過去の品質評価の一覧（#4811。offset 型）。ページを移る間は前のページを出したままにし、
+ * 実行中の評価がある間は状態を取り直す（状態の列を進める）。
+ */
+export function useEvaluationJobs(offset: number, limit: number) {
+  return useQuery({
+    queryKey: [...evaluationJobListQueryKey, offset, limit],
+    queryFn: () => api.listEvaluationJobs(offset, limit),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      !query.state.error && query.state.data?.items.some((job) => job.status === "RUNNING")
+        ? EVALUATION_JOB_POLL_INTERVAL_MS
+        : false,
   });
 }
 
@@ -2388,6 +2424,24 @@ export function useUpdatePreprocessSettings() {
       api.updatePreprocessSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.preprocessSettings, data);
+    },
+  });
+}
+
+export function useFileTypeDefaultsSettings() {
+  return useQuery<FileTypeDefaultsSettingsData>({
+    queryKey: queryKeys.fileTypeDefaultsSettings,
+    queryFn: api.getFileTypeDefaultsSettings,
+    retry: false,
+  });
+}
+
+export function useUpdateFileTypeDefaultsSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: FileTypeDefaultsUpdate) => api.updateFileTypeDefaultsSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.fileTypeDefaultsSettings, data);
     },
   });
 }

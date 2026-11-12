@@ -7,6 +7,7 @@ import { Button, buttonVariants } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
 import { Skeleton } from "../ui/skeleton";
 import { CodepointHighlight } from "./codepoint-highlight";
+import { SourceRecordView, type SourceRecordViewData } from "./source-record-view";
 import { OriginalSourcePanel, type OriginalSourceLoader } from "./original-source-panel";
 import { SourceVersionStaleNotice } from "./source-version-stale-notice";
 import { isSourceVersionStale } from "../../lib/api-error";
@@ -22,7 +23,7 @@ export interface EvidenceReadingWindow {
   revision: string;
   anchor_status: "exact" | "element" | "unresolved";
   section_path: string[];
-  blocks: { id: string; text: string; offset: number; highlights: [number, number][]; cited: boolean; kind?: string; heading?: string[] }[];
+  blocks: { id: string; text: string; offset: number; highlights: [number, number][]; cited: boolean; kind?: string; heading?: string[]; record?: SourceRecordViewData }[];
   previous_cursor: string | null;
   next_cursor: string | null;
   outline: { id: string; title: string; parent_id: string | null; has_children: boolean }[];
@@ -44,13 +45,14 @@ const labels = {
 };
 const EMPTY_INPUT: EvidenceReadingInput = {};
 
-export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true, loadOriginal }: {
+export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true, loadOriginal, purpose = "citation" }: {
   readingKey: string;
   loadWindow: (input: EvidenceReadingInput, signal: AbortSignal) => Promise<EvidenceReadingWindow>;
   enabled?: boolean;
   downloadUrl?: string;
   highlight?: boolean;
   loadOriginal?: OriginalSourceLoader;
+  purpose?: "citation" | "selection";
 }) {
   const [request, setRequest] = useState<{ key: string; input: EvidenceReadingInput; serial: number }>({ key: readingKey, input: {}, serial: 0 });
   const input = request.key === readingKey ? request.input : EMPTY_INPUT;
@@ -120,13 +122,14 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
   const blocks = active.flatMap(window => window.blocks).filter((block, index, all) => all.findIndex(other => other.id === block.id && other.offset === block.offset) === index);
   return <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="evidence-reader">
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" variant="secondary" onClick={() => read()} disabled={state.pending}><LocateFixed size={14} aria-hidden />{labels.anchor}</Button>
+      <Button size="sm" variant="secondary" onClick={() => read()} disabled={state.pending}><LocateFixed size={14} aria-hidden />{purpose === "selection" ? "選択位置に戻る" : labels.anchor}</Button>
       <Button size="sm" variant="secondary" onClick={() => read({ scope: "section" })} disabled={state.pending || !current?.section_path.length}>{labels.section}</Button>
       <Button size="sm" variant="secondary" onClick={() => read({ scope: "parent" })} disabled={state.pending || !current?.section_path.length}>{labels.parent}</Button>
       {downloadUrl ? <a className={buttonVariants({ variant: "ghost", size: "sm" })} href={downloadUrl} download referrerPolicy="no-referrer"><Download size={14} aria-hidden />{labels.download}</a> : null}
     </div>
+    {blocks.some(block => block.record) ? <p className="text-xs text-fg-muted">原文の構造化表示</p> : null}
     {current?.section_path.length ? <p className="text-xs text-fg-muted">{current.section_path.join(" › ")}</p> : null}
-    {current && (current.anchor_status !== "exact" || !highlight) ? <p className="text-sm text-fg-muted" role="status">{current.anchor_status === "unresolved" || !highlight ? labels.unresolved : labels.approximate}</p> : null}
+    {current && (current.anchor_status !== "exact" || !highlight) ? <p className="text-sm text-fg-muted" role="status">{current.anchor_status === "unresolved" || !highlight ? labels.unresolved : purpose === "selection" ? "保存された要素の範囲を表示しています。" : labels.approximate}</p> : null}
     {current?.outline.length ? <Disclosure summary={labels.outline} className="shrink-0" open={outline.key === readingKey && outline.open} onOpenChange={open => setOutline({ key: readingKey, open })} summaryProps={{ "data-testid": "evidence-reader-outline-toggle" }} contentClassName="max-h-[min(12rem,20dvh)] overflow-y-auto overscroll-contain" data-testid="evidence-reader-outline">
       <nav aria-label={labels.outline} className="flex flex-col items-start gap-1">
         {current.outline.map(item => <Button key={item.id} variant="ghost" size="sm" className="max-w-full whitespace-normal text-left" disabled={state.pending} onClick={() => read({ scope: "section", section_id: item.id })}>{item.title}</Button>)}
@@ -138,9 +141,9 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     <Button variant="secondary" size="sm" disabled={!first?.previous_cursor || state.pending} onClick={() => read({ cursor: first!.previous_cursor!, direction: "before" })}><ArrowLeft size={14} aria-hidden />{labels.before}</Button>
     <div ref={viewport} role="region" aria-label={labels.body} tabIndex={0} className="min-h-[min(16rem,30dvh)] flex-1 space-y-4 overflow-y-auto overscroll-contain [overflow-anchor:none]" data-testid="evidence-reader-content">
       {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} data-reader-cited={block.cited} data-reader-current={Boolean(state.notice && state.target === `${block.id}:${block.offset}`)} className="space-y-1">
-        <p className="text-xs text-fg-muted">{state.notice && state.target === `${block.id}:${block.offset}` ? `${labels.current} · ` : ""}{block.cited ? labels.cited : labels.context}</p>
+        <p className="text-xs text-fg-muted">{state.notice && state.target === `${block.id}:${block.offset}` ? `${labels.current} · ` : ""}{block.cited ? purpose === "selection" ? "選択した原文の記録" : labels.cited : labels.context}</p>
         {block.heading?.length ? <p className="text-sm font-semibold">{block.heading.join(" › ")}</p> : null}
-        {block.kind === "table" ? <ExcerptContent text={block.text} tableLabel={labels.table} className="text-sm leading-relaxed" /> : <p lang={resolveContentLang(undefined, block.text)} className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? <CodepointHighlight text={block.text} ranges={block.highlights} /> : block.text}</p>}
+        {block.record ? <SourceRecordView record={block.record} cited={block.cited} highlight={highlight} fallback={block.text}/> : block.kind === "table" ? <div className="space-y-1"><ExcerptContent contentKind="table" text={block.text} highlights={highlight && block.cited ? block.highlights : undefined} tableLabel={labels.table} className="text-sm leading-relaxed" /></div> : <p lang={resolveContentLang(undefined, block.text)} className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? <CodepointHighlight text={block.text} ranges={block.highlights} /> : block.text}</p>}
         {loadOriginal && current ? <OriginalSourcePanel key={`${block.id}:${current.revision}`} readingKey={readingKey} elementId={block.id} revision={current.revision} loadWindow={loadOriginal} enabled={enabled} /> : null}
       </section>)}
       {!blocks.length && !state.pending && !state.error ? <p className="text-sm text-fg-muted">{labels.empty}</p> : null}

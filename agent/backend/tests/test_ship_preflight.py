@@ -45,7 +45,6 @@ def _settings(**update: Any) -> Settings:
         "agent_external_nl2sql_mcp_url": NL2SQL,
         "agent_runtime_repository_backend": "oracle_checkpoint",
         "agent_tool_grounding_required": True,
-        "agent_final_validation_enabled": True,
     }
     values.update(update)
     return get_settings().model_copy(update=values)

@@ -2,7 +2,7 @@ import { expect, type Page } from "./fixtures/test";
 import { expectNoPageOverflow } from "./_helpers";
 
 export async function mockFeaturePrompts(page: Page) {
-  const keys = ["external_ocr", "heading_levels", "field_extraction", "navigation_summary", "raptor_summary_system"];
+  const keys = ["external_ocr", "heading_levels", "field_extraction", "navigation_summary", "document_summary"];
   const values = new Map<string, string>();
   const requests: { key: string; method: string }[] = [];
   await page.route("**/api/settings/answer-prompts**", async (route) => {
@@ -25,6 +25,13 @@ export async function verifyFeaturePrompt(page: Page, key: string, title: string
   const disclosure = summary.locator("..");
   const editor = page.locator(`#answer-prompt-${key}`);
   await expect(editor).toBeEditable();
+  const delta = await editor.evaluate(node => {
+    const parent = node.closest("[data-form-grid]")!.parentElement!;
+    const style = getComputedStyle(parent);
+    return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+  });
+  expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+
   await expect(editor).toHaveValue("合成の既定指示");
   const actions = disclosure.getByRole("group", { name: "編集内容の操作" });
   await expect(actions.getByRole("button")).toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);

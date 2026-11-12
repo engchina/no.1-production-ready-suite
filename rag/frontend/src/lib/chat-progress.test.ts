@@ -50,7 +50,7 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
       CHAT_PROGRESS_DEFINITIONS
     );
     expect(steps.map((item) => [item.label, item.status, item.meta ?? null])).toEqual([
-      ["前の会話を踏まえて質問を補う", "done", null],
+      ["質問を補い、検索が要るかを分ける", "done", null],
       ["検索文から根拠の候補を集める", "running", null],
       ["質問から対象と条件を読み取る", "failed", "LLM 1 回・送信 2 回"],
     ]);
@@ -91,9 +91,9 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
 
 it("回答ラウンドの採否を完了状態と分け、古い記録では補造しない", () => {
   const events = [
-    step("1".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と根拠確認（1回目）", accepted: true, round: 1}}),
-    step("2".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と根拠確認（2回目）", accepted: false, round: 2}}),
-    step("3".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と根拠確認（3回目）"}}),
+    step("1".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と引用の確認（1回目）", accepted: true, round: 1}}),
+    step("2".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と引用の確認（2回目）", accepted: false, round: 2}}),
+    step("3".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と引用の確認（3回目）"}}),
   ];
   const rows = chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS);
   expect(rows[0].status).toBe("done");

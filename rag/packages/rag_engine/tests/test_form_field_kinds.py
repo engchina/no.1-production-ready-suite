@@ -76,7 +76,7 @@ class OutputContractTests(unittest.TestCase):
             '  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": '
             '"selected / unselected / enabled / disabled / required / optional / unknown"}],'
         )
-        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt, picture_response_schema
 
         saved = "方針\n{\n" + old + "\n}"
         refined = refine_image_retrieval_prompt(saved)
@@ -86,7 +86,7 @@ class OutputContractTests(unittest.TestCase):
         contract = _picture_output_contract()
         # Step の見出しの無いテンプレートの後では、対象の指示が Step 1、出力契約が Step 2 になる(#3810)。
         self.assertTrue(rendered.endswith(contract.replace("## Step 7:", "## Step 2:", 1)))
-        schema = json.loads(contract.rsplit("\n", 1)[1])
+        schema = picture_response_schema()
         field = schema["$defs"]["FormFieldOutput"]
         self.assertIn("kind", field["required"])
         self.assertEqual(tuple(field["properties"]["kind"]["enum"]), FORM_FIELD_KINDS)
@@ -261,8 +261,6 @@ class AnswerEvidenceTests(unittest.TestCase):
             [],
             None,
             None,
-            None,
-            None,
             template="{{question}}\n{{answer_context}}",
             field_kind_note="NOTE-LINE",
         )
@@ -281,7 +279,10 @@ class ResolvedPlanTests(unittest.TestCase):
             original_question="q",
             expanded_question="q",
             path=Path("rk.json"),
-            matched_rules=(RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE"), RuntimeRule("r2", "別", content="OTHER")),
+            matched_rules=(
+                RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE", tags=("pinned", "support_guide")),
+                RuntimeRule("r2", "別", content="OTHER"),
+            ),
             guide_steps=(("screen", "画面", ("c1",)), ("code", "コード", ("c2",)), ("ask", "確認", ("c3",))),
             guide_optional_steps=("code",),
             guide_step_terms=(("code", ("コード",)), ("ask", ("確認",))),
@@ -296,7 +297,7 @@ class ResolvedPlanTests(unittest.TestCase):
         self.assertEqual(knowledge.guide_optional_steps, ())
         self.assertEqual(knowledge.guide_step_terms, (("code", ("コード",)),))
         self.assertEqual([rule.content for rule in knowledge.matched_rules], ["RESOLVED-RULE", "OTHER"])
-        self.assertIn("RESOLVED-RULE", knowledge.with_rule_usage(confirmation=False, answer=True).prompt_context())
+        self.assertIn("RESOLVED-RULE", knowledge.prompt_context())
 
     def test_named_field_resolution_selects_the_required_branch(self) -> None:
         observed = [
@@ -361,13 +362,12 @@ class CitableFieldKindTests(unittest.TestCase):
 
         observed = [form_field_kinds.FieldKindObservation("parent", "項目A", "select")]
         original = self._span()
-        spans = grounded.tag_spans("項目Aの種類", form_field_kinds.with_field_kind_evidence(observed, [original]))
+        spans = grounded.tag_spans(form_field_kinds.with_field_kind_evidence(observed, [original]))
         evidence = spans[-1]
         self.assertEqual(evidence["text"], "項目A = 選択")
         self.assertEqual(evidence["origin"], "image_extraction")
         self.assertEqual(evidence["page"], 3)
         self.assertIn("image_generated", evidence["tags"])
-        self.assertFalse(evidence["pinned"])
         self.assertEqual(original["text"], "別の図の説明")
         draft = GroundedDraft(
             summary="",
@@ -391,7 +391,7 @@ class CitableFieldKindTests(unittest.TestCase):
             form_field_kinds.FieldKindObservation("parent", "項目A", "select"),
             form_field_kinds.FieldKindObservation("parent", "項目B", "button"),
         ]
-        spans = grounded.tag_spans("項目Aと項目B", form_field_kinds.with_field_kind_evidence(observed, [self._span()]))
+        spans = grounded.tag_spans(form_field_kinds.with_field_kind_evidence(observed, [self._span()]))
         note = form_field_kinds.prompt_note(observed, [], spans)
         self.assertIn("- E2: 項目A = 選択", note)
         self.assertIn("- E3: 項目B = ボタン", note)
@@ -430,7 +430,7 @@ class CitableFieldKindTests(unittest.TestCase):
 
         original = {**self._span(), "source_aliases": ["alias"]}
         observed = [form_field_kinds.FieldKindObservation("alias", "項目A", "select")]
-        spans = grounded.tag_spans("項目A", form_field_kinds.with_field_kind_evidence(observed, [original]))
+        spans = grounded.tag_spans(form_field_kinds.with_field_kind_evidence(observed, [original]))
         self.assertIn("- E2: 項目A = 選択", form_field_kinds.prompt_note(observed, [], spans))
 
     def test_image_page_selects_its_own_page_in_a_multi_page_parent(self):

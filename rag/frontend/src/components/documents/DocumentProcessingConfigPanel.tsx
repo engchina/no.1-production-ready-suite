@@ -12,13 +12,13 @@ import {
   SelectField,
   type SelectFieldOption,
   Skeleton,
-  TextField,
   ToggleChip,
   TimedLoadingState,
 } from "@production-ready/ui";
 import { canOpenNavRoute } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
-import { MineruLicenseNotice } from "@/components/settings/MineruLicenseNotice";
+import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect";
+import { chunkDelimiterSummary } from "@/lib/chunking";
 import {
   ApiError,
   type DocumentProcessingConfigData,
@@ -57,7 +57,6 @@ import {
   SECTION_RULES_OPTIONS,
   PARSER_OPTIONS,
   PARSER_VALUES,
-  ROADMAP_PARSER_VALUES,
   PREPROCESS_OPTIONS,
   boolLabel,
   optionLabel,
@@ -73,7 +72,6 @@ function emptyConfig(): DocumentProcessingConfig {
     parser_adapter_backend: null,
     parser_docling_enabled: null,
     parser_unstructured_enabled: null,
-    parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
     parser_structured_records_jsonl_enabled: null,
     parser_xml_tree_json_enabled: null,
@@ -188,27 +186,6 @@ export function DocumentProcessingConfigPanel({
     modality: sourceModality,
     preprocessProfile: effectivePreprocessProfile,
   });
-  // MinerU は準備中（ロードマップ。#3359）の間は、ほかの準備中のエンジンと同じく灰色の選択肢で出す。
-  // 準備中でなくなったら、ライセンスの条件を system_admin が確認するまで選べない（backend も 422）。
-  // 選択中のレシピが MinerU のときは選択肢に残し、主な条件の案内を出す。
-  const mineruRoadmap = ROADMAP_PARSER_VALUES.includes("mineru");
-  const mineruLicense = adapterSettingsQuery.data?.mineru_license;
-  const mineruAcknowledged = mineruLicense?.acknowledged ?? false;
-  const parserOptions = useMemo(
-    () =>
-      mineruRoadmap || mineruAcknowledged || form.parser_adapter_backend === "mineru"
-        ? PARSER_OPTIONS
-        : PARSER_OPTIONS.filter((option) => option.value !== "mineru"),
-    [mineruRoadmap, mineruAcknowledged, form.parser_adapter_backend]
-  );
-  const parserNotice = mineruRoadmap ? null : effectiveParserBackend === "mineru" ? (
-    <MineruLicenseNotice
-      acknowledgement={mineruLicense}
-      testId={`document-mineru-license-notice-${documentId}`}
-    />
-  ) : adapterSettingsQuery.data && !mineruAcknowledged && form.parser_adapter_backend !== null ? (
-    <p className="text-xs text-fg-muted">{t("mineruLicense.recipeUnacknowledged")}</p>
-  ) : null;
   const parserHint = parserFormats
     ? t("documents.processingConfig.parserFormats", { formats: parserFormats })
     : null;
@@ -288,13 +265,12 @@ export function DocumentProcessingConfigPanel({
             globalHref={globalHref}
             value={form.parser_adapter_backend}
             effectiveValue={configs.effective.parser_adapter_backend}
-            options={parserOptions}
+            options={PARSER_OPTIONS}
             defaultValue="docling"
             disabled={disabled}
             onChange={(value) => update({ parser_adapter_backend: value })}
             hint={parserHint}
             warning={parserWarning}
-            notice={parserNotice}
           />
         );
       case "chunking_strategy":
@@ -624,7 +600,6 @@ function SelectRow<T extends string>({
   onChange,
   hint = null,
   warning = null,
-  notice = null,
 }: {
   field: RecipeConfigField;
   id: string;
@@ -638,8 +613,6 @@ function SelectRow<T extends string>({
   onChange: (value: T | null) => void;
   hint?: string | null;
   warning?: string | null;
-  /** 選択肢の下に出す案内（MinerU のライセンスの主な条件など。#3359）。 */
-  notice?: ReactNode;
 }) {
   const overriding = value !== null;
   const lastOverride = useRef<T>(value ?? effectiveValue ?? defaultValue);
@@ -686,7 +659,6 @@ function SelectRow<T extends string>({
       )}
       {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
       {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
-      {notice}
     </div>
   );
 }
@@ -769,14 +741,14 @@ function ChunkDelimiterRow({
   onChange,
 }: {
   id: string;
-  value: string | null;
-  effectiveValue: string | null;
+  value: string[] | null;
+  effectiveValue: string[] | null;
   disabled: boolean;
-  onChange: (value: string | null) => void;
+  onChange: (value: string[] | null) => void;
 }) {
   const label = t("settings.chunking.params.delimiter");
   const overriding = value !== null;
-  const lastOverride = useRef<string>(value ?? effectiveValue ?? "");
+  const lastOverride = useRef<string[]>(value ?? effectiveValue ?? []);
   useEffect(() => {
     if (value !== null) lastOverride.current = value;
   }, [value]);
@@ -801,18 +773,20 @@ function ChunkDelimiterRow({
         </div>
       </div>
       {overriding ? (
-        <TextField
+        <ChunkDelimiterSelect
           id={id}
-          label={label}
+          labelHidden
           value={value}
           disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-          className="[&>label]:sr-only"
-          // 分割符の文字列（短い記号から境界のマーカーまで。#1891）。
-          width="md"
+          // すべて外したら上書きをやめる（空の一覧は保存できない）。
+          onChange={(next) => onChange(next.length > 0 ? next : null)}
         />
       ) : (
-        <InheritResolved value={effectiveValue ?? "—"} label={label} globalHref={null} />
+        <InheritResolved
+          value={effectiveValue ? chunkDelimiterSummary(effectiveValue) : "—"}
+          label={label}
+          globalHref={null}
+        />
       )}
       <p className="text-xs text-fg-muted">{t("settings.chunking.params.delimiterHint")}</p>
     </div>

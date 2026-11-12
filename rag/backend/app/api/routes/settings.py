@@ -6,8 +6,6 @@ import logging
 import re
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -58,6 +56,7 @@ from app.clients.oracle import (
 )
 from app.clients.oracle_run_history import RunHistoryStore
 from app.config import (
+    FILE_TYPE_DEFAULTS_STORE,
     MODEL_SETTINGS_STORE,
     PARSER_SECRET_ATTRS,
     PARSER_SETTINGS_STORE,
@@ -65,7 +64,6 @@ from app.config import (
     Settings,
     get_settings,
     is_roadmap_parser_adapter_backend,
-    roadmap_parser_adapter_backend_message,
 )
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
@@ -91,18 +89,18 @@ from app.rag.extraction_field_adapter import (
     save_field_schema,
     standard_field_definitions,
 )
+from app.rag.file_type_defaults import (
+    CHUNKING_STRATEGY_OPTIONS,
+    FILE_TYPE_EXTENSIONS,
+    builtin_file_type_default,
+    file_type_default_issues,
+    file_type_defaults,
+    file_type_parser_option_table,
+    file_type_preprocess_options,
+)
 from app.rag.graph_adapter import (
     graph_adapter_runtime_settings,
     normalize_graph_profile,
-)
-from app.rag.mineru_license import (
-    MINERU_BACKEND,
-    MINERU_LICENSE_ADMIN_ONLY_MESSAGE,
-    MINERU_LICENSE_REQUIRED_MESSAGE,
-    mineru_license_acknowledged,
-    mineru_license_acknowledgement,
-    set_mineru_license_acknowledgement,
-    settings_use_mineru,
 )
 from app.rag.oracle_schema import vector_index_reindex_sql
 from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
@@ -114,6 +112,7 @@ from app.rag.parser_adapter_scorecard import (
 from app.rag.preprocess_strategy import (
     normalize_preprocess_profile,
     preprocess_runtime_settings,
+    resolve_preprocess_profile,
 )
 from app.rag.section_map_service import schedule_refresh_all_section_maps
 from app.rag.section_rules import (
@@ -123,7 +122,6 @@ from app.rag.section_rules import (
     save_section_rules,
     section_rules_settings,
 )
-from app.rag.step_models import STEP_MODEL_SETTINGS, StepModelSetting, step_model_id
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
@@ -134,7 +132,6 @@ from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
     POST_PARSE_SETTING_FIELDS,
-    AnsweringModelChoice,
     AnsweringSettingsData,
     AnsweringSettingsUpdate,
     AnswerPromptsData,
@@ -155,6 +152,10 @@ from app.schemas.settings import (
     ExtractionFieldsSettingsData,
     ExtractionFieldsSettingsUpdate,
     FieldDefinitionData,
+    FileTypeDefaultRowData,
+    FileTypeDefaultsGlobalData,
+    FileTypeDefaultsSettingsData,
+    FileTypeDefaultsUpdate,
     GraphProfileStatusData,
     GraphSettingsData,
     GraphSettingsUpdate,
@@ -162,7 +163,6 @@ from app.schemas.settings import (
     GuardrailSettingsUpdate,
     HuggingFaceSettingsData,
     HuggingFaceSettingsUpdate,
-    MineruLicenseAcknowledgementData,
     ModelSettingsTestRequest,
     OciConfigField,
     ParserAdapterBackendSourceMatrixData,
@@ -188,7 +188,6 @@ from app.schemas.settings import (
     VectorIndexSettingsData,
     VectorIndexSettingsUpdate,
 )
-from app.security.dependencies import current_principal
 from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
 from app.security.service import get_security_service
 
@@ -387,28 +386,16 @@ async def get_external_parser_status(
 @router.patch("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
 async def update_parser_adapter_settings(
     payload: ParserAdapterSettingsUpdate,
-    request: Request,
 ) -> ApiResponse[ParserAdapterSettingsData]:
     """任意 parser adapter の backend/feature flag と「解析後の処理」を保存し runtime へ反映する。
 
     - 解析エンジン（`adapter_backend` と feature flag・接続）は parser-settings.json（#1701）。
     - 「解析後の処理」（Vision・項目抽出・章節木。#528）は backend/.env。ほかのプロセスは
       `.env` の更新時刻の変化で読み直す（#466）。
-    - MinerU は、ライセンスの条件の確認（`mineru_license_acknowledged`）が無ければ有効にも
-      選択にもできない（422。#3359）。確認・取り消しは system_admin だけ（403）。確認した人・
-      日時は parser-settings.json に保存する（環境変数・`.env` では書けない）。
     """
     settings = get_settings()
     post_parse_updates = _post_parse_settings_updates(payload)
     parser_fields = payload.model_fields_set - set(POST_PARSE_SETTING_FIELDS)
-    license_actor = _mineru_license_actor(request)
-    actor = license_actor.display_name
-    if parser_fields:
-        # 「解析後の処理」の .env を書く前に、MinerU の確認の権限と不足で止める。
-        _raise_if_mineru_license_change_forbidden(settings, payload, license_actor)
-        _raise_if_mineru_license_missing(
-            settings, _parser_adapter_settings_candidate(settings, payload, actor=actor), payload
-        )
     if post_parse_updates:
         # 先に .env を書く。失敗したら解析エンジンの設定も変えない（500）。
         _persist_post_parse_settings(settings.model_copy(update=post_parse_updates))
@@ -420,9 +407,7 @@ async def update_parser_adapter_settings(
         try:
             with PARSER_SETTINGS_STORE.lock(settings):
                 PARSER_SETTINGS_STORE.reload_if_changed(settings)
-                _raise_if_mineru_license_change_forbidden(settings, payload, license_actor)
-                candidate = _parser_adapter_settings_candidate(settings, payload, actor=actor)
-                _raise_if_mineru_license_missing(settings, candidate, payload)
+                candidate = _parser_adapter_settings_candidate(settings, payload)
                 PARSER_SETTINGS_STORE.save(candidate)
         except OSError as exc:
             raise HTTPException(
@@ -478,6 +463,41 @@ async def update_preprocess_settings(
     return ApiResponse(data=_preprocess_settings_data(settings))
 
 
+@router.get("/file-type-defaults", response_model=ApiResponse[FileTypeDefaultsSettingsData])
+async def get_file_type_defaults_settings() -> ApiResponse[FileTypeDefaultsSettingsData]:
+    """形式別の既定と、種類ごとに選べる値を返す（#4732）。"""
+    return ApiResponse(data=_file_type_defaults_data(get_settings()))
+
+
+@router.patch("/file-type-defaults", response_model=ApiResponse[FileTypeDefaultsSettingsData])
+async def update_file_type_defaults_settings(
+    payload: FileTypeDefaultsUpdate,
+) -> ApiResponse[FileTypeDefaultsSettingsData]:
+    """形式別の既定（全行）を保存する（#4732）。組み合わせが不正なら 422 で何を直すかを返す。
+
+    レシピより弱く全体の既定より強い層で、保存は取り込み済みの文書を変えない（再処理で反映する）。
+    """
+    settings = get_settings()
+    entries = payload.entries
+    issues = [
+        issue
+        for file_type, entry in entries.items()
+        for issue in file_type_default_issues(file_type, entry, settings)
+    ]
+    if issues:
+        raise HTTPException(status_code=422, detail=" ".join(issues))
+    try:
+        with FILE_TYPE_DEFAULTS_STORE.lock(settings):
+            FILE_TYPE_DEFAULTS_STORE.reload_if_changed(settings)
+            candidate = settings.model_copy()
+            candidate._file_type_defaults = {str(key): value for key, value in entries.items()}
+            FILE_TYPE_DEFAULTS_STORE.save(candidate)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="形式別の既定を保存できませんでした。") from exc
+    FILE_TYPE_DEFAULTS_STORE.load(settings)
+    return ApiResponse(data=_file_type_defaults_data(settings))
+
+
 @router.get("/chunking", response_model=ApiResponse[ChunkingSettingsData])
 async def get_chunking_settings() -> ApiResponse[ChunkingSettingsData]:
     """Chunking アダプター(分割戦略)の選択と多様化パラメータを返す。"""
@@ -498,7 +518,7 @@ async def update_chunking_settings(
 
 @router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])
 async def get_answering_settings() -> ApiResponse[AnsweringSettingsData]:
-    """回答の検索と生成の全体既定(質問の拡張・回答の生成方式など。#593)を返す。"""
+    """回答の検索と生成の全体既定(#593)を返す。"""
     return ApiResponse(data=_answering_settings_data(get_settings()))
 
 
@@ -511,38 +531,21 @@ async def update_answering_settings(
     送った項目だけを変える。この画面の項目は全体設定だけで決め、検索・回答プロファイルでは上書きしない。
     """
     settings = get_settings()
-    step_models = [
-        (step.field, _step_model_update(settings, step, getattr(payload, f"{step.key}_model")))
-        for step in STEP_MODEL_SETTINGS
-    ]
     updates = {
         field: value
         for field, value in (
-            *step_models,
             ("rag_retrieval_query_limit", payload.retrieval_query_limit),
             ("rag_rerank_top_n", payload.rerank_top_n),
             ("rag_min_similarity", payload.min_similarity),
             ("rag_rerank_min_relevance_score", payload.rerank_min_relevance_score),
-            ("rag_runtime_rules_confirmation_enabled", payload.runtime_rules_confirmation_enabled),
-            ("rag_runtime_rules_answer_enabled", payload.runtime_rules_answer_enabled),
             ("rag_hybrid_search_backend", payload.hybrid_search_backend),
             ("rag_rrf_method_ratio", payload.rrf_method_ratio),
             ("rag_rrf_source_ratio", payload.rrf_source_ratio),
             ("rag_rerank_slot_ratio", payload.rerank_slot_ratio),
             ("rag_runtime_terms_search_enabled", payload.runtime_terms_search_enabled),
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
-            ("rag_query_strategy", payload.query_strategy),
-            ("rag_answer_flow", payload.answer_flow),
-            ("rag_answer_audit_mode", payload.answer_audit_mode),
-            ("rag_answer_evidence_refinement_mode", payload.answer_evidence_refinement_mode),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
-            ("rag_screen_linking_enabled", payload.screen_linking_enabled),
-            (
-                "rag_request_coverage_retrieval_enabled",
-                payload.request_coverage_retrieval_enabled,
-            ),
-            ("rag_auto_field_filter_enabled", payload.auto_field_filter_enabled),
             ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
             ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
@@ -571,12 +574,6 @@ async def update_answering_settings(
                 "RAG_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
                     candidate.rag_section_expansion_input_token_percent
                 ),
-                "RAG_RUNTIME_RULES_CONFIRMATION_ENABLED": _format_env_bool(
-                    candidate.rag_runtime_rules_confirmation_enabled
-                ),
-                "RAG_RUNTIME_RULES_ANSWER_ENABLED": _format_env_bool(
-                    candidate.rag_runtime_rules_answer_enabled
-                ),
                 "RAG_RUNTIME_TERMS_SEARCH_ENABLED": _format_env_bool(
                     candidate.rag_runtime_terms_search_enabled
                 ),
@@ -591,30 +588,11 @@ async def update_answering_settings(
                 "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
                 "RAG_RRF_SOURCE_RATIO": json.dumps(candidate.rag_rrf_source_ratio),
                 "RAG_RERANK_SLOT_RATIO": json.dumps(candidate.rag_rerank_slot_ratio),
-                "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
-                "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
-                "RAG_ANSWER_AUDIT_MODE": candidate.rag_answer_audit_mode,
-                "RAG_ANSWER_EVIDENCE_REFINEMENT_MODE": (
-                    candidate.rag_answer_evidence_refinement_mode
-                ),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
-                "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
-                    candidate.rag_screen_linking_enabled
-                ),
-                "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": _format_env_bool(
-                    candidate.rag_request_coverage_retrieval_enabled
-                ),
-                "RAG_AUTO_FIELD_FILTER_ENABLED": _format_env_bool(
-                    candidate.rag_auto_field_filter_enabled
-                ),
                 "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
                     candidate.rag_graph_expansion_enabled
                 ),
-                **{
-                    step.field.upper(): getattr(candidate, step.field)
-                    for step in STEP_MODEL_SETTINGS
-                },
             },
             section_comment="# 回答の検索と生成",
             error_detail="回答の検索と生成の設定を backend/.env へ保存できませんでした。",
@@ -624,70 +602,26 @@ async def update_answering_settings(
     return ApiResponse(data=_answering_settings_data(settings))
 
 
-def _step_model_choices(settings: Settings) -> list[AnsweringModelChoice]:
-    """段ごとのモデルで選べる登録モデル(回答のモデルの候補と同じ。接続情報は含めない)。"""
-    from app.api.routes.search import registered_answer_model_choices
-
-    return [
-        AnsweringModelChoice(model_id=choice["model_id"], display_name=choice["display_name"])
-        for choice in registered_answer_model_choices(settings)
-    ]
-
-
-def _step_model_update(settings: Settings, step: StepModelSetting, value: str | None) -> str | None:
-    """送られた段のモデル(#4351・#4564・#4565)。空は回答のモデル、それ以外は登録モデルの ID だけ。
-
-    画面は欄の全体を送るので、保存済みの値と同じなら登録が外れていても受ける(別の項目の保存を止めない)。
-    """
-    if value is None:
-        return None
-    model_id = value.strip()
-    if (
-        model_id
-        and model_id != step_model_id(settings, step)
-        and model_id not in {choice.model_id for choice in _step_model_choices(settings)}
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=f"{step.label}のモデルには、モデル設定に登録したモデルを選んでください。",
-        )
-    return model_id
-
-
 def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
         retrieval_query_limit=settings.rag_retrieval_query_limit,
         rerank_top_n=settings.rag_rerank_top_n,
         min_similarity=settings.rag_min_similarity,
         rerank_min_relevance_score=settings.rag_rerank_min_relevance_score,
-        runtime_rules_confirmation_enabled=settings.rag_runtime_rules_confirmation_enabled,
-        runtime_rules_answer_enabled=settings.rag_runtime_rules_answer_enabled,
         runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,
         runtime_terms_answer_enabled=settings.rag_runtime_terms_answer_enabled,
         hybrid_search_backend=settings.rag_hybrid_search_backend,
         rrf_method_ratio=settings.rag_rrf_method_ratio,
         rrf_source_ratio=settings.rag_rrf_source_ratio,
         rerank_slot_ratio=settings.rag_rerank_slot_ratio,
-        query_strategy=settings.rag_query_strategy,
-        answer_flow=settings.rag_answer_flow,
-        answer_audit_mode=settings.rag_answer_audit_mode,
-        answer_evidence_refinement_mode=settings.rag_answer_evidence_refinement_mode,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
-        screen_linking_enabled=settings.rag_screen_linking_enabled,
-        request_coverage_retrieval_enabled=settings.rag_request_coverage_retrieval_enabled,
-        auto_field_filter_enabled=settings.rag_auto_field_filter_enabled,
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,
         entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,
         section_expansion_enabled=settings.rag_section_expansion_enabled,
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
         section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
-        question_subject_role_model=settings.rag_question_subject_role_model.strip(),
-        row_condition_model=settings.rag_row_condition_model.strip(),
-        application_audit_model=settings.rag_application_audit_model.strip(),
-        application_reason_model=settings.rag_application_reason_model.strip(),
-        step_model_choices=_step_model_choices(settings),
     )
 
 
@@ -727,7 +661,7 @@ async def update_answer_record_settings(
 
 @router.get("/answer-prompts", response_model=ApiResponse[AnswerPromptsData])
 async def get_answer_prompts() -> ApiResponse[AnswerPromptsData]:
-    """編集できるプロンプト(回答生成・図の読み取り)と、回答フローの各段の読み取り専用プロンプトを返す。"""
+    """編集できるプロンプトと、回答フローの各段の読み取り専用プロンプトを返す。"""
     saved = await OracleClient().list_answer_prompts()
     return ApiResponse(data=_answer_prompts_data(saved))
 
@@ -1059,8 +993,9 @@ async def _run_model_settings_test(
         text = await async_call_with_model_purpose(
             "connection.check",
             OciEnterpriseAiClient(settings=settings).generate,
-            MODEL_TEST_TEXT_PROMPT,
+            "",
             model_test_text_context("Production Ready RAG"),
+            system_prompt=MODEL_TEST_TEXT_PROMPT,
         )
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
@@ -1177,6 +1112,41 @@ def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBacke
     ]
 
 
+def _file_type_defaults_data(settings: Settings) -> FileTypeDefaultsSettingsData:
+    rows: list[FileTypeDefaultRowData] = []
+    saved = file_type_defaults(settings)
+    for file_type, extensions in FILE_TYPE_EXTENSIONS.items():
+        entry = saved.get(file_type) or builtin_file_type_default(settings, file_type)[0]
+        builtin, builtin_reason = builtin_file_type_default(settings, file_type)
+        preprocess, unavailable_preprocess = file_type_preprocess_options(file_type, settings)
+        inherited, parser_options, unavailable_parsers = file_type_parser_option_table(
+            file_type, settings
+        )
+        rows.append(
+            FileTypeDefaultRowData(
+                **entry.model_dump(),
+                file_type=file_type,
+                extensions=list(extensions),
+                preprocess_options=preprocess,
+                unavailable_preprocess_profiles=unavailable_preprocess,
+                parser_options=parser_options,
+                unavailable_parser_backends=unavailable_parsers,
+                inherited_preprocess_profile=inherited,
+                builtin=builtin,
+                builtin_unavailable_reason=builtin_reason,
+            )
+        )
+    return FileTypeDefaultsSettingsData(
+        rows=rows,
+        chunking_options=list(CHUNKING_STRATEGY_OPTIONS),
+        global_defaults=FileTypeDefaultsGlobalData(
+            preprocess_profile=resolve_preprocess_profile(settings),
+            parser_adapter_backend=settings.rag_parser_adapter_backend,
+            chunking_strategy=settings.rag_chunking_strategy,
+        ),
+    )
+
+
 def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsData:
     """Settings から parser adapter readiness の表示用データを作る。"""
     runtime = parser_adapter_runtime_settings(settings)
@@ -1190,7 +1160,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         adapters=[
             ParserAdapterStatusData(
                 backend=adapter.backend,
-                # 準備中(ロードマップ)のエンジン(MinerU。#3359)は画面で選べない。
+                # 準備中(ロードマップ)のエンジンは画面で選べない。
                 availability=(
                     "roadmap" if is_roadmap_parser_adapter_backend(adapter.backend) else "available"
                 ),
@@ -1253,9 +1223,8 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
         navigation_summary_max_nodes=settings.rag_navigation_summary_max_nodes,
-        raptor_enabled=settings.rag_raptor_enabled,
+        document_summary_enabled=settings.rag_document_summary_enabled,
         vision_concurrency=settings.rag_vision_concurrency,
-        mineru_license=_mineru_license_data(settings),
         config_source="runtime",
     )
 
@@ -1286,7 +1255,7 @@ def _persist_post_parse_settings(settings: Settings) -> None:
             "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
                 settings.rag_navigation_summary_enabled
             ),
-            "RAG_RAPTOR_ENABLED": _format_env_bool(settings.rag_raptor_enabled),
+            "RAG_DOCUMENT_SUMMARY_ENABLED": _format_env_bool(settings.rag_document_summary_enabled),
             "RAG_VISION_CONCURRENCY": str(settings.rag_vision_concurrency),
         },
         section_comment="# 文書解析: 解析後の処理",
@@ -1375,106 +1344,9 @@ def _parser_adapter_backend_source_matrix(
     )
 
 
-@dataclass(frozen=True)
-class _MineruLicenseActor:
-    """MinerU のライセンスの確認を保存する利用者（#3359）。"""
-
-    display_name: str
-    is_system_admin: bool
-
-
-def _mineru_license_actor(request: Request) -> _MineruLicenseActor:
-    """操作した利用者。認証の情報を引けなければ system_admin とみなさない。"""
-    try:
-        principal = current_principal(request)
-    except Exception:  # noqa: BLE001 - 引けなければ確認を変えさせない（403）
-        return _MineruLicenseActor(display_name="", is_system_admin=False)
-    return _MineruLicenseActor(
-        display_name=principal.display_name or "",
-        is_system_admin=bool(principal.is_system_admin),
-    )
-
-
-def _raise_if_mineru_license_change_forbidden(
-    base: Settings,
-    payload: ParserAdapterSettingsUpdate,
-    actor: _MineruLicenseActor,
-) -> None:
-    """MinerU のライセンスの確認・取り消しは system_admin だけ（組織としての判断。#3359）。
-
-    今の状態と同じ値（画面が毎回送る値）は変更ではないので、ほかの利用者の保存も止めない。
-    """
-    requested = payload.mineru_license_acknowledged
-    if requested is None or requested == mineru_license_acknowledged(base):
-        return
-    if not actor.is_system_admin:
-        raise HTTPException(status_code=403, detail=MINERU_LICENSE_ADMIN_ONLY_MESSAGE)
-
-
-def _apply_mineru_license_update(
-    base: Settings,
-    candidate: Settings,
-    payload: ParserAdapterSettingsUpdate,
-    *,
-    actor: str,
-) -> None:
-    """MinerU のライセンスの確認の記録を候補へ置く（#3359）。確認済みなら最初の記録を保つ。"""
-    if payload.mineru_license_acknowledged is None:
-        return
-    if not payload.mineru_license_acknowledged:
-        set_mineru_license_acknowledgement(candidate, by="", at="")
-        return
-    if mineru_license_acknowledged(base):
-        return
-    set_mineru_license_acknowledgement(
-        candidate,
-        by=actor[:256],
-        at=datetime.now(UTC).isoformat(timespec="seconds"),
-    )
-
-
-def _raise_if_mineru_license_missing(
-    base: Settings,
-    candidate: Settings,
-    payload: ParserAdapterSettingsUpdate,
-) -> None:
-    """MinerU のライセンスの条件を確認せずに MinerU を有効・選択にする保存を拒否する（#3359）。
-
-    この保存で MinerU を選んだ・有効にした・確認を外したときだけ止める。`.env` で前から MinerU が
-    有効だった構成でも、ほかの項目の保存は止めない（取込では確認が無ければ MinerU を呼ばない）。
-    """
-    newly_enabled_flag = candidate.rag_parser_mineru_enabled and not base.rag_parser_mineru_enabled
-    if newly_enabled_flag and is_roadmap_parser_adapter_backend(MINERU_BACKEND):
-        # 準備中(ロードマップ)の MinerU は有効にもできない(#3359)。
-        raise HTTPException(
-            status_code=422, detail=roadmap_parser_adapter_backend_message(MINERU_BACKEND)
-        )
-    if mineru_license_acknowledged(candidate) or not settings_use_mineru(candidate):
-        return
-    newly_selected = (
-        candidate.rag_parser_adapter_backend == MINERU_BACKEND
-        and base.rag_parser_adapter_backend != MINERU_BACKEND
-    )
-    newly_enabled = candidate.rag_parser_mineru_enabled and not base.rag_parser_mineru_enabled
-    withdrawn = payload.mineru_license_acknowledged is False and mineru_license_acknowledged(base)
-    if newly_selected or newly_enabled or withdrawn:
-        raise HTTPException(status_code=422, detail=MINERU_LICENSE_REQUIRED_MESSAGE)
-
-
-def _mineru_license_data(settings: Settings) -> MineruLicenseAcknowledgementData:
-    by, at = mineru_license_acknowledgement(settings)
-    if not at:
-        return MineruLicenseAcknowledgementData(acknowledged=False)
-    return MineruLicenseAcknowledgementData(
-        acknowledged=True, acknowledged_by=by or None, acknowledged_at=at
-    )
-
-
 def _parser_adapter_settings_candidate(
     base: Settings,
     payload: ParserAdapterSettingsUpdate,
-    *,
-    actor: str = "",
 ) -> Settings:
     """parser adapter 更新 payload から保存候補 settings を作る。"""
     updates: dict[str, object] = {
@@ -1487,10 +1359,6 @@ def _parser_adapter_settings_candidate(
         "rag_parser_unstructured_enabled": _optional_bool(
             payload.unstructured_enabled,
             base.rag_parser_unstructured_enabled,
-        ),
-        "rag_parser_mineru_enabled": _optional_bool(
-            payload.mineru_enabled,
-            base.rag_parser_mineru_enabled,
         ),
         "rag_parser_structured_records_jsonl_enabled": _optional_bool(
             payload.structured_records_jsonl_enabled,
@@ -1509,16 +1377,14 @@ def _parser_adapter_settings_candidate(
         spec = ENGINE_SPECS[connection.backend]
         if "endpoint" in connection.model_fields_set:
             updates[spec.endpoint_field] = connection.endpoint or ""
-        if spec.model_field and "model" in connection.model_fields_set:
+        if "model" in connection.model_fields_set:
             updates[spec.model_field] = connection.model or ""
         updates[spec.api_key_field] = _secret_value(
             current=str(getattr(base, spec.api_key_field, "") or ""),
             update=connection.api_key,
             clear=connection.clear_api_key,
         )
-    candidate = base.model_copy(update=updates)
-    _apply_mineru_license_update(base, candidate, payload, actor=actor)
-    return candidate
+    return base.model_copy(update=updates)
 
 
 def _optional_bool(value: bool | None, fallback: bool) -> bool:
@@ -1801,7 +1667,7 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_SIZE": str(settings.rag_chunk_size),
             "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
-            "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
+            "RAG_CHUNK_DELIMITER": json.dumps(settings.rag_chunk_delimiter, ensure_ascii=False),
             **{name.upper(): str(getattr(settings, name)) for name in SMALL_TO_BIG_SETTING_FIELDS},
             # 交差参照の解析の語は言語資源へ移した(#2181)。以前に保存した値は消す。
             **{f"RAG_REFERENCE_{spec.key.upper()}": None for spec in FIELD_SPECS},

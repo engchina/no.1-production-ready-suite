@@ -19,17 +19,16 @@ import {
   type RunStatusLabels,
   type RunTimelineStep,
   type StatusVariant,
+  operationTimestampMs,
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import { validationExecutionBadge } from "@/lib/answer-validation";
 import type {
   RunDetail,
   RunExecutorFilter,
   RunStatus,
   RunSummary,
   RunSurface,
-  RunVerification,
 } from "@/lib/api";
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
@@ -117,13 +116,6 @@ export function runOutcomeView(run: Pick<RunSummary, "answer_generated" | "statu
   return { variant: "success", label: t("history.outcome.answered") };
 }
 
-/** 資料との照合のバッジ。回答を作らなかった・止めた・失敗した実行は null（「—」）。 */
-export function runVerificationView(verification: RunVerification | null, execution?: string | null): BadgeView | null {
-  const explicit = validationExecutionBadge(execution);
-  if (explicit) return explicit;
-  return verification == null ? null : validationExecutionBadge("unknown");
-}
-
 /** 検索・回答プロファイルの表示名（ID は出さない）。 */
 export function runProfileLabel(run: Pick<RunSummary, "search_answer_profile_id" | "search_answer_profile_name">): string {
   if (!run.search_answer_profile_id) return t("history.profile.none");
@@ -183,8 +175,8 @@ export function runSearchHref(
 }
 
 export function runStartedAt(run: Pick<RunSummary, "created_at" | "elapsed_ms">): string {
-  const finished = Date.parse(run.created_at);
-  if (run.elapsed_ms == null || !Number.isFinite(run.elapsed_ms) || Number.isNaN(finished)) return run.created_at;
+  const finished = operationTimestampMs(run.created_at);
+  if (run.elapsed_ms == null || !Number.isFinite(run.elapsed_ms) || finished === null) return run.created_at;
   return new Date(finished - run.elapsed_ms).toISOString();
 }
 

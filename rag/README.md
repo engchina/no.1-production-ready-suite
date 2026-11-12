@@ -21,15 +21,13 @@ A production-ready RAG reference implementation covering data ingestion, chunkin
 
 生成は `answer_parts` の要点ごとに、答えられる場合の `answer` と不足を示す `gap` を別の型で返す。`answer` は原文単位の選択（`basis`）、導く方法（`reasoning`）、結果（`result`）を持つ。選択した原文の事実・規則はコードがそのまま `items` に構成し、自由な説明と導出結果は `applications` に入れる。直接答えられる値の説明も同じ出力先を使い、自然言語をコードで直接記載・導出へ推定分類しない。資料だけで必要な値がそろう計算も扱う。
 
-推導の審査（監査の型 none / standard / detailed とも）は論理の採否だけを返す。論理が valid な推導ごとに、審査の後に説明の段（`generation/application_explanation.py`）を 1 回呼び、利用者に示す説明を作る。説明の段に渡すのは原質問と、その推導が当てはめた資料の原文だけで、審査済みの結論・生成の `reasoning` は渡さない（質問が回答の言語を指定したときだけ、その指定の原文も渡す）。回答言語は初回の生成で「指定なし」または原質問の連続部分から選んだ指定原文として保持し、指定なしの既定はコードが日本語にする。表示するかはコードが形式だけで決める: 空でない、指定なしのときは仮名を含み入力の原文に無い Latin の 3 語以上の連なりを含まない、結論の数値（Unicode の 10 進数字の連なり）がすべて説明にある、出典行の印で始まる行を含まない。不成立・呼び出しの失敗は説明だけを隠し、結論と資料の原文は表示し、生成の `reasoning` へは戻さない。説明は Markdown を含むことがあり、画面は共通の Markdown の部品で描く。valid な推導 1 件ごとにモデルの呼び出しが 1 回増える。
-
 `summary` は、生成が選んだ最大2つの既出結果からコードが構成する。新しい摘要の自由文は生成させず、導出結果への依存を保存する。依存する結論を非公開にした場合は摘要にも残さない。引用の位置と原文の真正性は、意味的に正しい導出であることの保証ではない。
 
 `answer_parts` は各要求の必要な要点と出力との対応を記録する。宣言した導出が出力されていない状態を、要求IDの一致だけで完了としない。計画のない旧回答は未記録で、意味的な網羅を推測しない。モデルが答えを誤って `gap` に入れた場合や、要点自体を書かなかった場合の意味的な誤りは、型・参照の検証だけでは保証できない。
 
 ### 保存済みの生成指示を使う環境の更新
 
-未編集の生成指示はコードの既定値を使う。保存済みの指示と既存履歴は自動で書き換えない。更新前に「取込・検索・回答設定」で、`generation.system`、`generation.plannedSystem` と回答入力テンプレートの編集有無を確認する。
+未編集の生成指示はコードの既定値を使う。保存済みの指示と既存履歴は自動で書き換えない。編集できる生成指示は「役割と回答の書き方」（`generation.role`）だけで、信頼の境界・引用・出力の形の固定の部分と回答入力テンプレートはコードが持つ（#4782）。更新前に「取込・検索・回答設定」で、編集の有無を確認する。
 
 旧来の自由な `items`・`summary` の生成を指示した内容は、新しい `answer_parts` の契約に合わせる必要がある。編集内容を控えてから新しい既定値と比較し、必要な独自方針を残して更新する。保存内容の形式検証は自然言語の意味的な互換性を保証しないため、直接回答・計算・複数資料の接続・条件適用・情報不足の固定入力で回答と出典を再確認する。未編集の既定値の検証と、保存済み指示の検証は分けて行う。
 
@@ -75,19 +73,8 @@ XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使�
 取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
 「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
-GPU の OCR(dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。MinerU(mineru)は準備中(ロードマップ。下の「ロードマップ」)。
+GPU の OCR(dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。
 
-**MinerU のライセンス(#3359)**: MinerU は「MinerU Open Source License」(Apache-2.0 に追加の条件)で提供される。主な条件は次のとおり。
-**利用の前に、ライセンスの全文([LICENSE.md](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md)。公式のリポジトリは
-[opendatalab/MinerU](https://github.com/opendatalab/MinerU))を確認すること**(ここは主な条件の抜粋で、法的な助言ではない)。
-
-1. 利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか月の売上が 2,000 万米ドルを超えると、MinerU のチームの別途の商用ライセンスが要る。
-2. MinerU を使って第三者にオンラインサービスを提供するときは、サービスの画面か公開の文書の目立つ所に MinerU を使っていることを明示する。
-3. 1・2 を満たさないと、ライセンスは通知なしに自動で終わる。旧モデルの `MinerU2.5-2509-1.2B` は AGPL-3.0 なので、`MinerU2.5-Pro-2605-1.2B`(Apache-2.0)を使う。
-
-MinerU が準備中でなくなったら、システム管理者(system_admin)が「文書解析」の画面で「MinerU のライセンスの条件を確認した」を確かめて保存するまで、
-MinerU は使用エンジンにも処理レシピにも選べない(backend も拒否する。仕組みは実装済み)。確認・取り消しは system_admin だけができ、環境変数・`.env` では書けない。公式の remote 解析(mineru.net)は使わず、自前の API サーバーでは `mineru telemetry disable` で利用状況の送信を止める
-(詳細は [docs/deployment.md](./docs/deployment.md) の「許可（ライセンス）の確認」)。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。
@@ -113,7 +100,7 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 
 - `POST /api/documents/upload`: 原本を Object Storage 境界へ保存し、SHA-256 / サイズ / 重複元を記録してドキュメント行を作成。
 - `POST /api/documents/{id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）: 取込 job を投入し、worker がファイル準備 → OCI Enterprise AI 境界での OCR/構造化要素抽出 → ページ・章節・表・リスト感知 chunking → embedding → Oracle AI Database 境界への索引を工程ごとに実行する。確認待ちの工程は `POST /api/documents/{id}/recipes/{recipe_id}/approve` で次へ進め、抽出の修正は `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` で保存する。
-- `POST /api/search`: 質問の安全チェックと検索範囲（Business Context Pack）の確定の後、回答フロー（質問の理解・質問の拡張・Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF）・Cohere Rerank・根拠の評価と補正検索（CRAG）・small-to-big・回答の生成と監査）で citation-grounded 回答を作り、回答側の安全チェック・trace ID・guardrail warning・回答フローの実行記録を返却。
+- `POST /api/search`: 質問の安全チェックと検索範囲（Business Context Pack）の確定の後、回答フロー（質問の理解・Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF）・Cohere Rerank・small-to-big・回答の生成）で citation-grounded 回答を作り、回答側の安全チェック・trace ID・guardrail warning・回答フローの実行記録を返却。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。
 - `/metrics`: Prometheus metrics を公開。
 
@@ -137,7 +124,6 @@ RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備�
 | 機能 | 状態 | 今の扱い |
 |---|---|---|
 | OCI Document Understanding の解析（`oci_document_understanding`・サービス `parser-oci-document-understanding`） | 準備中（ロードマップ） | 「取込・検索・回答設定 › 文書解析」の使用エンジンと処理レシピの「文書解析」では選べず、API・`RAG_PARSER_ADAPTER_BACKEND` で選ぶと検証のエラーになります。「運用設定 › サービス管理」では起動できず、Terraform の stack・`rag/init_script.sh`・`scripts/rag-services.sh` も配備しません（既存の Compute の unit は再配備で止めて消します）。実装（`services/parsers/oci_document_understanding`・client）は今後の版のために残しています |
-| MinerU の解析（`mineru`。外部で運用する MinerU 4.x の V1 API） | 準備中（ロードマップ） | 「取込・検索・回答設定 › 文書解析」の使用エンジン（Dots.OCR の次、OCI Document Understanding の前）と処理レシピの「文書解析」では選べず、API・`RAG_PARSER_ADAPTER_BACKEND`・処理レシピの保存で選ぶと検証のエラーになります。保存済みの値は既定（全体は Docling、レシピは全体の継承）に寄せ、取込では呼びません。外部接続の欄も出しません。ライセンスは「MinerU Open Source License」（Apache-2.0 に追加の条件。企業の規模による別途の商用ライセンス・オンラインサービスでの利用の明示・満たさないと自動で終わる。旧モデル `MinerU2.5-2509-1.2B` は AGPL-3.0）で、画面のカードの下にも短い案内と [公式のリポジトリ](https://github.com/opendatalab/MinerU)・[LICENSE.md](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md) へのリンクを出します（主な条件は上の「MinerU のライセンス」）。実装（`app/clients/external_parser.py` の HTTP の client、system_admin だけが確認できるライセンスの確認）は今後の版のために残しています |
 
 ## 外部の MCP クライアントから使う（Claude Code など）
 
@@ -153,7 +139,7 @@ claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \
 
 MCP サーバーの名前は `rag` にします（組み込みのスキル（[skills/README.md](../skills/README.md)）がこの名前でツールを使います）。`--header` は単引用符で渡すと、キーの値ではなく `${PR_API_KEY}` が設定に保存され、起動のたびに環境変数から展開されます。
 
-`rag_search` は回答を作るので 20 秒〜2 分かかることがあります（サーバーの上限 600 秒）。Claude Code は MCP のツールを既定で 60 秒で打ち切るので、`MCP_TOOL_TIMEOUT=660000` を付けて起動してください（進み具合の通知は [skills/README.md](../skills/README.md)「長くかかるツール」）。
+`rag_search` は回答を作るので 20 秒〜2 分かかることがあります（サーバーの上限 600 秒）。Claude Code の HTTP の 1 要求の最初の応答までのタイマーは 60 秒で、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びます。サーバーの上限より長くするために、`MCP_TOOL_TIMEOUT=660000` を付けて起動してください（進み具合の通知は [skills/README.md](../skills/README.md)「長くかかるツール」）。
 
 手順・応答・制約は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md) を参照してください。
 
@@ -165,14 +151,6 @@ MCP サーバーの名前は `rag` にします（組み込みのスキル（[sk
 - [検索・回答の能力の一覧（必須 / 任意と縮退）](./docs/answer-capability-inventory.md)
 - [デプロイメント](./docs/deployment.md)
 - [参考 RAG プロジェクト](./docs/reference-rag-projects.md)
-
-## TODO
-
-- [ ] **実際の MinerU 4.x の API サーバーでの確認（未実施）**: #1329 の V1 API（`/v1/uploads` → `/v1/parse/jobs` → `/v1/files`）と
-  #1334 の Middle JSON からの親子階層（small-to-big）の分割は、記録した応答のスタブでだけ確かめている。GPU の MinerU 4.x
-  （`mineru-kit api-server`）を用意できたら、tier ごと（`flash` / `basic` / `standard` / `advanced`）に PDF・画像・Office の文書を
-  取り込み、解析の待ち・取り消し・結果の取得（302 の転送）・見出しの階層・頁と bbox・要素の定位子を確かめる
-  （手順は [docs/deployment.md](./docs/deployment.md)「既存環境の更新手順（#1329 MinerU 4.0 の V1 API）」）。
 
 ## シークレット混入防止(gitleaks)
 

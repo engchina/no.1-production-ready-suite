@@ -1,4 +1,4 @@
-"""本人のテストセット下書きを Oracle に永続化する。既存の校正データとは別に持つ。"""
+"""本人のテストセット下書きを Oracle に永続化する。"""
 
 from typing import Protocol
 

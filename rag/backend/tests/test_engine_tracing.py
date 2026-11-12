@@ -218,7 +218,6 @@ def test_handled_engine_failure_is_not_marked_done(status: str) -> None:
 def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dataclasses import replace
     from types import SimpleNamespace
 
     from pr_backend_core.observability.model_purpose import model_call_purpose
@@ -276,7 +275,7 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         api_key="",
         model="synthetic-model",
     )
-    settings = replace(engine_settings(environ={}, dotenv_path=None), llm_retries=0)
+    settings = engine_settings(environ={}, dotenv_path=None)
     configure_tracing(TracingSettings(), service_name="synthetic")
     try:
         with (
@@ -303,6 +302,10 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         assert len(sent) == len(calls) == 2
         assert [span.status for span in calls] == ["failed", "done"]
         assert [span.attributes["pr.attempt"] for span in calls] == [1, 2]
+        # 同じ呼び出しの試行は同じ束ねの値を持ち、やり直す試行にだけ予定の印が付く（#4736）。
+        groups = {span.attributes["pr.call.retry_group"] for span in calls}
+        assert len(groups) == 1 and all(groups)
+        assert ["pr.retry.scheduled" in span.attributes for span in calls] == [True, False]
         assert [span.attributes["pr.gen_ai.purpose"] for span in calls] == [
             "evidence.read_batch",
             "evidence.repair_batch_range",
@@ -322,41 +325,6 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
             next(span for span in summary.spans if span.operation_name == "rag.search").status
             == "done"
         )
-    finally:
-        shutdown_tracing()
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_catalog_skip_keeps_real_io_through_final_span_summary(enabled: bool) -> None:
-    from pr_backend_core.observability.call_policy import call_content_policy
-    from pr_backend_core.observability.tracing import TraceSummary
-    from rag_engine.config import get_settings as engine_settings
-    from rag_engine.generation.answering import _catalog_article_children
-
-    configure_tracing(TracingSettings(), service_name="synthetic")
-    try:
-        with (
-            call_content_policy(lambda: enabled),
-            operation_trace("rag.search", operation_id="synthetic") as summary,
-            bind_trace_observer(_observe_engine_call),
-        ):
-            assert _catalog_article_children(
-                "合成の質問", [], engine_settings(environ={}, dotenv_path=None)
-            ) == ([], [])
-        saved = TraceSummary.model_validate_json(summary.model_dump_json())
-        stage = next(span for span in saved.spans if span.attributes.get("pr.stage") == "条の選択")
-        assert stage.status == "skipped"
-        assert stage.display and stage.display.details and stage.display.details.call
-        call = stage.display.details.call
-        assert call.capture_enabled is enabled
-        if enabled:
-            import json
-
-            assert call.visibility == "system_admin"
-            assert json.loads(call.input.text)["受け取った質問"] == "合成の質問"
-            assert json.loads(call.output.text)["理由"] == "dependencies_unavailable"
-        else:
-            assert call.input.text == call.output.text == ""
     finally:
         shutdown_tracing()
 
@@ -413,7 +381,6 @@ def test_diversity_stage_preserves_actual_status_and_counts_without_call_bodies(
         ("configuration_disabled", "skipped"),
         ("no_match", "done"),
         ("selection_failed", "failed"),
-        ("caller_queries", "skipped"),
     ],
 )
 def test_recorded_execution_decisions_keep_status_and_reason_without_client_calls(
@@ -422,7 +389,6 @@ def test_recorded_execution_decisions_keep_status_and_reason_without_client_call
     status: str,
 ) -> None:
     from pr_backend_core.observability.call_policy import call_content_policy
-    from rag_engine.generation.answering import _record_catalog_skip
 
     from app.rag.answer_engine import _expansion_stage_outcome
 
@@ -433,10 +399,8 @@ def test_recorded_execution_decisions_keep_status_and_reason_without_client_call
             operation_trace("rag.search", operation_id="synthetic") as summary,
             bind_trace_observer(_observe_engine_call),
         ):
-            if reason == "caller_queries":
-                _record_catalog_skip("条の選択", reason)
-            elif reason == "selection_failed":
-                with _execution_step("画面の選択") as step:
+            if reason == "selection_failed":
+                with _execution_step("合成の補助処理") as step:
                     step.fail("取得に失敗したため、既存の候補で続けます。")
             else:
                 with _observe_engine_call("stage", "実体・別名による検索拡張") as observation:

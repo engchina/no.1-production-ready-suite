@@ -31,14 +31,6 @@ class AnswerLabels:
     abstention_guidance: str
     citation_prefix: str
     deadline_summary: str
-    off_goal_gap: str
-    cause_gap: str
-    subject_unconfirmed_gap: str
-    crag_refusal_summary: str
-    crag_missing_aspect_template: str
-    crag_unknown_aspect_template: str
-    crag_quote_only_note: str
-    crag_definition_aspect_template: str
     operation_steps_heading: str
     confirmation_steps_heading: str
     page_location: str
@@ -46,39 +38,19 @@ class AnswerLabels:
     item_bullet: str
     steps_heading_template: str
     quote_template: str
-    condition_template: str
-    condition_suffix: str
-    condition_link: str
     # 小問ごとの見出しの型（{label} に小問の印、{text} に小問の文。#2399）。
     subquestion_heading_template: str
-    missing_request_template: str
-    # 回答の末尾の節（#2738）: 根拠と矛盾して外した内容と、印の付いた段落・回答全体の警告の一覧。
-    removed_section: str
-    removed_section_note: str
-    marked_section: str
-    marked_section_note: str
-    # 検索した資料の原文と照合できない説明の節（#2792。資料の出典を付けない）と、業務ガイドの案内の節（業務ガイドの
     # 設定の窓口・引き継ぐ条件・承認。{title} に業務ガイドの題名、{contact} に窓口、{conditions} に条件、{note} に承認の補足）。
-    unsourced_section: str
-    unsourced_section_note: str
-    # 印の付いた説明（確かめていない・注意が要る）の節（#3394。「資料により確認できた事項」に入れない）。
-    marked_rules_section: str
-    marked_rules_section_note: str
     guide_notes_section: str
     guide_notes_note_template: str
     guide_handoff_template: str
     guide_approval_template: str
     guide_acquisition_incomplete_template: str
-    # 節の 1 行の型（{text} に段落の短い引用、{reasons} に理由）と、回答全体の警告の行の型。
-    passage_note_template: str
-    answer_warning_template: str
-    # 用言の終わり（「有効期限を過ぎた」）。条件がこれで終わるときは「の」を挟まない (#644)。
-    predicate_endings: tuple[str, ...]
-    # 観点名（task_contract.required_aspects）→ 利用者向けの語 (#986)。
-    aspect_labels: dict[str, str]
-    # 段落の印・外した段落・回答全体の警告の理由の code → 利用者向けの短い文（#2738。
-    # platform/contracts/answer-passages/passage-marks.json の reason_codes）。
-    passage_reason_labels: dict[str, str]
+    # 冒頭の回答の表の右端の出典の列名と、「資料をもとに導いた結論」で表の題の下に出す案内（#4812）。
+    table_source_column: str
+    table_above_note: str
+    # 文書全体の要約（取込のときに作った説明）を根拠にしたときの、出典の場所の表示（#4793）。
+    document_summary_location: str
     # render() が決定的に出力する見出し行と出典行、「参考情報」の節の原文の行と節の箇条の行。
     structural_line: re.Pattern[str]
     quote_only_line: re.Pattern[str]
@@ -94,20 +66,11 @@ class AnswerLabels:
     def quote(self, text: str) -> str:
         return self.quote_template.format(quote=text)
 
-    def condition(self, text: str) -> str:
-        return self.condition_template.format(condition=text)
-
     def steps_heading(self, heading: str, title: str) -> str:
         return self.steps_heading_template.format(heading=heading, title=title) if title else heading
 
     def subquestion_heading(self, label: str, text: str) -> str:
         return self.subquestion_heading_template.format(label=label, text=text)
-
-    def passage_note(self, text: str, reasons: str) -> str:
-        return self.passage_note_template.format(text=text, reasons=reasons)
-
-    def answer_warning(self, reasons: str) -> str:
-        return self.answer_warning_template.format(reasons=reasons)
 
     def guide_notes_note(self, title: str) -> str:
         return self.guide_notes_note_template.format(title=title)
@@ -147,15 +110,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         text("gaps_section"),
         text("unverified_section"),
         text("deadline_section"),
-        text("removed_section"),
-        text("removed_section_note"),
-        text("marked_section"),
-        text("marked_section_note"),
-        text("unsourced_section"),
-        text("unsourced_section_note"),
-        text("marked_rules_section"),
-        text("marked_rules_section_note"),
         text("guide_notes_section"),
+        text("table_above_note"),
     )
     return AnswerLabels(
         rules_section=text("rules_section"),
@@ -173,14 +129,6 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         abstention_guidance=text("abstention_guidance"),
         citation_prefix=text("citation_prefix"),
         deadline_summary=text("deadline_summary"),
-        off_goal_gap=text("off_goal_gap"),
-        cause_gap=text("cause_gap"),
-        subject_unconfirmed_gap=text("subject_unconfirmed_gap"),
-        crag_refusal_summary=text("crag_refusal_summary"),
-        crag_missing_aspect_template=text("crag_missing_aspect_template"),
-        crag_unknown_aspect_template=text("crag_unknown_aspect_template"),
-        crag_quote_only_note=text("crag_quote_only_note"),
-        crag_definition_aspect_template=text("crag_definition_aspect_template"),
         operation_steps_heading=text("operation_steps_heading"),
         confirmation_steps_heading=text("confirmation_steps_heading"),
         page_location=text("page_location"),
@@ -188,29 +136,15 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         item_bullet=text("item_bullet"),
         steps_heading_template=text("steps_heading_template"),
         quote_template=text("quote_template"),
-        condition_template=text("condition_template"),
-        condition_suffix=text("condition_suffix"),
-        condition_link=text("condition_link"),
         subquestion_heading_template=text("subquestion_heading_template"),
-        missing_request_template=text("missing_request_template"),
-        removed_section=text("removed_section"),
-        removed_section_note=text("removed_section_note"),
-        marked_section=text("marked_section"),
-        marked_section_note=text("marked_section_note"),
-        unsourced_section=text("unsourced_section"),
-        unsourced_section_note=text("unsourced_section_note"),
-        marked_rules_section=text("marked_rules_section"),
-        marked_rules_section_note=text("marked_rules_section_note"),
         guide_notes_section=text("guide_notes_section"),
         guide_notes_note_template=text("guide_notes_note_template"),
         guide_handoff_template=text("guide_handoff_template"),
         guide_approval_template=text("guide_approval_template"),
         guide_acquisition_incomplete_template=text("guide_acquisition_incomplete_template"),
-        passage_note_template=text("passage_note_template"),
-        answer_warning_template=text("answer_warning_template"),
-        predicate_endings=pack.words("answer_labels", "predicate_endings"),
-        aspect_labels={aspect: label for label, aspect in pack.mapping("answer_labels", "aspect_labels").items()},
-        passage_reason_labels={code: label for label, code in pack.mapping("answer_labels", "passage_reason_labels").items()},
+        table_source_column=text("table_source_column"),
+        table_above_note=text("table_above_note"),
+        document_summary_location=text("document_summary_location"),
         structural_line=re.compile(
             "|".join(re.escape(title) for title in titles)
             + rf"|(?:{steps})(?:{re.escape(title_open)}.+{re.escape(title_close)})?|"

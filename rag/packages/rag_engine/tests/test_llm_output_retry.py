@@ -53,8 +53,13 @@ def _completed():
 
 
 class OutputRetryRecordTest(unittest.TestCase):
-    def call(self, client, provider=PROVIDER):
-        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+    def setUp(self):
+        patcher = mock.patch.object(oci.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def call(self, client, provider=PROVIDER, *, retries=1):
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000, llm_max_retries=retries)
         steps: list = []
         step_token = execution_record._structured_steps.set(steps)
         usage_token = llm_usage.set(LlmUsage())
@@ -113,16 +118,16 @@ class OutputRetryRecordTest(unittest.TestCase):
 
     def test_repeated_corruption_fails_with_existing_retry_limit(self):
         corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="説明\ufffd").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted, corrupted])
+        client = _Client([corrupted] * (1 + oci.LLM_CALL_MAX_RETRIES))
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertRaises(oci.InvalidStructuredOutput):
             oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
-        self.assertEqual(len(client.budgets), 2)
+        self.assertEqual(len(client.budgets), 1 + oci.LLM_CALL_MAX_RETRIES)
 
     def test_rejected_corruption_names_the_fields_but_not_the_text(self):
         # 退けた出力の原文は残らないので、どの欄に置換文字があったかを例外と log に残す（#3849）。本文は残さない。
         corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="合成の説明�").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted, corrupted])
+        client = _Client([corrupted] * (1 + oci.LLM_CALL_MAX_RETRIES))
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with (
             mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
@@ -133,7 +138,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertIn("欄: text", str(raised.exception))
         self.assertNotIn("合成の説明", str(raised.exception))
         rejected = [record for record in logs.records if getattr(record, "event", "") == "llm_output_rejected"]
-        self.assertEqual(len(rejected), 2)
+        self.assertEqual(len(rejected), 1 + oci.LLM_CALL_MAX_RETRIES)
         self.assertEqual(rejected[0].llm_rejected_paths, ["text"])
         self.assertEqual(rejected[0].llm_rejected_reason, "replacement_character")
         self.assertNotIn("合成の説明", rejected[0].getMessage())
@@ -213,7 +218,7 @@ class OutputRetryRecordTest(unittest.TestCase):
     def test_reasoning_effort_is_lowered_after_the_widened_limit(self):
         """上限を広げても未完了なら、推論の量を 1 段下げて（medium → low）もう 1 回だけ送り直す（#2023）。"""
         client = _Client([_incomplete("max_output_tokens"), _incomplete("max_output_tokens"), _completed()])
-        usage, records = self.call(client, provider=MEDIUM_PROVIDER)
+        usage, records = self.call(client, provider=MEDIUM_PROVIDER, retries=2)
         self.assertEqual(client.budgets, [1000, 2000, 2000])
         self.assertEqual(client.efforts, ["medium", "medium", "low"])
         self.assertEqual((usage["output_retries"], usage["effort_retries"]), (1, 1))
@@ -235,7 +240,7 @@ class OutputRetryRecordTest(unittest.TestCase):
     def test_incomplete_after_both_retries_names_the_fixes(self):
         """送り直しても未完了なら、利用者向けの文（何が起きたかと直し方）と「詳細」の文を分けて送出する。"""
         client = _Client([_incomplete("max_output_tokens")] * 3)
-        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000, llm_max_retries=2)
         with (
             mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
             self.assertLogs(oci.__name__, level="INFO"),

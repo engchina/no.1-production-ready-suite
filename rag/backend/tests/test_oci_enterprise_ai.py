@@ -585,13 +585,15 @@ async def test_oci_generate_posts_rag_generation_payload() -> None:
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("承認条件は？", "[policy.txt#doc-1:0]\n承認条件: 120,000")
+    answer = await client.generate(
+        "承認条件は？", "[policy.txt#doc-1:0]\n承認条件: 120,000", system_prompt="合成の指示"
+    )
 
     assert answer == "根拠に基づく回答です。"
     assert transport.calls[0]["url"] == "https://enterprise-ai.example/llm/generate"
     payload = transport.calls[0]["payload"]
     assert payload["model"] == "enterprise-llm"
-    assert payload["instructions"]
+    assert payload["instructions"] == "合成の指示"
     assert payload["temperature"] == 0.0
     # 出力の上限はテキストのモデルの値(#1719。登録の無いモデルは既定の 32768)。
     assert payload["max_output_tokens"] == 32768
@@ -618,7 +620,7 @@ async def test_oci_generate_uses_configured_default_model() -> None:
     transport = FakeEnterpriseAiTransport({"answer": "回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
-    assert await client.generate("質問", "根拠") == "回答"
+    assert await client.generate("質問", "根拠", system_prompt="合成の指示") == "回答"
 
     assert transport.calls[0]["payload"]["model"] == "enterprise-default"
 
@@ -690,7 +692,7 @@ async def test_oci_adapter_adds_project_and_api_key_headers() -> None:
     transport = FakeEnterpriseAiTransport({"answer": "回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
-    assert await client.generate("質問", "根拠") == "回答"
+    assert await client.generate("質問", "根拠", system_prompt="合成の指示") == "回答"
 
     headers = transport.calls[0]["headers"]
     assert headers["OpenAI-Project"] == "ocid1.generativeaiproject.oc1..example"
@@ -705,7 +707,7 @@ async def test_oci_adapter_requires_api_key_before_endpoint_call() -> None:
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
     with pytest.raises(ValueError, match="OCI Enterprise AI API key"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls == []
 
@@ -745,7 +747,7 @@ async def test_oci_generate_accepts_inference_response_content_parts() -> None:
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "根拠1に基づく回答です。\n補足は根拠2です。"
 
@@ -774,7 +776,7 @@ async def test_oci_generate_accepts_openai_responses_output_text() -> None:
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "Responses API 由来の回答です。"
 
@@ -855,7 +857,7 @@ async def test_oci_incomplete_message_reports_reason_limit_and_used_tokens() -> 
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
     with pytest.raises(EnterpriseAiIncompleteResponseError) as raised:
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     message = str(raised.value)
     assert "モデル「enterprise-llm」" in message
@@ -880,7 +882,7 @@ async def test_oci_payloads_use_each_model_output_limit(vision_output_limit: int
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
-    await client.generate("質問", "根拠")
+    await client.generate("質問", "根拠", system_prompt="合成の指示")
     await client.generate_from_images([b"png"], "読み取ってください")
     await client.generate_from_image(b"png", "確認してください")
 
@@ -907,7 +909,7 @@ async def test_oci_generate_reports_openai_responses_error_before_empty_text() -
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
     with pytest.raises(ValueError, match="Unsupported request field"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
 
 def test_oci_http_status_error_includes_response_body() -> None:
@@ -940,7 +942,7 @@ async def test_oci_generate_accepts_tool_call_answer_payload() -> None:
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "tool call 由来の回答です。"
 
@@ -954,7 +956,7 @@ async def test_oci_generate_uses_configured_response_path() -> None:
     )
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "深い envelope 由来の回答です。"
 
@@ -970,7 +972,7 @@ async def test_oci_generate_uses_configured_payload_template() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "テンプレート回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "テンプレート回答"
     payload = transport.calls[0]["payload"]
@@ -990,7 +992,7 @@ async def test_oci_generate_rejects_empty_text_response() -> None:
     )
 
     with pytest.raises(ValueError, match="回答 text"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
 
 async def test_oci_adapter_requires_endpoint_before_transport_call() -> None:
@@ -1001,7 +1003,7 @@ async def test_oci_adapter_requires_endpoint_before_transport_call() -> None:
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
     with pytest.raises(ValueError, match="endpoint"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls == []
 
@@ -1013,7 +1015,7 @@ async def test_oci_adapter_uses_absolute_path_override() -> None:
     transport = FakeEnterpriseAiTransport({"answer": "回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
-    assert await client.generate("質問", "根拠") == "回答"
+    assert await client.generate("質問", "根拠", system_prompt="合成の指示") == "回答"
     assert transport.calls[0]["url"] == "https://private.example/custom/generate"
 
 
@@ -1025,7 +1027,7 @@ async def test_oci_adapter_rejects_unknown_payload_template_placeholder() -> Non
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
     with pytest.raises(ValueError, match="未対応の placeholder"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls == []
 
@@ -1038,7 +1040,7 @@ async def test_oci_adapter_rejects_invalid_response_path() -> None:
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
     with pytest.raises(ValueError, match="key が見つかりません"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert transport.calls
 
@@ -1284,7 +1286,7 @@ async def test_oci_generate_drops_reasoning_item_from_answer() -> None:
     transport = FakeEnterpriseAiTransport(response)
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "日本の首都は東京です。"
 
@@ -1296,7 +1298,7 @@ async def test_oci_generate_parses_structured_answer_after_reasoning() -> None:
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     # 構造化出力の本文(JSON)だけを返し、呼び出し側の JSON の解析が通る。
     assert json.loads(answer) == {"answer": "日本の首都は東京です。"}
@@ -1324,7 +1326,10 @@ async def test_oci_generate_without_reasoning_is_unchanged() -> None:
     transport = FakeEnterpriseAiTransport(response)
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    assert await client.generate("質問", "根拠") == "日本の首都は東京です。"
+    assert (
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
+        == "日本の首都は東京です。"
+    )
 
 
 async def test_oci_generate_drops_thinking_blocks_in_content_array() -> None:
@@ -1348,7 +1353,7 @@ async def test_oci_generate_drops_thinking_blocks_in_content_array() -> None:
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    answer = await client.generate("質問", "根拠")
+    answer = await client.generate("質問", "根拠", system_prompt="合成の指示")
 
     assert answer == "1 文目です。\n2 文目です。"
 
@@ -1367,7 +1372,7 @@ async def test_oci_generate_drops_chat_completions_reasoning(message: dict[str, 
     transport = FakeEnterpriseAiTransport({"choices": [{"message": message}]})
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
-    assert await client.generate("質問", "根拠") == "東京です。"
+    assert await client.generate("質問", "根拠", system_prompt="合成の指示") == "東京です。"
 
 
 async def test_oci_generate_does_not_return_reasoning_when_message_is_empty() -> None:
@@ -1376,7 +1381,7 @@ async def test_oci_generate_does_not_return_reasoning_when_message_is_empty() ->
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
     with pytest.raises(ValueError, match="回答 text"):
-        await client.generate("質問", "根拠")
+        await client.generate("質問", "根拠", system_prompt="合成の指示")
 
 
 @pytest.mark.parametrize(

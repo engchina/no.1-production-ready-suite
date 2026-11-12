@@ -205,12 +205,9 @@ def test_section_read_cases_need_every_page_of_one_section() -> None:
 def test_document_read_cases_need_evidence_from_several_chapters() -> None:
     """文書全体の網羅の問（#1503）は、必要な根拠が同じ資料の 2 つ以上の章にある。
 
-    質問は件数・章の範囲を示す（``enumeration_request`` が数えられる要求として取り出す）。
-
     点検表の欄の表の根拠は、資料の中で表にしか現れない値（本文の chunk の引用で一致しない）。
     """
     from pypdf import PdfReader
-    from rag_engine.retrieval.enumeration import enumeration_request
 
     builder = _source_builder()
     _payload, request = _load_set()
@@ -233,8 +230,6 @@ def test_document_read_cases_need_evidence_from_several_chapters() -> None:
             assert contains_normalized(page_text[page - 1], item.text), (case.id, item.id)
             if item.id.startswith("sheet-"):
                 assert html_text.count(item.text) == 1, (case.id, item.id)
-        enumeration = enumeration_request(case.query)
-        assert enumeration is not None and enumeration.countable, case.id
 
 
 def test_multi_hop_corpus_has_notation_variants_and_references() -> None:

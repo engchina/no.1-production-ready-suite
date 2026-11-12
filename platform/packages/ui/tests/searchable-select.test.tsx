@@ -131,6 +131,28 @@ describe("filterSearchableOptions", () => {
 });
 
 describe("SearchableMultiSelect", () => {
+  it("creatable は候補に無い検索語を選択の末尾に足し、検索語を消す（#4733）", () => {
+    const onChange = vi.fn();
+    const input = mountMulti({ creatable: true, initial: ["kb-1"], onChange });
+    act(() => input.focus());
+    type(input, "独自の値");
+    act(() => vi.advanceTimersByTime(SEARCH_FIELD_DEBOUNCE_MS));
+    const add = Array.from(host.querySelectorAll("button")).find(
+      (button) => button.textContent === "「独自の値」を追加"
+    )!;
+    act(() => add.click());
+    expect(onChange).toHaveBeenLastCalledWith(["kb-1", "独自の値"]);
+    expect(input.value).toBe("");
+  });
+
+  it("creatable でなければ追加のボタンを出さない（#4733）", () => {
+    const input = mountMulti();
+    act(() => input.focus());
+    type(input, "独自の値");
+    act(() => vi.advanceTimersByTime(SEARCH_FIELD_DEBOUNCE_MS));
+    expect(host.textContent).not.toContain("を追加");
+  });
+
   it("検索欄は combobox で、ラベル・必須・一覧との結び付きを持つ。フォーカスで一覧を開く", () => {
     const input = mountMulti({ required: true });
     expect(input.getAttribute("aria-labelledby")).toBeTruthy();
@@ -272,6 +294,20 @@ describe("SearchableMultiSelect", () => {
     expect(onLoadMore).toHaveBeenCalledTimes(2);
   });
 
+  it("スクロール領域へフォーカスが移っても開いたままで、Esc で入力へ戻る", () => {
+    const onChange = vi.fn();
+    const input = mountMulti({ initial: ["kb-1"], onChange });
+    focus(input);
+    const list = document.querySelector<HTMLElement>('[role="listbox"]')!;
+    focus(list);
+    expect(document.activeElement).toBe(list);
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    keydown(list, "Escape");
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("「完了」で一覧を閉じて検索欄へ戻り、戻したことで開き直さない", () => {
     const input = mountMulti();
     focus(input);
@@ -401,6 +437,19 @@ describe("SearchableSelectField", () => {
     advance(SEARCH_FIELD_DEBOUNCE_MS);
     // -25, -250〜-259
     expect(options()).toHaveLength(11);
+  });
+
+  it.each(["listbox", "dialog"])("%s にフォーカスがあるときも Esc と Tab で閉じてボタンへ戻る", (role) => {
+    for (const key of ["Escape", "Tab"]) {
+      const button = mountSingle();
+      click(button);
+      const region = document.querySelector<HTMLElement>(`[role="${role}"]`)!;
+      focus(region);
+      expect(document.activeElement).toBe(region);
+      keydown(region, key);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(button);
+    }
   });
 
   it("Esc で閉じてボタンへ戻り、囲むダイアログへ伝えない。検索語は次に開いたとき残らない", () => {

@@ -29,22 +29,6 @@ VISION_LIST_FIELD_LIMITS = {
     "form_fields": MAX_FORM_FIELDS,
 }
 
-# 語の列挙だけの行の field (#773)。根拠の判定・監査（result_granularity / operation_audit）はこれらの行と
-# グループ見出しを本文として使わない。ラベルは言語資源（content_labels。#2181）。
-VISION_ENUMERATION_FIELDS = (
-    "main_topic",
-    "menu_route",
-    "visible_screen_names",
-    "visible_buttons",
-    "visible_fields",
-    "visible_values",
-    "codes_and_errors",
-    "search_keywords",
-    "query_rewrites",
-    "answerable_questions",
-)
-
-
 # 画面に写っている値そのものを載せる行の field。項目名は「項目:」に残るため、検索用テキストからは
 # この行とその箇条書きを落とす。prompt の接頭辞（「画面例: 」）はモデルが守るとは限らず、
 # 実文書で守られない例が出たため、アプリが決定的に判別できる行ラベルで除く (#778)。
@@ -70,15 +54,6 @@ def without_vision_screen_values(text: str) -> str:
         dropping = False
         kept.append(line)
     return "\n".join(kept)
-
-
-def is_vision_enumeration_line(line: str) -> bool:
-    """生成説明のうち、語の列挙とグループ見出しだけの行かを返します。
-
-    本文として引用・判定に使うと、ボタン名や検索語が根拠の記述として扱われるため除きます。
-    """
-    labels = content_labels()
-    return line.lstrip().startswith(labels.group_prefix) or bool(re.match(r"\s*" + labels.field_line(*VISION_ENUMERATION_FIELDS), line))
 
 
 RULES_START = "[Vision extraction rules v1]"
@@ -109,9 +84,13 @@ TABLE_EXTRACTION_INSTRUCTION = (
 )
 
 
+# 説明を書く言語の基準として渡す、対象と同じページの本文の抜粋の metadata の key（#4821）。
+# 抜粋を作る側（picture_descriptions）と、読み方を書く側（出力契約）が同じ名前を使う。
+PAGE_TEXT_SAMPLE_KEY = "page_text_sample"
+
 # 各項目の意味は PictureDescriptionOutput の Field(description=...) に置き、ここには判断の原則だけを書く。
 VISION_EXTRACTION_INSTRUCTION = """### 読み取りの方針
-原文と検索用の言い換えを分離します。各項目の意味と形式は実行時の契約に従います。
+原文と検索用の言い換えを分離します。各項目の意味と形式は応答の schema に従います。
 
 ### 1. 原文保持
 - table_headers / table_rows / visible_* / codes_and_errors / visible_text は原文の正式名称、否定、条件、数値、単位、句読点を保持し、要約・同義語置換をしない。個人情報の扱いは上記の規則に従う。

@@ -918,17 +918,9 @@ def test_diff_reports_relative_order_but_not_added_rows_as_reordering() -> None:
     "status",
     ["explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"],
 )
-def test_preview_and_mcp_preserve_guide_coverage_status(status: str) -> None:
-    from app.mcp.tools import ValidatedGuideStep
-    from app.schemas.support_guide import SUPPORT_GUIDE_STEP_STATUSES
-
+def test_preview_preserves_guide_coverage_status(status: str) -> None:
     draft = SupportGuideContent.model_validate(guide())
     values = route._try_steps(
         {"step_coverage": [{"step_id": "register", "status": status, "required": True}]}, draft
     )
     assert len(values) == 1 and values[0].status == status
-    assert ValidatedGuideStep.model_validate(values[0].model_dump()).status == status
-    assert (
-        tuple(ValidatedGuideStep.model_json_schema()["properties"]["status"]["enum"])
-        == SUPPORT_GUIDE_STEP_STATUSES
-    )

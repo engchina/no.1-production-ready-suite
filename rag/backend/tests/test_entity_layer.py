@@ -468,11 +468,7 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 
 
 def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in (
-        "RAG_ENTITY_EXPANSION_ENABLED",
-        "RAG_SCREEN_LINKING_ENABLED",
-        "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED",
-    ):
+    for key in ("RAG_ENTITY_EXPANSION_ENABLED",):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
     # 索引の構築は既定 OFF。検索時の拡張とは別に設定する。
@@ -482,22 +478,9 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     assert settings.rag_entity_attribute_columns == []
     # 任意の検索拡張は明示的に有効化した場合だけ使う。
     assert settings.rag_entity_expansion_enabled is False
-    assert settings.rag_screen_linking_enabled is False
-    assert settings.rag_request_coverage_retrieval_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
-
-
-@pytest.mark.parametrize(
-    "field", ["entity_expansion", "screen_linking", "request_coverage_retrieval"]
-)
-def test_optional_search_expansion_accepts_explicit_environment_enable(
-    monkeypatch: pytest.MonkeyPatch, field: str
-) -> None:
-    monkeypatch.setenv(f"RAG_{field.upper()}_ENABLED", "true")
-    settings = Settings(_env_file=None)
-    assert getattr(settings, f"rag_{field}_enabled") is True
 
 
 def test_entity_expansion_uses_global_environment_settings(
@@ -529,43 +512,6 @@ def test_entity_expansion_uses_global_environment_settings(
     assert settings.rag_reference_expansion_max_chunks == 7
     # 属性名での生成（テスト・評価の上書き）は受け付ける。
     assert Settings(rag_entity_expansion_enabled=False).rag_entity_expansion_enabled is False
-
-
-def test_search_answer_profile_ignores_legacy_entity_expansion() -> None:
-    """保存済みの個別設定は適用せず、全体の名称・別名の拡張を使う。"""
-    from app.rag.search_answer_profile_config import (
-        parse_search_answer_profile_config,
-        resolve_search_answer_profile_settings,
-    )
-
-    base = Settings(rag_entity_expansion_enabled=True)
-    selected, applied = resolve_search_answer_profile_settings(
-        base,
-        parse_search_answer_profile_config(
-            {
-                "knowledge_base_ids": ["kb-1"],
-                "query": {"entity_expansion_enabled": False, "entity_expansion_max_chunks": 3},
-            }
-        ),
-    )
-    assert applied is False
-    assert selected.rag_entity_expansion_enabled is True
-    assert selected.rag_entity_expansion_max_chunks == 6
-    # 全体の設定は変えない（ほかのプロファイルの検索には効かない）。
-    assert base.rag_entity_expansion_enabled is True
-    # プロファイルの値に関係なく、明示的に有効化した全体の設定を使う。
-    for query in ({}, {"entity_expansion_enabled": None}, {"entity_expansion_enabled": True}):
-        other, _ = resolve_search_answer_profile_settings(
-            base,
-            parse_search_answer_profile_config({"knowledge_base_ids": ["kb-2"], "query": query}),
-        )
-        assert other.rag_entity_expansion_enabled is True
-        assert other.rag_entity_expansion_max_chunks == 6
-    # 上限の範囲はコードの検証で持つ（1〜20）。範囲の外の保存値は読まない（空の設定へ縮退）。
-    broken = parse_search_answer_profile_config(
-        {"knowledge_base_ids": ["kb-1"], "query": {"entity_expansion_max_chunks": 21}}
-    )
-    assert broken.query.entity_expansion_max_chunks is None
 
 
 def test_recipe_option_maps_to_ingestion_settings() -> None:

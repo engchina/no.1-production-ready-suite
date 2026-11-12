@@ -185,6 +185,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - inline style の生の px → 余白・寸法トークンか Tailwind のユーティリティを使う（Tailwind のレイアウト寸法 `min-w-[640px]` 等は画面固有のレイアウトとして許容）
 - デザインシステムに無い書体 → `var(--font-sans)` / `var(--font-mono)`
 - 文字サイズ・行間・字間・角丸の任意値（`text-[10px]` / `rounded-[3px]`）→ `text-xs` / `rounded-md` 等のトークン
+- `grid-cols-[…]` の任意値で `minmax(0,…)` に包まない `fr`（`grid-cols-[max-content_1fr]` / `grid-cols-[1fr_auto]`）→ `minmax(0,1fr)`。`1fr` の最小は中身の最小の幅で、長い値で列が広がり横にあふれる。意図した最小の幅は `minmax(8rem,1fr)`（#4803）
 - 旧トークン名（`bg-card` / `var(--primary)` 等。§5 の表の左列）→ 新名
 - `@production-ready/ui/dist/**` など内部パスへの直 import → パッケージのルート、または公開の `@production-ready/ui/graph` 入口から import する
 - `@production-ready/ui/graph` は React Flow を使う RAG／NL2SQL の共通画布・図の操作・ノードの面を提供する。React Flow は任意の peer dependency とし、図を使わない製品の root 入口には混ぜない。ノードは `GraphNodeCard`、辺は `graphEdgeStyle`・`GRAPH_EDGE_LABEL_PROPS`・`GRAPH_EDGE_MARKER`・`selectGraphEdgeHandles`・`GraphParallelEdge`、凡例の色は `GraphLegendSwatch` を使い、製品に描画を置かない。レイアウト・種類と色の対応・詳細のデータは各製品が渡す。階層のパスを名前に持つノードは `graphPathLabel` で末尾の段を主な表示にし、完全な名前は `title` と選択の詳細に出す。共通スタイルは `packages/ui` に置き、帰属表示を保持する。利用する製品は Vite の `resolve.dedupe` に `@xyflow/react` を含め、正式 build でも provider と hook を1つの context に集約する。
@@ -229,7 +230,7 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 
 今ライト専用なので、**ダークテーマが無償で付いてきます**（`data-theme="dark"` を付けるだけ）。
 
-- **Agent** はサイドバーにフッターが無いので `SidebarAccountFooter`（ユーザー・ロール・ログアウト・テーマ切替）が入ります
+- **Agent** はサイドバーにフッターが無いので `SidebarAccountFooter`（ユーザー・ロール・アカウントとログアウトのメニュー・テーマ切替）が入ります
 - **RAG** は `--font-mono` が無かったので、ID とログが Google Sans Code になります
 
 ### 3アプリ共通

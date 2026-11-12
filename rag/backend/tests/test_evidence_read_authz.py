@@ -835,6 +835,7 @@ def test_citation_source_metadata_follows_viewer_scope(
             "file_name": "sample.pdf",
             "content_type": "application/pdf",
             "is_pdf": True,
+            "is_structured_records": False,
         }
     else:
         reader.assert_not_awaited()

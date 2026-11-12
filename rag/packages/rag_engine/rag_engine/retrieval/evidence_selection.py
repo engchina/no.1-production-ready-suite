@@ -10,24 +10,16 @@ from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import range_class
 
-from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.structural_text import structural_only
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.character_forms import find_width_folded
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.table_header_lines import TABLE_HEADER_LINES_KEY, header_lines, header_lines_in
-from rag_engine.retrieval.task_contract import (
-    COUNT_REQUEST,
-    LIST_REQUEST,
-    STEPS_REQUEST,
-    current_request_text,
-    explicit_requests,
-    task_contract,
-)
+
+# 条で構成された文書（XML ツリー JSON の段落）の根拠の印（record の metadata と、回答の根拠 span の key）。
+# 文書の構造で決める（語の一覧を持たない）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+ARTICLE_UNIT_KEY = "article_unit"
 
 
 def _record_page_end(record: Any) -> int:
@@ -47,43 +39,13 @@ def _terms(value: str) -> set[str]:
     for word in re.findall(rf"{cues.kana_kanji}{{2,}}", text):
         terms.add(word)
         terms.update(word[i : i + 2] for i in range(len(word) - 1))
-    return terms - set(cues.words["relevance_stop_terms"])
+    return terms
 
 
 def evidence_relevance(question: str, text: str) -> float:
-    """用語一致と操作ラベルから相対関連度を返す。事実の正しさは判定しない。"""
+    """質問の語と本文の語の重なりで相対関連度を返す。事実の正しさは判定しない。"""
     normalized = unicodedata.normalize("NFKC", text).lower()
-    cues = evidence_cues()
-    alt = cues.alt
-    labels = content_labels()
-    # 画像の説明の「操作:」「条件と結果:」の欄（content_labels）と、操作の説明の語（evidence_cues）。
-    operation_fields = labels.field_line("operation_steps")
-    operation_text = f"{operation_fields}|{labels.field_line('condition_result_pairs')}|{alt['operation_text_cues']}"
-    matches = [term for term in _terms(current_request_text(question)) if term in normalized]
-    score = sum(min(len(term), 8) for term in matches)
-    # 列名の出現数ではなく、質問の各項目に対する定義本文を優先する。
-    score += 100 * len({item["label"] for item in definition_ranges(text, definition_labels(question))})
-    # 一致する操作説明を画面のサンプル値より優先する。無関係な操作には加点しない。
-    if matches:
-        score *= 1 + 0.18 * min(3, len(re.findall(operation_text, text)))
-    requests = explicit_requests(question)
-    if STEPS_REQUEST in requests and matches:
-        if re.search(rf"(?m)^\s*[{cues.chars('heading_bullet_chars')}]", text):
-            score += 80
-        if content_labels().index_line.match(text):
-            score *= 0.2
-    if re.search(alt["default_question_cues"], question, re.I):
-        score += 10 * len(set(re.findall(alt["default_text_cues"], text)))
-    if requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST}:
-        # 表名一致だけでは集計値の説明が名簿の操作を押し出す。原質問の出力対象で
-        # 補正し、検索用ラベルの反復より一覧の選択・抽出・実行を残す。
-        list_terms = set(re.findall(alt["list_text_cues"], normalized))
-        score += 12 * len(list_terms)
-        if list_terms and re.search(rf"{operation_fields}|{alt['list_action_words']}.*{alt['list_execute_words']}", text):
-            score += 40
-        if content_labels().index_line.match(text):
-            score *= 0.2
-    return score
+    return sum(min(len(term), 8) for term in _terms(question) if term in normalized)
 
 
 def evidence_excerpt(
@@ -128,47 +90,11 @@ def evidence_excerpt(
             spans.extend((start, min(right, start + window)) for start in range(left, right, max(1, window // 2)))
     if not spans:
         return text[:budget]
-    # 表の項目名だけに点数が集中しても、後続の番号付き完了操作を落とさない。
-    # 長い表全体は必須にせず、実際の操作を含む原文行を保護する。
-    steps = []
-    step_number = rf"\s*(?:[0-9０-９]+\s*[{cues.chars('step_number_closers')}]|{range_class(cues.words['step_circled_numbers'])})"
-    requests = explicit_requests(question)
-    if STEPS_REQUEST in requests or requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST}:
-        for match in re.finditer(r"(?m)^[^\n]+", text):
-            numbered = re.match(step_number, match.group())
-            conditional = cues.has("step_condition_cues", match.group())
-            if (numbered or conditional) and cues.has("step_action_words", match.group()):
-                steps.append(match.span())
-    # 短い節名の直後に箇条書きの条件が続く場合、節名と条件を同じ窓にする。
-    # 片方の処理区分名だけが落ちると、同ページの別モードへ条件を誤配属する。
-    if STEPS_REQUEST in requests:
-        lines = list(re.finditer(r"(?m)^[^\n]*(?:\n|$)", text))
-        for index, line in enumerate(lines[:-1]):
-            heading = line.group().strip()
-            if not re.fullmatch(rf"[^{plain}]{{2,32}}", heading) or not lines[index + 1].group().lstrip().startswith(
-                cues.words["item_bullet_chars"]
-            ):
-                continue
-            end = lines[index + 1].end()
-            for following in lines[index + 2 :]:
-                body = following.group().strip()
-                if (
-                    not body
-                    or re.fullmatch(rf"[^{plain}]{{2,32}}", body)
-                    or re.match(
-                        rf"(?:[0-9０-９]+[{cues.chars('step_number_closers')}]|[{bullets}]"
-                        rf"|[^{cues.chars('label_colon_chars')}]{{1,20}}[{cues.chars('label_colon_chars')}])",
-                        body,
-                    )
-                ):
-                    break
-                end = following.end()
-            steps.append((line.start(), end))
     priority = list(dict.fromkeys((a, b) for a, b in priority_ranges if 0 <= a < b <= len(text)))
-    protected = sorted(set([*priority, *required_ranges, *definition_windows(text, definition_labels(question)), *steps]))
+    protected = sorted(set([*priority, *required_ranges]))
     if required_only and priority:
         protected = priority
-    # 定義を一行ごとの点数で分断しない。収まらない完全定義の断片も候補から除く。
+    # 必須の範囲を一行ごとの点数で分断しない。
     spans = [(a, b) for a, b in spans if not any(a < y and b > x for x, y in protected)]
     if required_only:
         spans = []
@@ -359,7 +285,6 @@ def evidence_spans(
     *,
     budget: int = EVIDENCE_BUDGET_CHARS,
     anchors: Sequence[Any] = (),
-    definitions_only: bool = False,
     scope_records: Sequence[Any] = (),
     whole_records: bool = False,
     preserve_records: bool = False,
@@ -371,7 +296,6 @@ def evidence_spans(
 
     anchorsは同じ検索で取得したchildだけを渡す。文書・版・親子関係・位置を
     再検証し、照合できないchildは頁確定や原文保護に使わない。
-    definitions_onlyは予算競合時の再切出し用で、定義以外の窓を追加しない。
     scope_recordsは取得済みchildの所属照合専用で、全文の予算優先には使わない。
     whole_recordsは、全部の根拠の本文が予算（前置きの分の 1 割を除く）に入るとき、根拠ごとの配分で切らずに
     全文を渡す（章節の拡張で読んだ章節を切らない。#1436）。入らなければ通常の配分にする。
@@ -422,14 +346,7 @@ def evidence_spans(
         located_quote = find_width_folded(unique[key].text, item[1])
         if located_quote is not None:
             quote_ranges[item] = located_quote
-    labels = definition_labels(question)
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
-
-    # 条の目録で選んだ条の child（#3526）。その child に重なる根拠に印を付ける。
-    catalog_children = {
-        str(getattr(child, "chunk_uid", "") or getattr(child, "id", "")) for child in scope_records if is_catalog_article(child)
-    }
-
     from rag_engine.retrieval.source_context import prompt_source_context_text, source_context
 
     def note_cost(context: dict[str, Any], record: Any) -> int:
@@ -443,9 +360,7 @@ def evidence_spans(
     context_remaining = max(0, budget // 10)
     result = []
     table_headers: dict[str, list[str]] = {}
-    ordered = _same_unit_first(list(unique.items()), question)
-    if labels:
-        ordered.sort(key=lambda item: -len(definition_ranges(item[1].text, labels)))
+    ordered = _same_unit_first(list(unique.items()))
     # 必須手順の直接の根拠を各手順に一つずつ先に割り当てる。件数・文字予算は増やさない。
     # 同じ機能の説明や任意の章節が、後続の必須手順の原文を予算外へ押し出さないようにする。
     priority_keys: set[str] = set()
@@ -519,9 +434,7 @@ def evidence_spans(
         return total
 
     whole = preserve_records or (
-        whole_records
-        and not definitions_only
-        and sum(whole_record_cost(key, record) for key, record in ordered) <= max(0, budget - budget // 10)
+        whole_records and sum(whole_record_cost(key, record) for key, record in ordered) <= max(0, budget - budget // 10)
     )
     reserve_after = [0] * (len(ordered) + 1)
     for position in range(len(ordered) - 1, -1, -1):
@@ -531,8 +444,7 @@ def evidence_spans(
         priority_ranges = [
             (a, b)
             for a, b, child in child_locations[key]
-            if not definitions_only
-            and any(
+            if any(
                 (member_keys[key] | {str(getattr(child, attr, "")) for attr in ("chunk_uid", "chunk_id", "id")}) & set(group)
                 for group in priority_source_groups
             )
@@ -543,7 +455,6 @@ def evidence_spans(
         if source_cost >= remaining:
             continue
         remaining -= source_cost
-        required = definition_windows(text, labels)
         # まとめた根拠（#1331）の child も、本文が残す根拠の中に一意に見つかれば位置と頁に使う。
         parent_keys = member_keys[key]
         located = _child_ranges(record, anchors, parent_keys=parent_keys)
@@ -598,23 +509,22 @@ def evidence_spans(
         )
         native_ranges = _native_ranges(record)
         verified = sorted({quote_ranges[item] for item in quote_requests.get(key, ()) if item in quote_ranges})
-        # CRAGのchild本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
-        pinned = [] if definitions_only else [(a, b) for a, b, _ in located]
+        # child の本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
+        pinned = [(a, b) for a, b, _ in located]
         # 原文（解析本文）の短い範囲は質問の種類・画像の有無に関係なく先に確保し、残りの予算で生成説明・OCR を
         # 入れる (#687)。親 6,000 字では画面の生成説明（1 枚 1,000〜3,000 字）が予算を食い、原文の手順行
         # （「③〇〇ボタンを押します。」）が抜粋から落ちて、引用照合やボタン名の検査の根拠を失っていた。
         # 全体の予算は既存の remaining で制限する。
-        if not definitions_only:
-            pinned.extend((a, b) for a, b in native_ranges if b - a <= 600)
+        pinned.extend((a, b) for a, b in native_ranges if b - a <= 600)
         # 評価が写しを確かめた原文も必須の範囲にする（予算の総額は増やさない）。
-        required = sorted(set([*required, *pinned, *verified]))
+        required = sorted(set([*pinned, *verified]))
         needed = sum(b - a for a, b in required) + 8 * max(0, len(required) - 1)
         allowance = min(remaining, max(remaining // max(1, len(ordered) - index), needed))
-        if not labels and not anchors:
+        if not anchors:
             allowance = min(remaining, max(1, budget // max(1, len(unique))))
         if verified:
             allowance = min(remaining, max(allowance, sum(b - a for a, b in verified) + 8 * (len(verified) - 1)))
-        # 取り置き分を超えない。ただし自分の必須範囲（原文・定義・照合済み child）は確保する。
+        # 取り置き分を超えない。ただし自分の必須範囲（原文・照合済み child）は確保する。
         allowance = min(allowance, max(needed, remaining - reserve_after[index + 1]))
         if key in priority_keys:
             # 任意の資料の取り置きより、各必須手順の直接の根拠に残予算を公平に配る。
@@ -640,7 +550,7 @@ def evidence_spans(
             allowance,
             required_ranges=priority_ranges if child_only else required,
             priority_ranges=priority_ranges,
-            required_only=definitions_only or child_only,
+            required_only=child_only,
         )
         remaining -= len(excerpt)
         cursor = 0
@@ -717,10 +627,8 @@ def evidence_spans(
                     "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
                     # 会話の添付から選んだ根拠（利用者が明示した入力。#3228）。要求の根拠計画の照合に掛けない。
                     "conversation_attachment": is_attachment_evidence(record),
-                    # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+                    # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にして説明する。
                     ARTICLE_UNIT_KEY: (getattr(record, "metadata", {}) or {}).get(ARTICLE_UNIT_KEY) is True,
-                    # 条の目録で選んだ条の根拠（#3526）。回答は要求の計画で必ず使うか unrelated かを決める。
-                    ARTICLE_CATALOG_KEY: any(entry["id"] in catalog_children for entry in child_ranges),
                     # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
                     "location": record_location_label(record),
                     # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
@@ -914,8 +822,6 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
             text = previous["text"] + span["text"]
             if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
                 previous["child_ranges"] = ranges
-            if span.get(ARTICLE_CATALOG_KEY):
-                previous[ARTICLE_CATALOG_KEY] = True
             previous.update(
                 text=text,
                 end=span["end"],
@@ -1047,40 +953,12 @@ def _child_ranges(
     return found
 
 
-def _native_text(record: Any) -> str:
-    """解析本文（native_text_ranges）だけをつないだ文字列。旧 metadata で範囲がなければ全文。"""
-    ranges = _native_ranges(record)
-    text = str(getattr(record, "text", "") or "")
-    return "\n".join(text[a:b] for a, b in ranges) if ranges else text
-
-
-def _mentions(term: str, corpus: str) -> bool:
-    """corpus に term が完全一致か略称（文字が順に並ぶ term の 2 倍程度までの範囲）で現れるか (#700 と同じ)。"""
-    needle = re.sub(r"\s+", "", unicodedata.normalize("NFKC", term))
-    if not needle:
-        return False
-    if needle in corpus:
-        return True
-    pattern = (".{0," + str(len(needle) + 2) + "}?").join(re.escape(c) for c in needle)
-    return any(len(m.group()) <= len(needle) * 2 + 2 for m in re.finditer(pattern, corpus))
-
-
-def _question_targets(question: str) -> list[str]:
-    """同一ユニット優先の起点を選ぶための質問の対象（操作対象・帳票・画面）。"""
-    contract = task_contract(question)
-    return [t for t in dict.fromkeys([*contract.get("action_targets", ()), *contract.get("business_objects", ())]) if len(t) >= 2]
-
-
-def _same_unit_first(ordered: list[tuple[str, Any]], question: str = "") -> list[tuple[str, Any]]:
+def _same_unit_first(ordered: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
     """最上位候補と同じ機能ユニットの候補を直後に寄せ、原文予算をまず同じ機能に使う (#665)。
 
     機能ユニットは section_path の番号付き見出しまで（`chunking._section_unit`）。1 機能が複数の親に
     割れているとき、検索順のままだと別文書・別機能の候補に予算が先に配られ、同じ機能の残りの手順が
     予算外へ押し出される。安定ソートなので、それ以外の順序は変えない。
-
-    起点は、質問の対象（`action_targets` / `business_objects`）を**解析本文**（生成説明を除く）に含む最初の
-    候補にする (#730)。画面の生成説明の画面例の値（「出荷基準年月=令和6年9月」）だけが質問の語に一致して
-    最上位になった候補を、機能ユニットの起点にしない。該当する候補がなければ従来どおり先頭。
     """
     from rag_engine.chunking import _section_unit
 
@@ -1091,15 +969,7 @@ def _same_unit_first(ordered: list[tuple[str, Any]], question: str = "") -> list
         path = (getattr(record, "metadata", {}) or {}).get("section_path") or []
         return (str(getattr(record, "source", "")), *_section_unit(path))
 
-    targets = _question_targets(question) if question else []
-    anchor = ordered[0][1]
-    if targets:
-        for _, record in ordered:
-            corpus = re.sub(r"\s+", "", unicodedata.normalize("NFKC", _native_text(record)))
-            if any(_mentions(t, corpus) for t in targets):
-                anchor = record
-                break
-    top = unit(anchor)
+    top = unit(ordered[0][1])
     if len(top) <= 1:
         return ordered
     return sorted(ordered, key=lambda item: unit(item[1]) != top)
@@ -1111,7 +981,7 @@ def evidence_packet(question: str, records: Sequence[Any], *, budget: int = EVID
 
 
 def format_evidence_packet(spans: Sequence[dict[str, Any]]) -> str:
-    """選択済みの原文を再切出しせず、計画・生成・監査へ同じIDで渡す。"""
+    """選択済みの原文を再切出しせず、生成と引用の確認へ同じIDで渡す。"""
     return "\n\n".join(
         f"Source ID: {span['source_id']}\nEvidence ID: {span['evidence_id']}\n"
         f"Document: {span['source']} / {span.get('location') or 'page ' + str(span['page'])}\n"

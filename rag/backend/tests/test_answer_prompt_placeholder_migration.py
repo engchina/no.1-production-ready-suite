@@ -26,3 +26,15 @@ def test_placeholder_migration_is_registered_and_runs_once() -> None:
     assert count == 1
     manager.initialize()
     assert sum(needle in sql for sql in database.executed) == count
+
+
+def test_reading_rules_migration_keeps_saved_text_and_runs_once() -> None:
+    section = next(
+        s
+        for s in oracle_schema_migration_sections()
+        if s.name == "20261109_4712_answer_prompt_reading_rules"
+    )
+    assert "WHERE PROMPT_KEY = 'vlm_answer'" in section.sql
+    assert "'{{answer_context}}'" in section.sql and "'{{reading_rules}}'" in section.sql
+    assert "INSTR(CONTENT, '{{reading_rules}}') = 0" in section.sql
+    assert not section.destructive_note

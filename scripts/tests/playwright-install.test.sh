@@ -31,6 +31,14 @@ EOF
 cat > "${work}/bin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 echo "apt-get $*" >> "${FAKE_LOG}"
+if [[ " $* " == *" --no-download "* ]]; then
+  if [ "${FAKE_OFFLINE_SUCCESS:-0}" = "1" ]; then
+    printf 'fonts-bar 1.0\n' >> "${FAKE_INSTALLED}"
+    exit 0
+  fi
+  [ "${FAKE_OFFLINE_SUCCESS:-0}" = "2" ] && exit 0
+  exit 100
+fi
 if [ "$1" = "update" ] && [ -n "${FAKE_UPDATE_FAILURES:-}" ]; then
   n="$(cat "${FAKE_UPDATE_FAILURES}")"
   if [ "${n}" -gt 0 ]; then
@@ -109,12 +117,33 @@ printf 'libfoo 1.0\n' > "${work}/state/installed"
 touch "${work}/state/cache/fonts-bar_1.0_all.deb"
 run 0 "入っていない package だけを入れる"
 assert "update・取得・install の順に、入っていない package だけを渡す" test "$(cat "${work}/state/log")" = "$(
-  printf '%s\n' "apt-get update" \
+  printf '%s\n' "apt-get install -y --no-install-recommends --no-download fonts-bar" "apt-get update" \
     "apt-get install -y --no-install-recommends --download-only fonts-bar" \
     "apt-get install -y --no-install-recommends fonts-bar"
 )"
 assert "apt に retry と timeout を設定する" grep -q 'Acquire::Retries "3";' "${work}/state/apt.conf"
 assert "cache の .deb を apt の置き場に戻す" test -f "${work}/state/archives/fonts-bar_1.0_all.deb"
+
+reset
+printf 'libfoo 1.0\n' > "${work}/state/installed"
+touch "${work}/state/cache/fonts-bar_1.0_all.deb"
+run 0 "cache だけで依存が揃えばネットワークを使わない" FAKE_OFFLINE_SUCCESS=1
+assert "offline の apt install だけを呼ぶ" test "$(cat "${work}/state/log")" = \
+  'apt-get install -y --no-install-recommends --no-download fonts-bar'
+assert "導入後に全依存が入っていることを再確認する" grep -q 'cache から OS の依存をすべて導入した' "${work}/state/out"
+
+reset
+printf 'libfoo 1.0\n' > "${work}/state/installed"
+touch "${work}/state/cache/fonts-bar_1.0_all.deb"
+run 0 "cache が不完全なら既存の online 経路へ戻る"
+assert "offline の失敗後は update する" grep -q '^apt-get update$' "${work}/state/log"
+assert "online の download を省略しない" grep -q '^apt-get install -y --no-install-recommends --download-only fonts-bar$' "${work}/state/log"
+
+reset
+printf 'libfoo 1.0\n' > "${work}/state/installed"
+touch "${work}/state/cache/fonts-bar_1.0_all.deb"
+run 0 "apt が成功しても不足 package が残れば online で取得する" FAKE_OFFLINE_SUCCESS=2
+assert "不足したまま cache 導入を成功としない" grep -q '^apt-get update$' "${work}/state/log"
 
 reset
 echo 1 > "${work}/state/update-failures"

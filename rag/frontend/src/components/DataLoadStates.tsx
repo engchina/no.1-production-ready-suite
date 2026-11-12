@@ -33,12 +33,20 @@ export function DataLoadFailure({
   error,
   fallback,
   onRetry,
+  layout,
   testId,
+  retrying,
 }: {
   error: unknown;
   fallback: string;
   onRetry: () => void;
+  /**
+   * `field` は選択欄の候補・欄の値など、欄を支える読み取りの失敗（欄の直下の 1 行。#4222・#4817）。
+   * `fallback` が見出しになるので、欄ごとの文（何を読めなかったか）を渡す。
+   */
+  layout?: "region" | "field";
   testId?: string;
+  retrying?: boolean;
 }) {
   const databaseAction = useDatabaseAction();
   return (
@@ -48,7 +56,9 @@ export function DataLoadFailure({
       labels={dataLoadLabels()}
       onRetry={onRetry}
       databaseAction={databaseAction}
+      layout={layout}
       testId={testId}
+      retrying={retrying}
     />
   );
 }

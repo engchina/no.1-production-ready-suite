@@ -5,21 +5,18 @@
 2. ``POST .../support-guides/import/process/preview``: 行（Excel の行か、貼り付けたテキスト）ごとに
    OCI Enterprise AI で業務ガイドの下書きを作り、資料名の解決と検証の結果を返す（保存しない）。
 
-選んだ下書きは、既存の取り込み（``POST .../support-guides/import``）で下書きとして作る。ルールの
-候補は、用語・同義語と回答ルールの編集（``POST .../runtime-knowledge/edit``）で無効のルールとして
-足す。
+選んだ下書きは、既存の取り込み（``POST .../support-guides/import``）で下書きとして作る。
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import nullcontext
 from pathlib import PurePath
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
-from rag_parser_core.language import bind_pack, current_pack, resolve
+from rag_parser_core.language import current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
 from app.clients.ai_calls import make_ai_caller
@@ -107,7 +104,7 @@ async def preview_support_guide_process_import(
 
     1 行で OCI Enterprise AI を 1 回呼ぶ（上限つき並行。``RAG_SUPPORT_GUIDE_IMPORT_CONCURRENCY``）。
     行の数の上限は ``RAG_SUPPORT_GUIDE_IMPORT_MAX_ROWS``。見出しの語は言語資源
-    （``guide_import_cues.process_headings``。プロファイルの上書きを重ねる）。
+    （``guide_import_cues.process_headings``。全体の言語資源だけで決める。#4784）。
     """
     enforce_rate_limit("search", http_request)
     oracle = OracleClient()
@@ -122,7 +119,6 @@ async def preview_support_guide_process_import(
     documents = await list_knowledge_documents(
         oracle, profile.config.normalized_knowledge_base_ids()
     )
-    overrides = profile.config.language_pack
     llm = guide_draft_llm(settings)
     caller = make_ai_caller(settings, "guide_import")
 
@@ -142,14 +138,13 @@ async def preview_support_guide_process_import(
             for outcome in outcomes
         ]
 
-    with bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext():
-        headings = process_headings(current_pack())
-        try:
-            items = await draft_guides(body.rows, documents, llm=llm, headings=headings, run=run)
-        except BoundedCallAborted as exc:
-            raise HTTPException(
-                status_code=503, detail=f"業務ガイドの下書きを作れませんでした。{exc}"
-            ) from exc
+    headings = process_headings(current_pack())
+    try:
+        items = await draft_guides(body.rows, documents, llm=llm, headings=headings, run=run)
+    except BoundedCallAborted as exc:
+        raise HTTPException(
+            status_code=503, detail=f"業務ガイドの下書きを作れませんでした。{exc}"
+        ) from exc
     return ApiResponse(
         data=SupportGuideProcessPreviewData(
             items=items, importable_count=sum(item.valid for item in items)

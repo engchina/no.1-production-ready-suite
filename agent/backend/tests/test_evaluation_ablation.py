@@ -191,15 +191,15 @@ def test_not_applicable_and_not_comparable(agent: None) -> None:
     full = _completed()
     # 基準で動いていない補助（Run の記録が無い＝縮小・検証・差し戻しが 0 回）。
     unused = _completed("context_compaction")
-    other_trials = _completed("final_validation", trials=2)
+    other_trials = _completed("tool_grounding", trials=2)
     again = _completed()
 
     report = ablation_report(full, [unused, other_trials, again], lambda _run_id: None)
 
     rows = {row["name"]: row for row in report["rows"]}
     assert rows["no-context_compaction"]["decision"] == "not_applicable"
-    assert rows["no-final_validation"]["decision"] == "not_comparable"
-    assert "試行の回数が違う" in rows["no-final_validation"]["reason"]
+    assert rows["no-tool_grounding"]["decision"] == "not_comparable"
+    assert "試行の回数が違う" in rows["no-tool_grounding"]["reason"]
     # 全構成をもう一度流した評価は、揺れ・順序の偏りの目安として並べる。
     assert rows["full-again"]["decision"] == "baseline_repeat"
     assert report["order"][0] == full.id
@@ -215,7 +215,7 @@ def test_api_starts_ablation_and_returns_the_table(monkeypatch: MonkeyPatch) -> 
     }
     set_id = client.post("/api/evaluation-sets", json=body).json()["data"]["id"]
     full = _completed()
-    ablated = _completed("final_validation", correct=False)
+    ablated = _completed("tool_grounding", correct=False)
     table = client.get(
         "/api/evaluations/ablation",
         params={"base_job_id": full.id, "target_job_id": [ablated.id]},
@@ -234,11 +234,11 @@ def test_api_starts_ablation_and_returns_the_table(monkeypatch: MonkeyPatch) -> 
         json={
             "set_id": set_id,
             "agent_version": "draft",
-            "disabled_aids": ["tool_grounding", "final_validation", "tool_grounding"],
+            "disabled_aids": ["tool_grounding", "context_compaction"],
         },
     )
     assert started.status_code == 202, started.text
-    assert started.json()["data"]["disabled_aids"] == ["final_validation", "tool_grounding"]
+    assert started.json()["data"]["disabled_aids"] == ["context_compaction", "tool_grounding"]
     same = client.get(
         "/api/evaluations/ablation", params={"base_job_id": full.id, "target_job_id": [full.id]}
     )
@@ -248,9 +248,9 @@ def test_api_starts_ablation_and_returns_the_table(monkeypatch: MonkeyPatch) -> 
 def test_ablation_jobs_are_not_the_previous_result(agent: None) -> None:
     """補助を外した評価は「前回」にも公開の門の基準にもしない（公開する構成の評価ではない）。"""
     del agent
-    ablated = _completed("final_validation")
+    ablated = _completed("tool_grounding")
     later = _completed()
 
     assert evaluation_store.with_previous(later).previous_job_id is None
     assert evaluation_store.with_previous(_completed()).previous_job_id == later.id
-    assert ablated.disabled_aids == ["final_validation"]
+    assert ablated.disabled_aids == ["tool_grounding"]

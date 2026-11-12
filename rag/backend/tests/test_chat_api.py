@@ -276,8 +276,8 @@ class FakeChatOracle:
         current.status = message.status
         current.elapsed_ms = message.elapsed_ms
         current.progress = message.progress
-        current.passage_record = message.passage_record
         current.answer_format = message.answer_format
+        current.approved_faq_direct_score = message.approved_faq_direct_score
         current.heartbeat_at = datetime.now(UTC)
         return True
 
@@ -631,12 +631,15 @@ class _FakePipeline:
     filters: list[dict[str, str]] = []
     # 作られた pipeline に渡した検索する件数(#3512)。
     top_ks: list[int] = []
+    # 作られた pipeline に渡した、承認済み FAQ の回答をそのまま返してよいか(#4788)。
+    direct_faq_answers: list[object] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
         _FakePipeline.answer_model_ids.append(kwargs.get("answer_model_id"))
         _FakePipeline.approved_faqs.append(kwargs.get("approved_faq"))
         _FakePipeline.scopes.append(kwargs.get("scope"))
+        _FakePipeline.direct_faq_answers.append(kwargs.get("direct_faq_answer"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -764,6 +767,32 @@ def test_generated_answer_format_reaches_saved_chat_response(monkeypatch: Monkey
     assert stored.answer_format == answer_format
     detail = client.get("/api/chat/conversations/conv-format").json()["data"]
     assert detail["messages"][-1]["answer_format"] == answer_format
+
+
+def test_direct_faq_answer_score_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
+    """FAQ の回答をそのまま返した回答の一致度を、開き直した会話へ渡す（#4788）。"""
+
+    class DirectFaqPipeline(_FakePipeline):
+        def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
+            response = super()._response(request, trace_id)
+            response.diagnostics.answer = {
+                "answer_source": "approved_faq",
+                "approved_faq_direct": {"faq_id": "faq-a", "score": 0.95, "min_score": 0.92},
+            }
+            return response
+
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-faq")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    url = "/api/chat/conversations/conv-faq/messages/stream"
+    # いつもの回答には付かない。
+    assert client.post(url, json={"content": "合成の質問 A"}).status_code == 200
+    monkeypatch.setattr(chat_route, "RagPipeline", DirectFaqPipeline)
+    assert client.post(url, json={"content": "合成の質問 B"}).status_code == 200
+
+    detail = client.get("/api/chat/conversations/conv-faq").json()["data"]
+    answers = [m for m in detail["messages"] if m["role"] == "ASSISTANT"]
+    assert [m["approved_faq_direct_score"] for m in answers] == [None, 0.95]
 
 
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:
@@ -907,7 +936,7 @@ class _StagedPipeline(_FakePipeline):
                 pass
             with answer_step("文書検索"), answer_step("Rerank"):
                 pass
-            with answer_step("回答文の生成と根拠確認（1回目）"):
+            with answer_step("回答文の生成と引用の確認（1回目）"):
                 pass
 
         with answer_trace(trace, trace_id=trace_id or "trace"):
@@ -1014,7 +1043,7 @@ def test_stream_message_writes_answer_spans_to_shared_table(
         ("rag.engine.stage", "answer_step", "質問の理解"),
         ("rag.engine.stage", "answer_step", "文書検索"),
         ("rag.engine.stage", "answer_step", "Rerank"),
-        ("rag.engine.stage", "answer_step", "回答文の生成と根拠確認（1回目）"),
+        ("rag.engine.stage", "answer_step", "回答文の生成と引用の確認（1回目）"),
         ("rag.answer_guardrail", "answer_guardrail", None),
     ]
     by_id = {event["step_id"]: event for event in steps}
@@ -1349,6 +1378,7 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     fake.messages["conv-x"] = []
     _stub_stream(monkeypatch, fake, ["m1"])
     monkeypatch.setattr(_FakePipeline, "approved_faqs", [])
+    monkeypatch.setattr(_FakePipeline, "direct_faq_answers", [])
     record = ApprovedFaqRecord(
         id="faq-1", question="住宅ローンの特典は？", approved_answer="QUO カード", status="approved"
     )
@@ -1365,9 +1395,15 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     assert resp.status_code == 200
     assert looked_up == [("bv-1", "faq-1")]
     assert _FakePipeline.approved_faqs == [("住宅ローンの特典は？", "QUO カード")]
+    # 類似問を選んだ質問には、FAQ の回答をそのまま返す段を通さない(選んだ FAQ から回答する。#4788)。
+    assert _FakePipeline.direct_faq_answers == [False]
     # 選ばなかったときは渡さない。
     client.post(url, json={"content": "特典は?"})
     assert _FakePipeline.approved_faqs[-1] is None
+    assert _FakePipeline.direct_faq_answers[-1] is True
+    # 類似問を「どれでもない」と断った質問にも、そのまま返さない。
+    client.post(url, json={"content": "特典は?", "approved_faq_declined": True})
+    assert _FakePipeline.direct_faq_answers[-1] is False
     # 検索・回答プロファイルに無い(またはオフ)の FAQ は、発話を保存する前に 422 で断る。
     saved = len(fake.messages["conv-x"])
     missing = client.post(url, json={"content": "特典は?", "approved_faq_id": "other"})
@@ -1375,12 +1411,10 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     assert len(fake.messages["conv-x"]) == saved
 
 
-def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ranges(
+def test_stream_message_rejects_clarification_answers_that_are_not_guide_conditions(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """確認の答えは検索・回答プロファイルのルールから引き直し、章節の範囲と回答の前提にする(#717)。"""
-    from tests.test_search_answer_profile_clarification import CLARIFICATION
-
+    """確認は業務ガイドの条件だけ（#4799）。ほかの id の答えは保存前に 422 にする。"""
     fake = FakeChatOracle()
     fake.conversations["conv-x"] = StoredConversation(
         id="conv-x",
@@ -1392,65 +1426,24 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     fake.messages["conv-x"] = []
     _stub_stream(monkeypatch, fake, ["m1"])
     monkeypatch.setattr(_FakePipeline, "scopes", [])
-    monkeypatch.setattr(_FakePipeline, "filters", [])
-
-    async def payload(_store: object, search_answer_profile_id: str) -> dict[str, object]:
-        assert search_answer_profile_id == "bv-1"
-        return {"rules": [{"id": "R01", "clarification": CLARIFICATION}]}
-
-    monkeypatch.setattr(chat_route, "load_runtime_knowledge_payload", payload)
-    read_documents: list[str] = []
-
-    async def sections(_oracle: object, document_id: str, _recipe_id: None) -> None:
-        # 文書が無いときは、確認を保存したときのページで絞る(#721)。
-        read_documents.append(document_id)
-
-    from app.rag import document_sections_service
-
-    monkeypatch.setattr(document_sections_service, "document_sections", sections)
     url = "/api/chat/conversations/conv-x/messages/stream"
 
-    resp = client.post(
-        url,
-        json={
-            "content": "申請の期限は?",
-            "clarification": {"rule_id": "R01", "option_ids": ["travel"]},
-        },
-    )
-    assert resp.status_code == 200
-    scope = _FakePipeline.scopes[0]
-    assert getattr(scope, "label", "") == "「出張旅費規程.pdf」の「第6条 申請と精算」（p.2–3）"
-    assert '"document_id":"doc-travel"' in _FakePipeline.filters[0]["page_ranges"]
-    assert read_documents == ["doc-travel"]
-    # 回答前に確認した内容を USER のメッセージに残し、会話の API で返す（#1839）。
-    user = next(message for message in fake.messages["conv-x"] if message.role == "USER")
-    assert user.clarification == {
-        "outcome": "answered",
-        "entries": [
-            {"prompt": CLARIFICATION["question"], "selected": ["出張旅費"], "other_text": ""}
-        ],
-    }
-    assert chat_route._to_chat_message(user).clarification is not None
-
-    # 「確認せずに回答」は回答を変えず、飛ばしたことと確認事項を残す。
-    skipped = client.post(url, json={"content": "旅費は?", "clarification_skipped_rule_id": "R01"})
-    assert skipped.status_code == 200
-    last_user = [message for message in fake.messages["conv-x"] if message.role == "USER"][-1]
-    assert last_user.clarification == {
-        "outcome": "skipped",
-        "entries": [{"prompt": CLARIFICATION["question"]}],
-    }
-    record = chat_route._to_chat_message(last_user).clarification
-    assert record is not None and record.outcome == "skipped"
-
-    # ルールに無い選択肢は、発話を保存する前に 422 で断る。
-    saved = len(fake.messages["conv-x"])
     bad = client.post(
         url,
-        json={"content": "期限は?", "clarification": {"rule_id": "R01", "option_ids": ["x"]}},
+        json={
+            "content": "期限は?",
+            "clarification": {"guide_condition_id": "R01", "option_ids": ["a"]},
+        },
     )
     assert bad.status_code == 422
-    assert len(fake.messages["conv-x"]) == saved
+    assert fake.messages["conv-x"] == []
+
+    # 業務ガイドの確認でない id を飛ばしても、確認の記録は残さずに回答する。
+    skipped = client.post(url, json={"content": "旅費は?", "skipped_guide_condition_id": "R01"})
+    assert skipped.status_code == 200
+    user = next(message for message in fake.messages["conv-x"] if message.role == "USER")
+    assert user.clarification is None
+    assert _FakePipeline.scopes == [None]
 
 
 class _DatabaseError(Exception):
@@ -1588,8 +1581,8 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     async def capture_create(
         *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
-        seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
-        seen.append(current_pack().text("answer_labels", "cause_gap"))
+        seen.append(current_pack().text("answer_labels", "insufficient_evidence_summary"))
+        seen.append(current_pack().text("answer_labels", "gaps_section"))
         return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
 
     monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
@@ -1602,7 +1595,7 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     assert seen == []
     effective = row["effective_json"]
     assert isinstance(effective, dict)
-    assert effective["answer_labels"].get("crag_refusal_summary") is None
+    assert effective["answer_labels"].get("guide_acquisition_incomplete_template") is None
 
 
 def test_chat_stream_reports_inner_ai_network_failure(

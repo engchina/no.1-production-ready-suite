@@ -10,7 +10,7 @@ import {
   useParams,
 } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader } from "@production-ready/ui";
+import { AppShell, PageBody, PageHeader, RenderErrorBoundary } from "@production-ready/ui";
 import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
@@ -19,7 +19,6 @@ import { SecurityPermissionsPage } from "@/components/security/SecurityPermissio
 import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { AccountRoute, SecurityApiKeysPage } from "@/components/security/ApiKeysPages";
-import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { DocumentCategoriesClient } from "@/components/document-categories/DocumentCategoriesClient";
 import { DocumentDetailPage } from "@/components/documents/DocumentDetailPage";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
@@ -44,6 +43,7 @@ import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
 import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
 import { LanguagePackSettingsClient } from "@/components/settings/LanguagePackSettingsClient";
+import { FileTypeDefaultsSettingsClient } from "@/components/settings/FileTypeDefaultsSettingsClient";
 import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
 import { ServicesManagementClient } from "@/components/settings/ServicesManagementClient";
 import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
@@ -132,6 +132,7 @@ export function App() {
         />
         <Route path={APP_ROUTES.settingsPreprocess} element={<SettingsPreprocessRoute />} />
         <Route path={APP_ROUTES.settingsChunking} element={<SettingsChunkingRoute />} />
+        <Route path={APP_ROUTES.settingsFileTypeDefaults} element={<SettingsFileTypeDefaultsRoute />} />
         <Route path={APP_ROUTES.settingsLanguagePack} element={<SettingsLanguagePackRoute />} />
         <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
         {/* 削除した根拠確認・回答スタイル・高度な検索（#595）のブックマークは、回答の設定が移った検索方法へ。
@@ -238,9 +239,9 @@ function AppLayout() {
       <DatabaseGate>
           {/* ページ本体の描画例外を main 内に閉じ込め、サイドナビと画面遷移を維持する(#67)。
               location をキーにして、別ページへ移動したらエラー状態を自動で解除する。 */}
-          <CardErrorBoundary key={location.pathname}>
+          <RenderErrorBoundary key={location.pathname} serviceName="production-ready-rag" placement="page">
             <Outlet />
-          </CardErrorBoundary>
+          </RenderErrorBoundary>
       </DatabaseGate>
     </AppShell>
   );
@@ -481,6 +482,19 @@ function SettingsChunkingRoute() {
   );
 }
 
+function SettingsFileTypeDefaultsRoute() {
+  return (
+    <div>
+      <PageHeader
+        wide
+        title={t("nav.settingsFileTypeDefaults")}
+        subtitle={t("settings.fileTypeDefaults.subtitle")}
+      />
+      <FileTypeDefaultsSettingsClient />
+    </div>
+  );
+}
+
 function SettingsLanguagePackRoute() {
   return (
     <div>
@@ -589,9 +603,9 @@ function SettingsSystemTablesRoute() {
       />
       <PageBody wide>
         {/* カードの描画例外はカードだけに閉じ込め、見出しとナビを残す（#67）。 */}
-        <CardErrorBoundary label={t("settings.database.systemTables.title")}>
+        <RenderErrorBoundary serviceName="production-ready-rag" label={t("settings.database.systemTables.title")}>
           <SystemTablesCard />
-        </CardErrorBoundary>
+        </RenderErrorBoundary>
       </PageBody>
     </div>
   );

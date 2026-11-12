@@ -619,3 +619,76 @@ def test_signed_original_node_rechecks_acl_and_version(
     assert client.get(f"{path}?view=source-map").status_code == 409
     previews.visible.pop(("d3", "c3"))
     assert client.get(f"{path}?view=source-map").status_code == 404
+
+
+@pytest.mark.parametrize("extension", ["markdown", "MARKDOWN"])
+def test_markdown_alias_is_readable(extension: str) -> None:
+    assert preview_kind(f"synthetic.{extension}", None) == ("text", "original")
+
+
+@pytest.mark.parametrize("extension", ["csv", "xlsx", "xls", "docx", "doc"])
+def test_structured_artifact_selects_reader_without_changing_download(extension: str) -> None:
+    from rag_parser_core.structured_records import STRUCTURED_RECORDS_CONTENT_TYPE
+
+    artifact = DocumentPreprocessArtifact(
+        derivation_id="dv",
+        profile="structured",
+        object_storage_path="docs/prepared.jsonl",
+        content_type=f"{STRUCTURED_RECORDS_CONTENT_TYPE}; charset=utf-8",
+        file_name="prepared.jsonl",
+    )
+    assert preview_kind(f"synthetic.{extension}", artifact) == ("text", "original")
+    artifact.content_type = "application/octet-stream"
+    if extension != "csv":
+        assert preview_kind(f"synthetic.{extension}", artifact) == ("unsupported", "original")
+
+
+def test_signed_structured_reader_loads_versioned_records_and_preserves_original_download(
+    auth: ProductionAuth, previews: type[_PreviewOracle], monkeypatch: MonkeyPatch
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from rag_parser_core.structured_records import STRUCTURED_RECORDS_CONTENT_TYPE
+
+    from app.services import source_reader
+    from tests.test_structured_source_reader import fixture
+
+    raw, payload = fixture()
+    derivation = dict(payload["parser_artifacts"]["source_derivation"])
+    derivation.update(
+        {
+            "derivation_id": "dv-1",
+            "preprocess_profile": "structured",
+            "converted": True,
+            "derived_object_path": _PREPARED_PATH,
+            "derived_content_type": STRUCTURED_RECORDS_CONTENT_TYPE,
+            "source_sha256": "0" * 64,
+        }
+    )
+    previews.derivations[("d2", "cs-1")] = derivation
+    chunk = previews.visible[("d2", "c2")]
+    chunk.metadata["element_ids"] = "r2"
+    chunk.text = ""
+    monkeypatch.setattr(
+        source_reader,
+        "resolve_source_context",
+        AsyncMock(return_value=(chunk, "cs-1", "ex-1", payload)),
+    )
+    _Storage.files[_PREPARED_PATH] = raw
+    _Storage.files["docs/d2/source.docx"] = b"synthetic-original-office"
+    user = auth.user_with_permissions(
+        "structured-reader", ["menu.search"], knowledge_base_ids=["kb-1"]
+    )
+    preview = _preview(user.user_uuid, "d2", "c2")
+    assert preview["kind"] == "text"
+    path = preview["content_path"]
+    response = client.get(f"{path}?view=reader")
+    assert response.status_code == 200, response.text
+    selected = next(block for block in response.json()["data"]["blocks"] if block["cited"])
+    assert selected["id"] == "r2"
+    assert selected["record"]["parts"][0]["rows"][0]["label"] == "3"
+    original = client.get(f"{path}?disposition=attachment")
+    assert original.status_code == 200
+    assert original.content == b"synthetic-original-office"
+    _Storage.files[_PREPARED_PATH] = raw + b" "
+    assert client.get(f"{path}?view=reader").status_code == 409

@@ -12,12 +12,17 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from test_row_conditions_answering import TABLE_TEXT, answer
+from application_verdict_stub import audit_reply, is_application_schema
+from citation_unit_support import canonical_fixture
+from test_grounded_answer import context, ids, record
 
+from rag_engine.config import get_settings
+from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
-from rag_engine.generation.applications import check_applications
+from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, replace_evidence_labels
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedApplication, GroundedDraft
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "row_conditions_recorded.json").read_text(encoding="utf-8"))
@@ -87,25 +92,38 @@ def _draft(reasoning: str) -> GroundedDraft:
     )
 
 
-def test_replaced_derivation_passes_the_internal_label_check() -> None:
-    draft = grounded.with_application_sources(_draft(RECORDED_REASONING[0]), sent_catalog())
-    [entry] = check_applications("属性A〜Hは有です。属性Iは無です。", draft.applications, _items())
-    assert entry.internal_label_issues == [] and not any("内部の番号" in reason for reason in entry.reasons)
-    assert "synthetic-table.md p.1" in entry.application.reasoning and "synthetic-rule.md p.2" in entry.application.reasoning
-
-
-def test_unsent_id_is_still_a_leak() -> None:
-    draft = grounded.with_application_sources(_draft("E9 の表の点数を合計する。"), sent_catalog())
-    [entry] = check_applications("属性A〜Hは有です。属性Iは無です。", draft.applications, _items())
-    assert entry.internal_label_issues == ["E9"] and not entry.published
-
-
 def test_draft_without_ids_is_unchanged() -> None:
     draft = _draft("表の点数を合計する。")
     assert grounded.with_application_sources(draft, sent_catalog()) is draft
 
 
 # ---------------------------------------------------------------- 回答の経路（stub）
+
+
+TABLE_TEXT = FIXTURE["cases"]["reg-period-reversed"]["evidence_text"]
+QUESTION = FIXTURE["cases"]["reg-period-reversed"]["question"]
+
+
+def answer(generated_for: Any) -> tuple[Any, list[str]]:
+    ctx = context(record(0, TABLE_TEXT, "合成資料-値と規則", source="synthetic-period.md"))
+    generated = generated_for(ids(ctx, QUESTION)[TABLE_TEXT])
+    calls: list[str] = []
+
+    def model(_system: str, prompt: str, _settings: Any, schema: Any, **_options: Any) -> Any:
+        calls.append(schema.__name__)
+        if is_application_schema(schema):
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
+        if issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft:
+            return canonical_fixture(generated)
+        raise AssertionError(f"想定外の schema: {schema.__name__}")
+
+    def unused(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("unexpected I/O")
+
+    settings = get_settings(environ={"RAG_ENGINE_ANSWER_AUDIT_MODE": "none"}, dotenv_path=None)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = synthesize_grounded_answer(QUESTION, ctx, settings, image_prompt_mode="text_only")
+    return result.response, calls
 
 
 def _derivation_reasoning(reasoning: str) -> Any:
@@ -129,20 +147,3 @@ def _derivation_reasoning(reasoning: str) -> Any:
         return value
 
     return generated
-
-
-def test_answer_with_a_sent_label_in_the_derivation_needs_no_correction() -> None:
-    result, model = answer(_derivation_reasoning("E1 の表の行を当てはめる。"))
-    trace = result.generation_trace
-    assert [row["accepted"] for row in trace["rounds"]] == [True]
-    [application] = trace["applications"]
-    assert not EVIDENCE_LABEL.search(application["reasoning"]) and "synthetic-period.md" in application["reasoning"]
-    assert not any("内部の番号" in reason for reason in application["reasons"])
-    assert "E1" not in result.answer_text
-
-
-def test_answer_with_an_unsent_label_still_corrects() -> None:
-    result, _model = answer(_derivation_reasoning("E9 の表の行を当てはめる。"))
-    rounds = result.generation_trace["rounds"]
-    assert len(rounds) == 2
-    assert any("内部の番号『E9』" in reason for application in result.generation_trace["applications"] for reason in application["reasons"])

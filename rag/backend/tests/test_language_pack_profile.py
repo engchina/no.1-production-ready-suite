@@ -18,10 +18,17 @@ from app.schemas.search import SearchRequest, SearchResponse
 
 
 def test_profile_accepts_only_search_and_answer_fields() -> None:
-    config = SearchAnswerProfileConfig(language_pack={"question_cues": {"cause_cues": ["理屈"]}})
-    assert config.language_pack == {"question_cues": {"cause_cues": ["理屈"]}}
+    config = SearchAnswerProfileConfig(
+        language_pack={"question_cues": {"subquestion_reference_followers": ["理屈"]}}
+    )
+    assert config.language_pack == {"question_cues": {"subquestion_reference_followers": ["理屈"]}}
     with pytest.raises(ValidationError, match="取込の項目"):
         SearchAnswerProfileConfig(language_pack={"numbers": {"article_units": ["条"]}})
+    # 業務ガイドの取込の節は、検索と回答の要求では読まれない(#4784)。
+    with pytest.raises(ValidationError, match="検索と回答で使わない項目"):
+        SearchAnswerProfileConfig(
+            language_pack={"guide_import_cues": {"process_headings": ["合成の見出し"]}}
+        )
     with pytest.raises(ValidationError, match="知らない項目"):
         SearchAnswerProfileConfig(language_pack={"question_cues": {"nothing": ["x"]}})
     with pytest.raises(ValidationError):
@@ -29,16 +36,20 @@ def test_profile_accepts_only_search_and_answer_fields() -> None:
 
 
 def test_profile_overrides_reach_settings_and_are_bound_during_the_request() -> None:
-    config = SearchAnswerProfileConfig(language_pack={"question_cues": {"cause_cues": ["理屈"]}})
+    config = SearchAnswerProfileConfig(
+        language_pack={"question_cues": {"subquestion_reference_followers": ["理屈"]}}
+    )
     settings, applied = resolve_search_answer_profile_settings(get_settings(), config)
     assert applied
-    assert settings.rag_language_pack_overrides == {"question_cues": {"cause_cues": ["理屈"]}}
+    assert settings.rag_language_pack_overrides == {
+        "question_cues": {"subquestion_reference_followers": ["理屈"]}
+    }
 
     seen: list[tuple[str, ...]] = []
 
     class _Probe(pipeline_module.RagPipeline):
         async def _run(self, *args: object, **kwargs: object) -> SearchResponse:
-            seen.append(current_pack().words("question_cues", "cause_cues"))
+            seen.append(current_pack().words("question_cues", "subquestion_reference_followers"))
             return SearchResponse(answer="", trace_id="synthetic", elapsed_ms=0)
 
     probe = _Probe.__new__(_Probe)
@@ -46,4 +57,4 @@ def test_profile_overrides_reach_settings_and_are_bound_during_the_request() -> 
     probe._run_recorder = None
     asyncio.run(probe.run(SearchRequest(query="合成の質問")))
     assert seen == [("理屈",)]
-    assert current_pack().words("question_cues", "cause_cues") != ("理屈",)
+    assert current_pack().words("question_cues", "subquestion_reference_followers") != ("理屈",)

@@ -2,12 +2,17 @@
 
 import re
 import tomllib
+from collections import Counter
 from pathlib import Path
 
 import pytest
 from pr_backend_core.config import settings_env_names
 from pydantic import ValidationError
-from rag_pipeline_core.chunking import CHUNK_OVERLAP_MAX_CHARS, CHUNK_SIZE_MAX_CHARS
+from rag_pipeline_core.chunking import (
+    CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_SIZE_MAX_CHARS,
+    DEFAULT_FIXED_DELIMITERS,
+)
 
 from app import config as config_module
 from app.config import (
@@ -29,7 +34,7 @@ def test_chunking_strategy_defaults_to_small_to_big() -> None:
     settings = Settings()
     assert settings.rag_chunking_strategy == "small_to_big"
     assert settings.rag_chunk_min_chars == 120
-    assert settings.rag_chunk_delimiter == "<<<JSONL_RECORD_BOUNDARY>>>"
+    assert settings.rag_chunk_delimiter == list(DEFAULT_FIXED_DELIMITERS)
 
 
 def test_chunk_min_chars_must_be_smaller_than_chunk_size() -> None:
@@ -128,19 +133,6 @@ def test_unknown_vector_index_profile_is_rejected() -> None:
 def test_evaluation_suite_defaults_to_standard() -> None:
     """評価の基準の既定は標準(#591)。"""
     assert Settings().rag_evaluation_suite == "standard"
-
-
-def test_answer_flow_defaults_to_standard_rag_in_every_layer() -> None:
-    """回答の生成方式の既定は標準 RAG。CRAG は明示して選んだときだけ使う(#3509)。
-
-    backend の全体設定・.env.example・rag_engine の既定(answer_flow を省いた呼び出し)をそろえる。
-    """
-    from rag_engine.generation.answer_models import DEFAULT_ANSWER_FLOW, STANDARD_ANSWER_FLOW
-
-    assert Settings.model_fields["rag_answer_flow"].default == "standard_rag"
-    assert DEFAULT_ANSWER_FLOW == STANDARD_ANSWER_FLOW == "standard_rag"
-    example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
-    assert "RAG_ANSWER_FLOW=standard_rag" in example.splitlines()
 
 
 def test_unknown_evaluation_suite_is_rejected() -> None:
@@ -305,6 +297,18 @@ def test_backend_env_example_lists_only_rag_settings() -> None:
     assert [key for key in keys if key not in names] == []
 
 
+def test_backend_env_example_lists_each_variable_once() -> None:
+    """同じ変数を 2 回書かない。説明のコメントも ``# NAME=値`` の形で始めない（#4784）。
+
+    行頭が ``# NAME=`` のコメントは、無効にした変数の行と見分けられず、雛形を機械で読むと
+    同じ変数が 2 つあるように見える。
+    """
+    example = config_module.BACKEND_ROOT / ".env.example"
+    names = re.findall(r"^(?:#\s*)?([A-Z][A-Z0-9_]*)=", example.read_text(encoding="utf-8"), re.M)
+
+    assert sorted(name for name, count in Counter(names).items() if count > 1) == []
+
+
 def test_auth_settings_use_platform_and_rag_env_names() -> None:
     """共通認証: 構成管理者・認証ポリシー・Cookie 名は PLATFORM_*（#214）。
 
@@ -368,24 +372,16 @@ def test_external_gpu_parser_connection_defaults() -> None:
     """外部 GPU parser は未接続を既定とし、旧 service URL を読まない。"""
     settings = Settings()
 
-    assert settings.rag_parser_mineru_api_host == ""
     assert settings.rag_parser_dots_ocr_api_host == ""
-    assert settings.rag_parser_mineru_tier == "basic"
-    assert settings.rag_parser_mineru_job_timeout_seconds == 1800.0
     assert settings.rag_parser_dots_ocr_model == "rednote-hilab/dots.mocr"
-
-    assert Settings(rag_parser_mineru_tier="advanced").rag_parser_mineru_tier == "advanced"
-    # 3.x の解析の方式（pipeline 等）は 4.0 の tier ではない（#1329）。
-    with pytest.raises(ValidationError):
-        Settings(rag_parser_mineru_tier="pipeline")
 
 
 def test_legacy_gpu_service_url_is_not_migrated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RAG_PARSER_MINERU_SERVICE_URL", "http://legacy-mineru:8000/parse")
+    monkeypatch.setenv("RAG_PARSER_DOTS_OCR_SERVICE_URL", "http://legacy-dots:8000/parse")
 
     settings = Settings(_env_file=None)
 
-    assert settings.rag_parser_mineru_api_host == ""
+    assert settings.rag_parser_dots_ocr_api_host == ""
 
 
 def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
@@ -487,15 +483,11 @@ def test_ingestion_job_stall_timeout_default_starts_with_deployed_parser_timeout
     [
         ({"ingestion_job_stall_timeout_seconds": 1800.0}, "PLATFORM_OCI_ENTERPRISE_AI"),
         (
-            {"rag_parser_mineru_job_timeout_seconds": 7200.0},
-            "RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS",
-        ),
-        (
             {"rag_parser_service_timeout_seconds": 3600.0},
             "RAG_PARSER_SERVICE_TIMEOUT_SECONDS",
         ),
     ],
-    ids=["stall-too-short", "mineru-longer", "parser-service-longer"],
+    ids=["stall-too-short", "parser-service-longer"],
 )
 def test_ingestion_job_stall_timeout_rejects_shorter_than_silent_call(
     overrides: dict[str, float], setting_name: str
@@ -525,7 +517,6 @@ def test_parser_adapter_default_is_docling(monkeypatch: pytest.MonkeyPatch) -> N
         "RAG_PARSER_ADAPTER_BACKEND",
         "RAG_PARSER_DOCLING_ENABLED",
         "RAG_PARSER_UNSTRUCTURED_ENABLED",
-        "RAG_PARSER_MINERU_ENABLED",
         "RAG_PARSER_DOTS_OCR_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -535,7 +526,6 @@ def test_parser_adapter_default_is_docling(monkeypatch: pytest.MonkeyPatch) -> N
     assert settings.rag_parser_adapter_backend == "docling"
     assert settings.rag_parser_docling_enabled is True
     assert settings.rag_parser_unstructured_enabled is False
-    assert settings.rag_parser_mineru_enabled is False
     assert settings.rag_parser_dots_ocr_enabled is False
     # auto(旧既定)は既定 docling へ。local_partition は baseline 値 local へ。
     # local は正規化せず baseline 値として残す(runtime は ingestion で既定エンジンへマップ)。
@@ -748,37 +738,12 @@ def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> N
     assert "rag-parser-core" in pyproject["project"]["dependencies"]
 
 
-def test_tsv_upload_content_type_is_allowed_by_default() -> None:
-    """TSV は table-preserving local parser と整合するため既定 upload whitelist に含める。"""
-    assert "text/tab-separated-values" in Settings().allowed_upload_content_types
-
-
-def test_json_lines_upload_content_types_are_allowed_by_default() -> None:
-    """JSONL / NDJSON は local text parser と整合するため既定 upload whitelist に含める。"""
-    allowed = set(Settings().allowed_upload_content_types)
-
-    assert {
-        "application/jsonl",
-        "application/jsonlines",
-        "application/ndjson",
-        "application/x-ndjson",
-    } <= allowed
-
-
 def test_browser_previewable_image_content_types_are_allowed_by_default() -> None:
-    """Enterprise AI image payload と整合する画像 MIME は既定 upload whitelist に含める。"""
+    """既定の upload whitelist の画像は JPEG / PNG だけ(#4730)。"""
     allowed = set(Settings().allowed_upload_content_types)
 
-    assert {"image/gif", "image/jpeg", "image/jpg", "image/png", "image/webp"} <= allowed
-    assert {"image/tif", "image/tiff"} <= allowed
-
-
-def test_semantic_html_and_outlook_msg_content_types_are_allowed_by_default() -> None:
-    """SourceProfile が判定できる XHTML / Outlook MSG MIME は upload whitelist に含める。"""
-    allowed = set(Settings().allowed_upload_content_types)
-
-    assert "application/xhtml+xml" in allowed
-    assert {"application/vnd.ms-outlook", "application/x-msg"} <= allowed
+    assert {"image/jpeg", "image/jpg", "image/png"} <= allowed
+    assert allowed.isdisjoint({"image/gif", "image/webp", "image/tif", "image/tiff"})
 
 
 def test_audio_and_video_content_types_are_not_allowed_by_default() -> None:
@@ -1129,29 +1094,16 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert all(origin.startswith("http://") for origin in settings.cors_origins)
     assert settings.oci_enterprise_ai_models == []
     assert settings.oracle_password in ("", None)
-    assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings.model_fields["rag_request_coverage_retrieval_enabled"].default is False
-    assert settings.rag_article_catalog_enabled is True
-    assert Settings.model_fields["rag_article_catalog_enabled"].default is True
-    assert [
-        line
-        for line in (backend / ".env.example").read_text(encoding="utf-8").splitlines()
-        if line.startswith("RAG_ARTICLE_CATALOG_ENABLED=")
-    ] == ["RAG_ARTICLE_CATALOG_ENABLED=true"]
 
 
-def test_history_rewrite_env_example_matches_default_and_precedes_query_strategy() -> None:
-    """履歴の書き換えを雛形でも有効にし、独立した質問拡張より前に案内する。"""
+def test_history_rewrite_env_example_matches_default() -> None:
+    """履歴の書き換えを雛形でも有効にする。"""
     from dotenv import dotenv_values
 
     example = config_module.BACKEND_ROOT / ".env.example"
     values = dotenv_values(example, interpolate=False)
     assert values["RAG_HISTORY_REWRITE_ENABLED"] == "true"
     assert Settings.model_fields["rag_history_rewrite_enabled"].default is True
-    lines = example.read_text(encoding="utf-8").splitlines()
-    assert lines.index("RAG_HISTORY_REWRITE_ENABLED=true") < lines.index(
-        "RAG_QUERY_STRATEGY=simple_retrieval"
-    )
 
 
 def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -44,8 +44,6 @@ def run(monkeypatch, recorder, *, question="合成の質問", guide=None, genera
             "synthetic-run",
             ["docling"],
             settings or _rerank_ready_settings(),
-            query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
-            answer_flow=a.STANDARD_ANSWER_FLOW_LABEL,
             guide_plan=guide,
             generate_answer=generate,
             complete_evidence=complete,

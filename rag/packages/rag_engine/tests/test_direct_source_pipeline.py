@@ -1,10 +1,6 @@
 """正式生成入口の直接原文と導出公開門を、同じ合成資料で確認する。"""
 
 import re
-from dataclasses import replace
-
-import pytest
-from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -12,14 +8,12 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
 
 
-def run(*, derived: bool, valid: bool = True, readback: str | None = None):
+def run(*, derived: bool, readback: str | None = None):
     calls = []
     text = "項目Aは12です。"
 
     def parse(system, prompt, config, schema, **options):
         calls.append(schema.__name__)
-        if schema in APPLICATION_SCHEMAS:
-            return audit_reply(schema, [{"index": 0, "valid": valid}], prompt=prompt, summary_supported=valid)
         ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
         assert ids
         direct = (
@@ -38,6 +32,7 @@ def run(*, derived: bool, valid: bool = True, readback: str | None = None):
             )
         return schema.model_validate(
             {
+                "response_kind": "answered",
                 "answer_parts": parts,
                 "summary_part_indexes": list(range(len(parts))),
                 "request_coverage": [
@@ -64,7 +59,7 @@ def run(*, derived: bool, valid: bool = True, readback: str | None = None):
         source_run_id="synthetic",
         metadata={"layout": {"native_text_ranges": [{"start": 0, "end": len(text)}]}},
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0, llm_retries=0)
+    settings = get_settings(environ={}, dotenv_path=None)
     with bind_dependencies(AnswerDependencies(unexpected, unexpected, parse, unexpected, unexpected)):
         response = synthesize_grounded_answer(
             "項目Aの値と2件分を教えてください。" if derived else "項目Aの値を教えてください。",
@@ -84,31 +79,3 @@ def test_source_formal_flow_publishes_original_without_derivation_call():
     assert draft["answer_parts"][0]["result_kind"] == "direct"
     assert draft["summary_item_indexes"] == [0]
     assert draft["summary_application_indexes"] == []
-
-
-@pytest.mark.parametrize("valid", [True, False])
-def test_mixed_direct_and_derived_keep_gate_and_final_summary_dependencies(valid):
-    response, calls = run(derived=True, valid=valid)
-    assert calls[0] == "GroundedDraftWire" and calls[1] == "ApplicationVerdictAudit"
-    assert "項目Aは12です。" in response.answer_text
-    assert response.generation_trace["applications"][0]["published"] is valid
-    if valid:
-        assert "24です。" in response.answer_text
-    else:
-        assert "24です。" not in response.answer_text
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["summary_item_indexes"] == [0]
-    assert draft["summary_application_indexes"] == [0]
-    assert [part["result_kind"] for part in draft["answer_parts"]] == ["direct", "derived"]
-
-
-def test_answer_copying_the_original_renders_the_original_fetched_by_id():
-    response, calls = run(derived=False, readback="12です")
-    assert calls == ["GroundedDraftWire"]
-    assert "項目Aは12です。" in response.answer_text
-    assert not response.generation_trace["applications"]
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["answer_parts"][0]["result_kind"] == "direct"
-    assert draft["items"][0]["text"] == "項目Aは12です。"
-    assert draft["summary"] == "項目Aは12です。"
-    assert draft["summary_item_indexes"] == [0]

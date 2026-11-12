@@ -1,5 +1,5 @@
 import { chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents } from "@production-ready/ui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
 
@@ -18,7 +18,6 @@ import {
   runStatusParam,
   runTimeline,
   runUsageView,
-  runVerificationView,
   RUN_STATUS_OPTIONS,
   toRunStatus,
 } from "./run-history-view";
@@ -56,22 +55,6 @@ describe("実行履歴の表示の対応表", () => {
     ).toEqual({ variant: "danger", label: "根拠不足" });
   });
 
-  it("照合の実行記録がない旧集約値から照合済みと推定しない", () => {
-    for (const value of ["verified", "partial", "unverified"] as const) {
-      expect(runVerificationView(value)).toEqual({ variant: "neutral", label: "確認状態が不明" });
-    }
-    expect(runVerificationView(null)).toBeNull();
-  });
-
-  it.each([
-    ["disabled", "設定で無効"], ["not_run", "未実行"], ["error", "確認処理でエラー"],
-    ["timed_out", "確認が時間切れ"], ["passed", "確認完了・問題なし"],
-    ["failed", "確認完了・問題あり"], ["partial", "一部のみ確認"], ["unknown", "確認状態が不明"],
-  ])("照合の実行状態%sは旧集約値より優先する", (execution, label) => {
-    expect(runVerificationView("unverified", execution)?.label).toBe(label);
-    expect(runVerificationView("verified", execution)?.label).toBe(label);
-  });
-
   it("所要時間は共通の書式（記録なしは「—」）", () => {
     expect(formatRunElapsed(1234)).toBe("1.2 秒");
     expect(formatRunElapsed(null)).toBe("—");
@@ -80,6 +63,15 @@ describe("実行履歴の表示の対応表", () => {
   it("開始日時は記録の時刻（終わった時刻）から所要時間を引く", () => {
     expect(runStartedAt({ created_at: "2026-10-15T09:00:05.000Z", elapsed_ms: 5000 })).toBe("2026-10-15T09:00:00.000Z");
     expect(runStartedAt({ created_at: "2026-10-15T09:00:05Z", elapsed_ms: null })).toBe("2026-10-15T09:00:05Z");
+  });
+
+  it("時間帯の無い created_at は端末の時間帯によらず UTC として開始の時刻を出す", () => {
+    vi.stubEnv("TZ", "Asia/Tokyo");
+    try {
+      expect(runStartedAt({ created_at: "2026-11-09T14:15:57.223334", elapsed_ms: 11000 })).toBe("2026-11-09T14:15:46.223Z");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("検索・回答プロファイルと利用者は ID を出さずに名前で出す", () => {

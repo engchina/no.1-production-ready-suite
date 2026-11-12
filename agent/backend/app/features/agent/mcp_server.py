@@ -69,7 +69,6 @@ from app.features.agent.answer_evidence import (
     answer_evidence,
 )
 from app.features.agent.answer_outcome import ANSWER_OUTCOMES
-from app.features.agent.answer_validation import ANSWER_VALIDATION_KIND
 from app.features.agent.confirmation import (
     MAX_ITEMS,
     SOURCE_AGENT,
@@ -82,11 +81,9 @@ from app.features.agent.run_facts import run_answer_outcome, run_finished_at
 from app.features.agent.run_observation import (
     ObservedEvidenceItem,
     ObservedToolStatus,
-    ValidationStatus,
     answer_citations,
     observe_run,
     run_agent_version,
-    validation_status,
 )
 from app.features.agent.runtime import (
     AGENT_UNPUBLISHED_MESSAGE,
@@ -116,8 +113,8 @@ from app.security.permissions import ADMIN, RUNS_OPERATE, RUNS_VIEW
 from app.settings import get_settings
 
 MCP_SERVER_NAME = "production-ready-agent"
-# 既定の待ち時間は、MCP のクライアントのツールの待ち時間の既定（Claude Code は 60 秒）より短く
-# する。終わらなければ途中の状態を返すので、クライアントの時間切れで結果を失わない。
+# 既定の待ち時間は、MCP のクライアントの 1 要求の最初の応答までのタイマー（Claude Code は 60 秒）
+# より短くする。終わらなければ途中の状態を返すので、クライアントの時間切れで結果を失わない。
 CHAT_DEFAULT_WAIT_SECONDS = 50
 GET_RUN_DEFAULT_WAIT_SECONDS = 30
 MAX_WAIT_SECONDS = 300
@@ -130,7 +127,7 @@ wait_poll_seconds = 0.5
 # 根拠の ID・引用の印・見られない根拠の数を足して 3、#3321 で根拠の本文を 400 文字の先頭から全文と
 # 応答の予算・境界での切り詰めにし、truncated・text_omitted・text_length・excerpt_range・
 # header_range・next_offset・sources_text_omitted を足して 4）。
-RUN_OUTPUT_SCHEMA_VERSION = 4
+RUN_OUTPUT_SCHEMA_VERSION = 5
 # agent_list・agent_skill_export の出力の形の版（3 製品の MCP の出力に版を持たせる。#3240）。
 LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
@@ -140,8 +137,8 @@ CANCEL_OUTPUT_SCHEMA_VERSION = 1
 # 範囲 source_line_start / source_line_end を足して 3、#3429 で行の番号の基準に解析の表の格子の
 # parsed_table を足して 4、#3546 でツールの呼び出しに RAG の縮退（degraded_steps・
 # guardrail_degraded・zero_evidence_stage）を、根拠に表の行・列の対応の検査が読めるか
-# （table_binding）を足して 5）。
-OBSERVATION_SCHEMA_VERSION = 5
+# （table_binding）を足して 5。#4668 で RAG の根拠の table_binding を削除し 7）。
+OBSERVATION_SCHEMA_VERSION = 7
 # 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
 # pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
@@ -426,30 +423,6 @@ AnswerOutcomeValue = Literal[
 ]
 
 
-class ReasonOutput(BaseModel):
-    """印・外した段落・回答の警告の理由。"""
-
-    code: str
-    # 利用者に見せる短い文。
-    label: str
-    detail: str = ""
-
-
-class PassageMarkOutput(BaseModel):
-    """回答の本文に残した段落の印（unverified=根拠で確かめられていない / warning=注意が必要）。"""
-
-    text: str
-    state: Literal["unverified", "warning"]
-    reasons: list[ReasonOutput] = Field(default_factory=list)
-
-
-class RemovedPassageOutput(BaseModel):
-    """根拠と矛盾するため回答の本文から除いた段落。"""
-
-    text: str
-    reasons: list[ReasonOutput] = Field(default_factory=list)
-
-
 class RunOutput(BaseModel):
     schema_version: int = Field(
         default=RUN_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
@@ -481,16 +454,6 @@ class RunOutput(BaseModel):
     )
     withheld_evidence_count: int = Field(
         default=0, ge=0, description="今の権限で見られないため sources に出さない根拠の数。"
-    )
-    passage_marks: list[PassageMarkOutput] = Field(
-        default_factory=list,
-        description="answer の本文の段落（text）のうち、確かめが要る段落と理由。",
-    )
-    removed_passages: list[RemovedPassageOutput] = Field(
-        default_factory=list, description="根拠と矛盾するため answer の本文から除いた段落と理由。"
-    )
-    answer_warnings: list[ReasonOutput] = Field(
-        default_factory=list, description="回答全体についての警告。"
     )
     # 使ったツールの名前（Agent の中の名前。例: rag__rag_search）。
     tools_used: list[str] = Field(default_factory=list)
@@ -560,9 +523,8 @@ class ObservedUsage(BaseModel):
     output_tokens: int = Field(default=0, ge=0)
 
 
-# RAG の ZeroEvidence.stage と RagEvidence.table_binding の語彙（契約の一致はテストで確かめる）。
-ObservedZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
-ObservedTableBinding = Literal["checkable", "not_checkable"]
+# RAG の ZeroEvidence.stage の語彙（契約の一致はテストで確かめる）。
+ObservedZeroEvidenceStage = Literal["retrieval", "evidence_check", "context"]
 
 
 class ObservedDegradedStep(BaseModel):
@@ -650,13 +612,6 @@ class ObservedEvidence(BaseModel):
         description="回答での使われ方（RAG の answer_use と同じ。引用でなければ null）。",
     )
     locator: ObservedLocator = Field(default_factory=ObservedLocator)
-    table_binding: ObservedTableBinding | None = Field(
-        default=None,
-        description=(
-            "RAG の table_binding（表の行・列の対応の検査がこの根拠の本文を読めるか。null は表の"
-            "無い根拠・読み取りのツールの chunk）。"
-        ),
-    )
     text: str = Field(
         default="",
         description=(
@@ -694,9 +649,6 @@ class RunObservation(BaseModel):
     status: str
     outcome: AnswerOutcomeValue | None = Field(
         default=None, description="agent_get_run の outcome と同じ。completed でなければ null。"
-    )
-    validation_status: ValidationStatus | None = Field(
-        default=None, description="回答の最終の検証の状態（無ければ null）。"
     )
     created_at: datetime
     finished_at: datetime | None = Field(default=None, description="終わっていなければ null。")
@@ -884,57 +836,7 @@ def _answer_evidence(run: RunState) -> Mapping[str, Any]:
     for artifact in reversed(run.artifacts):
         if artifact.kind == ANSWER_EVIDENCE_KIND and isinstance(artifact.content, dict):
             return artifact.content
-    return answer_evidence(run.steps, run_answer_text(run) or "", _answer_validation(run) or None)
-
-
-def _answer_validation(run: RunState) -> Mapping[str, Any]:
-    """Run の最終の検証の成果物の内容（無ければ空）。"""
-    for artifact in reversed(run.artifacts):
-        if artifact.kind == ANSWER_VALIDATION_KIND and isinstance(artifact.content, dict):
-            return artifact.content
-    return {}
-
-
-def _reasons(value: object) -> list[ReasonOutput]:
-    return [
-        ReasonOutput(
-            code=str(item.get("code") or ""),
-            label=str(item.get("label") or ""),
-            detail=str(item.get("detail") or ""),
-        )
-        for item in (value if isinstance(value, list) else [])
-        if isinstance(item, Mapping)
-    ]
-
-
-def _review(
-    run: RunState,
-) -> tuple[list[PassageMarkOutput], list[RemovedPassageOutput], list[ReasonOutput]]:
-    """回答の段落の印・外した段落・回答の警告（成果物「資料との照合」。#2738）。"""
-    if run.status != RunStatus.COMPLETED:
-        return [], [], []
-    content = _answer_validation(run)
-    marks = content.get("passage_marks")
-    removed = content.get("removed_passages")
-    return (
-        [
-            PassageMarkOutput(
-                text=str(item.get("text") or ""),
-                state=item["state"],
-                reasons=_reasons(item.get("reasons")),
-            )
-            for item in (marks if isinstance(marks, list) else [])
-            if isinstance(item, Mapping) and item.get("state") in {"unverified", "warning"}
-        ],
-        [
-            RemovedPassageOutput(
-                text=str(item.get("text") or ""), reasons=_reasons(item.get("reasons"))
-            )
-            for item in (removed if isinstance(removed, list) else [])
-            if isinstance(item, Mapping)
-        ],
-        _reasons(content.get("answer_warnings")),
-    )
+    return answer_evidence(run.steps, run_answer_text(run) or "")
 
 
 def _by_document(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -1132,7 +1034,6 @@ def run_output(
             "実行しています。agent_get_run（wait_seconds）で続きを読んでください。"
             "止めるときは agent_cancel_run を使います。"
         )
-    passage_marks, removed_passages, warnings = _review(run)
     output = RunOutput(
         run_id=run.id,
         agent_id=run.agent_id,
@@ -1143,9 +1044,6 @@ def run_output(
         answer=run_answer_text(run),
         confirmation=_confirmation_output(confirmation) if confirmation is not None else None,
         withheld_evidence_count=withheld_evidence_count,
-        passage_marks=passage_marks,
-        removed_passages=removed_passages,
-        answer_warnings=warnings,
         tools_used=tools_used,
         skipped_approval_tools=skipped,
         pending_approvals=pending_approvals,
@@ -1232,7 +1130,6 @@ def _observed_evidence(
         cited=key in cited,
         answer_use=cast(Literal["confirmed", "reference"], use) if use is not None else None,
         locator=ObservedLocator.model_validate(item.locator),
-        table_binding=cast(ObservedTableBinding | None, item.table_binding),
         text_length=len(item.text),
         truncated=item.truncated,
     )
@@ -1278,7 +1175,6 @@ async def run_observation(
         trace_id=run.trace_id,
         status=str(run.status.value),
         outcome=_outcome(run),
-        validation_status=validation_status(_answer_validation(hydrated)),
         created_at=run.created_at,
         finished_at=run_finished_at(run),
         usage=(

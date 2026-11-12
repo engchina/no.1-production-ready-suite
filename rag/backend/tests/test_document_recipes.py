@@ -25,7 +25,13 @@ from app.clients.oracle import (
     oracle_document_recipe_schema_sql,
     oracle_ingestion_job_schema_sql,
 )
-from app.config import Settings, get_settings, resolve_ingestion_queue_concurrency
+from app.config import (
+    FILE_TYPES,
+    FileTypeDefaultEntry,
+    Settings,
+    get_settings,
+    resolve_ingestion_queue_concurrency,
+)
 from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY
 from app.rag.extraction_field_adapter import (
     FIELD_SCHEMA_FILE_ENV,
@@ -211,7 +217,7 @@ def test_recipe_steps_attribute_full_run_failure_to_failed_phase() -> None:
     failed = _recipe_job(
         IngestionJobPhase.PREPROCESS,
         IngestionJobStatus.FAILED,
-        error_message="選択した文書解析サービス(MinerU)に接続できません。",
+        error_message="選択した文書解析サービス(Docling)に接続できません。",
     )
     steps = _recipe_steps(
         {
@@ -221,7 +227,7 @@ def test_recipe_steps_attribute_full_run_failure_to_failed_phase() -> None:
         [failed],
     )
     assert [step.status for step in steps] == [_S, DocumentRecipeStepStatus.FAILED, _P, _P]
-    assert steps[1].error_message == "選択した文書解析サービス(MinerU)に接続できません。"
+    assert steps[1].error_message == "選択した文書解析サービス(Docling)に接続できません。"
     assert steps[0].error_message is None
 
 
@@ -487,7 +493,7 @@ class _RecipeStatusOracle:
 @pytest.mark.parametrize(
     ("job_phase", "recipe_status", "expected"),
     [
-        # 通しジョブが抽出まで進んで失敗 → EXTRACT に帰属(MinerU 接続失敗など)。
+        # 通しジョブが抽出まで進んで失敗 → EXTRACT に帰属(解析サービスの接続失敗など)。
         (IngestionJobPhase.PREPROCESS, FileStatus.INGESTING, IngestionJobPhase.EXTRACT),
         # 前処理中の失敗はそのまま。
         (IngestionJobPhase.PREPROCESS, FileStatus.PREPROCESSING, IngestionJobPhase.PREPROCESS),
@@ -1650,17 +1656,20 @@ async def test_recipe_job_source_fetch_failure_marks_only_recipe_error(
 
 def _layer_settings(*, enabled: bool) -> Settings:
     if enabled:
-        return Settings(
+        settings = Settings(
             rag_graph_profile="entities",
             rag_field_extraction_enabled=True,
             rag_navigation_summary_enabled=True,
         )
-    return Settings(
-        rag_graph_profile="off",
-        rag_field_extraction_enabled=False,
-        rag_navigation_summary_enabled=False,
-        rag_raptor_enabled=False,
-    )
+    else:
+        settings = Settings(
+            rag_graph_profile="off",
+            rag_field_extraction_enabled=False,
+            rag_navigation_summary_enabled=False,
+        )
+    # このテストの設定をそのまま使う（形式別の組み込みの既定を重ねない）。
+    settings._file_type_defaults = {file_type: FileTypeDefaultEntry() for file_type in FILE_TYPES}
+    return settings
 
 
 async def test_recipe_job_records_layers_and_chunk_sets_endpoint_reports_them(

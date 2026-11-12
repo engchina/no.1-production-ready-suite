@@ -7,8 +7,6 @@
 
 - `context_compaction`: モデルの入力の上限に収めるための古いツールの結果の縮小をしない
   （全体の既定は `AGENT_CONTEXT_COMPACTION_ENABLED`）。
-- `final_validation`: 回答の保存の前の RAG の `rag_validate_answer` の検証をしない
-  （`AGENT_FINAL_VALIDATION_ENABLED`）。
 - `tool_grounding`: 根拠のツールを呼ばずに作った回答の差し戻し・拒答をしない
   （`AGENT_TOOL_GROUNDING_REQUIRED`）。
 """
@@ -19,11 +17,10 @@ from typing import Literal
 
 from app.settings import get_settings
 
-EvaluationAid = Literal["context_compaction", "final_validation", "tool_grounding"]
+EvaluationAid = Literal["context_compaction", "tool_grounding"]
 # 補助 → 全体の既定の設定の名前。
 EVALUATION_AIDS: dict[str, str] = {
     "context_compaction": "agent_context_compaction_enabled",
-    "final_validation": "agent_final_validation_enabled",
     "tool_grounding": "agent_tool_grounding_required",
 }
 DISABLED_AIDS_METADATA_KEY = "evaluation_disabled_aids"

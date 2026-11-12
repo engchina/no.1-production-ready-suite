@@ -127,6 +127,16 @@ describe("dataLoadView", () => {
 });
 
 describe("DataLoadFailureState", () => {
+  it("再試行中も失敗の案内を保ち、同じ読み取りを重ねて送らない", () => {
+    const onRetry = vi.fn();
+    const host = mount(<DataLoadFailureState error={apiError(DATABASE_READ_FAILED_CODE)} fallback="読み込めませんでした" labels={LABELS} onRetry={onRetry} retrying />);
+    expect(host.querySelector("[role='alert']")).not.toBeNull();
+    const retry = retryButton(host);
+    expect(retry.getAttribute("aria-busy")).toBe("true");
+    act(() => retry.click());
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("timeout は role=alert で事実を出し、再試行へフォーカスを移し、DB 設定の導線を出さない", () => {
     const onRetry = vi.fn();
     const host = mount(
@@ -205,6 +215,122 @@ describe("DataLoadFailureState", () => {
   });
 });
 
+describe("DataLoadFailureState layout=field（欄の直下の失敗。#4222・#4817）", () => {
+  function detailsToggle(host: HTMLElement): HTMLButtonElement {
+    const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("詳細"));
+    if (!button) throw new Error("詳細のボタンがありません");
+    return button;
+  }
+
+  it("見出しは欄ごとの文。接続の失敗の文は畳んだ「詳細」に入れ、導線 → 再試行の順に出す", () => {
+    const onRetry = vi.fn();
+    const host = mount(
+      <DataLoadFailureState
+        error={apiError(DATABASE_UNAVAILABLE_CODE)}
+        fallback="文書の分類の候補を読み込めませんでした。"
+        labels={LABELS}
+        onRetry={onRetry}
+        databaseAction={databaseAction}
+        layout="field"
+        testId="field-failure"
+      />,
+    );
+    const root = host.querySelector("[data-testid='field-failure']")!;
+    expect(root.getAttribute("data-failure-layout")).toBe("field");
+    expect(root.getAttribute("data-failure-kind")).toBe("unavailable");
+    // 読み上げるのは欄ごとの文だけ。原因の文は見出しに出さない。
+    const alert = host.querySelector("[role='alert']")!;
+    expect(alert.textContent).toBe("文書の分類の候補を読み込めませんでした。");
+    const toggle = detailsToggle(host);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const region = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(region.hidden).toBe(true);
+    expect(region.textContent).toContain("接続不可の文");
+    act(() => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(region.hidden).toBe(false);
+    const link = host.querySelector("a");
+    expect(link).not.toBeNull();
+    const retry = retryButton(host);
+    expect(link!.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // どの欄の再試行かを、見出しの文で説明する（複数の欄が同時に失敗しても区別できる）。
+    expect(retry.getAttribute("aria-describedby")).toBe(alert.id);
+    act(() => retry.click());
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("その他の失敗は backend の文と技術的な情報を「詳細」に入れ、接続できないと言わず導線も出さない", () => {
+    const host = mount(
+      <DataLoadFailureState
+        error={Object.assign(apiError(DATABASE_READ_FAILED_CODE, 500), {
+          toApiErrorPresentation: () => ({
+            summary: "backend の文",
+            details: [{ label: "エラーコード", value: DATABASE_READ_FAILED_CODE }],
+          }),
+        })}
+        fallback="新しい版の候補を読み込めませんでした。"
+        labels={LABELS}
+        onRetry={() => {}}
+        databaseAction={databaseAction}
+        layout="field"
+      />,
+    );
+    expect(host.querySelector("[role='alert']")?.textContent).toBe("新しい版の候補を読み込めませんでした。");
+    const region = document.getElementById(detailsToggle(host).getAttribute("aria-controls")!)!;
+    expect(region.textContent).toContain("backend の文");
+    expect(region.textContent).toContain(DATABASE_READ_FAILED_CODE);
+    expect(host.textContent).not.toContain("接続不可");
+    expect(host.querySelector("a")).toBeNull();
+  });
+
+  it("2 つの欄が同じ原因で失敗しても、見出しは欄ごとに違う文になる", () => {
+    const error = apiError(DATABASE_READ_FAILED_CODE, 500);
+    const host = mount(
+      <>
+        <DataLoadFailureState error={error} fallback="欄 A の候補を読み込めませんでした。" labels={LABELS} onRetry={() => {}} layout="field" />
+        <DataLoadFailureState error={error} fallback="欄 B の候補を読み込めませんでした。" labels={LABELS} onRetry={() => {}} layout="field" />
+      </>,
+    );
+    expect([...host.querySelectorAll("[role='alert']")].map((item) => item.textContent)).toEqual([
+      "欄 A の候補を読み込めませんでした。",
+      "欄 B の候補を読み込めませんでした。",
+    ]);
+  });
+
+  it("原因の文も技術的な情報も無ければ「詳細」を出さない", () => {
+    const host = mount(
+      <DataLoadFailureState error={null} fallback="候補を読み込めませんでした。" labels={LABELS} onRetry={() => {}} layout="field" />,
+    );
+    expect([...host.querySelectorAll("button")].map((item) => item.textContent)).toEqual(["再試行"]);
+  });
+
+  it("フォーカスを動かさない（何にもフォーカスが無くても、ほかにフォーカスがあっても）", () => {
+    mount(
+      <DataLoadFailureState
+        error={apiError(DATABASE_READ_TIMEOUT_CODE)}
+        fallback="候補を読み込めませんでした。"
+        labels={LABELS}
+        onRetry={() => {}}
+        layout="field"
+      />,
+    );
+    expect(document.activeElement).toBe(document.body);
+    const buttonHost = mount(<button type="button">選択欄</button>);
+    const button = buttonHost.querySelector("button")!;
+    button.focus();
+    mount(
+      <DataLoadFailureState
+        error={apiError(DATABASE_READ_TIMEOUT_CODE)}
+        fallback="候補を読み込めませんでした。"
+        labels={LABELS}
+        onRetry={() => {}}
+        layout="field"
+      />,
+    );
+    expect(document.activeElement).toBe(button);
+  });
+});
+
 describe("StaleDataNotice", () => {
   it("いつの内容かと原因を出す。フォーカスのある要素からは動かさない", () => {
     const rowHost = mount(<button type="button">行の操作</button>);
@@ -234,5 +360,20 @@ describe("StaleDataNotice", () => {
       />,
     );
     expect(document.activeElement).toBe(retryButton(host));
+  });
+});
+
+
+describe("読み取りの復旧は操作中のポップアップの焦点を奪わない（#4857）", () => {
+  it.each(["menu", "listbox", "combobox", "trigger"])("%s の操作中に失敗しても焦点を保つ", (kind) => {
+    const activeHost = mount(
+      kind === "trigger" ? <button aria-haspopup="listbox" aria-expanded="true">合成の選択</button> :
+        <div role={kind}><button role={kind === "menu" ? "menuitem" : "option"}>合成の操作</button></div>
+    );
+    const active = activeHost.querySelector("button")!;
+    active.focus();
+    const failed = mount(<DataLoadFailureState error={apiError(DATABASE_READ_FAILED_CODE)} fallback="合成の読み取り失敗" labels={LABELS} onRetry={() => {}} />);
+    expect(retryButton(failed)).toBeTruthy();
+    expect(document.activeElement).toBe(active);
   });
 });

@@ -20,6 +20,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_preprocess",
   "menu.settings_parser_adapters",
   "menu.settings_chunking",
+  "menu.settings_file_type_defaults",
   "menu.settings_vector_index",
   "menu.settings_retrieval",
   "menu.settings_prompts",
@@ -48,7 +49,6 @@ export const CAPABILITY_PERMISSION_CODES = [
   "rag.knowledge_bases.manage",
   "rag.feedback.manage",
   "rag.system_tables.manage",
-  "rag.evaluation_calibration.manage",
 ] as const;
 
 export const ALL_PERMISSION_CODES: string[] = [

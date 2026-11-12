@@ -265,7 +265,7 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured", "mineru")
+    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured")
     assert route_by_kind["pdf"]["attempted_order"] == ()
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["candidate_order"] == ("unstructured",)
@@ -363,7 +363,6 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     }
     assert trend_route_by_kind["pdf"]["candidate_order"] == [
         "docling",
-        "mineru",
         "unstructured",
     ]
     assert trend_route_by_kind["pdf"]["selected_backend"] == "local"
@@ -1525,7 +1524,7 @@ def test_file_processing_staging_cli_preflight_only_reports_safe_config_gap(
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured", "mineru"]
+    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured"]
     assert route_by_kind["email"]["candidate_order"] == ["unstructured"]
     assert "super-secret-password" not in output_path.read_text(encoding="utf-8")
 
@@ -1829,13 +1828,13 @@ def test_report_payload_source_routes_are_contract_aware(
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured", "mineru")
+    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "unstructured")
     assert route_by_kind["pdf"]["selected_backend"] == "docling"
     assert "selected_adapter_supported_for_source" in route_by_kind["pdf"]["reason_codes"]
     # Docling は PDF と画像だけを解析するため、Docling を選んでも office は
     # Docling に回らない(#366)。取込では parser_source_guard が取込前に止めて案内する
     # (自動で Unstructured へ振り分けない)。
-    assert route_by_kind["office"]["candidate_order"] == ("unstructured", "mineru")
+    assert route_by_kind["office"]["candidate_order"] == ("unstructured",)
     assert route_by_kind["office"]["selected_backend"] == "local"
     assert "selected_adapter_unsupported_for_source" in route_by_kind["office"]["reason_codes"]
     assert "docling_adapter_source_unsupported" in route_by_kind["office"]["warning_codes"]
@@ -3462,13 +3461,12 @@ class FakeIngestion:
         self,
         document_id: str,
         image_bytes: bytes,
-        prompt: str,
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
         chunk_set_id: str | None = None,
     ) -> DocumentDetail:
-        del image_bytes, prompt, source_profile, chunk_set_id
+        del image_bytes, source_profile, chunk_set_id
         document = self.oracle.documents[document_id]
         if document.file_name == "broken.xlsx":
             self.oracle.set_error_segments(document_id)

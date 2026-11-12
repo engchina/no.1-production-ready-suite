@@ -164,7 +164,7 @@ def test_renamed_values_match_the_code() -> None:
         LAYOUT_SOURCE_PARSER,
         SMALL_TO_BIG_STRATEGY,
     )
-    from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig, KnowledgeBaseQueryConfig
+    from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
     from app.rag.layer_fingerprint import CHUNK_METADATA_CONTRACT_INPUT
 
     news = {new.strip('"') for _old, new in STORED_NAME_RENAMES_599}
@@ -181,19 +181,20 @@ def test_renamed_values_match_the_code() -> None:
     assert set(SMALL_TO_BIG_SETTING_FIELDS) <= news
     # 後で消した設定（書き換えの SQL は適用済みの版のまま残す）。回答の画像の添付は回答の
     # モデルの能力で決め、設定を持たない(#3444)。
-    removed = {"rag_answer_vision_enabled", "rag_answer_profile"}
+    removed = {
+        "rag_answer_vision_enabled",
+        "rag_answer_profile",
+        "rag_query_strategy",
+        "rag_answer_flow",
+        "rag_screen_linking_enabled",
+    }
     assert all(name in Settings.model_fields for name in news - removed if name.startswith("rag_"))
     assert not removed & set(Settings.model_fields)
     assert {name for name in news if name in KnowledgeBaseIngestionConfig.model_fields} == {
         name.removeprefix("rag_") for name in SMALL_TO_BIG_SETTING_FIELDS
     }
-    assert {name for name in news if name in KnowledgeBaseQueryConfig.model_fields} == {
-        "query_strategy",
-        "answer_flow",
-        "neighbor_child_count",
-        "rerank_enabled",
-        "screen_linking_enabled",
-    }
+    # プロファイルの query の欄は定義から消した(#4784)。全体の設定には残る。
+    assert {"neighbor_child_count", "rerank_enabled", "screen_linking_enabled"} <= news
 
 
 def test_stored_names_migration_rewrites_each_column_in_order() -> None:

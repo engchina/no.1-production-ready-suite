@@ -7,7 +7,6 @@ name: CI
 # 本 workflow・.github/actions/ と、どちらにも属さない platform のファイル（.env.example・contracts/ 等）の変更は両方に効く。
 # 例外: 回答の段落の判定の共通の事例（platform/contracts/answer-passages/）は backend のテストだけが読むので、
 # それを読む RAG / Engine・RAG / Backend・Agent / Backend だけを動かす（frontend・e2e は動かさない。#1488）。
-# ただし段落の印の契約（passage-marks.json）は共有 UI のテストも読むので、共有 UI の変更として frontend も動かす（#2738）。
 # 製品の frontend と E2E smoke の job は、その製品の frontend（と frontend のテストが読む backend の一部のファイル。
 # <製品>_frontend）か共有 UI の変更でだけ動く。e2e は API をすべてモックするので backend のコードを実行しない（#1531）。
 # 製品の backend の job（Backend・Engine・services の lint）は、その製品の frontend 以外（と backend のテストが読む
@@ -220,8 +219,6 @@ jobs:
               - "platform/docs/design-system/**"
               - "platform/package.json"
               - "platform/package-lock.json"
-              # 共有 UI のテスト（tests/answer-passage-marks.test.tsx）が読む段落の印の契約（#2738）。
-              - "platform/contracts/answer-passages/passage-marks.json"
               - "!platform/docs/design-system/**/*.md"
             platform_backend:
               - "platform/packages/backend_core/**"
@@ -425,6 +422,7 @@ jobs:
             oracle_common:
               - ".github/workflows/oracle-integration.yml"
               - ".github/scripts/oracle-free-ci.sh"
+              - ".github/scripts/oracle-free-pull.sh"
               - ".github/scripts/pytest-skip-gate.py"
               - "platform/packages/backend_core/src/pr_backend_core/oracle_*.py"
               - "platform/packages/backend_core/src/pr_backend_core/observability/trace_bodies.py"
@@ -460,6 +458,9 @@ jobs:
               - "rag/packages/rag_engine/rag_engine/adapters/oracle/native_hybrid.py"
               - "rag/backend/app/clients/document_category_store.py"
               - "rag/backend/app/clients/document_cleanup_store.py"
+              - "rag/backend/app/clients/document_summary_store.py"
+              - "rag/backend/app/rag/document_summary.py"
+              - "rag/backend/tests/test_document_summary_oracle.py"
               - "rag/backend/app/clients/section_map_store.py"
               - "rag/backend/app/clients/structure_graph_store.py"
               - "rag/backend/app/rag/reference_refresh.py"
@@ -487,6 +488,7 @@ jobs:
               - "rag/backend/app/clients/support_guide_store.py"
               - "rag/backend/app/clients/language_pack_release_store.py"
               - "rag/backend/app/rag/language_pack_retired_fields.py"
+              - "rag/backend/app/rag/language_pack_repair.py"
             nl2sql_oracle:
               - "nl2sql/backend/migrations/**"
               - "nl2sql/backend/app/cli/nl2sql_system_schema.py"
@@ -516,7 +518,7 @@ jobs:
               - "agent/backend/app/features/agent/run_signals.py"
               - "agent/backend/tests/*oracle_live*.py"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
-            # answer-passages の事例は answer_passages_contract（段落の印の契約は platform_frontend も）で判定する（#1488・#2738）。
+            # answer-passages の事例は answer_passages_contract で判定する（#1488）。
             platform_other:
               - "platform/**"
               - "!platform/packages/ui/**"
@@ -2034,6 +2036,10 @@ jobs:
       # 実 Oracle の結合テストの skip の監視（oracle-integration.yml。#1595）。runner の python3 で動く。
       - name: Test pytest-skip-gate
         run: bash scripts/tests/pytest-skip-gate.test.sh
+
+      # Oracle の image の取得の時間切れと再試行（oracle-free-pull.sh。#4708）。偽の docker で確かめる。
+      - name: Test oracle-free-pull
+        run: bash scripts/tests/oracle-free-pull.test.sh
 
       # Playwright の OS の依存を、時間の上限と retry を付けて入れる script（.github/actions/playwright-browsers。#3489）。
       - name: Test playwright-browsers install

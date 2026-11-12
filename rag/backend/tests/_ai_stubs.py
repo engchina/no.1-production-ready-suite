@@ -15,13 +15,13 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
-from rag_engine.models.audit_wire import AuditWireResult
 from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.schemas.document import SourceProfile
 from app.schemas.extraction import StructuredExtraction
+from tests.audit_fixtures import is_audit_wire
 
 
 def _decode(image_bytes: bytes) -> str:
@@ -68,13 +68,21 @@ class DeterministicEnterpriseAi(OciEnterpriseAiClient):
         prompt: str,
         context: str,
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        instruction: str = "",
         response_schema: Mapping[str, Any] | None = None,
         response_schema_name: str = "structured_answer",
     ) -> str:
         # 項目抽出は応答の schema を渡して呼ぶ（#2720）。決定論スタブは項目を 1 つも返さない。
         if response_schema_name == "field_extraction":
             return '{"fields": []}'
+        # 文書全体の要約（#4793）は、本文の先頭を写した決まった要約を返す。
+        if response_schema_name == "document_summary":
+            body = context.split("\n", 1)[-1].split("\n</document_body>")[0]
+            return json.dumps(
+                {"summary": f"合成の要約: {' '.join(body.split())[:80]}", "topics": ["合成の話題"]},
+                ensure_ascii=False,
+            )
         if not context.strip():
             return "該当する根拠は見つかりませんでした。条件やキーワードを変えて検索してください。"
         snippet = " ".join(context.split())[:200]
@@ -137,6 +145,9 @@ def patch_ai_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.rag.ingestion.OciGenAiClient", DeterministicGenAi)
     monkeypatch.setattr("app.rag.pipeline.OciEnterpriseAiClient", DeterministicEnterpriseAi)
     monkeypatch.setattr("app.rag.pipeline.OciGenAiClient", DeterministicGenAi)
+    # 取込の後段の文書全体の要約（#4793。テスト既定は無効で、専用テストが有効にする）。
+    monkeypatch.setattr("app.rag.document_summary.OciEnterpriseAiClient", DeterministicEnterpriseAi)
+    monkeypatch.setattr("app.rag.document_summary.OciGenAiClient", DeterministicGenAi)
     # 解析は parser マイクロサービスへ委譲する。
     # 実サービス未起動でも取込できるよう runner を差し替え。
     monkeypatch.setattr(
@@ -178,102 +189,13 @@ def _first_evidence(prompt: str) -> tuple[str, str] | None:
     return None
 
 
-def application_audit_reply(
-    text_format: type[BaseModel], prompt: str, *, valid: bool = True, summary_supported: bool = True
-) -> BaseModel | None:
-    """推導の監査（当てはめの監査、独立の監査の判定と理由）の合成応答。ほかは None。"""
-    from rag_engine.generation.application_reason import AuditReason
-    from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit
-
-    if text_format is AuditReason:
-        return AuditReason(reason="合成の判定の理由です。")
-    bound = getattr(text_format, "canonical_schema", None) is ApplicationAudit
-    if not bound and text_format not in (ApplicationAudit, ApplicationVerdictAudit):
-        return None
-    data = json.loads(prompt)
-    if bound:
-        # 当てはめの段の監査は application の固定キーに束縛した wire（#4393）。
-        from tests.audit_fixtures import legacy_audit_result
-
-        return cast(
-            AuditWireResult,
-            legacy_audit_result(
-                text_format,
-                ApplicationAudit(
-                    application_reviews=[
-                        {"index": row["index"], "valid": valid, "reason": "合成の原文対応"}
-                        for row in data["applications"]
-                    ],
-                    summary_supported=summary_supported,
-                ).model_dump(),
-            ),
-        )
-
-    def detail(application: dict[str, Any]) -> dict[str, Any]:
-        if text_format is not ApplicationVerdictAudit:
-            return {"reason": "合成の原文対応"}
-        # 根拠は引用元の evidence_id（引用元を含まない valid は未確認になる。basis_not_cited）。
-        return {
-            "basis_evidence_ids": list(
-                dict.fromkeys(
-                    str(binding["evidence_id"])
-                    for position in application.get("item_indexes") or ()
-                    for binding in data["items"][position].get("citation_bindings") or ()
-                    if binding.get("evidence_id")
-                )
-            )
-        }
-
-    return text_format.model_validate(
-        {
-            "application_reviews": [
-                {"index": row["index"], "valid": valid, **detail(row)}
-                for row in data["applications"]
-            ],
-            "summary_supported": summary_supported,
-        }
-    )
-
-
 def deterministic_parse_text_response(
     system_prompt: str, prompt: str, settings: Any, text_format: type[BaseModel], **_: Any
-) -> BaseModel | AuditWireResult:
+) -> BaseModel:
     """回答の生成の LLM 呼び出しを決定論的に返す（最初の根拠の 1 行を引用する 1 項目の回答）。"""
-    from rag_engine.generation.application_explanation import (
-        KEY_SOURCES,
-        is_explanation_schema,
-    )
     from rag_engine.generation.citation_wire import generation_draft_wire_model
-    from rag_engine.models.audit_wire import is_audit_wire
-    from rag_engine.models.llm import (
-        CragRetrievalGradeOutput,
-        GroundedAudit,
-        GroundedDraft,
-        GroundedFactAudit,
-        QueryExpansionOutput,
-        QueryRoutingOutput,
-        SectionExtractionOutput,
-        TextOutput,
-    )
+    from rag_engine.models.llm import GroundedDraft, TextOutput
 
-    # 推導の説明の段（#4393）。入力の資料の原文だけから日本語の説明を返す（結論は入力に無い）。
-    if is_explanation_schema(text_format):
-        sources = json.loads(prompt)[KEY_SOURCES]
-        return text_format.model_validate(
-            {"explanation": "資料の原文によると、" + " ".join(sources)}
-        )
-    if (reply := application_audit_reply(text_format, prompt)) is not None:
-        return reply
-    if text_format is QueryRoutingOutput:
-        return QueryRoutingOutput(strategy="simple_retrieval", reason="決定論スタブ", queries=[])
-    if text_format is QueryExpansionOutput:
-        return QueryExpansionOutput(queries=[])
-    if text_format is CragRetrievalGradeOutput:
-        return CragRetrievalGradeOutput(
-            reason="決定論スタブ", sufficient=True, confidence=0.9, rewritten_query=""
-        )
-    if text_format is SectionExtractionOutput:
-        return SectionExtractionOutput(quotes=[])
     if text_format is TextOutput:
         return TextOutput(text="決定論スタブの回答です。")
     if text_format is GroundedDraft:
@@ -313,12 +235,7 @@ def deterministic_parse_text_response(
             ]
         if getattr(text_format, "_uses_typed_answer_parts", False):
             answer = (
-                {
-                    "kind": "answer",
-                    "basis": {"unit_ids": [unit.group(1)]},
-                    "reasoning": "選択した原文を示す。",
-                    "result": items[0]["text"],
-                }
+                {"kind": "source", "basis": {"unit_ids": [unit.group(1)]}}
                 if evidence and unit
                 else {"kind": "gap", "text": "合成の資料が不足しています。"}
             )
@@ -339,6 +256,7 @@ def deterministic_parse_text_response(
                     ]
                     if evidence
                     else [],
+                    "response_kind": "answered" if evidence else "insufficient_evidence",
                     "answer_parts": [
                         {"request_id": "Q1", "requirement": "合成の要求", "answer": answer}
                     ],
@@ -381,7 +299,7 @@ def deterministic_parse_text_response(
             }
         )
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
-    if text_format in (GroundedAudit, GroundedFactAudit):
+    if False:
         evidence = _first_evidence(prompt)
         reviews = (
             [{"index": 0, "support": "supported", "applicability": "matched", "reason": "原文"}]

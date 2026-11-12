@@ -11,13 +11,15 @@ Agent の画面（ブラウザ）は RAG の Cookie を持たないため、Agen
   利用者に、その根拠が検索と同じ見え方の条件で見えるか」を確かめ直すため
   （``app.api.routes.source_previews``）。
 - プレビューの種類は RAG の根拠のパネル（frontend の ``DocumentPreview``）と同じ決め方:
-  拡張子で画像・PDF・テキストを分け、Office は処理後の PDF があればその PDF のページを出す。
+  画像・PDF・テキストと、保存済みの構造化 JSONL を分け、Office の PDF 変換はそのページを出す。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+
+from rag_parser_core.structured_records import is_structured_records_content_type
 
 from app.rag.signed_url import (
     SIGNED_URL_TTL_SECONDS,
@@ -40,7 +42,7 @@ PreviewVariant = Literal["original", "prepared"]
 # 拡張子 → プレビューの種類（frontend の DocumentPreview の kindOf と同じ）。
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 _TEXT_EXTENSIONS = frozenset(
-    {"txt", "csv", "tsv", "md", "json", "xml", "log", "html", "htm", "eml"}
+    {"txt", "csv", "tsv", "md", "markdown", "json", "xml", "log", "html", "htm", "eml"}
 )
 _OFFICE_EXTENSIONS = frozenset({"doc", "docx", "ppt", "pptx", "xls", "xlsx"})
 
@@ -139,6 +141,12 @@ def preview_kind(
         return "image", "original"
     if extension == "pdf":
         return "pdf", "original"
+    if (
+        prepared is not None
+        and prepared.object_storage_path
+        and is_structured_records_content_type(prepared.content_type or "")
+    ):
+        return "text", "original"
     if extension in _TEXT_EXTENSIONS:
         return "text", "original"
     if extension in _OFFICE_EXTENSIONS and is_prepared_pdf(prepared):

@@ -1,0 +1,134 @@
+{
+  "raw_text": "r\n\nA\n\nB",
+  "elements": [
+    {
+      "kind": "text",
+      "text": "r",
+      "element_id": "docling-p1-1",
+      "source_parser": "docling_layout",
+      "page_number": 1,
+      "bbox": [
+        411,
+        286,
+        440,
+        309.6666666666667
+      ],
+      "order": 0,
+      "section_path": []
+    },
+    {
+      "kind": "text",
+      "text": "A",
+      "element_id": "docling-p1-2",
+      "source_parser": "docling_layout",
+      "page_number": 1,
+      "bbox": [
+        154.33333333333334,
+        303.3333333333333,
+        185,
+        336
+      ],
+      "order": 1,
+      "section_path": []
+    },
+    {
+      "kind": "text",
+      "text": "B",
+      "element_id": "docling-p1-3",
+      "source_parser": "docling_layout",
+      "page_number": 1,
+      "bbox": [
+        785.3333333333334,
+        504,
+        813,
+        534.3333333333334
+      ],
+      "order": 2,
+      "section_path": []
+    }
+  ],
+  "pages": [
+    {
+      "page_number": 1,
+      "width": 1000,
+      "height": 650
+    }
+  ],
+  "parser_artifacts": {
+    "external_adapter": "docling",
+    "layout_records": {
+      "version": 1,
+      "pages": [
+        {
+          "page": 1,
+          "width": 1000,
+          "height": 650,
+          "pdf_width": 1000,
+          "pdf_height": 650
+        }
+      ],
+      "records": [
+        {
+          "bbox": [
+            411,
+            286,
+            440,
+            309.6666666666667
+          ],
+          "category": "Text",
+          "confidence": null,
+          "coord_system": "image_top_left",
+          "engine": "docling",
+          "id": "docling-p1-1",
+          "page": 1,
+          "page_height": 650,
+          "page_width": 1000,
+          "raw_type": "text",
+          "seq_no": 1,
+          "text": "r",
+          "raw": {}
+        },
+        {
+          "bbox": [
+            154.33333333333334,
+            303.3333333333333,
+            185,
+            336
+          ],
+          "category": "Text",
+          "confidence": null,
+          "coord_system": "image_top_left",
+          "engine": "docling",
+          "id": "docling-p1-2",
+          "page": 1,
+          "page_height": 650,
+          "page_width": 1000,
+          "raw_type": "text",
+          "seq_no": 2,
+          "text": "A",
+          "raw": {}
+        },
+        {
+          "bbox": [
+            785.3333333333334,
+            504,
+            813,
+            534.3333333333334
+          ],
+          "category": "Text",
+          "confidence": null,
+          "coord_system": "image_top_left",
+          "engine": "docling",
+          "id": "docling-p1-3",
+          "page": 1,
+          "page_height": 650,
+          "page_width": 1000,
+          "raw_type": "text",
+          "seq_no": 3,
+          "text": "B",
+          "raw": {}
+        }
+      ]
+    }
+  }
+}

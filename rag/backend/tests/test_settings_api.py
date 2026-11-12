@@ -35,7 +35,6 @@ from app.config import (
     MODEL_SETTINGS_STORE,
     PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
-    EnterpriseAiConfiguredModel,
     Settings,
     get_settings,
     load_persisted_model_settings,
@@ -90,7 +89,6 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
 
     def package_info(
@@ -124,12 +122,10 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     # dots_ocr はローカル package/image ではなく外部 API で配信する。
     assert by_backend["dots_ocr"]["install_package"] == "外部 Dots.OCR API"
     connections = {item["backend"]: item for item in body["connections"]}
-    assert set(connections) == {"mineru", "dots_ocr"}
+    assert set(connections) == {"dots_ocr"}
     assert connections["dots_ocr"]["endpoint"] == ""
     assert connections["dots_ocr"]["api_key_configured"] is False
     assert "api_key" not in connections["dots_ocr"]
-    assert by_backend["mineru"]["install_package"] == "外部 MinerU API"
-    assert by_backend["mineru"]["status"] == "disabled"
     assert by_backend["dots_ocr"]["status"] == "disabled"
     # XML ツリー JSON は Docling・Unstructured と同じ使用エンジン(#2042)。
     assert by_backend["xml_tree_json"]["status"] == "disabled"
@@ -141,7 +137,6 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
         "unstructured",
         "structured_records_jsonl",
         "xml_tree_json",
-        "mineru",
         "dots_ocr",
     ]
     assert "source_format_parsers" not in body
@@ -152,7 +147,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert score_by_backend["docling"]["warning_codes"] == ["adapter_flag_ignored_by_backend"]
     assert set(score_by_backend) == {"local", "docling", "unstructured"}
     route_by_kind = {route["source_kind"]: route for route in body["source_routes"]}
-    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured", "mineru"]
+    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured"]
     assert route_by_kind["pdf"]["attempted_order"] == []
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["selected_backend"] == "local"
@@ -353,7 +348,6 @@ def test_parser_adapter_settings_no_longer_handle_docling_vision(
     )
 
 
-@pytest.mark.usefixtures("mineru_selectable")
 def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_omitted_flags(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -362,8 +356,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
@@ -372,50 +365,44 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     resp = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "mineru",
-            "mineru_enabled": True,
-            "mineru_license_acknowledged": True,
-            "dots_ocr_enabled": False,
+            "adapter_backend": "dots_ocr",
+            "dots_ocr_enabled": True,
         },
     )
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["adapter_backend"] == "mineru"
-    assert body["effective_order"] == ["mineru"]
+    assert body["adapter_backend"] == "dots_ocr"
+    assert body["effective_order"] == ["dots_ocr"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
     assert by_backend["docling"]["enabled"] is True
-    assert by_backend["mineru"]["enabled"] is True
-    assert by_backend["dots_ocr"]["enabled"] is False
-    assert settings.rag_parser_adapter_backend == "mineru"
+    assert by_backend["dots_ocr"]["enabled"] is True
+    assert settings.rag_parser_adapter_backend == "dots_ocr"
     assert settings.rag_parser_docling_enabled is True
-    assert settings.rag_parser_mineru_enabled is True
-    assert settings.rag_parser_dots_ocr_enabled is False
+    assert settings.rag_parser_dots_ocr_enabled is True
     parser = _persisted_parser(settings)
-    assert parser["adapter_backend"] == "mineru"
+    assert parser["adapter_backend"] == "dots_ocr"
     assert parser["docling_enabled"] is True
-    assert parser["mineru_enabled"] is True
-    assert parser["dots_ocr_enabled"] is False
+    assert parser["dots_ocr_enabled"] is True
     # 削除したエンジン(#270)の項目は保存しない。
     assert not [key for key in parser if "marker" in key or "unlimited" in key or "glm" in key]
 
 
-@pytest.mark.usefixtures("mineru_selectable")
 def test_update_external_parser_connection_retains_and_clears_secret(
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_mineru_api_host", "https://old.example.com")
-    monkeypatch.setattr(settings, "rag_parser_mineru_api_key", "top-secret")
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_api_host", "https://old.example.com")
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_api_key", "top-secret")
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_model", "dots-model")
     retained = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "mineru",
-            "mineru_license_acknowledged": True,
+            "adapter_backend": "dots_ocr",
             "connections": [
                 {
-                    "backend": "mineru",
-                    "endpoint": "https://mineru.example.com/",
+                    "backend": "dots_ocr",
+                    "endpoint": "https://dots.example.com/",
                     "api_key": "",
                 }
             ],
@@ -424,35 +411,35 @@ def test_update_external_parser_connection_retains_and_clears_secret(
 
     assert retained.status_code == 200
     connection = next(
-        item for item in retained.json()["data"]["connections"] if item["backend"] == "mineru"
+        item for item in retained.json()["data"]["connections"] if item["backend"] == "dots_ocr"
     )
     assert connection == {
-        "backend": "mineru",
-        "protocol": "mineru_v1",
-        "endpoint": "https://mineru.example.com",
-        "model": None,
+        "backend": "dots_ocr",
+        "protocol": "openai_chat_completions",
+        "endpoint": "https://dots.example.com",
+        "model": "dots-model",
         "api_key_configured": True,
         "configured": True,
     }
     assert "top-secret" not in retained.text
-    assert settings.rag_parser_mineru_api_key == "top-secret"
+    assert settings.rag_parser_dots_ocr_api_key == "top-secret"
     parser = _persisted_parser(settings)
-    assert parser["mineru_api_host"] == "https://mineru.example.com"
+    assert parser["dots_ocr_api_host"] == "https://dots.example.com"
     # parser の API key も JSON ではなく .env に保存する（#106）。
-    assert "mineru_api_key" not in parser
+    assert "dots_ocr_api_key" not in parser
     assert "top-secret" not in PARSER_SETTINGS_STORE.path(settings).read_text(encoding="utf-8")
-    assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "top-secret"
+    assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "top-secret"
 
     cleared = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "mineru",
-            "connections": [{"backend": "mineru", "clear_api_key": True}],
+            "adapter_backend": "dots_ocr",
+            "connections": [{"backend": "dots_ocr", "clear_api_key": True}],
         },
     )
 
     assert cleared.status_code == 200
-    assert settings.rag_parser_mineru_api_key == ""
+    assert settings.rag_parser_dots_ocr_api_key == ""
     assert "top-secret" not in cleared.text
 
 
@@ -677,7 +664,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     monkeypatch.setattr(settings, "rag_chunk_overlap", 150)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
     monkeypatch.setattr(settings, "rag_chunk_child_target_chars", 800)
-    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n---\\n")
+    monkeypatch.setattr(settings, "rag_chunk_delimiter", ["\\n---\\n"])
     monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", False)
 
     resp = client.get("/api/settings/chunking")
@@ -694,7 +681,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["chunk_parent_target_chars"] == 6000
     assert body["chunk_parent_max_pages"] == 3
     assert body["chunk_parent_max_children"] == 12
-    assert body["delimiter"] == "\\n---\\n"
+    assert body["delimiter"] == ["\\n---\\n"]
     assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
     names = [item["name"] for item in body["strategies"]]
@@ -758,13 +745,13 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert settings.rag_chunking_strategy == "recursive_character"
     assert settings.rag_chunk_size == 1000
     assert settings.rag_chunk_min_chars == 40
-    assert settings.rag_chunk_delimiter == "---"
+    assert settings.rag_chunk_delimiter == ["---"]
     assert settings.rag_chunk_context_header_enabled is True
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_CHUNKING_STRATEGY=recursive_character" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
-    assert "RAG_CHUNK_DELIMITER=---" in persisted
+    assert 'RAG_CHUNK_DELIMITER="[\\"---\\"]"' in persisted
     assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED" not in persisted
 
 
@@ -990,7 +977,7 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
 
     assert resp.status_code == 200
     assert settings.rag_chunking_strategy == "fixed_delimiter"
-    assert "RAG_CHUNK_DELIMITER=---" in env_file.read_text(encoding="utf-8")
+    assert 'RAG_CHUNK_DELIMITER="[\\"---\\"]"' in env_file.read_text(encoding="utf-8")
 
 
 def test_guardrail_settings_exposes_independent_switches(monkeypatch: MonkeyPatch) -> None:
@@ -1173,7 +1160,7 @@ def test_evaluation_settings_reports_runtime_suite(monkeypatch: MonkeyPatch) -> 
     assert resp.status_code == 200
     body = resp.json()["data"]
     assert body["suite"] == "strict"
-    assert body["thresholds"]["claim_support_rate"] == 1.0
+    assert body["thresholds"]["answer_correctness"] == 1.0
     names = [item["name"] for item in body["suites"]]
     assert names == ["standard", "strict"]
     selected = [item["name"] for item in body["suites"] if item["selected"]]
@@ -1191,7 +1178,7 @@ def test_evaluation_settings_every_suite_has_thresholds(
     body = resp.json()["data"]
     assert body["suite"] == "standard"
     assert body["thresholds"]["required_evidence_recall"] == 0.9
-    assert all(len(item["thresholds"]) == 6 for item in body["suites"])
+    assert all(len(item["thresholds"]) == 4 for item in body["suites"])
 
 
 def test_update_evaluation_settings_persists_env_and_mutates_runtime(
@@ -1530,8 +1517,8 @@ def test_model_settings_test_enterprise_text_uses_candidate_without_mutating_run
         def __init__(self, settings: Settings) -> None:
             observed_settings.append(settings)
 
-        async def generate(self, prompt: str, context: str) -> str:
-            assert prompt
+        async def generate(self, prompt: str, context: str, *, system_prompt: str) -> str:
+            assert system_prompt
             assert context
             return "接続テスト応答"
 
@@ -1645,7 +1632,7 @@ def test_model_settings_test_returns_real_error_with_troubleshooting_and_masks_s
         def __init__(self, settings: Settings) -> None:
             self.settings = settings
 
-        async def generate(self, prompt: str, context: str) -> str:
+        async def generate(self, prompt: str, context: str, *, system_prompt: str) -> str:
             raise RuntimeError(
                 f"401 Unauthorized: bearer {self.settings.oci_enterprise_ai_api_key}"
             )
@@ -3541,239 +3528,10 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     )
 
 
-def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
-    """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_hybrid_search_backend", "oracle_native")
-    monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
-    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
-    monkeypatch.setattr(settings, "rag_answer_flow", "crag")
-    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
-    monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
-    monkeypatch.setattr(settings, "rag_rerank_enabled", True)
-    monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
-    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", True)
-    monkeypatch.setattr(settings, "rag_auto_field_filter_enabled", False)
-    monkeypatch.setattr(settings, "rag_graph_expansion_enabled", False)
-    expansion_defaults = {
-        "entity_expansion_enabled": True,
-        "entity_expansion_max_chunks": 6,
-        "section_expansion_enabled": True,
-        "section_expansion_max_levels": 4,
-        "section_expansion_input_token_percent": 50,
-    }
-    for name, value in expansion_defaults.items():
-        monkeypatch.setattr(settings, f"rag_{name}", value)
-        monkeypatch.delenv(f"RAG_{name.upper()}", raising=False)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-
-    current = client.get("/api/settings/answering").json()["data"]
-    # 段ごとのモデルと候補は別のテストで確かめる(#4351・#4564・#4565)。
-    for key in (
-        "question_subject_role_model",
-        "row_condition_model",
-        "application_audit_model",
-        "application_reason_model",
-        "step_model_choices",
-    ):
-        current.pop(key)
-    assert current == {
-        "runtime_rules_confirmation_enabled": False,
-        "runtime_rules_answer_enabled": False,
-        "hybrid_search_backend": "oracle_native",
-        "rrf_method_ratio": [7.0, 3.0],
-        "rerank_slot_ratio": [7, 3],
-        "rrf_source_ratio": [7.0, 3.0],
-        "retrieval_query_limit": settings.rag_retrieval_query_limit,
-        "rerank_top_n": settings.rag_rerank_top_n,
-        "min_similarity": settings.rag_min_similarity,
-        "rerank_min_relevance_score": settings.rag_rerank_min_relevance_score,
-        "runtime_terms_search_enabled": False,
-        "runtime_terms_answer_enabled": False,
-        "query_strategy": "auto_routing",
-        "answer_flow": "crag",
-        "answer_audit_mode": "none",
-        "answer_evidence_refinement_mode": "legacy",
-        "neighbor_child_count": 3,
-        "rerank_enabled": True,
-        "screen_linking_enabled": False,
-        "request_coverage_retrieval_enabled": True,
-        "auto_field_filter_enabled": False,
-        "graph_expansion_enabled": False,
-        **expansion_defaults,
-        "config_source": "runtime",
-    }
-
-    resp = client.patch(
-        "/api/settings/answering",
-        json={
-            "query_strategy": "rag_fusion",
-            "neighbor_child_count": 5,
-            "rerank_enabled": False,
-            "request_coverage_retrieval_enabled": False,
-            "auto_field_filter_enabled": True,
-            "graph_expansion_enabled": True,
-            "entity_expansion_enabled": False,
-            "entity_expansion_max_chunks": 9,
-            "section_expansion_enabled": False,
-            "section_expansion_max_levels": 3,
-            "section_expansion_input_token_percent": 40,
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["query_strategy"] == "rag_fusion"
-    assert data["answer_flow"] == "crag"
-    assert data["neighbor_child_count"] == 5
-    assert data["rerank_enabled"] is False
-    assert settings.rag_query_strategy == "rag_fusion"
-    assert settings.rag_neighbor_child_count == 5
-    assert settings.rag_rerank_enabled is False
-    env_text = env_file.read_text(encoding="utf-8")
-    assert "RAG_QUERY_STRATEGY=rag_fusion" in env_text
-    assert "RAG_ANSWER_FLOW=crag" in env_text
-    assert "RAG_NEIGHBOR_CHILD_COUNT=5" in env_text
-    assert "RAG_RERANK_ENABLED=false" in env_text
-    assert "RAG_SCREEN_LINKING_ENABLED=false" in env_text
-    # 質問から抽出項目の条件を読み取る(#652)。
-    assert data["auto_field_filter_enabled"] is True
-    assert settings.rag_auto_field_filter_enabled is True
-    assert "RAG_AUTO_FIELD_FILTER_ENABLED=true" in env_text
-    # 根拠の無い要求だけの再検索(#1279)。
-    assert data["request_coverage_retrieval_enabled"] is False
-    assert settings.rag_request_coverage_retrieval_enabled is False
-    assert "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED=false" in env_text
-    # 関係情報で検索の候補を足す(#2055。既定 OFF)。
-    assert data["graph_expansion_enabled"] is True
-    assert settings.rag_graph_expansion_enabled is True
-    assert "RAG_GRAPH_EXPANSION_ENABLED=true" in env_text
-
-    reloaded = Settings(_env_file=env_file)
-    for name, expected in {
-        "entity_expansion_enabled": False,
-        "entity_expansion_max_chunks": 9,
-        "section_expansion_enabled": False,
-        "section_expansion_max_levels": 3,
-        "section_expansion_input_token_percent": 40,
-    }.items():
-        assert data[name] == expected
-        assert getattr(settings, f"rag_{name}") == expected
-        assert getattr(reloaded, f"rag_{name}") == expected
-
-
-@pytest.mark.parametrize(
-    "key", ["question_subject_role", "row_condition", "application_audit", "application_reason"]
-)
-def test_answering_step_model_round_trip(
-    monkeypatch: MonkeyPatch, tmp_path: Path, key: str
-) -> None:
-    """段ごとのモデル(#4351・#4349・#4564・#4565)は登録モデルか空(回答のモデル)だけを受け、
-    .env と現在プロセスへ保存する。ほかの段の設定は変えない。"""
-    field = f"rag_{key}_model"
-    item = f"{key}_model"
-    settings = get_settings()
-    monkeypatch.setattr(
-        settings,
-        "oci_enterprise_ai_models",
-        [
-            EnterpriseAiConfiguredModel(model_id="model-answer", display_name="Answer"),
-            EnterpriseAiConfiguredModel(model_id="model-step", display_name="Step"),
-        ],
-    )
-    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "model-answer")
-    steps = ("question_subject_role", "row_condition", "application_audit", "application_reason")
-    for step in steps:
-        monkeypatch.setattr(settings, f"rag_{step}_model", "model-answer")
-        monkeypatch.delenv(f"RAG_{step.upper()}_MODEL", raising=False)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-
-    data = client.get("/api/settings/answering").json()["data"]
-    assert all(data[f"{step}_model"] == "model-answer" for step in steps)
-    choices = {choice["model_id"]: choice for choice in data["step_model_choices"]}
-    assert set(choices) >= {"model-answer", "model-step"}
-    # 接続情報は返さない。
-    assert all(set(choice) == {"model_id", "display_name"} for choice in choices.values())
-
-    changed = client.patch("/api/settings/answering", json={item: "model-step"})
-    assert changed.status_code == 200
-    assert changed.json()["data"][item] == "model-step"
-    assert getattr(settings, field) == "model-step"
-    assert f"{field.upper()}=model-step" in env_file.read_text(encoding="utf-8")
-    assert getattr(Settings(_env_file=env_file), field) == "model-step"
-    # ほかの段は変えない。
-    others = [step for step in steps if step != key]
-    assert all(changed.json()["data"][f"{step}_model"] == "model-answer" for step in others)
-
-    # 登録していないモデルは保存しない。
-    rejected = client.patch("/api/settings/answering", json={item: "model-unknown"})
-    assert rejected.status_code == 422
-    assert "モデル設定に登録したモデルを選んでください" in rejected.text
-    assert getattr(settings, field) == "model-step"
-
-    # 保存済みの値と同じなら、登録が外れていても受ける(画面は欄の全体を送る)。
-    monkeypatch.setattr(settings, field, "model-removed")
-    kept = client.patch(
-        "/api/settings/answering",
-        json={item: "model-removed", "neighbor_child_count": 3},
-    )
-    assert kept.status_code == 200
-    assert kept.json()["data"][item] == "model-removed"
-
-    # 空は回答のモデル。別の項目だけの更新では変えない。
-    emptied = client.patch("/api/settings/answering", json={item: ""})
-    assert emptied.json()["data"][item] == ""
-    assert getattr(Settings(_env_file=env_file), field) == ""
-    other = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
-    assert other.json()["data"][item] == ""
-
-
 def test_answering_settings_rejects_invalid_values() -> None:
     """選択肢に無い値・範囲外の近傍数は 422(#593)。"""
     assert (
-        client.patch("/api/settings/answering", json={"query_strategy": "unknown"}).status_code
-        == 422
-    )
-    assert (
         client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
-        == 422
-    )
-
-
-@pytest.mark.parametrize("mode", ["none", "standard", "detailed"])
-def test_answering_audit_mode_round_trip_and_independent_settings(
-    monkeypatch: MonkeyPatch, tmp_path: Path, mode: str
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
-    monkeypatch.setattr(settings, "rag_answer_flow", "standard_rag")
-    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", False)
-    monkeypatch.setattr(settings, "rag_answer_max_correction_rounds", 0)
-    monkeypatch.delenv("RAG_ANSWER_AUDIT_MODE", raising=False)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-    response = client.patch("/api/settings/answering", json={"answer_audit_mode": mode})
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["answer_audit_mode"] == mode
-    assert data["answer_flow"] == "standard_rag"
-    assert data["request_coverage_retrieval_enabled"] is False
-    assert settings.rag_answer_max_correction_rounds == 0
-    assert settings.rag_answer_audit_mode == mode
-    assert f"RAG_ANSWER_AUDIT_MODE={mode}" in env_file.read_text()
-    reloaded = Settings(_env_file=env_file)
-    assert reloaded.rag_answer_audit_mode == mode
-    from app.rag.answer_engine import build_engine_settings
-
-    assert build_engine_settings(settings, output_dir=tmp_path).answer_audit_mode == mode
-    assert build_engine_settings(reloaded, output_dir=tmp_path).answer_audit_mode == mode
-    assert client.get("/api/settings/answering").json()["data"]["answer_audit_mode"] == mode
-    # 別の項目だけの更新では、保存済みの確認範囲を変えない。
-    unchanged = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
-    assert unchanged.json()["data"]["answer_audit_mode"] == mode
-
-
-def test_answering_audit_mode_rejects_unknown_value() -> None:
-    assert (
-        client.patch("/api/settings/answering", json={"answer_audit_mode": "automatic"}).status_code
         == 422
     )
 
@@ -3929,79 +3687,6 @@ def test_model_settings_rerank_probe_has_explicit_purpose(monkeypatch: MonkeyPat
     assert model_purpose_attributes() == {}
 
 
-@pytest.mark.parametrize("mode", ["legacy", "cited_only", "cited_required"])
-def test_answering_evidence_refinement_mode_is_persisted_and_independent(
-    monkeypatch: MonkeyPatch, tmp_path: Path, mode: str
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
-    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
-    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", False)
-    monkeypatch.setattr(settings, "rag_answer_max_correction_rounds", 0)
-    monkeypatch.delenv("RAG_ANSWER_EVIDENCE_REFINEMENT_MODE", raising=False)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-    response = client.patch(
-        "/api/settings/answering", json={"answer_evidence_refinement_mode": mode}
-    )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["answer_evidence_refinement_mode"] == mode
-    assert data["answer_audit_mode"] == "none"
-    assert data["request_coverage_retrieval_enabled"] is False
-    assert settings.rag_answer_max_correction_rounds == 0
-    assert f"RAG_ANSWER_EVIDENCE_REFINEMENT_MODE={mode}" in env_file.read_text()
-    reloaded = Settings(_env_file=env_file)
-    assert reloaded.rag_answer_evidence_refinement_mode == mode
-    from app.rag.answer_engine import build_engine_settings
-
-    assert (
-        build_engine_settings(settings, output_dir=tmp_path).answer_evidence_refinement_mode == mode
-    )
-    assert (
-        build_engine_settings(reloaded, output_dir=tmp_path).answer_evidence_refinement_mode == mode
-    )
-    # 別の設定の保存で選別方式を暗黙に戻さない。
-    changed = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
-    assert changed.json()["data"]["answer_evidence_refinement_mode"] == mode
-    assert (
-        client.get("/api/settings/answering").json()["data"]["answer_evidence_refinement_mode"]
-        == mode
-    )
-
-
-def test_answering_evidence_refinement_rejects_unknown_without_saving(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "cited_required")
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-    before = env_file.read_bytes() if env_file.exists() else None
-    response = client.patch(
-        "/api/settings/answering", json={"answer_evidence_refinement_mode": "automatic"}
-    )
-    assert response.status_code == 422
-    assert settings.rag_answer_evidence_refinement_mode == "cited_required"
-    assert (env_file.read_bytes() if env_file.exists() else None) == before
-
-
-def test_answering_evidence_refinement_defaults_to_legacy(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.delenv("RAG_ANSWER_EVIDENCE_REFINEMENT_MODE", raising=False)
-    assert Settings(_env_file=None).rag_answer_evidence_refinement_mode == "legacy"
-
-
-def test_answering_evidence_refinement_changes_runtime_fingerprint() -> None:
-    from app.rag.diagnostics import rag_config_fingerprint
-
-    base = Settings(_env_file=None)
-    fingerprints = {
-        rag_config_fingerprint(
-            base.model_copy(update={"rag_answer_evidence_refinement_mode": mode})
-        )
-        for mode in ("legacy", "cited_only", "cited_required")
-    }
-    assert len(fingerprints) == 3
-
-
 @pytest.mark.parametrize(
     "search,answer", [(False, False), (True, False), (False, True), (True, True)]
 )
@@ -4012,7 +3697,6 @@ def test_term_usage_settings_are_independent(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", False)
     monkeypatch.setattr(settings, "rag_runtime_terms_answer_enabled", False)
-    monkeypatch.setattr(settings, "rag_query_strategy", "rag_fusion")
     env_file = _settings_env_file(monkeypatch, tmp_path)
     for key, value in (
         ("runtime_terms_search_enabled", search),
@@ -4028,32 +3712,28 @@ def test_term_usage_settings_are_independent(
     ):
         assert data[key] is value
         assert getattr(reloaded, "rag_" + key) is value
-    assert data["query_strategy"] == "rag_fusion"
 
 
-@pytest.mark.parametrize(
-    "confirmation,answer", [(False, False), (True, False), (False, True), (True, True)]
-)
-def test_rule_usage_settings_are_independent(
-    monkeypatch: MonkeyPatch, tmp_path: Path, confirmation: bool, answer: bool
+def test_removed_rule_and_auto_field_settings_are_not_offered(
+    monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    """登録ルールと抽出項目の条件の自動読み取りの設定は無い（#4799）。.env に書かない。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_runtime_rules_confirmation_enabled", False)
-    monkeypatch.setattr(settings, "rag_runtime_rules_answer_enabled", False)
-    monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", True)
+    monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
-    for key, value in (
-        ("runtime_rules_confirmation_enabled", confirmation),
-        ("runtime_rules_answer_enabled", answer),
-    ):
-        assert client.patch("/api/settings/answering", json={key: value}).status_code == 200
-    data = client.get("/api/settings/answering").json()["data"]
-    reloaded = Settings(_env_file=env_file)
-    assert data["runtime_rules_confirmation_enabled"] is confirmation
-    assert data["runtime_rules_answer_enabled"] is answer
-    assert reloaded.rag_runtime_rules_confirmation_enabled is confirmation
-    assert reloaded.rag_runtime_rules_answer_enabled is answer
-    assert data["runtime_terms_search_enabled"] is True
+    response = client.patch("/api/settings/answering", json={"runtime_terms_search_enabled": True})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    removed = (
+        "runtime_rules_confirmation_enabled",
+        "runtime_rules_answer_enabled",
+        "auto_field_filter_enabled",
+    )
+    assert not set(removed) & set(data)
+    written = env_file.read_text()
+    assert "RAG_RUNTIME_TERMS_SEARCH_ENABLED=true" in written
+    for name in removed:
+        assert f"RAG_{name.upper()}" not in written
 
 
 def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
@@ -4071,7 +3751,6 @@ def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: 
     reloaded = Settings(_env_file=env_file)
     assert reloaded.rag_rrf_method_ratio == (1, 3)
     assert reloaded.rag_rrf_source_ratio == (4, 1)
-    assert response.json()["data"]["query_strategy"] == initial["query_strategy"]
     assert response.json()["data"]["rerank_enabled"] == initial["rerank_enabled"]
 
 
@@ -4146,7 +3825,6 @@ def test_retrieval_thresholds_save_reload_and_preserve_other_settings(
     assert saved.rag_min_similarity == values[0]
     assert saved.rag_rerank_min_relevance_score == values[1]
     assert client.get("/api/settings/answering").json()["data"]["min_similarity"] == values[0]
-    assert response.json()["data"]["query_strategy"] == before["query_strategy"]
     assert response.json()["data"]["rerank_enabled"] == before["rerank_enabled"]
 
 
@@ -4212,7 +3890,6 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
     from app.schemas.settings import AnsweringSettingsData
 
     settings = Settings()
-    assert settings.rag_runtime_rules_confirmation_enabled is False
     assert (
         settings.rag_min_similarity,
         settings.rag_retrieval_query_limit,

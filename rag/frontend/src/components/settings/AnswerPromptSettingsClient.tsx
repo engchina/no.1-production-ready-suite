@@ -12,7 +12,7 @@ import { isRetrievalPromptStage } from "./answer-prompt.logic";
 import { AnswerPromptStages } from "./AnswerPromptStages";
 
 /**
- * 回答プロンプトの画面。回答を作る指示のテンプレートと、回答の各工程（読み取り専用）を出す。
+ * 回答プロンプトの画面。回答の各工程の指示を出す（編集できるのは生成の役割の文と登録済みQ&A。#4782）。
  * 以前の system prompt の版（作成・有効化）は、回答エンジンを 1 つにしたときに削除した（#595）。
  */
 export function AnswerPromptSettingsClient() {
@@ -40,22 +40,11 @@ export function AnswerPromptSettingsClient() {
       </PageBody>
     );
   }
-  const stages = query.data.stages.filter((stage) => stage.phase !== "ingestion" && stage.phase !== "indexing" && !isRetrievalPromptStage(stage) && stage.id !== "evaluation");
-  // 編集欄は回答生成の位置に置く。固定の段が返らない場合も編集欄への導線を残す。
-  const withGeneration = [...stages];
-  if (!stages.some((stage) => stage.id === "generation")) {
-    const afterGeneration = stages.findIndex((stage) => stage.phase === "audit" || stage.phase === "evaluation");
-    withGeneration.splice(afterGeneration < 0 ? stages.length : afterGeneration, 0, {
-      id: "generation",
-      phase: "generation",
-      prompts: [],
-    });
-  }
+  const stages = query.data.stages.filter((stage) => stage.phase !== "ingestion" && !isRetrievalPromptStage(stage) && stage.id !== "evaluation");
   return (
     <PageBody wide>
       <AnswerTermSettingsCard />
-      <AnswerTermSettingsCard field="runtime_rules_answer_enabled" />
-      <AnswerPromptStages stages={withGeneration} />
+      <AnswerPromptStages stages={stages} />
     </PageBody>
   );
 }

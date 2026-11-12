@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../../platform/packages/ui/e2e/field-load-failure";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
@@ -1790,13 +1791,14 @@ test("既定の生成方式はこの環境で使える方式だけから選ん�
   ]);
   expect(Math.abs((engineBox?.height ?? 0) - (categoryBox?.height ?? 0))).toBeLessThanOrEqual(1);
   // ライト / ダークの見た目を確かめるための画像（失敗の判定には使わない）。
-  for (const colorScheme of ["light", "dark"] as const) {
-    await page.emulateMedia({ colorScheme });
-    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
-    await testInfo.attach(`default-engine-${colorScheme}`, {
-      body: await engine.locator("xpath=ancestor::section[1]").screenshot(),
-      contentType: "image/png",
-    });
+  for (const width of (page.viewportSize()?.width ?? 0) > 640 ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, colorScheme);
+      await expectNoDocumentHorizontalOverflow(page);
+      await engine.locator("xpath=ancestor::section[1]").screenshot({ path: testInfo.outputPath(`default-engine-${width}-${colorScheme}.png`) });
+    }
   }
   await page.emulateMedia({ colorScheme: "light" });
   await page.evaluate(() => document.documentElement.classList.remove("dark"));
@@ -1814,6 +1816,50 @@ test("既定の生成方式はこの環境で使える方式だけから選ん�
   await expect(page.getByTestId("profile-save-progress")).toHaveAttribute("data-job-status", "succeeded");
   expect((savedPayload as { default_engine?: string } | null)?.default_engine).toBe("select_ai_agent");
   await expectNoDocumentHorizontalOverflow(page);
+});
+
+test("既定の生成方式の候補を読み取れないときは、候補なしと見せず欄の直下に欄ごとの文の失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  let enginesFail = true;
+  await page.route("**/api/nl2sql/engines", (route) =>
+    enginesFail
+      ? route.fulfill({
+          status: 500,
+          json: { error: "生成の方式の一覧を読み取れませんでした。", error_code: "database_read_failed" },
+        })
+      : fulfillJson(route, {
+          engines: [
+            { engine: "select_ai", available: true, reason: "" },
+            { engine: "select_ai_agent", available: true, reason: "" },
+          ],
+        })
+  );
+  await page.goto("/profiles?profile=default");
+
+  const engine = page.getByRole("combobox", { name: "既定の生成方式" });
+  await expect(engine).toBeVisible();
+  const failure = page.getByTestId("profile-default-engine-load-failed");
+  // 取得は TanStack Query の自動の再試行の後に失敗になる。
+  await failure.scrollIntoViewIfNeeded({ timeout: 20_000 });
+  await page.screenshot({ path: testInfo.outputPath(`profile-default-engine-load-failed-${testInfo.project.name}.png`) });
+  // 見出しは欄ごとの文。backend の文は畳んだ「詳細」に入れる。
+  await expect(failure.getByRole("alert")).toHaveText("既定の生成方式の候補を読み込めませんでした。");
+  await expect(failure.getByText("生成の方式の一覧を読み取れませんでした。")).toBeHidden();
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  // 欄の直下に出す。欄は今の値のまま残す。
+  expect((await failure.boundingBox())!.y).toBeGreaterThanOrEqual((await engine.boundingBox())!.y);
+  await failure.getByRole("button", { name: "詳細" }).click();
+  await expect(failure.getByText("生成の方式の一覧を読み取れませんでした。")).toBeVisible();
+  await expectNoDocumentHorizontalOverflow(page);
+
+  // 再試行はキーボードで押せる。読み取れたら失敗の表示を消し、使える方式を候補に出す。
+  enginesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(failure).toHaveCount(0);
+  await engine.click();
+  const listbox = page.locator(`[id="${await engine.getAttribute("aria-controls")}"]`);
+  await expect(listbox.getByRole("option")).toHaveText(["Select AI", "Select AI Agent"]);
 });
 
 test("回答前の確認の方針と確認の上限（往復）を業務プロファイルに保存する (#1839)", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -3933,6 +3979,35 @@ test("業務プロファイルの一覧と編集のフォームは 1280 / 1920 /
         expect(await findClippedPlaceholders(page), label).toEqual([]);
         if (width >= 640) expect(await findFieldsOffWidthScale(page), label).toEqual([]);
       }
+    }
+  }
+});
+
+
+test("Select AI の役割と追加指示は所属区画の全幅を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  await page.goto("/profiles?profile=new");
+  const role = page.locator("#profile-select-ai-role");
+  const instructions = page.locator("#profile-select-ai-additional-instructions");
+  await expect(role).toBeEditable();
+  await role.fill("合成の役割");
+  await instructions.fill("合成の追加指示");
+  const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("dark", theme === "dark"), theme);
+      for (const field of [role, instructions]) {
+        const delta = await field.evaluate(node => {
+          const parent = node.closest("[data-form-grid]")!.parentElement!;
+          const style = getComputedStyle(parent);
+          return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+        });
+        expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+      }
+      if (width === 1920) expect((await page.locator("#profile-select-ai-model").boundingBox())!.width).toBeLessThan((await role.boundingBox())!.width);
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      await page.locator("#profile-select-ai").screenshot({ path: testInfo.outputPath(`select-ai-prompts-${width}-${theme}.png`) });
     }
   }
 });

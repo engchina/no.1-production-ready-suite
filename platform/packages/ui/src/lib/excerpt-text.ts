@@ -6,15 +6,19 @@
  * 壊れた HTML（閉じていない・途中で切れた・`<table>` の無い `<tr>`）も例外を出さず、読める範囲で返す。
  */
 
+import { sourcePipeTable } from "./tabular-data";
+
 /** 表のセル。`header` は `<th>` か `<thead>` の中のセル。 */
 export interface ExcerptTableCell {
   text: string;
   header: boolean;
+  /** 元文字列のcodepoint範囲。位置の追跡を指定した場合だけ付く。 */
+  sourceRanges?: [number, number][];
 }
 
 export type ExcerptBlock =
   | { kind: "text"; text: string }
-  | { kind: "table"; caption: string; rows: ExcerptTableCell[][] };
+  | { kind: "table"; caption: string; rows: ExcerptTableCell[][]; captionSourceRanges?: [number, number][] };
 
 const ENTITY: Record<string, string> = {
   amp: "&",
@@ -146,24 +150,25 @@ function tidyCell(text: string): string {
 
 interface TableState {
   caption: string;
+  captionSourceRanges?: [number, number][];
   inCaption: boolean;
   rows: ExcerptTableCell[][];
   row: ExcerptTableCell[] | null;
-  cell: { text: string; header: boolean; span: number } | null;
+  cell: { text: string; header: boolean; span: number; sourceRanges?: [number, number][] } | null;
   inHead: boolean;
   /** 入れ子の表の深さ（1 = この表の直下）。 */
   depth: number;
 }
 
-function newTable(): TableState {
-  return { caption: "", inCaption: false, rows: [], row: null, cell: null, inHead: false, depth: 1 };
+function newTable(trackSourceRanges = false): TableState {
+  return { caption: "", ...(trackSourceRanges ? {captionSourceRanges: []} : {}), inCaption: false, rows: [], row: null, cell: null, inHead: false, depth: 1 };
 }
 
 function closeCell(table: TableState) {
   if (!table.cell) return;
   if (!table.row) table.row = [];
   const text = decodeEntities(tidyCell(table.cell.text));
-  table.row.push({ text, header: table.cell.header });
+  table.row.push({ text, header: table.cell.header, ...(table.cell.sourceRanges ? {sourceRanges:table.cell.sourceRanges} : {}) });
   for (let index = 1; index < table.cell.span; index += 1) table.row.push({ text: "", header: table.cell.header });
   table.cell = null;
 }
@@ -184,7 +189,7 @@ function finishTable(table: TableState): ExcerptBlock | null {
   const rows = table.rows.map((row) =>
     row.length < width ? [...row, ...Array.from({ length: width - row.length }, () => ({ text: "", header: false }))] : row
   );
-  return { kind: "table", caption: decodeEntities(tidyCell(table.caption)), rows };
+  return { kind: "table", caption: decodeEntities(tidyCell(table.caption)), rows, ...(table.captionSourceRanges ? {captionSourceRanges:table.captionSourceRanges} : {}) };
 }
 
 /** 文字に HTML の表・タグが入っているか（入っていなければ解析しない）。 */
@@ -195,12 +200,25 @@ function looksLikeHtml(text: string): boolean {
 /**
  * 抜粋を、本文（text）と表（table）の並びにする。HTML を含まない文字は 1 つの text のまま返す。
  */
-export function parseExcerpt(raw: string): ExcerptBlock[] {
+export function parseExcerpt(raw: string, {trackSourceRanges = false, tableText = false}: {trackSourceRanges?:boolean; tableText?:boolean} = {}): ExcerptBlock[] {
   const source = raw ?? "";
   if (!source.trim()) return [];
+  if (tableText) {
+    const rows=sourcePipeTable(source);
+    if(rows) return [{kind:"table",caption:"",rows:rows.map((row,index)=>row.map(cell=>({text:cell.text,header:index===0,...(trackSourceRanges?{sourceRanges:[cell.range]}:{})})))}];
+  }
   if (!looksLikeHtml(source)) return [{ kind: "text", text: source }];
   const input = source.replace(CUT_TAG_AT_END, "");
   const blocks: ExcerptBlock[] = [];
+  const codepoints: number[] = [];
+  if (trackSourceRanges) {
+    let utf16 = 0, point = 0;
+    codepoints[0] = 0;
+    for (const character of source) {
+      utf16 += character.length;
+      codepoints[utf16] = ++point;
+    }
+  }
   let text = "";
   // クロージャの中で書き換えるので、宣言の null に型を絞らせない。
   let table = null as TableState | null;
@@ -211,14 +229,18 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
     if (value) blocks.push({ kind: "text", text: value });
     text = "";
   };
-  const appendChars = (chars: string) => {
+  const appendChars = (chars: string, sourceStart?: number) => {
     if (!chars) return;
+    const range: [number, number][] = sourceStart != null && trackSourceRanges && chars.trim()
+      ? [[codepoints[sourceStart], codepoints[sourceStart + chars.length]]] : [];
     if (!table) {
       text += chars;
     } else if (table.cell) {
       table.cell.text += chars;
+      table.cell.sourceRanges?.push(...range);
     } else if (table.inCaption) {
       table.caption += chars;
+      table.captionSourceRanges?.push(...range);
     }
     // 表の中でセルの外の文字（タグの間の空白など）は捨てる。
   };
@@ -232,6 +254,7 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
   let last = 0;
   TAG.lastIndex = 0;
   for (let match = TAG.exec(input); match; match = TAG.exec(input)) {
+    const charsStart = last;
     const chars = input.slice(last, match.index);
     last = TAG.lastIndex;
     const closing = match[1] === "/";
@@ -241,7 +264,7 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
       if (closing && name === dropUntil) dropUntil = null;
       continue;
     }
-    appendChars(chars);
+    appendChars(chars, charsStart);
     if (DROP_CONTENT.has(name)) {
       if (!closing && !attrs.trim().endsWith("/")) dropUntil = name;
       continue;
@@ -251,7 +274,7 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
         if (closing) continue; // 対応する開きの無い閉じタグ（途中から始まる抜粋）は捨てる。
         // `<table>` の無い `<tr>` / `<td>` も表の始まりとして扱う（途中から始まる抜粋）。
         pushText();
-        table = newTable();
+        table = newTable(trackSourceRanges);
         if (name === "table") continue;
       }
       const current: TableState = table;
@@ -272,7 +295,7 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
         } else {
           // セルの外で始まる 2 つ目の表（閉じ忘れ）。前の表を閉じて新しい表にする。
           endTable();
-          table = newTable();
+          table = newTable(trackSourceRanges);
         }
         continue;
       }
@@ -295,7 +318,7 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
       }
       // td / th
       closeCell(current);
-      if (!closing) current.cell = { text: "", header: name === "th" || current.inHead, span: colspanOf(attrs) };
+      if (!closing) current.cell = { text: "", header: name === "th" || current.inHead, span: colspanOf(attrs), ...(trackSourceRanges ? {sourceRanges: []} : {}) };
       continue;
     }
     if (LINE_BREAK.has(name)) {
@@ -304,9 +327,9 @@ export function parseExcerpt(raw: string): ExcerptBlock[] {
     }
     if (KNOWN_INLINE.has(name)) continue;
     // 知らないタグの形の文字は本文の文字として残す。
-    appendChars(match[0]);
+    appendChars(match[0], match.index);
   }
-  if (!dropUntil) appendChars(input.slice(last));
+  if (!dropUntil) appendChars(input.slice(last), last);
   endTable();
   pushText();
   return blocks;

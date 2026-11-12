@@ -62,14 +62,13 @@ BUDGET_EXCEEDED_CODE = "budget_exceeded"
 _DRY_RUN_CODE = "evaluation.dry_run"
 
 # 根拠・データを確かめないツール（業務プロファイル・検索・回答プロファイルの一覧と推薦）と、
-# Control Plane が自分で呼ぶツール（最終の検証・SQL の生成前の確認の取り消し）。拒答が調べる前か後か
+# Control Plane が自分で呼ぶツール（SQL の生成前の確認の取り消し）。拒答が調べる前か後か
 # （`tool_grounding.refusal_stage`。#2608）と、回答の対応の現場のデータの確認
 # （`answer_outcome` の `environment_tools`。#108）が同じ定義を使う。
 NON_GROUNDING_TOOLS = frozenset(
     {
         "rag_list_search_answer_profiles",
         "rag_recommend_search_answer_profile",
-        "rag_validate_answer",
         "nl2sql_list_profiles",
         "nl2sql_recommend_profile",
         "nl2sql_cancel_requirement",
@@ -85,14 +84,12 @@ RAG_READ_DOCUMENT = "rag_read_document"
 # 章節（章節ナビゲーションの章節）の本文を章節の終わりまで読む（#1438）。
 RAG_READ_SECTION = "rag_read_section"
 # Control Plane が自分で呼ぶ業務ガイドの照合（#1322）の呼び出しの trace_id の接頭辞。
-# モデルの予算・消費には数えない（回答の最終の検証と同じく Control Plane の呼び出し）。
+# モデルの予算・消費には数えない（Control Plane の呼び出し）。
 GUIDE_CHECK_TRACE_PREFIX = "guide_check_"
 # Run ごとの上限に数える RAG のツール。検索（と rag_search は回答の生成）を行い、1 回が重い
 # （rag_search は 50〜110 秒）もの。rag_lookup_guides（業務ガイドの照合）と rag_read_source
 # （根拠の本文の読み取り）は軽いため数えない（タスクの通しの上限には数える）。
 RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
-# Control Plane が自分で呼ぶ回答の最終の検証（#1246）。モデルの予算には数えない。
-_UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # NL2SQL の SQL の生成・実行。SQL を作る前に確認の項目（SQL の生成前の確認）を返すことが
@@ -233,8 +230,6 @@ def _executed(step: RunStep) -> bool:
     if step.tool_call is None or step.tool_result is None:
         return False
     if step.status not in {"completed", "failed"}:
-        return False
-    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
     if (step.tool_call.trace_id or "").startswith(
         (GUIDE_CHECK_TRACE_PREFIX, CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)
@@ -591,7 +586,7 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
 
     その確認事項は Run の完了の後に利用者への確認のカードになる（`builtin_runtime` の
     `_tool_confirmations`）。モデルが同じことを `ask_user_confirmation` で聞き直さないように使う。
-    RAG の検索は `rag_search` の `needs_clarification` と、根拠の取得のルールの確認（#2651）。
+    RAG の検索は、業務ガイドの条件の確認（`rag_search` の `needs_clarification`）。
     業務ガイドの判断が条件を確かめる（clarify）ときも、その問いが条件の id 付きのカードになるので
     止まっているとみなす（#2726。Agent 自身の確認で聞くと、答えが業務ガイドの条件に渡らない）。
     `known` は分かっている条件の id。
@@ -607,24 +602,13 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
         if not result.success or not isinstance(result.output, dict):
             return False
         if mcp_base_tool_name(call.name) == RAG_RETRIEVE_EVIDENCE:
-            return bool(_records(result.output.get("clarifications")))
+            return False
         return result.output.get("outcome") == "needs_clarification"
     return False
 
 
-def evidence_clarification_step(output: JsonObject) -> JsonObject | None:
-    """根拠の取得が検索・回答プロファイルのルールの確認を返したときの次の手（#2651）。
-
-    確認が要るときは検索していない（根拠は空）。`rag_search` の確認と同じ次の手にする。
-    """
-    clarifications = _records(output.get("clarifications"))
-    if not clarifications:
-        return None
-    return ask_clarification_step(clarifications, reason="needs_clarification")
-
-
 def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
-    """根拠の取得がモデルへ渡した検索・回答プロファイルのルール・用語の記録（#2701）。
+    """根拠の取得がモデルへ渡した検索・回答プロファイルの用語の記録（#2701）。
 
     設定の画面の一致の確かめ（preview）と、実行でモデルに渡った内容を分けて追えるように、数と版
     だけを返す（本文・名前は業務の内容なのでログに残さない。全文は Run の step の結果にある）。
@@ -633,15 +617,12 @@ def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
     knowledge = output.get("profile_knowledge")
     if not isinstance(knowledge, dict):
         return None
-    rules = _records(knowledge.get("rules"))
     terms = _records(knowledge.get("terms"))
     return {
         "search_answer_profile_id": knowledge.get("search_answer_profile_id"),
         "revision": knowledge.get("revision"),
         "matched_on": knowledge.get("matched_on"),
-        "rules": len(rules),
         "terms": len(terms),
-        "rules_omitted": knowledge.get("rules_omitted"),
         "terms_omitted": knowledge.get("terms_omitted"),
         "load_failed": knowledge.get("load_failed") is True,
     }
@@ -1333,11 +1314,11 @@ def caller_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
 
 
 # Agent 主体の取得を許さない接続（#2676）の根拠の取得で、モデルに見せず、渡されても呼び先へ送らない
-# 引数。planning と追跡 ID は実行環境だけが決め、queries・skip_clarification は planning=caller の
+# 引数。planning と追跡 ID は実行環境だけが決め、queries は planning=caller の
 # ときだけ効く（送らなければ RAG の既定の rag が検索文を計画する）。schema に無い追加の項目として
 # 引数の誤りにすると、caller の手順を書いたスキルの Run が引数の誤りの上限で止まりうるので、
 # 誤りにせずに外す。
-RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries", "skip_clarification")
+RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries")
 
 
 def rag_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
@@ -1828,8 +1809,6 @@ def _in_flight(step: RunStep) -> bool:
     """
     if step.tool_call is None or step.tool_result is not None:
         return False
-    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
-        return False
     if step.status == "running":
         return True
     return step.status == "cancelled" and step.approval_id is None
@@ -2128,18 +2107,11 @@ class _StateBuilder:
             self.gaps = [text for item in gaps if (text := _text(item))][:MAX_GAPS]
 
     def apply_retrieve(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
-        """根拠の取得（呼び出し元が検索文を作る取得。#2651）のルールの確認と、渡した答え。
-
-        確認が返ったときだけ確かめ中にする（根拠を返した取得は、業務ガイドの確認を消さない）。
-        """
+        """根拠の取得へ利用者が渡した条件を保持する。業務ガイドの確認は照合の結果で扱う。"""
         conditions = arguments.get("conditions")
         if isinstance(conditions, dict):
             for condition_id, value in conditions.items():
                 self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
-        clarifications = _records(output.get("clarifications")) if output is not None else []
-        if clarifications:
-            self.add_labels(clarifications)
-            self.set_rag_pending(_rag_pending(clarifications))
 
     def apply_lookup(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
         """`rag_lookup_guides`（モデル・Control Plane の照合。#1322）の最上位の業務ガイド。

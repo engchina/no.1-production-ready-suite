@@ -2,6 +2,7 @@
 
 import pytest
 from pytest import MonkeyPatch
+from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_pipeline_core import chunking as core_chunking
 
 from app.config import Settings
@@ -280,7 +281,7 @@ def test_resolve_chunking_params_reads_settings() -> None:
     assert params.chunk_size == 1000
     assert params.overlap == 80
     assert params.min_chars == 30
-    assert params.delimiter == "---"
+    assert params.delimiter == ("---",)
 
 
 def test_chunking_strategy_order_puts_small_to_big_where_parent_child_was() -> None:
@@ -307,6 +308,7 @@ def test_resolve_chunking_params_reads_small_to_big_params() -> None:
         parent_target_chars=6000,
         parent_max_pages=3,
         parent_max_children=12,
+        separators=DEFAULT_CHUNK_SEPARATORS,
     )
     custom = resolve_chunking_params(
         Settings(
@@ -318,7 +320,9 @@ def test_resolve_chunking_params_reads_small_to_big_params() -> None:
             rag_chunk_parent_max_children=6,
         )
     )
-    assert custom.small_to_big == SmallToBigParams(600, 1200, 3000, 2, 6)
+    assert custom.small_to_big == SmallToBigParams(
+        600, 1200, 3000, 2, 6, separators=DEFAULT_CHUNK_SEPARATORS
+    )
 
 
 def test_chunking_runtime_settings_orders_and_marks_selected() -> None:
@@ -379,3 +383,18 @@ def test_fixed_size_offsets_follow_trimmed_window_text() -> None:
     assert chunks[1].text == "efgh"
     assert (chunks[1].start_offset, chunks[1].end_offset) == (5, 9)
     assert all(source[chunk.start_offset : chunk.end_offset] == chunk.text for chunk in chunks)
+
+
+@pytest.mark.parametrize("strategy", ["recursive_character", "markdown_heading"])
+def test_text_section_split_does_not_read_numbered_sentence_as_heading(strategy: str) -> None:
+    """本文の文字列から章節を作る分割も、文末の記号で終わる番号付きの行を見出しにしない(#4742)。"""
+    extraction = StructuredExtraction(
+        raw_text="1.1 合成の手順を確認する。\n続く本文。\n1.2 概要\n本文 B。"
+    )
+
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=200, overlap=0
+    )
+
+    assert "section_path" not in chunks[0].metadata
+    assert chunks[-1].metadata["section_path"] == "1.2 概要"

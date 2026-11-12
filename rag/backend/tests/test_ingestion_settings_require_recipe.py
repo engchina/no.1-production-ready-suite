@@ -27,6 +27,8 @@ class LegacyDocument:
 
     def __init__(self, calls: list[str], legacy: bool | None) -> None:
         self.id = "synthetic-doc"
+        self.file_name = "synthetic.pdf"
+        self.content_type = "application/pdf"
         self.content_sha256 = "a" * 64
         self._calls = calls
         self._legacy = legacy

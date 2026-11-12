@@ -2,33 +2,20 @@
 
 章節の正本は文書の「章節ナビゲーション」で、章節と chunk の対応（#1438）は呼び出し元（backend）が持つ。この module は
 対応を ``AnswerDependencies.section_outline`` / ``section_chunks`` から読み、広げる順・予算・止める条件だけを決める
-（I/O と LLM は注入された関数と ``grade`` を通す。決定論のテストはスタブで行う）。
+（I/O は注入された関数を通す。決定論のテストはスタブで行う）。
 
 広げる順は、当たった chunk → 所有の章節（leaf）→ 親の章節 → … → 最上位の章節 → 文書全体（根の章節）。
 
-- 最初の判定が十分でも、最低 1 段（所有の章節）を読んでから、既存の CRAG の十分性の判定（``grade``）で
-  足りるかを確かめ、足りれば止める。所有の章節がすでに全量文脈にあれば、再判定せず最後の判定を使う。
-  足りるは「十分と判定され、内容の観点（``CONTENT_ASPECTS``）に
-  確かめられていないものが無い」。適用の観点（applicability）は利用者の状況の確認で、章節を読んでも埋まらないため
-  広げる理由にしない。
-- 列挙・網羅の問（#1503。``retrieval.enumeration``）は、件数・章の範囲の欠けを評価器の項目ごとの根拠から数え、
-  欠ければ内容の観点 ``enumeration_coverage`` が確かめられていないとして広げる。件数も範囲も無い網羅の問
-  （「〜要領で、…をすべて挙げて」）は根拠の数から足りるかを決められないため、評価器が足りると判定しても、
-  読む範囲（``minimum_scope``。当たった章節 = leaf、文書全体 = 根の章節）まで読んでから判定する。読む範囲に
-  届くまでの段は評価器を呼ばない（段ごとの LLM の呼び出しを増やさない）。上限（段・token・時間）は変えない。
+- 読む範囲（当たった章節 = leaf）までを読む。足りるかの判定はせず、上限（段・token・時間）で止める。
 - 上の段の章節は、予算に入れば全体を読む。入らなければ、子の章節の見出し（目次）を質問との関連度（rerank。使えなければ
   語の重なり）で並べ、関連の高い子の章節から、予算に入る章節を全体で読む。入らない子の章節は読まない。
 - 章節が予算に入るかは、章節の chunk のうち、まだ文脈に無いものの token で決める（最初の根拠・前の段で読んだ
   chunk は数えない。#1504）。章節の chunk がすべて文脈にあれば、読むものは無い（診断の ``read: "in_context"``）。
-- 全体を読む必要があるのに予算に入らない章節は、第 3 段階（#1437。抽出してから統合）の差し込み口
-  （``large_sections``。``section_extraction.SectionExtractor``）に渡し、質問に関係する原文だけを抜き出して文脈に
-  入れる。入らない子の章節が出たら、それより関連の低い子の章節もまとめて 1 つの要求で渡す。要求には、すでに文脈に
-  ある章節の親（最初の根拠を含む）も入れ、その分を抜き出した原文の予算に戻す（抜き出した原文で置き換える。予算に
-  入れば元のまま残す。#1504）。差し込み口が無ければ予算で打ち切る。
+- 子の章節が無い（または子の章節も入らない）章節は、見積もりで入るなら先頭から入る分だけ読み、入らなければ読まない。
 - 上限（入力 token・段の数・時間）で止めたときは、読めなかった章節を返し、呼び出し元は回答を条件つき
   （``conditional``）にして「回答に未反映の関連章節」に出す。ただし、当たった章節より上の段で子の章節を読むときに、
   関連度の順でより上の兄弟の章節を全体で読んだ後に予算で読めなかった章節のうち、どの起点の chunk も含まないものは、
-  読む範囲が文書全体でなければ回答に出さず、診断（``unread_omitted``）にだけ残す（#2816。質問に合わせて広げた参考の
+  回答に出さず、診断（``unread_omitted``）にだけ残す（#2816。質問に合わせて広げた参考の
   範囲で、読めなくても当たった章節の読了は崩れない）。読取の失敗は、どの章節でも回答に出す。
 - 1 回の回答の中で後に別の起点から広げる段（業務ガイドの手順ごとの検索の後など）があるときは、呼び出し元が
   ``reserve_tokens`` で残す token を渡し、先の段はその分を使わずに止める（#2816）。後の段は、前の段で起点に
@@ -57,7 +44,7 @@ from time import monotonic
 from typing import Any
 
 from rag_engine.dependencies import report_degraded
-from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
+from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
 from rag_engine.retrieval.context_builder import (
@@ -65,50 +52,40 @@ from rag_engine.retrieval.context_builder import (
     ContextParentEvidence,
     context_bundle_from_parent_evidence,
 )
-from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, minimum_scope
 
 # 根の章節（文書全体）の id。backend の ``section_chunk_map.ROOT_SECTION_ID`` と同じ。
 ROOT_SECTION_ID = "document"
 # 広げた章節の根拠の役割（context の parent の理由と child の役割）。
 SECTION_EXPANSION_REASON = "section_expansion"
 SECTION_CONTEXT_ROLE = "section_context"
-# 「足りる」の判定で、確かめられていないと広げる内容の観点（``task_contract`` の required_aspects のうち）。
-CONTENT_ASPECTS = frozenset({"requested_result", "procedure", "member_details", "population_membership", ENUMERATION_ASPECT})
 # 1 つの章節で読む chunk の上限（文書全体でも、これより多い章節は予算に関係なく読まない）。
 MAX_SECTION_CHUNKS = 400
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
 DEFAULT_MODEL_INPUT_TOKENS = 128_000
-# 回答の生成に残す秒数。これより残りが少なければ上がらない。生成と監査の 1 組の見積もりの既定と回答の確定の分の和
+# 回答の生成に残す秒数。これより残りが少なければ上がらない。生成の 1 回の見積もりの既定と回答の確定の分の和
 # （#1516。150 秒は、長い根拠で 1 組 125〜344 秒かかるモデルの 1 組目に足りなかった）。是正の round は、残りの時間と
 # 直前の組の実測から grounded の `RoundBudget` が決める。
 GENERATION_RESERVE_SECONDS = DEFAULT_GENERATION_ROUND_SECONDS + ANSWER_FINALIZE_RESERVE_SECONDS
-# 次の段の見積もりの秒数（評価器の 1 回の実測が無いとき）。
+# 次の段を読む処理の見積もりの秒数。
 DEFAULT_LEVEL_SECONDS = 20.0
 _ASCII = re.compile(r"[\x00-\x7f]")
 
 # 止めた理由。LIMIT_STOPS は上限で止めた（読めなかった章節があれば条件つきの回答にする）。
-STOP_SUFFICIENT = "sufficient"
 STOP_DOCUMENT = "document_read"
 STOP_MAX_LEVELS = "max_levels"
 STOP_TOKEN_BUDGET = "token_budget"
 STOP_TIME_LIMIT = "time_limit"
 STOP_NO_SECTIONS = "no_sections"
-STOP_GRADE_ERROR = "grade_error"
 STOP_READ_ERROR = "read_error"
 STOP_PARTIAL = "partial_read"
 STOP_DISABLED = "disabled"
-# 列挙の問の読む範囲（文書全体）まで読み、評価し直しを省いて止めた（#1528。``section_skip_regrade_at_scope``）。
+# 読む範囲まで読んで止めた。
 STOP_SCOPE_READ = "scope_read"
-# 足りると判定したが列挙の観点が未確認（写しの照合の失敗など）のため、評価し直さずに上の章節を 1 段読んで止めた（#3755）。
-STOP_UNVERIFIED_EXPANDED = "unverified_expanded"
-# 抽出してから統合（#1437）で読めなかった範囲の理由（章節の拡張の止めた理由には使わない）。
-STOP_EXTRACTION_CALLS = "extraction_calls"
-STOP_EXTRACTION_ERROR = "extraction_error"
 STOP_SECTION_CHUNKS = "section_chunks"
 LIMIT_STOPS = frozenset({STOP_MAX_LEVELS, STOP_TOKEN_BUDGET, STOP_TIME_LIMIT})
 # 「回答に未反映の関連章節」に出す行の上限（超えた分は件数の 1 行にする。#2828）。
 MAX_UNREAD_LINES = 10
-# 「回答に未反映の関連章節」の各行の理由（利用者の言葉。#2040）。段・入力・抽出の呼び出し・chunk の上限は
+# 「回答に未反映の関連章節」の各行の理由（利用者の言葉。#2040）。段・入力・chunk の上限は
 # 利用者から見て同じ意味なので「読み込み量の上限」にまとめる。上限の区別は工程の記録（``_SECTION_STOP_LABELS``）と
 # 回答の診断の ``section_expansion.unread[].reason`` に残す。
 _READ_LIMIT_LABEL = "読み込み量の上限"
@@ -116,7 +93,6 @@ _LIMIT_LABELS = {
     STOP_MAX_LEVELS: _READ_LIMIT_LABEL,
     STOP_TOKEN_BUDGET: _READ_LIMIT_LABEL,
     STOP_TIME_LIMIT: "回答時間の上限",
-    STOP_EXTRACTION_CALLS: _READ_LIMIT_LABEL,
     STOP_SECTION_CHUNKS: _READ_LIMIT_LABEL,
 }
 
@@ -186,7 +162,7 @@ class UnreadSection:
 
     def gap_line(self) -> str:
         """本文の行。影響（回答に未反映）と理由を書き言葉で述べる（#2040）。"""
-        if self.reason in {STOP_EXTRACTION_ERROR, STOP_READ_ERROR}:
+        if self.reason == STOP_READ_ERROR:
             return f"{self.label}は、原文を取得できなかったため未反映です。"
         if self.reason == STOP_PARTIAL:
             return f"{self.label}は、原文の一部だけを取得したため未確認の範囲が残っています。"
@@ -329,60 +305,6 @@ class SectionExpansionResult:
         return [item.gap_line() for item in self.unread]
 
 
-@dataclass(frozen=True)
-class LargeSectionRequest:
-    """全体を読む必要があるのに予算に入らない章節（第 3 段階 #1437 の抽出してから統合に渡す）。
-
-    ``tree`` は章節の親（章節の中の読み順）。まだ文脈に無い親に加えて、すでに文脈にある章節の親（最初の根拠・前の段で
-    読んだ親。``context_keys`` の chunk）も含む（#1504。抜き出した原文で置き換えられるので、同じ原文を二重に数えない）。
-    ``remaining_tokens`` は抜き出した原文に使える入力 token（根拠の入力の上限の残りに、``context_keys`` の親の分を
-    戻した値）。抽出の 1 回の呼び出しの入力は、これとは別にモデルの入力の上限から決める（``section_extraction``）。
-    ``sections`` は読めなかったときに出す章節（既定は ``section``。子の章節をまとめて渡すときは、その子の章節）、
-    ``seed_positions`` は同じ文書の当たった chunk の位置（``seq_no``。近い分から先に読む）、``seconds_left`` は抽出に使える残りの秒数
-    （回答の時間の上限から、生成と次の判定の分を引いた値）、``truncated`` は章節の chunk が読む上限を超えて
-    先頭だけを読んだこと。
-    """
-
-    question: str
-    outline: SectionOutline
-    section: SectionInfo
-    tree: tuple[ContextParentEvidence, ...]
-    remaining_tokens: int
-    seed_positions: tuple[int, ...] = ()
-    seconds_left: Callable[[], float] = lambda: math.inf
-    truncated: bool = False
-    context_keys: frozenset[str] = frozenset()
-    sections: tuple[SectionInfo, ...] = ()
-
-    @property
-    def unread_sections(self) -> tuple[SectionInfo, ...]:
-        return self.sections or (self.section,)
-
-
-@dataclass
-class LargeSectionOutcome:
-    """抽出してから統合の結果。``tree`` は文脈に足す根拠、``unread`` は上限で読めなかった範囲。
-
-    ``replacements`` は、すでに文脈にある親（``LargeSectionRequest.context_keys``）のうち、抜き出した原文の親に
-    置き換えるもの（chunk の ID → 置き換える record。None は文脈から外す）。含まれない親は文脈のまま残す。
-    """
-
-    tree: tuple[ContextParentEvidence, ...] = ()
-    unread: list[UnreadSection] = field(default_factory=list)
-    trace: dict[str, Any] = field(default_factory=dict)
-    replacements: dict[str, AnswerRecord | None] = field(default_factory=dict)
-
-
-# (章節の要求) を受け取り、抜き出した根拠（読めなかった範囲つき）を返す。None は読まない（予算で打ち切る）。
-LargeSectionHandler = Callable[[LargeSectionRequest], LargeSectionOutcome | None]
-
-
-def no_large_section_handler(request: LargeSectionRequest) -> LargeSectionOutcome | None:
-    """抽出してから統合を使わない差し込み口。読まずに None を返し、呼び出し元は予算で打ち切る。"""
-    del request
-    return None
-
-
 def estimate_tokens(text: str) -> int:
     """本文の入力 token の見積もり（platform の ``estimate_input_tokens`` と同じ。#1437）。
 
@@ -405,22 +327,6 @@ def model_input_tokens(settings: Any) -> int:
 def context_tokens(context: AnswerContext) -> int:
     """文脈の根拠の本文（親の本文）の見積もりの token。"""
     return sum(estimate_tokens(str(getattr(record, "text", "") or "")) for record in context.records)
-
-
-def is_enough(attempt: CragRetrievalAttempt | None) -> bool:
-    """CRAG の判定で足りるか（十分で、内容の観点に確かめられていないものが無い）。"""
-    if attempt is None or attempt.grade_error:
-        return False
-    return bool(attempt.sufficient) and not (set(attempt.missing_aspects) & CONTENT_ASPECTS)
-
-
-def unverified_enumeration(attempt: CragRetrievalAttempt | None) -> bool:
-    """足りると判定したが、列挙の観点が未確認（``unknown``）か（#3755）。
-
-    未確認は不足ではない（足りないと確かめていない）が、足りるとも確かめていない。章節の拡張では、評価器を
-    呼び直さずに上の章節を 1 段だけ読む理由にする（足りるとして止めない）。
-    """
-    return is_enough(attempt) and ENUMERATION_ASPECT in tuple(getattr(attempt, "unknown_aspects", ()) or ())
 
 
 def section_label(outline: SectionOutline, section: SectionInfo) -> str:
@@ -452,18 +358,15 @@ def _context_chunk_ids(context: AnswerContext) -> set[str]:
     return ids
 
 
-def seed_chunk_ids(context: AnswerContext, relevant_ids: Sequence[str] = ()) -> list[str]:
-    """起点にする当たった chunk（関連度の順。CRAG が関連とした child を先に）。"""
-    relevant = [uid for uid in dict.fromkeys(relevant_ids) if uid]
+def seed_chunk_ids(context: AnswerContext) -> list[str]:
+    """起点にする当たった chunk（関連度の順）。"""
     anchors: list[str] = []
     for parent in context.evidence_tree:
         for child in parent.children:
             uid = _record_key(child.record)
             if uid and child.role == "retrieved_anchor":
                 anchors.append(uid)
-    known = {_record_key(child.record) for parent in context.evidence_tree for child in parent.children}
-    ordered = [uid for uid in relevant if uid in known] + anchors
-    return list(dict.fromkeys(ordered))
+    return list(dict.fromkeys(anchors))
 
 
 @dataclass
@@ -679,7 +582,7 @@ def _merge(context: AnswerContext, tree: Sequence[ContextParentEvidence]) -> Ans
 
 
 def _replace_records(context: AnswerContext, replacements: dict[str, AnswerRecord | None]) -> AnswerContext:
-    """文脈の親を、抜き出した原文の親に置き換える（None は外す。#1504）。位置・役割・child はそのまま。"""
+    """文脈の親を、渡した record に置き換える（None は外す）。位置・役割・child はそのまま。"""
     if not replacements:
         return context
 
@@ -711,12 +614,9 @@ def expand_sections(
     context: AnswerContext,
     settings: Any,
     *,
-    last_attempt: CragRetrievalAttempt | None,
-    grade: Callable[[AnswerContext, int], CragRetrievalAttempt] | None,
     section_outline: Callable[..., Any],
     section_chunks: Callable[..., Sequence[Any]],
     rerank: Callable[..., Any] | None = None,
-    large_sections: LargeSectionHandler = no_large_section_handler,
     started_at: float | None = None,
     deadline_remaining: Callable[[], float | None] = lambda: None,
     clock: Callable[[], float] = monotonic,
@@ -724,9 +624,9 @@ def expand_sections(
     reserve_tokens: int = 0,
     priority: Sequence[PriorityRange] = (),
 ) -> SectionExpansionResult:
-    """当たった chunk の章節から段階的に広げる。grade が None なら最低範囲の補完だけを行う。
+    """当たった chunk の章節から段階的に広げ、読む範囲までの原文を文脈に足す。
 
-    ``grade(context, level)`` は既存の CRAG の十分性の判定、``started_at`` は回答の開始の時刻（``clock`` の値）、
+    ``started_at`` は回答の開始の時刻（``clock`` の値）、
     ``deadline_remaining`` は回答の期限までの残りの秒数（無ければ None）。``reserve_tokens`` は、後の段のために
     この呼び出しで使わずに残す入力 token（#2816）。``priority`` は先に読む範囲（業務ガイドの手順の参照。#2828）。
     """
@@ -766,7 +666,6 @@ def expand_sections(
             unread=[item.to_payload() for item in result.unread],
             unread_omitted=[item.to_payload() for item in result.omitted],
             minimum_scope_complete=bool(chains) and scope_reached() if reader is not None and chains else False,
-            judgement="llm" if grade is not None else "not_requested",
             completed_sections=[
                 {"document_id": key[0], "chunk_set_id": key[1], "section_id": key[2]} for key in sorted(reader.read_sections)
             ]
@@ -778,10 +677,8 @@ def expand_sections(
     if not getattr(settings, "section_expansion_enabled", True) or limits.max_levels <= 0:
         trace["enabled"] = False
         return finish(STOP_DISABLED)
-    # 最低でも所有の章節を読む。列挙・網羅の問がさらに広い範囲を求めればそちらを優先する。
-    need = minimum_scope(question) or "leaf"
-    trace["minimum_scope"] = need
-    seeds = seed_chunk_ids(context, last_attempt.relevant_chunk_ids if last_attempt is not None else ())
+    # 最低でも所有の章節を読む。
+    seeds = seed_chunk_ids(context)
     owners: set[tuple[str, str, str]] = set()
     for uid in seeds:
         try:
@@ -826,8 +723,8 @@ def expand_sections(
             (c.outline.document_id, c.outline.chunk_set_id, c.outline.owner_section_id) in reader.seeded_owners,
         )
     )
-    if need != "document" and any(rank < _RANK_OTHER for rank in ranks.values()):
-        # 範囲の外の文書の起点は段の外に置き、範囲の起点の章節を先に読む（#2828。列挙の問は文書全体が読む範囲）。
+    if any(rank < _RANK_OTHER for rank in ranks.values()):
+        # 範囲の外の文書の起点は段の外に置き、範囲の起点の章節を先に読む（#2828）。
         deferred = [chain for chain in chains if ranks[id(chain)] == _RANK_OTHER]
         chains = [chain for chain in chains if ranks[id(chain)] < _RANK_OTHER]
         if deferred:
@@ -848,38 +745,10 @@ def expand_sections(
         )
     }
     level_seconds = DEFAULT_LEVEL_SECONDS
-    latest = last_attempt  # 最後の判定（読む範囲に届くまでの段は判定しない）
-    # 読む範囲が文書全体の列挙の問で、文書全体まで読んだら評価し直さない (#1528。既定 off)。文書全体を読んだ後は
-    # 上に読む章節が無く、評価し直しは足りるかの記録にしか使われない。当たった章節（leaf）が範囲の問は、評価器が
-    # 足りないと判定すれば親の章節へ広げるので、評価し直す。
-    skip_regrade_at_scope = bool(getattr(settings, "section_skip_regrade_at_scope", False)) and need == "document"
 
     def scope_reached() -> bool:
-        """読む範囲まで読んだか（leaf: 全起点の所有の章節、document: 全起点の文書全体）。"""
-        return all(
-            reader.section_key(chain.outline, chain.sections[0 if need == "leaf" else -1]) in reader.read_sections for chain in chains
-        )
-
-    replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
-    extracting = large_sections is not no_large_section_handler
-    # 足りると判定したが列挙の観点が未確認のとき、上の章節を 1 段読むのを待つ（#3755）。待つ間の段は評価器も抜き出しも
-    # 呼ばない（モデルの呼び出しを増やさない）。
-    unverified_pending = False
-
-    def wait_for_unverified(attempt: CragRetrievalAttempt | None, level: int) -> bool:
-        """未確認の列挙の観点で、評価し直さずに上の章節を読みに行くか。行くなら診断に残して True。"""
-        nonlocal unverified_pending
-        if grade is None or unverified_pending or not unverified_enumeration(attempt):
-            return False
-        unverified_pending = True
-        trace["unverified_expansion"] = {"aspects": [ENUMERATION_ASPECT], "after_level": level}
-        return True
-
-    def seconds_left() -> float:
-        """抽出に使える残りの秒数（回答全体の期限から、生成と次の判定の分を引く）。"""
-        remaining_deadline = deadline_remaining()
-        left = math.inf if remaining_deadline is None else remaining_deadline
-        return left - GENERATION_RESERVE_SECONDS - level_seconds
+        """読む範囲（全起点の所有の章節）まで読んだか。"""
+        return all(reader.section_key(chain.outline, chain.sections[0]) in reader.read_sections for chain in chains)
 
     def remaining_now(added: Sequence[ContextParentEvidence]) -> int:
         return budget - context_tokens(current) - _tree_tokens(added)
@@ -926,11 +795,9 @@ def expand_sections(
 
         当たった章節（読む範囲が leaf のとき）より上の段で読む子の章節のうち、関連度の順でより上の兄弟の章節を
         全体で読んだ後に読めなかったもので（``after_read``）、どの起点の chunk も含まず、読取に失敗していないもの。
-        読む範囲が文書全体（列挙の問）なら、どの章節も読む範囲に入るので出す。
         """
         if (
             not after_read
-            or need == "document"
             or chain.position <= 0
             or section.section_id == chain.sections[chain.position].section_id
             or reader.section_key(chain.outline, section) in reader.failures
@@ -978,10 +845,10 @@ def expand_sections(
         entry.update(read="whole", added_parents=len(tree))
         return True
 
-    def without_extraction(
+    def fit_or_skip(
         chain: _Chain, section: SectionInfo, entry: dict[str, Any], added: list[ContextParentEvidence], after_read: bool = False
     ) -> None:
-        """抽出してから統合が無いとき: 見積もりで入る章節は先頭から入る分だけ読み、入らなければ読まない。"""
+        """予算に入らない章節: 見積もりで入るなら先頭から入る分だけ読み、入らなければ読まない。"""
         remaining = remaining_now(added)
         label = section_label(chain.outline, section)
         if section.chunk_count <= MAX_SECTION_CHUNKS and reader.unread_chars(chain.outline, section) <= remaining:
@@ -999,102 +866,6 @@ def expand_sections(
             after_read,
         )
 
-    def hand_off(
-        chain: _Chain,
-        scope: SectionInfo,
-        pending: Sequence[tuple[SectionInfo, dict[str, Any]]],
-        holder: dict[str, Any],
-        added: list[ContextParentEvidence],
-        after_read: bool = False,
-    ) -> bool:
-        """予算に入らない章節を、抽出してから統合（#1437）に渡す。読めなかった範囲があれば True。
-
-        ``scope`` は広げている章節、``pending`` は入らない章節（``scope`` 自身か、入らない子の章節）。``scope`` の
-        親（読めれば ``scope`` の全体、読めなければ ``pending`` の章節）のうち、まだ文脈に無い親と、すでに文脈にある親
-        （最初の根拠・前の段で読んだ親）を読み順で渡す。文脈にある親の分は予算に戻し、抜き出した原文で置き換える
-        （#1504。同じ原文を二重に数えない）。差し込み口が None を返したら、読めなかった章節にする。
-        """
-        nonlocal current, replaced
-        outline = chain.outline
-        sections_ = [section for section, _entry in pending]
-        scoped = [scope] if scope.chunk_count <= MAX_SECTION_CHUNKS or sections_ == [scope] else sections_
-        in_context = {_record_key(item.record): item for item in current.evidence_tree}
-        tree: list[ContextParentEvidence] = []
-        seen: set[str] = set()
-        absorbed: set[str] = set()
-        for section in scoped:
-            for item in reader.groups(outline, section):
-                key = _record_key(item.record)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if key in in_context:
-                    tree.append(in_context[key])
-                    absorbed.add(key)
-                elif key not in reader.known_ids:
-                    tree.append(item)
-        remaining = remaining_now(added) + sum(estimate_tokens(str(getattr(in_context[key].record, "text", "") or "")) for key in absorbed)
-        outcome = large_sections(
-            LargeSectionRequest(
-                question=question,
-                outline=outline,
-                section=scope,
-                tree=tuple(tree),
-                remaining_tokens=max(0, remaining),
-                seconds_left=seconds_left,
-                seed_positions=_seed_positions(context, chains, chain),
-                truncated=any(section.chunk_count > MAX_SECTION_CHUNKS for section in scoped),
-                context_keys=frozenset(absorbed),
-                sections=() if sections_ == [scope] else tuple(sections_),
-            )
-        )
-        if outcome is None:
-            for section, entry in pending:
-                entry["read"] = "skipped"
-                report(
-                    chain,
-                    UnreadSection(
-                        outline.document_id, section.section_id, section_label(outline, section), STOP_TOKEN_BUDGET, section.page_start
-                    ),
-                    section,
-                    after_read,
-                )
-            return True
-        # 抜粋を取得しても、最低範囲を全量読了したことにはしない。
-        for section, _entry in pending:
-            if not any(item.document_id == outline.document_id and item.section_id == section.section_id for item in outcome.unread):
-                report(
-                    chain,
-                    UnreadSection(
-                        outline.document_id, section.section_id, section_label(outline, section), STOP_PARTIAL, section.page_start
-                    ),
-                    section,
-                    after_read,
-                )
-        if outcome.replacements:
-            current = _replace_records(current, outcome.replacements)
-            replaced += len(outcome.replacements)
-            reader.read_sections = {key for key in reader.read_sections if key[:2] != (outline.document_id, outline.chunk_set_id)}
-        added.extend(outcome.tree)
-        # 抜き出しで残った範囲も、起点を含まない兄弟の章節なら診断だけに残す。読取の失敗は回答に出す。
-        omissible = {section.section_id for section in sections_ if optional(chain, section, after_read)}
-        for item in outcome.unread:
-            hidden = item.section_id in omissible and item.reason not in {STOP_EXTRACTION_ERROR, STOP_READ_ERROR}
-            (result.omitted if hidden else result.unread).append(item)
-        # 抜き出していない章節を「抽出した」にしない（#1504）。
-        read = "skipped" if outcome.trace.get("skipped") else "extracted"
-        holder.update(
-            added_parents=len(outcome.tree),
-            replaced_parents=sum(value is not None for value in outcome.replacements.values()),
-            removed_parents=sum(value is None for value in outcome.replacements.values()),
-            extraction=outcome.trace,
-        )
-        for _section, entry in pending:
-            entry["read"] = read
-            if entry is not holder:
-                entry["extraction_group"] = scope.section_id
-        return True
-
     for level in range(1, limits.max_levels + 1):
         targets = [chain for chain in chains if chain.next_section is not None]
         if not targets:
@@ -1107,10 +878,7 @@ def expand_sections(
             return finish(STOP_TIME_LIMIT)
         level_trace: dict[str, Any] = {"level": level, "sections": []}
         trace["levels"].append(level_trace)
-        # 未確認の観点のために読む段では、入らない章節を抜き出さない（抜き出しはモデルを呼ぶ）。
-        extract_now = extracting and not unverified_pending
         added: list[ContextParentEvidence] = []
-        replaced = 0
         budget_hit = False
         labels: list[str] = []
         seen_targets: set[tuple[str, str, str]] = set()
@@ -1140,16 +908,12 @@ def expand_sections(
                 child for child in chain.outline.children(section.section_id) if done is None or child.section_id != done.section_id
             ]
             if not children:
-                # 子の章節が無い章節（大きな leaf・子をすべて読んだ章節）は、抽出してから統合（#1437）に渡す。
-                if extract_now:
-                    budget_hit = hand_off(chain, section, [(section, entry)], entry, added) or budget_hit
-                else:
-                    without_extraction(chain, section, entry, added)
-                    budget_hit = True
+                # 子の章節が無い章節（大きな leaf・子をすべて読んだ章節）。
+                fit_or_skip(chain, section, entry, added)
+                budget_hit = True
                 continue
             ranked, method = _rank_children(question, chain.outline, children, rerank, settings)
             entry.update(read="children", ranking=method, children=[])
-            pending: list[tuple[SectionInfo, dict[str, Any]]] = []
             read_above = False  # 関連度の順でより上の子の章節を全体で読んだ（#2816）
             for child in ranked:
                 child_key = reader.section_key(chain.outline, child)
@@ -1157,19 +921,6 @@ def expand_sections(
                     continue
                 child_entry: dict[str, Any] = {"section_id": child.section_id, "title": child.title}
                 entry["children"].append(child_entry)
-                if pending:
-                    # 入らない子の章節が出たら、それより関連の低い子の章節もまとめて抽出してから統合に渡す
-                    # （関連の低い章節が先に予算を使わない）。読むものが無い章節は渡さない。
-                    if (
-                        child.chunk_count <= MAX_SECTION_CHUNKS
-                        and not reader.read(chain.outline, child)
-                        and child_key not in reader.failures
-                    ):
-                        reader.mark(chain.outline, child, ())
-                        child_entry.update(read="in_context", added_parents=0)
-                    else:
-                        pending.append((child, child_entry))
-                    continue
                 if try_whole(chain, child, child_entry, added):
                     read_above = True
                     continue
@@ -1177,115 +928,20 @@ def expand_sections(
                     # 読取に失敗した子の章節は、失敗として出す（予算で読めなかった章節にしない）。
                     budget_hit = True
                     continue
-                if extract_now:
-                    pending.append((child, child_entry))
-                else:
-                    without_extraction(chain, child, child_entry, added, read_above)
-                    budget_hit = True
-            if pending:
-                # 入らない子の章節は、まとめて抽出してから統合（#1437）に渡す（1 回分に複数の章節を入れられる）。
-                budget_hit = hand_off(chain, section, pending, entry, added, read_above) or budget_hit
-        if budget_hit or any(item.get("read") == "extracted" for item in _entries(level_trace)):
-            # 全体を読む必要のある章節は、抽出してから統合（#1437）に渡す（差し込み口が無ければ予算で打ち切る）。
-            trace["large_section_handoff"] = (
-                "extract_then_integrate"
-                if extract_now
-                else "not_used_for_unverified_aspects"
-                if extracting
-                else "extract_then_integrate_unavailable"
-            )
+                fit_or_skip(chain, child, child_entry, added, read_above)
+                budget_hit = True
         result.levels = level
         level_trace["labels"] = labels
         if added:
             current = _merge(current, added)
             level_trace["added_parents"] = len(added)
-        if replaced:
-            level_trace["replaced_parents"] = replaced
-        if unverified_pending and (added or replaced):
-            # 未確認の観点のために上の章節を読んだ。評価し直さずに生成へ渡す（#3755）。
-            level_trace["grade_skipped"] = "unverified_aspects"
-            return finish(STOP_TOKEN_BUDGET if budget_hit else STOP_UNVERIFIED_EXPANDED)
-        if grade is None and (scope_reached() or budget_hit):
-            level_trace["grade_skipped"] = "not_requested"
+        if scope_reached() or budget_hit:
             return finish(STOP_PARTIAL if result.unread else STOP_SCOPE_READ)
-        if not added and not replaced:
-            if budget_hit:
-                return finish(STOP_TOKEN_BUDGET)
-            # 判定を飛ばした段で足した根拠がまだ判定・生成に渡っていない（#1526）。評価し直しの省略（#1528）は、
-            # 下の判定の前で扱う（足した根拠が判定に渡っていないときだけ）。
-            unjudged = current is not result.context or (latest is None and grade is not None)
-            if unverified_pending:
-                # 未確認の観点のために読む段で、足す根拠が無かった。さらに上の章節を読みに行く（段の上限まで）。
-                continue
-            if scope_reached() and is_enough(latest) and not unjudged:
-                if wait_for_unverified(latest, level):
-                    continue
-                # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
-                return finish(STOP_SUFFICIENT)
-            if not (unjudged and scope_reached()):
-                continue
-            # 読む範囲に届いた段で足す根拠が無くても（表題の章節が文書の全部を持ち、文書全体の段が in_context）、
-            # それまでの段で足した根拠で判定する（#1526）。
-        if not scope_reached() and not budget_hit:
-            # 読む範囲に届くまでは判定しない（網羅の問で、見えている数件で「足りる」としない。#1503）。
-            level_trace["grade_skipped"] = "minimum_scope"
-            continue
-        if skip_regrade_at_scope and not budget_hit:
-            # 読む範囲（文書全体）まで決定的に読んだ。上に読む章節は無いので、評価し直さずに生成へ進む (#1528)。
-            level_trace["grade_skipped"] = "scope_reached"
-            result.context = current
-            result.applied = True
-            return finish(STOP_SCOPE_READ)
-        result.context = current
-        result.applied = True
-        before = clock()
-        try:
-            assert grade is not None
-            attempt = grade(current, level)
-        except Exception as exc:  # noqa: BLE001 - 判定の失敗は、読んだ章節のまま回答へ進む
-            if type(exc).__name__ == "DeadlineExceeded":
-                raise
-            level_trace["grade_error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
-            return finish(STOP_GRADE_ERROR)
-        level_seconds = max(1.0, clock() - before)
-        latest = attempt
-        level_trace.update(sufficient=attempt.sufficient, missing_aspects=list(attempt.missing_aspects))
-        if is_enough(attempt) and scope_reached() and not result.unread:
-            if budget_hit or not wait_for_unverified(attempt, level):
-                return finish(STOP_TOKEN_BUDGET if budget_hit and unverified_enumeration(attempt) else STOP_SUFFICIENT)
-            continue
-        if budget_hit:
-            return finish(STOP_TOKEN_BUDGET)
     remaining_targets = [chain for chain in chains if chain.next_section is not None]
     if not remaining_targets:
         return finish(STOP_DOCUMENT)
     _mark_unread(result, reader, remaining_targets, STOP_MAX_LEVELS)
     return finish(STOP_MAX_LEVELS)
-
-
-def _seed_positions(context: AnswerContext, chains: Sequence[_Chain], chain: _Chain) -> tuple[int, ...]:
-    """同じ文書（chunk_set）の起点の当たった chunk の、文書の中の位置（``seq_no``）。"""
-    same = {
-        item.seed_uid
-        for item in chains
-        if (item.outline.document_id, item.outline.chunk_set_id) == (chain.outline.document_id, chain.outline.chunk_set_id)
-    }
-    positions = [
-        int(getattr(child.record, "seq_no", 0) or 0)
-        for parent in context.evidence_tree
-        for child in parent.children
-        if _record_key(child.record) in same
-    ]
-    return tuple(dict.fromkeys(positions))
-
-
-def _entries(level_trace: dict[str, Any]) -> list[dict[str, Any]]:
-    """段の記録の章節と子の章節の記録（読み方を数えるため）。"""
-    entries: list[dict[str, Any]] = []
-    for entry in level_trace.get("sections", []):
-        entries.append(entry)
-        entries.extend(entry.get("children", []) or [])
-    return entries
 
 
 def _mark_unread(result: SectionExpansionResult, reader: SectionReader, chains: Sequence[_Chain], reason: str) -> None:
@@ -1305,21 +961,15 @@ def _mark_unread(result: SectionExpansionResult, reader: SectionReader, chains: 
 
 
 __all__ = [
-    "CONTENT_ASPECTS",
     "GENERATION_RESERVE_SECONDS",
     "DEFAULT_MODEL_INPUT_TOKENS",
     "LIMIT_STOPS",
     "MAX_SECTION_CHUNKS",
-    "STOP_EXTRACTION_CALLS",
-    "STOP_EXTRACTION_ERROR",
     "STOP_SCOPE_READ",
     "STOP_SECTION_CHUNKS",
     "ROOT_SECTION_ID",
     "SECTION_CONTEXT_ROLE",
     "SECTION_EXPANSION_REASON",
-    "LargeSectionHandler",
-    "LargeSectionOutcome",
-    "LargeSectionRequest",
     "SectionExpansionLimits",
     "SectionExpansionResult",
     "SectionInfo",
@@ -1330,9 +980,6 @@ __all__ = [
     "context_tokens",
     "estimate_tokens",
     "expand_sections",
-    "is_enough",
-    "unverified_enumeration",
-    "no_large_section_handler",
     "model_input_tokens",
     "section_label",
     "seed_chunk_ids",

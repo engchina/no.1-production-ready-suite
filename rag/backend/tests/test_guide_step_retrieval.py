@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine, _guide_step_diagnostics
+from app.rag.answer_engine import AnswerEngine
 from app.rag.answer_engine import guide_step_plan as engine_guide_step_plan
 from app.rag.support_guide import reference_issues
 from app.rag.support_guide_runtime import (
@@ -87,8 +87,6 @@ async def _answer(monkeypatch: pytest.MonkeyPatch, oracle: GuideStepOracle, **se
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
         Settings(
-            rag_query_strategy="simple_retrieval",
-            rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
             **{"rag_support_guide_enabled": True, **settings},
         ),
@@ -97,41 +95,6 @@ async def _answer(monkeypatch: pytest.MonkeyPatch, oracle: GuideStepOracle, **se
     )
     return await engine.run(
         SearchRequest(query="設定 A の変更方法は？", filters={"knowledge_base_id": "kb-1"})
-    )
-
-
-async def test_guide_steps_add_step_b_and_reference_page_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """手順ごとに検索し、手順 B の根拠と参照の頁の根拠を回答の材料に入れる。"""
-    oracle = GuideStepOracle()
-
-    outcome = await _answer(monkeypatch, oracle, rag_support_guide=_guide())
-
-    assert {"doc-a:c1", "doc-b:c1", "doc-c:c1"} <= _evidence_ids(outcome)
-    # 参照の頁の検索は、その文書の頁の範囲に絞る(利用者の KB の範囲は保つ)。
-    page_filters = [filters for _, filters in oracle.calls if "page_ranges" in filters]
-    assert page_filters
-    assert json.loads(page_filters[0]["page_ranges"]) == [
-        {"document_id": "doc-c", "page_start": 2, "page_end": 3}
-    ]
-    assert page_filters[0]["knowledge_base_id"] == "kb-1"
-    trace = outcome.diagnostics["guide_step_retrieval"]
-    assert trace["guide_id"] == "g-1" and trace["llm_calls"] == 0
-    step_b = trace["steps"][1]
-    assert step_b["has_references"] is True
-    assert step_b["evidence_count"] >= 1
-    assert [search["kind"] for search in step_b["searches"]] == ["reference", "step"]
-    assert any(
-        step["name"] == "業務ガイドの手順ごとの検索"
-        for step in outcome.diagnostics["execution_steps"]
-    )
-    # 手順ごとの充足（#2686）は id・状態・必須かだけを回答の診断に写す。
-    coverage = outcome.diagnostics["guide_step_coverage"]
-    assert [step["step_id"] for step in coverage] == ["s1", "s2"]
-    assert all(
-        set(step) == {"step_id", "status", "required", "assignment", "evidence_flow"}
-        for step in coverage
     )
 
 
@@ -448,36 +411,6 @@ def test_step_coverage_and_embedding_go_to_guide_diagnostics() -> None:
     assert "step_retrieval" not in diagnostics["guide"]
     assert {"step_coverage", "step_embedding"}.isdisjoint(diagnostics["envelope"]["guide"])
     assert {"guide_step_coverage", "guide_step_embedding"}.isdisjoint(diagnostics)
-
-
-def test_answer_diagnostics_keep_only_step_ids_statuses_and_call_counts() -> None:
-    """記録には手順の id・状態・必須かと呼び出しの回数・時間だけを写す（#2686）。"""
-    trace = {
-        "guide_step_coverage": [
-            {
-                "step_id": "s1",
-                "title": "手順 1",
-                "required": True,
-                "status": "explained",
-                "evidence_refs": [{"evidence_id": "e1", "text": "根拠の本文"}],
-            },
-            "壊れた値",
-        ],
-        "guide_step_embedding": {
-            "calls": 2,
-            "texts": 9,
-            "elapsed_ms": 120,
-            "failed": True,
-            "extra": "x",
-        },
-    }
-
-    assert _guide_step_diagnostics(trace) == {
-        "guide_step_coverage": [{"step_id": "s1", "status": "explained", "required": True}],
-        "guide_step_embedding": {"calls": 2, "texts": 9, "elapsed_ms": 120, "failed": True},
-    }
-    assert _guide_step_diagnostics({}) == {}
-    assert _guide_step_diagnostics(None) == {}
 
 
 def test_mcp_guide_reference_carries_sheet_ranges_apart_from_pages() -> None:

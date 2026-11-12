@@ -48,9 +48,7 @@ from app.rag.answer_timeout import (
     run_answer_with_timeout,
 )
 from app.rag.audit import record_rag_search_audit
-from app.rag.chat_question_token import context_digest
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.document_sections_service import current_section_pages
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
@@ -59,10 +57,9 @@ from app.rag.observability import (
     record_rag_request,
 )
 from app.rag.pipeline import RagPipeline, SearchStageProgress
-from app.rag.question_understanding import profile_language_scope
+from app.rag.profile_language import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
-from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.run_history import RunRecorder, search_run_conditions
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.search_answer_profile_config import (
@@ -73,7 +70,6 @@ from app.rag.search_answer_profile_config import (
 )
 from app.rag.search_answer_profile_knowledge import (
     RUNTIME_KNOWLEDGE_KIND,
-    clarification_document_ids,
     load_domain_keywords,
 )
 from app.rag.stored_answer import stored_citation_metadata
@@ -121,7 +117,6 @@ from app.schemas.search import (
     format_search_id_filter,
 )
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
-from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.schemas.settings import FieldDefinitionData, SearchExtractionFieldsData
 from app.schemas.support_guide import SupportGuideContent
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
@@ -289,7 +284,7 @@ async def search(
     """自然言語クエリで RAG 検索を実行する。
 
     回答は回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
-    Cohere Rerank -> 根拠の評価・補正検索 -> 回答の生成と監査)で作る。
+    Cohere Rerank -> 回答の生成)で作る。
     """
     enforce_rate_limit("search", http_request)
     result = await _run_search_with_timeout(request, run_recorder=_search_run_recorder(request))
@@ -336,8 +331,6 @@ async def _resolve_query_context(
     guide_context: Sequence[str] = (),
     interactive: bool = False,
     guide_preview: GuidePreview | None = None,
-    answered_rule_ids: Sequence[str] = (),
-    confirmed_rule_answers: Sequence[ClarificationAnswer] = (),
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
@@ -384,7 +377,7 @@ async def _resolve_query_context(
             profile_config = profile_config.model_copy(
                 update={"answer_model_id": explicit_model, "escalation_model_id": None}
             )
-        # 回答を作らない検索も、根拠を集める LLM（質問拡張・条の選択・CRAG など）はチャットと同じ
+        # 回答を作らない検索も、根拠を集める LLM（画面の選択など）はチャットと同じ
         # 回答のモデルで呼ぶ（#3506。回答の有無でモデルを変えない）。ただし回答を作らない検索は、
         # 登録を外したモデルを選んだままのプロファイルでも止めず、既定のモデルで根拠を集める。
         settings, applied = resolve_search_answer_profile_settings(
@@ -402,98 +395,16 @@ async def _resolve_query_context(
             domain_keywords = await load_domain_keywords(oracle, view.id)
             if domain_keywords:
                 settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
-            # 用語・同義語と回答ルールは回答エンジンだけが使う。
+            # 用語・同義語は回答エンジンだけが使う。
             runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
                 view.id, RUNTIME_KNOWLEDGE_KIND
-            )
-            selection_state = dict(effective_request._rule_selection_state)
-            selection_binding = context_digest(
-                [runtime_knowledge, request.query, request.original_question]
-            )
-            recognized_answers = tuple(
-                answer
-                for answer in confirmed_rule_answers
-                if answer.rule_id not in answered_rule_ids
-            )
-            if selection_state.get("binding") == selection_binding:
-                recognized_answers = tuple(
-                    ClarificationAnswer.model_validate(value)
-                    for value in selection_state.get("answers", [])
-                )
-            elif not selection_state.get("prepared"):
-                selection_usage: dict[str, float] = {}
-                selection_rules = (runtime_knowledge or {}).get("rules", [])
-                if not isinstance(selection_rules, list):
-                    selection_rules = []
-                recognized_answers = await recognize_rule_selections(
-                    {
-                        **(runtime_knowledge or {}),
-                        "rules": [
-                            rule
-                            for rule in selection_rules
-                            if isinstance(rule, dict)
-                            and str(rule.get("id", "")) not in answered_rule_ids
-                        ],
-                    },
-                    request.query,
-                    settings,
-                    source_text="\n".join(
-                        [*guide_context, request.original_question or request.query]
-                    ),
-                    answers=recognized_answers,
-                    usage=selection_usage,
-                )
-                selection_state["elapsed_seconds"] = float(
-                    selection_state.get("elapsed_seconds", 0.0)
-                ) + selection_usage.get("elapsed_seconds", 0.0)
-            selection_state.update(
-                binding=selection_binding,
-                answers=[answer.model_dump() for answer in recognized_answers],
-            )
-            effective_request = apply_rule_selection_scope(
-                effective_request,
-                runtime_knowledge or {},
-                recognized_answers,
-                current_pages=await current_section_pages(
-                    oracle,
-                    {
-                        doc
-                        for answer in recognized_answers
-                        for doc in clarification_document_ids(runtime_knowledge or {}, answer)
-                    },
-                )
-                if recognized_answers
-                else None,
-            )
-            effective_request._rule_selection_state = selection_state
-            initial_budget = float(
-                selection_state.setdefault(
-                    "initial_budget_seconds", settings.rag_answer_timeout_seconds
-                )
-            )
-            remaining_budget = max(
-                0.0, initial_budget - float(selection_state.get("elapsed_seconds", 0.0))
-            )
-            settings = settings.model_copy(
-                update={
-                    "rag_answer_timeout_seconds": min(
-                        settings.rag_answer_timeout_seconds, remaining_budget
-                    )
-                }
             )
             if guide_preview is not None:
                 # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
                 settings = settings.model_copy(update={"rag_support_guide_enabled": True})
             if not settings.rag_support_guide_enabled:
-                runtime_knowledge = await asyncio.to_thread(
-                    with_answer_assumptions,
-                    runtime_knowledge,
-                    policy=profile_config.clarification_policy,
-                    question=request.query,
-                    conditions=request.conditions,
-                    guide={},
-                    answered_rule_ids=answered_rule_ids,
-                    confirmed_answers=recognized_answers,
+                runtime_knowledge = with_answer_assumptions(
+                    runtime_knowledge, policy=profile_config.clarification_policy, guide={}
                 )
                 settings = settings.model_copy(
                     update={
@@ -507,11 +418,10 @@ async def _resolve_query_context(
             guides, guides_failed = await load_published_guides(oracle, view.id)
             if guide_preview is not None:
                 guides = with_draft(guides, guide_preview)
-                # 下書きの試答は業務ガイドの要件ごとの充足まで詳しく監査する(#2795)。
+                # 下書きの試答は、回答の記録に試答の印を付けて履歴・評価から外す(#2795)。
                 settings = settings.model_copy(
                     update={
                         "rag_guide_preview": guide_preview.marker(),
-                        "rag_answer_audit_mode": "detailed",
                     }
                 )
             guide_text = "\n".join([*guide_context, request.query])
@@ -605,15 +515,10 @@ async def _resolve_query_context(
                         }
                     }
                 )
-            runtime_knowledge = await asyncio.to_thread(
-                with_answer_assumptions,
+            runtime_knowledge = with_answer_assumptions(
                 runtime_knowledge,
                 policy=profile_config.clarification_policy,
-                question=request.query,
-                conditions=request.conditions,
                 guide=settings.rag_support_guide or {},
-                answered_rule_ids=answered_rule_ids,
-                confirmed_answers=recognized_answers,
             )
             if (
                 profile_config.clarification_policy == "assume"
@@ -865,6 +770,7 @@ async def _run_search_with_timeout(
                 answer_notice=current_answer_notice,
                 caller_queries=caller_queries,
                 complete_evidence=complete_evidence,
+                direct_faq_answer=True,
             ).run(
                 request,
                 trace_id=trace_id,
@@ -1083,6 +989,7 @@ async def _stream_search_events_with_timeout(
                     answer_model_id=answer_model_id,
                     run_recorder=run_recorder,
                     answer_notice=current_answer_notice,
+                    direct_faq_answer=True,
                 ).run(
                     request,
                     trace_id=trace_id,

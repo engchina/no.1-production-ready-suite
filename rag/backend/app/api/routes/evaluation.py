@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     Form,
     HTTPException,
@@ -23,10 +24,11 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
 from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
-from rag_engine.evaluation.answer_eval import standard_scope_cache
 from rag_parser_core.language import current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
+from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.search import (
     SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX,
@@ -52,6 +54,7 @@ from app.rag.evaluation import (
     EvaluationRunner,
 )
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
+from app.rag.evaluation_evidence import used_evidence_lines
 from app.rag.evaluation_excel import (
     EVALUATION_EXCEL_MAX_BYTES,
     EVALUATION_EXCEL_MAX_ROWS,
@@ -69,6 +72,7 @@ from app.rag.evaluation_excel import (
 from app.rag.evaluation_jobs import (
     EVALUATION_COMPARE_PASS_INDEX,
     EvaluationJobExecutor,
+    EvaluationJobForbiddenError,
     EvaluationJobLimitError,
     EvaluationJobNotFoundError,
     EvaluationJobOutcome,
@@ -96,7 +100,7 @@ from app.rag.support_guide_process_import import (
     list_knowledge_documents,
     process_headings,
 )
-from app.schemas.common import ApiResponse
+from app.schemas.common import ApiResponse, Page
 from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
@@ -106,6 +110,7 @@ from app.schemas.evaluation import (
     EvaluationImportRow,
     EvaluationJob,
     EvaluationJobKind,
+    EvaluationJobSummary,
     EvaluationMetrics,
     EvaluationProcessDraftData,
     EvaluationProcessDraftRequest,
@@ -114,6 +119,7 @@ from app.schemas.evaluation import (
 )
 from app.schemas.search import normalize_search_id_list
 from app.schemas.support_guide import SupportGuideProcessRow
+from app.security.user_names import user_display_names
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -144,6 +150,13 @@ async def _resolve_evaluation_suite_name(
     return normalize_evaluation_suite(get_settings().rag_evaluation_suite)
 
 
+@router.get("/models")
+async def evaluation_models() -> ApiResponse[list[dict[str, str]]]:
+    from app.api.routes.search import registered_answer_model_choices
+
+    return ApiResponse(data=registered_answer_model_choices(get_settings()))
+
+
 @router.post("/run", response_model=ApiResponse[EvaluationMetrics])
 async def run_evaluation(
     http_request: Request,
@@ -155,6 +168,7 @@ async def run_evaluation(
     （`POST /jobs/run`。#390）を使う。
     """
     enforce_rate_limit("evaluation", http_request)
+    request = await _testset_run_request(request)
     metrics, _ = await _execute_run(request, time_budget_seconds=EVALUATION_RUN_TIMEOUT_SECONDS)
     return ApiResponse(data=metrics)
 
@@ -170,7 +184,11 @@ async def submit_run_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """golden set の評価を job として投入する（#390）。進捗は `GET /jobs/{job_id}` で取得する。"""
     enforce_rate_limit("evaluation", http_request)
-    source_workbook_id = await _usable_source_workbook_id(request)
+    from_testset = request.testset_id is not None
+    request = await _testset_run_request(request)
+    source_workbook_id = (
+        request.source_workbook_id if from_testset else await _usable_source_workbook_id(request)
+    )
     # 比べる検索・回答プロファイルがあれば、同じケースを 2 回流す（#2402）。
     passes = 2 if request.compare_search_answer_profile_id else 1
     time_limit = evaluation_job_time_limit_seconds(
@@ -206,8 +224,10 @@ async def submit_run_evaluation_job(
         executor=execute,
         job_id=job_id,
         source_workbook_id=source_workbook_id,
+        search_answer_profile_id=request.search_answer_profile_id,
+        compare_search_answer_profile_id=request.compare_search_answer_profile_id,
     )
-    return ApiResponse(data=job)
+    return ApiResponse(data=(await _with_job_names([job]))[0])
 
 
 async def _usable_source_workbook_id(request: EvaluationRunRequest) -> str | None:
@@ -500,32 +520,113 @@ async def _with_document_locations(
     ]
 
 
+@router.get("/jobs", response_model=ApiResponse[Page[EvaluationJobSummary]])
+async def list_evaluation_jobs(
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
+) -> ApiResponse[Page[EvaluationJobSummary]]:
+    """見られる過去の品質評価を新しい順に返す（#4811。offset 型）。
+
+    見え方は job の詳細と同じ（使った検索・回答プロファイルを今使える利用者。プロファイルの
+    分からない job は実行した本人と system_admin）。結果の本体は返さず、全体の判定だけを返す。
+    """
+    items, total = await get_evaluation_job_service().list_jobs(
+        offset=paging.offset, limit=paging.limit
+    )
+    return ApiResponse(
+        data=paginate(
+            await _with_job_names(items), total=total, limit=paging.limit, offset=paging.offset
+        )
+    )
+
+
 @router.get("/jobs/{job_id}", response_model=ApiResponse[EvaluationJob])
 async def get_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
-    """投入した利用者の品質評価の job の状態（進捗・結果）を返す（#390）。"""
+    """品質評価の job の状態（進捗・結果）を返す（#390）。見えない job は 404（#4811）。
+
+    保存した結果を返すだけで、モデルは呼ばない。
+    """
     try:
         job = await get_evaluation_job_service().get(job_id)
     except EvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ApiResponse(data=job)
+    return ApiResponse(data=(await _with_job_names([job]))[0])
+
+
+async def _with_job_names[JobT: (EvaluationJob, EvaluationJobSummary)](
+    jobs: list[JobT],
+) -> list[JobT]:
+    """job に検索・回答プロファイルの名前と、実行した利用者の表示名を足す（#4811）。
+
+    名前は表示の補助なので、引けなければ空のまま返す（画面は ID・「—」を出す）。
+    """
+    profile_ids = sorted(
+        {
+            profile_id
+            for job in jobs
+            for profile_id in (job.search_answer_profile_id, job.compare_search_answer_profile_id)
+            if profile_id
+        }
+    )
+    profile_names = await evaluation_profile_names(profile_ids) if profile_ids else {}
+    user_uuids = sorted({job.actor_user_uuid for job in jobs if job.actor_user_uuid})
+    user_names = await evaluation_user_names(user_uuids) if user_uuids else {}
+    return [
+        job.model_copy(
+            update={
+                "search_answer_profile_name": profile_names.get(job.search_answer_profile_id or ""),
+                "compare_search_answer_profile_name": profile_names.get(
+                    job.compare_search_answer_profile_id or ""
+                ),
+                "actor_display_name": user_names.get(job.actor_user_uuid or ""),
+            }
+        )
+        for job in jobs
+    ]
+
+
+async def evaluation_profile_names(profile_ids: Sequence[str]) -> dict[str, str]:
+    """検索・回答プロファイルの ID → 名前（見る利用者の範囲。引けなければ空）。
+
+    テストで差し替える。
+    """
+    try:
+        profiles = await OracleClient().list_search_answer_profiles(
+            search_answer_profile_ids=list(profile_ids), limit=len(profile_ids)
+        )
+    except Exception as exc:  # noqa: BLE001 - 名前は表示の補助。一覧・結果は返す
+        logger.warning("evaluation_profile_names_unavailable", extra=oracle_error_log_fields(exc))
+        return {}
+    return {profile.id: profile.name for profile in profiles}
+
+
+async def evaluation_user_names(user_uuids: Sequence[str]) -> dict[str, str]:
+    """利用者の UUID → 表示名（引けない利用者は省く。テストで差し替える）。"""
+    return await run_in_threadpool(user_display_names, list(user_uuids))
 
 
 @router.post("/jobs/{job_id}/results.xlsx")
 async def export_evaluation_results(job_id: str, body: EvaluationResultExportRequest) -> Response:
-    """投入した利用者の結果を出力する。
+    """見られる job の結果を出力する（#4811。他の利用者の job も見えれば出せる）。
 
-    アップロードした Excel がある job は、そのファイルに結果の列を足す（#4212）。無い job・読めない
-    ときは、画面の実行時の入力と合わせた結果だけのファイルにする（`X-Evaluation-Results-Source` で
-    区別する）。失敗・取り消しの job は、終わったケースまでを出す（#4208）。実行中と結果の無い
-    job は 409。
+    アップロードした Excel がある job は、そのファイルに結果の列を足す（#4212。ファイルは job を
+    実行した利用者のものを読む）。無い job・読めないときは、画面の実行時の入力と合わせた結果だけの
+    ファイルにする（`X-Evaluation-Results-Source` で区別する）。回答の本文は、見る利用者が読める
+    回答の記録の分だけを入れる。失敗・取り消しの job は、終わったケースまでを出す（#4208）。
+    実行中と結果の無い job は 409。
     """
-    job = (await get_evaluation_job(job_id)).data
-    metrics = (job.run_result or job.partial_result) if job is not None else None
-    if job is None or metrics is None:
+    try:
+        job, owner = await get_evaluation_job_service().get_with_owner(job_id)
+    except EvaluationJobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    metrics = job.run_result or job.partial_result
+    if metrics is None:
         raise HTTPException(
             status_code=409, detail="結果のある品質評価（終わったもの）だけを書き出せます。"
         )
-    uploaded = await _results_on_source_workbook(job, metrics)
+    evidence = await _case_evidence(metrics)
+    uploaded = await _results_on_source_workbook(job, metrics, owner, evidence=evidence)
     if uploaded is not None:
         content, file_name = uploaded
         return Response(
@@ -544,6 +645,7 @@ async def export_evaluation_results(job_id: str, body: EvaluationResultExportReq
         metrics,
         body,
         partial_of_total=job.total_cases if job.run_result is None else None,
+        evidence=evidence,
     )
     return Response(
         content,
@@ -556,16 +658,25 @@ async def export_evaluation_results(job_id: str, body: EvaluationResultExportReq
 
 
 async def _results_on_source_workbook(
-    job: EvaluationJob, metrics: EvaluationMetrics
+    job: EvaluationJob,
+    metrics: EvaluationMetrics,
+    owner: tuple[str | None, str | None],
+    *,
+    evidence: dict[str, str] | None = None,
 ) -> tuple[bytes, str] | None:
-    """元の Excel に結果の列を足す。元の Excel が無い・足せないときは None（ログだけ）。"""
+    """元の Excel に結果の列を足す。元の Excel が無い・足せないときは None（ログだけ）。
+
+    `owner` は job を実行した利用者（tenant と user の hash）。job が見えることは確かめてある。
+    """
     if not job.source_workbook_id:
         return None
     try:
-        workbook = await get_evaluation_source_workbook_service().load(job.source_workbook_id)
+        workbook = await get_evaluation_source_workbook_service().load(
+            job.source_workbook_id, owner=owner
+        )
         answers = await _case_answers(metrics)
         content = await asyncio.to_thread(
-            evaluation_workbook_with_results, workbook.content, metrics, answers
+            evaluation_workbook_with_results, workbook.content, metrics, answers, evidence=evidence
         )
     except Exception as exc:  # noqa: BLE001 - 結果だけのファイルを返す
         logger.warning(
@@ -575,6 +686,23 @@ async def _results_on_source_workbook(
         return None
     stem = PurePath(workbook.file_name).stem or "evaluation"
     return content, f"{stem}_results.xlsx"
+
+
+async def _case_evidence(metrics: EvaluationMetrics) -> dict[str, str]:
+    """最終回答の採用済み引用だけを整形する。取得できない旧記録は空欄。"""
+    results = [*metrics.case_results]
+    if metrics.comparison:
+        results.extend(metrics.comparison.metrics.case_results)
+    try:
+        citations = await OracleClient().evaluation_citations_by_trace_ids(
+            [result.trace_id for result in results]
+        )
+        return {trace_id: used_evidence_lines(items) for trace_id, items in citations.items()}
+    except Exception as exc:  # noqa: BLE001 - 指標は出す
+        logger.warning(
+            "evaluation_results_citations_unavailable", extra=oracle_error_log_fields(exc)
+        )
+        return {}
 
 
 async def _case_answers(metrics: EvaluationMetrics) -> dict[str, str]:
@@ -593,15 +721,20 @@ async def _case_answers(metrics: EvaluationMetrics) -> dict[str, str]:
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])
 async def cancel_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
-    """投入した利用者の実行中の品質評価の job を取り消す（#390）。"""
+    """実行中の品質評価の job を取り消す（#390）。
+
+    見えない job は 404、見えるが実行した本人でも system_admin でもなければ 403（#4811）。
+    """
     service = get_evaluation_job_service()
     try:
         job = await service.cancel(job_id)
     except EvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EvaluationJobForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except EvaluationJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ApiResponse(data=job)
+    return ApiResponse(data=(await _with_job_names([job]))[0])
 
 
 async def _submit_job(
@@ -612,6 +745,8 @@ async def _submit_job(
     executor: EvaluationJobExecutor,
     job_id: str | None = None,
     source_workbook_id: str | None = None,
+    search_answer_profile_id: str | None = None,
+    compare_search_answer_profile_id: str | None = None,
 ) -> EvaluationJob:
     try:
         return await get_evaluation_job_service().submit(
@@ -621,6 +756,8 @@ async def _submit_job(
             executor=executor,
             job_id=job_id,
             source_workbook_id=source_workbook_id,
+            search_answer_profile_id=search_answer_profile_id,
+            compare_search_answer_profile_id=compare_search_answer_profile_id,
         )
     except EvaluationJobLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -659,8 +796,7 @@ async def _execute_run(
         )
 
     started_manifest = await manifest()
-    # 標準回答の比較範囲は、job の 2 つの pass で同じものを使う（#3570）。
-    with standard_scope_cache(), fixed_today(as_of):
+    with fixed_today(as_of):
         started = time.monotonic()
         metrics = await EvaluationRunner().run(
             cases=request.cases,
@@ -669,6 +805,7 @@ async def _execute_run(
             knowledge_base_ids=request.knowledge_base_ids,
             thresholds=effective_thresholds,
             rag_overrides=request.rag_overrides,
+            answer_model_id=request.answer_model_id,
             search_answer_profile_id=request.search_answer_profile_id,
             time_budget_seconds=time_budget_seconds,
             progress=_offset_progress(progress, offset=0, final=False)
@@ -691,6 +828,7 @@ async def _execute_run(
                 knowledge_base_ids=[],
                 thresholds=effective_thresholds,
                 rag_overrides=request.rag_overrides,
+                answer_model_id=request.answer_model_id,
                 search_answer_profile_id=request.compare_search_answer_profile_id,
                 time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
                 progress=_offset_progress(progress, offset=len(request.cases), final=True),
@@ -816,3 +954,65 @@ def _metrics_passed(metrics: EvaluationMetrics) -> bool:
 
 def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+async def prepare_testset(draft_id: str, revision: int, profile_id: str) -> EvaluationImportResult:
+    """本人の指定版の確認済み項目だけを解決し、実行時の入力を原本の保存先へ固定する。"""
+    from io import BytesIO
+
+    from app.rag import evaluation_testsets
+    from app.rag.request_context import current_audit_request_context
+
+    if current_audit_request_context().user_id_hash is None:
+        raise HTTPException(status_code=403, detail="本人を確認できません。")
+    draft = await evaluation_testsets.get_store().get(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="テストセットが見つかりません。")
+    if draft.revision != revision:
+        raise HTTPException(
+            status_code=409, detail="テストセットが更新されました。最新の内容を確認してください。"
+        )
+    try:
+        content = await asyncio.to_thread(evaluation_testsets.export_draft, draft)
+    except evaluation_testsets.TestSetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = (
+        await import_evaluation_cases(
+            file=UploadFile(filename=f"{draft.name}-r{revision}.xlsx", file=BytesIO(content)),
+            search_answer_profile_id=profile_id,
+        )
+    ).data
+    if result is None or result.error_count:
+        raise HTTPException(
+            status_code=422,
+            detail="テストセットの根拠を評価先の資料と照合できません。内容を確認してください。",
+        )
+    if not result.source_workbook_id:
+        raise HTTPException(
+            status_code=503, detail="実行時の入力を保存できません。時間をおいて再試行してください。"
+        )
+    return result
+
+
+async def _testset_run_request(request: EvaluationRunRequest) -> EvaluationRunRequest:
+    if request.answer_model_id:
+        from app.api.routes.search import ensure_answer_models_registered
+
+        ensure_answer_models_registered([request.answer_model_id], get_settings())
+    if not request.testset_id:
+        return request
+    if not request.search_answer_profile_id or request.testset_revision is None:
+        raise HTTPException(
+            status_code=422, detail="評価する検索・回答プロファイルを選んでください。"
+        )
+    prepared = await prepare_testset(
+        request.testset_id, request.testset_revision, request.search_answer_profile_id
+    )
+    return request.model_copy(
+        update={
+            "cases": prepared.cases,
+            "source_workbook_id": prepared.source_workbook_id,
+            "testset_id": None,
+            "testset_revision": None,
+        }
+    )

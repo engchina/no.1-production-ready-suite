@@ -325,7 +325,6 @@ def test_map_chunk_skips_summaries_and_reads_pages_and_elements() -> None:
     }
     chunk = map_chunk_from_row(row)
     assert chunk == MapChunk("c1", 3, 4, 4, ("e1", "e2"), ("規程", "第1章"), "第1章", 120)
-    assert map_chunk_from_row({**row, "metadata_json": {"raptor_summary": True}}) is None
     assert map_chunk_from_row({**row, "metadata_json": {"nav_summary": True}}) is None
 
 

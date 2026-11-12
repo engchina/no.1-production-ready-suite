@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #926: 業務 Agent が使うスキルは削除できない。スキルの ID は URL に置ける形だけを受け付ける。
 
@@ -18,13 +18,6 @@ function seedRuntimeSkill(mockApi: MockApi) {
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
   });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 test("業務 Agent が使うスキルの削除は理由を出して断り、スキルを残す", async ({ page, mockApi }) => {
@@ -58,7 +51,7 @@ test("業務 Agent が使うスキルの削除は理由を出して断り、ス�
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "経理の手順 skill_926", exact: true })).toBeVisible();
   expect(mockApi.state.skills.some((skill) => skill.id === "skill_926")).toBe(true);
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });
 
 test("スキルの ID に / や空白を入れると欄の下にエラーを出して送らない", async ({ page, mockApi }) => {
@@ -78,5 +71,5 @@ test("スキルの ID に / や空白を入れると欄の下にエラーを出�
   await page.getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("スキルを追加しました")).toBeVisible();
   expect(mockApi.lastRequest("POST", "/api/skills")?.body).toMatchObject({ id: "keiri_procedure-1.0" });
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 });

@@ -1,0 +1,234 @@
+{
+  "csv": {
+    "input_jsonl": "{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"doc\",\"source_type\":\"csv\",\"record_type\":\"document\",\"converter\":\"csv_to_jsonl\",\"converter_version\":\"v2\",\"header_row\":1,\"skipped\":[],\"diagnostics\":[]}\n{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"r1\",\"source_type\":\"csv\",\"location\":{\"row_start\":2,\"row_end\":2,\"record\":2},\"section_path\":[],\"record_type\":\"row\",\"fields\":[{\"name\":\"項目\",\"position\":1,\"value\":\"同じ値😀\"},{\"name\":\"備考\",\"position\":2,\"value\":\"前\\n後\"}]}\n{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"r2\",\"source_type\":\"csv\",\"location\":{\"row_start\":3,\"row_end\":3,\"record\":3},\"section_path\":[],\"record_type\":\"row\",\"fields\":[{\"name\":\"項目\",\"position\":1,\"value\":\"同じ値😀\"},{\"name\":\"備考\",\"position\":2,\"value\":\"前\\n後\"}]}\n",
+    "element_id": "r2",
+    "window": {
+      "revision": "synthetic-extraction",
+      "anchor_status": "element",
+      "section_path": [],
+      "blocks": [
+        {
+          "id": "r1",
+          "text": "項目: 同じ値😀 / 備考: 前\n後",
+          "offset": 0,
+          "highlights": [],
+          "cited": false,
+          "kind": "text",
+          "heading": [],
+          "record": {
+            "source_type": "csv",
+            "location": {
+              "row_start": 2,
+              "row_end": 2,
+              "source_line_start": 2,
+              "source_line_end": 2,
+              "table_row_start": 2,
+              "table_row_end": 2
+            },
+            "parts": [
+              {
+                "kind": "table",
+                "columns": [
+                  "項目",
+                  "備考"
+                ],
+                "rows": [
+                  {
+                    "label": "2",
+                    "cells": [
+                      "同じ値😀",
+                      "前\n後"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "precision": "record"
+          }
+        },
+        {
+          "id": "r2",
+          "text": "項目: 同じ値😀 / 備考: 前\n後",
+          "offset": 0,
+          "highlights": [],
+          "cited": true,
+          "kind": "text",
+          "heading": [],
+          "record": {
+            "source_type": "csv",
+            "location": {
+              "row_start": 3,
+              "row_end": 3,
+              "source_line_start": 3,
+              "source_line_end": 3,
+              "table_row_start": 3,
+              "table_row_end": 3
+            },
+            "parts": [
+              {
+                "kind": "table",
+                "columns": [
+                  "項目",
+                  "備考"
+                ],
+                "rows": [
+                  {
+                    "label": "3",
+                    "cells": [
+                      "同じ値😀",
+                      "前\n後"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "precision": "record"
+          }
+        }
+      ],
+      "previous_cursor": null,
+      "next_cursor": null,
+      "outline": [
+        {
+          "id": "4f53cda18c2baa0c0354bb5f",
+          "title": "文書全体",
+          "parent_id": null,
+          "has_children": false
+        }
+      ],
+      "scope": "paragraph"
+    }
+  },
+  "xlsx": {
+    "input_jsonl": "{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"document\",\"source_type\":\"xlsx\",\"record_type\":\"document\",\"converter\":\"excel_to_jsonl\",\"converter_version\":\"v2\",\"skipped\":[],\"diagnostics\":[]}\n{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"sheet-000\",\"source_type\":\"xlsx\",\"record_type\":\"sheet\",\"sheet_index\":0,\"name\":\"シートA\",\"header_row\":1,\"header_row_count\":1,\"mode\":\"table\",\"columns\":[{\"name\":\"項目\",\"column\":\"A\"}],\"diagnostics\":[]}\n{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"sheet-000-r4\",\"source_type\":\"xlsx\",\"parent_id\":\"sheet-000\",\"location\":{\"row_start\":4,\"row_end\":4,\"cell_range\":\"A4:A4\"},\"section_path\":[],\"record_type\":\"row\",\"fields\":[{\"name\":\"項目\",\"position\":1,\"column\":\"A\",\"value\":\"同じ値\"}]}\n",
+    "element_id": "sheet-000-r4",
+    "window": {
+      "revision": "synthetic-extraction",
+      "anchor_status": "element",
+      "section_path": [
+        "シートA"
+      ],
+      "blocks": [
+        {
+          "id": "sheet-000-r4",
+          "text": "項目: 同じ値",
+          "offset": 0,
+          "highlights": [],
+          "cited": true,
+          "kind": "text",
+          "heading": [
+            "シートA"
+          ],
+          "record": {
+            "source_type": "xlsx",
+            "location": {
+              "sheet_name": "シートA",
+              "row_start": 4,
+              "row_end": 4,
+              "cell_range": "A4:A4"
+            },
+            "parts": [
+              {
+                "kind": "table",
+                "columns": [
+                  "項目"
+                ],
+                "rows": [
+                  {
+                    "label": "4",
+                    "cells": [
+                      "同じ値"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "precision": "record"
+          }
+        }
+      ],
+      "previous_cursor": null,
+      "next_cursor": null,
+      "outline": [
+        {
+          "id": "4f53cda18c2baa0c0354bb5f",
+          "title": "文書全体",
+          "parent_id": null,
+          "has_children": true
+        },
+        {
+          "id": "b944647af461c56c0592255c",
+          "title": "シートA",
+          "parent_id": "4f53cda18c2baa0c0354bb5f",
+          "has_children": false
+        }
+      ],
+      "scope": "paragraph"
+    }
+  },
+  "docx": {
+    "input_jsonl": "{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"doc\",\"source_type\":\"docx\",\"record_type\":\"document\",\"converter\":\"word_to_jsonl\",\"converter_version\":\"v1\",\"location_basis\":\"original\",\"skipped\":[],\"diagnostics\":[]}\n{\"schema\":\"production-ready.structured-records\",\"schema_version\":1,\"record_id\":\"r1\",\"source_type\":\"docx\",\"record_type\":\"passage\",\"section_path\":[],\"location\":{\"body_start\":3,\"body_end\":4,\"paragraph_start\":3,\"paragraph_end\":3,\"table_indices\":[1]},\"blocks\":[{\"kind\":\"paragraph\",\"text\":\"合成段落\",\"body_index\":3,\"paragraph_index\":3},{\"kind\":\"table\",\"body_index\":4,\"table_index\":1,\"header_rows\":1,\"rows\":[[\"項目\"],[\"値\"]],\"row_start\":1,\"row_end\":2}]}\n",
+    "element_id": "r1",
+    "window": {
+      "revision": "synthetic-extraction",
+      "anchor_status": "element",
+      "section_path": [],
+      "blocks": [
+        {
+          "id": "r1",
+          "text": "合成段落\n| 項目 |\n| --- |\n| 値 |",
+          "offset": 0,
+          "highlights": [],
+          "cited": true,
+          "kind": "text",
+          "heading": [],
+          "record": {
+            "source_type": "docx",
+            "location": {
+              "table_row_start": 1,
+              "table_row_end": 2,
+              "word_paragraph_start": 3,
+              "word_paragraph_end": 3,
+              "word_body_start": 3,
+              "word_body_end": 4,
+              "word_table_indices": "1",
+              "word_location_basis": "original"
+            },
+            "parts": [
+              {
+                "kind": "text",
+                "text": "合成段落"
+              },
+              {
+                "kind": "table",
+                "columns": [
+                  "項目"
+                ],
+                "rows": [
+                  {
+                    "label": "2",
+                    "cells": [
+                      "値"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "precision": "record"
+          }
+        }
+      ],
+      "previous_cursor": null,
+      "next_cursor": null,
+      "outline": [
+        {
+          "id": "4f53cda18c2baa0c0354bb5f",
+          "title": "文書全体",
+          "parent_id": null,
+          "has_children": false
+        }
+      ],
+      "scope": "paragraph"
+    }
+  }
+}

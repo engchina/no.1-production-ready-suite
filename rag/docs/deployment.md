@@ -7,7 +7,7 @@
 | ファイル | 内容 | 変数名 |
 |---|---|---|
 | `platform/.env`（雛形 `platform/.env.example`） | 3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース）。システム設定画面の保存先。`model-settings.json` も同じディレクトリに置き、3製品で共有する | `PLATFORM_*` |
-| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など）。「文書解析」画面で保存した解析エンジンと接続は同じディレクトリの `parser-settings.json`（`RAG_PARSER_SETTINGS_FILE`。#1701）に置き、共有の `model-settings.json` には書かない | `RAG_*` |
+| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など）。「文書解析」画面で保存した解析エンジンと接続は同じディレクトリの `parser-settings.json`（`RAG_PARSER_SETTINGS_FILE`。#1701）に、「形式別の既定」画面の保存値は `file-type-defaults.json`（`RAG_FILE_TYPE_DEFAULTS_FILE`。#4732）に置き、共有の `model-settings.json` には書かない | `RAG_*` |
 
 backend は 環境変数 → `platform/.env` → `backend/.env` の順に読む（環境変数が最優先）。共通 `.env` の場所は
 `PLATFORM_ENV_FILE` で上書きできる（既定はリポジトリの `platform/.env`）。旧名（接頭辞のない名前や `HF_TOKEN` /
@@ -145,14 +145,12 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 
 | 形式 | 既定（Docling）のまま | 取り込み方 |
 |---|---|---|
-| PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`） | 解析できる | そのまま「処理を開始」 |
+| PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg`） | 解析できる | そのまま「処理を開始」 |
 | Word・PowerPoint（`.docx` / `.pptx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
 | Excel（`.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Excel→JSONL** を選ぶ（文書解析は構造化レコード JSONL）か、「文書解析」で **Unstructured** を選ぶ。**Office→PDF は Excel を変換しない**（#2470） |
-| 旧形式・マクロ付き・テンプレートの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`・`.dotx` / `.dotm` / `.potx` / `.potm` / `.xltx` / `.xltm`。テンプレートは拡張子・MIME type と原本の package が一致しないと保存しない。#4054） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
-| ODT・RTF（`.odt` / `.rtf`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから解析する）。Unstructured は原本を読まない（pandoc を入れないため。#3351） |
-| テキスト・Markdown・reStructuredText・Org・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.rst` / `.org` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（`.rst` / `.org` はプレーンテキストとして読む。#3351） |
-| メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
-| TIFF・Outlook（`.msg`）・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
+| 旧形式の Office（`.doc` / `.ppt` / `.xls`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
+| テキスト・Markdown・CSV・JSON・HTML（`.txt` / `.md` / `.markdown` / `.csv` / `.json` / `.html` / `.htm`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（XML ツリー JSON の形の `.json` は下の **XML ツリー JSON** を選ぶ） |
+| 上の表にない形式（GIF・WEBP・TIF / TIFF・RST・ORG・TSV・JSONL・NDJSON・XML・XHTML・EML・MSG・マクロ付きとテンプレートの Office・ODT・RTF など） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める。#4730） | 表のいずれかの形式に変換してからアップロードする |
 | HEIC / HEIF の画像（`.heic` / `.heif`）・EPUB（`.epub`） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める） | 画像は JPEG / PNG（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できる）、EPUB は PDF に変換してからアップロードする |
 | 音声・動画（`.mp3` / `.wav` / `.m4a` / `.flac` / `.ogg` / `.aac`・`.mp4` / `.mov` / `.webm` など、`audio/*` / `video/*`） | アップロードできない（画面の選択と API の 415 で止める。#3369） | 内容をテキストに書き起こしてからアップロードする |
 
@@ -184,6 +182,10 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   （`fixed_delimiter`）は、分割符の設定に関係なくこの境界で 1 記録 1 chunk にし（chunk size / overlap で再分割・結合しない）、
   シート・行・セル範囲・列の役割・記録の ID を chunk に残す。chunk の本文・索引・引用にマーカーは残らない。契約に合わない JSONL・
   1 要素の上限（8,000 字）を超える記録・境界の数が記録の数と合わない抽出は、黙って切らずに取込を止める。
+- 分割の区切りの設定は 2 つある（#4733）。どちらも JSON の配列で、優先度順に試す。
+  - `RAG_CHUNK_DELIMITER`（文書レシピの `chunk_delimiter`）: 分割方式 `fixed_delimiter` だけが使う。既定は `<<<JSONL_RECORD_BOUNDARY>>>` だけ。複数のときは 1 番目で必ず切り、その境界はまたがず、2 番目以降は chunk サイズを超えた断片だけに使って chunk サイズまで前からまとめる（overlap なし）。どの分割符でも切れない断片はそのまま 1 chunk にする。
+  - `RAG_CHUNK_SEPARATORS`（環境変数だけ）: `structure_aware`・`recursive_character`・`small_to_big` が本文を切るときに使う。既定は `\n\n`・`\n`・`。`・`！`・`？`・`. `・`! `・`? `・`；`・`;` の順。chunk サイズ（親子階層は子の目標文字数）を超える本文だけを順に切る。`markdown_heading`・`page_level`・`fixed_delimiter`・`fixed_size` は使わない。
+  - 文末の記号（`。！？`・英語の 3 つ・セミコロン 2 つ）は前の文に残す。`RAG_CHUNK_SEPARATORS` は使う 3 方式の `chunk_set_id` と再処理の案内に入るので、変えると（導入時も）それらの文書に再処理の案内が出る。再処理するまで今の chunk のまま。
 
 自前のコードの `docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は #356 で削除した。以前の Docker の環境からの移行は
 「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」を参照する。
@@ -218,6 +220,70 @@ ln -s "${NEW}" "${OLD}"
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#4793 取込の後の文書全体の要約）
+
+取込（分割・埋め込み・索引）が終わって検索に出した後に、文書全体の要約を 1 文書につき 1 回の LLM（OCI Enterprise AI。既定のテキストモデル）で作り、文書の詳細に出す。要約の chunk（`content_kind=document_summary`）を有効な chunk_set に 1 つ入れ、文書全体を問う質問の検索に当てる。既定で有効（`RAG_DOCUMENT_SUMMARY_ENABLED=true`）。
+
+1. backend を更新し、システムテーブルの「作成・更新」（または `system_schema_cli initialize`）を実行する。migration `20261110_4793_document_summaries` が表 `RAG_DOCUMENT_SUMMARIES` を足す（データは消さない）。
+2. 更新の後の取込から、job の成功の後に要約を作る（LLM 1 回と埋め込み 1 回が増える）。失敗・時間切れ（`RAG_DOCUMENT_SUMMARY_TIMEOUT_SECONDS`。既定 120 秒）でも取込は成功のままで、理由は文書の詳細の「文書の要約」に出る。
+3. 更新の前に取り込んだ文書には要約が無い。文書の詳細の「文書の要約」の「要約を作る」（`POST /api/documents/{document_id}/summary`）で、再取込をせずに作れる（原文の chunk・埋め込みは変えない）。件数は次で確かめる。
+
+   ```sql
+   SELECT COUNT(*) FROM RAG_DOCUMENTS d
+    WHERE d.STATUS = 'INDEXED'
+      AND NOT EXISTS (SELECT 1 FROM RAG_DOCUMENT_SUMMARIES s
+                       WHERE s.DOCUMENT_ID = d.DOCUMENT_ID AND s.STATUS = 'READY');
+   ```
+
+4. 言語資源に、要約を根拠にしたときの出典の場所の表示（`answer_labels.document_summary_location`。既定「文書の要約」）を足した。公開済みの言語資源は項目が欠けて契約に合わなくなるので、[言語資源の現在版の契約](./language-pack-current-contract.md)の手順（`language_pack_repair_cli` の dry-run → 許可 → 適用）で、欠けた項目に組み込みの値を足した版を発行する（`ingest_hash` は変わらず、文書の再処理は要らない）。
+5. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
+
+## 既存環境の更新手順（#4811 品質評価の過去の評価の一覧と見え方）
+
+品質評価の「評価の実行」に過去の評価の一覧を足し、`/evaluation?job=<評価 ID>` で別のブラウザーからも保存済みの結果を開けるようにした。評価に使った検索・回答プロファイルを使える利用者が見られる（プロファイルの分からない評価は実行した本人と system_admin だけ）。
+
+1. システムテーブルを更新する（migration `20261110_4811_evaluation_job_visibility`。`rag_evaluation_jobs` に列 `search_answer_profile_id`・`compare_search_answer_profile_id`・`user_uuid` を足す。行は消さない）。既存の行のプロファイルは、保存した結果の実行条件（`result_json` の `run_manifest.request`。比べる方は `comparison` も）とケースごとの結果（`rag_evaluation_job_case_results` の pass ごとの `search_answer_profile_id`）から埋める。どちらにも無い行は NULL のままで、実行した本人と system_admin だけが見られる。利用者の UUID は既存の行には埋めない（一覧の実行者は「—」）。
+2. backend と frontend を更新する。新しい評価は使ったプロファイルと実行した利用者の UUID を必ず記録する。
+3. 権限（`menu.evaluation`）を持ち、評価に使った検索・回答プロファイルを使える利用者は、他の利用者の評価の結果を閲覧し、結果の Excel をダウンロードできるようになる（取り消しは実行した本人と system_admin だけ）。広げたくない評価は、プロファイルの割り当て（権限管理）で絞る。
+
+## 既存環境の更新手順（#4799 抽出項目の条件の自動読み取りと登録ルールの削除）
+
+質問から抽出項目の条件を LLM で読み取る段と、検索・回答プロファイルの登録ルール（回答前の確認・回答への差し込み）を
+削除した。絞り込みは利用者が画面・API・MCP で明示した条件（`filters.extraction_fields`）だけで行い、回答の規則は
+回答プロンプトの「役割と回答の書き方」（`generation.role`）に書く（[回答の規則](./confirmation-answer-rules.md)）。
+用語・同義語（`RAG_RUNTIME_TERMS_*`）・業務ガイドの条件の確認・承認済み FAQ の回答は変えない。
+
+1. **データを削除する migration `20261110_4799_search_answer_profile_runtime_rules` を含むので、承認（CLI の
+   `--allow-destructive`・画面の確認ダイアログ）が要る**（上の「既存環境の更新手順の共通の注意」）。
+   `RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE` の `KIND = 'runtime_knowledge'` の行の `PAYLOAD_JSON` から登録ルール
+   （`$.rules`。確認の質問と選択肢を含む）を消す。用語・同義語（`$.terms`）とほかの種別の行は変えない。
+   ルールの文を残す場合は、適用の前に同列を書き出し、適用の後に「役割と回答の書き方」へ手で写す（読み替えはしない）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+2. `backend/.env` の `RAG_AUTO_FIELD_FILTER_ENABLED`・`RAG_RUNTIME_RULES_CONFIRMATION_ENABLED`・
+   `RAG_RUNTIME_RULES_ANSWER_ENABLED` は読まない（消してよい）。
+3. MCP の出力の版は 43 になる。`rag_search`・`rag_retrieve_evidence` の入力から `skip_clarification` を外し、
+   `conditions` の `rule:` の値・`rag_retrieve_evidence` の `clarifications`・`profile_knowledge` の
+   `rules`・`rules_omitted` を外した。
+
+## 既存環境の更新手順（#4739 解析エンジン MinerU の対応の削除）
+
+使っていなかった解析エンジン MinerU の対応（接続設定・ライセンスの確認・画面のカード）を削除した。保存値の読み替えと migration は持たない（未リリース）。
+
+1. 更新の前に `parser-settings.json` を確かめる。`adapter_backend` が `mineru` のままだと、`RAG_PARSER_SETTINGS_FILE` の読み込みが検証のエラーになり、backend が起動しない。`docling` などへ書き換えてから更新する。ファイルに残っている `mineru_*` の項目は読み捨て、次の保存で消える。
+2. `file-type-defaults.json` の `parser_adapter_backend` が `mineru` の行は、読み込みで捨てる（警告 `rag_file_type_defaults_invalid_row`。全体の既定に従う）。
+3. `backend/.env` の `RAG_PARSER_MINERU_*` は読まない（消してよい）。`RAG_PARSER_ADAPTER_BACKEND=mineru` は起動時の検証のエラーになる。
+4. `RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG` に `mineru` が残るレシピは読み込みで検証のエラーになるので、「処理レシピ」で解析エンジンを選び直す（または該当行を直す）。件数は次で確かめる。
+
+   ```sql
+   SELECT COUNT(*) FROM RAG_DOCUMENT_RECIPES
+    WHERE JSON_SERIALIZE(PROCESSING_CONFIG RETURNING CLOB) LIKE '%"mineru"%'
+       OR JSON_EXISTS(PROCESSING_CONFIG, '$.parser_mineru_enabled');
+   ```
 
 ## 既存環境の更新手順（#4549 文書構造索引の構築器の版の更新）
 
@@ -362,20 +428,6 @@ PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン D
 
   使っていなかった venv（`services/preprocess/pdf_to_page_images/.venv`）が残っていれば消してよい。
 
-## 既存環境の更新手順（#3359 MinerU の解析の連携を戻し、準備中（ロードマップ）にする）
-
-#3345 で外した外部の GPU の解析エンジン MinerU の連携（client・設定 `RAG_PARSER_MINERU_*`）を戻し、OCI Document Understanding
-（#3374）と同じ準備中（ロードマップ）にした（利用者の判断。2026-10-26）。使用エンジン・処理レシピでは灰色で選べず、画面には
-ライセンスの短い案内と公式のリンクを出す。準備中でなくなったときのために、system_admin だけが画面で確かめられるライセンスの
-確認（`.env` では書けない。下の「許可（ライセンス）の確認」）も実装した。表の変更（migration）は無い。
-
-- 使用エンジンの並びは Docling → Unstructured → 構造化レコード JSONL → XML ツリー JSON → Dots.OCR → MinerU →
-  OCI Document Understanding（処理レシピの選択肢も同じ）。
-- MinerU を使わない環境は何もしなくてよい。
-- `parser-settings.json`・処理レシピに MinerU が残っていれば、読み込みで既定（全体は Docling、レシピは全体の継承）に寄せる
-  （ログに出し、次の保存で消える）。`backend/.env` の `RAG_PARSER_ADAPTER_BACKEND=mineru` は起動時の検証のエラーになるので、
-  更新の前に別の解析エンジンにする。
-
 ## 既存環境の更新手順（#3226 処理の経過を共通の span の表に書く）
 
 処理の経過（チャット・RAG 検索・実行の詳細）の span を、3 製品共通の span の表（`PLATFORM_TRACE_SPANS`）に書いて読む
@@ -443,6 +495,8 @@ uv run python -m rag_engine.knowledge.answer_migration /path/to/answer.json --ap
    ```
 
 `init_script.sh` は承認を付けずに `initialize` を実行する。データを削除する migration が未適用なら、WARNING を出して配備を続ける（backend は起動する）ので、上の手順で書き出してから適用する。
+
+データを削除する migration を当てた DB では、消した表・列を読む前の commit へコードだけを戻すことはできない。配備の後の確認が言語資源の不適合で NG になったときも、コードを戻さず [修復の手順](./language-pack-current-contract.md) で直す。
 
 ### 書き出す前に消えたデータを、DB のバックアップから取り出す
 
@@ -530,7 +584,7 @@ migration は値の書き換えだけで、データを消さない（承認は�
 4. 確かめる: 文書レシピに旧名が残っていないこと（`SELECT COUNT(*) FROM rag_document_recipes WHERE JSON_SERIALIZE(processing_config)
    LIKE '%_to_json"%'` が 0）と、CSV→JSONL・Excel→JSONL のレシピの解析エンジンが「構造化レコード JSONL」になっていること。
    global の分割符を `\n\n` 以外の値で保存していて、固定分割を選んだレシピがその値を継承していた場合は、移行で `\n\n` が明示される。
-   そのレシピの「固定分割符文字列」を保存していた値に直してから再処理する。
+   そのレシピの「分割符」を保存していた値に直してから再処理する。
 
 ## 既存環境の更新手順（#2452 文書の削除の後始末の再試行）
 
@@ -639,29 +693,6 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERVICE_ENABLED` / `RAG_CHUNKING_SERVICE_URL` は
 使わないため、設定ファイルに残っていれば削除する。独自に分割のサービスを起動していた環境では、そのプロセスも停止する。
 
-## 既存環境の更新手順（#4373 不足要求の追加検索の既定 OFF）
-
-「根拠の無い要求を探し直す」は、雛形・backend・独立した回答エンジンで既定を無効にする。
-`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED`（独立したエンジンでは `RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL`）を
-指定していない環境は、更新後のプロセスの再起動から無効になる。既存の環境変数や設定画面で保存した明示値は変更しない。
-有効にしたい環境は、検索方法の「回答の検索と生成」で有効にして保存するか、環境変数に `true` を指定する。
-以下の #4114 / #2850 は過去の変更の記録で、現在の既定はこの節に従う。
-
-## 既存環境の更新手順（#4114 根拠の無い要求の探し直しの既定）
-
-`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` の既定を有効に戻した（#2850 の無効化の後、#3675 で生成が不足を明示したときだけ動く形に変わったため）。
-指定していない環境は、更新後の backend・取込 worker の再起動から有効になる。不足の無い回答では検索も LLM も増えない。不足があった回答では、
-違う検索文を作れない要求ごとに質問の拡張の LLM を 1 回呼び、検索と rerank を 1 回行い、新しい根拠があれば生成を 1 回作り直す。
-明示した値は維持する。無効にしたい環境は `false` を指定するか、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で無効にして保存する。
-
-## 既存環境の更新手順（#2850 根拠の無い要求の再検索の既定）
-
-「根拠の無い要求を探し直す」の既定を無効にした。`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` を
-指定していない環境は、更新後の backend・取込 worker の再起動から無効になる。
-既存の環境変数に明示した値は維持する。保存済みの有効値も無効にしたい場合は、
-取込・検索・回答設定 › 検索方法の「回答の検索と生成」でこの項目を無効にして保存する
-（この項目は全体設定だけで決め、検索・回答プロファイルに保存された同名の値は #3053 から適用しない）。
-
 ## 既存環境の更新手順（#2277 見出しの階層の推定（AI））
 
 任意の取込の段「見出しの階層の推定（AI）」を足した。既定は無効で、既定のままなら取込・抽出結果・抽出の使い回しの鍵は
@@ -670,7 +701,7 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 - 対象: しおりの深さを当てた見出しが無く、見出しが `RAG_HEADING_LEVEL_INFERENCE_MIN_HEADINGS`（既定 3）以上
   `RAG_HEADING_LEVEL_INFERENCE_MAX_HEADINGS`（既定 300）以下で、番号の体系（「1.」「1.2」「第 1 章」など）で深さを
   決められない見出しの割合が `RAG_HEADING_LEVEL_INFERENCE_UNRESOLVED_RATIO`（既定 0.5）以上の、Docling の解析結果
-  （要素の `section_path` を `layout_records` から作る結果）。MinerU など、ほかの解析エンジンの結果には当てない。
+  （要素の `section_path` を `layout_records` から作る結果）。ほかの解析エンジンの結果には当てない。
 - 段ごとの解析をまとめ、文書全体の整理（#2001）を当てた後の原本全体に 1 回だけ当てる（章節の木・項目抽出・chunk より前）。
   見出しの一覧を一括で送り、通常のモデル呼び出しは対象文書ごとに 1 回。一時的な通信障害や流量制限などでは
   共通の実行器が再試行するため、実際の呼び出しは複数回になる場合がある。本文全体を送ったり、見出しを分割して送ったりはしない。
@@ -689,12 +720,12 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 
 ## 既存環境の更新手順（#2273 ページの境目の段落の続きの判定に行の位置を足す）
 
-ページの境目で切れた段落の続きの判定（文書全体の整理。#2001。Docling と MinerU の段の境目）を次のように変えた。表の続きの
+ページの境目で切れた段落の続きの判定（文書全体の整理。#2001。Docling の段の境目）を次のように変えた。表の続きの
 判定・API・表の変更は無い。
 
 - 前のページの末尾・次のページの先頭の図・表・caption・脚注・ページの定型を読み飛ばして、段落の続きの元・続きを探す
   （ページ下端の図・表の後ろに続く段落もつなぐ）。見出し・数式などほかの record で探すのをやめる。
-- 文の終わりの規則（言語資源）に加えて、PDF の文字の層の行の位置で確かめる（MinerU の段落の続きの規則と同じ考え方）。
+- 文の終わりの規則（言語資源）に加えて、PDF の文字の層の行の位置で確かめる。
   - 前の段落が 2 行以上なら、最後の行の右端が段落の右端まで届く（差が行の高さ × `RAG_PAGE_CONTINUATION_RIGHT_EDGE_TOLERANCE`
     未満。既定 1.0）。
   - 次の段落が 2 行以上なら、最初の行に字下げが無い（差が行の高さ × `RAG_PAGE_CONTINUATION_INDENT_TOLERANCE` 未満。既定 0.5）。
@@ -708,26 +739,6 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 
 1. 必要なら `rag/backend/.env` に `RAG_PAGE_CONTINUATION_*`（雛形 `rag/backend/.env.example`）を設定し、backend・取込 worker を
    再起動する（既定のままなら設定は要らない）。
-
-## 既存環境の更新手順（#2266 MinerU の解析結果のページの境目の続き）
-
-外部の解析エンジン MinerU（任意）で取り込んだ PDF も、文書全体の整理（#2001。下の節）の対象にした。設定・API・表の変更は無い。
-
-- MinerU が付ける続きの印（Middle JSON の `continues_prev`。ページ・段・図をまたぐ本文・リスト、ページをまたぐ表）を、
-  続きの元の record の ID（`raw.continues_record_id`）に写し、親子階層（small-to-big）の分割で同じ子 chunk に入れる。表の続き
-  には Docling と同じく前の表の列見出しの行を付ける。続きの元は MinerU と同じ規則で探す（本文は図・表・脚注・ページの定型を
-  読み飛ばし、見出しで止める。表は前のページの最後の表）。
-- MinerU も 11 ページ以上の PDF は段（既定 10 ページ）ごとに解析する（段ごとの再開・進捗を保つ）。段の境目は MinerU が両方の
-  ページを見ていないので、Docling と同じ規則（前のページの本文が文の終わりで終わらず、次のページの本文が項目の記号・番号で
-  始まらない）で続きを判定する。MinerU が両方のページを見た境目は MinerU の判定のまま（印が無ければつながない）。
-- しおりの見出しの深さ・要素の `section_path` の作り直しは今までどおり Docling だけ。
-- 親子階層の分割は、続きの段落の間に図・表があっても段落を閉じず（図・表は単独の子 chunk）、前のページの下端の脚注が間に
-  あっても続きを同じ子 chunk に入れる（Docling の結果も同じ）。
-- 表の `cell_merge`（MinerU のサーバー側の LLM の後処理が付けるセルの続き。この repo では有効にしない）は `raw.cell_merge` に
-  残すだけで、セルはつながない。
-- 既に取り込んだ文書の抽出結果・chunk は変わらない（再取込したときに変わる）。
-
-1. backend・取込 worker を再起動する（parser のサービス・MinerU の設定は変えていない）。
 
 ## 既存環境の更新手順（#2131 文書の分類の一覧の管理）
 
@@ -1080,13 +1091,13 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - 問題が無ければ Docker の資源を消してよい（任意）: `docker volume ls -q | grep '^production-ready-rag_'`、
   `docker images --format '{{.Repository}}' | grep '^production-ready-rag-'` を確認して削除し、Docker 自体が不要なら
   `sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` で外す。
-- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`・`backend/parser-settings.json`）は host のファイルなので、そのまま引き継がれる。
+- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`・`backend/parser-settings.json`・`backend/file-type-defaults.json`）は host のファイルなので、そのまま引き継がれる。
 
 ### ローカル（Docker Compose で前処理 / parser を動かしていた環境）
 
 1. 以前のコンテナを止めて消す（port 18010〜18038 を空ける）。#310 より前の project 名（旧 repo の
    `no1-production-ready-rag`、monorepo の `rag/` で compose を使った場合の `rag`）のコンテナも同じく消す。
-   label で絞るので、別 project（例: 外部の MinerU API）のコンテナは消えない。
+   label で絞るので、別 project のコンテナは消えない。
 
    ```bash
    for project in production-ready-rag no1-production-ready-rag rag; do
@@ -1189,7 +1200,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
   - 「回答エンジン」を継承していた検索・回答プロファイルと、「標準」を明示していた検索・回答プロファイルの RAG 検索・チャット。
   - 検索・回答プロファイルを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
   - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
-- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、質問の言い換え・分解 = 自動ルーティング、回答の生成方式 = CRAG のとき、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。既定は質問の言い換え・分解 = 単純検索、回答の生成方式 = 標準 RAG（#2747）で、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で変える（これらは全体設定だけで決め、検索・回答プロファイルでは上書きしない。#3053）。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、質問の言い換え・分解 = 自動ルーティング、回答の生成方式 = CRAG のとき、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。既定は質問の言い換え・分解 = 単純検索、回答の生成方式 = 標準 RAG（#2747）で、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で変える（これらは全体設定だけで決め、検索・回答プロファイルでは上書きしない。#3053）。
 - 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
 - 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、取込・検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。当時は回答の上書きを検索・回答プロファイルの「質問の言い換え・分解」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行ったが、これらは #3053 で全体設定だけになった（検索・回答プロファイルの保存値は適用しない）。安全チェックは今までどおり質問と回答の両方に適用する。
 
@@ -1342,9 +1353,9 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
 1. 更新後の RAG は `model-settings.json` の `parser_adapters` を読まない（移行・読み替えはしない。残っていても害は無い）。
    `parser-settings.json` が無いうちは `backend/.env` の `RAG_PARSER_*` と既定値（Docling）で動く。
-2. 画面で既定以外の解析エンジン（Unstructured・MinerU・Dots.OCR など）や接続を保存していた環境は、更新後に
+2. 画面で既定以外の解析エンジン（Unstructured・Dots.OCR など）や接続を保存していた環境は、更新後に
    「取込・検索・回答設定 › 文書解析」で選び直して保存する（`parser-settings.json` が作られる）。parser の API key は今までどおり
-   `backend/.env`（`RAG_PARSER_MINERU_API_KEY` など）にあるので入れ直さなくてよい。
+   `backend/.env`（`RAG_PARSER_DOTS_OCR_API_KEY` など）にあるので入れ直さなくてよい。
 3. Compute では `init_script.sh` が `parser-settings.json`（と `.lock`）の所有者をサービスのユーザーへ戻す。SELinux の
    context は repository の `usr_t` を受け継ぐので追加の設定は無い。`backend/.env` と同じく、Compute の中だけにあるファイル
    なので、作り直す前に残す場合は写しておく。
@@ -1374,12 +1385,10 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 1. 先に #1438 の手順（下の節）でシステムテーブルを更新する。対応の表が無い環境では、章節を読めずに広げない（回答は
    続ける。backend のログに `section outline load failed`）。
 2. backend を再起動する。プロファイルを使わない検索と、拡張を選んでいない（`query.section_expansion_enabled` が
-   未指定 / `null`）プロファイルの検索は、根拠が足りないと判定したときに章節を広げる。1 段ごとに AI の呼び出し
-   （CRAG の判定）が 1 回増え、回答の時間が延びる。上限は段 4・根拠の入力はモデルの入力の上限の 50%・回答の開始から
+   未指定 / `null`）プロファイルの検索は、読む範囲まで章節を広げる。上限は段 4・根拠の入力はモデルの入力の上限の 50%・回答の開始から
    600 秒（`RAG_ANSWER_TIMEOUT_SECONDS` が短ければその上限）で、プロファイルごとに変えられる。
 3. 拡張を使わないプロファイルは「検索・回答設定」で「当たった根拠の章節から親の章節へ広げる」を off にして保存する
    （`false` で保存される）。環境変数は持たない（`backend/.env` に書いても読まない）。
-4. 回答の生成方式が標準 RAG（`RAG_ANSWER_FLOW=standard_rag`）のときは効かない。
 
 ## 既存環境の更新手順（#2002 取込の AI の呼び出しの上限つきの並行と、エラーの種類ごとの扱い）
 
@@ -1404,7 +1413,7 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
 文書の詳細の「工程ごとの実行状況」は、抽出の行に「抽出: N / M ページ完了」（段が終わるたびに進む）・段の帯・図・表の説明
 （Vision）の bar を出し、「抽出セグメント」の一覧は既定で畳む（失敗した段があるときだけ開く）。表の変更（migration）は無い。
 
-- まとめた後の文書全体の整理（Docling の解析結果。原本全体を 1 回で解析した結果にも同じ規則で当てる。MinerU は #2266 の節）:
+- まとめた後の文書全体の整理（Docling の解析結果。原本全体を 1 回で解析した結果にも同じ規則で当てる）:
   - 見出しの階層: PDF のしおり（outline）の 6 割以上が本文の見出しに当たるときは、当たった見出しの深さをしおりの深さに
     する（chunk の `section_path` と章節の木の両方）。当たらないしおり（スライドの区分だけなど）は使わない。
   - ページの境目で切れた段落・リスト（前のページの本文が文の終わりで終わらず、次のページの本文が項目の記号・番号で
@@ -1429,7 +1438,7 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
 1. #1999 のシステムテーブルの更新（`progress_json` の列）が済んでいることを確かめる（停滞の判定はこの列を読む）。
 2. Compute の `rag/backend/.env` に `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（旧既定の 1200 など）を書いていれば消すか、
    `86400` に書き換える（書いた値が優先され、旧い短い上限のまま止まる）。既定のままなら書かなくてよい。
-3. 停滞の時間を変えるなら `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` を書く。解析サービス・MinerU・Document Understanding・
+3. 停滞の時間を変えるなら `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` を書く。解析サービス・Document Understanding・
    Vision の LLM の timeout（再試行を含む）より短い値は起動時の検証で止まる（エラーに直す設定の名前が出る）。
 4. backend と取込 worker を再起動する（`sudo systemctl restart production-ready-rag-backend production-ready-rag-ingestion-worker`）。実行中の job は worker の停止で
    `QUEUED` に戻り、再起動の後に新しい止め方で最初から実行する。前に 1200 秒で失敗した文書は、文書の詳細から再実行する。
@@ -1468,7 +1477,7 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
    `clarification_json`（CLOB）を無ければ足す。データを削除しないので承認は要らない）。**更新するまで、チャットの送信は
    列が無くて失敗する**ので、backend の更新と同時に行う。
 2. backend を再起動する。検索・回答プロファイルの設定「曖昧な質問の扱い」は既定が「確認してから回答する」で、今までと同じに
-   ルールの確認・業務ガイドの条件の確認を出す。
+   業務ガイドの条件の確認を出す（登録ルールの確認は #4799 で削除）。
 
 ## 既存環境の更新手順（#1438 章節と chunk の対応・MCP の章節の読み取り）
 
@@ -1533,23 +1542,6 @@ schema の変更は無い。表示の本文・embedding は変えない。
    uv run python -m app.rag.text_search_index_cli normalize --dry-run
    uv run python -m app.rag.text_search_index_cli normalize
    ```
-
-## 既存環境の更新手順（#1329 MinerU 4.0 の V1 API）
-
-文書解析の MinerU（外部で運用する GPU の解析エンジン）の接続を、MinerU 4.x の V1 API に切り替えた。MinerU 4.0 は
-3.x までの `POST /file_parse` を削除したため、3.x 向けのままでは 4.x の API サーバーで解析できない。データの移行（migration）は不要。
-
-1. MinerU の API サーバーを 4.x にする（`mineru-kit api-server`。V1 の `/v1/health`・`/v1/uploads`・`/v1/parse/jobs`・`/v1/files`）。
-   `RAG_PARSER_MINERU_API_HOST` は今までどおり base URL（例: `https://parser.example.com`）を入れる。3.x のサーバーには接続できない（互換は持たない）。
-2. `RAG_PARSER_MINERU_LANGUAGE` は使わなくなった（V1 の request に言語の指定は無く、API サーバーの起動時の `--language` で決まる）。
-   `backend/.env` に残っていても読まない。代わりに解析の品質を `RAG_PARSER_MINERU_TIER`（`flash` / `basic` / `standard` / `advanced`。既定 `basic`）で選ぶ。
-   3.x の `backend=pipeline` は `basic`、`hybrid-*` は `standard`、`vlm-*` は `advanced` に当たる。PDF・画像以外（Office など）は、MinerU が
-   `flash` だけを持つため `flash` で解析する。parse job を待つ上限は `RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`（既定 1800 秒。超えたら job を取り消し、
-   warning `mineru_external_timeout` を残して縮退する）。
-3. 解析の結果の識別子（extraction recipe）の材料を言語から tier に変えたため、MinerU で解析した既存の文書は、文書の取込設定に
-   parser のずれ（再処理が必要）と表示される。今の索引はそのまま検索対象に残る。MinerU 4.x で読み直すときは、その文書を再解析する。
-4. 解析の結果は Middle JSON（schema 2.0）から読む。見出しの block は見出しとして読む（3.x の content list では本文だった）ため、
-   再解析した文書は節の見出しの列（`section_path`）が付く。頁のヘッダー・フッター・頁番号は本文に入れない。
 
 ## 既存環境の更新手順（#1402 実体の 1 段の拡張を既定 on にする）
 
@@ -1992,10 +1984,11 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` / `_SECONDARY_PROJECT_OCID` / `_SECONDARY_API_KEY`: OCI Enterprise AI のセカンダリ接続（#533。任意。設定するときは 3 つとも必須。#542）。登録モデルごとに接続を選び、回答はテキストのモデルの接続、VLM 抽出・図の読み取りは既定の Vision モデルの接続で呼ぶ。詳細は `platform/README.md` の「OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続」。
 - `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_ENDPOINT` / `_TERTIARY_PROJECT_OCID` / `_TERTIARY_API_KEY`: ターシャリ接続（#786。任意）。OpenAI / OpenAI 互換 API 向けで、設定するときは Endpoint URL と API key が必須、Project OCID は OCI Enterprise AI に使うときだけ入れる。呼び出しは Responses API（`/responses`）。
 - `PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
+- 回答フローの LLM の再試行は、1 回の呼び出しにつき最大 5 回（初回を含め最大 6 回）。通信・stream の失敗、不正な構造化出力、出力の上限での送り直しは内外のループで同じ枠を共有する。すべての送り直しで、1 / 2 / 4 / 8 / 16 秒を上限とする full jitter（0〜上限の乱数）で待つ。`Retry-After` があれば指定された待ちを下限にして jitter を加え、回答全体の期限内で待てない場合や取消後は送信しない。構造化したエラーが認証・権限・要求の誤りや quota の使い切りを示すときは、stream の失敗でも同じ要求を送り直さない。Embedding の通信再試行も最大 5 回、Rerank の既定も最大 5 回で、同じ jitter の待ちを使う。Rerank の明示設定は維持する。
 - 出力の上限（Responses payload の `max_output_tokens`。#1719）: 共通の LLM / VLM の出力の上限の環境変数は持たず、「システム設定 › モデル」の登録モデルごとの「出力の上限（tokens）」（`max_output_tokens`。既定 32768。入力の上限以下）を使う。送る値は platform の `enterprise_ai_output_token_budget`（モデルの出力の上限と入力の上限の小さい方）で、テキストの呼び出し（回答・要約など）はテキストのモデル、VLM 抽出・図の読み取りは Vision のモデルの値。回答フロー（rag_engine）は回答の上限（`ANSWER_MAX_TOKENS`。既定 32768）とモデルの値の小さい方を送り、出力の上限で未完了なら 2 倍（モデルの値まで）にして 1 回、それでも未完了（広げられないときを含む）なら推論の量を 1 段下げて（high → medium → low。low は下げない）1 回だけ送り直す（#2023。未完了のたびに log の `llm_incomplete_response` に理由・上限・推論の量・使った token を WARNING で残す）。送り直しても未完了なら、画面（RAG 検索・チャット）・MCP・品質評価に「回答が長くなり出力の上限に達して途中で止まりました」の種類の文と直し方（出力の上限を大きくする・推論の量を下げる・質問を分ける）を返し、trace_id・エラー種別・工程・理由・出力の状況は「詳細」に出す。`status=incomplete` / `reason=max_output_tokens` は、理由・出力の上限・使った出力（うち推論）の token を添えた取込エラー / 回答の失敗として利用者に返す。推論のあるモデルは推論の token も出力の上限に数える。
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS` / `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`: PDF をページの段（既定 10 ページ。最大 300 段）に分け、段ごとに解析サービス（Docling・Unstructured・外部の解析 API）を呼ぶ（#2001。2 段以上の PDF だけ。OCI の解析サービス〔Document Understanding・Vision〕と PDF 以外は原本全体を 1 回で解析する）。段ごとに 待機中 → 処理中 → 完了 / 失敗 と抽出結果（段の artifact。`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/segments/<段>.json`）を残し、失敗・中断・再起動の後の再実行は、成功した段の artifact（段の PDF と解析・前処理の設定の鍵と、解析の出力の版〔`EXTRACTION_ARTIFACT_SCHEMA_VERSION`〕が同じもの）を使って残りの段だけを解析する（解析の出力を変える修正の配備の後は、解析からの再処理で段を解析し直す。#4577）。段が失敗したら、始めていない段は「取消済み」にして止める。すべての段が終わったら、ページの順に 1 つの抽出結果にまとめ（ページ番号・ID・`layout_records` を原本のページにそろえ、Docling の見出しの階層は原本全体の record から作り直す）、文書全体を整える（PDF のしおりに当たる見出しの深さ・ページの境目で切れた段落・リスト・表の続き。下の #2001 の節）。段を同時に解析する数は `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`（1〜4。既定 1 = 順番）。上げるときは解析サービスの CPU・メモリを確かめる。
 - `RAG_PAGE_CONTINUATION_GEOMETRY_ENABLED` / `RAG_PAGE_CONTINUATION_RIGHT_EDGE_TOLERANCE` / `RAG_PAGE_CONTINUATION_INDENT_TOLERANCE` / `RAG_PAGE_CONTINUATION_WIDTH_DIFFERENCE_RATIO`: ページの境目の段落の続きの判定で、PDF の文字の層の行の位置（前の段落の最後の行が右端まで届く・次の段落の最初の行に字下げが無い・幅が近い）も確かめる（#2273。既定 true / 1.0 / 0.5 / 1.0。右端と字下げは行の高さの倍数、幅の差は狭いほうの幅の倍数）。文字の層の無いページ・縦書き・回転したページは文の終わりの規則だけで判定する。
-- `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured` → `mineru`、画像は `unstructured` → `docling` → `dots_ocr` → `mineru`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `mineru` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle AI Database、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
+- `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured`、画像は `unstructured` → `docling` → `dots_ocr`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle AI Database、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
 - `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling` / `unstructured[pdf,image,docx,pptx,xlsx,csv,tsv,md]`。pi-heif・pandoc は入れない。#3351)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `python -m app.rag.parser_adapter_contract_cli` で確認し（画面と API からは #492 で削除）、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / text の routing が CI artifact として監査できる。音声・動画はアップロードで止めるため(#3369)、routing の source kind に持たない。
   - Unstructured adapter は対応する runtime では `include_page_breaks=true`、PDF/画像では `strategy=auto` と `infer_table_structure=true` を要求する。adapter 関数の signature を見て未対応 kwargs は渡さないため、古い Unstructured API でも不要な fallback を増やさない。
   - 外部 adapter の block metadata に `parent_id` / `section_path` / heading level が含まれる場合は `DocumentElement.parent_id` / `section_path` へ再マップする。metadata が不足する場合も title block の reading order から section stack を補完し、citation / chunk lineage を保持する。
@@ -2004,19 +1997,14 @@ uv run python -m app.rag.file_processing_staging_cli \
   - 外部 adapter の `Formula` / `Equation` block は `latex` / `formula` / `mathml` などの metadata から本文を復元し、`DocumentElement(content_kind=equation)` と chunk metadata の `equation_format` に残す。公式 block が `text` を持たない場合でも検索・citation から落とさない。
   - 外部 adapter の bbox は `x/y/width/height`、`x/y/w/h`、`left/top/right/bottom`、`xmin/ymin/xmax/ymax` などを `DocumentElement.bbox` / `ExtractionTableCell.bbox` / `ExtractionAsset.bbox` の `xyxy` へ正規化し、要素 chunk では `bbox_coordinate_mode` / `bbox_unit` も metadata に残す。preview overlay / citation jump / table cell review は adapter 固有の座標 key に依存しない。
   - 外部 adapter の `Image` / `Picture` / `Figure` block は `DocumentElement(content_kind=figure)` だけでなく `ExtractionAsset` にも昇格し、chunk metadata へ `asset_id` を残す。figure citation から asset export / preview audit へ辿れるようにする。
-- `RAG_PARSER_MINERU_API_HOST` / `RAG_PARSER_MINERU_API_KEY` / `RAG_PARSER_MINERU_TIER` / `RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`、`RAG_PARSER_DOTS_OCR_*`: 外部で運用する GPU の解析エンジン（任意。既定は使わない。この stack は配備しない）。MinerU は 4.x の V1 API（upload → parse job → Middle JSON の取得。#1329）、Dots.OCR は OpenAI 互換 API を backend が直接呼ぶ。MinerU の API key は同じ origin の URL にだけ付け、別 origin の upload URL・302 の転送先には送らない。
+- `RAG_PARSER_DOTS_OCR_*`: 外部で運用する GPU の解析エンジン（任意。既定は使わない。この stack は配備しない）。Dots.OCR は OpenAI 互換 API を backend が直接呼ぶ。
   - **許可（ライセンス）の確認（#1329）**: 有効にする前に、利用者側の法務で次を確かめる。この repo は解析エンジンを同梱・配備せず、HTTP で呼ぶだけで、許可の義務は解析エンジンを運用する側に掛かる。
 
     | 解析エンジン | コードの許可 | モデルの重みの許可（Hugging Face の model card、2026-10-09 確認） |
     |---|---|---|
     | Docling（既定） | MIT | — |
     | Dots.OCR | MIT（GitHub は `studio-dots-ai/dots.ocr` へ移動） | MIT（`dots-studio/dots.ocr`、後継の `dots-studio/dots.mocr`。旧名 `rednote-hilab/*` は転送される） |
-    | MinerU | MinerU Open Source License（Apache-2.0 に追加の条件） | `opendatalab/MinerU2.5-Pro-2605-1.2B` は apache-2.0。旧版の `MinerU2.5-2509-1.2B` は agpl-3.0 なので使わない |
 
-    MinerU の追加の条件（MinerU の [`LICENSE.md`](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md)。公式のリポジトリは <https://github.com/opendatalab/MinerU>）: (1) 利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超える場合は、MinerU Team から別途の商用ライセンスが要る。(2) MinerU を使って第三者にオンラインサービスを提供する場合は、画面か公開ドキュメントの目立つ場所に MinerU を使っていると明示する。(3) (1)・(2) を満たさないと、許可は通知なしに自動で終わる。企業の利用者は (1) の基準を超えやすいので、商用ライセンスの要否を先に確かめる。**利用の前に、ライセンスの全文を確認する**（ここは主な条件の抜粋で、法的な助言ではない）。
-  - **準備中（ロードマップ。#3359）**: MinerU は OCI Document Understanding（#3374）と同じく準備中で、使用エンジン・処理レシピでは灰色で選べない（API・`RAG_PARSER_ADAPTER_BACKEND`・処理レシピの保存は検証のエラー、保存済みの値は既定へ寄せ、取込では呼ばない）。下の利用の前の確認は、準備中でなくなったときに効く（実装とテストは残す）。画面の MinerU のカードの下には、ライセンスの短い案内と公式のリポジトリ・`LICENSE.md` へのリンクを出す。
-  - **利用の前の確認（#3359）**: システム管理者（system_admin）が「取込・検索・回答設定 › 文書解析」に出る MinerU のライセンスの主な条件と公式のリンクを読み、「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU を使用エンジンにも処理レシピの解析エンジンにも選べない（backend も `PATCH /api/settings/parser-adapters`・`PUT /api/documents/{document_id}/recipes/{recipe_id}` を 422 で拒否し、取込でも MinerU を呼ばずに止める）。確認した人（表示名）と日時は `parser-settings.json` の `mineru_license_acknowledged_by` / `mineru_license_acknowledged_at` に保存する（DB の表は使わない）。確認は組織としての判断なので、確認・取り消しは system_admin だけができ（ほかの利用者が変えようとすると 403。checkbox は理由を添えて操作できない）、環境変数・`.env` では書けない（同じ名前の変数を置いても効かない）。確認の後は、文書解析の設定の権限を持つ利用者も MinerU を選べる。使用エンジンが MinerU の間は確認を外せない。#3345 で一度外した MinerU の連携は #3359 で戻した（外部の HTTP API だけを呼び、`rag_parser_core` の中で MinerU を import・実行しない）。
-  - MinerU の公式の remote 解析（mineru.net）は、文書が環境の外へ出るため推奨しない（接続先は自前で運用する API サーバーにする）。自前の API サーバーでも、MinerU の文書ライブラリ（`mineru` コマンドの doclib）の利用状況の送信は既定で有効なので、使う場合は `mineru telemetry disable` で止める。
 - `GET /api/documents/{document_id}/recipes/{recipe_id}/extraction-export?format=json|markdown|html|chunks`: レシピの保存済み extraction を JSON / Markdown / escaped HTML / chunk view として返す API。`chunks` は embedding を含めず、HTML は原本 HTML を実行せず escaped review source として返す。`download=true` を付けると同じ本文を `Content-Disposition: attachment`（ファイル名は `<文書名>_レシピ<N>.md|.html|.json`、chunk は `<文書名>_レシピ<N>_chunks.json`）で返す（#561）。文書の詳細の「抽出エクスポート」（Markdown / HTML / JSON のダウンロード・コピー）と「Chunk / Citation」（chunk の JSON のダウンロード）、CI artifact、parser adapter 比較の確認に使う。原本再解析や外部 parser の直接呼び出しは行わない。
   - `tables[].cells` がある表は safe `<table>` として再構成し、`data-table-id` / row / col / bbox lineage を保持する。cells がない旧 extraction は escaped `<pre>` に fallback する。
   - `assets[]` は Markdown / HTML 監査 view に `asset_id` / kind / page / bbox / alt text として表示する。HTML export では asset 実体や Object Storage path を埋め込まず、escaped text と `data-asset-id` / `data-kind` / `data-page` / `data-bbox` のみを返す。
@@ -2040,12 +2028,11 @@ uv run python -m app.rag.file_processing_staging_cli \
     claim で増やした attempt は戻し（停止は job の失敗ではない）、文書・レシピの status は stale の回復と同じく工程の前へ戻す（レシピの job はレシピ行だけ）。子の runner（`app.rag.ingestion_job_runner`）も SIGTERM で job の実行を取り消し、後始末をして終了コード 143 で終わる。
   - API プロセス内の worker（`INPROCESS_WORKER_ENABLED=true`。ローカル開発の `uvicorn --reload` など）は停止を待たせないため grace 0 で、実行中の job の子をすぐ止めて `QUEUED` に戻す。
   - systemd の worker unit は `KillMode=mixed`（SIGTERM は main process だけに送り、子は worker が止める）で、`TimeoutStopSec`（90 秒）を grace（unit で 60 秒に固定）+ 子の停止待ち 10 秒 + 戻す DB の処理より長くしている。grace を変えるときは `init_script.sh` の `WORKER_SHUTDOWN_GRACE_SECONDS` / `WORKER_TIMEOUT_STOP_SEC` を一緒に変える（テストで照合する）。
-- `RAG_EVALUATION_CONCURRENCY`（品質評価で同時に実行するケースの数の上限。既定 2、1〜8。#2004）: ケースを評価ケースの順に始め、結果はケースの順のまま返す（1 ケースの往復と判定は順に行う）。回答・判定が 429（流量の制限）で失敗したら、`Retry-After` を守って評価の全体で待ち、並行の数を半分（最小 1）にして送り直す（3 回まで。送り直しは新しい trace id で記録する）。時間切れ・5xx などは回答の中の再試行のあとのケースの失敗のまま（送り直さない）。割り当ての使い切り・401・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・TLS の証明書の誤りは、残りのケースを始めずに評価を止め、直す所を job の失敗の理由に出す。1 は 1 件ずつ（#2004 より前と同じ）。
+- `RAG_EVALUATION_CONCURRENCY`（品質評価で同時に実行するケースの数の上限。既定 2、1〜8。#2004）: ケースを評価ケースの順に始め、結果はケースの順のまま返す（1 ケースの往復と判定は順に行う）。回答・判定が 429（流量の制限）で失敗したら、`Retry-After` を守って評価の全体で待ち、並行の数を半分（最小 1）にして送り直す（5 回まで。送り直しは新しい trace id で記録する）。時間切れ・5xx などは回答の中の再試行のあとのケースの失敗のまま（送り直さない）。割り当ての使い切り・401・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・TLS の証明書の誤りは、残りのケースを始めずに評価を止め、直す所を job の失敗の理由に出す。1 は 1 件ずつ（#2004 より前と同じ）。
 - `RAG_VISION_CONCURRENCY` / `RAG_NAVIGATION_SUMMARY_CONCURRENCY` / `RAG_EMBEDDING_CONCURRENCY` / `RAG_AI_CALL_BACKOFF_MAX_SECONDS` / `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS` / `RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR`（取込の AI の呼び出しの並行と再試行。#2002）:
   - 取込の図・表の説明（Vision）・ナビゲーション要約・Embedding（と、文書ごとに 1 回の項目抽出・検索のリランク）は、共通の部品 `pr_backend_core.bounded_calls` の上限つきの並行の実行器を通して呼ぶ。段ごとの同時の呼び出しの上限は Vision 4・ナビゲーション要約 4・Embedding 2（既定）。Vision は同じページの図・表を順番に読み（後の図の prompt は同じページの前の図の説明を含むため）、違うページを並べる。結果の順番・内容（図・項目・chunk・Embedding の入力の順）は順番に呼んだときと同じ。
   - エラーは種類に分けて扱う（HTTP status・例外の型・OCI / openai の SDK の例外・応答の本文）。429（流量の制限）は `Retry-After` を守って**同じ段の呼び出し全体で待ち**、並行の数を半分（最小 1）にして成功が続くと上限まで戻す（AIMD）。502 / 503 / 504・接続の誤り・時間切れは指数の backoff と full jitter（上限 `RAG_AI_CALL_BACKOFF_MAX_SECONDS`）で再試行し、続けば（既定 10 回）呼び出しを止めて時間をおいて試す（circuit breaker。回復しなければ止める）。500 は 2 回まで、出力の形の誤り（JSON・schema の不一致・空の応答）は 2 回まで、401 は 1 回だけ再試行する。割り当ての使い切り（429 の quota）・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・501 / 505・TLS の証明書の誤りは再試行せず、残りの呼び出しをせずに取込を止め、直す所（IAM policy・モデルの設定など）を文書の失敗の理由に出す。400・安全のための拒否はその件を記録して飛ばす。413・context の長さの超過は入力を小さくして（Vision は画像の解像度を半分、要約は入力を短く）やり直す。再試行の総数には予算（最初の 10 回 + 成功の数の 20%）がある。
   - 再試行を使い切った件は、段の最後に `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS`（既定 30 秒）待ってからもう一度呼ぶ。それでも失敗した件は記録して続ける（Vision は「説明できなかった図」として要素に理由を残す）。`RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` で、その件があれば取込を失敗にする。
-  - RAPTOR 要約（`RAG_RAPTOR_ENABLED=true` のとき。#2067）も同じ実行器を通す。1 つの階層の cluster を `RAG_RAPTOR_CONCURRENCY`（既定 4、1〜16）まで並べ、階層は前の階層の要約を入力にするため順に作る。429 は段の全体で待って並行の数を下げ、再試行のあとも要約できない cluster は飛ばす（leaf の chunk は残る）。権限・モデルの設定の誤り・割り当ての使い切りは、残りの cluster を呼ばずに取込を止める。
   - 再試行は実行器だけが受け持つ（SDK の再試行は切る: OCI Enterprise AI の openai SDK は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` は、実行器を通さない呼び出し（回答の生成・接続確認など）の SDK の再試行の回数のまま。
   - 待っている間も job の進捗（`progress_json` の `calls`。待ちの理由・残りの秒数・今の並行の数・再試行の数）を 10 秒ごとに更新するため、#2003 の停滞の検出は待ちを停滞と数えない。再試行ごとに種類・回数・待ちの時間をログ（`bounded_call_retry`）に出す。
   - **Vision を段ごとに解析と並べる（流水線）**: PDF を段ごとに解析するとき（#2001）、段の解析が終わるとその段の図・表の Vision を始め、次の段の解析と重ねる（解析は解析サービスの CPU、Vision は VLM の応答待ちなので重ねられる）。段の図は 1 段ずつ読み（段の中は上の並行の上限で並べる）、応答は取込の作業ディレクトリの checkpoint に残す。すべての段の後の全体の読み取り（文書全体の整理・まとめた抽出結果への書き戻し）は同じ入力の応答を使い、VLM を呼び直さない（描いたページも使い回す）。段ごとの応答は段の artifact（`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/vision/<段>.json`。文書の削除で一緒に消える）にも残し、失敗・中断の後の再実行は済んだ段の図を呼び直さない（応答の鍵は入力の画像・prompt・モデルの hash なので、入力の変わった図は読み直す）。文書の詳細の「抽出の進み具合」は、解析の途中から「図・表の説明（Vision）: N / M 件（説明の済んだ段 K / S）」と、並べて説明している段・API の待ちの理由（「API の制限のため N 秒待っています」など）を出す。
@@ -2057,7 +2044,7 @@ uv run python -m app.rag.file_processing_staging_cli \
     進捗を読めない間（DB の一時的な失敗）は進んだとも止まったとも決めない（`ingestion_job_progress_read_failed` を warning で出す）。
   - 停滞の時間は、進捗を変えずに続きうる 1 回の呼び出し（再試行を含む）の最長より長くする。起動時に検証し、短ければ直す設定の名前を出して起動を止める。
     対象は解析サービス（`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` × `RAG_HTTP_SERVICE_RETRY_ATTEMPTS` + 待ち。配備の unit は 1230 秒で約 6170 秒）、
-    MinerU の job（`RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`）、Document Understanding（`RAG_OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS`）、Vision の LLM（`PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` × (`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` + 1)）。
+    Document Understanding（`RAG_OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS`）、Vision の LLM（`PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` × (`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` + 1)）。
   - 全体の上限（既定 86400 秒、設定できる上限 604800 秒〔7 日〕）: 進んでいても、これを超えたら止める保険。1 文書 1,000 図を 1 件 60 秒で順に読んでも足りる長さ。
   - 失敗の文言（job と文書の `error_message`。画面に出る）は、停滞（「取込の進捗が … 進まなかったため止めました」）と全体の上限（「取込が全体の上限（…）を超えたため止めました」）を分け、
     最後に進んだ段・件数（例「図・表の説明 120 / 232 件」）と、長くする設定の名前を出す。
@@ -2109,6 +2096,24 @@ schema の更新で `20261021_001_answer_prompt_placeholders` を適用すると
 ファイルに保存する SDK の構成では、`prompts/vlm_answer.txt` をバックアップしてから同じ
 placeholder を置き換えます。旧名を実行時に展開する互換処理はありません。
 
+### 回答テンプレートの読み方の差し込み（#4712）
+
+`{{reading_rules}}` は回答テンプレートの必須の差し込み項目です。schema の更新で
+`20261109_4712_answer_prompt_reading_rules` を適用すると、保存済みの `vlm_answer` の
+`{{answer_context}}` の前に `{{reading_rules}}` が足されます。指示の本文は保持します。
+schema の更新と backend の更新を合わせて行ってください。ファイルに保存する SDK の構成では、
+`prompts/vlm_answer.txt` をバックアップしてから同じ位置に足します。実行時の互換処理はありません。
+
+### 編集欄を外した指示の保存値の削除（#4782）
+
+生成の指示は、編集できる「役割と回答の書き方」（`generation.role`）と、コードが必ず足す固定の部分
+（信頼の境界・引用・出力の形）に分かれました。回答入力テンプレート（旧 `vlm_answer`）と、検索・回答の
+内部の段の指示は編集できません。schema の更新で `20261110_4782_generation_prompt_overrides` を
+適用すると、編集欄を外した指示の保存値を `rag_answer_prompts` から削除します（破壊的な migration。
+旧 `generation.system` の保存値は固定の部分を含むため、`generation.role` へ読み替えません）。
+独自の方針を残す場合は、適用の前に保存値を控え、適用の後に「役割と回答の書き方」へ書き直してください。
+ファイルに保存する SDK の構成の `prompts/vlm_answer.txt` は読まれなくなります。
+
 組み込みの指示は Markdown の節・手順・条件で表示します。編集済みの独自の指示本文は
 自動で書き直しません。組み込みの新しい書式へ戻す場合は、内容を確認してから設定画面の
 「既定に戻す」を使います。外部根拠を囲む `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` /
@@ -2124,7 +2129,7 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 
 `RAG_ENGINE_DOMAIN_PROFILE_FILE` と作業ディレクトリの `domain_profile.json` を読む機能、および `RAG_ANSWER_PROFILE` / `RAG_ENGINE_PROFILE` の選択を廃止した。これらの変数は別名で受け付けず、残っていても実行には使わない。backend の `.env`、起動 shell、systemd の drop-in に残る定義は運用者が削除する。`DOCRAG_DOMAIN_PROFILE_FILE` の旧定義も新しい名前へ改名しない。
 
-ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「回答ルール」「業務ガイド」へ必要な分だけ登録する。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
+ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「業務ガイド」へ必要な分だけ登録する（回答の規則は回答プロンプトの「役割と回答の書き方」に書く）。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
 
 一般的な日本語の質問理解は設定に依存せず維持する。SDK から `profile=` を渡していた場合は引数を除き、Prompt 上書きだけが必要なら Runtime の `prompt_overrides` を使う。Prompt の本文や保存済みの Prompt 設定は変更しない。
 
@@ -2172,3 +2177,70 @@ WHERE d.extraction IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM rag_document_extractions e WHERE e.document_id = d.document_id);
 SELECT COUNT(*) FROM rag_documents WHERE processing_config IS NOT NULL;
 ```
+
+### 検索・回答プロファイルの適用しない欄の削除（#4784）
+
+検索・回答プロファイルの `query` は適用する欄（`max_anchors_per_document`・`support_guide_enabled`）だけを持ち、
+ほかの欄を検証エラーにする。`language_pack` の上書きは、検索と回答の要求の間に読む節（`search_terms`・
+`question_cues`・`evidence_cues`・`answer_labels`・`answer_check_cues`・`grounding_cues`）だけを持てる。
+ナレッジベースは `query` の値を持たない。未リリースのため互換を持たない。
+
+過去の migration は変更せず、`20261110_4784_search_answer_profile_retired_fields` が保存値を直す。
+`RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG` の `query` から上の 2 欄以外を、`language_pack` から上の 6 節以外を消し、
+`RAG_KNOWLEDGE_BASES.RETRIEVAL_CONFIG` の `query` を消す。残す欄と節の値、ほかの key は変えない。値の読み替えはしない。
+何回流しても結果は同じ。
+
+- 適用は、現在の schema 管理の `initialize --allow-destructive` で明示的に行う（`status` の
+  `pending_destructive_migrations` に出る）。
+- **新しいコードの配備の直後に適用する。** 適用するまで、保存値に消した欄・節が残るプロファイルは設定の復元に
+  失敗し、空の設定（ナレッジベースの選択なし・全体設定のまま）で動く。その間に画面で保存すると、空の設定で上書きされる。
+- **適用の前に、読み取りだけの dry-run で消えるものを確かめる。** 行の ID と、消える欄・節の名前だけを出す
+  （値は出さない）。言語資源の上書きを持つプロファイルでは、`language_pack.<節>` の行が出たら、その節の上書きが消える
+  （業務ガイドの取込の節 `guide_import_cues` は、必要なら全体の言語資源へ移してから適用する）。
+
+```bash
+cd rag/backend && .venv/bin/python -m app.rag.search_answer_profile_retired_fields
+```
+
+### 回答の流れを 1 本にする（#4749）
+
+CRAG（根拠の十分性の判定と補正検索）、検索戦略の自動選択（`query.route` / `query.expand`）、小問の事前計画（`answer.scope`）を削除し、回答の流れを 1 本（検索して生成）にした。未リリースのため互換を持たない。
+
+- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_ANSWER_FLOW`・`RAG_QUERY_STRATEGY`・`RAG_QUERY_EXPANSION_MAX_QUERIES`・`RAG_CRAG_*`・`RAG_SECTION_SKIP_REGRADE_AT_SCOPE`・`RAG_STRATEGY_REASONING_EFFORT`・`RAG_JUDGE_REASONING_EFFORT`。保存された検索・回答プロファイルの `query_strategy` / `answer_flow` の値は読み捨てられ、次の保存で消える。
+- データの削除は無い（migration なし）。回答プロンプトの保存値（`rag_answer_prompts` の `routing.*`・`expansion.*`・`crag.*`・`generation.plannedSystem`・`generation.instruction`）は実行で読まれず、#4781 の migration が消す。
+
+### 品質評価の判定を正確性の 1 本にし、判定の校正を削除する（#4781）
+
+品質評価の LLM の判定を正確性（`evaluation.correctness`）の 1 本にし、判定の校正（人手の判定との一致を測る機能。#3578）を削除した。未リリースのため後方互換は持たない。
+
+- **migration `20261110_4781_retire_evaluation_calibration` と `20261110_4781_retire_removed_answer_prompts` はデータを削除する。** 承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る（上の「既存環境の更新手順の共通の注意」）。
+  - 前者は判定の校正の表（`RAG_EVALUATION_LABEL_SETS`・`RAG_EVALUATION_LABEL_ITEMS`・`RAG_EVALUATION_LABELS`・`RAG_EVALUATION_CALIBRATIONS`）を削除し、校正の job の行（`RAG_EVALUATION_JOBS` の `kind = 'calibration'`）とロールの権限の「判定の校正の管理」（`rag.evaluation_calibration.manage`）の行を削除する。人手の判定を残すなら、適用の前に 4 表を export する。
+  - 後者は `RAG_ANSWER_PROMPTS` から、評価の判定の 5 本（`evaluation.scope`・`evaluation.coverage`・`evaluation.claim`・`evaluation.evidenceCoverage`・`evaluation.absenceScope`）と #4749 で読まれなくなった `crag.*`・`routing.*`・`expansion.*`・`generation.instruction`・`generation.plannedSystem` の行だけを削除する。保存した文を残すなら、適用の前に同表を export する。
+- 品質評価の job・ケースごとの結果・回答の記録は削除しない。過去の結果の網羅・裏付けの値は DB に残るが、画面と結果の Excel には出さない。合否は保存した値のまま出す。
+- テストセットの作成のタブの URL は `/evaluation?tab=testsets` になった（`?tab=calibration` のブックマークは評価の実行のタブを開く）。
+
+### 質問と検索の段を整理する（#4782）
+
+章節の拡張で入らない章節から原文を LLM で抜き出す段（`evidence.extract`）を削除した。入らない章節は rerank の順で上限まで入れ、残りを「回答に未反映の関連章節」に示す（これまでの既定と同じ動き）。
+
+条の目録から根拠の条を LLM で選ぶ段（`evidence.select_document` / `evidence.select_article` / `evidence.refine_article`）も削除した。条で構成された文書も、ほかの文書と同じ検索・rerank・章節の拡張で根拠を集める。MCP の `rag_retrieve_evidence` の根拠に `role=catalog_article` は出なくなる（ツールの名前・引数・出力の形は変えない）。未リリースのため互換を持たない。
+
+- 削除した設定（`backend/.env` に残っていても読まない）: `RAG_SECTION_EXTRACTION_ENABLED`・`RAG_ARTICLE_CATALOG_ENABLED`・`RAG_ARTICLE_CATALOG_MAX_DOCUMENTS`・`RAG_ARTICLE_CATALOG_MAX_ARTICLES`・`RAG_ARTICLE_CATALOG_CONTEXT_RECORDS`・`RAG_ARTICLE_CATALOG_SCOPE_DOCUMENTS`・`RAG_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH`・`RAG_ARTICLE_CATALOG_REFINE_ARTICLES`・`RAG_ARTICLE_CATALOG_REFINE_CANDIDATES`・`RAG_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP`・`RAG_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_DIR`・`RAG_ARTICLE_CATALOG_CACHE_TTL_SECONDS`・`RAG_ARTICLE_CATALOG_CACHE_MAX_ENTRIES`・`RAG_MCP_CATALOG_ARTICLE_EVIDENCE_LIMIT`。
+- 条の選択の結果の記録のファイル（既定は `PLATFORM_LOCAL_STORAGE_DIR` の下の `cache/rag-article-catalog`、または `RAG_ARTICLE_CATALOG_CACHE_DIR` に設定した場所）は読まれなくなる。ディレクトリごと消してよい。
+- 保存値: この 2 つの段の回答プロンプトの保存値（`RAG_ANSWER_PROMPTS` の `section_extraction.system`・`article_catalog.*`）は、#4782 の生成の PR の migration `20261110_4782_generation_prompt_overrides` が消す（この PR に別の migration は無い）。
+
+
+## 画面目録による検索の廃止後の更新（#4845）
+
+専用の開閉・prompt・検索処理は削除した。原文・chunk の章節パスと交差参照は保持する。保存済み prompt の `screen_linking.system` は既存の `20261110_4782_generation_prompt_overrides` migration が削除するため、適用済み migration は書き換えない。言語資源の旧フィールドは既存の退役処理に残し、未更新の資源からも除けるようにする。
+
+旧い `.env` の行を消してから通常の更新を実行する。設定の値は表示しない。以下は repo の直下で実行する。
+
+```bash
+mkdir -p tmp/remove-screen-linking-env
+sudo -n cp -a rag/backend/.env "tmp/remove-screen-linking-env/rag.env.$(date -u +%Y%m%dT%H%M%SZ)"
+sudo -n sed -i -E '/^[[:space:]]*(export[[:space:]]+)?(RAG_DOCRAG_SCREEN_LINKING_ENABLED|RAG_SCREEN_LINKING_ENABLED|RAG_ENGINE_SCREEN_LINKING|RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK)[[:space:]]*=/d' rag/backend/.env
+sudo -n ./platform/deploy/suite-update.sh
+```
+
+独立して rag_engine の `.env` を用意した環境では、そのファイルからも `RAG_ENGINE_SCREEN_LINKING` と `RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK` の行を除く。新しいコードには旧キーを受ける互換動作はない。この手順は配備の承認後に行う。

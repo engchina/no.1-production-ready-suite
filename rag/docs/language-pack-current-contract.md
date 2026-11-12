@@ -16,6 +16,131 @@
 
 この文書や合成テストはデータ移行を実行しません。DBの表定義、認可、版/来歴のfail-closed、索引の版切替の規則は変更しません。
 
+## 配備の後の確認（#4695）
+
+`system_schema_cli check`（`platform/deploy/suite-health.sh` が呼びます）は、今の公開版と下書きが現行の契約に合うかも**読み取りだけ**で確かめ、合わなければ確認を NG にします。古い公開版の履歴は見ません。公開版が 1 つも無い新しい環境は合格です。NG の行には、合わない項目の名前（値は出しません）と次の節の修復の手順を出します。自動では直しません（組み込みの値での補完や自動の公開はしません）。
+
+## 不適合の言語資源の修復（#4697・#4745）
+
+現在版か下書きが契約に合わない環境では、画面とAPIの読み取り・保存・公開・復元は例外で止まるため、画面からは直せません。`app.rag.language_pack_repair_cli` は明示の復旧の経路で、状態に応じて次の 1 つだけを行います（どちらを行うかは dry-run の `repair_target` に出ます）。互換の補完や自動の公開はせず、起動・API・`ensure_initialized` の動きは変えません。
+
+| 状態 | `repair_target` | 適用で行うこと |
+|---|---|---|
+| 現在版が不適合 | `current` | 現在版の内容を保ったまま、**欠けている項目だけ**組み込みの値を足した新しい公開版を発行します。下書きは、現在版と同じ内容なら新しい版と同じ内容にし、未公開の変更があれば**その値を保ったまま**欠けている項目だけ新しい版の値を足します（dry-run の `draft_changes_kept` が `true`。#4832） |
+| 現在版は適合で、下書きだけが不適合 | `draft` | 下書きの値を保ったまま、**欠けている項目だけ現在版の値**を足し、廃止の項目を除きます。書き換えるのは下書きだけで、新しい版は発行しません。公開は通常の手順で利用者が行います |
+| どちらも適合 | `none` | 何もしません（`CURRENT_ALREADY_CONFORMS` で止まります） |
+
+手順（`rag/backend` で実行します。ADBと認証は `system_schema_cli` と同じ設定を使います）。
+
+1. **dry-run（読み取りだけ）。** 引数なしで実行します。
+
+   ```bash
+   uv run python -m app.rag.language_pack_repair_cli
+   ```
+
+   JSONで次を出します（項目の名前だけで、値は出しません）。`status` が `ready` なら終了コードは 0、`blocked` なら 1 で、`blockers` に止めた理由が入ります。
+
+   | 項目 | 意味 |
+   |---|---|
+   | `repair_target` | 修復の対象（`current` / `draft` / `none`。上の表） |
+   | `current_release_id` / `current_version` / `draft_revision` | 現在版と下書きの状態（適用の期待値に使います） |
+   | `current_conforms` / `draft_conforms` | 現在版・下書きが現行の契約に合っているか |
+   | `draft_matches_current` | 下書きが現在版と同じ内容か。`repair_target` が `current` で `false` のときは、未公開の変更を保って下書きを補います（`draft_changes_kept` が `true`）。補った下書きが厳格な検証に通らないときだけ、未公開の変更を消さないよう適用を止めます（`DRAFT_DIFFERS_FROM_CURRENT`）。`draft` のときは未公開の変更を保つので止めません |
+   | `draft_changes_kept` | `repair_target` が `current` で、下書きの未公開の変更を保ったまま欠けている項目だけ補えるか（未公開の変更が無いときは `false`） |
+   | `missing_fields` / `retired_fields` | 足す項目（`current` は組み込みの値、`draft` は現在版の値）/ 除く廃止の項目の名前 |
+   | `candidate_valid` / `ingest_hash_unchanged` | 候補が厳格な検証に通るか / 候補の `ingest_hash` が現在版と同じか（`draft` では参考の情報で、下書きを公開すると文書の再処理が要るかの目安です） |
+   | `active_ingestion_jobs` | QUEUED / RUNNING の取込 job の件数（`draft` では公開版を変えないので止めません） |
+
+   止める条件（`blockers`）: `DRAFT_DIFFERS_FROM_CURRENT`（下書きに未公開の変更があり、その値を保ったままでは補えない）、`CURRENT_ALREADY_CONFORMS`（現在版は既に契約に合っている）、`NO_FIELDS_TO_REPAIR`（項目は揃っているのに不適合。hash の不一致など）、`CANDIDATE_INVALID`、`INGEST_HASH_CHANGED`（文書の再処理が要る変更はこの経路で行いません）、`ACTIVE_INGESTION_JOBS`。適用では `EXPECTED_CURRENT_MISMATCH` / `EXPECTED_DRAFT_REVISION_MISMATCH` も加わります。`repair_target` が `draft` のときに止める条件は `CANDIDATE_INVALID`（下書きが JSON のオブジェクトでない、`locale` が無いか現在版と違う、未知の項目や形の誤った値があるなど、欠けた項目を足すだけでは直らない）と、適用の期待値の 2 つです。下書きを現在版や組み込みの値で丸ごと置き換えることはしません。
+
+2. **許可とバックアップ。** dry-runの結果を対象の環境の利用者へ示し、適用の明示の許可を得ます（上の門禁の 5）。適用の前に、対象の環境の DB のバックアップ（Autonomous AI Database の復元できる時点など）を確かめます。除く廃止の項目の値は、適用の後は下書きに残りません。
+3. **適用。** dry-runで確かめた値を指定します。値が違えば何も書き込まずに止まります。
+
+   ```bash
+   uv run python -m app.rag.language_pack_repair_cli --apply \
+     --expected-current-id <dry-run の current_release_id> \
+     --expected-draft-revision <dry-run の draft_revision>
+   ```
+
+   1 つの transaction の中で状態の行を lock し、同じ条件を確かめ直し、commit の前に厳格な検証で読み戻します。途中で失敗すれば全体を rollback します。旧版の内容と hash は書き換えません。`current` は新しい公開版（`previous_id` は現在版）を追加して下書きと現在版のポインタを同時に切り替えます。`draft` は下書きと `draft_revision` だけを更新し、結果の `release_id` は今の現在版のままです。
+
+4. **確認。** `system_schema_cli check` が通ることと、対象の環境で検索と回答が実際に動くことを確かめます。`current` は `ingest_hash` が同じなので文書の再処理は行わず、索引の関係は `EQUIVALENT` になります。`draft` は公開版を変えないので、検索と回答の内容は変わりません。
+
+`current` の発行の後も残る制約: 旧版は保存した内容のままなので、個別の取得・比較・復元は不適合のまま 409 です。旧版に固定された成果物は CHUNK / INDEX で再利用できず、再処理するときは「ファイル準備」か「抽出」から始めます。
+
+
+### 配備先でそのまま実行するコマンド
+
+`system_schema_cli check` が「言語資源が現行の契約に合いません」と示した場合の手順です。配備先の `opc` で実行します。repo の場所が異なる場合は最初の `cd` だけ合わせます。`initialize --allow-destructive` や索引の再作成は、この不適合の修復には使いません。
+
+**1. 読み取りだけの確認。** dry-run の結果を repo の `tmp/` に保存します。
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite
+mkdir -p tmp/language-pack-repair
+cd rag/backend
+set -o pipefail
+.venv/bin/python -m app.rag.language_pack_repair_cli \
+  | tee ../../tmp/language-pack-repair/plan.json
+```
+
+`status=ready`、`blockers=[]` を確認し、`missing_fields`・`retired_fields`・`draft_changes_kept` を利用者へ示します。`current_conforms=true` かつ `draft_conforms=true` なら修復は不要です。
+
+**2. 適用前のバックアップ確認（読み取りだけ）。** 件数と完了時刻だけを表示し、接続情報・DB 名・OCID は表示しません。
+
+```bash
+.venv/bin/python - <<'PYBACKUP'
+from app.config import get_settings
+from pr_system_settings.oci_database import OciDatabaseClient
+
+settings = get_settings()
+client = OciDatabaseClient(settings)._client()
+backups = client.list_autonomous_database_backups(
+    autonomous_database_id=settings.oracle_adb_ocid,
+).data
+available = [item for item in backups if item.lifecycle_state == "ACTIVE"]
+print("available_backup_count:", len(available))
+print("latest_backup_completed:", max(
+    (str(item.time_ended) for item in available if item.time_ended),
+    default="none",
+))
+PYBACKUP
+```
+
+バックアップが使えることを確認し、**この環境への今回の適用について利用者の明示の許可を得てから**、次へ進みます。バックアップの確認に失敗した場合や `none` の場合は、復旧手段を確認するまで適用しません。
+
+**3. 許可後の適用。** 保存した dry-run の版 ID と下書きの番号をそのまま渡すため、手入力は不要です。途中に別の変更があれば CLI が書き込まずに止まります。その場合は 1 からやり直します。
+
+```bash
+.venv/bin/python - <<'PYAPPLY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+plan = json.loads(Path("../../tmp/language-pack-repair/plan.json").read_text())
+if plan.get("status") != "ready" or plan.get("blockers"):
+    raise SystemExit("dry-run が ready ではありません。適用せずに止めます。")
+if plan.get("repair_target") not in {"current", "draft"}:
+    raise SystemExit("修復の対象がありません。適用せずに止めます。")
+subprocess.run([
+    sys.executable, "-m", "app.rag.language_pack_repair_cli", "--apply",
+    "--expected-current-id", str(plan["current_release_id"]),
+    "--expected-draft-revision", str(plan["draft_revision"]),
+], check=True)
+PYAPPLY
+```
+
+**4. 修復後の確認。** `status=ready` と各サービスの `active` を確認します。続けて管理者でログインし、ナレッジベース・文書・チャットの一覧を開きます。health の成功だけでは、言語資源の不適合で API が 409 になる問題を検出できません。
+
+```bash
+.venv/bin/python -m app.rag.system_schema_cli check
+systemctl is-active production-ready-rag-backend.service \
+  production-ready-nl2sql-backend.service \
+  production-ready-agent-backend.service nginx.service
+```
+
+この修復で既存値と下書きの未公開の変更を保ち、`ingest_hash_unchanged=true` なら文書の再取込は不要です。古い log に `ORA-29855` が残っていても、それだけで索引を作り直さず、現在の `system_schema_cli check` の結果を基準に切り分けます。
 
 ## 公開履歴の一覧と内容の利用
 

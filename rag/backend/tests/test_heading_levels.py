@@ -111,10 +111,10 @@ def test_plan_sends_only_heading_texts_in_reading_order() -> None:
             ),
             "outline_levels",
         ),
-        (_extraction(_records(HEADINGS, engine="mineru")), "engine_not_supported"),
+        (_extraction(_records(HEADINGS, engine="unstructured")), "engine_not_supported"),
         (StructuredExtraction(elements=[DocumentElement(text="本文")]), "no_layout_records"),
     ],
-    ids=["numbered", "too-few", "outline", "mineru", "no-layout"],
+    ids=["numbered", "too-few", "outline", "other-engine", "no-layout"],
 )
 def test_plan_skips_documents_that_do_not_need_inference(
     extraction: StructuredExtraction, reason: str
@@ -236,7 +236,9 @@ async def test_ingestion_applies_inferred_levels_with_structured_output() -> Non
 
     assert len(vlm.calls) == 1
     prompt, context, kwargs = vlm.calls[0]
-    assert prompt == HEADING_LEVEL_PROMPT
+    # 段の指示はシステムの文で渡し、質問の位置には何も置かない(#4776)。
+    assert prompt == ""
+    assert kwargs["system_prompt"] == HEADING_LEVEL_PROMPT
     assert json.loads(context)[1] == {"i": 1, "text": "背景"}
     assert kwargs["response_schema"]["required"] == ["levels"]
     paths = {element.text: element.section_path for element in result.elements}
@@ -297,5 +299,6 @@ async def test_heading_levels_use_the_saved_prompt() -> None:
         settings=_enabled(), vlm=cast(Any, vlm), oracle=cast(Any, Oracle())
     )
     await pipeline._attach_heading_levels("trace", _extraction(_records(HEADINGS)))
-    assert vlm.calls[0][0] == "合成の独自階層指示"
+    assert vlm.calls[0][0] == ""
+    assert vlm.calls[0][2]["system_prompt"] == "合成の独自階層指示"
     assert vlm.calls[0][2]["response_schema"]["required"] == ["levels"]

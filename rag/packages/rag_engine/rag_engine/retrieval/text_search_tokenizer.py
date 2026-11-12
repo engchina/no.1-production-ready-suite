@@ -34,7 +34,6 @@ from rag_parser_core.language.text import range_class, text_patterns
 from rag_engine.dependencies import report_degraded
 from rag_engine.knowledge.domain_keywords import extract_domain_keywords
 from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_text
-from rag_engine.retrieval.definition_evidence import definition_labels
 
 logger = logging.getLogger(__name__)
 
@@ -375,10 +374,6 @@ def tokenize_text_search_query_with_trace(
         for token, tier in _content_terms(keyword, cfg, use_sudachi, failures):
             add(token, _TIER_KEYWORD_PART if tier == _TIER_PRIMARY else tier)
 
-    # 品詞判定が接頭辞とする一文字でも、質問で明示された列名は失わない。
-    labels = definition_labels(query)
-    for label in labels:
-        add(label, _TIER_KEYWORD)
     for token, tier in _content_terms(query, cfg, use_sudachi, failures):
         add(token, tier)
     if failures:
@@ -395,7 +390,7 @@ def tokenize_text_search_query_with_trace(
             fallback_reason=failures[0],
         )
     # 優先配分だけを変え、既存の重みと語順は維持する。意味の充足は判定しない。
-    protected = tuple(dict.fromkeys((*_protected_query_terms(query), *(_normalize_term(label) for label in labels))))
+    protected = tuple(dict.fromkeys(_protected_query_terms(query)))
     for token in protected:
         if token not in candidates:
             add(token, _TIER_PRIMARY)
@@ -434,6 +429,24 @@ def tokenize_text_search_query_with_trace(
         character_limit_tokens=character_plan.omitted_tokens,
         oracle_text_query=character_plan.query,
     )
+
+
+def surface_tokens(text: str, config: TextSearchTokenizerConfig | None = None) -> list[str]:
+    """Sudachi の短い単位の表層形を並び順で返す（記号と空白は除く）。使えなければ空。
+
+    活用語尾や否定の語も残す。語の重なりの比較に使い、検索の語は作らない。
+    """
+    cfg = normalize_text_search_tokenizer_config(config)
+    if not _sudachi_available(cfg):
+        return []
+    tokenizer = _get_sudachi_tokenizer(cfg.sudachi_dict_type, cfg.sudachi_config_path)
+    mode = _sudachi_split_mode("A")
+    return [
+        morpheme.surface()
+        for chunk in _split_for_sudachi(normalize_text_search_text(text))
+        for morpheme in tokenizer.tokenize(chunk, mode)
+        if morpheme.part_of_speech()[0] not in {"補助記号", "空白"}
+    ]
 
 
 def content_term_set(text: str, config: TextSearchTokenizerConfig | None = None) -> frozenset[str]:

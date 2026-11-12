@@ -291,7 +291,6 @@ def test_injected_claims_in_rag_search_results_do_not_skip_approval(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """RAG の検索の結果（MCP の結果の本文と項目）に承認の主張があっても、書き込みは承認待ち。"""
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     search = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     search["answer"] = INJECTED_TEXT

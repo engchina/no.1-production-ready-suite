@@ -82,7 +82,7 @@ def _install(monkeypatch: MonkeyPatch, configs: dict[str, KnowledgeBaseAdapterCo
 def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) -> None:
     """単一 KB 指定でも、その KB の legacy query 上書きは pipeline に効かない。"""
     config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"query_strategy": "hyde", "vector_index_profile": "fast"}}
+        {"query": {"neighbor_child_count": 9, "vector_index_profile": "fast"}}
     )
     _install(monkeypatch, {"kb-1": config})
 
@@ -96,13 +96,13 @@ def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) 
     assert diagnostics["kb_adapter_config_applied"] is None
     # pipeline へはグローバル settings が渡っている。
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_query_strategy == "simple_retrieval"
+    assert RecordingPipeline.captured_settings.rag_neighbor_child_count == 3
     assert RecordingPipeline.captured_settings.rag_vector_index_profile == "accurate"
 
 
 def test_multiple_kb_ids_use_global_defaults(monkeypatch: MonkeyPatch) -> None:
     """複数 KB 指定は設定競合を避けてグローバル既定を使う。"""
-    config = KnowledgeBaseAdapterConfig.model_validate({"query": {"query_strategy": "hyde"}})
+    config = KnowledgeBaseAdapterConfig.model_validate({"query": {"neighbor_child_count": 9}})
     _install(monkeypatch, {"kb-1": config, "kb-2": config})
 
     response = client.post(
@@ -114,7 +114,7 @@ def test_multiple_kb_ids_use_global_defaults(monkeypatch: MonkeyPatch) -> None:
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["kb_adapter_config_applied"] is None
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_query_strategy == "simple_retrieval"
+    assert RecordingPipeline.captured_settings.rag_neighbor_child_count == 3
 
 
 def test_empty_kb_config_does_not_mark_applied(monkeypatch: MonkeyPatch) -> None:

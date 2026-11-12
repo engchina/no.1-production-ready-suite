@@ -500,7 +500,7 @@ def test_annotate_cross_references_resolves_same_document_sections() -> None:
         _chunk(2, "第3章を参照。3.1節を参照。", "第3章 承認 > 3.1 申請"),
         _chunk(3, "申請日を書く。", "別紙1 申請書様式"),
         _chunk(4, "第9章を参照。", "第1章 総則"),
-        _chunk(5, "要約。第3章を参照。", "第1章 総則", raptor_summary=True),
+        _chunk(5, "要約。第3章を参照。", "第1章 総則", nav_summary=True),
         # 章節の要約・項目の値(派生の chunk。印の無い #2590 より前の chunk も。#2641)。
         _chunk(6, "第1章 総則: 第3章を参照。", "第1章 総則", content_kind="section_summary"),
         _chunk(7, "項目: 第3章を参照。", None, content_kind="field", extracted_field=True),
@@ -783,9 +783,7 @@ class ReferenceOracle:
         }
         return {title: rows for title, rows in found.items() if rows}
 
-    async def retrieval_screen_sections(
-        self, filters: dict[str, str]
-    ) -> list[tuple[str, str, int]]:
+    async def retrieval_section_paths(self, filters: dict[str, str]) -> list[tuple[str, str, int]]:
         self.section_calls.append(dict(filters))
         document_id = filters.get("document_id")
         chunk_set_id = filters.get("chunk_set_id")
@@ -2119,46 +2117,11 @@ _SECTION_ANSWER = "合成の入力画面で確認ボタンを押す。"
 def _section_answer_llm(
     system: str, prompt: str, settings: Any, schema: type, **options: Any
 ) -> Any:
-    """CRAG は不足と判定して章節を広げ、回答は参照先の文書 B の手順を引用する LLM の代役。"""
-    from rag_engine.models.llm import CragRetrievalGradeOutput, GroundedDraft
+    """回答は参照先の文書 B の手順を引用する LLM の代役。"""
+    from rag_engine.models.llm import GroundedDraft
 
     from tests.test_answer_engine import _fake_llm
 
-    if schema is CragRetrievalGradeOutput:
-        candidates = json.loads(
-            prompt.split("BEGIN_UNTRUSTED_CRAG_CANDIDATES\n", 1)[1].split(
-                "END_UNTRUSTED_CRAG_CANDIDATES", 1
-            )[0]
-        )
-        candidate = next((row for row in candidates if _SECTION_ANSWER in row["text"]), None)
-        evidence = (
-            [dict(source_id=candidate["chunk_uid"], quote=_SECTION_ANSWER)] if candidate else []
-        )
-        return CragRetrievalGradeOutput(
-            reason="参照先の操作原文を確認" if candidate else "参照先の操作原文が必要",
-            sufficient=bool(candidate),
-            confidence=0.9 if candidate else 0.4,
-            rewritten_query="",
-            candidate_verdicts=[
-                dict(chunk_uid=row["chunk_uid"], relevant=True, reason="参照先の資料")
-                for row in candidates
-            ],
-            aspect_checks=[
-                dict(
-                    aspect=aspect,
-                    status="supported" if candidate else "missing",
-                    source_ids=[candidate["chunk_uid"]] if candidate else [],
-                    evidence=evidence,
-                    reason="操作原文の有無",
-                )
-                for aspect in ["business_object", "requested_result", "applicability", "procedure"]
-            ],
-            answerable_parts=[
-                dict(aspect="procedure", kind="operation", claim=_SECTION_ANSWER, evidence=evidence)
-            ]
-            if candidate
-            else [],
-        )
     if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
         # CRAGの判定に含まれる引用ではなく、番号付き根拠ブロックから出典を選ぶ。
         parts = re.split(r"\[(E[0-9]+)\]", prompt)
@@ -2221,8 +2184,6 @@ def _section_engine(oracle: ReferenceOracle) -> AnswerEngine:
     return _engine(
         oracle,
         FakeGenAi({"手順": 0.9}),
-        rag_answer_flow="crag",
-        rag_query_strategy="auto_routing",
         rag_section_expansion_enabled=True,
     )
 
@@ -2471,7 +2432,7 @@ def test_document_name_appendix_and_edition_words_come_from_settings(
 def test_number_symbol_and_english_settings_change_extraction(
     reference_words: Callable[..., None],
 ) -> None:
-    """数の書き方・記号・助詞・英語の書き方・正規化は設定で変わる(#2177)。"""
+    """数の書き方・記号・助詞・英語の書き方は設定で変わる(#2177)。"""
     # 年度・版・日付の型。
     assert "定期保守計画" in document_name_aliases("定期保守計画 2026年度.pdf")
     reference_words(edition_patterns=["第N稿"], edition_words=[])
@@ -2498,10 +2459,9 @@ def test_number_symbol_and_english_settings_change_extraction(
     assert extract_references("see Section 3.2") == []
     assert [(s.kind, s.key) for s in extract_references("consult Part 2")] == [("chapter", "2")]
 
-    # 正規化: しないなら全角の「３．２節」を節の番号として読まない。
+    # 正規化は NFKC に固定(#4784): 全角の「３．２節」も節の番号として読み、設定の項目は無い。
     assert [s.key for s in extract_references("詳細は３．２節参照。")] == ["3.2"]
-    reference_words(normalization="none")
-    assert [s.key for s in extract_references("詳細は３．２節参照。")] == []
+    assert "normalization" not in {spec.key for spec in FIELD_SPECS}
 
 
 def test_number_units_kanji_name_chars_and_coordination_come_from_settings(
@@ -2581,7 +2541,7 @@ async def test_equally_matching_documents_do_not_select_first_target() -> None:
     assert oracle.reference_calls == []
 
 
-async def test_screen_sections_merge_overflowed_paths_in_reading_order(
+async def test_section_paths_merge_overflowed_paths_in_reading_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """超えたパスの行があるときだけ読み直し、文書の並びと読み順を保ってまとめる(#4144)。"""
@@ -2634,7 +2594,7 @@ async def test_screen_sections_merge_overflowed_paths_in_reading_order(
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
 
-    assert await client.retrieval_screen_sections({"knowledge_base_id": "kb-1"}) == [
+    assert await client.retrieval_section_paths({"knowledge_base_id": "kb-1"}) == [
         ("z.pdf", "第1章", 1),
         ("z.pdf", long_path, 2),
         ("z.pdf", "第3章", 1),
@@ -2668,7 +2628,7 @@ async def test_catalog_queries_do_not_grow_without_overflowed_paths(
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
     filters = {"knowledge_base_id": "kb-1"}
 
-    assert await client.retrieval_screen_sections(filters) == [("合成資料.pdf", "第1章", 1)]
+    assert await client.retrieval_section_paths(filters) == [("合成資料.pdf", "第1章", 1)]
     assert await client.retrieval_reference_documents(filters, title="合成資料", limit=5)
     assert len(calls) == 2
     assert not any("RETURNING CLOB" in statement for statement in calls)
@@ -2756,3 +2716,13 @@ async def test_reference_chunks_count_lob_prefix_in_utf16_units(
 
     assert seen["reference_prefix_length"] == len("\U00020bb7章 > ")
     assert seen["reference_prefix_lob_length"] == len("\U00020bb7章 > ") + 1
+
+
+@pytest.mark.parametrize("text", ["詳細は３．２節参照。", "Ⅳ ｱｲｳ ①（別紙）", "第2条の2", ""])
+def test_fixed_nfkc_matches_the_previous_default(text: str) -> None:
+    """正規化を NFKC に固定しても、既定（NFKC）のまま取り込んだ文書と同じ形になる(#4784)。"""
+    import unicodedata
+
+    from app.rag.cross_references import normalize_text
+
+    assert normalize_text(text) == unicodedata.normalize("NFKC", text)

@@ -1,9 +1,11 @@
 """検索・回答プロファイル(Search Answer Profile)設定解決の単体テスト(DB 非依存)。"""
 
+import pytest
+from pydantic import ValidationError
+
 from app.config import get_settings
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.search_answer_profile_config import (
-    PROFILE_GLOBAL_QUERY_FIELDS,
     SearchAnswerProfileConfig,
     dump_search_answer_profile_config,
     parse_search_answer_profile_config,
@@ -31,103 +33,73 @@ def test_query_overrides_apply() -> None:
     assert merged.rag_max_anchors_per_document == 2
     assert merged.rag_guardrails_input_enabled is settings.rag_guardrails_input_enabled
     # グローバルは破壊しない。
-    assert settings.rag_query_strategy == "simple_retrieval"
+    assert settings.rag_guardrails_input_enabled is merged.rag_guardrails_input_enabled
 
 
-def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
-    """旧 vector index 値は読めるが、共有索引設定を上書きせず次回保存で除外する。"""
-    settings = get_settings()
-    config = parse_search_answer_profile_config(
-        {
-            "query": {
-                "max_anchors_per_document": 2,
-                "vector_index_profile": "accurate",
-            }
-        }
-    )
-
-    assert config.query.vector_index_profile == "accurate"
-    merged, applied = resolve_search_answer_profile_settings(settings, config)
-    assert applied is True
-    assert merged.rag_max_anchors_per_document == 2
-    assert merged.rag_vector_index_profile == settings.rag_vector_index_profile
-    dumped_query = dump_search_answer_profile_config(config)["query"]
-    assert isinstance(dumped_query, dict)
-    assert "vector_index_profile" not in dumped_query
-
-
-def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None:
-    """検索・回答プロファイルは品質評価を上書きしない。保存済みの値は読み込み時に無視し、次回保存で消える(#301)。"""
-    settings = get_settings()
-    config = parse_search_answer_profile_config(
-        {
-            "query": {
-                "max_anchors_per_document": 3,
-                "evaluation_suite": "strict_ci",
-            }
-        }
-    )
-
-    # 他の上書きは生きたまま、評価スイートだけを捨てる(設定全体を空へ縮退させない)。
-    assert config.query.max_anchors_per_document == 3
-    assert "evaluation_suite" not in KnowledgeBaseQueryConfig.model_fields
-    merged, applied = resolve_search_answer_profile_settings(settings, config)
-    assert applied is True
-    assert merged.rag_evaluation_suite == settings.rag_evaluation_suite
-    dumped_query = dump_search_answer_profile_config(config)["query"]
-    assert isinstance(dumped_query, dict)
-    assert "evaluation_suite" not in dumped_query
-    assert dumped_query["max_anchors_per_document"] == 3
+# 定義から消した欄(#4784)。全体の設定だけで決まる欄・画面に無い業務ガイドの照合の 2 欄・旧データ用の
+# vector_index_profile と、それより前に消した欄の代表。
+RETIRED_QUERY_FIELDS = {
+    "neighbor_child_count": 0,
+    "rerank_enabled": False,
+    "auto_field_filter_enabled": True,
+    "graph_expansion_enabled": True,
+    "graph_expansion_max_chunks": 3,
+    "screen_linking_enabled": True,
+    "guide_step_retrieval_enabled": False,
+    "guide_step_max_queries": 7,
+    "guide_step_deadline_seconds": 37.5,
+    "entity_expansion_enabled": False,
+    "entity_expansion_max_chunks": 3,
+    "section_expansion_enabled": False,
+    "section_expansion_max_levels": 2,
+    "section_expansion_input_token_percent": 40,
+    "support_guide_semantic_match_enabled": True,
+    "support_guide_close_match_clarification_enabled": True,
+    "vector_index_profile": "accurate",
+    "evaluation_suite": "strict_ci",
+    "guardrail_policy": "regulated",
+    "min_similarity": 0.9,
+}
 
 
-def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> None:
-    """旧 standard の回答エンジンの値(#595 で削除)は読み込み時に捨て、次回保存で消える。
+def test_query_has_only_the_applied_fields() -> None:
+    """プロファイルの query は、適用する欄だけを持つ(#4784)。"""
+    assert set(KnowledgeBaseQueryConfig.model_fields) == {
+        "max_anchors_per_document",
+        "support_guide_enabled",
+    }
 
-    検索モード・検索オプション・根拠確認・回答スタイルと、persona(system prompt / 既定言語)。
+
+@pytest.mark.parametrize("field", sorted(RETIRED_QUERY_FIELDS))
+def test_retired_query_field_is_a_validation_error(field: str) -> None:
+    """定義から消した欄を送ると検証エラーになる(受け付けて捨てない。#4784)。"""
+    with pytest.raises(ValidationError, match=field):
+        SearchAnswerProfileConfig.model_validate({"query": {field: RETIRED_QUERY_FIELDS[field]}})
+
+
+def test_saved_persona_is_ignored_on_load_and_dropped_on_save() -> None:
+    """旧 standard の persona(system prompt / 既定言語。#595 で削除)は読み捨て、次回保存で消える。
+
     他の上書きは生きたまま残す(設定全体を空へ縮退させない)。
     """
     settings = get_settings()
     config = parse_search_answer_profile_config(
         {
             "knowledge_base_ids": ["kb-1"],
-            "system_prompt": "あなたは経理規程アシスタントです。",
+            "system_prompt": "合成の system prompt",
             "default_language": "日本語",
-            "query": {
-                "retrieval_strategy": "business_context_strict",
-                "retrieval_query_expansion": False,
-                "retrieval_query_expansion_llm": True,
-                "retrieval_gap_stop": True,
-                "retrieval_corrective": True,
-                "retrieval_business_fit_weighting": True,
-                "post_retrieval_pipeline": "lean",
-                "generation_profile": "structured_json",
-                "max_anchors_per_document": 5,
-            },
+            "query": {"max_anchors_per_document": 5},
         }
     )
 
     assert config.normalized_knowledge_base_ids() == ["kb-1"]
-    assert config.query.max_anchors_per_document == 5
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_max_anchors_per_document == 5
     dumped = dump_search_answer_profile_config(config)
     assert "system_prompt" not in dumped
     assert "default_language" not in dumped
-    dumped_query = dumped["query"]
-    assert isinstance(dumped_query, dict)
-    for removed in (
-        "retrieval_strategy",
-        "retrieval_query_expansion",
-        "retrieval_query_expansion_llm",
-        "retrieval_gap_stop",
-        "retrieval_corrective",
-        "retrieval_business_fit_weighting",
-        "post_retrieval_pipeline",
-        "generation_profile",
-    ):
-        assert removed not in dumped_query
-    assert dumped_query["max_anchors_per_document"] == 5
+    assert dumped["query"] == {"max_anchors_per_document": 5, "support_guide_enabled": None}
 
 
 def test_dump_parse_roundtrip() -> None:
@@ -167,128 +139,27 @@ def test_parse_tolerates_broken_payload() -> None:
     assert restored.query == KnowledgeBaseQueryConfig()
 
 
-def test_removed_guardrail_policy_cannot_override_or_be_saved() -> None:
-    settings = get_settings().model_copy(update={"rag_guardrails_input_enabled": True})
-    config = SearchAnswerProfileConfig(query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"))
-    merged, applied = resolve_search_answer_profile_settings(settings, config)
-    assert merged.rag_guardrails_input_enabled is True
-    assert applied is False
-    assert "guardrail_policy" not in config.model_dump()["query"]
-
-
-def test_support_guide_switch_round_trip_preserves_internal_matching_settings() -> None:
-    settings = get_settings().model_copy(update={"rag_support_guide_enabled": True})
-    old = {
-        "support_guide_semantic_match_enabled": True,
-        "support_guide_close_match_clarification_enabled": True,
-    }
-    for enabled in [None, False, True]:
-        config = parse_search_answer_profile_config(
-            {"query": {**old, "support_guide_enabled": enabled}}
+def test_support_guide_switch_is_per_profile_and_matching_follows_global_settings() -> None:
+    """業務ガイドの使用はプロファイルごと。照合の方法(意味の照合・聞き返し)は全体の設定だけ(#4784)。"""
+    for matching in (True, False):
+        settings = get_settings().model_copy(
+            update={
+                "rag_support_guide_enabled": True,
+                "rag_support_guide_semantic_match_enabled": matching,
+                "rag_support_guide_close_match_clarification_enabled": matching,
+            }
         )
-        reloaded = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
-        resolved, _ = resolve_search_answer_profile_settings(settings, reloaded)
-        assert resolved.rag_support_guide_enabled is (enabled is True)
-        assert resolved.rag_support_guide_semantic_match_enabled is True
-        assert resolved.rag_support_guide_close_match_clarification_enabled is True
-        assert (
-            resolved.rag_support_guide_semantic_threshold
-            == settings.rag_support_guide_semantic_threshold
+        for enabled in [None, False, True]:
+            config = parse_search_answer_profile_config(
+                {"query": {"support_guide_enabled": enabled}}
+            )
+            reloaded = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
+            resolved, _ = resolve_search_answer_profile_settings(settings, reloaded)
+            assert resolved.rag_support_guide_enabled is (enabled is True)
+            assert resolved.rag_support_guide_semantic_match_enabled is matching
+            assert resolved.rag_support_guide_close_match_clarification_enabled is matching
+        missing, _ = resolve_search_answer_profile_settings(
+            settings, parse_search_answer_profile_config({})
         )
-        assert (
-            resolved.rag_support_guide_close_match_margin
-            == settings.rag_support_guide_close_match_margin
-        )
-    missing, _ = resolve_search_answer_profile_settings(
-        settings, parse_search_answer_profile_config({"query": old})
-    )
-    assert missing.rag_support_guide_enabled is False
-    assert settings.rag_support_guide_enabled is True
-
-
-def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_save() -> None:
-    settings = get_settings().model_copy(
-        update={
-            "rag_query_strategy": "simple_retrieval",
-            "rag_answer_flow": "crag",
-            "rag_neighbor_child_count": 3,
-            "rag_rerank_enabled": True,
-            "rag_auto_field_filter_enabled": False,
-            "rag_graph_expansion_enabled": False,
-            "rag_screen_linking_enabled": False,
-            "rag_request_coverage_retrieval_enabled": True,
-            "rag_guide_step_retrieval_enabled": True,
-            "rag_entity_expansion_enabled": True,
-            "rag_entity_expansion_max_chunks": 6,
-            "rag_section_expansion_enabled": True,
-            "rag_section_expansion_max_levels": 4,
-            "rag_section_expansion_input_token_percent": 50,
-            "rag_graph_expansion_max_chunks": 5,
-            "rag_guide_step_max_queries": 2,
-            "rag_guide_step_deadline_seconds": 20.0,
-        }
-    )
-    old = {
-        "query_strategy": "hyde",
-        "answer_flow": "standard_rag",
-        "neighbor_child_count": 0,
-        "rerank_enabled": False,
-        "auto_field_filter_enabled": True,
-        "graph_expansion_enabled": True,
-        "screen_linking_enabled": True,
-        "request_coverage_retrieval_enabled": False,
-        "guide_step_retrieval_enabled": False,
-        "entity_expansion_enabled": False,
-        "entity_expansion_max_chunks": 3,
-        "section_expansion_enabled": False,
-        "section_expansion_max_levels": 2,
-        "section_expansion_input_token_percent": 40,
-        # 関係情報の拡張の上限と業務ガイドの手順ごとの検索の上限・期限も全体設定だけ(#3523)。
-        "graph_expansion_max_chunks": 3,
-        "guide_step_max_queries": 7,
-        "guide_step_deadline_seconds": 37.5,
-    }
-    assert set(old) == set(PROFILE_GLOBAL_QUERY_FIELDS)
-    config = parse_search_answer_profile_config(
-        {
-            "knowledge_base_ids": ["kb-1"],
-            "query": {
-                **old,
-                "max_anchors_per_document": 2,
-                "support_guide_enabled": True,
-            },
-        }
-    )
-    merged, applied = resolve_search_answer_profile_settings(settings, config)
-    assert applied is True
-    for key in old:
-        assert getattr(merged, f"rag_{key}") == getattr(settings, f"rag_{key}")
-    assert merged.rag_max_anchors_per_document == 2
-    # 全体の値が効く(プロファイルの保存値は重ねない)。
-    assert merged.rag_graph_expansion_max_chunks == 5
-    assert merged.rag_guide_step_max_queries == 2
-    assert merged.rag_guide_step_deadline_seconds == 20.0
-    saved = dump_search_answer_profile_config(config)
-    assert saved["knowledge_base_ids"] == ["kb-1"]
-    query = saved["query"]
-    assert isinstance(query, dict)
-    assert not set(old) & set(query)
-    assert query["support_guide_enabled"] is True
-    assert query["max_anchors_per_document"] == 2
-
-
-def test_retrieval_thresholds_are_not_profile_override_fields() -> None:
-    settings = get_settings().model_copy(
-        update={"rag_min_similarity": 0.18, "rag_rerank_min_relevance_score": 0.27}
-    )
-    config = parse_search_answer_profile_config(
-        {"query": {"min_similarity": 0.9, "rerank_min_relevance_score": 0.9}}
-    )
-    resolved, _ = resolve_search_answer_profile_settings(settings, config)
-    assert resolved.rag_min_similarity == 0.18
-    assert resolved.rag_rerank_min_relevance_score == 0.27
-    serialized = dump_search_answer_profile_config(config)
-    query = serialized["query"]
-    assert isinstance(query, dict)
-    assert "min_similarity" not in query
-    assert "rerank_min_relevance_score" not in query
+        assert missing.rag_support_guide_enabled is False
+        assert settings.rag_support_guide_enabled is True

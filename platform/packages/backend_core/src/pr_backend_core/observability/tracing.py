@@ -81,6 +81,10 @@ _SAFE_ATTRIBUTES = frozenset(
         "pr.batch.index",
         "pr.batch.count",
         "pr.retry.reason",
+        # 同じ呼び出しの試行を束ねる id と、この試行の失敗の後にやり直すか（#4736。
+        # 画面が「再試行して成功」と出す）。
+        "pr.call.retry_group",
+        "pr.retry.scheduled",
         "pr.call.transport_status",
         "pr.call.validation_status",
         "pr.cache.hit",
@@ -599,11 +603,17 @@ def observed_span(
     cancellation_check: Callable[[], bool] | None = None,
     display: SpanDisplay | None = None,
     links: Sequence[trace.Link] = (),
+    start_time_ns: int | None = None,
 ) -> Iterator[ObservedSpan]:
-    """実際の呼出しの範囲に置く。例外の本文や stack trace は span に記録しない。"""
+    """実際の呼出しの範囲に置く。例外の本文や stack trace は span に記録しない。
+
+    `start_time_ns` は、先に済んだ処理（送信の前の準備など）の結果を記録するときに、実際に
+    かかった時間の分だけ開始を戻すために渡す（終わりは閉じた時刻。未来の時刻は今にそろえる）。
+    """
     provider, _ = _active_provider()
     tracer = provider.get_tracer("production-ready-suite")
-    start = time_ns()
+    now = time_ns()
+    start = min(start_time_ns, now) if start_time_ns is not None else now
     span_kind = trace.SpanKind[kind.upper()]
     sdk_span = tracer.start_span(name, kind=span_kind, start_time=start, links=list(links))
     observed = ObservedSpan(sdk_span)

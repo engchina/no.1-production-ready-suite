@@ -16,6 +16,33 @@ from app.schemas.document import SourceModality, SourcePreviewKind, SourceProfil
 
 LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024
 
+# アップロードで受ける主要な形式(#4730)。入力の段だけの制限で、形式の判定・解析は変えない。
+# 画面(frontend の upload-selection.ts)と同じ拡張子にする(test_upload_format_contract.py で照合)。
+ACCEPTED_UPLOAD_EXTENSIONS = frozenset(
+    {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".ppt",
+        ".pptx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".txt",
+        ".md",
+        ".markdown",
+        ".json",
+        ".html",
+        ".htm",
+        ".jpg",
+        ".jpeg",
+        ".png",
+    }
+)
+UNSUPPORTED_UPLOAD_FORMAT_MESSAGE = (
+    "この形式は対応していません。PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・HTML・"
+    "JPEG / PNG のいずれかに変換してからアップロードしてください。"
+)
 # アップロードで受け付けない形式と、利用者に示す変換の方法(#3351)。解析に要る依存
 # (HEIC / HEIF は pi-heif の libheif・EPUB は pandoc)をライセンスの理由で入れないため、
 # 保存せずに止める。音声・動画は取り込まない形式で、同じく保存せずに止める(#3369)。

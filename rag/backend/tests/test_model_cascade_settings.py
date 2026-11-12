@@ -86,7 +86,9 @@ def test_profile_escalation_model_is_request_scoped() -> None:
 
 def test_unregistered_escalation_model_is_an_explicit_error() -> None:
     config = SearchAnswerProfileConfig(escalation_model_id="removed-model")
-    with pytest.raises(ProfileAnswerModelUnavailableError, match="確認を通らなかったときのモデル"):
+    with pytest.raises(
+        ProfileAnswerModelUnavailableError, match="出力の検査を通らなかったときのモデル"
+    ):
         resolve_search_answer_profile_settings(_settings(), config)
     # 回答を作らない検索（モデルを適用しない）では止めず、カスケードもしない。
     effective, _ = resolve_search_answer_profile_settings(
@@ -106,7 +108,7 @@ def test_saving_unregistered_escalation_model_returns_422(monkeypatch: pytest.Mo
         },
     )
     assert response.status_code == 422
-    assert "確認を通らなかったときのモデル" in "".join(response.json()["error_messages"])
+    assert "出力の検査を通らなかったときのモデル" in "".join(response.json()["error_messages"])
 
 
 def test_engine_receives_the_escalation_connection(tmp_path: Path) -> None:
@@ -185,15 +187,13 @@ def test_cascade_record_survives_answer_conversion() -> None:
         "primary_model": "model-light",
         "escalation_model": "model-strong",
         "escalated": True,
-        "reasons": ["citation_mismatch"],
+        "reasons": ["structured_output_invalid"],
         "stage": "answer.generate",
     }
     result = AnswerQuestionResult(
         answer="合成の回答",
         question_display="合成の質問",
         original_question="合成の質問",
-        selected_strategy="simple",
-        effective_strategy="simple",
         generation_trace={"model_cascade": record},
     )
     assert _outcome_from_result(result, _SearchState()).diagnostics["model_cascade"] == record

@@ -730,7 +730,6 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     detail = await pipeline.ingest(
         "doc-artifact",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -804,7 +803,6 @@ async def test_low_confidence_excel_header_stops_at_review_even_when_gate_is_off
     detail = await pipeline.ingest(
         "doc-low-header",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -867,7 +865,6 @@ async def test_ingestion_pipeline_stops_at_preprocessed_when_parse_gate_off() ->
     detail = await pipeline.ingest(
         "doc-gate",
         b"pdfdata",
-        "本文を抽出してください。",
         manage_document_state=False,
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
@@ -906,7 +903,6 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys(
     await pipeline.ingest(
         "doc/with/slash:artifact?",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -954,7 +950,6 @@ async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure(
     detail = await pipeline.ingest(
         "doc-artifact-cache-failure",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -1017,7 +1012,6 @@ async def test_preprocess_canonical_persist_failure_surfaces_as_error() -> None:
         await pipeline.ingest(
             "doc-canonical-fail",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )
@@ -1122,7 +1116,6 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         await first_pipeline.ingest(
             "doc-full-artifact-retry",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )
@@ -1161,7 +1154,6 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
     detail = await second_pipeline.ingest(
         "doc-full-artifact-retry",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -1202,7 +1194,6 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
         await first_pipeline.ingest(
             "doc-full-artifact-changed",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )
@@ -1222,7 +1213,6 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
     detail = await second_pipeline.ingest(
         "doc-full-artifact-changed",
         b"pdfdata-changed",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=15),
     )
@@ -1239,25 +1229,24 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
     assert artifacts["extraction_artifact_parse_key"] != first_key
 
 
-@pytest.mark.usefixtures("mineru_selectable")
 def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
     """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
     pipeline = object.__new__(IngestionPipeline)
     pipeline._settings = Settings(
         # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
         rag_field_extraction_enabled=False,
-        rag_parser_adapter_backend="mineru",
-        rag_parser_mineru_enabled=True,
+        rag_parser_adapter_backend="dots_ocr",
+        rag_parser_dots_ocr_enabled=True,
     )
     result = ParserRegistryResult(
         extraction=None,
-        parser_backend="mineru",
+        parser_backend="dots_ocr",
         parser_version="service_unavailable",
         fallback_used=True,
-        warnings=("mineru_adapter_failed",),
+        warnings=("dots_ocr_adapter_failed",),
     )
 
-    with pytest.raises(IngestionUserError, match="MinerU"):
+    with pytest.raises(IngestionUserError, match="Dots.OCR"):
         pipeline._raise_if_selected_parser_was_not_used(result)
 
 
@@ -1289,7 +1278,6 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index(
         await pipeline.ingest(
             "doc-cancel",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
             cancel_checker=cancel_after_extraction,
@@ -1334,7 +1322,6 @@ async def test_ingestion_pipeline_cancel_during_preprocess_does_not_write_later_
         await pipeline.ingest(
             "doc-cancel-preprocess",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
             cancel_checker=cancel_checker,
@@ -1384,7 +1371,6 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
         await pipeline.ingest(
             "doc-cancel-review",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
             cancel_checker=cancel_checker,
@@ -1430,7 +1416,6 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled(
     detail = await pipeline.ingest(
         "doc-graph",
         b"pdfdata",
-        "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=7),
     )
@@ -1531,17 +1516,13 @@ def test_partition_source_preflight_blocks_unsupported_format(
 
 
 @pytest.mark.parametrize("content_kind", ["pdf", "office"], ids=["pdf", "office"])
-@pytest.mark.parametrize("backend", ["oci_document_understanding", "mineru"])
 def test_partition_source_blocks_roadmap_engine_before_any_call(
-    monkeypatch: pytest.MonkeyPatch, content_kind: str, backend: str
+    monkeypatch: pytest.MonkeyPatch, content_kind: str
 ) -> None:
-    """準備中(ロードマップ)のエンジンは、対応形式でも呼ばずに止める。
-
-    OCI Document Understanding(#3374)と MinerU(#3359)。
-    """
+    """準備中(ロードマップ)のエンジンは、対応形式でも呼ばずに止める(#3374)。"""
     from app.clients.parser_service import ParserServiceUnavailableError
 
-    pipeline = _preflight_pipeline(backend, monkeypatch)
+    pipeline = _preflight_pipeline("oci_document_understanding", monkeypatch)
     profile = (
         _pdf_source_profile(file_size_bytes=10)
         if content_kind == "pdf"
@@ -1954,7 +1935,6 @@ async def test_ingest_audit_uses_given_document_source_instead_of_input_bytes(
         await pipeline.ingest(
             "doc-1",
             b"prepared bytes",
-            "prompt",
             record_outcome=False,
             manage_document_state=False,
             cancel_checker=cancelled,
@@ -2005,7 +1985,6 @@ async def test_pipeline_releases_heavy_slot_after_parse_before_llm_stages(
         detail = await pipeline.ingest(
             "doc-heavy-slot",
             b"pdfdata",
-            "本文を抽出してください。",
             content_type="application/pdf",
             source_profile=_pdf_source_profile(file_size_bytes=7),
         )

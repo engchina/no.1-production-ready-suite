@@ -13,7 +13,7 @@
 比べ、手がかりがあって合わなければそのガイドを使わない。手がかりが無い項目は ``unverified`` として
 回答の記録・MCP に出す（推測で埋めない）。
 
-業務ガイドの内容は、回答ルールと同じ経路（runtime knowledge のルール。`pinned` で必ず使う）で
+業務ガイドの内容は、runtime knowledge のルール（`pinned` で必ず使う）として
 回答の材料に渡す。手順の検索の手がかりは検索文に足す。分かっている条件で決まる分岐だけを残し、
 合わない分岐の行き先の手順は材料から外す（#1278）。
 
@@ -1032,13 +1032,12 @@ def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
 
 
 def with_guide_rule(payload: Mapping[str, Any] | None, match: GuideMatch) -> dict[str, Any]:
-    """用語・同義語と回答ルールの payload に業務ガイドのルールを先頭に足した写し。"""
+    """用語・同義語の payload に業務ガイドのルールを足した写し。"""
     base = dict(payload or {})
-    rules = [rule for rule in base.get("rules", []) if isinstance(rule, dict)]
     return {
         "schema_version": base.get("schema_version", 1),
         "terms": list(base.get("terms", [])),
-        "rules": [guide_rule(match), *rules],
+        "rules": [guide_rule(match)],
     }
 
 
@@ -1134,9 +1133,6 @@ def guide_short_circuit_outcome(guide: Mapping[str, Any]) -> Any:
         "gaps": [],
         "confirmations": [],
         # 段落の印・外した段落・回答全体の警告（#2738）。確認・引き継ぎは本文の段落を検証しない。
-        "passage_marks": [],
-        "removed_passages": [],
-        "answer_warnings": [],
         "reference_materials": [],
         "handoff_reasons": ["clarification" if clarify else "handoff"],
         "clarifications": list(guide.get("clarifications") or []),
@@ -1236,15 +1232,16 @@ def is_guide_preview_record(diagnostics: object) -> bool:
 
 
 def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
-    """チャットの確認の質問（ルールの確認と同じ形）。選択肢で答えられる最初の不明・矛盾の条件だけ。
+    """チャットで業務ガイドの条件を確かめる質問。選択肢で答えられる最初の不明・矛盾の条件だけ。
 
-    戻り値は (rule_id, 題名, RuleClarification)。rule_id は ``guide:<guide_id>:<condition_id>``。
+    戻り値は (guide_condition_id, 題名, GuideConditionClarification)。
+    guide_condition_id は ``guide:<guide_id>:<condition_id>``。
     選択肢の id は条件の全選択肢の中の位置（``o<1 始まり>``）で、矛盾した条件は質問に出た値だけを
     出す（答えは ``resolve_guide_clarification`` が同じ位置で引き直す）。
     """
     from app.schemas.search_answer_profile_knowledge import (
         ClarificationOption,
-        RuleClarification,
+        GuideConditionClarification,
     )
 
     if match.decision != "clarify":
@@ -1254,7 +1251,7 @@ def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
         question, shown = _clarification(match, condition)
         if condition.type != "text" and not 2 <= len(shown) <= 8:
             continue
-        clarification = RuleClarification(
+        clarification = GuideConditionClarification(
             question=question[:200],
             multiple=False,
             # 「その他（自由入力）」は常に出す（#1839）。値に当てはめられない答えは前提の文で渡す。
@@ -1269,23 +1266,23 @@ def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
                 for value in shown
             ],
         )
-        rule_id = f"{GUIDE_CLARIFICATION_PREFIX}{match.guide_id}:{condition.id}"
-        return rule_id, match.content.title, clarification
+        guide_condition_id = f"{GUIDE_CLARIFICATION_PREFIX}{match.guide_id}:{condition.id}"
+        return guide_condition_id, match.content.title, clarification
     return None
 
 
 # 上位の業務ガイドが近いときの、どのガイドかの確認の id（#2398）。選択肢の id は guide_id。
-GUIDE_CHOICE_RULE_ID = f"{GUIDE_CLARIFICATION_PREFIX}{GUIDE_CHOICE_CONDITION_ID}"
+GUIDE_CHOICE_CONDITION_ID = f"{GUIDE_CLARIFICATION_PREFIX}{GUIDE_CHOICE_CONDITION_ID}"
 
 
 def guide_choice_clarification(choice: GuideChoice) -> tuple[str, str, Any]:
     """どのガイドかを確かめるチャットの確認（ルールの確認と同じ形）。選択肢の id は guide_id。"""
     from app.schemas.search_answer_profile_knowledge import (
         ClarificationOption,
-        RuleClarification,
+        GuideConditionClarification,
     )
 
-    clarification = RuleClarification(
+    clarification = GuideConditionClarification(
         question=choice.question()[:200],
         multiple=False,
         allow_other=True,
@@ -1299,7 +1296,7 @@ def guide_choice_clarification(choice: GuideChoice) -> tuple[str, str, Any]:
             for match in choice.candidates
         ],
     )
-    return GUIDE_CHOICE_RULE_ID, "業務ガイド", clarification
+    return GUIDE_CHOICE_CONDITION_ID, "業務ガイド", clarification
 
 
 def _resolve_guide_choice(
@@ -1324,12 +1321,14 @@ def _resolve_guide_choice(
 
 
 def _guide_condition(
-    guides: Iterable[tuple[str, int, SupportGuideContent]], rule_id: str
+    guides: Iterable[tuple[str, int, SupportGuideContent]], guide_condition_id: str
 ) -> SupportGuideCondition | None:
     """確認の id（``guide:<guide_id>:<condition_id>``）の業務ガイドの条件（公開の版）。"""
-    if not rule_id.startswith(GUIDE_CLARIFICATION_PREFIX):
+    if not guide_condition_id.startswith(GUIDE_CLARIFICATION_PREFIX):
         return None
-    guide_id, _, condition_id = rule_id.removeprefix(GUIDE_CLARIFICATION_PREFIX).partition(":")
+    guide_id, _, condition_id = guide_condition_id.removeprefix(
+        GUIDE_CLARIFICATION_PREFIX
+    ).partition(":")
     content = next((item for gid, _, item in guides if gid == guide_id), None)
     if content is None:
         return None
@@ -1344,7 +1343,7 @@ def _guide_option_value(condition: SupportGuideCondition, option_id: str) -> str
 
 def resolve_guide_clarification(
     guides: Iterable[tuple[str, int, SupportGuideContent]],
-    rule_id: str,
+    guide_condition_id: str,
     option_ids: Sequence[str],
     other_text: str = "",
 ) -> tuple[dict[str, str], str] | None:
@@ -1355,12 +1354,12 @@ def resolve_guide_clarification(
     文で決めない）。条件は分からないままにし、利用者の入力を前提の文で回答に渡す（回答は値ごとに分けるか、
     当てはまる値を確かめるよう案内する）。
 
-    どのガイドかの確認（``GUIDE_CHOICE_RULE_ID``。#2398）は、選んだガイドを
+    どのガイドかの確認（``GUIDE_CHOICE_CONDITION_ID``。#2398）は、選んだガイドを
     ``GUIDE_CHOICE_CONDITION_ID`` の値にする（照合はそのガイドを使う）。
     """
-    if rule_id == GUIDE_CHOICE_RULE_ID:
+    if guide_condition_id == GUIDE_CHOICE_CONDITION_ID:
         return _resolve_guide_choice(list(guides), option_ids, other_text)
-    condition = _guide_condition(guides, rule_id)
+    condition = _guide_condition(guides, guide_condition_id)
     other = other_text.strip()
     if condition is None or len(option_ids) > 1 or (not option_ids and not other):
         return None
@@ -1391,12 +1390,12 @@ def resolve_guide_clarification(
 
 def guide_clarification_record(
     guides: Iterable[tuple[str, int, SupportGuideContent]],
-    rule_id: str,
+    guide_condition_id: str,
     option_ids: Sequence[str] | None,
     other_text: str = "",
 ) -> dict[str, object] | None:
     """会話に残す「回答前に確認した内容」（#1839）。``option_ids`` が None なら飛ばした記録。"""
-    if rule_id == GUIDE_CHOICE_RULE_ID:
+    if guide_condition_id == GUIDE_CHOICE_CONDITION_ID:
         prompt = "次のどれについての質問ですか？"
         if option_ids is None:
             return {"outcome": "skipped", "entries": [{"prompt": prompt}]}
@@ -1411,7 +1410,7 @@ def guide_clarification_record(
                 }
             ],
         }
-    condition = _guide_condition(guides, rule_id)
+    condition = _guide_condition(guides, guide_condition_id)
     if condition is None:
         return None
     prompt = condition.question or condition.label
@@ -1433,7 +1432,7 @@ def guide_clarification_record(
 
 __all__ = [
     "GUIDE_CHOICE_CONDITION_ID",
-    "GUIDE_CHOICE_RULE_ID",
+    "GUIDE_CHOICE_CONDITION_ID",
     "GUIDE_CLARIFICATION_PREFIX",
     "GUIDE_LOAD_FAILED_KEY",
     "GUIDE_PREVIEW_KEY",

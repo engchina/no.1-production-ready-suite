@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #2549: 業務 Agent の出力の項目。編集画面で定義し、チャットに記録した項目の表と CSV を出す。
 
@@ -8,13 +8,6 @@ const OUTPUT_FIELDS = [
   { key: "item", label: "項目", type: "text", required: true, description: "" },
   { key: "matched", label: "一致", type: "boolean", required: true, description: "" },
 ];
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
 
 function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
   mockApi.state.agents.push({
@@ -69,7 +62,7 @@ for (const viewport of [
     await note.getByRole("textbox", { name: "key" }).fill("note");
     await note.getByLabel("評価の比べ方").click();
     await page.getByRole("option", { name: "意味が同じ" }).click();
-    await expectNoHorizontalOverflow(page);
+    await expectNoPageHorizontalOverflow(page);
     await section.screenshot({ path: testInfo.outputPath(`agent-output-fields-${viewport.name}.png`) });
 
     await page.getByRole("button", { name: "作成", exact: true }).click();

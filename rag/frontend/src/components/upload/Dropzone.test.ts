@@ -11,36 +11,13 @@ describe("Dropzone accepted upload types", () => {
     expect(accepted).not.toContain("image/bmp");
   });
 
-  it("matches supported image and table entry points", () => {
-    expect(accepted).toEqual(
-      expect.arrayContaining([
-        ".gif",
-        ".webp",
-        ".tif",
-        ".tiff",
-        ".tsv",
-        "image/gif",
-        "image/webp",
-        "image/tif",
-        "image/tiff",
-        "text/tab-separated-values",
-      ])
-    );
-  });
-
-  it("includes upload-metadata-only formats that backend skips with explicit warnings", () => {
-    expect(accepted).toEqual(
-      expect.arrayContaining([
-        ".msg",
-        ".doc",
-        ".ppt",
-        ".xls",
-        "application/vnd.ms-outlook",
-        "application/x-msg",
-        "application/msword",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.ms-excel",
-      ])
+  // 主要な形式だけを受ける（#4730）。
+  it("accepts only the main formats", () => {
+    expect(accepted.filter((item) => item.startsWith(".")).sort()).toEqual(
+      [
+        ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt",
+        ".md", ".markdown", ".json", ".html", ".htm", ".jpg", ".jpeg", ".png",
+      ].sort()
     );
   });
 
@@ -53,40 +30,10 @@ describe("Dropzone accepted upload types", () => {
     expect(accepted).not.toContain("application/ogg");
   });
 
-  it("advertises formats read without pandoc and hides formats whose parsers are not installed", () => {
+  it("hides formats whose parsers are not installed", () => {
     // pandoc・pi-heif を入れないため（#3351）。
-    expect(accepted).toEqual(
-      expect.arrayContaining([
-        ".rst",
-        ".org",
-        ".odt",
-        ".rtf",
-        "text/x-rst",
-        "text/org",
-        "application/vnd.oasis.opendocument.text",
-        "application/rtf",
-        "text/rtf",
-      ])
-    );
     for (const item of [".heic", ".heif", ".epub", "image/heic", "image/heif", "application/epub+zip"]) {
       expect(accepted).not.toContain(item);
     }
-  });
-
-  it("keeps semantic HTML MIME variants aligned with SourceProfile", () => {
-    expect(accepted).toEqual(expect.arrayContaining([".xhtml", "application/xhtml+xml"]));
-  });
-
-  it("keeps JSON Lines variants aligned with backend upload whitelist", () => {
-    expect(accepted).toEqual(
-      expect.arrayContaining([
-        ".jsonl",
-        ".ndjson",
-        "application/jsonl",
-        "application/jsonlines",
-        "application/ndjson",
-        "application/x-ndjson",
-      ])
-    );
   });
 });

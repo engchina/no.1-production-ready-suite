@@ -138,7 +138,7 @@ function usePreviewPages(data: RunSourcePreview | undefined): DocumentPreviewPag
 
 /** 原文の本文を読む（RAG の署名つきの URL。Cookie と Referer を送らない）。 */
 async function loadPreviewWindow<T>(url: string, input: object, signal: AbortSignal, view: "reader" | "source-map"): Promise<T> {
-  const target = new URL(url);
+  const target = new URL(url, window.location.origin);
   target.searchParams.set("view", view);
   for (const [key, value] of Object.entries(input)) if (value !== undefined) target.searchParams.set(key, String(value));
   const response = await fetch(target.toString(), { signal, credentials: "omit", referrerPolicy: "no-referrer" });

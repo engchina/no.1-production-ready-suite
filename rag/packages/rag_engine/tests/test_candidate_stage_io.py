@@ -50,6 +50,44 @@ def test_rerank_io_records_real_calls_threshold_and_top_n(monkeypatch):
     assert decisions["採用件数の判断"]["applied"] is True
 
 
+def _context_after_rerank(monkeypatch, scores, **values):
+    records = [child(f"c{i}", i, f"合成本文 {i}", f"合成{i}.txt", f"p{i}") for i in range(len(scores))]
+    parents = [parent(f"p{i}", i, f"合成本文 {i}", f"合成{i}.txt") for i in range(len(scores))]
+    monkeypatch.setattr(a, "search_adb_hybrid_chunks", lambda **_: SimpleNamespace(child_chunks=records, all_chunks=[*records, *parents]))
+    monkeypatch.setattr(a, "_stored_chunk_answer_record", lambda record: record)
+    monkeypatch.setattr(a, "_rerank_configured", lambda _: True)
+    monkeypatch.setattr(a, "rerank_text_with_scores", lambda *_, **kw: [RerankTextRank(i, score) for i, score in enumerate(scores)])
+    return a.build_adb_hybrid_answer_context(
+        "合成の質問",
+        "synthetic-run",
+        ["docling"],
+        settings(document_selection_enabled=False, **values),
+        top_k=3,
+        neighbor_child_count=0,
+        retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+    )
+
+
+def test_candidate_count_is_taken_before_the_relevance_threshold(monkeypatch):
+    result = _context_after_rerank(monkeypatch, [0.9, 0.1, 0.2], rerank_min_relevance_score=0.4, rerank_top_n=0)
+    counts = a._retrieval_counts(result, ())
+    assert (counts["candidate_count"], counts["found"], counts["passed_to_model"]) == (3, 1, 0)
+    assert result.candidate_count == 3
+
+
+def test_candidate_count_survives_when_the_threshold_removes_everything(monkeypatch):
+    result = _context_after_rerank(monkeypatch, [0.01, 0.01], rerank_min_relevance_score=0.9, rerank_top_n=0)
+    counts = a._retrieval_counts(result, ())
+    assert (counts["candidate_count"], counts["found"], counts["passed_to_model"]) == (2, 0, 0)
+
+
+def test_candidate_count_is_at_least_the_found_count_when_the_search_did_not_record_it():
+    # 件数を持たない context（SDK・テストの組み立て）でも「候補 < 通過」にしない。
+    records = [child("c", 1, "合成本文", "合成.txt", "p")]
+    counts = a._retrieval_counts(a.AnswerContext(records=records, text="合成本文", ranked_candidates=tuple(records)), ())
+    assert (counts["candidate_count"], counts["found"]) == (1, 1)
+
+
 @pytest.mark.parametrize("mode", ["disabled", "empty", "failure", "unscored"])
 def test_rerank_io_does_not_invent_scores_or_a_successful_call(monkeypatch, mode):
     records = [] if mode == "empty" else [child("a", 1, "合成の本文", "a.txt", "p")]
@@ -108,8 +146,6 @@ def test_candidate_document_and_anchor_io_follow_real_pipeline(monkeypatch, last
                 rerank_top_n=0,
                 max_anchors_per_document=1,
                 document_selection_enabled=True,
-                article_catalog_enabled=False,
-                screen_linking_enabled=False,
             ),
             top_k=1,
             neighbor_child_count=0,

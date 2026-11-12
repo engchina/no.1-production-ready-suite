@@ -18,7 +18,11 @@ export type AnswerTextEntry =
   | { kind: "text"; text: string };
 
 export type AnswerTextBlock =
-  | { kind: "paragraph"; text: string }
+  /**
+   * 節の前の段落。`citations` は段落の直後の「根拠：」の行（回答エンジンが冒頭の回答の表の下に出す行ごとの出典行。
+   * #4812）と、その本文の何番目の行か（`citationLines`）。
+   */
+  | { kind: "paragraph"; text: string; citations?: string[]; citationLines?: number[] }
   | { kind: "section"; title: string; ordered: boolean; entries: AnswerTextEntry[] };
 
 // rag_engine の grounded.py の RULES_SECTION_TITLE / QUOTE_ONLY_LABEL / GAPS_SECTION_TITLE /
@@ -33,10 +37,6 @@ const SECTION_TITLE = new RegExp(
       "質問の条件への当てはめ",
       "業務ガイドの案内",
       "質問.{1,12}?：.+",
-      "根拠と矛盾し除いた内容",
-      "確認が必要な点",
-      "根拠で確かめきれていない事項",
-      "資料の出典を確かめられない説明",
       "参考情報",
       "資料から確認できなかった事項",
       "回答に未反映の関連章節",
@@ -91,6 +91,14 @@ function sectionTitle(line: string, format?: AnswerFormat): boolean {
   ) + "$").test(line));
 }
 
+function nextNonEmptyLine(lines: readonly string[], start: number): string | undefined {
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (line) return line;
+  }
+  return undefined;
+}
+
 export function parseAnswerText(text: string, format?: AnswerFormat): AnswerTextBlock[] | null {
   const lines = text.split("\n");
   const citation = format?.citation_prefix ? new RegExp("^" + escapePattern(format.citation_prefix)) : CITATION;
@@ -99,22 +107,34 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   const blocks: AnswerTextBlock[] = [];
   let section: Extract<AnswerTextBlock, { kind: "section" }> | null = null;
   let paragraph: string[] = [];
+  // 節の前の段落の直後の根拠の行（冒頭の回答の表の下の出典行。#4812）。
+  let paragraphCitations: { line: string; ordinal: number }[] = [];
   // 本文の「根拠：」の行の順番（1 始まり）。回答エンジンが出典行ごとの根拠に付ける番号と同じ数え方（#1330）。
   let citationOrdinal = 0;
   const isApplication = () => Boolean(section && [format?.applications_section, "資料をもとに導いた結論", "質問の条件への当てはめ"].includes(section.title));
   const flushParagraph = () => {
     const joined = paragraph.join("\n").trim();
+    const cited = paragraphCitations;
     paragraph = [];
+    paragraphCitations = [];
     if (!joined) return;
     const last = section?.entries[section.entries.length - 1];
     if (isApplication() && last?.kind === "item") (last.details ??= []).push(joined);
     else if (section) section.entries.push({ kind: "text", text: joined });
-    else blocks.push({ kind: "paragraph", text: joined });
+    else if (cited.length) {
+      blocks.push({
+        kind: "paragraph",
+        text: joined,
+        citations: cited.map((entry) => entry.line),
+        citationLines: cited.map((entry) => entry.ordinal),
+      });
+    } else blocks.push({ kind: "paragraph", text: joined });
   };
   // 結論の説明（#4393）を集めている項目。根拠の行（回答エンジンは説明の後に必ず根拠の行を置く）か節の見出しで閉じる。
   let reasoning: { entry: Extract<AnswerTextEntry, { kind: "item" }>; lines: string[] } | null = null;
   // 本文の続きの行を受ける項目（#4632）。回答エンジンは項目の文の改行（隣り合う表の行をまとめた引用など）をそのまま
-  // 出すので、項目の直後の行は空行・箇条書き・節の見出し・根拠の行で区切られるまで項目の本文の続きにする。
+  // 出すので、項目の直後の行は空行（後ろが表の行のときを除く。#4734）・箇条書き・節の見出し・根拠の行で区切られるまで
+  // 項目の本文の続きにする。
   // 区切りは書式の印だけで決める。結論の節の項目は説明の行を details に分けるので受けない。
   let continued: Extract<AnswerTextEntry, { kind: "item" }> | null = null;
   const closeReasoning = () => {
@@ -123,10 +143,15 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
     if (value) reasoning.entry.reasoning = value;
     reasoning = null;
   };
-  for (const raw of lines) {
+  for (const [lineIndex, raw] of lines.entries()) {
     const line = raw.trim();
-    const item = continued;
+    const item: Extract<AnswerTextEntry, { kind: "item" }> | null = continued;
     continued = null;
+    if (item && !line && nextNonEmptyLine(lines, lineIndex + 1)?.startsWith("|")) {
+      // 項目の直後の空行の後ろが表の行なら、表も項目の続きにする（#4734。後ろの根拠の行を項目に残す）。判定は行の形だけ。
+      continued = item;
+      continue;
+    }
     if (reasoning) {
       if (!citation.test(line) && !sectionTitle(line, format)) {
         reasoning.lines.push(raw.trimEnd());
@@ -169,6 +194,11 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
       continued = item;
       continue;
     }
+    if (citation.test(line) && !section && paragraph.length > 0) {
+      paragraphCitations.push({ line, ordinal: citationOrdinal });
+      continue;
+    }
+    if (paragraphCitations.length) flushParagraph();
     if (citation.test(line) && isApplication()) flushParagraph();
     const last = section?.entries[section.entries.length - 1];
     if (citation.test(line) && last?.kind === "item" && paragraph.length === 0) {

@@ -41,15 +41,19 @@ export function EvaluationJobPanel({
   title = t("evaluation.job.title.run"),
   testPrefix = "evaluation-run-job",
   currentLabel,
+  meta,
 }: {
   job: EvaluationJob;
-  onCancel: (job: EvaluationJob) => void;
+  /** 取り消し。渡さなければ取り消しを出さない（実行した本人と system_admin だけ。#4811）。 */
+  onCancel?: (job: EvaluationJob) => void;
   cancelling: boolean;
-  /** 見出し（判定の校正の job は「校正の実行状況」。#3578）。 */
+  /** 見出し（省略時は評価の job の見出し）。 */
   title?: string;
   testPrefix?: string;
   /** 実行中の対象の文言（省略時は評価のケースの行。null なら出さない）。 */
   currentLabel?: string | null;
+  /** 実行日時の行に並べる補足（評価の条件・実行した利用者。#4811）。 */
+  meta?: string[];
 }) {
   const active = isEvaluationJobActive(job);
   const currentCase = currentLabel === undefined ? evaluationJobCurrentCaseLabel(job) : currentLabel;
@@ -76,7 +80,7 @@ export function EvaluationJobPanel({
               {evaluationJobCountLabel(job)}
             </span>
           </div>
-          {active ? (
+          {active && onCancel ? (
             <Button
               type="button"
               size="sm"
@@ -117,6 +121,11 @@ export function EvaluationJobPanel({
           {job.finished_at ? (
             <span>{t("evaluation.job.finishedAt", { time: formatDateTime(job.finished_at) })}</span>
           ) : null}
+          {(meta ?? []).map((item) => (
+            <span key={item} className="break-words">
+              {item}
+            </span>
+          ))}
         </div>
         {active ? <p className="text-xs text-fg-muted">{t("evaluation.job.timeLimitHint")}</p> : null}
         {job.status === "FAILED" ? (

@@ -10,18 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import (
     asks_for_request,
     greets,
     is_clarification_only,
     is_greeting_only,
     non_claim_passages,
-)
-from app.features.agent.answer_validation import (
-    REASON_CLARIFICATION_ONLY,
-    STATUS_SKIPPED,
-    validation_content,
 )
 from app.features.agent.runtime import RunStep, StepStatus
 from app.features.agent.tools import ToolCall, ToolResult
@@ -61,14 +55,6 @@ def _lookup_guides() -> RunStep:
         tool_call=ToolCall(name=name, arguments={"query": "権限の付与"}),
         tool_result=ToolResult(name=name, success=True, output={"guides": []}),
     )
-
-
-@pytest.mark.parametrize("answer", CLARIFICATIONS.values(), ids=CLARIFICATIONS.keys())
-def test_question_with_preface_and_answer_guidance_is_clarification_only(answer: str) -> None:
-    assert is_clarification_only(answer)
-    validation = validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY)
-    content = answer_outcome(answer, steps=[_lookup_guides()], validation=validation)
-    assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
 
 
 # あいさつ・お礼の文を添えた、用件を聞く確認の質問（#1879。#1863 の実モデルの回答）。

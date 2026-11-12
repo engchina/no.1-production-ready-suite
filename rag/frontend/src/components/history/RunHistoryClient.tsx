@@ -2,7 +2,7 @@
 
 /**
  * 実行履歴（`/history`・`/history/<run_id>`。#1890・#1955）。チャットと RAG 検索の実行を一覧し、全幅の詳細で
- * 回答・根拠・資料との照合・処理の経過を確かめる。
+ * 回答・根拠・処理の経過を確かめる。
  *
  * - 型は 3 製品で共通（UX 契約 run-history.md）。一覧は `RunHistoryToolbar`（検索 → 状態 → 種類 → 期間 → 実行者）
  *   → `RunHistoryTable` → `OffsetPagination`、詳細は `RunDetailLayout`（概要 → 処理の経過 → 回答 → 根拠 →
@@ -24,7 +24,6 @@ import {
   DEFAULT_PAGE_SIZE,
   DEFAULT_RUN_PERIOD,
   DataTable,
-  InfoTip,
   OffsetPagination,
   PageBody,
   PageHeader,
@@ -97,7 +96,6 @@ import {
   runSurfaceLabel,
   runTimeline,
   runUsageView,
-  runVerificationView,
   toRunStatus,
   type RunSurfaceFilter,
 } from "./run-history-view";
@@ -367,7 +365,7 @@ export function RunHistoryClient() {
   );
 }
 
-/** RAG の列（回答の対応・資料との照合）。所要時間の右に置き、狭い画面では出さない（詳細の概要で見る）。 */
+/** RAG の列（回答の対応）。所要時間の右に置き、狭い画面では出さない（詳細の概要で見る）。 */
 function runExtraColumns(): DataTableColumn<RunSummary>[] {
   return [
     {
@@ -375,20 +373,6 @@ function runExtraColumns(): DataTableColumn<RunSummary>[] {
       header: t("history.col.outcome"),
       className: "whitespace-nowrap",
       render: (run) => <StatusBadge {...runOutcomeView(run)} />,
-    },
-    {
-      key: "verification",
-      header: (
-        <span className="inline-flex items-center gap-1">
-          {t("history.col.verification")}
-          <InfoTip label={t("history.verification.helpLabel")} content={t("history.verification.help")} />
-        </span>
-      ),
-      className: "whitespace-nowrap",
-      render: (run) => {
-        const view = runVerificationView(run.verification, run.validation_execution);
-        return view ? <StatusBadge {...view} /> : <span className="text-fg-muted">{t("history.notRecorded")}</span>;
-      },
     },
   ];
 }
@@ -471,7 +455,6 @@ function RunDetailView({ run }: { run: RunDetail }) {
       : null;
   // 「RAG 検索で開く」（#3309）: 本人の RAG 検索の実行を、質問と条件を入れて RAG 検索の画面に開く（検索はしない）。
   const searchHref = runSearchHref(run, { canOpenSearch: hasPermission(MENU_PERMISSIONS.search) });
-  const verification = runVerificationView(run.verification, run.validation_execution);
   const statusLabels = runStatusLabels();
   const traceLabels = useTraceDetailsLabels();
   const succeeded = run.status === "success";
@@ -531,12 +514,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
           testId="run-history-summary"
           status={toRunStatus(run.status)}
           labels={{ summary: t("history.detail.summary"), status: statusLabels }}
-          badges={
-            <>
-              <StatusBadge {...runOutcomeView(run)} />
-              {verification ? <StatusBadge {...verification} /> : null}
-            </>
-          }
+          badges={<StatusBadge {...runOutcomeView(run)} />}
           question={run.question || t("history.question.withheld")}
           startedAt={runStartedAt(run)}
           finishedAt={run.elapsed_ms != null ? run.created_at : null}

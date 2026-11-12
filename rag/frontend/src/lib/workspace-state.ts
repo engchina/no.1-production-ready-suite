@@ -37,24 +37,21 @@ export type WorkspaceField =
   | "searchAnswerProfiles.draft"
   // 品質評価（#2065）: 検証した評価リクエストの Excel（ケースとプレビュー。200,000 文字を超えると
   // 保存しない）、KB スコープ、評価の job id と、その評価のケースの見出し（結果の表の質問・根拠）。
+  | "evaluation.answerModelId"
   | "evaluation.import"
   | "evaluation.profileId"
   | "evaluation.runProfileName"
   | "evaluation.runInput"
   | "evaluation.runJobId"
   | "evaluation.runCaseLabels"
+  // 見出し・実行時の入力を残した評価の job id と、過去の評価の一覧のページ（#4811）
+  | "evaluation.runLabelsJobId"
+  | "evaluation.historyPaging"
   | "evaluation.compareEnabled"
   | "evaluation.compareProfileId"
   | "evaluation.runCompareName"
   | "evaluation.processDrafts"
   | "evaluation.useProcessDrafts"
-  // 判定の校正（#3578）: 選んだ記入の集合・手順のタブ・記入の観点と状態の絞り込み・校正の job id。
-  | "evaluation.calibration.setsPaging"
-  | "evaluation.calibration.labelSetId"
-  | "evaluation.calibration.step"
-  | "evaluation.calibration.aspect"
-  | "evaluation.calibration.rowFilter"
-  | "evaluation.calibration.jobId"
   | "feedback.search"
   | "history.view"
   | "language-releases.paging"
@@ -63,6 +60,7 @@ export type WorkspaceField =
   | "evaluation.testsets.sourcesPaging"
   | "evaluation.testsets.candidatesPaging"
   | "evaluation.testsets.itemsPaging"
+  | "evaluation.testsets.importPaging"
   | "evaluation.casesPaging"
   | "evaluation.previewPaging"
   | "supportGuides.includeArchived"
@@ -73,11 +71,7 @@ export type WorkspaceField =
   | "runtimeKnowledge.listPaging"
   | "approvedFaqs.listPaging"
   | "documentCategories.searchPaging"
-  // 品質評価の校正・期待の下書きの一覧（#4636）
-  | "evaluation.calibration.historyPaging"
-  | "evaluation.calibration.sourcesPaging"
-  | "evaluation.calibration.syntheticPaging"
-  | "evaluation.testsets.previousCalibrationPaging"
+  // 品質評価の期待の下書きの一覧（#4636）
   | "evaluation.processDraftsPaging";
 
 interface StoredRecord {

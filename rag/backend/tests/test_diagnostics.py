@@ -99,34 +99,6 @@ def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() 
     assert first != second
 
 
-@pytest.mark.parametrize(
-    "update",
-    [
-        {"rag_query_strategy": "rag_fusion"},
-        {"rag_answer_flow": "crag"},
-        {"rag_neighbor_child_count": 5},
-        {"rag_rerank_enabled": False},
-        {"rag_screen_linking_enabled": True},
-        {"rag_request_coverage_retrieval_enabled": True},
-    ],
-    ids=[
-        "query_strategy",
-        "answer_flow",
-        "neighbor",
-        "rerank",
-        "screen_linking",
-        "request_coverage",
-    ],
-)
-def test_rag_config_fingerprint_changes_when_answer_settings_change(
-    update: dict[str, object],
-) -> None:
-    """fingerprint は回答の検索と生成の全体既定の変更も反映する。"""
-    base = Settings()
-
-    assert rag_config_fingerprint(base) != rag_config_fingerprint(base.model_copy(update=update))
-
-
 def test_rag_config_fingerprint_changes_with_vector_index_profile() -> None:
     """fingerprint は検索インデックス profile の違い(検索時 accuracy)を反映する。"""
     fingerprints = {
@@ -147,7 +119,8 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_page_continuation_",
     "rag_heading_level_inference_",
     "rag_navigation_summary_",
-    "rag_raptor_",
+    # 取込の後段の文書全体の要約（#4793）。結果は文書の要約の行と要約の chunk に残る。
+    "rag_document_summary_",
     "rag_field_extraction_",
     "rag_auto_",
     # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。
@@ -158,7 +131,6 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_embedding_",
     "rag_rerank_cache_",
     "rag_evaluation_",
-    "rag_article_catalog_cache_",
     # 別の機能の管理の設定。回答の入力に入らない。
     "rag_approved_faq_",
     "rag_support_guide_import_",
@@ -171,6 +143,7 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_chunk_child_target_chars",
         "rag_chunk_context_header_enabled",
         "rag_chunk_delimiter",
+        "rag_chunk_separators",
         "rag_chunk_min_chars",
         "rag_chunk_parent_max_children",
         "rag_chunk_parent_max_pages",
@@ -184,7 +157,6 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_extraction_artifact_prefix",
         "rag_graph_profile",
         "rag_review_gate_enabled",
-        "rag_section_extraction_enabled",
         "rag_segment_checkpoint_enabled",
         "rag_vision_concurrency",
         "rag_vision_enabled",
@@ -196,10 +168,6 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_chunk_set_retention_days",
         "rag_chunk_set_retained_versions",
         "rag_answer_timeout_seconds",
-        "rag_answer_validation_concurrency",
-        "rag_answer_validation_timeout_seconds",
-        "rag_article_catalog_call_timeout_seconds",
-        "rag_mcp_catalog_article_evidence_limit",
         "rag_native_index_full_optimize_interval_hours",
         "rag_rerank_max_documents_per_request",
         "rag_support_guide_max_published_revisions",
@@ -215,8 +183,9 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_runtime_knowledge",
         "rag_search_answer_profile_revision",
         "rag_support_guide",
-        # 言語資源の差のファイルの置き場所。値は path で、内容の版ではない。
-        "rag_language_pack_file",
+        # 形式別の既定（#4732）のファイルの置き場所。値は path で、内容は取込の設定（結果は
+        # chunk_set の id に残る）。
+        "rag_file_type_defaults_file",
     }
 )
 

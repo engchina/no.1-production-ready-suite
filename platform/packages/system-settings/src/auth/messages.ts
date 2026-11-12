@@ -34,7 +34,7 @@ export const AUTH_MESSAGES = {
   forbiddenDescription: "必要なロールが付与されているか、システム管理者に確認してください。",
   forbiddenBack: "利用可能な画面へ戻る",
   /** アカウントの欄（名前・ロール）のリンクの読み上げ名（#1873）。 */
-  sidebarOpenAccount: "アカウント設定を開く（{name}）",
+  sidebarAccountMenu: "アカウントのメニュー",
   // アカウントの画面（#1873）。サイドナビのアカウントの欄から開き、タブで API キーとパスワード変更を切り替える。
   accountTitle: "アカウント",
   accountSubtitle: "{name}（ロール: {roles}）",

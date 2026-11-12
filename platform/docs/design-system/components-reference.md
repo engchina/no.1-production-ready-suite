@@ -2249,6 +2249,17 @@ const load = dataLoadView(query, { isEmpty: page?.total === 0 });
 - `databaseAction` は接続の失敗のときだけ再試行の前に出る。開ける利用者のときだけ渡す。データベース設定へのリンクは `@production-ready/system-settings` の `DatabaseSettingsLink`。
 - `QueryClient` の既定に `retryDataLoad` / `dataLoadRetryDelay` を渡す。
 - `ErrorState` の `focusRetry`（再試行へフォーカス）と `action`（再試行の前の導線）はこの部品が使う。
+- 選択欄の候補・欄の値など、画面の一部の欄を支える読み取りの失敗は `layout="field"`（#4222・#4817）。欄の直下の 1 行で出す: danger のアイコンと `fallback`（**欄ごとの文**。何を読めなかったか）・「詳細」（button + region。畳んで出す）・`databaseAction`（条件は `region` と同じ）・再試行。原因の文（backend の文・`labels.timeout`・`labels.unavailable`）と技術的な情報は「詳細」の中。danger の面・枠で囲まず、フォーカスは動かさない。`region`（既定）の見出しと形は変えない。
+
+```tsx
+// 欄の直下（FormGrid の中では col-span-full の箱に入れる）。fallback は欄ごとの i18n の文（common.* は lint が止める）。
+{query.isError && query.data === undefined ? (
+  <DataLoadFailureState error={query.error} fallback={t("…candidatesLoadError")} labels={labels} onRetry={() => void query.refetch()} databaseAction={…} layout="field" testId="…-load-failed" />
+) : null}
+```
+
+- 製品は `components/DataLoadStates.tsx` の `DataLoadFailure`（文言と `databaseAction` を束ねたラッパー。RAG・Agent・NL2SQL）から使う。製品で `Banner`・警告の文・`helper` / `error` の文・手書きの枠で欄の読み取りの失敗を出さない。共有の部品に欄を持つとき（`MyApiKeysPanel` の `agentScopeFailure` など）は、製品がこの表示を渡す口を付ける。
+- 単体テストは `packages/ui/tests/data-load.test.tsx`、実ブラウザの検査は `packages/ui/e2e/field-load-failure.ts`（`findFieldLoadFailureViolations`）。
 
 ## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
 
@@ -3194,7 +3205,7 @@ function submit() {
 
 ## ChatProgress — **新規**（#1145）
 
-チャットの回答の場所（アシスタントの吹き出しの中、回答の上）に置く、backend の処理の段階の控えめな表示。3 製品（RAG・NL2SQL・Agent）のチャットで同じ部品・同じ段階の形を使う。SQL 生成の画面の工程の表示（NL2SQL の `WorkflowProgressStrip`）より情報を絞る。
+回答カードの上に独立して置く、backend の処理の段階の表示。3 製品（RAG・NL2SQL・Agent）のチャット、検索・SQL 生成と実行履歴で、共有の `RunProgressCard` の枠・配色・余白を使う（#4884）。`ChatAnswer` の `progress` に渡すと、進度と回答は同じ往復の中で上下に並び、枠が入れ子にならない。見出しに状態・ステップ数・経過時間をまとめ、展開した時間線の末尾へ「軌跡を調べる」と「処理の詳細」を置く。ライト・ダークの配色は `Card` の共有トークンに従う。
 
 ### 段階の形（3 製品共通の契約）
 
@@ -3394,6 +3405,7 @@ import { ResultTable, toast } from "@production-ready/ui";
 ```ts
 export interface ResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
 export interface ResultTableProps {
+  renderCell?: (value: unknown, rowIndex: number, columnIndex: number) => React.ReactNode | undefined;  // undefined は既定のセル
   columns: readonly ResultTableColumn[];
   rows: readonly (readonly unknown[])[];       // 取得した行（列の順）。NULL は null
   truncated?: boolean;                         // 上限（行数・応答の大きさ）で打ち切った
@@ -3686,15 +3698,14 @@ function submit() {
 
 ## ChatTurn / ChatAnswer / ChatPendingTurn — **新規**（#1161）
 
-チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。回答の中身（処理の段階 `ChatProgress`・本文・引用・SQL・ツール・承認・評価）は製品が子要素で渡す。
+チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。進度は `ChatAnswer.progress`、回答の中身（本文・引用・SQL・ツール・承認・評価）は子要素で渡す。進度と回答は独立した枠で上下に並ぶ（#4884）。
 
 ```tsx
 import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 // 確定した往復
 <ChatTurn question={turn.question} testId="sql-chat-turn">
-  <ChatAnswer live>                       {/* 回答が後から届く製品は live（polite） */}
-    <ChatProgress … />
+  <ChatAnswer live progress={<ChatProgress … />}> {/* 回答が後から届く製品は live（polite） */}
     <AnswerBody … />
   </ChatAnswer>
 </ChatTurn>
@@ -3713,7 +3724,7 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 |---|---|
 | 1 往復は `<article>`（質問と回答の間 0.5rem）。往復の間は会話の欄（`ChatLayout`）が 1.25rem を空ける | 3 製品で `div` / `article` と間隔が違っていた。往復のまとまりを読み上げでも区切る |
 | 回答の枠は `rounded-md`・`border`・`bg-surface`・`p-3`、中は縦に 0.75rem 間隔（`ChatAnswer`） | NL2SQL は `Card`（影・角丸 lg）、RAG・Agent は枠線の箱で、余白も違っていた。会話の欄の中で影を重ねない |
-| 送信中は回答の枠に処理の段階だけを出し、送れなかったら枠を出さずに原因と「再送信」を出す（`ChatPendingTurn`） | 送れなかった質問を残し、入力欄に戻さない（messaging.md §11.3）。動くスピナーは回答の場所の 1 つだけ |
+| 送信中は独立した進度カードだけを出し、空の回答カードは出さない。送れなかったら原因と「再送信」を出す（`ChatPendingTurn`） | 送れなかった質問を残し、入力欄に戻さない（messaging.md §11.3）。動くスピナーは回答の場所の 1 つだけ |
 | 複数モデルの比較（RAG）は `ChatAnswer` を列にして並べる（`className` で `h-full`） | 比較の列も同じ枠にする |
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
@@ -3730,7 +3741,7 @@ LLM の回答など Markdown の本文を、記号のまま出さずに要素で
 ```tsx
 import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-ready/ui";
 
-// 表は先に取り出して共通の結果の表で出し、残りを MarkdownText で描く（Agent の AnswerBody）。
+// 表は先に取り出して共通の結果の表で出し、残りを MarkdownText で描く（共有の AnswerBody。下の節。#4734）。
 {splitMarkdownTables(answer).map((segment, index) =>
   segment.kind === "text" ? (
     <MarkdownText key={index} text={segment.text} headingLevel={3} />
@@ -3752,6 +3763,22 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 
 - 描くもの: 見出し（`#`〜`######`）・段落（中の改行は `<br>`）・`-` / `*` / `+` / `1.` の箇条書き（字下げで入れ子）・` ``` ` / `~~~` のコードブロック（`data-language`）・`>` の引用・`---` の区切り線、行の中の `` `code` ``・`**強調**`・`*斜体*`・`[文字](https://…)`・`<https://…>`・裸の URL、`\*` の取り消し。
 - 描かないもの: 生の HTML（文字のまま）・表（段落の文字のまま。`splitMarkdownTables` で先に取り出す）・画像・`_斜体_`（識別子の `_` を斜体にしない）・`http(s)` / `mailto` 以外のリンク。
+
+### AnswerBody（#4734。Agent の `AnswerBody` を移した）
+
+回答の本文の中の表を共通の結果の表で出す部品。`text` を `splitMarkdownTables` で分け、表は `ResultTable`、表以外は `MarkdownText`（`renderText` を渡せば製品の描き方）で描く。3 製品で表の切り出しと名前の付け方を 1 つにするため、製品で `splitMarkdownTables` と `ResultTable` を組み合わせて書かない（Agent は文言だけを渡す、RAG は節に分けない本文・段落・項目・結論の説明で使う）。
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `text` | `string` | — | 表を含みうる本文 |
+| `headingLevel` | `2 \| 3 \| 4 \| 5 \| 6` | `MarkdownText` の既定 | `renderText` を渡さないときの本文の見出しの段 |
+| `renderText` | `(text: string) => ReactNode` | `MarkdownText` | 表以外の部分の描き方 |
+| `splitOptions` | `SplitMarkdownTablesOptions` | — | `{ headerlessRows: true }` で区切りの行の無い `\| A \| B \|` の行の並び（2 行以上）も表にする。文書の表から切り出した本文用で、列の名前は番号（RAG） |
+| `labels` | `AnswerBodyLabels` | `DEFAULT_ANSWER_BODY_LABELS` | `tableName(number)`（表が 1 つなら `number` は null）・`table(name)`（その表の `ResultTable` の文言） |
+| `renderTableCell` | `(cell: AnswerBodyTableCell) => ReactNode \| undefined` | — | 表のセルの描き方（`value`・`rowIndex`・`columnIndex`・`table.number`・`table.columns`）。RAG は出典の列の `[1][2]` を `AnswerSourceMarks` にする |
+| `className` / `testId` | `string` | — | 外側の `div`。表は `{testId}-table-{番号}` |
+
+回答の表の出典の列（#4812）: `AnswerSourceMarks`（`marks`: `key`・`label`（「[1]」）・`targetId`・`ariaLabel`）は印ごとのリンクで、押すと `targetId` の根拠の行の原文を開く（行がボタンのとき。#4822。表のプレビューでもすべての行のシートでも同じ。行が押せないときは、その行へ移ってフォーカスする）。当たり判定 24px、タッチ端末 44px。対応する行は `AnswerSections` の根拠の行で、`AnswerCitationRef` の `marker`（行の前の「[1]」）と `anchorId`（押せる行はボタン、押せない行は文字の要素の id）で付ける。
 
 ---
 
@@ -3964,15 +3991,13 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 | `SourceVersionStaleNotice` / `isSourceVersionStale` | `message?`（既定は共通の文言）/ `error` | 再索引などで引用の版を表示できない根拠の案内（info の `Banner`。エラーと再試行を出さない）と、失敗がそれに当たるかの判定（`errorCode === "source_stale"`）。`EvidenceReader` と原本の対応箇所は内部で使い、製品は自前の取得（Agent のプレビューの発行・RAG の ID からの根拠の読み取り）の失敗に使う（#4092） |
 | `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
 | `evidenceCountLabel` | `(items, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
-| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`）・`passages?`・`passageLabels?` | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ）。`passages`（#2738）を渡すと、段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` を照合して印を付け、本文の上に回答全体の注意、後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す |
-| `parseAnswerPassageRecords` / `matchAnswerPassageMarks` / `answerPassageCounts` | `(source)` / `(passages, marks)` / `(records)` | 回答の記録の `passage_marks`・`removed_passages`・`answer_warnings` を読む（3 つとも無い過去の記録は null）。照合は印の原文と同じ段落 → 含む段落 → 含まれる段落の順（箇条書きの印・強調・空白・「根拠：」の行を除いて比べる。契約は `platform/contracts/answer-passages/passage-marks.json`） |
-| `AnswerPassageMarked` / `AnswerPassageWarnings` / `AnswerPassageBadges` | `group`・`anchorId`・`render(marker)` / `warnings` / `records`・`labels?`・`testId?` | 印の段落（左の線・末尾の印・開く理由）、回答全体の注意（warning の `Banner`）、印の数のバッジ（0 件は出さない）。文言は `AnswerPassageLabels`（製品が i18n で渡す。RAG `answerPassageLabels()`・Agent `answerPassageLabels()`） |
+| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`）・`passages?`・`passageLabels?` | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足。項目の `content` が表などのブロックを含むなら `block`。#4734）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ）。`passages`（#2738）を渡すと、段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` を照合して印を付け、本文の上に回答全体の注意、後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す |
 | `MarkdownInlineText` | `text`・`labels?` | 段落・項目の中の太字・斜体・コード・リンクだけを描く（`<p>` / `<li>` の中に置く） |
 
 **データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。
 
 - RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/citation-evidence.ts`）。根拠のパネルは `CitationSourceSheet`（`EvidenceSourceSheet` に原文のプレビュー `DocumentPreview` を渡す）。
-- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に RAG と同じ `DocumentPreview`（`RagSourcePreview`）を渡す。原文は RAG の画面用の Cookie の API ではなく、Agent の backend（`GET /api/runs/{run_id}/source-preview`）が閲覧者として RAG に作らせた短命の署名つきの URL で読む（#2389）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
+- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に RAG と同じ `DocumentPreview`（`RagSourcePreview`）を渡す。原文は RAG の画面用の Cookie の API ではなく、Agent の backend（`GET /api/runs/{run_id}/source-preview`）が閲覧者として RAG に作らせた短命の署名つきの URL で読む（#2389）。
 - 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`・`answer-passage-marks.test.tsx`（段落の印の契約の事例を読む）・`evidence-figure.test.tsx`。
 
 ---
@@ -4077,3 +4102,34 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 ### テキスト原本の表示範囲通知（#3995）
 
 `DocumentPreview` の `loadTextRange` は `DocumentTextRange` を返す。任意の `revision` と `previous_offset`／`next_offset` を使って、長さ上限を保った構造単位の移動ができる。`onTextRangeChange` は取得に成功して実際に表示した範囲だけを通知する。座標は Unicode codepoint とし、原本と抽出本文の座標の変換・版の検証は製品が担当する。失敗・取消した応答では通知しない。`focusRequestKey` を変えるとテキストの引用／章節位置も再取得する。
+
+## 構造化した原文の共通表示（#4888）
+
+`EvidenceReader`は`blocks[].record`があるとき、共有の`SourceRecordView`でCSV/Excelの表行列とWord段落/表を表示する。表は`DataTable`、記録の文字の強調は`CodepointHighlight`。保存された記録単位の強調を文字単位の精密な引用と区別し、原生の行列/段落位置を出す。引用に含まれない前後文と、`highlight=false`の未確定の引用は強調しない。
+
+解析画面は`purpose="selection"`で選択位置の文言を使い、Chatは既定の引用の文言を使う。位置と版の検証は製品backend、配色・文字・表・フォーカス・明暗テーマは共有UIが担う。取得失敗/再試行・版失効・有限の前後文・目次の既存動作を維持する。
+
+### 引用readerの通常表の高亮（#4892）
+
+`ExcerptContent.highlights` は元HTML上のcodepoint範囲を受ける。`parseExcerpt` が文字のあるセル片の原文範囲を任意に記録し、対応するセル全体を既存の`CodepointHighlight`で強調する。既定の解析結果・コピー用テキスト・表の意味やレイアウトは変えない。タグ属性・scriptなどの非表示部分・無効な座標はセルへ投影しない。引用readerは未確定の引用と参考文脈を強調せず、表はセル単位である旨を案内する。HTMLの実行や同文の検索で位置を推測する機能ではない。
+
+```bash
+cd platform/packages/ui
+npx vitest run tests/excerpt-highlight.test.tsx tests/excerpt-text.test.tsx tests/evidence-reader.test.tsx tests/source-record-view.test.tsx
+npm run typecheck
+npm run build
+```
+
+### 保存済み表の引用範囲（#4897）
+
+`ExcerptContent contentKind="table"` はHTMLに加え、解析器が保存する縦線の表も共有の`DataTable`で表示する。
+セルの元文字列のcodepoint範囲から強調し、列数が不揃い・行途中・1行だけなど行列を確定できない断片は元の文字列と範囲を保って表示する。
+通常の本文では縦線の並びを表と推測しない。別表現のHTMLへ差し替えて座標を再利用しない。
+
+```bash
+cd platform/packages/ui
+npx vitest run tests/excerpt-highlight.test.tsx tests/excerpt-text.test.tsx tests/evidence-reader.test.tsx tests/tabular-data.test.ts
+npm run typecheck
+cd ../../../rag/frontend
+PLAYWRIGHT_PORT=3198 npx playwright test e2e/citation-text-preview.spec.ts
+```

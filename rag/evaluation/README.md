@@ -26,9 +26,9 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run` は、外部から直接呼ぶ
 利用のために残していますが、評価全体を 600 秒で打ち切ります（#383）。
 
-## 評価の六指標
+## 評価の四指標
 
-「検索2・回答3・応答の判断1」の順に統一します。定義・閾値・Excelの入力は
+「検索2・回答1・応答の判断1」の順に統一します。定義・閾値・Excelの入力は
 [評価・観測性・ガードレール](../docs/evaluation-observability-guardrails.md#評価)が正本です。
 
 | 分類 | 指標 | 評価入力 |
@@ -36,15 +36,13 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 | 検索 | `required_evidence_recall` | 必要な本文・位置を指定した `required_evidence` |
 | 検索 | `mrr` | `relevant_document_ids`。重複を除いた引用文書の最初の正解の順位 |
 | 回答 | `answer_correctness` | 標準回答または確認済みの `required_answer_points` |
-| 回答 | `requirement_coverage` | 標準回答・必須要点・`required_conditions` |
-| 回答 | `claim_support_rate` | 回答の主張と取得した根拠。標準回答は不要 |
 | 応答の判断 | `response_decision_accuracy` | `expected_response_decision`: `answer` / `clarify` / `hold` |
 
 前提不足は `null`（未評価）で、0点や合格にしません。`metric_case_counts`が指標ごとの対象件数です。
 標準回答や根拠が空でも、保留を期待するとは推定しません。判断の期待は明示します。
 `expected_outcomes`を使う場合も、明示値を三つの判断へまとめます。
 
-`reasoning_type_breakdown`・`hops_breakdown`・`split_breakdown`・`category_breakdown`も同じ六指標と件数です。
+`reasoning_type_breakdown`・`hops_breakdown`・`split_breakdown`・`category_breakdown`も同じ四指標と件数です。
 `decision_breakdown`で期待する回答・確認・保留ごとの内訳を確認できます。
 `reasoning_type`・`hops`・`conditions`・`turns`・`include_superseded`は検索と会話の条件として使います。
 実行の失敗は平均に入れず`error_count`で数え、合格にしません。評価の未完了も合格にしません。
@@ -55,7 +53,7 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 ナレッジベース・回答の設定・業務ガイド）をしてから回答します。指定しなければ全体の既定で評価します（#301）。
 アーカイブ済み・参照するナレッジベースが無いプロファイルは、そのケースを失敗にします。
 
-単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（`query_strategy`・`answer_flow`・
+単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（
 `neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限
 （`context_group_max_chunks`）・Oracle vector target accuracy を一時的に上書きできます。
 

@@ -86,8 +86,6 @@ GOAL = "HRM の変更の承認者の代理は誰ですか？"
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    # 最終の検証（#1246）はこのテストの対象外。
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
@@ -626,7 +624,6 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
 def test_business_rag_research_instructions_do_not_report_the_work() -> None:
     """回答に作業の経過（ツール名・検索の状態・業務ガイドの有無・旧版の有無）を書かない（#1452）。
 
-    #1362 の評価で、これらの段落が最終の検証で「根拠で確かめられない」になって外れ、資料の答えは
     正しいのに回答が conditional になっていた（`da-regional-report-export` の「業務ガイドは
     見つかりませんでした」、`km-license-fee` の「rag_search の結果は insufficient_evidence」、
     `ir-emergency-change` の「旧版もあることが確認できました」、`br-crm-retention` の
@@ -1103,29 +1100,9 @@ def test_unresolved_hops_skip_codes_the_question_names() -> None:
     assert [item["value"] for item in unresolved_hops(steps, answer, "極秘のシステムは？")] == ["A"]
 
 
-def _validation_by_answer(bad: str) -> Any:
-    """`bad` の回答の段落だけを根拠で確かめられないとする `rag_validate_answer`。"""
-
-    def validate(argument: Any) -> dict[str, Any]:
-        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
-        status = "unsupported" if argument.answer == bad else "supported"
-        output.update(
-            valid=status == "supported",
-            counts={
-                "supported": int(status == "supported"),
-                "unsupported": int(status != "supported"),
-            },
-            claims=[{"answer_quote": argument.answer, "status": status, "chunk_id": "incident-1"}],
-        )
-        return output
-
-    return validate
-
-
 def _hop_retry_run(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp, first: str, second: str
 ) -> RunState:
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
     output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
     output["evidence"] = deepcopy(_HOP_EVIDENCE)
     mcp.outputs["rag_retrieve_evidence"] = output
@@ -1140,93 +1117,6 @@ def _hop_retry_run(
         [assistant_message(second)],
     )
     return _run("ＩＤ管理システムで障害が起きたら、何分以内に誰へ連絡しますか？")
-
-
-def test_worse_answer_after_the_hop_retry_falls_back_to_the_first_answer(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    first = "30 分以内に安部の承認者へ連絡します。"
-    second = "60 分以内に総務部へ連絡します。"
-    mcp.outputs["rag_validate_answer"] = _validation_by_answer(second)
-
-    run = _hop_retry_run(monkeypatch, mcp, first, second)
-
-    # 差し戻しの後の回答の段落を検証が外した: 前の回答も検証し、外した内容が軽い前の回答を使う。
-    assert [call["arguments"]["answer"] for call in mcp.calls_of("rag_validate_answer")] == [
-        second,
-        first,
-    ]
-    answer = [item for item in run.artifacts if item.kind == "answer"][-1].content["text"]
-    assert answer == first
-    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
-    assert validation.content["valid"] is True
-    events = [
-        event.payload["tool_grounding"] for event in run.events if "tool_grounding" in event.payload
-    ]
-    assert events == [
-        {"action": "hop_retry", "original_answer": first},
-        {"action": "hop_reverted", "original_answer": second},
-    ]
-    assert run.metadata[METADATA_KEY] == {"hop_retries": 1, "hop_reverted": True}
-
-
-def test_answer_after_the_hop_retry_is_kept_unless_the_first_was_better(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    first = "30 分以内に安部の承認者へ連絡します。"
-    second = "30 分以内に情報セキュリティ部長へ連絡します。"
-    # 差し戻しの後の回答を検証が通した: 前の回答は検証しない。
-    mcp.outputs["rag_validate_answer"] = _validation_by_answer(first)
-    run = _hop_retry_run(monkeypatch, mcp, first, second)
-    assert [call["arguments"]["answer"] for call in mcp.calls_of("rag_validate_answer")] == [second]
-    assert [item for item in run.artifacts if item.kind == "answer"][-1].content["text"] == second
-
-
-def test_answer_after_the_hop_retry_is_kept_when_both_are_withheld(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    first = "30 分以内に安部の承認者へ連絡します。"
-    second = "30 分以内に安部長へ連絡します。"
-
-    def validate(argument: Any) -> dict[str, Any]:
-        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
-        output.update(
-            valid=False,
-            counts={"supported": 0, "unsupported": 1},
-            claims=[{"answer_quote": argument.answer, "status": "unsupported"}],
-        )
-        return output
-
-    mcp.outputs["rag_validate_answer"] = validate
-    run = _hop_retry_run(monkeypatch, mcp, first, second)
-
-    # どちらもすべて外した（前の回答も良くない）: 差し戻しの後の回答とその検証のまま。
-    assert len(mcp.calls_of("rag_validate_answer")) == 2
-    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
-    assert validation.content["result"]["claims"][0]["answer_quote"] == second
-    assert run.metadata[METADATA_KEY] == {"hop_retries": 1}
-
-
-def test_hop_retry_compares_removed_then_unverified_then_warnings() -> None:
-    """差し戻しの前後の回答は、矛盾で外した段落 → 未確認の段落 → 警告（印と回答の警告）の数の順に
-    比べる（#2738）。判定が出なかった検証は比べない。"""
-
-    def content(removed: int, unverified: int, warnings: int, answers: int = 0) -> dict[str, Any]:
-        return {
-            "status": "completed",
-            "withheld": {"removed": removed, "unverified": unverified, "warnings": warnings},
-            "answer_warnings": [{"code": "requests"}] * answers,
-        }
-
-    def rank(validation: dict[str, Any]) -> tuple[int, int, int]:
-        value = builtin_runtime._withheld_rank(validation)  # noqa: SLF001 - 比べ方の単体の確認
-        assert value is not None
-        return value
-
-    assert rank(content(0, 5, 5)) < rank(content(1, 0, 0))
-    assert rank(content(0, 1, 0)) > rank(content(0, 0, 9))
-    assert rank(content(0, 0, 1, answers=1)) == (0, 0, 2)
-    assert builtin_runtime._withheld_rank({"status": "unvalidated"}) is None  # noqa: SLF001
 
 
 def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:

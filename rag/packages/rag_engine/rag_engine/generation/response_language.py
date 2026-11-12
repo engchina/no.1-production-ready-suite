@@ -3,20 +3,25 @@
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, create_model
+from rag_parser_core.language import current_pack
 
 from rag_engine.models.llm import DefaultResponseLanguage, ExplicitResponseLanguage, ResponseLanguage
 
+# 指示の文の差し込み口（WeKnora の {{language}} と同じ形）。保存した指示でも使える。
+LANGUAGE_PLACEHOLDER = "{{language}}"
+# 言語資源の locale の表示名。無い locale は locale の文字のまま渡す。
+_LOCALE_LANGUAGE_NAMES = {"ja": "日本語"}
 
-def response_language_contract(question: str, value: ResponseLanguage) -> dict[str, Any]:
-    if value.invalid:
-        return {"status": "unconfirmed", "language": None, "instruction": None}
-    selection = value.selection
-    if selection.kind == "default":
-        return {"status": "confirmed", "language": "ja", "instruction": None}
-    copied = selection.quote
-    if not copied.strip() or copied not in question:
-        return {"status": "unconfirmed", "language": None, "instruction": copied}
-    return {"status": "confirmed", "language": copied, "instruction": copied}
+
+def default_response_language() -> str:
+    """回答の既定の言語。回答の見出し・定型文と同じ言語資源の locale から決める。"""
+    locale = current_pack().locale
+    return _LOCALE_LANGUAGE_NAMES.get(locale, locale)
+
+
+def render_language_placeholder(prompt: str) -> str:
+    """指示の文の差し込み口を、回答の既定の言語で埋める。"""
+    return prompt.replace(LANGUAGE_PLACEHOLDER, default_response_language())
 
 
 def generation_language_schema(base: type[BaseModel], question: str) -> type[BaseModel]:
@@ -32,7 +37,10 @@ def generation_language_schema(base: type[BaseModel], question: str) -> type[Bas
         __base__=ResponseLanguage,
         selection=(DefaultResponseLanguage | explicit, Field(default_factory=DefaultResponseLanguage, discriminator="kind")),
     )
-    description = "result・reasoning・requirement・text はこの回答言語で書く。引用原文と逐語で示す語句は原文の表記と言語のままにする。"
+    description = (
+        "モデルが書く文の欄（result・reasoning・requirement・text・external_data_items・reference_materials）はすべてこの回答言語で書く。"
+        "引用原文と逐語で示す語句は原文の表記と言語のままにする。"
+    )
     return create_model(
         base.__name__, __base__=base, response_language=(contract, Field(default_factory=contract, description=description))
     )

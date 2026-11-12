@@ -3,7 +3,8 @@
 rag_poc はプロンプトをファイル(`prompts/<key>.txt`)へ保存したが、rag では DB
 (`rag_answer_prompts`)に保存し、rag_engine の runtime の ``prompt_overrides`` で渡す。
 回答生成・文書解析・文書分割の編集可能な指示は、それぞれの設定画面で管理する。
-検索・回答・監査・評価の自然言語の指示も編集でき、応答の型はコードで管理する。
+生成は役割と回答の書き方だけを編集でき、信頼の境界・出力の形・引用の決まりと、質問・検索の
+内部の段の文はコードで管理する（画面には読み取り専用で出す。#4782）。
 """
 
 from __future__ import annotations
@@ -16,11 +17,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
-from rag_engine.knowledge.prompt_files import (
-    IMAGE_RETRIEVAL_PROMPT_KEY,
-    PROMPT_FILES,
-    VLM_ANSWER_PROMPT_KEY,
-)
+from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, PROMPT_FILES
 from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
 
 INGESTION_PROMPT_REFS = {
@@ -28,9 +25,9 @@ INGESTION_PROMPT_REFS = {
     "heading_levels": "app.rag.ingestion_prompts:HEADING_LEVEL_PROMPT",
     "field_extraction": "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT",
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
-    "raptor_summary_system": "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT",
+    "document_summary": "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT",
 }
-EDITABLE_PROMPT_KEYS = (VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
+EDITABLE_PROMPT_KEYS = (IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
 ANSWER_PROMPT_MAX_CHARS = 50_000
 
 
@@ -42,11 +39,15 @@ def default_prompt(key: str) -> str:
     return PROMPT_FILES[key].default_content or ""
 
 
+# 欠けても LLM への入力が落ちない差し込み（回答の既定の言語）。
+# 保存した指示に無ければ差し込まれないだけなので、必須にしない。
+_OPTIONAL_PLACEHOLDERS = frozenset({"language"})
+
+
 def required_placeholders(key: str) -> tuple[str, ...]:
     if key in STAGE_PROMPT_REFS:
-        return tuple(
-            dict.fromkeys(re.findall(r"{{([A-Za-z_][A-Za-z_0-9]*)}}", default_prompt(key)))
-        )
+        names = re.findall(r"{{([A-Za-z_][A-Za-z_0-9]*)}}", default_prompt(key))
+        return tuple(dict.fromkeys(name for name in names if name not in _OPTIONAL_PLACEHOLDERS))
     return () if key in INGESTION_PROMPT_REFS else PROMPT_FILES[key].required_placeholders
 
 
@@ -62,20 +63,15 @@ def validate_prompt(key: str, content: str) -> None:
     missing.extend(token for token in required_tokens(key) if token not in content)
     if missing:
         raise ValueError(f"必須の placeholder がありません: {', '.join(missing)}")
-    if key in KEYED_LINE_PROMPT_KEYS:
-        _validate_keyed_lines(key, content)
 
 
 # 設定の概要の順を土台に、独立した知識の準備と、検索・回答の実行順を区別する。
 PROMPT_PHASES = (
     "ingestion",
-    "indexing",
     "knowledge",
     "question",
     "retrieval",
-    "grounding",
     "generation",
-    "audit",
     "evaluation",
 )
 
@@ -136,10 +132,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT"),),
     ),
+    # 取込の後に 1 文書につき 1 回だけ作る文書全体の要約（#4793）。
     PromptStage(
-        "raptor_summary",
-        "indexing",
-        (("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),),
+        "document_summary",
+        "ingestion",
+        (("instruction", "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT"),),
     ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(
@@ -160,68 +157,15 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
-        "rule_selection",
-        "question",
-        (
-            ("system", "app.rag.rule_selection:RULE_SELECTION_SYSTEM_PROMPT"),
-            ("instruction", "app.rag.rule_selection:RULE_SELECTION_INPUT_PROMPT"),
-        ),
-    ),
-    PromptStage(
         "history_rewrite",
         "question",
         (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
     ),
+    # 検索の要らない発話（挨拶・雑談）への根拠なしの短い応答（#4787）。
     PromptStage(
-        "field_filter",
-        "question",
-        (("system", "app.rag.field_filter_reader:FIELD_FILTER_SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
-        "routing",
-        "question",
-        (
-            ("system", "rag_engine.generation.answering:QUERY_ROUTING_SYSTEM_PROMPT"),
-            ("template", "rag_engine.generation.query_prompts:QUERY_ROUTING_PROMPT_TEMPLATE"),
-        ),
-    ),
-    PromptStage(
-        "expansion",
-        "question",
-        (
-            ("system", "rag_engine.generation.answering:QUERY_EXPANSION_SYSTEM_PROMPT"),
-            ("template", "rag_engine.generation.query_prompts:QUERY_EXPANSION_PROMPT_TEMPLATE"),
-        ),
-    ),
-    PromptStage(
-        "screen_linking",
-        "retrieval",
-        (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
-        "article_catalog",
-        "retrieval",
-        (
-            (
-                "documentSystem",
-                "rag_engine.retrieval.article_catalog:ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT",
-            ),
-            ("system", "rag_engine.retrieval.article_catalog:ARTICLE_SELECTION_SYSTEM_PROMPT"),
-            ("refineSystem", "rag_engine.retrieval.article_catalog:ARTICLE_REFINE_SYSTEM_PROMPT"),
-        ),
-    ),
-    PromptStage(
-        "crag",
-        "grounding",
-        (
-            ("system", "rag_engine.generation.answering:CRAG_GRADER_SYSTEM_PROMPT"),
-            ("template", "rag_engine.generation.crag_support:CRAG_GRADE_PROMPT_TEMPLATE"),
-        ),
-    ),
-    PromptStage(
-        "section_extraction",
-        "grounding",
-        (("system", "rag_engine.generation.section_extraction:EXTRACTION_SYSTEM_PROMPT"),),
+        "small_talk",
+        "generation",
+        (("system", "app.rag.small_talk:SMALL_TALK_SYSTEM_PROMPT"),),
     ),
     PromptStage(
         "faq_answer",
@@ -232,105 +176,38 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         "generation",
         (
-            ("instruction", "rag_engine.generation.grounded:SCOPE_PLAN_SYSTEM_PROMPT"),
             ("batchReading", "rag_engine.generation.batched_evidence:BATCH_READING_PROMPT"),
-            ("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),
-            ("plannedSystem", "rag_engine.generation.grounded:PLANNED_GENERATE_SYSTEM_PROMPT"),
+            # system = 編集できる役割の文 + 必ず足す固定の部分（+ 未確定の前提）（#4782）。
+            ("role", "rag_engine.generation.grounded:GENERATION_ROLE_PROMPT"),
+            ("fixed", "rag_engine.generation.grounded:GENERATION_FIXED_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
+            # user message の固定のテンプレート。
+            ("template", "rag_engine.knowledge.prompt_files:ANSWER_INPUT_TEMPLATE"),
             # 該当する入力のときだけ生成の入力へ足す読み方（タグ・値の種類 / 業務ガイド。#4677）。
             ("evidenceReading", "rag_engine.generation.grounded:EVIDENCE_READING_PROMPT"),
             ("guideRules", "rag_engine.generation.grounded:GUIDE_RULES_PROMPT"),
-            (
-                "citationRepair",
-                "rag_engine.generation.citation_range_repair:CITATION_RANGE_REPAIR_SYSTEM_PROMPT",
-            ),
-            # 目録で選んだ条を生成が引かなかったときだけ、支える説明を検討する（#3526）。
-            ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
-            # 要点がすべて原文の提示だった導出の質問の作り直しで、入力に足す部品（#4586）。
-            (
-                "sourceOnlyDerivation",
-                "rag_engine.generation.answer_parts_wire:SOURCE_ONLY_DERIVATION_PROMPT",
-            ),
-            # 表の見出しの行だけを示した要点の作り直しで、入力に足す部品（#4592）。
-            (
-                "headerOnlySource",
-                "rag_engine.generation.answer_parts_wire:HEADER_ONLY_SOURCE_PROMPT",
-            ),
-        ),
-    ),
-    # 説明・要約に書いた質問の対象の名前を引いた原文に照らす検査の、対象の抽出と役割の判定(#4351)。
-    # 品質評価も同じ指示で取り出す。
-    PromptStage(
-        "question_subjects",
-        "audit",
-        (
-            ("extraction", "rag_engine.generation.question_subjects:SUBJECT_EXTRACTION_PROMPT"),
-            ("role", "rag_engine.generation.question_subjects:SUBJECT_ROLE_PROMPT"),
-        ),
-    ),
-    PromptStage(
-        "audit",
-        "audit",
-        (
-            ("detailedSystem", "rag_engine.generation.grounded:AUDIT_SYSTEM_PROMPT"),
-            # 標準の監査。未使用の根拠は列挙せず、主張・要求・要件を判定する。
-            ("factSystem", "rag_engine.generation.grounded:FACT_AUDIT_SYSTEM_PROMPT"),
-            ("compactRule", "rag_engine.generation.grounded:AUDIT_COMPACT_REASON_RULE"),
-        ),
-    ),
-    PromptStage(
-        "application",
-        "audit",
-        (
-            ("system", "rag_engine.generation.applications:APPLICATION_SYSTEM_PROMPT"),
-            ("auditSystem", "rag_engine.generation.applications:APPLICATION_AUDIT_SYSTEM_PROMPT"),
-            # 独立の監査の判定に、利用者に示す理由を付ける（判定は変えない。#4471）。
-            (
-                "reasonSystem",
-                "rag_engine.generation.application_reason:APPLICATION_REASON_SYSTEM_PROMPT",
-            ),
-            # 推導の前に、表の各行の条件の種類と時点を読み取り（rowTypeSystem）、
-            # 時点以外の条件が質問から成り立つかを判定する（rowJudgeSystem。#4349）。
-            ("rowTypeSystem", "rag_engine.generation.row_conditions:ROW_TYPE_SYSTEM_PROMPT"),
-            ("rowJudgeSystem", "rag_engine.generation.row_conditions:ROW_JUDGE_SYSTEM_PROMPT"),
-        ),
-    ),
-    PromptStage(
-        "answer_validation",
-        "audit",
-        (
-            ("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),
-            # 表の対応と取り違えた段落を、表の正しい値に直す（#3005。取り違えがあるときだけ）。
-            ("tableRevision", "rag_engine.generation.table_revision:REVISION_SYSTEM_PROMPT"),
-            # 確認の答えがあるときだけ、勧める内容が答えの条件・制約と両立するかを比べる（#2726）。
-            (
-                "premiseConsistency",
-                "rag_engine.evaluation.answer_validation:PREMISE_CONSISTENCY_SYSTEM_PROMPT",
-            ),
         ),
     ),
     PromptStage(
         "evaluation",
         "evaluation",
-        (
-            ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
-            # 網羅と、段落ごとの主張の裏付け（その段落の出典の根拠だけ）は別の呼び出し（#3576）。
-            ("coverage", "rag_engine.evaluation.answer_eval:COVERAGE_PROMPT"),
-            ("claim", "rag_engine.evaluation.answer_eval:CLAIM_PROMPT"),
-            ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
-            ("evidenceCoverage", "rag_engine.evaluation.answer_eval:EVIDENCE_COVERAGE_PROMPT"),
-            ("absenceScope", "rag_engine.evaluation.answer_eval:ABSENCE_SCOPE_PROMPT"),
-        ),
+        (("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),),
     ),
 )
 
 
-# 実行の段に対応する自然言語の指示。既存の解析設定の key は維持する。
+# 段の部分のうち編集できるもの（#4782）。生成は役割と回答の書き方、FAQ は回答の指示だけ。
+# 信頼の境界・出力の形・引用の決まりと、質問・検索の内部の段の文は編集させない。
+_EDITABLE_STAGE_PARTS = frozenset({"generation.role", "faq_answer.system"})
+
+# 実行の段に対応する、編集できる自然言語の指示。既存の解析設定の key は維持する。
 STAGE_PROMPT_REFS = {
     f"{stage.id}.{part_id}": ref
     for stage in PROMPT_STAGES
-    if stage.phase not in {"ingestion", "indexing"} or stage.id == "picture_description"
     for part_id, ref in stage.parts
+    if stage.id == "picture_description"
+    or stage.phase == "evaluation"
+    or f"{stage.id}.{part_id}" in _EDITABLE_STAGE_PARTS
 }
 EDITABLE_PROMPT_KEYS = (*EDITABLE_PROMPT_KEYS, *STAGE_PROMPT_REFS)
 
@@ -344,22 +221,6 @@ def required_tokens(key: str) -> tuple[str, ...]:
     )
 
 
-# 該当する入力のときだけ ``- キー: 説明`` の行を渡す指示。キーのない行だけの内容は実行で渡されない。
-KEYED_LINE_PROMPT_KEYS = ("generation.evidenceReading", "generation.guideRules")
-
-
-def _validate_keyed_lines(key: str, content: str) -> None:
-    from rag_engine.generation.grounded import reading_line_keys
-
-    known = reading_line_keys(default_prompt(key))
-    used = reading_line_keys(content)
-    if not used or any(name not in known for name in used):
-        raise ValueError(
-            "「- キー: 説明」の行が使われます。キーは次のいずれかにしてください: "
-            + "、".join(known)
-        )
-
-
 def stage_prompt_permission(key: str) -> str | None:
     """指示の配置先の設定権限。条件の認識は回答プロンプトに置く。"""
     for stage in PROMPT_STAGES:
@@ -369,12 +230,6 @@ def stage_prompt_permission(key: str) -> str | None:
             return "menu.settings_parser_adapters"
         if stage.phase == "evaluation":
             return "menu.settings_evaluation"
-        if stage.id != "support_guide_conditions" and stage.phase in {
-            "question",
-            "retrieval",
-            "grounding",
-        }:
-            return "menu.settings_retrieval"
         return "menu.settings_prompts"
     return None
 

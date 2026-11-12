@@ -1,6 +1,5 @@
 """複合要求の各要点の出力参照を検証し、意味支持と区別する。"""
 
-from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -56,17 +55,6 @@ def test_missing_plan_is_unrecorded_instead_of_success_or_semantic_failure():
     draft.answer_parts = []
     result = check_answer_parts(draft, items, applications, {"Q1"})
     assert result == {"status": "unrecorded", "parts": [], "unrecorded_request_ids": ["Q1"]}
-
-
-def test_wire_part_reference_is_bound_to_the_generated_application():
-    from test_answer_parts_wire import case as wire_case
-
-    from rag_engine.generation.citation_wire import canonical_generation_draft
-
-    raw, schema, catalog = wire_case()
-    result = canonical_generation_draft(schema.model_validate(deepcopy(raw)), unit_catalog=catalog)
-    assert result.answer_parts[1].item_indexes == []
-    assert result.answer_parts[1].application_indexes == [0]
 
 
 def test_verified_gap_keeps_index_so_the_declared_part_is_not_duplicated():

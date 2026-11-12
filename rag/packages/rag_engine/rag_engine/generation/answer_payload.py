@@ -9,22 +9,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_models import (
     ANSWER_USES,
     AnswerQuestionResult,
     AnswerRecord,
     AnswerResponse,
     _normalize_text,
-    answer_flow_label,
     extract_original_question,
     merge_answer_use,
-    query_strategy_label,
     retrieval_scope_label,
 )
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
-from rag_engine.retrieval.rerank_scores import keeps_original_order
 
 
 def _records_for_prompt_injection_scan(
@@ -84,39 +80,9 @@ def parse_answer_response(content: str) -> AnswerResponse:
 
 
 def _normalize_answer_response(response: AnswerResponse) -> AnswerResponse:
-    """旧式の短い棄権を根拠不足の説明へ補正し、不足時の人手確認を保証する。
-
-    完全一致した日本語・英語・中国語の定型句のみ置換する。部分回答や引用中の
-    同じ語は保持し、元のモデル出力は raw_text に残す。意味的な根拠判定は行わない。
-    """
-    bare_answer = response.answer_text.strip().strip("。.!！?？ ").casefold()
-    fallback = ""
-    reason = ""
-    if bare_answer in {"わかりません", "分かりません", "判りません", "不明です"}:
-        fallback = answer_labels().insufficient_evidence_summary + answer_labels().abstention_guidance
-        reason = "検索された資料では、質問への回答を裏付ける根拠が不足しています。"
-    elif bare_answer in {"i don't know", "i don’t know", "i do not know"}:
-        fallback = (
-            "The retrieved documents do not provide sufficient evidence to answer this question. "
-            "Consult the relevant operation manual to check the procedure and applicable conditions, or "
-            "clarify the question or search scope."
-        )
-        reason = "The retrieved documents contain insufficient evidence for this question."
-    elif bare_answer in {"不知道", "我不知道", "不清楚", "无法确定"}:
-        fallback = (
-            "检索到的资料缺乏足够的依据，无法回答此问题。请查看相关操作手册以确认操作方法和适用条件，并明确问题的对象、条件及检索范围。"
-        )
-        reason = "检索到的资料不足以支持对该问题的回答。"
+    """外部データの要否と根拠不足の項目から、人手確認の要否をそろえる。本文は書き換えない。"""
     if response.external_data_items:
         response = replace(response, external_data_required=True, needs_human_review=True)
-    if fallback:
-        return replace(
-            response,
-            answer_text=fallback,
-            confidence="low",
-            insufficient_reason=response.insufficient_reason or reason,
-            needs_human_review=True,
-        )
     if (response.insufficient_reason or response.external_data_required) and response.needs_human_review is not True:
         return replace(response, needs_human_review=True)
     return response
@@ -278,7 +244,6 @@ def answer_result_payload(
         "task_contract": result.task_contract,
         # 回答の構造（AnswerEnvelope。#1235）。
         "envelope": result.envelope,
-        "rejected_queries": list(result.rejected_queries),
         "primary_source_run_id": result.primary_source_run_id,
         "reasoning_summary": result.reasoning_summary,
         "insufficient_reason": result.insufficient_reason,
@@ -286,19 +251,11 @@ def answer_result_payload(
         "external_data_required": result.external_data_required,
         "external_data_items": list(result.external_data_items),
         "answer_flow": result.answer_flow,
-        "answer_flow_label": answer_flow_label(result.answer_flow),
         "retrieval_scope": result.retrieval_scope,
         "retrieval_scope_label": retrieval_scope_label(result.retrieval_scope),
         "classification_filter": dict(result.classification_filter),
-        "selected_strategy": result.selected_strategy,
-        "effective_strategy": result.effective_strategy,
-        "selected_strategy_label": query_strategy_label(result.selected_strategy),
-        "effective_strategy_label": query_strategy_label(result.effective_strategy),
         "generated_queries": list(result.generated_queries),
         "query_expansion_summary": _query_expansion_summary(result.generated_queries),
-        "routing_reason": result.routing_reason,
-        "routing_data_required": result.routing_data_required,
-        "routing_data_items": list(result.routing_data_items),
         "question_plan": result.question_plan.to_payload() if result.question_plan is not None else {},
         "runtime_knowledge": result.runtime_knowledge.to_payload() if result.runtime_knowledge is not None else {},
         "text_search_tokenizer": result.text_search_tokenizer,
@@ -309,7 +266,6 @@ def answer_result_payload(
         "text_search_queries": list(result.text_search_queries),
         "text_search_query_source": result.text_search_query_source,
         "text_search_tokenization_error": result.text_search_tokenization_error,
-        "crag_attempts": list(result.crag_attempts),
         "prompt_injection_risk": result.prompt_injection_risk,
         "prompt_injection_warnings": list(result.prompt_injection_warnings),
         "rerank_scores": list(result.rerank_scores),
@@ -392,9 +348,7 @@ def answer_evidence_items(
         item = _answer_record_evidence_item(record, used_ids, usage_order, uses)
         item["children"] = []
         items.append(item)
-    # 条の目録で選んだ条（rerank 最優先の例外。`keeps_original_order`）を含む一覧は元の規則（rerank を使わない）で並べる。
-    original = any(keeps_original_order(record) for record in records)
-    return [item for _, item in sorted(enumerate(items), key=lambda pair: _evidence_item_sort_key(pair, rerank_first=not original))]
+    return [item for _, item in sorted(enumerate(items), key=lambda pair: _evidence_item_sort_key(pair, rerank_first=True))]
 
 
 def _answer_record_evidence_item(

@@ -1,6 +1,7 @@
 import { mockFeaturePrompts, verifyFeaturePrompt } from "./_feature-prompt-helpers";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -76,25 +77,6 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /Unstructured.*選んだ場合だけ使用/ })
     ).toBeVisible();
-    // MinerU は OCI Document Understanding と同じ準備中（ロードマップ。#3359）。灰色で選べず、
-    // 接続の状態（未設定）も出さない。カードの下にライセンスの短い案内と公式のリンクを出す。
-    const mineru = page.getByRole("radio", { name: /MinerU.*GPU.*準備中（ロードマップ）/ });
-    await expect(mineru).toBeDisabled();
-    await expect(mineru).toHaveAttribute("data-availability", "roadmap");
-    await expect(page.locator('label[for="settings-parser-backend-mineru"]')).not.toContainText("未設定");
-    const mineruNote = page.getByTestId("mineru-license-note");
-    await expect(mineruNote).toContainText("MinerU Open Source License");
-    await expect(mineruNote.getByRole("link", { name: /MinerU の公式リポジトリ/ })).toHaveAttribute(
-      "href",
-      "https://github.com/opendatalab/MinerU"
-    );
-    await expect(mineruNote.getByRole("link", { name: /ライセンスの全文/ })).toHaveAttribute(
-      "href",
-      "https://github.com/opendatalab/MinerU/blob/master/LICENSE.md"
-    );
-    // 準備中の間は確認の checkbox と外部接続の欄を出さない。
-    await expect(page.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" })).toHaveCount(0);
-    await expect(page.locator("#external-parser-mineru-endpoint")).toHaveCount(0);
     // 対応形式の拡張子に .rst / .org を出し、読まない形式（.heic / .epub など）は出さない（#3351）。
     const unstructuredCard = page.locator('label[for="settings-parser-backend-unstructured"]');
     await expect(unstructuredCard).toContainText(".org");
@@ -142,18 +124,17 @@ for (const viewport of [
         )
     ).map((text) => text.replace(/\s+/g, " ").trim());
     // 並びは PARSER_BACKEND_ORDER（#3359。利用者の判断）。CPU は Docling → Unstructured →
-    // 構造化レコード JSONL → XML ツリー JSON（#2457）、続いて Dots.OCR → MinerU →
+    // 構造化レコード JSONL → XML ツリー JSON（#2457）、続いて Dots.OCR →
     // OCI Document Understanding。処理レシピの選択肢も同じ順。
-    expect(engineNames).toHaveLength(7);
+    expect(engineNames).toHaveLength(6);
     expect(engineNames[0]).toContain("Docling");
     expect(engineNames[1]).toContain("Unstructured");
     expect(engineNames[2]).toContain("構造化レコード JSONL");
     expect(engineNames[3]).toContain("XML ツリー JSON");
     expect(engineNames[4]).toContain("Dots.OCR");
-    expect(engineNames[5]).toContain("MinerU");
-    expect(engineNames[6]).toContain("OCI Document Understanding");
+    expect(engineNames[5]).toContain("OCI Document Understanding");
     // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 構造化レコード JSONL・XML ツリー JSON /
-    // 3 行目 Dots.OCR・MinerU / 4 行目 OCI Document Understanding）、375px は 1 列で同じ順。
+    // 3 行目 Dots.OCR・OCI Document Understanding）、375px は 1 列で同じ順。
     const cardBoxes = await page
       .locator('label[for^="settings-parser-backend-"]')
       .evaluateAll((elements) =>
@@ -162,7 +143,7 @@ for (const viewport of [
           return { x: Math.round(box.left), y: Math.round(box.top) };
         })
       );
-    expect(cardBoxes).toHaveLength(7);
+    expect(cardBoxes).toHaveLength(6);
     if (viewport.name === "desktop") {
       for (const row of [0, 2, 4]) {
         expect(cardBoxes[row].y).toBe(cardBoxes[row + 1].y);
@@ -170,19 +151,17 @@ for (const viewport of [
       }
       expect(cardBoxes[0].y).toBeLessThan(cardBoxes[2].y);
       expect(cardBoxes[2].y).toBeLessThan(cardBoxes[4].y);
-      expect(cardBoxes[4].y).toBeLessThan(cardBoxes[6].y);
-      expect(cardBoxes[6].x).toBe(cardBoxes[0].x);
+      expect(cardBoxes[4].x).toBe(cardBoxes[0].x);
     } else {
       for (let index = 1; index < cardBoxes.length; index += 1) {
         expect(cardBoxes[index].x).toBe(cardBoxes[0].x);
         expect(cardBoxes[index].y).toBeGreaterThan(cardBoxes[index - 1].y);
       }
     }
-    await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
-    // 準備中（ロードマップ）の MinerU の接続の欄は出さない（Dots.OCR の 1 組だけ。#3359）。
-    await expect(page.getByLabel("Endpoint")).toHaveCount(1);
-    await expect(page.getByLabel("Model")).toHaveCount(1);
-    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(1);
+    // 接続の設定は節として並べず、Dots.OCR のカードの「設定」から右のパネルで開く（#4740）。
+    await expect(page.getByText("外部 GPU 解析エンジンの接続")).toHaveCount(0);
+    await expect(page.getByLabel("Endpoint")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /の設定$/ })).toHaveCount(1);
     await expect(page.getByText("運用診断", { exact: true })).toHaveCount(0);
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -238,7 +217,6 @@ async function mockParserAdaptersWithPostParse(
       adapters: [
         { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
         disabledAdapter("unstructured"),
-        disabledAdapter("mineru"),
         disabledAdapter("dots_ocr"),
       ],
     });
@@ -326,7 +304,7 @@ for (const scheme of ["light", "dark"] as const) {
       "3. メタデータ/項目抽出",
       "4. 章節の抽出規則",
       "5. 章節の要約",
-    "6. RAPTOR の階層の要約",
+      "6. 文書の要約",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -373,7 +351,8 @@ for (const scheme of ["light", "dark"] as const) {
         heading_level_inference_enabled: false,
         field_extraction_enabled: true,
         navigation_summary_enabled: false,
-        raptor_enabled: false,
+        // 文書の要約は保存値の無い応答で有効（既定。#4793）。
+        document_summary_enabled: true,
         vision_concurrency: 4,
       },
     ]);
@@ -416,7 +395,7 @@ test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002
       heading_level_inference_enabled: false,
       field_extraction_enabled: false,
       navigation_summary_enabled: false,
-      raptor_enabled: false,
+      document_summary_enabled: true,
       vision_concurrency: 6,
     },
   ]);
@@ -629,7 +608,7 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
     "3. メタデータ/項目抽出",
     "4. 章節の抽出規則",
     "5. 章節の要約",
-    "6. RAPTOR の階層の要約",
+    "6. 文書の要約",
   ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
@@ -772,26 +751,19 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
       savedPayload = route.request().postDataJSON();
       await route.fulfill({
         json: parserAdapterEnvelope({
-          adapter_backend: "mineru",
-          effective_order: ["mineru"],
+          adapter_backend: "dots_ocr",
+          effective_order: ["dots_ocr"],
           config_source: "runtime",
           adapters: [
             disabledAdapter("docling"),
             disabledAdapter("unstructured"),
             {
-              ...disabledAdapter("mineru"),
-              availability: "available",
+              ...disabledAdapter("dots_ocr"),
               enabled: true,
               selected: true,
               status: "active",
             },
-            disabledAdapter("dots_ocr"),
           ],
-          mineru_license: {
-            acknowledged: true,
-            acknowledged_by: "管理者 A",
-            acknowledged_at: "2026-10-26T00:00:00+00:00",
-          },
         }),
       });
       return;
@@ -804,8 +776,6 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
         adapters: [
           disabledAdapter("docling"),
           disabledAdapter("unstructured"),
-          // ライセンスの確認から MinerU を選ぶ経路は、準備中の判定を外して確かめる（#3359）。
-          { ...disabledAdapter("mineru"), availability: "available" },
           disabledAdapter("dots_ocr"),
         ],
       }),
@@ -814,43 +784,30 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
 
   await page.goto("/settings/parser-adapters");
 
-  // local は廃止。既定の Docling で解析する旨を出し、microservice エンジン(MinerU)を選択する。
+  // local は廃止。既定の Docling で解析する旨を出し、外部エンジン(Dots.OCR)を選択する。
   await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
   await expect(page.getByText(/未選択時は既定の Docling で解析します/)).toBeVisible();
-  const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
-  // MinerU はライセンスの条件を確認するまで選べない（#3359）。
-  await expect(mineruBackend).toBeDisabled();
-  await page.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" }).check();
-  await expect(mineruBackend).toBeEnabled();
-  await mineruBackend.focus();
-  await expect(mineruBackend).toBeFocused();
+  const dotsBackend = page.getByRole("radio", { name: /Dots\.OCR/ });
+  await expect(dotsBackend).toBeEnabled();
+  await dotsBackend.focus();
+  await expect(dotsBackend).toBeFocused();
   // 本物のラジオは Space（または矢印キー）で選ぶ（#469）。
   await page.keyboard.press("Space");
-  await expect(mineruBackend).toBeChecked();
+  await expect(dotsBackend).toBeChecked();
 
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+  // 接続の設定はパネルの中で保存するので、使用エンジンの保存には含めない（#4740）。
   expect(savedPayload).toEqual({
-    adapter_backend: "mineru",
+    adapter_backend: "dots_ocr",
     docling_enabled: false,
     unstructured_enabled: false,
-    mineru_enabled: true,
-    mineru_license_acknowledged: true,
-    dots_ocr_enabled: false,
+    dots_ocr_enabled: true,
     structured_records_jsonl_enabled: false,
     xml_tree_json_enabled: false,
-    // 接続の並びも使用エンジンのカードと同じ（Dots.OCR → MinerU。#3359）。
-    connections: ["dots_ocr", "mineru"].map((backend) => {
-      const connection = defaultConnections().find((item) => item.backend === backend)!;
-      return {
-        backend: connection.backend,
-        endpoint: connection.endpoint,
-        ...(connection.backend === "mineru" ? {} : { model: connection.model }),
-      };
-    }),
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -869,7 +826,6 @@ test("XML ツリー JSON は使用エンジンとして選んで保存する（i
             { ...disabledAdapter("docling"), enabled: true, status: "ignored" },
             disabledAdapter("unstructured"),
             { ...disabledAdapter("xml_tree_json"), enabled: true, selected: true, status: "active" },
-            disabledAdapter("mineru"),
             disabledAdapter("dots_ocr"),
           ],
         }),
@@ -885,7 +841,6 @@ test("XML ツリー JSON は使用エンジンとして選んで保存する（i
           { ...disabledAdapter("docling"), enabled: true, selected: true, status: "active" },
           disabledAdapter("unstructured"),
           disabledAdapter("xml_tree_json"),
-          disabledAdapter("mineru"),
           disabledAdapter("dots_ocr"),
         ],
       }),
@@ -927,7 +882,6 @@ test("構造化レコード JSONL は使用エンジンとして選んで保存�
         }
       : disabledAdapter("structured_records_jsonl"),
     disabledAdapter("xml_tree_json"),
-    disabledAdapter("mineru"),
     disabledAdapter("dots_ocr"),
   ];
   await page.route("**/api/settings/parser-adapters", async (route) => {
@@ -999,10 +953,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
         return {
           ...connection,
           endpoint: String(update.endpoint ?? connection.endpoint),
-          model:
-            connection.backend === "mineru"
-              ? null
-              : String(update.model ?? connection.model ?? ""),
+          model: String(update.model ?? connection.model ?? ""),
           api_key_configured: update.clear_api_key ? false : connection.api_key_configured,
           configured: Boolean(update.endpoint),
         };
@@ -1017,7 +968,6 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
         adapters: [
           disabledAdapter("docling"),
           disabledAdapter("unstructured"),
-          disabledAdapter("mineru"),
           { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
         ],
       }),
@@ -1041,11 +991,11 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   });
 
   await page.goto("/settings/parser-adapters");
-  const endpoint = page.locator("#external-parser-dots_ocr-endpoint");
-  const model = page.locator("#external-parser-dots_ocr-model");
-  const card = endpoint.locator(
-    "xpath=ancestor::*[.//button[normalize-space()='接続を確認']][1]"
-  );
+  await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
+  const card = page.getByTestId("external-parser-connection-dots_ocr");
+  const endpoint = card.locator("#external-parser-dots_ocr-endpoint");
+  const model = card.locator("#external-parser-dots_ocr-model");
+  const save = card.getByRole("group", { name: "Dots.OCR の接続設定の操作" }).getByRole("button", { name: "保存", exact: true });
 
   await card.getByRole("button", { name: "接続を確認" }).click();
   await expect(card.getByText("接続できました。")).toBeVisible();
@@ -1056,7 +1006,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(result.locator("details")).not.toHaveAttribute("open", "");
 
   await endpoint.fill("ftp://invalid.example.com");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await save.click();
   await expect(
     page.getByText(
       "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
@@ -1067,7 +1017,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
 
   // `http:foo` は URL としては読めるが、backend は `http(s)://host` の形だけを受け付ける（#976）。
   await endpoint.fill("http:dots.example.com");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await save.click();
   await expect(
     page.getByText(
       "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
@@ -1080,14 +1030,17 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
 
   await endpoint.fill("https://dots-new.example.com/v1");
   await model.fill("served-dots");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await save.click();
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
-  const firstConnections = payloads[0].connections as Array<Record<string, unknown>>;
-  const firstDots = firstConnections.find((item) => item.backend === "dots_ocr");
-  expect(firstDots).toEqual({
-    backend: "dots_ocr",
-    endpoint: "https://dots-new.example.com/v1",
-    model: "served-dots",
+  // パネルの保存は接続だけを送る（使用エンジンの選択は送らない。#4740）。
+  expect(payloads[0]).toEqual({
+    connections: [
+      {
+        backend: "dots_ocr",
+        endpoint: "https://dots-new.example.com/v1",
+        model: "served-dots",
+      },
+    ],
   });
   await expect(card.getByText("接続できました。")).toHaveCount(0);
 
@@ -1101,125 +1054,270 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(result.getByText("external_parser_model_missing")).toBeVisible();
 
   await card.getByLabel("保存済み API key を削除").check();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  const secondConnections = payloads[1].connections as Array<Record<string, unknown>>;
-  expect(secondConnections.find((item) => item.backend === "dots_ocr")).toEqual({
-    backend: "dots_ocr",
-    endpoint: "https://dots-new.example.com/v1",
-    model: "served-dots",
-    clear_api_key: true,
+  await save.click();
+  await expect.poll(() => payloads.length).toBe(2);
+  expect(payloads[1]).toEqual({
+    connections: [
+      {
+        backend: "dots_ocr",
+        endpoint: "https://dots-new.example.com/v1",
+        model: "served-dots",
+        clear_api_key: true,
+      },
+    ],
   });
   await expectNoHorizontalOverflow(page);
 });
 
+/** Dots.OCR の接続の GET / PATCH。PATCH の payload を記録し、接続だけ保存後の値を返す（使用エンジンは Docling のまま）。 */
+async function mockParserAdaptersForConnectionSheet(page: Page) {
+  const patches: Array<Record<string, unknown>> = [];
+  let connection = { ...defaultConnections()[0] } as Omit<ReturnType<typeof defaultConnections>[number], "endpoint" | "model"> & {
+    endpoint: string;
+    model: string;
+  };
+  await page.route("**/api/settings/parser-adapters", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const payload = route.request().postDataJSON() as { connections?: Array<{ endpoint: string; model: string }> };
+      patches.push(payload);
+      const update = payload.connections?.[0];
+      if (update) connection = { ...connection, endpoint: update.endpoint, model: update.model };
+    }
+    await route.fulfill({
+      json: parserAdapterEnvelope({
+        adapter_backend: "docling",
+        effective_order: ["docling"],
+        config_source: "runtime",
+        connections: [connection],
+        adapters: [
+          { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
+          disabledAdapter("unstructured"),
+          disabledAdapter("dots_ocr"),
+        ],
+      }),
+    });
+  });
+  return patches;
+}
+
+const dotsSettingsButton = (page: Page) => page.getByRole("button", { name: "Dots.OCR の設定", exact: true });
+const dotsSheet = (page: Page) => page.getByTestId("external-parser-connection-dots_ocr");
+const dotsSheetActions = (page: Page) => dotsSheet(page).getByRole("group", { name: "Dots.OCR の接続設定の操作" });
+
 for (const viewport of [
-  { name: "desktop", width: 1280, height: 900 },
+  { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`MinerU のライセンスの主な条件と公式のリンクを出し、確認するまで選べない (${viewport.name})`, async ({
-    page,
-  }) => {
+  test(`Dots.OCR の「設定」はエンジンの選択を変えず右のパネルで開く（#4740, ${viewport.name}）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockParserAdapters(page, {}, { mineruAvailability: "available" });
-    await page.goto("/settings/parser-adapters");
+    await mockParserAdaptersForConnectionSheet(page);
+    await mockFeaturePrompts(page);
 
-    const notice = page.getByTestId("mineru-license-notice");
-    await expect(notice).toContainText("MinerU のライセンス（MinerU Open Source License）の主な条件");
-    await expect(notice).toContainText("月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超える");
-    await expect(notice).toContainText("MinerU を使っていることを明示します");
-    await expect(notice).toContainText("通知なしに自動で終わります");
-    await expect(notice).toContainText("MinerU2.5-Pro-2605-1.2B（Apache-2.0）");
-    await expect(notice).toContainText("利用の前に、ライセンスの全文を確認してください");
-    await expect(notice).toContainText("法的な助言ではありません");
-    await expect(notice.getByRole("link", { name: /MinerU の公式リポジトリ/ })).toHaveAttribute(
-      "href",
-      "https://github.com/opendatalab/MinerU"
-    );
-    const licenseLink = notice.getByRole("link", { name: /ライセンスの全文/ });
-    await expect(licenseLink).toHaveAttribute(
-      "href",
-      "https://github.com/opendatalab/MinerU/blob/master/LICENSE.md"
-    );
-    await expect(licenseLink).toHaveAttribute("target", "_blank");
-    // 確認するまで MinerU は選べない（#3359。backend も 422 で拒否する）。
-    const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
-    await expect(mineruBackend).toBeDisabled();
-    await expect(page.locator('label[for="settings-parser-backend-mineru"]')).toContainText(
-      "先に下の「MinerU のライセンスの条件を確認した」を確かめてください"
-    );
-    const acknowledge = notice.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" });
-    await expect(acknowledge).not.toBeChecked();
-    await acknowledge.check();
-    await expect(mineruBackend).toBeEnabled();
-    await expect(page.getByText("未保存の変更があります。")).toBeVisible();
-    await expectNoPageOverflow(page);
+    await page.goto("/settings/parser-adapters");
+    const docling = page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ });
+    const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
+    await expect(docling).toBeChecked();
+    const button = dotsSettingsButton(page);
+    // 「設定」はカードの中にあり、カードの文字に重ならない。
+    const overlap = await page.locator('label[for="settings-parser-backend-dots_ocr"]').evaluate((label) => {
+      const target = label.parentElement!.querySelector("button")!.getBoundingClientRect();
+      const box = label.getBoundingClientRect();
+      const inside = target.left >= box.left && target.right <= box.right && target.top >= box.top && target.bottom <= box.bottom;
+      const covered = [...label.querySelectorAll("span")].filter((span) => span.children.length === 0 && span.textContent?.trim()).some((span) => {
+        const rect = span.getBoundingClientRect();
+        return rect.left < target.right && rect.right > target.left && rect.top < target.bottom && rect.bottom > target.top;
+      });
+      return { inside, covered };
+    });
+    expect(overlap).toEqual({ inside: true, covered: false });
+
+    await button.click();
+    const sheet = dotsSheet(page);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    await expect(page.getByRole("dialog", { name: "Dots.OCR の設定" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Dots.OCR の設定" })).toBeVisible();
+    // 押してもエンジンの選択は変わらない（未保存の変更にもならない）。
+    await expect(docling).toBeChecked();
+    await expect(dots).not.toBeChecked();
+    await expect(page.getByRole("group", { name: "文書解析の設定の操作" }).getByText("未保存の変更があります。")).toHaveCount(0);
+
+    // 根拠を表示するパネルと同じ形: 右端に付き、開くとパネルへフォーカスする。sm 未満は全画面。
+    await expect(sheet).toBeFocused();
+    await expect
+      .poll(() => sheet.evaluate((node) => Math.round(node.getBoundingClientRect().right)))
+      .toBe(viewport.width);
+    const box = (await sheet.boundingBox())!;
+    if (viewport.name === "mobile") expect(Math.round(box.x)).toBe(0);
+    else expect(box.x).toBeGreaterThan(0);
+
+    // 中身は Endpoint / Model / API key / 保存済みのキーの削除 / 接続確認 / 読み取りプロンプト。欄は 1 組だけ。
+    await expect(sheet.getByLabel("Endpoint")).toHaveValue("https://dots.example.com/v1");
+    await expect(sheet.getByLabel("Model")).toHaveValue("rednote-hilab/dots.mocr");
+    await expect(page.getByLabel("Endpoint")).toHaveCount(1);
+    await expect(page.getByLabel("Model")).toHaveCount(1);
+    const apiKey = sheet.getByLabel("API key", { exact: true });
+    await expect(apiKey).toHaveCount(1);
+    // 保存済みの値は欄にも出さず、設定済みかどうかだけを示す。
+    await expect(apiKey).toHaveValue("");
+    await expect(apiKey).toHaveAttribute("type", "password");
+    await expect(apiKey).toHaveAttribute("placeholder", "設定済み（空欄なら保持）");
+    await expect(sheet.getByLabel("保存済み API key を削除")).toBeEnabled();
+    const actions = dotsSheetActions(page);
+    const testConnection = actions.getByRole("button", { name: "接続を確認", exact: true });
+    await expect(actions.getByRole("button")).toHaveText(["保存", "接続を確認", "変更を破棄"]);
+    await expect(testConnection).toBeEnabled();
+    const actionBoxes = await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      return { x: box.x, y: box.y, bottom: box.bottom };
+    }));
+    if (viewport.name === "desktop") {
+      expect(Math.abs(actionBoxes[0].y - actionBoxes[1].y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(actionBoxes[1].y - actionBoxes[2].y)).toBeLessThanOrEqual(1);
+      expect(actionBoxes[0].x).toBeLessThan(actionBoxes[1].x);
+      expect(actionBoxes[1].x).toBeLessThan(actionBoxes[2].x);
+    } else {
+      expect(actionBoxes[1].y).toBeGreaterThanOrEqual(actionBoxes[0].bottom);
+      expect(actionBoxes[2].y).toBeGreaterThanOrEqual(actionBoxes[1].bottom);
+    }
+    await sheet.getByLabel("Endpoint").fill("https://edited.example.com/v1");
+    await expect(testConnection).toBeDisabled();
+    await expect(sheet.getByText("接続確認には保存済み設定を使います。先に変更を保存してください。")).toBeVisible();
+    await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
+    await expect(sheet.getByLabel("Endpoint")).toHaveValue("https://dots.example.com/v1");
+    await expect(testConnection).toBeEnabled();
+    await actions.screenshot({ path: test.info().outputPath(`connection-actions-${viewport.name}.png`) });
+    await expect(sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" })).toHaveCount(1);
+    expect(await findClippedPlaceholders(page, { root: '[data-testid="external-parser-connection-dots_ocr"]' })).toEqual([]);
+
+    await expectNoHorizontalOverflow(page);
+    expect(await sheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-sheet-${viewport.name}.png` });
+
+    // 破棄後に無効になったボタンから、元の閉じる検証と同じパネルへフォーカスを戻す。
+    await sheet.focus();
+    // 変更が無ければ Escape 1 回で確認なしに閉じ、開いたボタンへ戻る。
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveAttribute("data-state", "closed");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(button).toBeFocused();
+    await expect(docling).toBeChecked();
+    if (SCREENSHOT_DIR) {
+      await page.locator('label[for="settings-parser-backend-dots_ocr"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-card-${viewport.name}.png` });
+    }
   });
 
-  test(`MinerU のライセンスの確認はシステム管理者だけができる (${viewport.name})`, async ({ page }) => {
+  test(`Dots.OCR のパネルは未保存のまま閉じるときに確認する（#4740, ${viewport.name}）`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    // 文書解析の設定の権限はあるが system_admin ではない利用者（#3359）。
-    await mockAuthUser(page, { permissions: ["menu.settings_parser_adapters"] });
-    await mockParserAdapters(page, {}, { mineruAvailability: "available" });
+    const patches = await mockParserAdaptersForConnectionSheet(page);
+    await mockFeaturePrompts(page);
+
     await page.goto("/settings/parser-adapters");
+    await dotsSettingsButton(page).click();
+    const sheet = dotsSheet(page);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    const endpoint = sheet.getByLabel("Endpoint");
+    await endpoint.fill("https://edited.example.com/v1");
+    await expect(dotsSheetActions(page).getByText("未保存の変更があります。")).toBeVisible();
 
-    const notice = page.getByTestId("mineru-license-notice");
-    await expect(notice).toContainText("MinerU Open Source License");
-    const acknowledge = notice.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" });
-    await expect(acknowledge).not.toBeChecked();
-    await expect(acknowledge).toBeDisabled();
-    await expect(notice).toContainText(
-      "MinerU のライセンスの条件の確認と取り消しは、システム管理者だけができます。"
-    );
-    await expect(page.getByRole("radio", { name: /MinerU/ })).toBeDisabled();
-    await expectNoPageOverflow(page);
-  });
-
-  test(`MinerU を使用エンジンにしている間は確認を外せない (${viewport.name})`, async ({ page }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.route("**/api/settings/parser-adapters", (route) =>
-      route.fulfill({
-        json: parserAdapterEnvelope({
-          adapter_backend: "mineru",
-          effective_order: ["mineru"],
-          config_source: "runtime",
-          adapters: [
-            disabledAdapter("docling"),
-            disabledAdapter("unstructured"),
-            {
-              ...disabledAdapter("mineru"),
-              availability: "available",
-              enabled: true,
-              selected: true,
-              status: "active",
-            },
-            disabledAdapter("dots_ocr"),
-          ],
-          mineru_license: {
-            acknowledged: true,
-            acknowledged_by: "管理者 A",
-            acknowledged_at: "2026-10-26T00:00:00+00:00",
-          },
-        }),
+    // × で確認し、取り消すと編集中のまま残る。
+    await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("変更を破棄しますか");
+    // 確認はパネルの上に出る。
+    const confirmButton = dialog.getByRole("button", { name: "破棄して閉じる" });
+    await expect(confirmButton).toBeVisible();
+    await expect(confirmButton).toBeInViewport();
+    expect(
+      await confirmButton.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return Boolean(top && node.contains(top));
       })
-    );
-    await page.goto("/settings/parser-adapters");
+    ).toBe(true);
+    if (SCREENSHOT_DIR) await page.screenshot({ path: `${SCREENSHOT_DIR}/dots-ocr-unsaved-confirm-${viewport.name}.png` });
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    await expect(endpoint).toHaveValue("https://edited.example.com/v1");
 
-    const notice = page.getByTestId("mineru-license-notice");
-    const acknowledge = notice.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" });
-    await expect(acknowledge).toBeChecked();
-    await expect(acknowledge).toBeDisabled();
-    await expect(notice).toContainText("MinerU を使用エンジンにしている間は、確認を外せません");
-    await expect(notice).toContainText("確認済み: 管理者 A");
-    await expectNoPageOverflow(page);
+    // Escape でも確認する。破棄すると閉じ、開き直すと保存済みの値に戻る。
+    await endpoint.focus();
+    // 閉じるボタンの Tooltip が残っている間の Escape は Tooltip だけを閉じる（共有の Tooltip の仕様）。
+    // 名前と同じ文言の Tooltip は aria-hidden なので role ではなく属性で待つ。
+    await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    // Escape の keydown から開いた確認は、その keydown では閉じない（#4763）。次の Escape で取り消す。
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(sheet).toHaveAttribute("data-state", "open");
+    await expect(endpoint).toBeFocused();
+    await page.keyboard.press("Escape");
+    await page.getByRole("alertdialog").getByRole("button", { name: "破棄して閉じる" }).click();
+    await expect(sheet).toHaveAttribute("data-state", "closed");
+    expect(patches).toEqual([]);
+    await dotsSettingsButton(page).click();
+    await expect(sheet.getByLabel("Endpoint")).toHaveValue("https://dots.example.com/v1");
+
+    // 読み取りプロンプトの未保存の編集でも確認する。
+    await sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" }).click();
+    await sheet.locator("#answer-prompt-external_ocr").fill("合成の編集中の指示");
+    // 375px のパネルは全画面で scrim に届かないので、× で閉じる。desktop は scrim で確かめる。
+    if (viewport.name === "desktop") await page.getByTestId("external-parser-connection-dots_ocr-scrim").click({ position: { x: 5, y: 5 }, force: true });
+    else await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("変更を破棄しますか");
+    await page.getByRole("alertdialog").getByRole("button", { name: "破棄して閉じる" }).click();
+    await expect(sheet).toHaveAttribute("data-state", "closed");
+    // 破棄した後は、画面を離れるときの確認も出ない。
+    await expect(page.getByRole("group", { name: "文書解析の設定の操作" }).getByText("未保存の変更があります。")).toHaveCount(0);
+    await dotsSettingsButton(page).click();
+    await sheet.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" }).click();
+    await expect(sheet.locator("#answer-prompt-external_ocr")).toHaveValue("合成の既定指示");
   });
 }
 
+test("Dots.OCR のパネルの保存は未保存のエンジンの選択を送らず、選択を残す（#4740）", async ({ page }) => {
+  const patches = await mockParserAdaptersForConnectionSheet(page);
+  await mockFeaturePrompts(page);
+
+  await page.goto("/settings/parser-adapters");
+  const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
+  await dots.check();
+  const pageActions = page.getByRole("group", { name: "文書解析の設定の操作" });
+  await expect(pageActions.getByText("未保存の変更があります。")).toBeVisible();
+
+  await dotsSettingsButton(page).click();
+  const sheet = dotsSheet(page);
+  await sheet.getByLabel("API key", { exact: true }).fill("synthetic-key");
+  await dotsSheetActions(page).getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+  expect(patches).toEqual([
+    {
+      connections: [
+        {
+          backend: "dots_ocr",
+          endpoint: "https://dots.example.com/v1",
+          model: "rednote-hilab/dots.mocr",
+          api_key: "synthetic-key",
+        },
+      ],
+    },
+  ]);
+  // 保存した後は欄を空に戻し、パネルは開いたまま（続けて接続を確認できる）。閉じても確認は出ない。
+  await expect(sheet.getByLabel("API key", { exact: true })).toHaveValue("");
+  await expect(sheet).toHaveAttribute("data-state", "open");
+  await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(sheet).toHaveAttribute("data-state", "closed");
+  // 画面のエンジンの選択（未保存）はそのまま残る。
+  await expect(dots).toBeChecked();
+  await expect(pageActions.getByText("未保存の変更があります。")).toBeVisible();
+});
+
 async function mockParserAdapters(
   page: Page,
-  extra: object = {},
-  // MinerU のライセンスの確認の画面を確かめるときは、準備中の判定を外す（backend の
-  // mineru_selectable と同じ。#3359）。
-  options: { mineruAvailability?: "available" | "roadmap" } = {}
+  extra: object = {}
 ) {
   await page.route("**/api/settings/parser-adapters", async (route) => {
     await route.fulfill({
@@ -1278,20 +1376,6 @@ async function mockParserAdapters(
               selected: false,
               installed: true,
               status: "available",
-              version: null,
-              warning_code: null,
-            },
-            {
-              backend: "mineru",
-              availability: options.mineruAvailability ?? "roadmap",
-              package_name: "external_api",
-              import_name: "external_api",
-              distribution_name: "mineru_v1",
-              install_package: "外部 MinerU API",
-              enabled: false,
-              selected: false,
-              installed: false,
-              status: "disabled",
               version: null,
               warning_code: null,
             },
@@ -1366,7 +1450,7 @@ function defaultSourceRoutes() {
   return [
     {
       source_kind: "pdf",
-      candidate_order: ["docling", "unstructured", "mineru", "dots_ocr"],
+      candidate_order: ["docling", "unstructured", "dots_ocr"],
       attempted_order: ["docling", "unstructured"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -1375,7 +1459,7 @@ function defaultSourceRoutes() {
     },
     {
       source_kind: "image",
-      candidate_order: ["unstructured", "docling", "dots_ocr", "mineru"],
+      candidate_order: ["unstructured", "docling", "dots_ocr"],
       attempted_order: ["docling"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -1446,7 +1530,7 @@ async function mockExternalParserStatuses(page: Page) {
         data: {
           backend,
           status: "available",
-          version: backend === "mineru" ? "3.4.0" : "served-model",
+          version: "served-model",
           warning_code: null,
         },
         error_messages: [],
@@ -1458,14 +1542,6 @@ async function mockExternalParserStatuses(page: Page) {
 
 function defaultConnections() {
   return [
-    {
-      backend: "mineru",
-      protocol: "mineru_v1",
-      endpoint: "",
-      model: null,
-      api_key_configured: false,
-      configured: false,
-    },
     {
       backend: "dots_ocr",
       protocol: "openai_chat_completions",
@@ -1488,14 +1564,12 @@ function disabledAdapter(
     | "unstructured"
     | "structured_records_jsonl"
     | "xml_tree_json"
-    | "mineru"
     | "dots_ocr"
 ) {
-  const external = backend === "mineru" || backend === "dots_ocr";
+  const external = backend === "dots_ocr";
   return {
     backend,
-    // MinerU は準備中（ロードマップ。#3359）。backend の GET と同じく roadmap を返す。
-    availability: backend === "mineru" ? "roadmap" : "available",
+    availability: "available",
     package_name: external ? "external_api" : backend,
     import_name: external ? "external_api" : backend,
     distribution_name: null,
@@ -1504,8 +1578,6 @@ function disabledAdapter(
         ? "unstructured[all-docs]==0.18.32"
         : backend === "xml_tree_json" || backend === "structured_records_jsonl"
           ? "rag-parser-core"
-          : backend === "mineru"
-          ? "外部 MinerU API"
           : backend === "dots_ocr"
             ? "外部 Dots.OCR API"
             : "docling==2.103.0",
@@ -1540,7 +1612,6 @@ for (const viewport of [
       adapters: [
         { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
         disabledAdapter("unstructured"),
-        disabledAdapter("mineru"),
         disabledAdapter("dots_ocr"),
       ],
     };
@@ -1548,7 +1619,8 @@ for (const viewport of [
     await page.route("**/api/settings/parser-adapters", async (route) => {
       if (route.request().method() === "PATCH") {
         patchCount += 1;
-        if (patchCount === 1) {
+        // 1 回目はエンジンの保存、3 回目はパネルの接続の保存を失敗させる。
+        if (patchCount === 1 || patchCount === 3) {
           await route.fulfill({
             status: 500,
             json: {
@@ -1567,7 +1639,6 @@ for (const viewport of [
             adapters: [
               { ...disabledAdapter("docling"), enabled: true, installed: true, status: "active" },
               disabledAdapter("unstructured"),
-              disabledAdapter("mineru"),
               { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
             ],
           }),
@@ -1580,16 +1651,13 @@ for (const viewport of [
 
     const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
     await dots.check();
-    const apiKey = page.locator("#external-parser-dots_ocr-api-key");
-    await apiKey.fill("new-secret");
     const actions = page.getByRole("group", { name: "文書解析の設定の操作" });
     const saveButton = actions.getByRole("button", { name: "保存", exact: true });
     await saveButton.click();
 
-    // 失敗は操作の行に出し、選んだエンジン・入力した API key・保存のボタンを残す。
+    // 失敗は操作の行に出し、選んだエンジン・保存のボタンを残す。
     await expect(actions).toContainText("設定を共有永続化ファイルへ保存できませんでした。");
     await expect(dots).toBeChecked();
-    await expect(apiKey).toHaveValue("new-secret");
     await expect(saveButton).toBeEnabled();
     await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeEnabled();
     await expectNoHorizontalOverflow(page);
@@ -1598,9 +1666,25 @@ for (const viewport of [
     await saveButton.click();
     await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
     await expect(dots).toBeChecked();
-    await expect(apiKey).toHaveValue("");
     await expect(saveButton).toBeDisabled();
     expect(patchCount).toBe(2);
+
+    // パネルの保存の失敗は、パネルの操作の行に出し、入力した API key を残す（#4740）。
+    await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
+    const sheet = page.getByTestId("external-parser-connection-dots_ocr");
+    const apiKey = sheet.locator("#external-parser-dots_ocr-api-key");
+    await apiKey.fill("new-secret");
+    const sheetActions = sheet.getByRole("group", { name: "Dots.OCR の接続設定の操作" });
+    const sheetSave = sheetActions.getByRole("button", { name: "保存", exact: true });
+    await sheetSave.click();
+    await expect(sheetActions).toContainText("設定を共有永続化ファイルへ保存できませんでした。");
+    await expect(apiKey).toHaveValue("new-secret");
+    await expect(sheetSave).toBeEnabled();
+
+    await sheetSave.click();
+    await expect(apiKey).toHaveValue("");
+    await expect(sheetSave).toBeDisabled();
+    expect(patchCount).toBe(4);
   });
 }
 
@@ -1610,6 +1694,7 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   await mockExtractionFields(page);
   const requests = await mockFeaturePrompts(page);
   await page.goto("/settings/parser-adapters");
+  await page.getByRole("button", { name: "Dots.OCR の設定", exact: true }).click();
   const dotsCard = page.getByTestId("external-parser-connection-dots_ocr");
   const prompt = dotsCard.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" });
   await expect(prompt).toHaveCount(1);
@@ -1620,12 +1705,15 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   expect(position!.y - connection!.y - connection!.height).toBeGreaterThanOrEqual(minimumGap - 1);
   await expect(page.getByText("GPU 解析エンジンは外部 API を直接呼びます。", {exact: false})).toHaveCount(0);
 
+  // Dots.OCR のプロンプトはパネルの中で確かめてから閉じ、残りは画面の項目で確かめる（#4740）。
+  await verifyFeaturePrompt(page, "external_ocr", "Dots.OCR の読み取りプロンプト");
+  await dotsCard.getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(dotsCard).toHaveAttribute("data-state", "closed");
   for (const [key, title] of [
-    ["external_ocr", "Dots.OCR の読み取りプロンプト"],
     ["heading_levels", "見出しの階層の推定プロンプト"],
     ["field_extraction", "メタデータ/項目抽出プロンプト"],
     ["navigation_summary", "章節の要約プロンプト"],
-    ["raptor_summary_system", "RAPTOR の階層の要約のシステムプロンプト"],
+    ["document_summary", "文書の要約プロンプト"],
   ]) {
     await verifyFeaturePrompt(page, key, title);
   }
@@ -1662,37 +1750,33 @@ test("章節の方式は広い欄と折り返す選択肢で全文を読める",
 });
 
 
+test("文書の要約は解析後の処理の最後の項目で、有効・無効を保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const patches = await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page); await mockFeaturePrompts(page);
+  await page.goto("/settings/parser-adapters#post-parse-document-summary");
+  const item = page.locator("#post-parse-document-summary");
+  await expect(item.getByRole("heading", { name: "6. 文書の要約", exact: true })).toBeVisible();
+  await expect(item.getByText(/モデルの呼び出しは 1 文書につき 1 回です/)).toBeVisible();
+  // 保存値が無い応答（既定）は有効。
+  const toggle = item.getByRole("switch", { name: "文書の要約", exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await page.getByRole("button", { name: "解析後の処理を保存", exact: true }).click();
+  await expect.poll(() => patches.at(-1)?.document_summary_enabled).toBe(false);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await expectNoPageOverflow(page);
+  await item.scrollIntoViewIfNeeded();
+  await item.screenshot({ path: testInfo.outputPath(`post-parse-document-summary-${testInfo.project.name}.png`) });
+});
+
 test("章節の要約は実効の対象数上限を示し不要な比較文を出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, {vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false});
   await mockExtractionFields(page); await mockFeaturePrompts(page);
   await page.goto("/settings/parser-adapters");
   await expect(page.getByText(/正常に処理した章節が最大 37 件/)).toBeVisible();
   await expect(page.getByText(/モデルの呼び出し回数の上限ではありません/)).toBeVisible();
-  await expect(page.getByText("RAPTOR は使いません。", {exact: false})).toHaveCount(0);
 });
-
- test("RAPTOR は文書解析の第6項で既定 OFF、保存と破棄を共通操作で扱う", {tag: "@responsive"}, async ({page}) => {
-  const state = await mockParserAdaptersWithPostParse(page, {vision_enabled:false, field_extraction_enabled:false, navigation_summary_enabled:false});
-  await mockExtractionFields(page);
-  await mockFeaturePrompts(page);
-  await page.goto("/settings/parser-adapters");
-  const panel = page.locator("#post-parse-raptor-summary");
-  await expect(panel.getByRole("heading", {name: "6. RAPTOR の階層の要約", exact:true})).toBeVisible();
-  const toggle = panel.getByRole("switch", {name: "RAPTOR の階層の要約", exact:true});
-  await expect(toggle).not.toBeChecked();
-  await toggle.click();
-  const container = panel.locator("xpath=ancestor::*[.//ol][1]");
-  await container.getByRole("button", {name: "変更を破棄", exact:true}).click();
-  await expect(toggle).not.toBeChecked();
-  await toggle.click();
-  await container.getByRole("button", {name: "解析後の処理を保存", exact:true}).click();
-  await expect.poll(() => state.length).toBe(1);
-  expect(state[0]).toMatchObject({raptor_enabled:true});
-  await expect(page.locator("summary").filter({hasText: "RAPTOR の階層の要約プロンプト"})).toHaveCount(0);
-  await expectNoPageOverflow(page);
-  await panel.screenshot({path: test.info().outputPath("raptor-setting.png")});
- });
-
 
 test("画像の自然言語指示は保存・再読込でき、出力契約は読み取り専用", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
@@ -1719,18 +1803,24 @@ test("画像の自然言語指示は保存・再読込でき、出力契約は�
     await vision.locator("summary", { hasText: "図・画像の指示と出力形式" }).click();
     return vision.getByTestId("vision-prompt-parts");
   }
+  // 6 つの部分をそれぞれ保存・破棄・既定に戻すので、nightly の負荷（JS の coverage・再試行の trace）でも足りる時間にする。
+  test.setTimeout(60_000);
+  const fieldOf = (label: string) => instructions.getByRole("textbox", { name: label, exact: true });
+  const actionsOf = (label: string) => fieldOf(label).locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
+  const customOf = (part: string) => `## Step 1: 保存する合成の指示（${part}）`;
+  // 再読込は 1 回 3 秒ほどかかるので、部分ごとではなく、保存・既定に戻す・確かめるの段ごとに 1 回だけ行う（#4808）。
   let instructions = await openInstructions();
   for (const [part, label] of parts) {
+    await fieldOf(label).fill(customOf(part));
+    await actionsOf(label).getByRole("button", { name: "プロンプトを保存", exact: true }).click();
+    await expect.poll(() => saved.get(`picture_description.${part}`)).toBe(customOf(part));
+  }
+  instructions = await openInstructions();
+  for (const [part, label] of parts) {
     const key = `picture_description.${part}`;
-    let field = instructions.getByRole("textbox", { name: label, exact: true });
-    let actions = field.locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
-    await field.fill("## Step 1: 保存する合成の指示");
-    const custom = await field.inputValue();
-    await actions.getByRole("button", { name: "プロンプトを保存", exact: true }).click();
-    await expect.poll(() => saved.get(key)).toBe(custom);
-    instructions = await openInstructions();
-    field = instructions.getByRole("textbox", { name: label, exact: true });
-    actions = field.locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
+    const field = fieldOf(label);
+    const actions = actionsOf(label);
+    const custom = customOf(part);
     await expect(field).toHaveValue(custom);
     await field.fill("破棄する内容");
     await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
@@ -1746,6 +1836,9 @@ test("画像の自然言語指示は保存・再読込でき、出力契約は�
     await expect.poll(() => saved.has(key)).toBe(false);
     await expect(field).toHaveValue(builtin);
   }
+  instructions = await openInstructions();
+  for (const [, label] of parts) await expect(fieldOf(label)).toHaveValue(builtin);
+  expect(saved.size).toBe(0);
   await expect(instructions.getByRole("textbox", { name: "出力形式と上限（読み取り専用）", exact: true })).toHaveAttribute("readonly", "");
   await expect(instructions.getByText("既定値", { exact: true })).toHaveCount(0);
   await expectNoPageOverflow(page);

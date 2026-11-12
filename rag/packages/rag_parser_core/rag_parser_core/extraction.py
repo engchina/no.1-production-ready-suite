@@ -24,19 +24,25 @@ type ExtractionArtifactValue = (
     | dict[str, "ExtractionArtifactValue"]
 )
 
-# 取込が原文から作った派生の要素・chunk（章節ナビゲーションの要約・項目抽出の値・RAPTOR の要約）の
+# 取込が原文から作った派生の要素・chunk（章節ナビゲーションの要約・項目抽出の値）の
 # content_kind と印（#2590）。索引の手がかりで、引用できる原文ではない。見出しとして読み直さず、
 # 分割で原文の要素と結合せず、章節の本文に入れない。
 SECTION_SUMMARY_CONTENT_KIND = "section_summary"
 EXTRACTED_FIELD_CONTENT_KIND = "field"
-DERIVED_CONTENT_KINDS = frozenset({SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD_CONTENT_KIND})
+# 文書全体の要約の chunk（#4793）。取込の後に 1 文書 1 回の LLM で作り、chunk として 1 つだけ索引に
+# 入れる（抽出の要素にはしない）。原文ではないので派生として扱うが、指す原文が文書の全体なので、
+# 検索で当たったときは原文の chunk に置き換えず、要約と分かる根拠として渡す
+# （``app.rag.derived_evidence``）。
+DOCUMENT_SUMMARY_CONTENT_KIND = "document_summary"
+DERIVED_CONTENT_KINDS = frozenset(
+    {SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD_CONTENT_KIND, DOCUMENT_SUMMARY_CONTENT_KIND}
+)
 NAV_SUMMARY_KEY = "nav_summary"
 EXTRACTED_FIELD_KEY = "extracted_field"
-RAPTOR_SUMMARY_KEY = "raptor_summary"
 # 項目抽出の値を読み取った元の要素の ID。分割で chunk に引き継ぎ、検索で当たった値の chunk を
 # 根拠に渡すときに、この要素を含む原文の chunk を読む（#2641）。
 FIELD_SOURCE_ELEMENT_KEY = "field_source_element_id"
-DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY, RAPTOR_SUMMARY_KEY)
+DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY)
 
 # 書式の飾りとして文字に重ねる結合の線（上線 U+0305・下線 U+0332・二重下線 U+0333・
 # 二重上線 U+033F）。前後の文字の線とつながるように作られた記号で、文字の読みと意味を変えない。
@@ -60,6 +66,8 @@ def is_derived_content(content_kind: object, metadata: Mapping[str, object]) -> 
 
 
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
+# これより長い行は見出しとして読まない。
+MAX_HEADING_LINE_CHARS = 120
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
 FENCED_CODE_START = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$")
 FENCED_CODE_ENDS = {
@@ -1102,11 +1110,11 @@ def _equation_block_start(
 
 def _parse_heading(line: str) -> tuple[int, str] | None:
     """Markdown / 番号付き / 日本語章節見出しを推定する。"""
-    if not line or len(line) > 120:
+    if not line or len(line) > MAX_HEADING_LINE_CHARS:
         return None
     if match := MARKDOWN_HEADING.match(line):
         return len(match.group("marks")), _clean_heading_title(match.group("title"))
-    if match := numbered_heading().match(line):
+    if match := numbered_heading_line(line):
         prefix = match.group("prefix")
         title = _clean_heading_title(match.group("title"))
         return heading_level_from_prefix(prefix), title
@@ -1133,6 +1141,14 @@ def numbered_heading() -> re.Pattern[str]:
         _numbered_headings.clear()
         _numbered_headings[key] = pattern
     return pattern
+
+
+def numbered_heading_line(line: str) -> re.Match[str] | None:
+    """番号の付いた見出しの行の一致を返す。文末の記号で終わる行は番号付きの本文とする(#4742)。"""
+    match = numbered_heading().match(line)
+    if match and re.search(rf"{text_patterns().heading_terminal}$", line.rstrip()):
+        return None
+    return match
 
 
 def heading_level_from_prefix(prefix: str) -> int:

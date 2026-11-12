@@ -10,7 +10,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from time import perf_counter, time
+from time import perf_counter, time, time_ns
 from typing import Any, Literal, cast
 
 from pr_backend_core.chat_history import (
@@ -32,7 +32,6 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
 )
 from pydantic import ValidationError
-from rag_engine.evaluation.answer_validation import MAX_PREMISES
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
@@ -46,6 +45,7 @@ from app.config import Settings, get_settings
 from app.rag.answer_engine import (
     ANSWER_ENGINE,
     AnswerEngine,
+    AnswerOutcome,
     AnswerScope,
     _trace_chunks,
     answer_step_stage,
@@ -56,11 +56,16 @@ from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.chat_question_token import context_digest
 from app.rag.degraded_steps import DegradedSteps, ReportDegraded, not_recorded
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
-from app.rag.field_filter_reader import read_field_conditions
+from app.rag.faq_direct_answer import FAQ_DIRECT_STAGE, direct_faq_snapshot
+from app.rag.faq_direct_answer import direct_faq_outcome as direct_faq_outcome_from
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
+from app.rag.history_question import (
+    EMPTY_CONVERSATION_HISTORY,
+    HistoryConfirmation,
+    HistoryIntent,
+    HistoryRewrite,
+)
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
-from app.rag.history_question import HistoryConfirmation, HistoryRewrite
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -71,8 +76,13 @@ from app.rag.observability import (
     record_rag_stage,
     record_trace_span,
 )
-from app.rag.question_understanding import profile_language_scope
+from app.rag.profile_language import profile_language_scope
 from app.rag.run_history import RunRecorder
+from app.rag.search_answer_profile_knowledge import (
+    load_direct_faq_snapshot,
+    match_direct_approved_faq,
+)
+from app.rag.small_talk import SMALL_TALK_SYSTEM_PROMPT, SmallTalkReply, skips_retrieval
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
     ANSWER_STEP_KIND,
@@ -83,8 +93,9 @@ from app.rag.span_display import (
 )
 from app.rag.step_details import (
     answer_guardrail_details,
-    field_filter_details,
+    faq_direct_details,
     history_rewrite_details,
+    small_talk_details,
     step_details_model,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
@@ -98,7 +109,6 @@ from app.rag.trace_bodies import trace_body_capture
 from app.rag.trace_store import AnswerTrace, operation_trace_parent
 from app.schemas.common import JsonValue
 from app.schemas.search import (
-    ExtractionFieldCondition,
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
@@ -128,9 +138,13 @@ type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[Non
 
 # 回答の記録の保存の工程（#2342）。失敗しても回答は返し、処理の経過で失敗にする。
 ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
+# 検索の要らない発話（挨拶・雑談）に、検索せずに応じる工程（#4787）。
+SMALL_TALK_STAGE = "small_talk_reply"
 # 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。KB の検索テストの
 # 「retrieval」（回答フローを通らない検索だけ）とは分ける。
 EVIDENCE_STAGE = "evidence"
+# 会話の履歴から引き継ぐ確認済みの前提の上限。
+MAX_HISTORY_PREMISES = 10
 
 
 def storage_failure(step: StorageFailureStep, exc: BaseException) -> StorageFailure:
@@ -162,6 +176,20 @@ class ChatTurn:
     confirmation_resets: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedHistoryRewrite:
+    """送信の前（確認の提案）に済ませた履歴による補完（#4794）。
+
+    送信の側は補完を呼び直さず、処理の経過に同じ段（所要時間・詳細）として残す。補った質問は
+    検索の request（``query`` / ``original_question``）が持つ。
+    """
+
+    elapsed_seconds: float
+    confirmed_facts: tuple[HistoryConfirmation, ...] = ()
+    # 補完と同じ呼び出しで分けた最新の発話の種類（#4787）。
+    intent: HistoryIntent = "search"
+
+
 def history_confirmation_facts(history: Sequence[ChatTurn]) -> dict[str, HistoryConfirmation]:
     """同じ確認の質問は最新の回答だけを候補とし、古い値を再採用しない。"""
     latest: dict[str, HistoryConfirmation] = {}
@@ -172,7 +200,7 @@ def history_confirmation_facts(history: Sequence[ChatTurn]) -> dict[str, History
             for fact in turn.confirmed_facts:
                 latest.pop(fact.key or fact.question, None)
                 latest[fact.key or fact.question] = fact
-    return {fact.id: fact for fact in list(latest.values())[-MAX_PREMISES:]}
+    return {fact.id: fact for fact in list(latest.values())[-MAX_HISTORY_PREMISES:]}
 
 
 def scope_with_history_confirmations(
@@ -387,6 +415,8 @@ class RagPipeline:
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
         history_question_prepared: bool = False,
+        prepared_history_rewrite: PreparedHistoryRewrite | None = None,
+        direct_faq_answer: bool = False,
         caller_queries: Sequence[str] | None = None,
         complete_evidence: bool = True,
     ) -> None:
@@ -416,9 +446,18 @@ class RagPipeline:
         # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
         self._attachment_conversation_id = attachment_conversation_id
         self._history_question_prepared = history_question_prepared
+        self._prepared_history_rewrite = (
+            prepared_history_rewrite if history_question_prepared else None
+        )
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
+        # 会話履歴による補完が分けた最新の発話の種類（#4787。補完しなければ search）。
+        self._history_intent: HistoryIntent = "search"
+        # 補完した質問が承認済み FAQ に下限以上で一致したら、FAQ の回答をそのまま返すか（#4788）。
+        # チャットの送信だけが渡す（類似問を選んだ・断った発話と確認に答えた発話は渡さない）。
+        # プロファイルの設定がオフなら照合しない。
+        self._direct_faq_answer = direct_faq_answer
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
-        # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取り・質問拡張など）を呼ばない。
+        # 使い、質問に応じた推論の LLM を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         # 回答を作らない検索で根拠の補いまでするか（#3506。`AnswerEngine` の同名の引数）。False は
         # 業務 Agent の根拠の取得（MCP の rag_retrieve_evidence）だけが渡す。
@@ -445,61 +484,6 @@ class RagPipeline:
         い trace に置く(画面・外部の traceparent を親にしない。サービストークンの MCP の要求の中だ
         け Agent の trace を続ける。`operation_trace_parent`)。
         """
-        if request._rule_selection_scope:
-            recognized = AnswerScope(**request._rule_selection_scope)
-            current_sources: dict[tuple[str, str], str] = {}
-            for question, answer, source in (
-                self._scope.confirmed_premise_sources if self._scope else ()
-            ):
-                current_sources.setdefault((question, answer), source)
-            self._scope = AnswerScope(
-                context="\n".join(
-                    value
-                    for value in (self._scope.context if self._scope else "", recognized.context)
-                    if value
-                ),
-                search_terms=tuple(
-                    dict.fromkeys(
-                        [
-                            *(self._scope.search_terms if self._scope else ()),
-                            *recognized.search_terms,
-                        ]
-                    )
-                ),
-                label="、".join(
-                    value
-                    for value in (self._scope.label if self._scope else "", recognized.label)
-                    if value
-                ),
-                confirmed_premises=tuple(
-                    dict.fromkeys(
-                        [
-                            *(self._scope.confirmed_premises if self._scope else ()),
-                            *recognized.confirmed_premises,
-                        ]
-                    )
-                ),
-                confirmed_premise_sources=tuple(
-                    dict.fromkeys(
-                        [
-                            *(
-                                tuple(
-                                    (
-                                        question,
-                                        answer,
-                                        current_sources.get((question, answer), "user"),
-                                    )
-                                    for question, answer in self._scope.confirmed_premises
-                                )
-                                if self._scope
-                                else ()
-                            ),
-                            *recognized.confirmed_premise_sources,
-                        ]
-                    )
-                ),
-            )
-
         trace_id = trace_id or new_trace_id()
         if trace is not None:
             trace.run_id = trace_id
@@ -677,19 +661,31 @@ class RagPipeline:
         # 回答エンジンの前の段(書き換え・抽出項目の条件・添付)の縮退。回答エンジンへ渡し、回答の
         # 診断の degraded_steps に回答の中の補助の処理と同じ形で出す(#3286)。
         degraded = DegradedSteps()
+        prepared_rewrite = self._prepared_history_rewrite
+        # チャット（``history`` を渡す経路。1 回目は空の履歴）は、毎回 1 回の呼び出しで質問を補い、
+        # 検索が要るかを分ける（#4787）。RAG 検索など ``history`` を渡さない経路は通さない。
         if (
-            history
+            history is not None
             and self._settings.rag_history_rewrite_enabled
-            and not self._history_question_prepared
+            and (not self._history_question_prepared or prepared_rewrite is not None)
         ):
+            # 送信の前に済ませた補完は呼び直さず、その結果と所要時間で同じ段を残す（#4794）。
+            # 採用した確認回答は、送信の側が対象範囲（``self._scope``）へ入れ済み。
+            if prepared_rewrite is not None:
+                self._history_intent = prepared_rewrite.intent
             rewritten_query = await _observe_stage(
                 trace_id,
                 "history_rewrite",
-                self._safe_rewritten_query(
+                _completed(rewritten_query)
+                if prepared_rewrite is not None
+                else self._safe_rewritten_query(
                     original_query, history, report_degraded=degraded.record_degraded
                 ),
+                prior_elapsed=prepared_rewrite.elapsed_seconds if prepared_rewrite else 0.0,
                 progress_callback=stage_callback,
-                result_details=lambda rewritten: history_rewrite_details(rewritten, history),
+                result_details=lambda rewritten: history_rewrite_details(
+                    rewritten, history, intent=self._history_intent
+                ),
                 request_snapshot=lambda: {
                     "質問": original_query,
                     "渡した会話履歴": [asdict(turn) for turn in history],
@@ -697,8 +693,14 @@ class RagPipeline:
                 result_snapshot=lambda rewritten: {
                     "返却された補完質問": rewritten,
                     "採用した確認回答": [
-                        item.model_dump(mode="json") for item in self._selected_history_facts
+                        item.model_dump(mode="json")
+                        for item in (
+                            prepared_rewrite.confirmed_facts
+                            if prepared_rewrite is not None
+                            else self._selected_history_facts
+                        )
                     ],
+                    "判定した発話の種類": self._history_intent,
                     "縮退の記録（累計）": degraded.steps(),
                 },
             )
@@ -706,40 +708,85 @@ class RagPipeline:
                 request = request.model_copy(
                     update={"query": rewritten_query, "original_question": original_query}
                 )
+        # 検索の要らない発話（挨拶・雑談）は検索を飛ばし、根拠なしの短い応答にする（#4787）。
+        # 応答を作れなければ、いつもの検索と回答に戻す（分からないときは検索する）。
+        small_talk_outcome: AnswerOutcome | None = None
+        if (
+            request.generate_answer
+            and self._approved_faq is None
+            and self._scope is None
+            and self._caller_queries is None
+            and skips_retrieval(self._history_intent)
+        ):
+            intent = self._history_intent
+            small_talk_outcome = await _observe_stage(
+                trace_id,
+                SMALL_TALK_STAGE,
+                self._small_talk_reply(original_query, intent),
+                progress_callback=stage_callback,
+                result_details=lambda result: small_talk_details(
+                    intent, replied=result is not None
+                ),
+                result_outcome=lambda result: "success" if result is not None else "error",
+                request_snapshot=lambda: {"発話": original_query, "発話の種類": intent},
+                result_snapshot=lambda result: {
+                    "応答": result.answer if result is not None else None,
+                },
+            )
+        # 補完した質問が承認済み FAQ に下限以上で一致したら、検索・会話の添付の根拠・回答の生成を
+        # 通さず、FAQ の回答をそのまま返す（#4788。モデルを呼ばない）。照合できなければ、いつもの
+        # 検索と回答に進む。
+        direct_faq_outcome: AnswerOutcome | None = None
+        if (
+            self._direct_faq_answer
+            and small_talk_outcome is None
+            and request.generate_answer
+            and request.search_answer_profile_id
+            and self._approved_faq is None
+            and self._scope is None
+            and self._caller_queries is None
+        ):
+            profile_id = str(request.search_answer_profile_id)
+            faq_snapshot = await load_direct_faq_snapshot(self._oracle, profile_id)
+            if faq_snapshot is not None:
+                # 設定がオンで使える FAQ があるプロファイルだけ、照合を段として残す。
+                direct_faq = await _observe_stage(
+                    trace_id,
+                    FAQ_DIRECT_STAGE,
+                    match_direct_approved_faq(
+                        self._oracle,
+                        profile_id,
+                        request.query,
+                        self._settings,
+                        lambda: self._genai,
+                        snapshot=faq_snapshot,
+                    ),
+                    progress_callback=stage_callback,
+                    result_details=lambda match: (
+                        faq_direct_details(match) if match is not None else None
+                    ),
+                    result_outcome=lambda match: "success" if match is not None else "error",
+                    request_snapshot=lambda: {
+                        "質問": request.query,
+                        "検索・回答プロファイル ID": profile_id,
+                    },
+                    result_snapshot=lambda match: (
+                        direct_faq_snapshot(match) if match is not None else None
+                    ),
+                )
+                if direct_faq is not None:
+                    direct_faq_outcome = direct_faq_outcome_from(
+                        direct_faq, embedding_model=self._settings.oci_genai_embedding_model
+                    )
+        skips_search = small_talk_outcome is not None or direct_faq_outcome is not None
         caller_queries = (
             await self._checked_caller_queries(self._caller_queries)
             if self._caller_queries is not None
             else None
         )
-        # 質問に書かれた条件を抽出項目の条件として読み取る
-        # (Metadata Filter Extraction。有効なときだけ。#652)。
-        # チャットは会話履歴で書き換えた質問から読む。呼び出し元が検索文を作った検索(#2651)は、
-        # 読み取りの LLM を呼ばない(条件は呼び出し元が filters で渡す)。
-        auto_field_conditions: list[ExtractionFieldCondition] = []
-        if (
-            self._settings.rag_auto_field_filter_enabled
-            and request.search_answer_profile_id
-            and caller_queries is None
-        ):
-            auto_field_conditions = await _observe_stage(
-                trace_id,
-                "field_filter",
-                self._read_field_conditions(request, report_degraded=degraded.record_degraded),
-                progress_callback=stage_callback,
-                result_details=field_filter_details,
-                request_snapshot=lambda: {
-                    "質問": request.query,
-                    "検索・回答プロファイル ID": request.search_answer_profile_id,
-                    "除外する項目": request.auto_field_filter_excluded,
-                },
-                result_snapshot=lambda conditions: {
-                    "返却した条件": [item.model_dump(mode="json") for item in conditions],
-                    "縮退の記録（累計）": degraded.steps(),
-                },
-            )
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
-        if self._attachment_conversation_id and self._approved_faq is None:
+        if not skips_search and self._attachment_conversation_id and self._approved_faq is None:
             from app.rag.chat_attachments import attachment_evidence, chat_attachment_service
 
             attachment_status = chat_attachment_service().reading_status()
@@ -782,7 +829,6 @@ class RagPipeline:
             genai=self._genai,
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
             answer_model_id=self._answer_model_id,
-            auto_field_conditions=auto_field_conditions,
             approved_faq=self._approved_faq,
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
@@ -809,7 +855,11 @@ class RagPipeline:
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
         # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は同じ流れを回答の生成の手前で
         # 止め、全体の工程を「質問の理解から根拠の検索まで」（evidence）にする（#649・#3506）。
-        if request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
+        if small_talk_outcome is not None:
+            outcome = small_talk_outcome
+        elif direct_faq_outcome is not None:
+            outcome = direct_faq_outcome
+        elif request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
             # 業務ガイドの必要な条件が分からず、確かめるか人へ引き継ぐ（#1238）。
             # 回答（モデル）は作らない。
             outcome = guide_short_circuit_outcome(guide)
@@ -824,9 +874,6 @@ class RagPipeline:
                 request_snapshot=lambda: {
                     "検索要求": request.model_dump(mode="json"),
                     "添付の根拠": _trace_chunks(attachment_chunks),
-                    "読取済みの項目条件": [
-                        item.model_dump(mode="json") for item in auto_field_conditions
-                    ],
                     "呼出元の検索文": caller_queries,
                     "根拠補完有効": self._complete_evidence,
                 },
@@ -890,17 +937,6 @@ class RagPipeline:
         if outcome.evaluation_input is not None:
             outcome.evaluation_input["answer_text"] = final_answer
         if final_answer != outcome.answer:
-            # 安全処理後の本文へ、変更前の本文の検査済み表示を引き継がない。
-            previous_validation = outcome.diagnostics.get("answer_validation")
-            outcome.diagnostics["answer_validation"] = {
-                "previous_body_validation": previous_validation,
-                "status": "body_changed",
-                "valid": False,
-                "reuse_context": "",
-                "previous_status": previous_validation.get("status")
-                if isinstance(previous_validation, dict)
-                else None,
-            }
             outcome.diagnostics["needs_human_review"] = True
             outcome.diagnostics["confidence"] = "low"
         # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。
@@ -1196,44 +1232,6 @@ class RagPipeline:
                 checked.append(result.sanitized_text)
         return checked
 
-    async def _read_field_conditions(
-        self, request: SearchRequest, *, report_degraded: ReportDegraded = not_recorded
-    ) -> list[ExtractionFieldCondition]:
-        """検索・回答プロファイルの KB の抽出項目の定義で、質問から条件を読み取る(#652)。
-
-        定義は検索の絞り込みの項目と同じ(利用者が使える有効な KB の定義の和集合。KB に無ければ
-        全体の既定)。定義が無い・読めないときは LLM を呼ばずに空(条件なしで検索を続ける)。
-        読めなかったとき・読み取りの LLM が失敗したときは ``report_degraded`` に残す(定義が無い
-        ときと分ける。#3286)。
-        """
-        try:
-            view = await self._oracle.get_search_answer_profile(
-                request.search_answer_profile_id or ""
-            )
-            field_sets = (
-                await self._oracle.list_knowledge_base_extraction_field_sets(
-                    view.config.normalized_knowledge_base_ids()
-                )
-                if view is not None
-                else []
-            )
-        except Exception as exc:  # 読み取りは補助。条件なしで検索を続ける。
-            logger.warning("field definitions load failed", extra={**safe_exception_fields(exc)})
-            report_degraded("field_filter", exc)
-            return []
-        if not field_sets:
-            return []
-        # 利用者が画面で外した項目は読み取らない(定義から除く)。
-        excluded = {name.strip().casefold() for name in request.auto_field_filter_excluded}
-        field_defs = [
-            definition
-            for definition in resolve_field_definitions(field_sets, load_field_schema().fields)
-            if definition.name.casefold() not in excluded
-        ]
-        return await read_field_conditions(
-            request.query, field_defs, self._llm, report_degraded=report_degraded
-        )
-
     async def _safe_rewritten_query(
         self,
         query: str,
@@ -1247,6 +1245,7 @@ class RagPipeline:
         拒否されたら空文字(元の質問で続ける)、許可されたらマスク後の質問を返す。
         """
         self._selected_history_facts = ()
+        self._history_intent = "search"
         rewritten = await self._rewrite_query_with_history(
             query, history, report_degraded=report_degraded
         )
@@ -1255,6 +1254,7 @@ class RagPipeline:
         checked = await self._check_query(rewritten, purpose="history_rewrite")
         if not checked.allowed:
             self._selected_history_facts = ()
+            self._history_intent = "search"
             logger.warning(
                 "history rewrite rejected by guardrail",
                 extra={"codes": [finding.code for finding in checked.findings]},
@@ -1269,16 +1269,12 @@ class RagPipeline:
         *,
         report_degraded: ReportDegraded = not_recorded,
     ) -> str:
-        """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換える。
+        """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換え、発話の種類を分ける。
 
-        書き換え不要・失敗・不自然な応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の
-        失敗は ``report_degraded`` に残す(書き換えが要らなかったときと分ける。#3286)。
+        チャットの毎回の発話で 1 回呼ぶ（1 回目は空の履歴。#4787）。書き換え不要・失敗・不自然な
+        応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の失敗は ``report_degraded`` に
+        残す(書き換えが要らなかったときと分ける。#3286)。
         """
-        history_text = _format_chat_history(
-            history, ChatHistoryBudget.from_settings(self._settings)
-        )
-        if not history_text:
-            return ""
         budget = ChatHistoryBudget.from_settings(self._settings)
         user_positions = [index for index, turn in enumerate(history) if turn.role == "USER"]
         fact_history = (
@@ -1326,7 +1322,8 @@ class RagPipeline:
         )
         if len(history_text) + len(confirmed_data) + len(current_data) > budget.max_chars:
             history_text = ""
-        history_text += confirmed_data + current_data
+        # 1 回目（履歴なし）と、予算に入る往復が無いときは、空の履歴の形で渡す（#4787）。
+        history_text = (history_text or EMPTY_CONVERSATION_HISTORY) + confirmed_data + current_data
         try:
             text = await async_call_with_model_purpose(
                 "query.rewrite",
@@ -1357,7 +1354,43 @@ class RagPipeline:
         if not rewritten or len(rewritten) > max(200, len(query) * 4):
             self._selected_history_facts = ()
             return ""
+        self._history_intent = result.intent
         return "" if rewritten == " ".join(query.split()) else rewritten
+
+    async def _small_talk_reply(
+        self, utterance: str, intent: HistoryIntent
+    ) -> AnswerOutcome | None:
+        """検索の要らない発話へ、回答のモデルで根拠なしの短い応答を作る（#4787。引用なし）。
+
+        失敗・空の応答は None（呼び出し側がいつもの検索と回答に戻す）。
+        """
+        try:
+            text = await async_call_with_model_purpose(
+                "answer.small_talk",
+                self._llm.generate,
+                utterance,
+                "",
+                system_prompt=resolve_prompt("small_talk.system", SMALL_TALK_SYSTEM_PROMPT),
+                response_schema=SmallTalkReply.model_json_schema(),
+                response_schema_name="small_talk_reply",
+            )
+            reply = SmallTalkReply.model_validate_json(text).reply.strip()
+        except Exception as exc:  # 応答は補助。検索と回答に戻す。
+            logger.warning("small talk reply failed", extra={**safe_exception_fields(exc)})
+            return None
+        if not reply:
+            return None
+        return AnswerOutcome(
+            answer=reply,
+            citations=[],
+            context_text="",
+            diagnostics={"retrieval_skipped": {"intent": intent}},
+        )
+
+
+async def _completed[T](value: T) -> T:
+    """済んだ処理の結果を、工程の記録（``_observe_stage``）へ渡す awaitable にする。"""
+    return value
 
 
 def guardrail_stage_outcome(result: GuardrailResult) -> Literal["success", "skipped", "error"]:
@@ -1379,8 +1412,12 @@ async def _observe_stage[T](
     result_outcome: Callable[[T], Literal["success", "skipped", "error"]] | None = None,
     request_snapshot: Callable[[], object] | None = None,
     result_snapshot: Callable[[T], object] | None = None,
+    prior_elapsed: float = 0.0,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。
+
+    ``prior_elapsed`` は、この呼び出しの前に済ませた処理の時間（秒。送信の前に済ませた履歴による
+    補完など）。開始をその分だけ戻し、所要時間に含める。
 
     stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
     (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
@@ -1389,10 +1426,12 @@ async def _observe_stage[T](
     失敗の要約)を付け、画面の処理の経過にする(#3226)。
     """
     kind = stage if stage in PIPELINE_STEP_KINDS else None
+    prior_elapsed = max(0.0, prior_elapsed)
     with observed_span(
         f"rag.{stage}",
         attributes={"pr.stage": stage},
         display=SpanDisplay(kind=kind) if kind is not None else None,
+        start_time_ns=time_ns() - int(prior_elapsed * 1e9) if prior_elapsed else None,
     ) as span:
         if request_snapshot is not None:
             try:
@@ -1403,7 +1442,7 @@ async def _observe_stage[T](
                     {"recording_status": "incomplete", "error_type": type(exc).__name__},
                     restricted=True,
                 )
-        started_at = perf_counter()
+        started_at = perf_counter() - prior_elapsed
         base_attributes = dict(attributes or {})
         await _emit_stage_progress(
             progress_callback,

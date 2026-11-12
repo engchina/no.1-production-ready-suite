@@ -23,9 +23,12 @@ import { useSearchParams } from "react-router-dom";
 
 import { useQuery } from "@tanstack/react-query";
 
+import { DataLoadFailure } from "@/components/DataLoadStates";
+import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect";
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
+import { DocumentSummaryPanel } from "./DocumentSummaryPanel";
 import { LanguagePackRecipeSummary, languagePackBuildText } from "./LanguagePackDocumentPanel";
 import { languagePackBuildNotice } from "./LanguagePackDocumentPanel.logic";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
@@ -1617,6 +1620,13 @@ export function DocumentWorkspace({
           </div>
         </dl>
 
+        {/* 文書全体の要約（#4793）。取込の後に作る文書の説明。 */}
+        <DocumentSummaryPanel
+          documentId={documentId}
+          ingesting={ingestionActive}
+          canRegenerate={(recipesQuery.data ?? []).some((recipe) => recipe.active_chunk_set_id != null)}
+        />
+
         <DocumentKnowledgeBaseEditor
           documentId={documentId}
           initialKnowledgeBases={doc.knowledge_bases}
@@ -1684,11 +1694,12 @@ export function DocumentWorkspace({
                 variant={selectedPreviewVariant}
                 sourceProfile={selectedPreviewSourceProfile}
                 preparedArtifact={preparedArtifact}
+                extractionRevision={selectedRecipe?.active_extraction_recipe_id ?? null}
                 showFallbackDownload={false}
                 focusPage={effectiveFocusPage}
                 onPageChange={reportInspectorPage}
                 onTextRangeChange={reportTextRange}
-                focusElementId={requestedElementId ?? (requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids[0] : null)}
+                focusElementId={previewFocusSource === "element" || previewFocusSource === "chunk" ? selectedElementId : requestedElementId ?? (requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids[0] : null)}
                 focusSectionId={sectionFocus?.id}
 
                 focusRequestKey={sectionFocus?.key ?? urlFallbackFocus?.key ?? focusRequest?.key ?? null}
@@ -2956,17 +2967,16 @@ function ChunkPreviewControls({
           }}
         />
         {fixedDelimiter ? (
-          <TextField
-            id="chunk-preview-delimiter"
-            className="col-span-full"
-            width="sm"
-            label={t("settings.chunking.params.delimiter")}
-            value={form.chunk_delimiter}
-            maxLength={256}
-            required
-            disabled={pending}
-            onValueChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
-          />
+          <>
+            <ChunkDelimiterSelect
+              id="chunk-preview-delimiter"
+              value={form.chunk_delimiter}
+              required
+              disabled={pending}
+              onChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
+            />
+            {chunkSizeField}
+          </>
         ) : form.chunking_strategy === "small_to_big" ? (
           // 親子階層（small-to-big）は chunk サイズ等を使わず、子と親の大きさの 5 項目で分割する。
           SMALL_TO_BIG_PARAMS.map((spec) => (
@@ -3493,9 +3503,17 @@ function DocumentKnowledgeBaseEditor({
       </div>
 
       {membership.isError ? (
-        <Banner severity="warning" title={t("documents.knowledgeBases.loadWarning")}>
-          <p>{errorMessage(membership.error, t("documents.knowledgeBases.loadWarningHint"))}</p>
-        </Banner>
+        // 欄の値（今の所属先）を読み取れなかった。欄は文書詳細に含まれる所属情報で出し、失敗と再試行を添える（#4817）。
+        <div className="space-y-1">
+          <DataLoadFailure
+            error={membership.error}
+            fallback={t("documents.knowledgeBases.loadError")}
+            onRetry={() => void membership.refetch()}
+            layout="field"
+            testId="document-knowledge-bases-load-failed"
+          />
+          <p className="text-xs text-fg-muted">{t("documents.knowledgeBases.loadErrorHint")}</p>
+        </div>
       ) : null}
 
       <div id={DOCUMENT_KB_PICKER_ID}>

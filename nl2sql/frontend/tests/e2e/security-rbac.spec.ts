@@ -1,3 +1,4 @@
+import { findFieldLoadFailureViolations } from "../../../../platform/packages/ui/e2e/field-load-failure";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import {
   expect,
@@ -352,30 +353,6 @@ async function expectFloatingMenuInsideViewport(page: Page, menu: Locator) {
       }))
     )
     .toEqual({ constrained: null, fitsWithoutScrollbar: true });
-}
-
-async function sidebarComparableStyle(locator: Locator) {
-  await expect(locator).toBeVisible();
-  return locator.evaluate((element) => {
-    const style = getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    return {
-      height: Math.round(rect.height),
-      borderRadius: style.borderRadius,
-      fontSize: style.fontSize,
-      paddingLeft: style.paddingLeft,
-      paddingRight: style.paddingRight,
-      transitionProperty: style.transitionProperty,
-    };
-  });
-}
-
-async function expectSidebarActionMatchesMenuItem(action: Locator, menuItem: Locator) {
-  const [actionStyle, menuStyle] = await Promise.all([
-    sidebarComparableStyle(action),
-    sidebarComparableStyle(menuItem),
-  ]);
-  expect(actionStyle).toEqual(menuStyle);
 }
 
 const systemRole = {
@@ -884,20 +861,27 @@ test("ログインの試行が多すぎるときは 429 の文をそのまま出
   expect(loginAttempts).toBe(1);
 });
 
-test("構成管理者はアカウントの欄からアカウントの画面を開け、サイドバー操作は安定した高さを保つ", async ({ page }) => {
+test("構成管理者はアカウントの欄のメニューからログアウトとアカウントの画面に移れる", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.goto("/query");
 
   // 375px ではナビがドロワー（#367）。開いてから読む。
   const sidebar = await openSidebarNav(page);
-  const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
-  // パスワード変更はサイドナビの行に無く、アカウントの欄（行全体のリンク）から開くアカウントの画面のタブ（#1873）。
+  // パスワード変更はサイドナビの行に無く、アカウントの欄のメニューから開くアカウントの画面のタブ（#1873・#4724）。
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
-  const accountLink = sidebar.getByRole("link", { name: /^アカウント設定を開く/ });
-  const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
-  await expect(accountLink).toBeVisible();
-  expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-  await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
+  await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
+  const accountMenuButton = sidebar.getByTestId("sidebar-account");
+  await expect(accountMenuButton).toHaveAttribute("aria-haspopup", "menu");
+  expect((await accountMenuButton.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await accountMenuButton.click();
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["アカウント", "ログアウト"]);
+  await expect(page.getByRole("menu")).toHaveAttribute("data-floating-menu-placement", "top");
+  // 背景の初回読取が失敗しても、再試行へ焦点を奪ってメニューの Esc を失わない（#4857）。
+  await expect(page.getByTestId("query-page-data-load-failed")).toBeVisible();
+  await expect(page.getByRole("menu").getByRole("menuitem").first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(accountMenuButton).toBeFocused();
 
   // 初回・リセット後の強制の変更の単独の画面はそのまま。
 
@@ -990,21 +974,19 @@ test("通常ユーザーはアカウントの欄からパスワード変更の�
   await page.goto("/query");
   // 375px ではナビがドロワー（#367）。開いてから読む。
   const sidebar = await openSidebarNav(page);
-  const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
-  const accountLink = sidebar.getByRole("link", { name: "アカウント設定を開く（query.user）" });
-  const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
+  const accountMenuButton = sidebar.getByRole("button", { name: /^アカウントのメニュー query\.user/ });
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
-  await expect(accountLink).toBeVisible();
-  await expect(logoutButton).toBeVisible();
-  await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
+  await accountMenuButton.click();
 
-  // アカウントの欄はログアウトの上に重ならずに並び、ログアウトの文言は折り返さない。
-  const footerLayout = await Promise.all([accountLink, logoutButton].map((element) => element.boundingBox()));
-  expect((footerLayout[1]?.y ?? 0) - ((footerLayout[0]?.y ?? 0) + (footerLayout[0]?.height ?? 0))).toBeGreaterThanOrEqual(0);
-  await expect(logoutButton.locator("span").last()).toHaveCSS("white-space", "nowrap");
+  // メニューは欄の上に開き、ログアウトの文言は折り返さない。
+  const logoutItem = page.getByRole("menuitem", { name: "ログアウト" });
+  await expect(logoutItem).toBeVisible();
+  const [menuBox, buttonBox] = await Promise.all([page.getByRole("menu").boundingBox(), accountMenuButton.boundingBox()]);
+  expect((buttonBox?.y ?? 0) - ((menuBox?.y ?? 0) + (menuBox?.height ?? 0))).toBeGreaterThanOrEqual(0);
+  await expect(logoutItem.locator("span").last()).toHaveCSS("white-space", "nowrap");
 
-  // 375px のドロワーは押すと閉じて移る（#1873）。
-  await accountLink.click();
+  // 375px のドロワーは「アカウント」を押すと閉じて移る（#1873）。
+  await page.getByRole("menuitem", { name: "アカウント" }).click();
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
   await page.getByRole("tab", { name: "パスワード変更" }).click();
@@ -6735,8 +6717,14 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   await expect(related.getByRole("status")).toBeVisible();
   await expect.poll(() => Boolean(pending)).toBe(true);
   await fulfill(pending!, "関連候補を取得できませんでした", 503);
-  await expect(related.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
-  await related.getByRole("button", { name: "再試行", exact: true }).click();
+  // 読めなかった欄の直下に、欄ごとの文の失敗と再試行を出す（共有の部品。backend の文は畳んだ「詳細」。#4817）。
+  const profilesFailure = related.locator('[data-failure-layout="field"]');
+  await expect(profilesFailure.getByRole("alert")).toHaveText("候補を選ぶ業務プロファイルを読み込めませんでした。");
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  await profilesFailure.getByRole("button", { name: "詳細", exact: true }).click();
+  await expect(profilesFailure.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
+  await profilesFailure.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(profilesFailure).toHaveCount(0);
   await chooseSelectFieldOption(related.getByLabel("候補を選ぶ業務プロファイル"), "hr");
   await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
   await expectSelectFieldValue(related.getByLabel("関連キーの設定方法"), "");
@@ -7008,13 +6996,17 @@ test("DeepSec 再取得修正: 関連情報の待機と失敗を成功扱いせ�
   await expect(page.getByRole("region", { name: "通知", exact: true }).getByRole("status")).toHaveCount(0);
   state.hold = false;
   await fulfill(state.pending!, "関連メタデータの取得失敗", 503);
-  await expect(related.getByText("関連メタデータの取得失敗", { exact: true })).toBeVisible();
+  // 関連テーブルの欄の直下に、欄ごとの文の失敗を出す（backend の文は畳んだ「詳細」。#4817）。
+  const relatedFailure = related.locator('[data-failure-layout="field"]');
+  await expect(relatedFailure.getByRole("alert")).toHaveText("関連テーブルの候補を読み込めませんでした。");
+  await relatedFailure.getByRole("button", { name: "詳細", exact: true }).click();
+  await expect(relatedFailure.getByText("関連メタデータの取得失敗", { exact: true })).toBeVisible();
   await expect(refresh).toBeEnabled();
   await expect(page.getByRole("region", { name: "通知", exact: true }).getByRole("status")).toHaveCount(0);
   await expect(related.getByLabel("値", { exact: true })).toHaveValue("東京");
   await refresh.click();
   await expect.poll(() => state.reads.relations).toBe(3);
-  await expect(related.getByText("関連メタデータの取得失敗", { exact: true })).toHaveCount(0);
+  await expect(relatedFailure).toHaveCount(0);
   await expect(page.getByRole("region", { name: "通知", exact: true }).getByRole("status")).toHaveCount(1);
 });
 

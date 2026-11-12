@@ -16,7 +16,6 @@ def oracle_answer_dependencies() -> AnswerDependencies:
     """既存 Oracle/OCI 関数を束ねる。ここでは接続・モデル読込を行わない。"""
     from rag_engine.adapters.oci import parse_multimodal_response, parse_text_response, rerank_text_with_scores
     from rag_engine.adapters.oracle.store import check_adb_hybrid_search_ready, search_adb_hybrid_chunks
-    from rag_engine.generation.question_subjects import extract_question_subjects
 
     return AnswerDependencies(
         search_adb_hybrid_chunks,
@@ -24,7 +23,6 @@ def oracle_answer_dependencies() -> AnswerDependencies:
         parse_text_response,
         parse_multimodal_response,
         rerank_text_with_scores,
-        question_subjects=extract_question_subjects,
     )
 
 

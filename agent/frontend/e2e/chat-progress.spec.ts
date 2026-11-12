@@ -1,3 +1,4 @@
+import { progressCardLayout } from "../../../platform/packages/ui/e2e/progress-card-checks";
 import { expectRunValueTypography } from "../../../platform/packages/ui/e2e/run-value-typography";
 import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
@@ -511,6 +512,7 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   await page.goto(`/runs?id=${RUN_ID}`);
   await expect(page.getByTestId("run-summary")).toBeVisible();
   await page.getByTestId("run-timeline-section-summary").click();
+  await expect.poll(() => progressCardLayout(page.getByTestId("run-timeline-section"))).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
   expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
   await expectNoHorizontalOverflow(page);
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process-products.png")});
@@ -534,11 +536,12 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.goto("/chat");
   await openThread(page);
   await page.getByTestId("chat-progress-summary").click();
+  await expect.poll(() => progressCardLayout(page.getByTestId("chat-progress"))).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
   const live = await timelineSnapshot(page.getByTestId("chat-progress"));
   const liveTypography = await timelineTypography(page.getByTestId("chat-progress"));
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
   // span の木: ツールの中の MCP の呼び出しは 1 段下げる（実行の全体の span は行にしない）。
   expect(live.map((row) => row.level)).toEqual([0, 0, 1, 0]);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
@@ -558,6 +561,26 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await expectTraceIdRowOnOneLine(page);
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});
+  const card = page.getByTestId("run-timeline-section");
+  await expect.poll(() => progressCardLayout(card)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
+  for (const theme of ["light", "dark"]) {
+    await page.emulateMedia({colorScheme: theme as "light" | "dark"});
+    await page.evaluate(value => {document.documentElement.classList.toggle("dark", value === "dark"); document.documentElement.dataset.theme = value;}, theme);
+    await card.screenshot({path: testInfo.outputPath(`history-process-${theme}.png`)});
+  }
+  await page.emulateMedia({reducedMotion: "reduce"});
+  const explorer = card.getByRole("button", {name: "軌跡を調べる", exact: true});
+  await explorer.focus();
+  await page.keyboard.press("Enter");
+  await expect(card.locator("[data-trace-explorer]")).toBeVisible();
+  await card.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  await expect(explorer).toBeFocused();
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({width:1920,height:1080});
+    await expectNoHorizontalOverflow(page);
+    await card.screenshot({path:testInfo.outputPath("history-process-wide.png")});
+  }
+
 });
 
 test("共通の span の表に書く前の古い形式の記録は、処理の経過の位置に古い形式の案内を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {

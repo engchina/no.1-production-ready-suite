@@ -27,7 +27,6 @@ from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND
 from app.rag.support_guide_query import build_guide_query, examples_sha256
 from app.rag.support_guide_runtime import (
     GUIDE_CHOICE_CONDITION_ID,
-    GUIDE_CHOICE_RULE_ID,
     GuideChoice,
     GuideMatch,
     GuideQuery,
@@ -250,22 +249,22 @@ def test_same_titles_are_not_offered_as_choices() -> None:
 def test_chat_guide_choice_round_trip() -> None:
     choice = select_guide(GUIDES, "集計表Bの手順", close_margin=1)
     assert isinstance(choice, GuideChoice)
-    rule_id, title, clarification = guide_choice_clarification(choice)
-    assert (rule_id, title) == (GUIDE_CHOICE_RULE_ID, "業務ガイド")
+    guide_condition_id, title, clarification = guide_choice_clarification(choice)
+    assert (guide_condition_id, title) == (GUIDE_CHOICE_CONDITION_ID, "業務ガイド")
     assert [option.id for option in clarification.options] == ["g-export", "g-import"]
-    resolved = resolve_guide_clarification(GUIDES, rule_id, ["g-import"])
+    resolved = resolve_guide_clarification(GUIDES, guide_condition_id, ["g-import"])
     assert resolved is not None
     conditions, context = resolved
     assert conditions == {GUIDE_CHOICE_CONDITION_ID: "g-import"}
     assert "集計表Bを取り込む" in context
-    assert resolve_guide_clarification(GUIDES, rule_id, ["g-missing"]) is None
-    other = resolve_guide_clarification(GUIDES, rule_id, [], "どちらでもない")
+    assert resolve_guide_clarification(GUIDES, guide_condition_id, ["g-missing"]) is None
+    other = resolve_guide_clarification(GUIDES, guide_condition_id, [], "どちらでもない")
     assert other is not None and other[0] == {}
-    record = guide_clarification_record(GUIDES, rule_id, ["g-import"])
+    record = guide_clarification_record(GUIDES, guide_condition_id, ["g-import"])
     assert record is not None
     entries: Any = record["entries"]
     assert entries[0]["selected"] == ["集計表Bを取り込む"]
-    skipped = guide_clarification_record(GUIDES, rule_id, None)
+    skipped = guide_clarification_record(GUIDES, guide_condition_id, None)
     assert skipped is not None and skipped["outcome"] == "skipped"
 
 
@@ -319,11 +318,8 @@ async def test_search_expands_aliases_and_records_the_breakdown(monkeypatch: Mon
 
 @pytest.mark.usefixtures("system_access")
 async def test_search_clarifies_close_guides_when_enabled(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        search_route,
-        "OracleClient",
-        lambda: _ProfileOracle(support_guide_close_match_clarification_enabled=True),
-    )
+    monkeypatch.setattr(get_settings(), "rag_support_guide_close_match_clarification_enabled", True)
+    monkeypatch.setattr(search_route, "OracleClient", lambda: _ProfileOracle())
     monkeypatch.setattr(search_route, "SupportGuideStore", _published_store(GUIDES))
     request = SearchRequest(query="集計表Bの手順", search_answer_profile_id="bv-1")
     _, settings, _, _ = await search_route._resolve_query_context(request, get_settings())
@@ -354,7 +350,8 @@ async def test_search_clarifies_close_guides_when_enabled(monkeypatch: MonkeyPat
 
 
 def test_chat_suggestion_asks_which_guide(monkeypatch: MonkeyPatch) -> None:
-    fake = _ProfileOracle(support_guide_close_match_clarification_enabled=True)
+    monkeypatch.setattr(get_settings(), "rag_support_guide_close_match_clarification_enabled", True)
+    fake = _ProfileOracle()
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
 
     async def published(_oracle: object, _profile: str) -> list[Any]:
@@ -365,7 +362,7 @@ def test_chat_suggestion_asks_which_guide(monkeypatch: MonkeyPatch) -> None:
         "/api/search-answer-profiles/bv-1/clarifications/suggest",
         json={"query": "集計表Bの手順"},
     ).json()["data"]["suggestion"]
-    assert body["rule_id"] == GUIDE_CHOICE_RULE_ID
+    assert body["guide_condition_id"] == GUIDE_CHOICE_CONDITION_ID
     assert [option["label"] for option in body["clarification"]["options"]] == [
         "集計表Bを出力する",
         "集計表Bを取り込む",
@@ -504,11 +501,7 @@ async def test_semantic_failure_falls_back_to_term_matching(monkeypatch: MonkeyP
 async def test_master_off_skips_all_guide_work_and_keeps_regular_knowledge(
     enabled: bool | None, monkeypatch: MonkeyPatch
 ) -> None:
-    fake = _ProfileOracle(
-        support_guide_enabled=enabled,
-        support_guide_semantic_match_enabled=True,
-        support_guide_close_match_clarification_enabled=True,
-    )
+    fake = _ProfileOracle(support_guide_enabled=enabled)
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
 
     async def forbidden(*args: Any, **kwargs: Any) -> Any:
@@ -520,21 +513,22 @@ async def test_master_off_skips_all_guide_work_and_keeps_regular_knowledge(
     request = SearchRequest(query="NA画面の設定", search_answer_profile_id="bv-1")
     _, settings, _, _ = await search_route._resolve_query_context(
         request,
-        get_settings().model_copy(update={"rag_support_guide_enabled": True}),
+        get_settings().model_copy(
+            update={
+                "rag_support_guide_enabled": True,
+                "rag_support_guide_semantic_match_enabled": True,
+                "rag_support_guide_close_match_clarification_enabled": True,
+            }
+        ),
     )
     assert settings.rag_support_guide_enabled is False
     assert settings.rag_support_guide == {}
     assert settings.rag_runtime_knowledge == TERMS
-    assert settings.rag_support_guide_semantic_match_enabled is True
-    assert settings.rag_support_guide_close_match_clarification_enabled is True
 
 
 def test_master_off_chat_does_not_load_or_confirm_guides(monkeypatch: MonkeyPatch) -> None:
-    fake = _ProfileOracle(
-        support_guide_enabled=False,
-        support_guide_semantic_match_enabled=True,
-        support_guide_close_match_clarification_enabled=True,
-    )
+    monkeypatch.setattr(get_settings(), "rag_support_guide_close_match_clarification_enabled", True)
+    fake = _ProfileOracle(support_guide_enabled=False)
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
 
     async def forbidden(*args: Any, **kwargs: Any) -> Any:
@@ -554,11 +548,7 @@ def test_master_off_mcp_does_not_lookup_guides(auth: Any, monkeypatch: MonkeyPat
     monkeypatch.setattr(
         mcp_tools,
         "OracleClient",
-        lambda: _ProfileOracle(
-            support_guide_enabled=False,
-            support_guide_semantic_match_enabled=True,
-            support_guide_close_match_clarification_enabled=True,
-        ),
+        lambda: _ProfileOracle(support_guide_enabled=False),
     )
 
     async def forbidden(*args: Any, **kwargs: Any) -> Any:
@@ -602,10 +592,13 @@ async def test_master_off_ignores_a_previous_guide_confirmation(
         {
             "content": "合成の質問",
             **(
-                {"clarification_skipped_rule_id": GUIDE_CHOICE_RULE_ID}
+                {"skipped_guide_condition_id": GUIDE_CHOICE_CONDITION_ID}
                 if skipped
                 else {
-                    "clarification": {"rule_id": GUIDE_CHOICE_RULE_ID, "option_ids": ["g-import"]}
+                    "clarification": {
+                        "guide_condition_id": GUIDE_CHOICE_CONDITION_ID,
+                        "option_ids": ["g-import"],
+                    }
                 }
             ),
         }

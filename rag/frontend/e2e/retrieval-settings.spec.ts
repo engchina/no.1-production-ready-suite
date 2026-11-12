@@ -25,12 +25,6 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
-    const recoveryHint = page.getByText(/^回答生成が明示した根拠不足の要求を/);
-    await expect(recoveryHint).toContainText("初回検索の「質問の言い換え・分解」とは別の処理です");
-    await expect(recoveryHint).toContainText("自動ルーティング（自動選択）");
-    await expect(recoveryHint).toContainText("「原質問のみ（言い換え・分解なし）」を含めない");
-    await expect(recoveryHint).toContainText("AI の呼び出しが増えることがあります");
-    await recoveryHint.screenshot({ path: testInfo.outputPath("request-coverage-help.png") });
     await expect(page.getByText("既定は 60 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
     await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
@@ -138,17 +132,8 @@ const ANSWERING_SETTINGS = {
   rrf_source_ratio: [7, 3],
   runtime_terms_search_enabled: false,
   runtime_terms_answer_enabled: false,
-  runtime_rules_confirmation_enabled: false,
-  runtime_rules_answer_enabled: false,
-  query_strategy: "auto_routing",
-  answer_flow: "standard_rag",
-  answer_audit_mode: "none",
-  answer_evidence_refinement_mode: "legacy",
   neighbor_child_count: 3,
   rerank_enabled: true,
-  screen_linking_enabled: false,
-  request_coverage_retrieval_enabled: false,
-  auto_field_filter_enabled: false,
   graph_expansion_enabled: false,
   config_source: "runtime",
   entity_expansion_enabled: true,
@@ -156,15 +141,6 @@ const ANSWERING_SETTINGS = {
   section_expansion_enabled: true,
   section_expansion_max_levels: 4,
   section_expansion_input_token_percent: 50,
-  question_subject_role_model: "model-role",
-  row_condition_model: "model-step",
-  application_audit_model: "model-step",
-  application_reason_model: "",
-  step_model_choices: [
-    { model_id: "model-answer", display_name: "回答用モデル" },
-    { model_id: "model-role", display_name: "役割判定用モデル" },
-    { model_id: "model-step", display_name: "段用モデル" },
-  ],
 };
 
 async function mockAnsweringSettings(page: Page, saved: unknown[] = [], initial: Record<string, unknown> = {}) {
@@ -188,130 +164,6 @@ for (const viewport of [
   { name: "mobile", width: 375, height: 900, collapse: true },
 ]) {
   for (const theme of ["light", "dark"] as const) {
-    test(`検索方法の画面で回答の検索と生成の既定を変えて保存できる (#593, ${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({
-      page,
-    }, testInfo) => {
-      await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      // 外観（テーマ）とサイドバーの折りたたみは共有 UI の ui-store の保存値で決まる。
-      await page.addInitScript(
-        (state) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })),
-        { theme, sidebarCollapsed: viewport.collapse }
-      );
-      await mockRetrievalCards(page);
-      const saved: unknown[] = [];
-      await mockAnsweringSettings(page, saved);
-
-      await page.goto("/settings/retrieval");
-      await expect
-        .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
-        .toBe(theme === "dark");
-
-      await expect(page.getByText("回答の検索と生成", { exact: true })).toBeVisible();
-      // 画面の文言に移植元の呼び名（DocRAG）を出さない（#593）。
-      const card = page.getByTestId("answering-settings-card");
-      await expect(card).not.toContainText("DocRAG");
-      await expect(card.getByRole("switch")).toHaveCount(9);
-      expect(await card.getByRole("switch").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
-        .toEqual(["登録ルールによる確認の使用", "用語・同義語による検索文の追加", "質問から項目の条件を読み取る", "実体・別名による検索拡張", "文書構造による検索拡張", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
-      const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
-      await expect(strategy).toContainText("自動ルーティング");
-      // 回答の生成方式の既定は標準 RAG。先頭に「（既定）」付きで並べ、CRAG は任意で AI の呼び出しが増えると説明する（#3509）。
-      const answerFlow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
-      await expect(answerFlow).toContainText("標準 RAG（既定）");
-      await expect(answerFlow).toHaveAccessibleDescription(/CRAG は必要なときだけ選ぶ方式.*回答生成前.*AI の呼び出しが増え/);
-      await expect(answerFlow).toHaveAccessibleDescription(/生成後の再検索・監査とは別の設定.*自動では有効にしません/);
-      await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
-      await page.getByRole("switch", { name: "質問から項目の条件を読み取る" }).scrollIntoViewIfNeeded();
-      await page.screenshot({ path: test.info().outputPath("retrieval-option-order.png") });
-      const screenLinking = page.getByRole("switch", { name: "画面目録で操作画面を探す" });
-      await expect(screenLinking).not.toBeChecked();
-      // 根拠の無い要求を探し直す（#1279）は既定で無効。
-      const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
-      await expect(requestCoverage).not.toBeChecked();
-      await expect(requestCoverage).toHaveAccessibleDescription(/回答生成が明示した根拠不足.*回数・時間の予算内/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/既にある根拠での説明漏れを材料不足とは扱わず/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/未校正の意味監査の結果だけでは追加検索や再生成を行いません/);
-      await requestCoverage.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: testInfo.outputPath(`settings-${viewport.name}-${theme}.png`) });
-      await expect(answerFlow).toHaveAccessibleDescription(/初回を含め最大 3 段.*書き換えは最大 2 回/);
-      await expect(screenLinking).toHaveAccessibleDescription(/目録がない場合.*省略/);
-      const autoFieldFilter = page.getByRole("switch", { name: "質問から項目の条件を読み取る" });
-      await expect(autoFieldFilter).not.toBeChecked();
-      // 文書構造による検索拡張（#2055）は既定で無効。AI の呼び出しが増えないことを説明に出す。
-      const graphExpansion = page.getByRole("switch", { name: "文書構造による検索拡張" });
-      await expect(graphExpansion).not.toBeChecked();
-      await graphExpansion.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: test.info().outputPath("entity-structure-expansion.png") });
-      await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
-      await expect(graphExpansion).toHaveAccessibleDescription(/文書構造索引.*併用でき.*重複して加えません/);
-      await expect(page.getByRole("switch", { name: "実体・別名による検索拡張" })).toHaveAccessibleDescription(/名称・ID・別名.*1 段.*文書構造による検索拡張と併用/);
-      const save = page.getByRole("button", { name: "回答の設定を保存", exact: true });
-      await expect(save).toBeDisabled();
-
-      const backend = page.getByRole("combobox", { name: "検索の実行方式", exact: true });
-      await expect(backend).toContainText("Oracle原生混合索引（既定）");
-      await backend.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: testInfo.outputPath(`hybrid-backend-${viewport.name}-${theme}.png`) });
-      await backend.click();
-      await page.getByRole("option", { name: "Sudachi＋ベクトル・全文検索", exact: true }).click();
-      await strategy.click();
-      await page.getByRole("option", { name: /RAG フュージョン/ }).click();
-      await answerFlow.click();
-      await expect(page.getByRole("option")).toHaveText(["標準 RAG（既定）", "CRAG（根拠を評価し、必要なら補正検索）"]);
-      await page.getByRole("option", { name: /^CRAG/ }).click();
-      await expect(answerFlow).toContainText("CRAG");
-      await page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true }).click();
-      await page.getByRole("option", { name: "5", exact: true }).click();
-      await screenLinking.click();
-      await autoFieldFilter.click();
-      await requestCoverage.click();
-      const auditMode = page.getByRole("combobox", { name: "AIによる確認", exact: true });
-      await expect(auditMode).toContainText("実行しない");
-      await auditMode.click();
-      await page.getByRole("option", { name: "詳細", exact: true }).click();
-      await graphExpansion.click();
-      await expect(save).toBeEnabled();
-      await save.click();
-
-      await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
-      expect(saved).toEqual([
-        {
-          retrieval_query_limit: 60,
-          rerank_top_n: 60,
-          min_similarity: 0.2,
-          rerank_min_relevance_score: 0.3,
-          hybrid_search_backend: "sudachi",
-          rrf_method_ratio: [1, 1],
-          rrf_source_ratio: [7, 3],
-          rerank_slot_ratio: [7, 3],
-          query_strategy: "rag_fusion",
-          runtime_terms_search_enabled: false,
-          runtime_rules_confirmation_enabled: false,
-          answer_flow: "crag",
-          answer_audit_mode: "detailed",
-          answer_evidence_refinement_mode: "legacy",
-          neighbor_child_count: 5,
-          rerank_enabled: true,
-          screen_linking_enabled: true,
-          request_coverage_retrieval_enabled: true,
-          auto_field_filter_enabled: true,
-          graph_expansion_enabled: true,
-          entity_expansion_enabled: true,
-          entity_expansion_max_chunks: 6,
-          section_expansion_enabled: true,
-          section_expansion_max_levels: 4,
-          section_expansion_input_token_percent: 50,
-          // 変えていない段ごとのモデルも欄の全体として送る（#4351・#4349・#4564・#4565）。
-          question_subject_role_model: "model-role",
-          row_condition_model: "model-step",
-          application_audit_model: "model-step",
-          application_reason_model: "",
-        },
-      ]);
-      await expect(save).toBeDisabled();
-      await expect(screenLinking).toBeChecked();
-      await expectNoPageOverflow(page);
-    });
   }
 }
 
@@ -319,181 +171,13 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`生成後の回答確認は独立して保存・破棄し再読込できる (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    if (viewport.collapse) await collapseSidebar(page);
-    await mockRetrievalCards(page);
-    const saved: unknown[] = [];
-    await mockAnsweringSettings(page, saved);
-    await page.goto("/settings/retrieval");
-    const card = page.getByTestId("answering-settings-card");
-    const audit = card.getByRole("combobox", { name: "AIによる確認", exact: true });
-    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
-    const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
-    await expect(card.getByRole("heading", { name: "生成後の回答確認", exact: true })).toBeVisible();
-    await expect(page.getByTestId("answering-audit-mode")).toContainText("引用ID・引用範囲の基本確認は、設定に関わらず実行します。");
-    await expect(card).toContainText("回答生成が明示した根拠不足の要求を、回数・時間の予算内");
-    await expect(card).toContainText("未校正の意味監査の結果だけでは追加検索や再生成を行いません。");
-    await expect(audit).toContainText("実行しない");
-    await expect(audit).toHaveAccessibleDescription(/全回答の診断.*行いません.*最終候補の結論だけをまとめて AI で確認.*引用の ID・行範囲・原文との照合/);
-    const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
-    expect(await options.locator("button[role=switch],button[role=combobox]").evaluateAll((elements) =>
-      elements.map((element) => element.getAttribute("id") || element.getAttribute("aria-label"))
-    )).toContain("answering-answer-audit-mode");
-    const section = card.getByRole("switch", { name: "章節で広げる根拠", exact: true });
-    const coverage = card.getByRole("switch", { name: "根拠の無い要求を探し直す", exact: true });
-    expect(await section.evaluate((element) => Boolean(element.compareDocumentPosition(document.getElementById("answering-answer-audit-mode")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
-    expect(await audit.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector('[aria-label="根拠の無い要求を探し直す"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
-    await audit.click();
-    await expect(page.getByRole("option")).toHaveText(["実行しない", "標準", "詳細"]);
-    await page.getByRole("option", { name: "標準", exact: true }).click();
-    await expect(audit).toHaveAccessibleDescription(/未校正の意味判定による自動是正は行いません.*是正予算は最大 1 回.*初回を含め最大 2 回/);
-    await expect(save).toBeEnabled();
-    await discard.click();
-    await expect(audit).toContainText("実行しない");
-    await expect(save).toBeDisabled();
-    expect(saved).toEqual([]);
-    for (const label of ["詳細", "実行しない", "標準"]) {
-      await audit.click();
-      await page.getByRole("option", { name: label, exact: true }).click();
-      if (label === "詳細") await expect(audit).toHaveAccessibleDescription(/意味判定や説明の抜けの診断だけでは作り直しません.*是正予算は最大 2 回.*合計最大 3 回/);
-      await save.click();
-      await expect(save).toBeDisabled();
-      await page.reload();
-      await expect(audit).toContainText(label);
-      await expect(card.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("標準 RAG（既定）");
-      await expect(coverage).not.toBeChecked();
-      await expect(page.getByTestId("answering-audit-mode")).toContainText("独立した設定");
-      await expect(page.getByTestId("answering-audit-mode")).toContainText("共有の時間予算");
-    }
-    expect(saved).toHaveLength(3);
-    expect(saved).toEqual(expect.arrayContaining([
-      expect.objectContaining({ answer_audit_mode: "none", answer_flow: "standard_rag", request_coverage_retrieval_enabled: false }),
-      expect.objectContaining({ answer_audit_mode: "standard", answer_flow: "standard_rag", request_coverage_retrieval_enabled: false }),
-      expect.objectContaining({ answer_audit_mode: "detailed", answer_flow: "standard_rag", request_coverage_retrieval_enabled: false }),
-    ]));
-    await page.getByTestId("answering-audit-mode").scrollIntoViewIfNeeded();
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`answer-audit-mode-${viewport.name}.png`) });
-  });
 }
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`質問の対象の役割を判定するモデルを登録モデルから選んで保存できる (#4351, ${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    if (viewport.collapse) await collapseSidebar(page);
-    await mockRetrievalCards(page);
-    const saved: Record<string, unknown>[] = [];
-    await mockAnsweringSettings(page, saved);
-    await page.goto("/settings/retrieval");
-    const card = page.getByTestId("answering-settings-card");
-    const roleModel = card.getByRole("combobox", { name: "質問の対象の役割を判定するモデル", exact: true });
-    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
-    // 生成後の回答確認の塊の中、AIによる確認の後に置く。
-    await expect(page.getByTestId("answering-audit-mode").locator("#answering-question-subject-role-model")).toBeVisible();
-    await expect(roleModel).toContainText("役割判定用モデル");
-    await expect(roleModel).toHaveAccessibleDescription(/問い・前提・例のどれかを判定するモデル.*モデル設定に登録したモデルから選びます/);
-    await roleModel.click();
-    await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル"]);
-    await page.getByRole("option", { name: "回答のモデルと同じ", exact: true }).click();
-    await expect(roleModel).toContainText("回答のモデルと同じ");
-    await save.click();
-    await expect(save).toBeDisabled();
-    expect(saved.at(-1)).toEqual(expect.objectContaining({ question_subject_role_model: "" }));
-    expect(saved.at(-1)).not.toHaveProperty("step_model_choices");
-    await roleModel.click();
-    await page.getByRole("option", { name: "回答用モデル", exact: true }).click();
-    await save.click();
-    await expect(save).toBeDisabled();
-    expect(saved.at(-1)).toEqual(expect.objectContaining({ question_subject_role_model: "model-answer" }));
-    await page.getByTestId("answering-audit-mode").scrollIntoViewIfNeeded();
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`question-subject-role-model-${viewport.name}.png`) });
-  });
 }
-
-test("登録が外れた役割の判定のモデルは、名前に印を付けて選択肢に残す (#4351)", { tag: "@responsive" }, async ({ page }) => {
-  await mockRetrievalCards(page);
-  await mockAnsweringSettings(page, [], { question_subject_role_model: "model-removed" });
-  await page.goto("/settings/retrieval");
-  const roleModel = page.getByTestId("answering-settings-card").getByRole("combobox", { name: "質問の対象の役割を判定するモデル", exact: true });
-  await expect(roleModel).toContainText("model-removed（登録を確認できません）");
-  await roleModel.click();
-  await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル", "model-removed（登録を確認できません）"]);
-});
-
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 900, collapse: false },
-  { name: "mobile", width: 375, height: 812, collapse: true },
-]) {
-  test(`表の行の条件・導いた結論の判定・理由のモデルを段ごとに登録モデルから選んで保存できる (#4349, #4564, #4565, ${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    if (viewport.collapse) await collapseSidebar(page);
-    await mockRetrievalCards(page);
-    const saved: Record<string, unknown>[] = [];
-    await mockAnsweringSettings(page, saved);
-    await page.goto("/settings/retrieval");
-    const card = page.getByTestId("answering-settings-card");
-    const group = page.getByTestId("answering-audit-mode");
-    const auditModel = card.getByRole("combobox", { name: "導いた結論を判定するモデル", exact: true });
-    const reasonModel = card.getByRole("combobox", { name: "判定の理由を書くモデル", exact: true });
-    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
-    // 生成後の回答確認の塊の中、回答の工程の順（役割の判定・表の行の条件・判定・理由）に置く。
-    const stepFields = group.locator(
-      "#answering-question-subject-role-model, #answering-row-condition-model, #answering-application-audit-model, #answering-application-reason-model"
-    );
-    await expect(stepFields).toHaveCount(4);
-    // セレクタの一覧は文書の順で返る（表示の順）。
-    const ids = await stepFields.evaluateAll((nodes) => nodes.map((node) => node.id));
-    expect(ids).toEqual([
-      "answering-question-subject-role-model",
-      "answering-row-condition-model",
-      "answering-application-audit-model",
-      "answering-application-reason-model",
-    ]);
-    const rowModel = card.getByRole("combobox", { name: "表の行の条件を当てはめるモデル", exact: true });
-    await expect(rowModel).toContainText("段用モデル");
-    await expect(rowModel).toHaveAccessibleDescription(/表の各行の条件が、質問の内容から成り立つかを行ごとに判定するモデル.*推論の量はこの段の設定（既定 low）です/);
-    await expect(auditModel).toContainText("段用モデル");
-    await expect(reasonModel).toContainText("回答のモデルと同じ");
-    await expect(auditModel).toHaveAccessibleDescription(/導いた結論が、選んだ原文と質問の条件から導けるかを判定するモデル.*モデル設定に登録したモデルから選びます/);
-    await expect(reasonModel).toHaveAccessibleDescription(/利用者に示す理由の文を書くモデル.*判定の結果は変えません/);
-    await reasonModel.click();
-    await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル"]);
-    await page.getByRole("option", { name: "段用モデル", exact: true }).click();
-    await auditModel.click();
-    await page.getByRole("option", { name: "回答のモデルと同じ", exact: true }).click();
-    await rowModel.click();
-    await page.getByRole("option", { name: "回答用モデル", exact: true }).click();
-    await save.click();
-    await expect(save).toBeDisabled();
-    expect(saved.at(-1)).toEqual(
-      expect.objectContaining({
-        application_audit_model: "",
-        application_reason_model: "model-step",
-        row_condition_model: "model-answer",
-        question_subject_role_model: "model-role",
-      })
-    );
-    expect(saved.at(-1)).not.toHaveProperty("step_model_choices");
-    await group.scrollIntoViewIfNeeded();
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`application-step-models-${viewport.name}.png`) });
-  });
-}
-
-test("登録が外れた判定のモデルは、名前に印を付けて選択肢に残す (#4565)", { tag: "@responsive" }, async ({ page }) => {
-  await mockRetrievalCards(page);
-  await mockAnsweringSettings(page, [], { application_audit_model: "model-removed" });
-  await page.goto("/settings/retrieval");
-  const auditModel = page.getByTestId("answering-settings-card").getByRole("combobox", { name: "導いた結論を判定するモデル", exact: true });
-  await expect(auditModel).toContainText("model-removed（登録を確認できません）");
-  await auditModel.click();
-  await expect(page.getByRole("option")).toHaveText(["回答のモデルと同じ", "回答用モデル", "役割判定用モデル", "段用モデル", "model-removed（登録を確認できません）"]);
-});
 
 test("回答の検索と生成の既定を読み込めないときは、その欄だけに理由を出す (#593)", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -546,24 +230,24 @@ test("回答の検索と生成の保存に失敗しても入力を残して操�
 
   await page.goto("/settings/retrieval");
   const actions = page.getByRole("group", { name: "回答の検索と生成の設定の操作" });
-  const confirm = page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true });
-  await confirm.click();
-  const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
-  await strategy.click();
-  await page.getByRole("option", { name: /RAG フュージョン/ }).click();
+  const termsSearch = page.getByRole("switch", { name: "用語・同義語による検索文の追加", exact: true });
+  await termsSearch.click();
+  const neighbor = page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true });
+  await neighbor.click();
+  await page.getByRole("option", { name: "5", exact: true }).click();
   await actions.getByRole("button", { name: "回答の設定を保存" }).click();
   // 保存中は欄を変えられない（保存の後に保存値で作り直すため、保存中の変更は消える）。
-  await expect(strategy).toBeDisabled();
-  await expect(confirm).toBeDisabled();
+  await expect(neighbor).toBeDisabled();
+  await expect(termsSearch).toBeDisabled();
   release();
 
   await expect(actions).toContainText("回答の検索と生成の設定を backend/.env へ保存できませんでした。");
-  await expect(strategy).toContainText("RAG フュージョン");
-  await expect(strategy).toBeEnabled();
-  await expect(confirm).toBeChecked();
+  await expect(neighbor).toContainText("5");
+  await expect(neighbor).toBeEnabled();
+  await expect(termsSearch).toBeChecked();
   await actions.getByRole("button", { name: "変更を破棄" }).click();
-  await expect(strategy).toContainText("自動ルーティング");
-  await expect(confirm).not.toBeChecked();
+  await expect(neighbor).toContainText("3");
+  await expect(termsSearch).not.toBeChecked();
   await expect(actions.getByRole("button", { name: "回答の設定を保存" })).toBeDisabled();
 });
 
@@ -597,7 +281,7 @@ for (const width of [1280, 375]) {
   test(`検索プロンプトは処理順・使用条件・読み取り専用で確認できる (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await mockAuthUser(page, { permissions: ["menu.settings_retrieval"] });
-    const displayStages = [{ id: "rule_selection", phase: "question", prompts: [{ id: "system", content: "## Step 1: 選択を確かめる\n合成の条件。\n\n## Step 2: 結果を返す\nJSON のみ。" }] }, ...FLOW_STAGES].map((stage) => stage.id === "history_rewrite" ? {
+    const displayStages = FLOW_STAGES.map((stage) => stage.id === "history_rewrite" ? {
       ...stage, prompts: [{ id: "system", content: "## 目的と手順\n\n- 合成の対象名を補います。\n- 質問だけを 1 行で返します。" }],
     } : stage);
     await mockRetrievalCards(page, undefined, displayStages);
@@ -610,8 +294,8 @@ for (const width of [1280, 375]) {
     expect(Math.abs(bounds!.width-reference!.width)).toBeLessThanOrEqual(1);
     expect(await card.evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
 
-    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
-    const expected = displayStages.filter((stage) => stage.id !== "support_guide_conditions" && ["question", "retrieval", "grounding"].includes(stage.phase));
+    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈"]);
+    const expected = displayStages.filter((stage) => stage.id !== "support_guide_conditions" && ["question", "retrieval"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);
     for (const stage of expected) {
       const panel = prompts.getByTestId(`answer-prompt-stage-${stage.id}`);
@@ -626,8 +310,9 @@ for (const width of [1280, 375]) {
     await expect(prompts.getByTestId("answer-prompt-stage-generation")).toHaveCount(0);
     await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toHaveCount(0);
     await expect(prompts.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
-    await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
-    await expect(prompts.getByTestId("answer-prompt-stage-rule_selection")).toContainText("曖昧な条件は確認に残します");
+    await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toHaveCount(0);
+    await expect(prompts.getByTestId("answer-prompt-stage-rule_selection")).toHaveCount(0);
+    await expect(prompts.getByTestId("answer-prompt-stage-field_filter")).toHaveCount(0);
     const rewrite = prompts.getByTestId("answer-prompt-stage-history_rewrite");
     await rewrite.locator("summary").click();
     await expect(rewrite.getByRole("textbox")).toHaveValue(/\n- .+\n- /);
@@ -665,80 +350,13 @@ for (const width of [1280, 375]) {
   await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
  });
 
-test("検索方法の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
-  await mockRetrievalCards(page);
-  const { mockEditableStage } = await import("./_feature-prompt-helpers");
-  const requests = await mockEditableStage(page, "routing", "question", "system");
-  await page.goto("/settings/retrieval");
-  const stage = page.getByTestId("answer-prompt-stage-routing");
-  await stage.locator("summary").click();
-  await expect(stage.getByRole("group", { name: "編集内容の操作" }).getByRole("button"))
-    .toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
-  await stage.getByRole("textbox").fill("## Step 1: 合成の検索指示");
-  await stage.getByRole("button", { name: "プロンプトを保存" }).click();
-  await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
-  expect(requests).toEqual([{ key: "routing.system", method: "PUT", content: "## Step 1: 合成の検索指示" }]);
-  await expectNoPageOverflow(page);
-});
-
 
 // 選別は回答の全体設定で、監査・補検索を自動で有効にしない。
-test("生成後の根拠選別を独立して保存・破棄し再読込できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockRetrievalCards(page);
-  const saved: unknown[] = [];
-  await mockAnsweringSettings(page, saved);
-  await page.goto("/settings/retrieval");
-  const card = page.getByTestId("answering-settings-card");
-  const select = card.getByRole("combobox", { name: "生成後の根拠選別", exact: true });
-  const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
-  const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
-  const audit = card.getByRole("combobox", { name: "AIによる確認", exact: true });
-  const coverage = card.getByRole("switch", { name: "根拠の無い要求を探し直す", exact: true });
-  await expect(select).toContainText("既存方式を維持");
-  await expect(save).toBeDisabled();
-  await select.click();
-  await expect(page.getByRole("option")).toHaveText([
-    "既存方式を維持", "引用済みの根拠だけ（比較用）", "引用と必須の補完根拠",
-  ]);
-  await page.getByRole("option", { name: "引用済みの根拠だけ（比較用）", exact: true }).click();
-  await expect(select).toHaveAccessibleDescription(/重要な根拠を落とすおそれ/);
-  await discard.click();
-  await expect(select).toContainText("既存方式を維持");
-  expect(saved).toEqual([]);
-  for (const label of ["引用済みの根拠だけ（比較用）", "引用と必須の補完根拠", "既存方式を維持"]) {
-    await select.click();
-    await page.getByRole("option", { name: label, exact: true }).click();
-    await save.click();
-    await expect(save).toBeDisabled();
-    await page.reload();
-    await expect(select).toContainText(label);
-    await expect(audit).toContainText("実行しない");
-    await expect(coverage).not.toBeChecked();
-    if (label === "引用と必須の補完根拠") {
-      await expect(select).toHaveAccessibleDescription(/意味の支持を保証しません/);
-      await page.getByTestId("answering-evidence-refinement").scrollIntoViewIfNeeded();
-      await expectNoPageOverflow(page);
-      await page.screenshot({ path: testInfo.outputPath("evidence-refinement-enabled.png") });
-    }
-  }
-  expect(saved).toEqual([
-    expect.objectContaining({ answer_evidence_refinement_mode: "cited_only", answer_audit_mode: "none", request_coverage_retrieval_enabled: false }),
-    expect.objectContaining({ answer_evidence_refinement_mode: "cited_required", answer_audit_mode: "none", request_coverage_retrieval_enabled: false }),
-    expect.objectContaining({ answer_evidence_refinement_mode: "legacy", answer_audit_mode: "none", request_coverage_retrieval_enabled: false }),
-  ]);
-  const section = page.getByTestId("answering-evidence-refinement");
-  await expect(section).toContainText("最大 1 回再生成");
-  await expect(section).toContainText("既存の是正回数・時間予算");
-  await expect(section).toContainText("意味の確認を暗黙に追加しません");
-  await section.scrollIntoViewIfNeeded();
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("evidence-refinement-settings.png") });
-});
 
 
 for (const width of [1280, 375]) {
   for (const theme of ["light", "dark"] as const) {
-    test(`確認と検索の全体スイッチを一緒に保存でき、生成用は独立して保存できる (${width}px, ${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    test(`検索の全体スイッチを保存でき、生成用は独立して保存できる (${width}px, ${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       await page.addInitScript((state) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
       await mockRetrievalCards(page);
@@ -746,55 +364,47 @@ for (const width of [1280, 375]) {
       await mockAnsweringSettings(page, saved);
       await page.goto("/settings/retrieval");
       const search = page.getByRole("switch", { name: "用語・同義語による検索文の追加", exact: true });
-      const confirm = page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true });
       await expect(search).not.toBeChecked();
-      await expect(confirm).not.toBeChecked();
+      await expect(search).toHaveAccessibleDescription(/原質問.*検索文を追加します/);
       const area = page.getByRole("region", { name: "検索文の作成" });
-      await expect(area.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toContainText("自動");
-      await expect(search).toHaveAccessibleDescription(/原質問.*生成した検索文には.*行いません/);
       const card = page.getByTestId("answering-settings-card");
-      await expect(card.getByRole("region", { name: "回答前の確認", exact: true }).getByRole("switch")).toHaveAccessibleName("登録ルールによる確認の使用");
-      await expect(page.getByTestId("runtime_rules_confirmation_enabled")).toHaveCount(0);
+      // 登録ルールと抽出項目の条件の自動読み取りの欄は無い（#4799）。
+      await expect(card.getByRole("region", { name: "回答前の確認", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("switch", { name: "質問から項目の条件を読み取る", exact: true })).toHaveCount(0);
       await search.click();
-      await confirm.click();
       await card.getByRole("button", { name: "変更を破棄", exact: true }).click();
       await expect(search).not.toBeChecked();
-      await expect(confirm).not.toBeChecked();
       await search.click();
-      await confirm.click();
       await page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true }).click();
       await expect(page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true })).not.toHaveAttribute("aria-busy", "true");
       await expect(card.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeDisabled();
       await expect(search).toBeChecked();
-      expect(saved.at(-1)).toMatchObject({ runtime_rules_confirmation_enabled: true, runtime_terms_search_enabled: true, query_strategy: "auto_routing" });
+      expect(saved.at(-1)).toMatchObject({ runtime_terms_search_enabled: true });
       expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
-      expect(saved.at(-1)).not.toHaveProperty("runtime_rules_answer_enabled");
-      await expect(page.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).toHaveCount(0);
-      await expect(confirm).toBeChecked();
+      expect(saved.at(-1)).not.toHaveProperty("runtime_rules_confirmation_enabled");
+      expect(saved.at(-1)).not.toHaveProperty("auto_field_filter_enabled");
       await area.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`search-expressions-${width}-${theme}.png`) });
       await expectNoPageOverflow(page);
       await page.goto("/settings/prompts");
-      for (const [testId, label, field] of [
-        ["answer-term-settings-card", "回答生成での用語・同義語の使用", "runtime_terms_answer_enabled"],
-        ["runtime_rules_answer_enabled", "回答生成での登録ルールの使用", "runtime_rules_answer_enabled"],
-      ]) {
-        const card = page.getByTestId(testId);
-        const toggle = card.getByRole("switch", { name: label, exact: true });
+      {
+        const card = page.getByTestId("answer-term-settings-card");
+        const toggle = card.getByRole("switch", { name: "回答生成での用語・同義語の使用", exact: true });
         await expect(toggle).not.toBeChecked();
         await toggle.click();
-        const save = card.getByRole("button", { name: field === "runtime_terms_answer_enabled" ? "用語・同義語の使用を保存" : "登録ルールの回答設定を保存", exact: true });
+        const save = card.getByRole("button", { name: "用語・同義語の使用を保存", exact: true });
         await save.click();
         await expect(save).toBeDisabled();
         await expect(save).not.toHaveAttribute("aria-busy", "true");
-        expect(saved.at(-1)).toEqual({ [field]: true });
+        expect(saved.at(-1)).toEqual({ runtime_terms_answer_enabled: true });
+        await expect(page.getByRole("switch", { name: "回答生成での登録ルールの使用", exact: true })).toHaveCount(0);
       }
       await page.getByTestId("answer-term-settings-card").scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`answer-knowledge-${width}-${theme}.png`) });
       await expectNoPageOverflow(page);
       await page.goto("/settings/retrieval");
       await expect(search).toBeChecked();
-      await expect(confirm).toBeChecked();
     });
   }
 }
@@ -951,18 +561,15 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
   await mockRetrievalCards(page);
   await mockAnsweringSettings(page, []);
   await page.goto("/settings/retrieval");
+  await expect(page.getByRole("switch", { name: "画面目録で操作画面を探す", exact: true })).toHaveCount(0);
   const card = page.getByTestId("answering-settings-card");
-  for (const title of ["回答前の確認", "検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
+  for (const title of ["検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
     const group = card.getByRole("region", { name: title, exact: true });
     await expect(group).toBeVisible();
     await expect(group).toHaveCSS("border-top-style", "solid");
     await expect(group).toHaveCSS("border-top-width", "1px");
   }
   // 区切りの線は切り替えの行の上にだけあり、下限の欄は切り替えの行の続きとして余白を持つ。
-  const derivedConclusionHint = card.getByText(/資料をもとに導いた結論は別に確認し、確認できない結論は保留します/);
-  await derivedConclusionHint.scrollIntoViewIfNeeded();
-  await expect(derivedConclusionHint).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("derived-conclusion-review.png") });
   const rerankBlock = card.getByTestId("answering-rerank-block");
   const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
   const boxes = await Promise.all([rerankBlock.boundingBox(), options.boundingBox()]);
@@ -996,7 +603,6 @@ for (const theme of ["light", "dark"] as const) {
     await expect(topN).toHaveValue("60");
     await expect(min).toHaveValue("0.2");
     await expect(score).toHaveValue("0.3");
-    await expect(card.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true })).not.toBeChecked();
     await expect(topN).toHaveAccessibleDescription(/0 は追加制限なし.*明示添付.*別枠/);
     const boxes = await Promise.all([search.boundingBox(), min.boundingBox(), topN.boundingBox(), score.boundingBox()]);
     if ((page.viewportSize()?.width ?? 0) >= 1280) {
@@ -1022,6 +628,9 @@ for (const theme of ["light", "dark"] as const) {
     await expect(save).toBeEnabled();
     await save.click();
     expect(saved.at(-1)).toMatchObject({retrieval_query_limit: 0});
+    // 保存後のフォームの再作成が終わってから次の編集を始める。
+    await expect(search).toBeEnabled();
+    await expect(reset).toBeDisabled();
     await expect(search).toHaveAccessibleDescription(/0 は追加制限なし/);
     await search.fill("150");
     for (const invalid of ["", "-1", "1.5", "2001"]) {

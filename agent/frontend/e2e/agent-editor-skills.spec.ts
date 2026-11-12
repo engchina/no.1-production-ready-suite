@@ -1,6 +1,6 @@
-import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #925: 業務 Agent のエディタ。登録から消えたスキルを外せること、未保存の変更があるあいだは公開できないこと。
 
@@ -26,13 +26,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
   });
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-}
-
 test("登録から消えたスキルが「見つかりません」として出て、外して保存できる", async ({ page, mockApi }) => {
   const knownSkill = String(mockApi.state.skills[0]?.id);
   seedAgent(mockApi, { skill_ids: ["deleted_skill_925", knownSkill].sort() });
@@ -46,7 +39,7 @@ test("登録から消えたスキルが「見つかりません」として出�
   await expect(missing).toHaveAttribute("aria-checked", "true");
   await expect(missing).toContainText("見つかりません");
   await expect(page.getByTestId("agent-skill-picker")).toContainText("選択 2 件");
-  await expectNoHorizontalOverflow(page);
+  await expectNoPageHorizontalOverflow(page);
 
   // 外さずに保存すると backend と同じく断られる（外す手段が画面にあることを確かめる前提）。
   await page.getByLabel("指示").fill("v2 の指示");
@@ -87,4 +80,28 @@ test("保存していない変更があるあいだは公開できない", async
   await expect(page.getByText("v1 として公開しました")).toBeVisible();
   const agent = mockApi.state.agents.find((item) => item.id === AGENT_ID);
   expect((agent?.versions as Array<Record<string, unknown>>)[0]?.instructions).toBe("保存していない指示");
+});
+
+
+test("Agent の指示は全幅、通常の名前欄は既定幅を保つ", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedAgent(mockApi, { name: "合成の Agent", description: "合成の説明", instructions: "## Step 1: 合成の指示" });
+  await page.goto(`/agents?id=${AGENT_ID}`);
+  const field = page.getByLabel("指示", { exact: true });
+  await expect(field).toBeEditable();
+  const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("dark", theme === "dark"), theme);
+      const delta = await field.evaluate(node => {
+        const parent = node.closest("[data-form-grid]")!.parentElement!;
+        const style = getComputedStyle(parent);
+        return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+      });
+      expect(Math.abs(delta)).toBeLessThanOrEqual(2);
+      if (width === 1920) expect((await page.locator('input[id$="-agent-name"]').boundingBox())!.width).toBeLessThan((await field.boundingBox())!.width);
+      await expectNoPageHorizontalOverflow(page);
+      await field.screenshot({ path: testInfo.outputPath(`agent-instructions-${width}-${theme}.png`) });
+    }
+  }
 });

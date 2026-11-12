@@ -5,7 +5,6 @@ import unittest
 from rag_parser_core.language import bind_pack, builtin_pack, resolve
 
 from rag_engine.chunking.headings import _heading_patterns
-from rag_engine.retrieval.enumeration import enumeration_request
 
 
 def _custom(**sections):
@@ -38,21 +37,12 @@ class LanguagePackEngineTest(unittest.TestCase):
         with bind_pack(_custom(symbols={"sentence_like_endings": ["。", "ます", "とは？"]})):
             self.assertTrue(_heading_patterns().sentence_heading.search("〜とは？"))
 
-    def test_enumeration_chapter_range_follows_connectors(self):
-        question = "第2章〜第4章の手順をすべて挙げてください"
-        self.assertEqual(enumeration_request(question).chapters, (2, 3, 4))
-        question = "第2章 to 第4章の手順をすべて挙げてください"
-        self.assertNotEqual(enumeration_request(question).chapters, (2, 3, 4))
-        with bind_pack(_custom(numbers={"range_connectors": ["から", "to"]})):
-            self.assertEqual(enumeration_request(question).chapters, (2, 3, 4))
-
     def test_content_labels_follow_the_pack(self):
         """表・図の内容のラベルは書く側と読む側が同じ言語資源から作る(#2181 段 2c)。"""
         from rag_engine.generation.grounded import _without_screen_examples
         from rag_engine.parsing.content_labels import content_labels
         from rag_engine.parsing.picture_descriptions import vision_description_text
         from rag_engine.parsing.table_structure import _fixed_group_pieces
-        from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 
         payload = {"retrieval_text": "画面の説明", "visible_buttons": ["保存"], "visible_values": ["ID=A1"]}
         structure = {"caption": "一覧", "column_headers": [{"column_index": 0, "text": "名前"}]}
@@ -71,7 +61,6 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertIn("◆ 概要\n説明: 画面の説明", text)
             self.assertIn("押すもの: 保存", text)
             self.assertEqual(_fixed_group_pieces(structure, "")[0], "表の名前: 一覧")
-            self.assertTrue(is_vision_enumeration_line("押すもの: 保存"))
             self.assertTrue(content_labels().generated.search(text))
             self.assertNotIn("A1", _without_screen_examples(text))
 
@@ -101,78 +90,46 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertNotIn("申請", tokenize_text_search_query("申請の期限"))
             self.assertNotEqual(tokenizer_fingerprint(TextSearchTokenizerConfig()), before)
 
-    def test_question_cues_follow_the_pack(self):
-        """質問の理解の手がかり（原因・総称の対象・要求の語）は言語資源から作る(#2181 段 4)。"""
-        from rag_engine.retrieval.task_contract import action_targets, asks_cause, task_contract
+    def test_subquestion_markers_follow_the_pack(self):
+        """質問の小問の印は言語資源から作る(#2181 段 4)。"""
+        from rag_engine.retrieval.task_contract import subquestion_markers
 
-        self.assertTrue(asks_cause("なぜ止まるのか"))
-        self.assertFalse(asks_cause("どの理屈で止まるのか"))
-        self.assertEqual(action_targets("帳票を削除したい"), ["帳票"])
-        with bind_pack(_custom(question_cues={"cause_cues": ["理屈"], "generic_target_words": ["帳票"]})):
-            self.assertFalse(asks_cause("なぜ止まるのか"))
-            self.assertTrue(asks_cause("どの理屈で止まるのか"))
-            self.assertEqual(action_targets("帳票を削除したい"), [])
-            self.assertEqual(task_contract("帳票を削除したい")["action_targets"], [])
-
-    def test_inquiry_enumeration_and_definition_cues_follow_the_pack(self):
-        """問い合わせ・列挙・定義の手がかりは言語資源から作る(#2181 段 4)。"""
-        from rag_engine.retrieval.definition_evidence import definition_labels
-
-        self.assertIsNotNone(enumeration_request("該当する条件をすべて挙げてください"))
-        self.assertIsNone(enumeration_request("該当する条件を残さず挙げてください"))
-        self.assertEqual(definition_labels("「区分」の意味は"), ["区分"])
-        self.assertEqual(definition_labels("〈区分〉の意味は"), [])
-        with bind_pack(
-            _custom(
-                enumeration_cues={"exhaustive_words": ["残さず"]},
-                definition_cues={"definition_label_brackets": ["〈〉"]},
-            )
-        ):
-            self.assertIsNotNone(enumeration_request("該当する条件を残さず挙げてください"))
-            self.assertEqual(definition_labels("〈区分〉の意味は"), ["区分"])
+        self.assertEqual([label for _, label in subquestion_markers("(1) 受注 (2) 請求")], ["(1)", "(2)"])
+        with bind_pack(_custom(question_cues={"subquestion_number_patterns": ["[N]"]})):
+            self.assertEqual(subquestion_markers("(1) 受注 (2) 請求"), [])
 
     def test_evidence_cues_follow_the_pack(self):
-        """根拠の選び方の手がかり（集計値・機能番号の線）は言語資源から作る(#2181 段 4)。"""
+        """根拠の選び方の手がかり（機能番号の線）は言語資源から作る(#2181 段 4)。"""
         from types import SimpleNamespace
 
-        from rag_engine.retrieval.operation_context import alternative_operation_queries
-        from rag_engine.retrieval.result_granularity import aggregate_only_evidence
+        from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
 
-        spans = [{"text": "件数の合計を表示する"}]
-        self.assertTrue(aggregate_only_evidence(spans))
+        record = SimpleNamespace(metadata={"section_path": ["合成の章の名前", "業務~(1)登録画面"]})
+        # 線の字に「~」が無ければ番号付きの機能見出しと見なさず、章の名前も残す。
+        self.assertEqual(operation_labels(record), {"合成の章の名前", "業務~(1)登録画面"})
+        with bind_pack(_custom(evidence_cues={"function_number_dashes": ["-", "~"]})):
+            self.assertEqual(operation_labels(record), {"業務~(1)登録画面"})
         records = [
             SimpleNamespace(metadata={"section_path": ["業務~(1)登録画面"]}),
             SimpleNamespace(metadata={"section_path": ["業務~(2)削除画面"]}),
         ]
         self.assertEqual(alternative_operation_queries("登録したい", records), ())
-        with bind_pack(
-            _custom(
-                evidence_cues={
-                    "aggregate_value_words": ["総数"],
-                    "function_number_dashes": ["-", "~"],
-                }
-            )
-        ):
-            self.assertFalse(aggregate_only_evidence(spans))
+        with bind_pack(_custom(evidence_cues={"function_number_dashes": ["-", "~"]})):
             self.assertEqual(len(alternative_operation_queries("登録したい", records)), 2)
 
     def test_answer_labels_follow_the_pack(self):
         """回答の表示（見出し・出典・条件の型）は言語資源から作り、検査も同じ語で読む(#2181 段 5)。"""
         from rag_engine.generation.answer_labels import answer_labels
-        from rag_engine.generation.grounded import _condition_phrase, is_structural_line, known_gap_labels
+        from rag_engine.generation.grounded import is_structural_line
 
         self.assertTrue(is_structural_line("資料により確認できた事項"))
         self.assertTrue(is_structural_line("根拠：a.pdf p.3"))
-        self.assertEqual(_condition_phrase("有効期限を過ぎた"), "有効期限を過ぎた場合")
-        self.assertEqual(_condition_phrase("管理者"), "管理者の場合")
         custom = _custom(
             answer_labels={
                 "rules_section": "確かめた事項",
                 "applications_section": "合成の導出結論",
                 "citation_prefix": "出典: ",
                 "page_location": "{page} 頁",
-                "condition_suffix": "とき",
-                "aspect_labels": ["手順=procedure"],
             }
         )
         with bind_pack(custom):
@@ -181,49 +138,35 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(answer_labels().applications_section, "合成の導出結論")
             self.assertFalse(is_structural_line("資料により確認できた事項"))
             self.assertEqual(answer_labels().page(3), "3 頁")
-            self.assertEqual(_condition_phrase("管理者"), "管理者のとき")
-            self.assertEqual(known_gap_labels(["procedure"]), ["手順"])
 
-    def test_answer_check_cues_follow_the_pack(self):
-        """回答の検査の手がかり（限定・推測・版の廃止）は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.grounded import _tag_constraint, superseded_evidence_ids
+    def test_page_text_is_fixed_to_nfkc_like_the_previous_default(self):
+        """頁番号の比較は NFKC に固定し、既定（NFKC）で取り込んだ文書と同じ形にする(#4784)。"""
+        import re
+        import unicodedata
 
-        span = {"text": "管理者に限定する。", "evidence_id": "E1"}
-        self.assertEqual(_tag_constraint("", span), set())
-        abolished = {"text": "第1版は改訂により廃棄されました。", "evidence_id": "E2", "source": "改訂の案内", "section_path": []}
-        old = {"text": "手順", "evidence_id": "E1", "source": "第1版 手引き", "section_path": []}
-        self.assertEqual(superseded_evidence_ids("手順は", [old, abolished]), set())
-        with bind_pack(_custom(answer_check_cues={"constraint_words": ["に限定"], "abolish_words": ["廃棄"]})):
-            self.assertEqual(_tag_constraint("", span), {"constraint"})
-            self.assertIn("E1", superseded_evidence_ids("手順は", [old, abolished]))
+        from rag_engine.chunking.constants import _compact_page_text
 
-    def test_operation_audit_cues_follow_the_pack(self):
-        """操作の指示は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.operation_audit import is_operation_instruction
+        for text in ("－ ３ －", "Ⅳ", "Ｐ．１２ / ２０", "ii"):
+            self.assertEqual(_compact_page_text(text), re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)))
 
-        self.assertFalse(is_operation_instruction("申請書を提出します"))
-        with bind_pack(
-            _custom(
-                operation_audit_cues={"instruction_phrases": ["を提出"]},
-            )
-        ):
-            self.assertTrue(is_operation_instruction("申請書を提出します"))
+    def test_added_question_stopwords_are_dropped_from_the_query(self):
+        """同梱の止め語の英語 5 語と疑問の副詞 3 語は質問の語にしない(#4784)。足す前の一覧では語に残る。"""
+        from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
 
-    def test_grounding_cues_follow_the_pack(self):
-        """算式の単位は言語資源から作る(#2181 段 5)。"""
-        from rag_engine.generation.applications import arithmetic_mismatch
-
-        self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
-        with bind_pack(
-            _custom(
-                grounding_cues={
-                    "amount_units": ["兆円", "円"],
-                    "amount_scale_units": ["兆=9"],
-                }
-            )
-        ):
-            self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
-            self.assertTrue(arithmetic_mismatch("2兆円+3兆円=5円"))
+        added = {"as", "into", "through", "whom", "whose", "なぜ", "どうして", "いかが"}
+        questions = (
+            "なぜ区画の上限を超えるのですか",
+            "設定はいかがですか",
+            "records into the archive through the console",
+            "whom and whose records as default",
+        )
+        self.assertTrue(added <= set(builtin_pack().words("search_terms", "stopwords")))
+        current = {term for question in questions for term in tokenize_text_search_query(question)}
+        self.assertFalse(added & current)
+        before = [word for word in builtin_pack().words("search_terms", "stopwords") if word not in added]
+        with bind_pack(_custom(search_terms={"stopwords": before})):
+            previous = {term for question in questions for term in tokenize_text_search_query(question)}
+        self.assertTrue({"なぜ", "いかが", "into", "through", "whom", "as"} <= previous)
 
 
 if __name__ == "__main__":

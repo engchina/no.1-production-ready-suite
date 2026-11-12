@@ -11,12 +11,12 @@ from pathlib import Path
 
 from rag_parser_core.image_purpose import ImagePurpose
 
-from rag_engine.models.llm import FORM_FIELD_KINDS
+from rag_engine.models.llm import FORM_FIELD_KINDS, PictureDescriptionOutput
 from rag_engine.parsing.checkpoints import atomic_json, digest_json, file_digest
 
 # prompt以外の後処理・画像入力契約を変更した場合も版を上げて再利用を無効化する。
 # 2: Form の項目に種類（kind）を足した応答の契約（#2404）。
-VISION_CHECKPOINT_VERSION = 2
+VISION_CHECKPOINT_VERSION = 3
 
 _LOG = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ class VisionCheckpoints:
         return digest_json(
             {
                 "version": VISION_CHECKPOINT_VERSION,
+                "response_schema": digest_json(PictureDescriptionOutput.model_json_schema()),
                 "source": self.source_hash,
                 "vision_image_purpose": self.image_purpose,
                 "images": [file_digest(crop), file_digest(context)],
@@ -157,6 +158,12 @@ def _has_current_contract(response: dict) -> bool:
     台帳の key は版・prompt を含むが、key が一致しても（台帳の artifact を別の版から戻したなど）Form の項目に
     種類（kind）の無い応答は使い回さず、Vision を呼び直す（#2404）。
     """
+    nodes = response.get("diagram_nodes", [])
+    edges = response.get("diagram_edges", [])
+    if not isinstance(nodes, list) or any(not isinstance(node, dict) or not {"id", "kind", "label"} <= node.keys() for node in nodes):
+        return False
+    if not isinstance(edges, list) or any(not isinstance(edge, dict) or "direction" not in edge for edge in edges):
+        return False
     fields = response.get("form_fields")
     if fields is None:
         return True

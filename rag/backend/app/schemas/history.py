@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
 from pr_backend_core.observability.failure_diagnosis import FailureDiagnosis
 from pr_backend_core.observability.model_usage import RunModelUsage, UsageMeasurement
+from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, Field
 
 from app.schemas.common import JsonValue
@@ -14,10 +14,6 @@ from app.schemas.search import RetrievedChunk, StorageFailure
 
 RunSurface = Literal["search", "chat"]
 RunStatus = Literal["success", "blocked", "error"]
-RunVerification = Literal["verified", "partial", "unverified"]
-ValidationExecution = Literal[
-    "disabled", "not_run", "error", "timed_out", "passed", "failed", "partial", "unknown"
-]
 
 
 class RunSummary(BaseModel):
@@ -35,9 +31,7 @@ class RunSummary(BaseModel):
     status: RunStatus
     # 回答の対応（answered / conditional / insufficient_evidence など。#1235）。
     answer_outcome: str | None = None
-    # 回答の検証（回答の監査で要求ごとに根拠で答えられたか）。回答を作らない実行は None。
-    verification: RunVerification | None = None
-    validation_execution: ValidationExecution | None = None
+    # 回答の確からしさ（回答の確信度と人手確認の要否）。回答を作らない実行は None。
     confidence: str | None = None
     needs_human_review: bool | None = None
     citation_count: int = 0
@@ -47,7 +41,7 @@ class RunSummary(BaseModel):
     models: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
     message_id: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
     # 見ている利用者自身が実行したか（#1954。持ち主の会話で system_admin が実行した行は、持ち主には
     # false）。
     executed_by_me: bool = False
@@ -69,7 +63,7 @@ class RunFeedback(BaseModel):
     rating: Literal["helpful", "not_helpful"]
     reason: str | None = None
     document_id: str | None = None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class RunSearchConditions(BaseModel):

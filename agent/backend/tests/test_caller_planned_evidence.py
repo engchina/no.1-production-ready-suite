@@ -5,7 +5,7 @@
   モデルに見せない（モデルが渡した値は上書きする）。宣言の無い古いスキルを固定した公開版・固定の
   中身の無い公開版は RAG が計画し、caller でだけ効く引数（planning・queries など）をモデルに見せず、
   モデルが渡しても呼び先へ送らない（#2676）。
-- 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答 → 最終の検証が
+- 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答の順に呼ぶ。
   RAG に回答を作らせずに（`rag_search` を呼ばずに）通る。
 - 根拠の取得が検索・回答プロファイルのルールの確認を返したら、確認の次の手と確かめ中の問いにする。
 """
@@ -44,11 +44,9 @@ from app.features.agent.skills import (
 from app.features.agent.skills_loader import load_skills_from_dir
 from app.features.agent.support_task import (
     caller_planned_schema,
-    evidence_clarification_step,
     rag_planned_arguments,
     rag_planned_schema,
 )
-from app.settings import get_settings
 
 SKILL_ID = "test2651-skill"
 AGENT_ID = "test2651-agent"
@@ -133,7 +131,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             skill_registry.remove(SKILL_ID)
 
 
-def _script(monkeypatch: MonkeyPatch, *steps: Any, validation: bool) -> ScriptedModel:
+def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
     model = ScriptedModel(list(steps))
     monkeypatch.setattr(
         builtin_runtime,
@@ -146,7 +144,6 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any, validation: bool) -> Scripted
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
-    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", validation)
     return model
 
 
@@ -177,7 +174,6 @@ def test_runtime_fixes_caller_planning_and_hides_it_from_the_model(
             )
         ],
         [assistant_message(ANSWER)],
-        validation=False,
     )
     run_id = _run()
 
@@ -211,7 +207,6 @@ def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
         [assistant_message(ANSWER)],
         [call],
         [assistant_message(ANSWER)],
-        validation=False,
     )
 
     _run(draft=False)
@@ -228,7 +223,7 @@ def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
 
     # 再公開すると、公開版も Agent 主体の取得になる。
     runtime_repository.publish_agent(AGENT_ID, published_by="admin")
-    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    _script(monkeypatch, [call], [assistant_message(ANSWER)])
     _run(draft=False)
     assert mcp.calls_of("rag_retrieve_evidence")[-1]["arguments"]["planning"] == "caller"
 
@@ -250,14 +245,13 @@ def _legacy_published_version() -> None:
 
 
 # caller でだけ効く引数（#2676。門が閉じた Run ではモデルに見せず、送らない）。
-_CALLER_ONLY = frozenset({"planning", "queries", "request_id", "skip_clarification"})
+_CALLER_ONLY = frozenset({"planning", "queries", "request_id"})
 # モデルが自分で caller を指定する（今のスキルの本文が言い換えを queries に入れて引くと指示する）。
 _MODEL_CALLER_ARGUMENTS = {
     "query": "機器 A 点検",
     "planning": "caller",
     "queries": ["機器A 定期点検"],
     "request_id": "model-chosen",
-    "skip_clarification": True,
 }
 
 
@@ -282,13 +276,13 @@ def test_published_version_without_pinned_skills_keeps_rag_planning(
     """
     _legacy_published_version()
     call = function_call("rag__rag_retrieve_evidence", _MODEL_CALLER_ARGUMENTS, call_id="c1")
-    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)])
     published_run = _run(draft=False)
     [published] = mcp.calls_of("rag_retrieve_evidence")
     _assert_rag_planned(published_run, published, model)
 
     # 下書きは今どおり caller（モデルの queries を送り、planning・追跡 ID は実行環境が決める）。
-    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)])
     draft_run = _run(draft=True)
     draft = mcp.calls_of("rag_retrieve_evidence")[-1]
     assert draft["arguments"]["planning"] == "caller"
@@ -308,7 +302,7 @@ def test_latest_policy_version_follows_the_current_skill(
     runtime_repository.publish_agent(AGENT_ID, published_by="admin")
     skill_registry.upsert_custom(_skill("caller"))
     call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
-    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    _script(monkeypatch, [call], [assistant_message(ANSWER)])
 
     _run(draft=False)
 
@@ -327,7 +321,7 @@ def test_builtin_published_agents_keep_rag_planning(
     assert version is not None and version.skills is None
     # モデルが planning=caller と queries を渡しても、呼び先へ送らない（#2676）。
     call = function_call("rag__rag_retrieve_evidence", _MODEL_CALLER_ARGUMENTS, call_id="c1")
-    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)])
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(goal=GOAL, agent_id=agent_id), created_by_user_uuid=USER_UUID
     )
@@ -394,7 +388,6 @@ def test_rag_planned_schema_and_arguments_drop_caller_only_arguments() -> None:
             "planning": {"enum": ["rag", "caller"]},
             "queries": {"type": "array", "items": {"type": "string"}},
             "request_id": {"type": "string"},
-            "skip_clarification": {"type": "boolean"},
             "conditions": {"type": "object"},
         },
         "required": ["query", "planning"],
@@ -414,10 +407,10 @@ def test_rag_planned_schema_and_arguments_drop_caller_only_arguments() -> None:
     assert rag_planned_schema("rag__rag_retrieve_evidence", old) is old
 
 
-def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(
+def test_agent_orchestrates_retrieval_figure_reading_and_answer(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """本文・表・図の根拠を取得し、図の根拠だけ元の画像を読んでから答え、最終の検証を通す。"""
+    """本文・表・図の根拠を取得し、図の根拠だけ元の画像を読んでから答える。"""
     retrieved = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
     retrieved["evidence"] = [_TEXT, _TABLE, _FIGURE]
     mcp.outputs["rag_retrieve_evidence"] = retrieved
@@ -441,7 +434,6 @@ def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(
             )
         ],
         [assistant_message(ANSWER)],
-        validation=True,
     )
     run_id = _run()
 
@@ -451,53 +443,20 @@ def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(
     assert mcp.calls_of("rag_search") == []
     assert len(mcp.calls_of("rag_retrieve_evidence")) == 1
     assert mcp.calls_of("rag_read_source")[0]["arguments"]["include_image"] is True
-    # 最終の検証は、取得した根拠と読んだ図の根拠で回答を確かめる。
-    [validation] = mcp.calls_of("rag_validate_answer")
-    checked = {item["chunk_id"] for item in validation["arguments"]["evidence"]}
-    assert {"chunk-text", "chunk-table", "chunk-figure"} <= checked
-    assert validation["arguments"]["answer"].startswith("機器 A の点検は毎月 1 回です。")
 
 
-def test_rule_clarification_of_retrieval_becomes_the_next_step_and_pending(
+def test_retired_retrieval_clarification_does_not_become_pending(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    clarification = {
-        "condition_id": "rule:target",
-        "label": "対象",
-        "question": "どの機器の点検ですか",
-        "options": ["機器 A", "機器 B"],
-        "multiple": False,
-    }
-    asked = {
+    mcp.outputs["rag_retrieve_evidence"] = {
         **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
-        "evidence": [],
-        "clarifications": [clarification],
+        "clarifications": [{"condition_id": "retired", "question": "合成の旧い確認"}],
     }
-    mcp.outputs["rag_retrieve_evidence"] = asked
-    model = _script(
+    _script(
         monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "点検 周期"}, call_id="c1")],
-        [assistant_message("どの機器の点検ですか。")],
-        validation=False,
+        [function_call("rag__rag_retrieve_evidence", {"query": "合成の質問"}, call_id="c1")],
+        [assistant_message("合成の回答")],
     )
-    run_id = _run("点検の周期は？")
-
-    output = next(
-        item["output"]
-        for item in model.calls[1].input
-        if isinstance(item, dict) and item.get("call_id") == "c1" and "output" in item
-    )
-    assert '"next_step"' in str(output)
-    assert "どの機器の点検ですか" in str(output)
+    run_id = _run("合成の質問")
     state = run_support_task(runtime_repository.get_run(run_id)) or {}
-    pending = state.get("content", state).get("pending_clarifications") or []
-    assert [item["condition_id"] for item in pending] == ["rule:target"]
-
-
-def test_evidence_clarification_step_only_when_asked() -> None:
-    assert evidence_clarification_step({"evidence": [], "clarifications": []}) is None
-    step = evidence_clarification_step(
-        {"clarifications": [{"condition_id": "rule:x", "label": "x", "question": "どれ？"}]}
-    )
-    assert step is not None
-    assert step["reason"] == "needs_clarification"
+    assert not state.get("content", state).get("pending_clarifications")

@@ -24,11 +24,13 @@ from rag_engine.models.llm import form_field_kind
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, digest_json, file_digest
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
+from rag_engine.parsing.diagram_graph import graph_projection, normalize_graph
 from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_engine.parsing.vision_prompt_rules import (
     MAX_CHART_SERIES_VALUES,
     MAX_TABLE_COLUMNS,
+    PAGE_TEXT_SAMPLE_KEY,
     VISION_LIST_FIELD_LIMITS,
 )
 from rag_engine.resources.runtime import resolve_prompt
@@ -45,6 +47,9 @@ VISION_TARGET_OUTLINE_WIDTH = 4
 SECTION_CATEGORIES = {"Title", "Section-header"}
 PROMPT_CONTEXT_EXCLUDED_CATEGORIES = {"Page-footer", "Page-header"}
 PROMPT_NEARBY_HEADING_LIMIT = 4
+# 説明を書く言語の基準にする本文の抜粋（#4821）。図と表は読み取りの対象で、本文が説明の文のことがあるので数えない。
+PAGE_TEXT_SAMPLE_CATEGORIES = {"Text", "List-item", "Caption", "Footnote", *SECTION_CATEGORIES}
+PAGE_TEXT_SAMPLE_CHARS = 200
 TABLE_CELL_TEXT_HINT_LIMIT = 6
 # 生成説明の本文。グループ見出し（`■ …`）と field ごとのラベル行の 2 階層にする (#773)。
 # グループと field の名前は言語資源（content_labels の vision_groups / vision_fields。#2181）。
@@ -294,6 +299,21 @@ def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False
         return ""
 
     labels = content_labels()
+    if (graph := graph_projection(description)) is not None:
+        paths, uncertain = graph
+        # 接続の説明は保存した段から一つだけ作る。自由文の別経路で条件を再配分しない。
+        description = {
+            **description,
+            "diagram_nodes": [node["label"] for node in description["diagram_nodes"] if node.get("kind") != "junction"],
+            "diagram_edges": paths,
+            "diagram_summary": "",
+            "retrieval_text": "",
+            "condition_result_pairs": [],
+            "operation_steps": [],
+        }
+        if uncertain:
+            note = labels.pack.text("answer_labels", "gaps_section") + ": " + " / ".join(uncertain)
+            description["correction_notes"] = "\n".join(filter(None, [description.get("correction_notes"), note]))
     lines: list[str] = []
     for group, fields in VISION_SENTENCE_GROUPS:
         if for_answer and group == "search":
@@ -381,6 +401,7 @@ def _bounded_vision_description(payload: dict[str, Any]) -> dict[str, Any]:
                 omissions.append(f"{field}: {len(value)}件のうち先頭{limit}件を保持")
             description[field] = value[:limit]
 
+    description = normalize_graph(description)
     rows = description.get("table_rows")
     if isinstance(rows, list):
         for index, row in enumerate(rows, 1):
@@ -1019,6 +1040,7 @@ def _vision_metadata(
         "next_record": next_record,
         "containing_table": containing_table,
         "paired_ocr_text": paired_ocr_text,
+        PAGE_TEXT_SAMPLE_KEY: _page_text_sample(record, records),
         "image_inputs": [
             {
                 "index": 1,
@@ -1344,6 +1366,27 @@ def _paired_picture_ocr_text(record: LayoutRecord, records: list[LayoutRecord]) 
         if _same_bbox(target_bbox, _coerce_bbox(other.bbox)):
             return _text_preview(other.text, 2000)
     return ""
+
+
+def _page_text_sample(record: LayoutRecord, records: list[LayoutRecord]) -> str:
+    """説明を書く言語の基準にする、対象と同じページの最も長い本文の抜粋。本文が無ければ空。
+
+    見出し・番号・キャプションより地の文が言語を表すので、長い記録を選ぶ。ほかのページは見ない
+    （段ごとの先読みと全体の読み取りで prompt が変わると、checkpoint の鍵が合わず同じ図を呼び直す）。
+    """
+    candidates = [
+        other
+        for other in records
+        if other is not record
+        and other.engine == record.engine
+        and other.page == record.page
+        and str(other.category or "") in PAGE_TEXT_SAMPLE_CATEGORIES
+        and str(other.text or "").strip()
+    ]
+    if not candidates:
+        return ""
+    longest = min(candidates, key=lambda other: (-len(str(other.text).strip()), _record_order_key(other)))
+    return _text_preview(longest.text, PAGE_TEXT_SAMPLE_CHARS)
 
 
 def _validated_bbox(values: Any, *, label: str = "bbox") -> tuple[float, float, float, float]:

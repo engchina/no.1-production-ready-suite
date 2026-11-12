@@ -14,7 +14,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.clients.oracle import OracleClient, OraclePoolProtocol
+from app.clients.oracle import OracleClient, OraclePoolProtocol, evaluation_job_visibility_sql
 from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.main import app
 from app.rag import evaluation_jobs
@@ -29,6 +29,7 @@ from app.rag.evaluation_jobs import (
     EvaluationJobRecord,
     EvaluationJobService,
     EvaluationJobStateError,
+    EvaluationJobViewer,
     MemoryEvaluationJobStore,
     OracleEvaluationJobStore,
     evaluation_answer_runs,
@@ -975,27 +976,72 @@ async def test_oracle_store_scopes_reads_and_cancel_to_owner() -> None:
         ],
     )
     store = _oracle_store(connection)
-
-    assert await store.cancel(
-        "job-1",
+    viewer = EvaluationJobViewer(
         tenant_id_hash=None,
         user_id_hash="u" * 64,
-        error_message=EVALUATION_JOB_CANCELLED_MESSAGE,
+        allowed_search_answer_profile_ids=frozenset({"profile-b", "profile-a"}),
     )
-    record = await store.get("job-1", tenant_id_hash=None, user_id_hash="u" * 64)
+
+    assert await store.cancel("job-1", error_message=EVALUATION_JOB_CANCELLED_MESSAGE)
+    record = await store.get("job-1", viewer=viewer)
     assert record is not None
     assert (record.kind, record.status, record.total_cases) == ("run", "CANCELLED", 6)
 
     cancel, select = (_normalized(call.statement) for call in connection.calls)
-    owner_sql = (
-        "(tenant_id_hash = :tenant_id_hash OR (tenant_id_hash IS NULL AND :tenant_id_hash IS NULL))"
-        " AND (user_id_hash = :user_id_hash OR (user_id_hash IS NULL AND :user_id_hash IS NULL))"
-    )
     assert "SET status = 'CANCELLED'" in cancel
     assert "AND status = 'RUNNING'" in cancel
-    assert owner_sql in cancel
-    assert owner_sql in select
+    # 取り消しの認可は service が先に確かめる（見える job の本人・system_admin。#4811）。
+    assert "user_id_hash" not in cancel
+    # 読み取りは見え方の条件で絞る: 同じ tenant、プロファイルの分かる job は使えるプロファイル、
+    # 分からない job は本人だけ。
+    assert (
+        "(tenant_id_hash = :viewer_tenant_id_hash "
+        "OR (tenant_id_hash IS NULL AND :viewer_tenant_id_hash IS NULL))"
+    ) in select
+    assert (
+        "search_answer_profile_id IN (:viewer_profile_id_0, :viewer_profile_id_1)"
+        " AND (compare_search_answer_profile_id IS NULL"
+        " OR compare_search_answer_profile_id IN (:viewer_profile_id_0, :viewer_profile_id_1))"
+    ) in select
+    assert (
+        "search_answer_profile_id IS NULL AND (user_id_hash = :viewer_user_id_hash "
+        "OR (user_id_hash IS NULL AND :viewer_user_id_hash IS NULL))"
+    ) in select
+    params = connection.calls[1].parameters
+    assert params["viewer_profile_id_0"] == "profile-a"
+    assert params["viewer_profile_id_1"] == "profile-b"
     assert "query" not in select.lower()
+
+
+@pytest.mark.parametrize(
+    ("viewer", "expected", "absent"),
+    [
+        (
+            EvaluationJobViewer(tenant_id_hash=None, user_id_hash="u", all_users_visible=True),
+            "search_answer_profile_id IS NOT NULL AND 1 = 1) OR "
+            "(search_answer_profile_id IS NULL AND 1 = 1)",
+            "viewer_user_id_hash",
+        ),
+        (
+            EvaluationJobViewer(
+                tenant_id_hash=None, user_id_hash="u", allowed_search_answer_profile_ids=frozenset()
+            ),
+            "search_answer_profile_id IS NOT NULL AND 1 = 0",
+            "viewer_profile_id_0",
+        ),
+    ],
+    ids=["system-admin", "no-profiles"],
+)
+def test_visibility_sql_for_admin_and_no_profiles(
+    viewer: EvaluationJobViewer, expected: str, absent: str
+) -> None:
+    """system_admin は全部、使えるプロファイルの無い利用者はプロファイルの分かる job を見ない。
+
+    使わない bind は渡さない（python-oracledb は文に無い bind を拒む）。
+    """
+    sql, binds = evaluation_job_visibility_sql(viewer)
+    assert expected in _normalized(sql)
+    assert absent not in binds and absent not in sql
 
 
 async def test_oracle_store_fails_stale_jobs_by_database_clock() -> None:

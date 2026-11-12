@@ -1,7 +1,9 @@
+import { progressCardLayout } from "../../../../platform/packages/ui/e2e/progress-card-checks";
 import { inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
 import { findLoadingStandardViolations } from "../../../../platform/packages/ui/e2e/loading-checks";
+import { findFieldLoadFailureViolations } from "../../../../platform/packages/ui/e2e/field-load-failure";
 import {jobProgressEvents, jobProgressTraceId, withJobProgress, withRecordedTrace, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
@@ -3238,6 +3240,68 @@ test("スキーマ参照の読込状態は利用者向けの日本語ラベル�
   schemaGate.release();
   await expect(loading).toBeHidden();
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`スキーマ参照は表の一覧を読み取れないとき「一致する表または項目がありません」と出さない (#4222, ${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockNl2SqlApi(page);
+    let schemaFail = true;
+    await page.unroute("**/api/schema/objects?*");
+    await page.route("**/api/schema/objects?*", (route) => {
+      if (schemaFail) {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({
+            data: null,
+            error_messages: ["スキーマの一覧を読み取れませんでした。"],
+            warning_messages: [],
+            error_code: "database_read_failed",
+          }),
+        });
+      }
+      return fulfillJson(route, {
+        items: schemaCatalog.tables.map((table) => ({
+          owner: table.owner,
+          object_name: table.table_name,
+          object_type: table.table_type,
+          logical_name: table.logical_name,
+          comment: table.comment,
+          row_count: table.row_count,
+          column_count: table.columns.length,
+          last_ddl_at: "",
+        })),
+        next_cursor: null,
+        total: schemaCatalog.tables.length,
+        catalog_version: 1,
+      });
+    });
+
+    await page.goto("/query");
+
+    const panel = page.getByTestId("nl2sql-schema-reference");
+    const unavailable = panel.getByTestId("nl2sql-schema-load-unavailable");
+    await expect(unavailable).toBeVisible({ timeout: 15_000 });
+    await expect(unavailable).toHaveText("読み取れなかったため、一覧を表示できません。");
+    await expect(panel.getByText("一致する表または項目がありません。")).toHaveCount(0);
+    // 原因と再試行はページの先頭の案内（#4217）。
+    const retry = page.getByTestId("query-page-data-load-failed").getByRole("button", { name: "再試行" });
+    await expect(retry).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`schema-reference-load-failed-notice-${viewport.name}.png`) });
+    await panel.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`schema-reference-load-failed-${viewport.name}.png`) });
+
+    schemaFail = false;
+    await retry.click();
+    await expect(unavailable).toHaveCount(0);
+    await expect(panel.getByText("一致する表または項目がありません。")).toHaveCount(0);
+  });
+}
 
 test("query workbench waits for a real profile id before profile detail and schema requests", async ({ page }) => {
   const profileId = "0f2767ed-da07-4d35-bee0-52b5a92ec694";
@@ -10197,7 +10261,7 @@ test("sql to question page shows a reserved loading state and retries reference-
   const errorBanner = page.getByRole("alert");
   await expect(errorBanner).toContainText("接続状態と入力内容を確認して再試行してください。");
   failObjectRequests = false;
-  await errorBanner.getByRole("button", { name: "プロファイル・スキーマを再読込" }).click();
+  await errorBanner.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(errorBanner).toHaveCount(0);
   await expect(page.getByText("請求情報")).toBeVisible();
   await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
@@ -14296,6 +14360,34 @@ test("data management CSV upload layout keeps table, file, mode, and execution i
   await expectCsvUploadLayout(mobileCsvPanel);
   await expect(mobileCsvPanel.getByText("CSV / XLSX / XLS ファイルを選択してください。")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
+});
+
+test("CSV のアップロード先テーブルの候補を読み取れないときは、候補の位置に欄ごとの文の失敗と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let tablesFail = true;
+  // 後から登録した route が先に呼ばれる（mockNl2SqlApi の成功の応答を上書きする）。
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    tablesFail
+      ? route.fulfill({ status: 500, json: { error: "表の一覧を読み取れませんでした。", error_code: "database_read_failed" } })
+      : route.fallback()
+  );
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const csvPanel = page.locator("#data-management-panel-csv");
+
+  const failure = csvPanel.getByTestId("data-csv-table-load-failed");
+  // 取得は TanStack Query の自動の再試行の後に失敗になる。見出しは欄ごとの文、backend の文は畳んだ「詳細」。
+  await expect(failure.getByRole("alert")).toHaveText("アップロード先テーブルの候補を読み込めませんでした。", { timeout: 20_000 });
+  await expect(failure.getByText("表の一覧を読み取れませんでした。")).toBeHidden();
+  await expect(csvPanel.getByTestId("data-csv-table-list")).toHaveCount(0);
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
+  await failure.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`data-csv-table-load-failed-${testInfo.project.name}.png`) });
+
+  tablesFail = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
 });
 
 test("data management CSV upload hides unmatched columns when Oracle reports none", async ({ page }) => {
@@ -19533,7 +19625,7 @@ test("sql to question retains candidates through navigation, reload and failed r
   await expect(generate).toBeDisabled();
   await expect(editor).toHaveValue(draft);
   unavailable = false;
-  await page.getByRole("button", { name: "プロファイル・スキーマを再読込" }).click();
+  await page.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(generate).toBeEnabled();
   expect(mutations).toBe(1);
 });
@@ -19784,7 +19876,7 @@ test("query recovery: usage-context の再試行で失敗した Profile だけ�
   await page.goto("/query");
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await nl2sqlQuestionInput(page).fill("再試行で消してはいけない草稿");
-  const error = page.getByRole("alert").filter({ hasText: "Profile の一時取得エラー" });
+  const error = page.getByTestId("query-page-data-load-failed");
   await expect(error).toBeVisible();
   await error.screenshot({ path: testInfo.outputPath("query-profile-retry-error.png") });
   await error.getByRole("button").click();
@@ -20540,6 +20632,7 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
+  await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
   await expect(page.getByTestId("nl2sql-job-partial-read-truncated")).toBeVisible();
   await expect(page.getByTestId("nl2sql-job-partial-write-dropped")).toBeVisible();
   await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");
@@ -20554,6 +20647,7 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await details.locator(":scope > summary").click();
   await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${jobProgressTraceId("job-default-001")}`);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await progress.screenshot({ path: testInfo.outputPath("progress-card.png") });
   await page.screenshot({ path: testInfo.outputPath("sql-generate-span-tree.png"), fullPage: true });
 });
 
@@ -20610,7 +20704,7 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
   const liveTypography = await timelineTypography(progress);
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
-  expect(liveTypography.summary?.fontSize).toBe("12px");
+  expect(liveTypography.summary?.fontSize).toBe("14px");
     expect(live).toHaveLength(6);
     await progress.screenshot({path: testInfo.outputPath("sql-generation-process.png")});
     if (cancelled) {
@@ -20658,4 +20752,19 @@ test("SQL 生成は最初の取得が終わる前から開始待ちを表示す�
   } finally {
     release();
   }
+});
+
+
+test("SQLから質問の読み取り失敗は共有の案内と再試行で回復する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let failing = true;
+  await page.route("**/api/nl2sql/profiles/search?*", (route) => failing ? route.fulfill({ status: 500, json: { detail: "合成の読み取り失敗" } }) : route.fallback());
+  await page.goto("/sql-to-question");
+  const panel = page.getByTestId("page-data-load-failed");
+  await expect(panel).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("sql-to-question-load-failed.png") });
+  failing = false;
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
 });
