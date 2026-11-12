@@ -30,6 +30,8 @@ def test_union_keeps_native_order_and_all_original_text_without_score_fusion() -
     assert result.records[1:] == native[1:] + additional[1:]
     assert len(result.records[-1].text) == len(additional[-1].text)
     assert context.records == native
+    assert result.independent_sources_merged is True
+    assert context.independent_sources_merged is False
 
 
 def test_same_text_in_different_documents_and_ranges_is_not_deduplicated() -> None:

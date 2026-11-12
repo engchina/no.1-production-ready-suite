@@ -35,17 +35,38 @@ def select_evidence(
     _, fixed = measure([])
     if not fixed["fits"]:
         raise GenerationInputBudgetExceeded({**fixed, "reason": "fixed_input_exceeds_limit"})
-    selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    omitted = 0
     duplicates = 0
-    partial = 0
+    ordered = []
     for span in sorted(spans, key=lambda value: rerank_first_key((source_scores or {}).get(str(value["source_id"])))):
         key = str(span["source_id"]), str(span["text"])
         if key in seen:
             duplicates += 1
             continue
         seen.add(key)
+        ordered.append(span)
+    # 全件が入る場合は、候補を足すたびに全 prompt と引用ビューを作り直さない。
+    complete = tag(ordered)
+    prompt, measurement = measure(complete)
+    if measurement["fits"]:
+        return (
+            complete,
+            prompt,
+            {
+                **measurement,
+                "selection": "relevance_within_budget",
+                "batch_count": 0,
+                "input_span_count": len(spans),
+                "selected_span_count": len(complete),
+                "excluded_span_count": 0,
+                "partial_span_count": 0,
+                "duplicate_span_count": duplicates,
+            },
+        )
+    selected: list[dict[str, Any]] = []
+    omitted = 0
+    partial = 0
+    for span in ordered:
         if measure([*selected, span])[1]["fits"]:
             selected.append(span)
             continue

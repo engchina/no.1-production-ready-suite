@@ -40,6 +40,29 @@ def test_rank_and_exact_duplicate_selection_without_model():
     assert diagnostic["excluded_span_count"] == 0
 
 
+def test_fitting_many_sources_builds_the_complete_input_once():
+    inputs = [span(i, f"合成の本文{i}。") for i in range(150)]
+    rendered_counts = []
+    settings = get_settings(environ={}, dotenv_path=None)
+
+    def render(values):
+        rendered_counts.append(len(values))
+        return json.dumps(values, ensure_ascii=False)
+
+    selected, _, diagnostic = select_evidence(
+        [*inputs, inputs[0]],
+        settings,
+        render=render,
+        evidence_text=lambda values: "".join(value["text"] for value in values),
+        tag=list,
+        system="合成の指示",
+        schema_for=lambda _values: {"type": "object"},
+    )
+    assert selected == inputs
+    assert rendered_counts == [0, 150]
+    assert diagnostic["duplicate_span_count"] == 1
+
+
 def test_long_input_retains_source_positions_and_reports_partial_input():
     original = span(0, "合成の原文です。" * 100, start=120)
     selected, _, diagnostic = select([original], chars=100)

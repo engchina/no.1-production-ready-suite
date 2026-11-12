@@ -350,11 +350,15 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
     settings = replace(config(), evidence_budget_chars=12000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
-            "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
+            "各資料の条件を教えてください。",
+            answering.AnswerContext(records=records, text="", independent_sources_merged=True),
+            settings,
+            image_prompt_mode="text_only",
         ).response
 
     assert "generation_failure" not in result.generation_trace
     assert generated
+    assert batches > 0
     assert "採らない合成の回答" not in generated[0]
     assert "条件0は値0です。" in generated[0]
 

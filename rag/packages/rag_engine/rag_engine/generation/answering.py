@@ -1722,17 +1722,43 @@ def synthesize_grounded_answer(
                     question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
                 ).model_json_schema()
 
-            spans, prompt, input_diagnostic = select_evidence(
-                spans,
-                generation_settings,
-                render=render_generation,
-                evidence_text=grounded.evidence_block_text,
-                tag=grounded.tag_spans,
-                system=generation_system,
-                schema_for=selected_generation_schema,
-                provider_id=provider,
-                source_scores=_source_question_scores(context),
-            )
+            if context.independent_sources_merged:
+                from rag_engine.generation.batched_evidence import prepare_batched_evidence
+
+                spans, prompt, input_diagnostic = prepare_batched_evidence(
+                    spans,
+                    generation_settings,
+                    question=question,
+                    schema={},  # schema_for が入力ごとの実在する引用 ID に限定する。
+                    read=lambda system, prompt, schema: parse_text_response(
+                        system,
+                        prompt,
+                        generation_settings,
+                        schema,
+                        provider_id=provider,
+                        purpose="evidence.read_batch",
+                    ),
+                    unusable_output=_invalid_structured_output,
+                    render=render_generation,
+                    evidence_text=grounded.evidence_block_text,
+                    tag=grounded.tag_spans,
+                    system=generation_system,
+                    schema_for=selected_generation_schema,
+                    provider_id=provider,
+                    source_scores=_source_question_scores(context),
+                )
+            else:
+                spans, prompt, input_diagnostic = select_evidence(
+                    spans,
+                    generation_settings,
+                    render=render_generation,
+                    evidence_text=grounded.evidence_block_text,
+                    tag=grounded.tag_spans,
+                    system=generation_system,
+                    schema_for=selected_generation_schema,
+                    provider_id=provider,
+                    source_scores=_source_question_scores(context),
+                )
             selecting_evidence = False
             current = grounded.run_round(
                 question,

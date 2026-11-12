@@ -58,4 +58,5 @@ def union_sources(context: AnswerContext, additional: Sequence[AnswerRecord]) ->
         status="ready",
         insufficient_reason="",
         candidate_count=max(context.candidate_count, len(records)),
+        independent_sources_merged=True,
     )
