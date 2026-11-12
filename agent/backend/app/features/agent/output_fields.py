@@ -224,21 +224,18 @@ def record_output_tool(
         rows = validate_rows(columns, arguments)
         index = identifier_index(runtime_repository.get_run(run_id).steps)
         corrected = 0
+        ambiguous = 0
         for row in rows:
             for key, value in row.items():
                 if not isinstance(value, str):
                     continue
                 checked = index.scalar(value)
-                if checked.ambiguous:
-                    raise ExternalToolError(
-                        "output.identifier_ambiguous",
-                        "識別子を取得したデータと同じ表記で記録してください。",
-                    )
                 row[key] = checked.text
                 corrected += checked.corrected
+                ambiguous += checked.ambiguous
         content = output_content(columns, rows)
-        if corrected:
-            content["identifier_check"] = {"corrected": corrected, "ambiguous": 0}
+        if corrected or ambiguous:
+            content["identifier_check"] = {"corrected": corrected, "ambiguous": ambiguous}
         runtime_repository.save_builtin_artifact(
             run_id, kind=OUTPUT_KIND, name=OUTPUT_NAME, content=content
         )

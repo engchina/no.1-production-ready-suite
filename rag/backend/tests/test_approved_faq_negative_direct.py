@@ -469,7 +469,7 @@ async def test_rewritten_question_is_matched_after_the_history_rewrite(
 
 
 @pipeline_test
-async def test_small_talk_is_answered_before_the_faq_match(
+async def test_predicted_greeting_does_not_override_the_configured_faq_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     oracle = await _oracle()
@@ -477,10 +477,10 @@ async def test_small_talk_is_answered_before_the_faq_match(
         monkeypatch, oracle, QUESTION, llm=FakeLlm(intent="greeting")
     )
 
-    assert llm.calls == ["history_rewrite", "small_talk_reply"]
+    assert llm.calls == ["history_rewrite"]
     assert engine_queries == []
-    assert response.answer == "合成の応答です。"
-    assert _stage(summary) is None
+    assert response.answer.startswith(ANSWER)
+    assert _stage(summary).status == "done"
 
 
 @pipeline_test

@@ -392,3 +392,26 @@ def test_recorded_output_title_uses_the_shared_section_filter() -> None:
         without_output_record_sections(answer, Settings().agent_output_record_section_titles)
         == "本文。\n\n## 補足\n値は 8 です。"
     )
+
+
+def test_ambiguous_identifier_prediction_does_not_reject_or_change_output(
+    monkeypatch: MonkeyPatch, agents: None
+) -> None:
+    from app.features.agent import output_fields
+    from app.features.agent.answer_identifiers import IdentifierIndex
+
+    monkeypatch.setattr(
+        output_fields, "identifier_index", lambda _: IdentifierIndex(["row-a row‑a"])
+    )
+    row = {**ROW, "item": "row–a"}
+    model = _script(
+        monkeypatch,
+        [function_call(RECORD_OUTPUT_TOOL, {"rows": [row]}, call_id="call-record")],
+        [assistant_message("確認した内容を保存しました。")],
+    )
+    run = runtime_repository.get_run(_run(AGENT_ID))
+    assert run.status == RunStatus.COMPLETED
+    output = next(item for item in run.artifacts if item.kind == OUTPUT_KIND)
+    assert output.content["rows"] == [row]
+    assert output.content["identifier_check"] == {"corrected": 0, "ambiguous": 1}
+    model.assert_complete()

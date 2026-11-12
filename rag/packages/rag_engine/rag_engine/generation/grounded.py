@@ -751,8 +751,7 @@ def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict]) -> l
     """計画の evidence_ids のうち、送った根拠のどれにも当たらない label の指摘（業務ガイドの要件 ID を書いたなど。#3825）。
 
     照合を足しても直らないので、照合の件数ではなく根拠の ID でないことを示す。別の ID へは付け替えない。
-    何の根拠も指さないので ``_outside_request_plan`` で何も許可せず、作り直しの後に残っても計画の内外の判定を
-    未決にしない（``plan_unsettled`` に入れない）。旧形式の応答（evidence_scope の無い計画）は検査しない。
+    計画の参照 ID だけを検査し、説明の採否は引用の実在で確かめる。旧形式の応答は検査しない。
     """
     return list(
         dict.fromkeys(
@@ -854,53 +853,6 @@ def plan_rows_from_citations(draft: GroundedDraft, spans: Sequence[dict]) -> tup
     return draft.model_copy(update={"request_coverage": coverage}), [row.evidence_id for added in rows.values() for row in added]
 
 
-def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
-    """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。
-
-    会話の添付の根拠（#3228）は、計画に載っていなくても計画の外にしない（利用者が明示した入力）。
-    計画の根拠は evidence_ids の label と、同じ計画の evidence_scope が direct、または原文のある linked と判断した
-    label（schema の evidence_ids の定義と同じ集合。片方にだけ書いた計画を外さない。#3827）。判断が 1 つに
-    まとまらない label・unrelated の label は許可しない。根拠でない label は何の根拠も指さない（#3825）。
-    """
-    if span.get("conversation_attachment"):
-        return False
-    plans = _item_request_plans(item, draft)
-    if not plans:
-        return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
-    if _plan_marks_unrelated(item, span, draft, spans):
-        return True
-    labels: set[str] = set()
-    for plan in plans:
-        for label in dict.fromkeys([*plan.evidence_ids, *(scope.evidence_id for scope in plan.evidence_scope)]):
-            if "evidence_scope" not in plan.model_fields_set or _attachment_label(label, spans):
-                labels.add(label)
-                continue
-            scopes = _scope_decisions(plan, label)
-            if len(scopes) != 1:
-                continue
-            scope = scopes[0]
-            # linked の原文はコードが指定の範囲から切り出すので、空でなければ根拠にある。
-            if scope.relation == "direct" or (scope.relation == "linked" and scope.link_quote.strip()):
-                labels.add(label)
-    labels.update(label for plan in draft.guide_coverage for label in plan.evidence_ids)
-    allowed = {str(candidate["evidence_id"]) for label in labels for candidate in _label_spans(label, spans)}
-    return str(span["evidence_id"]) not in allowed
-
-
-def _plan_marks_unrelated(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
-    """説明の小問の根拠計画が、この根拠を unrelated（別の対象・独立した操作）と判断したか。
-
-    同じ根拠への判断が食い違っても（unrelated と linked など）、unrelated の判断が 1 つでもあれば外す側に倒す。
-    """
-    for plan in _item_request_plans(item, draft):
-        for scope in plan.evidence_scope:
-            if scope.relation == "unrelated" and any(
-                candidate["evidence_id"] == span["evidence_id"] for candidate in _label_spans(scope.evidence_id, spans)
-            ):
-                return True
-    return False
-
-
 # 1 つの説明に付ける出典の上限（#3526）。超えた分は照合しない（出典ごとに検査するため）。
 MAX_ITEM_CITATIONS = 4
 
@@ -967,19 +919,6 @@ def verify(
             if provenance:
                 entry["citation_resolution"] = dict(provenance)
             notes.append(entry)
-            return None, notes
-        if _outside_request_plan(item, span, draft, spans):
-            notes.append(
-                {
-                    "index": index,
-                    "evidence_id": span["evidence_id"],
-                    "text": item.text,
-                    "quote": quote,
-                    "reason": "要求の根拠計画にない説明",
-                    "ignored": True,
-                    "scope_excluded": True,
-                }
-            )
             return None, notes
         return (
             CheckedItem(

@@ -23,7 +23,7 @@ def checked(text, quote, *, request="Q1", evidence="E1", kind="operation", condi
     )
 
 
-def test_unplanned_operations_are_excluded_even_when_their_quotes_are_real():
+def test_model_plan_does_not_exclude_real_citations():
     correct = CASES["summary"]["evidence"]
     other = CASES["coverage"]["additional_evidence"]
     spans = [
@@ -52,8 +52,8 @@ def test_unplanned_operations_are_excluded_even_when_their_quotes_are_real():
         }
     )
     result, dropped = verify(CASES["summary"]["question"], draft, spans)
-    assert all(x.item.evidence_id != "E2" for x in result)
-    assert any(x.get("scope_excluded") for x in dropped)
+    assert any(x.item.evidence_id == "E2" for x in result)
+    assert not any(x.get("scope_excluded") for x in dropped)
 
 
 def test_request_plan_keeps_related_steps_without_question_word_overlap():
@@ -70,75 +70,6 @@ def test_request_plan_keeps_related_steps_without_question_word_overlap():
     result, dropped = verify("設定を登録する方法を教えてください。", draft, spans)
     assert any(entry.item.text == source for entry in result)
     assert not any(row.get("scope_excluded") for row in dropped)
-
-
-def test_an_independent_operation_is_excluded_even_if_listed_in_evidence_ids():
-    from rag_engine.generation.grounded import _outside_request_plan
-
-    quote = CASES["coverage"]["additional_evidence"]
-    span = {"evidence_id": "actual-id", "label": "E2", "text": quote}
-    item = GroundedItem(kind="operation", request_id="Q1", text=quote, citations=[GroundedCitation(evidence_id="E2")])
-    draft = GroundedDraft.model_validate(
-        {
-            "request_coverage": [
-                {
-                    "request_id": "Q1",
-                    "evidence_ids": ["E2"],
-                    "evidence_scope": [{"evidence_id": "E2", "target": "対象選択の設定", "relation": "unrelated", "link_quote": ""}],
-                }
-            ],
-            "items": [item.model_dump()],
-            "summary": quote,
-            "confidence": "high",
-        }
-    )
-    assert _outside_request_plan(item, span, draft, [span])
-
-
-def test_a_dependency_needs_an_actual_source_quote_but_not_question_word_overlap():
-    from rag_engine.generation.grounded import _outside_request_plan
-
-    text = "確定ボタンを押して完了します。"
-    span = {"evidence_id": "actual-id", "label": "E2", "text": text}
-    link = {"evidence_id": "link-id", "text": "設定の登録後、確定ボタンを押して完了します。"}
-    item = GroundedItem(kind="operation", request_id="Q1", text=text, citations=[GroundedCitation(evidence_id="E2")])
-
-    def plan(quote):
-        return GroundedDraft.model_validate(
-            {
-                "request_coverage": [
-                    {
-                        "request_id": "Q1",
-                        "evidence_ids": ["E2"],
-                        "evidence_scope": [{"evidence_id": "E2", "target": "確定", "relation": "linked", "link_quote": quote}],
-                    }
-                ],
-                "items": [item.model_dump()],
-                "summary": "確定します。",
-                "confidence": "high",
-            }
-        )
-
-    assert _outside_request_plan(item, span, plan(""), [span, link])
-    assert not _outside_request_plan(item, span, plan(link["text"]), [span, link])
-
-
-def test_an_explicitly_empty_scope_does_not_authorize_an_operation():
-    from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
-
-    text = CASES["coverage"]["additional_evidence"]
-    span = {"evidence_id": "E2", "text": text}
-    item = GroundedItem(kind="operation", request_id="Q1", text=text, citations=[GroundedCitation(evidence_id="E2")])
-    draft = GroundedDraft.model_validate(
-        {
-            "request_coverage": [{"request_id": "Q1", "evidence_ids": ["E2"], "evidence_scope": []}],
-            "items": [item.model_dump()],
-            "summary": text,
-            "confidence": "high",
-        }
-    )
-    assert _request_plan_errors(draft, [span])
-    assert _outside_request_plan(item, span, draft, [span])
 
 
 def test_retrieval_rank_does_not_reorder_a_documents_heading_and_body():
@@ -158,59 +89,6 @@ def test_retrieval_rank_does_not_reorder_a_documents_heading_and_body():
     assert all(packet.index(parts[i]) < packet.index(parts[i + 1]) for i in range(len(parts) - 1))
     # 根拠の選択と表示 ID は関連度順のまま、モデルへ読ませる本文だけ原文順にする。
     assert spans[0]["text"] == parts[8]
-
-
-def test_same_evidence_used_for_two_claims_can_repeat_a_consistent_scope_decision():
-    from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
-
-    text = (EXAMPLES / "rows.csv").read_text()
-    span = {"evidence_id": "E1", "text": text}
-    item = GroundedItem(kind="rule", request_id="Q1", text="残す行は row-a と row-c です。", citations=[GroundedCitation(evidence_id="E1")])
-    draft = GroundedDraft.model_validate(
-        {
-            "request_coverage": [
-                {
-                    "request_id": "Q1",
-                    "evidence_ids": ["E1"],
-                    "evidence_scope": [
-                        {"evidence_id": "E1", "target": target, "relation": "direct", "link_quote": ""}
-                        for target in ["残す行", "削除する行"]
-                    ],
-                }
-            ],
-            "items": [item.model_dump()],
-            "summary": "行を区別します。",
-            "confidence": "high",
-        }
-    )
-    assert not _request_plan_errors(draft, [span])
-    assert not _outside_request_plan(item, span, draft, [span])
-
-
-def test_conflicting_scope_decisions_for_the_same_evidence_are_not_merged():
-    from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
-
-    span = {"evidence_id": "E1", "text": "対象を選択します。"}
-    item = GroundedItem(kind="operation", request_id="Q1", text=span["text"], citations=[GroundedCitation(evidence_id="E1")])
-    draft = GroundedDraft.model_validate(
-        {
-            "request_coverage": [
-                {
-                    "request_id": "Q1",
-                    "evidence_ids": ["E1"],
-                    "evidence_scope": [
-                        {"evidence_id": "E1", "target": "対象", "relation": relation, "link_quote": ""}
-                        for relation in ["direct", "unrelated"]
-                    ],
-                }
-            ],
-            "items": [item.model_dump()],
-            "summary": "対象を選択します。",
-            "confidence": "high",
-        }
-    )
-    assert _request_plan_errors(draft, [span])
-    assert _outside_request_plan(item, span, draft, [span])
 
 
 def test_unsectioned_contiguous_chunks_keep_separate_numbered_headings():
@@ -236,3 +114,26 @@ def test_unsectioned_contiguous_chunks_keep_separate_numbered_headings():
     # 未取得の章境界を飛び越えた本文へ、前章の名前を与えない。
     gap = _retrieved_heading_context([span for span in spans if span["text"] in [parts[0], parts[5]]])
     assert next(span for span in gap if span["text"] == parts[5])["function"][-1] == ""
+
+
+def test_unrelated_prediction_does_not_override_a_real_citation():
+    quote = "対象を選択します。"
+    span = {"evidence_id": "E1", "label": "E1", "text": quote, "source": "source.txt"}
+    draft = GroundedDraft.model_validate(
+        {
+            "request_coverage": [
+                {
+                    "request_id": "Q1",
+                    "evidence_ids": ["E1"],
+                    "evidence_scope": [{"evidence_id": "E1", "target": "別の対象", "relation": "unrelated", "link_quote": ""}],
+                }
+            ],
+            "items": [{"kind": "operation", "request_id": "Q1", "text": quote, "citations": [{"quote": quote, "evidence_id": "E1"}]}],
+            "summary": quote,
+            "confidence": "high",
+        }
+    )
+    kept, dropped = verify("対象を選ぶ方法", draft, [span])
+    assert len(kept) == 1
+    assert kept[0].item.quote == quote
+    assert not any(row.get("scope_excluded") for row in dropped)

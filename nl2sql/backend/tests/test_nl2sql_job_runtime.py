@@ -69,11 +69,6 @@ class _FakeEnterpriseAiClient:
         response_format: object | None = None,
     ) -> str:
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
-        if (
-            isinstance(response_format, dict)
-            and response_format.get("name") == "ScopeInterpretation"
-        ):
-            return '{"related_scope":null}'
         return self.text
 
 

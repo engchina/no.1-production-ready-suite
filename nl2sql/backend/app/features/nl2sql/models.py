@@ -1623,7 +1623,6 @@ class SqlRequirementSpec(BaseModel):
     session_id: str
     profile_id: str
     clarified_question: str
-    original_question: str = ""
     tables: list[str] = Field(default_factory=list)
     joins: list[str] = Field(default_factory=list)
     items: list[SqlRequirementSpecItem] = Field(default_factory=list)
