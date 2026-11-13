@@ -34,6 +34,7 @@ import {
 import { cn } from "../../lib/utils";
 import { useMediaQuery } from "../chat/use-chat-history-panel";
 import { Button } from "../ui/button";
+import { Card } from "../ui/card";
 
 /** 一覧 + 詳細の文言。製品の i18n で上書きできる。 */
 export interface ListDetailLayoutLabels {
@@ -181,7 +182,7 @@ export interface ListDetailLayoutProps {
   id: string;
   /** single は幅に関わらず一覧から全幅の詳細へ切り替える。既定は xl 以上で分割する。 */
   layout?: "responsive" | "single";
-  /** 1 ペインの主一覧は table。枠・高さ・スクロールは DataTable が持つ（既定 panel）。 */
+  /** 1 ペインの主一覧は table。共有カード内に見出し・表・ページ送りをまとめ、高さ・スクロールは DataTable が持つ（既定 panel）。 */
   listVariant?: "panel" | "table";
   /** 一覧の列の名前（翻訳済み。例:「テーブル一覧」）。列の読み上げ名と、開閉ボタンの名前・Tooltip に使う。 */
   listLabel: string;
@@ -445,6 +446,25 @@ export function ListDetailLayout({
   } as CSSProperties;
   const toolbar = split || detailToolbar;
 
+  const listContent = (
+    <>
+      {listHeader ? (
+        <div className={tableList ? undefined : "shrink-0 border-b border-border p-3"} data-list-detail-header="">
+          {listHeader}
+        </div>
+      ) : null}
+      {/* 溝（scrollbar-gutter）は取らない: 行の表（DataTable）は自分のスクロール領域に溝を持つので、ここでも取ると
+          表の右に 2 本分の空白が残る（#2282）。 */}
+      <div className={tableList ? "min-w-0" : "flex min-h-0 shrink flex-col overflow-y-auto"} data-list-detail-body="">{list}</div>
+      {/* 中身が何も描かない（1 ページの Pagination など）ときは、列の下の帯を出さない（empty:hidden。#2283）。 */}
+      {listFooter ? (
+        <div className={tableList ? "empty:hidden" : "shrink-0 border-t border-border px-3 py-2 empty:hidden"} data-list-detail-footer="">
+          {listFooter}
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <div
       ref={rootRef}
@@ -483,20 +503,9 @@ export function ListDetailLayout({
         }}
         onKeyDown={onListKeyDown}
       >
-        {listHeader ? (
-          <div className={tableList ? undefined : "shrink-0 border-b border-border p-3"} data-list-detail-header="">
-            {listHeader}
-          </div>
-        ) : null}
-        {/* 溝（scrollbar-gutter）は取らない: 行の表（DataTable）は自分のスクロール領域に溝を持つので、ここでも取ると
-            表の右に 2 本分の空白が残る（#2282）。 */}
-        <div className={tableList ? "min-w-0" : "flex min-h-0 shrink flex-col overflow-y-auto"} data-list-detail-body="">{list}</div>
-        {/* 中身が何も描かない（1 ページの Pagination など）ときは、列の下の帯を出さない（empty:hidden。#2283）。 */}
-        {listFooter ? (
-          <div className={tableList ? "empty:hidden" : "shrink-0 border-t border-border px-3 py-2 empty:hidden"} data-list-detail-footer="">
-            {listFooter}
-          </div>
-        ) : null}
+        {tableList ? (
+          <Card className="grid min-w-0 gap-3 p-5" data-list-detail-card="">{listContent}</Card>
+        ) : listContent}
       </section>
       {split && !collapsed ? (
         <div

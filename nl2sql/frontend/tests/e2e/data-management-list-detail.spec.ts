@@ -104,6 +104,12 @@ test.describe("データの管理のデータの表示の全幅の一覧 → 全
     await expect(layout).toHaveAttribute("data-list-detail-layout", "single");
     await expect(rowButton(page, "TABLE_01")).toBeVisible();
     await expect(list).toBeVisible();
+    // 検索・表・ページ送りが共有カードの同じ面に含まれる（#5043）。
+    const card = list.locator("[data-list-detail-card]");
+    await expect(card).toBeVisible();
+    await expect(card).toHaveCSS("border-top-width", "1px");
+    await expect(card.locator("[data-list-detail-body]")).toBeVisible();
+    await expect(card.locator("[data-list-detail-footer]")).toBeVisible();
     await expect(detail).toBeHidden();
     await expect(page.getByTestId("list-detail-data-management-preview-resizer")).toHaveCount(0);
     await expect(page.getByTestId("list-detail-data-management-preview-toggle")).toHaveCount(0);

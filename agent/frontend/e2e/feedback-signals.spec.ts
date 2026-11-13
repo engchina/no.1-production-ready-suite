@@ -106,15 +106,22 @@ for (const viewport of VIEWPORTS) {
       expect(listBox!.width).toBeCloseTo(layoutBox!.width, 0);
       const countToolbar = page.getByTestId("signals-list-toolbar");
       expect(await countToolbar.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
-      // 主一覧は外側のカードを持たず、件数は表の右端、見出しは共通 Section の大きさにする。
+      // 見出し・件数・表・ページ送りを共有カードにまとめる。
       const appearance = await list.evaluate((element) => {
-        const style = getComputedStyle(element);
+        const card = element.querySelector("[data-list-detail-card]")!;
+        const style = getComputedStyle(card);
         const heading = element.querySelector("h2")!;
-        return { border: style.borderTopWidth, shadow: style.boxShadow, position: style.position, fontSize: getComputedStyle(heading).fontSize };
+        return { border: style.borderTopWidth, shadow: style.boxShadow, position: getComputedStyle(element).position, fontSize: getComputedStyle(heading).fontSize };
       });
-      expect(appearance).toEqual({ border: "0px", shadow: "none", position: "static", fontSize: "16px" });
-      const [toolbarBox, mainListBox] = await Promise.all([countToolbar.boundingBox(), list.boundingBox()]);
-      expect(toolbarBox!.x + toolbarBox!.width).toBeCloseTo(mainListBox!.x + mainListBox!.width, 0);
+      expect(appearance.border).toBe("1px");
+      expect(appearance.shadow).not.toBe("none");
+      expect(appearance.position).toBe("static");
+      expect(appearance.fontSize).toBe("16px");
+      const card = list.locator("[data-list-detail-card]");
+      await expect(card.getByRole("heading", { name: "確かめるべき実行の一覧" })).toBeVisible();
+      const [toolbarBox, mainListBox] = await Promise.all([countToolbar.boundingBox(), card.boundingBox()]);
+      const cardPadding = await card.evaluate((element) => parseFloat(getComputedStyle(element).paddingRight) + parseFloat(getComputedStyle(element).borderRightWidth));
+      expect(toolbarBox!.x + toolbarBox!.width).toBeCloseTo(mainListBox!.x + mainListBox!.width - cardPadding, 0);
       const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
       await expect(table.getByRole("columnheader", { name: "シグナル", exact: true })).toHaveCount(viewport.width >= 1024 ? 1 : 0);
       const toolRow = table.getByRole("row", { name: /run-tool/ });
@@ -185,6 +192,7 @@ for (const viewport of VIEWPORTS) {
     await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
     const pager = page.getByTestId("signals-pagination");
     await expect(pager).toContainText("1–25 / 53 件");
+    await expect(page.locator("[data-list-detail-card]").getByTestId("signals-pagination")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`signals-paginated-${viewport.name}.png`), fullPage: true });
     await pager.getByRole("button", { name: "次へ" }).click();
     await expect(table.getByRole("row", { name: /run-25/ })).toBeVisible();
