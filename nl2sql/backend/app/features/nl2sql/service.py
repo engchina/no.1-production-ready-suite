@@ -24301,7 +24301,6 @@ class Nl2SqlService:
                 elapsed_ms=stage_elapsed,
                 running_stage="generate_sql",
             )
-            self._raise_if_job_cancelled(job_id)
             stage_started = time.monotonic()
             generation_question = self._chat_generation_question(
                 request,
