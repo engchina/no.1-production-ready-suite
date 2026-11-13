@@ -64,8 +64,6 @@ export function useSkillUpdatePublish(onDone?: () => void) {
               })
             : undefined,
           action: { label: t("agent.skillUpdates.undo"), onClick: () => rollback.mutate(published) },
-          // 取り消しを押せるよう、自動では消さない。
-          duration: 0,
         });
       } else {
         toast.error(t("agent.skillUpdates.nothingPublished"), {

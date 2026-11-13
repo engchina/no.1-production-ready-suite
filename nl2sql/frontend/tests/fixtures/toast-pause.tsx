@@ -7,6 +7,7 @@ import "../../src/globals.css";
 
 function ToastPause() {
   const [bannerOpen, setBannerOpen] = useState(true);
+  const [opened, setOpened] = useState(false);
   return (
     <AppShell sidebar={null}>
       <PageHeader title="通知の確認" />
@@ -19,6 +20,8 @@ function ToastPause() {
           ) : null}
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => toast.success("保存しました")}>成功通知</Button>
+            <Button variant="secondary" onClick={() => toast.success("合成の完了通知", { action: { label: "結果を開く", onClick: () => setOpened(true) } })}>操作付き通知</Button>
+            {opened ? <span>合成の結果を開きました</span> : null}
             <Button variant="secondary" onClick={() => toast.warning("接続が不安定です")}>警告通知</Button>
             <Button variant="secondary" onClick={() => toast.error("保存できませんでした", { description: "もう一度お試しください。" })}>
               エラー通知

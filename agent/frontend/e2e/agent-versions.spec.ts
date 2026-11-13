@@ -225,7 +225,7 @@ for (const viewport of [
   });
 }
 
-test("業務 Agent の詳細から差分を見て、評価へ移り、スキルの更新だけを公開できる。方針を「常に最新」にできる", async ({
+test("業務 Agent の詳細から差分を見て、評価へ移り、スキルの更新だけを公開できる。方針を「常に最新」にできる", { tag: "@responsive" }, async ({
   page,
   mockApi,
 }) => {
@@ -246,9 +246,13 @@ test("業務 Agent の詳細から差分を見て、評価へ移り、スキル�
   expect(mockApi.lastRequest("PATCH", "/api/agents/agent-1855")?.body).toMatchObject({ skill_policy: "latest" });
 
   // スキルの更新だけを公開（下書きの変更は公開しない）。
+  await page.clock.install();
   await banner.getByTestId("agent-publish-skill-updates").click();
   await expect(page.getByText("1 件の業務 Agent にスキルの更新を取り込みました")).toBeVisible();
   await expect(page.getByTestId("agent-skills-updated")).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await page.clock.runFor(4001);
+  await expect(page.getByText("1 件の業務 Agent にスキルの更新を取り込みました")).toHaveCount(0);
 
   // 品質評価で比べる: その業務 Agent を選んだ状態で開く。
   await page.goto("/evaluation?agent=agent-1855");
