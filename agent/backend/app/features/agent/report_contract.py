@@ -18,8 +18,14 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
+ReportBudgetMetric = Literal[
+    "expanded_markdown_codepoints",
+    "expanded_markdown_without_citation_markers_codepoints",
+]
+
+
 class AnswerBudget(_StrictModel):
-    metric: Literal["expanded_markdown_codepoints"] = "expanded_markdown_codepoints"
+    metric: ReportBudgetMetric = "expanded_markdown_codepoints"
     soft_target: int | None = Field(default=None, gt=0)
     hard_max: int | None = Field(default=None, gt=0)
 

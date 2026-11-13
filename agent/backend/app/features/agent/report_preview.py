@@ -4,18 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.features.agent.report_contract import AnswerPlan, FinalSelection, ReportOutputContract
+from app.features.agent.report_contract import (
+    AnswerPlan,
+    FinalSelection,
+    ReportBudgetMetric,
+    ReportOutputContract,
+)
 
 REPORT_PREVIEWS_METADATA_KEY = "_report_previews"
 MAX_REPORT_PREVIEWS = 16
 MAX_REPORT_BODY_CHARS = 262_144
 MAX_REPORT_LEDGER_BYTES = 2 * 1024 * 1024
 BudgetStatus = Literal["WITHIN_BUDGET", "OVER_TARGET", "REJECTED_HARD_MAX"]
+# report_runtime の正式な表示用 citation と同じ有限の形式。根拠の実在検証は描画側で行う。
+_CANONICAL_CITATION = re.compile(r"【根拠: ([^\r\n】]*)】")
 
 
 class ReportPreviewError(ValueError):
@@ -49,7 +58,9 @@ class RenderedReport(_Model):
 
 class PreviewSummary(_Model):
     preview_id: str
-    metric: Literal["expanded_markdown_codepoints"] = "expanded_markdown_codepoints"
+    metric: ReportBudgetMetric = "expanded_markdown_codepoints"
+    budget_codepoints: int
+    citation_marker_codepoints: int
     block_costs: tuple[RenderedBlockCost, ...]
     composition_delta_chars: int
     total_codepoints: int
@@ -117,6 +128,31 @@ def report_source_digest(value: Any) -> str:
 
 def _record_digest(record: _Record) -> str:
     return report_source_digest(record.model_dump(mode="json", exclude={"record_digest"}))
+
+
+def _budget_measurement(
+    body: str, evidence_text: str, contract: ReportOutputContract
+) -> tuple[ReportBudgetMetric, int, int]:
+    """本文は変えず、Narrative が明示した検証済み citation だけの費用を求める。"""
+    metric: ReportBudgetMetric = (
+        contract.budget.metric if contract.budget else "expanded_markdown_codepoints"
+    )
+    markers = [match[0] for match in _CANONICAL_CITATION.finditer(evidence_text)]
+    marker_cost = sum(len(marker) for marker in markers)
+    if metric == "expanded_markdown_without_citation_markers_codepoints":
+        # evidence_text は callback が検証済みの引用だけを保存する。分隔の改行は控除しない。
+        if _CANONICAL_CITATION.sub("", evidence_text).strip():
+            raise ReportPreviewError(
+                "runtime.report_render_invalid", "回答案の引用計測用の対応が不正です。"
+            )
+        required = Counter(markers)
+        present = Counter(match[0] for match in _CANONICAL_CITATION.finditer(body))
+        if any(present[marker] < count for marker, count in required.items()):
+            raise ReportPreviewError(
+                "runtime.report_render_invalid", "回答案の引用と描画済み本文が一致しません。"
+            )
+        return metric, len(body) - marker_cost, marker_cost
+    return metric, len(body), marker_cost
 
 
 def _budget_values(
@@ -216,7 +252,9 @@ def _load(value: Mapping[str, Any] | None, run_id: str, contract: ReportOutputCo
             or _record_digest(record) != record.record_digest
             or record.total_codepoints != len(record.body)
             or (record.status, record.remaining_target, record.remaining_hard)
-            != _budget_values(record.total_codepoints, contract)
+            != _budget_values(
+                _budget_measurement(record.body, record.evidence_text, contract)[1], contract
+            )
             or record.incomplete != (record.status == "REJECTED_HARD_MAX")
         ):
             raise ReportPreviewError(
@@ -226,9 +264,17 @@ def _load(value: Mapping[str, Any] | None, run_id: str, contract: ReportOutputCo
     return ledger
 
 
-def _summary(record: _Record, *, reused: bool = False) -> PreviewSummary:
+def _summary(
+    record: _Record, contract: ReportOutputContract, *, reused: bool = False
+) -> PreviewSummary:
     # 本文と内部hash・operation keyをモデルへ返さない。
+    metric, budget_cost, marker_cost = _budget_measurement(
+        record.body, record.evidence_text, contract
+    )
     return PreviewSummary(
+        metric=metric,
+        budget_codepoints=budget_cost,
+        citation_marker_codepoints=marker_cost,
         preview_id=record.preview_id,
         block_costs=tuple(record.block_costs),
         composition_delta_chars=record.composition_delta_chars,
@@ -268,7 +314,7 @@ def create_preview(
                 "同じ操作識別子に異なる回答案は保存できません。",
             )
         return PreviewCreation(
-            ledger=current.model_dump(mode="json"), result=_summary(previous, reused=True)
+            ledger=current.model_dump(mode="json"), result=_summary(previous, contract, reused=True)
         )
     if len(current.records) >= MAX_REPORT_PREVIEWS:
         raise ReportPreviewError(
@@ -291,7 +337,8 @@ def create_preview(
         )
     _check_costs(frozen_plan, rendered.body, rendered.block_costs, rendered.composition_delta_chars)
     total = len(rendered.body)
-    status, target, hard = _budget_values(total, contract)
+    _, budget_cost, _ = _budget_measurement(rendered.body, rendered.evidence_text, contract)
+    status, target, hard = _budget_values(budget_cost, contract)
     record = _Record(
         preview_id=f"A{current.next_number}",
         operation_key=operation_key,
@@ -319,7 +366,7 @@ def create_preview(
     )
     value = updated.model_dump(mode="json")
     _bounded(value)
-    return PreviewCreation(ledger=value, result=_summary(record))
+    return PreviewCreation(ledger=value, result=_summary(record, contract))
 
 
 def select_preview(

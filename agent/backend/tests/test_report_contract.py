@@ -29,6 +29,7 @@ from app.features.agent.report_contract import (
         {"soft_target": "40"},
         {"soft_target": 20, "hard_max": 10},
         {"metric": "DOM", "hard_max": 20},
+        {"metric": None, "hard_max": 20},
         {"question": "40", "hard_max": 40},
     ],
 )
@@ -134,3 +135,12 @@ def test_narrative_does_not_hide_table_selections_outside_typed_block() -> None:
     with pytest.raises(ValidationError):
         NarrativeBlock(text="[[table:T1]]")
     assert NarrativeBlock(text="値 [[quantity:T1:R1:C1]]").kind == "narrative"
+
+
+def test_citation_aware_metric_is_explicit_and_does_not_change_default() -> None:
+    value = AnswerBudget(
+        metric="expanded_markdown_without_citation_markers_codepoints", soft_target=3000
+    )
+    assert value.metric == "expanded_markdown_without_citation_markers_codepoints"
+    assert AnswerBudget(soft_target=3000).metric == "expanded_markdown_codepoints"
+    assert ReportOutputContract().budget is None
