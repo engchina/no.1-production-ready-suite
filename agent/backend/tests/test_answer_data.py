@@ -138,11 +138,10 @@ def test_runtime_uses_saved_result_and_recovers_from_transcription(
         refs = payloads[-1]["answer_data"]
         assert refs["table"] == "[[table:T1]]"
         assert refs["cells"][0]["VALUE"] == "[[cell:T1:R1:C2]]"
-        return [
-            assistant_message(
-                "結果\n\n" + refs["table"] + "\n\n値は" + refs["cells"][0]["VALUE"] + "%。"
-            )
-        ]
+        text = "結果\n\n" + refs["table"] + "\n\n値は" + refs["cells"][0]["VALUE"] + "%。"
+        if rewrite_first:
+            text = json.dumps({"patches": [{"target_id": "P1", "replacement": text}]})
+        return [assistant_message(text)]
 
     script: list[Any] = [
         [function_call("nl2sql__nl2sql_query", {"question": "数値を表示"}, call_id="data-call")]
@@ -150,7 +149,22 @@ def test_runtime_uses_saved_result_and_recovers_from_transcription(
     if rewrite_first is not False:
         script.append([assistant_message("| ID | VALUE |\n|---|---|\n| B | 55 |")])
     if rewrite_first is None:
-        script.append([assistant_message("| ID | VALUE |\n|---|---|\n| B | 55 |")])
+        script.append(
+            [
+                assistant_message(
+                    json.dumps(
+                        {
+                            "patches": [
+                                {
+                                    "target_id": "P1",
+                                    "replacement": "| ID | VALUE |\n|---|---|\n| B | 55 |",
+                                }
+                            ]
+                        }
+                    )
+                )
+            ]
+        )
     else:
         script.append(ModelStep.respond(respond))
     model = _script(monkeypatch, *script)

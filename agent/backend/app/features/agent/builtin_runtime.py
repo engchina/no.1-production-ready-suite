@@ -128,7 +128,14 @@ from app.features.agent.answer_data import (
     DATA_INSTRUCTIONS,
     DataReferenceError,
     data_index,
+    has_data_reference,
     model_data_references,
+)
+from app.features.agent.answer_data_patches import (
+    PATCH_INSTRUCTIONS,
+    ReferencePatches,
+    applied_result,
+    plan_patches,
 )
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
@@ -142,6 +149,7 @@ from app.features.agent.answer_notice import answer_takes_notice, current_answer
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_references import (
+    cited_chunk_ids,
     without_lookup_notes,
 )
 from app.features.agent.chat_progress import (
@@ -4836,33 +4844,55 @@ async def _require_data_references(
     if isinstance(record, dict) and record.get("data_reference_retry"):
         return result
     answer = _answer_text(result.final_output)
-    try:
-        resolved = _render_source_citations(current, answer)
-        data_index(current.steps, current.metadata).render(resolved)
+    # 対応表の不正は回答の編集では修復しない。
+    index = data_index(current.steps, current.metadata)
+    _render_source_citations(current, "")
+
+    available_chunks = [item["chunk_id"] for item in passed_evidence(current.steps, limit=None)]
+
+    def validate(text: str) -> frozenset[str]:
+        resolved = _render_source_citations(current, text)
+        index.render(resolved)
         selected_answer_evidence(current.steps, resolved)
+        kinds: set[str] = set()
+        if has_data_reference(text):
+            kinds.add("data")
+        if cited_chunk_ids(resolved, available_chunks):
+            kinds.add("source")
+        return frozenset(kinds)
+
+    try:
+        validate(answer)
         return result
-    except DataReferenceError as exc:
-        reason = str(exc)
+    except DataReferenceError:
+        plan = plan_patches(answer, validate)
     runtime_repository.record_tool_grounding(run.id, "data_reference_retry", answer)
     context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
     context.usage.add(result.context_wrapper.usage)
     repair_agent = copy(sdk_agent)
     repair_agent.tools = []
-    result = await _run_sdk(
+    repair_agent.output_type = ReferencePatches
+    repaired = await _run_sdk(
         run.id,
         repair_agent,
         tool_grounding.retry_input(
             result.to_input_list(),
-            answer,
-            head="## Step 1: データ参照の形式を直す\n"
-            + reason
-            + "\n## Step 2: 取得済みの参照から回答する\n"
-            "answer_dataの参照で値と表を構成してください。"
-            "根拠の出典には取得結果のcitation参照を使用してください。",
+            "",
+            head=PATCH_INSTRUCTIONS + "\n" + json.dumps(plan.payload(), ensure_ascii=False),
         ),
         context=context,
     )
-    return await _unattended_approvals(run, sdk_agent, result, data_scopes)
+    # 適用時に失敗しても、修正呼び出しの累計usageを失わない。
+    result.context_wrapper = repaired.context_wrapper
+    try:
+        response = ReferencePatches.model_validate(repaired.final_output)
+    except ValueError as exc:
+        raise DataReferenceError("参照修正の応答形式が不正です。") from exc
+    patched = plan.apply(
+        response, current_answer=_answer_text(result.final_output), references=validate
+    )
+    validate(patched)
+    return applied_result(result, repaired, patched)
 
 
 def _tool_budget_exhausted(budget: SupportTaskBudget | None) -> bool:

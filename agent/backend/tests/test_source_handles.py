@@ -1,5 +1,6 @@
 """根拠の短参照は原文を書き換えず、同じ取得結果の実IDへ戻る。"""
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -156,7 +157,8 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
         runtime_config_store.patch_tool_policy(allow=[], ask=["rag__rag_read_source"])
     answers = [[assistant_message("合成の原文です。 [[cite:1]]")]]
     if invalid_replies:
-        last = "合成の原文です。 [[cite:1]]" if invalid_replies == 1 else "根拠 [[cite:99]]"
+        replacement = "[[cite:1]]" if invalid_replies == 1 else "[[cite:99]]"
+        last = json.dumps({"patches": [{"target_id": "P1", "replacement": replacement}]})
         answers = [[assistant_message("根拠 [[cite:99]]")], [assistant_message(last)]]
     model = _script(
         monkeypatch,
