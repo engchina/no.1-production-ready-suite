@@ -30,6 +30,7 @@ import functools
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext, suppress
 from contextvars import ContextVar
@@ -150,6 +151,7 @@ from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_references import (
     cited_chunk_ids,
+    evidence_refs,
     without_lookup_notes,
 )
 from app.features.agent.chat_progress import (
@@ -4831,6 +4833,41 @@ def _render_source_citations(run: Any, answer: str) -> str:
     return source_handles.render_citations(run.metadata, answer, available_sources=available)
 
 
+def _citable_source_ids(run: Any) -> frozenset[str]:
+    """実取得とcitable対応表が一致し、出典を一意に特定できるIDだけを返す。"""
+    available: set[tuple[str, str]] = set()
+    for step in run.steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or step.status != "completed" or not result.success:
+            continue
+        if isinstance(result.output, dict):
+            available.update(
+                reference
+                for reference, *_ in evidence_refs(
+                    mcp_base_tool_name(call.name), result.output, original_only=True
+                )
+            )
+    rows = run.metadata.get(source_handles.REGISTRY_KEY, [])
+    if not isinstance(rows, list):
+        raise source_handles.SourceHandleError("保存した根拠参照の対応表が不正です。")
+    citable = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("kind") == "chunk"
+        and row.get("citable") is True
+        and isinstance(row.get("value"), str)
+    ]
+    counts = Counter(row["value"] for row in citable)
+    return frozenset(
+        row["value"]
+        for row in citable
+        if counts[row["value"]] == 1
+        and isinstance(row.get("document"), str)
+        and (row["document"], row["value"]) in available
+    )
+
+
 async def _require_data_references(
     run: Any, sdk_agent: Agent[Any], result: Any, data_scopes: data_scope.AgentDataScopes | None
 ) -> Any:
@@ -4845,19 +4882,22 @@ async def _require_data_references(
         return result
     answer = _answer_text(result.final_output)
     # 対応表の不正は回答の編集では修復しない。
-    index = data_index(current.steps, current.metadata)
+    available_chunks = _citable_source_ids(current)
+    index = data_index(current.steps, current.metadata, trusted_sources=available_chunks)
     _render_source_citations(current, "")
 
-    available_chunks = [item["chunk_id"] for item in passed_evidence(current.steps, limit=None)]
+    def validate_source(text: str) -> str:
+        resolved = _render_source_citations(current, text)
+        selected_answer_evidence(current.steps, resolved)
+        return resolved
 
     def validate(text: str) -> frozenset[str]:
-        resolved = _render_source_citations(current, text)
+        resolved = validate_source(text)
         index.render(resolved)
-        selected_answer_evidence(current.steps, resolved)
         kinds: set[str] = set()
         if has_data_reference(text):
             kinds.add("data")
-        if cited_chunk_ids(resolved, available_chunks):
+        if cited_chunk_ids(resolved, tuple(available_chunks)):
             kinds.add("source")
         return frozenset(kinds)
 
@@ -4865,7 +4905,7 @@ async def _require_data_references(
         validate(answer)
         return result
     except DataReferenceError:
-        plan = plan_patches(answer, validate)
+        plan = plan_patches(answer, index.render, validate_source=validate_source)
     runtime_repository.record_tool_grounding(run.id, "data_reference_retry", answer)
     context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
     context.usage.add(result.context_wrapper.usage)
@@ -5097,7 +5137,11 @@ async def _finish(
     answer = _answer_text(result.final_output)
     data_run = runtime_repository.get_run(run_id)
     answer = _render_source_citations(data_run, answer)
-    answer = data_index(data_run.steps, data_run.metadata).render(answer)
+    answer = data_index(
+        data_run.steps,
+        data_run.metadata,
+        trusted_sources=_citable_source_ids(data_run),
+    ).render(answer)
     tool_confirmations = _tool_confirmations(task, state_content)
     if tool_confirmations and is_confirmation_payload(answer):
         # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。

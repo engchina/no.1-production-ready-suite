@@ -80,8 +80,12 @@ def sdk_result(text: str) -> RunResult:
 
 
 def validator(text: str) -> None:
-    if "[[cell:bad]]" in text or "[[cite:bad]]" in text:
-        raise DataReferenceError("合成の形式エラー")
+    if "[[cell:bad]]" in text:
+        raise DataReferenceError("合成のデータ形式エラー")
+    if "[[cite:bad]]" in text:
+        from app.features.agent.source_handles import SourceHandleError
+
+        raise SourceHandleError("合成の根拠形式エラー")
 
 
 def response(plan: PatchPlan, replacements: list[str]) -> ReferencePatches:
