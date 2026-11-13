@@ -49,8 +49,28 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
       <Section><FormGrid columns={1}><TextField width="md" id="testset-draft-name" required label={t("evaluation.testsets.name")} value={draft.name} maxLength={200} disabled={save.isPending} onChange={event => setDraft({ ...draft, name: event.target.value })} /></FormGrid><p className="mt-3 text-sm text-fg-muted">{t("evaluation.testsets.pendingHelp")}</p></Section>
       <div className="testset-mobile-tools"><SelectField width="full" id="testset-item-picker" label={t("evaluation.testsets.itemSelector")} value={selected} onValueChange={choose} options={draft.items.map((value, i) => ({ value: value.item_id, label: `${i + 1}. ${value.question || t("evaluation.testsets.missingQuestion")} · ${t(value.confirmed ? "evaluation.testsets.isConfirmed" : "evaluation.testsets.unconfirmed")}` }))} /><Tabs idPrefix="testset-mobile" ariaLabel={t("evaluation.testsets.itemSelector")} value={tab} onChange={value => { remember(); setTab(value); }} items={[{ id: "edit", label: t("evaluation.testsets.editTab") }, { id: "reference", label: t("evaluation.testsets.referenceTab") }]} /></div>
       <div className="testset-review-workspace" data-testid="testset-editor">
-        <aside className="testset-item-nav"><Section title={t("evaluation.testsets.items")}><div className="grid gap-3">
-          {draft.items.map((value, i) => <div key={value.item_id} className="grid gap-1"><div className="flex items-start gap-2"><input type="checkbox" aria-label={t("evaluation.testsets.selectItem", { question: value.question || String(i + 1) })} checked={checked.includes(value.item_id)} disabled={save.isPending} onChange={() => setChecked(values => values.includes(value.item_id) ? values.filter(id => id !== value.item_id) : [...values, value.item_id])} /><Button variant={selected === value.item_id ? "secondary" : "ghost"} className="flex-1 justify-start whitespace-normal text-left" onClick={() => choose(value.item_id)}>{i + 1}. {value.question || t("evaluation.testsets.missingQuestion")}</Button></div><StatusBadge variant={value.confirmed ? "success" : "neutral"} label={t(value.confirmed ? "evaluation.testsets.isConfirmed" : "evaluation.testsets.unconfirmed")} /></div>)}
+        <aside className="testset-item-nav"><Section title={t("evaluation.testsets.items")}><div className="grid grid-cols-1 gap-3">
+          {draft.items.map((value, i) => <div key={value.item_id} className="grid grid-cols-1 gap-1">
+            <div className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                aria-label={t("evaluation.testsets.selectItem", { question: value.question || String(i + 1) })}
+                checked={checked.includes(value.item_id)}
+                disabled={save.isPending}
+                onChange={() => setChecked(values => values.includes(value.item_id) ? values.filter(id => id !== value.item_id) : [...values, value.item_id])}
+              />
+              <Button
+                variant={selected === value.item_id ? "secondary" : "ghost"}
+                aria-current={selected === value.item_id ? "true" : undefined}
+                tooltip={value.question || t("evaluation.testsets.missingQuestion")}
+                className="min-w-0 flex-1 justify-start text-left"
+                onClick={() => choose(value.item_id)}
+              >
+                <span>{i + 1}. {value.question || t("evaluation.testsets.missingQuestion")}</span>
+              </Button>
+            </div>
+            <StatusBadge variant={value.confirmed ? "success" : "neutral"} label={t(value.confirmed ? "evaluation.testsets.isConfirmed" : "evaluation.testsets.unconfirmed")} />
+          </div>)}
         </div></Section></aside>
         <div ref={editorRef} id="testset-mobile-panel-edit" role={mobile ? "tabpanel" : undefined} aria-labelledby={mobile ? "testset-mobile-tab-edit" : undefined} tabIndex={mobile ? 0 : undefined} className={`testset-editor-pane ${tab === "edit" ? "testset-mobile-active" : ""}`}>
           <Section title={item ? t("evaluation.testsets.itemNo", { count: index + 1 }) : t("evaluation.testsets.noItems")} actions={<Button icon={Plus} variant="secondary" disabled={save.isPending || draft.items.length >= 200} onClick={() => { const value = blankTestSetItem(); setDraft({ ...draft, items: [...draft.items, value] }); choose(value.item_id); }}>{t("evaluation.testsets.add")}</Button>}>

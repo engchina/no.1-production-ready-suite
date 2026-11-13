@@ -14,7 +14,9 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -1389,6 +1391,88 @@ def _stall_detection_enabled(settings: Settings) -> bool:
     return bool(getattr(settings, "llm_stall_detection", False)) and current_deadline() is not None
 
 
+class _StreamTextRecovery:
+    """同じ応答の完全本文だけを保持し、最終スナップショットの置換文字破損を復旧する。"""
+
+    def __init__(self) -> None:
+        self.response_id: str | None = None
+        self.invalid = False
+        self.closed = False
+        self.texts: dict[tuple[str, int, int], str | None] = {}
+
+    def feed(self, kind: str, event: Any) -> None:
+        if self.closed:
+            return
+        response = _value(event, "response")
+        if response is not None:
+            response_id = _value(response, "id")
+            if not isinstance(response_id, str) or not response_id:
+                self.invalid = True
+            elif self.response_id is None and kind == "response.created":
+                self.response_id = response_id
+            elif response_id != self.response_id:
+                self.invalid = True
+        if kind in {"response.completed", "response.incomplete", "response.failed", "error"}:
+            self.closed = True
+        if kind != "response.output_text.done" or self.response_id is None:
+            return
+        item_id = _value(event, "item_id")
+        output_index = _value(event, "output_index")
+        content_index = _value(event, "content_index")
+        text = _value(event, "text")
+        if (
+            not isinstance(item_id, str)
+            or not item_id
+            or type(output_index) is not int
+            or type(content_index) is not int
+            or output_index < 0
+            or content_index < 0
+            or not isinstance(text, str)
+        ):
+            return
+        key = (item_id, output_index, content_index)
+        self.texts[key] = text if key not in self.texts or self.texts[key] == text else None
+
+    def recover(self, final: Any) -> Any:
+        if (
+            self.invalid
+            or self.response_id is None
+            or _value(final, "id") != self.response_id
+            or _value(final, "status") != "completed"
+            or _value(final, "error")
+            or _value(final, "incomplete_details")
+            or _response_refusal(final)
+            or "\ufffd" not in _response_output_text(final)
+        ):
+            return final
+        recovered = deepcopy(final.model_dump(mode="python") if isinstance(final, BaseModel) else final)
+        changed = 0
+        for output_index, item in enumerate(_value(recovered, "output", []) or []):
+            if _value(item, "type") != "message" or _value(item, "status") != "completed":
+                continue
+            for content_index, part in enumerate(_value(item, "content", []) or []):
+                if _value(part, "type") != "output_text":
+                    continue
+                damaged = _value(part, "text")
+                clean = self.texts.get((_value(item, "id"), output_index, content_index))
+                if not isinstance(damaged, str) or not clean or "\ufffd" not in damaged or "\ufffd" in clean:
+                    continue
+                differences = SequenceMatcher(None, damaged, clean).get_opcodes()
+                if any(tag != "equal" and (tag != "replace" or set(damaged[a:b]) != {"\ufffd"}) for tag, a, b, _, _ in differences):
+                    continue
+                part["text"] = clean
+                changed += 1
+        if not changed:
+            return final
+        # SDK の便利属性が存在しても、本文の正本と食い違わせない。元の event は診断用に保持する。
+        if "output_text" in recovered:
+            recovered["output_text"] = "".join(
+                str(_value(part, "text") or "") for part in _iter_response_content(recovered) if _value(part, "type") == "output_text"
+            )
+        _logger.warning("LLM stream text recovered from matching done events: parts=%d", changed)
+        return recovered
+
+
 def _stream_parsed(
     client: Any,
     request: dict[str, Any],
@@ -1402,7 +1486,8 @@ def _stream_parsed(
     """Responses API を streaming で呼び、完了（または未完了）の event の応答と時刻を返す（#1926）。
 
     SDK の組み立て（`responses.stream`）を通さず、event をそのまま読む。応答は完了の event が持つ全体を使うので、provider の
-    event の順（項目の開始より前の content_part・delta など）では失敗しない（#4197）。``request`` は wire の形（schema は ``text``）。
+    event の順（項目の開始より前の content_part・delta など）では失敗しない（#4197）。同じ item/content の完全本文が届いていれば、
+    完了本文の置換文字だけが破損した場合に限り復旧する。``request`` は wire の形（schema は ``text``）。
 
     1 回の待ちの上限（httpx の read timeout。event の間隔）は ``idle_seconds``（検出しないときの None は全体の上限）。
     全体の上限（LLM 1 回の timeout と回答の期限の残りの短いほう）と取り消しは event ごとに確かめる。無音を検出したら
@@ -1423,6 +1508,7 @@ def _stream_parsed(
     idle_bound = idle_seconds is not None and idle_seconds < total
     timing = _StreamTiming()
     trail = _StreamEventTrail(timing)
+    text_recovery = _StreamTextRecovery()
     draft_arrays = isinstance(text_format, type) and issubclass(text_format, GroundedDraft)
     monitor = _RunawayMonitor(draft_arrays=draft_arrays) if runaway else None
     final: Any = None
@@ -1442,6 +1528,7 @@ def _stream_parsed(
                     timing.first_event_seconds = elapsed
                 kind = str(_value(event, "type") or "")
                 trail.feed(kind, event)
+                text_recovery.feed(kind, event)
                 if kind.endswith(".delta"):
                     timing.deltas += 1
                     timing.last_delta_seconds = elapsed
@@ -1485,7 +1572,7 @@ def _stream_parsed(
         trace = trail.trace(final)
         _logger.warning("LLM stream completed without output: trace=%s", json.dumps(trace, ensure_ascii=False))
         raise LlmStreamOutputMissing("LLM の応答の完了の event に本文がありません。", timing, trace)
-    return final, timing
+    return text_recovery.recover(final), timing
 
 
 def _is_stream_error_event(exc: BaseException) -> bool:
