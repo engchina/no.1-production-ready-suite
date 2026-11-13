@@ -150,6 +150,31 @@ async def test_quality_path_locates_file_then_reads_full_section() -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_planner_retains_selected_document_identity_metadata() -> None:
+    search, store, _, model = retriever()
+    identities = [
+        {
+            "source_key": "synthetic-source",
+            "revision_key": "synthetic-v2",
+            "effective_date": "2025-01-01",
+            "source_status": "active",
+        }
+    ]
+
+    async def catalog(filters: Any, compiler: str) -> Any:
+        return [{"document_id": "document-a", "title": "合成資料", "source_identities": identities}]
+
+    store.catalog = catalog
+    await search.search(
+        "合成資料の版を比較する質問", profile_id="profile-a", filters={}, allow_planning=True
+    )
+    documents = model.calls[1]["documents"]
+    assert documents[0]["source_identities"] == identities
+    assert documents[0]["title"] == "合成資料"
+    assert documents[0]["document_id"] == model.calls[1]["units"][0]["document_id"]
+
+
+@pytest.mark.asyncio
 async def test_disabled_and_not_ready_do_not_call_models() -> None:
     search, store, oracle, model = retriever()
     oracle.enabled = False

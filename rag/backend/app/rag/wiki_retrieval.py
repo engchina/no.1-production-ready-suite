@@ -344,6 +344,11 @@ class WikiRetriever:
                     READ_PROMPT,
                     {
                         "question": question,
+                        "documents": [
+                            row
+                            for row in current_catalog
+                            if row["document_id"] in files.document_ids
+                        ],
                         "units": [
                             {
                                 "unit_id": p.unit.unit_id,
