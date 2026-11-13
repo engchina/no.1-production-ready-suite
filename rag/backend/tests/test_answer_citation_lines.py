@@ -1,6 +1,11 @@
 """本文の出典行（「根拠：」）を引用の chunk に結ぶ（#1330・#2710）。"""
 
+import json
 from typing import Any
+
+import pytest
+from rag_engine.generation import grounded
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 from app.rag.answer_engine import (
     ANSWER_CITATION_CANDIDATE_LINES_KEY,
@@ -9,6 +14,8 @@ from app.rag.answer_engine import (
     ANSWER_CITATION_PROVENANCE_KEY,
     _with_citation_lines,
 )
+from app.rag.evaluation_evidence import used_evidence_lines
+from app.rag.stored_answer import stored_citations
 from app.schemas.search import RetrievedChunk
 
 
@@ -137,3 +144,88 @@ def test_citation_page_ranges_are_stored_per_exact_line() -> None:
         {"line": 2, "page_start": 4, "page_end": 4},
     ]
     assert "answer_citation_page_ranges" not in citations[0].metadata
+
+
+@pytest.mark.parametrize("name", ["合成.csv", "合成.xlsx", "合成.docx", "合成.pdf"])
+@pytest.mark.parametrize("source_ids", [None, ["v1:record-a"]])
+def test_direct_record_reference_survives_storage_and_evidence_export(
+    name: str, source_ids: list[str] | None
+) -> None:
+    """親へ昇格していない分割は、引用元と木の唯一の子が同じ ID を持つ。"""
+    selected = _chunk("v1:record-a", 1).model_copy(
+        update={
+            "file_name": name,
+            "metadata": {
+                "evidence_model_used": True,
+                "row_start": 18,
+                "row_end": 18,
+            },
+        }
+    )
+    other = _chunk("v1:record-b", 1)
+    parents = [_parent(selected.chunk_id, (selected.chunk_id, True))]
+    span = {
+        "evidence_id": "E1",
+        "label": "E1",
+        "source_id": selected.chunk_id,
+        "source": name,
+        "page": 1,
+        "text": selected.text,
+        "start": 0,
+        "end": len(selected.text),
+    }
+    item, error = grounded.cited_quote(
+        GroundedItem(
+            kind="rule",
+            text="合成の説明です。",
+            citations=[GroundedCitation(evidence_id="E1", lines="1")],
+        ),
+        [span],
+    )
+    assert not error
+    _, refs = grounded.render_with_citations(
+        "",
+        [grounded.CheckedItem(item, span, citation_resolution=grounded._citation_extraction(item))],
+    )
+    assert refs[0]["scope_source_ids"] == refs[0]["candidate_source_ids"] == []
+    if source_ids is None:
+        refs[0].pop("source_ids")
+
+    result = _with_citation_lines([other, selected], parents, refs)
+
+    assert _lines(result) == {selected.chunk_id: [1]}
+    assert _lines(result, ANSWER_CITATION_CANDIDATE_LINES_KEY) == {}
+    assert result[1].metadata[ANSWER_CITATION_PROVENANCE_KEY] == "child"
+    expected = f"{name} | 行: 18" if name.endswith((".csv", ".xlsx")) else name
+    saved = json.loads(json.dumps(stored_citations(result)))
+    assert used_evidence_lines(saved) == expected
+    assert ANSWER_CITATION_LINES_KEY not in selected.metadata
+
+
+@pytest.mark.parametrize("children", [[], [("v1:self", True), ("v1:other", True)]])
+def test_direct_record_does_not_promote_missing_or_mixed_children(
+    children: list[tuple[str, bool]],
+) -> None:
+    citations = [_chunk("v1:self", 1), _chunk("v1:other", 1)]
+    refs = [{"source_id": "v1:self", "page": 1}]
+    result = _with_citation_lines(citations, [_parent("v1:self", *children)], refs)
+    assert _lines(result) == {}
+
+
+def test_direct_reference_does_not_match_another_version_or_an_unreferenced_record() -> None:
+    citations = [_chunk("v2:record-a", 1), _chunk("v1:record-b", 1)]
+    parents = [
+        _parent("v1:record-a", ("v1:record-a", True)),
+        _parent("v1:record-b", ("v1:record-b", True)),
+    ]
+    result = _with_citation_lines(citations, parents, [{"source_id": "v1:record-a", "page": 1}])
+    assert _lines(result) == {}
+
+
+def test_one_line_can_reference_multiple_direct_records_without_citing_their_neighbors() -> None:
+    citations = [_chunk(identity, 1) for identity in ("a", "b", "neighbor")]
+    parents = [_parent(chunk.chunk_id, (chunk.chunk_id, True)) for chunk in citations]
+    refs = [{"source_ids": ["b", "a", "b"], "page": 1}]
+    result = _with_citation_lines(citations, parents, refs)
+    assert _lines(result) == {"a": [1], "b": [1]}
+    assert _lines(result, ANSWER_CITATION_CANDIDATE_LINES_KEY) == {}

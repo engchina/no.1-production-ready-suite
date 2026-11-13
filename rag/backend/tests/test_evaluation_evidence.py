@@ -54,6 +54,25 @@ def test_locations_follow_template_document_format(citation: dict[str, Any], exp
     assert used_evidence_lines([citation]) == expected
 
 
+@pytest.mark.parametrize(
+    ("name", "metadata", "expected"),
+    [
+        ("合成.csv", {"row_start": 18, "page": 1}, "合成.csv | 行: 18"),
+        ("合成.docx", {"page": 3}, "合成.docx | p.3"),
+        ("合成.md", {"section_path": "設定", "page": 1}, "合成.md | 章節: 設定"),
+    ],
+)
+def test_saved_citation_uses_its_top_level_file_name(
+    name: str, metadata: dict[str, Any], expected: str
+) -> None:
+    citation = {
+        "file_name": name,
+        "document_id": "doc-a",
+        "metadata": {"evidence_model_used": True, **metadata},
+    }
+    assert used_evidence_lines([citation]) == expected
+
+
 def test_candidates_parent_only_and_legacy_records_are_not_actual_evidence() -> None:
     assert (
         used_evidence_lines(
